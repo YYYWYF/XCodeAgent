@@ -38,6 +38,13 @@ PROCESS_EVENT_NAME = "agent-process"
 PROCESS_DETAIL_LIMIT = 24_000
 
 WORKFLOW_NODE_LABELS = {
+    "planning_stage_entry": "进入计划阶段",
+    "technical_planning": "技术规划",
+    "technical_planning_begin": "技术规划事务开始",
+    "technical_planning_generate": "生成技术规划候选",
+    "technical_planning_commit": "提交技术规划文档",
+    "technical_planning_confirm": "确认技术规划",
+    "technical_planning_review": "审阅技术规划",
     "api_design_readiness_gate": "API 设计前置检查",
     "development_readiness_gate": "开发前置检查",
     "entity_source_binding": "实体数据源绑定",
@@ -61,6 +68,16 @@ WORKFLOW_NODE_LABELS = {
 }
 
 WORKFLOW_STATIC_NEXT_NODES = {
+    "planning_stage_entry": ["technical_planning_begin", "design_intent_analysis"],
+    "technical_planning_begin": ["technical_planning_generate"],
+    "technical_planning_generate": ["technical_planning_commit", "technical_planning_review"],
+    "technical_planning_commit": ["technical_planning_review"],
+    "technical_planning_review": [
+        "technical_planning_begin",
+        "technical_planning_confirm",
+        "design_intent_analysis",
+    ],
+    "technical_planning_confirm": ["technical_planning_begin"],
     "api_design_readiness_gate": ["inspect_workspace"],
     "development_readiness_gate": ["inspect_workspace"],
     "entity_source_binding": [],
@@ -1148,6 +1165,11 @@ def _workflow_start_node(
                 "ui_confirmation",
                 "planning_stage_entry",
                 "technical_planning",
+                "technical_planning_begin",
+                "technical_planning_generate",
+                "technical_planning_commit",
+                "technical_planning_confirm",
+                "technical_planning_review",
             }
             else "requirements"
         )
@@ -1193,6 +1215,20 @@ def _workflow_start_node(
 def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     """预测下一个可视化节点，实际执行仍以 LangGraph 路由为准。"""
 
+    if node_name == "planning_stage_entry":
+        return ["technical_planning_begin"] if update.get("status") != "requires_user_input" else []
+    if node_name == "technical_planning_begin":
+        return ["technical_planning_generate"]
+    if node_name == "technical_planning_generate":
+        return (
+            ["technical_planning_commit"]
+            if update.get("technical_plan_candidate")
+            else ["technical_planning_review"]
+        )
+    if node_name == "technical_planning_commit":
+        return ["technical_planning_review"]
+    if node_name in {"technical_planning_review", "technical_planning_confirm", "technical_planning"}:
+        return []
     if node_name == "integration_test":
         if update.get("quality_gate_passed"):
             return ["review_phase_confirmation"]
@@ -1306,6 +1342,10 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
             "code_review_report_path",
             # Native Recovery 的审阅路由只供后端 Graph 重建 successor，不能公开。
             "application_planning_review_route",
+            "application_planning_recovery_boundary",
+            "technical_planning_revision_bootstrap",
+            "technical_plan_candidate",
+            "technical_plan_candidate_sha256",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }

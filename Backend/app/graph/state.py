@@ -52,6 +52,9 @@ class ProjectState(TypedDict, total=False):
         "requirements",
         "product_planning",
         "design_intent_analysis",
+        "planning_stage_entry",
+        "technical_planning_begin",
+        "technical_planning_confirm",
     ]
     authorization_config_conflict: dict[str, Any]
     direct_modification_owner: str
@@ -83,6 +86,10 @@ class ProjectState(TypedDict, total=False):
     technical_plan: dict[str, Any]
     technical_plan_path: str
     technical_plan_json_path: str
+    application_planning_recovery_boundary: dict[str, Any]
+    technical_planning_revision_bootstrap: bool
+    technical_plan_candidate: dict[str, Any]
+    technical_plan_candidate_sha256: str
     technical_plan_repair_candidate: dict[str, Any]
     technical_plan_repair_errors: list[str]
     project_plan: dict[str, Any]

@@ -344,6 +344,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if acceptance_decision:
         resume_from = "acceptance"
+    technical_revision_bootstrap = _validated_technical_revision_bootstrap(
+        forwarded_props,
+        workflow_scope=workflow_scope,
+        resume_from=resume_from,
+        workspace=workspace,
+        request=request,
+    )
     selectedPageId = (
         _optional_text(payload.get("selectedPageId"))
         or _optional_text(payload.get("selected_page_id"))
@@ -703,6 +710,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         "retry_failed_tasks": (
             workflow_action == "retry_failed_tasks" and resume_from == "build"
         ),
+        "technical_planning_revision_bootstrap": technical_revision_bootstrap,
         **({"change_id": continuation_change_id} if continuation_change_id else {}),
         **(
             {
@@ -1683,6 +1691,37 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     if detail_target_type:
         resumed_values["detail_target_type"] = detail_target_type
     return resumed_values
+
+
+def _validated_technical_revision_bootstrap(
+    forwarded_props: dict[str, Any],
+    *,
+    workflow_scope: str | None,
+    resume_from: str,
+    workspace: str,
+    request: str,
+) -> bool:
+    """校验后端正式 TechnicalPlan 修订交接标记，拒绝客户端伪造恢复入口。"""
+
+    marker = forwarded_props.get("_technicalRevisionBootstrap")
+    if marker is None:
+        return False
+    if workflow_scope != "application_planning" or resume_from != "technical_planning":
+        raise ValueError("TechnicalPlan revision bootstrap 只能进入 application_planning technical_planning。")
+    marker = _optional_dict(marker)
+    change_id = _optional_text(marker.get("changeId")) if marker else ""
+    if not change_id or not workspace:
+        raise ValueError("TechnicalPlan revision bootstrap 缺少有效 changeId 或 workspace。")
+    lifecycle = load_application_lifecycle(workspace)
+    active = lifecycle.active_formal_revision if lifecycle is not None else None
+    if (
+        active is None
+        or active.formal_branch is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
+        or active.change_id != change_id
+        or active.request != request.strip()
+    ):
+        raise ValueError("TechnicalPlan revision bootstrap 与当前 active formal revision 不匹配。")
+    return True
 
 
 def _project_plan_start_values(

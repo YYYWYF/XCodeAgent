@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Literal
+from uuid import uuid4
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, interrupt
@@ -11,6 +12,11 @@ from app.domain.application_planning_interaction import (
     ApplicationPlanningInteraction,
     application_planning_artifact_revision,
     application_planning_gate_id,
+)
+from app.domain.application_planning_recovery import (
+    ApplicationPlanningOperation,
+    ApplicationPlanningRecoveryBoundary,
+    application_planning_boundary_payload,
 )
 from app.graph.application_planning_revision import (
     begin_current_artifact_revision,
@@ -47,7 +53,8 @@ class ApplicationPlanningReviewResumeDecision:
         "product_planning",
         "ui_confirmation",
         "planning_stage_entry",
-        "technical_planning",
+        "technical_planning_begin",
+        "technical_planning_confirm",
         "design_intent_analysis",
     ]
 
@@ -225,9 +232,16 @@ def prepare_application_planning_review_resume(
         ),
     }
     if effective_node_name == "planning_stage_entry":
+        update["application_planning_recovery_boundary"] = _technical_input_boundary(
+            state,
+            operation=ApplicationPlanningOperation.INITIAL,
+            gate_id=payload["gateId"],
+            artifact_revision=payload["artifactRevision"],
+            request=submission.request,
+        )
         return ApplicationPlanningReviewResumeDecision(
             update=update,
-            target_node="technical_planning",
+            target_node="technical_planning_begin",
         )
     if submission.edited_requirement_spec is not None:
         update["edited_requirement_spec"] = submission.edited_requirement_spec
@@ -238,7 +252,10 @@ def prepare_application_planning_review_resume(
     if submission.action == "revise":
         clarification = payload.get("clarification")
         clarification = clarification if isinstance(clarification, dict) else {}
-        if clarification.get("mode") != "technical_plan_generation_error":
+        if clarification.get("mode") not in {
+            "technical_plan_generation_error",
+            "project_plan_dependency_validation_error",
+        }:
             # generation error 的 revise 属于失败候选续修，必须保留 repair candidate/errors；
             # 只有用户直接修订正式产物时才开启新的 baseline revision transaction。
             update.update(
@@ -248,6 +265,21 @@ def prepare_application_planning_review_resume(
                     request=submission.request,
                 )
             )
+        update["application_planning_recovery_boundary"] = _technical_input_boundary(
+            state,
+            operation=(
+                ApplicationPlanningOperation.REPAIR
+                if clarification.get("mode")
+                in {
+                    "technical_plan_generation_error",
+                    "project_plan_dependency_validation_error",
+                }
+                else ApplicationPlanningOperation.REVISE
+            ),
+            gate_id=payload["gateId"],
+            artifact_revision=payload["artifactRevision"],
+            request=submission.request,
+        )
         if effective_node_name == "ui_confirmation":
             update["ui_design_action"] = {
                 "action": "adjust_pages",
@@ -257,7 +289,16 @@ def prepare_application_planning_review_resume(
     target_node = (
         "product_planning"
         if effective_node_name == "requirement_document"
-        else effective_node_name
+        else (
+            "technical_planning_begin"
+            if effective_node_name == "technical_planning"
+            and submission.action == "revise"
+            else (
+                "technical_planning_confirm"
+                if effective_node_name == "technical_planning"
+                else effective_node_name
+            )
+        )
     )
     return ApplicationPlanningReviewResumeDecision(
         update=update,
@@ -365,19 +406,73 @@ def ui_confirmation_review(
 def technical_planning_review(
     state: ProjectState,
     config: RunnableConfig,
-) -> Command[Literal["technical_planning", "design_intent_analysis"]]:
-    """暂停 TechnicalPlan 审阅并恢复到技术规划或设计意图分析。"""
+) -> dict[str, Any]:
+    """暂停 TechnicalPlan 审阅并持久化 begin/confirm/design-change 后继路由。"""
 
-    return resume_application_planning_review(state, "technical_planning", config)
+    decision = prepare_application_planning_review_resume(state, "technical_planning", config)
+    return {
+        **decision.update,
+        "application_planning_review_route": decision.target_node,
+    }
 
 
 def planning_stage_entry(
     state: ProjectState,
     config: RunnableConfig,
-) -> Command[Literal["technical_planning", "design_intent_analysis"]]:
-    """暂停在计划阶段入口，只有显式进入动作才能开始 TechnicalPlan。"""
+) -> dict[str, Any]:
+    """暂停在计划阶段入口并持久化 begin 后继，只有显式动作才能开始 TechnicalPlan。"""
 
-    return resume_application_planning_review(state, "planning_stage_entry", config)
+    decision = prepare_application_planning_review_resume(state, "planning_stage_entry", config)
+    return {
+        **decision.update,
+        "application_planning_review_route": decision.target_node,
+    }
+
+
+def route_planning_stage_entry(state: ProjectState) -> str:
+    """从入口 checkpoint 读取服务端决定的 TechnicalPlan begin 后继。"""
+
+    target = str(state.get("application_planning_review_route") or "").strip()
+    if target not in {"technical_planning_begin", "design_intent_analysis"}:
+        raise ApplicationPlanningRoutingError("计划阶段入口缺少合法的服务端路由事实。")
+    return target
+
+
+def route_technical_planning_review(state: ProjectState) -> str:
+    """从 TechnicalPlan review checkpoint 读取服务端决定的 durable 后继。"""
+
+    target = str(state.get("application_planning_review_route") or "").strip()
+    if target not in {
+        "technical_planning_begin",
+        "technical_planning_confirm",
+        "design_intent_analysis",
+    }:
+        raise ApplicationPlanningRoutingError(
+            "technical_planning_review 缺少合法的服务端路由事实。"
+        )
+    return target
+
+
+def _technical_input_boundary(
+    state: ProjectState,
+    *,
+    operation: ApplicationPlanningOperation,
+    gate_id: str,
+    artifact_revision: str,
+    request: str,
+) -> dict[str, Any]:
+    """为入口或 TechnicalPlan 修订写入 Backend-owned INPUT_COMMITTED boundary。"""
+
+    baseline = state.get("technical_plan")
+    return application_planning_boundary_payload(
+        operation_id=f"technical-plan-{uuid4().hex}",
+        operation=operation,
+        boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
+        request=request,
+        gate_id=gate_id,
+        artifact_revision=artifact_revision,
+        baseline=baseline if isinstance(baseline, dict) and baseline else None,
+    )
 
 
 def pending_review_node(state: ProjectState) -> str:

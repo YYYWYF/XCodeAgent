@@ -678,7 +678,18 @@ export class AgUiChatSession {
         if (event.name === 'llm.token') {
           // 规划模型 token 是内部 JSON 生成过程，只由 Workflow 事件驱动进度 UI，禁止写入聊天正文。
           const node = (event.value as { node?: string } | null)?.node || ''
-          if (['product_planning', 'project_planning', 'technical_planning'].includes(node)) {
+          if (
+            [
+              'product_planning',
+              'project_planning',
+              'technical_planning',
+              'technical_planning_begin',
+              'technical_planning_generate',
+              'technical_planning_commit',
+              'technical_planning_confirm',
+              'technical_planning_review'
+            ].includes(node)
+          ) {
             return
           }
         }

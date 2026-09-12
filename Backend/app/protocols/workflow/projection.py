@@ -403,6 +403,11 @@ def _workflow_start_node(
                 "product_planning",
                 "ui_confirmation",
                 "technical_planning",
+                "technical_planning_begin",
+                "technical_planning_generate",
+                "technical_planning_commit",
+                "technical_planning_confirm",
+                "technical_planning_review",
                 "project_planning",
             }
             else "requirements"
@@ -433,7 +438,7 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         # 误判为"设计稿生成中"继续渲染设计稿区域。
         if update.get("status") == "requires_user_input":
             return []
-        return ["technical_planning"]
+        return ["technical_planning_begin"]
     if node_name == "product_planning":
         if update.get("status") == "requires_user_input":
             return []
@@ -443,6 +448,20 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             return []
         return ["product_planning"]
     if node_name == "technical_planning":
+        return []
+    if node_name == "technical_planning_begin":
+        return ["technical_planning_generate"]
+    if node_name == "technical_planning_generate":
+        return (
+            ["technical_planning_commit"]
+            if update.get("technical_plan_candidate")
+            else ["technical_planning_review"]
+        )
+    if node_name == "technical_planning_commit":
+        return ["technical_planning_review"]
+    if node_name == "technical_planning_review":
+        return []
+    if node_name == "technical_planning_confirm":
         return []
     if node_name == "integration_test":
         if update.get("quality_gate_passed"):
@@ -592,6 +611,10 @@ def _public_workflow_state(
             "test_report_json_path",
             # Native Recovery 的审阅路由是后端 Durable Graph State，不能成为公开协议事实。
             "application_planning_review_route",
+            "application_planning_recovery_boundary",
+            "technical_planning_revision_bootstrap",
+            "technical_plan_candidate",
+            "technical_plan_candidate_sha256",
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。
             "technical_plan_repair_candidate",
             "technical_plan_repair_errors",
@@ -776,7 +799,14 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "requiresUserInput": update.get("status") == "requires_user_input",
             },
         }
-    if node_name == "technical_planning":
+    if node_name in {
+        "technical_planning",
+        "technical_planning_begin",
+        "technical_planning_generate",
+        "technical_planning_commit",
+        "technical_planning_confirm",
+        "technical_planning_review",
+    }:
         clarification = update.get("clarification")
         return {
             "message": f"技术规划={update.get('technical_plan_path') or update.get('project_plan_path')}",

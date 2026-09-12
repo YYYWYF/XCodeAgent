@@ -11,7 +11,6 @@ from app.graph import nodes
 from app.graph.application_planning_revision import (
     DESIGN_CHANGE_TARGET_NODES,
     analyze_design_intent,
-    cleared_design_change_context,
     design_artifact_node_state,
     design_chat_response,
     design_node_update,
@@ -25,6 +24,8 @@ from app.graph.application_planning_interrupts import (
     requirement_document_review,
     requirements_review,
     route_requirements_review,
+    route_planning_stage_entry,
+    route_technical_planning_review,
     technical_planning_review,
     ui_confirmation_review,
 )
@@ -36,7 +37,6 @@ from app.domain.application_lifecycle import (
     utc_now,
 )
 from app.persistence.checkpoints import workflow_checkpoint_db_path, workflow_checkpointer
-from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
     application_lifecycle_payload,
@@ -44,7 +44,6 @@ from app.services.application_lifecycle import (
     load_application_lifecycle,
     persist_application_lifecycle_transition,
 )
-from app.services.application_revision_lifecycle import issue_revision_continuation
 from app.services.authorization_frontend_projection import (
     apply_frontend_routes_projection,
     compile_frontend_routes_projection,
@@ -60,6 +59,12 @@ from app.services.template_scaffold_injection import (
 from app.workspace.plan_documents import technical_plan_json_path
 from app.workspace.product_plan_documents import confirmed_product_plan_json_path
 from app.workspace.spec_documents import ui_designs_json_path, load_ui_designs_json
+from app.graph.nodes.application_technical_planning import (
+    technical_planning_begin,
+    technical_planning_commit,
+    technical_planning_confirm,
+    technical_planning_generate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +98,20 @@ def _route_start(state: ProjectState) -> str:
             ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
             ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
         },
+        "technical_planning_begin": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        },
+        "technical_planning_generate": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+        },
+        "technical_planning_commit": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        },
+        "technical_planning_confirm": {
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        },
     }
     if resume_from in allowed_resume_stages:
         if (
@@ -105,7 +124,7 @@ def _route_start(state: ProjectState) -> str:
                 f"resume_from={resume_from}，"
                 f"lifecycle={lifecycle.initialization.stage.value}。"
             )
-        return resume_from
+        return "technical_planning_begin" if resume_from == "technical_planning" else resume_from
     if resume_from:
         raise ApplicationLifecycleConflictError(
             f"application_planning 不支持恢复入口：{resume_from}"
@@ -150,11 +169,21 @@ def _route_ui_confirmation(state: ProjectState) -> str:
     return "ui_confirmation_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "planning_stage_entry"
 
 
-def _route_technical_planning(state: ProjectState) -> str:
-    """TechnicalPlan 未确认时进入原生审阅中断，确认后结束创建规划。"""
+def _route_technical_planning_generate(state: ProjectState) -> str:
+    """生成成功进入 commit，模型修复耗尽则进入原生 TechnicalPlan 审阅门。"""
 
-    clarification = state.get("clarification")
-    return "technical_planning_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "completed"
+    if isinstance(state.get("technical_plan_candidate"), dict) and state.get(
+        "technical_plan_candidate"
+    ):
+        return "technical_planning_commit"
+    return "technical_planning_review"
+
+
+def _route_technical_planning_confirm(state: ProjectState) -> str:
+    """确认校验产生 repair boundary 时回到 begin，否则结束创建规划。"""
+
+    target = str(state.get("application_planning_review_route") or "").strip()
+    return "technical_planning_begin" if target == "technical_planning_begin" else "completed"
 
 
 def _requirements(state: ProjectState) -> dict:
@@ -352,120 +381,6 @@ def _product_planning(state: ProjectState) -> dict:
         raise
 
 
-def _technical_planning(state: ProjectState) -> dict:
-    """生成 TechnicalPlan，并在开发确认后校验全部正式产物。"""
-
-    node_state = design_artifact_node_state(state, "technical_planning")
-    workspace = _workspace(node_state)
-    try:
-        lifecycle = load_application_lifecycle(workspace) or _ensure_lifecycle(state)
-        lifecycle = _prepare_technical_planning_lifecycle(workspace, lifecycle, state)
-        if (
-            lifecycle.initialization.stage
-            == ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
-            and lifecycle.initialization.status in {
-                ApplicationLifecycleStatus.FAILED,
-                ApplicationLifecycleStatus.CANCELLED,
-            }
-        ):
-            lifecycle = persist_application_lifecycle_transition(
-                workspace,
-                stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-                status=ApplicationLifecycleStatus.RUNNING,
-                active_run_id=state.get("active_run_id"),
-            )
-        update = nodes.project_planning(node_state)
-        if update.get("status") != "completed":
-            lifecycle = persist_application_lifecycle_transition(
-                workspace,
-                stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-                status=ApplicationLifecycleStatus.AWAITING_USER,
-                active_run_id=state.get("active_run_id"),
-            )
-            return design_node_update(
-                state,
-                "technical_planning",
-                {
-                    **update,
-                    "workflow_scope": "application_planning",
-                    "lifecycle": application_lifecycle_payload(lifecycle),
-                },
-            )
-        if (
-            lifecycle.initialization.stage
-            == ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
-        ):
-            # 只有本轮节点已经返回完成结果后才补齐确认边；这既允许正常确认
-            # 进入模板/continuation，也不会再被 checkpoint 中的旧计划提前触发。
-            lifecycle = persist_application_lifecycle_transition(
-                workspace,
-                stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-                status=ApplicationLifecycleStatus.AWAITING_USER,
-                active_run_id=state.get("active_run_id"),
-            )
-        merged_state = {**node_state, **update}
-        confirmation = confirm_application_planning_artifacts(merged_state)
-        revision_continuation: dict[str, Any] = {}
-        active_revision = lifecycle.active_formal_revision
-        if (
-            active_revision is not None
-            and active_revision.formal_branch.value
-            in {"design_stage_revision", "workbench_plan_revision"}
-        ):
-            # 应用模板只在首次创建时生成一次。正式二次修改确认 TechnicalPlan
-            # 后直接签发主 Workflow continuation，由 application_revision 收口并
-            # 进入 inspect_workspace/prepare_build_tasks，不得再次进入模板阶段。
-            # 在签发 continuation 前，把可确定性推导的后端骨架代码注入模板工程，
-            # 让开发阶段 Agent 只需补充业务逻辑，不必从零生成 Entity/PO/Mapper 等
-            # 确定性文件。模板工程已在首次创建时拉取到工作区，此处只写不删。
-            _inject_revision_scaffold(workspace, node_state)
-            token, issued = issue_revision_continuation(
-                workspace,
-                change_id=active_revision.change_id,
-                technical_plan_path=(
-                    Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
-                ),
-            )
-            lifecycle = load_application_lifecycle(workspace) or lifecycle
-            revision_continuation = {
-                "changeId": issued.change_id,
-                "formalBranch": issued.formal_branch.value,
-                "action": "continue_revision_build",
-                "token": token,
-                "technicalPlanSha256": issued.technical_plan_sha256,
-            }
-        else:
-            # 只有首次创建流程会在 TechnicalPlan 确认后准备应用模板。
-            lifecycle = persist_application_lifecycle_transition(
-                workspace,
-                stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
-                status=ApplicationLifecycleStatus.RUNNING,
-                active_run_id=state.get("active_run_id"),
-            )
-        # 技术规划完成即整条创建/变更链路终结，重置设计变更上下文，
-        # 避免旧变更指令残留在 checkpoint 中影响后续轮次。
-        return {
-            **design_node_update(
-                state,
-                "technical_planning",
-                {
-                    **update,
-                    "workflow_scope": "application_planning",
-                    "application_planning_confirmation": confirmation,
-                    "revision_continuation": revision_continuation,
-                    "lifecycle": application_lifecycle_payload(lifecycle),
-                },
-            ),
-            **cleared_design_change_context(),
-        }
-    except asyncio.CancelledError:
-        _persist_node_cancelled(workspace, state)
-        raise
-    except Exception as exc:
-        _persist_node_error(workspace, state, exc)
-        raise
-
-
 def _ensure_lifecycle(state: ProjectState):
     """从 Graph State 元数据创建或读取工作区生命周期。"""
 
@@ -481,47 +396,6 @@ def _ensure_lifecycle(state: ProjectState):
         initialization_thread_id=state.get("active_thread_id"),
         active_run_id=state.get("active_run_id"),
     )
-
-
-def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: ProjectState):
-    """校验计划阶段入口动作，并把生命周期推进到 TechnicalPlan 生成。"""
-
-    common = {
-        "active_run_id": state.get("active_run_id"),
-    }
-    interaction = state.get("application_planning_interaction")
-    action = str(interaction.get("action") or "") if isinstance(interaction, dict) else ""
-    if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY:
-        if action != "enter_planning":
-            raise ValueError("TechnicalPlan 必须由用户明确进入计划阶段后才能生成。")
-        lifecycle = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-            status=ApplicationLifecycleStatus.RUNNING,
-            **common,
-        )
-    elif (
-        lifecycle.initialization.stage
-        == ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION
-        and action == "revise"
-    ):
-        # 用户要求重做当前 TechnicalPlan 时先回到生成态；确认动作则继续留在
-        # awaiting 状态，由 project_planning 同步 Markdown 并完成确认。
-        lifecycle = persist_application_lifecycle_transition(
-            workspace,
-            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-            status=ApplicationLifecycleStatus.RUNNING,
-            **common,
-        )
-    if lifecycle.initialization.stage not in {
-        ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-        ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-    }:
-        raise ValueError(
-            "TechnicalPlan 只能在用户明确进入计划阶段后生成，当前生命周期为 "
-            f"{lifecycle.initialization.stage.value}。"
-        )
-    return lifecycle
 
 
 def _persist_requirement_result(workspace: str, update: dict, state: ProjectState):
@@ -710,7 +584,10 @@ def build_application_planning_graph(*, checkpointer):
     builder.add_node("ui_confirmation", _ui_confirmation)
     builder.add_node("ui_confirmation_review", ui_confirmation_review)
     builder.add_node("planning_stage_entry", planning_stage_entry)
-    builder.add_node("technical_planning", _technical_planning)
+    builder.add_node("technical_planning_begin", technical_planning_begin)
+    builder.add_node("technical_planning_generate", technical_planning_generate)
+    builder.add_node("technical_planning_commit", technical_planning_commit)
+    builder.add_node("technical_planning_confirm", technical_planning_confirm)
     builder.add_node("technical_planning_review", technical_planning_review)
     builder.add_conditional_edges(START, _route_start, {
         "design_intent_analysis": "design_intent_analysis",
@@ -718,7 +595,10 @@ def build_application_planning_graph(*, checkpointer):
         "product_planning": "product_planning",
         "ui_confirmation": "ui_confirmation",
         "planning_stage_entry": "planning_stage_entry",
-        "technical_planning": "technical_planning",
+        "technical_planning_begin": "technical_planning_begin",
+        "technical_planning_generate": "technical_planning_generate",
+        "technical_planning_commit": "technical_planning_commit",
+        "technical_planning_confirm": "technical_planning_confirm",
     })
     builder.add_conditional_edges("design_intent_analysis", route_design_intent, {
         "requirements": "requirements",
@@ -747,9 +627,36 @@ def build_application_planning_graph(*, checkpointer):
         "planning_stage_entry": "planning_stage_entry",
         "ui_confirmation_review": "ui_confirmation_review",
     })
-    builder.add_conditional_edges("technical_planning", _route_technical_planning, {
-        "technical_planning_review": "technical_planning_review",
-        "completed": END,
+    builder.add_conditional_edges("planning_stage_entry", route_planning_stage_entry, {
+        "technical_planning_begin": "technical_planning_begin",
+        "design_intent_analysis": "design_intent_analysis",
+    })
+    builder.add_edge("technical_planning_begin", "technical_planning_generate")
+    builder.add_conditional_edges(
+        "technical_planning_generate",
+        _route_technical_planning_generate,
+        {
+            "technical_planning_commit": "technical_planning_commit",
+            "technical_planning_review": "technical_planning_review",
+        },
+    )
+    builder.add_edge("technical_planning_commit", "technical_planning_review")
+    builder.add_conditional_edges(
+        "technical_planning_review",
+        route_technical_planning_review,
+        {
+            "technical_planning_begin": "technical_planning_begin",
+            "technical_planning_confirm": "technical_planning_confirm",
+            "design_intent_analysis": "design_intent_analysis",
+        },
+    )
+    builder.add_conditional_edges(
+        "technical_planning_confirm",
+        _route_technical_planning_confirm,
+        {
+            "technical_planning_begin": "technical_planning_begin",
+            "completed": END,
+        },
     })
     builder.add_conditional_edges("design_chat_response", route_design_chat_response, {
         "completed": END,

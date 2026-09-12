@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -1098,17 +1100,72 @@ def write_technical_plan_document(
     state: dict[str, Any],
     plan: dict[str, Any],
 ) -> tuple[str, str]:
-    """写入当前 TechnicalPlan 正式文件。"""
+    """写入当前 TechnicalPlan 正式文件，并复用事务化原子提交实现。"""
 
-    from app.workspace.detail_design_documents import write_compact_project_plan
+    return commit_technical_plan_document(state, plan)
+
+
+def commit_technical_plan_document(
+    state: dict[str, Any],
+    plan: dict[str, Any],
+    *,
+    expected_sha256: str | None = None,
+) -> tuple[str, str]:
+    """以确定性、幂等且可重复执行的方式提交 TechnicalPlan JSON/Markdown。"""
+
+    from app.domain.application_planning_recovery import application_planning_sha256
+    from app.workspace.detail_design_documents import externalize_detail_designs
 
     json_path = technical_plan_json_path(state)
     markdown_path = technical_plan_markdown_path(state)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    write_compact_project_plan(state, json_path, plan)
-    compact_plan = load_project_plan_json(json_path)
-    markdown_path.write_text(render_project_plan_markdown(compact_plan), encoding="utf-8")
+    actual_sha256 = application_planning_sha256(plan)
+    if expected_sha256 is not None and actual_sha256 != expected_sha256:
+        raise ValueError("TechnicalPlan candidate SHA-256 与提交内容不一致。")
+    compact_plan = externalize_detail_designs(state, plan)
+    json_content = f"{json.dumps(compact_plan, ensure_ascii=False, indent=2)}\n"
+    markdown_content = render_project_plan_markdown(compact_plan)
+    _write_text_atomically(json_path, json_content)
+    _write_text_atomically(markdown_path, markdown_content)
     return str(markdown_path), str(json_path)
+
+
+def _write_text_atomically(path: Path, content: str) -> None:
+    """把一份文档写入同目录临时文件、fsync 后原子替换到目标路径。"""
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+        _fsync_directory(path.parent)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _fsync_directory(directory: Path) -> None:
+    """同步文档目录项，确保原子替换在进程崩溃后可见。"""
+
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
 
 
 def project_plan_markdown_path(state: dict[str, Any]) -> Path:

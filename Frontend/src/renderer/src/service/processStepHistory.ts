@@ -237,7 +237,12 @@ export function isStructuredPlanningWorkflow(workflow: WorkflowRunPayload | unde
     'requirements',
     'product_planning',
     'project_planning',
-    'technical_planning'
+    'technical_planning',
+    'technical_planning_begin',
+    'technical_planning_generate',
+    'technical_planning_commit',
+    'technical_planning_confirm',
+    'technical_planning_review'
   ])
   if (planningNodes.has(String(workflow.summary.phase || ''))) return true
   const clarificationCandidates = [

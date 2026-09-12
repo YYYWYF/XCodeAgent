@@ -254,7 +254,14 @@ const PRODUCT_PHASE_NODES = new Set([
   'design_intent_analysis',
   'design_chat_response'
 ])
-const PLANNING_PHASE_NODES = new Set(['technical_planning', 'technical_planning_review'])
+const PLANNING_PHASE_NODES = new Set([
+  'technical_planning',
+  'technical_planning_begin',
+  'technical_planning_generate',
+  'technical_planning_commit',
+  'technical_planning_confirm',
+  'technical_planning_review'
+])
 
 /** 解析工作台实际阶段，确保用户手动选择优先于生命周期自动阶段。 */
 export function resolveWorkbenchPhase(

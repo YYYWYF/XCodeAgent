@@ -602,11 +602,14 @@ def _prepare_start_design_revision_payload(
             "state": {"product_stage_conversation": False}
         }
     if action == "start_technical_revision":
-        # TechnicalPlan 二次修改恢复原 planning checkpoint，由原节点重新调用模型。
+        # TechnicalPlan 二次修改恢复原 planning checkpoint，由 begin 节点消费一次性后端标记。
         restart_application_planning_lifecycle(
             workspace,
             stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
         )
+        next_forwarded["_technicalRevisionBootstrap"] = {
+            "changeId": active.change_id,
+        }
         next_forwarded["resumeState"] = {
             "state": technical_plan_revision_reset_state()
         }

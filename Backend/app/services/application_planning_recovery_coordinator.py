@@ -9,6 +9,7 @@ from app.domain.application_lifecycle import (
     ApplicationLifecycle,
     ApplicationLifecycleStatus,
 )
+from app.domain.application_planning_recovery import parse_application_planning_boundary
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
@@ -16,6 +17,7 @@ from app.domain.execution_recovery import (
     RecoveryPoint,
 )
 from app.persistence.execution_recovery import (
+    get_recovery_point,
     list_recovery_points,
 )
 from app.protocols.application_planning_interrupt import (
@@ -23,6 +25,9 @@ from app.protocols.application_planning_interrupt import (
 )
 from app.services.application_planning_recovery_policy import (
     application_planning_committed_input,
+)
+from app.services.application_planning_recovery_contracts import (
+    resolve_application_planning_recovery_contract,
 )
 from app.services.execution_recovery import capture_recovery_point
 from app.services.execution_recovery_coordinator import prepare_continue
@@ -86,10 +91,28 @@ async def resolve_application_planning_recovery(
         )
 
     input_committed = _input_committed_for_source(source, snapshot)
+    snapshot_values = getattr(snapshot, "values", {})
+    snapshot_values = snapshot_values if isinstance(snapshot_values, dict) else {}
+    technical_boundary = parse_application_planning_boundary(
+        snapshot_values.get("application_planning_recovery_boundary")
+    )
     committed_transition_candidate = bool(
         source
         and source.status is DurableExecutionStatus.INTERRUPTED
-        and input_committed
+        and (
+            input_committed
+            or (
+                technical_boundary is not None
+                and str(snapshot_values.get("active_run_id") or "").strip()
+                == source.run_id
+                and technical_boundary.boundary.value
+                in {
+                    "input_committed",
+                    "candidate_committed",
+                    "artifact_committed",
+                }
+            )
+        )
     )
     lifecycle_status = lifecycle.initialization.status if lifecycle else None
     if (
@@ -168,14 +191,23 @@ async def resolve_application_planning_recovery(
         replay_policies=production_recovery_replay_policies(),
     )
     if plan.decision is RecoveryDecision.READY_NATIVE:
+        contract = resolve_application_planning_recovery_contract(
+            source=source,
+            point=await _recovery_point_for_plan(source, plan),
+            snapshot=snapshot,
+        )
         return _projection(
             classification="ready_to_continue",
             source=source,
             thread_id=thread_id,
             can_continue=True,
             input_committed=input_committed,
-            reason_code="INPUT_COMMITTED_EXECUTION_INTERRUPTED",
-            message="上一次需求生成被中断，已保存你刚才提交的回答，可以继续执行。",
+            reason_code=plan.reason_code,
+            message=(
+                contract.recovery_message()
+                if contract is not None
+                else "上一次规划执行被中断，可以继续执行。"
+            ),
         )
     if plan.decision is RecoveryDecision.AWAITING_USER:
         return _projection(
@@ -268,12 +300,39 @@ def _input_committed_for_source(
 
     values = getattr(snapshot, "values", {})
     values = values if isinstance(values, dict) else {}
+    if not source:
+        return False
+    if str(values.get("active_run_id") or "").strip() != source.run_id:
+        return False
+    boundary = values.get("application_planning_recovery_boundary")
+    parsed_boundary = parse_application_planning_boundary(boundary)
+    if parsed_boundary is not None:
+        return parsed_boundary.boundary.value == "input_committed"
     return bool(
-        source
-        and str(values.get("active_run_id") or "").strip() == source.run_id
+        str(values.get("active_run_id") or "").strip() == source.run_id
         and application_planning_committed_input(snapshot)
         and application_planning_interrupt_from_snapshot(snapshot) is None
     )
+
+
+async def _recovery_point_for_plan(
+    source: DurableExecutionRecord,
+    plan: Any,
+) -> RecoveryPoint:
+    """从当前计划引用恢复点索引，供恢复文案 Contract 解析使用。"""
+
+    point = await _point_by_id(source.workspace, plan.recovery_point_id)
+    if point is None:
+        raise ValueError("READY_NATIVE 计划缺少可解释的 RecoveryPoint。")
+    return point
+
+
+async def _point_by_id(workspace: str, point_id: str | None) -> RecoveryPoint | None:
+    """按恢复计划的稳定 ID 读取 RecoveryPoint。"""
+
+    if not point_id:
+        return None
+    return await get_recovery_point(workspace, point_id)
 
 
 def _projection(
