@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domain.application_lifecycle import (
+    ApplicationLifecycle,
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+)
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
@@ -34,6 +39,49 @@ def application_planning_committed_input(snapshot: Any) -> bool:
         and bool(str(interaction.get("artifact_revision") or "").strip())
         and ((isinstance(answers, dict) and bool(answers)) or bool(request))
     )
+
+
+def application_planning_committed_input_lifecycle_compatible(
+    *,
+    source: DurableExecutionRecord,
+    point: RecoveryPoint,
+    snapshot: Any,
+    lifecycle: ApplicationLifecycle,
+) -> bool:
+    """仅认可已提交澄清回答进入 requirements 时的两个生命周期窗口。"""
+
+    values = getattr(snapshot, "values", {})
+    values = values if isinstance(values, dict) else {}
+    if (
+        source.execution_kind != "application_planning"
+        or source.status is not DurableExecutionStatus.INTERRUPTED
+        or point.next_nodes != ["requirements"]
+        or application_planning_interrupt_from_snapshot(snapshot) is not None
+        or str(values.get("active_run_id") or "").strip() != source.run_id
+        or not application_planning_committed_input(snapshot)
+        or lifecycle.initialization.thread_id != source.thread_id
+        or lifecycle.active_run_id != source.run_id
+    ):
+        return False
+
+    expected_revision = point.lifecycle_revision
+    if (
+        lifecycle.initialization.stage
+        is ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION
+        and lifecycle.initialization.status
+        is ApplicationLifecycleStatus.AWAITING_USER
+    ):
+        return expected_revision is None or lifecycle.revision == expected_revision
+    if (
+        lifecycle.initialization.stage
+        is ApplicationLifecycleStage.ANALYZING_REQUIREMENT
+        and lifecycle.initialization.status is ApplicationLifecycleStatus.RUNNING
+    ):
+        return expected_revision is None or lifecycle.revision in {
+            expected_revision,
+            expected_revision + 1,
+        }
+    return False
 
 
 class ApplicationPlanningCommittedInputReplayPolicy:
@@ -70,4 +118,5 @@ class ApplicationPlanningCommittedInputReplayPolicy:
 __all__ = [
     "ApplicationPlanningCommittedInputReplayPolicy",
     "application_planning_committed_input",
+    "application_planning_committed_input_lifecycle_compatible",
 ]

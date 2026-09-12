@@ -17,6 +17,9 @@ from app.domain.execution_recovery import (
 )
 from app.persistence.execution_recovery import get_execution
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.application_planning_recovery_policy import (
+    application_planning_committed_input_lifecycle_compatible,
+)
 from app.services.execution_recovery_selector import (
     RecoveryPointSelection,
     RecoveryPointSelector,
@@ -245,7 +248,12 @@ async def _validate_checkpoint(
             reason="真实 checkpoint 正在等待用户业务输入，必须走结构化 interaction resume。",
         )
 
-    lifecycle = _validate_lifecycle(workspace=workspace, source=source, point=point)
+    lifecycle = _validate_lifecycle(
+        workspace=workspace,
+        source=source,
+        point=point,
+        snapshot=snapshot,
+    )
     if lifecycle.decision is not None:
         return _CheckpointValidation(**{**lifecycle.__dict__, "snapshot": snapshot})
     workspace_state = _validate_workspace(workspace=workspace, point=point)
@@ -270,8 +278,9 @@ def _validate_lifecycle(
     workspace: str,
     source: DurableExecutionRecord,
     point: RecoveryPoint,
+    snapshot: Any,
 ) -> _CheckpointValidation:
-    """保守比较 lifecycle revision，并区分允许缺失的 application planning。"""
+    """保守比较 revision，仅放行已提交回答的明确 Planning 转换窗口。"""
 
     try:
         lifecycle = load_application_lifecycle(workspace)
@@ -287,6 +296,13 @@ def _validate_lifecycle(
             "LIFECYCLE_STATE_MISSING",
             "Workbench execution 缺少应存在的 ApplicationLifecycle。",
         )
+    if application_planning_committed_input_lifecycle_compatible(
+        source=source,
+        point=point,
+        snapshot=snapshot,
+        lifecycle=lifecycle,
+    ):
+        return _CheckpointValidation(lifecycle_revision=lifecycle.revision)
     if (
         point.lifecycle_revision is not None
         and lifecycle.revision != point.lifecycle_revision

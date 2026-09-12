@@ -145,8 +145,8 @@ class ApplicationPlanningRecoveryConsistencyTests(unittest.IsolatedAsyncioTestCa
         self.assertTrue(projection.user_action_required)
         self.assertFalse(projection.can_continue)
 
-    async def test_lifecycle_awaiting_user_without_interrupt_is_conflict(self) -> None:
-        """Lifecycle 单方面等待用户时只能返回冲突，不能形成操作卡。"""
+    async def test_lifecycle_awaiting_user_without_committed_answer_is_conflict(self) -> None:
+        """未提交回答时 Lifecycle 单方面等待用户仍只能返回冲突。"""
 
         source = await self._insert_source(DurableExecutionStatus.INTERRUPTED)
         lifecycle = create_application_lifecycle(
@@ -164,7 +164,7 @@ class ApplicationPlanningRecoveryConsistencyTests(unittest.IsolatedAsyncioTestCa
             stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
             status=ApplicationLifecycleStatus.AWAITING_USER,
         )
-        snapshot = self._snapshot()
+        snapshot = self._snapshot(interaction_action="confirm")
 
         projection = await resolve_application_planning_recovery(
             workspace=str(self.workspace),
@@ -282,7 +282,14 @@ class ApplicationPlanningRecoveryConsistencyTests(unittest.IsolatedAsyncioTestCa
         await insert_execution(source)
         return source
 
-    def _snapshot(self, *, tasks: tuple[object, ...] = ()) -> SimpleNamespace:
+    def _snapshot(
+        self,
+        *,
+        tasks: tuple[object, ...] = (),
+        checkpoint_id: str = "cp-committed",
+        next_nodes: tuple[str, ...] = ("requirements",),
+        interaction_action: str = "answer",
+    ) -> SimpleNamespace:
         """构造回答已写入但旧 clarification 仍残留的真实 checkpoint。"""
 
         return SimpleNamespace(
@@ -290,10 +297,10 @@ class ApplicationPlanningRecoveryConsistencyTests(unittest.IsolatedAsyncioTestCa
                 "configurable": {
                     "thread_id": "planning-thread",
                     "checkpoint_ns": "",
-                    "checkpoint_id": "cp-committed",
+                    "checkpoint_id": checkpoint_id,
                 }
             },
-            next=("requirements",),
+            next=next_nodes,
             tasks=tasks,
             values={
                 "active_run_id": "run-A",
@@ -305,7 +312,7 @@ class ApplicationPlanningRecoveryConsistencyTests(unittest.IsolatedAsyncioTestCa
                     "questions": [{"id": "role", "prompt": "你的角色？"}],
                 },
                 "application_planning_interaction": {
-                    "action": "answer",
+                    "action": interaction_action,
                     "artifact": "requirement_spec",
                     "gate_id": "requirement_spec:revision-1",
                     "artifact_revision": "revision-1",

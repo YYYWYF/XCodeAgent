@@ -85,15 +85,24 @@ async def resolve_application_planning_recovery(
             message="当前应用规划正在等待你的确认。",
         )
 
+    input_committed = _input_committed_for_source(source, snapshot)
+    committed_transition_candidate = bool(
+        source
+        and source.status is DurableExecutionStatus.INTERRUPTED
+        and input_committed
+    )
     lifecycle_status = lifecycle.initialization.status if lifecycle else None
-    if lifecycle_status is ApplicationLifecycleStatus.AWAITING_USER:
+    if (
+        lifecycle_status is ApplicationLifecycleStatus.AWAITING_USER
+        and not committed_transition_candidate
+    ):
         return _projection(
             classification="conflict",
             source=source,
             thread_id=thread_id,
             reason_code="LIFECYCLE_AWAITING_USER_WITHOUT_NATIVE_INTERRUPT",
             message="当前规划状态需要重新校准。",
-            input_committed=_input_committed_for_source(source, snapshot),
+            input_committed=input_committed,
         )
     if source is None:
         return _projection(
@@ -110,7 +119,7 @@ async def resolve_application_planning_recovery(
             thread_id=thread_id,
             reason_code="DURABLE_AWAITING_USER_WITHOUT_NATIVE_INTERRUPT",
             message="当前规划状态需要重新校准。",
-            input_committed=_input_committed_for_source(source, snapshot),
+            input_committed=input_committed,
         )
     if source.status is DurableExecutionStatus.RUNNING:
         return _projection(
@@ -135,7 +144,7 @@ async def resolve_application_planning_recovery(
             thread_id=thread_id,
             reason_code="DURABLE_APPLICATION_PLANNING_FAILED",
             message="上一次规划执行失败，当前现场不能安全自动继续。",
-            input_committed=_input_committed_for_source(source, snapshot),
+            input_committed=input_committed,
         )
     if source.status is not DurableExecutionStatus.INTERRUPTED:
         return _projection(
@@ -144,7 +153,7 @@ async def resolve_application_planning_recovery(
             thread_id=thread_id,
             reason_code="DURABLE_APPLICATION_PLANNING_NOT_CONTINUABLE",
             message="当前规划状态无法安全自动恢复，请查看恢复状态。",
-            input_committed=_input_committed_for_source(source, snapshot),
+            input_committed=input_committed,
         )
 
     await ensure_application_planning_recovery_point(
@@ -158,7 +167,6 @@ async def resolve_application_planning_recovery(
         graph=graph,
         replay_policies=production_recovery_replay_policies(),
     )
-    input_committed = _input_committed_for_source(source, snapshot)
     if plan.decision is RecoveryDecision.READY_NATIVE:
         return _projection(
             classification="ready_to_continue",
