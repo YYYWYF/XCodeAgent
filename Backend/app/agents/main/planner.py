@@ -19,6 +19,7 @@ from app.services.project_plan import (
     apply_project_plan_feedback,
     create_project_plan,
     create_technical_plan,
+    product_agent_gateway_action_ids,
     technical_agent_contract_model_input,
 )
 from app.utils.model_output import extract_json_object
@@ -224,8 +225,15 @@ def _technical_planning_prompt(
                     "actionId": str(action_id),
                     "endpointId": gateway_endpoint_id,
                 }
-                for action_id in page_binding.get("actionIds", [])
-                if str(action_id).strip()
+                for action_id in product_agent_gateway_action_ids(
+                    product_plan,
+                    binding_page_id,
+                    {
+                        str(action_id)
+                        for action_id in page_binding.get("actionIds", [])
+                        if str(action_id).strip()
+                    },
+                )
             )
         response_example["agent_contracts"] = [
             {
