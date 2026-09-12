@@ -54,6 +54,10 @@ export type SendWorkflowMessageOptions = {
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   workflowScope?: string
+  executionRecovery?: {
+    action: 'continue'
+    sourceRunId: string
+  }
   onContent?: (content: string) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
@@ -130,6 +134,7 @@ export function buildWorkflowForwardedProps(
       (options.workflowDebug?.enabled ? options.workflowDebug.buildExecutionScope : undefined),
     resumeState: options.resumeState,
     workflowScope: options.workflowScope,
+    executionRecovery: options.executionRecovery,
     planControlAction: options.planControlAction,
     planControlRunId: options.planControlRunId,
     planningRunId: options.planningRunId,
@@ -544,6 +549,11 @@ export function getWorkflowUrl(): string {
 /** 返回自由对话 Graph 的 AG-UI 地址。 */
 export function getConversationUrl(): string {
   return `${getAgentBaseUrl()}/conversation/run`
+}
+
+/** 返回独立 Durable Recovery 使用的 AG-UI 地址，不改变普通 Workflow transport。 */
+export function getExecutionRecoveryUrl(): string {
+  return `${getAgentBaseUrl()}/execution-recovery/run`
 }
 
 export class AgUiChatSession {

@@ -160,6 +160,26 @@ function mergePlanningRefresh(
   return { ...base, extensions }
 }
 
+/** 在普通 workflow 生命周期帧缺少 GET-time 字段时保留最新恢复投影。 */
+function mergeExecutionRecovery(
+  base: ApplicationLifecycle,
+  current: ApplicationLifecycle,
+  incoming: ApplicationLifecycle
+): ApplicationLifecycle {
+  const currentProjection = current.extensions?.executionRecovery
+  const incomingProjection = incoming.extensions?.executionRecovery
+  if (!currentProjection || incomingProjection || incoming.revision < current.revision) {
+    return base
+  }
+  return {
+    ...base,
+    extensions: {
+      ...base.extensions,
+      executionRecovery: currentProjection
+    }
+  }
+}
+
 /**
  * 按应用标识和单调 revision 合并持久化 lifecycle。
  * planningRefresh 是 Backend GET 时临时计算的恢复投影，不参与持久化 revision；
@@ -171,7 +191,11 @@ export function latestApplicationLifecycle(
 ): ApplicationLifecycle {
   if (!current || current.application.id !== incoming.application.id) return incoming
   const base = incoming.revision > current.revision ? incoming : current
-  return mergePlanningRefresh(base, current, incoming)
+  return mergeExecutionRecovery(
+    mergePlanningRefresh(base, current, incoming),
+    current,
+    incoming
+  )
 }
 
 // 直接根据权威 lifecycle 状态计算首页展示状态。

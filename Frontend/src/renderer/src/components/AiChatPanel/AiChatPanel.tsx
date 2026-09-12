@@ -80,6 +80,7 @@ import StageOutputPanel from './components/StageOutputPanel'
 import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
+import ExecutionRecoveryCard from './components/ExecutionRecoveryCard'
 import ApiDesignConfigModal from './components/WorkflowRunCard/ApiDesignConfigModal'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
 import {
@@ -145,6 +146,7 @@ import {
   resolvePendingPlanGuard,
   stageOutputPhase
 } from './stageOutputState'
+import { executionRecoveryForSession } from './executionRecoveryState'
 import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
@@ -2167,6 +2169,7 @@ export default function AiChatPanel({
     error,
     handleAcceptPreview,
     handleContinueDevelopment: continueDevelopmentExecution,
+    handleContinueInterruptedExecution,
     handleContinueRevisionBuild,
     handleEndPlan,
     handleProductStageConversation,
@@ -2186,7 +2189,9 @@ export default function AiChatPanel({
     sessionExecutionLocked,
     sessionRunStates,
     stopping,
-    workspaceBusy
+    workspaceBusy,
+    recoveryError,
+    recoveryRunning
   } = useWorkflowConversation({
     acquireSessionExecution,
     activeSession,
@@ -2861,6 +2866,7 @@ export default function AiChatPanel({
     phaseExecution?.status || (pendingPlanLockActive ? 'awaiting_user' : 'running')
   const workflowInputLocked =
     workspaceBusy ||
+    recoveryRunning ||
     pendingPlanLockActive ||
     planningMutationBlocked(planningState)
   const displayedSessionRunStates =
@@ -3440,6 +3446,13 @@ export default function AiChatPanel({
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
   const acceptanceAwaiting = displayedPlanExecutionMode === 'awaiting_acceptance'
+  const activeExecutionRecovery = useMemo(() => {
+    const candidate = executionRecoveryForSession(applicationLifecycle, activeSession?.threadId)
+    return candidate?.availability === 'awaiting_user' ? undefined : candidate
+  }, [activeSession?.threadId, applicationLifecycle])
+  const activeWorkflowHasBusinessInteraction = Boolean(
+    activeWorkflow && workflowInteractionAvailability(activeWorkflow, applicationLifecycle) === 'active'
+  )
   const activeSessionTargetKey = currentStageSessionTargetKey
   const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const activeWorkflowMatchesTarget = Boolean(
@@ -4448,6 +4461,18 @@ export default function AiChatPanel({
               templateGenerationOrphaned={templateGenerationOrphaned}
               planningState={planningState}
             />
+
+            {activeExecutionRecovery && !activeWorkflowHasBusinessInteraction && !acceptanceAwaiting ? (
+              <ExecutionRecoveryCard
+                disabled={workflowInputLocked || otherSessionExecutionLocked}
+                error={recoveryError}
+                loading={recoveryRunning}
+                onContinue={() => {
+                  void handleContinueInterruptedExecution(activeExecutionRecovery)
+                }}
+                recovery={activeExecutionRecovery}
+              />
+            ) : null}
 
             {otherSessionExecutionLocked || pendingPlanOwnedByCurrentSession ? (
               <SessionExecutionLockDock

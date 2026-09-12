@@ -1311,6 +1311,43 @@ async def get_execution(
         return _execution_from_row(row) if row is not None else None
 
 
+async def list_recovery_projection_candidates(
+    workspace: str | Path,
+    *,
+    limit: int = 16,
+) -> list[DurableExecutionRecord]:
+    """读取没有正式恢复 child 的 canonical interrupted execution 叶子。"""
+
+    await initialize_execution_recovery_store(workspace)
+    bounded_limit = max(1, min(int(limit), 128))
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            SELECT e.run_id, e.thread_id, e.workspace, e.project_id,
+                   e.execution_kind, e.workflow_scope, e.first_node,
+                   e.current_node, e.status, e.last_recovery_point_id,
+                   e.started_at, e.updated_at, e.ended_at
+            FROM execution_records AS e
+            WHERE e.status = ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM recovery_attempts AS a
+                  WHERE a.source_run_id = e.run_id
+                    AND a.status != ?
+              )
+            ORDER BY e.updated_at DESC, e.run_id DESC
+            LIMIT ?
+            """,
+            (
+                DurableExecutionStatus.INTERRUPTED.value,
+                RecoveryAttemptStatus.FAILED_PRESTART.value,
+                bounded_limit,
+            ),
+        )
+        rows = await cursor.fetchall()
+    return [_execution_from_row(row) for row in rows]
+
+
 async def get_latest_recovery_point(
     workspace: str | Path,
     run_id: str,

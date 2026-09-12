@@ -1,0 +1,76 @@
+.@{class-prefix}-execution-recovery-card {
+  display: flex;
+  width: min(calc(100% - 60px), 1080px);
+  min-height: 64px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 12px;
+  margin: 8px auto 18px;
+  padding: 12px 14px;
+  color: var(--wb-text);
+  background: color-mix(in srgb, var(--wb-warning) 8%, var(--wb-canvas));
+  border: 1px solid color-mix(in srgb, var(--wb-warning) 42%, var(--wb-border));
+  border-radius: 12px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-warning) 10%, transparent);
+}
+
+.@{class-prefix}-execution-recovery-card-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-warning);
+  background: color-mix(in srgb, var(--wb-warning) 14%, var(--wb-canvas));
+  border-radius: 9px;
+  font-size: 17px;
+}
+
+.@{class-prefix}-execution-recovery-card-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+
+  .ant-typography {
+    margin: 0;
+    color: var(--wb-text);
+    font-size: 13px;
+    line-height: 19px;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    line-height: 18px;
+  }
+}
+
+.@{class-prefix}-execution-recovery-card-error {
+  color: var(--wb-warning) !important;
+  font-size: 12px !important;
+}
+
+.@{class-prefix}-execution-recovery-card-action.ant-btn {
+  flex: 0 0 auto;
+  border-radius: 7px;
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-execution-recovery-card {
+    width: calc(100% - 24px);
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .@{class-prefix}-execution-recovery-card-copy {
+    flex-basis: calc(100% - 46px);
+  }
+
+  .@{class-prefix}-execution-recovery-card-action.ant-btn {
+    width: 100%;
+    margin-left: 46px;
+  }
+}

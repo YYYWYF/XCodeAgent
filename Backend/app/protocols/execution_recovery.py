@@ -184,12 +184,6 @@ def build_execution_recovery_ag_ui_stream(
 def _parse_request(payload: dict[str, Any]) -> tuple[str, str]:
     """在协议边界拒绝客户端伪造的恢复定位与执行 authority。"""
 
-    unexpected = sorted(set(payload) - {"forwardedProps"})
-    if unexpected:
-        raise RecoveryExecutionError(
-            "INVALID_EXECUTION_RECOVERY_REQUEST",
-            "execution-recovery 请求只允许 forwardedProps。",
-        )
     forwarded = payload.get("forwardedProps")
     if not isinstance(forwarded, dict):
         raise RecoveryExecutionError(
@@ -202,6 +196,12 @@ def _parse_request(payload: dict[str, Any]) -> tuple[str, str]:
         raise RecoveryExecutionError(
             "INVALID_EXECUTION_RECOVERY_REQUEST",
             "executionRecovery 必须包含 workspaceRoot 和对象值。",
+        )
+    unexpected = sorted(set(recovery) - {"action", "sourceRunId"})
+    if unexpected:
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "executionRecovery 只允许 action 和 sourceRunId。",
         )
     forbidden = sorted(_FORBIDDEN_RECOVERY_FIELDS.intersection(recovery))
     if forbidden:

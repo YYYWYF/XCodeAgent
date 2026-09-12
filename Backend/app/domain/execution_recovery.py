@@ -192,6 +192,43 @@ class RecoveryPlan(ExecutionRecoveryModel):
     workspace_snapshot_hash: str | None = Field(default=None, max_length=512)
 
 
+class ExecutionRecoveryProjectionCandidate(ExecutionRecoveryModel):
+    """定义 lifecycle GET 仅向前端公开的单条中断执行投影。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    source_run_id: str = Field(alias="sourceRunId", min_length=1, max_length=512)
+    thread_id: str = Field(alias="threadId", min_length=1, max_length=512)
+    execution_kind: Literal["application_planning", "workbench"] = Field(
+        alias="executionKind"
+    )
+    workflow_scope: str | None = Field(
+        default=None,
+        alias="workflowScope",
+        max_length=128,
+    )
+    execution_status: str = Field(alias="executionStatus", min_length=1, max_length=64)
+    current_node: str | None = Field(default=None, alias="currentNode", max_length=256)
+    availability: Literal["ready", "requires_handler", "blocked", "awaiting_user"]
+    can_continue: bool = Field(alias="canContinue")
+    reason_code: str = Field(alias="reasonCode", min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=2048)
+    updated_at: datetime = Field(alias="updatedAt")
+
+
+class ExecutionRecoveryProjection(ExecutionRecoveryModel):
+    """定义 application lifecycle GET 的非持久化恢复投影外层。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["execution-recovery.v1"] = Field(
+        default="execution-recovery.v1",
+        alias="schemaVersion",
+    )
+    generated_at: datetime = Field(alias="generatedAt")
+    candidates: list[ExecutionRecoveryProjectionCandidate] = Field(default_factory=list)
+
+
 class RecoveryAttempt(ExecutionRecoveryModel):
     """记录 source execution 到新 execution attempt 的持久化 lineage。"""
 

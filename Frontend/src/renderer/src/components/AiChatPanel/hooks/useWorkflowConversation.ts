@@ -6,6 +6,7 @@ import {
   AgUiChatSession,
   AgUiRunError,
   appendElementContextToConversationPrompt,
+  getExecutionRecoveryUrl,
   getConversationUrl,
   getWorkflowUrl
 } from '../../../service/agUiAgent'
@@ -21,6 +22,7 @@ import type {
   ApplicationConfig,
   ApplicationPlanningInteraction,
   ApplicationLifecycle,
+  ExecutionRecoveryCandidate,
   ChatMessageSkill,
   EditorMode,
   InspectedElementContext,
@@ -189,6 +191,9 @@ type UseWorkflowConversationResult = {
   handleContinueDevelopment: (
     continuation: import('../../../service/chatSessions').ChatSessionDevelopmentContinuation
   ) => Promise<boolean>
+  handleContinueInterruptedExecution: (
+    recovery: ExecutionRecoveryCandidate
+  ) => Promise<boolean>
   handleEndPlan: (runId?: string) => Promise<void>
   handleProductStageConversation: (
     request: string,
@@ -234,6 +239,8 @@ type UseWorkflowConversationResult = {
   sessionRunStates: Record<string, SessionRunStatus>
   stopping: boolean
   workspaceBusy: boolean
+  recoveryRunning: boolean
+  recoveryError?: string
 }
 
 /** 从 Workflow 快照中读取最近一次页面选择，作为确认继续时的兜底上下文。 */
@@ -643,6 +650,8 @@ export function useWorkflowConversation({
   const [runStates, setRunStates] = useState<Record<string, SessionRunEntry>>({})
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
+  const [recoveringSourceRunId, setRecoveringSourceRunId] = useState<string>()
+  const [recoveryError, setRecoveryError] = useState<string>()
   // 记录用户已明确结束的会话，保证自由输入不依赖后端控制请求或生命周期回传时序。
   const [endedPlanSessionKeys, setEndedPlanSessionKeys] = useState<Record<string, boolean>>({})
 
@@ -679,6 +688,42 @@ export function useWorkflowConversation({
   // 只有非持有者会话只读；是否有局部 activeRun 不再参与所有权判断。
   const sessionExecutionLocked = Boolean(phaseExecution && !activeSessionOwnsExecution)
   const workspaceBusy = sessionExecutionLocked
+
+  /** 使用当前 stage session 的执行锁启动一次短生命周期 Durable Recovery。 */
+  const handleContinueInterruptedExecution = async (
+    recovery: ExecutionRecoveryCandidate
+  ): Promise<boolean> => {
+    if (
+      !activeSession ||
+      activeSession.threadId !== recovery.threadId ||
+      recoveringSourceRunId === recovery.sourceRunId ||
+      !recovery.canContinue
+    ) {
+      return false
+    }
+    const sessionIdentity = activeSession
+    setRecoveringSourceRunId(recovery.sourceRunId)
+    setRecoveryError(undefined)
+    try {
+      return await sendWorkflowMessage('继续执行上一次中断的任务。', {
+        executionRecovery: {
+          action: 'continue',
+          sourceRunId: recovery.sourceRunId
+        },
+        sessionIdentity,
+        titleFrom: '继续执行上一次中断的任务',
+        conversation: false
+      })
+    } finally {
+      try {
+        const latestLifecycle = await getApplicationLifecycle(application, sessionIdentity.threadId)
+        onApplicationLifecycleChange(latestLifecycle)
+      } catch (error) {
+        setRecoveryError(error instanceof Error ? error.message : '恢复状态刷新失败。')
+      }
+      setRecoveringSourceRunId(undefined)
+    }
+  }
   const sessionRunStates = sessionExecutions.reduce<Record<string, SessionRunStatus>>(
     (states, entry) => {
       if (
@@ -842,6 +887,10 @@ export function useWorkflowConversation({
       revisionContinuation?: { changeId: string; token: string }
       revisionInteraction?: WorkflowRevisionDraftInteraction
       workflowScope?: string
+      executionRecovery?: {
+        action: 'continue'
+        sourceRunId: string
+      }
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
@@ -914,7 +963,9 @@ export function useWorkflowConversation({
     const effectiveBuildExecutionScope =
       explicitBuildExecutionScope || sessionTargetFields.buildExecutionScope
 
-    const endpointUrl = options?.conversation
+    const endpointUrl = options?.executionRecovery
+      ? getExecutionRecoveryUrl()
+      : options?.conversation
       ? getConversationUrl()
       : options?.workflowScope === 'application_planning'
         ? getApplicationPlanningUrl()
@@ -922,8 +973,9 @@ export function useWorkflowConversation({
     const executionThreadId =
       options?.executionThreadId || options?.resumeState?.threadId || identity.threadId
     const currentAgUiSession = agUiSessionsRef.current[identity.key]
-    const agUiSession =
-      currentAgUiSession &&
+    const agUiSession = options?.executionRecovery
+      ? new AgUiChatSession(executionThreadId, endpointUrl)
+      : currentAgUiSession &&
       currentAgUiSession.endpointUrl === endpointUrl &&
       currentAgUiSession.threadId === executionThreadId
         ? currentAgUiSession
@@ -1123,7 +1175,8 @@ export function useWorkflowConversation({
         revisionContinuation: options?.revisionContinuation,
         developmentContinuation: options?.developmentContinuation,
         revisionInteraction: options?.revisionInteraction,
-        workflowScope: options?.workflowScope,
+      workflowScope: options?.workflowScope,
+      executionRecovery: options?.executionRecovery,
         onContent: (content) => {
           streamedContent = content
           updateAssistantMessage(content, streamedWorkflow, streamedToolCalls)
@@ -1298,6 +1351,10 @@ export function useWorkflowConversation({
         ...current,
         [identity.key]: failedContent
       }))
+      if (options?.executionRecovery) {
+        // Recovery endpoint 的内部错误码和技术原因不直接展示给普通用户。
+        setRecoveryError('无法安全恢复上一次执行，请查看最新状态。')
+      }
       return false
     } finally {
       releaseSessionExecution(identity.key)
@@ -2084,6 +2141,7 @@ export function useWorkflowConversation({
     handleAcceptPreview,
     handleContinueRevisionBuild,
     handleContinueDevelopment,
+    handleContinueInterruptedExecution,
     handleEndPlan,
     handleProductStageConversation,
     handleResumePlan,
@@ -2102,7 +2160,9 @@ export function useWorkflowConversation({
     sessionExecutionLocked,
     sessionRunStates,
     stopping,
-    workspaceBusy
+    workspaceBusy,
+    recoveryRunning: Boolean(recoveringSourceRunId),
+    recoveryError
   }
 }
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, AsyncIterator, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,9 +21,11 @@ from app.services.application_template_generation import (
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
+from app.services.execution_recovery_projection import resolve_execution_recovery_projection
 
 
 APPLICATION_LIFECYCLE_EVENT_NAME = "application-lifecycle"
+logger = logging.getLogger("uvicorn.error")
 
 
 class ApplicationLifecycleApplication(BaseModel):
@@ -193,10 +196,32 @@ def build_application_lifecycle_ag_ui_stream(
         if request.action == "get":
             # 恢复投影只附加到本次读取响应，不写回 application-lifecycle.json，
             # 避免进程内 runtime 事实伪装成可跨 Backend 重启的持久状态。
+            try:
+                recovery_projection = await resolve_execution_recovery_projection(
+                    request.workspace_root,
+                )
+            except Exception as exc:
+                # projection 是冷启动增强信息；解析失败不能阻断基础 lifecycle GET。
+                logger.warning(
+                    "recovery.projection.failed workspace=%s error=%s",
+                    request.workspace_root,
+                    exc,
+                    exc_info=True,
+                )
+                recovery_projection = None
             lifecycle_payload["extensions"] = {
                 **dict(lifecycle_payload.get("extensions") or {}),
                 "planningRefresh": resolve_planning_refresh_state(
                     request.workspace_root,
+                ),
+                "executionRecovery": (
+                    recovery_projection.model_dump(mode="json", by_alias=True)
+                    if recovery_projection is not None
+                    else {
+                        "schemaVersion": "execution-recovery.v1",
+                        "generatedAt": state.updated_at.isoformat(),
+                        "candidates": [],
+                    }
                 ),
             }
         data = {"action": request.action, "lifecycle": lifecycle_payload}

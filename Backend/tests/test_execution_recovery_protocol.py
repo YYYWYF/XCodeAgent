@@ -84,6 +84,30 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(raised.exception.code, "INVALID_EXECUTION_RECOVERY_REQUEST")
 
+    def test_standard_ag_ui_envelope_is_accepted(self) -> None:
+        """标准 AG-UI envelope 的客户端字段不能阻断 recovery authority 解析。"""
+
+        workspace, source_run_id = _parse_request(
+            {
+                "threadId": "frontend-thread",
+                "runId": "frontend-run",
+                "messages": [],
+                "state": {},
+                "tools": [],
+                "context": [],
+                "forwardedProps": {
+                    "workspaceRoot": str(self.workspace),
+                    "executionRecovery": {
+                        "action": "continue",
+                        "sourceRunId": "run-A",
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(workspace, str(self.workspace))
+        self.assertEqual(source_run_id, "run-A")
+
     async def test_requires_handler_has_no_recovery_side_effects(self) -> None:
         """默认 replay safety 未评估时只返回结构化拒绝，不 claim child 或修改 lifecycle。"""
 
