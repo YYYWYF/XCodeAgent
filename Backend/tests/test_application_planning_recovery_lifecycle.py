@@ -130,11 +130,11 @@ class ApplicationPlanningRecoveryLifecycleTests(unittest.IsolatedAsyncioTestCase
         cases = (
             ("awaiting_revision_plus_one", 11, awaiting, awaiting_user, None, None),
             ("revision_plus_two", 12, analyzing, running, None, None),
-            ("wrong_active_run", 11, analyzing, running, "other-run", None),
-            ("wrong_thread", 11, analyzing, running, None, "other-thread"),
-            ("wrong_stage", 11, generating, running, None, None),
-            ("wrong_analyzing_status", 11, analyzing, failed, None, None),
-            ("wrong_awaiting_status", 11, awaiting, running, None, None),
+            ("wrong_active_run", 10, analyzing, running, "other-run", None),
+            ("wrong_thread", 10, analyzing, running, None, "other-thread"),
+            ("wrong_stage", 10, generating, running, None, None),
+            ("wrong_analyzing_status", 10, analyzing, failed, None, None),
+            ("wrong_awaiting_status", 10, awaiting, running, None, None),
         )
 
         for index, case in enumerate(cases):
@@ -159,6 +159,29 @@ class ApplicationPlanningRecoveryLifecycleTests(unittest.IsolatedAsyncioTestCase
 
                 self.assertEqual(plan.decision, RecoveryDecision.STATE_DRIFT)
                 self.assertEqual(plan.reason_code, "LIFECYCLE_DRIFT")
+
+    async def test_non_candidate_keeps_generic_lifecycle_validation(self) -> None:
+        """非 committed answer 现场继续走 generic Lifecycle 与默认 replay 拒绝。"""
+
+        source = await self._insert_source(run_id="run-generic", thread_id="thread-generic")
+        point = self._point(source=source, lifecycle_revision=10)
+        await insert_recovery_point(workspace=self.workspace, point=point)
+        lifecycle = self._lifecycle(
+            source=source,
+            revision=10,
+            stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+            status=ApplicationLifecycleStatus.RUNNING,
+        )
+        write_application_lifecycle(self.workspace, lifecycle)
+
+        plan = await self._prepare(
+            source=source,
+            point=point,
+            interaction_action="confirm",
+        )
+
+        self.assertEqual(plan.decision, RecoveryDecision.REQUIRES_HANDLER)
+        self.assertEqual(plan.reason_code, "REPLAY_SAFETY_UNASSESSED")
 
     async def test_other_successor_or_interaction_cannot_use_transition_window(
         self,

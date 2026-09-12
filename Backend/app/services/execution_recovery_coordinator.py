@@ -18,6 +18,7 @@ from app.domain.execution_recovery import (
 from app.persistence.execution_recovery import get_execution
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.application_planning_recovery_policy import (
+    application_planning_committed_input_recovery_candidate,
     application_planning_committed_input_lifecycle_compatible,
 )
 from app.services.execution_recovery_selector import (
@@ -296,13 +297,23 @@ def _validate_lifecycle(
             "LIFECYCLE_STATE_MISSING",
             "Workbench execution 缺少应存在的 ApplicationLifecycle。",
         )
-    if application_planning_committed_input_lifecycle_compatible(
+    committed_candidate = application_planning_committed_input_recovery_candidate(
         source=source,
         point=point,
         snapshot=snapshot,
-        lifecycle=lifecycle,
-    ):
-        return _CheckpointValidation(lifecycle_revision=lifecycle.revision)
+    )
+    if committed_candidate:
+        if application_planning_committed_input_lifecycle_compatible(
+            source=source,
+            point=point,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+        ):
+            return _CheckpointValidation(lifecycle_revision=lifecycle.revision)
+        return _invalid_state(
+            "LIFECYCLE_DRIFT",
+            "已提交 Requirement 回答的 Lifecycle 已偏离允许的恢复窗口。",
+        )
     if (
         point.lifecycle_revision is not None
         and lifecycle.revision != point.lifecycle_revision

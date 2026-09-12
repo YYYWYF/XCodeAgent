@@ -41,6 +41,26 @@ def application_planning_committed_input(snapshot: Any) -> bool:
     )
 
 
+def application_planning_committed_input_recovery_candidate(
+    *,
+    source: DurableExecutionRecord,
+    point: RecoveryPoint,
+    snapshot: Any,
+) -> bool:
+    """判断 checkpoint 是否属于已提交 Requirement 回答的专用恢复候选现场。"""
+
+    values = getattr(snapshot, "values", {})
+    values = values if isinstance(values, dict) else {}
+    return (
+        source.execution_kind == "application_planning"
+        and source.status is DurableExecutionStatus.INTERRUPTED
+        and point.next_nodes == ["requirements"]
+        and application_planning_interrupt_from_snapshot(snapshot) is None
+        and str(values.get("active_run_id") or "").strip() == source.run_id
+        and application_planning_committed_input(snapshot)
+    )
+
+
 def application_planning_committed_input_lifecycle_compatible(
     *,
     source: DurableExecutionRecord,
@@ -50,16 +70,14 @@ def application_planning_committed_input_lifecycle_compatible(
 ) -> bool:
     """仅认可已提交澄清回答进入 requirements 时的两个生命周期窗口。"""
 
-    values = getattr(snapshot, "values", {})
-    values = values if isinstance(values, dict) else {}
+    if not application_planning_committed_input_recovery_candidate(
+        source=source,
+        point=point,
+        snapshot=snapshot,
+    ):
+        return False
     if (
-        source.execution_kind != "application_planning"
-        or source.status is not DurableExecutionStatus.INTERRUPTED
-        or point.next_nodes != ["requirements"]
-        or application_planning_interrupt_from_snapshot(snapshot) is not None
-        or str(values.get("active_run_id") or "").strip() != source.run_id
-        or not application_planning_committed_input(snapshot)
-        or lifecycle.initialization.thread_id != source.thread_id
+        lifecycle.initialization.thread_id != source.thread_id
         or lifecycle.active_run_id != source.run_id
     ):
         return False
@@ -96,15 +114,10 @@ class ApplicationPlanningCommittedInputReplayPolicy:
     ) -> RecoveryStrategyAssessment | None:
         """同时校验执行、checkpoint、交互身份和 Native Interrupt。"""
 
-        values = getattr(snapshot, "values", {})
-        values = values if isinstance(values, dict) else {}
-        if (
-            source.execution_kind != "application_planning"
-            or source.status is not DurableExecutionStatus.INTERRUPTED
-            or point.next_nodes != ["requirements"]
-            or application_planning_interrupt_from_snapshot(snapshot) is not None
-            or str(values.get("active_run_id") or "").strip() != source.run_id
-            or not application_planning_committed_input(snapshot)
+        if not application_planning_committed_input_recovery_candidate(
+            source=source,
+            point=point,
+            snapshot=snapshot,
         ):
             return None
         return RecoveryStrategyAssessment(
@@ -118,5 +131,6 @@ class ApplicationPlanningCommittedInputReplayPolicy:
 __all__ = [
     "ApplicationPlanningCommittedInputReplayPolicy",
     "application_planning_committed_input",
+    "application_planning_committed_input_recovery_candidate",
     "application_planning_committed_input_lifecycle_compatible",
 ]
