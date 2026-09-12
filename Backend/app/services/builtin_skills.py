@@ -38,6 +38,7 @@ _CODE_BLOCK_TEMPLATE_REFERENCE_FILES = [
 ]
 
 _SPRINGBOOT_BACKEND_REFERENCE_FILES = [
+    "references/error-handling.md",
     "references/database/bootstrap.md",
     "references/database/layer-implementation.md",
     "references/external-api/bootstrap.md",

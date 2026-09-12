@@ -19,6 +19,7 @@ class BuiltinSkillsTests(unittest.TestCase):
 
         self.assertLess(len(entrypoint), 10_000)
         for relative_path in (
+            "references/error-handling.md",
             "references/database/bootstrap.md",
             "references/database/layer-implementation.md",
             "references/external-api/bootstrap.md",
@@ -68,6 +69,11 @@ class BuiltinSkillsTests(unittest.TestCase):
             "## Error and Safety Behavior",
             "## Java 8 and Project Constraints",
             "## Completion Criteria",
+        )
+        error_handling_headings = (
+            "## Authority and Error-Code Definition",
+            "## Generating the Error Message",
+            "## Where to Raise Exceptions",
         )
 
         actual_entrypoint_headings = tuple(
@@ -148,6 +154,17 @@ class BuiltinSkillsTests(unittest.TestCase):
             normalized_entrypoint,
         )
         self.assertIn("stable `database` then `external_api` order", entrypoint)
+        error_handling = (skill_root / "references/error-handling.md").read_text(
+            encoding="utf-8"
+        )
+        error_heading_positions = [
+            error_handling.index(heading) for heading in error_handling_headings
+        ]
+        self.assertEqual(sorted(error_heading_positions), error_heading_positions)
+        self.assertIn("api_contract.error_codes", error_handling)
+        self.assertIn("ApplicationService", error_handling)
+        self.assertIn("MessageFormat", error_handling)
+        self.assertIn("must not catch `BizException`", error_handling)
         for result_name in (
             "already_satisfied",
             "contract_mismatch",

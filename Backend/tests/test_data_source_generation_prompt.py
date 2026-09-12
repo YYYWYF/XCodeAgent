@@ -384,6 +384,13 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertEqual(database_paths[:2], expected_skills)
         self.assertEqual(external_paths[:2], expected_skills)
         self.assertEqual(mixed_paths[:2], expected_skills)
+        error_handling_path = (
+            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "references/error-handling.md"
+        )
+        self.assertIn(error_handling_path, database_paths)
+        self.assertIn(error_handling_path, external_paths)
+        self.assertIn(error_handling_path, mixed_paths)
         self.assertIn(
             "/.xcodeagent/builtin-skills/springboot-backend-generate/"
             "references/database/layer-implementation.md",
@@ -418,6 +425,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             "references/external-api/bootstrap.md",
             bootstrap_paths,
         )
+        self.assertNotIn(error_handling_path, bootstrap_paths)
 
     def test_static_backend_task_is_rejected(self) -> None:
         """非法 static 来源若误入 API 设计，应在调用模型前失败。"""

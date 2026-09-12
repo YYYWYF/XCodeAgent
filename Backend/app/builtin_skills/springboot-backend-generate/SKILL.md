@@ -67,6 +67,9 @@ or inconsistent with its source-specific design or the current Endpoint operatio
 
 The `implementation_contract.kind` field accepts the following values:
 
+Choose the mode by its responsibility, not by the `implementation_contract.kind` value
+alone; the declared kind must also agree with the task purpose and write scope.
+
 - **Bootstrap** is a project-level dependency and shared-capability check. It verifies the
   Maven dependencies and global configuration required by the selected source types,
   injects only genuinely missing authorized infrastructure, and never implements an
@@ -80,16 +83,19 @@ The declared `implementation_contract.kind`, task purpose, `allowed_paths`, and
 `change_scope` must agree with this boundary. Return `contract_mismatch` before loading a
 mode reference or writing when they conflict. When they agree, use
 `implementation_contract.kind` to choose the reference for each source type in the set.
-Read only the selected references, in stable `database` then `external_api` order. A mixed
-task reads both selected references but reads this `SKILL.md` only once. Reject `static` or
-any unknown source type before writing.
+Every Endpoint task must first read the shared
+[error handling guide](references/error-handling.md), then read the selected source
+references in stable `database` then `external_api` order. Bootstrap tasks do not read the
+error handling guide. A mixed task reads each selected reference once and reads this
+`SKILL.md` only once. Reject `static` or any unknown source type before writing.
 
 ### Database
 
 - For `implementation_contract.kind=bootstrap`, read
   [database/bootstrap.md](references/database/bootstrap.md).
 - For `implementation_contract.kind=endpoint`, read
-  [database/layer-implementation.md](references/database/layer-implementation.md) and
+  [error-handling.md](references/error-handling.md), then
+  [database/layer-implementation.md](references/database/layer-implementation.md), and
   apply only the section for the current `stage`.
 
 Prefer existing MyBatis-Plus conventions. Endpoint tasks must not edit Maven dependencies,
@@ -100,7 +106,8 @@ data source configuration, or global MyBatis-Plus configuration.
 - For `implementation_contract.kind=bootstrap`, read
   [external-api/bootstrap.md](references/external-api/bootstrap.md).
 - For `implementation_contract.kind=endpoint`, read
-  [external-api/layer-implementation.md](references/external-api/layer-implementation.md)
+  [error-handling.md](references/error-handling.md), then
+  [external-api/layer-implementation.md](references/external-api/layer-implementation.md),
   and apply only the section for the current `stage`.
 
 Prefer Spring Cloud OpenFeign for a new Client, but preserve an already satisfying

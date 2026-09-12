@@ -140,9 +140,10 @@ not create a second implementation with the same responsibility:
   `BaseExceptionHandler`. Controllers must not catch `BizException` or manually call
   `ResponseEntity.failed` to imitate global exception handling.
 - For confirmed business failures in a Service, throw `BizException` with an existing
-  concrete error-code type. Do not invent error codes. If no confirmed error-code
-  implementation exists and the current `allowed_paths` cannot add one, return a change
-  request.
+  concrete error-code type and follow the shared Endpoint error-handling guide for code
+  authority, message generation, parameter formatting, and layer ownership. If no
+  confirmed error-code implementation exists and the current `allowed_paths` cannot add
+  one, return a change request.
 - Reuse the existing CORS configuration. Do not add `@CrossOrigin` to a Controller or
   create or modify another `WebMvcConfigurer`.
 
@@ -165,6 +166,9 @@ contract mismatch or change request when the current write scope cannot implemen
 
 ## Error and Safety Behavior
 
+- Prefer detecting business failures and raising endpoint-facing `BizException` in the
+  Application Service. Repository and Controller layers must not assemble public error
+  messages from persistence exceptions.
 - Do not swallow persistence or mapping failures, return fake success, or expose database
   credentials in logs or responses.
 - Do not invent error codes, response wrappers, schema fields, CRUD operations, or

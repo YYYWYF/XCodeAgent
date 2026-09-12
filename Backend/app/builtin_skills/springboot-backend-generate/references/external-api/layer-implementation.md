@@ -103,7 +103,8 @@ treat them as read-only template dependencies.
 - Translate confirmed upstream failures through the existing concrete `IErrorCode` and
   `BizException` flow so `BaseExceptionHandler` owns the public failure response. Do not
   catch `BizException` or call `ResponseEntity.failed` in the Controller, and never invent
-  an error code.
+  an error code. Follow the shared Endpoint error-handling guide for code authority,
+  message generation, parameter formatting, and Service-first exception ownership.
 - Reuse existing CORS configuration. Do not add `@CrossOrigin`, another
   `WebMvcConfigurer`, or edits to template `common` files.
 
@@ -130,6 +131,9 @@ not authorize pagination by themselves.
 
 ## Error and Safety Behavior
 
+- Prefer the Application Service for the final endpoint-facing `BizException`. An upstream
+  adapter may classify a failure only from an exact confirmed mapping; it must not expose
+  or turn a raw upstream message into the public `errorMsg`.
 - Do not swallow upstream HTTP errors, timeouts, or decode failures; do not return fake
   success or expose credentials/raw sensitive payloads.
 - The current contract is public/no-auth only. Return a change request for authentication,

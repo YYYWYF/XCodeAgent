@@ -87,6 +87,8 @@ def task_required_instruction_paths(task: dict[str, Any]) -> list[str]:
         f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
         f"{SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME}/references/"
     )
+    if _task_kind(task) == "endpoint":
+        paths.append(f"{skill_root}error-handling.md")
     paths.extend(
         f"{skill_root}{_SOURCE_REFERENCE_DIRECTORIES[source_type]}/{reference_name}"
         for source_type in _SOURCE_SKILL_ORDER
