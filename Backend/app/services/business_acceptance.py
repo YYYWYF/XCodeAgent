@@ -244,6 +244,7 @@ def business_acceptance_contract_errors(
         if check.get("verification_stage") != "build":
             errors.append(f"Business check {check_id or '<unknown>'} must run at build stage.")
         errors.extend(_expected_field_errors(check_id, kind, check.get("expected")))
+    errors.extend(_frontend_api_deliverable_target_errors(task_id, deliverables, checks))
     return _dedupe_strings(errors)
 
 
@@ -291,12 +292,16 @@ def _aggregate_deliverables_by_kind(
             grouped[kind] = deepcopy(deliverable)
             grouped[kind]["paths"] = []
             grouped[kind]["provides"] = []
+            grouped[kind]["target_ids"] = []
             order.append(kind)
         grouped[kind]["paths"] = _dedupe_paths(
             [*grouped[kind]["paths"], *deliverable.get("paths", [])]
         )
         grouped[kind]["provides"] = _dedupe_strings(
             [*grouped[kind]["provides"], *deliverable.get("provides", [])]
+        )
+        grouped[kind]["target_ids"] = _dedupe_strings(
+            [*grouped[kind]["target_ids"], _text(deliverable.get("target_id"))]
         )
     return [grouped[kind] for kind in order]
 
@@ -310,7 +315,7 @@ def _checks_for_deliverable(
 
     kind = deliverable["kind"]
     if kind == "frontend.api_module":
-        endpoints = _endpoint_expectations(formal)
+        endpoints = _frontend_api_endpoint_expectations(formal, deliverable)
         return [
             _business_check(
                 task,
@@ -461,6 +466,76 @@ def _checks_for_deliverable(
             )
         ]
     return []
+
+
+def _frontend_api_endpoint_expectations(
+    formal: dict[str, Any], deliverable: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """按前端 API 交付物声明的 Endpoint 或 API Contract 收窄验收范围。"""
+
+    target_ids = set(
+        _dedupe_strings(
+            [
+                _text(deliverable.get("target_id")),
+                *_string_list(deliverable.get("target_ids")),
+            ]
+        )
+    )
+    return [
+        endpoint
+        for endpoint in _endpoint_expectations(formal)
+        if _text(endpoint.get("endpoint_id")) in target_ids
+        or _text(endpoint.get("api_contract_id")) in target_ids
+    ]
+
+
+def _frontend_api_deliverable_target_errors(
+    task_id: str,
+    deliverables: list[dict[str, Any]],
+    checks: list[dict[str, Any]],
+) -> list[str]:
+    """拒绝无法映射到当前正式 Endpoint 或 API Contract 的前端 API target_id。"""
+
+    api_deliverables = [
+        deliverable
+        for deliverable in deliverables
+        if deliverable.get("kind") == "frontend.api_module"
+    ]
+    if not api_deliverables:
+        return []
+    declared_target_ids = {
+        _text(deliverable.get("target_id")) for deliverable in api_deliverables
+    }
+    expected_endpoints = [
+        endpoint
+        for check in checks
+        if check.get("kind") == "frontend.api_contract"
+        for endpoint in _dict_items(_dict_value(check.get("expected")).get("endpoints"))
+    ]
+    valid_target_ids = {
+        target_id
+        for endpoint in expected_endpoints
+        for target_id in (
+            _text(endpoint.get("endpoint_id")),
+            _text(endpoint.get("api_contract_id")),
+        )
+        if target_id
+    }
+    errors = [
+        f"Frontend API deliverable {deliverable['id']} in task {task_id} has target_id "
+        f"{deliverable['target_id'] or '<empty>'} outside the current formal Endpoint/API contract scope."
+        for deliverable in api_deliverables
+        if _text(deliverable.get("target_id")) not in valid_target_ids
+    ]
+    # 反向校验已编译检查，防止未来再次把 Unit 的完整 Endpoint 集合扩散给单个任务。
+    errors.extend(
+        f"Frontend API task {task_id} claims Endpoint "
+        f"{_text(endpoint.get('endpoint_id')) or '<empty>'} outside its deliverable targets."
+        for endpoint in expected_endpoints
+        if _text(endpoint.get("endpoint_id")) not in declared_target_ids
+        and _text(endpoint.get("api_contract_id")) not in declared_target_ids
+    )
+    return errors
 
 
 def _business_check(

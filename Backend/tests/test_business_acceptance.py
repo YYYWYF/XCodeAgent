@@ -368,7 +368,11 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
                     path=path.replace("/", "\\"),
                     owner=owner,
                     unit_id=unit_id,
-                    target_id="orders.list" if kind == "backend.endpoint_controller" else "Order",
+                    target_id=(
+                        "orders.list"
+                        if kind in {"frontend.api_module", "backend.endpoint_controller"}
+                        else "Order"
+                    ),
                 )
                 for kind, owner, unit_id, path in cases
             ],
@@ -484,6 +488,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
             path="frontend\\src\\apis\\orders.ts",
             owner="frontend",
             unit_id="frontend:api-client",
+            target_id="orders.list",
         )
         task["acceptance_criteria"] = ["模型不应控制平台验收"]
         compiled = compile_business_acceptance([task], _formal_context())[0]
@@ -491,6 +496,30 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
         self.assertNotEqual(check["sources"][0]["sha256"], "")
         self.assertEqual(check["verification"]["mode"], "deterministic")
         self.assertNotIn("verification_commands", check)
+
+    def test_frontend_api_check_cannot_claim_endpoint_outside_deliverable_target(self) -> None:
+        """业务检查不得把 Unit 中其他 Endpoint 扩散给单个前端 API 任务。"""
+
+        task = _task(
+            "frontend.api_module",
+            path="frontend/src/apis/orders.ts",
+            owner="frontend",
+            unit_id="frontend:api-client",
+            target_id="orders.list",
+        )
+        compiled = compile_business_acceptance([task], _formal_context())[0]
+        compiled["business_acceptance_checks"][0]["expected"]["endpoints"].append(
+            {
+                "api_contract_id": "orders-api",
+                "endpoint_id": "orders.delete",
+            }
+        )
+
+        errors = business_acceptance_contract_errors(compiled)
+
+        self.assertTrue(
+            any("claims Endpoint orders.delete outside its deliverable targets" in error for error in errors)
+        )
 
     def test_invalid_deliverable_and_check_scope_are_rejected(self) -> None:
         """交付物越权、owner 不匹配和未知业务检查引用必须被拒绝。"""
@@ -500,6 +529,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
             path="frontend/src/apis/orders.ts",
             owner="backend",
             unit_id="backend:orders",
+            target_id="orders.list",
         )
         task["deliverables"][0]["paths"] = ["../outside.ts"]
         task["business_acceptance_checks"] = [
@@ -531,6 +561,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
                     path="frontend/src/apis/orders.ts",
                     owner="frontend",
                     unit_id="frontend:api-client",
+                    target_id="orders.list",
                 )
             ],
             _formal_context(),

@@ -1401,9 +1401,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "id": "task-page-api",
                         "unit_id": "page:test-page-1",
                         "owner": "frontend",
-                        "description": "创建页面 API 模块。",
+                        "description": "创建页面共享调用能力。",
                         "change_scope": ["frontend/src/apis/testPage1.ts"],
-                        "deliverables": [{"id": "api:test-page-1", "kind": "frontend.api_module", "target_id": "test-page-1", "paths": ["frontend/src/apis/testPage1.ts"], "provides": ["test-page-1.api"]}],
+                        "deliverables": [{"id": "api:test-page-1", "kind": "frontend.shared_capability", "target_id": "test-page-1", "paths": ["frontend/src/apis/testPage1.ts"], "provides": ["test-page-1.api"]}],
                     }
                 ]
             }
@@ -1953,7 +1953,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     {
                         "id": f"deliverable:{task_id}",
                         "kind": "frontend.api_module",
-                        "target_id": task_id,
+                        "target_id": "role_api.list",
                         "paths": [path],
                         "provides": [f"{task_id}.api"],
                     }
@@ -1979,6 +1979,169 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("role_api + role_api.list", errors)
         self.assertIn("home-api (frontend/src/apis/homeApi.ts)", errors)
         self.assertIn("role-api (frontend/src/apis/role.ts)", errors)
+
+    def test_frontend_api_deliverable_target_scopes_endpoint_owner(self) -> None:
+        """同一 API Client Unit 的独立 Endpoint 模块不得互相冒充实现 owner。"""
+
+        project_plan = {
+            "api_contracts": [
+                {
+                    "id": "product_api",
+                    "endpoints": [
+                        {
+                            "id": "product_api.list",
+                            "method": "GET",
+                            "path": "/api/products",
+                            "parameters": [],
+                        },
+                        {
+                            "id": "product_api.delete",
+                            "method": "DELETE",
+                            "path": "/api/products/{id}",
+                            "parameters": [],
+                        },
+                    ],
+                    "schemas": {},
+                },
+                {
+                    "id": "category_api",
+                    "endpoints": [
+                        {
+                            "id": "category_api.options",
+                            "method": "GET",
+                            "path": "/api/categories/options",
+                            "parameters": [],
+                        }
+                    ],
+                    "schemas": {},
+                },
+            ]
+        }
+        tasks = [
+            {
+                "id": task_id,
+                "unit_id": "frontend:api-client",
+                "owner": "frontend",
+                "description": f"实现 {endpoint_id}",
+                "change_scope": [{"operation": "add", "path": target_path}],
+                "deliverables": [
+                    {
+                        "id": f"deliverable:{task_id}",
+                        "kind": "frontend.api_module",
+                        "target_id": endpoint_id,
+                        "paths": [target_path],
+                        "provides": [f"frontend.api.{endpoint_id}"],
+                    }
+                ],
+            }
+            for task_id, endpoint_id, target_path in (
+                (
+                    "frontend:api-client::product-api-list",
+                    "product_api.list",
+                    "frontend/src/apis/product/list.ts",
+                ),
+                (
+                    "frontend:api-client::product-api-delete",
+                    "product_api.delete",
+                    "frontend/src/apis/product/delete.ts",
+                ),
+                (
+                    "frontend:api-client::category-api-options",
+                    "category_api.options",
+                    "frontend/src/apis/category/options.ts",
+                ),
+            )
+        ]
+
+        plan = create_build_task_plan(
+            project_plan,
+            agent_plan={"tasks": tasks},
+            build_context={
+                "required_unit_ids": ["frontend:api-client"],
+                "endpoint_ids": [
+                    "product_api.list",
+                    "product_api.delete",
+                    "category_api.options",
+                ],
+            },
+        )
+
+        self.assertTrue(
+            plan["task_graph"]["validation"]["is_valid"],
+            plan["task_graph"]["validation"]["errors"],
+        )
+        self.assertEqual(
+            {
+                owner["owner_task_id"]: owner["endpoint_id"]
+                for owner in frontend_endpoint_implementation_owners(
+                    list(plan["task_registry"].values())
+                )
+            },
+            {
+                "frontend:api-client::product-api-list": "product_api.list",
+                "frontend:api-client::product-api-delete": "product_api.delete",
+                "frontend:api-client::category-api-options": "category_api.options",
+            },
+        )
+
+    def test_frontend_api_deliverable_rejects_unknown_formal_target(self) -> None:
+        """前端 API target_id 拼写错误时必须直接报告正式范围错误。"""
+
+        plan = create_build_task_plan(
+            {
+                "api_contracts": [
+                    {
+                        "id": "product_api",
+                        "endpoints": [
+                            {
+                                "id": "product_api.list",
+                                "method": "GET",
+                                "path": "/api/products",
+                                "parameters": [],
+                            }
+                        ],
+                        "schemas": {},
+                    }
+                ]
+            },
+            agent_plan={
+                "tasks": [
+                    {
+                        "id": "product-list-api",
+                        "unit_id": "frontend:api-client",
+                        "owner": "frontend",
+                        "description": "实现商品列表 API。",
+                        "change_scope": [
+                            {
+                                "operation": "add",
+                                "path": "frontend/src/apis/product/list.ts",
+                            }
+                        ],
+                        "deliverables": [
+                            {
+                                "id": "deliverable:product-list-api",
+                                "kind": "frontend.api_module",
+                                "target_id": "product_api.lsit",
+                                "paths": ["frontend/src/apis/product/list.ts"],
+                                "provides": ["frontend.api.product_api.list"],
+                            }
+                        ],
+                    }
+                ]
+            },
+            build_context={
+                "required_unit_ids": ["frontend:api-client"],
+                "endpoint_ids": ["product_api.list"],
+            },
+        )
+
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertTrue(
+            any(
+                "outside the current formal Endpoint/API contract scope" in error
+                for error in plan["task_graph"]["validation"]["errors"]
+            )
+        )
 
     def test_frontend_endpoint_owner_validation_ignores_repair_task(self) -> None:
         """同一路径的父任务与受限 Repair 不得被误判为两个实现 owner。"""

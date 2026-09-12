@@ -26,7 +26,11 @@ def _compiled_task(kind: str, path: str, *, unit_id: str = "frontend:api-client"
         path=path,
         owner="frontend" if kind.startswith("frontend.") else "backend",
         unit_id=unit_id,
-        target_id="orders.list" if kind == "backend.endpoint_controller" else "Order",
+        target_id=(
+            "orders.list"
+            if kind in {"frontend.api_module", "backend.endpoint_controller"}
+            else "Order"
+        ),
     )
     return compile_business_acceptance([task], context)[0], context["project_plan"]
 
