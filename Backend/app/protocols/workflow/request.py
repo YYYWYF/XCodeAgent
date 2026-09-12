@@ -1839,6 +1839,15 @@ def _debug_resume_values(
             # 只有 Build 入口需要从权威 DAG 初始化任务；下游节点必须沿用
             # checkpoint 中已经执行过的任务状态，不能重新注入 pending 任务。
             values["tasks"] = tasks_from_build_task_plan(build_task_plan)
+            # 显式 Build 调试属于新的 Build Run：清空 checkpoint 中的旧绑定，
+            # 但继续使用权威 DAG 的任务终态，任何已完成任务都不再派发。
+            values.update(
+                {
+                    "build_run_id": "",
+                    "build_run_plan_path": "",
+                    "build_run_plan_sha256": "",
+                }
+            )
 
     workspace_snapshot_path = _resolve_debug_workspace_snapshot_path(
         debug_state,

@@ -70,6 +70,7 @@ from app.workspace.task_documents import (
     build_task_plan_json_path,
     load_build_task_plan_json,
     write_build_run_task_plan_json,
+    write_build_task_plan_execution_state,
 )
 from app.workspace.task_documents import write_repair_task_plan_json
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
@@ -739,7 +740,9 @@ def _apply_scheduler_results(
             repaired_tasks,
             updated.get("build_results", []),
         )
-    # 调度状态由 Graph checkpoint 保存，不能回写 Build Run 的只读计划副本或规划权威文件。
+    # Build Run 副本保持只读；运行状态回写工作区权威 DAG，供后续范围复用。
+    # 写入函数只合并既有任务的运行字段，修复任务等 Run 内增量不会改变规划合同。
+    write_build_task_plan_execution_state(state, updated["build_task_plan"])
     return updated
 
 

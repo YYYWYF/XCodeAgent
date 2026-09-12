@@ -435,6 +435,8 @@ checkpoint 中的任务计划。若用户在 DAG 阶段提出正式设计变更�
 - 用户确认：`confirmation_status=confirmed`，写入 `confirmed_at`；
 - 用户重新生成：覆盖最新 JSON，并重置为 `confirmation_status=pending`、`confirmed_at=null`；
 - 任务执行状态变化不清除确认状态；
+- Scheduler 将既有任务的执行状态回写到该 JSON，供后续 Scope 或新 Build Run 复用；
+- 新 Build Run 必须把 `backend:bootstrap` 和显式 `*.verify` 任务重置为 `pending`，依赖检测与验证不能因历史完成状态被跳过；
 - 任务规划内容变化必须清除原确认状态并重新确认。
 
 重建任务 registry、执行批次或 Unit 元数据时必须显式区分“执行状态更新”和“任务规划内容变化”：

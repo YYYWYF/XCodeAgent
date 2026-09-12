@@ -2143,6 +2143,9 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_values"]["project_plan"]["version"], "plan-v1")
         self.assertEqual(inputs["resume_values"]["tasks"], [{"id": "task-1"}])
         self.assertEqual(inputs["resume_values"]["workspace_revision"], "rev-auto")
+        self.assertEqual(inputs["resume_values"]["build_run_id"], "")
+        self.assertEqual(inputs["resume_values"]["build_run_plan_path"], "")
+        self.assertEqual(inputs["resume_values"]["build_run_plan_sha256"], "")
 
     def test_integration_test_debug_starts_with_fresh_repair_budget(self) -> None:
         """验证显式集成测试调试不会继承同一会话已耗尽的修复计数。"""

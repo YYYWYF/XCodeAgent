@@ -52,6 +52,166 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_build_debug_rerun_reuses_all_completed_tasks(self) -> None:
+        """从 Build 调试重跑时复用当前 DAG 中全部已完成任务。"""
+
+        dispatched_task_ids: list[str] = []
+        tasks = [
+            {
+                "id": "backend:bootstrap::bootstrap",
+                "unit_id": "backend:bootstrap",
+                "owner": "backend",
+                "task_type": "backend.code",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [
+                    {"operation": "modify", "path": "backend/pom.xml"}
+                ],
+            },
+            {
+                "id": "backend:endpoint:orders:list::controller",
+                "unit_id": "backend:endpoint:orders:list",
+                "owner": "backend",
+                "task_type": "backend.code",
+                "status": "pending",
+                "dependencies": ["backend:bootstrap::bootstrap"],
+                "change_scope": [
+                    {"operation": "add", "path": "backend/src/OrdersController.java"}
+                ],
+            },
+            {
+                "id": "backend:endpoint:orders:list::verify",
+                "unit_id": "backend:endpoint:orders:list",
+                "owner": "backend",
+                "task_type": "backend.verify",
+                "status": "pending",
+                "dependencies": ["backend:endpoint:orders:list::controller"],
+                "change_scope": [
+                    {"operation": "modify", "path": "backend/src/OrdersController.java"}
+                ],
+            },
+        ]
+
+        def backend_runner(**kwargs):
+            results = []
+            for task in kwargs["tasks"]:
+                dispatched_task_ids.append(task["id"])
+                if task["unit_id"] == "backend:bootstrap":
+                    results.append(
+                        {
+                            "task_id": task["id"],
+                            "owner": "backend",
+                            "status": "already_satisfied",
+                            "summary": "依赖检测已完成，当前环境无需修改。",
+                        }
+                    )
+                    continue
+                _write_workspace_file(
+                    kwargs.get("workspace"),
+                    "backend/src/OrdersController.java",
+                )
+                results.append(
+                    {
+                        "task_id": task["id"],
+                        "owner": "backend",
+                        "status": "completed",
+                        "summary": "接口实现已完成。",
+                    }
+                )
+            return results
+
+        with tempfile.TemporaryDirectory() as workspace:
+            pom_path = os.path.join(workspace, "backend", "pom.xml")
+            os.makedirs(os.path.dirname(pom_path), exist_ok=True)
+            with open(pom_path, "w", encoding="utf-8") as handle:
+                handle.write("<project />\n")
+            initial_state = _ready_build_state(
+                workspace,
+                {
+                    "workspace": workspace,
+                    "project_plan": {"version": "1.0.0"},
+                    "build_execution_scope": {
+                        "type": "endpoint",
+                        "apiContractId": "orders",
+                        "targetId": "list",
+                    },
+                    "build_task_plan": replace_build_task_plan_tasks(
+                        {
+                            "schema_version": "build-dag.v3",
+                            "build_units": {
+                                "backend:bootstrap": {
+                                    "id": "backend:bootstrap",
+                                    "kind": "backend",
+                                },
+                                "backend:endpoint:orders:list": {
+                                    "id": "backend:endpoint:orders:list",
+                                    "kind": "backend",
+                                },
+                            },
+                            "unit_graph": {
+                                "nodes": [
+                                    "backend:bootstrap",
+                                    "backend:endpoint:orders:list",
+                                ],
+                                "edges": [
+                                    {
+                                        "from": "backend:bootstrap",
+                                        "to": "backend:endpoint:orders:list",
+                                        "type": "depends_on",
+                                    }
+                                ],
+                            },
+                        },
+                        tasks,
+                    ),
+                    "timeline": [],
+                },
+            )
+            with patch(
+                "app.graph.subgraphs.build.generate_data_sources_with_deep_agent",
+                side_effect=backend_runner,
+            ):
+                first = run_build_scheduler(initial_state)
+                first_dispatches = list(dispatched_task_ids)
+                dispatched_task_ids.clear()
+                second = run_build_scheduler(
+                    {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_execution_scope": {
+                            "type": "endpoint",
+                            "apiContractId": "orders",
+                            "targetId": "list",
+                        },
+                        "timeline": [],
+                    }
+                )
+
+            plan_path = os.path.join(
+                workspace, ".xcodeagent", "plans", "build-task-plan.json"
+            )
+            with open(plan_path, encoding="utf-8") as handle:
+                persisted = json.load(handle)
+
+        self.assertEqual(
+            first_dispatches,
+            [
+                "backend:bootstrap::bootstrap",
+                "backend:endpoint:orders:list::controller",
+                "backend:endpoint:orders:list::verify",
+            ],
+        )
+        self.assertEqual(dispatched_task_ids, [])
+        self.assertEqual(first["build_summary"]["status"], "completed")
+        self.assertEqual(second["build_summary"]["status"], "completed")
+        self.assertEqual(second["build_execution_slice"]["summary"]["reused"], 3)
+        self.assertEqual(
+            persisted["task_registry"][
+                "backend:endpoint:orders:list::controller"
+            ]["status"],
+            "completed",
+        )
+
     def test_backend_workspace_snapshot_loads_from_inspection_artifact(self) -> None:
         """Build 应通过独立快照路径读取 WorkspaceSnapshot，而不是读取任务计划。"""
 
