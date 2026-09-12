@@ -27,7 +27,11 @@ from app.services.execution_recovery_strategy import (
     RecoveryStrategyAssessment,
     RecoveryStrategyResolver,
 )
-from app.services.workspace_inspector import snapshot_hash
+from app.services.workspace_inspector import (
+    INSPECTOR_SCHEMA_VERSION,
+    snapshot_hash,
+    workspace_inventory,
+)
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
 
@@ -297,32 +301,54 @@ def _validate_workspace(
     workspace: str,
     point: RecoveryPoint,
 ) -> _CheckpointValidation:
-    """读取既有工作区快照并严格比较 revision 与 snapshot hash。"""
+    """从当前磁盘重新计算 revision，再严格比较对应 snapshot hash。"""
 
     if point.workspace_revision is None and point.workspace_snapshot_hash is None:
         return _CheckpointValidation()
-    snapshot = _load_current_workspace_snapshot(workspace)
-    if snapshot is None:
-        return _invalid_state(
-            "WORKSPACE_DRIFT",
-            "找不到可用于确认工作区未漂移的现有 snapshot。",
+
+    if point.workspace_revision is None:
+        return _requires_handler_state(
+            "WORKSPACE_STATE_UNVERIFIABLE",
+            "RecoveryPoint 缺少 workspaceRevision，无法验证当前磁盘状态。",
         )
-    current_revision = _optional_text(snapshot.get("workspace_revision"))
-    current_hash = snapshot_hash(snapshot)
-    if (
-        point.workspace_revision is not None
-        and current_revision != point.workspace_revision
-    ):
+
+    workspace_root = Path(workspace).expanduser().resolve()
+    if not workspace_root.is_dir():
+        return _requires_handler_state(
+            "WORKSPACE_STATE_UNVERIFIABLE",
+            "当前工作区不存在，无法安全读取真实磁盘状态。",
+        )
+    try:
+        _files, current_revision = workspace_inventory(workspace_root)
+    except (OSError, ValueError):
+        return _requires_handler_state(
+            "WORKSPACE_STATE_UNVERIFIABLE",
+            "当前工作区状态无法安全读取。",
+        )
+
+    if not current_revision:
+        return _requires_handler_state(
+            "WORKSPACE_STATE_UNVERIFIABLE",
+            "当前工作区未能生成有效 revision，无法安全验证恢复现场。",
+        )
+    if current_revision != point.workspace_revision:
         return _invalid_state(
             "WORKSPACE_DRIFT",
             "当前 workspace revision 已偏离 RecoveryPoint。",
             workspace_revision=current_revision,
-            workspace_snapshot_hash=current_hash,
         )
-    if (
-        point.workspace_snapshot_hash is not None
-        and current_hash != point.workspace_snapshot_hash
-    ):
+
+    if point.workspace_snapshot_hash is None:
+        return _CheckpointValidation(workspace_revision=current_revision)
+
+    snapshot = _load_workspace_snapshot_for_revision(workspace, current_revision)
+    if snapshot is None:
+        return _requires_handler_state(
+            "WORKSPACE_SNAPSHOT_UNAVAILABLE",
+            "当前 workspace revision 缺少可验证的 snapshot 证据。",
+        )
+    current_hash = snapshot_hash(snapshot)
+    if current_hash != point.workspace_snapshot_hash:
         return _invalid_state(
             "WORKSPACE_DRIFT",
             "当前 workspace snapshot hash 已偏离 RecoveryPoint。",
@@ -335,19 +361,20 @@ def _validate_workspace(
     )
 
 
-def _load_current_workspace_snapshot(workspace: str) -> dict[str, Any] | None:
-    """从已有 cache 读取最新合法 snapshot，不触发新的扫描或写入。"""
+def _load_workspace_snapshot_for_revision(
+    workspace: str,
+    revision: str,
+) -> dict[str, Any] | None:
+    """按精确 revision 和当前 inspector schema 读取已有 snapshot。"""
 
     roots = (
         Path(workspace).expanduser().resolve() / ".xcodeagent" / "cache" / "workspace-snapshots",
         Path(workspace).expanduser().resolve() / "cache" / "workspace-snapshots",
     )
-    candidates: list[Path] = []
     for root in roots:
-        if root.is_dir():
-            candidates.extend(root.glob("*.json"))
-    candidates.sort(key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True)
-    for path in candidates:
+        path = root / f"{revision}.{INSPECTOR_SCHEMA_VERSION}.json"
+        if not path.is_file():
+            continue
         try:
             snapshot = load_workspace_snapshot_json(path)
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError):

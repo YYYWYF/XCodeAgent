@@ -44,8 +44,8 @@ class RecoveryReplayPolicy(Protocol):
         source: DurableExecutionRecord,
         point: RecoveryPoint,
         snapshot: Any,
-    ) -> RecoveryStrategyAssessment:
-        """根据执行、现场和真实快照评估是否允许恢复。"""
+    ) -> RecoveryStrategyAssessment | None:
+        """根据执行、现场和真实快照评估是否由本策略负责恢复。"""
 
 
 class DenyUnassessedReplayPolicy:
@@ -83,7 +83,7 @@ class AllowNodePolicy:
         source: DurableExecutionRecord,
         point: RecoveryPoint,
         snapshot: Any,
-    ) -> RecoveryStrategyAssessment:
+    ) -> RecoveryStrategyAssessment | None:
         """仅当所有后继节点都在显式白名单中时允许 Native Replay。"""
 
         if point.next_nodes and set(point.next_nodes).issubset(self._safe_nodes):
@@ -93,41 +93,37 @@ class AllowNodePolicy:
                 reason_code="READY_FOR_NATIVE_REPLAY",
                 reason="checkpoint 已通过注入的 Native Replay 节点白名单。",
             )
-        return DenyUnassessedReplayPolicy().assess(
-            source=source,
-            point=point,
-            snapshot=snapshot,
-        )
+        del source, snapshot
+        return None
 
 
 class RecoveryStrategyResolver:
-    """按注册顺序解析策略，默认保留 deny-by-default。"""
+    """按注册顺序解析策略，首个命中者胜出并保留 deny-by-default。"""
 
     def __init__(
         self,
         policies: Sequence[RecoveryReplayPolicy] | None = None,
     ) -> None:
-        """保存可注入的策略集合；未提供时使用默认拒绝策略。"""
+        """保存可注入的策略集合；默认拒绝只作为最终 fallback。"""
 
-        self._policies = tuple(policies or (DenyUnassessedReplayPolicy(),))
+        self._policies = tuple(policies or ())
 
     def resolve(self, context: RecoveryContext) -> RecoveryStrategyAssessment:
-        """为已验证的恢复上下文返回首个明确的安全评估。"""
+        """按注册优先级返回首个非 None 评估，未命中时默认拒绝。"""
 
-        fallback = DenyUnassessedReplayPolicy().assess(
-            source=context.source,
-            point=context.point,
-            snapshot=context.snapshot,
-        )
         for policy in self._policies:
             assessment = policy.assess(
                 source=context.source,
                 point=context.point,
                 snapshot=context.snapshot,
             )
-            if assessment.decision is RecoveryDecision.READY_NATIVE:
+            if assessment is not None:
                 return assessment
-        return fallback
+        return DenyUnassessedReplayPolicy().assess(
+            source=context.source,
+            point=context.point,
+            snapshot=context.snapshot,
+        )
 
 
 def resolve_recovery_strategy(

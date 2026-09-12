@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -24,7 +25,11 @@ from app.services.execution_recovery_coordinator import (
     prepare_continue,
 )
 from app.services.execution_recovery_strategy import AllowNodePolicy
-from app.services.workspace_inspector import snapshot_hash
+from app.services.workspace_inspector import (
+    INSPECTOR_SCHEMA_VERSION,
+    snapshot_hash,
+    workspace_inventory,
+)
 
 
 class _GraphDouble:
@@ -311,32 +316,143 @@ class ExecutionRecoveryCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan.decision, RecoveryDecision.REQUIRES_HANDLER)
         self.assertEqual(plan.reason_code, "REPLAY_SAFETY_UNASSESSED")
 
-    async def test_workspace_snapshot_drift_is_state_drift(self) -> None:
-        """现有 workspace snapshot hash 变化时不得复用旧 checkpoint。"""
+    async def test_workspace_file_change_without_new_snapshot_is_detected(self) -> None:
+        """文件未重新 inspect 时，当前磁盘 revision 变化也必须被发现。"""
 
         source = await self._insert_source(status=DurableExecutionStatus.INTERRUPTED)
-        current_snapshot = {"workspace_revision": "revision-2", "files": ["new.py"]}
+        source_file = self.workspace / "a.py"
+        source_file.write_text("print('initial')\n", encoding="utf-8")
+        _files, revision = workspace_inventory(self.workspace)
+        snapshot = {"workspace_revision": revision, "files": ["a.py"]}
+        self._write_snapshot(revision, snapshot)
         await self._insert_point(
             "rp-workspace",
             "cp-workspace",
             "A",
             ["B"],
-            workspace_revision="revision-1",
-            workspace_snapshot_hash="hash-1",
+            workspace_revision=revision,
+            workspace_snapshot_hash=snapshot_hash(snapshot),
         )
+        source_file.write_text("print('changed-content')\n", encoding="utf-8")
         graph = _GraphDouble({"cp-workspace": self._snapshot("cp-workspace", ["B"])})
-        with patch(
-            "app.services.execution_recovery_coordinator._load_current_workspace_snapshot",
-            return_value=current_snapshot,
-        ):
-            plan = await prepare_continue(
-                workspace=str(self.workspace),
-                source_run_id=source.run_id,
-                graph=graph,
-            )
+        plan = await prepare_continue(
+            workspace=str(self.workspace),
+            source_run_id=source.run_id,
+            graph=graph,
+        )
 
         self.assertEqual(plan.decision, RecoveryDecision.STATE_DRIFT)
         self.assertEqual(plan.reason_code, "WORKSPACE_DRIFT")
+
+    async def test_unchanged_workspace_revision_passes_drift_validation(self) -> None:
+        """磁盘 revision 和精确 snapshot 均一致时才进入 replay safety 评估。"""
+
+        source = await self._insert_source(status=DurableExecutionStatus.INTERRUPTED)
+        source_file = self.workspace / "a.py"
+        source_file.write_text("print('stable')\n", encoding="utf-8")
+        _files, revision = workspace_inventory(self.workspace)
+        snapshot = {"workspace_revision": revision, "files": ["a.py"]}
+        self._write_snapshot(revision, snapshot)
+        await self._insert_point(
+            "rp-stable-workspace",
+            "cp-stable-workspace",
+            "A",
+            ["B"],
+            workspace_revision=revision,
+            workspace_snapshot_hash=snapshot_hash(snapshot),
+        )
+        graph = _GraphDouble({
+            "cp-stable-workspace": self._snapshot("cp-stable-workspace", ["B"]),
+        })
+
+        plan = await prepare_continue(
+            workspace=str(self.workspace),
+            source_run_id=source.run_id,
+            graph=graph,
+        )
+
+        self.assertEqual(plan.decision, RecoveryDecision.REQUIRES_HANDLER)
+        self.assertEqual(plan.reason_code, "REPLAY_SAFETY_UNASSESSED")
+        self.assertEqual(plan.workspace_revision, revision)
+
+    async def test_untracked_file_change_is_workspace_drift(self) -> None:
+        """新增未跟踪文件时，当前 workspace revision 必须发生漂移。"""
+
+        source = await self._insert_source(status=DurableExecutionStatus.INTERRUPTED)
+        (self.workspace / "a.py").write_text("print('stable')\n", encoding="utf-8")
+        _files, revision = workspace_inventory(self.workspace)
+        snapshot = {"workspace_revision": revision, "files": ["a.py"]}
+        self._write_snapshot(revision, snapshot)
+        await self._insert_point(
+            "rp-untracked",
+            "cp-untracked",
+            "A",
+            ["B"],
+            workspace_revision=revision,
+            workspace_snapshot_hash=snapshot_hash(snapshot),
+        )
+        (self.workspace / "new-file.ts").write_text("export const added = true;\n", encoding="utf-8")
+        graph = _GraphDouble({"cp-untracked": self._snapshot("cp-untracked", ["B"])})
+
+        plan = await prepare_continue(
+            workspace=str(self.workspace),
+            source_run_id=source.run_id,
+            graph=graph,
+        )
+
+        self.assertEqual(plan.decision, RecoveryDecision.STATE_DRIFT)
+        self.assertEqual(plan.reason_code, "WORKSPACE_DRIFT")
+
+    async def test_missing_workspace_snapshot_requires_handler(self) -> None:
+        """revision 一致但 snapshot 证据缺失时必须要求专用 Handler。"""
+
+        source = await self._insert_source(status=DurableExecutionStatus.INTERRUPTED)
+        (self.workspace / "a.py").write_text("print('stable')\n", encoding="utf-8")
+        _files, revision = workspace_inventory(self.workspace)
+        await self._insert_point(
+            "rp-missing-snapshot",
+            "cp-missing-snapshot",
+            "A",
+            ["B"],
+            workspace_revision=revision,
+            workspace_snapshot_hash="missing-hash",
+        )
+        graph = _GraphDouble({
+            "cp-missing-snapshot": self._snapshot("cp-missing-snapshot", ["B"]),
+        })
+
+        plan = await prepare_continue(
+            workspace=str(self.workspace),
+            source_run_id=source.run_id,
+            graph=graph,
+        )
+
+        self.assertEqual(plan.decision, RecoveryDecision.REQUIRES_HANDLER)
+        self.assertEqual(plan.strategy, RecoveryStrategy.HANDLER)
+        self.assertEqual(plan.reason_code, "WORKSPACE_SNAPSHOT_UNAVAILABLE")
+
+    async def test_workspace_hash_without_revision_is_unverifiable(self) -> None:
+        """只有 snapshot hash 而没有 revision 时不得猜测当前 cache。"""
+
+        source = await self._insert_source(status=DurableExecutionStatus.INTERRUPTED)
+        await self._insert_point(
+            "rp-hash-only",
+            "cp-hash-only",
+            "A",
+            ["B"],
+            workspace_snapshot_hash="hash-only",
+        )
+        graph = _GraphDouble({"cp-hash-only": self._snapshot("cp-hash-only", ["B"])})
+
+        plan = await prepare_continue(
+            workspace=str(self.workspace),
+            source_run_id=source.run_id,
+            graph=graph,
+        )
+
+        self.assertEqual(plan.decision, RecoveryDecision.REQUIRES_HANDLER)
+        self.assertEqual(plan.strategy, RecoveryStrategy.HANDLER)
+        self.assertEqual(plan.reason_code, "WORKSPACE_STATE_UNVERIFIABLE")
 
     async def test_injected_safe_policy_produces_native_ready_plan(self) -> None:
         """注入明确的安全节点策略后才允许 READY_NATIVE。"""
@@ -426,6 +542,14 @@ class ExecutionRecoveryCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         )
         await insert_execution(source)
         return source
+
+    def _write_snapshot(self, revision: str, snapshot: dict[str, object]) -> None:
+        """把测试用的 revision snapshot 写入当前 inspector schema 路径。"""
+
+        cache = self.workspace / ".xcodeagent" / "cache" / "workspace-snapshots"
+        cache.mkdir(parents=True, exist_ok=True)
+        path = cache / f"{revision}.{INSPECTOR_SCHEMA_VERSION}.json"
+        path.write_text(json.dumps(snapshot), encoding="utf-8")
 
     async def _insert_point(
         self,
