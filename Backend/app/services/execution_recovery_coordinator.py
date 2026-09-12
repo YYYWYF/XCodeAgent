@@ -237,7 +237,7 @@ async def _validate_checkpoint(
             "CHECKPOINT_NEXT_MISMATCH",
             "真实 checkpoint 的 nextNodes 与 RecoveryPoint 不一致。",
         )
-    if _snapshot_requires_user_input(snapshot):
+    if _snapshot_requires_user_input(snapshot, source=source):
         return _CheckpointValidation(
             snapshot=snapshot,
             decision=RecoveryDecision.AWAITING_USER,
@@ -413,15 +413,23 @@ def _snapshot_identity(snapshot: Any) -> tuple[str, str, str] | None:
     return thread_id, checkpoint_ns, checkpoint_id
 
 
-def _snapshot_requires_user_input(snapshot: Any) -> bool:
-    """检测 StateSnapshot 的 interrupt、task metadata 和状态等待标记。"""
+def _snapshot_requires_user_input(
+    snapshot: Any,
+    *,
+    source: DurableExecutionRecord,
+) -> bool:
+    """按执行类型检测真实中断或兼容的 Workbench 等待标记。"""
 
     for task in getattr(snapshot, "tasks", ()) or ():
         if getattr(task, "interrupts", ()):
             return True
+        if source.execution_kind == "application_planning":
+            continue
         metadata = getattr(task, "metadata", {})
         if isinstance(metadata, dict) and _metadata_requires_user_input(metadata):
             return True
+    if source.execution_kind == "application_planning":
+        return False
     metadata = getattr(snapshot, "metadata", {})
     if isinstance(metadata, dict) and _metadata_requires_user_input(metadata):
         return True

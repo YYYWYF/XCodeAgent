@@ -1335,6 +1335,34 @@ async def get_execution(
         return _execution_from_row(row) if row is not None else None
 
 
+async def get_latest_execution_for_thread(
+    workspace: str | Path,
+    *,
+    thread_id: str,
+    execution_kind: str | None = None,
+) -> DurableExecutionRecord | None:
+    """按线程和可选执行类型读取最近一次 Durable Execution。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            SELECT run_id, thread_id, workspace, project_id, execution_kind,
+                   workflow_scope, first_node, current_node, status,
+                   last_recovery_point_id, started_at, updated_at, ended_at,
+                   owner_session_id
+            FROM execution_records
+            WHERE thread_id = ?
+              AND (? IS NULL OR execution_kind = ?)
+            ORDER BY started_at DESC, updated_at DESC, run_id DESC
+            LIMIT 1
+            """,
+            (thread_id, execution_kind, execution_kind),
+        )
+        row = await cursor.fetchone()
+        return _execution_from_row(row) if row is not None else None
+
+
 async def list_recovery_projection_candidates(
     workspace: str | Path,
     *,

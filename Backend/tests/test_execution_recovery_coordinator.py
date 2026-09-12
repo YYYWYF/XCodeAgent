@@ -269,6 +269,23 @@ class ExecutionRecoveryCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan.decision, RecoveryDecision.AWAITING_USER)
         self.assertEqual(plan.reason_code, "CHECKPOINT_REQUIRES_USER_INPUT")
 
+    async def test_application_planning_stale_status_without_interrupt_is_not_awaiting(self) -> None:
+        """Application Planning 历史 status 不能代替真实 Native Interrupt。"""
+
+        source = await self._insert_source(status=DurableExecutionStatus.INTERRUPTED)
+        await self._insert_point("rp-stale", "cp-stale", "A", ["B"])
+        snapshot = self._snapshot("cp-stale", ["B"])
+        snapshot.values = {"status": "requires_user_input"}
+
+        plan = await prepare_continue(
+            workspace=str(self.workspace),
+            source_run_id=source.run_id,
+            graph=_GraphDouble({"cp-stale": snapshot}),
+        )
+
+        self.assertEqual(plan.decision, RecoveryDecision.REQUIRES_HANDLER)
+        self.assertEqual(plan.reason_code, "REPLAY_SAFETY_UNASSESSED")
+
     async def test_lifecycle_drift_is_state_drift(self) -> None:
         """Workbench 的 lifecycle revision 变化必须保守阻止恢复。"""
 

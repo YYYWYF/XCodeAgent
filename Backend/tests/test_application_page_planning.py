@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -259,7 +260,30 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 """返回同一 thread 的待确认需求状态。"""
 
                 self.config = config
-                return type("Snapshot", (), {"values": self.values})()
+                return type(
+                    "Snapshot",
+                    (),
+                    {
+                        "values": self.values,
+                        "tasks": (
+                            SimpleNamespace(
+                                interrupts=(
+                                    SimpleNamespace(
+                                        id="requirement-review",
+                                        value={
+                                            "type": "application_planning_review",
+                                            "gateId": "requirement_document:test",
+                                            "artifact": "requirement_document",
+                                            "artifactRevision": "test",
+                                            "phase": "requirements",
+                                            "clarification": self.values["clarification"],
+                                        },
+                                    ),
+                                )
+                            ),
+                        ),
+                    },
+                )()
 
             async def astream(self, *_args, **_kwargs):
                 """禁止恢复动作执行 Graph。"""

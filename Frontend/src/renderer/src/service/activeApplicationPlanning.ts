@@ -7,6 +7,7 @@ import type {
 import { retainApplicationPlanningInterrupt } from './applicationPlanningWorkflowState'
 import { isApplicationCreationComplete, loadStoredApplications } from './applicationStorage'
 import { getApplicationLifecycle } from './applicationLifecycle'
+import type { ApplicationPlanningRecoveryProjection } from './applicationPlanningRecovery'
 
 export type ActivePlanningStatus = 'error' | 'ready' | 'running'
 export type PlanningTransportState = 'idle' | 'running' | 'reconciling' | 'uncertain'
@@ -23,6 +24,8 @@ export type ApplicationPlanningCurrentState = {
   /** Renderer 暂时无法确认后端权威状态时的同步错误。 */
   syncError?: string
   workflow?: WorkflowRunPayload
+  /** Backend 根据 Durable Execution、checkpoint 与 Native Interrupt 生成的唯一恢复解释。 */
+  recovery?: ApplicationPlanningRecoveryProjection
 }
 
 export type ApplicationPlanningCurrentEvent =
@@ -54,6 +57,7 @@ export type ApplicationPlanningCurrentEvent =
       threadId: string
       lifecycle: ApplicationLifecycle
       workflow: WorkflowRunPayload
+      recovery: ApplicationPlanningRecoveryProjection
     }
   | {
       type: 'reconcile_failed'
@@ -272,7 +276,13 @@ export function reduceApplicationPlanningCurrentState(
   }
 
   if (event.type === 'run_started') {
-    return { ...current, error: undefined, syncError: undefined, transportState: 'running' }
+    return {
+      ...current,
+      error: undefined,
+      syncError: undefined,
+      recovery: undefined,
+      transportState: 'running'
+    }
   }
   if (event.type === 'run_settled') {
     return { ...current, transportState: 'idle' }
@@ -306,7 +316,13 @@ export function reduceApplicationPlanningCurrentState(
         : event.lifecycle
     )
     let error = current.error
-    if (event.workflow.summary.status === 'failed') {
+    if (
+      ['ready_to_continue', 'failed', 'blocked', 'conflict', 'legacy_unverified'].includes(
+        event.recovery.classification
+      )
+    ) {
+      error = event.recovery.message
+    } else if (event.workflow.summary.status === 'failed') {
       error = event.workflow.summary.message || current.error || '规划运行失败。'
     } else if (lifecycle.initialization.status === 'failed') {
       error = lifecycle.error?.message || current.error || '规划运行失败。'
@@ -317,6 +333,7 @@ export function reduceApplicationPlanningCurrentState(
       ...current,
       workflow: event.workflow,
       lifecycle,
+      recovery: event.recovery,
       error,
       syncError: undefined,
       transportState: 'idle'

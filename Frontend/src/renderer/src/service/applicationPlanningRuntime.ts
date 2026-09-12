@@ -5,7 +5,12 @@ import type {
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
 } from '../typings'
-import { AgUiRunError, type AgUiChatSession, type SendWorkflowMessageOptions } from './agUiAgent'
+import {
+  AgUiChatSession,
+  AgUiRunError,
+  getExecutionRecoveryUrl,
+  type SendWorkflowMessageOptions
+} from './agUiAgent'
 import {
   applicationPlanningDisplayStatus,
   planningMutationBlocked,
@@ -27,7 +32,8 @@ import {
 import {
   ApplicationPlanningCheckpointNotFoundError,
   readApplicationPlanningAuthoritativeSnapshot,
-  type ApplicationPlanningAuthoritativeSnapshot
+  type ApplicationPlanningAuthoritativeSnapshot,
+  type ApplicationPlanningRecoveryProjection
 } from './applicationPlanningRecovery'
 import {
   buildPlanningInteraction, hasPlanningInterrupt,
@@ -47,6 +53,10 @@ export type ApplicationPlanningRuntimeDependencies = {
   onTechnicalPlanConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
   onRevisionContinuation: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   session?: Pick<AgUiChatSession, 'sendMessage' | 'stop' | 'hasActiveRun'>
+  /** 测试可替换短生命周期 Native Recovery 会话；生产不复用普通 Planning endpoint。 */
+  createRecoverySession?: (
+    threadId: string
+  ) => Pick<AgUiChatSession, 'sendMessage'>
   /** 测试可替换保存服务；生产仍使用原有 AG-UI 保存入口。 */
   saveRequirementSpecDraft?: typeof saveRequirementSpecDraft
   /** 测试可替换权威读取；生产使用独立 applicationPlanningRecovery client。 */
@@ -64,6 +74,15 @@ export type PlanningReconcileOutcome =
 type PlanningExecutionFailure = 'authoritative_failure' | 'recovered' | 'uncertain'
 
 const PLANNING_SYNC_ERROR = '与后端连接中断，当前规划状态尚未确认。请重新同步状态。'
+
+/** 标识 Backend 已证明本次乐观提交尚未被 Native Interrupt 消费。 */
+export class ApplicationPlanningSubmissionNotCommittedError extends Error {
+  /** 保留原错误文案，供 UI 精确回滚本次乐观消息。 */
+  constructor(message: string) {
+    super(message)
+    this.name = 'ApplicationPlanningSubmissionNotCommittedError'
+  }
+}
 
 /** 独立于 React 的 Planning 执行器；业务事实始终同步读取 Canonical State。 */
 export class ApplicationPlanningRuntime {
@@ -169,16 +188,22 @@ export class ApplicationPlanningRuntime {
     await this.runPlanning(current.workflow ? '请从上次保存的规划状态继续执行。' : buildApplicationPlanningRequest(current.application))
   }
 
-  /** 重试只读取调用时的最新生命周期，并保留技术规划已确认的终止边界。 */
+  /** 先对账再由 Backend Recovery Projection 决定是否创建 Native Recovery child。 */
   async retryCurrentFailure(): Promise<void> {
-    const current = this.requireCurrentState()
     this.assertMutationAllowed()
-    if (workflowConfirmation(current.workflow)) return
-    if (current.lifecycle.initialization.status === 'awaiting_user') {
-      await this.reconcileCurrentState()
+    const outcome = await this.reconcileCurrentState()
+    if (outcome.status !== 'recovered') return
+    const current = this.requireCurrentState()
+    const recovery = current.recovery
+    if (!recovery || recovery.classification === 'awaiting_user') return
+    if (
+      recovery.classification !== 'ready_to_continue' ||
+      !recovery.canContinue ||
+      !recovery.sourceRunId
+    ) {
       return
     }
-    await this.runPlanning(buildApplicationPlanningRequest(current.application))
+    await this.continueInterruptedPlanning(recovery)
   }
 
   /** 正式设计修订直接使用原 Planning 会话发送用户请求。 */
@@ -233,11 +258,22 @@ export class ApplicationPlanningRuntime {
         reason,
         designChangeRequest ? productConversationSubmissionError(reason) : planningRuntimeError(reason, '创建规划确认失败')
       )
+      const latest = this.requireCurrentState()
+      if (outcome === 'recovered' && latest.recovery?.inputCommitted) return
       if (
         outcome === 'recovered' &&
-        planningInterruptIdentity(this.requireCurrentState().workflow) !== submittedGateIdentity
+        planningInterruptIdentity(latest.workflow) !== submittedGateIdentity
       ) {
         return
+      }
+      if (
+        outcome === 'recovered' &&
+        latest.recovery?.classification === 'awaiting_user' &&
+        planningInterruptIdentity(latest.workflow) === submittedGateIdentity
+      ) {
+        throw new ApplicationPlanningSubmissionNotCommittedError(
+          planningRuntimeError(reason, '创建规划确认失败')
+        )
       }
       throw reason
     }
@@ -301,7 +337,7 @@ export class ApplicationPlanningRuntime {
       }
       this.dispatch({
         type: 'reconcile_received', applicationId: this.applicationId, threadId: this.threadId,
-        lifecycle: snapshot.lifecycle, workflow: snapshot.workflow
+        lifecycle: snapshot.lifecycle, workflow: snapshot.workflow, recovery: snapshot.recovery
       })
       const workflow = this.requireCurrentState().workflow
       if (workflow) this.dependencies.publishWorkflow(workflow)
@@ -338,6 +374,44 @@ export class ApplicationPlanningRuntime {
       })
     }
     return 'uncertain'
+  }
+
+  /** 使用独立 `/execution-recovery/run` 会话继续同一 Planning thread，不重发用户答案。 */
+  private async continueInterruptedPlanning(
+    recovery: ApplicationPlanningRecoveryProjection
+  ): Promise<void> {
+    let recoveryToken: number | undefined
+    try {
+      await this.withExclusiveTransport(
+        async (token) => {
+          const current = this.requireCurrentState()
+          const session = this.dependencies.createRecoverySession
+            ? this.dependencies.createRecoverySession(recovery.threadId)
+            : new AgUiChatSession(recovery.threadId, getExecutionRecoveryUrl())
+          const merged = await this.sendMessageWithinTransport(
+            token,
+            '继续执行上一次中断的规划。',
+            {
+              editorMode: 'frontend',
+              workspaceRoot: current.application.workspaceRoot,
+              executionRecovery: {
+                action: 'continue',
+                sourceRunId: recovery.sourceRunId!
+              }
+            },
+            session
+          )
+          await this.handlePlanningResult(token, merged)
+        },
+        { onToken: (token) => { recoveryToken = token } }
+      )
+    } catch (reason) {
+      if (recoveryToken === undefined || !this.isCurrentRun(recoveryToken)) return
+      await this.handleExecutionFailure(
+        reason,
+        planningRuntimeError(reason, '继续执行中断的规划失败')
+      )
+    }
   }
 
   /** 区分认证、服务端明确 RUN_ERROR 与普通 transport uncertainty。 */
@@ -463,10 +537,11 @@ export class ApplicationPlanningRuntime {
   private async sendMessageWithinTransport(
     token: number,
     messageText: string,
-    options: SendWorkflowMessageOptions
+    options: SendWorkflowMessageOptions,
+    session: Pick<AgUiChatSession, 'sendMessage'> = this.session
   ): Promise<WorkflowRunPayload | undefined> {
     if (!this.isCurrentRun(token)) throw new Error('当前 Planning Runtime 已失效。')
-    const result = await this.session.sendMessage(messageText, {
+    const result = await session.sendMessage(messageText, {
       ...options,
       onContent: (content) => {
         if (!this.isCurrentRun(token)) return

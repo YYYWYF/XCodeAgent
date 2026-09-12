@@ -78,6 +78,11 @@ export default function ApplicationPagePlanningModal({
   const workflow = planning.workflow
   const running = planningTransportBusy(planning)
   const displayStatus = applicationPlanningDisplayStatus(planning)
+  const recoveryCanContinue = Boolean(
+    planning.recovery?.classification === 'ready_to_continue' &&
+      planning.recovery.canContinue &&
+      planning.recovery.sourceRunId
+  )
   const error =
     planning.syncError ||
     planning.error ||
@@ -109,11 +114,13 @@ export default function ApplicationPagePlanningModal({
     generatingTemplate || !workflow || (running && !awaitingUserInput && !inUiConfirmationStage)
   // run 中途流式快照可能短暂丢失 clarification，此时确认面板会返回 null 导致白屏。
   // 有 workflow 但无 clarification 时显示加载态兜底，避免空白。
-  const hasClarification = Boolean(
-    workflow?.summary?.clarification ||
-      workflow?.state?.clarification ||
-      workflow?.result?.clarification
-  )
+  const hasClarification =
+    awaitingUserInput &&
+    Boolean(
+      workflow?.summary?.clarification ||
+        workflow?.state?.clarification ||
+        workflow?.result?.clarification
+    )
   // UI确认节点生成期间，流式展示已就绪的设计稿，避免干等到最后一次性出现。
   // 排除 ui_confirmation 已完成（用户确认或跳过后同 run 流转到规划入口，
   // 但入口 started 帧到达前可能短暂停留在 ui_confirmation completed 帧），
@@ -180,10 +187,28 @@ export default function ApplicationPagePlanningModal({
           {error ? (
             <AgentErrorCard
               error={error}
-              onRetry={planning.syncError || !workflowConfirmation(workflow) ? onRetry : undefined}
-              retryLabel={planning.syncError ? '重新同步状态' : undefined}
+              onRetry={
+                planning.syncError ||
+                recoveryCanContinue ||
+                (!planning.recovery && !workflowConfirmation(workflow))
+                  ? onRetry
+                  : undefined
+              }
+              retryLabel={
+                planning.syncError
+                  ? '重新同步状态'
+                  : recoveryCanContinue
+                    ? '继续执行'
+                    : undefined
+              }
               retrying={running}
-              title={planning.syncError ? '规划状态尚未同步' : undefined}
+              title={
+                planning.syncError
+                  ? '规划状态尚未同步'
+                  : recoveryCanContinue
+                    ? '规划执行已中断'
+                    : undefined
+              }
             />
           ) : (
             <section className={cx('page-planning-review')}>

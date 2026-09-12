@@ -360,6 +360,14 @@ export default function MessageList({
       : undefined
   const planningActionsBlocked = planningMutationBlocked(planningState)
   const planningSyncError = planningState?.syncError?.trim() || ''
+  const planningRecoveryCanContinue = Boolean(
+    planningState?.recovery?.classification === 'ready_to_continue' &&
+      planningState.recovery.canContinue &&
+      planningState.recovery.sourceRunId
+  )
+  const planningRecoveryBlocksAction = Boolean(
+    planningState?.recovery && !planningRecoveryCanContinue && !planningSyncError
+  )
   const syncErrorHostMessageIndex = planningSyncErrorHostMessageIndex(
     activePlanningReviewIdentity,
     planningReviewMessageIndexes,
@@ -843,12 +851,24 @@ export default function MessageList({
                         {messageError ? (
                           <AgentErrorCard
                             error={messageError}
-                            onRetry={isCurrentErrorMessage ? onRetryError : undefined}
+                            onRetry={
+                              isCurrentErrorMessage && !planningRecoveryBlocksAction
+                                ? onRetryError
+                                : undefined
+                            }
                             retryLabel={
-                              currentPlanningSyncError ? '重新同步状态' : undefined
+                              currentPlanningSyncError
+                                ? '重新同步状态'
+                                : planningRecoveryCanContinue
+                                  ? '继续执行'
+                                  : undefined
                             }
                             title={
-                              currentPlanningSyncError ? '规划状态尚未同步' : undefined
+                              currentPlanningSyncError
+                                ? '规划状态尚未同步'
+                                : planningRecoveryCanContinue
+                                  ? '规划执行已中断'
+                                  : undefined
                             }
                           />
                         ) : null}
@@ -1041,11 +1061,19 @@ export default function MessageList({
                 <MessageAgentHeader agentKey={currentPhase} />
                 <AgentErrorCard
                   error={visibleError}
-                  onRetry={onRetryError}
-                  retryLabel={planningSyncError ? '重新同步状态' : undefined}
+                  onRetry={planningRecoveryBlocksAction ? undefined : onRetryError}
+                  retryLabel={
+                    planningSyncError
+                      ? '重新同步状态'
+                      : planningRecoveryCanContinue
+                        ? '继续执行'
+                        : undefined
+                  }
                   title={
                     planningSyncError
                       ? '规划状态尚未同步'
+                      : planningRecoveryCanContinue
+                        ? '规划执行已中断'
                       : /确认卡|中断|过期|版本/.test(visibleError)
                         ? '规划确认未完成'
                         : undefined

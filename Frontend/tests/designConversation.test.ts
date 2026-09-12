@@ -1068,8 +1068,8 @@ const summaryOnlyQuestionsWorkflow = {
   result: {}
 } as WorkflowRunPayload
 
-assert.equal(planningWorkflowRequiresUserInput(summaryOnlyQuestionsWorkflow), true)
-assert.equal(planningWorkflowCanPublishDuringRun(summaryOnlyQuestionsWorkflow), false)
+assert.equal(planningWorkflowRequiresUserInput(summaryOnlyQuestionsWorkflow), false)
+assert.equal(planningWorkflowCanPublishDuringRun(summaryOnlyQuestionsWorkflow), true)
 assert.equal(
   planningWorkflowCanPublishDuringRun({
     ...summaryOnlyQuestionsWorkflow,
@@ -1450,9 +1450,9 @@ const clarificationOnlyQuestionsWorkflow = {
   }
 } as WorkflowRunPayload
 
-assert.equal(planningWorkflowRequiresUserInput(clarificationOnlyQuestionsWorkflow), true)
-assert.equal(planningWorkflowIsActivelyRunning(clarificationOnlyQuestionsWorkflow), false)
-assert.equal(planningWorkflowSettlesLoading(clarificationOnlyQuestionsWorkflow), true)
+assert.equal(planningWorkflowRequiresUserInput(clarificationOnlyQuestionsWorkflow), false)
+assert.equal(planningWorkflowIsActivelyRunning(clarificationOnlyQuestionsWorkflow), true)
+assert.equal(planningWorkflowSettlesLoading(clarificationOnlyQuestionsWorkflow), false)
 assert.equal(
   planningWorkflowIsActivelyRunning({
     ...clarificationOnlyQuestionsWorkflow,
@@ -1460,7 +1460,7 @@ assert.equal(
   } as WorkflowRunPayload),
   true
 )
-assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, false), true)
+assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, false), false)
 assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, true), false)
 
 const previousRunWithInterrupt = {
@@ -1545,6 +1545,12 @@ const awaitingPlanningEntryWithStaleTechnicalProjection = {
   state: {
     lifecycle: {
       initialization: { stage: 'awaiting_planning_stage_entry', status: 'awaiting_user' }
+    },
+    application_planning_interrupt: {
+      type: 'application_planning_review',
+      gateId: 'ui-designs:entry',
+      artifact: 'ui_designs',
+      artifactRevision: 'entry'
     }
   },
   events: [

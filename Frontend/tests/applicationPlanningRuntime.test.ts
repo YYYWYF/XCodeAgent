@@ -9,7 +9,10 @@ import {
   type ApplicationPlanningCurrentState
 } from '../src/renderer/src/service/activeApplicationPlanning'
 import { AgUiRunError, type AgUiChatResult, type SendWorkflowMessageOptions } from '../src/renderer/src/service/agUiAgent'
-import { ApplicationPlanningCheckpointNotFoundError } from '../src/renderer/src/service/applicationPlanningRecovery'
+import {
+  ApplicationPlanningCheckpointNotFoundError,
+  type ApplicationPlanningRecoveryProjection
+} from '../src/renderer/src/service/applicationPlanningRecovery'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -67,6 +70,25 @@ function authoritativeLifecycle(
   }
 }
 
+/** 构造 Backend 权威恢复分类，默认表示真实 Native Interrupt 仍在等待用户。 */
+function recoveryProjection(
+  threadId = 'thread-A',
+  overrides: Partial<ApplicationPlanningRecoveryProjection> = {}
+): ApplicationPlanningRecoveryProjection {
+  return {
+    schemaVersion: 'application-planning-recovery.v1',
+    classification: 'awaiting_user',
+    sourceRunId: 'run-A',
+    threadId,
+    canContinue: false,
+    userActionRequired: true,
+    inputCommitted: false,
+    reasonCode: 'NATIVE_APPLICATION_PLANNING_INTERRUPT',
+    message: '当前应用规划正在等待你的确认。',
+    ...overrides
+  }
+}
+
 /** 注入可控会话与真实 Canonical reducer，记录所有外部调用和到达顺序。 */
 function harness(initial = planningState(), overrides: Partial<ApplicationPlanningRuntimeDependencies> = {}) {
   let current: ApplicationPlanningCurrentState | undefined = initial
@@ -79,7 +101,8 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
     lifecycle: authoritativeLifecycle(initial, {
       stage: 'awaiting_technical_plan_confirmation',
       status: 'awaiting_user'
-    })
+    }),
+    recovery: recoveryProjection(initial.threadId)
   })
   let readCalls = 0
   const events: ApplicationPlanningCurrentEvent[] = []
@@ -306,7 +329,8 @@ async function waitForCondition<T>(
   const h = harness(current)
   h.onRead(async () => ({
     workflow: confirmationWorkflow('thread-A', 'recovered-gate'),
-    lifecycle: authoritativeLifecycle(current, { status: 'awaiting_user' })
+    lifecycle: authoritativeLifecycle(current, { status: 'awaiting_user' }),
+    recovery: recoveryProjection()
   }))
   h.onSend(async (options) => {
     assert.equal(options.applicationPlanningInteraction?.gateId, 'recovered-gate')
@@ -324,7 +348,11 @@ async function waitForCondition<T>(
   const current = planningState()
   current.workflow = workflowWithoutInterrupt()
   const h = harness(current)
-  let finishRecovery!: (value: { workflow: WorkflowRunPayload; lifecycle: ApplicationLifecycle }) => void
+  let finishRecovery!: (value: {
+    workflow: WorkflowRunPayload
+    lifecycle: ApplicationLifecycle
+    recovery: ApplicationPlanningRecoveryProjection
+  }) => void
   h.onRead(async () => {
     return await new Promise((resolve) => { finishRecovery = resolve })
   })
@@ -334,7 +362,8 @@ async function waitForCondition<T>(
   assert.equal(h.calls.length, 0)
   finishRecovery({
     workflow: confirmationWorkflow(),
-    lifecycle: authoritativeLifecycle(current, { status: 'awaiting_user' })
+    lifecycle: authoritativeLifecycle(current, { status: 'awaiting_user' }),
+    recovery: recoveryProjection()
   })
   await submitting
   assert.equal(h.calls.length, 1)
@@ -343,7 +372,11 @@ async function waitForCondition<T>(
 // L：并发手动同步共享同一个 single-flight 权威读取。
 {
   const h = harness()
-  let finishRecovery!: (value: { workflow: WorkflowRunPayload; lifecycle: ApplicationLifecycle }) => void
+  let finishRecovery!: (value: {
+    workflow: WorkflowRunPayload
+    lifecycle: ApplicationLifecycle
+    recovery: ApplicationPlanningRecoveryProjection
+  }) => void
   h.onRead(async () => {
     return await new Promise((resolve) => { finishRecovery = resolve })
   })
@@ -352,7 +385,8 @@ async function waitForCondition<T>(
   assert.equal(h.readCalls(), 1)
   finishRecovery({
     workflow: confirmationWorkflow(),
-    lifecycle: authoritativeLifecycle(h.current()!, { status: 'awaiting_user' })
+    lifecycle: authoritativeLifecycle(h.current()!, { status: 'awaiting_user' }),
+    recovery: recoveryProjection()
   })
   assert.deepEqual(await first, { status: 'recovered' })
   assert.deepEqual(await second, { status: 'recovered' })
@@ -365,7 +399,8 @@ async function waitForCondition<T>(
   const h = harness(current)
   h.onRead(async () => ({
     workflow: confirmationWorkflow('thread-A', 'canonical-recovery-gate'),
-    lifecycle: authoritativeLifecycle(current, { status: 'awaiting_user' })
+    lifecycle: authoritativeLifecycle(current, { status: 'awaiting_user' }),
+    recovery: recoveryProjection()
   }))
   h.onSend(async (options) => {
     const canonicalInterrupt = h.current()?.workflow?.state?.application_planning_interrupt as Record<string, unknown> | undefined
@@ -394,7 +429,8 @@ async function waitForCondition<T>(
       current,
       { stage: 'awaiting_technical_plan_confirmation', status: 'awaiting_user' },
       current.lifecycle.revision + 1
-    )
+    ),
+    recovery: recoveryProjection()
   }))
   await h.runtime.retryCurrentFailure()
   assert.equal(h.current()?.workflow?.summary.status, 'requires_user_input')
@@ -412,7 +448,8 @@ async function waitForCondition<T>(
   h.onSend(async () => { throw new Error('network disconnected') })
   h.onRead(async () => ({
     workflow: confirmationWorkflow('thread-A', 'same-gate'),
-    lifecycle: authoritativeLifecycle(current, { status: 'awaiting_user' })
+    lifecycle: authoritativeLifecycle(current, { status: 'awaiting_user' }),
+    recovery: recoveryProjection()
   }))
   await assert.rejects(
     h.runtime.submitClarification(current.workflow, { __applicationPlanningAction: 'confirm' }),
@@ -432,7 +469,8 @@ async function waitForCondition<T>(
   h.onSend(async () => { throw new Error('unexpected EOF') })
   h.onRead(async () => ({
     workflow: confirmationWorkflow('thread-A', 'next-gate'),
-    lifecycle: authoritativeLifecycle(current, { status: 'awaiting_user' })
+    lifecycle: authoritativeLifecycle(current, { status: 'awaiting_user' }),
+    recovery: recoveryProjection()
   }))
   await h.runtime.submitClarification(current.workflow, { __applicationPlanningAction: 'confirm' })
   assert.equal(h.calls.length, 1)
@@ -493,7 +531,8 @@ async function waitForCondition<T>(
     lifecycle: authoritativeLifecycle(
       current,
       { stage: 'awaiting_technical_plan_confirmation', status: 'awaiting_user' }
-    )
+    ),
+    recovery: recoveryProjection()
   }))
   await h.runtime.ensureStarted()
   assert.equal(h.calls.length, 0)
@@ -543,7 +582,8 @@ async function waitForCondition<T>(
   h.onStop(async () => { throw new Error('cancel timeout') })
   h.onRead(async () => ({
     workflow: confirmationWorkflow(),
-    lifecycle: authoritativeLifecycle(current, { status: 'stopped' })
+    lifecycle: authoritativeLifecycle(current, { status: 'stopped' }),
+    recovery: recoveryProjection()
   }))
   await h.runtime.stop()
   assert.equal(h.readCalls(), 1)
@@ -556,7 +596,11 @@ async function waitForCondition<T>(
   const h = harness()
   let staleOptions: SendWorkflowMessageOptions | undefined
   let rejectWriter!: (reason: Error) => void
-  let finishRecovery!: (value: { workflow: WorkflowRunPayload; lifecycle: ApplicationLifecycle }) => void
+  let finishRecovery!: (value: {
+    workflow: WorkflowRunPayload
+    lifecycle: ApplicationLifecycle
+    recovery: ApplicationPlanningRecoveryProjection
+  }) => void
   h.onSend(async (options) => {
     staleOptions = options
     return await new Promise<AgUiChatResult>((_resolve, reject) => { rejectWriter = reject })
@@ -576,7 +620,8 @@ async function waitForCondition<T>(
   })
   finishAuthoritativeRecovery({
     workflow: confirmationWorkflow('thread-A', 'authoritative-gate'),
-    lifecycle: authoritativeLifecycle(h.current()!, { status: 'awaiting_user' })
+    lifecycle: authoritativeLifecycle(h.current()!, { status: 'awaiting_user' }),
+    recovery: recoveryProjection()
   })
   await running
   assert.equal(h.current()?.workflow?.summary.status, 'requires_user_input')
@@ -662,6 +707,91 @@ async function waitForCondition<T>(
   await h.runtime.ensureStarted()
   assert.equal(h.events.some((event) => event.type === 'run_failed'), false)
   assert.equal(h.current()?.transportState, 'idle')
+}
+
+// AA：Continue 先读取 Backend 分类，再用 transient Recovery session 只提交 sourceRunId。
+{
+  const current = planningState()
+  current.workflow = workflowWithoutInterrupt()
+  current.error = '规划执行中断'
+  let recoveryOptions: SendWorkflowMessageOptions | undefined
+  let recoveryThreadId = ''
+  const childWorkflow = {
+    ...workflowWithoutInterrupt(),
+    runId: 'run-B',
+    summary: { status: 'running', phase: 'requirements', message: '继续生成需求' }
+  } as WorkflowRunPayload
+  const h = harness(current, {
+    createRecoverySession: (threadId) => {
+      recoveryThreadId = threadId
+      return {
+        sendMessage: async (_message, options) => {
+          recoveryOptions = options
+          options.onWorkflow?.(childWorkflow)
+          return result(childWorkflow)
+        }
+      }
+    }
+  })
+  h.onRead(async () => ({
+    workflow: {
+      ...workflowWithoutInterrupt(),
+      summary: { status: 'failed', phase: 'requirements', message: '回答已保存，可以继续。' }
+    },
+    lifecycle: authoritativeLifecycle(current, { status: 'running' }),
+    recovery: recoveryProjection('thread-A', {
+      classification: 'ready_to_continue',
+      canContinue: true,
+      userActionRequired: false,
+      inputCommitted: true,
+      reasonCode: 'INPUT_COMMITTED_EXECUTION_INTERRUPTED',
+      message: '回答已保存，可以继续。'
+    })
+  }))
+
+  await h.runtime.retryCurrentFailure()
+
+  assert.equal(recoveryThreadId, 'thread-A')
+  assert.deepEqual(recoveryOptions?.executionRecovery, {
+    action: 'continue',
+    sourceRunId: 'run-A'
+  })
+  assert.equal(recoveryOptions?.applicationPlanningInteraction, undefined)
+  assert.equal(recoveryOptions?.workflowDebug, undefined)
+  assert.equal(h.calls.length, 0)
+  assert.equal(h.current()?.workflow?.runId, 'run-B')
+}
+
+// AB：回答已被 checkpoint 消费时 transport 失败不回滚、不重发原答案。
+{
+  const current = planningState()
+  current.workflow = confirmationWorkflow('thread-A', 'submitted-gate')
+  const h = harness(current)
+  h.onSend(async () => { throw new Error('connection lost') })
+  h.onRead(async () => ({
+    workflow: {
+      ...workflowWithoutInterrupt(),
+      summary: { status: 'failed', phase: 'requirements', message: '回答已保存，可以继续。' }
+    },
+    lifecycle: authoritativeLifecycle(current, { status: 'running' }),
+    recovery: recoveryProjection('thread-A', {
+      classification: 'ready_to_continue',
+      canContinue: true,
+      userActionRequired: false,
+      inputCommitted: true,
+      reasonCode: 'INPUT_COMMITTED_EXECUTION_INTERRUPTED',
+      message: '回答已保存，可以继续。'
+    })
+  }))
+
+  await h.runtime.submitClarification(current.workflow, {
+    __applicationPlanningAction: 'answer',
+    role: '本人'
+  })
+
+  assert.equal(h.calls.length, 1)
+  assert.equal(h.readCalls(), 1)
+  assert.equal(h.current()?.recovery?.inputCommitted, true)
 }
 
 console.log('application planning runtime tests passed')

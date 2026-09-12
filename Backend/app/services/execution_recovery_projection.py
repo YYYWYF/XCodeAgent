@@ -15,6 +15,9 @@ from app.graph.application_planning_workflow import application_planning_graph_f
 from app.graph.workflow import workflow_graph_for_request
 from app.persistence.execution_recovery import list_recovery_projection_candidates
 from app.services.execution_recovery_coordinator import prepare_continue
+from app.services.execution_recovery_policies import (
+    production_recovery_replay_policies,
+)
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -76,6 +79,7 @@ async def _resolve_candidate(
         workspace=record.workspace,
         source_run_id=record.run_id,
         graph=graph,
+        replay_policies=production_recovery_replay_policies(),
     )
     availability = _availability_for_decision(plan.decision)
     if availability is None:

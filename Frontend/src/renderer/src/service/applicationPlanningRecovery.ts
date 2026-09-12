@@ -26,6 +26,78 @@ type ApplicationPlanningRecoveryEnvelope = {
 export type ApplicationPlanningAuthoritativeSnapshot = {
   workflow: WorkflowRunPayload
   lifecycle: ApplicationLifecycle
+  recovery: ApplicationPlanningRecoveryProjection
+}
+
+export type ApplicationPlanningRecoveryProjection = {
+  schemaVersion: 'application-planning-recovery.v1'
+  classification:
+    | 'awaiting_user'
+    | 'running'
+    | 'ready_to_continue'
+    | 'completed'
+    | 'failed'
+    | 'blocked'
+    | 'conflict'
+    | 'legacy_unverified'
+  sourceRunId?: string
+  threadId: string
+  canContinue: boolean
+  userActionRequired: boolean
+  inputCommitted: boolean
+  reasonCode: string
+  message: string
+}
+
+const APPLICATION_PLANNING_RECOVERY_CLASSIFICATIONS = new Set([
+  'awaiting_user',
+  'running',
+  'ready_to_continue',
+  'completed',
+  'failed',
+  'blocked',
+  'conflict',
+  'legacy_unverified'
+])
+
+/** 从 Workflow result/state 严格读取 Backend 给出的 Planning 恢复分类。 */
+export function applicationPlanningRecoveryProjection(
+  workflow?: WorkflowRunPayload
+): ApplicationPlanningRecoveryProjection | undefined {
+  for (const source of [workflow?.result, workflow?.state]) {
+    const raw = source?.applicationPlanningRecovery
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const value = raw as Record<string, unknown>
+    const classification = String(value.classification || '')
+    const threadId = String(value.threadId || '').trim()
+    const reasonCode = String(value.reasonCode || '').trim()
+    const message = String(value.message || '').trim()
+    if (
+      value.schemaVersion !== 'application-planning-recovery.v1' ||
+      !APPLICATION_PLANNING_RECOVERY_CLASSIFICATIONS.has(classification) ||
+      !threadId ||
+      !reasonCode ||
+      !message ||
+      typeof value.canContinue !== 'boolean' ||
+      typeof value.userActionRequired !== 'boolean' ||
+      typeof value.inputCommitted !== 'boolean'
+    ) {
+      continue
+    }
+    const sourceRunId = String(value.sourceRunId || '').trim()
+    return {
+      schemaVersion: 'application-planning-recovery.v1',
+      classification: classification as ApplicationPlanningRecoveryProjection['classification'],
+      ...(sourceRunId ? { sourceRunId } : {}),
+      threadId,
+      canContinue: value.canContinue,
+      userActionRequired: value.userActionRequired,
+      inputCommitted: value.inputCommitted,
+      reasonCode,
+      message
+    }
+  }
+  return undefined
 }
 
 /** 标识目标 planning thread 尚未产生可恢复 checkpoint。 */
@@ -135,13 +207,17 @@ async function readApplicationPlanningAuthoritativeSnapshotOnce(
   if (workflow.threadId !== threadId) {
     throw new Error('应用规划权威状态与请求 thread 不匹配。')
   }
+  const recovery = applicationPlanningRecoveryProjection(workflow)
+  if (!recovery || recovery.threadId !== threadId) {
+    throw new Error('读取应用规划权威状态没有返回有效的 Recovery Projection。')
+  }
   const lifecycle =
     workflowApplicationLifecycle(workflow) ??
     (await getApplicationLifecycle(application, threadId))
   if (lifecycle.application.id !== application.id) {
     throw new Error('应用规划权威状态与请求 application 不匹配。')
   }
-  return { workflow, lifecycle }
+  return { workflow, lifecycle, recovery }
 }
 
 /** 以最多两次、单次二十秒的有界读取获取 application planning 权威状态。 */

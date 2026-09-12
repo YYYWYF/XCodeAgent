@@ -22,6 +22,12 @@ from app.protocols.application_planning_run_lock import application_planning_run
 from app.protocols.application_lifecycle import application_lifecycle_input
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_summary, _workflow_visual_payload
+from app.persistence.execution_recovery import get_latest_execution_for_thread
+from app.services.application_planning_recovery_coordinator import (
+    resolve_application_planning_recovery,
+    sanitize_application_planning_recovery_result,
+)
+from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.ui_design_manifest import present_ui_pages
 from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_path
 from app.services.application_lifecycle import (
@@ -269,18 +275,48 @@ def _build_application_planning_recovery_ag_ui_stream(
         if inspect.isawaitable(active_graph):
             active_graph = await active_graph
         lock = application_planning_run_lock(thread_id)
-        # 与同 thread writer 共用屏障，确保读取发生在在途 Graph 写运行释放锁之后。
+        # 与同 thread writer 共用屏障；锁内先收敛旧 owner，再读取同一稳定世界的
+        # Durable source、Graph checkpoint 和 Lifecycle，禁止由历史 clarification 猜门禁。
         async with lock:
+            await reconcile_workspace_recovery(request.workspaceRoot)
+            try:
+                source = await get_latest_execution_for_thread(
+                    request.workspaceRoot,
+                    thread_id=thread_id,
+                    execution_kind="application_planning",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "application_planning.recovery.source_unavailable threadId=%s error=%s",
+                    thread_id,
+                    exc,
+                    exc_info=True,
+                )
+                source = None
             snapshot = await active_graph.aget_state(
                 {"configurable": {"thread_id": thread_id}}
             )
-            result = project_application_planning_interrupt(
-                dict(snapshot.values), snapshot
-            )
+            values = getattr(snapshot, "values", {})
+            result = dict(values) if isinstance(values, dict) else {}
             if not result:
                 raise ApplicationPlanningCheckpointNotFoundError(
                     "没有找到可恢复的应用规划 checkpoint。"
                 )
+            lifecycle = load_application_lifecycle(request.workspaceRoot)
+            projection = await resolve_application_planning_recovery(
+                workspace=request.workspaceRoot,
+                thread_id=thread_id,
+                graph=active_graph,
+                snapshot=snapshot,
+                lifecycle=lifecycle,
+                source=source,
+            )
+            if projection.classification == "awaiting_user":
+                result = project_application_planning_interrupt(result, snapshot)
+            result = sanitize_application_planning_recovery_result(
+                result,
+                projection=projection,
+            )
             # UI 确认阶段：后台生成池把最新 page status/code 写进 ui-designs.json，
             # 但 checkpoint 里的 ui_designs 仍停留在入队时的 queued/generating（池不写
             # checkpoint）。recovery 只读 checkpoint 不跑 Graph，若不回填 manifest，
@@ -300,20 +336,21 @@ def _build_application_planning_recovery_ag_ui_stream(
                         clarification["pages"] = present_ui_pages(
                             manifest, product_plan
                         )
-            lifecycle = load_application_lifecycle(request.workspaceRoot)
         if lifecycle is not None:
             result["lifecycle"] = application_lifecycle_payload(lifecycle)
         recovery_run_id = str(result.get("active_run_id") or f"recovery:{thread_id}")
+        summary = _workflow_summary(result, [])
+        summary["message"] = projection.message
         visual_payload = _workflow_visual_payload(
             run_id=recovery_run_id,
             thread_id=thread_id,
-            summary=_workflow_summary(result, []),
+            summary=summary,
             events=[],
             result=result,
         )
         return AgUiActionResult(
             data=visual_payload,
-            message="已恢复待确认的应用规划状态。",
+            message=projection.message,
         )
 
     return build_ag_ui_action_stream(

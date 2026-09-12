@@ -31,6 +31,9 @@ from app.services.execution_recovery_executor import (
 from app.services.execution_retry_dispatcher import prepare_retry_current_failure
 from app.services.execution_recovery_lineage import resolve_recovery_head
 from app.services.execution_recovery_lineage import reconcile_recovery_attempt
+from app.services.execution_recovery_policies import (
+    production_recovery_replay_policies,
+)
 
 
 _FORBIDDEN_RECOVERY_FIELDS = {
@@ -164,7 +167,11 @@ def build_execution_recovery_ag_ui_stream(
                 workspace=workspace,
                 source_run_id=head_run_id,
                 graph=graph,
-                replay_policies=replay_policies,
+                replay_policies=(
+                    replay_policies
+                    if replay_policies is not None
+                    else production_recovery_replay_policies()
+                ),
             )
             async for frame in build_workflow_ag_ui_stream(
                 graph=context.graph,

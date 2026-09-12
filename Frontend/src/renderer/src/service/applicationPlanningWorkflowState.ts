@@ -201,32 +201,9 @@ export function ensureApplicationPlanningAction(
 // 判断当前应用规划是否已经进入可展示的用户交互阶段，避免被仍在收尾的传输状态遮挡。
 export function planningWorkflowRequiresUserInput(workflow?: WorkflowRunPayload): boolean {
   if (!workflow) return false
-  const clarificationCandidates = [
-    workflow.summary.clarification,
-    workflow.result?.clarification,
-    workflow.state?.clarification
-  ]
-  if (workflow.summary.status === 'requires_user_input') {
-    const clarification = planningWorkflowClarification(workflow)
-    const hasProjectedClarification = clarificationCandidates.some(
-      (value) => value && typeof value === 'object'
-    )
-    return Boolean(clarification) || !hasProjectedClarification
-  }
-  for (const value of clarificationCandidates) {
-    const clarification =
-      value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined
-    if (
-      clarification?.status === 'requires_user_input' &&
-      applicationPlanningClarificationMatchesPhase(
-        workflow,
-        clarification as WorkflowClarification
-      )
-    ) {
-      return true
-    }
-  }
-  return false
+  // Application Planning 的当前交互能力只能来自 Backend 投影的真实 Native Interrupt；
+  // summary、clarification 与 Lifecycle 都可能是已消费 checkpoint 的历史数据。
+  return Boolean(applicationPlanningInterrupt(workflow))
 }
 
 // 判断规划运行是否仍在实际生成；已投影待确认交互时即使 summary 暂留 running 也必须解锁输入。

@@ -48,6 +48,7 @@ import type {
   WorkflowRevisionContinuationHandoff
 } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
+import { ApplicationPlanningSubmissionNotCommittedError } from '../../service/applicationPlanningRuntime'
 import { formatError } from '../Welcome/utils'
 import {
   planningWorkflowActivity,
@@ -4151,6 +4152,12 @@ export default function AiChatPanel({
       }
       void onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec).catch(
         (reason) => {
+          if (reason instanceof ApplicationPlanningSubmissionNotCommittedError) {
+            planningNewRoundRef.current = false
+            rollbackPlanningSubmission(planningSubmission)
+            message.error(reason.message)
+            return
+          }
           if (revisionTechnicalPlanConfirmed) {
             suppressRevisionTechnicalPlanTransitionRef.current = false
             planningNewRoundRef.current = false
