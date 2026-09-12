@@ -59,7 +59,7 @@ def _delete_workspace_file(
                 "do not include workspaceRoot."
             )
         if path_guard is not None and not path_guard(virtual_path):
-            raise ValueError("SmallTask Agent 无权删除该路径。")
+            raise ValueError("当前 Agent 无权删除该路径。")
         target = _resolve_virtual_path(root, virtual_path)
         _validate_delete_target(root, target)
         target.unlink()

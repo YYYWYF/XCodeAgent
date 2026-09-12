@@ -12,6 +12,7 @@ from deepagents.middleware.filesystem import _check_fs_permission
 from app.agents.workspace_scope import (
     create_workspace_backend,
     create_workspace_permissions,
+    is_data_source_backend_path,
     resolve_workspace_root,
 )
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
@@ -192,11 +193,58 @@ class WorkspaceScopeTests(unittest.TestCase):
             self.assertEqual(_check_fs_permission(permissions, "read", virtual_path), "allow")
             self.assertEqual(_check_fs_permission(permissions, "write", virtual_path), "deny")
             self.assertEqual(
-                _check_fs_permission(permissions, "write", "/app/backend/api.py"),
+                _check_fs_permission(permissions, "write", "/backend/api.py"),
                 "allow",
+            )
+            self.assertEqual(
+                _check_fs_permission(permissions, "read", "/frontend/src/App.tsx"),
+                "deny",
+            )
+            self.assertEqual(
+                _check_fs_permission(
+                    permissions,
+                    "read",
+                    "/.xcodeagent/plans/technical-plan.json",
+                ),
+                "deny",
             )
             with self.assertRaisesRegex(ValueError, "Path traversal not allowed"):
                 backend.read(f"{USER_SKILLS_VIRTUAL_ROOT}../outside.txt")
+
+    def test_data_source_scope_only_allows_backend_project_paths(self) -> None:
+        """DataSource Agent 只能读写后端目录，根目录和内部状态目录必须拒绝。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            permissions = create_workspace_permissions(workspace, mode="data_source")
+
+        for path in (
+            "/backend",
+            "/backend/pom.xml",
+            "/backend/.mvn/wrapper/maven-wrapper.properties",
+            "/backend/target/dependency/example-library.jar",
+            "/backend/module/target/classes/Generated.class",
+            "/Backend/src/App.java",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(_check_fs_permission(permissions, "read", path), "allow")
+                self.assertEqual(_check_fs_permission(permissions, "write", path), "allow")
+                self.assertTrue(is_data_source_backend_path(path))
+
+        for path in (
+            "/",
+            "/README.md",
+            "/frontend/src/App.tsx",
+            "/.git/config",
+            "/unrelated/.cache/state.json",
+            "/.xcodeagent/application.json",
+            "/.xcodeAgent/plans/technical-plan.json",
+            "/backend/.idea/workspace.xml",
+            "/Backend/.gradle/caches/state.bin",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(_check_fs_permission(permissions, "read", path), "deny")
+                self.assertEqual(_check_fs_permission(permissions, "write", path), "deny")
+                self.assertFalse(is_data_source_backend_path(path))
 
     def test_sensitive_files_are_denied_before_workspace_allow(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:

@@ -49,6 +49,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
 
         self.assertIn("code_graph_context", _tool_names(frontend))
         self.assertNotIn("code_graph_context", _tool_names(data_source))
+        self.assertNotIn("execute", _tool_names(data_source))
         self.assertNotIn("code_graph_context", _tool_names(database))
         self.assertNotIn("code_graph_context", _tool_names(repair))
         self.assertEqual(data_source.get("name"), "data-source-generation-agent")
@@ -57,6 +58,18 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertNotIn("Data Source Coding Agent", data_source_system_prompt)
         self.assertNotIn("unique filename", data_source_system_prompt)
         self.assertNotIn("changed files", data_source_system_prompt)
+        self.assertIn(
+            "backend directory is the only accessible project directory",
+            data_source_system_prompt,
+        )
+        self.assertIn(
+            "Do not broadly list, glob, grep, or inspect the backend target directory",
+            data_source_system_prompt,
+        )
+        self.assertIn(
+            "one exact third-party dependency class or object",
+            data_source_system_prompt,
+        )
         prompt = " ".join(str(frontend.get("system_prompt") or "").split())
         self.assertIn("Process dispatched tasks one by one by `task_id`", prompt)
         self.assertIn("do not repeat the same graph query", prompt)

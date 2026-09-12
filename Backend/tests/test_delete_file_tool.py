@@ -196,6 +196,46 @@ class DeleteFileToolTests(unittest.TestCase):
         )
         self.assertEqual(repair_planner.get("skills"), [USER_SKILLS_VIRTUAL_ROOT])
 
+    def test_data_source_delete_tool_is_limited_to_backend_directory(self) -> None:
+        """DataSource Agent 的独立删除工具不得绕过后端目录边界。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            backend_file = root / "backend" / "obsolete.java"
+            frontend_file = root / "frontend" / "App.tsx"
+            internal_file = root / ".xcodeagent" / "application.json"
+            for target in (backend_file, frontend_file, internal_file):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("keep", encoding="utf-8")
+            user_skills_backend = FilesystemBackend(root_dir=workspace, virtual_mode=True)
+            agent_memory_backend = FilesystemBackend(root_dir=workspace, virtual_mode=True)
+            with patch(
+                "app.agents.data_source.agent.create_deep_agent",
+                side_effect=lambda **kwargs: kwargs,
+            ):
+                agent = create_data_source_agent(
+                    "model",
+                    workspace_root=workspace,
+                    user_skills_backend=user_skills_backend,
+                    agent_memory_backend=agent_memory_backend,
+                )
+
+            delete_tool = next(
+                tool for tool in agent["tools"] if getattr(tool, "name", "") == "delete_file"
+            )
+            allowed = json.loads(delete_tool.invoke({"file_path": "/backend/obsolete.java"}))
+            denied_frontend = json.loads(delete_tool.invoke({"file_path": "/frontend/App.tsx"}))
+            denied_internal = json.loads(
+                delete_tool.invoke({"file_path": "/.xcodeagent/application.json"})
+            )
+
+            self.assertEqual(allowed["status"], "deleted")
+            self.assertEqual(denied_frontend["status"], "error")
+            self.assertEqual(denied_internal["status"], "error")
+            self.assertFalse(backend_file.exists())
+            self.assertTrue(frontend_file.exists())
+            self.assertTrue(internal_file.exists())
+
     def _invoke_delete(self, workspace: str | None, file_path: str) -> dict:
         delete_file = create_delete_file_tool(workspace)
         payload = delete_file.invoke({"file_path": file_path})

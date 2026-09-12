@@ -4,13 +4,12 @@ from deepagents.backends.protocol import BackendProtocol
 from app.agents.workspace_scope import (
     create_workspace_backend,
     create_workspace_permissions,
+    is_data_source_backend_path,
 )
-from app.middleware.direct_modification import DirectModificationMiddleware
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.tools.delete_file import create_delete_file_tool
-from app.tools.execute import create_execute_tool
 from app.tools.mysql_info import create_get_mysql_config_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
@@ -30,8 +29,16 @@ def create_data_source_agent(
         "Spring Boot tasks and implementation contracts in the current user message. "
         "Before editing, read the task's required instructions, current target files, and "
         "the nearest relevant existing implementation. Reuse the workspace's package "
-        "structure and conventions, and make the smallest in-scope change. Write only the "
-        "task's allowed_paths and declared change_scope. Do not modify formal planning "
+        "structure and conventions, and make the smallest in-scope change. The backend "
+        "directory is the only accessible project directory: use /backend/** or "
+        "/Backend/** according to Backend Workspace Context. Never inspect the workspace "
+        "root, frontend, or the workspace's real .xcodeagent directory. "
+        "Do not broadly list, glob, grep, or inspect the backend target directory. Read a "
+        "file under target only when the current task requires checking one exact "
+        "third-party dependency class or object and you already have its precise path; "
+        "never use Maven compiler status, generated file inventories, or unrelated build "
+        "outputs as implementation context. "
+        "Write only the task's allowed_paths and declared change_scope. Do not modify formal planning "
         "artifacts, the task DAG, API or Entity contracts, database schema, migrations, or "
         "seed data. If a task cannot be completed within its contract and write scope, "
         "return the structured failure or change request required by the execution prompt; "
@@ -42,10 +49,11 @@ def create_data_source_agent(
         "reports that the exact target already exists, use edit_file for that target. "
         "Never create an alternate filename to bypass an existing target or task scope."
     )
-    execute_tool = create_execute_tool(workspace_root)
     runtime_tools = [
-        create_delete_file_tool(workspace_root),
-        execute_tool,
+        create_delete_file_tool(
+            workspace_root,
+            path_guard=is_data_source_backend_path,
+        ),
         create_get_mysql_config_tool(workspace_root),
     ]
     return create_deep_agent(
@@ -57,7 +65,6 @@ def create_data_source_agent(
         skills=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
         tools=runtime_tools,
-        middleware=[DirectModificationMiddleware(required_tools=[execute_tool])],
         backend=create_workspace_backend(
             workspace_root,
             include_builtin_skills=True,

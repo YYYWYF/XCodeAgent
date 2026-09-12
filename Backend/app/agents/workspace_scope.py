@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from app.agents.auto_dedup_backend import AutoDedupFilesystemBackend
@@ -29,6 +29,23 @@ AgentWorkspaceMode = Literal[
     "test_generation",
     "workspace_assistant",
 ]
+
+_DATA_SOURCE_IGNORED_DIRECTORY_NAMES = frozenset(
+    {
+        ".git",
+        ".gradle",
+        ".hg",
+        ".idea",
+        ".settings",
+        ".svn",
+        ".vscode",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "out",
+    }
+)
 
 
 def resolve_workspace_root(workspace_root: str | None) -> Path | None:
@@ -119,6 +136,38 @@ def create_workspace_permissions(
             )
         )
     permissions.extend(skill_permissions)
+    if mode == "data_source":
+        # DataSource Agent 只实现后端任务；平台技能与记忆已由前面的精确规则放行。
+        permissions.extend(
+            [
+                FilesystemPermission(
+                    operations=["read", "write"],
+                    paths=_data_source_ignored_virtual_paths(),
+                    mode="deny",
+                ),
+                FilesystemPermission(
+                    operations=["read", "write"],
+                    paths=[
+                        "/backend",
+                        "/backend/**",
+                        "/backend/**/.*",
+                        "/backend/**/.*/**",
+                        "/Backend",
+                        "/Backend/**",
+                        "/Backend/**/.*",
+                        "/Backend/**/.*/**",
+                    ],
+                    mode="allow",
+                ),
+                FilesystemPermission(
+                    operations=["read", "write"],
+                    paths=["/**", "/.*", "/.*/**", "/**/.*", "/**/.*/**"],
+                    mode="deny",
+                ),
+            ]
+        )
+        return permissions
+
     if mode in {"database", "repair_planner", "workspace_assistant"}:
         permissions.extend(
             [
@@ -222,6 +271,37 @@ def create_workspace_permissions(
         FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="allow")
     )
     return permissions
+
+
+def is_data_source_backend_path(virtual_path: str) -> bool:
+    """判断虚拟绝对路径是否位于 DataSource Agent 可操作的后端源码范围。"""
+
+    parts = PurePosixPath(str(virtual_path or "").replace("\\", "/")).parts
+    return (
+        len(parts) >= 2
+        and parts[0] == "/"
+        and parts[1] in {"backend", "Backend"}
+        and ".." not in parts
+        and not any(
+            part.casefold() in _DATA_SOURCE_IGNORED_DIRECTORY_NAMES
+            for part in parts[2:]
+        )
+    )
+
+
+def _data_source_ignored_virtual_paths() -> list[str]:
+    """生成 DataSource Agent 项目路径中 IDE 元数据和构建产物的拒绝规则。"""
+
+    paths: list[str] = []
+    for root in ("backend", "Backend"):
+        for name in sorted(_DATA_SOURCE_IGNORED_DIRECTORY_NAMES):
+            paths.extend(
+                [
+                    f"/{root}/**/{name}",
+                    f"/{root}/**/{name}/**",
+                ]
+            )
+    return paths
 
 
 def _read_only_virtual_permissions(virtual_root: str) -> list[FilesystemPermission]:
