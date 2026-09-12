@@ -578,6 +578,11 @@ def _handoff_lifecycle(
     """按 execution kind 选择 Workbench 或 Application Planning 的 handoff。"""
 
     if source.execution_kind == "application_planning":
+        if plan.lifecycle_revision is None:
+            raise RecoveryExecutionError(
+                "RECOVERY_LIFECYCLE_REVISION_MISSING",
+                "Native Application Planning Recovery 缺少 Lifecycle revision。",
+            )
         if plan.lifecycle_ownership_mode is RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP:
             return claim_application_planning_run_for_recovery(
                 workspace,

@@ -289,6 +289,11 @@ def _validate_lifecycle(
 ) -> _CheckpointValidation:
     """保守比较 revision，仅放行已提交回答的明确 Planning 转换窗口。"""
 
+    contract = resolve_application_planning_recovery_contract(
+        source=source,
+        point=point,
+        snapshot=snapshot,
+    )
     try:
         lifecycle = load_application_lifecycle(workspace)
     except (OSError, ValueError):
@@ -297,17 +302,17 @@ def _validate_lifecycle(
             "当前 ApplicationLifecycle 无法安全读取。",
         )
     if lifecycle is None:
+        if contract is not None:
+            return _requires_handler_state(
+                "LIFECYCLE_STATE_MISSING",
+                "Application Planning Recovery Contract 缺少权威 Lifecycle，无法证明 ownership safety。",
+            )
         if source.execution_kind == "application_planning":
             return _CheckpointValidation()
         return _requires_handler_state(
             "LIFECYCLE_STATE_MISSING",
             "Workbench execution 缺少应存在的 ApplicationLifecycle。",
         )
-    contract = resolve_application_planning_recovery_contract(
-        source=source,
-        point=point,
-        snapshot=snapshot,
-    )
     if contract is not None:
         assessment = contract.assess_lifecycle(
             source=source,

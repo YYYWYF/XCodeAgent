@@ -16,6 +16,11 @@ from app.domain.execution_recovery import (
     RecoveryPointKind,
     RecoveryStrategy,
 )
+from app.domain.application_planning_recovery import (
+    ApplicationPlanningOperation,
+    ApplicationPlanningRecoveryBoundary,
+    application_planning_boundary_payload,
+)
 from app.persistence.execution_recovery import (
     insert_execution,
     insert_recovery_point,
@@ -332,6 +337,52 @@ class ExecutionRecoveryCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(plan.decision, RecoveryDecision.REQUIRES_HANDLER)
         self.assertEqual(plan.reason_code, "REPLAY_SAFETY_UNASSESSED")
+
+    async def test_application_planning_contract_requires_lifecycle(self) -> None:
+        """命中 Production Contract 但缺失 Lifecycle 时必须在 Coordinator fail closed。"""
+
+        source = await self._insert_source(status=DurableExecutionStatus.INTERRUPTED)
+        point = await self._insert_point(
+            "rp-technical-contract",
+            "cp-technical-contract",
+            "technical_planning_review",
+            ["technical_planning_begin"],
+            lifecycle_revision=7,
+        )
+        baseline = {
+            "artifact_type": "technical-plan",
+            "confirmation_status": "confirmed",
+            "app": {"name": "contract"},
+        }
+        snapshot = self._snapshot(
+            "cp-technical-contract",
+            ["technical_planning_begin"],
+        )
+        snapshot.values = {
+            "active_run_id": source.run_id,
+            "request": "创建技术规划",
+            "technical_plan": baseline,
+            "application_planning_recovery_boundary": application_planning_boundary_payload(
+                operation_id="technical-plan-contract",
+                operation=ApplicationPlanningOperation.INITIAL,
+                boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
+                request="创建技术规划",
+                baseline=None,
+            ),
+        }
+        with patch(
+            "app.services.execution_recovery_coordinator.load_application_lifecycle",
+            return_value=None,
+        ):
+            plan = await prepare_continue(
+                workspace=str(self.workspace),
+                source_run_id=source.run_id,
+                graph=_GraphDouble({"cp-technical-contract": snapshot}),
+            )
+
+        self.assertEqual(plan.recovery_point_id, point.recovery_point_id)
+        self.assertEqual(plan.decision, RecoveryDecision.REQUIRES_HANDLER)
+        self.assertEqual(plan.reason_code, "LIFECYCLE_STATE_MISSING")
 
     async def test_workspace_file_change_without_new_snapshot_is_detected(self) -> None:
         """文件未重新 inspect 时，当前磁盘 revision 变化也必须被发现。"""
