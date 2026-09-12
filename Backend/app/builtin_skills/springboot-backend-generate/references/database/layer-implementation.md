@@ -89,6 +89,11 @@ configuration work here.
 
 - Let `ApplicationService` coordinate DTOs/Entities, the Repository, and business
   decisions. It must not access the Mapper directly.
+- Prefer letting the service task create or extend the module-level
+  `domain/exception/<Module>ErrorCode.java` from confirmed `api_contract.error_codes`, and
+  prefer throwing endpoint-facing `BizException` from ApplicationService. This is a
+  recommended ownership pattern; preserve an explicit existing module convention and never
+  write the ErrorCode file unless its exact path is in the current task scope.
 - For write operations, determine transaction boundaries from Spring conventions and the
   actual persistence boundary.
 - Match confirmed endpoint decisions for zero matches, multiple matches, uniqueness
@@ -166,7 +171,7 @@ contract mismatch or change request when the current write scope cannot implemen
 
 ## Error and Safety Behavior
 
-- Prefer detecting business failures and raising endpoint-facing `BizException` in the
+- Detect business failures and preferably raise endpoint-facing `BizException` in the
   Application Service. Repository and Controller layers must not assemble public error
   messages from persistence exceptions.
 - Do not swallow persistence or mapping failures, return fake success, or expose database

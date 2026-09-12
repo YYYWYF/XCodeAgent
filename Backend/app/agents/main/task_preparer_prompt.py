@@ -367,6 +367,14 @@ def _planning_algorithm_section(
             "Do not invent any Endpoint or physical-source field for a business_description. "
             f"{objects_scope}"
         )
+        rules.append(
+            "Prefer assigning a module-level `domain/exception/<Module>ErrorCode.java` to "
+            "the `service` task when the current API Contract declares `error_codes` and no "
+            "existing task or module convention already owns that file. Prefer implementing "
+            "confirmed business failure branches and raising endpoint-facing `BizException` "
+            "in ApplicationService. This is a planning recommendation, not an exclusive "
+            "ownership constraint; preserve an explicit existing ownership convention."
+        )
     if "database" in source_groups:
         rules.append(
             "The `objects` task owns PO, Entity, DTO, and typed PO <-> Entity plus Entity <-> "

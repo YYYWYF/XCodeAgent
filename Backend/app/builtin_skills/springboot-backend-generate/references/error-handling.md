@@ -5,18 +5,37 @@
 - Treat `implementation_contract.api_contract.error_codes` as the complete allowlist of
   endpoint-facing business error-code constants. Reusing or defining those exact constants
   is not inventing an error code; adding any other public code is.
-- Reuse an existing concrete module error-code enum when it already contains the required
-  constants. Otherwise, create or extend one module-level
-  `domain/exception/<Module>ErrorCode.java` implementing `IBizErrorCode` only when that
-  exact path is authorized by the current `allowed_paths` and `change_scope`. Do not create
-  one enum per Controller method.
-- If a required contract code is missing and the current task cannot write the module
-  error-code file, return `change_request`. Do not substitute another code, use a raw
-  string, or edit the template `common` exception classes.
+- Every generated concrete ErrorCode type must be an enum that implements `IBizErrorCode`.
+  Do not generate a plain enum, implement only `IErrorCode`, or represent a confirmed
+  business error as a free-form string constant.
+- Prefer letting the `service` task create or maintain the module error-code enum because it
+  owns the business failure branches that consume those codes. Reuse the enum when it
+  already contains the required constants; otherwise create or extend the single
+  module-level `domain/exception/<Module>ErrorCode.java` implementing `IBizErrorCode` when
+  that exact path is present in the current task's `allowed_paths` and `change_scope`. Do
+  not create one enum per Controller method.
+- This is a recommended ownership pattern, not an exclusive constraint. Follow an explicit
+  existing task/module convention when another stage owns the ErrorCode file. If the
+  required file is not writable by the current task, return `plan_mismatch` with
+  `change_request`; do not write a reference to a missing type, substitute another code,
+  use a raw string, or edit the template `common` classes.
 
 Follow the existing module's enum and Lombok conventions. With the template defaults, the
 enum constant name becomes `returnCode` through `IErrorCode.getErrorCodeStr()`, while the
 enum's `errorMessage` becomes the public `errorMsg` through `ResponseEntity.failed`.
+
+## Error Type and Propagation Contract
+
+- Define the stable code and message on an `IBizErrorCode` enum constant.
+- Propagate a confirmed business failure by constructing `BizException` with that enum
+  constant: `throw new BizException(ModuleErrorCode.SOME_ERROR)`.
+- When the enum message contains `MessageFormat` placeholders, pass only the matching safe
+  formatting arguments after the enum constant:
+  `throw new BizException(ModuleErrorCode.SOME_ERROR, argument)`.
+- Do not throw an ErrorCode enum directly, throw `RuntimeException` with the public message,
+  return `ResponseEntity.failed(...)` from business code, or duplicate the enum message in
+  the exception branch. The global exception handler is responsible for translating
+  `BizException` and its `IBizErrorCode` into the response envelope.
 
 ## Generating the Error Message
 
@@ -77,11 +96,11 @@ with those used by the confirmed Endpoint artifacts.
 - Let Repository methods return their domain result, empty result, affected-row count, or
   infrastructure exception. A Repository must not choose a public business message merely
   from a low-level SQL exception.
-- Let an external Client or adapter classify an upstream HTTP status, timeout, decode
-  failure, or declared `error_message_path` only when the confirmed upstream contract
-  provides an exact mapping. Prefer the Service for the final endpoint-facing
-  `BizException`; a lower layer may throw it only when classification is complete at that
-  boundary and the project already follows that convention.
+- Let an external Client or adapter preserve an upstream HTTP status, timeout, decode
+  failure, or declared `error_message_path` in the project's non-public transport failure
+  form. Prefer performing the confirmed mapping and throwing the final endpoint-facing
+  `BizException` in ApplicationService. A lower layer should do so only when classification
+  is complete at that boundary and the existing module already follows that convention.
 - Controllers must use Bean Validation for request-shape constraints, delegate to the
   Service, and return only success responses. They must not catch `BizException`, call
   `ResponseEntity.failed`, or construct public error messages.

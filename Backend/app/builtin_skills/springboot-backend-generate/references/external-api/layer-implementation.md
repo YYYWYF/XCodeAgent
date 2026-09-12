@@ -78,8 +78,10 @@ current task `stage`; do not perform bootstrap dependency or global activation w
 2. The upstream Converter owns field conversion, payload-path traversal, array/cardinality
    normalization, and internal semantic mapping. Its files remain distinct from transport
    DTO and Client deliverable paths even though all belong to the same upstream task.
-3. The service stage owns endpoint-facing orchestration and business decisions; it does not
-   issue HTTP calls directly when an upstream adapter exists.
+3. The service stage owns endpoint-facing orchestration and business decisions. Prefer
+   assigning the module ErrorCode file to this stage and throwing endpoint-facing
+   `BizException` here; preserve an explicit existing module convention. The service does
+   not issue HTTP calls directly when an upstream adapter exists.
 4. The controller stage owns the confirmed internal HTTP method/path, request validation,
    response envelope/status mapping, and delegation to the application service.
 
@@ -132,8 +134,10 @@ not authorize pagination by themselves.
 ## Error and Safety Behavior
 
 - Prefer the Application Service for the final endpoint-facing `BizException`. An upstream
-  adapter may classify a failure only from an exact confirmed mapping; it must not expose
-  or turn a raw upstream message into the public `errorMsg`.
+  adapter should preserve a failure in the project's non-public transport form and must not
+  expose or turn a raw upstream message into the public `errorMsg`. Throw at the adapter
+  boundary only when the mapping is complete there and the existing module follows that
+  convention.
 - Do not swallow upstream HTTP errors, timeouts, or decode failures; do not return fake
   success or expose credentials/raw sensitive payloads.
 - The current contract is public/no-auth only. Return a change request for authentication,
