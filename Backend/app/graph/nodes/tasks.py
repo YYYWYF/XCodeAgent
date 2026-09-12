@@ -2052,7 +2052,7 @@ def _replaceable_unit_ids(
         build_context: dict,
         required_unit_ids: set[str],
 ) -> set[str]:
-    """仅替换目标 Unit 与尚无任务的依赖 Unit，已准备依赖任务始终复用。"""
+    """替换目标、当前范围基础设施检查和未准备依赖，复用其余已准备任务。"""
 
     target = build_context.get("target") if isinstance(build_context.get("target"), dict) else {}
     if target.get("type") == "application":
@@ -2070,7 +2070,9 @@ def _replaceable_unit_ids(
     for unit_id in required_unit_ids:
         unit = units.get(unit_id) if isinstance(units, dict) else {}
         has_tasks = isinstance(unit, dict) and bool(unit.get("task_ids"))
-        if unit_id == target_unit_id or not has_tasks:
+        # bootstrap 检查内容由当前范围的已确认数据源决定；共享 ID 不能作为
+        # 复用依据，否则切换接口后会保留旧 Feign 检查并丢弃新的数据库检查。
+        if unit_id in {target_unit_id, "backend:bootstrap"} or not has_tasks:
             replaceable.add(unit_id)
     return replaceable
 
