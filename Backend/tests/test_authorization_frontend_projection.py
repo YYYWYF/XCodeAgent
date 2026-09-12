@@ -21,7 +21,9 @@ class AuthorizationFrontendProjectionTests(unittest.TestCase):
                 entry.write_text("export default null;\n", encoding="utf-8")
             routes.write_text("// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n", encoding="utf-8")
             plan = self._plan()
-            projection = compile_frontend_authorization_projection(plan)
+            projection = compile_frontend_authorization_projection(
+                plan, application_config={"authorization": {"enabled": True}}
+            )
             apply_route_projection(root, compile_route_projection(plan), authorization_decorations=projection["routeDecorations"])
             apply_authorization_frontend_projection(root, projection)
             source = routes.read_text(encoding="utf-8")
@@ -32,7 +34,7 @@ class AuthorizationFrontendProjectionTests(unittest.TestCase):
 
     def _plan(self) -> dict:
         """构造同时包含受控和公开页面的最小计划。"""
-        return {"pages": [{"pageId": "page_personal_assets", "name": "个人资产", "path": "/personal-assets"}, {"pageId": "page_public_assets", "name": "公共资产", "path": "/public-assets"}], "authorization_manifest": {"enabled": True, "resources": [{"resourceKey": "system_authorization_management", "type": "system", "targetResourceRef": "system:authorization_management"}, {"resourceKey": "page_personal_assets", "type": "page", "targetResourceRef": "page:page_personal_assets"}], "bindings": {"pages": [{"pageId": "page_personal_assets", "resourceKey": "page_personal_assets"}], "actions": [], "endpoints": []}}}
+        return {"artifact_type": "technical-plan", "pages": [{"pageId": "page_personal_assets", "name": "个人资产", "path": "/personal-assets"}, {"pageId": "page_public_assets", "name": "公共资产", "path": "/public-assets"}], "authorization_manifest": {"resources": [{"resourceKey": "system_authorization_management", "type": "system", "targetResourceRef": "system:authorization_management"}, {"resourceKey": "page_personal_assets", "type": "page", "targetResourceRef": "page:page_personal_assets"}], "bindings": {"pages": [{"pageId": "page_personal_assets", "resourceKey": "page_personal_assets"}], "actions": [], "endpoints": []}}}
 
 
 if __name__ == "__main__":

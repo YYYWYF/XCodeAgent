@@ -185,8 +185,8 @@ export default function WelcomeRecentProjects({
                   <span className={cx('welcome-project-description')}>
                     {application.senario || '继续上一次开发会话'}
                   </span>
-                  <time dateTime={new Date(application.createdAt).toISOString()}>
-                    {formatRecentTime(application.createdAt)}
+                  <time dateTime={new Date(application.lastOpenedAt).toISOString()}>
+                    {formatRecentTime(application.lastOpenedAt)}
                   </time>
                 </button>
                 <Button

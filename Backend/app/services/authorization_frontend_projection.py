@@ -16,12 +16,17 @@ class AuthorizationFrontendProjectionError(ValueError):
     """表示前端资源常量或业务路由无法按确认权限事实安全生成。"""
 
 
-def compile_frontend_authorization_projection(project_plan: dict[str, Any]) -> dict[str, Any] | None:
+def compile_frontend_authorization_projection(
+    project_plan: dict[str, Any], *, application_config: dict[str, Any]
+) -> dict[str, Any] | None:
     """从完整 TechnicalPlan 编译资源目录和受控页 decoration，不拥有普通路由。"""
 
-    manifest = project_plan.get("authorization_manifest")
-    if not isinstance(manifest, dict) or manifest.get("enabled") is not True:
+    authorization = application_config.get("authorization")
+    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
         return None
+    manifest = project_plan.get("authorization_manifest")
+    if not isinstance(manifest, dict):
+        raise AuthorizationFrontendProjectionError("权限已启用，但 TechnicalPlan 缺少 authorization_manifest。")
     bindings = manifest.get("bindings") if isinstance(manifest.get("bindings"), dict) else {}
     page_resource_keys = {
         str(item.get("pageId") or "").strip(): str(item.get("resourceKey") or "").strip()

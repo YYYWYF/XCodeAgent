@@ -3,11 +3,15 @@ import { test } from 'node:test'
 import type { ApplicationConfig, ApplicationDraft } from '../src/renderer/src/typings'
 import { DatasourceEnum } from '../src/renderer/src/typings'
 import { buildApplicationPlanningRequest } from '../src/renderer/src/service/applicationPagePlanning'
+import {
+  applicationIndexOf,
+  applicationSchemaOf
+} from '../src/renderer/src/service/applicationStorage'
 import { initialApplicationDraft } from '../src/renderer/src/components/Welcome/constants'
 import { buildApplicationSchema } from '../src/renderer/src/components/Welcome/utils'
 
-/** 验证新建表单只生成当前 v5 的内置权限种子，并清理重复成员标识。 */
-test('生成 schemaVersion 5 权限配置', () => {
+/** 验证新建表单只生成当前 v6 的内置权限种子，并清理重复成员标识。 */
+test('生成 schemaVersion 6 权限配置', () => {
   const draft = structuredClone(initialApplicationDraft) as ApplicationDraft
   draft.appName = '权限验收应用'
   draft.senario = '验证新建应用权限配置。'
@@ -19,7 +23,8 @@ test('生成 schemaVersion 5 权限配置', () => {
 
   const schema = buildApplicationSchema(draft)
 
-  assert.equal(schema.schemaVersion, 5)
+  assert.equal(schema.schemaVersion, 6)
+  assert.equal(schema.configRevision, 1)
   assert.deepEqual(schema.authorization, {
     enabled: true,
     initialAdministratorSubjects: ['ops@example.com', 'admin@example.com']
@@ -50,6 +55,35 @@ test('规划请求携带当前权限事实', () => {
   assert.match(request, /初始管理员成员标识：ops@example.com。/)
   assert.doesNotMatch(request, /运行态权限管理页面/)
   assert.doesNotMatch(request, /权限提供器模式/)
+})
+
+/** 验证首页持久化对象只保留工作区索引，运行时配置不会写入 applications.json。 */
+test('应用索引不保存 application.json 配置副本', () => {
+  const schema = buildApplicationSchema(structuredClone(initialApplicationDraft) as ApplicationDraft)
+  const application = {
+    ...schema,
+    id: 'application-index-test',
+    name: schema.appName,
+    workspaceRoot: '/tmp/application-index-test',
+    lastOpenedAt: 123,
+    pages: ['工作台'],
+    defaultPage: '工作台',
+    source: 'new' as const,
+    planningThreadId: 'thread-1'
+  } as ApplicationConfig
+
+  const applicationIndex = applicationIndexOf(application)
+  assert.deepEqual(applicationIndex, {
+    id: 'application-index-test',
+    workspaceRoot: '/tmp/application-index-test',
+    name: schema.appName,
+    lastOpenedAt: applicationIndex.lastOpenedAt
+  })
+  const persistedSchema = applicationSchemaOf(application) as Record<string, unknown>
+  assert.equal('id' in persistedSchema, false)
+  assert.equal('workspaceRoot' in persistedSchema, false)
+  assert.equal('planningThreadId' in persistedSchema, false)
+  assert.deepEqual(persistedSchema.auth, schema.auth)
 })
 
 /** 验证权限开启时配置构造器拒绝缺少认证、数据库或管理员种子的非法组合。 */

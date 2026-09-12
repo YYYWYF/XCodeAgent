@@ -4,6 +4,7 @@ from app.graph import nodes
 from app.graph.subgraphs import acceptance_subgraph
 from app.graph.state import ProjectState
 from app.services.authorization_bootstrap import authorization_bootstrap_enabled
+from app.services.application_config import read_application_config
 from app.persistence.checkpoints import (
     workflow_checkpoint_db_path,
     workflow_checkpointer,
@@ -32,7 +33,7 @@ def route_workflow_start(state: ProjectState) -> str:
     if state.get("resume_from") == "build":
         return (
             "authorization_bootstrap"
-            if authorization_bootstrap_enabled(state.get("technical_plan"))
+            if _authorization_bootstrap_required(state)
             else "build"
         )
     if state.get("resume_from") == "authorization_bootstrap":
@@ -224,8 +225,18 @@ def route_prepare_build_tasks(state: ProjectState) -> str:
         return "handle_failure"
     return (
         "authorization_bootstrap"
-        if authorization_bootstrap_enabled(state.get("technical_plan"))
+        if _authorization_bootstrap_required(state)
         else "build"
+    )
+
+
+def _authorization_bootstrap_required(state: ProjectState) -> bool:
+    """从当前工作区 application.json 判断本次 Build 是否需要权限初始化。"""
+
+    workspace = str(state.get("workspace") or "").strip()
+    return bool(workspace) and authorization_bootstrap_enabled(
+        state.get("technical_plan"),
+        application_config=read_application_config(workspace),
     )
 
 

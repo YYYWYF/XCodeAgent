@@ -11,13 +11,16 @@ from app.services.authorization_frontend_projection import (
 
 
 def compile_authorization_overlay(
-    project_plan: dict[str, Any], build_context: dict[str, Any]
+    project_plan: dict[str, Any], build_context: dict[str, Any], *, application_config: dict[str, Any]
 ) -> dict[str, Any]:
     """在叶子任务生成前按当前目标裁剪页面、操作和接口权限事实。"""
 
-    manifest = project_plan.get("authorization_manifest")
-    if not isinstance(manifest, dict) or manifest.get("enabled") is not True:
+    authorization = application_config.get("authorization")
+    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
         return {key: value for key, value in build_context.items() if key != "authorization_constraints"}
+    manifest = project_plan.get("authorization_manifest")
+    if not isinstance(manifest, dict):
+        raise ValueError("权限已启用，但 TechnicalPlan 缺少 authorization_manifest。")
 
     bindings = manifest.get("bindings")
     if not isinstance(bindings, dict):
@@ -77,7 +80,9 @@ def compile_authorization_overlay(
                 key=lambda item: (item["pageId"], item["actionId"]),
             ),
             "endpoints": endpoints,
-            "frontendProjection": compile_frontend_authorization_projection(project_plan),
+            "frontendProjection": compile_frontend_authorization_projection(
+                project_plan, application_config=application_config
+            ),
             "authConstantsProjection": auth_constants_projection,
         },
     }

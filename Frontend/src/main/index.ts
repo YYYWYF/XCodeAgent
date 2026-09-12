@@ -783,7 +783,29 @@ async function ensureApplicationsFile(): Promise<string> {
   return applicationsFile
 }
 
-/** 读取持久化应用列表，非数组内容按空列表处理。 */
+/** 校验 applications.json 索引记录，拒绝混入工作区配置副本。 */
+function assertApplicationIndex(value: unknown): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('application index must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const allowedKeys = ['id', 'workspaceRoot', 'name', 'lastOpenedAt']
+  if (
+    Object.keys(record).some((key) => !allowedKeys.includes(key)) ||
+    typeof record.id !== 'string' ||
+    !record.id.trim() ||
+    typeof record.workspaceRoot !== 'string' ||
+    !record.workspaceRoot.trim() ||
+    typeof record.name !== 'string' ||
+    !record.name.trim() ||
+    typeof record.lastOpenedAt !== 'number' ||
+    !Number.isFinite(record.lastOpenedAt)
+  ) {
+    throw new Error('application index contains invalid fields')
+  }
+}
+
+/** 读取持久化应用索引，非数组内容按空列表处理。 */
 async function readApplications(): Promise<unknown[]> {
   const applicationsFile = await ensureApplicationsFile()
   const rawValue = await fs.readFile(applicationsFile, 'utf8')
@@ -791,11 +813,12 @@ async function readApplications(): Promise<unknown[]> {
   return Array.isArray(parsed) ? parsed : []
 }
 
-/** 校验并持久化应用列表。 */
+/** 校验并持久化不含 application.json 配置副本的应用索引。 */
 async function writeApplications(applications: unknown): Promise<void> {
   if (!Array.isArray(applications)) {
     throw new Error('applications must be an array')
   }
+  applications.forEach(assertApplicationIndex)
 
   const applicationsFile = await ensureApplicationsFile()
   await fs.writeFile(applicationsFile, `${JSON.stringify(applications, null, 2)}\n`, 'utf8')
@@ -1498,6 +1521,27 @@ function setupWorkspaceIpc(): void {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
     const applicationConfig = await readManagedWorkspaceApplication(workspaceRoot)
     return { application: applicationConfig }
+  })
+
+  ipcMain.handle('workspace:write-application', async (_event, payload = {}) => {
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    if (
+      !payload.application ||
+      typeof payload.application !== 'object' ||
+      Array.isArray(payload.application)
+    ) {
+      throw new Error('application must be an object')
+    }
+    const currentApplication = await readManagedWorkspaceApplication(workspaceRoot)
+    const nextApplication = { ...(payload.application as Record<string, unknown>) }
+    // 只有实际配置变化才递增版本，避免打开或刷新应用时制造过期规划产物。
+    if (JSON.stringify(currentApplication) !== JSON.stringify(nextApplication)) {
+      nextApplication.configRevision = Number(currentApplication.configRevision) + 1
+    }
+    assertCurrentApplicationSchema(nextApplication)
+    const applicationFile = getWorkspaceApplicationFile(workspaceRoot)
+    await fs.writeFile(applicationFile, `${JSON.stringify(nextApplication, null, 2)}\n`, 'utf8')
+    return { application: await readManagedWorkspaceApplication(workspaceRoot) }
   })
 
   ipcMain.handle('workspace:select-directory', async (_event, options = {}) => {

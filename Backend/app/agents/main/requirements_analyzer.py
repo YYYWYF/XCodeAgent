@@ -209,8 +209,8 @@ def _remove_unauthorized_authorization_candidates(
     for field_name in ("restrictedPages", "restrictedOperations"):
         if isinstance(authorization.get(field_name), list):
             authorization[field_name] = []
-    # 非显式授权证据不得把模型的 enabled=true 作为权限初始化依据。
-    authorization["enabled"] = False
+    # 非显式授权证据不得留下任何可被误解为权限启用的业务规则。
+    authorization.pop("enabled", None)
     authorization.pop("initialAdminRoleId", None)
     return sanitized
 
@@ -430,7 +430,7 @@ def _merge_authorization_facts(
         and bool(authorization[field_name])
         for field_name in ("restrictedPages", "restrictedOperations")
     ):
-        authorization["enabled"] = True
+        authorization.pop("enabled", None)
     data_issues = fact_authorization.get("dataAuthorizationIssues")
     if isinstance(data_issues, list):
         merged["authorization_capability_issues"] = [
@@ -545,8 +545,8 @@ def _requirements_prompt(
         "to produce a RequirementSpec.\n"
         "A clear RequirementSpec must cover all of these aspects: 应用信息, 业务参与者, 功能模块, "
         "页面清单, 业务流程.\n"
-        "When the request explicitly asks to add or enable login, produce authentication_requirements with enabled=true "
-        "and sourceRefs citing that request; otherwise set enabled=false and sourceRefs=[]. When the request explicitly "
+        "When the request explicitly asks to add or enable login, produce authentication_requirements.sourceRefs "
+        "citing that request; otherwise return sourceRefs=[]. When the request explicitly "
         "asks to add or enable application-level authorization, also produce an "
         "authorization_requirements object. Extract only permission controls explicitly stated in the user's "
         "business description or clarification answers into restrictedPages and restrictedOperations. Empty candidate "
@@ -581,8 +581,8 @@ def _requirements_prompt(
         "When the business description explicitly requests a permission control, preserve the candidate page or operation. "
         "The platform determines the application-level authorization configuration after deterministic validation and "
         "collects only a required real initial-administrator subjectId; do not emit configuration-conflict fields.\n"
-        "If authorization is not enabled, return authorization_requirements.enabled=false and empty candidate "
-        "arrays, and state that the application has no application-level resource authorization.\n"
+        "When no permission control is requested, return empty authorization candidate arrays. Do not emit any "
+        "application capability enabled/disabled field in RequirementSpec.\n"
         "Do not generate business entities in this stage. Entities, their fields, data sources, "
         "and database/persistence choices belong to the technical planning stage, not the requirement "
         "specification. Do not include an entities field in the returned RequirementSpec.\n"
@@ -929,13 +929,13 @@ def _validate_complete_requirement_spec(
         and isinstance(existing_spec.get("authorization_requirements"), dict)
         else {}
     )
-    authorization_required = (
-        "authorization_requirements" in agent_spec
-        or existing_authorization.get("enabled") is True
+    authorization_required = "authorization_requirements" in agent_spec or any(
+        bool(existing_authorization.get(field_name))
+        for field_name in ("restrictedPages", "restrictedOperations")
     )
     if authorization_required and not isinstance(authorization, dict):
         missing_fields.append("authorization_requirements")
-    elif isinstance(authorization, dict) and authorization.get("enabled") is True:
+    elif isinstance(authorization, dict):
         for field_name in ("restrictedPages", "restrictedOperations"):
             if not isinstance(authorization.get(field_name), list):
                 missing_fields.append(f"authorization_requirements.{field_name}")

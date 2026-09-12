@@ -10,7 +10,7 @@ from app.services.build_task_planner import build_task_candidate_contract_errors
 from app.services.build_unit_compiler import annotate_unit_inputs
 
 
-def _project_plan(*, enabled: bool = True) -> dict:
+def _project_plan() -> dict:
     """构造同时含页面、操作和 Endpoint ANY-OF 的最小确认权限事实。"""
 
     return {
@@ -26,7 +26,6 @@ def _project_plan(*, enabled: bool = True) -> dict:
             }
         ],
         "authorization_manifest": {
-            "enabled": enabled,
             "bindings": {
                 "pages": [{"pageId": "orders", "resourceKey": "orders"}],
                 "actions": [
@@ -71,6 +70,7 @@ class AuthorizationOverlayTests(unittest.TestCase):
                     "page:orders",
                 ],
             },
+            application_config={"authorization": {"enabled": True}},
         )
 
         self.assertEqual(
@@ -134,6 +134,7 @@ class AuthorizationOverlayTests(unittest.TestCase):
                 "endpoint_ids": ["orders.approve"],
                 "required_unit_ids": ["backend:endpoint:orders_api:orders.approve"],
             },
+            application_config={"authorization": {"enabled": True}},
         )
         units = annotate_unit_inputs(
             {
@@ -155,8 +156,9 @@ class AuthorizationOverlayTests(unittest.TestCase):
         """权限关闭时不向 Build Context 或 Unit 注入任何权限字段。"""
 
         context = compile_authorization_overlay(
-            _project_plan(enabled=False),
+            _project_plan(),
             {"target": {"type": "page", "id": "orders"}, "authorization_constraints": {"stale": True}},
+            application_config={"authorization": {"enabled": False}},
         )
 
         self.assertNotIn("authorization_constraints", context)

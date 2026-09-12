@@ -145,18 +145,14 @@ function isDatabaseDatasourceType(value: unknown): boolean {
   return value === 'database'
 }
 
-/** 加密完整应用索引对象，并让顶层 datasource 与嵌套 schema 共享密文配置。 */
+/** 加密运行时应用视图中的数据源配置，返回可写入 application.json 的当前配置。 */
 export async function encryptApplicationForPersistence(
   application: ApplicationConfig
 ): Promise<ApplicationConfig> {
   const encryptedTopLevel = await encryptSensitiveDatasourceFields(application)
   return {
     ...application,
-    datasource: encryptedTopLevel.datasource,
-    schema: {
-      ...application.schema,
-      datasource: encryptedTopLevel.datasource
-    }
+    datasource: encryptedTopLevel.datasource
   }
 }
 

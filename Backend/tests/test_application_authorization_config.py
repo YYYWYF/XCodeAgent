@@ -15,14 +15,15 @@ from app.services.requirement_spec import create_requirement_spec
 
 
 def _write_current_config(workspace: str, datasource_type: str = "database") -> Path:
-    """为测试工作区写入最小 schema v5 应用配置。"""
+    """为测试工作区写入最小 schema v6 应用配置。"""
 
     target = Path(workspace) / ".xcodeagent" / "application.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(
             {
-                "schemaVersion": 5,
+                "schemaVersion": 6,
+                "configRevision": 1,
                 "appName": "权限测试应用",
                 "datasource": {"type": datasource_type},
                 "auth": {"enable": False},

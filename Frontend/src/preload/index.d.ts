@@ -42,6 +42,10 @@ declare global {
         readApplication: (payload: {
           workspaceRoot: string
         }) => Promise<{ application?: unknown }>
+        writeApplication: (payload: {
+          workspaceRoot: string
+          application: ApplicationSchemaConfig
+        }) => Promise<{ application?: unknown }>
         inspectPlanningArtifacts: (payload: {
           workspaceRoot: string
         }) => Promise<{

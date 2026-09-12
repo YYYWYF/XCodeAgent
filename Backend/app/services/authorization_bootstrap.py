@@ -28,17 +28,23 @@ def clear_authorization_bootstrap_lock(workspace: str | Path) -> bool:
         return _WORKSPACE_LOCKS.pop(key, None) is not None
 
 
-def authorization_bootstrap_enabled(technical_plan: Any) -> bool:
-    """判断已确认技术规划是否要求执行模板权限初始化。"""
+def authorization_bootstrap_enabled(
+    technical_plan: Any,
+    *,
+    application_config: dict[str, Any],
+) -> bool:
+    """只按 application.json 的权限开关判断是否执行模板权限初始化。"""
 
     if not isinstance(technical_plan, dict):
         return False
     manifest = technical_plan.get("authorization_manifest")
+    authorization = application_config.get("authorization") if isinstance(application_config, dict) else None
     return (
         technical_plan.get("artifact_type") == "technical-plan"
         and technical_plan.get("confirmation_status") == "confirmed"
+        and isinstance(authorization, dict)
+        and authorization.get("enabled") is True
         and isinstance(manifest, dict)
-        and manifest.get("enabled") is True
         and isinstance(manifest.get("fingerprint"), str)
         and bool(manifest["fingerprint"].strip())
     )
@@ -47,6 +53,8 @@ def authorization_bootstrap_enabled(technical_plan: Any) -> bool:
 def run_authorization_bootstrap(
     workspace: str | Path,
     technical_plan: dict[str, Any],
+    *,
+    application_config: dict[str, Any],
 ) -> dict[str, Any]:
     """以固定模板脚本执行或复用权限 Bootstrap，并返回可安全投影的结果。"""
 
@@ -61,7 +69,10 @@ def run_authorization_bootstrap(
         if isinstance(manifest, dict)
         else ""
     )
-    if not authorization_bootstrap_enabled(technical_plan):
+    if not authorization_bootstrap_enabled(
+        technical_plan,
+        application_config=application_config,
+    ):
         return {"status": "skipped", "reason": "authorization_disabled"}
     if not root.is_dir():
         return _failed_result(fingerprint, "workspace_invalid", "工作区不存在或不是目录。")

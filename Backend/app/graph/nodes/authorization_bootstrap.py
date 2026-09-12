@@ -7,6 +7,7 @@ from pathlib import Path
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.authorization_bootstrap import run_authorization_bootstrap
+from app.services.application_config import read_application_config
 from app.workspace.task_documents import load_build_task_plan_json
 
 
@@ -27,6 +28,7 @@ def authorization_bootstrap(state: ProjectState) -> dict:
             state.get("technical_plan")
             if isinstance(state.get("technical_plan"), dict)
             else {},
+            application_config=read_application_config(workspace),
         )
     )
     succeeded = result.get("status") in {"executed", "reused", "skipped"}

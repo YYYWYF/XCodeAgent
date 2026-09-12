@@ -359,6 +359,21 @@ def enforce_revision_routing(
     """校验模型候选并执行正式产物安全、字段合同和低置信度规则。"""
 
     normalized = _normalize_candidate_payload(payload)
+    # 应用级能力开关是 application.json 的配置事实；无论模型把它误判为产品行为还是
+    # 局部实现修改，都必须从 RequirementSpec 重建下游规划，不能复用旧权限语义。
+    if has_explicit_capability_change(user_request):
+        normalized.update(
+            {
+                "route": RevisionRoute.FORMAL_REVISION,
+                "formalBranch": FormalRevisionBranch.DESIGN_STAGE_REVISION,
+                "revisionType": RevisionType.REQUIREMENT_SCOPE_CHANGE,
+                "earliestArtifact": EarliestRevisionArtifact.REQUIREMENT_SPEC,
+                "owner": "none",
+                "candidatePaths": [],
+                "affectedArtifactKeys": ["requirement-spec"],
+                "confidence": 1.0,
+            }
+        )
     target_paths = [str(path).strip() for path in normalized.get("candidatePaths", [])]
     forced = _forced_formal_artifact_classification(target_paths)
     if forced is not None:

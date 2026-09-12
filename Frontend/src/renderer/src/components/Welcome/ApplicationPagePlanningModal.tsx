@@ -949,7 +949,7 @@ export default function ApplicationPagePlanningModal({
                   onSaveRequirementSpec={handleSaveRequirementSpec}
                   onReturnHome={onReturnHome}
                   onSubmit={handleSubmitClarification}
-                  rootPath={application.schema?.menus?.rootPath || '/'}
+                  rootPath={application.menus?.rootPath || '/'}
                   workflow={workflow}
                 />
               ) : null}

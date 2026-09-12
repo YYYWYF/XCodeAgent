@@ -36,9 +36,6 @@ from app.domain.application_lifecycle import (
 )
 from app.persistence.checkpoints import workflow_checkpoint_db_path, workflow_checkpointer
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
-from app.services.application_revision_lifecycle import (
-    commit_active_revision_application_config_changes,
-)
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
     application_lifecycle_payload,
@@ -359,19 +356,6 @@ def _product_planning(state: ProjectState) -> dict:
                     "workflow_scope": "application_planning",
                     "lifecycle": application_lifecycle_payload(lifecycle),
                 },
-            )
-        active_revision = lifecycle.active_formal_revision
-        if (
-            active_revision is not None
-            and active_revision.formal_branch.value == "design_stage_revision"
-        ):
-            lifecycle = load_application_lifecycle(workspace) or lifecycle
-            committed = commit_active_revision_application_config_changes(
-                workspace,
-                change_id=active_revision.change_id,
-            )
-            lifecycle = (load_application_lifecycle(workspace) or lifecycle).model_copy(
-                update={"active_formal_revision": committed}
             )
         lifecycle = persist_application_lifecycle_transition(
             workspace,

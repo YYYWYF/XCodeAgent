@@ -209,7 +209,6 @@ def sync_project_plan_from_markdown(
                     "entities",
                     "api_contracts",
                     "pages",
-                    "template_capabilities",
                 )
             },
             datasource_type=datasource_type,

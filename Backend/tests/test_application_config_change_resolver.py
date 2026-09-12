@@ -11,13 +11,15 @@ from app.services.application_config_change_resolver import (
     ApplicationConfigChangeResolutionError,
     resolve_application_config_changes,
 )
+from app.services.application_config import ApplicationConfigService
 
 
 def _application(enabled: bool = False) -> dict:
-    """构造当前 schema v5 的能力开关配置，用于写入测试工作区。"""
+    """构造当前 schema v6 的能力开关配置，用于写入测试工作区。"""
 
     return {
-        "schemaVersion": 5,
+        "schemaVersion": 6,
+        "configRevision": 1,
         "auth": {"enable": enabled},
         "authorization": {"enabled": enabled},
         "track": {"enable": enabled},
@@ -126,11 +128,17 @@ class ApplicationConfigChangeResolverTests(unittest.TestCase):
         self.assertFalse(disabled[0].to_value)
 
     def test_authorization_dependency_and_noop_filtering(self) -> None:
-        """权限启用补全登录依赖，重复目标和已满足状态不生成重复变更。"""
+        """Resolver 只解析用户目标，统一服务负责补齐权限依赖和过滤空操作。"""
 
         changes = self._resolve("开启权限管理")
-        self.assertEqual([item.path for item in changes], ["auth.enable", "authorization.enabled"])
+        self.assertEqual([item.path for item in changes], ["authorization.enabled"])
         self.assertTrue(all(item.to_value for item in changes))
+        self.current["datasource"] = {"type": "database"}
+        self.current["authorization"]["initialAdministratorSubjects"] = ["ops@example.com"]
+        self._replace_current(self.current)
+        preview = ApplicationConfigService(self.workspace).preview(changes=changes)
+        self.assertTrue(preview["auth"]["enable"])
+        self.assertTrue(preview["authorization"]["enabled"])
         self.current["auth"]["enable"] = True
         self._replace_current(self.current)
         changes = self._resolve("开启权限管理，开启权限管理")
@@ -154,7 +162,7 @@ class ApplicationConfigChangeResolverTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ApplicationConfigChangeResolutionError):
                 self._replace_current(current)
                 self._resolve("启用登录")
-        for current in ({}, {"schemaVersion": 4}, {"schemaVersion": 5.0}, {"schemaVersion": 5}):
+        for current in ({}, {"schemaVersion": 4}, {"schemaVersion": 6.0}, {"schemaVersion": 6}):
             with self.subTest(current=current), self.assertRaises(ApplicationConfigChangeResolutionError):
                 self._replace_current(current)
                 self._resolve("启用登录")

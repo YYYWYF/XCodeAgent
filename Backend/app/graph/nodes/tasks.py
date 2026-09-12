@@ -31,6 +31,7 @@ from app.services.build_task_planner import (
     tasks_from_build_task_plan,
 )
 from app.services.authorization_overlay import compile_authorization_overlay
+from app.services.application_config import read_application_config
 from app.services.route_projection import compile_route_projection
 from app.services.template_state import effective_capabilities, load_template_state, template_context
 from app.services.build_task_progress import (
@@ -243,7 +244,11 @@ def prepare_build_tasks(state: ProjectState) -> dict:
 
     progress.start("authorization_overlay", "正在按当前 Unit 编译只读权限 Overlay。")
     try:
-        build_context = compile_authorization_overlay(project_plan, build_context)
+        build_context = compile_authorization_overlay(
+            project_plan,
+            build_context,
+            application_config=read_application_config(workspace_from_state(state)),
+        )
     except ValueError as exc:
         attempt_plan = _build_task_plan_attempt_view(
             build_task_plan,
@@ -715,12 +720,13 @@ def _build_prerequisite_errors(
         except ValueError as exc:
             errors.append(str(exc))
     if workspace:
-        authorization_manifest = project_plan.get("authorization_manifest")
-        authorization_enabled = (
-            isinstance(authorization_manifest, dict)
-            and authorization_manifest.get("enabled") is True
-        )
         try:
+            application_config = read_application_config(workspace)
+            authorization = application_config.get("authorization")
+            authorization_enabled = (
+                isinstance(authorization, dict)
+                and authorization.get("enabled") is True
+            )
             capabilities = effective_capabilities(load_template_state(workspace))
             if authorization_enabled and "authorization" not in capabilities:
                 errors.append("权限已启用，但 TemplateState.effective 缺少 authorization。")

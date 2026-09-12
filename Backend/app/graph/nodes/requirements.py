@@ -29,6 +29,9 @@ from app.services.application_authorization_config import (
     authorization_configuration_is_enabled,
     persist_authorization_configuration,
 )
+from app.services.application_revision_lifecycle import (
+    stage_active_revision_initial_administrator_subjects,
+)
 from app.services.requirement_spec import (
     apply_requirement_spec_editor_changes,
     validate_authorization_requirements,
@@ -553,7 +556,7 @@ def _authorization_requested_by_requirement(spec: dict[str, Any]) -> bool:
     """判断已归一化的需求是否包含明确的页面或操作权限控制。"""
 
     authorization = spec.get("authorization_requirements")
-    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
+    if not isinstance(authorization, dict):
         return False
     return any(
         isinstance(authorization.get(field_name), list)
@@ -589,7 +592,7 @@ def _resolve_authorization_config_conflict(
     conflict: dict,
     existing_spec: dict,
 ) -> dict:
-    """处理前置澄清答案；只有管理员校验通过后才原子启用配置。"""
+    """处理前置澄清答案；正式修订仅暂存管理员，确认边界才提交配置。"""
 
     answers = interaction.get("answers") if isinstance(interaction, dict) else {}
     answers = answers if isinstance(answers, dict) else {}
@@ -618,13 +621,19 @@ def _resolve_authorization_config_conflict(
                     collecting_admin=True,
                 )
             }
-        try:
-            persist_authorization_configuration(
-                workspace,
-                initial_administrator_subjects=subjects,
-            )
-        except ApplicationAuthorizationConfigError as exc:
-            raise ValueError(str(exc)) from exc
+        staged_revision = stage_active_revision_initial_administrator_subjects(
+            workspace,
+            subjects=subjects,
+        )
+        if staged_revision is None:
+            # 首次创建没有 active formal revision，沿用既有初始化路径。
+            try:
+                persist_authorization_configuration(
+                    workspace,
+                    initial_administrator_subjects=subjects,
+                )
+            except ApplicationAuthorizationConfigError as exc:
+                raise ValueError(str(exc)) from exc
         return {
             "request": "\n".join(
                 [
@@ -743,7 +752,7 @@ def _clear_unselected_initial_admin(spec: dict, existing_spec: dict | None) -> N
     if str(existing_authorization.get("initialAdminRoleId") or "").strip():
         return
     authorization = spec.get("authorization_requirements")
-    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
+    if not isinstance(authorization, dict) or not _authorization_requested_by_requirement(spec):
         return
     authorization.pop("initialAdminRoleId", None)
     roles = spec.get("user_roles")
@@ -763,7 +772,7 @@ def _next_authorization_business_question(
     """按页面和操作顺序返回一个权限业务梳理问题。"""
 
     authorization = spec.get("authorization_requirements")
-    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
+    if not isinstance(authorization, dict) or not _authorization_requested_by_requirement(spec):
         return None
     answered_question_ids = answered_question_ids or set()
 
@@ -974,7 +983,7 @@ def _apply_authorization_business_answers(
     authorization = spec.get("authorization_requirements")
     if not isinstance(answers, dict) or not isinstance(authorization, dict):
         return set()
-    if authorization.get("enabled") is not True:
+    if not _authorization_requested_by_requirement(spec):
         return set()
 
     updated_authorization = deepcopy(authorization)

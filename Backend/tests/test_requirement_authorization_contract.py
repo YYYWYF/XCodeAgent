@@ -21,6 +21,23 @@ from app.services.requirement_spec import (
 class RequirementAuthorizationContractTests(unittest.TestCase):
     """覆盖 RequirementSpec 当前权限候选契约的核心边界。"""
 
+    def test_requirement_spec_drops_capability_switch_copies(self) -> None:
+        """旧模型输入的认证和权限开关不得进入正式 RequirementSpec。"""
+
+        spec = create_requirement_spec(
+            "管理员可以查看人员页面",
+            agent_spec={
+                "authentication_requirements": {"enabled": True, "sourceRefs": ["需要登录"]},
+                "authorization_requirements": {
+                    "enabled": True,
+                    "restrictedPages": [],
+                    "restrictedOperations": [],
+                },
+            },
+        )
+        self.assertNotIn("enabled", spec["authentication_requirements"])
+        self.assertNotIn("enabled", spec["authorization_requirements"])
+
     def test_empty_candidates_do_not_require_unauthorized_behavior(self) -> None:
         """启用权限但未提出任何受控对象时可直接进入确认。"""
 
@@ -98,7 +115,7 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
         self.assertEqual(
             sanitized["authorization_requirements"]["restrictedPages"], []
         )
-        self.assertFalse(sanitized["authorization_requirements"]["enabled"])
+        self.assertNotIn("enabled", sanitized["authorization_requirements"])
 
     def test_evidence_gate_skips_authorization_extraction_for_business_flow(self) -> None:
         """无显式授权证据时不得调用专门的权限事实提取器。"""
@@ -223,7 +240,7 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
             merged["authorization_requirements"]["restrictedPages"][0]["description"],
             "只有管理员可以进入资产列表页。",
         )
-        self.assertTrue(merged["authorization_requirements"]["enabled"])
+        self.assertNotIn("enabled", merged["authorization_requirements"])
         self.assertEqual(
             merged["authorization_capability_issues"][0]["code"],
             "DATA_AUTHORIZATION_NOT_SUPPORTED",
@@ -271,7 +288,7 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
         )
 
         authorization = spec["authorization_requirements"]
-        self.assertTrue(authorization["enabled"])
+        self.assertNotIn("enabled", authorization)
         self.assertEqual(
             authorization["restrictedPages"][0]["targetPageId"],
             "page_personnel_list",
@@ -313,7 +330,7 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
         )
 
         authorization = merged["authorization_requirements"]
-        self.assertTrue(authorization["enabled"])
+        self.assertNotIn("enabled", authorization)
         self.assertEqual(authorization["restrictedPages"], [primary_rule])
         spec = create_requirement_spec(
             "涉及权限控制：否；补充确认：authorization_initial_admin_role 已选：hr",
@@ -321,7 +338,7 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
             authoritative_agent_spec=True,
             allow_inferred_defaults=False,
         )
-        self.assertTrue(spec["authorization_requirements"]["enabled"])
+        self.assertNotIn("enabled", spec["authorization_requirements"])
         self.assertEqual(
             spec["authorization_requirements"]["restrictedPages"][0]["targetPageId"],
             "page_personnel_list",

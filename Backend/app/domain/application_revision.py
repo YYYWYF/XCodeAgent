@@ -285,6 +285,12 @@ class ActiveFormalRevision(RevisionModel):
         alias="pendingApplicationConfigChanges",
         max_length=4,
     )
+    # 初始管理员是权限配置提案的一部分；仅在对应正式产物确认时写入 application.json。
+    pending_initial_administrator_subjects: list[str] = Field(
+        default_factory=list,
+        alias="pendingInitialAdministratorSubjects",
+        max_length=100,
+    )
     technical_plan_sha256: str | None = Field(
         default=None,
         alias="technicalPlanSha256",

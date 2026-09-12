@@ -456,6 +456,12 @@ def _authorization_target_key(value: Any) -> str:
     return re.sub(r"[^\w]+", "", str(value or "").casefold())
 
 
+def _has_authorization_rules(authorization: dict[str, Any]) -> bool:
+    """仅由业务规则存在性判断是否需要生成权限目标，不读取能力开关副本。"""
+
+    return any(bool(authorization.get(field_name)) for field_name in ("restrictedPages", "restrictedOperations"))
+
+
 def _authorization_targets(
     requirement_spec: dict[str, Any],
     pages: list[dict[str, Any]],
@@ -464,7 +470,7 @@ def _authorization_targets(
 
     authorization = requirement_spec.get("authorization_requirements")
     authorization = authorization if isinstance(authorization, dict) else {}
-    if authorization.get("enabled") is not True:
+    if not _has_authorization_rules(authorization):
         return {"pageRules": [], "operationRules": []}
 
     action_by_name: dict[str, list[dict[str, str]]] = {}
@@ -533,7 +539,7 @@ def authorization_operation_action_coverage(
 
     authorization = requirement_spec.get("authorization_requirements")
     authorization = authorization if isinstance(authorization, dict) else {}
-    if authorization.get("enabled") is not True:
+    if not _has_authorization_rules(authorization):
         return []
 
     action_candidates: dict[str, list[dict[str, str]]] = {}
@@ -800,7 +806,7 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
                     )
                 if mapping.get("mode") is not None and str(mapping.get("mode") or "") not in {"hidden", "disabled"}:
                     errors.append("ProductPlan.authorizationTargets.operationRules.mode 必须是 hidden 或 disabled。")
-    if authorization.get("enabled") is True:
+    if _has_authorization_rules(authorization):
         errors.extend(_authorization_resource_candidate_errors(product_plan))
     return errors
 
