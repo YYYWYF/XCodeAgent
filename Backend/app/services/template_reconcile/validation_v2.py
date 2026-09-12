@@ -1,13 +1,9 @@
-"""执行 V2 Validation Plan，并将可能产生副作用的命令隔离在临时 Sandbox。"""
+"""执行 Engine 声明的只读后置条件；启动验收由平台根据实际 ChangeSet 规划。"""
 
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
-import tempfile
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -18,8 +14,6 @@ from app.services.template_reconcile.protocol_v2 import (
     ValidationPlanItemV2,
     assert_reconcile_state_invariant_v2,
 )
-from app.services.workspace_process_registry import workspace_process_registry
-from app.utils.subprocess_output import subprocess_output_text
 
 
 class ValidationV2Error(ValueError):
@@ -40,16 +34,15 @@ class ValidationResultV2:
     message: str
     stdout_log_ref: str | None = None
     stderr_log_ref: str | None = None
+    details: dict[str, Any] | None = None
 
 
-CommandRunnerV2 = Callable[..., subprocess.CompletedProcess[Any]]
 
 
 def execute_validation_plan_v2(
     workspace: str | Path,
     validation_plan: list[ValidationPlanItemV2],
     *,
-    command_runner: CommandRunnerV2 = workspace_process_registry.run,
     attempt_id: str | None = None,
 ) -> list[ValidationResultV2]:
     """按 package 顺序执行验证；失败结果保留，调用方据 blocking 决定是否提交 State。"""
@@ -59,10 +52,11 @@ def execute_validation_plan_v2(
     for item in validation_plan:
         started = time.monotonic()
         try:
-            if item.type in {"NPM_BUILD", "NPM_TEST", "MAVEN_TEST", "MAVEN_PACKAGE"}:
-                result = _run_sandbox_command(root, item, command_runner, attempt_id)
-            else:
-                result = _run_read_only_validation(root, item)
+            result = (
+                _ignored_command_validation_result(item)
+                if item.type in {"NPM_BUILD", "NPM_TEST", "MAVEN_TEST", "MAVEN_PACKAGE"}
+                else _run_read_only_validation(root, item)
+            )
         except ValidationV2Error as exc:
             result = ValidationResultV2(
                 validation_id=item.validationId,
@@ -91,7 +85,6 @@ def execute_reconcile_validation_v2(
     package: StrategyUpdatePackageV2,
     current_template_state: TemplateStateV2,
     *,
-    command_runner: CommandRunnerV2 = workspace_process_registry.run,
     attempt_id: str | None = None,
 ) -> list[ValidationResultV2]:
     """执行 RECONCILE 的唯一验收入口，并先强制 current/next State 内容不变式。"""
@@ -102,7 +95,9 @@ def execute_reconcile_validation_v2(
         assert_reconcile_state_invariant_v2(current_template_state, package.nextTemplateState)
     except ValueError as exc:
         raise ValidationV2Error(str(exc)) from exc
-    return execute_validation_plan_v2(workspace, package.validationPlan, command_runner=command_runner, attempt_id=attempt_id)
+    return execute_validation_plan_v2(workspace, package.validationPlan, attempt_id=attempt_id)
+
+
 
 
 def _run_read_only_validation(root: Path, item: ValidationPlanItemV2) -> ValidationResultV2:
@@ -120,6 +115,21 @@ def _run_read_only_validation(root: Path, item: ValidationPlanItemV2) -> Validat
     if item.type == "CAPABILITY_POSTCONDITION":
         return _capability_postcondition_result(root, item)
     raise ValidationV2Error(f"不支持的只读 Validation 类型：{item.type}。")
+
+
+def _ignored_command_validation_result(item: ValidationPlanItemV2) -> ValidationResultV2:
+    """兼容读取历史命令校验项，但不创建 Sandbox 或启动任何命令进程。"""
+
+    return ValidationResultV2(
+        item.validationId,
+        True,
+        item.blocking,
+        item.executionMode,
+        0,
+        None,
+        None,
+        "历史命令校验已由真实项目重启验收替代，当前项未执行。",
+    )
 
 
 def _capability_postcondition_result(root: Path, item: ValidationPlanItemV2) -> ValidationResultV2:
@@ -165,95 +175,6 @@ def _json_structure_result(root: Path, item: ValidationPlanItemV2) -> Validation
     return _assertion_result(item, passed, "JSON 结构检查通过。" if passed else f"JSON pointer 不匹配：{pointer}")
 
 
-def _run_sandbox_command(root: Path, item: ValidationPlanItemV2, command_runner: CommandRunnerV2, attempt_id: str | None) -> ValidationResultV2:
-    """复制 Workspace 后执行固定白名单命令，保证构建产物不会进入真实 Workspace。"""
-
-    if item.executionMode != "SANDBOX":
-        raise ValidationV2Error("Build/Test Validation 必须使用 SANDBOX。")
-    with tempfile.TemporaryDirectory(prefix="xcodeagent-validation-") as sandbox_root:
-        sandbox = Path(sandbox_root) / "workspace"
-        try:
-            shutil.copytree(root, sandbox, ignore=_sandbox_ignore)
-        except OSError as exc:
-            raise ValidationV2Error(f"无法创建 Validation Sandbox：{exc}") from exc
-        cwd = _validation_path(sandbox, item.workingDirectory)
-        if not cwd.is_dir():
-            raise ValidationV2Error("Validation workingDirectory 不存在。")
-        try:
-            preparation = _dependency_preparation_command(item.type, cwd)
-            prepared = command_runner(
-                preparation,
-                workspace=sandbox,
-                cwd=str(cwd),
-                text=True,
-                capture_output=True,
-                timeout=item.timeoutSeconds,
-                check=False,
-            )
-            if prepared.returncode != 0:
-                stdout_ref, stderr_ref = _write_command_logs(root, attempt_id, item.validationId, subprocess_output_text(prepared.stdout), subprocess_output_text(prepared.stderr))
-                return ValidationResultV2(item.validationId, False, item.blocking, item.executionMode, 0, prepared.returncode, "VALIDATION_DEPENDENCY_PREPARATION_FAILED", "确定性依赖准备失败。", stdout_ref, stderr_ref)
-            argv = _validation_command(item.type, cwd)
-            completed = command_runner(argv, workspace=sandbox, cwd=str(cwd), text=True, capture_output=True, timeout=item.timeoutSeconds, check=False)
-        except subprocess.TimeoutExpired as exc:
-            stdout_ref, stderr_ref = _write_command_logs(root, attempt_id, item.validationId, subprocess_output_text(exc.stdout), subprocess_output_text(exc.stderr))
-            return ValidationResultV2(item.validationId, False, item.blocking, item.executionMode, 0, None, "VALIDATION_TIMEOUT", "验证命令超时。", stdout_ref, stderr_ref)
-        except OSError as exc:
-            return ValidationResultV2(item.validationId, False, item.blocking, item.executionMode, 0, None, "VALIDATION_COMMAND_START_FAILED", f"验证命令无法启动：{exc}")
-        stdout = subprocess_output_text(completed.stdout)
-        stderr = subprocess_output_text(completed.stderr)
-        passed = completed.returncode == 0
-        stdout_ref, stderr_ref = _write_command_logs(root, attempt_id, item.validationId, stdout, stderr)
-        return ValidationResultV2(item.validationId, passed, item.blocking, item.executionMode, 0, completed.returncode, None if passed else "VALIDATION_COMMAND_FAILED", "验证命令通过。" if passed else "验证命令失败。", stdout_ref, stderr_ref)
-
-
-def _write_command_logs(root: Path, attempt_id: str | None, validation_id: str, stdout: str, stderr: str) -> tuple[str, str]:
-    """把命令输出写入 Attempt 私有日志目录，Result 仅保留相对 LogRef。"""
-
-    identity = attempt_id or "unbound"
-    relative = Path(".xcodeagent/runtime/template-reconcile/attempts") / identity / "logs"
-    directory = root / relative
-    directory.mkdir(parents=True, exist_ok=True)
-    stdout_path = directory / f"{validation_id}.stdout.log"
-    stderr_path = directory / f"{validation_id}.stderr.log"
-    stdout_path.write_text(stdout, encoding="utf-8")
-    stderr_path.write_text(stderr, encoding="utf-8")
-    return (relative / stdout_path.name).as_posix(), (relative / stderr_path.name).as_posix()
-
-
-def _sandbox_ignore(directory: str, names: list[str]) -> set[str]:
-    """排除控制目录、版本库和历史构建产物，避免 Sandbox 复制它们或污染判断。"""
-
-    del directory
-    return {name for name in names if name in {".git", ".xcodeagent", "node_modules", "dist", "target", "coverage"}}
-
-
-def _dependency_preparation_command(validation_type: str, cwd: Path) -> list[str]:
-    """生成 Sandbox 内唯一允许的确定性依赖准备命令。"""
-
-    if validation_type in {"NPM_BUILD", "NPM_TEST"}:
-        if not (cwd / "pnpm-lock.yaml").is_file():
-            raise ValidationV2Error("NPM Validation 缺少 pnpm-lock.yaml，不能执行 frozen install。")
-        return ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"]
-    if validation_type in {"MAVEN_TEST", "MAVEN_PACKAGE"}:
-        repository = cwd / ".xcodeagent-validation-m2"
-        return ["mvn", "dependency:go-offline", f"-Dmaven.repo.local={repository}"]
-    raise ValidationV2Error(f"不支持的 Sandbox Validation 类型：{validation_type}。")
-
-
-def _validation_command(validation_type: str, cwd: Path) -> list[str]:
-    """把验证类型映射为固定 argv，禁止 Service 在 Validation Plan 中注入任意命令。"""
-
-    commands = {
-        "NPM_BUILD": ["pnpm", "run", "build"],
-        "NPM_TEST": ["pnpm", "test"],
-        "MAVEN_TEST": ["mvn", "test", f"-Dmaven.repo.local={cwd / '.xcodeagent-validation-m2'}"],
-        "MAVEN_PACKAGE": ["mvn", "package", f"-Dmaven.repo.local={cwd / '.xcodeagent-validation-m2'}"],
-    }
-    try:
-        return commands[validation_type]
-    except KeyError as exc:
-        raise ValidationV2Error(f"不支持的 Sandbox Validation 类型：{validation_type}。") from exc
 
 
 def _validation_path(root: Path, raw_path: str) -> Path:

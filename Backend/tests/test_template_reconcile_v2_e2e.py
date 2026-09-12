@@ -61,7 +61,10 @@ class TemplateReconcileV2E2ETests(unittest.TestCase):
                     return downloads.pop(0)
 
             service = TemplateReconcileService(_settings())
-            with patch("app.services.template_reconcile.service.TemplateEngineClient", FakeClient):
+            with patch("app.services.template_reconcile.service.TemplateEngineClient", FakeClient), patch(
+                "app.services.template_reconcile.service.launch_project_preview",
+                return_value={"status": "running", "message": "项目已就绪。"},
+            ):
                 result = asyncio.run(service.reconcile(root, change_id="c1", requested_config={"capabilities": {"login": {"enabled": True, "config": {}}, "authorization": {"enabled": True, "config": {}}}}, technical_plan_sha256=plan_sha256))
                 self.assertEqual("CHANGED", result)
                 result = asyncio.run(service.reconcile(root, change_id="c2", requested_config={"capabilities": {"login": {"enabled": True, "config": {}}, "authorization": {"enabled": True, "config": {}}}}, technical_plan_sha256=plan_sha256, mode="RECONCILE"))
@@ -100,7 +103,10 @@ class TemplateReconcileV2E2ETests(unittest.TestCase):
             persist_prepared_attempt(root, attempt, package_path)
             attempt = update_attempt(root, attempt, phase="COMMITTING_STATE")
             service = TemplateReconcileService(_settings())
-            with patch("app.services.template_reconcile.service.write_template_state_v2", side_effect=AssertionError("FINALIZE 不得写 State")):
+            with patch("app.services.template_reconcile.service.write_template_state_v2", side_effect=AssertionError("FINALIZE 不得写 State")), patch(
+                "app.services.template_reconcile.service.launch_project_preview",
+                return_value={"status": "running", "message": "项目已就绪。"},
+            ):
                 result = service._recover(root, attempt, load_template_state_v2(root), {}, plan_sha256, "APPLY")
             self.assertEqual("FINALIZED", result)
 

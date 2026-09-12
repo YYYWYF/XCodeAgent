@@ -20,6 +20,7 @@ from app.services.frontend_performance_runner import (
     run_frontend_performance_check,
 )
 from app.services.integration_test_runner import run_integration_checks
+from app.services.project_launcher import run_project_restart_validation
 from app.services.test_validation import evaluate_quality_gate
 from app.workspace.code_changes import code_change_state_update
 from app.workspace.code_changes import merge_code_change_sets
@@ -1055,10 +1056,9 @@ def build_project_checks(
             "test_events": ["integration_build:reused_after_confirmation"],
         }
 
-    result = run_integration_checks(
+    result = run_project_restart_validation(
         state,
         on_progress=reporter,
-        phase="build",
     )
     test_results = _ordered_integration_checks(
         [
@@ -1474,6 +1474,9 @@ def repair_planning(state: ProjectState) -> dict:
             "test_events": ["repair_planning:skipped"],
         }
 
+    if any(item.get("passed") is False and item.get("repairable") is False for item in state.get("test_results", [])):
+        return {"repair_task_plan": {}, "repair_tasks": [], "integration_next_action": "handle_failure",
+                "test_events": ["repair_planning:environment_not_ready"]}
     security_failure = _generation_security_failure(state)
     if security_failure:
         return {
@@ -1908,8 +1911,8 @@ def integration_test(state: ProjectState) -> dict:
             "acceptance_decision": "",
             "accepted": False,
             "test_events": [],
-            "code_changes": {},
-            "code_change_sets": [],
+            "code_changes": input_code_changes,
+            "code_change_sets": input_code_change_sets,
             "timeline": [],
         },
         config={

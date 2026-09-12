@@ -14,8 +14,10 @@ class StrategyAstV2Error(ValueError):
 def insert_after_last_import(source_path: str, content: str, insertion: str) -> str:
     """在 TypeScript/Java AST 的最后一个 import 声明后插入内容。"""
 
-    root, raw = _parse(source_path, content)
-    imports = [node for node in _walk(root) if node.type == "import_declaration"]
+    language, root, raw = _parse(source_path, content)
+    # Java 与 TypeScript 系列的 Tree-sitter import 节点名称不同，必须按实际语法识别。
+    import_node_types = {"import_declaration"} if language == "java" else {"import_statement"}
+    imports = [node for node in _walk(root) if node.type in import_node_types]
     if not imports:
         raise StrategyAstV2Error("AST_IMPORT_TARGET_MISSING：目标缺少 import 声明。")
     position = max(node.end_byte for node in imports)
@@ -32,7 +34,7 @@ def insert_at_selector(source_path: str, content: str, selector: dict[str, Any],
         raise StrategyAstV2Error("AST_SELECTOR_INVALID：selector 必须含 nodeType 和受限 position。")
     if name is not None and (not isinstance(name, str) or not name):
         raise StrategyAstV2Error("AST_SELECTOR_INVALID：selector.name 必须是非空字符串。")
-    root, raw = _parse(source_path, content)
+    _, root, raw = _parse(source_path, content)
     matches = [node for node in _walk(root) if node.type == node_type and _matches_name(node, raw, name)]
     if len(matches) != 1:
         raise StrategyAstV2Error("AST_SELECTOR_AMBIGUOUS：Strategy 必须命中唯一 AST 节点。")
@@ -57,7 +59,7 @@ def _parse(source_path: str, content: str):
     root = get_parser(language).parse(raw).root_node
     if root.has_error:
         raise StrategyAstV2Error("AST_PARSE_FAILED：目标文件存在语法错误。")
-    return root, raw
+    return language, root, raw
 
 
 def _walk(node: Any):

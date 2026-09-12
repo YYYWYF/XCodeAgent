@@ -18,7 +18,8 @@ class WorkspaceProcessRegistry:
         """初始化线程安全的工作区进程集合。"""
 
         self._lock = threading.Lock()
-        self._processes: dict[str, set[subprocess.Popen[Any]]] = {}
+        # 按登记顺序保存进程句柄；进程对象不保证可哈希，只能用身份比较管理。
+        self._processes: dict[str, list[subprocess.Popen[Any]]] = {}
         self._deleting_workspaces: set[str] = set()
 
     def run(
@@ -78,6 +79,23 @@ class WorkspaceProcessRegistry:
         with self._lock:
             self._deleting_workspaces.add(_workspace_key(workspace))
 
+    def start(self, workspace: str | Path, argv: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
+        """在删除栅栏内启动并登记长生命周期子进程，供启动验收统一回收。"""
+
+        key = _workspace_key(workspace)
+        with self._lock:
+            if key in self._deleting_workspaces:
+                raise RuntimeError("应用正在删除，已拒绝启动验证进程。")
+            _configure_process_group(kwargs)
+            process = subprocess.Popen(argv, **kwargs)
+            self._processes.setdefault(key, []).append(process)
+            return process
+
+    def release(self, workspace: str | Path, process: subprocess.Popen[Any]) -> None:
+        """验证运行器完成进程树回收后解除登记。"""
+
+        self._unregister(_workspace_key(workspace), process)
+
     def end_workspace_deletion(self, workspace: str | Path) -> None:
         """仅解除目标工作区的删除栅栏，允许停机失败后继续启动命令。"""
 
@@ -97,7 +115,7 @@ class WorkspaceProcessRegistry:
         with self._lock:
             processes = [
                 process
-                for process in self._processes.get(key, set())
+                for process in self._processes.get(key, [])
                 if process.poll() is None
             ]
         for process in processes:
@@ -129,7 +147,7 @@ class WorkspaceProcessRegistry:
         with self._lock:
             return sorted(
                 process.pid
-                for process in self._processes.get(key, set())
+                for process in self._processes.get(key, [])
                 if process.poll() is None
             )
 
@@ -144,7 +162,7 @@ class WorkspaceProcessRegistry:
                 except subprocess.TimeoutExpired:
                     pass
                 raise RuntimeError("应用正在删除，工作区命令已被中断。")
-            self._processes.setdefault(key, set()).add(process)
+            self._processes.setdefault(key, []).append(process)
 
     def _unregister(self, key: str, process: subprocess.Popen[Any]) -> None:
         """移除已经完成或被删除事务终止的进程句柄。"""
@@ -153,8 +171,8 @@ class WorkspaceProcessRegistry:
             processes = self._processes.get(key)
             if processes is None:
                 return
-            processes.discard(process)
-            if not processes:
+            self._processes[key] = [item for item in processes if item is not process]
+            if not self._processes[key]:
                 self._processes.pop(key, None)
 
 

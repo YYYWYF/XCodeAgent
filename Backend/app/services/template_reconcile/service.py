@@ -16,7 +16,9 @@ from app.services.template_reconcile.protocol_v2 import StrategyUpdatePackageV2,
 from app.services.template_reconcile.runtime_v2 import ReconcileAttemptV2, load_current_attempt, persist_prepared_attempt, reconcile_run_gate, reconcile_v2_root, recovery_action, update_attempt
 from app.services.template_reconcile.state_v2 import load_template_state_v2, write_template_state_v2
 from app.services.template_reconcile.strategy_update_package import ValidatedStrategyUpdatePackage, validate_strategy_update_package
-from app.services.template_reconcile.validation_v2 import execute_reconcile_validation_v2, execute_validation_plan_v2, validation_plan_passed_v2
+from app.services.template_reconcile.validation_v2 import ValidationResultV2, execute_reconcile_validation_v2, execute_validation_plan_v2, validation_plan_passed_v2
+from app.services.project_launcher import inspect_project_preview, launch_project_preview, stop_standard_project_preview
+from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplateStateError
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
 
@@ -102,9 +104,11 @@ class TemplateReconcileService:
             update_attempt(root, attempt, phase="RECOVERY_REQUIRED", status="FAILED", error_code="RECOVERY_STATE_CONFLICT", error_message="当前 TemplateState 与未完成 Attempt 不匹配。")
             raise TemplateStateError("RECOVERY_STATE_CONFLICT：无法安全恢复模板更新。")
         if action == "FINALIZE":
-            if not validation_plan_passed_v2(self._validate(root, validated.package, current, attempt)):
-                update_attempt(root, attempt, phase="FAILED", status="FAILED", error_code="VALIDATION_FAILED", error_message="Roll-forward Validation 未通过。")
-                raise TemplateStateError("VALIDATION_FAILED：Template Preparation 验收未通过。")
+            results, attempt = self._validate(root, validated.package, current, attempt)
+            if not validation_plan_passed_v2(results):
+                message = _validation_failure_message(results)
+                update_attempt(root, attempt, phase="FAILED", status="FAILED", error_code=_validation_error_code(results), error_message=message)
+                raise TemplateStateError(message)
             # nextState 已是唯一 State 事实；FINALIZE 只能收口 Attempt，绝不能再次写 State。
             update_attempt(root, attempt, phase="SUCCEEDED", status="SUCCEEDED")
             return "FINALIZED"
@@ -114,27 +118,75 @@ class TemplateReconcileService:
         """在一个 Working Copy 完成 Strategy、Apply、Validation 与最终 State Commit。"""
 
         store = WorkingCopyStoreV2(root)
+        pre_launch_state = inspect_project_preview(root)
+        results: list[ValidationResultV2] = []
         attempt = update_attempt(root, attempt, phase="APPLYING")
         try:
             package = validated.package
             ModificationStrategyExecutorV2().execute(package.strategies, store, _payloads(validated))
             apply_working_copy_v2(root, store)
             attempt = update_attempt(root, attempt, phase="VALIDATING")
-            if not validation_plan_passed_v2(self._validate(root, package, current, attempt)):
-                raise TemplateStateError("VALIDATION_FAILED：Template Preparation 验收未通过。")
+            results, attempt = self._validate(root, package, current, attempt)
+            if not validation_plan_passed_v2(results):
+                raise TemplateStateError(_validation_failure_message(results))
             return self._commit(root, attempt, package.nextTemplateState)
         except StateCommittedV2Error:
             # State 已成为权威事实，后续只能由 digest 驱动 Roll-forward，禁止恢复 Workspace。
             raise
         except Exception as exc:
+            recovery_error = self._restore_after_failed_acceptance(
+                root,
+                store,
+                pre_launch_state,
+                restart_attempted=any(item.validation_id == "PROJECT_RESTART" for item in results),
+            )
+            error_code = _error_code(exc)
+            message = str(exc)
+            if recovery_error is not None:
+                error_code = recovery_error[0]
+                message = f"{message}；{recovery_error[1]}"
+            update_attempt(root, attempt, phase="FAILED", status="FAILED", error_code=error_code, error_message=message[:2048])
+            raise TemplateStateError(message) from exc
+
+    def _validate(self, root: Path, package: StrategyUpdatePackageV2, current: TemplateStateV2, attempt: ReconcileAttemptV2) -> tuple[list[ValidationResultV2], ReconcileAttemptV2]:
+        """先验证静态后置条件，再强制重启真实工程完成运行态验收。"""
+
+        if package.mode == "RECONCILE":
+            results = execute_reconcile_validation_v2(root, package, current, attempt_id=attempt.attempt_id)
+        else:
+            results = execute_validation_plan_v2(root, package.validationPlan, attempt_id=attempt.attempt_id)
+        if validation_plan_passed_v2(results):
+            attempt = update_attempt(root, attempt, phase="VALIDATING", event_message="正在重新启动项目进行模板更新验证。")
+
+            def report(stage: str, status: str, message: str) -> None:
+                """把 Project Launcher 的细粒度进度追加到当前 Attempt。"""
+
+                nonlocal attempt
+                attempt = update_attempt(root, attempt, phase="VALIDATING", event_message=f"{stage}/{status}：{message}")
+
+            launch = launch_project_preview(root, force_restart=True, on_progress=report)
+            results.append(_project_restart_result(launch))
+        atomic_write_json(reconcile_v2_root(root) / "attempts" / attempt.attempt_id / "validation-results.json",
+                          {"checks": [item.__dict__ for item in results]})
+        return results, attempt
+
+    def _restore_after_failed_acceptance(self, root: Path, store: WorkingCopyStoreV2, pre_launch_state: dict[str, Any], *, restart_attempted: bool) -> tuple[str, str] | None:
+        """按运行态清理、文件回滚、旧运行态恢复的顺序补偿失败的模板更新。"""
+
+        recovery_error: tuple[str, str] | None = None
+        if restart_attempted:
+            cleanup = stop_standard_project_preview(root)
+            if cleanup.get("status") == "failed":
+                recovery_error = "ROLLBACK_RESTORE_FAILED", "无法停止失败的新版本 standard preview。"
+        try:
             restore_working_copy_v2(root, store)
-            update_attempt(root, attempt, phase="FAILED", status="FAILED", error_code=_error_code(exc), error_message=str(exc)[:2048])
-            raise
-
-    def _validate(self, root: Path, package: StrategyUpdatePackageV2, current: TemplateStateV2, attempt: ReconcileAttemptV2):
-        """按 Package mode 运行唯一的 Validation Plan 权威验收。"""
-
-        return execute_reconcile_validation_v2(root, package, current, attempt_id=attempt.attempt_id) if package.mode == "RECONCILE" else execute_validation_plan_v2(root, package.validationPlan, attempt_id=attempt.attempt_id)
+        except Exception as exc:
+            return "ROLLBACK_RESTORE_FAILED", f"无法恢复模板文件：{exc}"
+        if pre_launch_state.get("running"):
+            previous = launch_project_preview(root, force_restart=True)
+            if previous.get("status") != "running":
+                return "PREVIOUS_RUNTIME_RESTORE_FAILED", "模板文件已恢复，但原项目运行态恢复失败。"
+        return recovery_error
 
     def _commit(self, root: Path, attempt: ReconcileAttemptV2, state: TemplateStateV2) -> str:
         """将 Attempt 置于提交临界区后原子写 State，再记录成功终态。"""
@@ -261,6 +313,44 @@ def _error_code(exc: Exception) -> str:
     """提取可展示协议码，未知异常统一收敛为执行失败码。"""
 
     return str(exc).split("：", 1)[0] if "：" in str(exc) else "TEMPLATE_RECONCILE_EXECUTION_FAILED"
+
+
+def _validation_error_code(results: list[Any]) -> str:
+    """保留首个阻断验收的精确失败码，供工作流和用户界面区分环境与代码错误。"""
+
+    failed = next((item for item in results if item.blocking and not item.passed), None)
+    if failed is None:
+        return "VALIDATION_FAILED"
+    if failed.error_code == "VALIDATION_ASSERTION_FAILED":
+        return "POSTCONDITION_FAILED"
+    return str(failed.error_code or "VALIDATION_FAILED")
+
+
+def _validation_failure_message(results: list[Any]) -> str:
+    """把首个阻断验收的真实原因投影为 Template Preparation 错误正文。"""
+
+    failed = next((item for item in results if item.blocking and not item.passed), None)
+    if failed is None:
+        return "VALIDATION_FAILED：Template Preparation 验收未通过。"
+    code = _validation_error_code(results)
+    return f"{code}：{failed.message}"
+
+
+def _project_restart_result(launch: dict[str, Any]) -> ValidationResultV2:
+    """将统一 Project Launcher 结果投影为 Template Reconcile 的单项验收。"""
+
+    passed = launch.get("status") == "running"
+    return ValidationResultV2(
+        validation_id="PROJECT_RESTART",
+        passed=passed,
+        blocking=True,
+        execution_mode="REAL_WORKSPACE",
+        duration_ms=0,
+        exit_code=None,
+        error_code=None if passed else "PROJECT_LAUNCH_FAILED",
+        message=str(launch.get("message") or ("项目重启并就绪。" if passed else "项目重启失败。")),
+        details=launch,
+    )
 
 
 def _now() -> str:

@@ -35,6 +35,7 @@ from app.services.project_launcher import (
     launch_backend_project,
     launch_frontend_project,
     launch_project_preview,
+    run_project_restart_validation,
     stop_backend_project,
 )
 
@@ -1072,6 +1073,40 @@ class ProjectLauncherTests(unittest.TestCase):
         find_backend.assert_called_once()
         launch_backend.assert_not_called()
         launch_frontend.assert_called_once()
+
+    def test_force_restart_forwards_only_to_standard_frontend_preview(self) -> None:
+        """模板验收强制重启前端，但不触及独立 UI Design Runtime。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch("app.services.project_launcher.find_backend_project_root", return_value=None),
+                patch(
+                    "app.services.project_launcher.launch_frontend_project",
+                    return_value={"status": "running", "message": "前端已就绪。", "preview_url": "http://127.0.0.1:80"},
+                ) as frontend,
+            ):
+                result = launch_project_preview(workspace, force_restart=True)
+
+        self.assertEqual("running", result["status"])
+        frontend.assert_called_once_with(Path(workspace).resolve(), force_restart=True)
+
+    def test_restart_validation_adapts_launcher_result_for_changed_layer(self) -> None:
+        """旧质量门可消费统一 Launcher 的真实重启结果，不再依赖独立运行时。"""
+
+        with patch(
+            "app.services.project_launcher.launch_project_preview",
+            return_value={"status": "running", "message": "项目已就绪。"},
+        ) as launcher:
+            result = run_project_restart_validation(
+                {
+                    "workspace": "/workspace",
+                    "direct_code_change_sets": [{"files": [{"path": "Frontend/src/Page.tsx"}]}],
+                }
+            )
+
+        self.assertEqual("frontend_project_restart", result["test_results"][0]["id"])
+        self.assertTrue(result["test_results"][0]["passed"])
+        launcher.assert_called_once_with("/workspace", force_restart=True, on_progress=ANY)
 
     def test_database_preview_starts_backend_then_frontend(self) -> None:
         """Database 在后端工程存在时保持先后端、后前端的启动顺序。"""

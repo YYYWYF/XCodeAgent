@@ -51,30 +51,12 @@ class TemplateReconcileV2ValidationTests(unittest.TestCase):
             self.assertEqual(1, len(results))
             self.assertFalse(validation_plan_passed_v2(results))
 
-    def test_sandbox_command_cannot_write_into_real_workspace(self) -> None:
-        """验证命令即使在 cwd 中写入产物，Sandbox 销毁后真实 Workspace 仍保持不变。"""
+    def test_legacy_command_validation_is_parsed_but_not_executed(self) -> None:
+        """历史 Sandbox 命令项保持可解析，并由真实项目重启验收统一替代。"""
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "package.json").write_text('{"scripts":{"build":"noop"}}', encoding="utf-8")
-            (root / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
-            item = _item(type="NPM_BUILD", executionMode="SANDBOX", path=None)
-            commands: list[list[str]] = []
-
-            def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-                """模拟构建在 Sandbox 中写入产物，而不依赖本机 pnpm。"""
-
-                commands.append(argv)
-                if argv[:2] == ["pnpm", "install"]:
-                    return subprocess.CompletedProcess(argv, 0, "prepared", "")
-                self.assertEqual(["pnpm", "run", "build"], argv)
-                Path(str(kwargs["cwd"]), "dist.txt").write_text("sandbox", encoding="utf-8")
-                return subprocess.CompletedProcess(argv, 0, "ok", "")
-
-            results = execute_validation_plan_v2(root, [item], command_runner=runner)
-            self.assertTrue(results[0].passed)
-            self.assertEqual(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"], commands[0])
-            self.assertFalse((root / "dist.txt").exists())
-            self.assertIsNotNone(results[0].stdout_log_ref)
-            self.assertTrue((root / str(results[0].stdout_log_ref)).is_file())
-            self.assertFalse(hasattr(results[0], "stdout"))
+        for kind in ("NPM_BUILD", "NPM_TEST", "MAVEN_TEST", "MAVEN_PACKAGE"):
+            with self.subTest(kind=kind):
+                item = _item(type=kind, executionMode="SANDBOX", path=None)
+                results = execute_validation_plan_v2(Path.cwd(), [item])
+                self.assertTrue(results[0].passed)
+                self.assertIn("未执行", results[0].message)

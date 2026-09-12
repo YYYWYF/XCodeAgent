@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from typing import Any
 
 from app.services.template_reconcile.runtime_v2 import (
@@ -49,6 +50,7 @@ def template_preparation_projection_v2(workspace: str | Path) -> dict[str, Any] 
         "retryable": attempt.status == "FAILED" or attempt.phase == "RECOVERY_REQUIRED",
         "errorCode": attempt.error_code,
         "errorMessage": attempt.error_message,
+        "validationResults": _validation_results(workspace, attempt.attempt_id),
         "startedAt": attempt.started_at,
         "updatedAt": attempt.updated_at,
         "logs": [
@@ -56,3 +58,13 @@ def template_preparation_projection_v2(workspace: str | Path) -> dict[str, Any] 
             for event in attempt.events[-20:]
         ],
     }
+
+
+def _validation_results(workspace: str | Path, attempt_id: str) -> list[dict[str, Any]]:
+    """从本轮验收报告恢复结果，保留错误分类、命令与日志引用。"""
+
+    path = Path(workspace) / ".xcodeagent/runtime/template-reconcile/attempts" / attempt_id / "validation-results.json"
+    if not path.is_file():
+        return []
+    value = json.loads(path.read_text(encoding="utf-8"))
+    return value["checks"]

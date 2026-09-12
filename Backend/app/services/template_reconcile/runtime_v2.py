@@ -131,12 +131,13 @@ def load_current_attempt(workspace: str | Path) -> ReconcileAttemptV2 | None:
 def update_attempt(workspace: str | Path, attempt: ReconcileAttemptV2, **changes: object) -> ReconcileAttemptV2:
     """原子推进当前 Attempt phase，并自动刷新更新时间。"""
 
+    event_message = changes.pop("event_message", None)
     next_phase = str(changes.get("phase", attempt.phase))
     event = ReconcileAttemptEventV2(
         timestamp=_now(),
         phase=next_phase,
         level="ERROR" if changes.get("status") == "FAILED" else "INFO",
-        message=str(changes.get("error_message") or f"Template Preparation 进入 {next_phase}。"),
+        message=str(event_message or changes.get("error_message") or f"Template Preparation 进入 {next_phase}。"),
     )
     updated = replace(attempt, updated_at=event.timestamp, events=(*attempt.events, event), **changes)
     _save_attempt(reconcile_v2_root(workspace) / "attempts" / attempt.attempt_id / "attempt.json", updated)
