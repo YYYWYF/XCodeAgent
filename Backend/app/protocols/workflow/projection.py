@@ -590,6 +590,8 @@ def _public_workflow_state(
             "code_review_report_path",
             "test_report_path",
             "test_report_json_path",
+            # Native Recovery 的审阅路由是后端 Durable Graph State，不能成为公开协议事实。
+            "application_planning_review_route",
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。
             "technical_plan_repair_candidate",
             "technical_plan_repair_errors",

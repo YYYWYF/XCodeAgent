@@ -24,6 +24,7 @@ from app.graph.application_planning_interrupts import (
     planning_stage_entry,
     requirement_document_review,
     requirements_review,
+    route_requirements_review,
     technical_planning_review,
     ui_confirmation_review,
 )
@@ -729,6 +730,15 @@ def build_application_planning_graph(*, checkpointer):
         "product_planning": "product_planning",
         "requirements_review": "requirements_review",
     })
+    builder.add_conditional_edges(
+        "requirements_review",
+        route_requirements_review,
+        {
+            "requirements": "requirements",
+            "product_planning": "product_planning",
+            "design_intent_analysis": "design_intent_analysis",
+        },
+    )
     builder.add_conditional_edges("product_planning", _route_product_planning, {
         "ui_confirmation": "ui_confirmation",
         "requirement_document_review": "requirement_document_review",

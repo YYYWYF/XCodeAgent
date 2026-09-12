@@ -1304,6 +1304,8 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
             "code_review_max_repair_iterations",
             "code_review_next_action",
             "code_review_report_path",
+            # Native Recovery 的审阅路由只供后端 Graph 重建 successor，不能公开。
+            "application_planning_review_route",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }

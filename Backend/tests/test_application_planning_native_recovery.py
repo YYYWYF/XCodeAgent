@@ -6,11 +6,11 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
+from langgraph.types import Command
 
 from app.domain.application_lifecycle import (
     ApplicationLifecycle,
@@ -42,57 +42,39 @@ from app.services.execution_recovery_executor import prepare_native_recovery
 from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
 )
-
-
-class PlanningRecoveryState(TypedDict, total=False):
-    """声明真实 Planning recovery 测试图使用的最小状态。"""
-
-    active_run_id: str
-    active_thread_id: str
-    workspace: str
-    status: str
-    phase: str
-    clarification: dict[str, Any]
-    application_planning_interaction: dict[str, Any]
-    requirements_executions: list[str]
-    lifecycle: dict[str, Any]
-    observability: dict[str, Any]
-    resume_from: str
+from app.graph.application_planning_interrupts import (
+    ApplicationPlanningRoutingError,
+    requirements_review,
+    route_requirements_review,
+)
+from app.graph.state import ProjectState
+from tests.helpers.native_recovery_contract import (
+    assert_native_recovery_fork_stable,
+)
 
 
 def _build_committed_answer_graph(counters: dict[str, int]) -> Any:
-    """构造 review 原生中断并在 requirements 前形成 durable checkpoint。"""
+    """使用生产 review/router 构造在 requirements 前形成 durable checkpoint 的测试图。"""
 
-    def review(_state: PlanningRecoveryState) -> dict[str, Any]:
-        """消费真实 Native Interrupt 回答并把完整交互写入 Graph State。"""
+    def counted_requirements_review(
+        state: ProjectState,
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """调用生产 requirements_review，仅记录其是否被重复执行。"""
 
-        submission = interrupt(
-            {
-                "type": "application_planning_review",
-                "gateId": "requirement_spec:revision-1",
-                "artifact": "requirement_spec",
-                "artifactRevision": "revision-1",
-                "phase": "requirements",
-                "clarification": {
-                    "mode": "ask_user_question",
-                    "status": "requires_user_input",
-                    "questions": [{"id": "role", "prompt": "业务角色是什么？"}],
-                },
-            }
-        )
         counters["review"] += 1
-        return {"application_planning_interaction": dict(submission)}
+        return requirements_review(state, config)
 
-    def requirements(state: PlanningRecoveryState) -> dict[str, Any]:
+    def requirements(state: ProjectState) -> dict[str, Any]:
         """模拟真实 requirements 入口切换 lifecycle 并记录唯一执行次数。"""
 
+        counters["requirements"] += 1
         persist_application_lifecycle_transition(
             state["workspace"],
             stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
             status=ApplicationLifecycleStatus.RUNNING,
             active_run_id=state["active_run_id"],
         )
-        counters["requirements"] += 1
         return {
             "phase": "requirements",
             "status": "completed",
@@ -102,12 +84,34 @@ def _build_committed_answer_graph(counters: dict[str, int]) -> Any:
             ],
         }
 
-    builder = StateGraph(PlanningRecoveryState)
-    builder.add_node("review", review)
+    def product_planning(_state: ProjectState) -> dict[str, Any]:
+        """提供联合需求文档路由的最小终点，保证生产 router 映射完整。"""
+
+        return {"status": "completed"}
+
+    def design_intent_analysis(_state: ProjectState) -> dict[str, Any]:
+        """提供设计变更路由的最小终点，保证生产 router 映射完整。"""
+
+        return {"status": "completed"}
+
+    builder = StateGraph(ProjectState)
+    builder.add_node("requirements_review", counted_requirements_review)
     builder.add_node("requirements", requirements)
-    builder.add_edge(START, "review")
-    builder.add_edge("review", "requirements")
+    builder.add_node("product_planning", product_planning)
+    builder.add_node("design_intent_analysis", design_intent_analysis)
+    builder.add_edge(START, "requirements_review")
+    builder.add_conditional_edges(
+        "requirements_review",
+        route_requirements_review,
+        {
+            "requirements": "requirements",
+            "product_planning": "product_planning",
+            "design_intent_analysis": "design_intent_analysis",
+        },
+    )
     builder.add_edge("requirements", END)
+    builder.add_edge("product_planning", END)
+    builder.add_edge("design_intent_analysis", END)
     return builder.compile(
         checkpointer=InMemorySaver(),
         interrupt_before=["requirements"],
@@ -145,6 +149,14 @@ def _create_awaiting_lifecycle(
 
 class ApplicationPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
     """覆盖 Lifecycle transition 前后两个真实 Native Recovery crash 窗口。"""
+
+    def test_requirements_review_route_fails_closed(self) -> None:
+        """需求审阅没有服务端路由事实时必须拒绝继续执行。"""
+
+        for value in ({}, {"application_planning_review_route": "unknown"}):
+            with self.subTest(value=value):
+                with self.assertRaises(ApplicationPlanningRoutingError):
+                    route_requirements_review(value)
 
     async def test_committed_answer_recovers_across_both_lifecycle_windows(self) -> None:
         """两个窗口都应 fork 新 run，并且只继续执行一次 requirements。"""
@@ -184,20 +196,22 @@ class ApplicationPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
                             {"id": "role", "prompt": "业务角色是什么？"},
                         ],
                     },
+                    "requirement_spec": {"name": "花名册"},
                     "requirements_executions": [],
                 },
                 config=config,
             )
             interrupted = await graph.aget_state(config)
             self.assertTrue(any(task.interrupts for task in interrupted.tasks))
+            pending = interrupted.tasks[0].interrupts[0].value
 
             await graph.ainvoke(
                 Command(
                     resume={
                         "action": "answer",
                         "artifact": "requirement_spec",
-                        "gate_id": "requirement_spec:revision-1",
-                        "artifact_revision": "revision-1",
+                        "gate_id": pending["gateId"],
+                        "artifact_revision": pending["artifactRevision"],
                         "answers": {"role": "本人"},
                         "request": "创建花名册",
                     }
@@ -207,6 +221,28 @@ class ApplicationPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             committed = await graph.aget_state(config)
             self.assertEqual(tuple(committed.next), ("requirements",))
             self.assertFalse(any(task.interrupts for task in committed.tasks))
+            self.assertEqual(
+                committed.values["application_planning_review_route"],
+                "requirements",
+            )
+            self.assertEqual(
+                committed.values["application_planning_interaction"]["action"],
+                "answer",
+            )
+
+            await assert_native_recovery_fork_stable(
+                testcase=self,
+                graph=graph,
+                checkpoint_config=committed.config,
+                expected_next_nodes=["requirements"],
+                runtime_identity_update={
+                    "active_run_id": "run-B",
+                    "active_thread_id": thread_id,
+                    "resume_from": "",
+                    "observability": {"run_id": "run-B", "thread_id": thread_id},
+                    "lifecycle": {"active_run_id": "run-B"},
+                },
+            )
 
             identity = committed.config["configurable"]
             captured_at = datetime.now(timezone.utc)
@@ -217,7 +253,7 @@ class ApplicationPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 project_id="app-1",
                 execution_kind="application_planning",
                 workflow_scope="application_planning",
-                first_node="review",
+                first_node="requirements_review",
                 current_node="requirements",
                 status=DurableExecutionStatus.INTERRUPTED,
                 started_at=captured_at,

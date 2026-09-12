@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
@@ -30,6 +31,25 @@ CONFIRMATION_MODE_BY_ARTIFACT: dict[ApplicationPlanningArtifact, str] = {
     "ui_designs": "ui_design_confirmation",
     "technical_plan": "technical_plan_confirmation",
 }
+
+
+class ApplicationPlanningRoutingError(ValueError):
+    """表示创建规划审阅恢复缺少合法的服务端路由事实。"""
+
+
+@dataclass(frozen=True)
+class ApplicationPlanningReviewResumeDecision:
+    """封装审阅恢复的状态更新与目标节点，分离业务决策和 Graph 调度。"""
+
+    update: dict[str, Any]
+    target_node: Literal[
+        "requirements",
+        "product_planning",
+        "ui_confirmation",
+        "planning_stage_entry",
+        "technical_planning",
+        "design_intent_analysis",
+    ]
 
 
 def application_planning_review_payload(
@@ -145,7 +165,18 @@ def resume_application_planning_review(
     node_name: str,
     config: RunnableConfig | None = None,
 ) -> Command[Any]:
-    """暂停在正式产物审阅门，并把显式恢复动作路由到确定节点。"""
+    """通过共享审阅决策恢复正式产物审阅门，并保留普通节点的 Command 路由。"""
+
+    decision = prepare_application_planning_review_resume(state, node_name, config)
+    return Command(update=decision.update, goto=decision.target_node)
+
+
+def prepare_application_planning_review_resume(
+    state: ProjectState,
+    node_name: str,
+    config: RunnableConfig | None = None,
+) -> ApplicationPlanningReviewResumeDecision:
+    """集中完成审阅恢复校验并返回可持久化的状态更新和目标节点。"""
 
     payload = application_planning_review_payload(state, node_name)
     submission = ApplicationPlanningInteraction.model_validate(interrupt(payload))
@@ -167,7 +198,7 @@ def resume_application_planning_review(
         # 由分类器路由到最早受影响产物并级联重新生成下游。
         if not submission.request.strip():
             raise ValueError("设计变更必须提供明确的修改要求。")
-        return Command(
+        return ApplicationPlanningReviewResumeDecision(
             update={
                 **runtime_update,
                 # design_change 会提前跳转到意图分析；在跳转前就消费旧 START
@@ -177,7 +208,7 @@ def resume_application_planning_review(
                 "design_interaction_origin": effective_node_name,
                 "application_planning_interaction": {},
             },
-            goto="design_intent_analysis",
+            target_node="design_intent_analysis",
         )
 
     update: dict[str, Any] = {
@@ -194,7 +225,10 @@ def resume_application_planning_review(
         ),
     }
     if effective_node_name == "planning_stage_entry":
-        return Command(update=update, goto="technical_planning")
+        return ApplicationPlanningReviewResumeDecision(
+            update=update,
+            target_node="technical_planning",
+        )
     if submission.edited_requirement_spec is not None:
         update["edited_requirement_spec"] = submission.edited_requirement_spec
     if submission.requirement_spec_feedback:
@@ -225,7 +259,10 @@ def resume_application_planning_review(
         if effective_node_name == "requirement_document"
         else effective_node_name
     )
-    return Command(update=update, goto=target_node)
+    return ApplicationPlanningReviewResumeDecision(
+        update=update,
+        target_node=target_node,
+    )
 
 
 def _effective_application_planning_review_node(
@@ -281,10 +318,30 @@ def _application_planning_runtime_update(
 def requirements_review(
     state: ProjectState,
     config: RunnableConfig,
-) -> Command[Literal["requirements", "design_intent_analysis"]]:
-    """暂停 RequirementSpec 审阅并恢复到需求处理或设计意图分析。"""
+) -> dict[str, Any]:
+    """暂停 RequirementSpec 审阅并持久化后继路由事实。"""
 
-    return resume_application_planning_review(state, "requirements", config)
+    decision = prepare_application_planning_review_resume(state, "requirements", config)
+    return {
+        **decision.update,
+        "application_planning_review_route": decision.target_node,
+    }
+
+
+def route_requirements_review(state: ProjectState) -> str:
+    """从 Durable Graph State 读取需求审阅后继，并对缺失或非法值 fail closed。"""
+
+    target = str(state.get("application_planning_review_route") or "").strip()
+    allowed = {
+        "requirements",
+        "product_planning",
+        "design_intent_analysis",
+    }
+    if target not in allowed:
+        raise ApplicationPlanningRoutingError(
+            "requirements_review 缺少合法的服务端路由事实。"
+        )
+    return target
 
 
 def requirement_document_review(
