@@ -14,7 +14,11 @@ from app.domain.execution_recovery import (
     RecoveryPoint,
     RecoveryPointKind,
 )
-from app.persistence.execution_recovery import insert_execution, insert_recovery_point
+from app.persistence.execution_recovery import (
+    get_execution,
+    insert_execution,
+    insert_recovery_point,
+)
 from app.services.execution_retry_dispatcher import prepare_retry_current_failure
 
 
@@ -34,6 +38,26 @@ class _RetrySnapshot:
         self.values = values
         self.next = ("build",)
         self.tasks: tuple[object, ...] = ()
+
+
+class _RetryGraph:
+    """模拟 LangGraph 对历史 checkpoint 与当前 thread head 的不同读取。"""
+
+    def __init__(self, exact_snapshot: _RetrySnapshot, latest_snapshot: _RetrySnapshot) -> None:
+        """保存精确失败现场与当前 thread head。"""
+
+        self.exact_snapshot = exact_snapshot
+        self.latest_snapshot = latest_snapshot
+        self.configs: list[dict[str, object]] = []
+
+    async def aget_state(self, config: dict[str, object]) -> _RetrySnapshot:
+        """根据是否带 checkpoint_id 返回历史现场或当前 head。"""
+
+        self.configs.append(config)
+        configurable = config.get("configurable", {})
+        if isinstance(configurable, dict) and configurable.get("checkpoint_id"):
+            return self.exact_snapshot
+        return self.latest_snapshot
 
 
 class ExecutionRetryDispatcherTests(unittest.IsolatedAsyncioTestCase):
@@ -105,8 +129,16 @@ class ExecutionRetryDispatcherTests(unittest.IsolatedAsyncioTestCase):
     async def test_build_adapter_uses_source_identity(self) -> None:
         """Build 失败由 Backend 选择旧 handler，并保留 source thread/session。"""
 
-        source, snapshot = await self._insert_source(run_id="run-build")
-        graph = SimpleNamespace(aget_state=AsyncMock(return_value=snapshot))
+        source, snapshot = await self._insert_source(
+            run_id="run-build",
+            values={
+                "build_summary": {
+                    "recovery_available": True,
+                    "recovery_task_ids": ["task-1"],
+                },
+            },
+        )
+        graph = _RetryGraph(snapshot, snapshot)
 
         plan = await prepare_retry_current_failure(
             workspace=str(self.workspace),
@@ -128,14 +160,23 @@ class ExecutionRetryDispatcherTests(unittest.IsolatedAsyncioTestCase):
             forwarded["resumeState"]["state"]["active_run_id"],
             source.run_id,
         )
-        graph.aget_state.assert_awaited_once_with(
-            {
-                "configurable": {
-                    "thread_id": source.thread_id,
-                    "checkpoint_ns": "",
-                    "checkpoint_id": "checkpoint-run-build",
-                }
-            }
+        self.assertEqual(
+            graph.configs,
+            [
+                {
+                    "configurable": {
+                        "thread_id": source.thread_id,
+                        "checkpoint_ns": "",
+                        "checkpoint_id": "checkpoint-run-build",
+                    }
+                },
+                {
+                    "configurable": {
+                        "thread_id": source.thread_id,
+                        "checkpoint_ns": "",
+                    }
+                },
+            ],
         )
 
     async def test_code_review_adapter_precedes_build_adapter(self) -> None:
@@ -146,9 +187,10 @@ class ExecutionRetryDispatcherTests(unittest.IsolatedAsyncioTestCase):
             values={
                 "phase": "code_review",
                 "code_review_retry": {"available": True, "target": "scan"},
+                "build_summary": {"recovery_available": True},
             },
         )
-        graph = SimpleNamespace(aget_state=AsyncMock(return_value=snapshot))
+        graph = _RetryGraph(snapshot, snapshot)
 
         plan = await prepare_retry_current_failure(
             workspace=str(self.workspace),
@@ -161,6 +203,49 @@ class ExecutionRetryDispatcherTests(unittest.IsolatedAsyncioTestCase):
             plan.internal_payload["forwardedProps"]["workflowAction"],
             "retry_code_review",
         )
+
+    async def test_build_adapter_accepts_legacy_retry_available(self) -> None:
+        """旧 checkpoint 的 retry_available 证据仍可进入 Build handler。"""
+
+        source, snapshot = await self._insert_source(
+            run_id="run-build-legacy",
+            values={"build_summary": {"retry_available": True}},
+        )
+        graph = _RetryGraph(snapshot, snapshot)
+
+        plan = await prepare_retry_current_failure(
+            workspace=str(self.workspace),
+            source_run_id=source.run_id,
+            graph=graph,
+        )
+
+        self.assertEqual(plan.handler, "retry_failed_tasks")
+
+    async def test_integration_test_failure_without_build_recovery_evidence_is_unsupported(
+        self,
+    ) -> None:
+        """没有 Build 恢复证据的 Integration Test 失败不能误匹配 Build。"""
+
+        source, snapshot = await self._insert_source(
+            run_id="run-integration",
+            values={
+                "phase": "integration_test",
+                "status": "failed",
+            },
+        )
+        graph = _RetryGraph(snapshot, snapshot)
+
+        with self.assertRaises(RecoveryExecutionError) as raised:
+            await prepare_retry_current_failure(
+                workspace=str(self.workspace),
+                source_run_id=source.run_id,
+                graph=graph,
+            )
+
+        self.assertEqual(raised.exception.code, "RETRY_HANDLER_NOT_AVAILABLE")
+        persisted = await get_execution(str(self.workspace), source.run_id)
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.status, DurableExecutionStatus.FAILED)
 
     async def test_non_failed_source_is_rejected(self) -> None:
         """running、interrupted、stopped 和 completed source 都不能启动 Generic Retry。"""
@@ -184,12 +269,21 @@ class ExecutionRetryDispatcherTests(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(raised.exception.code, "RETRY_SOURCE_NOT_FAILED")
 
-    async def test_stale_source_checkpoint_is_rejected_without_adapter(self) -> None:
-        """精确 checkpoint 已被更晚 run 写入时必须 fail closed。"""
+    async def test_historical_checkpoint_is_rejected_when_current_head_is_newer(self) -> None:
+        """历史 checkpoint 仍属 source 但当前 thread head 已属于新 run 时拒绝重试。"""
 
-        source, snapshot = await self._insert_source(run_id="run-stale")
-        snapshot.values["active_run_id"] = "run-newer"
-        graph = SimpleNamespace(aget_state=AsyncMock(return_value=snapshot))
+        source, exact_snapshot = await self._insert_source(
+            run_id="run-stale",
+            values={
+                "build_summary": {"recovery_available": True},
+            },
+        )
+        latest_snapshot = _RetrySnapshot(
+            source.thread_id,
+            "checkpoint-run-newer",
+            {"active_run_id": "run-newer", "phase": "build", "status": "failed"},
+        )
+        graph = _RetryGraph(exact_snapshot, latest_snapshot)
 
         with self.assertRaises(RecoveryExecutionError) as raised:
             await prepare_retry_current_failure(

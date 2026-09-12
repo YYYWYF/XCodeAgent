@@ -75,14 +75,19 @@ class FailedTasksRetryAdapter:
         source: DurableExecutionRecord,
         snapshot: Any,
     ) -> dict[str, Any] | None:
-        """通过现有 Workflow parser 判断失败任务重试是否适用于当前现场。"""
+        """先确认 Build 恢复能力，再通过现有 parser 判断失败任务重试是否适用。"""
+
+        if not _has_failed_tasks_retry_evidence(snapshot):
+            return None
 
         payload = _retry_payload(source, snapshot, self.name)
         try:
             parsed = workflow_run_inputs(payload)
         except ValueError:
             return None
-        return payload if parsed.get("workflow_action") == self.name else None
+        if parsed.get("workflow_action") != self.name:
+            return None
+        return payload
 
 
 RETRY_ADAPTERS: tuple[RetryAdapter, ...] = (
@@ -140,6 +145,11 @@ async def prepare_retry_current_failure(
         )
     snapshot = await _read_source_snapshot(graph, source, point)
     _validate_source_snapshot(source, point, snapshot)
+    await _validate_current_thread_head(
+        graph=graph,
+        source=source,
+        point=point,
+    )
 
     for adapter in RETRY_ADAPTERS:
         payload = await adapter.prepare(source, snapshot)
@@ -185,6 +195,46 @@ async def _read_source_snapshot(
         ) from exc
 
 
+async def _validate_current_thread_head(
+    *,
+    graph: Any,
+    source: DurableExecutionRecord,
+    point: RecoveryPoint,
+) -> None:
+    """读取当前 thread head，确认 source execution 仍是最新 owner。"""
+
+    if not hasattr(graph, "aget_state"):
+        raise RecoveryExecutionError(
+            "RETRY_SOURCE_CHECKPOINT_INVALID",
+            "当前 Graph 无法验证失败 execution 的最新状态。",
+        )
+    config = {
+        "configurable": {
+            "thread_id": source.thread_id,
+            "checkpoint_ns": point.checkpoint_ns,
+        }
+    }
+    try:
+        latest = await graph.aget_state(config)
+    except Exception as exc:  # noqa: BLE001 - 协议层统一转换 thread head 读取失败
+        raise RecoveryExecutionError(
+            "RETRY_SOURCE_CHECKPOINT_INVALID",
+            "无法读取当前 Graph thread 状态。",
+        ) from exc
+
+    values = getattr(latest, "values", {})
+    if not isinstance(values, dict):
+        raise RecoveryExecutionError(
+            "RETRY_SOURCE_STALE",
+            "无法证明当前失败仍是最新执行。",
+        )
+    if str(values.get("active_run_id") or "") != source.run_id:
+        raise RecoveryExecutionError(
+            "RETRY_SOURCE_STALE",
+            "当前失败已经被新的执行替代，请刷新后查看最新状态。",
+        )
+
+
 def _validate_source_snapshot(
     source: DurableExecutionRecord,
     point: RecoveryPoint,
@@ -215,6 +265,27 @@ def _validate_source_snapshot(
             "RETRY_SOURCE_STALE",
             "当前失败已经被新的执行替代，请刷新后查看最新状态。",
         )
+
+
+def _has_failed_tasks_retry_evidence(snapshot: Any) -> bool:
+    """只根据明确的 Build 恢复证据判断失败任务 Adapter 是否具备能力。"""
+
+    values = getattr(snapshot, "values", {})
+    if not isinstance(values, dict):
+        return False
+    build_summary = values.get("build_summary")
+    if not isinstance(build_summary, dict):
+        return False
+    if build_summary.get("recovery_available") is True:
+        return True
+    if build_summary.get("retry_available") is True:
+        return True
+    retryable_failures = build_summary.get("retryable_failures")
+    return (
+        isinstance(retryable_failures, int)
+        and not isinstance(retryable_failures, bool)
+        and retryable_failures > 0
+    )
 
 
 def _retry_payload(
