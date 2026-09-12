@@ -64,6 +64,7 @@ class WorkflowExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             run_id="run-planning",
             workflow_scope="application_planning",
             first_node="requirements",
+            owner_session_id="session-planning",
         )
         self.assertIsNotNone(record)
         assert record is not None
@@ -72,6 +73,7 @@ class WorkflowExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(loaded)
         assert loaded is not None
         self.assertEqual(loaded.first_node, "requirements")
+        self.assertEqual(loaded.owner_session_id, "session-planning")
 
     async def test_capture_without_checkpoint_creates_entry_point(self) -> None:
         """测试 Graph 没有真实 checkpoint 时只能产生 ENTRY 现场。"""

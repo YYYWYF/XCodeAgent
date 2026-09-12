@@ -39,6 +39,7 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
         return DurableExecutionRecord(
             run_id=run_id,
             thread_id=thread_id,
+            owner_session_id="session-A",
             workspace=str(self.workspace),
             project_id=None,
             execution_kind="workbench",
@@ -102,6 +103,7 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
         candidate = projection.candidates[0].model_dump(mode="json", by_alias=True)
         self.assertTrue(candidate["canContinue"])
         self.assertEqual(candidate["availability"], "ready")
+        self.assertEqual(candidate["ownerSessionId"], "session-A")
         for forbidden in (
             "checkpointId",
             "checkpointNs",
@@ -141,6 +143,70 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
                     projection = await resolve_execution_recovery_projection(str(self.workspace))
             self.assertEqual(projection.candidates[0].availability, availability)
             self.assertEqual(projection.candidates[0].can_continue, can_continue)
+
+    async def test_legacy_record_uses_exact_checkpoint_owner_without_mutating_record(self) -> None:
+        """旧记录只允许从 P0.3A 精确 checkpoint 读取 ownership。"""
+
+        record = self._record("run-legacy").model_copy(update={"owner_session_id": None})
+        snapshot = type("Snapshot", (), {"values": {"owner_session_id": "session-legacy"}})()
+        plan = self._plan(record.run_id, RecoveryDecision.READY_NATIVE).model_copy(
+            update={"checkpoint_id": "checkpoint-exact", "checkpoint_ns": "namespace"}
+        )
+        graph = type("Graph", (), {"aget_state": AsyncMock(return_value=snapshot)})()
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=graph),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.prepare_continue",
+                new=AsyncMock(return_value=plan),
+            ),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(projection.candidates[0].owner_session_id, "session-legacy")
+        graph.aget_state.assert_awaited_once_with(
+            {
+                "configurable": {
+                    "thread_id": record.thread_id,
+                    "checkpoint_ns": "namespace",
+                    "checkpoint_id": "checkpoint-exact",
+                }
+            }
+        )
+        self.assertIsNone(record.owner_session_id)
+
+    async def test_legacy_record_without_checkpoint_owner_is_not_projected(self) -> None:
+        """旧记录无法从精确 checkpoint 证明 ownership 时必须 fail closed。"""
+
+        record = self._record("run-unowned").model_copy(update={"owner_session_id": None})
+        snapshot = type("Snapshot", (), {"values": {}})()
+        plan = self._plan(record.run_id, RecoveryDecision.READY_NATIVE).model_copy(
+            update={"checkpoint_id": "checkpoint-exact"}
+        )
+        graph = type("Graph", (), {"aget_state": AsyncMock(return_value=snapshot)})()
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=graph),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.prepare_continue",
+                new=AsyncMock(return_value=plan),
+            ),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(projection.candidates, [])
 
 
 if __name__ == "__main__":

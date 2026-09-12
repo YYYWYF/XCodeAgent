@@ -160,7 +160,7 @@ function mergePlanningRefresh(
   return { ...base, extensions }
 }
 
-/** 在普通 workflow 生命周期帧缺少 GET-time 字段时保留最新恢复投影。 */
+/** 按持久 lifecycle revision 合并 GET-time recovery projection，避免旧帧覆盖新状态。 */
 function mergeExecutionRecovery(
   base: ApplicationLifecycle,
   current: ApplicationLifecycle,
@@ -168,15 +168,25 @@ function mergeExecutionRecovery(
 ): ApplicationLifecycle {
   const currentProjection = current.extensions?.executionRecovery
   const incomingProjection = incoming.extensions?.executionRecovery
-  if (!currentProjection || incomingProjection || incoming.revision < current.revision) {
-    return base
+  let projection: typeof currentProjection
+
+  if (incoming.revision < current.revision) {
+    // 旧持久 revision 的 GET 不能覆盖更新状态。
+    projection = currentProjection
+  } else if (incomingProjection) {
+    // 同 revision / 新 revision 的 GET projection 都是最新 runtime authority。
+    projection = incomingProjection
+  } else {
+    // 普通 Workflow lifecycle 帧没有 GET-time projection，不能因此清掉已有 projection。
+    projection = currentProjection
   }
+
+  const extensions = { ...base.extensions }
+  if (projection) extensions.executionRecovery = projection
+  else delete extensions.executionRecovery
   return {
     ...base,
-    extensions: {
-      ...base.extensions,
-      executionRecovery: currentProjection
-    }
+    extensions
   }
 }
 

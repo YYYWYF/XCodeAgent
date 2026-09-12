@@ -11,6 +11,7 @@ function recovery(
 ): ExecutionRecoveryCandidate {
   return {
     sourceRunId: 'run-A',
+    ownerSessionId: 'session-A',
     threadId: 'thread-A',
     executionKind: 'workbench',
     executionStatus: 'interrupted',
@@ -46,4 +47,3 @@ test('blocked and requires-handler recovery cards hide continue action', () => {
     assert.doesNotMatch(markup, /继续执行/)
   }
 })
-

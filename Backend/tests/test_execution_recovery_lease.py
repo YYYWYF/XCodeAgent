@@ -116,6 +116,7 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
             run_id="run-atomic",
             workflow_scope="page",
             first_node="A",
+            owner_session_id="session-atomic",
             backend_instance_id="backend-test",
             backend_pid=123,
             lease_ttl=30,
@@ -129,6 +130,8 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
         assert loaded is not None
         assert lease is not None
         self.assertEqual(loaded.status, DurableExecutionStatus.RUNNING)
+        self.assertEqual(loaded.owner_session_id, "session-atomic")
+        self.assertNotEqual(loaded.owner_session_id, loaded.thread_id)
         self.assertEqual(lease.status, ExecutionLeaseStatus.ACTIVE)
         self.assertEqual(lease.owner_backend_instance_id, "backend-test")
         self.assertEqual(lease.owner_pid, 123)

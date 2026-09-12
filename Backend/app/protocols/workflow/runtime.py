@@ -333,6 +333,9 @@ def build_workflow_ag_ui_stream(
     )
     thread_id = workflow_inputs["thread_id"] or str(uuid4())
     run_id = workflow_inputs["run_id"] or f"workflow-{uuid4().hex[:12]}"
+    owner_session_id = str(
+        workflow_inputs.get("resume_values", {}).get("owner_session_id") or ""
+    ).strip() or None
     plan_control_action = workflow_inputs.get("plan_control_action") or ""
     if plan_control_action:
         return build_workflow_plan_control_ag_ui_stream(
@@ -833,6 +836,7 @@ def build_workflow_ag_ui_stream(
                         run_id=run_id,
                         workflow_scope=workflow_scope,
                         first_node=first_node_name,
+                        owner_session_id=owner_session_id,
                         backend_instance_id=backend_identity.instance_id,
                         backend_pid=backend_identity.pid,
                         lease_ttl=settings.execution_recovery_lease_ttl_seconds,

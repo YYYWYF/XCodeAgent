@@ -695,7 +695,7 @@ export function useWorkflowConversation({
   ): Promise<boolean> => {
     if (
       !activeSession ||
-      activeSession.threadId !== recovery.threadId ||
+      activeSession.sessionId !== recovery.ownerSessionId ||
       recoveringSourceRunId === recovery.sourceRunId ||
       !recovery.canContinue
     ) {
@@ -710,6 +710,7 @@ export function useWorkflowConversation({
           action: 'continue',
           sourceRunId: recovery.sourceRunId
         },
+        executionThreadId: recovery.threadId,
         sessionIdentity,
         titleFrom: '继续执行上一次中断的任务',
         conversation: false

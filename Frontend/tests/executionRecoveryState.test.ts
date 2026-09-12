@@ -28,7 +28,8 @@ function lifecycleWithCandidates(candidates: unknown[]): ApplicationLifecycle {
 function candidate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     sourceRunId: 'run-A',
-    threadId: 'thread-A',
+    ownerSessionId: 'session-A',
+    threadId: 'exec-thread-A',
     executionKind: 'workbench',
     executionStatus: 'interrupted',
     availability: 'ready',
@@ -48,16 +49,29 @@ test('错误 schema 不会被当作 execution recovery projection', () => {
   assert.equal(executionRecoveryProjection(lifecycle), undefined)
 })
 
-test('recovery candidate 只按 active session threadId 匹配并选择最新记录', () => {
+test('recovery candidate 只按 active session sessionId 匹配并选择最新记录', () => {
   const lifecycle = lifecycleWithCandidates([
-    candidate({ sourceRunId: 'run-old', updatedAt: '2026-09-12T00:00:01.000Z' }),
-    candidate({ sourceRunId: 'run-new', updatedAt: '2026-09-12T00:00:02.000Z' }),
-    candidate({ sourceRunId: 'run-other', threadId: 'thread-B' })
+    candidate({
+      sourceRunId: 'run-old',
+      ownerSessionId: 'session-A',
+      updatedAt: '2026-09-12T00:00:01.000Z'
+    }),
+    candidate({
+      sourceRunId: 'run-new',
+      ownerSessionId: 'session-A',
+      updatedAt: '2026-09-12T00:00:02.000Z'
+    }),
+    candidate({ sourceRunId: 'run-other', ownerSessionId: 'session-B', threadId: 'exec-thread-A' })
   ])
 
-  assert.equal(executionRecoveryForSession(lifecycle, 'thread-A')?.sourceRunId, 'run-new')
-  assert.equal(executionRecoveryForSession(lifecycle, 'thread-B')?.sourceRunId, 'run-other')
-  assert.equal(executionRecoveryForSession(lifecycle, 'thread-C'), undefined)
+  assert.equal(executionRecoveryForSession(lifecycle, 'session-A')?.sourceRunId, 'run-new')
+  assert.equal(executionRecoveryForSession(lifecycle, 'session-B')?.sourceRunId, 'run-other')
+  assert.equal(executionRecoveryForSession(lifecycle, 'session-C'), undefined)
   assert.equal(executionRecoveryForSession(lifecycle, undefined), undefined)
 })
 
+test('缺少 ownerSessionId 的候选不会被投影到前端', () => {
+  const lifecycle = lifecycleWithCandidates([candidate({ ownerSessionId: undefined })])
+
+  assert.deepEqual(executionRecoveryProjection(lifecycle)?.candidates, [])
+})

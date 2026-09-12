@@ -127,6 +127,7 @@ class DurableExecutionRecord(ExecutionRecoveryModel):
 
     run_id: str = Field(min_length=1, max_length=512)
     thread_id: str = Field(min_length=1, max_length=512)
+    owner_session_id: str | None = Field(default=None, max_length=512)
     workspace: str = Field(min_length=1, max_length=4096)
     project_id: str | None = Field(default=None, max_length=512)
     execution_kind: Literal["application_planning", "workbench"]
@@ -198,6 +199,7 @@ class ExecutionRecoveryProjectionCandidate(ExecutionRecoveryModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     source_run_id: str = Field(alias="sourceRunId", min_length=1, max_length=512)
+    owner_session_id: str = Field(alias="ownerSessionId", min_length=1, max_length=512)
     thread_id: str = Field(alias="threadId", min_length=1, max_length=512)
     execution_kind: Literal["application_planning", "workbench"] = Field(
         alias="executionKind"

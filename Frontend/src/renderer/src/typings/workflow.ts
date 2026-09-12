@@ -1167,6 +1167,7 @@ export type ExecutionRecoveryAvailability =
 
 export type ExecutionRecoveryCandidate = {
   sourceRunId: string
+  ownerSessionId: string
   threadId: string
   executionKind: 'application_planning' | 'workbench'
   workflowScope?: string

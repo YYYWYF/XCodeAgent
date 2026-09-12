@@ -24,6 +24,7 @@ function parseExecutionRecoveryCandidate(value: unknown): ExecutionRecoveryCandi
   const candidate = recordValue(value)
   if (!candidate) return undefined
   const sourceRunId = String(candidate.sourceRunId || '').trim()
+  const ownerSessionId = String(candidate.ownerSessionId || '').trim()
   const threadId = String(candidate.threadId || '').trim()
   const executionKind = String(candidate.executionKind || '')
   const executionStatus = String(candidate.executionStatus || '')
@@ -33,6 +34,7 @@ function parseExecutionRecoveryCandidate(value: unknown): ExecutionRecoveryCandi
   const updatedAt = String(candidate.updatedAt || '').trim()
   if (
     !sourceRunId ||
+    !ownerSessionId ||
     !threadId ||
     !['application_planning', 'workbench'].includes(executionKind) ||
     executionStatus !== 'interrupted' ||
@@ -54,6 +56,7 @@ function parseExecutionRecoveryCandidate(value: unknown): ExecutionRecoveryCandi
       : undefined
   return {
     sourceRunId,
+    ownerSessionId,
     threadId,
     executionKind: executionKind as ExecutionRecoveryCandidate['executionKind'],
     ...(workflowScope ? { workflowScope } : {}),
@@ -86,14 +89,14 @@ export function executionRecoveryProjection(
   }
 }
 
-/** 只按当前 stage session 的 threadId 选择最新候选，拒绝跨会话串卡。 */
+/** 只按当前 stage session 的 sessionId 选择最新候选，拒绝跨会话串卡。 */
 export function executionRecoveryForSession(
   lifecycle: ApplicationLifecycle | undefined,
-  threadId: string | undefined
+  sessionId: string | undefined
 ): ExecutionRecoveryCandidate | undefined {
-  const normalizedThreadId = String(threadId || '').trim()
-  if (!normalizedThreadId) return undefined
+  const normalizedSessionId = String(sessionId || '').trim()
+  if (!normalizedSessionId) return undefined
   return executionRecoveryProjection(lifecycle)?.candidates
-    .filter((candidate) => candidate.threadId === normalizedThreadId)
+    .filter((candidate) => candidate.ownerSessionId === normalizedSessionId)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
 }

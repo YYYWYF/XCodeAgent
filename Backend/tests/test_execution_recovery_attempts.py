@@ -83,7 +83,12 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(taken.owner_backend_instance_id, "backend-b")
         self.assertEqual(taken.owner_pid, 202)
         self.assertEqual(taken.status, ExecutionLeaseStatus.ACTIVE)
-        self.assertEqual((await get_execution(self.workspace, child.run_id)).status, DurableExecutionStatus.RUNNING)
+        child_loaded = await get_execution(self.workspace, child.run_id)
+        self.assertIsNotNone(child_loaded)
+        assert child_loaded is not None
+        self.assertEqual(child_loaded.status, DurableExecutionStatus.RUNNING)
+        self.assertEqual(child_loaded.owner_session_id, "session-owner")
+        self.assertEqual(child_loaded.thread_id, source.thread_id)
         self.assertEqual(lease.owner_backend_instance_id, "backend-a")
 
     async def test_started_attempt_cannot_be_taken_over_pre_runtime(self) -> None:
@@ -533,6 +538,7 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         source = DurableExecutionRecord(
             run_id="source-run",
             thread_id="recovery-thread",
+            owner_session_id="session-owner",
             workspace=str(self.workspace),
             project_id=None,
             execution_kind="workbench",

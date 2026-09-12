@@ -97,6 +97,7 @@ async def observe_execution_started(
     run_id: str,
     workflow_scope: str | None,
     first_node: str,
+    owner_session_id: str | None = None,
     backend_instance_id: str | None = None,
     backend_pid: int | None = None,
     lease_ttl: float | None = None,
@@ -117,6 +118,7 @@ async def observe_execution_started(
     record = DurableExecutionRecord(
         run_id=run_id,
         thread_id=thread_id,
+        owner_session_id=owner_session_id,
         workspace=workspace,
         project_id=project_id,
         execution_kind=(

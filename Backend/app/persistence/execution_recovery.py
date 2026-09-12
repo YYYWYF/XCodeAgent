@@ -31,7 +31,9 @@ from app.domain.execution_recovery import (
 RECOVERY_DATABASE_RELATIVE_PATH = Path(
     ".xcodeagent/recovery/execution-recovery.sqlite"
 )
-RECOVERY_SCHEMA_VERSION = "3"
+RECOVERY_SCHEMA_VERSION = "4"
+EXECUTION_ROW_WIDTH = 14
+EXECUTION_LEASE_ROW_WIDTH = 8
 
 
 def execution_recovery_db_path(workspace: str | Path) -> Path:
@@ -112,7 +114,7 @@ async def _connection_after_initialize(
 
 
 async def initialize_execution_recovery_store(workspace: str | Path) -> None:
-    """创建恢复库表，并把现有 v2 store 原子补齐到 v3。"""
+    """创建恢复库表，并把现有 v3 store 原地补齐到 v4。"""
 
     async with _connection(workspace) as connection:
         await connection.executescript(
@@ -135,7 +137,8 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 last_recovery_point_id TEXT,
                 started_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                ended_at TEXT
+                ended_at TEXT,
+                owner_session_id TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_execution_records_thread
@@ -226,6 +229,12 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 WHERE status IN ('preparing', 'handed_off', 'finalizing', 'started');
             """
         )
+        columns_cursor = await connection.execute("PRAGMA table_info(execution_records)")
+        columns = await columns_cursor.fetchall()
+        if not any(str(column[1]) == "owner_session_id" for column in columns):
+            await connection.execute(
+                "ALTER TABLE execution_records ADD COLUMN owner_session_id TEXT"
+            )
         index_cursor = await connection.execute(
             """
             SELECT sql
@@ -268,8 +277,9 @@ async def insert_execution(
             INSERT INTO execution_records(
                 run_id, thread_id, workspace, project_id, execution_kind,
                 workflow_scope, first_node, current_node, status,
-                last_recovery_point_id, started_at, updated_at, ended_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                last_recovery_point_id, started_at, updated_at, ended_at,
+                owner_session_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id) DO NOTHING
             """,
             (
@@ -286,6 +296,7 @@ async def insert_execution(
                 _utc_iso(record.started_at),
                 _utc_iso(record.updated_at),
                 _utc_iso(record.ended_at) if record.ended_at else None,
+                record.owner_session_id,
             ),
         )
         row = await _fetch_execution_row(connection, record.run_id)
@@ -345,6 +356,7 @@ async def claim_native_recovery_attempt(
         project_id=source.project_id,
         execution_kind=source.execution_kind,
         workflow_scope=source.workflow_scope,
+        owner_session_id=source.owner_session_id,
         first_node=plan.next_nodes[0],
         current_node=plan.next_nodes[0],
         status=DurableExecutionStatus.RUNNING,
@@ -385,8 +397,9 @@ async def claim_native_recovery_attempt(
                 INSERT INTO execution_records(
                     run_id, thread_id, workspace, project_id, execution_kind,
                     workflow_scope, first_node, current_node, status,
-                    last_recovery_point_id, started_at, updated_at, ended_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_recovery_point_id, started_at, updated_at, ended_at,
+                    owner_session_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -402,6 +415,7 @@ async def claim_native_recovery_attempt(
                     _utc_iso(record.started_at),
                     _utc_iso(record.updated_at),
                     None,
+                    record.owner_session_id,
                 ),
             )
             await connection.execute(
@@ -782,8 +796,9 @@ async def insert_execution_with_lease(
                 INSERT INTO execution_records(
                     run_id, thread_id, workspace, project_id, execution_kind,
                     workflow_scope, first_node, current_node, status,
-                    last_recovery_point_id, started_at, updated_at, ended_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_recovery_point_id, started_at, updated_at, ended_at,
+                    owner_session_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -799,6 +814,7 @@ async def insert_execution_with_lease(
                     _utc_iso(record.started_at),
                     _utc_iso(record.updated_at),
                     _utc_iso(record.ended_at) if record.ended_at else None,
+                    record.owner_session_id,
                 ),
             )
         except aiosqlite.IntegrityError:
@@ -1035,7 +1051,7 @@ async def list_running_executions_with_leases(
                 e.run_id, e.thread_id, e.workspace, e.project_id,
                 e.execution_kind, e.workflow_scope, e.first_node,
                 e.current_node, e.status, e.last_recovery_point_id,
-                e.started_at, e.updated_at, e.ended_at,
+                e.started_at, e.updated_at, e.ended_at, e.owner_session_id,
                 l.run_id, l.owner_backend_instance_id, l.owner_pid,
                 l.status, l.acquired_at, l.heartbeat_at, l.expires_at,
                 l.released_at
@@ -1049,8 +1065,10 @@ async def list_running_executions_with_leases(
         rows = await cursor.fetchall()
     return [
         (
-            _execution_from_row(row[:13]),
-            _execution_lease_from_row(row[13:]) if row[13] is not None else None,
+            _execution_from_row(row[:EXECUTION_ROW_WIDTH]),
+            _execution_lease_from_row(row[EXECUTION_ROW_WIDTH:])
+            if row[EXECUTION_ROW_WIDTH] is not None
+            else None,
         )
         for row in rows
     ]
@@ -1175,7 +1193,7 @@ async def _list_running_executions_with_leases_and_attempts(
                 e.run_id, e.thread_id, e.workspace, e.project_id,
                 e.execution_kind, e.workflow_scope, e.first_node,
                 e.current_node, e.status, e.last_recovery_point_id,
-                e.started_at, e.updated_at, e.ended_at,
+                e.started_at, e.updated_at, e.ended_at, e.owner_session_id,
                 l.run_id, l.owner_backend_instance_id, l.owner_pid,
                 l.status, l.acquired_at, l.heartbeat_at, l.expires_at,
                 l.released_at, a.status
@@ -1190,9 +1208,15 @@ async def _list_running_executions_with_leases_and_attempts(
         rows = await cursor.fetchall()
     return [
         (
-            _execution_from_row(row[:13]),
-            _execution_lease_from_row(row[13:21]) if row[13] is not None else None,
-            RecoveryAttemptStatus(str(row[21])) if row[21] is not None else None,
+            _execution_from_row(row[:EXECUTION_ROW_WIDTH]),
+            _execution_lease_from_row(
+                row[EXECUTION_ROW_WIDTH : EXECUTION_ROW_WIDTH + EXECUTION_LEASE_ROW_WIDTH]
+            )
+            if row[EXECUTION_ROW_WIDTH] is not None
+            else None,
+            RecoveryAttemptStatus(str(row[EXECUTION_ROW_WIDTH + EXECUTION_LEASE_ROW_WIDTH]))
+            if row[EXECUTION_ROW_WIDTH + EXECUTION_LEASE_ROW_WIDTH] is not None
+            else None,
         )
         for row in rows
     ]
@@ -1326,7 +1350,7 @@ async def list_recovery_projection_candidates(
             SELECT e.run_id, e.thread_id, e.workspace, e.project_id,
                    e.execution_kind, e.workflow_scope, e.first_node,
                    e.current_node, e.status, e.last_recovery_point_id,
-                   e.started_at, e.updated_at, e.ended_at
+                   e.started_at, e.updated_at, e.ended_at, e.owner_session_id
             FROM execution_records AS e
             WHERE e.status = ?
               AND NOT EXISTS (
@@ -1433,7 +1457,8 @@ async def _fetch_execution_row(
         """
         SELECT run_id, thread_id, workspace, project_id, execution_kind,
                workflow_scope, first_node, current_node, status,
-               last_recovery_point_id, started_at, updated_at, ended_at
+               last_recovery_point_id, started_at, updated_at, ended_at,
+               owner_session_id
         FROM execution_records
         WHERE run_id = ?
         """,
@@ -1544,6 +1569,9 @@ def _execution_from_row(row: tuple[object, ...]) -> DurableExecutionRecord:
         started_at=_parse_datetime(str(row[10])),
         updated_at=_parse_datetime(str(row[11])),
         ended_at=_parse_datetime(str(row[12])) if row[12] is not None else None,
+        owner_session_id=(
+            str(row[13]) if len(row) >= EXECUTION_ROW_WIDTH and row[13] is not None else None
+        ),
     )
 
 

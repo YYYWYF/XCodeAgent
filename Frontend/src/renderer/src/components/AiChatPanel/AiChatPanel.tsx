@@ -3447,9 +3447,9 @@ export default function AiChatPanel({
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
   const acceptanceAwaiting = displayedPlanExecutionMode === 'awaiting_acceptance'
   const activeExecutionRecovery = useMemo(() => {
-    const candidate = executionRecoveryForSession(applicationLifecycle, activeSession?.threadId)
+    const candidate = executionRecoveryForSession(applicationLifecycle, activeSession?.sessionId)
     return candidate?.availability === 'awaiting_user' ? undefined : candidate
-  }, [activeSession?.threadId, applicationLifecycle])
+  }, [activeSession?.sessionId, applicationLifecycle])
   const activeWorkflowHasBusinessInteraction = Boolean(
     activeWorkflow && workflowInteractionAvailability(activeWorkflow, applicationLifecycle) === 'active'
   )

@@ -80,9 +80,17 @@ async def _resolve_candidate(
     availability = _availability_for_decision(plan.decision)
     if availability is None:
         return None
+    owner_session_id = await _resolve_owner_session_id(
+        record=record,
+        plan=plan,
+        graph=graph,
+    )
+    if owner_session_id is None:
+        return None
     can_continue = availability == "ready"
     return ExecutionRecoveryProjectionCandidate(
         source_run_id=record.run_id,
+        owner_session_id=owner_session_id,
         thread_id=record.thread_id,
         execution_kind=record.execution_kind,
         workflow_scope=record.workflow_scope,
@@ -94,6 +102,38 @@ async def _resolve_candidate(
         message=_message_for_availability(availability),
         updated_at=record.updated_at,
     )
+
+
+async def _resolve_owner_session_id(
+    *,
+    record: DurableExecutionRecord,
+    plan: object,
+    graph: object,
+) -> str | None:
+    """优先读取 durable ownership，旧记录仅回查 P0.3A 精确 checkpoint。"""
+
+    owner_session_id = str(record.owner_session_id or "").strip()
+    if owner_session_id:
+        return owner_session_id
+    checkpoint_id = getattr(plan, "checkpoint_id", None)
+    if not checkpoint_id or not hasattr(graph, "aget_state"):
+        return None
+    config = {
+        "configurable": {
+            "thread_id": record.thread_id,
+            "checkpoint_ns": str(getattr(plan, "checkpoint_ns", "") or ""),
+            "checkpoint_id": str(checkpoint_id),
+        }
+    }
+    try:
+        snapshot = await graph.aget_state(config)
+    except Exception:
+        return None
+    values = getattr(snapshot, "values", {})
+    if not isinstance(values, dict):
+        return None
+    resolved = str(values.get("owner_session_id") or "").strip()
+    return resolved or None
 
 
 def _availability_for_decision(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -44,6 +45,69 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
         await initialize_execution_recovery_store(self.workspace)
         self.assertTrue(execution_recovery_db_path(self.workspace).exists())
 
+    async def test_initialize_migrates_v3_records_without_rebuilding_history(self) -> None:
+        """v3 execution_records 必须原地增加 owner_session_id 并保留旧记录。"""
+
+        database_path = execution_recovery_db_path(self.workspace)
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE recovery_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO recovery_meta(key, value) VALUES ('schema_version', '3');
+                CREATE TABLE execution_records (
+                    run_id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    workspace TEXT NOT NULL,
+                    project_id TEXT,
+                    execution_kind TEXT NOT NULL,
+                    workflow_scope TEXT,
+                    first_node TEXT NOT NULL,
+                    current_node TEXT,
+                    status TEXT NOT NULL,
+                    last_recovery_point_id TEXT,
+                    started_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    ended_at TEXT
+                );
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO execution_records VALUES (
+                    'legacy-run', 'graph-thread', ?, 'project', 'workbench', 'page',
+                    'A', 'A', 'interrupted', NULL, '2026-09-12T00:00:00+00:00',
+                    '2026-09-12T00:00:01+00:00', '2026-09-12T00:00:01+00:00'
+                )
+                """,
+                (str(self.workspace),),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        await initialize_execution_recovery_store(self.workspace)
+
+        loaded = await get_execution(self.workspace, "legacy-run")
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertEqual(loaded.thread_id, "graph-thread")
+        self.assertIsNone(loaded.owner_session_id)
+        connection = sqlite3.connect(database_path)
+        try:
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(execution_records)")
+            }
+            version = connection.execute(
+                "SELECT value FROM recovery_meta WHERE key = 'schema_version'"
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertIn("owner_session_id", columns)
+        self.assertEqual(version[0] if version else None, "4")
+
     async def test_insert_and_reload_execution(self) -> None:
         """ExecutionRecord 关闭连接后仍应能按 runId 重新读取。"""
 
@@ -55,6 +119,7 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.thread_id, record.thread_id)
         self.assertEqual(loaded.current_node, record.current_node)
         self.assertEqual(loaded.status, DurableExecutionStatus.RUNNING)
+        self.assertEqual(loaded.owner_session_id, "session-owner")
 
     async def test_node_and_status_updates_preserve_end_time_contract(self) -> None:
         """节点更新只改 currentNode，明确终态更新才写 endedAt。"""
@@ -154,6 +219,7 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
         return DurableExecutionRecord(
             run_id="run-001",
             thread_id="thread-001",
+            owner_session_id="session-owner",
             workspace=str(self.workspace),
             project_id="project-001",
             execution_kind="workbench",
