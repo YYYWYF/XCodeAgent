@@ -6,15 +6,20 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     RecoveryExecutionError,
+    RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
     RecoveryStrategy,
 )
-from app.services.execution_recovery_executor import _handoff_lifecycle
+from app.services.execution_recovery_executor import (
+    _handoff_lifecycle,
+    _validate_finalization_lifecycle,
+)
 
 
 class ExecutionRecoveryExecutorTests(unittest.TestCase):
@@ -60,6 +65,114 @@ class ExecutionRecoveryExecutorTests(unittest.TestCase):
                 )
 
         self.assertEqual(raised.exception.code, "RECOVERY_LIFECYCLE_REVISION_MISSING")
+
+    def test_application_planning_finalization_requires_lifecycle_ownership(self) -> None:
+        """Application Planning finalization 缺少 lifecycle 时必须拒绝 child fork。"""
+
+        now = datetime.now(timezone.utc)
+        source = DurableExecutionRecord(
+            run_id="source-run",
+            thread_id="planning-thread",
+            workspace="/tmp/native-recovery-executor",
+            project_id="app-1",
+            execution_kind="application_planning",
+            workflow_scope="application_planning",
+            first_node="technical_planning_begin",
+            current_node="technical_planning_begin",
+            status=DurableExecutionStatus.INTERRUPTED,
+            started_at=now,
+            updated_at=now,
+            ended_at=now,
+        )
+        attempt = SimpleNamespace(
+            new_run_id="recovery-child",
+            thread_id="planning-thread",
+            lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+        )
+
+        with self.assertRaises(RecoveryExecutionError) as raised:
+            _validate_finalization_lifecycle(
+                source=source,
+                attempt=attempt,
+                lifecycle=None,
+            )
+
+        self.assertEqual(raised.exception.code, "RECOVERY_STATE_DRIFT")
+
+    def test_application_planning_finalization_rejects_child_identity_drift(self) -> None:
+        """finalization 必须同时拒绝 child activeRunId 或 threadId 漂移。"""
+
+        now = datetime.now(timezone.utc)
+        source = DurableExecutionRecord(
+            run_id="source-run",
+            thread_id="planning-thread",
+            workspace="/tmp/native-recovery-executor",
+            project_id="app-1",
+            execution_kind="application_planning",
+            workflow_scope="application_planning",
+            first_node="technical_planning_begin",
+            current_node="technical_planning_begin",
+            status=DurableExecutionStatus.INTERRUPTED,
+            started_at=now,
+            updated_at=now,
+            ended_at=now,
+        )
+        attempt = SimpleNamespace(
+            new_run_id="recovery-child",
+            thread_id="planning-thread",
+            lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+        )
+        for lifecycle in (
+            SimpleNamespace(
+                active_run_id="other-child",
+                initialization=SimpleNamespace(thread_id="planning-thread"),
+            ),
+            SimpleNamespace(
+                active_run_id="recovery-child",
+                initialization=SimpleNamespace(thread_id="other-thread"),
+            ),
+        ):
+            with self.subTest(lifecycle=lifecycle):
+                with self.assertRaises(RecoveryExecutionError) as raised:
+                    _validate_finalization_lifecycle(
+                        source=source,
+                        attempt=attempt,
+                        lifecycle=lifecycle,
+                    )
+                self.assertEqual(raised.exception.code, "RECOVERY_STATE_DRIFT")
+
+    def test_application_planning_pre_ownership_finalization_accepts_child(self) -> None:
+        """PRE_OWNERSHIP child 在 lifecycle identity 正确时继续允许 finalization。"""
+
+        now = datetime.now(timezone.utc)
+        source = DurableExecutionRecord(
+            run_id="source-run",
+            thread_id="planning-thread",
+            workspace="/tmp/native-recovery-executor",
+            project_id="app-1",
+            execution_kind="application_planning",
+            workflow_scope="application_planning",
+            first_node="technical_planning_begin",
+            current_node="technical_planning_begin",
+            status=DurableExecutionStatus.INTERRUPTED,
+            started_at=now,
+            updated_at=now,
+            ended_at=now,
+        )
+        attempt = SimpleNamespace(
+            new_run_id="recovery-child",
+            thread_id="planning-thread",
+            lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+        )
+
+        _validate_finalization_lifecycle(
+            source=source,
+            attempt=attempt,
+            lifecycle=SimpleNamespace(
+                active_run_id="recovery-child",
+                initialization=SimpleNamespace(thread_id="planning-thread"),
+            ),
+        )
 
 
 __all__ = ["ExecutionRecoveryExecutorTests"]

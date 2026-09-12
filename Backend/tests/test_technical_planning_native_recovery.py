@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -25,11 +25,12 @@ from app.domain.application_planning_recovery import (
     application_planning_boundary_payload,
     application_planning_sha256,
 )
-from app.domain.application_revision import RevisionImpact, RevisionTarget
+from app.domain.application_revision import ActiveFormalRevision, RevisionImpact, RevisionTarget
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     RecoveryDecision,
+    RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPoint,
 )
@@ -445,6 +446,61 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(lifecycle.active_formal_revision)
         self.assertEqual(tuple(child_snapshot.next), ("technical_planning_review",))
+
+    async def test_ambiguous_formal_lifecycle_is_not_natively_recoverable(self) -> None:
+        """Coordinator 遇到 pending 与 active 并存时必须阻断并不创建 child。"""
+
+        scenario = await self._scenario(
+            pause_before="technical_planning_begin",
+            operation=ApplicationPlanningOperation.REVISE,
+            lifecycle_stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+            lifecycle_status=ApplicationLifecycleStatus.COMPLETED,
+            formal_revision=True,
+        )
+        lifecycle = load_application_lifecycle(scenario.workspace)
+        self.assertIsNotNone(lifecycle)
+        assert lifecycle is not None and lifecycle.pending_revision_impact is not None
+        pending = lifecycle.pending_revision_impact
+        conflicted = ActiveFormalRevision(
+            changeId="change-conflict",
+            formalBranch="workbench_plan_revision",
+            sourceThreadId=pending.source_thread_id,
+            sourceRunId=pending.source_run_id,
+            request=pending.request,
+            target=pending.target,
+            impactInteractionId=pending.interaction_id,
+            planningThreadId=scenario.source.thread_id,
+            status="drafting",
+        )
+        write_application_lifecycle(
+            scenario.workspace,
+            lifecycle.model_copy(update={"active_formal_revision": conflicted}),
+            expected_revision=lifecycle.revision,
+        )
+
+        plan = await prepare_continue(
+            workspace=str(scenario.workspace),
+            source_run_id=scenario.source.run_id,
+            graph=scenario.runtime_graph,
+            replay_policies=production_recovery_replay_policies(),
+        )
+        self.assertEqual(plan.decision, RecoveryDecision.STATE_DRIFT)
+        self.assertEqual(plan.reason_code, "LIFECYCLE_DRIFT")
+
+        with patch(
+            "app.services.execution_recovery_executor.claim_native_recovery_attempt",
+            new=AsyncMock(),
+        ) as claim:
+            with self.assertRaises(RecoveryExecutionError) as raised:
+                await prepare_native_recovery(
+                    workspace=str(scenario.workspace),
+                    source_run_id=scenario.source.run_id,
+                    graph=scenario.runtime_graph,
+                    replay_policies=production_recovery_replay_policies(),
+                )
+
+        self.assertEqual(raised.exception.code, "LIFECYCLE_DRIFT")
+        claim.assert_not_awaited()
 
     async def test_initial_input_committed_uses_pre_ownership_claim(self) -> None:
         """首次进入 TechnicalPlan 的 INPUT_COMMITTED 也必须完整经过 pre-ownership。"""

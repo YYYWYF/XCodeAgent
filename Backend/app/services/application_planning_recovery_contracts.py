@@ -444,19 +444,24 @@ class TechnicalPlanningRecoveryContract:
             return False
         request = _technical_request_from_values(values)
         pending = lifecycle.pending_revision_impact
+        active = lifecycle.active_formal_revision
+        # Formal Revision 的生命周期 authority 必须唯一，pending 与 active 同时存在即为歧义状态。
+        if pending is not None and active is not None:
+            return False
         if pending is not None:
             return (
-                pending.change_id == change_id
+                active is None
+                and pending.change_id == change_id
                 and pending.interaction_id == str(boundary.gate_id or "")
                 and pending.request == request
                 and pending.impact.formal_branch is FormalRevisionBranch.WORKBENCH_PLAN_REVISION
                 and pending.target == target
             )
-        active = lifecycle.active_formal_revision
         if active is None:
             return False
         return (
-            active.change_id == change_id
+            pending is None
+            and active.change_id == change_id
             and active.impact_interaction_id == str(boundary.gate_id or "")
             and active.request == request
             and active.formal_branch is FormalRevisionBranch.WORKBENCH_PLAN_REVISION

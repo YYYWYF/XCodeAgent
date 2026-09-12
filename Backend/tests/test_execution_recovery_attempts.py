@@ -216,6 +216,105 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(taken.owner_backend_instance_id, "backend-b")
         self.assertEqual(taken.owner_pid, 202)
 
+    async def test_application_planning_missing_lifecycle_fails_before_fork(self) -> None:
+        """Application Planning finalization 缺少 lifecycle 时不得创建 fork checkpoint。"""
+
+        now = datetime.now(timezone.utc)
+        source = DurableExecutionRecord(
+            run_id="planning-source",
+            thread_id="planning-thread",
+            owner_session_id="session-owner",
+            workspace=str(self.workspace),
+            project_id="app-1",
+            execution_kind="application_planning",
+            workflow_scope="application_planning",
+            first_node="technical_planning_begin",
+            current_node="technical_planning_begin",
+            status=DurableExecutionStatus.INTERRUPTED,
+            started_at=now,
+            updated_at=now,
+            ended_at=now,
+        )
+        await insert_execution(source)
+        point = RecoveryPoint(
+            recovery_point_id="planning-source-point",
+            run_id=source.run_id,
+            thread_id=source.thread_id,
+            kind=RecoveryPointKind.CHECKPOINT,
+            checkpoint_id="planning-source-checkpoint",
+            checkpoint_ns="",
+            graph_node="technical_planning_begin",
+            next_nodes=["technical_planning_begin"],
+            captured_at=now,
+        )
+        await insert_recovery_point(workspace=self.workspace, point=point)
+        plan = RecoveryPlan(
+            source_run_id=source.run_id,
+            thread_id=source.thread_id,
+            decision="ready_native",
+            strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+            recovery_point_id=point.recovery_point_id,
+            checkpoint_id=point.checkpoint_id,
+            checkpoint_ns="",
+            next_nodes=list(point.next_nodes),
+            reason_code="TEST",
+            reason="test",
+            lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+        )
+        child, _lease, _attempt = await claim_native_recovery_attempt(
+            source=source,
+            plan=plan,
+            new_run_id="planning-child",
+            owner_backend_instance_id="backend-old",
+            owner_pid=101,
+            lease_ttl_seconds=30,
+        )
+        await update_recovery_attempt(
+            workspace=self.workspace,
+            new_run_id=child.run_id,
+            status=RecoveryAttemptStatus.HANDED_OFF,
+        )
+        graph = SimpleNamespace(
+            aget_state=AsyncMock(
+                return_value=SimpleNamespace(
+                    config={
+                        "configurable": {
+                            "thread_id": source.thread_id,
+                            "checkpoint_ns": "",
+                            "checkpoint_id": point.checkpoint_id,
+                        }
+                    },
+                    next=tuple(point.next_nodes),
+                    tasks=(),
+                )
+            )
+        )
+        settings = SimpleNamespace(execution_recovery_lease_ttl_seconds=30)
+        with (
+            patch(
+                "app.services.execution_recovery_executor.current_backend_instance",
+                return_value=SimpleNamespace(instance_id="backend-new", pid=202),
+            ),
+            patch("app.services.execution_recovery_executor.Settings.from_env", return_value=settings),
+            patch(
+                "app.services.execution_recovery_executor._start_recovery_heartbeat",
+                return_value=None,
+            ),
+            patch(
+                "app.services.execution_recovery_executor._fork_and_start",
+                new=AsyncMock(),
+            ) as fork,
+        ):
+            with self.assertRaises(RecoveryExecutionError) as raised:
+                await finalize_handed_off_recovery_attempt(
+                    workspace=str(self.workspace),
+                    new_run_id=child.run_id,
+                    graph=graph,
+                )
+
+        self.assertEqual(raised.exception.code, "RECOVERY_STATE_DRIFT")
+        fork.assert_not_awaited()
+
     async def test_finalization_heartbeat_prevents_takeover_during_slow_revalidation(self) -> None:
         """慢速 revalidation 超过原 lease TTL 时，存活 owner 仍拒绝第二次 finalization。"""
 

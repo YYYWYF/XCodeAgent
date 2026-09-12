@@ -18,6 +18,7 @@ from app.domain.application_planning_recovery import (
     application_planning_sha256,
 )
 from app.domain.application_revision import (
+    ActiveFormalRevision,
     PendingRevisionImpact,
     RevisionImpact,
     RevisionTarget,
@@ -137,6 +138,65 @@ def _snapshot_and_point(
 class TechnicalPlanningRecoveryContractTests(unittest.TestCase):
     """覆盖 REVIEW_READY 以及 checkpoint 身份漂移的 fail-closed 规则。"""
 
+    def _formal_snapshot(self) -> tuple[SimpleNamespace, RecoveryPoint, DurableExecutionRecord, object]:
+        """构造 Formal Revision INPUT_COMMITTED 的共同测试现场。"""
+
+        snapshot, point, source, lifecycle = _snapshot_and_point(
+            boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
+            next_nodes=["technical_planning_begin"],
+        )
+        target = RevisionTarget(type="application")
+        snapshot.values.update(
+            {
+                "change_id": "change-1",
+                "change_target": target.model_dump(mode="python"),
+            }
+        )
+        pending = PendingRevisionImpact(
+            changeId="change-1",
+            interactionId="impact-1",
+            sourceThreadId="conversation-thread",
+            sourceRunId="conversation-run",
+            request="增加分页参数",
+            target=target,
+            impact=RevisionImpact(
+                formalBranch="workbench_plan_revision",
+                revisionType=RevisionType.TECHNICAL_CONTRACT_CHANGE,
+                earliestArtifact="technical-plan",
+                affectedArtifacts=["technical-plan"],
+                affectedResources=["application"],
+                reason="技术契约变化",
+            ),
+            basedOnLifecycleRevision=lifecycle.revision,
+        )
+        lifecycle = lifecycle.model_copy(
+            update={
+                "active_run_id": "previous-run",
+                "pending_revision_impact": pending,
+                "initialization": ApplicationInitialization(
+                    stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    status=ApplicationLifecycleStatus.COMPLETED,
+                    threadId=source.thread_id,
+                ),
+            }
+        )
+        return snapshot, point, source, lifecycle
+
+    def _active_revision(self, *, source: DurableExecutionRecord, change_id: str) -> ActiveFormalRevision:
+        """构造与 Formal Revision boundary 对齐的 active predecessor。"""
+
+        return ActiveFormalRevision(
+            changeId=change_id,
+            formalBranch="workbench_plan_revision",
+            sourceThreadId="conversation-thread",
+            sourceRunId="conversation-run",
+            request="增加分页参数",
+            target={"type": "application"},
+            impactInteractionId="impact-1",
+            planningThreadId=source.thread_id,
+            status="drafting",
+        )
+
     def test_formal_input_committed_accepts_pre_ownership_window(self) -> None:
         """Formal Revision 的 input boundary 可在 lifecycle ownership 前安全恢复。"""
 
@@ -193,6 +253,86 @@ class TechnicalPlanningRecoveryContractTests(unittest.TestCase):
         self.assertEqual(
             assessment.ownership_mode,
             RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+        )
+
+    def test_formal_revision_rejects_pending_and_conflicting_active(self) -> None:
+        """pending 与另一笔 active 同时存在时必须拒绝 Formal Revision admission。"""
+
+        snapshot, point, source, lifecycle = self._formal_snapshot()
+        lifecycle = lifecycle.model_copy(
+            update={
+                "active_formal_revision": self._active_revision(
+                    source=source,
+                    change_id="change-other",
+                )
+            }
+        )
+
+        assessment = TechnicalPlanningRecoveryContract().assess_lifecycle(
+            source=source,
+            point=point,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+        )
+
+        self.assertFalse(assessment.compatible)
+
+    def test_formal_revision_rejects_pending_and_matching_active(self) -> None:
+        """即使 pending 与 active 指向同一 change，也必须因状态歧义而拒绝。"""
+
+        snapshot, point, source, lifecycle = self._formal_snapshot()
+        lifecycle = lifecycle.model_copy(
+            update={
+                "active_formal_revision": self._active_revision(
+                    source=source,
+                    change_id="change-1",
+                )
+            }
+        )
+
+        assessment = TechnicalPlanningRecoveryContract().assess_lifecycle(
+            source=source,
+            point=point,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+        )
+
+        self.assertFalse(assessment.compatible)
+
+    def test_formal_revision_active_only_remains_source_owned(self) -> None:
+        """active-only 的 generation crash window 仍然允许 source-owned recovery。"""
+
+        snapshot, point, source, lifecycle = _snapshot_and_point(
+            boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
+            next_nodes=["technical_planning_begin"],
+        )
+        snapshot.values.update(
+            {
+                "change_id": "change-1",
+                "change_target": {"type": "application"},
+            }
+        )
+        lifecycle = lifecycle.model_copy(
+            update={
+                "pending_revision_impact": None,
+                "active_formal_revision": self._active_revision(
+                    source=source,
+                    change_id="change-1",
+                ),
+            }
+        )
+
+        assessment = TechnicalPlanningRecoveryContract().assess_lifecycle(
+            source=source,
+            point=point,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+        )
+
+        self.assertTrue(assessment.compatible)
+        self.assertEqual(
+            assessment.ownership_mode,
+            RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
         )
 
     def test_initial_input_committed_accepts_pre_ownership_window(self) -> None:

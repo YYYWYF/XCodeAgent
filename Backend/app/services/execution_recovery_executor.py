@@ -524,11 +524,14 @@ def _validate_finalization_lifecycle(
     """验证 handoff 后 child 仍拥有正确的生命周期和资源锁。"""
 
     if lifecycle is None:
-        if source.execution_kind == "application_planning":
-            return
         raise RecoveryExecutionError(
             "RECOVERY_STATE_DRIFT",
-            "Workbench finalization 缺少 ApplicationLifecycle。",
+            (
+                "Application Planning Recovery finalization 缺少 ApplicationLifecycle，"
+                "无法证明 child ownership。"
+                if source.execution_kind == "application_planning"
+                else "Workbench finalization 缺少 ApplicationLifecycle。"
+            ),
         )
     if source.execution_kind == "application_planning":
         if (
