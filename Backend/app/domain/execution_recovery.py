@@ -64,7 +64,11 @@ class ExecutionFailureOrigin(StrEnum):
 
 
 class ExecutionFailureEvidence(ExecutionRecoveryModel):
-    """保存可供恢复安全判断使用的脱敏失败事实。"""
+    """保存可供恢复安全判断使用的结构化事实与安全诊断摘要。
+
+    diagnostic_message 是 Backend 脱敏、限长后允许向用户展示的失败摘要，
+    不是未经处理的原始异常或完整 provider response。
+    """
 
     origin: ExecutionFailureOrigin
     code: str = Field(min_length=1, max_length=256)
@@ -74,6 +78,7 @@ class ExecutionFailureEvidence(ExecutionRecoveryModel):
     model: str | None = Field(default=None, max_length=256)
     http_status: int | None = Field(default=None, ge=100, le=599)
     replay_compatible: bool = False
+    diagnostic_message: str | None = Field(default=None, max_length=2048)
 
 
 def execution_failure_sha256(
@@ -83,8 +88,19 @@ def execution_failure_sha256(
 
     if failure is None:
         return None
+    # 展示诊断不属于恢复安全身份，避免新增可选字段改变既有 lineage hash。
+    identity = {
+        "origin": failure.origin.value,
+        "code": failure.code,
+        "operation": failure.operation,
+        "dependency": failure.dependency,
+        "provider": failure.provider,
+        "model": failure.model,
+        "http_status": failure.http_status,
+        "replay_compatible": failure.replay_compatible,
+    }
     canonical = json.dumps(
-        failure.model_dump(mode="json"),
+        identity,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,

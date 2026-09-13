@@ -464,7 +464,7 @@ def _persist_node_error(
         active_run_id=state.get("active_run_id"),
         error=ApplicationLifecycleError(
             code="application_planning_failed",
-            message=str(exc)[:2048] or type(exc).__name__,
+            message=evidence.diagnostic_message or type(exc).__name__,
             recoverable=True,
             occurredAt=utc_now(),
             details={

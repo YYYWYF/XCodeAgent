@@ -33,6 +33,33 @@ const ready = applicationPlanningRecoveryProjection(
 assert.equal(ready?.classification, 'ready_to_continue')
 assert.equal(ready?.sourceRunId, 'run-A')
 assert.equal(ready?.inputCommitted, true)
+
+const diagnosticReady = applicationPlanningRecoveryProjection(
+  recoveryWorkflow({
+    schemaVersion: 'application-planning-recovery.v1',
+    classification: 'ready_to_continue',
+    sourceRunId: 'run-B',
+    threadId: 'planning-thread',
+    canContinue: true,
+    userActionRequired: false,
+    inputCommitted: true,
+    reasonCode: 'INPUT_COMMITTED_EXECUTION_INTERRUPTED',
+    message: '回答已保存，可以继续。',
+    failureDiagnostic: {
+      sourceRunId: 'run-B',
+      origin: 'model_call',
+      code: 'MODEL_CONNECTION_ERROR',
+      operation: 'technical_planning',
+      provider: 'openai-compatible',
+      model: 'mimo-v2.5-pro',
+      httpStatus: 503,
+      message: 'model unavailable'
+    }
+  })
+)
+assert.equal(diagnosticReady?.failureDiagnostic?.sourceRunId, 'run-B')
+assert.equal(diagnosticReady?.failureDiagnostic?.httpStatus, 503)
+assert.equal(diagnosticReady?.failureDiagnostic?.message, 'model unavailable')
 assert.equal(
   applicationPlanningRecoveryProjection(
     recoveryWorkflow({

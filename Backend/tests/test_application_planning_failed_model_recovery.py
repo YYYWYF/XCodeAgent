@@ -311,6 +311,7 @@ class ApplicationPlanningFailedModelRecoveryTests(unittest.IsolatedAsyncioTestCa
                 self.assertEqual(source.failure.http_status, 503)
                 self.assertTrue(source.failure.replay_compatible)
                 self.assertEqual(source.failure.operation, "requirements")
+                self.assertEqual(source.failure.diagnostic_message, "test model failure")
 
                 point = await _failure_point(
                     workspace,
@@ -419,6 +420,30 @@ class ApplicationPlanningFailedModelRecoveryTests(unittest.IsolatedAsyncioTestCa
                 self.assertIsNotNone(lineage_b.head)
                 assert lineage_b.head is not None
                 self.assertEqual(lineage_b.head.run_id, context_b.new_run_id)
+                projection = await resolve_application_planning_recovery(
+                    workspace=str(workspace),
+                    thread_id=thread_id,
+                    graph=graph,
+                    snapshot=snapshot_b,
+                    lifecycle=load_application_lifecycle(workspace),
+                    source=source_a,
+                    lineage_resolution=lineage_b,
+                )
+                self.assertEqual(projection.source_run_id, context_b.new_run_id)
+                self.assertIsNotNone(projection.failure_diagnostic)
+                assert projection.failure_diagnostic is not None
+                self.assertEqual(
+                    projection.failure_diagnostic["sourceRunId"],
+                    context_b.new_run_id,
+                )
+                self.assertEqual(
+                    projection.failure_diagnostic["model"],
+                    "unavailable-model-b",
+                )
+                self.assertEqual(
+                    projection.failure_diagnostic["message"],
+                    "test model failure",
+                )
                 model_config["name"] = "working-model"
                 context_c = await _prepare_and_run_child(
                     self,

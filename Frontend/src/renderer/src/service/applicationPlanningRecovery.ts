@@ -29,6 +29,18 @@ export type ApplicationPlanningAuthoritativeSnapshot = {
   recovery: ApplicationPlanningRecoveryProjection
 }
 
+export interface ApplicationPlanningFailureDiagnostic {
+  sourceRunId: string
+  origin: string
+  code: string
+  operation?: string | null
+  dependency?: string | null
+  provider?: string | null
+  model?: string | null
+  httpStatus?: number | null
+  message?: string | null
+}
+
 export type ApplicationPlanningRecoveryProjection = {
   schemaVersion: 'application-planning-recovery.v1'
   classification:
@@ -47,6 +59,7 @@ export type ApplicationPlanningRecoveryProjection = {
   inputCommitted: boolean
   reasonCode: string
   message: string
+  failureDiagnostic?: ApplicationPlanningFailureDiagnostic | null
 }
 
 const APPLICATION_PLANNING_RECOVERY_CLASSIFICATIONS = new Set([
@@ -59,6 +72,47 @@ const APPLICATION_PLANNING_RECOVERY_CLASSIFICATIONS = new Set([
   'conflict',
   'legacy_unverified'
 ])
+
+/** 从公开投影中读取可展示的可选文本，拒绝对象、数组和未定义字段。 */
+function optionalDiagnosticText(value: unknown): string | null | undefined {
+  if (value === null) return null
+  if (typeof value !== 'string') return undefined
+  const normalized = value.trim()
+  return normalized || null
+}
+
+/** 从公开投影中读取合法 HTTP 状态，避免 UI 信任任意数字。 */
+function optionalDiagnosticHttpStatus(value: unknown): number | null | undefined {
+  if (value === null) return null
+  return typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599
+    ? value
+    : undefined
+}
+
+/** 严格解析 Backend 提供的安全失败诊断，历史缺失字段保持兼容。 */
+function parseFailureDiagnostic(
+  value: unknown
+): ApplicationPlanningFailureDiagnostic | null | undefined {
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const candidate = value as Record<string, unknown>
+  const sourceRunId = String(candidate.sourceRunId || '').trim()
+  const origin = String(candidate.origin || '').trim()
+  const code = String(candidate.code || '').trim()
+  if (!sourceRunId || !origin || !code) return undefined
+  const httpStatus = optionalDiagnosticHttpStatus(candidate.httpStatus)
+  return {
+    sourceRunId,
+    origin,
+    code,
+    operation: optionalDiagnosticText(candidate.operation),
+    dependency: optionalDiagnosticText(candidate.dependency),
+    provider: optionalDiagnosticText(candidate.provider),
+    model: optionalDiagnosticText(candidate.model),
+    ...(httpStatus !== undefined ? { httpStatus } : {}),
+    message: optionalDiagnosticText(candidate.message)
+  }
+}
 
 /** 从 Workflow result/state 严格读取 Backend 给出的 Planning 恢复分类。 */
 export function applicationPlanningRecoveryProjection(
@@ -85,6 +139,7 @@ export function applicationPlanningRecoveryProjection(
       continue
     }
     const sourceRunId = String(value.sourceRunId || '').trim()
+    const failureDiagnostic = parseFailureDiagnostic(value.failureDiagnostic)
     return {
       schemaVersion: 'application-planning-recovery.v1',
       classification: classification as ApplicationPlanningRecoveryProjection['classification'],
@@ -94,7 +149,8 @@ export function applicationPlanningRecoveryProjection(
       userActionRequired: value.userActionRequired,
       inputCommitted: value.inputCommitted,
       reasonCode,
-      message
+      message,
+      ...(failureDiagnostic !== undefined ? { failureDiagnostic } : {})
     }
   }
   return undefined

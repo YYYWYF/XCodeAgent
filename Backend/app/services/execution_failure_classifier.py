@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.domain.execution_recovery import (
@@ -31,6 +32,27 @@ _NETWORK_ERROR_NAMES = frozenset(
         "ConnectionError",
     }
 )
+_AUTHORIZATION_SECRET_PATTERN = re.compile(
+    r"(?i)(\bauthorization\s*:\s*)bearer\s+[^\s,;&}\])]+"
+)
+_BEARER_SECRET_PATTERN = re.compile(r"(?i)\bbearer\s+[^\s,;&}\])]+")
+_KEY_VALUE_SECRET_PATTERN = re.compile(
+    r"(?i)(\b(?:api[_-]?key|access[_-]?token|token)\s*[=:]\s*)"
+    r"[^\s,;&}\])]+"
+)
+
+
+def sanitize_failure_diagnostic(exc: BaseException) -> str | None:
+    """提取允许展示的异常摘要并完成基础密钥脱敏与长度限制。"""
+
+    diagnostic = str(exc).strip()
+    if not diagnostic:
+        return None
+    diagnostic = _AUTHORIZATION_SECRET_PATTERN.sub(r"\1[REDACTED]", diagnostic)
+    diagnostic = _BEARER_SECRET_PATTERN.sub("[REDACTED]", diagnostic)
+    diagnostic = _KEY_VALUE_SECRET_PATTERN.sub(r"\1[REDACTED]", diagnostic)
+    diagnostic = diagnostic[:2048].strip()
+    return diagnostic or None
 
 
 def classify_execution_failure(
@@ -38,7 +60,7 @@ def classify_execution_failure(
     *,
     operation: str | None = None,
 ) -> ExecutionFailureEvidence:
-    """根据异常类型和受控操作上下文生成不含原始消息的失败证据。"""
+    """根据异常类型和受控操作上下文生成带安全诊断摘要的失败证据。"""
 
     normalized_operation = str(operation or "").strip() or None
     status = _http_status(exc)
@@ -64,6 +86,7 @@ def classify_execution_failure(
             model=_model_from_exception(exc),
             http_status=status,
             replay_compatible=True,
+            diagnostic_message=sanitize_failure_diagnostic(exc),
         )
     if is_network_exception:
         return ExecutionFailureEvidence(
@@ -73,6 +96,7 @@ def classify_execution_failure(
             dependency="external",
             http_status=status,
             replay_compatible=True,
+            diagnostic_message=sanitize_failure_diagnostic(exc),
         )
     if isinstance(exc, (ValueError, TypeError, KeyError)):
         origin = ExecutionFailureOrigin.BUSINESS
@@ -84,6 +108,7 @@ def classify_execution_failure(
         operation=normalized_operation,
         http_status=status,
         replay_compatible=False,
+        diagnostic_message=sanitize_failure_diagnostic(exc),
     )
 
 
@@ -128,4 +153,4 @@ def _model_from_exception(exc: BaseException) -> str | None:
     return model.strip()[:256] if isinstance(model, str) and model.strip() else None
 
 
-__all__ = ["classify_execution_failure"]
+__all__ = ["classify_execution_failure", "sanitize_failure_diagnostic"]

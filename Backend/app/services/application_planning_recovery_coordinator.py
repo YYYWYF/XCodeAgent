@@ -54,6 +54,7 @@ class ApplicationPlanningRecoveryProjection:
     input_committed: bool
     reason_code: str
     message: str
+    failure_diagnostic: dict[str, Any] | None = None
 
     def to_payload(self) -> dict[str, Any]:
         """把内部字段转换为不泄漏 checkpoint authority 的公开 camelCase 结构。"""
@@ -68,6 +69,7 @@ class ApplicationPlanningRecoveryProjection:
             "inputCommitted": self.input_committed,
             "reasonCode": self.reason_code,
             "message": self.message,
+            "failureDiagnostic": self.failure_diagnostic,
         }
 
 
@@ -394,7 +396,29 @@ def _projection(
         input_committed=input_committed,
         reason_code=reason_code,
         message=message,
+        failure_diagnostic=_failure_diagnostic(source),
     )
+
+
+def _failure_diagnostic(
+    source: DurableExecutionRecord | None,
+) -> dict[str, Any] | None:
+    """从已经解析出的 canonical head 转换安全失败诊断公开结构。"""
+
+    if source is None or source.failure is None:
+        return None
+    failure = source.failure
+    return {
+        "sourceRunId": source.run_id,
+        "origin": failure.origin.value,
+        "code": failure.code,
+        "operation": failure.operation,
+        "dependency": failure.dependency,
+        "provider": failure.provider,
+        "model": failure.model,
+        "httpStatus": failure.http_status,
+        "message": failure.diagnostic_message,
+    }
 
 
 __all__ = [

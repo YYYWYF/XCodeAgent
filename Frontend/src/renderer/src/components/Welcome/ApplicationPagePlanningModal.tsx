@@ -187,6 +187,8 @@ export default function ApplicationPagePlanningModal({
           {error ? (
             <AgentErrorCard
               error={error}
+              recovery={Boolean(planning.recovery && !planning.syncError)}
+              failureDiagnostic={planning.recovery?.failureDiagnostic}
               onRetry={
                 planning.syncError ||
                 recoveryCanContinue ||

@@ -85,6 +85,7 @@ from app.services.execution_recovery import (
     observe_execution_started,
     observe_node_started,
 )
+from app.services.execution_failure_classifier import sanitize_failure_diagnostic
 from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext
 from app.services.execution_lease_heartbeat import (
     maintain_execution_heartbeat,
@@ -2153,6 +2154,8 @@ def build_workflow_ag_ui_stream(
 
             if pending_recovery_node is not None:
                 await capture_pending_recovery_point(pending_recovery_node)
+            # AG-UI 失败帧可能先于权威对账到达，先脱敏再向任何 UI 文本/事件暴露。
+            safe_error_message = sanitize_failure_diagnostic(exc) or type(exc).__name__
             failure_point = None
             failure_boundary = None
             gate_blocked = isinstance(exc, DevelopmentArtifactsIncompleteError)
@@ -2197,7 +2200,7 @@ def build_workflow_ag_ui_stream(
             result = {
                 "status": "requires_user_input" if gate_blocked else "failed",
                 "phase": "test_phase_confirmation" if gate_blocked else "failed",
-                "error": str(exc),
+                "error": safe_error_message,
                 **({"lifecycle": lifecycle_payload} if lifecycle_payload else {}),
                 **({"error_code": error_code} if error_code else {}),
                 **({"test_entry_gate": exc.gate.model_dump(mode="json", by_alias=True)} if gate_blocked else {}),
@@ -2206,14 +2209,18 @@ def build_workflow_ag_ui_stream(
                     "test_target": blocked_target,
                     "clarification": {
                         "mode": "test_phase_confirmation", "status": "requires_user_input",
-                        "message": str(exc), "testTarget": blocked_target,
+                        "message": safe_error_message, "testTarget": blocked_target,
                         "testEntryGate": exc.gate.model_dump(mode="json", by_alias=True),
                         "questions": [],
                     },
                 } if gate_blocked else {}),
             }
             summary = _workflow_summary(result, events)
-            summary["message"] = str(exc) if gate_blocked else f"Workflow failed：{type(exc).__name__}: {exc}"
+            summary["message"] = (
+                safe_error_message
+                if gate_blocked
+                else f"Workflow failed：{type(exc).__name__}: {safe_error_message}"
+            )
             if error_code:
                 summary["errorCode"] = error_code
             if durable_execution_started and active_graph is not None and config is not None:
@@ -2282,7 +2289,7 @@ def build_workflow_ag_ui_stream(
                 data={
                     "error": {
                         "type": type(exc).__name__,
-                        "message": str(exc),
+                        "message": safe_error_message,
                         **({"code": error_code} if error_code else {}),
                         **({"testEntryGate": exc.gate.model_dump(mode="json", by_alias=True)} if gate_blocked else {}),
                     }
@@ -2305,7 +2312,9 @@ def build_workflow_ag_ui_stream(
             ):
                 yield frame
             if gate_blocked:
-                yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=str(exc)))
+                yield encoder.encode(
+                    TextMessageContentEvent(messageId=message_id, delta=safe_error_message)
+                )
             yield encoder.encode(TextMessageEndEvent(messageId=message_id))
             if gate_blocked:
                 yield encoder.encode(RunFinishedEvent(

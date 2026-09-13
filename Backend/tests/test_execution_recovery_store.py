@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -9,6 +10,8 @@ from pathlib import Path
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    ExecutionFailureEvidence,
+    ExecutionFailureOrigin,
     RecoveryAttemptStatus,
     RecoveryLifecycleOwnershipMode,
     RecoveryPoint,
@@ -162,6 +165,73 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.current_node, record.current_node)
         self.assertEqual(loaded.status, DurableExecutionStatus.RUNNING)
         self.assertEqual(loaded.owner_session_id, "session-owner")
+
+    async def test_insert_and_reload_execution_preserves_failure_diagnostic(self) -> None:
+        """failure_json 应在关闭连接后完整 round-trip 安全诊断摘要。"""
+
+        now = datetime.now(timezone.utc)
+        record = self._record().model_copy(
+            update={
+                "status": DurableExecutionStatus.FAILED,
+                "ended_at": now,
+                "failure": ExecutionFailureEvidence(
+                    origin=ExecutionFailureOrigin.MODEL_CALL,
+                    code="MODEL_CONNECTION_ERROR",
+                    operation="technical_planning",
+                    model="mimo-v2.5-pro",
+                    http_status=503,
+                    replay_compatible=True,
+                    diagnostic_message="model unavailable",
+                ),
+            }
+        )
+
+        await insert_execution(record)
+        loaded = await get_execution(self.workspace, record.run_id)
+
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertIsNotNone(loaded.failure)
+        assert loaded.failure is not None
+        self.assertEqual(loaded.failure.diagnostic_message, "model unavailable")
+
+    async def test_old_failure_json_without_diagnostic_loads_as_none(self) -> None:
+        """旧 failure_json 缺少新字段时应按当前模型默认值加载。"""
+
+        record = self._record().model_copy(
+            update={
+                "status": DurableExecutionStatus.FAILED,
+                "ended_at": datetime.now(timezone.utc),
+                "failure": ExecutionFailureEvidence(
+                    origin=ExecutionFailureOrigin.MODEL_CALL,
+                    code="MODEL_CONNECTION_ERROR",
+                    operation="technical_planning",
+                    http_status=503,
+                    replay_compatible=True,
+                ),
+            }
+        )
+        await insert_execution(record)
+        legacy_failure = record.failure.model_dump(mode="json") if record.failure else {}
+        legacy_failure.pop("diagnostic_message", None)
+        database_path = execution_recovery_db_path(self.workspace)
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.execute(
+                "UPDATE execution_records SET failure_json = ? WHERE run_id = ?",
+                (json.dumps(legacy_failure), record.run_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        loaded = await get_execution(self.workspace, record.run_id)
+
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertIsNotNone(loaded.failure)
+        assert loaded.failure is not None
+        self.assertIsNone(loaded.failure.diagnostic_message)
 
     async def test_node_and_status_updates_preserve_end_time_contract(self) -> None:
         """节点更新只改 currentNode，明确终态更新才写 endedAt。"""

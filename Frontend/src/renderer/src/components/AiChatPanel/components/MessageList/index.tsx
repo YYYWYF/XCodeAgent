@@ -856,6 +856,8 @@ export default function MessageList({
                                 ? onRetryError
                                 : undefined
                             }
+                            recovery={Boolean(planningState?.recovery && !planningSyncError)}
+                            failureDiagnostic={planningState?.recovery?.failureDiagnostic}
                             retryLabel={
                               currentPlanningSyncError
                                 ? '重新同步状态'
@@ -1062,6 +1064,8 @@ export default function MessageList({
                 <AgentErrorCard
                   error={visibleError}
                   onRetry={planningRecoveryBlocksAction ? undefined : onRetryError}
+                  recovery={Boolean(planningState?.recovery && !planningSyncError)}
+                  failureDiagnostic={planningState?.recovery?.failureDiagnostic}
                   retryLabel={
                     planningSyncError
                       ? '重新同步状态'
