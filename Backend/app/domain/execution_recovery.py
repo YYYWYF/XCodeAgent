@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -163,10 +163,17 @@ class RecoveryAttemptAlreadyClaimedError(RuntimeError):
 class RecoveryExecutionError(RuntimeError):
     """表示 Native Recovery 在执行前被明确拒绝或准备失败。"""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         """保存协议层需要透出的稳定错误码与安全消息。"""
 
         self.code = code
+        self.details = dict(details or {})
         super().__init__(message)
 
 

@@ -22,10 +22,14 @@ from app.protocols.application_planning_run_lock import application_planning_run
 from app.protocols.application_lifecycle import application_lifecycle_input
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_summary, _workflow_visual_payload
-from app.persistence.execution_recovery import get_latest_execution_for_thread
 from app.services.application_planning_recovery_coordinator import (
     resolve_application_planning_recovery,
     sanitize_application_planning_recovery_result,
+)
+from app.services.execution_recovery_lineage import (
+    RecoveryLineageResolution,
+    RecoveryLineageState,
+    resolve_recovery_lineage_head,
 )
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.ui_design_manifest import present_ui_pages
@@ -279,17 +283,23 @@ def _build_application_planning_recovery_ag_ui_stream(
         async with lock:
             await reconcile_workspace_recovery(request.workspaceRoot)
             try:
-                source = await get_latest_execution_for_thread(
+                lineage_resolution = await resolve_recovery_lineage_head(
                     request.workspaceRoot,
                     thread_id=thread_id,
                     execution_kind="application_planning",
                 )
+                source = lineage_resolution.head
             except Exception as exc:
                 logger.warning(
-                    "application_planning.recovery.source_unavailable threadId=%s error=%s",
+                    "application_planning.recovery.lineage_unavailable threadId=%s error=%s",
                     thread_id,
                     exc,
                     exc_info=True,
+                )
+                lineage_resolution = RecoveryLineageResolution(
+                    head=None,
+                    state=RecoveryLineageState.AMBIGUOUS,
+                    reason_code="RECOVERY_LINEAGE_UNAVAILABLE",
                 )
                 source = None
             snapshot = await active_graph.aget_state(
@@ -309,6 +319,7 @@ def _build_application_planning_recovery_ag_ui_stream(
                 snapshot=snapshot,
                 lifecycle=lifecycle,
                 source=source,
+                lineage_resolution=lineage_resolution,
             )
             if projection.classification == "awaiting_user":
                 result = project_application_planning_interrupt(result, snapshot)

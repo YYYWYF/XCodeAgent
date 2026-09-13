@@ -48,6 +48,10 @@ from app.services.execution_recovery_coordinator import (
     validate_recovery_workspace_state,
 )
 from app.services.execution_recovery_source_admission import assess_recovery_source
+from app.services.execution_recovery_lineage import (
+    RecoveryLineageState,
+    resolve_recovery_lineage_head,
+)
 from app.services.execution_lease_heartbeat import (
     maintain_execution_heartbeat,
     stop_execution_heartbeat,
@@ -119,6 +123,27 @@ async def prepare_native_recovery(
         raise RecoveryExecutionError(
             "SOURCE_EXECUTION_NOT_FOUND",
             "source execution 不存在。",
+        )
+    lineage = await resolve_recovery_lineage_head(
+        workspace,
+        thread_id=source.thread_id,
+        execution_kind=source.execution_kind,
+    )
+    if lineage.state is RecoveryLineageState.AMBIGUOUS:
+        raise RecoveryExecutionError(
+            lineage.reason_code,
+            "Recovery lineage 存在多个无法安全解释的当前 head。",
+        )
+    if lineage.head is None:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_NOT_CURRENT",
+            "当前没有可用的 recovery source。",
+        )
+    if lineage.head.run_id != source.run_id:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_SUPERSEDED",
+            "当前 recovery source 已被新的 child execution 替代，请刷新后继续。",
+            details={"currentSourceRunId": lineage.head.run_id},
         )
     plan = await prepare_continue(
         workspace=workspace,

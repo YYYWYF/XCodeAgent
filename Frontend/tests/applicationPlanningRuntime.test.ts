@@ -671,9 +671,23 @@ async function waitForCondition<T>(
   assert.equal(saveCalls, 0)
 }
 
-// 补充：服务端明确 RUN_ERROR 保持业务失败，不额外触发 reconcile。
+// 补充：服务端明确 RUN_ERROR 收口后必须重新读取当前 recovery head。
 {
   const h = harness()
+  h.onRead(async () => ({
+    workflow: {
+      ...workflowWithoutInterrupt(),
+      summary: { status: 'failed', message: '上一次模型调用失败，可以继续。' }
+    },
+    lifecycle: authoritativeLifecycle(h.current()!, { status: 'failed' }),
+    recovery: recoveryProjection('thread-A', {
+      classification: 'ready_to_continue',
+      canContinue: true,
+      userActionRequired: false,
+      reasonCode: 'APPLICATION_PLANNING_MODEL_GENERATION_REPLAY_SAFE',
+      message: '上一次模型调用失败，可以继续。'
+    })
+  }))
   h.onSend(async () => {
     throw new AgUiRunError('technical planning failed', {
       workflow: {
@@ -683,8 +697,9 @@ async function waitForCondition<T>(
     })
   })
   await h.runtime.ensureStarted()
-  assert.equal(h.readCalls(), 0)
-  assert.equal(h.current()?.error, 'technical planning failed')
+  assert.equal(h.readCalls(), 1)
+  assert.equal(h.current()?.recovery?.classification, 'ready_to_continue')
+  assert.equal(h.current()?.error, '上一次模型调用失败，可以继续。')
   assert.equal(h.current()?.transportState, 'idle')
 }
 

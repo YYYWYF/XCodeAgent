@@ -31,6 +31,10 @@ from app.services.application_planning_recovery_contracts import (
 )
 from app.services.execution_recovery import capture_recovery_point
 from app.services.execution_recovery_coordinator import prepare_continue
+from app.services.execution_recovery_lineage import (
+    RecoveryLineageResolution,
+    RecoveryLineageState,
+)
 from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
@@ -75,6 +79,7 @@ async def resolve_application_planning_recovery(
     snapshot: Any,
     lifecycle: ApplicationLifecycle | None,
     source: DurableExecutionRecord | None,
+    lineage_resolution: RecoveryLineageResolution | None = None,
 ) -> ApplicationPlanningRecoveryProjection:
     """按 Native Interrupt、Durable、索引和策略顺序解析唯一恢复分类。"""
 
@@ -90,6 +95,28 @@ async def resolve_application_planning_recovery(
             reason_code="NATIVE_APPLICATION_PLANNING_INTERRUPT",
             message="当前应用规划正在等待你的确认。",
         )
+
+    if lineage_resolution is not None:
+        if lineage_resolution.state is RecoveryLineageState.AMBIGUOUS:
+            return _projection(
+                classification="blocked",
+                source=None,
+                thread_id=thread_id,
+                reason_code=lineage_resolution.reason_code,
+                message="当前规划状态无法安全自动恢复，请查看恢复状态。",
+            )
+        if lineage_resolution.state is RecoveryLineageState.NO_HEAD:
+            source = None
+        elif lineage_resolution.head is None:
+            return _projection(
+                classification="blocked",
+                source=None,
+                thread_id=thread_id,
+                reason_code="RECOVERY_LINEAGE_HEAD_MISSING",
+                message="当前规划状态无法安全自动恢复，请查看恢复状态。",
+            )
+        else:
+            source = lineage_resolution.head
 
     input_committed = _input_committed_for_source(source, snapshot)
     snapshot_values = getattr(snapshot, "values", {})

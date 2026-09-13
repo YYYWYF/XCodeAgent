@@ -47,6 +47,10 @@ from app.services.application_planning_recovery_coordinator import (
 )
 from app.services.execution_recovery_coordinator import prepare_continue
 from app.services.execution_recovery_executor import prepare_native_recovery
+from app.services.execution_recovery_lineage import (
+    RecoveryLineageState,
+    resolve_recovery_lineage_head,
+)
 from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
 )
@@ -406,18 +410,32 @@ class ApplicationPlanningFailedModelRecoveryTests(unittest.IsolatedAsyncioTestCa
                 self.assertEqual(source_b.failure.operation, "requirements")
 
                 snapshot_b = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+                lineage_b = await resolve_recovery_lineage_head(
+                    str(workspace),
+                    thread_id=thread_id,
+                    execution_kind="application_planning",
+                )
+                self.assertEqual(lineage_b.state, RecoveryLineageState.RECOVERABLE_HEAD)
+                self.assertIsNotNone(lineage_b.head)
+                assert lineage_b.head is not None
+                self.assertEqual(lineage_b.head.run_id, context_b.new_run_id)
                 model_config["name"] = "working-model"
                 context_c = await _prepare_and_run_child(
                     self,
                     workspace=workspace,
                     graph=graph,
-                    source=source_b,
+                    source=lineage_b.head,
                     snapshot=snapshot_b,
                 )
 
                 source_a_after = await get_execution(workspace, run_a)
                 source_b_after = await get_execution(workspace, context_b.new_run_id)
                 child_c = await get_execution(workspace, context_c.new_run_id)
+                lineage_c = await resolve_recovery_lineage_head(
+                    str(workspace),
+                    thread_id=thread_id,
+                    execution_kind="application_planning",
+                )
 
         self.assertEqual(
             called_models,
@@ -435,6 +453,10 @@ class ApplicationPlanningFailedModelRecoveryTests(unittest.IsolatedAsyncioTestCa
         self.assertIsNotNone(child_c)
         assert child_c is not None
         self.assertEqual(child_c.status, DurableExecutionStatus.COMPLETED)
+        self.assertEqual(lineage_c.state, RecoveryLineageState.COMPLETED)
+        self.assertIsNotNone(lineage_c.head)
+        assert lineage_c.head is not None
+        self.assertEqual(lineage_c.head.run_id, context_c.new_run_id)
 
     async def test_product_planning_failure_replays_only_product_planning(self) -> None:
         """ProductPlan 503 后 child 只能重放 product_planning，不能重跑 requirements。"""

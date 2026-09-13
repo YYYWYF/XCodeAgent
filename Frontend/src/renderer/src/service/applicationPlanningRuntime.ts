@@ -426,6 +426,8 @@ export class ApplicationPlanningRuntime {
         type: 'run_failed', applicationId: this.applicationId, threadId: this.threadId,
         error: reason.message || fallback, workflow
       })
+      // authoritative RUN_ERROR 已完成 durable 终态写入，释放 write transport 后重新读取当前 lineage head。
+      await this.reconcileCurrentState()
       return 'authoritative_failure'
     }
     // stopPrevious 或主 SSE 失败后旧 token 必须立即失效；后端共享 barrier 负责等待 writer。

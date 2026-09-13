@@ -29,8 +29,9 @@ from app.services.execution_recovery_executor import (
     prepare_native_recovery,
 )
 from app.services.execution_retry_dispatcher import prepare_retry_current_failure
-from app.services.execution_recovery_lineage import resolve_recovery_head
 from app.services.execution_recovery_lineage import reconcile_recovery_attempt
+from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
+from app.services.execution_recovery_lineage import RecoveryLineageState
 from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
 )
@@ -141,13 +142,10 @@ def build_execution_recovery_ag_ui_stream(
                 ):
                     yield frame
                 return
-            head_run_id = await resolve_recovery_head(workspace, source_run_id)
-            source = await get_execution(workspace, head_run_id)
-            if source is None:
-                raise RecoveryExecutionError(
-                    "SOURCE_EXECUTION_NOT_FOUND",
-                    "source execution 不存在。",
-                )
+            source = await _resolve_current_recovery_source(
+                workspace=workspace,
+                requested_source_run_id=source_run_id,
+            )
             fallback_thread_id = source.thread_id
             if _workspace_identity(source.workspace) != _workspace_identity(workspace):
                 raise RecoveryExecutionError(
@@ -165,7 +163,7 @@ def build_execution_recovery_ag_ui_stream(
             )
             context = await prepare_native_recovery(
                 workspace=workspace,
-                source_run_id=head_run_id,
+                source_run_id=source.run_id,
                 graph=graph,
                 replay_policies=(
                     replay_policies
@@ -200,6 +198,11 @@ def build_execution_recovery_ag_ui_stream(
                         "sourceRunId": source_run_id,
                         "errorCode": error_code,
                         "message": message,
+                        **(
+                            getattr(exc, "details", {})
+                            if isinstance(getattr(exc, "details", {}), dict)
+                            else {}
+                        ),
                     },
                 )
             )
@@ -212,6 +215,48 @@ def build_execution_recovery_ag_ui_stream(
             )
 
     return stream()
+
+
+async def _resolve_current_recovery_source(
+    *,
+    workspace: str,
+    requested_source_run_id: str,
+) -> Any:
+    """在创建 recovery child 前校验请求仍指向当前唯一 lineage head。"""
+
+    requested = await get_execution(workspace, requested_source_run_id)
+    if requested is None:
+        raise RecoveryExecutionError(
+            "SOURCE_EXECUTION_NOT_FOUND",
+            "source execution 不存在。",
+        )
+    if _workspace_identity(requested.workspace) != _workspace_identity(workspace):
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "workspaceRoot 与 source execution 的 workspace 不一致。",
+        )
+    resolution = await resolve_recovery_lineage_head(
+        workspace,
+        thread_id=requested.thread_id,
+        execution_kind=requested.execution_kind,
+    )
+    if resolution.state is RecoveryLineageState.AMBIGUOUS:
+        raise RecoveryExecutionError(
+            resolution.reason_code,
+            "Recovery lineage 存在多个无法安全解释的当前 head。",
+        )
+    if resolution.head is None:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_NOT_CURRENT",
+            "当前没有可用的 recovery source。",
+        )
+    if resolution.head.run_id != requested.run_id:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_SUPERSEDED",
+            "当前 recovery source 已被新的 child execution 替代，请刷新后继续。",
+            details={"currentSourceRunId": resolution.head.run_id},
+        )
+    return requested
 
 
 def _parse_request(payload: dict[str, Any]) -> tuple[str, str, str]:
@@ -263,9 +308,17 @@ async def _reconcile_prepared_lineage(
 ) -> NativeRecoveryRuntimeContext | None:
     """在解析 canonical head 前收敛同一 source 链上的 pre-runtime child。"""
 
-    for attempt in await list_recovery_attempts_from_source(workspace, source_run_id):
-        if attempt.status.value not in {"preparing", "handed_off", "finalizing"}:
-            continue
+    attempts = [
+        attempt
+        for attempt in await list_recovery_attempts_from_source(workspace, source_run_id)
+        if attempt.status.value in {"preparing", "handed_off", "finalizing"}
+    ]
+    if len(attempts) > 1:
+        raise RecoveryExecutionError(
+            "RECOVERY_LINEAGE_AMBIGUOUS",
+            "Recovery source 存在多个未收敛的 child execution。",
+        )
+    for attempt in attempts:
         child = await get_execution(workspace, attempt.new_run_id)
         if child is None:
             continue

@@ -1465,6 +1465,61 @@ async def get_latest_execution_for_thread(
         return _execution_from_row(row) if row is not None else None
 
 
+async def list_executions_for_thread(
+    workspace: str | Path,
+    *,
+    thread_id: str,
+    execution_kind: str | None = None,
+) -> list[DurableExecutionRecord]:
+    """读取 thread 下全部 Durable Execution，供业务层计算 lineage。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            SELECT run_id, thread_id, workspace, project_id, execution_kind,
+                   workflow_scope, first_node, current_node, status,
+                   last_recovery_point_id, started_at, updated_at, ended_at,
+                   owner_session_id, failure_json
+            FROM execution_records
+            WHERE thread_id = ?
+              AND (? IS NULL OR execution_kind = ?)
+            ORDER BY started_at ASC, updated_at ASC, run_id ASC
+            """,
+            (thread_id, execution_kind, execution_kind),
+        )
+        rows = await cursor.fetchall()
+    return [_execution_from_row(row) for row in rows]
+
+
+async def list_recovery_attempts_for_thread(
+    workspace: str | Path,
+    *,
+    thread_id: str,
+) -> list[RecoveryAttempt]:
+    """读取 thread 下全部 RecoveryAttempt，保留分支事实交由 resolver 判断。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            SELECT new_run_id, source_run_id, thread_id,
+                   source_recovery_point_id, source_checkpoint_id,
+                   source_checkpoint_ns, replay_checkpoint_id,
+                   replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
+                   status, created_at,
+                   handed_off_at, started_at, failed_at, failure_code,
+                   source_status, source_failure_sha256
+            FROM recovery_attempts
+            WHERE thread_id = ?
+            ORDER BY created_at ASC, new_run_id ASC
+            """,
+            (thread_id,),
+        )
+        rows = await cursor.fetchall()
+    return [_recovery_attempt_from_row(row) for row in rows]
+
+
 async def list_recovery_projection_candidates(
     workspace: str | Path,
     *,
