@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
@@ -13,8 +14,11 @@ from app.domain.application_lifecycle import (
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    RecoveryDecision,
     RecoveryPoint,
     RecoveryPointKind,
+    RecoveryPlan,
+    RecoveryStrategy,
 )
 from app.persistence.execution_recovery import insert_execution, list_recovery_points
 from app.services.application_lifecycle import (
@@ -178,6 +182,66 @@ class ApplicationPlanningRecoveryConsistencyTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(projection.classification, "conflict")
         self.assertFalse(projection.user_action_required)
         self.assertFalse(projection.can_continue)
+
+    async def test_needs_attention_action_plan_is_preserved_in_projection(self) -> None:
+        """Action Planner 已判定 needs_attention 时，Coordinator 不得丢失当前 ActionPlan。"""
+
+        source = await self._insert_source(DurableExecutionStatus.FAILED)
+        snapshot = self._snapshot()
+        recovery_plan = RecoveryPlan(
+            source_run_id=source.run_id,
+            thread_id=source.thread_id,
+            decision=RecoveryDecision.READY_NATIVE,
+            strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+            recovery_point_id="recovery-point",
+            checkpoint_id="checkpoint",
+            checkpoint_ns="recovery-stage-C",
+            next_nodes=["requirements"],
+            reason_code="READY_FOR_NATIVE_REPLAY",
+            reason="test",
+        )
+        facts = SimpleNamespace(
+            point=None,
+            snapshot=SimpleNamespace(values={}),
+            lifecycle=None,
+        )
+
+        with (
+            patch(
+                "app.services.application_planning_recovery_coordinator.ensure_application_planning_recovery_point",
+                new=AsyncMock(),
+            ),
+            patch(
+                "app.services.application_planning_recovery_coordinator.prepare_continue",
+                new=AsyncMock(return_value=recovery_plan),
+            ),
+            patch(
+                "app.services.application_planning_recovery_coordinator.build_recovery_facts",
+                new=AsyncMock(return_value=facts),
+            ),
+        ):
+            projection = await resolve_application_planning_recovery(
+                workspace=str(self.workspace),
+                thread_id=source.thread_id,
+                graph=_RecoveryGraph(snapshot),
+                snapshot=snapshot,
+                lifecycle=None,
+                source=source,
+            )
+
+        self.assertEqual(projection.classification, "blocked")
+        self.assertIsNotNone(projection.recovery_action_plan)
+        assert projection.recovery_action_plan is not None
+        self.assertEqual(projection.recovery_action_plan["status"], "needs_attention")
+        self.assertIsNone(projection.recovery_action_plan["primaryAction"])
+        self.assertEqual(
+            projection.recovery_action_plan["reasonCode"],
+            "NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED",
+        )
+        self.assertEqual(
+            projection.message,
+            projection.recovery_action_plan["message"],
+        )
 
     async def test_replay_policy_denies_every_other_planning_checkpoint(self) -> None:
         """节点、动作、身份或中断任一不匹配时都不能获得 Native Replay。"""

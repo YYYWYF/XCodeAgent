@@ -249,6 +249,8 @@ async def resolve_application_planning_recovery(
         snapshot=facts.snapshot,
         lifecycle=facts.lifecycle,
     )
+    # Action Planner 一旦返回结果，后续任何 projection 分支都必须复用同一份当前事实。
+    recovery_action_plan = action_plan.model_dump(mode="json", by_alias=True)
     native_capability = assess_native_recovery_capability(plan)
     if plan.decision is RecoveryDecision.READY_NATIVE and native_capability.executable:
         contract = resolve_application_planning_recovery_contract(
@@ -268,7 +270,7 @@ async def resolve_application_planning_recovery(
                 if contract is not None
                 else action_plan.message
             ),
-            recovery_action_plan=action_plan.model_dump(mode="json", by_alias=True),
+            recovery_action_plan=recovery_action_plan,
         )
     if action_plan.primary_action is not None:
         return _projection(
@@ -279,7 +281,7 @@ async def resolve_application_planning_recovery(
             input_committed=input_committed,
             reason_code=action_plan.reason_code,
             message=action_plan.message,
-            recovery_action_plan=action_plan.model_dump(mode="json", by_alias=True),
+            recovery_action_plan=recovery_action_plan,
         )
     if plan.decision is RecoveryDecision.AWAITING_USER:
         return _projection(
@@ -287,8 +289,9 @@ async def resolve_application_planning_recovery(
             source=source,
             thread_id=thread_id,
             input_committed=input_committed,
-            reason_code="UNTYPED_INTERRUPT_CONFLICT",
-            message="当前规划状态需要重新校准。",
+            reason_code=action_plan.reason_code,
+            message=action_plan.message,
+            recovery_action_plan=recovery_action_plan,
         )
     return _projection(
         classification="blocked",
@@ -296,7 +299,8 @@ async def resolve_application_planning_recovery(
         thread_id=thread_id,
         input_committed=input_committed,
         reason_code=action_plan.reason_code,
-        message="当前规划状态无法安全自动恢复，请查看恢复状态。",
+        message=action_plan.message,
+        recovery_action_plan=recovery_action_plan,
     )
 
 

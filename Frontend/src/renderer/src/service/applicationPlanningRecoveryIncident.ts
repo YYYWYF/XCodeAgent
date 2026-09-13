@@ -100,10 +100,10 @@ export function applicationPlanningRecoveryIncident(
   }
 
   const failureMessage = currentFailureMessage(state, actionPlan)
-  if (failureMessage && (state.transportState === 'reconciling' || !actionPlan)) {
+  if (failureMessage && state.transportState === 'reconciling') {
     return {
       kind: 'reconciling_failure',
-      title: '规划状态同步失败',
+      title: '正在确认规划状态',
       failureMessage
     }
   }

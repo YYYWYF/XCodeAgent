@@ -1,13 +1,128 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createElement } from 'react'
+import { createElement, Fragment } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ExecutionRecoveryCard from '../src/renderer/src/components/AiChatPanel/components/ExecutionRecoveryCard'
 import ApplicationPagePlanningModal from '../src/renderer/src/components/Welcome/ApplicationPagePlanningModal'
 import AgentErrorCard from '../src/renderer/src/components/AgentErrorCard'
 import ApplicationPlanningRecoveryIncidentCard from '../src/renderer/src/components/ApplicationPlanningRecoveryIncidentCard'
+import { applicationPlanningRecoveryProjection } from '../src/renderer/src/service/applicationPlanningRecovery'
 import type { ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
-import type { ExecutionRecoveryCandidate } from '../src/renderer/src/typings'
+import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
+
+/** 统计服务端文本在实际渲染结果中的出现次数。 */
+function countOccurrences(markup: string, text: string): number {
+  return markup.split(text).length - 1
+}
+
+/** 从 Backend-like Workflow 投影构造当前 Application Planning 状态。 */
+function planningStateFromRecovery(options: {
+  sourceRunId: string
+  model: string
+  diagnosticMessage: string
+  status?: 'recoverable' | 'needs_attention'
+}): ApplicationPlanningCurrentState {
+  const status = options.status || 'recoverable'
+  const workflow = {
+    runId: options.sourceRunId,
+    threadId: 'thread-A',
+    summary: { status: 'failed', message: options.diagnosticMessage },
+    events: [],
+    state: {},
+    result: {
+      applicationPlanningRecovery: {
+        schemaVersion: 'application-planning-recovery.v1',
+        classification: status === 'recoverable' ? 'ready_to_continue' : 'blocked',
+        sourceRunId: options.sourceRunId,
+        threadId: 'thread-A',
+        canContinue: status === 'recoverable',
+        userActionRequired: false,
+        inputCommitted: true,
+        reasonCode:
+          status === 'recoverable' ? 'RECOVERABLE' : 'NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED',
+        message:
+          status === 'recoverable'
+            ? '当前 checkpoint 可以安全恢复。'
+            : '当前现场没有可证明安全的自动恢复入口，需要人工处理。',
+        failureDiagnostic: {
+          sourceRunId: options.sourceRunId,
+          origin: 'model_call',
+          code: 'MODEL_NOT_FOUND',
+          operation: 'technical_planning',
+          provider: 'openai-compatible',
+          model: options.model,
+          httpStatus: 404,
+          message: options.diagnosticMessage
+        },
+        recoveryActionPlan: {
+          schemaVersion: 'recovery-action-plan.v1',
+          incidentId: `incident-${options.sourceRunId}`,
+          sourceRunId: options.sourceRunId,
+          threadId: 'thread-A',
+          executionKind: 'application_planning',
+          status,
+          reasonCode:
+            status === 'recoverable'
+              ? 'TECHNICAL_PLAN_STAGE_RESTART'
+              : 'NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED',
+          message:
+            status === 'recoverable'
+              ? '已验证正式规划输入，可以重新执行技术规划。'
+              : '当前现场没有可证明安全的自动恢复入口，需要人工处理。',
+          primaryAction:
+            status === 'recoverable'
+              ? {
+                  actionId: `action-${options.sourceRunId}`,
+                  kind: 'restart_stage',
+                  label: '重新执行技术规划',
+                  description: '从 Technical Planning 阶段重新执行。',
+                  requiresConfirmation: false
+                }
+              : null,
+          alternateActions: []
+        }
+      }
+    }
+  } as WorkflowRunPayload
+  const recovery = applicationPlanningRecoveryProjection(workflow)
+  if (!recovery) throw new Error('测试 Workflow 缺少有效的 Recovery Projection。')
+  return {
+    application: { id: 'app-A', appName: 'Demo App' },
+    threadId: 'thread-A',
+    transportState: 'idle',
+    error: options.diagnosticMessage,
+    lifecycle: {
+      application: { id: 'app-A', name: 'Demo App' },
+      revision: 1,
+      updatedAt: '2026-09-12T00:00:00.000Z',
+      initialization: { status: 'failed', stage: 'generating_technical_plan' },
+      activeExecutions: {},
+      extensions: {}
+    },
+    workflow,
+    recovery
+  } as ApplicationPlanningCurrentState
+}
+
+/** 组合历史错误卡与唯一当前 Recovery Incident，模拟聊天 caller 的输出边界。 */
+function renderPlanningRecoverySurface(
+  historyErrors: string[],
+  planning: ApplicationPlanningCurrentState
+): string {
+  return renderToStaticMarkup(
+    createElement(
+      Fragment,
+      null,
+      ...historyErrors.map((error, index) =>
+        createElement(AgentErrorCard, { error, key: `history-${index}` })
+      ),
+      createElement(ApplicationPlanningRecoveryIncidentCard, {
+        onAction: () => undefined,
+        planning
+      })
+    )
+  )
+}
 
 /** 构造恢复卡片所需的公开候选。 */
 function recovery(
@@ -202,6 +317,75 @@ test('needs_attention Incident shows reason without an action button', () => {
   )
   assert.match(markup, /RECOVERY_BLOCKED/)
   assert.doesNotMatch(markup, /<button/)
+})
+
+test('caller keeps historical errors unchanged and renders one current Incident', () => {
+  const historyErrors = ['404 model-A', '404 model-B']
+  const planning = planningStateFromRecovery({
+    sourceRunId: 'run-B',
+    model: 'model-B',
+    diagnosticMessage: 'Model-B not found'
+  })
+  const markup = renderPlanningRecoverySurface(historyErrors, planning)
+
+  assert.equal(countOccurrences(markup, '404 model-A'), 1)
+  assert.equal(countOccurrences(markup, '404 model-B'), 1)
+  assert.equal(
+    countOccurrences(markup, 'data-testid="application-planning-recovery-incident"'),
+    1
+  )
+  assert.equal(countOccurrences(markup, '重新执行技术规划'), 1)
+})
+
+test('caller updates only the current Incident when the canonical source moves from B to C', () => {
+  const historyErrors = ['404 model-A', '404 model-B']
+  const firstMarkup = renderPlanningRecoverySurface(
+    historyErrors,
+    planningStateFromRecovery({
+      sourceRunId: 'run-B',
+      model: 'model-B',
+      diagnosticMessage: 'Model-B not found'
+    })
+  )
+  const secondMarkup = renderPlanningRecoverySurface(
+    historyErrors,
+    planningStateFromRecovery({
+      sourceRunId: 'run-C',
+      model: 'model-C',
+      diagnosticMessage: 'Model-C unavailable'
+    })
+  )
+
+  assert.match(firstMarkup, /Model-B not found/)
+  assert.doesNotMatch(secondMarkup, /Model-B not found/)
+  assert.match(secondMarkup, /Model-C unavailable/)
+  assert.equal(countOccurrences(secondMarkup, '404 model-A'), 1)
+  assert.equal(countOccurrences(secondMarkup, '404 model-B'), 1)
+  assert.equal(
+    countOccurrences(secondMarkup, 'data-testid="application-planning-recovery-incident"'),
+    1
+  )
+})
+
+test('caller projects needs_attention as the only current Incident without an action', () => {
+  const markup = renderPlanningRecoverySurface(
+    ['404 model-A', '404 model-B'],
+    planningStateFromRecovery({
+      sourceRunId: 'run-B',
+      model: 'model-B',
+      diagnosticMessage: 'Model-B unavailable',
+      status: 'needs_attention'
+    })
+  )
+
+  assert.equal(
+    countOccurrences(markup, 'data-testid="application-planning-recovery-incident"'),
+    1
+  )
+  assert.match(markup, /NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED/)
+  assert.match(markup, /当前现场没有可证明安全的自动恢复入口，需要人工处理/)
+  assert.doesNotMatch(markup, /<button/)
+  assert.doesNotMatch(markup, /重新执行技术规划/)
 })
 
 test('awaiting_user leaves the business confirmation card as the only control surface', () => {
