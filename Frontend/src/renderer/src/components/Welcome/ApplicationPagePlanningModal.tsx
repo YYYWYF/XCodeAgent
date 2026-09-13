@@ -3,15 +3,14 @@ import { useRef } from 'react'
 import type { WorkflowClarificationAnswers, WorkflowRunPayload } from '../../typings'
 import type { RequirementSpecDraftSaveResult } from '../../service/applicationPagePlanning'
 import {
-  applicationPlanningDisplayStatus,
   planningTransportBusy,
   type ApplicationPlanningCurrentState
 } from '../../service/activeApplicationPlanning'
-import { workflowConfirmation } from '../../service/applicationPlanningRuntimeHelpers'
+import { applicationPlanningRecoveryIncident } from '../../service/applicationPlanningRecoveryIncident'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { cx } from '../../utils'
 import { formatError } from './utils'
-import AgentErrorCard from '../AgentErrorCard'
+import ApplicationPlanningRecoveryIncidentCard from '../ApplicationPlanningRecoveryIncidentCard'
 import ApplicationPlanningProgress from './ApplicationPlanningProgress'
 import ApplicationPlanningQuestionPanel from './ApplicationPlanningQuestionPanel'
 import UiDesignStreamingPreview from './UiDesignStreamingPreview'
@@ -77,16 +76,7 @@ export default function ApplicationPagePlanningModal({
   const enteredUiConfirmationRef = useRef(false)
   const workflow = planning.workflow
   const running = planningTransportBusy(planning)
-  const displayStatus = applicationPlanningDisplayStatus(planning)
-  const recoveryCanContinue = Boolean(
-    planning.recovery?.classification === 'ready_to_continue' &&
-      planning.recovery.canContinue &&
-      planning.recovery.sourceRunId
-  )
-  const error =
-    planning.syncError ||
-    planning.error ||
-    (displayStatus === 'error' ? '上次规划流程中断，请重试或检查当前规划内容。' : '')
+  const recoveryIncident = applicationPlanningRecoveryIncident(planning)
   const progressCopy = workflowProgressCopy(workflow)
   const awaitingUserInput = planningWorkflowRequiresUserInput(workflow)
   // 检测是否已进入 UI 确认阶段：一旦命中即锁定，避免 run 期间流式快照丢失导致回切进度页。
@@ -184,34 +174,11 @@ export default function ApplicationPagePlanningModal({
 
       <div className={cx('page-planning-screen-body')}>
         <div className={cx('page-planning-screen-content')}>
-          {error ? (
-            <AgentErrorCard
-              error={error}
-              recovery={Boolean(planning.recovery && !planning.syncError)}
-              failureDiagnostic={planning.recovery?.failureDiagnostic}
-              recoveryMessage={planning.recovery?.message}
-              onRetry={
-                planning.syncError ||
-                recoveryCanContinue ||
-                (!planning.recovery && !workflowConfirmation(workflow))
-                  ? onRetry
-                  : undefined
-              }
-              retryLabel={
-                planning.syncError
-                  ? '重新同步状态'
-                  : recoveryCanContinue
-                    ? '继续执行'
-                    : undefined
-              }
+          {recoveryIncident ? (
+            <ApplicationPlanningRecoveryIncidentCard
+              onAction={onRetry}
+              planning={planning}
               retrying={running}
-              title={
-                planning.syncError
-                  ? '规划状态尚未同步'
-                  : recoveryCanContinue
-                    ? '规划执行已中断'
-                    : undefined
-              }
             />
           ) : (
             <section className={cx('page-planning-review')}>

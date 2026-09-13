@@ -82,6 +82,7 @@ import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import ExecutionRecoveryCard from './components/ExecutionRecoveryCard'
+import ApplicationPlanningRecoveryIncidentCard from '../ApplicationPlanningRecoveryIncidentCard'
 import ApiDesignConfigModal from './components/WorkflowRunCard/ApiDesignConfigModal'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
 import {
@@ -4442,7 +4443,7 @@ export default function AiChatPanel({
                   />
                 ) : undefined
               }
-              error={planningError || error}
+              error={isApplicationPlanningPhase ? undefined : planningError || error}
               key={activeSession?.key || draftKey}
               loading={loading || otherSessionExecutionLocked}
               messages={messages}
@@ -4454,7 +4455,7 @@ export default function AiChatPanel({
               onOpenRevisionSession={handleOpenRevisionSession}
               onRevertCodeChanges={requestCodeChangeRevert}
               onRetryError={
-                planningError
+                !isApplicationPlanningPhase && planningError
                   ? onRetryPlanning
                   : workflowCodeReviewRetry(activeWorkflow)
                     ? () => void handleRetryCodeReview()
@@ -4477,6 +4478,13 @@ export default function AiChatPanel({
               templateGenerationOrphaned={templateGenerationOrphaned}
               planningState={planningState}
             />
+
+            {isApplicationPlanningPhase && planningState ? (
+              <ApplicationPlanningRecoveryIncidentCard
+                onAction={onRetryPlanning}
+                planning={planningState}
+              />
+            ) : null}
 
             {activeExecutionRecovery && !activeWorkflowHasBusinessInteraction && !acceptanceAwaiting ? (
               <ExecutionRecoveryCard

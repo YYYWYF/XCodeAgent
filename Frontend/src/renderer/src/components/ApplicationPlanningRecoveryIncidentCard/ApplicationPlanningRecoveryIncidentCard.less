@@ -1,0 +1,138 @@
+.@{class-prefix}-application-planning-recovery-incident {
+  display: flex;
+  width: min(calc(100% - 24px), 1080px);
+  min-width: 0;
+  box-sizing: border-box;
+  align-items: flex-start;
+  gap: 13px;
+  margin: 8px auto 18px;
+  padding: 15px 16px;
+  color: var(--wb-text, var(--modal-text, #202124));
+  background: color-mix(
+    in srgb,
+    var(--wb-danger, var(--modal-danger, #b42318)) 7%,
+    var(--wb-surface, var(--modal-surface, #ffffff))
+  );
+  border: 1px solid color-mix(
+    in srgb,
+    var(--wb-danger, var(--modal-danger, #b42318)) 38%,
+    var(--wb-border, var(--modal-border, rgba(0, 0, 0, 0.12)))
+  );
+  border-radius: 10px;
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--wb-danger, #b42318) 8%, transparent);
+}
+
+.@{class-prefix}-application-planning-recovery-incident-icon {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-danger, var(--modal-danger, #b42318));
+  font-size: 21px;
+}
+
+.@{class-prefix}-application-planning-recovery-incident-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.@{class-prefix}-application-planning-recovery-incident-title.ant-typography {
+  color: var(--wb-text, var(--modal-text, #202124));
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.@{class-prefix}-application-planning-recovery-incident-message.ant-typography,
+.@{class-prefix}-application-planning-recovery-incident-headline.ant-typography {
+  color: var(--wb-text, var(--modal-text, #202124));
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-application-planning-recovery-incident-message.ant-typography {
+  font-family: var(--ui-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.@{class-prefix}-application-planning-recovery-incident-headline.ant-typography {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.@{class-prefix}-application-planning-recovery-incident-recovery-message.ant-typography,
+.@{class-prefix}-application-planning-recovery-incident-reason.ant-typography {
+  color: var(--wb-text-secondary, var(--modal-text-secondary, #65666a));
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-application-planning-recovery-incident-reason.ant-typography {
+  font-family: var(--ui-font-mono);
+  font-size: 12px;
+}
+
+.@{class-prefix}-application-planning-recovery-incident-details {
+  color: var(--wb-text-secondary, var(--modal-text-secondary, #65666a));
+  font-size: 12px;
+  line-height: 1.55;
+
+  summary {
+    width: fit-content;
+    cursor: pointer;
+    color: var(--wb-text-secondary, var(--modal-text-secondary, #65666a));
+    user-select: none;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
+
+  dl {
+    display: grid;
+    grid-template-columns: minmax(110px, auto) minmax(0, 1fr);
+    gap: 4px 12px;
+    margin: 8px 0 0;
+    padding: 10px;
+    background: color-mix(
+      in srgb,
+      var(--wb-surface, var(--modal-surface, #ffffff)) 72%,
+      var(--wb-border, var(--modal-border, rgba(0, 0, 0, 0.12)));
+    border: 1px solid var(--wb-border, var(--modal-border, rgba(0, 0, 0, 0.12)));
+    border-radius: 7px;
+  }
+
+  dt {
+    color: var(--wb-text-secondary, var(--modal-text-secondary, #65666a));
+  }
+
+  dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--wb-text, var(--modal-text, #202124));
+    font-family: var(--ui-font-mono);
+    overflow-wrap: anywhere;
+  }
+}
+
+.@{class-prefix}-application-planning-recovery-incident-action.ant-btn {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  border-radius: 7px;
+}
+
+@media (max-width: 720px) {
+  .@{class-prefix}-application-planning-recovery-incident {
+    width: calc(100% - 24px);
+    flex-wrap: wrap;
+  }
+
+  .@{class-prefix}-application-planning-recovery-incident-action.ant-btn {
+    width: 100%;
+    margin-left: 43px;
+  }
+}

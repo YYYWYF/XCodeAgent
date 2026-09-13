@@ -8,7 +8,7 @@ import type {
 import {
   AgUiChatSession,
   AgUiRunError,
-  getExecutionRecoveryUrl,
+  getExecutionRecoveryActionUrl,
   type SendWorkflowMessageOptions
 } from './agUiAgent'
 import {
@@ -33,7 +33,7 @@ import {
   ApplicationPlanningCheckpointNotFoundError,
   readApplicationPlanningAuthoritativeSnapshot,
   type ApplicationPlanningAuthoritativeSnapshot,
-  type ApplicationPlanningRecoveryProjection
+  type ApplicationPlanningRecoveryActionPlan
 } from './applicationPlanningRecovery'
 import {
   buildPlanningInteraction, hasPlanningInterrupt,
@@ -195,15 +195,9 @@ export class ApplicationPlanningRuntime {
     if (outcome.status !== 'recovered') return
     const current = this.requireCurrentState()
     const recovery = current.recovery
-    if (!recovery || recovery.classification === 'awaiting_user') return
-    if (
-      recovery.classification !== 'ready_to_continue' ||
-      !recovery.canContinue ||
-      !recovery.sourceRunId
-    ) {
-      return
-    }
-    await this.continueInterruptedPlanning(recovery)
+    const plan = recovery?.recoveryActionPlan
+    if (!plan || plan.status !== 'recoverable' || !plan.primaryAction) return
+    await this.executeRecoveryAction(plan)
   }
 
   /** 正式设计修订直接使用原 Planning 会话发送用户请求。 */
@@ -376,9 +370,9 @@ export class ApplicationPlanningRuntime {
     return 'uncertain'
   }
 
-  /** 使用独立 `/execution-recovery/run` 会话继续同一 Planning thread，不重发用户答案。 */
-  private async continueInterruptedPlanning(
-    recovery: ApplicationPlanningRecoveryProjection
+  /** 使用 Backend 签发的 incident/action 身份执行当前 Planning Recovery，不重发用户答案。 */
+  private async executeRecoveryAction(
+    plan: ApplicationPlanningRecoveryActionPlan
   ): Promise<void> {
     let recoveryToken: number | undefined
     try {
@@ -386,17 +380,18 @@ export class ApplicationPlanningRuntime {
         async (token) => {
           const current = this.requireCurrentState()
           const session = this.dependencies.createRecoverySession
-            ? this.dependencies.createRecoverySession(recovery.threadId)
-            : new AgUiChatSession(recovery.threadId, getExecutionRecoveryUrl())
+            ? this.dependencies.createRecoverySession(plan.threadId)
+            : new AgUiChatSession(plan.threadId, getExecutionRecoveryActionUrl())
           const merged = await this.sendMessageWithinTransport(
             token,
-            '继续执行上一次中断的规划。',
+            plan.primaryAction?.label || '执行当前恢复操作。',
             {
               editorMode: 'frontend',
               workspaceRoot: current.application.workspaceRoot,
               executionRecovery: {
-                action: 'continue',
-                sourceRunId: recovery.sourceRunId!
+                action: 'execute',
+                incidentId: plan.incidentId,
+                actionId: plan.primaryAction!.actionId
               }
             },
             session

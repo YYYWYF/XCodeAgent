@@ -75,16 +75,40 @@ function recoveryProjection(
   threadId = 'thread-A',
   overrides: Partial<ApplicationPlanningRecoveryProjection> = {}
 ): ApplicationPlanningRecoveryProjection {
+  const classification = overrides.classification || 'awaiting_user'
+  const sourceRunId = overrides.sourceRunId || 'run-A'
+  const recoveryActionPlan =
+    classification === 'ready_to_continue'
+      ? {
+          schemaVersion: 'recovery-action-plan.v1' as const,
+          incidentId: 'incident-A',
+          sourceRunId,
+          threadId,
+          executionKind: 'application_planning' as const,
+          status: 'recoverable' as const,
+          reasonCode: 'RECOVERABLE_TEST',
+          message: '当前执行现场可以安全继续。',
+          primaryAction: {
+            actionId: 'action-A',
+            kind: 'continue_checkpoint' as const,
+            label: '继续执行',
+            description: '从测试 checkpoint 继续。',
+            requiresConfirmation: false
+          },
+          alternateActions: []
+        }
+      : null
   return {
     schemaVersion: 'application-planning-recovery.v1',
-    classification: 'awaiting_user',
-    sourceRunId: 'run-A',
+    classification,
+    sourceRunId,
     threadId,
     canContinue: false,
     userActionRequired: true,
     inputCommitted: false,
     reasonCode: 'NATIVE_APPLICATION_PLANNING_INTERRUPT',
     message: '当前应用规划正在等待你的确认。',
+    recoveryActionPlan,
     ...overrides
   }
 }
@@ -763,7 +787,7 @@ async function waitForCondition<T>(
 {
   const current = planningState()
   current.workflow = workflowWithoutInterrupt()
-  current.error = '规划执行中断'
+  current.error = '计划执行中断'
   let recoveryOptions: SendWorkflowMessageOptions | undefined
   let recoveryThreadId = ''
   const childWorkflow = {
@@ -795,7 +819,25 @@ async function waitForCondition<T>(
       userActionRequired: false,
       inputCommitted: true,
       reasonCode: 'INPUT_COMMITTED_EXECUTION_INTERRUPTED',
-      message: '回答已保存，可以继续。'
+      message: '回答已保存，可以继续。',
+      recoveryActionPlan: {
+        schemaVersion: 'recovery-action-plan.v1',
+        incidentId: 'incident-AA',
+        sourceRunId: 'run-A',
+        threadId: 'thread-A',
+        executionKind: 'application_planning',
+        status: 'recoverable',
+        reasonCode: 'INPUT_COMMITTED_EXECUTION_INTERRUPTED',
+        message: '回答已保存，可以继续。',
+        primaryAction: {
+          actionId: 'action-AA',
+          kind: 'restart_stage',
+          label: '重新执行技术规划',
+          description: '从正式技术规划阶段重新执行。',
+          requiresConfirmation: false
+        },
+        alternateActions: []
+      }
     })
   }))
 
@@ -803,8 +845,9 @@ async function waitForCondition<T>(
 
   assert.equal(recoveryThreadId, 'thread-A')
   assert.deepEqual(recoveryOptions?.executionRecovery, {
-    action: 'continue',
-    sourceRunId: 'run-A'
+    action: 'execute',
+    incidentId: 'incident-AA',
+    actionId: 'action-AA'
   })
   assert.equal(recoveryOptions?.applicationPlanningInteraction, undefined)
   assert.equal(recoveryOptions?.workflowDebug, undefined)

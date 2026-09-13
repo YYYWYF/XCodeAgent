@@ -84,8 +84,6 @@ import {
 } from './productConversationPresentation'
 import {
   planningMessageActionsDisabled,
-  planningMessageHostsSyncError,
-  planningSyncErrorHostMessageIndex,
   resolvePlanningMessageWorkflow
 } from './planningMessageWorkflow'
 import './MessageList.less'
@@ -359,24 +357,6 @@ export default function MessageList({
       ? planningReviewIdentity(planningWorkflow)
       : undefined
   const planningActionsBlocked = planningMutationBlocked(planningState)
-  const planningSyncError = planningState?.syncError?.trim() || ''
-  const planningRecoveryCanContinue = Boolean(
-    planningState?.recovery?.classification === 'ready_to_continue' &&
-      planningState.recovery.canContinue &&
-      planningState.recovery.sourceRunId
-  )
-  const planningRecoveryBlocksAction = Boolean(
-    planningState?.recovery && !planningRecoveryCanContinue && !planningSyncError
-  )
-  const syncErrorHostMessageIndex = planningSyncErrorHostMessageIndex(
-    activePlanningReviewIdentity,
-    planningReviewMessageIndexes,
-    currentPlanningMessageIndex
-  )
-  const planningMessageCanHostSyncError = planningMessageHostsSyncError(
-    planningSyncError,
-    syncErrorHostMessageIndex
-  )
   const { phase: currentPhase } = useWorkbenchPhase()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
@@ -387,10 +367,6 @@ export default function MessageList({
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const latestAssistantMessageId = findLastAssistantMessageId(messages)
   const visibleError = error?.trim() || ''
-  const canonicalPlanningStateError = planningState?.error?.trim() || ''
-  const canonicalPlanningError = planningSyncError || canonicalPlanningStateError
-  const canonicalPlanningFailure =
-    canonicalPlanningError || workflowFailureMessage(planningWorkflow)
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
   const latestAssistantMessage = findLastAssistantMessage(messages)
@@ -400,12 +376,11 @@ export default function MessageList({
     : ''
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
   const showStandaloneError = Boolean(
+    !designPhasePlanning &&
     !templateGenerationFailed &&
     !templateGenerationOrphaned &&
     visibleError &&
-    visibleError !== latestAssistantMessageError &&
-    !planningMessageCanHostSyncError &&
-    (currentPlanningMessageIndex < 0 || visibleError !== canonicalPlanningFailure)
+    visibleError !== latestAssistantMessageError
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
@@ -621,8 +596,6 @@ export default function MessageList({
                   planningWorkflow &&
                   (isCurrentPlanningReview || messageIndex === currentPlanningMessageIndex)
               )
-              const currentPlanningSyncError =
-                messageIndex === syncErrorHostMessageIndex ? planningSyncError : ''
               const planningCardWorkflow = resolvePlanningMessageWorkflow(
                 message.workflow,
                 planningWorkflow,
@@ -631,11 +604,8 @@ export default function MessageList({
               const currentPresentationWorkflow = isCurrentPlanningMessage
                 ? planningCardWorkflow
                 : message.workflow
-              const messageError = currentPlanningSyncError
-                ? currentPlanningSyncError
-                : isCurrentPlanningMessage
-                  ? canonicalPlanningStateError || workflowFailureMessage(planningCardWorkflow)
-                  : message.error || workflowFailureMessage(message.workflow)
+              // 历史消息只读取自身错误和自身 Workflow，绝不从当前 Planning State 注入错误。
+              const messageError = message.error?.trim() || workflowFailureMessage(message.workflow)
               const isCurrentErrorMessage = Boolean(
                 messageError &&
                   message.role === 'assistant' &&
@@ -852,26 +822,9 @@ export default function MessageList({
                           <AgentErrorCard
                             error={messageError}
                             onRetry={
-                              isCurrentErrorMessage && !planningRecoveryBlocksAction
+                              !designPhasePlanning && isCurrentErrorMessage
                                 ? onRetryError
                                 : undefined
-                            }
-                            recovery={Boolean(planningState?.recovery && !planningSyncError)}
-                            failureDiagnostic={planningState?.recovery?.failureDiagnostic}
-                            recoveryMessage={planningState?.recovery?.message}
-                            retryLabel={
-                              currentPlanningSyncError
-                                ? '重新同步状态'
-                                : planningRecoveryCanContinue
-                                  ? '继续执行'
-                                  : undefined
-                            }
-                            title={
-                              currentPlanningSyncError
-                                ? '规划状态尚未同步'
-                                : planningRecoveryCanContinue
-                                  ? '规划执行已中断'
-                                  : undefined
                             }
                           />
                         ) : null}
@@ -1064,26 +1017,7 @@ export default function MessageList({
                 <MessageAgentHeader agentKey={currentPhase} />
                 <AgentErrorCard
                   error={visibleError}
-                  onRetry={planningRecoveryBlocksAction ? undefined : onRetryError}
-                  recovery={Boolean(planningState?.recovery && !planningSyncError)}
-                  failureDiagnostic={planningState?.recovery?.failureDiagnostic}
-                  recoveryMessage={planningState?.recovery?.message}
-                  retryLabel={
-                    planningSyncError
-                      ? '重新同步状态'
-                      : planningRecoveryCanContinue
-                        ? '继续执行'
-                        : undefined
-                  }
-                  title={
-                    planningSyncError
-                      ? '规划状态尚未同步'
-                      : planningRecoveryCanContinue
-                        ? '规划执行已中断'
-                      : /确认卡|中断|过期|版本/.test(visibleError)
-                        ? '规划确认未完成'
-                        : undefined
-                  }
+                  onRetry={onRetryError}
                 />
               </div>
             </article>

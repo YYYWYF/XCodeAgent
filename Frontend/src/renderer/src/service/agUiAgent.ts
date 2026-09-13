@@ -55,6 +55,10 @@ export type SendWorkflowMessageOptions = {
   resumeState?: WorkflowRunPayload
   workflowScope?: string
   executionRecovery?: {
+    action: 'execute'
+    incidentId: string
+    actionId: string
+  } | {
     action: 'continue' | 'retry_current_failure'
     sourceRunId: string
   }
@@ -554,6 +558,11 @@ export function getConversationUrl(): string {
 /** 返回独立 Durable Recovery 使用的 AG-UI 地址，不改变普通 Workflow transport。 */
 export function getExecutionRecoveryUrl(): string {
   return `${getAgentBaseUrl()}/execution-recovery/run`
+}
+
+/** 返回 Planning Current Incident 使用的 Backend-authoritative action 地址。 */
+export function getExecutionRecoveryActionUrl(): string {
+  return `${getAgentBaseUrl()}/execution-recovery/execute`
 }
 
 export class AgUiChatSession {
