@@ -289,12 +289,12 @@ if authorization_enabled:
 
 依赖解析只存在于 Template Engine。
 
-TechnicalPlan 只用于一致性校验，例如：
+TechnicalPlan 只携带确认后的权限业务事实，不复制应用级能力开关；一致性校验由 application.json 与 TemplateState 分别完成，例如：
 
 ```text
 application.authorization.enabled
     ==
-technicalPlan.authorization_manifest.enabled
+templateState.effective_capabilities.authorization.enabled
 ```
 
 ---
