@@ -205,10 +205,11 @@ export async function fetchDutyList(params: DutyListQuery): Promise<DutyListResp
 }
 ```
 
-上例假设模板 `service.ts` 的响应拦截器直接返回响应数据。写代码前必须读取实际
-`service.ts`：如果其真实返回值是 `AxiosResponse<ResponseEntity<T>>`，只把
-`response.data` 传给共享解包函数；如果直接返回 `ResponseEntity<T>`，只传
-`response`。禁止编写同时兼容两种形态的分支，也不得修改 `service.ts`。
+模板 `service.ts` 的响应拦截器会直接返回 HTTP 响应数据，因此所有 HTTP 方法的
+业务 API 都必须把 `service.get/post/put/patch/delete` 返回值本身传给共享解包函数。
+例如 POST 接口调用 `unwrapResponseEntity(response)`；空响应调用
+`unwrapEmptyResponseEntity(response)`。所有 HTTP 方法保持相同的解包边界，不得修改
+`service.ts`。
 
 真实后端业务接口统一遵守以下传输边界：
 

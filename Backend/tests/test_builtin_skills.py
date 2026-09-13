@@ -282,7 +282,9 @@ class BuiltinSkillsTests(unittest.TestCase):
         self.assertIn("unwrapResponseEntity<T>()", content)
         self.assertIn("unwrapEmptyResponseEntity()", content)
         self.assertIn("SUC0000", content)
-        self.assertIn("response.data", content)
+        self.assertIn("POST 接口调用 `unwrapResponseEntity(response)`", content)
+        self.assertIn("`unwrapEmptyResponseEntity(response)`", content)
+        self.assertNotIn("response.data", content)
         self.assertIn("不得导入", content)
 
     def test_source_tree_skills_are_available_and_complete(self) -> None:

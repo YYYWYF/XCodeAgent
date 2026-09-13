@@ -131,8 +131,11 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
 
         self.assertIn("ResponseEntity transport boundary", prompt)
         self.assertIn("`response_schema_ref` describes `T`", prompt)
-        self.assertIn("Read the actual `src/apis/service.ts`", prompt)
-        self.assertIn("pass `response.data` when it returns AxiosResponse", prompt)
+        self.assertIn("response interceptor", prompt)
+        self.assertIn("a POST implementation must call", prompt)
+        self.assertIn("`unwrapResponseEntity(response)`", prompt)
+        self.assertIn("`unwrapEmptyResponseEntity(response)`", prompt)
+        self.assertNotIn("response.data", prompt)
         self.assertIn("`src/apis/responseEntity.ts`", prompt)
         self.assertIn("`unwrapResponseEntity<T>()`", prompt)
         self.assertIn("`unwrapEmptyResponseEntity()`", prompt)
