@@ -31,7 +31,11 @@ export default function ExecutionRecoveryCard({
       ? '工作区或流程状态已经发生变化，无法直接从旧现场继续。'
       : '当前步骤暂不能自动继续。'
   return (
-    <section aria-live="polite" className={cx('execution-recovery-card')}>
+    <section
+      aria-live="polite"
+      className={cx('execution-recovery-card')}
+      data-testid="execution-recovery-card"
+    >
       <span aria-hidden="true" className={cx('execution-recovery-card-icon')}>
         {loading ? <LoadingOutlined spin /> : <WarningOutlined />}
       </span>

@@ -100,3 +100,20 @@ export function executionRecoveryForSession(
     .filter((candidate) => candidate.ownerSessionId === normalizedSessionId)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
 }
+
+/** 判断旧版 ExecutionRecoveryCard 是否仍属于当前 Workbench 控制面。 */
+export function shouldShowLegacyExecutionRecovery(
+  candidate: ExecutionRecoveryCandidate | undefined,
+  options: {
+    isApplicationPlanningPhase: boolean
+    hasBusinessInteraction: boolean
+    acceptanceAwaiting: boolean
+  }
+): boolean {
+  return Boolean(
+    !options.isApplicationPlanningPhase &&
+      candidate?.executionKind === 'workbench' &&
+      !options.hasBusinessInteraction &&
+      !options.acceptanceAwaiting
+  )
+}

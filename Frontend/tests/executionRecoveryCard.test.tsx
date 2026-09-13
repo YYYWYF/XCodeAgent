@@ -6,6 +6,7 @@ import ExecutionRecoveryCard from '../src/renderer/src/components/AiChatPanel/co
 import ApplicationPagePlanningModal from '../src/renderer/src/components/Welcome/ApplicationPagePlanningModal'
 import AgentErrorCard from '../src/renderer/src/components/AgentErrorCard'
 import ApplicationPlanningRecoveryIncidentCard from '../src/renderer/src/components/ApplicationPlanningRecoveryIncidentCard'
+import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recoverySurface'
 import { applicationPlanningRecoveryProjection } from '../src/renderer/src/service/applicationPlanningRecovery'
 import type { ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
 import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
@@ -126,13 +127,14 @@ function renderPlanningRecoverySurface(
 
 /** 构造恢复卡片所需的公开候选。 */
 function recovery(
-  availability: ExecutionRecoveryCandidate['availability']
+  availability: ExecutionRecoveryCandidate['availability'],
+  executionKind: ExecutionRecoveryCandidate['executionKind'] = 'workbench'
 ): ExecutionRecoveryCandidate {
   return {
     sourceRunId: 'run-A',
     ownerSessionId: 'session-A',
     threadId: 'thread-A',
-    executionKind: 'workbench',
+    executionKind,
     executionStatus: 'interrupted',
     availability,
     canContinue: availability === 'ready',
@@ -140,6 +142,30 @@ function recovery(
     message: '恢复测试',
     updatedAt: '2026-09-12T00:00:00.000Z'
   }
+}
+
+/** 渲染真实聊天 caller 使用的 Recovery surface，验证两个当前控制面的边界。 */
+function renderRecoverySurface(options: {
+  isApplicationPlanningPhase: boolean
+  planning?: ApplicationPlanningCurrentState
+  candidate?: ExecutionRecoveryCandidate
+  hasBusinessInteraction?: boolean
+  acceptanceAwaiting?: boolean
+}): string {
+  return renderToStaticMarkup(
+    createElement(RecoverySurface, {
+      acceptanceAwaiting: options.acceptanceAwaiting ?? false,
+      activeExecutionRecovery: options.candidate,
+      hasBusinessInteraction: options.hasBusinessInteraction ?? false,
+      isApplicationPlanningPhase: options.isApplicationPlanningPhase,
+      onContinueInterruptedExecution: () => undefined,
+      onRetryPlanning: () => undefined,
+      otherSessionExecutionLocked: false,
+      planningState: options.planning,
+      recoveryRunning: false,
+      workflowInputLocked: false
+    })
+  )
 }
 
 test('READY recovery card exposes continue action', () => {
@@ -386,6 +412,32 @@ test('caller projects needs_attention as the only current Incident without an ac
   assert.match(markup, /当前现场没有可证明安全的自动恢复入口，需要人工处理/)
   assert.doesNotMatch(markup, /<button/)
   assert.doesNotMatch(markup, /重新执行技术规划/)
+})
+
+test('Planning caller renders one Incident and suppresses both legacy candidate kinds', () => {
+  const planning = planningStateFromRecovery({
+    sourceRunId: 'run-planning',
+    model: 'model-planning',
+    diagnosticMessage: 'Planning model unavailable'
+  })
+  const markup = renderRecoverySurface({
+    candidate: recovery('ready', 'application_planning'),
+    isApplicationPlanningPhase: true,
+    planning
+  })
+
+  assert.equal(countOccurrences(markup, 'data-testid="application-planning-recovery-incident"'), 1)
+  assert.equal(countOccurrences(markup, 'data-testid="execution-recovery-card"'), 0)
+})
+
+test('Workbench caller keeps the legacy recovery card without a Planning Incident', () => {
+  const markup = renderRecoverySurface({
+    candidate: recovery('ready'),
+    isApplicationPlanningPhase: false
+  })
+
+  assert.equal(countOccurrences(markup, 'data-testid="application-planning-recovery-incident"'), 0)
+  assert.equal(countOccurrences(markup, 'data-testid="execution-recovery-card"'), 1)
 })
 
 test('awaiting_user leaves the business confirmation card as the only control surface', () => {

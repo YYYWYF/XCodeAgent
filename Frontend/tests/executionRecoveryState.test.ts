@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   executionRecoveryForSession,
-  executionRecoveryProjection
+  executionRecoveryProjection,
+  shouldShowLegacyExecutionRecovery
 } from '../src/renderer/src/components/AiChatPanel/executionRecoveryState'
-import type { ApplicationLifecycle } from '../src/renderer/src/typings'
+import type { ApplicationLifecycle, ExecutionRecoveryCandidate } from '../src/renderer/src/typings'
 
 /** 构造只包含当前恢复投影扩展的 lifecycle 测试快照。 */
 function lifecycleWithCandidates(candidates: unknown[]): ApplicationLifecycle {
@@ -74,4 +75,67 @@ test('缺少 ownerSessionId 的候选不会被投影到前端', () => {
   const lifecycle = lifecycleWithCandidates([candidate({ ownerSessionId: undefined })])
 
   assert.deepEqual(executionRecoveryProjection(lifecycle)?.candidates, [])
+})
+
+/** 从当前投影构造纯函数测试使用的合法恢复候选。 */
+function projectedCandidate(
+  executionKind: ExecutionRecoveryCandidate['executionKind']
+): ExecutionRecoveryCandidate {
+  const projected = executionRecoveryForSession(
+    lifecycleWithCandidates([candidate({ executionKind })]),
+    'session-A'
+  )
+  if (!projected) throw new Error('测试候选未成功投影。')
+  return projected
+}
+
+test('旧恢复卡仅允许 Workbench 且不能覆盖 Planning 控制面', () => {
+  const applicationPlanningCandidate = projectedCandidate('application_planning')
+  const workbenchCandidate = projectedCandidate('workbench')
+
+  assert.equal(
+    shouldShowLegacyExecutionRecovery(applicationPlanningCandidate, {
+      isApplicationPlanningPhase: true,
+      hasBusinessInteraction: false,
+      acceptanceAwaiting: false
+    }),
+    false
+  )
+  assert.equal(
+    shouldShowLegacyExecutionRecovery(workbenchCandidate, {
+      isApplicationPlanningPhase: true,
+      hasBusinessInteraction: false,
+      acceptanceAwaiting: false
+    }),
+    false
+  )
+  assert.equal(
+    shouldShowLegacyExecutionRecovery(workbenchCandidate, {
+      isApplicationPlanningPhase: false,
+      hasBusinessInteraction: false,
+      acceptanceAwaiting: false
+    }),
+    true
+  )
+})
+
+test('旧恢复卡在 Workbench 业务交互或验收等待时隐藏', () => {
+  const workbenchCandidate = projectedCandidate('workbench')
+
+  assert.equal(
+    shouldShowLegacyExecutionRecovery(workbenchCandidate, {
+      isApplicationPlanningPhase: false,
+      hasBusinessInteraction: true,
+      acceptanceAwaiting: false
+    }),
+    false
+  )
+  assert.equal(
+    shouldShowLegacyExecutionRecovery(workbenchCandidate, {
+      isApplicationPlanningPhase: false,
+      hasBusinessInteraction: false,
+      acceptanceAwaiting: true
+    }),
+    false
+  )
 })

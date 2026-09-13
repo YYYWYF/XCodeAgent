@@ -81,8 +81,7 @@ import StageOutputPanel from './components/StageOutputPanel'
 import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
-import ExecutionRecoveryCard from './components/ExecutionRecoveryCard'
-import ApplicationPlanningRecoveryIncidentCard from '../ApplicationPlanningRecoveryIncidentCard'
+import RecoverySurface from './recoverySurface'
 import ApiDesignConfigModal from './components/WorkflowRunCard/ApiDesignConfigModal'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
 import {
@@ -4479,24 +4478,21 @@ export default function AiChatPanel({
               planningState={planningState}
             />
 
-            {isApplicationPlanningPhase && planningState ? (
-              <ApplicationPlanningRecoveryIncidentCard
-                onAction={onRetryPlanning}
-                planning={planningState}
-              />
-            ) : null}
-
-            {activeExecutionRecovery && !activeWorkflowHasBusinessInteraction && !acceptanceAwaiting ? (
-              <ExecutionRecoveryCard
-                disabled={workflowInputLocked || otherSessionExecutionLocked}
-                error={recoveryError}
-                loading={recoveryRunning}
-                onContinue={() => {
-                  void handleContinueInterruptedExecution(activeExecutionRecovery)
-                }}
-                recovery={activeExecutionRecovery}
-              />
-            ) : null}
+            <RecoverySurface
+              acceptanceAwaiting={acceptanceAwaiting}
+              activeExecutionRecovery={activeExecutionRecovery}
+              hasBusinessInteraction={activeWorkflowHasBusinessInteraction}
+              isApplicationPlanningPhase={isApplicationPlanningPhase}
+              onContinueInterruptedExecution={(recovery) => {
+                void handleContinueInterruptedExecution(recovery)
+              }}
+              onRetryPlanning={onRetryPlanning}
+              otherSessionExecutionLocked={otherSessionExecutionLocked}
+              planningState={planningState}
+              recoveryError={recoveryError}
+              recoveryRunning={recoveryRunning}
+              workflowInputLocked={workflowInputLocked}
+            />
 
             {otherSessionExecutionLocked || pendingPlanOwnedByCurrentSession ? (
               <SessionExecutionLockDock
