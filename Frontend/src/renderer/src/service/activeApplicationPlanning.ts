@@ -247,6 +247,36 @@ export function planningMutationBlocked(
   return Boolean(state && state.transportState !== 'idle')
 }
 
+/** 从恢复投影、Workflow、lifecycle 与当前运行态中恢复真实失败原因，绝不使用恢复说明覆盖错误。 */
+function recoverablePlanningFailureMessage(
+  current: ApplicationPlanningCurrentState,
+  workflow: WorkflowRunPayload,
+  lifecycle: ApplicationLifecycle,
+  recovery: ApplicationPlanningRecoveryProjection
+): string {
+  const diagnosticMessage = recovery.failureDiagnostic?.message?.trim()
+  if (diagnosticMessage) return diagnosticMessage
+
+  const workflowFailure =
+    workflow.summary.status === 'failed' ? workflow.summary.message?.trim() : ''
+  if (workflowFailure) return workflowFailure
+
+  const lifecycleFailure =
+    lifecycle.initialization.status === 'failed' ? lifecycle.error?.message?.trim() : ''
+  if (lifecycleFailure) return lifecycleFailure
+
+  const currentError = current.error?.trim()
+  if (currentError && currentError !== recovery.message.trim()) return currentError
+
+  if (recovery.failureDiagnostic?.httpStatus) {
+    return `HTTP ${recovery.failureDiagnostic.httpStatus}`
+  }
+
+  if (recovery.failureDiagnostic?.code) return recovery.failureDiagnostic.code
+
+  return '上一次规划执行失败。'
+}
+
 /** 合并 Workflow 及其 lifecycle，并保留同一运行中的原生中断投影。 */
 function reducePlanningWorkflow(
   current: ApplicationPlanningCurrentState,
@@ -316,8 +346,15 @@ export function reduceApplicationPlanningCurrentState(
         : event.lifecycle
     )
     let error = current.error
-    if (
-      ['ready_to_continue', 'failed', 'blocked', 'conflict', 'legacy_unverified'].includes(
+    if (event.recovery.classification === 'ready_to_continue') {
+      error = recoverablePlanningFailureMessage(
+        current,
+        event.workflow,
+        lifecycle,
+        event.recovery
+      )
+    } else if (
+      ['failed', 'blocked', 'conflict', 'legacy_unverified'].includes(
         event.recovery.classification
       )
     ) {

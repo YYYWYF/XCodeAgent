@@ -189,6 +189,7 @@ export default function ApplicationPagePlanningModal({
               error={error}
               recovery={Boolean(planning.recovery && !planning.syncError)}
               failureDiagnostic={planning.recovery?.failureDiagnostic}
+              recoveryMessage={planning.recovery?.message}
               onRetry={
                 planning.syncError ||
                 recoveryCanContinue ||

@@ -16,6 +16,8 @@ type AgentErrorCardProps = {
   /** 当前卡片是否由权威规划恢复投影驱动，用于移除旧的误导性重试提示。 */
   recovery?: boolean
   failureDiagnostic?: ApplicationPlanningFailureDiagnostic | null
+  /** Recovery 模式下独立展示的恢复说明，不参与真实错误摘要。 */
+  recoveryMessage?: string | null
 }
 
 /** 按真实错误类型区分模型连接异常和普通任务失败，避免把所有失败误报为模型问题。 */
@@ -26,10 +28,11 @@ export default function AgentErrorCard({
   retryLabel = '重试',
   title,
   recovery = false,
-  failureDiagnostic
+  failureDiagnostic,
+  recoveryMessage
 }: AgentErrorCardProps): ReactElement {
-  const copy = readableAgentError(error)
-  const resolvedTitle = title || (copy.modelServiceError ? '模型服务异常' : '任务执行异常')
+  const copy = recovery ? undefined : readableAgentError(error)
+  const resolvedTitle = title || (copy?.modelServiceError ? '模型服务异常' : '任务执行异常')
 
   return (
     <section
@@ -45,19 +48,36 @@ export default function AgentErrorCard({
         <Text className={cx('agent-error-card-title')} strong>
           {resolvedTitle}
         </Text>
-        <Text className={cx('agent-error-card-message')}>{copy.message}</Text>
-        {!recovery ? (
-          <Text className={cx('agent-error-card-hint')} type="secondary">
-            {copy.hint}
-          </Text>
-        ) : null}
-        {failureDiagnostic ? (
-          <FailureDiagnostic diagnostic={failureDiagnostic} />
-        ) : copy.detail && !recovery ? (
-          <Text className={cx('agent-error-card-detail')} type="secondary">
-            错误详情：{copy.detail}
-          </Text>
-        ) : null}
+        {recovery ? (
+          <>
+            {failureDiagnostic ? (
+              <FailureDiagnostic diagnostic={failureDiagnostic} />
+            ) : (
+              <Text className={cx('agent-error-card-diagnostic-message')}>
+                {error?.trim() || '上一次规划执行失败。'}
+              </Text>
+            )}
+            {recoveryMessage?.trim() ? (
+              <Text className={cx('agent-error-card-recovery-message')} type="secondary">
+                {recoveryMessage.trim()}
+              </Text>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <Text className={cx('agent-error-card-message')}>{copy?.message}</Text>
+            <Text className={cx('agent-error-card-hint')} type="secondary">
+              {copy?.hint}
+            </Text>
+            {failureDiagnostic ? (
+              <FailureDiagnostic diagnostic={failureDiagnostic} />
+            ) : copy?.detail ? (
+              <Text className={cx('agent-error-card-detail')} type="secondary">
+                错误详情：{copy.detail}
+              </Text>
+            ) : null}
+          </>
+        )}
         {onRetry ? (
           <Button
             className={cx('agent-error-card-retry')}

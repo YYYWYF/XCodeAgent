@@ -671,7 +671,7 @@ async function waitForCondition<T>(
   assert.equal(saveCalls, 0)
 }
 
-// 补充：服务端明确 RUN_ERROR 收口后必须重新读取当前 recovery head。
+// 补充：服务端明确 RUN_ERROR 收口后必须重新读取当前 recovery head，并保留真实失败原因。
 {
   const h = harness()
   h.onRead(async () => ({
@@ -685,22 +685,57 @@ async function waitForCondition<T>(
       canContinue: true,
       userActionRequired: false,
       reasonCode: 'APPLICATION_PLANNING_MODEL_GENERATION_REPLAY_SAFE',
-      message: '上一次模型调用失败，可以继续。'
+      message: '当前执行现场可以安全继续。',
+      failureDiagnostic: {
+        sourceRunId: 'run-A',
+        origin: 'model_call',
+        code: 'http_503',
+        httpStatus: 503,
+        model: 'mimo-v2.5-pro',
+        message: 'Service Unavailable'
+      }
     })
   }))
   h.onSend(async () => {
-    throw new AgUiRunError('technical planning failed', {
+    throw new AgUiRunError('503 Service Unavailable', {
       workflow: {
         ...confirmationWorkflow(),
-        summary: { status: 'failed', message: 'technical planning failed' }
+        summary: { status: 'failed', message: '503 Service Unavailable' }
       }
     })
   })
   await h.runtime.ensureStarted()
   assert.equal(h.readCalls(), 1)
   assert.equal(h.current()?.recovery?.classification, 'ready_to_continue')
-  assert.equal(h.current()?.error, '上一次模型调用失败，可以继续。')
+  assert.equal(h.current()?.error, 'Service Unavailable')
+  assert.equal(h.current()?.recovery?.message, '当前执行现场可以安全继续。')
   assert.equal(h.current()?.transportState, 'idle')
+}
+
+// 补充：旧记录没有 diagnostic 时，ready_to_continue 仍按 Workflow/lifecycle/current error 顺序恢复错误。
+{
+  const initial = planningState()
+  initial.error = '503 Service Unavailable'
+  const h = harness(initial)
+  h.onRead(async () => ({
+    workflow: {
+      ...workflowWithoutInterrupt(),
+      summary: { status: 'failed', message: '503 Service Unavailable' }
+    },
+    lifecycle: authoritativeLifecycle(initial, { status: 'failed' }),
+    recovery: recoveryProjection('thread-A', {
+      classification: 'ready_to_continue',
+      canContinue: true,
+      userActionRequired: false,
+      reasonCode: 'APPLICATION_PLANNING_MODEL_GENERATION_REPLAY_SAFE',
+      message: '当前执行现场可以安全继续。'
+    })
+  }))
+  h.onSend(async () => {
+    throw new AgUiRunError('transport failed')
+  })
+  await h.runtime.ensureStarted()
+  assert.equal(h.current()?.error, '503 Service Unavailable')
 }
 
 // 补充：同线程历史卡片不能决定交互门，跨线程卡片明确拒绝。
