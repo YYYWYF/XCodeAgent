@@ -675,7 +675,7 @@ def build_application_planning_graph(*, checkpointer):
             "technical_planning_begin": "technical_planning_begin",
             "completed": END,
         },
-    })
+    )
     builder.add_conditional_edges("design_chat_response", route_design_chat_response, {
         "completed": END,
         "requirements_review": "requirements_review",

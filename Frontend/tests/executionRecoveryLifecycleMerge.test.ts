@@ -23,6 +23,27 @@ function recoveryProjection(
             canContinue: availability === 'ready',
             reasonCode: availability.toUpperCase(),
             message: availability,
+            recoveryActionPlan: {
+              schemaVersion: 'recovery-action-plan.v1',
+              incidentId: `incident-${availability}`,
+              sourceRunId: 'run-recovery',
+              threadId: 'exec-thread-A',
+              executionKind: 'workbench',
+              status: availability === 'ready' ? 'recoverable' : 'needs_attention',
+              reasonCode: availability.toUpperCase(),
+              message: availability,
+              primaryAction:
+                availability === 'ready'
+                  ? {
+                      actionId: 'action-recovery',
+                      kind: 'continue_checkpoint',
+                      label: '继续执行',
+                      description: '从已保存的现场继续执行。',
+                      requiresConfirmation: false
+                    }
+                  : null,
+              alternateActions: []
+            },
             updatedAt: '2026-09-12T00:00:00.000Z'
           }
         ]

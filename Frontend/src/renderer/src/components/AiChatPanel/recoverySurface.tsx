@@ -1,64 +1,54 @@
 import type { ReactElement } from 'react'
 import type { ApplicationPlanningCurrentState } from '../../service/activeApplicationPlanning'
+import {
+  applicationPlanningRecoveryIncident,
+  workbenchRecoveryIncident
+} from '../../service/recoveryIncident'
 import type { ExecutionRecoveryCandidate } from '../../typings'
-import ApplicationPlanningRecoveryIncidentCard from '../ApplicationPlanningRecoveryIncidentCard'
-import ExecutionRecoveryCard from './components/ExecutionRecoveryCard'
-import { shouldShowLegacyExecutionRecovery } from './executionRecoveryState'
+import RecoveryIncidentCard from '../RecoveryIncidentCard/RecoveryIncidentCard'
 
 export type RecoverySurfaceProps = {
   isApplicationPlanningPhase: boolean
   planningState?: ApplicationPlanningCurrentState
   onRetryPlanning?: () => void
   activeExecutionRecovery?: ExecutionRecoveryCandidate
-  hasBusinessInteraction: boolean
-  acceptanceAwaiting: boolean
-  workflowInputLocked: boolean
-  otherSessionExecutionLocked: boolean
   recoveryError?: string
   recoveryRunning: boolean
-  onContinueInterruptedExecution: (candidate: ExecutionRecoveryCandidate) => void
+  onExecuteRecoveryAction: (candidate: ExecutionRecoveryCandidate) => void
 }
 
-/** 统一渲染 Planning 当前 Incident 与 Workbench 旧恢复卡，确保两者不会串成双控制面。 */
+/** 统一渲染当前 Recovery Incident，Planning 与 Workbench 不再并列暴露旧恢复卡。 */
 export default function RecoverySurface({
   isApplicationPlanningPhase,
   planningState,
   onRetryPlanning,
   activeExecutionRecovery,
-  hasBusinessInteraction,
-  acceptanceAwaiting,
-  workflowInputLocked,
-  otherSessionExecutionLocked,
   recoveryError,
   recoveryRunning,
-  onContinueInterruptedExecution
-}: RecoverySurfaceProps): ReactElement {
-  const showLegacyExecutionRecovery = shouldShowLegacyExecutionRecovery(activeExecutionRecovery, {
-    isApplicationPlanningPhase,
-    hasBusinessInteraction,
-    acceptanceAwaiting
-  })
+  onExecuteRecoveryAction
+}: RecoverySurfaceProps): ReactElement | null {
+  const incident = isApplicationPlanningPhase
+    ? applicationPlanningRecoveryIncident(planningState)
+    : workbenchRecoveryIncident(activeExecutionRecovery)
+  if (!incident) return null
 
   return (
-    <>
-      {isApplicationPlanningPhase && planningState ? (
-        <ApplicationPlanningRecoveryIncidentCard
-          onAction={onRetryPlanning}
-          planning={planningState}
-        />
-      ) : null}
-
-      {showLegacyExecutionRecovery && activeExecutionRecovery ? (
-        <ExecutionRecoveryCard
-          disabled={workflowInputLocked || otherSessionExecutionLocked}
-          error={recoveryError}
-          loading={recoveryRunning}
-          onContinue={() => {
-            onContinueInterruptedExecution(activeExecutionRecovery)
-          }}
-          recovery={activeExecutionRecovery}
-        />
-      ) : null}
-    </>
+    <RecoveryIncidentCard
+      incident={incident}
+      error={recoveryError}
+      onAction={
+        isApplicationPlanningPhase
+          ? onRetryPlanning
+          : activeExecutionRecovery
+            ? () => onExecuteRecoveryAction(activeExecutionRecovery)
+            : undefined
+      }
+      retrying={recoveryRunning}
+      testId={
+        isApplicationPlanningPhase
+          ? 'application-planning-recovery-incident'
+          : 'workbench-recovery-incident'
+      }
+    />
   )
 }

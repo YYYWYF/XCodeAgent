@@ -1,5 +1,9 @@
 import type { WorkspaceCodeChangeSet } from './codeChanges'
 import type { ToolApproval } from '../service/workspaceTools'
+import type {
+  RecoveryActionPlan,
+  RecoveryFailureDiagnostic
+} from '../service/recoveryActionPlan'
 
 export type WorkflowEvent = {
   type: string
@@ -1171,12 +1175,14 @@ export type ExecutionRecoveryCandidate = {
   threadId: string
   executionKind: 'application_planning' | 'workbench'
   workflowScope?: string
-  executionStatus: 'interrupted'
+  executionStatus: 'interrupted' | 'failed'
   currentNode?: string
   availability: ExecutionRecoveryAvailability
   canContinue: boolean
   reasonCode: string
   message: string
+  failureDiagnostic?: RecoveryFailureDiagnostic | null
+  recoveryActionPlan: RecoveryActionPlan
   updatedAt: string
 }
 

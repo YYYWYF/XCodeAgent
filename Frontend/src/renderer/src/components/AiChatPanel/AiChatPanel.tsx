@@ -167,8 +167,6 @@ import {
   planExecutionContextForPage,
   planExecutionContextForRun,
   shouldRenderPlanExecutionDock,
-  workflowCanRetryFailedTasks,
-  workflowCodeReviewRetry,
   workflowInteractionAvailability,
   workflowResumeNode,
   type PlanExecutionMode
@@ -2170,14 +2168,11 @@ export default function AiChatPanel({
     error,
     handleAcceptPreview,
     handleContinueDevelopment: continueDevelopmentExecution,
-    handleContinueInterruptedExecution,
+    handleExecuteRecoveryAction,
     handleContinueRevisionBuild,
     handleEndPlan,
     handleProductStageConversation,
-    handleRetryCurrentFailure,
     handleResumePlan,
-    handleRetryCodeReview,
-    handleRetryPlan,
     handleStopPlan,
     handleSend,
     handleStartEndpointDevelopment,
@@ -2193,8 +2188,7 @@ export default function AiChatPanel({
     stopping,
     workspaceBusy,
     recoveryError,
-    recoveryRunning,
-    genericRetryRunning
+    recoveryRunning
   } = useWorkflowConversation({
     acquireSessionExecution,
     activeSession,
@@ -3079,13 +3073,6 @@ export default function AiChatPanel({
           workflowIdentity
         )
   const scopedExecution = targetExecutionContext.execution
-  const genericRetrySource =
-    scopedExecution?.status === 'failed'
-      ? {
-          runId: scopedExecution.runId,
-          threadId: scopedExecution.threadId
-        }
-      : undefined
   // 新建对话的空白草稿不归属于任何历史 Run；应用级 execution 不能重新锁住输入区。
   const detachedConversationDraft =
     !isApplicationPlanningPhase && !activeSession && activeDetailTarget.type === 'none'
@@ -3098,7 +3085,6 @@ export default function AiChatPanel({
           loading,
           Boolean(applicationLifecycle)
         )
-  const canRetryFailedTasks = workflowCanRetryFailedTasks(activeWorkflow, scopedExecution)
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
   const activePageTitle =
@@ -3457,12 +3443,8 @@ export default function AiChatPanel({
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
   const acceptanceAwaiting = displayedPlanExecutionMode === 'awaiting_acceptance'
   const activeExecutionRecovery = useMemo(() => {
-    const candidate = executionRecoveryForSession(applicationLifecycle, activeSession?.sessionId)
-    return candidate?.availability === 'awaiting_user' ? undefined : candidate
+    return executionRecoveryForSession(applicationLifecycle, activeSession?.sessionId)
   }, [activeSession?.sessionId, applicationLifecycle])
-  const activeWorkflowHasBusinessInteraction = Boolean(
-    activeWorkflow && workflowInteractionAvailability(activeWorkflow, applicationLifecycle) === 'active'
-  )
   const activeSessionTargetKey = currentStageSessionTargetKey
   const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const activeWorkflowMatchesTarget = Boolean(
@@ -4456,9 +4438,7 @@ export default function AiChatPanel({
               onRetryError={
                 !isApplicationPlanningPhase && planningError
                   ? onRetryPlanning
-                  : workflowCodeReviewRetry(activeWorkflow)
-                    ? () => void handleRetryCodeReview()
-                    : undefined
+                  : undefined
               }
               onRetryTemplateGeneration={
                 templateGenerationRecoverable ? onRetryPlanning : undefined
@@ -4479,19 +4459,15 @@ export default function AiChatPanel({
             />
 
             <RecoverySurface
-              acceptanceAwaiting={acceptanceAwaiting}
               activeExecutionRecovery={activeExecutionRecovery}
-              hasBusinessInteraction={activeWorkflowHasBusinessInteraction}
               isApplicationPlanningPhase={isApplicationPlanningPhase}
-              onContinueInterruptedExecution={(recovery) => {
-                void handleContinueInterruptedExecution(recovery)
+              onExecuteRecoveryAction={(recovery) => {
+                void handleExecuteRecoveryAction(recovery)
               }}
               onRetryPlanning={onRetryPlanning}
-              otherSessionExecutionLocked={otherSessionExecutionLocked}
               planningState={planningState}
               recoveryError={recoveryError}
               recoveryRunning={recoveryRunning}
-              workflowInputLocked={workflowInputLocked}
             />
 
             {otherSessionExecutionLocked || pendingPlanOwnedByCurrentSession ? (
@@ -4523,33 +4499,20 @@ export default function AiChatPanel({
                 onStopGenerating={handleStopCurrentGeneration}
                 rightContent={
                   <PlanExecutionDock
-                    canRetryFailedTasks={canRetryFailedTasks}
                     dependencyLocked={targetExecutionContext.dependencyLocked}
                     error={scopedExecution?.error?.message || error}
                     execution={scopedExecution}
-                    genericRetryLoading={
-                      genericRetryRunning && genericRetrySource?.runId === scopedExecution?.runId
-                    }
                     mode={displayedPlanExecutionMode}
                     onAccept={handleAcceptPreview}
                     onConfirmInteraction={handleConfirmPlanInteraction}
                     onEnd={() => void handleEndPlan(scopedExecution?.runId)}
-                    onGenericRetry={
-                      genericRetrySource
-                        ? () => {
-                            void handleRetryCurrentFailure(genericRetrySource)
-                          }
-                        : undefined
-                    }
                     onOpenPreview={() => void handleOpenFullscreenPreview()}
-                    onRetry={() => void handleRetryPlan()}
                     onStop={
                       currentGenerationLoading
                         ? handleStopCurrentGeneration
                         : () => void handleStopPlan(scopedExecution?.runId)
                     }
                     onViewPlan={handleViewPlan}
-                    retryActionRunning={currentGenerationLoading}
                   />
                 }
                 stopping={stopping}

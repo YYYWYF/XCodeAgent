@@ -6,7 +6,7 @@ import {
   AgUiChatSession,
   AgUiRunError,
   appendElementContextToConversationPrompt,
-  getExecutionRecoveryUrl,
+  getExecutionRecoveryActionUrl,
   getConversationUrl,
   getWorkflowUrl
 } from '../../../service/agUiAgent'
@@ -77,7 +77,6 @@ import {
 import {
   planExecutionForPage,
   withWorkflowExecutionStatus,
-  workflowCodeReviewRetry,
   workflowInteractionAvailability
 } from '../planExecutionMode'
 import { maybeRefreshPendingPlanLifecycleAfterGeneration } from '../pendingPlanLifecycleRefresh'
@@ -191,18 +190,15 @@ type UseWorkflowConversationResult = {
   handleContinueDevelopment: (
     continuation: import('../../../service/chatSessions').ChatSessionDevelopmentContinuation
   ) => Promise<boolean>
-  handleContinueInterruptedExecution: (
+  handleExecuteRecoveryAction: (
     recovery: ExecutionRecoveryCandidate
   ) => Promise<boolean>
-  handleRetryCurrentFailure: (source: { runId: string; threadId: string }) => Promise<boolean>
   handleEndPlan: (runId?: string) => Promise<void>
   handleProductStageConversation: (
     request: string,
     planningThreadId: string
   ) => Promise<boolean>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
-  handleRetryCodeReview: () => Promise<void>
-  handleRetryPlan: () => Promise<void>
   handleStopPlan: (runId?: string) => Promise<void>
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleStartDetailConfirmation: (
@@ -241,7 +237,6 @@ type UseWorkflowConversationResult = {
   stopping: boolean
   workspaceBusy: boolean
   recoveryRunning: boolean
-  genericRetryRunning: boolean
   recoveryError?: string
 }
 
@@ -653,8 +648,6 @@ export function useWorkflowConversation({
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
   const [recoveringSourceRunId, setRecoveringSourceRunId] = useState<string>()
-  const [genericRetryingRunId, setGenericRetryingRunId] = useState<string>()
-  const genericRetryingRunIdRef = useRef<string>()
   const [recoveryError, setRecoveryError] = useState<string>()
   // 记录用户已明确结束的会话，保证自由输入不依赖后端控制请求或生命周期回传时序。
   const [endedPlanSessionKeys, setEndedPlanSessionKeys] = useState<Record<string, boolean>>({})
@@ -693,15 +686,20 @@ export function useWorkflowConversation({
   const sessionExecutionLocked = Boolean(phaseExecution && !activeSessionOwnsExecution)
   const workspaceBusy = sessionExecutionLocked
 
-  /** 使用当前 stage session 的执行锁启动一次短生命周期 Durable Recovery。 */
-  const handleContinueInterruptedExecution = async (
+  /** 使用当前 RecoveryActionPlan 的 incident/action 身份启动一次短生命周期 Durable Recovery。 */
+  const handleExecuteRecoveryAction = async (
     recovery: ExecutionRecoveryCandidate
   ): Promise<boolean> => {
+    const actionPlan = recovery.recoveryActionPlan
+    const primaryAction = actionPlan.primaryAction
     if (
       !activeSession ||
       activeSession.sessionId !== recovery.ownerSessionId ||
+      loading ||
+      workspaceBusy ||
       recoveringSourceRunId === recovery.sourceRunId ||
-      !recovery.canContinue
+      actionPlan.status !== 'recoverable' ||
+      !primaryAction
     ) {
       return false
     }
@@ -709,14 +707,15 @@ export function useWorkflowConversation({
     setRecoveringSourceRunId(recovery.sourceRunId)
     setRecoveryError(undefined)
     try {
-      return await sendWorkflowMessage('继续执行上一次中断的任务。', {
+      return await sendWorkflowMessage(primaryAction.label, {
         executionRecovery: {
-          action: 'continue',
-          sourceRunId: recovery.sourceRunId
+          action: 'execute',
+          incidentId: actionPlan.incidentId,
+          actionId: primaryAction.actionId
         },
         executionThreadId: recovery.threadId,
         sessionIdentity,
-        titleFrom: '继续执行上一次中断的任务',
+        titleFrom: primaryAction.label,
         conversation: false
       })
     } finally {
@@ -730,40 +729,6 @@ export function useWorkflowConversation({
     }
   }
 
-  /** 通过统一 recovery action 重试当前失败 execution，handler 与 checkpoint 均由 Backend 决定。 */
-  const handleRetryCurrentFailure = async (source: {
-    runId: string
-    threadId: string
-  }): Promise<boolean> => {
-    if (
-      !activeSession ||
-      !source.runId ||
-      !source.threadId ||
-      loading ||
-      workspaceBusy ||
-      genericRetryingRunIdRef.current
-    ) {
-      return false
-    }
-    genericRetryingRunIdRef.current = source.runId
-    setGenericRetryingRunId(source.runId)
-    setRecoveryError(undefined)
-    try {
-      return await sendWorkflowMessage('重试当前失败任务。', {
-        executionRecovery: {
-          action: 'retry_current_failure',
-          sourceRunId: source.runId
-        },
-        executionThreadId: source.threadId,
-        sessionIdentity: activeSession,
-        titleFrom: '通用重试',
-        conversation: false
-      })
-    } finally {
-      genericRetryingRunIdRef.current = undefined
-      setGenericRetryingRunId(undefined)
-    }
-  }
   const sessionRunStates = sessionExecutions.reduce<Record<string, SessionRunStatus>>(
     (states, entry) => {
       if (
@@ -928,8 +893,9 @@ export function useWorkflowConversation({
       revisionInteraction?: WorkflowRevisionDraftInteraction
       workflowScope?: string
       executionRecovery?: {
-        action: 'continue' | 'retry_current_failure'
-        sourceRunId: string
+        action: 'execute'
+        incidentId: string
+        actionId: string
       }
     }
   ): Promise<boolean> => {
@@ -1004,7 +970,7 @@ export function useWorkflowConversation({
       explicitBuildExecutionScope || sessionTargetFields.buildExecutionScope
 
     const endpointUrl = options?.executionRecovery
-      ? getExecutionRecoveryUrl()
+      ? getExecutionRecoveryActionUrl()
       : options?.conversation
       ? getConversationUrl()
       : options?.workflowScope === 'application_planning'
@@ -1366,12 +1332,14 @@ export function useWorkflowConversation({
       const failedContent =
         runError?.message ||
         (caughtError instanceof Error ? caughtError.message : '调用 Workflow 失败。')
+      const staleRecoveryAction =
+        Boolean(options?.executionRecovery) && runError?.code === 'STALE_RECOVERY_ACTION'
       const failedMessages = updateAssistantMessage(
         '',
         failedWorkflow,
         failedToolCalls,
         failedProcessSteps,
-        failedContent
+        options?.executionRecovery ? undefined : failedContent
       )
       if (failedWorkflow) {
         setLiveWorkflows((current) => ({
@@ -1387,20 +1355,19 @@ export function useWorkflowConversation({
         threadId: identity.threadId,
         titleFrom: options?.titleFrom || message
       })
-      setErrors((current) => ({
-        ...current,
-        [identity.key]: failedContent
-      }))
+      if (!options?.executionRecovery) {
+        setErrors((current) => ({
+          ...current,
+          [identity.key]: failedContent
+        }))
+      }
       if (options?.executionRecovery) {
-        // Recovery endpoint 的内部错误码和技术原因不直接展示给普通用户。
-        const recoveryMessage =
-          options.executionRecovery.action === 'retry_current_failure'
-            ? genericRetryFailureMessage(runError?.code, failedContent)
-            : '无法安全恢复上一次执行，请查看最新状态。'
-        setRecoveryError(recoveryMessage)
-        if (options.executionRecovery.action === 'retry_current_failure') {
-          setErrors((current) => ({ ...current, [identity.key]: recoveryMessage }))
-        }
+        // Recovery endpoint 的内部错误码不写入历史错误卡，避免 stale action 形成第二控制面。
+        setRecoveryError(
+          staleRecoveryAction
+            ? '当前恢复操作已过期，请查看最新状态。'
+            : '无法安全执行当前恢复操作，请查看最新状态。'
+        )
       }
       return false
     } finally {
@@ -2038,48 +2005,6 @@ export function useWorkflowConversation({
     return handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
   }
 
-  /** 从当前可恢复节点重新执行失败或已停止的计划切片。 */
-  const handleRetryPlan = async (): Promise<void> => {
-    if (!activeWorkflow || loading || workspaceBusy || genericRetryingRunIdRef.current) return
-    const execution = planExecutionForPage(activeWorkflow.summary.lifecycle, selectedPageId, {
-      runId: activeWorkflow.runId,
-      threadId: activeWorkflow.threadId
-    })
-    const isStopped = execution?.status === 'stopped' || activeWorkflow.summary.status === 'stopped'
-    await sendWorkflowMessage('重试当前计划任务。', {
-      resumeState: activeWorkflow,
-      resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || selectedPageId,
-      titleFrom: '重试计划任务',
-      ...(!isStopped ? { workflowAction: 'retry_failed_tasks' as const } : {})
-    })
-  }
-
-  /** 在原审查会话和执行范围内重新调用失败的扫描或修复模型子步骤。 */
-  const handleRetryCodeReview = async (): Promise<void> => {
-    if (
-      !activeWorkflow ||
-      !workflowCodeReviewRetry(activeWorkflow) ||
-      loading ||
-      workspaceBusy ||
-      genericRetryingRunIdRef.current
-    ) {
-      return
-    }
-    const execution = planExecutionForPage(activeWorkflow.summary.lifecycle, selectedPageId, {
-      runId: activeWorkflow.runId,
-      threadId: activeWorkflow.threadId
-    })
-    await sendWorkflowMessage('重试当前代码审查请求。', {
-      resumeState: activeWorkflow,
-      resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || selectedPageId,
-      buildExecutionScope: activeWorkflow.summary.buildExecutionScope,
-      titleFrom: '重试代码审查',
-      workflowAction: 'retry_code_review'
-    })
-  }
-
   /** 按暂停态调试面板选择的节点恢复当前计划，并保留原执行身份与状态快照。 */
   const handleResumePlan = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     if (!activeWorkflow || !workflowDebug?.resumeFrom || loading || workspaceBusy) return
@@ -2194,13 +2119,10 @@ export function useWorkflowConversation({
     handleAcceptPreview,
     handleContinueRevisionBuild,
     handleContinueDevelopment,
-    handleContinueInterruptedExecution,
-    handleRetryCurrentFailure,
+    handleExecuteRecoveryAction,
     handleEndPlan,
     handleProductStageConversation,
     handleResumePlan,
-    handleRetryCodeReview,
-    handleRetryPlan,
     handleStopPlan,
     handleSend,
     handleStartEndpointDevelopment,
@@ -2216,7 +2138,6 @@ export function useWorkflowConversation({
     stopping,
     workspaceBusy,
     recoveryRunning: Boolean(recoveringSourceRunId),
-    genericRetryRunning: Boolean(genericRetryingRunId),
     recoveryError
   }
 }
@@ -2256,18 +2177,4 @@ function isAbortedStreamError(error: unknown): boolean {
   }
 
   return false
-}
-
-/** 把 Generic Retry 的 Backend 错误码转换为用户可执行的中文提示。 */
-function genericRetryFailureMessage(code: string | undefined, fallback: string): string {
-  if (code === 'RETRY_HANDLER_NOT_AVAILABLE') {
-    return '当前失败暂未接入通用重试，请继续使用原有重试入口。'
-  }
-  if (code === 'RETRY_SOURCE_STALE') {
-    return '当前失败已经被新的执行替代，请刷新后查看最新状态。'
-  }
-  if (code === 'RETRY_SOURCE_NOT_FAILED') {
-    return '当前执行已不是失败状态，请刷新后查看最新状态。'
-  }
-  return fallback || '通用重试未能安全启动，请查看最新状态。'
 }

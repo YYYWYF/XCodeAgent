@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   executionRecoveryForSession,
-  executionRecoveryProjection,
-  shouldShowLegacyExecutionRecovery
+  executionRecoveryProjection
 } from '../src/renderer/src/components/AiChatPanel/executionRecoveryState'
+import { workbenchRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
 import type { ApplicationLifecycle, ExecutionRecoveryCandidate } from '../src/renderer/src/typings'
 
 /** 构造只包含当前恢复投影扩展的 lifecycle 测试快照。 */
@@ -27,16 +27,38 @@ function lifecycleWithCandidates(candidates: unknown[]): ApplicationLifecycle {
 
 /** 创建前端可接受的公开恢复候选。 */
 function candidate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const executionKind =
+    (overrides.executionKind as 'application_planning' | 'workbench' | undefined) || 'workbench'
+  const sourceRunId = (overrides.sourceRunId as string | undefined) || 'run-A'
+  const threadId = (overrides.threadId as string | undefined) || 'exec-thread-A'
   return {
-    sourceRunId: 'run-A',
+    sourceRunId,
     ownerSessionId: 'session-A',
-    threadId: 'exec-thread-A',
-    executionKind: 'workbench',
+    threadId,
+    executionKind,
     executionStatus: 'interrupted',
     availability: 'ready',
     canContinue: true,
     reasonCode: 'READY_NATIVE',
     message: '上一次执行被中断，可以从已保存的现场继续。',
+    recoveryActionPlan: {
+      schemaVersion: 'recovery-action-plan.v1',
+      incidentId: 'incident-A',
+      sourceRunId,
+      threadId,
+      executionKind,
+      status: 'recoverable',
+      reasonCode: 'READY_NATIVE',
+      message: '上一次执行可以安全恢复。',
+      primaryAction: {
+        actionId: 'action-A',
+        kind: 'continue_checkpoint',
+        label: '继续执行',
+        description: '从已保存的现场继续执行。',
+        requiresConfirmation: false
+      },
+      alternateActions: []
+    },
     updatedAt: '2026-09-12T00:00:01.000Z',
     ...overrides
   }
@@ -77,6 +99,20 @@ test('缺少 ownerSessionId 的候选不会被投影到前端', () => {
   assert.deepEqual(executionRecoveryProjection(lifecycle)?.candidates, [])
 })
 
+test('缺少或失配 RecoveryActionPlan 的候选 fail closed', () => {
+  const basePlan = candidate().recoveryActionPlan as Record<string, unknown>
+  const lifecycle = lifecycleWithCandidates([
+    candidate({ recoveryActionPlan: undefined }),
+    candidate({
+      recoveryActionPlan: {
+        ...basePlan,
+        threadId: 'other-thread'
+      }
+    })
+  ])
+  assert.deepEqual(executionRecoveryProjection(lifecycle)?.candidates, [])
+})
+
 /** 从当前投影构造纯函数测试使用的合法恢复候选。 */
 function projectedCandidate(
   executionKind: ExecutionRecoveryCandidate['executionKind']
@@ -89,53 +125,10 @@ function projectedCandidate(
   return projected
 }
 
-test('旧恢复卡仅允许 Workbench 且不能覆盖 Planning 控制面', () => {
+test('Workbench 当前 Incident 只接受 Workbench ActionPlan', () => {
   const applicationPlanningCandidate = projectedCandidate('application_planning')
   const workbenchCandidate = projectedCandidate('workbench')
 
-  assert.equal(
-    shouldShowLegacyExecutionRecovery(applicationPlanningCandidate, {
-      isApplicationPlanningPhase: true,
-      hasBusinessInteraction: false,
-      acceptanceAwaiting: false
-    }),
-    false
-  )
-  assert.equal(
-    shouldShowLegacyExecutionRecovery(workbenchCandidate, {
-      isApplicationPlanningPhase: true,
-      hasBusinessInteraction: false,
-      acceptanceAwaiting: false
-    }),
-    false
-  )
-  assert.equal(
-    shouldShowLegacyExecutionRecovery(workbenchCandidate, {
-      isApplicationPlanningPhase: false,
-      hasBusinessInteraction: false,
-      acceptanceAwaiting: false
-    }),
-    true
-  )
-})
-
-test('旧恢复卡在 Workbench 业务交互或验收等待时隐藏', () => {
-  const workbenchCandidate = projectedCandidate('workbench')
-
-  assert.equal(
-    shouldShowLegacyExecutionRecovery(workbenchCandidate, {
-      isApplicationPlanningPhase: false,
-      hasBusinessInteraction: true,
-      acceptanceAwaiting: false
-    }),
-    false
-  )
-  assert.equal(
-    shouldShowLegacyExecutionRecovery(workbenchCandidate, {
-      isApplicationPlanningPhase: false,
-      hasBusinessInteraction: false,
-      acceptanceAwaiting: true
-    }),
-    false
-  )
+  assert.equal(workbenchRecoveryIncident(applicationPlanningCandidate), undefined)
+  assert.equal(workbenchRecoveryIncident(workbenchCandidate)?.kind, 'recoverable')
 })

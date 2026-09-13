@@ -386,6 +386,10 @@ class ExecutionRecoveryProjectionCandidate(ExecutionRecoveryModel):
     reason_code: str = Field(alias="reasonCode", min_length=1, max_length=128)
     message: str = Field(min_length=1, max_length=2048)
     updated_at: datetime = Field(alias="updatedAt")
+    failure_diagnostic: dict[str, Any] | None = Field(
+        default=None,
+        alias="failureDiagnostic",
+    )
     recovery_action_plan: RecoveryActionPlan | None = Field(
         default=None,
         alias="recoveryActionPlan",

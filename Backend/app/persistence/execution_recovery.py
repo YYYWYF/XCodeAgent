@@ -463,6 +463,35 @@ async def claim_native_recovery_attempt(
     )
 
 
+async def claim_operation_retry_attempt(
+    *,
+    source: DurableExecutionRecord,
+    plan: RecoveryPlan,
+    new_run_id: str,
+    owner_backend_instance_id: str,
+    owner_pid: int,
+    lease_ttl_seconds: float,
+    created_at: datetime | None = None,
+) -> tuple[DurableExecutionRecord, ExecutionLease, RecoveryAttempt]:
+    """以 checkpoint authority 原子创建 Workbench operation retry child。"""
+
+    if plan.strategy is not RecoveryStrategy.OPERATION_RETRY:
+        raise RecoveryExecutionError(
+            "RECOVERY_RETRY_PLAN_INVALID",
+            "operation retry claim 必须使用 operation_retry strategy。",
+        )
+    return await _claim_recovery_attempt(
+        source=source,
+        plan=plan,
+        new_run_id=new_run_id,
+        owner_backend_instance_id=owner_backend_instance_id,
+        owner_pid=owner_pid,
+        lease_ttl_seconds=lease_ttl_seconds,
+        created_at=created_at,
+        source_authority_kind=RecoverySourceAuthorityKind.CHECKPOINT,
+    )
+
+
 async def claim_stage_restart_attempt(
     *,
     source: DurableExecutionRecord,
@@ -536,16 +565,25 @@ async def _claim_recovery_attempt(
             "RecoveryPlan 与 source execution 不属于同一条运行记录。",
         )
     if source_authority_kind is RecoverySourceAuthorityKind.CHECKPOINT:
-        if (
-            plan.decision.value != "ready_native"
-            or plan.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT
-            or not plan.recovery_point_id
-            or not plan.checkpoint_id
-            or len(plan.next_nodes) != 1
-        ):
+        checkpoint_complete = bool(
+            plan.recovery_point_id and plan.checkpoint_id and len(plan.next_nodes) == 1
+        )
+        native_valid = (
+            plan.decision.value == "ready_native"
+            and plan.strategy is RecoveryStrategy.NATIVE_CHECKPOINT
+            and checkpoint_complete
+        )
+        operation_valid = (
+            plan.decision is RecoveryDecision.REQUIRES_HANDLER
+            and plan.strategy is RecoveryStrategy.OPERATION_RETRY
+            and checkpoint_complete
+            and source.status is DurableExecutionStatus.FAILED
+            and source.execution_kind == "workbench"
+        )
+        if not native_valid and not operation_valid:
             raise RecoveryExecutionError(
                 "RECOVERY_NOT_READY_NATIVE",
-                "当前 RecoveryPlan 未被 Native Recovery policy 明确允许。",
+                "当前 RecoveryPlan 未被 Recovery Action Planner 明确允许。",
             )
     else:
         if (

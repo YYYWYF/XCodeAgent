@@ -2,13 +2,14 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createElement, Fragment } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import ExecutionRecoveryCard from '../src/renderer/src/components/AiChatPanel/components/ExecutionRecoveryCard'
+import RecoveryIncidentCard from '../src/renderer/src/components/RecoveryIncidentCard/RecoveryIncidentCard'
 import ApplicationPagePlanningModal from '../src/renderer/src/components/Welcome/ApplicationPagePlanningModal'
 import AgentErrorCard from '../src/renderer/src/components/AgentErrorCard'
 import ApplicationPlanningRecoveryIncidentCard from '../src/renderer/src/components/ApplicationPlanningRecoveryIncidentCard'
 import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recoverySurface'
 import { applicationPlanningRecoveryProjection } from '../src/renderer/src/service/applicationPlanningRecovery'
 import type { ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
+import { workbenchRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
 import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
 
 /** 统计服务端文本在实际渲染结果中的出现次数。 */
@@ -140,6 +141,27 @@ function recovery(
     canContinue: availability === 'ready',
     reasonCode: 'RECOVERY_TEST',
     message: '恢复测试',
+    recoveryActionPlan: {
+      schemaVersion: 'recovery-action-plan.v1',
+      incidentId: 'incident-run-A',
+      sourceRunId: 'run-A',
+      threadId: 'thread-A',
+      executionKind,
+      status: availability === 'ready' ? 'recoverable' : 'needs_attention',
+      reasonCode: 'RECOVERY_TEST',
+      message: '恢复测试',
+      primaryAction:
+        availability === 'ready'
+          ? {
+              actionId: 'action-run-A',
+              kind: 'continue_checkpoint',
+              label: '继续执行',
+              description: '从保存的现场继续执行。',
+              requiresConfirmation: false
+            }
+          : null,
+      alternateActions: []
+    },
     updatedAt: '2026-09-12T00:00:00.000Z'
   }
 }
@@ -149,44 +171,40 @@ function renderRecoverySurface(options: {
   isApplicationPlanningPhase: boolean
   planning?: ApplicationPlanningCurrentState
   candidate?: ExecutionRecoveryCandidate
-  hasBusinessInteraction?: boolean
-  acceptanceAwaiting?: boolean
 }): string {
   return renderToStaticMarkup(
     createElement(RecoverySurface, {
-      acceptanceAwaiting: options.acceptanceAwaiting ?? false,
       activeExecutionRecovery: options.candidate,
-      hasBusinessInteraction: options.hasBusinessInteraction ?? false,
       isApplicationPlanningPhase: options.isApplicationPlanningPhase,
-      onContinueInterruptedExecution: () => undefined,
+      onExecuteRecoveryAction: () => undefined,
       onRetryPlanning: () => undefined,
-      otherSessionExecutionLocked: false,
       planningState: options.planning,
-      recoveryRunning: false,
-      workflowInputLocked: false
+      recoveryRunning: false
     })
   )
 }
 
-test('READY recovery card exposes continue action', () => {
+test('Workbench Recovery Incident exposes the Backend primary action', () => {
+  const incident = workbenchRecoveryIncident(recovery('ready'))
+  if (!incident) throw new Error('测试候选未生成 Workbench Incident。')
   const markup = renderToStaticMarkup(
-    createElement(ExecutionRecoveryCard, {
-      recovery: recovery('ready'),
-      loading: false,
-      onContinue: () => undefined
+    createElement(RecoveryIncidentCard, {
+      incident,
+      onAction: () => undefined
     })
   )
-  assert.match(markup, /上一次执行未正常完成/)
+  assert.match(markup, /工作台执行需要恢复/)
   assert.match(markup, /继续执行/)
 })
 
-test('blocked and requires-handler recovery cards hide continue action', () => {
+test('needs_attention Recovery Incident hides the action button', () => {
   for (const availability of ['blocked', 'requires_handler'] as const) {
+    const incident = workbenchRecoveryIncident(recovery(availability))
+    if (!incident) throw new Error('测试候选未生成 Workbench Incident。')
     const markup = renderToStaticMarkup(
-      createElement(ExecutionRecoveryCard, {
-        recovery: recovery(availability),
-        loading: false,
-        onContinue: () => undefined
+      createElement(RecoveryIncidentCard, {
+        incident,
+        onAction: () => undefined
       })
     )
     assert.doesNotMatch(markup, /继续执行/)
@@ -430,14 +448,14 @@ test('Planning caller renders one Incident and suppresses both legacy candidate 
   assert.equal(countOccurrences(markup, 'data-testid="execution-recovery-card"'), 0)
 })
 
-test('Workbench caller keeps the legacy recovery card without a Planning Incident', () => {
+test('Workbench caller renders one unified current Recovery Incident', () => {
   const markup = renderRecoverySurface({
     candidate: recovery('ready'),
     isApplicationPlanningPhase: false
   })
 
   assert.equal(countOccurrences(markup, 'data-testid="application-planning-recovery-incident"'), 0)
-  assert.equal(countOccurrences(markup, 'data-testid="execution-recovery-card"'), 1)
+  assert.equal(countOccurrences(markup, 'data-testid="workbench-recovery-incident"'), 1)
 })
 
 test('awaiting_user leaves the business confirmation card as the only control surface', () => {

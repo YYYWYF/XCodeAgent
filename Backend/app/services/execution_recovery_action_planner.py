@@ -29,6 +29,10 @@ from app.services.application_planning_stage_recovery import (
 from app.services.execution_recovery_capability import (
     assess_native_recovery_capability,
 )
+from app.services.execution_retry_dispatcher import (
+    RetryOperationCapability,
+    assess_retry_operation,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +95,7 @@ async def plan_recovery_action(
     point: RecoveryPoint | None,
     snapshot: Any,
     lifecycle: ApplicationLifecycle | None = None,
+    graph: Any | None = None,
 ) -> tuple[RecoveryActionPlan, TechnicalPlanningStageRestartAssessment | None]:
     """基于 durable facts 选择最近的确定性恢复入口，不执行任何动作。"""
 
@@ -105,6 +110,23 @@ async def plan_recovery_action(
             lifecycle=current_lifecycle,
         )
     native_capability = assess_native_recovery_capability(recovery_plan)
+    retry_capability = RetryOperationCapability(
+        executable=False,
+        handler=None,
+        reason_code="RETRY_HANDLER_NOT_AVAILABLE",
+        reason="当前失败暂未接入可执行的 operation retry handler。",
+    )
+    if (
+        graph is not None
+        and source.execution_kind == "workbench"
+        and source.status.value == "failed"
+        and not native_capability.executable
+    ):
+        retry_capability = await assess_retry_operation(
+            workspace=workspace,
+            source=source,
+            graph=graph,
+        )
     previous_native_retry = await _source_was_native_retry(
         workspace=workspace,
         source=source,
@@ -122,6 +144,9 @@ async def plan_recovery_action(
         point=point,
         lifecycle=current_lifecycle,
         stage_assessment=stage_assessment if stage_restart_available else None,
+        retry_handler=(
+            retry_capability.handler if retry_capability.executable else None
+        ),
     )
     if recovery_plan.decision is RecoveryDecision.AWAITING_USER:
         return (
@@ -169,6 +194,24 @@ async def plan_recovery_action(
                 status=RecoveryIncidentStatus.RECOVERABLE,
                 reason_code=recovery_plan.reason_code,
                 message="已找到可验证的恢复入口，可以继续执行。",
+                primary_action=action,
+            ),
+            stage_assessment,
+        )
+    if retry_capability.executable and retry_capability.handler is not None:
+        action = _action(
+            incident_id=incident_id,
+            kind=RecoveryActionKind.RETRY_OPERATION,
+            label=_retry_label(retry_capability.handler),
+            description=retry_capability.reason,
+        )
+        return (
+            _action_plan(
+                source=source,
+                incident_id=incident_id,
+                status=RecoveryIncidentStatus.RECOVERABLE,
+                reason_code=retry_capability.reason_code,
+                message="当前失败操作可以安全重试，具体执行方式由 Backend 决定。",
                 primary_action=action,
             ),
             stage_assessment,
@@ -232,12 +275,22 @@ def _action(
     )
 
 
+def _retry_label(handler: str) -> str:
+    """把 Backend 内部 retry handler 映射为用户可见动作标签。"""
+
+    return {
+        "retry_code_review": "重试代码审查",
+        "retry_failed_tasks": "重试失败任务",
+    }.get(handler, "重试失败操作")
+
+
 def _incident_id(
     *,
     source: DurableExecutionRecord,
     point: RecoveryPoint | None,
     lifecycle: ApplicationLifecycle | None,
     stage_assessment: TechnicalPlanningStageRestartAssessment | None,
+    retry_handler: str | None = None,
 ) -> str:
     """把 Stage authority 纳入稳定 incidentId，避免正式文件变化复用旧动作。"""
 
@@ -252,6 +305,7 @@ def _incident_id(
             if stage_assessment is not None and stage_assessment.authority is not None
             else None
         ),
+        'retryHandler': retry_handler,
     })[:32]}"
 
 

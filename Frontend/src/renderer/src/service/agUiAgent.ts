@@ -58,9 +58,6 @@ export type SendWorkflowMessageOptions = {
     action: 'execute'
     incidentId: string
     actionId: string
-  } | {
-    action: 'continue' | 'retry_current_failure'
-    sourceRunId: string
   }
   onContent?: (content: string) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
@@ -553,11 +550,6 @@ export function getWorkflowUrl(): string {
 /** 返回自由对话 Graph 的 AG-UI 地址。 */
 export function getConversationUrl(): string {
   return `${getAgentBaseUrl()}/conversation/run`
-}
-
-/** 返回独立 Durable Recovery 使用的 AG-UI 地址，不改变普通 Workflow transport。 */
-export function getExecutionRecoveryUrl(): string {
-  return `${getAgentBaseUrl()}/execution-recovery/run`
 }
 
 /** 返回 Planning Current Incident 使用的 Backend-authoritative action 地址。 */

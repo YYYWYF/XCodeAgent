@@ -17,6 +17,7 @@ from ag_ui.core import (
 )
 from ag_ui.encoder import EventEncoder
 from app.domain.execution_recovery import RecoveryExecutionError
+from app.domain.execution_recovery import RecoveryActionKind
 from app.graph.application_planning_workflow import application_planning_graph_for_request
 from app.graph.workflow import workflow_graph_for_request
 from app.persistence.execution_recovery import (
@@ -29,6 +30,7 @@ from app.services.execution_recovery_executor import (
     NativeRecoveryRuntimeContext,
     prepare_stage_restart,
     prepare_native_recovery,
+    prepare_operation_retry,
 )
 from app.services.execution_retry_dispatcher import prepare_retry_current_failure
 from app.services.execution_recovery_lineage import reconcile_recovery_attempt
@@ -192,6 +194,7 @@ def build_execution_recovery_ag_ui_stream(
                 point=facts.point,
                 snapshot=facts.snapshot,
                 lifecycle=facts.lifecycle,
+                graph=graph,
             )
             if action == "execute" and (
                 action_plan.incident_id != incident_id
@@ -204,14 +207,8 @@ def build_execution_recovery_ag_ui_stream(
                 )
             if action_plan.primary_action is None:
                 raise RecoveryExecutionError(action_plan.reason_code, action_plan.message)
-            if action_plan.primary_action.kind.value == "restart_stage":
-                context = await prepare_stage_restart(
-                    workspace=workspace,
-                    source_run_id=source.run_id,
-                    graph=graph,
-                    assessment=stage_assessment,
-                )
-            else:
+            kind = action_plan.primary_action.kind
+            if kind is RecoveryActionKind.CONTINUE_CHECKPOINT:
                 context = await prepare_native_recovery(
                     workspace=workspace,
                     source_run_id=source.run_id,
@@ -221,6 +218,25 @@ def build_execution_recovery_ag_ui_stream(
                         if replay_policies is not None
                         else production_recovery_replay_policies()
                     ),
+                )
+            elif kind is RecoveryActionKind.RETRY_OPERATION:
+                context = await prepare_operation_retry(
+                    workspace=workspace,
+                    source_run_id=source.run_id,
+                    graph=graph,
+                    recovery_plan=recovery_plan,
+                )
+            elif kind is RecoveryActionKind.RESTART_STAGE:
+                context = await prepare_stage_restart(
+                    workspace=workspace,
+                    source_run_id=source.run_id,
+                    graph=graph,
+                    assessment=stage_assessment,
+                )
+            else:
+                raise RecoveryExecutionError(
+                    "RECOVERY_ACTION_NOT_EXECUTABLE",
+                    "当前 RecoveryActionPlan 没有可执行的 Workbench action。",
                 )
             async for frame in build_workflow_ag_ui_stream(
                 graph=context.graph,
@@ -425,6 +441,7 @@ async def _resolve_action_source_run(
             point=facts.point,
             snapshot=facts.snapshot,
             lifecycle=facts.lifecycle,
+            graph=graph,
         )
         if (
             action_plan.incident_id == incident_id

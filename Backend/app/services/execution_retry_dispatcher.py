@@ -32,6 +32,18 @@ class RetryDispatchPlan:
     internal_payload: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class RetryOperationCapability:
+    """保存只读 operation retry 能力判断，不创建 child 或执行 handler。"""
+
+    executable: bool
+    handler: RetryHandler | None
+    reason_code: str
+    reason: str
+    snapshot: Any | None = None
+    resume_from: str | None = None
+
+
 class RetryAdapter(Protocol):
     """定义一个只负责构造并试运行旧 handler 请求的 Adapter。"""
 
@@ -41,6 +53,8 @@ class RetryAdapter(Protocol):
         self,
         source: DurableExecutionRecord,
         snapshot: Any,
+        *,
+        new_run_id: str | None = None,
     ) -> dict[str, Any] | None:
         """根据失败现场返回可被现有 Workflow parser 接受的内部请求。"""
 
@@ -54,10 +68,12 @@ class CodeReviewRetryAdapter:
         self,
         source: DurableExecutionRecord,
         snapshot: Any,
+        *,
+        new_run_id: str | None = None,
     ) -> dict[str, Any] | None:
         """通过现有 Workflow parser 判断审查重试是否适用于当前现场。"""
 
-        payload = _retry_payload(source, snapshot, self.name)
+        payload = _retry_payload(source, snapshot, self.name, new_run_id=new_run_id)
         try:
             parsed = workflow_run_inputs(payload)
         except ValueError:
@@ -74,13 +90,15 @@ class FailedTasksRetryAdapter:
         self,
         source: DurableExecutionRecord,
         snapshot: Any,
+        *,
+        new_run_id: str | None = None,
     ) -> dict[str, Any] | None:
         """先确认 Build 恢复能力，再通过现有 parser 判断失败任务重试是否适用。"""
 
         if not _has_failed_tasks_retry_evidence(snapshot):
             return None
 
-        payload = _retry_payload(source, snapshot, self.name)
+        payload = _retry_payload(source, snapshot, self.name, new_run_id=new_run_id)
         try:
             parsed = workflow_run_inputs(payload)
         except ValueError:
@@ -94,6 +112,86 @@ RETRY_ADAPTERS: tuple[RetryAdapter, ...] = (
     CodeReviewRetryAdapter(),
     FailedTasksRetryAdapter(),
 )
+
+
+def _capability_failure(code: str, reason: str) -> RetryOperationCapability:
+    """构造不可执行能力，统一隐藏 checkpoint 读取与 handler 选择细节。"""
+
+    return RetryOperationCapability(
+        executable=False,
+        handler=None,
+        reason_code=code,
+        reason=reason,
+    )
+
+
+async def assess_retry_operation(
+    *,
+    workspace: str,
+    source: DurableExecutionRecord,
+    graph: Any,
+) -> RetryOperationCapability:
+    """只证明当前 FAILED Workbench 是否存在可执行 RetryAdapter。"""
+
+    if _workspace_identity(source.workspace) != _workspace_identity(workspace):
+        return _capability_failure(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "workspaceRoot 与 source execution 的 workspace 不一致。",
+        )
+    if source.status is not DurableExecutionStatus.FAILED:
+        return _capability_failure(
+            "RETRY_SOURCE_NOT_FAILED",
+            "operation retry 只接受 failed execution。",
+        )
+    if source.execution_kind != "workbench":
+        return _capability_failure(
+            "RETRY_HANDLER_NOT_AVAILABLE",
+            "当前 execution kind 不支持 Workbench operation retry。",
+        )
+    if not source.last_recovery_point_id:
+        return _capability_failure(
+            "RETRY_SOURCE_CHECKPOINT_INVALID",
+            "当前失败没有可用的精确 RecoveryPoint。",
+        )
+    point = await get_recovery_point(workspace, source.last_recovery_point_id)
+    if (
+        point is None
+        or point.kind is not RecoveryPointKind.CHECKPOINT
+        or point.run_id != source.run_id
+        or point.thread_id != source.thread_id
+        or not point.checkpoint_id
+    ):
+        return _capability_failure(
+            "RETRY_SOURCE_CHECKPOINT_INVALID",
+            "当前失败的 RecoveryPoint 无效，无法安全重试。",
+        )
+    try:
+        snapshot = await _read_source_snapshot(graph, source, point)
+        _validate_source_snapshot(source, point, snapshot)
+        await _validate_current_thread_head(graph=graph, source=source, point=point)
+    except RecoveryExecutionError as exc:
+        return _capability_failure(str(exc.code), str(exc))
+
+    for adapter in RETRY_ADAPTERS:
+        payload = await adapter.prepare(source, snapshot, new_run_id=source.run_id)
+        if payload is not None:
+            parsed = workflow_run_inputs(payload)
+            return RetryOperationCapability(
+                executable=True,
+                handler=adapter.name,
+                reason_code="RETRY_OPERATION_AVAILABLE",
+                reason="当前失败可以安全重试对应的失败操作。",
+                snapshot=snapshot,
+                resume_from=str(
+                    parsed.get("resume_from")
+                    or ((point.next_nodes or [""])[0])
+                    or ""
+                ),
+            )
+    return _capability_failure(
+        "RETRY_HANDLER_NOT_AVAILABLE",
+        "当前失败暂未接入可执行的 operation retry handler。",
+    )
 
 
 async def prepare_retry_current_failure(
@@ -110,60 +208,25 @@ async def prepare_retry_current_failure(
             "SOURCE_EXECUTION_NOT_FOUND",
             "source execution 不存在。",
         )
-    if _workspace_identity(source.workspace) != _workspace_identity(workspace):
-        raise RecoveryExecutionError(
-            "INVALID_EXECUTION_RECOVERY_REQUEST",
-            "workspaceRoot 与 source execution 的 workspace 不一致。",
-        )
-    if source.status is not DurableExecutionStatus.FAILED:
-        raise RecoveryExecutionError(
-            "RETRY_SOURCE_NOT_FAILED",
-            "通用重试只接受 failed execution。",
-        )
-    if source.execution_kind != "workbench":
-        raise RecoveryExecutionError(
-            "RETRY_HANDLER_NOT_AVAILABLE",
-            "当前失败暂未接入通用重试，请继续使用原有重试入口。",
-        )
-    if not source.last_recovery_point_id:
-        raise RecoveryExecutionError(
-            "RETRY_SOURCE_CHECKPOINT_INVALID",
-            "当前失败没有可用的精确 RecoveryPoint。",
-        )
-
-    point = await get_recovery_point(workspace, source.last_recovery_point_id)
-    if (
-        point is None
-        or point.kind is not RecoveryPointKind.CHECKPOINT
-        or point.run_id != source.run_id
-        or point.thread_id != source.thread_id
-        or not point.checkpoint_id
-    ):
-        raise RecoveryExecutionError(
-            "RETRY_SOURCE_CHECKPOINT_INVALID",
-            "当前失败的 RecoveryPoint 无效，无法安全重试。",
-        )
-    snapshot = await _read_source_snapshot(graph, source, point)
-    _validate_source_snapshot(source, point, snapshot)
-    await _validate_current_thread_head(
-        graph=graph,
+    capability = await assess_retry_operation(
+        workspace=workspace,
         source=source,
-        point=point,
+        graph=graph,
     )
-
-    for adapter in RETRY_ADAPTERS:
-        payload = await adapter.prepare(source, snapshot)
-        if payload is not None:
-            return RetryDispatchPlan(
-                source_run_id=source.run_id,
-                thread_id=source.thread_id,
-                owner_session_id=source.owner_session_id,
-                handler=adapter.name,
-                internal_payload=payload,
-            )
-    raise RecoveryExecutionError(
-        "RETRY_HANDLER_NOT_AVAILABLE",
-        "当前失败暂未接入通用重试，请继续使用原有重试入口。",
+    if not capability.executable or capability.handler is None:
+        raise RecoveryExecutionError(capability.reason_code, capability.reason)
+    payload = _retry_payload(
+        source,
+        capability.snapshot,
+        capability.handler,
+        new_run_id=f"workflow-{uuid4().hex[:12]}",
+    )
+    return RetryDispatchPlan(
+        source_run_id=source.run_id,
+        thread_id=source.thread_id,
+        owner_session_id=source.owner_session_id,
+        handler=capability.handler,
+        internal_payload=payload,
     )
 
 
@@ -292,6 +355,8 @@ def _retry_payload(
     source: DurableExecutionRecord,
     snapshot: Any,
     handler: RetryHandler,
+    *,
+    new_run_id: str | None = None,
 ) -> dict[str, Any]:
     """构造不向 Frontend 暴露的 Backend-owned 旧 handler payload。"""
 
@@ -323,7 +388,7 @@ def _retry_payload(
         forwarded_props["workflowScope"] = source.workflow_scope
     return {
         "threadId": source.thread_id,
-        "runId": f"workflow-{uuid4().hex[:12]}",
+        "runId": new_run_id or source.run_id,
         "messages": [
             {
                 "role": "user",
@@ -344,5 +409,7 @@ __all__ = [
     "RETRY_ADAPTERS",
     "RetryAdapter",
     "RetryDispatchPlan",
+    "RetryOperationCapability",
+    "assess_retry_operation",
     "prepare_retry_current_failure",
 ]

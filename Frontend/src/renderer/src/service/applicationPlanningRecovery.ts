@@ -7,6 +7,12 @@ import { workflowApplicationLifecycle } from './activeApplicationPlanning'
 import { getApplicationLifecycle } from './applicationLifecycle'
 import { getApplicationPlanningUrl } from './applicationPagePlanning'
 import { createAgUiHttpAgent, isAuthenticationFailure } from './authentication'
+import {
+  parseRecoveryActionPlan as parseSharedRecoveryActionPlan,
+  type RecoveryAction,
+  type RecoveryActionPlan,
+  type RecoveryFailureDiagnostic
+} from './recoveryActionPlan'
 
 const APPLICATION_PLANNING_RECONCILE_TIMEOUT_MS = 20_000
 const APPLICATION_PLANNING_RECONCILE_ATTEMPTS = 2
@@ -29,51 +35,15 @@ export type ApplicationPlanningAuthoritativeSnapshot = {
   recovery: ApplicationPlanningRecoveryProjection
 }
 
-export interface ApplicationPlanningFailureDiagnostic {
-  sourceRunId: string
-  origin: string
-  code: string
-  operation?: string | null
-  dependency?: string | null
-  provider?: string | null
-  model?: string | null
-  httpStatus?: number | null
-  message?: string | null
-}
-
-export type RecoveryActionKind =
-  | 'continue_checkpoint'
-  | 'retry_operation'
-  | 'restart_stage'
-  | 'reconcile_state'
-  | 'await_user'
-  | 'needs_attention'
-
-export type RecoveryIncidentStatus =
-  | 'recoverable'
-  | 'awaiting_user'
-  | 'needs_attention'
-
-export type ApplicationPlanningRecoveryAction = {
-  actionId: string
-  kind: RecoveryActionKind
-  label: string
-  description: string
-  requiresConfirmation: boolean
-}
-
-export type ApplicationPlanningRecoveryActionPlan = {
-  schemaVersion: 'recovery-action-plan.v1'
-  incidentId: string
-  sourceRunId: string
-  threadId: string
-  executionKind: 'application_planning'
-  status: RecoveryIncidentStatus
-  reasonCode: string
-  message: string
-  primaryAction?: ApplicationPlanningRecoveryAction | null
-  alternateActions: ApplicationPlanningRecoveryAction[]
-}
+export type {
+  RecoveryActionKind,
+  RecoveryFailureDiagnostic,
+  RecoveryIncidentStatus
+} from './recoveryActionPlan'
+export type ApplicationPlanningFailureDiagnostic = RecoveryFailureDiagnostic
+export type ApplicationPlanningRecoveryAction = RecoveryAction
+export type ApplicationPlanningRecoveryActionPlan = RecoveryActionPlan<'application_planning'>
+export { parseRecoveryAction, parseRecoveryActionPlan } from './recoveryActionPlan'
 
 export type ApplicationPlanningRecoveryProjection = {
   schemaVersion: 'application-planning-recovery.v1'
@@ -107,28 +77,6 @@ const APPLICATION_PLANNING_RECOVERY_CLASSIFICATIONS = new Set([
   'conflict',
   'legacy_unverified'
 ])
-
-const RECOVERY_ACTION_KINDS = new Set<RecoveryActionKind>([
-  'continue_checkpoint',
-  'retry_operation',
-  'restart_stage',
-  'reconcile_state',
-  'await_user',
-  'needs_attention'
-])
-
-const RECOVERY_INCIDENT_STATUSES = new Set<RecoveryIncidentStatus>([
-  'recoverable',
-  'awaiting_user',
-  'needs_attention'
-])
-
-/** 从恢复协议中读取非空文本，避免把任意对象转成用户可见字符串。 */
-function requiredRecoveryText(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined
-  const normalized = value.trim()
-  return normalized || undefined
-}
 
 /** 从公开投影中读取可展示的可选文本，拒绝对象、数组和未定义字段。 */
 function optionalDiagnosticText(value: unknown): string | null | undefined {
@@ -171,94 +119,20 @@ function parseFailureDiagnostic(
   }
 }
 
-/** 严格解析一个 Backend-authoritative 恢复动作，不接受未知 kind 或缺失字段。 */
-export function parseRecoveryAction(value: unknown): ApplicationPlanningRecoveryAction | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-  const candidate = value as Record<string, unknown>
-  const actionId = requiredRecoveryText(candidate.actionId)
-  const kind = requiredRecoveryText(candidate.kind)
-  const label = requiredRecoveryText(candidate.label)
-  const description = requiredRecoveryText(candidate.description)
-  if (
-    !actionId ||
-    !kind ||
-    !RECOVERY_ACTION_KINDS.has(kind as RecoveryActionKind) ||
-    !label ||
-    !description ||
-    typeof candidate.requiresConfirmation !== 'boolean'
-  ) {
-    return undefined
-  }
-  return {
-    actionId,
-    kind: kind as RecoveryActionKind,
-    label,
-    description,
-    requiresConfirmation: candidate.requiresConfirmation
-  }
-}
-
 /** 严格解析当前 RecoveryActionPlan，并校验它与外层 Planning thread/source 身份一致。 */
-export function parseRecoveryActionPlan(
+function parsePlanningRecoveryActionPlan(
   value: unknown,
   outer?: { threadId: string; sourceRunId?: string }
 ): ApplicationPlanningRecoveryActionPlan | null | undefined {
-  if (value === null) return null
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-  const candidate = value as Record<string, unknown>
-  const incidentId = requiredRecoveryText(candidate.incidentId)
-  const sourceRunId = requiredRecoveryText(candidate.sourceRunId)
-  const threadId = requiredRecoveryText(candidate.threadId)
-  const executionKind = requiredRecoveryText(candidate.executionKind)
-  const status = requiredRecoveryText(candidate.status)
-  const reasonCode = requiredRecoveryText(candidate.reasonCode)
-  const message = requiredRecoveryText(candidate.message)
-  if (
-    candidate.schemaVersion !== 'recovery-action-plan.v1' ||
-    !incidentId ||
-    !sourceRunId ||
-    !threadId ||
-    !executionKind ||
-    executionKind !== 'application_planning' ||
-    !status ||
-    !RECOVERY_INCIDENT_STATUSES.has(status as RecoveryIncidentStatus) ||
-    !reasonCode ||
-    !message ||
-    (outer !== undefined && threadId !== outer.threadId) ||
-    (outer?.sourceRunId !== undefined && sourceRunId !== outer.sourceRunId) ||
-    !Array.isArray(candidate.alternateActions)
-  ) {
-    return undefined
-  }
-
-  const primaryAction =
-    candidate.primaryAction === undefined || candidate.primaryAction === null
-      ? candidate.primaryAction === null
-        ? null
-        : undefined
-      : parseRecoveryAction(candidate.primaryAction)
-  if (candidate.primaryAction !== undefined && candidate.primaryAction !== null && !primaryAction) {
-    return undefined
-  }
-  const alternateActions: ApplicationPlanningRecoveryAction[] = []
-  for (const action of candidate.alternateActions) {
-    const parsed = parseRecoveryAction(action)
-    if (!parsed) return undefined
-    alternateActions.push(parsed)
-  }
-  if (status === 'recoverable' && !primaryAction) return undefined
-  return {
-    schemaVersion: 'recovery-action-plan.v1',
-    incidentId,
-    sourceRunId,
-    threadId,
-    executionKind: 'application_planning',
-    status: status as RecoveryIncidentStatus,
-    reasonCode,
-    message,
-    ...(primaryAction !== undefined ? { primaryAction } : {}),
-    alternateActions
-  }
+  return parseSharedRecoveryActionPlan<'application_planning'>(
+    value,
+    outer
+      ? {
+          ...outer,
+          executionKind: 'application_planning'
+        }
+      : undefined
+  )
 }
 
 /** 从 Workflow result/state 严格读取 Backend 给出的 Planning 恢复分类。 */
@@ -291,7 +165,7 @@ export function applicationPlanningRecoveryProjection(
       value,
       'recoveryActionPlan'
     )
-    const recoveryActionPlan = parseRecoveryActionPlan(value.recoveryActionPlan, {
+    const recoveryActionPlan = parsePlanningRecoveryActionPlan(value.recoveryActionPlan, {
       threadId,
       ...(sourceRunId ? { sourceRunId } : {})
     })

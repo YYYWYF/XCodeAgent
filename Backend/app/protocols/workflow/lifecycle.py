@@ -203,9 +203,9 @@ def _validate_revision_continuation_replacement(
         or execution is None
         or execution.phase != "application_revision"
     ):
-        raise ApplicationLifecycleConflictError("revision continuation 的规划执行绑定无效。")
+        raise ApplicationLifecycleConflictError("revision continuation 的计划执行绑定无效。")
     if execution.scope != scope or execution.target_id != target_id:
-        raise ApplicationLifecycleConflictError("revision continuation 的开发目标与规划执行不一致。")
+        raise ApplicationLifecycleConflictError("revision continuation 的开发目标与计划执行不一致。")
 
 
 def _validate_resumable_execution(

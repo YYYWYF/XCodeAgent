@@ -274,7 +274,7 @@ function recoverablePlanningFailureMessage(
 
   if (recovery.failureDiagnostic?.code) return recovery.failureDiagnostic.code
 
-  return '上一次规划执行失败。'
+  return '上一次计划执行失败。'
 }
 
 /** 合并 Workflow 及其 lifecycle，并保留同一运行中的原生中断投影。 */

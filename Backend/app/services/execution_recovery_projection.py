@@ -9,7 +9,6 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord,
     ExecutionRecoveryProjection,
     ExecutionRecoveryProjectionCandidate,
-    RecoveryDecision,
 )
 from app.graph.application_planning_workflow import application_planning_graph_for_request
 from app.graph.workflow import workflow_graph_for_request
@@ -21,10 +20,6 @@ from app.services.execution_recovery_policies import (
 from app.services.execution_recovery_action_planner import (
     build_recovery_facts,
     plan_recovery_action,
-)
-from app.services.execution_recovery_capability import (
-    assess_native_recovery_capability,
-    NativeRecoveryCapability,
 )
 
 
@@ -102,13 +97,13 @@ async def _resolve_candidate(
         point=facts.point,
         snapshot=facts.snapshot,
         lifecycle=facts.lifecycle,
+        graph=graph,
     )
-    native_capability = assess_native_recovery_capability(plan)
-    availability = _availability_for_decision(plan.decision, native_capability)
-    if action_plan.primary_action is not None:
-        availability = "ready"
-    if availability is None:
-        return None
+    availability = {
+        "recoverable": "ready",
+        "awaiting_user": "awaiting_user",
+        "needs_attention": "blocked",
+    }[action_plan.status.value]
     owner_session_id = await _resolve_owner_session_id(
         record=record,
         plan=plan,
@@ -116,7 +111,7 @@ async def _resolve_candidate(
     )
     if owner_session_id is None:
         return None
-    can_continue = availability == "ready" and action_plan.primary_action is not None
+    can_continue = action_plan.status.value == "recoverable" and action_plan.primary_action is not None
     return ExecutionRecoveryProjectionCandidate(
         source_run_id=record.run_id,
         owner_session_id=owner_session_id,
@@ -130,6 +125,11 @@ async def _resolve_candidate(
         reason_code=action_plan.reason_code,
         message=action_plan.message,
         updated_at=record.updated_at,
+        failureDiagnostic=(
+            record.failure.model_dump(mode="json", by_alias=True)
+            if record.failure is not None
+            else None
+        ),
         recoveryActionPlan=action_plan.model_dump(mode="json", by_alias=True),
     )
 
@@ -164,26 +164,6 @@ async def _resolve_owner_session_id(
         return None
     resolved = str(values.get("owner_session_id") or "").strip()
     return resolved or None
-
-
-def _availability_for_decision(
-    decision: RecoveryDecision,
-    native_capability: NativeRecoveryCapability,
-) -> str | None:
-    """把 P0.3A 决策映射为不暴露内部恢复 authority 的 UI 状态。"""
-
-    if decision is RecoveryDecision.READY_NATIVE:
-        return "ready" if native_capability.executable else "blocked"
-    if decision is RecoveryDecision.REQUIRES_HANDLER:
-        return "requires_handler"
-    if decision in {
-        RecoveryDecision.STATE_DRIFT,
-        RecoveryDecision.INVALID_RECOVERY_POINT,
-    }:
-        return "blocked"
-    if decision is RecoveryDecision.AWAITING_USER:
-        return "awaiting_user"
-    return None
 
 
 def _message_for_availability(

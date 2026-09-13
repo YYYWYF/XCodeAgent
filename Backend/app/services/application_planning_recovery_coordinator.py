@@ -207,7 +207,7 @@ async def resolve_application_planning_recovery(
             source=source,
             thread_id=thread_id,
             reason_code=admission.reason_code,
-            message="上一次规划执行缺少可证明安全的恢复证据，当前现场不能自动继续。",
+            message="上一次计划执行缺少可证明安全的恢复证据，当前现场不能自动继续。",
             input_committed=input_committed,
         )
     if source.status not in {
@@ -219,7 +219,7 @@ async def resolve_application_planning_recovery(
             source=source,
             thread_id=thread_id,
             reason_code="DURABLE_APPLICATION_PLANNING_NOT_CONTINUABLE",
-            message="当前规划状态无法安全自动恢复，请查看恢复状态。",
+            message="当前计划状态无法安全自动恢复，请查看恢复状态。",
             input_committed=input_committed,
         )
 

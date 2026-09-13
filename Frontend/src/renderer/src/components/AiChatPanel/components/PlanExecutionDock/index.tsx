@@ -3,8 +3,7 @@ import {
   ExclamationCircleOutlined,
   LoadingOutlined,
   LockOutlined,
-  PauseCircleOutlined,
-  RedoOutlined
+  PauseCircleOutlined
 } from '@ant-design/icons'
 import { Button, Modal, Popconfirm, Typography } from 'antd'
 import { useEffect, useState } from 'react'
@@ -18,42 +17,32 @@ import './PlanExecutionDock.less'
 const { Text } = Typography
 
 type Props = {
-  canRetryFailedTasks?: boolean
   dependencyLocked?: boolean
   error?: string
   execution?: WorkbenchExecution
-  genericRetryLoading?: boolean
   mode: Exclude<PlanExecutionMode, 'idle'>
   ownerPageId?: string
   onAccept: () => Promise<boolean>
   onConfirmInteraction: (decision: 'reject' | 'once' | 'always') => void
   onEnd: () => void
-  onGenericRetry?: () => void
   onOpenPreview: () => void
-  onRetry: () => void
   onStop: () => void
   onViewPlan: () => void
-  retryActionRunning?: boolean
 }
 
 /** 仅替换工作区最底部输入区，承载计划锁定说明和必要控制动作。 */
 export default function PlanExecutionDock({
-  canRetryFailedTasks = false,
   dependencyLocked = false,
   error,
   execution,
-  genericRetryLoading = false,
   mode,
   ownerPageId,
   onAccept,
   onConfirmInteraction,
   onEnd,
-  onGenericRetry,
   onOpenPreview,
-  onRetry,
   onStop,
-  onViewPlan,
-  retryActionRunning = false
+  onViewPlan
 }: Props): ReactElement {
   const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -101,8 +90,7 @@ export default function PlanExecutionDock({
                   mode,
                   execution?.phase,
                   pending?.payload,
-                  error,
-                  canRetryFailedTasks
+                  error
                 )}
           </Text>
         </div>
@@ -196,26 +184,6 @@ export default function PlanExecutionDock({
             )}
             {(mode === 'failed' || mode === 'stopped') && (
               <>
-                {mode === 'failed' && onGenericRetry ? (
-                  <Button
-                    disabled={retryActionRunning}
-                    icon={<RedoOutlined />}
-                    loading={genericRetryLoading}
-                    onClick={onGenericRetry}
-                  >
-                    通用重试（试用）
-                  </Button>
-                ) : null}
-                {(mode === 'stopped' || (mode === 'failed' && canRetryFailedTasks)) && (
-                  <Button
-                    disabled={genericRetryLoading || retryActionRunning}
-                    icon={<RedoOutlined />}
-                    onClick={onRetry}
-                    type="primary"
-                  >
-                    {mode === 'failed' ? '重试失败任务' : '继续执行'}
-                  </Button>
-                )}
                 <Popconfirm
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
@@ -309,16 +277,10 @@ function planModeDescription(
   mode: Exclude<PlanExecutionMode, 'idle'>,
   phase?: string,
   payload?: Record<string, unknown>,
-  error?: string,
-  canRetryFailedTasks = false
+  error?: string
 ): string {
   if (mode === 'failed') {
-    return (
-      error ||
-      (canRetryFailedTasks
-        ? '存在可恢复的失败任务或待执行修复任务。'
-        : '当前失败需要调整计划、确认修复范围或结束。')
-    )
+    return error || '当前失败需要通过 Recovery Incident 处理，或结束当前计划。'
   }
   if (mode === 'awaiting_repair_confirmation') {
     return String(payload?.reason || payload?.message || '修复范围发生变化，确认后继续。')
