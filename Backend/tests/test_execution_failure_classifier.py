@@ -62,6 +62,31 @@ class ExecutionFailureClassifierTests(unittest.TestCase):
         assert diagnostic is not None
         self.assertLessEqual(len(diagnostic), 2048)
 
+    def test_diagnostic_message_redacts_quoted_key_value_secrets(self) -> None:
+        """JSON 和 Python dict 格式的凭据值也必须从诊断摘要中移除。"""
+
+        cases = (
+            ('{"api_key":"key-secret"}', "key-secret"),
+            ("{'token': 'token-secret'}", "token-secret"),
+            ('{"access_token":"access-secret"}', "access-secret"),
+            ("{'x-api-key': 'anthropic-secret'}", "anthropic-secret"),
+        )
+
+        for message, secret in cases:
+            with self.subTest(message=message):
+                diagnostic = sanitize_failure_diagnostic(RuntimeError(message))
+
+                self.assertIsNotNone(diagnostic)
+                assert diagnostic is not None
+                self.assertNotIn(secret, diagnostic)
+
+        diagnostic = sanitize_failure_diagnostic(
+            RuntimeError("upstream model failed while loading configuration")
+        )
+        self.assertEqual(
+            diagnostic, "upstream model failed while loading configuration"
+        )
+
     def test_diagnostic_message_does_not_change_recovery_identity_hash(self) -> None:
         """同一失败事实的展示文案变化不得改变 source failure identity。"""
 

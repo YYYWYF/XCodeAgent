@@ -37,8 +37,8 @@ _AUTHORIZATION_SECRET_PATTERN = re.compile(
 )
 _BEARER_SECRET_PATTERN = re.compile(r"(?i)\bbearer\s+[^\s,;&}\])]+")
 _KEY_VALUE_SECRET_PATTERN = re.compile(
-    r"(?i)(\b(?:api[_-]?key|access[_-]?token|token)\s*[=:]\s*)"
-    r"[^\s,;&}\])]+"
+    r"(?i)(?P<prefix>(?<![\w-])['\"]?(?:x-api-key|api[_-]?key|access[_-]?token|token|authorization)"
+    r"['\"]?\s*[=:]\s*)(?P<quote>['\"]?)(?P<secret>[^\s,;&}\])'\"]+)(?P=quote)"
 )
 
 
@@ -50,7 +50,9 @@ def sanitize_failure_diagnostic(exc: BaseException) -> str | None:
         return None
     diagnostic = _AUTHORIZATION_SECRET_PATTERN.sub(r"\1[REDACTED]", diagnostic)
     diagnostic = _BEARER_SECRET_PATTERN.sub("[REDACTED]", diagnostic)
-    diagnostic = _KEY_VALUE_SECRET_PATTERN.sub(r"\1[REDACTED]", diagnostic)
+    diagnostic = _KEY_VALUE_SECRET_PATTERN.sub(
+        r"\g<prefix>\g<quote>[REDACTED]\g<quote>", diagnostic
+    )
     diagnostic = diagnostic[:2048].strip()
     return diagnostic or None
 
