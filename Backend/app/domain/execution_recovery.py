@@ -232,6 +232,15 @@ class RecoveryPoint(ExecutionRecoveryModel):
     captured_at: datetime
 
 
+class ExecutionFailureBoundary(ExecutionRecoveryModel):
+    """固定一次失败证据所依据的 exact durable Graph boundary。"""
+
+    recovery_point_id: str = Field(min_length=1, max_length=512)
+    checkpoint_id: str = Field(min_length=1, max_length=512)
+    checkpoint_ns: str = Field(default="", max_length=512)
+    operation: str = Field(min_length=1, max_length=256)
+
+
 class RecoveryPlan(ExecutionRecoveryModel):
     """保存只读恢复协调结果，不复制完整 Graph State 或业务产物。"""
 

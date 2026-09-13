@@ -12,6 +12,7 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionRunConflictError,
     DurableExecutionStatus,
+    ExecutionFailureBoundary,
     ExecutionLease,
     ExecutionLeaseStatus,
     ExecutionFailureEvidence,
@@ -22,10 +23,10 @@ from app.config import execution_recovery_lease_ttl_seconds
 from app.persistence.execution_recovery import (
     finish_execution_and_release_lease,
     get_execution,
-    get_latest_recovery_point,
     initialize_execution_recovery_store,
     insert_execution_with_lease,
     insert_recovery_point,
+    reconcile_execution_current_node,
     update_execution_node,
 )
 from app.services.application_lifecycle import load_application_lifecycle
@@ -310,16 +311,31 @@ async def observe_execution_failed(
     workflow_scope: str | None,
     backend_instance_id: str | None = None,
     exception: BaseException | None = None,
-    operation: str | None = None,
+    failure_boundary: ExecutionFailureBoundary | None = None,
     failure: ExecutionFailureEvidence | None = None,
 ) -> None:
     """记录未处理异常对应的失败终态。"""
 
-    authoritative_operation = await _failure_operation(
-        workspace=workspace,
-        run_id=run_id,
-        fallback_operation=operation,
+    authoritative_operation = (
+        failure_boundary.operation if failure_boundary is not None else None
     )
+    if failure_boundary is not None and workspace:
+        try:
+            await reconcile_execution_current_node(
+                workspace=workspace,
+                run_id=run_id,
+                authoritative_node=failure_boundary.operation,
+            )
+        except Exception as exc:
+            # mirror 收敛仍是旁路观测；即使它失败，也必须继续写入原始 FAILED 终态。
+            logger.warning(
+                "recovery.failure_authority.mirror_reconcile_failed "
+                "runId=%s operation=%s error=%s",
+                run_id,
+                failure_boundary.operation,
+                exc,
+                exc_info=True,
+            )
     evidence = failure or (
         classify_execution_failure(exception, operation=authoritative_operation)
         if exception is not None
@@ -344,47 +360,26 @@ async def observe_execution_failed(
     )
 
 
-async def _failure_operation(
+def failure_boundary_from_recovery_point(
     *,
-    workspace: str | None,
+    point: RecoveryPoint | None,
     run_id: str,
-    fallback_operation: str | None,
-) -> str | None:
-    """从 Durable Execution 或唯一 RecoveryPoint successor 解析失败节点。"""
+    thread_id: str,
+) -> ExecutionFailureBoundary | None:
+    """仅从本次异常现场的 exact RecoveryPoint 建立失败边界。"""
 
-    if not workspace:
+    if point is None or point.run_id != run_id or point.thread_id != thread_id:
         return None
-    try:
-        execution = await get_execution(workspace, run_id)
-    except Exception as exc:
-        # 读取 authority 失败时宁可留下无 operation 的 fail-closed evidence，
-        # 也不能重新相信调用方可能来自 UI 的阶段字段。
-        logger.warning(
-            "recovery.failure_authority.read_failed runId=%s error=%s",
-            run_id,
-            exc,
-            exc_info=True,
-        )
+    checkpoint_id = str(point.checkpoint_id or "").strip()
+    next_nodes = [str(node).strip() for node in point.next_nodes]
+    if not checkpoint_id or len(next_nodes) != 1 or not next_nodes[0]:
         return None
-    if execution is not None and execution.current_node:
-        return execution.current_node
-    try:
-        point = await get_latest_recovery_point(workspace, run_id)
-    except Exception as exc:
-        logger.warning(
-            "recovery.failure_authority.point_read_failed runId=%s error=%s",
-            run_id,
-            exc,
-            exc_info=True,
-        )
-        return None
-    if point is not None and len(point.next_nodes) == 1:
-        # RecoveryPoint 的唯一 next node 是已提交 Graph boundary 的后继，
-        # 仅在 execution.current_node 缺失时作为同一 authority 的补充事实。
-        return point.next_nodes[0]
-    if execution is None:
-        return str(fallback_operation or "").strip() or None
-    return None
+    return ExecutionFailureBoundary(
+        recovery_point_id=point.recovery_point_id,
+        checkpoint_id=checkpoint_id,
+        checkpoint_ns=point.checkpoint_ns,
+        operation=next_nodes[0],
+    )
 
 
 async def observe_execution_cancelled(

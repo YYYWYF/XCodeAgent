@@ -22,6 +22,7 @@ from app.services.execution_recovery import (
     observe_execution_finished,
     observe_execution_started,
     observe_node_started,
+    failure_boundary_from_recovery_point,
 )
 
 
@@ -180,6 +181,129 @@ class WorkflowExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.current_node, "B")
         self.assertEqual(record.status, DurableExecutionStatus.RUNNING)
 
+    async def test_failure_boundary_reconciles_stale_current_node(self) -> None:
+        """失败现场的唯一 checkpoint successor 必须覆盖落后的 mirror。"""
+
+        await observe_execution_started(
+            workspace=str(self.workspace),
+            project_id=None,
+            thread_id="thread-boundary",
+            run_id="run-boundary",
+            workflow_scope="application_planning",
+            first_node="requirements",
+        )
+        point = await capture_recovery_point(
+            graph=_SnapshotGraph(
+                SimpleNamespace(
+                    config={
+                        "configurable": {
+                            "thread_id": "thread-boundary",
+                            "checkpoint_id": "cp-product",
+                            "checkpoint_ns": "main",
+                        }
+                    },
+                    next=("product_planning",),
+                    values={"phase": "requirements", "status": "running"},
+                )
+            ),
+            config={},
+            workspace=str(self.workspace),
+            thread_id="thread-boundary",
+            run_id="run-boundary",
+            workflow_scope="application_planning",
+            completed_node="requirements",
+        )
+        boundary = failure_boundary_from_recovery_point(
+            point=point,
+            run_id="run-boundary",
+            thread_id="thread-boundary",
+        )
+        self.assertIsNotNone(boundary)
+        assert boundary is not None
+        self.assertEqual(boundary.operation, "product_planning")
+        await observe_execution_failed(
+            workspace=str(self.workspace),
+            run_id="run-boundary",
+            thread_id="thread-boundary",
+            workflow_scope="application_planning",
+            exception=RuntimeError("model unavailable"),
+            failure_boundary=boundary,
+        )
+
+        record = await get_execution(self.workspace, "run-boundary")
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.current_node, "product_planning")
+        self.assertIsNotNone(record.failure)
+        assert record.failure is not None
+        self.assertEqual(record.failure.operation, "product_planning")
+        latest = await get_latest_recovery_point(self.workspace, "run-boundary")
+        self.assertIsNotNone(latest)
+        assert latest is not None
+        self.assertEqual(latest.next_nodes, ["product_planning"])
+
+    async def test_failure_boundary_rejects_non_unique_successors_without_fallback(self) -> None:
+        """零个或多个 successor 时必须保持 recovery operation 为空。"""
+
+        for suffix, next_nodes in (("zero", ()), ("multiple", ("A", "B"))):
+            run_id = f"run-boundary-{suffix}"
+            await observe_execution_started(
+                workspace=str(self.workspace),
+                project_id=None,
+                thread_id="thread-boundary",
+                run_id=run_id,
+                workflow_scope="application_planning",
+                first_node="product_planning",
+            )
+            await observe_node_started(
+                workspace=str(self.workspace),
+                run_id=run_id,
+                thread_id="thread-boundary",
+                workflow_scope="application_planning",
+                node_name="product_planning",
+            )
+            point = await capture_recovery_point(
+                graph=_SnapshotGraph(
+                    SimpleNamespace(
+                        config={
+                            "configurable": {
+                                "thread_id": "thread-boundary",
+                                "checkpoint_id": f"cp-{suffix}",
+                                "checkpoint_ns": "main",
+                            }
+                        },
+                        next=next_nodes,
+                        values={"phase": "product_planning", "status": "running"},
+                    )
+                ),
+                config={},
+                workspace=str(self.workspace),
+                thread_id="thread-boundary",
+                run_id=run_id,
+                workflow_scope="application_planning",
+            )
+            self.assertIsNone(
+                failure_boundary_from_recovery_point(
+                    point=point,
+                    run_id=run_id,
+                    thread_id="thread-boundary",
+                )
+            )
+            await observe_execution_failed(
+                workspace=str(self.workspace),
+                run_id=run_id,
+                thread_id="thread-boundary",
+                workflow_scope="application_planning",
+                exception=RuntimeError("model unavailable"),
+            )
+            record = await get_execution(self.workspace, run_id)
+            self.assertIsNotNone(record)
+            assert record is not None
+            self.assertEqual(record.current_node, "product_planning")
+            self.assertIsNotNone(record.failure)
+            assert record.failure is not None
+            self.assertIsNone(record.failure.operation)
+
     async def test_terminal_statuses_are_projected_without_lifecycle_calls(self) -> None:
         """失败、取消和等待确认只更新恢复库，不调用业务生命周期。"""
 
@@ -198,7 +322,6 @@ class WorkflowExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 run_id="run-terminal",
                 thread_id="thread-001",
                 workflow_scope="page",
-                operation="requirements",
             )
         record = await get_execution(self.workspace, "run-terminal")
         self.assertIsNotNone(record)
@@ -206,7 +329,7 @@ class WorkflowExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.status, DurableExecutionStatus.FAILED)
         self.assertIsNotNone(record.failure)
         assert record.failure is not None
-        self.assertEqual(record.failure.operation, "A")
+        self.assertIsNone(record.failure.operation)
 
         await observe_execution_started(
             workspace=str(self.workspace),

@@ -78,6 +78,7 @@ from app.services.execution_recovery import (
     best_effort_recovery_observation,
     capture_recovery_point,
     durable_execution_status,
+    failure_boundary_from_recovery_point,
     observe_execution_cancelled,
     observe_execution_failed,
     observe_execution_finished,
@@ -2152,6 +2153,8 @@ def build_workflow_ag_ui_stream(
 
             if pending_recovery_node is not None:
                 await capture_pending_recovery_point(pending_recovery_node)
+            failure_point = None
+            failure_boundary = None
             gate_blocked = isinstance(exc, DevelopmentArtifactsIncompleteError)
             run_id_conflict = isinstance(
                 exc,
@@ -2214,7 +2217,7 @@ def build_workflow_ag_ui_stream(
             if error_code:
                 summary["errorCode"] = error_code
             if durable_execution_started and active_graph is not None and config is not None:
-                await best_effort_recovery_observation(
+                failure_point = await best_effort_recovery_observation(
                     operation="point.captured",
                     workspace=workspace,
                     run_id=run_id,
@@ -2229,6 +2232,11 @@ def build_workflow_ag_ui_stream(
                         workflow_scope=workflow_scope,
                         completed_node=None,
                     ),
+                )
+                failure_boundary = failure_boundary_from_recovery_point(
+                    point=failure_point,
+                    run_id=run_id,
+                    thread_id=thread_id,
                 )
                 if gate_blocked:
                     await best_effort_recovery_observation(
@@ -2261,6 +2269,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             workflow_scope=workflow_scope,
                             exception=exc,
+                            failure_boundary=failure_boundary,
                         ),
                     )
             failed_event = _workflow_event(

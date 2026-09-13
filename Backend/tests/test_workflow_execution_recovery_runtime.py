@@ -28,13 +28,17 @@ def _linear_runtime_graph(
     started_events: dict[str, asyncio.Event] | None = None,
     release_events: dict[str, asyncio.Event] | None = None,
     failing_node: str | None = None,
+    node_names: tuple[str, ...] = (
+        "requirements",
+        "product_planning",
+        "technical_planning",
+    ),
 ) -> tuple[Any, InMemorySaver]:
     """构造真实 StateGraph 和内存 checkpoint，用于 Runtime 级恢复观测。"""
 
     started_events = started_events or {}
     release_events = release_events or {}
     checkpointer = InMemorySaver()
-    node_names = ("requirements", "product_planning", "technical_planning")
     builder = StateGraph(ProjectState)
 
     for node_name in node_names:
@@ -62,9 +66,9 @@ def _linear_runtime_graph(
         builder.add_node(node_name, linear_node)
 
     builder.add_edge(START, node_names[0])
-    builder.add_edge(node_names[0], node_names[1])
-    builder.add_edge(node_names[1], node_names[2])
-    builder.add_edge(node_names[2], END)
+    for predecessor, successor in zip(node_names, node_names[1:]):
+        builder.add_edge(predecessor, successor)
+    builder.add_edge(node_names[-1], END)
     return builder.compile(checkpointer=checkpointer), checkpointer
 
 
@@ -259,6 +263,103 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.failure.operation, "product_planning")
         self.assertIn('"type":"RUN_ERROR"', "".join(frames))
         self.assertNotIn('"type":"RUN_FINISHED"', "".join(frames))
+
+    async def test_requirements_failure_uses_unique_checkpoint_successor(self) -> None:
+        """Requirements 首次失败必须以 requirements successor 建立可恢复边界。"""
+
+        graph, _ = _linear_runtime_graph(failing_node="requirements")
+        thread_id = "runtime-requirements-failure-thread"
+        run_id = "runtime-requirements-failure-run"
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            _ = await _collect_runtime_frames(
+                graph,
+                _runtime_payload(
+                    workspace,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                ),
+            )
+            points = await list_recovery_points(workspace, run_id)
+            record = await get_execution(workspace, run_id)
+
+        self.assertTrue(any(point.next_nodes == ["requirements"] for point in points))
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.current_node, "requirements")
+        self.assertIsNotNone(record.failure)
+        assert record.failure is not None
+        self.assertEqual(record.failure.operation, "requirements")
+
+    async def test_node_started_observation_loss_uses_checkpoint_not_stale_mirror(self) -> None:
+        """product_planning 的 node.started 丢失时仍必须按异常 checkpoint 归类。"""
+
+        graph, _ = _linear_runtime_graph(failing_node="product_planning")
+        thread_id = "runtime-stale-mirror-thread"
+        run_id = "runtime-stale-mirror-run"
+
+        async def fail_product_observation(**kwargs: Any) -> None:
+            if kwargs.get("node_name") == "product_planning":
+                raise OSError("recovery mirror unavailable")
+
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            with patch(
+                "app.protocols.workflow.runtime.observe_node_started",
+                side_effect=fail_product_observation,
+            ):
+                _ = await _collect_runtime_frames(
+                    graph,
+                    _runtime_payload(
+                        workspace,
+                        thread_id=thread_id,
+                        run_id=run_id,
+                    ),
+                )
+            points = await list_recovery_points(workspace, run_id)
+            record = await get_execution(workspace, run_id)
+
+        self.assertTrue(any(
+            point.completed_node == "requirements"
+            and point.next_nodes == ["product_planning"]
+            for point in points
+        ))
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.current_node, "product_planning")
+        self.assertIsNotNone(record.failure)
+        assert record.failure is not None
+        self.assertEqual(record.failure.operation, "product_planning")
+
+    async def test_ui_confirmation_failure_uses_ui_checkpoint_successor(self) -> None:
+        """UI 首个 update 前失败也必须从 exact checkpoint 得到 ui_confirmation。"""
+
+        graph, _ = _linear_runtime_graph(
+            failing_node="ui_confirmation",
+            node_names=("requirements", "product_planning", "ui_confirmation"),
+        )
+        thread_id = "runtime-ui-failure-thread"
+        run_id = "runtime-ui-failure-run"
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            _ = await _collect_runtime_frames(
+                graph,
+                _runtime_payload(
+                    workspace,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                ),
+            )
+            points = await list_recovery_points(workspace, run_id)
+            record = await get_execution(workspace, run_id)
+
+        self.assertTrue(any(point.next_nodes == ["ui_confirmation"] for point in points))
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.current_node, "ui_confirmation")
+        self.assertIsNotNone(record.failure)
+        assert record.failure is not None
+        self.assertEqual(record.failure.operation, "ui_confirmation")
 
     async def test_external_cancel_captures_running_node_as_interrupted(self) -> None:
         """外部取消 B 时必须保留未完成现场并标记为 interrupted。"""

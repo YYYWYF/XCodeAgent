@@ -1310,6 +1310,41 @@ async def update_execution_node(
         )
 
 
+async def reconcile_execution_current_node(
+    *,
+    workspace: str | Path,
+    run_id: str,
+    authoritative_node: str,
+) -> DurableExecutionRecord | None:
+    """依据已验证的 Graph boundary 收敛仍在运行的 currentNode mirror。"""
+
+    normalized_node = str(authoritative_node).strip()
+    if not normalized_node:
+        return None
+    await initialize_execution_recovery_store(workspace)
+    now = _utc_iso(datetime.now(timezone.utc))
+    async with _connection(workspace) as connection:
+        await connection.execute(
+            """
+            UPDATE execution_records
+            SET current_node = ?, updated_at = ?
+            WHERE run_id = ? AND status = ?
+            """,
+            (
+                normalized_node,
+                now,
+                run_id,
+                DurableExecutionStatus.RUNNING.value,
+            ),
+        )
+        row = await _fetch_execution_row(connection, run_id)
+        if row is None or str(row[0]) != run_id:
+            return None
+        if str(row[8]) != DurableExecutionStatus.RUNNING.value:
+            return None
+        return _execution_from_row(row)
+
+
 async def update_execution_status(
     *,
     workspace: str | Path,
