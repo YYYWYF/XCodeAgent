@@ -19,7 +19,10 @@ from app.persistence.execution_recovery import (
     insert_execution,
     insert_recovery_point,
 )
-from app.services.execution_retry_dispatcher import prepare_retry_current_failure
+from app.services.execution_retry_dispatcher import (
+    _retry_payload,
+    prepare_retry_current_failure,
+)
 
 
 class _RetrySnapshot:
@@ -158,6 +161,21 @@ class ExecutionRetryDispatcherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(forwarded["resumeExecutionRunId"], source.run_id)
         self.assertEqual(
             forwarded["resumeState"]["state"]["active_run_id"],
+            source.run_id,
+        )
+        explicit_payload = _retry_payload(
+            source,
+            snapshot,
+            "retry_failed_tasks",
+            new_run_id="build-retry-child",
+        )
+        self.assertEqual(explicit_payload["runId"], "build-retry-child")
+        self.assertEqual(
+            explicit_payload["forwardedProps"]["workflowAction"],
+            "retry_failed_tasks",
+        )
+        self.assertEqual(
+            explicit_payload["forwardedProps"]["resumeExecutionRunId"],
             source.run_id,
         )
         self.assertEqual(

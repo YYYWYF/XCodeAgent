@@ -1377,7 +1377,9 @@ export function useWorkflowConversation({
         if (staleRecoveryAction) {
           setRecoveryError('当前恢复操作已过期，正在刷新最新状态。')
           const refreshed = await refreshExecutionRecoveryLifecycle()
-          if (!refreshed) {
+          if (refreshed) {
+            setRecoveryError(undefined)
+          } else {
             setRecoveryError('恢复操作已过期，但最新恢复状态刷新失败，请重试。')
           }
         } else {

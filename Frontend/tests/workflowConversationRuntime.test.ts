@@ -517,6 +517,7 @@ test('STALE_RECOVERY_ACTION 会读取并替换最新 Incident，且不写入历�
     assert.equal(result, false)
     assert.ok(lifecycleGetCount >= 1)
     assert.equal(lifecycleUpdates.at(-1)?.extensions?.executionRecovery?.candidates?.[0]?.recoveryActionPlan?.incidentId, 'incident-B')
+    assert.equal(captured.recoveryError, undefined)
     assert.equal(
       persistedMessages.some(({ messages }) => JSON.stringify(messages).includes('当前恢复操作已过期')),
       false
