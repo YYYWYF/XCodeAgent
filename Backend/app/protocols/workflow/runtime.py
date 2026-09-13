@@ -2261,7 +2261,6 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             workflow_scope=workflow_scope,
                             exception=exc,
-                            operation=current_phase,
                         ),
                     )
             failed_event = _workflow_event(

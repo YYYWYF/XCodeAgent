@@ -22,6 +22,7 @@ from app.config import execution_recovery_lease_ttl_seconds
 from app.persistence.execution_recovery import (
     finish_execution_and_release_lease,
     get_execution,
+    get_latest_recovery_point,
     initialize_execution_recovery_store,
     insert_execution_with_lease,
     insert_recovery_point,
@@ -314,11 +315,23 @@ async def observe_execution_failed(
 ) -> None:
     """记录未处理异常对应的失败终态。"""
 
+    authoritative_operation = await _failure_operation(
+        workspace=workspace,
+        run_id=run_id,
+        fallback_operation=operation,
+    )
     evidence = failure or (
-        classify_execution_failure(exception, operation=operation)
+        classify_execution_failure(exception, operation=authoritative_operation)
         if exception is not None
         else None
     )
+    if (
+        evidence is not None
+        and evidence.operation != authoritative_operation
+    ):
+        # 外部调用方传入的证据也必须收敛到 Durable Execution 的真实边界，
+        # 防止旧的 presentation phase 污染 source failure identity。
+        evidence = evidence.model_copy(update={"operation": authoritative_operation})
     await _observe_terminal_status(
         workspace=workspace,
         run_id=run_id,
@@ -329,6 +342,49 @@ async def observe_execution_failed(
         backend_instance_id=backend_instance_id,
         failure=evidence,
     )
+
+
+async def _failure_operation(
+    *,
+    workspace: str | None,
+    run_id: str,
+    fallback_operation: str | None,
+) -> str | None:
+    """从 Durable Execution 或唯一 RecoveryPoint successor 解析失败节点。"""
+
+    if not workspace:
+        return None
+    try:
+        execution = await get_execution(workspace, run_id)
+    except Exception as exc:
+        # 读取 authority 失败时宁可留下无 operation 的 fail-closed evidence，
+        # 也不能重新相信调用方可能来自 UI 的阶段字段。
+        logger.warning(
+            "recovery.failure_authority.read_failed runId=%s error=%s",
+            run_id,
+            exc,
+            exc_info=True,
+        )
+        return None
+    if execution is not None and execution.current_node:
+        return execution.current_node
+    try:
+        point = await get_latest_recovery_point(workspace, run_id)
+    except Exception as exc:
+        logger.warning(
+            "recovery.failure_authority.point_read_failed runId=%s error=%s",
+            run_id,
+            exc,
+            exc_info=True,
+        )
+        return None
+    if point is not None and len(point.next_nodes) == 1:
+        # RecoveryPoint 的唯一 next node 是已提交 Graph boundary 的后继，
+        # 仅在 execution.current_node 缺失时作为同一 authority 的补充事实。
+        return point.next_nodes[0]
+    if execution is None:
+        return str(fallback_operation or "").strip() or None
+    return None
 
 
 async def observe_execution_cancelled(

@@ -253,6 +253,10 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(record)
         assert record is not None
         self.assertEqual(record.status.value, "failed")
+        self.assertEqual(record.current_node, "product_planning")
+        self.assertIsNotNone(record.failure)
+        assert record.failure is not None
+        self.assertEqual(record.failure.operation, "product_planning")
         self.assertIn('"type":"RUN_ERROR"', "".join(frames))
         self.assertNotIn('"type":"RUN_FINISHED"', "".join(frames))
 

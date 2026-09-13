@@ -198,11 +198,15 @@ class WorkflowExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 run_id="run-terminal",
                 thread_id="thread-001",
                 workflow_scope="page",
+                operation="requirements",
             )
         record = await get_execution(self.workspace, "run-terminal")
         self.assertIsNotNone(record)
         assert record is not None
         self.assertEqual(record.status, DurableExecutionStatus.FAILED)
+        self.assertIsNotNone(record.failure)
+        assert record.failure is not None
+        self.assertEqual(record.failure.operation, "A")
 
         await observe_execution_started(
             workspace=str(self.workspace),

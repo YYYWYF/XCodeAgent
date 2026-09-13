@@ -246,7 +246,7 @@ def _requirements(state: ProjectState) -> dict:
         _persist_node_cancelled(workspace, state)
         raise
     except Exception as exc:
-        _persist_node_error(workspace, state, exc)
+        _persist_node_error(workspace, state, exc, node_name="requirements")
         raise
 
 
@@ -318,7 +318,7 @@ async def _ui_confirmation(state: ProjectState) -> dict:
         _persist_node_cancelled(workspace, state)
         raise
     except Exception as exc:
-        _persist_node_error(workspace, state, exc)
+        _persist_node_error(workspace, state, exc, node_name="ui_confirmation")
         raise
 
 
@@ -375,7 +375,7 @@ def _product_planning(state: ProjectState) -> dict:
         _persist_node_cancelled(workspace, state)
         raise
     except Exception as exc:
-        _persist_node_error(workspace, state, exc)
+        _persist_node_error(workspace, state, exc, node_name="product_planning")
         raise
 
 
@@ -441,15 +441,21 @@ def _persist_requirement_result(workspace: str, update: dict, state: ProjectStat
     )
 
 
-def _persist_node_error(workspace: str, state: ProjectState, exc: Exception) -> None:
-    """把节点失败记录在当前阶段，避免错误时丢失恢复位置。"""
+def _persist_node_error(
+    workspace: str,
+    state: ProjectState,
+    exc: Exception,
+    *,
+    node_name: str,
+) -> None:
+    """把节点失败记录在真实 Graph 节点，避免 UI 阶段污染失败证据。"""
 
     current = load_application_lifecycle(workspace)
     if current is None:
         return
     evidence = classify_execution_failure(
         exc,
-        operation=str(state.get("phase") or state.get("current_node") or "") or None,
+        operation=node_name,
     )
     persist_application_lifecycle_transition(
         workspace,
