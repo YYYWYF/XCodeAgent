@@ -26,7 +26,7 @@ logger = logging.getLogger("uvicorn.error")
 async def resolve_execution_recovery_projection(
     workspace: str,
 ) -> ExecutionRecoveryProjection:
-    """只读解析当前工作区可展示的中断执行，不创建恢复 child 或修改业务状态。"""
+    """只读解析当前工作区可展示的异常终止执行，不创建恢复 child 或修改业务状态。"""
 
     generated_at = datetime.now(timezone.utc)
     try:
@@ -103,7 +103,7 @@ async def _resolve_candidate(
         availability=availability,
         can_continue=can_continue,
         reason_code=plan.reason_code,
-        message=_message_for_availability(availability),
+        message=_message_for_availability(availability, record),
         updated_at=record.updated_at,
     )
 
@@ -159,11 +159,18 @@ def _availability_for_decision(
     return None
 
 
-def _message_for_availability(availability: str) -> str:
+def _message_for_availability(
+    availability: str,
+    record: DurableExecutionRecord,
+) -> str:
     """生成面向普通用户的恢复文案，隐藏节点和技术错误码。"""
 
     return {
-        "ready": "上一次执行被中断，可以从已保存的现场继续。",
+        "ready": (
+            "上一次模型调用失败，当前执行现场可以安全继续，将使用当前模型配置重新执行未完成步骤。"
+            if record.status.value == "failed"
+            else "上一次执行被中断，可以从已保存的现场继续。"
+        ),
         "requires_handler": "当前步骤暂不能自动继续。",
         "blocked": "工作区或流程状态已经发生变化，无法直接从旧现场继续。",
         "awaiting_user": "当前执行正在等待用户确认。",

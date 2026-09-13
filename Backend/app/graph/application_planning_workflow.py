@@ -53,6 +53,8 @@ from app.services.frontend_scaffold import (
     ensure_frontend_menu_entries,
     ensure_frontend_page_placeholders,
 )
+from app.services.execution_failure_classifier import classify_execution_failure
+from app.services.application_planning_generation_lifecycle import ensure_generation_running
 from app.services.template_scaffold_injection import (
     inject_deterministic_backend_skeleton,
 )
@@ -203,25 +205,16 @@ def _requirements(state: ProjectState) -> dict:
         if lifecycle.initialization.stage in {
             ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
             ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+            ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
         }:
-            lifecycle = persist_application_lifecycle_transition(
+            lifecycle = ensure_generation_running(
                 workspace,
                 stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                status=ApplicationLifecycleStatus.RUNNING,
                 active_run_id=state.get("active_run_id"),
-            )
-        elif (
-            lifecycle.initialization.stage == ApplicationLifecycleStage.ANALYZING_REQUIREMENT
-            and lifecycle.initialization.status in {
-                ApplicationLifecycleStatus.FAILED,
-                ApplicationLifecycleStatus.CANCELLED,
-            }
-        ):
-            lifecycle = persist_application_lifecycle_transition(
-                workspace,
-                stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                status=ApplicationLifecycleStatus.RUNNING,
-                active_run_id=state.get("active_run_id"),
+                predecessor_stages={
+                    ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+                },
             )
         elif (
             lifecycle.initialization.stage
@@ -271,12 +264,17 @@ async def _ui_confirmation(state: ProjectState) -> dict:
     try:
         lifecycle = load_application_lifecycle(workspace) or _ensure_lifecycle(state)
         # 需求确认完成后推进到 UI设计生成阶段（若尚未推进）。
-        if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION:
-            lifecycle = persist_application_lifecycle_transition(
+        if lifecycle.initialization.stage in {
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+            ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+        }:
+            lifecycle = ensure_generation_running(
                 workspace,
                 stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-                status=ApplicationLifecycleStatus.RUNNING,
                 active_run_id=state.get("active_run_id"),
+                predecessor_stages={
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+                },
             )
         update = await nodes.ui_confirmation(node_state)
         if update.get("status") != "completed":
@@ -336,10 +334,9 @@ def _product_planning(state: ProjectState) -> dict:
             == ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT
         ):
             # RequirementSpec 草稿已通过校验后，继续生成同一联合阶段的 ProductPlan 草稿。
-            lifecycle = persist_application_lifecycle_transition(
+            lifecycle = ensure_generation_running(
                 workspace,
                 stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
-                status=ApplicationLifecycleStatus.RUNNING,
                 active_run_id=state.get("active_run_id"),
             )
         update = nodes.product_planning(node_state)
@@ -450,6 +447,10 @@ def _persist_node_error(workspace: str, state: ProjectState, exc: Exception) -> 
     current = load_application_lifecycle(workspace)
     if current is None:
         return
+    evidence = classify_execution_failure(
+        exc,
+        operation=str(state.get("phase") or state.get("current_node") or "") or None,
+    )
     persist_application_lifecycle_transition(
         workspace,
         stage=current.initialization.stage,
@@ -460,6 +461,16 @@ def _persist_node_error(workspace: str, state: ProjectState, exc: Exception) -> 
             message=str(exc)[:2048] or type(exc).__name__,
             recoverable=True,
             occurredAt=utc_now(),
+            details={
+                "origin": evidence.origin.value,
+                "code": evidence.code,
+                "operation": evidence.operation,
+                "dependency": evidence.dependency,
+                "provider": evidence.provider,
+                "model": evidence.model,
+                "httpStatus": evidence.http_status,
+                "replayCompatible": evidence.replay_compatible,
+            },
         ),
     )
 

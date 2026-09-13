@@ -20,6 +20,7 @@ from app.domain.execution_recovery import (
     RecoveryPoint,
     RecoveryPointKind,
     RecoveryStrategy,
+    execution_failure_sha256,
 )
 from app.persistence.execution_recovery import (
     claim_recovery_finalization,
@@ -46,6 +47,7 @@ from app.services.execution_recovery_coordinator import (
     prepare_continue,
     validate_recovery_workspace_state,
 )
+from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.execution_lease_heartbeat import (
     maintain_execution_heartbeat,
     stop_execution_heartbeat,
@@ -447,10 +449,21 @@ async def _revalidate_finalizing_recovery(
 ) -> Any:
     """在唯一 finalizer 持有 fork 权后重新证明 checkpoint、磁盘和 ownership。"""
 
-    if source.status is not DurableExecutionStatus.INTERRUPTED:
+    admission = assess_recovery_source(source)
+    if not admission.admissible:
         raise RecoveryExecutionError(
             "RECOVERY_STATE_DRIFT",
-            "source execution 已不再处于 INTERRUPTED，不能继续 finalization。",
+            "source execution 不再满足 recovery source admission，不能继续 finalization。",
+        )
+    if source.status is not attempt.source_status:
+        raise RecoveryExecutionError(
+            "RECOVERY_STATE_DRIFT",
+            "source execution 的终止状态已偏离 RecoveryAttempt。",
+        )
+    if execution_failure_sha256(source.failure) != attempt.source_failure_sha256:
+        raise RecoveryExecutionError(
+            "RECOVERY_STATE_DRIFT",
+            "source execution 的 failure evidence 已偏离 RecoveryAttempt。",
         )
     if not hasattr(graph, "aget_state"):
         raise RecoveryExecutionError(

@@ -7,6 +7,7 @@ from typing import Any
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
+    DurableExecutionStatus,
     RecoveryPoint,
     RecoveryPointKind,
 )
@@ -57,7 +58,7 @@ class RecoveryPointSelector:
         candidates = tuple(
             point
             for point in reversed(canonical)
-            if _is_native_checkpoint_candidate(point)
+            if _is_native_checkpoint_candidate(point, source=source)
         )
         if not candidates:
             return RecoveryPointSelection(
@@ -125,7 +126,11 @@ def _has_checkpoint_identity(point: RecoveryPoint) -> bool:
     )
 
 
-def _is_native_checkpoint_candidate(point: RecoveryPoint) -> bool:
+def _is_native_checkpoint_candidate(
+    point: RecoveryPoint,
+    *,
+    source: DurableExecutionRecord,
+) -> bool:
     """过滤入口现场、空后继和已到终点的失败观察。"""
 
     if not _has_checkpoint_identity(point) or point.thread_id == "":
@@ -135,5 +140,11 @@ def _is_native_checkpoint_candidate(point: RecoveryPoint) -> bool:
         return False
     state_status = str(point.state_status or "").strip().lower()
     if state_status in {"failed", "cancelled", "stopped", "interrupted"}:
+        if (
+            source.status is DurableExecutionStatus.FAILED
+            and source.failure is not None
+            and source.failure.replay_compatible
+        ):
+            return True
         return point.completed_node is not None
     return True

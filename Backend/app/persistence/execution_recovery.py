@@ -15,6 +15,8 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionRunConflictError,
     DurableExecutionStatus,
+    ExecutionFailureEvidence,
+    execution_failure_sha256,
     ExecutionLease,
     ExecutionLeaseStatus,
     RecoveryAttempt,
@@ -32,8 +34,8 @@ from app.domain.execution_recovery import (
 RECOVERY_DATABASE_RELATIVE_PATH = Path(
     ".xcodeagent/recovery/execution-recovery.sqlite"
 )
-RECOVERY_SCHEMA_VERSION = "5"
-EXECUTION_ROW_WIDTH = 14
+RECOVERY_SCHEMA_VERSION = "6"
+EXECUTION_ROW_WIDTH = 15
 EXECUTION_LEASE_ROW_WIDTH = 8
 
 
@@ -115,7 +117,7 @@ async def _connection_after_initialize(
 
 
 async def initialize_execution_recovery_store(workspace: str | Path) -> None:
-    """创建恢复库表，并把现有 v3/v4 store 原地补齐到当前 schema v5。"""
+    """创建恢复库表，并把现有 v3-v5 store 原地补齐到当前 schema v6。"""
 
     async with _connection(workspace) as connection:
         await connection.executescript(
@@ -139,7 +141,8 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 started_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 ended_at TEXT,
-                owner_session_id TEXT
+                owner_session_id TEXT,
+                failure_json TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_execution_records_thread
@@ -216,6 +219,8 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 started_at TEXT,
                 failed_at TEXT,
                 failure_code TEXT,
+                source_status TEXT,
+                source_failure_sha256 TEXT,
                 FOREIGN KEY(source_run_id)
                     REFERENCES execution_records(run_id),
                 FOREIGN KEY(new_run_id)
@@ -237,6 +242,10 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
             await connection.execute(
                 "ALTER TABLE execution_records ADD COLUMN owner_session_id TEXT"
             )
+        if not any(str(column[1]) == "failure_json" for column in columns):
+            await connection.execute(
+                "ALTER TABLE execution_records ADD COLUMN failure_json TEXT"
+            )
         attempts_columns_cursor = await connection.execute(
             "PRAGMA table_info(recovery_attempts)"
         )
@@ -248,6 +257,16 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
             await connection.execute(
                 "ALTER TABLE recovery_attempts ADD COLUMN "
                 "lifecycle_ownership_mode TEXT NOT NULL DEFAULT 'source_owned'"
+            )
+        if not any(str(column[1]) == "source_status" for column in attempts_columns):
+            await connection.execute(
+                "ALTER TABLE recovery_attempts ADD COLUMN source_status TEXT"
+            )
+        if not any(
+            str(column[1]) == "source_failure_sha256" for column in attempts_columns
+        ):
+            await connection.execute(
+                "ALTER TABLE recovery_attempts ADD COLUMN source_failure_sha256 TEXT"
             )
         index_cursor = await connection.execute(
             """
@@ -292,8 +311,8 @@ async def insert_execution(
                 run_id, thread_id, workspace, project_id, execution_kind,
                 workflow_scope, first_node, current_node, status,
                 last_recovery_point_id, started_at, updated_at, ended_at,
-                owner_session_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                owner_session_id, failure_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id) DO NOTHING
             """,
             (
@@ -311,6 +330,7 @@ async def insert_execution(
                 _utc_iso(record.updated_at),
                 _utc_iso(record.ended_at) if record.ended_at else None,
                 record.owner_session_id,
+                _failure_json(record.failure),
             ),
         )
         row = await _fetch_execution_row(connection, record.run_id)
@@ -332,6 +352,7 @@ async def claim_native_recovery_attempt(
     """在一个 SQLite 写事务中 claim source、创建 child Execution、Lease 和 Attempt。"""
 
     from app.domain.execution_recovery import RecoveryExecutionError
+    from app.services.execution_recovery_source_admission import assess_recovery_source
 
     if plan.source_run_id != source.run_id:
         raise RecoveryExecutionError(
@@ -348,10 +369,11 @@ async def claim_native_recovery_attempt(
             "RECOVERY_PLAN_INCOMPLETE",
             "Native RecoveryPlan 缺少唯一 checkpoint 或 next node。",
         )
-    if source.status is not DurableExecutionStatus.INTERRUPTED:
+    admission = assess_recovery_source(source)
+    if not admission.admissible:
         raise RecoveryExecutionError(
-            "RECOVERY_SOURCE_NOT_INTERRUPTED",
-            "source execution 当前状态不允许创建 Native Recovery attempt。",
+            "RECOVERY_SOURCE_NOT_ADMISSIBLE",
+            admission.reason_code,
         )
     now = created_at or datetime.now(timezone.utc)
     lease = ExecutionLease(
@@ -388,6 +410,8 @@ async def claim_native_recovery_attempt(
         lifecycle_ownership_mode=plan.lifecycle_ownership_mode,
         status=RecoveryAttemptStatus.PREPARING,
         created_at=now,
+        source_status=source.status,
+        source_failure_sha256=execution_failure_sha256(source.failure),
     )
     await initialize_execution_recovery_store(source.workspace)
     async with _connection(source.workspace) as connection:
@@ -403,6 +427,20 @@ async def claim_native_recovery_attempt(
                 "RECOVERY_SOURCE_CHANGED",
                 "source execution 在 claim 前已经发生状态变化。",
             )
+        persisted_source = _execution_from_row(source_row)
+        persisted_admission = assess_recovery_source(persisted_source)
+        if not persisted_admission.admissible:
+            raise RecoveryExecutionError(
+                "RECOVERY_SOURCE_NOT_ADMISSIBLE",
+                persisted_admission.reason_code,
+            )
+        if execution_failure_sha256(persisted_source.failure) != execution_failure_sha256(
+            source.failure
+        ):
+            raise RecoveryExecutionError(
+                "RECOVERY_SOURCE_CHANGED",
+                "source execution 的 failure evidence 在 claim 前已经发生变化。",
+            )
         existing_row = await _fetch_execution_row(connection, new_run_id)
         if existing_row is not None:
             raise _run_id_conflict_from_row(existing_row)
@@ -411,10 +449,10 @@ async def claim_native_recovery_attempt(
                 """
                 INSERT INTO execution_records(
                     run_id, thread_id, workspace, project_id, execution_kind,
-                    workflow_scope, first_node, current_node, status,
-                    last_recovery_point_id, started_at, updated_at, ended_at,
-                    owner_session_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                workflow_scope, first_node, current_node, status,
+                last_recovery_point_id, started_at, updated_at, ended_at,
+                owner_session_id, failure_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -431,6 +469,7 @@ async def claim_native_recovery_attempt(
                     _utc_iso(record.updated_at),
                     None,
                     record.owner_session_id,
+                    _failure_json(record.failure),
                 ),
             )
             await connection.execute(
@@ -459,8 +498,9 @@ async def claim_native_recovery_attempt(
                     source_checkpoint_ns, replay_checkpoint_id,
                     replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
                     status, created_at,
-                    handed_off_at, started_at, failed_at, failure_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    handed_off_at, started_at, failed_at, failure_code,
+                    source_status, source_failure_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt.new_run_id,
@@ -479,6 +519,8 @@ async def claim_native_recovery_attempt(
                     None,
                     None,
                     None,
+                    attempt.source_status.value,
+                    attempt.source_failure_sha256,
                 ),
             )
         except aiosqlite.IntegrityError as exc:
@@ -522,7 +564,8 @@ async def list_recovery_attempts_from_source(
                    source_checkpoint_ns, replay_checkpoint_id,
                    replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
                    status, created_at,
-                   handed_off_at, started_at, failed_at, failure_code
+                   handed_off_at, started_at, failed_at, failure_code,
+                   source_status, source_failure_sha256
             FROM recovery_attempts
             WHERE source_run_id = ?
             ORDER BY created_at ASC, new_run_id ASC
@@ -813,10 +856,10 @@ async def insert_execution_with_lease(
                 """
                 INSERT INTO execution_records(
                     run_id, thread_id, workspace, project_id, execution_kind,
-                    workflow_scope, first_node, current_node, status,
-                    last_recovery_point_id, started_at, updated_at, ended_at,
-                    owner_session_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                workflow_scope, first_node, current_node, status,
+                last_recovery_point_id, started_at, updated_at, ended_at,
+                owner_session_id, failure_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -833,6 +876,7 @@ async def insert_execution_with_lease(
                     _utc_iso(record.updated_at),
                     _utc_iso(record.ended_at) if record.ended_at else None,
                     record.owner_session_id,
+                    _failure_json(record.failure),
                 ),
             )
         except aiosqlite.IntegrityError:
@@ -1014,6 +1058,7 @@ async def finish_execution_and_release_lease(
     status: DurableExecutionStatus,
     owner_backend_instance_id: str,
     ended_at: datetime,
+    failure: ExecutionFailureEvidence | None = None,
 ) -> bool:
     """原子写入终态并释放当前 Backend 持有的 ACTIVE lease。"""
 
@@ -1023,7 +1068,8 @@ async def finish_execution_and_release_lease(
         cursor = await connection.execute(
             """
             UPDATE execution_records
-            SET status = ?, updated_at = ?, ended_at = COALESCE(ended_at, ?)
+            SET status = ?, updated_at = ?, ended_at = COALESCE(ended_at, ?),
+                failure_json = ?
             WHERE run_id = ?
               AND status = ?
             """,
@@ -1031,6 +1077,7 @@ async def finish_execution_and_release_lease(
                 status.value,
                 ended_at_text,
                 ended_at_text,
+                _failure_json(failure),
                 run_id,
                 DurableExecutionStatus.RUNNING.value,
             ),
@@ -1070,6 +1117,7 @@ async def list_running_executions_with_leases(
                 e.execution_kind, e.workflow_scope, e.first_node,
                 e.current_node, e.status, e.last_recovery_point_id,
                 e.started_at, e.updated_at, e.ended_at, e.owner_session_id,
+                e.failure_json,
                 l.run_id, l.owner_backend_instance_id, l.owner_pid,
                 l.status, l.acquired_at, l.heartbeat_at, l.expires_at,
                 l.released_at
@@ -1212,6 +1260,7 @@ async def _list_running_executions_with_leases_and_attempts(
                 e.execution_kind, e.workflow_scope, e.first_node,
                 e.current_node, e.status, e.last_recovery_point_id,
                 e.started_at, e.updated_at, e.ended_at, e.owner_session_id,
+                e.failure_json,
                 l.run_id, l.owner_backend_instance_id, l.owner_pid,
                 l.status, l.acquired_at, l.heartbeat_at, l.expires_at,
                 l.released_at, a.status
@@ -1368,7 +1417,7 @@ async def get_latest_execution_for_thread(
             SELECT run_id, thread_id, workspace, project_id, execution_kind,
                    workflow_scope, first_node, current_node, status,
                    last_recovery_point_id, started_at, updated_at, ended_at,
-                   owner_session_id
+                   owner_session_id, failure_json
             FROM execution_records
             WHERE thread_id = ?
               AND (? IS NULL OR execution_kind = ?)
@@ -1386,7 +1435,7 @@ async def list_recovery_projection_candidates(
     *,
     limit: int = 16,
 ) -> list[DurableExecutionRecord]:
-    """读取没有正式恢复 child 的 canonical interrupted execution 叶子。"""
+    """读取没有正式恢复 child 的异常终止 execution 叶子。"""
 
     await initialize_execution_recovery_store(workspace)
     bounded_limit = max(1, min(int(limit), 128))
@@ -1396,9 +1445,10 @@ async def list_recovery_projection_candidates(
             SELECT e.run_id, e.thread_id, e.workspace, e.project_id,
                    e.execution_kind, e.workflow_scope, e.first_node,
                    e.current_node, e.status, e.last_recovery_point_id,
-                   e.started_at, e.updated_at, e.ended_at, e.owner_session_id
+                   e.started_at, e.updated_at, e.ended_at, e.owner_session_id,
+                   e.failure_json
             FROM execution_records AS e
-            WHERE e.status = ?
+            WHERE e.status IN (?, ?)
               AND NOT EXISTS (
                   SELECT 1
                   FROM recovery_attempts AS a
@@ -1410,6 +1460,7 @@ async def list_recovery_projection_candidates(
             """,
             (
                 DurableExecutionStatus.INTERRUPTED.value,
+                DurableExecutionStatus.FAILED.value,
                 RecoveryAttemptStatus.FAILED_PRESTART.value,
                 bounded_limit,
             ),
@@ -1504,7 +1555,7 @@ async def _fetch_execution_row(
         SELECT run_id, thread_id, workspace, project_id, execution_kind,
                workflow_scope, first_node, current_node, status,
                last_recovery_point_id, started_at, updated_at, ended_at,
-               owner_session_id
+               owner_session_id, failure_json
         FROM execution_records
         WHERE run_id = ?
         """,
@@ -1526,7 +1577,8 @@ async def _fetch_active_attempt_row(
                source_checkpoint_ns, replay_checkpoint_id,
                replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
                status, created_at,
-               handed_off_at, started_at, failed_at, failure_code
+               handed_off_at, started_at, failed_at, failure_code,
+               source_status, source_failure_sha256
         FROM recovery_attempts
         WHERE source_run_id = ?
           AND status IN ('preparing', 'handed_off', 'started')
@@ -1551,7 +1603,8 @@ async def _fetch_recovery_attempt_row(
                source_checkpoint_ns, replay_checkpoint_id,
                replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
                status, created_at,
-               handed_off_at, started_at, failed_at, failure_code
+               handed_off_at, started_at, failed_at, failure_code,
+               source_status, source_failure_sha256
         FROM recovery_attempts
         WHERE new_run_id = ?
         """,
@@ -1620,7 +1673,28 @@ def _execution_from_row(row: tuple[object, ...]) -> DurableExecutionRecord:
         owner_session_id=(
             str(row[13]) if len(row) >= EXECUTION_ROW_WIDTH and row[13] is not None else None
         ),
+        failure=_failure_from_json(row[14] if len(row) > 14 else None),
     )
+
+
+def _failure_json(failure: ExecutionFailureEvidence | None) -> str | None:
+    """将失败证据编码为单列 JSON，避免扩展字段不断改变 SQLite 表结构。"""
+
+    if failure is None:
+        return None
+    return json.dumps(failure.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
+
+
+def _failure_from_json(value: object) -> ExecutionFailureEvidence | None:
+    """将历史失败证据安全解码，缺失或损坏时保持 fail-closed 的 None。"""
+
+    if value is None:
+        return None
+    try:
+        payload = json.loads(str(value))
+        return ExecutionFailureEvidence.model_validate(payload)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def _execution_lease_from_row(row: tuple[object, ...]) -> ExecutionLease:
@@ -1658,6 +1732,10 @@ def _recovery_attempt_from_row(row: tuple[object, ...]) -> RecoveryAttempt:
         started_at=_parse_datetime(str(row[13])) if row[13] is not None else None,
         failed_at=_parse_datetime(str(row[14])) if row[14] is not None else None,
         failure_code=str(row[15]) if row[15] is not None else None,
+        source_status=DurableExecutionStatus(str(row[16]))
+        if row[16] is not None
+        else DurableExecutionStatus.INTERRUPTED,
+        source_failure_sha256=str(row[17]) if row[17] is not None else None,
     )
 
 

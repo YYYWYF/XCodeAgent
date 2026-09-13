@@ -57,7 +57,11 @@ class ApplicationPlanningContractReplayPolicy:
         values = values if isinstance(values, dict) else {}
         if (
             source.execution_kind == "application_planning"
-            and source.status is DurableExecutionStatus.INTERRUPTED
+            and source.status
+            in {
+                DurableExecutionStatus.INTERRUPTED,
+                DurableExecutionStatus.FAILED,
+            }
             and any(str(node).startswith("technical_planning") for node in point.next_nodes)
             and parse_application_planning_boundary(
                 values.get("application_planning_recovery_boundary")

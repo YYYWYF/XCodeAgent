@@ -14,6 +14,7 @@ from app.domain.execution_recovery import (
     DurableExecutionStatus,
     ExecutionLease,
     ExecutionLeaseStatus,
+    ExecutionFailureEvidence,
     RecoveryPoint,
     RecoveryPointKind,
 )
@@ -28,6 +29,7 @@ from app.persistence.execution_recovery import (
 )
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.backend_instance import current_backend_instance
+from app.services.execution_failure_classifier import classify_execution_failure
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -306,9 +308,17 @@ async def observe_execution_failed(
     thread_id: str,
     workflow_scope: str | None,
     backend_instance_id: str | None = None,
+    exception: BaseException | None = None,
+    operation: str | None = None,
+    failure: ExecutionFailureEvidence | None = None,
 ) -> None:
     """记录未处理异常对应的失败终态。"""
 
+    evidence = failure or (
+        classify_execution_failure(exception, operation=operation)
+        if exception is not None
+        else None
+    )
     await _observe_terminal_status(
         workspace=workspace,
         run_id=run_id,
@@ -317,6 +327,7 @@ async def observe_execution_failed(
         status=DurableExecutionStatus.FAILED,
         log_name="recovery.execution.failed",
         backend_instance_id=backend_instance_id,
+        failure=evidence,
     )
 
 
@@ -399,6 +410,7 @@ async def _observe_terminal_status(
     status: DurableExecutionStatus,
     log_name: str,
     backend_instance_id: str | None = None,
+    failure: ExecutionFailureEvidence | None = None,
 ) -> None:
     """写入失败或取消状态并输出不含敏感 State 的结构化上下文。"""
 
@@ -411,6 +423,7 @@ async def _observe_terminal_status(
         status=status,
         owner_backend_instance_id=backend_instance_id or identity.instance_id,
         ended_at=_utc_now(),
+        failure=failure,
     )
     logger.info(
         "%s runId=%s threadId=%s workflowScope=%s status=%s",

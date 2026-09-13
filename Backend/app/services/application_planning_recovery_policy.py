@@ -12,6 +12,7 @@ from app.domain.application_lifecycle import (
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    ExecutionFailureOrigin,
     RecoveryDecision,
     RecoveryPoint,
     RecoveryStrategy,
@@ -51,13 +52,26 @@ def application_planning_committed_input_recovery_candidate(
 
     values = getattr(snapshot, "values", {})
     values = values if isinstance(values, dict) else {}
+    failure_compatible = (
+        source.status is DurableExecutionStatus.INTERRUPTED
+        or (
+            source.failure is not None
+            and source.failure.origin is ExecutionFailureOrigin.MODEL_CALL
+            and source.failure.replay_compatible
+        )
+    )
     return (
         source.execution_kind == "application_planning"
-        and source.status is DurableExecutionStatus.INTERRUPTED
+        and source.status
+        in {
+            DurableExecutionStatus.INTERRUPTED,
+            DurableExecutionStatus.FAILED,
+        }
         and point.next_nodes == ["requirements"]
         and application_planning_interrupt_from_snapshot(snapshot) is None
         and str(values.get("active_run_id") or "").strip() == source.run_id
         and application_planning_committed_input(snapshot)
+        and failure_compatible
     )
 
 
@@ -94,6 +108,15 @@ def application_planning_committed_input_lifecycle_compatible(
         lifecycle.initialization.stage
         is ApplicationLifecycleStage.ANALYZING_REQUIREMENT
         and lifecycle.initialization.status is ApplicationLifecycleStatus.RUNNING
+    ):
+        return expected_revision is None or lifecycle.revision in {
+            expected_revision,
+            expected_revision + 1,
+        }
+    if (
+        lifecycle.initialization.stage
+        is ApplicationLifecycleStage.ANALYZING_REQUIREMENT
+        and lifecycle.initialization.status is ApplicationLifecycleStatus.FAILED
     ):
         return expected_revision is None or lifecycle.revision in {
             expected_revision,

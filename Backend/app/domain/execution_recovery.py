@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ExecutionRecoveryModel(BaseModel):
@@ -49,6 +51,45 @@ class DurableExecutionStatus(StrEnum):
     CANCELLED = "cancelled"
     STOPPED = "stopped"
     INTERRUPTED = "interrupted"
+
+
+class ExecutionFailureOrigin(StrEnum):
+    """定义失败证据来自模型、外部依赖、业务逻辑、不变量还是未知来源。"""
+
+    MODEL_CALL = "model_call"
+    EXTERNAL_DEPENDENCY = "external_dependency"
+    BUSINESS = "business"
+    INVARIANT = "invariant"
+    UNKNOWN = "unknown"
+
+
+class ExecutionFailureEvidence(ExecutionRecoveryModel):
+    """保存可供恢复安全判断使用的脱敏失败事实。"""
+
+    origin: ExecutionFailureOrigin
+    code: str = Field(min_length=1, max_length=256)
+    operation: str | None = Field(default=None, max_length=256)
+    dependency: str | None = Field(default=None, max_length=128)
+    provider: str | None = Field(default=None, max_length=128)
+    model: str | None = Field(default=None, max_length=256)
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    replay_compatible: bool = False
+
+
+def execution_failure_sha256(
+    failure: ExecutionFailureEvidence | None,
+) -> str | None:
+    """为失败证据生成稳定摘要，供 RecoveryAttempt 固化 source identity。"""
+
+    if failure is None:
+        return None
+    canonical = json.dumps(
+        failure.model_dump(mode="json"),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 class ExecutionLeaseStatus(StrEnum):
@@ -146,6 +187,15 @@ class DurableExecutionRecord(ExecutionRecoveryModel):
     started_at: datetime
     updated_at: datetime
     ended_at: datetime | None = None
+    failure: ExecutionFailureEvidence | None = None
+
+    @model_validator(mode="after")
+    def validate_failure_status(self) -> "DurableExecutionRecord":
+        """确保失败证据不会附着到非 FAILED execution。"""
+
+        if self.status is not DurableExecutionStatus.FAILED and self.failure is not None:
+            raise ValueError("只有 FAILED execution 可以保存 failure evidence。")
+        return self
 
 
 class ExecutionLease(ExecutionRecoveryModel):
@@ -262,3 +312,5 @@ class RecoveryAttempt(ExecutionRecoveryModel):
     started_at: datetime | None = None
     failed_at: datetime | None = None
     failure_code: str | None = Field(default=None, max_length=128)
+    source_status: DurableExecutionStatus
+    source_failure_sha256: str | None = Field(default=None, max_length=64)

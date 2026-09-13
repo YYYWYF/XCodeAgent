@@ -20,6 +20,7 @@ from app.domain.application_revision import FormalRevisionBranch, RevisionTarget
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    ExecutionFailureOrigin,
     RecoveryDecision,
     RecoveryLifecycleOwnershipMode,
     RecoveryPoint,
@@ -164,6 +165,157 @@ class RequirementCommittedInputRecoveryContract:
         return "上一次需求分析被中断，已保存你提交的回答，可以继续执行。"
 
 
+@dataclass(frozen=True)
+class ApplicationPlanningGenerationRecoverySpec:
+    """声明一个可由通用模型失败 Contract 解释的生成节点。"""
+
+    operation: str
+    node: str
+    lifecycle_stage: ApplicationLifecycleStage
+    label: str
+
+
+APPLICATION_PLANNING_MODEL_GENERATIONS = (
+    ApplicationPlanningGenerationRecoverySpec(
+        operation="requirements",
+        node="requirements",
+        lifecycle_stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+        label="需求分析",
+    ),
+    ApplicationPlanningGenerationRecoverySpec(
+        operation="product_planning",
+        node="product_planning",
+        lifecycle_stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+        label="产品规划",
+    ),
+    ApplicationPlanningGenerationRecoverySpec(
+        operation="ui_confirmation",
+        node="ui_confirmation",
+        lifecycle_stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+        label="UI 设计",
+    ),
+)
+
+
+class ApplicationPlanningModelGenerationRecoveryContract:
+    """允许未产生 durable 业务结果的模型调用从其安全 checkpoint 重放。"""
+
+    def _spec_for(
+        self,
+        *,
+        source: DurableExecutionRecord,
+        point: RecoveryPoint,
+        snapshot: Any,
+    ) -> ApplicationPlanningGenerationRecoverySpec | None:
+        """按 failure operation 与 checkpoint successor 解析唯一生成节点。"""
+
+        failure = source.failure
+        if (
+            source.execution_kind != "application_planning"
+            or source.status is not DurableExecutionStatus.FAILED
+            or failure is None
+            or failure.origin is not ExecutionFailureOrigin.MODEL_CALL
+            or not failure.replay_compatible
+            or point.run_id != source.run_id
+            or point.thread_id != source.thread_id
+            or len(point.next_nodes) != 1
+            or application_planning_interrupt_from_snapshot(snapshot) is not None
+        ):
+            return None
+        for spec in APPLICATION_PLANNING_MODEL_GENERATIONS:
+            if (
+                failure.operation == spec.operation
+                and point.next_nodes == [spec.node]
+            ):
+                return spec
+        return None
+
+    def match(self, *, source: DurableExecutionRecord, point: RecoveryPoint, snapshot: Any) -> bool:
+        """只接受失败证据、生成 successor 和 active owner 同时一致的现场。"""
+
+        spec = self._spec_for(source=source, point=point, snapshot=snapshot)
+        if spec is None:
+            return False
+        values = getattr(snapshot, "values", {})
+        values = values if isinstance(values, dict) else {}
+        return str(values.get("active_run_id") or "").strip() == source.run_id
+
+    def assess_replay(
+        self,
+        *,
+        source: DurableExecutionRecord,
+        point: RecoveryPoint,
+        snapshot: Any,
+    ) -> RecoveryStrategyAssessment:
+        """返回通用生成节点的 Native checkpoint replay 结论。"""
+
+        if not self.match(source=source, point=point, snapshot=snapshot):
+            raise ValueError("当前 checkpoint 不是可验证的 Application Planning 模型生成失败现场。")
+        return RecoveryStrategyAssessment(
+            decision=RecoveryDecision.READY_NATIVE,
+            strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+            reason_code="APPLICATION_PLANNING_MODEL_GENERATION_REPLAY_SAFE",
+            reason="模型调用失败未产生 durable 业务结果，生成节点可以从安全边界重新执行。",
+        )
+
+    def assess_lifecycle(
+        self,
+        *,
+        source: DurableExecutionRecord,
+        point: RecoveryPoint,
+        snapshot: Any,
+        lifecycle: ApplicationLifecycle,
+    ) -> ApplicationPlanningLifecycleRecoveryAssessment:
+        """验证失败生成节点仍处于同一阶段并由 source 持有 lifecycle。"""
+
+        spec = self._spec_for(source=source, point=point, snapshot=snapshot)
+        if (
+            spec is None
+            or not self.match(source=source, point=point, snapshot=snapshot)
+            or lifecycle.initialization.thread_id != source.thread_id
+            or lifecycle.active_run_id != source.run_id
+            or lifecycle.initialization.stage is not spec.lifecycle_stage
+            or lifecycle.initialization.status
+            not in {
+                ApplicationLifecycleStatus.RUNNING,
+                ApplicationLifecycleStatus.FAILED,
+            }
+        ):
+            return ApplicationPlanningLifecycleRecoveryAssessment(False)
+        expected_revision = point.lifecycle_revision
+        return ApplicationPlanningLifecycleRecoveryAssessment(
+            compatible=expected_revision is None
+            or lifecycle.revision in {expected_revision, expected_revision + 1}
+        )
+
+    def lifecycle_compatible(
+        self,
+        *,
+        source: DurableExecutionRecord,
+        point: RecoveryPoint,
+        snapshot: Any,
+        lifecycle: ApplicationLifecycle,
+    ) -> bool:
+        """保留旧的布尔生命周期适配入口。"""
+
+        return self.assess_lifecycle(
+            source=source,
+            point=point,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+        ).compatible
+
+    def activity_label(self) -> str:
+        """返回当前生成节点的统一业务名称。"""
+
+        return "模型生成"
+
+    def recovery_message(self) -> str:
+        """返回模型失败后继续执行的用户可见文案。"""
+
+        return "上一次模型调用失败，当前执行现场可以安全继续，将使用当前模型配置重新执行未完成步骤。"
+
+
 class TechnicalPlanningRecoveryContract:
     """定义 TechnicalPlan 五个 durable boundary 的 Native Replay 规则。"""
 
@@ -178,9 +330,17 @@ class TechnicalPlanningRecoveryContract:
     def match(self, *, source: DurableExecutionRecord, point: RecoveryPoint, snapshot: Any) -> bool:
         """仅识别带完整技术规划 boundary、同线程 owner 和合法 successor 的现场。"""
 
+        failure_compatible = (
+            source.status is DurableExecutionStatus.INTERRUPTED
+            or (
+                source.failure is not None
+                and source.failure.origin is ExecutionFailureOrigin.MODEL_CALL
+                and source.failure.replay_compatible
+            )
+        )
         if (
             source.execution_kind != "application_planning"
-            or source.status is not DurableExecutionStatus.INTERRUPTED
+            or not failure_compatible
             or point.run_id != source.run_id
             or point.thread_id != source.thread_id
         ):
@@ -365,7 +525,11 @@ class TechnicalPlanningRecoveryContract:
                 compatible=(
                     lifecycle.active_run_id == source.run_id
                     and current_stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
-                    and current_status is ApplicationLifecycleStatus.RUNNING
+                    and current_status
+                    in {
+                        ApplicationLifecycleStatus.RUNNING,
+                        ApplicationLifecycleStatus.FAILED,
+                    }
                     and (
                         expected_revision is None
                         or lifecycle.revision == expected_revision
@@ -400,7 +564,11 @@ class TechnicalPlanningRecoveryContract:
                 boundary.boundary is ApplicationPlanningRecoveryBoundary.REVIEW_READY
                 and lifecycle.active_run_id == source.run_id
                 and current_stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
-                and current_status is ApplicationLifecycleStatus.RUNNING
+                and current_status
+                in {
+                    ApplicationLifecycleStatus.RUNNING,
+                    ApplicationLifecycleStatus.FAILED,
+                }
                 and (
                     expected_revision is None
                     or lifecycle.revision == expected_revision
@@ -482,10 +650,11 @@ class TechnicalPlanningRecoveryContract:
 def production_application_planning_recovery_contracts() -> tuple[
     ApplicationPlanningRecoveryContract, ...
 ]:
-    """返回生产环境当前注册的 Requirement 与 TechnicalPlan Contract。"""
+    """返回生产环境当前注册的需求回答、模型生成与 TechnicalPlan Contract。"""
 
     return (
         RequirementCommittedInputRecoveryContract(),
+        ApplicationPlanningModelGenerationRecoveryContract(),
         TechnicalPlanningRecoveryContract(),
     )
 
@@ -522,6 +691,9 @@ def resolve_application_planning_recovery_contract(
 __all__ = [
     "ApplicationPlanningLifecycleRecoveryAssessment",
     "ApplicationPlanningRecoveryContract",
+    "ApplicationPlanningGenerationRecoverySpec",
+    "ApplicationPlanningModelGenerationRecoveryContract",
+    "APPLICATION_PLANNING_MODEL_GENERATIONS",
     "RequirementCommittedInputRecoveryContract",
     "TechnicalPlanningRecoveryContract",
     "production_application_planning_recovery_contracts",

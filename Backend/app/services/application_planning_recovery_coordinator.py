@@ -31,6 +31,7 @@ from app.services.application_planning_recovery_contracts import (
 )
 from app.services.execution_recovery import capture_recovery_point
 from app.services.execution_recovery_coordinator import prepare_continue
+from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
 )
@@ -98,7 +99,11 @@ async def resolve_application_planning_recovery(
     )
     committed_transition_candidate = bool(
         source
-        and source.status is DurableExecutionStatus.INTERRUPTED
+        and source.status
+        in {
+            DurableExecutionStatus.INTERRUPTED,
+            DurableExecutionStatus.FAILED,
+        }
         and (
             input_committed
             or (
@@ -160,16 +165,20 @@ async def resolve_application_planning_recovery(
             reason_code="DURABLE_APPLICATION_PLANNING_COMPLETED",
             message="当前规划已经完成。",
         )
-    if source.status is DurableExecutionStatus.FAILED:
+    admission = assess_recovery_source(source)
+    if not admission.admissible:
         return _projection(
-            classification="failed",
+            classification="failed" if source.status is DurableExecutionStatus.FAILED else "blocked",
             source=source,
             thread_id=thread_id,
-            reason_code="DURABLE_APPLICATION_PLANNING_FAILED",
-            message="上一次规划执行失败，当前现场不能安全自动继续。",
+            reason_code=admission.reason_code,
+            message="上一次规划执行缺少可证明安全的恢复证据，当前现场不能自动继续。",
             input_committed=input_committed,
         )
-    if source.status is not DurableExecutionStatus.INTERRUPTED:
+    if source.status not in {
+        DurableExecutionStatus.INTERRUPTED,
+        DurableExecutionStatus.FAILED,
+    }:
         return _projection(
             classification="blocked",
             source=source,
@@ -234,9 +243,9 @@ async def ensure_application_planning_recovery_point(
     graph: Any,
     snapshot: Any,
 ) -> RecoveryPoint | None:
-    """只为属于中断 source 的真实活跃 checkpoint 幂等补写恢复索引。"""
+    """只为通过 source admission 的真实活跃 checkpoint 幂等补写恢复索引。"""
 
-    if source.status is not DurableExecutionStatus.INTERRUPTED:
+    if not assess_recovery_source(source).admissible:
         return None
     values = getattr(snapshot, "values", {})
     values = values if isinstance(values, dict) else {}

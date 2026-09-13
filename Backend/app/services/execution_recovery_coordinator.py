@@ -25,6 +25,7 @@ from app.services.execution_recovery_selector import (
     RecoveryPointSelection,
     RecoveryPointSelector,
 )
+from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.execution_recovery_strategy import (
     RecoveryContext,
     RecoveryReplayPolicy,
@@ -95,6 +96,15 @@ class RecoveryCoordinator:
         status_plan = _source_status_plan(source)
         if status_plan is not None:
             return status_plan
+        admission = assess_recovery_source(source)
+        if not admission.admissible:
+            return _plan_from_source(
+                source=source,
+                decision=RecoveryDecision.NOT_RECOVERABLE,
+                strategy=RecoveryStrategy.NONE,
+                reason_code=admission.reason_code,
+                reason="source execution 没有满足 Abnormal Execution Recovery Contract。",
+            )
 
         selection = await self._selector.select_recovery_point(
             workspace=workspace,
@@ -533,6 +543,19 @@ def _source_status_plan(source: DurableExecutionRecord) -> RecoveryPlan | None:
             strategy=RecoveryStrategy.NONE,
             reason_code="SOURCE_AWAITING_USER",
             reason="source execution 正在等待结构化用户交互，不走通用 Continue。",
+        )
+    if source.status in {
+        DurableExecutionStatus.INTERRUPTED,
+        DurableExecutionStatus.FAILED,
+    }:
+        return None
+    if source.status is DurableExecutionStatus.CANCELLED:
+        return _plan_from_source(
+            source=source,
+            decision=RecoveryDecision.NOT_RECOVERABLE,
+            strategy=RecoveryStrategy.NONE,
+            reason_code="SOURCE_EXECUTION_CANCELLED",
+            reason="显式取消的 source execution 不进入 Native Recovery。",
         )
     return None
 
