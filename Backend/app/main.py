@@ -462,6 +462,23 @@ async def run_execution_recovery(
     )
 
 
+@app.post("/execution-recovery/execute")
+async def execute_execution_recovery(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过 incidentId/actionId 执行 Backend-authoritative Recovery Action。"""
+
+    return StreamingResponse(
+        build_execution_recovery_ag_ui_stream(
+            payload=input_data,
+            accept=accept,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 class ProjectLaunchRequest(BaseModel):
     workspace: str = Field(min_length=1, max_length=4096)
 

@@ -18,6 +18,7 @@ from app.domain.execution_recovery import (
 )
 from app.persistence.execution_recovery import (
     get_recovery_point,
+    get_latest_recovery_point,
     list_recovery_points,
 )
 from app.protocols.application_planning_interrupt import (
@@ -39,6 +40,7 @@ from app.services.execution_recovery_source_admission import assess_recovery_sou
 from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
 )
+from app.services.execution_recovery_action_planner import plan_recovery_action
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,7 @@ class ApplicationPlanningRecoveryProjection:
     reason_code: str
     message: str
     failure_diagnostic: dict[str, Any] | None = None
+    recovery_action_plan: dict[str, Any] | None = None
 
     def to_payload(self) -> dict[str, Any]:
         """把内部字段转换为不泄漏 checkpoint authority 的公开 camelCase 结构。"""
@@ -70,6 +73,7 @@ class ApplicationPlanningRecoveryProjection:
             "reasonCode": self.reason_code,
             "message": self.message,
             "failureDiagnostic": self.failure_diagnostic,
+            "recoveryActionPlan": self.recovery_action_plan,
         }
 
 
@@ -228,6 +232,17 @@ async def resolve_application_planning_recovery(
         graph=graph,
         replay_policies=production_recovery_replay_policies(),
     )
+    point = await get_latest_recovery_point(workspace, source.run_id)
+    if point is None:
+        point = await _point_by_id(workspace, plan.recovery_point_id)
+    action_plan, _stage_assessment = await plan_recovery_action(
+        workspace=workspace,
+        source=source,
+        recovery_plan=plan,
+        point=point,
+        snapshot=snapshot,
+        lifecycle=lifecycle,
+    )
     if plan.decision is RecoveryDecision.READY_NATIVE:
         contract = resolve_application_planning_recovery_contract(
             source=source,
@@ -242,10 +257,22 @@ async def resolve_application_planning_recovery(
             input_committed=input_committed,
             reason_code=plan.reason_code,
             message=(
-                contract.recovery_message()
+                action_plan.message
                 if contract is not None
-                else "上一次规划执行被中断，可以继续执行。"
+                else action_plan.message
             ),
+            recovery_action_plan=action_plan.model_dump(mode="json", by_alias=True),
+        )
+    if action_plan.primary_action is not None:
+        return _projection(
+            classification="ready_to_continue",
+            source=source,
+            thread_id=thread_id,
+            can_continue=True,
+            input_committed=input_committed,
+            reason_code=action_plan.reason_code,
+            message=action_plan.message,
+            recovery_action_plan=action_plan.model_dump(mode="json", by_alias=True),
         )
     if plan.decision is RecoveryDecision.AWAITING_USER:
         return _projection(
@@ -383,6 +410,7 @@ def _projection(
     can_continue: bool = False,
     user_action_required: bool = False,
     input_committed: bool = False,
+    recovery_action_plan: dict[str, Any] | None = None,
 ) -> ApplicationPlanningRecoveryProjection:
     """集中构造 v1 投影并固定所有布尔默认值。"""
 
@@ -397,6 +425,7 @@ def _projection(
         reason_code=reason_code,
         message=message,
         failure_diagnostic=_failure_diagnostic(source),
+        recovery_action_plan=recovery_action_plan,
     )
 
 

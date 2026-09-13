@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Sequence
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from app.config import Settings
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    RecoveryDecision,
     RecoveryAttempt,
     RecoveryAttemptStatus,
     RecoveryExecutionError,
@@ -24,12 +26,14 @@ from app.domain.execution_recovery import (
 )
 from app.persistence.execution_recovery import (
     claim_recovery_finalization,
+    claim_recovery_action_attempt,
     claim_native_recovery_attempt,
     finish_execution_and_release_lease,
     get_execution,
     get_execution_lease,
     get_recovery_attempt,
     get_recovery_point,
+    get_latest_recovery_point,
     fail_recovery_attempt_prestart,
     insert_recovery_point,
     update_recovery_attempt,
@@ -80,6 +84,8 @@ class NativeRecoveryRuntimeContext:
     workspace_lease: WorkspaceRunLease | None
     observability: dict[str, Any]
     heartbeat_task: asyncio.Task[None] | None
+    fresh_start: bool = False
+    recovery_action_kind: str = "continue_checkpoint"
 
     def workflow_inputs(self) -> dict[str, Any]:
         """生成 Runtime 内部使用的最小字段集合，不重新解析外部 workflow request。"""
@@ -87,7 +93,11 @@ class NativeRecoveryRuntimeContext:
         values = getattr(self.fork_snapshot, "values", {})
         values = values if isinstance(values, dict) else {}
         return {
-            "request": "从 durable checkpoint 继续执行。",
+            "request": (
+                str(values.get("request") or "").strip()
+                if self.fresh_start
+                else "从 durable checkpoint 继续执行。"
+            ),
             "selected_skills_error": None,
             "selected_skill_names": list(values.get("selected_skill_names") or []),
             "project_id": self.project_id or "",
@@ -95,7 +105,11 @@ class NativeRecoveryRuntimeContext:
             "editor_mode": str(values.get("editor_mode") or "") or None,
             "workflow_scope": self.workflow_scope or "",
             "application_planning_interaction": None,
-            "resume_from": "",
+            "resume_from": (
+                str(values.get("resume_from") or "technical_planning_begin")
+                if self.fresh_start
+                else ""
+            ),
             "resume_values": {},
             "application_name": str(values.get("application_name") or "") or None,
             "workflow_debug_enabled": False,
@@ -210,6 +224,146 @@ async def prepare_native_recovery(
             "RECOVERY_PRESTART_FAILED",
             "Native Recovery 在 Graph 启动前失败。",
         ) from exc
+
+
+async def prepare_stage_restart(
+    *,
+    workspace: str,
+    source_run_id: str,
+    graph: Any,
+    assessment: Any,
+) -> NativeRecoveryRuntimeContext:
+    """原子 claim 后从正式产物构造 Technical Planning 阶段重启上下文。"""
+
+    source = await get_execution(workspace, source_run_id)
+    if source is None:
+        raise RecoveryExecutionError("SOURCE_EXECUTION_NOT_FOUND", "source execution 不存在。")
+    lineage = await resolve_recovery_lineage_head(
+        workspace,
+        thread_id=source.thread_id,
+        execution_kind=source.execution_kind,
+    )
+    if lineage.state is RecoveryLineageState.AMBIGUOUS:
+        raise RecoveryExecutionError(lineage.reason_code, "Recovery lineage 存在多个无法安全解释的当前 head。")
+    if lineage.head is None or lineage.head.run_id != source.run_id:
+        raise RecoveryExecutionError("RECOVERY_SOURCE_SUPERSEDED", "当前 recovery source 已被新的 child execution 替代，请刷新后继续。")
+    if not getattr(assessment, "available", False) or not isinstance(getattr(assessment, "state", None), dict):
+        raise RecoveryExecutionError(
+            getattr(assessment, "reason_code", None) or "STAGE_RESTART_NOT_AVAILABLE",
+            getattr(assessment, "reason", None) or "当前正式产物不能支持 Stage Restart。",
+        )
+    lifecycle = load_application_lifecycle(workspace)
+    if lifecycle is None:
+        raise RecoveryExecutionError("STAGE_RESTART_LIFECYCLE_MISSING", "ApplicationLifecycle 不存在。")
+    source_point = await get_latest_recovery_point(workspace, source.run_id)
+    if source_point is None or not source_point.checkpoint_id:
+        raise RecoveryExecutionError("STAGE_RESTART_RECOVERY_POINT_MISSING", "Stage Restart 缺少可固化的 source RecoveryPoint。")
+    identity = current_backend_instance()
+    new_run_id = f"recovery-{uuid4().hex[:12]}"
+    plan = RecoveryPlan(
+        source_run_id=source.run_id,
+        thread_id=source.thread_id,
+        decision=RecoveryDecision.READY_NATIVE,
+        strategy=RecoveryStrategy.STAGE_RESTART,
+        lifecycle_ownership_mode=getattr(
+            assessment,
+            "lifecycle_ownership_mode",
+            RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
+        ),
+        recovery_point_id=source_point.recovery_point_id,
+        checkpoint_id=source_point.checkpoint_id,
+        checkpoint_ns=source_point.checkpoint_ns,
+        next_nodes=["technical_planning_begin"],
+        reason_code="TECHNICAL_PLANNING_STAGE_RESTART",
+        reason="从当前正式 RequirementSpec、ProductPlan 和 UiDesign 重建 Technical Planning 输入。",
+        lifecycle_revision=lifecycle.revision,
+    )
+    child_execution, _, attempt = await claim_recovery_action_attempt(
+        source=source,
+        plan=plan,
+        new_run_id=new_run_id,
+        owner_backend_instance_id=identity.instance_id,
+        owner_pid=identity.pid,
+        lease_ttl_seconds=Settings.from_env().execution_recovery_lease_ttl_seconds,
+    )
+    heartbeat_task = _start_recovery_heartbeat(
+        workspace=workspace,
+        run_id=new_run_id,
+        owner_backend_instance_id=identity.instance_id,
+    )
+    handoff_completed = False
+    try:
+        lifecycle = _handoff_lifecycle(
+            workspace,
+            source=source,
+            plan=plan,
+            new_run_id=new_run_id,
+        )
+        handoff_completed = True
+        await update_recovery_attempt(
+            workspace=workspace,
+            new_run_id=new_run_id,
+            status=RecoveryAttemptStatus.STARTED,
+        )
+        fresh_state = dict(assessment.state)
+        fresh_state.update(
+            {
+                "active_thread_id": source.thread_id,
+                "active_run_id": new_run_id,
+                "workspace": workspace,
+                "workflow_scope": "application_planning",
+            }
+        )
+        observability = _recovery_observability(
+            run_id=new_run_id,
+            thread_id=source.thread_id,
+            project_id=source.project_id,
+            workspace=workspace,
+        )
+        namespace = f"recovery-stage-{new_run_id}"
+        return NativeRecoveryRuntimeContext(
+            source_execution=source,
+            child_execution=child_execution,
+            recovery_plan=plan,
+            source_recovery_point=source_point,
+            new_run_id=new_run_id,
+            thread_id=source.thread_id,
+            project_id=source.project_id,
+            workspace=workspace,
+            workflow_scope=source.workflow_scope or "application_planning",
+            graph=graph,
+            fork_config={
+                "configurable": {
+                    "thread_id": source.thread_id,
+                    "checkpoint_ns": namespace,
+                }
+            },
+            observation_config={
+                "configurable": {
+                    "thread_id": source.thread_id,
+                    "checkpoint_ns": namespace,
+                }
+            },
+            fork_snapshot=SimpleNamespace(values=fresh_state),
+            lifecycle_payload=application_lifecycle_payload(lifecycle),
+            workspace_lease=None,
+            observability=observability,
+            heartbeat_task=heartbeat_task,
+            fresh_start=True,
+            recovery_action_kind="restart_stage",
+        )
+    except Exception as exc:
+        await stop_execution_heartbeat(heartbeat_task)
+        await _handle_pre_runtime_failure(
+            workspace=workspace,
+            new_run_id=new_run_id,
+            attempt=await get_recovery_attempt(workspace, new_run_id),
+            error_code=_recovery_error_code(exc),
+            handoff_completed=handoff_completed,
+        )
+        if isinstance(exc, RecoveryExecutionError):
+            raise
+        raise RecoveryExecutionError("RECOVERY_PRESTART_FAILED", "Stage Restart 在 Graph 启动前失败。") from exc
 
 
 async def finalize_handed_off_recovery_attempt(
@@ -863,4 +1017,5 @@ __all__ = [
     "NativeRecoveryRuntimeContext",
     "finalize_handed_off_recovery_attempt",
     "prepare_native_recovery",
+    "prepare_stage_restart",
 ]

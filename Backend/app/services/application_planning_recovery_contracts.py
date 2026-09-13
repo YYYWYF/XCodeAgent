@@ -34,6 +34,9 @@ from app.services.application_planning_recovery_policy import (
     application_planning_committed_input_recovery_candidate,
 )
 from app.services.execution_recovery_strategy import RecoveryStrategyAssessment
+from app.services.application_planning_stage_recovery import (
+    ApplicationPlanningStageRecoveryContract,
+)
 
 
 @dataclass(frozen=True)
@@ -696,6 +699,7 @@ __all__ = [
     "APPLICATION_PLANNING_MODEL_GENERATIONS",
     "RequirementCommittedInputRecoveryContract",
     "TechnicalPlanningRecoveryContract",
+    "ApplicationPlanningStageRecoveryContract",
     "production_application_planning_recovery_contracts",
     "resolve_application_planning_recovery_contract",
 ]

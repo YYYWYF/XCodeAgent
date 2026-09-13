@@ -1049,7 +1049,12 @@ def build_workflow_ag_ui_stream(
             tool_indexes: dict[int, str] = {}
 
             graph_input: dict[str, Any] | Command[Any] | None = (
-                None if native_recovery_context is not None else initial_state
+                initial_state
+                if native_recovery_context is not None
+                and native_recovery_context.fresh_start
+                else None
+                if native_recovery_context is not None
+                else initial_state
             )
             if (
                 native_recovery_context is None

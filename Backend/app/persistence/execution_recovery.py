@@ -348,6 +348,7 @@ async def claim_native_recovery_attempt(
     owner_pid: int,
     lease_ttl_seconds: float,
     created_at: datetime | None = None,
+    allow_non_native: bool = False,
 ) -> tuple[DurableExecutionRecord, ExecutionLease, RecoveryAttempt]:
     """在一个 SQLite 写事务中 claim source、创建 child Execution、Lease 和 Attempt。"""
 
@@ -359,7 +360,13 @@ async def claim_native_recovery_attempt(
             "RECOVERY_SOURCE_MISMATCH",
             "RecoveryPlan 与 source execution 不属于同一条运行记录。",
         )
-    if plan.decision.value != "ready_native" or plan.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT:
+    if (
+        not allow_non_native
+        and (
+            plan.decision.value != "ready_native"
+            or plan.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT
+        )
+    ):
         raise RecoveryExecutionError(
             "RECOVERY_NOT_READY_NATIVE",
             "当前 RecoveryPlan 未被 Native Recovery policy 明确允许。",
@@ -535,6 +542,30 @@ async def claim_native_recovery_attempt(
                 raise _run_id_conflict_from_row(existing_row) from None
             raise exc
         return record, lease, attempt
+
+
+async def claim_recovery_action_attempt(
+    *,
+    source: DurableExecutionRecord,
+    plan: RecoveryPlan,
+    new_run_id: str,
+    owner_backend_instance_id: str,
+    owner_pid: int,
+    lease_ttl_seconds: float,
+    created_at: datetime | None = None,
+) -> tuple[DurableExecutionRecord, ExecutionLease, RecoveryAttempt]:
+    """用同一原子 lineage claim 记录 operation retry 或 stage restart。"""
+
+    return await claim_native_recovery_attempt(
+        source=source,
+        plan=plan,
+        new_run_id=new_run_id,
+        owner_backend_instance_id=owner_backend_instance_id,
+        owner_pid=owner_pid,
+        lease_ttl_seconds=lease_ttl_seconds,
+        created_at=created_at,
+        allow_non_native=True,
+    )
 
 
 async def get_recovery_attempt(

@@ -139,6 +139,9 @@ class RecoveryStrategy(StrEnum):
 
     NATIVE_CHECKPOINT = "native_checkpoint"
     HANDLER = "handler"
+    OPERATION_RETRY = "operation_retry"
+    STAGE_RESTART = "stage_restart"
+    RECONCILE_STATE = "reconcile_state"
     NONE = "none"
 
 
@@ -285,6 +288,67 @@ class RecoveryPlan(ExecutionRecoveryModel):
     workspace_snapshot_hash: str | None = Field(default=None, max_length=512)
 
 
+class RecoveryActionKind(StrEnum):
+    """定义恢复旅程层可以向用户公开的下一步动作。"""
+
+    CONTINUE_CHECKPOINT = "continue_checkpoint"
+    RETRY_OPERATION = "retry_operation"
+    RESTART_STAGE = "restart_stage"
+    RECONCILE_STATE = "reconcile_state"
+    AWAIT_USER = "await_user"
+    NEEDS_ATTENTION = "needs_attention"
+
+
+class RecoveryIncidentStatus(StrEnum):
+    """定义当前恢复事件是否仍有 Backend-authoritative 下一步。"""
+
+    RECOVERABLE = "recoverable"
+    AWAITING_USER = "awaiting_user"
+    NEEDS_ATTENTION = "needs_attention"
+
+
+class RecoveryAction(ExecutionRecoveryModel):
+    """描述一个不携带内部 checkpoint authority 的可执行恢复动作。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    action_id: str = Field(alias="actionId", min_length=1, max_length=512)
+    kind: RecoveryActionKind
+    label: str = Field(min_length=1, max_length=128)
+    description: str = Field(min_length=1, max_length=2048)
+    requires_confirmation: bool = Field(alias="requiresConfirmation", default=False)
+
+
+class RecoveryActionPlan(ExecutionRecoveryModel):
+    """保存统一 Recovery Incident 的当前动作规划，策略由 Backend 决定。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal["recovery-action-plan.v1"] = Field(
+        default="recovery-action-plan.v1",
+        alias="schemaVersion",
+    )
+    incident_id: str = Field(alias="incidentId", min_length=1, max_length=512)
+    source_run_id: str = Field(alias="sourceRunId", min_length=1, max_length=512)
+    thread_id: str = Field(alias="threadId", min_length=1, max_length=512)
+    execution_kind: Literal["application_planning", "workbench"] = Field(
+        alias="executionKind"
+    )
+    status: RecoveryIncidentStatus
+    reason_code: str = Field(alias="reasonCode", min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=2048)
+    primary_action: RecoveryAction | None = Field(
+        default=None,
+        alias="primaryAction",
+    )
+    alternate_actions: list[RecoveryAction] = Field(
+        default_factory=list,
+        alias="alternateActions",
+        max_length=8,
+    )
+    updated_at: datetime = Field(alias="updatedAt")
+
+
 class ExecutionRecoveryProjectionCandidate(ExecutionRecoveryModel):
     """定义 lifecycle GET 仅向前端公开的单条中断执行投影。"""
 
@@ -308,6 +372,10 @@ class ExecutionRecoveryProjectionCandidate(ExecutionRecoveryModel):
     reason_code: str = Field(alias="reasonCode", min_length=1, max_length=128)
     message: str = Field(min_length=1, max_length=2048)
     updated_at: datetime = Field(alias="updatedAt")
+    recovery_action_plan: RecoveryActionPlan | None = Field(
+        default=None,
+        alias="recoveryActionPlan",
+    )
 
 
 class ExecutionRecoveryProjection(ExecutionRecoveryModel):
