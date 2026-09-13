@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -48,13 +47,32 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
                     [{"name": "SYSTEM_AUTHORIZATION_MANAGEMENT_RESOURCE", "resourceKey": "system_authorization_management"}],
                 )
 
-    def _write_auth_template_contract(self, workspace: Path) -> Path:
-        """构造最小 auth 下载 manifest 和固定 Java 常量托管文件。"""
+    def test_rejects_projection_when_effective_capability_is_missing(self) -> None:
+        """固定 marker 存在也不能绕过 Engine effective capability 门禁。"""
 
-        manifest = workspace / ".xcodeagent/template-generation-manifest.json"
-        manifest.parent.mkdir(parents=True)
-        manifest.write_text(
-            json.dumps({"steps": {"download": {"targets": {"backend": {"branch": "auth"}}}}}),
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            target = self._write_auth_template_contract(workspace)
+            state = workspace / ".xcodeagent/template-state.json"
+            state.write_text(
+                '{"schemaVersion":2,"templateRevision":"r1","requested":{},"effective":{},"appliedAdditions":{}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(AuthorizationConstantsProjectionError, "effective"):
+                apply_authorization_constants_projection(
+                    workspace,
+                    [{"name": "ORDERS_APPROVE_RESOURCE", "resourceKey": "orders_approve"}],
+                )
+            self.assertNotIn("ORDERS_APPROVE_RESOURCE", target.read_text(encoding="utf-8"))
+
+    def _write_auth_template_contract(self, workspace: Path) -> Path:
+        """构造 authorization effective State 和固定 Java 常量托管文件。"""
+
+        state = workspace / ".xcodeagent/template-state.json"
+        state.parent.mkdir(parents=True)
+        state.write_text(
+            '{"schemaVersion":2,"templateRevision":"r1","requested":{"authorization":{"enabled":true,"config":{}}},'
+            '"effective":{"authorization":{"enabled":true,"config":{}}},"appliedAdditions":{}}',
             encoding="utf-8",
         )
         target = workspace / (

@@ -1,0 +1,9 @@
+{
+  "operations": [
+    {
+      "type": "ADD_FILE",
+      "path": "../outside.txt",
+      "content": "must be rejected"
+    }
+  ]
+}

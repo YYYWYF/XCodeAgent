@@ -5,7 +5,6 @@ import json
 import tempfile
 import threading
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.subgraphs.build import (
@@ -20,11 +19,7 @@ from app.graph.subgraphs.build import (
 )
 from app.services.build_task_planner import replace_build_task_plan_tasks
 from app.services.build_scheduler import attribute_task_file_changes
-from app.services.build_scheduler import select_ready_build_batch
-from app.services.authorization_resource_catalog import (
-    compile_frontend_resource_catalog,
-    resource_catalog_fingerprint,
-)
+from app.services.template_state import load_template_state, template_context
 
 
 def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
@@ -41,6 +36,47 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
     """为调度器测试落盘一份已确认的当前 JSON DAG，匹配真实 Build 门禁。"""
 
     plan = dict(state.get("build_task_plan") or {})
+    template_state_path = os.path.join(workspace, ".xcodeagent", "template-state.json")
+    if not os.path.exists(template_state_path):
+        os.makedirs(os.path.dirname(template_state_path), exist_ok=True)
+        with open(template_state_path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "schemaVersion": 2,
+                    "templateRevision": "scheduler-test-r1",
+                    "requested": {},
+                    "effective": {},
+                    "appliedAdditions": {},
+                },
+                handle,
+            )
+    # v4 计划必须绑定与工作区一致的 TemplateState，夹具不能绕过真实门禁。
+    plan.setdefault("template_context", template_context(load_template_state(workspace)))
+    if "route_projection" not in plan:
+        # 非路由测试也要满足 v4 的统一平台投影前置，避免复用已废弃的 v3 夹具。
+        routes_path = os.path.join(workspace, "frontend/src/constants/routes.tsx")
+        _write_workspace_file(workspace, "frontend/src/pages/SchedulerTest/index.tsx")
+        os.makedirs(os.path.dirname(routes_path), exist_ok=True)
+        if not os.path.exists(routes_path):
+            with open(routes_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n"
+                    "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n"
+                    "export const PAGE_ROUTES = [\n"
+                    "// XCODEAGENT_BUSINESS_ROUTES_START\n"
+                    "// XCODEAGENT_BUSINESS_ROUTES_END\n];\n"
+                )
+        plan["route_projection"] = {
+            "pages": [
+                {
+                    "pageId": "scheduler-test",
+                    "path": "/scheduler-test",
+                    "pageKey": "SchedulerTest",
+                    "name": "调度器测试",
+                    "menu": True,
+                }
+            ]
+        }
     plan["status"] = "ready"
     plan["confirmation_status"] = "confirmed"
     plan["confirmed_at"] = "2026-08-19T00:00:00+00:00"
@@ -57,256 +93,146 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
     return {**state, "build_task_plan": plan}
 
 
-def _authorization_formal_plan() -> dict:
-    """构造 deterministic auth dispatch 使用的最小已确认 TechnicalPlan。"""
-
-    return {
-        "confirmation_status": "confirmed",
-        "authorization_manifest": {
-            "enabled": True,
-            "resources": [
-                {
-                    "resourceKey": "system_authorization_management",
-                    "type": "system",
-                    "targetResourceRef": "system:authorization_management",
-                },
-                {
-                    "resourceKey": "orders",
-                    "type": "page",
-                    "targetResourceRef": "page:orders",
-                },
-            ],
-        },
-    }
-
-
-def _deterministic_auth_task(formal_plan: dict) -> dict:
-    """按正式资源目录生成可进入平台 executor 的 auth-guard Task。"""
-
-    catalog = compile_frontend_resource_catalog(
-        formal_plan["authorization_manifest"]
-    )
-    fingerprint = resource_catalog_fingerprint(catalog)
-    capability = f"frontend.auth.resources:{fingerprint}"
-    task_id = f"frontend-auth-resources-{fingerprint}"
-    resource_path = "frontend/src/constants/resources.ts"
-    return {
-        "id": task_id,
-        "unit_id": "frontend:auth-guard",
-        "owner": "frontend",
-        "task_type": "frontend.code",
-        "execution_strategy": "deterministic",
-        "platform_executor": "authorization.frontend_resources",
-        "status": "pending",
-        "dependencies": [],
-        "target_files": [resource_path],
-        "allowed_paths": [resource_path],
-        "change_scope": [
-            {
-                "operation": "add",
-                "path": resource_path,
-                "description": "物化已确认的完整权限资源目录。",
-            }
-        ],
-        "provides_capabilities": [capability],
-        "source_refs": {
-            "artifact": "technical-plan",
-            "kind": "frontend.auth.resources",
-            "capability_id": capability,
-            "resource_catalog_fingerprint": fingerprint,
-            "paths": [resource_path],
-        },
-        "deliverables": [
-            {
-                "id": f"{task_id}-resources",
-                "kind": "frontend.shared_capability",
-                "target_id": capability,
-                "paths": [resource_path],
-                "provides": [capability],
-            }
-        ],
-    }
-
-
 class BuildSubgraphSchedulerTests(unittest.TestCase):
-    def test_deterministic_auth_task_dispatches_platform_executor(self) -> None:
-        """frontend owner 的 auth Task 必须执行平台 executor 而不是 Frontend Agent。"""
+    def test_platform_projection_does_not_run_when_page_task_failed(self) -> None:
+        """任一页面任务失败时，平台不得提前写入路由或资源文件。"""
 
-        formal_plan = _authorization_formal_plan()
-        task = _deterministic_auth_task(formal_plan)
-        with tempfile.TemporaryDirectory() as workspace, patch(
-            "app.graph.subgraphs.build.generate_frontend_with_deep_agent"
-        ) as frontend_runner:
-            results, change_sets = _execute_ready_tasks(
-                {
-                    "workspace": workspace,
-                    "project_plan": formal_plan,
-                    "build_task_plan": {"schema_version": "build-dag.v3"},
-                },
-                [task],
-            )
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = self._platform_projection_plan(workspace)
+            failed_task = {**plan["tasks"][0], "status": "failed"}
+            plan["tasks"] = [failed_task]
+            plan["task_registry"] = {"page-orders": failed_task}
+            with patch("app.graph.subgraphs.build.apply_platform_projections") as projection:
+                result = run_build_scheduler(
+                    _ready_build_state(
+                        workspace,
+                        {
+                            "workspace": workspace,
+                            "project_plan": {"version": "1.0.0"},
+                            "build_task_plan": plan,
+                            "tasks": [failed_task],
+                            "build_results": [{"task_id": "page-orders", "owner": "frontend", "status": "failed"}],
+                            "timeline": [],
+                        },
+                    )
+                )
 
-            generated = Path(workspace) / "frontend/src/constants/resources.ts"
-            self.assertTrue(generated.is_file())
+        self.assertEqual(result["status"], "failed")
+        projection.assert_not_called()
+        self.assertEqual(result["platform_projection_evidence"], {})
 
-        frontend_runner.assert_not_called()
-        self.assertEqual(results[0]["status"], "completed")
-        self.assertEqual(results[0]["scheduler_decision"]["action"], "complete")
-        self.assertEqual(results[0]["executed_by"]["mode"], "deterministic")
-        self.assertEqual(results[0]["owner"], "frontend")
-        self.assertEqual(len(change_sets), 1)
+    def test_platform_projection_waits_for_real_page_file(self) -> None:
+        """页面任务成功但未落盘时，投影必须在任务后失败并阻断 Build。"""
 
-    def test_deterministic_executor_failure_does_not_fallback_to_frontend_agent(self) -> None:
-        """平台 executor 失败继续走普通失败 lifecycle，但不能转交 frontend LLM。"""
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = self._platform_projection_plan(workspace)
+            with patch(
+                "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                return_value=[{"task_id": "page-orders", "owner": "frontend", "status": "completed"}],
+            ):
+                result = run_build_scheduler(
+                    _ready_build_state(
+                        workspace,
+                        {
+                            "workspace": workspace,
+                            "project_plan": {"version": "1.0.0"},
+                            "build_task_plan": plan,
+                            "tasks": plan["tasks"],
+                            "timeline": [],
+                        },
+                    )
+                )
 
-        formal_plan = _authorization_formal_plan()
-        task = _deterministic_auth_task(formal_plan)
-        invalid_plan = {**formal_plan, "confirmation_status": "pending"}
-        with tempfile.TemporaryDirectory() as workspace, patch(
-            "app.graph.subgraphs.build.generate_frontend_with_deep_agent"
-        ) as frontend_runner:
-            results, change_sets = _execute_ready_tasks(
-                {
-                    "workspace": workspace,
-                    "project_plan": invalid_plan,
-                    "build_task_plan": {"schema_version": "build-dag.v3"},
-                },
-                [task],
-            )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result.get("platform_projection_evidence", {}).get("status"), "failed", result)
+        self.assertIn("缺少真实页面入口", result["platform_projection_evidence"]["error"])
+        self.assertIn("scheduler:platform_projection_failed", result["build_events"])
 
-        frontend_runner.assert_not_called()
-        self.assertEqual(change_sets, [])
-        self.assertEqual(results[0]["status"], "failed")
-        self.assertEqual(results[0]["failure_category"], "invalid_execution_context")
-        self.assertEqual(results[0]["scheduler_decision"]["action"], "terminal_failure")
+    def test_platform_projection_runs_after_page_task_and_stays_out_of_agent_changes(self) -> None:
+        """真实页面生成后才写入 routes，平台差异不能混入 Agent change set。"""
 
-    def test_mixed_batch_dispatches_platform_and_agent_tasks(self) -> None:
-        """同一 ready batch 可并发分流 deterministic 与普通 Agent Task。"""
+        def write_page_runner(**kwargs):
+            """模拟页面 Agent 先完成业务页面，再返回成功结果。"""
 
-        formal_plan = _authorization_formal_plan()
-        auth_task = _deterministic_auth_task(formal_plan)
-        page_task = {
-            "id": "orders-page",
-            "owner": "frontend",
-            "execution_strategy": "agent",
-            "platform_executor": None,
-            "status": "pending",
-            "dependencies": [],
-            "target_files": ["frontend/src/Page.tsx"],
-            "allowed_paths": ["frontend/src/Page.tsx"],
-            "change_scope": [
-                {"operation": "add", "path": "frontend/src/Page.tsx"}
-            ],
+            _write_workspace_file(kwargs.get("workspace"), "frontend/src/pages/Orders/index.tsx")
+            return [{"task_id": "page-orders", "owner": "frontend", "status": "completed"}]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = self._platform_projection_plan(workspace)
+            with patch(
+                "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                side_effect=write_page_runner,
+            ):
+                result = run_build_scheduler(
+                    _ready_build_state(
+                        workspace,
+                        {
+                            "workspace": workspace,
+                            "project_plan": {"version": "1.0.0"},
+                            "build_task_plan": plan,
+                            "tasks": plan["tasks"],
+                            "timeline": [],
+                        },
+                    )
+                )
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["platform_projection_evidence"]["status"], "applied")
+        self.assertIn("scheduler:platform_projection_applied", result["build_events"])
+        self.assertNotIn(
+            "frontend/src/constants/routes.tsx",
+            [item["path"] for item in result["code_changes"]["files"]],
+        )
+
+    def _platform_projection_plan(self, workspace: str) -> dict:
+        """构造含单个页面任务的 v4 计划与最小无权限模板。"""
+
+        state = {
+            "schemaVersion": 2,
+            "templateRevision": "test-r1",
+            "requested": {},
+            "effective": {},
+            "appliedAdditions": {},
         }
-        selection = select_ready_build_batch([auth_task, page_task])
-
-        def frontend_runner(**kwargs):
-            """模拟普通前端 Agent 在自己的授权路径内写入。"""
-
-            _write_workspace_file(kwargs.get("workspace"), "frontend/src/Page.tsx")
-            return [
-                {
-                    "task_id": "orders-page",
-                    "owner": "frontend",
-                    "status": "completed",
-                }
-            ]
-
-        with tempfile.TemporaryDirectory() as workspace, patch(
-            "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
-            side_effect=frontend_runner,
-        ) as agent_runner:
-            results, change_sets = _execute_ready_tasks(
-                {
-                    "workspace": workspace,
-                    "project_plan": formal_plan,
-                    "build_task_plan": {"schema_version": "build-dag.v3"},
-                },
-                selection["ready_tasks"],
+        _write_workspace_file(workspace, ".xcodeagent/template-state.json")
+        with open(os.path.join(workspace, ".xcodeagent/template-state.json"), "w", encoding="utf-8") as handle:
+            json.dump(state, handle)
+        routes = os.path.join(workspace, "frontend/src/constants/routes.tsx")
+        os.makedirs(os.path.dirname(routes), exist_ok=True)
+        with open(routes, "w", encoding="utf-8") as handle:
+            handle.write(
+                "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n"
+                "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n"
+                "export const PAGE_ROUTES = [\n"
+                "// XCODEAGENT_BUSINESS_ROUTES_START\n"
+                "// XCODEAGENT_BUSINESS_ROUTES_END\n];\n"
             )
-            auth_output_exists = (
-                Path(workspace) / "frontend/src/constants/resources.ts"
-            ).is_file()
-            page_output_exists = (Path(workspace) / "frontend/src/Page.tsx").is_file()
-
-        self.assertEqual(set(selection["ready_task_ids"]), {auth_task["id"], "orders-page"})
-        self.assertEqual({result["status"] for result in results}, {"completed"})
-        results_by_id = {result["task_id"]: result for result in results}
-        self.assertEqual(
-            results_by_id[auth_task["id"]]["executed_by"]["mode"],
-            "deterministic",
-        )
-        self.assertEqual(
-            results_by_id[auth_task["id"]]["changed_files"],
-            ["frontend/src/constants/resources.ts"],
-        )
-        agent_runner.assert_called_once()
-        self.assertTrue(auth_output_exists)
-        self.assertTrue(page_output_exists)
-        changed_paths = {
-            file_item["path"]
-            for change_set in change_sets
-            for file_item in change_set.get("files", [])
-        }
-        self.assertEqual(
-            changed_paths,
-            {"frontend/src/constants/resources.ts", "frontend/src/Page.tsx"},
-        )
-
-    def test_unknown_deterministic_executor_never_falls_back_to_llm(self) -> None:
-        """未知 deterministic executor 必须 fail closed，不能按 frontend owner 调用 LLM。"""
-
         task = {
-            "id": "unknown-executor",
+            "id": "page-orders",
             "owner": "frontend",
-            "execution_strategy": "deterministic",
-            "platform_executor": "authorization.unknown",
+            "unit_id": "application:root",
+            "task_type": "frontend.code",
             "status": "pending",
             "dependencies": [],
+            "change_scope": [{"operation": "add", "path": "frontend/src/pages/Orders/index.tsx"}],
+            "allowed_paths": ["frontend/src/pages/Orders/index.tsx"],
+            "target_files": ["frontend/src/pages/Orders/index.tsx"],
+            "deliverables": [{"id": "page:orders", "kind": "frontend.page", "target_id": "orders", "paths": ["frontend/src/pages/Orders/index.tsx"], "provides": ["orders.render"]}],
         }
-        with patch("app.graph.subgraphs.build.generate_frontend_with_deep_agent") as runner:
-            results, change_sets = _execute_ready_tasks(
-                {
-                    "project_plan": {},
-                    "build_task_plan": {"schema_version": "build-dag.v3"},
-                },
-                [task],
-            )
-
-        runner.assert_not_called()
-        self.assertEqual(change_sets, [])
-        self.assertEqual(results[0]["status"], "failed")
-        self.assertEqual(results[0]["failure_category"], "execution_contract_error")
-        self.assertIn("is not allowlisted", results[0]["failure_reason"])
-
-    def test_normal_frontend_task_still_uses_frontend_agent(self) -> None:
-        """普通 agent 策略前端 Task 继续使用原有 frontend Agent。"""
-
-        task = {
-            "id": "legacy-page",
-            "owner": "frontend",
-            "execution_strategy": "agent",
-            "platform_executor": None,
-            "status": "pending",
-            "dependencies": [],
+        return {
+            "schema_version": "build-dag.v4",
+            "template_context": template_context(state),
+            "status": "ready",
+            "confirmation_status": "confirmed",
+            "confirmed_at": "2026-09-07T00:00:00+00:00",
+            "build_execution_scope": {},
+            "tasks": [task],
+            "build_units": {"application:root": {"id": "application:root", "kind": "application", "task_ids": ["page-orders"]}},
+            "unit_graph": {"nodes": ["application:root"], "edges": []},
+            "task_registry": {"page-orders": task},
+            "task_graph": {"nodes": ["page-orders"], "topological_order": ["page-orders"], "validation": {"is_valid": True, "errors": []}},
+            "route_projection": {"pages": [{"pageId": "orders", "path": "/orders", "pageKey": "Orders", "name": "订单", "menu": True}]},
         }
-        with patch(
-            "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
-            return_value=[
-                {"task_id": "legacy-page", "owner": "frontend", "status": "completed"}
-            ],
-        ) as runner:
-            results, _ = _execute_ready_tasks(
-                {
-                    "project_plan": {},
-                    "build_task_plan": {"schema_version": "build-dag.v3"},
-                },
-                [task],
-            )
-
-        runner.assert_called_once()
-        self.assertEqual(results[0]["status"], "completed")
-
     def test_backend_workspace_snapshot_loads_from_inspection_artifact(self) -> None:
         """Build 应通过独立快照路径读取 WorkspaceSnapshot，而不是读取任务计划。"""
 
@@ -357,7 +283,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             },
         ]
         plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "status": "ready",
             "confirmation_status": "confirmed",
             "build_execution_scope": {},
@@ -379,7 +305,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         """Build Run 必须持续使用首次绑定的副本，规划文件变化后不得继续派发任务。"""
 
         plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "status": "ready",
             "confirmation_status": "confirmed",
             "build_execution_scope": {},
@@ -455,7 +381,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
-                        "build_task_plan": {"schema_version": "build-dag.v3"},
+                        "build_task_plan": {"schema_version": "build-dag.v4"},
                         "workspace_snapshot": {
                             "high_value_files": [{"path": "backend/pom.xml"}]
                         },
@@ -558,7 +484,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
-                        "build_task_plan": {"schema_version": "build-dag.v3"},
+                        "build_task_plan": {"schema_version": "build-dag.v4"},
                     },
                     tasks,
                 )
@@ -690,7 +616,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
-                        "build_task_plan": {"schema_version": "build-dag.v3"},
+                        "build_task_plan": {"schema_version": "build-dag.v4"},
                     },
                     [task],
                 )
@@ -770,7 +696,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
-                        "build_task_plan": {"schema_version": "build-dag.v3"},
+                        "build_task_plan": {"schema_version": "build-dag.v4"},
                     },
                     [task],
                 )
@@ -842,7 +768,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "application:root": {
                                         "id": "application:root",
@@ -927,7 +853,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "application:root": {
                                         "id": "application:root",
@@ -982,7 +908,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     "project_plan": {"version": "1.0.0"},
                     "build_task_plan": replace_build_task_plan_tasks(
                         {
-                            "schema_version": "build-dag.v3",
+                            "schema_version": "build-dag.v4",
                             "build_units": {
                                 "application:root": {
                                     "id": "application:root",
@@ -1066,7 +992,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "application:root": {
                                         "id": "application:root",
@@ -1159,7 +1085,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "unit_graph": {
                                     "nodes": ["application:root"],
                                     "edges": [],
@@ -1225,7 +1151,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "database:orders": {
                                         "id": "database:orders",
@@ -1294,7 +1220,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "database:orders": {
                                         "id": "database:orders",
@@ -1342,7 +1268,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "database:orders": {
                                         "id": "database:orders",
@@ -1416,7 +1342,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "database:orders": {
                                         "id": "database:orders",
@@ -1492,7 +1418,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         },
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "database:orders": {
                                         "id": "database:orders",
@@ -1592,7 +1518,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "page:home": {"id": "page:home", "kind": "page"},
                                 },
@@ -1702,7 +1628,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "application:root": {
                                         "id": "application:root",
@@ -1802,7 +1728,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "project_plan": {"version": "1.0.0"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "application:root": {
                                         "id": "application:root",
@@ -1904,7 +1830,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "build_execution_scope": {"type": "page", "targetId": "orders"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {
                                     "database:orders": {
                                         "id": "database:orders",
@@ -1992,7 +1918,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         "build_execution_scope": {"type": "page", "targetId": "orders"},
                         "build_task_plan": replace_build_task_plan_tasks(
                             {
-                                "schema_version": "build-dag.v3",
+                                "schema_version": "build-dag.v4",
                                 "build_units": {"page:orders": {"id": "page:orders", "kind": "page"}},
                                 "unit_graph": {"nodes": ["page:orders"], "edges": []},
                             },

@@ -132,7 +132,7 @@ class DagProductionPathCutoverTests(unittest.IsolatedAsyncioTestCase):
         # 默认 Graph：不注入任何节点，必须由 workflow.py 绑定 async adapter。
         graph = build_graph(checkpointer=InMemorySaver())
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=_ready_template(self.workspace),
         ), patch(
             "app.services.dag_planning_orchestrator.generate_unit_candidate_once",
@@ -186,7 +186,7 @@ class DagProductionPathCutoverTests(unittest.IsolatedAsyncioTestCase):
         scheduler_rounds: list[str] = []
         graph = build_graph(checkpointer=InMemorySaver())
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=_ready_template(self.workspace),
         ), patch(
             "app.services.dag_planning_orchestrator.generate_unit_candidate_once",
@@ -219,7 +219,7 @@ class DagProductionPathCutoverTests(unittest.IsolatedAsyncioTestCase):
         scope = execution_scope(name="orders")
         graph = build_graph(checkpointer=InMemorySaver())
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=_ready_template(self.workspace),
         ), patch(
             "app.services.dag_planning_orchestrator.generate_unit_candidate_once",

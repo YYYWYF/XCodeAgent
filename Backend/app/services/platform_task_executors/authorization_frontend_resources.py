@@ -10,10 +10,11 @@ from typing import Any
 from app.services.authorization_frontend_projection import (
     AuthorizationFrontendProjectionError,
     RESOURCES_RELATIVE_PATH,
-    apply_frontend_resources_projection,
-    compile_frontend_resources_projection,
-    verify_frontend_resources_projection,
+    apply_authorization_frontend_projection,
+    compile_frontend_authorization_projection,
+    verify_authorization_frontend_projection,
 )
+from app.services.application_config import read_application_config
 from app.services.authorization_resource_catalog import (
     compile_frontend_resource_catalog,
     resource_catalog_fingerprint,
@@ -71,7 +72,11 @@ def execute_authorization_frontend_resources(
         )
 
     try:
-        projection = compile_frontend_resources_projection(formal_plan)
+        application_config = read_application_config(workspace)
+        projection = compile_frontend_authorization_projection(
+            formal_plan,
+            application_config=application_config,
+        )
         if projection is None:
             raise AuthorizationFrontendProjectionError("已确认权限资源投影不能为空。")
     except (AuthorizationFrontendProjectionError, TypeError, ValueError) as exc:
@@ -89,7 +94,7 @@ def execute_authorization_frontend_resources(
             "resources.ts 的真实写入位置越出当前 workspace。",
         )
     try:
-        already_identical = target.is_file() and verify_frontend_resources_projection(
+        already_identical = target.is_file() and verify_authorization_frontend_projection(
             workspace,
             projection,
         ).get("verified") is True
@@ -106,7 +111,7 @@ def execute_authorization_frontend_resources(
 
     wrote_target = False
     try:
-        apply_frontend_resources_projection(workspace, projection)
+        apply_authorization_frontend_projection(workspace, projection)
         wrote_target = True
     except (AuthorizationFrontendProjectionError, OSError, RuntimeError, ValueError) as exc:
         return _failure_result(
@@ -116,7 +121,7 @@ def execute_authorization_frontend_resources(
         )
 
     try:
-        validation = verify_frontend_resources_projection(workspace, projection)
+        validation = verify_authorization_frontend_projection(workspace, projection)
         if validation.get("verified") is not True:
             raise AuthorizationFrontendProjectionError("写后校验没有返回 verified=true。")
     except (AuthorizationFrontendProjectionError, OSError, RuntimeError, ValueError) as exc:

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 2,
+  "templateRevision": "2026.09.04.1",
+  "requested": {
+    "authorization": {
+      "enabled": true,
+      "config": {}
+    }
+  },
+  "effective": {
+    "authorization": {
+      "enabled": true,
+      "config": {}
+    },
+    "login": {
+      "enabled": true,
+      "config": {}
+    }
+  },
+  "appliedAdditions": {}
+}

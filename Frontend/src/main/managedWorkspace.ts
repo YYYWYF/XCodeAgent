@@ -4,8 +4,15 @@ import { lstatIfPresent } from './filesystem'
 
 /** 校验 application.json 是否符合当前权限配置契约。 */
 export function assertCurrentApplicationSchema(applicationRecord: Record<string, unknown>): void {
-  if (applicationRecord.schemaVersion !== 5) {
-    throw new Error('无法添加该项目：application.json 必须使用当前 schemaVersion 5')
+  if (applicationRecord.schemaVersion !== 6) {
+    throw new Error('无法添加该项目：application.json 必须使用当前 schemaVersion 6')
+  }
+  if (
+    typeof applicationRecord.configRevision !== 'number' ||
+    !Number.isInteger(applicationRecord.configRevision) ||
+    applicationRecord.configRevision < 1
+  ) {
+    throw new Error('无法添加该项目：application.json 缺少有效的 configRevision')
   }
 
   const authorization = applicationRecord.authorization
@@ -54,13 +61,6 @@ export function assertCurrentApplicationSchema(applicationRecord: Record<string,
   if (authorizationEnabled && (auth as Record<string, unknown>).enable !== true) {
     throw new Error('无法添加该项目：启用权限时必须同时启用认证')
   }
-}
-
-/** 根据已持久化的权限开关确定前后端模板唯一允许的分支。 */
-export function resolveApplicationTemplateBranch(applicationRecord: Record<string, unknown>): 'main' | 'auth' {
-  assertCurrentApplicationSchema(applicationRecord)
-  const authorization = applicationRecord.authorization as Record<string, unknown>
-  return authorization.enabled === true ? 'auth' : 'main'
 }
 
 /** 校验并读取受 XCodeAgent 管理的工作区配置，拒绝缺少真实 .xcodeagent 目录的文件夹。 */

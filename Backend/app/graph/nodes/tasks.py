@@ -23,12 +23,13 @@ from app.services.build_task_confirmation import (
 )
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.services.api_design import api_design_readiness
-from app.services.application_template_generation import inspect_template_generation_readiness
+from app.services.application_config import read_application_config
 from app.services.build_task_planner import tasks_from_build_task_plan
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.planning_issues import ValidationIssue
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
+from app.services.template_state import effective_capabilities, load_template_state
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.endpoint_design_documents import technical_plan_path
 from app.workspace.plan_documents import (
@@ -89,7 +90,7 @@ def _build_prerequisite_errors(
     build_execution_scope: dict[str, str] | None = None,
     formal_artifacts: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
-    """在 DAG 生成前只读校验正式产物、模板 manifest 和当前运行时计划。"""
+    """在 DAG 生成前只读校验正式产物、TemplateState 和当前运行时计划。"""
 
     errors: list[str] = []
     artifacts = (
@@ -150,23 +151,16 @@ def _build_prerequisite_errors(
         except ValueError as exc:
             errors.append(str(exc))
     if workspace:
-        readiness = inspect_template_generation_readiness(workspace)
-        authorization_manifest = project_plan.get("authorization_manifest")
-        authorization_enabled = (
-            isinstance(authorization_manifest, dict)
-            and authorization_manifest.get("enabled") is True
-        )
-        if authorization_enabled and readiness.get("templateVariant") != "auth":
-            errors.append("权限已启用，但前后端模板不是配套的 auth 分支。")
-        errors.extend(
-            f"模板初始化：{error}"
-            for error in readiness.get("errors", [])
-            if str(error).strip()
-        )
-        if readiness.get("ready") is not True and not readiness.get("errors"):
-            errors.append("模板初始化：模板前置门禁未就绪。")
+        try:
+            application_config = read_application_config(workspace)
+            authorization = application_config.get("authorization")
+            authorization_enabled = isinstance(authorization, dict) and authorization.get("enabled") is True
+            if authorization_enabled and "authorization" not in effective_capabilities(load_template_state(workspace)):
+                errors.append("权限已启用，但 TemplateState.effective 缺少 authorization。")
+        except ValueError as exc:
+            errors.append(f"TemplateState：{exc}")
     else:
-        errors.append("缺少 workspace，无法校验模板初始化 manifest。")
+        errors.append("缺少 workspace，无法校验 TemplateState。")
     return _dedupe_texts(errors)
 
 
@@ -319,7 +313,7 @@ def _build_prerequisite_blocked_result(
             "target": build_execution_scope,
             "artifact": (
                 "RequirementSpec / ProductPlan / UiManifest / TechnicalPlan / "
-                "template-generation-manifest.json / Endpoint API Design"
+                "template-state.json / Endpoint API Design"
             ),
             "recommended_action": "手动完成并确认错误所指向的前置产物后重新发起 DAG 生成。",
             "automatic_routing": False,

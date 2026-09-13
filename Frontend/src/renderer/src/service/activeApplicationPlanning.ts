@@ -312,7 +312,7 @@ export async function loadActiveApplicationPlannings(): Promise<ApplicationPlann
   const recoveredActive: ApplicationPlanningCurrentState[] = []
   const applications = (await loadStoredApplications())
     .filter((application) => application.source === 'new' && application.workspaceRoot)
-    .sort((left, right) => right.createdAt - left.createdAt)
+    .sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
 
   for (const application of applications) {
     try {

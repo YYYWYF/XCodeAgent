@@ -1,0 +1,18 @@
+{
+  "operations": [
+    {
+      "type": "DELETE_FILE",
+      "path": "frontend/src/obsolete.ts"
+    },
+    {
+      "type": "ADD_FILE",
+      "path": "frontend/src/added.ts",
+      "content": "export const added = true;\n"
+    },
+    {
+      "type": "UPDATE_FILE",
+      "path": "frontend/src/App.tsx",
+      "content": "export default function App() { return <main>new</main>; }\n"
+    }
+  ]
+}

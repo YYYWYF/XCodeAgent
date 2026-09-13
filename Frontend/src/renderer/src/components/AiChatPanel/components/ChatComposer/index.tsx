@@ -28,6 +28,7 @@ const { TextArea } = Input
 const { Option } = Select
 
 const resumeNodeOptions = [
+  { value: 'bootstrap_template_generation', label: 'bootstrap_template_generation（下载模板）' },
   { value: 'development_readiness_gate', label: 'development_readiness_gate' },
   { value: 'entity_source_binding', label: 'entity_source_binding' },
   { value: 'inspect_workspace', label: 'inspect_workspace' },

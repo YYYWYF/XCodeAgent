@@ -5,13 +5,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from app.services.application_template_generation import (
-    inspect_template_generation_readiness, prepare_application_template_generation,
-    validate_application_template_generation,
-)
 from app.services.build_task_reuse import resolve_reuse_facts, resolve_template_prerequisite_facts
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.engineering_acceptance import compile_engineering_acceptance
+from app.services.template_state import load_template_state, template_context
 from app.services.unit_generation_requirements import (
     GenerationRequirementsError, resolve_generation_requirements,
 )
@@ -20,7 +17,7 @@ from tests.dag_planning_baseline_fixtures import (
     workspace_snapshot, write_json,
 )
 from tests.test_build_task_reuse import _plan, _task
-from tests.test_build_task_reuse_workspace import _ready_template
+from tests.test_build_task_reuse_workspace import _template_state_context
 
 
 SHELL = "frontend:shell"
@@ -63,33 +60,19 @@ class FrontendShellPrerequisiteTests(unittest.TestCase):
     def test_ready_main_and_auth_provide_same_prerequisite_contract(self) -> None:
         """两类真实模板证据均提供 shell 能力；空历史不创建任何 shell 任务或需求。"""
 
-        for variant in ("main", "auth"):
-            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as directory:
+        for capability_set in ("minimal", "authorization"):
+            with self.subTest(capability_set=capability_set), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                readiness = _ready_template(root)
-                if variant == "main":
-                    write_json(root, ".xcodeagent/plans/product-plan.json", {
-                        "schema_version": "product-plan.v5", "confirmation_status": "confirmed",
-                        "pages": [{"pageId": "orders", "name": "订单", "path": "/orders"}],
-                    })
-                    write_json(root, ".xcodeagent/specs/ui-designs.json", {
-                        "schema_version": "ui-manifest.v3", "confirmation_status": "skipped",
-                    })
-                    (root / "frontend/src/constants/menus.ts").write_text("export const BIZ_MENUS = [];", encoding="utf-8")
-                    prepare_application_template_generation(root, {
-                        "targets": {name: {"status": "succeeded", "attempt": 1, "branch": "main"} for name in ("frontend", "backend")},
-                    })
-                    validate_application_template_generation(root)
-                    readiness = inspect_template_generation_readiness(root)
+                context = _template_state_context(root)
                 plan = project_plan()
                 snapshot = workspace_snapshot()
                 skeleton = ensure_build_unit_skeleton(plan, snapshot)
-                context = {**build_context(plan, execution_scope()), "template_variant": variant}
+                context = {**build_context(plan, execution_scope()), "template_context": context}
                 before = deepcopy(skeleton)
                 files = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
                 facts = resolve_template_prerequisite_facts(
                     unit_skeleton=skeleton, build_context=context,
-                    workspace_snapshot=snapshot, template_readiness=readiness,
+                    workspace_snapshot=snapshot, template_state_context=context["template_context"],
                 )
                 requirements = resolve_generation_requirements(
                     required_unit_ids=context["required_unit_ids"], build_execution_scope=execution_scope(),
@@ -110,10 +93,10 @@ class FrontendShellPrerequisiteTests(unittest.TestCase):
         """历史 pending、failed、completed 均不参与模板能力和 shell 生成决策。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            readiness = _ready_template(Path(directory))
+            template_state_context = _template_state_context(Path(directory))
             plan = project_plan()
             snapshot = workspace_snapshot()
-            context = {**build_context(plan, execution_scope()), "template_variant": "auth"}
+            context = {**build_context(plan, execution_scope()), "template_context": template_state_context}
             previous_facts = None
             for status in ("pending", "failed", "completed"):
                 with self.subTest(status=status):
@@ -122,7 +105,7 @@ class FrontendShellPrerequisiteTests(unittest.TestCase):
                     reused = ensure_build_unit_skeleton(plan, snapshot, skeleton)
                     facts = resolve_reuse_facts(
                         confirmed_plan=history, unit_skeleton=reused, build_context=context,
-                        workspace_snapshot=snapshot, formal_plan=plan, template_readiness=readiness,
+                        workspace_snapshot=snapshot, formal_plan=plan, template_state_context=template_state_context,
                     )
                     self.assertEqual(facts.issues, ())
                     self.assertEqual(facts.retained_task_ids_by_unit[SHELL], ("historical-shell",))
