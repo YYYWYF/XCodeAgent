@@ -14,12 +14,14 @@ from app.domain.execution_recovery import (
 from app.graph.application_planning_workflow import application_planning_graph_for_request
 from app.graph.workflow import workflow_graph_for_request
 from app.persistence.execution_recovery import list_recovery_projection_candidates
-from app.persistence.execution_recovery import get_latest_recovery_point
 from app.services.execution_recovery_coordinator import prepare_continue
 from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
 )
-from app.services.execution_recovery_action_planner import plan_recovery_action
+from app.services.execution_recovery_action_planner import (
+    build_recovery_facts,
+    plan_recovery_action,
+)
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -83,13 +85,19 @@ async def _resolve_candidate(
         graph=graph,
         replay_policies=production_recovery_replay_policies(),
     )
-    snapshot = await _snapshot_for_plan(record=record, plan=plan, graph=graph)
+    facts = await build_recovery_facts(
+        workspace=record.workspace,
+        source=record,
+        recovery_plan=plan,
+        graph=graph,
+    )
     action_plan, _stage_assessment = await plan_recovery_action(
         workspace=record.workspace,
         source=record,
         recovery_plan=plan,
-        point=await get_latest_recovery_point(record.workspace, record.run_id),
-        snapshot=snapshot,
+        point=facts.point,
+        snapshot=facts.snapshot,
+        lifecycle=facts.lifecycle,
     )
     availability = _availability_for_decision(plan.decision)
     if action_plan.primary_action is not None:
@@ -119,33 +127,6 @@ async def _resolve_candidate(
         updated_at=record.updated_at,
         recoveryActionPlan=action_plan.model_dump(mode="json", by_alias=True),
     )
-
-
-async def _snapshot_for_plan(
-    *,
-    record: DurableExecutionRecord,
-    plan: object,
-    graph: object,
-) -> object:
-    """读取 planner 所需的当前 snapshot，读取失败时保持 fail-closed。"""
-
-    checkpoint_id = str(getattr(plan, "checkpoint_id", "") or "").strip()
-    checkpoint_ns = str(getattr(plan, "checkpoint_ns", "") or "")
-    config = {
-        "configurable": {
-            "thread_id": record.thread_id,
-            "checkpoint_ns": checkpoint_ns,
-            **({"checkpoint_id": checkpoint_id} if checkpoint_id else {}),
-        }
-    }
-    if hasattr(graph, "aget_state"):
-        try:
-            snapshot = await graph.aget_state(config)
-            if snapshot is not None:
-                return snapshot
-        except Exception:
-            pass
-    return type("EmptyRecoverySnapshot", (), {"values": {}})()
 
 
 async def _resolve_owner_session_id(

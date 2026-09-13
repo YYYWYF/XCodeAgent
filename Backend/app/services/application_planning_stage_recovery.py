@@ -16,6 +16,7 @@ from app.domain.application_planning_recovery import (
     ApplicationPlanningRecoveryBoundary,
     ApplicationPlanningOperation,
     application_planning_boundary_payload,
+    application_planning_sha256,
 )
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
@@ -36,6 +37,21 @@ from app.workspace.spec_documents import (
 
 
 @dataclass(frozen=True, slots=True)
+class TechnicalPlanningStageRestartAuthority:
+    """绑定 Stage Restart 所依据的正式产物、请求和 lifecycle 版本。"""
+
+    stage: str
+    operation: ApplicationPlanningOperation
+    lifecycle_revision: int
+    requirement_spec_sha256: str
+    product_plan_sha256: str
+    ui_designs_sha256: str
+    technical_plan_sha256: str | None
+    request_sha256: str
+    authority_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class TechnicalPlanningStageRestartAssessment:
     """保存 Stage Restart 是否可以安全重建及其新一轮 Graph 输入。"""
 
@@ -44,10 +60,17 @@ class TechnicalPlanningStageRestartAssessment:
     reason: str
     operation: ApplicationPlanningOperation | None = None
     request: str = ""
-    state: dict[str, Any] | None = None
+    reconstructed_state: dict[str, Any] | None = None
+    authority: TechnicalPlanningStageRestartAuthority | None = None
     lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode = (
         RecoveryLifecycleOwnershipMode.SOURCE_OWNED
     )
+
+    @property
+    def state(self) -> dict[str, Any] | None:
+        """兼容旧调用点读取一次执行期 convenience state。"""
+
+        return self.reconstructed_state
 
 
 class ApplicationPlanningStageRecoveryContract:
@@ -61,6 +84,8 @@ class ApplicationPlanningStageRecoveryContract:
         point: RecoveryPoint | None,
         snapshot: Any,
         lifecycle: ApplicationLifecycle | None,
+        expected_owner: str | None = None,
+        authority_lifecycle_revision: int | None = None,
     ) -> TechnicalPlanningStageRestartAssessment:
         """验证正式产物、lifecycle authority 和 revision 后构造干净输入。"""
 
@@ -77,8 +102,9 @@ class ApplicationPlanningStageRecoveryContract:
             return _unavailable("STAGE_RESTART_LIFECYCLE_MISSING", "ApplicationLifecycle 不存在，不能重启技术规划阶段。")
         if lifecycle.initialization.thread_id != source.thread_id:
             return _unavailable("STAGE_RESTART_THREAD_MISMATCH", "ApplicationLifecycle 与 source execution 的 threadId 不一致。")
-        if lifecycle.active_run_id != source.run_id:
-            return _unavailable("STAGE_RESTART_OWNER_DRIFT", "ApplicationLifecycle 已不再由当前 source execution 持有。")
+        owner = expected_owner or source.run_id
+        if lifecycle.active_run_id != owner:
+            return _unavailable("STAGE_RESTART_OWNER_DRIFT", "ApplicationLifecycle 已不再由当前 recovery execution 持有。")
         if lifecycle.initialization.stage is not ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN:
             return _unavailable("STAGE_RESTART_STAGE_MISMATCH", "当前生命周期不在 Technical Planning 生成阶段。")
         if lifecycle.initialization.status not in {
@@ -111,6 +137,28 @@ class ApplicationPlanningStageRecoveryContract:
                 or canonical_sha256(technical_path) != expected
             ):
                 return _unavailable("STAGE_RESTART_FORMAL_REVISION_DRIFT", "TechnicalPlan 正式 baseline 已发生 revision/hash 漂移。")
+
+        authority = _build_authority(
+            workspace=workspace,
+            operation=operation,
+            lifecycle_revision=(
+                authority_lifecycle_revision
+                if authority_lifecycle_revision is not None
+                else lifecycle.revision
+            ),
+            request=request,
+            technical_plan=technical_plan
+            if operation is not ApplicationPlanningOperation.INITIAL
+            else None,
+        )
+        if authority_lifecycle_revision is not None and lifecycle.revision not in {
+            authority_lifecycle_revision,
+            authority_lifecycle_revision + 1,
+        }:
+            return _unavailable(
+                "STAGE_RESTART_LIFECYCLE_DRIFT",
+                "ApplicationLifecycle revision 已偏离 Stage Restart authority。",
+            )
 
         boundary = application_planning_boundary_payload(
             operation_id=f"stage-restart-{source.run_id}",
@@ -150,9 +198,112 @@ class ApplicationPlanningStageRecoveryContract:
             reason="已重新校验正式产物，可以从 Technical Planning 阶段入口重新执行。",
             operation=operation,
             request=request,
-            state=restart_state,
+            reconstructed_state=restart_state,
+            authority=authority,
             lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
         )
+
+    def assess_before_handoff(
+        self,
+        *,
+        workspace: str,
+        source: DurableExecutionRecord,
+        snapshot: Any,
+        lifecycle: ApplicationLifecycle | None,
+    ) -> TechnicalPlanningStageRestartAssessment:
+        """只验证 source ownership，生成供 durable claim 固化的 authority。"""
+
+        return self.assess(
+            workspace=workspace,
+            source=source,
+            point=None,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+            expected_owner=source.run_id,
+        )
+
+    def revalidate_after_handoff(
+        self,
+        *,
+        workspace: str,
+        source: DurableExecutionRecord,
+        snapshot: Any,
+        lifecycle: ApplicationLifecycle | None,
+        expected_owner: str,
+        expected_authority_sha256: str,
+        expected_lifecycle_revision: int,
+    ) -> TechnicalPlanningStageRestartAssessment:
+        """以 child ownership 重读正式产物，并拒绝 authority 或 lifecycle 漂移。"""
+
+        assessment = self.assess(
+            workspace=workspace,
+            source=source,
+            point=None,
+            snapshot=snapshot,
+            lifecycle=lifecycle,
+            expected_owner=expected_owner,
+            authority_lifecycle_revision=expected_lifecycle_revision,
+        )
+        if not assessment.available:
+            return assessment
+        if (
+            assessment.authority is None
+            or assessment.authority.authority_sha256 != expected_authority_sha256
+        ):
+            return _unavailable(
+                "RECOVERY_STAGE_AUTHORITY_DRIFT",
+                "正式产物或 Stage Restart authority 已发生变化，请刷新恢复动作。",
+            )
+        return assessment
+
+
+def _build_authority(
+    *,
+    workspace: str,
+    operation: ApplicationPlanningOperation,
+    lifecycle_revision: int,
+    request: str,
+    technical_plan: dict[str, Any] | None,
+) -> TechnicalPlanningStageRestartAuthority:
+    """从当前正式文件和稳定请求构造唯一的 Stage Restart fingerprint。"""
+
+    state = {"workspace": workspace}
+    paths = {
+        "requirement_spec": confirmed_requirement_spec_json_path(state),
+        "product_plan": confirmed_product_plan_json_path(state),
+        "ui_designs": ui_designs_json_path(state),
+        "technical_plan": technical_plan_json_path(state),
+    }
+    requirement_spec_sha256 = canonical_sha256(paths["requirement_spec"])
+    product_plan_sha256 = canonical_sha256(paths["product_plan"])
+    ui_designs_sha256 = canonical_sha256(paths["ui_designs"])
+    technical_plan_sha256 = (
+        canonical_sha256(paths["technical_plan"])
+        if technical_plan is not None and paths["technical_plan"].is_file()
+        else None
+    )
+    request_sha256 = application_planning_sha256(request)
+    fingerprint = {
+        "stage": "technical_planning",
+        "operation": operation.value,
+        "lifecycleRevision": lifecycle_revision,
+        "requirementSpecSha256": requirement_spec_sha256,
+        "productPlanSha256": product_plan_sha256,
+        "uiDesignsSha256": ui_designs_sha256,
+        "technicalPlanSha256": technical_plan_sha256,
+        "requestSha256": request_sha256,
+    }
+    return TechnicalPlanningStageRestartAuthority(
+        stage="technical_planning",
+        operation=operation,
+        lifecycle_revision=lifecycle_revision,
+        requirement_spec_sha256=requirement_spec_sha256,
+        product_plan_sha256=product_plan_sha256,
+        ui_designs_sha256=ui_designs_sha256,
+        technical_plan_sha256=technical_plan_sha256,
+        request_sha256=request_sha256,
+        authority_sha256=application_planning_sha256(fingerprint),
+    )
 
 
 def _load_formal_artifacts(
@@ -262,5 +413,6 @@ def _unavailable(code: str, reason: str) -> TechnicalPlanningStageRestartAssessm
 
 __all__ = [
     "ApplicationPlanningStageRecoveryContract",
+    "TechnicalPlanningStageRestartAuthority",
     "TechnicalPlanningStageRestartAssessment",
 ]

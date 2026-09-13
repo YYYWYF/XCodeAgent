@@ -151,7 +151,7 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
             connection.close()
         self.assertIn("owner_session_id", execution_columns)
         self.assertIn("lifecycle_ownership_mode", attempt_columns)
-        self.assertEqual(version[0] if version else None, "5")
+        self.assertEqual(version[0] if version else None, "7")
 
     async def test_insert_and_reload_execution(self) -> None:
         """ExecutionRecord 关闭连接后仍应能按 runId 重新读取。"""

@@ -21,7 +21,6 @@ from app.graph.application_planning_workflow import application_planning_graph_f
 from app.graph.workflow import workflow_graph_for_request
 from app.persistence.execution_recovery import (
     get_execution,
-    get_latest_recovery_point,
     list_recovery_projection_candidates,
     list_recovery_attempts_from_source,
 )
@@ -39,6 +38,7 @@ from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
 )
 from app.services.execution_recovery_action_planner import plan_recovery_action
+from app.services.execution_recovery_action_planner import build_recovery_facts
 
 
 _FORBIDDEN_RECOVERY_FIELDS = {
@@ -179,14 +179,19 @@ def build_execution_recovery_ag_ui_stream(
                 graph=graph,
                 replay_policies=replay_policies,
             )
-            point = await get_latest_recovery_point(workspace, source.run_id)
-            snapshot = await _current_snapshot(graph, source.thread_id)
+            facts = await build_recovery_facts(
+                workspace=workspace,
+                source=source,
+                recovery_plan=recovery_plan,
+                graph=graph,
+            )
             action_plan, stage_assessment = await plan_recovery_action(
                 workspace=workspace,
                 source=source,
                 recovery_plan=recovery_plan,
-                point=point,
-                snapshot=snapshot,
+                point=facts.point,
+                snapshot=facts.snapshot,
+                lifecycle=facts.lifecycle,
             )
             if action == "execute" and (
                 action_plan.incident_id != incident_id
@@ -385,19 +390,6 @@ async def _prepare_recovery_plan(
     )
 
 
-async def _current_snapshot(graph: Any, thread_id: str) -> Any:
-    """读取 planner 所需的当前 Graph snapshot，失败时返回空事实集。"""
-
-    if hasattr(graph, "aget_state"):
-        try:
-            snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-            if snapshot is not None:
-                return snapshot
-        except Exception:
-            pass
-    return type("EmptyRecoverySnapshot", (), {"values": {}})()
-
-
 async def _resolve_action_source_run(
     *,
     workspace: str,
@@ -420,13 +412,19 @@ async def _resolve_action_source_run(
             graph=graph,
             replay_policies=None,
         )
-        point = await get_latest_recovery_point(workspace, record.run_id)
+        facts = await build_recovery_facts(
+            workspace=workspace,
+            source=record,
+            recovery_plan=plan,
+            graph=graph,
+        )
         action_plan, _assessment = await plan_recovery_action(
             workspace=workspace,
             source=record,
             recovery_plan=plan,
-            point=point,
-            snapshot=await _current_snapshot(graph, record.thread_id),
+            point=facts.point,
+            snapshot=facts.snapshot,
+            lifecycle=facts.lifecycle,
         )
         if (
             action_plan.incident_id == incident_id

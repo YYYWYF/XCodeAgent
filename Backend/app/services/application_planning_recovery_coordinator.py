@@ -16,11 +16,7 @@ from app.domain.execution_recovery import (
     RecoveryDecision,
     RecoveryPoint,
 )
-from app.persistence.execution_recovery import (
-    get_recovery_point,
-    get_latest_recovery_point,
-    list_recovery_points,
-)
+from app.persistence.execution_recovery import get_recovery_point, list_recovery_points
 from app.protocols.application_planning_interrupt import (
     application_planning_interrupt_from_snapshot,
 )
@@ -40,7 +36,10 @@ from app.services.execution_recovery_source_admission import assess_recovery_sou
 from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
 )
-from app.services.execution_recovery_action_planner import plan_recovery_action
+from app.services.execution_recovery_action_planner import (
+    build_recovery_facts,
+    plan_recovery_action,
+)
 
 
 @dataclass(frozen=True)
@@ -232,16 +231,20 @@ async def resolve_application_planning_recovery(
         graph=graph,
         replay_policies=production_recovery_replay_policies(),
     )
-    point = await get_latest_recovery_point(workspace, source.run_id)
-    if point is None:
-        point = await _point_by_id(workspace, plan.recovery_point_id)
+    facts = await build_recovery_facts(
+        workspace=workspace,
+        source=source,
+        recovery_plan=plan,
+        graph=graph,
+        lifecycle=lifecycle,
+    )
     action_plan, _stage_assessment = await plan_recovery_action(
         workspace=workspace,
         source=source,
         recovery_plan=plan,
-        point=point,
-        snapshot=snapshot,
-        lifecycle=lifecycle,
+        point=facts.point,
+        snapshot=facts.snapshot,
+        lifecycle=facts.lifecycle,
     )
     if plan.decision is RecoveryDecision.READY_NATIVE:
         contract = resolve_application_planning_recovery_contract(

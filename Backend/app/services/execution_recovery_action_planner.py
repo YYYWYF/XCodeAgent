@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any
 
 from app.domain.execution_recovery import (
@@ -19,11 +20,64 @@ from app.domain.execution_recovery import (
     execution_failure_sha256,
 )
 from app.persistence.execution_recovery import list_recovery_attempts_for_thread
+from app.persistence.execution_recovery import get_recovery_point
 from app.services.application_lifecycle import ApplicationLifecycle, load_application_lifecycle
 from app.services.application_planning_stage_recovery import (
     ApplicationPlanningStageRecoveryContract,
     TechnicalPlanningStageRestartAssessment,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryFacts:
+    """保存 projection 与 execute 共同消费的精确 source facts。"""
+
+    point: RecoveryPoint | None
+    snapshot: Any
+    lifecycle: ApplicationLifecycle | None
+
+
+async def build_recovery_facts(
+    *,
+    workspace: str,
+    source: DurableExecutionRecord,
+    recovery_plan: RecoveryPlan,
+    graph: Any,
+    lifecycle: ApplicationLifecycle | None = None,
+) -> RecoveryFacts:
+    """只按完整 checkpoint identity 读取 facts，禁止按 thread 猜当前快照。"""
+
+    point = (
+        await get_recovery_point(workspace, recovery_plan.recovery_point_id)
+        if recovery_plan.recovery_point_id
+        else None
+    )
+    if point is not None and (
+        point.run_id != source.run_id or point.thread_id != source.thread_id
+    ):
+        point = None
+    snapshot: Any = type("EmptyRecoverySnapshot", (), {"values": {}})()
+    if point is not None and point.checkpoint_id and hasattr(graph, "aget_state"):
+        config = {
+            "configurable": {
+                "thread_id": source.thread_id,
+                "checkpoint_ns": point.checkpoint_ns,
+                "checkpoint_id": point.checkpoint_id,
+            }
+        }
+        try:
+            resolved = await graph.aget_state(config)
+            if resolved is not None:
+                snapshot = resolved
+        except Exception:
+            # facts 读取失败时保留空快照，让 Stage Restart 仍只依赖正式 authority；
+            # Native 是否可执行仍由其自身 finalization revalidation 决定。
+            pass
+    return RecoveryFacts(
+        point=point,
+        snapshot=snapshot,
+        lifecycle=lifecycle or load_application_lifecycle(workspace),
+    )
 
 
 async def plan_recovery_action(
@@ -51,7 +105,20 @@ async def plan_recovery_action(
         workspace=workspace,
         source=source,
     )
-    incident_id = _incident_id(source=source, point=point, lifecycle=current_lifecycle)
+    stage_restart_available = bool(
+        stage_assessment is not None
+        and stage_assessment.available
+        and (
+            recovery_plan.decision is not RecoveryDecision.READY_NATIVE
+            or previous_native_retry
+        )
+    )
+    incident_id = _incident_id(
+        source=source,
+        point=point,
+        lifecycle=current_lifecycle,
+        stage_assessment=stage_assessment if stage_restart_available else None,
+    )
     if recovery_plan.decision is RecoveryDecision.AWAITING_USER:
         return (
             _action_plan(
@@ -65,8 +132,7 @@ async def plan_recovery_action(
         )
     if (
         stage_assessment is not None
-        and stage_assessment.available
-        and (recovery_plan.decision is not RecoveryDecision.READY_NATIVE or previous_native_retry)
+        and stage_restart_available
     ):
         action = _action(
             incident_id=incident_id,
@@ -162,8 +228,9 @@ def _incident_id(
     source: DurableExecutionRecord,
     point: RecoveryPoint | None,
     lifecycle: ApplicationLifecycle | None,
+    stage_assessment: TechnicalPlanningStageRestartAssessment | None,
 ) -> str:
-    """只用 canonical source/failure/point/lifecycle revision 生成稳定 incidentId。"""
+    """把 Stage authority 纳入稳定 incidentId，避免正式文件变化复用旧动作。"""
 
     return f"recovery-incident-{_digest({
         'sourceRunId': source.run_id,
@@ -171,6 +238,11 @@ def _incident_id(
         'failure': execution_failure_sha256(source.failure),
         'recoveryPointId': point.recovery_point_id if point else None,
         'lifecycleRevision': lifecycle.revision if lifecycle else None,
+        'stageAuthoritySha256': (
+            stage_assessment.authority.authority_sha256
+            if stage_assessment is not None and stage_assessment.authority is not None
+            else None
+        ),
     })[:32]}"
 
 
@@ -199,4 +271,4 @@ def _digest(value: dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-__all__ = ["plan_recovery_action"]
+__all__ = ["RecoveryFacts", "build_recovery_facts", "plan_recovery_action"]

@@ -145,6 +145,13 @@ class RecoveryStrategy(StrEnum):
     NONE = "none"
 
 
+class RecoverySourceAuthorityKind(StrEnum):
+    """定义恢复尝试的 source authority 来自 checkpoint 还是正式阶段事实。"""
+
+    CHECKPOINT = "checkpoint"
+    FORMAL_STAGE = "formal_stage"
+
+
 class RecoveryLifecycleOwnershipMode(StrEnum):
     """定义 Native Recovery 在 fork 前如何取得 ApplicationLifecycle ownership。"""
 
@@ -286,6 +293,13 @@ class RecoveryPlan(ExecutionRecoveryModel):
     lifecycle_revision: int | None = Field(default=None, ge=0)
     workspace_revision: str | None = Field(default=None, max_length=512)
     workspace_snapshot_hash: str | None = Field(default=None, max_length=512)
+    source_authority_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    source_stage: str | None = Field(default=None, max_length=256)
 
 
 class RecoveryActionKind(StrEnum):
@@ -397,8 +411,17 @@ class RecoveryAttempt(ExecutionRecoveryModel):
     source_run_id: str = Field(min_length=1, max_length=512)
     new_run_id: str = Field(min_length=1, max_length=512)
     thread_id: str = Field(min_length=1, max_length=512)
-    source_recovery_point_id: str = Field(min_length=1, max_length=512)
-    source_checkpoint_id: str = Field(min_length=1, max_length=512)
+    source_authority_kind: RecoverySourceAuthorityKind
+    source_authority_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    source_stage: str | None = Field(default=None, max_length=256)
+    source_lifecycle_revision: int | None = Field(default=None, ge=0)
+    source_recovery_point_id: str | None = Field(default=None, max_length=512)
+    source_checkpoint_id: str | None = Field(default=None, max_length=512)
     source_checkpoint_ns: str = Field(default="", max_length=512)
     replay_checkpoint_id: str | None = Field(default=None, max_length=512)
     replay_checkpoint_ns: str = Field(default="", max_length=512)
@@ -414,3 +437,24 @@ class RecoveryAttempt(ExecutionRecoveryModel):
     failure_code: str | None = Field(default=None, max_length=128)
     source_status: DurableExecutionStatus
     source_failure_sha256: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_source_authority(self) -> "RecoveryAttempt":
+        """确保 checkpoint 与正式阶段 authority 不会互相伪装或缺少必要事实。"""
+
+        if self.source_authority_kind is RecoverySourceAuthorityKind.CHECKPOINT:
+            if not self.source_recovery_point_id or not self.source_checkpoint_id:
+                raise ValueError("checkpoint recovery attempt 必须包含 RecoveryPoint 和 checkpointId。")
+        elif self.source_authority_kind is RecoverySourceAuthorityKind.FORMAL_STAGE:
+            if (
+                not self.source_authority_sha256
+                or self.source_stage != "technical_planning"
+                or self.source_lifecycle_revision is None
+                or self.source_recovery_point_id is not None
+                or self.source_checkpoint_id is not None
+                or self.source_checkpoint_ns
+            ):
+                raise ValueError(
+                    "formal stage recovery attempt 必须只包含 authority、stage 和 lifecycle revision。"
+                )
+        return self

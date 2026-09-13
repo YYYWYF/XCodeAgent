@@ -27,6 +27,7 @@ from app.domain.execution_recovery import (
     RecoveryPoint,
     RecoveryPointKind,
     RecoveryPlan,
+    RecoverySourceAuthorityKind,
     RecoveryStrategy,
 )
 
@@ -34,7 +35,7 @@ from app.domain.execution_recovery import (
 RECOVERY_DATABASE_RELATIVE_PATH = Path(
     ".xcodeagent/recovery/execution-recovery.sqlite"
 )
-RECOVERY_SCHEMA_VERSION = "6"
+RECOVERY_SCHEMA_VERSION = "7"
 EXECUTION_ROW_WIDTH = 15
 EXECUTION_LEASE_ROW_WIDTH = 8
 
@@ -117,7 +118,7 @@ async def _connection_after_initialize(
 
 
 async def initialize_execution_recovery_store(workspace: str | Path) -> None:
-    """创建恢复库表，并把现有 v3-v5 store 原地补齐到当前 schema v6。"""
+    """创建恢复库表，并把现有 v3-v6 store 原地迁移到当前 schema v7。"""
 
     async with _connection(workspace) as connection:
         await connection.executescript(
@@ -206,8 +207,12 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 new_run_id TEXT PRIMARY KEY,
                 source_run_id TEXT NOT NULL,
                 thread_id TEXT NOT NULL,
-                source_recovery_point_id TEXT NOT NULL,
-                source_checkpoint_id TEXT NOT NULL,
+                source_authority_kind TEXT NOT NULL,
+                source_authority_sha256 TEXT,
+                source_stage TEXT,
+                source_lifecycle_revision INTEGER,
+                source_recovery_point_id TEXT,
+                source_checkpoint_id TEXT,
                 source_checkpoint_ns TEXT NOT NULL DEFAULT '',
                 replay_checkpoint_id TEXT,
                 replay_checkpoint_ns TEXT NOT NULL DEFAULT '',
@@ -250,23 +255,38 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
             "PRAGMA table_info(recovery_attempts)"
         )
         attempts_columns = await attempts_columns_cursor.fetchall()
-        if not any(
-            str(column[1]) == "lifecycle_ownership_mode"
+        attempt_column_names = {str(column[1]) for column in attempts_columns}
+        source_checkpoint_not_null = any(
+            str(column[1]) == "source_checkpoint_id" and int(column[3]) == 1
             for column in attempts_columns
+        )
+        required_attempt_columns = {
+            "source_authority_kind",
+            "source_authority_sha256",
+            "source_stage",
+            "source_lifecycle_revision",
+            "source_recovery_point_id",
+            "source_checkpoint_id",
+            "source_checkpoint_ns",
+            "replay_checkpoint_id",
+            "replay_checkpoint_ns",
+            "strategy",
+            "lifecycle_ownership_mode",
+            "status",
+            "created_at",
+            "handed_off_at",
+            "started_at",
+            "failed_at",
+            "failure_code",
+            "source_status",
+            "source_failure_sha256",
+        }
+        if source_checkpoint_not_null or not required_attempt_columns.issubset(
+            attempt_column_names
         ):
-            await connection.execute(
-                "ALTER TABLE recovery_attempts ADD COLUMN "
-                "lifecycle_ownership_mode TEXT NOT NULL DEFAULT 'source_owned'"
-            )
-        if not any(str(column[1]) == "source_status" for column in attempts_columns):
-            await connection.execute(
-                "ALTER TABLE recovery_attempts ADD COLUMN source_status TEXT"
-            )
-        if not any(
-            str(column[1]) == "source_failure_sha256" for column in attempts_columns
-        ):
-            await connection.execute(
-                "ALTER TABLE recovery_attempts ADD COLUMN source_failure_sha256 TEXT"
+            await _rebuild_recovery_attempts_v7(
+                connection,
+                existing_columns=attempt_column_names,
             )
         index_cursor = await connection.execute(
             """
@@ -296,6 +316,86 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
             """,
             (RECOVERY_SCHEMA_VERSION,),
         )
+
+
+async def _rebuild_recovery_attempts_v7(
+    connection: aiosqlite.Connection,
+    *,
+    existing_columns: set[str],
+) -> None:
+    """重建 recovery_attempts，使 source checkpoint 字段真正允许为空。"""
+
+    def old_column(name: str, fallback: str) -> str:
+        """为 v3-v6 表生成安全的固定列表达式。"""
+
+        return name if name in existing_columns else fallback
+
+    await connection.execute("DROP INDEX IF EXISTS idx_recovery_attempts_source")
+    await connection.execute("DROP INDEX IF EXISTS idx_recovery_attempts_status")
+    await connection.execute("DROP INDEX IF EXISTS idx_recovery_attempts_active_source")
+    await connection.execute(
+        "ALTER TABLE recovery_attempts RENAME TO recovery_attempts_v6"
+    )
+    await connection.execute(
+        """
+        CREATE TABLE recovery_attempts (
+            new_run_id TEXT PRIMARY KEY,
+            source_run_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            source_authority_kind TEXT NOT NULL,
+            source_authority_sha256 TEXT,
+            source_stage TEXT,
+            source_lifecycle_revision INTEGER,
+            source_recovery_point_id TEXT,
+            source_checkpoint_id TEXT,
+            source_checkpoint_ns TEXT NOT NULL DEFAULT '',
+            replay_checkpoint_id TEXT,
+            replay_checkpoint_ns TEXT NOT NULL DEFAULT '',
+            strategy TEXT NOT NULL,
+            lifecycle_ownership_mode TEXT NOT NULL DEFAULT 'source_owned',
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            handed_off_at TEXT,
+            started_at TEXT,
+            failed_at TEXT,
+            failure_code TEXT,
+            source_status TEXT,
+            source_failure_sha256 TEXT,
+            FOREIGN KEY(source_run_id)
+                REFERENCES execution_records(run_id),
+            FOREIGN KEY(new_run_id)
+                REFERENCES execution_records(run_id)
+        )
+        """
+    )
+    await connection.execute(
+        f"""
+        INSERT INTO recovery_attempts(
+            new_run_id, source_run_id, thread_id,
+            source_authority_kind, source_authority_sha256, source_stage,
+            source_lifecycle_revision, source_recovery_point_id,
+            source_checkpoint_id, source_checkpoint_ns, replay_checkpoint_id,
+            replay_checkpoint_ns, strategy, lifecycle_ownership_mode, status,
+            created_at, handed_off_at, started_at, failed_at, failure_code,
+            source_status, source_failure_sha256
+        )
+        SELECT
+            new_run_id, source_run_id, thread_id,
+            'checkpoint', NULL, NULL,
+            NULL, {old_column('source_recovery_point_id', 'NULL')},
+            {old_column('source_checkpoint_id', 'NULL')},
+            {old_column('source_checkpoint_ns', "''")},
+            {old_column('replay_checkpoint_id', 'NULL')},
+            {old_column('replay_checkpoint_ns', "''")},
+            strategy,
+            {old_column('lifecycle_ownership_mode', "'source_owned'")},
+            status, created_at, handed_off_at, started_at, failed_at,
+            failure_code, {old_column('source_status', 'NULL')},
+            {old_column('source_failure_sha256', 'NULL')}
+        FROM recovery_attempts_v6
+        """
+    )
+    await connection.execute("DROP TABLE recovery_attempts_v6")
 
 
 async def insert_execution(
@@ -348,9 +448,84 @@ async def claim_native_recovery_attempt(
     owner_pid: int,
     lease_ttl_seconds: float,
     created_at: datetime | None = None,
-    allow_non_native: bool = False,
 ) -> tuple[DurableExecutionRecord, ExecutionLease, RecoveryAttempt]:
-    """在一个 SQLite 写事务中 claim source、创建 child Execution、Lease 和 Attempt。"""
+    """校验 checkpoint authority，并原子创建 Native Recovery child transaction。"""
+
+    return await _claim_recovery_attempt(
+        source=source,
+        plan=plan,
+        new_run_id=new_run_id,
+        owner_backend_instance_id=owner_backend_instance_id,
+        owner_pid=owner_pid,
+        lease_ttl_seconds=lease_ttl_seconds,
+        created_at=created_at,
+        source_authority_kind=RecoverySourceAuthorityKind.CHECKPOINT,
+    )
+
+
+async def claim_stage_restart_attempt(
+    *,
+    source: DurableExecutionRecord,
+    plan: RecoveryPlan,
+    authority: object,
+    new_run_id: str,
+    owner_backend_instance_id: str,
+    owner_pid: int,
+    lease_ttl_seconds: float,
+    created_at: datetime | None = None,
+) -> tuple[DurableExecutionRecord, ExecutionLease, RecoveryAttempt]:
+    """校验正式阶段 authority，并原子创建 Stage Restart child transaction。"""
+
+    authority_sha256 = str(getattr(authority, "authority_sha256", "") or "").strip()
+    source_stage = str(getattr(authority, "stage", "") or "").strip()
+    lifecycle_revision = getattr(authority, "lifecycle_revision", None)
+    normalized_lifecycle_revision = (
+        int(lifecycle_revision) if lifecycle_revision is not None else None
+    )
+    if not authority_sha256 or source_stage != "technical_planning":
+        raise RecoveryExecutionError(
+            "STAGE_RESTART_AUTHORITY_MISSING",
+            "Stage Restart 缺少完整的正式阶段 authority。",
+        )
+    if (
+        plan.source_authority_sha256 != authority_sha256
+        or plan.source_stage != source_stage
+        or plan.lifecycle_revision != normalized_lifecycle_revision
+    ):
+        raise RecoveryExecutionError(
+            "STAGE_RESTART_AUTHORITY_MISMATCH",
+            "RecoveryPlan 与正式阶段 authority 不一致。",
+        )
+    return await _claim_recovery_attempt(
+        source=source,
+        plan=plan,
+        new_run_id=new_run_id,
+        owner_backend_instance_id=owner_backend_instance_id,
+        owner_pid=owner_pid,
+        lease_ttl_seconds=lease_ttl_seconds,
+        created_at=created_at,
+        source_authority_kind=RecoverySourceAuthorityKind.FORMAL_STAGE,
+        source_authority_sha256=authority_sha256,
+        source_stage=source_stage,
+        source_lifecycle_revision=normalized_lifecycle_revision,
+    )
+
+
+async def _claim_recovery_attempt(
+    *,
+    source: DurableExecutionRecord,
+    plan: RecoveryPlan,
+    new_run_id: str,
+    owner_backend_instance_id: str,
+    owner_pid: int,
+    lease_ttl_seconds: float,
+    created_at: datetime | None,
+    source_authority_kind: RecoverySourceAuthorityKind,
+    source_authority_sha256: str | None = None,
+    source_stage: str | None = None,
+    source_lifecycle_revision: int | None = None,
+) -> tuple[DurableExecutionRecord, ExecutionLease, RecoveryAttempt]:
+    """在一个 SQLite 写事务中统一 claim source、child、lease 和 attempt。"""
 
     from app.domain.execution_recovery import RecoveryExecutionError
     from app.services.execution_recovery_source_admission import assess_recovery_source
@@ -360,22 +535,34 @@ async def claim_native_recovery_attempt(
             "RECOVERY_SOURCE_MISMATCH",
             "RecoveryPlan 与 source execution 不属于同一条运行记录。",
         )
-    if (
-        not allow_non_native
-        and (
+    if source_authority_kind is RecoverySourceAuthorityKind.CHECKPOINT:
+        if (
             plan.decision.value != "ready_native"
             or plan.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT
-        )
-    ):
-        raise RecoveryExecutionError(
-            "RECOVERY_NOT_READY_NATIVE",
-            "当前 RecoveryPlan 未被 Native Recovery policy 明确允许。",
-        )
-    if not plan.recovery_point_id or not plan.checkpoint_id or len(plan.next_nodes) != 1:
-        raise RecoveryExecutionError(
-            "RECOVERY_PLAN_INCOMPLETE",
-            "Native RecoveryPlan 缺少唯一 checkpoint 或 next node。",
-        )
+            or not plan.recovery_point_id
+            or not plan.checkpoint_id
+            or len(plan.next_nodes) != 1
+        ):
+            raise RecoveryExecutionError(
+                "RECOVERY_NOT_READY_NATIVE",
+                "当前 RecoveryPlan 未被 Native Recovery policy 明确允许。",
+            )
+    else:
+        if (
+            plan.strategy is not RecoveryStrategy.STAGE_RESTART
+            or plan.decision is not RecoveryDecision.REQUIRES_HANDLER
+            or plan.next_nodes != ["technical_planning_begin"]
+            or not source_authority_sha256
+            or source_stage != "technical_planning"
+            or source_lifecycle_revision is None
+            or plan.recovery_point_id is not None
+            or plan.checkpoint_id is not None
+            or plan.checkpoint_ns
+        ):
+            raise RecoveryExecutionError(
+                "STAGE_RESTART_PLAN_INCOMPLETE",
+                "Stage Restart 缺少正式阶段 strategy、入口或 authority。",
+            )
     admission = assess_recovery_source(source)
     if not admission.admissible:
         raise RecoveryExecutionError(
@@ -410,6 +597,10 @@ async def claim_native_recovery_attempt(
         source_run_id=source.run_id,
         new_run_id=new_run_id,
         thread_id=source.thread_id,
+        source_authority_kind=source_authority_kind,
+        source_authority_sha256=source_authority_sha256,
+        source_stage=source_stage,
+        source_lifecycle_revision=source_lifecycle_revision,
         source_recovery_point_id=plan.recovery_point_id,
         source_checkpoint_id=plan.checkpoint_id,
         source_checkpoint_ns=plan.checkpoint_ns,
@@ -501,18 +692,24 @@ async def claim_native_recovery_attempt(
                 """
                 INSERT INTO recovery_attempts(
                     new_run_id, source_run_id, thread_id,
-                    source_recovery_point_id, source_checkpoint_id,
+                    source_authority_kind, source_authority_sha256, source_stage,
+                    source_lifecycle_revision, source_recovery_point_id,
+                    source_checkpoint_id,
                     source_checkpoint_ns, replay_checkpoint_id,
                     replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
                     status, created_at,
                     handed_off_at, started_at, failed_at, failure_code,
                     source_status, source_failure_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt.new_run_id,
                     attempt.source_run_id,
                     attempt.thread_id,
+                    attempt.source_authority_kind.value,
+                    attempt.source_authority_sha256,
+                    attempt.source_stage,
+                    attempt.source_lifecycle_revision,
                     attempt.source_recovery_point_id,
                     attempt.source_checkpoint_id,
                     attempt.source_checkpoint_ns,
@@ -544,30 +741,6 @@ async def claim_native_recovery_attempt(
         return record, lease, attempt
 
 
-async def claim_recovery_action_attempt(
-    *,
-    source: DurableExecutionRecord,
-    plan: RecoveryPlan,
-    new_run_id: str,
-    owner_backend_instance_id: str,
-    owner_pid: int,
-    lease_ttl_seconds: float,
-    created_at: datetime | None = None,
-) -> tuple[DurableExecutionRecord, ExecutionLease, RecoveryAttempt]:
-    """用同一原子 lineage claim 记录 operation retry 或 stage restart。"""
-
-    return await claim_native_recovery_attempt(
-        source=source,
-        plan=plan,
-        new_run_id=new_run_id,
-        owner_backend_instance_id=owner_backend_instance_id,
-        owner_pid=owner_pid,
-        lease_ttl_seconds=lease_ttl_seconds,
-        created_at=created_at,
-        allow_non_native=True,
-    )
-
-
 async def get_recovery_attempt(
     workspace: str | Path,
     new_run_id: str,
@@ -591,7 +764,9 @@ async def list_recovery_attempts_from_source(
         cursor = await connection.execute(
             """
             SELECT new_run_id, source_run_id, thread_id,
-                   source_recovery_point_id, source_checkpoint_id,
+                   source_authority_kind, source_authority_sha256, source_stage,
+                   source_lifecycle_revision, source_recovery_point_id,
+                   source_checkpoint_id,
                    source_checkpoint_ns, replay_checkpoint_id,
                    replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
                    status, created_at,
@@ -1535,7 +1710,9 @@ async def list_recovery_attempts_for_thread(
         cursor = await connection.execute(
             """
             SELECT new_run_id, source_run_id, thread_id,
-                   source_recovery_point_id, source_checkpoint_id,
+                   source_authority_kind, source_authority_sha256, source_stage,
+                   source_lifecycle_revision, source_recovery_point_id,
+                   source_checkpoint_id,
                    source_checkpoint_ns, replay_checkpoint_id,
                    replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
                    status, created_at,
@@ -1694,7 +1871,9 @@ async def _fetch_active_attempt_row(
     cursor = await connection.execute(
         """
         SELECT new_run_id, source_run_id, thread_id,
-               source_recovery_point_id, source_checkpoint_id,
+               source_authority_kind, source_authority_sha256, source_stage,
+               source_lifecycle_revision, source_recovery_point_id,
+               source_checkpoint_id,
                source_checkpoint_ns, replay_checkpoint_id,
                replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
                status, created_at,
@@ -1702,7 +1881,7 @@ async def _fetch_active_attempt_row(
                source_status, source_failure_sha256
         FROM recovery_attempts
         WHERE source_run_id = ?
-          AND status IN ('preparing', 'handed_off', 'started')
+          AND status IN ('preparing', 'handed_off', 'finalizing', 'started')
         ORDER BY created_at ASC, new_run_id ASC
         LIMIT 1
         """,
@@ -1720,7 +1899,9 @@ async def _fetch_recovery_attempt_row(
     cursor = await connection.execute(
         """
         SELECT new_run_id, source_run_id, thread_id,
-               source_recovery_point_id, source_checkpoint_id,
+               source_authority_kind, source_authority_sha256, source_stage,
+               source_lifecycle_revision, source_recovery_point_id,
+               source_checkpoint_id,
                source_checkpoint_ns, replay_checkpoint_id,
                replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
                status, created_at,
@@ -1840,23 +2021,31 @@ def _recovery_attempt_from_row(row: tuple[object, ...]) -> RecoveryAttempt:
         new_run_id=str(row[0]),
         source_run_id=str(row[1]),
         thread_id=str(row[2]),
-        source_recovery_point_id=str(row[3]),
-        source_checkpoint_id=str(row[4]),
-        source_checkpoint_ns=str(row[5] or ""),
-        replay_checkpoint_id=str(row[6]) if row[6] is not None else None,
-        replay_checkpoint_ns=str(row[7] or ""),
-        strategy=RecoveryStrategy(str(row[8])),
-        lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode(str(row[9])),
-        status=RecoveryAttemptStatus(str(row[10])),
-        created_at=_parse_datetime(str(row[11])),
-        handed_off_at=_parse_datetime(str(row[12])) if row[12] is not None else None,
-        started_at=_parse_datetime(str(row[13])) if row[13] is not None else None,
-        failed_at=_parse_datetime(str(row[14])) if row[14] is not None else None,
-        failure_code=str(row[15]) if row[15] is not None else None,
-        source_status=DurableExecutionStatus(str(row[16]))
-        if row[16] is not None
+        source_authority_kind=RecoverySourceAuthorityKind(str(row[3])),
+        source_authority_sha256=(
+            str(row[4]) if row[4] is not None else None
+        ),
+        source_stage=str(row[5]) if row[5] is not None else None,
+        source_lifecycle_revision=(
+            int(row[6]) if row[6] is not None else None
+        ),
+        source_recovery_point_id=str(row[7]) if row[7] is not None else None,
+        source_checkpoint_id=str(row[8]) if row[8] is not None else None,
+        source_checkpoint_ns=str(row[9] or ""),
+        replay_checkpoint_id=str(row[10]) if row[10] is not None else None,
+        replay_checkpoint_ns=str(row[11] or ""),
+        strategy=RecoveryStrategy(str(row[12])),
+        lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode(str(row[13])),
+        status=RecoveryAttemptStatus(str(row[14])),
+        created_at=_parse_datetime(str(row[15])),
+        handed_off_at=_parse_datetime(str(row[16])) if row[16] is not None else None,
+        started_at=_parse_datetime(str(row[17])) if row[17] is not None else None,
+        failed_at=_parse_datetime(str(row[18])) if row[18] is not None else None,
+        failure_code=str(row[19]) if row[19] is not None else None,
+        source_status=DurableExecutionStatus(str(row[20]))
+        if row[20] is not None
         else DurableExecutionStatus.INTERRUPTED,
-        source_failure_sha256=str(row[17]) if row[17] is not None else None,
+        source_failure_sha256=str(row[21]) if row[21] is not None else None,
     )
 
 
