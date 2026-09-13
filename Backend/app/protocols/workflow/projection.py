@@ -504,7 +504,7 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         )
         return (
             ["authorization_bootstrap"]
-            if isinstance(manifest, dict) and manifest.get("enabled") is True
+            if isinstance(manifest, dict) and manifest.get("resources")
             else ["build"]
         )
     if node_name == "authorization_bootstrap":

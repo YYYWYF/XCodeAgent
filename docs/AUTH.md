@@ -848,7 +848,7 @@ deleteSubjectAuthorization
 
 ##### 步骤 4C：编译 `authorization-manifest.v2`
 
-- RBAC 关闭时输出 `enabled=false`、空资源/绑定/默认授权；RBAC 开启时确定性注入唯一 `type=system` 的 `system_authorization_management`。
+- RBAC 是否启用只由 `application.json.authorization.enabled` 决定；`authorization_manifest` 不重复保存该开关。权限开启时确定性注入唯一 `type=system` 的 `system_authorization_management`，关闭时资源/绑定/默认授权为空。
 - 页面规则编译为 `resourceKey=pageId`，操作规则编译为 `resourceKey=<pageId>_<actionId>`；所有 key 必须为 `lower_snake_case`，页面、操作和系统组成的完整资源目录必须全局唯一。
 - 多条规则指向同一页面或顶层 action 时复用资源并聚合去重 `sourceRuleIds`；同一 action 的直接业务 Endpoint 和 sequence 中全部 business step Endpoint 绑定同一父 action 资源，不生成 step 资源。
 - 对每个 Endpoint 汇总全部 business action 引用并校验操作权限属性一致性：全部未受控时输出空 `operationResourceKeys`；全部受控时聚合去重多个 `operationResourceKeys` 并固定采用 ANY-OF；受控与未受控混用时以 `ENDPOINT_AUTHORIZATION_MIXED_CONTROL` 阻止 manifest 编译并要求拆分 Endpoint，禁止通过调用来源字段选择授权分支。

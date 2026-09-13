@@ -54,16 +54,14 @@ def compile_frontend_resource_catalog(manifest: dict[str, Any]) -> ResourceCatal
     """编译上游已确认 manifest 的全部资源；确认门禁仍由正式产物调用方负责。
 
     当前 manifest.resources 已包含 compiled page、operation 和 system resources，
-    不从当前 Scope 或 bindings 补造资源。关闭权限返回 None；重复输入显式报错。
+    不从当前 Scope 或 bindings 补造资源。空资源目录返回 None；重复输入显式报错。
     """
 
-    if not isinstance(manifest, dict) or not isinstance(manifest.get("enabled"), bool):
-        raise AuthorizationFrontendProjectionError("authorization_manifest.enabled 必须为布尔值。")
-    if not manifest["enabled"]:
-        return None
+    if not isinstance(manifest, dict):
+        raise AuthorizationFrontendProjectionError("authorization_manifest 必须为对象。")
     items = manifest.get("resources")
     if not isinstance(items, list) or not items:
-        raise AuthorizationFrontendProjectionError("已启用权限的正式资源目录必须为非空数组。")
+        return None
     resources: list[ResourceIdentity] = []
     keys: set[str] = set()
     symbols: set[tuple[str, str]] = set()

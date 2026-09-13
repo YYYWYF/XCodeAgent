@@ -172,9 +172,9 @@ def resource_catalog_fingerprint(plan: dict) -> str | None:
     manifest = plan.get("authorization_manifest")
     if manifest is None:
         return None
-    if not isinstance(manifest, dict) or not isinstance(manifest.get("enabled"), bool):
-        fail_requirement_input("AUTH_RESOURCE_INPUT_INVALID", "正式 authorization_manifest.enabled 必须为布尔值。")
-    if not manifest["enabled"]:
+    if not isinstance(manifest, dict):
+        fail_requirement_input("AUTH_RESOURCE_INPUT_INVALID", "正式 authorization_manifest 必须为对象。")
+    if not manifest.get("resources"):
         return None
     resources = object_index(manifest.get("resources"), "resourceKey", "Authorization resource")
     if not resources:

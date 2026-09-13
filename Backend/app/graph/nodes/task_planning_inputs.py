@@ -101,7 +101,7 @@ def _authorization_slices(
     """按 Page 的正式权限目标构造最小切片，不携带凭据或运行时状态。"""
 
     manifest = project_plan.get("authorization_manifest")
-    if not isinstance(manifest, Mapping) or manifest.get("enabled") is not True:
+    if not isinstance(manifest, Mapping) or not manifest.get("resources"):
         return []
     bindings = manifest.get("bindings")
     if not isinstance(bindings, Mapping):

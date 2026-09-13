@@ -182,14 +182,14 @@ def api_selectors(contract: FrozenContract, endpoint_indexes: set[int]) -> set[s
 def authorization_targets(
     technical: FrozenContract,
 ) -> tuple[set[str], set[str]]:
-    """从已启用的正式权限清单读取确实需要权限切片的 Page 和 Endpoint。"""
+    """从非空正式权限资源清单读取确实需要权限切片的 Page 和 Endpoint。"""
 
     manifest = technical.content.get("authorization_manifest")
     if manifest is None:
         return set(), set()
-    if not isinstance(manifest, Mapping) or not isinstance(manifest.get("enabled"), bool):
+    if not isinstance(manifest, Mapping):
         raise ContractCatalogBindingError("TechnicalPlan authorization_manifest 结构无效。")
-    if manifest["enabled"] is False:
+    if not manifest.get("resources"):
         return set(), set()
     bindings = manifest.get("bindings")
     if not isinstance(bindings, Mapping):
