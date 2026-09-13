@@ -26,6 +26,9 @@ from app.services.application_planning_stage_recovery import (
     ApplicationPlanningStageRecoveryContract,
     TechnicalPlanningStageRestartAssessment,
 )
+from app.services.execution_recovery_capability import (
+    assess_native_recovery_capability,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +104,7 @@ async def plan_recovery_action(
             snapshot=snapshot,
             lifecycle=current_lifecycle,
         )
+    native_capability = assess_native_recovery_capability(recovery_plan)
     previous_native_retry = await _source_was_native_retry(
         workspace=workspace,
         source=source,
@@ -109,7 +113,7 @@ async def plan_recovery_action(
         stage_assessment is not None
         and stage_assessment.available
         and (
-            recovery_plan.decision is not RecoveryDecision.READY_NATIVE
+            not native_capability.executable
             or previous_native_retry
         )
     )
@@ -151,7 +155,7 @@ async def plan_recovery_action(
             ),
             stage_assessment,
         )
-    if recovery_plan.decision is RecoveryDecision.READY_NATIVE:
+    if native_capability.executable:
         action = _action(
             incident_id=incident_id,
             kind=RecoveryActionKind.CONTINUE_CHECKPOINT,
@@ -174,7 +178,12 @@ async def plan_recovery_action(
             source=source,
             incident_id=incident_id,
             status=RecoveryIncidentStatus.NEEDS_ATTENTION,
-            reason_code=recovery_plan.reason_code,
+            reason_code=(
+                native_capability.reason_code
+                if recovery_plan.decision is RecoveryDecision.READY_NATIVE
+                and not native_capability.executable
+                else recovery_plan.reason_code
+            ),
             message="当前现场没有可证明安全的自动恢复入口，需要人工处理。",
         ),
         stage_assessment,

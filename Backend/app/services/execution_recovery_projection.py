@@ -22,6 +22,10 @@ from app.services.execution_recovery_action_planner import (
     build_recovery_facts,
     plan_recovery_action,
 )
+from app.services.execution_recovery_capability import (
+    assess_native_recovery_capability,
+    NativeRecoveryCapability,
+)
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -99,7 +103,8 @@ async def _resolve_candidate(
         snapshot=facts.snapshot,
         lifecycle=facts.lifecycle,
     )
-    availability = _availability_for_decision(plan.decision)
+    native_capability = assess_native_recovery_capability(plan)
+    availability = _availability_for_decision(plan.decision, native_capability)
     if action_plan.primary_action is not None:
         availability = "ready"
     if availability is None:
@@ -122,7 +127,7 @@ async def _resolve_candidate(
         current_node=record.current_node,
         availability=availability,
         can_continue=can_continue,
-        reason_code=plan.reason_code,
+        reason_code=action_plan.reason_code,
         message=action_plan.message,
         updated_at=record.updated_at,
         recoveryActionPlan=action_plan.model_dump(mode="json", by_alias=True),
@@ -163,11 +168,12 @@ async def _resolve_owner_session_id(
 
 def _availability_for_decision(
     decision: RecoveryDecision,
+    native_capability: NativeRecoveryCapability,
 ) -> str | None:
     """把 P0.3A 决策映射为不暴露内部恢复 authority 的 UI 状态。"""
 
     if decision is RecoveryDecision.READY_NATIVE:
-        return "ready"
+        return "ready" if native_capability.executable else "blocked"
     if decision is RecoveryDecision.REQUIRES_HANDLER:
         return "requires_handler"
     if decision in {

@@ -56,6 +56,9 @@ from app.services.execution_recovery_source_admission import assess_recovery_sou
 from app.services.application_planning_stage_recovery import (
     ApplicationPlanningStageRecoveryContract,
 )
+from app.services.execution_recovery_capability import (
+    assess_native_recovery_capability,
+)
 from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
     resolve_recovery_lineage_head,
@@ -178,7 +181,6 @@ async def prepare_native_recovery(
         )
     identity = current_backend_instance()
     new_run_id = f"recovery-{uuid4().hex[:12]}"
-    _validate_root_plan(plan)
     child_execution, _, attempt = await claim_native_recovery_attempt(
         source=source,
         plan=plan,
@@ -422,7 +424,7 @@ async def finalize_handed_off_recovery_attempt(
             workspace_revision=source_point.workspace_revision,
             workspace_snapshot_hash=source_point.workspace_snapshot_hash,
         )
-        _validate_root_plan(plan)
+        _require_native_plan(plan)
         await _revalidate_finalizing_recovery(
             workspace=workspace,
             source=source,
@@ -634,6 +636,7 @@ async def _fork_and_start(
 ) -> NativeRecoveryRuntimeContext:
     """只写 runtime identity 的 fork checkpoint，并在 durable point 后标记 STARTED。"""
 
+    _require_native_plan(plan)
     if not hasattr(graph, "aupdate_state") or not hasattr(graph, "aget_state"):
         raise RecoveryExecutionError(
             "RECOVERY_FORK_UNSUPPORTED",
@@ -987,34 +990,18 @@ def _acquire_workspace_lease(
 
 
 def _require_native_plan(plan: RecoveryPlan) -> None:
-    """把 P0.3A 的非 Native 结果转换为无副作用的结构化拒绝。"""
+    """复用统一 capability，把不可执行计划转换为结构化拒绝。"""
 
-    if plan.decision.value == "ready_native" and plan.strategy is RecoveryStrategy.NATIVE_CHECKPOINT:
+    capability = assess_native_recovery_capability(plan)
+    if capability.executable:
         return
-    if plan.decision.value == "requires_handler":
-        code = "RECOVERY_REQUIRES_HANDLER"
-    elif plan.decision.value == "state_drift":
-        code = plan.reason_code or "RECOVERY_STATE_DRIFT"
-    elif plan.decision.value == "awaiting_user":
-        code = plan.reason_code or "SOURCE_AWAITING_USER"
-    else:
-        code = plan.reason_code or "RECOVERY_NOT_RECOVERABLE"
-    raise RecoveryExecutionError(code, plan.reason)
+    raise RecoveryExecutionError(capability.reason_code, capability.reason)
 
 
 def _validate_root_plan(plan: RecoveryPlan) -> None:
-    """限制 P0.3B 只处理 root namespace 与单一 successor。"""
+    """保留旧的内部入口，但实际校验统一委托给 Native capability。"""
 
-    if plan.checkpoint_ns != "":
-        raise RecoveryExecutionError(
-            "NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED",
-            "P0.3B 暂不支持非 root checkpoint namespace replay。",
-        )
-    if len(plan.next_nodes) != 1:
-        raise RecoveryExecutionError(
-            "NATIVE_PARALLEL_REPLAY_UNSUPPORTED",
-            "P0.3B 暂不支持并行 next nodes replay。",
-        )
+    _require_native_plan(plan)
 
 
 def _snapshot_identity(snapshot: Any) -> tuple[str, str, str]:

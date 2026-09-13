@@ -127,6 +127,11 @@ class ApplicationPlanningStageRecoveryContract:
         )
         if operation is None:
             return _unavailable("STAGE_RESTART_REVISION_AMBIGUOUS", "无法唯一确定 Technical Planning 是首次生成还是 Formal Revision。")
+        if operation is ApplicationPlanningOperation.INITIAL and not request:
+            return _unavailable(
+                "STAGE_RESTART_REQUEST_MISSING",
+                "正式 RequirementSpec 缺少首次 Technical Planning 所需的原始需求。",
+            )
         if operation is not ApplicationPlanningOperation.INITIAL and not technical_plan:
             return _unavailable("STAGE_RESTART_BASELINE_MISSING", "TechnicalPlan 修订缺少当前正式 baseline。")
         if operation is not ApplicationPlanningOperation.INITIAL and lifecycle.active_formal_revision is not None:
@@ -393,11 +398,19 @@ def _request_from_formal_artifacts(
 ) -> str:
     """只从正式 RequirementSpec/ProductPlan 事实提取首次生成请求。"""
 
-    for artifact in (requirement_spec, product_plan):
-        for key in ("request", "original_request", "user_request", "description"):
-            value = str(artifact.get(key) or "").strip()
-            if value:
-                return value
+    requirement_request = str(requirement_spec.get("source_request") or "").strip()
+    if requirement_request:
+        return requirement_request
+
+    for key in ("request", "original_request", "user_request", "description"):
+        value = str(requirement_spec.get(key) or "").strip()
+        if value:
+            return value
+
+    for key in ("request", "original_request", "user_request", "description"):
+        value = str(product_plan.get(key) or "").strip()
+        if value:
+            return value
     return ""
 
 

@@ -40,6 +40,9 @@ from app.services.execution_recovery_action_planner import (
     build_recovery_facts,
     plan_recovery_action,
 )
+from app.services.execution_recovery_capability import (
+    assess_native_recovery_capability,
+)
 
 
 @dataclass(frozen=True)
@@ -246,7 +249,8 @@ async def resolve_application_planning_recovery(
         snapshot=facts.snapshot,
         lifecycle=facts.lifecycle,
     )
-    if plan.decision is RecoveryDecision.READY_NATIVE:
+    native_capability = assess_native_recovery_capability(plan)
+    if plan.decision is RecoveryDecision.READY_NATIVE and native_capability.executable:
         contract = resolve_application_planning_recovery_contract(
             source=source,
             point=await _recovery_point_for_plan(source, plan),
@@ -291,7 +295,7 @@ async def resolve_application_planning_recovery(
         source=source,
         thread_id=thread_id,
         input_committed=input_committed,
-        reason_code=plan.reason_code,
+        reason_code=action_plan.reason_code,
         message="当前规划状态无法安全自动恢复，请查看恢复状态。",
     )
 

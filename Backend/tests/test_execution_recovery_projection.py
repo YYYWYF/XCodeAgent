@@ -64,6 +64,17 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
                 if decision is RecoveryDecision.READY_NATIVE
                 else RecoveryStrategy.NONE
             ),
+            recovery_point_id=(
+                "projection-point"
+                if decision is RecoveryDecision.READY_NATIVE
+                else None
+            ),
+            checkpoint_id=(
+                "projection-checkpoint"
+                if decision is RecoveryDecision.READY_NATIVE
+                else None
+            ),
+            next_nodes=["build"] if decision is RecoveryDecision.READY_NATIVE else [],
             reason_code=decision.value.upper(),
             reason="projection test",
         )
