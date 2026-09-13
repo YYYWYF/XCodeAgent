@@ -843,6 +843,17 @@ export function useWorkflowConversation({
     return accepted || completed
   }
 
+  /** 重新读取当前 Execution Recovery Incident，避免 stale action 继续占据控制面。 */
+  const refreshExecutionRecoveryLifecycle = async (): Promise<boolean> => {
+    try {
+      const lifecycle = await getApplicationLifecycle(application)
+      onApplicationLifecycleChange(lifecycle)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   /** 发送并持久化 Workflow 对话，认证失败时恢复发送前的界面状态。 */
   const sendWorkflowMessage = async (
     message: string,
@@ -1363,11 +1374,15 @@ export function useWorkflowConversation({
       }
       if (options?.executionRecovery) {
         // Recovery endpoint 的内部错误码不写入历史错误卡，避免 stale action 形成第二控制面。
-        setRecoveryError(
-          staleRecoveryAction
-            ? '当前恢复操作已过期，请查看最新状态。'
-            : '无法安全执行当前恢复操作，请查看最新状态。'
-        )
+        if (staleRecoveryAction) {
+          setRecoveryError('当前恢复操作已过期，正在刷新最新状态。')
+          const refreshed = await refreshExecutionRecoveryLifecycle()
+          if (!refreshed) {
+            setRecoveryError('恢复操作已过期，但最新恢复状态刷新失败，请重试。')
+          }
+        } else {
+          setRecoveryError('无法安全执行当前恢复操作，请查看最新状态。')
+        }
       }
       return false
     } finally {

@@ -9,11 +9,14 @@ from unittest.mock import AsyncMock, patch
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    ExecutionFailureEvidence,
+    ExecutionFailureOrigin,
     RecoveryDecision,
     RecoveryPlan,
     RecoveryStrategy,
 )
 from app.services.execution_recovery_projection import (
+    recovery_failure_diagnostic,
     resolve_execution_recovery_projection,
 )
 
@@ -218,6 +221,41 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
             projection = await resolve_execution_recovery_projection(str(self.workspace))
 
         self.assertEqual(projection.candidates, [])
+
+    async def test_failure_diagnostic_uses_public_camel_case_contract(self) -> None:
+        """真实失败证据只能通过公共 mapper 暴露，不能直接泄漏 domain 字段名。"""
+
+        record = self._record("run-failure").model_copy(
+            update={
+                "status": DurableExecutionStatus.FAILED,
+                "ended_at": datetime.now(timezone.utc),
+                "failure": ExecutionFailureEvidence(
+                    origin=ExecutionFailureOrigin.MODEL_CALL,
+                    code="MODEL_NOT_FOUND",
+                    operation="code_review",
+                    dependency="model-provider",
+                    provider="openai",
+                    model="missing-model",
+                    http_status=404,
+                    diagnostic_message="model not found",
+                ),
+            }
+        )
+
+        self.assertEqual(
+            recovery_failure_diagnostic(record),
+            {
+                "sourceRunId": "run-failure",
+                "origin": "model_call",
+                "code": "MODEL_NOT_FOUND",
+                "operation": "code_review",
+                "dependency": "model-provider",
+                "provider": "openai",
+                "model": "missing-model",
+                "httpStatus": 404,
+                "message": "model not found",
+            },
+        )
 
 
 if __name__ == "__main__":

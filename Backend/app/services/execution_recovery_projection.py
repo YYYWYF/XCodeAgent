@@ -26,6 +26,27 @@ from app.services.execution_recovery_action_planner import (
 logger = logging.getLogger("uvicorn.error")
 
 
+def recovery_failure_diagnostic(
+    record: DurableExecutionRecord,
+) -> dict[str, object] | None:
+    """把内部失败证据映射为稳定的 Recovery 公共诊断 DTO。"""
+
+    failure = record.failure
+    if failure is None:
+        return None
+    return {
+        "sourceRunId": record.run_id,
+        "origin": failure.origin.value,
+        "code": failure.code,
+        "operation": failure.operation,
+        "dependency": failure.dependency,
+        "provider": failure.provider,
+        "model": failure.model,
+        "httpStatus": failure.http_status,
+        "message": failure.diagnostic_message,
+    }
+
+
 async def resolve_execution_recovery_projection(
     workspace: str,
 ) -> ExecutionRecoveryProjection:
@@ -125,11 +146,7 @@ async def _resolve_candidate(
         reason_code=action_plan.reason_code,
         message=action_plan.message,
         updated_at=record.updated_at,
-        failureDiagnostic=(
-            record.failure.model_dump(mode="json", by_alias=True)
-            if record.failure is not None
-            else None
-        ),
+        failureDiagnostic=recovery_failure_diagnostic(record),
         recoveryActionPlan=action_plan.model_dump(mode="json", by_alias=True),
     )
 
@@ -184,4 +201,4 @@ def _message_for_availability(
     }[availability]
 
 
-__all__ = ["resolve_execution_recovery_projection"]
+__all__ = ["recovery_failure_diagnostic", "resolve_execution_recovery_projection"]

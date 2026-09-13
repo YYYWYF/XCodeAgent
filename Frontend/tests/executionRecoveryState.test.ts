@@ -132,3 +132,24 @@ test('Workbench 当前 Incident 只接受 Workbench ActionPlan', () => {
   assert.equal(workbenchRecoveryIncident(applicationPlanningCandidate), undefined)
   assert.equal(workbenchRecoveryIncident(workbenchCandidate)?.kind, 'recoverable')
 })
+
+test('真实 Backend failureDiagnostic 使用公开字段后仍能生成当前 Incident', () => {
+  const projected = executionRecoveryForSession(
+    lifecycleWithCandidates([
+      candidate({
+        failureDiagnostic: {
+          sourceRunId: 'run-A',
+          origin: 'model_call',
+          code: 'MODEL_ERROR',
+          operation: 'code_review',
+          httpStatus: 404,
+          message: 'model not found'
+        }
+      })
+    ]),
+    'session-A'
+  )
+
+  assert.equal(projected?.failureDiagnostic?.httpStatus, 404)
+  assert.equal(workbenchRecoveryIncident(projected)?.failureMessage, 'model not found')
+})
