@@ -293,8 +293,7 @@ function WorkbenchPage({
         if (!active) return
         setWorkspaceApplication({
           ...application,
-          ...applicationConfig,
-          schema: { ...application.schema, ...applicationConfig }
+          ...applicationConfig
         })
       } catch (error) {
         console.warn('读取工作区 application.json 失败，终止本次工作台加载。', error)

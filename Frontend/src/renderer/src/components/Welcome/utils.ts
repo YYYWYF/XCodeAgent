@@ -163,7 +163,8 @@ export function buildApplicationSchema(values: ApplicationDraft): ApplicationSch
   }
 
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    configRevision: 1,
     appName: values.appName.trim(),
     appIcon: values.appIcon.trim(),
     senario: values.senario.trim(),

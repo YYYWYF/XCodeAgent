@@ -1,0 +1,24 @@
+{
+  "kind": "NO_CHANGE",
+  "nextTemplateState": {
+    "templateRevision": "2026.09.04.1",
+    "managedFiles": {
+      "frontend/src/App.tsx": "export default function App() { return <main>old</main>; }\n",
+      "frontend/src/obsolete.ts": "export const obsolete = true;\n"
+    },
+    "requested": {
+      "login": {
+        "enabled": true,
+        "config": {}
+      }
+    },
+    "effective": {
+      "login": {
+        "enabled": true,
+        "config": {}
+      }
+    }
+  },
+  "body": null,
+  "diagnostics": []
+}

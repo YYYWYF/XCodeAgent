@@ -39,6 +39,16 @@ const PLANNING_ACTIVITY_COPY: Record<
     detail: '正在根据已确认的上游设计生成技术实现方案。',
     revisionDetail: '正在根据本次设计变更更新技术实现方案。'
   },
+  template_preparation: {
+    title: '正在准备应用模板',
+    revisionTitle: '正在准备应用模板',
+    detail: '正在执行 Workspace Bootstrap 并校验工作区就绪状态。'
+  },
+  template_reconcile: {
+    title: '正在更新应用模板',
+    revisionTitle: '正在更新应用模板',
+    detail: '正在根据已确认的技术规划更新模板能力并校验工作区。'
+  },
   project_planning: {
     title: '正在生成项目计划',
     revisionTitle: '正在重新生成项目计划',

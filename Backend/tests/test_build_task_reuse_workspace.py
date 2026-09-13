@@ -5,35 +5,33 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from app.services.application_template_generation import (
-    inspect_template_generation_readiness,
-    prepare_application_template_generation,
-    validate_application_template_generation,
-)
 from app.services.build_task_reuse import resolve_reuse_facts
 from app.services.planning_frozen import freeze_json
+from app.services.template_state import load_template_state, template_context
 from tests.test_build_task_reuse import _inputs
 
 
-def _ready_template(workspace: Path) -> dict:
-    """通过真实模板初始化和门禁构造只读检查结果，不伪造 ready 布尔值。"""
+def _template_state_context(workspace: Path) -> dict:
+    """写入并读取真实 V2 TemplateState，生成 Build 允许冻结的唯一模板证据。"""
 
-    constants = workspace / "frontend/src/constants"
-    constants.mkdir(parents=True)
-    (workspace / "frontend/package.json").write_text("{}", encoding="utf-8")
-    (constants / "resources.ts").write_text("export const RESOURCES = {} as const;", encoding="utf-8")
-    (constants / "routes.tsx").write_text(
-        "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n"
-        "// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n",
+    state_path = workspace / ".xcodeagent/template-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        '{"schemaVersion":2,"templateRevision":"template-r1","requested":{},"effective":{},"appliedAdditions":{}}',
         encoding="utf-8",
     )
-    (workspace / "backend").mkdir()
-    (workspace / "backend/pom.xml").write_text("<project/>", encoding="utf-8")
-    prepare_application_template_generation(workspace, {
-        "targets": {name: {"status": "succeeded", "attempt": 1, "branch": "auth"} for name in ("frontend", "backend")},
-    })
-    validate_application_template_generation(workspace)
-    return inspect_template_generation_readiness(workspace)
+    return template_context(load_template_state(workspace))
+
+
+def _ready_template(workspace: Path) -> dict:
+    """提供 Adapter 测试所需的原始 V2 State，调用方必须自行冻结为 BuildContext。"""
+
+    _template_state_context(workspace)
+    (workspace / ".xcodeagent/application.json").write_text(
+        '{"schemaVersion":6,"configRevision":1,"auth":{"enable":false},"authorization":{"enabled":false,"initialAdministratorSubjects":[]}}',
+        encoding="utf-8",
+    )
+    return load_template_state(workspace)
 
 
 class BuildTaskReuseWorkspaceTests(unittest.TestCase):
@@ -43,8 +41,9 @@ class BuildTaskReuseWorkspaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             inputs = _inputs()
-            inputs["template_readiness"] = _ready_template(workspace)
-            inputs["build_context"]["template_variant"] = "auth"
+            context = _template_state_context(workspace)
+            inputs["template_state_context"] = context
+            inputs["build_context"]["template_context"] = context
             before_files = {str(path.relative_to(workspace)): (path.read_bytes(), path.stat().st_mtime_ns) for path in workspace.rglob("*") if path.is_file()}
             before_inputs = deepcopy(inputs)
 
@@ -57,8 +56,9 @@ class BuildTaskReuseWorkspaceTests(unittest.TestCase):
             capability = facts.external_capabilities[0]
             self.assertEqual((capability.unit_id, capability.capability_id), ("frontend:shell", "frontend.shell.ready"))
             self.assertEqual(capability.workspace_revision, "snapshot-1")
-            self.assertEqual(capability.source_refs["manifest_path"], ".xcodeagent/template-generation-manifest.json")
-            self.assertEqual(len(capability.source_refs["manifest_sha256"]), 64)
+            self.assertEqual(capability.source, "template_state")
+            self.assertEqual(capability.source_refs["state_path"], ".xcodeagent/template-state.json")
+            self.assertEqual(len(capability.source_refs["template_state_sha256"]), 64)
             self.assertEqual(resolve_reuse_facts(**freeze_json(inputs)), facts)
             self.assertEqual(inputs, before_inputs)
             self.assertEqual({str(path.relative_to(workspace)): (path.read_bytes(), path.stat().st_mtime_ns) for path in workspace.rglob("*") if path.is_file()}, before_files)
@@ -84,7 +84,7 @@ class BuildTaskReuseWorkspaceTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             inputs = _inputs()
-            inputs["template_readiness"] = inspect_template_generation_readiness(directory)
+            inputs["template_state_context"] = {}
             facts = resolve_reuse_facts(**inputs)
             self.assertEqual(facts.external_capabilities, ())
             self.assertEqual(facts.issues[0].code, "WORKSPACE_TEMPLATE_NOT_READY")
@@ -95,13 +95,16 @@ class BuildTaskReuseWorkspaceTests(unittest.TestCase):
         """缺失检查身份或当前模板变体不匹配时，不把无归属证据发布为外部能力。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            readiness = _ready_template(Path(directory))
+            context = _template_state_context(Path(directory))
             for bad_input, expected_code in (
                 ({"workspace_snapshot": {}}, "WORKSPACE_EVIDENCE_IDENTITY_MISSING"),
-                ({"build_context": {"template_variant": "main"}}, "WORKSPACE_TEMPLATE_VARIANT_MISMATCH"),
+                ({"build_context": {"template_context": {}}}, "WORKSPACE_TEMPLATE_CONTEXT_MISMATCH"),
             ):
                 with self.subTest(code=expected_code):
-                    facts = resolve_reuse_facts(**{**_inputs(), "template_readiness": readiness, **bad_input})
+                    inputs = {**_inputs(), "template_state_context": context, **bad_input}
+                    if "build_context" not in bad_input:
+                        inputs["build_context"] = {**inputs["build_context"], "template_context": context}
+                    facts = resolve_reuse_facts(**inputs)
                     self.assertEqual(facts.external_capabilities, ())
                     self.assertEqual(facts.issues[0].code, expected_code)
 

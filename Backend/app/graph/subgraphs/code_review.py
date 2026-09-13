@@ -16,7 +16,7 @@ from app.agents.code_review_repair import (
 from app.agents.code_analyze.scope import is_code_review_change_path
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
-from app.services.integration_test_runner import run_integration_checks
+from app.services.project_launcher import run_project_restart_validation
 from app.agents.code_analyze.analyzer import analyze_workspace_code, _safe_review_text
 from app.workspace.code_changes import code_change_state_update
 from app.workspace.code_review_documents import write_code_review_markdown
@@ -507,12 +507,9 @@ def review_build_checks(state: ProjectState) -> dict[str, Any]:
         frontend_install_result = _frontend_install_result(
             previous_repair.get("package_install")
         )
-        result = run_integration_checks(
+        result = run_project_restart_validation(
             state,
             on_progress=report,
-            phase="build",
-            artifact_namespace="code-review",
-            frontend_install_result=frontend_install_result,
         )
     except Exception as exc:  # noqa: BLE001 - 构建执行异常进入有限修复环
         results = [
@@ -559,7 +556,7 @@ def review_build_checks(state: ProjectState) -> dict[str, Any]:
             "code_review_events": ["review_build_checks"],
             "timeline": ["code_review", "code_review_repair", "review_build_checks"],
         }
-    if attempt < max_attempts:
+    if attempt < max_attempts and not any(item.get("passed") is False and item.get("repairable") is False for item in results):
         previous_repair = state.get("code_review_repair_result")
         previous_repair = previous_repair if isinstance(previous_repair, dict) else {}
         return {

@@ -1090,6 +1090,7 @@ def validate_project_plan_datasource_policy(
     """
 
     del datasource_type
+    # Template capability 开关是 application.json 的配置事实，不属于 TechnicalPlan 校验范围。
     errors: list[str] = []
     sources = plan_data_sources(project_plan)
     source_ids = {str(source.get("id") or "") for source in sources}
@@ -1794,18 +1795,34 @@ def create_technical_plan(
         if isinstance(spec.get("confirmed_product_plan"), dict)
         else {"authorizationTargets": {"pageRules": [], "operationRules": []}}
     )
+    application_config = spec.get("application_config")
+    if not isinstance(application_config, dict):
+        # 非 application_planning 的纯规划调用没有工作区配置输入时，只能生成
+        # 无权限 Manifest；真实应用链路在规划节点中强制注入 application.json。
+        application_config = {
+            "configRevision": 1,
+            "auth": {"enable": False},
+            "authorization": {
+                "enabled": False,
+                "initialAdministratorSubjects": [],
+            },
+        }
+    authorization_manifest = compile_authorization_manifest(
+        spec,
+        product_plan,
+        api_contracts,
+        pages,
+        application_config=application_config,
+    )
     plan = {
         "artifact_type": TECHNICAL_PLAN_ARTIFACT_TYPE,
         "architecture": architecture,
         "entities": entities,
         "api_contracts": api_contracts,
         "pages": pages,
-        "authorization_manifest": compile_authorization_manifest(
-            spec,
-            product_plan,
-            api_contracts,
-            pages,
-        ),
+        "authorization_manifest": authorization_manifest,
+        # 仅记录本产物消费的配置版本，不复制任何应用级开关。
+        "sourceConfigRevision": int(application_config.get("configRevision") or 1),
     }
     repaired, _ = repair_cross_contract_schema_refs(plan)
     return repaired

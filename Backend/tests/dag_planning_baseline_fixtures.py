@@ -112,10 +112,13 @@ def build_context(plan: dict, scope: dict) -> dict:
             api_contract_id=scope.get("apiContractId"),
             project_plan_path=plan_path,
         )
-    return compile_authorization_overlay(plan, {
-        **context, "project_plan": plan, "scope": scope,
-        "template_variant": "auth" if plan.get("authorization_manifest") else "main",
-    })
+    return compile_authorization_overlay(
+        plan,
+        {**context, "project_plan": plan, "scope": scope},
+        application_config={
+            "authorization": {"enabled": bool(plan.get("authorization_manifest"))}
+        },
+    )
 
 
 def write_confirmed_endpoint_designs(

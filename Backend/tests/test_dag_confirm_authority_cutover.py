@@ -97,7 +97,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
         """执行一次真实 generation，返回 Graph 结果与 Pending DraftIdentity。"""
 
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=self.readiness,
         ), patch(
             "app.services.dag_planning_orchestrator.generate_unit_candidate_once",
@@ -136,7 +136,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
             with patch(
-                "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+                "app.graph.nodes.task_planning_adapter.load_template_state",
                 return_value=self.readiness,
             ):
                 confirmed = await graph.ainvoke(
@@ -195,7 +195,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=self.readiness,
         ):
             result = await graph.ainvoke(
@@ -219,7 +219,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
         _, old_identity = await self._generate_pending(graph, thread)
 
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=self.readiness,
         ), patch(
             "app.services.dag_planning_orchestrator.generate_unit_candidate_once",
@@ -271,7 +271,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=self.readiness,
         ):
             result = await guarded_graph.ainvoke(

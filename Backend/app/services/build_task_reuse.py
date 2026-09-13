@@ -195,63 +195,64 @@ def _endpoint_owners(
 
 def _external_capabilities(
     units: set[str], build_context: Mapping, workspace_snapshot: Mapping,
-    template_readiness: Mapping | None, issues: list[ValidationIssue],
+    template_state_context: Mapping | None, issues: list[ValidationIssue],
 ) -> list[ExternalCapability]:
-    """仅将真实模板只读门禁结果转为 shell 外部能力；文件扫描线索不证明已满足。"""
+    """仅将冻结的 V2 TemplateState 绑定转为 shell 外部能力，不以文件扫描推断。"""
 
-    if "frontend:shell" not in units or template_readiness is None:
+    if "frontend:shell" not in units or template_state_context is None:
         return []
-    errors = template_readiness.get("errors")
-    if template_readiness.get("ready") is not True or not isinstance(errors, (list, tuple)) or errors:
+    state_path = template_state_context.get("state_path")
+    template_revision = template_state_context.get("template_revision")
+    effective = template_state_context.get("effective_capabilities")
+    if (
+        state_path != ".xcodeagent/template-state.json"
+        or not _identity(template_revision)
+        or not isinstance(effective, Mapping)
+    ):
         if "frontend:shell" in build_context.get("required_unit_ids", []):
             issues.append(_issue(
-                "WORKSPACE_TEMPLATE_NOT_READY", "当前范围需要的模板前置能力未通过只读门禁。",
+                "WORKSPACE_TEMPLATE_NOT_READY", "当前范围需要的 V2 TemplateState 绑定无效。",
                 units=["frontend:shell"], category="input",
             ))
         return []
     revision = workspace_snapshot.get("workspace_revision")
-    variant = template_readiness.get("templateVariant")
-    manifest = template_readiness.get("manifest")
-    if (
-        not _identity(revision) or variant not in {"main", "auth"}
-        or not isinstance(manifest, Mapping) or not manifest
-    ):
+    if not _identity(revision):
         issues.append(_issue(
-            "WORKSPACE_EVIDENCE_IDENTITY_MISSING", "模板能力证据缺少 snapshot revision、模板变体或 manifest。",
+            "WORKSPACE_EVIDENCE_IDENTITY_MISSING", "模板能力证据缺少 workspace snapshot revision。",
             units=["frontend:shell"], category="input",
         ))
         return []
-    if build_context.get("template_variant", variant) != variant:
+    if build_context.get("template_context") != template_state_context:
         issues.append(_issue(
-            "WORKSPACE_TEMPLATE_VARIANT_MISMATCH", "模板只读检查与当前 BuildContext 变体不一致。",
+            "WORKSPACE_TEMPLATE_CONTEXT_MISMATCH", "TemplateState 绑定与当前 BuildContext 不一致。",
             units=["frontend:shell"], category="input",
         ))
         return []
-    manifest_digest = sha256(json.dumps(
-        plain_json(manifest), ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    state_digest = sha256(json.dumps(
+        plain_json(template_state_context), ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     ).encode("utf-8")).hexdigest()
     return [ExternalCapability(
         unit_id="frontend:shell", capability_id="frontend.shell.ready",
-        source="template_generation_readiness", workspace_revision=revision,
+        source="template_state", workspace_revision=revision,
         source_refs={
-            "template_variant": variant, "manifest_path": ".xcodeagent/template-generation-manifest.json",
-            "manifest_sha256": manifest_digest,
+            "state_path": state_path, "template_revision": template_revision,
+            "template_state_sha256": state_digest,
         },
     )]
 
 
 def resolve_template_prerequisite_facts(
     *, unit_skeleton: Mapping[str, Any], build_context: Mapping[str, Any],
-    workspace_snapshot: Mapping[str, Any], template_readiness: Mapping[str, Any],
+    workspace_snapshot: Mapping[str, Any], template_state_context: Mapping[str, Any],
 ) -> ReuseFacts:
-    """严格校验骨架中的模板前置事实，不接入其他 Unit 的复用和缺项决策。"""
+    """严格校验 V2 State 的模板前置事实，不接入其他 Unit 的复用和缺项决策。"""
 
     issues: list[ValidationIssue] = []
     # 模板门禁适用于整个 Planning 入口，Endpoint Scope 也不能跳过二次检查失败。
     context = {**build_context, "required_unit_ids": ["frontend:shell"]}
     capabilities = _external_capabilities(
         set(unit_skeleton.get("build_units", {})), context,
-        workspace_snapshot, template_readiness, issues,
+        workspace_snapshot, template_state_context, issues,
     )
     return ReuseFacts(
         retained_task_ids_by_unit={}, reusable_capabilities_by_unit={},
@@ -292,14 +293,14 @@ def _auth_external_capabilities(
 def resolve_reuse_facts(
     *, confirmed_plan: Mapping[str, Any] | None, unit_skeleton: Mapping[str, Any],
     build_context: Mapping[str, Any], workspace_snapshot: Mapping[str, Any],
-    formal_plan: Mapping[str, Any], template_readiness: Mapping[str, Any] | None = None,
+    formal_plan: Mapping[str, Any], template_state_context: Mapping[str, Any] | None = None,
     auth_resource_inspection: Mapping[str, Any] | None = None,
 ) -> ReuseFacts:
     """计算全部 confirmed 职责事实，返回冻结且顺序稳定的结果，不读写文件或计算缺项。
 
     confirmed_plan 由 load_confirmed_build_task_plan 提供；formal_plan 是完整正式
-    TechnicalPlan 运行时投影。template_readiness 必须来自同次 workspace 检查的
-    inspect_template_generation_readiness 结果；缺少该证据就不声明外部能力。
+    TechnicalPlan 运行时投影。template_state_context 必须来自同次 V2 TemplateState
+    读取；缺少该冻结绑定就不声明外部能力。
     auth_resource_inspection 来自同次 inspect_authorization_resource_catalog；当前 R
     有 confirmed provider 时优先保留，否则只接纳匹配 R 和 revision 的完整投影证据。
     required_unit_ids 仅用于模板前置问题归因，不裁剪历史 Task；有 issues 必须阻断。
@@ -321,7 +322,7 @@ def resolve_reuse_facts(
         for capability in sorted(_capabilities(task, all_unit_ids, issues)):
             capabilities[unit_id].setdefault(capability, []).append(task_id)
     owners = _endpoint_owners(tasks, _formal_endpoints(formal_plan, issues), issues)
-    external = _external_capabilities(unit_ids, build_context, workspace_snapshot, template_readiness, issues)
+    external = _external_capabilities(unit_ids, build_context, workspace_snapshot, template_state_context, issues)
     external.extend(_auth_external_capabilities(
         unit_ids, capabilities, formal_plan, workspace_snapshot, auth_resource_inspection, issues,
     ))

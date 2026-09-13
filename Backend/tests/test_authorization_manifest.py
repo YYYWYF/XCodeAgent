@@ -5,6 +5,7 @@ import unittest
 
 from app.services.authorization_manifest import (
     compile_authorization_manifest,
+    validate_authorization_configuration_projection,
     validate_authorization_manifest,
 )
 from app.services.authorization_deliverability import authorization_deliverability_report
@@ -44,11 +45,22 @@ class AuthorizationManifestTests(unittest.TestCase):
         pages = [{"pageId": "people", "references": {"action_implementations": [{"actionId": "edit_person", "endpointId": "person_api.update"}]}}]
         return requirement, product, contracts, pages
 
+    def _application_config(self) -> dict:
+        """构造权限已启用的唯一应用配置输入。"""
+
+        return {
+            "auth": {"enable": True},
+            "authorization": {
+                "enabled": True,
+                "initialAdministratorSubjects": ["test-administrator"],
+            },
+        }
+
     def test_compiles_fixed_resources_and_action_level_endpoint_binding(self) -> None:
         """资源键、系统目录和 sequence 统一 action 资源必须稳定。"""
 
         requirement, product, contracts, pages = self._inputs()
-        manifest = compile_authorization_manifest(requirement, product, contracts, pages)
+        manifest = compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
 
         self.assertIn("system_authorization_management", {item["resourceKey"] for item in manifest["resources"]})
         self.assertIn("people", {item["resourceKey"] for item in manifest["resources"]})
@@ -75,8 +87,29 @@ class AuthorizationManifestTests(unittest.TestCase):
                 },
             ],
         )
-        self.assertEqual(validate_authorization_manifest(manifest, requirement, product, contracts, pages), [])
-        self.assertEqual(manifest, compile_authorization_manifest(requirement, product, contracts, pages))
+        self.assertEqual(validate_authorization_manifest(manifest, requirement, product, contracts, pages, application_config=self._application_config()), [])
+        self.assertEqual(manifest, compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config()))
+
+    def test_ignores_requirement_switch_when_compiling_manifest(self) -> None:
+        """RequirementSpec 的历史开关不能覆盖 application.json。"""
+
+        requirement, product, contracts, pages = self._inputs()
+        requirement["authorization_requirements"]["enabled"] = False
+
+        errors = validate_authorization_configuration_projection(
+            self._application_config(),
+            requirement,
+            product,
+        )
+        self.assertEqual(errors, [])
+        manifest = compile_authorization_manifest(
+            requirement,
+            product,
+            contracts,
+            pages,
+            application_config=self._application_config(),
+        )
+        self.assertTrue(manifest["resources"])
 
     def test_rejects_data_permissions_and_mixed_endpoint_control(self) -> None:
         """数据权限和受控/未受控复用 Endpoint 必须阻止 TechnicalPlan。"""
@@ -84,12 +117,12 @@ class AuthorizationManifestTests(unittest.TestCase):
         requirement, product, contracts, pages = self._inputs()
         requirement["authorization_requirements"]["dataRules"] = []
         with self.assertRaisesRegex(ValueError, "DATA_AUTHORIZATION_NOT_SUPPORTED"):
-            compile_authorization_manifest(requirement, product, contracts, pages)
+            compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
 
         requirement, product, contracts, pages = self._inputs()
         pages[0]["references"]["action_implementations"].append({"actionId": "unrestricted", "endpointId": "person_api.update"})
         with self.assertRaisesRegex(ValueError, "ENDPOINT_AUTHORIZATION_MIXED_CONTROL"):
-            compile_authorization_manifest(requirement, product, contracts, pages)
+            compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
 
     def test_multiple_operation_resources_use_any_of_and_key_collision_is_rejected(self) -> None:
         """多个操作资源可聚合到同一 Endpoint，跨类型同键必须停止编译。"""
@@ -114,7 +147,7 @@ class AuthorizationManifestTests(unittest.TestCase):
         pages[0]["references"]["action_implementations"].append(
             {"actionId": "operate_person", "endpointId": "person_api.update"}
         )
-        manifest = compile_authorization_manifest(requirement, product, contracts, pages)
+        manifest = compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
         endpoint = next(item for item in manifest["bindings"]["endpoints"] if item["endpointId"] == "person_api.update")
         self.assertEqual(endpoint["operationResourceKeys"], ["people_edit_person", "people_operate_person"])
 
@@ -130,7 +163,7 @@ class AuthorizationManifestTests(unittest.TestCase):
         )
         product["authorizationTargets"]["pageRules"].append({"ruleId": "page_collision", "pageId": "people_edit_person"})
         with self.assertRaisesRegex(ValueError, "跨类型或跨目标碰撞"):
-            compile_authorization_manifest(requirement, product, contracts, pages)
+            compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
 
     def test_deliverability_report_covers_closed_loop_and_default_endpoint_access(self) -> None:
         """4E 必须展示完整闭环，并允许受控页面调用未授权 Endpoint。"""
@@ -140,7 +173,7 @@ class AuthorizationManifestTests(unittest.TestCase):
             {"endpoint_id": "person_api.list"},
             {"endpoint_id": "person_api.update"},
         ]
-        manifest = compile_authorization_manifest(requirement, product, contracts, pages)
+        manifest = compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
         technical_plan = {
             "artifact_type": "technical-plan",
             "authorization_manifest": manifest,
@@ -160,6 +193,7 @@ class AuthorizationManifestTests(unittest.TestCase):
             contracts,
             pages,
             page_contracts,
+            application_config=self._application_config(),
         )
 
         self.assertTrue(report["passed"])
@@ -174,7 +208,7 @@ class AuthorizationManifestTests(unittest.TestCase):
         """4E 必须把 Endpoint 目录和初始管理员授权分别标记为阻断项。"""
 
         requirement, product, contracts, pages = self._inputs()
-        manifest = compile_authorization_manifest(requirement, product, contracts, pages)
+        manifest = compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
         manifest["bindings"]["endpoints"].append(
             {"endpointId": "person_api.missing", "operationResourceKeys": ["people_edit_person"]}
         )
@@ -188,6 +222,7 @@ class AuthorizationManifestTests(unittest.TestCase):
             contracts,
             pages,
             [],
+            application_config=self._application_config(),
         )
 
         statuses = {check["id"]: check["status"] for check in report["checks"]}
@@ -199,7 +234,7 @@ class AuthorizationManifestTests(unittest.TestCase):
         """4E 必须逐项定位资源、页面、操作、闭环和 mixed-control 问题。"""
 
         requirement, product, contracts, pages = self._inputs()
-        manifest = compile_authorization_manifest(requirement, product, contracts, pages)
+        manifest = compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
 
         def report_for(candidate_manifest: dict, candidate_pages: list[dict]) -> dict:
             """为独立篡改场景生成 4E 报告，避免场景之间相互影响。"""
@@ -211,6 +246,7 @@ class AuthorizationManifestTests(unittest.TestCase):
                 contracts,
                 candidate_pages,
                 [],
+                application_config=self._application_config(),
             )
 
         missing_resource = deepcopy(manifest)

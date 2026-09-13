@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 2,
+  "templateRevision": "2026.09.04.1",
+  "requested": {
+    "login": {
+      "enabled": true,
+      "config": {}
+    }
+  },
+  "effective": {
+    "login": {
+      "enabled": true,
+      "config": {}
+    }
+  },
+  "appliedAdditions": {}
+}

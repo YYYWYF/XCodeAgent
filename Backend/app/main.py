@@ -76,10 +76,12 @@ from app.services.project_launcher import (
     stop_project_preview,
 )
 from app.services.ui_design_generation_pool import get_ui_design_generation_pool
+from app.services.workspace_bootstrap.service import workspace_bootstrap_service
 from app.tools import database_tools
 from app.workspace import workspace as workspace_tools
 
 settings = Settings.from_env()
+bootstrap_service = workspace_bootstrap_service(settings)
 
 
 @asynccontextmanager
@@ -176,6 +178,7 @@ async def run_application_lifecycle(
         build_application_lifecycle_ag_ui_stream(
             payload=input_data,
             accept=accept,
+            bootstrap_service=bootstrap_service,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

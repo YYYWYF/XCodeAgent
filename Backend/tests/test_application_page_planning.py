@@ -5,13 +5,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.main import requirements_analyzer
 from app.graph.application_planning_workflow import (
-    _inject_revision_scaffold,
+    _reconcile_confirmed_revision,
     _technical_planning,
     _requirements,
     _route_requirements,
@@ -27,10 +28,6 @@ from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
     build_application_page_planning_ag_ui_stream,
 )
-from app.protocols.application_planning_run_lock import (
-    application_planning_run_lock,
-    clear_application_planning_run_locks,
-)
 from app.protocols.workflow.projection import _workflow_confirmation_artifact
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.application_lifecycle import (
@@ -43,6 +40,9 @@ from app.services.application_lifecycle import (
 from app.services.application_revision_lifecycle import (
     register_revision_impact,
     submit_revision_impact,
+)
+from app.services.template_reconcile.finalization import (
+    claim_template_reconcile_finalization,
 )
 from app.services.requirement_spec import create_requirement_spec
 from app.services.product_plan import create_product_plan
@@ -115,7 +115,7 @@ def _write_planning_stage_entry_lifecycle(
     *,
     initialization_thread_id: str | None = None,
 ) -> None:
-    """把测试生命周期推进到等待进入计划阶段，模拟已确认或已跳过 UI。"""
+    """把测试生命周期推进到等待进入规划阶段，模拟已确认或已跳过 UI。"""
 
     state = create_application_lifecycle(
         application_id=workspace.name,
@@ -143,112 +143,6 @@ def _write_planning_stage_entry_lifecycle(
 
 
 class ApplicationPagePlanningTests(unittest.TestCase):
-    def test_checkpoint_recovery_waits_for_active_planning_writer(self) -> None:
-        """只读恢复必须等待同 thread writer 释放共享运行锁。"""
-
-        class RecoveryGraph:
-            """记录权威读取何时真正越过 writer 屏障。"""
-
-            called = False
-
-            async def aget_state(self, _config: dict[str, object]):
-                """返回可投影的稳定 checkpoint。"""
-
-                self.called = True
-                return type(
-                    "Snapshot",
-                    (),
-                    {
-                        "values": {
-                            "active_run_id": "writer-run",
-                            "phase": "technical_planning",
-                            "status": "requires_user_input",
-                            "clarification": {
-                                "mode": "technical_plan_confirmation",
-                                "status": "requires_user_input",
-                            },
-                        }
-                    },
-                )()
-
-        async def exercise() -> str:
-            """在同一事件循环中持锁、启动恢复并验证读取顺序。"""
-
-            graph = RecoveryGraph()
-            thread_id = "planning-writer-barrier"
-            lock = application_planning_run_lock(thread_id)
-            await lock.acquire()
-            try:
-                stream = build_application_page_planning_ag_ui_stream(
-                    graph=graph,
-                    payload={
-                        "threadId": thread_id,
-                        "runId": "recovery-run",
-                        "forwardedProps": {
-                            "applicationPlanningRecovery": {
-                                "action": "get",
-                                "workspaceRoot": "/missing-workspace",
-                                "applicationId": "app-1",
-                            }
-                        },
-                    },
-                )
-
-                async def collect() -> str:
-                    """消费恢复流以驱动其只读 operation。"""
-
-                    return "".join([frame async for frame in stream])
-
-                recovery = asyncio.create_task(collect())
-                await asyncio.sleep(0)
-                self.assertFalse(graph.called)
-                lock.release()
-                frames = await recovery
-                self.assertTrue(graph.called)
-                return frames
-            finally:
-                if lock.locked():
-                    lock.release()
-                clear_application_planning_run_locks({thread_id})
-
-        frames = asyncio.run(exercise())
-        self.assertIn("RUN_FINISHED", frames)
-
-    def test_checkpoint_recovery_exposes_machine_readable_missing_code(self) -> None:
-        """缺少 checkpoint 时应通过完成信封返回稳定错误码。"""
-
-        class EmptyRecoveryGraph:
-            """模拟目标 thread 从未产生 checkpoint。"""
-
-            async def aget_state(self, _config: dict[str, object]):
-                """返回空 checkpoint 快照。"""
-
-                return type("Snapshot", (), {"values": {}})()
-
-        stream = build_application_page_planning_ag_ui_stream(
-            graph=EmptyRecoveryGraph(),
-            payload={
-                "threadId": "missing-planning-thread",
-                "runId": "missing-recovery-run",
-                "forwardedProps": {
-                    "applicationPlanningRecovery": {
-                        "action": "get",
-                        "workspaceRoot": "/missing-workspace",
-                        "applicationId": "app-1",
-                    }
-                },
-            },
-        )
-
-        async def collect() -> str:
-            """消费缺失 checkpoint 的完整失败生命周期。"""
-
-            return "".join([frame async for frame in stream])
-
-        frames = asyncio.run(collect())
-        self.assertIn("application_planning_checkpoint_not_found", frames)
-        self.assertIn("RUN_FINISHED", frames)
-
     def test_checkpoint_recovery_projects_confirmation_without_running_graph(self) -> None:
         """冷启动恢复只读取 checkpoint，并重新投影需求确认卡。"""
 
@@ -493,7 +387,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(result["clarification"]["questions"][0]["question"], "主要使用者是谁？")
 
     def test_routes_cover_design_and_independent_planning_stages(self) -> None:
-        """独立创建 Graph 应把技术规划放在设计与开发之间的独立计划阶段。"""
+        """独立创建 Graph 应把技术规划放在设计与开发之间的独立规划阶段。"""
 
         self.assertEqual(_route_start({}), "requirements")
         with self.assertRaisesRegex(
@@ -815,8 +709,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
             )
 
-    def test_design_revision_technical_plan_issues_continuation_without_template_stage(self) -> None:
-        """二次修改确认 TechnicalPlan 后应直接续接 Build，不能再次生成应用模板。"""
+    def test_design_revision_confirmation_commits_before_template_reconcile(self) -> None:
+        """二次修改确认先提交 TechnicalPlan，下一节点才执行模板收口。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -866,9 +760,9 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                     {**state, "workflow_scope": "application_planning"}
                 )
 
-            continuation = result["revision_continuation"]
-            self.assertEqual(continuation["action"], "continue_revision_build")
-            self.assertEqual(continuation["changeId"], active.change_id)
+            self.assertEqual(result["revision_continuation"], {})
+            self.assertTrue(result["template_reconcile_pending"])
+            self.assertEqual(result["application_planning_interaction"], {})
             lifecycle = load_application_lifecycle(workspace)
             assert lifecycle is not None
             self.assertEqual(
@@ -880,10 +774,10 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
             )
             assert lifecycle.active_formal_revision is not None
-            self.assertEqual(lifecycle.active_formal_revision.status, "continuation_ready")
+            self.assertEqual(lifecycle.active_formal_revision.status, "design_planning")
 
-    def test_workbench_revision_technical_plan_issues_continuation_without_execution_binding(self) -> None:
-        """独立 application_planning 完成 TechnicalPlan 后不要求工作台 execution。"""
+    def test_reconcile_retry_reuses_confirmed_plan_without_confirm_interaction(self) -> None:
+        """模板收口失败后只能重试收口，不得重放已消费的 TechnicalPlan 确认。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -934,16 +828,73 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                     {**state, "workflow_scope": "application_planning"}
                 )
 
-            continuation = result["revision_continuation"]
-            self.assertEqual(continuation["action"], "continue_revision_build")
-            self.assertEqual(continuation["changeId"], active.change_id)
+            self.assertTrue(result["template_reconcile_pending"])
+            self.assertEqual(result["application_planning_interaction"], {})
+
+            def failing_reconcile(root: str, change_id: str) -> None:
+                """模拟已取得 Reconcile 进入权后 Engine 更新失败。"""
+
+                claim_template_reconcile_finalization(
+                    root,
+                    change_id=change_id,
+                    technical_plan_path=workspace / ".xcodeagent" / "plans" / "technical-plan.json",
+                )
+                raise ValueError("engine update failed")
+
+            with patch(
+                "app.graph.application_planning_workflow._reconcile_revision_template_capabilities",
+                side_effect=failing_reconcile,
+            ):
+                with self.assertRaisesRegex(ValueError, "engine update failed"):
+                    _reconcile_confirmed_revision({**state, **result})
+
             lifecycle = load_application_lifecycle(workspace)
             assert lifecycle is not None and lifecycle.active_formal_revision is not None
             self.assertEqual(
                 lifecycle.active_formal_revision.status,
-                "continuation_ready",
+                "template_reconcile_failed",
             )
-            self.assertFalse(lifecycle.active_executions)
+            persisted = json.loads(
+                (workspace / ".xcodeagent" / "plans" / "technical-plan.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(persisted["confirmation_status"], "confirmed")
+            self.assertEqual(
+                _route_start(
+                    {"workspace": str(workspace), "resume_from": "technical_planning"}
+                ),
+                "template_reconcile",
+            )
+
+            issued = SimpleNamespace(
+                change_id=active.change_id,
+                formal_branch=active.formal_branch,
+                technical_plan_sha256="a" * 64,
+            )
+
+            def retry_reconcile(root: str, change_id: str) -> None:
+                """模拟重试时基于已确认 canonical TechnicalPlan 重新取得进入权。"""
+
+                claim_template_reconcile_finalization(
+                    root,
+                    change_id=change_id,
+                    technical_plan_path=workspace / ".xcodeagent" / "plans" / "technical-plan.json",
+                )
+
+            with patch(
+                "app.graph.application_planning_workflow._reconcile_revision_template_capabilities",
+                side_effect=retry_reconcile,
+            ) as reconcile, patch(
+                "app.graph.application_planning_workflow._inject_revision_backend_skeleton"
+            ), patch(
+                "app.graph.application_planning_workflow.issue_revision_continuation",
+                return_value=("continuation-token", issued),
+            ):
+                retried = _reconcile_confirmed_revision({**state, **result})
+
+            reconcile.assert_called_once_with(str(workspace), active.change_id)
+            self.assertEqual(retried["application_planning_interaction"], {})
+            self.assertFalse(retried["template_reconcile_pending"])
+            self.assertEqual(retried["revision_continuation"]["action"], "continue_revision_build")
 
     def test_technical_planning_cannot_run_before_stage_entry(self) -> None:
         """直接调度 TechnicalPlan 时必须在模型调用前拒绝，不能绕过规划入口。"""
@@ -953,7 +904,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             with patch(
                 "app.graph.application_planning_workflow.nodes.project_planning"
             ) as project_planning:
-                with self.assertRaisesRegex(ValueError, "明确进入计划阶段"):
+                with self.assertRaisesRegex(ValueError, "明确进入规划阶段"):
                     _technical_planning({**state, "workflow_scope": "application_planning"})
             project_planning.assert_not_called()
 
@@ -1006,6 +957,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 "ui_confirmation",
                 "planning_stage_entry",
                 "technical_planning",
+                "template_reconcile",
             ],
         )
         self.assertEqual(
@@ -1125,23 +1077,6 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
         self.assertIs(result, sentinel)
         self.assertEqual(stream.call_args.kwargs["payload"]["workflowScope"], "application_planning")
-
-    def test_revision_scaffold_failure_is_logged_without_blocking_continuation(self) -> None:
-        """预注入异常应留下诊断，但仍保持 scaffold 层既有的 fail-open 语义。"""
-
-        with (
-            patch(
-                "app.graph.application_planning_workflow.technical_plan_json_path",
-                side_effect=RuntimeError("scaffold failed"),
-            ),
-            patch(
-                "app.graph.application_planning_workflow.logger.exception"
-            ) as log_exception,
-        ):
-            result = _inject_revision_scaffold("/tmp/revision-workspace", {})
-
-        self.assertIsNone(result)
-        log_exception.assert_called_once_with("revision_scaffold_injection_failed")
 
 
 if __name__ == "__main__":

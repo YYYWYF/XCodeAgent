@@ -8,7 +8,8 @@ import type {
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import {
   APPLICATION_TEMPLATE_GENERATION_ENABLED,
-  ensureApplicationTemplateReadiness
+  ensureApplicationTemplateReadiness,
+  retryApplicationTemplateReadiness
 } from '../service/templateApi'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 
@@ -27,6 +28,10 @@ type ApplicationTemplateGenerationController = {
   generateApplicationTemplateFiles: (
     planning: ApplicationPlanningCurrentState
   ) => Promise<boolean>
+  /** 仅重试后端已经标记失败的 Bootstrap，不重启规划 Graph。 */
+  retryApplicationTemplateFiles: (
+    planning: ApplicationPlanningCurrentState
+  ) => Promise<boolean>
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
   generatingAppIds: ReadonlySet<string>
 }
@@ -43,8 +48,8 @@ export function useApplicationTemplateGeneration({
   const [generatingAppIds, setGeneratingAppIds] = useState<ReadonlySet<string>>(() => new Set())
 
   // 为单个应用生成模板文件，并复用同一应用尚未结束的幂等任务。
-  const generateApplicationTemplateFiles = useCallback(
-    (planning: ApplicationPlanningCurrentState): Promise<boolean> => {
+  const runApplicationTemplateFiles = useCallback(
+    (planning: ApplicationPlanningCurrentState, retry: boolean): Promise<boolean> => {
       // 临时关闭模板生成时直接完成规划回调，不触发下载、初始化或生命周期结果提交。
       if (!APPLICATION_TEMPLATE_GENERATION_ENABLED) return Promise.resolve(true)
 
@@ -61,10 +66,9 @@ export function useApplicationTemplateGeneration({
           threadId: planning.threadId
         })
         try {
-          const lifecycle = await ensureApplicationTemplateReadiness(
-            planning.application,
-            planning.threadId
-          )
+          const lifecycle = retry
+            ? await retryApplicationTemplateReadiness(planning.application, planning.threadId)
+            : await ensureApplicationTemplateReadiness(planning.application, planning.threadId)
           const confirmedApplication = {
             ...planning.application,
             planningThreadId: planning.threadId
@@ -152,5 +156,19 @@ export function useApplicationTemplateGeneration({
     ]
   )
 
-  return { generateApplicationTemplateFiles, generatingAppIds }
+  /** TechnicalPlan 确认后首次触发受控 Bootstrap。 */
+  const generateApplicationTemplateFiles = useCallback(
+    (planning: ApplicationPlanningCurrentState): Promise<boolean> =>
+      runApplicationTemplateFiles(planning, false),
+    [runApplicationTemplateFiles]
+  )
+
+  /** 模板失败后只执行 Bootstrap retry，保持当前 Planning Runtime 与线程不变。 */
+  const retryApplicationTemplateFiles = useCallback(
+    (planning: ApplicationPlanningCurrentState): Promise<boolean> =>
+      runApplicationTemplateFiles(planning, true),
+    [runApplicationTemplateFiles]
+  )
+
+  return { generateApplicationTemplateFiles, generatingAppIds, retryApplicationTemplateFiles }
 }

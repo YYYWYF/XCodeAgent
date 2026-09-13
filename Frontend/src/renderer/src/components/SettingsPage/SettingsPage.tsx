@@ -173,8 +173,7 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
       const updatedApplication: ApplicationConfig = {
         ...application,
         ...rest,
-        environment,
-        schema: { ...application.schema, ...rest, environment }
+        environment
       }
       const persistedApplication = await saveApplication(updatedApplication)
       onSaved(persistedApplication)

@@ -203,7 +203,7 @@ export function useActiveApplicationPlannings({
     (): string | undefined => visiblePlanningIdRef.current,
     []
   )
-  const { generateApplicationTemplateFiles, generatingAppIds } =
+  const { generateApplicationTemplateFiles, generatingAppIds, retryApplicationTemplateFiles } =
     useApplicationTemplateGeneration({
       dispatchPlanningEvent,
       hidePlanning,
@@ -237,7 +237,15 @@ export function useActiveApplicationPlannings({
   )
 
   const onTechnicalPlanConfirmed = runTemplateGeneration
-  const retryTemplateGeneration = runTemplateGeneration
+  const retryTemplateGeneration = useCallback(
+    (applicationId: string): Promise<boolean> => {
+      const planning = activePlanningsRef.current.find(
+        (candidate) => candidate.application.id === applicationId
+      )
+      return planning ? retryApplicationTemplateFiles(planning) : Promise.resolve(false)
+    },
+    [retryApplicationTemplateFiles]
+  )
 
   // 返回首页时只隐藏当前规划，所有后台 Runtime 继续运行。
   const returnHome = useCallback((): void => {

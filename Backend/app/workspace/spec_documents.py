@@ -144,6 +144,21 @@ def _authorization_markdown(spec: dict[str, Any]) -> str:
     )
 
 
+def _authentication_markdown(spec: dict[str, Any]) -> str:
+    """渲染登录基础能力需求，避免把它混同为页面或操作权限。"""
+
+    authentication = spec.get("authentication_requirements")
+    if not isinstance(authentication, dict) or authentication.get("enabled") is not True:
+        return "- 不涉及登录认证基础能力。"
+    sources = authentication.get("sourceRefs")
+    evidence = (
+        "；".join(str(item).strip() for item in sources if str(item).strip())
+        if isinstance(sources, list)
+        else ""
+    )
+    return f"- 已启用登录认证基础能力。{f'依据：{evidence}' if evidence else ''}"
+
+
 def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
     """把 RequirementSpec 渲染为用户可编辑的 Markdown 文档。"""
 
@@ -206,6 +221,10 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
 ## 权限需求
 
 {_authorization_markdown(spec)}
+
+## 认证需求
+
+{_authentication_markdown(spec)}
 
 ## 功能模块
 

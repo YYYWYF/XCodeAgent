@@ -4442,7 +4442,7 @@ export default function AiChatPanel({
               uiDesignActingPageIds={uiDesignActingPageIds}
               onUiDesignActingPageIdsChange={setUiDesignActingPageIds}
               onSaveRequirementSpec={handleSaveRequirementSpec}
-              rootPath={application.schema?.menus?.rootPath || '/'}
+              rootPath={application.menus?.rootPath || '/'}
               onEnterDevelopment={handleEnterDevelopment}
               generatingTemplate={generatingTemplate}
               templateGenerationOrphaned={templateGenerationOrphaned}

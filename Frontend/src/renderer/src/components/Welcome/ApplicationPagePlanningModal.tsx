@@ -208,7 +208,7 @@ export default function ApplicationPagePlanningModal({
                   onSaveRequirementSpec={handleSaveRequirementSpec}
                   onReturnHome={onReturnHome}
                   onSubmit={onSubmit}
-                  rootPath={application.schema?.menus?.rootPath || '/'}
+                  rootPath={application.menus?.rootPath || '/'}
                   workflow={workflow}
                 />
               ) : null}

@@ -31,15 +31,29 @@ from app.workspace.spec_documents import (
 _LOWER_SNAKE_CASE_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 
 
-def _default_authorization_requirements(
-    enabled: bool = False,
-) -> dict[str, Any]:
+def _default_authorization_requirements() -> dict[str, Any]:
     """构造当前 RequirementSpec 使用的权限需求默认结构。"""
 
+    return {"restrictedPages": [], "restrictedOperations": []}
+
+
+def _default_authentication_requirements() -> dict[str, Any]:
+    """构造当前 RequirementSpec 使用的认证能力需求默认结构。"""
+
+    return {"sourceRefs": []}
+
+
+def normalize_authentication_requirements(
+    value: Any,
+    *,
+    enabled_hint: bool | None = None,
+) -> dict[str, Any]:
+    """归一化登录基础能力需求，避免模型写入认证实现细节。"""
+
+    raw = value if isinstance(value, dict) else {}
+    enabled = bool(enabled_hint) if enabled_hint is not None else raw.get("enabled") is True
     return {
-        "enabled": bool(enabled),
-        "restrictedPages": [],
-        "restrictedOperations": [],
+        "sourceRefs": _string_list(raw.get("sourceRefs")) if enabled else [],
     }
 
 
@@ -60,6 +74,16 @@ def _authorization_enabled_from_request(text: str) -> bool | None:
     """读取权限是否启用的显式规划事实。"""
 
     for marker in ("涉及权限控制", "权限控制", "应用级资源授权"):
+        value = _explicit_authorization_flag(text, marker)
+        if value is not None:
+            return value
+    return None
+
+
+def _authentication_enabled_from_request(text: str) -> bool | None:
+    """读取认证是否启用的显式规划事实。"""
+
+    for marker in ("认证", "登录认证"):
         value = _explicit_authorization_flag(text, marker)
         if value is not None:
             return value
@@ -229,7 +253,7 @@ def normalize_authorization_requirements(
         if enabled_hint is not None
         else bool(raw_enabled)
         if isinstance(raw_enabled, bool)
-        else False
+        else any(isinstance(raw.get(field_name), list) and raw[field_name] for field_name in ("restrictedPages", "restrictedOperations"))
     )
     # 页面在 RequirementSpec 内已具有稳定 pageId；页面权限规则必须引用该身份。
     # 实体在此阶段不参与权限绑定，保留参数是为了保持调用边界稳定。
@@ -278,7 +302,7 @@ def normalize_authorization_requirements(
         return value if isinstance(value, list) else []
 
     normalized = {
-        "enabled": enabled,
+        "sourceRefs": _string_list(raw.get("sourceRefs")) if enabled else [],
         "restrictedPages": [
             rule
             for item in raw_list("restrictedPages")
@@ -306,8 +330,9 @@ def validate_authorization_requirements(
     value: dict[str, Any],
     *,
     require_initial_admin: bool = True,
+    authorization_enabled: bool | None = None,
 ) -> list[str]:
-    """校验权限候选的业务语义，并可延后初始系统管理员确认。"""
+    """校验权限候选的业务语义，并允许调用方注入唯一应用配置开关。"""
 
     authorization = value.get("authorization_requirements") if isinstance(value, dict) else None
     if authorization is None and isinstance(value, dict):
@@ -315,7 +340,11 @@ def validate_authorization_requirements(
     if not isinstance(authorization, dict):
         return []
 
-    enabled = authorization.get("enabled") is True
+    # application.json 已可用的调用方必须显式传入开关，避免 RequirementSpec 的
+    # 补充性字段反向决定平台能力；未接入工作区配置的编辑器保留当前校验路径。
+    enabled = authorization_enabled if type(authorization_enabled) is bool else any(
+        bool(authorization.get(field_name)) for field_name in ("restrictedPages", "restrictedOperations")
+    )
     errors: list[str] = []
     unsupported_fields = {
         field_name
@@ -326,12 +355,15 @@ def validate_authorization_requirements(
         errors.append(
             "Authorization V1 不支持数据权限字段：" + "、".join(sorted(unsupported_fields))
         )
+    capability_issues = value.get("authorization_capability_issues") if isinstance(value, dict) else None
+    if isinstance(capability_issues, list) and capability_issues:
+        errors.append("当前需求包含不支持的数据权限：DATA_AUTHORIZATION_NOT_SUPPORTED")
 
     if not enabled:
         for field in ("restrictedPages", "restrictedOperations"):
             if authorization.get(field):
                 errors.append(f"权限未启用时 {field} 必须为空")
-        if authorization.get("initialAdminRoleId"):
+        if type(authorization_enabled) is bool and authorization.get("initialAdminRoleId"):
             errors.append("权限未启用时不能保留 initialAdminRoleId")
         return errors
 
@@ -353,9 +385,6 @@ def validate_authorization_requirements(
         for page in value.get("pages", [])
         if isinstance(page, dict) and str(page.get("pageId") or page.get("id") or "").strip()
     }
-    capability_issues = value.get("authorization_capability_issues") if isinstance(value, dict) else None
-    if isinstance(capability_issues, list) and capability_issues:
-        errors.append("当前需求包含不支持的数据权限：DATA_AUTHORIZATION_NOT_SUPPORTED")
     if "unauthorizedBehavior" in authorization:
         errors.append("RequirementSpec 不支持 unauthorizedBehavior")
 
@@ -915,7 +944,6 @@ def create_requirement_spec(
     # 模型正在 ask_user 时只允许保留已有或明确返回的事实，禁止用默认页面填充未决需求。
     modules = _feature_modules(source_text) if allow_inferred_defaults else []
     app_name = _app_name(source_text) if allow_inferred_defaults else ""
-    request_authorization_enabled = _authorization_enabled_from_request(source_text)
     roles = [
         {
             "id": "business_user",
@@ -946,9 +974,8 @@ def create_requirement_spec(
         "pages": _pages(modules) if allow_inferred_defaults else [],
         "entities": _entities(modules) if allow_inferred_defaults else [],
         "business_flows": _business_flows(modules) if allow_inferred_defaults else [],
-        "authorization_requirements": _default_authorization_requirements(
-            enabled=(request_authorization_enabled is True),
-        ),
+        "authorization_requirements": _default_authorization_requirements(),
+        "authentication_requirements": _default_authentication_requirements(),
         "acceptance_criteria": (
             _acceptance_criteria(app_name) if allow_inferred_defaults else []
         ),
@@ -1079,24 +1106,35 @@ def create_requirement_spec(
         if isinstance(agent_authorization, dict)
         else existing_authorization
     )
-    explicit_authorization_enabled = _authorization_enabled_from_request(source_text)
-    # 权限总开关由创建表单约束；业务行为和 ruleId 只来自候选及已有内部状态。
+    authorization_has_current_rules = isinstance(authorization_source, dict) and any(
+        isinstance(authorization_source.get(field_name), list)
+        and bool(authorization_source[field_name])
+        for field_name in ("restrictedPages", "restrictedOperations")
+    )
+    authorization_enabled_hint = True if authorization_has_current_rules else None
     spec["authorization_requirements"] = normalize_authorization_requirements(
         authorization_source
         if isinstance(authorization_source, dict)
         else default_spec["authorization_requirements"],
-        enabled_hint=explicit_authorization_enabled,
+        enabled_hint=authorization_enabled_hint,
         existing_value=existing_authorization,
         pages=spec["pages"],
         entities=spec["entities"],
     )
+    authentication_source = (
+        agent_spec.get("authentication_requirements")
+        if isinstance(agent_spec, dict) and isinstance(agent_spec.get("authentication_requirements"), dict)
+        else existing_spec.get("authentication_requirements")
+        if isinstance(existing_spec, dict)
+        else default_spec["authentication_requirements"]
+    )
+    spec["authentication_requirements"] = normalize_authentication_requirements(
+        authentication_source,
+    )
     # 第一阶段不能把数据范围语义悄然丢弃：模型或编辑内容一旦提出该能力，
     # 必须以明确的能力缺口阻断 RequirementSpec 确认，等待用户改写需求。
     data_authorization_issues = []
-    if (
-        spec["authorization_requirements"].get("enabled") is True
-        and isinstance(authorization_source, dict)
-    ):
+    if authorization_has_current_rules and isinstance(authorization_source, dict):
         raw_data_rules = authorization_source.get("dataRules")
         if raw_data_rules:
             data_authorization_issues.append(
@@ -1121,7 +1159,7 @@ def create_requirement_spec(
         ]
     if data_authorization_issues:
         spec["authorization_capability_issues"] = data_authorization_issues
-    if spec["authorization_requirements"].get("enabled") is not True:
+    if not authorization_has_current_rules:
         # 关闭权限时不保留任何系统管理员角色种子，避免配置与需求事实冲突。
         for role in spec["user_roles"]:
             role["isSystemRole"] = False

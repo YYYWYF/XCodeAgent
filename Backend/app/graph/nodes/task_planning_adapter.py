@@ -28,10 +28,8 @@ from app.graph.nodes.tasks import (
     clear_planning_projection,
 )
 from app.graph.state import ProjectState
-from app.services.application_template_generation import (
-    inspect_template_generation_readiness,
-)
 from app.services.authorization_overlay import compile_authorization_overlay
+from app.services.application_config import read_application_config
 from app.services.build_task_plan_lifecycle import (
     ConfirmPromotionResult,
     RegeneratePendingResult,
@@ -50,6 +48,7 @@ from app.services.dag_planning_regeneration import regenerate_pending_build_task
 from app.services.planning_frozen import plain_json
 from app.services.planning_run_contracts import PlanningRun
 from app.services.planning_run_progress import project_planning_run_progress
+from app.services.template_state import load_template_state, template_context
 from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
     UnitGenerationPolicy,
@@ -345,6 +344,7 @@ def _assemble_planning_context(
         build_context = compile_authorization_overlay(
             project_plan,
             _resolve_build_context(state, project_plan, scope, skeleton),
+            application_config=read_application_config(workspace),
         )
     except ValueError as exc:
         return _context_blocked_result(
@@ -366,11 +366,12 @@ def _assemble_planning_context(
             ),
         )
 
-    template_readiness = inspect_template_generation_readiness(workspace)
+    # Build 只能绑定 Engine-owned V2 State，不能回退到已删除的模板生成 manifest。
+    current_template_context = template_context(load_template_state(workspace))
     build_context = {
         **build_context,
         "scope": scope,
-        "template_variant": template_readiness.get("templateVariant"),
+        "template_context": current_template_context,
     }
     reuse_facts = resolve_reuse_facts(
         confirmed_plan=confirmed_plan,
@@ -378,7 +379,7 @@ def _assemble_planning_context(
         build_context=build_context,
         workspace_snapshot=workspace_snapshot,
         formal_plan=project_plan,
-        template_readiness=template_readiness,
+        template_state_context=current_template_context,
     )
     workflow_run_id, thread_id = _workflow_identity(state)
     owner_session_id = str(state.get("owner_session_id") or "").strip()

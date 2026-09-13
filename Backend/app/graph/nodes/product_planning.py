@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from langgraph.config import get_stream_writer
@@ -13,6 +14,10 @@ from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.nodes.requirements import prepare_requirement_spec_confirmation
 from app.graph.state import ProjectState
 from app.services.data_source_policy import datasource_type_from_artifact
+from app.services.application_config import read_application_config
+from app.services.authorization_manifest import (
+    validate_authorization_configuration_projection,
+)
 from app.services.model_transport_retry import run_with_transport_retry
 from app.services.product_plan import (
     PRODUCT_PLAN_SCHEMA_VERSION,
@@ -38,6 +43,7 @@ from app.workspace.spec_documents import (
     requirement_spec_draft_json_path,
     requirement_spec_draft_markdown_path,
     write_confirmed_requirement_spec_document,
+    write_requirement_spec_draft_document,
 )
 
 
@@ -412,6 +418,47 @@ def _pending_product_plan_update(
     }
 
 
+def _configuration_alignment_update(
+    state: ProjectState,
+    requirement_spec: dict[str, Any],
+    product_plan: dict[str, Any],
+    errors: list[str],
+) -> dict[str, Any]:
+    """将配置投影不一致留在联合确认阶段，禁止错误候选流入 TechnicalPlan。"""
+
+    pending_requirement = {
+        **requirement_spec,
+        "confirmation_status": "pending_user_confirmation",
+    }
+    pending_product = {
+        **product_plan,
+        "confirmation_status": "pending_user_confirmation",
+    }
+    requirement_path = write_requirement_spec_draft_document(
+        state,
+        pending_requirement,
+    )
+    product_path, product_json_path = write_product_plan_documents(state, pending_product)
+    return {
+        "phase": "product_planning",
+        "status": "requires_user_input",
+        "requirement_spec": pending_requirement,
+        "requirement_spec_path": requirement_path,
+        "requirement_spec_json_path": str(requirement_spec_draft_json_path(state)),
+        "product_plan": pending_product,
+        "product_plan_path": product_path,
+        "product_plan_json_path": product_json_path,
+        "clarification": {
+            **_confirmation_payload(pending_product),
+            "mode": "application_configuration_alignment",
+            "message": "本次修订的应用配置与需求/产品权限规则不一致："
+            + "；".join(errors)
+            + " 请修订两份草稿后再次联合确认。",
+        },
+        "timeline": ["product_planning"],
+    }
+
+
 def product_planning(state: ProjectState) -> dict[str, Any]:
     """生成、修订并联合确认 RequirementSpec 与 ProductPlan。"""
 
@@ -512,6 +559,24 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             except ProductPlanOperationCoverageError as exc:
                 return _operation_coverage_update(state, exc.candidate, exc.coverage)
             return _pending_product_plan_update(state, repaired)
+        application_file = Path(str(state.get("workspace") or "")) / ".xcodeagent" / "application.json"
+        if application_planning_scope and application_file.is_file():
+            # 正式修订进入规划前已提交配置，所有规划预检只读取唯一事实源。
+            effective_application_config = read_application_config(
+                str(state.get("workspace") or ""),
+            )
+            projection_errors = validate_authorization_configuration_projection(
+                effective_application_config,
+                confirmed_requirement_spec,
+                confirmed,
+            )
+            if projection_errors:
+                return _configuration_alignment_update(
+                    state,
+                    confirmed_requirement_spec,
+                    confirmed,
+                    projection_errors,
+                )
         # 两份正式文件与草稿在全部校验后才连续提交；写入中断时必须恢复完整状态。
         # 否则“需求已确认、产品未确认”会绕过联合确认门禁。
         artifact_paths = (

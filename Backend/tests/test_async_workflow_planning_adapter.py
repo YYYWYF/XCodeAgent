@@ -154,7 +154,7 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=_ready_template(self.workspace),
         ), patch(
             "app.services.build_task_planning_service._new_planning_run_id",
@@ -254,7 +254,7 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
         thread = {"configurable": {"thread_id": "thread-blocked-projection"}}
 
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=_ready_template(self.workspace),
         ), patch(
             "app.services.build_task_planning_service._new_planning_run_id",
@@ -314,7 +314,7 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
         scope = execution_scope(name="orders")
 
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=_ready_template(self.workspace),
         ), patch(
             "app.services.build_task_planning_service._new_planning_run_id",
