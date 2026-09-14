@@ -421,6 +421,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selected_endpoint_id = ""
         selected_api_contract_id = ""
         selected_entity_id = ""
+        # Agent 首次开发没有页面/API 门禁；仅在未指定恢复节点时进入 Agent 前置检查，
+        # 避免覆盖构建重试、阶段确认或节点调试已经确定的入口。
+        if not resume_from:
+            resume_from = "development_readiness_gate"
     if skip_agent_entity_binding:
         if _clarification_mode(resume_state) != "entity_source_binding_required":
             raise ValueError("只能从 Agent 实体绑定门禁显式跳过当前前置。")

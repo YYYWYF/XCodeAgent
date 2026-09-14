@@ -30,6 +30,35 @@ class WorkflowRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(inputs["resume_values"]["owner_session_id"], "session-owner-1")
+
+    def test_agent_initial_development_enters_agent_readiness_gate(self) -> None:
+        """Agent 首次开发必须进入 Agent 前置门禁，不能误入页面/API 门禁。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "开始开发智能体：员工政策助手",
+                "forwardedProps": {
+                    "selectedAgentId": "employee_policy_agent",
+                    "selectedPageId": "",
+                    "detailTargetType": "agent",
+                    "buildExecutionScope": {
+                        "type": "agent",
+                        "targetId": "employee_policy_agent",
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
+        self.assertEqual(
+            inputs["resume_values"]["selected_agent_id"],
+            "employee_policy_agent",
+        )
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "agent", "targetId": "employee_policy_agent"},
+        )
+
     def test_agent_entity_binding_skip_is_bound_to_current_agent_gate(self) -> None:
         """手动跳过必须来自当前 Agent 实体门禁并绑定 Agent id。"""
 
