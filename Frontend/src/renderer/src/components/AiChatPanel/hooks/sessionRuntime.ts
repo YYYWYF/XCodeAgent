@@ -28,7 +28,11 @@ export type SessionExecutionEntry = {
   identity: SessionIdentity
   status: SessionRunStatus
   conversation: boolean
+  /** 当前 Workflow 节点，用于把本地运行态收窄到 DAG Planning 锁。 */
+  phase?: string
 }
+
+export const DAG_PLANNING_PHASE = 'prepare_build_tasks'
 
 export function sessionRuntimeKey(
   workspaceRoot: string,
@@ -82,11 +86,13 @@ export function isSameSessionExecutionScope(
   )
 }
 
-/** 判断两个会话是否竞争同一 Application 的 mutation 执行权，跨工作台阶段统一归并。 */
-export function isSameApplicationExecutionScope(
-  left: SessionIdentity,
-  right: SessionIdentity
-): boolean {
+/** 判断节点是否属于当前唯一需要跨会话互斥的 DAG Planning 阶段。 */
+export function isDagPlanningPhase(value: unknown): boolean {
+  return value === DAG_PLANNING_PHASE
+}
+
+/** 判断两个本地 execution 是否属于同一工作区应用的 DAG Planning 竞争范围。 */
+export function isSameDagPlanningScope(left: SessionIdentity, right: SessionIdentity): boolean {
   return left.workspaceRoot === right.workspaceRoot && left.workflowId === right.workflowId
 }
 

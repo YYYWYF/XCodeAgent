@@ -1070,6 +1070,7 @@ export default function AiChatPanel({
     acquireSessionExecution,
     releaseSessionExecution,
     sessionExecutions,
+    updateSessionExecutionPhase,
     updateSessionExecutionStatus
   } = useSessionRuntimeStore()
 
@@ -1436,8 +1437,8 @@ export default function AiChatPanel({
     designPhasePlanning: isApplicationPlanningPhase
   })
 
-  // Application owner 由 lifecycle、当前进程的活动 execution 和有效 Pending 共同投影；
-  // resourceLocks 只用于资源说明，不能替代这里的跨阶段 mutation ownership。
+  // DAG Planning owner 只由 DAG-specific lifecycle/local execution 和有效 Pending 投影；
+  // resourceLocks 及其它 Workbench execution 只用于资源/阶段说明，不能形成 DAG lock。
   const applicationOwnership = useMemo(
     () =>
       resolveApplicationMutationOwnership(applicationLifecycle, allSessions, sessionExecutions, {
@@ -2260,8 +2261,8 @@ export default function AiChatPanel({
     setDraftByKey,
     setSelectedSkillsByKey,
     setSessionMessages,
-    updateSessionExecutionStatus,
-    workbenchPhase: activeWorkbenchPhase
+    updateSessionExecutionPhase,
+    updateSessionExecutionStatus
   })
 
   // 同一执行归属同时决定停止按钮的显示与动作路由，普通 Workflow 保持原有优先级。
@@ -3902,7 +3903,7 @@ export default function AiChatPanel({
     await handleOpenSession(sessionId)
   }
 
-  /** 打开 Application owner 会话；跨工作台阶段时先激活目标再切换视图。 */
+  /** 打开 DAG Planning owner 会话；跨工作台阶段时先激活目标再切换视图。 */
   const handleOpenApplicationSession = async (sessionId: string): Promise<void> => {
     const targetSession = allSessions.find((session) => session.id === sessionId)
     if (!targetSession || targetSession.workbenchPhase === activeWorkbenchPhase) {

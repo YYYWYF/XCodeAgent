@@ -96,6 +96,10 @@ async function runApplicationLifecycleAction(
     throw new Error(payload.error?.message || '生命周期操作失败。')
   }
   if (!payload.lifecycle) throw new Error('生命周期接口没有返回 lifecycle。')
+  console.log('[lifecycle-debug]', {
+    planningRefresh: payload.lifecycle.extensions?.planningRefresh,
+    activeExecutions: payload.lifecycle.activeExecutions
+  })
   return payload.lifecycle
 }
 

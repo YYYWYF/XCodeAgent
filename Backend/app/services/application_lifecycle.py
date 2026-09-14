@@ -373,7 +373,6 @@ def start_workbench_execution(
             workspace,
             current,
             owner_session_id=owner_session_id,
-            thread_id=thread_id,
             replaces_run_id=replaces_run_id,
         )
         if test_interaction_submission is not None:
@@ -468,10 +467,9 @@ def _assert_application_mutation_admission(
     current: ApplicationLifecycle,
     *,
     owner_session_id: str | None,
-    thread_id: str,
     replaces_run_id: str | None,
 ) -> None:
-    """在带会话身份的入口拒绝绕过 Application owner 的新 mutation。"""
+    """在带会话身份的入口只拒绝绕过 DAG Planning owner 的新 mutation。"""
 
     normalized_owner = str(owner_session_id or "").strip()
     if not normalized_owner:
@@ -482,16 +480,11 @@ def _assert_application_mutation_admission(
         execution
         for run_id, execution in current.active_executions.items()
         if run_id != replaces_run_id
-        and execution.status
-        in {
-            WorkbenchExecutionStatus.RUNNING,
-            WorkbenchExecutionStatus.STOPPING,
-            WorkbenchExecutionStatus.AWAITING_USER,
-        }
+        and _is_active_dag_planning_execution(execution)
     ]
     if active_executions:
         raise ApplicationLifecycleConflictError(
-            "当前应用已有活动 Workflow，必须先完成当前会话或使用精确恢复令牌。"
+            "当前应用已有活动 DAG Planning，必须先完成当前会话或使用精确恢复令牌。"
         )
 
     # PendingPlan 的 owner 是唯一可继续 Confirm/Regenerate 的会话；普通新 mutation
@@ -516,6 +509,17 @@ def _assert_application_mutation_admission(
             raise ApplicationLifecycleConflictError(
                 "当前 Pending Build DAG 只能通过对应 Workflow 的 Confirm/Regenerate 继续。"
             )
+
+
+def _is_active_dag_planning_execution(execution: WorkbenchExecution) -> bool:
+    """判断 execution 是否正处于 DAG 生成或 Regenerate 的可占用窗口。"""
+
+    # prepare_build_tasks 是唯一登记 DAG Planning 的工作台节点；API Design、Unit Test、
+    # Review、Acceptance、普通 Build 及其它节点即使 active 也不形成 DAG 跨会话锁。
+    return execution.phase == "prepare_build_tasks" and execution.status in {
+        WorkbenchExecutionStatus.RUNNING,
+        WorkbenchExecutionStatus.STOPPING,
+    }
 
 
 def expand_workbench_execution_resources(

@@ -203,8 +203,8 @@ function buildRuntimeParams(input: {
     setDraftByKey: () => undefined,
     setSelectedSkillsByKey: () => undefined,
     setSessionMessages: () => undefined,
-    updateSessionExecutionStatus: () => undefined,
-    workbenchPhase: 'development'
+    updateSessionExecutionPhase: () => undefined,
+    updateSessionExecutionStatus: () => undefined
   }
 }
 

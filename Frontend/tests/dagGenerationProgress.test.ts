@@ -36,8 +36,9 @@ import {
   resolveApplicationMutationOwnership
 } from '../src/renderer/src/components/AiChatPanel/applicationOwnership'
 import {
-  isSameApplicationExecutionScope,
-  type SessionIdentity
+  createSessionIdentity,
+  isSameDagPlanningScope,
+  type SessionExecutionEntry
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import { maybeRefreshPendingPlanLifecycleAfterGeneration } from '../src/renderer/src/components/AiChatPanel/pendingPlanLifecycleRefresh'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
@@ -50,14 +51,14 @@ import type {
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
 
-/** 构造 Application owner 测试所需的最小活动 execution。 */
+/** 构造 DAG Planning owner 测试所需的最小活动 execution。 */
 function ownershipExecution(overrides: Partial<WorkbenchExecution> = {}): WorkbenchExecution {
   return {
     scope: 'application',
     targetId: 'application',
     threadId: 'thread-a',
     runId: 'run-a',
-    phase: 'development',
+    phase: 'prepare_build_tasks',
     status: 'running',
     startedAt: '2026-09-14T00:00:00Z',
     updatedAt: '2026-09-14T00:00:01Z',
@@ -67,7 +68,7 @@ function ownershipExecution(overrides: Partial<WorkbenchExecution> = {}): Workbe
 
 /** 构造只包含当前 owner projection 的生命周期，测试不依赖磁盘或 React。 */
 function ownershipLifecycle(
-  executions: WorkbenchExecution[],
+  executions: WorkbenchExecution[] = [],
   planningRefresh?: Record<string, unknown>
 ): ApplicationLifecycle {
   return {
@@ -93,6 +94,28 @@ function ownershipSessions(): Array<{
     { id: 'session-a', title: '会话 A', threadId: 'thread-a', workbenchPhase: 'development' },
     { id: 'session-b', title: '会话 B', threadId: 'thread-b', workbenchPhase: 'test' }
   ]
+}
+
+/** 构造前端本地登记的 DAG Planning execution，模拟 AG-UI lifecycle 首帧之前的窗口。 */
+function localDagExecution(
+  status: SessionExecutionEntry['status'] = 'starting',
+  sessionId = 'session-a',
+  threadId = 'thread-a',
+  phase = 'prepare_build_tasks'
+): SessionExecutionEntry {
+  return {
+    identity: createSessionIdentity({
+      workspaceRoot: '/workspace/app',
+      editorMode: 'frontend',
+      sessionId,
+      threadId,
+      workflowId: 'app-owner',
+      workbenchPhase: 'development'
+    }),
+    status,
+    conversation: false,
+    phase
+  }
 }
 
 /** 构造最小 Workflow，覆盖当前 clarification 与历史 DAG 投影的优先级。 */
@@ -1950,29 +1973,16 @@ test('same revision 重连校准可刷新 planningRefresh，但不能覆盖持�
   )
 })
 
-test('Application owner 覆盖 generating、building、unit-testing 的其它会话', () => {
+test('DAG Planning generation 只锁 prepare_build_tasks 的其它会话', () => {
   const sessions = ownershipSessions()
   const ownerStates = [
-    { status: 'running', phase: 'development' },
     { status: 'running', phase: 'prepare_build_tasks' },
-    { status: 'stopping', phase: 'development' },
-    { status: 'awaiting_user', phase: 'unit_test' }
+    { status: 'stopping', phase: 'prepare_build_tasks' }
   ] as const
   for (const { status, phase } of ownerStates) {
     const execution = ownershipExecution({
       status,
-      phase,
-      pendingInteraction:
-        status === 'awaiting_user'
-          ? {
-              id: 'unit-test-interaction',
-              type: 'unit_test_confirmation',
-              basedOnRevision: 1,
-              payload: { mode: 'unit_test_confirmation' },
-              artifactRefs: [],
-              createdAt: '2026-09-14T00:00:00Z'
-            }
-          : undefined
+      phase
     })
     const ownership = resolveApplicationMutationOwnership(ownershipLifecycle([execution]), sessions)
 
@@ -1992,6 +2002,78 @@ test('Application owner 覆盖 generating、building、unit-testing 的其它会
       true
     )
   }
+})
+
+test('API Design、Unit Test、Review、Acceptance 和普通 Build 不形成 DAG lock', () => {
+  const sessions = ownershipSessions()
+  const nonDagStates = [
+    { status: 'awaiting_user', phase: 'api_design_readiness_gate' },
+    { status: 'running', phase: 'unit_test' },
+    { status: 'awaiting_user', phase: 'unit_test' },
+    { status: 'awaiting_user', phase: 'prepare_build_tasks' },
+    { status: 'awaiting_user', phase: 'review_phase_confirmation' },
+    { status: 'awaiting_user', phase: 'acceptance_phase_confirmation' },
+    { status: 'running', phase: 'build' },
+    { status: 'running', phase: 'inspect_workspace' }
+  ] as const
+  for (const { status, phase } of nonDagStates) {
+    const ownership = resolveApplicationMutationOwnership(
+      ownershipLifecycle([
+        ownershipExecution({
+          status,
+          phase,
+          pendingInteraction:
+            status === 'awaiting_user'
+              ? {
+                  id: `interaction-${phase}`,
+                  type: 'unit_test_confirmation',
+                  basedOnRevision: 1,
+                  payload: { mode: phase },
+                  artifactRefs: [],
+                  createdAt: '2026-09-14T00:00:00Z'
+                }
+              : undefined
+        })
+      ]),
+      sessions
+    )
+
+    assert.equal(ownership.state, 'free', phase)
+    assert.equal(
+      applicationMutationReadonlyForSession(ownership, {
+        sessionId: 'session-b',
+        threadId: 'thread-b'
+      }),
+      false,
+      phase
+    )
+  }
+})
+
+test('Regenerate 在旧 Pending 已消费且新 Pending 未生成时仍保持 DAG owner', () => {
+  const sessions = ownershipSessions()
+  const ownership = resolveApplicationMutationOwnership(
+    ownershipLifecycle([], {
+      schemaVersion: 'planning-refresh.v1',
+      source: 'none',
+      status: 'idle',
+      message: '旧 Pending 已消费，正在生成新 Pending。'
+    }),
+    sessions,
+    [localDagExecution('starting')],
+    { applicationId: 'app-owner', workspaceRoot: '/workspace/app' }
+  )
+
+  assert.equal(ownership.state, 'owned')
+  assert.equal(ownership.owner?.sessionId, 'session-a')
+  assert.equal(ownership.actionablePending, false)
+  assert.equal(
+    applicationMutationReadonlyForSession(ownership, {
+      sessionId: 'session-b',
+      threadId: 'thread-b'
+    }),
+    true
+  )
 })
 
 test('actionable Pending 只锁其它会话，不锁 owner 自己的 Confirm/Regenerate/Abandon', () => {
@@ -2028,7 +2110,7 @@ test('actionable Pending 只锁其它会话，不锁 owner 自己的 Confirm/Reg
   )
 })
 
-test('failed、stopped、completed execution 不形成 Application lock', () => {
+test('prepare_build_tasks 的 failed、stopped、completed execution 不形成 DAG lock', () => {
   for (const status of ['failed', 'stopped', 'completed'] as const) {
     const ownership = resolveApplicationMutationOwnership(
       ownershipLifecycle([ownershipExecution({ status })]),
@@ -2048,8 +2130,8 @@ test('failed、stopped、completed execution 不形成 Application lock', () => 
 test('多个无法归并的活动 thread 进入 fail-closed 冲突态', () => {
   const ownership = resolveApplicationMutationOwnership(
     ownershipLifecycle([
-      ownershipExecution({ runId: 'run-a', threadId: 'thread-a' }),
-      ownershipExecution({ runId: 'run-b', threadId: 'thread-b' })
+      ownershipExecution({ runId: 'run-a', threadId: 'thread-a', phase: 'prepare_build_tasks' }),
+      ownershipExecution({ runId: 'run-b', threadId: 'thread-b', phase: 'prepare_build_tasks' })
     ]),
     ownershipSessions()
   )
@@ -2115,19 +2197,40 @@ test('current workflow interaction 优先于历史 DAG confirmation', () => {
   assert.equal(workflowClarification(interactionWorkflow())?.mode, 'build_task_plan_confirmation')
 })
 
-test('本地运行登记跨阶段竞争同一 Application', () => {
-  const base = {
-    key: 'session-a-key',
-    sessionId: 'session-a',
-    threadId: 'thread-a',
-    workflowId: 'app-owner',
-    workbenchPhase: 'development',
-    editorMode: 'frontend',
-    workspaceRoot: '/workspace/app'
-  } as unknown as SessionIdentity
-  const otherPhase = { ...base, key: 'session-a-test', workbenchPhase: 'test' }
-  const otherApplication = { ...base, workflowId: 'app-other' }
+test('本地只有标记为 prepare_build_tasks 的 execution 才形成 DAG lock', () => {
+  const sessions = ownershipSessions()
+  const nonDagLocal = localDagExecution('running', 'session-a', 'thread-a', 'unit_test')
+  const ownership = resolveApplicationMutationOwnership(
+    ownershipLifecycle(),
+    sessions,
+    [nonDagLocal],
+    { applicationId: 'app-owner', workspaceRoot: '/workspace/app' }
+  )
 
-  assert.equal(isSameApplicationExecutionScope(base, otherPhase), true)
-  assert.equal(isSameApplicationExecutionScope(base, otherApplication), false)
+  assert.equal(ownership.state, 'free')
+  assert.equal(
+    applicationMutationReadonlyForSession(ownership, {
+      sessionId: 'session-b',
+      threadId: 'thread-b'
+    }),
+    false
+  )
+})
+
+test('本地 DAG registry 只在同一 workspace/application 范围内互斥', () => {
+  const owner = localDagExecution()
+  const sameApplication = createSessionIdentity({
+    ...owner.identity,
+    sessionId: 'session-b',
+    threadId: 'thread-b'
+  })
+  const otherApplication = createSessionIdentity({
+    ...owner.identity,
+    workflowId: 'app-other',
+    sessionId: 'session-c',
+    threadId: 'thread-c'
+  })
+
+  assert.equal(isSameDagPlanningScope(owner.identity, sameApplication), true)
+  assert.equal(isSameDagPlanningScope(owner.identity, otherApplication), false)
 })

@@ -6,7 +6,11 @@ import type {
 } from '../../typings'
 import type { ChatSessionSummary } from '../../service/chatSessions'
 import type { WorkbenchPhase } from '../../workbenchPhase'
-import type { SessionExecutionEntry, SessionIdentity } from './hooks/sessionRuntime'
+import {
+  isDagPlanningPhase,
+  type SessionExecutionEntry,
+  type SessionIdentity
+} from './hooks/sessionRuntime'
 
 export type ApplicationMutationOwner = {
   sessionId?: string
@@ -15,7 +19,7 @@ export type ApplicationMutationOwner = {
   workbenchPhase?: WorkbenchPhase
   status: string
   runId?: string
-  source: 'active_execution' | 'active_planning_run' | 'pending_plan'
+  source: 'active_dag_execution' | 'active_planning_run' | 'pending_plan'
 }
 
 export type ApplicationMutationOwnership = {
@@ -44,9 +48,12 @@ type ApplicationOwnershipScope = {
   workspaceRoot?: string
 }
 
-const ACTIVE_EXECUTION_STATUSES = new Set<
-  WorkbenchExecutionStatus | SessionExecutionEntry['status']
->(['starting', 'running', 'stopping', 'awaiting_user'])
+const ACTIVE_DAG_EXECUTION_STATUSES = new Set<WorkbenchExecutionStatus>(['running', 'stopping'])
+const ACTIVE_LOCAL_DAG_EXECUTION_STATUSES = new Set<SessionExecutionEntry['status']>([
+  'starting',
+  'running',
+  'stopping'
+])
 
 /** 从当前工作区会话列表中补齐 owner 的可展示身份。 */
 function sessionForOwner(
@@ -62,6 +69,7 @@ function sessionForOwner(
 
 /** 只把当前支持的工作台阶段投影给锁提示，未知阶段不伪造阶段身份。 */
 function workbenchPhaseOf(value: unknown): WorkbenchPhase | undefined {
+  if (value === 'prepare_build_tasks') return 'development'
   return value === 'product' ||
     value === 'planning' ||
     value === 'development' ||
@@ -72,7 +80,7 @@ function workbenchPhaseOf(value: unknown): WorkbenchPhase | undefined {
     : undefined
 }
 
-/** 从生命周期 execution 构造 Application owner 候选，不读取资源锁推断归属。 */
+/** 只从 DAG Planning 生命周期 execution 构造 owner 候选，不读取资源锁推断归属。 */
 function executionCandidate(
   execution: WorkbenchExecution,
   sessions: readonly ApplicationOwnerSession[]
@@ -86,12 +94,12 @@ function executionCandidate(
     workbenchPhase: session?.workbenchPhase || workbenchPhaseOf(execution.phase),
     status: execution.status,
     runId: execution.runId,
-    source: 'active_execution',
+    source: 'active_dag_execution',
     updatedAt: execution.updatedAt || execution.startedAt || ''
   }
 }
 
-/** 从前端本地运行登记构造 owner 候选，使 AG-UI 首帧前也能及时保护其它会话。 */
+/** 从前端本地 DAG Planning 登记构造 owner 候选，使 AG-UI 首帧前也能保护其它会话。 */
 function localExecutionCandidate(
   entry: SessionExecutionEntry,
   sessions: readonly ApplicationOwnerSession[]
@@ -103,7 +111,7 @@ function localExecutionCandidate(
     title: session?.title,
     workbenchPhase: entry.identity.workbenchPhase,
     status: entry.status,
-    source: 'active_execution',
+    source: 'active_dag_execution',
     updatedAt: ''
   }
 }
@@ -131,7 +139,7 @@ function mergeOwnershipCandidates(candidates: OwnershipCandidate[]): OwnershipCa
   return [...merged.values()]
 }
 
-/** 从生命周期和本地登记派生唯一 Application mutation owner，Pending 优先于旧 execution。 */
+/** 从 DAG Planning 状态和本地登记派生 owner，普通 Workbench execution 永不参与。 */
 export function resolveApplicationMutationOwnership(
   lifecycle?: ApplicationLifecycle,
   sessions: readonly ApplicationOwnerSession[] = [],
@@ -168,7 +176,12 @@ export function resolveApplicationMutationOwnership(
 
   const candidates: OwnershipCandidate[] = []
   Object.values(lifecycle?.activeExecutions || {}).forEach((execution) => {
-    if (ACTIVE_EXECUTION_STATUSES.has(execution.status)) {
+    // 只有 prepare_build_tasks 的 running/stopping 代表 DAG generation 或 Regenerate。
+    // awaiting_user 必须由上面的 actionable PendingPlan 单独确认，不能靠 execution 猜测。
+    if (
+      isDagPlanningPhase(execution.phase) &&
+      ACTIVE_DAG_EXECUTION_STATUSES.has(execution.status)
+    ) {
       candidates.push(executionCandidate(execution, sessions))
     }
   })
@@ -177,7 +190,8 @@ export function resolveApplicationMutationOwnership(
       entry.identity.workflowId === (scope?.applicationId || lifecycle?.application.id) &&
       entry.identity.workspaceRoot &&
       (!scope?.workspaceRoot || entry.identity.workspaceRoot === scope.workspaceRoot) &&
-      ACTIVE_EXECUTION_STATUSES.has(entry.status)
+      isDagPlanningPhase(entry.phase) &&
+      ACTIVE_LOCAL_DAG_EXECUTION_STATUSES.has(entry.status)
     ) {
       candidates.push(localExecutionCandidate(entry, sessions))
     }
@@ -206,7 +220,7 @@ export function resolveApplicationMutationOwnership(
 
   const owners = mergeOwnershipCandidates(candidates)
   if (owners.length === 0) return { state: 'free', actionablePending: false }
-  // 活动状态出现多个无法归并的 thread 时全局 fail closed，避免任意一个会话误获写权限。
+  // DAG 活动状态出现多个无法归并的 thread 时 fail closed，避免任意一个会话误获写权限。
   if (owners.some((candidate) => !candidate.threadId) || owners.length > 1) {
     return { state: 'conflicted', actionablePending: false }
   }

@@ -122,16 +122,24 @@ function conversationTargetFromSelection(
   return undefined
 }
 
+/** 从当前 Workflow 读取后端 execution 节点，只有 prepare_build_tasks 可成为 DAG 锁。 */
+function workflowExecutionPhase(workflow?: WorkflowRunPayload): string | undefined {
+  if (!workflow) return undefined
+  const candidates = [workflow.summary.phase, workflow.state?.phase, workflow.result?.phase]
+  return candidates.map((value) => String(value || '').trim()).find(Boolean)
+}
+
 type UseWorkflowConversationParams = {
   acquireSessionExecution: (
     identity: SessionIdentity,
-    conversation: boolean
+    conversation: boolean,
+    phase?: string
   ) => SessionExecutionEntry | undefined
   activeSession?: SessionIdentity
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
-  /** 当前会话是否因另一会话持有 Application mutation ownership 而只读。 */
+  /** 当前会话是否因另一会话持有 DAG Planning mutation ownership 而只读。 */
   applicationMutationReadonly?: boolean
   draft: string
   draftKey: string
@@ -176,7 +184,7 @@ type UseWorkflowConversationParams = {
   setSelectedSkillsByKey: (sessionKey: string, value: ChatMessageSkill[]) => void
   setSessionMessages: (sessionKey: string, value: SetStateAction<AgentChatMessage[]>) => void
   updateSessionExecutionStatus: (sessionKey: string, status: SessionRunStatus) => void
-  workbenchPhase: import('../../../workbenchPhase').WorkbenchPhase
+  updateSessionExecutionPhase: (sessionKey: string, phase?: string) => void
 }
 
 type UseWorkflowConversationResult = {
@@ -630,8 +638,8 @@ export function useWorkflowConversation({
   setDraftByKey,
   setSelectedSkillsByKey,
   setSessionMessages,
-  updateSessionExecutionStatus,
-  workbenchPhase
+  updateSessionExecutionPhase,
+  updateSessionExecutionStatus
 }: UseWorkflowConversationParams): UseWorkflowConversationResult {
   const stopRequestedRef = useRef<Record<string, boolean>>({})
   const notifiedPreviewTargetsRef = useRef<Set<string>>(new Set())
@@ -649,12 +657,9 @@ export function useWorkflowConversation({
   // 记录用户已明确结束的会话，保证自由输入不依赖后端控制请求或生命周期回传时序。
   const [endedPlanSessionKeys, setEndedPlanSessionKeys] = useState<Record<string, boolean>>({})
 
-  const phaseExecution = sessionExecutions.find(
-    (entry) =>
-      entry.identity.workspaceRoot === application.workspaceRoot &&
-      entry.identity.workflowId === application.id &&
-      entry.identity.workbenchPhase === workbenchPhase
-  )
+  const phaseExecution = activeSession
+    ? sessionExecutions.find((entry) => entry.identity.key === activeSession.key)
+    : undefined
   const matchingActiveSession = activeSession
   const activeSessionOwnsExecution = isSessionExecutionOwner(phaseExecution, matchingActiveSession)
   // 持有者始终沿用原有运行、调试和停止控制；局部状态短暂缺失时从中央登记恢复。
@@ -679,7 +684,7 @@ export function useWorkflowConversation({
       ? liveWorkflows[activeRuntimeKey]
       : (liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey)))
     : undefined
-  // Application ownership 已在面板层按 lifecycle + 本地登记派生；hook 只消费该投影，
+  // DAG Planning ownership 已在面板层按 lifecycle + 本地登记派生；hook 只消费该投影，
   // 不再用当前 phase 的局部 execution 反推其它阶段是否可以写入。
   const sessionExecutionLocked = applicationMutationReadonly
   const workspaceBusy = sessionExecutionLocked
@@ -868,7 +873,14 @@ export function useWorkflowConversation({
     }
 
     const identity = options?.sessionIdentity || (await ensureActiveSession())
-    const blockingExecution = acquireSessionExecution(identity, Boolean(options?.conversation))
+    const initialExecutionPhase =
+      String(options?.workflowDebug?.resumeFrom || '').trim() ||
+      workflowExecutionPhase(options?.resumeState)
+    const blockingExecution = acquireSessionExecution(
+      identity,
+      Boolean(options?.conversation),
+      initialExecutionPhase
+    )
     if (blockingExecution) {
       const sameSession = blockingExecution.identity.key === identity.key
       setErrors((current) => ({
@@ -997,6 +1009,15 @@ export function useWorkflowConversation({
     let apiConfirmationPersistFailed = false
     let apiConfirmationPersistPromise: Promise<void> = Promise.resolve()
     let executionStartedNotified = false
+    let executionFinalized = false
+    /** 收口本地运行态；不修改 Backend Pending，避免以 UI 状态猜测生命周期。 */
+    const finalizeSessionExecution = (): void => {
+      if (executionFinalized) return
+      executionFinalized = true
+      releaseSessionExecution(identity.key)
+      setRunStates((current) => omitKey(current, identity.key))
+      stopRequestedRef.current[identity.key] = false
+    }
     const updateAssistantMessage = (
       content: string,
       workflow?: WorkflowRunPayload,
@@ -1026,6 +1047,8 @@ export function useWorkflowConversation({
 
     /** 在 AG-UI 实时回调中立即转交一次成功启动信号，避免被最终运行态更新批处理丢失。 */
     const updateWorkflow = (nextWorkflow: WorkflowRunPayload): void => {
+      const nextPhase = workflowExecutionPhase(nextWorkflow)
+      if (nextPhase) updateSessionExecutionPhase(identity.key, nextPhase)
       if (
         !executionStartedNotified &&
         nextWorkflow.summary.lifecycle?.activeExecutions?.[nextWorkflow.runId]
@@ -1196,6 +1219,8 @@ export function useWorkflowConversation({
         threadId: identity.threadId,
         titleFrom: options?.titleFrom || trimmedMessage
       })
+      // 先清理本地运行态，再读取 Backend 的最终 Pending 投影，避免 refresh 回调观察到旧锁。
+      finalizeSessionExecution()
       await maybeRefreshPendingPlanLifecycleAfterGeneration(
         finalWorkflow,
         {
@@ -1312,9 +1337,7 @@ export function useWorkflowConversation({
       }))
       return false
     } finally {
-      releaseSessionExecution(identity.key)
-      setRunStates((current) => omitKey(current, identity.key))
-      stopRequestedRef.current[identity.key] = false
+      finalizeSessionExecution()
     }
   }
 
