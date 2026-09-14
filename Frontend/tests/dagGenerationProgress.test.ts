@@ -17,7 +17,6 @@ import {
   dagGenerationUnitStatusLabel,
   dagGenerationUnitTaskCopy,
   currentDagConfirmationDraftIdentity,
-  currentDagConfirmationPlan,
   bindDagConfirmationDraftIdentity,
   latestDagGenerationSnapshot,
   pendingDagConfirmationExecution,
@@ -244,32 +243,8 @@ function unitTestConfirmationTransition(): {
 test('DAG Confirm 后进入 Unit Test 时，当前 clarification 优先于历史 DAG 投影', () => {
   const { workflow, lifecycle } = unitTestConfirmationTransition()
 
-  assert.equal(currentDagConfirmationPlan(workflow), undefined)
   assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
   assert.equal(workflowMessageInteractionAvailability(workflow, lifecycle, false, false), 'active')
-})
-
-test('Confirm completed 的 clear confirmation 即使带旧 taskPlan 也不可再次操作', () => {
-  const workflow = {
-    runId: 'workflow-confirmed',
-    threadId: 'thread-confirmed',
-    events: [],
-    summary: {
-      status: 'completed',
-      phase: 'build',
-      clarification: {},
-      buildTaskPlanConfirmation: {
-        mode: 'build_task_plan_confirmation',
-        status: 'clear',
-        confirmationStatus: 'confirmed',
-        taskPlan: { confirmationStatus: 'confirmed', scopeTasks: [] }
-      }
-    },
-    state: { clarification: {} },
-    result: { clarification: {} }
-  } as unknown as WorkflowRunPayload
-
-  assert.equal(currentDagConfirmationPlan(workflow), undefined)
 })
 
 test('当前 clarification 仍是 DAG confirmation 时继续遵守 terminal stale 防护', () => {

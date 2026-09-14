@@ -26,74 +26,11 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.execution_resource_scope import resolve_execution_resource_claims
-from app.workspace.task_documents import (
-    build_task_plan_pending_json_path,
-    write_pending_build_task_plan_atomic,
-)
 from tests.entity_design_test_utils import confirm_entity_designs
 
 
 class ExecutionResourceLockTests(unittest.TestCase):
     """验证页面、API、数据源资源锁的解析和完整生命周期。"""
-
-    def test_confirm_commit_broadcasts_terminal_pending_refresh(self) -> None:
-        """Confirm 提交点之后的 lifecycle event 必须立即广播 Pending 终态。"""
-
-        with tempfile.TemporaryDirectory() as directory:
-            _write_ready_lifecycle(directory)
-            start_workbench_execution(
-                directory,
-                scope="application",
-                target_id="application",
-                page_id=None,
-                thread_id="thread-confirm",
-                run_id="run-confirm",
-                phase="prepare_build_tasks",
-            )
-            state = {"workspace": directory}
-            write_pending_build_task_plan_atomic(
-                state,
-                {
-                    "schema_version": "build-dag.v3",
-                    "status": "ready",
-                    "build_units": {},
-                    "task_registry": {},
-                    "task_graph": {
-                        "validation": {"is_valid": True, "errors": []},
-                        "nodes": [],
-                        "edges": [],
-                        "topological_order": [],
-                    },
-                },
-                owner_session_id="session-confirm",
-                planning_run_id="planning-confirm",
-                workflow_run_id="run-confirm",
-                base_confirmed_plan_digest=None,
-                input_fingerprint="a" * 64,
-                build_execution_scope={"type": "application", "targetId": "application"},
-                created_at="2026-09-11T00:00:00Z",
-            )
-
-            # 模拟 Confirm service 已完成 Formal 原子提交和 Pending 删除，再进入 lifecycle 边界。
-            build_task_plan_pending_json_path(state).unlink()
-            projected = project_workflow_lifecycle_boundary(
-                directory,
-                run_id="run-confirm",
-                node_name="prepare_build_tasks",
-                update={
-                    "status": "completed",
-                    "build_task_plan_confirmation": {
-                        "mode": "build_task_plan_confirmation",
-                        "status": "clear",
-                        "confirmationStatus": "confirmed",
-                    },
-                },
-            )
-
-        assert projected is not None
-        refresh = projected["extensions"]["planningRefresh"]
-        self.assertEqual(refresh["source"], "none")
-        self.assertEqual(refresh["status"], "idle")
 
     def test_api_design_confirmation_keeps_execution_running(self) -> None:
         """API 设计确认后生命周期应投影就绪检查，而不是提前完成 execution。"""

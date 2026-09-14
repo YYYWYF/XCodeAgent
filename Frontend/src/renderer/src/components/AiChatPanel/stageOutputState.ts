@@ -345,47 +345,34 @@ export function currentDagConfirmationErrors(workflow: WorkflowRunPayload | unde
     : []
 }
 
-type DagConfirmationPayload = {
-  taskPlan?: WorkflowBuildTaskPlan
-  targetReview?: WorkflowBuildTargetReview
-  draftIdentity?: unknown
-  errors?: unknown
-}
-
-/** 只接受尚未完成的 DAG 确认，阻止 Confirm 结果中的 clear projection 重新变成操作卡。 */
-function isActionableDagConfirmationPayload(value: unknown): value is DagConfirmationPayload {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const payload = value as Record<string, unknown>
-  if (String(payload.mode || '') !== 'build_task_plan_confirmation') return false
-  const status = String(payload.status || '').trim()
-  const confirmationStatus = String(payload.confirmationStatus || '').trim()
-  return (
-    (!status || status === 'requires_user_input') &&
-    (!confirmationStatus || confirmationStatus === 'pending')
-  )
-}
-
 /** 从 Workflow 当前投影位置解析 DAG 确认载荷，不读取历史阶段快照。 */
-function currentDagConfirmationPayload(
-  workflow: WorkflowRunPayload | undefined
-): DagConfirmationPayload | undefined {
+function currentDagConfirmationPayload(workflow: WorkflowRunPayload | undefined):
+  | {
+      taskPlan?: WorkflowBuildTaskPlan
+      targetReview?: WorkflowBuildTargetReview
+      draftIdentity?: unknown
+      errors?: unknown
+    }
+  | undefined {
   if (!workflow) return undefined
-  const currentClarifications = [
+  return [
     workflow.summary.clarification,
+    workflow.summary.buildTaskPlanConfirmation,
     workflow.state?.clarification,
     workflow.result?.clarification
-  ]
-  const currentClarification = currentClarifications.find(
-    (value) => value && typeof value === 'object' && !Array.isArray(value)
-  )
-  if (currentClarification) {
-    return isActionableDagConfirmationPayload(currentClarification)
-      ? currentClarification
-      : undefined
-  }
-  // 当前 clarification 完全缺失时，保留 PendingPlan recovery 对 buildTaskPlanConfirmation 的兼容回退。
-  const historicalProjection = workflow.summary.buildTaskPlanConfirmation
-  return isActionableDagConfirmationPayload(historicalProjection) ? historicalProjection : undefined
+  ].find(
+    (value) =>
+      value &&
+      typeof value === 'object' &&
+      String((value as { mode?: string }).mode || '') === 'build_task_plan_confirmation'
+  ) as
+    | {
+        taskPlan?: WorkflowBuildTaskPlan
+        targetReview?: WorkflowBuildTargetReview
+        draftIdentity?: unknown
+        errors?: unknown
+      }
+    | undefined
 }
 
 /** 区分 DAG 生成、DAG 确认和其它大阶段，供右侧面板只在大阶段变化时自动跟随。 */
