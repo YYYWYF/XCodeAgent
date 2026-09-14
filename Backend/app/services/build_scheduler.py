@@ -235,17 +235,10 @@ def manually_retryable_failed_task_ids(
         if not task_id or task.get("status") != "failed":
             continue
         result = latest_results.get(task_id, task)
-        category = str(
-            result.get("failure_category")
-            or result.get("error_category")
-            or result.get("category")
-            or "implementation_failure"
-        )
         action = classify_task_result(result).get("action")
-        if action in {"repair", "requires_confirmation"} and category not in {
-            "database_approval_required",
-            "workspace_snapshot_stale",
-        }:
+        # requires_confirmation 表示正式契约、计划、审批或工作区快照需要先处理；
+        # 普通“重试”不能把这些失败直接恢复为 pending，否则模型可能绕过确认后自行猜测。
+        if action == "repair":
             retryable_ids.add(task_id)
     return retryable_ids
 

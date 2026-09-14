@@ -220,11 +220,16 @@ class BuildSchedulerTests(unittest.TestCase):
         self.assertEqual(summary["retryable_failures"], 1)
         self.assertFalse(summary["retry_available"])
 
-    def test_manual_retry_recovers_plan_mismatch_without_approval_only_blockers(self) -> None:
-        """Repair 不可用时允许用户重跑 Contract/实现失败，但不绕过审批或快照门禁。"""
+    def test_manual_retry_only_recovers_repairable_failures(self) -> None:
+        """普通重试只恢复工程修复失败，不绕过契约、计划、审批或快照确认。"""
 
         tasks = [
             {"id": "agent", "status": "failed", "failure_category": "plan_mismatch"},
+            {
+                "id": "implementation",
+                "status": "failed",
+                "failure_category": "implementation_failure",
+            },
             {
                 "id": "approval",
                 "status": "failed",
@@ -245,10 +250,13 @@ class BuildSchedulerTests(unittest.TestCase):
             for task in tasks
         ]
 
-        self.assertEqual(manually_retryable_failed_task_ids(tasks, results), {"agent"})
+        self.assertEqual(
+            manually_retryable_failed_task_ids(tasks, results),
+            {"implementation"},
+        )
         summary = summarize_build_runtime(tasks, results)
         self.assertTrue(summary["recovery_available"])
-        self.assertEqual(summary["manual_retry_task_ids"], ["agent"])
+        self.assertEqual(summary["manual_retry_task_ids"], ["implementation"])
 
     def test_repaired_parent_ignores_stale_failed_result(self) -> None:
         """修复成功关闭父任务后，旧失败结果不应再次触发修复并阻塞下游。"""
