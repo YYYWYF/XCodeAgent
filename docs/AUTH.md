@@ -938,7 +938,7 @@ deleteSubjectAuthorization
 
 #### 步骤 5：工程初始化接入模板权限基础
 
-本步骤的模板交付方案已由 BOOTSTRAP_PLAN.md 的 Backend Workspace Bootstrap 统一实施。Renderer 通过 lifecycle AG-UI 触发，Engine 凭据仅由 Backend 持有。
+本步骤的模板交付方案已由 BOOTSTRAP_PLAN.md 的 Backend Workspace Bootstrap 统一实施。Renderer 通过 lifecycle AG-UI 触发，不直接连接 Template Service。
 
 1. Backend 从已持久化 Application 编译 RequestedConfig，由 Engine 解析有效能力并返回 ZIP 与 TemplateState。
 2. WorkspaceBootstrapService 依次验证归档、物化、事务内 Readiness、独立 Git baseline，完成后写 READY；失败回滚受管产物。

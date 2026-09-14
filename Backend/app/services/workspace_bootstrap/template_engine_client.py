@@ -20,13 +20,12 @@ logger = logging.getLogger("uvicorn.error")
 
 
 class TemplateEngineClient:
-    """封装 Engine token、超时与下载大小限制，避免调用方处理传输细节。"""
+    """封装 Engine 连接、超时与下载大小限制，避免调用方处理传输细节。"""
 
-    def __init__(self, *, base_url: str, token: str, connect_timeout: float, read_timeout: float, max_package_bytes: int, client_factory: Callable[..., httpx.AsyncClient] = httpx.AsyncClient) -> None:
-        """保存冻结的 Engine 连接配置，不在前端或 Workspace 写入凭据。"""
+    def __init__(self, *, base_url: str, connect_timeout: float, read_timeout: float, max_package_bytes: int, client_factory: Callable[..., httpx.AsyncClient] = httpx.AsyncClient) -> None:
+        """保存冻结的 Engine 连接配置，不在前端或 Workspace 写入连接状态。"""
 
         self._base_url = base_url.rstrip("/")
-        self._token = token
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._max_package_bytes = max_package_bytes
@@ -35,8 +34,8 @@ class TemplateEngineClient:
     async def generate(self, requested_config: dict[str, Any], *, temporary_dir: str | Path | None = None) -> TemplatePackageDownload:
         """调用 `/v1/generate` 并分块写临时 ZIP，同时计算 SHA-256。"""
 
-        if not self._base_url or not self._token:
-            raise TemplateEngineError("Template Engine 地址或凭据未配置。")
+        if not self._base_url:
+            raise TemplateEngineError("Template Engine 地址未配置。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
         descriptor, name = tempfile.mkstemp(prefix="xcodeagent-template-", suffix=".zip", dir=directory)
         temporary_path = Path(name)
@@ -45,7 +44,7 @@ class TemplateEngineClient:
         try:
             timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
             async with self._client_factory(timeout=timeout) as client:
-                async with client.stream("POST", f"{self._base_url}/v1/generate", json={"requestedConfig": requested_config}, headers={"Authorization": f"Bearer {self._token}", "Accept": "application/zip"}) as response:
+                async with client.stream("POST", f"{self._base_url}/v1/generate", json={"requestedConfig": requested_config}, headers={"Accept": "application/zip"}) as response:
                     if response.status_code >= 400:
                         raise await _engine_response_error(response, "Template Engine 拒绝请求")
                     content_type = response.headers.get("content-type")
@@ -82,8 +81,8 @@ class TemplateEngineClient:
     ) -> TemplatePackageDownload | None:
         """调用 V2 单次 `/v1/update`；204 返回 `None`，200 时下载 Strategy Package。"""
 
-        if not self._base_url or not self._token:
-            raise TemplateEngineError("Template Engine 地址或凭据未配置。")
+        if not self._base_url:
+            raise TemplateEngineError("Template Engine 地址未配置。")
         if mode not in {"APPLY", "RECONCILE"}:
             raise TemplateEngineError("Template Engine 更新 mode 必须是 APPLY 或 RECONCILE。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
@@ -92,7 +91,7 @@ class TemplateEngineClient:
         digest = hashlib.sha256()
         size = 0
         try:
-            # 仅记录调用边界与非敏感摘要；不得输出 Engine token、完整请求配置或 ZIP 内容。
+            # 仅记录调用边界与非敏感摘要；不得输出完整请求配置或 ZIP 内容。
             logger.info(
                 "模板更新请求已发起：endpoint=%s/v1/update，当前模板版本=%s。",
                 self._base_url,
@@ -109,7 +108,7 @@ class TemplateEngineClient:
                         "requestedConfig": requested_config,
                         "mode": mode,
                     },
-                    headers={"Authorization": f"Bearer {self._token}", "Accept": "application/zip"},
+                    headers={"Accept": "application/zip"},
                 ) as response:
                     logger.info(
                         "模板更新接口已响应：endpoint=%s/v1/update，status=%s。",

@@ -69,7 +69,7 @@ class TemplateReconcileService:
         """下载、校验并先持久化 immutable Package，204 不创建虚假 Attempt。"""
 
         _assert_technical_plan_binding(root, plan_sha)
-        client = TemplateEngineClient(base_url=self._settings.template_engine_base_url, token=self._settings.template_engine_token, connect_timeout=self._settings.template_engine_connect_timeout_seconds, read_timeout=self._settings.template_engine_read_timeout_seconds, max_package_bytes=self._settings.template_package_max_bytes)
+        client = TemplateEngineClient(base_url=self._settings.template_engine_base_url, connect_timeout=self._settings.template_engine_connect_timeout_seconds, read_timeout=self._settings.template_engine_read_timeout_seconds, max_package_bytes=self._settings.template_package_max_bytes)
         download = await client.update(current.model_dump(mode="json"), requested_config, mode=mode)
         if download is None:
             return "NO_CHANGE"

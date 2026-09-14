@@ -1044,7 +1044,7 @@ First Build E2E
 
 - [ ] Electron 不再 clone/选 branch；
 - [ ] Frontend 不知道模板 Git 仓库；
-- [ ] Engine 凭据仅在 Backend；
+- [ ] Template Service 连接仅由 Backend 发起；
 - [ ] templateVariant/main/auth 不再是事实源；
 - [ ] 全量测试通过。
 
@@ -1078,7 +1078,7 @@ First Build E2E
 - [ ] 独立 Git repo；
 - [ ] baseline clean；
 - [ ] `.xcodeagent` 不入 baseline；
-- [ ] Frontend 无 Engine 凭据；
+- [ ] Frontend 不直接连接 Template Service；
 - [ ] Electron 无模板 clone。
 
 ### E2E
@@ -1453,7 +1453,7 @@ Application deletion 只使用 Backend `TemplateMutationCoordinator` 和当前�
 
 ### 退出标准
 
-- [ ] Frontend/Electron 不知道模板仓库 URL、分支或 Engine 凭据；
+- [ ] Frontend/Electron 不知道模板仓库 URL、分支或 Template Service 连接细节；
 - [ ] Backend 不接受 Renderer 模板下载结果；
 - [ ] 新旧 Bootstrap 协议不再并存。
 

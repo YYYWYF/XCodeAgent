@@ -77,7 +77,6 @@ class Settings:
     langsmith_project: str = ""
     langsmith_endpoint: str = ""
     template_engine_base_url: str = ""
-    template_engine_token: str = ""
     template_engine_connect_timeout_seconds: float = 10.0
     template_engine_read_timeout_seconds: float = 120.0
     template_package_max_bytes: int = 104857600
@@ -212,7 +211,6 @@ class Settings:
             template_engine_base_url=os.getenv(
                 "XCODEAGENT_TEMPLATE_ENGINE_BASE_URL", ""
             ).rstrip("/"),
-            template_engine_token=os.getenv("XCODEAGENT_TEMPLATE_ENGINE_TOKEN", ""),
             template_engine_connect_timeout_seconds=float(
                 os.getenv("XCODEAGENT_TEMPLATE_ENGINE_CONNECT_TIMEOUT_SECONDS", "10")
             ),

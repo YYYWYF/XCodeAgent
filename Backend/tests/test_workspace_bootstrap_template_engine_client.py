@@ -13,21 +13,32 @@ from app.services.workspace_bootstrap.template_engine_client import TemplateEngi
 
 
 class TemplateEngineClientTests(unittest.TestCase):
-    """验证客户端流式下载 ZIP，不暴露 Engine 凭据到调用方。"""
+    """验证客户端流式下载 ZIP，且不发送已移除的静态认证头。"""
 
     def test_downloads_zip_and_enforces_size_limit(self) -> None:
         """确认成功下载计算摘要，超限时删除临时文件并失败。"""
 
-        transport = httpx.MockTransport(
-            lambda request: httpx.Response(200, headers={"content-type": "application/zip"}, content=b"zip-bytes")
-        )
+        def respond(request: httpx.Request) -> httpx.Response:
+            """验证首次生成请求只携带当前协议需要的内容协商头。"""
+
+            self.assertEqual("POST", request.method)
+            self.assertEqual("/v1/generate", request.url.path)
+            self.assertEqual("application/zip", request.headers["accept"])
+            self.assertNotIn("authorization", request.headers)
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/zip"},
+                content=b"zip-bytes",
+            )
+
+        transport = httpx.MockTransport(respond)
         factory = lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs)
         with tempfile.TemporaryDirectory() as directory:
-            client = TemplateEngineClient(base_url="http://engine", token="token", connect_timeout=1, read_timeout=1, max_package_bytes=100, client_factory=factory)
+            client = TemplateEngineClient(base_url="http://engine", connect_timeout=1, read_timeout=1, max_package_bytes=100, client_factory=factory)
             result = asyncio.run(client.generate({"capabilities": {}}, temporary_dir=directory))
             self.assertEqual(result.temporary_path.read_bytes(), b"zip-bytes")
             result.temporary_path.unlink()
-            limited = TemplateEngineClient(base_url="http://engine", token="token", connect_timeout=1, read_timeout=1, max_package_bytes=3, client_factory=factory)
+            limited = TemplateEngineClient(base_url="http://engine", connect_timeout=1, read_timeout=1, max_package_bytes=3, client_factory=factory)
             with self.assertRaises(TemplateEngineError):
                 asyncio.run(limited.generate({"capabilities": {}}, temporary_dir=directory))
             self.assertEqual(list(Path(directory).glob("*.zip")), [])
@@ -40,6 +51,8 @@ class TemplateEngineClientTests(unittest.TestCase):
 
             self.assertEqual(request.method, "POST")
             self.assertEqual(request.url.path, "/v1/update")
+            self.assertEqual(request.headers["accept"], "application/zip")
+            self.assertNotIn("authorization", request.headers)
             self.assertEqual(
                 json.loads(request.content),
                 {
@@ -55,7 +68,6 @@ class TemplateEngineClientTests(unittest.TestCase):
         factory = lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs)
         client = TemplateEngineClient(
             base_url="http://engine",
-            token="token",
             connect_timeout=1,
             read_timeout=1,
             max_package_bytes=100,
@@ -83,7 +95,7 @@ class TemplateEngineClientTests(unittest.TestCase):
             lambda _request: httpx.Response(409, json={"code": "RECONCILE_STATE_CHANGE_REQUIRED", "message": "必须使用 APPLY", "details": {"currentRevision": "v1"}, "traceId": "trace-123"})
         )
         factory = lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs)
-        client = TemplateEngineClient(base_url="http://engine", token="token", connect_timeout=1, read_timeout=1, max_package_bytes=100, client_factory=factory)
+        client = TemplateEngineClient(base_url="http://engine", connect_timeout=1, read_timeout=1, max_package_bytes=100, client_factory=factory)
 
         with self.assertRaises(TemplateEngineError) as raised:
             asyncio.run(client.update({"templateRevision": "v1"}, {"capabilities": {}}))

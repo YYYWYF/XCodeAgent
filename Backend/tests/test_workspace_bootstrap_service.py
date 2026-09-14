@@ -25,7 +25,6 @@ def _settings() -> SimpleNamespace:
 
     return SimpleNamespace(
         template_engine_base_url="http://engine.invalid",
-        template_engine_token="test-token",
         template_engine_connect_timeout_seconds=1,
         template_engine_read_timeout_seconds=1,
         template_package_max_bytes=1024 * 1024,
@@ -42,7 +41,15 @@ def _prepare_generating_workspace(workspace: Path) -> None:
     specs.mkdir(parents=True)
     plans.mkdir(parents=True)
     for path, payload in (
-        (workspace / ".xcodeagent/application.json", {"auth": {"enable": False}, "authorization": {"enabled": False}}),
+        (
+            workspace / ".xcodeagent/application.json",
+            {
+                "schemaVersion": 6,
+                "configRevision": 1,
+                "auth": {"enable": False},
+                "authorization": {"enabled": False, "initialAdministratorSubjects": []},
+            },
+        ),
         (specs / "requirement-spec.json", {"confirmation_status": "confirmed"}),
         (plans / "product-plan.json", {"confirmation_status": "confirmed"}),
         (specs / "ui-designs.json", {"confirmation_status": "confirmed"}),
@@ -51,6 +58,7 @@ def _prepare_generating_workspace(workspace: Path) -> None:
             {
                 "confirmation_status": "confirmed",
                 "artifact_type": "technical-plan",
+                "sourceConfigRevision": 1,
                 "authorization_manifest": {"enabled": False},
                 "template_capabilities": {},
             },

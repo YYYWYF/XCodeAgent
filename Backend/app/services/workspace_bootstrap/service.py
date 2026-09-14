@@ -70,7 +70,6 @@ class WorkspaceBootstrapService:
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             client = TemplateEngineClient(
                 base_url=self._settings.template_engine_base_url,
-                token=self._settings.template_engine_token,
                 connect_timeout=self._settings.template_engine_connect_timeout_seconds,
                 read_timeout=self._settings.template_engine_read_timeout_seconds,
                 max_package_bytes=self._settings.template_package_max_bytes,
