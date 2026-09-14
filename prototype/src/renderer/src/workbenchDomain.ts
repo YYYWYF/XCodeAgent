@@ -55,7 +55,13 @@ export type WorkbenchArtifactAccess = {
 
 /** 生成设计文档产物的稳定领域标识。 */
 export function documentArtifactId(
-  key: 'requirement-spec' | 'project-plan' | 'code-review'
+  key:
+    | 'requirement-spec'
+    | 'product-plan'
+    | 'ui-designs'
+    | 'technical-plan'
+    | 'project-plan'
+    | 'code-review'
 ): string {
   return `document:${key}`
 }

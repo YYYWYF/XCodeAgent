@@ -3,6 +3,7 @@ import {
   CheckCircleOutlined,
   CloseOutlined,
   DeleteOutlined,
+  DatabaseOutlined,
   EyeOutlined,
   InfoCircleOutlined,
   LoadingOutlined,
@@ -18,6 +19,7 @@ import type { TestCasePreparationSnapshot } from '../../../../testCasePreparatio
 import { testCasePreparationLabel } from '../../../../testCasePreparation'
 import { cx } from '../../../../utils'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
+import DataSourcesPage from '../../../DataSources/DataSourcesPage'
 import './AuxiliaryDrawer.less'
 
 const { Panel } = Collapse
@@ -27,6 +29,7 @@ export type AuxiliaryDrawerMode =
   | 'conversation-management'
   | 'temporary-conversation'
   | 'test-preparation'
+  | 'data-sources'
 
 /** 任务管理抽屉的内容快照：由工作台在打开抽屉时向聊天面板查询获得。 */
 export type ConversationManagementContent = {
@@ -248,13 +251,14 @@ function ConversationManagement({
           content.conversations.map((conversation) => {
             // 阶段默认任务不渲染删除入口；自建任务常显删除按钮，但当前推进中的任务
             // 在推进权转移前业务上不允许删除——按钮保留并置灰提示，而不是直接隐藏。
-            const showDelete =
-              Boolean(content.onDeleteSession) && Boolean(conversation.deletable)
-            const deleteDisabled =
-              showDelete && conversation.id === content.editingSessionId
+            const showDelete = Boolean(content.onDeleteSession) && Boolean(conversation.deletable)
+            const deleteDisabled = showDelete && conversation.id === content.editingSessionId
             return (
               // 删除按钮绝对定位收进任务条块右缘：所有条块同宽，不再出现行宽不一致。
-              <div className={cx('conversation-row', showDelete && 'has-delete')} key={conversation.id}>
+              <div
+                className={cx('conversation-row', showDelete && 'has-delete')}
+                key={conversation.id}
+              >
                 <button
                   aria-current={conversation.active ? 'true' : undefined}
                   className={cx('conversation-item', conversation.active && 'active')}
@@ -293,11 +297,7 @@ function ConversationManagement({
                       if (deleteDisabled) return
                       confirmDeleteSession(conversation.id, conversation.title)
                     }}
-                    title={
-                      deleteDisabled
-                        ? '当前推进中的任务不可删除，请先转移推进权'
-                        : '删除任务'
-                    }
+                    title={deleteDisabled ? '当前推进中的任务不可删除，请先转移推进权' : '删除任务'}
                     type="button"
                   >
                     <DeleteOutlined />
@@ -353,7 +353,7 @@ function TestPreparation({
       <div className={cx('test-preparation-summary')}>
         <div>
           <strong>{testCasePreparationLabel(snapshot)}</strong>
-          <span>ProductPlan 确认后在后台按业务场景分批生成</span>
+          <span>需求规格说明书确认后在后台按业务场景分批生成</span>
         </div>
         <Progress
           percent={percent}
@@ -399,7 +399,8 @@ const DRAWER_HEADERS: Record<AuxiliaryDrawerMode, { title: string; description: 
     description: '按需拆分上下文，当前阶段仅一条任务可继续推进'
   },
   'temporary-conversation': { title: '临时问答', description: '只读问答，不触发工作流' },
-  'test-preparation': { title: '测试准备', description: '后台异步生成业务测试用例' }
+  'test-preparation': { title: '测试准备', description: '后台异步生成业务测试用例' },
+  'data-sources': { title: '数据来源', description: '管理应用使用的数据库与外部 API 连接' }
 }
 
 /** 在同一辅助槽位中承载任务管理、临时问答和测试准备，禁止抽屉叠加。 */
@@ -452,14 +453,20 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
     })
   }
   return (
-    <section className={cx('auxiliary-drawer')} aria-label={header.title}>
+    <section className={cx('auxiliary-drawer', props.mode)} aria-label={header.title}>
       <header>
         <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
-          <span
-            aria-hidden="true"
-            className={cx('auxiliary-drawer-badge-icon')}
-            style={{ '--auxiliary-drawer-badge-source': `url("${freeChatIcon}")` } as CSSProperties}
-          />
+          {props.mode === 'data-sources' ? (
+            <DatabaseOutlined />
+          ) : (
+            <span
+              aria-hidden="true"
+              className={cx('auxiliary-drawer-badge-icon')}
+              style={
+                { '--auxiliary-drawer-badge-source': `url("${freeChatIcon}")` } as CSSProperties
+              }
+            />
+          )}
         </span>
         <div>
           <strong>{header.title}</strong>
@@ -480,7 +487,9 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
         </button>
       </header>
       <div className={cx('auxiliary-drawer-body')}>
-        {props.mode === 'conversation-management' && props.conversationManagement ? (
+        {props.mode === 'data-sources' ? (
+          <DataSourcesPage />
+        ) : props.mode === 'conversation-management' && props.conversationManagement ? (
           <ConversationManagement
             content={props.conversationManagement}
             onCreateTemporaryConversation={createTemporaryConversation}

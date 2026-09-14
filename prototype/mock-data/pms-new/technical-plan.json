@@ -1,0 +1,74 @@
+{
+  "artifact_type": "technical-plan",
+  "confirmation_status": "pending_user_confirmation",
+  "architecture": {
+    "frontend": "React 18 + TypeScript + Ant Design 4，使用 Vite 构建 PC 管理端单页应用。",
+    "backend": "Spring Boot 3 + MyBatis-Plus 提供 REST JSON API。",
+    "data": "MySQL 8.0 持久化回检记录，状态字典随应用初始化。"
+  },
+  "entities": [
+    {
+      "id": "RecheckRecord",
+      "name": "回检单",
+      "description": "承载项目回检的提交、审核、状态与责任人。",
+      "fields": [
+        { "name": "recheck_no", "label": "回检单号", "type": "text", "required": true },
+        { "name": "project_name", "label": "关联项目", "type": "text", "required": true },
+        { "name": "status", "label": "状态", "type": "enum", "required": true }
+      ],
+      "operations": [
+        { "name": "分页查询", "operation_type": "builtin", "description": "平台内置分页、排序与条件过滤能力" },
+        { "name": "查询回检详情", "operation_type": "builtin", "description": "按回检单号读取对象完整字段" },
+        { "name": "新增", "operation_type": "builtin", "description": "新增一条回检单" },
+        { "name": "更新", "operation_type": "builtin", "description": "更新允许修改的回检字段" },
+        { "name": "删除", "operation_type": "builtin", "description": "按业务规则删除回检单" },
+        { "name": "查询我的回检", "operation_type": "custom", "data_intent": "武汉回检数据库", "description": "按当前用户与状态查询可跟踪的回检单" },
+        { "name": "提交回检", "operation_type": "custom", "data_intent": "本项目数据库", "description": "提交填报内容并进入审核流程" },
+        { "name": "审核回检", "operation_type": "custom", "data_intent": "本地业务规则", "description": "记录结论并推进回检状态" },
+        { "name": "查询审核人信息", "operation_type": "custom", "data_intent": "用户中心", "description": "取得审核人的姓名与所属部门" }
+      ]
+    }
+  ],
+  "api_contracts": [
+    {
+      "id": "rechecks-api",
+      "name": "需求回检",
+      "base_path": "/api/rechecks",
+      "entity_ids": ["RecheckRecord"],
+      "schemas": {
+        "RecheckListResponse": {
+          "type": "object",
+          "fields": ["total", "pageSize", "current", "list"]
+        }
+      },
+      "endpoints": [
+        {
+          "id": "rechecks.listMine",
+          "method": "GET",
+          "path": "/api/rechecks/my",
+          "summary": "分页查询当前用户的回检记录",
+          "response_schema_ref": "RecheckListResponse"
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "pageId": "recheck-introduction",
+      "references": {
+        "endpoint_dependencies": [],
+        "action_implementations": []
+      }
+    },
+    {
+      "pageId": "my-rechecks",
+      "references": {
+        "endpoint_dependencies": ["rechecks.listMine"],
+        "business_object_operations": ["回检单.查询我的回检()"],
+        "action_implementations": [
+          { "actionId": "filter-rechecks", "endpointId": "rechecks.listMine" }
+        ]
+      }
+    }
+  ]
+}

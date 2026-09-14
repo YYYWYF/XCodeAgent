@@ -79,6 +79,24 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
       surface: 'conversation'
     },
     {
+      id: 'entity_read_structure',
+      title: '读取实体结构',
+      detail: '载入技术规划方案确认的字段、内置操作与自定义操作。',
+      surface: 'conversation'
+    },
+    {
+      id: 'entity_confirm_binding',
+      title: '绑定操作的数据实现',
+      detail: '为每个操作绑定数据库表或外部服务能力，AI 自动推导字段映射。',
+      surface: 'conversation'
+    },
+    {
+      id: 'entity_generate_adapter',
+      title: '生成数据适配逻辑',
+      detail: '按确认的绑定生成查询、组合、转换与本地业务规则。',
+      surface: 'conversation'
+    },
+    {
       id: 'choose_execution',
       title: '选择页面执行方式',
       detail: '页面产物：同步任务在当前对话中直接完成；异步/潮汐任务转入对应任务系统后台执行。',
@@ -209,6 +227,12 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
       label: '产物验收',
       nodeIds: ['acceptance_preview', 'acceptance_confirm']
     },
+    /** 实体开发段：读取结构 → 对话区确认绑定 → 生成数据适配逻辑（同步执行，不进任务池）。 */
+    entity: {
+      id: 'entity',
+      label: '实体开发',
+      nodeIds: ['entity_read_structure', 'entity_confirm_binding', 'entity_generate_adapter']
+    },
     /** 调整段：验收后需要修改时回流执行的预留链路。 */
     adjustment: {
       id: 'adjustment',
@@ -219,14 +243,12 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
 }
 
 /**
- * 需求分析工作流的完整底层 DAG。
- * 节点序列对齐真实工程应用规划 Graph 的 requirements 段：上下文汇总 → 业务分析 →
- * 澄清（交互门）→ 生成需求文档 → 确认需求文档（交互门）；澄清回答只补充信息，
- * 文档确认始终是独立门禁，与真实工程的确认中断语义一致。
+ * 设计阶段工作流的完整底层 DAG：需求澄清后生成一份需求规格说明书，
+ * 页面行为事实作为其内部结构随表单确认，再逐页生成和确认 UI 设计稿。
  */
 const REQUIREMENT_ANALYSIS_WORKFLOW: WorkflowDefinition = {
   id: 'requirement_analysis',
-  name: '需求分析工作流',
+  name: '产品设计工作流',
   nodes: [
     {
       id: 'requirements_context',
@@ -254,8 +276,32 @@ const REQUIREMENT_ANALYSIS_WORKFLOW: WorkflowDefinition = {
     },
     {
       id: 'requirements_document',
-      title: '生成需求文档',
-      detail: '合并原始诉求与澄清答案，产出需求文档；Diff 接受后节点完成。',
+      title: '生成需求规格',
+      detail: '合并原始诉求与澄清答案，生成 RequirementSpec。',
+      surface: 'conversation'
+    },
+    {
+      id: 'product_plan',
+      title: '完善页面行为与验收',
+      detail: '将页面、信息项、用户动作、状态与验收标准合并进需求规格说明书。',
+      surface: 'conversation'
+    },
+    {
+      id: 'requirement_document_review',
+      title: '确认需求规格说明书',
+      detail: '通过结构化表单审阅业务范围、页面行为与验收标准，确认后才允许生成 UI 设计稿。',
+      surface: 'conversation'
+    },
+    {
+      id: 'ui_designs',
+      title: '生成 UI 设计稿',
+      detail: '按已确认需求逐页生成可交互设计稿，并校验信息项与用户动作映射。',
+      surface: 'conversation'
+    },
+    {
+      id: 'ui_design_review',
+      title: '确认 UI 设计稿',
+      detail: '逐页选择版式模板，统一生成后一并确认，也可明确跳过。',
       surface: 'conversation'
     }
   ],
@@ -263,7 +309,11 @@ const REQUIREMENT_ANALYSIS_WORKFLOW: WorkflowDefinition = {
     ['requirements_context', 'requirements_analyze'],
     ['requirements_analyze', 'requirements_clarify'],
     ['requirements_clarify', 'requirements_document'],
-    ['requirements_intent', 'requirements_document']
+    ['requirements_intent', 'requirements_document'],
+    ['requirements_document', 'product_plan'],
+    ['product_plan', 'requirement_document_review'],
+    ['requirement_document_review', 'ui_designs'],
+    ['ui_designs', 'ui_design_review']
   ],
   segments: {
     /** 澄清段：冷启动时先呈现的分析与澄清节点（澄清为待输入节点）。 */
@@ -273,68 +323,89 @@ const REQUIREMENT_ANALYSIS_WORKFLOW: WorkflowDefinition = {
       nodeIds: ['requirements_context', 'requirements_analyze', 'requirements_clarify']
     },
     /**
-     * 文档段：Diff 与接受授权都归属「生成需求文档」节点——生成中 running、
-     * 等待接受 requires_user_input、接受后 completed。规划准入门（planning_stage_entry）
-     * 是阶段层逻辑：工作流在此挂起等待确认，但不作为轨迹节点呈现。
+     * 文档段：需求规格通过表单审阅与确认，不产生文档 Diff。规划准入门
+     * （planning_stage_entry）是阶段层逻辑：工作流在此挂起等待确认，但不作为轨迹节点呈现。
      */
     document: {
       id: 'document',
-      label: '需求文档',
-      nodeIds: ['requirements_clarify', 'requirements_document']
+      label: '需求规格说明书',
+      nodeIds: [
+        'requirements_clarify',
+        'requirements_document',
+        'product_plan',
+        'requirement_document_review'
+      ]
     },
     /** 修订段：修改意见提交后先做变更意图分析，再重新生成。 */
     revision: {
       id: 'revision',
       label: '需求修订',
-      nodeIds: ['requirements_intent', 'requirements_document']
+      nodeIds: [
+        'requirements_intent',
+        'requirements_document',
+        'product_plan',
+        'requirement_document_review'
+      ]
+    },
+    /** UI 设计段：产品文档确认后生成并审阅逐页设计稿。 */
+    ui: {
+      id: 'ui',
+      label: 'UI 设计',
+      nodeIds: ['ui_designs', 'ui_design_review']
     }
   }
 }
 
 /**
- * 项目计划工作流的完整底层 DAG。
- * 节点序列对齐真实工程应用规划 Graph 的 product_planning/project_planning 段：
- * Diff 与接受授权归属「生成项目计划」节点（生成中 → 等待接受 → 完成）。
+ * 计划阶段工作流的完整底层 DAG：消费已确认产品事实和 UI 设计，生成 TechnicalPlan，
+ * 开发确认后生成应用模板并进入工作台。
  */
 const PROJECT_PLANNING_WORKFLOW: WorkflowDefinition = {
   id: 'project_planning',
-  name: '项目计划工作流',
+  name: '技术规划工作流',
   nodes: [
     {
       id: 'planning_context',
-      title: '读取已确认需求',
-      detail: '读取已确认的需求文档与业务约束。',
+      title: '读取产品设计基线',
+      detail: '读取已确认的需求规格说明书与 UI Manifest。',
       surface: 'conversation'
     },
     {
       id: 'planning_scope',
-      title: '规划页面与接口',
-      detail: '梳理页面、接口、实体清单与直接依赖关系。',
+      title: '规划实体与 API 契约',
+      detail: '定义技术架构、实体字段与操作、API 契约与数据结构。',
       surface: 'conversation'
     },
     {
       id: 'planning_permissions',
-      title: '映射业务权限规则',
-      detail: '把需求中的角色与权限规则映射到页面和操作清单。',
+      title: '绑定页面技术实现',
+      detail: '把产品动作和 UI 控件映射到 Endpoint、导航和本地交互。',
       surface: 'conversation'
     },
     {
       id: 'planning_document',
-      title: '生成项目计划',
-      detail: '按依赖关系整理开发顺序，产出项目计划文档；Diff 接受后节点完成。',
+      title: '生成技术规划方案',
+      detail: '产出 TechnicalPlan；开发确认后才允许生成工程模板。',
+      surface: 'conversation'
+    },
+    {
+      id: 'template_generation',
+      title: '生成应用模板',
+      detail: '根据已确认的四份正式产物生成项目骨架、路由与基础配置。',
       surface: 'conversation'
     }
   ],
   edges: [
     ['planning_context', 'planning_scope'],
     ['planning_scope', 'planning_permissions'],
-    ['planning_permissions', 'planning_document']
+    ['planning_permissions', 'planning_document'],
+    ['planning_document', 'template_generation']
   ],
   segments: {
     /** 计划段：从读取需求到计划 Diff 接受的完整前台链路。 */
     document: {
       id: 'document',
-      label: '项目计划',
+      label: '技术规划方案',
       nodeIds: ['planning_context', 'planning_scope', 'planning_permissions', 'planning_document']
     },
     /** 修订段：调整意见提交后重新映射规则并再生成。 */
@@ -342,6 +413,12 @@ const PROJECT_PLANNING_WORKFLOW: WorkflowDefinition = {
       id: 'revision',
       label: '计划修订',
       nodeIds: ['planning_permissions', 'planning_document']
+    },
+    /** 模板段：TechnicalPlan 确认后执行确定性模板生成。 */
+    template: {
+      id: 'template',
+      label: '应用模板',
+      nodeIds: ['template_generation']
     }
   }
 }

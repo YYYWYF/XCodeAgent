@@ -13,7 +13,6 @@ import type {
   ChatMessageSkill,
   EditorMode,
   WorkflowBuildExecutionScope,
-  WorkflowDebugOptions,
   WorkflowRunPayload
 } from '../../../typings'
 import type { WorkbenchPhase } from '../../../workbenchPhase'
@@ -42,10 +41,7 @@ import {
   type SessionIdentity,
   type SessionRunStatus
 } from './sessionRuntime'
-import {
-  withWorkflowExecutionStatus,
-  workflowInteractionAvailability
-} from '../planExecutionMode'
+import { withWorkflowExecutionStatus, workflowInteractionAvailability } from '../planExecutionMode'
 
 type SessionRunEntry = {
   identity: SessionIdentity
@@ -120,7 +116,6 @@ type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
   error?: string
   handleSend: (
-    workflowDebug?: WorkflowDebugOptions,
     explicitMessage?: string,
     options?: {
       sessionIdentity?: SessionIdentity
@@ -152,10 +147,15 @@ type UseWorkflowConversationResult = {
     endpointLabel: string
     hasDetailPlan?: boolean
   }) => Promise<boolean>
+  handleStartBusinessObjectWorkflow: (target: {
+    objectId: string
+    objectLabel: string
+  }) => Promise<boolean>
   handleStopGenerating: () => void
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
-    answers: ClarificationAnswers
+    answers: ClarificationAnswers,
+    options?: { quietRun?: boolean }
   ) => Promise<boolean>
   loading: boolean
   editingSessionId?: string
@@ -395,23 +395,11 @@ export function useWorkflowConversation({
       setDraftByKey(draftKey, '')
       setSelectedSkillsByKey(draftKey, [])
     }
-    await persistSession({
-      editorMode: identity.editorMode,
-      messages: nextMessages,
-      sessionId: identity.sessionId,
-      threadId: identity.threadId,
-      apiContractId: identity.apiContractId,
-      endpointId: identity.endpointId,
-      endpointLabel: identity.endpointLabel,
-      pageId: identity.pageId,
-      sessionKind: identity.sessionKind,
-      titleFrom: '应用验收'
-    })
+    await persistSessionFor(persistSession, identity, { messages: nextMessages })
   }
 
   /** 首次发送时创建目标会话；简单模式补充输入优先复用当前会话和 thread。 */
   const handleSend = async (
-    workflowDebug?: WorkflowDebugOptions,
     explicitMessage?: string,
     options?: {
       sessionIdentity?: SessionIdentity
@@ -426,7 +414,7 @@ export function useWorkflowConversation({
       workflowScope?: string
     }
   ): Promise<void> => {
-    const message = (explicitMessage || draft).trim() || workflowDebugMessage(workflowDebug)
+    const message = (explicitMessage || draft).trim()
     if (!message || loading || workspaceBusy) return
     // 验收入口由应用预览承载；进入对话后只把用户意见追加到验收会话。
     // 产物验收入口（artifact_acceptance）属于开发对话的结构化动作，不按应用验收反馈分流，
@@ -501,12 +489,12 @@ export function useWorkflowConversation({
           options.selectedEndpointId !== undefined)
     )
     const targetApiContractId = hasExplicitTarget
-      ? options?.selectedApiContractId ?? ''
+      ? (options?.selectedApiContractId ?? '')
       : selectedApiContractId
     const targetEndpointId = hasExplicitTarget
-      ? options?.selectedEndpointId ?? ''
+      ? (options?.selectedEndpointId ?? '')
       : selectedEndpointId
-    const targetPageId = hasExplicitTarget ? options?.selectedPageId ?? '' : selectedPageId
+    const targetPageId = hasExplicitTarget ? (options?.selectedPageId ?? '') : selectedPageId
     await sendWorkflowMessage(message, {
       clearDraft: true,
       detailTargetType: acceptanceFeedback
@@ -544,12 +532,11 @@ export function useWorkflowConversation({
             : autoStartTesting || testingPhase
               ? '应用测试'
               : message,
-      workflowDebug,
       suppressUserMessage: options?.suppressUserMessage,
       acceptanceFeedback,
       directModification: acceptanceFeedback
         ? false
-        : shouldUseDirectModification(directModificationEnabled, activeWorkflow, workflowDebug),
+        : shouldUseDirectModification(directModificationEnabled, activeWorkflow),
       workflowScope:
         options?.workflowScope ||
         (acceptanceFeedback
@@ -576,17 +563,17 @@ export function useWorkflowConversation({
       selectedFilePaths?: string[]
       resumeState?: WorkflowRunPayload
       titleFrom?: string
-      workflowDebug?: WorkflowDebugOptions
       buildExecutionScope?: WorkflowBuildExecutionScope
       planControlAction?: 'stop' | 'end'
       planControlRunId?: string
       resumeExecutionRunId?: string
       acceptanceFeedback?: boolean
       selectedPageId?: string
+      selectedObjectId?: string
       selectedApiContractId?: string
       selectedEndpointId?: string
       endpointLabel?: string
-      detailTargetType?: 'page' | 'endpoint' | 'application'
+      detailTargetType?: 'page' | 'endpoint' | 'business-object' | 'application'
       sessionIdentity?: SessionIdentity
       pageTemplate?: {
         id?: string
@@ -599,6 +586,8 @@ export function useWorkflowConversation({
       suppressUserMessage?: boolean
       /** 文件 Diff 授权后的续跑复用原 assistant 消息，保持同一页面只有一条研发工作流轨迹。 */
       reuseAssistantMessage?: boolean
+      /** 静默续跑（如右侧保存草稿）：仍走 AG-UI 管道刷新快照，但不把会话标记为运行中，左侧轨迹不转圈。 */
+      quietRun?: boolean
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
@@ -670,16 +659,19 @@ export function useWorkflowConversation({
         : [...previousMessages, userMessage, assistantMessage]
 
     runningSessionsRef.current.set(identity.key, identity)
-    setRunStates((current) => ({
-      ...current,
-      [identity.key]: {
-        identity,
-        status: 'running',
-        directModification: Boolean(options?.directModification)
-      }
-    }))
+    // 静默续跑不把会话标记为运行中：保存草稿之类动作自带按钮 loading，左侧轨迹保持原状不转圈。
+    if (!options?.quietRun) {
+      setRunStates((current) => ({
+        ...current,
+        [identity.key]: {
+          identity,
+          status: 'running',
+          directModification: Boolean(options?.directModification)
+        }
+      }))
+    }
     setErrors((current) => ({ ...current, [identity.key]: undefined }))
-    if (!options?.planControlAction) {
+    if (!options?.planControlAction && !options?.quietRun) {
       setLiveWorkflows((current) => omitKey(current, identity.key))
     }
     stopRequestedRef.current[identity.key] = false
@@ -763,19 +755,7 @@ export function useWorkflowConversation({
     }
 
     try {
-      await persistSession({
-        editorMode: identity.editorMode,
-        messages: nextMessages,
-        sessionId: identity.sessionId,
-        threadId: identity.threadId,
-        apiContractId: identity.apiContractId,
-        endpointId: identity.endpointId,
-        endpointLabel: identity.endpointLabel,
-        pageId: identity.pageId,
-        sessionKind: identity.sessionKind,
-        titleFrom: options?.titleFrom || trimmedMessage,
-        materialize: false
-      })
+      await persistSessionFor(persistSession, identity, { messages: nextMessages, titleFrom: options?.titleFrom || trimmedMessage })
       const {
         answer: rawAnswer,
         workflow,
@@ -789,13 +769,13 @@ export function useWorkflowConversation({
         onApplicationLifecycle: onApplicationLifecycleChange,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
         selectedFilePaths: options?.selectedFilePaths,
-        selectedPageId:
-          options && 'selectedPageId' in options ? options.selectedPageId : identity.pageId,
-        selectedApiContractId: options?.selectedApiContractId,
-        selectedEndpointId: options?.selectedEndpointId,
-        detailTargetType: options?.detailTargetType,
+      selectedPageId:
+        options && 'selectedPageId' in options ? options.selectedPageId : identity.pageId,
+      selectedObjectId: options?.selectedObjectId,
+      selectedApiContractId: options?.selectedApiContractId,
+      selectedEndpointId: options?.selectedEndpointId,
+      detailTargetType: options?.detailTargetType,
         buildExecutionScope: options?.buildExecutionScope,
-        workflowDebug: options?.workflowDebug,
         planControlAction: options?.planControlAction,
         planControlRunId: options?.planControlRunId,
         resumeExecutionRunId: options?.resumeExecutionRunId,
@@ -847,18 +827,7 @@ export function useWorkflowConversation({
         }))
       }
 
-      await persistSession({
-        editorMode: identity.editorMode,
-        messages: completedMessages,
-        sessionId: identity.sessionId,
-        threadId: identity.threadId,
-        apiContractId: identity.apiContractId,
-        endpointId: identity.endpointId,
-        endpointLabel: identity.endpointLabel,
-        pageId: identity.pageId,
-        sessionKind: identity.sessionKind,
-        titleFrom: options?.titleFrom || trimmedMessage
-      })
+      await persistSessionFor(persistSession, identity, { messages: completedMessages })
       publishAiMessage(identity.editorMode, answer)
       return true
     } catch (caughtError) {
@@ -868,18 +837,7 @@ export function useWorkflowConversation({
         if (options?.clearDraft) {
           setSelectedSkillsByKey(identity.key, rollbackSkillSelection(options.selectedSkills))
         }
-        await persistSession({
-          editorMode: identity.editorMode,
-          messages: previousMessages,
-          sessionId: identity.sessionId,
-          threadId: identity.threadId,
-          apiContractId: identity.apiContractId,
-          endpointId: identity.endpointId,
-          endpointLabel: identity.endpointLabel,
-          pageId: identity.pageId,
-          sessionKind: identity.sessionKind,
-          materialize: false
-        })
+        await persistSessionFor(persistSession, identity, { messages: previousMessages })
         return false
       }
       if (stopRequestedRef.current[identity.key] || isAbortedStreamError(caughtError)) {
@@ -897,18 +855,7 @@ export function useWorkflowConversation({
             [identity.key]: stoppedWorkflow
           }))
         }
-        await persistSession({
-          editorMode: identity.editorMode,
-          messages: completedMessages,
-          sessionId: identity.sessionId,
-          threadId: identity.threadId,
-          apiContractId: identity.apiContractId,
-          endpointId: identity.endpointId,
-          endpointLabel: identity.endpointLabel,
-          pageId: identity.pageId,
-          sessionKind: identity.sessionKind,
-          titleFrom: message
-        })
+        await persistSessionFor(persistSession, identity, { messages: completedMessages })
         publishAiMessage(identity.editorMode, answer)
         return false
       }
@@ -919,27 +866,34 @@ export function useWorkflowConversation({
       return false
     } finally {
       runningSessionsRef.current.delete(identity.key)
-      // Workflow 暂停等待用户确认时仍占用唯一编辑席位；完成、失败或停止后才释放。
-      setRunStates((current) =>
-        streamedWorkflow?.summary?.status === 'requires_user_input'
-          ? {
-              ...current,
-              [identity.key]: {
-                identity,
-                status: 'awaiting_user',
-                directModification: Boolean(options?.directModification)
+      // 静默续跑不落运行态：会话保持进入静默前的状态（如等待确认），避免左侧出现运行痕迹。
+      if (!options?.quietRun) {
+        // Workflow 暂停等待用户确认时仍占用唯一编辑席位；完成、失败或停止后才释放。
+        setRunStates((current) =>
+          streamedWorkflow?.summary?.status === 'requires_user_input'
+            ? {
+                ...current,
+                [identity.key]: {
+                  identity,
+                  status: 'awaiting_user',
+                  directModification: Boolean(options?.directModification)
+                }
               }
-            }
-          : omitKey(current, identity.key)
-      )
+            : omitKey(current, identity.key)
+        )
+      }
       stopRequestedRef.current[identity.key] = false
     }
   }
 
-  /** 将结构化确认转换为 Workflow 续跑参数，不把已在卡片确认的答案重复写入对话历史。 */
+  /**
+   * 将结构化确认转换为 Workflow 续跑参数；设计/计划阶段把答案转成用户消息留痕（一轮一来回），
+   * 开发/测试阶段的原地确认与右侧静默续跑仍不写用户消息（由下方 suppressUserMessage 决定）。
+   */
   const handleSubmitClarification = async (
     workflow: WorkflowRunPayload,
-    answers: ClarificationAnswers
+    answers: ClarificationAnswers,
+    options?: { quietRun?: boolean }
   ): Promise<boolean> => {
     const directModification = isDirectModificationWorkflow(workflow)
     if (
@@ -968,9 +922,7 @@ export function useWorkflowConversation({
           // 已提交门禁对应的待输入节点同步落为完成态：跨阶段续跑不会再来更新原消息轨迹，
           // 不落定的话历史回看会一直显示“等待确认”节点。
           processSteps: (message.processSteps || []).map((step) =>
-            step.status === 'requires_user_input'
-              ? { ...step, status: 'completed' as const }
-              : step
+            step.status === 'requires_user_input' ? { ...step, status: 'completed' as const } : step
           ),
           workflow: {
             ...workflow,
@@ -986,25 +938,21 @@ export function useWorkflowConversation({
           }
         }
       })
-      if (nextMessages.some((message, index) => message !== getSessionMessages(activeSession.key)[index])) {
+      if (
+        nextMessages.some(
+          (message, index) => message !== getSessionMessages(activeSession.key)[index]
+        )
+      ) {
         setSessionMessages(activeSession.key, nextMessages)
-        await persistSession({
-          editorMode: activeSession.editorMode,
-          messages: nextMessages,
-          sessionId: activeSession.sessionId,
-          threadId: activeSession.threadId,
-          apiContractId: activeSession.apiContractId,
-          endpointId: activeSession.endpointId,
-          endpointLabel: activeSession.endpointLabel,
-          pageId: activeSession.pageId,
-          sessionKind: activeSession.sessionKind,
-          materialize: true
-        })
+        await persistSessionFor(persistSession, activeSession, { messages: nextMessages })
       }
       // 已提交的确认卡立即退出运行占位；后续续跑会按目标阶段/会话重新写入 running 状态。
       // 不能让历史卡残留的 awaiting_user 把本阶段的新建任务入口永久锁住。
-      setRunStates((current) => omitKey(current, activeSession.key))
-      setLiveWorkflows((current) => omitKey(current, activeSession.key))
+      // 静默续跑（合成恢复工作流不会匹配任何消息）不清理运行占位，保持左侧现状。
+      if (!options?.quietRun) {
+        setRunStates((current) => omitKey(current, activeSession.key))
+        setLiveWorkflows((current) => omitKey(current, activeSession.key))
+      }
     }
     const originalRequest = workflowOriginalRequest(workflow)
     // 开发/审查 Diff 与测试用例确认均复用原工作流消息，避免确认动作凭空拆出新的工作流卡片。
@@ -1019,7 +967,15 @@ export function useWorkflowConversation({
       clarificationMode === 'background_dispatch' &&
       (answers.background_dispatch !== undefined ||
         answers.background_dispatch_endpoint !== undefined)
-    const requirementConfirmation = clarificationMode === 'requirement_spec_confirmation'
+    // 实体绑定确认的续跑复用原工作流消息：确认卡原地落定，适配生成继续演进在同一条轨迹上。
+    const entityBindingContinuation =
+      clarificationMode === 'entity_binding' && answers.entity_binding !== undefined
+    const requirementConfirmation = [
+      'requirement_spec_confirmation',
+      'requirement_document_confirmation',
+      'ui_design_confirmation',
+      'requirement_document_revision'
+    ].includes(String(clarificationMode || ''))
     const requirementNeedsRevision =
       requirementConfirmation &&
       answers.confirm_requirement_spec !== undefined &&
@@ -1032,9 +988,7 @@ export function useWorkflowConversation({
       Boolean(designPhase) &&
       !requirementNeedsRevision &&
       !requirementConfirmation &&
-      (planningStageEntry ||
-        Boolean(planningPhase) ||
-        activeSession?.sessionKind === 'planning')
+      (planningStageEntry || Boolean(planningPhase) || activeSession?.sessionKind === 'planning')
     const sessionIdentity = designPhase
       ? requirementNeedsRevision || requirementConfirmation
         ? await ensureAnalysisSession()
@@ -1057,18 +1011,28 @@ export function useWorkflowConversation({
       resumeState: workflow,
       selectedPageId: workflowSelectedPageId(workflow) || activeSession?.pageId || selectedPageId,
       buildExecutionScope: workflowEndpointExecutionScope(workflow),
-      titleFrom: planningStageEntry || planningDesignContinuation ? '项目计划' : originalRequest || '需求分析',
+      titleFrom:
+        planningStageEntry || planningDesignContinuation
+          ? '技术规划方案'
+          : originalRequest || '产品设计',
       sessionIdentity,
       directModification,
-      suppressUserMessage: true,
+      // 设计/计划阶段是“一轮一来回”的对话形态：用户在卡片上的确认/澄清回答先落一条用户消息
+      // 留痕，再追加新的 assistant 消息；右侧静默续跑（保存草稿、逐页确认）与开发/测试阶段的
+      // 原地确认（Diff 接受、验收、执行方式选择）仍不产生用户消息，避免打断进行中的工作流。
+      suppressUserMessage: Boolean(options?.quietRun) || !designPhase,
+      // 右侧保存草稿等静默续跑：不把会话置为运行中，左侧轨迹与确认卡保持原状。
+      quietRun: options?.quietRun,
+      // 开发/测试阶段确认继续复用原工作流消息；右侧保存草稿、逐页确认等静默续跑
+      // 也只刷新当前卡片快照，不新增对话轮次。其余设计/规划续跑对齐原工程对话逻辑：
+      // 一轮确认追加一条新 assistant 消息，上一轮卡片留在原消息里只读回看。
       reuseAssistantMessage:
         fileAcceptanceContinuation ||
         testingResume ||
         acceptanceContinuation ||
         backgroundDispatchContinuation ||
-        // 需求分析/项目计划阶段同会话续跑复用原工作流消息：整阶段保持一条连续工作流轨迹。
-        // 跨阶段续跑（规划准入门 → 计划会话）目标会话尚无 assistant 消息，复用自然落空、另起新轨迹。
-        (Boolean(designPhase) && !directModification),
+        entityBindingContinuation ||
+        Boolean(options?.quietRun),
       // 需求分析/项目计划阶段确认必须继续走对应的工作台规划剧本，否则会被默认路由到
       // replayWorkbench，导致提交确认后不推进规划节点。
       workflowScope:
@@ -1170,6 +1134,27 @@ export function useWorkflowConversation({
     )
   }
 
+  /** 以用户选定的实体作为开发工作流起点：绑定确认、适配生成都演进在同一条工作流轨迹上。 */
+  const handleStartBusinessObjectWorkflow = async (target: {
+    objectId: string
+    objectLabel: string
+  }): Promise<boolean> => {
+    if (!target.objectId || loading || workspaceBusy) return false
+    // 开发阶段复用当前打开的开发对话；实体身份仅通过本轮 Workflow 参数传递。
+    const identity =
+      activeSession?.sessionKind === 'development'
+        ? activeSession
+        : await ensureDevelopmentSession()
+    return sendWorkflowMessage(`开始开发实体：${target.objectLabel}`, {
+      selectedObjectId: target.objectId,
+      detailTargetType: 'business-object',
+      sessionIdentity: identity,
+      titleFrom: `开发实体${target.objectLabel}`,
+      // 实体没有模板选择卡，直接追加新的 assistant 消息承载整条工作流轨迹。
+      suppressUserMessage: true
+    })
+  }
+
   const handleStopGenerating = (): void => {
     const runningIdentity = activeRun?.identity
     if (!runningIdentity || !loading || stopping) return
@@ -1193,7 +1178,7 @@ export function useWorkflowConversation({
     agUiSession.stop()
   }
 
-    // 需求分析/项目计划阶段：新应用或阶段回退后，默认 Agent 主动开启当前阶段对话。
+  // 设计/计划阶段：新应用或阶段回退后，默认 Agent 主动开启当前阶段对话。
   // 注意：ref 只在 timer 真正 fire（已发起发送）后置位，而非 effect body 里提前置位——
   // 否则 React.StrictMode 双调（mount→cleanup 清 timer→重 mount）会因 ref 已 true 而不再
   // 调度，handleSend 被 cleanup 吞掉，表现为“有时自动开始、有时不开始”。
@@ -1204,7 +1189,7 @@ export function useWorkflowConversation({
     // 稍等让会话列表/运行态稳定，避免新建会话与发送竞态导致内容不进展示。
     const timer = window.setTimeout(() => {
       autoStartDesignRef.current = true // 只在真正发起后置位，cleanup 清 timer 时保持可重试
-      void handleSend(undefined, planningPhase ? '开始项目计划' : '开始需求分析')
+      void handleSend(planningPhase ? '开始技术规划' : '开始产品设计')
     }, 600)
     return () => window.clearTimeout(timer)
   }, [autoStartDesign, loading, planningPhase, workspaceBusy])
@@ -1219,7 +1204,7 @@ export function useWorkflowConversation({
     if (loading || workspaceBusy) return
     const timer = window.setTimeout(() => {
       autoStartTestingRef.current = true
-      void handleSend(undefined, '开始应用测试', { suppressUserMessage: true })
+      void handleSend('开始应用测试', { suppressUserMessage: true })
     }, 0)
     return () => window.clearTimeout(timer)
   }, [autoStartTesting, loading, workspaceBusy])
@@ -1236,7 +1221,7 @@ export function useWorkflowConversation({
     if (loading || workspaceBusy) return
     const timer = window.setTimeout(() => {
       autoStartReviewRef.current = true
-      void handleSend(undefined, '开始代码审查', { suppressUserMessage: true })
+      void handleSend('开始代码审查', { suppressUserMessage: true })
     }, 0)
     return () => window.clearTimeout(timer)
   }, [autoStartReview, loading, workspaceBusy])
@@ -1247,6 +1232,7 @@ export function useWorkflowConversation({
     error,
     handleSend,
     handleStartEndpointDetailConfirmation,
+    handleStartBusinessObjectWorkflow,
     handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,
@@ -1295,11 +1281,6 @@ function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
   return next
 }
 
-function workflowDebugMessage(workflowDebug?: WorkflowDebugOptions): string {
-  if (!workflowDebug?.enabled || !workflowDebug.resumeFrom) return ''
-  return `从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`
-}
-
 function isAbortedStreamError(error: unknown): boolean {
   const inspected = new Set<unknown>()
   let current = error
@@ -1316,4 +1297,29 @@ function isAbortedStreamError(error: unknown): boolean {
   }
 
   return false
+}
+
+
+/**
+ * 会话持久化的统一身份展开：persistSession 的身份字段全部来自 SessionIdentity，
+ * 各调用点只差异化消息、标题与物化标记，集中一处避免字段清单漂移。
+ */
+async function persistSessionFor(
+  persist: (input: PersistSessionInput) => Promise<void>,
+  identity: SessionIdentity,
+  input: { messages: PersistSessionInput['messages']; titleFrom?: string; materialize?: boolean }
+): Promise<void> {
+  await persist({
+    editorMode: identity.editorMode,
+    sessionId: identity.sessionId,
+    threadId: identity.threadId,
+    apiContractId: identity.apiContractId,
+    endpointId: identity.endpointId,
+    endpointLabel: identity.endpointLabel,
+    pageId: identity.pageId,
+    sessionKind: identity.sessionKind,
+    messages: input.messages,
+    ...(input.titleFrom !== undefined ? { titleFrom: input.titleFrom } : {}),
+    ...(input.materialize !== undefined ? { materialize: input.materialize } : {})
+  })
 }

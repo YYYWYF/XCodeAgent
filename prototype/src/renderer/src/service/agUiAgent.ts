@@ -9,7 +9,6 @@ import type {
   WorkflowClarificationAnswers,
   WorkflowConfirmationArtifact,
   WorkflowBuildExecutionScope,
-  WorkflowDebugOptions,
   WorkflowEvent,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
@@ -31,11 +30,11 @@ export type SendWorkflowMessageOptions = {
   selectedSkillNames?: string[]
   selectedFilePaths?: string[]
   selectedPageId?: string
+  selectedObjectId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
-  detailTargetType?: 'page' | 'endpoint' | 'application'
+  detailTargetType?: 'page' | 'endpoint' | 'business-object' | 'application'
   buildExecutionScope?: WorkflowBuildExecutionScope
-  workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   workflowScope?: string
   onContent?: (content: string) => void
@@ -59,7 +58,7 @@ export type SendWorkflowMessageOptions = {
 }
 
 /** 构建 `/workflow/run` 的 AG-UI forwardedProps，集中维护技能、控制和恢复字段。 */
-export function buildWorkflowForwardedProps(
+function buildWorkflowForwardedProps(
   options: SendWorkflowMessageOptions
 ): Record<string, unknown> {
   return {
@@ -74,16 +73,11 @@ export function buildWorkflowForwardedProps(
     selectedSkillNames: options.selectedSkillNames,
     selectedFilePaths: options.selectedFilePaths,
     selectedPageId: options.selectedPageId,
+    selectedObjectId: options.selectedObjectId,
     selectedApiContractId: options.selectedApiContractId,
     selectedEndpointId: options.selectedEndpointId,
     detailTargetType: options.detailTargetType,
-    workflowDebug: options.workflowDebug,
-    resumeFrom: options.workflowDebug?.enabled ? options.workflowDebug.resumeFrom : undefined,
-    buildExecutionScope: options.buildExecutionScope || (
-      options.workflowDebug?.enabled
-        ? options.workflowDebug.buildExecutionScope
-        : undefined
-    ),
+    buildExecutionScope: options.buildExecutionScope,
     resumeState: options.resumeState,
     workflowScope: options.workflowScope,
     planControlAction: options.planControlAction,
@@ -100,7 +94,7 @@ export function buildWorkflowForwardedProps(
   }
 }
 
-export type AgUiChatResult = {
+type AgUiChatResult = {
   threadId: string
   runId: string
   answer: string
@@ -257,7 +251,7 @@ export type ProcessStepRecord = {
 
 /** 返回主工作流的 AG-UI 地址。 */
 export function getWorkflowUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.aiStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/workflow/run`
     : '/api/agent/workflow/run'
@@ -265,7 +259,7 @@ export function getWorkflowUrl(): string {
 
 /** 返回独立快速修改 Graph 的 AG-UI 地址。 */
 export function getDirectModificationUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.aiStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/direct-modification/run`
     : '/api/agent/direct-modification/run'
@@ -280,6 +274,7 @@ export class AgUiChatSession {
   private activeRunId?: string
   private activeRunCompletion?: Promise<void>
   private resolveActiveRunCompletion?: () => void
+  private activeMockAbortController?: AbortController
 
   /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
   constructor(threadId = randomUUID(), url = getWorkflowUrl()) {
@@ -289,6 +284,11 @@ export class AgUiChatSession {
 
   /** 请求后端取消当前运行；确认失败时才本地中止，并等待取消请求完成。 */
   async stop(): Promise<void> {
+    if (this.activeMockAbortController) {
+      this.activeMockAbortController.abort()
+      await this.activeRunCompletion
+      return
+    }
     const runId = this.activeRunId
     const activeAgent = this.activeAgent
     const activeRunCompletion = this.activeRunCompletion
@@ -304,52 +304,79 @@ export class AgUiChatSession {
   /** 使用请求级 HttpAgent 发送当前消息，避免把本地会话历史和旧状态重复传输。 */
   async sendMessage(message: string, options: SendWorkflowMessageOptions): Promise<AgUiChatResult> {
     // 浏览器 mock 环境（无 Electron）直接回放剧本，不经真实后端。
-    if (!window.xcodeAgent?.isElectron) {
-      // 剧本需要原始消息文本来区分“自动开启阶段”与“用户输入的迭代需求”等真实输入。
-      const scriptOptions: SendWorkflowMessageOptions = { ...options, message }
-      const [
-        { replayPlanning, replayDesignPhase },
-        { replayApplicationAcceptance, replayApplicationTesting, replayWorkbench, replayArtifactAcceptance, replayCodeReview }
-      ] = await Promise.all([
-        import('../mock/scripts/planning'),
-        import('../mock/scripts/workbench')
-      ])
-      let lastContent = ''
-      const trackContent = (content: string): void => {
-        if (content) lastContent = content
-        options.onContent?.(content)
-      }
-      const callbacks = {
-        onContent: trackContent,
-        onWorkflow: options.onWorkflow,
-        onApplicationLifecycle: options.onApplicationLifecycle,
-        onProcessSteps: options.onProcessSteps
-      }
-      const result =
-        scriptOptions.workflowScope === 'application_planning'
-          ? await replayPlanning(this.threadId, scriptOptions, callbacks)
-          : scriptOptions.workflowScope === 'application_analysis' ||
-              scriptOptions.workflowScope === 'application_workbench_planning'
-            ? await replayDesignPhase(this.threadId, scriptOptions, callbacks)
-            : scriptOptions.workflowScope === 'application_acceptance' ||
-                scriptOptions.workflowScope === 'application_acceptance_feedback'
-              ? await replayApplicationAcceptance(this.threadId, scriptOptions, callbacks)
-              : scriptOptions.workflowScope === 'application_testing'
-                ? await replayApplicationTesting(this.threadId, scriptOptions, callbacks)
-            : scriptOptions.workflowScope === 'application_review'
-              ? await replayCodeReview(this.threadId, scriptOptions, callbacks)
-              : scriptOptions.workflowScope === 'artifact_acceptance'
-                ? await replayArtifactAcceptance(this.threadId, scriptOptions, callbacks)
-                : await replayWorkbench(this.threadId, scriptOptions, callbacks)
-      return {
-        threadId: this.threadId,
-        runId: result?.runId || 'mock-run',
-        // 没有正式回复时保持正文为空，由节点过程或交互卡承载当前状态，
-        // 不再用“已推进到下一阶段”这类内部流程兜底文案污染对话。
-        answer: lastContent || '',
-        toolCalls: [],
-        processSteps: [],
-        ...(result ? { workflow: result as never } : {})
+    if (!window.aiStudio?.isElectron) {
+      const controller = new AbortController()
+      const runId = randomUUID()
+      this.activeRunId = runId
+      this.activeMockAbortController = controller
+      const mockRun = (async (): Promise<{ result?: WorkflowRunPayload; answer: string }> => {
+        // 剧本需要原始消息文本来区分“自动开启阶段”与“用户输入的迭代需求”等真实输入。
+        const scriptOptions: SendWorkflowMessageOptions = { ...options, message }
+        const [
+          { replayPlanning, replayDesignPhase },
+          { replayApplicationAcceptance, replayApplicationTesting, replayWorkbench, replayArtifactAcceptance, replayCodeReview }
+        ] = await Promise.all([
+          import('../mock/scripts/planning'),
+          import('../mock/scripts/workbench')
+        ])
+        let lastContent = ''
+        const trackContent = (content: string): void => {
+          if (content) lastContent = content
+          options.onContent?.(content)
+        }
+        const callbacks = {
+          onContent: trackContent,
+          onWorkflow: options.onWorkflow,
+          onApplicationLifecycle: options.onApplicationLifecycle,
+          onProcessSteps: options.onProcessSteps,
+          signal: controller.signal
+        }
+        const result =
+          scriptOptions.workflowScope === 'application_planning'
+            ? await replayPlanning(this.threadId, scriptOptions, callbacks)
+            : scriptOptions.workflowScope === 'application_analysis' ||
+                scriptOptions.workflowScope === 'application_workbench_planning'
+              ? await replayDesignPhase(this.threadId, scriptOptions, callbacks)
+              : scriptOptions.workflowScope === 'application_acceptance' ||
+                  scriptOptions.workflowScope === 'application_acceptance_feedback'
+                ? await replayApplicationAcceptance(this.threadId, scriptOptions, callbacks)
+                : scriptOptions.workflowScope === 'application_testing'
+                  ? await replayApplicationTesting(this.threadId, scriptOptions, callbacks)
+              : scriptOptions.workflowScope === 'application_review'
+                ? await replayCodeReview(this.threadId, scriptOptions, callbacks)
+                : scriptOptions.workflowScope === 'artifact_acceptance'
+                  ? await replayArtifactAcceptance(this.threadId, scriptOptions, callbacks)
+                  : await replayWorkbench(this.threadId, scriptOptions, callbacks)
+        return { result, answer: lastContent }
+      })()
+      this.activeRunCompletion = mockRun.then(() => undefined, () => undefined)
+      try {
+        const { result, answer } = await mockRun
+        return {
+          threadId: this.threadId,
+          runId: result?.runId || runId,
+          answer: answer || '',
+          toolCalls: [],
+          processSteps: [],
+          ...(result ? { workflow: result as never } : {})
+        }
+      } catch (error) {
+        if (controller.signal.aborted && options.application) {
+          const { recordPlanningFailure } = await import('../mock/scripts/planning')
+          const failure = recordPlanningFailure(options.application, this.threadId, '用户已停止当前生成。', true, {
+            onWorkflow: options.onWorkflow,
+            onApplicationLifecycle: options.onApplicationLifecycle,
+            onProcessSteps: options.onProcessSteps
+          })
+          options.onWorkflow?.(failure)
+        }
+        throw error
+      } finally {
+        if (this.activeMockAbortController === controller) {
+          this.activeMockAbortController = undefined
+          this.activeRunId = undefined
+          this.activeRunCompletion = undefined
+        }
       }
     }
 
@@ -403,7 +430,7 @@ export class AgUiChatSession {
         }
       },
       onStateSnapshotEvent: ({ event }) => {
-        workflow = readWorkflowFromState(event.snapshot) ?? workflow
+        workflow = readWorkflowContainer(event.snapshot) ?? workflow
         if (workflow) {
           emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
           options.onWorkflow?.(workflow)
@@ -461,7 +488,7 @@ export class AgUiChatSession {
     const assistantMessage = result.newMessages.find(
       (newMessage) => newMessage.role === 'assistant'
     )
-    workflow = readResultWorkflow(result.result) ?? workflow
+    workflow = readWorkflowContainer(result.result) ?? workflow
     if (workflow) emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
     const answer =
       messageContentToText(assistantMessage?.content).trim() ||
@@ -773,15 +800,10 @@ function messageContentToText(content: Message['content'] | undefined): string {
   return ''
 }
 
-function readWorkflowFromState(snapshot: unknown): WorkflowRunPayload | undefined {
-  if (!snapshot || typeof snapshot !== 'object') return undefined
-  const value = snapshot as { workflow?: unknown; directModification?: unknown }
-  return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.directModification)
-}
-
-function readResultWorkflow(result: unknown): WorkflowRunPayload | undefined {
-  if (!result || typeof result !== 'object') return undefined
-  const value = result as { workflow?: unknown; directModification?: unknown }
+/** 从 StateSnapshot/Result 两种载荷里读工作流快照：字段形状一致，共用同一读取器。 */
+function readWorkflowContainer(container: unknown): WorkflowRunPayload | undefined {
+  if (!container || typeof container !== 'object') return undefined
+  const value = container as { workflow?: unknown; directModification?: unknown }
   return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.directModification)
 }
 
@@ -820,7 +842,7 @@ function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {
 }
 
 /** 校验独立 lifecycle 事件的最小稳定字段，忽略未知或损坏的实时投影。 */
-export function readApplicationLifecycle(value: unknown): ApplicationLifecycle | undefined {
+function readApplicationLifecycle(value: unknown): ApplicationLifecycle | undefined {
   if (!value || typeof value !== 'object') return undefined
   const lifecycle = value as Partial<ApplicationLifecycle>
   if (

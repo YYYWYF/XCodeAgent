@@ -14,6 +14,9 @@ import { WORKBENCH_PAGES as newPages } from './pms-new/workbench-pages'
 import { mockChatSessions as newSessions } from './pms-new/chat-sessions'
 import newRequirementSpec from './pms-new/requirement-spec.json'
 import newProjectPlan from './pms-new/project-plan.json'
+import newProductPlan from './pms-new/product-plan.json'
+import newUiDesigns from './pms-new/ui-designs.json'
+import newTechnicalPlan from './pms-new/technical-plan.json'
 import newClarification from './pms-new/clarification-questions.json'
 import newBuildTaskPlan from './pms-new/build-task-plan.json'
 import newPageDesigns from './pms-new/page-designs.json'
@@ -39,6 +42,9 @@ export type AppScenario = {
   workbenchPages: Record<string, { label: string; path: string; purpose: string }>
   requirementSpec: Record<string, unknown>
   projectPlan: Record<string, unknown>
+  productPlan: Record<string, unknown>
+  uiDesigns: Record<string, unknown>
+  technicalPlan: Record<string, unknown>
   clarificationQuestions: Array<Record<string, unknown>>
   buildTaskPlan: Record<string, unknown>
   pageDesigns: Record<string, unknown>
@@ -55,6 +61,9 @@ function scenario(
   workbenchPages: AppScenario['workbenchPages'],
   requirementSpec: Record<string, unknown>,
   projectPlan: Record<string, unknown>,
+  productPlan: Record<string, unknown>,
+  uiDesigns: Record<string, unknown>,
+  technicalPlan: Record<string, unknown>,
   clarificationQuestions: Array<Record<string, unknown>>,
   buildTaskPlan: Record<string, unknown>,
   pageDesigns: Record<string, unknown>,
@@ -62,11 +71,45 @@ function scenario(
   endpointDesigns: Record<string, unknown>,
   chatSessions: (workspaceRoot: string, editorMode: EditorMode) => unknown[]
 ): AppScenario {
-  return { app, workspaceRoot, lifecycle, planningArtifacts, workbenchPages, requirementSpec, projectPlan, clarificationQuestions, buildTaskPlan, pageDesigns, designedPageDesigns, endpointDesigns, chatSessions }
+  return {
+    app,
+    workspaceRoot,
+    lifecycle,
+    planningArtifacts,
+    workbenchPages,
+    requirementSpec,
+    projectPlan,
+    productPlan,
+    uiDesigns,
+    technicalPlan,
+    clarificationQuestions,
+    buildTaskPlan,
+    pageDesigns,
+    designedPageDesigns,
+    endpointDesigns,
+    chatSessions
+  }
 }
 
 // 唯一场景：新建应用（需求回检单模块）。
-const NEW_SCENARIO: AppScenario = scenario(pmsNewApplication, NEW_ROOT, pmsNewLifecycle, newArtifacts as PlanningArtifactsShape, newPages, newRequirementSpec as Record<string, unknown>, newProjectPlan as Record<string, unknown>, newClarification as Array<Record<string, unknown>>, newBuildTaskPlan as Record<string, unknown>, newPageDesigns as Record<string, unknown>, newDesignedPageDesigns as Record<string, unknown>, newEndpointDesigns as Record<string, unknown>, newSessions)
+const NEW_SCENARIO: AppScenario = scenario(
+  pmsNewApplication,
+  NEW_ROOT,
+  pmsNewLifecycle,
+  newArtifacts as PlanningArtifactsShape,
+  newPages,
+  newRequirementSpec as Record<string, unknown>,
+  newProjectPlan as Record<string, unknown>,
+  newProductPlan as Record<string, unknown>,
+  newUiDesigns as Record<string, unknown>,
+  newTechnicalPlan as Record<string, unknown>,
+  newClarification as Array<Record<string, unknown>>,
+  newBuildTaskPlan as Record<string, unknown>,
+  newPageDesigns as Record<string, unknown>,
+  newDesignedPageDesigns as Record<string, unknown>,
+  newEndpointDesigns as Record<string, unknown>,
+  newSessions
+)
 
 /** 最近项目列表：单一新建旅程场景。 */
 export const mockApplications: ApplicationConfig[] = [pmsNewApplication]

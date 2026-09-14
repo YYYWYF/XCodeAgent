@@ -81,6 +81,11 @@
     border-color: rgba(107, 60, 240, 0.34);
     outline: none;
   }
+
+  &.@{class-prefix}-selected {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
 }
 
 .@{class-prefix}-session-sidebar-header {
@@ -1417,6 +1422,61 @@
   }
 }
 
+.@{class-prefix}-artifact-business-object {
+  position: relative;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+
+.@{class-prefix}-artifact-branch-row.@{class-prefix}-selected {
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+}
+
+// 对象行 = 行按钮 + 行尾省略号（更多操作）。省略号是行内兄弟节点而非浮层，
+// 悬停时替换状态圆点的位置，不再盖在行上方。
+.@{class-prefix}-artifact-object-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+
+  .@{class-prefix}-artifact-branch-row {
+    flex: 1;
+    min-width: 0;
+    padding-right: 4px;
+  }
+}
+
+.@{class-prefix}-artifact-object-more {
+  display: none;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  padding: 0;
+  color: var(--wb-text-tertiary);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+
+  &:hover {
+    color: var(--wb-text);
+    background: var(--wb-surface-hover);
+  }
+
+  .@{class-prefix}-artifact-business-object:hover & {
+    display: inline-flex;
+  }
+}
+
+.@{class-prefix}-artifact-business-object:hover .@{class-prefix}-artifact-status-dot {
+  opacity: 0;
+}
+
 .@{class-prefix}-artifact-root-row {
   height: 36px;
   padding: 0 8px;
@@ -1631,9 +1691,7 @@
       cursor: default;
     }
   }
-
 }
-
 
 /* Stage 2：阶段感知大纲——需求文档区、阶段标签 */
 .@{class-prefix}-outline-phase-tag {

@@ -1,7 +1,7 @@
 {
-  "name": "xcodeagent-prototype",
+  "name": "aistudio-prototype",
   "version": "1.0.0",
-  "description": "XcodeAgent(生成低开应用) · 浏览器原型：UI 层复用真实 renderer，数据来自 mock 数据层",
+  "description": "AIStudio(生成低开应用) · 浏览器原型：UI 层复用真实 renderer，数据来自 mock 数据层",
   "author": "80303865",
   "scripts": {
     "format": "prettier --write .",

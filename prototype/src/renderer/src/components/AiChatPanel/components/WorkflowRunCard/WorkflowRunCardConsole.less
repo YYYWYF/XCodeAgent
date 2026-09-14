@@ -79,54 +79,6 @@
   border-radius: 8px;
 }
 
-.@{class-prefix}-workflow-section-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 2px;
-
-  .ant-typography {
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  span {
-    color: var(--wb-accent);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 11px;
-  }
-}
-
-.@{class-prefix}-workflow-artifact-item {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-
-  .ant-typography {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .ant-typography code {
-    padding: 0;
-    color: var(--wb-text);
-    background: transparent;
-    border: 0;
-  }
-}
-
-.@{class-prefix}-workflow-artifact-marker {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  background: var(--wb-accent);
-  border-radius: 1px;
-  transform: rotate(45deg);
-}
-
 .@{class-prefix}-workflow-clarification {
   gap: 12px;
   padding: 0;
@@ -251,7 +203,9 @@
     border: 0;
     font-size: 32px;
     font-weight: 900;
-    transition: color 160ms ease, transform 160ms ease;
+    transition:
+      color 160ms ease,
+      transform 160ms ease;
 
     &:hover {
       color: var(--wb-accent-hover) !important;

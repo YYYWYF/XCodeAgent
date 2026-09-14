@@ -1,0 +1,174 @@
+.@{class-prefix}-planning-artifact-review {
+  height: 100%;
+  padding: 22px;
+  overflow: auto;
+  color: var(--wb-text-primary);
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-planning-artifact-review.@{class-prefix}-is-empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+}
+
+.@{class-prefix}-planning-artifact-review-header,
+.@{class-prefix}-planning-review-item-title {
+  display: flex;
+  align-items: center;
+}
+
+.@{class-prefix}-planning-artifact-review-header {
+  justify-content: space-between;
+  padding-bottom: 8px;
+
+  h4.ant-typography {
+    margin: 3px 0 0;
+  }
+}
+
+// 标题区：小字标识与状态标签同行的引导行，状态标签固定在左侧，不参与右侧操作区的增减。
+.@{class-prefix}-planning-artifact-review-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.@{class-prefix}-planning-artifact-review-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+// 审阅与编辑共用同一个 Tabs 实例（仅切换面板内容）：容器不再提供额外间距，
+// 保证两种状态下分栏栏位与内容起始位置逐像素一致，切换时不抖动。
+// 编辑动作（保存草稿）与模式开关统一放在面板头部，不再使用底部悬浮按钮条。
+.@{class-prefix}-planning-requirement-editor {
+  .@{class-prefix}-requirement-editor {
+    max-width: 920px;
+  }
+}
+
+// 三个产物面板的第二级 Tabs 统一从面板头部下方同一高度起步：容器一律不带顶部内距，
+// 底部 40px 是滚动收尾的公共留白；页签行高全部使用 antd Tabs 默认值，切换产物时页签不跳位。
+.@{class-prefix}-planning-review-document {
+  display: grid;
+  gap: 18px;
+  padding: 0 0 40px;
+
+  // 章节标题的纵向节奏：非首个标题与上一块内容拉开呼吸感，首个标题贴齐页签内容区顶部。
+  section > h5.ant-typography {
+    margin: 20px 0 12px;
+  }
+  section > h5.ant-typography:first-child {
+    margin-top: 0;
+  }
+}
+
+.@{class-prefix}-planning-review-hero {
+  padding: 16px 18px;
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 10px;
+  background: var(--wb-accent-soft);
+
+  h4.ant-typography {
+    margin: 4px 0 8px;
+  }
+  p.ant-typography {
+    margin: 0;
+  }
+}
+
+.@{class-prefix}-planning-review-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+
+  span {
+    padding: 13px;
+    border: 1px solid var(--wb-border);
+    border-radius: 8px;
+    background: var(--wb-surface-subtle);
+  }
+
+  strong {
+    margin-right: 5px;
+    color: var(--wb-primary);
+    font-size: 20px;
+  }
+}
+
+.@{class-prefix}-planning-review-collection {
+  display: grid;
+  gap: 10px;
+
+  > article {
+    padding: 14px 16px;
+    border: 1px solid var(--wb-border);
+    border-radius: 9px;
+    background: var(--wb-surface);
+  }
+
+  p.ant-typography {
+    margin: 6px 0 0;
+  }
+}
+
+.@{class-prefix}-planning-review-item-title {
+  gap: 8px;
+}
+
+// UI 设计稿审阅：页签在顶部横排（与需求规格说明书、技术规划的分栏方式一致）。
+// 过程互动（选模板/确认/重画）全部在对话区确认卡，这里只呈现静态预览与终态标记。
+.@{class-prefix}-planning-ui-review {
+  min-width: 0;
+  padding-bottom: 40px;
+}
+
+.@{class-prefix}-planning-ui-page-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.@{class-prefix}-planning-ui-page-check.anticon {
+  color: var(--wb-success);
+  font-size: 13px;
+}
+
+.@{class-prefix}-planning-ui-preview {
+  min-height: 380px;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface-subtle);
+  box-shadow: var(--wb-shadow);
+  overflow: hidden;
+
+  > header {
+    display: flex;
+    justify-content: space-between;
+    padding: 14px 18px;
+    // 浏览器壳头部沿用主题强调色渐变（与 .planning-ui-filter 按钮同源），不再写死品牌紫。
+    color: #fff;
+    background: linear-gradient(110deg, var(--wb-accent), var(--wb-accent-hover));
+  }
+  > header span {
+    opacity: 0.8;
+  }
+  > main {
+    display: flex;
+    flex-direction: column;
+    padding: 16px 18px 18px;
+  }
+}
+
+// 未生成占位：等待版式选择时右侧不放假稿，只给一句引导。
+.@{class-prefix}-planning-ui-preview-placeholder {
+  display: grid;
+  flex: 1;
+  min-height: 220px;
+  place-items: center;
+  padding: 0 24px;
+  text-align: center;
+}

@@ -33,7 +33,7 @@ function assertApplicationLifecycleOwnership(
 
 // 读取独立应用生命周期 AG-UI 地址。
 function getApplicationLifecycleUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.aiStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/application-lifecycle/run`
     : '/api/agent/application-lifecycle/run'
@@ -113,7 +113,8 @@ export async function createApplicationLifecycle(
 
 // 读取权威生命周期，并合并 React StrictMode 等场景产生的同工作区并发请求。
 export async function getApplicationLifecycle(
-  application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>,
+  application: Pick<ApplicationConfig, 'workspaceRoot'> &
+    Partial<Pick<ApplicationConfig, 'id' | 'currentVersionId'>>,
   threadId = randomUUID()
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot
@@ -126,7 +127,10 @@ export async function getApplicationLifecycle(
   const request = runApplicationLifecycleAction(threadId, {
     action: 'get',
     workspaceRoot,
-    applicationId: application.id
+    applicationId: application.id,
+    // 当前版本号随请求下发：mock 侧据此按版本定位初始化规划记录，避免阶段定位被
+    // 同应用其它版本的运行实验记录劫持（如回退实验遗留的 collecting_requirement）。
+    versionId: application.currentVersionId
   })
   lifecycleReadRequests.set(workspaceRoot, request)
   try {

@@ -11,18 +11,91 @@
       "id": "recheck-reporter",
       "name": "回检填报人",
       "description": "提交需求回检单，跟踪回检状态。",
-      "permissions": ["提交回检", "查看我的回检"]
+      "permissions": [
+        "提交回检",
+        "查看我的回检"
+      ]
     },
     {
       "id": "recheck-reviewer",
       "name": "回检审核人",
       "description": "审核回检单。",
-      "permissions": ["审核回检"]
+      "permissions": [
+        "审核回检"
+      ]
+    }
+  ],
+  "feature_modules": [
+    {
+      "id": "recheck_management",
+      "name": "需求回检管理",
+      "description": "覆盖回检流程说明、个人回检记录查询与状态跟踪。",
+      "priority": "must"
     }
   ],
   "pages": [
-    { "pageId": "recheck-introduction", "name": "回检介绍", "path": "/recheck-introduction", "description": "静态介绍需求回检场景与处理流程" },
-    { "pageId": "my-rechecks", "name": "我的回检", "path": "/my-rechecks", "description": "回检填报" }
+    {
+      "pageId": "recheck-introduction",
+      "name": "回检介绍",
+      "path": "/recheck-introduction",
+      "module_id": "recheck_management",
+      "description": "静态介绍需求回检场景与处理流程"
+    },
+    {
+      "pageId": "my-rechecks",
+      "name": "我的回检",
+      "path": "/my-rechecks",
+      "module_id": "recheck_management",
+      "description": "回检填报"
+    }
+  ],
+  "entities": [
+    {
+      "id": "recheck_record",
+      "name": "回检单",
+      "description": "承载需求回检的提交、处理、审核与状态跟踪，具备独立编号和完整生命周期。",
+      "business_operations": [
+        "查询我的回检()：查看自己提交的回检记录及处理状态；预期结果：返回当前用户可跟踪的回检记录",
+        "查询审核人信息()：了解本次回检的审核负责人；预期结果：展示审核人姓名和所属部门"
+      ],
+      "fields": [
+        {
+          "name": "recheck_no",
+          "label": "回检单号",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "related_project",
+          "label": "关联项目",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "status",
+          "label": "处理状态",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "applicant",
+          "label": "申请人",
+          "type": "string",
+          "required": true,
+          "description": "提交回检的员工，审核时需展示其姓名与部门"
+        },
+        {
+          "name": "submitted_at",
+          "label": "提交时间",
+          "type": "string",
+          "required": true,
+          "description": "回检提交的时间，用于列表排序与跟踪"
+        }
+      ],
+      "used_by_pages": [
+        "my-rechecks"
+      ]
+    }
   ],
   "business_flows": [
     {
@@ -30,17 +103,38 @@
       "name": "需求回检流程",
       "description": "回检填报与审核。",
       "steps": [
-        { "step_id": 1, "description": "提交回检单" },
-        { "step_id": 2, "description": "审核回检单" }
+        {
+          "step_id": 1,
+          "description": "提交回检单"
+        },
+        {
+          "step_id": 2,
+          "description": "审核回检单"
+        }
       ]
     }
   ],
   "test_case_estimate": {
     "total": 6,
     "groups": [
-      { "id": "introduction", "label": "回检介绍", "total": 1, "coverage": "页面访问、流程说明与进入回检入口" },
-      { "id": "my-rechecks", "label": "我的回检", "total": 3, "coverage": "列表加载、回检提交、必填校验与状态筛选" },
-      { "id": "query-api", "label": "回检查询接口", "total": 2, "coverage": "当前用户数据、分页参数与状态筛选" }
+      {
+        "id": "introduction",
+        "label": "回检介绍",
+        "total": 1,
+        "coverage": "页面访问、流程说明与进入回检入口"
+      },
+      {
+        "id": "my-rechecks",
+        "label": "我的回检",
+        "total": 3,
+        "coverage": "列表加载、回检提交、必填校验与状态筛选"
+      },
+      {
+        "id": "query-api",
+        "label": "回检查询接口",
+        "total": 2,
+        "coverage": "当前用户数据、分页参数与状态筛选"
+      }
     ]
   },
   "acceptance_criteria": [

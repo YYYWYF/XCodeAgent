@@ -1,0 +1,77 @@
+/* 实体绑定确认卡：逐操作列出数据实现去向的精简交互，作为工作流节点内容渲染。 */
+.@{class-prefix}-entity-binding-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.@{class-prefix}-entity-binding-card-summary {
+  margin: 0;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.@{class-prefix}-entity-binding-card-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface);
+  overflow: hidden;
+}
+
+.@{class-prefix}-entity-binding-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 18px;
+
+  & + & {
+    border-top: 1px solid var(--wb-border);
+  }
+}
+
+.@{class-prefix}-entity-binding-card-name {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--wb-text);
+  font-weight: 600;
+
+  em {
+    flex: 0 0 auto;
+    padding: 0 4px;
+    border: 1px solid var(--wb-border);
+    border-radius: 4px;
+    color: var(--wb-text-tertiary);
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 400;
+    line-height: 16px;
+  }
+}
+
+.@{class-prefix}-entity-binding-card-target {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--wb-text-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.@{class-prefix}-entity-binding-card-fields {
+  flex: 0 0 auto;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+}
+
+.@{class-prefix}-entity-binding-card-actions {
+  display: flex;
+  justify-content: flex-end;
+}

@@ -244,13 +244,16 @@
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
 }
 
-.@{class-prefix}-ai-message-agent.@{class-prefix}-analysis .@{class-prefix}-ai-message-agent-avatar {
+.@{class-prefix}-ai-message-agent.@{class-prefix}-analysis
+  .@{class-prefix}-ai-message-agent-avatar {
   background: linear-gradient(135deg, #a97aff, #6b3cf0);
 }
-.@{class-prefix}-ai-message-agent.@{class-prefix}-planning .@{class-prefix}-ai-message-agent-avatar {
+.@{class-prefix}-ai-message-agent.@{class-prefix}-planning
+  .@{class-prefix}-ai-message-agent-avatar {
   background: linear-gradient(135deg, #8b7cf6, #5541d8);
 }
-.@{class-prefix}-ai-message-agent.@{class-prefix}-development .@{class-prefix}-ai-message-agent-avatar {
+.@{class-prefix}-ai-message-agent.@{class-prefix}-development
+  .@{class-prefix}-ai-message-agent-avatar {
   background: linear-gradient(135deg, #4dabf7, #1f7aeb);
 }
 .@{class-prefix}-ai-message-agent.@{class-prefix}-testing .@{class-prefix}-ai-message-agent-avatar {
@@ -259,7 +262,8 @@
 .@{class-prefix}-ai-message-agent.@{class-prefix}-review .@{class-prefix}-ai-message-agent-avatar {
   background: linear-gradient(135deg, #56c596, #20865d);
 }
-.@{class-prefix}-ai-message-agent.@{class-prefix}-acceptance .@{class-prefix}-ai-message-agent-avatar {
+.@{class-prefix}-ai-message-agent.@{class-prefix}-acceptance
+  .@{class-prefix}-ai-message-agent-avatar {
   background: linear-gradient(135deg, #a97aff, #6b3cf0);
 }
 
@@ -334,8 +338,9 @@
   background: var(--wb-surface-hover);
   border: 1px solid var(--wb-border-soft);
   border-radius: 5px;
-  font-family: 'Segoe UI Variable Text', ui-monospace, SFMono-Regular, Menlo, Consolas,
-    'Microsoft YaHei UI', monospace;
+  font-family:
+    'Segoe UI Variable Text', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Microsoft YaHei UI',
+    monospace;
   font-size: 0.92em;
   font-weight: 600;
 }
@@ -396,22 +401,25 @@
   }
 }
 
-// 产物发起引导：快速入口内嵌正文，文字链接样式，不做独立按钮。
-// 文案颜色随消息正文继承（--wb-text），与其它对话消息保持一致，不额外灰化。
-.@{class-prefix}-guide-launch-line {
-  display: block;
-  padding: 2px 0;
-}
+// 设计/计划阶段生成中的轻量进度条：一句标题 + 一句说明，替代步骤轨迹。
+.@{class-prefix}-planning-activity-strip {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface-subtle);
 
-.@{class-prefix}-guide-inline-link {
-  padding: 0 2px;
-  color: var(--wb-accent);
-  font-size: inherit;
-  background: none;
-  border: none;
-  cursor: pointer;
+  > .anticon {
+    margin-top: 3px;
+    color: var(--wb-accent);
+    font-size: 14px;
+  }
 
-  &:hover {
-    text-decoration: underline;
+  > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
   }
 }

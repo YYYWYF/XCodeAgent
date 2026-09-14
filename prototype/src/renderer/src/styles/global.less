@@ -57,7 +57,9 @@ textarea[disabled],
   pointer-events: none;
 }
 
-.@{class-prefix}-workbench-shell {
+// 工作台浅色主题 token：shell 内直接生效；Portal 到 body 的弹窗等浮层
+// 位于 shell 作用域之外，需通过下方 body:has(...) 桥接才能解析同一组变量。
+.wb-light-tokens() {
   --wb-bg: #f5f5f5;
   --wb-canvas: #ffffff;
   --wb-sidebar: #f2f2f2;
@@ -96,6 +98,10 @@ textarea[disabled],
   --wb-accent-active: #5d31dc;
   --wb-accent-soft: rgba(107, 60, 240, 0.07);
   --wb-accent-border: rgba(107, 60, 240, 0.34);
+}
+
+.@{class-prefix}-workbench-shell {
+  .wb-light-tokens();
   display: flex;
   flex-direction: row;
   align-items: stretch;
@@ -111,6 +117,10 @@ textarea[disabled],
 /* Ant Design 浮层通过 Portal 挂载到 body，需要从当前浅色页面同步样式。 */
 body:has(.@{class-prefix}-workbench-shell[data-theme='light']),
 body:has(.@{class-prefix}-welcome-page[data-theme='light']) {
+  // 桥接主题变量：Modal/Dropdown 等 Portal 浮层在 body 下也能解析 --wb-*，
+  // 否则像 bo-modal 的 background: var(--wb-elevated) 会解析失败变成透明弹框。
+  .wb-light-tokens();
+
   .ant-tooltip-inner,
   .ant-popover-inner {
     color: #202124;

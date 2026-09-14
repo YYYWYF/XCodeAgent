@@ -1,0 +1,28 @@
+{
+  "schema_version": "ui-manifest.v3",
+  "confirmation_status": "pending_user_confirmation",
+  "pages": [
+    {
+      "pageId": "recheck-introduction",
+      "name": "回检介绍",
+      "path": "/recheck-introduction",
+      "page_key": "RecheckIntroduction",
+      "template": "流程引导页",
+      "status": "generated",
+      "description": "左侧步骤说明配合右侧回检流程卡，突出进入个人回检的主操作。",
+      "sections": ["场景说明", "办理流程", "角色职责", "进入我的回检"],
+      "accent": "violet"
+    },
+    {
+      "pageId": "my-rechecks",
+      "name": "我的回检",
+      "path": "/my-rechecks",
+      "page_key": "MyRechecks",
+      "template": "通用列表查询",
+      "status": "generated",
+      "description": "顶部状态筛选与结果概览，下方使用清晰的回检记录表格和分页。",
+      "sections": ["状态筛选", "结果概览", "回检记录表格", "分页"],
+      "accent": "indigo"
+    }
+  ]
+}

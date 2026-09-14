@@ -1,796 +1,348 @@
-// 规划会话剧本：模拟后端 AG-UI 事件流，把需求分析/项目规划两阶段对话按工作流形式推进：
-// 分析段（汇总上下文 → 业务分析 → 澄清门 → 生成需求文档 → 确认需求文档门）
-// 计划段（读取已确认需求 → 规划页面与接口 → 生成项目计划 → 确认项目计划门）。
-// 节点轨迹以 mock/workflowGraphs.ts 注册的 DAG 为唯一来源，剧本只负责选段播放；
-// 节点序列对齐真实工程应用规划 Graph 的 requirements/project_planning 语义，
-// 用户交互靠 summary.status='requires_user_input' 与 state.clarification，阶段判定沿用
-// planningWorkflowState 的 phase 约定（'requirements' / 'project_planning'）。
-// 澄清问题 / 需求文档 / 项目计划均为按真实后端 prompt 生成的数据（见 mock-data/）。
+import { appDataByWorkspace } from '../../../../../mock-data'
+import type { ApplicationConfig, WorkflowRunPayload } from '../../typings'
+import type { SendWorkflowMessageOptions } from '../../service/agUiAgent'
+import {
+  ensureInitializationPlanningRecord,
+  persistInitializationPlanningRecord,
+  planningGate,
+  transitionInitializationPlanning,
+  type InitializationPlanningEvent,
+  type InitializationPlanningRecord,
+  type InitializationPlanningSeed,
+  type PlanningAction
+} from '../../initializationPlanning'
+import { applyPlanningMarkdown, refreshPlanningDocuments } from '../../planning/documents'
+import { applyRequirementForm } from '../../planning/requirements'
+import { assertRequirementReady } from '../../planning/requirementQuality'
+import { planningSnapshot } from './planningPayloads'
+import {
+  createPlanningTrajectory,
+  planningDelay,
+  planningLifecycle,
+  type PlanningReplayCallbacks
+} from './planningRuntime'
 
-import type {
-  ApplicationConfig,
-  ApplicationLifecycle,
-  ApplicationLifecycleStage,
-  WorkflowEvent,
-  WorkflowRunPayload,
-  WorkspaceCodeChangeFile,
-  WorkspaceCodeChangeSet
-} from '../../typings'
-import type {
-  ProcessStepRecord,
-  SendWorkflowMessageOptions
-} from '../../service/agUiAgent'
-import { buildProjectPlanDoc, buildRequirementSpecDoc } from '../../workbenchArtifacts'
-import { WORKSPACE_DOC_PATHS, appPath } from '../workspaceFiles'
-import { appDataByWorkspace } from '../../../../../mock-data/index'
-import { nextLifecycleRevision } from './revision'
-import { workflowNode } from '../workflowGraphs'
-
-type ReplayCallbacks = {
-  onContent?: (content: string) => void
-  onWorkflow?: (workflow: WorkflowRunPayload) => void
-  onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
-  onProcessSteps?: (steps: ProcessStepRecord[]) => void
+/** 精确读取当前应用版本，种子只在第一次进入时使用。 */
+export function loadPlanningRecord(application: ApplicationConfig): InitializationPlanningRecord {
+  const scenario = appDataByWorkspace(application.workspaceRoot)
+  return ensureInitializationPlanningRecord(application, {
+    requirementSpec: scenario.requirementSpec,
+    productPlan: scenario.productPlan,
+    uiDesigns: scenario.uiDesigns as InitializationPlanningSeed['uiDesigns'],
+    technicalPlan: scenario.technicalPlan
+  })
 }
 
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
-
-// —— 工作流轨迹播放器 ——
-// 按 DAG 节点累积 ProcessStep 轨迹与节点事件：同一节点重复 set 时原位更新状态，
-// 每次变更立即全量发射轨迹；事件随 payload 落盘，历史会话重放时可据此重建节点过程。
-
-type PlanningTrajectory = {
-  /** 把节点推进到目标状态；detailOverride 用于差异化说明同一节点的本轮动作。 */
-  set: (nodeId: string, status: ProcessStepRecord['status'], detailOverride?: string) => void
-  /** 当前已累积的事件快照，供 wf() 写入 payload 的 events 字段。 */
-  events: () => WorkflowEvent[]
+/** 保存领域结果，再投影 lifecycle；不允许 UI 或脚本各自猜测阶段。 */
+function saveRecord(
+  application: ApplicationConfig,
+  record: InitializationPlanningRecord,
+  callbacks: PlanningReplayCallbacks
+): InitializationPlanningRecord {
+  refreshPlanningDocuments(record)
+  persistInitializationPlanningRecord(record, application)
+  callbacks.onApplicationLifecycle?.(planningLifecycle(application, record.stage, record))
+  return record
 }
 
-function createTrajectory(
-  workflowId: string,
-  onProcessSteps?: ReplayCallbacks['onProcessSteps']
-): PlanningTrajectory {
-  const steps: ProcessStepRecord[] = []
-  const events: WorkflowEvent[] = []
-
-  const set = (
-    nodeId: string,
-    status: ProcessStepRecord['status'],
-    detailOverride?: string
-  ): void => {
-    const node = workflowNode(workflowId, nodeId)
-    const existingIndex = steps.findIndex((step) => step.id === nodeId)
-    const record: ProcessStepRecord = {
-      id: nodeId,
-      kind: 'workflow',
-      status,
-      title: node.title,
-      detail: detailOverride ?? node.detail,
-      sequence: existingIndex >= 0 ? steps[existingIndex].sequence : steps.length + 1,
-      nodeName: nodeId
-    }
-    if (existingIndex >= 0) steps[existingIndex] = record
-    else steps.push(record)
-    // 节点事件与轨迹同步累积：启动事件与终态事件的对齐关系与后端投影一致。
-    events.push({
-      type: status === 'running' ? 'workflow.node.started' : 'workflow.node.completed',
-      nodeName: nodeId,
-      node: { id: nodeId, label: node.title },
-      status
-    })
-    onProcessSteps?.([...steps])
-  }
-
-  return {
-    set,
-    events: (): WorkflowEvent[] => events.map((event) => ({ ...event }))
-  }
+/** 执行经过校验的领域事件。 */
+function advance(
+  application: ApplicationConfig,
+  event: InitializationPlanningEvent,
+  callbacks: PlanningReplayCallbacks
+): InitializationPlanningRecord {
+  return saveRecord(
+    application,
+    transitionInitializationPlanning(loadPlanningRecord(application), event),
+    callbacks
+  )
 }
 
-// —— 设计文档的“新增文件”变更集：与构建节点共用代码审查交互（右侧 Diff 绿色新增行）——
-
-// 新增文件的行级变更：全部行为新增（绿色），新增行数即内容行数。
-function docAddedChange(id: string, path: string, content: string): WorkspaceCodeChangeFile {
-  const lines = content.split('\n')
-  return {
-    id,
-    path,
-    changeType: 'added',
-    additions: lines.length,
-    deletions: 0,
-    diff: lines.map((line) => `+${line}`).join('\n'),
-    tool: 'file.write',
-    sourceTool: 'doc_generator',
-    executed: true
-  }
-}
-
-// 组装单文件变更集；id 随快照递增，右侧 Diff 面板按 id 变化原地刷新。
-function docChangeSet(id: string, file: WorkspaceCodeChangeFile): WorkspaceCodeChangeSet {
-  return {
-    id,
-    status: 'applied',
-    workspaceRoot: 'wh-branch-pms-new',
-    summary: { files: 1, additions: file.additions, deletions: 0 },
-    files: [file]
-  }
-}
-
-// 生成节点运行中把文档按行分块渐进发射 codeChanges 快照，
-// 右侧 Diff 面板呈现“从 0 开始逐段写入”的绿色新增行，完成后的确认载荷携带完整变更集。
-async function emitProgressiveDocChanges(
+/** 将当前待办保存为可恢复快照并通过 AG-UI 发射。 */
+function project(
+  application: ApplicationConfig,
   threadId: string,
-  phase: 'requirements' | 'project_planning',
-  path: string,
-  message: string,
-  fullDoc: string,
-  onWorkflow?: ReplayCallbacks['onWorkflow'],
-  trajectory?: ReturnType<typeof createTrajectory>
-): Promise<WorkspaceCodeChangeSet> {
-  const lines = fullDoc.split('\n')
-  // 约 9 块写完：块更小、节奏更密，让“逐步写入”的过程在演示中清晰可辨。
-  const chunkSize = Math.max(6, Math.ceil(lines.length / 9))
-  let snapshotIndex = 0
-  for (let visible = chunkSize; ; visible += chunkSize) {
-    await delay(300)
-    const partial = docAddedChange(
-      `cc-${phase}-partial-${visible}`,
-      path,
-      lines.slice(0, visible).join('\n')
-    )
-    onWorkflow?.(
-      wf(
-        threadId,
-        phase,
-        'running',
-        { codeChanges: docChangeSet(`cc-${phase}-p${snapshotIndex++}`, partial) },
-        { summary: { phase, status: 'running', message } },
-        trajectory?.events()
-      )
-    )
-    if (visible >= lines.length) break
-  }
-  const full = docAddedChange(`cc-${phase}-full`, path, fullDoc)
-  return docChangeSet(`cc-${phase}-completed`, full)
-}
-
-// 构造 WorkflowRunPayload：phase 同时作为 summary.phase 与 nodeName；events 携带已播放节点事件。
-function wf(
-  threadId: string,
-  phase: string,
-  status: string,
-  state: Record<string, unknown> = {},
-  extra: Partial<WorkflowRunPayload> = {},
-  events: WorkflowEvent[] = []
+  callbacks: PlanningReplayCallbacks,
+  events: WorkflowRunPayload['events'] = []
 ): WorkflowRunPayload {
-  return {
-    runId: `mock-run-${phase}`,
-    threadId,
-    summary: { phase, status, message: '' },
-    events: events.length > 0 ? events : [{ type: 'workflow.node.started', nodeName: phase }],
-    state,
-    result: {},
-    ...extra
-  } as WorkflowRunPayload
+  const record = loadPlanningRecord(application)
+  const payload = planningSnapshot(record, threadId, events)
+  if (!events.length && record.stage === 'analyzing_requirement') {
+    const trajectory = createPlanningTrajectory('requirement_analysis', callbacks.onProcessSteps)
+    trajectory.set('requirements_context', 'completed')
+    trajectory.set('requirements_analyze', 'completed')
+    trajectory.set('requirements_clarify', 'requires_user_input')
+  }
+  record.workflow = payload
+  saveRecord(application, record, callbacks)
+  callbacks.onWorkflow?.(payload)
+  return payload
 }
 
-// 需求文档 / 项目计划的 Markdown 渲染统一收敛到 workbenchArtifacts.ts（buildRequirementSpecDoc /
-// buildProjectPlanDoc），规划会话与工作台右侧「文档」共用同一份渲染，避免两处分叉。
-
-const requirementConfirmationPayload = (
+/** 只模拟可观察的生成耗时，状态与产物由领域层负责，取消后不再落定节点。 */
+async function generate(
+  application: ApplicationConfig,
   threadId: string,
-  appName: string | undefined,
-  requirementSpec: Record<string, unknown>,
-  codeChanges?: WorkspaceCodeChangeSet,
-  events: WorkflowEvent[] = [],
-  clarificationHistory: Array<Record<string, unknown>> = []
-): WorkflowRunPayload =>
-  wf(
-    threadId,
-    'requirements',
-    'requires_user_input',
-    {
-      // 工作台复用 WorkflowRunCard 渲染应用级确认：给一个 yesno 确认项，复用现有澄清卡渲染
-      // （status=requires_user_input + questions），summary.status 同步为 requires_user_input。
-      // 推进仍由 mode=requirement_spec_confirmation 驱动 replayPlanning 生成项目计划。
-      clarificationHistory,
-      clarification: {
-        mode: 'requirement_spec_confirmation',
-        status: 'requires_user_input',
-        message: '请审核需求文档',
-        questions: [
-          {
-            id: 'confirm_requirement_spec',
-            header: '需求确认',
-            type: 'yesno',
-            question: '需求文档已生成，是否确认并继续生成项目计划？',
-            allowOther: false
-          }
-        ]
-      },
-      requirement_spec: requirementSpec,
-      ...(codeChanges ? { codeChanges } : {})
+  callbacks: PlanningReplayCallbacks
+): Promise<WorkflowRunPayload> {
+  const record = loadPlanningRecord(application)
+  const config: Record<
+    string,
+    { graph: string; nodes: string[]; done: InitializationPlanningEvent; gate?: string }
+  > = {
+    generating_requirement_document: {
+      graph: 'requirement_analysis',
+      nodes: ['requirements_document', 'product_plan'],
+      done: { type: 'requirement_document_ready' },
+      gate: 'requirement_document_review'
     },
-    {
-      result: { requirement_spec: requirementSpec },
-      confirmationArtifact: {
-        id: 'requirement_spec',
-        name: '需求文档',
-        path: WORKSPACE_DOC_PATHS.requirementSpec,
-        format: 'markdown',
-        content: buildRequirementSpecDoc(requirementSpec, appName)
-      }
+    generating_ui_designs: {
+      graph: 'requirement_analysis',
+      nodes: ['ui_designs'],
+      done: { type: 'ui_designs_ready' },
+      gate: 'ui_design_review'
     },
-    events
-  )
-
-const projectPlanConfirmationPayload = (
-  threadId: string,
-  appName: string | undefined,
-  projectPlan: Record<string, unknown>,
-  codeChanges?: WorkspaceCodeChangeSet,
-  events: WorkflowEvent[] = []
-): WorkflowRunPayload =>
-  wf(
-    threadId,
-    'project_planning',
-    'requires_user_input',
-    {
-      clarification: {
-        mode: 'project_plan_confirmation',
-        status: 'requires_user_input',
-        message: '请审核项目计划',
-        questions: [
-          {
-            id: 'confirm_project_plan',
-            header: '计划确认',
-            type: 'yesno',
-            question: '项目计划已生成，是否确认并进入开发阶段？',
-            allowOther: false
-          }
-        ]
-      }
-      ,
-      ...(codeChanges ? { codeChanges } : {})
+    generating_technical_plan: {
+      graph: 'project_planning',
+      nodes: ['planning_context', 'planning_scope', 'planning_permissions', 'planning_document'],
+      done: { type: 'technical_plan_ready' },
+      gate: 'planning_document'
     },
-    {
-      confirmationArtifact: {
-        id: 'project_plan',
-        name: '项目计划',
-        path: WORKSPACE_DOC_PATHS.projectPlan,
-        format: 'markdown',
-        content: buildProjectPlanDoc(projectPlan, appName)
-      }
-    },
-    events
-  )
-
-/** 项目计划确认后的独立开发准入门：不再携带 Diff，只等待用户选择后台任务类型。 */
-const developmentEntryConfirmationPayload = (
-  threadId: string,
-  events: WorkflowEvent[] = []
-): WorkflowRunPayload =>
-  wf(
-    threadId,
-    'development_entry_confirmation',
-    'requires_user_input',
-    {
-      clarification: {
-        mode: 'development_entry_confirmation',
-        status: 'requires_user_input',
-        message: '项目计划已确认，可以进入开发阶段。',
-        questions: []
-      },
-      project_plan_confirmed: true
-    },
-    {
-      result: { project_plan_confirmed: true },
-      summary: {
-        phase: 'development_entry_confirmation',
-        status: 'requires_user_input',
-        message: '项目计划已确认，可以进入开发阶段。'
-      }
-    },
-    events
-  )
-
-/**
- * 需求文档确认后的项目规划准入门：与开发准入门（development_entry_confirmation）同一模式。
- * 门禁是工作流自身的待输入节点，弹框只是它的显示面；确认后由规划剧本接管阶段切换。
- */
-const planningEntryConfirmationPayload = (
-  threadId: string,
-  events: WorkflowEvent[] = []
-): WorkflowRunPayload =>
-  wf(
-    threadId,
-    'planning_stage_entry',
-    'requires_user_input',
-    {
-      clarification: {
-        mode: 'planning_stage_entry',
-        status: 'requires_user_input',
-        message: '需求文档已确认，等待进入项目计划阶段。',
-        questions: []
-      },
-      requirement_spec_confirmed: true
-    },
-    {
-      result: { requirement_spec_confirmed: true },
-      summary: {
-        phase: 'planning_stage_entry',
-        status: 'requires_user_input',
-        message: '需求文档已确认，等待进入项目计划阶段。'
-      }
-    },
-    events
-  )
-
-// 澄清问题文案里的应用名与当前应用对齐（澄清题文案里的应用名统一替换为当前应用名）。
-const clarificationPayload = (
-  threadId: string,
-  appName: string | undefined,
-  clarificationQuestions: Array<Record<string, unknown>>,
-  events: WorkflowEvent[] = [],
-  clarificationHistory: Array<Record<string, unknown>> = []
-): WorkflowRunPayload =>
-  wf(threadId, 'requirements', 'requires_user_input', {
-    clarificationHistory,
-    clarification: {
-      mode: 'requirement_clarification',
-      status: 'requires_user_input',
-      message: '需要补充关键信息',
-      questions: appName
-        ? clarificationQuestions.map((question) => ({
-            ...question,
-            question: String(question.question || '').replace(/「[^」]*」/g, `「${appName}」`)
-          }))
-        : clarificationQuestions
+    generating_application_template_files: {
+      graph: 'project_planning',
+      nodes: ['template_generation'],
+      done: { type: 'template_generation_completed' }
     }
-  }, {}, events)
+  }
+  const segment = config[record.stage]
+  if (!segment) return project(application, threadId, callbacks)
+  record.operationStatus = 'running'
+  delete record.error
+  saveRecord(application, record, callbacks)
+  const trajectory = createPlanningTrajectory(segment.graph, callbacks.onProcessSteps)
+  for (const node of segment.nodes) {
+    trajectory.set(node, 'running')
+    project(application, threadId, callbacks, trajectory.events())
+    await planningDelay(420, callbacks.signal)
+    trajectory.set(node, 'completed')
+  }
+  advance(application, segment.done, callbacks)
+  if (segment.gate) trajectory.set(segment.gate, 'requires_user_input')
+  // 计划阶段以模板生成为最后一环：追加一句 Agent 检查收尾文本（与设计阶段的收尾同型）；
+  // 进入开发阶段由统一的开发准入门弹框承载，对话区不渲染门禁卡。
+  if (segment.done.type === 'template_generation_completed')
+    callbacks.onContent?.('技术规划方案已确认，应用模板已生成，计划阶段完成。')
+  return project(application, threadId, callbacks, trajectory.events())
+}
 
-// 需求或计划未确认时，回到当前阶段继续接受用户的自然语言修改意见。
-const revisionPayload = (
-  threadId: string,
-  phase: 'requirements' | 'project_planning',
-  mode: 'requirement_revision' | 'project_plan_revision',
-  events: WorkflowEvent[] = [],
-  clarificationHistory: Array<Record<string, unknown>> = []
-): WorkflowRunPayload =>
-  wf(threadId, phase, 'requires_user_input', {
-    clarificationHistory,
-    clarification: {
-      mode,
-      status: 'requires_user_input',
-      message:
-        phase === 'requirements'
-          ? '请补充需求文档需要修改的内容'
-          : '请补充项目计划需要调整的内容',
-      questions: [
+/** 保存澄清答案与只读历史，答案仅补齐需求，不自动确认正式文档。 */
+function applyAnswers(
+  application: ApplicationConfig,
+  resume: WorkflowRunPayload,
+  answers: Record<string, unknown>,
+  callbacks: PlanningReplayCallbacks
+): void {
+  const record = loadPlanningRecord(application)
+  record.clarificationAnswers = answers
+  const clarification = resume.state?.clarification as { questions?: Array<Record<string, any>> }
+  const constraints = (clarification?.questions || [])
+    .map((question) => {
+      const value: any = answers[String(question.id)]
+      const answer =
+        typeof value === 'string'
+          ? value
+          : Array.isArray(value)
+            ? value.join('、')
+            : [
+                ...(Array.isArray(value?.selected) ? value.selected : [value?.selected]),
+                value?.other
+              ]
+                .filter(Boolean)
+                .join('、')
+      return answer ? `${question.header || question.question}：${answer}` : ''
+    })
+    .filter(Boolean)
+  record.artifacts.requirementSpec.business_constraints = constraints
+  record.artifacts.productPlan.business_constraints = constraints
+  record.workflow = {
+    ...resume,
+    state: {
+      ...resume.state,
+      clarificationHistory: [
         {
-          id: phase === 'requirements' ? 'requirement_revision' : 'project_plan_revision',
-          header: phase === 'requirements' ? '需求修改意见' : '计划修改意见',
-          type: 'text',
-          question:
-            phase === 'requirements'
-              ? '请说明需求文档需要调整的业务目标、角色或流程。'
-              : '请说明页面、接口或实体清单及依赖关系需要如何调整。',
-          required: true,
-          placeholder: '请输入修改意见…'
+          nodeName: 'requirements_clarify',
+          clarification: {
+            ...clarification,
+            mode: 'requirement_clarification',
+            status: 'submitted'
+          },
+          answers
         }
       ]
     }
-  }, {}, events)
-
-// 读取确认卡中的 yes/no 答案，避免“否”被误推进到下一个阶段。
-function answerIsYes(value: unknown): boolean {
-  if (value && typeof value === 'object' && !Array.isArray(value) && 'selected' in value) {
-    const selected = (value as { selected?: unknown }).selected
-    return (Array.isArray(selected) ? selected : [selected]).some((item) => String(item) === '是')
   }
-  if (Array.isArray(value)) return value.some((item) => String(item) === '是')
-  return value === '是' || value === true
+  saveRecord(application, record, callbacks)
 }
 
-// —— 澄清卡历史 ——
-// 同一阶段工作流复用同一条消息：已提交的澄清卡写入 payload 的 clarificationHistory，
-// 前端按 nodeName 内嵌回对应节点下方，保持“第 X / Y 项”向导形态的只读回看。
-// 只有真正以问题卡形态出现过的交互（需求澄清）才进入历史；产物确认由“文件改动”卡承担，不留痕。
-
-const DESIGN_CARD_NODES: Record<string, string> = {
-  requirement_clarification: 'requirements_clarify',
-  requirement_spec_confirmation: 'requirements_document',
-  requirement_revision: 'requirements_document',
-  project_plan_confirmation: 'planning_document',
-  project_plan_revision: 'planning_document'
-}
-
-/** 汇总已提交卡片历史：把本次提交的澄清问答追加到续跑快照携带的历史之后。 */
-function submittedCardHistory(
-  resume: WorkflowRunPayload | undefined,
-  answers: Record<string, unknown> | undefined
-): Array<Record<string, unknown>> {
-  const history = Array.isArray(resume?.state?.clarificationHistory)
-    ? [...(resume?.state?.clarificationHistory as Array<Record<string, unknown>>)]
-    : []
-  const clarification = (resume?.state?.clarification ??
-    resume?.result?.clarification) as Record<string, unknown> | undefined
-  const mode = String(clarification?.mode || '')
-  if (mode !== 'requirement_clarification' || !clarification || !answers) return history
-  const fingerprint = JSON.stringify({ mode, answers })
-  if (history.some((entry) => entry.fingerprint === fingerprint)) return history
-  return [
-    ...history,
-    {
-      nodeName: DESIGN_CARD_NODES[mode],
-      mode,
-      fingerprint,
-      clarification: { ...clarification, status: 'submitted' },
-      answers
-    }
-  ]
-}
-
-// 项目计划阶段独立回放项目计划生成，保证没有需求确认上下文时也不会重新进入需求分析阶段。
-async function replayProjectPlan(
+/** 结构化编辑/单页动作统一走同一个规划运行，拒绝越阶段与过期提交。 */
+async function performAction(
+  application: ApplicationConfig,
   threadId: string,
-  options: SendWorkflowMessageOptions,
-  callbacks: ReplayCallbacks,
-  appName: string | undefined,
-  projectPlan: Record<string, unknown>,
-  extra?: { revision?: boolean }
+  action: PlanningAction,
+  callbacks: PlanningReplayCallbacks
 ): Promise<WorkflowRunPayload> {
-  const { onWorkflow, onApplicationLifecycle } = callbacks
-  const revision = Boolean(extra?.revision)
-  const trajectory = createTrajectory('project_planning', callbacks.onProcessSteps)
-  // 项目计划开始生成即进入项目计划阶段，不能等文件生成完成后才切换 Agent 与会话。
-  // 过渡说明由节点轨迹的 detail 承载，不再向对话正文追加状态句。
-  onApplicationLifecycle?.(designLifecycle(options.application, 'generating_project_plan'))
-  trajectory.set('planning_context', 'completed')
-  trajectory.set('planning_scope', 'running')
-  await delay(350)
-  trajectory.set('planning_scope', 'completed')
-  trajectory.set('planning_permissions', 'running')
-  await delay(450)
-  trajectory.set('planning_permissions', 'completed')
-  trajectory.set(
-    'planning_document',
-    'running',
-    revision ? '根据本次调整意见重新生成项目计划。' : undefined
-  )
-  onWorkflow?.(
-    wf(threadId, 'project_planning', 'running', {}, {
-      summary: {
-        phase: 'project_planning',
-        status: 'running',
-        message: '项目 Agent 正在生成项目计划…'
-      }
-    }, trajectory.events())
-  )
-  const planChanges = await emitProgressiveDocChanges(
-    threadId,
-    'project_planning',
-    appPath(WORKSPACE_DOC_PATHS.projectPlan),
-    '正在生成项目计划…',
-    buildProjectPlanDoc(projectPlan, appName),
-    onWorkflow,
-    trajectory
-  )
-  // Diff 与接受授权归生成节点：文档渐进写入完成即进入待接受态，接受后才落完成。
-  trajectory.set(
-    'planning_document',
-    'requires_user_input',
-    revision ? '项目计划已按调整意见更新，请重新审核。' : undefined
-  )
-  const payload = projectPlanConfirmationPayload(
-    threadId,
-    appName,
-    projectPlan,
-    planChanges,
-    trajectory.events()
-  )
-  onWorkflow?.(payload)
-  return payload
+  const record = loadPlanningRecord(application)
+  switch (action.action) {
+    case 'save_requirements':
+      if (!action.form) throw new Error('缺少需求表单。')
+      saveRecord(application, applyRequirementForm(record, action.form), callbacks)
+      break
+    case 'save_document':
+      if (!action.artifactKey || action.markdown === undefined)
+        throw new Error('缺少要保存的正式文档。')
+      saveRecord(
+        application,
+        applyPlanningMarkdown(record, action.artifactKey, action.markdown),
+        callbacks
+      )
+      break
+    case 'select_template':
+      // 批量选模板：一次为全部待确认页面定版式，统一交后台重画、右侧统一呈现。
+      if (!action.pages?.length) throw new Error('请先为页面选择版式模板。')
+      advance(application, { type: 'revise_ui_designs', pages: action.pages }, callbacks)
+      return generate(application, threadId, callbacks)
+    case 'revise':
+      if (!action.feedback?.trim()) throw new Error('请填写修改意见。')
+      advance(
+        application,
+        {
+          type:
+            record.stage === 'awaiting_technical_plan_confirmation'
+              ? 'revise_technical_plan'
+              : 'revise_requirement_document',
+          feedback: action.feedback.trim()
+        },
+        callbacks
+      )
+      return generate(application, threadId, callbacks)
+    case 'confirm':
+      if (record.stage === 'awaiting_requirement_document_confirmation') {
+        assertRequirementReady(record.artifacts.requirementSpec, record.artifacts.productPlan)
+        advance(application, { type: 'confirm_requirement_document' }, callbacks)
+      } else if (record.stage === 'awaiting_technical_plan_confirmation')
+        advance(application, { type: 'confirm_technical_plan' }, callbacks)
+      else throw new Error('当前没有待确认的规划文档。')
+      return generate(application, threadId, callbacks)
+    case 'retry':
+      saveRecord(application, { ...record, operationStatus: 'idle', error: undefined }, callbacks)
+      return generate(application, threadId, callbacks)
+    default:
+      throw new Error('不支持的规划操作。')
+  }
+  return project(application, threadId, callbacks)
 }
 
-// 按 resumeState 所处阶段选择回放分支。
+/** 回放有持久状态的初始化旅程；新建与历史版本派生均经过同一组明确确认门。 */
 export async function replayPlanning(
   threadId: string,
   options: SendWorkflowMessageOptions,
-  callbacks: ReplayCallbacks
+  callbacks: PlanningReplayCallbacks
 ): Promise<WorkflowRunPayload> {
-  const { onContent, onWorkflow } = callbacks
+  const application = options.application || appDataByWorkspace().app
+  const version = application.versions?.find((item) => item.id === application.currentVersionId)
+  if (version?.status === 'released') throw new Error('已生成版本只读，请先发起迭代。')
   const resume = options.resumeState as WorkflowRunPayload | undefined
-  const clarification = (resume?.state?.clarification ?? resume?.result?.clarification ?? {}) as {
-    mode?: string
-    questions?: unknown[]
-  }
-  const mode = clarification?.mode
-  // 已提交澄清卡历史：随续跑快照累积，前端按节点内嵌回看；恢复/修订续跑时不得丢失。
-  const history = submittedCardHistory(
-    resume,
-    options.clarificationAnswers as Record<string, unknown> | undefined
-  )
-  const appName = options.application?.appName || options.application?.name
-  // 按当前应用工作区取规划数据（requirement-spec / project-plan / 澄清题），三应用各自独立。
-  const scenario = appDataByWorkspace(options.application?.workspaceRoot)
-  const requirementSpec = scenario.requirementSpec
-  const projectPlan = scenario.projectPlan
-  const clarificationQuestions = scenario.clarificationQuestions
-
-  // 恢复进行中计划：首页"查看计划"只读恢复同一线程的澄清状态，不推进任何节点。
-  if (options.applicationPlanningRecovery) {
-    const trajectory = createTrajectory('requirement_analysis', callbacks.onProcessSteps)
-    trajectory.set('requirements_context', 'completed')
-    trajectory.set('requirements_analyze', 'completed')
-    trajectory.set('requirements_clarify', 'requires_user_input')
-    // 恢复查看不再追加状态句：澄清节点与卡片本身已表达待确认状态。
-    await delay(300)
-    const payload = clarificationPayload(threadId, appName, clarificationQuestions, trajectory.events(), history)
-    onWorkflow?.(payload)
-    return payload
-  }
-
-  // 新迭代（由父版本派生）：只问「本次迭代补充什么需求」，提交后直接进开发，
-  // 不重复新应用的完整需求确认/项目计划流程（基于上一版本增量）。
-  // 判定用 parentVersionId（createIterationVersion 置）；lifecycle.revision 不准 ——
-  // 演示态 makeCompleteLifecycle revision=5，但仍是单次新建，不能据此判迭代。
-  const currentVersionForIteration = options.application?.versions?.find(
-    (v) => v.id === options.application?.currentVersionId
-  )
-  const isIterationVersion = Boolean(currentVersionForIteration?.parentVersionId)
-  if (isIterationVersion) {
-    // 用户已在下方输入框回复迭代需求 → 直接进开发。普通消息不携带 resumeState，
-    // 因此用消息文本判定：自动开启（“开始需求分析”/“开始项目计划”）只播引导语，
-    // 其它任何非空文本都视为用户描述的迭代需求。
-    const userText = typeof options.message === 'string' ? options.message.trim() : ''
-    const isAutoStageStart =
-      userText === '开始需求分析' || userText === '开始项目计划' || userText === ''
-    if (resume || !isAutoStageStart) {
-      onContent?.('已收到本次迭代需求。')
-      await delay(300)
-      const confirmation = wf(
-        threadId,
-        'ready_for_workbench',
-        'completed',
+  const answers = options.clarificationAnswers as Record<string, unknown> | undefined
+  const record = loadPlanningRecord(application)
+  if (resume && answers) {
+    if (resume.state?.planningGate !== planningGate(record))
+      throw new Error('这条确认已过期，请使用当前版本的最新审阅操作。')
+    const action = answers.planning_action as PlanningAction | undefined
+    if (action) return performAction(application, threadId, action, callbacks)
+    const mode = (resume.state?.clarification as { mode?: string })?.mode
+    if (mode === 'requirement_clarification') {
+      applyAnswers(application, resume, answers, callbacks)
+      advance(application, { type: 'start_requirement_document' }, callbacks)
+      return generate(application, threadId, callbacks)
+    }
+    if (mode === 'ui_design_confirmation') {
+      const choice = answers.ui_design_action
+      if (!['confirm', 'skip'].includes(String(choice))) throw new Error('请选择明确的 UI 操作。')
+      advance(
+        application,
+        { type: choice === 'skip' ? 'skip_ui_designs' : 'confirm_ui_designs' },
+        callbacks
+      )
+      // 阶段完成只输出一句 agent 文本收尾；进入计划阶段由统一的阶段门禁弹框承载
+      //（弹框可关闭，稍后从顶部阶段条「计划阶段」再次唤起），对话区不再渲染门禁大卡。
+      callbacks.onContent?.(
+        choice === 'skip'
+          ? '已跳过 UI 设计，设计阶段完成。'
+          : '设计阶段的产物已全部确认，设计阶段完成。'
+      )
+      return project(application, threadId, callbacks)
+    }
+    if (mode === 'planning_stage_entry' && answers.planning_stage_entry) {
+      advance(application, { type: 'enter_planning' }, callbacks)
+      return generate(application, threadId, callbacks)
+    }
+    if (mode === 'development_entry_confirmation' && answers.test_case_task_type) {
+      // 开发准入门确认：登记任务类型并推进到 ready_for_workbench（生命周期与阶段条随之
+      // 进入开发阶段），随后补一句 Agent 收尾文本，与本轮其它确认的“一来回”形态一致。
+      saveRecord(
+        application,
         {
-          application_planning_confirmation: {
-            confirmedAt: new Date().toISOString(),
-            directories: { specs: 'docs', plans: 'docs' },
-            artifacts: {}
+          ...record,
+          clarificationAnswers: {
+            ...record.clarificationAnswers,
+            test_case_task_type: answers.test_case_task_type
           }
         },
-        {
-          result: {
-            application_planning_confirmation: {
-              confirmedAt: new Date().toISOString(),
-              directories: { specs: 'docs', plans: 'docs' },
-              artifacts: {}
-            }
-          }
-        }
+        callbacks
       )
-      onWorkflow?.(confirmation)
-      return confirmation
+      advance(application, { type: 'confirm_development_entry' }, callbacks)
+      callbacks.onContent?.('开发准入已确认，可以进入开发阶段。')
+      return project(application, threadId, callbacks)
     }
-    // 起点：一句引导词即可，用户在下方输入框描述迭代需求（无确认卡片）。
-    onContent?.(
-      '新迭代已创建。请在下方输入框描述本次迭代要补充或调整的需求，Agent 会基于上一版已完成的内容增量开发。'
-    )
-    await delay(300)
-    const intro = wf(threadId, 'requirements', 'requires_user_input', {})
-    onWorkflow?.(intro)
-    return intro
+    throw new Error('请使用当前节点的确认或修改按钮。')
   }
-
-  if (!resume && options.workflowScope === 'application_workbench_planning') {
-    return replayProjectPlan(threadId, options, callbacks, appName, projectPlan)
-  }
-
-  // 无 resumeState：需求分析阶段冷启动，先播放分析与澄清段节点再挂澄清门。
-  if (!resume) {
-    const trajectory = createTrajectory('requirement_analysis', callbacks.onProcessSteps)
-    trajectory.set('requirements_context', 'running')
-    await delay(400)
-    trajectory.set('requirements_context', 'completed')
-    trajectory.set('requirements_analyze', 'running')
-    await delay(600)
-    trajectory.set('requirements_analyze', 'completed')
-    // 分析进度快照：运行中状态先于澄清门发射，供会话运行态识别“推进中”。
-    onWorkflow?.(
-      wf(threadId, 'requirements', 'running', {}, {
-        summary: {
-          phase: 'requirements',
-          status: 'running',
-          message: '产品 Agent 正在分析需求…'
-        }
-      }, trajectory.events())
-    )
-    trajectory.set('requirements_clarify', 'requires_user_input')
-    await delay(300)
-    const payload = clarificationPayload(threadId, appName, clarificationQuestions, trajectory.events())
-    onWorkflow?.(payload)
-    return payload
-  }
-
-  if (mode === 'project_plan_confirmation') {
-    if (
-      options.clarificationAnswers?.confirm_project_plan !== undefined &&
-      !answerIsYes(options.clarificationAnswers.confirm_project_plan)
-    ) {
-      const trajectory = createTrajectory('project_planning', callbacks.onProcessSteps)
-      trajectory.set('planning_context', 'completed')
-      trajectory.set('planning_scope', 'completed')
-      trajectory.set(
-        'planning_document',
-        'requires_user_input',
-        '项目计划暂不确认，请补充需要调整的页面、接口或实体范围。'
+  if (record.stage === 'collecting_requirement') {
+    advance(application, { type: 'start_design' }, callbacks)
+    if (version?.parentVersionId)
+      callbacks.onContent?.(
+        '已继承所选版本的需求与规划内容。请核对本轮范围；新的产物仍需逐步确认。'
       )
-      const revision = revisionPayload(threadId, 'project_planning', 'project_plan_revision', trajectory.events(), history)
-      onWorkflow?.(revision)
-      return revision
-    }
-    const trajectory = createTrajectory('project_planning', callbacks.onProcessSteps)
-    trajectory.set('planning_context', 'completed')
-    trajectory.set('planning_scope', 'completed')
-    trajectory.set('planning_document', 'completed', '项目计划 Diff 已接受。')
-    const entryGate = developmentEntryConfirmationPayload(threadId, trajectory.events())
-    onWorkflow?.(entryGate)
-    return entryGate
+    return project(application, threadId, callbacks)
   }
-
-  if (mode === 'development_entry_confirmation') {
-    const trajectory = createTrajectory('project_planning', callbacks.onProcessSteps)
-    trajectory.set('planning_context', 'completed')
-    trajectory.set('planning_scope', 'completed')
-    trajectory.set('planning_permissions', 'completed')
-    trajectory.set('planning_document', 'completed')
-    const confirmation = wf(
-      threadId,
-      'ready_for_workbench',
-      'completed',
-      {
-        application_planning_confirmation: {
-          confirmedAt: new Date().toISOString(),
-          directories: { specs: 'docs', plans: 'docs' },
-          artifacts: {}
-        }
-      },
-      {
-        result: {
-          application_planning_confirmation: {
-            confirmedAt: new Date().toISOString(),
-            directories: { specs: 'docs', plans: 'docs' },
-            artifacts: {}
-          }
-        }
-      },
-      trajectory.events()
+  if (record.operationStatus === 'failed' || record.operationStatus === 'cancelled')
+    return project(application, threadId, callbacks)
+  if (record.stage.startsWith('generating_')) return generate(application, threadId, callbacks)
+  const text = String(options.message || '').trim()
+  if (
+    text &&
+    !['开始产品设计', '开始需求分析', '开始设计', '开始项目规划', '开始技术规划'].includes(text)
+  ) {
+    callbacks.onContent?.(
+      '当前产物已在右侧打开。可直接编辑 Markdown 或使用“提出修改”；确认与进入下一阶段只通过明确按钮执行。'
     )
-    onWorkflow?.(confirmation)
-    return confirmation
   }
-
-  if (mode === 'planning_stage_entry') {
-    // 项目规划门禁确认：切到规划会话启动规划工作流，规划剧本负责生命周期与阶段切换。
-    return replayProjectPlan(threadId, options, callbacks, appName, projectPlan)
-  }
-
-  if (mode === 'project_plan_revision') {
-    return replayProjectPlan(threadId, options, callbacks, appName, projectPlan, { revision: true })
-  }
-
-  if (mode === 'requirement_spec_confirmation') {
-    if (
-      options.clarificationAnswers?.confirm_requirement_spec !== undefined &&
-      !answerIsYes(options.clarificationAnswers.confirm_requirement_spec)
-    ) {
-      const trajectory = createTrajectory('requirement_analysis', callbacks.onProcessSteps)
-      trajectory.set('requirements_clarify', 'completed')
-      trajectory.set(
-        'requirements_document',
-        'requires_user_input',
-        '需求文档暂不确认，请补充需要调整的业务目标、角色或流程。'
-      )
-      const revision = revisionPayload(threadId, 'requirements', 'requirement_revision', trajectory.events(), history)
-      onWorkflow?.(revision)
-      return revision
-    }
-    // 需求文档 Diff 已接受 → 「生成需求文档」节点收口，工作流到此完成。
-    // 项目规划准入门（planning_stage_entry）是阶段层逻辑：工作流在此挂起等待确认，
-    // 弹框与顶部「项目规划」承载进入动作，但不在需求分析轨迹里呈现阶段切换节点。
-    // 生命周期停在 awaiting_requirement_confirmation：仍属分析阶段的初始集合，
-    // 门禁保持可交互，且不会像 generating_project_plan 那样提前切换阶段。
-    callbacks.onApplicationLifecycle?.(
-      designLifecycle(options.application, 'awaiting_requirement_confirmation')
-    )
-    const trajectory = createTrajectory('requirement_analysis', callbacks.onProcessSteps)
-    trajectory.set('requirements_document', 'completed', '需求文档 Diff 已接受。')
-    const entryGate = planningEntryConfirmationPayload(threadId, trajectory.events())
-    onWorkflow?.(entryGate)
-    return entryGate
-  }
-
-  // 澄清已提交（hasQuestions）或其它 → 播放文档段：生成需求文档 → 确认需求文档。
-  const trajectory = createTrajectory('requirement_analysis', callbacks.onProcessSteps)
-  trajectory.set('requirements_clarify', 'completed')
-  // 修改意见续跑先做需求变更意图分析（对齐真实工程 design_intent_analysis），再重新生成文档。
-  if (mode === 'requirement_revision') {
-    trajectory.set('requirements_intent', 'running')
-    await delay(500)
-    trajectory.set('requirements_intent', 'completed')
-  }
-  trajectory.set('requirements_document', 'running')
-  await delay(350)
-  onWorkflow?.(
-    wf(threadId, 'requirements', 'running', {}, {
-      summary: { phase: 'requirements', status: 'running', message: '正在生成需求文档…' }
-    }, trajectory.events())
-  )
-  const requirementChanges = await emitProgressiveDocChanges(
-    threadId,
-    'requirements',
-    appPath(WORKSPACE_DOC_PATHS.requirementSpec),
-    '正在生成需求文档…',
-    buildRequirementSpecDoc(requirementSpec, appName),
-    onWorkflow,
-    trajectory
-  )
-  // 文档渐进写入完成即进入待接受态：Diff 与接受授权归「生成需求文档」节点，
-  // 接受后由准入门续跑把节点落为完成。
-  trajectory.set(
-    'requirements_document',
-    'requires_user_input',
-    '需求文档已生成，请在右侧确认 Diff 后接受。'
-  )
-
-  // 需求文档已生成（确认卡出现）→ 发 generating_requirement_spec，让「需求文档」文档 tab 变亮。
-  callbacks.onApplicationLifecycle?.(designLifecycle(options.application, 'generating_requirement_spec'))
-  const payload = requirementConfirmationPayload(
-    threadId,
-    appName,
-    requirementSpec,
-    requirementChanges,
-    trajectory.events(),
-    history
-  )
-  onWorkflow?.(payload)
-  return payload
+  return project(application, threadId, callbacks)
 }
 
-// —— 工作台需求分析/项目计划阶段：把「一次性需求确认 + 项目规划」节点逻辑挪进工作台对话 ——
+/** 工作台设计与规划会话复用同一应用版本领域记录。 */
+export const replayDesignPhase = replayPlanning
 
-function designLifecycle(
-  app: ApplicationConfig | undefined,
-  stage: ApplicationLifecycleStage
-): ApplicationLifecycle {
-  return {
-    schemaVersion: '1.2.0',
-    application: { id: app?.id || 'app-pms-new', name: app?.name || '应用' },
-    updatedAt: new Date().toISOString(),
-    revision: nextLifecycleRevision(),
-    initialization: { stage, status: 'running' },
-    activeExecutions: {},
-    extensions: {}
-  }
-}
-
-/**
- * 工作台需求分析/项目计划阶段剧本 = 规划流程(复用 replayPlanning)+ 生命周期驱动阶段。
- * 规划全程生命周期 stage 属需求分析/项目计划阶段；计划确认完成后发 ready_for_workbench，
- * 前端 executionPhase 据此自动切到开发阶段。
- */
-export async function replayDesignPhase(
+/** 记录停止或失败后的可重试状态，恢复时不伪造节点成功。 */
+export function recordPlanningFailure(
+  application: ApplicationConfig,
   threadId: string,
-  options: SendWorkflowMessageOptions,
-  callbacks: ReplayCallbacks
-): Promise<WorkflowRunPayload> {
-  if (options.workflowScope !== 'application_workbench_planning') {
-    callbacks.onApplicationLifecycle?.(designLifecycle(options.application, 'collecting_requirement'))
-  }
-  const result = await replayPlanning(threadId, options, callbacks)
-  if (result.summary.phase === 'ready_for_workbench' && result.summary.status === 'completed') {
-    callbacks.onApplicationLifecycle?.(designLifecycle(options.application, 'ready_for_workbench'))
-  }
-  return result
+  error: string,
+  cancelled: boolean,
+  callbacks: PlanningReplayCallbacks
+): WorkflowRunPayload {
+  const record = loadPlanningRecord(application)
+  record.operationStatus = cancelled ? 'cancelled' : 'failed'
+  record.error = error
+  saveRecord(application, record, callbacks)
+  return project(application, threadId, callbacks)
 }

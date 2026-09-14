@@ -5,7 +5,8 @@
     "src/renderer/src/env.d.ts",
     "src/renderer/src/window.d.ts",
     "src/renderer/src/**/*",
-    "src/renderer/src/**/*.tsx"
+    "src/renderer/src/**/*.tsx",
+    "show-helper/**/*"
   ],
   "compilerOptions": {
     "composite": true,
@@ -32,6 +33,12 @@
       ],
       "@mock-data/*": [
         "mock-data/*"
+      ],
+      "@show-helper": [
+        "show-helper"
+      ],
+      "@show-helper/*": [
+        "show-helper/*"
       ]
     }
   }

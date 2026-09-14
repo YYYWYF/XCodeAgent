@@ -18,7 +18,7 @@ export type WorkbenchPhaseValidity = 'unreached' | 'valid' | 'invalid'
 
 export type WorkbenchAgentIdentity = {
   key: WorkbenchPhase
-  /** 短标签：需求分析 / 项目规划 / 开发 / 测试 / 审查 / 验收。 */
+  /** 短标签：设计 / 计划 / 开发 / 测试 / 审查 / 验收。 */
   label: string
   /** 主责角色：产品 / 项目 / 研发 / 测试 / 审查 Agent 或用户。 */
   role: string
@@ -30,21 +30,21 @@ export type WorkbenchAgentIdentity = {
 export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdentity> = {
   analysis: {
     key: 'analysis',
-    label: '需求分析',
+    label: '设计',
     role: '产品 Agent',
-    responsibility: '明确应用要解决的问题，维护需求文档'
+    responsibility: '确认需求规格说明书，并完成 UI 设计'
   },
   planning: {
     key: 'planning',
-    label: '项目规划',
+    label: '计划',
     role: '项目 Agent',
-    responsibility: '根据确认需求维护项目计划和开发产物清单'
+    responsibility: '审阅技术规划方案并生成应用工程模板'
   },
   development: {
     key: 'development',
     label: '开发',
     role: '研发 Agent',
-    responsibility: '实现页面、接口、实体并交付代码产物'
+    responsibility: '实现页面、接口与实体操作并交付代码产物'
   },
   testing: {
     key: 'testing',
@@ -66,10 +66,10 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
   }
 }
 
-/** 顶部阶段旅程节点的展示文案：需求分析/项目规划本身即完整名称，其余短标签补充“阶段”后缀。 */
+/** 顶部阶段旅程节点统一使用“阶段”后缀。 */
 export function workbenchPhaseTabText(phase: WorkbenchPhase): string {
   const { label } = WORKBENCH_PHASE_AGENTS[phase]
-  return phase === 'analysis' || phase === 'planning' ? label : `${label}阶段`
+  return `${label}阶段`
 }
 
 /** 需求分析阶段的初始化节点：产品 Agent 仍在整理和确认需求。 */
@@ -77,15 +77,26 @@ const ANALYSIS_INITIALIZATION_STAGES = new Set([
   'collecting_requirement',
   'analyzing_requirement',
   'awaiting_requirement_clarification',
+  'generating_requirement_document',
+  'awaiting_requirement_document_confirmation',
+  'generating_ui_designs',
+  'awaiting_ui_design_confirmation',
+  'awaiting_planning_stage_entry',
   'generating_requirement_spec',
   'awaiting_requirement_confirmation'
 ])
 
 /** 项目计划阶段的初始化节点：项目 Agent 正在生成或确认项目计划。 */
 const PLANNING_INITIALIZATION_STAGES = new Set([
+  'generating_technical_plan',
+  'awaiting_technical_plan_confirmation',
   'generating_project_plan',
   'awaiting_project_plan_confirmation',
-  'generating_build_task_plan'
+  'generating_build_task_plan',
+  // 模板生成与开发准入门都属于计划阶段收尾：在此之前不能把旅程推导进开发阶段，
+  // 否则顶部「开发阶段」的再唤起分支会退化为直接切换。
+  'generating_application_template_files',
+  'awaiting_development_entry'
 ])
 
 /** 应用是否仍处于需求分析或项目计划阶段——新应用自动开始规划对话的依据。 */

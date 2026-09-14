@@ -24,7 +24,6 @@ export type WorkflowSummary = {
   previewUrl?: string
   launchResult?: WorkflowLaunchResult
   acceptanceRequest?: WorkflowAcceptanceRequest
-  artifacts?: Record<string, string>
   clarification?: WorkflowClarification
   lifecycle?: ApplicationLifecycle
   [key: string]: unknown
@@ -172,7 +171,7 @@ export type WorkflowClarification = {
 }
 
 export type WorkflowConfirmationArtifact = {
-  id: 'requirement_spec' | 'project_plan'
+  id: 'requirement_spec' | 'product_plan' | 'ui_designs' | 'technical_plan' | 'project_plan'
   name: string
   path: string
   format: 'markdown'
@@ -183,6 +182,13 @@ export type ApplicationLifecycleStage =
   | 'collecting_requirement'
   | 'analyzing_requirement'
   | 'awaiting_requirement_clarification'
+  | 'generating_requirement_document'
+  | 'awaiting_requirement_document_confirmation'
+  | 'generating_ui_designs'
+  | 'awaiting_ui_design_confirmation'
+  | 'awaiting_planning_stage_entry'
+  | 'generating_technical_plan'
+  | 'awaiting_technical_plan_confirmation'
   | 'generating_requirement_spec'
   | 'awaiting_requirement_confirmation'
   | 'generating_project_plan'
@@ -190,6 +196,7 @@ export type ApplicationLifecycleStage =
   | 'generating_build_task_plan'
   | 'generating_application_template_files'
   | 'application_template_generation_failed'
+  | 'awaiting_development_entry'
   | 'ready_for_workbench'
 
 export type WorkbenchExecutionStatus =
@@ -281,16 +288,6 @@ export type WorkflowRunPayload = {
   codeChanges?: WorkspaceCodeChangeSet
   state?: Record<string, unknown>
   result?: Record<string, unknown>
-}
-
-export type WorkflowDebugOptions = {
-  enabled: boolean
-  resumeFrom?: string
-  buildExecutionScope?: WorkflowBuildExecutionScope
-  requirementSpecPath?: string
-  projectPlanPath?: string
-  workspaceSnapshotPath?: string
-  buildTaskPlanPath?: string
 }
 
 export type WorkflowBuildExecutionScope = {

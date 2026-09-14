@@ -10,7 +10,7 @@ import styleConfig from './src/renderer/src/config/style.json'
 const rootDir = process.cwd()
 const MOCK_APPLICATION_PORT = 5190
 
-// 在独立端口运行“被生成应用”，避免预览地址误指向 XCodeAgent 原型自身。
+// 在独立端口运行“被生成应用”，避免预览地址误指向 AIStudio 原型自身。
 function mockPreviewAppPlugin(): Plugin {
   const previewHtmlPath = resolve(rootDir, 'mock-data/preview-app.html')
   return {
@@ -52,7 +52,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@renderer': resolve(rootDir, 'src/renderer/src'),
-      '@mock-data': resolve(rootDir, 'mock-data')
+      '@mock-data': resolve(rootDir, 'mock-data'),
+      // 原型演示辅助代码目录：与 mock-data 同级，独立于正式渲染层源码。
+      '@show-helper': resolve(rootDir, 'show-helper')
     }
   },
   define: {

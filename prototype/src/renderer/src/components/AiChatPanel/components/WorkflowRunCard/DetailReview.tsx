@@ -221,7 +221,7 @@ export default function DetailReview({
 function targetKindLabel(targetType: WorkflowDetailReviewTarget["target_type"]): string {
   if (targetType === "page") return "页面";
   if (targetType === "endpoint") return "接口";
-  return "对象";
+  return "实体";
 }
 
 function PageReviewEditor({

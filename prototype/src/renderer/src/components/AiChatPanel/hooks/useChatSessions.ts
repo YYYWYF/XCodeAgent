@@ -7,6 +7,7 @@ import {
   createChatSessionTitle,
   deleteChatSession,
   listChatSessions,
+  inferEndpointContextFromMessages,
   readChatSession,
   saveChatSession,
   type ChatSessionMessage,
@@ -38,39 +39,6 @@ export type PersistSessionInput = {
   sessionKind?: WorkbenchSessionKind
   titleFrom?: string
   materialize?: boolean
-}
-
-/** 从待保存消息中的 Workflow 快照推断 API endpoint 会话归属。 */
-function inferEndpointContextFromMessages(messages: ChatSessionMessage[]): {
-  apiContractId?: string
-  endpointId?: string
-  endpointLabel?: string
-} {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const workflow = messages[index]?.workflow
-    const state = workflow?.state || {}
-    const result = workflow?.result || {}
-    const reviewSummary = workflow?.summary.clarification?.review?.summary || {}
-    const detailTargetType = String(
-      state.detailTargetType || result.detailTargetType || reviewSummary.detailTargetType || ''
-    ).trim()
-    // 页面工作流可以携带依赖接口身份，但只有独立接口工作流才能据此建立接口产物关系。
-    if (detailTargetType !== 'endpoint') continue
-    const apiContractId = String(
-      state.selectedApiContractId ||
-        result.selectedApiContractId ||
-        reviewSummary.selectedApiContractId ||
-        ''
-    ).trim()
-    const endpointId = String(
-      state.selectedEndpointId ||
-        result.selectedEndpointId ||
-        reviewSummary.selectedEndpointId ||
-        ''
-    ).trim()
-    if (apiContractId && endpointId) return { apiContractId, endpointId }
-  }
-  return {}
 }
 
 type UseChatSessionsParams = {
@@ -318,6 +286,26 @@ export function useChatSessions({
     }
   }
 
+  /**
+   * 按谓词查找目标产物已有内容的会话并打开：优先 summary.messageCount>0，
+   * 静态计数在运行时消息写入后可能未刷新（挡板注入/设计会话不重写 summary），
+   * 回退内存消息判断，避免切换产物再回来时会话历史丢失。
+   */
+  const openExistingArtifactSession = async (
+    match: (session: ChatSessionSummary) => boolean
+  ): Promise<boolean> => {
+    const candidates = sessionSummariesRef.current[editorMode].filter(match)
+    const existingSession =
+      candidates.find((session) => session.messageCount > 0) ||
+      candidates.find((session) => {
+        const key = sessionRuntimeKey(workspaceRoot, editorMode, session.id)
+        return getSessionMessages(key).length > 0
+      })
+    if (!existingSession) return false
+    await handleOpenSession(existingSession.id)
+    return true
+  }
+
   /** 清空当前选中的会话，让阶段入口可以展示尚未建立任务上下文的空白态。 */
   const clearActiveSession = (): void => {
     activeSessionIdsRef.current = { ...activeSessionIdsRef.current, [editorMode]: undefined }
@@ -328,26 +316,10 @@ export function useChatSessions({
   const handleSelectPage = async (pageId: string): Promise<void> => {
     const normalizedPageId = pageId.trim()
     if (!normalizedPageId || loadingSessions) return
-
-    // 优先恢复该页面的有内容会话：静态 messageCount 在运行时消息写入后可能未刷新
-    // （挡板注入/设计会话走 setSessionMessages 不重写 summary），回退到内存消息判断，
-    // 避免切换到其它页面再回来时会话历史丢失。
-    const pageSessions = sessionSummariesRef.current[editorMode].filter(
-      (session) => session.pageId === normalizedPageId
-    )
-    const existingSession =
-      pageSessions.find((session) => session.messageCount > 0) ||
-      pageSessions.find((session) => {
-        const key = sessionRuntimeKey(workspaceRoot, editorMode, session.id)
-        return getSessionMessages(key).length > 0
-      })
-    if (existingSession) {
-      await handleOpenSession(existingSession.id)
+    if (await openExistingArtifactSession((session) => session.pageId === normalizedPageId)) {
       return
     }
-
-    activeSessionIdsRef.current = { ...activeSessionIdsRef.current, [editorMode]: undefined }
-    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    clearActiveSession()
   }
 
   /** 切换接口时恢复已有会话(优先 messageCount>0，回退内存消息)，避免切回后历史丢失。 */
@@ -356,24 +328,11 @@ export function useChatSessions({
     const normalizedApi = apiContractId.trim()
     const normalizedEp = endpointId.trim()
     if (!normalizedApi || !normalizedEp) return
-    const epSessions = sessionSummariesRef.current[editorMode].filter(
+    const restored = await openExistingArtifactSession(
       (session) => session.apiContractId === normalizedApi && session.endpointId === normalizedEp
     )
-    // summary messageCount 可能滞后(persist 时机/竞态)，回退内存消息判断，
-    // 确保切回开发后接口历史不丢（对齐 handleSelectPage 的回退策略）。
-    const existingSession =
-      epSessions.find((session) => session.messageCount > 0) ||
-      epSessions.find((session) => {
-        const runtimeKey = sessionRuntimeKey(workspaceRoot, editorMode, session.id)
-        return getSessionMessages(runtimeKey).length > 0
-      })
-    if (existingSession) {
-      await handleOpenSession(existingSession.id)
-      return
-    }
-
-    activeSessionIdsRef.current = { ...activeSessionIdsRef.current, [editorMode]: undefined }
-    setActiveSessionIds((current) => ({ ...current, [editorMode]: undefined }))
+    if (restored) return
+    clearActiveSession()
   }
 
 /** 创建尚未进入目录的运行时草稿会话，等待 Agent 回复后再物化。 */
@@ -560,45 +519,53 @@ export function useChatSessions({
     }
   }
 
-  /** 创建或复用阶段默认的应用级代码审查会话。 */
-  const createReviewSession = async (): Promise<SessionIdentity> => {
-    const REVIEW_TITLE = '代码审查'
-    const existingReview = sessionSummariesRef.current[editorMode].find(
+  /**
+   * 按阶段默认目录（sessionKind + 标题集合）查找并复用应用级会话，找不到时新建默认会话。
+   * review/testing/acceptance/analysis/planning 五个阶段默认会话共享这一查找-复用-回退路径。
+   */
+  const ensureKindSession = async (
+    sessionKind: WorkbenchSessionKind,
+    titles: string[],
+    options?: { checkActiveRuntime?: boolean }
+  ): Promise<SessionIdentity> => {
+    if (options?.checkActiveRuntime) {
+      const runtimeSession = activeRuntimeDesignSession(
+        sessionKind as 'analysis' | 'planning'
+      )
+      if (runtimeSession) return runtimeSession
+    }
+    const existing = sessionSummariesRef.current[editorMode].find(
       (session) =>
         !session.pageId &&
         !session.apiContractId &&
         !session.endpointId &&
-        session.sessionKind === 'review' && session.title === REVIEW_TITLE
+        session.sessionKind === sessionKind &&
+        titles.includes(session.title)
     )
-    if (existingReview) {
-      await openChatSession(editorMode, existingReview.id)
-      const key = sessionRuntimeKey(workspaceRoot, editorMode, existingReview.id)
+    if (existing) {
+      await openChatSession(editorMode, existing.id)
+      const key = sessionRuntimeKey(workspaceRoot, editorMode, existing.id)
       const identity =
-        getIdentity(key) || sessionIdentityFromSummary(existingReview, editorMode, workspaceRoot)
+        getIdentity(key) || sessionIdentityFromSummary(existing, editorMode, workspaceRoot)
       if (identity) return identity
     }
-    return createNewSession(undefined, undefined, undefined, REVIEW_TITLE, true, 'review')
+    return createNewSession(
+      undefined,
+      undefined,
+      undefined,
+      titles[0],
+      true,
+      sessionKind
+    )
   }
 
+  /** 创建或复用阶段默认的应用级代码审查会话。 */
+  const createReviewSession = (): Promise<SessionIdentity> =>
+    ensureKindSession('review', ['代码审查'])
+
   /** 创建或复用阶段默认的应用级测试会话。 */
-  const createTestingSession = async (): Promise<SessionIdentity> => {
-    const TESTING_TITLE = '应用测试'
-    const existingTesting = sessionSummariesRef.current[editorMode].find(
-      (session) =>
-        !session.pageId &&
-        !session.apiContractId &&
-        !session.endpointId &&
-        session.sessionKind === 'testing' && session.title === TESTING_TITLE
-    )
-    if (existingTesting) {
-      await openChatSession(editorMode, existingTesting.id)
-      const key = sessionRuntimeKey(workspaceRoot, editorMode, existingTesting.id)
-      const identity =
-        getIdentity(key) || sessionIdentityFromSummary(existingTesting, editorMode, workspaceRoot)
-      if (identity) return identity
-    }
-    return createNewSession(undefined, undefined, undefined, TESTING_TITLE, true, 'testing')
-  }
+  const createTestingSession = (): Promise<SessionIdentity> =>
+    ensureKindSession('testing', ['应用测试'])
 
   /** 创建或复用开发阶段的主对话「应用开发」；产物目标不再决定会话身份。 */
   const ensureDevelopmentSession = async (): Promise<SessionIdentity> => {
@@ -690,24 +657,8 @@ export function useChatSessions({
   }
 
   /** 创建或复用阶段默认的应用级验收会话，保持验收与审查对话完全隔离。 */
-  const createAcceptanceSession = async (): Promise<SessionIdentity> => {
-    const ACCEPTANCE_TITLE = '应用验收'
-    const existingAcceptance = sessionSummariesRef.current[editorMode].find(
-      (session) =>
-        !session.pageId &&
-        !session.apiContractId &&
-        !session.endpointId &&
-        session.sessionKind === 'acceptance' && session.title === ACCEPTANCE_TITLE
-    )
-    if (existingAcceptance) {
-      await openChatSession(editorMode, existingAcceptance.id)
-      const key = sessionRuntimeKey(workspaceRoot, editorMode, existingAcceptance.id)
-      const identity =
-        getIdentity(key) || sessionIdentityFromSummary(existingAcceptance, editorMode, workspaceRoot)
-      if (identity) return identity
-    }
-    return createNewSession(undefined, undefined, undefined, ACCEPTANCE_TITLE, true, 'acceptance')
-  }
+  const createAcceptanceSession = (): Promise<SessionIdentity> =>
+    ensureKindSession('acceptance', ['应用验收'])
 
   /** 读取当前运行时已创建的设计会话，避免自动首轮再次创建空白会话。 */
   const activeRuntimeDesignSession = (
@@ -720,47 +671,13 @@ export function useChatSessions({
     return identity?.sessionKind === sessionKind ? identity : undefined
   }
 
-  /** 创建或复用产品 Agent 的需求分析阶段默认会话，只持有需求文档。 */
-  const ensureAnalysisSession = async (): Promise<SessionIdentity> => {
-    const activeRuntimeSession = activeRuntimeDesignSession('analysis')
-    if (activeRuntimeSession) return activeRuntimeSession
-    const existing = sessionSummariesRef.current[editorMode].find(
-      (session) =>
-        !session.pageId &&
-        !session.apiContractId &&
-        !session.endpointId &&
-        session.sessionKind === 'analysis' && session.title === '需求分析'
-    )
-    if (existing) {
-      await openChatSession(editorMode, existing.id)
-      const key = sessionRuntimeKey(workspaceRoot, editorMode, existing.id)
-      const identity =
-        getIdentity(key) || sessionIdentityFromSummary(existing, editorMode, workspaceRoot)
-      if (identity) return identity
-    }
-    return createNewSession(undefined, undefined, undefined, '需求分析', true, 'analysis')
-  }
+  /** 创建或复用产品 Agent 的设计阶段默认会话，承载联合需求与 UI 设计。 */
+  const ensureAnalysisSession = (): Promise<SessionIdentity> =>
+    ensureKindSession('analysis', ['设计', '需求分析'], { checkActiveRuntime: true })
 
-  /** 创建或复用项目 Agent 的项目计划阶段默认会话，只持有项目计划。 */
-  const ensurePlanningSession = async (): Promise<SessionIdentity> => {
-    const activeRuntimeSession = activeRuntimeDesignSession('planning')
-    if (activeRuntimeSession) return activeRuntimeSession
-    const existing = sessionSummariesRef.current[editorMode].find(
-      (session) =>
-        !session.pageId &&
-        !session.apiContractId &&
-        !session.endpointId &&
-        session.sessionKind === 'planning' && session.title === '项目计划'
-    )
-    if (existing) {
-      await openChatSession(editorMode, existing.id)
-      const key = sessionRuntimeKey(workspaceRoot, editorMode, existing.id)
-      const identity =
-        getIdentity(key) || sessionIdentityFromSummary(existing, editorMode, workspaceRoot)
-      if (identity) return identity
-    }
-    return createNewSession(undefined, undefined, undefined, '项目计划', true, 'planning')
-  }
+  /** 创建或复用项目 Agent 的计划阶段默认会话，承载 TechnicalPlan 与模板生成。 */
+  const ensurePlanningSession = (): Promise<SessionIdentity> =>
+    ensureKindSession('planning', ['项目计划'], { checkActiveRuntime: true })
 
   /** 按 API endpoint 恢复既有会话，首次进入该接口时创建独立 session 与 thread。 */
   const ensureEndpointSession = async (
@@ -933,13 +850,13 @@ export function useChatSessions({
       threadId: input.threadId,
       apiContractId: isDevelopmentSession
         ? undefined
-        : input.apiContractId || existingSummary?.apiContractId || inferredEndpoint.apiContractId,
+        : input.apiContractId || existingSummary?.apiContractId || inferredEndpoint?.apiContractId,
       endpointId: isDevelopmentSession
         ? undefined
-        : input.endpointId || existingSummary?.endpointId || inferredEndpoint.endpointId,
+        : input.endpointId || existingSummary?.endpointId || inferredEndpoint?.endpointId,
       endpointLabel: isDevelopmentSession
         ? undefined
-        : input.endpointLabel || existingSummary?.endpointLabel || inferredEndpoint.endpointLabel,
+        : input.endpointLabel || existingSummary?.endpointLabel || inferredEndpoint?.endpointLabel,
       pageId: isDevelopmentSession ? undefined : input.pageId || existingSummary?.pageId,
       sessionKind: input.sessionKind || existingSummary?.sessionKind,
       versionId: application.currentVersionId,

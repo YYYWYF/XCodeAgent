@@ -34,8 +34,6 @@ type Props = {
   /** 开发工作流首节点的模板选择交互。 */
   inlineFirstNode?: ReactElement
   inlineFirstNodePending?: boolean
-  /** 按节点归属内嵌的交互卡（需求分析/项目规划的澄清卡与已提交历史卡），键为节点 id。 */
-  nodeCards?: Record<string, ReactElement>
   /** 当前消息的 Workflow，用于把需要操作的节点交互嵌入节点轨迹。 */
   workflow?: WorkflowRunPayload
   interactionAvailability?: WorkflowInteractionAvailability
@@ -55,7 +53,6 @@ export default function ProcessSteps({
   workflowTitle,
   inlineFirstNode,
   inlineFirstNodePending = false,
-  nodeCards,
   workflow,
   interactionAvailability = 'stale',
   interactionDisabled = false,
@@ -67,8 +64,14 @@ export default function ProcessSteps({
   const dispatchPending =
     workflowClarification(workflow)?.mode === 'background_dispatch' &&
     workflowClarification(workflow)?.status === 'requires_user_input'
-  const statusClassName =
-    loading ? 'running' : waitingForInput || inlineFirstNodePending || dispatchPending ? 'waiting' : 'completed'
+  const entityBindingPending =
+    workflowClarification(workflow)?.mode === 'entity_binding' &&
+    workflowClarification(workflow)?.status === 'requires_user_input'
+  const statusClassName = loading
+    ? 'running'
+    : waitingForInput || inlineFirstNodePending || dispatchPending || entityBindingPending
+      ? 'waiting'
+      : 'completed'
   const testCaseAuthorizationPending =
     workflowClarification(workflow)?.mode === 'test_case_execute' &&
     workflowClarification(workflow)?.status === 'requires_user_input'
@@ -82,17 +85,15 @@ export default function ProcessSteps({
       ? '请选择页面模板后开始详细设计'
       : dispatchPending
         ? '请选择执行方式后继续'
-        : waitingForInput
-          ? '请根据下方提示补充修改需求'
-          : ''
+        : entityBindingPending
+          ? '确认各操作的数据实现后继续'
+          : waitingForInput
+            ? '请根据下方提示补充修改需求'
+            : ''
 
   return (
     <div
-      className={cx(
-        'process-steps',
-        statusClassName,
-        inlineFirstNode && 'has-inline-first-node'
-      )}
+      className={cx('process-steps', statusClassName, inlineFirstNode && 'has-inline-first-node')}
     >
       {/* 头部单行布局：大圆 + 名称 + 进度 + 状态说明同处一条水平线，
           说明文字出现与否都不会把文字重心拉低，也不再需要防抖占位行。 */}
@@ -100,7 +101,7 @@ export default function ProcessSteps({
         <span className={cx('process-steps-status')}>
           {loading ? (
             <LoadingOutlined spin />
-          ) : waitingForInput || inlineFirstNodePending || dispatchPending ? (
+          ) : waitingForInput || inlineFirstNodePending || dispatchPending || entityBindingPending ? (
             <PauseCircleOutlined />
           ) : (
             <CheckCircleOutlined />
@@ -108,9 +109,7 @@ export default function ProcessSteps({
         </span>
         <span className={cx('process-steps-title-row')}>
           <Text strong>{workflowTitle}</Text>
-          <Text className={cx('process-steps-progress')}>
-            {formatStepProgress(steps)}
-          </Text>
+          <Text className={cx('process-steps-progress')}>{formatStepProgress(steps)}</Text>
           {statusHint && (
             <Text className={cx('process-steps-current')} type="secondary">
               {statusHint}
@@ -128,7 +127,7 @@ export default function ProcessSteps({
             showTestCaseAuthorization={testCaseAuthorizationPending}
             showArtifactAcceptance={artifactAcceptancePending}
             showBackgroundDispatch={dispatchPending}
-            stepCard={nodeCards?.[step.nodeName || step.id]}
+            showEntityBinding={entityBindingPending}
             inlineContent={index === 0 ? inlineFirstNode : undefined}
             workflow={workflow}
             interactionAvailability={interactionAvailability}
@@ -149,10 +148,10 @@ function ProcessStep({
   settled,
   step,
   inlineContent,
-  stepCard,
   showTestCaseAuthorization,
   showArtifactAcceptance,
   showBackgroundDispatch,
+  showEntityBinding,
   workflow,
   interactionAvailability,
   interactionDisabled,
@@ -164,11 +163,10 @@ function ProcessStep({
   settled: boolean
   step: ProcessStepRecord
   inlineContent?: ReactElement
-  /** 归属到该节点下方的交互卡（需求澄清待输入卡 / 已提交历史卡）。 */
-  stepCard?: ReactElement
   showTestCaseAuthorization: boolean
   showArtifactAcceptance: boolean
   showBackgroundDispatch: boolean
+  showEntityBinding: boolean
   workflow?: WorkflowRunPayload
   interactionAvailability: WorkflowInteractionAvailability
   interactionDisabled: boolean
@@ -188,12 +186,17 @@ function ProcessStep({
   const expandable =
     hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration || hasWorkspaceInspection
   const awaitingInput = waitingForInput && step.status === 'requires_user_input'
-  const awaitingTestCaseAuthorization =
-    showTestCaseAuthorization && step.status === 'requires_user_input'
-  const awaitingArtifactAcceptance =
-    showArtifactAcceptance && step.status === 'requires_user_input'
-  const awaitingBackgroundDispatch =
-    showBackgroundDispatch && step.status === 'requires_user_input'
+  // 四类节点动作（用例授权 / 产物验收 / 执行方式选择 / 实体绑定）共用同一条内嵌轨迹渲染：
+  // 节点进入待输入态时把 WorkflowRunCard 内嵌在流程轨迹里，不再脱离流程单独渲染。
+  const awaitingEmbeddedAction =
+    step.status === 'requires_user_input' &&
+    Boolean(
+      workflow &&
+        (showTestCaseAuthorization ||
+          showArtifactAcceptance ||
+          showBackgroundDispatch ||
+          showEntityBinding)
+    )
 
   const className = cx(
     'process-step',
@@ -225,8 +228,7 @@ function ProcessStep({
     )
   }
 
-  // 用例授权是“确认执行用例”节点的动作，不再脱离流程轨迹单独渲染。
-  if (awaitingTestCaseAuthorization && workflow) {
+  if (awaitingEmbeddedAction && workflow) {
     return (
       <div className={`${className} ${cx('process-step-interactive')}`}>
         <div className={cx('process-step-summary')}>{summaryContent}</div>
@@ -242,56 +244,6 @@ function ProcessStep({
       </div>
     )
   }
-
-  // 产物验收是「确认验收」节点的动作，与用例授权同样内嵌在节点轨迹中。
-  if (awaitingArtifactAcceptance && workflow) {
-    return (
-      <div className={`${className} ${cx('process-step-interactive')}`}>
-        <div className={cx('process-step-summary')}>{summaryContent}</div>
-        <div className={cx('process-step-detail', 'process-step-interaction-detail')}>
-          <WorkflowRunCard
-            embedded
-            disabled={interactionDisabled}
-            interactionAvailability={interactionAvailability}
-            onSubmitClarification={onSubmitClarification}
-            workflow={workflow}
-          />
-        </div>
-      </div>
-    )
-  }
-
-  // 执行方式选择是“选择执行方式”节点的动作，与用例授权同样内嵌在节点轨迹中。
-  if (awaitingBackgroundDispatch && workflow) {
-    return (
-      <div className={`${className} ${cx('process-step-interactive')}`}>
-        <div className={cx('process-step-summary')}>{summaryContent}</div>
-        <div className={cx('process-step-detail', 'process-step-interaction-detail')}>
-          <WorkflowRunCard
-            embedded
-            disabled={interactionDisabled}
-            interactionAvailability={interactionAvailability}
-            onSubmitClarification={onSubmitClarification}
-            workflow={workflow}
-          />
-        </div>
-      </div>
-    )
-  }
-
-  // 需求分析/项目规划工作流：卡片与节点同体——沿用可折叠节点的 details 结构，
-  // 点击节点标题即可收起/展开；待输入节点默认展开，确认提交落定后自动收起为历史。
-  if (stepCard) {
-    return (
-      <details className={className} open={step.status === 'requires_user_input'}>
-        <summary className={cx('process-step-summary')}>{summaryContent}</summary>
-        <div className={cx('process-step-detail', 'process-step-interaction-detail')}>
-          {stepCard}
-        </div>
-      </details>
-    )
-  }
-
   if (awaitingInput) {
     const clarificationText =
       step.detail.trim() ||

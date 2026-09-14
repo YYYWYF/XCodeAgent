@@ -1,0 +1,157 @@
+.@{class-prefix}-business-object-development {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  h2, h3, p { margin: 0; }
+  .ant-btn-primary { color: #fff; background: var(--wb-accent); border-color: var(--wb-accent); }
+}
+
+.@{class-prefix}-bod-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--wb-border);
+}
+.@{class-prefix}-bod-title { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.@{class-prefix}-bod-title > span { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; color: var(--wb-accent); background: var(--wb-accent-soft); border: 1px solid var(--wb-accent-border); border-radius: 10px; }
+.@{class-prefix}-bod-title h2 { overflow: hidden; margin: 0; color: var(--wb-text); font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+
+// 目录驱动的单一内容区：对象节点 → 字段维护；方法节点 → 出入参与数据实现定义。
+.@{class-prefix}-bod-content { min-width: 0; min-height: 0; flex: 1; overflow-y: auto; padding: 18px 20px 30px; }
+
+.@{class-prefix}-bod-fields-head {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 14px;
+  > div { display: flex; align-items: center; gap: 7px; }
+  > div .anticon { color: var(--wb-accent); }
+  > div strong { font-size: 12px; }
+  > span { color: var(--wb-text-tertiary); font-size: 10.5px; }
+}
+
+// 数据来源绑定卡：类别切换 + 库表绑定 + 字段对应，是对象页的第一块内容。
+.@{class-prefix}-bod-source-card {
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface);
+}
+
+.@{class-prefix}-bod-source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  > div:first-child { display: flex; align-items: center; gap: 7px; }
+  > div:first-child .anticon { color: var(--wb-accent); }
+  > div:first-child strong { font-size: 12px; }
+}
+
+.@{class-prefix}-bod-bound-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  color: var(--wb-accent);
+  font-size: 11px;
+
+  .anticon { font-size: 11px; }
+}
+
+.@{class-prefix}-bod-bind-note {
+  display: block;
+  margin-top: 10px;
+  color: var(--wb-text-tertiary);
+  font-size: 10.5px;
+  line-height: 1.7;
+}
+
+.@{class-prefix}-bod-match-table {
+  margin-bottom: 4px;
+
+  td:last-child span {
+    font-size: 10px;
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-bod-match-ok { color: var(--wb-success); }
+.@{class-prefix}-bod-match-pending { color: var(--wb-warning); }
+
+// 字段表列结构对齐原工程（字段名 / 类型 / 必填），用主题 token 适配明暗两套主题。
+.@{class-prefix}-bod-field-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  th, td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--wb-border);
+  }
+  th {
+    color: var(--wb-text-tertiary);
+    background: var(--wb-surface-subtle);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    &:first-child { border-radius: 7px 0 0 7px; }
+    &:last-child { border-radius: 0 7px 7px 0; }
+  }
+  td {
+    color: var(--wb-text-secondary);
+    &:first-child code {
+      padding: 1px 6px;
+      color: var(--wb-text);
+      background: var(--wb-surface-subtle);
+      border: 1px solid var(--wb-border);
+      border-radius: 5px;
+      font-size: 10.5px;
+    }
+  }
+  tbody tr:hover td { background: var(--wb-surface-hover); }
+}
+
+.@{class-prefix}-bod-operation-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.@{class-prefix}-bod-operation-header > div { min-width: 0; }
+.@{class-prefix}-bod-operation-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.@{class-prefix}-bod-operation-header .ant-tag { margin-bottom: 6px; }
+.@{class-prefix}-bod-operation-header h3 { color: var(--wb-text); font-size: 16px; }
+.@{class-prefix}-bod-operation-header p { margin-top: 4px; color: var(--wb-text-muted); font-size: 11px; line-height: 1.6; }
+.@{class-prefix}-bod-contract { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 14px 0 16px; }
+.@{class-prefix}-bod-contract > div { min-width: 0; padding: 9px 10px; border: 1px solid var(--wb-border); border-radius: 7px; background: var(--wb-surface-subtle); }
+.@{class-prefix}-bod-contract small { color: var(--wb-text-tertiary); font-size: 9.5px; }
+.@{class-prefix}-bod-contract p { margin-top: 4px; color: var(--wb-text-secondary); font-size: 10.5px; overflow-wrap: anywhere; }
+.@{class-prefix}-bod-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.@{class-prefix}-bod-chips span {
+  padding: 2px 8px;
+  color: var(--wb-text-secondary);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  font-size: 10.5px;
+}
+.@{class-prefix}-bod-binding-stage { padding: 14px; border: 1px solid var(--wb-border); border-radius: 10px; background: var(--wb-surface); }
+.@{class-prefix}-bod-stage-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 13px; }
+.@{class-prefix}-bod-stage-heading > span { display: grid; width: 24px; height: 24px; place-items: center; color: var(--wb-accent); background: var(--wb-accent-soft); border-radius: 7px; font-size: 9px; font-weight: 700; }
+.@{class-prefix}-bod-stage-heading > div { display: grid; }
+.@{class-prefix}-bod-stage-heading strong { font-size: 12px; }
+.@{class-prefix}-bod-stage-heading small { margin-top: 2px; color: var(--wb-text-tertiary); font-size: 9.5px; }
+.@{class-prefix}-bod-binding-stage .@{class-prefix}-bo-implementation { padding: 0; border: 0; background: transparent; }
+.@{class-prefix}-bod-binding-stage .@{class-prefix}-bo-implementation > .@{class-prefix}-bo-section-heading:first-child { display: none; }
+.@{class-prefix}-bod-binding-stage .@{class-prefix}-bo-implementation > .@{class-prefix}-bo-muted:first-of-type { display: none; }
+
+.@{class-prefix}-bod-operation-form { display: grid; gap: 12px; }
+.@{class-prefix}-bod-operation-form label { display: grid; gap: 6px; color: var(--wb-text-secondary); font-size: 12px; }
+
+@media (max-width: 850px) {
+  .@{class-prefix}-bod-contract { grid-template-columns: 1fr; }
+}

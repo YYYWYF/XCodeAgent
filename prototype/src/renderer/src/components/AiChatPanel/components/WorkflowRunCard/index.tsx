@@ -21,7 +21,7 @@ import {
   Typography
 } from 'antd'
 import type { ReactElement } from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type {
   WorkflowBuildExecutionSlice,
   WorkflowBuildExecutionTask,
@@ -32,6 +32,9 @@ import type {
   WorkflowClarificationAnswers,
   WorkflowRunPayload
 } from '../../../../typings'
+import type { UiDesignPage } from '../../../../initializationPlanning'
+import { getAvailableTemplates } from '../../../../service/templateService'
+import UiTemplateWireframe from '../UiTemplateWireframe'
 import { cx } from '../../../../utils'
 import type { WorkspaceDocKey } from '../../types'
 import {
@@ -40,6 +43,7 @@ import {
 } from '../../workflowContinuation'
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode'
 import BackgroundDispatchCard, { type BackgroundDispatchOption } from '../BackgroundDispatchCard'
+import EntityBindingCard, { type EntityBindingPlanItem } from '../EntityBindingCard'
 import { DetailReviewAuthBar } from './DetailReview'
 import {
   taskId,
@@ -61,7 +65,7 @@ const { TextArea } = Input
 
 const OTHER_OPTION_VALUE = '__other__'
 
-// 需求分析/项目计划阶段三份产物的确认卡 mode → 文档信息（驱动 ArtifactConfirmationCard 渲染）。
+// 设计与计划阶段的确认卡 mode → 正式产物信息（驱动 ArtifactConfirmationCard 渲染）。
 const ARTIFACT_CONFIRMATION_MAP: Record<
   string,
   { docKey: WorkspaceDocKey; title: string; summary: string }
@@ -71,10 +75,20 @@ const ARTIFACT_CONFIRMATION_MAP: Record<
     title: '需求文档',
     summary: '需求文档已生成，请确认内容。'
   },
+  requirement_document_confirmation: {
+    docKey: 'requirement-spec',
+    title: '需求规格说明书',
+    summary: '需求规格说明书已生成，请通过右侧表单审阅并确认。'
+  },
   project_plan_confirmation: {
     docKey: 'project-plan',
     title: '项目计划',
     summary: '项目计划已生成，确认后生成构建任务清单。'
+  },
+  technical_plan_confirmation: {
+    docKey: 'technical-plan',
+    title: '技术规划方案',
+    summary: '技术架构、实体、数据来源意向与页面使用关系已生成，请确认。'
   }
 }
 
@@ -107,6 +121,10 @@ type WorkflowRunCardProps = {
   /** 是否作为流程节点的内嵌动作渲染，避免形成独立的对话卡片。 */
   embedded?: boolean
   interactionAvailability: WorkflowInteractionAvailability
+  /** UI 设计确认卡逐页选模板用的实时页面清单（模板名随剧本重写同步刷新）。 */
+  uiDesignPages?: UiDesignPage[]
+  /** 用户是否已提交过一轮版式选择：区分首轮“待选择版式”与改稿轮“生成中显示已选模板”。 */
+  uiDesignTemplatesSelected?: boolean
   onDiscard?: (docKey: WorkspaceDocKey) => void
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
@@ -119,11 +137,12 @@ export default function WorkflowRunCard({
   disabled,
   embedded = false,
   interactionAvailability,
+  uiDesignPages,
+  uiDesignTemplatesSelected = false,
   onSubmitClarification,
   workflow
 }: WorkflowRunCardProps): ReactElement | null {
   const status = String(workflow.summary.status || 'unknown')
-  const artifacts = workflow.summary.artifacts || {}
   const clarification = workflowClarification(workflow)
   const cardCopy = workflowCardCopy(clarification?.mode, workflow.summary.phase)
   const clarificationQuestions = clarification?.questions || []
@@ -137,11 +156,23 @@ export default function WorkflowRunCard({
   const isTestCaseAuthorization = clarification?.mode === 'test_case_execute'
   const isArtifactAcceptance = clarification?.mode === 'page_acceptance'
   const isBackgroundDispatch = clarification?.mode === 'background_dispatch'
+  // ui_confirmation 阶段的运行中快照不带 clarification（生成中），按阶段名兜底识别：
+  // 静默批量生成期间卡片必须仍落在 UI 设计分支，否则整张卡被卸载再重挂，表现为闪烁。
+  const isUiDesignConfirmation =
+    clarification?.mode === 'ui_design_confirmation' ||
+    workflow.summary?.phase === 'ui_confirmation'
+  const isRequirementDocumentConfirmation =
+    clarification?.mode === 'requirement_document_confirmation'
+  const isTechnicalPlanConfirmation = clarification?.mode === 'technical_plan_confirmation'
   const detailReview = clarification?.mode === 'detail_review' ? clarification.review : undefined
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
     : undefined
   const requiresConfirmation = clarification?.status === 'requires_user_input'
+  // 已提交的确认卡保留只读回看：对齐原工程历史轮次行为，卡片留在自己的消息里禁用展示。
+  const isSubmittedConfirmation = clarification?.status === 'submitted'
+  // 交互统一禁用条件：外层禁用或该确认卡已不再处于可交互窗口（提交中/已失效）。
+  const actionDisabled = disabled || interactionAvailability !== 'active'
   const [isSubmittingClarification, setIsSubmittingClarification] = useState(false)
   // 同一条测试用例的提交中状态应持续到运行快照替换；切换到下一条用例时再恢复新的授权入口。
   const testAuthorizationKey = [
@@ -174,10 +205,22 @@ export default function WorkflowRunCard({
     return initial
   })
   const [clarificationStep, setClarificationStep] = useState(0)
+  // 技术规划方案“重新生成”的展开式意见输入：首次点击只展开输入区，再点才提交；
+  // 用户可表达真实修改意图，留空则退回默认文案，不增加默认状态的视觉负担。
+  const [technicalPlanRevisionOpen, setTechnicalPlanRevisionOpen] = useState(false)
+  const [technicalPlanFeedback, setTechnicalPlanFeedback] = useState('')
+  // UI 设计确认卡的逐页选模板：展开哪一页的选择器、当前翻看的模板序号、已记录的版式选择。
+  // 选模板只记录选择，不触发生成；全部页面选定后自动批量交后台重画，右侧一次性统一呈现。
+  const uiTemplates = useMemo(() => getAvailableTemplates(), [])
+  const [uiTemplatePickerPageId, setUiTemplatePickerPageId] = useState('')
+  const [uiTemplateIndex, setUiTemplateIndex] = useState(0)
+  const [uiTemplateSelections, setUiTemplateSelections] = useState<Record<string, string>>({})
   // 应用级验收的主交互位于右侧预览底部，避免在对话区重复渲染一张确认卡。
   if (clarification?.mode === 'application_acceptance') return null
-  // 开发准入由独立弹框承载，计划对话只保留项目 Agent 的确认消息。
+  // 开发准入与设计完成后的计划准入统一由阶段门禁弹框承载：
+  // 对话区只留一句 agent 文本收尾，弹框可关闭后从顶部阶段条「计划/开发阶段」再次唤起。
   if (clarification?.mode === 'development_entry_confirmation') return null
+  if (clarification?.mode === 'planning_stage_entry') return null
   const canSubmitClarification =
     clarification?.status === 'requires_user_input' &&
     clarificationQuestions.length > 0 &&
@@ -202,18 +245,160 @@ export default function WorkflowRunCard({
     }))
   }
 
-  /** 提交卡片动作并立刻隐藏已点击的授权入口；续跑拒绝时恢复该入口。 */
+  /** 提交卡片动作；续跑 promise 结束后立即恢复动作入口，纯右侧状态切换（如修改需求）没有新快照可依赖。 */
   const submitClarification = (nextAnswers: ClarificationAnswers): void => {
     if (!onSubmitClarification || isSubmittingClarification) return
     setIsSubmittingClarification(true)
     void onSubmitClarification(workflow, nextAnswers)
-      .then((submitted) => {
-        if (!submitted) setIsSubmittingClarification(false)
-      })
-      .catch(() => setIsSubmittingClarification(false))
+      .catch(() => undefined)
+      .finally(() => setIsSubmittingClarification(false))
   }
 
-  // 产物确认始终由消息中的“文件改动”卡片承担（接受按钮），待确认与已提交状态都不再渲染问题卡。
+  // 需求确认属于主对话的连续工作流；右侧仅承载同一产物的阅读与原位编辑。
+  if (isRequirementDocumentConfirmation && (requiresConfirmation || isSubmittedConfirmation)) {
+    return (
+      <div
+        className={cx(
+          'workflow-run-card',
+          'workflow-run-card-ui-design',
+          requiresConfirmation && 'workflow-run-card-pending',
+          embedded && 'workflow-run-card-embedded'
+        )}
+      >
+        {/* 卡头统一用标准结构：信号点与标题同一行（workflow-run-name 主题色 15px），不再让圆点独占一行。 */}
+        {!embedded && (
+          <div className={cx('workflow-run-header')}>
+            <div className={cx('workflow-run-title')}>
+              <span className={cx('workflow-run-signal')} aria-hidden="true" />
+              <div>
+                <Text className={cx('workflow-run-name')} strong>
+                  确认需求规格说明书
+                </Text>
+              </div>
+            </div>
+          </div>
+        )}
+        <Text className={cx('workflow-ui-design-copy')}>
+          需求草稿已展示在右侧，确认后将转为正式需求文档并进入下一阶段。
+        </Text>
+        <div className={cx('workflow-ui-design-actions')}>
+          <Button
+            disabled={actionDisabled}
+            onClick={() =>
+              submitClarification({
+                planning_action: { action: 'edit_requirements', artifactKey: 'requirement-spec' }
+              })
+            }
+          >
+            {/* 与右侧面板头部的“预览|编辑”开关共用同一措辞，两个入口指向同一本机动作。 */}
+            编辑需求
+          </Button>
+          <Button
+            disabled={actionDisabled}
+            onClick={() =>
+              submitClarification({
+                planning_action: { action: 'confirm', artifactKey: 'requirement-spec' }
+              })
+            }
+            type="primary"
+          >
+            确认并继续规划
+          </Button>
+        </div>
+      </div>
+    )
+  }
+  // 技术规划方案与需求规格同样由工作流授权；右侧只展示内容，不能绕过流程直接推进。
+  if (isTechnicalPlanConfirmation && (requiresConfirmation || isSubmittedConfirmation)) {
+    return (
+      <div
+        className={cx(
+          'workflow-run-card',
+          'workflow-run-card-ui-design',
+          requiresConfirmation && 'workflow-run-card-pending',
+          embedded && 'workflow-run-card-embedded'
+        )}
+      >
+        {!embedded && (
+          <div className={cx('workflow-run-header')}>
+            <div className={cx('workflow-run-title')}>
+              <span className={cx('workflow-run-signal')} aria-hidden="true" />
+              <div>
+                <Text className={cx('workflow-run-name')} strong>
+                  确认技术规划方案
+                </Text>
+              </div>
+            </div>
+          </div>
+        )}
+        <Text className={cx('workflow-ui-design-copy')}>
+          请在右侧审阅架构、实体、API 契约与页面技术绑定；确认后才会生成应用模板。
+        </Text>
+        {/* 重新生成展开为“意见输入 + 提交”两步：默认收起不加视觉负担，展开后意见选填。 */}
+        {requiresConfirmation && technicalPlanRevisionOpen && (
+          <TextArea
+            autoSize={{ minRows: 2, maxRows: 4 }}
+            disabled={actionDisabled}
+            onChange={(event) => setTechnicalPlanFeedback(event.target.value)}
+            placeholder="想调整什么？可填写修改意见（选填），留空则按当前审阅内容重新生成。"
+            value={technicalPlanFeedback}
+          />
+        )}
+        <div className={cx('workflow-ui-design-actions')}>
+          {requiresConfirmation && technicalPlanRevisionOpen ? (
+            <>
+              <Button
+                disabled={actionDisabled}
+                onClick={() => {
+                  setTechnicalPlanRevisionOpen(false)
+                  setTechnicalPlanFeedback('')
+                }}
+              >
+                取消
+              </Button>
+              <Button
+                disabled={actionDisabled}
+                onClick={() =>
+                  submitClarification({
+                    planning_action: {
+                      action: 'revise',
+                      artifactKey: 'technical-plan',
+                      feedback:
+                        technicalPlanFeedback.trim() || '请根据当前审阅内容重新生成技术规划方案。'
+                    }
+                  })
+                }
+                type="primary"
+              >
+                提交并重新生成
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                disabled={actionDisabled}
+                onClick={() => setTechnicalPlanRevisionOpen(true)}
+              >
+                重新生成
+              </Button>
+              <Button
+                disabled={actionDisabled}
+                onClick={() =>
+                  submitClarification({
+                    planning_action: { action: 'confirm', artifactKey: 'technical-plan' }
+                  })
+                }
+                type="primary"
+              >
+                确认技术规划方案
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
+  // 其余历史产物确认仍由各自专属交互承载，避免重复渲染无效的通用卡片。
   if (artifactConfirmation) {
     return null
   }
@@ -246,7 +431,7 @@ export default function WorkflowRunCard({
           </Text>
         )}
         <BackgroundDispatchCard
-          disabled={disabled || interactionAvailability !== 'active'}
+          disabled={actionDisabled}
           options={BACKGROUND_DISPATCH_OPTIONS}
           answerKey={
             String(workflow.state?.dispatchTarget || '') === 'endpoint'
@@ -266,6 +451,240 @@ export default function WorkflowRunCard({
             showIcon
             type="info"
           />
+        )}
+      </div>
+    )
+  }
+
+  // 实体绑定确认是「绑定操作的数据实现」节点的动作：绑定/映射细节全部在对话卡内确认，
+  // 右侧只按确认结果静态呈现；确认后同一轨迹继续生成数据适配逻辑。
+  if (clarification?.mode === 'entity_binding' && requiresConfirmation) {
+    const operations = Array.isArray(clarification.operations)
+      ? (clarification.operations as EntityBindingPlanItem[])
+      : []
+    return (
+      <div
+        className={cx(
+          'workflow-run-card',
+          'workflow-run-card-test-case-authorization',
+          'workflow-run-card-pending',
+          embedded && 'workflow-run-card-embedded'
+        )}
+      >
+        {!embedded && <span className={cx('workflow-run-signal')} aria-hidden="true" />}
+        {!embedded && (
+          <Text className={cx('workflow-run-name')} strong>
+            确认数据实现绑定
+          </Text>
+        )}
+        <EntityBindingCard
+          disabled={actionDisabled}
+          message={String(clarification.message || '')}
+          objectName={String(clarification.objectName || '')}
+          operations={operations}
+          submitting={isSubmittingClarification}
+          onConfirm={() => submitClarification({ entity_binding: 'confirmed' })}
+        />
+      </div>
+    )
+  }
+
+  // UI 设计确认卡：模板选择是过程互动，按设计原则留在对话区完成（右侧只承载静态预览与终态标记）。
+  // 选择→批量生成→确认→终态记录都演进在同一张卡上；生成中只把动作置为禁用并显示状态标签。
+  if (isUiDesignConfirmation) {
+    const uiDesignGenerating = workflow.summary.status === 'running'
+    const uiPages = uiDesignPages || []
+    const pickerOpen = uiTemplatePickerPageId && uiTemplates[uiTemplateIndex]
+    const unconfirmedPages = uiPages.filter((page) => page.status !== 'confirmed')
+    // “确认全部设计稿”必须等所有页面都完成版式选择并生成后才能点击。
+    const uiPagesReady =
+      uiPages.length > 0 &&
+      uiPages.every((page) => page.status === 'generated' || page.status === 'confirmed')
+    // 终态记录：全部页面已确认，或已跳过（页面清空且本卡已提交）。
+    // 生成中的运行态不算终态——卡保持交互布局、仅按钮禁用，避免动作区闪没又闪回。
+    const uiDesignRecord =
+      !uiDesignGenerating &&
+      (uiPages.length > 0
+        ? uiPages.every((page) => page.status === 'confirmed')
+        : Boolean(isSubmittedConfirmation))
+    const uiDesignSkipped = uiDesignRecord && uiPages.length === 0
+    /** 记录一页的版式选择：只写本地不触发生成；选满全部页面后一次性批量交后台重画（右侧统一刷新）。 */
+    const applyUiTemplateSelection = (pageId: string, template: string): void => {
+      const next = { ...uiTemplateSelections, [pageId]: template }
+      setUiTemplateSelections(next)
+      if (unconfirmedPages.length > 0 && unconfirmedPages.every((page) => next[page.pageId])) {
+        setUiTemplateSelections({})
+        submitClarification({
+          planning_action: {
+            action: 'select_template',
+            artifactKey: 'ui-designs',
+            pages: unconfirmedPages.map((page) => ({
+              pageId: page.pageId,
+              template: next[page.pageId]
+            }))
+          }
+        })
+      }
+    }
+    return (
+      <div
+        className={cx(
+          'workflow-run-card',
+          'workflow-run-card-ui-design',
+          requiresConfirmation && 'workflow-run-card-pending',
+          embedded && 'workflow-run-card-embedded'
+        )}
+      >
+        {!embedded && (
+          <div className={cx('workflow-run-header')}>
+            <div className={cx('workflow-run-title')}>
+              <span className={cx('workflow-run-signal')} aria-hidden="true" />
+              <div>
+                <Text className={cx('workflow-run-name')} strong>
+                  确认 UI 设计稿
+                </Text>
+              </div>
+            </div>
+            {/* 生成中只变状态标签：卡片与右侧布局都保持稳定，不闪烁。 */}
+            {uiDesignGenerating && <Tag color="purple">生成中</Tag>}
+          </div>
+        )}
+        <Text className={cx('workflow-ui-design-copy')}>
+          {uiDesignSkipped
+            ? '已跳过 UI 设计稿，未生成页面设计。'
+            : uiDesignRecord
+              ? '全部页面设计稿已确认。'
+              : '为每页选择版式模板；全部选定后统一生成，右侧一次性呈现所有设计稿。'}
+        </Text>
+        {uiPages.length > 0 && (
+          <div className={cx('workflow-ui-template-list')}>
+            {uiPages.map((page) => {
+              const pickerActive = pickerOpen && uiTemplatePickerPageId === page.pageId
+              // 已记录但尚未生成的选择用主题色标出；生成完成后以正式记录为准。
+              const pendingTemplate = uiTemplateSelections[page.pageId]
+              // 首轮页面尚未选定版式：不展示种子里自带的默认模板名，避免被误读为已选择；
+              // 改稿轮（已提交过版式选择）的 queued 页面展示的正是本次所选模板。
+              const chosenTemplate =
+                pendingTemplate ||
+                (page.status === 'queued' && !uiDesignTemplatesSelected ? '' : page.template)
+              /** 打开本页选择器：翻看起点定位到该页当前版式，跨页翻看互不残留；再点一次收起。 */
+              const togglePicker = (): void => {
+                if (uiTemplatePickerPageId === page.pageId) {
+                  setUiTemplatePickerPageId('')
+                  return
+                }
+                const index = uiTemplates.findIndex(
+                  (template) => template.manifest.name === (pendingTemplate || page.template)
+                )
+                setUiTemplateIndex(index >= 0 ? index : 0)
+                setUiTemplatePickerPageId(page.pageId)
+              }
+              return (
+                <div className={cx('workflow-ui-template-item')} key={page.pageId}>
+                  <div className={cx('workflow-ui-template-row')}>
+                    <Text className={cx('workflow-ui-template-name')} strong>
+                      {page.name}
+                    </Text>
+                    <Text
+                      className={cx('workflow-ui-template-current', pendingTemplate && 'pending')}
+                      type={pendingTemplate ? undefined : 'secondary'}
+                    >
+                      {chosenTemplate || '待选择版式'}
+                      {pendingTemplate ? '（待生成）' : ''}
+                    </Text>
+                    {page.status === 'confirmed' ? (
+                      <Tag color="green">已确认</Tag>
+                    ) : (
+                      <Button
+                        disabled={actionDisabled}
+                        size="small"
+                        onClick={togglePicker}
+                      >
+                        选模板
+                      </Button>
+                    )}
+                  </div>
+                  {pickerActive && (
+                    <div className={cx('workflow-ui-template-picker')}>
+                      <div className={cx('workflow-ui-template-picker-preview')}>
+                        <UiTemplateWireframe
+                          templateId={uiTemplates[uiTemplateIndex].manifest.id}
+                        />
+                      </div>
+                      <div className={cx('workflow-ui-template-picker-copy')}>
+                        <Text strong>{uiTemplates[uiTemplateIndex].manifest.name}</Text>
+                        <Text type="secondary">
+                          {uiTemplates[uiTemplateIndex].manifest.description}
+                        </Text>
+                      </div>
+                      <div className={cx('workflow-ui-template-picker-nav')}>
+                        <Button
+                          disabled={uiTemplateIndex === 0}
+                          size="small"
+                          onClick={() => setUiTemplateIndex((index) => Math.max(0, index - 1))}
+                        >
+                          上一个
+                        </Button>
+                        <Text type="secondary" className={cx('workflow-ui-template-stepper')}>
+                          第 {uiTemplateIndex + 1} / {uiTemplates.length} 个
+                        </Text>
+                        <Button
+                          disabled={uiTemplateIndex === uiTemplates.length - 1}
+                          size="small"
+                          onClick={() =>
+                            setUiTemplateIndex((index) =>
+                              Math.min(uiTemplates.length - 1, index + 1)
+                            )
+                          }
+                        >
+                          下一个
+                        </Button>
+                        <span className={cx('workflow-ui-template-nav-spacer')} />
+                        <Button
+                          disabled={actionDisabled}
+                          size="small"
+                          type="primary"
+                          onClick={() => {
+                            applyUiTemplateSelection(
+                              page.pageId,
+                              uiTemplates[uiTemplateIndex].manifest.name
+                            )
+                            setUiTemplatePickerPageId('')
+                          }}
+                        >
+                          使用此模板
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {/* 终态只留记录：逐页模板与已确认标记就是历史，不再渲染一组永远禁用的按钮。 */}
+        {!uiDesignRecord && (
+          <div className={cx('workflow-ui-design-actions')}>
+            <Button
+              disabled={actionDisabled}
+              onClick={() => submitClarification({ ui_design_action: 'skip' })}
+            >
+              跳过 UI 设计
+            </Button>
+            <Button
+              disabled={
+                disabled ||
+                interactionAvailability !== 'active' ||
+                uiDesignGenerating ||
+                !uiPagesReady
+              }
+              title={uiPagesReady ? undefined : '请先为每页选择版式模板并生成设计稿'}
+              onClick={() => submitClarification({ ui_design_action: 'confirm' })}
+              type="primary"
+            >
+              确认全部设计稿
+            </Button>
+          </div>
         )}
       </div>
     )
@@ -294,7 +713,7 @@ export default function WorkflowRunCard({
         <Button
           className={cx('workflow-test-case-authorization-action')}
           type="primary"
-          disabled={disabled || interactionAvailability !== 'active'}
+          disabled={actionDisabled}
           onClick={() => submitClarification({ page_acceptance: 'accepted' })}
         >
           确认验收
@@ -326,7 +745,7 @@ export default function WorkflowRunCard({
         <Button
           className={cx('workflow-test-case-authorization-action')}
           type="primary"
-          disabled={disabled || interactionAvailability !== 'active'}
+          disabled={actionDisabled}
           onClick={() => submitClarification({ confirm_test_case: '是' })}
         >
           开始执行
@@ -351,14 +770,10 @@ export default function WorkflowRunCard({
           <div className={cx('workflow-run-title')}>
             <span className={cx('workflow-run-signal')} aria-hidden="true" />
             <div>
+              {/* 标题始终用模式标题（如“细化需求”“修改需求文档”），提交前后保持同名——
+                  待确认/已提交由控件可用态与只读提示表达，不用通用“事项”措辞掩盖业务语义。 */}
               <Text className={cx('workflow-run-name')} strong>
-                {isTestCaseAuthorization
-                  ? cardCopy.title
-                  : isQuestionCard
-                    ? requiresConfirmation
-                      ? '待确认事项'
-                      : '已确认事项'
-                    : cardCopy.title}
+                {cardCopy.title}
               </Text>
             </div>
           </div>
@@ -376,22 +791,6 @@ export default function WorkflowRunCard({
       {workflow.summary.message && !embedded && (
         <div className={cx('workflow-run-message')}>
           <Text>{String(workflow.summary.message)}</Text>
-        </div>
-      )}
-      {Object.keys(artifacts).length > 0 && !embedded && (
-        <div className={cx('workflow-artifacts')}>
-          <div className={cx('workflow-section-heading')}>
-            <Text type="secondary">已生成产物</Text>
-            <span>{Object.keys(artifacts).length} 个</span>
-          </div>
-          {Object.entries(artifacts).map(([name, path]) => (
-            <div className={cx('workflow-artifact-item')} key={name}>
-              <span className={cx('workflow-artifact-marker')} aria-hidden="true" />
-              <Text code>
-                {name}: {path}
-              </Text>
-            </div>
-          ))}
         </div>
       )}
       {(clarificationQuestions.length > 0 || detailReview) && (
@@ -518,6 +917,11 @@ function workflowCardCopy(mode?: string, phase?: string): WorkflowCardCopy {
         title: '确认需求文档',
         primaryAction: '确认并生成项目计划'
       }
+    case 'requirement_document_confirmation':
+      return {
+        title: '确认需求规格说明书',
+        primaryAction: '确认并生成 UI 设计'
+      }
     case 'project_plan_revision':
       return {
         title: '修改项目计划',
@@ -527,6 +931,16 @@ function workflowCardCopy(mode?: string, phase?: string): WorkflowCardCopy {
       return {
         title: '确认项目计划',
         primaryAction: '确认并进入开发'
+      }
+    case 'ui_design_confirmation':
+      return {
+        title: '确认 UI 设计稿',
+        primaryAction: '确认设计稿'
+      }
+    case 'technical_plan_confirmation':
+      return {
+        title: '确认技术规划方案',
+        primaryAction: '确认并生成模板'
       }
     case 'page_acceptance':
       return {
@@ -1104,12 +1518,11 @@ function ClarificationQuestionControl({
 
   return (
     <TextArea
-      autoSize={false}
+      autoSize={{ minRows: 1, maxRows: 4 }}
       disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
       placeholder={question.placeholder || '请输入你的补充说明'}
-      // 单行输入保持每个确认步骤的底部操作栏在同一水平线上；超长内容仍可横向编辑滚动。
-      rows={1}
+      // 单行起步保持各步骤底部操作栏基线一致；长文本向上限内换行增高，不再横向滚动。
       value={typeof value === 'string' ? value : ''}
     />
   )
@@ -1221,7 +1634,7 @@ export function workflowOriginalRequest(workflow: WorkflowRunPayload): string {
   return typeof eventRequest === 'string' ? eventRequest.trim() : ''
 }
 
-/** 根据当前结构化交互生成恢复 Workflow 所需的用户可见消息。 */
+/** 根据当前结构化交互生成续跑消息；设计/计划阶段它同时作为用户回复气泡落进对话留痕。 */
 // eslint-disable-next-line react-refresh/only-export-components
 export function buildClarificationContinuationMessage(
   workflow: WorkflowRunPayload,
@@ -1232,6 +1645,10 @@ export function buildClarificationContinuationMessage(
   if (acceptanceMessage) return acceptanceMessage
   const dispatchMessage = backgroundDispatchContinuationMessage(clarification, answers)
   if (dispatchMessage) return dispatchMessage
+  // 实体绑定确认：单卡一次写回全部操作的绑定，续跑进入数据适配生成。
+  if (clarification?.mode === 'entity_binding' && answers.entity_binding !== undefined) {
+    return '已确认全部操作的数据实现与字段映射，请生成数据适配逻辑。'
+  }
   if (clarification?.mode === 'detail_review' && answers.detail_review) {
     const submission = answers.detail_review
     if (
@@ -1243,6 +1660,25 @@ export function buildClarificationContinuationMessage(
     }
   }
   const mode = clarification?.mode
+  // 保存草稿与确认是不同操作，只有明确确认才推进下游。
+  if (
+    answers.planning_action &&
+    typeof answers.planning_action === 'object' &&
+    !Array.isArray(answers.planning_action)
+  ) {
+    const action = answers.planning_action as { action?: string; feedback?: string }
+    if (action.action === 'save_requirements') return '保存需求规格说明书草稿。'
+    // edit_requirements 不会作为工作流答案提交（AiChatPanel 拦截为右侧本机切换），无需续跑消息。
+    // 重新生成携带用户真实意见时原样作为回复内容；默认话术也是合格的用户指令口吻。
+    if (action.action === 'revise')
+      return String(action.feedback || '').trim() || '请根据当前审阅内容重新生成技术规划方案。'
+    if (action.action === 'retry') return '继续当前生成。'
+    if (action.action === 'select_template') return '使用所选模板生成页面设计稿。'
+    if (action.action === 'confirm')
+      return mode === 'technical_plan_confirmation'
+        ? '确认技术规划方案并生成模板。'
+        : '确认需求规格说明书并生成 UI 设计。'
+  }
   // 逐文件接受：确认动作由消息中的“文件改动”卡（接受按钮）承担，这里生成续跑消息。
   if (mode === 'file_acceptance') {
     return `已接受文件 ${String(answers.file_acceptance || '')} 的变更，请继续下一个文件。`
@@ -1251,7 +1687,19 @@ export function buildClarificationContinuationMessage(
     return '确认进入开发阶段。'
   }
   if (mode === 'planning_stage_entry') {
-    return '确认进入项目计划阶段。'
+    return '确认进入计划阶段。'
+  }
+  // 澄清/修改意见卡：答案已在上方转为只读回看的卡片里，用户气泡只补一句确认话术，不重复罗列。
+  if (mode === 'requirement_clarification') {
+    return '需求信息已确认，请生成需求规格说明书。'
+  }
+  if (mode === 'requirement_revision') {
+    return '需求修改意见已提交，请更新需求文档。'
+  }
+  if (mode === 'ui_design_confirmation') {
+    const action = String(answers.ui_design_action || '')
+    if (action === 'skip') return '跳过 UI 设计，进入计划阶段。'
+    return '确认全部 UI 设计稿，进入计划阶段。'
   }
   if (
     mode === 'requirement_spec_confirmation' &&
@@ -1282,9 +1730,8 @@ export function buildClarificationContinuationMessage(
       const value = answers[key]
       const answer = clarificationAnswerText(value)
       if (!answer || !String(answer).trim()) return ''
-      return `- ${
-        question.header || question.dimension || `问题${index + 1}`
-      }：${question.question || '请补充需求细节。'}\n  回答：${answer}`
+      // 用户回复气泡只保留「标题：答案」，问题原文由上方的澄清卡承载，不重复念一遍。
+      return `${question.header || question.dimension || `问题${index + 1}`}：${answer}`
     })
     .filter(Boolean)
 
@@ -1303,12 +1750,13 @@ function answerConfirmsYes(value: WorkflowClarificationAnswer | undefined): bool
   return value === '是'
 }
 
+/** 把结构化答案压成用户口吻的一行文本：选项直接列举，其他补充随后。 */
 function clarificationAnswerText(value: WorkflowClarificationAnswer | undefined): string {
   if (typeof value === 'object' && value && !Array.isArray(value) && 'selected' in value) {
     const selected = selectedAnswerValues(value).filter((item) => item !== OTHER_OPTION_VALUE)
-    const parts = selected.length > 0 ? [`已选：${selected.join('、')}`] : []
+    const parts = selected.length > 0 ? [selected.join('、')] : []
     const other = answerOtherText(value).trim()
-    if (other) parts.push(`其他补充：${other}`)
+    if (other) parts.push(other)
     return parts.join('；')
   }
   if (Array.isArray(value)) return value.join('、')

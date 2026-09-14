@@ -1,6 +1,6 @@
 // 演示应用的项目目录（对齐真实工程：每个应用一个独立项目目录，文档与代码同树）。
 // 目录名与 mock 应用 workspaceRoot 末级一致；用户可见的正式文档统一收在 docs/
-// （与 frontend/backend 平级），不放进 .xcodeagent 内部工件目录。
+// （与 frontend/backend 平级），不放进 .aistudio 内部工件目录。
 
 export type WorkspaceSourceFile = {
   path: string
@@ -16,6 +16,9 @@ export const workspaceScaffoldDirectories = [appPath('docs')]
 /** 应用内正式文档路径（统一放在 docs/，与前后端工程平级）。 */
 export const WORKSPACE_DOC_PATHS = {
   requirementSpec: 'docs/requirement-spec.md',
+  productPlan: 'docs/product-plan.md',
+  uiDesigns: 'docs/ui-designs.json',
+  technicalPlan: 'docs/technical-plan.md',
   projectPlan: 'docs/project-plan.md',
   codeReview: 'docs/code-review.md'
 } as const
@@ -66,7 +69,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
 const routerTsx = `import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
-// 路由表：页面由 XCodeAgent 按产物生成，新增页面自动追加到此处。
+// 路由表：页面由 AIStudio 按产物生成，新增页面自动追加到此处。
 const RecheckIntroduction = lazy(() => import('./pages/recheck-introduction'))
 const MyRechecks = lazy(() => import('./pages/my-rechecks'))
 
@@ -97,7 +100,7 @@ export async function fetchMyRechecks(params: { status?: string; page: number; s
 const backendPom = `<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.xcodeagent</groupId>
+  <groupId>com.aistudio</groupId>
   <artifactId>wh-branch-pms</artifactId>
   <version>1.0.0</version>
   <parent>
@@ -137,7 +140,7 @@ export const workspaceRouterFile: WorkspaceSourceFile = {
 /**
  * 项目目录中的静态工程骨架。
  *
- * 正式文档和页面/接口源码都必须由工作流写出 Diff 并经用户确认后才加入文件树；
+ * 设计与规划正式文档由表单确认后直接加入文件树；页面/接口源码仍需经代码 Diff 确认；
  * 路由表属于初始化脚手架，因此随基础工程一起存在。
  */
 export const workspaceScaffoldFiles: WorkspaceSourceFile[] = scaffoldFiles

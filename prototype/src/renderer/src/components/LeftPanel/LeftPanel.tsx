@@ -37,7 +37,6 @@ type Props = {
   previewBaseUrl: string
   previewLaunchError: string
   versionReadOnly: boolean
-  versionPreviewOnly: boolean
   versionViewKey: string
   /** 顶部阶段条请求打开“进入测试”确认弹框的自增信号（透传给聊天面板）。 */
   testingEntryRequest?: number
@@ -74,6 +73,10 @@ type Props = {
   onOpenConversationManagement?: () => void
   /** 任务管理抽屉是否展开（透传给聊天面板菜单激活态）。 */
   conversationDrawerOpen?: boolean
+  /** 左侧菜单打开数据来源抽屉。 */
+  onOpenDataSources?: () => void
+  /** 数据来源抽屉是否展开。 */
+  dataSourcesDrawerOpen?: boolean
   /** 聊天面板注册任务管理内容查询函数（透传给工作台页）。 */
   onConversationManagementReady?: (query: () => ConversationManagementContent) => void
   /** 关闭辅助抽屉（透传给聊天面板）。 */
@@ -98,7 +101,6 @@ export default function LeftPanel({
   previewBaseUrl,
   previewLaunchError,
   versionReadOnly,
-  versionPreviewOnly,
   versionViewKey,
   testingEntryRequest,
   onTestingEntryAvailableChange,
@@ -119,6 +121,8 @@ export default function LeftPanel({
   onBackgroundTaskAcceptanceSettled,
   onOpenConversationManagement,
   conversationDrawerOpen,
+  onOpenDataSources,
+  dataSourcesDrawerOpen,
   onConversationManagementReady,
   onCloseAuxiliaryDrawer,
   onTestCaseGenerationTaskTypeChange
@@ -143,7 +147,6 @@ export default function LeftPanel({
             previewBaseUrl={previewBaseUrl}
             previewLaunchError={previewLaunchError}
             versionReadOnly={versionReadOnly}
-            versionPreviewOnly={versionPreviewOnly}
             versionViewKey={versionViewKey}
             testingEntryRequest={testingEntryRequest}
             onTestingEntryAvailableChange={onTestingEntryAvailableChange}
@@ -164,6 +167,8 @@ export default function LeftPanel({
             onBackgroundTaskAcceptanceSettled={onBackgroundTaskAcceptanceSettled}
             onOpenConversationManagement={onOpenConversationManagement}
             conversationDrawerOpen={conversationDrawerOpen}
+            onOpenDataSources={onOpenDataSources}
+            dataSourcesDrawerOpen={dataSourcesDrawerOpen}
             onConversationManagementReady={onConversationManagementReady}
             onCloseAuxiliaryDrawer={onCloseAuxiliaryDrawer}
             onTestCaseGenerationTaskTypeChange={onTestCaseGenerationTaskTypeChange}

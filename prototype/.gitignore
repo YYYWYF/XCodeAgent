@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-business-objects/
 out
 resources/backend/
 .DS_Store

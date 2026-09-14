@@ -1,16 +1,11 @@
 import { Layout, notification } from 'antd'
-import {
-  HourglassOutlined,
-  MoonOutlined
-} from '@ant-design/icons'
+import { HourglassOutlined, MoonOutlined } from '@ant-design/icons'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import { LeftPanel } from '../components'
 import WorkbenchTopBar from '../components/WorkbenchTopBar'
 import WorkbenchVersionModals from '../components/WorkbenchVersionModals'
-import BackgroundTaskDrawer, {
-  type BackgroundTaskItem
-} from '../components/BackgroundTaskDrawer'
+import BackgroundTaskDrawer, { type BackgroundTaskItem } from '../components/BackgroundTaskDrawer'
 import {
   BACKGROUND_TASK_KIND_LABEL,
   BACKGROUND_TASK_NEXT_STEP_LABEL,
@@ -30,10 +25,12 @@ import { WorkbenchPhaseProvider } from '../context'
 import {
   inspectWorkspacePlanningArtifacts,
   loadCachedApplications,
-  loadWorkspaceApplicationConfig
+  loadWorkspaceApplicationConfig,
+  saveStoredApplications
 } from '../service/applicationStorage'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { latestApplicationLifecycle } from '../hooks/useApplicationLifecycleStore'
+import { readInitializationPlanningRecord } from '../initializationPlanning'
 // 前端本地合成 lifecycle 快照的 revision 必须与剧本共享计数器，避免与下一帧撞号被拒合并
 import { nextSyntheticLifecycleRevision } from '../mock/scripts/revision'
 import {
@@ -48,6 +45,7 @@ import {
   resetDevelopmentPlanningPageTree,
   resetDevelopmentPlanningPages
 } from '../service/developmentPlanningState'
+import { resetBusinessObjectsCache } from '../components/BusinessObjects/store'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -122,9 +120,7 @@ function mapBackgroundTaskItem(
     onNextStep: nextStepPending ? () => onAccept(task.id) : undefined,
     nextStepDisabled: nextStepPending && acceptDisabled,
     switchLabel:
-      switchTarget !== undefined
-        ? `转到${BACKGROUND_TASK_SYSTEM_LABEL[switchTarget]}`
-        : undefined,
+      switchTarget !== undefined ? `转到${BACKGROUND_TASK_SYSTEM_LABEL[switchTarget]}` : undefined,
     onSwitchQueue:
       switchTarget !== undefined ? () => onSwitchQueue(task.id, switchTarget) : undefined
   }
@@ -231,6 +227,11 @@ function WorkbenchPage({
     }
     setAuxiliaryDrawerMode('conversation-management')
   }
+  /** 左侧数据来源入口与其它抽屉互斥；重复点击同一入口时收起。 */
+  const toggleDataSourcesDrawer = (): void => {
+    setBackgroundTasksDrawer(null)
+    setAuxiliaryDrawerMode((current) => (current === 'data-sources' ? null : 'data-sources'))
+  }
   // 抽屉打开期间轮询快照；切走或关闭时停止。
   useEffect(() => {
     if (auxiliaryDrawerMode !== 'conversation-management') return
@@ -264,10 +265,15 @@ function WorkbenchPage({
     setAuxiliaryDrawerMode(null)
   }
   // 任务管理内容查询函数由聊天面板注册（函数在其内部创建），用 ref 转接避免抽屉打开链路依赖渲染时序。
-  const getConversationManagementContentRef = useRef<(() => ConversationManagementContent) | undefined>()
-  const handleConversationManagementReady = useCallback((query: () => ConversationManagementContent) => {
-    getConversationManagementContentRef.current = query
-  }, [])
+  const getConversationManagementContentRef = useRef<
+    (() => ConversationManagementContent) | undefined
+  >()
+  const handleConversationManagementReady = useCallback(
+    (query: () => ConversationManagementContent) => {
+      getConversationManagementContentRef.current = query
+    },
+    []
+  )
   // 用例生成队列动态绑定：顶部芯片打开用例任务实际所在的任务系统抽屉。
   const testCaseQueueSystem: BackgroundTaskSystem =
     testCaseGenerationTaskType === 'tide' ? 'tide' : 'async'
@@ -281,6 +287,11 @@ function WorkbenchPage({
   const autoPublishShownRef = useRef(false)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const entryStartedAtRef = useRef(Date.now())
+
+  // 当前工作版本 id：跟随 workspaceApplication 而非冻结的 application prop——
+  // 回退/发起新迭代后 prop 仍是旧版本，用它去检查规划产物会把预置应用的完成态基线
+  // （app-pms-new + v1-3 → 已设计）泄漏进新迭代。
+  const workspaceCurrentVersionId = workspaceApplication.currentVersionId || ''
 
   useEffect(() => {
     let active = true
@@ -306,7 +317,7 @@ function WorkbenchPage({
         const inspection = await inspectWorkspacePlanningArtifacts(
           application.workspaceRoot,
           application.id,
-          application.currentVersionId
+          workspaceCurrentVersionId
         )
         if (!active) return
         setDevelopmentPlanningPages(inspection.pages)
@@ -345,7 +356,12 @@ function WorkbenchPage({
       active = false
       window.removeEventListener('focus', syncWorkspaceFiles)
     }
-  }, [application.id, application.workspaceRoot, planningRefreshRevision])
+  }, [
+    application.id,
+    application.workspaceRoot,
+    planningRefreshRevision,
+    workspaceCurrentVersionId
+  ])
 
   useEffect(() => {
     let active = true
@@ -353,7 +369,13 @@ function WorkbenchPage({
     if (!workspaceRoot) return
 
     // 每次进入一个工作区只做一次冷启动校准；后续状态由 Workflow AG-UI 事件实时合并。
-    getApplicationLifecycle({ workspaceRoot, id: application.id })
+    // 携带当前版本号：mock 侧按版本定位初始化规划记录，避免被同应用其它版本的
+    // 运行实验记录（如回退实验遗留的 collecting_requirement）劫持阶段定位。
+    getApplicationLifecycle({
+      workspaceRoot,
+      id: application.id,
+      currentVersionId: application.currentVersionId
+    })
       .then((lifecycle) => {
         if (active) onApplicationLifecycleChange(lifecycle)
       })
@@ -363,7 +385,7 @@ function WorkbenchPage({
     return () => {
       active = false
     }
-  }, [application.id, application.workspaceRoot, onApplicationLifecycleChange])
+  }, [application.id, application.workspaceRoot, application.currentVersionId, onApplicationLifecycleChange])
 
   useEffect(() => {
     if (!developmentPlanningPagesLoaded || entryStage !== 'loading') return
@@ -406,6 +428,16 @@ function WorkbenchPage({
     'generating_technical_plan',
     'awaiting_technical_plan_confirmation',
     'generating_application_template_files',
+    'awaiting_development_entry',
+    'ready_for_workbench'
+  ]).has(String(versionLifecycle?.initialization?.stage || ''))
+  // 顶部比值数字（开发产物完成比例 / 测试用例数量）的显示口径：技术规划方案确认后才
+  // 出现，确认前（设计全程 + 技术规划生成与确认）一律不显示。后台用例准备任务早于
+  // 显示口径启动（testCasePreparationEnabled），这里只约束「看得见」，不约束「做没做」。
+  const planCountersVisible = new Set([
+    // 技术规划确认后进入模板生成与开发准入门，ready_for_workbench 覆盖工作台与已发布版本。
+    'generating_application_template_files',
+    'awaiting_development_entry',
     'ready_for_workbench'
   ]).has(String(versionLifecycle?.initialization?.stage || ''))
   const testCasePreparation = useAsyncTestCasePreparation(
@@ -527,9 +559,14 @@ function WorkbenchPage({
     // 发布时把当前 lifecycle 固化进版本快照：版本是"当前资产快照"，回看历史版本
     // 必须停在发布时刻的旅程位置，而不是退回新建时冻结的初始 collecting_requirement。
     const releasedLifecycle = versionLifecycle
-    setWorkspaceApplication((prev) => {
-      const versions = (prev.versions || []).map((v) =>
-        v.id === prev.currentVersionId
+    const planning = readInitializationPlanningRecord({
+      id: workspaceApplication.id,
+      currentVersionId: workspaceApplication.currentVersionId
+    })
+    const nextApplication = {
+      ...workspaceApplication,
+      versions: (workspaceApplication.versions || []).map((v) =>
+        v.id === workspaceApplication.currentVersionId
           ? {
               ...v,
               status: 'released' as const,
@@ -538,15 +575,20 @@ function WorkbenchPage({
               ...(releasedLifecycle ? { lifecycle: releasedLifecycle } : {}),
               gitRef: { commitSha, tag: releaseVersion.versionLabel, committedAt: now },
               artifactSummary: {
-                pageIds: prev.pages,
+                pageIds: workspaceApplication.pages,
                 deployableScript: `deploy-${releaseVersion.versionLabel}.sh`
               },
-              snapshot: { pageIds: prev.pages }
+              snapshot: { pageIds: workspaceApplication.pages, ...(planning ? { planning } : {}) }
             }
           : v
       )
-      return { ...prev, versions }
-    })
+    }
+    setWorkspaceApplication(nextApplication)
+    void saveStoredApplications(
+      loadCachedApplications().map((item) =>
+        item.id === nextApplication.id ? nextApplication : item
+      )
+    )
     generatingRef.current = false
     setGenerating(null)
     setPublishModalOpen(false)
@@ -591,17 +633,26 @@ function WorkbenchPage({
       ...makeInitialLifecycle(application.id, application.name),
       revision: resetRevision
     }
-    const next = {
-      ...createRollbackVersion(workspaceApplication.id, currentHead, restoredVersion, Date.now()),
-      lifecycle: initialLifecycle
-    }
+    const next = createRollbackVersion(
+      workspaceApplication.id,
+      currentHead,
+      restoredVersion,
+      initialLifecycle,
+      Date.now()
+    )
     setRollbackTargetId('')
     runVersionSwitch(next.versionLabel, () => {
-      setWorkspaceApplication((current) => ({
-        ...current,
-        versions: [...(current.versions || []), next],
+      const nextApplication = {
+        ...workspaceApplication,
+        versions: [...(workspaceApplication.versions || []), next],
         currentVersionId: next.id
-      }))
+      }
+      setWorkspaceApplication(nextApplication)
+      void saveStoredApplications(
+        loadCachedApplications().map((item) =>
+          item.id === nextApplication.id ? nextApplication : item
+        )
+      )
       setViewingVersionId(next.id)
       autoPublishShownRef.current = false
       onApplicationLifecycleChange(initialLifecycle)
@@ -609,6 +660,8 @@ function WorkbenchPage({
       setDevelopmentPlanningPages(resetDevelopmentPlanningPages)
       setDevelopmentPlanningPageTree(resetDevelopmentPlanningPageTree)
       setDevelopmentPlanningApiContracts(resetDevelopmentPlanningApiContracts)
+      // 工作迭代 id 重载后可能复用，同步清掉同名版本遗留的实体绑定缓存。
+      resetBusinessObjectsCache(next.id)
       setHasPageDesigns(false)
     })
   }
@@ -630,15 +683,23 @@ function WorkbenchPage({
     )
     setIterationModalOpen(false)
     // 发起新迭代是全新空版本,无代码可切,不需要切换加载动画;直接同步建立新版本。
-    setWorkspaceApplication((current) => ({
-      ...current,
-      versions: [...(current.versions || []), next],
+    const nextApplication = {
+      ...workspaceApplication,
+      versions: [...(workspaceApplication.versions || []), next],
       currentVersionId: next.id
-    }))
+    }
+    setWorkspaceApplication(nextApplication)
+    void saveStoredApplications(
+      loadCachedApplications().map((item) =>
+        item.id === nextApplication.id ? nextApplication : item
+      )
+    )
     setViewingVersionId(next.id)
     setDevelopmentPlanningPages(resetDevelopmentPlanningPages)
     setDevelopmentPlanningPageTree(resetDevelopmentPlanningPageTree)
     setDevelopmentPlanningApiContracts(resetDevelopmentPlanningApiContracts)
+    // 工作迭代 id 重载后可能复用，同步清掉同名版本遗留的实体绑定缓存。
+    resetBusinessObjectsCache(next.id)
     setHasPageDesigns(false)
     autoPublishShownRef.current = false
     // 应用级 lifecycle 同步重置为新迭代初始态,避免版本 lifecycle 合并把上一版本的完成态盖回来。
@@ -681,11 +742,9 @@ function WorkbenchPage({
               canEnterReviewStage={reviewEntryAvailable}
               onRequestEnterReview={() => setReviewEntryRequest((count) => count + 1)}
               developmentArtifactProgress={developmentArtifactProgress}
-              planConfirmed={testCasePreparationEnabled}
+              planConfirmed={planCountersVisible}
               testCasePreparation={testCasePreparation.snapshot}
-              onOpenTestPreparation={() =>
-                setTestPreparationOpenRequest((count) => count + 1)
-              }
+              onOpenTestPreparation={() => setTestPreparationOpenRequest((count) => count + 1)}
               onOpenTestCaseQueue={() => toggleBackgroundTasksDrawer(testCaseQueueSystem)}
               testCaseQueueOpen={backgroundTasksDrawer === testCaseQueueSystem}
             />
@@ -706,7 +765,6 @@ function WorkbenchPage({
                 onApplicationLifecycleChange={onApplicationLifecycleChange}
                 versionViewKey={viewedVersion?.id || ''}
                 versionReadOnly={!isViewingActiveVersion || viewedVersion?.status === 'released'}
-                versionPreviewOnly={!isViewingActiveVersion}
                 testingEntryRequest={testingEntryRequest}
                 onTestingEntryAvailableChange={setTestingEntryAvailable}
                 developmentEntryRequest={developmentEntryRequest}
@@ -724,6 +782,8 @@ function WorkbenchPage({
                 onOpenBackgroundTasks={toggleBackgroundTasksDrawer}
                 onOpenConversationManagement={openConversationManagement}
                 conversationDrawerOpen={auxiliaryDrawerMode === 'conversation-management'}
+                onOpenDataSources={toggleDataSourcesDrawer}
+                dataSourcesDrawerOpen={auxiliaryDrawerMode === 'data-sources'}
                 onConversationManagementReady={handleConversationManagementReady}
                 onCloseAuxiliaryDrawer={() => setAuxiliaryDrawerMode(null)}
                 backgroundTaskAcceptRequest={backgroundTaskAcceptRequest}
@@ -765,14 +825,15 @@ function WorkbenchPage({
                     onOpenConversationManagement={() =>
                       setAuxiliaryDrawerMode('conversation-management')
                     }
-                    onOpenTemporaryConversation={() => setAuxiliaryDrawerMode('temporary-conversation')}
+                    onOpenTemporaryConversation={() =>
+                      setAuxiliaryDrawerMode('temporary-conversation')
+                    }
                     onRetryTestCases={testCasePreparation.retry}
                     testPreparation={testCasePreparation.snapshot}
                   />
                 ) : null}
               </div>
             </div>
-
           </div>
         </WorkbenchPhaseProvider>
       ) : null}
@@ -810,7 +871,7 @@ function WorkbenchPage({
               <span />
               <span />
             </div>
-            <div className={cx('workbench-entry-kicker')}>XCODEAGENT WORKSPACE</div>
+            <div className={cx('workbench-entry-kicker')}>AISTUDIO WORKSPACE</div>
             <h1>正在进入工作台</h1>
             <p>正在同步项目配置与页面设计状态</p>
             <div className={cx('workbench-entry-progress')} aria-hidden="true">

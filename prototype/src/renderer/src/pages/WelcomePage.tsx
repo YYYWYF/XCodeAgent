@@ -56,7 +56,7 @@ export default function WelcomePage({
           <section className={cx('welcome-primary')}>
             <WelcomeHero />
 
-            <section className={cx('welcome-actions')} aria-label="开始使用 XCodeAgent">
+            <section className={cx('welcome-actions')} aria-label="开始使用 AIStudio">
               <CreateApplicationAction
                 onOpenWorkbenchAfterCreate={onOpenWorkbenchAfterCreate}
               />
