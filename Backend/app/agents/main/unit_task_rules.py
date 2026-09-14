@@ -108,8 +108,7 @@ def example_task_id(context: UnitGenerationContext) -> str:
         ):
             return "frontend:api-client::response-entity-adapter"
         contract_id = _text(refs.get("api_contract_id")) or "api-contract-id"
-        endpoint_id = _text(refs.get("endpoint_id")) or "endpoint-id"
-        return f"{context.unit_id}::{contract_id}::{endpoint_id}::api-module"
+        return f"{context.unit_id}::{contract_id}::api-module"
     stage = _BACKEND_STAGE_BY_KIND.get(kind)
     if stage is None:
         raise ValueError(
@@ -178,13 +177,21 @@ def _frontend_api_rules(context: UnitGenerationContext) -> tuple[str, ...]:
         for requirement in context.generation_requirements
     }
     rules = [
-        "For every `frontend.api_module` requirement, emit exactly one business API Task "
-        "and exactly one business API module path. Use Task ID "
-        "`frontend:api-client::<api_contract_id>::<endpoint_id>::api-module`; read the "
-        "authorized API Contract endpoint, implement its exact method/path and typed "
-        "request/response shape, and declare one matching frontend.api_module deliverable.",
+        "Group all `frontend.api_module` requirements by `api_contract_id`. For each "
+        "distinct api_contract_id, emit exactly ONE business API Task with ID "
+        "`frontend:api-client::<api_contract_id>::api-module`. That single Task implements "
+        "every endpoint belonging to that API Contract and writes all of them into exactly "
+        "ONE shared file `frontend/src/apis/<biz>Api.ts`, where `<biz>` is the "
+        "api_contract_id converted to lowerCamelCase with the `_api` suffix stripped "
+        "(e.g. `product_api` → `productApi.ts`, `category_api` → `categoryApi.ts`). "
+        "Inside that file, implement each endpoint's exact method/path and typed "
+        "request/response shape as a separate exported async function. Declare one "
+        "`frontend.api_module` deliverable per requirement inside that Task, each with its "
+        "own target_id (the endpoint_id) and the exact requirement_id in provides. "
+        "Multiple endpoints of the same API Contract share the same Task, the same file, "
+        "and the same change_scope path; do not split them into separate tasks or files.",
         "Across this Candidate, each api_contract_id + endpoint_id has exactly one "
-        "implementation owner and one business API module. Business API Tasks must import "
+        "implementation owner. Business API Tasks must import "
         "`frontend/src/apis/responseEntity.ts`; they must not repeat ResponseEntity types, "
         "success-code handling, protocol errors, business errors, or unwrap logic.",
         "Do not emit pages, static-data modules, backend work, route/menu registration, "
