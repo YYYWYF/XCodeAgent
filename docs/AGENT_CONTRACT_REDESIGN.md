@@ -103,7 +103,7 @@ System Prompt、Skill、Knowledge 文档、Tool description 和检索结果都�
 1. RequirementSpec 和 ProductPlan 已确认；
 2. ProductPlan `agents[]` 非空；
 3. TechnicalPlan 已生成可引用的 API Contract 和 Endpoint；
-4. Agent Runtime 模板能力清单可用；
+4. Agent Runtime 模板入口与平台路径策略可用；
 5. 项目 Model、Memory、Skill 和 Knowledge Catalog 可以被平台解析。
 
 普通应用固定生成：
@@ -317,13 +317,11 @@ System Prompt、Skill、Knowledge 文档、Tool description 和检索结果都�
     "platformPromptMode": "locked_prefix"
   },
   "artifacts": {
-    "agentPath": "agent-runtime/src/app/agent/inventory_assistant.py",
-    "toolAdapterPath": "agent-runtime/src/app/tools/inventory_assistant_tools.py",
-    "testPath": "agent-runtime/tests/test_inventory_assistant.py"
+    "compositionPath": "agent-runtime/src/app/agent/factory.py",
+    "testRoot": "agent-runtime/tests"
   },
   "requiredChecks": [
-    "uv run --project agent-runtime python -m py_compile agent-runtime/src/app/agent/inventory_assistant.py agent-runtime/src/app/tools/inventory_assistant_tools.py",
-    "uv run --project agent-runtime pytest agent-runtime/tests/test_inventory_assistant.py"
+    "uv run --project agent-runtime pytest -q"
   ],
   "evaluation": {
     "productAcceptanceCriteria": [
@@ -653,17 +651,16 @@ Renderer 只能调用 Java Gateway。真实密钥、数据库密码、OSS Token�
 
 ## 15. Artifacts 与 DeepAgents 映射
 
-路径由 `lower_snake_case agentId` 确定性生成：
+当前 Contract 只声明模板中真实存在且允许复用的组合入口与测试目录：
 
 ```json
 {
-  "agentPath": "agent-runtime/src/app/agent/<agentId>.py",
-  "toolAdapterPath": "agent-runtime/src/app/tools/<agentId>_tools.py",
-  "testPath": "agent-runtime/tests/test_<agentId>.py"
+  "compositionPath": "agent-runtime/src/app/agent/factory.py",
+  "testRoot": "agent-runtime/tests"
 }
 ```
 
-生成代码必须等价于：
+标准 Agent 由 Runtime Factory 的显式 Builder 注册表装配，必须等价于：
 
 ```python
 llm = init_chat_model(model=resolved_project_model)
@@ -676,13 +673,15 @@ agent = create_deep_agent(
 )
 ```
 
-该片段只说明目标映射，实际参数以 Agent Runtime 模板公开构造入口为准。
+平台把 Prompt、Model、Memory、Tools、Skills、Knowledge 和 Context 编译为七个
+`agent.code` 任务；物理实现路径来自 XCodeAgent 内置且与模板 commit 共同绑定的路径
+策略。生成应用不携带平台 Manifest 或独立 Definition，任务优先修改现有 Factory，
+只有现有代码无法承载且任务明确授权时才新增文件。
 
 每个 Agent 至少执行：
 
 ```text
-uv run --project agent-runtime python -m py_compile <agentPath> <toolAdapterPath>
-uv run --project agent-runtime pytest <testPath>
+uv run --project agent-runtime pytest -q
 ```
 
 若 Tools、Skills、Knowledge、MySQL Memory、OSS 或 Compression 启用，平台必须追加对应的契约、权限、启动和集成检查。

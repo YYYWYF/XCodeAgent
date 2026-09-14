@@ -79,6 +79,7 @@ import {
   workflowInteractionAvailability
 } from '../planExecutionMode'
 import { maybeRefreshPendingPlanLifecycleAfterGeneration } from '../pendingPlanLifecycleRefresh'
+import { workflowDebugClarificationAnswers } from '../debugExecutionScope'
 
 type SessionRunEntry = {
   identity: SessionIdentity
@@ -2056,6 +2057,7 @@ export function useWorkflowConversation({
       }
     )
     await sendWorkflowMessage(`从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`, {
+      clarificationAnswers: workflowDebugClarificationAnswers(workflowDebug),
       resumeState: source,
       // Mock 或旧会话可能没有 lifecycle projection，但 Workflow runId 仍是可校验的恢复令牌。
       resumeExecutionRunId: execution?.runId || source.runId,

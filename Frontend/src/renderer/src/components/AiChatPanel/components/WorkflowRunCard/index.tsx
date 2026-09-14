@@ -68,6 +68,7 @@ import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
 import { workflowClarification } from './workflowClarification'
 import {
+  buildExecutionTerminalStatus,
   buildTaskDisplayStatus,
   isCheckpointCandidate,
   isModuleCheckpointCandidate
@@ -1275,26 +1276,34 @@ function BuildExecutionSliceProgress({
 
   const [activeTaskKeys, setActiveTaskKeys] = useState<string[]>([])
   const scope = executionSlice.scope
-  if (!scope) return null
   const tasks = Array.isArray(executionSlice.tasks) ? executionSlice.tasks : []
+  const failedTaskIds = tasks.filter((task) => task.status === 'failed').map(taskId)
+  const failedTaskKey = failedTaskIds.join('|')
+
+  useEffect(() => {
+    /** 失败发生时自动展开失败任务，让原因无需用户再猜测或手动寻找。 */
+
+    if (!failedTaskKey) return
+    setActiveTaskKeys((current) => dedupeStrings([...current, ...failedTaskKey.split('|')]))
+  }, [failedTaskKey])
+
+  if (!scope) return null
   const summary = executionSlice.summary || {}
-  const total = numberValue(summary.total, tasks.length)
-  const completed = numberValue(
-    summary.completed,
-    tasks.filter((task) => buildTaskDisplayStatus(task.status) === 'completed').length
-  )
-  const failed = numberValue(
-    summary.failed,
-    tasks.filter((task) => task.status === 'failed').length
-  )
-  const running = numberValue(
-    summary.running,
-    tasks.filter((task) => task.status === 'running').length
-  )
-  const pending = numberValue(
-    summary.pending,
-    tasks.filter((task) => buildTaskDisplayStatus(task.status) === 'pending').length
-  )
+  // tasks 是卡片当前范围的完整快照；存在时统一由它计算进度，避免 summary 晚一帧导致状态互相矛盾。
+  const hasTaskSnapshot = tasks.length > 0
+  const total = hasTaskSnapshot ? tasks.length : numberValue(summary.total, 0)
+  const completed = hasTaskSnapshot
+    ? tasks.filter((task) => buildTaskDisplayStatus(task.status) === 'completed').length
+    : numberValue(summary.completed, 0)
+  const failed = hasTaskSnapshot
+    ? tasks.filter((task) => task.status === 'failed').length
+    : numberValue(summary.failed, 0)
+  const running = hasTaskSnapshot
+    ? tasks.filter((task) => task.status === 'running').length
+    : numberValue(summary.running, 0)
+  const pending = hasTaskSnapshot
+    ? tasks.filter((task) => buildTaskDisplayStatus(task.status) === 'pending').length
+    : numberValue(summary.pending, 0)
   const reused = numberValue(summary.reused, executionSlice.reusable_task_ids?.length || 0)
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0
   const targetLabel =
@@ -1310,9 +1319,22 @@ function BuildExecutionSliceProgress({
     failed > 0 ? 'exception' : completed === total && total > 0 ? 'success' : 'active'
   const displayTasks = sortBuildTasksForDisplay(tasks)
   const expandedTaskKeys = new Set(activeTaskKeys)
+  const firstFailureReason = tasks
+    .filter((task) => task.status === 'failed')
+    .map(taskFailureReason)
+    .find(Boolean)
 
   return (
     <div className={cx('workflow-build-progress')}>
+      {failed > 0 && (
+        <Alert
+          className={cx('workflow-build-failure-alert')}
+          message="构建任务执行失败"
+          description={firstFailureReason || '失败任务已在下方展开，请查看具体原因后重试。'}
+          showIcon
+          type="error"
+        />
+      )}
       <div className={cx('workflow-build-progress-header')}>
         <div>
           <Text strong>执行进度</Text>
@@ -1414,8 +1436,11 @@ export function BuildExecutionRunCard({
 }): ReactElement {
   /** 在对应构建步骤内部渲染独立的构建轮次卡片。 */
 
+  const terminalStatus = status === 'running' ? buildExecutionTerminalStatus(executionSlice) : undefined
+  const effectiveStatus = terminalStatus || status
+
   return (
-    <section className={cx('workflow-run-card', 'workflow-build-run-card', status)}>
+    <section className={cx('workflow-run-card', 'workflow-build-run-card', effectiveStatus)}>
       <div className={cx('workflow-run-header')}>
         <div className={cx('workflow-run-title')}>
           <span className={cx('workflow-run-signal')} aria-hidden="true" />
@@ -1423,8 +1448,8 @@ export function BuildExecutionRunCard({
             构建执行
           </Text>
         </div>
-        <Tag className={cx('workflow-run-status')} color={workflowStatusColor(status)}>
-          {workflowStatusText(status)}
+        <Tag className={cx('workflow-run-status')} color={workflowStatusColor(effectiveStatus)}>
+          {workflowStatusText(effectiveStatus)}
         </Tag>
       </div>
       <BuildExecutionSliceProgress executionSlice={executionSlice} />
