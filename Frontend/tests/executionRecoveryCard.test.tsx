@@ -2,11 +2,14 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createElement, Fragment } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { WorkbenchPhaseContext } from '../src/renderer/src/context'
 import RecoveryIncidentCard from '../src/renderer/src/components/RecoveryIncidentCard/RecoveryIncidentCard'
 import ApplicationPagePlanningModal from '../src/renderer/src/components/Welcome/ApplicationPagePlanningModal'
 import AgentErrorCard from '../src/renderer/src/components/AgentErrorCard'
 import ApplicationPlanningRecoveryIncidentCard from '../src/renderer/src/components/ApplicationPlanningRecoveryIncidentCard'
+import MessageList from '../src/renderer/src/components/AiChatPanel/components/MessageList'
 import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recoverySurface'
+import { WORKBENCH_PHASE_AGENTS } from '../src/renderer/src/workbenchPhase'
 import { applicationPlanningRecoveryProjection } from '../src/renderer/src/service/applicationPlanningRecovery'
 import type { ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
 import { workbenchRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
@@ -116,7 +119,7 @@ function renderPlanningRecoverySurface(
       Fragment,
       null,
       ...historyErrors.map((error, index) =>
-        createElement(AgentErrorCard, { error, key: `history-${index}` })
+        createElement(AgentErrorCard, { error, historical: true, key: `history-${index}` })
       ),
       createElement(ApplicationPlanningRecoveryIncidentCard, {
         onAction: () => undefined,
@@ -288,6 +291,72 @@ test('ordinary AgentErrorCard remains a history-only error card', () => {
   assert.match(markup, /普通 Network Error/)
   assert.match(markup, /重试/)
   assert.doesNotMatch(markup, /重新执行技术规划/)
+})
+
+test('historical AgentErrorCard omits recovery guidance and retry action', () => {
+  const markup = renderToStaticMarkup(
+    createElement(AgentErrorCard, {
+      error: '普通任务失败',
+      historical: true,
+      onRetry: () => undefined
+    })
+  )
+  assert.match(markup, /普通任务失败/)
+  assert.doesNotMatch(markup, /请查看错误详情和相关执行记录后重试/)
+  assert.doesNotMatch(markup, />重试</)
+})
+
+test('MessageList renders legacy recovery guidance as history while keeping Current Recovery Incident unique', () => {
+  const markup = renderToStaticMarkup(
+    createElement(
+      WorkbenchPhaseContext.Provider,
+      {
+        value: {
+          phase: 'planning',
+          derivedPhase: 'planning',
+          reachedPhase: 'planning',
+          recordReachedPhase: () => undefined,
+          manualOverride: null,
+          switchPhase: () => undefined,
+          agent: WORKBENCH_PHASE_AGENTS.planning,
+          canEdit: () => true
+        }
+      },
+      createElement(
+        Fragment,
+        null,
+        createElement(MessageList, {
+          applicationTemplatePreparationEligible: false,
+          codeChangeActionsDisabled: false,
+          conversationRunning: false,
+          loading: false,
+          messages: [
+            {
+              id: 1,
+              role: 'assistant',
+              content: '',
+              error: '已找到可验证的恢复入口，可以继续执行。',
+              createdAt: 1
+            }
+          ],
+          onOpenCodeChangeFile: () => undefined,
+          onRevertCodeChanges: () => undefined,
+          onSubmitClarification: async () => undefined,
+          revertingCodeChangeIds: new Set()
+        }),
+        createElement(RecoverySurface, {
+          activeExecutionRecovery: recovery('ready'),
+          isApplicationPlanningPhase: false,
+          onExecuteRecoveryAction: () => undefined,
+          recoveryRunning: false
+        })
+      )
+    )
+  )
+  assert.equal(countOccurrences(markup, '此次任务执行未能完成'), 1)
+  assert.equal(countOccurrences(markup, '继续执行'), 1)
+  assert.doesNotMatch(markup, /已找到可验证的恢复入口，可以继续执行。/)
+  assert.doesNotMatch(markup, /请查看错误详情和相关执行记录后重试/)
 })
 
 test('sync error Incident stays outside history and offers only resync', () => {

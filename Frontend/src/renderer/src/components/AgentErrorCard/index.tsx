@@ -8,6 +8,7 @@ const { Text } = Typography
 
 type AgentErrorCardProps = {
   error?: string
+  historical?: boolean
   onRetry?: () => void
   retrying?: boolean
   retryLabel?: string
@@ -17,6 +18,7 @@ type AgentErrorCardProps = {
 /** 按真实错误类型区分模型连接异常和普通任务失败，避免把所有失败误报为模型问题。 */
 export default function AgentErrorCard({
   error,
+  historical = false,
   onRetry,
   retrying,
   retryLabel = '重试',
@@ -40,15 +42,17 @@ export default function AgentErrorCard({
           {resolvedTitle}
         </Text>
         <Text className={cx('agent-error-card-message')}>{copy?.message}</Text>
-        <Text className={cx('agent-error-card-hint')} type="secondary">
-          {copy?.hint}
-        </Text>
+        {!historical && copy?.hint ? (
+          <Text className={cx('agent-error-card-hint')} type="secondary">
+            {copy.hint}
+          </Text>
+        ) : null}
         {copy?.detail ? (
           <Text className={cx('agent-error-card-detail')} type="secondary">
             错误详情：{copy.detail}
           </Text>
         ) : null}
-        {onRetry ? (
+        {!historical && onRetry ? (
           <Button
             className={cx('agent-error-card-retry')}
             icon={<RedoOutlined />}
