@@ -71,6 +71,7 @@ from app.services.build_scheduler import (
     attribute_task_file_changes,
     classify_task_result,
     mark_tasks_running,
+    manually_retryable_failed_task_ids,
     normalize_task_results,
     ready_repair_task_ids,
     reset_failed_tasks_for_retry,
@@ -1592,6 +1593,17 @@ def run_build_scheduler(
                     reset_existing_repair_tasks=True,
                 )
                 recovery_mode = "repair"
+            else:
+                # RepairPlanner 没有给出可执行修复时，仍允许用户显式重跑原失败任务；
+                # 数据库审批和工作区快照漂移继续走各自的结构化恢复入口。
+                retry_task_ids = manually_retryable_failed_task_ids(
+                    retry_slice["tasks"],
+                    list(state.get("build_results", [])),
+                )
+                if retry_task_ids:
+                    tasks = reset_failed_tasks_for_retry(tasks, retry_task_ids)
+                    build_task_plan = replace_build_task_plan_tasks(build_task_plan, tasks)
+                    recovery_mode = "manual_retry"
     elif ready_repair_task_ids(incoming_repair_task_plan):
         build_task_plan = append_repair_tasks_to_build_plan(
             build_task_plan=build_task_plan,

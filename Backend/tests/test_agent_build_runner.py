@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from deepagents.backends import FilesystemBackend
@@ -12,7 +13,7 @@ from app.graph.subgraphs.build import _runner_for_owner
 
 
 class AgentBuildRunnerTests(unittest.TestCase):
-    """验证第一批七模块 DAG 不会再次误报 Agent 代码完成。"""
+    """验证七模块 DAG 使用受限的模板感知 Agent CodeRunner。"""
 
     def test_agent_owner_has_dedicated_runner(self) -> None:
         """构建调度器必须继续为 agent owner 注册独立执行边界。"""
@@ -23,8 +24,8 @@ class AgentBuildRunnerTests(unittest.TestCase):
         self.assertEqual(runner[0], "agent.deep_agent")
         self.assertEqual(runner[1].__name__, "generate_agent_runtime_with_deep_agent")
 
-    def test_first_batch_explicitly_blocks_module_execution(self) -> None:
-        """CodeRunner 未实施前必须失败并请求后续实现，不能无代码误报完成。"""
+    def test_agent_runtime_runner_returns_strict_module_result(self) -> None:
+        """CodeRunner 必须调用受限 Agent，并保留模块实现动作和执行身份。"""
 
         task = {
             "id": "agent:inventory_assistant::prompt",
@@ -33,16 +34,31 @@ class AgentBuildRunnerTests(unittest.TestCase):
             "task_type": "agent.code",
             "source_refs": {"agent_module": "prompt"},
         }
-        results = generate_agent_runtime_with_deep_agent(
-            project_plan={},
-            build_task_plan={},
-            tasks=[task],
-        )
+        with (
+            patch(
+                "app.agents.agent_runtime.generator._invoke_live_agent_runtime",
+                return_value=(
+                    '{"task_results":[{"task_id":"agent:inventory_assistant::prompt",'
+                    '"status":"completed","summary":"已更新模板 Prompt 组合入口",'
+                    '"implementation_action":"modify"}]}'
+                ),
+            ) as invoke,
+            patch(
+                "app.agents.agent_runtime.generator.Settings.from_env",
+                return_value=SimpleNamespace(model_name="test-model"),
+            ),
+        ):
+            results = generate_agent_runtime_with_deep_agent(
+                project_plan={"agent_contracts": [{"agentId": "inventory_assistant"}]},
+                build_task_plan={},
+                tasks=[task],
+                workspace="/tmp/generated-agent",
+            )
 
-        self.assertEqual(results[0]["status"], "failed")
-        self.assertEqual(results[0]["failure_category"], "plan_mismatch")
-        self.assertIn("CodeRunner", results[0]["failure_reason"])
-        self.assertEqual(results[0]["changed_files"], [])
+        self.assertEqual(results[0]["status"], "completed")
+        self.assertEqual(results[0]["implementation_action"], "modify")
+        self.assertEqual(results[0]["executed_by"]["model"], "test-model")
+        self.assertEqual(invoke.call_args.kwargs["workspace"], "/tmp/generated-agent")
 
     def test_agent_runtime_agent_does_not_expose_unrestricted_shell(self) -> None:
         """Agent Runtime 只能通过权限中间件控制的文件工具修改 sidecar。"""

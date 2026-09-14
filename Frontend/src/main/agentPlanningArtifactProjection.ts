@@ -175,7 +175,7 @@ async function projectAgent(
       tools: toolDependencies,
       entities: [...entityIds].map((entityId) => ({ entityId })),
       pages: entryActions,
-      runtime: await readAgentRuntimeManifest(workspaceRoot)
+      runtime: await readAgentRuntimeState(workspaceRoot)
     },
     runtime: record(contract.runtime),
     security: record(contract.security),
@@ -233,25 +233,21 @@ async function projectArtifacts(
   )
 }
 
-/** 读取模板 manifest 中已经由主进程验证过的 Agent Runtime 摘要。 */
-async function readAgentRuntimeManifest(workspaceRoot: string): Promise<Record<string, unknown>> {
+/** 从当前 TemplateState 与生成工程读取 Agent Runtime 只读摘要。 */
+async function readAgentRuntimeState(workspaceRoot: string): Promise<Record<string, unknown>> {
   try {
-    const raw = await fs.readFile(
-      path.join(workspaceRoot, '.xcodeagent', 'template-generation-manifest.json'),
-      'utf8'
-    )
-    const manifest = JSON.parse(raw) as Record<string, unknown>
-    const target = record(record(record(manifest.steps).download).targets).agentRuntime
-    const runtime = record(target)
+    const statePath = path.join(workspaceRoot, '.xcodeagent', 'template-state.json')
+    const state = JSON.parse(await fs.readFile(statePath, 'utf8')) as Record<string, unknown>
+    const runtimePath = path.join(workspaceRoot, 'agent-runtime', 'pyproject.toml')
+    const runtimeStat = await fs.lstat(runtimePath).catch(() => undefined)
     return {
-      required: runtime.required === true,
-      status: String(runtime.status || ''),
-      repositoryUrl: String(runtime.repositoryUrl || ''),
-      branch: String(runtime.branch || ''),
-      commitSha: String(runtime.commitSha || '')
+      required: true,
+      status: runtimeStat?.isFile() && !runtimeStat.isSymbolicLink() ? 'ready' : 'pending',
+      source: 'technical-plan',
+      templateRevision: String(state.templateRevision || '')
     }
   } catch {
-    return { required: true, status: 'missing' }
+    return { required: true, status: 'missing', source: 'technical-plan', templateRevision: '' }
   }
 }
 
