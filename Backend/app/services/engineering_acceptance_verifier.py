@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from fnmatch import fnmatch
 from pathlib import Path
 import re
@@ -131,6 +132,8 @@ def _verify_check(
         return _verify_scope_boundary(task, batch_unauthorized_paths)
     if kind == "agent_module_contract":
         return _verify_agent_module_contract(check, task=task)
+    if kind == "agent_system_prompt":
+        return _verify_agent_system_prompt(check, root=root)
     if kind == "page_entry":
         return _verify_page_entry(check, root=root)
     if kind == "page_default_export":
@@ -197,6 +200,104 @@ def _verify_agent_module_contract(
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(source_refs[field])):
             return f"Agent 模块任务的 {field} 无效。", "Hash 格式校验失败。"
     return None, f"已绑定 Agent {source_refs['agent_id']} 的 {module_name} 模块身份。"
+
+
+def _verify_agent_system_prompt(
+    check: dict[str, Any],
+    *,
+    root: Path | None,
+) -> tuple[str | None, str]:
+    """解析 Agent 组合入口并确认正式 System Prompt 作为完整字符串逐字落地。"""
+
+    expected = _dict_value(check.get("expected"))
+    agent_id = str(expected.get("agent_id") or "").strip()
+    system_prompt = expected.get("system_prompt")
+    path = _normalize_path(expected.get("composition_path"))
+    if not agent_id or not isinstance(system_prompt, str) or not system_prompt:
+        return (
+            "Agent Prompt 验收缺少正式 System Prompt。",
+            "任务未携带可验证的 Prompt Contract。",
+        )
+    source, error = _read_workspace_file(root, path)
+    if error:
+        return error, error
+    try:
+        tree = ast.parse(source or "", filename=path)
+    except SyntaxError:
+        return (
+            "Agent Prompt 组合入口不是有效的 Python 源码。",
+            f"无法解析 {path}。",
+        )
+    assignments = _python_string_assignments(tree)
+    configured_prompts = [
+        value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "system_prompt"
+        for value in _static_python_strings(keyword.value, assignments, set())
+    ]
+    if not any(system_prompt in value for value in configured_prompts):
+        return (
+            f"Agent {agent_id} 的 System Prompt 未按正式配置逐字落地。",
+            "生成源码传给 system_prompt 的静态字符串中未包含完整正式配置。",
+        )
+    return None, f"Agent {agent_id} 的 System Prompt 已按正式配置逐字落地。"
+
+
+def _python_string_assignments(tree: ast.AST) -> dict[str, list[ast.AST]]:
+    """收集 Python 源码中的字符串赋值表达式，供 Prompt 参数静态求值。"""
+
+    assignments: dict[str, list[ast.AST]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            names = [target.id for target in node.targets if isinstance(target, ast.Name)]
+            for name in names:
+                assignments.setdefault(name, []).append(node.value)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.value is not None:
+                assignments.setdefault(node.target.id, []).append(node.value)
+    return assignments
+
+
+def _static_python_strings(
+    expression: ast.AST,
+    assignments: dict[str, list[ast.AST]],
+    resolving: set[str],
+) -> list[str]:
+    """有限求值常量、拼接和变量引用，不执行生成工作区中的任何 Python 代码。"""
+
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        return [expression.value]
+    if isinstance(expression, ast.Name):
+        if expression.id in resolving:
+            return []
+        return [
+            value
+            for assigned in assignments.get(expression.id, [])
+            for value in _static_python_strings(
+                assigned,
+                assignments,
+                {*resolving, expression.id},
+            )
+        ]
+    if isinstance(expression, ast.BinOp) and isinstance(expression.op, ast.Add):
+        left = _static_python_strings(expression.left, assignments, resolving)
+        right = _static_python_strings(expression.right, assignments, resolving)
+        return [left_value + right_value for left_value in left for right_value in right]
+    if isinstance(expression, ast.JoinedStr):
+        parts: list[list[str]] = []
+        for item in expression.values:
+            target = item.value if isinstance(item, ast.FormattedValue) else item
+            values = _static_python_strings(target, assignments, resolving)
+            if not values:
+                return []
+            parts.append(values)
+        combined = [""]
+        for values in parts:
+            combined = [prefix + value for prefix in combined for value in values]
+        return combined
+    return []
 
 
 def _verify_file_operation(

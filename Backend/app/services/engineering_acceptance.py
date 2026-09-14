@@ -124,6 +124,8 @@ def _compile_task(
             checks.extend(_file_operation_checks(task))
         checks.append(_scope_boundary_check(task))
         checks.append(_agent_module_contract_check(task))
+        if str(_dict_value(task.get("source_refs")).get("agent_module") or "") == "prompt":
+            checks.append(_agent_system_prompt_check(task))
     else:
         checks.extend(_file_operation_checks(task))
         checks.append(_scope_boundary_check(task))
@@ -171,6 +173,40 @@ def _agent_module_contract_check(task: dict[str, Any]) -> dict[str, Any]:
             "template_policy_sha256": str(
                 source_refs.get("template_policy_sha256") or ""
             ),
+        },
+    )
+
+
+def _agent_system_prompt_check(task: dict[str, Any]) -> dict[str, Any]:
+    """把正式 System Prompt 编译为不泄露内容的逐字源码验收检查。"""
+
+    source_refs = _dict_value(task.get("source_refs"))
+    agent_id = str(source_refs.get("agent_id") or "")
+    contracts = _dict_items(source_refs.get("agent_contracts"))
+    contract = next(
+        (
+            item
+            for item in contracts
+            if str(item.get("agentId") or "") == agent_id
+        ),
+        contracts[0] if contracts else {},
+    )
+    settings = _dict_value(contract.get("agentSettings"))
+    prompt = _dict_value(settings.get("prompt"))
+    artifacts = _dict_value(contract.get("artifacts"))
+    composition_path = str(
+        artifacts.get("compositionPath")
+        or "agent-runtime/src/app/agent/factory.py"
+    ).strip()
+    return _check(
+        task,
+        kind="agent_system_prompt",
+        description="生成代码必须逐字包含正式 Agent Contract 的 System Prompt。",
+        target_paths=[composition_path],
+        expected={
+            "agent_id": agent_id,
+            "system_prompt": str(prompt.get("systemPrompt") or ""),
+            "composition_path": composition_path,
         },
     )
 

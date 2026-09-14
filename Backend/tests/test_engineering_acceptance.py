@@ -1209,6 +1209,17 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 "module_config_sha256": "sha256:" + "2" * 64,
                 "template_revision": "2026.09.04.1",
                 "template_policy_sha256": "sha256:" + "3" * 64,
+                "agent_contracts": [
+                    {
+                        "agentId": "inventory_assistant",
+                        "agentSettings": {
+                            "prompt": {"systemPrompt": "逐字解释库存政策。"}
+                        },
+                        "artifacts": {
+                            "compositionPath": "agent-runtime/src/app/agent/factory.py"
+                        },
+                    }
+                ],
             },
             "allowed_paths": ["agent-runtime/src/app/agent/factory.py"],
             "change_scope": [
@@ -1222,7 +1233,11 @@ class EngineeringAcceptanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             target = Path(workspace) / "agent-runtime/src/app/agent/factory.py"
             target.parent.mkdir(parents=True)
-            target.write_text("# generated\n", encoding="utf-8")
+            target.write_text(
+                'SYSTEM_PROMPT = "逐字解释库存政策。"\n'
+                "agent = create_deep_agent(system_prompt=SYSTEM_PROMPT)\n",
+                encoding="utf-8",
+            )
             evidence, errors = verify_engineering_acceptance(
                 task=compiled,
                 status="completed",
@@ -1242,6 +1257,82 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             any(
                 item["kind"] == "agent_module_contract"
                 and item["status"] == "passed"
+                for item in evidence
+            )
+        )
+        self.assertTrue(
+            any(
+                item["kind"] == "agent_system_prompt"
+                and item["status"] == "passed"
+                for item in evidence
+            )
+        )
+
+    def test_agent_prompt_acceptance_rejects_semantic_rewrite(self) -> None:
+        """语义相近但非逐字一致的 System Prompt 不得通过 Prompt 模块验收。"""
+
+        task = {
+            "id": "agent:leave_assistant::prompt",
+            "owner": "agent",
+            "unit_id": "agent:leave_assistant",
+            "task_type": "agent.code",
+            "source_refs": {
+                "agent_id": "leave_assistant",
+                "agent_module": "prompt",
+                "agent_contract_sha256": "sha256:" + "1" * 64,
+                "module_config_sha256": "sha256:" + "2" * 64,
+                "template_revision": "2026.09.04.1",
+                "template_policy_sha256": "sha256:" + "3" * 64,
+                "agent_contracts": [
+                    {
+                        "agentId": "leave_assistant",
+                        "agentSettings": {
+                            "prompt": {
+                                "systemPrompt": "面向员工解答政策并办理请假调休。"
+                            }
+                        },
+                        "artifacts": {
+                            "compositionPath": "agent-runtime/src/app/agent/factory.py"
+                        },
+                    }
+                ],
+            },
+            "allowed_paths": ["agent-runtime/src/app/agent/factory.py"],
+            "change_scope": [
+                {
+                    "operation": "modify",
+                    "path": "agent-runtime/src/app/agent/factory.py",
+                }
+            ],
+        }
+        compiled = ensure_engineering_acceptance(task)
+        with tempfile.TemporaryDirectory() as workspace:
+            target = Path(workspace) / "agent-runtime/src/app/agent/factory.py"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                'SYSTEM_PROMPT = "作为公司人事助手，帮助员工处理休假。"\n'
+                "agent = create_deep_agent(system_prompt=SYSTEM_PROMPT)\n",
+                encoding="utf-8",
+            )
+            evidence, errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={
+                    "files": [
+                        {
+                            "path": "agent-runtime/src/app/agent/factory.py",
+                            "changeType": "modified",
+                        }
+                    ]
+                },
+                workspace_root=workspace,
+            )
+
+        self.assertTrue(any("System Prompt 未按正式配置逐字落地" in error for error in errors))
+        self.assertTrue(
+            any(
+                item["kind"] == "agent_system_prompt"
+                and item["status"] == "failed"
                 for item in evidence
             )
         )
