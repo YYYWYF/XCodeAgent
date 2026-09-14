@@ -37,7 +37,7 @@
 - 正式前端需求文档面板已按需展示“智能体”章节；TechnicalPlan 的 `agent_contracts[]` 已升级为带 ProductPlan Hash 的完整派生执行快照，包含 identity、capabilities、interaction、七段 `agentSettings`、Invocation、Runtime、Security、Artifacts、Required checks 和 Evaluation。模型只返回候选设置和稳定引用，平台确定性展开 Endpoint 并拒绝派生字段漂移；TechnicalPlan Markdown 和右侧阅读面板已同步展示完整契约。普通应用仍使用 `agents: []`、`agent_contracts: []`，不出现智能体章节、契约页签或 Python 架构。
 - 现有 `build-dag.v3` 已增加平台 readiness `agent:runtime` Unit、业务 `agent:<agentId>` Unit、`agent` owner 和独立 Agent Runtime Generation CodeRunner；模型不再为 `agent:runtime` 生成 bootstrap 任务，业务 Agent 任务写权限只允许对应 `agent-runtime/**` 路径。CodeRunner 已强制读取专用生成 Skill，只接收当前 Agent Contract 和其 Tool 实际引用的 Java API Contract/Schema，并按模板固定入口生成业务模块。工作台智能体设计/配置产物、真实生成应用端到端运行、专属测试/审查证据和候选版本晋升仍未完成。
 - 已确认 [Agent Runtime 模板仓库与初始化流程设计](./AGENT_RUNTIME_TEMPLATE_AND_INITIALIZATION.md)，独立模板仓库 `Bettetman/agent-runtime-template@master` 可安装、测试、启动和基础对话。XCodeAgent 已把 `agentRuntime` 接入 TechnicalPlan 确认结果、Electron 模板下载、前后端协议类型、manifest 和 Backend readiness：`agent_contracts[]` 非空时下载并复核仓库、分支、commit 与关键文件，普通应用明确记录 skipped 且不创建目录。业务产物路径已统一切换到 `src/app/agent/`、`src/app/tools/`，`agent:runtime` 不再生成模型 bootstrap 任务；Testing、Code Review、Project Launch、Java Gateway 和 Electron 完整端到端仍未完成。
-- 已完成 [Agent Development Workbench 第一期](./AGENT_DEVELOPMENT_PHASE1_IMPLEMENTATION_PLAN.md)：生产工作台已把 Agent 作为页面、API、实体同级开发目标，只读展示完整 Contract、七段 Settings、Runtime/Gateway/Tool/实体/页面依赖和固定实现文件状态；`type=agent` 已贯通 AG-UI 请求、Graph State、lifecycle、资源锁、EntitySourceBinding continuation、Build scope、required Unit 闭包及现有 Agent CodeRunner。实现未增加新的产品 Endpoint，也未改变页面、Endpoint、实体和应用级 Build 的既有行为。
+- 已完成 [Agent Development Workbench 第一期](./AGENT_DEVELOPMENT_PHASE1_IMPLEMENTATION_PLAN.md)：生产工作台已把 Agent 作为页面、API、实体同级开发目标，只读展示完整 Contract、七段 Settings、Runtime/Gateway/Tool/实体/页面依赖和固定实现文件状态；`type=agent` 已贯通 AG-UI 请求、Graph State、lifecycle、资源锁、EntitySourceBinding continuation、Build scope、required Unit 闭包及现有 Agent CodeRunner。当唯一阻断是实体绑定时，用户可在 Agent 门禁中显式暂时跳过，本次执行只生成 Python Runtime 和目标 Agent Unit。实现未增加新的产品 Endpoint，也未改变页面、Endpoint、实体和应用级 Build 的既有行为。
 - Agent Settings 第一批可视化编辑已接入生产工作台：七段配置不再展示原始 JSON，Prompt 与 Temperature 可生成 TechnicalPlan revision draft、查看字段 Diff、确认或放弃；确认时原子更新正式 TechnicalPlan 并使绑定旧 Contract Hash 的当前 Agent BuildTaskPlan 失效。Prepare 使用现有 Agent 资源锁，运行任务必须回到原会话停止，等待确认/失败/停止任务可由用户明确结束后释放；不会自动中断运行，也不影响无关 Agent、页面、Endpoint 或实体。
 - 因此当前总体状态是：**正式开发中，已完成 RequirementSpec、ProductPlan、TechnicalPlan、条件式 Runtime 初始化、Agent Workbench 第一期与业务 Agent Build 接入切片，但尚未形成运行试聊、专属测试、启动和验收端到端闭环**。第一期自动化证据为 Backend 167 个定向测试和 Frontend Node/Renderer TypeScript + Electron/Vite Build 通过；Electron 实机完整 Agent Build 仍由用户验证。
 - 原型脚本 `test:agent-development`、`test:new-app-agent-planning`、智能体配置样式测试与 `typecheck` 可作为原型验证入口；本次变基后已重新运行并通过。
@@ -261,8 +261,8 @@
 - Agent Contract 按 ProductPlan `agentId` 一一对应，闭合能力→工具→TechnicalPlan API Endpoint、ProductPlan 页面 action→Java Agent 网关 Endpoint、会话、项目默认模型、知识引用、安全边界、产物路径和 required checks；模型不能改写运行时、传输、安全和路径事实。
 - 客户端调用固定经过 Java 网关并使用 AG-UI SSE；禁止浏览器直连 Python sidecar，Java 网关只转发受限用户上下文，工具适配器只能调用声明过的 Java API Endpoint。
 - 现有 `build-dag.v3` 在 Agent Contract 非空时增加 `agent:runtime` 和 `agent:<agentId>` Unit，并建立工具 API Endpoint → Agent → Java Agent 网关 Endpoint → 页面依赖；没有新建第二套任务计划或执行 Graph。
-- Build 任务增加 `agent` owner、`agent.code` task 与 `agent.runtime` deliverable。共享 runtime bootstrap 和单 Agent 定义/工具适配/测试分别写入确定性 `agent-runtime/**` 路径。
-- 独立 Agent Runtime Generation CodeRunner 只执行 `agent:<agentId>` 业务实现任务，通过现有 BuildScheduler/Build Subgraph 执行，文件权限只能写任务授权的 `/agent-runtime/**`；`agent:runtime` 由开发前模板门禁确定性准备，不派发模型任务。Java 网关继续由 Data Source Generation Agent 负责，页面入口继续由 Frontend Generation Agent 负责。
+- Build 任务保留 `agent` owner 与 `agent.runtime` deliverable。平台直接从完整 Agent Contract 与内置模板路径策略编译 Prompt、Model、Memory、Tools、Skills、Knowledge、Context 七个 `agent.code` 任务；生成应用不再携带 Manifest 或 Definition，任务优先修改模板现有组合入口，只有功能确实缺失且任务授权时才新增文件。
+- `agent:runtime` 继续由开发前模板门禁确定性准备，不派发模型任务；模板已增加 stable/protected/七模块扩展点清单。模板感知 CodeRunner、动态 Python 新建权限、真实七步进度和质量链仍属于下一实施批次，当前执行入口会明确阻断而不会误报完成。Java 网关继续由 Backend owner 负责，页面入口继续由 Frontend owner 负责。
 - Java 网关与前端生成提示按匹配 Agent Contract 增加 AG-UI 约束，防止把 Agent 实现在 Java 中、使用普通 REST 代替 AG-UI，或让前端直连 sidecar。
 
 正式代码证据：
@@ -369,7 +369,7 @@
 - 新增内置 `agent-runtime-generate` Skill，定义业务 Agent 模块、Prompt 编译、模型/checkpointer 注入、Java Tool Adapter、可信身份与测试边界；Agent Runtime CodeRunner 在写文件前必须读取该 Skill。
 - Generator 根据当前 `agent:<agentId>` 任务筛选完整 Agent Contract，并从 `agentSettings.tools.bindings[].endpoint.apiContractId` 精确投射相关 Java API Contract 和 Schema；无关 API 不进入生成上下文。
 - 业务模块固定公开 `create_agent(*, model, runtime_context, checkpointer)`，调用 `create_deep_agent`；项目默认模型由模板统一通过 `init_chat_model` 创建和注入，业务模块不得二次初始化。
-- 独立模板 Factory 保留内置 `chat`，同时动态加载 `app.agent.<agent_id>`；Runtime Settings 提供经过 Origin 校验的 Java Backend 地址和独立 Tool Gateway 凭据读取边界。
+- 独立模板 Factory 保留内置 `chat`，同时严格加载 `config/agents/<agent_id>.json` 并通用装配 Deep Agent；只有显式 Extension 才加载 `app.extensions.<agent_id>`。Runtime Settings 提供经过 Origin 校验的 Java Backend 地址和独立 Tool Gateway 凭据读取边界。
 - Tool Adapter 只能访问 Contract 声明的 Java Endpoint，身份与 Scope 只能来自可信 `RuntimeContext`，不能由 Tool 参数覆盖。
 
 正式代码证据：

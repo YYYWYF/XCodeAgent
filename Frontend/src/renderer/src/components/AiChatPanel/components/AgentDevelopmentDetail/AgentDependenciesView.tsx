@@ -22,8 +22,8 @@ export default function AgentDependenciesView({
           <div>
             <dt>Runtime</dt>
             <dd>
-              {String(runtime.status || 'unknown')} · {String(runtime.branch || '-')}
-              <code>{String(runtime.commitSha || '').slice(0, 12) || '无 commit'}</code>
+              {String(runtime.status || 'unknown')} · TemplateState
+              <code>{String(runtime.templateRevision || '') || '无 revision'}</code>
             </dd>
           </div>
           <div>

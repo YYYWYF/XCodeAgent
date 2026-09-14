@@ -15,6 +15,7 @@
 3. 以 `{type: "agent", agentId, label}` 启动现有 `/workflow/run`。
 4. 在进入 Workspace Inspection 和 Build DAG 之前获得服务端确定性 readiness 结果。
 5. 仅缺 EntitySourceBinding 时进入现有实体绑定流程，并通过一次性 continuation 回到原 Agent。
+6. 仅在上述 Agent 门禁中允许用户显式暂时跳过；跳过后只生成 Python Runtime 和目标 Agent Unit，不改变其他开发目标的 EntitySourceBinding 合同。
 6. 生成并确认只覆盖当前 Agent 完整实现闭包的 Build DAG。
 7. 由现有 BuildScheduler 调用现有 Agent Runtime CodeRunner，生成 Contract 限定的三个 Python 文件，并继续使用现有 Diff、失败恢复和阶段确认卡。
 
@@ -30,7 +31,7 @@
 - Agent readiness 的结构化 blockers。
 - Agent Build 所需 Runtime、Tool Endpoint、Java Gateway、业务 Agent 和入口页面 Unit 闭包。
 - 当前 Build Plan 中既有已完成任务的保留与复用。
-- 现有 Agent CodeRunner 的真实调度，不修改它的写入权限。
+- 现有 Agent CodeRunner 的真实调度；通用临时脚本禁令仅对其固定 Agent 模块、Tool Adapter 和测试文件开放 Python 例外。
 - 页面、Endpoint、实体、应用级 Build 的回归保护。
 
 ### 2.2 不在范围内
@@ -258,13 +259,7 @@ Scheduler 对 `scope.type=agent` 使用已随已确认 Build Plan 持久化的 `
 - 已完成且 Unit fingerprint 与当前输入一致的 Gateway、Tool Endpoint、公共能力和页面任务沿用当前保留规则。
 - 尚无任务或已失效的 required Unit 进入同一份待确认 DAG。
 - `_target_unit_id()` 对 Agent 返回 `agent:<agentId>`，因此 Agent 自身任务会被替换；不无条件重做已有依赖任务。
-- Agent CodeRunner 仍只能写：
-
-  ```text
-  agent-runtime/src/app/agent/<agent_id>.py
-  agent-runtime/src/app/tools/<agent_id>_tools.py
-  agent-runtime/tests/test_<agent_id>.py
-  ```
+- Agent CodeRunner 后续只允许写平台内置模板路径策略与当前七模块任务授权路径的交集；第一版七模块串行执行。不得按固定命名机械创建 Agent、Tool 或测试文件，Runtime 服务入口、`agent-runtime/scripts/*.py` 及其他 owner 的脚本新建仍被禁止。
 
 - Java Gateway 继续由 Backend owner 负责，入口页面继续由 Frontend owner 负责。
 

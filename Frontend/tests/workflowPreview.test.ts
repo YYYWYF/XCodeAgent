@@ -1178,6 +1178,19 @@ test('失败计划只为可恢复的 Build 失败显示恢复动作', () => {
       previewWorkflow({
         status: 'failed',
         phase: 'build',
+        buildSummary: {
+          recovery_available: true,
+          manual_retry_task_ids: ['agent:hr_leave_policy_assistant::context']
+        }
+      })
+    ),
+    true
+  )
+  assert.equal(
+    workflowCanRetryFailedTasks(
+      previewWorkflow({
+        status: 'failed',
+        phase: 'build',
         buildSummary: { retry_available: false, repairable_failures: 1 }
       })
     ),
@@ -1538,6 +1551,25 @@ test('构建完成快照有无汇总时都把已满足要求的任务计入完�
     assert.deepEqual(tags.map((match) => match[1]), ['完成', '完成'])
     assert.doesNotMatch(markup, /workflow-build-task-panel[^"<>]*already_satisfied/)
   }
+})
+
+test('构建卡在汇总滞后但任务全部完成时停止运行态', () => {
+  const executionSlice: WorkflowBuildExecutionSlice = {
+    scope: { type: 'agent', targetId: 'hr_leave_policy_assistant' },
+    summary: { total: 2, completed: 0, failed: 0, pending: 0, running: 0 },
+    tasks: [
+      { id: 'context', title: '实现 Context 模块', status: 'completed' },
+      { id: 'knowledge', title: '实现 Knowledge 模块', status: 'already_satisfied' }
+    ]
+  }
+  const markup = renderToStaticMarkup(
+    createElement(BuildExecutionRunCard, { executionSlice, status: 'running' })
+  )
+
+  assert.match(markup, /workflow-build-run-card completed/)
+  assert.doesNotMatch(markup, /workflow-build-run-card running/)
+  assert.match(markup, />已完成</)
+  assert.match(markup, /100% 完成/)
 })
 
 test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、失败、通过与跳过状态', () => {

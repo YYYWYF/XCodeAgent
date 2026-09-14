@@ -12,6 +12,16 @@ from app.services.api_design import (
     api_design_source_types,
     load_confirmed_endpoint_designs,
 )
+from app.services.entity_definitions import (
+    confirmed_entity_designs,
+    entity_design_source_type,
+    entity_design_summaries,
+    missing_entity_design_ids,
+)
+from app.services.entity_design import (
+    entity_design_endpoint_binding_errors,
+    entity_design_validation_errors,
+)
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.services.agent_development_readiness import agent_contract_sha256
@@ -33,6 +43,63 @@ def _endpoint_contract(
         ),
         {},
     )
+
+
+def _endpoint_entity_designs(
+    project_plan: dict[str, Any],
+    endpoint: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """读取 Agent Tool Endpoint 的已确认实体设计，并返回缺失设计清单。"""
+
+    contract = _endpoint_contract(project_plan, endpoint)
+    confirmed = confirmed_entity_designs(project_plan, contract)
+    invalid_ids = [
+        str(detail.get("entity_id") or "")
+        for detail in confirmed
+        if entity_design_validation_errors(project_plan, detail)
+        or entity_design_endpoint_binding_errors(
+            project_plan,
+            detail,
+            api_contract_id=str(endpoint.get("api_contract_id") or ""),
+            endpoint_id=str(endpoint.get("id") or ""),
+        )
+    ]
+    missing_ids = missing_entity_design_ids(project_plan, contract)
+    return (
+        [
+            detail
+            for detail in confirmed
+            if str(detail.get("entity_id") or "") not in invalid_ids
+        ],
+        list(dict.fromkeys([*missing_ids, *invalid_ids])),
+    )
+
+
+def _entity_design_source_types(entity_designs: list[dict[str, Any]]) -> list[str]:
+    """按已确认实体设计提取有序去重的数据源类型集合。"""
+
+    result: list[str] = []
+    for detail in entity_designs:
+        source_type = entity_design_source_type(detail)
+        if source_type and source_type not in result:
+            result.append(source_type)
+    return result
+
+
+def _assert_endpoint_entities_designed(
+    endpoint_id: str,
+    entity_designs: list[dict[str, Any]],
+    missing_entity_ids: list[str],
+) -> None:
+    """Agent Tool Endpoint 存在未确认实体设计时给出可定位错误。"""
+
+    if missing_entity_ids:
+        raise ValueError(
+            f"Endpoint {endpoint_id} 绑定实体 "
+            f"{', '.join(missing_entity_ids)} 缺少已确认实体设计。"
+        )
+    if not entity_designs:
+        raise ValueError(f"Endpoint {endpoint_id} 未绑定任何实体。")
 
 
 def _workspace_root(project_plan_path: str | Path | None) -> Path:
