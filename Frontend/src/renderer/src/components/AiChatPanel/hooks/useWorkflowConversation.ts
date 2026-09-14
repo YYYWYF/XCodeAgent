@@ -686,7 +686,7 @@ export function useWorkflowConversation({
   const sessionExecutionLocked = Boolean(phaseExecution && !activeSessionOwnsExecution)
   const workspaceBusy = sessionExecutionLocked
 
-  /** 使用当前 RecoveryActionPlan 的 incident/action 身份启动一次短生命周期 Durable Recovery。 */
+  /** 提交当前 Backend action 或永久 Retry Entry，恢复策略仍由 Backend 重新解析。 */
   const handleExecuteRecoveryAction = async (
     recovery: ExecutionRecoveryCandidate
   ): Promise<boolean> => {
@@ -698,8 +698,8 @@ export function useWorkflowConversation({
       loading ||
       workspaceBusy ||
       recoveringSourceRunId === recovery.sourceRunId ||
-      actionPlan.status !== 'recoverable' ||
-      !primaryAction
+      (actionPlan.status !== 'needs_attention' &&
+        (actionPlan.status !== 'recoverable' || !primaryAction))
     ) {
       return false
     }
@@ -707,15 +707,21 @@ export function useWorkflowConversation({
     setRecoveringSourceRunId(recovery.sourceRunId)
     setRecoveryError(undefined)
     try {
-      return await sendWorkflowMessage(primaryAction.label, {
-        executionRecovery: {
-          action: 'execute',
-          incidentId: actionPlan.incidentId,
-          actionId: primaryAction.actionId
-        },
+      return await sendWorkflowMessage(primaryAction?.label || '重试', {
+        executionRecovery:
+          actionPlan.status === 'recoverable' && primaryAction
+            ? {
+                action: 'execute',
+                incidentId: actionPlan.incidentId,
+                actionId: primaryAction.actionId
+              }
+            : {
+                action: 'retry_current_failure',
+                sourceRunId: actionPlan.sourceRunId
+              },
         executionThreadId: recovery.threadId,
         sessionIdentity,
-        titleFrom: primaryAction.label,
+        titleFrom: primaryAction?.label || '重试',
         conversation: false
       })
     } finally {
@@ -903,11 +909,16 @@ export function useWorkflowConversation({
       revisionContinuation?: { changeId: string; token: string }
       revisionInteraction?: WorkflowRevisionDraftInteraction
       workflowScope?: string
-      executionRecovery?: {
-        action: 'execute'
-        incidentId: string
-        actionId: string
-      }
+      executionRecovery?:
+        | {
+            action: 'execute'
+            incidentId: string
+            actionId: string
+          }
+        | {
+            action: 'retry_current_failure'
+            sourceRunId: string
+          }
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()

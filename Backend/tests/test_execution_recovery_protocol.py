@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, patch
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    ExecutionFailureEvidence,
+    ExecutionFailureOrigin,
     RecoveryPoint,
     RecoveryPointKind,
 )
@@ -87,7 +89,7 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
     def test_standard_ag_ui_envelope_is_accepted(self) -> None:
         """标准 AG-UI envelope 的客户端字段不能阻断 recovery authority 解析。"""
 
-        workspace, action, source_run_id = _parse_request(
+        workspace, action, source_run_id, _incident_id, _action_id = _parse_request(
             {
                 "threadId": "frontend-thread",
                 "runId": "frontend-run",
@@ -112,7 +114,7 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
     def test_generic_retry_action_is_accepted_without_handler_fields(self) -> None:
         """通用重试只接受统一 action 与 sourceRunId，不接收旧 handler 路由字段。"""
 
-        workspace, action, source_run_id = _parse_request(
+        workspace, action, source_run_id, _incident_id, _action_id = _parse_request(
             {
                 "forwardedProps": {
                     "workspaceRoot": str(self.workspace),
@@ -142,6 +144,67 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
         self.assertEqual(raised.exception.code, "INVALID_EXECUTION_RECOVERY_REQUEST")
+
+    async def test_retry_entry_replans_needs_attention_without_consuming_old_action(
+        self,
+    ) -> None:
+        """永久 Retry Entry 每次只重解析当前失败，无法证明安全时保持零副作用。"""
+
+        now = datetime.now(timezone.utc)
+        source = DurableExecutionRecord(
+            run_id="needs-attention-run",
+            thread_id="needs-attention-thread",
+            workspace=str(self.workspace),
+            project_id="needs-attention-project",
+            execution_kind="application_planning",
+            workflow_scope="application_planning",
+            first_node="technical_planning",
+            current_node="technical_planning",
+            status=DurableExecutionStatus.FAILED,
+            started_at=now,
+            updated_at=now,
+            ended_at=now,
+            failure=ExecutionFailureEvidence(
+                origin=ExecutionFailureOrigin.MODEL_CALL,
+                code="MODEL_NOT_FOUND",
+                operation="technical_planning",
+                http_status=404,
+                replay_compatible=True,
+            ),
+        )
+        await insert_execution(source)
+        payload = {
+            "forwardedProps": {
+                "workspaceRoot": str(self.workspace),
+                "executionRecovery": {
+                    "action": "retry_current_failure",
+                    "sourceRunId": source.run_id,
+                },
+            }
+        }
+        with patch(
+            "app.protocols.execution_recovery.application_planning_graph_for_request",
+            new=AsyncMock(return_value=SimpleNamespace()),
+        ):
+            outputs = [
+                "".join(
+                    [
+                        frame
+                        async for frame in build_execution_recovery_ag_ui_stream(
+                            payload=payload
+                        )
+                    ]
+                )
+                for _ in range(2)
+            ]
+
+        for output in outputs:
+            self.assertIn("FAILED_NODE_PREDECESSOR_NOT_FOUND", output)
+            self.assertIn('"type":"RUN_ERROR"', output)
+        self.assertEqual(
+            await list_recovery_attempts_from_source(self.workspace, source.run_id),
+            [],
+        )
 
     async def test_requires_handler_has_no_recovery_side_effects(self) -> None:
         """默认 replay safety 未评估时只返回结构化拒绝，不 claim child 或修改 lifecycle。"""

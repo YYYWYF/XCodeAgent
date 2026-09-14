@@ -31,7 +31,8 @@ export default function RecoveryIncidentCard({
   testId = 'recovery-incident'
 }: RecoveryIncidentCardProps): ReactElement {
   const action = incident.kind === 'recoverable' ? incident.action : undefined
-  const hasAction = incident.kind === 'sync_error' || Boolean(action)
+  const hasAction =
+    incident.kind === 'sync_error' || incident.kind === 'needs_attention' || Boolean(action)
 
   /** 遵循 Backend requiresConfirmation，确认策略不由前端猜测。 */
   const handleAction = (): void => {
@@ -122,7 +123,11 @@ export default function RecoveryIncidentCard({
           onClick={handleAction}
           type="primary"
         >
-          {incident.kind === 'sync_error' ? incident.actionLabel : action?.label}
+          {incident.kind === 'sync_error'
+            ? incident.actionLabel
+            : incident.kind === 'needs_attention'
+              ? '重试'
+              : action?.label}
         </Button>
       ) : null}
     </section>

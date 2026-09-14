@@ -530,3 +530,80 @@ test('STALE_RECOVERY_ACTION 会读取并替换最新 Incident，且不写入历�
     })
   }
 })
+
+test('needs_attention Retry Entry 只提交 retry_current_failure 与当前 source hint', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  const ownerIdentity = buildSessionIdentity()
+  const application = {
+    id: APPLICATION_ID,
+    appName: 'Recovery retry entry application',
+    workspaceRoot: WORKSPACE_ROOT,
+    source: 'existing-workspace'
+  } as unknown as ApplicationConfig
+  const lifecycle = buildRecoveryLifecycle('incident-A', 'action-A')
+  const baseCandidate = recoveryCandidate()
+  const candidate: ExecutionRecoveryCandidate = {
+    ...baseCandidate,
+    availability: 'blocked',
+    canContinue: false,
+    reasonCode: 'NO_RECOVERY_POINT',
+    recoveryActionPlan: {
+      ...baseCandidate.recoveryActionPlan,
+      status: 'needs_attention',
+      reasonCode: 'NO_RECOVERY_POINT',
+      primaryAction: null
+    }
+  }
+  let recoveryRequest: Record<string, unknown> | undefined
+  let captured: ReturnType<typeof useWorkflowConversation> | undefined
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      threadId: string
+      runId: string
+      forwardedProps?: { executionRecovery?: Record<string, unknown> }
+    }
+    if (String(input).endsWith('/application-lifecycle/run')) {
+      return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+    }
+    recoveryRequest = request.forwardedProps?.executionRecovery
+    return sseErrorResponse(request.threadId, request.runId)
+  }
+
+  const params = buildRuntimeParams({
+    activeSession: ownerIdentity,
+    application,
+    applicationLifecycle: lifecycle,
+    agUiSessionsRef: { current: {} as Record<string, AgUiChatSession> },
+    acquireSessionExecution: () => undefined,
+    releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined
+  })
+
+  /** 捕获 Hook 暴露的当前恢复执行入口。 */
+  function Probe(): ReactElement {
+    captured = useWorkflowConversation(params)
+    return createElement('div')
+  }
+
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.ok(captured)
+    await captured.handleExecuteRecoveryAction(candidate)
+    assert.deepEqual(recoveryRequest, {
+      action: 'retry_current_failure',
+      sourceRunId: 'run-A'
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow
+    })
+  }
+})

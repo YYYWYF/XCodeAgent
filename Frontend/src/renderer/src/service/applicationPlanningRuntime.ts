@@ -188,7 +188,7 @@ export class ApplicationPlanningRuntime {
     await this.runPlanning(current.workflow ? '请从上次保存的规划状态继续执行。' : buildApplicationPlanningRequest(current.application))
   }
 
-  /** 先对账再由 Backend Recovery Projection 决定是否创建 Native Recovery child。 */
+  /** 先对账，再提交 Backend action 或永久 Retry Entry，具体恢复策略始终由 Backend 决定。 */
   async retryCurrentFailure(): Promise<void> {
     this.assertMutationAllowed()
     const outcome = await this.reconcileCurrentState()
@@ -196,7 +196,13 @@ export class ApplicationPlanningRuntime {
     const current = this.requireCurrentState()
     const recovery = current.recovery
     const plan = recovery?.recoveryActionPlan
-    if (!plan || plan.status !== 'recoverable' || !plan.primaryAction) return
+    if (
+      !plan ||
+      (plan.status !== 'needs_attention' &&
+        (plan.status !== 'recoverable' || !plan.primaryAction))
+    ) {
+      return
+    }
     await this.executeRecoveryAction(plan)
   }
 
@@ -370,7 +376,7 @@ export class ApplicationPlanningRuntime {
     return 'uncertain'
   }
 
-  /** 使用 Backend 签发的 incident/action 身份执行当前 Planning Recovery，不重发用户答案。 */
+  /** 使用 Backend action 或当前失败意图执行 Planning Recovery，不重发用户答案。 */
   private async executeRecoveryAction(
     plan: ApplicationPlanningRecoveryActionPlan
   ): Promise<void> {
@@ -384,15 +390,21 @@ export class ApplicationPlanningRuntime {
             : new AgUiChatSession(plan.threadId, getExecutionRecoveryActionUrl())
           const merged = await this.sendMessageWithinTransport(
             token,
-            plan.primaryAction?.label || '执行当前恢复操作。',
+            plan.primaryAction?.label || '重试',
             {
               editorMode: 'frontend',
               workspaceRoot: current.application.workspaceRoot,
-              executionRecovery: {
-                action: 'execute',
-                incidentId: plan.incidentId,
-                actionId: plan.primaryAction!.actionId
-              }
+              executionRecovery:
+                plan.status === 'recoverable' && plan.primaryAction
+                  ? {
+                      action: 'execute',
+                      incidentId: plan.incidentId,
+                      actionId: plan.primaryAction.actionId
+                    }
+                  : {
+                      action: 'retry_current_failure',
+                      sourceRunId: plan.sourceRunId
+                    }
             },
             session
           )

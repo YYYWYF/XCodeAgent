@@ -200,7 +200,7 @@ test('Workbench Recovery Incident exposes the Backend primary action', () => {
   assert.match(markup, /继续执行/)
 })
 
-test('needs_attention Recovery Incident hides the action button', () => {
+test('needs_attention Recovery Incident keeps a permanent retry entry', () => {
   for (const availability of ['blocked', 'requires_handler'] as const) {
     const incident = workbenchRecoveryIncident(recovery(availability))
     if (!incident) throw new Error('测试候选未生成 Workbench Incident。')
@@ -210,6 +210,7 @@ test('needs_attention Recovery Incident hides the action button', () => {
         onAction: () => undefined
       })
     )
+    assert.match(markup, /重试/)
     assert.doesNotMatch(markup, /继续执行/)
   }
 })
@@ -386,7 +387,7 @@ test('sync error Incident stays outside history and offers only resync', () => {
   assert.doesNotMatch(markup, /重新执行技术规划/)
 })
 
-test('needs_attention Incident shows reason without an action button', () => {
+test('needs_attention Incident shows reason and a permanent retry entry', () => {
   const markup = renderToStaticMarkup(
     createElement(ApplicationPlanningRecoveryIncidentCard, {
       planning: {
@@ -425,11 +426,12 @@ test('needs_attention Incident shows reason without an action button', () => {
             alternateActions: []
           }
         }
-      } as ApplicationPlanningCurrentState
+      } as ApplicationPlanningCurrentState,
+      onAction: () => undefined
     })
   )
   assert.match(markup, /RECOVERY_BLOCKED/)
-  assert.doesNotMatch(markup, /<button/)
+  assert.match(markup, /重试/)
 })
 
 test('caller keeps historical errors unchanged and renders one current Incident', () => {
@@ -480,7 +482,7 @@ test('caller updates only the current Incident when the canonical source moves f
   )
 })
 
-test('caller projects needs_attention as the only current Incident without an action', () => {
+test('caller projects needs_attention as the only current Incident with retry entry', () => {
   const markup = renderPlanningRecoverySurface(
     ['404 model-A', '404 model-B'],
     planningStateFromRecovery({
@@ -497,7 +499,7 @@ test('caller projects needs_attention as the only current Incident without an ac
   )
   assert.match(markup, /NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED/)
   assert.match(markup, /当前现场没有可证明安全的自动恢复入口，需要人工处理/)
-  assert.doesNotMatch(markup, /<button/)
+  assert.match(markup, /重试/)
   assert.doesNotMatch(markup, /重新执行技术规划/)
 })
 

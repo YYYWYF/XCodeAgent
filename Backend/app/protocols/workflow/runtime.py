@@ -2158,11 +2158,20 @@ def build_workflow_ag_ui_stream(
             from app.services.development_artifacts import DevelopmentArtifactsIncompleteError
 
             failure_predecessor_node = pending_recovery_node
+            failure_predecessor_snapshot = None
             failure_predecessor_point = None
             if pending_recovery_node is not None:
                 failure_predecessor_point = await capture_pending_recovery_point(
                     pending_recovery_node
                 )
+            elif (
+                native_recovery_context is not None
+                and not native_recovery_context.fresh_start
+            ):
+                # Native child 在首节点产出 update 前再次失败时，fork snapshot 就是
+                # 它自己的 exact predecessor；不能退回 source run 的旧 RecoveryPoint。
+                failure_predecessor_node = first_node_name
+                failure_predecessor_snapshot = native_recovery_context.fork_snapshot
             # AG-UI 失败帧可能先于权威对账到达，先脱敏再向任何 UI 文本/事件暴露。
             safe_error_message = sanitize_failure_diagnostic(exc) or type(exc).__name__
             failure_point = None
@@ -2236,7 +2245,7 @@ def build_workflow_ag_ui_stream(
                 async def capture_failure_recovery_point() -> Any | None:
                     """在失败 Lifecycle 落盘后重新观测同一个 predecessor checkpoint。"""
 
-                    snapshot = None
+                    snapshot = failure_predecessor_snapshot
                     if (
                         failure_predecessor_point is not None
                         and failure_predecessor_point.checkpoint_id

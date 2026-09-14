@@ -54,11 +54,16 @@ export type SendWorkflowMessageOptions = {
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   workflowScope?: string
-  executionRecovery?: {
-    action: 'execute'
-    incidentId: string
-    actionId: string
-  }
+  executionRecovery?:
+    | {
+        action: 'execute'
+        incidentId: string
+        actionId: string
+      }
+    | {
+        action: 'retry_current_failure'
+        sourceRunId: string
+      }
   onContent?: (content: string) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void

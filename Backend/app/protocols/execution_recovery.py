@@ -32,7 +32,6 @@ from app.services.execution_recovery_executor import (
     prepare_native_recovery,
     prepare_operation_retry,
 )
-from app.services.execution_retry_dispatcher import prepare_retry_current_failure
 from app.services.execution_recovery_lineage import reconcile_recovery_attempt
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 from app.services.execution_recovery_lineage import RecoveryLineageState
@@ -79,10 +78,10 @@ def execution_recovery_capabilities() -> dict[str, Any]:
                     "action": "execute | continue | retry_current_failure",
                     "incidentId": "backend-issued current recovery incident",
                     "actionId": "backend-issued recovery action",
-                    "sourceRunId": "only used by the transitional continue/retry action",
+                    "sourceRunId": "current projection hint used by continue/retry_current_failure",
                 },
             },
-            "clientSelectedFields": ["incidentId", "actionId"],
+            "clientSelectedFields": ["incidentId", "actionId", "sourceRunId"],
             "backendOwnedFields": sorted(_FORBIDDEN_RECOVERY_FIELDS),
         },
     }
@@ -114,28 +113,6 @@ def build_execution_recovery_ag_ui_stream(
                     incident_id=incident_id,
                     action_id=action_id,
                 )
-            if action == "retry_current_failure":
-                source = await get_execution(workspace, source_run_id)
-                graph = (
-                    await workflow_graph_for_request(
-                        workspace=workspace,
-                        project_id=source.project_id,
-                    )
-                    if source is not None and source.execution_kind == "workbench"
-                    else None
-                )
-                plan = await prepare_retry_current_failure(
-                    workspace=workspace,
-                    source_run_id=source_run_id,
-                    graph=graph,
-                )
-                async for frame in build_workflow_ag_ui_stream(
-                    graph=graph,
-                    payload=plan.internal_payload,
-                    accept=accept,
-                ):
-                    yield frame
-                return
             reconciled_context = await _reconcile_prepared_lineage(
                 workspace,
                 source_run_id,

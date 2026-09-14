@@ -41,6 +41,7 @@ from app.persistence.execution_recovery import (
     insert_execution,
     insert_recovery_point,
     list_executions_for_thread,
+    list_recovery_points,
     list_recovery_attempts_for_thread,
     list_recovery_attempts_from_source,
     update_execution_node,
@@ -802,50 +803,50 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempts[0].source_authority_kind, RecoverySourceAuthorityKind.CHECKPOINT)
 
     async def test_repeated_failed_node_replay_advances_from_current_lineage_head(self) -> None:
-        """连续失败必须沿 A→B→C 推进，第二次不能重新分叉 A。"""
+        """真实 Recovery Runtime 连续失败必须沿 A→B→C 推进。"""
 
         await self._start()
         assert self.harness.graph is not None
-        self.harness.current_model = "mimo-failing"
-        with patch(
-            "app.config.Settings.from_env",
-            side_effect=self.harness.settings,
+        self.harness.current_model = "deepseek-child-failing"
+        source, first_action, _assessment = await self.harness.resolve_action()
+        assert first_action.primary_action is not None
+        first_payload = {
+            "forwardedProps": {
+                "workspaceRoot": str(self.harness.workspace),
+                "executionRecovery": {
+                    "action": "execute",
+                    "incidentId": first_action.incident_id,
+                    "actionId": first_action.primary_action.action_id,
+                },
+            }
+        }
+        with (
+            patch("app.config.Settings.from_env", side_effect=self.harness.settings),
+            patch(
+                "app.protocols.execution_recovery.workflow_graph_for_request",
+                new=AsyncMock(return_value=self.harness.graph),
+            ),
         ):
-            first_context = await prepare_native_recovery(
-                workspace=str(self.harness.workspace),
-                source_run_id=self.harness.source_run_id,
-                graph=self.harness.graph,
-            )
-            self.harness.heartbeat_tasks.append(first_context.heartbeat_task)
-            try:
-                await self.harness.graph.ainvoke(None, config=first_context.fork_config)
-            except FakeModelNotFoundError:
-                pass
-            child_snapshot = await self.harness.graph.aget_state(
-                first_context.observation_config
-            )
-            child_point = await capture_recovery_point(
-                graph=self.harness.graph,
-                config=first_context.observation_config,
-                workspace=str(self.harness.workspace),
+            first_frames = [
+                frame
+                async for frame in build_execution_recovery_ag_ui_stream(
+                    payload=first_payload
+                )
+            ]
+            attempts = await list_recovery_attempts_for_thread(
+                self.harness.workspace,
                 thread_id=self.harness.thread_id,
-                run_id=first_context.new_run_id,
-                workflow_scope="application",
-                snapshot=child_snapshot,
             )
-            self.assertIsNotNone(child_point)
-            await observe_execution_failed(
-                workspace=str(self.harness.workspace),
-                run_id=first_context.new_run_id,
-                thread_id=self.harness.thread_id,
-                workflow_scope="application",
-                failure=_failure(model="mimo-failing"),
+            self.assertEqual(len(attempts), 1)
+            first_child_run_id = attempts[0].new_run_id
+            child_points = await list_recovery_points(
+                self.harness.workspace,
+                first_child_run_id,
             )
-
             second_source, second_action, _assessment = await self._resolve_current_action(
-                first_context.new_run_id
+                first_child_run_id
             )
-            self.assertEqual(second_source.run_id, first_context.new_run_id)
+            self.assertEqual(second_source.run_id, first_child_run_id)
             self.assertEqual(second_action.primary_action.kind, RecoveryActionKind.RETRY_FAILED_NODE)
             self.harness.current_model = "mimo-v2.5-pro"
             second_context = await prepare_native_recovery(
@@ -863,13 +864,23 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
                 status=DurableExecutionStatus.COMPLETED,
             )
 
+        self.assertIn('"type":"RUN_ERROR"', "".join(first_frames))
+        self.assertTrue(
+            any(
+                point.run_id == first_child_run_id
+                and point.thread_id == self.harness.thread_id
+                and point.next_nodes == ["technical_planning"]
+                and point.checkpoint_ns == ""
+                for point in child_points
+            )
+        )
         attempts = await list_recovery_attempts_for_thread(
             self.harness.workspace,
             thread_id=self.harness.thread_id,
         )
         self.assertEqual(len(attempts), 2)
         self.assertEqual(attempts[0].source_run_id, self.harness.source_run_id)
-        self.assertEqual(attempts[1].source_run_id, first_context.new_run_id)
+        self.assertEqual(attempts[1].source_run_id, first_child_run_id)
         self.assertNotEqual(attempts[1].source_run_id, self.harness.source_run_id)
         resolution = await resolve_recovery_lineage_head(
             self.harness.workspace,

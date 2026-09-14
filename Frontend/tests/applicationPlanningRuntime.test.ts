@@ -887,4 +887,48 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.recovery?.inputCommitted, true)
 }
 
+// AC：needs_attention 的永久 Retry Entry 只提交当前失败意图，不伪造 action authority。
+{
+  const current = planningState()
+  let recoveryOptions: SendWorkflowMessageOptions | undefined
+  const needsAttentionPlan = {
+    schemaVersion: 'recovery-action-plan.v1' as const,
+    incidentId: 'incident-needs-attention',
+    sourceRunId: 'run-needs-attention',
+    threadId: 'thread-A',
+    executionKind: 'application_planning' as const,
+    status: 'needs_attention' as const,
+    reasonCode: 'NO_RECOVERY_POINT',
+    message: '当前现场暂时无法证明安全恢复。',
+    primaryAction: null,
+    alternateActions: []
+  }
+  const h = harness(current, {
+    createRecoverySession: () => ({
+      sendMessage: async (_message, options) => {
+        recoveryOptions = options
+        return result(workflowWithoutInterrupt())
+      }
+    })
+  })
+  h.onRead(async () => ({
+    workflow: workflowWithoutInterrupt(),
+    lifecycle: authoritativeLifecycle(current, { status: 'failed' }),
+    recovery: recoveryProjection('thread-A', {
+      classification: 'blocked',
+      sourceRunId: 'run-needs-attention',
+      reasonCode: 'NO_RECOVERY_POINT',
+      message: '当前现场暂时无法证明安全恢复。',
+      recoveryActionPlan: needsAttentionPlan
+    })
+  }))
+
+  await h.runtime.retryCurrentFailure()
+
+  assert.deepEqual(recoveryOptions?.executionRecovery, {
+    action: 'retry_current_failure',
+    sourceRunId: 'run-needs-attention'
+  })
+}
+
 console.log('application planning runtime tests passed')
