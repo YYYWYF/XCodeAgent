@@ -2175,7 +2175,13 @@ def _replacement_dependency_map(
         for old_task in old_tasks_by_unit.get(unit_id, []):
             old_task_id = str(old_task.get("id") or "").strip()
             if old_task_id:
-                dependency_map[old_task_id] = replacement_ids
+                # 平台编译的 Agent 七模块会稳定复用任务 ID；同名任务必须保持
+                # 一一映射，否则原有单向链会被展开成“依赖 Unit 内全部任务”并形成环。
+                dependency_map[old_task_id] = (
+                    [old_task_id]
+                    if old_task_id in replacement_ids
+                    else replacement_ids
+                )
     return dependency_map
 
 

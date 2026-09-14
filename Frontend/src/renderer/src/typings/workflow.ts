@@ -179,6 +179,7 @@ export type WorkflowBuildSummary = {
   retry_available?: boolean
   recovery_available?: boolean
   recovery_task_ids?: string[]
+  manual_retry_task_ids?: string[]
   recovery_mode?: 'retry' | 'repair' | string
   retry_requested?: boolean
   retry_message?: string

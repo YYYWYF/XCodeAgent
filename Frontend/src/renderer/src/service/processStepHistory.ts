@@ -7,6 +7,7 @@ import {
   readWorkspaceInspectionSnapshot
 } from './agUiAgent'
 import type { DagGenerationSnapshot, ProcessStepRecord } from './agUiAgent'
+import { buildExecutionTerminalStatus } from '../components/AiChatPanel/components/WorkflowRunCard/buildTaskStatus'
 
 const WORKFLOW_NODE_LABELS: Record<string, string> = {
   development_readiness_gate: '开发前置检查',
@@ -60,7 +61,9 @@ export function processStepsForDisplay(
   workflow: WorkflowRunPayload | undefined
 ): ProcessStepRecord[] | undefined {
   const recoveredSteps = completedWorkflowProcessSteps(workflow)
-  let displaySteps = sortProcessStepsForDisplay(mergeRecoveredWorkflowSteps(steps, recoveredSteps))
+  let displaySteps = sortProcessStepsForDisplay(
+    settleCompletedBuildSteps(mergeRecoveredWorkflowSteps(steps, recoveredSteps))
+  )
   if (!displaySteps?.length) return displaySteps
   const finalChecks = completedIntegrationTestChecks(workflow)
   if (finalChecks?.checks.length) {
@@ -137,10 +140,33 @@ function mergeRecoveredWorkflowSteps(
       existingStep.dagGeneration,
       recoveredStep.dagGeneration
     )
-    if (dagGeneration === existingStep.dagGeneration) continue
-    mergedSteps[existingIndex] = { ...existingStep, dagGeneration }
+    const recoveredSettlesRunningStep =
+      existingStep.status === 'running' && recoveredStep.status !== 'running'
+    if (!recoveredSettlesRunningStep && dagGeneration === existingStep.dagGeneration) continue
+    mergedSteps[existingIndex] = recoveredSettlesRunningStep
+      ? {
+          ...existingStep,
+          ...recoveredStep,
+          sequence: existingStep.sequence,
+          dagGeneration
+        }
+      : { ...existingStep, dagGeneration }
   }
   return mergedSteps
+}
+
+/** 根据构建切片的任务统计收口遗漏的 running 步骤，避免任务归零后卡片继续转圈。 */
+function settleCompletedBuildSteps(
+  steps: ProcessStepRecord[] | undefined
+): ProcessStepRecord[] | undefined {
+  if (!steps?.length) return steps
+  return steps.map((step) => {
+    if (step.nodeName !== 'build' || step.status !== 'running' || !step.buildExecutionSlice) {
+      return step
+    }
+    const terminalStatus = buildExecutionTerminalStatus(step.buildExecutionSlice)
+    return terminalStatus ? { ...step, status: terminalStatus } : step
+  })
 }
 
 /** 按稳定 ID 或节点轮次匹配实时步骤与历史完成步骤。 */

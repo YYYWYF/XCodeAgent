@@ -1,4 +1,9 @@
-import type { WorkflowBuildExecutionScope, WorkflowRunPayload } from '../../typings'
+import type {
+  WorkflowBuildExecutionScope,
+  WorkflowClarificationAnswers,
+  WorkflowDebugOptions,
+  WorkflowRunPayload
+} from '../../typings'
 
 const BUILD_SCOPE_TYPES = new Set<WorkflowBuildExecutionScope['type']>([
   'application',
@@ -61,4 +66,16 @@ export function workflowDebugBuildScope(
         targetId: execution.targetId,
         ...(execution.scope === 'endpoint' && apiContractId ? { apiContractId } : {})
       }
+}
+
+/** 为必须由结构化动作驱动的调试恢复节点补齐正式确认，避免把提示文本误当作节点输入。 */
+export function workflowDebugClarificationAnswers(
+  workflowDebug?: WorkflowDebugOptions
+): WorkflowClarificationAnswers | undefined {
+  if (workflowDebug?.resumeFrom !== 'test_phase_confirmation') return undefined
+  return {
+    test_phase_confirmation: {
+      action: 'confirm'
+    }
+  }
 }

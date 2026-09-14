@@ -295,10 +295,10 @@ DAG 确认等待，不能把所有 `prepare_build_tasks` 用户输入都显示�
 TechnicalPlan `agent_contracts[]` 非空时，继续使用同一 `build-dag.v3` 和 BuildScheduler，不建立第二套任务计划或执行 Graph：
 
 - 建立共享 `agent:runtime` Unit，表示 TechnicalPlan 确认后已经由平台下载并完成门禁的 Python 3.12 sidecar 模板；
-- 每个 `agentId` 建立 `agent:<agentId>` Unit，负责契约给出的 `artifacts.agentPath`、`toolAdapterPath` 和 `testPath`；
+- 每个 `agentId` 建立 `agent:<agentId>` Unit；Unit 固定包含七个模板感知模块任务，不预写独立 Definition；
 - Unit 依赖固定为“工具 API Endpoint Unit → `agent:<agentId>` → Java AG-UI 网关 Endpoint Unit → 页面 Unit”，且 `agent:runtime → agent:<agentId>`；
-- `agent` owner 只允许 `task_type=agent.code`、`agent.runtime` 交付物和 `agent-runtime/**` 写入范围；前端、Java 后端、正式规划产物和 DAG 均不可写；
-- `agent:runtime` 不生成模型任务，每个业务智能体生成一个实现任务；Java 网关和页面仍分别由现有 backend/frontend owner 生成，但必须消费同一 Agent Contract，使用 AG-UI SSE，不得把智能体交互退化为普通 REST JSON；
+- `agent` owner 只允许 `task_type=agent.code`、`agent.runtime` 交付物和平台模板路径策略/任务共同授权的 `agent-runtime/**` 路径；模块由 `source_refs.agent_module` 标识；
+- `agent:runtime` 不生成模型任务；平台从 Agent Contract 确定性编译七模块任务，生成应用不携带 Manifest 或 Definition。Java 网关和页面仍分别由现有 backend/frontend owner 生成，但必须消费同一 Agent Contract，使用 AG-UI SSE，不得把智能体交互退化为普通 REST JSON；
 - Agent Runtime 使用独立 Deep Agent CodeRunner，写权限由 workspace permission 限定到 `agent-runtime/**`，执行结果继续进入现有 Diff 归属、工程检查、失败分类和受限 Repair 流程。
 
 普通应用固定使用 `agent_contracts: []`，Unit 骨架不创建 `agent:*`，现有 backend/frontend/database 任务算法、调度和摘要结构保持不变。

@@ -19,7 +19,9 @@ _STRICT_REPORT_FIELDS = {
     "failure_category",
     "failure_reason",
     "change_request",
+    "implementation_action",
 }
+_IMPLEMENTATION_ACTIONS = {"skip", "reuse", "modify", "add"}
 _CHANGE_REQUEST_FAILURES = {"contract_mismatch", "plan_mismatch"}
 
 
@@ -191,6 +193,13 @@ def _strict_result_condition_error(report: dict[str, Any]) -> str:
         return f"has invalid status {report.get('status')!r}."
     if not str(report.get("summary") or "").strip():
         return "must include a non-empty summary."
+    action = str(report.get("implementation_action") or "").strip()
+    if action and action not in _IMPLEMENTATION_ACTIONS:
+        return "has invalid implementation_action; expected skip|reuse|modify|add."
+    if action and status == "completed" and action not in {"modify", "add"}:
+        return "must use implementation_action=modify|add when status is completed."
+    if action and status == "already_satisfied" and action not in {"skip", "reuse"}:
+        return "must use implementation_action=skip|reuse when status is already_satisfied."
 
     failure_fields = {"failure_category", "failure_reason"}
     if status != "failed" and any(field in report for field in failure_fields):
@@ -276,6 +285,7 @@ def _task_result_from_report(
             "source": "specialist_agent",
         },
         "change_request": report.get("change_request"),
+        "implementation_action": report.get("implementation_action"),
         "structured_response_recovered": structured_response_recovered,
     }
 

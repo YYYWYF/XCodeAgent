@@ -7,6 +7,7 @@ from pathlib import Path
 from app.services.build_scheduler import (
     classify_task_result,
     hydrate_missing_failed_results,
+    manually_retryable_failed_task_ids,
     normalize_task_results,
     reset_failed_tasks_for_retry,
     retryable_failed_task_ids,
@@ -188,6 +189,36 @@ class BuildSchedulerTests(unittest.TestCase):
         summary = summarize_build_runtime(tasks, build_results)
         self.assertEqual(summary["retryable_failures"], 1)
         self.assertFalse(summary["retry_available"])
+
+    def test_manual_retry_recovers_plan_mismatch_without_approval_only_blockers(self) -> None:
+        """Repair 不可用时允许用户重跑 Contract/实现失败，但不绕过审批或快照门禁。"""
+
+        tasks = [
+            {"id": "agent", "status": "failed", "failure_category": "plan_mismatch"},
+            {
+                "id": "approval",
+                "status": "failed",
+                "failure_category": "database_approval_required",
+            },
+            {
+                "id": "snapshot",
+                "status": "failed",
+                "failure_category": "workspace_snapshot_stale",
+            },
+        ]
+        results = [
+            {
+                "task_id": task["id"],
+                "status": "failed",
+                "failure_category": task["failure_category"],
+            }
+            for task in tasks
+        ]
+
+        self.assertEqual(manually_retryable_failed_task_ids(tasks, results), {"agent"})
+        summary = summarize_build_runtime(tasks, results)
+        self.assertTrue(summary["recovery_available"])
+        self.assertEqual(summary["manual_retry_task_ids"], ["agent"])
 
     def test_repaired_parent_ignores_stale_failed_result(self) -> None:
         """修复成功关闭父任务后，旧失败结果不应再次触发修复并阻塞下游。"""
