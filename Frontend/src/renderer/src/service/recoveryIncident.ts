@@ -76,7 +76,7 @@ export function applicationPlanningRecoveryIncident(
   if (recovery && actionPlan?.status === 'recoverable' && actionPlan.primaryAction) {
     return {
       kind: 'recoverable',
-      title: '规划执行已中断',
+      title: '执行已中断',
       failureDiagnostic: recovery.failureDiagnostic,
       failureMessage: currentPlanningFailureMessage(state, actionPlan),
       recoveryMessage: actionPlan.message,
@@ -87,7 +87,7 @@ export function applicationPlanningRecoveryIncident(
   if (actionPlan?.status === 'needs_attention') {
     return {
       kind: 'needs_attention',
-      title: '规划执行需要处理',
+      title: '执行需要处理',
       failureDiagnostic: recovery?.failureDiagnostic,
       failureMessage: currentPlanningFailureMessage(state, actionPlan),
       recoveryMessage: actionPlan.message,
