@@ -38,7 +38,7 @@ class Settings:
         "You are a helpful local agent. Answer clearly and concisely."
     )
     default_temperature: float = 0.2
-    default_max_tokens: int = 2048
+    default_max_tokens: int = 32768
     # UI 确认节点生成 React 设计稿的生成 token 上限。推理模型（如 glm-5.2）的
     # 思考过程与正文共用该预算，且网关会把 thinking 以 [{'thinking': ..}] 碎片
     # 形式逐 token 拼进 content——16384 时思考可吃掉大部分预算导致正文在
@@ -166,7 +166,7 @@ class Settings:
                 "You are a helpful local agent. Answer clearly and concisely.",
             ),
             default_temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
-            default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "2048")),
+            default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "32768")),
             ui_design_model_base_url=os.getenv("UI_DESIGN_MODEL_BASE_URL", "").strip(),
             ui_design_model_api_key=os.getenv("UI_DESIGN_MODEL_API_KEY", "").strip(),
             ui_design_model_name=os.getenv("UI_DESIGN_MODEL_NAME", "").strip(),

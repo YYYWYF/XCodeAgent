@@ -11,6 +11,7 @@ from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.product_plan import create_product_plan, validate_product_plan_model_output
 from app.utils.model_output import extract_json_object
+from json_repair import repair_json
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,26 @@ def plan_product_with_chat_model(
         on_token=on_token,
     )
     agent_plan = extract_json_object(agent_note)
+    if not isinstance(agent_plan, dict) or not agent_plan.get("pages"):
+        # extract_json_object 回退到嵌套对象（如 app）或返回 None 时，模型输出可能
+        # 被 max_tokens 截断。用 json_repair 尝试修复截断的根对象，恢复 business_flows/
+        # pages/product_acceptance_criteria 等根级字段。json_repair 会自动补全缺失的
+        # 括号和引号，对截断 JSON 做最大努力恢复。
+        try:
+            repaired = repair_json(
+                agent_note,
+                return_objects=True,
+                ensure_ascii=False,
+                skip_json_loads=True,
+            )
+        except Exception:
+            repaired = None
+        if isinstance(repaired, dict) and repaired.get("pages"):
+            logger.warning(
+                "product_plan_json_repair_applied: extract_json_object 回退到嵌套对象，"
+                "已用 json_repair 修复截断的根对象。"
+            )
+            agent_plan = repaired
     agent_plan = _normalize_product_plan_root(agent_plan)
     format_errors = validate_product_plan_model_output(agent_plan, requirement_spec)
     if format_errors:
