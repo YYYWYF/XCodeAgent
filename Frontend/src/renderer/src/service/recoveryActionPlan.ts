@@ -2,6 +2,7 @@ export type RecoveryExecutionKind = 'application_planning' | 'workbench'
 
 export type RecoveryActionKind =
   | 'continue_checkpoint'
+  | 'retry_failed_node'
   | 'retry_operation'
   | 'restart_stage'
   | 'reconcile_state'
@@ -47,6 +48,7 @@ export type RecoveryActionPlan<
 
 const RECOVERY_ACTION_KINDS = new Set<RecoveryActionKind>([
   'continue_checkpoint',
+  'retry_failed_node',
   'retry_operation',
   'restart_stage',
   'reconcile_state',

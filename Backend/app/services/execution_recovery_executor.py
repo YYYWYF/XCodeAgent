@@ -981,6 +981,11 @@ async def _fork_and_start(
     """只写 runtime identity 的 fork checkpoint，并在 durable point 后标记 STARTED。"""
 
     _require_native_plan(plan)
+    _validate_failed_node_replay_source(
+        source=source,
+        source_point=source_point,
+        attempt=attempt,
+    )
     if not hasattr(graph, "aupdate_state") or not hasattr(graph, "aget_state"):
         raise RecoveryExecutionError(
             "RECOVERY_FORK_UNSUPPORTED",
@@ -1147,6 +1152,26 @@ async def _revalidate_finalizing_recovery(
             "RECOVERY_STATE_DRIFT",
             "source execution 的 failure evidence 已偏离 RecoveryAttempt。",
         )
+    if (
+        source.thread_id != attempt.thread_id
+        or source_point.kind is not RecoveryPointKind.CHECKPOINT
+        or source_point.recovery_point_id != attempt.source_recovery_point_id
+        or source_point.run_id != source.run_id
+        or source_point.thread_id != source.thread_id
+        or source_point.checkpoint_id != attempt.source_checkpoint_id
+        or source_point.checkpoint_ns != attempt.source_checkpoint_ns
+        or source_point.checkpoint_ns != ""
+        or len(source_point.next_nodes) != 1
+    ):
+        raise RecoveryExecutionError(
+            "RECOVERY_STATE_DRIFT",
+            "Native Recovery 的 source checkpoint authority 已发生变化。",
+        )
+    _validate_failed_node_replay_source(
+        source=source,
+        source_point=source_point,
+        attempt=attempt,
+    )
     if not hasattr(graph, "aget_state"):
         raise RecoveryExecutionError(
             "RECOVERY_SOURCE_CHECKPOINT_INVALID",
@@ -1187,6 +1212,11 @@ async def _revalidate_finalizing_recovery(
             "RECOVERY_SOURCE_CHECKPOINT_INVALID",
             "source checkpoint nextNodes 已偏离 RecoveryPoint。",
         )
+    if source.status is DurableExecutionStatus.FAILED and next_nodes != [source.current_node]:
+        raise RecoveryExecutionError(
+            "RECOVERY_STATE_DRIFT",
+            "FAILED source 的 checkpoint successor 已偏离当前失败节点。",
+        )
     if any(getattr(task, "interrupts", ()) for task in getattr(snapshot, "tasks", ()) or ()):
         raise RecoveryExecutionError(
             "RECOVERY_SOURCE_CHECKPOINT_INVALID",
@@ -1208,6 +1238,33 @@ async def _revalidate_finalizing_recovery(
         lifecycle=lifecycle,
     )
     return snapshot
+
+
+def _validate_failed_node_replay_source(
+    *,
+    source: DurableExecutionRecord,
+    source_point: RecoveryPoint,
+    attempt: RecoveryAttempt,
+) -> None:
+    """在 Native fork 前重新证明 FAILED source 与 predecessor authority 完全一致。"""
+
+    if source.status is not DurableExecutionStatus.FAILED:
+        return
+    failed_node = source.current_node
+    if (
+        not failed_node
+        or source_point.run_id != source.run_id
+        or source_point.thread_id != source.thread_id
+        or source_point.kind is not RecoveryPointKind.CHECKPOINT
+        or source_point.checkpoint_id != attempt.source_checkpoint_id
+        or source_point.checkpoint_ns != attempt.source_checkpoint_ns
+        or source_point.recovery_point_id != attempt.source_recovery_point_id
+        or source_point.next_nodes != [failed_node]
+    ):
+        raise RecoveryExecutionError(
+            "RECOVERY_STATE_DRIFT",
+            "FAILED source 的 predecessor checkpoint 已偏离当前失败节点或 RecoveryAttempt authority。",
+        )
 
 
 def _validate_finalization_lifecycle(

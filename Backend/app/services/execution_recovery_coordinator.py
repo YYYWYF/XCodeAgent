@@ -720,13 +720,26 @@ def _plan_from_assessment(
 ) -> RecoveryPlan:
     """把策略评估结果与已校验的当前状态引用组合成最终计划。"""
 
+    reason_code = assessment.reason_code
+    reason = assessment.reason
+    if (
+        source.status is DurableExecutionStatus.FAILED
+        and source.current_node is not None
+        and point.checkpoint_ns == ""
+        and point.next_nodes == [source.current_node]
+        and assessment.decision is RecoveryDecision.READY_NATIVE
+        and assessment.strategy is RecoveryStrategy.NATIVE_CHECKPOINT
+    ):
+        reason_code = "FAILED_NODE_REPLAY_READY"
+        reason = "已找到失败步骤之前的已验证 checkpoint，可重新执行失败步骤。"
+
     plan = _plan_from_point(
         source=source,
         point=point,
         decision=assessment.decision,
         strategy=assessment.strategy,
-        reason_code=assessment.reason_code,
-        reason=assessment.reason,
+        reason_code=reason_code,
+        reason=reason,
     )
     return plan.model_copy(
         update={

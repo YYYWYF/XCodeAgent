@@ -10,6 +10,7 @@ from typing import Any
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
+    DurableExecutionStatus,
     RecoveryAction,
     RecoveryActionKind,
     RecoveryActionPlan,
@@ -181,6 +182,27 @@ async def plan_recovery_action(
             stage_assessment,
         )
     if native_capability.executable:
+        if (
+            source.status is DurableExecutionStatus.FAILED
+            and recovery_plan.reason_code == "FAILED_NODE_REPLAY_READY"
+        ):
+            action = _action(
+                incident_id=incident_id,
+                kind=RecoveryActionKind.RETRY_FAILED_NODE,
+                label=_failed_node_retry_label(source.current_node),
+                description="从失败步骤之前最近的已验证 checkpoint 重新执行该步骤。",
+            )
+            return (
+                _action_plan(
+                    source=source,
+                    incident_id=incident_id,
+                    status=RecoveryIncidentStatus.RECOVERABLE,
+                    reason_code=recovery_plan.reason_code,
+                    message="已找到失败步骤之前的已验证 checkpoint，可以重新执行失败步骤。",
+                    primary_action=action,
+                ),
+                stage_assessment,
+            )
         action = _action(
             incident_id=incident_id,
             kind=RecoveryActionKind.CONTINUE_CHECKPOINT,
@@ -284,6 +306,18 @@ def _retry_label(handler: str) -> str:
     }.get(handler, "重试失败操作")
 
 
+def _failed_node_retry_label(node: str | None) -> str:
+    """把失败节点映射为用户可见的重新执行文案。"""
+
+    normalized = str(node or "").strip()
+    if normalized.startswith("technical_planning"):
+        return "重新执行技术规划"
+    return {
+        "build": "重新执行代码生成",
+        "code_review": "重新执行代码审查",
+    }.get(normalized, "重新执行失败步骤")
+
+
 def _incident_id(
     *,
     source: DurableExecutionRecord,
@@ -298,6 +332,7 @@ def _incident_id(
         'sourceRunId': source.run_id,
         'threadId': source.thread_id,
         'failure': execution_failure_sha256(source.failure),
+        'failedNode': source.current_node,
         'recoveryPointId': point.recovery_point_id if point else None,
         'lifecycleRevision': lifecycle.revision if lifecycle else None,
         'stageAuthoritySha256': (

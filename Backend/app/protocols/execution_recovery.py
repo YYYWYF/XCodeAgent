@@ -208,7 +208,10 @@ def build_execution_recovery_ag_ui_stream(
             if action_plan.primary_action is None:
                 raise RecoveryExecutionError(action_plan.reason_code, action_plan.message)
             kind = action_plan.primary_action.kind
-            if kind is RecoveryActionKind.CONTINUE_CHECKPOINT:
+            if kind in {
+                RecoveryActionKind.CONTINUE_CHECKPOINT,
+                RecoveryActionKind.RETRY_FAILED_NODE,
+            }:
                 context = await prepare_native_recovery(
                     workspace=workspace,
                     source_run_id=source.run_id,

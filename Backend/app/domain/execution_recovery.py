@@ -306,6 +306,7 @@ class RecoveryActionKind(StrEnum):
     """定义恢复旅程层可以向用户公开的下一步动作。"""
 
     CONTINUE_CHECKPOINT = "continue_checkpoint"
+    RETRY_FAILED_NODE = "retry_failed_node"
     RETRY_OPERATION = "retry_operation"
     RESTART_STAGE = "restart_stage"
     RECONCILE_STATE = "reconcile_state"
