@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.build_task_reuse import resolve_reuse_facts
-from app.services.build_task_reuse_contracts import ExternalCapability
+from app.services.build_task_reuse_contracts import ExternalCapability, ReuseFacts
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.planning_frozen import freeze_json
 from app.services.unit_generation_requirements import (
@@ -61,6 +61,63 @@ def _inputs(*tasks: dict, source_type: str = "database", formal_plan: dict | Non
 
 
 class UnitGenerationRequirementsTests(unittest.TestCase):
+    def test_agent_scope_uses_prerequisite_and_deterministic_units(self) -> None:
+        """Agent Scope 必须跳过 runtime 模型任务并确定性规划七个业务模块。"""
+
+        plan = {
+            "confirmation_status": "confirmed",
+            "page_implementation_contracts": [],
+            "api_contracts": [],
+            "agent_contracts": [{"agentId": "support_agent"}],
+        }
+        skeleton = ensure_build_unit_skeleton(plan, {})
+        result = resolve_generation_requirements(
+            required_unit_ids=["agent:runtime", "agent:support_agent"],
+            build_execution_scope={
+                "type": "agent",
+                "targetId": "support_agent",
+            },
+            unit_skeleton=skeleton,
+            reuse_facts=ReuseFacts(
+                retained_task_ids_by_unit={},
+                reusable_capabilities_by_unit={},
+                retained_endpoint_owners=[],
+                external_capabilities=[],
+                issues=[],
+            ),
+            formal_target=plan,
+        )
+
+        self.assertEqual(
+            result.generation_strategy_by_unit["agent:runtime"],
+            "prerequisite_only",
+        )
+        self.assertEqual(
+            result.generation_strategy_by_unit["agent:support_agent"],
+            "deterministic",
+        )
+        self.assertEqual(
+            [
+                requirement.requirement_id
+                for requirement in result.generation_requirements_by_unit[
+                    "agent:support_agent"
+                ]
+            ],
+            [
+                f"agent.support_agent.{module_name}"
+                for module_name in (
+                    "context",
+                    "knowledge",
+                    "memory",
+                    "model",
+                    "prompt",
+                    "skills",
+                    "tools",
+                )
+            ],
+        )
+        self.assertEqual(result.planning_unit_ids, ("agent:support_agent",))
+
     def test_first_time_page_computes_scoped_responsibilities(self) -> None:
         """首次页面只规划本 Scope 的缺项，保留 required 与 planning 的区别。"""
 

@@ -1,12 +1,26 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 import tempfile
 import unittest
 
-from app.services.agent_build_tasks import compile_agent_build_tasks
+from app.services.agent_build_tasks import (
+    build_agent_unit_candidate,
+    compile_agent_build_tasks,
+)
 from app.services.agent_runtime_template_policy import AGENT_RUNTIME_MODULES
+from app.services.build_task_reuse_contracts import ReuseFacts
+from app.services.build_unit_skeleton import ensure_build_unit_skeleton
+from app.services.dag_planning_inputs import assemble_mainline_planning_inputs
+from app.services.dag_planning_orchestrator import plan_dag_sequential
+from app.services.frozen_contract_store import (
+    FormalContractInput,
+    PlanningFormalInputs,
+)
+from app.services.unit_generation_contracts import UnitGenerationPolicy
+from app.services.unit_generation_requirements import resolve_generation_requirements
 
 
 def _contract() -> dict:
@@ -101,6 +115,136 @@ class AgentBuildTasksTests(unittest.TestCase):
                 for task in tasks
                 for path in task["allowed_paths"]
             )
+        )
+
+    def test_builds_deterministic_candidate_for_agent_generation_requirements(self) -> None:
+        """新 DAG 规划链必须复用七模块编译器生成 Agent Candidate。"""
+
+        contract = _contract()
+        plan = {
+            "confirmation_status": "confirmed",
+            "page_implementation_contracts": [],
+            "api_contracts": [],
+            "agent_contracts": [contract],
+        }
+        requirements = resolve_generation_requirements(
+            required_unit_ids=["agent:runtime", "agent:inventory_assistant"],
+            build_execution_scope={
+                "type": "agent",
+                "targetId": "inventory_assistant",
+            },
+            unit_skeleton=ensure_build_unit_skeleton(plan, {}),
+            reuse_facts=ReuseFacts(
+                retained_task_ids_by_unit={},
+                reusable_capabilities_by_unit={},
+                retained_endpoint_owners=[],
+                external_capabilities=[],
+                issues=[],
+            ),
+            formal_target=plan,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_workspace(root)
+            candidate = build_agent_unit_candidate(
+                unit_id="agent:inventory_assistant",
+                contracts=[contract],
+                workspace=root,
+                generation_requirements=requirements,
+            )
+
+        self.assertIsNotNone(candidate)
+        tasks = candidate["tasks"] if candidate is not None else []
+        self.assertEqual(len(tasks), len(AGENT_RUNTIME_MODULES))
+        self.assertEqual(
+            {
+                capability
+                for task in tasks
+                for capability in task["provides_capabilities"]
+            },
+            {
+                f"agent.inventory_assistant.{module_name}"
+                for module_name in AGENT_RUNTIME_MODULES
+            },
+        )
+
+    def test_agent_scope_completes_new_dag_planning_without_model_call(self) -> None:
+        """Agent Scope 应通过新分 Unit 规划链生成七模块累计 DAG，且不调用模型。"""
+
+        contract = _contract()
+        plan = {
+            "artifact_type": "technical-plan",
+            "confirmation_status": "confirmed",
+            "architecture": {"agentRuntime": "Python 3.12"},
+            "page_implementation_contracts": [],
+            "api_contracts": [],
+            "agent_contracts": [contract],
+        }
+        scope = {"type": "agent", "targetId": "inventory_assistant"}
+        required = ["agent:runtime", "agent:inventory_assistant"]
+        skeleton = ensure_build_unit_skeleton(plan, {})
+        reuse_facts = ReuseFacts(
+            retained_task_ids_by_unit={},
+            reusable_capabilities_by_unit={},
+            retained_endpoint_owners=[],
+            external_capabilities=[],
+            issues=[],
+        )
+        formal_inputs = PlanningFormalInputs(
+            product_plan=FormalContractInput(
+                content={"agents": [{"agentId": "inventory_assistant"}]},
+                source={"artifact": "product-plan"},
+            ),
+            technical_plan=FormalContractInput(
+                content=plan,
+                source={"artifact": "technical-plan"},
+            ),
+            page_contracts=[],
+            api_contracts=[],
+            endpoint_api_designs=[],
+            authorization_slices=[],
+        )
+        inputs = assemble_mainline_planning_inputs(
+            project_plan=plan,
+            base_confirmed_plan=None,
+            skeleton_plan=skeleton,
+            build_context={"scope": scope, "required_unit_ids": required},
+            build_execution_scope=scope,
+            workspace_snapshot={"workspace_revision": "agent-snapshot"},
+            reuse_facts=reuse_facts,
+            formal_contract_inputs=formal_inputs,
+            owner_session_id="agent-session",
+            workflow_run_id="agent-workflow-run",
+            thread_id="agent-thread",
+        )
+        policy = UnitGenerationPolicy(
+            request_timeout=1,
+            unit_session_timeout=2,
+            model_turn_limit=1,
+            frozen_contract_read_limits={
+                "max_reads": 2,
+                "max_total_bytes": 20_000,
+                "max_bytes_per_read": 10_000,
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_workspace(root)
+            result = asyncio.run(
+                plan_dag_sequential(
+                    inputs.sequential_inputs(),
+                    workspace_state={"workspace": str(root)},
+                    planning_run_id="agent-planning-run",
+                    workflow_run_id="agent-workflow-run",
+                    thread_id="agent-thread",
+                    policy=policy,
+                )
+            )
+
+        registry = result.assembly.assembled_plan["task_registry"]
+        self.assertEqual(len(registry), len(AGENT_RUNTIME_MODULES))
+        self.assertTrue(
+            all(task["owner"] == "agent" for task in registry.values())
         )
 
     def test_disabled_optional_modules_are_skipped_without_completing_others(self) -> None:

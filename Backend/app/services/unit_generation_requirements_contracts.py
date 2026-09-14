@@ -41,8 +41,14 @@ class UnitGenerationRequirements(FrozenPlanningModel):
             strategy = self.generation_strategy_by_unit[unit]
             if unit in {"application:root", "app:integration"} and strategy != "structural_only":
                 raise ValueError("Structural Unit 必须为 structural_only。")
-            if unit == "frontend:shell" and strategy != "prerequisite_only":
-                raise ValueError("frontend:shell 必须为 prerequisite_only。")
+            if unit in {"frontend:shell", "agent:runtime"} and strategy != "prerequisite_only":
+                raise ValueError("模板前置 Unit 必须为 prerequisite_only。")
+            if (
+                unit.startswith("agent:")
+                and unit != "agent:runtime"
+                and strategy not in {"deterministic", "reuse_only"}
+            ):
+                raise ValueError("业务 Agent Unit 只能复用或产生 deterministic Candidate。")
             if requirements:
                 if strategy not in {"model", "deterministic"}:
                     raise ValueError("只有 model/deterministic Unit 可以携带新增职责。")

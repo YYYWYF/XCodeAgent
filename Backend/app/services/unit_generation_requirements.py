@@ -4,11 +4,13 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.services.build_task_reuse_contracts import ReuseFacts
+from app.services.agent_runtime_template_policy import AGENT_RUNTIME_MODULES
 from app.services.planning_frozen import plain_json
 from app.services.unit_generation_contracts import GenerationRequirement
 from app.services.unit_generation_requirement_targets import (
     ENDPOINT_PHYSICAL_SOURCE_TYPES, endpoint_source_types, exact_id,
-    resource_catalog_fingerprint, responsibility, scoped_formal_targets,
+    object_index, resource_catalog_fingerprint, responsibility,
+    scoped_formal_targets,
 )
 from app.services.unit_generation_requirements_contracts import (
     GenerationRequirementsError, UnitGenerationRequirements, fail_requirement_input,
@@ -85,6 +87,32 @@ def _unit_responsibilities(
 
     if unit_id in _STRUCTURAL_UNITS or unit_id == "frontend:shell":
         return []
+    if unit_id == "agent:runtime":
+        return []
+    if unit_id.startswith("agent:"):
+        agent_id = exact_id(unit_id.removeprefix("agent:"), "Agent Unit.agentId")
+        contracts = object_index(
+            plan.get("agent_contracts", []),
+            "agentId",
+            "Agent Contract",
+        )
+        if agent_id not in contracts:
+            fail_requirement_input(
+                "GENERATION_UNIT_OUTSIDE_SCOPE",
+                f"Agent Unit {unit_id} 无法唯一映射到当前正式 Agent Contract。",
+                unit_ids=[unit_id],
+            )
+        return [
+            responsibility(
+                f"agent.{agent_id}.{module_name}",
+                description=f"依据正式 Agent Contract 实现 {agent_id} 的 {module_name} 模块。",
+                kind="agent.runtime",
+                target_id=agent_id,
+                agent_id=agent_id,
+                agent_module=module_name,
+            )
+            for module_name in AGENT_RUNTIME_MODULES
+        ]
     if unit_id.startswith("page:"):
         page_id = unit_id.removeprefix("page:")
         if page_id not in pages:
@@ -195,7 +223,11 @@ def resolve_generation_requirements(
     if not isinstance(formal_target, Mapping) or not isinstance(build_execution_scope, Mapping):
         fail_requirement_input("FORMAL_GENERATION_INPUT_INVALID", "formal_target 与 BuildExecutionScope 必须为明确对象。")
     plan = plain_json(formal_target)
-    pages, endpoints = scoped_formal_targets(plan, build_execution_scope)
+    pages, endpoints = scoped_formal_targets(
+        plan,
+        build_execution_scope,
+        required_unit_ids=required,
+    )
     sources = (
         endpoint_source_types(endpoint_designs, endpoints)
         if _requires_endpoint_source_types(required, endpoints)
@@ -208,14 +240,22 @@ def resolve_generation_requirements(
         missing = [item for item in duties if not _is_satisfied(unit_id, item, facts)]
         if unit_id in _STRUCTURAL_UNITS:
             strategy = "structural_only"
-        elif unit_id == "frontend:shell":
+        elif unit_id in {"frontend:shell", "agent:runtime"}:
             strategy = "prerequisite_only"
-            if not any(item.unit_id == unit_id and item.capability_id == "frontend.shell.ready" for item in facts.external_capabilities):
+            if unit_id == "frontend:shell" and not any(
+                item.unit_id == unit_id
+                and item.capability_id == "frontend.shell.ready"
+                for item in facts.external_capabilities
+            ):
                 fail_requirement_input("SHELL_PREREQUISITE_MISSING", "frontend:shell 缺少平台已验证的模板前置能力。", unit_ids=[unit_id])
         elif duties and not missing:
             strategy = "reuse_only"
         else:
-            strategy = "deterministic" if unit_id == "frontend:auth-guard" else "model"
+            strategy = (
+                "deterministic"
+                if unit_id == "frontend:auth-guard" or unit_id.startswith("agent:")
+                else "model"
+            )
         requirements_by_unit[unit_id] = sorted(missing, key=lambda item: item.requirement_id)
         strategies[unit_id] = strategy
     return UnitGenerationRequirements(

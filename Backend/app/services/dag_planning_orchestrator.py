@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import model_validator
 
 from app.config import Settings
+from app.services.agent_build_tasks import build_agent_unit_candidate
 from app.services.authorization_resource_catalog import compile_frontend_resource_catalog, resource_catalog_fingerprint
 from app.services.build_task_progress import create_planning_run_progress_publisher
 from app.services.dag_planning_inputs import SequentialPlanningInputs
@@ -204,11 +205,51 @@ async def plan_dag_sequential(
         identity = AttemptIdentity.allocate(planning_run_id=initial.planning_run_id, unit_id=current.unit_id,
                                             generation_round=current.generation_round, attempt_in_round=1)
         await controller.apply(UnitAttemptStarted(identity=identity, at=now()))
-        catalog = compile_frontend_resource_catalog(plain_json(frozen.project_plan.get("authorization_manifest", {})))
-        payload = build_auth_guard_candidate(
-            unit_id=current.unit_id, resource_catalog=catalog, fingerprint=resource_catalog_fingerprint(catalog),
-            generation_requirements=requirements,
-        )
+        if current.unit_id == "frontend:auth-guard":
+            catalog = compile_frontend_resource_catalog(
+                plain_json(frozen.project_plan.get("authorization_manifest", {}))
+            )
+            payload = build_auth_guard_candidate(
+                unit_id=current.unit_id,
+                resource_catalog=catalog,
+                fingerprint=resource_catalog_fingerprint(catalog),
+                generation_requirements=requirements,
+            )
+        elif current.unit_id.startswith("agent:") and current.unit_id != "agent:runtime":
+            workspace = str(
+                workspace_state.get("workspace")
+                or workspace_state.get("workspace_path")
+                or ""
+            ).strip()
+            if not workspace:
+                raise GenerationRequirementsError((ValidationIssue(
+                    code="AGENT_CANDIDATE_WORKSPACE_MISSING",
+                    level="pre_generation",
+                    category="input",
+                    retryable=False,
+                    unit_ids=(current.unit_id,),
+                    message="Agent deterministic Candidate 缺少工作区。",
+                ),))
+            payload = build_agent_unit_candidate(
+                unit_id=current.unit_id,
+                contracts=[
+                    item
+                    for item in plain_json(frozen.project_plan).get("agent_contracts", [])
+                    if isinstance(item, dict)
+                ],
+                workspace=workspace,
+                generation_requirements=requirements,
+                retained_task_ids=set(current.retained_task_ids),
+            )
+        else:
+            raise GenerationRequirementsError((ValidationIssue(
+                code="PLANNING_DETERMINISTIC_UNIT_UNSUPPORTED",
+                level="pre_generation",
+                category="platform",
+                retryable=False,
+                unit_ids=(current.unit_id,),
+                message=f"确定性 Unit {current.unit_id} 没有注册 Candidate builder。",
+            ),))
         if payload is None:
             raise GenerationRequirementsError((ValidationIssue(
                 code="PLANNING_DETERMINISTIC_CANDIDATE_MISSING", level="system", category="platform",

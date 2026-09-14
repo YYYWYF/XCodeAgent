@@ -42,6 +42,40 @@ _SCOPED_REQUIREMENT_KINDS = {
     "backend.bootstrap",
     "frontend.auth.resources",
 }
+_AGENT_REQUIREMENT_KIND = "agent.runtime"
+
+
+def _agent_contract_selector(
+    technical: FrozenContract,
+    *,
+    unit_id: str,
+    unit_kind: BuildUnitKind,
+    source_refs: Mapping[str, Any],
+) -> str:
+    """把 Agent 职责精确绑定到当前 TechnicalPlan 中唯一的 Agent Contract。"""
+
+    agent_id = exact_manifest_id(
+        source_refs.get("agent_id"),
+        "agent.runtime.agent_id",
+    )
+    if unit_kind != "agent" or unit_id != f"agent:{agent_id}":
+        raise ContractCatalogBindingError(
+            f"Agent requirement {agent_id} 与 Unit {unit_id} 身份不一致。"
+        )
+    contracts = manifest_sequence(
+        technical.content.get("agent_contracts"),
+        "TechnicalPlan.agent_contracts",
+    )
+    matches = [
+        index
+        for index, contract in enumerate(contracts)
+        if isinstance(contract, Mapping) and contract.get("agentId") == agent_id
+    ]
+    if len(matches) != 1:
+        raise ContractCatalogBindingError(
+            f"TechnicalPlan 无法唯一定位 Agent Contract {agent_id}。"
+        )
+    return f"/agent_contracts/{matches[0]}"
 
 
 def _endpoint_keys_for_requirement(
@@ -138,15 +172,31 @@ def compile_expected_unit_formal_source_refs(
 
     for raw_requirement in generation_requirements:
         requirement_id, source_refs = requirement_record(raw_requirement)
-        grant(requirement_id, technical, {"/architecture"})
-        page_id, relevant_keys = _endpoint_keys_for_requirement(
-            unit_id=unit_id,
-            unit_kind=unit_kind,
-            source_refs=source_refs,
-            page_contracts=pages,
-            endpoint_index=endpoints,
-            scoped_endpoint_keys=scoped_keys,
-        )
+        requirement_kind = source_refs.get("kind")
+        if requirement_kind == _AGENT_REQUIREMENT_KIND:
+            grant(
+                requirement_id,
+                technical,
+                {
+                    _agent_contract_selector(
+                        technical,
+                        unit_id=unit_id,
+                        unit_kind=unit_kind,
+                        source_refs=source_refs,
+                    )
+                },
+            )
+            page_id, relevant_keys = None, set()
+        else:
+            grant(requirement_id, technical, {"/architecture"})
+            page_id, relevant_keys = _endpoint_keys_for_requirement(
+                unit_id=unit_id,
+                unit_kind=unit_kind,
+                source_refs=source_refs,
+                page_contracts=pages,
+                endpoint_index=endpoints,
+                scoped_endpoint_keys=scoped_keys,
+            )
         if page_id is not None:
             grant(requirement_id, pages[page_id], {"/"})
 

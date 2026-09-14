@@ -13,6 +13,10 @@ from app.services.agent_runtime_template_policy import (
     load_agent_runtime_template_policy,
 )
 from app.services.template_state import load_template_state, template_revision
+from app.services.unit_generation_requirements_contracts import (
+    UnitGenerationRequirements,
+    fail_requirement_input,
+)
 
 
 _MODULE_LABELS = {
@@ -203,4 +207,92 @@ def compile_agent_build_tasks(
     return tasks
 
 
-__all__ = ["compile_agent_build_tasks"]
+def build_agent_unit_candidate(
+    *,
+    unit_id: str,
+    contracts: list[dict[str, Any]],
+    workspace: str | Path,
+    generation_requirements: UnitGenerationRequirements,
+    retained_task_ids: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """把当前业务 Agent 的缺项职责编译为确定性 Candidate，不调用规划模型。"""
+
+    requirements = UnitGenerationRequirements.model_validate(generation_requirements)
+    if not unit_id.startswith("agent:") or unit_id == "agent:runtime":
+        fail_requirement_input(
+            "AGENT_CANDIDATE_INPUT_INVALID",
+            f"Agent deterministic builder 不支持 Unit {unit_id}。",
+            unit_ids=[unit_id],
+        )
+    strategy = requirements.generation_strategy_by_unit.get(unit_id)
+    missing = requirements.generation_requirements_by_unit.get(unit_id, ())
+    if strategy not in {"deterministic", "reuse_only"}:
+        fail_requirement_input(
+            "AGENT_CANDIDATE_INPUT_INVALID",
+            "业务 Agent Unit 必须有明确的 deterministic 或 reuse_only 职责判定。",
+            unit_ids=[unit_id],
+        )
+    if not missing:
+        return None
+    if strategy != "deterministic":
+        fail_requirement_input(
+            "AGENT_CANDIDATE_INPUT_INVALID",
+            "存在 Agent 职责缺项时必须生成 deterministic Candidate。",
+            unit_ids=[unit_id],
+        )
+
+    required_by_capability = {
+        requirement.requirement_id: requirement
+        for requirement in missing
+    }
+    compiled = compile_agent_build_tasks(
+        contracts,
+        unit_ids={unit_id},
+        workspace=workspace,
+    )
+    tasks = [
+        task
+        for task in compiled
+        if set(task.get("provides_capabilities") or ()) & set(required_by_capability)
+    ]
+    provided = {
+        capability
+        for task in tasks
+        for capability in task.get("provides_capabilities") or ()
+        if capability in required_by_capability
+    }
+    if provided != set(required_by_capability):
+        fail_requirement_input(
+            "AGENT_CANDIDATE_INPUT_INVALID",
+            "Agent 七模块编译结果没有精确覆盖当前 generation requirements。",
+            unit_ids=[unit_id],
+        )
+    selected_task_ids = {str(task.get("id") or "") for task in tasks}
+    available_task_ids = selected_task_ids | set(retained_task_ids or ())
+    for task in tasks:
+        capabilities = set(task.get("provides_capabilities") or ())
+        capability = next(iter(capabilities & set(required_by_capability)), "")
+        requirement = required_by_capability.get(capability)
+        source_refs = requirement.source_refs if requirement is not None else {}
+        task_source_refs = task.get("source_refs") or {}
+        if (
+            source_refs.get("kind") != "agent.runtime"
+            or source_refs.get("agent_id") != task_source_refs.get("agent_id")
+            or source_refs.get("agent_module") != task_source_refs.get("agent_module")
+        ):
+            fail_requirement_input(
+                "AGENT_CANDIDATE_INPUT_INVALID",
+                f"Agent Task {task.get('id') or '<unknown>'} 与正式模块职责不一致。",
+                unit_ids=[unit_id],
+            )
+        # 增量 Candidate 只保留当前候选或正式 retained Task 依赖，不能引用被复用事实
+        # 省略且没有任务身份的旧模块。
+        task["dependencies"] = [
+            dependency
+            for dependency in task.get("dependencies") or []
+            if dependency in available_task_ids
+        ]
+    return {"tasks": tasks}
+
+
+__all__ = ["build_agent_unit_candidate", "compile_agent_build_tasks"]
