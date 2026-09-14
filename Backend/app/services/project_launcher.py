@@ -236,14 +236,19 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
 
 
 def stop_standard_project_preview(workspace_path: str | Path) -> dict[str, Any]:
-    """只停止标准项目预览，避免模板验收影响 UI Design 等独立 Runtime。"""
+    """停止标准项目预览及其 Agent Runtime，避免模板回滚时残留新版本进程。"""
 
     root = Path(workspace_path).expanduser().resolve()
     frontend = stop_frontend_project(root)
+    agent_runtime = stop_workspace_agent_runtime_project(root)
     backend = stop_workspace_backend_project(root)
     failed_parts = [
         name
-        for name, result in (("frontend", frontend), ("backend", backend))
+        for name, result in (
+            ("frontend", frontend),
+            ("agent_runtime", agent_runtime),
+            ("backend", backend),
+        )
         if result.get("status") == "failed"
     ]
     return {
@@ -251,6 +256,7 @@ def stop_standard_project_preview(workspace_path: str | Path) -> dict[str, Any]:
         "message": "部分标准预览服务停止失败：" + "、".join(failed_parts) if failed_parts else "标准项目预览已停止。",
         "workspace": str(root),
         "frontend": frontend,
+        "agent_runtime": agent_runtime,
         "backend": backend,
     }
 
@@ -261,12 +267,20 @@ def inspect_project_preview(workspace_path: str | Path) -> dict[str, Any]:
     root = Path(workspace_path).expanduser().resolve()
     runtime_root = root / ".xcodeagent" / "runtime" / "launch"
     backend = {"running": _pid_file_is_running(runtime_root / "backend.pid")}
+    agent_runtime = {
+        "running": _pid_file_is_running(runtime_root / "agent-runtime.pid")
+    }
     frontend = {"running": _pid_file_is_running(runtime_root / "frontend.pid")}
     return {
         "workspace": str(root),
         "backend": backend,
+        "agent_runtime": agent_runtime,
         "frontend": frontend,
-        "running": backend["running"] or frontend["running"],
+        "running": (
+            backend["running"]
+            or agent_runtime["running"]
+            or frontend["running"]
+        ),
     }
 
 

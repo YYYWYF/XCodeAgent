@@ -32,11 +32,13 @@ from app.services.frontend_project_launcher import (
 )
 from app.services.project_launcher import (
     find_backend_project_root,
+    inspect_project_preview,
     launch_backend_project,
     launch_frontend_project,
     launch_project_preview,
     run_project_restart_validation,
     stop_backend_project,
+    stop_standard_project_preview,
 )
 
 
@@ -66,6 +68,42 @@ class ProjectLauncherTests(unittest.TestCase):
             json.dumps({"datasource": {"type": datasource_type}}),
             encoding="utf-8",
         )
+
+    def test_standard_preview_cleanup_includes_agent_runtime(self) -> None:
+        """模板回滚清理必须停止本轮启动的 Agent Runtime。"""
+
+        with (
+            patch(
+                "app.services.project_launcher.stop_frontend_project",
+                return_value={"status": "stopped"},
+            ),
+            patch(
+                "app.services.project_launcher.stop_workspace_agent_runtime_project",
+                return_value={"status": "stopped", "cleanup": {"terminated": True}},
+            ) as stop_runtime,
+            patch(
+                "app.services.project_launcher.stop_workspace_backend_project",
+                return_value={"status": "stopped"},
+            ),
+        ):
+            result = stop_standard_project_preview("/tmp/xcodeagent-standard-preview")
+
+        self.assertEqual(result["status"], "stopped")
+        self.assertTrue(result["agent_runtime"]["cleanup"]["terminated"])
+        stop_runtime.assert_called_once()
+
+    def test_preview_inspection_counts_agent_runtime_only_state(self) -> None:
+        """仅 Agent Runtime 存活时也必须记录模板更新前的运行态。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            runtime_root = Path(workspace) / ".xcodeagent/runtime/launch"
+            runtime_root.mkdir(parents=True)
+            (runtime_root / "agent-runtime.pid").write_text(str(os.getpid()), encoding="utf-8")
+
+            result = inspect_project_preview(workspace)
+
+        self.assertTrue(result["agent_runtime"]["running"])
+        self.assertTrue(result["running"])
 
     def test_preview_healthcheck_accepts_http_404_as_listening(self) -> None:
         """验证 urllib 将 404 表示为 HTTPError 时仍判定服务已经监听。"""
