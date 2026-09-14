@@ -1,5 +1,6 @@
 import type { ApplicationLifecycle, WorkbenchExecution, WorkflowRunPayload } from '../../typings'
 import { isConversationWorkflow } from './conversationMode'
+import { currentWorkflowInteraction } from './applicationOwnership'
 
 export type PlanExecutionMode =
   | 'idle'
@@ -25,24 +26,9 @@ export type PagePlanExecutionContext = {
 
 export type WorkflowInteractionAvailability = 'active' | 'stale' | 'unavailable'
 
-/** 从未知 AG-UI 投影值中读取交互 mode。 */
-function interactionMode(value: unknown): string {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
-  return String((value as Record<string, unknown>).mode || '')
-}
-
 /** 判断 Workflow 是否承载 Build DAG 确认，统一兼容当前 AG-UI 投影位置。 */
 function isDagConfirmationWorkflow(workflow: WorkflowRunPayload): boolean {
-  const currentMode =
-    interactionMode(workflow.summary.clarification) ||
-    interactionMode(workflow.state?.clarification) ||
-    interactionMode(workflow.result?.clarification)
-  // 当前 clarification 已明确表达交互类型时，历史 DAG 投影不能覆盖当前阶段语义。
-  if (currentMode) return currentMode === 'build_task_plan_confirmation'
-  // 只有当前 clarification 完全缺失时，才用历史投影支持 PendingPlan 恢复。
-  return (
-    interactionMode(workflow.summary.buildTaskPlanConfirmation) === 'build_task_plan_confirmation'
-  )
+  return currentWorkflowInteraction(workflow)?.mode === 'build_task_plan_confirmation'
 }
 
 /** 判断 Planning refresh 是否已明确结束当前 DAG 待确认状态。 */
@@ -203,13 +189,7 @@ function recoveredPendingInteractionMatches(
   ) {
     return false
   }
-  const workflowMode = String(
-    interactionMode(workflow.summary.clarification) ||
-      interactionMode(workflow.summary.buildTaskPlanConfirmation) ||
-      interactionMode(workflow.state?.clarification) ||
-      interactionMode(workflow.result?.clarification) ||
-      ''
-  )
+  const workflowMode = currentWorkflowInteraction(workflow)?.mode || ''
   const workflowDraftIdentity = workflowDagDraftIdentity(workflow)
   const recoveryDraftIdentity = dagDraftIdentity(recovery.confirmation)
   const recoveryOwnerSessionId = String(recovery.ownerSessionId || '').trim()

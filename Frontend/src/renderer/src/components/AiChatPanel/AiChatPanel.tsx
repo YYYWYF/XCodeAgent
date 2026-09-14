@@ -127,6 +127,10 @@ import {
 } from './hooks/revisionSession'
 import { sessionIdentityFromSummary, sessionRuntimeKey } from './hooks/sessionRuntime'
 import type { SessionIdentity } from './hooks/sessionRuntime'
+import {
+  applicationMutationReadonlyForSession,
+  resolveApplicationMutationOwnership
+} from './applicationOwnership'
 import { chatCopy } from './constants'
 import type { AgentChatMessage, WorkspaceDocKey } from './types'
 import type { EndpointDesignSaveResult } from '../../typings'
@@ -1407,6 +1411,7 @@ export default function AiChatPanel({
     handleCreateSessionFromList,
     handleDeleteSession,
     handleOpenSession,
+    handleOpenSessionById,
     openSessionForPhase,
     loadSessionIdentity,
     loadingSessions,
@@ -1430,6 +1435,21 @@ export default function AiChatPanel({
     },
     designPhasePlanning: isApplicationPlanningPhase
   })
+
+  // Application owner 由 lifecycle、当前进程的活动 execution 和有效 Pending 共同投影；
+  // resourceLocks 只用于资源说明，不能替代这里的跨阶段 mutation ownership。
+  const applicationOwnership = useMemo(
+    () =>
+      resolveApplicationMutationOwnership(applicationLifecycle, allSessions, sessionExecutions, {
+        applicationId: application.id,
+        workspaceRoot: application.workspaceRoot
+      }),
+    [application.id, application.workspaceRoot, allSessions, applicationLifecycle, sessionExecutions]
+  )
+  const applicationMutationReadonly = applicationMutationReadonlyForSession(
+    applicationOwnership,
+    activeSession
+  )
 
   // DOM 源码定位仅绑定当前会话，切换页面、接口或自由会话后要求用户重新选择。
   useEffect(() => {
@@ -2193,6 +2213,7 @@ export default function AiChatPanel({
     agUiSessionsRef,
     application,
     applicationLifecycle,
+    applicationMutationReadonly,
     draft,
     draftKey,
     editorMode,
@@ -2851,14 +2872,47 @@ export default function AiChatPanel({
       (!existingPlanningSession || existingPlanningSession.id !== activeSessionId)
   )
   const otherSessionExecutionLocked =
-    sessionExecutionLocked || planningRunLockedByOtherSession || pendingPlanOwnedByOtherSession
+    sessionExecutionLocked ||
+    applicationMutationReadonly ||
+    planningRunLockedByOtherSession ||
+    pendingPlanOwnedByOtherSession
   const phaseSessionRunActive =
-    Boolean(phaseExecution) || planningSessionRunActive || pendingPlanLockActive
-  const phaseExecutionSessionTitle = phaseExecution
-    ? allSessions.find((session) => session.id === phaseExecution.identity.sessionId)?.title
-    : pendingDagSession?.title || existingPlanningSession?.title
+    Boolean(phaseExecution) ||
+    planningSessionRunActive ||
+    pendingPlanLockActive ||
+    applicationOwnership.state === 'owned' ||
+    applicationOwnership.state === 'conflicted'
+  const applicationOwnerSession = applicationOwnership.owner
+    ? allSessions.find(
+        (session) =>
+          (applicationOwnership.owner?.sessionId &&
+            session.id === applicationOwnership.owner.sessionId) ||
+          (applicationOwnership.owner?.threadId &&
+            session.threadId === applicationOwnership.owner.threadId)
+      )
+    : undefined
+  const phaseExecutionSessionTitle =
+    applicationOwnership.owner?.title ||
+    applicationOwnerSession?.title ||
+    (phaseExecution
+      ? allSessions.find((session) => session.id === phaseExecution.identity.sessionId)?.title
+      : pendingDagSession?.title || existingPlanningSession?.title)
+  const applicationOwnerStatus = applicationOwnership.owner?.status
   const phaseExecutionStatus =
-    phaseExecution?.status || (pendingPlanLockActive ? 'awaiting_user' : 'running')
+    applicationOwnerStatus === 'awaiting_confirmation' || applicationOwnerStatus === 'awaiting_user'
+      ? 'awaiting_user'
+      : applicationOwnerStatus === 'starting'
+        ? 'starting'
+        : applicationOwnerStatus === 'stopping'
+          ? 'stopping'
+          : applicationOwnerStatus === 'running'
+            ? 'running'
+            : phaseExecution?.status ||
+              (pendingPlanLockActive ? 'awaiting_user' : 'running')
+  const phaseExecutionLabel =
+    applicationOwnership.owner?.workbenchPhase
+      ? WORKBENCH_PHASE_AGENTS[applicationOwnership.owner.workbenchPhase].label
+      : WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label
   const workflowInputLocked =
     workspaceBusy ||
     pendingPlanLockActive ||
@@ -3848,6 +3902,22 @@ export default function AiChatPanel({
     await handleOpenSession(sessionId)
   }
 
+  /** 打开 Application owner 会话；跨工作台阶段时先激活目标再切换视图。 */
+  const handleOpenApplicationSession = async (sessionId: string): Promise<void> => {
+    const targetSession = allSessions.find((session) => session.id === sessionId)
+    if (!targetSession || targetSession.workbenchPhase === activeWorkbenchPhase) {
+      await handleOpenChatSession(sessionId)
+      return
+    }
+    setTemporaryChatOpen(false)
+    setActiveView('chat')
+    setInteractingDetailTargetKey('')
+    setGeneratingDetailTargetKey('')
+    setActiveDetailTarget({ type: 'none' })
+    await handleOpenSessionById(sessionId)
+    switchPhase(targetSession.workbenchPhase)
+  }
+
   /** 始终用原会话身份提交固定 DAG 卡；确认启动后才把中央对话切回该会话。 */
   const handlePinnedDagConfirmation = async (
     action: WorkflowBuildTaskPlanConfirmation
@@ -4449,18 +4519,20 @@ export default function AiChatPanel({
               planningState={planningState}
             />
 
-            {otherSessionExecutionLocked || pendingPlanOwnedByCurrentSession ? (
+            {otherSessionExecutionLocked ? (
               <SessionExecutionLockDock
-                phaseLabel={WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label}
+                phaseLabel={phaseExecutionLabel}
                 sessionTitle={phaseExecutionSessionTitle}
                 status={phaseExecutionStatus}
-                onOpenSession={
-                  pendingPlanOwnedByOtherSession && pendingDagSession
+                onOpenSession={applicationOwnerSession
+                  ? () => {
+                      void handleOpenApplicationSession(applicationOwnerSession.id)
+                    }
+                  : pendingPlanOwnedByOtherSession && pendingDagSession
                     ? () => {
-                        void handleOpenChatSession(pendingDagSession.id)
+                        void handleOpenApplicationSession(pendingDagSession.id)
                       }
-                    : undefined
-                }
+                    : undefined}
               />
             ) : !entityDesignChatActive &&
               !acceptanceAwaiting &&

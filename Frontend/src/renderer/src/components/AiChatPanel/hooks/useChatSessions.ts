@@ -128,6 +128,7 @@ type UseChatSessionsResult = {
   handleCreateSessionFromList: () => void
   handleDeleteSession: (sessionId: string) => Promise<void>
   handleOpenSession: (sessionId: string) => Promise<void>
+  handleOpenSessionById: (sessionId: string) => Promise<void>
   openSessionForPhase: (handoff: ChatSessionRevisionHandoff, phase: WorkbenchPhase) => Promise<void>
   loadingSessions: boolean
   messages: AgentChatMessage[]
@@ -375,6 +376,27 @@ export function useChatSessions({
       setSessionErrors((current) => ({
         ...current,
         [editorMode]: caughtError instanceof Error ? caughtError.message : '打开本地会话失败。'
+      }))
+    } finally {
+      setSessionLoadingModes((current) => ({ ...current, [editorMode]: false }))
+    }
+  }
+
+  /** 打开当前编辑模式下任意工作台阶段的会话，用于 owner dock 的跨阶段跳转。 */
+  const handleOpenSessionById = async (sessionId: string): Promise<void> => {
+    if (sessionId === activeSessionId || loadingSessions) return
+    setSessionLoadingModes((current) => ({ ...current, [editorMode]: true }))
+    setSessionErrors((current) => ({ ...current, [editorMode]: undefined }))
+    try {
+      const summary = sessionSummariesRef.current[editorMode].find(
+        (session) => session.id === sessionId
+      )
+      if (!summary) throw new Error('目标 owner 会话不存在或已被删除。')
+      await openChatSession(editorMode, sessionId, summary.workbenchPhase, true)
+    } catch (caughtError) {
+      setSessionErrors((current) => ({
+        ...current,
+        [editorMode]: caughtError instanceof Error ? caughtError.message : '打开 owner 会话失败。'
       }))
     } finally {
       setSessionLoadingModes((current) => ({ ...current, [editorMode]: false }))
@@ -832,6 +854,7 @@ export function useChatSessions({
     handleCreateSessionFromList,
     handleDeleteSession,
     handleOpenSession,
+    handleOpenSessionById,
     openSessionForPhase,
     clearActiveSession,
     loadingSessions,

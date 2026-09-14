@@ -71,6 +71,7 @@ from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
 )
+from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
@@ -104,6 +105,29 @@ def _workflow_stream_chunk(item: Any) -> tuple[tuple[str, ...], str, Any]:
         stream_mode, chunk = item
         return tuple(), str(stream_mode), chunk
     return tuple(), "", item
+
+
+def _lifecycle_payload_with_planning_refresh(
+    workspace: str | None,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """从当前磁盘事实生成带 planningRefresh 的最新生命周期帧。"""
+
+    if not workspace:
+        return fallback
+    try:
+        lifecycle = load_application_lifecycle(workspace)
+        if lifecycle is None:
+            return fallback
+        payload = application_lifecycle_payload(lifecycle)
+        payload["extensions"] = {
+            **dict(payload.get("extensions") or {}),
+            "planningRefresh": resolve_planning_refresh_state(workspace),
+        }
+        return payload
+    except (OSError, TypeError, ValueError):
+        # 生命周期或 Pending 损坏时仍保留原有错误收口，不能在异常投影内再次打断 AG-UI。
+        return fallback
 
 
 def _validate_application_planning_resume(
@@ -307,6 +331,9 @@ def build_workflow_ag_ui_stream(
     workflow_inputs = workflow_run_inputs(payload)
     thread_id = workflow_inputs["thread_id"] or str(uuid4())
     run_id = workflow_inputs["run_id"] or f"workflow-{uuid4().hex[:12]}"
+    resume_values = workflow_inputs.get("resume_values")
+    resume_values = resume_values if isinstance(resume_values, dict) else {}
+    owner_session_id = str(resume_values.get("owner_session_id") or "").strip() or None
     plan_control_action = workflow_inputs.get("plan_control_action") or ""
     if plan_control_action:
         return build_workflow_plan_control_ag_ui_stream(
@@ -317,6 +344,7 @@ def build_workflow_ag_ui_stream(
             draft_digest=workflow_inputs.get("plan_control_draft_digest") or "",
             thread_id=thread_id,
             run_id=run_id,
+            owner_session_id=owner_session_id,
             accept=accept,
         )
     cancel_run_id = workflow_inputs["cancel_run_id"]
@@ -342,6 +370,7 @@ def build_workflow_ag_ui_stream(
         node_attempts: dict[str, int] = {}
         application_planning_run_lock_instance: asyncio.Lock | None = None
         application_planning_run_lock_acquired = False
+        planning_refresh_generation_projection_sent = False
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Workflow stream must run inside an asyncio task.")
@@ -1102,6 +1131,23 @@ def build_workflow_ag_ui_stream(
                             else {}
                         )
                         progress_status = str(progress.get("status") or "running")
+                        if not planning_refresh_generation_projection_sent:
+                            # 首个 PlanningRun progress 只会在 Regenerate 已消费 A、或首轮
+                            # generation 尚无 Pending 后出现；此时显式广播 none/idle，
+                            # 让前端清掉旧 projection，而不是继续展示 Confirmation A。
+                            refreshed_lifecycle = _lifecycle_payload_with_planning_refresh(
+                                workspace,
+                                lifecycle_payload,
+                            )
+                            if refreshed_lifecycle is not None:
+                                lifecycle_payload = refreshed_lifecycle
+                                planning_refresh_generation_projection_sent = True
+                                yield encoder.encode(
+                                    CustomEvent(
+                                        name="application-lifecycle",
+                                        value=refreshed_lifecycle,
+                                    )
+                                )
                         process_sequence += 1
                         task_attempt = _current_node_attempt(
                             node_attempts, "prepare_build_tasks"
@@ -1766,6 +1812,12 @@ def build_workflow_ag_ui_stream(
                     run_id=run_id,
                     phase=current_phase,
                     error=exc,
+                )
+                # Regenerate 的旧 Pending 已在服务端提交点消费；失败终帧必须再次按磁盘
+                # 计算 refresh，禁止前端沿用 A 或从失败 execution 合成伪 Pending。
+                lifecycle_payload = _lifecycle_payload_with_planning_refresh(
+                    workspace,
+                    lifecycle_payload,
                 )
             error_code = getattr(exc, "code", None)
             result = {

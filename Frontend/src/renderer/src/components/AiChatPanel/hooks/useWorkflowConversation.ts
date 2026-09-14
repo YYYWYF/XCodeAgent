@@ -131,6 +131,8 @@ type UseWorkflowConversationParams = {
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
+  /** 当前会话是否因另一会话持有 Application mutation ownership 而只读。 */
+  applicationMutationReadonly?: boolean
   draft: string
   draftKey: string
   selectedSkills: ChatMessageSkill[]
@@ -590,6 +592,7 @@ export function useWorkflowConversation({
   agUiSessionsRef,
   application,
   applicationLifecycle,
+  applicationMutationReadonly = false,
   draft,
   draftKey,
   selectedSkills,
@@ -676,8 +679,9 @@ export function useWorkflowConversation({
       ? liveWorkflows[activeRuntimeKey]
       : (liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey)))
     : undefined
-  // 只有非持有者会话只读；是否有局部 activeRun 不再参与所有权判断。
-  const sessionExecutionLocked = Boolean(phaseExecution && !activeSessionOwnsExecution)
+  // Application ownership 已在面板层按 lifecycle + 本地登记派生；hook 只消费该投影，
+  // 不再用当前 phase 的局部 execution 反推其它阶段是否可以写入。
+  const sessionExecutionLocked = applicationMutationReadonly
   const workspaceBusy = sessionExecutionLocked
   const sessionRunStates = sessionExecutions.reduce<Record<string, SessionRunStatus>>(
     (states, entry) => {
@@ -846,6 +850,14 @@ export function useWorkflowConversation({
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
     if (!trimmedMessage) return false
+    if (applicationMutationReadonly) {
+      // 只读会话在 ensureActiveSession 前失败，避免 B 会话因直接调用创建新的 mutation thread。
+      setErrors((current) => ({
+        ...current,
+        [draftKey]: '当前应用由其他会话持有，当前会话为只读。'
+      }))
+      return false
+    }
     // 空白草稿发送前先检查当前渲染快照，避免已被同阶段 Run 锁定时仍落盘一个空会话。
     if (!options?.sessionIdentity && !activeSession && phaseExecution) {
       setErrors((current) => ({

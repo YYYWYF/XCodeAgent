@@ -70,7 +70,7 @@ export function createSessionIdentity(input: {
   }
 }
 
-/** 判断两个会话是否竞争同一应用阶段的单会话执行权，不按编辑模式拆锁。 */
+/** 判断两个会话是否竞争同一应用阶段的单会话执行权，保留阶段级兼容判断。 */
 export function isSameSessionExecutionScope(
   left: SessionIdentity,
   right: SessionIdentity
@@ -80,6 +80,14 @@ export function isSameSessionExecutionScope(
     left.workflowId === right.workflowId &&
     left.workbenchPhase === right.workbenchPhase
   )
+}
+
+/** 判断两个会话是否竞争同一 Application 的 mutation 执行权，跨工作台阶段统一归并。 */
+export function isSameApplicationExecutionScope(
+  left: SessionIdentity,
+  right: SessionIdentity
+): boolean {
+  return left.workspaceRoot === right.workspaceRoot && left.workflowId === right.workflowId
 }
 
 /** 判断当前选中会话是否就是阶段执行权持有者，避免用局部渲染状态推断所有权。 */

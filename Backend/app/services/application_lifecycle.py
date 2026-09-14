@@ -342,6 +342,7 @@ def start_workbench_execution(
     thread_id: str,
     run_id: str,
     phase: str,
+    owner_session_id: str | None = None,
     replaces_run_id: str | None = None,
     resource_claims: list[ExecutionResourceClaim] | None = None,
     development_continuation_consume: dict[str, str] | None = None,
@@ -368,6 +369,13 @@ def start_workbench_execution(
                 "应用尚未完成创建规划，当前阶段 "
                 f"{current.initialization.stage.value} 不能启动工作台计划执行。"
             )
+        _assert_application_mutation_admission(
+            workspace,
+            current,
+            owner_session_id=owner_session_id,
+            thread_id=thread_id,
+            replaces_run_id=replaces_run_id,
+        )
         if test_interaction_submission is not None:
             # 测试确认凭据只在接替 execution 的同一次写盘中消费；启动失败仍可重试。
             source_id = str(test_interaction_submission.get("runId") or "")
@@ -453,6 +461,61 @@ def start_workbench_execution(
             ),
             resource_locks=next_locks,
         )
+
+
+def _assert_application_mutation_admission(
+    workspace: str | Path,
+    current: ApplicationLifecycle,
+    *,
+    owner_session_id: str | None,
+    thread_id: str,
+    replaces_run_id: str | None,
+) -> None:
+    """在带会话身份的入口拒绝绕过 Application owner 的新 mutation。"""
+
+    normalized_owner = str(owner_session_id or "").strip()
+    if not normalized_owner:
+        # 保留低层资源登记服务的独立能力；真实 Workflow request 会由 request adapter
+        # 从 sessionId 注入 owner_session_id，再由本 guard 保护应用级 admission。
+        return
+    active_executions = [
+        execution
+        for run_id, execution in current.active_executions.items()
+        if run_id != replaces_run_id
+        and execution.status
+        in {
+            WorkbenchExecutionStatus.RUNNING,
+            WorkbenchExecutionStatus.STOPPING,
+            WorkbenchExecutionStatus.AWAITING_USER,
+        }
+    ]
+    if active_executions:
+        raise ApplicationLifecycleConflictError(
+            "当前应用已有活动 Workflow，必须先完成当前会话或使用精确恢复令牌。"
+        )
+
+    # PendingPlan 的 owner 是唯一可继续 Confirm/Regenerate 的会话；普通新 mutation
+    # 即使来自同一 owner 也必须携带对应 replaces_run_id，避免绕过 Pending gate。
+    try:
+        from app.services.planning_refresh_recovery import resolve_planning_refresh_state
+
+        refresh = resolve_planning_refresh_state(str(workspace))
+    except (OSError, TypeError, ValueError):
+        # 损坏或不可读的 Pending 不制造新的 lock；后续正式请求仍由原有 lifecycle
+        # 校验报告具体错误，避免 admission guard 取代 Pending 自身的权威校验。
+        return
+    if (
+        refresh.get("source") == "pending_plan"
+        and refresh.get("status") == "awaiting_confirmation"
+    ):
+        if refresh.get("ownerSessionId") != normalized_owner:
+            raise ApplicationLifecycleConflictError(
+                "当前 Pending Build DAG 属于其他会话，不能启动新的应用 mutation。"
+            )
+        if replaces_run_id != refresh.get("workflowRunId"):
+            raise ApplicationLifecycleConflictError(
+                "当前 Pending Build DAG 只能通过对应 Workflow 的 Confirm/Regenerate 继续。"
+            )
 
 
 def expand_workbench_execution_resources(

@@ -14,8 +14,10 @@ from app.graph.nodes.task_planning_adapter import (
     create_async_workflow_planning_adapter,
 )
 from app.graph.workflow import build_graph
+from app.services.dag_planning_orchestrator import DagPlanningError
 from app.protocols.workflow.request import workflow_run_inputs
 from app.services.unit_generation_contracts import UnitGenerationAttemptResult
+from app.services.unit_generation import UnitGenerationInfrastructureError
 from app.workspace.task_documents import (
     build_task_plan_json_path,
     build_task_plan_pending_json_path,
@@ -252,6 +254,76 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
             regenerated["build_task_plan_confirmation"]["actionValues"],
             ["confirm", "abandon", "regenerate"],
         )
+        self.assertFalse(build_task_plan_json_path(self._state()).exists())
+
+    async def test_stale_regenerate_request_keeps_pending_a_unchanged(self) -> None:
+        """Regenerate 尚未命中当前 DraftIdentity 时不能提前消费 Pending A。"""
+
+        graph = build_graph(checkpointer=InMemorySaver())
+        _, identity = await self._generate_pending(graph, "thread-stale-regenerate")
+        pending_path = build_task_plan_pending_json_path(self._state())
+        pending_bytes = pending_path.read_bytes()
+
+        result = await graph.ainvoke(
+            self._state(
+                build_task_plan_confirmation={
+                    "mode": "build_task_plan_confirmation",
+                    "action": "regenerate",
+                    "planning_run_id": "planning-not-current",
+                    "draft_digest": "a" * 64,
+                }
+            ),
+            config={"configurable": {"thread_id": "thread-stale-regenerate"}},
+        )
+
+        self.assertEqual(pending_path.read_bytes(), pending_bytes)
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(
+            result["planning_run_id"],
+            identity["planning_run_id"],
+        )
+        self.assertTrue(result["build_task_plan_confirmation"]["errors"])
+
+    async def test_regenerate_failure_does_not_resurrect_consumed_pending_a(self) -> None:
+        """旧 Pending 消费后新 DAG 失败时只保留失败 Run，绝不复活 A。"""
+
+        graph = build_graph(checkpointer=InMemorySaver())
+        thread = "thread-regenerate-failure"
+        _, old_identity = await self._generate_pending(graph, thread)
+
+        async def fail_generation(job, **_: object) -> UnitGenerationAttemptResult:
+            """模拟新 PlanningRun 的模型生成基础设施失败。"""
+
+            raise UnitGenerationInfrastructureError(
+                identity=job.identity,
+                stage="model_invoke",
+                cause=RuntimeError("simulated regenerate failure"),
+            )
+
+        with patch(
+            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            return_value=self.readiness,
+        ), patch(
+            "app.services.dag_planning_orchestrator.generate_unit_candidate_once",
+            new=fail_generation,
+        ), patch(
+            "app.services.dag_planning_regeneration._new_planning_run_id",
+            return_value="planning-regenerate-failure",
+        ):
+            with self.assertRaises(DagPlanningError):
+                await graph.ainvoke(
+                    self._state(
+                        build_task_plan_confirmation={
+                            "mode": "build_task_plan_confirmation",
+                            "action": "regenerate",
+                            "planning_run_id": old_identity["planning_run_id"],
+                            "draft_digest": old_identity["draft_digest"],
+                        }
+                    ),
+                    config={"configurable": {"thread_id": thread}},
+                )
+
+        self.assertIsNone(load_pending_build_task_plan(self._state()))
         self.assertFalse(build_task_plan_json_path(self._state()).exists())
 
     async def test_non_confirm_action_never_reaches_confirm_service(self) -> None:

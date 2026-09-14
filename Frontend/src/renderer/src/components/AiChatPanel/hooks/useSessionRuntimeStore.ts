@@ -5,7 +5,7 @@ import { clearEntityDesignDraftStore } from '../components/WorkflowRunCard/Entit
 import type { ChatMessageSkill } from '../../../typings'
 import type { AgentChatMessage } from '../types'
 import {
-  isSameSessionExecutionScope,
+  isSameApplicationExecutionScope,
   sessionRuntimeKeyBelongsToWorkspace,
   type SessionExecutionEntry,
   type SessionIdentity
@@ -120,13 +120,13 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     setSessionMessages(identity.key, messages)
   }
 
-  /** 原子获取同一应用阶段的执行权；返回占用者表示本次获取失败。 */
+  /** 原子获取同一应用的执行权；跨阶段已有其它会话时也返回占用者。 */
   const acquireSessionExecution = (
     identity: SessionIdentity,
     conversation: boolean
   ): SessionExecutionEntry | undefined => {
     const blockingExecution = Object.values(sessionExecutionsRef.current).find((entry) =>
-      isSameSessionExecutionScope(entry.identity, identity)
+      isSameApplicationExecutionScope(entry.identity, identity)
     )
     if (blockingExecution) return blockingExecution
     const entry: SessionExecutionEntry = { identity, status: 'starting', conversation }
@@ -150,7 +150,7 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     setSessionExecutions(sessionExecutionsRef.current)
   }
 
-  /** 在 AG-UI Run 到达终态后释放阶段执行权，使其他历史会话可以重新输入。 */
+  /** 在 AG-UI Run 到达终态后释放 Application 执行权，使其他历史会话可以重新输入。 */
   const releaseSessionExecution = (sessionKey: string): void => {
     runningSessionsRef.current.delete(sessionKey)
     if (!sessionExecutionsRef.current[sessionKey]) return

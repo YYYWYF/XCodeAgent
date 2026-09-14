@@ -59,6 +59,7 @@ def begin_workflow_lifecycle(
         return None
     resume_values = workflow_inputs.get("resume_values")
     resume_values = resume_values if isinstance(resume_values, dict) else {}
+    owner_session_id = str(resume_values.get("owner_session_id") or "").strip() or None
     requires_test_entry = phase == "integration_test" or bool(resume_values.get("test_phase_confirmation"))
     if requires_test_entry:
         from app.services.development_artifacts import require_test_entry
@@ -159,6 +160,7 @@ def begin_workflow_lifecycle(
         target_id=target_id,
         page_id=page_id,
         thread_id=thread_id,
+        owner_session_id=owner_session_id,
         run_id=run_id,
         phase=phase,
         replaces_run_id=(
@@ -317,19 +319,6 @@ def _validate_resumable_execution(
         raise ApplicationLifecycleConflictError("恢复目标与原工作台执行不一致。")
 
 
-def _is_confirmed_build_task_plan_update(update: dict[str, Any]) -> bool:
-    """识别已完成 Confirm 提交的节点结果，避免普通 Build 完成误清理 Pending 投影。"""
-
-    confirmation = update.get("build_task_plan_confirmation")
-    return (
-        update.get("status") == "completed"
-        and isinstance(confirmation, dict)
-        and confirmation.get("mode") == "build_task_plan_confirmation"
-        and confirmation.get("status") == "clear"
-        and confirmation.get("confirmationStatus") == "confirmed"
-    )
-
-
 def project_workflow_lifecycle_boundary(
     workspace: str | None,
     *,
@@ -402,7 +391,15 @@ def project_workflow_lifecycle_boundary(
                 source_run_id=run_id,
             )
             state = load_application_lifecycle(workspace) or state
-        return application_lifecycle_payload(state)
+        payload = application_lifecycle_payload(state)
+        if node_name == "prepare_build_tasks":
+            # Prepare 节点返回的 lifecycle 必须重新读取 Pending；Regenerate 消费 A 后，
+            # 生成中的帧得到 none，成功后则得到新 Pending B，不能沿用旧 projection。
+            payload["extensions"] = {
+                **dict(payload.get("extensions") or {}),
+                "planningRefresh": resolve_planning_refresh_state(workspace or ""),
+            }
+        return payload
     if status == "failed" or node_name == "handle_failure":
         message = str(update.get("error") or update.get("message") or "计划执行失败。")
         state = update_workbench_execution(
@@ -418,7 +415,14 @@ def project_workflow_lifecycle_boundary(
                 details={"phase": node_name},
             ),
         )
-        return application_lifecycle_payload(state)
+        payload = application_lifecycle_payload(state)
+        if node_name == "prepare_build_tasks":
+            # 失败也必须以 Pending 文件为准；旧 Pending 已消费时不能由失败 execution 复活。
+            payload["extensions"] = {
+                **dict(payload.get("extensions") or {}),
+                "planningRefresh": resolve_planning_refresh_state(workspace or ""),
+            }
+        return payload
     if node_name == "entity_source_binding" and status == "completed":
         continuation_id = str(update.get("development_continuation_id") or "").strip()
         if continuation_id:
@@ -448,9 +452,9 @@ def project_workflow_lifecycle_boundary(
         status=WorkbenchExecutionStatus.RUNNING,
     )
     payload = application_lifecycle_payload(state)
-    if node_name == "prepare_build_tasks" and _is_confirmed_build_task_plan_update(update):
-        # Formal 已在 Confirm service 中原子提交并清理 Pending；此处立即读取同一权威文件，
-        # 让 Confirm lifecycle event 先于后续 Build 帧清除旧的 actionable projection。
+    if node_name == "prepare_build_tasks":
+        # Prepare 的每个生命周期边界都从 Pending 文件重算，覆盖 Confirm、Regenerate
+        # 成功和 stale 请求，确保 A/B identity 不通过旧 lifecycle 帧串联。
         payload["extensions"] = {
             **dict(payload.get("extensions") or {}),
             "planningRefresh": resolve_planning_refresh_state(workspace or ""),

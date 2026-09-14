@@ -20,6 +20,7 @@ from ag_ui.core import (
 from ag_ui.encoder import EventEncoder
 
 from app.services.application_lifecycle import (
+    ApplicationLifecycleConflictError,
     application_lifecycle_payload,
     end_workbench_execution,
     load_application_lifecycle,
@@ -254,6 +255,40 @@ def _pending_confirmation_for_run(
     return None
 
 
+def _assert_execution_control_owner(
+    workspace: str,
+    target_run_id: str,
+    thread_id: str,
+) -> None:
+    """拒绝其它 AG-UI thread 直接停止或结束当前活动 execution。"""
+
+    if not workspace or not target_run_id or not thread_id:
+        return
+    lifecycle = load_application_lifecycle(workspace)
+    execution = lifecycle.active_executions.get(target_run_id) if lifecycle else None
+    if execution is not None and execution.thread_id != thread_id:
+        raise ApplicationLifecycleConflictError(
+            "当前 Workflow 由其他会话持有，不能执行停止或结束操作。"
+        )
+
+
+def _assert_pending_control_owner(
+    workspace: str,
+    target_run_id: str,
+    owner_session_id: str | None,
+) -> None:
+    """拒绝非 Pending owner 会话直接 Abandon 当前确认草稿。"""
+
+    normalized_owner = str(owner_session_id or "").strip()
+    if not normalized_owner:
+        return
+    pending = _pending_confirmation_for_run(workspace, target_run_id)
+    if pending is not None and pending.get("ownerSessionId") != normalized_owner:
+        raise ApplicationLifecycleConflictError(
+            "当前 Pending Build DAG 属于其他会话，不能执行放弃操作。"
+        )
+
+
 def build_workflow_cancellation_ag_ui_stream(
     *,
     thread_id: str,
@@ -268,6 +303,7 @@ def build_workflow_cancellation_ag_ui_stream(
     message_id = f"cancel:{run_id}"
 
     async def stream() -> AsyncIterator[str]:
+        _assert_execution_control_owner(workspace, target_run_id, thread_id)
         status = await workflow_run_registry.cancel_and_wait(
             target_run_id,
             **({"workspace": workspace} if workspace else {}),
@@ -328,6 +364,7 @@ def build_workflow_plan_control_ag_ui_stream(
     draft_digest: str = "",
     thread_id: str,
     run_id: str,
+    owner_session_id: str | None = None,
     accept: str | None = None,
 ) -> AsyncIterator[str]:
     """通过主 AG-UI 端点执行不启动 Graph 的计划控制动作。"""
@@ -338,7 +375,10 @@ def build_workflow_plan_control_ag_ui_stream(
     async def stream() -> AsyncIterator[str]:
         if action not in {"stop", "end", "abandon"}:
             raise ValueError(f"不支持的计划控制动作：{action}")
+        if not target_run_id:
+            raise ValueError("计划控制动作缺少目标 runId。")
         if action == "abandon":
+            _assert_pending_control_owner(workspace, target_run_id, owner_session_id)
             result = abandon_pending_build_task_plan(
                 {"workspace": workspace},
                 planning_run_id=planning_run_id,
@@ -354,8 +394,7 @@ def build_workflow_plan_control_ag_ui_stream(
             ):
                 yield frame
             return
-        if not target_run_id:
-            raise ValueError("计划控制动作缺少目标 runId。")
+        _assert_execution_control_owner(workspace, target_run_id, thread_id)
         lifecycle = application_lifecycle_payload(
             end_workbench_execution(workspace, run_id=target_run_id)
             if action == "end"

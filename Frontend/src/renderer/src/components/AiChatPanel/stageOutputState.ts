@@ -268,6 +268,12 @@ export function latestDagGenerationSnapshot(
   messages: AgentChatMessage[],
   lifecycle?: ApplicationLifecycle
 ): DagGenerationSnapshot | undefined {
+  const recovery = planningRefreshState(lifecycle)
+  if (recovery?.source === 'none' && recovery.status === 'idle') {
+    // Regenerate 消费 Pending A 后，生成进度只在中间区域展示；阶段产物没有当前
+    // Pending 内容时保持为空，不能把本轮或历史 DAG 快照投影到右侧面板。
+    return undefined
+  }
   let latest: DagGenerationSnapshot | undefined
   let reachedPreviousRun = false
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
@@ -285,7 +291,6 @@ export function latestDagGenerationSnapshot(
     }
     if (reachedPreviousRun) break
   }
-  const recovery = planningRefreshState(lifecycle)
   if (!recovery) return latest
   if (recovery.source === 'active_planning_run' && recovery.status === 'planning') {
     return readRecoveredDagGenerationSnapshot(recovery.dagGeneration) || latest
