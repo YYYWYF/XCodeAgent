@@ -3,7 +3,10 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { projectWorkbenchAgents } from '../src/main/agentPlanningArtifactProjection'
+import {
+  projectWorkbenchAgents,
+  readAgentRuntimeState
+} from '../src/main/agentPlanningArtifactProjection'
 import { requirementAgentRows } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocPanelData'
 import { selectedAgentSurfaceProductPlan } from '../src/renderer/src/components/AiChatPanel/agentSurfaceSelectionState'
 import {
@@ -298,6 +301,54 @@ test('开发工作台过滤已关闭的智能体浮窗', async () => {
 
     assert.deepEqual(result.agents[0]?.entryPageIds, [])
     assert.deepEqual(result.agents[0]?.entryActions, [])
+  } finally {
+    await fs.rm(workspaceRoot, { force: true, recursive: true })
+  }
+})
+
+/** 验证 Runtime ready 同时依赖有效 V2 TemplateState 和完整七模块模板入口。 */
+test('开发工作台只把完整 Agent Runtime 工程标记为 ready', async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-runtime-ready-'))
+  const requiredFiles = [
+    'pyproject.toml',
+    'src/app/agent/factory.py',
+    'src/app/agent/context.py',
+    'src/app/models/factory.py',
+    'src/app/settings.py',
+    'src/app/persistence/checkpointer.py',
+    'src/app/tools/__init__.py',
+    'src/app/interaction/schemas.py',
+    'src/app/interaction/service.py'
+  ]
+  try {
+    await fs.mkdir(path.join(workspaceRoot, '.xcodeagent'), { recursive: true })
+    await fs.writeFile(
+      path.join(workspaceRoot, '.xcodeagent', 'template-state.json'),
+      JSON.stringify({
+        schemaVersion: 2,
+        templateRevision: '2026.09.14.1',
+        requested: {},
+        effective: {},
+        appliedAdditions: {}
+      }),
+      'utf8'
+    )
+    await Promise.all(
+      requiredFiles.map(async (relativePath) => {
+        const target = path.join(workspaceRoot, 'agent-runtime', relativePath)
+        await fs.mkdir(path.dirname(target), { recursive: true })
+        await fs.writeFile(target, '# test\n', 'utf8')
+      })
+    )
+    await fs.mkdir(path.join(workspaceRoot, 'agent-runtime', 'tests'), { recursive: true })
+
+    const ready = await readAgentRuntimeState(workspaceRoot)
+    await fs.rm(path.join(workspaceRoot, 'agent-runtime', 'src/app/settings.py'))
+    const incomplete = await readAgentRuntimeState(workspaceRoot)
+
+    assert.equal(ready.status, 'ready')
+    assert.equal(ready.templateRevision, '2026.09.14.1')
+    assert.equal(incomplete.status, 'pending')
   } finally {
     await fs.rm(workspaceRoot, { force: true, recursive: true })
   }

@@ -52,6 +52,19 @@ export type WorkbenchAgentOption = {
   }
 }
 
+const AGENT_RUNTIME_REQUIRED_ENTRIES = [
+  { path: 'pyproject.toml', kind: 'file' },
+  { path: 'src/app/agent/factory.py', kind: 'file' },
+  { path: 'src/app/agent/context.py', kind: 'file' },
+  { path: 'src/app/models/factory.py', kind: 'file' },
+  { path: 'src/app/settings.py', kind: 'file' },
+  { path: 'src/app/persistence/checkpointer.py', kind: 'file' },
+  { path: 'src/app/tools/__init__.py', kind: 'file' },
+  { path: 'src/app/interaction/schemas.py', kind: 'file' },
+  { path: 'src/app/interaction/service.py', kind: 'file' },
+  { path: 'tests', kind: 'directory' }
+] as const
+
 /** 从当前 ProductPlan 与 TechnicalPlan 生成开发工作台的只读 Agent 投影。 */
 export async function projectWorkbenchAgents(
   workspaceRoot: string,
@@ -234,21 +247,104 @@ async function projectArtifacts(
 }
 
 /** 从当前 TemplateState 与生成工程读取 Agent Runtime 只读摘要。 */
-async function readAgentRuntimeState(workspaceRoot: string): Promise<Record<string, unknown>> {
+export async function readAgentRuntimeState(
+  workspaceRoot: string
+): Promise<Record<string, unknown>> {
   try {
     const statePath = path.join(workspaceRoot, '.xcodeagent', 'template-state.json')
     const state = JSON.parse(await fs.readFile(statePath, 'utf8')) as Record<string, unknown>
-    const runtimePath = path.join(workspaceRoot, 'agent-runtime', 'pyproject.toml')
-    const runtimeStat = await fs.lstat(runtimePath).catch(() => undefined)
+    const templateRevision = validTemplateStateRevision(state)
+    const runtimeReady =
+      Boolean(templateRevision) && (await agentRuntimeRequiredEntriesExist(workspaceRoot))
     return {
       required: true,
-      status: runtimeStat?.isFile() && !runtimeStat.isSymbolicLink() ? 'ready' : 'pending',
+      status: runtimeReady ? 'ready' : 'pending',
       source: 'technical-plan',
-      templateRevision: String(state.templateRevision || '')
+      templateRevision
     }
   } catch {
     return { required: true, status: 'missing', source: 'technical-plan', templateRevision: '' }
   }
+}
+
+/** 校验 Runtime 工作台展示所需的 V2 TemplateState 基础结构并返回 revision。 */
+function validTemplateStateRevision(state: Record<string, unknown>): string {
+  const expectedKeys = [
+    'appliedAdditions',
+    'effective',
+    'requested',
+    'schemaVersion',
+    'templateRevision'
+  ]
+  const actualKeys = Object.keys(state).sort()
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key, index) => key !== expectedKeys[index]) ||
+    state.schemaVersion !== 2 ||
+    typeof state.templateRevision !== 'string' ||
+    !state.templateRevision.trim() ||
+    !validCapabilityStateMap(state.requested) ||
+    !validCapabilityStateMap(state.effective) ||
+    !validAppliedAdditionMap(state.appliedAdditions)
+  ) {
+    return ''
+  }
+  return state.templateRevision.trim()
+}
+
+/** 校验 V2 requested/effective 中的 Capability 标识和严格状态字段。 */
+function validCapabilityStateMap(value: unknown): boolean {
+  if (!isPlainRecord(value)) return false
+  return Object.entries(value).every(([capabilityId, rawState]) => {
+    if (!capabilityId.trim() || !isPlainRecord(rawState)) return false
+    const keys = Object.keys(rawState).sort()
+    return (
+      keys.length === 2 &&
+      keys[0] === 'config' &&
+      keys[1] === 'enabled' &&
+      rawState.enabled === true &&
+      isPlainRecord(rawState.config)
+    )
+  })
+}
+
+/** 校验 V2 appliedAdditions 中每个已物化能力的严格字段。 */
+function validAppliedAdditionMap(value: unknown): boolean {
+  if (!isPlainRecord(value)) return false
+  return Object.entries(value).every(([capabilityId, rawAddition]) => {
+    if (!capabilityId.trim() || !isPlainRecord(rawAddition)) return false
+    const keys = Object.keys(rawAddition).sort()
+    return (
+      keys.length === 3 &&
+      keys[0] === 'capabilityId' &&
+      keys[1] === 'installedRevision' &&
+      keys[2] === 'target' &&
+      typeof rawAddition.capabilityId === 'string' &&
+      Boolean(rawAddition.capabilityId.trim()) &&
+      typeof rawAddition.installedRevision === 'string' &&
+      Boolean(rawAddition.installedRevision.trim()) &&
+      typeof rawAddition.target === 'string' &&
+      Boolean(rawAddition.target.trim())
+    )
+  })
+}
+
+/** 按后端七模块路径策略检查 Runtime 基础工程是否完整且不使用符号链接。 */
+async function agentRuntimeRequiredEntriesExist(workspaceRoot: string): Promise<boolean> {
+  const runtimeRoot = path.join(workspaceRoot, 'agent-runtime')
+  const states = await Promise.all(
+    AGENT_RUNTIME_REQUIRED_ENTRIES.map(async (entry) => {
+      const stat = await fs.lstat(path.join(runtimeRoot, entry.path)).catch(() => undefined)
+      if (!stat || stat.isSymbolicLink()) return false
+      return entry.kind === 'file' ? stat.isFile() : stat.isDirectory()
+    })
+  )
+  return states.every(Boolean)
+}
+
+/** 判断未知值是否为非数组普通记录。 */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 /** 计算与后端相同的排序紧凑 JSON SHA-256。 */
