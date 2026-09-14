@@ -175,7 +175,7 @@ def _verify_agent_module_contract(
         "agent_module",
         "agent_contract_sha256",
         "module_config_sha256",
-        "template_commit",
+        "template_revision",
         "template_policy_sha256",
     )
     mismatched = [

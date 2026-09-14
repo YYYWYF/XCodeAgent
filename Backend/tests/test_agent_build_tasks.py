@@ -39,7 +39,7 @@ def _contract() -> dict:
 
 
 def _write_workspace(root: Path) -> None:
-    """写入任务编译依赖的 Runtime 入口和模板生成 manifest。"""
+    """写入任务编译依赖的 Runtime 入口和当前 TemplateState。"""
 
     runtime = root / "agent-runtime"
     files = (
@@ -59,20 +59,14 @@ def _write_workspace(root: Path) -> None:
     (runtime / "tests").mkdir()
     metadata = root / ".xcodeagent"
     metadata.mkdir()
-    (metadata / "template-generation-manifest.json").write_text(
+    (metadata / "template-state.json").write_text(
         json.dumps(
             {
-                "steps": {
-                    "download": {
-                        "targets": {
-                            "agentRuntime": {
-                                "required": True,
-                                "status": "succeeded",
-                                "commitSha": "abc123",
-                            }
-                        }
-                    }
-                }
+                "schemaVersion": 2,
+                "templateRevision": "2026.09.04.1",
+                "requested": {},
+                "effective": {},
+                "appliedAdditions": {},
             }
         ),
         encoding="utf-8",
@@ -128,6 +122,12 @@ class AgentBuildTasksTests(unittest.TestCase):
         self.assertFalse((root / "agent-runtime/config").exists())
         self.assertTrue(
             all("template_policy_sha256" in task["source_refs"] for task in tasks)
+        )
+        self.assertTrue(
+            all(
+                task["source_refs"]["template_revision"] == "2026.09.04.1"
+                for task in tasks
+            )
         )
 
     def test_ignores_agents_outside_requested_units(self) -> None:

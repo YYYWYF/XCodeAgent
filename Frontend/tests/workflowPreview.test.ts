@@ -1687,6 +1687,25 @@ test('构建完成快照有无汇总时都把已满足要求的任务计入完�
   }
 })
 
+test('构建卡在汇总滞后但任务全部完成时停止运行态', () => {
+  const executionSlice: WorkflowBuildExecutionSlice = {
+    scope: { type: 'agent', targetId: 'hr_leave_policy_assistant' },
+    summary: { total: 2, completed: 0, failed: 0, pending: 0, running: 0 },
+    tasks: [
+      { id: 'context', title: '实现 Context 模块', status: 'completed' },
+      { id: 'knowledge', title: '实现 Knowledge 模块', status: 'already_satisfied' }
+    ]
+  }
+  const markup = renderToStaticMarkup(
+    createElement(BuildExecutionRunCard, { executionSlice, status: 'running' })
+  )
+
+  assert.match(markup, /workflow-build-run-card xa-completed/)
+  assert.doesNotMatch(markup, /workflow-build-run-card xa-running/)
+  assert.match(markup, />已完成</)
+  assert.match(markup, /100% 完成/)
+})
+
 test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、失败、通过与跳过状态', () => {
   for (const status of ['running', 'failed', 'passed', 'skipped'] as const) {
     const checks = readIntegrationTestChecks({

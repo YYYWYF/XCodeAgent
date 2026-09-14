@@ -148,8 +148,18 @@ class AgentDevelopmentReadinessTests(unittest.TestCase):
                 side_effect=load_artifact,
             ),
             patch(
-                "app.services.agent_development_readiness.inspect_template_generation_readiness",
-                return_value={"ready": True},
+                "app.services.agent_development_readiness.load_template_state",
+                return_value={
+                    "schemaVersion": 2,
+                    "templateRevision": "2026.09.04.1",
+                    "requested": {},
+                    "effective": {},
+                    "appliedAdditions": {},
+                },
+            ),
+            patch(
+                "app.services.agent_development_readiness.load_agent_runtime_template_policy",
+                return_value={"policySha256": "sha256:" + "1" * 64},
             ),
             patch(
                 "app.services.agent_development_readiness.validate_technical_plan_agent_contracts",

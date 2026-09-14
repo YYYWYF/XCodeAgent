@@ -9,8 +9,10 @@ import unittest
 from app.graph.nodes.tasks import (
     _existing_build_task_plan,
     _merge_prepared_scope_tasks,
+    _replacement_dependency_map,
     _retained_frontend_endpoint_owner_constraints,
     _resolve_build_context,
+    _rewrite_replaced_unit_dependencies,
 )
 from app.services.build_task_planner import (
     create_build_task_plan,
@@ -116,6 +118,55 @@ def _page_task(task_id: str, page_id: str, page_key: str) -> dict:
 
 
 class BuildTaskPlanRecoveryTests(unittest.TestCase):
+    def test_stable_agent_module_ids_preserve_serial_dependencies_on_replacement(self) -> None:
+        """重编译同名七模块任务时不得把顺序链扩张成 Unit 内全互相依赖。"""
+
+        unit_id = "agent:hr_leave_policy_assistant"
+        module_ids = [
+            f"{unit_id}::{module}"
+            for module in (
+                "prompt",
+                "model",
+                "memory",
+                "tools",
+                "skills",
+                "knowledge",
+                "context",
+            )
+        ]
+        old_tasks = [
+            _task(
+                task_id,
+                unit_id,
+                dependencies=[module_ids[index - 1]] if index > 0 else [],
+            )
+            for index, task_id in enumerate(module_ids)
+        ]
+        base_plan = replace_build_task_plan_tasks(
+            _base_unit_plan(unit_id),
+            old_tasks,
+        )
+        generated_tasks = deepcopy(old_tasks)
+
+        dependency_map = _replacement_dependency_map(
+            base_plan,
+            generated_tasks,
+            {unit_id},
+        )
+        rewritten = _rewrite_replaced_unit_dependencies(
+            generated_tasks,
+            dependency_map,
+        )
+        merged = replace_build_task_plan_tasks(base_plan, rewritten)
+
+        self.assertEqual(rewritten[0]["dependencies"], [])
+        for index in range(1, len(rewritten)):
+            self.assertEqual(rewritten[index]["dependencies"], [module_ids[index - 1]])
+        self.assertTrue(
+            merged["task_graph"]["validation"]["is_valid"],
+            merged["task_graph"]["validation"]["errors"],
+        )
+
     def test_retained_owner_constraints_follow_replaceable_units_and_ignore_repair(self) -> None:
         """owner 表只读取真实保留的普通任务，不携带模型声明路径。"""
 

@@ -7,13 +7,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.services.application_template_generation import inspect_template_generation_readiness
+from app.services.agent_runtime_template_policy import load_agent_runtime_template_policy
 from app.services.development_readiness import development_readiness
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.project_plan import (
     product_agent_gateway_action_ids,
     validate_technical_plan_agent_contracts,
 )
+from app.services.template_state import load_template_state
 from app.workspace.plan_documents import load_project_plan_json
 
 
@@ -90,14 +91,16 @@ def inspect_agent_development_readiness(
             )
         )
 
-    template_readiness = inspect_template_generation_readiness(root)
-    if not template_readiness.get("ready"):
+    try:
+        load_template_state(root)
+        load_agent_runtime_template_policy(root / "agent-runtime")
+    except ValueError:
         blockers.append(
             _blocker(
                 "agent_runtime_template",
                 normalized_agent_id,
-                "Agent Runtime 模板尚未准备完成或来源校验失败。",
-                "retry_template_generation",
+                "当前 TemplateState 或 Agent Runtime 基础工程尚未准备完成。",
+                "retry_template_preparation",
             )
         )
 

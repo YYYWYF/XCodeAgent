@@ -43,31 +43,23 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
         agent_runtime_process_registry._AGENT_RUNTIME_PROCESSES.clear()
         agent_runtime_process_registry._AGENT_RUNTIME_LAUNCH_LOCKS.clear()
 
-    def test_launch_requirement_comes_only_from_manifest(self) -> None:
+    def test_launch_requirement_comes_only_from_confirmed_technical_plan(self) -> None:
         """验证是否启动 Runtime 不通过目录存在性反推。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
             self.assertFalse(agent_runtime_launch_required(root))
             (root / "agent-runtime").mkdir()
-            with self.assertRaises(AgentRuntimeLaunchError):
-                agent_runtime_launch_required(root)
+            self.assertFalse(agent_runtime_launch_required(root))
 
-            manifest_path = root / ".xcodeagent/template-generation-manifest.json"
-            manifest_path.parent.mkdir(parents=True)
-            manifest_path.write_text(
+            technical_plan_path = root / ".xcodeagent/plans/technical-plan.json"
+            technical_plan_path.parent.mkdir(parents=True)
+            technical_plan_path.write_text(
                 json.dumps(
                     {
-                        "steps": {
-                            "download": {
-                                "targets": {
-                                    "agentRuntime": {
-                                        "required": True,
-                                        "status": "succeeded",
-                                    }
-                                }
-                            }
-                        }
+                        "artifact_type": "technical-plan",
+                        "confirmation_status": "confirmed",
+                        "agent_contracts": [{"agentId": "inventory_assistant"}],
                     }
                 ),
                 encoding="utf-8",

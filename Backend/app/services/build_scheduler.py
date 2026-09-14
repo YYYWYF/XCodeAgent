@@ -222,6 +222,34 @@ def retryable_failed_task_ids(
     return retryable_ids
 
 
+def manually_retryable_failed_task_ids(
+    tasks: list[dict[str, Any]],
+    build_results: list[dict[str, Any]],
+) -> set[str]:
+    """找出可由用户显式重跑且不依赖审批交互的当前失败任务。"""
+
+    latest_results = _latest_task_results(build_results)
+    retryable_ids: set[str] = set()
+    for task in tasks:
+        task_id = str(task.get("id") or "").strip()
+        if not task_id or task.get("status") != "failed":
+            continue
+        result = latest_results.get(task_id, task)
+        category = str(
+            result.get("failure_category")
+            or result.get("error_category")
+            or result.get("category")
+            or "implementation_failure"
+        )
+        action = classify_task_result(result).get("action")
+        if action in {"repair", "requires_confirmation"} and category not in {
+            "database_approval_required",
+            "workspace_snapshot_stale",
+        }:
+            retryable_ids.add(task_id)
+    return retryable_ids
+
+
 def reset_failed_tasks_for_retry(
     tasks: list[dict[str, Any]],
     task_ids: set[str],
@@ -576,6 +604,9 @@ def summarize_build_runtime(
         if classify_task_result(result).get("action") == "requires_confirmation"
     ]
     repair_task_ids = sorted(ready_repair_task_ids(repair_task_plan))
+    manual_retry_task_ids = sorted(
+        manually_retryable_failed_task_ids(tasks, build_results)
+    )
     return {
         "total": len(tasks),
         "completed": counts["completed"] + counts.get("already_satisfied", 0),
@@ -592,7 +623,8 @@ def summarize_build_runtime(
         ),
         "repairable_failures": len(repairable),
         "requires_confirmation": len(confirmation),
-        "recovery_available": bool(retryable or repair_task_ids),
+        "manual_retry_task_ids": manual_retry_task_ids,
+        "recovery_available": bool(retryable or repair_task_ids or manual_retry_task_ids),
         "recovery_task_ids": repair_task_ids,
         "retry_available": bool(retryable and not repairable and not confirmation),
         "status": _overall_status(tasks, repairable, confirmation),

@@ -118,7 +118,10 @@ def _compile_task(
         str(task.get("owner") or "") == "agent"
         and str(task.get("task_type") or "") == "agent.code"
     ):
-        checks.extend(_file_operation_checks(task))
+        # 七模块的 allowed_paths 是权限上限而不是“每个文件都必须修改”的清单；
+        # 只有任务显式声明 change_scope 时才生成逐文件操作断言。
+        if _dict_items(task.get("change_scope")):
+            checks.extend(_file_operation_checks(task))
         checks.append(_scope_boundary_check(task))
         checks.append(_agent_module_contract_check(task))
     else:
@@ -164,7 +167,7 @@ def _agent_module_contract_check(task: dict[str, Any]) -> dict[str, Any]:
             "module_config_sha256": str(
                 source_refs.get("module_config_sha256") or ""
             ),
-            "template_commit": str(source_refs.get("template_commit") or ""),
+            "template_revision": str(source_refs.get("template_revision") or ""),
             "template_policy_sha256": str(
                 source_refs.get("template_policy_sha256") or ""
             ),

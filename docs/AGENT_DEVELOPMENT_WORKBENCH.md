@@ -211,6 +211,8 @@ Agent 进入 `inspect_workspace` 和 Build DAG 之前执行 Agent 依赖复检�
 
 如果只缺 EntitySourceBinding，复用现有实体设计 continuation；continuation target 扩展 Agent 稳定身份。实体确认后只提供“继续开发 Agent”动作，不自动启动 Build。
 
+为支持 Java Gateway 和数据源尚未接入时的 Python Agent 生成调试，当且仅当 Agent 的全部 blocker 均为 `entity_source_binding` 时，门禁可展示“暂时跳过”。该动作必须由用户通过 AG-UI 结构化确认显式提交，只绑定当前 Agent execution，Build 仅选择 `agent:runtime` 和 `agent:<agentId>`。页面、Endpoint 和实体的原门禁不变；未接入的 Tool Adapter 必须 fail-closed。
+
 如果是 Contract Hash、Endpoint 或页面 Action 失效，不尝试确定性修复产品语义，必须进入正式规划修订。
 
 ## 9. Build DAG 与生成边界
@@ -237,13 +239,7 @@ Agent Runtime template readiness
 
 ### 9.2 业务 Agent Unit
 
-`agent:<agentId>` 继续编译为唯一 `owner=agent` 实现任务，且只能修改 Contract 确定的三个文件：
-
-```text
-agent-runtime/src/app/agent/<agent_id>.py
-agent-runtime/src/app/tools/<agent_id>_tools.py
-agent-runtime/tests/test_<agent_id>.py
-```
+`agent:<agentId>` 由平台编译为七个顺序稳定的 `owner=agent`、`task_type=agent.code` 模块任务，通过 `source_refs.agent_module` 区分 Prompt、Model、Memory、Tools、Skills、Knowledge、Context。物理路径来自 XCodeAgent 内置并与模板 commit 同时绑定的路径策略，不由模板 Manifest、规划模型或 Contract 自由指定。
 
 Agent Runtime CodeRunner：
 
@@ -324,7 +320,7 @@ Renderer 不知道 Python sidecar 地址或内部 token。Java Gateway 负责：
 Agent 使用应用共享质量阶段，不建立平行流程。下列检查编译为当前测试/审查证据的 Agent 模块：
 
 1. Python 语法、导入和生成文件路径检查。
-2. `uv run --project agent-runtime pytest agent-runtime/tests/test_<agent_id>.py`。
+2. `uv run --project agent-runtime pytest` 中与真实 Agent Runtime Diff 对应的聚焦测试。
 3. Agent Factory 能按 `agentId` 动态加载业务模块。
 4. System Prompt、Model、Memory 和 Tool Binding 与当前 Contract 一致。
 5. Tool Adapter 只能访问 Contract 允许的 Endpoint，不允许用户消息覆盖可信身份和 Scope。

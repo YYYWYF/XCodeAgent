@@ -182,7 +182,12 @@ export default function AgentSettingsSummary({ agentSettings }: Props): ReactEle
         header={sectionTitle('模型配置', { source: '项目模型策略' })}
         key="model"
       >
-        <Descriptions className={cx('agent-setting-descriptions')} column={2} size="small">
+        <Descriptions
+          className={cx('agent-setting-descriptions')}
+          column={2}
+          layout="vertical"
+          size="small"
+        >
           <Descriptions.Item label="模型策略">
             <Select
               aria-label="Agent 模型策略"
@@ -198,7 +203,7 @@ export default function AgentSettingsSummary({ agentSettings }: Props): ReactEle
               value={modelRef}
             />
           </Descriptions.Item>
-          <Descriptions.Item label="能力要求" span={2}>
+          <Descriptions.Item label="能力要求">
             <div className={cx('agent-setting-checkbox-grid')}>
               {capabilityEntries.map(([key, value]) => (
                 <span key={key}>

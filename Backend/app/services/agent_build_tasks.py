@@ -12,6 +12,7 @@ from app.services.agent_runtime_template_policy import (
     AGENT_RUNTIME_MODULES,
     load_agent_runtime_template_policy,
 )
+from app.services.template_state import load_template_state, template_revision
 
 
 _MODULE_LABELS = {
@@ -68,24 +69,6 @@ def _module_allowed_paths(config: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(paths))
 
 
-def _template_commit(workspace: Path) -> str:
-    """从已确认模板生成 manifest 读取固定 Agent Runtime commit。"""
-
-    manifest_path = workspace / ".xcodeagent" / "template-generation-manifest.json"
-    try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError("无法读取 Agent Runtime 模板生成 manifest。") from exc
-    steps = _dict_value(payload.get("steps"))
-    download = _dict_value(steps.get("download"))
-    targets = _dict_value(download.get("targets"))
-    target = _dict_value(targets.get("agentRuntime"))
-    commit = str(target.get("commitSha") or "").strip()
-    if target.get("required") is not True or target.get("status") != "succeeded" or not commit:
-        raise ValueError("Agent Runtime 模板生成 manifest 尚未提供有效 commit。")
-    return commit
-
-
 def _module_is_disabled(module_name: str, config: dict[str, Any]) -> bool:
     """只对契约允许关闭的模块识别显式 disabled。"""
 
@@ -103,7 +86,7 @@ def compile_agent_build_tasks(
     root = Path(workspace).expanduser().resolve()
     runtime_root = root / "agent-runtime"
     template_policy = load_agent_runtime_template_policy(runtime_root)
-    template_commit = _template_commit(root)
+    current_template_revision = template_revision(load_template_state(root))
     tasks: list[dict[str, Any]] = []
     for contract in contracts:
         agent_id = str(contract.get("agentId") or "").strip()
@@ -154,7 +137,7 @@ def compile_agent_build_tasks(
                     "agent_module": module_name,
                     "agent_contract_sha256": _canonical_sha256(contract),
                     "module_config_sha256": _canonical_sha256(module_config),
-                    "template_commit": template_commit,
+                    "template_revision": current_template_revision,
                     "template_policy_sha256": template_policy["policySha256"],
                     "agent_contracts": [deepcopy(contract)],
                 },

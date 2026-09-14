@@ -69,7 +69,7 @@
 + 当前 API Contract / Endpoint
 + 当前平台 Model / Memory / Skill / Knowledge Catalog
 + 用户允许修改的 Settings Patch
-+ Runtime 能力清单
++ Runtime 模板入口与平台路径策略
 + 平台安全策略
 = 新的完整 Agent Contract
 ```

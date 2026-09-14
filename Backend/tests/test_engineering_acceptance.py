@@ -1207,7 +1207,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 "agent_module": "prompt",
                 "agent_contract_sha256": "sha256:" + "1" * 64,
                 "module_config_sha256": "sha256:" + "2" * 64,
-                "template_commit": "abc123",
+                "template_revision": "2026.09.04.1",
                 "template_policy_sha256": "sha256:" + "3" * 64,
             },
             "allowed_paths": ["agent-runtime/src/app/agent/factory.py"],
@@ -1245,6 +1245,50 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 for item in evidence
             )
         )
+
+    def test_agent_module_allowed_paths_do_not_require_every_template_file_to_change(self) -> None:
+        """七模块路径权限是上限，Context 的最小修改不能被误判为漏改其余模板文件。"""
+
+        task = {
+            "id": "agent:leave_assistant::context",
+            "owner": "agent",
+            "unit_id": "agent:leave_assistant",
+            "task_type": "agent.code",
+            "source_refs": {
+                "agent_id": "leave_assistant",
+                "agent_module": "context",
+                "agent_contract_sha256": "sha256:" + "1" * 64,
+                "module_config_sha256": "sha256:" + "2" * 64,
+                "template_revision": "2026.09.04.1",
+                "template_policy_sha256": "sha256:" + "3" * 64,
+            },
+            "allowed_paths": [
+                "agent-runtime/src/app/agent/factory.py",
+                "agent-runtime/src/app/agent/context.py",
+                "agent-runtime/src/app/interaction/schemas.py",
+                "agent-runtime/src/app/interaction/service.py",
+                "agent-runtime/tests/**",
+            ],
+            "change_scope": [],
+        }
+        compiled = ensure_engineering_acceptance(task)
+        with tempfile.TemporaryDirectory() as workspace:
+            evidence, errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={
+                    "files": [
+                        {
+                            "path": "agent-runtime/src/app/agent/context.py",
+                            "changeType": "modified",
+                        }
+                    ]
+                },
+                workspace_root=workspace,
+            )
+
+        self.assertFalse(errors, errors)
+        self.assertNotIn("file_operation", [item["kind"] for item in evidence])
 
     def _contract_context(self) -> dict:
         """构造带页面字段绑定的最小正式 API 契约。"""
