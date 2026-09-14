@@ -30,7 +30,10 @@ import {
   isConversationWaitingForInput,
   shouldUseConversation
 } from '../src/renderer/src/components/AiChatPanel/conversationMode'
-import { workflowDebugBuildScope } from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
+import {
+  workflowDebugBuildScope,
+  workflowDebugClarificationAnswers
+} from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
 import WorkflowRunCard, {
   buildToolActivityPlacement,
   PlanConfirmationCard,
@@ -221,7 +224,7 @@ test('prepare_build_tasks 调试默认继承当前页面范围', () => {
   assert.deepEqual(scope, { type: 'page', targetId: 'pet_list_page' })
 })
 
-test('页面和 Endpoint 开发目标严格规范化并投影到 Workflow scope', () => {
+test('页面、Endpoint 和 Agent 开发目标严格规范化并投影到 Workflow scope', () => {
   const page = normalizeDevelopmentTarget({
     type: 'page',
     pageId: 'products',
@@ -233,6 +236,11 @@ test('页面和 Endpoint 开发目标严格规范化并投影到 Workflow scope'
     endpointId: 'products.list',
     label: 'GET /api/products'
   })
+  const agent = normalizeDevelopmentTarget({
+    type: 'agent',
+    agentId: 'support-agent',
+    label: '客服智能体'
+  })
 
   assert.deepEqual(page, { type: 'page', pageId: 'products', label: '商品列表页' })
   assert.deepEqual(endpoint, {
@@ -241,6 +249,7 @@ test('页面和 Endpoint 开发目标严格规范化并投影到 Workflow scope'
     endpointId: 'products.list',
     label: 'GET /api/products'
   })
+  assert.deepEqual(agent, { type: 'agent', agentId: 'support-agent', label: '客服智能体' })
   assert.equal(normalizeDevelopmentTarget({ type: 'endpoint', endpointId: 'products.list' }), undefined)
   assert.deepEqual(developmentTargetWorkflowFields(endpoint), {
     selectedApiContractId: 'products-api',
@@ -251,6 +260,11 @@ test('页面和 Endpoint 开发目标严格规范化并投影到 Workflow scope'
       targetId: 'products.list',
       apiContractId: 'products-api'
     }
+  })
+  assert.deepEqual(developmentTargetWorkflowFields(agent), {
+    selectedAgentId: 'support-agent',
+    detailTargetType: 'agent',
+    buildExecutionScope: { type: 'agent', targetId: 'support-agent' }
   })
   // 自由会话和临时对话浮层都不声明目标，因此不会投影出正式开发 scope。
   assert.equal(normalizeDevelopmentTarget(undefined), undefined)
@@ -304,6 +318,24 @@ test('会话摘要和运行时身份保留不可变开发目标', () => {
       label: 'GET /api/products/{id}'
     }),
     false
+  )
+})
+
+test('test_phase_confirmation 调试恢复发送正式结构化确认', () => {
+  assert.deepEqual(
+    workflowDebugClarificationAnswers({
+      enabled: true,
+      resumeFrom: 'test_phase_confirmation'
+    }),
+    {
+      test_phase_confirmation: {
+        action: 'confirm'
+      }
+    }
+  )
+  assert.equal(
+    workflowDebugClarificationAnswers({ enabled: true, resumeFrom: 'integration_test' }),
+    undefined
   )
 })
 
@@ -2551,6 +2583,84 @@ test('多轮构建测试历史按 attempt 展开并把构建卡挂在对应步�
   )
   assert.equal((markup.match(/构建执行/g) || []).length, 2)
   assert.ok(markup.indexOf('构建执行') < markup.indexOf('集成测试与质量门禁'))
+})
+
+test('构建任务全部完成后收口遗留的运行中步骤和转圈状态', () => {
+  const finalBuildSlice = {
+    scope: { type: 'agent' as const, targetId: 'hr_leave_policy_assistant' },
+    tasks: [
+      {
+        id: 'agent:hr_leave_policy_assistant::context',
+        title: '实现 Context 模块',
+        status: 'completed'
+      }
+    ],
+    // 汇总字段可能比 tasks[] 晚一帧更新，终态必须以完整任务列表为准。
+    summary: { total: 1, completed: 0, failed: 0, pending: 0, running: 0 }
+  }
+  const steps = processStepsForDisplay(
+    [
+      {
+        id: 'workflow:build',
+        kind: 'workflow',
+        status: 'running',
+        title: '正在执行 代码生成与构建协调',
+        detail: '构建任务结果已更新：1 个任务返回结果。',
+        sequence: 1,
+        nodeName: 'build',
+        attempt: 1,
+        buildExecutionSlice: finalBuildSlice
+      }
+    ],
+    {
+      runId: 'run-agent-build',
+      threadId: 'thread-agent-build',
+      summary: { status: 'running', phase: 'unit_test' },
+      events: []
+    }
+  )
+
+  assert.equal(steps?.[0]?.status, 'completed')
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, { loading: true, steps: steps || [] })
+  )
+  assert.ok(markup.includes('workflow-build-run-card completed'))
+  assert.ok(!markup.includes('workflow-build-run-card running'))
+})
+
+test('节点完成事件覆盖同一轮次遗留的构建运行中状态', () => {
+  const steps = processStepsForDisplay(
+    [
+      {
+        id: 'workflow:build',
+        kind: 'workflow',
+        status: 'running',
+        title: '正在执行 代码生成与构建协调',
+        detail: '等待最终状态',
+        sequence: 1,
+        nodeName: 'build',
+        attempt: 1
+      }
+    ],
+    {
+      runId: 'run-agent-build-event',
+      threadId: 'thread-agent-build-event',
+      summary: { status: 'running', phase: 'unit_test' },
+      events: [
+        {
+          type: 'workflow.node.completed',
+          nodeName: 'build',
+          node: { label: '代码生成与构建协调' },
+          status: 'completed',
+          attempt: 1,
+          message: '构建任务已全部完成。'
+        }
+      ]
+    }
+  )
+
+  assert.equal(steps?.[0]?.status, 'completed')
+  assert.equal(steps?.[0]?.detail, '构建任务已全部完成。')
 })
 
 test('集成测试重试轮次不继承上一轮失败的检查快照', () => {

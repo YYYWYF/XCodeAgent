@@ -3522,7 +3522,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                             "agent_module": "prompt",
                             "agent_contract_sha256": "sha256:" + "1" * 64,
                             "module_config_sha256": "sha256:" + "2" * 64,
-                            "template_commit": "abc123",
+                            "template_revision": "2026.09.04.1",
                             "template_policy_sha256": "sha256:" + "3" * 64,
                         },
                         "dependencies": [],

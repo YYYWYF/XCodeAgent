@@ -29,9 +29,6 @@ from app.services.agent_runtime_process_registry import (
     stop_previous_agent_runtime_process,
     terminate_agent_runtime_process,
 )
-from app.services.application_template_generation import (
-    TEMPLATE_GENERATION_MANIFEST_RELATIVE_PATH,
-)
 
 
 class AgentRuntimeLaunchError(ValueError):
@@ -39,36 +36,27 @@ class AgentRuntimeLaunchError(ValueError):
 
 
 def agent_runtime_launch_required(workspace_path: str | Path) -> bool:
-    """只根据模板 manifest 判断当前工作区是否需要启动 Agent Runtime。"""
+    """只根据已确认 TechnicalPlan 判断当前工作区是否需要启动 Agent Runtime。"""
 
     root = Path(workspace_path).expanduser().resolve()
-    manifest_path = root / TEMPLATE_GENERATION_MANIFEST_RELATIVE_PATH
-    if not manifest_path.is_file():
-        if (root / "agent-runtime").exists():
-            raise AgentRuntimeLaunchError(
-                "工作区存在 agent-runtime，但缺少模板生成 manifest，无法确认是否应启动。"
-            )
+    technical_plan_path = root / ".xcodeagent" / "plans" / "technical-plan.json"
+    if not technical_plan_path.is_file() or technical_plan_path.is_symlink():
         return False
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        technical_plan = json.loads(technical_plan_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise AgentRuntimeLaunchError("模板生成 manifest 损坏或无法读取。") from exc
-    steps = manifest.get("steps") if isinstance(manifest, dict) else None
-    download = steps.get("download") if isinstance(steps, dict) else None
-    targets = download.get("targets") if isinstance(download, dict) else None
-    target = targets.get("agentRuntime") if isinstance(targets, dict) else None
-    if not isinstance(target, dict) or not isinstance(target.get("required"), bool):
-        raise AgentRuntimeLaunchError("模板生成 manifest 缺少有效的 agentRuntime 目标。")
-    if target["required"] and target.get("status") != "succeeded":
-        raise AgentRuntimeLaunchError("必需的 Agent Runtime 模板尚未成功初始化。")
-    if not target["required"]:
-        if target.get("status") != "skipped":
-            raise AgentRuntimeLaunchError("非必需 Agent Runtime 的 manifest 状态必须为 skipped。")
-        if (root / "agent-runtime").exists():
-            raise AgentRuntimeLaunchError(
-                "manifest 标记 Agent Runtime 非必需，但工作区仍存在 agent-runtime。"
-            )
-    return target["required"]
+        raise AgentRuntimeLaunchError("TechnicalPlan 损坏或无法读取。") from exc
+    if not isinstance(technical_plan, dict):
+        raise AgentRuntimeLaunchError("TechnicalPlan 必须是 JSON 对象。")
+    if (
+        technical_plan.get("artifact_type") != "technical-plan"
+        or technical_plan.get("confirmation_status") != "confirmed"
+    ):
+        raise AgentRuntimeLaunchError("必须使用已确认的当前 TechnicalPlan 判断 Agent Runtime。")
+    contracts = technical_plan.get("agent_contracts")
+    if not isinstance(contracts, list):
+        raise AgentRuntimeLaunchError("TechnicalPlan.agent_contracts 必须是数组。")
+    return bool(contracts)
 
 
 def launch_agent_runtime_project(
