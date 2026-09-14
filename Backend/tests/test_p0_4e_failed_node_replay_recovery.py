@@ -424,6 +424,20 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
         self.workspace = Path(self.temporary_workspace.name)
         self.thread_id = "selector-thread"
         self.source_run_id = "selector-source"
+        lifecycle = create_application_lifecycle(
+            application_id="selector-application",
+            application_name="Selector Recovery",
+            initialization_thread_id=self.thread_id,
+        ).model_copy(
+            update={
+                "initialization": ApplicationInitialization(
+                    stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    status=ApplicationLifecycleStatus.COMPLETED,
+                    threadId=self.thread_id,
+                )
+            }
+        )
+        write_application_lifecycle(self.workspace, lifecycle, expected_revision=0)
         now = datetime.now(timezone.utc)
         self.source = DurableExecutionRecord(
             run_id=self.source_run_id,
@@ -609,7 +623,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
         self,
         failure: ExecutionFailureEvidence | None,
     ) -> None:
-        """验证 FAILED replay 不依赖 failure evidence 或注入式节点白名单。"""
+        """验证异常 FAILED replay 不依赖错误类型或注入式节点白名单。"""
 
         self.harness.close()
         self.harness = FailedNodeReplayDurableHarness(failure=failure)
@@ -645,10 +659,20 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_missing_failure_evidence_uses_failed_node_replay(self) -> None:
-        """FAILED 且缺失 failure evidence 时仍可由 exact predecessor 重放。"""
+    async def test_failed_without_exception_evidence_is_not_default_replay(self) -> None:
+        """FAILED 且缺失异常证据时不能自动进入 Failed Node Replay。"""
 
-        await self._assert_default_failed_node_replay(None)
+        self.harness.close()
+        self.harness = FailedNodeReplayDurableHarness(failure=None)
+        await self._start()
+        source, action_plan, _assessment = await self.harness.resolve_action()
+
+        self.assertEqual(source.status, DurableExecutionStatus.FAILED)
+        self.assertEqual(
+            action_plan.reason_code,
+            "FAILED_EXCEPTION_EVIDENCE_MISSING",
+        )
+        self.assertIsNone(action_plan.primary_action)
 
     async def test_forked_child_reenters_failed_node(self) -> None:
         """Native fork 必须产生新 child，并把 next 精确保留为失败节点。"""

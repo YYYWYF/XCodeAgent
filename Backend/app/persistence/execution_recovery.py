@@ -22,6 +22,7 @@ from app.domain.execution_recovery import (
     RecoveryAttempt,
     RecoveryAttemptAlreadyClaimedError,
     RecoveryAttemptStatus,
+    RecoveryDecision,
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPoint,
@@ -67,7 +68,7 @@ def _parse_datetime(value: str) -> datetime:
 
 
 def _dedupe_key(point: RecoveryPoint) -> str:
-    """按现场事实生成稳定幂等键，不把时间和随机记录 ID 纳入身份。"""
+    """按 checkpoint 和 lifecycle observation 事实生成稳定幂等键。"""
 
     payload = {
         "runId": point.run_id,
@@ -76,6 +77,7 @@ def _dedupe_key(point: RecoveryPoint) -> str:
         "completedNode": point.completed_node,
         "nextNodes": point.next_nodes,
         "kind": point.kind.value,
+        "lifecycleRevision": point.lifecycle_revision,
     }
     canonical = json.dumps(
         payload,

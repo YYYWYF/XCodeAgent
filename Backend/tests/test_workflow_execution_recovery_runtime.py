@@ -10,6 +10,20 @@ from unittest.mock import AsyncMock, patch
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from app.domain.application_revision import (
+    ActiveFormalRevision,
+    FormalRevisionBranch,
+    RevisionTarget,
+)
+from app.domain.application_lifecycle import (
+    ApplicationInitialization,
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+)
+from app.domain.execution_recovery import (
+    DurableExecutionStatus,
+    RecoveryActionKind,
+)
 from app.graph.application_planning_interrupts import technical_planning_review
 from app.graph.state import ProjectState
 from app.persistence.execution_recovery import (
@@ -21,6 +35,16 @@ from app.protocols.application_planning_interrupt import (
     project_application_planning_interrupt,
 )
 from app.protocols.workflow import build_workflow_ag_ui_stream
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    load_application_lifecycle,
+    write_application_lifecycle,
+)
+from app.services.execution_recovery_action_planner import (
+    build_recovery_facts,
+    plan_recovery_action,
+)
+from app.services.execution_recovery_coordinator import prepare_continue
 
 
 def _linear_runtime_graph(
@@ -78,21 +102,62 @@ def _runtime_payload(
     thread_id: str,
     run_id: str,
     interaction: dict[str, Any] | None = None,
+    workflow_scope: str | None = "application_planning",
+    resume_from: str | None = None,
 ) -> dict[str, Any]:
-    """构造 application planning Runtime 使用的最小 AG-UI 请求。"""
+    """构造 Runtime 使用的最小 AG-UI 请求，并允许测试切换工作台边界。"""
 
-    forwarded_props: dict[str, Any] = {
-        "workspaceRoot": str(workspace),
-        "workflowScope": "application_planning",
-    }
+    forwarded_props: dict[str, Any] = {"workspaceRoot": str(workspace)}
+    if workflow_scope is not None:
+        forwarded_props["workflowScope"] = workflow_scope
     if interaction is not None:
         forwarded_props["applicationPlanningInteraction"] = interaction
-    return {
+    payload = {
         "threadId": thread_id,
         "runId": run_id,
         "message": "运行恢复观测集成测试",
         "forwardedProps": forwarded_props,
     }
+    if resume_from is not None:
+        payload["resumeFrom"] = resume_from
+    return payload
+
+
+def _seed_failed_workbench_lifecycle(
+    workspace: Path,
+    *,
+    thread_id: str,
+    run_id: str,
+) -> None:
+    """准备带 active Formal Revision 的工作台生命周期测试边界。"""
+
+    formal_revision = ActiveFormalRevision(
+        changeId="runtime-failed-node-change",
+        formalBranch=FormalRevisionBranch.WORKBENCH_PLAN_REVISION,
+        sourceThreadId=thread_id,
+        sourceRunId=run_id,
+        request="验证失败节点恢复",
+        target=RevisionTarget(type="application"),
+        impactInteractionId="runtime-failed-node-impact",
+        planningThreadId=thread_id,
+        status="drafting",
+    )
+    lifecycle = create_application_lifecycle(
+        application_id="runtime-failed-node-application",
+        application_name="Runtime Failed Node",
+        initialization_thread_id=thread_id,
+        active_run_id=run_id,
+    ).model_copy(
+        update={
+            "initialization": ApplicationInitialization(
+                stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                status=ApplicationLifecycleStatus.COMPLETED,
+                threadId=thread_id,
+            ),
+            "active_formal_revision": formal_revision,
+        }
+    )
+    write_application_lifecycle(workspace, lifecycle, expected_revision=0)
 
 
 async def _collect_runtime_frames(graph: Any, payload: dict[str, Any]) -> list[str]:
@@ -261,6 +326,90 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(record.failure)
         assert record.failure is not None
         self.assertEqual(record.failure.operation, "product_planning")
+        self.assertIn('"type":"RUN_ERROR"', "".join(frames))
+        self.assertNotIn('"type":"RUN_FINISHED"', "".join(frames))
+
+    async def test_failed_runtime_reobserves_predecessor_after_lifecycle_failure(
+        self,
+    ) -> None:
+        """真实 A→B 异常路径必须以最终 FAILED lifecycle revision 规划 replay。"""
+
+        graph, _ = _linear_runtime_graph(
+            failing_node="product_planning",
+            node_names=("requirements", "product_planning"),
+        )
+        thread_id = "runtime-failed-node-thread"
+        run_id = "runtime-failed-node-run"
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            _seed_failed_workbench_lifecycle(
+                workspace,
+                thread_id=thread_id,
+                run_id=run_id,
+            )
+            frames = await _collect_runtime_frames(
+                graph,
+                _runtime_payload(
+                    workspace,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    workflow_scope=None,
+                    resume_from="requirements",
+                ),
+            )
+            points = await list_recovery_points(workspace, run_id)
+            source = await get_execution(workspace, run_id)
+            lifecycle = load_application_lifecycle(workspace)
+            recovery_plan = await prepare_continue(
+                workspace=str(workspace),
+                source_run_id=run_id,
+                graph=graph,
+            )
+            self.assertIsNotNone(source)
+            self.assertIsNotNone(lifecycle)
+            assert source is not None
+            assert lifecycle is not None
+            facts = await build_recovery_facts(
+                workspace=str(workspace),
+                source=source,
+                recovery_plan=recovery_plan,
+                graph=graph,
+            )
+            action_plan, _assessment = await plan_recovery_action(
+                workspace=str(workspace),
+                source=source,
+                recovery_plan=recovery_plan,
+                point=facts.point,
+                snapshot=facts.snapshot,
+                lifecycle=facts.lifecycle,
+                graph=graph,
+            )
+
+        predecessor_points = [
+            point
+            for point in points
+            if point.next_nodes == ["product_planning"]
+        ]
+        self.assertGreaterEqual(len(predecessor_points), 2)
+        self.assertEqual(
+            {point.checkpoint_id for point in predecessor_points},
+            {predecessor_points[0].checkpoint_id},
+        )
+        selected = predecessor_points[-1]
+        self.assertEqual(selected.completed_node, "requirements")
+        self.assertEqual(recovery_plan.recovery_point_id, selected.recovery_point_id)
+        self.assertEqual(selected.lifecycle_revision, lifecycle.revision)
+        self.assertEqual(source.status, DurableExecutionStatus.FAILED)
+        self.assertEqual(source.current_node, "product_planning")
+        self.assertIsNotNone(source.failure)
+        self.assertEqual(recovery_plan.reason_code, "FAILED_NODE_REPLAY_READY")
+        self.assertEqual(action_plan.reason_code, "FAILED_NODE_REPLAY_READY")
+        self.assertIsNotNone(action_plan.primary_action)
+        assert action_plan.primary_action is not None
+        self.assertEqual(
+            action_plan.primary_action.kind,
+            RecoveryActionKind.RETRY_FAILED_NODE,
+        )
         self.assertIn('"type":"RUN_ERROR"', "".join(frames))
         self.assertNotIn('"type":"RUN_FINISHED"', "".join(frames))
 

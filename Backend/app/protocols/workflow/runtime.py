@@ -2157,8 +2157,12 @@ def build_workflow_ag_ui_stream(
         except Exception as exc:
             from app.services.development_artifacts import DevelopmentArtifactsIncompleteError
 
+            failure_predecessor_node = pending_recovery_node
+            failure_predecessor_point = None
             if pending_recovery_node is not None:
-                await capture_pending_recovery_point(pending_recovery_node)
+                failure_predecessor_point = await capture_pending_recovery_point(
+                    pending_recovery_node
+                )
             # AG-UI 失败帧可能先于权威对账到达，先脱敏再向任何 UI 文本/事件暴露。
             safe_error_message = sanitize_failure_diagnostic(exc) or type(exc).__name__
             failure_point = None
@@ -2229,21 +2233,49 @@ def build_workflow_ag_ui_stream(
             if error_code:
                 summary["errorCode"] = error_code
             if durable_execution_started and active_graph is not None and config is not None:
-                failure_point = await best_effort_recovery_observation(
-                    operation="point.captured",
-                    workspace=workspace,
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    workflow_scope=workflow_scope,
-                    callback=lambda: capture_recovery_point(
+                async def capture_failure_recovery_point() -> Any | None:
+                    """在失败 Lifecycle 落盘后重新观测同一个 predecessor checkpoint。"""
+
+                    snapshot = None
+                    if (
+                        failure_predecessor_point is not None
+                        and failure_predecessor_point.checkpoint_id
+                        and hasattr(active_graph, "aget_state")
+                    ):
+                        try:
+                            snapshot = await active_graph.aget_state(
+                                {
+                                    "configurable": {
+                                        "thread_id": thread_id,
+                                        "checkpoint_ns": failure_predecessor_point.checkpoint_ns,
+                                        "checkpoint_id": failure_predecessor_point.checkpoint_id,
+                                    }
+                                }
+                            )
+                        except Exception:
+                            # 精确回读失败时仍允许 capture_recovery_point 使用 live snapshot
+                            # 作为旁路 fallback；Recovery Coordinator 后续还会重新校验身份。
+                            snapshot = None
+                    return await capture_recovery_point(
                         graph=active_graph,
                         config=recovery_observation_config or config or {},
                         workspace=workspace,
                         thread_id=thread_id,
                         run_id=run_id,
                         workflow_scope=workflow_scope,
-                        completed_node=None,
-                    ),
+                        completed_node=failure_predecessor_node,
+                        snapshot=snapshot,
+                    )
+
+                # fail_workflow_lifecycle 及其 Formal Revision 同步必须先完成；此处
+                # 读取到的 revision 才与最终 FAILED 现场一致，且不放宽 Coordinator 的严格比较。
+                failure_point = await best_effort_recovery_observation(
+                    operation="point.captured",
+                    workspace=workspace,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    workflow_scope=workflow_scope,
+                    callback=capture_failure_recovery_point,
                 )
                 failure_boundary = failure_boundary_from_recovery_point(
                     point=failure_point,

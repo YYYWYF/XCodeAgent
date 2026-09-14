@@ -21,12 +21,14 @@ class RecoverySourceAdmission:
 def assess_recovery_source(
     source: DurableExecutionRecord,
 ) -> RecoverySourceAdmission:
-    """只依据 durable status 判断 source 是否进入现场安全校验。"""
+    """区分可恢复异常终止与缺少异常证据的业务 FAILED 终态。"""
 
     if source.status is DurableExecutionStatus.INTERRUPTED:
         return RecoverySourceAdmission(True, "SOURCE_INTERRUPTED_ADMISSIBLE")
     if source.status is DurableExecutionStatus.FAILED:
-        return RecoverySourceAdmission(True, "SOURCE_FAILED_ADMISSIBLE")
+        if source.failure is None:
+            return RecoverySourceAdmission(False, "FAILED_EXCEPTION_EVIDENCE_MISSING")
+        return RecoverySourceAdmission(True, "SOURCE_FAILED_EXCEPTION_ADMISSIBLE")
     return RecoverySourceAdmission(False, "SOURCE_STATUS_NOT_RECOVERY_ADMISSIBLE")
 
 
