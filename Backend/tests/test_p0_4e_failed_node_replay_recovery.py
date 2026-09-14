@@ -162,25 +162,39 @@ def _replay_policy() -> tuple[AllowNodePolicy, ...]:
     return (AllowNodePolicy({"technical_planning"}),)
 
 
-def _failure(*, model: str | None = "deepseek-xxx") -> ExecutionFailureEvidence:
-    """构造可重放的模型失败证据。"""
+def _failure(
+    *,
+    model: str | None = "deepseek-xxx",
+    origin: ExecutionFailureOrigin = ExecutionFailureOrigin.MODEL_CALL,
+    replay_compatible: bool = True,
+    http_status: int | None = 404,
+) -> ExecutionFailureEvidence:
+    """构造测试使用的结构化失败证据。"""
 
     return ExecutionFailureEvidence(
-        origin=ExecutionFailureOrigin.MODEL_CALL,
+        origin=origin,
         code="MODEL_NOT_FOUND",
         operation="technical_planning",
         provider="deepseek",
         model=model,
-        http_status=404,
-        replay_compatible=True,
+        http_status=http_status,
+        replay_compatible=replay_compatible,
         diagnostic_message="model not found",
     )
+
+
+_DEFAULT_FAILURE = object()
 
 
 class FailedNodeReplayDurableHarness:
     """提供可重建 Graph、SQLite checkpoint 与 Workbench lifecycle 的测试环境。"""
 
-    def __init__(self, *, source_status: DurableExecutionStatus = DurableExecutionStatus.FAILED) -> None:
+    def __init__(
+        self,
+        *,
+        source_status: DurableExecutionStatus = DurableExecutionStatus.FAILED,
+        failure: ExecutionFailureEvidence | None | object = _DEFAULT_FAILURE,
+    ) -> None:
         """初始化隔离 workspace，并保存可动态切换的当前模型配置。"""
 
         self.temporary_workspace = tempfile.TemporaryDirectory()
@@ -191,6 +205,9 @@ class FailedNodeReplayDurableHarness:
         self.source_status = source_status
         self.current_model = "deepseek-xxx"
         self.current_provider = "deepseek"
+        self.source_failure: ExecutionFailureEvidence | None = (
+            _failure() if failure is _DEFAULT_FAILURE else failure  # type: ignore[assignment]
+        )
         self.calls: list[tuple[str, str, str]] = []
         self.graph: Any | None = None
         self.checkpointer: AsyncSqliteSaver | None = None
@@ -236,7 +253,11 @@ class FailedNodeReplayDurableHarness:
             started_at=now,
             updated_at=now,
             ended_at=now,
-            failure=_failure() if self.source_status is DurableExecutionStatus.FAILED else None,
+            failure=(
+                self.source_failure
+                if self.source_status is DurableExecutionStatus.FAILED
+                else None
+            ),
         )
         await insert_execution(self.source)
         lifecycle = self._load_lifecycle()
@@ -350,7 +371,11 @@ class FailedNodeReplayDurableHarness:
             "execution_log": [],
         }
 
-    async def resolve_action(self) -> tuple[Any, Any, Any]:
+    async def resolve_action(
+        self,
+        *,
+        replay_policies: tuple[Any, ...] | None = None,
+    ) -> tuple[Any, Any, Any]:
         """经由 Coordinator 和 Action Planner 重新解析当前 Backend action。"""
 
         if self.graph is None or self.source is None:
@@ -362,7 +387,7 @@ class FailedNodeReplayDurableHarness:
             workspace=str(self.workspace),
             source_run_id=source.run_id,
             graph=self.graph,
-            replay_policies=_replay_policy(),
+            replay_policies=replay_policies,
         )
         facts = await build_recovery_facts(
             workspace=str(self.workspace),
@@ -473,7 +498,6 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
             workspace=str(self.workspace),
             source_run_id=self.source_run_id,
             graph=graph,
-            replay_policies=_replay_policy(),
         )
         facts = await build_recovery_facts(
             workspace=str(self.workspace),
@@ -509,7 +533,6 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
             workspace=str(self.workspace),
             source_run_id=self.source_run_id,
             graph=graph,
-            replay_policies=_replay_policy(),
         )
 
         self.assertEqual(plan.recovery_point_id, predecessor.recovery_point_id)
@@ -529,7 +552,6 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
             workspace=str(self.workspace),
             source_run_id=self.source_run_id,
             graph=graph,
-            replay_policies=_replay_policy(),
         )
 
         self.assertEqual(plan.reason_code, "FAILED_NODE_PREDECESSOR_NOT_FOUND")
@@ -547,7 +569,6 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
             workspace=str(self.workspace),
             source_run_id=self.source_run_id,
             graph=graph,
-            replay_policies=_replay_policy(),
         )
 
         self.assertEqual(plan.reason_code, "FAILED_NODE_PREDECESSOR_NOT_FOUND")
@@ -584,6 +605,51 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.harness.start()
 
+    async def _assert_default_failed_node_replay(
+        self,
+        failure: ExecutionFailureEvidence | None,
+    ) -> None:
+        """验证 FAILED replay 不依赖 failure evidence 或注入式节点白名单。"""
+
+        self.harness.close()
+        self.harness = FailedNodeReplayDurableHarness(failure=failure)
+        await self._start()
+        source, action_plan, _assessment = await self.harness.resolve_action()
+        self.assertEqual(source.status, DurableExecutionStatus.FAILED)
+        self.assertEqual(action_plan.reason_code, "FAILED_NODE_REPLAY_READY")
+        self.assertIsNotNone(action_plan.primary_action)
+        assert action_plan.primary_action is not None
+        self.assertEqual(
+            action_plan.primary_action.kind,
+            RecoveryActionKind.RETRY_FAILED_NODE,
+        )
+
+    async def test_business_failure_uses_failed_node_replay(self) -> None:
+        """业务失败最终逃出 Node 后仍必须按失败节点重放。"""
+
+        await self._assert_default_failed_node_replay(
+            _failure(
+                origin=ExecutionFailureOrigin.BUSINESS,
+                replay_compatible=False,
+            )
+        )
+
+    async def test_unknown_failure_uses_failed_node_replay(self) -> None:
+        """未知失败最终逃出 Node 后仍必须按失败节点重放。"""
+
+        await self._assert_default_failed_node_replay(
+            _failure(
+                origin=ExecutionFailureOrigin.UNKNOWN,
+                replay_compatible=False,
+                http_status=None,
+            )
+        )
+
+    async def test_missing_failure_evidence_uses_failed_node_replay(self) -> None:
+        """FAILED 且缺失 failure evidence 时仍可由 exact predecessor 重放。"""
+
+        await self._assert_default_failed_node_replay(None)
+
     async def test_forked_child_reenters_failed_node(self) -> None:
         """Native fork 必须产生新 child，并把 next 精确保留为失败节点。"""
 
@@ -598,7 +664,6 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
                 workspace=str(self.harness.workspace),
                 source_run_id=self.harness.source_run_id,
                 graph=self.harness.graph,
-                replay_policies=_replay_policy(),
             )
             self.harness.heartbeat_tasks.append(context.heartbeat_task)
             self.assertNotEqual(context.new_run_id, self.harness.source_run_id)
@@ -633,7 +698,6 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
                 workspace=str(self.harness.workspace),
                 source_run_id=self.harness.source_run_id,
                 graph=self.harness.graph,
-                replay_policies=_replay_policy(),
             )
             self.harness.heartbeat_tasks.append(context.heartbeat_task)
 
@@ -689,7 +753,6 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
                             },
                         }
                     },
-                    replay_policies=_replay_policy(),
                 )
             ]
 
@@ -728,7 +791,6 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
                 workspace=str(self.harness.workspace),
                 source_run_id=self.harness.source_run_id,
                 graph=self.harness.graph,
-                replay_policies=_replay_policy(),
             )
             self.harness.heartbeat_tasks.append(first_context.heartbeat_task)
             try:
@@ -766,7 +828,6 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
                 workspace=str(self.harness.workspace),
                 source_run_id=second_source.run_id,
                 graph=self.harness.graph,
-                replay_policies=_replay_policy(),
             )
             self.harness.heartbeat_tasks.append(second_context.heartbeat_task)
             await self.harness.graph.ainvoke(None, config=second_context.fork_config)
@@ -806,7 +867,6 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             workspace=str(self.harness.workspace),
             source_run_id=source_run_id,
             graph=self.harness.graph,
-            replay_policies=_replay_policy(),
         )
         facts = await build_recovery_facts(
             workspace=str(self.harness.workspace),
@@ -892,7 +952,6 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             frame
             async for frame in build_execution_recovery_ag_ui_stream(
                 payload=payload,
-                replay_policies=_replay_policy(),
             )
         ]
 
@@ -927,7 +986,6 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
                 frame
                 async for frame in build_execution_recovery_ag_ui_stream(
                     payload=payload,
-                    replay_policies=_replay_policy(),
                 )
             ]
 
@@ -954,7 +1012,9 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             "app.config.Settings.from_env",
             side_effect=self.harness.settings,
         ):
-            source, action_plan, _assessment = await self.harness.resolve_action()
+            source, action_plan, _assessment = await self.harness.resolve_action(
+                replay_policies=_replay_policy()
+            )
             self.assertEqual(source.status, DurableExecutionStatus.INTERRUPTED)
             self.assertIsNotNone(action_plan.primary_action)
             assert action_plan.primary_action is not None
