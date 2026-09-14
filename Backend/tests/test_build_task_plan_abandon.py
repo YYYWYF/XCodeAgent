@@ -314,7 +314,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
 
 
     def test_abandon_commit_survives_pending_cleanup_failure(self) -> None:
-        """Pending 删除失败时，残留文件仍按 PendingPlan 权威投影，直到清理成功。"""
+        """Abandon 提交后，即使 Pending 清理失败，残留文件也不能继续 actionable。"""
         self.formal_path.unlink()
         self.pending_path.unlink()
         request = self._write_pending(base_digest=None)
@@ -337,9 +337,8 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         snapshot = resolve_planning_refresh_state(
             self.state["workspace"],
         )
-        self.assertEqual(snapshot["source"], "pending_plan")
-        self.assertEqual(snapshot["status"], "awaiting_confirmation")
-        self.assertEqual(snapshot["planningRunId"], request["planning_run_id"])
+        self.assertEqual(snapshot["source"], "none")
+        self.assertEqual(snapshot["status"], "idle")
 
         # 重试不会把已经提交的 Abandon 当成 no_pending；同时会 best-effort 清理 residue。
         retried = abandon_pending_build_task_plan(

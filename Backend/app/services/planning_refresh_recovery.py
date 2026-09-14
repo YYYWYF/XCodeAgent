@@ -7,6 +7,8 @@ from typing import Any, Literal, TypedDict
 
 from app.services.build_task_confirmation import build_task_confirmation_read_model
 from app.workspace.task_documents import (
+    build_task_plan_lifecycle_lock,
+    load_confirmed_build_task_plan,
     load_pending_build_task_plan,
     validate_pending_self_digest,
 )
@@ -32,7 +34,7 @@ class PlanningRefreshState(TypedDict, total=False):
 
 
 def _pending_plan(workspace: str) -> tuple[dict[str, Any] | None, Any | None]:
-    """只读取并校验唯一 PendingPlan，不从其他状态补全或推断。"""
+    """读取并校验唯一 PendingPlan 候选，不从其他状态补全其正文或身份。"""
 
     pending = load_pending_build_task_plan({"workspace": workspace})
     if pending is None:
@@ -71,28 +73,80 @@ def _pending_confirmation(pending: dict[str, Any], identity: Any) -> dict[str, A
     }
 
 
+def _identity_matches(value: Any, identity: Any, *, camel_case: bool = False) -> bool:
+    """按当前存储对象的字段格式严格比较 PlanningRun 与 draft digest。"""
+
+    planning_run_key = "planningRunId" if camel_case else "planning_run_id"
+    draft_digest_key = "draftDigest" if camel_case else "draft_digest"
+    return (
+        isinstance(value, dict)
+        and value.get(planning_run_key) == identity.planning_run_id
+        and value.get(draft_digest_key) == identity.draft_digest
+    )
+
+
+def _pending_is_terminal_residue(workspace: str, identity: Any) -> bool:
+    """判断当前 Pending 是否已被 Formal 确认或 authoritative Abandon 终结。"""
+
+    try:
+        formal = load_confirmed_build_task_plan(workspace)
+    except (OSError, TypeError, ValueError):
+        # Formal 无法安全读取时不能伪造终态；由当前 Pending 的精确身份继续决定投影。
+        formal = None
+    if isinstance(formal, dict) and _identity_matches(formal.get("confirmed_from"), identity):
+        return True
+
+    try:
+        from app.services.application_lifecycle import load_application_lifecycle
+
+        lifecycle = load_application_lifecycle(workspace)
+    except (OSError, TypeError, ValueError):
+        # 生命周期损坏时没有可验证的 Abandon 身份，不把未知状态误判为终态。
+        lifecycle = None
+    marker = lifecycle.extensions.get("planningResultLifecycle") if lifecycle else None
+    return (
+        isinstance(marker, dict)
+        and marker.get("schemaVersion") == "planning-result-lifecycle.v1"
+        and marker.get("status") == "abandoned"
+        and _identity_matches(marker, identity, camel_case=True)
+    )
+
+
+def resolve_actionable_pending_plan(
+    workspace: str,
+) -> tuple[dict[str, Any], Any] | None:
+    """返回唯一尚未终结的 PendingPlan；Confirmed/Abandoned residue 返回空。"""
+
+    with build_task_plan_lifecycle_lock:
+        pending, identity = _pending_plan(workspace)
+        if pending is None or _pending_is_terminal_residue(workspace, identity):
+            return None
+        return pending, identity
+
+
 def resolve_planning_refresh_state(
     workspace: str,
     *,
     lifecycle: Any | None = None,
     runtime_active: Callable[[str], bool] | None = None,
 ) -> PlanningRefreshState:
-    """只按 PendingPlan 是否存在返回 awaiting_confirmation 或 idle。
+    """只按当前 PendingPlan 是否仍可行动返回 awaiting_confirmation 或 idle。
 
     旧的 awaiting_user、activeRunId、resourceLocks 或其他运行时残留不参与判断；
-    只有 Confirm/Abandon 真正移除 PendingPlan 后，投影才会变为 idle。保留的两个
-    旧调用参数仅用于平滑切换读取调用方，函数不会读取它们。
+    Confirm/Abandon 的清理残留由其精确终态身份压制。保留的两个旧调用参数仅用于
+    平滑切换读取调用方，函数不会读取它们。
     """
 
     del lifecycle, runtime_active
-    pending, pending_identity = _pending_plan(workspace)
-    if pending is None:
+    actionable = resolve_actionable_pending_plan(workspace)
+    if actionable is None:
         return {
             "schemaVersion": "planning-refresh.v1",
             "source": "none",
             "status": "idle",
             "message": "当前没有可恢复的 PendingPlan。",
         }
+    pending, pending_identity = actionable
 
     return {
         "schemaVersion": "planning-refresh.v1",
