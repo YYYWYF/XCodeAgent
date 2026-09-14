@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
-    ExecutionFailureOrigin,
 )
 
 
@@ -22,23 +21,13 @@ class RecoverySourceAdmission:
 def assess_recovery_source(
     source: DurableExecutionRecord,
 ) -> RecoverySourceAdmission:
-    """只依据 durable status 与结构化 failure evidence 判断 source 资格。"""
+    """只依据 durable status 判断 source 是否进入现场安全校验。"""
 
     if source.status is DurableExecutionStatus.INTERRUPTED:
         return RecoverySourceAdmission(True, "SOURCE_INTERRUPTED_ADMISSIBLE")
-    if source.status is not DurableExecutionStatus.FAILED:
-        return RecoverySourceAdmission(False, "SOURCE_STATUS_NOT_RECOVERY_ADMISSIBLE")
-    failure = source.failure
-    if failure is None:
-        return RecoverySourceAdmission(False, "FAILURE_EVIDENCE_MISSING")
-    if failure.origin not in {
-        ExecutionFailureOrigin.MODEL_CALL,
-        ExecutionFailureOrigin.EXTERNAL_DEPENDENCY,
-    }:
-        return RecoverySourceAdmission(False, "FAILURE_ORIGIN_NOT_ADMISSIBLE")
-    if not failure.replay_compatible:
-        return RecoverySourceAdmission(False, "FAILURE_NOT_REPLAY_COMPATIBLE")
-    return RecoverySourceAdmission(True, "FAILED_REPLAY_COMPATIBLE")
+    if source.status is DurableExecutionStatus.FAILED:
+        return RecoverySourceAdmission(True, "SOURCE_FAILED_ADMISSIBLE")
+    return RecoverySourceAdmission(False, "SOURCE_STATUS_NOT_RECOVERY_ADMISSIBLE")
 
 
 __all__ = ["RecoverySourceAdmission", "assess_recovery_source"]

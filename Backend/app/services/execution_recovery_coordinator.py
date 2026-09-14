@@ -138,16 +138,15 @@ class RecoveryCoordinator:
                 continue
 
             assert validation.snapshot is not None
-            assessment = self._resolve_strategy(
-                RecoveryContext(
-                    source=source,
-                    point=point,
-                    snapshot=validation.snapshot,
-                    lifecycle_revision=validation.lifecycle_revision,
-                    workspace_revision=validation.workspace_revision,
-                    workspace_snapshot_hash=validation.workspace_snapshot_hash,
-                    lifecycle_ownership_mode=validation.lifecycle_ownership_mode,
-                )
+            assessment = _assess_validated_recovery(
+                source=source,
+                point=point,
+                snapshot=validation.snapshot,
+                lifecycle_revision=validation.lifecycle_revision,
+                workspace_revision=validation.workspace_revision,
+                workspace_snapshot_hash=validation.workspace_snapshot_hash,
+                lifecycle_ownership_mode=validation.lifecycle_ownership_mode,
+                strategy_resolver=self._resolve_strategy,
             )
             return _plan_from_assessment(
                 source=source,
@@ -171,6 +170,41 @@ class RecoveryCoordinator:
         if hasattr(resolver, "resolve"):
             return resolver.resolve(context)  # type: ignore[union-attr]
         return resolver(context)  # type: ignore[misc]
+
+
+def _assess_validated_recovery(
+    *,
+    source: DurableExecutionRecord,
+    point: RecoveryPoint,
+    snapshot: Any,
+    lifecycle_revision: int | None,
+    workspace_revision: str | None,
+    workspace_snapshot_hash: str | None,
+    lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode,
+    strategy_resolver: Callable[[RecoveryContext], RecoveryStrategyAssessment],
+) -> RecoveryStrategyAssessment:
+    """在现场全部验证后区分 FAILED replay 与原有 INTERRUPTED policy。"""
+
+    if source.status is DurableExecutionStatus.FAILED:
+        # FAILED 的恢复边界已经由 current_node 与 exact predecessor checkpoint 定义，
+        # 不再把异常类型、HTTP 状态或 replay 标志当作第二个准入策略。
+        return RecoveryStrategyAssessment(
+            decision=RecoveryDecision.READY_NATIVE,
+            strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+            reason_code="FAILED_NODE_REPLAY_READY",
+            reason="已找到失败步骤之前的已验证 checkpoint，可重新执行失败步骤。",
+        )
+    return strategy_resolver(
+        RecoveryContext(
+            source=source,
+            point=point,
+            snapshot=snapshot,
+            lifecycle_revision=lifecycle_revision,
+            workspace_revision=workspace_revision,
+            workspace_snapshot_hash=workspace_snapshot_hash,
+            lifecycle_ownership_mode=lifecycle_ownership_mode,
+        )
+    )
 
 
 async def prepare_continue(
