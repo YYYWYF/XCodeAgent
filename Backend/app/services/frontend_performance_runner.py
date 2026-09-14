@@ -147,7 +147,10 @@ def run_frontend_performance_check(
         },
     )
 
+    from app.services.preview_runtime_state import record_frontend_runtime
+
     launch = launch_frontend_project(root, skip_install=True)
+    record_frontend_runtime(root, launch)
     preview_url = str(launch.get("preview_url") or "").strip()
     server_reused = bool(launch.get("server", {}).get("reused"))
     server_started = launch.get("status") == "running" and preview_url
@@ -296,7 +299,7 @@ def run_frontend_performance_check(
         return {"test_results": [result], "test_events": [PERFORMANCE_CHECK_ID]}
     finally:
         if server_started and not server_reused:
-            stop_frontend_project(root)
+            record_frontend_runtime(root, stop_frontend_project(root))
 
 
 def _skipped_result(evidence: str) -> dict[str, Any]:

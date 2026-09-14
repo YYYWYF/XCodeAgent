@@ -19,6 +19,8 @@ from ag_ui.core import (
 )
 from ag_ui.encoder import EventEncoder
 
+from app.services.preview_runtime_guard import maintenance_lock, require_no_maintenance
+
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     end_workbench_execution,
@@ -59,15 +61,24 @@ class WorkflowRunRegistry:
         task: asyncio.Task[Any],
         *,
         workspace: str | None = None,
+        maintenance_thread_id: str = "",
     ) -> None:
         """按规范工作区登记运行，并拒绝删除栅栏之后启动的新任务。"""
 
         workspace_key = _workspace_key(workspace)
-        with self._lock:
+        with maintenance_lock, self._lock:
+            if workspace_key:
+                require_no_maintenance(workspace_key, maintenance_thread_id)
             if workspace_key and workspace_key in self._deleting_workspaces:
                 raise RuntimeError("当前应用正在删除，不能启动新的运行。")
             self._tasks[run_id] = (workspace_key, task)
             workspace_process_registry.allow_run(run_id)
+
+    def workspace_active_runs(self, workspace: str) -> list[str]:
+        """返回真实在运行的任务，供维护入口原子检查。"""
+        key = _workspace_key(workspace)
+        with self._lock:
+            return [run_id for run_id, (root, task) in self._tasks.items() if root == key and not task.done()]
 
     def unregister(self, run_id: str, task: asyncio.Task[Any] | None = None) -> None:
         """仅移除仍指向同一 asyncio task 的运行登记。"""

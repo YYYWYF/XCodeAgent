@@ -307,7 +307,10 @@ def complete_application_deletion(
         and prepared_application_id != request.application_id
     ):
         raise ValueError("应用标识与当前删除事务不匹配，已拒绝完成删除。")
-    end_application_template_deletion(workspace)
+    template_mutation_coordinator.cancel_deletion(workspace)
+    from app.services.preview_runtime_guard import clear_preview_runtime_workspace
+
+    clear_preview_runtime_workspace(workspace_text)
     workflow_run_registry.end_workspace_deletion(workspace_text)
     workspace_process_registry.end_workspace_deletion(workspace)
     get_ui_design_generation_pool().end_workspace_deletion(workspace_text)

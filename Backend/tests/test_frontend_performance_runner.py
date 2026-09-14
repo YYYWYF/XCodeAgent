@@ -83,7 +83,8 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
                     "server": {},
                 },
             ) as launch, patch(
-                "app.services.frontend_performance_runner.stop_frontend_project"
+                "app.services.frontend_performance_runner.stop_frontend_project",
+                return_value={"status": "stopped", "message": "已停止前端服务。"},
             ) as stop:
                 result = run_frontend_performance_check(state)
         check = result["test_results"][0]
@@ -142,7 +143,8 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
                 "app.services.frontend_performance_runner.workspace_process_registry.run",
                 side_effect=fake_run,
             ), patch(
-                "app.services.frontend_performance_runner.stop_frontend_project"
+                "app.services.frontend_performance_runner.stop_frontend_project",
+                return_value={"status": "stopped", "message": "已停止前端服务。"},
             ) as stop:
                 result = run_frontend_performance_check(state)
 
@@ -193,7 +195,8 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
                 "app.services.frontend_performance_runner.workspace_process_registry.run",
                 side_effect=fake_run,
             ), patch(
-                "app.services.frontend_performance_runner.stop_frontend_project"
+                "app.services.frontend_performance_runner.stop_frontend_project",
+                return_value={"status": "stopped", "message": "已停止前端服务。"},
             ) as stop:
                 result = run_frontend_performance_check(state)
 
@@ -234,7 +237,8 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
                 "app.services.frontend_performance_runner.workspace_process_registry.run",
                 return_value=SimpleNamespace(returncode=1, stdout="", stderr="failed"),
             ), patch(
-                "app.services.frontend_performance_runner.stop_frontend_project"
+                "app.services.frontend_performance_runner.stop_frontend_project",
+                return_value={"status": "stopped", "message": "已停止前端服务。"},
             ):
                 result = run_frontend_performance_check(state)
 

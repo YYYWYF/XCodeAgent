@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
+from app.services.preview_runtime_guard import maintenance_lock, require_no_maintenance
 
 from app.domain.application_lifecycle import (
     ApplicationIdentity,
@@ -349,7 +350,8 @@ def start_workbench_execution(
     """原子登记计划执行及全部资源锁，并保持初始化完成状态不变。"""
 
     path = application_lifecycle_path(workspace)
-    with _application_lifecycle_lock(path):
+    with maintenance_lock, _application_lifecycle_lock(path):
+        require_no_maintenance(workspace)
         from app.services.development_artifacts import (
             execution_development_metadata, reconcile_development_artifacts, require_test_entry,
         )

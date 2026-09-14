@@ -64,6 +64,8 @@ import {
   shouldSuppressConfirmedTechnicalPlanTransitionChunk
 } from '../Welcome/planningWorkflowState'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
+import PreviewRepairControls from '../BrowserPreviewPanel/PreviewRepairControls'
+import { usePreviewRuntime } from './hooks/usePreviewRuntime'
 import ChatComposer from './components/ChatComposer'
 import {
   PRODUCT_CONVERSATION_PLACEHOLDER,
@@ -1177,10 +1179,11 @@ export default function AiChatPanel({
     : Array.isArray(planningClarification?.pages) && planningClarification.pages.length > 0
       ? planningClarification.pages
       : ((currentPlanningWorkflow?.state?.ui_designs as { pages?: unknown[] } | undefined)?.pages ??
-        (currentPlanningWorkflow?.result?.ui_designs as
-          | { pages?: unknown[] | undefined }
-          | undefined)
-          ?.pages ??
+        (
+          currentPlanningWorkflow?.result?.ui_designs as
+            | { pages?: unknown[] | undefined }
+            | undefined
+        )?.pages ??
         localUiDesignPages)
   // UI 设计稿页面列表（右侧"UI设计稿"tab 预览用）。
   // workflow running 期间流式快照可能丢失 page.code，用 ref 缓存上一次有 code 的 pages，
@@ -1390,6 +1393,7 @@ export default function AiChatPanel({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
+    createDevelopmentConversation,
     createTestSession,
     createReviewSession,
     createAcceptanceSession,
@@ -1431,6 +1435,47 @@ export default function AiChatPanel({
     designPhasePlanning: isApplicationPlanningPhase
   })
 
+  const previewRuntime = usePreviewRuntime({
+    workspace: application.workspaceRoot || '',
+    activeSession,
+    localBlocked:
+      Object.values(sessionExecutions).some(
+        (entry) => entry.identity.workspaceRoot === application.workspaceRoot
+      ) ||
+      Object.values(applicationLifecycle?.activeExecutions || {}).some((entry) =>
+        ['running', 'stopping', 'awaiting_user'].includes(entry.status)
+      ),
+    createSession: async () => {
+      const identity = await createDevelopmentConversation(
+        '诊断并修复',
+        `preview-repair:${crypto.randomUUID()}`
+      )
+      switchPhase('development')
+      return identity
+    },
+    discardSession: discardPreparedSession,
+    persistSession,
+    setMessages: setSessionMessages,
+    getMessages: getSessionMessages,
+    openTask: (threadId, runId) => {
+      const execution = runId ? applicationLifecycle?.activeExecutions?.[runId] : undefined
+      const targetThread =
+        threadId ||
+        execution?.threadId ||
+        Object.values(sessionExecutions).find(
+          (entry) => entry.identity.workspaceRoot === application.workspaceRoot
+        )?.identity.threadId
+      const session = allSessions.find((item) => item.threadId === targetThread)
+      if (session) void handleOpenChatSession(session.id)
+    },
+    onReady: (url) => {
+      setRuntimePreviewBaseUrl(url)
+      setRuntimePreviewLaunchError('')
+      if (rightPanel?.type === 'preview')
+        setRightPanel({ ...rightPanel, requestKey: crypto.randomUUID() })
+    }
+  })
+
   // DOM 源码定位仅绑定当前会话，切换页面、接口或自由会话后要求用户重新选择。
   useEffect(() => {
     setInspectedElementContext(undefined)
@@ -1458,7 +1503,7 @@ export default function AiChatPanel({
       }))
     : [
         { key: 'outline', label: '开发产物', available: true },
-        { key: 'preview', label: '预览', available: Boolean(runtimePreviewBaseUrl) },
+        { key: 'preview', label: '预览', available: Boolean(application.workspaceRoot) },
         { key: 'source', label: '源码', available: Boolean(activePageOption) },
         { key: 'doc', label: '文档', available: true },
         { key: 'stage-output', label: '阶段产物', available: true }
@@ -1808,10 +1853,7 @@ export default function AiChatPanel({
         },
         createdAt: entryId
       }
-      const nextTargetMessages = appendRevisionDevelopmentEntryMessage(
-        targetMessages,
-        entryMessage
-      )
+      const nextTargetMessages = appendRevisionDevelopmentEntryMessage(targetMessages, entryMessage)
       setSessionMessages(targetIdentity.key, nextTargetMessages)
       try {
         await persistSession({
@@ -2860,9 +2902,7 @@ export default function AiChatPanel({
   const phaseExecutionStatus =
     phaseExecution?.status || (pendingPlanLockActive ? 'awaiting_user' : 'running')
   const workflowInputLocked =
-    workspaceBusy ||
-    pendingPlanLockActive ||
-    planningMutationBlocked(planningState)
+    workspaceBusy || pendingPlanLockActive || planningMutationBlocked(planningState)
   const displayedSessionRunStates =
     planningSessionRunActive && existingPlanningSession
       ? { ...sessionRunStates, [existingPlanningSession.id]: 'running' as const }
@@ -4462,6 +4502,18 @@ export default function AiChatPanel({
                     : undefined
                 }
               />
+            ) : previewRuntime.repairSession ? (
+              <PreviewRepairControls
+                repair={previewRuntime.repairState}
+                busy={previewRuntime.repairBusy}
+                onAction={previewRuntime.act}
+                onRevision={(message) => {
+                  void createDevelopmentConversation('预览修复：正式修订').then((identity) => {
+                    setDraftByKey(identity.key, message)
+                    switchPhase('development')
+                  })
+                }}
+              />
             ) : !entityDesignChatActive &&
               !acceptanceAwaiting &&
               shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive) ? (
@@ -4726,6 +4778,7 @@ export default function AiChatPanel({
             }}
           />
           <BrowserPreviewPanel
+            serviceControl={previewRuntime.control}
             application={application}
             pages={displayedPlanningPages}
             requestKey={rightPanel.requestKey}

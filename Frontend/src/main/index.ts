@@ -1,3 +1,4 @@
+import { stopProjectPreviewViaAgUi } from './projectPreviewControl'
 import { app, shell, BrowserWindow, ipcMain, dialog, Menu, Tray, nativeImage } from 'electron'
 import { join } from 'path'
 import crypto from 'node:crypto'
@@ -1061,20 +1062,7 @@ function setupProjectPreviewIpc(): void {
 
 /** 请求本地后端停止指定工作区的生成项目预览服务。 */
 async function stopGeneratedProjectPreview(workspaceRoot: string): Promise<void> {
-  const response = await fetch(`${getBackendBaseUrl().replace(/\/$/, '')}/api/projects/stop`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace: workspaceRoot })
-  })
-  if (!response.ok) {
-    throw new Error(`Stop project preview failed: ${response.status}`)
-  }
-  const result = (await response.json()) as { status?: unknown; message?: unknown }
-  if (result.status === 'failed') {
-    throw new Error(
-      typeof result.message === 'string' ? result.message : 'Project preview stop failed'
-    )
-  }
+  await stopProjectPreviewViaAgUi(getBackendBaseUrl(), workspaceRoot)
 }
 
 /** 显式退出 Electron 前停止本次打开过的所有生成项目预览。 */

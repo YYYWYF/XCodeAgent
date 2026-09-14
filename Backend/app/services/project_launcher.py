@@ -27,6 +27,42 @@ def launch_project_preview(
     on_progress: LaunchProgressCallback | None = None,
     force_restart: bool = False,
 ) -> dict[str, Any]:
+    """串行维护标准预览并同步所有入口的运行事实。"""
+    from app.services.backend_process_registry import backend_launch_lock
+    from app.services.preview_runtime_state import begin_attempt, finish_attempt, record_progress
+
+    root = Path(workspace_path).expanduser().resolve()
+    with backend_launch_lock(root):
+        # 在清空本轮日志前停止旧进程，避免旧输出污染新的诊断证据。
+        if force_restart:
+            frontend_stop = stop_frontend_project(root)
+            backend_stop = stop_workspace_backend_project(root)
+            if any(part.get("status") == "failed" for part in (frontend_stop, backend_stop)):
+                result = {"status": "failed", "message": "旧服务停止失败，未启动新的服务。", "failed_stage": "stop", "frontend": frontend_stop, "backend": backend_stop}
+                finish_attempt(root, result)
+                return result
+        begin_attempt(root)
+
+        def report(stage: str, status: str, message: str) -> None:
+            """同时向公共状态和调用者推送阶段变化。"""
+            record_progress(root, stage, status, message)
+            if on_progress:
+                on_progress(stage, status, message)
+
+        try:
+            result = _launch_project_preview(root, on_progress=report, force_restart=force_restart)
+        except Exception as exc:
+            result = {"status": "failed", "message": str(exc), "failed_stage": "launch"}
+        finish_attempt(root, result)
+        return result
+
+
+def _launch_project_preview(
+    workspace_path: str | Path,
+    *,
+    on_progress: LaunchProgressCallback | None = None,
+    force_restart: bool = False,
+) -> dict[str, Any]:
     """按工作区工程结构启动应用预览；强制模式会重启 standard preview。"""
 
     def report(stage: str, status: str, message: str) -> None:
@@ -141,7 +177,7 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
         )
         if result.get("status") == "failed"
     ]
-    return {
+    result = {
         "status": "failed" if failed_parts else "stopped",
         "message": (
             "部分预览服务停止失败：" + "、".join(failed_parts)
@@ -153,6 +189,10 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
         "ui_design_frontend": ui_design_frontend,
         "backend": backend,
     }
+    from app.services.preview_runtime_state import finish_attempt
+
+    finish_attempt(root, result)
+    return result
 
 
 def stop_standard_project_preview(workspace_path: str | Path) -> dict[str, Any]:
@@ -166,13 +206,17 @@ def stop_standard_project_preview(workspace_path: str | Path) -> dict[str, Any]:
         for name, result in (("frontend", frontend), ("backend", backend))
         if result.get("status") == "failed"
     ]
-    return {
+    result = {
         "status": "failed" if failed_parts else "stopped",
         "message": "部分标准预览服务停止失败：" + "、".join(failed_parts) if failed_parts else "标准项目预览已停止。",
         "workspace": str(root),
         "frontend": frontend,
         "backend": backend,
     }
+    from app.services.preview_runtime_state import finish_attempt
+
+    finish_attempt(root, result)
+    return result
 
 
 def inspect_project_preview(workspace_path: str | Path) -> dict[str, Any]:

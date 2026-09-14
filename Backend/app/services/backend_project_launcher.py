@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -28,6 +29,10 @@ BACKEND_BUILD_TIMEOUT_SECONDS = 600
 BACKEND_READY_TIMEOUT_SECONDS = 60
 BACKEND_READY_INTERVAL_SECONDS = 1
 BACKEND_READY_MARKERS = ("Spring Boot", "ZA21 Version")
+_BACKEND_PORT_PATTERN = re.compile(
+    r"(?:Tomcat|Jetty|Netty|Undertow)[^\n]*?port(?:\(s\)|s)?\s*:?\s*(\d+)",
+    re.IGNORECASE,
+)
 
 
 def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
@@ -255,8 +260,15 @@ def _launch_backend_project_locked(
     )
     returncode = process.poll() if process is not None else None
     process_running = process is not None and returncode is None
+    port = _detect_backend_port(
+        stdout_log=Path(str(server_result.get("stdout_log") or "")),
+        stdout_offset=int(server_result.get("stdout_offset") or 0),
+        stderr_log=Path(str(server_result.get("stderr_log") or "")),
+        stderr_offset=int(server_result.get("stderr_offset") or 0),
+    )
     server = {
         **server_result,
+        "port": port,
         "ready": ready,
         "returncode": returncode,
         "ready_checked_at": datetime.now(UTC).isoformat(),
@@ -553,6 +565,30 @@ def _backend_logs_are_ready(
     return _log_contains_backend_ready_marker(stdout_log, stdout_offset) or (
         _log_contains_backend_ready_marker(stderr_log, stderr_offset)
     )
+
+
+def _detect_backend_port(
+    *,
+    stdout_log: Path,
+    stdout_offset: int,
+    stderr_log: Path,
+    stderr_offset: int,
+) -> int | None:
+    """从本轮后端启动日志提取实际监听端口，避免依赖固定默认端口。"""
+
+    for path, offset in ((stdout_log, stdout_offset), (stderr_log, stderr_offset)):
+        try:
+            with path.open("rb") as stream:
+                stream.seek(max(0, offset))
+                content = stream.read().decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        match = _BACKEND_PORT_PATTERN.search(content)
+        if match:
+            port = int(match.group(1))
+            if 0 < port <= 65535:
+                return port
+    return None
 
 
 def _log_contains_backend_ready_marker(path: Path, offset: int) -> bool:

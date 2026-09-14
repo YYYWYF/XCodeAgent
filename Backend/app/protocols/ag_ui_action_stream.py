@@ -88,6 +88,17 @@ def build_ag_ui_action_stream(
             "operation、progress_operation 和 streaming_operation 必须且只能提供一个。"
         )
 
+    # 独立产品动作也登记工作区，确保预览维护不能与隐式写入并发。
+    if not workspace_root and event_name not in {"preview-runtime", "application-deletion"}:
+        forwarded = payload.get("forwardedProps") or {}
+        for candidate in [forwarded, *forwarded.values()]:
+            if isinstance(candidate, dict):
+                root = candidate.get("workspaceRoot") or candidate.get("workspace")
+                action = candidate.get("action")
+                if root and action not in {"get", "list", "read", "watch"}:
+                    workspace_root = str(root)
+                    break
+
     encoder = EventEncoder(accept or "text/event-stream")
     thread_id = str(payload.get("threadId") or uuid4())
     run_id = str(payload.get("runId") or f"{run_id_prefix}-{uuid4().hex[:12]}")
@@ -183,6 +194,9 @@ def build_ag_ui_action_stream(
                 result = await operation_task
             else:
                 result = await operation()  # type: ignore[misc]
+            if workspace_root:
+                from app.services.preview_runtime_guard import record_product_interaction
+                record_product_interaction(workspace_root, thread_id, result.data)
             response_payload: dict[str, Any] = {
                 "schemaVersion": 1,
                 "runId": run_id,

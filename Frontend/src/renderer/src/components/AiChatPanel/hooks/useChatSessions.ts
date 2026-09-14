@@ -105,6 +105,7 @@ type UseChatSessionsResult = {
   deletingSessionId?: string
   draft: string
   draftKey: string
+  createDevelopmentConversation: (title: string, entryKey?: string) => Promise<SessionIdentity>
   createTestSession: (target: TestPhaseSessionTarget) => Promise<SessionIdentity>
   createReviewSession: (target: ReviewPhaseSessionTarget) => Promise<SessionIdentity>
   createAcceptanceSession: (target: AcceptancePhaseSessionTarget) => Promise<SessionIdentity>
@@ -628,6 +629,24 @@ export function useChatSessions({
     loadChatSessionIdentity(editorMode, sessionId)
 
   /** 为测试阶段创建独立的空白会话和 AG-UI thread，只保留测试阶段归属。 */
+  /** 创建独立开发对话并保留预览面板，供服务修复及正式修订入口使用。 */
+  const createDevelopmentConversation = async (
+    title: string,
+    entryKey?: string
+  ): Promise<SessionIdentity> => {
+    const identity = await createNewSession({
+      title,
+      entryKey,
+      workbenchPhase: 'development',
+      activate: false
+    })
+    setActiveSessionIds((current) =>
+      withSelectedSessionForPhase(current, editorMode, 'development', identity.sessionId)
+    )
+    setPersistedActiveSessionId(application.id, editorMode, 'development', identity.sessionId)
+    return identity
+  }
+
   const createTestSession = async (target: TestPhaseSessionTarget): Promise<SessionIdentity> => {
     const targetLabel = target.targetLabel.trim() || '当前应用'
     try {
@@ -815,6 +834,7 @@ export function useChatSessions({
     activeSession,
     activeSessionId,
     agUiSessionsRef,
+    createDevelopmentConversation,
     createTestSession,
     createReviewSession,
     createAcceptanceSession,
