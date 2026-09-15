@@ -11,7 +11,10 @@ from app.services.application_lifecycle import (
     begin_application_template_generation,
     complete_workspace_bootstrap,
 )
-from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
+from app.services.workspace_bootstrap.coordinator import (
+    clear_failed_bootstrap_outputs,
+    template_mutation_coordinator,
+)
 from app.services.workspace_bootstrap.git_template_package import (
     GitTemplatePackageBuilder,
 )
@@ -72,6 +75,8 @@ class WorkspaceBootstrapService:
         template_mutation_coordinator.begin_preparation(workspace)
         coordinator_started = True
         try:
+            # GENERATING 只表示尚未 READY；重试前必须清掉上一轮失败留下的 .git / State。
+            await asyncio.to_thread(clear_failed_bootstrap_outputs, workspace)
             requested_config = await asyncio.to_thread(compile_template_requested_config, workspace)
             managed_roots = await asyncio.to_thread(
                 bootstrap_managed_roots, workspace
@@ -93,6 +98,13 @@ class WorkspaceBootstrapService:
                     max_package_bytes=self._settings.template_package_max_bytes,
                 )
                 download = await client.generate(requested_config)
+                # Engine V1 ZIP 只有 frontend/backend；有业务 Agent 时从 Git 补齐第三根。
+                download = await asyncio.to_thread(
+                    GitTemplatePackageBuilder(self._settings).supplement_engine_package,
+                    workspace,
+                    download,
+                    managed_roots,
+                )
             download_path = download.temporary_path
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             package = await asyncio.to_thread(

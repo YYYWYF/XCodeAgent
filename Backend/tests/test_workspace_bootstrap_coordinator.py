@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat
 import tempfile
 import threading
 import unittest
@@ -16,7 +17,10 @@ from app.services.application_lifecycle import (
     transition_application_lifecycle,
     write_application_lifecycle,
 )
-from app.services.workspace_bootstrap.coordinator import TemplateMutationCoordinator
+from app.services.workspace_bootstrap.coordinator import (
+    TemplateMutationCoordinator,
+    clear_failed_bootstrap_outputs,
+)
 from app.services.workspace_bootstrap.materializer import BOOTSTRAP_STAGING_RELATIVE_PATH
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
 
@@ -110,6 +114,27 @@ class TemplateMutationCoordinatorTests(unittest.TestCase):
             for relative in ("frontend", "backend", ".git", TEMPLATE_STATE_RELATIVE_PATH, BOOTSTRAP_STAGING_RELATIVE_PATH):
                 self.assertFalse((workspace / relative).exists(), relative)
 
+    def test_clear_failed_outputs_removes_readonly_git_and_template_state(self) -> None:
+        """失败残留的只读 .git 与 TemplateState 必须能在重试前被清掉。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            pack = workspace / ".git" / "objects" / "pack"
+            pack.mkdir(parents=True)
+            idx = pack / "pack.idx"
+            idx.write_bytes(b"idx")
+            idx.chmod(stat.S_IREAD)
+            state_path = workspace / TEMPLATE_STATE_RELATIVE_PATH
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text("{}", encoding="utf-8")
+            (workspace / ".xcodeagent/application-lifecycle.json").write_text("{}", encoding="utf-8")
+
+            clear_failed_bootstrap_outputs(workspace)
+
+            self.assertFalse((workspace / ".git").exists())
+            self.assertFalse(state_path.exists())
+            self.assertTrue((workspace / ".xcodeagent/application-lifecycle.json").is_file())
+
     def test_attach_returns_active_without_touching_backend_owned_bootstrap(self) -> None:
         """当前 Backend 持有 Bootstrap 时 Attach 只能返回 active，不能修改生命周期或文件。"""
 
@@ -163,7 +188,7 @@ class TemplateMutationCoordinatorTests(unittest.TestCase):
             workspace = Path(directory)
             _generating_workspace(workspace)
             (workspace / "frontend").mkdir()
-            with patch("app.services.workspace_bootstrap.coordinator.shutil.rmtree", side_effect=OSError("busy")):
+            with patch("app.services.workspace_bootstrap.coordinator.remove_managed_path", side_effect=OSError("busy")):
                 result = TemplateMutationCoordinator().attach_workspace(workspace)
 
             lifecycle = load_application_lifecycle(workspace)

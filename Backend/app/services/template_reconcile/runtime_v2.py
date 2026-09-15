@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import tempfile
@@ -10,7 +9,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Literal
+from typing import IO, Iterator, Literal
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 from app.utils.atomic_json import atomic_write_json
 
@@ -61,6 +65,33 @@ def reconcile_v2_root(workspace: str | Path) -> Path:
     return Path(workspace).expanduser().resolve() / ".xcodeagent/runtime/template-reconcile"
 
 
+def _acquire_exclusive_nonblocking_lock(handle: IO[bytes]) -> None:
+    """获取非阻塞排他文件锁；已被占用时抛出 BlockingIOError。"""
+
+    if os.name == "nt":
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            raise BlockingIOError("lock is already held") from exc
+        return
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _release_exclusive_lock(handle: IO[bytes]) -> None:
+    """释放当前句柄持有的排他文件锁。"""
+
+    if os.name == "nt":
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 @contextmanager
 def reconcile_run_gate(workspace: str | Path) -> Iterator[None]:
     """以非阻塞文件锁保证同一 Workspace 同时只有一个 V2 Writer。"""
@@ -68,15 +99,16 @@ def reconcile_run_gate(workspace: str | Path) -> Iterator[None]:
     root = reconcile_v2_root(workspace)
     root.mkdir(parents=True, exist_ok=True)
     lock_path = root / ".gate.lock"
-    with lock_path.open("a+") as handle:
+    lock_path.touch(exist_ok=True)
+    with lock_path.open("r+b") as handle:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _acquire_exclusive_nonblocking_lock(handle)
         except BlockingIOError as exc:
             raise ReconcileV2RuntimeError("TEMPLATE_RECONCILE_BUSY：Workspace 正在执行模板更新。") from exc
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _release_exclusive_lock(handle)
 
 
 def persist_prepared_attempt(workspace: str | Path, attempt: ReconcileAttemptV2, package_zip: Path) -> None:

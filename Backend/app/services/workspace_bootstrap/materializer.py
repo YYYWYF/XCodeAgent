@@ -14,6 +14,7 @@ from app.services.template_reconcile.protocol_v2 import TemplateStateV2
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
 from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
+from app.services.workspace_bootstrap.fs import remove_managed_path
 from app.services.workspace_bootstrap.models import TemplatePackageError, WorkspaceBootstrapError
 
 BOOTSTRAP_STAGING_RELATIVE_PATH = Path(".xcodeagent/bootstrap-staging")
@@ -157,10 +158,7 @@ def _write_template_state(path: Path, template_state: TemplateStateV2) -> None:
 def _remove_managed_path(path: Path) -> None:
     """删除已解析到受管路径的单个文件、目录或符号链接。"""
 
-    if path.is_symlink() or path.is_file():
-        path.unlink(missing_ok=True)
-    elif path.is_dir():
-        shutil.rmtree(path)
+    remove_managed_path(path)
 
 
 def _remove_empty_staging_parent(workspace: Path) -> None:

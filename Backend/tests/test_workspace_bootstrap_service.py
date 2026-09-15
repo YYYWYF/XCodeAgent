@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import stat
 import tempfile
 import unittest
 import zipfile
@@ -43,7 +44,7 @@ def _prepare_generating_workspace(workspace: Path) -> None:
     specs.mkdir(parents=True)
     plans.mkdir(parents=True)
     for path, payload in (
-        (workspace / ".xcodeagent/application.json", {"auth": {"enable": False}, "authorization": {"enabled": False}}),
+        (workspace / ".xcodeagent/application.json", {"schemaVersion": 6, "configRevision": 1, "datasource": {"type": "database"}, "auth": {"enable": False}, "authorization": {"enabled": False, "initialAdministratorSubjects": []}}),
         (specs / "requirement-spec.json", {"confirmation_status": "confirmed"}),
         (plans / "product-plan.json", {"confirmation_status": "confirmed"}),
         (specs / "ui-designs.json", {"confirmation_status": "confirmed"}),
@@ -52,6 +53,7 @@ def _prepare_generating_workspace(workspace: Path) -> None:
             {
                 "confirmation_status": "confirmed",
                 "artifact_type": "technical-plan",
+                "sourceConfigRevision": 1,
                 "authorization_manifest": {"enabled": False},
                 "template_capabilities": {},
                 "agent_contracts": [],
@@ -151,9 +153,10 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
         """确认显式 Git 模式复用完整事务且不调用 Template Engine。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
+            workspace = Path(directory) / "app"
+            workspace.mkdir()
             _prepare_generating_workspace(workspace)
-            package = workspace / "git-template.zip"
+            package = Path(directory) / "git-template.zip"
             _write_package(package, include_application=True)
             download = TemplatePackageDownload(
                 temporary_path=package,
@@ -179,3 +182,88 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
             )
             git_generate.assert_called_once()
             engine_generate.assert_not_awaited()
+
+    def test_retry_clears_leftover_git_and_template_state(self) -> None:
+        """上一轮失败留下的 .git 与 TemplateState 不得阻断重试物化。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "app"
+            workspace.mkdir()
+            _prepare_generating_workspace(workspace)
+            pack = workspace / ".git/objects/pack"
+            pack.mkdir(parents=True)
+            idx = pack / "pack.idx"
+            idx.write_bytes(b"idx")
+            idx.chmod(stat.S_IREAD)
+            state_path = workspace / ".xcodeagent/template-state.json"
+            state_path.write_text("{}", encoding="utf-8")
+            package = Path(directory) / "git-template.zip"
+            _write_package(package, include_application=True)
+            download = TemplatePackageDownload(
+                temporary_path=package,
+                sha256="ignored",
+                size=package.stat().st_size,
+                content_type="application/zip",
+            )
+            settings = _settings()
+            settings.template_bootstrap_source = "git"
+            service = WorkspaceBootstrapService(settings)
+            with patch(
+                "app.services.workspace_bootstrap.service.GitTemplatePackageBuilder.generate",
+                return_value=download,
+            ):
+                result = asyncio.run(service._run(workspace))
+
+            self.assertEqual(
+                result["lifecycle"]["initialization"]["stage"],
+                "ready_for_workbench",
+            )
+            self.assertTrue((workspace / "frontend/package.json").is_file())
+            self.assertTrue((workspace / ".xcodeagent/template-state.json").is_file())
+            self.assertNotEqual(
+                (workspace / ".xcodeagent/template-state.json").read_text(encoding="utf-8").strip(),
+                "{}",
+            )
+
+    def test_engine_source_supplements_agent_runtime_for_agent_contracts(self) -> None:
+        """有业务 Agent 时 Engine 下载后必须补齐第三根，再进入统一校验。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            _prepare_generating_workspace(workspace)
+            plan_file = workspace / ".xcodeagent/plans/technical-plan.json"
+            plan = json.loads(plan_file.read_text(encoding="utf-8"))
+            plan["agent_contracts"] = [{"agentId": "policy_assistant"}]
+            plan_file.write_text(json.dumps(plan), encoding="utf-8")
+            package = workspace / "engine.zip"
+            _write_package(package, include_application=True)
+            download = TemplatePackageDownload(
+                temporary_path=package,
+                sha256="ignored",
+                size=package.stat().st_size,
+                content_type="application/zip",
+            )
+            settings = _settings()
+            settings.template_git_agent_runtime_repository_url = (
+                "https://github.com/Bettetman/agent-runtime-template.git"
+            )
+            settings.template_git_agent_runtime_branch = "master"
+            settings.template_git_clone_timeout_seconds = 30
+            service = WorkspaceBootstrapService(settings)
+            with patch(
+                "app.services.workspace_bootstrap.service.TemplateEngineClient.generate",
+                new=AsyncMock(return_value=download),
+            ), patch(
+                "app.services.workspace_bootstrap.service.GitTemplatePackageBuilder.supplement_engine_package",
+                return_value=download,
+            ) as supplement:
+                with self.assertRaisesRegex(
+                    WorkspaceBootstrapError, "必须包含本轮全部 managed roots"
+                ):
+                    asyncio.run(service._run(workspace))
+
+            supplement.assert_called_once()
+            self.assertEqual(
+                supplement.call_args.args[-1],
+                ("frontend", "backend", "agent-runtime"),
+            )

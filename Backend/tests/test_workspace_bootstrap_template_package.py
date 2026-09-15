@@ -45,6 +45,26 @@ class TemplatePackageTests(unittest.TestCase):
             )
             self.assertEqual(result.template_state.templateRevision, "R1")
 
+    def test_rejects_declared_agent_runtime_when_zip_omits_its_files(self) -> None:
+        """确认声明了第三根但 ZIP 只有前后端时，必须在校验阶段失败。"""
+
+        package = self._archive(
+            {
+                "frontend/package.json": "{}",
+                "backend/pom.xml": "<project/>",
+                ".xcodeagent/template-state.json": json.dumps(self._state()),
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "template.zip"
+            path.write_bytes(package)
+            with self.assertRaisesRegex(TemplatePackageError, "必须包含本轮全部 managed roots"):
+                validate_template_package(
+                    path,
+                    self._limits(),
+                    ("frontend", "backend", "agent-runtime"),
+                )
+
     def test_rejects_unmanaged_and_internal_paths(self) -> None:
         """确认额外 root、额外 .xcodeagent 与路径穿越均被拒绝。"""
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -18,6 +17,7 @@ from app.domain.application_lifecycle import (
 )
 from app.services.application_lifecycle import load_application_lifecycle, persist_application_lifecycle_transition
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
+from app.services.workspace_bootstrap.fs import remove_managed_path
 from app.services.workspace_bootstrap.materializer import BOOTSTRAP_STAGING_RELATIVE_PATH
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapError
 
@@ -166,10 +166,7 @@ def _cleanup_interrupted_bootstrap(workspace: Path) -> None:
         BOOTSTRAP_STAGING_RELATIVE_PATH,
     ):
         path = workspace / relative
-        if path.is_symlink() or path.is_file():
-            path.unlink(missing_ok=True)
-        elif path.is_dir():
-            shutil.rmtree(path)
+        remove_managed_path(path)
     remaining = [
         str(relative)
         for relative in (
@@ -183,7 +180,13 @@ def _cleanup_interrupted_bootstrap(workspace: Path) -> None:
         if (workspace / relative).exists() or (workspace / relative).is_symlink()
     ]
     if remaining:
-        raise WorkspaceBootstrapError("Workspace Attach 未能清理受管产物：" + "、".join(remaining))
+        raise WorkspaceBootstrapError("未能清理 Bootstrap 受管产物：" + "、".join(remaining))
+
+
+def clear_failed_bootstrap_outputs(workspace: str | Path) -> None:
+    """重试首次 Bootstrap 前清除上一轮失败残留的受管产物，保留规划与 lifecycle。"""
+
+    _cleanup_interrupted_bootstrap(Path(workspace).expanduser().resolve(strict=False))
 
 
 def _workspace_key(workspace: str | Path) -> str:

@@ -7,22 +7,27 @@ import json
 import logging
 import os
 import re
-import shutil
 import tempfile
 import time
 import zipfile
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, Iterator
 
 from app.config import Settings
 from app.services.template_reconcile.protocol_v2 import TemplateStateV2
+from app.services.workspace_bootstrap.fs import remove_managed_path
 from app.services.workspace_bootstrap.models import (
     GitTemplateError,
     TemplatePackageDownload,
+    TemplatePackageError,
 )
 from app.services.workspace_process_registry import workspace_process_registry
 
 logger = logging.getLogger(__name__)
+
+_STATE_PATH = ".xcodeagent/template-state.json"
+_ENGINE_MANAGED_ROOTS = frozenset({"frontend", "backend"})
+_GIT_SUPPLEMENT_ROOTS = frozenset({"agent-runtime"})
 
 
 class GitTemplatePackageBuilder:
@@ -50,7 +55,10 @@ class GitTemplatePackageBuilder:
         Path(archive_name).unlink(missing_ok=True)
         try:
             # clone 目录仅用于本轮 Preparation；任何失败都不会触碰真实 Workspace。
-            with tempfile.TemporaryDirectory(prefix="xcodeagent-git-template-sources-") as directory:
+            with tempfile.TemporaryDirectory(
+                prefix="xcodeagent-git-template-sources-",
+                ignore_cleanup_errors=True,
+            ) as directory:
                 source_root = Path(directory)
                 revisions: dict[str, dict[str, str]] = {}
                 for target, repository_url, branch in repositories:
@@ -79,6 +87,90 @@ class GitTemplatePackageBuilder:
         except Exception:
             Path(archive_name).unlink(missing_ok=True)
             raise
+
+    def supplement_engine_package(
+        self,
+        workspace: str | Path,
+        download: TemplatePackageDownload,
+        managed_roots: tuple[str, ...],
+    ) -> TemplatePackageDownload:
+        """把 Engine V1 ZIP 缺失的 Git 专有 root 补进同一 Package，并保留 Engine TemplateState。"""
+
+        archive = Path(download.temporary_path)
+        try:
+            seen_roots = _package_file_roots(archive)
+        except zipfile.BadZipFile as exc:
+            raise TemplatePackageError("模板 ZIP 已损坏或格式无效。") from exc
+        missing_roots = frozenset(managed_roots) - seen_roots
+        # frontend/backend 仍以 Engine 为准；缺它们时交给后续 exact-root 校验，避免误用 Git 覆盖。
+        if missing_roots & _ENGINE_MANAGED_ROOTS or not (
+            missing_roots & _GIT_SUPPLEMENT_ROOTS
+        ):
+            return download
+        repositories = self._git_supplement_targets(missing_roots)
+        logger.info(
+            "Engine 模板缺少 %s，开始从 Git 补齐。",
+            "、".join(target for target, _url, _branch in repositories),
+        )
+        descriptor, archive_name = tempfile.mkstemp(
+            prefix="xcodeagent-engine-template-supplement-", suffix=".zip"
+        )
+        os.close(descriptor)
+        Path(archive_name).unlink(missing_ok=True)
+        merged = Path(archive_name)
+        root = Path(workspace).expanduser().resolve()
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="xcodeagent-git-template-supplement-",
+                ignore_cleanup_errors=True,
+            ) as directory:
+                source_root = Path(directory)
+                extra_roots: dict[str, Path] = {}
+                for target, repository_url, branch in repositories:
+                    self._clone_repository(
+                        root,
+                        source_root,
+                        target=target,
+                        repository_url=repository_url,
+                        branch=branch,
+                    )
+                    extra_roots[target] = source_root / target
+                _merge_archive(archive, extra_roots, merged)
+            digest = _file_sha256(merged)
+            supplemented = TemplatePackageDownload(
+                temporary_path=merged,
+                sha256=digest,
+                size=merged.stat().st_size,
+                content_type="application/zip",
+            )
+            archive.unlink(missing_ok=True)
+            return supplemented
+        except Exception:
+            merged.unlink(missing_ok=True)
+            raise
+
+    def _git_supplement_targets(
+        self, missing_roots: frozenset[str]
+    ) -> tuple[tuple[str, str, str], ...]:
+        """只返回 Engine ZIP 无法提供、必须从公开 Git 补齐的 root。"""
+
+        unexpected = missing_roots - _ENGINE_MANAGED_ROOTS - _GIT_SUPPLEMENT_ROOTS
+        if unexpected:
+            raise GitTemplateError(
+                "Engine 模板 ZIP 缺少无法从 Git 补齐的 managed roots："
+                + "、".join(sorted(unexpected))
+            )
+        repository_url = self._settings.template_git_agent_runtime_repository_url
+        branch = self._settings.template_git_agent_runtime_branch
+        if not repository_url or not branch:
+            raise GitTemplateError("agent-runtime Git 模板地址或分支未配置。")
+        return (
+            (
+                "agent-runtime",
+                repository_url,
+                branch,
+            ),
+        )
 
     def _repositories(
         self,
@@ -204,7 +296,12 @@ class GitTemplatePackageBuilder:
         revision = str(revision_result.stdout or "").strip()
         if revision_result.returncode != 0 or not revision:
             raise GitTemplateError(f"{target} Git 模板提交无法确认。")
-        shutil.rmtree(target_root / ".git")
+        git_dir = target_root / ".git"
+        try:
+            remove_managed_path(git_dir)
+        except OSError:
+            # Windows 可能短暂锁住只读 pack；元数据仍会在打包时被跳过。
+            logger.warning("临时 Git 元数据无法立即删除，打包时将跳过 .git：target=%s", target)
         _reject_symbolic_links(target_root)
         if target == "agent-runtime" and (target_root / ".env").exists():
             raise GitTemplateError("agent-runtime Git 模板不能包含真实 .env 文件。")
@@ -267,13 +364,62 @@ def _template_state(
     )
 
 
+def _iter_template_files(root: Path) -> Iterator[Path]:
+    """遍历可打进 ZIP 的普通文件，跳过嵌套 Git 元数据。"""
+
+    for path in sorted(root.rglob("*")):
+        if ".git" in path.parts or not path.is_file() or path.is_symlink():
+            continue
+        yield path
+
+
+def _package_file_roots(archive_path: Path) -> set[str]:
+    """统计 Engine ZIP 中除 TemplateState 外已出现的顶层文件 root。"""
+
+    roots: set[str] = set()
+    with zipfile.ZipFile(archive_path) as package:
+        for entry in package.infolist():
+            if entry.is_dir() or entry.filename == _STATE_PATH:
+                continue
+            path = PurePosixPath(entry.filename)
+            if path.parts:
+                roots.add(path.parts[0])
+    return roots
+
+
+def _merge_archive(
+    source_archive: Path,
+    extra_roots: dict[str, Path],
+    dest_archive: Path,
+) -> None:
+    """复制 Engine ZIP 全部条目，再写入 Git 补齐的普通文件。"""
+
+    with zipfile.ZipFile(source_archive) as source, zipfile.ZipFile(
+        dest_archive, "w", compression=zipfile.ZIP_DEFLATED
+    ) as dest:
+        existing = {name for name in source.namelist() if not name.endswith("/")}
+        for info in source.infolist():
+            if info.is_dir():
+                dest.writestr(info.filename, b"")
+                continue
+            dest.writestr(info.filename, source.read(info.filename))
+        for root_name, root in extra_roots.items():
+            if not root.is_dir() or root.is_symlink():
+                raise GitTemplateError(f"Git 模板缺少有效 {root_name} 根目录。")
+            for path in _iter_template_files(root):
+                arcname = (Path(root_name) / path.relative_to(root)).as_posix()
+                if arcname in existing or arcname == _STATE_PATH:
+                    raise GitTemplateError(f"Git 模板与 Engine ZIP 路径冲突：{arcname}")
+                dest.write(path, arcname)
+
+
 def _reject_symbolic_links(root: Path) -> None:
     """拒绝把模板仓库中的符号链接带入受管工作区。"""
 
     symbolic = [
         path.relative_to(root).as_posix()
         for path in root.rglob("*")
-        if path.is_symlink()
+        if ".git" not in path.parts and path.is_symlink()
     ]
     if symbolic:
         raise GitTemplateError(
@@ -296,12 +442,11 @@ def _write_archive(
             root = source_root / root_name
             if not root.is_dir() or root.is_symlink():
                 raise GitTemplateError(f"Git 模板缺少有效 {root_name} 根目录。")
-            for path in sorted(root.rglob("*")):
-                if path.is_file() and not path.is_symlink():
-                    package.write(
-                        path,
-                        (Path(root_name) / path.relative_to(root)).as_posix(),
-                    )
+            for path in _iter_template_files(root):
+                package.write(
+                    path,
+                    (Path(root_name) / path.relative_to(root)).as_posix(),
+                )
         package.writestr(
             ".xcodeagent/template-state.json",
             json.dumps(

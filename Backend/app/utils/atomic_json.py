@@ -21,6 +21,9 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_name, path)
+        # Windows 不能用 O_RDONLY 打开目录做 fsync；replace 已经完成同目录原子提交。
+        if os.name == "nt":
+            return
         directory = os.open(path.parent, os.O_RDONLY)
         try:
             os.fsync(directory)
