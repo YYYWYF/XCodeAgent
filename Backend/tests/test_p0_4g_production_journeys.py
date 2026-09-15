@@ -1068,7 +1068,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as raw_workspace:
             workspace = Path(raw_workspace)
-            old_graph = await _seed_planning_checkpoint(
+            old_graph, _, _ = await _seed_planning_checkpoint(
                 workspace,
                 thread_id=thread_id,
                 run_id=source_run_id,
