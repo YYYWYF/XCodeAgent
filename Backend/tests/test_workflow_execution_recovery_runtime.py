@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -46,9 +45,6 @@ from app.services.execution_recovery_action_planner import (
     plan_recovery_action,
 )
 from app.services.execution_recovery_coordinator import prepare_continue
-from app.services.execution_recovery_executor import prepare_native_recovery
-from app.services.execution_recovery_policies import AllowNodePolicy
-from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 
 
 def _linear_runtime_graph(
@@ -172,22 +168,6 @@ async def _collect_runtime_frames(graph: Any, payload: dict[str, Any]) -> list[s
         async for frame in build_workflow_ag_ui_stream(
             graph=graph,
             payload=payload,
-        )
-    ]
-
-
-async def _collect_native_runtime_frames(
-    graph: Any,
-    context: Any,
-) -> list[str]:
-    """消费 Backend 重启后从 durable checkpoint fork 的 child Runtime 流。"""
-
-    return [
-        frame
-        async for frame in build_workflow_ag_ui_stream(
-            graph=graph,
-            payload={},
-            native_recovery_context=context,
         )
     ]
 
@@ -575,126 +555,6 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
             point.completed_node == "product_planning"
             for point in points
         ))
-
-    async def test_backend_owner_loss_reconnects_from_exact_checkpoint_successor(self) -> None:
-        """Backend owner 丢失后重连必须从 checkpoint.next 的唯一 Node 继续。"""
-
-        product_started = asyncio.Event()
-        release_product = asyncio.Event()
-        graph, _ = _linear_runtime_graph(
-            started_events={"product_planning": product_started},
-            release_events={"product_planning": release_product},
-        )
-        thread_id = "runtime-owner-loss-thread"
-        run_id = "runtime-owner-loss-run"
-        with tempfile.TemporaryDirectory() as raw_workspace:
-            workspace = Path(raw_workspace)
-
-            async def collect() -> list[str]:
-                """消费旧 Backend 的运行流，等待测试模拟 owner 消失。"""
-
-                return await _collect_runtime_frames(
-                    graph,
-                    _runtime_payload(
-                        workspace,
-                        thread_id=thread_id,
-                        run_id=run_id,
-                        workflow_scope=None,
-                    ),
-                )
-
-            runtime_task = asyncio.create_task(collect())
-            await asyncio.wait_for(product_started.wait(), timeout=5)
-            scan = await reconcile_workspace_recovery(
-                workspace,
-                locally_active_run_ids=set(),
-                current_backend_instance_id="backend-after-restart",
-                now=datetime.now(timezone.utc) + timedelta(seconds=1),
-            )
-            self.assertEqual(scan.interrupted_run_ids, [run_id])
-            interrupted = await get_execution(workspace, run_id)
-            self.assertIsNotNone(interrupted)
-            assert interrupted is not None
-            self.assertEqual(interrupted.status, DurableExecutionStatus.INTERRUPTED)
-
-            # 旧 Backend 被杀后不会再执行其 Node；取消本地 producer 只用于释放测试任务。
-            runtime_task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await runtime_task
-
-            points = await list_recovery_points(workspace, run_id)
-            entry = next(
-                point
-                for point in reversed(points)
-                if point.next_nodes == ["product_planning"]
-            )
-            self.assertEqual(entry.thread_id, thread_id)
-            self.assertIsNotNone(entry.checkpoint_id)
-
-            release_product.set()
-            context = await prepare_native_recovery(
-                workspace=str(workspace),
-                source_run_id=run_id,
-                graph=graph,
-                replay_policies=(AllowNodePolicy({"product_planning"}),),
-            )
-            frames = await _collect_native_runtime_frames(graph, context)
-            child = await get_execution(workspace, context.new_run_id)
-
-        self.assertIsNotNone(child)
-        assert child is not None
-        self.assertEqual(child.first_node, "product_planning")
-        self.assertEqual(child.status, DurableExecutionStatus.COMPLETED)
-        self.assertIn('"type":"RUN_FINISHED"', "".join(frames))
-        self.assertNotIn('"type":"RUN_ERROR"', "".join(frames))
-
-    async def test_business_failure_stays_inside_node_repair_boundary(self) -> None:
-        """Node 内部业务失败和 repair 不应逃逸成 Generic Durable Exception。"""
-
-        repair_trace: list[str] = []
-
-        async def business_validation(_state: ProjectState) -> dict[str, Any]:
-            """模拟一次业务校验失败、Node 内修复和再次校验的闭环。"""
-
-            repair_trace.extend(("validate", "repair", "validate"))
-            return {
-                "phase": "business_validation",
-                "status": "requires_user_input",
-                "clarification": {
-                    "mode": "business_repair",
-                    "status": "requires_user_input",
-                    "message": "业务校验需要用户确认。",
-                },
-            }
-
-        builder = StateGraph(ProjectState)
-        builder.add_node("business_validation", business_validation)
-        builder.add_edge(START, "business_validation")
-        builder.add_edge("business_validation", END)
-        graph = builder.compile(checkpointer=InMemorySaver())
-        thread_id = "runtime-business-failure-thread"
-        run_id = "runtime-business-failure-run"
-
-        with tempfile.TemporaryDirectory() as raw_workspace:
-            workspace = Path(raw_workspace)
-            frames = await _collect_runtime_frames(
-                graph,
-                _runtime_payload(
-                    workspace,
-                    thread_id=thread_id,
-                    run_id=run_id,
-                    workflow_scope=None,
-                ),
-            )
-            execution = await get_execution(workspace, run_id)
-
-        self.assertEqual(repair_trace, ["validate", "repair", "validate"])
-        self.assertIsNotNone(execution)
-        assert execution is not None
-        self.assertEqual(execution.status, DurableExecutionStatus.AWAITING_USER)
-        self.assertIsNone(execution.failure)
-        self.assertIn('"type":"RUN_FINISHED"', "".join(frames))
-        self.assertNotIn('"type":"RUN_ERROR"', "".join(frames))
 
     async def test_application_planning_snapshot_only_does_not_create_fake_execution(
         self,

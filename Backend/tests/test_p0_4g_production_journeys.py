@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
+import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,13 +22,23 @@ from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
 )
+from app.domain.application_planning_recovery import (
+    ApplicationPlanningOperation,
+    ApplicationPlanningRecoveryBoundary,
+    application_planning_boundary_payload,
+)
 from app.domain.application_revision import (
     EarliestRevisionArtifact,
     FormalRevisionBranch,
     RevisionImpact,
     RevisionTarget,
 )
-from app.domain.execution_recovery import DurableExecutionStatus
+from app.domain.execution_recovery import (
+    DurableExecutionStatus,
+    RecoveryDecision,
+    RecoveryExecutionError,
+    RecoveryStrategy,
+)
 from app.graph.application_planning_workflow import (
     application_planning_graph_for_request,
     clear_application_planning_graph_cache,
@@ -39,6 +52,9 @@ from app.persistence.execution_recovery import (
 from app.protocols.application_page_planning import (
     build_application_page_planning_ag_ui_stream,
 )
+from app.protocols.application_planning_interrupt import (
+    application_planning_interrupt_from_snapshot,
+)
 from app.protocols.execution_recovery import build_execution_recovery_ag_ui_stream
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.application_lifecycle import (
@@ -47,10 +63,14 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.application_revision_lifecycle import register_revision_impact
+from app.services.execution_recovery_coordinator import prepare_continue
+from app.services.execution_recovery_executor import prepare_native_recovery
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
+from app.services.execution_recovery_policies import production_recovery_replay_policies
 from app.services.execution_recovery_projection import (
     resolve_execution_recovery_projection,
 )
+from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.workflow_reentry import semantic_context_sha256
 from app.services.change_contracts import load_confirmed_contract_corpus
 from app.workspace.product_plan_documents import (
@@ -264,6 +284,32 @@ class _ProductionModelBoundary:
         yield self._invoke(prompt)
 
 
+class _InvalidTechnicalPlanTransport:
+    """只在 TechnicalPlan 生成的模型 transport 边界返回无效 JSON。"""
+
+    def __init__(self, calls: list[str]) -> None:
+        """保存模型请求次数，供测试确认 production Node 自己完成重试。"""
+
+        self.calls = calls
+
+    def stream(self, _prompt: str):
+        """返回无法形成 TechnicalPlan 根结构的模型响应。"""
+
+        self.calls.append("technical_planning_generate")
+        yield AIMessage(content="{}")
+
+
+def _invalid_technical_plan_model_factory(calls: list[str]):
+    """创建只替换 TechnicalPlan 最低模型 transport 的 production factory。"""
+
+    def factory(_settings: Settings, **_kwargs: Any) -> _InvalidTechnicalPlanTransport:
+        """为每次 production Node 调用返回一个无效响应 transport。"""
+
+        return _InvalidTechnicalPlanTransport(calls)
+
+    return factory
+
+
 class _ImpactModel:
     """返回一次真实 ChangeImpactAnalyzer 使用的只读模型 JSON。"""
 
@@ -356,10 +402,11 @@ def _planning_payload(
     thread_id: str,
     run_id: str,
     project_id: str,
+    resume_from: str | None = None,
 ) -> dict[str, Any]:
     """构造真实 application planning AG-UI 首次请求。"""
 
-    return {
+    payload = {
         "threadId": thread_id,
         "runId": run_id,
         "projectId": project_id,
@@ -371,6 +418,9 @@ def _planning_payload(
             "application": {"id": project_id, "name": "生产旅程应用"},
         },
     }
+    if resume_from is not None:
+        payload["resumeFrom"] = resume_from
+    return payload
 
 
 def _write_planning_lifecycle(
@@ -407,6 +457,8 @@ async def _seed_planning_checkpoint(
     thread_id: str,
     run_id: str,
     project_id: str,
+    lifecycle_stage: ApplicationLifecycleStage = ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+    lifecycle_status: ApplicationLifecycleStatus = ApplicationLifecycleStatus.COMPLETED,
 ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
     """写入正式 baseline artifacts 与原 planning thread 的 production checkpoint。"""
 
@@ -432,8 +484,8 @@ async def _seed_planning_checkpoint(
         thread_id=thread_id,
         run_id=run_id,
         project_id=project_id,
-        stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
-        status=ApplicationLifecycleStatus.COMPLETED,
+        stage=lifecycle_stage,
+        status=lifecycle_status,
     )
     state = {"workspace": str(workspace)}
     write_confirmed_requirement_spec_document(state, requirement_spec)
@@ -992,3 +1044,291 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(inspection_calls), 1)
         self.assertEqual(len(generation_calls), 2)
         self.assertNotEqual(generation_calls[0], generation_calls[1])
+
+    async def test_backend_crash_reloads_durable_checkpoint_and_exposes_gap(self) -> None:
+        """真实 Backend 崩溃窗口重启后必须暴露当前 production crash-resume 能力缺口。"""
+
+        project_id = "p0-5-d-crash-app"
+        thread_id = "p0-5-d-crash-thread"
+        source_run_id = "p0-5-d-crash-source"
+        dependency_started = threading.Event()
+        dependency_release = threading.Event()
+        dependency_finished = threading.Event()
+        runtime_task: asyncio.Task[list[str]] | None = None
+
+        def blocked_setup(workspace_root: str) -> dict[str, str]:
+            """在真实 ui_confirmation Node 的最低 setup 依赖处制造未完成窗口。"""
+
+            dependency_started.set()
+            dependency_release.wait(timeout=30)
+            dependency_finished.set()
+            return {
+                "project_dir": str(Path(workspace_root) / ".xcodeagent" / "ui-design")
+            }
+
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            old_graph = await _seed_planning_checkpoint(
+                workspace,
+                thread_id=thread_id,
+                run_id=source_run_id,
+                project_id=project_id,
+                lifecycle_stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                lifecycle_status=ApplicationLifecycleStatus.RUNNING,
+            )
+            try:
+                with patch(
+                    "app.graph.nodes.ui_confirmation.setup_ui_design_project",
+                    side_effect=blocked_setup,
+                ):
+                    runtime_task = asyncio.create_task(
+                        _consume(
+                            build_workflow_ag_ui_stream(
+                                graph=application_planning_graph_for_request,
+                                payload=_planning_payload(
+                                    workspace,
+                                    thread_id=thread_id,
+                                    run_id=source_run_id,
+                                    project_id=project_id,
+                                    resume_from="ui_confirmation",
+                                ),
+                            )
+                        )
+                    )
+                    self.assertTrue(
+                        await asyncio.wait_for(
+                            asyncio.to_thread(dependency_started.wait, 5),
+                            timeout=10,
+                        )
+                    )
+                    running = await get_execution(workspace, source_run_id)
+                    self.assertIsNotNone(running)
+                    assert running is not None
+                    self.assertEqual(running.status, DurableExecutionStatus.RUNNING)
+                    self.assertEqual(running.current_node, "ui_confirmation")
+
+                    # 新 Backend 看不到旧 owner，且读取时间已经越过旧 lease，模拟 owner 消失。
+                    scan = await reconcile_workspace_recovery(
+                        workspace,
+                        locally_active_run_ids=set(),
+                        current_backend_instance_id="backend-after-restart",
+                        now=datetime.now(timezone.utc) + timedelta(days=1),
+                    )
+                    self.assertEqual(scan.interrupted_run_ids, [source_run_id])
+                    source_after_scan = await get_execution(workspace, source_run_id)
+                    self.assertIsNotNone(source_after_scan)
+                    assert source_after_scan is not None
+                    self.assertEqual(
+                        source_after_scan.status,
+                        DurableExecutionStatus.INTERRUPTED,
+                    )
+
+                    # 旧 runtime 的取消只代表旧进程已经死亡；不把它当成恢复动作。
+                    runtime_task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await runtime_task
+                    runtime_task = None
+                    dependency_release.set()
+                    self.assertTrue(
+                        await asyncio.wait_for(
+                            asyncio.to_thread(dependency_finished.wait, 5),
+                            timeout=10,
+                        )
+                    )
+
+                points = await list_recovery_points(workspace, source_run_id)
+                entry = next(
+                    point
+                    for point in reversed(points)
+                    if point.completed_node is None
+                    and point.next_nodes == ["ui_confirmation"]
+                    and point.checkpoint_id is not None
+                )
+                self.assertEqual(entry.thread_id, thread_id)
+                self.assertEqual(entry.checkpoint_ns, "")
+
+                # 必须清掉旧 Graph/cache 并关闭旧 SQLite connection，随后才模拟新 Backend。
+                clear_application_planning_graph_cache()
+                self.assertTrue(
+                    await close_workflow_checkpointer_for_workspace(
+                        workspace=str(workspace),
+                        project_id=project_id,
+                    )
+                )
+                restarted_graph = await application_planning_graph_for_request(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                self.assertIsNot(restarted_graph, old_graph)
+
+                restarted_source = await get_execution(workspace, source_run_id)
+                self.assertIsNotNone(restarted_source)
+                assert restarted_source is not None
+                self.assertEqual(
+                    restarted_source.status,
+                    DurableExecutionStatus.INTERRUPTED,
+                )
+                self.assertEqual(restarted_source.current_node, "ui_confirmation")
+                checkpoint = await restarted_graph.aget_state(
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": entry.checkpoint_ns,
+                            "checkpoint_id": entry.checkpoint_id,
+                        }
+                    }
+                )
+                self.assertEqual(tuple(checkpoint.next), ("ui_confirmation",))
+
+                production_plan = await prepare_continue(
+                    workspace=str(workspace),
+                    source_run_id=source_run_id,
+                    graph=restarted_graph,
+                    replay_policies=production_recovery_replay_policies(),
+                )
+                self.assertEqual(
+                    production_plan.decision,
+                    RecoveryDecision.REQUIRES_HANDLER,
+                )
+                self.assertEqual(
+                    production_plan.strategy,
+                    RecoveryStrategy.HANDLER,
+                )
+                self.assertEqual(
+                    production_plan.reason_code,
+                    "REPLAY_SAFETY_UNASSESSED",
+                )
+                with self.assertRaises(RecoveryExecutionError) as raised:
+                    await prepare_native_recovery(
+                        workspace=str(workspace),
+                        source_run_id=source_run_id,
+                        graph=restarted_graph,
+                        replay_policies=production_recovery_replay_policies(),
+                    )
+                self.assertEqual(raised.exception.code, "NATIVE_DECISION_REQUIRED")
+            finally:
+                dependency_release.set()
+                if runtime_task is not None:
+                    if not runtime_task.done():
+                        runtime_task.cancel()
+                    try:
+                        await runtime_task
+                    except asyncio.CancelledError:
+                        pass
+                clear_application_planning_graph_cache()
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+
+    async def test_technical_planning_business_failure_uses_native_repair_interaction(
+        self,
+    ) -> None:
+        """真实 TechnicalPlan 生成失败必须停在原生 repair interaction 而非 FAILED。"""
+
+        project_id = "p0-5-e-business-failure-app"
+        thread_id = "p0-5-e-business-failure-thread"
+        source_run_id = "p0-5-e-business-failure-source"
+        model_calls: list[str] = []
+        request = "创建一个生产旅程应用"
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            graph, _requirement_spec, _product_plan = await _seed_planning_checkpoint(
+                workspace,
+                thread_id=thread_id,
+                run_id=source_run_id,
+                project_id=project_id,
+                lifecycle_stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                lifecycle_status=ApplicationLifecycleStatus.RUNNING,
+            )
+            await graph.aupdate_state(
+                {"configurable": {"thread_id": thread_id}},
+                {
+                    "active_thread_id": thread_id,
+                    "active_run_id": source_run_id,
+                    "workflow_scope": "application_planning",
+                    "phase": "technical_planning_generate",
+                    "status": "running",
+                    "application_planning_recovery_boundary": application_planning_boundary_payload(
+                        operation_id="p0-5-e-technical-plan",
+                        operation=ApplicationPlanningOperation.INITIAL,
+                        boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+                        request=request,
+                    ),
+                },
+            )
+            try:
+                with patch(
+                    "app.agents.main.planner.create_chat_model",
+                    new=_invalid_technical_plan_model_factory(model_calls),
+                ):
+                    frames = await _consume(
+                        build_workflow_ag_ui_stream(
+                            graph=application_planning_graph_for_request,
+                            payload=_planning_payload(
+                                workspace,
+                                thread_id=thread_id,
+                                run_id=source_run_id,
+                                project_id=project_id,
+                                resume_from="technical_planning_generate",
+                            ),
+                        )
+                    )
+
+                execution = await get_execution(workspace, source_run_id)
+                self.assertIsNotNone(execution)
+                assert execution is not None
+                self.assertNotEqual(execution.status, DurableExecutionStatus.FAILED)
+                self.assertEqual(
+                    execution.status,
+                    DurableExecutionStatus.AWAITING_USER,
+                )
+                self.assertIsNone(execution.failure)
+                self.assertEqual(model_calls, ["technical_planning_generate"] * 3)
+
+                text = "".join(frames)
+                self.assertIn('"type":"RUN_FINISHED"', text)
+                self.assertNotIn('"type":"RUN_ERROR"', text)
+                snapshot = await graph.aget_state(
+                    {"configurable": {"thread_id": thread_id}}
+                )
+                interaction = application_planning_interrupt_from_snapshot(snapshot)
+                self.assertIsNotNone(interaction)
+                assert interaction is not None
+                self.assertEqual(interaction["type"], "application_planning_review")
+                self.assertEqual(interaction["artifact"], "technical_plan")
+                self.assertEqual(interaction["phase"], "technical_planning")
+                self.assertEqual(
+                    interaction["clarification"]["mode"],
+                    "technical_plan_generation_error",
+                )
+                self.assertEqual(
+                    interaction["clarification"]["status"],
+                    "requires_user_input",
+                )
+
+                recovery_plan = await prepare_continue(
+                    workspace=str(workspace),
+                    source_run_id=source_run_id,
+                    graph=graph,
+                    replay_policies=production_recovery_replay_policies(),
+                )
+                self.assertEqual(
+                    recovery_plan.decision,
+                    RecoveryDecision.AWAITING_USER,
+                )
+                projection = await resolve_execution_recovery_projection(
+                    str(workspace)
+                )
+                self.assertFalse(
+                    any(
+                        candidate.source_run_id == source_run_id
+                        for candidate in projection.candidates
+                    )
+                )
+            finally:
+                clear_application_planning_graph_cache()
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
