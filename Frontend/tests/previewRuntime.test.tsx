@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { runPreviewRuntime } from '../src/renderer/src/service/previewRuntime'
+import { leavePreviewRuntime, runPreviewRuntime } from '../src/renderer/src/service/previewRuntime'
 import PreviewRepairControls from '../src/renderer/src/components/BrowserPreviewPanel/PreviewRepairControls'
 
 const originalFetch = globalThis.fetch
@@ -52,6 +52,12 @@ try {
     workspace: '/workspace',
     action: 'diagnose',
     attemptId: 'attempt-1'
+  })
+  await leavePreviewRuntime('/workspace')
+  assert.deepEqual(forwarded, {
+    workspace: '/workspace',
+    action: 'leave',
+    includeLogs: false
   })
   mockStream(true)
   await assert.rejects(

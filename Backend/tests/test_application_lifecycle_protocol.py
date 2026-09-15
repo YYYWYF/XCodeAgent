@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
@@ -18,6 +19,7 @@ from app.services.application_lifecycle import (
     transition_application_lifecycle,
     write_application_lifecycle,
 )
+from app.services.preview_runtime_guard import claim_maintenance, release_maintenance
 
 
 class ApplicationLifecycleProtocolTests(unittest.TestCase):
@@ -186,6 +188,82 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
 
         attach_workspace.assert_not_called()
         self.assertIn("已读取应用生命周期", frames)
+
+    def test_get_action_is_not_blocked_by_preview_maintenance(self) -> None:
+        """工作台只读恢复不应被隐藏页面的预览维护状态阻断。"""
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+            )
+            write_application_lifecycle(directory, lifecycle)
+            claim_maintenance(directory, "preview-thread", "restart")
+            try:
+                stream = build_application_lifecycle_ag_ui_stream(
+                    payload={
+                        "threadId": "lifecycle-thread",
+                        "runId": "lifecycle-run",
+                        "forwardedProps": {
+                            "applicationLifecycle": {
+                                "action": "get",
+                                "workspaceRoot": directory,
+                            }
+                        },
+                    }
+                )
+
+                async def collect() -> str:
+                    """消费维护期间的只读生命周期响应。"""
+                    return "".join([frame async for frame in stream])
+
+                frames = asyncio.run(collect())
+            finally:
+                release_maintenance(directory, "preview-thread")
+
+        self.assertIn("已读取应用生命周期", frames)
+        self.assertNotIn("当前应用正在进行预览服务维护", frames)
+
+    def test_workspace_attach_is_not_blocked_by_preview_maintenance(self) -> None:
+        """真实入口链路的 Workspace Attach 同样不能被预览维护阻断。"""
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = create_application_lifecycle(
+                application_id="app-1",
+                application_name="任务中心",
+            )
+            write_application_lifecycle(directory, lifecycle)
+            claim_maintenance(directory, "preview-thread", "restart")
+            try:
+                with patch(
+                    "app.protocols.application_lifecycle.template_mutation_coordinator.attach_workspace",
+                    return_value=SimpleNamespace(
+                        action="preserved",
+                        cleaned=False,
+                        lifecycle_changed=False,
+                    ),
+                ):
+                    stream = build_application_lifecycle_ag_ui_stream(
+                        payload={
+                            "threadId": "lifecycle-thread",
+                            "runId": "lifecycle-run",
+                            "forwardedProps": {
+                                "applicationLifecycle": {
+                                    "action": "workspace_attach",
+                                    "workspaceRoot": directory,
+                                }
+                            },
+                        }
+                    )
+
+                    async def collect() -> str:
+                        """消费维护期间的 Workspace Attach 响应。"""
+                        return "".join([frame async for frame in stream])
+
+                    frames = asyncio.run(collect())
+            finally:
+                release_maintenance(directory, "preview-thread")
+
+        self.assertIn("Workspace Attach 已完成", frames)
+        self.assertNotIn("当前应用正在进行预览服务维护", frames)
 
 
 if __name__ == "__main__":

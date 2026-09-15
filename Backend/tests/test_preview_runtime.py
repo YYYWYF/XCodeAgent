@@ -109,6 +109,44 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["repair"]["status"], "stopped")
         self.assertIsNone(maintenance_owner(self.workspace))
 
+    async def test_leave_workbench_releases_other_preview_thread(self) -> None:
+        """退出工作台可清理当前应用遗留的预览维护，不要求复用原会话身份。"""
+        save_repair(
+            self.workspace,
+            "stale-preview-thread",
+            {"status": "awaiting_confirmation", "message": "等待确认"},
+        )
+        claim_maintenance(self.workspace, "stale-preview-thread", "restart")
+
+        with patch(
+            "app.protocols.preview_runtime.stop_project_preview",
+            return_value={"status": "stopped"},
+        ) as stop_preview:
+            value = self.result(await self.request("leave"))
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(value["status"], "completed")
+        self.assertIsNone(maintenance_owner(self.workspace))
+        self.assertEqual(
+            load_repair(self.workspace, "stale-preview-thread")["status"],
+            "stopped",
+        )
+        self.assertEqual(Path(stop_preview.call_args.args[0]), Path(self.workspace).resolve())
+        require_no_maintenance(self.workspace)
+
+    async def test_leave_without_maintenance_still_stops_preview(self) -> None:
+        """没有维护任务时退出工作台也会在后台关闭前后端服务。"""
+        with patch(
+            "app.protocols.preview_runtime.stop_project_preview",
+            return_value={"status": "stopped"},
+        ) as stop_preview:
+            value = self.result(await self.request("leave"))
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(value["status"], "completed")
+        stop_preview.assert_called_once()
+        self.assertEqual(Path(stop_preview.call_args.args[0]), Path(self.workspace).resolve())
+
     async def test_changed_source_rejects_confirmation(self) -> None:
         """待确认文件被修改后不能继续执行原计划。"""
         attempt = self.fail_launch()

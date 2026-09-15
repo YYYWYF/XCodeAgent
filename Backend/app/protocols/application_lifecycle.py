@@ -180,6 +180,13 @@ def build_application_lifecycle_ag_ui_stream(
             }
         return AgUiActionResult(data=data, message=message)
 
+    action = str(resolved_input.get("action") or "")
+    # 工作台进入所需的读取和 Attach 不参与预览维护互斥，避免隐藏页面的维护状态阻塞导航。
+    guarded_workspace = (
+        None
+        if action in {"get", "workspace_attach"}
+        else str(resolved_input.get("workspaceRoot") or "") or None
+    )
     return build_ag_ui_action_stream(
         payload=payload,
         event_name=APPLICATION_LIFECYCLE_EVENT_NAME,
@@ -189,5 +196,6 @@ def build_application_lifecycle_ag_ui_stream(
         error_message_prefix="应用生命周期操作失败",
         error_data=lambda _exc: {"action": resolved_input.get("action")},
         accept=accept,
-        workspace_root=str(resolved_input.get("workspaceRoot") or "") or None,
+        workspace_root=guarded_workspace,
+        register_workspace_run=action not in {"get", "workspace_attach"},
     )

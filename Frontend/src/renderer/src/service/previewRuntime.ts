@@ -13,6 +13,7 @@ export type PreviewAction =
   | 'confirm'
   | 'revise'
   | 'cancel'
+  | 'leave'
 export type PreviewServiceState = {
   status: 'starting' | 'running' | 'failed' | 'stopped' | 'skipped'
   message?: string
@@ -111,4 +112,10 @@ export async function runPreviewRuntime(
   } finally {
     options.signal?.removeEventListener('abort', abort)
   }
+}
+
+/** 离开工作台时停止当前应用的预览维护并释放应用级占用。 */
+export async function leavePreviewRuntime(workspace: string): Promise<void> {
+  if (!workspace) return
+  await runPreviewRuntime({ workspace, action: 'leave', includeLogs: false })
 }

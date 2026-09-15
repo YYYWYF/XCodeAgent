@@ -1,5 +1,8 @@
 import { useCallback, useRef, useState } from 'react'
-import { SessionRuntimeProvider } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
+import {
+  SessionRuntimeProvider,
+  useSessionRuntimeStore
+} from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
 import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
 import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlannings'
 import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
@@ -14,6 +17,7 @@ import {
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { isTemplateGenerationOrphaned } from '../service/templateApi'
 import { stopProjectPreview } from '../service/projectLaunch'
+import { leavePreviewRuntime } from '../service/previewRuntime'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -41,6 +45,7 @@ export default function AppEntryPage(): JSX.Element {
 
 // 在欢迎页、独立后台规划 Runtime 与应用工作台之间维护顶层导航。
 function AppEntryContent(): JSX.Element {
+  const { releasePreviewMaintenanceExecutions } = useSessionRuntimeStore()
   const { theme, setTheme } = useApplicationTheme()
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
@@ -94,12 +99,12 @@ function AppEntryContent(): JSX.Element {
         event.type === 'reconcile_received'
           ? event.lifecycle
           : event.type === 'lifecycle_received'
-          ? event.lifecycle
-          : event.type === 'workflow_received'
-            ? workflowApplicationLifecycle(event.workflow)
-            : event.type === 'run_failed' && event.workflow
+            ? event.lifecycle
+            : event.type === 'workflow_received'
               ? workflowApplicationLifecycle(event.workflow)
-              : undefined
+              : event.type === 'run_failed' && event.workflow
+                ? workflowApplicationLifecycle(event.workflow)
+                : undefined
       if (lifecycle) mergeApplicationLifecycle(lifecycle)
     },
     [activeApplication?.id, mergeApplicationLifecycle, planningController.dispatchPlanningEvent]
@@ -113,12 +118,9 @@ function AppEntryContent(): JSX.Element {
     activePlanningLifecycle?.initialization.stage === 'application_template_generation_failed'
   const templateGenerationOrphaned = isTemplateGenerationOrphaned(
     activePlanningLifecycle,
-    activeApplication
-      ? planningController.generatingAppIds.has(activeApplication.id)
-      : false
+    activeApplication ? planningController.generatingAppIds.has(activeApplication.id) : false
   )
-  const templateGenerationRecoverable =
-    templateGenerationFailed || templateGenerationOrphaned
+  const templateGenerationRecoverable = templateGenerationFailed || templateGenerationOrphaned
 
   const {
     deliverPlanningChunk,
@@ -173,7 +175,9 @@ function AppEntryContent(): JSX.Element {
     ? planningController.getPlanningState(planningController.visiblePlanningId)
     : undefined
   const streamingContent = useApplicationPlanningStreamingContent(
-    visiblePlanning ? planningRuntimeController.getRuntime(visiblePlanning.application.id) : undefined
+    visiblePlanning
+      ? planningRuntimeController.getRuntime(visiblePlanning.application.id)
+      : undefined
   )
 
   // 新建应用：登记规划状态后直接进入工作台，后台执行由根部 Runtime Manager 接管。
@@ -185,8 +189,16 @@ function AppEntryContent(): JSX.Element {
     [openWorkbench, planningController]
   )
 
-  // 从工作台直接返回欢迎页，后台任务由工作台会话与独立 Planning Runtime 继续运行。
+  // 返回欢迎页时结束预览维护占用；再次打开项目会等待本次清理完成。
   const handleReturnWelcome = (): void => {
+    const workspace = activeApplication ? applicationPreviewWorkspace(activeApplication) : ''
+    releasePreviewMaintenanceExecutions(workspace)
+    activePreviewWorkspaceRef.current = ''
+    if (workspace) {
+      void leavePreviewRuntime(workspace).catch((error) => {
+        console.warn('退出工作台时清理预览维护失败。', error)
+      })
+    }
     setActiveSurface('welcome')
   }
 

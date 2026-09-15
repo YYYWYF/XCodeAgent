@@ -1,6 +1,7 @@
 """开发预览的独立 AG-UI 操作、日志订阅和修复确认协议。"""
 
 import asyncio
+from contextlib import suppress
 from pathlib import Path
 from threading import Event
 from typing import Any, Literal
@@ -21,7 +22,7 @@ class PreviewRuntimeInput(BaseModel):
     """在协议边界约束工作区、动作和本次确认身份。"""
     model_config = ConfigDict(extra="forbid")
     workspace: str = Field(min_length=1, max_length=4096)
-    action: Literal["get", "watch", "start", "restart", "stop", "diagnose", "confirm", "revise", "cancel"]
+    action: Literal["get", "watch", "start", "restart", "stop", "diagnose", "confirm", "revise", "cancel", "leave"]
     attemptId: str = ""
     planId: str = ""
     feedback: str = Field(default="", max_length=4000)
@@ -30,6 +31,7 @@ class PreviewRuntimeInput(BaseModel):
 
 _jobs: dict[tuple[str, str], asyncio.Task[Any]] = {}
 _cancellations: dict[tuple[str, str], Event] = {}
+_leave_cleanups: dict[str, asyncio.Task[Any]] = {}
 
 
 def _job_finished(key: tuple[str, str], task: asyncio.Task[Any]) -> None:
@@ -38,6 +40,23 @@ def _job_finished(key: tuple[str, str], task: asyncio.Task[Any]) -> None:
         _jobs.pop(key, None)
     if not task.cancelled():
         task.exception()
+
+
+def _leave_cleanup_finished(workspace: str, task: asyncio.Task[Any]) -> None:
+    """消费退出清理异常并移除任务引用，避免后台停止任务泄漏。"""
+    if _leave_cleanups.get(workspace) is task:
+        _leave_cleanups.pop(workspace, None)
+    if not task.cancelled():
+        task.exception()
+
+
+async def _finish_leave_cleanup(workspace: str, job: asyncio.Task[Any] | None) -> None:
+    """后台停止现有服务，并在旧维护线程收口后再次确认服务已关闭。"""
+    await asyncio.to_thread(stop_project_preview, workspace)
+    if job and not job.done():
+        with suppress(asyncio.CancelledError, Exception):
+            await asyncio.shield(job)
+        await asyncio.to_thread(stop_project_preview, workspace)
 
 
 def preview_runtime_capabilities() -> dict[str, Any]:
@@ -172,6 +191,41 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
                 if request.action == "watch":
                     await asyncio.sleep(1)
             return AgUiActionResult(data=current, message="已读取服务状态。")
+        if request.action == "leave":
+            owner = maintenance_owner(request.workspace)
+            job: asyncio.Task[Any] | None = None
+            if owner:
+                owner_thread_id = str(owner.get("threadId") or "")
+                owner_key = (request.workspace, owner_thread_id)
+                event = _cancellations.get(owner_key)
+                if event:
+                    event.set()
+                job = _jobs.get(owner_key)
+                if job and not job.done():
+                    job.cancel()
+                repair = load_repair(request.workspace, owner_thread_id)
+                if repair.get("status") in {"awaiting_confirmation", "running", "stopping"}:
+                    save_repair(
+                        request.workspace,
+                        owner_thread_id,
+                        {
+                            **repair,
+                            "status": "stopped",
+                            "message": "已退出工作台，预览诊断修复已停止。",
+                        },
+                    )
+                release_maintenance(request.workspace, owner_thread_id)
+            cleanup = _leave_cleanups.get(request.workspace)
+            if cleanup is None or cleanup.done():
+                cleanup = asyncio.create_task(_finish_leave_cleanup(request.workspace, job))
+                _leave_cleanups[request.workspace] = cleanup
+                cleanup.add_done_callback(
+                    lambda task: _leave_cleanup_finished(request.workspace, task)
+                )
+            return AgUiActionResult(
+                data=snapshot(request.workspace, thread_id),
+                message="已退出预览维护，正在后台关闭预览服务。",
+            )
         if request.action == "cancel":
             owner = maintenance_owner(request.workspace)
             if not owner or owner["threadId"] != thread_id:

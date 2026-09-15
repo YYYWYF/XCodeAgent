@@ -10,7 +10,7 @@
 
 ## AG-UI 契约
 
-`/preview-runtime/run` 使用 `forwardedProps.previewRuntime`，字段包括 `workspace`、`action` 和动作所需的 `attemptId`、`planId`、`feedback`。动作是 `get/watch/start/restart/stop/diagnose/confirm/revise/cancel`。所有字段在 Pydantic 边界校验；不接受日志文件路径。
+`/preview-runtime/run` 使用 `forwardedProps.previewRuntime`，字段包括 `workspace`、`action` 和动作所需的 `attemptId`、`planId`、`feedback`。动作是 `get/watch/start/restart/stop/diagnose/confirm/revise/cancel/leave`。所有字段在 Pydantic 边界校验；不接受日志文件路径。
 
 所有响应均使用标准 AG-UI 生命周期、助手消息、`preview-runtime` CustomEvent、`previewRuntime` StateSnapshot 和 RunFinished，包括业务失败。`runtime.frontend` 与 `runtime.backend` 各自包含状态、可选 `port`、兼容保留的 URL 及失败摘要；操作失败含结构化 error。状态包含 runtime、blockedBy、当前会话 repair。`/health` 发布该能力。旧预览 REST 启停路由已移除；renderer 和 Electron 退出清理均通过 AG-UI 客户端调用。
 
@@ -23,6 +23,8 @@ RepairPlanner 根据当前启动失败及脱敏日志生成精确文件范围，
 每次实际派发前计入修复预算，最多 3 轮；异常也消耗本轮额度。重新生成计划不代表确认。执行后运行受影响层构建与静态检查，再重启服务。失败重新诊断并等待下一轮确认；无进展、额度耗尽、环境不可自动处理或越界时停止。需要正式产品或合同调整时提供转入正式修订对话的入口。
 
 停止操作以安全边界收口：停止派发后续工具及后续验证/重启，等待当前同步操作退出后才释放维护占用。停止保留已有修改。此流程不调用集成测试 Graph 节点、不生成测试通过结论、不增加开发完成计数，也不推进测试或验收阶段。
+
+返回欢迎页会调用 `leave`：它先同步释放当前应用的维护占用、停止等待确认的修复，再立即返回；前后端服务关闭在后台完成，并在旧维护线程退出后再次确认停止。Renderer 不等待关闭过程即可显示欢迎页和打开其他应用。生命周期的只读 `get` 与入口 `workspace_attach` 不参与预览维护互斥，预览任务不能再阻塞工作台导航。普通规划和开发工作流仍按各自后台运行规则处理。
 
 ## 互斥与运行事实
 
