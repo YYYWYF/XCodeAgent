@@ -182,6 +182,7 @@ def resume_application_planning_review(
                 # 冲突仅是临时交互状态，不能在新的需求分析前被 requirements
                 # 节点优先消费并错误地重新展示初始管理员 subjectId 问题。
                 "authorization_config_conflict": {},
+                "pending_application_config_target": {},
                 "clarification": {},
             },
             goto="design_intent_analysis",

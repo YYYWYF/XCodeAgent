@@ -1,5 +1,7 @@
 # 内置 RBAC 权限体系分阶段实施计划
 
+> **当前合同（2026-09-15）**：下文任何与本节冲突的 V2 角色种子设计均已废止。应用能力唯一来自 `.xcodeagent/application.json`：`authorization.enabled` 和 `authorization.initialAdministratorSubjects` 不得写入 RequirementSpec。RequirementSpec 仅保存业务 `user_roles`（`id`、`name`、`description`）和显式业务资源规则。平台确定性创建 `SYSTEM_ADMIN`（`system_admin`），只授予 `system_authorization_management`，并在 bootstrap 时将已配置的初始 Subject 绑定至该角色。`authorization-manifest.v3` 通过 `systemAuthorization.{adminRoleSeedKey,managementResourceKey}` 与业务 `defaultRoleAuthorization` 分离表达；不再包含 `isSystemRole`、`isInitialAdminRole` 或 `initialAdminRoleSeedKey`。新增业务资源不得隐式授予 `SYSTEM_ADMIN`。
+
 ## 前置设计
 
 Authorization V1 的业务权限资源点只分为两种，此外平台固定注入一种 `system` 资源：

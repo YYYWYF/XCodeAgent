@@ -152,6 +152,9 @@ def _route_requirements(state: ProjectState) -> str:
         and confirmation_status == "pending_user_input"
     ):
         return "requirements_review"
+    if isinstance(state.get("pending_application_config_target"), dict) and state["pending_application_config_target"]:
+        # 任何未提交配置目标都必须在 RequirementSpec 阶段解决，禁止带入 ProductPlan。
+        return "requirements"
     return "product_planning"
 
 

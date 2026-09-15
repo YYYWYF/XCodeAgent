@@ -19,8 +19,6 @@ export type AuthorizationResourceView = {
 export type AuthorizationRoleView = {
   description: string
   groups: Array<{ key: AuthorizationResourceView['type']; label: string; resources: AuthorizationResourceView[] }>
-  isInitialAdminRole: boolean
-  isSystemRole: boolean
   name: string
   resourceCount: number
   seedKey: string
@@ -46,7 +44,7 @@ function resourceType(value: unknown): AuthorizationResourceView['type'] {
 /** 从权限 manifest 生成只读角色视角，绝不补写或推断权限事实。 */
 export function authorizationDesignView(plan: JsonRecord): AuthorizationDesignView | undefined {
   const manifest = asRecord(plan.authorization_manifest)
-  if (manifest.enabled !== true) return undefined
+  if (textValue(manifest.schema_version) !== 'authorization-manifest.v3') return undefined
 
   const resources = new Map(
     recordItems(manifest.resources)
@@ -64,8 +62,7 @@ export function authorizationDesignView(plan: JsonRecord): AuthorizationDesignVi
     resourceKeys: stringItems(binding.operationResourceKeys)
   }))
 
-  return {
-    roles: recordItems(authorization.roles).map((role) => {
+  const businessRoles = recordItems(authorization.roles).map((role) => {
       const seedKey = textValue(role.roleSeedKey)
       const grantedKeys = grants.get(seedKey) || []
       const resourcesByGroup = new Map<AuthorizationResourceView['type'], AuthorizationResourceView[]>()
@@ -95,12 +92,35 @@ export function authorizationDesignView(plan: JsonRecord): AuthorizationDesignVi
           ...group,
           resources: (resourcesByGroup.get(group.key) || []).sort((left, right) => left.key.localeCompare(right.key))
         })).filter((group) => group.resources.length),
-        isInitialAdminRole: role.isInitialAdminRole === true,
-        isSystemRole: role.isSystemRole === true,
         name: textValue(role.name, seedKey || '未命名角色'),
         resourceCount: grantedKeys.length,
         seedKey
       }
     })
-  }
+  const systemAuthorization = asRecord(manifest.systemAuthorization)
+  const systemRoleSeedKey = textValue(systemAuthorization.adminRoleSeedKey)
+  const managementResourceKey = textValue(systemAuthorization.managementResourceKey)
+  const managementResource = resources.get(managementResourceKey)
+  const systemRole: AuthorizationRoleView | undefined = systemRoleSeedKey && managementResourceKey
+    ? {
+        description: '平台固定系统角色，仅用于权限管理控制面。',
+        groups: [{
+          key: 'system',
+          label: '系统资源',
+          resources: [{
+            description: textValue(managementResource?.description),
+            endpointBindings: [],
+            key: managementResourceKey,
+            name: textValue(managementResource?.name, managementResourceKey),
+            sourceRuleIds: [],
+            target: textValue(managementResource?.targetResourceRef),
+            type: 'system'
+          }]
+        }],
+        name: 'SYSTEM_ADMIN',
+        resourceCount: 1,
+        seedKey: systemRoleSeedKey
+      }
+    : undefined
+  return { roles: [...(systemRole ? [systemRole] : []), ...businessRoles] }
 }

@@ -49,6 +49,7 @@ class ProjectState(TypedDict, total=False):
     application_planning_interaction: dict[str, Any]
     requirement_revision_id: str
     authorization_config_conflict: dict[str, Any]
+    pending_application_config_target: dict[str, Any]
     direct_modification_owner: str
     direct_modification_scope: str
     direct_modification_confidence: float

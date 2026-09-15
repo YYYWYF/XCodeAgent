@@ -206,8 +206,10 @@ def authorization_deliverability_report(
         for endpoint_id, controls in sorted(endpoint_controls.items())
         if len(controls) > 1
     ]
+    system_authorization = raw_manifest.get("systemAuthorization") if isinstance(raw_manifest.get("systemAuthorization"), dict) else {}
+    system_role = str(system_authorization.get("adminRoleSeedKey") or "").strip()
+    system_resource = str(system_authorization.get("managementResourceKey") or "").strip()
     authorization = raw_manifest.get("defaultRoleAuthorization") if isinstance(raw_manifest.get("defaultRoleAuthorization"), dict) else {}
-    initial_role = str(authorization.get("initialAdminRoleSeedKey") or "").strip()
     grants = {
         str(item.get("roleSeedKey") or "").strip(): set(_text_items(item.get("resourceKeys")))
         for item in _dict_items(authorization.get("roleResourceGrants"))
@@ -217,9 +219,9 @@ def authorization_deliverability_report(
         if isinstance(application_config.get("authorization"), dict)
         else False
     )
-    initial_admin_failures = [] if not authorization_enabled else [
-        "Initial Admin 未拥有 system_authorization_management 系统资源。"
-    ] if not initial_role or SYSTEM_RESOURCE_KEY not in grants.get(initial_role, set()) else []
+    system_authorization_failures = [] if not authorization_enabled else [
+        "SYSTEM_ADMIN 初始化合同必须固定为 system_admin → system_authorization_management，且不得混入业务默认授权。"
+    ] if system_role != "system_admin" or system_resource != SYSTEM_RESOURCE_KEY or system_role in grants else []
     integrity_failures = validate_authorization_manifest(
         manifest,
         requirement_spec,
@@ -238,7 +240,7 @@ def authorization_deliverability_report(
         _check("action_endpoint_resource_closure", "Action → Endpoint → Resource 是否闭环", closure_failures, default_access_notes),
         _check("controller_guard_delivery", "受控能力是否可交付后端 guard", [*guard_failures, *projection_failures]),
         _check("mixed_endpoint_control", "Endpoint 是否混用受控/未受控 action", mixed_failures),
-        _check("initial_admin_system_resource", "Initial Admin 是否拥有 system resource", initial_admin_failures),
+        _check("system_authorization_contract", "SYSTEM_ADMIN 是否仅拥有系统权限管理资源", system_authorization_failures),
     ]
     return {
         "schemaVersion": "authorization-deliverability.v1",

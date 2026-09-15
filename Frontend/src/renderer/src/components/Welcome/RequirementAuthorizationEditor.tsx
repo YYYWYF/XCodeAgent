@@ -1,5 +1,5 @@
 import { DeleteOutlined, PlusOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
-import { Button, Input, Select, Switch, Typography } from 'antd'
+import { Button, Input, Select, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../utils'
 
@@ -63,10 +63,9 @@ function AuthorizationItem({
   )
 }
 
-// 编辑 RequirementSpec 权限业务候选、首次默认角色授权和初始系统管理员选择。
+// 编辑 RequirementSpec 的业务权限候选和默认业务角色授权。
 export default function RequirementAuthorizationEditor({ onChange, spec }: Props): ReactElement {
   const authorization = asRecord(spec.authorization_requirements)
-  const enabled = authorization.enabled === true
   const roles = recordList(spec.user_roles)
   const roleOptions = roles
     .map((role) => ({
@@ -108,46 +107,6 @@ export default function RequirementAuthorizationEditor({ onChange, spec }: Props
       field,
       recordList(authorization[field]).filter((_item, itemIndex) => itemIndex !== index)
     )
-  }
-
-  // 选择初始系统管理员角色，并将系统属性作为角色种子事实同步写回。
-  const updateInitialAdminRole = (roleId: string): void => {
-    let nextRoles = roles
-    let selectedRoleId = roleId
-    if (roleId === '__create_system_administrator__') {
-      const usedIds = new Set(roles.map((role) => textValue(role.id)))
-      selectedRoleId = 'system_administrator'
-      let suffix = 2
-      while (usedIds.has(selectedRoleId)) {
-        selectedRoleId = `system_administrator_${suffix}`
-        suffix += 1
-      }
-      nextRoles = [
-        ...roles,
-        {
-          id: selectedRoleId,
-          name: '系统管理员',
-          description: '首次负责系统权限管理的角色。',
-          isSystemRole: true,
-          isInitialAdminRole: true
-        }
-      ]
-    }
-    onChange({
-      ...spec,
-      user_roles: nextRoles.map((role) => {
-        const isSelected = textValue(role.id) === selectedRoleId
-        return {
-          ...role,
-          isSystemRole: isSelected || role.isSystemRole === true,
-          isInitialAdminRole: isSelected
-        }
-      }),
-      authorization_requirements: {
-        ...authorization,
-        initialAdminRoleId: selectedRoleId
-      }
-    })
   }
 
   // 为权限章节追加一个空的业务候选，只要求填写业务语义，不要求技术绑定。
@@ -192,27 +151,8 @@ export default function RequirementAuthorizationEditor({ onChange, spec }: Props
         只保留用户需求明确提及的业务页面和操作；未提及的候选保持为空，不进行
         资源控制。页面和操作入口对无权限成员固定隐藏，直接访问固定返回 403。
       </Text>
-      <div className={cx('requirement-editor-field')}>
-        <Text>涉及应用级资源授权（由新建应用设置决定）</Text>
-        <Switch checked={enabled} disabled />
-      </div>
-      {enabled ? (
-        <>
-          <div className={cx('requirement-editor-field')}>
-            <Text>初始系统管理员角色</Text>
-            <Select
-              onChange={updateInitialAdminRole}
-              options={[
-                ...roleOptions,
-                {
-                  label: '新建独立系统管理员',
-                  value: '__create_system_administrator__'
-                }
-              ]}
-              value={textValue(authorization.initialAdminRoleId)}
-            />
-          </div>
-          <div className={cx('requirement-editor-grid')}>
+      <Text type="secondary">初始权限管理员由应用配置中的真实 Subject 初始化并绑定平台固定 SYSTEM_ADMIN，不属于业务角色编辑范围。</Text>
+      <div className={cx('requirement-editor-grid')}>
             <section className={cx('requirement-editor-section')}>
               <header>
                 <Title level={5}>受控页面</Title>
@@ -329,11 +269,7 @@ export default function RequirementAuthorizationEditor({ onChange, spec }: Props
                 </AuthorizationItem>
               ))}
             </section>
-          </div>
-        </>
-      ) : (
-        <Text type="secondary">不涉及应用级资源授权；候选规则会保持为空。</Text>
-      )}
+      </div>
     </section>
   )
 }

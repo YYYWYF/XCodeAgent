@@ -460,6 +460,7 @@ def begin_current_artifact_revision(
             {
                 "requirement_revision_id": uuid4().hex,
                 "authorization_config_conflict": {},
+                "pending_application_config_target": {},
                 "clarification": {},
                 "requirements_confirmed": False,
                 "requirement_spec_path": "",
