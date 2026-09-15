@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
@@ -32,15 +32,32 @@ def save_repair(workspace: str, thread_id: str, repair: dict[str, Any]) -> None:
 
 
 def safe_file(workspace: str, path: str) -> str:
-    """严格限制修复到生成项目内的精确非敏感文件。"""
+    """将虚拟绝对路径规范为工作区相对路径，并限制到精确非敏感文件。"""
     from app.agents.small_task.scope import _is_forbidden_path
     from app.workspace.workspace import SENSITIVE_FILE_NAMES
-    normalized = path.replace("\\", "/")
-    parts = Path(normalized).parts
-    if not parts or any(marker in normalized for marker in "*?[]{}") or any(part.lower() in SENSITIVE_FILE_NAMES for part in parts) or parts[0] not in {"frontend", "Frontend", "backend", "Backend"} or ".." in parts or any(p in {"node_modules", "target", "dist", ".git"} for p in parts) or _is_forbidden_path(normalized):
-        raise ValueError(f"修复计划包含不允许的路径：{normalized}")
-    target = Path(workspace).resolve() / normalized
-    if not target.resolve().is_relative_to(Path(workspace).resolve()) or target.is_dir() or any(p.startswith(".env") for p in parts):
+
+    virtual_path = str(path or "").strip().replace("\\", "/")
+    relative_path = virtual_path.lstrip("/")
+    parts = PurePosixPath(relative_path).parts
+    normalized = "/".join(parts)
+    sensitive_names = {name.casefold() for name in SENSITIVE_FILE_NAMES}
+    invalid_path = (
+        not parts
+        or any(marker in virtual_path for marker in "*?[]{}")
+        or any(part.casefold() in sensitive_names for part in parts)
+        or parts[0] not in {"frontend", "Frontend", "backend", "Backend"}
+        or ".." in parts
+        or _is_forbidden_path(normalized)
+    )
+    if invalid_path:
+        raise ValueError(f"修复计划包含不允许的路径：{virtual_path}")
+    workspace_root = Path(workspace).resolve()
+    target = workspace_root / normalized
+    if (
+        not target.resolve().is_relative_to(workspace_root)
+        or target.is_dir()
+        or any(part.casefold().startswith(".env") for part in parts)
+    ):
         raise ValueError("修复范围必须是工作区内非敏感的精确文件。")
     return normalized
 
@@ -75,14 +92,36 @@ def prepare_repair(workspace: str, thread_id: str, previous: dict[str, Any], fee
     paths: list[str] = []
     for index, task in enumerate(plan.get("repair_tasks") or []):
         changes = task.get("change_scope") or []
-        selected = [safe_file(workspace, str(item.get("path") or "")) for item in changes]
+        # RepairPlanner 按工作区虚拟根返回 `/frontend/...`；这里只规范化一次，
+        # 后续授权、目标文件和变更范围必须复用同一值，避免范围身份发生漂移。
+        normalized_changes = [
+            {**item, "path": safe_file(workspace, str(item.get("path") or ""))}
+            for item in changes
+            if isinstance(item, dict)
+        ]
+        selected = [str(item["path"]) for item in normalized_changes]
         if not selected or len(selected) > 30:
             raise ValueError("修复计划必须明确列出 1–30 个文件。")
         paths.extend(selected)
         for owner in ("backend", "frontend"):
             owner_paths = [path for path in selected if path.lower().startswith(owner + "/")]
             if owner_paths:
-                tasks.append({"id": f"preview:{iteration + 1}:{index}:{owner}", "owner": owner, "title": task.get("title"), "description": task.get("description"), "allowed_paths": owner_paths, "target_files": owner_paths, "change_scope": [item for item in changes if item.get("path") in owner_paths], "failure_evidence": evidence})
+                tasks.append(
+                    {
+                        "id": f"preview:{iteration + 1}:{index}:{owner}",
+                        "owner": owner,
+                        "title": task.get("title"),
+                        "description": task.get("description"),
+                        "allowed_paths": owner_paths,
+                        "target_files": owner_paths,
+                        "change_scope": [
+                            item
+                            for item in normalized_changes
+                            if item["path"] in owner_paths
+                        ],
+                        "failure_evidence": evidence,
+                    }
+                )
     if not tasks:
         raise ValueError("诊断没有产生可执行的修复任务。")
     if len(tasks) > 10 or len(set(paths)) > 100:

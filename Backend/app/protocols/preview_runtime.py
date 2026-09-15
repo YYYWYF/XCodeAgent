@@ -76,7 +76,7 @@ def blocking_task(workspace: str, thread_id: str = "") -> dict[str, Any] | None:
             return {"threadId": initialization.thread_id, "message": "当前应用的规划或模板任务尚未结束，请完成或明确停止后再操作。"}
         for execution in lifecycle.active_executions.values():
             if execution.thread_id != thread_id and str(execution.status) in {"running", "stopping", "awaiting_user"}:
-                return {"threadId": execution.thread_id, "runId": execution.run_id, "message": "当前应用有任务执行中或等待确认，请完成或明确停止后再操作。"}
+                return {"threadId": execution.thread_id, "runId": execution.run_id, "message": "当前应用有会话执行中或等待确认，请完成或明确停止后再操作。"}
     pending = pending_product_interaction(workspace)
     if pending:
         return pending

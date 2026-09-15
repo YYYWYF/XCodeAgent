@@ -1457,17 +1457,6 @@ export default function AiChatPanel({
     persistSession,
     setMessages: setSessionMessages,
     getMessages: getSessionMessages,
-    openTask: (threadId, runId) => {
-      const execution = runId ? applicationLifecycle?.activeExecutions?.[runId] : undefined
-      const targetThread =
-        threadId ||
-        execution?.threadId ||
-        Object.values(sessionExecutions).find(
-          (entry) => entry.identity.workspaceRoot === application.workspaceRoot
-        )?.identity.threadId
-      const session = allSessions.find((item) => item.threadId === targetThread)
-      if (session) void handleOpenChatSession(session.id)
-    },
     onReady: (url) => {
       setRuntimePreviewBaseUrl(url)
       setRuntimePreviewLaunchError('')

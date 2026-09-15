@@ -26,7 +26,6 @@ export type ServiceStatusControl = {
   blockedReason: string
   onRestart: () => void
   onDiagnose: () => void
-  onOpenTask?: () => void
 }
 
 type ServiceLayer = 'frontend' | 'backend'
@@ -290,13 +289,6 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               type="info"
               showIcon
               message={blockedReason}
-              action={
-                props.onOpenTask ? (
-                  <Button type="link" onClick={props.onOpenTask}>
-                    查看占用任务
-                  </Button>
-                ) : undefined
-              }
             />
           )}
           {!blockedReason && !runtime?.repairAvailable && (

@@ -74,7 +74,10 @@ try {
     })
   )
   assert.match(awaiting, /确认并修复/)
-  assert.match(awaiting, /提交不会自动确认计划/)
+  assert.match(awaiting, /停止修复/)
+  assert.doesNotMatch(awaiting, /提交不会自动确认计划/)
+  assert.doesNotMatch(awaiting, /重新诊断/)
+  assert.doesNotMatch(awaiting, /textarea/)
   const complete = renderToStaticMarkup(
     createElement(PreviewRepairControls, {
       repair: { status: 'completed', message: '预览服务已恢复' },
@@ -83,9 +86,8 @@ try {
       onRevision: () => {}
     })
   )
-  assert.match(complete, /预览服务已恢复/)
   assert.doesNotMatch(complete, /测试通过/)
-  assert.ok((complete.match(/disabled=""/g) || []).length >= 3)
+  assert.ok((complete.match(/disabled=""/g) || []).length >= 2)
   console.log('preview runtime AG-UI client and repair controls: passed')
 } finally {
   globalThis.fetch = originalFetch

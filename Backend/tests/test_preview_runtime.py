@@ -420,10 +420,16 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret-token", value)
 
     def test_repair_paths_are_exact_and_cannot_escape(self) -> None:
-        """拒绝模型输出通配符、敏感路径和工作区外的符号链接。"""
+        """接受虚拟根路径，同时拒绝通配符、宿主路径、敏感路径和越界符号链接。"""
+        self.assertEqual(
+            safe_file(self.workspace, "/frontend/src/index.tsx"),
+            "frontend/src/index.tsx",
+        )
         for path in ("frontend/**", "frontend/.npmrc", "frontend/.env", "backend/../../outside", "frontend"):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 safe_file(self.workspace, path)
+        with self.assertRaises(ValueError):
+            safe_file(self.workspace, str(Path(self.workspace) / "frontend/main.ts"))
         (Path(self.workspace) / "frontend/outside").symlink_to("/tmp")
         with self.assertRaises(ValueError):
             safe_file(self.workspace, "frontend/outside/file.ts")
@@ -432,10 +438,16 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         """贯穿诊断、精确计划确认、修改、复测和启动，旧确认不可覆盖成功结果。"""
         import os
         attempt = self.fail_launch()
-        plan = {"decision": "repair", "strategy": "修复编译错误", "repair_tasks": [{"title": "修复入口", "description": "修正语法", "change_scope": [{"path": "frontend/main.ts", "operation": "modify"}]}]}
+        plan = {"decision": "repair", "strategy": "修复编译错误", "repair_tasks": [{"title": "修复入口", "description": "修正语法", "change_scope": [{"path": "/frontend/main.ts", "operation": "modify"}]}]}
         with patch("app.agents.repair_planner.plan_build_failure_repair_with_repair_planner_agent", return_value=plan):
             prepared = self.result(await self.request("diagnose", attemptId=attempt))
         self.assertEqual((Path(self.workspace) / "frontend/main.ts").read_text(), "broken")
+        self.assertEqual(prepared["repair"]["paths"], ["frontend/main.ts"])
+        stored_repair = load_repair(self.workspace, self.thread)
+        self.assertEqual(
+            stored_repair["tasks"][0]["change_scope"][0]["path"],
+            "frontend/main.ts",
+        )
 
         def execute(**_kwargs: object) -> dict:
             """只在确认后模拟受限任务真正修改目标文件。"""

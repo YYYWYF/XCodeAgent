@@ -17,7 +17,6 @@ type Options = {
   persistSession: (input: PersistSessionInput) => Promise<void>
   setMessages: (key: string, messages: AgentChatMessage[]) => void
   getMessages: (key: string) => AgentChatMessage[]
-  openTask: (threadId?: string, runId?: string) => void
   onReady: (url: string) => void
 }
 
@@ -47,6 +46,9 @@ export function usePreviewRuntime(options: Options): {
   const [error, setError] = useState('')
   const [repairs, setRepairs] = useState<Record<string, PreviewRuntimePayload['repair']>>({})
   const busyRef = useRef(false)
+  const activeRunControllerRef = useRef<AbortController | null>(null)
+  const cancelRequestedRef = useRef(false)
+  const optimisticallyCancelledThreadsRef = useRef<Set<string>>(new Set())
   const optionsRef = useRef(options)
   optionsRef.current = options
   const lastReadyUrlRef = useRef('')
@@ -82,13 +84,19 @@ export function usePreviewRuntime(options: Options): {
       setRepairs((previous) => ({ ...previous, [threadId]: value.repair }))
       const identity = optionsRef.current.activeSession
       if (identity?.threadId === threadId) {
+        const optimisticallyCancelled = optimisticallyCancelledThreadsRef.current.has(threadId)
         if (['awaiting_confirmation', 'running', 'stopping'].includes(value.repair.status || '')) {
-          acquireSessionExecution(identity, true)
-          updateSessionExecutionStatus(
-            identity.key,
-            value.repair.status === 'stopping' ? 'stopping' : 'running'
-          )
-        } else if (value.repair.status) releaseSessionExecution(identity.key)
+          if (!optimisticallyCancelled) {
+            acquireSessionExecution(identity, true)
+            updateSessionExecutionStatus(
+              identity.key,
+              value.repair.status === 'stopping' ? 'stopping' : 'running'
+            )
+          }
+        } else if (value.repair.status) {
+          optimisticallyCancelledThreadsRef.current.delete(threadId)
+          releaseSessionExecution(identity.key)
+        }
         // 断线后读到服务端当前计划时，将其补回同一历史会话，不创建新会话。
         const content = [value.repair.markdown, value.repair.message].filter(Boolean).join('\n\n')
         const current = optionsRef.current.getMessages(identity.key)
@@ -146,6 +154,60 @@ export function usePreviewRuntime(options: Options): {
     return () => controller.abort()
   }, [options.workspace, open, activeThread, repairRunning, receive])
 
+  /** 立即停止渲染端等待，并在后台让服务端完成取消与占用收口。 */
+  const cancelRepairImmediately = (identity?: SessionIdentity): void => {
+    const captured = optionsRef.current
+    const workspace = captured.workspace
+    const threadId = identity?.threadId || activeThread
+    const activeController = activeRunControllerRef.current
+    const hadActiveRun = Boolean(activeController)
+    const serverThreadId = threadId || randomUUID()
+
+    cancelRequestedRef.current = hadActiveRun
+    activeController?.abort()
+    activeRunControllerRef.current = null
+    busyRef.current = false
+    setBusy(false)
+    setError('')
+
+    if (threadId) {
+      optimisticallyCancelledThreadsRef.current.add(threadId)
+      setRepairs((previous) => ({
+        ...previous,
+        [threadId]: {
+          ...previous[threadId],
+          status: 'stopping',
+          message: '正在停止修复…'
+        }
+      }))
+    }
+    if (identity) releaseSessionExecution(identity.key)
+
+    // 取消请求不再阻塞按钮反馈；服务端返回后仍由同一会话更新最终状态和日志。
+    void runPreviewRuntime(
+      {
+        workspace,
+        action: 'cancel',
+        attemptId: snapshot?.runtime?.attemptId,
+        planId: identity ? repairs[identity.threadId]?.planId : undefined
+      },
+      {
+        threadId: serverThreadId,
+        onUpdate: (value) => {
+          if (workspaceRef.current === workspace) receive(value, threadId)
+        }
+      }
+    )
+      .catch((reason) => {
+        if (workspaceRef.current === workspace)
+          setError(reason instanceof Error ? reason.message : '停止修复失败')
+      })
+      .finally(() => {
+        // 有正在等待的 AG-UI 运行时由其 catch 分支清理标记；没有运行时则在后台请求结束后清理。
+        if (!hadActiveRun) cancelRequestedRef.current = false
+      })
+  }
+
   /** 把本轮进度和结果保存到既有历史对话记录。 */
   const execute = async (
     action: PreviewAction,
@@ -153,13 +215,15 @@ export function usePreviewRuntime(options: Options): {
     feedback = ''
   ): Promise<void> => {
     if (busyRef.current && action !== 'cancel') return
+    if (action === 'cancel') {
+      cancelRepairImmediately(identity)
+      return
+    }
     const captured = optionsRef.current
     const workspace = captured.workspace
-    const cancelling = action === 'cancel'
-    if (!cancelling) {
-      busyRef.current = true
-      setBusy(true)
-    }
+    cancelRequestedRef.current = false
+    busyRef.current = true
+    setBusy(true)
     setError('')
     const previous = identity ? captured.getMessages(identity.key) : []
     const now = Date.now()
@@ -194,9 +258,11 @@ export function usePreviewRuntime(options: Options): {
       if (identity)
         captured.setMessages(identity.key, [...previous, user, assistant, ...changeMessages])
     }
-    if (!cancelling) updateMessages()
+    updateMessages()
+    const operationController = new AbortController()
+    activeRunControllerRef.current = operationController
     try {
-      if (identity && !cancelling) {
+      if (identity) {
         const blocker = acquireSessionExecution(identity, true)
         if (blocker && blocker.identity.key !== identity.key)
           throw new Error('当前开发阶段已有执行任务。')
@@ -212,12 +278,14 @@ export function usePreviewRuntime(options: Options): {
         },
         {
           threadId: identity?.threadId || randomUUID(),
+          signal: operationController.signal,
           onUpdate: (value) => {
             if (workspaceRef.current !== workspace) return
             receive(value, identity?.threadId)
+            if (cancelRequestedRef.current) return
             if (value.status !== 'failed') accepted = true
             const progress = value.progress?.message
-            if (progress && progress !== lastProgress && !cancelling) {
+            if (progress && progress !== lastProgress) {
               lastProgress = progress
               assistant = {
                 ...assistant,
@@ -238,6 +306,7 @@ export function usePreviewRuntime(options: Options): {
           }
         }
       )
+      if (cancelRequestedRef.current) return
       const repair = value.repair
       awaitingConfirmation = repair?.status === 'awaiting_confirmation'
       const oldChangeIds = new Set(previous.map((message) => message.codeChanges?.id))
@@ -269,6 +338,10 @@ export function usePreviewRuntime(options: Options): {
       )
         captured.onReady(value.runtime.previewUrl)
     } catch (reason) {
+      if (cancelRequestedRef.current) {
+        cancelRequestedRef.current = false
+        return
+      }
       const message = reason instanceof Error ? reason.message : '预览服务操作失败'
       setError(message)
       assistant = { ...assistant, content: message, error: message }
@@ -279,13 +352,13 @@ export function usePreviewRuntime(options: Options): {
         return
       }
     } finally {
-      if (!cancelling) {
-        busyRef.current = false
-        setBusy(false)
-        if (identity && !awaitingConfirmation) releaseSessionExecution(identity.key)
-      }
+      if (activeRunControllerRef.current === operationController)
+        activeRunControllerRef.current = null
+      busyRef.current = false
+      setBusy(false)
+      if (identity && !awaitingConfirmation) releaseSessionExecution(identity.key)
     }
-    if (identity && !cancelling) {
+    if (identity) {
       updateMessages()
       await pendingSave
       await captured.persistSession({
@@ -308,7 +381,7 @@ export function usePreviewRuntime(options: Options): {
     }
   }
   const blockedReason = options.localBlocked
-    ? '当前应用有任务执行中或等待确认，请完成或明确停止后再操作。'
+    ? '当前应用有会话执行中或等待确认，请完成或明确停止后再操作。'
     : snapshot?.blockedBy?.message ||
       (snapshot?.runtime?.maintenance ? '当前应用有预览维护任务，请完成或停止后再操作。' : '')
   return {
@@ -324,14 +397,7 @@ export function usePreviewRuntime(options: Options): {
       },
       onDiagnose: () => {
         void diagnose()
-      },
-      onOpenTask: blockedReason
-        ? () =>
-            options.openTask(
-              snapshot?.blockedBy?.threadId || snapshot?.runtime?.maintenance?.threadId,
-              snapshot?.blockedBy?.runId
-            )
-        : undefined
+      }
     },
     repairSession,
     repairState: activeThread ? repairs[activeThread] : undefined,
