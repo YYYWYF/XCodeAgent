@@ -160,6 +160,18 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("global_check", 0), self.phases)
         self.assertIn(("assembling", 0), self.phases)
         self.assertTrue(result.assembly.assembled_plan["task_graph"]["validation"]["is_valid"])
+        self.assertEqual(
+            result.assembly.assembled_plan["build_execution_scope"],
+            plain_json(inputs.build_execution_scope),
+        )
+        for field in (
+            "confirmation_status",
+            "confirmed_at",
+            "confirmed_from",
+            "draft_identity",
+            "last_update",
+        ):
+            self.assertNotIn(field, result.assembly.assembled_plan)
         self.assertNotIn("confirmation_status", result.assembly.assembled_plan)
         self.assertEqual(before, inputs.model_dump_json())
         # B 两个 Attempt 复用同一冻结输入；Context 不携带 A/C 的当前候选正文。

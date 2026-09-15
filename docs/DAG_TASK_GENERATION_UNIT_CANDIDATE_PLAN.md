@@ -2050,6 +2050,15 @@ Task input invalidation propagation
 historical Task automatic removal
 ```
 
+## Plan root metadata ownership
+
+Scope Assembly 的 append-only 语义只针对 confirmed Tasks 及其累计 DAG 内容：历史 Task
+必须保留自身的 status、acceptance contract 和 execution history。Plan root 则不随 baseline
+继承：`build_execution_scope` 与 `template_context` 属于当前 PlanningRun，Assembly 后必须
+重新绑定当前冻结值。`confirmation_status`、`confirmed_at`、`confirmed_from`、
+`draft_identity` 属于 Pending/Confirm lifecycle，不得从 ConfirmedPlan 进入新的 planning
+draft；`last_update` 属于旧 Build runtime，也不得进入新的 Planning draft。
+
 ---
 
 # 27. Assembly ID 规则

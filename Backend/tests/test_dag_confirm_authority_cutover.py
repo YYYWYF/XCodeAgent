@@ -14,18 +14,23 @@ from app.graph.nodes.task_planning_adapter import (
     create_async_workflow_planning_adapter,
 )
 from app.graph.workflow import build_graph
+from app.services.build_task_plan_lifecycle import confirm_pending_build_task_plan
+from app.services.build_task_planning_service import run_mainline_planning
 from app.services.dag_planning_orchestrator import DagPlanningError
 from app.protocols.workflow.request import workflow_run_inputs
 from app.services.unit_generation_contracts import UnitGenerationAttemptResult
 from app.services.unit_generation import UnitGenerationInfrastructureError
+from app.workspace.planning_run_documents import load_planning_run
 from app.workspace.task_documents import (
     build_task_plan_json_path,
     build_task_plan_pending_json_path,
     load_confirmed_build_task_plan,
     load_pending_build_task_plan,
     validate_pending_self_digest,
+    write_build_task_plan_json,
 )
 from tests.dag_planning_baseline_fixtures import (
+    confirmed_baseline,
     execution_scope,
     formal_artifacts,
     project_plan,
@@ -112,6 +117,122 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
         pending = load_pending_build_task_plan(self._state())
         self.assertIsNotNone(pending)
         return result, validate_pending_self_digest(pending).model_dump(mode="json")
+
+    async def _assert_cross_scope_confirmation(
+        self,
+        *,
+        previous_scope: dict[str, str],
+        current_scope: dict[str, str],
+        thread_id: str,
+    ) -> None:
+        """串起旧 Formal、当前 Run、Pending 和 Confirm，核对每一层 scope invariant。"""
+
+        formal = confirmed_baseline(self.plan, previous_scope)
+        state = self._state(
+            build_execution_scope=current_scope,
+            active_run_id=f"workflow-{thread_id}",
+            active_thread_id=thread_id,
+        )
+        write_build_task_plan_json(state, formal)
+
+        planning_results = []
+        confirm_results = []
+
+        async def capture_planning(*args, **kwargs):
+            """记录真实 Mainline Planning 返回的 ValidatedAssembledPlan。"""
+
+            result = await run_mainline_planning(*args, **kwargs)
+            planning_results.append(result)
+            return result
+
+        def capture_confirm(*args, **kwargs):
+            """记录真实 ConfirmPromotionResult，同时保留 production lifecycle 行为。"""
+
+            result = confirm_pending_build_task_plan(*args, **kwargs)
+            confirm_results.append(result)
+            return result
+
+        adapter = create_async_workflow_planning_adapter(
+            generate_once=self._model_stub(),
+            planning_service=capture_planning,
+            confirm_service=capture_confirm,
+        )
+        build_states: list[dict] = []
+
+        def build_spy(build_state: dict) -> dict:
+            """记录 Confirm 成功后唯一放行的 Build 状态。"""
+
+            build_states.append(dict(build_state))
+            return {"status": "completed", "phase": "build"}
+
+        with patch(
+            "app.graph.nodes.task_planning_adapter.load_template_state",
+            return_value=self.readiness,
+        ), patch("app.graph.nodes.build", new=build_spy):
+            # 在 patch 生效后构建 Graph，确保 Confirm 成功确实进入 Build 节点。
+            graph = build_graph(
+                checkpointer=InMemorySaver(),
+                prepare_build_tasks_node=adapter,
+            )
+            generated = await graph.ainvoke(
+                state,
+                config={"configurable": {"thread_id": thread_id}},
+            )
+            pending = load_pending_build_task_plan(state)
+            planning_run = load_planning_run(state)
+            self.assertIsNotNone(pending)
+            self.assertIsNotNone(planning_run)
+            identity = validate_pending_self_digest(pending)
+
+            confirmed = await graph.ainvoke(
+                {
+                    **state,
+                    "build_task_plan_confirmation": {
+                        "mode": "build_task_plan_confirmation",
+                        "action": "confirm",
+                        "planning_run_id": identity.planning_run_id,
+                        "draft_digest": identity.draft_digest,
+                    },
+                },
+                config={"configurable": {"thread_id": thread_id}},
+            )
+
+        self.assertEqual(len(planning_results), 1)
+        assembled = planning_results[0].validated_assembled_plan.assembly.assembled_plan
+        self.assertEqual(assembled["build_execution_scope"], current_scope)
+        self.assertNotIn("confirmed_from", assembled)
+        self.assertNotIn("last_update", assembled)
+        self.assertEqual(planning_run["build_execution_scope"], current_scope)
+        self.assertEqual(pending["build_execution_scope"], current_scope)
+        self.assertEqual(identity.build_execution_scope, current_scope)
+        self.assertEqual(generated["build_task_plan"]["build_execution_scope"], current_scope)
+        self.assertEqual(confirm_results[0].status, "confirmed")
+
+        confirmed_plan = load_confirmed_build_task_plan(self.workspace)
+        self.assertIsNotNone(confirmed_plan)
+        self.assertEqual(confirmed_plan["build_execution_scope"], current_scope)
+        self.assertEqual(confirmed["build_task_plan"]["build_execution_scope"], current_scope)
+        self.assertEqual(len(build_states), 1)
+        self.assertEqual(build_states[0]["build_task_plan"]["build_execution_scope"], current_scope)
+        self.assertFalse(build_task_plan_pending_json_path(state).exists())
+
+    async def test_endpoint_baseline_to_page_pending_confirm_keeps_current_scope(self) -> None:
+        """Confirmed endpoint A → Planning page B → Pending → Confirm 不得回泄 endpoint root。"""
+
+        await self._assert_cross_scope_confirmation(
+            previous_scope=execution_scope(target_type="endpoint", name="orders"),
+            current_scope=execution_scope(name="customers"),
+            thread_id="thread-cross-endpoint-page",
+        )
+
+    async def test_page_baseline_to_endpoint_pending_confirm_keeps_current_scope(self) -> None:
+        """Confirmed page A → Planning endpoint B → Pending → Confirm 对称保持当前 scope。"""
+
+        await self._assert_cross_scope_confirmation(
+            previous_scope=execution_scope(name="orders"),
+            current_scope=execution_scope(target_type="endpoint", name="customers"),
+            thread_id="thread-cross-page-endpoint",
+        )
 
     async def test_confirm_resume_promotes_formal_and_releases_build(self) -> None:
         """generation→Pending→确认→lifecycle Formal→Graph 投影→Build 放行。"""
@@ -301,7 +422,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with patch(
-            "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+            "app.graph.nodes.task_planning_adapter.load_template_state",
             return_value=self.readiness,
         ), patch(
             "app.services.dag_planning_orchestrator.generate_unit_candidate_once",

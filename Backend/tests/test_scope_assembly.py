@@ -95,7 +95,8 @@ def _base_inputs() -> dict:
 
     plan = project_plan()
     baseline = confirmed_baseline(plan, execution_scope())
-    context = build_context(plan, execution_scope(name="customers"))
+    current_scope = execution_scope(name="customers")
+    context = build_context(plan, current_scope)
     skeleton = ensure_build_unit_skeleton(plan, workspace_snapshot(), baseline)
     candidate = _candidate(SHARED_UNIT, [_customer_api_task()])
     return {
@@ -103,6 +104,7 @@ def _base_inputs() -> dict:
         "skeleton_plan": skeleton,
         "project_plan": plan,
         "build_context": context,
+        "build_execution_scope": current_scope,
         "reuse_facts": _reuse_facts(baseline),
         "generation_requirements_by_unit": {SHARED_UNIT: _requirement(SHARED_UNIT)},
         "candidates_by_unit": {SHARED_UNIT: candidate},
@@ -214,6 +216,41 @@ class ScopeAssemblyTests(unittest.TestCase):
 
         self.assertEqual(result.assembled_plan["template_context"], expected)
 
+    def test_plan_root_metadata_binds_current_scope_and_drops_prior_lifecycle(self) -> None:
+        """跨 Scope Assembly 只重绑当前 root metadata，不携带旧生命周期字段。"""
+
+        inputs = _base_inputs()
+        stale_root_metadata = {
+            "confirmed_from": {
+                "planning_run_id": "confirmed-endpoint-run",
+                "draft_digest": "e" * 64,
+            },
+            "draft_identity": {"planning_run_id": "confirmed-endpoint-run"},
+            "last_update": {
+                "stage": "build_scheduler",
+                "updated_at": "2026-09-04T00:00:00+00:00",
+            },
+        }
+        inputs["base_confirmed_plan"].update(deepcopy(stale_root_metadata))
+        inputs["skeleton_plan"].update(deepcopy(stale_root_metadata))
+
+        result = assemble_scope_build_task_plan(**inputs)
+        assembled = result.assembled_plan
+
+        self.assertEqual(assembled["build_execution_scope"], inputs["build_execution_scope"])
+        for field in (
+            "confirmation_status",
+            "confirmed_at",
+            "confirmed_from",
+            "draft_identity",
+            "last_update",
+        ):
+            self.assertNotIn(field, assembled)
+        self.assertEqual(
+            assembled["task_registry"]["orders:api"]["status"],
+            inputs["base_confirmed_plan"]["task_registry"]["orders:api"]["status"],
+        )
+
     def test_missing_template_context_stops_scope_assembly(self) -> None:
         """缺少模板绑定时必须以输入问题终止 Assembly，不能返回部分 DAG。"""
 
@@ -320,6 +357,7 @@ class ScopeAssemblyTests(unittest.TestCase):
             "skeleton_plan": deepcopy(inputs["skeleton_plan"]),
             "project_plan": deepcopy(inputs["project_plan"]),
             "build_context": deepcopy(inputs["build_context"]),
+            "build_execution_scope": deepcopy(inputs["build_execution_scope"]),
             "reuse_facts": inputs["reuse_facts"].model_dump(mode="json"),
             "candidates_by_unit": {
                 unit_id: candidate.model_dump(mode="json")
@@ -329,7 +367,13 @@ class ScopeAssemblyTests(unittest.TestCase):
 
         assemble_scope_build_task_plan(**inputs)
 
-        for name in ("base_confirmed_plan", "skeleton_plan", "project_plan", "build_context"):
+        for name in (
+            "base_confirmed_plan",
+            "skeleton_plan",
+            "project_plan",
+            "build_context",
+            "build_execution_scope",
+        ):
             self.assertEqual(inputs[name], snapshots[name])
         self.assertEqual(inputs["reuse_facts"].model_dump(mode="json"), snapshots["reuse_facts"])
         self.assertEqual(

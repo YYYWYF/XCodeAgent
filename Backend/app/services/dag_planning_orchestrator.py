@@ -71,7 +71,18 @@ class ValidatedAssembledPlan(FrozenPlanningModel):
                             for task in run.candidates[run.unit_states[key].latest_candidate_id].tasks}
         if set(self.assembly.candidate_task_ids) != current_task_ids:
             raise ValueError("ValidatedAssembledPlan 不能引用旧轮次或缺失的 Candidate Tasks。")
-        if _compiled_issues(self.assembly) or "confirmation_status" in plan or "confirmed_at" in plan:
+        if plain_json(plan.get("build_execution_scope")) != plain_json(run.build_execution_scope):
+            raise ValueError("ValidatedAssembledPlan 的 root Build scope 必须属于当前 PlanningRun。")
+        if _compiled_issues(self.assembly) or any(
+            field in plan
+            for field in (
+                "confirmation_status",
+                "confirmed_at",
+                "confirmed_from",
+                "draft_identity",
+                "last_update",
+            )
+        ):
             raise ValueError("ValidatedAssembledPlan 必须是通过编译检查且无确认身份的内存草稿。")
         return self
 
@@ -256,6 +267,7 @@ async def plan_dag_sequential(
             assembled = assemble_scope_build_task_plan(
                 base_confirmed_plan=frozen.base_confirmed_plan, skeleton_plan=frozen.skeleton_plan,
                 project_plan=frozen.project_plan, build_context=frozen.build_context,
+                build_execution_scope=frozen.build_execution_scope,
                 reuse_facts=frozen.reuse_facts, generation_requirements_by_unit=requirements.generation_requirements_by_unit,
                 candidates_by_unit={key: snapshot.candidates[snapshot.unit_states[key].latest_candidate_id]
                                     for key in snapshot.planning_unit_ids},

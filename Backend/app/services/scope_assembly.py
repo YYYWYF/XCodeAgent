@@ -352,12 +352,15 @@ def assemble_scope_build_task_plan(
     skeleton_plan: Mapping[str, Any],
     project_plan: Mapping[str, Any],
     build_context: Mapping[str, Any],
+    build_execution_scope: Mapping[str, Any],
     reuse_facts: ReuseFacts | Mapping[str, Any],
     generation_requirements_by_unit: Mapping[str, Any],
     candidates_by_unit: Mapping[str, CandidateAttempt | Mapping[str, Any]],
 ) -> ScopeAssemblyResult:
     """append-only 组装 retained Tasks 与当前 valid Candidates，并重编译 DAG 派生字段。
 
+    ``build_execution_scope`` 由当前 PlanningRun 显式提供，是唯一允许写入 Plan
+    root 的权威 Scope；ConfirmedPlan 和 skeleton 仅提供历史 Task 与当前编译骨架。
     本服务不选择 Candidate、不执行 retry、不写 PendingPlan，也不做 Task replacement。
     任一来源或 ID 冲突均在 registry 建立前失败，禁止自动 rename 或精确重复合并。
     """
@@ -366,6 +369,7 @@ def assemble_scope_build_task_plan(
         skeleton_plan,
         project_plan,
         build_context,
+        build_execution_scope,
         generation_requirements_by_unit,
         candidates_by_unit,
     )):
@@ -424,12 +428,19 @@ def assemble_scope_build_task_plan(
     graph_valid = assembled.get("task_graph", {}).get("validation", {}).get("is_valid") is True
     blocked_batches = assembled.get("execution", {}).get("blocked_batches", [])
     assembled = dict(assembled)
-    # 顶层绑定只来自本轮冻结 TemplateState，不能继承 ConfirmedPlan 或旧 compiler 结果。
+    # Plan root 的 scope 与 TemplateState 都只绑定当前 PlanningRun，不能继承旧 baseline。
+    assembled["build_execution_scope"] = deepcopy(plain_json(build_execution_scope))
     assembled["template_context"] = deepcopy(frozen_template_context)
     # Assembly 只产生等待 Global Validation 的内存草稿；正式 PendingPlan 生命周期
     # 由后续 Controller / persistence 在 Global success 后赋予，且不能继承 confirmed 基线。
-    assembled.pop("confirmation_status", None)
-    assembled.pop("confirmed_at", None)
+    for field in (
+        "confirmation_status",
+        "confirmed_at",
+        "confirmed_from",
+        "draft_identity",
+        "last_update",
+    ):
+        assembled.pop(field, None)
     assembled["status"] = "ready" if graph_valid and not blocked_batches else "blocked"
     task_origins = {
         **{task_id: "retained" for task_id in retained_task_ids},
