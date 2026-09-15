@@ -123,6 +123,121 @@ class RecoveryPointKind(StrEnum):
     CHECKPOINT = "checkpoint"
 
 
+class WorkflowReentryReason(StrEnum):
+    """区分失败重试与正式修订两种 Workflow Node 重入来源。"""
+
+    FAILURE_RETRY = "failure_retry"
+    REVISION = "revision"
+
+
+class WorkflowReentryContextAuthorityKind(StrEnum):
+    """区分 checkpoint 原语义现场与协调器新建的修订语义现场。"""
+
+    CHECKPOINT = "checkpoint"
+    REVISION_CONTEXT = "revision_context"
+
+
+class NodeEntryBoundary(ExecutionRecoveryModel):
+    """索引真实已提交的 Node Entry checkpoint，不复制完整 Graph State。"""
+
+    boundary_id: str = Field(min_length=1, max_length=512)
+    source_run_id: str = Field(min_length=1, max_length=512)
+    thread_id: str = Field(min_length=1, max_length=512)
+    target_node: str = Field(min_length=1, max_length=256)
+    checkpoint_id: str = Field(min_length=1, max_length=512)
+    checkpoint_ns: str = Field(default="", max_length=512)
+    lifecycle_revision: int | None = Field(default=None, ge=0)
+    workspace_revision: str | None = Field(default=None, max_length=512)
+    workspace_snapshot_hash: str | None = Field(default=None, max_length=512)
+    captured_at: datetime
+
+
+class WorkflowReentryContextAuthority(ExecutionRecoveryModel):
+    """保存重入语义上下文的权威身份，不在 Recovery DB 复制业务 State。"""
+
+    kind: WorkflowReentryContextAuthorityKind
+    boundary_id: str | None = Field(default=None, max_length=512)
+    source_run_id: str | None = Field(default=None, max_length=512)
+    thread_id: str | None = Field(default=None, max_length=512)
+    target_node: str | None = Field(default=None, max_length=256)
+    checkpoint_id: str | None = Field(default=None, max_length=512)
+    checkpoint_ns: str = Field(default="", max_length=512)
+    revision_context_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_authority_identity(self) -> "WorkflowReentryContextAuthority":
+        """确保两类语义 authority 只能携带各自必需的身份字段。"""
+
+        if self.kind is WorkflowReentryContextAuthorityKind.CHECKPOINT:
+            if (
+                not self.boundary_id
+                or not self.source_run_id
+                or not self.thread_id
+                or not self.target_node
+                or not self.checkpoint_id
+                or self.revision_context_sha256
+            ):
+                raise ValueError("CHECKPOINT context authority 缺少 Node Entry 身份。")
+        elif (
+            not self.revision_context_sha256
+            or self.boundary_id is not None
+            or self.source_run_id is not None
+            or self.thread_id is not None
+            or self.target_node is not None
+            or self.checkpoint_id is not None
+            or self.checkpoint_ns
+        ):
+            raise ValueError("REVISION_CONTEXT authority 必须只包含修订语义摘要。")
+        return self
+
+
+class WorkflowReentryLifecycleAuthority(ExecutionRecoveryModel):
+    """固定调用方已经决定的 lifecycle owner 与 revision。"""
+
+    owner_run_id: str = Field(min_length=1, max_length=512)
+    revision: int | None = Field(default=None, ge=0)
+
+
+class WorkflowReentryPlan(ExecutionRecoveryModel):
+    """统一描述从哪个 Node、携带哪份语义上下文重新进入 Workflow。"""
+
+    reason: WorkflowReentryReason
+    execution_kind: Literal["application_planning", "workbench"]
+    target_node: str = Field(min_length=1, max_length=256)
+    thread_id: str = Field(min_length=1, max_length=512)
+    source_run_id: str | None = Field(default=None, max_length=512)
+    context_authority: WorkflowReentryContextAuthority
+    lifecycle_authority: WorkflowReentryLifecycleAuthority
+    lineage_parent_run_id: str | None = Field(default=None, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_reason_contract(self) -> "WorkflowReentryPlan":
+        """强制失败重试只接受 source checkpoint，正式修订只接受新修订上下文。"""
+
+        if self.reason is WorkflowReentryReason.FAILURE_RETRY:
+            if (
+                not self.source_run_id
+                or self.lineage_parent_run_id != self.source_run_id
+                or self.context_authority.kind
+                is not WorkflowReentryContextAuthorityKind.CHECKPOINT
+                or self.context_authority.source_run_id != self.source_run_id
+                or self.context_authority.thread_id != self.thread_id
+                or self.context_authority.target_node != self.target_node
+            ):
+                raise ValueError("failure_retry 必须绑定 source lineage 与 CHECKPOINT authority。")
+        elif (
+            self.context_authority.kind
+            is not WorkflowReentryContextAuthorityKind.REVISION_CONTEXT
+        ):
+            raise ValueError("revision re-entry 必须绑定 REVISION_CONTEXT authority。")
+        return self
+
+
 class RecoveryDecision(StrEnum):
     """定义 P0.3A 对一次恢复判断给出的安全决策。"""
 

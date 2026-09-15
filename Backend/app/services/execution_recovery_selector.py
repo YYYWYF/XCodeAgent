@@ -11,7 +11,8 @@ from app.domain.execution_recovery import (
     RecoveryPoint,
     RecoveryPointKind,
 )
-from app.persistence.execution_recovery import list_recovery_points
+from app.persistence.execution_recovery import get_recovery_point, list_recovery_points
+from app.services.workflow_reentry import FailureTargetResolver
 
 
 @dataclass(frozen=True)
@@ -36,11 +37,39 @@ class RecoveryPointSelector:
     ) -> RecoveryPointSelection:
         """按历史顺序折叠重复观察并从新到旧返回 checkpoint 候选。"""
 
-        del graph
         history = await list_recovery_points(workspace, source.run_id)
         canonical = _collapse_checkpoint_observations(history)
         if source.status is DurableExecutionStatus.FAILED:
-            return _select_failed_node_predecessor(canonical, source=source)
+            try:
+                reentry = await FailureTargetResolver().resolve(
+                    workspace=workspace,
+                    source=source,
+                    graph=graph,
+                )
+            except Exception as exc:
+                return RecoveryPointSelection(
+                    point=None,
+                    reason_code=str(
+                        getattr(exc, "code", None) or "NODE_ENTRY_AUTHORITY_INVALID"
+                    ),
+                    reason=str(exc) or "失败 Node 的语义上下文 authority 无法验证。",
+                )
+            point = await get_recovery_point(
+                workspace,
+                reentry.context_authority.boundary_id or "",
+            )
+            if point is None:
+                return RecoveryPointSelection(
+                    point=None,
+                    reason_code="NODE_ENTRY_AUTHORITY_MISSING",
+                    reason="Node Entry Boundary 缺少对应的 checkpoint 索引。",
+                )
+            return RecoveryPointSelection(
+                point=point,
+                reason_code="FAILED_NODE_ENTRY_SELECTED",
+                reason="已从 committed LangGraph history 解析失败 Node 的精确入口。",
+                candidates=(point,),
+            )
         malformed_thread_point = next(
             (
                 point
@@ -74,40 +103,6 @@ class RecoveryPointSelector:
             reason="已从 RecoveryPoint history 选择最近的可验证 checkpoint 候选。",
             candidates=candidates,
         )
-
-
-def _select_failed_node_predecessor(
-    history: list[RecoveryPoint],
-    *,
-    source: DurableExecutionRecord,
-) -> RecoveryPointSelection:
-    """只为 FAILED execution 选择失败节点之前的精确 predecessor checkpoint。"""
-
-    failed_node = source.current_node
-    if not failed_node:
-        return RecoveryPointSelection(
-            point=None,
-            reason_code="FAILED_NODE_PREDECESSOR_NOT_FOUND",
-            reason="FAILED execution 缺少 current_node，无法确定要重新执行的失败步骤。",
-        )
-
-    candidates = tuple(
-        point
-        for point in reversed(history)
-        if _is_failed_node_predecessor(point, source=source, failed_node=failed_node)
-    )
-    if not candidates:
-        return RecoveryPointSelection(
-            point=None,
-            reason_code="FAILED_NODE_PREDECESSOR_NOT_FOUND",
-            reason="没有找到失败步骤之前、nextNodes 精确等于失败节点的已验证 checkpoint。",
-        )
-    return RecoveryPointSelection(
-        point=candidates[0],
-        reason_code="FAILED_NODE_PREDECESSOR_SELECTED",
-        reason="已找到失败步骤之前最近的精确 predecessor checkpoint。",
-        candidates=candidates,
-    )
 
 
 async def select_recovery_point(
@@ -185,20 +180,3 @@ def _is_native_checkpoint_candidate(
         return point.completed_node is not None
     return True
 
-
-def _is_failed_node_predecessor(
-    point: RecoveryPoint,
-    *,
-    source: DurableExecutionRecord,
-    failed_node: str,
-) -> bool:
-    """验证 FAILED replay 的 checkpoint、执行身份、namespace 和 successor 集合。"""
-
-    return (
-        point.kind is RecoveryPointKind.CHECKPOINT
-        and point.run_id == source.run_id
-        and point.thread_id == source.thread_id
-        and bool(point.checkpoint_id)
-        and point.checkpoint_ns == ""
-        and point.next_nodes == [failed_node]
-    )

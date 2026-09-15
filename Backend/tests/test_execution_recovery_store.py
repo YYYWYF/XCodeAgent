@@ -144,6 +144,10 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
                 str(row[1])
                 for row in connection.execute("PRAGMA table_info(recovery_attempts)")
             }
+            boundary_columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(node_entry_boundaries)")
+            }
             version = connection.execute(
                 "SELECT value FROM recovery_meta WHERE key = 'schema_version'"
             ).fetchone()
@@ -151,7 +155,20 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
             connection.close()
         self.assertIn("owner_session_id", execution_columns)
         self.assertIn("lifecycle_ownership_mode", attempt_columns)
-        self.assertEqual(version[0] if version else None, "7")
+        self.assertEqual(
+            {
+                "boundary_id",
+                "source_run_id",
+                "thread_id",
+                "target_node",
+                "checkpoint_id",
+                "checkpoint_ns",
+                "captured_at",
+            }
+            - boundary_columns,
+            set(),
+        )
+        self.assertEqual(version[0] if version else None, "8")
 
     async def test_insert_and_reload_execution(self) -> None:
         """ExecutionRecord 关闭连接后仍应能按 runId 重新读取。"""

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
@@ -105,15 +105,9 @@ class P04BRecoveryContractTests(unittest.IsolatedAsyncioTestCase):
             reason="stage restart is available",
             authority=SimpleNamespace(authority_sha256="a" * 64),
         )
-        with (
-            patch(
-                "app.services.execution_recovery_action_planner.ApplicationPlanningStageRecoveryContract.assess",
-                return_value=assessment,
-            ),
-            patch(
-                "app.services.execution_recovery_action_planner._source_was_native_retry",
-                new=AsyncMock(return_value=False),
-            ),
+        with patch(
+            "app.services.execution_recovery_action_planner.ApplicationPlanningStageRecoveryContract.assess",
+            return_value=assessment,
         ):
             action_plan, _ = await plan_recovery_action(
                 workspace=source.workspace,

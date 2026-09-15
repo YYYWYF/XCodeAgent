@@ -183,16 +183,16 @@ def _assess_validated_recovery(
     lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode,
     strategy_resolver: Callable[[RecoveryContext], RecoveryStrategyAssessment],
 ) -> RecoveryStrategyAssessment:
-    """在现场全部验证后区分 FAILED replay 与原有 INTERRUPTED policy。"""
+    """在现场全部验证后区分 FAILED re-entry 与原有 INTERRUPTED policy。"""
 
     if source.status is DurableExecutionStatus.FAILED:
-        # FAILED 的恢复边界已经由 current_node 与 exact predecessor checkpoint 定义，
+        # FAILED 的恢复边界已经由 current_node 与 exact Node Entry checkpoint 定义，
         # 不再把异常类型、HTTP 状态或 replay 标志当作第二个准入策略。
         return RecoveryStrategyAssessment(
             decision=RecoveryDecision.READY_NATIVE,
             strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
-            reason_code="FAILED_NODE_REPLAY_READY",
-            reason="已找到失败步骤之前的已验证 checkpoint，可重新执行失败步骤。",
+            reason_code="FAILED_NODE_REENTRY_READY",
+            reason="已找到失败 Node 之前的精确入口 checkpoint，可重新执行该 Node。",
         )
     return strategy_resolver(
         RecoveryContext(
@@ -289,6 +289,16 @@ async def _validate_checkpoint(
         return _invalid_checkpoint(
             "CHECKPOINT_NEXT_MISMATCH",
             "真实 checkpoint 的 nextNodes 与 RecoveryPoint 不一致。",
+        )
+    values = getattr(snapshot, "values", {}) or {}
+    values = values if isinstance(values, dict) else {}
+    if (
+        source.status is DurableExecutionStatus.FAILED
+        and str(values.get("active_run_id") or "") != source.run_id
+    ):
+        return _invalid_checkpoint(
+            "SEMANTIC_CONTEXT_AUTHORITY_MISSING",
+            "Node Entry checkpoint 不属于当前 FAILED source execution。",
         )
     if _snapshot_requires_user_input(snapshot, source=source):
         return _CheckpointValidation(
@@ -764,8 +774,8 @@ def _plan_from_assessment(
         and assessment.decision is RecoveryDecision.READY_NATIVE
         and assessment.strategy is RecoveryStrategy.NATIVE_CHECKPOINT
     ):
-        reason_code = "FAILED_NODE_REPLAY_READY"
-        reason = "已找到失败步骤之前的已验证 checkpoint，可重新执行失败步骤。"
+        reason_code = "FAILED_NODE_REENTRY_READY"
+        reason = "已验证失败 Node 开始前的精确 Semantic Context checkpoint。"
 
     plan = _plan_from_point(
         source=source,

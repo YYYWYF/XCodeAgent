@@ -62,7 +62,10 @@ from app.services.execution_recovery_action_planner import (
     plan_recovery_action,
 )
 from app.services.execution_recovery_coordinator import prepare_continue
-from app.services.execution_recovery_executor import prepare_native_recovery
+from app.services.execution_recovery_executor import (
+    WorkflowReentryExecutor,
+    prepare_native_recovery,
+)
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 from app.services.execution_recovery_strategy import AllowNodePolicy
 from app.services.execution_lease_heartbeat import stop_execution_heartbeat
@@ -141,6 +144,12 @@ class _SnapshotGraph:
         configurable = config["configurable"]
         checkpoint_id = str(configurable["checkpoint_id"])
         return self._snapshots[checkpoint_id]
+
+    async def aget_state_history(self, _config: dict[str, Any]):
+        """按 newest-first 提供真实 committed history 的测试替身。"""
+
+        for snapshot in reversed(tuple(self._snapshots.values())):
+            yield snapshot
 
 
 def _settings(model_name: str, *, provider: str = "openai") -> Settings:
@@ -494,7 +503,7 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
                     thread_id=self.thread_id,
                     checkpoint_id=checkpoint_id,
                     next_nodes=["technical_planning"],
-                    values={"request": "test"},
+                    values={"request": "test", "active_run_id": self.source_run_id},
                 )
                 for checkpoint_id in checkpoint_ids
             }
@@ -530,8 +539,8 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
             graph=graph,
         )
 
-        self.assertEqual(recovery_plan.recovery_point_id, predecessor.recovery_point_id)
-        self.assertEqual(recovery_plan.reason_code, "FAILED_NODE_REPLAY_READY")
+        self.assertEqual(recovery_plan.checkpoint_id, predecessor.checkpoint_id)
+        self.assertEqual(recovery_plan.reason_code, "FAILED_NODE_REENTRY_READY")
         self.assertIsNotNone(action_plan.primary_action)
         assert action_plan.primary_action is not None
         self.assertEqual(action_plan.primary_action.kind, RecoveryActionKind.RETRY_FAILED_NODE)
@@ -550,7 +559,7 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
             graph=graph,
         )
 
-        self.assertEqual(plan.recovery_point_id, predecessor.recovery_point_id)
+        self.assertEqual(plan.checkpoint_id, predecessor.checkpoint_id)
         self.assertEqual(plan.next_nodes, ["technical_planning"])
 
     async def test_multi_successor_checkpoint_is_not_failed_node_authority(self) -> None:
@@ -562,15 +571,24 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
             ["technical_planning", "other_node"],
             1,
         )
-        graph = self._graph(["checkpoint-b"])
+        graph = _SnapshotGraph(
+            {
+                "checkpoint-b": _Snapshot(
+                    thread_id=self.thread_id,
+                    checkpoint_id="checkpoint-b",
+                    next_nodes=["technical_planning", "other_node"],
+                    values={"active_run_id": self.source_run_id},
+                )
+            }
+        )
         plan = await prepare_continue(
             workspace=str(self.workspace),
             source_run_id=self.source_run_id,
             graph=graph,
         )
 
-        self.assertEqual(plan.reason_code, "FAILED_NODE_PREDECESSOR_NOT_FOUND")
-        self.assertNotEqual(plan.reason_code, "FAILED_NODE_REPLAY_READY")
+        self.assertEqual(plan.reason_code, "NODE_ENTRY_AUTHORITY_MISSING")
+        self.assertNotEqual(plan.reason_code, "FAILED_NODE_REENTRY_READY")
         self.assertIsNone(plan.recovery_point_id)
 
     async def test_missing_predecessor_never_falls_back_to_latest_checkpoint(self) -> None:
@@ -586,7 +604,7 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
             graph=graph,
         )
 
-        self.assertEqual(plan.reason_code, "FAILED_NODE_PREDECESSOR_NOT_FOUND")
+        self.assertEqual(plan.reason_code, "NODE_ENTRY_AUTHORITY_MISSING")
         self.assertIsNone(plan.recovery_point_id)
         self.assertEqual(plan.next_nodes, [])
 
@@ -631,7 +649,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self._start()
         source, action_plan, _assessment = await self.harness.resolve_action()
         self.assertEqual(source.status, DurableExecutionStatus.FAILED)
-        self.assertEqual(action_plan.reason_code, "FAILED_NODE_REPLAY_READY")
+        self.assertEqual(action_plan.reason_code, "FAILED_NODE_REENTRY_READY")
         self.assertIsNotNone(action_plan.primary_action)
         assert action_plan.primary_action is not None
         self.assertEqual(
@@ -685,7 +703,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             "app.config.Settings.from_env",
             side_effect=self.harness.settings,
         ):
-            context = await prepare_native_recovery(
+            context = await WorkflowReentryExecutor().prepare_failure_retry(
                 workspace=str(self.harness.workspace),
                 source_run_id=self.harness.source_run_id,
                 graph=self.harness.graph,
@@ -693,6 +711,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             self.harness.heartbeat_tasks.append(context.heartbeat_task)
             self.assertNotEqual(context.new_run_id, self.harness.source_run_id)
             self.assertEqual(context.thread_id, self.harness.thread_id)
+            self.assertEqual(context.child_execution.first_node, "technical_planning")
             self.assertEqual(tuple(context.fork_snapshot.next), ("technical_planning",))
             await self.harness.graph.ainvoke(None, config=context.fork_config)
 
@@ -719,7 +738,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             "app.config.Settings.from_env",
             side_effect=self.harness.settings,
         ):
-            context = await prepare_native_recovery(
+            context = await WorkflowReentryExecutor().prepare_failure_retry(
                 workspace=str(self.harness.workspace),
                 source_run_id=self.harness.source_run_id,
                 graph=self.harness.graph,
@@ -849,7 +868,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(second_source.run_id, first_child_run_id)
             self.assertEqual(second_action.primary_action.kind, RecoveryActionKind.RETRY_FAILED_NODE)
             self.harness.current_model = "mimo-v2.5-pro"
-            second_context = await prepare_native_recovery(
+            second_context = await WorkflowReentryExecutor().prepare_failure_retry(
                 workspace=str(self.harness.workspace),
                 source_run_id=second_source.run_id,
                 graph=self.harness.graph,

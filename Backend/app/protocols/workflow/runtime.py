@@ -62,13 +62,17 @@ from app.protocols.workflow.stream_events import (
     _workflow_ag_ui_frames,
 )
 from app.config import Settings
-from app.domain.execution_recovery import DurableExecutionRunConflictError
+from app.domain.execution_recovery import (
+    DurableExecutionRunConflictError,
+    ExecutionFailureBoundary,
+)
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
 from app.graph.application_planning_interrupts import (
     validate_application_planning_review_action,
 )
 from app.graph.application_planning_revision import cleared_design_change_context
 from app.persistence.checkpoints import cleanup_workflow_checkpoints
+from app.persistence.execution_recovery import get_execution
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
@@ -78,7 +82,6 @@ from app.services.execution_recovery import (
     best_effort_recovery_observation,
     capture_recovery_point,
     durable_execution_status,
-    failure_boundary_from_recovery_point,
     observe_execution_cancelled,
     observe_execution_failed,
     observe_execution_finished,
@@ -86,7 +89,10 @@ from app.services.execution_recovery import (
     observe_node_started,
 )
 from app.services.execution_failure_classifier import sanitize_failure_diagnostic
-from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext
+from app.services.execution_recovery_executor import (
+    NativeRecoveryRuntimeContext,
+    WorkflowReentryExecutor,
+)
 from app.services.execution_lease_heartbeat import (
     maintain_execution_heartbeat,
     stop_execution_heartbeat,
@@ -95,6 +101,11 @@ from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.backend_instance import current_backend_instance
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.user_skill_runtime import validate_selected_user_skills
+from app.services.workflow_reentry import (
+    RevisionTargetResolver,
+    SYNTHETIC_WORKFLOW_ENTRY_NODE,
+    resolve_current_node_entry_boundary,
+)
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
 
@@ -109,6 +120,24 @@ def _graph_stream_supports_subgraphs(graph: Any) -> bool:
         parameter.name == "subgraphs"
         or parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in parameters
+    )
+
+
+def _is_formal_revision_reentry(state: dict[str, Any]) -> bool:
+    """识别已经由 Backend Coordinator 建立身份与语义上下文的正式修订运行。"""
+
+    return bool(
+        str(state.get("change_id") or "").strip()
+        and any(
+            state.get(key) is not None
+            for key in (
+                "revision_impact",
+                "revision_draft",
+                "revision_continuation",
+                "design_change_request",
+                "change_target",
+            )
+        )
     )
 
 
@@ -433,70 +462,6 @@ def build_workflow_ag_ui_stream(
             TextMessageStartEvent(messageId=message_id, role="assistant")
         )
 
-        pending_recovery_node: str | None = None
-
-        async def capture_pending_recovery_point(node_name: str) -> Any | None:
-            """在下一个 Graph update 到来后捕获上一节点已提交的真实 checkpoint。"""
-
-            nonlocal pending_recovery_node
-            if not durable_execution_started or not node_name:
-                return
-            history_snapshot: Any | None = None
-            history_reader = getattr(active_graph, "aget_state_history", None)
-            review_node = node_name.endswith("_review")
-            for _ in range(30 if review_node else 1):
-                review_route_snapshot: Any | None = None
-                if callable(history_reader):
-                    try:
-                        async for candidate in history_reader(
-                            recovery_observation_config or config or {}
-                        ):
-                            values = getattr(candidate, "values", {})
-                            if not isinstance(values, dict):
-                                continue
-                            if not review_node and str(values.get("phase") or "") == node_name:
-                                history_snapshot = candidate
-                                break
-                            candidate_next = tuple(getattr(candidate, "next", ()) or ())
-                            if (
-                                review_route_snapshot is None
-                                and review_node
-                                and candidate_next
-                                and node_name not in candidate_next
-                                and all(not item.startswith("__") for item in candidate_next)
-                            ):
-                                # review 节点的业务 phase 保持产物节点名；没有精确 phase 时，
-                                # 仍只从真实 history 选择带后继的 checkpoint，不推导业务路由。
-                                review_route_snapshot = candidate
-                    except Exception:
-                        # 历史读取只是 Recovery 旁路证据，失败时仍回退到当前 live snapshot。
-                        history_snapshot = None
-                if history_snapshot is None:
-                    history_snapshot = review_route_snapshot
-                if history_snapshot is not None or not review_node:
-                    break
-                # Graph 可能正好在提交后继 checkpoint；让出一个调度周期再读真实 history。
-                await asyncio.sleep(0.01)
-            point = await best_effort_recovery_observation(
-                operation="point.captured",
-                workspace=workspace,
-                run_id=run_id,
-                thread_id=thread_id,
-                workflow_scope=workflow_scope,
-                callback=lambda: capture_recovery_point(
-                    graph=active_graph,
-                    config=recovery_observation_config or config or {},
-                    workspace=workspace,
-                    thread_id=thread_id,
-                    run_id=run_id,
-                    workflow_scope=workflow_scope,
-                    completed_node=node_name,
-                    snapshot=history_snapshot,
-                ),
-            )
-            pending_recovery_node = None
-            return point
-
         try:
             request = workflow_inputs["request"]
             if not request:
@@ -769,6 +734,29 @@ def build_workflow_ag_ui_stream(
                 observability = native_recovery_context.observability
                 first_node_name = native_recovery_context.recovery_plan.next_nodes[0]
                 current_phase = first_node_name
+            elif _is_formal_revision_reentry(initial_state):
+                # ChangeImpactAnalyzer 与 Revision Coordinator 已经决定 target/context；
+                # 此处只通过共享 Reentry Executor 固化语义 authority 并覆盖本轮身份。
+                current_lifecycle = load_application_lifecycle(workspace) if workspace else None
+                revision_plan = RevisionTargetResolver().resolve(
+                    execution_kind=(
+                        "application_planning"
+                        if workflow_scope == "application_planning"
+                        else "workbench"
+                    ),
+                    target_node=first_node_name,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    semantic_state=initial_state,
+                    lifecycle_revision=(
+                        current_lifecycle.revision if current_lifecycle is not None else None
+                    ),
+                )
+                initial_state = WorkflowReentryExecutor().materialize_revision_context(
+                    plan=revision_plan,
+                    semantic_state=initial_state,
+                    child_run_id=run_id,
+                )
 
             # resume_from 只属于本次 START 调度，必须覆盖 checkpoint 中的旧值；
             # 首个真实节点还会将其清空，避免再次持久化为业务状态。
@@ -856,24 +844,6 @@ def build_workflow_ag_ui_stream(
                         lease_ttl_seconds=settings.execution_recovery_lease_ttl_seconds,
                     )
                 )
-            if durable_execution_started and native_recovery_context is None:
-                await best_effort_recovery_observation(
-                    operation="point.captured",
-                    workspace=workspace,
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    workflow_scope=workflow_scope,
-                    callback=lambda: capture_recovery_point(
-                        graph=active_graph,
-                        config=recovery_observation_config or config or {},
-                        workspace=workspace,
-                        thread_id=thread_id,
-                        run_id=run_id,
-                        workflow_scope=workflow_scope,
-                        first_node=first_node_name,
-                    ),
-                )
-
             started_event = _workflow_event(
                 events,
                 "workflow.run.started",
@@ -1716,8 +1686,10 @@ def build_workflow_ag_ui_stream(
                         continue
                     if not isinstance(update, dict):
                         continue
-                    if pending_recovery_node is not None:
-                        await capture_pending_recovery_point(pending_recovery_node)
+                    if node_name == SYNTHETIC_WORKFLOW_ENTRY_NODE:
+                        # 合成入口只负责迫使 LangGraph 提交首业务节点前的真实 checkpoint，
+                        # 不进入业务时间线、UI phase 或 current_node 展示。
+                        continue
                     # 节点更新是 LangGraph 的增量结果；先合并进运行态，供后续
                     # launch_project.progress 和 code_review.build_checks 帧继续投影。
                     stream_state.update(update)
@@ -1742,17 +1714,11 @@ def build_workflow_ag_ui_stream(
                             result=resumed_state,
                         ):
                             yield frame
-                        # review update 可能早于真实后继节点的 checkpoint 提交，复用
-                        # history-aware helper 读取已提交的实际路由，避免用 UI phase 猜测。
-                        point = (
-                            await capture_pending_recovery_point(node_name)
-                            if durable_execution_started
-                            else None
-                        )
-                        if point is not None and len(point.next_nodes) == 1:
-                            # Recovery currentNode 必须跟随真实 checkpoint 的唯一后继，不能
-                            # 使用 UI phase 或业务路由推断覆盖 LangGraph 的执行事实。
-                            next_node = point.next_nodes[0]
+                        review_next_nodes = _workflow_next_nodes(node_name, update)
+                        if len(review_next_nodes) == 1:
+                            # 这里只更新展示 mirror；异常收口会从 committed history
+                            # 重新解析真实 Node Entry Boundary，并覆盖任何陈旧 mirror。
+                            next_node = review_next_nodes[0]
                             await best_effort_recovery_observation(
                                 operation="node.started",
                                 workspace=workspace,
@@ -1908,10 +1874,6 @@ def build_workflow_ag_ui_stream(
                         sequence=process_sequence,
                     ):
                         yield frame
-
-                    # updates 事件可能早于 LangGraph 为下一节点提交 checkpoint，
-                    # 因此延迟到下一个节点 update 时从 observation history 捕获。
-                    pending_recovery_node = node_name
 
                     next_nodes = _workflow_next_nodes(node_name, update)
                     if (
@@ -2111,8 +2073,6 @@ def build_workflow_ag_ui_stream(
                 )
             )
         except asyncio.CancelledError:
-            if pending_recovery_node is not None:
-                await capture_pending_recovery_point(pending_recovery_node)
             if durable_execution_started and active_graph is not None and config is not None:
                 await best_effort_recovery_observation(
                     operation="point.captured",
@@ -2157,24 +2117,8 @@ def build_workflow_ag_ui_stream(
         except Exception as exc:
             from app.services.development_artifacts import DevelopmentArtifactsIncompleteError
 
-            failure_predecessor_node = pending_recovery_node
-            failure_predecessor_snapshot = None
-            failure_predecessor_point = None
-            if pending_recovery_node is not None:
-                failure_predecessor_point = await capture_pending_recovery_point(
-                    pending_recovery_node
-                )
-            elif (
-                native_recovery_context is not None
-                and not native_recovery_context.fresh_start
-            ):
-                # Native child 在首节点产出 update 前再次失败时，fork snapshot 就是
-                # 它自己的 exact predecessor；不能退回 source run 的旧 RecoveryPoint。
-                failure_predecessor_node = first_node_name
-                failure_predecessor_snapshot = native_recovery_context.fork_snapshot
             # AG-UI 失败帧可能先于权威对账到达，先脱敏再向任何 UI 文本/事件暴露。
             safe_error_message = sanitize_failure_diagnostic(exc) or type(exc).__name__
-            failure_point = None
             failure_boundary = None
             gate_blocked = isinstance(exc, DevelopmentArtifactsIncompleteError)
             run_id_conflict = isinstance(
@@ -2242,54 +2186,33 @@ def build_workflow_ag_ui_stream(
             if error_code:
                 summary["errorCode"] = error_code
             if durable_execution_started and active_graph is not None and config is not None:
-                async def capture_failure_recovery_point() -> Any | None:
-                    """在失败 Lifecycle 落盘后重新观测同一个 predecessor checkpoint。"""
+                async def resolve_failure_node_entry() -> ExecutionFailureBoundary | None:
+                    """直接从 committed history 解析失败 Node 的精确 Entry Boundary。"""
 
-                    snapshot = failure_predecessor_snapshot
-                    if (
-                        failure_predecessor_point is not None
-                        and failure_predecessor_point.checkpoint_id
-                        and hasattr(active_graph, "aget_state")
-                    ):
-                        try:
-                            snapshot = await active_graph.aget_state(
-                                {
-                                    "configurable": {
-                                        "thread_id": thread_id,
-                                        "checkpoint_ns": failure_predecessor_point.checkpoint_ns,
-                                        "checkpoint_id": failure_predecessor_point.checkpoint_id,
-                                    }
-                                }
-                            )
-                        except Exception:
-                            # 精确回读失败时仍允许 capture_recovery_point 使用 live snapshot
-                            # 作为旁路 fallback；Recovery Coordinator 后续还会重新校验身份。
-                            snapshot = None
-                    return await capture_recovery_point(
-                        graph=active_graph,
-                        config=recovery_observation_config or config or {},
+                    source = await get_execution(workspace, run_id) if workspace else None
+                    if source is None:
+                        return None
+                    boundary = await resolve_current_node_entry_boundary(
                         workspace=workspace,
-                        thread_id=thread_id,
-                        run_id=run_id,
-                        workflow_scope=workflow_scope,
-                        completed_node=failure_predecessor_node,
-                        snapshot=snapshot,
+                        source=source,
+                        graph=active_graph,
+                    )
+                    return ExecutionFailureBoundary(
+                        recovery_point_id=boundary.boundary_id,
+                        checkpoint_id=boundary.checkpoint_id,
+                        checkpoint_ns=boundary.checkpoint_ns,
+                        operation=boundary.target_node,
                     )
 
-                # fail_workflow_lifecycle 及其 Formal Revision 同步必须先完成；此处
-                # 读取到的 revision 才与最终 FAILED 现场一致，且不放宽 Coordinator 的严格比较。
-                failure_point = await best_effort_recovery_observation(
-                    operation="point.captured",
+                # LangGraph checkpoint 是唯一 State authority；旁路表只缓存刚解析出的
+                # identity，observer 是否及时消费 update 不再决定 FAILED 可恢复性。
+                failure_boundary = await best_effort_recovery_observation(
+                    operation="node_entry.resolved",
                     workspace=workspace,
                     run_id=run_id,
                     thread_id=thread_id,
                     workflow_scope=workflow_scope,
-                    callback=capture_failure_recovery_point,
-                )
-                failure_boundary = failure_boundary_from_recovery_point(
-                    point=failure_point,
-                    run_id=run_id,
-                    thread_id=thread_id,
+                    callback=resolve_failure_node_entry,
                 )
                 if gate_blocked:
                     await best_effort_recovery_observation(

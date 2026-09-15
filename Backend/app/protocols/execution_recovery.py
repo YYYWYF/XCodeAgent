@@ -28,6 +28,7 @@ from app.persistence.execution_recovery import (
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.execution_recovery_executor import (
     NativeRecoveryRuntimeContext,
+    WorkflowReentryExecutor,
     prepare_stage_restart,
     prepare_native_recovery,
     prepare_operation_retry,
@@ -185,10 +186,13 @@ def build_execution_recovery_ag_ui_stream(
             if action_plan.primary_action is None:
                 raise RecoveryExecutionError(action_plan.reason_code, action_plan.message)
             kind = action_plan.primary_action.kind
-            if kind in {
-                RecoveryActionKind.CONTINUE_CHECKPOINT,
-                RecoveryActionKind.RETRY_FAILED_NODE,
-            }:
+            if kind is RecoveryActionKind.RETRY_FAILED_NODE:
+                context = await WorkflowReentryExecutor().prepare_failure_retry(
+                    workspace=workspace,
+                    source_run_id=source.run_id,
+                    graph=graph,
+                )
+            elif kind is RecoveryActionKind.CONTINUE_CHECKPOINT:
                 context = await prepare_native_recovery(
                     workspace=workspace,
                     source_run_id=source.run_id,

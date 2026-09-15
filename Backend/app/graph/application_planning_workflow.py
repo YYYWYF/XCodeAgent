@@ -58,6 +58,7 @@ from app.services.application_planning_generation_lifecycle import ensure_genera
 from app.services.template_scaffold_injection import (
     inject_deterministic_backend_skeleton,
 )
+from app.services.workflow_reentry import workflow_entry
 from app.workspace.plan_documents import technical_plan_json_path
 from app.workspace.product_plan_documents import confirmed_product_plan_json_path
 from app.workspace.spec_documents import ui_designs_json_path, load_ui_designs_json
@@ -593,6 +594,7 @@ def build_application_planning_graph(*, checkpointer):
     """构建设计、规划分段且含显式入口门禁的创建规划 Graph。"""
 
     builder = StateGraph(ProjectState)
+    builder.add_node("workflow_entry", workflow_entry)
     builder.add_node("design_intent_analysis", analyze_design_intent)
     builder.add_node("design_chat_response", design_chat_response)
     builder.add_node("requirements", _requirements)
@@ -607,7 +609,8 @@ def build_application_planning_graph(*, checkpointer):
     builder.add_node("technical_planning_commit", technical_planning_commit)
     builder.add_node("technical_planning_confirm", technical_planning_confirm)
     builder.add_node("technical_planning_review", technical_planning_review)
-    builder.add_conditional_edges(START, _route_start, {
+    builder.add_edge(START, "workflow_entry")
+    builder.add_conditional_edges("workflow_entry", _route_start, {
         "design_intent_analysis": "design_intent_analysis",
         "requirements": "requirements",
         "product_planning": "product_planning",

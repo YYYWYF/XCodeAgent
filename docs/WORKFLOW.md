@@ -212,6 +212,14 @@ TechnicalPlan 继续保存 Endpoint HTTP 契约与 Schema 字段，并由 Contra
 
 当前等待/续跑机制使用 LangGraph 原生 `interrupt` 与 `Command(resume=...)`。主 Graph 通过 SQLite checkpointer 持久化 ProjectState；前端只提交服务端中断返回的版本令牌、用户回答或确认动作，不回传状态重建上下文，也不硬编码后端阶段名。
 
+## Workflow Node Re-entry
+
+所有未处理异常形成的 `DurableExecution=FAILED` 统一使用 `WorkflowReentryPlan(reason=failure_retry)`。目标由 source run 最新合法的 Node Entry checkpoint 确定，并同步回 `source.current_node`；语义上下文 authority 恒为 `snapshot.next == [targetNode]`、root namespace 且 `snapshot.values.active_run_id == source.run_id` 的真实 committed checkpoint。两个 production Graph 都通过无业务副作用的 `workflow_entry` 节点先提交首业务 Node 的入口 State，因此 Requirements 等首 Node 第一行失败时也存在真实可 fork checkpoint。Runtime 不再通过 `pending_recovery_node`、后续 update 时序或无 checkpoint 的 ENTRY metadata 决定恢复能力。
+
+Failure Retry 创建新 child lineage，完成 lifecycle handoff 后从上述 checkpoint fork 完整 Semantic Context，只覆盖 `active_run_id`、`active_thread_id`、observability 和一次性调度元数据。模型、Provider、API key、MCP 和外部依赖仍由重入后的 Node 从当前 canonical Settings/runtime 重新解析。重复失败继续从当前 child 自己的 NodeEntryBoundary 产生下一代 child；缺失或损坏 authority 时以 `NODE_ENTRY_AUTHORITY_MISSING`、`NODE_ENTRY_AUTHORITY_INVALID` 或 `SEMANTIC_CONTEXT_AUTHORITY_MISSING` fail closed，绝不搜索更老 checkpoint、重建 initial state 或自动降级 Stage Restart。
+
+Formal Revision 保留 ChangeImpactAnalyzer 与 Revision Coordinator 对 target、thread policy 和新 Revision Context 的所有权。Coordinator 已决定的 target/context 被转换为 `WorkflowReentryPlan(reason=revision, contextAuthority=REVISION_CONTEXT)`，随后由同一 `WorkflowReentryExecutor` 校验语义摘要并只覆盖新 execution identity；Executor 不重新分析用户意图或变更影响。`CONTINUE_CHECKPOINT` 仅属于 INTERRUPTED/awaiting continuation，operation retry 与显式 Stage Restart 只保留其既有非 exception 业务入口。前端执行当前 Incident 时仍只提交 Backend 签发的 `incidentId/actionId`。
+
 所有选项型 `ask_user` 问题（单选、多选、是/否）都自动包含“其他”选项。用户选中“其他”后必须填写补充内容；前端提交结构化答案 `{ selected, other }`，后端将其归并为“已选：…；其他补充：…”，与原始需求和既有选项一起输入给后续模型。文本题本身就是自由输入，不额外显示“其他”。
 
 生成选项题前，模型必须先判断选项是否互斥。搜索、筛选、导入导出、分页等可叠加能力必须使用 `multiSelect = true`，并将每项能力作为独立选项；不得通过“搜索 + 导入导出”这类组合选项伪造单选。只有数据源类型、认证策略等真正的二选一或多选一决策使用单选。

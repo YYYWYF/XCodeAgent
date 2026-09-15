@@ -7,7 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app.domain.execution_recovery import DurableExecutionStatus, RecoveryPointKind
+from app.domain.execution_recovery import (
+    DurableExecutionStatus,
+    ExecutionFailureBoundary,
+    RecoveryPointKind,
+)
 from app.persistence.execution_recovery import (
     get_execution,
     get_latest_recovery_point,
@@ -22,7 +26,6 @@ from app.services.execution_recovery import (
     observe_execution_finished,
     observe_execution_started,
     observe_node_started,
-    failure_boundary_from_recovery_point,
 )
 
 
@@ -76,8 +79,8 @@ class WorkflowExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.first_node, "requirements")
         self.assertEqual(loaded.owner_session_id, "session-planning")
 
-    async def test_capture_without_checkpoint_creates_entry_point(self) -> None:
-        """测试 Graph 没有真实 checkpoint 时只能产生 ENTRY 现场。"""
+    async def test_capture_without_checkpoint_creates_non_authoritative_entry_metadata(self) -> None:
+        """旧 INTERRUPTED 观测可保留 ENTRY metadata，但它不具备 Node 重入 authority。"""
 
         await observe_execution_started(
             workspace=str(self.workspace),
@@ -213,13 +216,13 @@ class WorkflowExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             workflow_scope="application_planning",
             completed_node="requirements",
         )
-        boundary = failure_boundary_from_recovery_point(
-            point=point,
-            run_id="run-boundary",
-            thread_id="thread-boundary",
+        assert point is not None
+        boundary = ExecutionFailureBoundary(
+            recovery_point_id=point.recovery_point_id,
+            checkpoint_id=str(point.checkpoint_id),
+            checkpoint_ns=point.checkpoint_ns,
+            operation="product_planning",
         )
-        self.assertIsNotNone(boundary)
-        assert boundary is not None
         self.assertEqual(boundary.operation, "product_planning")
         await observe_execution_failed(
             workspace=str(self.workspace),
@@ -282,13 +285,7 @@ class WorkflowExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 run_id=run_id,
                 workflow_scope="application_planning",
             )
-            self.assertIsNone(
-                failure_boundary_from_recovery_point(
-                    point=point,
-                    run_id=run_id,
-                    thread_id="thread-boundary",
-                )
-            )
+            self.assertIsNotNone(point)
             await observe_execution_failed(
                 workspace=str(self.workspace),
                 run_id=run_id,

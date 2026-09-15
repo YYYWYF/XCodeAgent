@@ -310,8 +310,8 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
             record = await get_execution(workspace, run_id)
 
         self.assertTrue(any(
-            point.completed_node == "requirements"
-            and "product_planning" in point.next_nodes
+            point.completed_node is None
+            and point.next_nodes == ["product_planning"]
             for point in points
         ))
         self.assertFalse(any(
@@ -390,20 +390,16 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
             for point in points
             if point.next_nodes == ["product_planning"]
         ]
-        self.assertGreaterEqual(len(predecessor_points), 2)
-        self.assertEqual(
-            {point.checkpoint_id for point in predecessor_points},
-            {predecessor_points[0].checkpoint_id},
-        )
+        self.assertEqual(len(predecessor_points), 1)
         selected = predecessor_points[-1]
-        self.assertEqual(selected.completed_node, "requirements")
+        self.assertIsNone(selected.completed_node)
         self.assertEqual(recovery_plan.recovery_point_id, selected.recovery_point_id)
         self.assertEqual(selected.lifecycle_revision, lifecycle.revision)
         self.assertEqual(source.status, DurableExecutionStatus.FAILED)
         self.assertEqual(source.current_node, "product_planning")
         self.assertIsNotNone(source.failure)
-        self.assertEqual(recovery_plan.reason_code, "FAILED_NODE_REPLAY_READY")
-        self.assertEqual(action_plan.reason_code, "FAILED_NODE_REPLAY_READY")
+        self.assertEqual(recovery_plan.reason_code, "FAILED_NODE_REENTRY_READY")
+        self.assertEqual(action_plan.reason_code, "FAILED_NODE_REENTRY_READY")
         self.assertIsNotNone(action_plan.primary_action)
         assert action_plan.primary_action is not None
         self.assertEqual(
@@ -469,7 +465,7 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
             record = await get_execution(workspace, run_id)
 
         self.assertTrue(any(
-            point.completed_node == "requirements"
+            point.completed_node is None
             and point.next_nodes == ["product_planning"]
             for point in points
         ))

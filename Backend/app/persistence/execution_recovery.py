@@ -19,6 +19,7 @@ from app.domain.execution_recovery import (
     execution_failure_sha256,
     ExecutionLease,
     ExecutionLeaseStatus,
+    NodeEntryBoundary,
     RecoveryAttempt,
     RecoveryAttemptAlreadyClaimedError,
     RecoveryAttemptStatus,
@@ -36,7 +37,7 @@ from app.domain.execution_recovery import (
 RECOVERY_DATABASE_RELATIVE_PATH = Path(
     ".xcodeagent/recovery/execution-recovery.sqlite"
 )
-RECOVERY_SCHEMA_VERSION = "7"
+RECOVERY_SCHEMA_VERSION = "8"
 EXECUTION_ROW_WIDTH = 15
 EXECUTION_LEASE_ROW_WIDTH = 8
 
@@ -120,7 +121,7 @@ async def _connection_after_initialize(
 
 
 async def initialize_execution_recovery_store(workspace: str | Path) -> None:
-    """创建恢复库表，并把现有 v3-v6 store 原地迁移到当前 schema v7。"""
+    """创建恢复库表，并把旧恢复库原地扩展到当前 schema v8。"""
 
     async with _connection(workspace) as connection:
         await connection.executescript(
@@ -204,6 +205,25 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 ON recovery_points(checkpoint_id);
             CREATE INDEX IF NOT EXISTS idx_recovery_points_captured
                 ON recovery_points(captured_at);
+
+            CREATE TABLE IF NOT EXISTS node_entry_boundaries (
+                boundary_id TEXT PRIMARY KEY,
+                source_run_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                target_node TEXT NOT NULL,
+                checkpoint_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                lifecycle_revision INTEGER,
+                workspace_revision TEXT,
+                workspace_snapshot_hash TEXT,
+                captured_at TEXT NOT NULL,
+                UNIQUE(source_run_id, thread_id, target_node, checkpoint_id, checkpoint_ns)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_node_entry_boundaries_source_target
+                ON node_entry_boundaries(source_run_id, target_node, captured_at);
+            CREATE INDEX IF NOT EXISTS idx_node_entry_boundaries_checkpoint
+                ON node_entry_boundaries(thread_id, checkpoint_ns, checkpoint_id);
 
             CREATE TABLE IF NOT EXISTS recovery_attempts (
                 new_run_id TEXT PRIMARY KEY,
@@ -1671,6 +1691,88 @@ async def insert_recovery_point(
         return persisted
 
 
+async def insert_node_entry_boundary(
+    *,
+    workspace: str | Path,
+    boundary: NodeEntryBoundary,
+) -> NodeEntryBoundary:
+    """幂等写入真实 Node Entry checkpoint 的轻量索引。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        await connection.execute(
+            """
+            INSERT INTO node_entry_boundaries(
+                boundary_id, source_run_id, thread_id, target_node,
+                checkpoint_id, checkpoint_ns, lifecycle_revision,
+                workspace_revision, workspace_snapshot_hash, captured_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_run_id, thread_id, target_node, checkpoint_id, checkpoint_ns)
+            DO NOTHING
+            """,
+            (
+                boundary.boundary_id,
+                boundary.source_run_id,
+                boundary.thread_id,
+                boundary.target_node,
+                boundary.checkpoint_id,
+                boundary.checkpoint_ns,
+                boundary.lifecycle_revision,
+                boundary.workspace_revision,
+                boundary.workspace_snapshot_hash,
+                _utc_iso(boundary.captured_at),
+            ),
+        )
+        cursor = await connection.execute(
+            """
+            SELECT boundary_id, source_run_id, thread_id, target_node,
+                   checkpoint_id, checkpoint_ns, lifecycle_revision,
+                   workspace_revision, workspace_snapshot_hash, captured_at
+            FROM node_entry_boundaries
+            WHERE source_run_id = ? AND thread_id = ? AND target_node = ?
+              AND checkpoint_id = ? AND checkpoint_ns = ?
+            """,
+            (
+                boundary.source_run_id,
+                boundary.thread_id,
+                boundary.target_node,
+                boundary.checkpoint_id,
+                boundary.checkpoint_ns,
+            ),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError(f"无法读取刚写入的 Node Entry Boundary：{boundary.boundary_id}")
+        return _node_entry_boundary_from_row(row)
+
+
+async def get_node_entry_boundary(
+    workspace: str | Path,
+    *,
+    source_run_id: str,
+    thread_id: str,
+    target_node: str,
+) -> NodeEntryBoundary | None:
+    """读取 source run 与 target Node 完全一致的最新 Entry Boundary。"""
+
+    await initialize_execution_recovery_store(workspace)
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            """
+            SELECT boundary_id, source_run_id, thread_id, target_node,
+                   checkpoint_id, checkpoint_ns, lifecycle_revision,
+                   workspace_revision, workspace_snapshot_hash, captured_at
+            FROM node_entry_boundaries
+            WHERE source_run_id = ? AND thread_id = ? AND target_node = ?
+            ORDER BY captured_at DESC, boundary_id DESC
+            LIMIT 1
+            """,
+            (source_run_id, thread_id, target_node),
+        )
+        row = await cursor.fetchone()
+        return _node_entry_boundary_from_row(row) if row is not None else None
+
+
 async def get_execution(
     workspace: str | Path,
     run_id: str,
@@ -2112,4 +2214,21 @@ def _recovery_point_from_row(row: tuple[object, ...]) -> RecoveryPoint:
         workspace_snapshot_hash=str(row[13]) if row[13] is not None else None,
         replay_safety=str(row[14]),
         captured_at=_parse_datetime(str(row[16])),
+    )
+
+
+def _node_entry_boundary_from_row(row: tuple[object, ...]) -> NodeEntryBoundary:
+    """将 Node Entry Boundary 表行恢复为严格领域模型。"""
+
+    return NodeEntryBoundary(
+        boundary_id=str(row[0]),
+        source_run_id=str(row[1]),
+        thread_id=str(row[2]),
+        target_node=str(row[3]),
+        checkpoint_id=str(row[4]),
+        checkpoint_ns=str(row[5] or ""),
+        lifecycle_revision=int(row[6]) if row[6] is not None else None,
+        workspace_revision=str(row[7]) if row[7] is not None else None,
+        workspace_snapshot_hash=str(row[8]) if row[8] is not None else None,
+        captured_at=_parse_datetime(str(row[9])),
     )

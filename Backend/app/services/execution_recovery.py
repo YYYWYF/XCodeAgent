@@ -360,28 +360,6 @@ async def observe_execution_failed(
     )
 
 
-def failure_boundary_from_recovery_point(
-    *,
-    point: RecoveryPoint | None,
-    run_id: str,
-    thread_id: str,
-) -> ExecutionFailureBoundary | None:
-    """仅从本次异常现场的 exact RecoveryPoint 建立失败边界。"""
-
-    if point is None or point.run_id != run_id or point.thread_id != thread_id:
-        return None
-    checkpoint_id = str(point.checkpoint_id or "").strip()
-    next_nodes = [str(node).strip() for node in point.next_nodes]
-    if not checkpoint_id or len(next_nodes) != 1 or not next_nodes[0]:
-        return None
-    return ExecutionFailureBoundary(
-        recovery_point_id=point.recovery_point_id,
-        checkpoint_id=checkpoint_id,
-        checkpoint_ns=point.checkpoint_ns,
-        operation=next_nodes[0],
-    )
-
-
 async def observe_execution_cancelled(
     *,
     workspace: str | None,

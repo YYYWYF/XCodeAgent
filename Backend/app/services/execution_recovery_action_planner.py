@@ -20,7 +20,6 @@ from app.domain.execution_recovery import (
     RecoveryPoint,
     execution_failure_sha256,
 )
-from app.persistence.execution_recovery import list_recovery_attempts_for_thread
 from app.persistence.execution_recovery import get_recovery_point
 from app.services.application_lifecycle import ApplicationLifecycle, load_application_lifecycle
 from app.services.application_planning_stage_recovery import (
@@ -101,6 +100,45 @@ async def plan_recovery_action(
     """基于 durable facts 选择最近的确定性恢复入口，不执行任何动作。"""
 
     current_lifecycle = lifecycle or load_application_lifecycle(workspace)
+    native_capability = assess_native_recovery_capability(recovery_plan)
+    if source.status is DurableExecutionStatus.FAILED and source.failure is not None:
+        incident_id = _incident_id(
+            source=source,
+            point=point,
+            lifecycle=current_lifecycle,
+            stage_assessment=None,
+        )
+        if (
+            native_capability.executable
+            and recovery_plan.reason_code == "FAILED_NODE_REENTRY_READY"
+        ):
+            action = _action(
+                incident_id=incident_id,
+                kind=RecoveryActionKind.RETRY_FAILED_NODE,
+                label=_failed_node_retry_label(source.current_node),
+                description="恢复失败 Node 开始前的精确语义 State，并使用当前运行配置重新执行。",
+            )
+            return (
+                _action_plan(
+                    source=source,
+                    incident_id=incident_id,
+                    status=RecoveryIncidentStatus.RECOVERABLE,
+                    reason_code="FAILED_NODE_REENTRY_READY",
+                    message="已验证失败 Node 的精确入口，可以保留原业务上下文重新执行。",
+                    primary_action=action,
+                ),
+                None,
+            )
+        return (
+            _action_plan(
+                source=source,
+                incident_id=incident_id,
+                status=RecoveryIncidentStatus.NEEDS_ATTENTION,
+                reason_code=recovery_plan.reason_code,
+                message="失败 Node 的精确语义上下文 authority 缺失或无效，已阻止降级重启。",
+            ),
+            None,
+        )
     stage_assessment: TechnicalPlanningStageRestartAssessment | None = None
     if source.execution_kind == "application_planning":
         stage_assessment = ApplicationPlanningStageRecoveryContract().assess(
@@ -110,7 +148,6 @@ async def plan_recovery_action(
             snapshot=snapshot,
             lifecycle=current_lifecycle,
         )
-    native_capability = assess_native_recovery_capability(recovery_plan)
     retry_capability = RetryOperationCapability(
         executable=False,
         handler=None,
@@ -128,17 +165,10 @@ async def plan_recovery_action(
             source=source,
             graph=graph,
         )
-    previous_native_retry = await _source_was_native_retry(
-        workspace=workspace,
-        source=source,
-    )
     stage_restart_available = bool(
         stage_assessment is not None
         and stage_assessment.available
-        and (
-            not native_capability.executable
-            or previous_native_retry
-        )
+        and not native_capability.executable
     )
     incident_id = _incident_id(
         source=source,
@@ -182,27 +212,6 @@ async def plan_recovery_action(
             stage_assessment,
         )
     if native_capability.executable:
-        if (
-            source.status is DurableExecutionStatus.FAILED
-            and recovery_plan.reason_code == "FAILED_NODE_REPLAY_READY"
-        ):
-            action = _action(
-                incident_id=incident_id,
-                kind=RecoveryActionKind.RETRY_FAILED_NODE,
-                label=_failed_node_retry_label(source.current_node),
-                description="从失败步骤之前最近的已验证 checkpoint 重新执行该步骤。",
-            )
-            return (
-                _action_plan(
-                    source=source,
-                    incident_id=incident_id,
-                    status=RecoveryIncidentStatus.RECOVERABLE,
-                    reason_code=recovery_plan.reason_code,
-                    message="已找到失败步骤之前的已验证 checkpoint，可以重新执行失败步骤。",
-                    primary_action=action,
-                ),
-                stage_assessment,
-            )
         action = _action(
             incident_id=incident_id,
             kind=RecoveryActionKind.CONTINUE_CHECKPOINT,
@@ -342,24 +351,6 @@ def _incident_id(
         ),
         'retryHandler': retry_handler,
     })[:32]}"
-
-
-async def _source_was_native_retry(
-    *,
-    workspace: str,
-    source: DurableExecutionRecord,
-) -> bool:
-    """识别当前 source 是否已经由 Native checkpoint retry 产生，触发下一层降级。"""
-
-    attempts = await list_recovery_attempts_for_thread(
-        workspace,
-        thread_id=source.thread_id,
-    )
-    return any(
-        attempt.new_run_id == source.run_id
-        and attempt.strategy.value == "native_checkpoint"
-        for attempt in attempts
-    )
 
 
 def _digest(value: dict[str, Any]) -> str:
