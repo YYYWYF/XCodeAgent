@@ -354,7 +354,10 @@ def start_workbench_execution(
     """原子登记计划执行及全部资源锁，并保持初始化完成状态不变。"""
 
     path = application_lifecycle_path(workspace)
-    with _application_lifecycle_lock(path):
+    # 双锁路径固定先取得 Pending 生命周期锁，再取得 application lifecycle 锁。
+    from app.workspace.task_documents import build_task_plan_lifecycle_lock
+
+    with build_task_plan_lifecycle_lock(workspace), _application_lifecycle_lock(path):
         from app.services.development_artifacts import (
             execution_development_metadata, reconcile_development_artifacts, require_test_entry,
         )
@@ -490,9 +493,13 @@ def _assert_application_mutation_admission(
     # PendingPlan 的 owner 是唯一可继续 Confirm/Regenerate 的会话；普通新 mutation
     # 即使来自同一 owner 也必须携带对应 replaces_run_id，避免绕过 Pending gate。
     try:
-        from app.services.planning_refresh_recovery import resolve_planning_refresh_state
+        from app.services.planning_refresh_recovery import (
+            _resolve_planning_refresh_state_locked,
+        )
 
-        refresh = resolve_planning_refresh_state(str(workspace))
+        # 当前函数由 start_workbench_execution 的 Pending -> Application 双锁包裹，
+        # 直接调用已持有 Pending 锁的内部投影，避免在 Application 锁内反向请求 Pending。
+        refresh = _resolve_planning_refresh_state_locked(str(workspace))
     except (OSError, TypeError, ValueError):
         # 损坏或不可读的 Pending 不制造新的 lock；后续正式请求仍由原有 lifecycle
         # 校验报告具体错误，避免 admission guard 取代 Pending 自身的权威校验。
@@ -659,7 +666,10 @@ def record_abandoned_planning_result(
     """
 
     path = application_lifecycle_path(workspace)
-    with _application_lifecycle_lock(path):
+    # Abandon 也必须沿用 Pending -> Application 的统一锁顺序，支持独立调用时仍安全。
+    from app.workspace.task_documents import build_task_plan_lifecycle_lock
+
+    with build_task_plan_lifecycle_lock(workspace), _application_lifecycle_lock(path):
         current = load_application_lifecycle(workspace)
         if current is None:
             return None

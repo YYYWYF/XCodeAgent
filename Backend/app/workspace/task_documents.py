@@ -5,18 +5,38 @@ from copy import deepcopy
 import hashlib
 import hmac
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
-from threading import RLock
+from threading import Lock, RLock
 
 from app.services.build_task_plan_lifecycle import DraftIdentity
 from app.workspace.json_documents import write_json_atomic
-from app.workspace.spec_documents import workflow_artifact_root
+from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
 
-# 同一后端进程内，Pending 写入与 Confirm 的读验写删必须互斥。
-build_task_plan_lifecycle_lock = RLock()
+# 同一后端进程内按规范化工作区隔离 Pending 生命周期锁，避免不同工作区互相阻塞。
+_PENDING_LIFECYCLE_LOCKS: dict[str, RLock] = {}
+_PENDING_LIFECYCLE_LOCKS_GUARD = Lock()
+
+
+def build_task_plan_lifecycle_lock(workspace: str | Path) -> RLock:
+    """返回指定工作区共享的 Pending 生命周期可重入锁。"""
+
+    key = _pending_lifecycle_workspace_key(workspace)
+    with _PENDING_LIFECYCLE_LOCKS_GUARD:
+        lock = _PENDING_LIFECYCLE_LOCKS.get(key)
+        if lock is None:
+            lock = RLock()
+            _PENDING_LIFECYCLE_LOCKS[key] = lock
+        return lock
+
+
+def _pending_lifecycle_workspace_key(workspace: str | Path) -> str:
+    """生成 Pending 生命周期锁使用的规范化绝对工作区键。"""
+
+    return os.path.normcase(str(Path(workspace).expanduser().resolve(strict=False)))
 
 
 def build_task_plan_json_path(state: dict[str, Any]) -> Path:
@@ -192,7 +212,7 @@ def write_pending_build_task_plan_atomic(
     validate_pending_self_digest(pending_plan)
 
     path = build_task_plan_pending_json_path(state)
-    with build_task_plan_lifecycle_lock:
+    with build_task_plan_lifecycle_lock(workspace_root(state)):
         write_json_atomic(path, pending_plan)
     return str(path)
 
