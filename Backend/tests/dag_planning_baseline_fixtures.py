@@ -112,13 +112,21 @@ def build_context(plan: dict, scope: dict) -> dict:
             api_contract_id=scope.get("apiContractId"),
             project_plan_path=plan_path,
         )
-    return compile_authorization_overlay(
-        plan,
-        {**context, "project_plan": plan, "scope": scope},
-        application_config={
-            "authorization": {"enabled": bool(plan.get("authorization_manifest"))}
+    return {
+        **compile_authorization_overlay(
+            plan,
+            {**context, "project_plan": plan, "scope": scope},
+            application_config={
+                "authorization": {"enabled": bool(plan.get("authorization_manifest"))}
+            },
+        ),
+        # DAG Planning 的测试输入必须显式绑定当前 V2 TemplateState 快照。
+        "template_context": {
+            "state_path": ".xcodeagent/template-state.json",
+            "template_revision": "fixture-template-r1",
+            "effective_capabilities": {},
         },
-    )
+    }
 
 
 def write_confirmed_endpoint_designs(

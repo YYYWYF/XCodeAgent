@@ -183,7 +183,14 @@ def planning_inputs(*, plan=None, baseline=None, required=None, scope=None, cont
             } for key in ("a", "b", "c", "history")],
         }
     scope = scope or {"type": "application", "targetId": "application"}
-    context = context or {"scope": scope, "template_variant": "main"}
+    context = context or {
+        "scope": scope,
+        "template_context": {
+            "state_path": ".xcodeagent/template-state.json",
+            "template_revision": "fixture-template-r1",
+            "effective_capabilities": {},
+        },
+    }
     context = {
         **context,
         "endpoint_designs": context.get("endpoint_designs") or _fixture_endpoint_designs(plan),

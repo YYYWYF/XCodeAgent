@@ -347,6 +347,23 @@ class ConfirmPromotionTests(unittest.TestCase):
             with self.subTest(fault=fault):
                 self._assert_rejected("invalid_dag")
 
+    def test_dag_gate_requires_matching_template_context(self):
+        """Pending 缺失、非法或绑定漂移时必须 invalid_dag，且不能写 Formal。"""
+
+        original = load_pending_build_task_plan(self.state)
+        for name in ("missing", "malformed", "mismatch"):
+            pending = deepcopy(original)
+            if name == "missing":
+                pending.pop("template_context")
+            elif name == "malformed":
+                pending["template_context"]["template_revision"] = ""
+            else:
+                pending["template_context"]["template_revision"] = "different-template-r1"
+            self._rewrite(pending, resign=True)
+            with self.subTest(case=name):
+                result = self._assert_rejected("invalid_dag")
+                self.assertTrue(any("template_context" in error for error in result.errors))
+
     def test_formal_write_failure_preserves_both_files(self):
         """原子 replace 失败不得损坏旧 Formal、提前删 Pending 或遗留临时文件。"""
 
@@ -618,6 +635,10 @@ class PlanningPromotionIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 thread_id="thread", policy=UnitGenerationPolicy(**_policy_payload()), generate_once=generate,
             )
             self.assertEqual(result.assembly.assembled_plan["schema_version"], "build-dag.v4")
+            self.assertEqual(
+                result.assembly.assembled_plan["template_context"],
+                plain_json(inputs.build_context["template_context"]),
+            )
             self.assertTrue(
                 result.assembly.assembled_plan["unit_graph"]["validation"]["is_valid"]
             )
@@ -636,6 +657,10 @@ class PlanningPromotionIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(confirmed.status, "confirmed", confirmed.errors)
             self.assertEqual(confirmed.confirmed_plan["task_registry"], result.assembly.assembled_plan["task_registry"])
+            self.assertEqual(
+                confirmed.confirmed_plan["template_context"],
+                result.assembly.assembled_plan["template_context"],
+            )
             self.assertFalse(build_task_plan_pending_json_path(state).exists())
 
 

@@ -162,6 +162,10 @@ class DagProductionPathCutoverTests(unittest.IsolatedAsyncioTestCase):
         # Pending 落盘，Formal 未被写入。
         pending = load_pending_build_task_plan(self._state(scope))
         self.assertIsNotNone(pending)
+        self.assertEqual(
+            pending["template_context"],
+            result["build_context"]["template_context"],
+        )
         identity = validate_pending_self_digest(pending)
         self.assertFalse(build_task_plan_json_path(self._state(scope)).exists())
         # Graph 停在等用户确认，并投影精确 DraftIdentity。

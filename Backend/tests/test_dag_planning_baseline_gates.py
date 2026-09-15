@@ -129,6 +129,42 @@ class DagPlanningBaselineGateTests(unittest.TestCase):
                 })
                 self.assertTrue(any(error_text in error for error in errors), errors)
 
+    def test_build_gate_requires_exact_template_context_binding(self) -> None:
+        """当前 TemplateState 与 ConfirmedPlan binding 一致才允许 Build，漂移必须阻断。"""
+
+        baseline = confirmed_baseline(project_plan(), execution_scope())
+        template_state = {
+            "schemaVersion": 2,
+            "templateRevision": "fixture-template-r1",
+            "requested": {},
+            "effective": {},
+            "appliedAdditions": {},
+        }
+        cases = (
+            (template_state, True),
+            ({**template_state, "templateRevision": "fixture-template-r2"}, False),
+            ({
+                **template_state,
+                "requested": {"login": {"enabled": True, "config": {}}},
+                "effective": {"login": {"enabled": True, "config": {}}},
+            }, False),
+        )
+        for current_state, should_pass in cases:
+            with self.subTest(current_state=current_state):
+                with tempfile.TemporaryDirectory() as workspace:
+                    root = Path(workspace)
+                    write_json(root, PLAN_PATH, baseline)
+                    write_json(root, ".xcodeagent/template-state.json", current_state)
+                    _, errors = _latest_build_task_plan_for_build({
+                        "workspace": workspace,
+                        "build_task_plan": baseline,
+                        "build_execution_scope": execution_scope(),
+                    })
+                if should_pass:
+                    self.assertEqual(errors, [])
+                else:
+                    self.assertTrue(any("TemplateState" in error for error in errors), errors)
+
     def test_build_run_binds_confirmed_digest_and_rejects_later_drift(self) -> None:
         """Build 绑定确认版本副本，后续正式计划变化必须停止而非换计划执行。"""
 

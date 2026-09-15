@@ -203,6 +203,44 @@ class ScopeAssemblyTests(unittest.TestCase):
                     inputs["base_confirmed_plan"]["confirmation_status"], "confirmed"
                 )
 
+    def test_template_context_is_promoted_from_current_build_context(self) -> None:
+        """Scope Assembly 必须把本轮冻结的 V2 模板绑定原样提升到 Plan root。"""
+
+        inputs = _base_inputs()
+        inputs["base_confirmed_plan"]["template_context"]["template_revision"] = "confirmed-template-r0"
+        expected = deepcopy(inputs["build_context"]["template_context"])
+
+        result = assemble_scope_build_task_plan(**inputs)
+
+        self.assertEqual(result.assembled_plan["template_context"], expected)
+
+    def test_missing_template_context_stops_scope_assembly(self) -> None:
+        """缺少模板绑定时必须以输入问题终止 Assembly，不能返回部分 DAG。"""
+
+        inputs = _base_inputs()
+        inputs["build_context"].pop("template_context")
+
+        with self.assertRaises(ScopeAssemblyError) as raised:
+            assemble_scope_build_task_plan(**inputs)
+
+        issue = raised.exception.issues[0]
+        self.assertEqual(issue.code, "SCOPE_TEMPLATE_CONTEXT_INVALID")
+        self.assertEqual(issue.category, "input")
+
+    def test_malformed_template_context_stops_scope_assembly(self) -> None:
+        """模板绑定结构非法时必须拒绝，不得继承 confirmed root 的旧值。"""
+
+        inputs = _base_inputs()
+        inputs["build_context"]["template_context"] = {
+            **inputs["build_context"]["template_context"],
+            "template_revision": "",
+        }
+
+        with self.assertRaises(ScopeAssemblyError) as raised:
+            assemble_scope_build_task_plan(**inputs)
+
+        self.assertEqual(raised.exception.issues[0].code, "SCOPE_TEMPLATE_CONTEXT_INVALID")
+
     def test_shared_unit_retains_history_and_appends_current_candidate(self) -> None:
         """共享 Unit 同时保留正式职责和本轮新增职责，并输出完整来源索引。"""
 

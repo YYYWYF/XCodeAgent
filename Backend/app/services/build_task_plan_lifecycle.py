@@ -12,6 +12,7 @@ from app.services.dag_planning_inputs import SequentialPlanningInputs, _input_di
 from app.services.build_task_planner import replace_build_task_plan_tasks
 from app.services.planning_frozen import FrozenJsonObject, FrozenPlanningModel, plain_json
 from app.services.planning_run_contracts import PlanningRun
+from app.services.template_state import validate_template_context
 from app.workspace.spec_documents import workspace_root
 
 
@@ -148,6 +149,22 @@ def abandon_pending_build_task_plan(
 
 def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
     """按当前 v4 Unit/Task Graph 合同复核原稿，并复用现有任务编译器。"""
+
+    # Template binding 是 Confirm 的独立不变量，必须在任何 DAG 派生重算前 fail-closed。
+    try:
+        pending_template_context = validate_template_context(
+            plain_json(plan.get("template_context"))
+        )
+    except (TypeError, ValueError) as exc:
+        return [f"Pending DAG 的 template_context 无效：{exc}"]
+    try:
+        current_template_context = validate_template_context(
+            plain_json(inputs.build_context.get("template_context"))
+        )
+    except (TypeError, ValueError) as exc:
+        return [f"当前 Planning Inputs 的 template_context 无效：{exc}"]
+    if pending_template_context != current_template_context:
+        return ["Pending DAG 的 template_context 与当前 Planning Inputs 不一致。"]
 
     unit_graph = plan.get("unit_graph")
     unit_validation = unit_graph.get("validation") if isinstance(unit_graph, dict) else None

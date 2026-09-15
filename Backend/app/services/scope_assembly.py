@@ -23,6 +23,7 @@ from app.services.planning_frozen import (
     tuple_input,
 )
 from app.services.planning_issues import ValidationIssue
+from app.services.template_state import validate_template_context
 from app.services.unit_generation_contracts import CandidateAttempt, GenerationRequirement
 
 
@@ -369,6 +370,17 @@ def assemble_scope_build_task_plan(
         candidates_by_unit,
     )):
         _raise_input("SCOPE_ASSEMBLY_INPUT_INVALID", "Scope Assembly 的映射输入类型无效。")
+    # 先冻结并规范化本轮模板事实，避免 compiler 或 confirmed baseline 提供隐式回退。
+    try:
+        frozen_template_context = validate_template_context(
+            plain_json(build_context.get("template_context"))
+        )
+    except (TypeError, ValueError) as exc:
+        _raise_input(
+            "SCOPE_TEMPLATE_CONTEXT_INVALID",
+            "当前 Frozen Planning Inputs 的 template_context 不满足 V2 绑定契约。",
+            error=str(exc),
+        )
     _, retained = _retained_tasks(base_confirmed_plan)
     facts = _validate_reuse_facts(reuse_facts, retained)
     required_units = _required_candidate_units(generation_requirements_by_unit)
@@ -384,6 +396,7 @@ def assemble_scope_build_task_plan(
     retained_id_set = set(retained_task_ids)
     context = {
         **deepcopy(plain_json(build_context)),
+        "template_context": deepcopy(frozen_template_context),
         "project_plan": deepcopy(plain_json(project_plan)),
         "executable_details": (
             deepcopy(plain_json(project_plan.get("executable_details")))
@@ -411,6 +424,8 @@ def assemble_scope_build_task_plan(
     graph_valid = assembled.get("task_graph", {}).get("validation", {}).get("is_valid") is True
     blocked_batches = assembled.get("execution", {}).get("blocked_batches", [])
     assembled = dict(assembled)
+    # 顶层绑定只来自本轮冻结 TemplateState，不能继承 ConfirmedPlan 或旧 compiler 结果。
+    assembled["template_context"] = deepcopy(frozen_template_context)
     # Assembly 只产生等待 Global Validation 的内存草稿；正式 PendingPlan 生命周期
     # 由后续 Controller / persistence 在 Global success 后赋予，且不能继承 confirmed 基线。
     assembled.pop("confirmation_status", None)
