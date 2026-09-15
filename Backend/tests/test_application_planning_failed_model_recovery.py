@@ -24,11 +24,14 @@ from app.domain.execution_recovery import (
     ExecutionFailureEvidence,
     ExecutionFailureOrigin,
     RecoveryDecision,
+    RecoveryActionKind,
     RecoveryPoint,
     RecoveryPointKind,
 )
 from app.graph import application_planning_workflow
+from app.graph.application_planning_workflow import application_planning_graph_for_request
 from app.graph.state import ProjectState
+from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
 from app.persistence.execution_recovery import (
     get_execution,
     insert_execution,
@@ -36,6 +39,7 @@ from app.persistence.execution_recovery import (
     list_recovery_points,
 )
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
+from app.protocols.execution_recovery import build_execution_recovery_ag_ui_stream
 from app.services.application_lifecycle import (
     create_application_lifecycle,
     load_application_lifecycle,
@@ -228,9 +232,15 @@ async def _prepare_and_run_child(
     )
     testcase.assertEqual(projection.classification, "ready_to_continue")
     testcase.assertTrue(projection.can_continue)
+    action_plan = projection.recovery_action_plan
+    testcase.assertIsNotNone(action_plan)
+    assert action_plan is not None
+    primary_action = action_plan.get("primaryAction")
+    testcase.assertIsNotNone(primary_action)
+    assert primary_action is not None
     testcase.assertEqual(
-        projection.reason_code,
-        "APPLICATION_PLANNING_MODEL_GENERATION_REPLAY_SAFE",
+        primary_action["kind"],
+        RecoveryActionKind.RETRY_FAILED_NODE.value,
     )
 
     plan = await prepare_continue(
@@ -240,10 +250,7 @@ async def _prepare_and_run_child(
         replay_policies=production_recovery_replay_policies(),
     )
     testcase.assertEqual(plan.decision, RecoveryDecision.READY_NATIVE)
-    testcase.assertEqual(
-        plan.reason_code,
-        "APPLICATION_PLANNING_MODEL_GENERATION_REPLAY_SAFE",
-    )
+    testcase.assertEqual(plan.reason_code, "FAILED_NODE_REENTRY_READY")
     testcase.assertEqual(plan.next_nodes, [source.current_node])
     snapshot_config = snapshot.config["configurable"]
     testcase.assertEqual(plan.checkpoint_id, snapshot_config["checkpoint_id"])
@@ -263,6 +270,123 @@ async def _prepare_and_run_child(
 
 class ApplicationPlanningFailedModelRecoveryTests(unittest.IsolatedAsyncioTestCase):
     """验证三类真实生成节点从模型 503 到 child replay 的完整链路。"""
+
+    async def test_real_requirements_first_node_public_retry_uses_child_identity(self) -> None:
+        """真实 Application Planning 首节点失败后通过 public action 精确重入。"""
+
+        model_config = {"name": "DeepSeek"}
+        called_models: list[str] = []
+
+        def requirements(state: ProjectState) -> dict[str, Any]:
+            """按当前模型配置模拟 Requirements 首次失败与 child 成功。"""
+
+            model_name = Settings.from_env().model_name
+            called_models.append(model_name)
+            if model_name == "DeepSeek":
+                raise FakeModelConnectionError(status_code=404, model=model_name)
+            return _successful_requirements(state)
+
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            thread_id = "production-requirements-thread"
+            source_run_id = "production-requirements-source"
+            project_id = "production-requirements-app"
+            _seed_lifecycle(workspace, thread_id=thread_id, run_id=source_run_id)
+            graph = await application_planning_graph_for_request(
+                workspace=str(workspace),
+                project_id=project_id,
+            )
+            try:
+                with (
+                    patch(
+                        "app.config.Settings.from_env",
+                        side_effect=lambda: _settings_for(model_config["name"]),
+                    ),
+                    patch(
+                        "app.graph.application_planning_workflow.nodes.requirements",
+                        side_effect=requirements,
+                    ),
+                    patch(
+                        "app.graph.application_planning_workflow.nodes.product_planning",
+                        side_effect=_successful_product_planning,
+                    ),
+                    patch(
+                        "app.graph.application_planning_workflow.nodes.ui_confirmation",
+                        new=AsyncMock(side_effect=_successful_ui_confirmation),
+                    ),
+                ):
+                    await _consume_runtime(
+                        graph,
+                        _runtime_payload(
+                            workspace,
+                            thread_id=thread_id,
+                            run_id=source_run_id,
+                        ),
+                    )
+                    source = await get_execution(workspace, source_run_id)
+                    self.assertIsNotNone(source)
+                    assert source is not None
+                    self.assertEqual(source.status, DurableExecutionStatus.FAILED)
+                    self.assertEqual(source.current_node, "requirements")
+                    self.assertIsNotNone(source.failure)
+                    assert source.failure is not None
+                    self.assertEqual(source.failure.http_status, 404)
+
+                    snapshot = await graph.aget_state(
+                        {"configurable": {"thread_id": thread_id}}
+                    )
+                    projection = await resolve_application_planning_recovery(
+                        workspace=str(workspace),
+                        thread_id=thread_id,
+                        graph=graph,
+                        snapshot=snapshot,
+                        lifecycle=load_application_lifecycle(workspace),
+                        source=source,
+                    )
+                    action_plan = projection.recovery_action_plan
+                    self.assertIsNotNone(action_plan)
+                    assert action_plan is not None
+                    primary_action = action_plan["primaryAction"]
+                    self.assertEqual(
+                        primary_action["kind"],
+                        RecoveryActionKind.RETRY_FAILED_NODE.value,
+                    )
+
+                    model_config["name"] = "MiMo"
+                    _ = [
+                        frame
+                        async for frame in build_execution_recovery_ag_ui_stream(
+                            payload={
+                                "forwardedProps": {
+                                    "workspaceRoot": str(workspace),
+                                    "executionRecovery": {
+                                        "action": "execute",
+                                        "incidentId": action_plan["incidentId"],
+                                        "actionId": primary_action["actionId"],
+                                    },
+                                }
+                            }
+                        )
+                    ]
+                    resolution = await resolve_recovery_lineage_head(
+                        str(workspace),
+                        thread_id=thread_id,
+                        execution_kind="application_planning",
+                    )
+                    self.assertIsNotNone(resolution.head)
+                    assert resolution.head is not None
+                    self.assertEqual(resolution.head.first_node, "requirements")
+                    self.assertNotEqual(
+                        resolution.head.status,
+                        DurableExecutionStatus.FAILED,
+                    )
+            finally:
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+
+        self.assertEqual(called_models, ["DeepSeek", "MiMo"])
 
     async def test_requirements_model_switch_uses_current_settings_on_child(self) -> None:
         """Requirements 503 后修改当前模型配置，child 必须读取新配置并成功。"""

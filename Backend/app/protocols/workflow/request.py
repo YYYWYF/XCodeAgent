@@ -1767,6 +1767,7 @@ def _validated_technical_revision_intent(
     return {
         "change_id": pending.change_id,
         "change_target": pending.target.model_dump(mode="python", by_alias=False),
+        "revision_impact": pending.impact.model_dump(mode="python", by_alias=False),
         "technical_plan": baseline,
         "application_planning_recovery_boundary": boundary,
     }

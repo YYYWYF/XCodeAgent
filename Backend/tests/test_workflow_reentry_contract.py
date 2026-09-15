@@ -16,11 +16,13 @@ from app.domain.execution_recovery import (
     DurableExecutionStatus,
     ExecutionFailureEvidence,
     ExecutionFailureOrigin,
+    NodeEntryBoundary,
     RecoveryExecutionError,
     WorkflowReentryReason,
 )
 from app.persistence.execution_recovery import (
     get_node_entry_boundary,
+    insert_node_entry_boundary,
     insert_execution,
 )
 from app.services.execution_recovery_executor import WorkflowReentryExecutor
@@ -277,6 +279,87 @@ class WorkflowReentryContractTests(unittest.IsolatedAsyncioTestCase):
                 ("revision", "R-middle", {"type": "endpoint", "id": "orders"}),
             ],
         )
+
+    async def test_corrupt_boundary_index_rebuilds_from_committed_history(self) -> None:
+        """旁路索引损坏时必须回到同一 source 的真实 checkpoint history 重建。"""
+
+        def node_a(_state: ReentryState) -> dict[str, Any]:
+            """制造失败 Node，保留 workflow_entry 已提交的真实 predecessor。"""
+
+            raise RuntimeError("A failed")
+
+        builder = StateGraph(ReentryState)
+        builder.add_node("workflow_entry", workflow_entry)
+        builder.add_node("A", node_a)
+        builder.add_edge(START, "workflow_entry")
+        builder.add_edge("workflow_entry", "A")
+        builder.add_edge("A", END)
+        graph = builder.compile(checkpointer=InMemorySaver())
+
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            source = _source(
+                workspace=workspace,
+                run_id="source-corrupt-index",
+                thread_id="thread-corrupt-index",
+                current_node="A",
+            )
+            await insert_execution(source)
+            with self.assertRaises(RuntimeError):
+                await graph.ainvoke(
+                    {
+                        "active_run_id": source.run_id,
+                        "active_thread_id": source.thread_id,
+                        "mode": "initial",
+                    },
+                    config={"configurable": {"thread_id": source.thread_id}},
+                )
+
+            first_plan = await FailureTargetResolver().resolve(
+                workspace=str(workspace),
+                source=source,
+                graph=graph,
+            )
+            first_boundary = await get_node_entry_boundary(
+                workspace,
+                source_run_id=source.run_id,
+                thread_id=source.thread_id,
+                target_node="A",
+            )
+            assert first_boundary is not None
+            await insert_node_entry_boundary(
+                workspace=workspace,
+                boundary=NodeEntryBoundary(
+                    boundary_id="corrupt-boundary-index",
+                    source_run_id=source.run_id,
+                    thread_id=source.thread_id,
+                    target_node="A",
+                    checkpoint_id="missing-checkpoint",
+                    checkpoint_ns="",
+                    captured_at=datetime.now(timezone.utc),
+                ),
+            )
+
+            rebuilt_plan = await FailureTargetResolver().resolve(
+                workspace=str(workspace),
+                source=source,
+                graph=graph,
+            )
+            rebuilt_boundary = await get_node_entry_boundary(
+                workspace,
+                source_run_id=source.run_id,
+                thread_id=source.thread_id,
+                target_node="A",
+            )
+
+        self.assertEqual(
+            rebuilt_plan.context_authority.checkpoint_id,
+            first_plan.context_authority.checkpoint_id,
+        )
+        self.assertIsNotNone(rebuilt_boundary)
+        assert rebuilt_boundary is not None
+        self.assertEqual(rebuilt_boundary.checkpoint_id, first_boundary.checkpoint_id)
+        self.assertNotEqual(rebuilt_boundary.boundary_id, "corrupt-boundary-index")
 
     async def test_missing_source_owned_checkpoint_fails_closed(self) -> None:
         """只有其他 run 的同节点 checkpoint 时不得回退到旧现场或 Stage Restart。"""

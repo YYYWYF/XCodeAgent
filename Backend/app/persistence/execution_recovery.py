@@ -1708,7 +1708,12 @@ async def insert_node_entry_boundary(
                 workspace_revision, workspace_snapshot_hash, captured_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_run_id, thread_id, target_node, checkpoint_id, checkpoint_ns)
-            DO NOTHING
+            DO UPDATE SET
+                boundary_id = excluded.boundary_id,
+                lifecycle_revision = excluded.lifecycle_revision,
+                workspace_revision = excluded.workspace_revision,
+                workspace_snapshot_hash = excluded.workspace_snapshot_hash,
+                captured_at = excluded.captured_at
             """,
             (
                 boundary.boundary_id,

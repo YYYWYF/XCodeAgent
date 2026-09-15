@@ -22,7 +22,6 @@ from app.domain.application_planning_recovery import (
 from app.domain.execution_recovery import (
     DurableExecutionStatus,
     RecoveryActionKind,
-    RecoveryAttemptStatus,
     RecoverySourceAuthorityKind,
     RecoveryStrategy,
 )
@@ -101,7 +100,7 @@ class TechnicalPlanningRecoveryJourneyHarness:
         self.project_id = "weather-app-recovery-journey"
         self.request = "创建一个天气预报应用"
         self.source_run_id = "technical-planning-run-a"
-        self.model_name = "model-A"
+        self.model_name = "DeepSeek"
         self.called_models: list[str] = []
         self.graph: Any | None = None
         self._seed_formal_artifacts()
@@ -355,10 +354,8 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.harness.close()
 
-    async def test_native_retry_then_stage_restart_reaches_technical_plan_confirmation(
-        self,
-    ) -> None:
-        """404 → 404 → Stage Restart 成功必须停在 TechnicalPlan 用户确认。"""
+    async def test_failed_technical_planning_retries_exact_generation_node(self) -> None:
+        """Technical Planning 生成异常只能从精确失败节点重入并使用当前模型。"""
 
         with (
             patch(
@@ -383,40 +380,23 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(run_a.failure)
             assert run_a.failure is not None
             self.assertEqual(run_a.failure.http_status, 404)
-            self.assertEqual(run_a.failure.model, "model-A")
+            self.assertEqual(run_a.failure.model, "DeepSeek")
 
             source_a, projection_a, action_a = await self.harness.resolve_action()
             self.assertEqual(projection_a.classification, "ready_to_continue")
             self.assertEqual(action_a["status"], "recoverable")
             self.assertEqual(
                 action_a["primaryAction"]["kind"],
-                RecoveryActionKind.CONTINUE_CHECKPOINT.value,
+                RecoveryActionKind.RETRY_FAILED_NODE.value,
             )
             self.assertTrue(action_a["incidentId"])
             self.assertTrue(action_a["primaryAction"]["actionId"])
 
-            self.harness.model_name = "model-B"
-            run_b = await self.harness.execute_action(action_a)
-            self.assertEqual(run_b.status, DurableExecutionStatus.FAILED)
-            self.assertNotEqual(run_b.run_id, source_a.run_id)
-            self.assertIsNotNone(run_b.failure)
-            assert run_b.failure is not None
-            self.assertEqual(run_b.failure.http_status, 404)
-            self.assertEqual(run_b.failure.model, "model-B")
-
-            source_b, projection_b, action_b = await self.harness.resolve_action()
-            self.assertEqual(source_b.run_id, run_b.run_id)
-            self.assertEqual(projection_b.classification, "ready_to_continue")
-            self.assertEqual(action_b["status"], "recoverable")
-            self.assertEqual(
-                action_b["primaryAction"]["kind"],
-                RecoveryActionKind.RESTART_STAGE.value,
-            )
-
             self.harness.model_name = "working-model"
-            run_c = await self.harness.execute_action(action_b)
-            self.assertNotEqual(run_c.run_id, run_b.run_id)
-            self.assertNotEqual(run_c.status, DurableExecutionStatus.FAILED)
+            run_b = await self.harness.execute_action(action_a)
+            self.assertNotEqual(run_b.run_id, source_a.run_id)
+            self.assertEqual(run_b.first_node, "technical_planning_generate")
+            self.assertNotEqual(run_b.status, DurableExecutionStatus.FAILED)
 
             lifecycle = load_application_lifecycle(self.harness.workspace)
             self.assertIsNotNone(lifecycle)
@@ -429,7 +409,7 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 lifecycle.initialization.status,
                 ApplicationLifecycleStatus.AWAITING_USER,
             )
-            self.assertEqual(lifecycle.active_run_id, run_c.run_id)
+            self.assertEqual(lifecycle.active_run_id, run_b.run_id)
             self.assertTrue(
                 technical_plan_json_path(
                     {"workspace": str(self.harness.workspace)}
@@ -437,7 +417,7 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 self.harness.called_models,
-                ["model-A", "model-B", "working-model"],
+                ["DeepSeek", "working-model"],
             )
 
             resolution = await resolve_recovery_lineage_head(
@@ -448,7 +428,7 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(resolution.state, RecoveryLineageState.AWAITING_USER_HEAD)
             self.assertIsNotNone(resolution.head)
             assert resolution.head is not None
-            self.assertEqual(resolution.head.run_id, run_c.run_id)
+            self.assertEqual(resolution.head.run_id, run_b.run_id)
             self.assertEqual(
                 resolution.head.status,
                 DurableExecutionStatus.AWAITING_USER,
@@ -458,16 +438,11 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 self.harness.workspace,
                 thread_id=self.harness.thread_id,
             )
-            self.assertEqual(len(attempts), 2)
+            self.assertEqual(len(attempts), 1)
             native_attempt = next(
                 attempt
                 for attempt in attempts
                 if attempt.source_run_id == source_a.run_id
-            )
-            stage_attempt = next(
-                attempt
-                for attempt in attempts
-                if attempt.source_run_id == source_b.run_id
             )
             self.assertEqual(
                 native_attempt.strategy,
@@ -479,15 +454,6 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNotNone(native_attempt.source_recovery_point_id)
             self.assertIsNotNone(native_attempt.source_checkpoint_id)
-            self.assertEqual(stage_attempt.strategy, RecoveryStrategy.STAGE_RESTART)
-            self.assertEqual(
-                stage_attempt.source_authority_kind,
-                RecoverySourceAuthorityKind.FORMAL_STAGE,
-            )
-            self.assertIsNotNone(stage_attempt.source_authority_sha256)
-            self.assertIsNone(stage_attempt.source_recovery_point_id)
-            self.assertIsNone(stage_attempt.source_checkpoint_id)
-            self.assertEqual(stage_attempt.source_checkpoint_ns, "")
 
             executions = await list_executions_for_thread(
                 self.harness.workspace,
@@ -496,11 +462,11 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 {execution.run_id for execution in executions},
-                {source_a.run_id, source_b.run_id, run_c.run_id},
+                {source_a.run_id, run_b.run_id},
             )
 
-    async def test_failed_stage_restart_remains_recoverable_by_stage_restart(self) -> None:
-        """A 404 → B 404 → C 404 后，真实 planner 必须继续给出 Stage Restart。"""
+    async def test_repeated_failed_technical_planning_reentry_keeps_same_node(self) -> None:
+        """失败子执行再次失败时仍只能创建同一 Node 的 retry child。"""
 
         with (
             patch(
@@ -516,40 +482,19 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             await self.harness.run_initial()
             _source_a, _projection_a, action_a = await self.harness.resolve_action()
 
-            self.harness.model_name = "model-B"
+            self.harness.model_name = "MiMo"
             run_b = await self.harness.execute_action(action_a)
             _source_b, _projection_b, action_b = await self.harness.resolve_action()
             self.assertEqual(
                 action_b["primaryAction"]["kind"],
-                RecoveryActionKind.RESTART_STAGE.value,
-            )
-
-            self.harness.model_name = "model-C"
-            run_c = await self.harness.execute_action(action_b)
-            self.assertNotEqual(run_c.run_id, run_b.run_id)
-            self.assertEqual(run_c.status, DurableExecutionStatus.FAILED)
-            self.assertIsNotNone(run_c.failure)
-            assert run_c.failure is not None
-            self.assertEqual(run_c.failure.http_status, 404)
-            self.assertEqual(run_c.failure.model, "model-C")
-
-            source_c, projection_c, action_c = await self.harness.resolve_action()
-            self.assertEqual(source_c.run_id, run_c.run_id)
-            self.assertEqual(projection_c.classification, "ready_to_continue")
-            self.assertEqual(action_c["status"], "recoverable")
-            self.assertEqual(
-                action_c["primaryAction"]["kind"],
-                RecoveryActionKind.RESTART_STAGE.value,
-            )
-            self.assertNotEqual(
-                action_c["primaryAction"]["kind"],
-                RecoveryActionKind.CONTINUE_CHECKPOINT.value,
+                RecoveryActionKind.RETRY_FAILED_NODE.value,
             )
 
             self.harness.model_name = "working-model"
-            run_d = await self.harness.execute_action(action_c)
-            self.assertNotEqual(run_d.run_id, run_c.run_id)
-            self.assertNotEqual(run_d.status, DurableExecutionStatus.FAILED)
+            run_c = await self.harness.execute_action(action_b)
+            self.assertNotEqual(run_c.run_id, run_b.run_id)
+            self.assertEqual(run_b.first_node, "technical_planning_generate")
+            self.assertNotEqual(run_c.status, DurableExecutionStatus.FAILED)
 
             lifecycle = load_application_lifecycle(self.harness.workspace)
             self.assertIsNotNone(lifecycle)
@@ -558,17 +503,17 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 lifecycle.initialization.stage,
                 ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
             )
-            self.assertEqual(lifecycle.active_run_id, run_d.run_id)
+            self.assertEqual(lifecycle.active_run_id, run_c.run_id)
             self.assertEqual(
                 self.harness.called_models,
-                ["model-A", "model-B", "model-C", "working-model"],
+                ["DeepSeek", "MiMo", "working-model"],
             )
 
             attempts = await list_recovery_attempts_for_thread(
                 self.harness.workspace,
                 thread_id=self.harness.thread_id,
             )
-            self.assertEqual(len(attempts), 3)
+            self.assertEqual(len(attempts), 2)
             strategies_by_source = {
                 attempt.source_run_id: attempt.strategy for attempt in attempts
             }
@@ -576,21 +521,14 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 strategies_by_source[self.harness.source_run_id],
                 RecoveryStrategy.NATIVE_CHECKPOINT,
             )
-            self.assertEqual(strategies_by_source[run_b.run_id], RecoveryStrategy.STAGE_RESTART)
-            self.assertEqual(strategies_by_source[run_c.run_id], RecoveryStrategy.STAGE_RESTART)
-            for attempt in attempts[1:]:
-                self.assertEqual(
-                    attempt.status,
-                    RecoveryAttemptStatus.STARTED,
-                )
+            self.assertEqual(strategies_by_source[run_b.run_id], RecoveryStrategy.NATIVE_CHECKPOINT)
+            for attempt in attempts:
                 self.assertEqual(
                     attempt.source_authority_kind,
-                    RecoverySourceAuthorityKind.FORMAL_STAGE,
+                    RecoverySourceAuthorityKind.CHECKPOINT,
                 )
-                self.assertIsNotNone(attempt.source_authority_sha256)
-                self.assertIsNone(attempt.source_recovery_point_id)
-                self.assertIsNone(attempt.source_checkpoint_id)
-                self.assertEqual(attempt.source_checkpoint_ns, "")
+                self.assertIsNotNone(attempt.source_recovery_point_id)
+                self.assertIsNotNone(attempt.source_checkpoint_id)
 
             executions = await list_executions_for_thread(
                 self.harness.workspace,
@@ -603,7 +541,6 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                     self.harness.source_run_id,
                     run_b.run_id,
                     run_c.run_id,
-                    run_d.run_id,
                 },
             )
 

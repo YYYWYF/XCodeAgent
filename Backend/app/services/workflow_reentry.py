@@ -160,10 +160,8 @@ async def resolve_node_entry_boundary(
         snapshot = await _read_boundary_snapshot(graph=graph, boundary=indexed)
         if _snapshot_matches_boundary(snapshot, boundary=indexed, source=source):
             return indexed
-        raise RecoveryExecutionError(
-            "NODE_ENTRY_AUTHORITY_INVALID",
-            "已索引的 Node Entry checkpoint 缺失、损坏或不再属于 source execution。",
-        )
+        # 旁路表只保存索引，不能把损坏的索引升级成 State authority；继续从
+        # 同一 source/thread/target 的 committed history 精确重建，找不到才 fail closed。
 
     history_reader = getattr(graph, "aget_state_history", None)
     if not callable(history_reader):

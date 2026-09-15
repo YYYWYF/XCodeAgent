@@ -41,6 +41,7 @@ from app.services.execution_recovery_policies import (
 )
 from app.services.execution_recovery_action_planner import plan_recovery_action
 from app.services.execution_recovery_action_planner import build_recovery_facts
+from app.services.workflow_reentry import FailureTargetResolver
 
 
 _FORBIDDEN_RECOVERY_FIELDS = {
@@ -187,10 +188,16 @@ def build_execution_recovery_ag_ui_stream(
                 raise RecoveryExecutionError(action_plan.reason_code, action_plan.message)
             kind = action_plan.primary_action.kind
             if kind is RecoveryActionKind.RETRY_FAILED_NODE:
+                reentry_plan = await FailureTargetResolver().resolve(
+                    workspace=workspace,
+                    source=source,
+                    graph=graph,
+                )
                 context = await WorkflowReentryExecutor().prepare_failure_retry(
                     workspace=workspace,
                     source_run_id=source.run_id,
                     graph=graph,
+                    reentry_plan=reentry_plan,
                 )
             elif kind is RecoveryActionKind.CONTINUE_CHECKPOINT:
                 context = await prepare_native_recovery(

@@ -154,17 +154,21 @@ class WorkflowReentryExecutor:
         workspace: str,
         source_run_id: str,
         graph: Any,
+        reentry_plan: WorkflowReentryPlan | None = None,
     ) -> NativeRecoveryRuntimeContext:
-        """解析 checkpoint authority 后复用同一 claim、handoff 与 fork transaction。"""
+        """消费调用方已解析的 re-entry plan，并复用同一 claim、handoff 与 fork transaction。"""
 
         source = await get_execution(workspace, source_run_id)
         if source is None:
             raise RecoveryExecutionError("SOURCE_EXECUTION_NOT_FOUND", "source execution 不存在。")
-        reentry_plan = await FailureTargetResolver().resolve(
-            workspace=workspace,
-            source=source,
-            graph=graph,
-        )
+        if reentry_plan is None:
+            # 保留内部直接调用的最小入口；公开 Recovery protocol 会在调用方先解析
+            # authority 并显式传入，Executor 本身不重新计算业务 target。
+            reentry_plan = await FailureTargetResolver().resolve(
+                workspace=workspace,
+                source=source,
+                graph=graph,
+            )
         return await prepare_native_recovery(
             workspace=workspace,
             source_run_id=source_run_id,
