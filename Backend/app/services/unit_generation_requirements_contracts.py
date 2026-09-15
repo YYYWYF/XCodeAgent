@@ -10,7 +10,9 @@ from app.services.planning_issues import IssueCategory, ValidationIssue
 from app.services.unit_generation_contracts import GenerationRequirement
 
 
-GenerationStrategy = Literal["structural_only", "prerequisite_only", "reuse_only", "deterministic", "model"]
+GenerationStrategy = Literal[
+    "not_required", "structural_only", "prerequisite_only", "reuse_only", "deterministic", "model",
+]
 _Id = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
 _Requirements = Annotated[tuple[GenerationRequirement, ...], BeforeValidator(tuple_input)]
 _RequirementsByUnit = Annotated[
@@ -47,6 +49,8 @@ class UnitGenerationRequirements(FrozenPlanningModel):
                 if strategy not in {"model", "deterministic"}:
                     raise ValueError("只有 model/deterministic Unit 可以携带新增职责。")
                 expected.append(unit)
+            elif strategy in {"model", "deterministic"}:
+                raise ValueError("空职责 Unit 不能使用 model/deterministic 策略。")
             if len({item.requirement_id for item in requirements}) != len(requirements):
                 raise ValueError("同一 Unit 不得含重复 requirement_id。")
         if self.planning_unit_ids != tuple(sorted(expected)):

@@ -552,7 +552,7 @@ test('Global repair 显示真实轮次，failed/cancelled 只由 Run status 决�
   assert.equal(dagGenerationSummaryCopy(snapshot({ status: 'cancelled' })), 'PlanningRun cancelled')
 })
 
-test('shell 显示 prerequisite/reused，auth 确定性生成不展示虚假 attempt', () => {
+test('shell、无需参与和复用状态区分展示，auth 确定性生成不展示虚假 attempt', () => {
   const shell = unit({
     id: 'frontend:shell',
     participation: 'prerequisite_only',
@@ -567,6 +567,14 @@ test('shell 显示 prerequisite/reused，auth 确定性生成不展示虚假 att
     status: 'not_required',
     localAttemptLimit: 0
   })
+  const notRequired = unit({
+    id: 'backend:bootstrap',
+    kind: 'backend',
+    participation: 'not_required',
+    generationStrategy: 'not_required',
+    status: 'not_required',
+    localAttemptLimit: 0
+  })
   const authorization = unit({
     id: 'authorization:bootstrap',
     kind: 'authorization',
@@ -578,6 +586,8 @@ test('shell 显示 prerequisite/reused，auth 确定性生成不展示虚假 att
 
   assert.equal(dagGenerationUnitStatusLabel(shell), 'prerequisite')
   assert.equal(dagGenerationUnitStatusLabel(reusedShell), 'reused')
+  assert.equal(dagGenerationUnitStatusLabel(notRequired), 'not_required')
+  assert.equal(dagGenerationStrategyLabel(notRequired), 'not_required')
   assert.equal(dagGenerationStrategyLabel(authorization), 'deterministic')
   assert.equal(dagGenerationUnitAttemptCopy(authorization), '')
 })

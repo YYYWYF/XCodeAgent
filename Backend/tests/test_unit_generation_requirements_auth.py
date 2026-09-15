@@ -78,12 +78,12 @@ class UnitGenerationRequirementsAuthTests(unittest.TestCase):
         self.assertEqual(resource_catalog_fingerprint(original), fingerprint)
 
     def test_disabled_auth_has_no_candidate_requirement(self) -> None:
-        """骨架保留 auth-guard 但权限关闭时，没有目录职责便不进入 planning。"""
+        """骨架保留 auth-guard 但权限关闭时，没有目录职责且不伪装成复用。"""
 
         inputs = _inputs()
         inputs["required_unit_ids"] = ["frontend:auth-guard"]
         result = resolve_generation_requirements(**inputs)
-        self.assertEqual(result.generation_strategy_by_unit["frontend:auth-guard"], "deterministic")
+        self.assertEqual(result.generation_strategy_by_unit["frontend:auth-guard"], "not_required")
         self.assertEqual(result.generation_requirements_by_unit["frontend:auth-guard"], ())
         self.assertEqual(result.planning_unit_ids, ())
 

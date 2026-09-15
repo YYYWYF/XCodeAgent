@@ -59,8 +59,8 @@ def build_auth_guard_candidate(
         _invalid_input("确定性 auth builder 仅支持 frontend:auth-guard。")
     requirements = UnitGenerationRequirements.model_validate(generation_requirements)
     strategy = requirements.generation_strategy_by_unit.get(unit_id)
-    if strategy not in {"deterministic", "reuse_only"}:
-        _invalid_input("auth-guard 必须有明确的 deterministic 或 reuse_only 职责判定。")
+    if strategy not in {"not_required", "deterministic", "reuse_only"}:
+        _invalid_input("auth-guard 必须有明确的 not_required、deterministic 或 reuse_only 职责判定。")
     missing = requirements.generation_requirements_by_unit[unit_id]
     if not missing:
         return None

@@ -157,7 +157,7 @@ class DeterministicAuthCandidateTests(unittest.TestCase):
             self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
 
     def test_empty_disabled_auth_requirements_produce_no_candidate(self) -> None:
-        """权限关闭时即使 auth 骨架存在且策略为 deterministic，也不生成空候选。"""
+        """权限关闭时 auth 骨架明确为 not_required，不生成空候选。"""
 
         self.plan["authorization_manifest"]["enabled"] = False
         self.inputs = _inputs(formal_plan=self.plan)

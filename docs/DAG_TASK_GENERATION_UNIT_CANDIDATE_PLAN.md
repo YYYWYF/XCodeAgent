@@ -338,6 +338,10 @@ frontend:shell
 
 仍然属于共享 Capability Unit。
 
+当前 Scope 只要包含正式后端 Endpoint，就必须为其计算前端 API 调用职责；该判断与
+Endpoint 后端内部是否使用 database、external_api 或纯业务逻辑无关。物理数据来源只影响
+`backend:bootstrap` 及 Endpoint 后端来源分支，不能用于跳过前端 API Client。
+
 允许：
 
 ```text
@@ -808,6 +812,7 @@ bounded concurrency
 每个 Unit 明确：
 
 ```text
+not_required
 structural_only
 prerequisite_only
 reuse_only
@@ -818,6 +823,9 @@ model
 说明：
 
 ```text
+not_required
+→ 当前 Scope 没有该 Unit 的适用职责，不表示复用了历史 Task
+
 structural_only
 → DAG structure only
 
@@ -2184,6 +2192,7 @@ UnitRunState
 participation：
 
 ```text
+not_required
 reuse_only
 generate_only
 reuse_and_generate

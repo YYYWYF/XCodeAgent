@@ -93,17 +93,13 @@ def _unit_responsibilities(
             "frontend.page", page_id, description=f"实现页面 {page_id} 的当前正式 PageImplementationContract。",
             kind="frontend.page", page_id=page_id,
         )]
-    real_keys = [
-        key for key in endpoints
-        if set(source_types_by_endpoint[key]) & ENDPOINT_PHYSICAL_SOURCE_TYPES
-    ]
     if unit_id == "frontend:api-client":
-        if not real_keys:
+        if not endpoints:
             return []
         return [responsibility(
             "frontend.response-entity-adapter", description="提供统一 ResponseEntity 传输适配器，供业务 API 模块复用。",
             kind="frontend.shared_capability", target_id="response-entity-adapter",
-        ), *_endpoint_requirements("frontend.api_module", real_keys)]
+        ), *_endpoint_requirements("frontend.api_module", list(endpoints))]
     if unit_id.startswith("frontend:data:"):
         source_id = unit_id.removeprefix("frontend:data:")
         if source_id != "static":
@@ -212,6 +208,8 @@ def resolve_generation_requirements(
             strategy = "prerequisite_only"
             if not any(item.unit_id == unit_id and item.capability_id == "frontend.shell.ready" for item in facts.external_capabilities):
                 fail_requirement_input("SHELL_PREREQUISITE_MISSING", "frontend:shell 缺少平台已验证的模板前置能力。", unit_ids=[unit_id])
+        elif not duties:
+            strategy = "not_required"
         elif not missing:
             strategy = "reuse_only"
         else:

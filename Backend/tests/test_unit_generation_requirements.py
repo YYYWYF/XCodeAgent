@@ -203,8 +203,8 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
         self.assertEqual(error.exception.issues[0].code, "SHELL_PREREQUISITE_MISSING")
         self.assertFalse(error.exception.issues[0].retryable)
 
-    def test_unit_with_no_applicable_duties_is_reuse_only(self) -> None:
-        """Scope 无真实接口时 API client 无需 Candidate，并保持非生成状态。"""
+    def test_unit_with_no_applicable_duties_is_not_required(self) -> None:
+        """Scope 无正式接口时 API client 无需 Candidate，且不伪装成历史复用。"""
 
         plan = _formal_plan()
         plan["page_implementation_contracts"][0]["requiredEndpointIds"] = []
@@ -222,24 +222,25 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
             ),
             formal_target=plan,
         )
-        self.assertEqual(result.generation_strategy_by_unit["frontend:api-client"], "reuse_only")
+        self.assertEqual(result.generation_strategy_by_unit["frontend:api-client"], "not_required")
         self.assertEqual(result.generation_requirements_by_unit["frontend:api-client"], ())
         self.assertEqual(result.planning_unit_ids, ())
 
-    def test_legacy_static_source_keeps_business_description_endpoint_duties(self) -> None:
-        """旧静态实体来源不创建历史 Unit，业务说明 Endpoint 仍生成后端和页面职责。"""
+    def test_business_description_endpoint_still_requires_frontend_api_client(self) -> None:
+        """Endpoint 是否需要前端调用不由后端内部物理数据来源决定。"""
 
         result = resolve_generation_requirements(**_inputs(source_type="static"))
         self.assertEqual(set(result.planning_unit_ids), {
             "backend:endpoint:orders-api:orders.list",
+            "frontend:api-client",
             "page:orders",
         })
         self.assertEqual(
             result.generation_strategy_by_unit["backend:bootstrap"],
-            "reuse_only",
+            "not_required",
         )
         self.assertNotIn("frontend:data:static", result.generation_requirements_by_unit)
-        self.assertNotIn("response-entity-adapter", result.model_dump_json())
+        self.assertIn("frontend.response-entity-adapter", result.model_dump_json())
 
     def test_backend_bootstrap_adds_missing_source_capability(self) -> None:
         """共享 bootstrap 的 database 已满足时，external_api 仍作为本轮增量。"""

@@ -378,7 +378,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         bootstrap = result.planning_run.unit_states["backend:bootstrap"]
         self.assertEqual(
             (bootstrap.generation_strategy, bootstrap.generation_status),
-            ("reuse_only", "not_required"),
+            ("not_required", "not_required"),
         )
         self.assertEqual(
             {
@@ -393,8 +393,8 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(result.assembly.assembled_plan["task_graph"]["validation"]["is_valid"])
 
-    async def test_business_description_page_skips_all_empty_shared_units(self):
-        """纯业务说明页面只调度页面和 Endpoint，不调度空共享 Unit。"""
+    async def test_business_description_page_generates_api_client_but_skips_empty_bootstrap(self):
+        """纯业务说明页面仍生成前端接口调用，但不调度空 bootstrap。"""
 
         plan = project_plan()
         scope = execution_scope()
@@ -407,14 +407,17 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(
             {job.identity.unit_id for job, _ in self.calls},
-            {"backend:endpoint:orders-api:orders.list", "page:orders"},
+            {"backend:endpoint:orders-api:orders.list", "frontend:api-client", "page:orders"},
         )
-        for unit_id in ("backend:bootstrap", "frontend:api-client"):
-            unit = result.planning_run.unit_states[unit_id]
-            self.assertEqual(
-                (unit.generation_strategy, unit.generation_status),
-                ("reuse_only", "not_required"),
-            )
+        bootstrap = result.planning_run.unit_states["backend:bootstrap"]
+        self.assertEqual(
+            (bootstrap.generation_strategy, bootstrap.generation_status),
+            ("not_required", "not_required"),
+        )
+        self.assertEqual(
+            result.planning_run.unit_states["frontend:api-client"].generation_strategy,
+            "model",
+        )
         self.assertTrue(result.assembly.assembled_plan["task_graph"]["validation"]["is_valid"])
 
     async def test_pending_baseline_rejected_before_model_or_persistence(self):

@@ -242,6 +242,7 @@ export type DagGenerationPhase =
   | 'persisting_pending'
 
 export type DagGenerationParticipation =
+  | 'not_required'
   | 'reuse_only'
   | 'generate_only'
   | 'reuse_and_generate'
@@ -249,6 +250,7 @@ export type DagGenerationParticipation =
   | 'structural_only'
 
 export type DagGenerationStrategy =
+  | 'not_required'
   | 'structural_only'
   | 'prerequisite_only'
   | 'reuse_only'
@@ -327,6 +329,7 @@ const DAG_GENERATION_PHASES = new Set<string>([
   'persisting_pending'
 ])
 const DAG_GENERATION_PARTICIPATIONS = new Set<string>([
+  'not_required',
   'reuse_only',
   'generate_only',
   'reuse_and_generate',
@@ -334,6 +337,7 @@ const DAG_GENERATION_PARTICIPATIONS = new Set<string>([
   'structural_only'
 ])
 const DAG_GENERATION_STRATEGIES = new Set<string>([
+  'not_required',
   'structural_only',
   'prerequisite_only',
   'reuse_only',

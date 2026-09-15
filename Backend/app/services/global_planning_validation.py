@@ -82,8 +82,8 @@ def check_candidate_completeness(
 ) -> CandidateCompletenessResult:
     """在 generation round Barrier 后检查全部生成 Unit 的 Candidate。
 
-    reuse_only、prerequisite_only 和 structural_only 不要求 Candidate；model 与
-    deterministic Unit 都必须到达 candidate_ready。调用方若传入尚未结束本轮的生成
+    not_required、reuse_only、prerequisite_only 和 structural_only 不要求 Candidate；
+    model 与 deterministic Unit 都必须到达 candidate_ready。调用方若传入尚未结束本轮的生成
     Unit，说明 Barrier 尚未满足，本函数拒绝把暂时等待误报成 Candidate 缺失。
     """
 

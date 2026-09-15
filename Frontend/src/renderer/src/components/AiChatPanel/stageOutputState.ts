@@ -351,6 +351,7 @@ export function stageOutputPhase(
 /** 返回 Unit 的用户可见状态；前置与复用 Unit 永不误标为生成中。 */
 export function dagGenerationUnitStatusLabel(unit: DagGenerationUnitRecord): string {
   if (unit.status === 'not_required') {
+    if (unit.participation === 'not_required') return 'not_required'
     if (unit.participation === 'prerequisite_only') return 'prerequisite'
     if (unit.participation === 'reuse_only') return 'reused'
     if (unit.participation === 'structural_only') return 'structural'
@@ -386,6 +387,7 @@ export function dagGenerationUnitTaskCopy(unit: DagGenerationUnitRecord): string
 
 /** 返回 Unit 当前策略文案，auth 等确定性 Unit 始终明确标识 deterministic。 */
 export function dagGenerationStrategyLabel(unit: DagGenerationUnitRecord): string {
+  if (unit.generationStrategy === 'not_required') return 'not_required'
   if (unit.generationStrategy === 'deterministic') return 'deterministic'
   if (unit.generationStrategy === 'prerequisite_only') return 'prerequisite'
   if (unit.generationStrategy === 'reuse_only') return 'reused'
