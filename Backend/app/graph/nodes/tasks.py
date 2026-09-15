@@ -545,7 +545,7 @@ def _existing_build_task_plan(state: ProjectState) -> dict:
     plan = load_confirmed_build_task_plan(workspace_root(state))
     path = build_task_plan_json_path(state)
     if plan is None and (path.exists() or path.is_symlink()):
-        raise ValueError("正式文件存在但不是已确认且通过校验的 build-dag.v3。")
+        raise ValueError("正式文件存在但不是已确认且通过校验的 build-dag.v4。")
     return plan or {}
 
 

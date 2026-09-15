@@ -75,7 +75,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         validation = graph.get("validation") if isinstance(graph, Mapping) else None
         if baseline is not None and (
             baseline.get("confirmation_status") != "confirmed"
-            or baseline.get("schema_version") != "build-dag.v3"
+            or baseline.get("schema_version") != "build-dag.v4"
             or baseline.get("status") == "failed"
             or not isinstance(baseline.get("task_registry"), Mapping)
             or not isinstance(validation, Mapping) or validation.get("is_valid") is not True

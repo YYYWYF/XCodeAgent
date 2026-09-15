@@ -75,7 +75,7 @@ def _write_pending(workspace: str) -> dict[str, str]:
     write_pending_build_task_plan_atomic(
         {"workspace": workspace},
         {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "status": "ready",
             "task_graph": {"validation": {"is_valid": True, "errors": []}},
         },

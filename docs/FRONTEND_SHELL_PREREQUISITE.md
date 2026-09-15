@@ -33,7 +33,7 @@ shell 不进入 `planning_unit_ids` 或模型允许的 Unit 集合。原始候�
 历史 shell Task 及其执行状态保留，pending/failed/completed 不影响前置判断。
 
 Planning 继续沿用正式路径 `.xcodeagent/plans/build-task-plan.json`。
-文件缺失可开始首次规划；文件存在但不满足当前 confirmed v3 DAG 门槛，或读取失败，
+文件缺失可开始首次规划；文件存在但不满足当前 confirmed v4 DAG 门槛，或读取失败，
 入口必须阻断生成，不能按空基线继续或回退到 checkpoint/pending sidecar。
 既有确认恢复分支不启动 Planning，仍可处理当前 pending DAG 的确认。
 

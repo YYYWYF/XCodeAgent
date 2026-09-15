@@ -41,8 +41,14 @@ def _plan(*tasks: dict) -> dict:
 
     ids = [task["id"] for task in tasks]
     return {
-        "schema_version": "build-dag.v3", "status": "ready", "confirmation_status": "confirmed",
+        "schema_version": "build-dag.v4", "status": "ready", "confirmation_status": "confirmed",
         "task_registry": {task["id"]: task for task in tasks},
+        "unit_graph": {
+            "schema_version": "build-unit-graph.v3",
+            "nodes": ["application:root"],
+            "edges": [],
+            "validation": {"is_valid": True, "errors": []},
+        },
         "task_graph": {"nodes": ids, "edges": [], "topological_order": ids, "validation": {"is_valid": True}},
     }
 

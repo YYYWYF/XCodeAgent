@@ -347,6 +347,7 @@ def start_workbench_execution(
     api_contract_id: str | None = None,
     requires_test_entry: bool = False,
     test_interaction_submission: dict[str, Any] | None = None,
+    task_plan_interaction_submission: dict[str, Any] | None = None,
 ) -> ApplicationLifecycle:
     """原子登记计划执行及全部资源锁，并保持初始化完成状态不变。"""
 
@@ -382,17 +383,22 @@ def start_workbench_execution(
         )
         if test_interaction_submission is not None:
             # 测试确认凭据只在接替 execution 的同一次写盘中消费；启动失败仍可重试。
-            source_id = str(test_interaction_submission.get("runId") or "")
-            source = current.active_executions.get(source_id)
-            pending = source.pending_interaction if source else None
-            if (
-                source_id != replaces_run_id or pending is None
-                or pending.type != PendingInteractionType.TEST_PHASE_CONFIRMATION
-                or pending.id != test_interaction_submission.get("id")
-                or pending.based_on_revision != test_interaction_submission.get("basedOnRevision")
-                or pending.submitted_at is not None
-            ):
-                raise ApplicationLifecycleConflictError("测试阶段确认已过期或不属于原开发运行。")
+            _validate_interaction_submission(
+                current,
+                submission=test_interaction_submission,
+                replaces_run_id=replaces_run_id,
+                expected_type=PendingInteractionType.TEST_PHASE_CONFIRMATION,
+                error_message="测试阶段确认已过期或不属于原开发运行。",
+            )
+        if task_plan_interaction_submission is not None:
+            # DAG 确认凭据与 execution 接管共用一次原子写盘，启动失败不会烧掉交互。
+            _validate_interaction_submission(
+                current,
+                submission=task_plan_interaction_submission,
+                replaces_run_id=replaces_run_id,
+                expected_type=PendingInteractionType.TASK_PLAN_CONFIRMATION,
+                error_message="任务规划确认已过期或不属于原 DAG 运行。",
+            )
         if development_continuation_consume is not None:
             # 同一把生命周期锁内复验 token，并把消费状态与 execution 原子写入。
             # 请求解析、模型校验或写盘失败都不能单独烧掉一次性续接凭据。
@@ -514,10 +520,34 @@ def _assert_application_mutation_admission(
             raise ApplicationLifecycleConflictError(
                 "当前 Pending Build DAG 属于其他会话，不能启动新的应用 mutation。"
             )
-        if replaces_run_id != refresh.get("workflowRunId"):
+        if not replaces_run_id or replaces_run_id not in current.active_executions:
             raise ApplicationLifecycleConflictError(
-                "当前 Pending Build DAG 只能通过对应 Workflow 的 Confirm/Regenerate 继续。"
+                "当前 Pending Build DAG 只能通过现有 Workflow execution 的 Confirm/Regenerate 继续。"
             )
+
+
+def _validate_interaction_submission(
+    current: ApplicationLifecycle,
+    *,
+    submission: dict[str, Any],
+    replaces_run_id: str | None,
+    expected_type: PendingInteractionType,
+    error_message: str,
+) -> None:
+    """在接管写盘前精确校验一次性 interaction 凭据，失败不改变生命周期。"""
+
+    source_id = str(submission.get("runId") or "")
+    source = current.active_executions.get(source_id)
+    pending = source.pending_interaction if source else None
+    if (
+        source_id != replaces_run_id
+        or pending is None
+        or pending.type != expected_type
+        or pending.id != submission.get("id")
+        or pending.based_on_revision != submission.get("basedOnRevision")
+        or pending.submitted_at is not None
+    ):
+        raise ApplicationLifecycleConflictError(error_message)
 
 
 def _is_active_dag_planning_execution(execution: WorkbenchExecution) -> bool:

@@ -52,12 +52,12 @@ def _baseline_tasks(
     registry = plan.get("task_registry")
     if (
         plan.get("confirmation_status") != "confirmed"
-        or plan.get("schema_version") != "build-dag.v3"
+        or plan.get("schema_version") != "build-dag.v4"
         or plan.get("status") == "failed"
         or not isinstance(validation, Mapping) or validation.get("is_valid") is not True
         or not isinstance(registry, Mapping)
     ):
-        issues.append(_issue("CONFIRMED_BASELINE_INVALID", "输入必须是正式 confirmed 且有效的 v3 DAG。"))
+        issues.append(_issue("CONFIRMED_BASELINE_INVALID", "输入必须是正式 confirmed 且有效的 v4 DAG。"))
         return []
     tasks = []
     for task_id, task in sorted(registry.items()):

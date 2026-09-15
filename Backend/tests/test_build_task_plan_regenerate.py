@@ -9,6 +9,19 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
+from app.domain.application_lifecycle import (
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+    PendingInteractionType,
+    WorkbenchExecutionStatus,
+)
+from app.protocols.workflow.lifecycle import begin_workflow_lifecycle, fail_workflow_lifecycle
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    start_workbench_execution,
+    update_workbench_execution,
+    write_application_lifecycle,
+)
 from app.services.dag_planning_regeneration import regenerate_pending_build_task_plan
 from app.services.dag_planning_orchestrator import DagPlanningError, plan_dag_sequential
 from app.services.planning_frozen import plain_json
@@ -209,6 +222,97 @@ class BuildTaskPlanRegenerateTests(unittest.IsolatedAsyncioTestCase):
         failed_run = load_planning_run(self.state)
         self.assertEqual(failed_run["planning_run_id"], "planning-new-failed")
         self.assertEqual(failed_run["status"], "failed")
+
+    async def test_regenerate_after_replaced_workflow_failure_uses_current_execution(self) -> None:
+        """R2 失败后，R3 Regenerate 不再被旧 Pending 的 workflow_run_id 卡住。"""
+
+        identity, _ = await self._write_old_pending()
+        lifecycle = create_application_lifecycle(
+            application_id="app-regenerate-admission",
+            application_name="Regenerate admission",
+        )
+        lifecycle = lifecycle.model_copy(
+            update={
+                "initialization": lifecycle.initialization.model_copy(
+                    update={
+                        "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                        "status": ApplicationLifecycleStatus.COMPLETED,
+                    }
+                )
+            }
+        )
+        write_application_lifecycle(self.state["workspace"], lifecycle)
+        start_workbench_execution(
+            self.state["workspace"],
+            scope="page",
+            target_id="orders",
+            page_id="orders",
+            thread_id="thread-regenerate",
+            run_id="workflow-r1",
+            phase="prepare_build_tasks",
+        )
+        waiting = update_workbench_execution(
+            self.state["workspace"],
+            run_id="workflow-r1",
+            phase="prepare_build_tasks",
+            status=WorkbenchExecutionStatus.AWAITING_USER,
+            pending_type=PendingInteractionType.TASK_PLAN_CONFIRMATION,
+            pending_payload={"mode": "build_task_plan_confirmation"},
+        )
+        interaction = waiting.active_executions["workflow-r1"].pending_interaction
+        assert interaction is not None
+        begin_workflow_lifecycle(
+            {
+                "workspace": self.state["workspace"],
+                "resume_values": {
+                    "owner_session_id": "session-regenerate",
+                    "build_execution_scope": {
+                        "type": "page",
+                        "targetId": "orders",
+                    },
+                    "resume_execution_run_id": "workflow-r1",
+                    "lifecycle_interaction_submission": {
+                        "runId": "workflow-r1",
+                        "id": interaction.id,
+                        "basedOnRevision": interaction.based_on_revision,
+                    },
+                },
+            },
+            thread_id="thread-regenerate",
+            run_id="workflow-r2",
+            phase="prepare_build_tasks",
+        )
+        fail_workflow_lifecycle(
+            self.state["workspace"],
+            run_id="workflow-r2",
+            phase="prepare_build_tasks",
+            error=RuntimeError("simulated Confirm failure"),
+        )
+
+        retry = begin_workflow_lifecycle(
+            {
+                "workspace": self.state["workspace"],
+                "resume_values": {
+                    "owner_session_id": "session-regenerate",
+                    "build_execution_scope": {
+                        "type": "page",
+                        "targetId": "orders",
+                    },
+                    "resume_execution_run_id": "workflow-r2",
+                },
+            },
+            thread_id="thread-regenerate",
+            run_id="workflow-r3",
+            phase="prepare_build_tasks",
+        )
+        self.assertIsNotNone(retry)
+
+        result = await self._regenerate(identity)
+
+        self.assertEqual(result.status, "regenerated")
+        pending = load_pending_build_task_plan(self.state)
+        self.assertIsNotNone(pending)
+        self.assertNotEqual(pending["draft_identity"]["workflow_run_id"], "workflow-old")
 
 
 if __name__ == "__main__":

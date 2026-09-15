@@ -67,6 +67,7 @@ def begin_workflow_lifecycle(
         lifecycle = require_test_entry(workspace)
     submission = resume_values.get("lifecycle_interaction_submission")
     test_submission: dict[str, Any] | None = None
+    task_plan_submission: dict[str, Any] | None = None
     approved_repair_claims: list[ExecutionResourceClaim] = []
     if isinstance(submission, dict):
         submission_run_id = str(submission.get("runId") or "")
@@ -81,6 +82,9 @@ def begin_workflow_lifecycle(
                 approved_repair_claims = _repair_resource_claims(pending.payload)
             if pending is not None and pending.type == PendingInteractionType.TEST_PHASE_CONFIRMATION:
                 test_submission = submission
+            elif pending is not None and pending.type == PendingInteractionType.TASK_PLAN_CONFIRMATION:
+                # DAG 确认交互沿用测试确认的原子接管路径，不能先写 submittedAt。
+                task_plan_submission = submission
             else:
                 persist_workbench_interaction_submission(
                     workspace,
@@ -178,6 +182,7 @@ def begin_workflow_lifecycle(
         api_contract_id=str(scope.get("apiContractId") or "").strip() or None,
         requires_test_entry=requires_test_entry,
         test_interaction_submission=test_submission,
+        task_plan_interaction_submission=task_plan_submission,
     )
     # application_revision 仍可能停在草稿确认门，只有节点确认全部正式产物后
     # 才能把 formal revision 切成 building，避免运行登记提前改变业务事实。

@@ -43,8 +43,9 @@ workspace_snapshot 和 reuse_facts。传入的基线摘要还必须与实际 For
 3. 当前 Formal 摘要必须等于 `base_confirmed_plan_digest`。存在但损坏或不合格的
    Formal 不能被当作空基线。
 4. 当前完整输入指纹与 Scope 必须匹配。Pending 正文若携带 Scope，也必须一致。
-5. DAG 必须 ready、validation 有效且无错误、没有 blocked batch，保留全部 baseline
-   Task ID。复用实际 DAG compiler 对精确任务合同检查语义、依赖和调度，并核验
+5. 当前 v4 DAG 的 Unit Graph 与 Task Graph validation 都必须有效且无错误；计划必须
+   ready、没有 blocked batch，并保留全部 baseline Task ID。复用实际 DAG compiler
+   对精确任务合同检查语义、依赖和调度，并核验
    已保存的 nodes/edges/topological_order。检查不回写重编译结果，也不补齐或修复任务。
 6. 构造 ConfirmedPlan，通过共享 `write_json_atomic` 原子替换 Formal。
 7. 删除仍匹配本请求且摘要自洽的 Pending。

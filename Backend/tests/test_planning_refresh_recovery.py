@@ -80,8 +80,14 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
         write_build_task_plan_json(
             self.state,
             {
-                "schema_version": "build-dag.v3",
+                "schema_version": "build-dag.v4",
                 "status": "ready",
+                "unit_graph": {
+                    "schema_version": "build-unit-graph.v3",
+                    "nodes": [],
+                    "edges": [],
+                    "validation": {"is_valid": True, "errors": []},
+                },
                 "confirmation_status": "confirmed",
                 "confirmed_from": {
                     "planning_run_id": planning_run_id,

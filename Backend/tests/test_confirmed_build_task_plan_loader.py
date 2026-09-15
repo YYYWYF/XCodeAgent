@@ -16,11 +16,11 @@ from app.workspace.task_documents import (
 
 
 def _confirmed_plan(task_id: str = "formal-task") -> dict:
-    """构造内容可区分的已确认 v3 DAG，验证来源而非只验证确认标记。"""
+    """构造内容可区分的已确认 v4 DAG，验证来源而非只验证确认标记。"""
 
     return {
         "version": "1.0.0",
-        "schema_version": "build-dag.v3",
+        "schema_version": "build-dag.v4",
         "status": "ready",
         "confirmation_status": "confirmed",
         "confirmed_at": "2026-09-01T00:00:00+00:00",
@@ -32,6 +32,12 @@ def _confirmed_plan(task_id: str = "formal-task") -> dict:
                 "status": "completed",
                 "dependencies": [],
             }
+        },
+        "unit_graph": {
+            "schema_version": "build-unit-graph.v3",
+            "nodes": ["page:home"],
+            "edges": [],
+            "validation": {"is_valid": True, "errors": []},
         },
         "task_graph": {
             "schema_version": "build-task-graph.v3",

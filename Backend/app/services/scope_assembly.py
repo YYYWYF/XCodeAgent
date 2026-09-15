@@ -108,20 +108,20 @@ def _retained_tasks(base_confirmed_plan: Mapping[str, Any] | None) -> tuple[dict
     if base_confirmed_plan is None:
         return {}, []
     if not isinstance(base_confirmed_plan, Mapping):
-        _raise_input("SCOPE_BASELINE_INVALID", "base_confirmed_plan 必须是 confirmed v3 DAG 或 None。")
+        _raise_input("SCOPE_BASELINE_INVALID", "base_confirmed_plan 必须是 confirmed v4 DAG 或 None。")
     plan = deepcopy(plain_json(base_confirmed_plan))
     registry = plan.get("task_registry")
     graph = plan.get("task_graph")
     validation = graph.get("validation") if isinstance(graph, dict) else None
     if (
-        plan.get("schema_version") != "build-dag.v3"
+        plan.get("schema_version") != "build-dag.v4"
         or plan.get("confirmation_status") != "confirmed"
         or plan.get("status") == "failed"
         or not isinstance(registry, dict)
         or not isinstance(validation, dict)
         or validation.get("is_valid") is not True
     ):
-        _raise_input("SCOPE_BASELINE_INVALID", "base_confirmed_plan 必须是正式 confirmed 且有效的 v3 DAG。")
+        _raise_input("SCOPE_BASELINE_INVALID", "base_confirmed_plan 必须是正式 confirmed 且有效的 v4 DAG。")
 
     task_ids = [
         task_id

@@ -341,7 +341,7 @@ def write_pending_build_task_plan_atomic(
 
 
 def load_confirmed_build_task_plan(workspace_root: str | Path) -> dict[str, Any] | None:
-    """只读正式路径中已确认且有效的 v3 DAG，缺失或不合格时返回空基线。"""
+    """只读正式路径中已确认且有效的当前 v4 DAG，缺失或不合格时返回空基线。"""
 
     path = build_task_plan_json_path({"workspace": str(workspace_root)})
     try:
@@ -353,8 +353,16 @@ def load_confirmed_build_task_plan(workspace_root: str | Path) -> dict[str, Any]
     if (
         not isinstance(plan, dict)
         or plan.get("confirmation_status") != "confirmed"
-        or plan.get("schema_version") != "build-dag.v3"
+        or plan.get("schema_version") != "build-dag.v4"
         or plan.get("status") == "failed"
+    ):
+        return None
+    unit_graph = plan.get("unit_graph")
+    unit_validation = unit_graph.get("validation") if isinstance(unit_graph, dict) else None
+    if (
+        not isinstance(unit_validation, dict)
+        or unit_validation.get("is_valid") is not True
+        or unit_validation.get("errors")
     ):
         return None
     task_graph = plan.get("task_graph")

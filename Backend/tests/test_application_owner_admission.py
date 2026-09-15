@@ -219,8 +219,14 @@ class ApplicationOwnerAdmissionTests(unittest.TestCase):
                 {"workspace": workspace},
                 {
                     "version": "1.0.0",
-                    "schema_version": "build-dag.v3",
+                    "schema_version": "build-dag.v4",
                     "status": "ready",
+                    "unit_graph": {
+                        "schema_version": "build-unit-graph.v3",
+                        "nodes": [],
+                        "edges": [],
+                        "validation": {"is_valid": True, "errors": []},
+                    },
                     "confirmation_status": "confirmed",
                     "confirmed_at": "2026-09-14T00:00:00Z",
                     "task_registry": {},
@@ -316,8 +322,14 @@ class ApplicationOwnerAdmissionTests(unittest.TestCase):
             write_pending_build_task_plan_atomic(
                 {"workspace": workspace},
                 {
-                    "schema_version": "build-dag.v3",
+                    "schema_version": "build-dag.v4",
                     "status": "ready",
+                    "unit_graph": {
+                        "schema_version": "build-unit-graph.v3",
+                        "nodes": [],
+                        "edges": [],
+                        "validation": {"is_valid": True, "errors": []},
+                    },
                     "task_graph": {"validation": {"is_valid": True, "errors": []}},
                 },
                 owner_session_id="session-owner",

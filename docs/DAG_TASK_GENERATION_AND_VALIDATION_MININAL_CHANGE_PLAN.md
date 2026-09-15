@@ -458,7 +458,7 @@ Workflow/PlanningRun，而不是单个 Unit。待确认状态的终止统一使�
 
 ### 6.2 `build-task-plan.pending.json`
 
-Pending 使用同一 `build-dag.v3` 任务正文，但必须满足：
+Pending 使用同一当前 `build-dag.v4` 任务正文，但必须满足：
 
 - `confirmation_status=pending`、`confirmed_at=null`；
 - 携带服务端构造的 `draft_identity`，至少绑定页面对话 `owner_session_id`、`planning_run_id`、`draft_digest`、Formal baseline 摘要、完整输入 fingerprint 和 Build Scope；

@@ -24,6 +24,7 @@ class PlanningRefreshState(TypedDict, total=False):
     source: PlanningRefreshSource
     status: PlanningRefreshStatus
     planningRunId: str
+    # 仅记录 Pending 的来源 Workflow Run，不能作为后续 execution 接管令牌。
     workflowRunId: str
     ownerSessionId: str
     draftDigest: str

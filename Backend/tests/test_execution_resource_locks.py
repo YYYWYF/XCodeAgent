@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
@@ -20,6 +21,7 @@ from app.services.application_lifecycle import (
     create_application_lifecycle,
     end_workbench_execution,
     expand_workbench_execution_resources,
+    load_application_lifecycle,
     start_workbench_execution,
     stop_workbench_execution,
     update_workbench_execution,
@@ -54,8 +56,14 @@ class ExecutionResourceLockTests(unittest.TestCase):
             write_pending_build_task_plan_atomic(
                 state,
                 {
-                    "schema_version": "build-dag.v3",
+                    "schema_version": "build-dag.v4",
                     "status": "ready",
+                    "unit_graph": {
+                        "schema_version": "build-unit-graph.v3",
+                        "nodes": [],
+                        "edges": [],
+                        "validation": {"is_valid": True, "errors": []},
+                    },
                     "build_units": {},
                     "task_registry": {},
                     "task_graph": {
@@ -411,6 +419,73 @@ class ExecutionResourceLockTests(unittest.TestCase):
             assert payload is not None
             self.assertNotIn("run-old", payload["activeExecutions"])
             self.assertEqual(payload["activeExecutions"]["run-new"]["status"], "running")
+
+    def test_task_plan_confirmation_is_retryable_when_execution_handoff_fails(self) -> None:
+        """TASK_PLAN_CONFIRMATION 必须在 execution 接管写盘成功后才被消费。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="orders",
+                page_id="orders",
+                thread_id="thread-orders",
+                run_id="run-old",
+                phase="prepare_build_tasks",
+            )
+            waiting = update_workbench_execution(
+                directory,
+                run_id="run-old",
+                phase="prepare_build_tasks",
+                status=WorkbenchExecutionStatus.AWAITING_USER,
+                pending_type=PendingInteractionType.TASK_PLAN_CONFIRMATION,
+                pending_payload={"mode": "build_task_plan_confirmation"},
+            )
+            pending = waiting.active_executions["run-old"].pending_interaction
+            assert pending is not None
+            submission = {
+                "runId": "run-old",
+                "id": pending.id,
+                "basedOnRevision": pending.based_on_revision,
+            }
+            workflow_inputs = {
+                "workspace": directory,
+                "resume_values": {
+                    "selectedPageId": "orders",
+                    "build_execution_scope": {"type": "page", "targetId": "orders"},
+                    "resume_execution_run_id": "run-old",
+                    "lifecycle_interaction_submission": submission,
+                },
+            }
+
+            with patch(
+                "app.services.application_lifecycle.write_application_lifecycle",
+                side_effect=OSError("execution handoff failed"),
+            ):
+                with self.assertRaisesRegex(OSError, "execution handoff failed"):
+                    begin_workflow_lifecycle(
+                        workflow_inputs,
+                        thread_id="thread-orders",
+                        run_id="run-new",
+                        phase="prepare_build_tasks",
+                    )
+
+            current = load_application_lifecycle(directory)
+            assert current is not None
+            preserved = current.active_executions["run-old"].pending_interaction
+            assert preserved is not None
+            self.assertIsNone(preserved.submitted_at)
+
+            payload = begin_workflow_lifecycle(
+                workflow_inputs,
+                thread_id="thread-orders",
+                run_id="run-new",
+                phase="prepare_build_tasks",
+            )
+            assert payload is not None
+            self.assertNotIn("run-old", payload["activeExecutions"])
+            self.assertIn("run-new", payload["activeExecutions"])
 
     def test_stopped_workflow_retry_cannot_take_another_thread_locks(self) -> None:
         """显式恢复令牌不能跨对话接管已经停止的资源锁。"""

@@ -147,13 +147,18 @@ def abandon_pending_build_task_plan(
 
 
 def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
-    """只读复核原稿的图与合同；编译检查结果绝不覆盖用户确认的任务正文。"""
+    """按当前 v4 Unit/Task Graph 合同复核原稿，并复用现有任务编译器。"""
 
+    unit_graph = plan.get("unit_graph")
+    unit_validation = unit_graph.get("validation") if isinstance(unit_graph, dict) else None
     graph = plan.get("task_graph")
     validation = graph.get("validation") if isinstance(graph, dict) else None
     execution = plan.get("execution")
-    if (plan.get("schema_version") != "build-dag.v3" or plan.get("status") != "ready"
+    if (plan.get("schema_version") != "build-dag.v4" or plan.get("status") != "ready"
             or plan.get("confirmation_status") != "pending"
+            or not isinstance(unit_validation, dict)
+            or unit_validation.get("is_valid") is not True
+            or unit_validation.get("errors")
             or not isinstance(validation, dict) or validation.get("is_valid") is not True
             or validation.get("errors") or not isinstance(execution, dict)
             or execution.get("blocked_batches")

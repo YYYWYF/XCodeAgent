@@ -9,7 +9,8 @@ import unittest
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from app.domain.application_lifecycle import ApplicationLifecycle
-from app.services.application_lifecycle import write_application_lifecycle
+from app.protocols.workflow.lifecycle import begin_workflow_lifecycle, fail_workflow_lifecycle
+from app.services.application_lifecycle import load_application_lifecycle, write_application_lifecycle
 
 from app.services.build_task_plan_lifecycle import (
     abandon_pending_build_task_plan,
@@ -63,7 +64,7 @@ class ConfirmPromotionTests(unittest.TestCase):
         identity = load_pending_build_task_plan(self.state)["draft_identity"]
         self.request = {key: identity[key] for key in ("planning_run_id", "draft_digest")}
 
-    def _write_lifecycle(self) -> None:
+    def _write_lifecycle(self) -> ApplicationLifecycle:
         lifecycle = ApplicationLifecycle.model_validate(
             {
                 "application": {"id": "app-confirm", "name": "Confirm 测试"},
@@ -95,6 +96,7 @@ class ConfirmPromotionTests(unittest.TestCase):
             }
         )
         write_application_lifecycle(self.state["workspace"], lifecycle)
+        return lifecycle
 
     def _confirm(self, **changes):
         """调用被测公共函数，不 mock 门禁或文件读写。"""
@@ -140,6 +142,89 @@ class ConfirmPromotionTests(unittest.TestCase):
             if key not in {"confirmation_status", "confirmed_at", "draft_identity"}:
                 self.assertEqual(formal[key], value)
         self.assertFalse(self.pending_path.exists())
+
+    def test_real_v4_pending_confirm_can_take_over_new_workflow_run(self):
+        """真实 v4 Pending 在新 Workflow Run 接管后仍能完成一次 Confirm。"""
+
+        lifecycle = self._write_lifecycle()
+        pending = lifecycle.active_executions["workflow-current"].pending_interaction
+        assert pending is not None
+        payload = begin_workflow_lifecycle(
+            {
+                "workspace": self.state["workspace"],
+                "resume_values": {
+                    "owner_session_id": "session-confirm",
+                    "build_execution_scope": self.scope,
+                    "resume_execution_run_id": "workflow-current",
+                    "lifecycle_interaction_submission": {
+                        "runId": "workflow-current",
+                        "id": pending.id,
+                        "basedOnRevision": pending.based_on_revision,
+                    },
+                },
+            },
+            thread_id="thread-confirm",
+            run_id="workflow-r2",
+            phase="prepare_build_tasks",
+        )
+
+        assert payload is not None
+        self.assertNotIn("workflow-current", payload["activeExecutions"])
+        self.assertIn("workflow-r2", payload["activeExecutions"])
+        self.assertEqual(self._confirm().status, "confirmed")
+        self.assertFalse(self.pending_path.exists())
+
+    def test_real_pending_can_retry_after_replaced_workflow_failed(self):
+        """R2 失败保留真实 Pending 后，R3 可接替 R2 再次 Confirm。"""
+
+        lifecycle = self._write_lifecycle()
+        pending = lifecycle.active_executions["workflow-current"].pending_interaction
+        assert pending is not None
+        begin_workflow_lifecycle(
+            {
+                "workspace": self.state["workspace"],
+                "resume_values": {
+                    "owner_session_id": "session-confirm",
+                    "build_execution_scope": self.scope,
+                    "resume_execution_run_id": "workflow-current",
+                    "lifecycle_interaction_submission": {
+                        "runId": "workflow-current",
+                        "id": pending.id,
+                        "basedOnRevision": pending.based_on_revision,
+                    },
+                },
+            },
+            thread_id="thread-confirm",
+            run_id="workflow-r2",
+            phase="prepare_build_tasks",
+        )
+        fail_workflow_lifecycle(
+            self.state["workspace"],
+            run_id="workflow-r2",
+            phase="prepare_build_tasks",
+            error=RuntimeError("simulated Confirm failure"),
+        )
+        self.assertTrue(self.pending_path.exists())
+
+        retry = begin_workflow_lifecycle(
+            {
+                "workspace": self.state["workspace"],
+                "resume_values": {
+                    "owner_session_id": "session-confirm",
+                    "build_execution_scope": self.scope,
+                    "resume_execution_run_id": "workflow-r2",
+                },
+            },
+            thread_id="thread-confirm",
+            run_id="workflow-r3",
+            phase="prepare_build_tasks",
+        )
+
+        assert retry is not None
+        self.assertNotIn("workflow-r2", retry["activeExecutions"])
+        self.assertEqual(self._confirm().status, "confirmed")
+        self.assertFalse(self.pending_path.exists())
+        self.assertEqual(load_application_lifecycle(self.state["workspace"]).active_run_id, "workflow-r3")
 
     def test_normal_confirm_replaces_exact_baseline(self):
         """已有 ConfirmedPlan 时精确绑定旧摘要，并替换成新确认身份。"""
@@ -234,11 +319,16 @@ class ConfirmPromotionTests(unittest.TestCase):
         """重签的无效图必须被真实 DAG gate 拦截，不能信任 is_valid 缓存。"""
 
         original = load_pending_build_task_plan(self.state)
-        for fault in ("validation", "cycle", "nodes", "blocked", "owner", "registry", "order", "unit"):
+        for fault in (
+            "validation", "unit_graph_validation", "cycle", "nodes", "blocked",
+            "owner", "registry", "order", "unit",
+        ):
             pending = deepcopy(original)
             task = next(iter(pending["task_registry"].values()))
             if fault == "validation":
                 pending["task_graph"]["validation"] = {"is_valid": False, "errors": []}
+            elif fault == "unit_graph_validation":
+                pending["unit_graph"]["validation"] = {"is_valid": False, "errors": []}
             elif fault == "cycle":
                 task["dependencies"] = [task["id"]]
             elif fault == "nodes":
@@ -422,8 +512,14 @@ class EndpointDesignStalePromotionTests(unittest.TestCase):
             required=[unit_id],
         )
         draft = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "status": "ready",
+            "unit_graph": {
+                "schema_version": "build-unit-graph.v3",
+                "nodes": [],
+                "edges": [],
+                "validation": {"is_valid": True, "errors": []},
+            },
             "task_registry": {},
             "task_graph": {
                 "schema_version": "build-task-graph.v3",
@@ -520,6 +616,10 @@ class PlanningPromotionIntegrationTests(unittest.IsolatedAsyncioTestCase):
             result = await plan_dag_sequential(
                 inputs, workspace_state=state, planning_run_id="integration-run", workflow_run_id="workflow",
                 thread_id="thread", policy=UnitGenerationPolicy(**_policy_payload()), generate_once=generate,
+            )
+            self.assertEqual(result.assembly.assembled_plan["schema_version"], "build-dag.v4")
+            self.assertTrue(
+                result.assembly.assembled_plan["unit_graph"]["validation"]["is_valid"]
             )
             run = result.planning_run
             write_pending_build_task_plan_atomic(
