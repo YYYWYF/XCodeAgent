@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import tempfile
@@ -11,6 +10,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Literal
+
+import portalocker
 
 from app.utils.atomic_json import atomic_write_json
 
@@ -70,13 +71,13 @@ def reconcile_run_gate(workspace: str | Path) -> Iterator[None]:
     lock_path = root / ".gate.lock"
     with lock_path.open("a+") as handle:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
+            portalocker.lock(handle, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        except portalocker.exceptions.LockException as exc:
             raise ReconcileV2RuntimeError("TEMPLATE_RECONCILE_BUSY：Workspace 正在执行模板更新。") from exc
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            portalocker.unlock(handle)
 
 
 def persist_prepared_attempt(workspace: str | Path, attempt: ReconcileAttemptV2, package_zip: Path) -> None:

@@ -16,6 +16,7 @@ uvicorn[standard]>=0.30.0
 cryptography==46.0.3
 deepagents>=0.5.3
 pymysql>=1.1.0
+portalocker>=3.0.0
 code-review-graph==2.3.7
 tree-sitter==0.26.0
 tree-sitter-language-pack==0.11.0
