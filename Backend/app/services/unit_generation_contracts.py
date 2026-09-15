@@ -73,13 +73,13 @@ class UnitGenerationContext(_GenerationModel):
 class UnitGenerationPolicy(_GenerationModel):
     """独立运行策略，时间单位为秒；保护参数由调用方显式提供，不读取 Settings。
 
-    Local=3、SDK retry=0、token budget=4096 遵循设计基线。
+    Local=3、SDK max_retries 默认=0（允许显式配置 0-2）、token budget=4096 遵循设计基线。
     session timeout、turn limit、read limits 的生产默认值留待实现和压测确定。
     read limits 仅容纳具名正整数预算，不承载合同正文。
     """
 
     local_max_attempts: Annotated[int, Field(ge=3, le=3)] = 3
-    model_max_retries: Annotated[int, Field(ge=0, le=0)] = 0
+    model_max_retries: Annotated[int, Field(ge=0, le=2)] = 0
     model_max_tokens: _PositiveInt = 4096
     request_timeout: _PositiveSeconds
     unit_session_timeout: _PositiveSeconds

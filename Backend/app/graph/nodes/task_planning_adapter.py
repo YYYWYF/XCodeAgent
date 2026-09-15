@@ -79,11 +79,16 @@ RegenerateService = Callable[..., Awaitable[RegeneratePendingResult]]
 def production_unit_generation_policy() -> UnitGenerationPolicy:
     """返回 production Workflow 使用的 Unit 生成策略。
 
-    Local=3、SDK retry=0 与 token budget 由 DTO 固定；这里的超时、turn 与
-    Frozen Contract 读取预算是 cutover 的显式生产取值，不再依赖测试常量。
+    Local=3、SDK max_retries=2，token budget 保持 4096；这里的超时、turn 与
+    Frozen Contract 读取预算也是 cutover 的显式生产取值，不再依赖测试常量。
+    Production DAG Unit generation enables SDK max_retries=2. This relies on the
+    model SDK's supported retry behavior for transient request/infrastructure failures.
+    It does not provide stream resume or custom reconnect semantics after a streaming
+    response has already begun.
     """
 
     return UnitGenerationPolicy(
+        model_max_retries=2,
         request_timeout=120.0,
         unit_session_timeout=600.0,
         model_turn_limit=8,

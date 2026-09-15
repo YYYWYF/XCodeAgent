@@ -19,7 +19,8 @@ def create_chat_model(
     """根据 provider 和调用级覆盖创建聊天模型，不回写全局 Settings。
 
     支持 openai（OpenAI 兼容协议）与 anthropic（Anthropic 原生协议）两种 provider。
-    override 为 None 时沿用全局值；max_retries_override=0 显式关闭 SDK 重试。
+    override 为 None 时沿用全局值；max_retries_override 直接作为 SDK 的
+    max_retries，0 表示显式关闭 SDK retry。
     OpenAI 兼容协议的 timeout 同步作用于模型与两个 HTTP 客户端，连接超时仍
     保持原有的 30 秒。
 
