@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -93,6 +94,7 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         self.assertEqual(Path(written_path), self.pending_path)
         self.assertEqual(loaded["confirmation_status"], "pending")
         self.assertIsNone(loaded["confirmed_at"])
+        self.assertEqual(loaded["build_execution_scope"], BUILD_EXECUTION_SCOPE)
         self.assertEqual(loaded["task_registry"], plan["task_registry"])
         self.assertEqual(loaded["draft_identity"]["owner_session_id"], OWNER_SESSION_ID)
         self.assertEqual(loaded["draft_identity"]["workflow_run_id"], WORKFLOW_RUN_ID)
@@ -175,6 +177,41 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
 
         self.assertFalse(self.pending_path.exists())
         self.assertFalse(self.formal_path.exists())
+
+    def test_writer_rejects_mismatched_root_scope_before_persistence(self) -> None:
+        """assembled root scope 与当前 PlanningRun 不一致时必须 fail closed。"""
+
+        plan = _validated_plan()
+        plan["build_execution_scope"] = {"type": "endpoint", "targetId": "orders.list"}
+
+        with self.assertRaisesRegex(ValueError, "build_execution_scope"):
+            self._write_pending(plan)
+
+        self.assertFalse(self.pending_path.exists())
+        self.assertFalse(self.formal_path.exists())
+
+    def test_writer_drops_old_formal_and_build_runtime_root_metadata(self) -> None:
+        """Pending writer 不得复制旧 Formal confirmed_from 或 Build last_update。"""
+
+        plan = _validated_plan()
+        plan.update({
+            "build_execution_scope": deepcopy(BUILD_EXECUTION_SCOPE),
+            "confirmed_from": {
+                "planning_run_id": "old-formal-run",
+                "draft_digest": "f" * 64,
+            },
+            "last_update": {
+                "stage": "build_scheduler",
+                "updated_at": "2026-09-04T00:00:00+00:00",
+            },
+        })
+
+        self._write_pending(plan)
+        loaded = load_pending_build_task_plan(self.state)
+
+        self.assertNotIn("confirmed_from", loaded)
+        self.assertNotIn("last_update", loaded)
+        self.assertEqual(loaded["build_execution_scope"], BUILD_EXECUTION_SCOPE)
 
     def test_invalid_pending_root_is_reported_without_rewrite(self) -> None:
         """读取非对象 Pending 时应保留现场并明确报错。"""

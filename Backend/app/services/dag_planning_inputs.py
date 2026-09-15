@@ -115,6 +115,10 @@ class SequentialPlanningInputs(FrozenPlanningModel):
     ) -> PlanningRun:
         """绑定冻结输入摘要及正式基线摘要，创建本次串行 Run 的唯一初始身份。"""
 
+        # PlanningRun 与 Confirm 必须使用同一个只保留规划合同的 baseline digest，
+        # 否则 Task runtime 状态会让同一份 ConfirmedPlan 在 Confirm 前被误判为 stale_base。
+        from app.workspace.task_documents import build_task_plan_sha256
+
         units = {}
         for key, strategy in requirements.generation_strategy_by_unit.items():
             if strategy in {"model", "deterministic"} and not requirements.generation_requirements_by_unit[key]:
@@ -129,7 +133,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
             planning_run_id=planning_run_id, workflow_run_id=workflow_run_id, thread_id=thread_id,
             build_execution_scope=self.build_execution_scope,
             input_fingerprint=self.input_fingerprint(),
-            base_confirmed_plan_digest=_input_digest(self.base_confirmed_plan)
+            base_confirmed_plan_digest=build_task_plan_sha256(plain_json(self.base_confirmed_plan))
             if self.base_confirmed_plan is not None else None,
             required_unit_ids=tuple(units), planning_unit_ids=requirements.planning_unit_ids,
             unit_states=units, started_at=at, updated_at=at,

@@ -368,7 +368,9 @@ def confirm_pending_build_task_plan(
             return ConfirmPromotionResult(status="stale_base")
         try:
             inputs = SequentialPlanningInputs.model_validate(current_inputs)
-            supplied_base = _input_digest(inputs.base_confirmed_plan) if inputs.base_confirmed_plan is not None else None
+            # 与 PlanningRun.create_run/正式 Formal 使用同一个 canonical planning digest，仍保持严格相等校验。
+            supplied_base = (build_task_plan_sha256(plain_json(inputs.base_confirmed_plan))
+                             if inputs.base_confirmed_plan is not None else None)
             if (supplied_base != base_digest or inputs.input_fingerprint() != identity.input_fingerprint
                     or inputs.build_execution_scope != identity.build_execution_scope
                     or ("build_execution_scope" in pending

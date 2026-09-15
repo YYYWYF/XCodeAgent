@@ -13,6 +13,7 @@ from typing import Any
 from threading import Lock, RLock
 
 from app.services.build_task_plan_lifecycle import DraftIdentity
+from app.services.planning_frozen import plain_json
 from app.workspace.json_documents import write_json_atomic
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
@@ -299,7 +300,11 @@ def write_pending_build_task_plan_atomic(
     build_execution_scope: Mapping[str, Any],
     created_at: str,
 ) -> str:
-    """由后端元数据构造 DraftIdentity，并原子写入已验证的 PendingPlan。"""
+    """由后端元数据构造 DraftIdentity，并原子写入已验证的 PendingPlan。
+
+    Root Scope 缺失时由服务端补齐；若 assembled Scope 与当前权威 Scope 不同则
+    fail closed，保证 PendingPlan、DraftIdentity 和 PlanningRun 绑定同一 Scope。
+    """
 
     if not isinstance(build_task_plan, dict):
         raise ValueError("PendingPlan 必须是 JSON object。")
@@ -314,7 +319,24 @@ def write_pending_build_task_plan_atomic(
     ):
         raise ValueError("只有通过 task_graph validation 的 BuildTaskPlan 才能写入 PendingPlan。")
 
+    if not isinstance(build_execution_scope, Mapping):
+        raise ValueError("服务端 authoritative build_execution_scope 必须是 JSON object。")
+    authoritative_scope = deepcopy(plain_json(build_execution_scope))
+    if "build_execution_scope" in build_task_plan:
+        assembled_scope = build_task_plan["build_execution_scope"]
+        if (
+            not isinstance(assembled_scope, Mapping)
+            or plain_json(assembled_scope) != authoritative_scope
+        ):
+            raise ValueError(
+                "assembled BuildTaskPlan 的 build_execution_scope 与当前 PlanningRun 不一致，拒绝写入。"
+            )
+
     pending_plan = deepcopy(build_task_plan)
+    # 新 Pending 不携带旧 Formal lifecycle 或 Build runtime 的 root metadata。
+    pending_plan.pop("confirmed_from", None)
+    pending_plan.pop("last_update", None)
+    pending_plan["build_execution_scope"] = authoritative_scope
     pending_plan["confirmation_status"] = "pending"
     pending_plan["confirmed_at"] = None
     identity = DraftIdentity(
@@ -324,7 +346,7 @@ def write_pending_build_task_plan_atomic(
         draft_digest="0" * 64,
         base_confirmed_plan_digest=base_confirmed_plan_digest,
         input_fingerprint=input_fingerprint,
-        build_execution_scope=build_execution_scope,
+        build_execution_scope=authoritative_scope,
         created_at=created_at,
     )
     pending_plan["draft_identity"] = identity.model_dump(mode="json")

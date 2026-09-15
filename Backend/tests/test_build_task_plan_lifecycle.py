@@ -17,6 +17,7 @@ from app.services.build_task_plan_lifecycle import (
     confirm_pending_build_task_plan,
 )
 from app.services.dag_planning_inputs import SequentialPlanningInputs, _input_digest
+from app.services.planning_frozen import plain_json
 from app.workspace.task_documents import (
     build_task_plan_draft_sha256, build_task_plan_json_path, build_task_plan_pending_json_path,
     build_task_plan_sha256, load_pending_build_task_plan, write_pending_build_task_plan_atomic,
@@ -56,7 +57,7 @@ class ConfirmPromotionTests(unittest.TestCase):
         write_pending_build_task_plan_atomic(
             self.state, self.draft, owner_session_id="session-confirm", planning_run_id=run_id,
             workflow_run_id="workflow-confirm",
-            base_confirmed_plan_digest=_input_digest(self.inputs.base_confirmed_plan)
+            base_confirmed_plan_digest=build_task_plan_sha256(plain_json(self.inputs.base_confirmed_plan))
             if self.inputs.base_confirmed_plan is not None else None,
             input_fingerprint=_input_digest(self.inputs.model_dump(mode="json")),
             build_execution_scope=self.scope, created_at="2026-09-06T00:00:00Z",

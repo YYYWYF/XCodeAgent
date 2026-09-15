@@ -289,6 +289,7 @@ class AuthDeterministicExecutionIntegrationTests(unittest.TestCase):
             skeleton_plan=cycle["skeleton"],
             project_plan=cycle["plan"],
             build_context=cycle["context"],
+            build_execution_scope=cycle["scope"],
             reuse_facts=cycle["reuse_facts"],
             generation_requirements_by_unit=requirements_by_unit,
             candidates_by_unit=candidates_by_unit,
