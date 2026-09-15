@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.protocols.preview_runtime import build_preview_runtime_stream, blocking_task
+from app.agents.repair_planner.planner import _build_failure_repair_prompt
 from app.services.preview_runtime_guard import claim_maintenance, maintenance_owner, release_maintenance, require_no_maintenance
 from app.services.preview_runtime_repair import execute_repair, load_repair, prepare_repair, save_repair, source_digest, safe_file
 from app.services.preview_runtime_state import (
@@ -74,6 +75,13 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         value = self.result(await self.request("get"))
         self.assertEqual(value["runtime"]["status"], "stopped")
         self.assertIsNone(maintenance_owner(self.workspace))
+
+    def test_preview_repair_prompt_requires_simplified_chinese(self) -> None:
+        """预览修复计划的用户可见文本必须由模型使用简体中文生成。"""
+        prompt = _build_failure_repair_prompt(repair_input={})
+        self.assertIn("Simplified Chinese", prompt)
+        self.assertIn("简体中文", prompt)
+        self.assertIn("Do not return English explanations", prompt)
 
     async def test_error_has_complete_lifecycle(self) -> None:
         """无启动失败证据时不能诊断，但必须正常结束 AG-UI。"""

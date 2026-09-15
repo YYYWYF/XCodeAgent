@@ -3,6 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { leavePreviewRuntime, runPreviewRuntime } from '../src/renderer/src/service/previewRuntime'
 import PreviewRepairControls from '../src/renderer/src/components/BrowserPreviewPanel/PreviewRepairControls'
+import { previewServiceActionAvailability } from '../src/renderer/src/components/BrowserPreviewPanel/serviceStatusPolicy'
 
 const originalFetch = globalThis.fetch
 Object.assign(globalThis, { window: { xcodeAgent: { agentBaseUrl: 'http://127.0.0.1:8000' } } })
@@ -63,6 +64,24 @@ try {
   await assert.rejects(
     runPreviewRuntime({ workspace: '/workspace', action: 'restart' }),
     /等待确认/
+  )
+
+  assert.deepEqual(
+    previewServiceActionAvailability({ busy: false, blockedReason: '' }),
+    { canRestart: true, canDiagnose: false },
+    '初始运行快照尚未返回时应允许重启，但不能提前开放诊断修复'
+  )
+  assert.deepEqual(
+    previewServiceActionAvailability({
+      busy: false,
+      blockedReason: '',
+      repairAvailable: true
+    }),
+    { canRestart: true, canDiagnose: true }
+  )
+  assert.equal(
+    previewServiceActionAvailability({ busy: false, blockedReason: '会话执行中' }).canRestart,
+    false
   )
 
   const awaiting = renderToStaticMarkup(

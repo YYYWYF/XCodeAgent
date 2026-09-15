@@ -1,0 +1,305 @@
+.preview-repair-plan-card {
+  position: relative;
+  overflow: hidden;
+  margin: 6px 0 14px;
+  padding: 1px;
+  color: var(--wb-text);
+  background:
+    linear-gradient(135deg, var(--wb-accent), var(--wb-accent-border) 52%, var(--wb-accent-active))
+      border-box,
+    linear-gradient(145deg, var(--wb-accent-soft), var(--wb-canvas)) padding-box;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  box-shadow:
+    0 12px 30px color-mix(in srgb, var(--wb-accent-active) 14%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--wb-canvas) 80%, transparent);
+
+  &::before {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--wb-accent) 7%, transparent) 1px, transparent 1px),
+      linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--wb-accent) 7%, transparent) 1px,
+        transparent 1px
+      );
+    background-size: 22px 22px;
+    content: '';
+    mask-image: linear-gradient(135deg, black, transparent 68%);
+    opacity: 0.7;
+  }
+
+  > * {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+.preview-repair-plan-card__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 17px 18px 14px;
+  background: color-mix(in srgb, var(--wb-canvas) 78%, var(--wb-accent-soft));
+  border-radius: 15px 15px 0 0;
+}
+
+.preview-repair-plan-card__icon {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 11px;
+  box-shadow: 0 0 18px var(--wb-accent-soft);
+  font-size: 18px;
+}
+
+.preview-repair-plan-card__title {
+  min-width: 0;
+  flex: 1;
+
+  h3 {
+    margin: 3px 0 0;
+    overflow: hidden;
+    color: var(--wb-text);
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.preview-repair-plan-card__eyebrow {
+  display: block;
+  overflow: hidden;
+  color: var(--wb-accent);
+  font-family: var(--ui-font-mono);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.preview-repair-plan-card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+
+  > span {
+    width: 6px;
+    height: 6px;
+    background: var(--wb-accent);
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px var(--wb-accent-soft);
+  }
+}
+
+.preview-repair-plan-card__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 18px;
+  color: var(--wb-text-tertiary);
+  background: color-mix(in srgb, var(--wb-canvas) 88%, var(--wb-accent-soft));
+  border-top: 1px solid var(--wb-border);
+  border-bottom: 1px solid var(--wb-border);
+  font-family: var(--ui-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+
+  span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  span:first-child {
+    color: var(--wb-accent);
+  }
+}
+
+.preview-repair-plan-card__body {
+  padding: 16px 18px 15px;
+  background: color-mix(in srgb, var(--wb-canvas) 86%, var(--wb-accent-soft));
+
+  .markdown-content {
+    color: var(--wb-text);
+    font-size: 13px;
+    line-height: 1.72;
+
+    p:last-child {
+      margin-bottom: 0;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+      color: var(--wb-text);
+    }
+
+    code {
+      color: var(--wb-accent-active);
+      background: color-mix(in srgb, var(--wb-accent-soft) 70%, var(--wb-canvas));
+      border-color: var(--wb-accent-border);
+    }
+
+    li::marker {
+      color: var(--wb-accent);
+    }
+  }
+}
+
+.preview-repair-plan-card__activity {
+  margin: -2px 0 14px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--wb-accent-soft) 68%, var(--wb-canvas));
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--wb-canvas) 72%, transparent);
+}
+
+.preview-repair-plan-card__activity-trigger {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  color: var(--wb-text);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+
+  &:hover,
+  &:focus-visible {
+    background: color-mix(in srgb, var(--wb-accent-soft) 78%, var(--wb-canvas));
+    outline: 0;
+  }
+}
+
+.preview-repair-plan-card__activity-pulse {
+  position: relative;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  background: var(--wb-accent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 4px var(--wb-accent-soft),
+    0 0 12px var(--wb-accent);
+}
+
+.preview-repair-plan-card__activity-label {
+  flex: 0 0 auto;
+  color: var(--wb-accent);
+  font-family: var(--ui-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.preview-repair-plan-card__activity-current {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-repair-plan-card__activity-arrow {
+  margin-left: auto;
+  color: var(--wb-accent);
+  font-size: 10px;
+  transition: transform 160ms ease;
+}
+
+.preview-repair-plan-card__activity-history {
+  display: grid;
+  gap: 7px;
+  padding: 9px 12px 11px 27px;
+  border-top: 1px solid var(--wb-accent-border);
+}
+
+.preview-repair-plan-card__activity-item {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+
+  > span:first-child {
+    flex: 0 0 auto;
+    color: var(--wb-accent);
+    font-family: var(--ui-font-mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    opacity: 0.82;
+  }
+
+  > span:last-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+.preview-repair-plan-card__footer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 18px 12px;
+  color: var(--wb-text-secondary);
+  background: color-mix(in srgb, var(--wb-canvas) 80%, var(--wb-accent-soft));
+  border-radius: 0 0 15px 15px;
+  font-size: 11px;
+
+  .anticon {
+    color: var(--wb-accent);
+  }
+}
+
+@media (max-width: 560px) {
+  .preview-repair-plan-card__header {
+    align-items: flex-start;
+  }
+
+  .preview-repair-plan-card__status {
+    padding-right: 7px;
+    padding-left: 7px;
+  }
+
+  .preview-repair-plan-card__meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+}

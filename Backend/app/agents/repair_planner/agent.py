@@ -32,6 +32,12 @@ def create_repair_planner_agent(
         "product decision, return requires_user_confirmation. "
         "If the failure is not actionable with the provided evidence, return "
         "terminal_failure. "
+        "All user-visible natural-language fields in the repair plan, including "
+        "strategy, reason, failure_handling, task titles, task descriptions, and "
+        "change descriptions, must be written in Simplified Chinese. Keep file "
+        "paths, code identifiers, commands, library names, and verbatim error "
+        "snippets unchanged when needed. Do not provide English explanations. "
+        "语言要求：所有用户可见的自然语言字段必须使用简体中文；路径、代码标识符、命令和必要的原始错误片段可保留原样。 "
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}"
     )
     return create_deep_agent(

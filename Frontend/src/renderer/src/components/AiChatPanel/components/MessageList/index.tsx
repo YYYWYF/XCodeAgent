@@ -47,6 +47,7 @@ import RemainingEntityBindingsCard from '../WorkflowRunCard/RemainingEntityBindi
 import TemplatePreparingCard, {
   isTemplatePreparing
 } from '../WorkflowRunCard/TemplatePreparingCard'
+import PreviewRepairPlanCard from '../PreviewRepairPlanCard'
 import {
   isStructuredPlanningWorkflow,
   processStepsForMessageDisplay,
@@ -127,6 +128,11 @@ function entityDesignMessageContent(
     }
   }
   return parts.join('\n\n')
+}
+
+/** 判断消息是否为预览诊断生成的待确认修复计划。 */
+function isPreviewRepairPlanMessage(content: string): boolean {
+  return /^\s*#\s*预览服务修复计划(?:\s|$)/m.test(content)
 }
 
 /** assistant 消息头：标识当前是哪个阶段的 Agent（产品 / 规划 / 研发 / 测试 / 审查 / 验收）在回复。
@@ -353,9 +359,7 @@ export default function MessageList({
   // 当前 planning checkpoint 是确认权限的唯一权威。普通问答可以继续向后追加消息，
   // 但只要服务端仍挂起在同一 gateId + artifactRevision，原确认卡就必须保持可操作。
   const activePlanningReviewIdentity =
-    designPhasePlanning &&
-    planningWorkflow &&
-    planningWorkflowRequiresUserInput(planningWorkflow)
+    designPhasePlanning && planningWorkflow && planningWorkflowRequiresUserInput(planningWorkflow)
       ? planningReviewIdentity(planningWorkflow)
       : undefined
   const planningActionsBlocked = planningMutationBlocked(planningState)
@@ -393,11 +397,11 @@ export default function MessageList({
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
   const showStandaloneError = Boolean(
     !templateGenerationFailed &&
-    !templateGenerationOrphaned &&
-    visibleError &&
-    visibleError !== latestAssistantMessageError &&
-    !planningMessageCanHostSyncError &&
-    (currentPlanningMessageIndex < 0 || visibleError !== canonicalPlanningFailure)
+      !templateGenerationOrphaned &&
+      visibleError &&
+      visibleError !== latestAssistantMessageError &&
+      !planningMessageCanHostSyncError &&
+      (currentPlanningMessageIndex < 0 || visibleError !== canonicalPlanningFailure)
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
@@ -408,7 +412,9 @@ export default function MessageList({
   const templatePreparationVisible =
     applicationTemplatePreparationEligible &&
     designPhasePlanning &&
-    (generatingTemplate || isTemplatePreparing(applicationLifecycle) || Boolean(templatePreparation))
+    (generatingTemplate ||
+      isTemplatePreparing(applicationLifecycle) ||
+      Boolean(templatePreparation))
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -747,6 +753,8 @@ export default function MessageList({
                     message.workflow,
                     Boolean(visibleProcessSteps?.length)
                   )
+              const previewRepairPlanMessage =
+                message.role === 'assistant' && isPreviewRepairPlanMessage(visibleAssistantContent)
               // 规划文档确认阶段由确认卡展示，隐藏流式 JSON 原文；生成中只显示加载态。
               // 规划占位消息（planningLoading）：用户提交后产品 Agent 正在思考，只显示 loading 态。
               const isPlanningArtifactConfirmationCard =
@@ -845,12 +853,8 @@ export default function MessageList({
                           <AgentErrorCard
                             error={messageError}
                             onRetry={isCurrentErrorMessage ? onRetryError : undefined}
-                            retryLabel={
-                              currentPlanningSyncError ? '重新同步状态' : undefined
-                            }
-                            title={
-                              currentPlanningSyncError ? '规划状态尚未同步' : undefined
-                            }
+                            retryLabel={currentPlanningSyncError ? '重新同步状态' : undefined}
+                            title={currentPlanningSyncError ? '规划状态尚未同步' : undefined}
                           />
                         ) : null}
                         {/* 创建规划占位消息：初次进入或用户提交后当前阶段 Agent 正在准备，
@@ -861,7 +865,10 @@ export default function MessageList({
                             <PlanningWorkflowActivity workflow={planningCardWorkflow} />
                           ) : (
                             <PhasePendingCard
-                              agentKey={messageAgentPhase(currentPresentationWorkflow, currentPhase)}
+                              agentKey={messageAgentPhase(
+                                currentPresentationWorkflow,
+                                currentPhase
+                              )}
                               detail={
                                 isPlanningWorkflowRunning
                                   ? currentPhase === 'planning'
@@ -922,7 +929,11 @@ export default function MessageList({
                               !messageLoading && visibleCodeChanges && 'final-result-content'
                             )}
                           >
-                            <MarkdownContent content={effectiveAssistantContent} />
+                            {previewRepairPlanMessage ? (
+                              <PreviewRepairPlanCard content={effectiveAssistantContent} />
+                            ) : (
+                              <MarkdownContent content={effectiveAssistantContent} />
+                            )}
                           </div>
                         )}
                         {!messageLoading && visibleCodeChanges && codeChangesBeforeConfirmation && (
@@ -1087,7 +1098,9 @@ export default function MessageList({
 }
 
 /** 从规划 Workflow 的 summary、state 或 result 恢复 V2 Template Preparation 投影。 */
-function readTemplatePreparation(workflow?: WorkflowRunPayload): import('../../../../typings').WorkflowTemplatePreparation | undefined {
+function readTemplatePreparation(
+  workflow?: WorkflowRunPayload
+): import('../../../../typings').WorkflowTemplatePreparation | undefined {
   const candidates = [
     workflow?.summary?.templatePreparation,
     workflow?.state?.templatePreparation,

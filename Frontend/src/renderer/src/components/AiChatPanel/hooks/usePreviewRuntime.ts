@@ -130,21 +130,30 @@ export function usePreviewRuntime(options: Options): {
     if (!options.workspace || (!open && !activeThread)) return
     const controller = new AbortController()
     const workspace = options.workspace
-    /** 抽屉打开时连续订阅增量快照；关闭后取消读取。 */
+    /** 先读取一次初始快照，再连续订阅增量状态；关闭抽屉后取消读取。 */
     const watch = async (): Promise<void> => {
       try {
-        do {
+        const onUpdate = (value: PreviewRuntimePayload): void => {
+          if (!controller.signal.aborted) receive(value, activeThread)
+        }
+        await runPreviewRuntime(
+          { workspace, action: 'get', includeLogs: open },
+          {
+            threadId: activeThread,
+            signal: controller.signal,
+            onUpdate
+          }
+        )
+        while ((open || repairRunning) && !controller.signal.aborted) {
           await runPreviewRuntime(
-            { workspace, action: open || repairRunning ? 'watch' : 'get', includeLogs: open },
+            { workspace, action: 'watch', includeLogs: open },
             {
               threadId: activeThread,
               signal: controller.signal,
-              onUpdate: (value) => {
-                if (!controller.signal.aborted) receive(value, activeThread)
-              }
+              onUpdate
             }
           )
-        } while ((open || repairRunning) && !controller.signal.aborted)
+        }
       } catch (reason) {
         if (!controller.signal.aborted)
           setError(reason instanceof Error ? reason.message : '读取服务状态失败')

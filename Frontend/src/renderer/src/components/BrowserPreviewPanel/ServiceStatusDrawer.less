@@ -147,47 +147,6 @@
   padding: 20px;
 }
 
-.preview-service-hero {
-  position: relative;
-  overflow: hidden;
-  padding: 19px;
-  color: var(--wb-text);
-  background:
-    radial-gradient(circle at 96% 5%, var(--wb-accent-border), transparent 35%),
-    linear-gradient(135deg, var(--wb-accent-soft), transparent 68%), var(--wb-editor);
-  border: 1px solid var(--wb-accent-border);
-  border-radius: 14px;
-  box-shadow: inset 0 0 28px var(--wb-accent-soft);
-}
-
-.preview-service-hero__glow {
-  position: absolute;
-  top: -50px;
-  right: 44px;
-  width: 120px;
-  height: 120px;
-  pointer-events: none;
-  background: var(--wb-accent-soft);
-  border-radius: 50%;
-  filter: blur(14px);
-}
-
-.preview-service-hero__topline,
-.preview-service-hero__main,
-.preview-service-hero__metrics {
-  position: relative;
-  z-index: 1;
-}
-
-.preview-service-hero__topline,
-.preview-service-hero__main {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.preview-service-eyebrow,
 .preview-section-kicker {
   color: var(--wb-accent);
   font-size: 10px;
@@ -196,13 +155,6 @@
   text-transform: uppercase;
 }
 
-.preview-service-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.preview-runtime-indicator,
 .preview-action-state {
   display: inline-flex;
   align-items: center;
@@ -212,7 +164,6 @@
   font-weight: 600;
 }
 
-.preview-runtime-indicator__dot,
 .preview-action-state > span,
 .preview-log-live-dot,
 .preview-log-tab-dot {
@@ -223,31 +174,18 @@
   border-radius: 50%;
 }
 
-.preview-runtime-indicator.is-success,
 .preview-action-state.is-ready {
   color: var(--wb-accent);
 
-  .preview-runtime-indicator__dot,
   > span {
     background: var(--wb-accent);
     box-shadow: 0 0 0 4px var(--wb-accent-soft);
   }
 }
 
-.preview-runtime-indicator.is-danger {
-  color: var(--wb-danger);
-
-  .preview-runtime-indicator__dot {
-    background: var(--wb-danger);
-    box-shadow: 0 0 0 4px var(--wb-code-delete);
-  }
-}
-
-.preview-runtime-indicator.is-accent,
 .preview-action-state.is-busy {
   color: var(--wb-accent);
 
-  .preview-runtime-indicator__dot,
   > span {
     background: var(--wb-accent);
     box-shadow: 0 0 0 4px var(--wb-accent-soft);
@@ -260,78 +198,6 @@
   > span {
     background: var(--wb-warning);
     box-shadow: 0 0 0 4px var(--wb-accent-soft);
-  }
-}
-
-.preview-service-hero__main {
-  align-items: flex-start;
-  margin-top: 17px;
-
-  h2 {
-    margin: 0;
-    color: var(--wb-text);
-    font-size: 21px;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-  }
-
-  p {
-    max-width: 310px;
-    margin: 7px 0 0;
-    color: var(--wb-text-secondary);
-    font-size: 12px;
-    line-height: 1.55;
-  }
-}
-
-.preview-service-hero__mark {
-  display: inline-flex;
-  width: 54px;
-  height: 54px;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  color: var(--wb-accent);
-  font-size: 24px;
-  background: var(--wb-accent-soft);
-  border: 1px solid var(--wb-accent-border);
-  border-radius: 16px;
-  box-shadow: 0 0 24px var(--wb-accent-soft);
-}
-
-.preview-service-hero__metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--wb-border);
-
-  div {
-    min-width: 0;
-  }
-
-  span,
-  strong {
-    display: block;
-  }
-
-  span {
-    overflow: hidden;
-    color: var(--wb-text-tertiary);
-    font-size: 10px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  strong {
-    margin-top: 4px;
-    overflow: hidden;
-    color: var(--wb-text);
-    font-family: var(--ui-font-mono);
-    font-size: 13px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 }
 
@@ -807,17 +673,9 @@
   .preview-service-grid {
     grid-template-columns: 1fr;
   }
-
-  .preview-service-hero__main p {
-    max-width: 240px;
-  }
 }
 
 @media (max-width: 430px) {
-  .preview-service-hero__metrics {
-    gap: 5px;
-  }
-
   .preview-service-actions__buttons,
   .preview-log-toolbar {
     align-items: stretch;

@@ -7,14 +7,13 @@ import {
   ExclamationCircleFilled,
   LoadingOutlined,
   ReloadOutlined,
-  RobotOutlined,
-  ThunderboltFilled,
   ToolOutlined
 } from '@ant-design/icons'
 import { Alert, Button, Drawer, Empty, Tabs, Typography } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { PreviewRuntimePayload, PreviewServiceState } from '../../service/previewRuntime'
+import { previewServiceActionAvailability } from './serviceStatusPolicy'
 import './ServiceStatusDrawer.less'
 
 export type ServiceStatusControl = {
@@ -84,32 +83,13 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
         `[${log.stage} · ${log.stream}] ${log.name}${log.truncated ? '（日志已截断，仅显示末尾）' : ''}\n${log.content}`
     )
     .join('\n\n')
-  const frontendStatus = runtime?.frontend?.status || 'stopped'
-  const backendStatus = runtime?.backend?.status || 'stopped'
-  const statusCount = [frontendStatus, backendStatus].filter(
-    (status) => status === 'running'
-  ).length
-  const failureCount = [frontendStatus, backendStatus].filter(
-    (status) => status === 'failed'
-  ).length
-  const actionTone = busy
-    ? 'is-busy'
-    : blockedReason
-      ? 'is-blocked'
-      : runtime
-        ? 'is-ready'
-        : 'is-idle'
-  const actionLabel = busy ? '处理中' : blockedReason ? '任务占用' : runtime ? '可操作' : '等待状态'
-  const runtimeTone =
-    failureCount > 0
-      ? 'danger'
-      : runtime?.status === 'starting' ||
-          frontendStatus === 'starting' ||
-          backendStatus === 'starting'
-        ? 'accent'
-        : statusCount > 0
-          ? 'accent'
-          : 'neutral'
+  const actionAvailability = previewServiceActionAvailability({
+    busy,
+    blockedReason,
+    repairAvailable: runtime?.repairAvailable
+  })
+  const actionTone = busy ? 'is-busy' : blockedReason ? 'is-blocked' : 'is-ready'
+  const actionLabel = busy ? '处理中' : blockedReason ? '任务占用' : runtime ? '可操作' : '可启动'
 
   useEffect(() => {
     if (runtime?.failedStage)
@@ -154,40 +134,6 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
       rootClassName="preview-service-drawer"
     >
       <div className="preview-service-drawer__body">
-        <section className="preview-service-hero" aria-label="预览运行时概览">
-          <div className="preview-service-hero__glow" />
-          <div className="preview-service-hero__topline">
-            <span className="preview-service-eyebrow">
-              <ThunderboltFilled /> PREVIEW RUNTIME
-            </span>
-            <span className={`preview-runtime-indicator is-${runtimeTone}`}>
-              <span className="preview-runtime-indicator__dot" />
-              {runtime ? (failureCount > 0 ? '需要处理' : '实时监控') : '等待连接'}
-            </span>
-          </div>
-          <div className="preview-service-hero__main">
-            <div>
-              <h2>服务控制中心</h2>
-              <p>管理生成项目的前后端运行时，查看启动链路与诊断信息。</p>
-            </div>
-            <div className="preview-service-hero__mark" aria-hidden="true">
-              <RobotOutlined />
-            </div>
-          </div>
-          <div className="preview-service-hero__metrics">
-            <div>
-              <span>运行中</span>
-              <strong>{statusCount}/2</strong>
-            </div>
-            <div>
-              <span>日志文件</span>
-              <strong>
-                {(runtime?.logs?.frontend?.length || 0) + (runtime?.logs?.backend?.length || 0)}
-              </strong>
-            </div>
-          </div>
-        </section>
-
         <section
           className="preview-service-section"
           aria-labelledby="preview-service-status-heading"
@@ -268,7 +214,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               type="primary"
               icon={<ReloadOutlined />}
               loading={busy}
-              disabled={!!blockedReason || busy || !runtime}
+              disabled={!actionAvailability.canRestart}
               onClick={props.onRestart}
             >
               重启服务
@@ -277,7 +223,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               className="preview-service-action-button is-repair"
               type="primary"
               icon={<ToolOutlined />}
-              disabled={!!blockedReason || busy || !runtime?.repairAvailable}
+              disabled={!actionAvailability.canDiagnose}
               onClick={props.onDiagnose}
             >
               诊断并修复
