@@ -1,4 +1,4 @@
-"""P0.4G-C 三条生产旅程的失败节点 Native Recovery 回归合同。"""
+"""P0.5-C 生产恢复旅程与既有失败节点 Native Recovery 回归合同。"""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from app.domain.application_lifecycle import (
     ApplicationInitialization,
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
+    WorkbenchExecutionStatus,
 )
 from app.domain.application_planning_recovery import (
     ApplicationPlanningOperation,
@@ -48,6 +49,7 @@ from app.persistence.checkpoints import close_workflow_checkpointer_for_workspac
 from app.persistence.execution_recovery import (
     get_execution,
     get_node_entry_boundary,
+    list_recovery_attempts_from_source,
 )
 from app.protocols.application_page_planning import (
     build_application_page_planning_ag_ui_stream,
@@ -60,10 +62,12 @@ from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.application_lifecycle import (
     create_application_lifecycle,
     load_application_lifecycle,
+    start_workbench_execution,
     write_application_lifecycle,
 )
 from app.services.application_revision_lifecycle import register_revision_impact
 from app.services.execution_recovery_coordinator import prepare_continue
+from app.services.execution_recovery import observe_execution_started
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 from app.services.execution_recovery_policies import production_recovery_replay_policies
 from app.services.execution_recovery_projection import (
@@ -395,6 +399,29 @@ async def _execute_current_recovery_action(
     return resolution.head
 
 
+async def _read_current_continue_action(
+    workspace: Path,
+    *,
+    run_id: str,
+) -> Any:
+    """从真实 Recovery projection 读取 CONTINUE_CHECKPOINT，不创建 child。"""
+
+    projection = await resolve_execution_recovery_projection(str(workspace))
+    candidate = next(
+        candidate
+        for candidate in projection.candidates
+        if candidate.source_run_id == run_id
+    )
+    assert candidate.recovery_action_plan is not None
+    action_plan = candidate.recovery_action_plan.model_dump(
+        mode="json",
+        by_alias=True,
+    )
+    primary_action = action_plan["primaryAction"]
+    assert primary_action["kind"] == RecoveryActionKind.CONTINUE_CHECKPOINT.value
+    return action_plan
+
+
 def _planning_payload(
     workspace: Path,
     *,
@@ -527,8 +554,485 @@ async def _seed_planning_checkpoint(
     return graph, requirement_spec, product_plan
 
 
+async def _seed_first_requirements_crash_checkpoint(
+    workspace: Path,
+    *,
+    thread_id: str,
+    run_id: str,
+    project_id: str,
+) -> tuple[Any, Any]:
+    """用真实 Application Planning Graph 提交 workflow_entry 后的 requirements checkpoint。"""
+
+    _write_planning_lifecycle(
+        workspace,
+        thread_id=thread_id,
+        run_id=run_id,
+        project_id=project_id,
+        stage=ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
+        status=ApplicationLifecycleStatus.PENDING,
+    )
+    graph = await application_planning_graph_for_request(
+        workspace=str(workspace),
+        project_id=project_id,
+    )
+    await observe_execution_started(
+        workspace=str(workspace),
+        project_id=project_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        workflow_scope="application_planning",
+        first_node="requirements",
+        owner_session_id=f"{thread_id}-session",
+        lease_ttl=1,
+    )
+    await graph.aupdate_state(
+        {"configurable": {"thread_id": thread_id}},
+        {
+            "workspace": str(workspace),
+            "project_id": project_id,
+            "workflow_scope": "application_planning",
+            "request": "创建一个生产旅程应用",
+            "application_name": "生产旅程应用",
+            "active_thread_id": thread_id,
+            "active_run_id": run_id,
+            "owner_session_id": f"{thread_id}-session",
+            "phase": "workflow_entry",
+            "status": "running",
+            "resume_from": "",
+        },
+        as_node="workflow_entry",
+    )
+    snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+    return graph, snapshot
+
+
+async def _seed_native_planning_interrupt_checkpoint(
+    workspace: Path,
+    *,
+    thread_id: str,
+    run_id: str,
+    project_id: str,
+) -> tuple[Any, Any]:
+    """用真实 Application Planning review Node 提交可恢复的原生 interrupt。"""
+
+    _write_planning_lifecycle(
+        workspace,
+        thread_id=thread_id,
+        run_id=run_id,
+        project_id=project_id,
+        stage=ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+        status=ApplicationLifecycleStatus.AWAITING_USER,
+    )
+    graph = await application_planning_graph_for_request(
+        workspace=str(workspace),
+        project_id=project_id,
+    )
+    await observe_execution_started(
+        workspace=str(workspace),
+        project_id=project_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        workflow_scope="application_planning",
+        first_node="requirements",
+        owner_session_id=f"{thread_id}-session",
+        lease_ttl=1,
+    )
+    config = {"configurable": {"thread_id": thread_id}}
+    await graph.aupdate_state(
+        config,
+        {
+            "workspace": str(workspace),
+            "project_id": project_id,
+            "workflow_scope": "application_planning",
+            "request": "创建一个生产旅程应用",
+            "active_thread_id": thread_id,
+            "active_run_id": run_id,
+            "owner_session_id": f"{thread_id}-session",
+            "phase": "requirements",
+            "status": "requires_user_input",
+            "requirement_spec": {
+                "confirmation_status": "pending_user_confirmation",
+                "app_info": {"name": "生产旅程应用", "summary": "需要补充角色信息。"},
+            },
+            "clarification": {
+                "mode": "ask_user_question",
+                "status": "requires_user_input",
+                "questions": [{"id": "role", "prompt": "请补充用户角色。"}],
+            },
+            "resume_from": "",
+        },
+        as_node="requirements",
+    )
+    async for _update in graph.astream(None, config=config, stream_mode="updates"):
+        pass
+    snapshot = await graph.aget_state(config)
+    return graph, snapshot
+
+
+async def _seed_workbench_middle_crash_checkpoint(
+    workspace: Path,
+    *,
+    thread_id: str,
+    run_id: str,
+    project_id: str,
+) -> tuple[Any, Any]:
+    """用真实 Workbench Graph 提交 inspect success 后的 prepare_build_tasks checkpoint。"""
+
+    plan = project_plan()
+    for key, payload in formal_artifacts(plan).items():
+        write_json(
+            workspace,
+            {
+                "requirement_spec": ".xcodeagent/specs/requirement-spec.json",
+                "product_plan": ".xcodeagent/plans/product-plan.json",
+                "ui_designs": ".xcodeagent/specs/ui-designs.json",
+                "technical_plan": ".xcodeagent/plans/technical-plan.json",
+            }[key],
+            payload,
+        )
+    write_confirmed_endpoint_designs(workspace, plan)
+    _write_planning_lifecycle(
+        workspace,
+        thread_id=thread_id,
+        run_id=run_id,
+        project_id=project_id,
+        stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+        status=ApplicationLifecycleStatus.COMPLETED,
+    )
+    start_workbench_execution(
+        workspace,
+        scope="application",
+        target_id="application",
+        page_id=None,
+        thread_id=thread_id,
+        run_id=run_id,
+        phase="inspect_workspace",
+    )
+    graph = await workflow_graph_for_request(
+        workspace=str(workspace),
+        project_id=project_id,
+    )
+    await observe_execution_started(
+        workspace=str(workspace),
+        project_id=project_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        workflow_scope=None,
+        first_node="inspect_workspace",
+        owner_session_id=f"{thread_id}-session",
+        lease_ttl=1,
+    )
+    await graph.aupdate_state(
+        {"configurable": {"thread_id": thread_id}},
+        {
+            "workspace": str(workspace),
+            "project_id": project_id,
+            "request": "开始构建生产旅程应用",
+            "active_thread_id": thread_id,
+            "active_run_id": run_id,
+            "owner_session_id": f"{thread_id}-session",
+            "phase": "inspect_workspace",
+            "status": "completed",
+            "workspace_snapshot_summary": {
+                "file_manifest": {
+                    "total_files_indexed": 1,
+                    "source_files_indexed": 1,
+                },
+                "code_graph": {"available": False},
+            },
+            "workspace_revision": "workspace-revision-c3",
+        },
+        as_node="inspect_workspace",
+    )
+    snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+    return graph, snapshot
+
+
 class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
-    """验证真实生产入口、公开 Recovery action 与 child Semantic Context 闭环。"""
+    """验证真实生产入口、checkpoint 对账、公开 Recovery action 与 child context 闭环。"""
+
+    async def test_c2_first_node_crash_restarts_at_requirements_checkpoint(self) -> None:
+        """workflow_entry 后 Backend 崩溃，重启只能继续 requirements，不能回到 START。"""
+
+        project_id = "p0-5c-first-node-app"
+        thread_id = "p0-5c-first-node-thread"
+        source_run_id = "p0-5c-first-node-source"
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            old_graph, snapshot = await _seed_first_requirements_crash_checkpoint(
+                workspace,
+                thread_id=thread_id,
+                run_id=source_run_id,
+                project_id=project_id,
+            )
+            try:
+                self.assertEqual(tuple(snapshot.next), ("requirements",))
+                scan = await reconcile_workspace_recovery(
+                    workspace,
+                    locally_active_run_ids=set(),
+                    current_backend_instance_id="backend-after-c2-restart",
+                    now=datetime.now(timezone.utc) + timedelta(days=1),
+                )
+                self.assertEqual(scan.interrupted_run_ids, [source_run_id])
+                source = await get_execution(workspace, source_run_id)
+                self.assertIsNotNone(source)
+                assert source is not None
+                self.assertEqual(source.status, DurableExecutionStatus.INTERRUPTED)
+
+                clear_application_planning_graph_cache()
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                restarted_graph = await application_planning_graph_for_request(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                self.assertIsNot(restarted_graph, old_graph)
+                action_plan = await _read_current_continue_action(
+                    workspace,
+                    run_id=source_run_id,
+                )
+                self.assertEqual(
+                    action_plan["primaryAction"]["kind"],
+                    RecoveryActionKind.CONTINUE_CHECKPOINT.value,
+                )
+                boundary = await get_node_entry_boundary(
+                    workspace,
+                    source_run_id=source_run_id,
+                    thread_id=thread_id,
+                    target_node="requirements",
+                )
+                self.assertIsNotNone(boundary)
+                assert boundary is not None
+                self.assertEqual(boundary.checkpoint_id, snapshot.config["configurable"]["checkpoint_id"])
+            finally:
+                clear_application_planning_graph_cache()
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+
+    async def test_c3_workbench_middle_node_crash_continues_prepare_without_rescan(
+        self,
+    ) -> None:
+        """inspect success 后 prepare running 崩溃，重启 target 为 prepare 且扫描总数保持 1。"""
+
+        project_id = "p0-5c-middle-node-app"
+        thread_id = "p0-5c-middle-node-thread"
+        source_run_id = "p0-5c-middle-node-source"
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            old_graph, snapshot = await _seed_workbench_middle_crash_checkpoint(
+                workspace,
+                thread_id=thread_id,
+                run_id=source_run_id,
+                project_id=project_id,
+            )
+            try:
+                self.assertEqual(tuple(snapshot.next), ("prepare_build_tasks",))
+                self.assertEqual(
+                    snapshot.values["workspace_snapshot_summary"]["file_manifest"][
+                        "total_files_indexed"
+                    ],
+                    1,
+                )
+                scan = await reconcile_workspace_recovery(
+                    workspace,
+                    locally_active_run_ids=set(),
+                    current_backend_instance_id="backend-after-c3-restart",
+                    now=datetime.now(timezone.utc) + timedelta(days=1),
+                )
+                self.assertEqual(scan.interrupted_run_ids, [source_run_id])
+                clear_workflow_graph_cache()
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                restarted_graph = await workflow_graph_for_request(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                self.assertIsNot(restarted_graph, old_graph)
+                action_plan = await _read_current_continue_action(
+                    workspace,
+                    run_id=source_run_id,
+                )
+                self.assertEqual(
+                    action_plan["primaryAction"]["kind"],
+                    RecoveryActionKind.CONTINUE_CHECKPOINT.value,
+                )
+                boundary = await get_node_entry_boundary(
+                    workspace,
+                    source_run_id=source_run_id,
+                    thread_id=thread_id,
+                    target_node="prepare_build_tasks",
+                )
+                self.assertIsNotNone(boundary)
+                lifecycle = load_application_lifecycle(workspace)
+                self.assertIsNotNone(lifecycle)
+                assert lifecycle is not None
+                self.assertEqual(
+                    lifecycle.active_executions[source_run_id].status,
+                    WorkbenchExecutionStatus.RUNNING,
+                )
+            finally:
+                clear_workflow_graph_cache()
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+
+    async def test_c5_native_interrupt_restarts_as_awaiting_user_without_child(self) -> None:
+        """原生交互 checkpoint 提交后崩溃，重启保留 interaction 且不创建 child。"""
+
+        project_id = "p0-5c-native-interrupt-app"
+        thread_id = "p0-5c-native-interrupt-thread"
+        source_run_id = "p0-5c-native-interrupt-source"
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            old_graph, snapshot = await _seed_native_planning_interrupt_checkpoint(
+                workspace,
+                thread_id=thread_id,
+                run_id=source_run_id,
+                project_id=project_id,
+            )
+            try:
+                self.assertTrue(
+                    any(
+                        bool(getattr(task, "interrupts", ()))
+                        for task in snapshot.tasks
+                    )
+                )
+                scan = await reconcile_workspace_recovery(
+                    workspace,
+                    locally_active_run_ids=set(),
+                    current_backend_instance_id="backend-after-c5-restart",
+                    now=datetime.now(timezone.utc) + timedelta(days=1),
+                )
+                self.assertEqual(scan.interrupted_run_ids, [source_run_id])
+                clear_application_planning_graph_cache()
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                restarted_graph = await application_planning_graph_for_request(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                self.assertIsNot(restarted_graph, old_graph)
+                projection = await resolve_execution_recovery_projection(str(workspace))
+                self.assertFalse(
+                    any(item.source_run_id == source_run_id for item in projection.candidates)
+                )
+                source = await get_execution(workspace, source_run_id)
+                self.assertIsNotNone(source)
+                assert source is not None
+                self.assertEqual(source.status, DurableExecutionStatus.AWAITING_USER)
+                restored = await restarted_graph.aget_state(
+                    {"configurable": {"thread_id": thread_id}}
+                )
+                self.assertTrue(
+                    any(bool(getattr(task, "interrupts", ())) for task in restored.tasks)
+                )
+                lifecycle = load_application_lifecycle(workspace)
+                self.assertIsNotNone(lifecycle)
+                assert lifecycle is not None
+                self.assertEqual(
+                    lifecycle.initialization.status,
+                    ApplicationLifecycleStatus.AWAITING_USER,
+                )
+                self.assertEqual(
+                    await list_recovery_attempts_from_source(workspace, source_run_id),
+                    [],
+                )
+            finally:
+                clear_application_planning_graph_cache()
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+
+    async def test_c4_terminal_commit_reconciles_workbench_before_new_execution(
+        self,
+    ) -> None:
+        """terminal checkpoint 先提交时，重启只对账 lifecycle，不重跑 finalize 或创建 child。"""
+
+        project_id = "p0-5c-terminal-finalization-app"
+        thread_id = "p0-5c-terminal-finalization-thread"
+        source_run_id = "p0-5c-terminal-finalization-source"
+        next_run_id = "p0-5c-terminal-finalization-next"
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            graph, _pending_snapshot = await _seed_workbench_middle_crash_checkpoint(
+                workspace,
+                thread_id=thread_id,
+                run_id=source_run_id,
+                project_id=project_id,
+            )
+            try:
+                terminal_snapshot = await graph.aupdate_state(
+                    {"configurable": {"thread_id": thread_id}},
+                    {
+                        "active_run_id": source_run_id,
+                        "active_thread_id": thread_id,
+                        "phase": "finalize_project",
+                        "status": "completed",
+                    },
+                    as_node="finalize_project",
+                )
+                self.assertEqual(tuple(terminal_snapshot.next), ())
+                scan = await reconcile_workspace_recovery(
+                    workspace,
+                    locally_active_run_ids=set(),
+                    current_backend_instance_id="backend-after-c4-restart",
+                    now=datetime.now(timezone.utc) + timedelta(days=1),
+                )
+                self.assertEqual(scan.interrupted_run_ids, [source_run_id])
+
+                clear_workflow_graph_cache()
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                await workflow_graph_for_request(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                projection = await resolve_execution_recovery_projection(str(workspace))
+                self.assertFalse(
+                    any(item.source_run_id == source_run_id for item in projection.candidates)
+                )
+                source = await get_execution(workspace, source_run_id)
+                self.assertIsNotNone(source)
+                assert source is not None
+                self.assertEqual(source.status, DurableExecutionStatus.COMPLETED)
+                self.assertEqual(
+                    await list_recovery_attempts_from_source(workspace, source_run_id),
+                    [],
+                )
+                lifecycle = load_application_lifecycle(workspace)
+                self.assertIsNotNone(lifecycle)
+                assert lifecycle is not None
+                self.assertNotIn(source_run_id, lifecycle.active_executions)
+                self.assertIsNone(lifecycle.active_run_id)
+                self.assertIsNone(lifecycle.resource_locks.application)
+                new_execution = start_workbench_execution(
+                    workspace,
+                    scope="application",
+                    target_id="application",
+                    page_id=None,
+                    thread_id=thread_id,
+                    run_id=next_run_id,
+                    phase="inspect_workspace",
+                )
+                self.assertIn(next_run_id, new_execution.active_executions)
+            finally:
+                clear_workflow_graph_cache()
+                await close_workflow_checkpointer_for_workspace(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
 
     async def test_initial_requirements_uses_real_node_and_public_child_retry(self) -> None:
         """首次 Requirements 真实节点 404 后只重入 requirements，并读取 MiMo。"""
@@ -652,8 +1156,8 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
             ["DeepSeek", "MiMo"],
         )
 
-    async def test_formal_revision_retry_preserves_context_after_backend_restart(self) -> None:
-        """真实 ChangeImpact handoff 后重启 backend，retry 不创建 R2 或重新分析。"""
+    async def test_c6_formal_revision_retry_preserves_context_after_backend_restart(self) -> None:
+        """Formal Revision R1 重启后继续原 target，不创建 R2 或重新分析。"""
 
         model_config = {"name": "DeepSeek"}
         model_calls: list[tuple[str, str]] = []
@@ -867,6 +1371,16 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                         if final_lifecycle.active_formal_revision
                         else None,
                         change_id,
+                    )
+                    self.assertEqual(impact_model.calls, 1)
+                    assert final_lifecycle.active_formal_revision is not None
+                    self.assertEqual(
+                        final_lifecycle.active_formal_revision.request,
+                        change_request,
+                    )
+                    self.assertEqual(
+                        final_lifecycle.active_formal_revision.target.type,
+                        "application",
                     )
             finally:
                 clear_application_planning_graph_cache()

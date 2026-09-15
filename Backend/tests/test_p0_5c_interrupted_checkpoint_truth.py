@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
+    ExecutionLeaseStatus,
     NodeEntryBoundary,
     RecoveryActionKind,
     WorkflowReentryContextAuthority,
@@ -20,7 +21,29 @@ from app.domain.execution_recovery import (
     WorkflowReentryPlan,
     WorkflowReentryReason,
 )
+from app.domain.application_lifecycle import (
+    ApplicationInitialization,
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+    WorkbenchExecutionStatus,
+)
+from app.persistence.execution_recovery import (
+    get_execution,
+    get_execution_lease,
+    list_recovery_attempts_from_source,
+    mark_execution_interrupted,
+)
 from app.services.execution_recovery_projection import _resolve_candidate
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    load_application_lifecycle,
+    start_workbench_execution,
+    write_application_lifecycle,
+)
+from app.services.execution_recovery import observe_execution_started
+from app.services.execution_recovery_reconciliation import (
+    reconcile_interrupted_execution_state,
+)
 from app.services.workflow_reentry import (
     InterruptedTargetResolution,
     InterruptedTargetResolver,
@@ -77,9 +100,13 @@ class InterruptedCheckpointTruthTests(unittest.IsolatedAsyncioTestCase):
         checkpoint_id: str,
         next_nodes: tuple[str, ...],
         tasks: tuple[object, ...] = (),
+        state_status: str | None = None,
     ) -> SimpleNamespace:
         """构造带 source ownership 与 root checkpoint identity 的 snapshot。"""
 
+        values = {"active_run_id": self.source.run_id}
+        if state_status is not None:
+            values["status"] = state_status
         return SimpleNamespace(
             config={
                 "configurable": {
@@ -88,7 +115,7 @@ class InterruptedCheckpointTruthTests(unittest.IsolatedAsyncioTestCase):
                     "checkpoint_id": checkpoint_id,
                 }
             },
-            values={"active_run_id": self.source.run_id},
+            values=values,
             next=next_nodes,
             tasks=tasks,
         )
@@ -101,7 +128,26 @@ class InterruptedCheckpointTruthTests(unittest.IsolatedAsyncioTestCase):
             state=SimpleNamespace(value="RECOVERABLE_HEAD"),
         )
 
-    async def test_latest_terminal_does_not_fallback_to_older_pending(self) -> None:
+    def _write_workbench_lifecycle(self, run_id: str) -> None:
+        """创建可进入 Workbench 的 lifecycle，供 crash reconciliation 旅程使用。"""
+
+        lifecycle = create_application_lifecycle(
+            application_id="interrupted-app",
+            application_name="Interrupted App",
+            initialization_thread_id=self.source.thread_id,
+            active_run_id=run_id,
+        ).model_copy(
+            update={
+                "initialization": ApplicationInitialization(
+                    stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    status=ApplicationLifecycleStatus.COMPLETED,
+                    threadId=self.source.thread_id,
+                )
+            }
+        )
+        write_application_lifecycle(self.workspace, lifecycle, expected_revision=0)
+
+    async def test_c1_latest_terminal_does_not_fallback_to_older_pending(self) -> None:
         """最新 terminal checkpoint 必须完成对账解释，不能回退旧 pending。"""
 
         graph = _HistoryGraph(
@@ -120,8 +166,42 @@ class InterruptedCheckpointTruthTests(unittest.IsolatedAsyncioTestCase):
                 graph=graph,
             )
 
-        self.assertEqual(resolution.kind, "completed")
+        self.assertEqual(resolution.kind, "terminal")
+        self.assertEqual(resolution.terminal_status, DurableExecutionStatus.COMPLETED)
         self.assertEqual(resolution.snapshot.config["configurable"]["checkpoint_id"], "latest-end")
+
+    async def test_c1_terminal_state_status_is_preserved_for_durable_reconciliation(self) -> None:
+        """Graph terminal 只能说明没有 successor，最终 Durable status 仍取 committed State。"""
+
+        expected = {
+            "failed": DurableExecutionStatus.FAILED,
+            "requires_user_input": DurableExecutionStatus.AWAITING_USER,
+            "cancelled": DurableExecutionStatus.CANCELLED,
+            "stopped": DurableExecutionStatus.STOPPED,
+        }
+        for state_status, durable_status in expected.items():
+            with self.subTest(state_status=state_status):
+                graph = _HistoryGraph(
+                    [
+                        self._snapshot(
+                            checkpoint_id=f"terminal-{state_status}",
+                            next_nodes=(),
+                            state_status=state_status,
+                        )
+                    ]
+                )
+                with patch(
+                    "app.services.workflow_reentry.resolve_recovery_lineage_head",
+                    new=AsyncMock(return_value=self._lineage()),
+                ):
+                    resolution = await InterruptedTargetResolver().resolve(
+                        workspace=str(self.workspace),
+                        source=self.source,
+                        graph=graph,
+                    )
+                self.assertEqual(resolution.kind, "terminal")
+                self.assertEqual(resolution.terminal_status, durable_status)
+                self.assertNotEqual(resolution.terminal_status, DurableExecutionStatus.COMPLETED)
 
     async def test_latest_pending_creates_interrupted_continue_plan(self) -> None:
         """最新唯一 successor 必须成为 INTERRUPTED_CONTINUE target。"""
@@ -190,6 +270,214 @@ class InterruptedCheckpointTruthTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(resolution.kind, "awaiting_user")
         self.assertIsNone(resolution.reentry_plan)
+        self.assertEqual(
+            resolution.terminal_status,
+            DurableExecutionStatus.AWAITING_USER,
+        )
+
+    async def test_c4_terminal_reconciliation_closes_workbench_mirror_and_allows_new_run(
+        self,
+    ) -> None:
+        """Graph terminal 提交后重启对账必须释放旧锁，并允许下一次 Workbench 运行。"""
+
+        run_id = "terminal-workbench-source"
+        next_run_id = "terminal-workbench-next"
+        self._write_workbench_lifecycle(run_id)
+        start_workbench_execution(
+            self.workspace,
+            scope="application",
+            target_id="application",
+            page_id=None,
+            thread_id=self.source.thread_id,
+            run_id=run_id,
+            phase="finalize_project",
+        )
+        await observe_execution_started(
+            workspace=str(self.workspace),
+            project_id="interrupted-app",
+            thread_id=self.source.thread_id,
+            run_id=run_id,
+            workflow_scope="application",
+            first_node="inspect_workspace",
+        )
+        await mark_execution_interrupted(
+            workspace=self.workspace,
+            run_id=run_id,
+            interrupted_at=datetime.now(timezone.utc),
+        )
+        source = await get_execution(self.workspace, run_id)
+        self.assertIsNotNone(source)
+        assert source is not None
+        snapshot = SimpleNamespace(
+            values={
+                "active_run_id": run_id,
+                "phase": "finalize_project",
+                "status": "completed",
+            },
+            next=(),
+            tasks=(),
+        )
+        reconciled = await reconcile_interrupted_execution_state(
+            workspace=self.workspace,
+            source=source,
+            status=DurableExecutionStatus.COMPLETED,
+            snapshot=snapshot,
+        )
+
+        self.assertIsNotNone(reconciled)
+        assert reconciled is not None
+        self.assertEqual(reconciled.status, DurableExecutionStatus.COMPLETED)
+        lifecycle = load_application_lifecycle(self.workspace)
+        self.assertIsNotNone(lifecycle)
+        assert lifecycle is not None
+        self.assertNotIn(run_id, lifecycle.active_executions)
+        self.assertIsNone(lifecycle.active_run_id)
+        self.assertIsNone(lifecycle.resource_locks.application)
+        lease = await get_execution_lease(self.workspace, run_id)
+        self.assertIsNotNone(lease)
+        assert lease is not None
+        self.assertEqual(lease.status, ExecutionLeaseStatus.RELEASED)
+        self.assertEqual(await list_recovery_attempts_from_source(self.workspace, run_id), [])
+
+        started = start_workbench_execution(
+            self.workspace,
+            scope="application",
+            target_id="application",
+            page_id=None,
+            thread_id=self.source.thread_id,
+            run_id=next_run_id,
+            phase="inspect_workspace",
+        )
+        self.assertIn(next_run_id, started.active_executions)
+
+    async def test_c5_native_interrupt_reconciliation_preserves_interaction_and_lock(
+        self,
+    ) -> None:
+        """原生 interrupt 已提交时只收敛等待态，保留 interaction 与资源 owner。"""
+
+        run_id = "native-workbench-source"
+        self._write_workbench_lifecycle(run_id)
+        start_workbench_execution(
+            self.workspace,
+            scope="application",
+            target_id="application",
+            page_id=None,
+            thread_id=self.source.thread_id,
+            run_id=run_id,
+            phase="prepare_build_tasks",
+        )
+        await observe_execution_started(
+            workspace=str(self.workspace),
+            project_id="interrupted-app",
+            thread_id=self.source.thread_id,
+            run_id=run_id,
+            workflow_scope="application",
+            first_node="prepare_build_tasks",
+        )
+        await mark_execution_interrupted(
+            workspace=self.workspace,
+            run_id=run_id,
+            interrupted_at=datetime.now(timezone.utc),
+        )
+        source = await get_execution(self.workspace, run_id)
+        self.assertIsNotNone(source)
+        assert source is not None
+        snapshot = SimpleNamespace(
+            values={
+                "active_run_id": run_id,
+                "phase": "prepare_build_tasks",
+                "status": "running",
+                "clarification": {
+                    "mode": "build_task_plan_confirmation",
+                    "status": "requires_user_input",
+                    "message": "确认任务计划",
+                },
+            },
+            next=("prepare_build_tasks",),
+            tasks=(SimpleNamespace(interrupts=("task-plan-confirmation",)),),
+        )
+        reconciled = await reconcile_interrupted_execution_state(
+            workspace=self.workspace,
+            source=source,
+            status=DurableExecutionStatus.AWAITING_USER,
+            snapshot=snapshot,
+        )
+
+        self.assertIsNotNone(reconciled)
+        assert reconciled is not None
+        self.assertEqual(reconciled.status, DurableExecutionStatus.AWAITING_USER)
+        self.assertIsNone(reconciled.ended_at)
+        lifecycle = load_application_lifecycle(self.workspace)
+        self.assertIsNotNone(lifecycle)
+        assert lifecycle is not None
+        active = lifecycle.active_executions[run_id]
+        self.assertEqual(active.status, WorkbenchExecutionStatus.AWAITING_USER)
+        self.assertIsNotNone(active.pending_interaction)
+        self.assertIsNotNone(lifecycle.resource_locks.application)
+        assert lifecycle.resource_locks.application is not None
+        self.assertEqual(lifecycle.resource_locks.application.run_id, run_id)
+        self.assertEqual(await list_recovery_attempts_from_source(self.workspace, run_id), [])
+
+    async def test_c1_terminal_failed_reconciliation_has_no_failed_node_retry_evidence(
+        self,
+    ) -> None:
+        """Graph terminal 且 State.status=failed 时只收口 FAILED，不凭空生成异常重试证据。"""
+
+        run_id = "terminal-failed-workbench-source"
+        self._write_workbench_lifecycle(run_id)
+        start_workbench_execution(
+            self.workspace,
+            scope="application",
+            target_id="application",
+            page_id=None,
+            thread_id=self.source.thread_id,
+            run_id=run_id,
+            phase="handle_failure",
+        )
+        await observe_execution_started(
+            workspace=str(self.workspace),
+            project_id="interrupted-app",
+            thread_id=self.source.thread_id,
+            run_id=run_id,
+            workflow_scope="application",
+            first_node="handle_failure",
+        )
+        await mark_execution_interrupted(
+            workspace=self.workspace,
+            run_id=run_id,
+            interrupted_at=datetime.now(timezone.utc),
+        )
+        source = await get_execution(self.workspace, run_id)
+        self.assertIsNotNone(source)
+        assert source is not None
+        reconciled = await reconcile_interrupted_execution_state(
+            workspace=self.workspace,
+            source=source,
+            status=DurableExecutionStatus.FAILED,
+            snapshot=SimpleNamespace(
+                values={
+                    "active_run_id": run_id,
+                    "phase": "handle_failure",
+                    "status": "failed",
+                    "message": "业务失败已由 Graph 提交。",
+                },
+                next=(),
+                tasks=(),
+            ),
+        )
+
+        self.assertIsNotNone(reconciled)
+        assert reconciled is not None
+        self.assertEqual(reconciled.status, DurableExecutionStatus.FAILED)
+        self.assertIsNone(reconciled.failure)
+        lifecycle = load_application_lifecycle(self.workspace)
+        self.assertIsNotNone(lifecycle)
+        assert lifecycle is not None
+        self.assertEqual(
+            lifecycle.active_executions[run_id].status,
+            WorkbenchExecutionStatus.FAILED,
+        )
+        self.assertEqual(await list_recovery_attempts_from_source(self.workspace, run_id), [])
 
     async def test_latest_ambiguous_successors_fail_closed(self) -> None:
         """最新并行 successor 在当前 runtime 不可唯一重入时必须阻断。"""
@@ -263,6 +551,35 @@ class InterruptedCheckpointTruthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             candidate.recovery_action_plan.primary_action.kind,
             RecoveryActionKind.CONTINUE_CHECKPOINT,
+        )
+
+    async def test_business_failed_without_exception_evidence_has_no_retry_action(self) -> None:
+        """业务 FAILED 没有 escaped exception evidence 时不得产生失败节点重试动作。"""
+
+        source = self.source.model_copy(
+            update={
+                "status": DurableExecutionStatus.FAILED,
+                "failure": None,
+            }
+        )
+        with (
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=object()),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.FailureTargetResolver.resolve",
+                new=AsyncMock(side_effect=AssertionError("business FAILED entered node retry")),
+            ),
+        ):
+            candidate = await _resolve_candidate(source)
+
+        assert candidate is not None
+        assert candidate.recovery_action_plan is not None
+        self.assertIsNone(candidate.recovery_action_plan.primary_action)
+        self.assertEqual(
+            candidate.recovery_action_plan.reason_code,
+            "FAILED_EXCEPTION_EVIDENCE_MISSING",
         )
 
 

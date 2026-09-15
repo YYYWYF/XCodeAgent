@@ -20,7 +20,6 @@ from app.domain.execution_recovery import (
 from app.persistence.execution_recovery import (
     get_recovery_point,
     list_recovery_points,
-    reconcile_interrupted_execution_status,
 )
 from app.protocols.application_planning_interrupt import (
     application_planning_interrupt_from_snapshot,
@@ -35,6 +34,9 @@ from app.services.execution_recovery import capture_recovery_point
 from app.services.execution_recovery_lineage import (
     RecoveryLineageResolution,
     RecoveryLineageState,
+)
+from app.services.execution_recovery_reconciliation import (
+    reconcile_interrupted_execution_state,
 )
 from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.execution_recovery_action_planner import (
@@ -265,25 +267,33 @@ async def resolve_application_planning_recovery(
             source=source,
             graph=graph,
         )
-        if resolution.kind == "completed":
-            reconciled = await reconcile_interrupted_execution_status(
+        if resolution.kind == "terminal":
+            terminal_status = resolution.terminal_status or DurableExecutionStatus.COMPLETED
+            reconciled = await reconcile_interrupted_execution_state(
                 workspace=workspace,
-                run_id=source.run_id,
-                status=DurableExecutionStatus.COMPLETED,
+                source=source,
+                status=terminal_status,
+                snapshot=resolution.snapshot,
+            )
+            classification, message, user_action_required = _terminal_projection_fields(
+                terminal_status
             )
             return _projection(
-                classification="completed",
+                classification=classification,
                 source=reconciled or source,
                 thread_id=thread_id,
+                user_action_required=user_action_required,
                 reason_code=resolution.reason_code,
-                message="当前规划已经完成。",
+                message=message,
                 input_committed=input_committed,
             )
         if resolution.kind == "awaiting_user":
-            reconciled = await reconcile_interrupted_execution_status(
+            terminal_status = resolution.terminal_status or DurableExecutionStatus.AWAITING_USER
+            reconciled = await reconcile_interrupted_execution_state(
                 workspace=workspace,
-                run_id=source.run_id,
-                status=DurableExecutionStatus.AWAITING_USER,
+                source=source,
+                status=terminal_status,
+                snapshot=resolution.snapshot,
             )
             return _projection(
                 classification="awaiting_user",
@@ -370,6 +380,24 @@ async def resolve_application_planning_recovery(
         message=action_plan.message,
         recovery_action_plan=recovery_action_plan,
     )
+
+
+def _terminal_projection_fields(
+    status: DurableExecutionStatus,
+) -> tuple[str, str, bool]:
+    """把 Durable terminal status 映射为 Planning projection，不把失败伪装成完成。"""
+
+    return {
+        DurableExecutionStatus.COMPLETED: ("completed", "当前规划已经完成。", False),
+        DurableExecutionStatus.AWAITING_USER: (
+            "awaiting_user",
+            "当前应用规划正在等待你的确认。",
+            True,
+        ),
+        DurableExecutionStatus.FAILED: ("failed", "当前规划执行失败。", False),
+        DurableExecutionStatus.CANCELLED: ("cancelled", "当前规划执行已取消。", False),
+        DurableExecutionStatus.STOPPED: ("stopped", "当前规划执行已停止。", False),
+    }[status]
 
 
 async def ensure_application_planning_recovery_point(

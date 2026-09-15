@@ -32,6 +32,7 @@ from app.persistence.execution_recovery import (
     insert_recovery_point,
 )
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.execution_recovery import durable_execution_status
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 
 
@@ -113,11 +114,12 @@ class FailureTargetResolver:
 class InterruptedTargetResolution:
     """保存最新 INTERRUPTED checkpoint 的唯一解释结果。"""
 
-    kind: Literal["continue", "completed", "awaiting_user", "needs_attention"]
+    kind: Literal["continue", "terminal", "awaiting_user", "needs_attention"]
     snapshot: Any | None
     reentry_plan: WorkflowReentryPlan | None
     reason_code: str
     reason: str
+    terminal_status: DurableExecutionStatus | None = None
 
 
 class InterruptedTargetResolver:
@@ -201,17 +203,35 @@ class InterruptedTargetResolver:
                         reentry_plan=None,
                         reason_code="INTERRUPTED_NATIVE_INTERRUPT",
                         reason="最新 checkpoint 已提交原生用户交互，不能重新执行产生交互的 Node。",
+                        terminal_status=DurableExecutionStatus.AWAITING_USER,
                     )
                 if not next_nodes or all(
                     node.strip().lower() in {"end", "__end__"}
                     for node in next_nodes
                 ):
+                    terminal_status = durable_execution_status(
+                        result=values,
+                        summary=(
+                            values.get("summary")
+                            if isinstance(values.get("summary"), dict)
+                            else {}
+                        ),
+                    )
+                    reason_suffix = terminal_status.value.upper()
                     return InterruptedTargetResolution(
-                        kind="completed",
+                        kind="terminal",
                         snapshot=snapshot,
                         reentry_plan=None,
-                        reason_code="INTERRUPTED_GRAPH_COMPLETED",
-                        reason="最新 source-owned checkpoint 已到达 Graph terminal。",
+                        reason_code=(
+                            "INTERRUPTED_GRAPH_COMPLETED"
+                            if terminal_status is DurableExecutionStatus.COMPLETED
+                            else f"INTERRUPTED_GRAPH_{reason_suffix}"
+                        ),
+                        reason=(
+                            "最新 source-owned checkpoint 已到达 Graph terminal，"
+                            f"其 durable status 为 {terminal_status.value}。"
+                        ),
+                        terminal_status=terminal_status,
                     )
                 if len(next_nodes) != 1 or not next_nodes[0].strip():
                     return _interrupted_needs_attention(

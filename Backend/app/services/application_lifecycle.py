@@ -737,15 +737,27 @@ def complete_workbench_execution(
     *,
     run_id: str,
     phase: str = "finalize_project",
+    missing_ok: bool = False,
 ) -> ApplicationLifecycle:
-    """完成当前计划执行并释放资源锁，不改变已经完成的应用初始化状态。"""
+    """完成当前计划执行并释放资源锁，支持收口已丢失 execution 的残留锁。"""
 
     path = application_lifecycle_path(workspace)
     with _application_lifecycle_lock(path):
         current = load_application_lifecycle(workspace)
         active = current.active_executions.get(run_id) if current else None
-        if current is None or active is None:
+        if current is None:
             raise ApplicationLifecycleConflictError("当前没有可完成的工作台计划执行。")
+        if active is None:
+            if not missing_ok:
+                raise ApplicationLifecycleConflictError("当前没有可完成的工作台计划执行。")
+            # Graph terminal 已提交而 lifecycle execution 尚未完成时，允许只按 run owner
+            # 清理孤儿锁；不伪造一条已经不存在的 execution，也不触碰其他并行运行。
+            return _persist_workbench_execution_removal(
+                workspace,
+                current=current,
+                executions=dict(current.active_executions),
+                resource_locks=_resource_locks_without_run(current.resource_locks, run_id),
+            )
         remaining = dict(current.active_executions)
         remaining.pop(run_id, None)
         return _persist_workbench_execution_removal(

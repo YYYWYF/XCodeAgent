@@ -28,7 +28,6 @@ from app.persistence.execution_recovery import (
     get_execution,
     list_recovery_projection_candidates,
     list_recovery_attempts_from_source,
-    reconcile_interrupted_execution_status,
 )
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.execution_recovery_executor import (
@@ -50,6 +49,10 @@ from app.services.execution_recovery_action_planner import (
     plan_interrupted_continue_action,
     plan_recovery_action,
 )
+from app.services.execution_recovery_reconciliation import (
+    reconcile_interrupted_execution_state,
+)
+from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 
 
@@ -167,56 +170,66 @@ def build_execution_recovery_ag_ui_stream(
             stage_assessment = None
             reentry_plan = None
             if source.status is DurableExecutionStatus.FAILED:
-                try:
-                    reentry_plan = await FailureTargetResolver().resolve(
-                        workspace=workspace,
-                        source=source,
-                        graph=graph,
-                    )
-                except RecoveryExecutionError as exc:
+                admission = assess_recovery_source(source)
+                if not admission.admissible:
                     action_plan = plan_failed_node_reentry_action(
                         workspace=workspace,
                         source=source,
-                        error=exc,
+                        error=RecoveryExecutionError(
+                            admission.reason_code,
+                            "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
+                        ),
                     )
                 else:
-                    action_plan = plan_failed_node_reentry_action(
-                        workspace=workspace,
-                        source=source,
-                        reentry_plan=reentry_plan,
-                    )
+                    try:
+                        reentry_plan = await FailureTargetResolver().resolve(
+                            workspace=workspace,
+                            source=source,
+                            graph=graph,
+                        )
+                    except RecoveryExecutionError as exc:
+                        action_plan = plan_failed_node_reentry_action(
+                            workspace=workspace,
+                            source=source,
+                            error=exc,
+                        )
+                    else:
+                        action_plan = plan_failed_node_reentry_action(
+                            workspace=workspace,
+                            source=source,
+                            reentry_plan=reentry_plan,
+                        )
             elif source.status is DurableExecutionStatus.INTERRUPTED:
                 resolution = await InterruptedTargetResolver().resolve(
                     workspace=workspace,
                     source=source,
                     graph=graph,
                 )
-                if resolution.kind in {"completed", "awaiting_user"}:
-                    target_status = (
-                        DurableExecutionStatus.COMPLETED
-                        if resolution.kind == "completed"
-                        else DurableExecutionStatus.AWAITING_USER
+                if resolution.kind in {"terminal", "awaiting_user"}:
+                    target_status = resolution.terminal_status or (
+                        DurableExecutionStatus.AWAITING_USER
+                        if resolution.kind == "awaiting_user"
+                        else DurableExecutionStatus.COMPLETED
                     )
-                    reconciled = await reconcile_interrupted_execution_status(
+                    reconciled = await reconcile_interrupted_execution_state(
                         workspace=workspace,
-                        run_id=source.run_id,
+                        source=source,
                         status=target_status,
+                        snapshot=resolution.snapshot,
                     )
                     if reconciled is None:
                         raise RecoveryExecutionError(
                             "RECOVERY_SOURCE_CHANGED",
                             "INTERRUPTED source 在对账前已经发生变化，请刷新后继续。",
                         )
-                    reconciliation = (
-                        "completed"
-                        if target_status is DurableExecutionStatus.COMPLETED
-                        else "awaiting_user"
-                    )
-                    message = (
-                        "当前执行已经完成。"
-                        if reconciliation == "completed"
-                        else "当前执行正在等待已提交的用户确认。"
-                    )
+                    reconciliation = target_status.value
+                    message = {
+                        DurableExecutionStatus.COMPLETED: "当前执行已经完成。",
+                        DurableExecutionStatus.AWAITING_USER: "当前执行正在等待已提交的用户确认。",
+                        DurableExecutionStatus.FAILED: "当前执行已失败。",
+                        DurableExecutionStatus.CANCELLED: "当前执行已取消。",
+                        DurableExecutionStatus.STOPPED: "当前执行已停止。",
+                    }[target_status]
                     for frame in _reconciled_recovery_frames(
                         encoder=encoder,
                         message_id=message_id,
@@ -557,39 +570,51 @@ async def _resolve_action_source_run(
         graph = await graph_factory(workspace=workspace, project_id=record.project_id)
         reentry_plan = None
         if record.status is DurableExecutionStatus.FAILED:
-            try:
-                reentry_plan = await FailureTargetResolver().resolve(
-                    workspace=workspace,
-                    source=record,
-                    graph=graph,
-                )
-            except RecoveryExecutionError as exc:
+            admission = assess_recovery_source(record)
+            if not admission.admissible:
                 action_plan = plan_failed_node_reentry_action(
                     workspace=workspace,
                     source=record,
-                    error=exc,
+                    error=RecoveryExecutionError(
+                        admission.reason_code,
+                        "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
+                    ),
                 )
             else:
-                action_plan = plan_failed_node_reentry_action(
-                    workspace=workspace,
-                    source=record,
-                    reentry_plan=reentry_plan,
-                )
+                try:
+                    reentry_plan = await FailureTargetResolver().resolve(
+                        workspace=workspace,
+                        source=record,
+                        graph=graph,
+                    )
+                except RecoveryExecutionError as exc:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=workspace,
+                        source=record,
+                        error=exc,
+                    )
+                else:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=workspace,
+                        source=record,
+                        reentry_plan=reentry_plan,
+                    )
         elif record.status is DurableExecutionStatus.INTERRUPTED:
             resolution = await InterruptedTargetResolver().resolve(
                 workspace=workspace,
                 source=record,
                 graph=graph,
             )
-            if resolution.kind in {"completed", "awaiting_user"}:
-                await reconcile_interrupted_execution_status(
+            if resolution.kind in {"terminal", "awaiting_user"}:
+                await reconcile_interrupted_execution_state(
                     workspace=workspace,
-                    run_id=record.run_id,
-                    status=(
-                        DurableExecutionStatus.COMPLETED
-                        if resolution.kind == "completed"
-                        else DurableExecutionStatus.AWAITING_USER
+                    source=record,
+                    status=resolution.terminal_status or (
+                        DurableExecutionStatus.AWAITING_USER
+                        if resolution.kind == "awaiting_user"
+                        else DurableExecutionStatus.COMPLETED
                     ),
+                    snapshot=resolution.snapshot,
                 )
                 continue
             if resolution.kind == "continue" and resolution.reentry_plan is not None:

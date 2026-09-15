@@ -307,6 +307,13 @@ def plan_failed_node_reentry_action(
 ) -> RecoveryActionPlan:
     """把 WorkflowReentryPlan 或其 fail-closed 错误投影为 FAILED action。"""
 
+    if source.status is DurableExecutionStatus.FAILED and source.failure is None:
+        # 业务节点写下的 status=failed 不是 escaped exception；没有异常证据时
+        # 即使调用方误传了 reentry_plan，也不能签发 RETRY_FAILED_NODE。
+        error = RecoveryExecutionError(
+            "FAILED_EXCEPTION_EVIDENCE_MISSING",
+            "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
+        )
     lifecycle = load_application_lifecycle(workspace)
     incident_id = _incident_id(
         source=source,

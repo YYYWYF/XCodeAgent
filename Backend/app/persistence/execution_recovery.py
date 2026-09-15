@@ -1457,24 +1457,29 @@ async def reconcile_interrupted_execution_status(
     run_id: str,
     status: DurableExecutionStatus,
 ) -> DurableExecutionRecord | None:
-    """只允许把 INTERRUPTED 对账为已完成或等待用户，并释放残留 lease。"""
+    """按 Graph 已提交终态收敛 INTERRUPTED execution，并释放残留 lease。"""
 
     if status not in {
         DurableExecutionStatus.COMPLETED,
         DurableExecutionStatus.AWAITING_USER,
+        DurableExecutionStatus.FAILED,
+        DurableExecutionStatus.CANCELLED,
+        DurableExecutionStatus.STOPPED,
     }:
-        raise ValueError("INTERRUPTED 只能对账为 COMPLETED 或 AWAITING_USER。")
+        raise ValueError(
+            "INTERRUPTED 只能对账为 COMPLETED、AWAITING_USER、FAILED、CANCELLED 或 STOPPED。"
+        )
     await initialize_execution_recovery_store(workspace)
     now = datetime.now(timezone.utc)
     now_text = _utc_iso(now)
     ended_at_expression = (
         "COALESCE(ended_at, ?)"
-        if status is DurableExecutionStatus.COMPLETED
+        if status is not DurableExecutionStatus.AWAITING_USER
         else "NULL"
     )
     status_parameters = (
         (status.value, now_text, now_text, run_id, DurableExecutionStatus.INTERRUPTED.value)
-        if status is DurableExecutionStatus.COMPLETED
+        if status is not DurableExecutionStatus.AWAITING_USER
         else (status.value, now_text, run_id, DurableExecutionStatus.INTERRUPTED.value)
     )
     async with _connection(workspace) as connection:

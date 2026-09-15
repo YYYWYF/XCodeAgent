@@ -16,7 +16,6 @@ from app.graph.application_planning_workflow import application_planning_graph_f
 from app.graph.workflow import workflow_graph_for_request
 from app.persistence.execution_recovery import (
     list_recovery_projection_candidates,
-    reconcile_interrupted_execution_status,
 )
 from app.services.execution_recovery_coordinator import prepare_continue
 from app.services.execution_recovery_policies import (
@@ -28,6 +27,10 @@ from app.services.execution_recovery_action_planner import (
     plan_interrupted_continue_action,
     plan_recovery_action,
 )
+from app.services.execution_recovery_reconciliation import (
+    reconcile_interrupted_execution_state,
+)
+from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 
 
@@ -109,46 +112,58 @@ async def _resolve_candidate(
     )
     authority_plan = None
     if record.status is DurableExecutionStatus.FAILED:
-        try:
-            reentry_plan = await FailureTargetResolver().resolve(
-                workspace=record.workspace,
-                source=record,
-                graph=graph,
-            )
-        except RecoveryExecutionError as exc:
+        admission = assess_recovery_source(record)
+        if not admission.admissible:
             action_plan = plan_failed_node_reentry_action(
                 workspace=record.workspace,
                 source=record,
-                error=exc,
+                error=RecoveryExecutionError(
+                    admission.reason_code,
+                    "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
+                ),
             )
-            plan = None
         else:
-            action_plan = plan_failed_node_reentry_action(
-                workspace=record.workspace,
-                source=record,
-                reentry_plan=reentry_plan,
-            )
-            authority_plan = reentry_plan
-            plan = None
+            try:
+                reentry_plan = await FailureTargetResolver().resolve(
+                    workspace=record.workspace,
+                    source=record,
+                    graph=graph,
+                )
+            except RecoveryExecutionError as exc:
+                action_plan = plan_failed_node_reentry_action(
+                    workspace=record.workspace,
+                    source=record,
+                    error=exc,
+                )
+            else:
+                action_plan = plan_failed_node_reentry_action(
+                    workspace=record.workspace,
+                    source=record,
+                    reentry_plan=reentry_plan,
+                )
+                authority_plan = reentry_plan
+        plan = None
     elif record.status is DurableExecutionStatus.INTERRUPTED:
         resolution = await InterruptedTargetResolver().resolve(
             workspace=record.workspace,
             source=record,
             graph=graph,
         )
-        if resolution.kind == "completed":
-            await reconcile_interrupted_execution_status(
+        if resolution.kind == "terminal":
+            await reconcile_interrupted_execution_state(
                 workspace=record.workspace,
-                run_id=record.run_id,
-                status=DurableExecutionStatus.COMPLETED,
+                source=record,
+                status=resolution.terminal_status or DurableExecutionStatus.COMPLETED,
+                snapshot=resolution.snapshot,
             )
             return None
         if resolution.kind == "awaiting_user":
             # 原生 interrupt 已经是现有交互的 authority；只对账，不生成恢复 action。
-            await reconcile_interrupted_execution_status(
+            await reconcile_interrupted_execution_state(
                 workspace=record.workspace,
-                run_id=record.run_id,
-                status=DurableExecutionStatus.AWAITING_USER,
+                source=record,
+                status=resolution.terminal_status or DurableExecutionStatus.AWAITING_USER,
+                snapshot=resolution.snapshot,
             )
             return None
         if resolution.kind == "continue" and resolution.reentry_plan is not None:
