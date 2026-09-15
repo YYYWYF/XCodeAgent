@@ -130,6 +130,24 @@ def record_progress(workspace: str | Path, stage: str, status: str, message: str
         write_record(workspace, value)
 
 
+def mark_interrupted_attempt(workspace: str | Path, *, layer: str) -> None:
+    """把平台进程重启时遗留的启动中状态收口为可重新启动的失败状态。"""
+
+    with _lock:
+        value = read_record(workspace)
+        message = "预览启动任务意外中断，已清理残留进程，请重新启动服务。"
+        value.update(
+            status="failed",
+            message=message,
+            previewUrl=None,
+            failedStage="launch_interrupted",
+        )
+        if layer in {"frontend", "backend"}:
+            part = value.get(layer) if isinstance(value.get(layer), dict) else {}
+            value[layer] = {**part, "status": "failed", "message": message}
+        write_record(workspace, value)
+
+
 def finish_attempt(workspace: str | Path, result: dict[str, Any]) -> None:
     """保存启动结果与受管理 PID，隐藏内部进程对象。"""
     with _lock:
@@ -244,7 +262,7 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
     value["repairAvailable"] = bool(
         value.get("attemptId")
         and value.get("status") == "failed"
-        and value.get("failedStage") != "stop"
+        and value.get("failedStage") not in {"stop", "launch_interrupted"}
     )
     value["maintenance"] = maintenance_owner(workspace)
     return value

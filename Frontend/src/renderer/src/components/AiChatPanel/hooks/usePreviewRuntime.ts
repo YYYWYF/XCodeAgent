@@ -127,41 +127,40 @@ export function usePreviewRuntime(options: Options): {
     lastReadyUrlRef.current = ''
   }, [options.workspace])
   useEffect(() => {
-    if (!options.workspace || (!open && !activeThread)) return
+    if (!options.workspace) return
     const controller = new AbortController()
     const workspace = options.workspace
-    /** 先读取一次初始快照，再连续订阅增量状态；关闭抽屉后取消读取。 */
+    /** 始终订阅轻量运行状态；打开抽屉时再附带日志，断线后自动重新校准。 */
     const watch = async (): Promise<void> => {
-      try {
+      let initialRead = true
+      while (!controller.signal.aborted) {
         const onUpdate = (value: PreviewRuntimePayload): void => {
-          if (!controller.signal.aborted) receive(value, activeThread)
-        }
-        await runPreviewRuntime(
-          { workspace, action: 'get', includeLogs: open },
-          {
-            threadId: activeThread,
-            signal: controller.signal,
-            onUpdate
+          if (!controller.signal.aborted) {
+            setError('')
+            receive(value, activeThread)
           }
-        )
-        while ((open || repairRunning) && !controller.signal.aborted) {
+        }
+        try {
           await runPreviewRuntime(
-            { workspace, action: 'watch', includeLogs: open },
+            { workspace, action: initialRead ? 'get' : 'watch', includeLogs: open },
             {
               threadId: activeThread,
               signal: controller.signal,
               onUpdate
             }
           )
-        }
-      } catch (reason) {
-        if (!controller.signal.aborted)
+          initialRead = false
+        } catch (reason) {
+          if (controller.signal.aborted) return
+          initialRead = true
           setError(reason instanceof Error ? reason.message : '读取服务状态失败')
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 1000))
+        }
       }
     }
     void watch()
     return () => controller.abort()
-  }, [options.workspace, open, activeThread, repairRunning, receive])
+  }, [options.workspace, open, activeThread, receive])
 
   /** 立即停止渲染端等待，并在后台让服务端完成取消与占用收口。 */
   const cancelRepairImmediately = (identity?: SessionIdentity): void => {

@@ -155,6 +155,25 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         stop_preview.assert_called_once()
         self.assertEqual(Path(stop_preview.call_args.args[0]), Path(self.workspace).resolve())
 
+    async def test_get_recovers_orphaned_start_after_server_restart(self) -> None:
+        """服务重启丢失内存任务后，读取状态应清理孤儿启动并开放重新启动。"""
+
+        begin_attempt(self.workspace)
+        claim_maintenance(self.workspace, "orphaned-start", "start")
+
+        with patch(
+            "app.protocols.preview_runtime.stop_project_preview",
+            return_value={"status": "stopped"},
+        ) as stop_preview:
+            value = self.result(await self.request("get"))
+
+        stop_preview.assert_called_once_with(str(Path(self.workspace).resolve()))
+        self.assertEqual(value["runtime"]["status"], "failed")
+        self.assertEqual(value["runtime"]["failedStage"], "launch_interrupted")
+        self.assertFalse(value["runtime"]["repairAvailable"])
+        self.assertIsNone(value["blockedBy"])
+        self.assertIsNone(maintenance_owner(self.workspace))
+
     async def test_changed_source_rejects_confirmation(self) -> None:
         """待确认文件被修改后不能继续执行原计划。"""
         attempt = self.fail_launch()
@@ -180,7 +199,12 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_read_during_other_maintenance(self) -> None:
         """另一个维护占用时仍允许查看服务和日志。"""
-        claim_maintenance(self.workspace, "other", "restart")
+        save_repair(
+            self.workspace,
+            "other",
+            {"status": "awaiting_confirmation", "message": "等待确认"},
+        )
+        claim_maintenance(self.workspace, "other", "diagnose")
         self.assertEqual(self.result(await self.request("get"))["status"], "completed")
         self.assertEqual(self.result(await self.request("restart"))["status"], "failed")
 

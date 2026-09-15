@@ -13,7 +13,12 @@ from app.protocols.workflow.run_control import workflow_run_registry
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.preview_runtime_guard import claim_maintenance, maintenance_lock, maintenance_owner, release_maintenance, pending_product_interaction
 from app.services.preview_runtime_repair import execute_repair, load_repair, prepare_repair, repair_path, save_repair, source_digest
-from app.services.preview_runtime_state import finish_attempt, read_record, runtime_snapshot
+from app.services.preview_runtime_state import (
+    finish_attempt,
+    mark_interrupted_attempt,
+    read_record,
+    runtime_snapshot,
+)
 from app.services.project_launcher import launch_project_preview, stop_project_preview
 from app.workspace.run_lease import workspace_run_leases
 
@@ -89,8 +94,39 @@ def blocking_task(workspace: str, thread_id: str = "") -> dict[str, Any] | None:
     return None
 
 
+def _recover_orphaned_maintenance(workspace: str) -> None:
+    """清理服务进程重启后失去内存任务的启动维护占用。"""
+
+    with maintenance_lock:
+        owner = maintenance_owner(workspace)
+        if not owner:
+            return
+        action = str(owner.get("action") or "")
+        if action not in {"start", "restart", "stop"}:
+            return
+        key = (str(Path(workspace).expanduser().resolve()), str(owner.get("threadId") or ""))
+        job = _jobs.get(key)
+        if job is not None and not job.done():
+            return
+
+        # 启动器可能已经拉起一部分子进程；先按标准停止流程清理，再释放孤儿占用。
+        record = read_record(workspace)
+        layer = (
+            "frontend"
+            if (record.get("frontend") or {}).get("status") == "starting"
+            else "backend"
+            if (record.get("backend") or {}).get("status") == "starting"
+            else ""
+        )
+        stop_project_preview(workspace)
+        if action in {"start", "restart"}:
+            mark_interrupted_attempt(workspace, layer=layer)
+        release_maintenance(workspace, str(owner.get("threadId") or ""))
+
+
 def snapshot(workspace: str, thread_id: str, *, logs: bool = True) -> dict[str, Any]:
     """把运行事实、阻塞原因和当前会话修复投影到同一快照。"""
+    _recover_orphaned_maintenance(workspace)
     return {"runtime": runtime_snapshot(workspace, logs=logs), "blockedBy": blocking_task(workspace), "repair": {key: value for key, value in load_repair(workspace, thread_id).items() if key not in {"tasks", "digest"}}}
 
 
@@ -181,6 +217,8 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
         if not thread_id:
             raise ValueError("预览操作必须包含会话身份。")
         key = (request.workspace, thread_id)
+        if request.action not in {"leave", "cancel"}:
+            await asyncio.to_thread(_recover_orphaned_maintenance, request.workspace)
         if request.action in {"get", "watch"}:
             previous: dict[str, Any] = {}
             for _ in range(20 if request.action == "watch" else 1):
