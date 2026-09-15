@@ -16,8 +16,11 @@ from ag_ui.core import (
     TextMessageStartEvent,
 )
 from ag_ui.encoder import EventEncoder
-from app.domain.execution_recovery import RecoveryExecutionError
-from app.domain.execution_recovery import RecoveryActionKind
+from app.domain.execution_recovery import (
+    DurableExecutionStatus,
+    RecoveryActionKind,
+    RecoveryExecutionError,
+)
 from app.graph.application_planning_workflow import application_planning_graph_for_request
 from app.graph.workflow import workflow_graph_for_request
 from app.persistence.execution_recovery import (
@@ -39,8 +42,11 @@ from app.services.execution_recovery_lineage import RecoveryLineageState
 from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
 )
-from app.services.execution_recovery_action_planner import plan_recovery_action
-from app.services.execution_recovery_action_planner import build_recovery_facts
+from app.services.execution_recovery_action_planner import (
+    build_recovery_facts,
+    plan_failed_node_reentry_action,
+    plan_recovery_action,
+)
 from app.services.workflow_reentry import FailureTargetResolver
 
 
@@ -154,27 +160,50 @@ def build_execution_recovery_ag_ui_stream(
                 workspace=workspace,
                 project_id=source.project_id,
             )
-            recovery_plan = await _prepare_recovery_plan(
-                workspace=workspace,
-                source=source,
-                graph=graph,
-                replay_policies=replay_policies,
-            )
-            facts = await build_recovery_facts(
-                workspace=workspace,
-                source=source,
-                recovery_plan=recovery_plan,
-                graph=graph,
-            )
-            action_plan, stage_assessment = await plan_recovery_action(
-                workspace=workspace,
-                source=source,
-                recovery_plan=recovery_plan,
-                point=facts.point,
-                snapshot=facts.snapshot,
-                lifecycle=facts.lifecycle,
-                graph=graph,
-            )
+            recovery_plan = None
+            stage_assessment = None
+            reentry_plan = None
+            if source.status is DurableExecutionStatus.FAILED:
+                try:
+                    reentry_plan = await FailureTargetResolver().resolve(
+                        workspace=workspace,
+                        source=source,
+                        graph=graph,
+                    )
+                except RecoveryExecutionError as exc:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=workspace,
+                        source=source,
+                        error=exc,
+                    )
+                else:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=workspace,
+                        source=source,
+                        reentry_plan=reentry_plan,
+                    )
+            else:
+                recovery_plan = await _prepare_recovery_plan(
+                    workspace=workspace,
+                    source=source,
+                    graph=graph,
+                    replay_policies=replay_policies,
+                )
+                facts = await build_recovery_facts(
+                    workspace=workspace,
+                    source=source,
+                    recovery_plan=recovery_plan,
+                    graph=graph,
+                )
+                action_plan, stage_assessment = await plan_recovery_action(
+                    workspace=workspace,
+                    source=source,
+                    recovery_plan=recovery_plan,
+                    point=facts.point,
+                    snapshot=facts.snapshot,
+                    lifecycle=facts.lifecycle,
+                    graph=graph,
+                )
             if action == "execute" and (
                 action_plan.incident_id != incident_id
                 or action_plan.primary_action is None
@@ -188,11 +217,11 @@ def build_execution_recovery_ag_ui_stream(
                 raise RecoveryExecutionError(action_plan.reason_code, action_plan.message)
             kind = action_plan.primary_action.kind
             if kind is RecoveryActionKind.RETRY_FAILED_NODE:
-                reentry_plan = await FailureTargetResolver().resolve(
-                    workspace=workspace,
-                    source=source,
-                    graph=graph,
-                )
+                if reentry_plan is None:
+                    raise RecoveryExecutionError(
+                        "WORKFLOW_REENTRY_PLAN_INVALID",
+                        "FAILED action 缺少 Workflow Re-entry 计划。",
+                    )
                 context = await WorkflowReentryExecutor().prepare_failure_retry(
                     workspace=workspace,
                     source_run_id=source.run_id,
@@ -200,6 +229,11 @@ def build_execution_recovery_ag_ui_stream(
                     reentry_plan=reentry_plan,
                 )
             elif kind is RecoveryActionKind.CONTINUE_CHECKPOINT:
+                if recovery_plan is None:
+                    raise RecoveryExecutionError(
+                        "RECOVERY_ACTION_NOT_EXECUTABLE",
+                        "FAILED execution 不能走 legacy continue checkpoint。",
+                    )
                 context = await prepare_native_recovery(
                     workspace=workspace,
                     source_run_id=source.run_id,
@@ -211,6 +245,11 @@ def build_execution_recovery_ag_ui_stream(
                     ),
                 )
             elif kind is RecoveryActionKind.RETRY_OPERATION:
+                if recovery_plan is None:
+                    raise RecoveryExecutionError(
+                        "RECOVERY_ACTION_NOT_EXECUTABLE",
+                        "FAILED execution 不能走 operation retry。",
+                    )
                 context = await prepare_operation_retry(
                     workspace=workspace,
                     source_run_id=source.run_id,
@@ -218,6 +257,11 @@ def build_execution_recovery_ag_ui_stream(
                     recovery_plan=recovery_plan,
                 )
             elif kind is RecoveryActionKind.RESTART_STAGE:
+                if recovery_plan is None:
+                    raise RecoveryExecutionError(
+                        "RECOVERY_ACTION_NOT_EXECUTABLE",
+                        "FAILED execution 不能走 stage restart。",
+                    )
                 context = await prepare_stage_restart(
                     workspace=workspace,
                     source_run_id=source.run_id,
@@ -413,27 +457,48 @@ async def _resolve_action_source_run(
             else workflow_graph_for_request
         )
         graph = await graph_factory(workspace=workspace, project_id=record.project_id)
-        plan = await _prepare_recovery_plan(
-            workspace=workspace,
-            source=record,
-            graph=graph,
-            replay_policies=None,
-        )
-        facts = await build_recovery_facts(
-            workspace=workspace,
-            source=record,
-            recovery_plan=plan,
-            graph=graph,
-        )
-        action_plan, _assessment = await plan_recovery_action(
-            workspace=workspace,
-            source=record,
-            recovery_plan=plan,
-            point=facts.point,
-            snapshot=facts.snapshot,
-            lifecycle=facts.lifecycle,
-            graph=graph,
-        )
+        reentry_plan = None
+        if record.status is DurableExecutionStatus.FAILED:
+            try:
+                reentry_plan = await FailureTargetResolver().resolve(
+                    workspace=workspace,
+                    source=record,
+                    graph=graph,
+                )
+            except RecoveryExecutionError as exc:
+                action_plan = plan_failed_node_reentry_action(
+                    workspace=workspace,
+                    source=record,
+                    error=exc,
+                )
+            else:
+                action_plan = plan_failed_node_reentry_action(
+                    workspace=workspace,
+                    source=record,
+                    reentry_plan=reentry_plan,
+                )
+        else:
+            plan = await _prepare_recovery_plan(
+                workspace=workspace,
+                source=record,
+                graph=graph,
+                replay_policies=None,
+            )
+            facts = await build_recovery_facts(
+                workspace=workspace,
+                source=record,
+                recovery_plan=plan,
+                graph=graph,
+            )
+            action_plan, _assessment = await plan_recovery_action(
+                workspace=workspace,
+                source=record,
+                recovery_plan=plan,
+                point=facts.point,
+                snapshot=facts.snapshot,
+                lifecycle=facts.lifecycle,
+                graph=graph,
+            )
         if (
             action_plan.incident_id == incident_id
             and action_plan.primary_action is not None

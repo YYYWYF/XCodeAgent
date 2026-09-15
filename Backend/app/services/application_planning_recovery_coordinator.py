@@ -14,6 +14,7 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     RecoveryDecision,
+    RecoveryExecutionError,
     RecoveryPoint,
 )
 from app.persistence.execution_recovery import get_recovery_point, list_recovery_points
@@ -38,11 +39,13 @@ from app.services.execution_recovery_policies import (
 )
 from app.services.execution_recovery_action_planner import (
     build_recovery_facts,
+    plan_failed_node_reentry_action,
     plan_recovery_action,
 )
 from app.services.execution_recovery_capability import (
     assess_native_recovery_capability,
 )
+from app.services.workflow_reentry import FailureTargetResolver
 
 
 @dataclass(frozen=True)
@@ -223,36 +226,66 @@ async def resolve_application_planning_recovery(
             input_committed=input_committed,
         )
 
-    await ensure_application_planning_recovery_point(
-        source=source,
-        graph=graph,
-        snapshot=snapshot,
-    )
-    plan = await prepare_continue(
-        workspace=workspace,
-        source_run_id=source.run_id,
-        graph=graph,
-        replay_policies=production_recovery_replay_policies(),
-    )
-    facts = await build_recovery_facts(
-        workspace=workspace,
-        source=source,
-        recovery_plan=plan,
-        graph=graph,
-        lifecycle=lifecycle,
-    )
-    action_plan, _stage_assessment = await plan_recovery_action(
-        workspace=workspace,
-        source=source,
-        recovery_plan=plan,
-        point=facts.point,
-        snapshot=facts.snapshot,
-        lifecycle=facts.lifecycle,
-    )
+    if source.status is DurableExecutionStatus.FAILED:
+        try:
+            reentry_plan = await FailureTargetResolver().resolve(
+                workspace=workspace,
+                source=source,
+                graph=graph,
+            )
+        except Exception as exc:
+            if not isinstance(exc, RecoveryExecutionError):
+                raise
+            action_plan = plan_failed_node_reentry_action(
+                workspace=workspace,
+                source=source,
+                error=exc,
+            )
+        else:
+            action_plan = plan_failed_node_reentry_action(
+                workspace=workspace,
+                source=source,
+                reentry_plan=reentry_plan,
+            )
+        plan = None
+    else:
+        await ensure_application_planning_recovery_point(
+            source=source,
+            graph=graph,
+            snapshot=snapshot,
+        )
+        plan = await prepare_continue(
+            workspace=workspace,
+            source_run_id=source.run_id,
+            graph=graph,
+            replay_policies=production_recovery_replay_policies(),
+        )
+        facts = await build_recovery_facts(
+            workspace=workspace,
+            source=source,
+            recovery_plan=plan,
+            graph=graph,
+            lifecycle=lifecycle,
+        )
+        action_plan, _stage_assessment = await plan_recovery_action(
+            workspace=workspace,
+            source=source,
+            recovery_plan=plan,
+            point=facts.point,
+            snapshot=facts.snapshot,
+            lifecycle=facts.lifecycle,
+        )
     # Action Planner 一旦返回结果，后续任何 projection 分支都必须复用同一份当前事实。
     recovery_action_plan = action_plan.model_dump(mode="json", by_alias=True)
-    native_capability = assess_native_recovery_capability(plan)
-    if plan.decision is RecoveryDecision.READY_NATIVE and native_capability.executable:
+    native_capability = (
+        assess_native_recovery_capability(plan) if plan is not None else None
+    )
+    if (
+        plan is not None
+        and plan.decision is RecoveryDecision.READY_NATIVE
+        and native_capability is not None
+        and native_capability.executable
+    ):
         contract = resolve_application_planning_recovery_contract(
             source=source,
             point=await _recovery_point_for_plan(source, plan),
@@ -283,7 +316,7 @@ async def resolve_application_planning_recovery(
             message=action_plan.message,
             recovery_action_plan=recovery_action_plan,
         )
-    if plan.decision is RecoveryDecision.AWAITING_USER:
+    if plan is not None and plan.decision is RecoveryDecision.AWAITING_USER:
         return _projection(
             classification="conflict",
             source=source,

@@ -242,8 +242,8 @@ async def prepare_native_recovery(
             "当前 recovery source 已被新的 child execution 替代，请刷新后继续。",
             details={"currentSourceRunId": lineage.head.run_id},
         )
-    if reentry_plan is not None:
-        if (
+    if reentry_plan is not None or source.status is DurableExecutionStatus.FAILED:
+        if reentry_plan is not None and (
             reentry_plan.source_run_id != source.run_id
             or reentry_plan.thread_id != source.thread_id
             or reentry_plan.target_node != source.current_node
@@ -253,23 +253,19 @@ async def prepare_native_recovery(
                 "WORKFLOW_REENTRY_PLAN_INVALID",
                 "WorkflowReentryPlan 与当前 source execution identity 不一致。",
             )
-        expected_plan = recovery_plan_from_reentry(reentry_plan)
-        plan = await prepare_continue(
+        fresh_reentry_plan = await FailureTargetResolver().resolve(
             workspace=workspace,
-            source_run_id=source_run_id,
+            source=source,
             graph=graph,
-            replay_policies=replay_policies,
         )
-        if (
-            plan.recovery_point_id != expected_plan.recovery_point_id
-            or plan.checkpoint_id != expected_plan.checkpoint_id
-            or plan.checkpoint_ns != expected_plan.checkpoint_ns
-            or plan.next_nodes != expected_plan.next_nodes
-        ):
-            raise RecoveryExecutionError(
-                "WORKFLOW_REENTRY_PLAN_STALE",
-                "Coordinator 重新验证后的 checkpoint authority 已偏离 WorkflowReentryPlan。",
+        if reentry_plan is not None:
+            _require_fresh_reentry_plan(
+                expected=reentry_plan,
+                fresh=fresh_reentry_plan,
             )
+        # 这里只把已验证的 WorkflowReentryPlan 投影为现有 claim/fork
+        # transaction DTO；不再经过 RecoveryCoordinator 或 replay policy。
+        plan = recovery_plan_from_reentry(fresh_reentry_plan)
     else:
         plan = await prepare_continue(
             workspace=workspace,
@@ -277,7 +273,10 @@ async def prepare_native_recovery(
             graph=graph,
             replay_policies=replay_policies,
         )
-    _require_native_plan(plan)
+    if source.status is DurableExecutionStatus.FAILED:
+        _require_failed_node_reentry_plan(plan, source=source)
+    else:
+        _require_native_plan(plan)
     source_point = await get_recovery_point(workspace, plan.recovery_point_id or "")
     if source_point is None:
         raise RecoveryExecutionError(
@@ -867,7 +866,10 @@ async def finalize_handed_off_recovery_attempt(
             workspace_revision=source_point.workspace_revision,
             workspace_snapshot_hash=source_point.workspace_snapshot_hash,
         )
-        _require_native_plan(plan)
+        if source.status is DurableExecutionStatus.FAILED:
+            _require_failed_node_reentry_plan(plan, source=source)
+        else:
+            _require_native_plan(plan)
         await _revalidate_finalizing_recovery(
             workspace=workspace,
             source=source,
@@ -1079,7 +1081,10 @@ async def _fork_and_start(
 ) -> NativeRecoveryRuntimeContext:
     """只写 runtime identity 的 fork checkpoint，并在 durable point 后标记 STARTED。"""
 
-    _require_native_plan(plan)
+    if source.status is DurableExecutionStatus.FAILED:
+        _require_failed_node_reentry_plan(plan, source=source)
+    else:
+        _require_native_plan(plan)
     _validate_failed_node_reentry_source(
         source=source,
         source_point=source_point,
@@ -1523,6 +1528,55 @@ def _require_native_plan(plan: RecoveryPlan) -> None:
     if capability.executable:
         return
     raise RecoveryExecutionError(capability.reason_code, capability.reason)
+
+
+def _require_failed_node_reentry_plan(
+    plan: RecoveryPlan,
+    *,
+    source: DurableExecutionRecord,
+) -> None:
+    """验证 FAILED 的 transaction bridge，不调用旧 Native capability。"""
+
+    if (
+        plan.decision is not RecoveryDecision.READY_NATIVE
+        or plan.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT
+        or not plan.recovery_point_id
+        or not plan.checkpoint_id
+        or plan.checkpoint_ns != ""
+        or plan.next_nodes != [source.current_node]
+    ):
+        raise RecoveryExecutionError(
+            "WORKFLOW_REENTRY_PLAN_INVALID",
+            "FAILED Node Re-entry 缺少 root checkpoint transaction authority。",
+        )
+
+
+def _require_fresh_reentry_plan(
+    *,
+    expected: WorkflowReentryPlan,
+    fresh: WorkflowReentryPlan,
+) -> None:
+    """比较 claim 前重新解析的完整 Node Entry authority，拒绝 stale plan。"""
+
+    expected_authority = expected.context_authority
+    fresh_authority = fresh.context_authority
+    if (
+        expected.source_run_id != fresh.source_run_id
+        or expected.thread_id != fresh.thread_id
+        or expected.target_node != fresh.target_node
+        or expected.execution_kind != fresh.execution_kind
+        or expected_authority.boundary_id != fresh_authority.boundary_id
+        or expected_authority.source_run_id != fresh_authority.source_run_id
+        or expected_authority.thread_id != fresh_authority.thread_id
+        or expected_authority.target_node != fresh_authority.target_node
+        or expected_authority.checkpoint_id != fresh_authority.checkpoint_id
+        or expected_authority.checkpoint_ns != fresh_authority.checkpoint_ns
+        or expected.lifecycle_authority != fresh.lifecycle_authority
+    ):
+        raise RecoveryExecutionError(
+            "WORKFLOW_REENTRY_PLAN_STALE",
+            "重新验证后的 Workflow Node Entry authority 已偏离原始计划。",
+        )
 
 
 def _validate_root_plan(plan: RecoveryPlan) -> None:

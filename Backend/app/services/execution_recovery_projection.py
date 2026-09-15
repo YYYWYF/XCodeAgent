@@ -19,8 +19,11 @@ from app.services.execution_recovery_policies import (
 )
 from app.services.execution_recovery_action_planner import (
     build_recovery_facts,
+    plan_failed_node_reentry_action,
     plan_recovery_action,
 )
+from app.services.workflow_reentry import FailureTargetResolver
+from app.domain.execution_recovery import RecoveryExecutionError
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -88,7 +91,7 @@ async def resolve_execution_recovery_projection(
 async def _resolve_candidate(
     record: DurableExecutionRecord,
 ) -> ExecutionRecoveryProjectionCandidate | None:
-    """为单条中断记录选择正确 Graph 并复用 P0.3A 的只读判断。"""
+    """为单条记录选择 Graph，FAILED 走 Node Re-entry，其余保留旧路径。"""
 
     graph_factory = (
         application_planning_graph_for_request
@@ -99,27 +102,49 @@ async def _resolve_candidate(
         workspace=record.workspace,
         project_id=record.project_id,
     )
-    plan = await prepare_continue(
-        workspace=record.workspace,
-        source_run_id=record.run_id,
-        graph=graph,
-        replay_policies=production_recovery_replay_policies(),
-    )
-    facts = await build_recovery_facts(
-        workspace=record.workspace,
-        source=record,
-        recovery_plan=plan,
-        graph=graph,
-    )
-    action_plan, _stage_assessment = await plan_recovery_action(
-        workspace=record.workspace,
-        source=record,
-        recovery_plan=plan,
-        point=facts.point,
-        snapshot=facts.snapshot,
-        lifecycle=facts.lifecycle,
-        graph=graph,
-    )
+    if record.status.value == "failed":
+        try:
+            reentry_plan = await FailureTargetResolver().resolve(
+                workspace=record.workspace,
+                source=record,
+                graph=graph,
+            )
+        except RecoveryExecutionError as exc:
+            action_plan = plan_failed_node_reentry_action(
+                workspace=record.workspace,
+                source=record,
+                error=exc,
+            )
+            plan = None
+        else:
+            action_plan = plan_failed_node_reentry_action(
+                workspace=record.workspace,
+                source=record,
+                reentry_plan=reentry_plan,
+            )
+            plan = reentry_plan
+    else:
+        plan = await prepare_continue(
+            workspace=record.workspace,
+            source_run_id=record.run_id,
+            graph=graph,
+            replay_policies=production_recovery_replay_policies(),
+        )
+        facts = await build_recovery_facts(
+            workspace=record.workspace,
+            source=record,
+            recovery_plan=plan,
+            graph=graph,
+        )
+        action_plan, _stage_assessment = await plan_recovery_action(
+            workspace=record.workspace,
+            source=record,
+            recovery_plan=plan,
+            point=facts.point,
+            snapshot=facts.snapshot,
+            lifecycle=facts.lifecycle,
+            graph=graph,
+        )
     availability = {
         "recoverable": "ready",
         "awaiting_user": "awaiting_user",
@@ -162,13 +187,20 @@ async def _resolve_owner_session_id(
     owner_session_id = str(record.owner_session_id or "").strip()
     if owner_session_id:
         return owner_session_id
-    checkpoint_id = getattr(plan, "checkpoint_id", None)
+    authority = getattr(plan, "context_authority", None)
+    checkpoint_id = getattr(plan, "checkpoint_id", None) or getattr(
+        authority, "checkpoint_id", None
+    )
     if not checkpoint_id or not hasattr(graph, "aget_state"):
         return None
     config = {
         "configurable": {
             "thread_id": record.thread_id,
-            "checkpoint_ns": str(getattr(plan, "checkpoint_ns", "") or ""),
+            "checkpoint_ns": str(
+                getattr(plan, "checkpoint_ns", None)
+                or getattr(authority, "checkpoint_ns", "")
+                or ""
+            ),
             "checkpoint_id": str(checkpoint_id),
         }
     }

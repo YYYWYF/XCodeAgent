@@ -15,9 +15,11 @@ from app.domain.execution_recovery import (
     RecoveryActionKind,
     RecoveryActionPlan,
     RecoveryDecision,
+    RecoveryExecutionError,
     RecoveryIncidentStatus,
     RecoveryPlan,
     RecoveryPoint,
+    WorkflowReentryPlan,
     execution_failure_sha256,
 )
 from app.persistence.execution_recovery import get_recovery_point
@@ -33,6 +35,7 @@ from app.services.execution_retry_dispatcher import (
     RetryOperationCapability,
     assess_retry_operation,
 )
+from app.services.workflow_reentry import FailureTargetResolver
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,49 +99,51 @@ async def plan_recovery_action(
     snapshot: Any,
     lifecycle: ApplicationLifecycle | None = None,
     graph: Any | None = None,
+    reentry_plan: WorkflowReentryPlan | None = None,
 ) -> tuple[RecoveryActionPlan, TechnicalPlanningStageRestartAssessment | None]:
     """基于 durable facts 选择最近的确定性恢复入口，不执行任何动作。"""
 
     current_lifecycle = lifecycle or load_application_lifecycle(workspace)
-    native_capability = assess_native_recovery_capability(recovery_plan)
-    if source.status is DurableExecutionStatus.FAILED and source.failure is not None:
-        incident_id = _incident_id(
-            source=source,
-            point=point,
-            lifecycle=current_lifecycle,
-            stage_assessment=None,
-        )
-        if (
-            native_capability.executable
-            and recovery_plan.reason_code == "FAILED_NODE_REENTRY_READY"
-        ):
-            action = _action(
-                incident_id=incident_id,
-                kind=RecoveryActionKind.RETRY_FAILED_NODE,
-                label=_failed_node_retry_label(source.current_node),
-                description="恢复失败 Node 开始前的精确语义 State，并使用当前运行配置重新执行。",
-            )
-            return (
-                _action_plan(
+    if source.status is DurableExecutionStatus.FAILED:
+        # FAILED 的准入只由 Workflow Node Re-entry authority 决定；旧的
+        # RecoveryPlan、ReplayPolicy 和 Native capability 不能成为第二套判断。
+        if reentry_plan is None:
+            if graph is None:
+                return (
+                    plan_failed_node_reentry_action(
+                        workspace=workspace,
+                        source=source,
+                        error=RecoveryExecutionError(
+                            "NODE_ENTRY_AUTHORITY_MISSING",
+                            "当前 production Graph 无法解析失败 Node 的精确入口。",
+                        ),
+                    ),
+                    None,
+                )
+            try:
+                reentry_plan = await FailureTargetResolver().resolve(
+                    workspace=workspace,
                     source=source,
-                    incident_id=incident_id,
-                    status=RecoveryIncidentStatus.RECOVERABLE,
-                    reason_code="FAILED_NODE_REENTRY_READY",
-                    message="已验证失败 Node 的精确入口，可以保留原业务上下文重新执行。",
-                    primary_action=action,
-                ),
-                None,
-            )
+                    graph=graph,
+                )
+            except RecoveryExecutionError as exc:
+                return (
+                    plan_failed_node_reentry_action(
+                        workspace=workspace,
+                        source=source,
+                        error=exc,
+                    ),
+                    None,
+                )
         return (
-            _action_plan(
+            plan_failed_node_reentry_action(
+                workspace=workspace,
                 source=source,
-                incident_id=incident_id,
-                status=RecoveryIncidentStatus.NEEDS_ATTENTION,
-                reason_code=recovery_plan.reason_code,
-                message="失败 Node 的精确语义上下文 authority 缺失或无效，已阻止降级重启。",
+                reentry_plan=reentry_plan,
             ),
             None,
         )
+    native_capability = assess_native_recovery_capability(recovery_plan)
     stage_assessment: TechnicalPlanningStageRestartAssessment | None = None
     if source.execution_kind == "application_planning":
         stage_assessment = ApplicationPlanningStageRecoveryContract().assess(
@@ -264,6 +269,56 @@ async def plan_recovery_action(
     )
 
 
+def plan_failed_node_reentry_action(
+    *,
+    workspace: str,
+    source: DurableExecutionRecord,
+    reentry_plan: WorkflowReentryPlan | None = None,
+    error: RecoveryExecutionError | None = None,
+) -> RecoveryActionPlan:
+    """把 WorkflowReentryPlan 或其 fail-closed 错误投影为 FAILED action。"""
+
+    lifecycle = load_application_lifecycle(workspace)
+    incident_id = _incident_id(
+        source=source,
+        point=None,
+        lifecycle=lifecycle,
+        stage_assessment=None,
+        reentry_plan=reentry_plan,
+        reentry_error_code=error.code if error is not None else None,
+    )
+    if error is not None:
+        return _action_plan(
+            source=source,
+            incident_id=incident_id,
+            status=RecoveryIncidentStatus.NEEDS_ATTENTION,
+            reason_code=error.code,
+            message="失败 Node 的精确入口 authority 缺失或无效，已阻止降级恢复。",
+        )
+    if reentry_plan is None:
+        return _action_plan(
+            source=source,
+            incident_id=incident_id,
+            status=RecoveryIncidentStatus.NEEDS_ATTENTION,
+            reason_code="WORKFLOW_REENTRY_PLAN_INVALID",
+            message="失败 Node 缺少可执行的 Workflow Re-entry 计划，已阻止降级恢复。",
+        )
+    action = _action(
+        incident_id=incident_id,
+        kind=RecoveryActionKind.RETRY_FAILED_NODE,
+        label=_failed_node_retry_label(reentry_plan.target_node),
+        description="恢复失败 Node 开始前的精确语义 State，并使用当前运行配置重新执行。",
+    )
+    return _action_plan(
+        source=source,
+        incident_id=incident_id,
+        status=RecoveryIncidentStatus.RECOVERABLE,
+        reason_code="FAILED_NODE_REENTRY_READY",
+        message="已验证失败 Node 的精确入口，可以保留原业务上下文重新执行。",
+        primary_action=action,
+    )
+
+
 def _action_plan(
     *,
     source: DurableExecutionRecord,
@@ -334,8 +389,12 @@ def _incident_id(
     lifecycle: ApplicationLifecycle | None,
     stage_assessment: TechnicalPlanningStageRestartAssessment | None,
     retry_handler: str | None = None,
+    reentry_plan: WorkflowReentryPlan | None = None,
+    reentry_error_code: str | None = None,
 ) -> str:
-    """把 Stage authority 纳入稳定 incidentId，避免正式文件变化复用旧动作。"""
+    """把恢复 authority 纳入稳定 incidentId，避免 source 变化复用旧动作。"""
+
+    authority = reentry_plan.context_authority if reentry_plan is not None else None
 
     return f"recovery-incident-{_digest({
         'sourceRunId': source.run_id,
@@ -350,6 +409,13 @@ def _incident_id(
             else None
         ),
         'retryHandler': retry_handler,
+        'nodeEntryBoundaryId': authority.boundary_id if authority else None,
+        'nodeEntrySourceRunId': authority.source_run_id if authority else None,
+        'nodeEntryThreadId': authority.thread_id if authority else None,
+        'nodeEntryTargetNode': authority.target_node if authority else None,
+        'nodeEntryCheckpointId': authority.checkpoint_id if authority else None,
+        'nodeEntryCheckpointNs': authority.checkpoint_ns if authority else None,
+        'reentryErrorCode': reentry_error_code,
     })[:32]}"
 
 
@@ -360,4 +426,9 @@ def _digest(value: dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-__all__ = ["RecoveryFacts", "build_recovery_facts", "plan_recovery_action"]
+__all__ = [
+    "RecoveryFacts",
+    "build_recovery_facts",
+    "plan_failed_node_reentry_action",
+    "plan_recovery_action",
+]
