@@ -13,6 +13,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from app.graph.nodes.task_planning_adapter import (
     create_async_workflow_planning_adapter,
+    production_unit_generation_policy,
 )
 from app.graph.workflow import build_graph
 from app.services.planning_frozen import plain_json
@@ -70,6 +71,23 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             ".xcodeagent/cache/workspace-snapshot.json",
             workspace_snapshot(),
         )
+
+    def test_production_unit_generation_policy_enables_only_sdk_retry(self) -> None:
+        """production policy 开启 SDK retry=2，同时保持 Local、timeout、token 和 reader 预算。"""
+
+        policy = production_unit_generation_policy()
+
+        self.assertEqual(policy.local_max_attempts, 3)
+        self.assertEqual(policy.model_max_retries, 2)
+        self.assertEqual(policy.model_max_tokens, 4096)
+        self.assertEqual(policy.request_timeout, 120.0)
+        self.assertEqual(policy.unit_session_timeout, 600.0)
+        self.assertEqual(policy.model_turn_limit, 8)
+        self.assertEqual(dict(policy.frozen_contract_read_limits), {
+            "max_reads": 24,
+            "max_total_bytes": 2_000_000,
+            "max_bytes_per_read": 200_000,
+        })
 
     def _state(self, scope: dict[str, str]) -> dict:
         """构造与 Workflow runtime 一致的 generation 分支输入。"""

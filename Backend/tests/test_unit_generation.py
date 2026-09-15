@@ -66,10 +66,14 @@ def _settings(*, dag_unit_max_tokens: int = 4096) -> Settings:
     )
 
 
-def _job(*, model_max_tokens: int = 4096) -> UnitAttemptJob:
+def _job(*, model_max_tokens: int = 4096, model_max_retries: int = 0) -> UnitAttemptJob:
     """构造身份、Context 与 Policy 一致的单次 Worker Job。"""
 
-    policy_payload = {**_policy_payload(), "model_max_tokens": model_max_tokens}
+    policy_payload = {
+        **_policy_payload(),
+        "model_max_tokens": model_max_tokens,
+        "model_max_retries": model_max_retries,
+    }
     return UnitAttemptJob(
         identity=_identity_payload(),
         context=_context_payload(),
@@ -170,14 +174,17 @@ class UnitGenerationOnceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(issue.retryable)
 
     async def test_transport_exception_is_classified_and_raised(self) -> None:
-        """传输异常直接以 infrastructure 分类上抛，不转换为内容 Issue。"""
+        """SDK retry 耗尽后的传输异常仍以 infrastructure 分类上抛，不转换为内容 Issue。"""
 
         model = FakeAsyncModel(
             "",
             exception=httpx.ReadError("connection reset"),
         )
-        with self.assertRaises(UnitGenerationInfrastructureError) as raised:
-            await self._generate(model)
+        with patch(
+            "app.services.unit_generation.build_unit_generation_prompt",
+            return_value="test prompt",
+        ), self.assertRaises(UnitGenerationInfrastructureError) as raised:
+            await self._generate(model, job=_job(model_max_retries=2))
 
         self.assertEqual(raised.exception.category, "infrastructure")
         self.assertEqual(raised.exception.stage, "model_invoke")
@@ -200,12 +207,24 @@ class UnitGenerationOnceTests(unittest.IsolatedAsyncioTestCase):
             8192,
         )
 
-    async def test_sdk_retry_is_explicitly_disabled(self) -> None:
-        """每次创建 Unit 模型都显式传入 retry=0，不能回退全局配置。"""
+    async def test_sdk_retry_policy_is_forwarded_as_call_override(self) -> None:
+        """Unit policy 的 SDK retry 值原样传给模型工厂，不消耗额外 Local attempt。"""
 
-        _, model_factory = await self._generate(FakeAsyncModel('{"tasks":[]}'))
+        with patch(
+            "app.services.unit_generation.build_unit_generation_prompt",
+            return_value="test prompt",
+        ):
+            for retries in (0, 2):
+                with self.subTest(retries=retries):
+                    _, model_factory = await self._generate(
+                        FakeAsyncModel('{"tasks":[]}'),
+                        job=_job(model_max_retries=retries),
+                    )
 
-        self.assertEqual(model_factory.call_args.kwargs["max_retries_override"], 0)
+                    self.assertEqual(
+                        model_factory.call_args.kwargs["max_retries_override"],
+                        retries,
+                    )
 
     async def test_global_and_latest_local_feedback_are_injected(self) -> None:
         """Global 与本 Unit 最新 Local feedback 分区进入同一个 Prompt。"""

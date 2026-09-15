@@ -187,12 +187,12 @@ class UnitGenerationContractTests(unittest.TestCase):
             policy.frozen_contract_read_limits["max_reads"] = 20
 
     def test_policy_defaults_and_invalid_budgets(self) -> None:
-        """策略默认 Local=3、SDK retry=0、tokens=4096，拒绝非正预算与错误类型。"""
+        """策略默认 Local=3、SDK retry=0、tokens=4096，拒绝越界预算与错误类型。"""
 
         policy = UnitGenerationPolicy(**_policy_payload())
         self.assertEqual((policy.local_max_attempts, policy.model_max_retries, policy.model_max_tokens), (3, 0, 4096))
         for change in (
-            {"local_max_attempts": 1}, {"local_max_attempts": 4}, {"model_max_retries": 1}, {"model_max_retries": False},
+            {"local_max_attempts": 1}, {"local_max_attempts": 4}, {"model_max_retries": 3}, {"model_max_retries": False},
             {"model_max_tokens": 0}, {"model_max_tokens": "4096"},
             {"request_timeout": 0}, {"request_timeout": float("inf")},
             {"unit_session_timeout": -1}, {"unit_session_timeout": float("nan")},
@@ -205,6 +205,17 @@ class UnitGenerationContractTests(unittest.TestCase):
         ):
             with self.subTest(change=change), self.assertRaises(ValidationError):
                 UnitGenerationPolicy(**{**_policy_payload(), **change})
+
+    def test_policy_accepts_sdk_retry_boundaries(self) -> None:
+        """SDK retry 允许保持默认 0 或由 production 显式配置为 2。"""
+
+        for retries in (0, 2):
+            with self.subTest(retries=retries):
+                policy = UnitGenerationPolicy(**{
+                    **_policy_payload(),
+                    "model_max_retries": retries,
+                })
+                self.assertEqual(policy.model_max_retries, retries)
 
     def test_candidate_accepts_only_explicit_valid_invalid_superseded_status(self) -> None:
         """候选状态严格使用三种显式值，DTO 不执行状态推导或转移。"""
