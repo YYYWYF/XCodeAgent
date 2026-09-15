@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -162,7 +164,7 @@ def _cleanup_interrupted_bootstrap(workspace: Path) -> None:
         if path.is_symlink() or path.is_file():
             path.unlink(missing_ok=True)
         elif path.is_dir():
-            shutil.rmtree(path)
+            shutil.rmtree(path, onexc=_clear_readonly_and_retry)
     remaining = [
         str(relative)
         for relative in ("frontend", "backend", ".git", TEMPLATE_STATE_RELATIVE_PATH, BOOTSTRAP_STAGING_RELATIVE_PATH)
@@ -176,6 +178,15 @@ def _workspace_key(workspace: str | Path) -> str:
     """生成跨调用一致的工作区键。"""
 
     return os.path.normcase(str(Path(workspace).expanduser().resolve(strict=False)))
+
+
+def _clear_readonly_and_retry(function: Callable[[str], None], path: str, error: BaseException) -> None:
+    """Windows 清理 Bootstrap Git 对象遇到只读属性时解除属性并重试。"""
+
+    if not isinstance(error, PermissionError):
+        raise error
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
 
 
 template_mutation_coordinator = TemplateMutationCoordinator()
