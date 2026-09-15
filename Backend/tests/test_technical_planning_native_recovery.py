@@ -705,7 +705,6 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     runtime_identity_update={
                         "active_run_id": "fork-stability-child",
                         "active_thread_id": scenario.source.thread_id,
-                        "resume_from": "",
                         "observability": {"run_id": "fork-stability-child"},
                     },
                 )

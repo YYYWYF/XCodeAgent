@@ -238,7 +238,6 @@ class ApplicationPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 runtime_identity_update={
                     "active_run_id": "run-B",
                     "active_thread_id": thread_id,
-                    "resume_from": "",
                     "observability": {"run_id": "run-B", "thread_id": thread_id},
                     "lifecycle": {"active_run_id": "run-B"},
                 },

@@ -540,6 +540,28 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                     assert source.failure is not None
                     self.assertEqual(source.failure.operation, "requirements")
                     self.assertEqual(source.failure.http_status, 404)
+                    source_boundary = await get_node_entry_boundary(
+                        workspace,
+                        source_run_id=source_run_id,
+                        thread_id=thread_id,
+                        target_node="requirements",
+                    )
+                    self.assertIsNotNone(source_boundary)
+                    assert source_boundary is not None
+                    source_graph = await application_planning_graph_for_request(
+                        workspace=str(workspace),
+                        project_id=project_id,
+                    )
+                    source_snapshot = await source_graph.aget_state(
+                        {
+                            "configurable": {
+                                "thread_id": thread_id,
+                                "checkpoint_ns": source_boundary.checkpoint_ns,
+                                "checkpoint_id": source_boundary.checkpoint_id,
+                            }
+                        }
+                    )
+                    self.assertEqual(tuple(source_snapshot.next), ("requirements",))
 
                     model_config["name"] = "MiMo"
                     child = await _execute_current_recovery_action(
@@ -549,6 +571,24 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotEqual(child.run_id, source_run_id)
                     self.assertEqual(child.first_node, "requirements")
                     self.assertNotEqual(child.status, DurableExecutionStatus.FAILED)
+                    child_boundary = await get_node_entry_boundary(
+                        workspace,
+                        source_run_id=child.run_id,
+                        thread_id=thread_id,
+                        target_node="requirements",
+                    )
+                    self.assertIsNotNone(child_boundary)
+                    assert child_boundary is not None
+                    child_snapshot = await source_graph.aget_state(
+                        {
+                            "configurable": {
+                                "thread_id": thread_id,
+                                "checkpoint_ns": child_boundary.checkpoint_ns,
+                                "checkpoint_id": child_boundary.checkpoint_id,
+                            }
+                        }
+                    )
+                    self.assertEqual(tuple(child_snapshot.next), ("requirements",))
             finally:
                 clear_application_planning_graph_cache()
                 await close_workflow_checkpointer_for_workspace(
@@ -722,6 +762,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                             }
                         }
                     )
+                    self.assertEqual(tuple(source_snapshot.next), ("requirements",))
                     source_context_digest = semantic_context_sha256(
                         dict(source_snapshot.values)
                     )
@@ -762,6 +803,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                             }
                         }
                     )
+                    self.assertEqual(tuple(child_snapshot.next), ("requirements",))
                     self.assertEqual(
                         source_context_digest,
                         semantic_context_sha256(dict(child_snapshot.values)),
@@ -883,6 +925,28 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(source.execution_kind, "workbench")
                 self.assertEqual(source.status, DurableExecutionStatus.FAILED)
                 self.assertEqual(source.current_node, "prepare_build_tasks")
+                source_boundary = await get_node_entry_boundary(
+                    workspace,
+                    source_run_id=source_run_id,
+                    thread_id=thread_id,
+                    target_node="prepare_build_tasks",
+                )
+                self.assertIsNotNone(source_boundary)
+                assert source_boundary is not None
+                source_graph = await workflow_graph_for_request(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                source_snapshot = await source_graph.aget_state(
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": source_boundary.checkpoint_ns,
+                            "checkpoint_id": source_boundary.checkpoint_id,
+                        }
+                    }
+                )
+                self.assertEqual(tuple(source_snapshot.next), ("prepare_build_tasks",))
 
                 clear_workflow_graph_cache()
                 await close_workflow_checkpointer_for_workspace(
@@ -896,6 +960,28 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotEqual(child.run_id, source_run_id)
                 self.assertEqual(child.first_node, "prepare_build_tasks")
                 self.assertNotEqual(child.status, DurableExecutionStatus.FAILED)
+                child_boundary = await get_node_entry_boundary(
+                    workspace,
+                    source_run_id=child.run_id,
+                    thread_id=thread_id,
+                    target_node="prepare_build_tasks",
+                )
+                self.assertIsNotNone(child_boundary)
+                assert child_boundary is not None
+                child_graph = await workflow_graph_for_request(
+                    workspace=str(workspace),
+                    project_id=project_id,
+                )
+                child_snapshot = await child_graph.aget_state(
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": child_boundary.checkpoint_ns,
+                            "checkpoint_id": child_boundary.checkpoint_id,
+                        }
+                    }
+                )
+                self.assertEqual(tuple(child_snapshot.next), ("prepare_build_tasks",))
         finally:
             clear_workflow_graph_cache()
             await close_workflow_checkpointer_for_workspace(

@@ -1097,6 +1097,19 @@ async def _fork_and_start(
             "checkpoint_id": plan.checkpoint_id,
         }
     }
+    try:
+        source_snapshot = await graph.aget_state(source_config)
+    except Exception as exc:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_CHECKPOINT_INVALID",
+            "source Node Entry checkpoint 无法在 fork 前重新读取。",
+        ) from exc
+    source_next = [str(node) for node in (getattr(source_snapshot, "next", ()) or ())]
+    if source_next != source_point.next_nodes or source_next != plan.next_nodes:
+        raise RecoveryExecutionError(
+            "RECOVERY_FORK_CONTROL_FLOW_DRIFT",
+            "source Node Entry checkpoint 的 nextNodes 已偏离 Recovery authority。",
+        )
     observability = _recovery_observability(
         run_id=new_run_id,
         thread_id=source.thread_id,
@@ -1107,7 +1120,6 @@ async def _fork_and_start(
         "active_run_id": new_run_id,
         "active_thread_id": source.thread_id,
         "observability": observability,
-        "resume_from": "",
     }
     if lifecycle is not None:
         updates["lifecycle"] = application_lifecycle_payload(lifecycle)
@@ -1141,10 +1153,10 @@ async def _fork_and_start(
             "aupdate_state 没有产生新的 fork checkpoint。",
         )
     fork_next = [str(node) for node in (getattr(fork_snapshot, "next", ()) or ())]
-    if fork_next != plan.next_nodes:
+    if fork_next != source_next:
         raise RecoveryExecutionError(
-            "RECOVERY_FORK_NEXT_MISMATCH",
-            "fork checkpoint 的 nextNodes 与 RecoveryPlan 不一致。",
+            "RECOVERY_FORK_CONTROL_FLOW_DRIFT",
+            "fork identity overlay 改变了 source Node Entry checkpoint 的 nextNodes。",
         )
     values = getattr(fork_snapshot, "values", {})
     values = values if isinstance(values, dict) else {}
