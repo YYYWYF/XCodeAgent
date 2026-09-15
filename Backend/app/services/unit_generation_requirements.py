@@ -212,7 +212,7 @@ def resolve_generation_requirements(
             strategy = "prerequisite_only"
             if not any(item.unit_id == unit_id and item.capability_id == "frontend.shell.ready" for item in facts.external_capabilities):
                 fail_requirement_input("SHELL_PREREQUISITE_MISSING", "frontend:shell 缺少平台已验证的模板前置能力。", unit_ids=[unit_id])
-        elif duties and not missing:
+        elif not missing:
             strategy = "reuse_only"
         else:
             strategy = "deterministic" if unit_id == "frontend:auth-guard" else "model"

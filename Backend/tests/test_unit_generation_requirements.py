@@ -5,9 +5,8 @@ import unittest
 
 from pydantic import ValidationError
 
-from app.services.build_context_resolver import resolve_target_build_context
 from app.services.build_task_reuse import resolve_reuse_facts
-from app.services.build_task_reuse_contracts import ExternalCapability
+from app.services.build_task_reuse_contracts import ExternalCapability, ReuseFacts
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.planning_frozen import freeze_json
 from app.services.unit_generation_requirements import (
@@ -37,12 +36,54 @@ def _formal_plan(source_type: str = "database") -> dict:
     }, source_type=source_type)
 
 
+def _endpoint_designs(plan: dict, source_type: str) -> list[dict]:
+    """按当前正式 Endpoint 字段映射契约构造测试来源，不读取旧实体绑定作为生产输入。"""
+
+    designs = []
+    for contract in plan.get("api_contracts") or []:
+        for endpoint in contract.get("endpoints") or []:
+            endpoint_field = {
+                "side": "response",
+                "location": "response_body",
+                "path": "id",
+            }
+            if source_type in {"database", "external_api"}:
+                field_mappings = [{
+                    "mappingType": "source_mapping",
+                    "endpointField": endpoint_field,
+                    "sourceFields": [{
+                        "sourceType": source_type,
+                        "sourceId": f"{source_type}-source",
+                        "path": "id",
+                    }],
+                }]
+            else:
+                field_mappings = [{
+                    "mappingType": "business_description",
+                    "endpointField": endpoint_field,
+                    "businessDescription": "由当前 Endpoint 业务规则生成。",
+                }]
+            designs.append({
+                "apiContractId": contract["id"],
+                "endpointId": endpoint["id"],
+                "fieldMappings": field_mappings,
+            })
+    return designs
+
+
 def _inputs(*tasks: dict, source_type: str = "database", formal_plan: dict | None = None) -> dict:
-    """连接真实 BuildContext、Unit Skeleton、ReuseFacts，再提供既有平台 shell 证据。"""
+    """连接当前 Unit Skeleton、Endpoint Design、ReuseFacts 与平台 shell 证据。"""
 
     plan = formal_plan or _formal_plan(source_type)
     skeleton = ensure_build_unit_skeleton(plan, {})
-    context = resolve_target_build_context(plan, target_type="page", target_id="orders")
+    required_unit_ids = [
+        "frontend:shell",
+        "frontend:api-client",
+        "backend:bootstrap",
+        "backend:endpoint:orders-api:orders.list",
+        "page:orders",
+    ]
+    context = {"required_unit_ids": required_unit_ids}
     facts = resolve_reuse_facts(
         confirmed_plan=_plan(*tasks) if tasks else None, unit_skeleton=skeleton,
         build_context=context, workspace_snapshot={"workspace_revision": "snapshot-1"}, formal_plan=plan,
@@ -50,13 +91,14 @@ def _inputs(*tasks: dict, source_type: str = "database", formal_plan: dict | Non
     # 此处直接使用上游事实 DTO；真实模板检查与证据生成已由 T2.2 workspace 回归覆盖。
     facts = facts.model_copy(update={"external_capabilities": [ExternalCapability(
         unit_id="frontend:shell", capability_id="frontend.shell.ready",
-        source="template_generation_readiness", workspace_revision="snapshot-1",
+        source="template_state", workspace_revision="snapshot-1",
         source_refs={"manifest_path": ".xcodeagent/template-generation-manifest.json"},
     )]})
     return {
         "required_unit_ids": context["required_unit_ids"],
         "build_execution_scope": {"type": "page", "targetId": "orders"},
         "unit_skeleton": skeleton, "reuse_facts": facts, "formal_target": plan,
+        "endpoint_designs": _endpoint_designs(plan, source_type),
     }
 
 
@@ -161,31 +203,53 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
         self.assertEqual(error.exception.issues[0].code, "SHELL_PREREQUISITE_MISSING")
         self.assertFalse(error.exception.issues[0].retryable)
 
-    def test_model_unit_with_no_applicable_duties_is_not_planned(self) -> None:
-        """Scope 无真实接口时 API client 需求为空，model 策略本身不触发 planning。"""
+    def test_unit_with_no_applicable_duties_is_reuse_only(self) -> None:
+        """Scope 无真实接口时 API client 无需 Candidate，并保持非生成状态。"""
 
         plan = _formal_plan()
         plan["page_implementation_contracts"][0]["requiredEndpointIds"] = []
-        inputs = _inputs(formal_plan=plan)
-        inputs["required_unit_ids"] = ["frontend:api-client"]
-        result = resolve_generation_requirements(**inputs)
-        self.assertEqual(result.generation_strategy_by_unit["frontend:api-client"], "model")
+        skeleton = ensure_build_unit_skeleton(plan, {})
+        result = resolve_generation_requirements(
+            required_unit_ids=["frontend:api-client"],
+            build_execution_scope={"type": "page", "targetId": "orders"},
+            unit_skeleton=skeleton,
+            reuse_facts=ReuseFacts(
+                retained_task_ids_by_unit={},
+                reusable_capabilities_by_unit={},
+                retained_endpoint_owners=[],
+                external_capabilities=[],
+                issues=[],
+            ),
+            formal_target=plan,
+        )
+        self.assertEqual(result.generation_strategy_by_unit["frontend:api-client"], "reuse_only")
         self.assertEqual(result.generation_requirements_by_unit["frontend:api-client"], ())
         self.assertEqual(result.planning_unit_ids, ())
 
-    def test_static_scope_has_no_real_api_adapter_or_backend_duty(self) -> None:
-        """静态数据沿用正式源类型，仅生成静态接口职责和页面职责。"""
+    def test_legacy_static_source_keeps_business_description_endpoint_duties(self) -> None:
+        """旧静态实体来源不创建历史 Unit，业务说明 Endpoint 仍生成后端和页面职责。"""
 
         result = resolve_generation_requirements(**_inputs(source_type="static"))
-        self.assertEqual(set(result.planning_unit_ids), {"frontend:data:static", "page:orders"})
-        self.assertEqual([item.requirement_id for item in result.generation_requirements_by_unit["frontend:data:static"]], ["frontend.static_data_module:orders-api:orders.list"])
+        self.assertEqual(set(result.planning_unit_ids), {
+            "backend:endpoint:orders-api:orders.list",
+            "page:orders",
+        })
+        self.assertEqual(
+            result.generation_strategy_by_unit["backend:bootstrap"],
+            "reuse_only",
+        )
+        self.assertNotIn("frontend:data:static", result.generation_requirements_by_unit)
         self.assertNotIn("response-entity-adapter", result.model_dump_json())
 
     def test_backend_bootstrap_adds_missing_source_capability(self) -> None:
         """共享 bootstrap 的 database 已满足时，external_api 仍作为本轮增量。"""
 
         plan = confirm_entity_designs(_formal_plan(), source_type="external_api", entity_ids=["User"])
-        inputs = _inputs(_task("bootstrap-db", unit_id="backend:bootstrap", provides=["backend.bootstrap:database"]), formal_plan=plan)
+        inputs = _inputs(
+            _task("bootstrap-db", unit_id="backend:bootstrap", provides=["backend.bootstrap:database"]),
+            source_type="external_api",
+            formal_plan=plan,
+        )
         inputs["required_unit_ids"] = ["backend:bootstrap"]
         inputs["build_execution_scope"] = {"type": "application", "targetId": "application"}
         result = resolve_generation_requirements(**inputs)
@@ -204,9 +268,8 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
         """独立 Endpoint Scope 只为指定正式复合目标计算职责，不夹带其他页面或接口。"""
 
         inputs = _inputs()
-        context = resolve_target_build_context(inputs["formal_target"], target_type="endpoint", target_id="users.list", api_contract_id="users-api")
         inputs["build_execution_scope"] = {"type": "endpoint", "targetId": "users.list", "apiContractId": "users-api"}
-        inputs["required_unit_ids"] = context["required_unit_ids"]
+        inputs["required_unit_ids"] = ["backend:bootstrap", "backend:endpoint:users-api:users.list"]
         result = resolve_generation_requirements(**inputs)
         self.assertEqual(set(result.planning_unit_ids), {"backend:bootstrap", "backend:endpoint:users-api:users.list"})
         self.assertNotIn("orders.list", result.model_dump_json())

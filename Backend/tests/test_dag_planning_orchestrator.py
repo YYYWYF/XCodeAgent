@@ -1,6 +1,7 @@
 """T6.4/T9.2 全新有限并发链路集成 Gate，模型传输替身之外均使用真实服务。"""
 
 import asyncio
+from copy import deepcopy
 import json
 import tempfile
 import unittest
@@ -11,6 +12,11 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from app.services.api_design import (
+    api_design_business_descriptions,
+    api_design_mapping_flows,
+    api_design_source_types,
+)
 from app.services.dag_planning_orchestrator import DagPlanningError, ValidatedAssembledPlan, plan_dag_sequential
 from app.services.planning_frozen import plain_json
 from app.services.unit_generation import generate_unit_candidate_once
@@ -21,6 +27,35 @@ from tests.dag_planning_orchestrator_fixtures import model_tasks, planning_input
 from tests.planning_run_fixtures import AT
 from tests.test_unit_generation_contracts import _policy_payload
 from tests.test_unit_generation_orchestrator import _settings
+
+
+def _business_description_context(plan: dict, scope: dict) -> dict:
+    """把真实 BuildContext 的 Endpoint Design 转为纯业务说明来源。"""
+
+    context = build_context(plan, scope)
+    designs = deepcopy(context["endpoint_designs"])
+    for design in designs:
+        endpoint_field = deepcopy(design["fieldMappings"][0]["endpointField"])
+        design["fieldMappings"] = [{
+            "endpointField": endpoint_field,
+            "mappingType": "business_description",
+            "businessDescription": "由当前 Endpoint 业务规则生成。",
+        }]
+        design["sourceSnapshots"] = []
+    source_refs = dict(context.get("source_refs") or {})
+    source_refs.update({
+        "endpoint_designs": designs,
+        "mapping_flows": api_design_mapping_flows(designs),
+        "business_descriptions": api_design_business_descriptions(designs),
+    })
+    return {
+        **context,
+        "endpoint_designs": designs,
+        "source_types": api_design_source_types(designs),
+        "mapping_flows": api_design_mapping_flows(designs),
+        "business_descriptions": api_design_business_descriptions(designs),
+        "source_refs": source_refs,
+    }
 
 
 class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -325,6 +360,62 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         })
         self.assertTrue(result.assembly.assembled_plan["task_graph"]["validation"]["is_valid"])
         self.assertEqual(result.planning_run.phase, "persisting_pending")
+
+    async def test_business_description_endpoint_skips_empty_bootstrap(self):
+        """纯业务说明 Endpoint 不调度空 bootstrap，并完成真实组装和校验。"""
+
+        plan = project_plan()
+        scope = execution_scope(target_type="endpoint")
+        context = _business_description_context(plan, scope)
+        result = await self._plan(planning_inputs(
+            plan=plan,
+            scope=scope,
+            context=context,
+            required=context["required_unit_ids"],
+        ))
+        endpoint_unit = "backend:endpoint:orders-api:orders.list"
+        self.assertEqual([job.identity.unit_id for job, _ in self.calls], [endpoint_unit])
+        bootstrap = result.planning_run.unit_states["backend:bootstrap"]
+        self.assertEqual(
+            (bootstrap.generation_strategy, bootstrap.generation_status),
+            ("reuse_only", "not_required"),
+        )
+        self.assertEqual(
+            {
+                item.source_refs["kind"]
+                for item in result.generation_requirements.generation_requirements_by_unit[endpoint_unit]
+            },
+            {
+                "backend.objects",
+                "backend.application_service",
+                "backend.endpoint_controller",
+            },
+        )
+        self.assertTrue(result.assembly.assembled_plan["task_graph"]["validation"]["is_valid"])
+
+    async def test_business_description_page_skips_all_empty_shared_units(self):
+        """纯业务说明页面只调度页面和 Endpoint，不调度空共享 Unit。"""
+
+        plan = project_plan()
+        scope = execution_scope()
+        context = _business_description_context(plan, scope)
+        result = await self._plan(planning_inputs(
+            plan=plan,
+            scope=scope,
+            context=context,
+            required=context["required_unit_ids"],
+        ))
+        self.assertEqual(
+            {job.identity.unit_id for job, _ in self.calls},
+            {"backend:endpoint:orders-api:orders.list", "page:orders"},
+        )
+        for unit_id in ("backend:bootstrap", "frontend:api-client"):
+            unit = result.planning_run.unit_states[unit_id]
+            self.assertEqual(
+                (unit.generation_strategy, unit.generation_status),
+                ("reuse_only", "not_required"),
+            )
+        self.assertTrue(result.assembly.assembled_plan["task_graph"]["validation"]["is_valid"])
 
     async def test_pending_baseline_rejected_before_model_or_persistence(self):
         """Pending 不能进入新链路充当历史基线，前置失败不写 Run。"""

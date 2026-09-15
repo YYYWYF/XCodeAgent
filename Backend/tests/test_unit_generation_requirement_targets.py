@@ -226,6 +226,10 @@ class UnitGenerationRequirementTargetTests(unittest.TestCase):
         ))
         self.assertEqual(requirements["backend:bootstrap"], ())
         self.assertEqual(
+            result.generation_strategy_by_unit["backend:bootstrap"],
+            "reuse_only",
+        )
+        self.assertEqual(
             result.planning_unit_ids,
             ("backend:endpoint:orders-api:orders.list",),
         )

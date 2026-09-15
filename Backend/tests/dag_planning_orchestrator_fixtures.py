@@ -194,7 +194,7 @@ def planning_inputs(*, plan=None, baseline=None, required=None, scope=None, cont
     facts = resolve_reuse_facts(confirmed_plan=baseline, unit_skeleton=skeleton,
                                build_context=context, workspace_snapshot=snapshot, formal_plan=plan)
     facts = facts.model_copy(update={"external_capabilities": (ExternalCapability(
-        unit_id="frontend:shell", capability_id="frontend.shell.ready", source="template_generation_readiness",
+        unit_id="frontend:shell", capability_id="frontend.shell.ready", source="template_state",
         workspace_revision=snapshot["workspace_revision"], source_refs={"manifest_path": ".xcodeagent/template-generation-manifest.json"},
     ),)})
     try:
