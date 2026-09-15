@@ -1,9 +1,11 @@
-// 武汉分行需求回检系统 · 新建应用生命周期（刚创建，需求收集前）。
+// 武汉分行需求回检系统 · 预置版本生命周期基线（验收完成态：当前迭代与已发布历史共用）。
 import type { ApplicationLifecycle } from '../../src/renderer/src/typings'
 
 /**
  * 验收完成态 lifecycle(ready_for_workbench + acceptance completed)。
- * 用于版本演示:达到此态的迭代版本已经具备发布条件。
+ * 当前迭代 v1.3 用它表达"旅程已走完、测试/审查/验收全部通过、停在验收阶段
+ * 等待用户生成版本"；已发布历史版本(v1.0-v1.2)用它表达发布时的旅程终态。
+ * 六个阶段全部到达：顶部阶段条可任意切换，静态回看任一阶段的样貌。
  */
 export function makeCompleteLifecycle(appId: string, appName: string): ApplicationLifecycle {
   const now = new Date().toISOString()
@@ -43,7 +45,7 @@ export function makeCompleteLifecycle(appId: string, appName: string): Applicati
   } as unknown as ApplicationLifecycle
 }
 
-// 最近项目演示从当前已发布版本进入，实时 lifecycle 与 v1.3 一致停在审查完成态。
+// 实时 lifecycle 与当前迭代 v1.3 一致：全部阶段通过，定位验收阶段，等待用户生成版本。
 export const pmsNewLifecycle: ApplicationLifecycle = makeCompleteLifecycle(
   'app-pms-new',
   '武汉分行需求回检系统'

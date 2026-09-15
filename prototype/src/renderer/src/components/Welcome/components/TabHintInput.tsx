@@ -1,4 +1,4 @@
-import { AutoComplete, Input } from 'antd'
+import { Input } from 'antd'
 import type { FormInstance, InputProps } from 'antd'
 import { useTabToFillPlaceholder } from '../hooks/useTabToFillPlaceholder'
 import { cx } from '../../../utils'
@@ -29,31 +29,6 @@ export function TabHintInput({ placeholder, className, form, fieldName, ...props
 
   return (
     <Input
-      {...props}
-      className={cx('tab-hint-input', className)}
-      placeholder={buildTabHintPlaceholder(placeholder)}
-      onKeyDown={handleKeyDown}
-    />
-  )
-}
-
-/**
- * 带 Tab 键填充提示的 AutoComplete 组件
- *
- * 在 placeholder 后添加 "按 Tab 采用" 提示，
- * 用户按 Tab 键可快速填充 placeholder 内容到输入框。
- */
-export function TabHintAutoComplete({
-  placeholder,
-  className,
-  form,
-  fieldName,
-  ...props
-}: any & { form: FormInstance; fieldName: string | string[] }) {
-  const handleKeyDown = useTabToFillPlaceholder(form, fieldName)
-
-  return (
-    <AutoComplete
       {...props}
       className={cx('tab-hint-input', className)}
       placeholder={buildTabHintPlaceholder(placeholder)}

@@ -7,6 +7,7 @@ import type {
 } from '../../typings'
 import type { ProcessStepRecord } from '../../service/agUiAgent'
 import { nextLifecycleRevision } from './revision'
+import { replayDelay } from './replayClock'
 import { workflowNode } from '../workflowGraphs'
 import { planningGate, type InitializationPlanningRecord } from '../../initializationPlanning'
 
@@ -23,15 +24,9 @@ export type PlanningTrajectory = {
   events: () => WorkflowEvent[]
 }
 
-/** 等待短暂演示时长，让规划进度具备可观察的节奏。 */
+/** 等待短暂演示时长，让规划进度具备可观察的节奏；历史回放快进时立即兑现。 */
 export function planningDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) { reject(new Error('生成已停止。')); return }
-    const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, ms)
-    /** 取消演示计时并停止当前节点，避免停止后的迟到写入。 */
-    const abort = (): void => { clearTimeout(timer); reject(new Error('生成已停止。')) }
-    signal?.addEventListener('abort', abort, { once: true })
-  })
+  return replayDelay(ms, signal)
 }
 
 /** 创建由工作流图定义驱动的规划轨迹播放器。 */

@@ -12,13 +12,13 @@ type Props = {
   floating?: boolean
 }
 
-const LAYOUT_OPTIONS: Array<{ label: string; value: RightPanelLayout }> = [
-  { value: 'hidden', label: '隐藏右侧面板' },
-  { value: 'split', label: '分栏显示右侧面板' },
-  { value: 'full', label: '右侧面板全宽覆盖' }
+const LAYOUT_OPTIONS: Array<{ label: string; text: string; value: RightPanelLayout }> = [
+  { value: 'hidden', label: '隐藏右侧面板', text: '隐藏' },
+  { value: 'split', label: '分栏显示右侧面板', text: '分栏' },
+  { value: 'full', label: '右侧面板全宽覆盖', text: '全宽' }
 ]
 
-/** 右侧布局三档控制器：隐藏、分栏和全宽覆盖均可直接选择。 */
+/** 右侧布局三档控制器：展开时带用途说明与文字标签，收起时退化为贴边细条。 */
 export default function RightPanelLayoutControl({
   value,
   onChange,
@@ -31,6 +31,10 @@ export default function RightPanelLayoutControl({
       className={cx('right-panel-layout-control', docked && 'docked', floating && 'floating')}
       role="group"
     >
+      {/* 悬停展开时显示的控制条用途说明，帮助首次使用者理解三个档位的含义。 */}
+      <span aria-hidden="true" className={cx('right-panel-layout-caption')}>
+        右侧面板布局
+      </span>
       {LAYOUT_OPTIONS.map((option) => (
         <button
           key={option.value}
@@ -47,6 +51,7 @@ export default function RightPanelLayoutControl({
           type="button"
         >
           <span aria-hidden="true" className={cx('right-panel-layout-icon')} />
+          <span aria-hidden="true" className={cx('right-panel-layout-text')}>{option.text}</span>
         </button>
       ))}
     </div>

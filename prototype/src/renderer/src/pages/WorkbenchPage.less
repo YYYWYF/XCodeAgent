@@ -392,6 +392,26 @@
 }
 
 /* 生成版本弹框:提醒区 + 描述输入 + 进度态。 */
+.@{class-prefix}-workbench-generate-repo {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--wb-surface, #f7f8fc);
+  border: 1px solid var(--wb-border, #d8e0ea);
+  border-radius: 8px;
+  color: var(--wb-accent, #6b3cf0);
+
+  .@{class-prefix}-workbench-generate-repo-url {
+    // 行内仓库地址可能很长：等宽字体 + 任意位置折行，保证弹框内完整可读。
+    overflow-wrap: anywhere;
+    font-family: var(--wb-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
 .@{class-prefix}-workbench-generate-reminder {
   margin: 0 0 14px;
   padding: 12px 14px;

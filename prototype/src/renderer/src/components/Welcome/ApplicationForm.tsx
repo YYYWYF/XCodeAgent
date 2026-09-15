@@ -3,7 +3,6 @@ import {
   BankOutlined,
   BgColorsOutlined,
   CloudOutlined,
-  DatabaseOutlined,
   DashboardOutlined,
   DesktopOutlined,
   FolderOpenOutlined,
@@ -13,30 +12,25 @@ import {
   MenuOutlined,
   MessageOutlined,
   ProjectOutlined,
-  RadarChartOutlined,
   ShopOutlined,
   ShoppingOutlined,
   TeamOutlined,
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import { Button, Form, Input, message, Radio, Switch, Typography } from 'antd'
+import { Button, Form, Input, Radio, Switch } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
 import type { ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
 import {
   applicationIconOptions,
-  datasourceTypeOptions,
   initialApplicationDraft,
-  terminalLabels,
-  trackMethodOptions
+  terminalLabels
 } from './constants'
-import { TabHintInput, TabHintAutoComplete } from './components/TabHintInput'
+import { TabHintInput } from './components/TabHintInput'
 
 const { TextArea } = Input
-const { Text } = Typography
 
 const iconComponents: Record<string, typeof AppstoreOutlined> = {
   AppstoreOutlined,
@@ -71,53 +65,10 @@ function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode
 
 export default function ApplicationForm({ form, onSelectProjectParent, selectingParent }: Props) {
   const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? true
-  const trackEnabled = Form.useWatch(['track', 'enable'], form) ?? true
-  const apiTrackEnabled = Form.useWatch(['apiTrack', 'enable'], form) ?? true
   const useHeaderEnabled = Form.useWatch(['layout', 'useHeader'], form) ?? true
   const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? false
   const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
   const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
-  const datasourceType = Form.useWatch(['datasource', 'type'], form) ?? 'None'
-  const dbUseBuiltin = Form.useWatch(['datasource', 'db', 'useBuiltin'], form) ?? false
-  const dbConnectionMode = Form.useWatch(['datasource', 'db', 'connectionMode'], form) ?? 'plant'
-  const datasourceIsDatabase = datasourceType === 'DataBase'
-  const datasourceShowPlantFields =
-    datasourceIsDatabase && !dbUseBuiltin && dbConnectionMode === 'plant'
-  const datasourceDescription = datasourceTypeOptions.find(
-    (option) => option.value === datasourceType
-  )?.description
-
-  // 未开放选项（外部 API / 平台内置数据库 / DBID 连接）不使用 disabled，
-  // 改为视觉灰化 + 点击提示开发中并回退到可用值，避免「鼠标禁用」的挫败感。
-  useEffect(() => {
-    if (datasourceType === 'API') {
-      message.info('外部 API 接入开发中，暂不可选')
-      form.setFieldValue(['datasource', 'type'], 'DataBase')
-    }
-  }, [datasourceType, form])
-
-  useEffect(() => {
-    if (dbUseBuiltin) {
-      message.info('平台内置数据库开发中，暂不可选')
-      form.setFieldValue(['datasource', 'db', 'useBuiltin'], false)
-    }
-  }, [dbUseBuiltin, form])
-
-  useEffect(() => {
-    if (dbConnectionMode === 'dbid') {
-      message.info('通过 DBID 连接开发中，暂不可选')
-      form.setFieldValue(['datasource', 'db', 'connectionMode'], 'plant')
-    }
-  }, [dbConnectionMode, form])
-
-  const [trackMethodSearch, setTrackMethodSearch] = useState('')
-  const trackMethodFilteredOptions = useMemo(() => {
-    const keyword = trackMethodSearch.trim().toLowerCase()
-    if (!keyword) return trackMethodOptions
-    return trackMethodOptions.filter((option) =>
-      option.value.toLowerCase().includes(keyword)
-    )
-  }, [trackMethodSearch])
 
   const headerBar = useHeaderEnabled ? (
     <rect fill="#e8e8e8" height="6" rx="2" width="96" x="0" y="0" />
@@ -157,6 +108,15 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
               选择文件夹
             </Button>
           </Input.Group>
+        </Form.Item>
+        {/* 版本管理本质是 Git 管理：与本地目录成对配置远程码云仓库，生成新版本时的提交与 Tag 都落在该仓库。 */}
+        <Form.Item
+          extra="行内代码托管平台地址；生成新版本时会提交到该仓库并打 Tag。"
+          label="码云仓库地址"
+          name="gitRepoUrl"
+          rules={[{ required: true, whitespace: true, message: '请输入码云仓库地址' }]}
+        >
+          <Input placeholder="请输入码云仓库地址，如 https://gitee.example.com/分行科技/需求回检系统" />
         </Form.Item>
       </section>
 
@@ -335,92 +295,6 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
         </Form.Item>
       </section>
 
-      <section
-        className={cx(
-          'application-form-section',
-          'application-form-section--full'
-        )}
-      >
-        <SectionTitle icon={<DatabaseOutlined />}>数据源</SectionTitle>
-        <Form.Item label="数据源类型" name={['datasource', 'type']}>
-          <Radio.Group buttonStyle="solid">
-            {datasourceTypeOptions.map((option) => (
-              <Radio.Button
-                className={option.disabled ? cx('datasource-pending-option') : undefined}
-                key={option.value}
-                value={option.value}
-              >
-                {option.label}
-              </Radio.Button>
-            ))}
-          </Radio.Group>
-        </Form.Item>
-        {datasourceDescription ? (
-          <Text className={cx('datasource-type-hint')} type="secondary">
-            {datasourceDescription}
-          </Text>
-        ) : null}
-        {datasourceIsDatabase ? (
-          <>
-            <Form.Item label="数据库类型" name={['datasource', 'db', 'useBuiltin']}>
-              <Radio.Group buttonStyle="solid">
-                <Radio.Button className={cx('datasource-pending-option')} value={true}>
-                  平台内置数据库
-                </Radio.Button>
-                <Radio.Button value={false}>外部数据库</Radio.Button>
-              </Radio.Group>
-            </Form.Item>
-            <Form.Item label="连接方案" name={['datasource', 'db', 'connectionMode']}>
-              <Radio.Group buttonStyle="solid">
-                <Radio.Button className={cx('datasource-pending-option')} value="dbid">
-                  通过 DBID 连接
-                </Radio.Button>
-                <Radio.Button value="plant">通过账号密码连接</Radio.Button>
-              </Radio.Group>
-            </Form.Item>
-            {datasourceShowPlantFields ? (
-              <div className={cx('datasource-db-grid')}>
-                <Form.Item
-                  label="数据库地址"
-                  name={['datasource', 'db', 'plantMode', 'domain']}
-                  rules={[{ required: true, whitespace: true, message: '请填写数据库地址' }]}
-                >
-                  <Input />
-                </Form.Item>
-                <Form.Item
-                  label="端口"
-                  name={['datasource', 'db', 'plantMode', 'port']}
-                  rules={[{ required: true, message: '请填写端口' }]}
-                >
-                  <Input />
-                </Form.Item>
-                <Form.Item
-                  label="用户名"
-                  name={['datasource', 'db', 'plantMode', 'userName']}
-                  rules={[{ required: true, whitespace: true, message: '请填写用户名' }]}
-                >
-                  <Input />
-                </Form.Item>
-                <Form.Item
-                  label="密码"
-                  name={['datasource', 'db', 'plantMode', 'pwd']}
-                  rules={[{ required: true, whitespace: true, message: '请填写密码' }]}
-                >
-                  <Input.Password />
-                </Form.Item>
-                <Form.Item
-                  label="Schema"
-                  name={['datasource', 'db', 'plantMode', 'schema']}
-                  rules={[{ required: true, whitespace: true, message: '请填写 Schema' }]}
-                >
-                  <Input />
-                </Form.Item>
-              </div>
-            ) : null}
-          </>
-        ) : null}
-      </section>
-
       <section className={cx('application-form-section', 'application-form-section--full')}>
         <SectionTitle icon={<BgColorsOutlined />}>主题</SectionTitle>
         <Form.Item
@@ -485,75 +359,6 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
           rules={[{ required: authEnabled, message: '启用认证后请填写一号通clientId' }]}
         >
           <Input disabled={!authEnabled} />
-        </Form.Item>
-      </section>
-
-      <section
-        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !trackEnabled && 'application-form-section--disabled')}
-      >
-        <div className={cx('application-form-section-head')}>
-          <SectionTitle icon={<RadarChartOutlined />}>页面埋点</SectionTitle>
-          <Form.Item
-            className={cx('application-form-switch')}
-            name={['track', 'enable']}
-            valuePropName="checked"
-            noStyle
-          >
-            <Switch checkedChildren="启用" unCheckedChildren="关闭" />
-          </Form.Item>
-        </div>
-        <Form.Item
-          label="上传标识"
-          name={['track', 'uploadId']}
-          rules={[{ required: trackEnabled, message: '启用页面埋点后请填写上传标识' }]}
-        >
-          <Input disabled={!trackEnabled} />
-        </Form.Item>
-        <Form.Item label="上报地址" name={['track', 'apiHost']}>
-          <Input disabled={!trackEnabled} />
-        </Form.Item>
-        <Form.Item label="请求方式" name={['track', 'method']}>
-          <TabHintAutoComplete
-            form={form}
-            fieldName={['track', 'method']}
-            allowClear={false}
-            defaultActiveFirstOption={false}
-            disabled={!trackEnabled}
-            filterOption={false}
-            onSearch={setTrackMethodSearch}
-            onSelect={() => setTrackMethodSearch('')}
-            options={trackMethodFilteredOptions}
-            placeholder="post"
-          />
-        </Form.Item>
-      </section>
-
-      <section
-        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !apiTrackEnabled && 'application-form-section--disabled')}
-      >
-        <div className={cx('application-form-section-head')}>
-          <SectionTitle icon={<RadarChartOutlined />}>接口埋点</SectionTitle>
-          <Form.Item
-            className={cx('application-form-switch')}
-            name={['apiTrack', 'enable']}
-            valuePropName="checked"
-            noStyle
-          >
-            <Switch checkedChildren="启用" unCheckedChildren="关闭" />
-          </Form.Item>
-        </div>
-        <Form.Item
-          label="业务标识"
-          name={['apiTrack', 'businessId']}
-          rules={[{ required: apiTrackEnabled, message: '启用接口埋点后请填写业务标识' }]}
-        >
-          <Input disabled={!apiTrackEnabled} />
-        </Form.Item>
-        <Form.Item label="链路透传信息" name={['apiTrack', 'traceBaggage']}>
-          <Input disabled={!apiTrackEnabled} />
-        </Form.Item>
-        <Form.Item label="接口埋点地址" name={['apiTrack', 'apiTrackHost']}>
-          <Input disabled={!apiTrackEnabled} />
         </Form.Item>
       </section>
     </Form>

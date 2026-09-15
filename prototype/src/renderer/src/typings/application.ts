@@ -36,6 +36,8 @@ export interface ApplicationSchemaConfig {
   appIcon: string;
   senario: string;
   terminal: ApplicationTerminal;
+  /** 码云仓库地址（行内代码托管平台）：版本管理本质是 Git 管理，生成新版本的提交与 Tag 都落在该仓库。 */
+  gitRepoUrl: string;
   layout: {
     type: ApplicationLayoutType;
     useHeader: boolean;
@@ -373,6 +375,8 @@ export interface ApplicationDraft {
   appIcon: string;
   senario: string;
   projectPath: string;
+  /** 码云仓库地址：新建应用时必填，作为本应用所有版本提交与 Tag 的远程仓库。 */
+  gitRepoUrl: string;
   terminal: ApplicationTerminal;
   layout: ApplicationSchemaConfig['layout'];
   theme: ApplicationSchemaConfig['theme'];

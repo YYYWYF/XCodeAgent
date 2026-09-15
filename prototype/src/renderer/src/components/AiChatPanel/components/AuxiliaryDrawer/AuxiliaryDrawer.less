@@ -15,7 +15,9 @@
   animation: auxiliary-drawer-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-auxiliary-drawer-body { padding: 14px; overflow: hidden; }
-.@{class-prefix}-auxiliary-drawer-badge > .anticon { color: var(--wb-accent); font-size: 17px; }
+// 数据来源抽屉 body 内边距为 14px 且视图容器无额外留白（任务管理是 16px + 顶部 2px），
+// Tab 条通栏负边距需按实际内边距抵消，才能与任务管理抽屉一样贴住抽屉头下缘。
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-conversation-tabbar { margin: -14px -14px 0; }
 
 @keyframes auxiliary-drawer-in {
   from {
@@ -258,7 +260,8 @@
 
 
 // 任务管理视图：顶部过滤标签 + 单一扁平列表，常规 / 临时任务混排并以类型标签区分。
-.@{class-prefix}-conversation-management {
+// 类名带 -view 后缀：抽屉根节点会携带同名模式类，视图类若与之同名，这组样式会误命中抽屉根节点。
+.@{class-prefix}-conversation-management-view {
   display: flex;
   min-height: 0;
   flex: 1 1 auto;

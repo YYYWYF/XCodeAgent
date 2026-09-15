@@ -96,6 +96,13 @@ export function subscribeInitializationPlanning(listener: () => void): () => voi
   return () => { window.removeEventListener(CHANGE_EVENT, listener); window.removeEventListener('storage', listener) }
 }
 
+/** 清除指定应用当前版本的规划记录，并通知订阅者。 */
+export function clearInitializationPlanningRecord(application: Pick<ApplicationConfig, 'id' | 'currentVersionId'>): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.removeItem(storageKey(application))
+  window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: { applicationId: application.id, versionId: application.currentVersionId || 'current' } }))
+}
+
 /** 清除原型规划记录，静态演示基线仍保留在演示数据目录中。 */
 export function clearInitializationPlanningRecords(): void {
   if (typeof window === 'undefined') return
