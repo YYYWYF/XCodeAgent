@@ -187,7 +187,7 @@ class UnitGenerationContractTests(unittest.TestCase):
             policy.frozen_contract_read_limits["max_reads"] = 20
 
     def test_policy_defaults_and_invalid_budgets(self) -> None:
-        """策略默认 Local=3、SDK retry=0、tokens=4096，拒绝越界预算与错误类型。"""
+        """策略默认 Local=3、SDK max_retries=0、tokens=4096，拒绝越界预算与错误类型。"""
 
         policy = UnitGenerationPolicy(**_policy_payload())
         self.assertEqual((policy.local_max_attempts, policy.model_max_retries, policy.model_max_tokens), (3, 0, 4096))
@@ -207,7 +207,7 @@ class UnitGenerationContractTests(unittest.TestCase):
                 UnitGenerationPolicy(**{**_policy_payload(), **change})
 
     def test_policy_accepts_sdk_retry_boundaries(self) -> None:
-        """SDK retry 允许保持默认 0 或由 production 显式配置为 2。"""
+        """SDK max_retries 允许保持默认 0 或由 production 显式配置为 2。"""
 
         for retries in (0, 2):
             with self.subTest(retries=retries):
