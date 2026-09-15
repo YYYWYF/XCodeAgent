@@ -40,6 +40,9 @@ _RUNTIME_BINDING_KEYS = frozenset(
         "active_thread_id",
         "observability",
         "resume_from",
+        # lifecycle 在 Native child fork 时会刷新 active run ownership；权威业务
+        # 状态仍由工作区 lifecycle 文件持有，因此 Graph 中的投影不能污染语义摘要。
+        "lifecycle",
     }
 )
 
