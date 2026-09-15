@@ -630,7 +630,7 @@ def resolve_execution_slice(
     tasks: list[dict[str, Any]],
     build_execution_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """按应用、页面或数据源范围裁剪 BuildScheduler 的可执行任务视图。"""
+    """按应用、页面、接口、数据源或 Agent 范围裁剪可执行任务视图。"""
 
     scope = _normalized_scope(build_execution_scope)
     unit_ids = _execution_unit_ids(build_task_plan, scope)
@@ -870,18 +870,6 @@ def _execution_unit_ids(
     )
     if scope["type"] == "application":
         return unit_ids
-
-    if scope["type"] == "agent":
-        build_context = build_task_plan.get("build_context")
-        required = _string_list(
-            (build_context if isinstance(build_context, dict) else {}).get(
-                "required_unit_ids"
-            )
-        )
-        if not required:
-            return []
-        available = set(unit_ids)
-        return [unit_id for unit_id in required if unit_id in available]
 
     available = set(unit_ids)
     selected: list[str] = []

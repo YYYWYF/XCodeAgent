@@ -2,8 +2,9 @@
 
 ## 当前生产状态和目标动作
 
-生产 Workflow 已默认绑定 async Planning/Confirm adapter：生成成功只写
-`build-task-plan.pending.json`，Confirm 才提升到 `build-task-plan.json`。确认卡的目标动作集合为：
+生产 Workflow 已默认绑定 async Planning/Confirm adapter：生成成功只写当前
+`build-dag.v4` 的 `build-task-plan.pending.json`，Confirm 才提升到
+`build-task-plan.json`。确认卡的目标动作集合为：
 
 ```text
 confirm
@@ -43,11 +44,13 @@ workspace_snapshot 和 reuse_facts。传入的基线摘要还必须与实际 For
 3. 当前 Formal 摘要必须等于 `base_confirmed_plan_digest`。存在但损坏或不合格的
    Formal 不能被当作空基线。
 4. 当前完整输入指纹与 Scope 必须匹配。Pending 正文若携带 Scope，也必须一致。
-5. DAG 必须 ready、validation 有效且无错误、没有 blocked batch，保留全部 baseline
+5. Pending 必须冻结与当前正式 Planning 输入完全一致且结构有效的 V2 `template_context`；
+   缺失或漂移时不能提升 Formal，应重新生成 DAG，但不需要重新拉取模板代码。
+6. DAG 必须为当前 `build-dag.v4`，且 ready、validation 有效且无错误、没有 blocked batch，保留全部 baseline
    Task ID。复用实际 DAG compiler 对精确任务合同检查语义、依赖和调度，并核验
    已保存的 nodes/edges/topological_order。检查不回写重编译结果，也不补齐或修复任务。
-6. 构造 ConfirmedPlan，通过共享 `write_json_atomic` 原子替换 Formal。
-7. 删除仍匹配本请求且摘要自洽的 Pending。
+7. 构造 ConfirmedPlan，通过共享 `write_json_atomic` 原子替换 Formal。
+8. 删除仍匹配本请求且摘要自洽的 Pending。
 
 正式文件保存 `confirmation_status=confirmed`、一次生成的 `confirmed_at` 和
 `confirmed_from={planning_run_id, draft_digest}`，移除草稿专用的 `draft_identity`。

@@ -12,10 +12,16 @@ from app.services.application_lifecycle import (
     complete_workspace_bootstrap,
 )
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
+from app.services.workspace_bootstrap.git_template_package import (
+    GitTemplatePackageBuilder,
+)
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 from app.services.workspace_bootstrap.models import ArchiveLimits, WorkspaceBootstrapError
 from app.services.workspace_bootstrap.readiness import validate_workspace_bootstrap_readiness
-from app.services.workspace_bootstrap.requested_config import compile_template_requested_config
+from app.services.workspace_bootstrap.requested_config import (
+    bootstrap_managed_roots,
+    compile_template_requested_config,
+)
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
 from app.services.workspace_bootstrap.template_package import validate_template_package
 
@@ -67,15 +73,26 @@ class WorkspaceBootstrapService:
         coordinator_started = True
         try:
             requested_config = await asyncio.to_thread(compile_template_requested_config, workspace)
-            template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
-            client = TemplateEngineClient(
-                base_url=self._settings.template_engine_base_url,
-                token=self._settings.template_engine_token,
-                connect_timeout=self._settings.template_engine_connect_timeout_seconds,
-                read_timeout=self._settings.template_engine_read_timeout_seconds,
-                max_package_bytes=self._settings.template_package_max_bytes,
+            managed_roots = await asyncio.to_thread(
+                bootstrap_managed_roots, workspace
             )
-            download = await client.generate(requested_config)
+            template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
+            if self._settings.template_bootstrap_source == "git":
+                download = await asyncio.to_thread(
+                    GitTemplatePackageBuilder(self._settings).generate,
+                    workspace,
+                    requested_config,
+                    managed_roots,
+                )
+            else:
+                client = TemplateEngineClient(
+                    base_url=self._settings.template_engine_base_url,
+                    token=self._settings.template_engine_token,
+                    connect_timeout=self._settings.template_engine_connect_timeout_seconds,
+                    read_timeout=self._settings.template_engine_read_timeout_seconds,
+                    max_package_bytes=self._settings.template_package_max_bytes,
+                )
+                download = await client.generate(requested_config)
             download_path = download.temporary_path
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             package = await asyncio.to_thread(
@@ -86,6 +103,7 @@ class WorkspaceBootstrapService:
                     max_files=self._settings.template_package_max_files,
                     max_extracted_bytes=self._settings.template_package_max_extracted_bytes,
                 ),
+                managed_roots,
             )
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             template_mutation_coordinator.enter_commit_section(workspace)
@@ -98,6 +116,7 @@ class WorkspaceBootstrapService:
                 validate_workspace_bootstrap_readiness(
                     root,
                     requested_config=requested_config,
+                    managed_roots=managed_roots,
                 )
                 lifecycle = complete_workspace_bootstrap(
                     root,
@@ -110,6 +129,7 @@ class WorkspaceBootstrapService:
                 workspace=workspace,
                 archive_path=package.archive_path,
                 template_state=package.template_state,
+                managed_roots=managed_roots,
                 readiness=commit_readiness,
             )
             if lifecycle is None:

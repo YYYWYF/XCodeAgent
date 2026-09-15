@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.domain.api_design import API_DESIGN_SCHEMA_VERSION
+from app.domain.build_task_plan import BUILD_TASK_PLAN_SCHEMA_VERSION
 
 from copy import deepcopy
 from hashlib import sha256
@@ -50,7 +51,7 @@ def ensure_build_unit_skeleton(
     unit_graph = _unit_graph(project_plan, build_units)
     return {
         **current_plan,
-        "schema_version": "build-dag.v4",
+        "schema_version": BUILD_TASK_PLAN_SCHEMA_VERSION,
         "application": {
             "unit_id": "application:root",
             "status": "prepared",

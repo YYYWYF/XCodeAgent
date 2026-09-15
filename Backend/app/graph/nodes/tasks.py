@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.domain.build_task_plan import BUILD_TASK_PLAN_SCHEMA_VERSION
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
@@ -550,7 +551,9 @@ def _existing_build_task_plan(state: ProjectState) -> dict:
     plan = load_confirmed_build_task_plan(workspace_root(state))
     path = build_task_plan_json_path(state)
     if plan is None and (path.exists() or path.is_symlink()):
-        raise ValueError("正式文件存在但不是已确认且通过校验的 build-dag.v3。")
+        raise ValueError(
+            f"正式文件存在但不是已确认且通过校验的 {BUILD_TASK_PLAN_SCHEMA_VERSION}。"
+        )
     return plan or {}
 
 

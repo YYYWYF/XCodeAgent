@@ -43,6 +43,7 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.technical = {
             "confirmation_status": "confirmed", "entities": [],
             "api_contracts": [{"id": "api", "endpoints": [{"id": "get"}]}],
+            "agent_contracts": [],
         }
         self.write_plans()
         state = create_application_lifecycle(application_id="test", application_name="测试")
@@ -76,6 +77,30 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         run_id = self.start(target)
         complete_initial_development(self.workspace, run_id=run_id)
 
+    def start_agent(
+        self,
+        agent_id: str,
+        *,
+        run_id: str | None = None,
+        replaces: str | None = None,
+        initial: bool = True,
+    ) -> str:
+        """通过真实 lifecycle 服务登记智能体初次开发或同目标续接。"""
+
+        run_id = run_id or f"run-{agent_id}"
+        start_workbench_execution(
+            self.workspace,
+            scope="agent",
+            target_id=agent_id,
+            page_id=None,
+            thread_id=f"thread-{agent_id}",
+            run_id=run_id,
+            phase="api_design_readiness_gate",
+            initial_development_entry=initial,
+            replaces_run_id=replaces,
+        )
+        return run_id
+
     def test_initial_catalog_is_gray(self) -> None:
         """目录初始化不因实体数量或规划文件存在而标记开发完成。"""
 
@@ -85,6 +110,40 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.assertFalse(gate.allowed)
         self.assertNotIn("testEntryGate", json.loads((self.workspace / ".xcodeagent/application-lifecycle.json").read_text()))
         self.assertEqual(application_lifecycle_payload(state)["testEntryGate"]["total"], 3)
+
+    def test_agent_is_counted_as_first_class_completion_target(self) -> None:
+        """智能体按稳定 Agent ID 独立计数，并在同目标失败续接后提交首次完成。"""
+
+        self.technical["agent_contracts"] = [{"agentId": "support-agent"}]
+        self.write_plans()
+        state = refresh_development_artifacts(self.workspace)
+        gate = test_entry_gate(state)
+        self.assertEqual((gate.total, gate.completed, gate.pending), (4, 0, 4))
+        self.assertEqual(state.development_artifacts.agents["support-agent"].initial_development_status, "pending")
+        self.assertEqual(gate.blockers[-1].agent_id, "support-agent")
+
+        failed_run = self.start_agent("support-agent")
+        state = refresh_development_artifacts(self.workspace)
+        self.assertEqual(state.development_artifacts.agents["support-agent"].initial_development_status, "in_progress")
+        update_workbench_execution(
+            self.workspace,
+            run_id=failed_run,
+            phase="build",
+            status=WorkbenchExecutionStatus.FAILED,
+        )
+        retry_run = self.start_agent(
+            "support-agent",
+            run_id="retry-support-agent",
+            replaces=failed_run,
+            initial=False,
+        )
+        state = complete_initial_development(self.workspace, run_id=retry_run)
+        self.assertEqual(state.active_executions[retry_run].development_purpose, "initial")
+        self.assertEqual(state.development_artifacts.agents["support-agent"].initial_development_status, "completed")
+
+        for target in ("one", "two", "get"):
+            self.finish(target)
+        self.assertTrue(test_entry_gate(require_test_entry(self.workspace)).allowed)
 
     def test_entity_counts_and_requires_persisted_confirmation(self) -> None:
         """实体必须确认正式绑定才计完成，等待确认和重试保持开发中。"""

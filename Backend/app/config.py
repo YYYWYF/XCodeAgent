@@ -80,6 +80,18 @@ class Settings:
     langsmith_endpoint: str = ""
     template_engine_base_url: str = ""
     template_engine_token: str = ""
+    template_bootstrap_source: str = "engine"
+    template_git_frontend_repository_url: str = (
+        "https://github.com/ruyue1/frontend-template.git"
+    )
+    template_git_backend_repository_url: str = (
+        "https://github.com/Hupy2118/springboot-template.git"
+    )
+    template_git_agent_runtime_repository_url: str = (
+        "https://github.com/Bettetman/agent-runtime-template.git"
+    )
+    template_git_agent_runtime_branch: str = "master"
+    template_git_clone_timeout_seconds: float = 120.0
     template_engine_connect_timeout_seconds: float = 10.0
     template_engine_read_timeout_seconds: float = 120.0
     template_package_max_bytes: int = 104857600
@@ -154,6 +166,22 @@ class Settings:
             )
         custom_headers_raw = os.getenv("MODEL_CUSTOM_HEADERS", "")
         custom_headers = _parse_custom_headers(custom_headers_raw)
+        template_bootstrap_source = (
+            os.getenv("XCODEAGENT_TEMPLATE_BOOTSTRAP_SOURCE", "engine").strip().lower()
+            or "engine"
+        )
+        if template_bootstrap_source not in {"engine", "git"}:
+            raise ValueError(
+                "XCODEAGENT_TEMPLATE_BOOTSTRAP_SOURCE 必须是 engine 或 git。"
+            )
+        template_reconcile_enabled = _env_bool(
+            "XCODEAGENT_TEMPLATE_RECONCILE_ENABLED", default=True
+        )
+        if template_bootstrap_source == "git" and template_reconcile_enabled:
+            raise ValueError(
+                "Git Bootstrap 不支持 Template Engine V2 二次注入，"
+                "请设置 XCODEAGENT_TEMPLATE_RECONCILE_ENABLED=false。"
+            )
         return cls(
             model_base_url=base_url,
             model_api_key=_required_any("MODEL_API_KEY", "OPENAI_API_KEY"),
@@ -224,6 +252,26 @@ class Settings:
                 "XCODEAGENT_TEMPLATE_ENGINE_BASE_URL", ""
             ).rstrip("/"),
             template_engine_token=os.getenv("XCODEAGENT_TEMPLATE_ENGINE_TOKEN", ""),
+            template_bootstrap_source=template_bootstrap_source,
+            template_git_frontend_repository_url=os.getenv(
+                "XCODEAGENT_TEMPLATE_GIT_FRONTEND_REPOSITORY_URL",
+                "https://github.com/ruyue1/frontend-template.git",
+            ).strip(),
+            template_git_backend_repository_url=os.getenv(
+                "XCODEAGENT_TEMPLATE_GIT_BACKEND_REPOSITORY_URL",
+                "https://github.com/Hupy2118/springboot-template.git",
+            ).strip(),
+            template_git_agent_runtime_repository_url=os.getenv(
+                "XCODEAGENT_TEMPLATE_GIT_AGENT_RUNTIME_REPOSITORY_URL",
+                "https://github.com/Bettetman/agent-runtime-template.git",
+            ).strip(),
+            template_git_agent_runtime_branch=(
+                os.getenv("XCODEAGENT_TEMPLATE_GIT_AGENT_RUNTIME_BRANCH", "master").strip()
+                or "master"
+            ),
+            template_git_clone_timeout_seconds=float(
+                os.getenv("XCODEAGENT_TEMPLATE_GIT_CLONE_TIMEOUT_SECONDS", "120")
+            ),
             template_engine_connect_timeout_seconds=float(
                 os.getenv("XCODEAGENT_TEMPLATE_ENGINE_CONNECT_TIMEOUT_SECONDS", "10")
             ),
@@ -241,9 +289,7 @@ class Settings:
                     "XCODEAGENT_TEMPLATE_PACKAGE_MAX_EXTRACTED_BYTES", "524288000"
                 )
             ),
-            template_reconcile_enabled=_env_bool(
-                "XCODEAGENT_TEMPLATE_RECONCILE_ENABLED", default=True
-            ),
+            template_reconcile_enabled=template_reconcile_enabled,
         )
 
 

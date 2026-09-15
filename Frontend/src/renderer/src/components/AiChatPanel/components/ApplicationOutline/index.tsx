@@ -352,6 +352,12 @@ export default function ApplicationOutline({
               >
                 <CaretDownOutlined className={cx(!agentsExpanded && 'collapsed')} />
                 <span>智能体</span>
+                <span className={cx('development-count')}>
+                  {developmentCompletedCount(
+                    agents.map((agent) => developmentArtifacts?.agents[agent.agentId])
+                  )}
+                  /{agents.length}
+                </span>
               </button>
               {agentsExpanded ? (
                 <div className={cx('agent-group')}>
@@ -368,7 +374,12 @@ export default function ApplicationOutline({
                           <RobotOutlined />
                         </span>
                         <span className={cx('agent-copy')}>
-                          <span className={cx('outline-label')}>{agent.label}</span>
+                          <span className={cx('outline-label-row')}>
+                            <span className={cx('outline-label')}>{agent.label}</span>
+                            <DevelopmentStatusDot
+                              progress={developmentArtifacts?.agents[agent.agentId]}
+                            />
+                          </span>
                           <span className={cx('agent-meta')}>{agent.agentId}</span>
                         </span>
                       </button>

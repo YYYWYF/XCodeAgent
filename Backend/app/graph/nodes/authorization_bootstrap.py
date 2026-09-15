@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.domain.build_task_plan import BUILD_TASK_PLAN_SCHEMA_VERSION
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.authorization_bootstrap import run_authorization_bootstrap
@@ -52,7 +53,7 @@ def _build_plan_gate_error(workspace: str, state: ProjectState) -> str:
         plan = load_build_task_plan_json(path)
     except (OSError, TypeError, ValueError):
         return "最新 Build DAG 无法读取，不能执行权限数据库初始化。"
-    if plan.get("schema_version") != "build-dag.v4":
+    if plan.get("schema_version") != BUILD_TASK_PLAN_SCHEMA_VERSION:
         return "最新 Build DAG 版本无效，不能执行权限数据库初始化。"
     if plan.get("status") != "ready" or plan.get("confirmation_status") != "confirmed":
         return "最新 Build DAG 尚未确认，不能执行权限数据库初始化。"

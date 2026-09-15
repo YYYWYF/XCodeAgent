@@ -26,12 +26,14 @@ import {
   planExecutionContextForEndpoint,
   planExecutionContextForPage,
   planExecutionForPage,
+  planExecutionForScope,
   planExecutionShowsDebugResume,
   shouldRenderPlanExecutionDock,
   withWorkflowExecutionStatus,
   workflowCanRetryFailedTasks,
   workflowCodeReviewRetry,
   workflowInteractionAvailability,
+  workflowResumableExecution,
   workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
@@ -1363,6 +1365,111 @@ test('接口执行按复合资源键恢复且不会串到同名 endpoint', () =>
   )
   assert.equal(
     planExecutionContextForEndpoint(lifecycle, 'customers-api', 'list-orders').execution,
+    undefined
+  )
+})
+
+test('新 DAG 用当前 Agent Scope execution 接替历史 Workflow runId', () => {
+  const currentExecution = pageExecution({
+    scope: 'agent',
+    targetId: 'hr-assistant',
+    pageId: undefined,
+    runId: 'run-agent-current',
+    threadId: 'thread-agent-current',
+    status: 'failed'
+  })
+  const lifecycle = planLifecycle(currentExecution)
+  lifecycle.activeRunId = currentExecution.runId
+  const workflow = previewWorkflow(
+    {
+      buildExecutionScope: { type: 'agent', targetId: 'hr-assistant' }
+    },
+    'run-agent-history'
+  )
+  workflow.threadId = 'thread-agent-history'
+
+  assert.equal(
+    planExecutionForScope(
+      lifecycle,
+      workflow.summary.buildExecutionScope,
+      { runId: workflow.runId, threadId: workflow.threadId }
+    )?.runId,
+    currentExecution.runId
+  )
+  assert.equal(
+    workflowResumableExecution(workflow, lifecycle)?.runId,
+    currentExecution.runId
+  )
+})
+
+test('同一 runId 投影到其他目标时拒绝恢复 Agent', () => {
+  const pageRun = pageExecution({
+    scope: 'page',
+    targetId: 'orders',
+    pageId: 'orders',
+    runId: 'run-shared',
+    threadId: 'thread-shared',
+    status: 'failed'
+  })
+  const lifecycle = planLifecycle(pageRun)
+  lifecycle.activeRunId = pageRun.runId
+
+  assert.equal(
+    planExecutionForScope(
+      lifecycle,
+      { type: 'agent', targetId: 'hr-assistant' },
+      { runId: pageRun.runId, threadId: pageRun.threadId }
+    ),
+    undefined
+  )
+})
+
+test('非当前且非原 thread 的同 Agent execution 不能按时间猜测恢复', () => {
+  const unrelatedExecution = pageExecution({
+    scope: 'agent',
+    targetId: 'hr-assistant',
+    pageId: undefined,
+    runId: 'run-agent-unrelated',
+    threadId: 'thread-agent-unrelated',
+    status: 'failed'
+  })
+  const lifecycle = planLifecycle(unrelatedExecution)
+  lifecycle.activeRunId = undefined
+
+  assert.equal(
+    planExecutionForScope(
+      lifecycle,
+      { type: 'agent', targetId: 'hr-assistant' },
+      { runId: 'run-agent-history', threadId: 'thread-agent-history' }
+    ),
+    undefined
+  )
+})
+
+test('磁盘 PendingPlan 恢复时不再回退已删除的历史 Workflow runId', () => {
+  const historicalExecution = pageExecution({
+    scope: 'agent',
+    targetId: 'hr-assistant',
+    pageId: undefined,
+    runId: 'run-agent-history',
+    threadId: 'thread-agent-history',
+    status: 'awaiting_user'
+  })
+  const snapshotLifecycle = planLifecycle(historicalExecution)
+  const workflow = previewWorkflow(
+    {
+      lifecycle: snapshotLifecycle,
+      buildExecutionScope: { type: 'agent', targetId: 'hr-assistant' }
+    },
+    historicalExecution.runId
+  )
+  workflow.threadId = historicalExecution.threadId
+  const authoritativeLifecycle = planLifecycle(historicalExecution)
+  authoritativeLifecycle.activeRunId = undefined
+  authoritativeLifecycle.activeExecutions = {}
+
+  assert.equal(
+    workflowResumableExecution(workflow, authoritativeLifecycle),
     undefined
   )
 })

@@ -47,7 +47,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         """写入有效最小 Pending，并返回服务端签发的请求身份。"""
 
         plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "status": "ready",
             "task_graph": {"validation": {"is_valid": True, "errors": []}},
         }

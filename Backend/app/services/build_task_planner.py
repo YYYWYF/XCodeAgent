@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.domain.build_task_plan import BUILD_TASK_PLAN_SCHEMA_VERSION
 from app.domain.models import (
     BuildTaskExecutionContractError,
     resolve_build_task_execution_contract,
@@ -1084,6 +1085,14 @@ def _task_semantic_errors(
         if owner == "agent":
             if task_type != "agent.code":
                 errors.append(f"Task {task_id} is agent owner but task_type is {task_type}.")
+            if (
+                str(task.get("status") or "pending")
+                not in {"completed", "already_satisfied"}
+                and not _string_list(task.get("target_files"))
+            ):
+                errors.append(
+                    f"Agent task {task_id} must declare non-empty target_files before Build."
+                )
             source_refs = task.get("source_refs")
             source_refs = source_refs if isinstance(source_refs, dict) else {}
             agent_module = str(source_refs.get("agent_module") or "").strip()
@@ -1576,7 +1585,7 @@ def create_build_task_plan(
     plan = {
         **base_plan,
         "version": "3.0.0",
-        "schema_version": "build-dag.v4",
+        "schema_version": BUILD_TASK_PLAN_SCHEMA_VERSION,
         "template_context": deepcopy(_template_context(context)),
         "status": (
             "ready"

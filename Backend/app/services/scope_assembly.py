@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BeforeValidator, PlainSerializer, StringConstraints, ValidationError
 
+from app.domain.build_task_plan import BUILD_TASK_PLAN_SCHEMA_VERSION
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
     tasks_from_build_task_plan,
@@ -23,6 +24,7 @@ from app.services.planning_frozen import (
     tuple_input,
 )
 from app.services.planning_issues import ValidationIssue
+from app.services.template_state import validate_template_context
 from app.services.unit_generation_contracts import CandidateAttempt, GenerationRequirement
 
 
@@ -108,20 +110,26 @@ def _retained_tasks(base_confirmed_plan: Mapping[str, Any] | None) -> tuple[dict
     if base_confirmed_plan is None:
         return {}, []
     if not isinstance(base_confirmed_plan, Mapping):
-        _raise_input("SCOPE_BASELINE_INVALID", "base_confirmed_plan 必须是 confirmed v3 DAG 或 None。")
+        _raise_input(
+            "SCOPE_BASELINE_INVALID",
+            f"base_confirmed_plan 必须是 confirmed {BUILD_TASK_PLAN_SCHEMA_VERSION} DAG 或 None。",
+        )
     plan = deepcopy(plain_json(base_confirmed_plan))
     registry = plan.get("task_registry")
     graph = plan.get("task_graph")
     validation = graph.get("validation") if isinstance(graph, dict) else None
     if (
-        plan.get("schema_version") != "build-dag.v3"
+        plan.get("schema_version") != BUILD_TASK_PLAN_SCHEMA_VERSION
         or plan.get("confirmation_status") != "confirmed"
         or plan.get("status") == "failed"
         or not isinstance(registry, dict)
         or not isinstance(validation, dict)
         or validation.get("is_valid") is not True
     ):
-        _raise_input("SCOPE_BASELINE_INVALID", "base_confirmed_plan 必须是正式 confirmed 且有效的 v3 DAG。")
+        _raise_input(
+            "SCOPE_BASELINE_INVALID",
+            f"base_confirmed_plan 必须是正式 confirmed 且有效的 {BUILD_TASK_PLAN_SCHEMA_VERSION} DAG。",
+        )
 
     task_ids = [
         task_id
@@ -379,6 +387,15 @@ def assemble_scope_build_task_plan(
 
     all_tasks = [*retained, *candidates]
     skeleton = _validate_task_units(skeleton_plan, all_tasks)
+    try:
+        template_binding = validate_template_context(
+            plain_json(build_context.get("template_context"))
+        )
+    except ValueError as exc:
+        _raise_input(
+            "SCOPE_TEMPLATE_CONTEXT_INVALID",
+            f"Scope Assembly 缺少有效的 V2 TemplateState 绑定：{exc}",
+        )
     retained_task_ids = tuple(str(task["id"]) for task in retained)
     candidate_task_ids = tuple(str(task["id"]) for task in candidates)
     retained_id_set = set(retained_task_ids)
@@ -411,6 +428,9 @@ def assemble_scope_build_task_plan(
     graph_valid = assembled.get("task_graph", {}).get("validation", {}).get("is_valid") is True
     blocked_batches = assembled.get("execution", {}).get("blocked_batches", [])
     assembled = dict(assembled)
+    # Unit Planning 的 BuildContext 是模板绑定来源；最终 DAG 必须冻结同一份快照，
+    # 否则 Confirm 后到 Build 才发现缺字段，会形成无法解释的二次阻断。
+    assembled["template_context"] = template_binding
     # Assembly 只产生等待 Global Validation 的内存草稿；正式 PendingPlan 生命周期
     # 由后续 Controller / persistence 在 Global success 后赋予，且不能继承 confirmed 基线。
     assembled.pop("confirmation_status", None)

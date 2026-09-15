@@ -5,6 +5,7 @@ from hashlib import sha256
 import json
 from typing import Any
 
+from app.domain.build_task_plan import BUILD_TASK_PLAN_SCHEMA_VERSION
 from app.services.authorization_resource_catalog import compile_frontend_resource_catalog, resource_catalog_fingerprint
 from app.services.authorization_resource_inspection import verified_auth_resource_capability
 from app.services.build_task_reuse_contracts import ExternalCapability, RetainedEndpointOwner, ReuseFacts
@@ -52,12 +53,15 @@ def _baseline_tasks(
     registry = plan.get("task_registry")
     if (
         plan.get("confirmation_status") != "confirmed"
-        or plan.get("schema_version") != "build-dag.v3"
+        or plan.get("schema_version") != BUILD_TASK_PLAN_SCHEMA_VERSION
         or plan.get("status") == "failed"
         or not isinstance(validation, Mapping) or validation.get("is_valid") is not True
         or not isinstance(registry, Mapping)
     ):
-        issues.append(_issue("CONFIRMED_BASELINE_INVALID", "输入必须是正式 confirmed 且有效的 v3 DAG。"))
+        issues.append(_issue(
+            "CONFIRMED_BASELINE_INVALID",
+            f"输入必须是正式 confirmed 且有效的 {BUILD_TASK_PLAN_SCHEMA_VERSION} DAG。",
+        ))
         return []
     tasks = []
     for task_id, task in sorted(registry.items()):

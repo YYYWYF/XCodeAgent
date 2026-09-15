@@ -579,6 +579,18 @@ def build_workflow_ag_ui_stream(
                                if development_target.get("type") == "endpoint" else {}),
                         }
                         initial_state["selectedPageId"] = execution["targetId"] if execution["scope"] == "page" else ""
+                    elif execution.get("scope") == "agent":
+                        # Agent 与页面、Endpoint 一样从服务端 execution 恢复权威 Graph 目标。
+                        initial_state["build_execution_scope"] = {
+                            "type": "agent",
+                            "targetId": execution["targetId"],
+                        }
+                        initial_state["selected_agent_id"] = execution["targetId"]
+                        initial_state["detail_target_type"] = "agent"
+                        initial_state["selectedPageId"] = ""
+                        initial_state["selected_api_contract_id"] = ""
+                        initial_state["selected_endpoint_id"] = ""
+                        initial_state["selected_entity_id"] = ""
                     initial_state["lifecycle"] = lifecycle_payload
                     result["lifecycle"] = lifecycle_payload
                     # 生命周期写入成功后立即投影，不能等待首个 Graph 节点结束。

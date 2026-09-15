@@ -9,16 +9,25 @@ from unittest.mock import patch
 
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
 from app.services.template_reconcile.protocol_v2 import TemplateStateV2
-from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
+from app.services.workspace_bootstrap.git_manager import (
+    BootstrapGitError,
+    BootstrapGitManager,
+)
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 
 
 class _FailingGitManager:
     """模拟 Git 初始化后 baseline commit 失败的受控依赖。"""
 
-    def initialize_baseline(self, workspace: str | Path) -> str:
+    def initialize_baseline(
+        self,
+        workspace: str | Path,
+        *,
+        managed_roots: tuple[str, ...] = ("frontend", "backend"),
+    ) -> str:
         """留下 `.git` 后失败，用于验证 Journal 的受管回滚。"""
 
+        del managed_roots
         Path(workspace, ".git").mkdir()
         raise OSError("git commit failed")
 
@@ -35,12 +44,14 @@ def _template_state() -> TemplateStateV2:
     })
 
 
-def _write_package(path: Path) -> None:
-    """写入已经通过上游 Package 校验的最小 frontend/backend ZIP。"""
+def _write_package(path: Path, *, include_agent_runtime: bool = False) -> None:
+    """写入已经通过上游 Package 校验的最小动态 roots ZIP。"""
 
     with zipfile.ZipFile(path, "w") as package:
         package.writestr("frontend/package.json", "{}\n")
         package.writestr("backend/pom.xml", "<project />\n")
+        if include_agent_runtime:
+            package.writestr("agent-runtime/pyproject.toml", "[project]\n")
         package.writestr(str(TEMPLATE_STATE_RELATIVE_PATH), json.dumps(_template_state().model_dump(mode="json")))
 
 
@@ -53,6 +64,7 @@ class WorkspaceMaterializerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"
             workspace.mkdir()
+            (workspace / ".DS_Store").write_bytes(b"macOS metadata")
             archive = Path(directory) / "template.zip"
             _write_package(archive)
 
@@ -69,7 +81,14 @@ class WorkspaceMaterializerTests(unittest.TestCase):
             self.assertFalse((workspace / ".xcodeagent/bootstrap-staging").exists())
             exclude = (workspace / ".git/info/exclude").read_text(encoding="utf-8")
             self.assertIn(".xcodeagent/", exclude)
+            self.assertIn(".DS_Store", exclude)
             self.assertTrue(BootstrapGitManager().verify_baseline(workspace))
+
+            (workspace / "unexpected.txt").write_text("dirty\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                BootstrapGitError, r"工作树必须保持干净：\?\? unexpected\.txt"
+            ):
+                BootstrapGitManager().verify_baseline(workspace)
 
     def test_second_root_move_failure_rolls_back_all_managed_outputs(self) -> None:
         """第二个 root 的移动失败时不得留下第一个 root、Git 或 TemplateState。"""
@@ -101,6 +120,29 @@ class WorkspaceMaterializerTests(unittest.TestCase):
 
             for relative in ("frontend", "backend", ".git", TEMPLATE_STATE_RELATIVE_PATH):
                 self.assertFalse((workspace / relative).exists(), relative)
+
+    def test_materialize_commits_agent_runtime_in_same_baseline(self) -> None:
+        """确认第三根与前后端在同一事务和根 Git baseline 中提交。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            archive = Path(directory) / "template.zip"
+            _write_package(archive, include_agent_runtime=True)
+            roots = ("frontend", "backend", "agent-runtime")
+
+            WorkspaceMaterializer().materialize(
+                workspace=workspace,
+                archive_path=archive,
+                template_state=_template_state(),
+                managed_roots=roots,
+            )
+
+            self.assertTrue((workspace / "agent-runtime/pyproject.toml").is_file())
+            tracked = BootstrapGitManager()._run(
+                workspace, ["git", "ls-files", "--", "agent-runtime"]
+            )
+            self.assertIn("agent-runtime/pyproject.toml", tracked)
 
     def test_template_state_write_failure_rolls_back_git_and_roots(self) -> None:
         """State 原子写入失败时已有 Git baseline 与两个 roots 必须一并回滚。"""

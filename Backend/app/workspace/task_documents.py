@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from threading import RLock
 
+from app.domain.build_task_plan import BUILD_TASK_PLAN_SCHEMA_VERSION
 from app.services.build_task_plan_lifecycle import DraftIdentity
 from app.workspace.json_documents import write_json_atomic
 from app.workspace.spec_documents import workflow_artifact_root
@@ -198,7 +199,7 @@ def write_pending_build_task_plan_atomic(
 
 
 def load_confirmed_build_task_plan(workspace_root: str | Path) -> dict[str, Any] | None:
-    """只读正式路径中已确认且有效的 v3 DAG，缺失或不合格时返回空基线。"""
+    """只读正式路径中已确认且符合当前版本的 DAG，缺失或不合格时返回空基线。"""
 
     path = build_task_plan_json_path({"workspace": str(workspace_root)})
     try:
@@ -210,7 +211,7 @@ def load_confirmed_build_task_plan(workspace_root: str | Path) -> dict[str, Any]
     if (
         not isinstance(plan, dict)
         or plan.get("confirmation_status") != "confirmed"
-        or plan.get("schema_version") != "build-dag.v3"
+        or plan.get("schema_version") != BUILD_TASK_PLAN_SCHEMA_VERSION
         or plan.get("status") == "failed"
     ):
         return None

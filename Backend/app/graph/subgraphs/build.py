@@ -12,6 +12,7 @@ from typing import Any, Callable
 from langgraph.config import get_stream_writer
 
 from app.config import dag_business_self_check_enabled
+from app.domain.build_task_plan import BUILD_TASK_PLAN_SCHEMA_VERSION
 from app.agents.database.generator import generate_database_with_deep_agent
 from app.agents.agent_runtime.generator import generate_agent_runtime_with_deep_agent
 from app.agents.data_source.generator import generate_data_sources_with_deep_agent
@@ -1072,8 +1073,10 @@ def _latest_build_task_plan_for_build(
     if not isinstance(build_task_plan, dict):
         return {}, ["最新 build-task-plan.json 根结构必须是对象。"]
     errors: list[str] = []
-    if build_task_plan.get("schema_version") != "build-dag.v4":
-        errors.append("最新 Build DAG schema_version 不是 build-dag.v4。")
+    if build_task_plan.get("schema_version") != BUILD_TASK_PLAN_SCHEMA_VERSION:
+        errors.append(
+            f"最新 Build DAG schema_version 不是 {BUILD_TASK_PLAN_SCHEMA_VERSION}。"
+        )
     if "template_variant" in build_task_plan:
         errors.append("最新 Build DAG 不得包含已删除的 template_variant。")
     if workspace:
@@ -1084,7 +1087,10 @@ def _latest_build_task_plan_for_build(
                 build_task_plan.get("template_context"),
             )
         except ValueError as exc:
-            errors.append(f"Build DAG TemplateState 绑定失效：{exc}")
+            errors.append(
+                f"Build DAG TemplateState 绑定失效：{exc}"
+                "请重新生成 Build DAG；当前模板代码无需重新拉取。"
+            )
     if build_task_plan.get("status") != "ready":
         errors.append(
             f"最新 Build DAG status={build_task_plan.get('status') or 'unknown'}，不能进入 Build。"
@@ -1798,7 +1804,10 @@ def run_build_scheduler(
         if build_summary.get("status") == "requires_confirmation"
         else "failed"
     )
-    if workflow_status == "completed":
+    # Agent Runtime 只生成 agent-runtime 内的七模块代码，不拥有前端页面路由或
+    # 权限常量。其确认 DAG 因此不包含 route_projection，也不能套用应用页面投影门禁。
+    requires_platform_projection = execution_slice["scope"].get("type") != "agent"
+    if workflow_status == "completed" and requires_platform_projection:
         try:
             # 仅当所有页面/API/后端任务已成功后，才验证真实页面并写入平台托管区。
             # apply_platform_projections 内部的 Route Projection 会拒绝缺失的页面文件。
@@ -1837,6 +1846,9 @@ def run_build_scheduler(
             if edd_errors:
                 workflow_status = "failed"
                 build_summary = {**build_summary, "status": "failed", "authorization_edd_errors": edd_errors}
+    elif workflow_status == "completed":
+        platform_projection_evidence = {}
+        build_events.append("scheduler:platform_projection_not_applicable")
     else:
         platform_projection_evidence = state.get("platform_projection_evidence", {})
     pending_integration = {}

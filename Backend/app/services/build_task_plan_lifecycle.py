@@ -8,10 +8,12 @@ from typing import Annotated, Any, Literal
 
 from pydantic import StringConstraints, ValidationError
 
+from app.domain.build_task_plan import BUILD_TASK_PLAN_SCHEMA_VERSION
 from app.services.dag_planning_inputs import SequentialPlanningInputs, _input_digest
 from app.services.build_task_planner import replace_build_task_plan_tasks
 from app.services.planning_frozen import FrozenJsonObject, FrozenPlanningModel, plain_json
 from app.services.planning_run_contracts import PlanningRun
+from app.services.template_state import validate_template_context
 
 
 _Identifier = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
@@ -151,7 +153,7 @@ def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
     graph = plan.get("task_graph")
     validation = graph.get("validation") if isinstance(graph, dict) else None
     execution = plan.get("execution")
-    if (plan.get("schema_version") != "build-dag.v3" or plan.get("status") != "ready"
+    if (plan.get("schema_version") != BUILD_TASK_PLAN_SCHEMA_VERSION or plan.get("status") != "ready"
             or plan.get("confirmation_status") != "pending"
             or not isinstance(validation, dict) or validation.get("is_valid") is not True
             or validation.get("errors") or not isinstance(execution, dict)
@@ -160,6 +162,17 @@ def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
             or any(not isinstance(batch, dict) or batch.get("mode") == "blocked"
                    for batch in execution["batches"])):
         return ["Pending DAG 未通过 ready/validation/execution 门禁。"]
+    try:
+        pending_template_context = validate_template_context(
+            plan.get("template_context")
+        )
+        current_template_context = validate_template_context(
+            plain_json(inputs.build_context.get("template_context"))
+        )
+    except ValueError as exc:
+        return [f"Pending DAG 的 V2 TemplateState 绑定无效：{exc}"]
+    if pending_template_context != current_template_context:
+        return ["Pending DAG 的 TemplateState 绑定与当前正式 Planning 输入不一致。"]
     registry = plan.get("task_registry")
     units = plan.get("build_units")
     if (not isinstance(registry, dict) or not isinstance(units, dict)

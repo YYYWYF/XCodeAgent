@@ -98,7 +98,7 @@ def begin_workflow_lifecycle(
         phase in {"unit_test", "unit_test_repair", "test_phase_confirmation"}
         and not lifecycle.active_formal_revision
         and isinstance(executed_scope, dict)
-        and executed_scope.get("type") in {"page", "endpoint"}
+        and executed_scope.get("type") in {"page", "endpoint", "agent"}
         and bool(executed_scope.get("targetId"))
     )
     if use_executed_scope:
@@ -119,6 +119,24 @@ def begin_workflow_lifecycle(
     ).strip()
     if explicit_resume_run_id:
         previous = lifecycle.active_executions.get(explicit_resume_run_id)
+        # Agent DAG 确认仍处于 prepare_build_tasks，不能依赖 Build 后 checkpoint
+        # 纠正客户端默认 application；此时以待确认 execution 的服务端目标为权威。
+        agent_task_plan_confirmation = (
+            previous is not None
+            and previous.scope == "agent"
+            and previous.status == WorkbenchExecutionStatus.AWAITING_USER
+            and previous.pending_interaction is not None
+            and previous.pending_interaction.type
+            == PendingInteractionType.TASK_PLAN_CONFIRMATION
+            and scope_type == "application"
+            and target_id == "application"
+        )
+        if agent_task_plan_confirmation:
+            assert previous is not None
+            scope = {"type": "agent", "targetId": previous.target_id}
+            scope_type = "agent"
+            target_id = previous.target_id
+            page_id = None
         # 先校验应用级调试执行的原身份，再以服务端切片纠正新执行；页面之间仍禁止串目标。
         application_resume = use_executed_scope and previous is not None and previous.scope == "application"
         _validate_resumable_execution(
@@ -313,7 +331,11 @@ def _validate_resumable_execution(
     ):
         raise ApplicationLifecycleConflictError("不能从其他对话接替工作台执行。")
     if execution.scope != scope or execution.target_id != target_id:
-        raise ApplicationLifecycleConflictError("恢复目标与原工作台执行不一致。")
+        raise ApplicationLifecycleConflictError(
+            "恢复目标与原工作台执行不一致："
+            f"原执行={execution.scope}:{execution.target_id}，"
+            f"本次请求={scope}:{target_id}。"
+        )
 
 
 def project_workflow_lifecycle_boundary(

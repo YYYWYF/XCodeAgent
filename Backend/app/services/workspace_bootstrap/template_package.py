@@ -1,4 +1,4 @@
-"""校验 Template Engine `/v1/generate` ZIP 的固定根目录契约。"""
+"""校验 Engine 或 Git Bootstrap ZIP 的动态根目录契约。"""
 
 from __future__ import annotations
 
@@ -11,18 +11,27 @@ from app.services.workspace_bootstrap.archive_security import validate_archive_e
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageError, ValidatedTemplatePackage
 
 _STATE_PATH = ".xcodeagent/template-state.json"
-_MANAGED_ROOTS = frozenset({"frontend", "backend"})
+_BASE_MANAGED_ROOTS = ("frontend", "backend")
 
 
-def validate_template_package(archive_path: str | Path, limits: ArchiveLimits) -> ValidatedTemplatePackage:
-    """校验 ZIP 安全性、唯一 State 和 frontend/backend 固定顶层根。"""
+def validate_template_package(
+    archive_path: str | Path,
+    limits: ArchiveLimits,
+    managed_roots: tuple[str, ...] = _BASE_MANAGED_ROOTS,
+) -> ValidatedTemplatePackage:
+    """校验 ZIP 安全性、唯一 State 和本轮固定顶层 roots。"""
 
     path = Path(archive_path)
+    try:
+        if path.stat().st_size > limits.max_package_bytes:
+            raise TemplatePackageError("模板 ZIP 超过下载大小限制。")
+    except OSError as exc:
+        raise TemplatePackageError("模板 ZIP 无法读取。") from exc
     try:
         with zipfile.ZipFile(path) as package:
             entries = validate_archive_entries(package, limits)
             files = [entry for entry in entries if not entry.is_dir()]
-            _validate_roots(files)
+            _validate_roots(files, managed_roots)
             state_entries = [entry for entry in files if entry.filename == _STATE_PATH]
             if len(state_entries) != 1:
                 raise TemplatePackageError("模板 ZIP 必须且只能包含 .xcodeagent/template-state.json。")
@@ -38,19 +47,28 @@ def validate_template_package(archive_path: str | Path, limits: ArchiveLimits) -
         raise TemplatePackageError("模板 ZIP 已损坏或格式无效。") from exc
 
 
-def _validate_roots(entries: list[zipfile.ZipInfo]) -> None:
+def _validate_roots(
+    entries: list[zipfile.ZipInfo], managed_roots: tuple[str, ...]
+) -> None:
     """以 exact allow-list 限制初次 Bootstrap 可物化的全部根路径。"""
 
+    expected_roots = frozenset(managed_roots)
+    if not expected_roots or len(expected_roots) != len(managed_roots):
+        raise TemplatePackageError("Bootstrap managed roots 配置无效。")
     seen_roots: set[str] = set()
     for entry in entries:
         path = PurePosixPath(entry.filename)
         if entry.filename == _STATE_PATH:
             continue
         root = path.parts[0] if path.parts else ""
-        if root not in _MANAGED_ROOTS:
-            raise TemplatePackageError("模板 ZIP 仅允许 frontend、backend 和唯一 TemplateState。")
+        if root not in expected_roots:
+            raise TemplatePackageError(
+                "模板 ZIP 仅允许本轮 managed roots 和唯一 TemplateState。"
+            )
         if len(path.parts) < 2:
             raise TemplatePackageError("模板 ZIP 不允许在 managed root 放置顶层普通文件。")
         seen_roots.add(root)
-    if seen_roots != _MANAGED_ROOTS:
-        raise TemplatePackageError("模板 ZIP 必须同时包含 frontend 和 backend 文件。")
+    if seen_roots != expected_roots:
+        raise TemplatePackageError(
+            "模板 ZIP 必须包含本轮全部 managed roots 文件。"
+        )

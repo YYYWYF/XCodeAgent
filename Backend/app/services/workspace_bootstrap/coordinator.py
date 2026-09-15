@@ -157,7 +157,14 @@ class TemplateMutationCoordinator:
 def _cleanup_interrupted_bootstrap(workspace: Path) -> None:
     """精确删除首次 Bootstrap 受管 roots、仓库、State 与 staging。"""
 
-    for relative in ("frontend", "backend", ".git", TEMPLATE_STATE_RELATIVE_PATH, BOOTSTRAP_STAGING_RELATIVE_PATH):
+    for relative in (
+        "frontend",
+        "backend",
+        "agent-runtime",
+        ".git",
+        TEMPLATE_STATE_RELATIVE_PATH,
+        BOOTSTRAP_STAGING_RELATIVE_PATH,
+    ):
         path = workspace / relative
         if path.is_symlink() or path.is_file():
             path.unlink(missing_ok=True)
@@ -165,7 +172,14 @@ def _cleanup_interrupted_bootstrap(workspace: Path) -> None:
             shutil.rmtree(path)
     remaining = [
         str(relative)
-        for relative in ("frontend", "backend", ".git", TEMPLATE_STATE_RELATIVE_PATH, BOOTSTRAP_STAGING_RELATIVE_PATH)
+        for relative in (
+            "frontend",
+            "backend",
+            "agent-runtime",
+            ".git",
+            TEMPLATE_STATE_RELATIVE_PATH,
+            BOOTSTRAP_STAGING_RELATIVE_PATH,
+        )
         if (workspace / relative).exists() or (workspace / relative).is_symlink()
     ]
     if remaining:

@@ -17,7 +17,7 @@ from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import TemplatePackageError, WorkspaceBootstrapError
 
 BOOTSTRAP_STAGING_RELATIVE_PATH = Path(".xcodeagent/bootstrap-staging")
-_ROOTS = ("frontend", "backend")
+_BASE_ROOTS = ("frontend", "backend")
 
 
 @dataclass
@@ -72,22 +72,25 @@ class WorkspaceMaterializer:
         workspace: str | Path,
         archive_path: str | Path,
         template_state: TemplateStateV2,
+        managed_roots: tuple[str, ...] = _BASE_ROOTS,
         readiness: Callable[[Path], None] | None = None,
     ) -> str:
-        """在 staging 解压后提交两个根、Git baseline 与唯一 TemplateState。"""
+        """在 staging 解压后提交本轮 roots、Git baseline 与唯一 TemplateState。"""
 
         root = Path(workspace).expanduser().resolve()
-        self._preflight(root)
+        self._preflight(root, managed_roots)
         journal = BootstrapJournal(workspace=root)
         try:
-            journal.staging = self._extract_to_staging(root, Path(archive_path))
-            for name in _ROOTS:
+            journal.staging = self._extract_to_staging(
+                root, Path(archive_path), managed_roots
+            )
+            for name in managed_roots:
                 source = journal.staging / name
                 target = root / name
                 os.replace(source, target)
                 journal.moved_roots.append(target)
             journal.git_initialized = True
-            self._git_manager.initialize_baseline(root)
+            self._git_manager.initialize_baseline(root, managed_roots=managed_roots)
             _write_template_state(root / TEMPLATE_STATE_RELATIVE_PATH, template_state)
             journal.template_state_written = True
             _remove_managed_path(journal.staging)
@@ -105,20 +108,25 @@ class WorkspaceMaterializer:
                 pass
             raise
 
-    def _preflight(self, workspace: Path) -> None:
+    def _preflight(self, workspace: Path, managed_roots: tuple[str, ...]) -> None:
         """拒绝覆盖已有模板 roots、仓库或唯一模板状态。"""
 
         if not workspace.is_dir() or workspace.is_symlink():
             raise WorkspaceBootstrapError("Workspace 必须是已存在且非符号链接的目录。")
         collisions = [
             name
-            for name in ("frontend", "backend", ".git", str(TEMPLATE_STATE_RELATIVE_PATH))
+            for name in (*managed_roots, ".git", str(TEMPLATE_STATE_RELATIVE_PATH))
             if (workspace / name).exists() or (workspace / name).is_symlink()
         ]
         if collisions:
             raise WorkspaceBootstrapError("Workspace 已存在 Bootstrap 受管产物：" + "、".join(collisions))
 
-    def _extract_to_staging(self, workspace: Path, archive_path: Path) -> Path:
+    def _extract_to_staging(
+        self,
+        workspace: Path,
+        archive_path: Path,
+        managed_roots: tuple[str, ...],
+    ) -> Path:
         """逐条写入已验证 ZIP，绝不使用 `extractall()`。"""
 
         staging = workspace / BOOTSTRAP_STAGING_RELATIVE_PATH / uuid.uuid4().hex
@@ -132,7 +140,7 @@ class WorkspaceMaterializer:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with package.open(entry, "r") as source, target.open("xb") as destination:
                         shutil.copyfileobj(source, destination)
-            if not all((staging / name).is_dir() for name in _ROOTS):
+            if not all((staging / name).is_dir() for name in managed_roots):
                 raise TemplatePackageError("模板 ZIP 解压后缺少受管根目录。")
             return staging
         except Exception:

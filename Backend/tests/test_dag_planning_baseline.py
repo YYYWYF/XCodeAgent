@@ -35,7 +35,7 @@ class DagPlanningBaselineTests(unittest.TestCase):
                     }
                 )
                 self.assertEqual(result["status"], "ready")
-                self.assertEqual(result["schema_version"], "build-dag.v3")
+                self.assertEqual(result["schema_version"], "build-dag.v4")
                 self.assertEqual(result["build_execution_scope"], scope)
                 self.assertEqual(result["task_graph"]["validation"], {"is_valid": True, "errors": []})
                 self.assertEqual(set(result["task_registry"]), expected_ids)

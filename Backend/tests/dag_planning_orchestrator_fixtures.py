@@ -183,10 +183,15 @@ def planning_inputs(*, plan=None, baseline=None, required=None, scope=None, cont
             } for key in ("a", "b", "c", "history")],
         }
     scope = scope or {"type": "application", "targetId": "application"}
-    context = context or {"scope": scope, "template_variant": "main"}
+    context = context or {"scope": scope}
     context = {
         **context,
         "endpoint_designs": context.get("endpoint_designs") or _fixture_endpoint_designs(plan),
+        "template_context": context.get("template_context") or {
+            "state_path": ".xcodeagent/template-state.json",
+            "template_revision": "fixture-template-r1",
+            "effective_capabilities": {},
+        },
     }
     context = {**context, "required_unit_ids": required if required is not None else ["frontend:shell", "page:a", "page:b", "page:c"]}
     snapshot = workspace_snapshot()

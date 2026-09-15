@@ -141,6 +141,20 @@ MODEL_API_KEY=replace-with-your-token
 MODEL_NAME=moonshot-v1-8k
 ```
 
+本地只需要从公开仓库初始化三端模板、且没有 Template Engine 服务时，可启用
+Backend-owned Git Bootstrap。该模式不需要 GitHub Token 或
+`XCODEAGENT_TEMPLATE_ENGINE_TOKEN`，前后端按应用权限选择 `main/auth`，存在已确认
+`TechnicalPlan.agent_contracts` 时才拉取 `agent-runtime@master`：
+
+```dotenv
+XCODEAGENT_TEMPLATE_BOOTSTRAP_SOURCE=git
+XCODEAGENT_TEMPLATE_RECONCILE_ENABLED=false
+```
+
+Git 模式只替代首次 Bootstrap；模板能力二次注入仍属于 Template Engine V2，因此
+本地 Git 调试必须关闭 Reconcile。三套仓库地址可通过 `.env.example` 中的
+`XCODEAGENT_TEMPLATE_GIT_*` 变量覆盖。
+
 也可以使用 `OPENAI_BASE_URL`、`OPENAI_API_KEY` 和 `OPENAI_MODEL` 作为 `MODEL_*` 的兼容别名。`MODEL_PROVIDER` 只支持 `openai` 或 `openai-compatible`，后者会被归一化为 `openai`。
 
 可选覆盖项：

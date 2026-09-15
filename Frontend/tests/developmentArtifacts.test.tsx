@@ -39,7 +39,7 @@ const allowed: TestEntryGate = {
   reason: null
 }
 
-test('新会话卡片按权威状态显示页面、接口和实体三态', () => {
+test('新会话卡片按权威状态显示页面、接口、实体和智能体三态', () => {
   const html = renderToStaticMarkup(
     <QuickTaskGuide
       pages={[
@@ -60,10 +60,32 @@ test('新会话卡片按权威状态显示页面、接口和实体三态', () =>
         }
       ]}
       entities={[{ id: 'entity', label: '实体', purpose: '记录', dataSourceType: 'database' }]}
+      agents={[
+        {
+          key: 'agent',
+          agentId: 'agent',
+          label: '智能体',
+          purpose: '回答问题',
+          boundaries: [],
+          capabilities: [],
+          entryPageIds: [],
+          entryActions: [],
+          interaction: {},
+          contractHash: 'contract-hash',
+          technicalPlanSha256: 'technical-plan-hash',
+          agentSettings: {},
+          dependencies: { gateway: {}, tools: [], entities: [], pages: [], runtime: {} },
+          runtime: {},
+          security: {},
+          artifacts: [],
+          requiredChecks: []
+        }
+      ]}
       developmentArtifacts={{
         pages: { page: { initialDevelopmentStatus: 'completed' } },
         endpoints: { api: { get: { initialDevelopmentStatus: 'in_progress' } } },
-        entities: { entity: { initialDevelopmentStatus: 'pending' } }
+        entities: { entity: { initialDevelopmentStatus: 'pending' } },
+        agents: { agent: { initialDevelopmentStatus: 'completed' } }
       }}
       disabled={false}
       loading={false}
@@ -86,6 +108,16 @@ test('测试门禁正确展示未确认的实体名称', () => {
   })
   assert.match(html, /实体/)
   assert.match(html, /AgeRecord/)
+  assert.doesNotMatch(html, /undefined|进入测试阶段/)
+})
+
+test('测试门禁正确展示未完成的智能体名称', () => {
+  const html = renderConfirmation({
+    ...blocked,
+    blockers: [{ type: 'agent', agentId: 'support-agent' }]
+  })
+  assert.match(html, /智能体/)
+  assert.match(html, /support-agent/)
   assert.doesNotMatch(html, /undefined|进入测试阶段/)
 })
 

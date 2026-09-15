@@ -15,6 +15,7 @@ from app.graph.nodes.task_planning_adapter import (
 )
 from app.graph.workflow import build_graph
 from app.protocols.workflow.request import workflow_run_inputs
+from app.services.template_state import template_context
 from app.services.unit_generation_contracts import UnitGenerationAttemptResult
 from app.workspace.task_documents import (
     build_task_plan_json_path,
@@ -125,6 +126,11 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
             thread = "thread-confirm-cutover"
             generated, identity = await self._generate_pending(graph, thread)
             self.assertEqual(generated["status"], "requires_user_input")
+            self.assertEqual(generated["build_task_plan"]["schema_version"], "build-dag.v4")
+            self.assertEqual(
+                generated["build_task_plan"]["template_context"],
+                template_context(self.readiness),
+            )
             self.assertFalse(build_task_plan_json_path(self._state()).exists())
 
             confirm_state = self._state(
@@ -147,6 +153,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
         # lifecycle Confirm 是唯一提升 authority：Formal 带精确 confirmed_from。
         formal = load_confirmed_build_task_plan(self.workspace)
         self.assertIsNotNone(formal)
+        self.assertEqual(formal["schema_version"], "build-dag.v4")
         self.assertEqual(formal["confirmation_status"], "confirmed")
         self.assertEqual(
             formal["confirmed_from"],

@@ -52,7 +52,9 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
             )
     # v4 计划必须绑定与工作区一致的 TemplateState，夹具不能绕过真实门禁。
     plan.setdefault("template_context", template_context(load_template_state(workspace)))
-    if "route_projection" not in plan:
+    scope = state.get("build_execution_scope")
+    is_agent_scope = isinstance(scope, dict) and scope.get("type") == "agent"
+    if "route_projection" not in plan and not is_agent_scope:
         # 非路由测试也要满足 v4 的统一平台投影前置，避免复用已废弃的 v3 夹具。
         routes_path = os.path.join(workspace, "frontend/src/constants/routes.tsx")
         _write_workspace_file(workspace, "frontend/src/pages/SchedulerTest/index.tsx")
@@ -80,7 +82,6 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
     plan["status"] = "ready"
     plan["confirmation_status"] = "confirmed"
     plan["confirmed_at"] = "2026-08-19T00:00:00+00:00"
-    scope = state.get("build_execution_scope")
     plan["build_execution_scope"] = dict(scope) if isinstance(scope, dict) else {}
     graph = plan.get("task_graph") if isinstance(plan.get("task_graph"), dict) else {}
     # 调度器测试把任务计划视为已经通过前置 DAG 编译；图结构本身由规划器测试覆盖。
@@ -94,6 +95,81 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_agent_scope_skips_page_platform_projection(self) -> None:
+        """Agent 七模块完成后不得要求页面 route_projection 或执行权限 EDD。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            task = {
+                "id": "agent-inventory-prompt",
+                "owner": "agent",
+                "unit_id": "agent:inventory_assistant",
+                "task_type": "agent.code",
+                "status": "already_satisfied",
+                "dependencies": [],
+                "allowed_paths": ["agent-runtime/config/agents/inventory_assistant.yaml"],
+                "target_files": ["agent-runtime/config/agents/inventory_assistant.yaml"],
+                "source_refs": {"agent_module": "prompt"},
+            }
+            plan = {
+                "schema_version": "build-dag.v4",
+                "tasks": [task],
+                "build_units": {
+                    "agent:runtime": {
+                        "id": "agent:runtime",
+                        "kind": "agent_runtime",
+                        "task_ids": [],
+                    },
+                    "agent:inventory_assistant": {
+                        "id": "agent:inventory_assistant",
+                        "kind": "agent",
+                        "task_ids": [task["id"]],
+                    },
+                },
+                "unit_graph": {
+                    "nodes": ["agent:runtime", "agent:inventory_assistant"],
+                    "edges": [
+                        {
+                            "from": "agent:runtime",
+                            "to": "agent:inventory_assistant",
+                            "type": "depends_on",
+                        }
+                    ],
+                },
+                "task_registry": {task["id"]: task},
+                "task_graph": {
+                    "nodes": [task["id"]],
+                    "topological_order": [task["id"]],
+                    "validation": {"is_valid": True, "errors": []},
+                },
+            }
+            state = _ready_build_state(
+                workspace,
+                {
+                    "workspace": workspace,
+                    "project_plan": {"version": "1.0.0"},
+                    "build_task_plan": plan,
+                    "build_execution_scope": {
+                        "type": "agent",
+                        "targetId": "inventory_assistant",
+                    },
+                    "tasks": [task],
+                    "timeline": [],
+                },
+            )
+            with (
+                patch("app.graph.subgraphs.build.apply_platform_projections") as projection,
+                patch("app.graph.subgraphs.build.verify_authorization_edd") as verify_edd,
+            ):
+                result = run_build_scheduler(state)
+
+        self.assertEqual(result["status"], "completed", result)
+        self.assertIn(
+            "scheduler:platform_projection_not_applicable",
+            result["build_events"],
+        )
+        projection.assert_not_called()
+        verify_edd.assert_not_called()
+
     def test_platform_projection_does_not_run_when_page_task_failed(self) -> None:
         """任一页面任务失败时，平台不得提前写入路由或资源文件。"""
 

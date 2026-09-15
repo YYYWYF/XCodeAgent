@@ -104,6 +104,7 @@ export function buildQuickTasks(
     title: String(entity.label || entity.id || '未命名实体').trim()
   }))
   const agentTasks: AgentQuickTaskItem[] = agents.map((agent) => ({
+    progress: artifacts?.agents[agent.agentId],
     agentId: agent.agentId,
     agentLabel: String(agent.label || agent.agentId || '未命名智能体').trim(),
     description: String(agent.purpose || '从这个智能体开始进入开发流程。').trim(),

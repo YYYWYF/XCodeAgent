@@ -24,6 +24,7 @@ def _settings() -> SimpleNamespace:
     """构造 Bootstrap 服务运行所需的最小只读设置。"""
 
     return SimpleNamespace(
+        template_bootstrap_source="engine",
         template_engine_base_url="http://engine.invalid",
         template_engine_token="test-token",
         template_engine_connect_timeout_seconds=1,
@@ -53,6 +54,7 @@ def _prepare_generating_workspace(workspace: Path) -> None:
                 "artifact_type": "technical-plan",
                 "authorization_manifest": {"enabled": False},
                 "template_capabilities": {},
+                "agent_contracts": [],
             },
         ),
     ):
@@ -144,3 +146,36 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
                     asyncio.run(service._run(workspace))
 
             generate.assert_not_awaited()
+
+    def test_git_source_does_not_require_template_engine_credentials(self) -> None:
+        """确认显式 Git 模式复用完整事务且不调用 Template Engine。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            _prepare_generating_workspace(workspace)
+            package = workspace / "git-template.zip"
+            _write_package(package, include_application=True)
+            download = TemplatePackageDownload(
+                temporary_path=package,
+                sha256="ignored",
+                size=package.stat().st_size,
+                content_type="application/zip",
+            )
+            settings = _settings()
+            settings.template_bootstrap_source = "git"
+            service = WorkspaceBootstrapService(settings)
+            with patch(
+                "app.services.workspace_bootstrap.service.GitTemplatePackageBuilder.generate",
+                return_value=download,
+            ) as git_generate, patch(
+                "app.services.workspace_bootstrap.service.TemplateEngineClient.generate",
+                new=AsyncMock(),
+            ) as engine_generate:
+                result = asyncio.run(service._run(workspace))
+
+            self.assertEqual(
+                result["lifecycle"]["initialization"]["stage"],
+                "ready_for_workbench",
+            )
+            git_generate.assert_called_once()
+            engine_generate.assert_not_awaited()

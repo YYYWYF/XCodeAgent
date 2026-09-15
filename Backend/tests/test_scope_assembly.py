@@ -200,6 +200,10 @@ class ScopeAssemblyTests(unittest.TestCase):
                 self.assertNotIn("confirmation_status", result.assembled_plan)
                 self.assertNotIn("confirmed_at", result.assembled_plan)
                 self.assertEqual(
+                    result.assembled_plan["template_context"],
+                    inputs["build_context"]["template_context"],
+                )
+                self.assertEqual(
                     inputs["base_confirmed_plan"]["confirmation_status"], "confirmed"
                 )
 
@@ -216,6 +220,20 @@ class ScopeAssemblyTests(unittest.TestCase):
         self.assertTrue(all(result.task_origins[task_id] == "retained" for task_id in result.retained_task_ids))
         self.assertEqual(result.task_origins["customers:api-current"], "candidate")
         self.assertEqual(result.candidate_unit_by_task_id, {"customers:api-current": SHARED_UNIT})
+
+    def test_missing_template_context_is_rejected_before_dag_persistence(self) -> None:
+        """Scope Assembly 缺少 V2 模板绑定时必须失败，不能产出可确认的空绑定 DAG。"""
+
+        inputs = _base_inputs()
+        inputs["build_context"].pop("template_context")
+
+        with self.assertRaises(ScopeAssemblyError) as raised:
+            assemble_scope_build_task_plan(**inputs)
+
+        self.assertEqual(
+            raised.exception.issues[0].code,
+            "SCOPE_TEMPLATE_CONTEXT_INVALID",
+        )
 
     def test_candidate_retained_id_collision_fails_before_registry_rebuild(self) -> None:
         """Candidate 撞正式 Task ID 时归因当前 Unit，且不 rename 或覆盖历史任务。"""

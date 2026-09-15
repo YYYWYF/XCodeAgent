@@ -31,7 +31,7 @@ def _validated_plan(task_id: str = "page:orders::render") -> dict:
     """构造已完成全局校验的最小 BuildTaskPlan。"""
 
     return {
-        "schema_version": "build-dag.v3",
+        "schema_version": "build-dag.v4",
         "status": "ready",
         "task_registry": {task_id: {"id": task_id, "unit_id": "page:orders"}},
         "task_graph": {

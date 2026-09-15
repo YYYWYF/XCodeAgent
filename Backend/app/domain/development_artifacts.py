@@ -1,4 +1,4 @@
-"""页面、接口与实体开发状态的当前持久化合同。"""
+"""页面、接口、实体与智能体开发状态的当前持久化合同。"""
 
 from datetime import datetime
 from typing import Literal
@@ -15,22 +15,39 @@ class DevelopmentArtifactModel(BaseModel):
 class DevelopmentArtifactTarget(DevelopmentArtifactModel):
     """用稳定标识绑定唯一产物，禁止索引和展示路径替代身份。"""
 
-    type: Literal["page", "endpoint", "entity"]
+    type: Literal["page", "endpoint", "entity", "agent"]
     entity_id: str | None = Field(default=None, alias="entityId", min_length=1)
     page_id: str | None = Field(default=None, alias="pageId", min_length=1)
     api_contract_id: str | None = Field(default=None, alias="apiContractId", min_length=1)
     endpoint_id: str | None = Field(default=None, alias="endpointId", min_length=1)
+    agent_id: str | None = Field(default=None, alias="agentId", min_length=1)
 
     @model_validator(mode="after")
     def validate_identity(self) -> "DevelopmentArtifactTarget":
-        """确保三类目标只能携带各自完整的标识。"""
+        """确保四类目标只能携带各自完整的标识。"""
 
         if self.type == "entity":
-            if not self.entity_id or self.page_id or self.api_contract_id or self.endpoint_id:
+            if (
+                not self.entity_id
+                or self.page_id
+                or self.api_contract_id
+                or self.endpoint_id
+                or self.agent_id
+            ):
                 raise ValueError("实体开发目标必须且只能提供 entityId。")
             return self
-        if self.entity_id:
-            raise ValueError("页面和接口目标不能携带 entityId。")
+        if self.type == "agent":
+            if (
+                not self.agent_id
+                or self.entity_id
+                or self.page_id
+                or self.api_contract_id
+                or self.endpoint_id
+            ):
+                raise ValueError("智能体开发目标必须且只能提供 agentId。")
+            return self
+        if self.entity_id or self.agent_id:
+            raise ValueError("页面和接口目标不能携带 entityId 或 agentId。")
         if self.type == "page":
             if not self.page_id or self.api_contract_id or self.endpoint_id:
                 raise ValueError("页面开发目标必须且只能提供 pageId。")
@@ -76,6 +93,7 @@ class DevelopmentArtifacts(DevelopmentArtifactModel):
     pages: dict[str, DevelopmentArtifactProgress] = Field(default_factory=dict)
     entities: dict[str, EntityDevelopmentProgress] = Field(default_factory=dict)
     endpoints: dict[str, dict[str, DevelopmentArtifactProgress]] = Field(default_factory=dict)
+    agents: dict[str, DevelopmentArtifactProgress] = Field(default_factory=dict)
     catalog_error: str | None = Field(default="开发产物目录尚未就绪。", alias="catalogError")
 
 

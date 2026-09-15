@@ -73,6 +73,18 @@ def _module_allowed_paths(config: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(paths))
 
 
+def _module_target_files(config: dict[str, Any]) -> list[str]:
+    """把模板策略中的明确修改文件编译为新 DAG 可执行目标。"""
+
+    return list(
+        dict.fromkeys(
+            _prefixed_path(path)
+            for path in config.get("modifyPaths", [])
+            if str(path).strip()
+        )
+    )
+
+
 def _module_is_disabled(module_name: str, config: dict[str, Any]) -> bool:
     """只对契约允许关闭的模块识别显式 disabled。"""
 
@@ -114,6 +126,7 @@ def compile_agent_build_tasks(
             module_config = deepcopy(settings[module_name])
             module_paths = deepcopy(template_policy["modulePaths"][module_name])
             allowed_paths = _module_allowed_paths(module_paths)
+            target_files = _module_target_files(module_paths)
             task_id = f"agent:{agent_id}::{module_name}"
             capability_id = f"agent.{agent_id}.{module_name}"
             disabled = _module_is_disabled(module_name, _dict_value(module_config))
@@ -160,7 +173,7 @@ def compile_agent_build_tasks(
                 "risk": "medium" if module_name in {"tools", "knowledge"} else "low",
                 "approval": {},
                 "allowed_paths": allowed_paths,
-                "target_files": [],
+                "target_files": target_files,
                 "change_scope": [],
                 "lock_scope": allowed_paths,
                 "impact_scope": {"modules": ["agent-runtime", module_name]},

@@ -498,18 +498,23 @@ export function useChatSessions({
     return createNewSession()
   }
 
-  /** 确保页面/API 开发使用绑定目标的独立会话，目标变化时不改写旧会话。 */
+  /** 确保页面、API 与智能体开发使用绑定目标的独立会话，目标变化时不改写旧会话。 */
   const ensureDevelopmentSession = async (
     target: ChatSessionDevelopmentTarget
   ): Promise<SessionIdentity> => {
     if (workbenchPhase !== 'development') {
-      throw new Error('页面/API 开发目标只能创建在 DEVELOPMENT 会话中。')
+      throw new Error('页面、API 与智能体开发目标只能创建在 DEVELOPMENT 会话中。')
     }
     if (activeSession && sameDevelopmentTarget(activeSession.developmentTarget, target)) {
       ensureAgent(activeSession)
       return activeSession
     }
-    const title = target.type === 'page' ? `开发页面：${target.label}` : `开发接口：${target.label}`
+    const title =
+      target.type === 'page'
+        ? `开发页面：${target.label}`
+        : target.type === 'agent'
+          ? `开发智能体：${target.label}`
+          : `开发接口：${target.label}`
     return createNewSession({ developmentTarget: target, title })
   }
 

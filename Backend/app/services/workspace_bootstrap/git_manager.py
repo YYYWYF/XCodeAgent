@@ -7,6 +7,8 @@ from pathlib import Path
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapError
 from app.services.workspace_process_registry import workspace_process_registry
 
+_BASELINE_LOCAL_EXCLUDES = (".xcodeagent/", ".DS_Store")
+
 
 class BootstrapGitError(WorkspaceBootstrapError):
     """表示首次 Git 初始化或 baseline 提交未完成。"""
@@ -17,8 +19,13 @@ class BootstrapGitError(WorkspaceBootstrapError):
 class BootstrapGitManager:
     """只为新工作区创建不含 `.xcodeagent` 的模板 baseline。"""
 
-    def initialize_baseline(self, workspace: str | Path) -> str:
-        """初始化独立仓库、固定本地身份并提交 frontend/backend。"""
+    def initialize_baseline(
+        self,
+        workspace: str | Path,
+        *,
+        managed_roots: tuple[str, ...] = ("frontend", "backend"),
+    ) -> str:
+        """初始化独立仓库、固定本地身份并提交本轮模板 roots。"""
 
         root = Path(workspace).expanduser().resolve()
         self._run(root, ["git", "init"])
@@ -26,8 +33,12 @@ class BootstrapGitManager:
         self._run(root, ["git", "config", "--local", "user.email", "xcodeagent@local"])
         exclude = root / ".git" / "info" / "exclude"
         exclude.parent.mkdir(parents=True, exist_ok=True)
-        exclude.write_text(".xcodeagent/\n", encoding="utf-8")
-        self._run(root, ["git", "add", "--", "frontend", "backend"])
+        # 平台状态和 macOS 元数据都不属于用户工程 baseline。
+        exclude.write_text(
+            "".join(f"{pattern}\n" for pattern in _BASELINE_LOCAL_EXCLUDES),
+            encoding="utf-8",
+        )
+        self._run(root, ["git", "add", "--", *managed_roots])
         self._run(root, ["git", "commit", "-m", "chore: initialize workspace from template"])
         return self._run(root, ["git", "rev-parse", "HEAD"]).strip()
 
@@ -38,8 +49,11 @@ class BootstrapGitManager:
         head = self._run(root, ["git", "rev-parse", "--verify", "HEAD"]).strip()
         if not head:
             raise BootstrapGitError("Git baseline 缺少 HEAD 提交。")
-        if self._run(root, ["git", "status", "--porcelain"]).strip():
-            raise BootstrapGitError("Git baseline 提交后工作树必须保持干净。")
+        status = self._run(root, ["git", "status", "--porcelain"]).strip()
+        if status:
+            raise BootstrapGitError(
+                "Git baseline 提交后工作树必须保持干净：" + status[:512]
+            )
         if self._run(root, ["git", "ls-files", "--", ".xcodeagent"]).strip():
             raise BootstrapGitError("Git baseline 不得追踪 .xcodeagent 内部状态。")
         return head

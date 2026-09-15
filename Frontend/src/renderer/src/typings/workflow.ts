@@ -1181,6 +1181,7 @@ export type DevelopmentArtifactTarget =
   | { type: 'entity'; entityId: string }
   | { type: 'page'; pageId: string }
   | { type: 'endpoint'; apiContractId: string; endpointId: string }
+  | { type: 'agent'; agentId: string }
 
 export type DevelopmentArtifactProgress = {
   initialDevelopmentStatus: 'pending' | 'in_progress' | 'completed'
@@ -1193,6 +1194,7 @@ export type DevelopmentArtifacts = {
   entities: Record<string, DevelopmentArtifactProgress>
   pages: Record<string, DevelopmentArtifactProgress>
   endpoints: Record<string, Record<string, DevelopmentArtifactProgress>>
+  agents: Record<string, DevelopmentArtifactProgress>
   catalogError?: string | null
 }
 

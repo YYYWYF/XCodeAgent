@@ -253,6 +253,133 @@ class ExecutionResourceLockTests(unittest.TestCase):
                 "run-new",
             )
 
+    def test_agent_post_build_resume_uses_server_execution_slice_scope(self) -> None:
+        """Agent 下游恢复必须使用服务端 Build 切片，不受客户端默认范围影响。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="agent",
+                target_id="support_agent",
+                page_id=None,
+                thread_id="thread-agent",
+                run_id="run-agent-old",
+                phase="build",
+            )
+            stop_workbench_execution(directory, run_id="run-agent-old")
+
+            payload = begin_workflow_lifecycle(
+                {
+                    "workspace": directory,
+                    "resume_values": {
+                        "build_execution_scope": {
+                            "type": "application",
+                            "targetId": "application",
+                        },
+                        "resume_execution_run_id": "run-agent-old",
+                    },
+                },
+                thread_id="thread-agent",
+                run_id="run-agent-new",
+                phase="unit_test",
+                checkpoint_state={
+                    "build_execution_slice": {
+                        "scope": {
+                            "type": "agent",
+                            "targetId": "support_agent",
+                        }
+                    }
+                },
+            )
+
+            assert payload is not None
+            execution = payload["activeExecutions"]["run-agent-new"]
+            self.assertEqual(execution["scope"], "agent")
+            self.assertEqual(execution["targetId"], "support_agent")
+            self.assertNotIn("run-agent-old", payload["activeExecutions"])
+
+    def test_agent_build_resume_still_rejects_client_target_override(self) -> None:
+        """Build 前恢复不得借下游切片规则绕过 Agent 目标冲突校验。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="agent",
+                target_id="support_agent",
+                page_id=None,
+                thread_id="thread-agent",
+                run_id="run-agent-old",
+                phase="build",
+            )
+            stop_workbench_execution(directory, run_id="run-agent-old")
+
+            with self.assertRaisesRegex(
+                ApplicationLifecycleConflictError,
+                "恢复目标与原工作台执行不一致",
+            ):
+                begin_workflow_lifecycle(
+                    {
+                        "workspace": directory,
+                        "resume_values": {
+                            "build_execution_scope": {
+                                "type": "application",
+                                "targetId": "application",
+                            },
+                            "resume_execution_run_id": "run-agent-old",
+                        },
+                    },
+                    thread_id="thread-agent",
+                    run_id="run-agent-new",
+                    phase="build",
+                )
+
+    def test_agent_task_plan_confirmation_uses_registered_execution_scope(self) -> None:
+        """Agent DAG 确认遇到客户端 application 默认值时必须恢复服务端登记目标。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="agent",
+                target_id="support_agent",
+                page_id=None,
+                thread_id="thread-agent",
+                run_id="run-agent-old",
+                phase="prepare_build_tasks",
+            )
+            update_workbench_execution(
+                directory,
+                run_id="run-agent-old",
+                phase="prepare_build_tasks",
+                status=WorkbenchExecutionStatus.AWAITING_USER,
+                pending_type=PendingInteractionType.TASK_PLAN_CONFIRMATION,
+                pending_payload={"mode": "build_task_plan_confirmation"},
+            )
+
+            payload = begin_workflow_lifecycle(
+                {
+                    "workspace": directory,
+                    "resume_values": {
+                        "build_execution_scope": {
+                            "type": "application",
+                            "targetId": "application",
+                        },
+                        "resume_execution_run_id": "run-agent-old",
+                    },
+                },
+                thread_id="thread-agent",
+                run_id="run-agent-new",
+                phase="prepare_build_tasks",
+            )
+
+            assert payload is not None
+            execution = payload["activeExecutions"]["run-agent-new"]
+            self.assertEqual(execution["scope"], "agent")
+            self.assertEqual(execution["targetId"], "support_agent")
+            self.assertNotIn("run-agent-old", payload["activeExecutions"])
+
     def test_debug_resume_can_replace_plan_adjustment_execution(self) -> None:
         """任务拆分失败后的调试恢复应允许接管等待计划调整的旧执行。"""
 

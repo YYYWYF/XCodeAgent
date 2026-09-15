@@ -69,7 +69,7 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
         "stateSnapshotKey": "applicationLifecycle",
         "workflowIndependent": True,
         "developmentArtifacts": {
-            "targets": ["page", "endpoint"],
+            "targets": ["page", "endpoint", "entity", "agent"],
             "statuses": ["pending", "in_progress", "completed"],
             "completionBoundary": "test_phase_confirmation",
             "gateField": "testEntryGate",

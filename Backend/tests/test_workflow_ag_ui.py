@@ -1465,6 +1465,74 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             event_names.index("workflow-run"),
         )
 
+    def test_agent_execution_scope_is_restored_into_graph_state(self) -> None:
+        """Agent execution 必须像其他一级 scope 一样回写 Graph 目标。"""
+
+        lifecycle = {
+            "application": {"id": "app-1", "name": "测试应用"},
+            "updatedAt": "2026-09-14T00:00:00Z",
+            "revision": 3,
+            "initialization": {
+                "stage": "ready_for_workbench",
+                "status": "completed",
+            },
+            "activeRunId": "run-agent",
+            "activeExecutions": {
+                "run-agent": {
+                    "scope": "agent",
+                    "targetId": "support_agent",
+                    "threadId": "thread-agent",
+                    "runId": "run-agent",
+                    "status": "running",
+                }
+            },
+            "resourceLocks": {
+                "application": None,
+                "pages": {},
+                "apiContracts": {},
+                "endpoints": {},
+                "dataSources": {},
+                "agents": {},
+            },
+            "extensions": {},
+        }
+        graph = FakeWorkflowGraph()
+
+        async def collect() -> list[str]:
+            """收集 Agent Workflow 帧并保留 Graph 初始状态供断言。"""
+
+            stream = build_workflow_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "thread-agent",
+                    "runId": "run-agent",
+                    "messages": [{"role": "user", "content": "继续开发智能体"}],
+                    "forwardedProps": {
+                        "workspaceRoot": "/tmp/agent-lifecycle-projection",
+                        "buildExecutionScope": {
+                            "type": "application",
+                            "targetId": "application",
+                        },
+                    },
+                },
+            )
+            return [frame async for frame in stream]
+
+        with patch(
+            "app.protocols.workflow.runtime.begin_workflow_lifecycle",
+            return_value=lifecycle,
+        ):
+            asyncio.run(collect())
+
+        initial_state = graph.initial_states[0]
+        self.assertEqual(
+            initial_state["build_execution_scope"],
+            {"type": "agent", "targetId": "support_agent"},
+        )
+        self.assertEqual(initial_state["selected_agent_id"], "support_agent")
+        self.assertEqual(initial_state["detail_target_type"], "agent")
+        self.assertEqual(initial_state["selectedPageId"], "")
+
     def test_cancel_run_request_cancels_the_active_workflow_task(self) -> None:
         graph = FakeBlockingGraph()
 

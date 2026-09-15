@@ -12,6 +12,8 @@ from app.services.agent_build_tasks import (
 )
 from app.services.agent_runtime_template_policy import AGENT_RUNTIME_MODULES
 from app.services.build_task_reuse_contracts import ReuseFacts
+from app.services.build_scheduler import resolve_execution_slice
+from app.services.build_task_planner import tasks_from_build_task_plan
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.dag_planning_inputs import assemble_mainline_planning_inputs
 from app.services.dag_planning_orchestrator import plan_dag_sequential
@@ -21,6 +23,7 @@ from app.services.frozen_contract_store import (
 )
 from app.services.unit_generation_contracts import UnitGenerationPolicy
 from app.services.unit_generation_requirements import resolve_generation_requirements
+from app.services.template_state import load_template_state, template_context
 
 
 def _contract() -> dict:
@@ -116,6 +119,14 @@ class AgentBuildTasksTests(unittest.TestCase):
                 for path in task["allowed_paths"]
             )
         )
+        self.assertTrue(all(task["target_files"] for task in tasks))
+        self.assertTrue(
+            all(
+                path in task["allowed_paths"] and "*" not in path
+                for task in tasks
+                for path in task["target_files"]
+            )
+        )
 
     def test_builds_deterministic_candidate_for_agent_generation_requirements(self) -> None:
         """新 DAG 规划链必须复用七模块编译器生成 Agent Candidate。"""
@@ -204,19 +215,6 @@ class AgentBuildTasksTests(unittest.TestCase):
             endpoint_api_designs=[],
             authorization_slices=[],
         )
-        inputs = assemble_mainline_planning_inputs(
-            project_plan=plan,
-            base_confirmed_plan=None,
-            skeleton_plan=skeleton,
-            build_context={"scope": scope, "required_unit_ids": required},
-            build_execution_scope=scope,
-            workspace_snapshot={"workspace_revision": "agent-snapshot"},
-            reuse_facts=reuse_facts,
-            formal_contract_inputs=formal_inputs,
-            owner_session_id="agent-session",
-            workflow_run_id="agent-workflow-run",
-            thread_id="agent-thread",
-        )
         policy = UnitGenerationPolicy(
             request_timeout=1,
             unit_session_timeout=2,
@@ -230,6 +228,23 @@ class AgentBuildTasksTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _write_workspace(root)
+            inputs = assemble_mainline_planning_inputs(
+                project_plan=plan,
+                base_confirmed_plan=None,
+                skeleton_plan=skeleton,
+                build_context={
+                    "scope": scope,
+                    "required_unit_ids": required,
+                    "template_context": template_context(load_template_state(root)),
+                },
+                build_execution_scope=scope,
+                workspace_snapshot={"workspace_revision": "agent-snapshot"},
+                reuse_facts=reuse_facts,
+                formal_contract_inputs=formal_inputs,
+                owner_session_id="agent-session",
+                workflow_run_id="agent-workflow-run",
+                thread_id="agent-thread",
+            )
             result = asyncio.run(
                 plan_dag_sequential(
                     inputs.sequential_inputs(),
@@ -242,9 +257,32 @@ class AgentBuildTasksTests(unittest.TestCase):
             )
 
         registry = result.assembly.assembled_plan["task_registry"]
+        validation = result.assembly.assembled_plan["task_graph"]["validation"]
+        execution_slice = resolve_execution_slice(
+            build_task_plan=result.assembly.assembled_plan,
+            tasks=tasks_from_build_task_plan(result.assembly.assembled_plan),
+            build_execution_scope=scope,
+        )
         self.assertEqual(len(registry), len(AGENT_RUNTIME_MODULES))
+        self.assertTrue(validation["is_valid"], validation["errors"])
         self.assertTrue(
             all(task["owner"] == "agent" for task in registry.values())
+        )
+        self.assertTrue(all(task["target_files"] for task in registry.values()))
+        self.assertEqual(
+            len(execution_slice["task_ids"]),
+            len(AGENT_RUNTIME_MODULES),
+        )
+        self.assertEqual(
+            execution_slice["unit_ids"],
+            ["agent:inventory_assistant", "agent:runtime"],
+        )
+        self.assertTrue(
+            all(
+                batch["mode"] == "serial"
+                and "缺少明确 target_files" not in batch["reason"]
+                for batch in result.assembly.assembled_plan["execution"]["batches"]
+            )
         )
 
     def test_disabled_optional_modules_are_skipped_without_completing_others(self) -> None:

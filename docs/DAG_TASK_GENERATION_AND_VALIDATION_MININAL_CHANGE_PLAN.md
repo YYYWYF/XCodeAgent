@@ -289,7 +289,7 @@ DAG 确认等待，不能把所有 `prepare_build_tasks` 用户输入都显示�
 
 ### 4.7 业务智能体 Build Unit 与 CodeRunner
 
-TechnicalPlan `agent_contracts[]` 非空时，继续使用同一 `build-dag.v3` 和 BuildScheduler，不建立第二套任务计划或执行 Graph：
+TechnicalPlan `agent_contracts[]` 非空时，继续使用同一 `build-dag.v4` 和 BuildScheduler，不建立第二套任务计划或执行 Graph：
 
 - 建立共享 `agent:runtime` Unit，表示 TechnicalPlan 确认后已经由平台下载并完成门禁的 Python 3.12 sidecar 模板；
 - 每个 `agentId` 建立 `agent:<agentId>` Unit；Unit 固定包含七个模板感知模块任务，不预写独立 Definition；
@@ -425,7 +425,7 @@ Workflow/PlanningRun，而不是单个 Unit。待确认状态的终止统一使�
 
 | 操作 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- |
-| 增 | `build_execution_scope` | object | 记录本次 application、page、data_source 或 endpoint 范围 |
+| 增 | `build_execution_scope` | object | 记录本次 application、page、data_source、endpoint 或 agent 范围 |
 | 增 | `confirmation_status` | string | 正式路径必须为 `confirmed` |
 | 增 | `confirmed_at` | string | 最新任务规划的确认时间 |
 | 增 | `confirmed_from` | object | 被提升 Pending 的 `planning_run_id + draft_digest` |
@@ -471,7 +471,7 @@ Workflow/PlanningRun，而不是单个 Unit。待确认状态的终止统一使�
 
 ### 6.2 `build-task-plan.pending.json`
 
-Pending 使用同一 `build-dag.v3` 任务正文，但必须满足：
+Pending 使用同一 `build-dag.v4` 任务正文，但必须满足：
 
 - `confirmation_status=pending`、`confirmed_at=null`；
 - 携带服务端构造的 `draft_identity`，至少绑定页面对话 `owner_session_id`、`planning_run_id`、`draft_digest`、Formal baseline 摘要、完整输入 fingerprint 和 Build Scope；

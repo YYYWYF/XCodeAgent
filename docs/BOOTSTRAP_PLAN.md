@@ -474,7 +474,8 @@ Baseline commit：
 chore: initialize workspace from template
 ```
 
-`.xcodeagent/` 不进入 baseline。
+`.xcodeagent/` 与 macOS 自动产生的 `.DS_Store` 不进入 baseline；其他未跟踪或已修改文件仍必须让
+Readiness 失败，并在错误详情中列出对应的 `git status --porcelain` 路径。
 
 ---
 

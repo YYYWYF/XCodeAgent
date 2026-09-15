@@ -7,6 +7,7 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BeforeValidator, StringConstraints
 
+from app.domain.build_task_plan import BUILD_TASK_PLAN_SCHEMA_VERSION
 from app.services.build_task_reuse_contracts import ReuseFacts
 from app.services.frozen_contract_catalog import (
     ContractCatalogBindingError,
@@ -75,7 +76,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         validation = graph.get("validation") if isinstance(graph, Mapping) else None
         if baseline is not None and (
             baseline.get("confirmation_status") != "confirmed"
-            or baseline.get("schema_version") != "build-dag.v3"
+            or baseline.get("schema_version") != BUILD_TASK_PLAN_SCHEMA_VERSION
             or baseline.get("status") == "failed"
             or not isinstance(baseline.get("task_registry"), Mapping)
             or not isinstance(validation, Mapping) or validation.get("is_valid") is not True

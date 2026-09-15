@@ -12,7 +12,7 @@ from app.services.workspace_bootstrap.template_package import validate_template_
 
 
 class TemplatePackageTests(unittest.TestCase):
-    """验证首次模板 ZIP 只能含冻结的三个顶层范围。"""
+    """验证首次模板 ZIP 只能含本轮声明的受管顶层范围。"""
 
     def test_accepts_fixed_roots_and_unique_template_state(self) -> None:
         """确认完整 frontend/backend ZIP 能通过 Package Contract。"""
@@ -22,6 +22,27 @@ class TemplatePackageTests(unittest.TestCase):
             path = Path(directory) / "template.zip"
             path.write_bytes(package)
             result = validate_template_package(path, self._limits())
+            self.assertEqual(result.template_state.templateRevision, "R1")
+
+    def test_accepts_agent_runtime_only_when_declared_as_managed_root(self) -> None:
+        """确认业务 Agent Bootstrap 必须显式携带完整第三根。"""
+
+        package = self._archive(
+            {
+                "frontend/package.json": "{}",
+                "backend/pom.xml": "<project/>",
+                "agent-runtime/pyproject.toml": "[project]",
+                ".xcodeagent/template-state.json": json.dumps(self._state()),
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "template.zip"
+            path.write_bytes(package)
+            result = validate_template_package(
+                path,
+                self._limits(),
+                ("frontend", "backend", "agent-runtime"),
+            )
             self.assertEqual(result.template_state.templateRevision, "R1")
 
     def test_rejects_unmanaged_and_internal_paths(self) -> None:

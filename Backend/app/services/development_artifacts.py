@@ -63,7 +63,7 @@ def _identifier(value: Any) -> str:
 
 
 def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
-    """使用 ProductPlan 页面与 TechnicalPlan 接口、实体，与工作台目录保持一致。"""
+    """使用 ProductPlan 页面与 TechnicalPlan 接口、实体、智能体建立权威目录。"""
 
     product = _confirmed_plan(workspace, "product-plan")
     technical = _confirmed_plan(workspace, "technical-plan")
@@ -83,6 +83,13 @@ def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
             ))
     for entity in _records(technical.get("entities", []), "TechnicalPlan.entities"):
         targets.append(DevelopmentArtifactTarget(type="entity", entityId=_identifier(entity.get("id"))))
+    for agent in _records(technical.get("agent_contracts", []), "TechnicalPlan.agent_contracts"):
+        targets.append(
+            DevelopmentArtifactTarget(
+                type="agent",
+                agentId=_identifier(agent.get("agentId")),
+            )
+        )
     keys = [target.model_dump_json() for target in targets]
     if len(set(keys)) != len(keys):
         raise ValueError("开发产物标识重复。")
@@ -98,6 +105,8 @@ def artifact_progress(
         return artifacts.pages.get(target.page_id or "")
     if target.type == "entity":
         return artifacts.entities.get(target.entity_id or "")
+    if target.type == "agent":
+        return artifacts.agents.get(target.agent_id or "")
     return artifacts.endpoints.get(target.api_contract_id or "", {}).get(target.endpoint_id or "")
 
 
@@ -144,6 +153,8 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
             progress = DevelopmentArtifactProgress(initialDevelopmentStatus="in_progress" if active else "pending")
         if target.type == "page":
             artifacts.pages[target.page_id or ""] = progress
+        elif target.type == "agent":
+            artifacts.agents[target.agent_id or ""] = progress
         else:
             artifacts.endpoints.setdefault(target.api_contract_id or "", {})[target.endpoint_id or ""] = progress
     return state.model_copy(update={"development_artifacts": artifacts})
@@ -163,6 +174,9 @@ def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
     ] + [
         (DevelopmentArtifactTarget(type="entity", entityId=key), progress)
         for key, progress in artifacts.entities.items()
+    ] + [
+        (DevelopmentArtifactTarget(type="agent", agentId=key), progress)
+        for key, progress in artifacts.agents.items()
     ]
     completed = sum(progress.initial_development_status == "completed" for _, progress in records)
     in_progress = sum(progress.initial_development_status == "in_progress" for _, progress in records)
@@ -257,13 +271,15 @@ def execution_development_metadata(
         matches = (scope == "page" and target.page_id == target_id) or (
             scope == "endpoint" and target.endpoint_id == target_id
             and target.api_contract_id == api_contract_id
+        ) or (
+            scope == "agent" and target.agent_id == target_id
         )
         if matches and phase in INITIAL_DEVELOPMENT_PHASES:
             return {
                 "development_purpose": "revision" if state.active_formal_revision else previous.development_purpose,
                 "development_target": target,
             }
-    if scope not in {"page", "endpoint"} or phase not in INITIAL_DEVELOPMENT_PHASES:
+    if scope not in {"page", "endpoint", "agent"} or phase not in INITIAL_DEVELOPMENT_PHASES:
         return {}
     if not initial_entry and not api_contract_id and scope == "endpoint":
         return {}
@@ -271,6 +287,7 @@ def execution_development_metadata(
         type=scope, pageId=target_id if scope == "page" else None,
         apiContractId=api_contract_id if scope == "endpoint" else None,
         endpointId=target_id if scope == "endpoint" else None,
+        agentId=target_id if scope == "agent" else None,
     )
     progress = artifact_progress(state.development_artifacts, target)
     initial = initial_entry and not state.active_formal_revision and progress is not None and (

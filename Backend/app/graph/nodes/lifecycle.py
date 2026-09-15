@@ -388,13 +388,51 @@ def finalize_project(state: ProjectState) -> dict:
         "timeline": ["finalize_project"],
     }
 
+
+def _build_failure_message(state: ProjectState) -> str:
+    """从当前 Build 结果提取真实失败原因，禁止沿用上游成功节点文案。"""
+
+    results = state.get("build_results")
+    if isinstance(results, list):
+        for result in reversed(results):
+            if not isinstance(result, dict) or result.get("status") != "failed":
+                continue
+            task_id = str(result.get("task_id") or "构建任务")
+            reason = str(
+                result.get("failure_reason")
+                or result.get("error")
+                or result.get("agent_note")
+                or result.get("summary")
+                or "执行失败"
+            ).strip()
+            return f"构建任务 {task_id} 失败：{reason}"
+
+    summary = state.get("build_summary")
+    if isinstance(summary, dict):
+        for field in ("platform_projection_errors", "authorization_edd_errors"):
+            errors = summary.get(field)
+            if isinstance(errors, list) and errors:
+                return str(errors[0])
+        retry_message = str(summary.get("retry_message") or "").strip()
+        if retry_message:
+            return retry_message
+    return ""
+
+
 def handle_failure(state: ProjectState) -> dict:
     """保留上游失败原因并统一结束失败工作流。"""
 
+    build_failure = _build_failure_message(state) if state.get("phase") == "build" else ""
+    failure_message = str(
+        build_failure
+        or state.get("error")
+        or state.get("message")
+        or "Workflow 执行失败。"
+    ).strip()
     return {
         "phase": "failed",
         "status": "failed",
-        "message": state.get("message") or "Workflow 执行失败。",
-        "error": state.get("error"),
+        "message": failure_message,
+        "error": failure_message,
         "timeline": ["handle_failure"],
     }

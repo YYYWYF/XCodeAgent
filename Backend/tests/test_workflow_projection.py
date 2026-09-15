@@ -8,9 +8,35 @@ from app.protocols.workflow.projection import (
     _workflow_summary,
     _workflow_visual_payload,
 )
+from app.graph.nodes.lifecycle import handle_failure
 
 
 class WorkflowProjectionTests(unittest.TestCase):
+    def test_build_failure_uses_task_reason_instead_of_workspace_scan_message(self) -> None:
+        """Build 失败必须展示当前任务原因，不能继承工作区扫描成功文案。"""
+
+        failed = handle_failure(
+            {
+                "phase": "build",
+                "status": "failed",
+                "message": "代码扫描完成，已建立工作区代码索引。",
+                "build_results": [
+                    {
+                        "task_id": "agent:inventory_assistant::prompt",
+                        "status": "failed",
+                        "failure_reason": "任务缺少明确 target_files。",
+                    }
+                ],
+                "build_summary": {"status": "failed"},
+            }
+        )
+        summary = _workflow_summary(failed, [])
+
+        self.assertIn("agent:inventory_assistant::prompt", summary["message"])
+        self.assertIn("任务缺少明确 target_files", summary["message"])
+        self.assertNotIn("完成 0 个节点", summary["message"])
+        self.assertNotIn("代码扫描完成", summary["message"])
+
     def test_api_design_gate_projects_waiting_and_completed_routes(self) -> None:
         """字段映射门禁等待时停图，确认完成后投影工作区检查。"""
 

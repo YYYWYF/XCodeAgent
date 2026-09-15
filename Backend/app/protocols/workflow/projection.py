@@ -1378,6 +1378,24 @@ def _workflow_summary(
         message = conversation_response
     elif status == "requires_user_input":
         message = _workflow_user_input_message(result, clarification)
+    elif status == "failed":
+        failure = result.get("error") or result.get("message") or "Workflow 执行失败。"
+        if isinstance(failure, dict):
+            failure = failure.get("message") or failure.get("reason") or "Workflow 执行失败。"
+        message = f"Workflow failed：{str(failure).strip()}"
+        quality_gate_passed = result.get("quality_gate_passed")
+        if isinstance(quality_gate_passed, bool):
+            message += f" 质量门禁={'通过' if quality_gate_passed else '未通过'}。"
+        terminal_reason = _repair_terminal_reason(result)
+        if terminal_reason:
+            repair_iteration = result.get("repair_iteration")
+            max_repair_iterations = result.get("max_repair_iterations")
+            iteration_text = (
+                f" 修复次数={repair_iteration}/{max_repair_iterations}。"
+                if repair_iteration is not None and max_repair_iterations is not None
+                else ""
+            )
+            message += f"{iteration_text} 终止原因：{terminal_reason}"
     else:
         message = f"Workflow {status}：完成 {len(completed_nodes)} 个节点。"
         quality_gate_passed = result.get("quality_gate_passed")

@@ -49,6 +49,12 @@ class TemplateEngineError(WorkspaceBootstrapError):
         self.http_status = http_status
 
 
+class GitTemplateError(WorkspaceBootstrapError):
+    """表示公开 Git 模板配置、拉取或内容检查失败。"""
+
+    code = "TEMPLATE_GIT_UNAVAILABLE"
+
+
 class WorkspaceBootstrapReadinessError(WorkspaceBootstrapError):
     """表示提交前工作区未满足 Bootstrap 就绪契约。"""
 
@@ -76,7 +82,7 @@ class TemplatePackageDownload:
 
 @dataclass(frozen=True)
 class ValidatedTemplatePackage:
-    """保存通过安全和根目录契约检查的 Package 与 TemplateState。"""
+    """保存通过安全和动态根目录契约检查的 Package 与 TemplateState。"""
 
     archive_path: Path
     template_state: "TemplateStateV2"

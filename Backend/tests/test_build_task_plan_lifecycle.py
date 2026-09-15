@@ -234,7 +234,10 @@ class ConfirmPromotionTests(unittest.TestCase):
         """重签的无效图必须被真实 DAG gate 拦截，不能信任 is_valid 缓存。"""
 
         original = load_pending_build_task_plan(self.state)
-        for fault in ("validation", "cycle", "nodes", "blocked", "owner", "registry", "order", "unit"):
+        for fault in (
+            "validation", "cycle", "nodes", "blocked", "owner", "registry",
+            "order", "unit", "template_context",
+        ):
             pending = deepcopy(original)
             task = next(iter(pending["task_registry"].values()))
             if fault == "validation":
@@ -251,6 +254,8 @@ class ConfirmPromotionTests(unittest.TestCase):
                 pending["task_graph"]["topological_order"].reverse()
             elif fault == "unit":
                 task["unit_id"] = []
+            elif fault == "template_context":
+                pending.pop("template_context", None)
             else:
                 task["id"] = "forged"
             self._rewrite(pending, resign=True)
@@ -422,7 +427,7 @@ class EndpointDesignStalePromotionTests(unittest.TestCase):
             required=[unit_id],
         )
         draft = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "status": "ready",
             "task_registry": {},
             "task_graph": {

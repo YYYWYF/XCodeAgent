@@ -1,4 +1,9 @@
-import type { ApplicationLifecycle, WorkbenchExecution, WorkflowRunPayload } from '../../typings'
+import type {
+  ApplicationLifecycle,
+  WorkbenchExecution,
+  WorkflowBuildExecutionScope,
+  WorkflowRunPayload
+} from '../../typings'
 import { isConversationWorkflow } from './conversationMode'
 
 export type PlanExecutionMode =
@@ -241,6 +246,22 @@ function workflowLifecycleSnapshot(workflow: WorkflowRunPayload): ApplicationLif
   )
 }
 
+/** 按新 DAG 的权威生命周期解析可恢复执行，避免历史 Workflow runId 接替已收口运行。 */
+export function workflowResumableExecution(
+  workflow: WorkflowRunPayload,
+  lifecycle?: ApplicationLifecycle,
+  scope?: WorkflowBuildExecutionScope
+): WorkbenchExecution | undefined {
+  // 传入的全局 lifecycle 来自服务端当前读取；即使其中没有 execution，也不能
+  // 回退到历史卡片快照，否则仅由磁盘 PendingPlan 恢复时会再次提交已删除的 runId。
+  const authoritativeLifecycle = lifecycle || workflowLifecycleSnapshot(workflow)
+  return planExecutionForScope(
+    authoritativeLifecycle,
+    scope || workflow.summary.buildExecutionScope,
+    { runId: workflow.runId, threadId: workflow.threadId }
+  )
+}
+
 /** 从后端权威 execution 派生持久模式，停止中的短暂反馈由 Workflow 状态覆盖。 */
 export function derivePlanExecutionMode(execution?: WorkbenchExecution): PlanExecutionMode {
   if (!execution || execution.status === 'completed') return 'idle'
@@ -453,6 +474,56 @@ export function planExecutionContextForRun(
       (Boolean(workflowIdentity?.threadId) && execution.threadId === workflowIdentity?.threadId)
   )
   return { execution: identityExecution, dependencyLocked: false }
+}
+
+/** 按 application/page/endpoint/data_source/agent Scope 定位新 DAG 当前 execution。 */
+export function planExecutionForScope(
+  lifecycle: ApplicationLifecycle | undefined,
+  scope: WorkflowBuildExecutionScope | undefined,
+  workflowIdentity?: { runId?: string; threadId?: string }
+): WorkbenchExecution | undefined {
+  const executions = Object.values(lifecycle?.activeExecutions || {})
+  const scopeType = String(scope?.type || '').trim()
+  const targetId = String(scope?.targetId || '').trim()
+  const apiContractId = String(scope?.apiContractId || '').trim()
+
+  /** 校验 execution 是否与服务端投影的当前构建范围完全一致。 */
+  const matchesScope = (execution: WorkbenchExecution): boolean => {
+    if (!scopeType) return true
+    if (execution.scope !== scopeType) return false
+    if (targetId && execution.targetId !== targetId) return false
+    if (scopeType !== 'endpoint' || !apiContractId || !targetId) return true
+    const endpointKey = `endpoint:${apiContractId}:${targetId}`
+    const endpointKeys = (execution.resourceKeys || []).filter((key) =>
+      key.startsWith('endpoint:')
+    )
+    return endpointKeys.length === 0 || endpointKeys.includes(endpointKey)
+  }
+
+  const exactRun = workflowIdentity?.runId
+    ? lifecycle?.activeExecutions?.[workflowIdentity.runId]
+    : undefined
+  // 同一 run 若已被投影成另一个目标，必须拒绝而不能继续搜索代替 execution。
+  if (exactRun) return matchesScope(exactRun) ? exactRun : undefined
+
+  if (!scopeType) {
+    // 缺少 Scope 的历史快照只能按同一 thread 恢复，不能接管当前其他目标。
+    return executions.find(
+      (execution) =>
+        Boolean(workflowIdentity?.threadId) && execution.threadId === workflowIdentity?.threadId
+    )
+  }
+
+  const scopedExecutions = executions.filter(matchesScope)
+  if (scopedExecutions.length > 0) {
+    // 只允许服务端 activeRunId 或原 thread 证明当前绑定；不按时间猜测可恢复运行。
+    return (
+      scopedExecutions.find((execution) => execution.runId === lifecycle?.activeRunId) ||
+      scopedExecutions.find((execution) => execution.threadId === workflowIdentity?.threadId)
+    )
+  }
+
+  return undefined
 }
 
 /** 统一页面标识的历史前缀与分隔符，避免同一页面被误判为空闲。 */
