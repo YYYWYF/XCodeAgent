@@ -12,6 +12,7 @@ from app.services.business_acceptance import (
     DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND,
     normalize_repo_path,
 )
+from app.services.page_identity import canonical_page_entry_path
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_generation_contracts import UnitGenerationContext
 
@@ -460,6 +461,82 @@ def _impact_issues(task: Mapping[str, Any], context: UnitGenerationContext) -> l
     return issues
 
 
+def _page_entry_issues(
+    task: Mapping[str, Any],
+    context: UnitGenerationContext,
+) -> list[ValidationIssue]:
+    """校验 Page Unit 的 canonical 页面入口同时出现在四个路径字段中。"""
+
+    if context.unit_kind != "page" or not context.unit_id.startswith("page:"):
+        return []
+    page_requirements = tuple(
+        requirement
+        for requirement in context.generation_requirements
+        if _identity(requirement.source_refs.get("kind")) == "frontend.page"
+    )
+    page_ids = tuple(
+        _identity(requirement.source_refs.get("page_id"))
+        for requirement in page_requirements
+    )
+    if not page_requirements or any(page_id is None for page_id in page_ids):
+        return []
+    if len(set(page_ids)) != 1:
+        return []
+    page_id = page_ids[0]
+    if page_id is None:
+        return []
+    try:
+        expected_page_entry = canonical_page_entry_path(page_id)
+    except ValueError:
+        return []
+
+    deliverables = task.get("deliverables")
+    page_deliverables = [
+        deliverable
+        for deliverable in deliverables
+        if isinstance(deliverable, Mapping) and deliverable.get("kind") == "frontend.page"
+    ] if isinstance(deliverables, (list, tuple)) else []
+    if not page_deliverables:
+        return []
+
+    def valid_paths(value: Any) -> list[str]:
+        """提取路径字段中的合法精确路径，不替换 Candidate 原值。"""
+
+        if not isinstance(value, (list, tuple)):
+            return []
+        return [path for path in value if _strict_path(path) is not None]
+
+    declared_paths: dict[str, list[str]] = {
+        "target_files": valid_paths(task.get("target_files")),
+        "change_scope": valid_paths([
+            change.get("path")
+            for change in task.get("change_scope", ())
+            if isinstance(change, Mapping)
+        ]),
+        "allowed_paths": valid_paths(task.get("allowed_paths")),
+        "frontend.page deliverable.paths": [
+            path
+            for deliverable in page_deliverables
+            for path in valid_paths(deliverable.get("paths"))
+        ],
+    }
+    missing_fields = [
+        field for field, paths in declared_paths.items()
+        if expected_page_entry not in paths
+    ]
+    if not missing_fields:
+        return []
+    return [_issue(
+        "CANDIDATE_PAGE_ENTRY_MISMATCH",
+        f"Page Unit {context.unit_id} 的页面实现 Task 必须在 {', '.join(missing_fields)} 中精确声明 {expected_page_entry}。",
+        context=context,
+        task_ids=(_task_id(task),),
+        page_id=page_id,
+        expected_page_entry=expected_page_entry,
+        missing_fields=missing_fields,
+    )]
+
+
 def _requirement_issues(
     context: UnitGenerationContext,
     records: Sequence[tuple[str, str, tuple[str, ...], str]],
@@ -549,6 +626,7 @@ def validate_candidate_task_rules(
         all_records.extend(records)
         issues.extend(deliverable_issues)
         issues.extend(_impact_issues(task, context))
+        issues.extend(_page_entry_issues(task, context))
     duplicate_ids = sorted({task_id for task_id in task_ids if task_ids.count(task_id) > 1})
     for task_id in duplicate_ids:
         issues.append(_issue(

@@ -14,6 +14,7 @@ from app.services.business_acceptance import (
     DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND,
     normalize_repo_path,
 )
+from app.services.page_identity import page_id_to_page_key
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_generation_contracts import UnitGenerationContext
 
@@ -192,8 +193,51 @@ def _context_contract_issues(context: UnitGenerationContext) -> list[ValidationI
             "UNIT_VALIDATION_MANAGED_FILES_INVALID", "constraints.managed_files 必须是精确、安全且不重复的路径数组。",
             category="input", unit_id=unit_id,
         ))
+    issues.extend(_page_context_identity_issues(context))
     issues.extend(_strong_rule_contract_issues(context))
     return issues
+
+
+def _page_context_identity_issues(context: UnitGenerationContext) -> list[ValidationIssue]:
+    """校验 Page Unit 的正式 pageId 可被 canonical helper 唯一解析。"""
+
+    if context.unit_kind != "page" or not context.unit_id.startswith("page:"):
+        return []
+    requirements = tuple(
+        requirement
+        for requirement in context.generation_requirements
+        if requirement.source_refs.get("kind") == "frontend.page"
+    )
+    if not requirements and any(
+        requirement.source_refs.get("kind") not in DELIVERABLE_KINDS
+        for requirement in context.generation_requirements
+    ):
+        return []
+    page_ids = tuple(requirement.source_refs.get("page_id") for requirement in requirements)
+    unit_page_id = context.unit_id.removeprefix("page:")
+    if (
+        not requirements
+        or any(not isinstance(page_id, str) or not page_id or page_id != page_id.strip() for page_id in page_ids)
+        or len(set(page_ids)) != 1
+        or page_ids[0] != unit_page_id
+    ):
+        return [_fatal_issue(
+            "UNIT_VALIDATION_PAGE_ID_CONTRACT_INVALID",
+            "Page Unit 必须携带与 Unit 身份一致的唯一正式 frontend.page page_id。",
+            category="input", unit_id=context.unit_id,
+            page_ids=list(page_ids), expected_page_id=unit_page_id,
+        )]
+    page_id = page_ids[0]
+    try:
+        page_id_to_page_key(page_id)
+    except ValueError as exc:
+        return [_fatal_issue(
+            "UNIT_VALIDATION_PAGE_ID_INVALID",
+            "Page Unit 的正式 page_id 无法转换为 canonical PageKey。",
+            category="input", unit_id=context.unit_id,
+            page_id=page_id, error=str(exc),
+        )]
+    return []
 
 
 def _strong_rule_contract_issues(context: UnitGenerationContext) -> list[ValidationIssue]:

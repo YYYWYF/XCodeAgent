@@ -347,6 +347,33 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
             any("allowed_paths" in error for error in business_acceptance_contract_errors(task, context=context))
         )
 
+    def test_page_entry_ignores_noncanonical_context_page_key(self) -> None:
+        """全局验收必须从 pageId 计算入口，不能信任上下文中的派生 PageKey。"""
+
+        entry = "frontend/src/pages/AssetList/index.tsx"
+        task = {
+            "id": "page:asset_list::implementation",
+            "owner": "frontend",
+            "unit_id": "page:asset_list",
+            "change_scope": [{"operation": "add", "path": entry}],
+            "allowed_paths": [entry],
+            "deliverables": [{
+                "id": "page:asset_list::implementation::deliverable",
+                "kind": "frontend.page",
+                "target_id": "asset_list",
+                "paths": [entry],
+                "provides": ["asset_list.render"],
+            }],
+        }
+
+        self.assertEqual(
+            business_acceptance_contract_errors(
+                task,
+                context={"target": {"type": "page", "id": "asset_list", "page_key": "ProductDetail"}},
+            ),
+            [],
+        )
+
     """验证业务检查只由平台按正式输入生成。"""
 
     def test_all_phase_two_kinds_compile(self) -> None:

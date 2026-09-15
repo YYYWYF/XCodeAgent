@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from app.services.api_design_mapping_rules import mapping_business_description, mapping_sources
+from app.services.page_identity import canonical_page_entry_path
 
 
 BUSINESS_ACCEPTANCE_KINDS = (
@@ -1167,7 +1168,10 @@ def _page_deliverable_errors(
         return []
     if len(page_deliverables) != 1:
         return [f"Page Unit {unit_id} must declare exactly one frontend.page deliverable."]
-    expected_paths, strict_path = _page_entry_paths(page_id, context)
+    try:
+        expected_paths, strict_path = _page_entry_paths(page_id, context)
+    except ValueError:
+        return [f"Page Unit {unit_id} has an invalid pageId: {page_id}."]
     deliverable = page_deliverables[0]
     declared_paths = {normalize_repo_path(path) for path in deliverable.get("paths", [])}
     expected_path = expected_paths[0]
@@ -1189,23 +1193,10 @@ def _page_deliverable_errors(
 
 
 def _page_entry_paths(page_id: str, context: dict[str, Any]) -> tuple[list[str], bool]:
-    """优先使用 TargetBuildContext 的 page_key，兼容无精确上下文的既有页面目录。"""
+    """按正式 pageId 计算唯一 canonical 页面入口，不读取上下文中的派生 PageKey。"""
 
-    target = _dict_value(context.get("target"))
-    page_key = (
-        _text(target.get("page_key"))
-        if target.get("type") == "page" and _text(target.get("id")) == page_id
-        else ""
-    )
-    if page_key:
-        return [f"frontend/src/pages/{page_key}/index.tsx"], True
-    fallback_key = _page_key(page_id)
-    return [
-        f"frontend/src/pages/{fallback_key}/index.tsx",
-        f"frontend/src/pages/{fallback_key}Page/index.tsx",
-        f"src/pages/{fallback_key}/index.tsx",
-        f"src/pages/{fallback_key}Page/index.tsx",
-    ], False
+    del context
+    return [canonical_page_entry_path(page_id)], True
 
 
 def _endpoint_deliverable_errors(task: dict[str, Any], deliverable: dict[str, Any]) -> list[str]:
@@ -1337,13 +1328,6 @@ def _project_parameters(value: Any) -> list[dict[str, Any]]:
         for item in _dict_items(value)[:_MAX_ITEMS]
         if _text(item.get("name"))
     ]
-
-
-def _page_key(value: str) -> str:
-    """按模板约定把 page id 转换为稳定 PascalCase 页面目录名。"""
-
-    pieces = [piece for piece in re.split(r"[-_\s]+", str(value or "")) if piece]
-    return "".join(piece[:1].upper() + piece[1:].lower() for piece in pieces) or "Page"
 
 
 def _unique_objects(items: list[dict[str, Any]], keys: tuple[str, ...]) -> list[dict[str, Any]]:

@@ -91,6 +91,39 @@ def _context(unit_id: str = "page:orders") -> UnitGenerationContext:
     )
 
 
+def _page_context(page_id: str) -> UnitGenerationContext:
+    """构造带指定正式 pageId 的 Page Unit Context。"""
+
+    payload = _context().model_dump(mode="json")
+    payload["unit_id"] = f"page:{page_id}"
+    payload["build_execution_scope"]["targetId"] = page_id
+    requirement = payload["generation_requirements"][0]
+    requirement["requirement_id"] = f"frontend.page:{page_id}"
+    requirement["description"] = f"实现页面 {page_id}"
+    requirement["source_refs"].update({
+        "capability_id": f"frontend.page:{page_id}",
+        "page_id": page_id,
+    })
+    return UnitGenerationContext(**payload)
+
+
+def _page_task(page_id: str, path: str) -> dict:
+    """构造指定页面入口的完整 Page implementation Task。"""
+
+    task = _task()
+    task["id"] = f"page:{page_id}::page"
+    task["unit_id"] = f"page:{page_id}"
+    task["target_files"] = [path]
+    task["change_scope"] = [{"operation": "add", "path": path, "description": "新增页面实现"}]
+    task["allowed_paths"] = [path]
+    task["deliverables"][0].update({
+        "target_id": page_id,
+        "paths": [path],
+        "provides": [f"frontend.page:{page_id}"],
+    })
+    return task
+
+
 def _task(unit_id: str = "page:orders", task_id: str = "task-orders") -> dict:
     """构造覆盖完整 Task schema 的合法 Candidate Task。"""
 
@@ -174,6 +207,34 @@ class UnitCandidateValidatorTests(unittest.TestCase):
         ):
             with self.subTest(unit_id=unit_id):
                 self.assertEqual(validate_unit_candidate(_context(unit_id), [_task(unit_id)]), [])
+
+    def test_page_candidate_requires_canonical_entry_in_all_path_fields(self) -> None:
+        """正确 Page entry 通过，四处一致的错误目录仍在 Local 阶段失败。"""
+
+        page_id = "product_detail"
+        expected_entry = "frontend/src/pages/ProductDetail/index.tsx"
+        correct = _page_task(page_id, expected_entry)
+        self.assertEqual(validate_unit_candidate(_page_context(page_id), [correct]), [])
+
+        wrong_entry = "frontend/src/pages/product_detail/index.tsx"
+        wrong = _page_task(page_id, wrong_entry)
+        issues = validate_unit_candidate(_page_context(page_id), [wrong])
+
+        mismatch = next(
+            issue for issue in issues if issue.code == "CANDIDATE_PAGE_ENTRY_MISMATCH"
+        )
+        self.assertEqual(mismatch.level, "unit")
+        self.assertEqual(mismatch.category, "generation")
+        self.assertEqual(mismatch.unit_ids, ("page:product_detail",))
+        self.assertEqual(mismatch.task_ids, ("page:product_detail::page",))
+        self.assertEqual(mismatch.retry_unit_ids, ("page:product_detail",))
+        self.assertTrue(mismatch.retryable)
+        self.assertEqual(mismatch.details["page_id"], page_id)
+        self.assertEqual(mismatch.details["expected_page_entry"], expected_entry)
+        self.assertEqual(
+            mismatch.details["missing_fields"],
+            ("target_files", "change_scope", "allowed_paths", "frontend.page deliverable.paths"),
+        )
 
     def test_each_local_rule_reports_single_invalid_candidate(self) -> None:
         """每个主要不变量被单独破坏时均产生对应结构化 Issue。"""

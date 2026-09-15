@@ -8,6 +8,7 @@ from typing import Any
 
 from app.agents.main.backend_unit_task_rules import resolve_backend_unit_task_rules
 from app.services.business_acceptance import DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND
+from app.services.page_identity import canonical_page_entry_path, page_id_to_page_key
 from app.services.unit_generation_contracts import (
     GenerationRequirement,
     UnitGenerationContext,
@@ -152,15 +153,43 @@ def _common_rules(context: UnitGenerationContext) -> tuple[str, ...]:
 def _page_rules(context: UnitGenerationContext) -> tuple[str, ...]:
     """定义当前 PageImplementationContract 驱动的页面任务规则。"""
 
-    page_id = context.unit_id.removeprefix("page:")
+    page_requirements = tuple(
+        requirement
+        for requirement in context.generation_requirements
+        if _text(requirement.source_refs.get("kind")) == "frontend.page"
+    )
+    page_ids = tuple(
+        _text(requirement.source_refs.get("page_id"))
+        for requirement in page_requirements
+    )
+    if (
+        not page_requirements
+        or any(not page_id for page_id in page_ids)
+        or len(set(page_ids)) != 1
+    ):
+        raise ValueError(
+            f"Page Unit {context.unit_id} 必须携带唯一且明确的 frontend.page page_id。"
+        )
+    page_id = page_ids[0]
+    unit_page_id = context.unit_id.removeprefix("page:")
+    if page_id != unit_page_id:
+        raise ValueError(
+            f"Page Unit {context.unit_id} 的 page_id 必须与 Unit 身份一致。"
+        )
+    page_key = page_id_to_page_key(page_id)
+    page_entry = canonical_page_entry_path(page_id)
     return (
         f"Emit exactly one page implementation Task with id `{context.unit_id}::page`, "
         "dependencies `[]`, and exactly one `frontend.page` deliverable. Its target_id "
         f"must be `{page_id}` and its provides must contain the exact page requirement.",
-        "Read the authorized `page_contract` root before choosing implementation paths. "
-        "Derive PageKey from the directory that contains the contract's uiDesignRef file; "
-        "the exact business page entry is `frontend/src/pages/<PageKey>/index.tsx`. That "
-        "entry must appear identically in target_files, change_scope, allowed_paths, and "
+        f"The platform deterministically computes PageKey from formal pageId `{page_id}`: "
+        f"the canonical PageKey is `{page_key}`, and the exact page entry is `{page_entry}`. "
+        "Read the authorized `page_contract` root and its `uiDesignRef` only for UI/design "
+        "and implementation reference; neither may determine or rewrite PageKey or the "
+        "page entry. Treat these platform-provided values as immutable: the model must not "
+        "independently derive or rewrite paths from pageId spelling, unit_id, route path, "
+        "uiDesignRef content, or workspace guesses. The exact page entry must appear "
+        "identically in target_files, change_scope, allowed_paths, and "
         "the frontend.page deliverable paths. Reuse the existing entry when present and "
         "add only page-owned components or styles required by the current contract.",
         "Implement only the current PageImplementationContract. Do not emit API-client, "

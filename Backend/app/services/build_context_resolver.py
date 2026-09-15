@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +12,7 @@ from app.services.api_design import (
     load_confirmed_endpoint_designs,
 )
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
+from app.services.page_identity import page_id_to_page_key
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
 
 
@@ -42,24 +42,6 @@ def _workspace_root(project_plan_path: str | Path | None) -> Path:
     if path.name != "technical-plan.json" or path.parent.name != "plans":
         raise ValueError("Build 上下文必须使用规范的 technical-plan.json 路径。")
     return path.parent.parent.parent
-
-
-def _page_key_from_page_id(page_id: str) -> str:
-    """将 snake_case 的 pageId 转换为 PascalCase 的 PageKey。
-
-    与前端 templateApi.ts 的 pageKeyFromPageId 保持一致：
-    按 _ / - / 空格分段，每段首字母大写后拼接，保留所有段（含 "page" 后缀）。
-    例：dashboard_page → DashboardPage，order_list_page → OrderListPage。
-    """
-    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(page_id or "page")).strip("-")
-    segments = [s for s in re.split(r"[-_\s]+", cleaned) if s]
-    if not segments:
-        return "Page"
-    pascal = "".join(seg[:1].upper() + seg[1:].lower() for seg in segments)
-    # 确保以字母开头
-    if not pascal[:1].isalpha():
-        pascal = "Page" + pascal
-    return pascal
 
 
 def resolve_target_build_context(
@@ -133,7 +115,7 @@ def _page_context(
         "target": {
             "type": "page",
             "id": page_id,
-            "page_key": _page_key_from_page_id(page_id),
+            "page_key": page_id_to_page_key(page_id),
         },
         "page_implementation_contract": page_contract,
         "endpoint_contract": None,

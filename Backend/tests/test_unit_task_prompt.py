@@ -243,6 +243,22 @@ class UnitTaskPromptTests(unittest.TestCase):
         self.assertIn("只实现当前页面的 PageImplementationContract。", prompt)
         self.assertIn("页面 Task 必须复用现有入口文件。", prompt)
 
+    def test_page_prompt_binds_canonical_entry_from_formal_page_id(self) -> None:
+        """Page prompt 必须从正式 pageId 动态绑定 PageKey 和 exact entry。"""
+
+        context = _unit_context(
+            "page:product_detail",
+            "page",
+            [_requirement("frontend.page", "product_detail", page_id="product_detail")],
+        )
+        prompt = build_unit_generation_prompt(context)
+
+        self.assertIn("pageId `product_detail`", prompt)
+        self.assertIn("canonical PageKey is `ProductDetail`", prompt)
+        self.assertIn("frontend/src/pages/ProductDetail/index.tsx", prompt)
+        self.assertIn("uiDesignRef` only for UI/design", prompt)
+        self.assertNotIn("Derive PageKey from the directory that contains", prompt)
+
     def test_all_model_unit_types_resolve_current_responsibility_rules(self) -> None:
         """六类模型 Unit 均自动获得当前数量、固定 ID、分层或复用规则。"""
 
