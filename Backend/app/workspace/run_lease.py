@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+from app.services.preview_runtime_guard import maintenance_lock, require_no_maintenance
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,8 @@ class WorkspaceRunLeaseRegistry:
             run_id=run_id,
             resource_keys=_resource_keys(execution_scope, resource_claims),
         )
-        with self._lock:
+        with maintenance_lock, self._lock:
+            require_no_maintenance(workspace_key)
             self._active[_owner_key(owner)] = owner
         return WorkspaceRunLease(self, owner)
 

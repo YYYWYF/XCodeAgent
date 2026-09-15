@@ -312,7 +312,8 @@ backend.bootstrap
 3. `backend.*` 交付物只能属于 `backend:*` Unit，并由 backend owner 执行；
 4. `frontend.page` 必须包含当前 PageKey 的页面入口；
 5. `backend.endpoint_controller` 必须属于当前 endpoint Unit；
-6. backend endpoint 任务的实体范围必须是 Unit `source_refs.entity_designs` 的子集；
+6. backend endpoint 任务的交付目标必须是当前 Endpoint ID；职责不再经由
+   `source_refs.entity_designs` 或 Entity binding 中转；
 7. 同一精确路径不能被同批次多个交付物重复拥有；
 8. 每个业务检查必须引用一个真实 `deliverable_id`。
 
@@ -776,7 +777,7 @@ Backend/tests/test_build_repair_planner.py
 ### 重点文件
 
 ```text
-Backend/app/agents/main/task_preparer.py
+Backend/app/graph/nodes/task_planning_adapter.py
 Backend/app/services/build_task_planner.py
 Backend/app/services/build_unit_compiler.py
 Backend/app/services/engineering_acceptance.py

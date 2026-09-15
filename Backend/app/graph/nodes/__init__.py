@@ -1,4 +1,6 @@
-from app.graph.nodes.tasks import prepare_build_tasks
+from app.graph.nodes.task_planning_adapter import (
+    create_async_workflow_planning_adapter,
+)
 from app.graph.nodes.authorization_bootstrap import authorization_bootstrap
 from app.graph.nodes.application_revision import start_application_revision
 from app.graph.nodes.classification import classify_request_complexity
@@ -45,7 +47,7 @@ __all__ = [
     "unit_test_repair",
     "launch_project",
     "test_phase_confirmation",
-    "prepare_build_tasks",
+    "create_async_workflow_planning_adapter",
     "project_planning",
     "product_planning",
     "quality_gate",

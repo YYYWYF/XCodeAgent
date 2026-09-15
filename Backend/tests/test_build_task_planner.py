@@ -51,90 +51,6 @@ def _test_deliverable(task_id: str, unit_id: str, owner: str, path: str) -> dict
     }
 
 
-def _endpoint_design(
-    *source_types: str,
-    contract_id: str = "orders-api",
-    endpoint_id: str = "orders.list",
-    entity_id: str = "Order",
-) -> dict:
-    """构造供任务规划测试使用的自包含字段映射产物。"""
-
-    snapshots: list[dict] = []
-    field_mappings: list[dict] = []
-    for index, source_type in enumerate(source_types):
-        source_id = f"{source_type}-{index}"
-        field_name = f"{source_type}{index}"
-        if source_type == "database":
-            details = {"table": "orders", "columns": ["order_id"]}
-            source_field = {
-                "sourceType": "database",
-                "sourceId": source_id,
-                "schema": "app",
-                "table": "orders",
-                "column": "order_id",
-                "type": "string",
-                "usage": "read",
-            }
-        else:
-            details = {
-                "connection": {
-                    "baseUrl": "https://api.example.com",
-                    "baseUrlConfigKey": "upstream.url",
-                    "timeoutMs": 10000,
-                    "headers": [],
-                },
-                "operation": {
-                    "operationId": f"{endpoint_id}-operation",
-                    "method": "GET",
-                    "path": "/values",
-                    "pathParameters": [],
-                    "queryParameters": [],
-                    "requestStructure": {},
-                    "responseStructure": {},
-                },
-            }
-            source_field = {
-                "sourceType": "external_api",
-                "sourceId": source_id,
-                "directoryId": "upstream-directory",
-                "operationId": f"{endpoint_id}-operation",
-                "section": "response_body",
-                "path": "value",
-                "type": "string",
-            }
-        snapshots.append({
-            "sourceType": source_type,
-            "sourceId": source_id,
-            "name": source_id,
-            "details": details,
-        })
-        field_mappings.append({
-            "endpointField": {
-                "side": "response",
-                "location": "response_body",
-                "path": f"result.{field_name}",
-                "type": "string",
-                "required": True,
-                "description": "",
-            },
-            "mappingType": "source_mapping",
-            "processingType": "direct", "sourceFields": [source_field],
-        })
-    return {
-        "schemaVersion": "endpoint-field-mapping.v3",
-        "artifactType": "endpoint-field-mapping",
-        "status": "confirmed",
-        "confirmationStatus": "confirmed",
-        "apiContractId": contract_id,
-        "endpointId": endpoint_id,
-        "endpointContract": {"id": endpoint_id, "method": "GET", "path": "/values"},
-        "fieldMappings": field_mappings,
-        "sourceSnapshots": snapshots,
-        "basedOn": [{"artifactKey": "technical-plan", "sha256": "a" * 64}],
-        "confirmedAt": "2026-09-04T00:00:00Z",
-    }
-
-
 class BuildTaskPlannerTests(unittest.TestCase):
     def test_real_api_prompt_plans_one_shared_response_entity_adapter(self) -> None:
         """真实接口公共 Unit 必须规划唯一响应适配器并约束同 Unit API 依赖。"""
@@ -143,7 +59,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
             {
                 "version": "1.0.0",
                 "executable_details": {
-                    "endpoint_designs": [_endpoint_design("database")]
+                    "entity_designs": [
+                        {"entity_id": "Order", "data_source_type": "database"}
+                    ]
                 },
             },
             {},
@@ -181,7 +99,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
             {
                 "version": "1.0.0",
                 "executable_details": {
-                    "endpoint_designs": [_endpoint_design("external_api")]
+                    "entity_designs": [
+                        {"entity_id": "Order", "data_source_type": "external_api"}
+                    ]
                 },
             },
             {},
@@ -312,7 +232,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         positions = [prompt.index(heading) for heading in headings]
         self.assertEqual(positions, sorted(positions))
         self.assertTrue(all(prompt.count(heading) == 1 for heading in headings))
-        self.assertIn("exactly one top-level key: `tasks`", prompt)
+        self.assertIn("exactly two top-level keys", prompt)
+        self.assertIn("`workspace_analysis` and `tasks`", prompt)
         self.assertIn("do not return `dag`", prompt)
         self.assertNotIn("source_refs.entity_ids", prompt)
 
@@ -322,13 +243,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         prompt = build_task_preparation_prompt(
             {
                 "executable_details": {
-                    "endpoint_designs": [
-                        _endpoint_design(
-                            "database",
-                            contract_id="catalog-api",
-                            endpoint_id="catalog.list",
-                            entity_id="ProductCategory",
-                        )
+                    "entity_designs": [
+                        {"entity_id": "ProductCategory", "data_source_type": "database"}
                     ]
                 }
             },
@@ -348,18 +264,12 @@ class BuildTaskPlannerTests(unittest.TestCase):
         )
 
         self.assertIn("`backend:bootstrap::bootstrap`", prompt)
-        self.assertIn("`<endpointUnitId>::endpoint::<stage>`", prompt)
-        self.assertIn("Emit exactly four tasks: `objects -> repository -> service -> controller`", prompt)
-        self.assertIn("one `backend.objects` deliverable", prompt)
-        self.assertIn("Whenever implementation of a confirmed business failure branch", prompt)
-        self.assertIn("<Module>ErrorCode.java", prompt)
-        self.assertIn("plan never imports a missing ErrorCode type", prompt)
-        self.assertIn("planning recommendation, not an exclusive constraint", prompt)
-        self.assertIn("Mapper is not a separate pipeline stage", prompt)
-        self.assertNotIn("OpenFeign", prompt)
+        self.assertIn("`<endpointUnitId>::<entityId>::<stage>`", prompt)
+        self.assertIn("`objects`, `repository`, `service`, `controller`", prompt)
+        self.assertIn("objects → repository → service → controller", prompt)
         self.assertIn("ProductCategory becomes productCategory", prompt)
         self.assertIn("Never invent semantic names", prompt)
-        self.assertIn("Existing files do not remove a required stage", prompt)
+        self.assertIn("Existing files do not remove a stage", prompt)
         self.assertIn("For every owner=backend task", prompt)
         self.assertIn("`1. ...\\n2. ...`", prompt)
         self.assertIn("For every frontend or backend change_scope path", prompt)
@@ -642,7 +552,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
         project_plan = {
             "executable_details": {
                 "endpoint_detail_plans": [{"endpoint_id": "orders.list"}],
-                "endpoint_designs": [_endpoint_design("database")],
+                "entity_designs": [
+                    {"entity_id": "Order", "data_source_type": "database"}
+                ],
                 "api_contracts": [{"id": "orders-api"}],
             }
         }
@@ -679,7 +591,9 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "executable_details": {
                 "page_implementation_contracts": [{"pageId": "orders"}],
                 "endpoint_detail_plans": [{"endpoint_id": "orders.list"}],
-                "endpoint_designs": [_endpoint_design("database")],
+                "entity_designs": [
+                    {"entity_id": "Order", "data_source_type": "database"}
+                ],
                 "api_contracts": [{"id": "orders-api"}],
             },
         }
@@ -778,11 +692,11 @@ class BuildTaskPlannerTests(unittest.TestCase):
             self.assertNotIn(omitted_key, prompt_context)
         self.assertEqual(prompt.count("UNIQUE_ENDPOINT_LOGIC"), 1)
         self.assertEqual(prompt.count("UNIQUE_ENTITY_FIELD"), 1)
-        self.assertNotIn("owner=database", prompt)
+        self.assertEqual(prompt.count("owner=database"), 1)
         self.assertNotIn('"application_skeleton"', prompt)
 
-    def test_endpoint_projection_includes_confirmed_api_design(self) -> None:
-        """Endpoint 投影保留当前字段绑定和来源快照，不读取全局实体设计。"""
+    def test_endpoint_projection_includes_confirmed_entity_design(self) -> None:
+        """endpoint 投影保留有序实体摘要、字段和数据库绑定。"""
 
         project_plan = {
             "architecture": {"backend_tech_stack": {"framework": "Spring Boot"}},
@@ -822,14 +736,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 }
             ],
         }
-        endpoint_design = _endpoint_design(
-            "database",
-            contract_id="category_api",
-            endpoint_id="category_api.create",
-            entity_id="Category",
-        )
-        endpoint_design["fieldMappings"][0]["endpointField"]["path"] = "result.database0"
-        endpoint_design["fieldMappings"][0]["sourceFields"][0].update({"table": "category", "column": "category_name"})
         build_context = {
             "target": {
                 "type": "endpoint",
@@ -844,7 +750,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             ],
             "endpoint_ids": ["category_api.create"],
             "entity_ids": ["Category"],
-            "endpoint_designs": [endpoint_design],
             "required_unit_ids": [
                 "backend:endpoint:category_api:category_api.create"
             ],
@@ -853,17 +758,13 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         projected = _task_preparation_project_plan(project_plan, build_context)
 
-        designs = projected["executable_details"]["endpoint_designs"]
-        self.assertEqual([item["endpointId"] for item in designs], ["category_api.create"])
+        designs = projected["executable_details"]["entity_designs"]
+        self.assertEqual([item["entity_id"] for item in designs], ["Category"])
+        self.assertEqual(designs[0]["fields"][0]["name"], "category_name")
         self.assertEqual(
-            designs[0]["fieldMappings"][0]["endpointField"]["path"],
-            "result.database0",
-        )
-        self.assertEqual(
-            designs[0]["fieldMappings"][0]["sourceFields"][0]["table"],
+            designs[0]["database_design"]["matched_table"],
             "category",
         )
-        self.assertNotIn("entity_designs", projected["executable_details"])
         self.assertNotIn("application_skeleton", projected)
 
     def test_external_api_endpoint_prompt_keeps_only_external_rules(self) -> None:
@@ -875,13 +776,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
             "executable_details": {
                 "endpoint_detail_plans": [{"endpoint_id": "weather.get"}],
-                "endpoint_designs": [
-                    _endpoint_design(
-                        "external_api",
-                        contract_id="weather-api",
-                        endpoint_id="weather.get",
-                        entity_id="Weather",
-                    )
+                "entity_designs": [
+                    {"entity_id": "Weather", "data_source_type": "external_api"}
                 ],
                 "api_contracts": [{"id": "weather-api"}],
             },
@@ -910,22 +806,27 @@ class BuildTaskPlannerTests(unittest.TestCase):
         read_skill.assert_not_called()
         self.assertNotIn("Skill", prompt)
         self.assertNotIn("SKILL.md", prompt)
-        self.assertIn("`objects -> upstream -> service -> controller`", prompt)
-        self.assertIn("one `backend.upstream` deliverable", prompt)
+        self.assertIn("`upstream`, `mapping`, `service`, and `controller`", prompt)
         self.assertIn("external_api", prompt)
-        self.assertIn("apiContractId + endpointId", prompt)
-        self.assertIn("details.operation and details.connection", prompt)
+        self.assertIn("api_contract_id + endpoint_id", prompt)
+        self.assertIn("`backend.external_api_client`", prompt)
         self.assertIn("exactly one backend:bootstrap root task", prompt)
         self.assertIn("Spring Cloud OpenFeign", prompt)
         self.assertIn("@EnableFeignClients", prompt)
-        self.assertIn("typed @FeignClient", prompt)
-        self.assertIn("application.yml under its existing src/main/resources", prompt)
-        self.assertIn("connection.baseUrl as the plain value", prompt)
-        self.assertIn("Never put the Base URL in Java", prompt)
-        self.assertIn("requestStructure, responseStructure", prompt)
-        self.assertIn("never exposes the upstream path", prompt)
+        self.assertIn("typed @FeignClient interface", prompt)
+        self.assertIn("application.yml, application.yaml, or application.properties", prompt)
+        self.assertIn("Include that exact configuration file in target_files", prompt)
+        self.assertIn("add the exact base_url_config_key there", prompt)
+        self.assertIn("Write effective_connection.base_url directly", prompt)
+        self.assertIn("plain YAML or properties value", prompt)
+        self.assertIn("Never wrap it in a `${ENV_NAME:default}`", prompt)
+        self.assertNotIn("derive an uppercase underscore environment variable", prompt)
+        self.assertIn("configuration-file work belongs to upstream", prompt)
+        self.assertIn("mapped_entity_path", prompt)
+        self.assertIn("request_shape and response_shape as type/field structure", prompt)
+        self.assertIn("must not expose the upstream path", prompt)
         self.assertIn("For every owner=backend task", prompt)
-        self.assertNotIn("database, and external_api tasks", prompt)
+        self.assertIn("database, and external_api tasks", prompt)
         self.assertNotIn("DATABASE BOOTSTRAP TASK IS REQUIRED", prompt)
 
     def test_external_api_task_prompt_carries_product_operation_structure_without_samples(self) -> None:
@@ -988,41 +889,23 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 },
             ],
         }
-        endpoint_design = _endpoint_design(
-            "external_api",
-            contract_id="product_api",
-            endpoint_id="product_api.list",
-            entity_id="Product",
-        )
-        endpoint_design["sourceSnapshots"][0]["details"] = {
-            "connection": {
-                "baseUrl": operation["effective_connection"]["base_url"],
-                "baseUrlConfigKey": operation["effective_connection"]["base_url_config_key"],
-                "timeoutMs": operation["effective_connection"]["timeout_ms"],
-                "headers": [],
-            },
-            "operation": {
-                "operationId": operation["operation_id"],
-                "name": operation["name"],
-                "method": operation["api_info"]["method"],
-                "path": operation["api_info"]["path"],
-                "pathParameters": [],
-                "queryParameters": [],
-                "requestStructure": operation["api_info"]["request_shape"],
-                "responseStructure": operation["api_info"]["response_shape"],
-            },
-        }
-        endpoint_design["fieldMappings"] = [
-            {
-                "endpointField": {"side": "response", "location": "response_body", "path": f"items[].{mapping['entity_field']}", "type": "string", "required": True, "description": ""},
-                "mappingType": "source_mapping",
-                "processingType": "direct", "sourceFields": [{"sourceType": "external_api", "sourceId": "external_api-0", "directoryId": "products", "operationId": operation["operation_id"], "section": "response_body", "path": mapping["source_field"], "type": "string", "description": ""}],
-            }
-            for mapping in operation["field_mappings"]
-        ]
         project_plan = {
             "executable_details": {
-                "endpoint_designs": [endpoint_design],
+                "entity_designs": [
+                    {
+                        "entity_id": "Product",
+                        "data_source_type": "external_api",
+                        "external_api_design": {
+                            "connection": {
+                                "base_url_config_key": "product.url",
+                                "timeout_ms": 10000,
+                                "headers": [],
+                            },
+                            "operation_count": 1,
+                            "operations": [operation],
+                        },
+                    }
+                ],
                 "api_contracts": [
                     {
                         "id": "product_api",
@@ -1051,14 +934,14 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("/v1/product/list", prompt)
         self.assertIn('"path": "pageSize"', prompt)
         self.assertIn('"path": "list[].price"', prompt)
-        self.assertIn('"fieldMappings"', prompt)
-        self.assertIn('"baseUrl": "http://99.17.197.63:8090"', prompt)
-        self.assertIn("connection.baseUrl as the plain value", prompt)
-        self.assertIn("Never put the Base URL in Java", prompt)
+        self.assertIn('"mapped_entity_path": "list[]"', prompt)
+        self.assertIn("Write effective_connection.base_url directly", prompt)
+        self.assertIn("Never wrap it in a `${ENV_NAME:default}`", prompt)
+        self.assertIn("never put the design-time base_url in Java source", prompt)
         self.assertNotIn("PROMPT_SAMPLE_PRODUCT", prompt)
 
-    def test_mixed_endpoint_prompt_keeps_api_source_rules_without_skills(self) -> None:
-        """混合 Endpoint 保留数据库与外部 API 规则，但不读取或注入 Skill。"""
+    def test_mixed_endpoint_prompt_keeps_all_source_rules_without_skills(self) -> None:
+        """混合 endpoint 保留三类数据源规则，但不读取或注入 Skill。"""
 
         project_plan = {
             "application_skeleton": {
@@ -1070,13 +953,10 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
             "executable_details": {
                 "endpoint_detail_plans": [{"endpoint_id": "dashboard.get"}],
-                "endpoint_designs": [
-                    _endpoint_design(
-                        "database",
-                        "external_api",
-                        contract_id="dashboard-api",
-                        endpoint_id="dashboard.get",
-                    )
+                "entity_designs": [
+                    {"entity_id": "Order", "data_source_type": "database"},
+                    {"entity_id": "Weather", "data_source_type": "external_api"},
+                    {"entity_id": "Notice", "data_source_type": "static"},
                 ],
                 "api_contracts": [{"id": "dashboard-api"}],
             },
@@ -1103,18 +983,17 @@ class BuildTaskPlannerTests(unittest.TestCase):
 
         self.assertEqual(
             endpoint_source_types(project_plan),
-            {"database", "external_api"},
+            {"database", "external_api", "static"},
         )
         read_skill.assert_not_called()
         self.assertNotIn("Skill", prompt)
         self.assertNotIn("SKILL.md", prompt)
-        self.assertIn("database branch is `objects -> repository`", prompt)
-        self.assertIn("external branch is `objects -> upstream`", prompt)
-        self.assertIn("service depends on repository and upstream", prompt)
-        self.assertIn("different sources", prompt)
+        self.assertIn("`objects`, `repository`, `service`, `controller`", prompt)
+        self.assertIn("`upstream`, `mapping`, `service`, and `controller`", prompt)
+        self.assertIn("`<frontendDataUnitId>::data-module`", prompt)
 
-    def test_legacy_static_entity_binding_does_not_drive_endpoint_prompt(self) -> None:
-        """旧 static 实体绑定不会进入当前 Endpoint 任务准备上下文。"""
+    def test_static_endpoint_prompt_uses_frontend_snapshot_without_skill(self) -> None:
+        """纯 static endpoint 只使用前端快照和规划器自有规则。"""
 
         project_plan = {
             "executable_details": {
@@ -1144,28 +1023,16 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(endpoint_source_types(project_plan), set())
-        self.assertNotIn("frontend:data:*", prompt)
-        self.assertNotIn("frontend/src/apis/noticeApi.ts", prompt)
+        self.assertIn("All frontend paths are under `/frontend/`", prompt)
+        self.assertIn("frontend/src/apis/noticeApi.ts", prompt)
         self.assertNotIn("backend/src/main/java/NoticeController.java", prompt)
         self.assertNotIn("frontend-static-data-generate", prompt)
         self.assertNotIn("Skill", prompt)
         self.assertNotIn("SKILL.md", prompt)
 
-    def test_unit_inputs_filter_endpoint_designs_by_identity(self) -> None:
-        """后端 Endpoint Unit 只携带自身复合标识对应的 API 设计。"""
+    def test_unit_inputs_filter_entity_designs_by_owner_source(self) -> None:
+        """后端 endpoint 与前端 static Unit 只携带各自来源实体。"""
 
-        selected = _endpoint_design(
-            "database",
-            "external_api",
-            contract_id="dashboard-api",
-            endpoint_id="dashboard.get",
-        )
-        unrelated = _endpoint_design(
-            "database",
-            contract_id="notice-api",
-            endpoint_id="notice.list",
-        )
         build_context = {
             "target": {"type": "endpoint", "id": "dashboard.get"},
             "required_unit_ids": [
@@ -1173,8 +1040,12 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 "frontend:data:static",
             ],
             "endpoint_ids": ["dashboard.get"],
-            "entity_ids": ["Order"],
-            "endpoint_designs": [selected, unrelated],
+            "entity_ids": ["Order", "Weather", "Notice"],
+            "entity_designs": [
+                {"entity_id": "Order", "data_source_type": "database"},
+                {"entity_id": "Weather", "data_source_type": "external_api"},
+                {"entity_id": "Notice", "data_source_type": "static"},
+            ],
             "source_refs": {},
         }
         units = annotate_unit_inputs(
@@ -1194,16 +1065,17 @@ class BuildTaskPlannerTests(unittest.TestCase):
             {},
         )
 
-        backend_designs = units[
+        backend_sources = units[
             "backend:endpoint:dashboard-api:dashboard.get"
-        ]["source_refs"]["endpoint_designs"]
+        ]["source_refs"]["entity_designs"]
+        static_sources = units["frontend:data:static"]["source_refs"]["entity_designs"]
         self.assertEqual(
-            [item["endpointId"] for item in backend_designs],
-            ["dashboard.get"],
+            {item["data_source_type"] for item in backend_sources},
+            {"database", "external_api"},
         )
-        self.assertNotIn(
-            "endpoint_designs",
-            units["frontend:data:static"]["source_refs"],
+        self.assertEqual(
+            {item["data_source_type"] for item in static_sources},
+            {"static"},
         )
         self.assertNotEqual(
             units["backend:endpoint:dashboard-api:dashboard.get"]["input_fingerprint"],
@@ -1213,15 +1085,34 @@ class BuildTaskPlannerTests(unittest.TestCase):
     def test_page_backend_units_scope_external_operations_to_their_endpoint(self) -> None:
         """页面同时规划多个接口时，每个后端 Unit 只获得自身上游 operation。"""
 
-        endpoint_designs = [
-            _endpoint_design(
-                "external_api",
-                contract_id="product_api",
-                endpoint_id=endpoint_id,
-                entity_id="Product",
-            )
-            for endpoint_id in ("product_api.list", "product_api.detail")
-        ]
+        entity_design = {
+            "entity_id": "Product",
+            "data_source_type": "external_api",
+            "external_api_design": {
+                "connection": {"base_url_config_key": "product.url"},
+                "operation_count": 2,
+                "operations": [
+                    {
+                        "operation_id": "product-list",
+                        "endpoint_refs": [
+                            {
+                                "api_contract_id": "product_api",
+                                "endpoint_id": "product_api.list",
+                            }
+                        ],
+                    },
+                    {
+                        "operation_id": "product-detail",
+                        "endpoint_refs": [
+                            {
+                                "api_contract_id": "product_api",
+                                "endpoint_id": "product_api.detail",
+                            }
+                        ],
+                    },
+                ],
+            },
+        }
         build_context = {
             "target": {"type": "page", "id": "products"},
             "required_unit_ids": [
@@ -1230,7 +1121,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             ],
             "endpoint_ids": ["product_api.list", "product_api.detail"],
             "entity_ids": ["Product"],
-            "endpoint_designs": endpoint_designs,
+            "entity_designs": [entity_design],
             "source_refs": {
                 "technical_plan_endpoints": [
                     {"id": "product_api.list", "api_contract_id": "product_api"},
@@ -1256,12 +1147,17 @@ class BuildTaskPlannerTests(unittest.TestCase):
             ]["source_refs"]
             self.assertEqual(refs["endpoint_ids"], [endpoint_id])
             self.assertEqual(refs["target"]["id"], endpoint_id)
-            design = refs["endpoint_designs"][0]
+            operations = refs["entity_designs"][0]["external_api_design"][
+                "operations"
+            ]
             self.assertEqual(
-                design["sourceSnapshots"][0]["details"]["operation"]["operationId"],
-                f"{endpoint_id}-operation",
+                [operation["operation_id"] for operation in operations],
+                [operation_id],
             )
-            self.assertEqual(len(refs["endpoint_designs"]), 1)
+            self.assertEqual(
+                refs["entity_designs"][0]["external_api_design"]["operation_count"],
+                1,
+            )
 
     def test_delete_endpoint_name_does_not_make_create_table_high_risk(self) -> None:
         """来源 endpoint 名称中的 delete 不得被误判为高危数据库删除操作。"""
@@ -1310,8 +1206,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("same Unit only", prompt)
         self.assertIn("do not copy its task ids into dependencies", prompt)
 
-    def test_legacy_static_source_does_not_enter_build_prompt(self) -> None:
-        """旧应用级 static 来源不再驱动 Build，也不读取或注入 Skill。"""
+    def test_static_task_prompt_excludes_backend_generation_requirements(self) -> None:
+        """Static 任务准备不读取或注入任何 Skill。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -1328,8 +1224,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             )
 
         read_skill.assert_not_called()
-        self.assertNotIn("frontend:data:*", prompt)
-        self.assertIn("Plan page Units", prompt)
+        self.assertIn("frontend:data:*", prompt)
+        self.assertIn("Never create database, backend", prompt)
         self.assertNotIn("Skill", prompt)
         self.assertNotIn("SKILL.md", prompt)
         self.assertNotIn("WorkspaceNavigationContext", prompt)
@@ -1347,6 +1243,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
     def test_main_agent_json_is_consumed_by_task_planner(self) -> None:
         response = """```json
         {
+          "workspace_analysis": {"entry_files": ["src/main.tsx"]},
           "tasks": [{
             "id": "task-home",
             "unit_id": "page:home",
@@ -1378,7 +1275,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         tasks = tasks_from_build_task_plan(plan)
         self.assertEqual(tasks[0]["id"], "task-home")
         self.assertEqual(tasks[0]["target_files"], ["src/pages/Home/index.tsx"])
-        self.assertEqual(plan["workspace_analysis"]["inspection_status"], "incomplete")
+        self.assertEqual(plan["workspace_analysis"]["inspection_status"], "completed")
         self.assertEqual(plan["prepared_by"]["model"], "test-model")
 
     def test_malformed_deliverable_is_regenerated_with_precise_feedback(self) -> None:
@@ -1393,7 +1290,12 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "owner": "frontend",
                         "description": "创建页面 API 模块。",
                         "change_scope": ["frontend/src/apis/testPage1.ts"],
-                        "deliverables": [{"kind": "frontend.api_module", "path": "frontend/src/apis/testPage1.ts"}],
+                        "deliverables": [
+                            {
+                                "kind": "frontend.api_module",
+                                "path": "frontend/src/apis/testPage1.ts",
+                            }
+                        ],
                     }
                 ]
             }
@@ -1407,8 +1309,284 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "owner": "frontend",
                         "description": "创建页面共享调用能力。",
                         "change_scope": ["frontend/src/apis/testPage1.ts"],
-                        "deliverables": [{"id": "api:test-page-1", "kind": "frontend.shared_capability", "target_id": "test-page-1", "paths": ["frontend/src/apis/testPage1.ts"], "provides": ["test-page-1.api"]}],
+                        "deliverables": [
+                            {
+                                "id": "api:test-page-1",
+                                "kind": "frontend.api_module",
+                                "target_id": "test-page-1",
+                                "paths": ["frontend/src/apis/testPage1.ts"],
+                                "provides": ["test-page-1.api"],
+                            }
+                        ],
                     }
+                ]
+            }
+        )
+        chat_model = Mock()
+        bound_model = Mock()
+        chat_model.bind.return_value = bound_model
+        bound_model.invoke.side_effect = [
+            SimpleNamespace(
+                content=invalid_response, usage_metadata=None, response_metadata={}
+            ),
+            SimpleNamespace(
+                content=valid_response, usage_metadata=None, response_metadata={}
+            ),
+        ]
+        settings = SimpleNamespace(
+            model_name="test-model",
+            model_api_name="test-model",
+            default_max_tokens=4096,
+            build_task_plan_max_retries=2,
+        )
+
+        with (
+            patch(
+                "app.agents.main.task_preparer.Settings.from_env",
+                return_value=settings,
+            ),
+            patch(
+                "app.agents.main.task_preparer.create_chat_model",
+                return_value=chat_model,
+            ),
+        ):
+            plan = prepare_build_tasks_with_main_agent(
+                {"version": "1.0.0"},
+                build_context={
+                    "planning_context_mode": "page",
+                    "required_unit_ids": ["page:test-page-1"],
+                },
+            )
+
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
+        self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
+        retry_prompt = bound_model.invoke.call_args_list[1].args[0]
+        self.assertIn("deliverables[0].id is required", retry_prompt)
+        self.assertIn('singular field "path" is not supported', retry_prompt)
+        self.assertNotIn("must declare at least one deliverable", retry_prompt)
+
+    def test_full_dag_finalization_error_uses_the_same_regeneration_loop(self) -> None:
+        """候选单独有效但完整 DAG 无效时必须沿同一 attempt 计数重新生成。"""
+
+        response = json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "page-task",
+                        "unit_id": "page:dashboard",
+                        "owner": "frontend",
+                        "description": "实现页面内容。",
+                        "change_scope": ["frontend/src/pages/Dashboard/index.tsx"],
+                        "deliverables": [
+                            {
+                                "id": "page:dashboard",
+                                "kind": "frontend.page",
+                                "target_id": "dashboard",
+                                "paths": ["frontend/src/pages/Dashboard/index.tsx"],
+                                "provides": ["dashboard.render"],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        finalized_attempts = 0
+
+        def finalize_candidate(candidate: dict) -> dict:
+            """首轮模拟合并冲突，第二轮返回完整有效图。"""
+
+            nonlocal finalized_attempts
+            finalized_attempts += 1
+            if finalized_attempts == 1:
+                candidate["task_graph"]["validation"] = {
+                    "is_valid": False,
+                    "errors": ["merged retained owner conflict"],
+                }
+            return candidate
+
+        settings = SimpleNamespace(
+            model_name="test-model",
+            model_api_name="test-model",
+            default_max_tokens=4096,
+            build_task_plan_max_retries=2,
+        )
+        with (
+            patch(
+                "app.agents.main.task_preparer.Settings.from_env",
+                return_value=settings,
+            ),
+            patch(
+                "app.agents.main.task_preparer._invoke_live_main_agent",
+                side_effect=[response, response],
+            ) as invoke_model,
+        ):
+            plan = prepare_build_tasks_with_main_agent(
+                {"version": "1.0.0"},
+                build_context={"required_unit_ids": ["page:dashboard"]},
+                candidate_finalizer=finalize_candidate,
+            )
+
+        self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
+        self.assertEqual(finalized_attempts, 2)
+        self.assertEqual(invoke_model.call_count, 2)
+        self.assertEqual(
+            invoke_model.call_args_list[1].kwargs["validation_feedback"],
+            ["merged retained owner conflict"],
+        )
+
+    def test_invalid_candidate_is_automatically_regenerated(self) -> None:
+        """平台边界错误回喂模型自动重生成，不要求用户修正任务拆分。"""
+
+        invalid_response = json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "menu-task",
+                        "unit_id": "page:dashboard",
+                        "owner": "frontend",
+                        "description": "修改模板菜单",
+                        "change_scope": [
+                            {
+                                "operation": "modify",
+                                "path": "frontend/src/constants/menus.ts",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        valid_response = json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "page-task",
+                        "unit_id": "page:dashboard",
+                        "owner": "frontend",
+                        "description": "实现页面内容",
+                        "change_scope": [
+                            {
+                                "operation": "modify",
+                                "path": "frontend/src/pages/Dashboard/index.tsx",
+                            }
+                        ],
+                        "deliverables": [
+                            {
+                                "id": "page:dashboard",
+                                "kind": "frontend.page",
+                                "target_id": "dashboard",
+                                "paths": ["frontend/src/pages/Dashboard/index.tsx"],
+                                "provides": ["dashboard.render"],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        chat_model = Mock()
+        bound_model = Mock()
+        chat_model.bind.return_value = bound_model
+        bound_model.invoke.side_effect = [
+            SimpleNamespace(
+                content=invalid_response,
+                usage_metadata=None,
+                response_metadata={},
+            ),
+            SimpleNamespace(
+                content=valid_response,
+                usage_metadata=None,
+                response_metadata={},
+            ),
+        ]
+        settings = SimpleNamespace(
+            model_name="test-model",
+            model_api_name="test-model",
+            default_max_tokens=4096,
+            build_task_plan_max_retries=2,
+        )
+        with (
+            patch(
+                "app.agents.main.task_preparer.Settings.from_env",
+                return_value=settings,
+            ),
+            patch(
+                "app.agents.main.task_preparer.create_chat_model",
+                return_value=chat_model,
+            ) as create_model,
+        ):
+            plan = prepare_build_tasks_with_main_agent(
+                {
+                    "version": "1.0.0",
+                    "application_skeleton": {
+                        "data_sources": [{"id": "main", "type": "static"}]
+                    },
+                },
+                build_context={"required_unit_ids": ["page:dashboard"]},
+            )
+
+        self.assertEqual([task["id"] for task in tasks_from_build_task_plan(plan)], ["page-task"])
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
+        self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
+        self.assertEqual(create_model.call_count, 2)
+        self.assertEqual(bound_model.invoke.call_count, 2)
+        first_prompt = bound_model.invoke.call_args_list[0].args[0]
+        second_prompt = bound_model.invoke.call_args_list[1].args[0]
+        self.assertIn("Never create a menu or route registration task", first_prompt)
+        self.assertNotIn("AUTOMATIC REGENERATION FEEDBACK", first_prompt)
+        self.assertIn("AUTOMATIC REGENERATION FEEDBACK", second_prompt)
+        self.assertIn("Task menu-task", second_prompt)
+        self.assertIn("frontend/src/constants/menus.ts", second_prompt)
+
+    def test_missing_database_bootstrap_is_automatically_regenerated(self) -> None:
+        """数据库候选遗漏 bootstrap 时必须通过确定性错误触发自动重生成。"""
+
+        endpoint_task = {
+            "id": "orders-objects",
+            "unit_id": "backend:endpoint:orders-api:orders.list",
+            "owner": "backend",
+            "description": "实现订单对象层。",
+            "change_scope": [
+                {
+                    "operation": "add",
+                    "path": "backend/src/main/java/demo/Order.java",
+                }
+            ],
+            "deliverables": [
+                {
+                    "id": "domain:order",
+                    "kind": "backend.domain_mapping",
+                    "target_id": "Order",
+                    "paths": ["backend/src/main/java/demo/Order.java"],
+                    "provides": ["order.domain"],
+                }
+            ],
+        }
+        invalid_response = json.dumps({"tasks": [endpoint_task]})
+        valid_response = json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "backend-bootstrap",
+                        "unit_id": "backend:bootstrap",
+                        "owner": "backend",
+                        "description": "幂等校验数据库后端依赖和基础配置。",
+                        "dependencies": [],
+                        "change_scope": [
+                            {
+                                "operation": "modify",
+                                "path": "backend/pom.xml",
+                            }
+                        ],
+                        "deliverables": [
+                            {
+                                "id": "bootstrap:backend",
+                                "kind": "backend.bootstrap",
+                                "target_id": "backend:bootstrap",
+                                "paths": ["backend/pom.xml"],
+                                "provides": ["backend.bootstrap"],
+                            }
+                        ],
+                    },
+                    endpoint_task,
                 ]
             }
         )
@@ -1419,23 +1597,403 @@ class BuildTaskPlannerTests(unittest.TestCase):
             SimpleNamespace(content=invalid_response, usage_metadata=None, response_metadata={}),
             SimpleNamespace(content=valid_response, usage_metadata=None, response_metadata={}),
         ]
-        settings = SimpleNamespace(model_name="test-model", model_api_name="test-model", default_max_tokens=4096, build_task_plan_max_retries=2)
-
+        settings = SimpleNamespace(
+            model_name="test-model",
+            model_api_name="test-model",
+            default_max_tokens=4096,
+            build_task_plan_max_retries=2,
+        )
+        base_plan = {
+            "schema_version": "build-dag.v4",
+            "build_units": {
+                "backend:bootstrap": {"id": "backend:bootstrap", "kind": "backend"},
+                "backend:endpoint:orders-api:orders.list": {
+                    "id": "backend:endpoint:orders-api:orders.list",
+                    "kind": "backend",
+                },
+            },
+            "unit_graph": {
+                "schema_version": "build-unit-graph.v3",
+                "nodes": [
+                    "backend:bootstrap",
+                    "backend:endpoint:orders-api:orders.list",
+                ],
+                "edges": [
+                    {
+                        "from": "backend:bootstrap",
+                        "to": "backend:endpoint:orders-api:orders.list",
+                        "type": "depends_on",
+                    }
+                ],
+                "validation": {"is_valid": True, "errors": []},
+            },
+        }
+        build_context = {
+            "target": {"type": "endpoint", "id": "orders.list"},
+            "endpoint_ids": ["orders.list"],
+            "entity_ids": ["Order"],
+            "entity_designs": [
+                {"entity_id": "Order", "data_source_type": "database"}
+            ],
+            "planning_unit_ids": [
+                "backend:bootstrap",
+                "backend:endpoint:orders-api:orders.list",
+            ],
+            "required_unit_ids": [
+                "backend:bootstrap",
+                "backend:endpoint:orders-api:orders.list",
+            ],
+        }
+        project_plan = {
+            "executable_details": {
+                "entity_designs": build_context["entity_designs"],
+                "api_contracts": [],
+            }
+        }
         with (
             patch("app.agents.main.task_preparer.Settings.from_env", return_value=settings),
             patch("app.agents.main.task_preparer.create_chat_model", return_value=chat_model),
         ):
             plan = prepare_build_tasks_with_main_agent(
-                {"version": "1.0.0"},
-                build_context={"planning_context_mode": "page", "required_unit_ids": ["page:test-page-1"]},
+                project_plan,
+                build_context=build_context,
+                build_task_plan=base_plan,
             )
 
         self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
         self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
+        self.assertEqual(
+            {task["unit_id"] for task in tasks_from_build_task_plan(plan)},
+            {
+                "backend:bootstrap",
+                "backend:endpoint:orders-api:orders.list",
+            },
+        )
         retry_prompt = bound_model.invoke.call_args_list[1].args[0]
-        self.assertIn("deliverables[0].id is required", retry_prompt)
-        self.assertIn('singular field "path" is not supported', retry_prompt)
-        self.assertNotIn("must declare at least one deliverable", retry_prompt)
+        self.assertIn("AUTOMATIC REGENERATION FEEDBACK", retry_prompt)
+        self.assertIn("requires a backend:bootstrap task", retry_prompt)
+
+    def test_prepared_bootstrap_is_not_required_in_incremental_candidate(self) -> None:
+        """本轮 planning_unit_ids 不含已准备 bootstrap 时不产生遗漏错误。"""
+
+        plan = create_build_task_plan(
+            {"executable_details": {}},
+            agent_plan={
+                "tasks": [
+                    {
+                        "id": "orders-api",
+                        "unit_id": "backend:endpoint:orders-api:orders.list",
+                        "owner": "backend",
+                        "description": "实现订单接口。",
+                        "change_scope": [
+                            {
+                                "operation": "add",
+                                "path": "backend/src/main/java/demo/OrdersController.java",
+                            }
+                        ],
+                        "deliverables": [
+                            {
+                                "id": "controller:orders-list",
+                                "kind": "backend.endpoint_controller",
+                                "target_id": "orders.list",
+                                "paths": [
+                                    "backend/src/main/java/demo/OrdersController.java"
+                                ],
+                                "provides": ["orders.list.endpoint"],
+                            }
+                        ],
+                    }
+                ]
+            },
+            build_context={
+                "planning_unit_ids": ["backend:endpoint:orders-api:orders.list"],
+                "required_unit_ids": [
+                    "backend:bootstrap",
+                    "backend:endpoint:orders-api:orders.list",
+                ],
+            },
+        )
+
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
+
+    def test_task_preparer_binds_configured_max_tokens(self) -> None:
+        """任务规划调用必须显式传递 AGENT_MAX_TOKENS，避免采用 Provider 的短输出默认值。"""
+
+        model = Mock()
+        bound_model = Mock()
+        model.bind.return_value = bound_model
+        bound_model.invoke.return_value = SimpleNamespace(
+            content='{"tasks": [{"id": "task", "unit_id": "frontend:api-client", "owner": "frontend", "description": "任务", "change_scope": [{"operation": "modify", "path": "src/task.ts"}], "deliverables": [{"id": "api:task", "kind": "frontend.shared_capability", "target_id": "frontend:api-client", "paths": ["src/task.ts"], "provides": ["task.capability"]}]}]}',
+            usage_metadata=None,
+            response_metadata={},
+        )
+        settings = SimpleNamespace(
+            model_name="test-model",
+            model_api_name="test-model",
+            default_max_tokens=4096,
+        )
+
+        with (
+            patch("app.agents.main.task_preparer.Settings.from_env", return_value=settings),
+            patch("app.agents.main.task_preparer.create_chat_model", return_value=model),
+        ):
+            prepare_build_tasks_with_main_agent(
+                {
+                    "version": "1.0.0",
+                    "application_skeleton": {"data_sources": [{"id": "main", "type": "database"}]},
+                }
+            )
+
+        model.bind.assert_called_once_with(max_tokens=4096)
+
+    def test_uses_workspace_aware_agent_tasks_with_detailed_contract(self) -> None:
+        project_plan = {"version": "1.0.0", "page_detail_plans": [], "data_sources": []}
+        agent_plan = {
+            "workspace_analysis": {
+                "stack": ["React", "TypeScript"],
+                "inspected_directories": ["src/pages", "src/router"],
+                "entry_files": ["src/router/index.ts"],
+                "conventions": ["页面使用 PascalCase 文件名"],
+            },
+            "tasks": [
+                {
+                    "id": "page-login",
+                    "unit_id": "page:login",
+                    "owner": "frontend",
+                    "title": "新增登录页",
+                    "description": "实现登录表单与提交状态。",
+                    "dependencies": [],
+                    "change_scope": [
+                        {"operation": "add", "path": "src/pages/Login/index.tsx", "description": "新增登录页面"},
+                        {"operation": "modify", "path": "src/router/index.ts", "description": "注册登录路由"},
+                    ],
+                    "impact_scope": {
+                        "summary": "影响登录入口和路由表。",
+                        "affected_modules": ["pages", "router"],
+                        "public_contracts": [],
+                        "risks": ["未登录跳转可能形成循环"],
+                    },
+                    "can_run_in_parallel": False,
+                    "parallel_reason": "修改共享路由表，需要串行。",
+                    "deliverables": [
+                        {
+                            "id": "page:login",
+                            "kind": "frontend.page",
+                            "target_id": "login",
+                            "paths": ["src/pages/Login/index.tsx"],
+                            "provides": ["login.render"],
+                        }
+                    ],
+                    "status": "completed",
+                }
+            ],
+        }
+
+        plan = create_build_task_plan(project_plan, agent_plan=agent_plan)
+        task = tasks_from_build_task_plan(plan)[0]
+
+        self.assertEqual(plan["version"], "3.0.0")
+        self.assertEqual(plan["schema_version"], "build-dag.v4")
+        self.assertEqual(plan["task_graph"]["nodes"], ["page-login"])
+        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
+        self.assertEqual(plan["workspace_analysis"]["entry_files"], ["src/router/index.ts"])
+        self.assertEqual(task["id"], "page-login")
+        self.assertEqual(task["status"], "pending")
+        self.assertNotIn("task_id", task)
+        self.assertNotIn("dependsOn", task)
+        self.assertNotIn("targetFiles", task)
+        self.assertNotIn("acceptanceCriteria", task)
+        self.assertNotIn("canRunInParallel", task)
+        self.assertEqual(task["target_files"], ["src/pages/Login/index.tsx", "src/router/index.ts"])
+        self.assertEqual(task["change_scope"][0]["operation"], "add")
+        self.assertEqual(task["impact_scope"]["affected_modules"], ["pages", "router"])
+        self.assertFalse(task["can_run_in_parallel"])
+        self.assertNotIn("acceptance_criteria", task)
+        self.assertEqual(
+            [check["kind"] for check in task["acceptance_checks"]],
+            [
+                "file_operation",
+                "file_operation",
+                "scope_boundary",
+                "page_entry",
+                "page_default_export",
+                "page_placeholder",
+                "frontend_api_boundary",
+            ],
+        )
+        self.assertEqual(task["unit_id"], "page:login")
+        self.assertIn("page-login", [item["id"] for item in tasks_from_build_task_plan(plan)])
+
+    def test_duplicate_task_ids_are_made_unique_and_parallel_batch_is_recorded(self) -> None:
+        project_plan = {"version": "1.0.0", "page_detail_plans": [], "data_sources": []}
+        agent_plan = {
+            "tasks": [
+                {
+                    "id": "page-task",
+                    "unit_id": "page:login",
+                    "owner": "frontend",
+                    "description": "新增登录页",
+                    "change_scope": [{"operation": "add", "path": "src/pages/Login/index.tsx"}],
+                    "deliverables": [{"id": "page:login", "kind": "frontend.page", "target_id": "login", "paths": ["src/pages/Login/index.tsx"], "provides": ["login.render"]}],
+                },
+                {
+                    "id": "page-task",
+                    "unit_id": "page:help",
+                    "owner": "frontend",
+                    "description": "新增帮助页",
+                    "change_scope": [{"operation": "add", "path": "src/pages/Help/index.tsx"}],
+                    "deliverables": [{"id": "page:help", "kind": "frontend.page", "target_id": "help", "paths": ["src/pages/Help/index.tsx"], "provides": ["help.render"]}],
+                },
+            ]
+        }
+
+        plan = create_build_task_plan(project_plan, agent_plan=agent_plan)
+
+        tasks = tasks_from_build_task_plan(plan)
+        self.assertEqual([task["id"] for task in tasks], ["page-task", "page-task-2"])
+        self.assertEqual(plan["execution"]["batches"][0]["mode"], "parallel")
+        self.assertEqual(tasks[0]["parallel_with"], ["page-task-2"])
+        self.assertEqual(tasks[1]["parallel_with"], ["page-task"])
+
+    def test_live_page_path_is_reconciled_without_menu_route_task(self) -> None:
+        """实时唯一同义页面目录只用于路径校对，不补充菜单或路由登记任务。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "pages": [
+                    {
+                        "pageId": "dashboard_page",
+                        "name": "概览页",
+                        "path": "/page/",
+                        "module_id": "dashboard",
+                    }
+                ]
+            },
+        }
+        build_context = {
+            "target": {"type": "page", "id": "dashboard_page"},
+            "page_detail": {"page_name": "概览页", "path": "/page/"},
+            "required_unit_ids": ["frontend:shell", "page:dashboard_page"],
+            "source_refs": {"type": "page_detail"},
+        }
+        base_plan = {
+            "schema_version": "build-dag.v4",
+            "build_units": {
+                "frontend:shell": {"id": "frontend:shell", "kind": "frontend"},
+                "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
+            },
+            "unit_graph": {
+                "nodes": ["frontend:shell", "page:dashboard_page"],
+                "edges": [
+                    {
+                        "from": "frontend:shell",
+                        "to": "page:dashboard_page",
+                        "type": "depends_on",
+                    }
+                ],
+                "validation": {"is_valid": True, "errors": []},
+            },
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            dashboard = Path(workspace) / "frontend/src/pages/Dashboard/index.tsx"
+            dashboard.parent.mkdir(parents=True)
+            dashboard.write_text("export default function Dashboard() {}", encoding="utf-8")
+            plan = create_build_task_plan(
+                project_plan,
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "page-layout",
+                            "unit_id": "page:dashboard_page",
+                            "owner": "frontend",
+                            "description": "创建概览页",
+                            "change_scope": [
+                                {
+                                    "operation": "add",
+                                    "path": "frontend/src/pages/DashboardPage/index.tsx",
+                                }
+                            ],
+                            "deliverables": [
+                                {
+                                    "id": "page:dashboard_page",
+                                    "kind": "frontend.page",
+                                    "target_id": "dashboard_page",
+                                    "paths": ["frontend/src/pages/DashboardPage/index.tsx"],
+                                    "provides": ["dashboard_page.render"],
+                                }
+                            ],
+                        }
+                    ]
+                },
+                base_build_task_plan=base_plan,
+                build_context=build_context,
+                workspace_root=workspace,
+            )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        page_task = tasks["page-layout"]
+        self.assertNotIn("page:dashboard_page:route-menu-registration", tasks)
+        self.assertEqual(page_task["target_files"], ["frontend/src/pages/Dashboard/index.tsx"])
+        self.assertEqual(page_task["change_scope"][0]["operation"], "add")
+        self.assertEqual(
+            page_task["path_reconciliation"]["canonical_path"],
+            "frontend/src/pages/Dashboard/index.tsx",
+        )
+        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
+        self.assertIn("must include the dashboard_page page entry", str(plan["task_graph"]["validation"]["errors"]))
+        self.assertNotIn("frontend/src/constants/menus.ts", page_task["allowed_paths"])
+
+    def test_existing_page_entry_is_used_when_model_omits_page_path(self) -> None:
+        """模板已有唯一页面入口时，模型漏写入口路径不应阻断任务拆分。"""
+
+        project_plan = {
+            "version": "1.0.0",
+            "application_skeleton": {
+                "pages": [
+                    {
+                        "pageId": "pet_list_page",
+                        "name": "宠物照片列表页",
+                        "path": "/page/home",
+                    }
+                ]
+            },
+        }
+        build_context = {
+            "target": {"type": "page", "id": "pet_list_page"},
+            "page_detail": {"page_name": "宠物照片列表页", "path": "/page/home"},
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            page_file = Path(workspace) / "frontend/src/pages/PetListPage/index.tsx"
+            page_file.parent.mkdir(parents=True)
+            page_file.write_text("export default function PetListPage() {}", encoding="utf-8")
+            plan = create_build_task_plan(
+                project_plan,
+                agent_plan={
+                    "tasks": [
+                        {
+                            "id": "pet-data-view",
+                            "unit_id": "page:pet_list_page",
+                            "owner": "frontend",
+                            "description": "实现宠物列表内容",
+                            "change_scope": [
+                                {
+                                    "operation": "modify",
+                                    "path": "frontend/src/components/PetCard.tsx",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                build_context=build_context,
+                workspace_root=workspace,
+            )
+
+        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
+        self.assertEqual(set(tasks), {"pet-data-view"})
+        self.assertNotIn("page:pet_list_page:route-menu-registration", tasks)
+
     def test_missing_page_entry_is_injected_from_page_target(self) -> None:
         """模板入口尚未落盘且模型漏写路径时，按 pageId 补回标准页面入口。"""
 
@@ -1457,10 +2015,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as workspace:
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
-
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -1496,8 +2050,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
             [change["path"] for change in page_task["change_scope"]],
         )
 
-    def test_scaffolded_menu_entry_excludes_model_menu_task(self) -> None:
-        """脚手架已注册精确菜单项时，模型菜单任务直接不进入 Build DAG。"""
+    def test_platform_registration_task_is_rejected_by_dag_validation(self) -> None:
+        """模型触碰平台托管路由文件时，DAG 必须保留候选并报告边界错误。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -1518,7 +2072,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "required_unit_ids": ["frontend:shell", "page:dashboard_page"],
         }
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "frontend:shell": {"id": "frontend:shell", "kind": "frontend"},
                 "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
@@ -1539,15 +2093,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page_file = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text("export default function DashboardPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text(
-                """export const BIZ_MENUS = [{
-  path: 'firstLevel',
-  children: [{ path: '/page/', name: '概览页', key: 'DashboardPage' }]
-}];""",
-                encoding="utf-8",
-            )
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -1617,7 +2162,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "required_unit_ids": ["page:dashboard_page"],
         }
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "page:dashboard_page": {
                     "id": "page:dashboard_page",
@@ -1634,12 +2179,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
             page.parent.mkdir(parents=True)
             page.write_text("export default function DashboardPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text(
-                "export const BIZ_MENUS = [{ path: '/page/home', name: '概览页', key: 'DashboardPage' }];",
-                encoding="utf-8",
-            )
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -1689,8 +2228,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
         self.assertNotIn("pre_satisfied_targets", task)
 
-    def test_scaffolded_menu_entry_prevents_deterministic_duplicate_task(self) -> None:
-        """模型未生成菜单任务时，已存在的脚手架菜单也不得被确定性重复补齐。"""
+    def test_page_task_does_not_add_platform_registration_task(self) -> None:
+        """模型未触碰平台文件时，DAG 不得额外补齐路由或菜单注册任务。"""
 
         project_plan = {
             "version": "1.0.0",
@@ -1708,13 +2247,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page_file = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text("export default function DashboardPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text(
-                "export const BIZ_MENUS = [{ children: "
-                "[{ path: '/page/', name: '概览页', key: 'DashboardPage' }] }];",
-                encoding="utf-8",
-            )
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -1765,9 +2297,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page_file = Path(workspace) / "frontend/src/pages/DashboardPage/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text("export default function DashboardPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -1781,7 +2310,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                                 {
                                     "operation": "modify",
                                     "path": "frontend/src/constants/menus.ts",
-                                    "description": "追加到 BIZ_MENUS.firstLevel.children",
+                                    "description": "修改平台托管的业务导航区",
                                 }
                             ],
                             "acceptance_criteria": ["path 为 /page/dashboard"],
@@ -1838,9 +2367,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             page_file = Path(workspace) / "frontend/src/pages/ProjectListPage/index.tsx"
             page_file.parent.mkdir(parents=True)
             page_file.write_text("export default function ProjectListPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
             plan = create_build_task_plan(
                 project_plan,
                 agent_plan={
@@ -1875,7 +2401,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(list(tasks), ["task-api"])
         self.assertNotIn("frontend/src/constants/menus.ts", str(tasks))
 
-    def test_v3_plan_contains_json_confirmation_fields(self) -> None:
+    def test_v4_plan_contains_json_confirmation_fields(self) -> None:
         plan = create_build_task_plan(
             {"version": "1.0.0"},
             agent_plan={
@@ -1890,7 +2416,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(plan["schema_version"], "build-dag.v3")
+        self.assertEqual(plan["schema_version"], "build-dag.v4")
         self.assertEqual(plan["confirmation_status"], "pending")
         self.assertIsNone(plan["confirmed_at"])
         self.assertEqual(plan["build_execution_scope"], {})
@@ -2356,7 +2882,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """页面任务只继承前端公共 Unit，后端 Unit 仅保留接口来源引用。"""
 
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "frontend:api-client": {"id": "frontend:api-client", "kind": "frontend"},
                 "backend:endpoint:orders-api:orders_api.list": {
@@ -2460,9 +2986,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                     {"id": "orders_api.list", "api_contract_id": "orders-api"}
                 ],
                 "endpoint_ids": ["orders_api.list"],
-                "entity_ids": [],
-                "endpoint_designs": [],
-                "mapping_flows": [],
+                "entity_designs": [],
             },
         )
         self.assertTrue(plan["build_units"]["page:orders"]["input_fingerprint"])
@@ -2471,7 +2995,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """复现多任务计划，跨 Unit 反向边被改写且纯验证任务不进入注册表。"""
 
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "backend:bootstrap": {"id": "backend:bootstrap", "kind": "backend"},
                 "backend:core": {"id": "backend:core", "kind": "backend"},
@@ -2585,7 +3109,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 ]
             },
             base_build_task_plan={
-                "schema_version": "build-dag.v3",
+                "schema_version": "build-dag.v4",
                 "build_units": {
                     "database:users": {"id": "database:users", "kind": "database"}
                 },
@@ -2622,7 +3146,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 ]
             },
             base_build_task_plan={
-                "schema_version": "build-dag.v3",
+                "schema_version": "build-dag.v4",
                 "build_units": {
                     "backend:endpoint:user_api:user.list": {
                         "id": "backend:endpoint:user_api:user.list",
@@ -2688,7 +3212,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 ]
             },
             base_build_task_plan={
-                "schema_version": "build-dag.v3",
+                "schema_version": "build-dag.v4",
                 "build_units": {
                     "backend:endpoint:user_api:user.create": {
                         "id": "backend:endpoint:user_api:user.create",
@@ -2739,7 +3263,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 ]
             },
             base_build_task_plan={
-                "schema_version": "build-dag.v3",
+                "schema_version": "build-dag.v4",
                 "build_units": {
                     "database:core": {"id": "database:core", "kind": "database"},
                 },
@@ -2781,7 +3305,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """未显式声明 operation 时，按磁盘存在性决定 add/modify，避免验收 modified/added 错配。"""
 
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "frontend:api-client": {"id": "frontend:api-client", "kind": "application"},
             },
@@ -2827,7 +3351,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         """显式 add/modify 也必须由工作区文件存在性统一归一化。"""
 
         base_plan = {
-            "schema_version": "build-dag.v3",
+            "schema_version": "build-dag.v4",
             "build_units": {
                 "frontend:api-client": {"id": "frontend:api-client", "kind": "application"},
             },
@@ -2965,648 +3489,6 @@ class BuildTaskPlannerTests(unittest.TestCase):
             ),
             [],
         )
-
-
-
-
-
-
-
-    def test_full_dag_finalization_error_uses_the_same_regeneration_loop(self) -> None:
-        """候选单独有效但完整 DAG 无效时必须沿同一 attempt 计数重新生成。"""
-
-        response = json.dumps(
-            {
-                "tasks": [
-                    {
-                        "id": "page-task",
-                        "unit_id": "page:dashboard",
-                        "owner": "frontend",
-                        "description": "实现页面内容。",
-                        "change_scope": ["frontend/src/pages/Dashboard/index.tsx"],
-                        "deliverables": [
-                            {
-                                "id": "page:dashboard",
-                                "kind": "frontend.page",
-                                "target_id": "dashboard",
-                                "paths": ["frontend/src/pages/Dashboard/index.tsx"],
-                                "provides": ["dashboard.render"],
-                            }
-                        ],
-                    }
-                ]
-            }
-        )
-        finalized_attempts = 0
-
-        def finalize_candidate(candidate: dict) -> dict:
-            """首轮模拟合并冲突，第二轮返回完整有效图。"""
-
-            nonlocal finalized_attempts
-            finalized_attempts += 1
-            if finalized_attempts == 1:
-                candidate["task_graph"]["validation"] = {
-                    "is_valid": False,
-                    "errors": ["merged retained owner conflict"],
-                }
-            return candidate
-
-        settings = SimpleNamespace(
-            model_name="test-model",
-            model_api_name="test-model",
-            default_max_tokens=4096,
-            build_task_plan_max_retries=2,
-        )
-        with (
-            patch(
-                "app.agents.main.task_preparer.Settings.from_env",
-                return_value=settings,
-            ),
-            patch(
-                "app.agents.main.task_preparer._invoke_live_main_agent",
-                side_effect=[response, response],
-            ) as invoke_model,
-        ):
-            plan = prepare_build_tasks_with_main_agent(
-                {"version": "1.0.0"},
-                build_context={"required_unit_ids": ["page:dashboard"]},
-                candidate_finalizer=finalize_candidate,
-            )
-
-        self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
-        self.assertEqual(finalized_attempts, 2)
-        self.assertEqual(invoke_model.call_count, 2)
-        self.assertEqual(
-            invoke_model.call_args_list[1].kwargs["validation_feedback"],
-            ["merged retained owner conflict"],
-        )
-
-    def test_invalid_candidate_is_automatically_regenerated(self) -> None:
-        """平台边界错误回喂模型自动重生成，不要求用户修正任务拆分。"""
-
-        invalid_response = json.dumps(
-            {
-                "tasks": [
-                    {
-                        "id": "menu-task",
-                        "unit_id": "page:dashboard",
-                        "owner": "frontend",
-                        "description": "修改模板菜单",
-                        "change_scope": [
-                            {
-                                "operation": "modify",
-                                "path": "frontend/src/constants/menus.ts",
-                            }
-                        ],
-                    }
-                ]
-            }
-        )
-        valid_response = json.dumps(
-            {
-                "tasks": [
-                    {
-                        "id": "page-task",
-                        "unit_id": "page:dashboard",
-                        "owner": "frontend",
-                        "description": "实现页面内容",
-                        "change_scope": [
-                            {
-                                "operation": "modify",
-                                "path": "frontend/src/pages/Dashboard/index.tsx",
-                            }
-                        ],
-                        "deliverables": [
-                            {
-                                "id": "page:dashboard",
-                                "kind": "frontend.page",
-                                "target_id": "dashboard",
-                                "paths": ["frontend/src/pages/Dashboard/index.tsx"],
-                                "provides": ["dashboard.render"],
-                            }
-                        ],
-                    }
-                ]
-            }
-        )
-        chat_model = Mock()
-        bound_model = Mock()
-        chat_model.bind.return_value = bound_model
-        bound_model.invoke.side_effect = [
-            SimpleNamespace(
-                content=invalid_response,
-                usage_metadata=None,
-                response_metadata={},
-            ),
-            SimpleNamespace(
-                content=valid_response,
-                usage_metadata=None,
-                response_metadata={},
-            ),
-        ]
-        settings = SimpleNamespace(
-            model_name="test-model",
-            model_api_name="test-model",
-            default_max_tokens=4096,
-            build_task_plan_max_retries=2,
-        )
-        with (
-            patch(
-                "app.agents.main.task_preparer.Settings.from_env",
-                return_value=settings,
-            ),
-            patch(
-                "app.agents.main.task_preparer.create_chat_model",
-                return_value=chat_model,
-            ) as create_model,
-        ):
-            plan = prepare_build_tasks_with_main_agent(
-                {
-                    "version": "1.0.0",
-                    "application_skeleton": {
-                        "data_sources": [{"id": "main", "type": "static"}]
-                    },
-                },
-                build_context={"required_unit_ids": ["page:dashboard"]},
-            )
-
-        self.assertEqual([task["id"] for task in tasks_from_build_task_plan(plan)], ["page-task"])
-        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
-        self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
-        self.assertEqual(create_model.call_count, 2)
-        self.assertEqual(bound_model.invoke.call_count, 2)
-        first_prompt = bound_model.invoke.call_args_list[0].args[0]
-        second_prompt = bound_model.invoke.call_args_list[1].args[0]
-        self.assertIn("Never create a menu or route registration task", first_prompt)
-        self.assertNotIn("AUTOMATIC REGENERATION FEEDBACK", first_prompt)
-        self.assertIn("AUTOMATIC REGENERATION FEEDBACK", second_prompt)
-        self.assertIn("Task menu-task", second_prompt)
-        self.assertIn("frontend/src/constants/menus.ts", second_prompt)
-
-    def test_missing_database_bootstrap_is_automatically_regenerated(self) -> None:
-        """数据库候选遗漏 bootstrap 时必须通过确定性错误触发自动重生成。"""
-
-        endpoint_task = {
-            "id": "orders-objects",
-            "unit_id": "backend:endpoint:orders-api:orders.list",
-            "owner": "backend",
-            "description": "实现订单对象层。",
-            "change_scope": [
-                {
-                    "operation": "add",
-                    "path": "backend/src/main/java/demo/Order.java",
-                }
-            ],
-            "deliverables": [
-                {
-                    "id": "domain:order",
-                    "kind": "backend.objects",
-                    "target_id": "Order",
-                    "paths": ["backend/src/main/java/demo/Order.java"],
-                    "provides": ["order.domain"],
-                }
-            ],
-        }
-        invalid_response = json.dumps({"tasks": [endpoint_task]})
-        valid_response = json.dumps(
-            {
-                "tasks": [
-                    {
-                        "id": "backend-bootstrap",
-                        "unit_id": "backend:bootstrap",
-                        "owner": "backend",
-                        "description": "幂等校验数据库后端依赖和基础配置。",
-                        "dependencies": [],
-                        "change_scope": [
-                            {
-                                "operation": "modify",
-                                "path": "backend/pom.xml",
-                            }
-                        ],
-                        "deliverables": [
-                            {
-                                "id": "bootstrap:backend",
-                                "kind": "backend.bootstrap",
-                                "target_id": "backend:bootstrap",
-                                "paths": ["backend/pom.xml"],
-                                "provides": ["backend.bootstrap"],
-                            }
-                        ],
-                    },
-                    endpoint_task,
-                ]
-            }
-        )
-        chat_model = Mock()
-        bound_model = Mock()
-        chat_model.bind.return_value = bound_model
-        bound_model.invoke.side_effect = [
-            SimpleNamespace(content=invalid_response, usage_metadata=None, response_metadata={}),
-            SimpleNamespace(content=valid_response, usage_metadata=None, response_metadata={}),
-        ]
-        settings = SimpleNamespace(
-            model_name="test-model",
-            model_api_name="test-model",
-            default_max_tokens=4096,
-            build_task_plan_max_retries=2,
-        )
-        base_plan = {
-            "schema_version": "build-dag.v3",
-            "build_units": {
-                "backend:bootstrap": {"id": "backend:bootstrap", "kind": "backend"},
-                "backend:endpoint:orders-api:orders.list": {
-                    "id": "backend:endpoint:orders-api:orders.list",
-                    "kind": "backend",
-                },
-            },
-            "unit_graph": {
-                "schema_version": "build-unit-graph.v3",
-                "nodes": [
-                    "backend:bootstrap",
-                    "backend:endpoint:orders-api:orders.list",
-                ],
-                "edges": [
-                    {
-                        "from": "backend:bootstrap",
-                        "to": "backend:endpoint:orders-api:orders.list",
-                        "type": "depends_on",
-                    }
-                ],
-                "validation": {"is_valid": True, "errors": []},
-            },
-        }
-        build_context = {
-            "target": {"type": "endpoint", "id": "orders.list"},
-            "endpoint_ids": ["orders.list"],
-            "entity_ids": ["Order"],
-            "entity_designs": [
-                {"entity_id": "Order", "data_source_type": "database"}
-            ],
-            "planning_unit_ids": [
-                "backend:bootstrap",
-                "backend:endpoint:orders-api:orders.list",
-            ],
-            "required_unit_ids": [
-                "backend:bootstrap",
-                "backend:endpoint:orders-api:orders.list",
-            ],
-        }
-        project_plan = {
-            "executable_details": {
-                "entity_designs": build_context["entity_designs"],
-                "api_contracts": [],
-            }
-        }
-        with (
-            patch("app.agents.main.task_preparer.Settings.from_env", return_value=settings),
-            patch("app.agents.main.task_preparer.create_chat_model", return_value=chat_model),
-        ):
-            plan = prepare_build_tasks_with_main_agent(
-                project_plan,
-                build_context=build_context,
-                build_task_plan=base_plan,
-            )
-
-        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
-        self.assertEqual(plan["prepared_by"]["generation_attempt"], 2)
-        self.assertEqual(
-            {task["unit_id"] for task in tasks_from_build_task_plan(plan)},
-            {
-                "backend:bootstrap",
-                "backend:endpoint:orders-api:orders.list",
-            },
-        )
-        retry_prompt = bound_model.invoke.call_args_list[1].args[0]
-        self.assertIn("AUTOMATIC REGENERATION FEEDBACK", retry_prompt)
-        self.assertIn("requires a backend:bootstrap task", retry_prompt)
-
-    def test_prepared_bootstrap_is_not_required_in_incremental_candidate(self) -> None:
-        """本轮 planning_unit_ids 不含已准备 bootstrap 时不产生遗漏错误。"""
-
-        plan = create_build_task_plan(
-            {"executable_details": {}},
-            agent_plan={
-                "tasks": [
-                    {
-                        "id": "orders-api",
-                        "unit_id": "backend:endpoint:orders-api:orders.list",
-                        "owner": "backend",
-                        "description": "实现订单接口。",
-                        "change_scope": [
-                            {
-                                "operation": "add",
-                                "path": "backend/src/main/java/demo/OrdersController.java",
-                            }
-                        ],
-                        "deliverables": [
-                            {
-                                "id": "controller:orders-list",
-                                "kind": "backend.endpoint_controller",
-                                "target_id": "orders.list",
-                                "paths": [
-                                    "backend/src/main/java/demo/OrdersController.java"
-                                ],
-                                "provides": ["orders.list.endpoint"],
-                            }
-                        ],
-                    }
-                ]
-            },
-            build_context={
-                "planning_unit_ids": ["backend:endpoint:orders-api:orders.list"],
-                "required_unit_ids": [
-                    "backend:bootstrap",
-                    "backend:endpoint:orders-api:orders.list",
-                ],
-            },
-        )
-
-        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
-
-    def test_task_preparer_binds_configured_max_tokens(self) -> None:
-        """任务规划调用必须显式传递 AGENT_MAX_TOKENS，避免采用 Provider 的短输出默认值。"""
-
-        model = Mock()
-        bound_model = Mock()
-        model.bind.return_value = bound_model
-        bound_model.invoke.return_value = SimpleNamespace(
-            content='{"tasks": [{"id": "task", "unit_id": "frontend:api-client", "owner": "frontend", "description": "任务", "change_scope": [{"operation": "modify", "path": "src/task.ts"}], "deliverables": [{"id": "api:task", "kind": "frontend.shared_capability", "target_id": "frontend:api-client", "paths": ["src/task.ts"], "provides": ["task.capability"]}]}]}',
-            usage_metadata=None,
-            response_metadata={},
-        )
-        settings = SimpleNamespace(
-            model_name="test-model",
-            model_api_name="test-model",
-            default_max_tokens=4096,
-        )
-
-        with (
-            patch("app.agents.main.task_preparer.Settings.from_env", return_value=settings),
-            patch("app.agents.main.task_preparer.create_chat_model", return_value=model),
-        ):
-            prepare_build_tasks_with_main_agent(
-                {
-                    "version": "1.0.0",
-                    "application_skeleton": {"data_sources": [{"id": "main", "type": "database"}]},
-                }
-            )
-
-        model.bind.assert_called_once_with(max_tokens=4096)
-
-    def test_uses_workspace_aware_agent_tasks_with_detailed_contract(self) -> None:
-        project_plan = {"version": "1.0.0", "page_detail_plans": [], "data_sources": []}
-        agent_plan = {
-            "tasks": [
-                {
-                    "id": "page-login",
-                    "unit_id": "page:login",
-                    "owner": "frontend",
-                    "title": "新增登录页",
-                    "description": "实现登录表单与提交状态。",
-                    "dependencies": [],
-                    "change_scope": [
-                        {"operation": "add", "path": "src/pages/Login/index.tsx", "description": "新增登录页面"},
-                        {"operation": "modify", "path": "src/router/index.ts", "description": "注册登录路由"},
-                    ],
-                    "impact_scope": {
-                        "summary": "影响登录入口和路由表。",
-                        "affected_modules": ["pages", "router"],
-                        "public_contracts": [],
-                        "risks": ["未登录跳转可能形成循环"],
-                    },
-                    "deliverables": [
-                        {
-                            "id": "page:login",
-                            "kind": "frontend.page",
-                            "target_id": "login",
-                            "paths": ["src/pages/Login/index.tsx"],
-                            "provides": ["login.render"],
-                        }
-                    ],
-                    "status": "completed",
-                }
-            ],
-        }
-
-        plan = create_build_task_plan(
-            project_plan,
-            agent_plan=agent_plan,
-            workspace_snapshot={
-                "entrypoints": [{"path": "src/router/index.ts"}],
-                "project_roots": [{"path": "src"}],
-                "tech_stack": ["React", "TypeScript"],
-            },
-        )
-        task = tasks_from_build_task_plan(plan)[0]
-
-        self.assertEqual(plan["version"], "3.0.0")
-        self.assertEqual(plan["schema_version"], "build-dag.v3")
-        self.assertEqual(plan["task_graph"]["nodes"], ["page-login"])
-        self.assertTrue(plan["task_graph"]["validation"]["is_valid"])
-        self.assertEqual(plan["workspace_analysis"]["entry_files"], ["src/router/index.ts"])
-        self.assertEqual(task["id"], "page-login")
-        self.assertEqual(task["status"], "pending")
-        self.assertNotIn("task_id", task)
-        self.assertNotIn("dependsOn", task)
-        self.assertNotIn("targetFiles", task)
-        self.assertNotIn("acceptanceCriteria", task)
-        self.assertNotIn("canRunInParallel", task)
-        self.assertEqual(task["target_files"], ["src/pages/Login/index.tsx", "src/router/index.ts"])
-        self.assertEqual(task["change_scope"][0]["operation"], "add")
-        self.assertEqual(task["impact_scope"]["affected_modules"], ["pages", "router"])
-        self.assertTrue(task["can_run_in_parallel"])
-        self.assertNotIn("acceptance_criteria", task)
-        self.assertEqual(
-            [check["kind"] for check in task["acceptance_checks"]],
-            [
-                "file_operation",
-                "file_operation",
-                "scope_boundary",
-                "page_entry",
-                "page_default_export",
-                "page_placeholder",
-                "frontend_api_boundary",
-            ],
-        )
-        self.assertEqual(task["unit_id"], "page:login")
-        self.assertIn("page-login", [item["id"] for item in tasks_from_build_task_plan(plan)])
-
-    def test_duplicate_task_ids_are_made_unique_and_parallel_batch_is_recorded(self) -> None:
-        project_plan = {"version": "1.0.0", "page_detail_plans": [], "data_sources": []}
-        agent_plan = {
-            "tasks": [
-                {
-                    "id": "page-task",
-                    "unit_id": "page:login",
-                    "owner": "frontend",
-                    "description": "新增登录页",
-                    "change_scope": [{"operation": "add", "path": "src/pages/Login/index.tsx"}],
-                    "deliverables": [{"id": "page:login", "kind": "frontend.page", "target_id": "login", "paths": ["src/pages/Login/index.tsx"], "provides": ["login.render"]}],
-                },
-                {
-                    "id": "page-task",
-                    "unit_id": "page:help",
-                    "owner": "frontend",
-                    "description": "新增帮助页",
-                    "change_scope": [{"operation": "add", "path": "src/pages/Help/index.tsx"}],
-                    "deliverables": [{"id": "page:help", "kind": "frontend.page", "target_id": "help", "paths": ["src/pages/Help/index.tsx"], "provides": ["help.render"]}],
-                },
-            ]
-        }
-
-        plan = create_build_task_plan(project_plan, agent_plan=agent_plan)
-
-        tasks = tasks_from_build_task_plan(plan)
-        self.assertEqual([task["id"] for task in tasks], ["page-task", "page-task-2"])
-        self.assertEqual(plan["execution"]["batches"][0]["mode"], "parallel")
-        self.assertEqual(tasks[0]["parallel_with"], ["page-task-2"])
-        self.assertEqual(tasks[1]["parallel_with"], ["page-task"])
-
-    def test_live_page_path_is_reconciled_without_menu_route_task(self) -> None:
-        """实时唯一同义页面目录只用于路径校对，不补充菜单或路由登记任务。"""
-
-        project_plan = {
-            "version": "1.0.0",
-            "application_skeleton": {
-                "pages": [
-                    {
-                        "pageId": "dashboard_page",
-                        "name": "概览页",
-                        "path": "/page/",
-                        "module_id": "dashboard",
-                    }
-                ]
-            },
-        }
-        build_context = {
-            "target": {"type": "page", "id": "dashboard_page"},
-            "page_detail": {"page_name": "概览页", "path": "/page/"},
-            "required_unit_ids": ["frontend:shell", "page:dashboard_page"],
-            "source_refs": {"type": "page_detail"},
-        }
-        base_plan = {
-            "schema_version": "build-dag.v3",
-            "build_units": {
-                "frontend:shell": {"id": "frontend:shell", "kind": "frontend"},
-                "page:dashboard_page": {"id": "page:dashboard_page", "kind": "page"},
-            },
-            "unit_graph": {
-                "nodes": ["frontend:shell", "page:dashboard_page"],
-                "edges": [
-                    {
-                        "from": "frontend:shell",
-                        "to": "page:dashboard_page",
-                        "type": "depends_on",
-                    }
-                ],
-                "validation": {"is_valid": True, "errors": []},
-            },
-        }
-        with tempfile.TemporaryDirectory() as workspace:
-            dashboard = Path(workspace) / "frontend/src/pages/Dashboard/index.tsx"
-            dashboard.parent.mkdir(parents=True)
-            dashboard.write_text("export default function Dashboard() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
-            plan = create_build_task_plan(
-                project_plan,
-                agent_plan={
-                    "tasks": [
-                        {
-                            "id": "page-layout",
-                            "unit_id": "page:dashboard_page",
-                            "owner": "frontend",
-                            "description": "创建概览页",
-                            "change_scope": [
-                                {
-                                    "operation": "add",
-                                    "path": "frontend/src/pages/DashboardPage/index.tsx",
-                                }
-                            ],
-                            "deliverables": [
-                                {
-                                    "id": "page:dashboard_page",
-                                    "kind": "frontend.page",
-                                    "target_id": "dashboard_page",
-                                    "paths": ["frontend/src/pages/DashboardPage/index.tsx"],
-                                    "provides": ["dashboard_page.render"],
-                                }
-                            ],
-                        }
-                    ]
-                },
-                base_build_task_plan=base_plan,
-                build_context=build_context,
-                workspace_root=workspace,
-            )
-
-        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        page_task = tasks["page-layout"]
-        self.assertNotIn("page:dashboard_page:route-menu-registration", tasks)
-        self.assertEqual(page_task["target_files"], ["frontend/src/pages/Dashboard/index.tsx"])
-        self.assertEqual(page_task["change_scope"][0]["operation"], "add")
-        self.assertEqual(
-            page_task["path_reconciliation"]["canonical_path"],
-            "frontend/src/pages/Dashboard/index.tsx",
-        )
-        self.assertFalse(plan["task_graph"]["validation"]["is_valid"])
-        self.assertIn("must include the dashboard_page page entry", str(plan["task_graph"]["validation"]["errors"]))
-        self.assertNotIn("frontend/src/constants/menus.ts", page_task["allowed_paths"])
-
-    def test_existing_page_entry_is_used_when_model_omits_page_path(self) -> None:
-        """模板已有唯一页面入口时，模型漏写入口路径不应阻断任务拆分。"""
-
-        project_plan = {
-            "version": "1.0.0",
-            "application_skeleton": {
-                "pages": [
-                    {
-                        "pageId": "pet_list_page",
-                        "name": "宠物照片列表页",
-                        "path": "/page/home",
-                    }
-                ]
-            },
-        }
-        build_context = {
-            "target": {"type": "page", "id": "pet_list_page"},
-            "page_detail": {"page_name": "宠物照片列表页", "path": "/page/home"},
-        }
-
-        with tempfile.TemporaryDirectory() as workspace:
-            page_file = Path(workspace) / "frontend/src/pages/PetListPage/index.tsx"
-            page_file.parent.mkdir(parents=True)
-            page_file.write_text("export default function PetListPage() {}", encoding="utf-8")
-            menus = Path(workspace) / "frontend/src/constants/menus.ts"
-            menus.parent.mkdir(parents=True)
-            menus.write_text("export const BIZ_MENUS = [];", encoding="utf-8")
-
-            plan = create_build_task_plan(
-                project_plan,
-                agent_plan={
-                    "tasks": [
-                        {
-                            "id": "pet-data-view",
-                            "unit_id": "page:pet_list_page",
-                            "owner": "frontend",
-                            "description": "实现宠物列表内容",
-                            "change_scope": [
-                                {
-                                    "operation": "modify",
-                                    "path": "frontend/src/components/PetCard.tsx",
-                                }
-                            ],
-                        }
-                    ]
-                },
-                build_context=build_context,
-                workspace_root=workspace,
-            )
-
-        tasks = {task["id"]: task for task in tasks_from_build_task_plan(plan)}
-        self.assertEqual(set(tasks), {"pet-data-view"})
-        self.assertNotIn("page:pet_list_page:route-menu-registration", tasks)
 
 
 if __name__ == "__main__":

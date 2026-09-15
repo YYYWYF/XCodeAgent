@@ -171,6 +171,44 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
     document.getElementById('settings-environment')?.scrollIntoView({ behavior: 'smooth' })
   }
 
+  /** 数据库表单的环境变量下拉字段：Select 与「没有找到？去环境变量」引导脚注的同构封装。 */
+  const envSelectField = (field: {
+    label: string
+    name: string
+    requiredMessage: string
+    options: Array<{ label: string; value: string }>
+    placeholder: string
+    notFoundContent: string
+    extra?: ReactNode
+  }): ReactElement => (
+    <Form.Item
+      label={field.label}
+      name={['database', field.name]}
+      rules={[{ required: true, message: field.requiredMessage }]}
+      extra={field.extra}
+    >
+      <Select
+        options={field.options}
+        placeholder={field.placeholder}
+        notFoundContent={field.notFoundContent}
+        dropdownRender={(menu) => (
+          <>
+            {menu}
+            <div
+              className={cx('settings-db-select-footer')}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={scrollToEnvironment}
+            >
+              <Text type="secondary">没有找到？去</Text>
+              <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
+              <Text type="secondary">新建或修改</Text>
+            </div>
+          </>
+        )}
+      />
+    </Form.Item>
+  )
+
   // 环境变量名被删除时，自动清除数据库卡片中已引用但已不存在的变量
   useEffect(() => {
     const validValues = new Set((envVars ?? []).filter((v) => v.key).map((v) => `\${${v.key}}`))
@@ -870,111 +908,27 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
                 </>
               ) : (
                 <>
-                  <Form.Item
-                    label="数据库地址"
-                    name={['database', 'host']}
-                    rules={[{ required: true, message: '请选择数据库地址' }]}
-                  >
-                    <Select
-                      options={envVarOptions}
-                      placeholder="选择环境变量"
-                      notFoundContent="暂无环境变量"
-                      dropdownRender={(menu) => (
-                        <>
-                          {menu}
-                          <div
-                            className={cx('settings-db-select-footer')}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={scrollToEnvironment}
-                          >
-                            <Text type="secondary">没有找到？去</Text>
-                            <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
-                            <Text type="secondary">新建或修改</Text>
-                          </div>
-                        </>
-                      )}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label="端口号"
-                    name={['database', 'port']}
-                    rules={[{ required: true, message: '请选择端口号' }]}
-                  >
-                    <Select
-                      options={envVarOptions}
-                      placeholder="选择环境变量"
-                      notFoundContent="暂无环境变量"
-                      dropdownRender={(menu) => (
-                        <>
-                          {menu}
-                          <div
-                            className={cx('settings-db-select-footer')}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={scrollToEnvironment}
-                          >
-                            <Text type="secondary">没有找到？去</Text>
-                            <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
-                            <Text type="secondary">新建或修改</Text>
-                          </div>
-                        </>
-                      )}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label="用户名"
-                    name={['database', 'username']}
-                    rules={[{ required: true, message: '请选择用户名' }]}
-                  >
-                    <Select
-                      options={envVarOptions}
-                      placeholder="选择环境变量"
-                      notFoundContent="暂无环境变量"
-                      dropdownRender={(menu) => (
-                        <>
-                          {menu}
-                          <div
-                            className={cx('settings-db-select-footer')}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={scrollToEnvironment}
-                          >
-                            <Text type="secondary">没有找到？去</Text>
-                            <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
-                            <Text type="secondary">新建或修改</Text>
-                          </div>
-                        </>
-                      )}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label="密码"
-                    name={['database', 'password']}
-                    rules={[{ required: true, message: '请选择密码' }]}
-                    extra={
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        仅限密文类型
-                      </Text>
-                    }
-                  >
-                    <Select
-                      options={encryptedEnvVarOptions}
-                      placeholder="选择加密环境变量"
-                      notFoundContent="暂无加密环境变量"
-                      dropdownRender={(menu) => (
-                        <>
-                          {menu}
-                          <div
-                            className={cx('settings-db-select-footer')}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={scrollToEnvironment}
-                          >
-                            <Text type="secondary">没有找到？去</Text>
-                            <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
-                            <Text type="secondary">新建或修改</Text>
-                          </div>
-                        </>
-                      )}
-                    />
-                  </Form.Item>
+                                    {envSelectField({
+                    label: '数据库地址', name: 'host',
+                    requiredMessage: '请选择数据库地址',
+                    options: envVarOptions, placeholder: '选择环境变量', notFoundContent: '暂无环境变量'
+                  })}
+                  {envSelectField({
+                    label: '端口号', name: 'port',
+                    requiredMessage: '请选择端口号',
+                    options: envVarOptions, placeholder: '选择环境变量', notFoundContent: '暂无环境变量'
+                  })}
+                  {envSelectField({
+                    label: '用户名', name: 'username',
+                    requiredMessage: '请选择用户名',
+                    options: envVarOptions, placeholder: '选择环境变量', notFoundContent: '暂无环境变量'
+                  })}
+                  {envSelectField({
+                    label: '密码', name: 'password',
+                    requiredMessage: '请选择密码',
+                    options: encryptedEnvVarOptions, placeholder: '选择加密环境变量', notFoundContent: '暂无加密环境变量',
+                    extra: <Text type="secondary" style={{ fontSize: 12 }}>仅限密文类型</Text>
+                  })}
                 </>
               )}
             </SettingsCard>

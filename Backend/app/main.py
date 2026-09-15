@@ -17,6 +17,8 @@ from app.graph.application_planning_workflow import (
 from app.graph.direct_modification_workflow import clear_direct_modification_graph_cache
 from app.middleware.approvals import approval_store
 from app.persistence.checkpoints import close_workflow_checkpointer
+from app.protocols.preview_runtime import preview_runtime_capabilities, build_preview_runtime_stream
+
 from app.protocols.agent_files import (
     agent_files_capabilities,
     build_agent_files_ag_ui_stream,
@@ -71,15 +73,13 @@ from app.services.database_crypto import (
     database_encryption_metadata,
     ensure_database_platform_key,
 )
-from app.services.project_launcher import (
-    launch_project_preview,
-    stop_project_preview,
-)
 from app.services.ui_design_generation_pool import get_ui_design_generation_pool
+from app.services.workspace_bootstrap.service import workspace_bootstrap_service
 from app.tools import database_tools
 from app.workspace import workspace as workspace_tools
 
 settings = Settings.from_env()
+bootstrap_service = workspace_bootstrap_service(settings)
 
 
 @asynccontextmanager
@@ -139,6 +139,7 @@ async def health() -> dict[str, object]:
             "application_deletion": application_deletion_capabilities(),
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
+            "preview_runtime": preview_runtime_capabilities(),
             "data_sources": data_sources_capabilities(),
             "endpoint_designs": endpoint_designs_capabilities(),
             "code_changes": code_changes_capabilities(),
@@ -176,6 +177,7 @@ async def run_application_lifecycle(
         build_application_lifecycle_ag_ui_stream(
             payload=input_data,
             accept=accept,
+            bootstrap_service=bootstrap_service,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -238,6 +240,19 @@ async def run_user_skills(
 ) -> StreamingResponse:
     return StreamingResponse(
         build_user_skills_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/preview-runtime/run")
+async def run_preview_runtime(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 流管理开发预览、日志和诊断修复。"""
+    return StreamingResponse(
+        build_preview_runtime_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -427,10 +442,6 @@ async def run_workflow(
     )
 
 
-class ProjectLaunchRequest(BaseModel):
-    workspace: str = Field(min_length=1, max_length=4096)
-
-
 class UiDesignCancelRequest(BaseModel):
     workspace: str = Field(min_length=1, max_length=4096)
     pageId: str = Field(min_length=1, max_length=256)
@@ -447,25 +458,6 @@ async def api_cancel_ui_design(request: UiDesignCancelRequest) -> dict[str, Any]
     pool = get_ui_design_generation_pool()
     cancelled = await pool.cancel_page(request.workspace, request.pageId)
     return {"cancelled": cancelled, "pageId": request.pageId}
-
-
-@app.post("/api/projects/launch")
-def api_launch_project(request: ProjectLaunchRequest) -> dict[str, Any]:
-    """按应用数据源类型启动模板项目预览。
-
-    用于在模板下载完成、进入工作区后自动启动开发服务器。
-    Static 仅启动前端；Database 在存在 Maven 工程时先启动后端再启动前端。
-    FastAPI 自动将同步函数放在线程池中执行，不会阻塞事件循环。
-    """
-
-    return launch_project_preview(request.workspace)
-
-
-@app.post("/api/projects/stop")
-def api_stop_project(request: ProjectLaunchRequest) -> dict[str, Any]:
-    """停止指定工作区生成应用的前后端预览服务。"""
-
-    return stop_project_preview(request.workspace)
 
 
 # CORS 必须包在整个 FastAPI 应用外层，确保路由构造或未处理异常生成的 500 响应也携带跨域头。

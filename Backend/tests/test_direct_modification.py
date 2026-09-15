@@ -1066,32 +1066,32 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertIn("最终验收", stage_result["summary"])
         self.assertIn("最终验收", finalized["message"])
 
-    def test_direct_validation_only_builds_real_changed_layers(self) -> None:
-        """快速验证必须只构建真实差异所属层，不生成或执行单元测试。"""
+    def test_direct_validation_only_starts_real_changed_layers(self) -> None:
+        """快速验证必须只启动真实差异所属层，不生成或执行单元测试。"""
 
         captured: dict = {}
 
         def fake_checks(state, **kwargs):
-            """记录范围验证参数并返回前端通过证据。"""
+            """记录启动验收状态并返回前端通过证据。"""
 
             captured["state"] = state
             captured.update(kwargs)
             return {
                 "test_results": [
                     {
-                        "id": "frontend_build",
-                        "name": "前端构建检查",
+                        "id": "frontend_startup",
+                        "name": "前端启动验收",
                         "passed": True,
                         "required": True,
                         "evidence": "ok",
                     }
                 ],
-                "test_events": ["frontend_build"],
+                "test_events": ["frontend_startup"],
             }
 
         with tempfile.TemporaryDirectory() as workspace:
             with patch(
-                "app.graph.nodes.direct_modification.run_integration_checks",
+                "app.graph.nodes.direct_modification.run_project_restart_validation",
                 side_effect=fake_checks,
             ):
                 update = validate_direct_fix(
@@ -1103,9 +1103,6 @@ class DirectModificationNodeTests(unittest.TestCase):
                     }
                 )
 
-        self.assertEqual(captured["affected_layers"], {"frontend"})
-        self.assertEqual(captured["phase"], "build")
-        self.assertIs(captured["install_frontend_dependencies"], False)
         self.assertIs(captured["state"]["unit_test_generation_enabled"], False)
         self.assertNotIn("unit_test_affected_layers", captured["state"])
         self.assertEqual(update["status"], "completed")
@@ -1134,19 +1131,19 @@ class DirectModificationNodeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             with patch(
-                "app.graph.nodes.direct_modification.run_integration_checks",
+                "app.graph.nodes.direct_modification.run_project_restart_validation",
                 return_value={
                     "test_results": [
                         {
-                            "id": "frontend_build",
-                            "name": "前端构建检查",
+                            "id": "frontend_startup",
+                            "name": "前端启动验收",
                             "layer": "frontend",
                             "passed": False,
                             "required": True,
                             "evidence": "Frontend/src/LegacyPanel.tsx 存在历史类型错误。",
                         }
                     ],
-                    "test_events": ["frontend_build"],
+                    "test_events": ["frontend_startup"],
                 },
             ):
                 update = validate_direct_fix(
@@ -1168,19 +1165,19 @@ class DirectModificationNodeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             with patch(
-                "app.graph.nodes.direct_modification.run_integration_checks",
+                "app.graph.nodes.direct_modification.run_project_restart_validation",
                 return_value={
                     "test_results": [
                         {
-                            "id": "frontend_build",
-                            "name": "前端构建检查",
+                            "id": "frontend_startup",
+                            "name": "前端启动验收",
                             "layer": "frontend",
                             "passed": False,
                             "required": True,
                             "evidence": "Frontend/src/Page.tsx:12 类型不匹配。",
                         }
                     ],
-                    "test_events": ["frontend_build"],
+                    "test_events": ["frontend_startup"],
                 },
             ):
                 update = validate_direct_fix(

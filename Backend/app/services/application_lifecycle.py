@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
+from app.services.preview_runtime_guard import maintenance_lock, require_no_maintenance
 
 from app.domain.application_lifecycle import (
     ApplicationIdentity,
@@ -31,10 +32,6 @@ from app.domain.application_lifecycle import (
     WorkbenchExecution,
     WorkbenchExecutionStatus,
     utc_now,
-)
-from app.services.application_template_generation import (
-    ApplicationTemplateGenerationError,
-    validate_application_template_generation,
 )
 
 
@@ -353,7 +350,8 @@ def start_workbench_execution(
     """原子登记计划执行及全部资源锁，并保持初始化完成状态不变。"""
 
     path = application_lifecycle_path(workspace)
-    with _application_lifecycle_lock(path):
+    with maintenance_lock, _application_lifecycle_lock(path):
+        require_no_maintenance(workspace)
         from app.services.development_artifacts import (
             execution_development_metadata, reconcile_development_artifacts, require_test_entry,
         )
@@ -572,6 +570,76 @@ def complete_workbench_execution(
             current=current,
             executions=remaining,
             resource_locks=_resource_locks_without_run(current.resource_locks, run_id),
+        )
+
+
+def record_abandoned_planning_result(
+    workspace: str | Path,
+    *,
+    planning_run_id: str,
+    draft_digest: str,
+    base_confirmed_plan_digest: str | None,
+    build_execution_scope: dict[str, Any],
+    workflow_run_id: str = "",
+) -> ApplicationLifecycle | None:
+    """持久化 Planning result 的 Abandon tombstone，并收口对应待确认 execution。
+
+    该动作只在 Pending 已由 DraftIdentity 验证后调用；它不取消运行中的 Workflow、
+    Scheduler 或模型请求，也不修改 Formal DAG。没有 application lifecycle 的独立
+    service 测试场景保持可用，此时由 Pending 文件删除继续充当业务事实。
+    """
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        if current is None:
+            return None
+        now = utc_now()
+        marker = {
+            "schemaVersion": "planning-result-lifecycle.v1",
+            "status": "abandoned",
+            "planningRunId": planning_run_id,
+            "draftDigest": draft_digest,
+            "baseConfirmedPlanDigest": base_confirmed_plan_digest,
+            "buildExecutionScope": dict(build_execution_scope),
+            "workflowRunId": workflow_run_id,
+            "abandonedAt": now.isoformat(),
+        }
+        extensions = {
+            **current.extensions,
+            "planningResultLifecycle": marker,
+        }
+        executions = dict(current.active_executions)
+        resource_locks = current.resource_locks
+        execution = executions.get(workflow_run_id) if workflow_run_id else None
+        pending = execution.pending_interaction if execution is not None else None
+        # 只收口已经停在 Build DAG 确认门禁的 execution；绝不借 Abandon 取消生成中运行。
+        if (
+            execution is not None
+            and execution.status == WorkbenchExecutionStatus.AWAITING_USER
+            and pending is not None
+            and (
+                pending.type == PendingInteractionType.TASK_PLAN_CONFIRMATION
+                or pending.payload.get("mode") == "build_task_plan_confirmation"
+            )
+        ):
+            executions.pop(workflow_run_id, None)
+            resource_locks = _resource_locks_without_run(resource_locks, workflow_run_id)
+        latest = max(executions.values(), key=lambda item: item.updated_at) if executions else None
+        updated = current.model_copy(
+            update={
+                "updated_at": now,
+                "revision": current.revision + 1,
+                "active_run_id": latest.run_id if latest else None,
+                "active_executions": executions,
+                "resource_locks": resource_locks,
+                "extensions": extensions,
+            }
+        )
+        return write_application_lifecycle(
+            workspace,
+            updated,
+            expected_revision=current.revision,
         )
 
 
@@ -941,75 +1009,39 @@ def transition_application_lifecycle(
     )
 
 
-def complete_application_template_generation(
+def complete_workspace_bootstrap(
     workspace: str | Path,
     *,
     succeeded: bool,
+    readiness_verified: bool = False,
     error_message: str | None = None,
-    active_run_id: str | None = None,
 ) -> ApplicationLifecycle:
-    """校验正式产物、manifest 和真实文件后把模板生成结果落为 ready 或失败。"""
+    """仅接受事务内已验证的 Bootstrap 成功提交，或记录不可恢复失败。"""
 
     current = load_application_lifecycle(workspace)
     if current is None:
-        raise ApplicationLifecycleConflictError("生成应用模板文件前必须先创建生命周期状态。")
-    if (
-        current.initialization.stage
-        != ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES
-    ):
-        raise ApplicationLifecycleConflictError(
-            f"当前阶段 {current.initialization.stage.value} 不能提交应用模板文件生成结果。"
-        )
-    requirement_status = _artifact_confirmation_status(
-        Path(workspace) / ".xcodeagent/specs/requirement-spec.json"
-    )
-    product_plan_status = _artifact_confirmation_status(
-        Path(workspace) / ".xcodeagent/plans/product-plan.json"
-    )
-    ui_design_status = _artifact_confirmation_status(
-        Path(workspace) / ".xcodeagent/specs/ui-designs.json"
-    )
-    technical_plan_status = _artifact_confirmation_status(
-        Path(workspace) / ".xcodeagent/plans/technical-plan.json",
-        expected_artifact_type="technical-plan",
-    )
-    # UI 阶段可以是用户明确跳过，其余正式产物仍必须处于 confirmed。
-    artifacts_confirmed = (
-        requirement_status == "confirmed"
-        and product_plan_status == "confirmed"
-        and ui_design_status in {"confirmed", "skipped"}
-        and technical_plan_status == "confirmed"
-    )
-    if succeeded and not artifacts_confirmed:
-        succeeded = False
-        error_message = "需求、产品、技术正式产物必须确认，UI 设计稿必须确认或明确跳过，才能进入工作台。"
-    if succeeded:
-        try:
-            validate_application_template_generation(workspace)
-        except ApplicationTemplateGenerationError as exc:
-            succeeded = False
-            error_message = str(exc)
+        raise ApplicationLifecycleConflictError("Bootstrap 前必须先创建生命周期状态。")
+    if current.initialization.stage != ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES:
+        raise ApplicationLifecycleConflictError("当前生命周期不允许提交 Bootstrap 结果。")
+    if succeeded and not readiness_verified:
+        raise ApplicationLifecycleConflictError("Bootstrap 必须先在物化事务内通过 Readiness 校验。")
     if succeeded:
         return persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
             status=ApplicationLifecycleStatus.COMPLETED,
-            active_run_id=active_run_id,
         )
     return persist_application_lifecycle_transition(
         workspace,
         stage=ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
         status=ApplicationLifecycleStatus.FAILED,
-        active_run_id=active_run_id,
         error=ApplicationLifecycleError(
             code="application_template_generation_failed",
-            message=(error_message or "应用模板文件生成失败。")[:2048],
-            recoverable=True,
+            message=(error_message or "Workspace Bootstrap 失败。")[:2048],
+            recoverable=False,
             occurredAt=utc_now(),
         ),
     )
-
-
 def begin_application_template_generation(
     workspace: str | Path,
     *,
@@ -1036,6 +1068,30 @@ def begin_application_template_generation(
     raise ApplicationLifecycleConflictError(
         "只有用户确认 TechnicalPlan 后才能开始或重试模板初始化；当前阶段为 "
         f"{current.initialization.stage.value}。"
+    )
+
+
+def retry_application_template_generation(
+    workspace: str | Path,
+    *,
+    active_run_id: str | None = None,
+) -> ApplicationLifecycle:
+    """仅允许失败的首次 Bootstrap 显式重试，并清除上一轮错误。"""
+
+    current = load_application_lifecycle(workspace)
+    if current is None:
+        raise ApplicationLifecycleConflictError("重试应用模板前必须先创建生命周期状态。")
+    if current.initialization.stage != ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED:
+        raise ApplicationLifecycleConflictError(
+            "只有失败的应用模板生成可以重试；当前阶段为 "
+            f"{current.initialization.stage.value}。"
+        )
+    return persist_application_lifecycle_transition(
+        workspace,
+        stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+        status=ApplicationLifecycleStatus.RUNNING,
+        active_run_id=active_run_id,
+        error=None,
     )
 
 

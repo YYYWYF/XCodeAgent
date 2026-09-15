@@ -24,6 +24,10 @@ Source Field 节点可实时读取直属 MySQL 表列，也可读取数据源目
 
 开发确认成功后，门禁立即把页面或接口对应的完整映射集合随原工作流消息保存；该快照只代表当次确认结果，后续开发停止、失败或重新配置都不会覆盖历史卡片。切回会话时优先读取消息中的确认快照。独立 `/endpoint-designs/run` 按 `workspaceRoot + apiContractId + endpointId` 提供 `get/prepare/save`，右侧“开发产物”与门禁确认卡片共用只读投影；缺失结果显示 pending，TechnicalPlan 指纹变化或双文件异常显示 stale。任务规划继续读取当前正式磁盘映射，不消费门禁快照，也不增加基于 lifecycle 或开发状态的映射锁定。
 
+Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。它把已确认 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效 Endpoint API Design 和权限切片冻结到 PlanningRun；EntitySourceBinding 不进入该输入。Unit Candidate 由平台 FIFO Worker Pool 有界并行生成并执行 Unit Local Retry，完整 Scope Assembly 和 Global Validation/Repair 通过后只写 `.xcodeagent/plans/build-task-plan.pending.json`。已有正式 `.xcodeagent/plans/build-task-plan.json` 保持不变。
+
+确认卡是只读 Planning-result 门禁：`confirm` 精确验证 `planning_run_id + draft_digest` 后提升当前 Pending 并进入 Build；`abandon` 删除当前 Pending、结束对应 Workflow execution，但保留聊天会话和已有正式计划；结构化 `regenerate` 先删除旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun，后续失败不恢复旧 Pending。同一应用的所有页面和 Scope 共用一个 DAG Planning/待确认互斥域。活跃生成只允许取消整个 Workflow/PlanningRun，当前权威运行卡显示“取消运行”；待确认阶段改用确认卡上的放弃/重新生成/确认，不提供 Unit 级取消。刷新只恢复服务端权威状态投影，不保证原请求继续执行或事件补发；唯一 Pending 和精确 DraftIdentity 是确认权威，没有 Pending 时不得从聊天历史、旧卡片或旧 execution 恢复待确认状态。
+
 ## Initial Development Completion and Test Entry
 
 页面和 Endpoint 必须分别作为显式开发目标走完一次初次流程，全部完成后才能进入测试阶段。页面开发顺带实现依赖 Endpoint 不替接口标记完成。实体也单独计数，只有用户显式确认且正式 EntitySourceBinding 成功写盘后才完成；选表、生成设计和等待确认均不算完成。三类产物全部完成后才能进入测试阶段。
@@ -39,6 +43,8 @@ Source Field 节点可实时读取直属 MySQL 表列，也可读取数据源目
 `testEntryGate` 随 AG-UI lifecycle 投影提供 `allowed/total/completed/pending/inProgress/blockers/reason`，不重复持久化。放行要求工作台就绪、目录有效、至少一个页面、接口或实体、全部初次完成。前端顶部、历史确认卡、自动阶段与本地阶段恢复使用同一门禁。顶部点击只浏览；真实测试提交、execution 接替、直接恢复/调试测试及修复返回测试均由后端复检。拒绝返回 `development_artifacts_incomplete`，保留未消费确认；测试启动接替与凭据消费原子提交，失败后原执行可重试。
 
 圆点和分组计数只表示初次开发，不反映二次修改活动。分母不受搜索、折叠及相关项过滤影响。前端仅通过已有 AG-UI lifecycle store 同步，按 revision 拒绝旧快照；无状态文件轮询、独立 REST 接口或重复完成状态。
+
+下述编号开发任务规划使用独立 `/application-development-planning/run` AG-UI endpoint 和独立 thread id，不进入或恢复主 LangGraph Workflow。正常生成使用一次模型调用；只有模型返回真实阻断问题时，回答才进入第二次生成。确认过程是确定性的，不调用模型。
 
 ## Context Budget
 

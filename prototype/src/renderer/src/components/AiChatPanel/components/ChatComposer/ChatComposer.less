@@ -244,8 +244,8 @@
   border: 0;
   border-radius: 8px;
   cursor: pointer;
-  // 图标 + 文案 + 右侧状态徽标。
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  // 名称 + 右侧状态徽标，两列极简行，形态对齐右侧产物目录。
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   font: inherit;
   text-align: left;
@@ -259,10 +259,6 @@
   &.@{class-prefix}-disabled {
     color: var(--wb-text-tertiary);
     cursor: default;
-
-    .@{class-prefix}-composer-mention-icon {
-      color: var(--wb-text-tertiary);
-    }
 
     .@{class-prefix}-composer-mention-copy > .ant-typography:first-child {
       color: var(--wb-text-tertiary);
@@ -307,23 +303,9 @@
   }
 }
 
-.@{class-prefix}-composer-mention-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  color: var(--wb-accent);
-  background: var(--wb-accent-soft);
-  border-radius: 6px;
-  font-size: 12px;
-}
-
 .@{class-prefix}-composer-mention-copy {
   display: flex;
   min-width: 0;
-  flex-direction: column;
-  gap: 1px;
 
   > .ant-typography:first-child {
     overflow: hidden;
@@ -332,94 +314,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-
-  > .ant-typography:last-child {
-    overflow: hidden;
-    font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
 }
 
-.@{class-prefix}-composer-mention-hint.ant-typography {
-  flex: 0 0 auto;
-  color: var(--wb-text-tertiary);
-  font-size: 11px;
-}
-
-.@{class-prefix}-ai-chat-composer.@{class-prefix}-debug-only {
-  padding: 14px 30px 0;
-
-  .@{class-prefix}-ai-chat-composer-frame {
-    min-width: 0;
-    min-height: 0;
-    flex-direction: row;
-    align-items: center;
-    padding: 10px 14px;
-    border-radius: 12px;
-  }
-
-  .@{class-prefix}-composer-inline-input {
-    display: none;
-  }
-
-  .@{class-prefix}-workflow-debug-box {
-    min-width: 0;
-    flex: 1 1 auto;
-    padding: 0;
-    border: 0;
-  }
-
-  .@{class-prefix}-workflow-debug-fields {
-    display: flex;
-    min-width: 0;
-    flex-wrap: nowrap;
-    gap: 8px;
-  }
-
-  .@{class-prefix}-workflow-debug-node-select {
-    width: 210px;
-    flex: 0 0 210px;
-  }
-
-  .@{class-prefix}-workflow-debug-auto-paths {
-    display: none;
-  }
-
-  .@{class-prefix}-workflow-debug-build-scope {
-    display: flex;
-    min-width: 0;
-    flex: 1 1 auto;
-    gap: 8px;
-  }
-
-  .@{class-prefix}-workflow-debug-scope-select {
-    width: 150px;
-    flex: 0 0 150px;
-  }
-
-  .@{class-prefix}-workflow-debug-scope-hint {
-    overflow: hidden;
-    flex: 1 1 auto;
-    line-height: 24px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .@{class-prefix}-ai-chat-composer-footer {
-    width: auto;
-    flex: 0 0 auto;
-    gap: 8px;
-    padding: 0;
-  }
-
-  .@{class-prefix}-workflow-debug-resume-label {
-    display: none;
-  }
-}
-
-.@{class-prefix}-ai-chat-composer.@{class-prefix}-debug-only
-  + .@{class-prefix}-plan-execution-dock {
+-plan-execution-dock {
   margin-top: 8px;
 }
 
@@ -879,149 +776,6 @@
   text-align: center;
 }
 
-.@{class-prefix}-workflow-debug-box {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px 2px;
-  border-top: 1px solid var(--wb-border);
-  border-bottom: 1px solid var(--wb-border);
-}
-
-.@{class-prefix}-workflow-debug-fields {
-  display: grid;
-  min-width: 0;
-  align-items: center;
-  grid-template-columns: minmax(160px, 240px) minmax(220px, 1fr);
-  gap: 7px;
-
-  .ant-select-selector {
-    color: var(--wb-text);
-    font-size: 11px;
-    background: var(--wb-surface-subtle) !important;
-    border-color: var(--wb-border) !important;
-  }
-}
-
-.@{class-prefix}-workflow-debug-auto-paths.ant-typography {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--wb-text-tertiary);
-  font-size: 11px;
-  line-height: 24px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.@{class-prefix}-workflow-debug-node-select {
-  min-width: 0;
-}
-
-.@{class-prefix}-workflow-debug-build-scope {
-  display: grid;
-  min-width: 0;
-  align-items: center;
-  grid-column: 1 / -1;
-  grid-template-columns: minmax(120px, 170px) minmax(180px, 1fr) minmax(160px, 1fr);
-  gap: 7px;
-
-  .ant-input,
-  .ant-select-selector {
-    color: var(--wb-text);
-    font-size: 11px;
-    background: var(--wb-surface-subtle) !important;
-    border-color: var(--wb-border) !important;
-  }
-}
-
-.@{class-prefix}-workflow-debug-scope-select {
-  min-width: 0;
-}
-
-.@{class-prefix}-workflow-debug-scope-hint.ant-typography {
-  min-width: 0;
-  color: var(--wb-text-tertiary);
-  font-size: 11px;
-}
-
-.@{class-prefix}-workflow-debug-resume-label.ant-typography {
-  color: var(--wb-text-secondary);
-  font-size: 12px;
-}
-
-.@{class-prefix}-workflow-trace-log {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 7px;
-  padding: 8px;
-  border: 1px solid var(--wb-border);
-  border-radius: 7px;
-  background: var(--wb-surface-subtle);
-}
-
-.@{class-prefix}-workflow-trace-meta,
-.@{class-prefix}-workflow-trace-event-line {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 7px;
-
-  .ant-tag {
-    margin-right: 0;
-  }
-
-  a {
-    color: var(--wb-primary);
-    font-size: 11px;
-  }
-}
-
-.@{class-prefix}-workflow-trace-events {
-  display: flex;
-  max-height: 260px;
-  min-width: 0;
-  flex-direction: column;
-  gap: 6px;
-  overflow: auto;
-}
-
-.@{class-prefix}-workflow-trace-event {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.@{class-prefix}-workflow-trace-event-line {
-  align-items: flex-start;
-  flex-wrap: nowrap;
-
-  .ant-tag {
-    flex: 0 0 auto;
-  }
-}
-
-.@{class-prefix}-workflow-trace-time {
-  flex: 0 0 auto;
-  font-size: 11px;
-}
-
-.@{class-prefix}-workflow-trace-data {
-  max-height: 160px;
-  margin: 0 0 0 28px;
-  padding: 7px 8px;
-  overflow: auto;
-  border: 1px solid var(--wb-border);
-  border-radius: 6px;
-  background: var(--wb-surface);
-  color: var(--wb-text-secondary);
-  font-size: 11px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-}
-
 .@{class-prefix}-workspace-busy-label.ant-typography {
   flex: 0 0 auto;
   color: var(--wb-warning);
@@ -1055,13 +809,7 @@
 }
 
 @media (max-width: 1050px) {
-  .@{class-prefix}-workflow-debug-fields {
-    grid-template-columns: 1fr;
-  }
 
-  .@{class-prefix}-workflow-debug-build-scope {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 820px) {

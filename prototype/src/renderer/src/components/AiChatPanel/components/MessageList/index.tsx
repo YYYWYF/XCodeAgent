@@ -9,11 +9,7 @@ import {
 import { Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type {
-  ApplicationLifecycle,
-  WorkflowClarification,
-  WorkflowRunPayload
-} from '../../../../typings'
+import type { ApplicationLifecycle, WorkflowRunPayload } from '../../../../typings'
 import type { ProcessStepRecord } from '../../../../service/agUiAgent'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
@@ -52,6 +48,9 @@ import {
 } from '../../utils'
 import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { splitTextByMentions } from '../../artifactMention'
+import type { ComposerArtifactTarget } from '../../artifactMention'
+import type { UiDesignPage } from '../../../../initializationPlanning'
+import DevelopmentLaunchGuide from '../DevelopmentLaunchGuide'
 import { useWorkbenchPhase } from '../../../../context'
 import { WORKBENCH_PHASE_AGENTS, type WorkbenchPhase } from '../../../../workbenchPhase'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
@@ -79,8 +78,8 @@ function agentAvatarInitial(agentKey: WorkbenchPhase): string {
 /** 将当前 Agent 映射为用户可理解的具体工作流名称。 */
 function workflowTitleForAgent(agentKey: WorkbenchPhase): string {
   const titles: Record<WorkbenchPhase, string> = {
-    analysis: '需求分析工作流',
-    planning: '项目规划工作流',
+    analysis: '产品设计工作流',
+    planning: '技术规划工作流',
     development: '开发工作流',
     testing: '测试验证工作流',
     review: '代码审查工作流',
@@ -99,17 +98,27 @@ function testingWorkflowTitle(workflow: WorkflowRunPayload | undefined): string 
 }
 
 /** 从工作流节点反推消息所属阶段，作为旧会话缺少显式 Agent 标记时的稳定兜底。 */
-function workflowPhaseToAgentPhase(
-  workflow?: WorkflowRunPayload
-): WorkbenchPhase | undefined {
+function workflowPhaseToAgentPhase(workflow?: WorkflowRunPayload): WorkbenchPhase | undefined {
   const phase = String(workflow?.summary?.phase || '')
-  if (['requirements', 'requirement_spec_confirmation', 'planning_stage_entry'].includes(phase)) {
+  if (
+    [
+      'requirements',
+      'requirement_document',
+      'ui_confirmation',
+      'requirement_spec_confirmation',
+      'planning_stage_entry'
+    ].includes(phase)
+  ) {
     return 'analysis'
   }
   if (
-    ['project_planning', 'project_plan_confirmation', 'development_entry_confirmation'].includes(
-      phase
-    )
+    [
+      'technical_planning',
+      'template_generation',
+      'project_planning',
+      'project_plan_confirmation',
+      'development_entry_confirmation'
+    ].includes(phase)
   )
     return 'planning'
   if (
@@ -129,27 +138,47 @@ function workflowPhaseToAgentPhase(
   if (['application_test', 'business_test', 'test', 'testing'].includes(phase)) {
     return 'testing'
   }
-  if (['code_review', 'lint_check', 'security_scan', 'health_check', 'finalize_project'].includes(phase)) {
+  if (
+    ['code_review', 'lint_check', 'security_scan', 'health_check', 'finalize_project'].includes(
+      phase
+    )
+  ) {
     return 'review'
   }
   return undefined
 }
 
-/** 需求分析工作流的已提交澄清卡历史条目（随 payload state 累积，按节点内嵌回看）。 */
-type DesignClarificationHistoryEntry = {
-  nodeName?: string
-  clarification?: WorkflowClarification
-  answers?: ClarificationAnswers
-}
+/** 需求分析阶段的确认/澄清门禁模式：只有这些模式在对话区渲染交互卡。 */
+const DESIGN_GATE_MODES = [
+  'requirement_clarification',
+  'requirement_revision',
+  'requirement_document_confirmation',
+  'ui_design_confirmation',
+  'planning_stage_entry',
+  'technical_plan_confirmation'
+]
 
-/** 需求分析/项目规划工作流的澄清/确认卡归属节点：待输入卡内嵌当前节点，已提交卡内嵌回原节点。 */
-const DESIGN_CLARIFICATION_NODES: Record<string, string> = {
-  requirement_clarification: 'requirements_clarify',
-  requirement_spec_confirmation: 'requirements_document',
-  requirement_revision: 'requirements_document',
-  project_plan_confirmation: 'planning_document',
-  project_plan_revision: 'planning_document',
-  development_entry_confirmation: 'planning_document'
+/** 设计/计划阶段生成中的进度文案：按当前工作流阶段给出一句标题与说明。 */
+function designPlanningActivityCopy(
+  workflow: WorkflowRunPayload
+): { title: string; detail: string } | undefined {
+  const copy: Record<string, { title: string; detail: string }> = {
+    requirement_document: {
+      // 产物名与右侧审阅面板、Tab 的正式名称保持同一口径，避免“需求文档/需求规格说明书”混用。
+      title: '正在生成需求规格说明书',
+      detail: '正在把确认后的需求草稿写入正式文档。'
+    },
+    ui_confirmation: {
+      title: '正在生成 UI 设计稿',
+      detail: '正在生成各页面的布局、视觉与交互呈现。'
+    },
+    technical_planning: {
+      title: '正在生成技术规划方案',
+      detail: '正在根据已确认的产品设计生成实现方案。'
+    },
+    template_generation: { title: '正在准备应用模板', detail: '正在生成应用工程骨架与初始文件。' }
+  }
+  return copy[String(workflow.summary.phase || '')]
 }
 
 /** 过滤旧版本遗留的结构化控制消息，避免卡片选择与用户正文重复出现。 */
@@ -194,7 +223,9 @@ function isRedundantTestingMessage(message: AgentChatMessage): boolean {
 function isRedundantReviewStartMessage(message: AgentChatMessage): boolean {
   if (message.role === 'user') return message.content.trim() === '开始代码审查'
   if (!message.workflow) return false
-  return ['review_start', 'code_review'].includes(workflowClarification(message.workflow)?.mode || '')
+  return ['review_start', 'code_review'].includes(
+    workflowClarification(message.workflow)?.mode || ''
+  )
 }
 
 /** 隐藏验收条已经表达过的旧启动消息，验收对话只保留用户进入对话后的提示。 */
@@ -256,8 +287,16 @@ type MessageListProps = {
   ) => Promise<boolean>
   onDiscardArtifact: (docKey: WorkspaceDocKey) => void
   onStartDetailDesign?: DetailConfirmationStart
-  /** 引导消息快速按钮：打开输入区的产物选择弹层（与工作流按钮同一弹层）。 */
-  onOpenComposerPicker?: () => void
+  /** 开发阶段产物发起引导卡的候选：与输入区「产物」按钮共用同一份 composerMentionItems。 */
+  launchItems?: ComposerArtifactTarget[]
+  /** UI 设计确认卡逐页选模板用的实时页面清单（来自规划记录，模板名随剧本重写同步刷新）。 */
+  uiDesignPages?: UiDesignPage[]
+  /** 用户是否已提交过一轮版式选择（规划记录的 templates_selected），透传给 UI 设计确认卡。 */
+  uiDesignTemplatesSelected?: boolean
+  /** 引导卡点击产物行直接发起实施（与产物面板同一条链路，不产生用户消息输入）。 */
+  onLaunchArtifact?: (item: ComposerArtifactTarget) => void
+  /** 引导卡「继续处理」行恢复该产物已完成的后台工作流。 */
+  onResumePendingWorkflow?: (taskId: string) => void
 }
 
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
@@ -266,13 +305,17 @@ export default function MessageList({
   applicationLifecycle,
   conversationPhase,
   interactionsDisabled = false,
+  launchItems,
   loading,
   messages,
   mentionLabels,
   onDiscardArtifact,
+  onLaunchArtifact,
+  onResumePendingWorkflow,
   onSubmitClarification,
   onStartDetailDesign,
-  onOpenComposerPicker,
+  uiDesignPages,
+  uiDesignTemplatesSelected
 }: MessageListProps): ReactElement {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
@@ -480,7 +523,8 @@ export default function MessageList({
               const testWorkflowPhase = message.workflow?.summary?.phase
               const testWorkflowStatus = message.workflow?.summary?.status
               const testWorkflowRunning =
-                (testWorkflowPhase === 'application_test' || testWorkflowPhase === 'business_test') &&
+                (testWorkflowPhase === 'application_test' ||
+                  testWorkflowPhase === 'business_test') &&
                 testWorkflowStatus === 'running'
               const inlineTestCaseAuthorization =
                 Boolean(message.workflow) &&
@@ -499,12 +543,39 @@ export default function MessageList({
                 workflowClarification(message.workflow)?.mode === 'background_dispatch' &&
                 requiresClarification &&
                 Boolean(visibleProcessSteps?.length)
-              // 需求分析/项目规划工作流：有节点轨迹时卡片一律内嵌到归属节点，不再渲染独立卡。
-              // 否则提交瞬间（节点已落定、历史条目尚未写入）会闪现一张脱离节点的独立卡。
-              const designWorkflowInline =
-                (messageAgentKey === 'analysis' || messageAgentKey === 'planning') &&
+              // 实体绑定确认卡内嵌在「绑定操作的数据实现」节点上；节点轨迹存在时不再重复渲染独立卡。
+              const inlineEntityBinding =
                 Boolean(message.workflow) &&
+                workflowClarification(message.workflow)?.mode === 'entity_binding' &&
+                requiresClarification &&
                 Boolean(visibleProcessSteps?.length)
+              // 设计/计划阶段对齐原工程对话逻辑：一轮对话一条消息，每条消息至多一张交互卡；
+              // 生成中的轮次展示轻量进度条，历史轮次的卡片留在各自消息里只读回看，
+              // 不再渲染步骤轨迹，也没有外层汇总卡。
+              const designPlanningWorkflow =
+                (messageAgentKey === 'analysis' || messageAgentKey === 'planning') &&
+                Boolean(message.workflow)
+              // UI 设计门禁卡在静默改稿轮会被快照短暂置为 running（此时快照甚至不带 clarification）：
+              // 卡片必须钉在原地，既不换成进度条也不消失——生成中只表现为按钮禁用与状态标签。
+              // 因此除确认模式外，再按 ui_confirmation 阶段名兜底，避免生成期间整张卡被卸载造成闪烁。
+              const uiDesignGateCard =
+                designPlanningWorkflow &&
+                (clarificationSnapshot?.mode === 'ui_design_confirmation' ||
+                  message.workflow!.summary.phase === 'ui_confirmation')
+              const designPendingGate =
+                designPlanningWorkflow &&
+                requiresClarification &&
+                DESIGN_GATE_MODES.includes(clarificationSnapshot?.mode || '')
+              const designSubmittedGate =
+                designPlanningWorkflow && clarificationSnapshot?.status === 'submitted'
+              const designPlanningActivity = designPlanningWorkflow
+                ? designPlanningActivityCopy(message.workflow!)
+                : undefined
+              const designPlanningRunning =
+                Boolean(designPlanningActivity) &&
+                message.workflow!.summary.status === 'running' &&
+                !designPendingGate &&
+                !uiDesignGateCard
               // 模板选择详设卡已经承载完整引导，隐藏历史中重复保存的普通说明正文。
               const visibleAssistantContent = message.detailBlocker
                 ? ''
@@ -564,9 +635,7 @@ export default function MessageList({
                       const templateStep: ProcessStepRecord = {
                         id: templateStepId,
                         kind: 'workflow',
-                        status: detailBlockerWorkflowStarted
-                          ? 'completed'
-                          : 'requires_user_input',
+                        status: detailBlockerWorkflowStarted ? 'completed' : 'requires_user_input',
                         title:
                           message.detailBlocker?.type === 'endpoint'
                             ? '确认接口详细设计'
@@ -579,94 +648,16 @@ export default function MessageList({
                       }
                       const nextSteps: ProcessStepRecord[] = (visibleProcessSteps || []).map(
                         (step): ProcessStepRecord =>
-                        step.id === templateStepId && detailBlockerWorkflowStarted
-                          ? { ...step, status: 'completed', detail: templateStep.detail }
-                          : {
-                              ...step,
-                              sequence: step.sequence + (hasTemplateStep ? 0 : 1)
-                            }
+                          step.id === templateStepId && detailBlockerWorkflowStarted
+                            ? { ...step, status: 'completed', detail: templateStep.detail }
+                            : {
+                                ...step,
+                                sequence: step.sequence + (hasTemplateStep ? 0 : 1)
+                              }
                       )
                       return hasTemplateStep ? nextSteps : [templateStep, ...nextSteps]
                     })()
                   : visibleProcessSteps
-              // 需求分析/项目规划工作流：卡片按节点归属内嵌。已提交澄清卡（clarificationHistory）
-              // 以只读向导形态回到原节点下方；待输入澄清卡内嵌在当前节点上，不再悬浮在轨迹之外。
-              const designNodeCards = (() => {
-                if (!message.workflow || !visibleProcessSteps?.length) return undefined
-                if (messageAgentKey !== 'analysis' && messageAgentKey !== 'planning') {
-                  return undefined
-                }
-                const cards: Record<string, ReactElement> = {}
-                const historyEntries = Array.isArray(message.workflow.state?.clarificationHistory)
-                  ? (message.workflow.state!.clarificationHistory as DesignClarificationHistoryEntry[])
-                  : []
-                historyEntries.forEach((entry, index) => {
-                  const nodeName = String(entry?.nodeName || '')
-                  const questions = entry?.clarification?.questions || []
-                  if (!nodeName || questions.length === 0) return
-                  const historyCard = (
-                    <WorkflowRunCard
-                      disabled
-                      embedded
-                      interactionAvailability="stale"
-                      key={`clarify-history-${index}`}
-                      onDiscard={onDiscardArtifact}
-                      onSubmitClarification={onSubmitClarification}
-                      workflow={{
-                        ...message.workflow!,
-                        // 历史卡必须读条目自带的澄清载荷：summary.clarification 会指向当前门禁
-                        // （如 requirement_spec_confirmation），命中产物确认分支导致卡片返回 null。
-                        summary: {
-                          ...message.workflow!.summary,
-                          status: 'completed',
-                          clarification: entry.clarification
-                        },
-                        state: {
-                          ...(message.workflow!.state || {}),
-                          clarification: entry.clarification,
-                          clarificationAnswers: entry.answers || {}
-                        }
-                      }}
-                    />
-                  )
-                  cards[nodeName] = cards[nodeName] ? (
-                    <>{cards[nodeName]}{historyCard}</>
-                  ) : (
-                    historyCard
-                  )
-                })
-                // 待输入且带问题的卡（需求澄清 / 修改意见）内嵌到归属节点；
-                // 产物确认卡由「文件改动」条承担、开发准入门由弹框承担，都没有问题卡可内嵌。
-                const pendingDesignNode =
-                  requiresClarification &&
-                  (clarificationSnapshot?.questions?.length ?? 0) > 0
-                    ? DESIGN_CLARIFICATION_NODES[clarificationSnapshot?.mode || '']
-                    : undefined
-                if (pendingDesignNode) {
-                  const pendingCard = (
-                    <WorkflowRunCard
-                      disabled={
-                        interactionsDisabled ||
-                        loading ||
-                        messageLoading ||
-                        interactionAvailability !== 'active'
-                      }
-                      embedded
-                      interactionAvailability={interactionAvailability}
-                      key="clarify-pending"
-                      onDiscard={onDiscardArtifact}
-                      onSubmitClarification={onSubmitClarification}
-                      workflow={message.workflow!}
-                    />
-                  )
-                  cards[pendingDesignNode] = cards[pendingDesignNode] ? (
-                    <>{cards[pendingDesignNode]}{pendingCard}</>
-                  ) : (
-                    pendingCard
-                  )
-                }
-                return Object.keys(cards).length > 0 ? cards : undefined
-              })()
               return (
                 <article
                   className={cx(
@@ -681,26 +672,39 @@ export default function MessageList({
                     {message.role === 'assistant' ? (
                       <>
                         <MessageAgentHeader agentKey={messageAgentKey} loading={messageLoading} />
-                        {developmentProcessSteps && developmentProcessSteps.length > 0 && (
-                          <ProcessSteps
-                            loading={messageLoading || testWorkflowRunning}
-                            steps={developmentProcessSteps}
-                            workflowTitle={workflowTitle}
-                            inlineFirstNode={developmentTemplateSelector}
-                            inlineFirstNodePending={
-                              Boolean(developmentTemplateSelector) &&
-                              !detailBlockerWorkflowStarted &&
-                              !interactionsDisabled
-                            }
-                            nodeCards={designNodeCards}
-                            workflow={message.workflow}
-                            interactionAvailability={interactionAvailability}
-                            interactionDisabled={interactionsDisabled || loading || messageLoading}
-                            onSubmitClarification={onSubmitClarification}
-                            waitingForInput={waitingForDirectModificationInput}
-                            waitingPrompt={message.workflow?.summary?.message}
-                          />
+                        {designPlanningRunning && designPlanningActivity && (
+                          // 生成中的轮次用一句轻量进度表达，对齐原工程“正在生成…”文案。
+                          <div className={cx('planning-activity-strip')}>
+                            <LoadingOutlined aria-hidden="true" spin />
+                            <div>
+                              <Text strong>{designPlanningActivity.title}</Text>
+                              <Text type="secondary">{designPlanningActivity.detail}</Text>
+                            </div>
+                          </div>
                         )}
+                        {!designPlanningWorkflow &&
+                          developmentProcessSteps &&
+                          developmentProcessSteps.length > 0 && (
+                            <ProcessSteps
+                              loading={messageLoading || testWorkflowRunning}
+                              steps={developmentProcessSteps}
+                              workflowTitle={workflowTitle}
+                              inlineFirstNode={developmentTemplateSelector}
+                              inlineFirstNodePending={
+                                Boolean(developmentTemplateSelector) &&
+                                !detailBlockerWorkflowStarted &&
+                                !interactionsDisabled
+                              }
+                              workflow={message.workflow}
+                              interactionAvailability={interactionAvailability}
+                              interactionDisabled={
+                                interactionsDisabled || loading || messageLoading
+                              }
+                              onSubmitClarification={onSubmitClarification}
+                              waitingForInput={waitingForDirectModificationInput}
+                              waitingPrompt={message.workflow?.summary?.message}
+                            />
+                          )}
                         {!SLIM_CONVERSATION &&
                           messageLoading &&
                           message.toolCalls?.map((toolCall) => (
@@ -723,47 +727,50 @@ export default function MessageList({
                             </div>
                           </div>
                         )}
-                        {message.guideAction === 'artifact-launch' && onOpenComposerPicker ? (
-                          // 引导正文与快速入口合为一体：一句话 + 行内文字链接，
-                          // 点击与输入区末尾的工作流按钮打开同一产物选择弹层。
-                          <div className={cx('guide-launch-line')}>
-                            <Text>请选择从哪个产物开始开发，</Text>
-                            <button
-                              type="button"
-                              className={cx('guide-inline-link')}
-                              onClick={onOpenComposerPicker}
-                            >
-                              选择产物
-                            </button>
-                            <Text>即可发起实施。</Text>
-                          </div>
+                        {message.guideAction === 'artifact-launch' && launchItems ? (
+                          // 产物发起引导大卡：平铺页面 / 实体让用户直接点选，
+                          // 引导正文由卡片标题与说明承载，不再重复渲染纯文本。
+                          <DevelopmentLaunchGuide
+                            disabled={interactionsDisabled || loading || messageLoading}
+                            items={launchItems}
+                            onLaunch={(item) => onLaunchArtifact?.(item)}
+                            onResume={onResumePendingWorkflow}
+                          />
                         ) : (
                           visibleAssistantContent && (
                             <div
-                              className={cx(!messageLoading && codeChanges && 'final-result-content')}
+                              className={cx(
+                                !messageLoading && codeChanges && 'final-result-content'
+                              )}
                             >
                               <MarkdownContent content={visibleAssistantContent} />
                             </div>
                           )
                         )}
                         {message.workflow &&
-                          (requiresClarification || submittedClarificationHistory) &&
-                          !inlineTestCaseAuthorization &&
-                          !inlineArtifactAcceptance &&
-                          !inlineBackgroundDispatch &&
-                          !designWorkflowInline && (
-                          <WorkflowRunCard
-                            disabled={
-                              interactionsDisabled ||
-                              loading ||
-                              interactionAvailability !== 'active'
-                            }
-                            interactionAvailability={interactionAvailability}
-                          onDiscard={onDiscardArtifact}
-                          onSubmitClarification={onSubmitClarification}
-                            workflow={message.workflow}
-                          />
-                        )}
+                          (designPlanningWorkflow
+                            ? // 设计/计划阶段：当前门禁卡或已提交的历史卡，一条消息只挂这一张。
+                              designPendingGate || designSubmittedGate || uiDesignGateCard
+                            : (requiresClarification || submittedClarificationHistory) &&
+                              !inlineTestCaseAuthorization &&
+                              !inlineArtifactAcceptance &&
+                              !inlineBackgroundDispatch &&
+                              !inlineEntityBinding) && (
+                            <WorkflowRunCard
+                              disabled={
+                                interactionsDisabled ||
+                                loading ||
+                                messageLoading ||
+                                interactionAvailability !== 'active'
+                              }
+                              interactionAvailability={interactionAvailability}
+                              uiDesignPages={uiDesignPages}
+                              uiDesignTemplatesSelected={uiDesignTemplatesSelected}
+                              onDiscard={onDiscardArtifact}
+                              onSubmitClarification={onSubmitClarification}
+                              workflow={message.workflow}
+                            />
+                          )}
                       </>
                     ) : (
                       <>

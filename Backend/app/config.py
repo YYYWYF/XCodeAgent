@@ -38,7 +38,7 @@ class Settings:
         "You are a helpful local agent. Answer clearly and concisely."
     )
     default_temperature: float = 0.2
-    default_max_tokens: int = 2048
+    default_max_tokens: int = 32768
     # UI 确认节点生成 React 设计稿的生成 token 上限。推理模型（如 glm-5.2）的
     # 思考过程与正文共用该预算，且网关会把 thinking 以 [{'thinking': ..}] 碎片
     # 形式逐 token 拼进 content——16384 时思考可吃掉大部分预算导致正文在
@@ -64,12 +64,25 @@ class Settings:
     # 调用 LLM 生成设计稿的并发上限。默认 3，避免单 API Key 触发模型服务限流。
     ui_design_concurrency: int = 3
     build_task_plan_max_retries: int = 2
+    # DAG Unit Generation 独立预算；仅提供配置，不改变其他 Agent 的模型参数。
+    dag_unit_max_tokens: int = 4096
+    dag_unit_generation_concurrency: int = 3
+    # 第一版固定策略，不作为构造参数或环境变量配置开放。
+    dag_unit_local_max_attempts: int = field(default=3, init=False)
+    dag_global_repair_limit: int = field(default=2, init=False)
     dag_business_self_check_enabled: bool = False
     checkpoint_db_path: str = ""  # populated in from_env
     checkpoint_retention_days: int = 30
     langsmith_tracing_enabled: bool = False
     langsmith_project: str = ""
     langsmith_endpoint: str = ""
+    template_engine_base_url: str = ""
+    template_engine_connect_timeout_seconds: float = 10.0
+    template_engine_read_timeout_seconds: float = 120.0
+    template_package_max_bytes: int = 104857600
+    template_package_max_files: int = 10000
+    template_package_max_extracted_bytes: int = 524288000
+    template_reconcile_enabled: bool = True
 
     @property
     def model_api_name(self) -> str:
@@ -118,7 +131,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        """从环境变量加载模型、UI 设计生成和持久化配置。"""
+        """从环境变量加载模型、UI/DAG 专属生成和持久化配置。"""
 
         base_url = _required_any("MODEL_BASE_URL", "OPENAI_BASE_URL")
         model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai")
@@ -152,7 +165,7 @@ class Settings:
                 "You are a helpful local agent. Answer clearly and concisely.",
             ),
             default_temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
-            default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "2048")),
+            default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "32768")),
             ui_design_model_base_url=os.getenv("UI_DESIGN_MODEL_BASE_URL", "").strip(),
             ui_design_model_api_key=os.getenv("UI_DESIGN_MODEL_API_KEY", "").strip(),
             ui_design_model_name=os.getenv("UI_DESIGN_MODEL_NAME", "").strip(),
@@ -179,6 +192,12 @@ class Settings:
             build_task_plan_max_retries=int(
                 os.getenv("BUILD_TASK_PLAN_MAX_RETRIES", "2")
             ),
+            dag_unit_max_tokens=_env_int(
+                "XCODEAGENT_DAG_UNIT_MAX_TOKENS", default=4096, minimum=1
+            ),
+            dag_unit_generation_concurrency=_env_int(
+                "XCODEAGENT_DAG_UNIT_CONCURRENCY", default=3, minimum=1
+            ),
             dag_business_self_check_enabled=_env_bool(
                 "XCODEAGENT_DAG_BUSINESS_SELF_CHECK_ENABLED", default=False
             ),
@@ -189,6 +208,29 @@ class Settings:
             langsmith_tracing_enabled=_env_bool("LANGSMITH_TRACING", default=False),
             langsmith_project=os.getenv("LANGSMITH_PROJECT", ""),
             langsmith_endpoint=os.getenv("LANGSMITH_ENDPOINT", ""),
+            template_engine_base_url=os.getenv(
+                "XCODEAGENT_TEMPLATE_ENGINE_BASE_URL", ""
+            ).rstrip("/"),
+            template_engine_connect_timeout_seconds=float(
+                os.getenv("XCODEAGENT_TEMPLATE_ENGINE_CONNECT_TIMEOUT_SECONDS", "10")
+            ),
+            template_engine_read_timeout_seconds=float(
+                os.getenv("XCODEAGENT_TEMPLATE_ENGINE_READ_TIMEOUT_SECONDS", "120")
+            ),
+            template_package_max_bytes=int(
+                os.getenv("XCODEAGENT_TEMPLATE_PACKAGE_MAX_BYTES", "104857600")
+            ),
+            template_package_max_files=int(
+                os.getenv("XCODEAGENT_TEMPLATE_PACKAGE_MAX_FILES", "10000")
+            ),
+            template_package_max_extracted_bytes=int(
+                os.getenv(
+                    "XCODEAGENT_TEMPLATE_PACKAGE_MAX_EXTRACTED_BYTES", "524288000"
+                )
+            ),
+            template_reconcile_enabled=_env_bool(
+                "XCODEAGENT_TEMPLATE_RECONCILE_ENABLED", default=True
+            ),
         )
 
 
@@ -205,6 +247,21 @@ def _required_any(*names: str) -> str:
         if value:
             return value
     raise RuntimeError(f"Missing required environment variable: {' or '.join(names)}")
+
+
+def _env_int(name: str, *, default: int, minimum: int) -> int:
+    """严格读取有下界的整数配置，非法值报告变量名而不静默回退默认值。"""
+
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer >= {minimum}.") from exc
+    if value < minimum:
+        raise ValueError(f"{name} must be an integer >= {minimum}.")
+    return value
 
 
 def _env_bool(name: str, *, default: bool) -> bool:

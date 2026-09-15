@@ -59,7 +59,7 @@ export const TEST_CASE_BLUEPRINTS: TestCaseBlueprint[] = [
     groupId: 'introduction',
     scenario: '回检介绍',
     title: '访问回检介绍并查看流程',
-    preconditions: ['需求文档和项目计划已确认', '应用测试环境已启动'],
+    preconditions: ['需求规格说明书和技术规划方案已确认', '应用测试环境已启动'],
     steps: ['进入“回检介绍”页面', '查看回检流程说明', '点击入口进入“我的回检”页面'],
     testScript: "open('/recheck-introduction'); expectText('回检流程'); click('开始回检'); expectPath('/my-rechecks');",
     expected: '流程说明完整展示，入口可以正确跳转到“我的回检”。'

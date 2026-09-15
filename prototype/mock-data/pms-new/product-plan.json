@@ -1,0 +1,89 @@
+{
+  "schema_version": "product-plan.v5",
+  "confirmation_status": "pending_user_confirmation",
+  "app": {
+    "name": "武汉分行需求回检系统",
+    "summary": "帮助分行人员查看回检要求、查询本人回检记录并跟踪处理状态。"
+  },
+  "business_flows": [
+    {
+      "id": "recheck-query-flow",
+      "name": "个人回检查询",
+      "steps": ["进入我的回检", "按状态筛选", "查看回检记录与当前状态"]
+    }
+  ],
+  "pages": [
+    {
+      "pageId": "recheck-introduction",
+      "name": "回检介绍",
+      "path": "/recheck-introduction",
+      "module_id": "recheck-management",
+      "description": "说明需求回检的适用范围、处理流程和进入方式。",
+      "goal": "让首次使用者理解回检流程并进入个人回检页面。",
+      "information_items": [
+        { "itemId": "process-overview", "label": "流程说明", "description": "展示填报、审核和状态跟踪步骤" },
+        { "itemId": "entry-guide", "label": "操作入口", "description": "提供进入我的回检页面的入口" }
+      ],
+      "actions": [
+        {
+          "actionId": "open-my-rechecks",
+          "name": "进入我的回检",
+          "description": "点击入口进入个人回检记录页面",
+          "requiresConfirmation": false,
+          "behavior": {
+            "type": "navigation",
+            "targetPageId": "my-rechecks",
+            "expectedResult": "打开我的回检页面"
+          }
+        }
+      ],
+      "navigation_targets": ["my-rechecks"],
+      "state_requirements": {
+        "loading": "静态内容无需加载占位",
+        "empty": "始终展示流程说明",
+        "error": "静态内容异常时提示刷新",
+        "success": "流程说明和操作入口完整可见",
+        "validation": "无表单校验"
+      },
+      "acceptance_criteria": ["完整展示回检流程", "可以进入我的回检页面"]
+    },
+    {
+      "pageId": "my-rechecks",
+      "name": "我的回检",
+      "path": "/my-rechecks",
+      "module_id": "recheck-management",
+      "description": "查询当前用户的回检记录，并按状态快速筛选。",
+      "goal": "让填报人快速找到需要关注的回检记录。",
+      "information_items": [
+        { "itemId": "recheck-number", "label": "回检单号", "description": "回检记录唯一编号" },
+        { "itemId": "related-project", "label": "关联项目", "description": "本次回检对应的项目" },
+        { "itemId": "recheck-status", "label": "状态", "description": "待审核、已通过或已驳回" }
+      ],
+      "actions": [
+        {
+          "actionId": "filter-rechecks",
+          "name": "筛选回检记录",
+          "description": "选择状态后刷新列表",
+          "requiresConfirmation": false,
+          "behavior": {
+            "type": "business",
+            "expectedResult": "列表仅展示符合所选状态的当前用户回检记录"
+          }
+        }
+      ],
+      "navigation_targets": [],
+      "state_requirements": {
+        "loading": "列表加载期间显示骨架屏",
+        "empty": "没有数据时说明当前筛选条件下暂无回检",
+        "error": "查询失败时保留筛选条件并允许重试",
+        "success": "展示分页列表和状态标签",
+        "validation": "页码和每页数量必须为正整数"
+      },
+      "acceptance_criteria": ["仅展示当前用户数据", "状态筛选和分页结果一致"]
+    }
+  ],
+  "product_acceptance_criteria": [
+    "用户能够理解回检流程并进入个人回检页面",
+    "用户能够按状态查询自己的回检记录"
+  ]
+}

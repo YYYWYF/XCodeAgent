@@ -50,7 +50,7 @@ def ensure_build_unit_skeleton(
     unit_graph = _unit_graph(project_plan, build_units)
     return {
         **current_plan,
-        "schema_version": "build-dag.v3",
+        "schema_version": "build-dag.v4",
         "application": {
             "unit_id": "application:root",
             "status": "prepared",
@@ -123,6 +123,11 @@ def _unit_definition(unit_id: str, existing_unit: Any) -> dict[str, Any]:
         "task_ids": list(existing.get("task_ids") or []),
         "depends_on_unit_ids": list(existing.get("depends_on_unit_ids") or []),
         "source_refs": dict(existing.get("source_refs") or {}),
+        **({
+            "generation_strategy": "prerequisite_only",
+            "participation": "prerequisite_only",
+            "generation_status": "not_required",
+        } if unit_id == "frontend:shell" else {}),
     }
 
 
@@ -235,7 +240,7 @@ def _skeleton_fingerprint(
     """为 Unit 骨架输入生成稳定指纹，供后续页面请求复用。"""
 
     payload = {
-        "skeleton_policy": "page-implementation-contract-v3",
+        "skeleton_policy": "frontend-shell-prerequisite-only",
         "project_plan_version": project_plan.get("version"),
         "architecture": project_plan.get("architecture"),
         "permission_model": project_plan.get("permission_model"),

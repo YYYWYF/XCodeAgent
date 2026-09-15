@@ -1,6 +1,6 @@
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
-import type { ApplicationConfig, ApplicationLifecycle, TemplateDownloadResult } from '../typings'
+import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 
 type ApplicationLifecyclePayload = {
@@ -11,14 +11,15 @@ type ApplicationLifecyclePayload = {
   action?:
     | 'create'
     | 'get'
-    | 'begin_template_generation'
-    | 'prepare_template_generation'
-    | 'complete_template_generation'
+    | 'bootstrap_template_generation'
+    | 'retry_bootstrap_template_generation'
+    | 'workspace_attach'
   lifecycle?: ApplicationLifecycle
   error?: { message?: string }
 }
 
 const lifecycleReadRequests = new Map<string, Promise<ApplicationLifecycle>>()
+const workspaceAttachRequests = new Map<string, Promise<ApplicationLifecycle>>()
 
 // 校验生命周期快照只属于当前应用及初始化线程，禁止同目录或异步回包造成跨应用串态。
 function assertApplicationLifecycleOwnership(
@@ -116,7 +117,7 @@ export async function createApplicationLifecycle(
   )
 }
 
-// 读取权威生命周期，并合并 React StrictMode 等场景产生的同工作区并发请求。
+// 先接管可能中断的 Workspace，再读取权威生命周期，并合并 StrictMode 等并发请求。
 export async function getApplicationLifecycle(
   application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>,
   threadId = randomUUID()
@@ -128,10 +129,14 @@ export async function getApplicationLifecycle(
     return assertApplicationLifecycleOwnership(await currentRequest, application.id)
   }
 
-  const request = runApplicationLifecycleAction(threadId, {
-    action: 'get',
-    workspaceRoot
-  })
+  // 每次冷读取前先 Attach：后端 get 始终只读，孤儿 Bootstrap 的回收只能由 Attach 完成。
+  const request = (async (): Promise<ApplicationLifecycle> => {
+    await attachApplicationWorkspace(application, threadId)
+    return runApplicationLifecycleAction(threadId, {
+      action: 'get',
+      workspaceRoot
+    })
+  })()
   lifecycleReadRequests.set(workspaceRoot, request)
   try {
     return assertApplicationLifecycleOwnership(await request, application.id)
@@ -142,44 +147,52 @@ export async function getApplicationLifecycle(
   }
 }
 
-// 在模板下载前显式打开模板阶段，支持失败态只回到模板阶段重试。
-export async function beginApplicationTemplateGeneration(
+// 接管指定工作区的中断 Bootstrap；同一工作区的并发恢复请求必须共用一次 AG-UI 调用。
+export async function attachApplicationWorkspace(
+  application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>,
+  threadId = randomUUID()
+): Promise<ApplicationLifecycle> {
+  const workspaceRoot = application.workspaceRoot
+  if (!workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
+  const currentRequest = workspaceAttachRequests.get(workspaceRoot)
+  if (currentRequest) {
+    return assertApplicationLifecycleOwnership(await currentRequest, application.id)
+  }
+
+  const request = runApplicationLifecycleAction(threadId, {
+    action: 'workspace_attach',
+    workspaceRoot
+  })
+  workspaceAttachRequests.set(workspaceRoot, request)
+  try {
+    return assertApplicationLifecycleOwnership(await request, application.id)
+  } finally {
+    if (workspaceAttachRequests.get(workspaceRoot) === request) {
+      workspaceAttachRequests.delete(workspaceRoot)
+    }
+  }
+}
+
+// 由 Backend 持有真实任务，Renderer 只通过 AG-UI 触发并等待最终 lifecycle。
+export async function bootstrapApplicationTemplateGeneration(
   application: ApplicationConfig,
   threadId: string
 ): Promise<ApplicationLifecycle> {
   if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
   return runApplicationLifecycleAction(threadId, {
-    action: 'begin_template_generation',
+    action: 'bootstrap_template_generation',
     workspaceRoot: application.workspaceRoot
   })
 }
 
-// 把模板下载明细提交给后端，并执行页面与菜单的增量初始化。
-export async function prepareApplicationTemplateGeneration(
+// 仅在后端已标记模板生成失败时，显式开启一轮新的 Bootstrap。
+export async function retryApplicationTemplateGeneration(
   application: ApplicationConfig,
-  threadId: string,
-  downloadResult: TemplateDownloadResult
+  threadId: string
 ): Promise<ApplicationLifecycle> {
   if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
   return runApplicationLifecycleAction(threadId, {
-    action: 'prepare_template_generation',
-    workspaceRoot: application.workspaceRoot,
-    downloadResult
-  })
-}
-
-// 把应用模板文件的真实生成结果提交给后端，由状态机决定 ready 或 failed。
-export async function completeApplicationTemplateGeneration(
-  application: ApplicationConfig,
-  threadId: string,
-  succeeded: boolean,
-  errorMessage?: string
-): Promise<ApplicationLifecycle> {
-  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  return runApplicationLifecycleAction(threadId, {
-    action: 'complete_template_generation',
-    workspaceRoot: application.workspaceRoot,
-    succeeded,
-    errorMessage
+    action: 'retry_bootstrap_template_generation',
+    workspaceRoot: application.workspaceRoot
   })
 }

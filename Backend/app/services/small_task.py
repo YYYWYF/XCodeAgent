@@ -109,17 +109,44 @@ def execute_small_task_batch(
 
         packet = build_small_task_packet(task, state, source=source)
         try:
-            agent_note = invoke_small_task_agent(
-                packet=packet,
-                workspace=workspace,
-                selected_skill_names=state.get("selected_skill_names"),
-                on_tool_activity=(
-                    _task_activity_callback(on_tool_activity, task)
-                    if on_tool_activity is not None
-                    else None
-                ),
-            )
-            normalized = normalize_small_task_result(agent_note)
+            # 集成测试的输出协议重试留在当前修复节点内，不消耗复测轮次或发布失败状态。
+            max_attempts = 3 if source == "integration_test.small_task" else 1
+            for attempt in range(max_attempts):
+                agent_note = invoke_small_task_agent(
+                    packet=packet,
+                    workspace=workspace,
+                    selected_skill_names=state.get("selected_skill_names"),
+                    on_tool_activity=(
+                        _task_activity_callback(on_tool_activity, task)
+                        if on_tool_activity is not None
+                        else None
+                    ),
+                )
+                normalized = normalize_small_task_result(agent_note)
+                if normalized.get("failureCode") != "invalid_agent_output":
+                    break
+                if attempt + 1 == max_attempts:
+                    break
+                # 重试前检查已落盘变更；越权结果不能借输出协议错误继续执行。
+                current = snapshot_workspace(workspace)
+                current_files = (
+                    diff_workspace_snapshots(before, current, source_tool=source)
+                    if current else []
+                )
+                if unauthorized_batch_paths({"files": current_files}, tasks):
+                    break
+                packet = {
+                    **packet,
+                    "outputRetry": {
+                        "attempt": attempt + 2,
+                        "reason": normalized["failureReason"],
+                        "instruction": (
+                            "Re-read current files: previous edits remain on disk. "
+                            "Continue the same bounded task without duplicating changes. "
+                            "Return one complete JSON result with valid status and nonempty summary."
+                        ),
+                    },
+                }
         except Exception as exc:
             normalized = {
                 "status": "failed",

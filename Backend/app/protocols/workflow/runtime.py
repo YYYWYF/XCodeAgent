@@ -25,6 +25,7 @@ from app.protocols.application_planning_interrupt import (
     application_planning_interrupt_from_snapshot,
     project_application_planning_interrupt,
 )
+from app.protocols.application_planning_run_lock import application_planning_run_lock
 from app.protocols.workflow.projection import (
     _public_workflow_state,
     _workflow_artifacts,
@@ -70,11 +71,11 @@ from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
 )
+from app.services.template_reconcile.template_preparation import (
+    template_preparation_projection_v2,
+)
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
-
-
-_APPLICATION_PLANNING_RESUME_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def _graph_stream_supports_subgraphs(graph: Any) -> bool:
@@ -106,29 +107,6 @@ def _workflow_stream_chunk(item: Any) -> tuple[tuple[str, ...], str, Any]:
         stream_mode, chunk = item
         return tuple(), str(stream_mode), chunk
     return tuple(), "", item
-
-
-def _application_planning_resume_lock(thread_id: str) -> asyncio.Lock:
-    """返回指定创建规划 thread 的进程内恢复锁。"""
-
-    lock = _APPLICATION_PLANNING_RESUME_LOCKS.get(thread_id)
-    if lock is None:
-        # 单进程事件循环内创建锁不需要额外互斥；不同 thread 会得到不同锁并行执行。
-        lock = asyncio.Lock()
-        _APPLICATION_PLANNING_RESUME_LOCKS[thread_id] = lock
-    return lock
-
-
-def clear_application_planning_resume_locks(thread_ids: set[str]) -> int:
-    """在应用运行全部停止后移除其创建规划线程恢复锁。"""
-
-    removed = 0
-    for thread_id in thread_ids:
-        lock = _APPLICATION_PLANNING_RESUME_LOCKS.get(thread_id)
-        if lock is not None and not lock.locked():
-            _APPLICATION_PLANNING_RESUME_LOCKS.pop(thread_id, None)
-            removed += 1
-    return removed
 
 
 def _validate_application_planning_resume(
@@ -338,6 +316,8 @@ def build_workflow_ag_ui_stream(
             action=plan_control_action,
             workspace=workflow_inputs["workspace"] or "",
             target_run_id=workflow_inputs.get("plan_control_run_id") or "",
+            planning_run_id=workflow_inputs.get("plan_control_planning_run_id") or "",
+            draft_digest=workflow_inputs.get("plan_control_draft_digest") or "",
             thread_id=thread_id,
             run_id=run_id,
             accept=accept,
@@ -349,6 +329,7 @@ def build_workflow_ag_ui_stream(
             thread_id=thread_id,
             run_id=run_id,
             target_run_id=cancel_run_id,
+            workspace=workflow_inputs.get("workspace") or "",
             accept=accept,
         )
     message_id = str(uuid4())
@@ -362,8 +343,8 @@ def build_workflow_ag_ui_stream(
         workflow_scope = workflow_inputs.get("workflow_scope") or None
         current_phase = "api_design_readiness_gate"
         node_attempts: dict[str, int] = {}
-        application_planning_resume_lock: asyncio.Lock | None = None
-        application_planning_resume_lock_acquired = False
+        application_planning_run_lock_instance: asyncio.Lock | None = None
+        application_planning_run_lock_acquired = False
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Workflow stream must run inside an asyncio task.")
@@ -414,11 +395,11 @@ def build_workflow_ag_ui_stream(
                 # 同一 planning thread 的所有 Graph 写运行必须串行。无 interaction 的
                 # 显式重试同样会修改 checkpoint，不能与确认恢复并发；snapshot-only
                 # 请求持锁时间很短，只保证读取到前一写运行完成后的稳定快照。
-                application_planning_resume_lock = _application_planning_resume_lock(
+                application_planning_run_lock_instance = application_planning_run_lock(
                     thread_id
                 )
-                await application_planning_resume_lock.acquire()
-                application_planning_resume_lock_acquired = True
+                await application_planning_run_lock_instance.acquire()
+                application_planning_run_lock_acquired = True
             await cleanup_workflow_checkpoints(
                 workspace=workspace,
                 project_id=project_id,
@@ -487,6 +468,8 @@ def build_workflow_ag_ui_stream(
                 if current_lifecycle is not None:
                     lifecycle_payload = application_lifecycle_payload(current_lifecycle)
                     result["lifecycle"] = lifecycle_payload
+                if workspace:
+                    result["template_preparation"] = template_preparation_projection_v2(workspace)
                 _workflow_event(
                     events,
                     "workflow.run.started",
@@ -1123,6 +1106,7 @@ def build_workflow_ag_ui_stream(
                             if isinstance(progress.get("dag_generation"), dict)
                             else {}
                         )
+                        progress_status = str(progress.get("status") or "running")
                         process_sequence += 1
                         task_attempt = _current_node_attempt(
                             node_attempts, "prepare_build_tasks"
@@ -1131,7 +1115,11 @@ def build_workflow_ag_ui_stream(
                             encoder,
                             id=_process_step_id("prepare_build_tasks", task_attempt),
                             kind="workflow",
-                            status="running",
+                            status=(
+                                "failed"
+                                if progress_status in {"failed", "cancelled"}
+                                else "running"
+                            ),
                             title=f"正在执行 {_workflow_node_label('prepare_build_tasks')}",
                             detail=str(
                                 progress.get("message") or "构建任务 DAG 进度已更新。"
@@ -1143,6 +1131,64 @@ def build_workflow_ag_ui_stream(
                                 "prepare_build_tasks", task_attempt
                             ),
                             dag_generation=dag_generation,
+                        )
+                        continue
+                    if event_type == "template_reconcile.progress":
+                        # Template Reconcile 是二次修改 TechnicalPlan 确认后的独立工作；
+                        # 将其 custom progress 写成完整 Workflow 快照，确保前端不会
+                        # 回退到最后一个 technical_planning started 事件。
+                        progress_node = "template_reconcile"
+                        progress_attempt = _current_node_attempt(node_attempts, progress_node)
+                        progress_message = str(
+                            progress.get("message") or "正在更新应用模板。"
+                        )
+                        template_preparation = progress.get("template_preparation")
+                        progress_state = {
+                            **stream_state,
+                            "phase": progress_node,
+                            "status": "running",
+                            **(
+                                {"template_preparation": template_preparation}
+                                if isinstance(template_preparation, dict)
+                                else {}
+                            ),
+                        }
+                        _workflow_event(
+                            events,
+                            "workflow.node.progress",
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            node_name=progress_node,
+                            status="running",
+                            message=progress_message,
+                            data={
+                                "phase": progress_node,
+                                "templatePreparation": template_preparation,
+                            },
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                            node_label=_runtime_node_label(progress_node, progress_state),
+                        )
+                        for frame in _workflow_ag_ui_frames(
+                            encoder,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            events=events,
+                            result=progress_state,
+                        ):
+                            yield frame
+                        process_sequence += 1
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id(progress_node, progress_attempt),
+                            kind="workflow",
+                            status="running",
+                            title="正在更新应用模板",
+                            detail=progress_message,
+                            sequence=process_sequence,
+                            node_name=progress_node,
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
                         )
                         continue
                     if event_type == "workflow.build.progress":
@@ -1860,11 +1906,11 @@ def build_workflow_ag_ui_stream(
             if workspace_lease is not None:
                 workspace_lease.release()
             if (
-                application_planning_resume_lock is not None
-                and application_planning_resume_lock_acquired
+                application_planning_run_lock_instance is not None
+                and application_planning_run_lock_acquired
             ):
                 # 取消、预校验异常和 Graph 异常都走这里，不能把同一 thread 永久锁死。
-                application_planning_resume_lock.release()
+                application_planning_run_lock_instance.release()
 
     return stream()
 

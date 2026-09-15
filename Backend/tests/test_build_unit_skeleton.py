@@ -190,7 +190,7 @@ class BuildUnitSkeletonTests(unittest.TestCase):
             {"workspace_revision": "workspace-v1", "tech_stack": ["React"]},
         )
 
-        self.assertEqual(plan["schema_version"], "build-dag.v3")
+        self.assertEqual(plan["schema_version"], "build-dag.v4")
         self.assertIn("page:orders", plan["build_units"])
         self.assertIn("page:customers", plan["build_units"])
         self.assertNotIn("database:database", plan["build_units"])

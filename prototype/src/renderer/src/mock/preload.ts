@@ -1,4 +1,4 @@
-// Mock preload：在 main.tsx 之前注入，构造 window.xcodeAgent（替代 Electron IPC）
+// Mock preload：在 main.tsx 之前注入，构造 window.aiStudio（替代 Electron IPC）
 // 并拦截后端 HTTP，让真实组件在浏览器里用 mock 数据运行。
 // 抑制原型演示时的控制台噪音：antd v4 废弃 API 警告（Tooltip visible / Collapse
 // expandIconPosition / Steps children 等，真实工程历史遗留）与 React DevTools 提示。
@@ -10,7 +10,7 @@
         text.includes('[antd:') ||
         text.includes('deprecated') ||
         text.includes('Download the React DevTools') ||
-        text.includes('[xcodeagent-mock]')
+        text.includes('[aistudio-mock]')
       )
     })
   const origWarn = console.warn
@@ -40,13 +40,15 @@ import {
 } from './fixtures'
 import { mockApplicationInPlanning } from './mockHttpAgent'
 import { isEndpointDesigned, isPageDesigned } from './designState'
+import { preloadCompletedTestCaseTasks } from '../backgroundTasks'
+import { TEST_CASE_BLUEPRINTS } from '../testCasePreparation'
 
 // 预览地址跟随当前页面主机名：本机访问走 127.0.0.1，局域网设备访问时自动指向原型所在机器。
 const MOCK_APPLICATION_PREVIEW_URL = `http://${window.location.hostname || '127.0.0.1'}:5190`
 
 // 用户创建应用的持久化键：mock 环境里预置演示应用恒以静态数据为准（保证演示可重放），
 // 用户新建的应用落 localStorage，返回欢迎页或刷新后仍在"最近项目"里可重新打开。
-const USER_APPLICATIONS_KEY = 'xcodeagent:prototype:user-applications'
+const USER_APPLICATIONS_KEY = 'aistudio:prototype:user-applications'
 
 /** 规范化工作区路径用于占用比较：统一分隔符并忽略大小写（Windows 路径语义）。 */
 function normalizeWorkspacePath(path: unknown): string {
@@ -208,8 +210,8 @@ function asPendingPlanningArtifacts(artifacts: { pages: any[]; pageTree: any[]; 
   }
 }
 
-// window.xcodeAgent 的 mock 实现（覆盖 preload/index.ts 暴露的全部命名空间）。
-const xcodeAgent = {
+// window.aiStudio 的 mock 实现（覆盖 preload/index.ts 暴露的全部命名空间）。
+const aiStudio = {
   isElectron: false,
   agentBaseUrl: 'http://localhost:8000',
   platform: 'win32',
@@ -234,7 +236,7 @@ const xcodeAgent = {
       const demoParent = demoRoot.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]+$/, '')
       return ok({ canceled: false, path: `${demoParent}\\new-app-${Date.now()}` })
     },
-    // 拒绝复用已有应用的工作区目录，与桌面端“已有 XCodeAgent 应用目录不能复用”的规则一致；
+    // 拒绝复用已有应用的工作区目录，与桌面端“已有 AIStudio 应用目录不能复用”的规则一致；
     // 手动输入预置演示应用路径同样会被拦截。
     createProjectDirectory: (payload: { workspacePath?: string }) => {
       const requested = normalizeWorkspacePath(payload?.workspacePath)
@@ -243,7 +245,7 @@ const xcodeAgent = {
       )
       if (occupied) {
         return Promise.reject(
-          new Error(`该目录已被应用「${occupied.name}」使用，已有 XCodeAgent 应用目录不能复用。`)
+          new Error(`该目录已被应用「${occupied.name}」使用，已有 AIStudio 应用目录不能复用。`)
         )
       }
       return ok({ path: payload?.workspacePath || appDataByWorkspace().workspaceRoot })
@@ -341,7 +343,7 @@ const xcodeAgent = {
 }
 
 // Proxy 兜底：组件若调用了未 mock 的方法，返回 resolve 空值的 Proxy，避免崩溃。
-;(window as unknown as { xcodeAgent: unknown }).xcodeAgent = new Proxy(xcodeAgent, {
+;(window as unknown as { aiStudio: unknown }).aiStudio = new Proxy(aiStudio, {
   get(target, prop, receiver) {
     if (typeof prop === 'string' && prop in target) {
       return Reflect.get(target, prop, receiver)
@@ -407,6 +409,21 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
   return realFetch(input as RequestInfo | URL, init)
 }
 
-// 防御：真实代码里仍有少量直接访问 window.xcodeAgent 的子属性（可选链已容错）。
+// 防御：真实代码里仍有少量直接访问 window.aiStudio 的子属性（可选链已容错）。
 // 这里显式声明已就绪。
 void mockWorkspaceApplication
+
+// 预置应用 v1.3 的完成态用例基线：该版本是「照抄新建应用剧本数据、向后推延三个迭代」
+// 的已发布演示版本，打开工作台时测试用例应直接呈现 6/6 已生成的终态（与 lifecycle
+// 全 passed 一致），而不是空的生成队列。幂等：该版本已有用例任务时跳过。
+preloadCompletedTestCaseTasks({
+  applicationId: 'app-pms-new',
+  versionId: 'app-pms-new-v1-3',
+  system: 'async',
+  cases: TEST_CASE_BLUEPRINTS.map((blueprint) => ({
+    id: blueprint.id,
+    title: blueprint.title,
+    groupId: blueprint.groupId,
+    scenario: blueprint.scenario
+  }))
+})

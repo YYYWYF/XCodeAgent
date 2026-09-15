@@ -263,6 +263,7 @@ def _create_technical_plan_draft(
         **requirement_spec,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
+        "application_config": _load_json_object(workspace / ".xcodeagent" / "application.json"),
         "planning_adjustment_request": revision_request or active.request,
     }
     artifact = plan_project_with_chat_model(

@@ -32,6 +32,7 @@ export type SessionRuntimeStore = {
   ) => void
   removeSession: (sessionKey: string) => void
   releaseSessionExecution: (sessionKey: string) => void
+  releasePreviewMaintenanceExecutions: (workspaceRoot: string) => void
   sessionExecutions: SessionExecutionEntry[]
   setDraftByKey: (sessionKey: string, value: string) => void
   setSelectedSkillsByKey: (sessionKey: string, value: ChatMessageSkill[]) => void
@@ -158,6 +159,25 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     setSessionExecutions(sessionExecutionsRef.current)
   }
 
+  /** 退出工作台时只释放预览修复会话占用，保留普通会话和后台工作流运行态。 */
+  const releasePreviewMaintenanceExecutions = (workspaceRoot: string): void => {
+    const removableKeys = Object.entries(sessionExecutionsRef.current)
+      .filter(
+        ([, entry]) =>
+          entry.identity.workspaceRoot === workspaceRoot &&
+          entry.identity.entryKey?.startsWith('preview-repair:')
+      )
+      .map(([sessionKey]) => sessionKey)
+    if (!removableKeys.length) return
+    removableKeys.forEach((sessionKey) => runningSessionsRef.current.delete(sessionKey))
+    sessionExecutionsRef.current = Object.fromEntries(
+      Object.entries(sessionExecutionsRef.current).filter(
+        ([sessionKey]) => !removableKeys.includes(sessionKey)
+      )
+    )
+    setSessionExecutions(sessionExecutionsRef.current)
+  }
+
   /** 从内存运行态中清理已删除会话的全部关联状态。 */
   const removeSession = (sessionKey: string): void => {
     delete agUiSessionsRef.current[sessionKey]
@@ -216,6 +236,7 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     registerSession,
     removeSession,
     releaseSessionExecution,
+    releasePreviewMaintenanceExecutions,
     sessionExecutions: Object.values(sessionExecutions),
     setDraftByKey,
     setSelectedSkillsByKey,

@@ -10,13 +10,19 @@ from app.graph.nodes.authorization_bootstrap import authorization_bootstrap
 from app.services.authorization_bootstrap import run_authorization_bootstrap
 
 
+def _application_config(enabled: bool = True) -> dict:
+    """构造 Bootstrap 判断权限能力的唯一应用配置。"""
+
+    return {"authorization": {"enabled": enabled}}
+
+
 def _technical_plan(fingerprint: str = "sha256:abc") -> dict:
     """构造满足平台节点最小前置的已确认权限技术规划。"""
 
     return {
         "artifact_type": "technical-plan",
         "confirmation_status": "confirmed",
-        "authorization_manifest": {"enabled": True, "fingerprint": fingerprint},
+        "authorization_manifest": {"fingerprint": fingerprint},
     }
 
 
@@ -44,8 +50,12 @@ class AuthorizationBootstrapTests(unittest.TestCase):
         run_mock.return_value.stderr = b""
         with tempfile.TemporaryDirectory() as directory:
             root = self._workspace(directory)
-            first = run_authorization_bootstrap(root, _technical_plan())
-            second = run_authorization_bootstrap(root, _technical_plan())
+            first = run_authorization_bootstrap(
+                root, _technical_plan(), application_config=_application_config()
+            )
+            second = run_authorization_bootstrap(
+                root, _technical_plan(), application_config=_application_config()
+            )
             self.assertEqual(first["status"], "executed")
             self.assertEqual(second["status"], "reused")
             self.assertEqual(run_mock.call_count, 1)
@@ -63,7 +73,9 @@ class AuthorizationBootstrapTests(unittest.TestCase):
         run_mock.return_value.stderr = b"invalid input"
         with tempfile.TemporaryDirectory() as directory:
             root = self._workspace(directory)
-            result = run_authorization_bootstrap(root, _technical_plan())
+            result = run_authorization_bootstrap(
+                root, _technical_plan(), application_config=_application_config()
+            )
             self.assertEqual(result["status"], "failed")
             marker = root / ".xcodeagent/runtime/authorization-bootstrap/abc/result.json"
             self.assertFalse(marker.exists())
@@ -73,7 +85,9 @@ class AuthorizationBootstrapTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             result = run_authorization_bootstrap(
-                directory, {"authorization_manifest": {"enabled": False}}
+                directory,
+                {"authorization_manifest": {}},
+                application_config=_application_config(False),
             )
             self.assertEqual(result["status"], "skipped")
 

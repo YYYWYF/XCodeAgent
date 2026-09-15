@@ -103,13 +103,13 @@ type SharedTaskStoreState = {
 }
 
 const STORAGE_KEYS: Record<BackgroundTaskSystem, string> = {
-  async: 'xcodeagent:prototype:async-tasks:v2',
-  tide: 'xcodeagent:prototype:tide-tasks:v2'
+  async: 'aistudio:prototype:async-tasks:v2',
+  tide: 'aistudio:prototype:tide-tasks:v2'
 }
 
 const WINDOW_SLOT: Record<BackgroundTaskSystem, string> = {
-  async: '__xcodeAgentAsyncTaskStore__',
-  tide: '__xcodeAgentTideTaskStore__'
+  async: '__aiStudioAsyncTaskStore__',
+  tide: '__aiStudioTideTaskStore__'
 }
 
 /** 读取某套系统的存储单例；首次访问时惰性创建。 */
@@ -466,6 +466,38 @@ export function patchBackgroundTask(id: string, patch: Partial<BackgroundTask>):
     return
   }
   TASK_STORES.tide.patchTask(id, patch)
+}
+
+/**
+ * 预置一批「已完成」的用例生成任务，供没有运行历史的存量演示版本使用：
+ * 预置应用 v1.3 是走完全部旅程后发布的演示快照，其用例必须直接呈现与真实旅程
+ * 终态一致的「全部已生成」事实，而不是空的生成队列。已有同版本用例任务时
+ * 幂等跳过，不影响运行中旅程的正常派发。
+ */
+export function preloadCompletedTestCaseTasks(input: {
+  applicationId: string
+  versionId: string
+  system: BackgroundTaskSystem
+  cases: Array<{ id: string; title: string; groupId: string; scenario: string }>
+}): void {
+  const store = TASK_STORES[input.system]
+  // 先触发一次惰性恢复：tasksFor 不做 hydrate，本函数又可能在应用启动最早执行，
+  // 直接读会在空内存上误判「无任务」，进而覆盖掉 localStorage 里上一会话的流水。
+  store.getTasks()
+  const caseTasksOf = (): BackgroundTask[] =>
+    store
+      .tasksFor(input.applicationId, input.versionId)
+      .filter((task) => task.kind === 'test_case_generation')
+  if (caseTasksOf().length > 0) return
+  store.dispatchTestCaseQueue({
+    applicationId: input.applicationId,
+    versionId: input.versionId,
+    cases: input.cases
+  })
+  // 派发后立即收口为就绪终态：引擎只推进非终态任务，不会再改动这批基线。
+  caseTasksOf().forEach((task) =>
+    store.patchTask(task.id, { status: 'completed', phase: 'ready', progress: 100 })
+  )
 }
 
 /**

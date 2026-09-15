@@ -7,6 +7,8 @@ import json
 import re
 from typing import Any
 
+from app.services.requirement_spec import validate_authorization_requirements
+
 
 AUTHORIZATION_MANIFEST_SCHEMA_VERSION = "authorization-manifest.v2"
 SYSTEM_RESOURCE_KEY = "system_authorization_management"
@@ -28,7 +30,7 @@ def _canonical_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     """按当前契约排序并去重 manifest，供指纹和严格比较共用。"""
     bindings = manifest.get("bindings") if isinstance(manifest.get("bindings"), dict) else {}
     authorization = manifest.get("defaultRoleAuthorization") if isinstance(manifest.get("defaultRoleAuthorization"), dict) else {}
-    return {"schema_version": manifest.get("schema_version"), "enabled": manifest.get("enabled") is True,
+    return {"schema_version": manifest.get("schema_version"),
             "resources": sorted(_dict_items(manifest.get("resources")), key=lambda item: str(item.get("resourceKey") or "")),
             "bindings": {"pages": sorted(_dict_items(bindings.get("pages")), key=lambda item: str(item.get("pageId") or "")),
                          "actions": sorted(_dict_items(bindings.get("actions")), key=lambda item: (str(item.get("pageId") or ""), str(item.get("actionId") or ""))),
@@ -66,7 +68,7 @@ def _action_endpoint_ids(pages: list[dict[str, Any]]) -> dict[tuple[str, str], l
     return {key: sorted(value) for key, value in result.items()}
 
 
-def _authorization_errors(requirement_spec: dict[str, Any]) -> list[str]:
+def _authorization_errors(requirement_spec: dict[str, Any], *, authorization_enabled: bool) -> list[str]:
     """拒绝尚未通过上游确认门禁的数据权限和非法角色事实。"""
     authorization = requirement_spec.get("authorization_requirements") if isinstance(requirement_spec.get("authorization_requirements"), dict) else {}
     errors: list[str] = []
@@ -75,7 +77,7 @@ def _authorization_errors(requirement_spec: dict[str, Any]) -> list[str]:
     issues = _dict_items(requirement_spec.get("authorization_capability_issues"))
     if any(str(item.get("code") or "") == "DATA_AUTHORIZATION_NOT_SUPPORTED" for item in issues):
         errors.append("DATA_AUTHORIZATION_NOT_SUPPORTED：存在未解决的数据权限能力问题。")
-    if authorization.get("enabled") is True:
+    if authorization_enabled:
         roles = _dict_items(requirement_spec.get("user_roles")); role_ids = {str(item.get("id") or "").strip() for item in roles}
         initial = str(authorization.get("initialAdminRoleId") or "").strip(); initial_roles = [item for item in roles if item.get("isInitialAdminRole") is True]
         if not initial or initial not in role_ids or len(initial_roles) != 1:
@@ -88,14 +90,62 @@ def _authorization_errors(requirement_spec: dict[str, Any]) -> list[str]:
     return errors
 
 
-def compile_authorization_manifest(requirement_spec: dict[str, Any], product_plan: dict[str, Any], api_contracts: list[dict[str, Any]], pages: list[dict[str, Any]]) -> dict[str, Any]:
-    """从已确认页面/操作规则确定性编译 V1 manifest。"""
-    errors = _authorization_errors(requirement_spec)
+def authorization_enabled_from_application_config(application_config: Any) -> bool:
+    """只从 application.json 提取权限能力开关，拒绝以业务文档替代平台配置。"""
+
+    authorization = application_config.get("authorization") if isinstance(application_config, dict) else None
+    enabled = authorization.get("enabled") if isinstance(authorization, dict) else None
+    if type(enabled) is not bool:
+        raise ValueError("application.json.authorization.enabled 必须是布尔值。")
+    return enabled
+
+
+def validate_authorization_configuration_projection(
+    application_config: Any,
+    requirement_spec: dict[str, Any],
+    product_plan: dict[str, Any],
+    *,
+    validate_requirement_details: bool = True,
+) -> list[str]:
+    """校验待确认配置与需求、产品权限事实一致，阻止错误进入 TechnicalPlan。"""
+
+    try:
+        enabled = authorization_enabled_from_application_config(application_config)
+    except ValueError as exc:
+        return [str(exc)]
+    errors = (
+        validate_authorization_requirements(
+            requirement_spec,
+            authorization_enabled=enabled,
+        )
+        if enabled and validate_requirement_details
+        else []
+    )
+    if enabled:
+        subjects = application_config.get("authorization", {}).get("initialAdministratorSubjects")
+        if not isinstance(subjects, list) or not any(str(item).strip() and str(item).strip() != "current-user" for item in subjects):
+            errors.append("启用权限时 application.json 必须包含真实初始管理员 subjectId。")
+    return errors
+
+
+def compile_authorization_manifest(requirement_spec: dict[str, Any], product_plan: dict[str, Any], api_contracts: list[dict[str, Any]], pages: list[dict[str, Any]], *, application_config: dict[str, Any]) -> dict[str, Any]:
+    """从 application.json 开关及已确认业务规则确定性编译 V1 manifest。"""
+
+    enabled = authorization_enabled_from_application_config(application_config)
+    projection_errors = validate_authorization_configuration_projection(
+        application_config,
+        requirement_spec,
+        product_plan,
+        validate_requirement_details=False,
+    )
+    if projection_errors:
+        raise ValueError("；".join(projection_errors))
+    errors = _authorization_errors(requirement_spec, authorization_enabled=enabled)
     if errors:
         raise ValueError("；".join(errors))
     authorization = requirement_spec.get("authorization_requirements") if isinstance(requirement_spec.get("authorization_requirements"), dict) else {}
-    if authorization.get("enabled") is not True:
-        return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "enabled": False, "resources": [], "bindings": {"pages": [], "actions": [], "endpoints": []}, "defaultRoleAuthorization": {"roles": [], "roleResourceGrants": [], "initialAdminRoleSeedKey": ""}})
+    if not enabled:
+        return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "resources": [], "bindings": {"pages": [], "actions": [], "endpoints": []}, "defaultRoleAuthorization": {"roles": [], "roleResourceGrants": [], "initialAdminRoleSeedKey": ""}})
     targets = product_plan.get("authorizationTargets") if isinstance(product_plan.get("authorizationTargets"), dict) else {}
     page_targets = {str(item.get("ruleId") or "").strip(): str(item.get("pageId") or "").strip() for item in _dict_items(targets.get("pageRules"))}
     action_targets = {
@@ -139,14 +189,14 @@ def compile_authorization_manifest(requirement_spec: dict[str, Any], product_pla
     if mixed: raise ValueError("ENDPOINT_AUTHORIZATION_MIXED_CONTROL：Endpoint 同时被受控与未受控操作引用：" + "、".join(mixed))
     endpoint_bindings = [{"endpointId": endpoint_id, "operationResourceKeys": sorted(endpoint_resources.get(endpoint_id, set()))} for endpoint_id in sorted(endpoint_control)]
     roles = _dict_items(requirement_spec.get("user_roles")); initial = str(authorization.get("initialAdminRoleId") or "").strip(); grants.setdefault(initial, set()).add(SYSTEM_RESOURCE_KEY)
-    return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "enabled": True, "resources": list(resources.values()), "bindings": {"pages": list(page_bindings.values()), "actions": list(action_bindings.values()), "endpoints": endpoint_bindings}, "defaultRoleAuthorization": {"roles": [{"roleSeedKey": str(role.get("id") or ""), "name": str(role.get("name") or ""), "description": str(role.get("description") or ""), "isSystemRole": role.get("isSystemRole") is True, "isInitialAdminRole": role.get("isInitialAdminRole") is True} for role in roles], "roleResourceGrants": [{"roleSeedKey": role_id, "resourceKeys": sorted(keys)} for role_id, keys in grants.items()], "initialAdminRoleSeedKey": initial}})
+    return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "resources": list(resources.values()), "bindings": {"pages": list(page_bindings.values()), "actions": list(action_bindings.values()), "endpoints": endpoint_bindings}, "defaultRoleAuthorization": {"roles": [{"roleSeedKey": str(role.get("id") or ""), "name": str(role.get("name") or ""), "description": str(role.get("description") or ""), "isSystemRole": role.get("isSystemRole") is True, "isInitialAdminRole": role.get("isInitialAdminRole") is True} for role in roles], "roleResourceGrants": [{"roleSeedKey": role_id, "resourceKeys": sorted(keys)} for role_id, keys in grants.items()], "initialAdminRoleSeedKey": initial}})
 
 
-def validate_authorization_manifest(manifest: Any, requirement_spec: dict[str, Any], product_plan: dict[str, Any], api_contracts: list[dict[str, Any]], pages: list[dict[str, Any]]) -> list[str]:
+def validate_authorization_manifest(manifest: Any, requirement_spec: dict[str, Any], product_plan: dict[str, Any], api_contracts: list[dict[str, Any]], pages: list[dict[str, Any]], *, application_config: dict[str, Any]) -> list[str]:
     """通过重新编译做严格比较，拒绝手写、旧版或漂移 manifest。"""
     if not isinstance(manifest, dict): return ["TechnicalPlan.authorization_manifest 必须是 JSON 对象。"]
     if any(key in json.dumps(manifest, ensure_ascii=False) for key in _FORBIDDEN_FIELDS): return ["DATA_AUTHORIZATION_NOT_SUPPORTED：TechnicalPlan manifest 不得包含数据权限字段。"]
-    try: expected = compile_authorization_manifest(requirement_spec, product_plan, api_contracts, pages)
+    try: expected = compile_authorization_manifest(requirement_spec, product_plan, api_contracts, pages, application_config=application_config)
     except ValueError as exc: return [str(exc)]
     errors: list[str] = []
     if manifest.get("schema_version") != AUTHORIZATION_MANIFEST_SCHEMA_VERSION: errors.append("TechnicalPlan.authorization_manifest.schema_version 必须为 authorization-manifest.v2。")

@@ -43,7 +43,7 @@ function AppEntryContent(): JSX.Element {
       if (result.status === 'failed') {
         console.warn('停止上一个应用预览失败。', result)
       } else {
-        void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
+        void window.aiStudio?.projectPreview?.unregisterWorkspace({
           workspaceRoot: previousWorkspace
         })
       }

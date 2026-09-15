@@ -1,17 +1,17 @@
-# DAG 任务生成优化——指导性设计计划
+# DAG Unit Candidate 任务生成优化
 
-> 本文是后续详细设计的架构基线。本文中的 `UnitCandidate` 始终指当前 `PlanningRun` 新生成的任务增量，不是某个 Unit 的历史任务全集；上一份 confirmed DAG 是只读基线。
+# 最终技术方案设计稿
 
-## 当前讨论进度与剩余议题
+## 1. 背景与目标
 
-本表对应本轮讨论的十项议题，不改变正文的指导性计划与六个实施 Step。区分已确认决策、待确认建议和必要实施衔接；第 6 项已收口，后续按第 7—10 项顺序推进，不因正文保留早期概念草图而重新讨论已确认边界。
+当前 DAG Task Planning 的主要问题是：
 
 | 议题 | 当前进度 | 还需要明确的内容 |
 | --- | --- | --- |
 | 1. UnitGenerationContext | 输入范围、来源与切片主线已讨论；必需合同提供途径、冻结输入和 UI 代码不进入规划已确认。 | 公共／专属输入字段表最后统一对齐，尤其生成范围、资源清单与正式来源的表达；不重新讨论输入范围。冻结材料的工具签名、读取限额及上下文管理归第 10 项，持久化引用归第 8 项。 |
-| 2. 各类 Unit 生成与复用 | Endpoint、static、Page、adapter 与 auth-guard 方向已确认；shell 前置检查／复用边界已明确。 | 文档仍有一个具体尾项：shell 无可复用任务且确需贡献时，原有规划职责如何落成具体任务与输入。只沿用现有职责，不增加自动修复。bootstrap 具体数据源配置判断继续延期；同 Unit 追加／替换归第 7 项。 |
+| 2. 各类 Unit 生成与复用 | Endpoint、static、Page、adapter 方向已确认；权限资源归平台投影；shell 前置检查／复用边界已明确。 | 文档仍有一个具体尾项：shell 无可复用任务且确需贡献时，原有规划职责如何落成具体任务与输入。只沿用现有职责，不增加自动修复。bootstrap 具体数据源配置判断继续延期；同 Unit 追加／替换归第 7 项。 |
 | 3. UnitCandidate 与模型响应 | 已确认，可以收口。 | 状态枚举及存储归第 8 项，具体校验接入沿第 4、5 项落实；不重新讨论模型响应与整 Unit 重生成边界。 |
-| 4. 现有校验盘点与分层 | 已完成代码盘点并讨论分层；Local／Global 与输入／平台原因的区分已由后续议题进一步明确。 | 分层表与第 5 项已确认归因规则统一复核；原始响应严格检查、auth-guard 精确路径例外、环路定位等属于已识别的实施适配，不再另开通用校验设计。 |
+| 4. 现有校验盘点与分层 | 已完成代码盘点并讨论分层；Local／Global 与输入／平台原因的区分已由后续议题进一步明确。 | 分层表与第 5 项已确认归因规则统一复核；原始响应严格检查、平台投影路径保护、环路定位等属于已识别的实施适配，不再另开通用校验设计。 |
 | 5. 结构化错误与归因 | 已确认，可以收口。 | 无独立新议题。Task 替换相关归因要引用第 7 项最终规则，错误与状态的保存归第 8 项。 |
 | 6. 重试次数与失败处理 | 已确认，可以收口：Local 每轮 3 次总尝试、Global 2 轮修复、基础设施自动重试 0 次；Global 与 Local 反馈显式分区；基础设施故障结束 Run，由上层人工发起新 Run。 | 无独立新议题。具体轮次／失败结果存储归第 8 项，调用中断、收尾时限和事件格式归第 10 项。 |
 | 7. Scope Assembly | 串行合并、历史只读、Candidate 仅本轮贡献已确定，细则尚未展开。 | 明确保留／新增／显式替换的 Task 集合；共享 Unit 保留旧 Task 并追加新 Task；ID 碰撞与合法替换的区分；替换后的依赖引用、跨 Unit／保留任务依赖及验收编译。不能照搬当前整个 Unit 替换。 |
@@ -19,310 +19,284 @@
 | 9. 草稿确认与正式 DAG 提升 | 草稿与正式文件隔离、确认同一份 DAG 后原子提升已确定。 | 最终路径与草稿身份绑定、确认时精确定位、防止陈旧确认、原子替换和写入失败处理；取消／重新生成对草稿的处理；确认界面与 Build 读取与门禁契约。 |
 | 10. Unit Scheduler 与进度交互 | 有限并发只用于 Candidate 生成，沿用 AG-UI 已确定。 | 并发数与模型调用方式；请求／Unit 会话超时、调用／读取上限和上下文管理；取消及迟到结果隔离；Unit 重试与 Global 缺项／校验事件；基础设施错误的上层重新生成动作、进度与失败展示。 |
 
-第 1、2 项尾项最后集中对齐即可；第 4 项以现有盘点和已确认规则落实，不重新从代码盘点开始。主线剩余工作是第 7—10 项逐项明确。
+本次改造的核心目标：
 
-继续延期或排除：Task 输入依赖表、跨 Run 输入变化检测和精确失效传播、Task 级独立生成／局部重试、跨 Run Candidate 缓存、共享 Unit 多 Scope 并发版本管理、Build 执行调度改造、通用语义覆盖校验及额外审核模型。bootstrap 具体数据源配置判断、api-client 进一步拆分、static 按 sourceId 改造均不成为本轮前置要求。
+> 将 Scope 级整批 Task Generation 重构为 **Unit 级独立 Candidate Generation + Local Validation + Local Retry + 有限并发**；Scope 继续承担完整 DAG 的 Assembly、Global Validation 与提交。
 
-## 0. 本轮改造目标
+同时完善：
 
-当前任务规划流程的主要问题是：
+```text
+PlanningRun
+PendingPlan
+ConfirmedPlan
+Scheduler
+Progress
+Confirmation
+```
 
-- 一个 Scope 的多个 `planning_unit_ids` 一次性交给模型；
-- 模型返回一份大的扁平 `tasks[]`；
-- Task 数量越多，完整输出越慢，也更容易发生截断；
-- 任意一个 Unit / Task 校验失败，整个 Scope 重新生成；
-- 已成功内容在重试中被重复生成，存在成本浪费和语义漂移；
-- 用户只能看到“生成中”，无法知道具体生成到哪里、哪里正在重试。
-
-本次改造目标不是重做现有 DAG 系统，而是：
-
-> 保留现有 Unit Graph、Task DAG、Scope Assembly、用户确认和 Build 执行模型，只重构“任务生成阶段”。
-
-核心目标：
-
-> **将 Scope 级整批任务生成，改造成 Unit 级独立 Candidate 生成、局部校验、有限并行和局部自动重试；最终仍由 Scope 负责完整 DAG 的原子组装和一致性确认。**
-
-本轮范围收敛：Task 前置输入依赖清单、跨 PlanningRun 输入变化检测、精确失效与自动替换传播暂不设计，待上游产物结构稳定后专项处理。现有复用逻辑、正式产物有效性检查和确认门禁继续保留，本轮不新增业务失效机制，也不保证前置产物变化后的自动正确复用。
+完整生命周期。
 
 ---
 
-# 一、总体架构原则
+# 2. 核心边界
 
-当前需要明确两个最重要的边界。
+## 2.1 Unit：生成隔离边界
 
-## 1. Unit：生成隔离边界
+Unit 是当前 PlanningRun 中：
 
-可生成 Unit 是当前 Planning Run 内：
-
-- 模型生成；
-- Candidate 保存；
-- 局部校验；
-- 自动重试；
-- 失败隔离；
+```text
+Generation
+Local Validation
+Local Retry
+Failure Isolation
+```
 
 的最小边界。
 
-即：
+不进一步拆成 Task 级生成或 Task 级 Retry。
 
-```text
-Task 出错
-    ↓
-归属到 Unit
-    ↓
-重新生成该 Unit 在当前 PlanningRun 中的完整 UnitCandidate
-```
-
-当前阶段**不进一步做 Task 级局部重新生成**。
-
-原因是：
-
-- 同 Unit Task 数量可能变化；
-- Unit 内 Task dependency 相关；
-- `change_scope` / 文件范围可能整体变化；
-- 单独替换一个 Task 容易造成新旧 Task 不一致。
-
-因此：
-
-```text
-Unit = Generation / Validation / Retry Boundary
-```
-
-这里的“整个 Unit”只指本轮 Candidate。上一份 confirmed DAG 中已经确认的 Task 不进入 Candidate，也不会因为本轮失败而重新生成。
-
-同一个 `unit_id` 在流程中有三种不同载体，不能混称为“同一个 Unit”：
+三个概念必须严格区分：
 
 ```text
 Unit Skeleton Node
-= 生成前 Unit Graph 中的结构节点
+= Unit Graph 中结构节点
 
 UnitCandidate
-= 当前 PlanningRun 针对一个 unit_id 生成的临时任务包，只含本轮任务
+= 当前 PlanningRun 对一个 Unit 新产生的 Task 增量
 
-build-task-plan.build_units[unit_id]
-= Scope Assembly 后根据 Task.unit_id 编译出的累计 DAG 分组
+build_units[unit_id]
+= Scope Assembly 后累计 DAG 中该 Unit 的全部 Task
 ```
 
-本设计把第二种 `UnitCandidate` 作为生成和重试边界；第三种 `build_units` 仍按现有 `build-task-plan.json` 契约保留，不应把二者混为一体。
+因此：
+
+> “重新生成整个 Unit”只代表重新生成**当前 PlanningRun 的 UnitCandidate**，绝不代表删除上一份 confirmed DAG 中这个 Unit 的所有历史 Task。
 
 ---
 
-## 2. Scope：全局一致性和提交边界
+## 2.2 Scope：一致性和提交边界
 
-Unit Candidate 成功并不代表已经正式进入应用 DAG。
+Scope 是一次业务目标对应的完整 DAG 规划范围。
 
-每轮 Unit 均成功或局部耗尽后，先进入 Global 完整性检查；必需 Candidate 缺失时，在 Global 独立修复预算内补生成对应 Unit。下面是允许提交草稿的条件，不是首次进入 Global 检查的条件。
+```text
+Unit = Candidate Isolation Boundary
+
+Scope = Consistency / Commit Boundary
+```
 
 只有：
 
 ```text
-所有 planning Unit Candidate 稳定
-且 required Unit 的复用事实有效
-        ↓
-Scope Assembly
-        ↓
-Global Validation
-        ↓
-通过
+所有必需 Candidate 稳定
++
+复用事实有效
++
+Scope Assembly 成功
++
+Global Validation 成功
 ```
 
-以后，才可以：
-
-```text
-生成本轮 pending DAG 草稿
-        ↓
-用户确认
-        ↓
-原子替换正式 build-task-plan.json
-```
-
-因此：
-
-```text
-Unit = Candidate Isolation Boundary
-Scope = Commit / Consistency Boundary
-```
-
-或者更简单地描述为：
-
-> **Unit 负责失败隔离，Scope 负责全局一致性。**
+后，才能产生 PendingPlan。
 
 ---
 
-# 二、顶层流程
+# 3. 正式数据生命周期
 
-目标流程建议固定为：
+系统具有三个明确阶段：
 
-```mermaid
-flowchart TD
-    A["冻结上一份 confirmed DAG 与本次输入"]
+```text
+ConfirmedPlan
+build-task-plan.json
+        │
+        │ read-only baseline
+        ▼
+PlanningRun
+planning-run.json + runtime
+        │
+        │ generation success
+        ▼
+PendingPlan
+build-task-plan.pending.json
+        │
+        │ user confirm
+        ▼
+ConfirmedPlan
+build-task-plan.json
+```
 
-    A --> B["生成 Unit Skeleton"]
-    B --> C["解析 Scope / Build Context"]
-    C --> D["计算 required_unit_ids：当前目标及依赖范围"]
-    D --> D2["按既有范围与 owner 规则计算 reuse facts"]
-    D2 --> D4["汇总 planning_unit_ids"]
-    D4 --> D1{"planning_unit_ids 为空?"}
+核心 invariant：
 
-    D1 -- "Yes" --> J
-    D1 -- "No" --> E["构造 UnitGenerationContext"]
+1. 下一 PlanningRun 只读取 ConfirmedPlan。
+2. PendingPlan 永远不能成为下一 Run baseline。
+3. Build 永远只读取 ConfirmedPlan。
+4. LangGraph checkpoint 只是 Workflow projection，不是正式 DAG 权威。
+5. PlanningRun 成功写 Pending 后即失去执行权威；Pending 成为待确认权威。允许保留轻量 PlanningRun 投影用于刷新恢复、身份校验和清理，但不得据此继续生成。
+6. 未经用户确认不得修改正式 `build-task-plan.json`。
+7. 同一应用任一时刻最多存在一个 active PlanningRun 或一个 PendingPlan；不同 Scope 不得并行生成或等待确认。
+8. Abandon 结束本次 Workflow execution，但保留聊天记录和已有 ConfirmedPlan。
+9. Regenerate 删除旧 Pending 后创建全新 PlanningRun；后续失败不恢复旧 Pending。
 
-    E --> F["Unit Generation Scheduler"]
+---
 
-    F --> G1["Unit A Generation"]
-    F --> G2["Unit B Generation"]
-    F --> G3["Unit C Generation"]
+# 4. 总体流程
 
-    G1 --> H1["Unit Local Validation"]
-    G2 --> H2["Unit Local Validation"]
-    G3 --> H3["Unit Local Validation"]
+生产入口由 `graph/nodes/task_planning_adapter.py` 统一组装服务端正式输入。输入只来自已确认的 ProductPlan、TechnicalPlan、运行时 PageImplementationContract、TechnicalPlan API Contract、当前有效的 Endpoint API Design，以及按页面／应用裁剪的 authorization slice；Endpoint 设计通过 `api_contract_id + endpoint_id + artifact_revision` 绑定来源。`build_context.endpoint_designs` 会在进入 PlanningRun 前转换为 Frozen Store 中的 `endpoint_api_design`，Unit 只通过 allowlisted `contract_catalog` 和 FrozenContractReader 按需读取，不接收完整合同正文。
 
-    H1 --> I1{"Valid?"}
-    H2 --> I2{"Valid?"}
-    H3 --> I3{"Valid?"}
+EntitySourceBinding 仍可作为独立旧流程使用，但不再是 DAG Planning 的正式输入、就绪门禁或 Build Context 来源。页面 Scope 使用其全部 `requiredEndpointIds` 对应的已确认 Endpoint API Design；Endpoint Scope 只使用自身复合身份。缺失、过期、双文件不一致或缺少 `artifactRevision` 的设计都在 Pre-generation Gate 阻断，不能由模型补全。
 
-    I1 -- "Retryable / Local budget remains" --> G1
-    I2 -- "Retryable / Local budget remains" --> G2
-    I3 -- "Retryable / Local budget remains" --> G3
-
-    I1 -- "Yes" --> J["Barrier: 本轮 Unit 均成功或局部耗尽"]
-    I2 -- "Yes" --> J
-    I3 -- "Yes" --> J
-    I1 -- "Local exhausted" --> J
-    I2 -- "Local exhausted" --> J
-    I3 -- "Local exhausted" --> J
-    I1 -- "Non-retryable failure" --> T
-    I2 -- "Non-retryable failure" --> T
-    I3 -- "Non-retryable failure" --> T
-
-    J --> J0["Global 完整性检查：生成范围、有效 Candidate、Unit 失败信息"]
-    J0 --> J1{"本轮必需 Candidate 齐全?"}
-    J1 -- "Yes" --> K["Scope Assembly"]
-    J1 -- "Retryable missing Candidate" --> S
-    J1 -- "Input or platform failure" --> T
-    K --> L["Merge confirmed baseline Tasks / current Candidates"]
-    L --> M["Compile Cross-Unit Dependencies"]
-    M --> N["Global Validation"]
-
-    N --> O{"Valid?"}
-
-    O -- "Yes" --> P["写入 PlanningRun pending DAG 草稿"]
-    P --> Q["用户确认"]
-    Q --> R["原子提升为正式 build-task-plan.json"]
-
-    O -- "Retryable Unit Issue" --> S["归因需要重生成的本轮 Unit"]
-    S --> S1{"Global 修复额度尚有剩余?"}
-    S1 -- "Yes" --> S2["累计一轮 Global 修复"]
-    S1 -- "No" --> T
-    S2 --> F2["Scheduler 仅入队选定 Unit，恢复完整 Local 额度"]
-    F2 --> G4["Affected Unit Regeneration"]
-    G4 --> H4["Affected Unit Local Validation"]
-    H4 -- "Valid" --> J
-    H4 -- "Retryable / Local budget remains" --> G4
-    H4 -- "Local exhausted" --> J
-    H4 -- "Non-retryable failure" --> T
-
-    O -- "Non-Retryable Global Issue" --> T["Planning Run Failed"]
-
-    T --> U["停止自动生成"]
-    U --> V["用户选择“重新生成”"]
-    V --> A
+```text
+读取正式输入 + ConfirmedPlan
+        ↓
+Pre-generation Gate
+        ↓
+Unit Skeleton
+        ↓
+Build Execution Scope
+        ↓
+required_unit_ids
+        ↓
+ReuseFacts
+        ↓
+generation_requirements_by_unit
+        ↓
+planning_unit_ids
+        ↓
+Frozen UnitGenerationContext
+        ↓
+PlanningRun
+        ↓
+Unit Scheduler
+        ↓
+Candidate Generation
+        ↓
+Local Validation
+        ↓
+Local Retry
+        ↓
+Barrier
+        ↓
+Global Candidate Completeness
+        │
+        ├── 缺项且可修复 ────────────┐
+        │                           │
+        ▼                           │
+Scope Assembly                     │
+        ↓                           │
+Global Validation                  │
+        │                           │
+        ├── 可归因可修复 ───────────┤
+        │                           │
+        │                  Global Repair
+        │                           ↓
+        │                  affected Units only
+        │                           │
+        └───────────────────────────┘
+        ↓
+Global success
+        ↓
+PendingPlan
+        ↓
+┌──────────┬────────────┬────────────┐
+│ Confirm  │ Abandon    │ Regenerate │
+└────┬─────┴─────┬──────┴──────┬─────┘
+     ↓           ↓             ↓
+ Confirmed     Delete       New PlanningRun
 ```
 
 ---
 
-# 三、整个系统建议划分成四层
+# 5. Unit 分类
 
-后续项目分析建议按这四层逐层深入。
-
-```text
-┌──────────────────────────────────────────┐
-│ Layer 1：Planning Run / Scope            │
-│                                          │
-│ 管理本轮任务规划生命周期和最终 Commit        │
-└──────────────────────┬───────────────────┘
-                       │
-┌──────────────────────▼───────────────────┐
-│ Layer 2：Unit Generation                 │
-│                                          │
-│ Unit Context / Generation / Retry        │
-│ Candidate Lifecycle                      │
-└──────────────────────┬───────────────────┘
-                       │
-┌──────────────────────▼───────────────────┐
-│ Layer 3：Validation & Assembly           │
-│                                          │
-│ Unit Local Validation                    │
-│ Scope Assembly                           │
-│ Global Validation / Error Attribution    │
-└──────────────────────┬───────────────────┘
-                       │
-┌──────────────────────▼───────────────────┐
-│ Layer 4：Infrastructure                  │
-│                                          │
-│ Model Invocation / Concurrency / Timeout │
-│ Progress Events / Persistence            │
-└──────────────────────────────────────────┘
-```
-
-第一阶段项目分析时，不要直接跳到 Layer 4。
-
-优先把：
-
-```text
-Scope
-Unit
-Candidate
-Validation
-Assembly
-```
-
-这些领域边界定义清楚。
-
----
-
-# 四、Unit 类型继续沿用现有项目定义
-
-不重新设计 Unit 分类。
-
-## 结构 Unit
+## 5.1 Structural Unit
 
 ```text
 application:root
 app:integration
 ```
 
-设计目标：
+规则：
 
 ```text
 generatable = false
+participation = structural_only
+generation_status = not_required
 ```
 
-只参与：
+只用于：
 
-- Unit Graph；
-- 结构关系；
-- Scope Assembly；
+* Unit Graph；
+* Scope structure；
+* DAG 编译。
 
-不参与模型 Task Generation。
-
-同时需要项目内确认并补强：
-
-- `planning_unit_ids` 不允许包含 structural Unit；
-- Task 不允许归属 structural Unit；
-- Task 缺少 `unit_id` 时不能继续 fallback 到 `application:root`。
+Task 不允许归属 Structural Unit。
 
 ---
 
-## 共享能力 Unit
+# 5.2 `frontend:shell`
+
+最新正式定义：
+
+> `frontend:shell` 是一个 **frontend template/application shell prerequisite capability**，而不是需要生成 Task 的工作单元。
+
+职责：
+
+```text
+证明 frontend application shell 已由模板阶段正确准备
+```
+
+它不负责：
+
+```text
+修复模板
+生成页面 placeholder
+更新 menu
+生成 route
+修改 layout
+创建 provider
+```
+
+上述已有平台或模板职责不搬进 shell。
+
+正式定义：
+
+```text
+unit_id = frontend:shell
+
+generation_strategy = prerequisite_only
+
+participation = prerequisite_only
+
+generation_status = not_required
+
+produces_task = false
+
+provides:
+    frontend.shell.ready
+```
+
+完成依据：
+
+```text
+template generation readiness
++
+workspace/template prerequisite gate
+```
+
+如果 template readiness 不满足：
+
+```text
+Pre-generation Failure
+```
+
+而不是创建 shell Task 修复。
+
+Page Unit Graph 可以继续依赖：
 
 ```text
 frontend:shell
-frontend:api-client
-frontend:auth-guard
-backend:bootstrap
 ```
 
-它们：
+表达架构前置关系。
 
 - 属于应用级共享能力；
 - Candidate 可以由某个 Scope 触发生成，但只包含本轮新增或替换的任务；
@@ -338,7 +312,7 @@ backend:bootstrap
 但后续仍需要单独分析：
 
 - 共享能力不足时如何重新打开 Unit；
-- `frontend:auth-guard` 资源点清单匹配信息的绑定方式及变化时的新增条件（职责、固定规则生成和同清单任务复用已明确，见下文）；
+- 共享权限资源属于 Build 后平台投影，不作为 UnitCandidate 待定输入或复用议题；
 - `frontend:api-client` 生命周期是否需要进一步拆分。
 
 ### shell 当前讨论边界：前置检查后复用或生成
@@ -348,36 +322,11 @@ backend:bootstrap
 - 无可复用任务、需要本轮贡献时，保留按原有任务规划路径生成 shell Candidate 的可能性，不将 shell 预先限定为永不生成任务的 Unit。
 - 新 shell 任务的具体职责、所需输入和生成条件尚未明确，后续继续分析；不能把前置检查异常转换成 shell 修复任务，也不为保证非空 Candidate 而虚构检查任务或框架修改职责。
 
-### 已确认：auth-guard 承担资源注入任务，先于页面实施
+### 权限资源由 Build 后的平台投影统一写入
 
-`frontend:auth-guard` 的业务职责是把前面设计和计划阶段已经确定的全部资源点注入 auth 模板的 `src/constants/resources.ts`，在应用工作区中的精确路径为 `frontend/src/constants/resources.ts`。该职责由一个独立的 DAG Task 承担，并作为当前权限场景下 Page 页面实施 Task 的前置依赖；不采用“auth-guard 仅保留能力标识、不生成任务”的建议。
+本节原资源注入 Task 设计已被 BOOTSTRAP_PLAN.md 取代。UnitCandidate 仍用于业务实现隔离，但不构造权限资源注入任务，不为该任务增加 Page 前置依赖。
 
-**已确认的任务复用原则与执行边界：** 对未发生变化的同一份规划资源点清单，上一份 confirmed DAG 中已有对应资源注入任务时，生成阶段保留同一任务及其身份，后续页面依赖该任务，不因切换页面或开启新的页面 PlanningRun 而重复生成。是否保留任务不以已经执行成功为条件：已有任务尚未执行或执行失败，都不能仅因此另生成一份相同任务。生成阶段只判断已有任务是否对应本轮所需的资源注入职责，以及是否存在必须新增的任务贡献，不负责判断该任务现在是否应执行、跳过或重试。
-
-资源注入成功执行并通过校验一次后，同一份未变化的资源点清单无需因页面切换而重复执行；这是执行阶段的行为要求。执行状态读取、成功证据绑定、完成任务跳过和失败任务重试均由 Build 执行阶段负责，不列为本轮 DAG 生成设计的前置工作。当前 Build 运行状态由 Graph checkpoint 保存，正式 DAG 是任务计划的权威来源；跨 Run 是否正确取得执行状态属于执行衔接问题，不能据此要求生成阶段重建已有任务。本项不扩展为通用 Task 输入失效机制或 Build 调度改造。
-
-**已确认的生成方式：** 需要本轮新增资源注入贡献时，由平台按固定规则构造一个仅包含一项新 Task 的 auth-guard Candidate，不调用模型规划该任务。任务目标、输入和文件范围已由正式资源事实及既定职责确定，不由模型再次推导资源点。这里生成的是任务记录，资源文件仍在用户确认 DAG 后的执行阶段写入；固定规则生成的 Candidate 继续进入既定校验和 Scope Assembly 流程。
-
-上一份 confirmed DAG 已有对应任务、且绑定的资源点清单相同时，保留原任务和 ID，不产生本轮 auth-guard Candidate，页面依赖原任务。保留任务不重新包装成本轮 Candidate，也不以执行状态或成功证据作为任务匹配的条件。
-
-**生成输入与输出边界：**
-
-- 资源事实来自本次冻结的已确认 TechnicalPlan `authorization_manifest.resources` 完整清单，包括其中已声明的 system、page、operation 资源。该共享 Unit 不按当前页面裁剪资源点清单，不新增或猜测资源点。
-- 复用 `authorization_frontend_projection._resource_catalog` 与 `resource_constant_reference` 的资源映射、唯一性检查和稳定排序，向 Unit Context 提供已有 `{group, name, resourceKey}[]` 结构；现有 `_render_resources` 可用于确定性内容生成，具体文件注入方式仍待明确。
-- Context 同时提供模板变体、权限启用信息、资源点清单的正式来源引用，以及目标文件的工作区事实，用于确认任务适用范围和输入来源。
-- 复用判断读取上一份 confirmed DAG 中保留任务的 ID、职责及其绑定的资源点清单。这些属于任务计划输入，不包含执行成功的前置要求；绑定信息的具体字段与保存方式尚待明确，不能假设现有任务已具备这些数据。
-- 新 Task 的 `unit_id` 固定为 `frontend:auth-guard`，`owner` 为 `frontend`，职责为将确认的完整资源点清单写入前端资源常量文件，文件范围仅为 `frontend/src/constants/resources.ts`，输入绑定本轮冻结的资源点清单及正式来源。RouteGuard、AuthProvider、页面操作权限包装、路由文件和后端 AuthConstants 不纳入该任务。完整 Task 字段及 Candidate 包装结构在 UnitCandidate 与模型响应契约议题统一确定。
-- Task 只在用户确认 DAG 后执行，成功结果需要证明资源文件符合本轮确认的资源目录，随后页面实施 Task 才可执行。Page 的规划与 Candidate 生成继续消费同一份正式权限切片，不等待 auth-guard Candidate 内容；执行依赖不能变成模型生成依赖。
-
-**现有实现差异与必要衔接：**
-
-- 现有资源映射、文件渲染和 Unit Graph 到 Task 依赖编译逻辑可以复用，但尚未完成上述独立资源注入 Task 的固定构造与接入；不能将已确认的目标设计描述为当前已实现。
-- 当前调用链是 `graph/subgraphs/build.run_build_scheduler → apply_authorization_platform_projections → apply_authorization_frontend_projection`，发生在 Build 门禁通过后、普通任务派发前；输入为确认 DAG 中的 `authorization_frontend_projection`。该函数同时写入 resources.ts 和 routes.tsx；resources.ts 当前直接完整渲染并原子写入，没有资源目录未变化则跳过的判断。落地时需分离资源写入职责，由 auth-guard Task 唯一承担，避免平台步骤和 Task 重复写入同一份资源目录；路由投影及后端 AuthConstants 的既有职责不因此转移给 auth-guard。
-- 当前规划提示词、前端执行规范和 `_template_boundary_errors` 禁止普通任务修改 resources.ts。需要为此 Unit 的资源注入职责同步调整精确边界，其他 Unit 仍不得写入该文件。
-- 当前 auth-guard → Page 边依赖 `_page_requires_auth` 读取页面 permissions。目标依赖应按上述资源注入职责和正式权限场景建立，不能仅靠旧判断漏掉本轮页面实施任务；继续复用现有 Unit Graph 到 Task 依赖的编译与调度，不新增执行调度机制。
-- 现有资源校验与路由校验耦合在 `verify_authorization_frontend_projection` 中；资源部分需可用于此 Task 的完成校验，不能等到全部页面实施后才判断其前置资源任务是否成功。这是执行阶段的衔接要求，不要求生成阶段先取得成功执行证据或校验资源文件已完成注入。
-
-尚待明确：用于避免重复生成的资源点清单匹配信息的绑定字段与保存方式、清单变化时的本轮新增条件、最终 Task 字段与 Candidate 包装结构，以及注入是否沿用当前整文件渲染或采用明确托管区域。成功执行证据绑定与是否重执行不属于本项生成设计。现有实现是完整渲染资源文件，不能将其描述成已经具备任意模板内容的增量合并能力。本项不重新引入菜单／页面入口自动补齐，不新增通用跨 Run 失效专项。
+规划冻结 TemplateState 的 template_context，并从确认的 authorization_manifest 编译只读权限切片。通用 routes、可选资源目录与 AuthConstants 均在所有 Build 任务成功后由平台重放；Candidate、Scope Assembly 和普通 Agent 不能写这些共享文件。资源映射可以复用既有服务；重放与验收使用同一确认快照。
 
 ### 已确认延期：bootstrap 的数据源配置判断
 
@@ -385,83 +334,410 @@ backend:bootstrap
 
 ---
 
-## 业务实现 Unit
+# 5.3 `frontend:api-client`
+
+仍然属于共享 Capability Unit。
+
+允许：
 
 ```text
-backend:endpoint:<contractId>:<endpointId>
-frontend:data:<sourceId>
-page:<pageId>
+历史 adapter Task
+历史 user API Task
++
+本轮 order API Candidate
 ```
 
-这里的 `frontend:data:<sourceId>` 是目标抽象；当前 `build_context_resolver.py` 对 static 场景仍使用 `frontend:data:static`。后续若要改为按 sourceId 拆分，应作为单独的 Unit Skeleton / resolver 契约调整，不能在本轮并行生成改造中默认它已经实现。
+因此可能：
 
-是 Unit 独立生成机制最主要的对象。
+```text
+participation = reuse_and_generate
+```
 
-当前已经基本确认：
-
-- Page 不需要 Endpoint Task 内容；
-- Endpoint 不需要 Bootstrap Task 内容；
-- 生成依赖的是正式 Contract，而不是上游 Task Candidate；
-- 跨 Unit Task dependency 由 Unit Graph 编译。
-
-因此默认可以独立生成。
+不能因为 Unit 已有 Task 就整体复用，也不能因为本轮需要生成就删除历史任务。
 
 ---
 
-# 五、模型调用边界
+# 5.4 `frontend:auth-guard`
 
-在进入模型调用前，必须先区分三个概念：
+正式职责：
+
+> 将当前 confirmed authorization design 中确定的**完整资源点目录**物化到：
+
+```text
+frontend/src/constants/resources.ts
+```
+
+并为需要引用当前资源目录的 Page 提供前置 capability。
+
+它不负责：
+
+```text
+routes.tsx
+Page implementation
+Backend AuthConstants
+Endpoint authorization implementation
+```
+
+---
+
+## auth-guard 是 deterministic Unit
+
+```text
+generation_strategy = deterministic
+```
+
+不调用 LLM。
+
+平台已经可以根据 authorization manifest 确定性编译完整 resource catalog，因此没有必要让模型重新推断资源点。
+
+---
+
+# 6. auth-guard Resource Identity
+
+根据当前 confirmed authorization manifest：
+
+```text
+compile resource catalog
+        ↓
+canonical representation
+        ↓
+SHA-256
+        ↓
+resource_catalog_fingerprint
+```
+
+形成 capability：
+
+```text
+frontend.auth.resources:<fingerprint>
+```
+
+例如：
+
+```text
+frontend.auth.resources:8a91f...
+```
+
+该 fingerprint 表达：
+
+> 当前完整资源目录的版本身份。
+
+---
+
+# 7. auth-guard 生成判断
+
+假设当前资源目录 fingerprint 为：
+
+```text
+R2
+```
+
+判断顺序：
+
+```text
+已有 confirmed Task provides R2？
+        │
+       Yes
+        ↓
+reuse confirmed Task
+
+        No
+        ↓
+
+workspace resources.ts 已精确等于 R2？
+        │
+       Yes
+        ↓
+external capability reuse
+
+        No
+        ↓
+generate deterministic Candidate
+```
+
+因此有三种情况。
+
+---
+
+## 7.1 Confirmed Task reuse
+
+存在：
+
+```text
+task-auth-resources-R2
+
+provides:
+    frontend.auth.resources:R2
+```
+
+则：
+
+```text
+participation = reuse_only
+```
+
+无论该 Task 当前执行状态是：
+
+```text
+pending
+failed
+completed
+```
+
+Planning 都不重复生成相同职责。
+
+执行状态由 Build 负责。
+
+---
+
+## 7.2 Workspace external reuse
+
+如果：
+
+```text
+resources.ts
+==
+expected resources projection R2
+```
+
+即使正式 DAG 中没有对应 Task，也可以记录：
+
+```text
+external capability:
+frontend.auth.resources:R2
+```
+
+无需为了“留痕”创建一个虚假 Task。
+
+---
+
+## 7.3 Deterministic Candidate
+
+如果：
+
+```text
+没有 confirmed R2 provider
+AND
+workspace 不满足 R2
+```
+
+生成：
+
+```text
+frontend:auth-guard
+└── task-sync-auth-resources-R2
+```
+
+---
+
+# 8. auth-guard Task Contract
+
+建议：
+
+```text
+id:
+    frontend-auth-resources-<fingerprint-short>
+
+unit_id:
+    frontend:auth-guard
+
+owner:
+    frontend
+
+task_type:
+    authorization_resource_projection
+
+execution_strategy:
+    deterministic
+
+platform_executor:
+    authorization.frontend_resources
+
+target_files:
+    frontend/src/constants/resources.ts
+
+provides:
+    frontend.auth.resources:<fingerprint>
+
+source_refs:
+    authorization_manifest
+    resource_catalog_fingerprint
+```
+
+acceptance：
+
+```text
+resources.ts
+必须与当前 confirmed authorization resource projection 完全一致
+```
+
+---
+
+# 9. auth-guard 执行职责
+
+Planning：
+
+```text
+平台 deterministic Candidate
+```
+
+Build Execution：
+
+```text
+平台 deterministic executor
+```
+
+Validation：
+
+```text
+平台 deterministic validation
+```
+
+LLM 不参与。
+
+因此 Task Contract 中：
+
+```text
+owner
+```
+
+表示代码领域；
+
+```text
+execution_strategy
+```
+
+表示实际执行机制。
+
+不能通过新增：
+
+```text
+owner = platform
+```
+
+混淆业务 ownership 与 executor。
+
+---
+
+# 10. Authorization Projection 职责拆分
+
+当前 frontend authorization projection 同时管理：
+
+```text
+resources.ts
+routes.tsx
+```
+
+目标拆成：
+
+```text
+Frontend Authorization Projection
+├── resources projection
+└── routes projection
+```
+
+最终职责：
+
+```text
+resources.ts
+→ frontend:auth-guard deterministic Task
+
+routes.tsx
+→ platform-managed projection
+
+Backend AuthConstants
+→ platform-managed projection
+```
+
+Build 启动前的 platform projection 不再提前写：
+
+```text
+resources.ts
+```
+
+否则 auth-guard DAG Task 会失去意义。
+
+这属于本次唯一允许的小范围 Build execution extension，不扩大为通用 Build Scheduler 重构。
+
+---
+
+# 11. Page → auth capability dependency
+
+历史 auth Tasks 采用 append-only 保留：
+
+```text
+auth-guard
+├── task-R1
+└── task-R2
+```
+
+新 Page 如果要求：
+
+```text
+frontend.auth.resources:R2
+```
+
+不得依赖 auth Unit 中全部历史 Task。
+
+必须精确解析：
+
+```text
+required capability R2
+        ↓
+find provider task for R2
+        ↓
+Page depends_on task-R2
+```
+
+如果 workspace 已经 external-satisfied R2：
+
+```text
+不创建 Task dependency
+```
+
+因此 auth-guard 是第一版需要支持的：
+
+> **versioned shared capability dependency**
+
+普通 Unit 的 cross-unit dependency precision 暂时不全面重构。
+
+---
+
+# 12. Required / Reuse / Generation
+
+必须保持三层区别。
 
 ```text
 required_unit_ids
-= 当前 Scope 构成完整 DAG 所需要的全部 Unit
-
-reuse_facts
-= 从上一份 confirmed DAG 确定性计算出的可复用 Task / capability / endpoint owner
-
-planning_unit_ids
-= required_unit_ids 中本轮确实存在生成缺口、需要产生 UnitCandidate 的 Unit
 ```
 
-因此，`required_unit_ids` 本身不是“需要重新生成的 Unit 列表”，也不能仅凭“该 Unit 历史上有 Task”判断整个 Unit 可复用。共享 Unit 可能同时包含历史可复用 Task 和本轮需要新增的 Task。
-
-第一版应优先沿用并收敛项目中的现有逻辑：
-
-- `_replaceable_unit_ids`：作为计算 `planning_unit_ids` 的起点；
-- `_add_reusable_task_context`：投影可复用任务事实；
-- `_retained_frontend_endpoint_owner_constraints`：投影已确认的 API endpoint owner；
-- `frontend_endpoint_ownership_errors` 与 `retained_frontend_endpoint_owner_conflict_errors`：作为生成后的确定性兜底校验。
-
-需要补强的是：现有显式 reusable task context 主要只覆盖 `frontend:shell`，不能直接视为完整的通用复用机制。新设计应统一以“上一份 confirmed DAG + 本轮正式输入”为依据计算复用和生成缺口。
-
-已确认的范围限制：复用判断只依赖明确记录的目标、归属、正式来源和逐类定义的复用规则，不新增通过比较 Task 描述与业务要求来判断语义相似度的通用复用机制。存在历史任务也不等于平台已经证明其完整满足本轮业务语义。
-
-已确认：对于已由复用规则选定保留的依赖 Task，不因为它尚未执行就再次生成。正式 DAG 的 `confirmation_status = confirmed` 与其中 Task 的 `status = pending` 可以同时成立；保留的是任务计划，不能因此把执行状态改为完成。是否需要执行继续由现有 Build 流程决定。该规则不意味着任意同名历史 Task 都可以复用，也不把 pending DAG 草稿纳入正式复用基线。
-
-如果逐类规则计算出的 `planning_unit_ids` 为空，应跳过模型调用，直接进入 Scope Assembly 和 Global Validation。这只表示本轮无需新增任务规划，不表示历史 Task 均已执行或代码能力已经通过验收。
-
-### 已确认：Endpoint、static data、Page 的生成与复用方向
-
-| Unit | 本轮需要生成时 | 任务复用边界 |
-| --- | --- | --- |
-| Endpoint | 沿用强约束模型规划；每个相关实体按数据库 `objects → repository → service → controller` 或外部 API `upstream → mapping → service → controller` 生成，同一个 Unit 统一返回 Candidate。 | 按 `(api_contract_id, endpoint_id)` 匹配已确认任务包；作为后续页面依赖且已选定保留时，不重复生成其阶段任务。 |
-| static data | 沿用当前一项数据模块任务的规则，承担当次生成范围内的静态实体及供页面调用的数据操作。 | 按明确登记的实体和操作范围匹配保留职责；新增实体或操作尚无任务承担时，产生本轮贡献，不能仅因 static Unit 下已有任务就整体跳过。 |
-| Page | 按 PageImplementationContract 强约束生成，任务数量不固定，复用页面入口并只规划页面业务职责。 | 按 `page_id` 匹配已确认页面任务包；已选定保留时不重复生成，明确要求重新生成该页面时才进入本轮替换范围。 |
-
-这里的 static 数据操作是按正式合同实现的前端内存模拟 API，供页面通过异步函数查询或更新内存记录；不生成真实 HTTP 服务、代理或 Mock 服务，不默认补齐合同未声明的增删改查。已有任务承担同一实体的查询，不等于它也承担新增、修改等其他操作；匹配的是任务绑定的正式操作范围，不是验收代码是否已实现。
-
-上述方向适用于正式输入仍适用的场景，不新增跨 Run 变化检测、任务描述语义相似度判断或执行成功证据要求。具体同 Unit 追加、替换、ID 和依赖处理留到 Scope Assembly 议题。
-
-### 已确认：生成集合与模型调用列表的区别
+当前 Scope 构成完整 DAG 所需的 Units。
 
 ```text
-required_unit_ids = 当前目标及其必要依赖 Unit
-reuse_facts = 从 confirmed DAG 按逐类规则提取的保留任务和职责
-generation_scope[unit] = 该 Unit 本轮需要新增或明确替换的职责
-planning_unit_ids = generation_scope 非空的可生成 Unit
+reuse_facts
 ```
 
-不能用“所需 Unit 减去已有任务的 Unit”直接计算待生成集合；同一个共享 Unit 可以同时存在保留任务和本轮新贡献。`planning_unit_ids` 也不等于模型调用列表：auth-guard 需要新增任务时属于待生成 Unit，但由平台固定构造 Candidate。当前 `_replaceable_unit_ids` 只能作为计算起点，尚未实现上述所有逐类职责判断；bootstrap 具体数据源配置判断仍按已确认边界延期。
+历史 confirmed Task / capability / owner 等确定性可复用事实。
+
+```text
+generation_requirements_by_unit
+```
+
+每个 Unit 当前还缺少的新增职责。
+
+```text
+planning_unit_ids
+```
+
+最终需要生成 Candidate 的 generatable Units。
+
+不能使用：
+
+```text
+required units - units with existing tasks
+```
+
+不能用“所需 Unit 减去已有任务的 Unit”直接计算待生成集合；共享 Unit 可同时包含保留任务和新贡献。权限资源投影不进入 Candidate 或模型调用列表。当前 _replaceable_unit_ids 仅作为计算起点；bootstrap 数据源配置判断仍延期。
 
 当前：
 
@@ -527,182 +803,76 @@ bounded concurrency
 
 ---
 
-# 六、解除 combined prompt 的关键耦合
+# 13. Generation Strategy
 
-当前最明确的跨 Unit 一致性问题是：
-
-```text
-业务 API module
-到底属于 frontend:api-client
-还是 page:*
-```
-
-例如：
+每个 Unit 明确：
 
 ```text
-user.ts
+structural_only
+prerequisite_only
+reuse_only
+deterministic
+model
 ```
 
-项目当前 prompt 已经基本规定：
+说明：
 
 ```text
-业务 API module → frontend:api-client
-页面实现 → page:user-list
+structural_only
+→ DAG structure only
+
+prerequisite_only
+→ 有正式前置能力但无 Task，如 frontend:shell
+
+reuse_only
+→ 当前需求完全由 existing facts 满足
+
+deterministic
+→ 平台产生 Candidate
+
+model
+→ LLM Unit generation
 ```
-
-因此，这不是让模型在两个 Unit 之间自由选择 owner。改造重点是把当前 combined prompt 中的约束提升为生成前的平台 Ownership Rule，并在单 Unit Context 中显式提供：
-
-```text
-API module
-→ frontend:api-client
-
-Page implementation
-→ page:*
-```
-
-例如：
-
-```text
-responseEntity.ts
-Unit = frontend:api-client
-
-user.ts
-Unit = frontend:api-client
-
-frontend/src/pages/UserList/index.tsx
-Unit = page:user-list
-```
-
-这属于：
-
-> **生成前确定性 Ownership Rule**
-
-而不是运行过程中再让模型跨 Unit 协商。
-
-后续项目内还应继续寻找类似的：
-
-```text
-当前依赖 combined prompt 协调
-但实际上可以平台确定
-```
-
-的规则。
-
-## API module 的复用判断时机
-
-API module 重复利用需要“生成前判断 + 生成后校验”，但两者职责不同：
-
-```text
-上一份 confirmed DAG
-        ↓
-平台确定性提取 endpoint owner / 已有 capability / 可复用 Task 摘要
-        ↓
-计算本轮缺口和 planning_unit_ids
-        ↓
-只把必要的复用约束放入 UnitGenerationContext
-        ↓
-模型生成缺失任务
-        ↓
-平台再次校验 endpoint owner 唯一性和历史冲突
-```
-
-- **生成前**：平台按明确的逐类规则判断哪些历史任务保留、哪些任务无需二次生成；不将保留任务等同于代码能力已实现。模型不负责以语义推测替代这些复用规则。
-- **给模型的上下文**：只提供结构化的 owner / capability / retained Task 摘要，不把全部历史 Task 内容塞进 prompt。
-- **生成后**：确定性校验是安全兜底，用来阻止模型重复声明已经由历史 Task 拥有的 API module 或 endpoint。
-
-因此，现有 retained frontend endpoint owner constraint 应保留并下沉为 Unit Context 的一部分；现有 ownership conflict validation 也应保留。不能二选一。
-
-### 已确认：契约未变化时的 API module 跨页面复用
-
-前提是对应正式 API 契约未变化，且历史任务不在本轮明确替换的范围内。平台按 `api_contract_id + endpoint_id` 查询正式 DAG 的 Endpoint implementation-owner 索引：
-
-- 找到唯一 owner Task：保留该 Task，把 `reuse_only` 约束提供给本轮 Page / API Client Context；消费页面不再生成该 Endpoint 的 API module 实现任务。
-- 未找到 owner Task：该 Endpoint 没有可复用的 owner 任务，本轮需要规划对应 API module；不能因为 `frontend:api-client` 已登记其他 Task 就跳过整个 Unit。
-- 找到多个 owner Task：报告历史职责冲突并停止，不让模型任意选择 owner，也不自动重生成历史 Unit。
-- 匹配依据是明确的 Endpoint 身份及 owner 记录，不是 Task 描述、文件名或自然语言语义相似度。
-
-本规则描述契约未变化的复用场景，不意味着本轮新增了一套验证“契约未变化”的 Task 级机制。输入变更后的精确失效与替换延期专项设计；已有门禁发现问题时仍按现有机制处理，不能因延期而跳过检查或假定旧 Task 一定适用。
-
-### 已确认：共享响应适配器的生成依据与任务复用
-
-`frontend:api-client` 中的共享响应适配器是固定的 `frontend/src/apis/responseEntity.ts`。它按项目既有传输约定处理 `returnCode / errorMsg / body`、`SUC0000` 成功码、业务错误、协议错误和空响应；业务 API 模块通过它向页面返回业务数据 `T`。正式 API Contract 决定各接口的业务类型和是否有响应数据，适配器不因消费页面或业务类型不同而重复生成。实际 `service.ts` 的返回约定由业务模块执行时读取并采用；static 模块不使用该 HTTP 适配器。
-
-计划阶段复用的是上一份 confirmed DAG 中已选定保留的适配器任务，按明确身份识别：
-
-```text
-unit_id = frontend:api-client
-owner = frontend
-deliverable.kind = frontend.shared_capability
-deliverable.target_id = response-entity-adapter
-deliverable.provides 包含 frontend.response-entity-adapter
-```
-
-- 有明确对应的保留任务时，本轮不重复生成适配器任务；保留任务尚未执行也可复用其计划，执行状态保持不变，后续是否派发沿用 Build 调度。
-- 本轮需要适配器但没有可复用任务时，沿用已有固定任务生成规则；磁盘上存在同名文件不单独构成规划复用依据，执行时仍需读取并按合同处理现有实现。
-- 适配器任务与业务 Endpoint owner 分别判断：api-client 中已有其他任务不意味着适配器已被规划，保留适配器也不意味着本轮新增 Endpoint 无需生成业务 API 模块。
-- Task 身份与 deliverable 声明只用于确定任务职责，不能证明代码行为正确；代码是否满足合同继续由执行与验收处理，不能把通用验收描述成已有完整的适配器行为校验器。
-
-现有代码已有适配器的固定生成和执行规则，但显式 `reusable_tasks_by_unit` 生产逻辑主要覆盖 shell。上述适配器专属任务识别是目标设计，不能视为当前已经完整实现的复用能力，也不推广成所有共享能力的通用规则。本项不新增传输合同变化检测或历史任务自动失效机制。
-
-### 延期专项：Task 前置输入与失效处理
-
-- 不在本轮定义逐类 Task 的完整前置输入依赖表、最小输入切片、跨 Run 哈希比较或自动失效传播，也不把这些内容作为 Unit 独立生成的实施前置。
-- 之前讨论的“当前页面/API 及其依赖任务变化时替换、无关历史任务不处理”保留为后续专项的范围意向，不作为第一版已经具备或必须新增的能力。
-- 现有 `business_acceptance_checks[].sources[]` 及 Build 来源检查保持原样。本轮不将它们改造成通用的生成前 Task 失效判定器；其共享任务覆盖不足和切片粒度问题留到专项解决。
-- 本轮仍需要构造 UnitGenerationContext，以便独立模型调用；这不等于设计逐 Task 的跨 Run 失效依赖表。冻结本次 Run 输入、核对草稿身份及确认基线，也不属于本次延期的业务失效机制。
 
 ---
 
-# 七、UnitGenerationContext
-
-这是实现 Unit 独立生成最关键的新契约之一。
-
-原则：
-
-> 一个 Unit 必须能够仅依赖自己的 `UnitGenerationContext` 完成任务规划，不读取其他 Unit 的 Candidate Task 内容。
-
-建议概念模型：
+# 14. UnitGenerationContext
 
 ```text
 UnitGenerationContext
 ├── planning_run_id
-├── scope_id
+├── build_execution_scope
 ├── unit_id
 ├── unit_kind
+├── input_fingerprint
 ├── base_confirmed_plan_digest
 │
-├── formal_contracts
-│   ├── PageImplementationContract
-│   ├── Endpoint Contract
-│   ├── API Contract
-│   ├── EntityDesign
-│   └── EntitySourceBinding
+├── generation_requirements
+│
+├── contract_catalog
+│   └── [{ ref_id, kind, selectors[] }]
 │
 ├── workspace_context
-│   ├── WorkspaceSnapshot
-│   ├── architecture facts
-│   └── reuse conventions
+│   ├── workspace_snapshot identity
+│   ├── relevant paths
+│   ├── template variant
+│   └── architecture facts
 │
 ├── dependency_context
 │   ├── dependency_unit_ids
 │   ├── dependency_capabilities
 │   ├── retained_task_summaries
-│   ├── retained_endpoint_owner_constraints
-│   └── Unit Graph slice
+│   ├── retained owner constraints
+│   └── unit_graph_slice
 │
-├── constraints
-│   ├── owner constraints
-│   ├── authorization constraints
-│   ├── managed-file constraints
-│   └── capability ownership rules
-│
-└── generation_policy
-    ├── max_attempts
-    ├── strong rules
-    └── expected task rules
+└── constraints
+    ├── owner
+    ├── managed files
+    ├── authorization constraints
+    └── strong rules
 ```
 
-注意：
+Context 属于冻结业务输入。
 
 当前 `Unit.source_refs` 仍然可以继续作为：
 
@@ -714,7 +884,7 @@ traceability metadata
 
 ## 输入清单收敛稿（输入边界已明确，字段表待最终对齐）
 
-本节把生成前输入集中列出，供一次性审阅。表中的目标结构属于建议，不表示当前代码已经提供完整的单 Unit Context；其中 shell 前置检查、auth-guard 固定规则生成、保留任务不以执行成功为前提、bootstrap 数据源配置判断延期等边界沿用本次讨论已确认的结论。生成方式是平台控制参数，不是实体的数据来源。
+本节把生成前输入集中列出，供一次性审阅。表中的目标结构属于建议，不表示当前代码已经提供完整的单 Unit Context；其中 shell 前置检查、权限资源的平台投影边界、保留任务不以执行成功为前提、bootstrap 数据源配置判断延期等边界沿用本次讨论已确认的结论。生成方式是平台控制参数，不是实体的数据来源。
 
 ### 公共输入、来源与必填条件
 
@@ -723,7 +893,7 @@ traceability metadata
 | 身份 | `planning_run_id`、`scope_id`、`unit_id`、`unit_kind`、`base_confirmed_plan_digest` | Run／Scope 由平台创建，Unit 来自现有 Unit Skeleton；所有 Context 必填。首次没有 confirmed DAG 时，基线摘要为 null，并明确使用空基线，不拿失败或未确认计划替代。 |
 | 本轮生成范围 | `generation_scope`：本轮负责的正式目标引用、需要新增的职责、不得重复生成的保留职责 | 由平台生成前计算，所有待生成 Unit 必填。Endpoint 使用 `(api_contract_id, endpoint_id)`，Page 使用 `page_id`，共享 Unit 使用本轮所需职责；Unit 只生成该范围内的任务。此字段是对概念模型的补充建议。 |
 | 正式合同 | `formal_contracts`：适用的合同正文／有界结构化切片，以及对应正式来源引用；较大合同的受控读取方向见下文已确认规则 | 来自已确认正式产物，经现有运行时合同编译与绑定摘要逻辑组装。按下表条件必填；直接提供内容，或提供实际可查询读取的冻结输入引用，不能只给路径并假定模型已有文件工具。无关合同不下发。 |
-| 工作区事实 | `workspace_context`：同一份 WorkspaceSnapshot 的身份及 Unit 相关切片、模板变体、适用的预置文件清单和架构事实 | 快照来自 `inspect_workspace`，模板信息来自既有模板就绪检查，预置清单来自 `prebuilt_files_for_plan`。提供真实路径、目录、入口、已有文件等规划事实，不将路径存在等同于代码功能已满足。 |
+| 工作区事实 | `workspace_context`：同一份 WorkspaceSnapshot 的身份及 Unit 相关切片、template_context、适用的预置文件清单和架构事实 | 快照来自 `inspect_workspace`，模板绑定来自 TemplateState，预置清单来自 `prebuilt_files_for_plan`。提供真实路径、目录、入口、已有文件等规划事实，不将路径存在等同于代码功能已满足。 |
 | 依赖与保留事实 | `dependency_context`：直接依赖 Unit、相关 Unit Graph 边、必要的保留任务摘要、已有职责和 Endpoint owner 约束 | 来自 Unit Skeleton／Unit Graph 及上一份 confirmed DAG。相关集合必填，无相关记录时为空。保留任务摘要只含 ID、Unit、职责、交付物、能力、文件范围及必要正式输入引用，不要求成功执行记录，不下发历史任务全集。 |
 | 约束 | `constraints`：owner、文件职责边界、适用权限切片、已有确定性唯一归属规则 | 来自现有规划规则、模板边界、权限 Overlay 和保留任务索引。仅传适用于该 Unit 的约束；不存在权限场景时明确不适用，不伪造权限事实。 |
 | 生成控制 | `generation_policy`：固定规则或模型生成、适用 Task 字段契约及阶段规则 | 由平台选择，属于控制参数。具体重试次数与反馈结构在重试议题确定，不在正式合同输入中混入执行状态或重试决策。 |
@@ -734,7 +904,7 @@ traceability metadata
 | --- | --- | --- |
 | `frontend:shell` | 前端模板／工作区就绪事实、平台选定的本轮 shell 职责、保留 shell 任务摘要 | 沿用现有前置检查与前端快照。异常作为前置条件不满足；不新增菜单、页面入口自动补齐。无可复用任务时，仅为原有规划职责提供输入，不在本节扩张 shell 职责。 |
 | `frontend:api-client` | 本轮需要生成模块的 Endpoint 引用及 API Contract；固定响应适配约定；保留适配器任务及 Endpoint owner 信息 | 按 `(api_contract_id, endpoint_id)` 选择 Endpoint，保留所属契约的 schemas。工作区只提供相关前端目录、API 文件及 service 路径事实。不提供后端 Candidate 或数据库实现绑定；接口请求、响应和空响应等约定来自正式 API 合同。 |
-| `frontend:auth-guard` | 完整 `authorization_manifest.resources`、规范化的 `{group, name, resourceKey}[]`、权限启用与模板信息、保留任务绑定的资源点清单 | 来源为已确认 TechnicalPlan，复用现有资源映射逻辑；共享资源点清单不按页面裁剪。需要新增时由平台固定构造资源注入任务，目标仅为 `frontend/src/constants/resources.ts`。任务绑定清单由平台随正式输入来源补充；具体保存字段在第 8 项统一确定，不重新打开第 3 项模型响应契约。 |
+| `frontend:auth-guard` | 有效能力及确认的权限事实 | 不构造资源注入 Candidate；共享资源由 Build 后平台投影写入，Page 只消费本页权限切片。 |
 | `backend:bootstrap` | 当前 Scope 所需的后端数据来源类型及正式实体绑定引用、既有基础能力规则、后端工程路径事实、保留 bootstrap 任务职责 | 复用现有 resolver、实体摘要和后端快照裁剪。具体连接配置的复用／新增判断继续延期；本节不据此设计多数据源配置或新的缺口判定算法。 |
 | `backend:endpoint:<contractId>:<endpointId>` | 当前 Endpoint 的完整实施语义、所属 API Contract 的 schema、相关实体字段及确认的数据来源绑定、当前 Endpoint 权限切片 | 固定为一个接口，包含该接口相关实体，整个 Unit 的阶段任务使用同一份输入。数据库保留表／字段映射；外部 API 只保留通过该接口引用匹配到的操作、请求响应结构和字段映射。复用 `_endpoint_context`、`entity_design_summaries` 和 `unit_authorization_slice`，不读取 bootstrap Candidate 或其他 Endpoint Candidate。 |
 | static data Unit | 本轮相关 static 实体字段、确认的静态绑定摘要及其正式来源引用、对页面暴露的数据接口合同、前端模块路径事实 | 沿用现有 static 实体过滤和规划摘要；当前摘要包含种子行数与字段取值项数，不把它称为完整静态数据。具体记录供执行阶段按绑定的正式来源读取，不要求任务规划携带整批数据。沿用当前解析出的 Unit ID，本节不要求改成按 sourceId 拆分。 |
@@ -743,7 +913,7 @@ traceability metadata
 ### 统一的切片、缺失与重试边界
 
 - **确认进度：** 合同按目标切片并保留所属 API Contract 的完整 schemas、按适用性处理必需输入缺失、同一 Run 内重试冻结输入，以及较大必要合同的受控查询与分片读取方向均已确认。UI Design 代码仍属于执行材料。工具签名、调用上限与上下文管理细节留到生成调用机制中确定，不再以必要输入较长为由直接结束生成。
-- 公共输入表示共同来源与共同结构，不表示向每个 Unit 发送完整项目。正式合同按 Unit 目标裁剪，工作区按前端／后端及所需路径裁剪；权限按现有 Page／Action／Endpoint 切片，auth-guard 的完整资源点清单是明确例外。
+- 公共输入表示共同来源与共同结构，不表示向每个 Unit 发送完整项目。正式合同按 Unit 目标裁剪，工作区按前端／后端及所需路径裁剪；权限按现有 Page／Action／Endpoint 切片，完整资源点清单由平台投影持有，不进入普通 Task 的写入职责。
 - **已确认：** API Contract 第一版沿用 `_scoped_api_contract`：裁剪 endpoints，保留所属合同 schemas，避免引用断裂。不增加递归 schema 最小化工程。
 - **已确认：** 任务规划必需的语义内容必须有明确的提供途径：基础信息直接提供，较大必要合同可通过受控只读工具查询和分片读取。不能仅提供 TechnicalPlan 文件路径和 Endpoint ID，却不提供内容或实际读取途径。正式来源引用用于定位和追溯，不等于合同内容；`uiDesignRef.path / sha256` 属于可交给后续执行的设计引用，不代表规划模型必须读取该 UI 代码文件。当前无工具 ChatModel 调用仍需相应接入改造。
 - **范围澄清：** UI Design 代码正文用于执行阶段的视觉还原和组件实现。Page 任务生成读取 PageImplementationContract 已编译的行为、接口、权限、导航和验收信息，不从 UI 源码重新推导任务职责。此前把长 UI 代码列为规划模型按需读取材料的建议撤回，不据此扩大 UnitGenerationContext 或引入工具调用循环。
@@ -766,24 +936,181 @@ traceability metadata
 - `entity_definitions.py::entity_design_summaries`：复用有界实体摘要及按 Endpoint 引用裁剪外部 API 操作。
 - `graph/nodes/tasks.py::_executable_details / _scoped_api_contract / _scoped_pages`：复用合同正文组织、所属 schema 保留及导航目标裁剪。
 - `agents/main/task_preparer_prompt.py::compact_workspace_snapshot`：复用前端／后端路径事实裁剪；该快照不承担依赖是否安装、代码能力是否实现的判断。
-- `authorization_overlay.py` 与 `authorization_frontend_projection.py`：复用权限切片与资源点映射；auth-guard 的独立输入适配仍需接入。
+- `authorization_overlay.py` 与 `authorization_frontend_projection.py`：复用权限切片与资源映射；资源文件写入仍归 Build 后平台投影。
 - 新增的是把上述来源组装成单 Unit Context、显式携带本轮生成范围，并按既定逐类规则提供保留职责约束。当前 Scope Context、`Unit.source_refs` 和单 Unit 的完整生成输入不能直接画等号。
 
 ---
 
-# 八、Unit Candidate 数据结构
+# 15. UnitGenerationPolicy
 
-**已确认：** 模型最终仅返回一个包含 `tasks` 字段的 JSON 对象，表达当前 Unit 的本轮任务包；不返回 Scope DAG、Candidate 元信息或 `workspace_analysis`。合同查询与分片读取发生在最终响应之前，最终任务包必须完整。
-
-平台包装的 UnitCandidate 字段如下：
+运行策略独立：
 
 ```text
-UnitCandidate
-├── unit_id
-├── planning_run_id
+UnitGenerationPolicy
+├── local_max_attempts
+├── model_max_retries
+├── model_max_tokens
+├── request_timeout
+├── unit_session_timeout
+├── model_turn_limit
+└── frozen_contract_read_limits
+```
+
+不能把 Retry / timeout 等运行策略塞进 UnitGenerationContext。
+
+---
+
+# 16. DAG 专属配置
+
+新增：
+
+```text
+XCODEAGENT_DAG_UNIT_MAX_TOKENS=4096
+```
+
+Settings：
+
+```text
+dag_unit_max_tokens = 4096
+```
+
+Model factory 支持：
+
+```text
+max_tokens_override
+max_retries_override
+timeout_seconds_override
+```
+
+DAG model generation：
+
+```text
+max_tokens_override
+    = settings.dag_unit_max_tokens
+
+max_retries_override
+    = 0
+```
+
+不会修改其他 Agent 使用的：
+
+```text
+AGENT_MAX_TOKENS
+MODEL_MAX_RETRIES
+```
+
+已确认：
+
+```text
+Unit concurrency = 3
+Local attempts = 3
+Global repair rounds = 2
+SDK infrastructure retry = 0
+```
+
+第一版 Local=3、Global=2 是固定策略，不开放 Settings 构造参数或环境变量覆盖；
+`dag_unit_local_max_attempts`、`dag_global_repair_limit` 仅暴露只读固定值。
+`UnitGenerationPolicy.local_max_attempts` 同样只接受 3；Global 额度归后续 Run Controller 管理，不放入 Unit Policy。
+Unit 生成并发由平台拥有：`XCODEAGENT_DAG_UNIT_CONCURRENCY` 只配置 Worker Pool 的期望并发，Scheduler 仍硬限制最多 3 个 model worker。Unit Graph 依赖、模型输出和 Candidate 都不得声明 Unit Worker、跨 Unit 调度或最终执行批次；确定性 Unit 在模型 Worker Pool 外由平台串行提交。Task Candidate 当前仍包含单任务级 `can_run_in_parallel` / `parallel_reason` 字段，但它们不是实际调度批次；Scope 编译器还会结合依赖和文件冲突生成平台执行批次。token budget 保持 DAG 独立配置。
+
+以下保护参数由 production Planning adapter 显式构造，不进入业务 Context：
+
+```text
+Unit session timeout
+contract read count
+contract accumulated size
+model turn limit
+```
+
+当前生产值由 `production_unit_generation_policy()` 集中给出：单次请求 120 秒、Unit Session 600 秒、最多 8 个模型 turn、最多 24 次合同读取、累计 2,000,000 字节且单次最多 200,000 字节。Policy 严格校验三项读取预算，Builder、Scheduler 和 Worker 不得另设隐式默认值。
+
+---
+
+# 17. UnitCandidate 模型响应
+
+模型最终只返回：
+
+```json
+{
+  "tasks": []
+}
+```
+
+平台负责 Candidate metadata。
+
+模型不返回：
+
+```text
+PlanningRun metadata
+Scope DAG
+workspace_analysis
+Candidate status
+Global issue
+platform compilation data
+```
+
+Task ID 继续由模型生成。
+
+平台禁止：
+
+```text
+自动补 Task ID
+自动修改 owner
+重复 ID 自动 rename
+静默 drop 非法 Task
+exact duplicate silent merge
+```
+
+---
+
+# 18. Candidate Dependency
+
+Candidate Task 可以引用：
+
+```text
+1. 当前 Candidate 内 Task
+2. UnitGenerationContext 显式提供的同 Unit retained Task
+```
+
+禁止引用：
+
+```text
+另一个并发 Candidate
+跨 Unit Task ID
+Unit ID
+未知 Task
+```
+
+例如：
+
+```text
+frontend:api-client
+
+retained:
+task-response-adapter
+
+candidate:
+task-order-api
+    depends_on = task-response-adapter
+```
+
+允许。
+
+跨 Unit dependency 仍由平台编译。
+
+---
+
+# 19. CandidateAttempt
+
+```text
+CandidateAttempt
+├── candidate_id
+├── identity: AttemptIdentity
 ├── input_fingerprint
-├── generation_attempt
 ├── status
+│   ├── valid
+│   ├── invalid
+│   └── superseded
 ├── tasks[]
 ├── validation_issues[]
 └── generation_metadata
@@ -813,7 +1140,7 @@ UnitCandidate
 - 验收规则，以及 Scope Assembly 阶段的跨 Unit 和保留任务依赖。
 - Candidate 身份、尝试次数、状态、校验问题和生成诊断。
 
-固定规则生成的 auth-guard Candidate 遵循相同的平台身份、归属、局部校验和 Assembly 契约，但不要求经过模型响应步骤。
+平台资源投影独立于 Candidate；Candidate 继续遵循平台身份、归属、局部校验和 Assembly 契约。
 
 ## 已确认：失败处理与归一化边界
 
@@ -833,12 +1160,11 @@ UnitCandidate
 平台处理顺序为：
 
 ```text
-parse
-→ check raw response shape / identity
-→ normalize
-→ compile local structure
-→ validate
-→ candidate_ready / regenerate this Unit's complete current Candidate
+Task.id
+→ 模型
+
+CandidateAttempt.candidate_id
+→ 平台
 ```
 
 ---
@@ -1185,7 +1511,7 @@ generation_attempt
 | 重试反馈 | 冻结输入之外显式分区：Global 反馈是本 Unit 对本轮全局问题必须达成的修复目标，在整轮 Local 尝试中持续保留；最新 Local 错误是最近一次生成暴露的具体问题，按尝试更新。两类不能混成无来源的错误列表，最终须同时满足。输出始终是该 Unit 完整本轮 Candidate，其他 Unit 的 Candidate 正文不进入输入。 |
 | 最终失败或用户取消 | 停止派发、停止自动重试，尝试取消进行中调用，拒收迟到结果；不组装或提交失败 Candidate，不覆盖正式 DAG。通过现有 AG-UI 向上层输出已结束的状态及原因，不保留 PlanningRun 内人工暂停／继续。 |
 
-固定规则构造的 auth-guard 若出现平台错误，不适用模型内容重生成额度。缺少必需正式输入、平台构造／编译错误及无法归因的问题同样按不可重试失败处理，不包装成可由 Local／Global 恢复的模型内容问题。
+缺少正式输入、平台编译错误及无法归因的问题按不可重试失败处理，不使用模型内容重生成额度；平台投影在 Build 执行阶段处理。
 
 本项约定的结果交接为：Unit 生成向调度器交付有效 Candidate，或局部耗尽及结构化问题；不可重试故障触发 Run 失败收尾。Global 输出通过、选定 Unit 的下一轮修复或最终失败。运行结果的具体 DTO／状态字段留在第 8 项，不在此另建第二套状态模型。
 
@@ -1215,7 +1541,7 @@ generation_attempt
 
 错误发生后将当前 PlanningRun 标记为 failed，停止新调用与自动重试，按失败收尾规则处理正在进行的调用及迟到结果。通过现有 AG-UI 失败流程向上层报告故障 Unit、原因及是否需要先处理配置，明确结束当前生成进度；不交给 Global 作为内容缺项自动修复，也不在 PlanningRun 内保留等待用户决定的运行状态。
 
-- **用户选择重新生成任务：** 上层重新进入 `prepare_build_tasks` 的任务准备入口及必要输入准备，创建新的 `planning_run_id`；重新读取已确认正式合同和 confirmed DAG，建立本轮工作区快照、复用事实与生成范围。新 Run 不读取失败 Run 的 Candidate，也不能把 checkpoint 中上次候选计划当作 confirmed 基线；Local／Global 预算从新 Run 开始计数。这不是从需求、UI 或技术计划阶段重新生成上游产物。
+- **用户选择重新生成任务：** 上层重新进入 `prepare_build_tasks` 的任务准备入口及必要输入准备，创建新的 `planning_run_id`；重新读取已确认正式合同和 confirmed DAG，建立本轮工作区快照、复用事实与生成范围。新 Run 不读取失败 Run 的 Candidate，也不能把 checkpoint 中上次候选计划当作 confirmed 基线；Local／Global 预算从新 Run 开始计数。这不是从需求、UI 或技术规划阶段重新生成上游产物。
 - **用户选择取消／稍后处理：** 失败 PlanningRun 已经结束，无需再让它等待；上层关闭本次失败处理或等待用户稍后主动发起。正式 DAG 始终不变；用户在调用尚未失败时主动取消，则按取消分支结束运行。
 - **上层等待与内部 Run 分离：** 可以由工作流／界面等待用户选择，但这不表示失败 PlanningRun 仍活跃。AG-UI 工作流执行身份与 `planning_run_id` 分属不同层，不要求更换整个应用、会话或重新执行所有上游节点。用户操作的身份绑定在第 9、10 项衔接。
 - **错误契约：** 使用平台结构化失败结果和明确的新 Run 发起动作，不仅抛一个未处理异常后让界面停留在“生成中”。基础设施错误的 `ValidationIssue.retryable=false` 表示不能在该 PlanningRun 内通过 Candidate 重生成修复，不禁止用户在上层主动开启新 Run。
@@ -1291,26 +1617,16 @@ errors: [
 ValidationIssue
 ├── code
 ├── level
-├── unit_ids
-├── task_ids
-├── retry_unit_ids
-├── retryable
 ├── category
+├── unit_ids[]
+├── task_ids[]
+├── retry_unit_ids[]
+├── retryable
 ├── message
 └── details
 ```
 
-| 字段 | 约束与含义 |
-| --- | --- |
-| `code` | 必填，由开发时定义的固定规则代码标识错误；平台检查命中时填写，供调度及去重使用，不由模型生成，不根据展示文案反推。 |
-| `level` | 必填，为 `pre_generation / unit / global / system`，由发现问题的检查环节／运行时错误处理入口填写；表示在哪一层发现。 |
-| `category` | 必填，为 `input / generation / platform / infrastructure / persistence`，由平台依据数据来源和规则判定原因；发生在 Global 或 Unit Local 不等于原因来自模型。 |
-| `unit_ids` | 必填数组，涉及的全部 Unit，可含保留任务所属 Unit；无法定位时为空。 |
-| `task_ids` | 必填数组，涉及的 Task；缺少 Candidate 时可为空。ID 碰撞时，仅凭此数组不能区分同 ID 的多份任务，需结合 details 中的来源记录。 |
-| `retry_unit_ids` | 必填数组，需要整体重生成本轮 Candidate 的 Unit；必须属于 `unit_ids` 和当前 `planning_unit_ids`，且可通过模型重生成修复，不包含纯复用 Unit。 |
-| `retryable` | 必填布尔值，只表示是否可通过指定 Unit 重生成修复，不表示预算尚有余额。为 true 时 `retry_unit_ids` 必须非空；为 false 时该数组为空。基础设施是否重试另按第 6 项处理。 |
-| `message` | 必填，人可读的问题说明，不承担程序分支判断。 |
-| `details` | 结构化对象，按 code 携带字段路径、正式目标、预期／实际声明、冲突来源或依赖边等必要证据；无额外证据时为 `{}`。不放整份 Candidate、合同正文或原始模型响应。 |
+level：
 
 **已确认：字段由平台判定，不调用模型分类。** 例如模型返回错误 owner，输出固定 `invalid_task_owner`，检查层为 `unit`、原因是 `generation`；在 Unit 编译后发现平台漏注入必需来源，检查层同样可以是 `unit`，但原因是 `platform`。Task ID、错误 owner 等变量放入 details，不拼进 code。原因无法可靠确定时报告归因失败并停止，不猜测为 generation 后反复重生成。
 
@@ -1335,7 +1651,7 @@ Local 向调度器提供有效 Candidate，或本轮失败结果及原始问题�
 | Task ID 碰撞 | 在构建 ID 索引前保存各份任务来源，按已确定 ID／生成范围规则定位违规 Candidate。保留任务不改名；不能确定违规方时停止。显式替换身份与依赖改写规则仍在第 7 项确定，不能在本项假定所有同 ID 都是非法。 |
 | 缺失依赖 | 原始 Candidate 的无效内部引用归对应 Unit；其他 Unit 的 Candidate 缺失只重生成缺失方，不扩散到下游。有效输入及 Candidate 已齐全而平台仍编译出悬空引用，则按平台错误处理。 |
 | DAG 环路 | 根据实际环内边及其来源判断原因。明确违反正式依赖规则的 Candidate 声明归对应 Unit；平台 Unit 图／组装边错误由平台处理。不能仅凭参与环路或处于下游就重生成，无法确定可修复方时停止。 |
-| 正式合同、平台来源注入、验收编译、固定 auth-guard 构造或持久化错误 | 按实际原因归 input／platform／persistence 等类别，不通过 Candidate 模型重生成修复。 |
+| 正式合同、平台来源注入、验收编译、平台投影编译或持久化错误 | 按实际原因归 input／platform／persistence 等类别，不通过 Candidate 模型重生成修复。 |
 
 上述已确认规则不新增通用语义覆盖判断。缺项检查依据明确生成范围；职责冲突依据现有或已确认的稳定身份与归属规则。
 
@@ -1366,27 +1682,29 @@ Global 校验器输出结构化问题；平台归因逻辑补齐 `retry_unit_ids
 }
 ```
 
-全局非模型问题：
+category：
 
-```json
-{
-  "code": "unit_graph_cycle",
-  "level": "global",
-  "unit_ids": [],
-  "task_ids": [],
-  "retry_unit_ids": [],
-  "retryable": false,
-  "category": "platform",
-  "message": "Unit Graph contains a cycle",
-  "details": {}
-}
+```text
+input
+generation
+platform
+infrastructure
+persistence
 ```
+
+核心原则：
+
+```text
+unit_ids != retry_unit_ids
+```
+
+问题涉及某 Unit，不表示它必须重新生成。
 
 ---
 
-# 十四、Validation 分成两层
+# 21. Validation 分层
 
-模型产物仍分 Unit Local 与 Global 两层；生成前门禁、系统／持久化错误在这两层之外处理。下面记录现有实现盘点及已讨论的分层，具体原因与重生成选择以第 5 项已确认规则为准。
+## Pre-generation
 
 ## 第 4 项：现有检查盘点与分层（已讨论，结合第 5 项规则落实）
 
@@ -1409,7 +1727,7 @@ Global 校验器输出结构化问题；平台归因逻辑补齐 `retry_unit_ids
 | --- | --- | --- | --- |
 | P1 | `tasks.py::_build_prerequisite_errors` | RequirementSpec、ProductPlan 已确认；UiManifest 已确认或明确跳过；TechnicalPlan 存在、类型正确且已确认；运行时计划是 TechnicalPlan 投影；workspace 存在。 | Pre-generation，沿用适用性门禁。 |
 | P2 | `tasks.py::_formal_artifact_hash_errors` | 已有 `basedOn` 正式产物的直接上游哈希是否匹配。 | Pre-generation；保留已有产物门禁，不扩展为 Task 输入变化检测或失效传播。 |
-| P3 | `application_template_generation.py::inspect_template_generation_readiness` | 模板 manifest 可读、变体合法、必要步骤及总门禁完成、前后端模板目标有效；main 模板页面入口／菜单条目存在且菜单可解析；auth 模板资源／路由文件及托管标记符合现有要求。 | Pre-generation；异常直接阻断，不生成 shell 修复任务。权限启用时还沿用 P1 中配套 auth 模板检查。 |
+| P3 | `template_state.py::load_template_state / assert_template_context_matches` | Bootstrap 已就绪；TemplateState 结构有效，冻结绑定与当前 revision 和 effective capabilities 一致。业务页面由 Build 创建，平台投影后验收。 | Pre-generation；输入失效直接阻断，不生成模板修复任务。 |
 | P4 | `build_context_resolver.py::resolve_target_build_context / _page_context / _endpoint_context / _page_implementation_contract` | 目标类型受支持，Page／Endpoint／所属 API 合同可解析，页面实施合同存在，Endpoint 绑定实体非空且具有来源类型。 | Pre-generation，按当前目标提供必需输入。 |
 | P5 | `build_context_resolver.py::_endpoint_entity_designs / _assert_endpoint_entities_designed`；`entity_design.py::entity_design_validation_errors` | 相关实体绑定已确认且有效；数据库字段绑定有目标表、实体字段合法、表列非空，已有表操作检查继续保留；static 种子／字段值落在实体字段内且类型、枚举合法。 | Pre-generation；复用绑定校验，不新增 bootstrap 数据源配置复用判断。 |
 | P6 | `entity_design.py::_external_api_design_errors / _external_api_operation_errors / _external_api_connection_errors / entity_design_endpoint_binding_errors` | 上游连接、配置键、Header、HTTP 操作、路径参数和响应映射满足既有绑定规则；operation ID／名称和 Endpoint 关联有效；当前 Endpoint 恰有一个上游操作；实体字段、载荷／分页／错误路径可解析。 | Pre-generation；读取正式绑定事实，不由任务模型补写上游设计。 |
@@ -1428,7 +1746,7 @@ Global 校验器输出结构化问题；平台归因逻辑补齐 `retry_unit_ids
 | V2 | 同上 | 适用任务的 deliverables 非空；各项是对象，含 ID、受支持 kind、target_id、非空 paths／provides；不接受单数 `path` 替代 `paths`。当前四个共享 Unit 有缺省交付物豁免，不能说已有规则要求所有 Task 均非空。 | Unit Local；共享能力已确认的具体声明规则按下文契约衔接。 |
 | V3 | `build_task_planner.py::_task_semantic_errors` | Task 在当前规划范围；Unit 与 owner 对应；普通 Build 不允许数据库变更任务；非 database owner 不得声明 database_scope；backend owner 不得使用 database task_type。 | Unit Local；从当前 UnitGenerationContext 取得允许 Unit／owner，不能用整个 Scope 范围放过错误 Unit。 |
 | V4 | `build_task_planner.py::_database_task_semantic_errors` | 数据库任务类型受支持、database_scope 非空、不修改代码文件、高风险操作有审批要求。 | 保留既有适用检查；本轮普通 Unit 生成先按 V3 排除数据库变更任务，不扩展数据库任务生成。 |
-| V5 | `build_task_planner.py::_template_boundary_errors / _authorization_coverage_errors` | 禁止普通任务越过模板菜单／路由边界，禁止模型生成 route-registry；禁止 AuthConstants 写入；auth 模板当前还禁止 resources.ts／routes.tsx 写入。 | 路径限制放 Unit Local；按已确认 auth-guard 职责为固定资源注入任务开放 resources.ts 精确例外，其他路径仍按现有规则。 |
+| V5 | `build_task_planner.py::_template_boundary_errors / _authorization_coverage_errors` | 普通任务不得修改共享 routes、resources、AuthConstants 或模板基础设施。 | Unit Local；资源注入不享有 Task 例外，平台在全部任务成功后统一投影。 |
 | V6 | `business_acceptance.py::business_acceptance_contract_errors` | 适用任务有交付物，交付物 ID 在 Task 内不重复，kind 受支持且与 owner／Unit 域匹配。 | Unit Local。 |
 | V7 | 同上 | 交付物路径非空（现有 shared_capability 例外）、相对且无 `..`、落在 Task 文件范围；同一 Task 不得将同一路径分配给多个交付物。 | Unit Local。最后一项是现有 Task 内规则，不等于多个 Task 修改同文件就冲突。 |
 | V8 | `business_acceptance.py::_page_deliverable_errors` | 含 frontend.page 交付物的 Task 恰好声明一个此类交付物；覆盖指定页面入口；精确 page_key 存在时 change_scope／allowed_paths 也包含入口。 | Unit Local，读取本页入口事实。当前函数逐 Task 检查，不能宣称已有整个 Page Unit 的交付物唯一性检查。 |
@@ -1445,7 +1763,7 @@ Global 校验器输出结构化问题；平台归因逻辑补齐 `retry_unit_ids
 ### 为已确认契约必须衔接的检查
 
 - **第 3 项原始响应检查需要收紧。** 当前 `_normalize_agent_tasks` 会补 ID／owner、对重复 ID 加后缀、跳过部分无效任务，`merge_exact_duplicate_tasks` 还会合并重复任务。新 Unit 入口须在这些行为掩盖错误前检查原始字段、错误 Unit／owner、空包、重复 ID、未知或跨 Candidate 依赖；不完整 JSON 不进入部分任务编译。此处是已确认契约的实施差异，不是已有完整严格 schema 校验。
-- **共享职责只检查已确定的明确身份。** adapter、资源注入任务和本轮 generation_scope 可以据已确认规则校验；不能把 API owner 唯一性直接推广为所有 capability 的通用唯一性／覆盖检查。
+- **共享职责只检查已确定的明确身份。** adapter 和本轮 generation_scope 可以据已确认规则校验；不能把 API owner 唯一性直接推广为所有 capability 的通用唯一性／覆盖检查。
 - **Endpoint 阶段规则不能冒称已有硬校验。** 当前固定实体 ID 检查不证明四阶段 Task 及依赖完整。若将已确认的逐实体阶段规则实现为确定性检查，应在 Unit Local 对照正式来源类型和本轮职责检查；共享／保留任务组合的依赖仍由 Assembly 处理。
 - **完整 DAG 的 ID 冲突必须在构建 ID 索引前暴露。** Candidate 内重复已经属于 Unit Local；与保留任务或其他 Candidate 冲突需在 Assembly／Global 检查，不能被字典覆盖或自动改名掩盖。具体替换和依赖改写仍在第 7 项讨论。
 
@@ -1472,546 +1790,881 @@ Global 校验器输出结构化问题；平台归因逻辑补齐 `retry_unit_ids
 例如待分析归属：
 
 ```text
+formal artifacts
+TechnicalPlan freshness
+workspace/template readiness
+Unit Skeleton
+confirmed baseline
+Frozen Context
+```
+
+失败直接阻断。
+
+---
+
+## Unit Local
+
+检查：
+
+```text
+raw JSON
 Task schema
-Task 必填字段
-Unit / owner 对应关系
+ID
+owner / unit
+generation requirements
 deliverables
 change_scope
-托管文件
-同 Unit dependencies
-同 Unit cycle
-强规则 Task 是否完整
+managed files
+same-unit dependencies
+same-unit cycles
+retained ownership conflicts
+strong rules
 ```
 
-## Global Validation
-
-判断：
-
-> 多个 Unit Candidate + 上一份 confirmed DAG 中保留的 Tasks 组合以后，是否构成完整有效 DAG。
-
-例如：
+内容错误：
 
 ```text
-跨 Unit dependency
-Endpoint implementation ownership
-共享能力唯一性
-完整 DAG cycle
-required Unit completeness
-历史 DAG compatibility
-全局 capability completeness
+retry current Unit
 ```
 
-### 已确认：文件重叠不等于职责冲突
-
-- 多个 Task 修改同一路径，本身不作为规划失败或 Unit 自动重生成的理由；沿用现有依赖与执行调度规则，在允许的文件范围内串行处理共享文件写入。
-- 多个 Task 重复声明同一个正式 Endpoint 的实现 owner 或其他有确定性唯一归属规则的职责，属于规划错误，应归因到本轮违规 Candidate 后局部重试。
-- 文件重叠不豁免路径越界、平台托管文件限制或依赖循环等既有校验；这些仍按各自规则处理。
-- 本轮不修改 Build 执行调度，也不新增“任意 target_files 重叠即重生成”的全局校验规则。
-
-现有检查及归属见本章第 4 项盘点表，结构化错误与归因按第 5 项已确认设计落实，不重新设计通用语义校验。
-
----
-
-# 十五、Global Validation 的错误处理
-
-Global Validation 失败以后不能默认：
+平台/input 错误：
 
 ```text
-regenerate all
-```
-
-而是：
-
-```text
-Global Validation Issue
-        ↓
-Error Attribution
-        ↓
-能否定位 affected Unit？
-```
-
-如果既能确定需要重生成的本轮 Unit，又确认问题可通过其 Candidate 重生成修复：
-
-```text
-affected_unit_ids = [...]
-retryable = true
-```
-
-则在 Global 修复额度内，仅重新生成选定 Unit，并按第十一章给予各 Unit 新一轮完整的局部尝试额度。其余 Candidate 与历史保留 Tasks 保持不变；这些 Unit 成功或局部耗尽后再次做 Global 完整性检查，Candidate 齐全后重新组装并校验完整 Scope DAG。
-
-错误涉及的 Unit 集合，不一定等于必须重生成的 Unit 集合。若 A 与 B 声明同一 Endpoint 实现，而正式范围已明确 A 是 owner，则只重生成违规的 B；若确有多个违规 Unit，则只选择这些 Unit。不能仅凭“发生冲突”就重生成所有参与方，也不能随意按先完成或后完成选择一方。具体逐类归因规则在第 5 项确定。
-
-当前 `frontend_endpoint_ownership_errors` 已能找出冲突 Task／Unit，`retained_frontend_endpoint_owner_conflict_errors` 已能区分保留 owner 与当前 Candidate；但返回值主要仍是字符串错误。结构化归因、选定 Unit 调度和两层预算是本方案待实施能力，不能把当前 Scope 级重试当作已经支持。
-
-例如：
-
-```text
-保留：
-frontend:api-client
-
-重试：
-page:user-list
-
-原因：
-Page 重复拥有 user.list API implementation
-```
-
-如果是：
-
-```text
-Unit Graph 自身错误
-Contract 冲突
-历史 retained DAG 错误
-持久化失败
-无法通过重新生成 Unit 修复
-```
-
-则：
-
-```text
-retryable = false
-Planning Run Failed
+fail PlanningRun
 ```
 
 ---
 
-# 十六、Planning Run 的失败语义
+## Global
 
-本轮自动修复不能无限进行。
+先检查 Candidate completeness。
 
-如果：
-
-```text
-正式输入、平台构造或编译出现不能通过重生成 Candidate 修复的错误
-```
-
-或者：
-
-```text
-Global Validation 出现 non-retryable issue
-```
-
-或者：
-
-```text
-Global 修复轮数已达上限，仍缺少必需 Candidate 或完整 DAG 校验仍失败
-```
-
-则：
-
-```text
-PlanningRun.status = failed
-```
-
-用户界面：
-
-```text
-任务规划失败
-
-page:user-list
-Global 修复额度已耗尽，仍缺少有效 Candidate
-
-原因：
-……
-
-[重新生成]
-```
-
-系统停止自动工作。
-
-用户点击“重新生成”：
-
-```text
-New PlanningRun
-```
-
-从上一份 confirmed DAG 重新建立基线开始；失败 Run 的 Candidate 全部丢弃，但仍有效的 confirmed Task 继续复用。
-
----
-
-# 十七、Scope Assembly
-
-Scope Assembly 继续承担现有平台核心职责：
-
-```text
-上一份 confirmed DAG 中保留的 Tasks
-+
-当前 PlanningRun 的 Unit Candidates
-        ↓
-Task normalization
-        ↓
-Task registry merge
-        ↓
-Task ID conflict handling
-        ↓
-Cross-Unit dependency compile
-        ↓
-Acceptance compile
-        ↓
-最终 Task Graph
-```
-
-这里的合并结果指累计 DAG：最终 `build_units[unit_id]` 可以登记“历史保留 Tasks + 本轮 Candidate Tasks”。单次 UnitCandidate 仍只包含本轮任务，不要求模型重新输出该 Unit 的历史内容。
-
-重要原则：
-
-> 并行只发生在 Candidate Generation 阶段。
-
-Assembly / Commit 第一版继续：
-
-```text
-single-threaded / serialized
-```
-
-尤其不能让多个 Unit Candidate 并发修改：
-
-```text
-build-task-plan.pending.json
-或
-build-task-plan.json
-```
-
----
-
-# 十八、权威状态写入
-
-整个过程中：
-
-```text
-Unit Candidate
-```
-
-都是 Planning Run 内部状态。
-
-当：
+齐全后：
 
 ```text
 Scope Assembly
-+
-Global Validation
+ID collision
+endpoint ownership
+auth capability provider
+cross-unit dependency
+full DAG cycle
+required-unit completeness
+global contracts
+```
+
+---
+
+# 22. Retry
+
+## Local
+
+```text
+U = 3
+```
+
+表示：
+
+> 一个 Unit、一个 generation round 中，最多三次完整 Candidate generation attempts，含首次。
+
+---
+
+## Global
+
+```text
+G = 2
+```
+
+第一次 Global Check 不消耗额度。
+
+修复时：
+
+```text
+聚合 retry_unit_ids
+↓
+global_repair_round += 1
+↓
+affected Candidate superseded
+↓
+affected Units 开新 generation round
+↓
+每个 Unit 重新获得 Local=3
+```
+
+一个 Unit 极端最多：
+
+```text
+(2 + 1) × 3 = 9
+```
+
+次内容 Generation Sessions。
+
+---
+
+# 23. Generation Session
+
+正确单位：
+
+```text
+1 Unit Local Attempt
 =
-SUCCESS
+1 Unit Generation Session
 ```
 
-以后只允许：
+并不保证：
 
 ```text
-写入 build-task-plan.pending.json
-status = ready
-confirmation_status = pending
+1 Session = 1 HTTP Request
 ```
 
-此时正式 `build-task-plan.json` 保持不变。用户确认时必须重新核对草稿身份和输入未漂移，然后：
+以后如果需要 FrozenContractReader：
 
 ```text
-将确认元数据写入待提升内容
-        ↓
-原子替换 build-task-plan.json
-        ↓
-正式 DAG 的 confirmation_status = confirmed
+Model turn
+↓
+contract read
+↓
+Model turn
+↓
+contract read
+↓
+Model final tasks[]
 ```
 
-确认过程不得重新调用模型或重新编译出另一份 DAG；除确认元数据外，提升内容必须就是用户看到并确认的草稿。原子替换是目标实现要求，当前直接把 pending 内容写入正式路径的方式需要调整。
+仍然属于一个 Local attempt。
 
-存在当前 PlanningRun 的 pending 草稿时，Build 执行必须继续被确认门禁阻止。旧的正式 DAG 只作为复用基线，不能被误认为“本轮已经确认”；确认动作应把 `planning_run_id` 和草稿摘要绑定到正式 DAG，供 Build 启动时核对。
+---
 
-因此：
+# 24. Infrastructure Failure
+
+DAG SDK infrastructure retry：
 
 ```text
-Unit candidate_ready
+0
 ```
 
-绝对不能被其他流程误认为：
+以下直接结束 PlanningRun：
 
 ```text
-应用已经正式拥有该 Unit capability
+HTTP / connection error
+429
+5xx
+authentication/config error
+provider timeout
+Unit session infrastructure timeout
+```
+
+处理：
+
+```text
+PlanningRun.failed
+↓
+stop dispatch
+↓
+best-effort cancel active jobs
+↓
+reject late results
+```
+
+不消耗 Local / Global 内容修复预算。
+
+如果 Provider 正常响应，但：
+
+```text
+finish_reason=length
+JSON incomplete
+Candidate invalid
+```
+
+属于内容失败，消耗 Local attempt。
+
+---
+
+# 25. FrozenContractReader
+
+大合同通过冻结的受控接口读取：
+
+```text
+read_frozen_contract_fragment(
+    ref_id,
+    selector,
+    cursor?
+)
+```
+
+必须限制：
+
+```text
+Unit allowlist
+selector
+read count
+accumulated size
+model turns
+```
+
+不开放：
+
+```text
+任意 workspace read_file
+实时 formal artifact
+其他 Unit Candidate
+```
+
+具体上限由实现阶段压测决定。
+
+---
+
+# 26. Scope Assembly
+
+第一版是：
+
+> **Append-only cumulative DAG**
+
+设：
+
+```text
+B = all confirmed baseline Tasks
+C = current valid Candidate Tasks
+```
+
+则：
+
+```text
+A = B ∪ C
+```
+
+第一版没有正常业务路径删除 confirmed Task。
+
+明确延期：
+
+```text
+confirmed Task replacement
+Task input invalidation propagation
+historical Task automatic removal
 ```
 
 ---
 
-# 十九、进度模型
+# 27. Assembly ID 规则
 
-具体传输属于后续执行层，但必须遵循项目现有 AG-UI 端到端约束，不新增手写 SSE / WebSocket 产品协议。顶层状态现在就应设计好，再映射为 AG-UI lifecycle、custom event 和 state snapshot / delta。
-
-用户进度可以天然映射到：
+registry 建立前必须检查：
 
 ```text
-PlanningRun.phase
+baseline duplicate
+Candidate vs retained
+Candidate vs Candidate
+```
+
+Candidate 撞 retained：
+
+```text
+Candidate invalid / retry attributable Unit
+```
+
+禁止：
+
+```text
+覆盖 retained
+自动 rename
+推断 replacement
+```
+
+---
+
+# 28. Scope Assembly 编译顺序
+
+```text
+deepcopy confirmed Tasks
+↓
+collect current valid Candidates
+↓
+origin / ID validation
+↓
+retained + candidate
+↓
+compile Unit metadata
+↓
+compile cross-unit dependencies
+↓
+compile current capability dependency
+↓
+compile Candidate acceptance
+↓
+rebuild build_units
+↓
+rebuild task_registry
+↓
+rebuild task_graph
+↓
+execution batches
+↓
+Global Validation
+```
+
+retained Task 的业务与历史 acceptance contract 保留。
+
+平台派生的：
+
+```text
+dependency graph
+unit_dependencies
+task_graph
+execution batches
+```
+
+允许针对累计 DAG 重新计算。
+
+---
+
+# 29. PlanningRun
+
+```text
+PlanningRun
+├── planning_run_id
+├── workflow_run_id
+├── thread_id
+├── revision
+├── status
+├── phase
+├── build_execution_scope
+├── input_fingerprint
+├── base_confirmed_plan_digest
+├── required_unit_ids[]
+├── planning_unit_ids[]
+├── global_repair_round
+├── global_repair_limit
+├── global_issues[]
+├── unit_states{}
+├── started_at
+├── updated_at
+└── failure
+```
+
+status：
+
+```text
+active
+failed
+cancelled
+```
+
+phase：
+
+```text
+preparing
+generating_units
+global_check
+assembling
+validating
+persisting_pending
+```
+
+等待确认不属于 PlanningRun。
+
+---
+
+# 30. UnitRunState
+
+```text
+UnitRunState
+├── unit_id
+├── kind
+├── participation
+├── generation_status
+├── generation_round
+├── attempt_in_round
+├── total_attempts
+├── retained_task_ids[]
+├── reusable_capabilities[]
+├── latest_candidate_id
+├── candidate_task_count
+├── current_issues[]
+└── round_history[]
+```
+
+participation：
+
+```text
+reuse_only
+generate_only
+reuse_and_generate
+prerequisite_only
+structural_only
+```
+
+其中：
+
+```text
+frontend:shell
+→ prerequisite_only
+
+application:root / app:integration
+→ structural_only
+```
+
+generation_status：
+
+```text
+not_required
+pending
+generating
+validating
+candidate_ready
+round_exhausted
+aborted
+```
+
+---
+
+# 31. Candidate Supersede
+
+Global 要求重新生成 Unit：
+
+```text
+old Candidate
+valid → superseded
+
+latest_candidate_id = null
+
+generation_round += 1
+attempt_in_round = 0
+generation_status = pending
+```
+
+新一轮失败：
+
+```text
+不得恢复 superseded Candidate
+```
+
+---
+
+# 32. PlanningRun 存储
+
+Backend memory：
+
+```text
+Frozen Context
+full Candidate
+raw model result
+async tasks
+Semaphore
+cancel state
+attempt registry
+```
+
+临时文件：
+
+```text
+.xcodeagent/plans/planning-run.json
+```
+
+只保存轻量：
+
+```text
+identity
+status
+phase
+revision
+Unit states
+rounds
+issues
+diagnostics
+```
+
+Backend 重启后：
+
+```text
+disk Run active
 +
-Unit.status
+runtime missing
+
+→ planning_run_interrupted
+→ failed
 ```
 
-例如：
-
-```text
-正在生成任务
-
-✓ frontend:api-client
-  已生成并校验通过
-
-✓ backend:bootstrap
-  已生成并校验通过
-
-⟳ backend:endpoint:user:list
-  校验未通过，正在重新生成 2/3
-
-● page:user-list
-  正在生成
-```
-
-本轮 Unit 全部成功或局部耗尽后，先展示 Global 完整性检查；若有可重试缺项且尚有额度，继续展示对应 Unit 的下一轮生成。所有必需 Candidate 齐全后：
-
-```text
-正在整合任务关系
-
-✓ Unit 生成完成
-● Scope Assembly
-○ Global Validation
-```
-
-整个 Run 最终失败（不是单轮 Local 耗尽）：
-
-```text
-任务规划未完成
-
-backend:endpoint:user:list
-Global 修复额度已耗尽，仍未产出有效任务包
-
-[重新生成]
-```
+不恢复 Scheduler。
 
 ---
 
-# 二十、第一版明确不做什么
+# 33. 单写者
 
-为了控制范围，目前建议明确不做：
+并发：
 
-### 不做 Task 级独立生成
+```text
+Model Workers
+```
+
+串行：
+
+```text
+PlanningRunController
+```
+
+所有 state transition：
+
+```text
+validate
+↓
+apply
+↓
+revision += 1
+↓
+atomic persist
+↓
+progress snapshot
+```
+
+Worker 不直接写 `planning-run.json`。
+
+---
+
+# 34. Unit Scheduler
 
 默认：
 
 ```text
-1 Unit → 1 model generation request
+concurrency = 3
 ```
 
-第一版用 Unit 级请求降低单次输出规模，但不对 Unit 内 Task 数量设置架构假设；共享 Unit 和多实体 Endpoint Unit 都可能增长。
+Unit Graph dependency **不决定 Candidate generation 顺序**。
 
-但代码设计不要把这个假设写死。
+Unit 并行性完全由平台调度：Scheduler 为 pending model Units 建立 FIFO `UnitAttemptJob` 队列，按配置启动不超过 3 个 Worker；Local Retry 重新排到队尾。模型只生成当前 Unit 的 `tasks`，不得输出 `coordination`、Worker 数量、跨 Unit 顺序或最终执行批次。Task 内的 `can_run_in_parallel` / `parallel_reason` 只是当前 Candidate 合同字段，最终批次仍由 Scope 编译器结合依赖和文件冲突生成。deterministic Unit 不占模型并发槽，按平台规则在 Worker Pool 外串行完成。
 
-未来可以扩展：
+调度单位：
 
 ```text
-Unit
-  ↓
-Unit Planner
-  ↓
-Task Outline
-  ↓
-Task-level fan-out
+UnitAttemptJob
+```
+
+失败后下一 Local attempt 重新进入队尾，避免一个快速失败 Unit 独占 Worker。
+
+Generation round 的所有 Unit 到达：
+
+```text
+candidate_ready
+OR
+round_exhausted
+```
+
+后才通过 Barrier。
+
+---
+
+# 35. Attempt Identity
+
+```text
+AttemptIdentity
+├── planning_run_id
+├── unit_id
+├── generation_round
+├── attempt_in_round
+└── attempt_id
+
+UnitAttemptJob
+├── identity: AttemptIdentity
+├── context: UnitGenerationContext
+└── policy: UnitGenerationPolicy
+
+UnitGenerationAttemptResult
+├── identity: AttemptIdentity
+├── input_fingerprint
+├── raw_response
+├── tasks[]
+├── validation_issues[]
+└── generation_metadata
+```
+
+平台在 dispatch 前通过 `AttemptIdentity.allocate()` 分配独立 `attempt-<uuid>`；
+Worker 必须回传原身份，反序列化缺少 `attempt_id` 时拒绝输入，不补发 ID。
+`candidate_id` 使用独立的 `candidate-<uuid>`，Task ID 仍由模型提供，三者不可互相代替。
+Job 构造时必须校验 identity 与 Context 的 Run/Unit 一致；Candidate 与 Result 只保存嵌套 identity，
+不保留第二套可冲突的平铺身份字段。
+
+Context、Job、Result、Candidate 及其 `ValidationIssue` 为不可变快照；Issue 的 ID 序列为 tuple，
+details 递归只读。JSON 导出仍使用数组和对象，导出副本可编辑但不改变原快照；复制更新重新验证契约。
+Issue 的消息和详情仍不参与去重身份或重试路由。
+
+结果写状态前必须验证：
+
+```text
+Run still active
+AND
+attempt_id still expected
+```
+
+否则：
+
+```text
+discard
+```
+
+适用于：
+
+```text
+Cancel late response
+Global superseded response
+old generation round result
+fatal Run result
 ```
 
 ---
 
-### 不做跨 Planning Run Candidate 缓存
+# 36. PendingPlan
 
-失败 Run Candidate：
+路径：
 
 ```text
-不复用
+.xcodeagent/plans/build-task-plan.pending.json
+```
+
+身份：
+
+```text
+DraftIdentity
+├── planning_run_id
+├── draft_digest
+├── base_confirmed_plan_digest
+├── input_fingerprint
+├── build_execution_scope
+└── created_at
+```
+
+`draft_digest` 对去除自身字段后的 canonical PendingPlan 计算。
+
+Pending 成功写入后：
+
+```text
+PlanningRun.status = awaiting_confirmation
+PendingPlan 成为唯一待确认权威
+PlanningRun 仅保留轻量投影，不再继续执行
 ```
 
 ---
 
-### 不做 Shared Unit Versioning
+# 37. Confirm
 
-基于外部前提：
+请求必须带：
 
 ```text
-同一项目不允许两个 Planning Scope 并发
+action = confirm
+planning_run_id
+draft_digest
 ```
 
-暂时没有必要。若上游未能保证该约束，本设计不能自行推导出并发安全。
+Backend：
+
+```text
+load current Pending
+↓
+request identity
+↓
+Pending self digest
+↓
+base Confirmed digest
+↓
+input freshness
+↓
+DAG gate
+↓
+construct ConfirmedPlan
+↓
+atomic formal replace
+↓
+delete Pending
+```
+
+Formal 保存：
+
+```text
+confirmed_from
+├── planning_run_id
+└── draft_digest
+```
+
+用于重复确认和 crash recovery。
 
 ---
 
-### 不做 Task 前置输入与失效专项
+# 38. Abandon / Regenerate
 
-上游产物仍在调整，本轮暂不新增逐 Task 输入依赖表、正式输入变化比较、历史任务精确失效或自动替换传播。生成范围与复用仍基于既有明确规则；相关专项不阻塞 Unit 生成、局部校验、有限并发和局部重试设计。
+Abandon：
 
-既有正式产物有效性检查、输入冻结、草稿确认一致性检查和 Build 门禁不删除、不绕过。
+```text
+verify identity
+↓
+persist abandoned terminal marker
+↓
+delete matching Pending
+↓
+delete matching PlanningRun projection
+↓
+end current Workflow execution and release lifecycle/resource/session input locks
+↓
+Formal unchanged
+```
+
+这里的“结束”只指当前 Workflow execution，不删除或关闭聊天会话，也不清理聊天记录。
+
+Regenerate：
+
+```text
+receive structured action=regenerate + exact DraftIdentity
+↓
+verify and delete matching Pending (commit point)
+↓
+load current ConfirmedPlan
+↓
+return to prepare_build_tasks
+↓
+create new PlanningRun with a new planning_run_id
+↓
+generate + assemble + Global Validate
+↓
+success: write new Pending and await confirmation
+failure: keep failure state; do not restore old Pending
+```
+
+旧 Candidate / Pending 不恢复。
+
+`regenerate` 是 AG-UI 结构化 Planning result 动作，不是普通自然语言请求，也不复用 Unit Local Retry 或 Global Repair 的内部动作。生产接入必须同时更新 request normalization、Graph resume routing、lifecycle、前端类型与确认卡。
+
+## 38.1 同一应用全局互斥
+
+PlanningRun 和 PendingPlan 使用工作区唯一存储路径，因此互斥边界是 application/workspace，而不是 page 或 Unit：
+
+```text
+no active PlanningRun
+AND
+no PendingPlan awaiting confirmation
+```
+
+满足上述条件后才能开始新的 DAG generation。不同 page、endpoint、data_source 或 application Scope 不得同时处于 generating 或 awaiting_confirmation；新请求必须被拒绝或引导用户先 Cancel/Abandon 当前运行，不能采用 last-writer-wins 覆盖。
 
 ---
 
-### 不改 Build 执行调度
+# 39. Cancel
 
-本轮范围仅为：
+Cancel 只针对 active PlanningRun。
 
-```text
-任务规划 / DAG Generation
-```
+前端只在当前服务端权威 active Workflow/PlanningRun 的运行卡上显示“取消运行”；历史 running 快照没有取消权。当前浏览会话不是 owner 时输入区保持只读，但仍可打开 owner 对话查看运行。刷新后若本地 SSE 句柄已丢失，前端使用 `cancelRunId` 调用同一 `/workflow/run` 控制路径，并在后端完成取消后重新读取 lifecycle；不能只把本地 UI 改成 stopped。
 
-不涉及：
+行为：
 
 ```text
-Build Task execution scheduling
+stop dispatch
+stop Local requeue
+best-effort cancel active sessions
+PlanningRun.cancelled
+reject late results
 ```
+
+Pending 阶段对应的是：
+
+```text
+Abandon
+```
+
+二者不得混淆。
+
+待确认阶段的 UI 固定提供三个身份绑定动作：`confirm`、`abandon`、`regenerate`。此时不显示 active-run Cancel；`abandon` 才是结束待确认 Workflow execution 的动作，`regenerate` 明示先丢弃旧 Pending 且失败不恢复。
+
+取消粒度固定为 Workflow/PlanningRun 级：用户不能单独取消某个 Unit。Unit 级 `aborted` 只是整轮取消传播后的内部结果，不是产品动作。
+
+# 39.1 页面刷新与运行保持
+
+第一版只恢复 PlanningRun/Pending/ConfirmedPlan 的服务端权威状态投影，不保证页面刷新后原 DAG 请求继续执行，也不从轻量 `planning-run.json` 恢复 Candidate 或 Scheduler。`planningRefresh` 是 GET 时计算、不会推进持久化 lifecycle revision 的弱投影：解析顺序以唯一 Pending 文件和权威 Abandon 标记为先，再看进程内 active run、PlanningRun 终态和 ConfirmedPlan；终态与 DraftIdentity 校验必须否决迟到结果。没有 Pending 时绝不能从聊天历史、旧确认卡或旧 execution 复活待确认状态。页面刷新、应用切换、Electron 退出或其他传输断开均允许使 active Workflow/PlanningRun 结束。
+
+如果未来要求普通页面刷新后继续运行，必须先把 Workflow execution 从 SSE 响应协程中解耦，并设计后台任务所有权、事件重放/重新订阅、运行终止判定和跨进程恢复；该能力明确延期，不属于本轮 Regenerate 接入。
 
 ---
 
-# 二十一、建议的项目内分析顺序
+# 40. Progress
 
-以下保留指导性计划的六个 Step，作为设计与后续实施的对应索引，不代表当前讨论要从 Step 1 重开。当前进度以文首十项议题表为准，下一步进入第 7 项 Scope Assembly。
-
-## Step 1：Validation Rule Inventory
-
-把所有现有校验列出来：
+继续使用：
 
 ```text
-validation rule
-当前代码位置
-发生时机
-当前错误格式
+prepare_build_tasks.progress
 ```
 
-然后分类：
+发送完整 Snapshot。
 
 ```text
-Pre-generation
-Unit Local
-Global
-System / Persistence
+DagGenerationSnapshot
+├── schemaVersion
+├── planningRunId
+├── revision
+├── status
+├── phase
+├── globalRepairRound
+├── globalRepairLimit
+├── units[]
+├── globalIssues[]
+├── summary
+└── artifacts[]
 ```
 
-现有规则盘点已列入第 4 项；后续按已讨论分层及第 5 项归因规则实施。
+UI 不展示虚假百分比。
 
----
-
-## Step 2：UnitGenerationContext Inventory
-
-逐类 Unit 分析：
+推荐：
 
 ```text
-backend:bootstrap
+3 / 5 Unit 已就绪
+
 frontend:api-client
-frontend:auth-guard
-frontend:shell
-backend:endpoint:*
-frontend:data:*
-page:*
-```
+✓ 保留 2，新增 1
 
-回答：
+page:user-list
+⟳ 校验中 · 2/3
 
-```text
-独立生成需要什么输入？
-哪些输入目前在 Scope Context？
-哪些需要重新投影？
-哪些可以确定性计算？
-哪些仍需模型判断？
-```
-
-最终定义统一的：
-
-```text
-UnitGenerationContext
+Global Repair
+1 / 2
 ```
 
 ---
 
-## Step 3：Unit Generation Strategy
+# 41. Build 读取契约
 
-然后再分析不同 Unit 是否需要：
+Build：
 
 ```text
-rule-based
-rule-constrained model
-free-form model planning
-reuse-only
+ONLY
+build-task-plan.json
+AND
+confirmation_status == confirmed
 ```
 
-这一阶段重点尤其是：
+绝不能读取：
 
 ```text
-frontend:shell
-frontend:api-client
-frontend:auth-guard
-backend:bootstrap
+PendingPlan
+planning-run.json
+checkpoint candidate
+```
+
+`frontend:auth-guard` 增加的 deterministic executor 是局部 Task execution capability，不改变 Build Scheduler 的整体任务依赖和 batch 模型。
+
+---
+
+# 42. 第一版明确延期
+
+```text
+Task-level generation / retry
+Cross-run Candidate cache
+Task input hash
+自动失效传播
+Confirmed Task replacement
+Shared Unit multi-Run versioning
+General Task-level cross-unit dependency precision
+Build Scheduler general redesign
+Semantic review model
+frontend:data 全面重构
+backend:bootstrap 多数据源专项
+页面刷新后的后台脱离执行、事件重放或 Candidate 断点续跑
+Unit 级用户取消
 ```
 
 ---
 
-## Step 4：Structured Issue Contract
+# 43. 最终架构原则
 
-把现在字符串：
-
-```text
-errors[]
-```
-
-改造成统一 Issue Contract。
-
-已确认的关键字段包括：
-
-```text
-code
-level
-category
-unit_ids
-task_ids
-retry_unit_ids
-retryable
-```
-
-完整字段与调度约束见第 5 项；涉及 Unit 与重生成 Unit 不混用。
-
----
-
-## Step 5：PlanningRun / Unit State Model
-
-结合现有持久化方式决定：
-
-```text
-哪些状态只存在内存？
-哪些需要持久化？
-前端刷新后是否需要恢复进度？
-```
-
-再决定最终存储结构。
-
----
-
-## Step 6：Unit Scheduler
-
-到这一步才进入：
-
-```text
-线程 / asyncio
-Semaphore
-并发数
-Timeout
-Cancellation
-模型 SDK
-```
-
-此时前面的领域边界应该已经稳定。
-
----
-
-# 二十二、当前架构基线总结
-
-最终可以暂时用这一句话作为本次改造的 Architecture Baseline：
-
-> **保留现有 Unit Graph、Task DAG 和 Scope 原子提交机制，将任务规划从 Scope 级 combined generation 重构为 Unit 级独立 Candidate generation。每个 PlanningRun 以上一份 confirmed DAG 为只读基线：`required_unit_ids` 描述当前 Scope 的完整 Unit 需求，平台根据 confirmed Task / capability / endpoint owner 等复用事实计算真正需要生成的 `planning_unit_ids`。UnitCandidate 只包含本轮贡献，Unit 是本轮最小的生成、局部校验和自动重试边界；多个 Unit 可以在稳定 Contract 输入下有限并行生成。所有 Unit Candidate 仅在当前 Run 内有效；每轮 Unit 成功或局部耗尽后先由 Global 检查必需 Candidate 是否齐全，齐全后才与 confirmed baseline 统一进行 Scope Assembly 和完整 DAG 校验。Local 耗尽只标记该 Unit 本轮失败，可归因、可由模型修复的缺项或冲突在 Global 独立额度内触发相关 Unit 新一轮生成，并恢复完整 Local 额度；其他有效 Candidate 和历史 Tasks 保持不变。完整 Scope DAG 校验通过后只写 pending 草稿，正式 `build-task-plan.json` 保持不变；用户确认其看到的草稿后，平台才将同一 DAG 原子提升为新的 confirmed DAG。Global 修复耗尽仍未通过或出现不可通过模型修复的问题时终止 PlanningRun；最终失败后由用户主动开启新的 PlanningRun，并再次从上一份 confirmed DAG 建立基线。**
-
-这份基线之后所有详细设计，都应该能够回答一个问题：
-
-> **它是在强化这个边界，还是又把 Unit 和 Scope 重新耦合到一起？**
-
-如果后续某个设计导致：
-
-```text
-Unit A 错误
-→ 必须重新生成 A/B/C/D
-```
-
-就应该重新检查是不是又引入了不必要的跨 Unit 生成耦合。
+> 每个 PlanningRun 以上一份 confirmed DAG 为唯一只读历史基线。平台根据 Scope、Unit Skeleton、正式输入及确定性 ReuseFacts 计算本轮 Unit generation requirements。`frontend:shell` 仅作为模板前置能力存在，不生成 Task；`frontend:auth-guard` 根据当前 authorization resource fingerprint 判断 reuse、workspace satisfied 或 deterministic Candidate，并通过确定性 executor 物化 `resources.ts`。其他需生成 Unit 只依赖冻结的 UnitGenerationContext 独立产生 Candidate。Unit 是 Local generation / validation / retry 边界；Local 每轮最多 3 次，Global 最多 2 轮，只重新打开明确归因的 Unit。有效 Candidate 与所有 confirmed Tasks 通过 append-only Scope Assembly 组成累计 DAG。完整 DAG 通过 Global Validation 后只写 PendingPlan，用户确认精确 DraftIdentity 后才原子提升为正式 DAG。模型 infrastructure retry 为 0；并发、取消和 supersede 通过 PlanningRun 状态与 AttemptIdentity 保证结果隔离。Build 永远只消费 confirmed DAG。

@@ -115,11 +115,17 @@ export function createIterationVersion(
   }
 }
 
-/** 把历史版本内容恢复为新的顺序版本，保留单向版本链和完整回退记录。 */
+/**
+ * 把历史版本内容恢复为新的顺序版本，保留单向版本链和完整回退记录。
+ * 版本号在链头（currentHead）上递增，父节点是链头而非历史版本；
+ * 内容基线通过 snapshot（planning 继承源）与 restoredFromVersionId 生效；
+ * lifecycle 由调用方传入（通常是重置为 collecting_requirement），不能沿用历史版本的完成态。
+ */
 export function createRollbackVersion(
   applicationId: string,
   currentHead: ApplicationVersion,
   restoredVersion: ApplicationVersion,
+  lifecycle: ApplicationLifecycle,
   now: number
 ): ApplicationVersion {
   const { major, minor, versionLabel } = bumpVersionLabel(currentHead)
@@ -132,7 +138,7 @@ export function createRollbackVersion(
     parentVersionId: currentHead.id,
     restoredFromVersionId: restoredVersion.id,
     createdAt: now,
-    lifecycle: restoredVersion.lifecycle,
+    lifecycle,
     snapshot: restoredVersion.snapshot
   }
 }

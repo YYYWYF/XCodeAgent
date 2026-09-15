@@ -42,14 +42,14 @@ function buildDefinitions(groups: TestCaseGroup[]): TestCaseDefinition[] {
         groupLabel: group.label,
         title: `${group.label}核心路径`,
         scenario: group.label,
-        preconditions: ['需求文档和项目计划已确认', '应用测试环境已启动'],
+        preconditions: ['设计产物和技术规划方案已确认', '应用测试环境已启动'],
         steps: [
           `进入“${group.label}”业务场景`,
           `执行第 ${sequence} 条验证操作`,
           '记录页面反馈与接口响应'
         ],
         testScript: `runCase('${group.id}-${sequence}'); expectBusinessRule();`,
-        expected: '页面反馈符合需求文档，接口返回结构和业务状态正确。'
+        expected: '页面反馈符合需求规格说明书，接口返回结构和业务状态正确。'
       }
     })
   })

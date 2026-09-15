@@ -6,6 +6,7 @@ import type {
   WorkspaceCodeChangeSet
 } from '../../typings'
 import type { WorkbenchPhase } from '../../workbenchPhase'
+import type { FormalArtifactKey } from '../../initializationPlanning'
 
 export type AgentChatMessage = {
   id: number
@@ -40,8 +41,13 @@ export type AgentChatMessage = {
   createdAt: number
 }
 
-/** 需求分析/项目计划阶段右侧「文档」的产物 key，作为工作区 tab 使用。 */
-export type WorkspaceDocKey = 'requirement-spec' | 'project-plan'
+/** 设计/计划阶段的正式产物 key，作为工作区 tab 与审阅面板身份使用。 */
+export type WorkspaceDocKey =
+  | 'requirement-spec'
+  | 'product-plan'
+  | 'ui-designs'
+  | 'technical-plan'
+  | 'project-plan'
 
 export type RightPanelState =
   | { type: 'preview'; requestKey?: string; url?: string }
@@ -52,6 +58,7 @@ export type RightPanelState =
     }
   | { type: 'process' }
   | { type: 'doc'; docKey?: WorkspaceDocKey }
+  | { type: 'planning-artifact'; artifactKey: FormalArtifactKey }
   | { type: 'source' }
   /** 开发阶段的交付清单；仅用于选择当前 Workflow 目标，不承载写入权限。 */
   | { type: 'development-artifacts' }

@@ -15,6 +15,8 @@ import { TEST_CASE_BLUEPRINTS, type TestCaseDefect } from '../../testCasePrepara
 import { nextLifecycleRevision } from './revision'
 import {
   MOCK_APPLICATION_PREVIEW_URL,
+  stepRecord,
+  streamCodeFrames,
   addedFileChange,
   delay,
   makeBaseLifecycle,
@@ -344,14 +346,7 @@ export async function replayApplicationTesting(
       results: Record<string, 'pending' | 'running' | 'passed' | 'failed'>
     }
   ): Promise<ProcessStepRecord> => {
-    const initialStep: ProcessStepRecord = {
-      id: `case-generation-check-${testCase.id}`,
-      kind: 'workflow',
-      status: 'running',
-      title: '检查用例生成情况',
-      detail: '正在检查当前用例是否已由后台生成完成。',
-      sequence: 1
-    }
+    const initialStep: ProcessStepRecord = stepRecord(`case-generation-check-${testCase.id}`, '检查用例生成情况', 'running', 1, '正在检查当前用例是否已由后台生成完成。')
     // 生成检查是当前用例 Workflow 的第一个节点，不能另起“测试验证工作流”。
     // 这样检查、授权和执行始终留在同一张用例工作流卡里。
     if (readGenerationStatus(testCase.id) !== 'waiting') {
@@ -492,22 +487,8 @@ export async function replayApplicationTesting(
 
   // 第一条 Workflow：启动与非功能检查，不与具体业务用例混在一起；续跑用例确认时不重复执行。
   const nonFunctionalSteps: ProcessStepRecord[] = [
-    {
-      id: 'startup-test',
-      kind: 'workflow',
-      status: 'running',
-      title: '启动测试',
-      detail: '启动应用并检查主路由、页面入口和基础运行环境。',
-      sequence: 1
-    },
-    {
-      id: 'non-functional-test',
-      kind: 'workflow',
-      status: 'pending',
-      title: '非功能测试',
-      detail: '检查异常反馈、响应稳定性和恢复路径。',
-      sequence: 2
-    }
+    stepRecord('startup-test', '启动测试', 'running', 1, '启动应用并检查主路由、页面入口和基础运行环境。'),
+    stepRecord('non-functional-test', '非功能测试', 'pending', 2, '检查异常反馈、响应稳定性和恢复路径。')
   ]
   if (!resume) {
     const nonFunctionalLifecycle = emitLifecycle({
@@ -662,14 +643,7 @@ export async function replayApplicationTesting(
       withProcessStepTotal(
         [
           generationCheckStep,
-          {
-            id: `case-confirm-${testCase.id}`,
-            kind: 'workflow',
-            status: 'requires_user_input',
-            title: '确认执行用例',
-            detail: '请查看当前用例内容，并确认是否执行。',
-            sequence: 2
-          }
+          stepRecord(`case-confirm-${testCase.id}`, '确认执行用例', 'requires_user_input', 2, '请查看当前用例内容，并确认是否执行。')
         ],
         2
       )
@@ -692,30 +666,9 @@ export async function replayApplicationTesting(
   }
 
   const caseWorkflowSteps: ProcessStepRecord[] = [
-    {
-      id: `case-confirm-${currentCase.id}`,
-      kind: 'workflow',
-      status: 'completed',
-      title: '确认执行用例',
-      detail: '用户已确认执行当前用例。',
-      sequence: 1
-    },
-    {
-      id: `case-test-${currentCase.id}`,
-      kind: 'workflow',
-      status: 'running',
-      title: `执行用例：${currentCase.title}`,
-      detail: `正在执行 ${currentCase.id.toUpperCase()}。`,
-      sequence: 2
-    },
-    {
-      id: `case-defects-${currentCase.id}`,
-      kind: 'workflow',
-      status: 'pending',
-      title: '生成缺陷清单',
-      detail: '等待测试脚本执行完成后汇总缺陷。',
-      sequence: 3
-    }
+    stepRecord(`case-confirm-${currentCase.id}`, '确认执行用例', 'completed', 1, '用户已确认执行当前用例。'),
+    stepRecord(`case-test-${currentCase.id}`, `执行用例：${currentCase.title}`, 'running', 2, `正在执行 ${currentCase.id.toUpperCase()}。`),
+    stepRecord(`case-defects-${currentCase.id}`, '生成缺陷清单', 'pending', 3, '等待测试脚本执行完成后汇总缺陷。')
   ]
   caseResults[currentCase.id] = 'running'
   emitCaseWorkflow(currentCase, completed, { ...caseResults }, { ...defects }, 'running')
@@ -758,14 +711,7 @@ export async function replayApplicationTesting(
       ...defect,
       status: 'repairing'
     }))
-    caseWorkflowSteps.push({
-      id: `case-repair-${currentCase.id}`,
-      kind: 'workflow',
-      status: 'running',
-      title: `修复缺陷（${scriptedDefects.length}）`,
-      detail: '正在调度开发返修节点并逐项处理缺陷。',
-      sequence: 4
-    })
+    caseWorkflowSteps.push(stepRecord(`case-repair-${currentCase.id}`, `修复缺陷（${scriptedDefects.length}）`, 'running', 4, '正在调度开发返修节点并逐项处理缺陷。'))
     publishWorkflowSteps([...caseWorkflowSteps])
     emitCaseWorkflow(currentCase, completed, { ...caseResults }, { ...defects }, 'running')
     await delay(520)
@@ -779,14 +725,7 @@ export async function replayApplicationTesting(
       status: 'completed',
       detail: `${scriptedDefects.length} 条缺陷均已修复，准备回归验证。`
     }
-    caseWorkflowSteps.push({
-      id: `case-retest-${currentCase.id}`,
-      kind: 'workflow',
-      status: 'running',
-      title: '回归验证',
-      detail: '重新执行当前用例，确认缺陷关闭且未引入回归问题。',
-      sequence: 5
-    })
+    caseWorkflowSteps.push(stepRecord(`case-retest-${currentCase.id}`, '回归验证', 'running', 5, '重新执行当前用例，确认缺陷关闭且未引入回归问题。'))
     publishWorkflowSteps([...caseWorkflowSteps])
     emitCaseWorkflow(currentCase, completed, { ...caseResults }, { ...defects }, 'running')
     await delay(420)
@@ -928,27 +867,13 @@ export async function replayCodeReview(
     emit('lint_check', 'running', reviewRunning)
     await delay(1000)
     emit('lint_check', 'completed', reviewRunning)
-    pushStep({
-      id: 'step-lint',
-      kind: 'workflow',
-      status: 'completed',
-      title: '代码规范检测',
-      detail: '命名约定、模块结构与重复代码扫描通过。',
-      sequence: 1
-    })
+    pushStep(stepRecord('step-lint', '代码规范检测', 'completed', 1, '命名约定、模块结构与重复代码扫描通过。'))
 
     // 安全扫描
     emit('security_scan', 'running', reviewRunning)
     await delay(1000)
     emit('security_scan', 'completed', reviewRunning)
-    pushStep({
-      id: 'step-security',
-      kind: 'workflow',
-      status: 'completed',
-      title: '安全扫描',
-      detail: '未发现硬编码密钥、越权访问与注入风险。',
-      sequence: 2
-    })
+    pushStep(stepRecord('step-security', '安全扫描', 'completed', 2, '未发现硬编码密钥、越权访问与注入风险。'))
 
     // 健康度评估
     emit('health_check', 'running', reviewRunning)
@@ -976,26 +901,12 @@ export async function replayCodeReview(
       content: report,
       sourceTool: 'review_agent'
     }
-    const reportLines = report.split('\n')
-    for (let visible = 12; ; visible += 12) {
-      await delay(260)
+    await streamCodeFrames([reportTarget], { linesPerFrame: 12, intervalMs: 260 }, (_finished, partial) => {
       emit('code_review', 'running', reviewRunning, {
-        codeChanges: singleFileChangeSet(
-          runId,
-          reportTarget,
-          reportLines.slice(0, visible).join('\n')
-        )
+        codeChanges: singleFileChangeSet(runId, partial.target, partial.content)
       })
-      if (visible >= reportLines.length) break
-    }
-    pushStep({
-      id: 'step-report',
-      kind: 'workflow',
-      status: 'completed',
-      title: '生成代码审查报告',
-      detail: '报告已生成，等待确认写入工作区。',
-      sequence: 4
     })
+    pushStep(stepRecord('step-report', '生成代码审查报告', 'completed', 4, '报告已生成，等待确认写入工作区。'))
     const reviewPending = {
       id: `pi-code-review-file-${Date.now()}`,
       type: 'file_acceptance',

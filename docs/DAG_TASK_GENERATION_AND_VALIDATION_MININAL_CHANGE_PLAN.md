@@ -12,6 +12,20 @@
 TechnicalPlan Endpoint 契约和当前 Endpoint API 设计。运行时的 `project_plan` 是由当前 TechnicalPlan 和上游产物物化出的上下文投影，
 不是新的可编辑正式产物。本方案中的“上游计划”均按此边界理解。
 
+### 1.1 当前已确认的 Planning result 生命周期决策
+
+以下决策覆盖本文后续章节中与旧单文件 pending 方案或旧确认动作集合冲突的描述：
+
+1. 同一应用任一时刻只允许存在一个 active DAG PlanningRun 或一个待确认 PendingPlan；不同页面、Endpoint 或其他 Scope 不得并行处于 DAG 生成或待确认状态。
+2. 生成成功只写 `.xcodeagent/plans/build-task-plan.pending.json`；正式 `.xcodeagent/plans/build-task-plan.json` 在用户确认前保持不变。
+3. `confirm` 必须精确确认当前最新 Pending 的 `planning_run_id + draft_digest`，成功后原子提升为 Formal、删除匹配 Pending，并由 `prepare_build_tasks` 的既有路由进入 Build。
+4. `abandon` 精确删除当前 Pending、结束本次 Workflow execution 并释放 lifecycle/resource/session 输入门禁；它不删除聊天记录，也不改写已有 Formal。
+5. 新增结构化 `regenerate` 动作。它先消费并删除精确匹配的旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun；成功后写入新的 Pending 并再次等待确认。新生成失败时旧 Pending 不恢复。
+6. 用户取消只提供 Workflow/PlanningRun 级能力，不提供 Unit 级取消。取消 active PlanningRun 时停止派发、取消活动 Unit worker、标记 Run cancelled 并拒收晚到结果。
+7. 页面刷新只恢复权威状态投影，不承诺原 DAG 生成请求继续运行。将 Workflow 从 SSE 请求中解耦、支持重新订阅或断点续跑属于较大架构调整，本期明确延期；应用关闭、应用切换和其他断连同样允许结束当前生成运行。
+8. Pending 归属页面对话 `sessionId`，不归属某一次 Workflow Run；同一对话的 Regenerate 可以产生多个 Run，但新 Pending 必须继承原 `owner_session_id`。
+9. 删除 owner 对话时的二次确认、取消生成或放弃 Pending 联动本期不实施，作为独立后续功能。
+
 ## 2. 调整边界
 
 ### 2.1 本期处理范围
@@ -26,26 +40,30 @@ TechnicalPlan Endpoint 契约和当前 Endpoint API 设计。运行时的 `proje
 6. 增加轻量级 DAG 用户确认；
 7. 增加最小的 DAG scope 和 confirmation 字段；
 8. 增加“最新任务规划已经确认才能进入 Build”的门禁；
-9. 将当前正式产物、模板 manifest 和范围内详细设计作为 DAG 的显式前置条件；
+9. 将当前正式产物、TemplateState 和范围内详细设计作为 DAG 的显式前置条件；
 10. 将平台设计的任务边界校验失败交给模型自动重生成，不把任务拆分规则交给用户人工修正。
 11. 按稳定的 `api_contract_id + endpoint_id` 校验前端 Endpoint 唯一实现归属，禁止不同 API 模块重复封装同一接口。
+12. 增加 lifecycle/hash 绑定的结构化 `regenerate`，消费旧 Pending 后回到 `prepare_build_tasks` 创建新 PlanningRun。
+13. 对同一应用的 DAG Planning/Pending 阶段实施全局互斥，不允许不同 Scope 同时生成或等待确认。
 
 ### 2.2 本期明确不处理
 
-- 不升级 `build-dag.v3`；
+- 使用当前 `build-dag.v4`，并持久化 `template_context`；
 - 不拆分新的 LangGraph 节点或规划子图；
 - 不重新设计 Unit Graph、Task Graph、owner 或 Scheduler；
 - 不重新设计 `target_files`、`allowed_paths` 和 `change_scope` 的字段结构；保留当前将 `change_scope.path` 投影到
   `target_files`、并以 `target_files` 作为 `allowed_paths` 兜底的确定性归一化，不把三个字段合并成单一字段；
 - 不清理现有兼容字段和命名风格；
 - 不改 RequirementSpec、ProductPlan、UiDesign、TechnicalPlan 或模板初始化本身的正式产物协议；
-- 不新增独立的“新增页面初始化”Graph 节点，新增页面继续复用现有模板初始化生命周期和 manifest 门禁；
+- 新增业务页面由 Build 实现；二次 TechnicalPlan 确认不触发首次 Bootstrap 或预建前端文件；
 - 不在 Normal Build 中新增 database-owner 任务或 `database:*` Unit，数据库操作继续由实体确认阶段负责；
 - 不增加基于自然语言相似度的任务判断；除完全重复任务合并外，只按稳定 Endpoint ID 做唯一实现归属校验；
 - 不维护 DAG revision 或历史版本，每次只保存最新任务规划；
 - 不增加 DAG 根 fingerprint；现有 Unit 级 `input_fingerprint` 保持不变，不将其误删或改名；
 - 不增加独立单元测试任务；
 - 不将详细设计中的业务验收标准复制到 DAG。
+- 不实现页面刷新后的后台脱离执行、SSE 重连或 Candidate 断点续跑；刷新后只按磁盘和进程内事实恢复状态投影。
+- 不提供用户可操作的 Unit 级取消。
 
 ## 3. 当前流程与调整后流程
 
@@ -77,7 +95,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A["检查正式产物、模板 manifest 和范围前置条件"] --> B["生成 Unit 骨架和 BuildContext"]
+    A["检查正式产物、TemplateState 和范围前置条件"] --> B["生成 Unit 骨架和 BuildContext"]
     B --> C["模型生成候选任务"]
     C --> D["结构归一化 owner、path、operation 和 scope"]
     D --> E["合并完全重复任务"]
@@ -85,11 +103,12 @@ flowchart LR
     F --> G["校验 Endpoint 唯一归属并编译 DAG"]
     G --> V{"DAG 是否有效"}
     V -- "否" --> H["回灌错误并自动重生成候选任务"]
-    V -- "是" --> I["保存 pending build-task-plan.json"]
+    V -- "是" --> I["保存 build-task-plan.pending.json"]
     I --> J{"用户确认"}
-    J -- "修改选中任务" --> D
-    J -- "全量重新生成" --> C
-    J -- "确认" --> K["标记最新任务规划为 confirmed"]
+    J -- "放弃" --> X["删除 Pending 并结束 execution"]
+    J -- "重新生成" --> R["消费 Pending 并创建新 PlanningRun"]
+    R --> B
+    J -- "确认" --> K["原子提升 Pending 为 build-task-plan.json"]
     K --> L["进入 Build"]
 ```
 
@@ -122,8 +141,8 @@ AG-UI 结构化动作恢复，并使用独立的 `build_task_plan_confirmation` 
 - ProductPlan 已确认；
 - UiManifest 已确认或明确跳过；
 - 当前 TechnicalPlan 的 `artifact_type=technical-plan` 且已确认；
-- 模板初始化完成，`.xcodeagent/template-generation-manifest.json` 的完成门禁通过；
-- 当前范围需要的 PageImplementationContract、Endpoint 契约和 Endpoint API 设计均已确认。
+- Bootstrap 已完成，Engine-owned `.xcodeagent/template-state.json` 有效，Build 绑定其 revision 与 effective capabilities；
+- 当前范围需要的 PageImplementationContract、Endpoint 契约和 EntitySourceBinding 均已确认。
 
 调整后规则：
 
@@ -137,7 +156,7 @@ AG-UI 结构化动作恢复，并使用独立的 `build_task_plan_confirmation` 
 `sync_project_plan_from_markdown`、`revise_project_plan_with_chat_model` 或
 `write_project_plan_json` 来完成上游确认；上游 Markdown 编辑也必须回到对应的正式产物确认流程。
 
-上下游调整点：工作流恢复逻辑需要把正式产物、模板 manifest 和详细设计前置条件错误交回对应流程，
+上下游调整点：工作流恢复逻辑需要把正式产物、TemplateState 和详细设计前置条件错误交回对应流程，
 而不是由 DAG 节点修改计划或把运行时投影写回正式 TechnicalPlan。
 
 ### 4.2 移除菜单、路由和页面占位文件任务
@@ -159,13 +178,10 @@ DAG 阶段只负责任务规划、页面内容实现、API 调用和后端实现
 
 | 内容 | 负责阶段 | DAG 处理方式 |
 | --- | --- | --- |
-| 初始页面占位文件 | 模板初始化 | 只消费，不创建 |
-| 初始菜单和路由配置 | 模板初始化 | 只消费，不修改 |
-| 后续新增页面的占位文件 | 现有模板初始化的增量流程 | 只消费，不创建 |
-| 后续新增页面的菜单和路由 | 现有模板初始化的增量流程 | 只消费，不修改 |
-| 页面业务内容和交互实现 | DAG / Build | 生成页面实现任务 |
+| 初次或后续业务页面 | Build Agent | 声明真实页面入口和业务实现交付物 |
+| 通用路由、可选权限资源和 AuthConstants | 全部 Build 任务成功后的平台投影 | 只消费确认事实，不生成共享注册任务 |
 | 页面 API 调用 | DAG / Build | 按已确认设计生成实现任务 |
-| 数据库表结构和数据源操作 | 实体确认流程 | DAG 只消费已确认的实体上下文 |
+| 数据库表结构和数据源操作 | 实体确认流程 | 只消费已确认的实体上下文 |
 
 数据库或外部 API 来源后端还必须拥有独立的 `backend:bootstrap` 基础能力任务：它幂等检查现有
 `backend/pom.xml`；数据库来源检查数据源和 MyBatis-Plus，外部 API 来源按模板 Spring Boot 2.7.2 / Spring Cloud 2021.0.3 基线检查 OpenFeign starter、BOM 和 `@EnableFeignClients`，只补充确实缺失的共享能力，不生成业务分层代码。
@@ -174,41 +190,22 @@ endpoint-only 与前后端混合规划使用相同规则；只有 static-only �
 当 `backend:bootstrap` 位于本轮待规划 Unit 集合但模型遗漏对应任务时，确定性 DAG 校验必须报告错误并进入
 平台自动重生成，不能静默接受缺少前置能力的候选，也不能由编译器硬编码合成任务。
 
-新增页面必须在进入工作区检查和 DAG 之前完成以下前置动作。这里的页面初始化不是新的 Graph 节点，
-而是复用现有 `/application-lifecycle/run` 的模板准备和完成门禁：
+新增页面的正式 revision 顺序为：
 
 ```text
-更新并确认 ProductPlan
-→ 确认或跳过 UiDesign
-→ 更新并确认 TechnicalPlan
-→ 执行模板初始化增量流程（创建页面占位、菜单和路由）
-→ 更新并通过 .xcodeagent/template-generation-manifest.json 门禁
-→ Workbench 编译 PageImplementationContract
-→ 确认所需 Endpoint API 设计，并重新发起页面/API开发
+确认 ProductPlan / UiDesign / TechnicalPlan
+→ 完成当前 EntitySourceBinding
 → inspect_workspace
-→ prepare_build_tasks
+→ prepare_build_tasks（当前 TemplateState、template_context 和正式契约校验）
+→ 用户确认 build-dag.v4
+→ Agent 创建真实业务页面
+→ 全部任务成功后重放 Route / authorization / AuthConstants 投影
+→ 只读 EDD 验收最终工程
 ```
 
-DAG 生成时只做前置条件检查：
+二次规划确认不创建前端页面或导航文件。页面入口尚不存在是正常的首次实现场景，由 Agent 在任务范围中声明；编译器不得自行注入页面任务或占位文件。唯一实时页面目录可作为只读路径校对依据。
 
-- 页面入口文件存在；
-- 页面路径与 ProductPlan、UiManifest 和 PageImplementationContract 一致；
-- 菜单和路由已经由上游完成；
-- `.xcodeagent/template-generation-manifest.json` 的 `download`、`templateFiles`、`menus` 和 `gate` 状态均已完成；
-- 当前范围需要的 Endpoint 契约和 Endpoint API 设计已就绪；无 Endpoint 的纯静态页面不阻断。
-
-任一前置条件缺失时，DAG 返回新增页面初始化或模板初始化流程恢复，不生成兜底任务，也不把缺失文件改写成普通页面开发任务。
-
-`reconcile_live_page_paths` 如继续保留，只能用于把任务路径校对到已经存在的页面入口，不得创建目录、占位文件或菜单、路由任务；
-它不负责修剪任务边界。
-
-`ensure_page_route_registration_task` 和 `_inject_canonical_page_entry` 不再作为 DAG 编译步骤调用；菜单和页面入口的
-存在性检查可以保留为只读前置校验。模型提示词也必须同步移除“DAG 负责登记菜单”和“允许修改 menus.ts”的描述。
-模型若仍返回共享菜单、路由、隐藏路由或页面占位变更，编译器必须保留原候选并把任务 ID、字段和路径写入
-`task_graph.validation.errors`，不得删除任务、剥离路径或把 `add` 改成 `modify`。
-
-上下游调整点：现有模板初始化流程必须完整负责页面占位文件、菜单和路由，并提供可供 DAG 校验的
-`.xcodeagent/template-generation-manifest.json` 状态；DAG 只消费该状态。
+模型若触碰共享菜单、路由或模板基础设施，保留候选并报告边界错误，不静默删除任务或修改其职责。Bootstrap readiness 只验证基础工程，业务页面与平台投影的真实性在 Build 后验收。
 
 ### 4.4 修复失败重试时的文件操作误判
 
@@ -296,11 +293,11 @@ DAG 确认等待，不能把所有 `prepare_build_tasks` 用户输入都显示�
 
 DAG 编译和校验通过后：
 
-1. 将最新任务规划写入 `build-task-plan.json`；
-2. 将 `confirmation_status` 设置为 `pending`；
+1. 将最新任务规划写入 `build-task-plan.pending.json`；
+2. 将 Pending 的 `confirmation_status` 设置为 `pending`，并写入服务端签发的 `DraftIdentity`；
 3. 通过 AG-UI 和可视化界面展示最新任务规划；
 4. 工作流节点返回 `requires_user_input`，而不是把 DAG 生成标记为已完成并直接进入 Build；
-5. 用户确认后，将当前 JSON 标记为 `confirmed`，才允许进入 Build。
+5. 用户确认后，精确校验当前 Pending 并原子提升为正式 `build-task-plan.json`，才允许进入 Build。
 
 确认动作本身不重新调用任务规划模型。
 
@@ -333,20 +330,28 @@ DAG 编译和校验通过后：
 ```json
 {
   "mode": "build_task_plan_confirmation",
-  "action": "confirm"
+  "action": "confirm",
+  "planningRunId": "planning-...",
+  "draftDigest": "..."
 }
 ```
 
-确认卡只允许 `confirm`、`abandon`。`confirm` 不调用模型并恢复原 checkpoint；`abandon` 通过
-AG-UI 计划控制流把当前 DAG 标记为 `abandoned`、停止流程并释放 lifecycle/resource 锁。
-未知动作、已经移除的任务 `patch` 和旧的 `regenerate` 都必须在 AG-UI 请求边界被拒绝。
+确认卡只允许 `confirm`、`abandon`、`regenerate`。三个动作都必须携带服务端签发的
+`planningRunId + draftDigest`，并在请求边界转换为后端使用的精确 DraftIdentity：
+
+- `confirm` 不调用模型；它恢复到 `prepare_build_tasks` 的确认分支，复验当前 Pending 后提升 Formal 并进入 Build。
+- `abandon` 不进入 Graph；它通过 AG-UI 计划控制流删除匹配 Pending，结束本次 Workflow execution 并释放 lifecycle/resource/session 输入门禁。
+- `regenerate` 回到 `prepare_build_tasks`，先不可回滚地消费匹配 Pending，再创建新的 PlanningRun。新 Run 成功后只写新的 Pending；失败时旧 Pending 不恢复，Formal 保持不变。
+
+未知动作和已经移除的任务 `patch` 必须在 AG-UI 请求边界被拒绝。`regenerate` 是 Planning result 生命周期动作，不能复用模型内部 Local/Global 自动修复动作，也不能编码成普通自然语言。
 
 ### 5.3 用户操作
 
 | 操作 | 处理方式 |
 | --- | --- |
-| 确认并继续 | 校验工作区中的最新 JSON，将其标记为 confirmed，进入 Build |
-| 放弃流程 | 将最新 pending JSON 标记为 abandoned，终止当前 execution 并释放资源锁 |
+| 确认并继续 | 精确校验最新 Pending，原子写入 confirmed Formal，删除匹配 Pending并进入 Build |
+| 放弃流程 | 精确删除最新 Pending，记录 abandoned 终态，结束当前 Workflow execution并释放资源锁；聊天记录保留 |
+| 重新生成 | 精确消费旧 Pending，回到 `prepare_build_tasks` 创建新 PlanningRun；成功后写新 Pending并重新确认，失败不恢复旧 Pending |
 
 用户通过结构化确认界面核对任务，不再使用 Markdown 作为确认载体。
 
@@ -354,74 +359,96 @@ AG-UI 计划控制流把当前 DAG 标记为 `abandoned`、停止流程并释放
 
 ```text
 首次生成并校验通过
-→ 保存最新 build-task-plan.json、pending
+→ 保存最新 build-task-plan.pending.json
 → requires_user_input
 → 用户确认
-→ confirmation_status=confirmed
-→ 现有确认恢复分支校验最新 JSON
+→ 现有确认分支精确校验 Pending identity、正式输入和 DAG
+→ 原子写入 build-task-plan.json、confirmation_status=confirmed
+→ 删除匹配 Pending
 → Build
 ```
 
 ```text
 用户放弃
-→ confirmation_status=abandoned
-→ 结束当前 execution
+→ 校验 planning_run_id + draft_digest
+→ 记录 abandoned tombstone
+→ 删除匹配 Pending 和 PlanningRun 投影
+→ 结束当前 Workflow execution
 → 释放 lifecycle/resource/session 输入门禁
 → 当前流程停止
 ```
 
 ```text
 用户选择全量重新生成
-→ 重新调用模型
-→ 覆盖保存最新 JSON
-→ 重新编译、校验并确认
+→ 校验并删除匹配旧 Pending（提交点）
+→ 回到 prepare_build_tasks
+→ 从当前 Formal 和最新正式输入创建全新 PlanningRun
+→ 重新生成、组装并校验
+→ 成功：写入新 Pending，再次等待确认
+→ 失败：保留失败事实，旧 Pending 不恢复，Formal 不变
 ```
 
-Build DAG 确认阶段不提供独立的取消动作；未确认的 pending JSON 仍由工作区保存，后续恢复必须重新读取工作区中的最新 JSON，不能只信任旧
-checkpoint 中的任务计划。若用户在 DAG 阶段提出正式设计变更，则退出本 mode，返回对应的正式规划或详细设计流程。
+Build DAG 确认阶段不提供与 `abandon` 并列的独立 cancel 动作；active 生成阶段的停止按钮取消整个
+Workflow/PlanningRun，而不是单个 Unit。待确认状态的终止统一使用 `abandon`。后续恢复必须重新读取工作区中的最新 Pending/Formal，不能只信任旧 checkpoint 中的任务计划。若用户在 DAG 阶段提出正式设计变更，则退出本 mode，返回对应的正式规划或详细设计流程。
+
+同一应用的页面会话流程锁继续覆盖 `generating` 和 `awaiting_confirmation` 两个阶段。当前 UI 在这两个阶段不允许新建并启动另一个会话，因此本期不另外增加“写新 Pending 前的多会话服务端抢占检查”。若未来开放多窗口、外部调用或并行会话，必须再在 Pending writer 前增加原子冲突门禁，避免覆盖工作区唯一的 `planning-run.json` 或 `build-task-plan.pending.json`。
 
 ## 6. 产物字段调整
 
-本期只保留一份 DAG 持久化产物：
+本期保留一份正式 DAG 和一份临时候选 DAG：
 
 ```text
-.xcodeagent/plans/build-task-plan.json
+.xcodeagent/plans/build-task-plan.json          # 仅 ConfirmedPlan，Build 唯一输入
+.xcodeagent/plans/build-task-plan.pending.json  # 仅当前待确认 PendingPlan
 ```
 
-这里的“一份”只针对 DAG 规划产物；`.xcodeagent/plans/repair-task-plan.json` 仍是现有修复审批和调度流程的独立产物，
+两者不构成历史版本：每个工作区最多各一份，且 Pending 绝不能成为下一 PlanningRun 的 baseline。
+`.xcodeagent/plans/repair-task-plan.json` 仍是现有修复审批和调度流程的独立产物，
 不因删除 DAG Markdown 而删除或并入 Build Task Plan。
 
 ### 6.1 `build-task-plan.json`
 
-保持 `schema_version=build-dag.v3`，只增加确认闭环所需的最小字段。
+保持 `schema_version=build-dag.v4`，只增加确认闭环所需的最小字段。
 
 | 操作 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- |
 | 增 | `build_execution_scope` | object | 记录本次 application、page、data_source 或 endpoint 范围 |
-| 增 | `confirmation_status` | string | `pending` 或 `confirmed` |
-| 增 | `confirmed_at` | string/null | 最新任务规划的确认时间；未确认时为 null |
+| 增 | `confirmation_status` | string | 正式路径必须为 `confirmed` |
+| 增 | `confirmed_at` | string | 最新任务规划的确认时间 |
+| 增 | `confirmed_from` | object | 被提升 Pending 的 `planning_run_id + draft_digest` |
 | 改 | `change_scope[].operation` | string | 字段结构不变，明确为规划操作意图；重试差异按 attempt 基线判断 |
 | 不动 | `status` | string | 继续使用 `ready` 或 `blocked`，避免影响 Scheduler |
-| 不动 | `version`、`schema_version` | string | 保持当前 v3 版本；不增加历史产物读取或旧格式默认确认逻辑 |
+| 当前 | `version`、`schema_version` | string | DAG schema 使用 v4；不增加历史产物读取或旧格式默认确认逻辑 |
+| 当前 | `template_context` | object | 冻结 state_path、template_revision、effective_capabilities；Build 必须核对当前 TemplateState |
+| 当前 | `route_projection` | object | 保存确认的全部业务页面路由事实；所有任务成功后由平台投影 |
 | 不动 | `task_registry`、`task_graph` | object | 保持 BuildScheduler 输入结构 |
 | 不动 | `build_units`、`unit_graph` | object | 不调整 Unit 结构 |
 | 不动 | `execution.batches` | array | 不调整现有执行批次结构 |
 | 保留 | `source_project_plan_version` | string | 保留现有字段名；当前值来自运行时所基于的 TechnicalPlan 版本，本期不做命名清理 |
 | 不动 | 任务字段 | object | 不删除或重命名现有任务字段 |
 
-示例：
+示例（省略 route_projection、交付物和任务图细节，不是可直接执行的完整 DAG）：
 
 ```json
 {
   "version": "3.0.0",
-  "schema_version": "build-dag.v3",
+  "schema_version": "build-dag.v4",
+  "template_context": {
+    "state_path": ".xcodeagent/template-state.json",
+    "template_revision": "example-revision",
+    "effective_capabilities": {}
+  },
   "status": "ready",
   "build_execution_scope": {
     "type": "page",
     "targetId": "order-list"
   },
-  "confirmation_status": "pending",
-  "confirmed_at": null,
+  "confirmation_status": "confirmed",
+  "confirmed_at": "2026-09-09T00:00:00Z",
+  "confirmed_from": {
+    "planning_run_id": "planning-...",
+    "draft_digest": "..."
+  },
   "build_units": {},
   "task_registry": {},
   "task_graph": {},
@@ -429,11 +456,24 @@ checkpoint 中的任务计划。若用户在 DAG 阶段提出正式设计变更�
 }
 ```
 
+### 6.2 `build-task-plan.pending.json`
+
+Pending 使用同一 `build-dag.v3` 任务正文，但必须满足：
+
+- `confirmation_status=pending`、`confirmed_at=null`；
+- 携带服务端构造的 `draft_identity`，至少绑定页面对话 `owner_session_id`、`planning_run_id`、`draft_digest`、Formal baseline 摘要、完整输入 fingerprint 和 Build Scope；
+- 只有完整 Global Validation 通过的 DAG 才能写入；
+- Confirm、Abandon、Regenerate 都必须精确匹配当前 DraftIdentity；
+- Confirm 成功、Abandon 成功或 Regenerate 提交后删除；Regenerate 失败不恢复旧文件。
+
 字段更新规则：
 
-- 首次生成有效 DAG：`confirmation_status=pending`、`confirmed_at=null`；
-- 用户确认：`confirmation_status=confirmed`，写入 `confirmed_at`；
-- 用户重新生成：覆盖最新 JSON，并重置为 `confirmation_status=pending`、`confirmed_at=null`；
+- 首次生成有效 DAG：写 Pending，Formal 保持不变；
+- 用户确认：从 Pending 构造 ConfirmedPlan 并原子替换 Formal，然后删除匹配 Pending；
+- 用户重新生成：先删除旧 Pending，再由新 PlanningRun 写入新 Pending；失败不恢复旧 Pending；
+- 重新生成只更换 PlanningRun 身份，新 Pending 继承旧 Pending 的 `owner_session_id`；
+- 刷新进入开发阶段时，只有 `owner_session_id` 等于当前页面对话才恢复可操作确认卡；其他对话只显示锁和跳转入口；
+- 工作区不存在 Pending 时，阶段产物为空，不从历史消息或 ConfirmedPlan 恢复旧待确认卡；
 - 任务执行状态变化不清除确认状态；
 - Scheduler 将既有任务的执行状态回写到该 JSON，供后续 Scope 或新 Build Run 复用；
 - 新 Build Run 必须把 `backend:bootstrap` 和显式 `*.verify` 任务重置为 `pending`，依赖检测与验证不能因历史完成状态被跳过；
@@ -443,7 +483,7 @@ checkpoint 中的任务计划。若用户在 DAG 阶段提出正式设计变更�
 普通任务完成、失败、重试以及现有修复审批产生的运行时结果不得静默清除初始 DAG confirmation；
 如果重新生成改变了任务规划内容，则必须先重置为 pending。
 
-### 6.2 删除 Markdown 产物
+### 6.3 删除 Markdown 产物
 
 删除以下 DAG 产物及其写入流程：
 
@@ -460,7 +500,7 @@ checkpoint 中的任务计划。若用户在 DAG 阶段提出正式设计变更�
 - 不新增历史迁移或兼容读取；历史文件是否由独立清理流程删除，不影响当前 JSON DAG 生成和执行。
 - 进度摘要、Build scheduler 结果、修复任务追加和前端 DAG 快照均不得重新生成该 Markdown。
 
-### 6.3 本期不维护 revision 和 fingerprint
+### 6.4 本期不维护 revision 和 fingerprint
 
 本期不新增以下 DAG 根字段：
 
@@ -471,7 +511,7 @@ dag_fingerprint
 ```
 
 Unit 内已有的 `input_fingerprint` 继续由 Unit 编译器维护，不能因为本期不增加 DAG 根 fingerprint 而删除。
-本期不维护 DAG 历史版本，每次确认的对象都是 `.xcodeagent/plans/build-task-plan.json` 中的最新任务规划。
+本期不维护 DAG 历史版本，每次确认的对象都是 `.xcodeagent/plans/build-task-plan.pending.json` 中由精确 DraftIdentity 标识的最新任务规划。
 revision 和 DAG 根 fingerprint 可在后续需要防止并发覆盖、检测外部文件修改或提供历史审计时再引入。
 
 ## 7. Build 入口门禁
@@ -487,13 +527,13 @@ confirmation_status == confirmed
 
 不满足时：
 
-- `pending`：返回 `build_task_plan_confirmation` DAG 确认；
+- Formal 缺失但存在 Pending：返回 `build_task_plan_confirmation` DAG 确认；
 - DAG `blocked`：返回已有 DAG 校验错误；
 - 不允许为了兼容旧产物而默认视为已确认。
 
-门禁只读取并校验 `.xcodeagent/plans/build-task-plan.json` 中的最新计划，至少检查 `schema_version`、
-`status`、`confirmation_status`、当前 `build_execution_scope` 和任务图校验结果。任何重新生成都必须先把
-该字段重置为 `pending`，避免旧确认状态被新计划继承。
+门禁只读取并校验 `.xcodeagent/plans/build-task-plan.json` 中的最新 ConfirmedPlan，至少检查 `schema_version`、
+`status`、`confirmation_status`、当前 `build_execution_scope` 和任务图校验结果。Regenerate 只替换 Pending，
+不得把旧 Formal 改成 pending，也不得让旧确认状态进入新 Pending。
 
 `replace_build_task_plan_tasks`、修复任务追加和 scheduler 结果回写必须保留确认字段；普通任务状态更新不得清除
 `confirmed`。修复任务仍沿用现有 repair scope approval，不得通过追加修复任务绕过既有修复确认流程。
@@ -505,23 +545,23 @@ confirmation_status == confirmed
 
 | 模块 | 最小改动内容 |
 | --- | --- |
-| `Backend/app/graph/nodes/tasks.py` | 只消费已确认正式产物、模板 manifest 和范围详细设计；移除上游计划回写；处理 DAG pending 与确认，放弃由计划控制流收口 |
+| `Backend/app/graph/nodes/tasks.py` | 只消费已确认正式产物、TemplateState 和范围详细设计；移除上游计划回写；处理 DAG pending 与确认，放弃由计划控制流收口 |
 | `Backend/app/services/build_task_planner.py` | 完全重复任务确定性合并；按 `api_contract_id + endpoint_id` 校验前端唯一实现 owner；写入 scope 和确认字段；对菜单、路由、页面占位和数据库职责越界执行显式 DAG 校验，不修改或删除候选；保留 Unit 级 fingerprint |
 | `Backend/app/services/build_task_menu.py` | 删除 DAG 菜单/路由任务生成、菜单任务修剪和 canonical page entry 注入逻辑；仅保留已存在页面入口的只读路径校对和必要的菜单状态解析 |
 | `Backend/app/services/build_unit_skeleton.py` | 保持数据库已在实体确认阶段落地的当前边界，不为 Normal Build 创建 `database:*` Unit |
 | `Backend/app/services/build_context_resolver.py`、`page_implementation_contract.py`、`entity_definitions.py` | 将 PageImplementationContract、TechnicalPlan Endpoint、Contract `entity_ids` 和当前 Endpoint API 设计作为范围上下文；独立 EntitySourceBinding 不作为正常 Build 前置条件 |
 | `Backend/app/services/build_unit_compiler.py` | 保留 Unit 来源引用和 `input_fingerprint`；Endpoint source ref 直接指向 TechnicalPlan |
-| `Backend/app/agents/main/task_preparer.py` | 删除“DAG 负责菜单登记、允许修改 menus.ts”的提示词；将 DAG 校验错误自动回灌模型并有界重生成；保留页面内容和 API 实现边界 |
+| `Backend/app/graph/nodes/task_planning_adapter.py`、`Backend/app/agents/main/unit_task_prompt.py` | 生产入口按 Unit 生成并校验 Candidate；旧 Scope TaskPreparer 及其 Prompt 已删除，页面内容和 API 实现边界由当前 Unit 规则维护 |
 | `Backend/app/services/engineering_acceptance.py` | 明确规划 operation 与 attempt 验收边界，使用 PageImplementationContract/TechnicalPlan Endpoint 术语 |
 | `Backend/app/services/engineering_acceptance_verifier.py`、`build_scheduler.py` | 重试时按本次 attempt 基线接受合理的 added/modified 差异，并把原任务 retry 信息传入验收 |
-| `Backend/app/services/application_template_generation.py`、`frontend_scaffold.py`、`application_lifecycle.py` | 提供并校验现有 `.xcodeagent/template-generation-manifest.json`；DAG 只消费模板就绪状态，不接管初始化 |
+| `Backend/app/services/workspace_bootstrap/`、`template_state.py`、`application_lifecycle.py` | Backend 事务内完成 Bootstrap Readiness；DAG 读取 TemplateState 并冻结 template_context |
 | `Backend/app/workspace/task_documents.py` | 只保留 Build Task Plan JSON 和 repair task plan JSON；删除 DAG Markdown 路径、渲染和写入逻辑 |
 | `Backend/app/services/build_task_progress.py` | 移除 `BUILD_TASK_DAG.md` artifact 摘要，改为输出 JSON 安全投影和 DAG confirmation 状态 |
 | `Backend/app/services/build_repair_planner.py` | 保持 repair-task-plan 独立产物和既有修复确认；追加修复任务时保留主计划 confirmation 语义 |
 | `Backend/app/graph/subgraphs/build.py` | 在 Build/scheduler/直接恢复入口增加最新 JSON 确认门禁；任务结果和修复流程不再写入 Markdown |
-| `Backend/app/graph/workflow.py` | 保持现有 Graph 节点关系，但区分 DAG confirmation 等待和进入 Build 的恢复路由 |
-| `Backend/app/graph/state.py`、`Backend/app/protocols/workflow/definition.py` | 移除 `build_task_dag_path`；确认状态只存于计划内部，不新增重复 Graph State 字段 |
-| `Backend/app/protocols/workflow/request.py` | 接收 `build_task_plan_confirmation.confirm` 并恢复原 checkpoint；`abandon` 由 plan control 终止 execution |
+| `Backend/app/graph/workflow.py` | 保持现有 Graph 节点关系；confirm 进入 Build，abandon 结束本次 Workflow execution，regenerate 回到 `prepare_build_tasks` |
+| `Backend/app/graph/state.py`、`Backend/app/protocols/workflow/definition.py` | 移除 `build_task_dag_path`；增加页面对话 `owner_session_id` 作为 Pending 归属字段，不与 Run/Thread 身份混用 |
+| `Backend/app/protocols/workflow/request.py`、`run_control.py` | 接收 `forwardedProps.sessionId` 及结构化 `confirm`、`abandon`、`regenerate`；当前依赖页面流程锁阻止第二个对话进入 DAG，并恢复或结束对应 Workflow execution |
 | `Backend/app/protocols/workflow/projection.py`、`runtime.py` | 投影 DAG confirmation、当前目标、范围任务和局部错误；不再将 DAG Markdown 作为确认 artifact |
 | `Frontend/src/renderer/src/typings/workflow.ts`、`service/agUiAgent.ts` | 增加 DAG confirmation、目标、scope 和 JSON-safe snapshot 类型；移除 Markdown DAG artifact 类型 |
 | `Frontend/src/renderer/src/components/WorkflowRunCard`、`AiChatPanel.tsx`、`processStepHistory.ts`、`workbenchPhase.ts` | 分层展示目标与范围、页面验收、实际关联接口和只读任务详情，支持确认、全量重新生成及恢复；不复用正式文档确认卡片 |
@@ -534,26 +574,30 @@ confirmation_status == confirmed
 2. Database 项目在实体确认阶段完成数据库操作后，DAG 能消费已确认实体上下文并生成允许的后端/前端任务，且 Normal Build 不生成 database-owner 任务；
 3. RequirementSpec、ProductPlan、UiManifest、TechnicalPlan 未满足当前确认门禁时，DAG 不修改或回写任何正式产物；
 4. 运行时 `project_plan` 不会被写回 `.xcodeagent/plans/technical-plan.json`；
-5. 模板 manifest 缺失、未完成或真实页面/菜单不一致时，会返回模板初始化流程，不生成 DAG 兜底任务；
+5. TemplateState 缺失、结构无效或与冻结绑定漂移时阻断，要求处理工作区或重新规划；不生成模板修复任务。
 6. 模型若返回菜单、路由、隐藏路由或共享注册文件修改任务，候选不会被静默删除，`task_graph.validation.errors` 会定位到任务和路径，并自动触发重生成；
 7. 模型若返回页面目录或 `index.tsx` 占位文件新增任务，候选不会被改写，平台会自动重生成；
-8. 新增页面的模板初始化增量流程完成后，DAG 只生成页面内容和 API 调用实现任务；
-9. 当前范围缺少 PageImplementationContract、Endpoint 契约或当前 Endpoint API 设计时，会在 DAG 生成前阻断；
+8. 新增页面由 Agent 完成真实入口；全部任务成功后平台投影导航，不在规划阶段预建文件。
+9. 当前范围缺少 PageImplementationContract、Endpoint 契约或 EntitySourceBinding 时，会在 DAG 生成前阻断；
 10. DAG 校验通过后不会直接进入 Build；
 11. 用户确认最新任务规划后才能进入 Build；
 12. 确认页只展示当前范围任务，跨范围依赖以既有能力摘要展示，其余累计任务只返回汇总；
 13. 任务字段不可编辑，AG-UI 请求边界拒绝已移除的 patch 动作；
-14. 全量重新生成会覆盖最新 JSON 并重新确认；
+14. 全量重新生成必须携带旧 Pending 的 `planning_run_id + draft_digest`；系统先删除该 Pending，再回到 `prepare_build_tasks` 创建新 PlanningRun；成功后写入全新 Pending，失败时旧 Pending 不恢复；
 15. 完全重复任务被自动合并，依赖引用、Unit task_ids 和 source_refs 同步改写；
 16. 同一前端 Endpoint 被不同 API 文件重复实现时，DAG 在确认前阻断并自动重生成；正常 Repair 不会被误判为第二个 owner；
 17. 初次执行创建文件后失败，重试修改该文件不会因 `add/modify` 不一致被误判；
 18. 缺失依赖、循环依赖、路径冲突和详细设计缺失能够定位到具体任务、路径或上游产物；
 19. DAG 任务边界或拓扑校验失败时由平台自动重生成，用户只接收通过校验的 DAG 确认，不需要人工修正任务拆分；
-20. `confirmation_status` 不是 confirmed 的最新 JSON 无法通过主图、直接 Build 恢复或 scheduler 门禁；
-21. DAG 阶段及 Build/repair 回写只生成或更新 `build-task-plan.json`，不再生成或读取 `BUILD_TASK_DAG.md`；
+20. 只有 `confirmation_status = confirmed` 的正式 `build-task-plan.json` 能通过主图、直接 Build 恢复或 scheduler 门禁；PendingPlan 无论内容是否校验通过都不能进入 Build；
+21. DAG 生成阶段只写 `build-task-plan.pending.json`，确认后才原子提升为 `build-task-plan.json`；Build/repair 只消费或更新正式计划，不再生成或读取 `BUILD_TASK_DAG.md`；
 22. `repair-task-plan.json` 仍作为独立修复产物保留，不与 DAG JSON 混淆；
 23. 可视化界面展示的 scope、任务内容和确认状态与最新 JSON 一致，并能区分前置阻断、DAG 自动重生成失败和 DAG 确认等待；
-24. 普通任务执行、重试和修复流程不会错误清除已经确认的任务规划。
+24. 普通任务执行、重试和修复流程不会错误清除已经确认的任务规划；
+25. 同一应用已有 active PlanningRun 或 PendingPlan 时，页面流程锁不允许新建或启动另一对话，因而不会形成两个并行待确认版本；本期不验收多窗口/外部请求的服务端抢占。
+26. 取消只终止当前 Workflow/PlanningRun，不提供 Unit 级取消动作；已经进入待确认状态后使用 abandon，而不是取消；
+27. 页面刷新后可从服务端投影恢复当前生成或待确认状态；刷新期间持续执行与事件补发不属于本期强保证。
+28. 存在 Pending 时，owner 对话恢复可操作确认卡，其他对话显示锁定提示和“打开目标对话”；Pending 消失后不恢复旧确认卡或旧 DAG 进度。
 
 ## 10. 后续优化项
 

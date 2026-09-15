@@ -39,6 +39,37 @@ export function withProcessStepTotal(steps: ProcessStepRecord[], total: number):
   return steps.map((step) => ({ ...step, total }))
 }
 
+/**
+ * 构造一条剧本工作流步骤记录：kind 固定为 workflow，把 8 行字面量收拢为一行调用。
+ * detail 缺省取节点自带文案，传入时覆盖（例如携带运行时统计的句子）。
+ */
+export function step(
+  node: { id: string; title: string; detail?: string },
+  status: ProcessStepRecord['status'],
+  sequence: number,
+  detail?: string
+): ProcessStepRecord {
+  return {
+    id: node.id,
+    kind: 'workflow',
+    status,
+    title: node.title,
+    detail: detail ?? node.detail ?? '',
+    sequence
+  }
+}
+
+/** 字符串直填版 step：id 与文案不来自剧本节点对象时使用（如用例检查、审查阶段）。 */
+export function stepRecord(
+  id: string,
+  title: string,
+  status: ProcessStepRecord['status'],
+  sequence: number,
+  detail = ''
+): ProcessStepRecord {
+  return step({ id, title, detail }, status, sequence)
+}
+
 export function pageMeta(pageId?: string): { id: string; label: string; path: string; purpose: string } {
   const key = pageId || 'my-rechecks'
   const meta = PAGES[key] || PAGES['my-rechecks']
@@ -260,4 +291,48 @@ export type BuildFileTarget = {
 
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** 单个代码内容源：目标文件 + 当前内容（分帧场景下可能是部分行）。 */
+export type ChangeSource = { target: BuildFileTarget; content: string }
+
+/**
+ * 按行分帧渐进产出代码内容：每个目标按 linesPerFrame 逐帧增长，帧间等待 intervalMs。
+ * frame 回调收到「已完成文件 + 当前部分文件」，由剧本组装变更集后 emit，
+ * 让右侧源码区与 Diff 页签跟随刷新（页面/接口/实体/审查报告共用同一节奏）。
+ */
+export async function streamCodeFrames(
+  targets: BuildFileTarget[],
+  frame: { linesPerFrame: number; intervalMs: number },
+  onFrame: (finished: ChangeSource[], partial: ChangeSource) => void
+): Promise<void> {
+  const finished: ChangeSource[] = []
+  for (const target of targets) {
+    const lines = target.content.split('\n')
+    for (let visible = frame.linesPerFrame; ; visible += frame.linesPerFrame) {
+      await delay(frame.intervalMs)
+      onFrame(finished, { target, content: lines.slice(0, visible).join('\n') })
+      if (visible >= lines.length) break
+    }
+    finished.push({ target, content: target.content })
+  }
+}
+
 /** 判断测试用例检查卡是否确认按当前清单执行。 */
+
+// —— 实体（business-object）目标识别 ——
+// 实体开发工作流的启动与续传只带 selectedObjectId / resumeState，
+// 因此同时读 options 与 workflow.state / result 中持久化的目标身份。
+export function resolveEntityTarget(
+  options: SendWorkflowMessageOptions,
+  resume?: WorkflowRunPayload
+): { objectId: string } | undefined {
+  const state = (resume?.state || {}) as Record<string, unknown>
+  const result = (resume?.result || {}) as Record<string, unknown>
+  const detailTargetType = String(
+    options.detailTargetType || state.detailTargetType || result.detailTargetType || ''
+  ).trim()
+  const objectId = String(
+    options.selectedObjectId || state.selectedObjectId || result.selectedObjectId || ''
+  ).trim()
+  if (objectId && detailTargetType === 'business-object') return { objectId }
+  return undefined
+}

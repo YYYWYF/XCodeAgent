@@ -9,11 +9,11 @@ type Props = {
   className?: string
 }
 
-/** XCodeAgent 品牌 Logo：两条倾斜交叉光条 + 文字。欢迎页 / 工作台顶栏共用，避免各处自造。 */
+/** AIStudio 品牌 Logo：两条倾斜交叉光条 + 文字。欢迎页 / 工作台顶栏共用，避免各处自造。 */
 export default function BrandLogo({ size = 34, showText = true, className }: Props): ReactElement {
   return (
     <span
-      aria-label="XCodeAgent"
+      aria-label="AIStudio"
       className={cx('brand-logo', className)}
       style={{ '--brand-logo-size': `${size}px` } as CSSProperties}
     >
@@ -21,7 +21,7 @@ export default function BrandLogo({ size = 34, showText = true, className }: Pro
         <i />
         <i />
       </span>
-      {showText ? <span className={cx('brand-logo-text')}>XCodeAgent</span> : null}
+      {showText ? <span className={cx('brand-logo-text')}>AIStudio</span> : null}
     </span>
   )
 }

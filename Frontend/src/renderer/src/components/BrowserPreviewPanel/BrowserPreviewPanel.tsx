@@ -2,6 +2,7 @@ import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
   AimOutlined,
+  CloudServerOutlined,
   DesktopOutlined,
   ExpandOutlined,
   MobileOutlined,
@@ -27,12 +28,15 @@ import {
 } from '../../utils'
 import './BrowserPreviewPanel.less'
 import { useElementInspector } from './useElementInspector'
+import ServiceStatusDrawer from './ServiceStatusDrawer'
+import type { ServiceStatusControl } from './ServiceStatusDrawer'
 
 const { Text } = Typography
 
 type PreviewViewport = 'desktop' | 'tablet' | 'mobile'
 
 type Props = {
+  serviceControl?: ServiceStatusControl
   application: ApplicationConfig
   requestKey?: string
   requestedUrl?: string
@@ -59,6 +63,7 @@ function menuPreviewPages(items: ApplicationMenuItem[]): PreviewPageOption[] {
 
 /** 展示可由 Workflow 目标地址驱动的内嵌浏览器预览。 */
 export default function BrowserPreviewPanel({
+  serviceControl,
   application,
   requestKey,
   requestedUrl,
@@ -97,6 +102,28 @@ export default function BrowserPreviewPanel({
     onInspectingChange,
     previewUrl
   })
+  const serviceRuntime = serviceControl?.snapshot?.runtime
+  const serviceStatus =
+    serviceRuntime?.status === 'failed' ||
+    serviceRuntime?.frontend.status === 'failed' ||
+    serviceRuntime?.backend.status === 'failed'
+      ? 'failed'
+      : serviceRuntime?.status === 'starting' ||
+          serviceRuntime?.frontend.status === 'starting' ||
+          serviceRuntime?.backend.status === 'starting'
+        ? 'starting'
+        : serviceRuntime?.frontend.status === 'running' ||
+            serviceRuntime?.backend.status === 'running'
+          ? 'running'
+          : 'idle'
+  const serviceStatusLabel =
+    serviceStatus === 'failed'
+      ? '需处理'
+      : serviceStatus === 'starting'
+        ? '启动中'
+        : serviceStatus === 'running'
+          ? '运行中'
+          : '待启动'
 
   useEffect(() => {
     setDraftUrl(previewUrl)
@@ -106,6 +133,7 @@ export default function BrowserPreviewPanel({
   }, [previewUrl])
 
   useEffect(() => {
+    if (requestKey) setRefreshKey((key) => key + 1)
     if (!requestedUrl) return
     // 从外部收到新的 preview 地址（如 launch 成功返回），清除此前可能的启动错误
     setLaunchError('')
@@ -169,108 +197,125 @@ export default function BrowserPreviewPanel({
 
   return (
     <section className={cx('browser-preview-panel')}>
-      <header className={cx('browser-preview-toolbar')}>
-        <div className={cx('browser-window-controls')} aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </div>
-        <div className={cx('browser-navigation')}>
-          <Tooltip title="后退">
-            <Button
-              aria-label="后退"
-              disabled={navigation.index === 0}
-              icon={<ArrowLeftOutlined />}
-              onClick={() =>
-                setNavigation((current) => ({
-                  ...current,
-                  index: Math.max(0, current.index - 1)
-                }))
-              }
-              type="text"
-            />
+      {serviceControl && <ServiceStatusDrawer {...serviceControl} />}
+      <div className={cx('browser-preview-toolbar-scroll')}>
+        <header className={cx('browser-preview-toolbar')}>
+          <Tooltip title="查看前后端服务状态、重启与诊断日志">
+            <span className={cx('browser-service-status-shell')}>
+              <Button
+                aria-label="打开服务状态"
+                className={cx('browser-service-status-button', `is-${serviceStatus}`)}
+                disabled={!serviceControl}
+                onClick={() => serviceControl?.setOpen(true)}
+              >
+                <span className={cx('browser-service-status-button__icon')}>
+                  <CloudServerOutlined />
+                </span>
+                <span className={cx('browser-service-status-button__label')}>服务状态</span>
+                <span className={cx('browser-service-status-button__state')}>
+                  <span />
+                  {serviceStatusLabel}
+                </span>
+              </Button>
+            </span>
           </Tooltip>
-          <Tooltip title="前进">
-            <Button
-              aria-label="前进"
-              disabled={navigation.index >= navigation.history.length - 1}
-              icon={<ArrowRightOutlined />}
-              onClick={() =>
-                setNavigation((current) => ({
-                  ...current,
-                  index: Math.min(current.history.length - 1, current.index + 1)
-                }))
-              }
-              type="text"
-            />
-          </Tooltip>
-          <Tooltip title="刷新">
-            <Button
-              aria-label="刷新"
-              icon={<ReloadOutlined />}
-              onClick={() => setRefreshKey((key) => key + 1)}
-              type="text"
-            />
-          </Tooltip>
-        </div>
-        <Input.Search
-          aria-label="预览地址"
-          className={cx('browser-address-input')}
-          enterButton="访问"
-          onChange={(event) => setDraftUrl(event.target.value)}
-          onSearch={navigateTo}
-          value={draftUrl}
-        />
-        <Tooltip
-          title={
-            elementInspector.active
-              ? '退出元素审查'
-              : elementInspector.ready
-                ? '审查预览页面中的元素'
-                : '当前预览页面尚未准备好元素审查'
-          }
-        >
-          <span className={cx('browser-inspector-button-shell')}>
-            <Button
-              aria-label={elementInspector.active ? '退出审查' : '审查元素'}
-              aria-pressed={elementInspector.active}
-              className={cx('browser-inspector-button')}
-              disabled={!elementInspector.ready && !elementInspector.active}
-              icon={<AimOutlined />}
-              onClick={elementInspector.toggle}
-              type="primary"
-            >
-              {elementInspector.active ? '退出审查' : '审查元素'}
-            </Button>
-          </span>
-        </Tooltip>
-        <Select
-          aria-label="页面"
-          className={cx('browser-page-select')}
-          options={pageOptions}
-          value={selectedPage}
-          onChange={handlePageChange}
-        />
-        <Segmented
-          aria-label="视口"
-          className={cx('browser-viewport-switcher')}
-          options={[
-            { label: <DesktopOutlined />, value: 'desktop' },
-            { label: <TabletOutlined />, value: 'tablet' },
-            { label: <MobileOutlined />, value: 'mobile' }
-          ]}
-          value={viewport}
-          onChange={(value) => setViewport(value as PreviewViewport)}
-        />
-        <Tooltip title="在系统浏览器打开">
-          <Button
-            aria-label="在系统浏览器打开"
-            icon={<ExpandOutlined />}
-            onClick={openInBrowser}
-            type="primary"
+          <div className={cx('browser-navigation')}>
+            <Tooltip title="后退">
+              <Button
+                aria-label="后退"
+                disabled={navigation.index === 0}
+                icon={<ArrowLeftOutlined />}
+                onClick={() =>
+                  setNavigation((current) => ({
+                    ...current,
+                    index: Math.max(0, current.index - 1)
+                  }))
+                }
+                type="text"
+              />
+            </Tooltip>
+            <Tooltip title="前进">
+              <Button
+                aria-label="前进"
+                disabled={navigation.index >= navigation.history.length - 1}
+                icon={<ArrowRightOutlined />}
+                onClick={() =>
+                  setNavigation((current) => ({
+                    ...current,
+                    index: Math.min(current.history.length - 1, current.index + 1)
+                  }))
+                }
+                type="text"
+              />
+            </Tooltip>
+            <Tooltip title="刷新">
+              <Button
+                aria-label="刷新"
+                icon={<ReloadOutlined />}
+                onClick={() => setRefreshKey((key) => key + 1)}
+                type="text"
+              />
+            </Tooltip>
+          </div>
+          <Input.Search
+            aria-label="预览地址"
+            className={cx('browser-address-input')}
+            enterButton="访问"
+            onChange={(event) => setDraftUrl(event.target.value)}
+            onSearch={navigateTo}
+            value={draftUrl}
           />
-        </Tooltip>
-      </header>
+          <Tooltip
+            title={
+              elementInspector.active
+                ? '退出元素审查'
+                : elementInspector.ready
+                  ? '审查预览页面中的元素'
+                  : '当前预览页面尚未准备好元素审查'
+            }
+          >
+            <span className={cx('browser-inspector-button-shell')}>
+              <Button
+                aria-label={elementInspector.active ? '退出审查' : '审查元素'}
+                aria-pressed={elementInspector.active}
+                className={cx('browser-inspector-button')}
+                disabled={!elementInspector.ready && !elementInspector.active}
+                icon={<AimOutlined />}
+                onClick={elementInspector.toggle}
+                type="primary"
+              >
+                {elementInspector.active ? '退出审查' : '审查元素'}
+              </Button>
+            </span>
+          </Tooltip>
+          <Select
+            aria-label="页面"
+            className={cx('browser-page-select')}
+            options={pageOptions}
+            value={selectedPage}
+            onChange={handlePageChange}
+          />
+          <Segmented
+            aria-label="视口"
+            className={cx('browser-viewport-switcher')}
+            options={[
+              { label: <DesktopOutlined />, value: 'desktop' },
+              { label: <TabletOutlined />, value: 'tablet' },
+              { label: <MobileOutlined />, value: 'mobile' }
+            ]}
+            value={viewport}
+            onChange={(value) => setViewport(value as PreviewViewport)}
+          />
+          <Tooltip title="在系统浏览器打开">
+            <Button
+              aria-label="在系统浏览器打开"
+              icon={<ExpandOutlined />}
+              onClick={openInBrowser}
+              type="primary"
+            />
+          </Tooltip>
+        </header>
+      </div>
 
       <div className={cx('browser-preview-stage')}>
         <div className={cx('browser-preview-viewport', viewport)}>

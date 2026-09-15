@@ -8,15 +8,27 @@
     "basic_layout": {
       "overall": "顶部说明回检价值，下方按步骤展示填报、审核、整改与归档流程。",
       "regions": [
-        { "name": "介绍区", "responsibility": "说明需求回检的目标与适用范围" },
-        { "name": "流程区", "responsibility": "展示四步回检流程和操作说明" }
+        {
+          "name": "介绍区",
+          "responsibility": "说明需求回检的目标与适用范围"
+        },
+        {
+          "name": "流程区",
+          "responsibility": "展示四步回检流程和操作说明"
+        }
       ]
     },
-    "interactions": ["点击开始回检进入我的回检页面"],
+    "interactions": [
+      "点击开始回检进入我的回检页面"
+    ],
     "state_feedback": [],
     "api_dependencies": [],
     "response_bindings": [],
-    "acceptance_criteria": ["无需接口即可完整展示", "流程说明清晰", "入口可跳转到我的回检"]
+    "acceptance_criteria": [
+      "无需接口即可完整展示",
+      "流程说明清晰",
+      "入口可跳转到我的回检"
+    ]
   },
   "my-rechecks": {
     "target_type": "page",
@@ -52,25 +64,13 @@
         "feedbackComponent": "Empty"
       }
     ],
-    "api_dependencies": [
-      {
-        "apiContractId": "rechecks",
-        "method": "GET",
-        "path": "/api/rechecks/my",
-        "purpose": "我的回检单分页查询"
-      }
-    ],
-    "response_bindings": [
-      {
-        "endpointId": "ep-my-rechecks",
-        "sourcePath": "data.list",
-        "target": "table.rows"
-      }
-    ],
     "acceptance_criteria": [
       "可提交回检单并校验必填项",
       "已提交回检单状态可跟踪",
       "驳回回检可查看整改要求"
+    ],
+    "operation_interactions": [
+      "列表与筛选通过 回检单.查询我的回检() 读取数据，数据实现由回检单实体的开发工作流确认"
     ]
   }
 }

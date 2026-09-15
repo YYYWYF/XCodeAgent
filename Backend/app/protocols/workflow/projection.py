@@ -443,7 +443,10 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             return []
         return ["product_planning"]
     if node_name == "technical_planning":
-        return []
+        # 二次修改确认后的实际下一节点是 Template Reconcile。此处只负责
+        # AG-UI 时间线预测；若不投影 started 帧，前端会继续使用上一个
+        # technical_planning running 事件，错误地把模板更新显示为技术规划。
+        return ["template_reconcile"] if update.get("template_reconcile_pending") else []
     if node_name == "integration_test":
         if update.get("quality_gate_passed"):
             return ["review_phase_confirmation"]
@@ -501,7 +504,7 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         )
         return (
             ["authorization_bootstrap"]
-            if isinstance(manifest, dict) and manifest.get("enabled") is True
+            if isinstance(manifest, dict) and manifest.get("resources")
             else ["build"]
         )
     if node_name == "authorization_bootstrap":
@@ -630,6 +633,9 @@ def _public_workflow_state(
     if "development_continuation" in value:
         public_state.pop("development_continuation", None)
         public_state["developmentContinuation"] = value["development_continuation"]
+    if "template_preparation" in value:
+        public_state.pop("template_preparation", None)
+        public_state["templatePreparation"] = value["template_preparation"]
     if "code_review_result" in value:
         public_state.pop("code_review_result", None)
         public_state["codeReviewResult"] = _workflow_code_review_result_for_phase(
@@ -1275,6 +1281,10 @@ def _prepare_build_tasks_input_message(
     messages = {
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
         "build_prerequisite_error": "Build DAG 的正式产物或模板前置条件未满足，已返回上游流程。",
+        "confirmed_baseline_error": (
+            "正式任务基线 .xcodeagent/plans/build-task-plan.json 非法或无法读取，"
+            "请由平台维护者修复并验证为合法 ConfirmedPlan 后重新发起规划。"
+        ),
         "build_context_error": "当前构建范围缺少已确认的实体数据源绑定或技术契约。",
         "api_contract_consistency_error": "当前构建范围的 API 契约校验未通过，已阻止代码生成。",
         "build_task_plan_validation_error": "Build DAG 校验未通过，平台已停止代码生成。",
@@ -1483,6 +1493,7 @@ def _workflow_user_input_message(
         return "项目预览已就绪，请确认是否符合预期。"
 
     confirmation_labels = {
+        "confirmed_baseline_error": _prepare_build_tasks_input_message(clarification, 0),
         "requirement_document_confirmation": "需求文档草稿已生成，请确认后同时固化需求与页面操作规划。",
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
         "technical_plan_confirmation": "技术规划已生成，请确认后继续。",

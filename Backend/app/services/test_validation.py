@@ -77,6 +77,7 @@ def create_revision_requests(
         result
         for result in test_results
         if not result["passed"] and _result_is_blocking(result)
+        and result.get("repairable") is not False
     ]
     return [
         {

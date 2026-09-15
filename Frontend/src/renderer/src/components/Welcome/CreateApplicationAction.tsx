@@ -82,16 +82,13 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
         projectParentPath: '',
         projectDirectoryName: pathBasename(projectPath),
         source: 'new',
-        enableAuth: persistedSchema.auth.enable,
-        enableTracking: persistedSchema.track.enable || persistedSchema.apiTrack.enable,
         legacyTheme: 'custom',
         legacyLayout: 'side-nav',
         enableTabs: false,
         pages: ['默认页面'],
         defaultPage: '默认页面',
         hasDynamicRoutes: false,
-        schema: persistedSchema,
-        createdAt: Date.now()
+        lastOpenedAt: Date.now()
       }
       const persistedApplication = await saveApplication(application)
       const lifecycle = await createApplicationLifecycle(persistedApplication, planningThreadId)

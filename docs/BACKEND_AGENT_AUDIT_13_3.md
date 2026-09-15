@@ -2,7 +2,9 @@
 
 > 模板依据：`docs/XCODEAGENT_COMPLETE_WORKFLOW.md` 第 13.3 节「后续节点审计统一模板」
 > 审计日期：2026-08-11
-> 审计基线：当前工作区源码（含未提交改动：`task_preparer.py` / `build_task_planner.py` 的验收字段强制置空、`main.py` 格式化与 uvicorn 入口）
+> 审计基线：2026-08-11 的历史工作区快照；其中 `task_preparer.py`、`task_preparer_prompt.py`
+> 的描述不代表当前实现。T11.6.4 cutover 后，Scope TaskPreparer 已删除，生产入口改为
+> `graph/nodes/task_planning_adapter.py` 与 `agents/main/unit_task_prompt.py`。
 > 2026-08-18 更新：数据库上下文检查节点已退役，相关段落按现行工作流收敛。
 > 审计范围：
 > - 应用初始化阶段：`requirements`、`ui_confirmation`（ui_design）、`project_planning`

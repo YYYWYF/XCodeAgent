@@ -32,10 +32,8 @@ import './ProcessSteps.less'
 const { Text } = Typography
 
 type Props = {
-  activeDagStageId?: string
   conversation?: boolean
   loading: boolean
-  onDagStageSelect?: (stageId: string) => void
   steps: ProcessStepRecord[]
   waitingPrompt?: string
   waitingForInput?: boolean
@@ -47,10 +45,8 @@ type ProcessDisplayItem =
 
 /** 渲染一条可折叠的 Agent 执行轨迹，并在测试步骤中保留结构化检查结果。 */
 export default function ProcessSteps({
-  activeDagStageId,
   conversation = false,
   loading,
-  onDagStageSelect,
   steps,
   waitingPrompt = '',
   waitingForInput = false
@@ -138,11 +134,9 @@ export default function ProcessSteps({
               >
                 {item.steps.map((step, toolIndex) => (
                   <ProcessStep
-                    activeDagStageId={activeDagStageId}
                     conversation={conversation}
                     isLast={toolIndex === item.steps.length - 1}
                     key={step.id}
-                    onDagStageSelect={onDagStageSelect}
                     settled={!loading}
                     step={step}
                     waitingForInput={waitingForInput}
@@ -155,11 +149,9 @@ export default function ProcessSteps({
 
           return (
             <ProcessStep
-              activeDagStageId={activeDagStageId}
               conversation={conversation}
               isLast={index === displayItems.length - 1}
               key={item.step.id}
-              onDagStageSelect={onDagStageSelect}
               settled={!loading}
               step={item.step}
               toolSteps={item.toolSteps}
@@ -214,20 +206,16 @@ function buildProcessDisplayItems(
 
 /** 渲染单个 Agent 步骤，仅让包含实际详情的步骤具备展开交互。 */
 function ProcessStep({
-  activeDagStageId,
   conversation,
   isLast,
-  onDagStageSelect,
   settled,
   step,
   toolSteps = [],
   waitingForInput,
   waitingPrompt
 }: {
-  activeDagStageId?: string
   conversation: boolean
   isLast: boolean
-  onDagStageSelect?: (stageId: string) => void
   settled: boolean
   step: ProcessStepRecord
   toolSteps?: ProcessStepRecord[]
@@ -389,13 +377,7 @@ function ProcessStep({
           />
         )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
-        {step.dagGeneration && (
-          <DagGenerationProgress
-            onStageSelect={onDagStageSelect}
-            selectedStageId={activeDagStageId}
-            snapshot={step.dagGeneration}
-          />
-        )}
+        {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
         {step.projectPlanUpdate && <ProjectPlanUpdatePanel update={step.projectPlanUpdate} />}
         {step.workspaceInspectionProgress && !step.workspaceInspection && (
           <WorkspaceInspectionProgressPanel progress={step.workspaceInspectionProgress} />

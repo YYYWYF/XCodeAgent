@@ -14,7 +14,7 @@ const AGENT_FILES_EVENT = 'agent-files'
 const AGENT_FILES_KEY = 'agentFiles'
 
 function getAgentFilesUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.aiStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/agent-files/run`
     : '/api/agent/agent-files/run'

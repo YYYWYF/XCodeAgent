@@ -68,7 +68,7 @@ export function exactTaskTranslation(value: string): string {
   return translations[value] || "";
 }
 
-/** 从英文任务内容推导业务对象的中文名称。 */
+/** 从英文任务内容推导实体的中文名称。 */
 export function taskEntityLabel(value: string): string {
   const lowerValue = value.toLowerCase();
   if (lowerValue.includes("employee")) return "员工";

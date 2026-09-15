@@ -1,0 +1,156 @@
+// 开发阶段产物发起引导卡：卡壳复用 workflow-run-card（背景/圆角/内距/信号点与澄清卡、
+// 确认卡完全同一套），这里只定义卡内布局——标题区、两个分组浅色区块与“名称 + 状态”行。
+
+.@{class-prefix}-development-launch-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  .@{class-prefix}-workflow-run-title {
+    margin-bottom: 0;
+  }
+
+  .@{class-prefix}-development-launch-title.ant-typography {
+    color: var(--wb-text);
+    font-size: 14px;
+  }
+}
+
+.@{class-prefix}-development-launch-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+// 分组区块：卡内浅色面板（比卡面亮一档），类别图标 + 标题让页面/实体一眼可分。
+.@{class-prefix}-development-launch-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-development-launch-caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 1px 3px;
+  color: var(--wb-text);
+  font-size: 12px;
+
+  .ant-typography {
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-development-launch-caption-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-accent);
+  font-size: 13px;
+}
+
+.@{class-prefix}-development-launch-list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-color: color-mix(in srgb, var(--wb-text-tertiary) 24%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.@{class-prefix}-development-launch-item {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  font: inherit;
+  transition: background 0.16s ease;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--wb-surface-hover);
+    outline: none;
+  }
+
+  // 禁用是静态视觉行为：整体置灰并保持默认光标，原因通过 title 直接可读。
+  &.@{class-prefix}-disabled {
+    cursor: default;
+
+    &:hover {
+      background: transparent;
+    }
+
+    .@{class-prefix}-development-launch-item-name.ant-typography {
+      color: var(--wb-text-tertiary);
+    }
+  }
+}
+
+.@{class-prefix}-development-launch-item-name.ant-typography {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  color: var(--wb-text);
+  font-size: 13px;
+}
+
+// 状态徽标与 ChatComposer 产物面板同一套配色语义：待实施浅紫、继续处理实心主题色、
+// 实施/后台中性灰、已交付绿；两处入口永远呈现同一个状态。
+.@{class-prefix}-development-launch-state {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+  border-radius: 7px;
+
+  &.@{class-prefix}-is-ready {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+
+  &.@{class-prefix}-is-continue {
+    color: var(--wb-elevated);
+    font-weight: 600;
+    background: var(--wb-accent);
+  }
+
+  &.@{class-prefix}-is-in-progress,
+  &.@{class-prefix}-is-queued {
+    color: var(--wb-text-secondary);
+    background: var(--wb-control);
+  }
+
+  &.@{class-prefix}-is-delivered {
+    color: var(--wb-success);
+    background: var(--wb-surface-subtle);
+  }
+}
+
+.@{class-prefix}-development-launch-empty {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+@media (max-width: 460px) {
+  .@{class-prefix}-development-launch-grid {
+    grid-template-columns: 1fr;
+  }
+}

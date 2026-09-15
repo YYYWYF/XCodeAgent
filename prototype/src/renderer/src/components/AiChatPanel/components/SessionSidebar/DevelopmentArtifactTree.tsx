@@ -1,15 +1,20 @@
+import { Dropdown } from 'antd'
 import {
   ApiOutlined,
   AppstoreOutlined,
+  BlockOutlined,
   CaretDownOutlined,
   CaretRightOutlined,
-  DatabaseOutlined,
   FileTextOutlined,
-  FolderOutlined
+  FolderOutlined,
+  FunctionOutlined,
+  LockOutlined,
+  MoreOutlined
 } from '@ant-design/icons'
 import type { ReactElement } from 'react'
 import { useMemo, useState } from 'react'
 import type { WorkspaceDocKey } from '../../types'
+import { businessObjectArtifactId, type BusinessObject } from '../../../BusinessObjects/model'
 import type {
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntity,
@@ -18,11 +23,15 @@ import type {
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { apiEndpointDisplayPath } from '../../utils'
-import { documentArtifactId, entityArtifactId, endpointArtifactId, pageArtifactId } from '../../../../workbenchDomain'
+import {
+  documentArtifactId,
+  entityArtifactId,
+  endpointArtifactId,
+  pageArtifactId
+} from '../../../../workbenchDomain'
 import type { WorkbenchArtifactAccess } from '../../../../workbenchDomain'
 import type { WorkbenchArtifactStatus } from '../../../../workbenchDomain'
 import './SessionSidebar.less'
-
 
 type ArtifactStatus = 'not-started' | 'in-progress' | 'completed'
 type WorkbenchDocumentKey = WorkspaceDocKey | 'code-review'
@@ -145,14 +154,15 @@ function PageArtifactNode({
         className={cx(
           'artifact-row',
           status,
-          selectedPageId === pageId && artifactsAvailable && access?.mode !== 'unavailable' && 'selected',
+          selectedPageId === pageId &&
+            artifactsAvailable &&
+            access?.mode !== 'unavailable' &&
+            'selected',
           access?.mode === 'read' && 'read-only'
         )}
         onClick={() => (requestsWorkflow ? onCreatePageTask(page) : onPageSelect(page))}
         disabled={
-          !artifactsAvailable ||
-          access?.mode === 'unavailable' ||
-          access?.reason === 'phase-locked'
+          !artifactsAvailable || access?.mode === 'unavailable' || access?.reason === 'phase-locked'
         }
         style={{ paddingLeft: 8 + depth * 14 }}
         title={`${page.label} · ${page.path}${access?.message ? ` · ${access.message}` : ''}`}
@@ -170,6 +180,7 @@ function PageArtifactNode({
 type ArtifactNavigationProps = {
   apiContracts: DevelopmentPlanningApiContract[]
   applicationName: string
+  businessObjects: BusinessObject[]
   artifactAccessById: Record<string, WorkbenchArtifactAccess>
   artifactStatusById: Record<string, WorkbenchArtifactStatus>
   designArtifacts: DesignArtifactItem[]
@@ -178,6 +189,12 @@ type ArtifactNavigationProps = {
   hideDesignArtifacts?: boolean
   /** 开发产物目录不展示应用根节点，页面/接口/实体直接作为一级分组。 */
   hideApplicationRoot?: boolean
+  /** 选择实体后在右侧打开字段维护；再次点击折叠/展开方法清单。 */
+  onBusinessObjectSelect?: (objectId: string) => void
+  /** 选择方法后在右侧打开该方法的出入参与数据实现定义。 */
+  onBusinessObjectMethodSelect?: (objectId: string, methodId: string) => void
+  /** 在该方法清单末尾发起「新增方法」。 */
+  onBusinessObjectAddMethod?: (objectId: string) => void
   onApiEndpointSelect: (target: {
     apiContractId: string
     endpointId: string
@@ -199,6 +216,9 @@ type ArtifactNavigationProps = {
   selectedApiEndpointKey: string
   selectedDesignArtifactKey?: WorkbenchDocumentKey
   selectedPageId: string
+  selectedBusinessObjectId?: string
+  /** 当前在右侧打开定义的方法；空串表示右侧停留在对象字段维护。 */
+  selectedMethodId?: string
   showDevelopmentTasks: boolean
 }
 
@@ -207,7 +227,9 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
   const [applicationExpanded, setApplicationExpanded] = useState(true)
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apisExpanded, setApisExpanded] = useState(true)
-  const [entitiesExpanded, setEntitiesExpanded] = useState(true)
+  const [businessObjectsExpanded, setBusinessObjectsExpanded] = useState(true)
+  // 实体默认展开方法清单，只记录被手动折叠的对象，新增对象自动展开。
+  const [collapsedObjects, setCollapsedObjects] = useState<Set<string>>(() => new Set())
   const [expandedContracts, setExpandedContracts] = useState<Set<string>>(
     () => new Set(props.apiContracts.map((contract) => contract.id))
   )
@@ -232,22 +254,24 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
       contract.endpoints.filter((endpoint, endpointIndex) => {
         const endpointId = endpoint.id || String(endpointIndex + 1)
         const apiContractId = endpoint.apiContractId || contract.id
-        return props.artifactStatusById[endpointArtifactId(apiContractId, endpointId)] === 'completed'
+        return (
+          props.artifactStatusById[endpointArtifactId(apiContractId, endpointId)] === 'completed'
+        )
       }).length,
     0
   )
-  const completedEntities = 0
+  const completedBusinessObjects = props.businessObjects.filter(
+    (object) => props.artifactStatusById[businessObjectArtifactId(object.id)] === 'completed'
+  ).length
   const completedDocuments = props.designArtifacts.filter(
     (artifact) => artifact.status === 'completed'
   ).length
-  // 页面、接口和实体只有在项目计划确认保存后才进入正式产物树。
+  // 页面与实体只有在项目计划确认保存后才进入正式产物树。
   const developmentArtifactsKnown = props.showDevelopmentTasks
-  const completedTotal = completedDocuments + completedPages + completedEndpoints + completedEntities
+  const completedTotal = completedDocuments + completedPages + completedBusinessObjects
   const artifactTotal =
     props.designArtifacts.length +
-    (developmentArtifactsKnown
-      ? props.pages.length + endpointTotal + props.entities.length
-      : 0)
+    (developmentArtifactsKnown ? props.pages.length + props.businessObjects.length : 0)
 
   /** 单独切换一个接口分组，不影响其他契约树节点。 */
   const toggleContract = (contractId: string): void => {
@@ -278,47 +302,49 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
       ) : null}
       {props.hideApplicationRoot || applicationExpanded ? (
         <div className={cx('artifact-root-children', props.hideApplicationRoot && 'flat')}>
-          {!props.hideDesignArtifacts ? <>
-          <div className={cx('artifact-section-row', 'static')}>
-            <FileTextOutlined />
-            <span>文档</span>
-            <small>
-              {completedDocuments}/{props.designArtifacts.length}
-            </small>
-          </div>
-          <div className={cx('artifact-tree-children', 'section-children')}>
-            {props.designArtifacts.map((artifact) => {
-              const access = props.artifactAccessById[documentArtifactId(artifact.key)]
-              return (
-                <div className={cx('artifact-row-shell')} key={artifact.key}>
-                  <button
-                    className={cx(
-                      'artifact-row',
-                      artifact.status,
-                      props.selectedDesignArtifactKey === artifact.key &&
-                        artifact.available &&
-                        access?.mode !== 'unavailable' &&
-                        'selected',
-                      access?.mode === 'read' && 'read-only'
-                    )}
-                    disabled={!artifact.available || access?.mode === 'unavailable'}
-                    onClick={() => props.onDesignArtifactSelect(artifact.key)}
-                    style={{ paddingLeft: 22 }}
-                    title={`${artifact.label} · ${artifact.path}${access?.message ? ` · ${access.message}` : ''}`}
-                    type="button"
-                  >
-                    <FileTextOutlined />
-                    <span className={cx('artifact-label')}>{artifact.label}</span>
-                    <span
-                      aria-label={artifact.status}
-                      className={cx('artifact-status-dot', artifact.status)}
-                    />
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-          </> : null}
+          {!props.hideDesignArtifacts ? (
+            <>
+              <div className={cx('artifact-section-row', 'static')}>
+                <FileTextOutlined />
+                <span>文档</span>
+                <small>
+                  {completedDocuments}/{props.designArtifacts.length}
+                </small>
+              </div>
+              <div className={cx('artifact-tree-children', 'section-children')}>
+                {props.designArtifacts.map((artifact) => {
+                  const access = props.artifactAccessById[documentArtifactId(artifact.key)]
+                  return (
+                    <div className={cx('artifact-row-shell')} key={artifact.key}>
+                      <button
+                        className={cx(
+                          'artifact-row',
+                          artifact.status,
+                          props.selectedDesignArtifactKey === artifact.key &&
+                            artifact.available &&
+                            access?.mode !== 'unavailable' &&
+                            'selected',
+                          access?.mode === 'read' && 'read-only'
+                        )}
+                        disabled={!artifact.available || access?.mode === 'unavailable'}
+                        onClick={() => props.onDesignArtifactSelect(artifact.key)}
+                        style={{ paddingLeft: 22 }}
+                        title={`${artifact.label} · ${artifact.path}${access?.message ? ` · ${access.message}` : ''}`}
+                        type="button"
+                      >
+                        <FileTextOutlined />
+                        <span className={cx('artifact-label')}>{artifact.label}</span>
+                        <span
+                          aria-label={artifact.status}
+                          className={cx('artifact-status-dot', artifact.status)}
+                        />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          ) : null}
 
           {developmentArtifactsKnown ? (
             <>
@@ -354,19 +380,21 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
                 </div>
               ) : null}
 
-              <button
-                aria-expanded={apisExpanded}
-                className={cx('artifact-section-row')}
-                onClick={() => setApisExpanded((value) => !value)}
-                type="button"
-              >
-                <CaretDownOutlined className={cx(!apisExpanded && 'collapsed')} />
-                <span>接口</span>
-                <small>
-                  {completedEndpoints}/{endpointTotal}
-                </small>
-              </button>
-              {apisExpanded ? (
+              {props.apiContracts.length > 0 ? (
+                <button
+                  aria-expanded={apisExpanded}
+                  className={cx('artifact-section-row')}
+                  onClick={() => setApisExpanded((value) => !value)}
+                  type="button"
+                >
+                  <CaretDownOutlined className={cx(!apisExpanded && 'collapsed')} />
+                  <span>接口</span>
+                  <small>
+                    {completedEndpoints}/{endpointTotal}
+                  </small>
+                </button>
+              ) : null}
+              {props.apiContracts.length > 0 && apisExpanded ? (
                 <div className={cx('artifact-tree-children', 'section-children')}>
                   {props.apiContracts.map((contract) => {
                     const expanded = expandedContracts.has(contract.id)
@@ -411,7 +439,9 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
                                   endpointArtifactId(apiContractId, endpointId)
                                 ]
                               const requestsWorkflow =
-                                status === 'not-started' && !props.readOnly && access?.mode === 'write'
+                                status === 'not-started' &&
+                                !props.readOnly &&
+                                access?.mode === 'write'
                               return (
                                 <div className={cx('artifact-row-shell')} key={endpointKey}>
                                   <button
@@ -449,7 +479,10 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
                                   >
                                     <ApiOutlined />
                                     <code className={cx('artifact-label')}>{label}</code>
-                                    <span aria-label={status} className={cx('artifact-status-dot', status)} />
+                                    <span
+                                      aria-label={status}
+                                      className={cx('artifact-status-dot', status)}
+                                    />
                                   </button>
                                 </div>
                               )
@@ -462,56 +495,127 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
                 </div>
               ) : null}
 
-              <button
-                aria-expanded={entitiesExpanded}
-                className={cx('artifact-section-row')}
-                onClick={() => setEntitiesExpanded((value) => !value)}
-                type="button"
-              >
-                <CaretDownOutlined className={cx(!entitiesExpanded && 'collapsed')} />
-                <span>实体</span>
-                <small>{completedEntities}/{props.entities.length}</small>
-              </button>
-              {entitiesExpanded ? (
-                props.entities.length === 0 ? (
+              <>
+                <button
+                  aria-expanded={businessObjectsExpanded}
+                  className={cx('artifact-section-row')}
+                  onClick={() => setBusinessObjectsExpanded((value) => !value)}
+                  type="button"
+                >
+                  <CaretDownOutlined className={cx(!businessObjectsExpanded && 'collapsed')} />
+                  <BlockOutlined />
+                  <span>实体</span>
+                  <small>{props.businessObjects.length}</small>
+                </button>
+                {businessObjectsExpanded ? (
                   <div className={cx('artifact-tree-children', 'section-children')}>
-                    <div
-                      aria-label="实体定义，敬请期待"
-                      className={cx('artifact-branch-row', 'static')}
-                      style={{ paddingLeft: 22 }}
-                    >
-                      <CaretRightOutlined />
-                      <FolderOutlined />
-                      <span>实体定义</span>
-                      <small>敬请期待</small>
-                    </div>
+                    {props.businessObjects.length === 0 ? (
+                      <div
+                        className={cx('artifact-branch-row', 'static')}
+                        style={{ paddingLeft: 22 }}
+                      >
+                        <CaretRightOutlined />
+                        <span>请先在需求说明书中描述实体</span>
+                      </div>
+                    ) : (
+                      // 不设文件夹级：实体直接罗列，展开下一级即方法清单（统一术语「方法」）。
+                      props.businessObjects.map((object) => {
+                        const expanded = !collapsedObjects.has(object.id)
+                        return (
+                          <div className={cx('artifact-business-object')} key={object.id}>
+                            <div className={cx('artifact-object-row')}>
+                              <button
+                                aria-expanded={expanded}
+                                className={cx(
+                                  'artifact-branch-row',
+                                  object.id === props.selectedBusinessObjectId && 'selected'
+                                )}
+                                onClick={() => {
+                                  // 点击对象即选中（右侧呈现字段维护），同时切换方法清单展开态。
+                                  setCollapsedObjects((current) => {
+                                    const next = new Set(current)
+                                    if (next.has(object.id)) next.delete(object.id)
+                                    else next.add(object.id)
+                                    return next
+                                  })
+                                  props.onBusinessObjectSelect?.(object.id)
+                                }}
+                                style={{ paddingLeft: 22 }}
+                                type="button"
+                              >
+                                <CaretDownOutlined className={cx(!expanded && 'collapsed')} />
+                                <BlockOutlined />
+                                <span>{object.name}</span>
+                                <span
+                                  aria-label={
+                                    props.artifactStatusById[businessObjectArtifactId(object.id)] ||
+                                    'not-started'
+                                  }
+                                  className={cx(
+                                    'artifact-status-dot',
+                                    props.artifactStatusById[businessObjectArtifactId(object.id)] ||
+                                      'not-started'
+                                  )}
+                                />
+                              </button>
+                              {/* 目录以导航为主：更多操作（新增方法）收在对象行尾的省略号里，悬停显现。 */}
+                              <Dropdown
+                                menu={{
+                                  items: [
+                                    {
+                                      key: 'add-method',
+                                      label: '新增方法',
+                                      onClick: () => props.onBusinessObjectAddMethod?.(object.id)
+                                    }
+                                  ]
+                                }}
+                                placement="bottomRight"
+                                trigger={['click']}
+                              >
+                                <button
+                                  aria-label={`${object.name} 更多操作`}
+                                  className={cx('artifact-object-more')}
+                                  onClick={(event) => event.stopPropagation()}
+                                  type="button"
+                                >
+                                  <MoreOutlined />
+                                </button>
+                              </Dropdown>
+                            </div>
+                            {expanded ? (
+                              <div className={cx('artifact-tree-children')}>
+                                {object.operations.map((method) => (
+                                  <div className={cx('artifact-row-shell')} key={method.id}>
+                                    <button
+                                      className={cx(
+                                        'artifact-row',
+                                        props.selectedMethodId === method.id && 'selected'
+                                      )}
+                                      onClick={() =>
+                                        props.onBusinessObjectMethodSelect?.(object.id, method.id)
+                                      }
+                                      style={{ paddingLeft: 36 }}
+                                      type="button"
+                                    >
+                                      {/* 内置方法=平台锁定的模板动作，自定义方法=业务自定义函数。 */}
+                                      {method.operationType === 'builtin' ? (
+                                        <LockOutlined />
+                                      ) : (
+                                        <FunctionOutlined />
+                                      )}
+                                      <span className={cx('artifact-label')}>{method.name}</span>
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        )
+                      })
+                    )}
                   </div>
-                ) : (
-                  <div className={cx('artifact-tree-children', 'section-children')}>
-                    {props.entities.map((entity) => {
-                    const entityId = entityArtifactId(entity.entityId)
-                    const developmentStatus = props.artifactStatusById[entityId] || 'not-started'
-                      return (
-                        <div className={cx('artifact-row-shell')} key={entity.entityId}>
-                          <button
-                          aria-label={`${entity.label}实体，${developmentStatus}`}
-                            className={cx('artifact-row', developmentStatus, 'read-only')}
-                            disabled
-                            style={{ paddingLeft: 22 }}
-                            title={`${entity.purpose} · 实体仅作概念提示，暂不生成具体产物`}
-                            type="button"
-                          >
-        <DatabaseOutlined />
-                            <span className={cx('artifact-label')}>{entity.label}</span>
-                            <span className={cx('artifact-entity-placeholder')}>占位</span>
-                          <span aria-label={developmentStatus} className={cx('artifact-status-dot', developmentStatus)} />
-                          </button>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )
-              ) : null}
+                ) : null}
+              </>
             </>
           ) : null}
         </div>
@@ -524,6 +628,7 @@ export type DevelopmentArtifactTreeProps = {
   apiContracts: DevelopmentPlanningApiContract[]
   applicationName: string
   artifactStatusById: Record<string, WorkbenchArtifactStatus>
+  businessObjects: BusinessObject[]
   entities: DevelopmentPlanningEntity[]
   onApiEndpointSelect: (target: {
     apiContractId: string
@@ -531,24 +636,35 @@ export type DevelopmentArtifactTreeProps = {
     endpointKey: string
     label: string
   }) => void
+  onBusinessObjectSelect?: (objectId: string) => void
+  onBusinessObjectMethodSelect?: (objectId: string, methodId: string) => void
+  onBusinessObjectAddMethod?: (objectId: string) => void
   onPageSelect: (page: DevelopmentPlanningPageOption) => void
   pages: DevelopmentPlanningPageOption[]
   pageTree: DevelopmentPlanningPageTreeNode[]
   selectedApiEndpointKey: string
+  selectedBusinessObjectId?: string
+  selectedMethodId?: string
   selectedPageId: string
 }
 
-/** 复用旧版产物视图，只保留开发阶段需要的应用、页面、接口与实体目录树。 */
+/** 开发产物目录只展示页面和实体一级节点，方法明细留在对象开发面板。 */
 export function DevelopmentArtifactTree({
   apiContracts,
   applicationName,
   artifactStatusById,
+  businessObjects,
   entities,
   onApiEndpointSelect,
+  onBusinessObjectSelect,
+  onBusinessObjectMethodSelect,
+  onBusinessObjectAddMethod,
   onPageSelect,
   pages,
   pageTree,
   selectedApiEndpointKey,
+  selectedBusinessObjectId,
+  selectedMethodId,
   selectedPageId
 }: DevelopmentArtifactTreeProps): ReactElement {
   const artifactAccessById = useMemo<Record<string, WorkbenchArtifactAccess>>(() => {
@@ -576,8 +692,9 @@ export function DevelopmentArtifactTree({
 
   return (
     <ArtifactNavigation
-      apiContracts={apiContracts}
+      apiContracts={[]}
       applicationName={applicationName}
+      businessObjects={businessObjects}
       artifactAccessById={artifactAccessById}
       artifactStatusById={artifactStatusById}
       designArtifacts={[]}
@@ -585,6 +702,9 @@ export function DevelopmentArtifactTree({
       hideApplicationRoot
       hideDesignArtifacts
       onApiEndpointSelect={onApiEndpointSelect}
+      onBusinessObjectSelect={onBusinessObjectSelect}
+      onBusinessObjectMethodSelect={onBusinessObjectMethodSelect}
+      onBusinessObjectAddMethod={onBusinessObjectAddMethod}
       onCreateDocumentTask={() => undefined}
       onCreateEndpointTask={() => undefined}
       onCreatePageTask={() => undefined}
@@ -594,6 +714,8 @@ export function DevelopmentArtifactTree({
       pageTree={pageTree}
       readOnly
       selectedApiEndpointKey={selectedApiEndpointKey}
+      selectedBusinessObjectId={selectedBusinessObjectId}
+      selectedMethodId={selectedMethodId}
       selectedPageId={selectedPageId}
       showDevelopmentTasks
     />

@@ -37,18 +37,19 @@ BUSINESS_VERIFIER_NAMES = {
     "backend.upstream_contract": "backend_upstream_contract",
 }
 
-DELIVERABLE_KINDS = (
-    "frontend.page",
-    "frontend.api_module",
-    "frontend.static_data_module",
-    "frontend.shared_capability",
-    "backend.objects",
-    "backend.repository",
-    "backend.application_service",
-    "backend.endpoint_controller",
-    "backend.upstream",
-    "backend.bootstrap",
-)
+DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND = {
+    "frontend.page": "page_id",
+    "frontend.api_module": "endpoint_id",
+    "frontend.static_data_module": "endpoint_id",
+    "frontend.shared_capability": "target_id",
+    "backend.objects": "endpoint_id",
+    "backend.repository": "endpoint_id",
+    "backend.application_service": "endpoint_id",
+    "backend.endpoint_controller": "endpoint_id",
+    "backend.upstream": "endpoint_id",
+    "backend.bootstrap": "data_source_type",
+}
+DELIVERABLE_KINDS = tuple(DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND)
 
 _FRONTEND_DELIVERABLE_KINDS = {
     "frontend.page",

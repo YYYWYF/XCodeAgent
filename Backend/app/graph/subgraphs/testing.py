@@ -1095,20 +1095,6 @@ def build_project_checks(
 def unit_test_confirmation(state: ProjectState) -> dict[str, Any]:
     """无阻塞失败时暂停等待用户选择；存在阻塞失败则自动跳过直达质量门禁。"""
 
-    context = state.get("unit_test_generation_context")
-    if (
-        isinstance(context, dict)
-        and context.get("enabled") is not False
-        and not context.get("has_targets")
-        and not context.get("existing_test_files")
-    ):
-        return {
-            "status": "in_progress",
-            "clarification": {},
-            "unit_test_decision": "skip",
-            "integration_next_action": "skip_unit_tests",
-            "test_events": ["unit_test_confirmation:auto_skipped_no_targets"],
-        }
     if _blocking_test_failures(state):
         return {
             "status": "in_progress",
@@ -1492,6 +1478,9 @@ def repair_planning(state: ProjectState) -> dict:
             "test_events": ["repair_planning:skipped"],
         }
 
+    if any(item.get("passed") is False and item.get("repairable") is False for item in state.get("test_results", [])):
+        return {"repair_task_plan": {}, "repair_tasks": [], "integration_next_action": "handle_failure",
+                "test_events": ["repair_planning:environment_not_ready"]}
     security_failure = _generation_security_failure(state)
     if security_failure:
         return {
@@ -1948,8 +1937,8 @@ def integration_test(state: ProjectState) -> dict:
             "acceptance_decision": "",
             "accepted": False,
             "test_events": [],
-            "code_changes": {},
-            "code_change_sets": [],
+            "code_changes": input_code_changes,
+            "code_change_sets": input_code_change_sets,
             "timeline": [],
         },
         config={

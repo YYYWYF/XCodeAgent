@@ -11,7 +11,7 @@ import { cx } from '../../../../utils'
 import type { WorkspaceDocKey } from '../../types'
 import './RightPanelTabs.less'
 
-/** 工作区 tab 键：阶段专属工作台、预览/源码/文档/过程与需求分析/项目计划阶段文档。 */
+/** 工作区 tab 键：阶段专属工作台、正式规划产物、预览与源码。 */
 export type WorkspaceTabKey =
   | 'preview'
   | 'application-preview'
@@ -41,11 +41,7 @@ type Props = {
 }
 
 /** 右侧工作区的 tab 条：按阶段展示专属工作台或预览、源码、文档。不可用的 tab 灰显。 */
-export default function RightPanelTabs({
-  tabs,
-  active,
-  onChange
-}: Props): ReactElement {
+export default function RightPanelTabs({ tabs, active, onChange }: Props): ReactElement {
   /** 按窗口内容类型返回统一线性图标。 */
   const renderIcon = (icon?: WorkspaceTab['icon']): ReactElement | null => {
     if (icon === 'application') return <AppstoreOutlined />

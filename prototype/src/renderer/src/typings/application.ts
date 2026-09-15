@@ -334,6 +334,8 @@ export interface ApplicationVersion {
   };
   /** 发布时冻结的内容快照(已发布版本回看用)。 */
   snapshot?: {
+    /** 当前版本的正式规划资产；回退以此为内容基线，原版本保持只读。 */
+    planning?: import('../planning/model').InitializationPlanningRecord;
     pageIds?: string[];
     endpointIds?: string[];
     requirementSummary?: string;

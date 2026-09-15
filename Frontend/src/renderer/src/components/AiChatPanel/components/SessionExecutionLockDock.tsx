@@ -1,5 +1,5 @@
 import { LoadingOutlined, LockOutlined } from '@ant-design/icons'
-import { Typography } from 'antd'
+import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../utils'
 import type { SessionRunStatus } from '../hooks/sessionRuntime'
@@ -11,13 +11,15 @@ type Props = {
   phaseLabel: string
   sessionTitle?: string
   status?: SessionRunStatus | 'awaiting_user'
+  onOpenSession?: () => void
 }
 
 /** 在同阶段其他会话执行期间替代输入框，并说明当前历史会话仅可查看。 */
 export default function SessionExecutionLockDock({
   phaseLabel,
   sessionTitle,
-  status = 'running'
+  status = 'running',
+  onOpenSession
 }: Props): ReactElement {
   const statusText =
     status === 'starting'
@@ -45,10 +47,17 @@ export default function SessionExecutionLockDock({
         </Text>
         <Text type="secondary">
           {status === 'awaiting_user'
-            ? '当前会话只读；请在右侧阶段产物中确认或放弃任务计划。'
+            ? onOpenSession
+              ? '当前会话只读；请返回产出该计划的对话处理。'
+              : '当前会话只读；请在右侧阶段产物中确认或放弃任务计划。'
             : '当前会话暂时只读；该次运行结束后即可继续输入。'}
         </Text>
       </div>
+      {onOpenSession ? (
+        <Button className={cx('session-execution-lock-dock-action')} onClick={onOpenSession}>
+          打开目标对话
+        </Button>
+      ) : null}
     </section>
   )
 }

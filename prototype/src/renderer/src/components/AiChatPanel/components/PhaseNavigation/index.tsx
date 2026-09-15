@@ -1,5 +1,6 @@
 import {
   DownOutlined,
+  DatabaseOutlined,
   FolderOutlined,
   HourglassOutlined,
   MoonOutlined,
@@ -26,6 +27,10 @@ type Props = {
   backgroundTasksRunning?: Record<BackgroundTaskSystem, boolean>
   /** 打开应用文件工作区。 */
   onShowFiles: () => void
+  /** 打开数据来源目录；这里只管理连接，不承担实体绑定。 */
+  onShowDataSources: () => void
+  /** 数据来源抽屉是否展开。 */
+  dataSourcesDrawerOpen?: boolean
   /** 打开应用配置页。 */
   onShowSettings: () => void
   /** 打开技能页。 */
@@ -81,8 +86,10 @@ export default function PhaseNavigation({
   backgroundTasksDrawer,
   backgroundTasksRunning = { async: false, tide: false },
   conversationDrawerOpen = false,
+  dataSourcesDrawerOpen = false,
   onOpenConversationManagement,
   onOpenBackgroundTasks,
+  onShowDataSources,
   onShowFiles,
   onShowSettings,
   onShowSkills
@@ -120,6 +127,14 @@ export default function PhaseNavigation({
             </RailButton>
           )
         })}
+        <RailButton
+          active={dataSourcesDrawerOpen}
+          ariaLabel="数据来源"
+          onClick={onShowDataSources}
+          title="数据来源（仅管理连接）"
+        >
+          <DatabaseOutlined />
+        </RailButton>
         <span aria-hidden="true" className={cx('phase-navigation-divider')} />
       </nav>
       <div className={cx('phase-navigation-spacer')} />

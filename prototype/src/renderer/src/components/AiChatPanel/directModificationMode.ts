@@ -1,4 +1,4 @@
-import type { WorkflowDebugOptions, WorkflowRunPayload } from '../../typings'
+import type { WorkflowRunPayload } from '../../typings'
 
 /** 判断 Workflow 是否来自独立简单修改 Graph，兼容分类完成前后不同投影阶段。 */
 export function isDirectModificationWorkflow(workflow: WorkflowRunPayload | undefined): boolean {
@@ -18,10 +18,8 @@ export function isDirectModificationWaitingForInput(
 /** 选择普通消息使用的执行端点，并保证简单模式澄清始终沿同一 Graph 接续。 */
 export function shouldUseDirectModification(
   enabled: boolean,
-  workflow: WorkflowRunPayload | undefined,
-  workflowDebug: WorkflowDebugOptions | undefined
+  workflow: WorkflowRunPayload | undefined
 ): boolean {
-  if (workflowDebug?.enabled) return false
   if (isDirectModificationWorkflow(workflow)) return true
   if (!enabled) return false
   const status = String(workflow?.summary?.status || '')

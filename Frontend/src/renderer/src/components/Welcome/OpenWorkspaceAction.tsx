@@ -52,16 +52,13 @@ function applicationFromWorkspace(
     projectDirectoryName: workspaceName,
     source: 'existing-workspace',
     audience: 'developer',
-    enableAuth: Boolean(schema.auth?.enable),
-    enableTracking: Boolean(schema.track?.enable || schema.apiTrack?.enable),
     legacyTheme: 'light',
     legacyLayout: 'login-admin',
     enableTabs: false,
     pages: ['工作台'],
     defaultPage: '工作台',
     hasDynamicRoutes: false,
-    schema,
-    createdAt: Date.now()
+    lastOpenedAt: Date.now()
   }
 }
 
@@ -90,7 +87,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
           sessionCount: 0,
           frontendCount: 0,
           backendCount: 0,
-          latestUpdatedAt: application.createdAt,
+          latestUpdatedAt: application.lastOpenedAt,
           latestTitle: '已保存项目'
         })
       })

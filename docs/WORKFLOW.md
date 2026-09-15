@@ -71,7 +71,7 @@ START
 
 `build` 只有在 `build_summary.status == completed` 时才能路由到 `unit_test`。首次进入 `unit_test` 时固定保存 Build 产出的 `code_changes/code_change_sets`；`unit_test_generation_context.code_diff` 始终从该快照生成，单测生成文件和 SmallTask 修复文件再合并到开发阶段最终 Diff，修复重试不能覆盖原始 Build Diff。没有受影响源码时按无须执行通过；有目标时先由 `unit_test_confirmation` 接收现有 `run/skip` 结构化选择，前端生成、后端生成、前端单测、后端单测按检查 ID 各有 10 次独立修复额度；初次执行不计次数，第十次修复后的复测仍失败才耗尽，耗尽后失败且不展示测试阶段确认卡。
 
-SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `status/summary` 的结果统一标记为 `failureCode=invalid_agent_output`。单测局部修复遇到这类协议失败且当前检查尚有修复额度时，保留真实 Diff 和失败记录，返回 `unit_test` 复测，再由 RepairPlanner 根据当前失败生成新计划；派发仍计入各检查的十次额度，不自动清零。额度耗尽时同时显示协议错误和耗尽原因。真实业务失败、声明完成但无实际改动、越权变更及人工确认边界不按此策略自动重试；集成测试的独立修复策略保持不变。
+SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `status/summary` 的结果统一标记为 `failureCode=invalid_agent_output`。单测局部修复遇到这类协议失败且当前检查尚有修复额度时，保留真实 Diff 和失败记录，返回 `unit_test` 复测，再由 RepairPlanner 根据当前失败生成新计划；派发仍计入各检查的十次额度，不自动清零。额度耗尽时同时显示协议错误和耗尽原因。真实业务失败、声明完成但无实际改动、越权变更及人工确认边界不按此策略自动重试；集成测试遇到此类输出协议错误时，在当前 SmallTask 调用内最多自动重试 2 次（总计 3 次调用），保持正在修复的节点与 UI 状态；重试复用任务范围、保留已落盘修改，不消耗额外集成复测轮次。有效业务失败、人工确认和越权变更不自动重试；连续无效输出耗尽后明确失败。
 
 单元测试通过或跳过后才进入 `test_phase_confirmation`。确认节点首次输出 `status=requires_user_input`，并在 clarification 中返回固定 `mode=test_phase_confirmation` 与 `testTarget={type,id,label}`；Build 或单测失败、阻塞或尚未完成时不会展示测试确认卡。前端只能提交 `clarificationAnswers.test_phase_confirmation={action:"confirm"}`，后端按结构化动作恢复同一节点并进入 `integration_test`，不从自然语言判断确认结果。用户确认后前端创建绑定同一业务目标的全新测试会话与 AG-UI thread；新会话不复制开发消息，先落一条“开始测试页面/接口/数据源/应用：名称”用户消息，再启动恢复请求。
 
@@ -108,8 +108,8 @@ SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `sta
 
 - 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照和 `applicationPlanningInteraction`；确认卡携带服务端生成的 `gateId`、`artifactRevision` 与显式动作，沿同一 thread/checkpoint 原生恢复 Graph。前端按实际按钮或表单意图提交 `answer/confirm/revise/ui_action/enter_planning/design_change`，后端节点不再从中文文案猜动作；同一 thread 的版本校验与恢复全程串行，重复提交至多一个进入下游节点。
 - RequirementSpec、ProductPlan 和 TechnicalPlan 使用 Markdown 确认入口；React UI 稿及 `ui-designs.json` 使用 UI 确认界面。`ui_design_action.action = skip` 只写入 skipped Manifest 并进入 `awaiting_planning_stage_entry`，不得直接生成 TechnicalPlan。澄清回答不能替代产物确认。
-- TechnicalPlan 确认后校验四类正式产物；UI Manifest 的 `confirmation_status` 可以是 `confirmed` 或用户明确提交跳过后的 `skipped`，再推进 lifecycle 到 `generating_application_template_files`。模板完成动作使用同一规则复核四类 JSON 后才写入 `ready_for_workbench`。
-- 创建界面按“设计阶段 → 计划阶段 → 开发阶段”推进；设计阶段包含需求、产品和 UI，计划阶段包含 TechnicalPlan。RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，XCodeAgent 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用 `product-plan.v4` 保存产品可见行为；UI 使用 `ui-manifest.v3`，跳过时保存空 `pages` 与 `confirmation_status: skipped`；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
+- TechnicalPlan 确认后校验四类正式产物；UI Manifest 的 `confirmation_status` 可以是 `confirmed` 或用户明确提交跳过后的 `skipped`，再推进 lifecycle 到 `generating_application_template_files`。Backend WorkspaceBootstrapService 在事务内完成物化、Readiness 和 Git baseline 后才写入 `ready_for_workbench`。
+- 创建界面按“设计阶段 → 规划阶段 → 开发阶段”推进；设计阶段包含需求、产品和 UI，规划阶段包含 TechnicalPlan。RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，XCodeAgent 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用 `product-plan.v4` 保存产品可见行为；UI 使用 `ui-manifest.v3`，跳过时保存空 `pages` 与 `confirmation_status: skipped`；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
 - 主 Workflow 运行时从 RequirementSpec、ProductPlan、UiManifest 和 TechnicalPlan 按需编译 PageImplementationContract；编译结果不写回 TechnicalPlan。
 - 创建规划不执行构建后的集成测试质量门，也不生成 `quality_gate_passed`；AG-UI 摘要只在主 Workflow 明确产生布尔质量门结果时展示“通过/未通过”，不得把缺失值误报为未通过。
 
@@ -131,9 +131,9 @@ SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `sta
 - RequirementSpec / ProjectPlan Markdown + JSON：正式文档内容和 `confirmation_status`，继续保留；
 - Build DAG / ExecutionRun / TestReport：任务、执行和测试事实，继续由各自产物负责。
 
-创建流程覆盖 `collecting_requirement -> analyzing_requirement -> awaiting_requirement_clarification -> analyzing_requirement -> generating_requirement_document -> awaiting_requirement_document_confirmation -> generating_ui_designs -> awaiting_ui_design_confirmation -> generating_technical_plan -> awaiting_technical_plan_confirmation -> generating_application_template_files -> application_template_generation_failed（终止）/ready_for_workbench`。需求事实与产品规划属于同一份需求文档：只有联合确认后才能进入 UI 设计；提交 `revise` 时回到 `analyzing_requirement`。模板生成只由用户确认 TechnicalPlan 后触发；失败、重启和再次打开都不会重新触发。
+创建流程覆盖 `collecting_requirement -> analyzing_requirement -> awaiting_requirement_clarification -> analyzing_requirement -> generating_requirement_document -> awaiting_requirement_document_confirmation -> generating_ui_designs -> awaiting_ui_design_confirmation -> generating_technical_plan -> awaiting_technical_plan_confirmation -> generating_application_template_files -> application_template_generation_failed（终止）/ready_for_workbench`。需求事实与产品规划属于同一份需求文档：只有联合确认后才能进入 UI 设计；提交 `revise` 时回到 `analyzing_requirement`。模板生成只由用户确认 TechnicalPlan 后触发。列表恢复、打开应用、工作台挂载及 Renderer 重启时统一 Attach → Get；同 Workspace 并发请求合并。活动 Bootstrap 返回 active；孤儿 GENERATING 清理受管目录后写不可恢复 FAILED；清理失败保留 GENERATING 供下次 Attach 收尾。Backend get 严格只读。
 
-进入工作台后的主 Workflow 不再改写应用初始化阶段；运行、等待确认、失败、停止和验收只更新对应 execution。后端从正式 ProjectPlan 为页面执行解析页面、导航关联页、API 契约和数据源资源集合并写入 `resourceLocks`，但当前不以集合交集、同页面、同工作区或应用级范围拒绝新运行；进程内 lease 同样只跟踪活动 run 的释放，不再执行互斥。重叠资源键显示最近一次写入的 owner，完成或明确结束只清理该 run 当前拥有的登记。中央消息、现有进度卡、侧栏与预览布局不改变。停止、结束、结构化确认、重试、计划调整和最终验收均复用 `/workflow/run` 的 AG-UI 完整事件生命周期。停止操作先用本地 Workflow 快照即时显示 `stopping/stopped`，并让该瞬时状态优先于可能 revision 更高但尚未刷新的文件快照；后端 AG-UI 回包随后校准权威 execution，乐观更新不得改写顶层 `initialization`。
+进入工作台后的主 Workflow 不再改写应用初始化阶段；运行、等待确认、失败、停止和验收只更新对应 execution。后端从正式规划为页面执行解析页面、导航关联页、API 契约和数据源资源集合并写入 `resourceLocks`。一般执行仍不以资源集合交集拒绝新运行，进程内 lease 主要跟踪活动 run 的释放。DAG Planning 的产品入口用 renderer/session lock 维持一个 active PlanningRun 或 awaiting-confirmation PendingPlan，并用唯一 Pending 文件和 DraftIdentity 阻止旧结果提升；这不是独立的原子 server pre-start mutex，多窗口或外部入口仍需后续补强。中央消息、进度卡、侧栏与预览布局不改变。停止、结构化确认、重试、计划调整和最终验收均复用 `/workflow/run` 的 AG-UI 完整事件生命周期。活跃 Run 停止时前端先标记 `stopping`，随后以服务端取消终态校准；PendingPlan 一旦存在，普通 stop/end 和会话逃逸都不能代替处理，必须执行 identity-bound Confirm、Abandon 或 Regenerate。
 
 新应用在创建目录后立即通过 `applicationLifecycle.action = create` 建立 lifecycle；后续启动只使用 `get` 读取已有文件。业务阶段只以 lifecycle 为准，不读取旧 active-planning localStorage、旧完成线程列表、应用索引字段或 checkpoint 反向推导；前端 `planningThreadId` 只用于定位原规划 checkpoint。缺失、损坏和未来版本都会显式失败。
 
@@ -147,7 +147,7 @@ SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `sta
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
-`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，也必须只读校验已确认 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、模板生成 manifest、PageImplementationContract 和当前范围的 Endpoint API 设计；任一前置条件不满足时返回 `build_prerequisite_error`，绝不修改上游正式产物、生成任务 DAG 或进入 `build`。定向 Build Context 以 TechnicalPlan API Contract、动态映射节点/边、业务规则、派生数据流和确认时来源快照为权威来源。集成测试失败后的修复不回到 `build`：`integration_test` 只负责确定性检查、质量门禁和调用只读 RepairPlanner 生成任务包；局部任务统一进入 `small_task_repair`，由共享 SmallTask Agent 执行后再回到 `integration_test`。
+`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，也必须只读校验已确认 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、TemplateState 与冻结的 template_context、PageImplementationContract 和当前范围的 EntitySourceBinding；任一前置条件不满足时返回 `build_prerequisite_error`，绝不修改上游正式产物、生成任务 DAG 或进入 `build`。定向 Build Context 以 TechnicalPlan API Contract 和已确认实体绑定为权威来源。集成测试失败后的修复不回到 `build`：`integration_test` 只负责确定性检查、质量门禁和调用只读 RepairPlanner 生成任务包；局部任务统一进入 `small_task_repair`，由共享 SmallTask Agent 执行后再回到 `integration_test`。
 
 页面任务只继承 `frontend:*` 公共 Unit 和同页面 Unit 内部依赖，不把 `backend:endpoint:*` 或 `database:*` 编译成任务依赖。数据库前置任务完成后，BuildScheduler 可把依赖已满足且文件锁不重叠的 backend 与 page 任务放入同一批次，Build Subgraph 再按 owner 并发调用前后端 Agent；并发工作区快照按各自任务的 `change_scope/target_files/allowed_paths` 过滤后再归属，防止前端文件计入后端结果。API Contract 是并行期间的共同事实来源，`app:integration` 仍等待 endpoint 与 page 两边完成后统一验证。该设计沿用 learn-coding-agent 的契约先行、执行后验证循环，采用 OpenCode 的独立 owner/tool 执行边界，并让 Deep Agents 的专业 Agent 仅获得各自任务范围；每个 owner 仍只接收当前批次的紧凑任务与正式产物引用，符合 128k 上下文预算。
 
@@ -299,7 +299,7 @@ SQLite checkpointer 保存各 execution thread 的主 Graph 状态；恢复只�
 
 ### `prepare_build_tasks`
 
-先由确定性服务根据已确认 TechnicalPlan 与 Endpoint API 设计生成完整 `build-dag.v3` Unit DAG 骨架，再由 planning-only ChatModel 根据当前范围的 `PageImplementationContract`、TechnicalPlan Endpoint、React UI 引用、动态映射节点/边、业务规则/来源快照和 `WorkspaceSnapshot` 生成可执行静态 task DAG：
+先由确定性服务根据已确认 TechnicalPlan 生成完整 `build-dag.v4` Unit DAG 骨架，再由 planning-only ChatModel 根据当前范围的 `PageImplementationContract`、TechnicalPlan Endpoint、React UI 引用、已确认实体绑定和 `WorkspaceSnapshot` 生成可执行静态 task DAG：
 
 - 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为唯一工作区事实来源，不读取、创建、修改或删除代码文件，也不查询或注入 request-scoped 代码图上下文；
 - 生成稳定的 `task_id`；
@@ -315,7 +315,7 @@ SQLite checkpointer 保存各 execution thread 的主 Graph 状态；恢复只�
 
 Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 从 `PageImplementationContract.requiredEndpointIds` 得到接口集合，并直接加载 TechnicalPlan Endpoint 契约；endpoint 任务不嵌入 page Unit。模型显式依赖只用于同 Unit 内排序，跨 Unit 边由确定性编译器生成。
 
-`build-dag.v3` 的 Unit ID 采用新的层次：
+`build-dag.v4` 的 Unit ID 采用新的层次：
 
 - `application:root` 表示整应用根；
 - `backend:bootstrap` 表示后端共享基础能力：数据库来源幂等补齐 Maven、数据源与 MyBatis-Plus，外部 API 来源幂等补齐与模板 Spring Boot 2.7.2 对应的 Spring Cloud OpenFeign 依赖和全局扫描启用；static-only 范围不创建该 Unit；
@@ -335,7 +335,7 @@ DataSource Agent 对 database 和 external_api 统一加载 `springboot-backend-
 
 Build Task 不复制 ProductPlan、UiDesign 或 TechnicalPlan 中的业务验收。页面行为来自 ProductPlan、React UI 稿和 `PageImplementationContract`；Endpoint 契约来自 TechnicalPlan。内部 `acceptance_checks` 由确定性编译器生成。
 
-恢复旧 `build-dag.v3` 时会从任务元数据重新编译工程检查并清除旧业务验收文案。若旧接口任务缺少生成 API/Spring 契约检查所需的 Endpoint/API Contract 上下文，任务图校验失败并要求重新执行 `prepare_build_tasks`，不得用泛化文案或 Agent 自报证据继续执行。
+Build 仅接受当前 `build-dag.v4` 与冻结的 `template_context`；旧计划必须重新规划，不做版本迁移或历史字段回填。当前候选任务按正式 Endpoint/API Contract 编译工程检查，缺少上下文时拒绝候选。
 
 任务编译器不再按 Schema gap 自动删除、补齐或生成数据库任务，也不会推导缺失的 `database_scope`。正常 Build 只消费 Endpoint 动态映射图中的 Source Field、确认快照和执行证据，生成后端持久化代码任务。
 
@@ -349,9 +349,9 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 
 任务 DAG 的用户心智必须按应用级和页面级组织：用户看到和推进的是应用基础能力、页面生成、页面内容实现和整体集成验证。内部 DAG 保留 API、共享组件、权限和页面实现等支撑任务，并通过依赖边把它们挂到对应页面任务之前或页面任务组内；菜单、路由、页面占位和项目级测试不属于 DAG 任务。不得把用户可见计划退化为底层 Agent/文件操作清单；后续生成执行应优先以“生成某个页面及其支撑 API/交互/验证”为自然工作单元。
 
-该节点通过 `agents/main/task_preparer.py` 调用 direct ChatModel 生成任务编排建议，再由确定性 schema 编译结构字段为静态 Build DAG，不改变候选的语义边界。模型只返回 `tasks`；`build_task_plan.workspace_analysis` 始终由 `WorkspaceSnapshot` 确定性生成，并记录 `workspace_snapshot_ref` 以便恢复和审计。任务并行性由平台依据依赖和目标文件冲突计算，模型不得输出并行字段。模型未返回可解析任务、越过平台职责边界或生成无效 DAG 时，节点会把具体错误自动回灌模型并有界重生成；重试耗尽才进入平台失败处理，不把任务拆分规则交给用户，也不能用硬编码任务清单代替模型规划结果。
+`prepare_build_tasks` 的生产入口通过 async Planning adapter 创建后端签发的 PlanningRun。正式输入由服务端从已确认 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效 Endpoint API Design 和权限切片组装并冻结；EntitySourceBinding 不参与正常 DAG Planning。平台按 Unit 建立 FIFO Worker Pool，最多并发三个 model Unit，Local Retry 重新进入队尾；模型只返回当前 Unit 的 `tasks`，不得决定 Worker 数量、跨 Unit 调度或最终执行批次。Task Candidate 仍携带单任务级并行提示，但 Scope 编译器会结合依赖与文件冲突生成平台批次。所有 Unit 通过 Barrier 后才执行 Scope Assembly 和 Global Validation/Repair，只有完整校验通过才写 PendingPlan。模型未返回可解析任务、越过平台职责边界或生成无效 DAG 时，平台在 PlanningRun 内部有界重试；重试耗尽才进入失败处理，不把任务拆分规则交给用户，也不能用硬编码任务清单代替模型规划结果。
 
-调用模型生成任务 DAG 前，节点必须只读检查已确认的 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、模板生成 manifest、当前 PageImplementationContract、Endpoint 契约和 Endpoint API 设计。任一前置条件未满足时返回可定位错误，不修改上游正式产物。
+调用模型生成任务 DAG 前，节点必须只读检查已确认的 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、TemplateState 与冻结的 template_context、当前 PageImplementationContract、Endpoint 契约和 EntitySourceBinding。任一前置条件未满足时返回可定位错误，不修改上游正式产物。
 
 `build_task_plan` 至少包含：
 
@@ -359,16 +359,25 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 - `summary`：任务数量统计；
 - `workspace_analysis`：任务拆分前实际检查到的代码结构和工程约定；
 - `prepared_by`：执行任务编排的 Agent、运行方式和模型信息；
-- `coordination`：任务分发顺序、依赖策略和串并行执行批次。
+- `execution`：平台根据最终依赖、任务并行提示和文件冲突编译出的执行批次；模型不输出该顶层结构。
 
-节点成功后只写入一份任务 DAG 规划产物：
+节点成功后只写入待确认任务 DAG，不修改已有正式计划：
 
-- `.xcodeagent/plans/build-task-plan.json`：内部结构化状态，供 BuildScheduler、调试续跑和后续节点读取；v3 task registry 使用 snake_case 单一字段，不再写入或读取 `task_id/dependsOn/targetFiles/acceptanceCriteria/canRunInParallel` 等旧 DAG 同义字段，`agent_note` 只保留短摘要和响应 hash；
-- 规划 JSON 初次保存为 `confirmation_status=pending`；通过 AG-UI 的 `build_task_plan_confirmation` 动作确认后才允许进入 Build。DAG 确认只编辑任务 `title` 和 `description`，不再生成或读取 `BUILD_TASK_DAG.md`。
+- `.xcodeagent/plans/build-task-plan.pending.json`：当前唯一 PendingPlan，携带后端签发的 `planning_run_id + draft_digest`，不得被 BuildScheduler 消费；
+- `.xcodeagent/plans/build-task-plan.json`：仅保存 ConfirmedPlan，是 BuildScheduler、调试续跑和后续节点的唯一规划权威；
+- v3 task registry 使用 snake_case 单一字段，不再写入或读取旧 DAG 同义字段；不再生成或读取 `BUILD_TASK_DAG.md`。
+
+AG-UI `build_task_plan_confirmation` 是只读确认界面，结构化动作合同为：
+
+- `confirm`：精确复验 Pending identity、正式输入与 DAG，原子提升为 Formal，然后进入 Build；
+- `abandon`：精确删除 Pending、记录终态并结束当前 Workflow execution；聊天会话和已有 Formal 保留；
+- `regenerate`：先删除精确匹配的旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun；成功后写新 Pending，失败时旧 Pending 不恢复且 Formal 不变。
+
+active 生成阶段的取消粒度为整个 Workflow/PlanningRun，不提供 Unit 级取消；待确认阶段使用 `abandon`。页面刷新只恢复 PlanningRun/Pending/Formal 的服务端权威投影，不保证原请求在刷新后继续执行；`planningRefresh` 是不推进持久化 lifecycle revision 的 GET 时弱投影，唯一 Pending、Abandon 标记和终态/DraftIdentity 校验优先于 active-planning 快照，没有 Pending 时不得从聊天历史、旧卡片或旧 execution 恢复确认。后台脱离执行、事件重放和 Candidate 断点续跑明确延期。
 
 任务准备期间通过 LangGraph custom stream 发送 `prepare_build_tasks.progress` 完整快照，AG-UI 运行层将其投射到同一个 `workflow:prepare_build_tasks` 的 `agent-process.dagGeneration` 字段。快照固定按 Unit 骨架、目标上下文、契约校验、模型规划、任务编译、DAG 校验和产物保存七阶段排列；每个阶段可携带冻结的结构化 `output`，前端将候选任务归入模型计划阶段、最终任务表归入任务编译阶段、JSON 产物及确认状态归入产物保存阶段。最终任务按有效拓扑序展示，无效图则保留完整 task registry。公开快照只包含安全摘要、变更路径、工程检查摘要和 JSON 产物标签，不发送模型原文、WorkspaceSnapshot 正文或内部 JSON 路径。
 
-`stages[].output` 是严格的 `kind` 判别联合：`unit_graph` 包含 Unit（id/type/status/taskCount）、Unit 依赖边和骨架校验；`build_context` 包含目标 type/id、关联 Unit/Endpoint/API Contract/数据源及数据库摘要状态；`contract_validation` 包含校验范围、通过状态和问题；`candidate_tasks` 包含候选任务、负责人、依赖和 owner 汇总；`compiled_tasks` 包含最终拓扑任务、变更文件、工程检查摘要、任务依赖边和 owner 汇总；`dag_validation` 包含根/叶任务、拓扑顺序、执行批次（串/并行）和校验错误；`artifacts` 仅包含 `build-task-plan.json` 的 JSON 安全标签和确认状态。列表字段最多 200 条、文本最多 1000 字符，依赖边最多 500 条并带 `truncated` 标记；顶层 `tasks`、`artifacts` 仅作为安全投影保留。阶段完成或失败后产物冻结，后续阶段更新不得覆盖早期详情。历史会话重入时，前端以已完成 Workflow 事件、状态和结果中的 DAG 快照回填已持久化的步骤；若多个来源同时存在，优先选择包含更多阶段 `output` 的完整快照，避免旧的中间进度帧覆盖完成产物。
+`stages[].output` 是严格的 `kind` 判别联合：`unit_graph` 包含 Unit（id/type/status/taskCount）、Unit 依赖边和骨架校验；`build_context` 包含目标 type/id、关联 Unit/Endpoint/API Contract/数据源及数据库摘要状态；`contract_validation` 包含校验范围、通过状态和问题；`candidate_tasks` 包含候选任务、负责人、依赖和 owner 汇总；`compiled_tasks` 包含最终拓扑任务、变更文件、工程检查摘要、任务依赖边和 owner 汇总；`dag_validation` 包含根/叶任务、拓扑顺序、执行批次（串/并行）和校验错误；`artifacts` 仅包含 `build-task-plan.pending.json` 或已确认 `build-task-plan.json` 的 JSON 安全标签和生命周期状态。列表字段最多 200 条、文本最多 1000 字符，依赖边最多 500 条并带 `truncated` 标记；顶层 `tasks`、`artifacts` 仅作为安全投影保留。阶段完成或失败后产物冻结，后续阶段更新不得覆盖早期详情。历史会话重入时，前端以已完成 Workflow 事件、状态和结果中的 DAG 快照回填已持久化的步骤；若多个来源同时存在，优先选择包含更多阶段 `output` 的完整快照，避免旧的中间进度帧覆盖完成产物。
 
 任务规划提示词按实际可替换 Unit 渐进注入上下文：endpoint Unit 获得 TechnicalPlan Endpoint、Contract `entity_ids` 对应的全局实体语义、已确认字段映射摘要和后端数据源规则，page Unit 获得页面实现契约和前端事实；两类 Unit 同轮待生成时才组合当前范围。任务规划阶段不读取或注入 Skill 内容；执行 Agent 使用 `source_refs.endpoint_designs` 选择对应 Skill，bootstrap 只继承已确认字段映射中的数据源快照。
 
@@ -379,6 +388,7 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 {workspace}/.xcodeagent/plans/technical-plan.{md,json}
 {workspace}/.xcodeagent/checkpoints/checkpoints.sqlite
 {workspace}/.xcodeagent/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json
+{workspace}/.xcodeagent/plans/build-task-plan.pending.json
 {workspace}/.xcodeagent/plans/build-task-plan.json
 {workspace}/.xcodeagent/plans/repair-task-plan.json
 {workspace}/.xcodeagent/reports/test-report.json
@@ -609,7 +619,7 @@ acceptance.START
 任务编译和执行还必须遵守以下确定性边界：
 
 - 页面任务进入 DAG 前，以实时工作区校对模型计划路径。只有当计划入口不存在，且实时 `frontend/src/pages` 中存在唯一的同义目录（忽略大小写、分隔符和 `Page` 后缀）时，才把目标路径改写到该既有入口；保留模型声明的 `add/modify` 操作，若仍违反页面初始化边界则写入校验错误并自动重生成；多候选时不得猜测。这样可修复 WorkspaceSnapshot 在长流程中变旧造成的 `DashboardPage`/`Dashboard` 重复入口，同时保留可审计的 `path_reconciliation`。
-- 模板初始化按 manifest 的双端分支选择变体：`main` 保持页面占位与 `BIZ_MENUS` 初始化；`auth` 只检查资源与 routes 托管区，Build 启动前的平台根据确认 manifest 写入资源常量和页面配置，页面任务仅创建业务页面。双端分支不一致或权限开启但不是 auth 变体时 fail closed；模型误输出平台保留注册任务时确定性丢弃并清理其依赖，其他任务触及共享注册文件、路由树、隐藏路由或模板基础设施时仍写入 `task_graph.validation.errors` 后自动重生成。
+- Bootstrap 由 Backend 调用 Template Engine，消费 Engine-owned TemplateState；有效能力决定权限适用性。事务内 Readiness 与 Git baseline 成功后进入 READY。业务页面由 Build Agent 实现；全部任务成功后平台重放确认 DAG，写通用 routes、可选权限资源和 AuthConstants，再执行只读 EDD。平台变更单独记入 `platform_projection_evidence`。越权候选保留并写入 `task_graph.validation.errors`，供自动重生成。
 - 任何具有精确 `target_files` 的可执行任务都交给对应 Frontend/Data Source 受限 runner。共享路径、公共契约和重叠目标仍然串行，但不得标记为不存在后续集成步骤的 `subagent-plan-only`。无精确目标的候选不能进入代码执行器。
 - Frontend/Data Source owner Agent 只负责任务范围内的源码读取和实现，不在 task 内执行依赖安装、build、lint、typecheck、unit test 或 dev-server 命令；依赖、Build、性能和集成检查由后续 `integration_test` 执行，单元测试由开发阶段 `unit_test` 执行，缺少依赖或命令时由 Agent 在结构化结果中报告，不得自行安装恢复。
 - 专业 Agent 最终返回 `task_results` 结构化对象，逐任务给出 `completed`、`already_satisfied` 或 `failed`，但状态声明和自然语言证据都不构成项目级质量结论。当前 Build 调度器只负责结果归一化和真实文件 diff 的任务归属，不再执行 `engineering_acceptance`/`acceptance_checks` 逐项工程验收，也不因批次快照中出现额外的编译产物或生成文件而阻断代码生成。菜单、API/Spring 契约和数据库等项目级正确性由开发阶段 `unit_test` 的单测门禁与测试阶段 `integration_test` 的 install、build、性能和集成质量门禁共同处理；`acceptance_checks` 仍保留在任务计划和修复上下文中，供审计或后续重新启用。合法 JSON 遗漏已派发任务时记为 `runner_protocol_error`；明显未转义双引号会先做一次确定性恢复，仍损坏的顶层报告记为 `invalid_structured_response` 并进入受控重试分类。
@@ -898,7 +908,7 @@ Graph State 只保存这些文件的路径和版本。
 - 所有文件操作必须限制在项目工作目录中。
 - 前端历史会话的消息、草稿、运行状态和停止控制必须按 `workspaceRoot + editorMode + sessionId` 隔离；本地消息记录只负责 UI 展示和持久化，每次执行创建请求级 AG-UI `HttpAgent`，只发送当前用户消息且不复用上一轮客户端 state。`threadId` 只属于对应会话并跨请求稳定复用，每次执行使用独立 `runId`。
 - 同一个 `workspaceRoot` 允许多个 `/workflow/run` 进入 Graph。Backend 的进程内 workspace lease 只登记活动 run 并负责结束清理，不再以工作区、页面或资源交集返回 `workspace_busy`。
-- 停止生成必须是端到端取消：前端先中止当前 SSE 消费以停止渲染，再通过同一 `/workflow/run` 发送带 `forwardedProps.cancelRunId` 的独立 AG-UI 控制运行。后端的进程内运行表按 `runId` 调用对应 `asyncio.Task.cancel()`，使 `graph.astream()` 和其正在等待的异步模型 HTTP 流收到取消；控制运行也返回完整 AG-UI 开始、消息、状态快照和结束事件。模型供应商对已在其服务端排队的 token 的最终停止时点仍是 best-effort，不把取消响应误报为模型已计费归零。
+- 停止生成必须是端到端取消：有本地 SSE 句柄时，前端先给运行最多 300ms 自然收口；仍未完成才通过同一 `/workflow/run` 发送带 `forwardedProps.cancelRunId` 的独立 AG-UI 控制运行。后端等待注册任务退出并返回 `cancelled`、`not_running` 或 `cancel_timeout`；只有确认服务端停止后，前端才中止残余本地传输并有限等待其收口。无法确认时保留 unresolved server run identity，禁止同 thread 新运行。刷新恢复且没有本地句柄时直接走同一控制路径。模型供应商对已排队 token 的最终停止仍是 best-effort。
 - 该设计对应 learn-coding-agent 的“执行后立刻反馈/停止”紧凑循环，采用 OpenCode 风格的稳定运行标识和显式任务生命周期，并保持 Deep Agents 的人类可控边界。运行表只保存 `runId -> asyncio.Task`，不复制对话或仓库内容，因此不会扩大 128k 上下文预算；当前单 Uvicorn 进程是该进程内表的适用边界，未来多进程部署需要共享取消协调器。
 - 当前阶段不由 Workflow 运行登记阻止修改相同文件；文件写入安全仍由具体工具和原子写入边界负责。
 - 共享入口文件、依赖清单、API 契约和路由配置应使用文件锁。

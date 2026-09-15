@@ -4,6 +4,7 @@
  */
 
 import { backendControllerPath, frontendPagePath } from './mock/workspaceFiles'
+import type { BusinessObject } from './components/BusinessObjects/model'
 import {
   TEST_CASE_ESTIMATE_GROUPS,
   type TestCaseExecutionSnapshot,
@@ -172,8 +173,11 @@ function pascalCase(value: string): string {
     .join('')
 }
 
-/** 从页面设计生成真实感的 TSX 源码（含状态、表格、接口依赖）。 */
-export function buildPageSource(design: PageDesign, pageId: string): { filePath: string; content: string } {
+/** 从页面设计生成真实感的 TSX 源码（含状态、表格与数据依赖）。 */
+export function buildPageSource(
+  design: PageDesign,
+  pageId: string
+): { filePath: string; content: string } {
   const componentName = `${pascalCase(pageId)}Page`
   const name = design.name || pageId
   const path = design.path || `/${pageId}`
@@ -181,21 +185,23 @@ export function buildPageSource(design: PageDesign, pageId: string): { filePath:
   const apis = design.api_dependencies || []
   const interactions = design.interactions || []
   const apiComments = apis.length
-    ? apis.map((api) => `// ${api.method || 'GET'} ${api.path || ''} — ${api.purpose || ''}`).join('\n  ')
-    : '// 暂无接口依赖'
+    ? apis
+        .map((api) => `// ${api.method || 'GET'} ${api.path || ''} — ${api.purpose || ''}`)
+        .join('\n  ')
+    : '// 数据通过 实体.操作() 提供，数据实现由实体开发工作流确认'
 
   const content = [
     `import { Button, Card, Space, Table, Tag, message } from 'antd'`,
     `import { useEffect, useState } from 'react'`,
     ``,
-    `// 由 XCodeAgent 生成 · ${name} · ${path}`,
+    `// 由 AIStudio 生成 · ${name} · ${path}`,
     `type Row = Record<string, unknown>`,
     ``,
     `export default function ${componentName}() {`,
     `  const [loading, setLoading] = useState(false)`,
     `  const [rows, setRows] = useState<Row[]>([])`,
     ``,
-    `  // 接口依赖`,
+    `  // 数据依赖`,
     `  ${apiComments}`,
     ``,
     `  useEffect(() => {`,
@@ -204,7 +210,7 @@ export function buildPageSource(design: PageDesign, pageId: string): { filePath:
     ``,
     `  async function loadList() {`,
     `    setLoading(true)`,
-    `    // 对接接口并绑定响应`,
+    `    // 调用实体操作并绑定响应`,
     `    setRows([])`,
     `    setLoading(false)`,
     `    message.success('${name}数据已加载')`,
@@ -235,14 +241,19 @@ export function buildPageSource(design: PageDesign, pageId: string): { filePath:
 }
 
 /** 从接口设计生成真实感的 Java Controller 源码（对齐 build-task-plan 的 target_files）。 */
-export function buildEndpointSource(
-  design: Record<string, any>
-): { filePath: string; content: string } {
+export function buildEndpointSource(design: Record<string, any>): {
+  filePath: string
+  content: string
+} {
   const method = String(design.method || 'GET').toUpperCase()
   const path = String(design.path || '/api/resource')
   const summary = String(design.summary || design.name || '接口')
   // /api/rechecks/my → Rechecks;取 path 首段资源名做 Controller 类名。
-  const resource = path.split('/').filter(Boolean).find((seg) => seg !== 'api') || 'Resource'
+  const resource =
+    path
+      .split('/')
+      .filter(Boolean)
+      .find((seg) => seg !== 'api') || 'Resource'
   const className = `${pascalCase(resource)}Controller`
   const packageName = resource.toLowerCase()
 
@@ -253,27 +264,44 @@ export function buildEndpointSource(
   const logic = (design.processing_logic || []) as string[]
 
   const methodLower = method.toLowerCase()
-  const mapping = method === 'GET' ? 'GetMapping' : method === 'POST' ? 'PostMapping' : method === 'PUT' ? 'PutMapping' : method === 'DELETE' ? 'DeleteMapping' : 'RequestMapping'
+  const mapping =
+    method === 'GET'
+      ? 'GetMapping'
+      : method === 'POST'
+        ? 'PostMapping'
+        : method === 'PUT'
+          ? 'PutMapping'
+          : method === 'DELETE'
+            ? 'DeleteMapping'
+            : 'RequestMapping'
 
   const paramsSig = queryParams
-    .map((p) => `@RequestParam(required = ${Boolean(p.required)}) String ${String(p.name || 'arg').replace(/[^a-zA-Z0-9]/g, '')}`)
+    .map(
+      (p) =>
+        `@RequestParam(required = ${Boolean(p.required)}) String ${String(p.name || 'arg').replace(/[^a-zA-Z0-9]/g, '')}`
+    )
     .join(', ')
   const paramComments = queryParams.length
-    ? queryParams.map((p) => `   * @param ${String(p.name || 'arg').replace(/[^a-zA-Z0-9]/g, '')} ${p.schema || ''}`).join('\n')
+    ? queryParams
+        .map(
+          (p) =>
+            `   * @param ${String(p.name || 'arg').replace(/[^a-zA-Z0-9]/g, '')} ${p.schema || ''}`
+        )
+        .join('\n')
     : ''
   const logicComments = logic.length
     ? logic.map((l) => `     * ${l}`).join('\n')
     : '     * 按业务规则处理请求'
 
   const lines = [
-    `package com.xcodeagent.${packageName}.controller;`,
+    `package com.aistudio.${packageName}.controller;`,
     ``,
     `import org.springframework.web.bind.annotation.*;`,
-    `import com.xcodeagent.common.api.ApiResponse;`,
+    `import com.aistudio.common.api.ApiResponse;`,
     `import org.springframework.web.validation.annotation.Validated;`,
     ``,
     `/**`,
-    ` * 由 XCodeAgent 生成 · ${summary} · ${method} ${path}`,
+    ` * 由 AIStudio 生成 · ${summary} · ${method} ${path}`,
     ` */`,
     `@RestController`,
     `@RequestMapping("/api/${packageName}")`,
@@ -294,16 +322,13 @@ export function buildEndpointSource(
     ``
   ]
   // 合并连续空行为单行,避免文档空洞。
-  const content = lines
-    .filter((line, i) => !(line === '' && lines[i - 1] === ''))
-    .join('\n')
+  const content = lines.filter((line, i) => !(line === '' && lines[i - 1] === '')).join('\n')
 
   return {
     filePath: backendControllerPath(packageName),
     content
   }
 }
-
 
 export function buildPageDocFallback(pageLabel: string, path: string, purpose: string): string {
   return [
@@ -329,18 +354,25 @@ export function buildPageDocFallback(pageLabel: string, path: string, purpose: s
 export function buildAppRequirementDoc(
   applicationName: string,
   pages: Array<{ label: string; path?: string; purpose?: string }>,
-  apiContracts: Array<{ label: string; endpoints: Array<{ method?: string; path?: string; summary?: string }> }>
+  apiContracts: Array<{
+    label: string
+    endpoints: Array<{ method?: string; path?: string; summary?: string }>
+  }>
 ): string {
   const lines: string[] = [`# ${applicationName || '应用'} 需求文档`, '']
   lines.push('## 页面清单')
   if (pages.length === 0) lines.push('_暂无页面_')
-  pages.forEach((page) => lines.push(`- **${page.label}** \`${page.path || ''}\` — ${page.purpose || ''}`))
+  pages.forEach((page) =>
+    lines.push(`- **${page.label}** \`${page.path || ''}\` — ${page.purpose || ''}`)
+  )
   if (apiContracts.length) {
     lines.push('', '## 接口契约')
     apiContracts.forEach((contract) => {
       lines.push(`- **${contract.label}**`)
       contract.endpoints.forEach((endpoint) =>
-        lines.push(`  - \`${endpoint.method || ''}\` \`${endpoint.path || ''}\` — ${endpoint.summary || ''}`)
+        lines.push(
+          `  - \`${endpoint.method || ''}\` \`${endpoint.path || ''}\` — ${endpoint.summary || ''}`
+        )
       )
     })
   }
@@ -350,12 +382,16 @@ export function buildAppRequirementDoc(
 // —— 需求分析/项目计划阶段三份产物文档构建器（需求文档 / 项目计划 / 构建任务计划）——
 
 /** 从需求文档结构化数据渲染 Markdown。appName 优先用当前应用名。 */
-export function buildRequirementSpecDoc(
-  spec: Record<string, any>,
-  appName?: string
-): string {
+export function buildRequirementSpecDoc(spec: Record<string, any>, appName?: string): string {
   const app = (spec.app_info || {}) as Record<string, any>
-  const lines = [`# 需求文档 · ${appName || app.name || '应用'}`, '', '## 应用目标', String(app.description || ''), '', '## 用户角色']
+  const lines = [
+    `# 需求文档 · ${appName || app.name || '应用'}`,
+    '',
+    '## 应用目标',
+    String(app.description || ''),
+    '',
+    '## 用户角色'
+  ]
   for (const role of (spec.user_roles || []) as Array<Record<string, any>>) {
     lines.push(`- **${role.name}**：${role.description}`)
     if (Array.isArray(role.permissions) && role.permissions.length) {
@@ -382,12 +418,23 @@ export function buildRequirementSpecDoc(
 }
 
 /** 从项目计划数据渲染 Markdown（页面树 + 技术栈 + 接口契约 + 执行顺序）。 */
-export function buildProjectPlanDoc(
-  plan: Record<string, any>,
-  appName?: string
-): string {
+export function buildProjectPlanDoc(plan: Record<string, any>, appName?: string): string {
   const tech = (plan.tech_stack || {}) as Record<string, any>
-  const lines = [`# 项目计划 · ${appName || '应用'}`, '', '## 技术栈', `- 前端：${tech.frontend}`, `- 后端：${tech.backend}`, `- 数据库：${tech.database}`, '', '## 规划摘要', String(plan.summary || ''), '', '## 页面', '| 菜单 | 页面 | 路由 |', '| --- | --- | --- |']
+  const lines = [
+    `# 项目计划 · ${appName || '应用'}`,
+    '',
+    '## 技术栈',
+    `- 前端：${tech.frontend}`,
+    `- 后端：${tech.backend}`,
+    `- 数据库：${tech.database}`,
+    '',
+    '## 规划摘要',
+    String(plan.summary || ''),
+    '',
+    '## 页面',
+    '| 菜单 | 页面 | 路由 |',
+    '| --- | --- | --- |'
+  ]
   const walk = (nodes: Array<Record<string, any>>): void => {
     for (const node of nodes) {
       if (node.type === 'menu') {
@@ -411,6 +458,90 @@ export function buildProjectPlanDoc(
   return lines.join('\n')
 }
 
+/** 从 ProductPlan 当前契约渲染产品可见的页面、动作、状态与验收 Markdown。 */
+export function buildProductPlanDoc(plan: Record<string, any>, appName?: string): string {
+  const app = (plan.app || {}) as Record<string, any>
+  const lines = [
+    `# 产品规划 · ${appName || app.name || '应用'}`,
+    '',
+    String(app.summary || ''),
+    '',
+    '## 页面与产品行为'
+  ]
+  for (const page of (plan.pages || []) as Array<Record<string, any>>) {
+    lines.push('', `### ${page.name || page.pageId} · \`${page.path || ''}\``)
+    if (page.goal) lines.push(String(page.goal))
+    const informationItems = (page.information_items || []) as Array<Record<string, any>>
+    if (informationItems.length) {
+      lines.push('', '**信息项**')
+      informationItems.forEach((item) =>
+        lines.push(`- ${item.label || item.itemId}：${item.description || ''}`)
+      )
+    }
+    const actions = (page.actions || []) as Array<Record<string, any>>
+    if (actions.length) {
+      lines.push('', '**用户动作**')
+      actions.forEach((action) => {
+        const behavior = (action.behavior || {}) as Record<string, any>
+        lines.push(
+          `- ${action.name || action.actionId}：${behavior.expectedResult || action.description || ''}`
+        )
+      })
+    }
+    const acceptance = (page.acceptance_criteria || []) as string[]
+    if (acceptance.length) {
+      lines.push('', '**页面验收**')
+      acceptance.forEach((item) => lines.push(`- ${item}`))
+    }
+  }
+  lines.push('', '## 产品验收标准')
+  for (const criterion of (plan.product_acceptance_criteria || []) as string[]) {
+    lines.push(`- ${criterion}`)
+  }
+  return lines.join('\n')
+}
+
+/** 从 TechnicalPlan 当前契约渲染架构、实体、API 与页面技术绑定 Markdown。 */
+export function buildTechnicalPlanDoc(plan: Record<string, any>, appName?: string): string {
+  const architecture = (plan.architecture || {}) as Record<string, any>
+  const lines = [
+    `# 技术规划方案 · ${appName || '应用'}`,
+    '',
+    '## 技术架构',
+    `- 前端：${architecture.frontend || ''}`,
+    `- 后端：${architecture.backend || ''}`,
+    `- 数据：${architecture.data || ''}`,
+    '',
+    '## 实体'
+  ]
+  for (const entity of (plan.entities || []) as Array<Record<string, any>>) {
+    lines.push(`- **${entity.name || entity.id}**：${entity.description || ''}`)
+    for (const field of (entity.fields || []) as Array<Record<string, any>>) {
+      lines.push(
+        `  - ${field.label || field.name} · ${field.type || 'text'}${field.required ? ' · 必填' : ''}`
+      )
+    }
+  }
+  lines.push('', '## API 契约')
+  for (const contract of (plan.api_contracts || []) as Array<Record<string, any>>) {
+    lines.push(`- **${contract.name || contract.id}** \`${contract.base_path || ''}\``)
+    for (const endpoint of (contract.endpoints || []) as Array<Record<string, any>>) {
+      lines.push(
+        `  - \`${endpoint.method || ''}\` \`${endpoint.path || ''}\`：${endpoint.summary || ''}`
+      )
+    }
+  }
+  lines.push('', '## 页面技术绑定')
+  for (const page of (plan.pages || []) as Array<Record<string, any>>) {
+    const references = (page.references || {}) as Record<string, any>
+    const endpoints = Array.isArray(references.endpoint_dependencies)
+      ? references.endpoint_dependencies.join('、') || '无'
+      : '无'
+    lines.push(`- **${page.pageId || '页面'}**：Endpoint 依赖 ${endpoints}`)
+  }
+  return lines.join('\n')
+}
+
 /** 从构建任务计划数据渲染 Markdown（构建单元表 + 任务表）。 */
 export function buildBuildTaskPlanDoc(plan: Record<string, any>): string {
   const summary = (plan.summary || {}) as Record<string, any>
@@ -425,8 +556,15 @@ export function buildBuildTaskPlanDoc(plan: Record<string, any>): string {
     )
   }
   header.push('', '## 构建单元', '| 单元 | 类型 | 状态 |', '| --- | --- | --- |')
-  units.forEach((unit) => header.push(`| ${unit.label || unit.id} | ${unit.kind || '-'} | ${unit.status || '-'} |`))
-  header.push('', '## 任务', '| ID | 单元 | Owner | 类型 | 标题 | 验收标准 |', '| --- | --- | --- | --- | --- | --- |')
+  units.forEach((unit) =>
+    header.push(`| ${unit.label || unit.id} | ${unit.kind || '-'} | ${unit.status || '-'} |`)
+  )
+  header.push(
+    '',
+    '## 任务',
+    '| ID | 单元 | Owner | 类型 | 标题 | 验收标准 |',
+    '| --- | --- | --- | --- | --- | --- |'
+  )
   tasks.forEach((task) => {
     const unitLabel = units.find((unit) => unit.id === task.unit_id)?.label || task.unit_id || '-'
     const acceptance = Array.isArray(task.acceptance_criteria)
@@ -478,11 +616,15 @@ export function buildEndpointDesignDoc(design: Record<string, any>): string {
   if (params.length) {
     lines.push('- **请求参数**：')
     params.forEach((param) =>
-      lines.push(`  - \`${param.name}\`（${param.in || 'param'}）${param.required ? ' 必填' : ''} — ${param.schema || ''}`)
+      lines.push(
+        `  - \`${param.name}\`（${param.in || 'param'}）${param.required ? ' 必填' : ''} — ${param.schema || ''}`
+      )
     )
   }
   if (request.request_body) {
-    lines.push(`- **请求体**：\`${JSON.stringify((request.request_body as Record<string, any>).schema || '')}\``)
+    lines.push(
+      `- **请求体**：\`${JSON.stringify((request.request_body as Record<string, any>).schema || '')}\``
+    )
   }
   const response = (iface.response_format || {}) as Record<string, any>
   if (response.status_code != null) {
@@ -600,4 +742,136 @@ export function buildReviewReport(testExecution?: TestCaseExecutionSnapshot): st
 - 页面：我的回检
 - 接口：GET /api/rechecks/my
 `
+}
+
+// 平台内置操作到数据适配方法名的固定映射：适配层代码按这套命名生成。
+const BUILTIN_ADAPTER_METHODS: Record<string, string> = {
+  分页查询: 'pageQuery',
+  查询详情: 'queryById',
+  查询回检详情: 'queryById',
+  新增: 'insert',
+  更新: 'update',
+  删除: 'delete'
+}
+
+/** 从字段映射标签里还原来源列名：标签形如「武汉回检数据库 · project_name（关联项目）」。 */
+function columnNameFromMapping(sourceLabel: string): string {
+  const matched = sourceLabel.match(/· (.+?)（/)
+  return matched ? matched[1] : sourceLabel
+}
+
+/**
+ * 从实体确认后的绑定生成数据适配层源码：数据库绑定产出 SQL 适配，外部服务绑定产出
+ * 契约调用与出参翻译。对话区「确认绑定」后由开发工作流把这份文件作为实体交付物生成。
+ */
+export function buildEntityAdapterSource(object: BusinessObject): {
+  filePath: string
+  content: string
+} {
+  const className = `${pascalCase(object.id)}EntityAdapter`
+  const bindingSummary = Array.from(
+    new Set(
+      object.operations.flatMap((operation) =>
+        operation.implementation.bindings.map(
+          (binding) =>
+            binding.targetName
+              ? `${binding.sourceName} · ${binding.targetName}（${binding.targetComment}）`
+              : binding.sourceName
+        )
+      )
+    )
+  ).join(' + ')
+  const mappingComments = object.fields.map((field) => {
+    const mapping = object.operations
+      .flatMap((operation) => operation.implementation.mappings)
+      .find((item) => item.field === field.name && item.sourceLabel)
+    return `    //   ${field.name} → ${mapping ? mapping.sourceLabel : '业务规则推导'}`
+  })
+
+  let customIndex = 0
+  const methodBlocks = object.operations.map((operation) => {
+    const implementation = operation.implementation
+    const binding = implementation.bindings[0]
+    const builtinMethod = BUILTIN_ADAPTER_METHODS[operation.name]
+    const methodName =
+      operation.operationType === 'builtin' && builtinMethod
+        ? builtinMethod
+        : `customOp${(customIndex += 1)}`
+    const targetLabel = binding
+      ? binding.targetName
+        ? `${binding.sourceName} · ${binding.targetName}`
+        : binding.sourceName
+      : '业务规则推导'
+    const head = [
+      '    /**',
+      `     * ${operation.name}（${operation.operationType === 'builtin' ? '平台内置' : '需求自定义'}） → ${targetLabel}`,
+      '     */'
+    ]
+    // 本地实现：不产生数据访问代码，只落到业务规则服务。
+    if (!binding || binding.sourceId === 'local') {
+      return [
+        ...head,
+        `    public List<Map<String, Object>> ${methodName}(Map<String, Object> input) {`,
+        `        // 本地业务规则：${implementation.rule || '校验输入 → 执行业务规则 → 返回结果'}`,
+        '        return businessRuleService.execute(input);',
+        '    }'
+      ]
+    }
+    // 外部服务绑定：按固定契约调用并翻译出参，映射关系来自确认的绑定。
+    if (implementation.kind === '外部服务') {
+      const translations = implementation.mappings
+        .filter((mapping) => mapping.sourceLabel)
+        .map((mapping) => `        //   response.${columnNameFromMapping(mapping.sourceLabel)} → ${mapping.field}`)
+      return [
+        ...head,
+        `    public Map<String, Object> ${methodName}(Map<String, Object> input) {`,
+        '        // 调用外部服务并按确认的映射翻译出参',
+        ...translations,
+        `        Map<String, Object> response = externalClient.invoke("${binding.sourceName}", "${binding.targetName}", input);`,
+        '        return responseTranslator.translate(response);',
+        '    }'
+      ]
+    }
+    // 数据库绑定：按映射出的来源列拼装查询，表名来自确认的库表绑定。
+    const columns = implementation.mappings
+      .filter((mapping) => mapping.sourceLabel)
+      .map((mapping) => columnNameFromMapping(mapping.sourceLabel))
+    const columnList = Array.from(new Set(columns)).join(', ') || '*'
+    const table = binding.targetName || 'table'
+    const kindNote = operation.operationType === 'builtin' ? '平台按表结构模板生成' : '按确认的绑定生成'
+    return [
+      ...head,
+      `    public List<Map<String, Object>> ${methodName}(Map<String, Object> query) {`,
+      `        // ${kindNote}：字段映射沿用绑定确认结果`,
+      `        String sql = "SELECT ${columnList} FROM ${table}";`,
+      '        return jdbcTemplate.queryForList(sql, query);',
+      '    }'
+    ]
+  })
+
+  const content = [
+    'package com.aistudio.recheck.entity.adapter;',
+    '',
+    'import java.util.List;',
+    'import java.util.Map;',
+    '',
+    'import org.springframework.jdbc.core.JdbcTemplate;',
+    'import org.springframework.stereotype.Repository;',
+    '',
+    '/**',
+    ` * 由 AIStudio 生成 · 实体「${object.name}」数据适配层`,
+    ` * 数据绑定：${bindingSummary}`,
+    ' * 字段映射在绑定确认时自动推导；页面统一通过 实体.操作() 消费这份数据能力。',
+    ' */',
+    '@Repository',
+    `public class ${className} {`,
+    '',
+    '    // 实体字段 → 来源字段映射',
+    ...mappingComments,
+    '',
+    ...methodBlocks.flat(),
+    '}',
+    ''
+  ].join('\n')
+  return { filePath: `backend/entity-adapters/${object.id}-entity-adapter.java`, content }
 }

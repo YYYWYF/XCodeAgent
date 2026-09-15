@@ -7,7 +7,7 @@
   "summary": {
     "total": 2,
     "frontend": 2,
-    "backend": 1,
+    "backend": 0,
     "database": 0,
     "pending": 2,
     "running": 0,
@@ -22,7 +22,9 @@
       "label": "回检介绍",
       "status": "pending",
       "depends_on_unit_ids": [],
-      "task_ids": ["task-introduction"]
+      "task_ids": [
+        "task-introduction"
+      ]
     },
     {
       "id": "page:my-rechecks",
@@ -30,15 +32,9 @@
       "label": "我的回检",
       "status": "pending",
       "depends_on_unit_ids": [],
-      "task_ids": ["task-recheck-query"]
-    },
-    {
-      "id": "endpoint:rechecks:ep-my-rechecks",
-      "kind": "endpoint",
-      "label": "GET /api/rechecks/my",
-      "status": "pending",
-      "depends_on_unit_ids": [],
-      "task_ids": ["task-recheck-query"]
+      "task_ids": [
+        "task-recheck-query"
+      ]
     }
   ],
   "task_registry": [
@@ -50,24 +46,31 @@
       "unit_id": "page:recheck-introduction",
       "status": "pending",
       "dependencies": [],
-      "target_files": ["frontend/pages/recheck-introduction.tsx"],
+      "target_files": [
+        "frontend/pages/recheck-introduction.tsx"
+      ],
       "risk": "low",
-      "acceptance_criteria": ["无需接口即可完整展示", "可进入我的回检页面"]
+      "acceptance_criteria": [
+        "无需接口即可完整展示",
+        "可进入我的回检页面"
+      ]
     },
     {
       "id": "task-recheck-query",
-      "owner": "fullstack",
-      "task_type": "fullstack.code",
+      "owner": "frontend",
+      "task_type": "frontend.code",
       "title": "实现回检查询与列表展示",
       "unit_id": "page:my-rechecks",
       "status": "pending",
       "dependencies": [],
       "target_files": [
-        "frontend/pages/my-rechecks.tsx",
-        "backend/rechecks-controller.java"
+        "frontend/pages/my-rechecks.tsx"
       ],
       "risk": "medium",
-      "acceptance_criteria": ["查询接口仅返回当前用户数据", "页面筛选与列表使用真实接口", "页面与接口联调通过"]
+      "acceptance_criteria": [
+        "列表数据通过 回检单.查询我的回检() 获取，且仅包含当前用户的回检单",
+        "状态筛选与列表展示联调通过"
+      ]
     }
   ]
 }

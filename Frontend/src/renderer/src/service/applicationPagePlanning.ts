@@ -18,6 +18,11 @@ export type WorkflowRevisionContinuationHandoff = {
   lifecycle: ApplicationLifecycle
 }
 
+export type RequirementSpecDraftSaveResult = {
+  artifact: WorkflowConfirmationArtifact
+  requirementSpec: Record<string, unknown>
+}
+
 type RequirementSpecDraftPayload = {
   schemaVersion: 1
   runId: string
@@ -130,10 +135,7 @@ export async function saveRequirementSpecDraft(
   workspaceRoot: string,
   spec: Record<string, unknown>,
   threadId: string
-): Promise<{
-  artifact: WorkflowConfirmationArtifact
-  requirementSpec: Record<string, unknown>
-}> {
+): Promise<RequirementSpecDraftSaveResult> {
   const agent = createAgUiHttpAgent({ url: getApplicationPlanningUrl(), threadId })
   const userMessage: Message = {
     id: randomUUID(),

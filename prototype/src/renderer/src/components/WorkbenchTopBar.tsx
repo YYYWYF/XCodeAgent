@@ -22,7 +22,7 @@ const PHASE_SWITCH_POINTS = [
   {
     icon: <EditOutlined />,
     title: '可编辑上游产物',
-    desc: '回到该阶段后，需求文档 / 项目计划等上游产物可重新调整。'
+    desc: '回到该阶段后，可重新调整需求规格说明书和 UI 设计等上游产物。'
   },
   {
     icon: <RetweetOutlined />,

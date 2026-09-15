@@ -12,6 +12,7 @@ class ProjectState(TypedDict, total=False):
     application_name: str
     active_thread_id: str
     active_run_id: str
+    owner_session_id: str
     change_id: str
     change_target: dict[str, Any]
     element_context: dict[str, Any]
@@ -46,6 +47,7 @@ class ProjectState(TypedDict, total=False):
     design_interaction_origin: str
     product_stage_conversation: bool
     application_planning_interaction: dict[str, Any]
+    requirement_revision_id: str
     authorization_config_conflict: dict[str, Any]
     direct_modification_owner: str
     direct_modification_scope: str
@@ -102,6 +104,8 @@ class ProjectState(TypedDict, total=False):
     api_design_readiness: dict[str, Any]
     development_continuation_id: str
     application_planning_confirmation: dict[str, Any]
+    template_reconcile_pending: bool
+    template_preparation: dict[str, Any] | None
     ui_designs: dict[str, Any]
     ui_design_action: dict[str, Any]
     workspace_snapshot_summary: dict[str, Any]
@@ -113,6 +117,8 @@ class ProjectState(TypedDict, total=False):
     build_execution_scope: dict[str, str]
     last_persisted_build_execution_scope: dict[str, str] | None
     build_task_plan_persisted: bool
+    pending_build_task_plan_path: str
+    pending_build_task_plan_persisted: bool
     execution_resource_claims: list[dict[str, Any]]
     build_execution_slice: dict[str, Any]
     build_context: dict[str, Any]
@@ -120,6 +126,8 @@ class ProjectState(TypedDict, total=False):
     database_approval_requests: list[dict[str, Any]]
     build_task_plan: dict[str, Any]
     build_task_plan_confirmation: dict[str, Any]
+    planning_run_id: str
+    draft_digest: str
     dag_generation_progress: dict[str, Any]
     build_task_plan_path: str
     build_run_id: str
@@ -137,7 +145,7 @@ class ProjectState(TypedDict, total=False):
     build_results: list[dict[str, Any]]
     build_summary: dict[str, Any]
     authorization_bootstrap_result: dict[str, Any]
-    authorization_platform_projection_evidence: dict[str, Any]
+    platform_projection_evidence: dict[str, Any]
     build_events: Annotated[list[str], add]
     test_target: dict[str, Any]
     test_phase_confirmation: dict[str, Any]

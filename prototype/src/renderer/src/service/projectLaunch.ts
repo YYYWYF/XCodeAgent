@@ -18,7 +18,7 @@ export type ProjectLaunchResult = {
 
 /** 返回后端 API 的基础地址（仅 origin，不含路径）。 */
 function getBackendOrigin(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.aiStudio?.agentBaseUrl
   return agentBaseUrl ? agentBaseUrl.replace(/\/$/, '') : ''
 }
 

@@ -99,10 +99,51 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
             self.assertEqual(route_small_task_result(result), "await_user_input" if status == "requires_user_confirmation" else "handle_failure")
 
     def test_integration_repairs_do_not_inherit_unit_test_retry_policy(self) -> None:
-        """共享 Agent 的协议错误分类不改变集成测试的独立重试策略。"""
-        with tempfile.TemporaryDirectory() as workspace, patch("app.services.small_task.invoke_small_task_agent", return_value=""):
+        """集成测试连续三次无效输出后有界失败，不继承单测预算。"""
+        with tempfile.TemporaryDirectory() as workspace, patch("app.services.small_task.invoke_small_task_agent", return_value="") as invoke:
             result = small_task_repair({"workspace": workspace, "repair_tasks": [repair_task("backend_unit_tests")]})
         self.assertEqual(route_small_task_result(result), "handle_failure")
+        self.assertEqual(invoke.call_count, 3)
+
+    def test_integration_invalid_json_retries_same_task_and_preserves_diff(self) -> None:
+        """前后端无效输出在同一修复节点重试，保留首轮修改并返回复测。"""
+        for owner in ("frontend", "backend"):
+            with self.subTest(owner=owner), tempfile.TemporaryDirectory() as workspace:
+                task = repair_task("backend_unit_tests")
+                task.update({"owner": owner, "allowed_paths": [owner]})
+                target = Path(workspace) / owner / "example.txt"
+                target.parent.mkdir(parents=True)
+                target.write_text("before", encoding="utf-8")
+                packets: list[dict] = []
+
+                def invoke_response(**kwargs: object) -> str:
+                    """首轮修改后返回损坏 JSON，下一轮检查既有修改并给出完整结果。"""
+                    packets.append(kwargs["packet"])
+                    if len(packets) == 1:
+                        target.write_text("after", encoding="utf-8")
+                        return '{"status":'
+                    self.assertEqual(target.read_text(encoding="utf-8"), "after")
+                    return '{"status":"completed","summary":"修复完成"}'
+
+                with patch("app.services.small_task.invoke_small_task_agent", side_effect=invoke_response):
+                    result = small_task_repair({"workspace": workspace, "repair_tasks": [task]})
+                self.assertEqual(len(packets), 2)
+                self.assertEqual(packets[1]["outputRetry"]["attempt"], 2)
+                self.assertEqual(route_small_task_result(result), "integration_test")
+                self.assertEqual(len(result["small_task_results"]), 1)
+                self.assertTrue(result["small_task_code_change_sets"])
+
+    def test_integration_valid_failure_or_confirmation_is_not_retried(self) -> None:
+        """集成修复仅重试输出协议错误，保留业务与人工确认边界。"""
+        for status in ("failed", "requires_user_confirmation", "requires_workflow"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as workspace:
+                response = json.dumps({"status": status, "summary": "需要处理"})
+                with patch("app.services.small_task.invoke_small_task_agent", return_value=response) as invoke:
+                    result = execute_small_task_batch(
+                        state={"workspace": workspace}, tasks=[repair_task("backend_unit_tests")],
+                    )
+                self.assertEqual(invoke.call_count, 1)
+                self.assertEqual(result["results"][0]["status"], status)
 
     def test_unauthorized_changes_override_protocol_retry(self) -> None:
         """空响应伴随越权写入时仍停止，不能以输出错误为由继续派发。"""
@@ -115,8 +156,9 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                 target.write_text("after", encoding="utf-8")
                 return ""
 
-            with patch("app.services.small_task.invoke_small_task_agent", side_effect=unauthorized_write):
+            with patch("app.services.small_task.invoke_small_task_agent", side_effect=unauthorized_write) as invoke:
                 result = execute_small_task_batch(state={"workspace": workspace}, tasks=[repair_task("backend_unit_tests")])
+            self.assertEqual(invoke.call_count, 1)
             self.assertIsNone(result["results"][0]["failureCode"])
             self.assertIn("批次外文件变更", result["results"][0]["failureReason"])
 

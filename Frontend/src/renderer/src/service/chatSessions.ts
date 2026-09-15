@@ -71,7 +71,7 @@ export type ChatSessionRevisionHandoff = {
 
 export type ChatSessionRevisionContext = {
   kind: 'formal_revision';
-  sessionRole: 'design' | 'development';
+  sessionRole: 'design';
   formalBranch: WorkflowFormalRevisionBranch;
   impactInteractionId: string;
   sourceSessionId: string;
@@ -79,9 +79,6 @@ export type ChatSessionRevisionContext = {
   sourceRunId: string;
   planningThreadId: string;
   changeId?: string;
-  handoffFromSessionId?: string;
-  handoffFromConversationThreadId?: string;
-  technicalPlanSha256?: string;
 };
 
 export type AgentStage = 'DESIGN' | 'PLAN' | 'DEVELOPMENT';
@@ -133,8 +130,6 @@ export type CreateChatSessionInput = {
   /** 仅页面/API 开发会话创建时设置的目标。 */
   developmentTarget?: ChatSessionDevelopmentTarget;
   revisionContext?: ChatSessionRevisionContext;
-  /** 仅用于恢复已消费 continuation 但本地会话缺失的工作台 execution。 */
-  recoveryExecutionRunId?: string;
 };
 
 export type SessionWorkspaceSummary = {
@@ -631,13 +626,8 @@ export function normalizeRevisionSessionContext(
   const sourceRunId = normalizeEndpointField(context.sourceRunId);
   const planningThreadId = normalizeEndpointField(context.planningThreadId);
   const changeId = normalizeEndpointField(context.changeId);
-  const handoffFromSessionId = normalizeEndpointField(context.handoffFromSessionId);
-  const handoffFromConversationThreadId = normalizeEndpointField(
-    context.handoffFromConversationThreadId,
-  );
-  const technicalPlanSha256 = normalizeEndpointField(context.technicalPlanSha256);
   if (
-    !['design', 'development'].includes(sessionRole || '') ||
+    sessionRole !== 'design' ||
     !['design_stage_revision', 'workbench_plan_revision'].includes(formalBranch || '') ||
     !impactInteractionId ||
     !sourceSessionId ||
@@ -647,19 +637,9 @@ export function normalizeRevisionSessionContext(
   ) {
     return undefined;
   }
-  if (
-    sessionRole === 'development' &&
-    (!changeId ||
-      !handoffFromSessionId ||
-      !handoffFromConversationThreadId ||
-      !technicalPlanSha256 ||
-      !/^[0-9a-f]{64}$/.test(technicalPlanSha256))
-  ) {
-    return undefined;
-  }
   return {
     kind: 'formal_revision',
-    sessionRole: sessionRole as ChatSessionRevisionContext['sessionRole'],
+    sessionRole: 'design',
     formalBranch: formalBranch as WorkflowFormalRevisionBranch,
     impactInteractionId,
     sourceSessionId,
@@ -667,9 +647,6 @@ export function normalizeRevisionSessionContext(
     sourceRunId,
     planningThreadId,
     ...(changeId ? { changeId } : {}),
-    ...(handoffFromSessionId ? { handoffFromSessionId } : {}),
-    ...(handoffFromConversationThreadId ? { handoffFromConversationThreadId } : {}),
-    ...(technicalPlanSha256 ? { technicalPlanSha256 } : {}),
   };
 }
 

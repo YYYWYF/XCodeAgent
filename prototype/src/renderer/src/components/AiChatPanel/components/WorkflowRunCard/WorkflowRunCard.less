@@ -15,6 +15,133 @@
   }
 }
 
+.@{class-prefix}-workflow-run-card-ui-design {
+  display: grid;
+  gap: 8px;
+}
+
+// UI 设计确认卡的逐页选模板：过程互动留在对话区，右侧只承载静态预览与逐页确认。
+.@{class-prefix}-workflow-ui-template-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.@{class-prefix}-workflow-ui-template-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface);
+}
+
+.@{class-prefix}-workflow-ui-template-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+
+  .@{class-prefix}-workflow-ui-template-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .@{class-prefix}-workflow-ui-template-current {
+    flex: 0 0 auto;
+    max-width: 45%;
+    overflow: hidden;
+    font-size: 11.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    // 已记录待生成的版式选择用主题色提示，与正式版式名区分。
+    &.@{class-prefix}-pending.ant-typography {
+      color: var(--wb-accent);
+    }
+  }
+}
+
+.@{class-prefix}-workflow-ui-template-picker {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-canvas);
+}
+
+// 预览框固定高度：三种版式线框高度不同，定高裁切保证上一个/下一个切换时卡片不抖动。
+.@{class-prefix}-workflow-ui-template-picker-preview {
+  height: 168px;
+  overflow: hidden;
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  background: var(--wb-surface);
+}
+
+// 低保真线框容器：只借开发阶段骨架类的结构，尺寸收紧以适配对话卡宽度。
+.@{class-prefix}-workflow-ui-template-wireframe {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+
+  .@{class-prefix}-template-preview-table-row,
+  .@{class-prefix}-template-preview-filters {
+    span,
+    b,
+    .@{class-prefix} {
+      min-width: 0;
+    }
+  }
+}
+
+.@{class-prefix}-workflow-ui-template-picker-copy {
+  display: grid;
+  gap: 2px;
+
+  .ant-typography-secondary {
+    font-size: 11.5px;
+  }
+}
+
+.@{class-prefix}-workflow-ui-template-picker-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .@{class-prefix}-workflow-ui-template-stepper {
+    flex: 0 0 auto;
+    font-size: 11.5px;
+  }
+
+  .@{class-prefix}-workflow-ui-template-nav-spacer {
+    flex: 1;
+  }
+}
+
+.@{class-prefix}-workflow-ui-design-copy.ant-typography {
+  color: var(--wb-text-secondary);
+  line-height: 1.55;
+}
+
+.@{class-prefix}-workflow-ui-design-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .@{class-prefix}-workflow-run-header {
   display: flex;
   align-items: center;
@@ -35,7 +162,8 @@
   .@{class-prefix}-workflow-clarification-body {
     display: flex;
     box-sizing: border-box;
-    height: 132px;
+    // 以最高的常见题型取最小高度，常见步骤间切换时操作栏位置稳定；
+    // 长文本或多选项允许向下撑高，不压缩内容也不产生内部滚动。
     min-height: 132px;
     flex-direction: column;
     gap: 8px;
@@ -99,7 +227,6 @@
   }
 }
 
-.@{class-prefix}-workflow-artifacts,
 .@{class-prefix}-workflow-clarification,
 .@{class-prefix}-workflow-build-progress,
 .@{class-prefix}-workflow-events {
@@ -414,8 +541,7 @@
   }
 }
 
-.@{class-prefix}-workflow-build-task-header-shell
-  > .@{class-prefix}-workflow-build-tool-activity {
+.@{class-prefix}-workflow-build-task-header-shell > .@{class-prefix}-workflow-build-tool-activity {
   margin-top: 9px;
 }
 
@@ -1013,8 +1139,7 @@
   margin: 0;
   padding: 7px 10px;
   background:
-    linear-gradient(135deg, var(--wb-accent-soft), transparent 38%),
-    var(--wb-surface-subtle);
+    linear-gradient(135deg, var(--wb-accent-soft), transparent 38%), var(--wb-surface-subtle);
   border: 1px solid color-mix(in srgb, var(--wb-accent) 55%, var(--wb-border-strong));
   border-radius: 8px;
   box-shadow: 0 14px 30px rgba(45, 30, 104, 0.04);

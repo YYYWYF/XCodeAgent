@@ -68,6 +68,10 @@ import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
 import { workflowClarification } from './workflowClarification'
 import { buildTaskDisplayStatus } from './buildTaskStatus'
+import {
+  bindDagConfirmationDraftIdentity,
+  currentDagConfirmationDraftIdentity
+} from '../../stageOutputState'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
@@ -80,9 +84,9 @@ const { TextArea } = Input
 const OTHER_OPTION_VALUE = '__other__'
 
 /** 校验门禁卡片的页面或 Endpoint 开发目标，拒绝不完整的历史载荷。 */
-function normalizeApiDesignDevelopmentTarget(value: unknown):
-  | { type: 'page' | 'endpoint'; id: string; label?: string; apiContractId?: string }
-  | undefined {
+function normalizeApiDesignDevelopmentTarget(
+  value: unknown
+): { type: 'page' | 'endpoint'; id: string; label?: string; apiContractId?: string } | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const target = value as Record<string, unknown>
   const type = target.type === 'page' ? 'page' : target.type === 'endpoint' ? 'endpoint' : undefined
@@ -143,10 +147,6 @@ type WorkflowRunCardProps = {
   ) => Promise<Record<string, unknown> | undefined>
   /** 需求文档确认：菜单根路径（驱动编辑器页面路由前缀）。 */
   rootPath?: string
-  /** 设计阶段最新规划 workflow（activePlannings 权威快照）。UI 设计稿确认卡片
-   *  优先用它渲染：后台生成池轮询每轮都会更新该快照，而消息对象里的
-   *  message.workflow 可能因流式 chunk 被 threadId 过滤丢弃而滞留旧状态。 */
-  planningWorkflow?: WorkflowRunPayload
   workflow: WorkflowRunPayload
   workspaceRoot?: string
 }
@@ -165,7 +165,6 @@ export default function WorkflowRunCard({
   apiDesignSavedMappingKeys,
   onSaveRequirementSpec,
   rootPath,
-  planningWorkflow,
   workflow,
   workspaceRoot
 }: WorkflowRunCardProps): ReactElement {
@@ -222,6 +221,14 @@ export default function WorkflowRunCard({
     workflow.summary?.testTarget ||
     workflow.state?.testTarget) as WorkflowTestTarget | undefined
   const dagTaskPlan = clarification?.taskPlan as WorkflowBuildTaskPlan | undefined
+  // Confirm/Abandon/Regenerate 必须精确绑定服务端 DraftIdentity；缺失时禁止提交（fail closed）。
+  const dagDraftIdentity = currentDagConfirmationDraftIdentity(workflow)
+  const dagConfirmationErrors = dagDraftIdentity
+    ? clarification?.errors
+    : [
+        ...(Array.isArray(clarification?.errors) ? clarification.errors : []),
+        '当前任务规划缺少服务端 DraftIdentity，请刷新后重试。'
+      ]
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
@@ -233,22 +240,7 @@ export default function WorkflowRunCard({
   const uiDesignConfirmation =
     clarification?.mode === 'ui_design_confirmation' ||
     workflow.summary?.phase === 'ui_confirmation'
-  // UI 设计稿确认卡的权威 workflow：优先用 activePlannings 的最新快照（后台生成池
-  // 每轮 no-op resume 都会经 onWorkflowChange 更新它），仅当它仍处于 UI 确认阶段时
-  // 采用；否则回落到消息对象里的 workflow。这样即使流式 chunk 因 threadId 过滤或
-  // 卡片合并未命中而滞留旧 message.workflow，卡片仍能实时反映最新页面状态。
-  const latestUiWorkflow =
-    planningWorkflow &&
-    (planningWorkflow.summary?.phase === 'ui_confirmation' ||
-      (planningWorkflow.summary?.clarification as { mode?: string } | undefined)?.mode ===
-        'ui_design_confirmation' ||
-      (planningWorkflow.state?.clarification as { mode?: string } | undefined)?.mode ===
-        'ui_design_confirmation' ||
-      (planningWorkflow.result?.clarification as { mode?: string } | undefined)?.mode ===
-        'ui_design_confirmation')
-      ? planningWorkflow
-      : undefined
-  const effectiveUiDesignWorkflow = latestUiWorkflow ?? workflow
+  const effectiveUiDesignWorkflow = workflow
   // 创建规划各阶段生成中都要保留卡片，避免运行期间没有任何可见反馈。
   const planningPhase = workflow.summary?.phase
   const planningRunning =
@@ -351,15 +343,26 @@ export default function WorkflowRunCard({
         awaitingConfirmation={awaitingApiDesignConfirmation}
         result={apiDesignResult}
         disabled={disabled || interactionAvailability !== 'active'}
-        onConfirm={awaitingApiDesignConfirmation ? () => onSubmitClarification?.(workflow, { api_design_gate: gateAction }) : undefined}
-        onEdit={awaitingApiDesignConfirmation ? (item) => {
-          const endpoint = item.design.endpointContract as Record<string, unknown> | undefined
-          onOpenApiDesignConfig?.({
-            apiContractId: item.apiContractId,
-            endpointId: item.endpointId,
-            label: `${String(endpoint?.method || 'API')} ${String(endpoint?.path || item.endpointId)}`
-          }, workflow)
-        } : undefined}
+        onConfirm={
+          awaitingApiDesignConfirmation
+            ? () => onSubmitClarification?.(workflow, { api_design_gate: gateAction })
+            : undefined
+        }
+        onEdit={
+          awaitingApiDesignConfirmation
+            ? (item) => {
+                const endpoint = item.design.endpointContract as Record<string, unknown> | undefined
+                onOpenApiDesignConfig?.(
+                  {
+                    apiContractId: item.apiContractId,
+                    endpointId: item.endpointId,
+                    label: `${String(endpoint?.method || 'API')} ${String(endpoint?.path || item.endpointId)}`
+                  },
+                  workflow
+                )
+              }
+            : undefined
+        }
       />
     )
   }
@@ -458,20 +461,20 @@ export default function WorkflowRunCard({
         testPhaseConfirmation ||
         reviewPhaseConfirmation ||
         acceptancePhaseConfirmation) && (
-          <div className={cx('workflow-clarification')}>
-            {!revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
-              <div className={cx('workflow-clarification-header')}>
-                <div>
-                  <Text strong>待确认事项</Text>
-                </div>
-                <Tag
-                  className={cx('workflow-confirmation-count')}
-                  color={requiresConfirmation ? 'gold' : 'default'}
-                >
-                  {confirmationItemCount}
-                </Tag>
+        <div className={cx('workflow-clarification')}>
+          {!revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
+            <div className={cx('workflow-clarification-header')}>
+              <div>
+                <Text strong>待确认事项</Text>
               </div>
-            )}
+              <Tag
+                className={cx('workflow-confirmation-count')}
+                color={requiresConfirmation ? 'gold' : 'default'}
+              >
+                {confirmationItemCount}
+              </Tag>
+            </div>
+          )}
           {requiresConfirmation && interactionAvailability !== 'active' && (
             <Alert
               message={
@@ -577,13 +580,15 @@ export default function WorkflowRunCard({
             />
           ) : dagConfirmation && requiresConfirmation ? (
             <BuildTaskPlanConfirmation
-              disabled={disabled || interactionAvailability !== 'active'}
-              errors={clarification?.errors}
-              onSubmit={(action: WorkflowBuildTaskPlanConfirmation) =>
+              disabled={disabled || interactionAvailability !== 'active' || !dagDraftIdentity}
+              errors={dagConfirmationErrors}
+              onSubmit={(action: WorkflowBuildTaskPlanConfirmation) => {
+                const identityBoundAction = bindDagConfirmationDraftIdentity(workflow, action)
+                if (!identityBoundAction) return
                 onSubmitClarification?.(workflow, {
-                  build_task_plan_confirmation: action
+                  build_task_plan_confirmation: identityBoundAction
                 })
-              }
+              }}
               plan={dagTaskPlan}
               targetReview={clarification?.targetReview}
             />
@@ -615,9 +620,7 @@ export default function WorkflowRunCard({
               savedMappingKeys={apiDesignSavedMappingKeys}
               scopeKey={`${workflow.threadId}:${workflow.runId}`}
               onConfigure={(target) => onOpenApiDesignConfig?.(target, workflow)}
-              onConfirm={(action) =>
-                onSubmitClarification?.(workflow, { api_design_gate: action })
-              }
+              onConfirm={(action) => onSubmitClarification?.(workflow, { api_design_gate: action })}
               target={normalizeApiDesignDevelopmentTarget(clarification?.developmentTarget)}
             />
           ) : detailReview ? (
@@ -792,8 +795,7 @@ function workflowRevisionImpact(
   workflow: WorkflowRunPayload,
   clarification?: WorkflowClarification
 ): WorkflowRevisionImpact | undefined {
-  const clarificationImpact = (clarification as Record<string, unknown> | undefined)
-    ?.revisionImpact
+  const clarificationImpact = (clarification as Record<string, unknown> | undefined)?.revisionImpact
   const candidates = [
     clarificationImpact,
     workflow.summary.revisionImpact,
@@ -805,9 +807,7 @@ function workflowRevisionImpact(
     const impact = candidate as Partial<WorkflowRevisionImpact>
     if (
       typeof impact.interactionId === 'string' &&
-      ['design_stage_revision', 'workbench_plan_revision'].includes(
-        String(impact.formalBranch)
-      )
+      ['design_stage_revision', 'workbench_plan_revision'].includes(String(impact.formalBranch))
     ) {
       return impact as WorkflowRevisionImpact
     }
@@ -819,10 +819,12 @@ function workflowRevisionImpact(
 function workflowRevisionDraftBinding(
   workflow: WorkflowRunPayload,
   clarification?: WorkflowClarification
-): {
-  draft: WorkflowRevisionDraft
-  interaction: Omit<WorkflowRevisionDraftInteraction, 'action' | 'editedMarkdown' | 'feedback'>
-} | undefined {
+):
+  | {
+      draft: WorkflowRevisionDraft
+      interaction: Omit<WorkflowRevisionDraftInteraction, 'action' | 'editedMarkdown' | 'feedback'>
+    }
+  | undefined {
   if (clarification?.mode !== 'revision_draft_confirmation') return undefined
   const clarificationDraft = (clarification as Record<string, unknown>).revisionDraft
   const candidates = [
@@ -1019,7 +1021,12 @@ function RequirementSpecConfirmationCard({
         footer={
           <div className={cx('requirement-spec-edit-modal-actions')}>
             <Button onClick={cancelEditing}>取消</Button>
-            <Button loading={saving} onClick={() => void saveAndClose()} type="primary">
+            <Button
+              disabled={disabled}
+              loading={saving}
+              onClick={() => void saveAndClose()}
+              type="primary"
+            >
               保存并退出编辑
             </Button>
           </div>
@@ -1100,12 +1107,7 @@ export function PlanConfirmationCard({
 
   return (
     <div className={cx('artifact-auth-bar', 'project-plan-confirmation-card')}>
-      <div
-        className={cx(
-          'artifact-auth-bar-footer',
-          revising && 'technical-plan-revision-inline'
-        )}
-      >
+      <div className={cx('artifact-auth-bar-footer', revising && 'technical-plan-revision-inline')}>
         {revising ? (
           <div className={cx('technical-plan-revision-editor')}>
             <Input
@@ -2318,10 +2320,7 @@ type BusinessAcceptanceDetail = {
 }
 
 /** 提取失败或阻断的验收证据，工程错误优先使用精确 error 字段。 */
-function acceptanceFailureDetails(
-  value: unknown,
-  kind: 'engineering' | 'business'
-): string[] {
+function acceptanceFailureDetails(value: unknown, kind: 'engineering' | 'business'): string[] {
   return objectList(value).flatMap((item) => {
     const status = stringValue(item.status).trim()
     if (!['failed', 'blocked'].includes(status)) return []

@@ -1,4 +1,4 @@
-export const ELEMENT_INSPECTOR_CHANNEL = 'xcode-agent:element-inspector' as const
+export const ELEMENT_INSPECTOR_CHANNEL = 'aistudio:element-inspector' as const
 export const ELEMENT_INSPECTOR_VERSION = 1 as const
 
 export type ElementSourceLocation = {

@@ -136,7 +136,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
         <SectionTitle icon={<FolderOpenOutlined />}>项目位置</SectionTitle>
         {/* 与正式前端保持一致：明确要求新目录/空目录，避免用户复用已有应用目录。 */}
         <Form.Item
-          extra="请输入一个新的项目目录，或选择一个空目录；已有 XCodeAgent 应用目录不能复用。"
+          extra="请输入一个新的项目目录，或选择一个空目录；已有 AIStudio 应用目录不能复用。"
           label="新应用项目目录"
           required
         >

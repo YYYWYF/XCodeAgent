@@ -25,6 +25,86 @@ export type PagePlanExecutionContext = {
 
 export type WorkflowInteractionAvailability = 'active' | 'stale' | 'unavailable'
 
+/** 从未知 AG-UI 投影值中读取交互 mode。 */
+function interactionMode(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  return String((value as Record<string, unknown>).mode || '')
+}
+
+/** 判断 Workflow 是否承载 Build DAG 确认，统一兼容当前 AG-UI 投影位置。 */
+function isDagConfirmationWorkflow(workflow: WorkflowRunPayload): boolean {
+  const currentMode =
+    interactionMode(workflow.summary.clarification) ||
+    interactionMode(workflow.state?.clarification) ||
+    interactionMode(workflow.result?.clarification)
+  // 当前 clarification 已明确表达交互类型时，历史 DAG 投影不能覆盖当前阶段语义。
+  if (currentMode) return currentMode === 'build_task_plan_confirmation'
+  // 只有当前 clarification 完全缺失时，才用历史投影支持 PendingPlan 恢复。
+  return (
+    interactionMode(workflow.summary.buildTaskPlanConfirmation) === 'build_task_plan_confirmation'
+  )
+}
+
+/** 判断 Planning refresh 是否已明确结束当前 DAG 待确认状态。 */
+function terminalDagPlanningRefresh(lifecycle?: ApplicationLifecycle): boolean {
+  const recovery = lifecycle?.extensions?.planningRefresh
+  if (!recovery || recovery.schemaVersion !== 'planning-refresh.v1') return false
+  return !(
+    (recovery.source === 'pending_plan' && recovery.status === 'awaiting_confirmation') ||
+    (recovery.source === 'active_planning_run' && recovery.status === 'planning')
+  )
+}
+
+/** 从 DAG 确认载荷读取服务端签发的稳定草稿身份。 */
+function dagDraftIdentity(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const draftIdentity = (value as { draftIdentity?: unknown }).draftIdentity
+  if (!draftIdentity || typeof draftIdentity !== 'object' || Array.isArray(draftIdentity)) {
+    return undefined
+  }
+  const identity = draftIdentity as Record<string, unknown>
+  const planningRunId = String(identity.planningRunId || '').trim()
+  const draftDigest = String(identity.draftDigest || '').trim()
+  return planningRunId && /^[0-9a-f]{64}$/.test(draftDigest)
+    ? `${planningRunId}:${draftDigest}`
+    : undefined
+}
+
+/** 从 DAG DraftIdentity 读取页面会话归属，避免恢复卡跨 owner session 操作。 */
+function dagDraftOwnerSessionId(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const draftIdentity = (value as { draftIdentity?: unknown }).draftIdentity
+  if (!draftIdentity || typeof draftIdentity !== 'object' || Array.isArray(draftIdentity)) {
+    return undefined
+  }
+  const ownerSessionId = String(
+    (draftIdentity as Record<string, unknown>).ownerSessionId || ''
+  ).trim()
+  return ownerSessionId || undefined
+}
+
+/** 读取 Workflow 当前确认卡的稳定草稿身份。 */
+function workflowDagDraftIdentity(workflow: WorkflowRunPayload): string | undefined {
+  const candidates = [
+    workflow.summary.clarification,
+    workflow.summary.buildTaskPlanConfirmation,
+    workflow.state?.clarification,
+    workflow.result?.clarification
+  ]
+  return candidates.map(dagDraftIdentity).find(Boolean)
+}
+
+/** 读取当前 Workflow 确认卡中的 PendingPlan owner session。 */
+function workflowDagOwnerSessionId(workflow: WorkflowRunPayload): string | undefined {
+  const candidates = [
+    workflow.summary.clarification,
+    workflow.summary.buildTaskPlanConfirmation,
+    workflow.state?.clarification,
+    workflow.result?.clarification
+  ]
+  return candidates.map(dagDraftOwnerSessionId).find(Boolean)
+}
+
 /** 根据后端权威生命周期判断历史 Workflow 确认是否仍可提交。 */
 export function workflowInteractionAvailability(
   workflow: WorkflowRunPayload,
@@ -33,6 +113,18 @@ export function workflowInteractionAvailability(
   // 快速修改没有正式计划生命周期；它的确认卡由当前对话直接承接。
   if (isConversationWorkflow(workflow)) {
     return workflow.summary.status === 'requires_user_input' ? 'active' : 'stale'
+  }
+  const dagConfirmation = isDagConfirmationWorkflow(workflow)
+  // 明确终态优先于可能晚到的 execution，守住 Confirm/Abandon 后旧 Pending 不复活。
+  if (dagConfirmation && terminalDagPlanningRefresh(lifecycle)) return 'stale'
+  if (recoveredPendingInteractionMatches(workflow, lifecycle)) return 'active'
+  // Pending recovery 已经给出当前草稿身份；同 run/thread 上身份不匹配的旧卡必须失效。
+  if (
+    dagConfirmation &&
+    lifecycle?.extensions?.planningRefresh?.source === 'pending_plan' &&
+    lifecycle.extensions.planningRefresh.status === 'awaiting_confirmation'
+  ) {
+    return 'stale'
   }
   const snapshotLifecycle = workflowLifecycleSnapshot(workflow)
   const snapshotExecution = snapshotLifecycle?.activeExecutions?.[workflow.runId]
@@ -56,6 +148,22 @@ export function workflowInteractionAvailability(
       : 'stale'
   }
 
+  // DAG 确认以服务端 DraftIdentity 为业务身份；允许 lifecycle 与卡片的交互帧 id/revision
+  // 尚未完全同步，但仍要求同一 run/thread、未提交且处于 task_plan_confirmation。
+  const workflowDraftIdentity = workflowDagDraftIdentity(workflow)
+  const activeDraftIdentity = dagDraftIdentity(activePending.payload)
+  if (
+    dagConfirmation &&
+    workflowDraftIdentity &&
+    workflowDraftIdentity === activeDraftIdentity &&
+    activeExecution.status === 'awaiting_user' &&
+    !activePending.submittedAt &&
+    (activePending.type === 'task_plan_confirmation' ||
+      activePending.payload?.mode === 'build_task_plan_confirmation')
+  ) {
+    return 'active'
+  }
+
   return snapshotInteractionActive &&
     activeExecution.status === 'awaiting_user' &&
     activeExecution.threadId === workflow.threadId &&
@@ -64,6 +172,59 @@ export function workflowInteractionAvailability(
     activePending.basedOnRevision === snapshotPending.basedOnRevision
     ? 'active'
     : 'stale'
+}
+
+/** 结合消息位置和 lifecycle 判断消息流中的确认卡是否可操作。 */
+export function workflowMessageInteractionAvailability(
+  workflow: WorkflowRunPayload,
+  lifecycle: ApplicationLifecycle | undefined,
+  hasNewerMessage: boolean,
+  locallyManaged: boolean
+): WorkflowInteractionAvailability {
+  // DAG 卡的有效性只由当前 PendingPlan/lifecycle 决定，后续进度或完成消息不是作废证据。
+  if (isDagConfirmationWorkflow(workflow)) {
+    return workflowInteractionAvailability(workflow, lifecycle)
+  }
+  if (hasNewerMessage) return 'stale'
+  return locallyManaged ? 'active' : workflowInteractionAvailability(workflow, lifecycle)
+}
+
+/** 允许仅由磁盘 Pending 恢复的确认卡提交；此时 lifecycle 可能已没有原 active execution。 */
+function recoveredPendingInteractionMatches(
+  workflow: WorkflowRunPayload,
+  lifecycle?: ApplicationLifecycle
+): boolean {
+  const recovery = lifecycle?.extensions?.planningRefresh
+  if (
+    !recovery ||
+    recovery.schemaVersion !== 'planning-refresh.v1' ||
+    recovery.source !== 'pending_plan' ||
+    recovery.status !== 'awaiting_confirmation'
+  ) {
+    return false
+  }
+  const workflowMode = String(
+    interactionMode(workflow.summary.clarification) ||
+      interactionMode(workflow.summary.buildTaskPlanConfirmation) ||
+      interactionMode(workflow.state?.clarification) ||
+      interactionMode(workflow.result?.clarification) ||
+      ''
+  )
+  const workflowDraftIdentity = workflowDagDraftIdentity(workflow)
+  const recoveryDraftIdentity = dagDraftIdentity(recovery.confirmation)
+  const recoveryOwnerSessionId = String(recovery.ownerSessionId || '').trim()
+  const workflowOwnerSessionId = workflowDagOwnerSessionId(workflow)
+  const recoveryThreadId = String(recovery.threadId || '').trim()
+  return (
+    workflowMode === 'build_task_plan_confirmation' &&
+    recovery.workflowRunId === workflow.runId &&
+    // PendingPlan 当前契约不持久化 threadId；若 GET projection 额外带出它，再做一致性校验。
+    (!recoveryThreadId || recoveryThreadId === workflow.threadId) &&
+    Boolean(recoveryOwnerSessionId) &&
+    workflowOwnerSessionId === recoveryOwnerSessionId &&
+    Boolean(workflowDraftIdentity) &&
+    workflowDraftIdentity === recoveryDraftIdentity
+  )
 }
 
 /** 从 Workflow 的兼容投影位置读取提交交互所依据的生命周期快照。 */

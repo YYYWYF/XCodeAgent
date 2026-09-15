@@ -11,9 +11,17 @@ import type {
 import type { ProcessStepRecord, SendWorkflowMessageOptions } from '../../service/agUiAgent'
 import {
   buildEndpointSource,
+  buildEntityAdapterSource,
   buildPageSource,
   type PageDesign
 } from '../../workbenchArtifacts'
+import { readBusinessObjectsSnapshot, saveBusinessObjects } from '../../components/BusinessObjects/store'
+import {
+  entityBindingPlan,
+  withConfirmedBindings,
+  type EntityBindingPlanRow
+} from '../../components/BusinessObjects/model'
+import { readDataSources } from '../../components/DataSources/catalog'
 import {
   BACKGROUND_TASK_SYSTEM_LABEL,
   acceptArtifactTask,
@@ -40,11 +48,15 @@ import {
   makeBaseLifecycle,
   makeEmitLifecycle,
   pageMeta,
+  step,
   resolveEndpointTarget,
+  resolveEntityTarget,
+  streamCodeFrames,
   wf,
   withProcessStepTotal,
   workflowPageId,
   type BuildFileTarget,
+  type ChangeSource,
   type ReplayCallbacks,
   type WorkbenchExecutionLike
 } from './workbenchShared'
@@ -220,22 +232,8 @@ export async function replayArtifactAcceptance(
     onProcessSteps?.(
       withProcessStepTotal(
         [
-          {
-            id: previewNode.id,
-            kind: 'workflow',
-            status: 'completed',
-            title: previewNode.title,
-            detail: previewNode.detail,
-            sequence: 1
-          },
-          {
-            id: confirmNode.id,
-            kind: 'workflow',
-            status: 'completed',
-            title: confirmNode.title,
-            detail: '产物已确认交付。',
-            sequence: 2
-          }
+          step(previewNode, 'completed', 1),
+          step(confirmNode, 'completed', 2, '产物已确认交付。')
         ],
         acceptanceNodes.length
       )
@@ -251,30 +249,25 @@ export async function replayArtifactAcceptance(
   }
 
   // 2. 任务不存在：已被验收或状态已变化，直接给终态避免悬挂的确认卡。
+  // 无效入口只回纯文本答复、不挂工作流卡：同一条消息里不允许工作流与文字混排。
   if (!task) {
     onContent?.(`${targetLabel}当前没有待验收的实现任务。`)
-    return emit(
-      'completed',
-      emitLifecycle('completed'),
-      {},
-      {
-        summary: { phase: 'acceptance', status: 'completed', message: '无待验收任务' }
-      }
-    )
+    const lifecycle = emitLifecycle('completed')
+    return {
+      runId,
+      threadId,
+      summary: { phase: 'acceptance', status: 'completed', message: '无待验收任务', ...(lifecycle ? { lifecycle } : {}) },
+      events: [],
+      state: { ...identity, ...(lifecycle ? { lifecycle } : {}) },
+      result: { ...identity, ...(lifecycle ? { lifecycle } : {}) }
+    } as unknown as WorkflowRunPayload
   }
 
   // 3. 启动验收：右侧打开产物审查（审查节点先执行），随后挂起验收确认节点。
   onProcessSteps?.(
     withProcessStepTotal(
       [
-        {
-          id: previewNode.id,
-          kind: 'workflow',
-          status: 'running',
-          title: previewNode.title,
-          detail: previewNode.detail,
-          sequence: 1
-        }
+        step(previewNode, 'running', 1)
       ],
       acceptanceNodes.length
     )
@@ -283,22 +276,8 @@ export async function replayArtifactAcceptance(
   onProcessSteps?.(
     withProcessStepTotal(
       [
-        {
-          id: previewNode.id,
-          kind: 'workflow',
-          status: 'completed',
-          title: previewNode.title,
-          detail: previewNode.detail,
-          sequence: 1
-        },
-        {
-          id: confirmNode.id,
-          kind: 'workflow',
-          status: 'requires_user_input',
-          title: confirmNode.title,
-          detail: confirmNode.detail,
-          sequence: 2
-        }
+        step(previewNode, 'completed', 1),
+        step(confirmNode, 'requires_user_input', 2)
       ],
       acceptanceNodes.length
     )
@@ -323,7 +302,8 @@ export async function replayArtifactAcceptance(
 // 审查阶段检查矩阵（规范 / 安全 / 健康度 三项通过）。
 
 // 把生成的完整文件内容包装成新增文件的行级 Diff（bare diff 由前端自动补统一格式头）。
-function buildFileTargets(pageId: string, includeEndpoint: boolean): BuildFileTarget[] {
+// 页面产物只交付页面文件：数据能力由实体操作的实现提供，页面不再携带依赖接口文件。
+function buildFileTargets(pageId: string): BuildFileTarget[] {
   const scenario = appDataByWorkspace()
   const targets: BuildFileTarget[] = []
   const pageDesign =
@@ -339,23 +319,10 @@ function buildFileTargets(pageId: string, includeEndpoint: boolean): BuildFileTa
       sourceTool: 'page_generator'
     })
   }
-  if (includeEndpoint) {
-    const endpointDesign = scenario.endpointDesigns['ep-my-rechecks'] as Record<string, unknown>
-    if (endpointDesign) {
-      const source = buildEndpointSource(endpointDesign)
-      targets.push({
-        key: 'controller',
-        name: source.filePath.split('/').pop() || 'Controller.java',
-        path: appPath(source.filePath),
-        content: source.content,
-        sourceTool: 'backend_code_generator'
-      })
-    }
-  }
   return targets
 }
 
-/** 生成独立接口会话的代码交付目标，与页面依赖接口使用同一套源码生成逻辑。 */
+/** 生成独立接口会话的代码交付目标。 */
 function endpointBuildTargets(apiContractId: string, endpointId: string): BuildFileTarget[] {
   const endpointDesign = appDataByWorkspace().endpointDesigns[endpointId] as
     | Record<string, unknown>
@@ -372,8 +339,6 @@ function endpointBuildTargets(apiContractId: string, endpointId: string): BuildF
     }
   ]
 }
-
-type ChangeSource = { target: BuildFileTarget; content: string }
 
 /** 按内容源组装变更集：id 随已生成行数变化，右侧页签按 id 原地刷新写入进度。 */
 function changeSetFromContents(runId: string, sources: ChangeSource[]): WorkspaceCodeChangeSet {
@@ -407,6 +372,72 @@ function fileAcceptanceInteraction(): Record<string, unknown> {
     payload: { message: '代码已生成，请在右侧确认 Diff 后接受。' },
     createdAt: new Date().toISOString()
   }
+}
+
+/** 剧本 emit 闭包的统一形状：页面/接口剧本的快照发射器签名一致。 */
+type EmitFn = (
+  phase: string,
+  status: string,
+  lifecycle: ApplicationLifecycle | undefined,
+  state?: Record<string, unknown>,
+  extra?: Partial<WorkflowRunPayload>
+) => WorkflowRunPayload
+
+/**
+ * 页面/接口同步执行的共享前台构建编排：构建计划 → 分帧生成代码 → 挂「确认代码变更」节点。
+ * exec 由两个剧本各自提供（execution 域不同），其余节奏、状态与载荷完全一致。
+ */
+async function runForegroundBuild(input: {
+  runId: string
+  buildTargets: BuildFileTarget[]
+  emit: EmitFn
+  emitLifecycle: (execution: WorkbenchExecutionLike) => ApplicationLifecycle
+  onProcessSteps?: (steps: ProcessStepRecord[]) => void
+  exec: (phase: string, status: string, pendingInteraction?: Record<string, unknown>) => WorkbenchExecutionLike
+  /** 个别节点在特定产物域下的文案覆盖（如接口的生成代码节点）。 */
+  generateCodeDetail?: string
+  fileAcceptanceMessage: string
+}): Promise<WorkflowRunPayload> {
+  const { emit, emitLifecycle, onProcessSteps, exec } = input
+  const foregroundNodes = workflowSegmentNodes('development', 'foreground_build')
+  const generateNode = foregroundNodes.find((node) => node.id === 'generate_code')!
+  // 生成构建计划属于后台分析动作，不在对话轨迹中展示；直接进入生成代码。
+  emit('build_dag', 'running', emitLifecycle(exec('build_dag', 'running')))
+  await delay(900)
+  const nodeDetail = (node: { id: string; detail: string }): string =>
+    input.generateCodeDetail && node.id === 'generate_code' ? input.generateCodeDetail : node.detail
+  // 生成代码：按行分帧渐进写入 Diff，模拟一段一段生成的过程。
+  onProcessSteps?.([step(generateNode, 'running', 1, nodeDetail(generateNode))])
+  const generateLifecycle = emitLifecycle(exec('generate_code', 'running'))
+  await streamCodeFrames(input.buildTargets, { linesPerFrame: 8, intervalMs: 400 }, (finished, partial) => {
+    emit('generate_code', 'running', generateLifecycle, {
+      codeChanges: changeSetFromContents(input.runId, [...finished, partial])
+    })
+  })
+  onProcessSteps?.([step(generateNode, 'completed', 1, nodeDetail(generateNode))])
+  // 生成代码完成：携带代码变更集，挂「确认代码变更」待输入节点（右侧源码区打开 Diff）。
+  const confirmNode = foregroundNodes.find((node) => node.id === 'confirm_changes')!
+  onProcessSteps?.([step(confirmNode, 'requires_user_input', 1)])
+  return emit(
+    'build',
+    'requires_user_input',
+    emitLifecycle(exec('build', 'awaiting_user', fileAcceptanceInteraction())),
+    {
+      clarification: {
+        mode: 'file_acceptance',
+        status: 'requires_user_input',
+        message: input.fileAcceptanceMessage
+      },
+      codeChanges: fullChangeSet(input.runId, input.buildTargets)
+    },
+    {
+      summary: {
+        phase: 'build',
+        status: 'requires_user_input',
+        message: '等待确认代码变更'
+      }
+    }
+  )
 }
 
 // 构造接口执行的底部 Dock 条目（scope='endpoint' + resourceKeys 供 planExecutionContextForEndpoint 匹配）。
@@ -573,116 +604,20 @@ async function replayEndpointWorkbench(
       )
     }
     /** 同步执行：在对话内按阶段播放接口实现过程；同步不进任务池，产物状态由工作流与已保存文件推导。 */
-    const syncImplementEndpoint = async (): Promise<WorkflowRunPayload> => {
-      onProcessSteps?.([choiceStep('completed', '已选择同步任务，任务在当前对话中直接执行。')])
-      // 前台构建段节点取自开发工作流底层 DAG；接口目标下的 detail 以接口口径覆盖。
-      const foregroundDetailOverrides: Record<string, string> = {
-        generate_code: '按契约生成接口实现与数据访问代码。'
-      }
-      const foregroundNodes = workflowSegmentNodes('development', 'foreground_build')
-      const generateNode = foregroundNodes.find((node) => node.id === 'generate_code')!
-      const buildTargets = endpointBuildTargets(meta.apiContractId, meta.endpointId)
-      const endpointDetail = (nodeId: string): string =>
-        foregroundDetailOverrides[nodeId] ||
-        foregroundNodes.find((node) => node.id === nodeId)!.detail
-      // 生成构建计划属于后台分析动作，不在对话轨迹中展示；直接进入生成代码。
-      emit(
-        'build_dag',
-        'running',
-        emitLifecycle(
-          execEndpoint(runId, threadId, meta.apiContractId, meta.endpointId, 'build_dag', 'running')
-        )
-      )
-      await delay(900)
-      // 生成代码：按行分帧渐进写入 Diff，模拟一段一段生成的过程；任务中心同步显示生成中。
-      onProcessSteps?.([
-        {
-          id: generateNode.id,
-          kind: 'workflow',
-          status: 'running',
-          title: generateNode.title,
-          detail: endpointDetail(generateNode.id),
-          sequence: 1
-        }
-      ])
-      const generateLifecycle = emitLifecycle(
-        execEndpoint(
-          runId,
-          threadId,
-          meta.apiContractId,
-          meta.endpointId,
-          'generate_code',
-          'running'
-        )
-      )
-      const finishedSources: ChangeSource[] = []
-      for (const target of buildTargets) {
-        const lines = target.content.split('\n')
-        for (let visible = 8; ; visible += 8) {
-          await delay(400)
-          emit('generate_code', 'running', generateLifecycle, {
-            codeChanges: changeSetFromContents(runId, [
-              ...finishedSources,
-              { target, content: lines.slice(0, visible).join('\n') }
-            ])
-          })
-          if (visible >= lines.length) break
-        }
-        finishedSources.push({ target, content: target.content })
-      }
-      onProcessSteps?.([
-        {
-          id: generateNode.id,
-          kind: 'workflow',
-          status: 'completed',
-          title: generateNode.title,
-          detail: endpointDetail(generateNode.id),
-          sequence: 1
-        }
-      ])
-      // 生成代码完成：携带代码变更集，挂「确认代码变更」待输入节点（右侧源码区打开 Diff）。
-      const confirmNode = foregroundNodes.find((node) => node.id === 'confirm_changes')!
-      onProcessSteps?.([
-        {
-          id: confirmNode.id,
-          kind: 'workflow',
-          status: 'requires_user_input',
-          title: confirmNode.title,
-          detail: confirmNode.detail,
-          sequence: 1
-        }
-      ])
-      return emit(
-        'build',
-        'requires_user_input',
-        emitLifecycle(
-          execEndpoint(
-            runId,
-            threadId,
-            meta.apiContractId,
-            meta.endpointId,
-            'build',
-            'awaiting_user',
-            fileAcceptanceInteraction()
-          )
-        ),
-        {
-          clarification: {
-            mode: 'file_acceptance',
-            status: 'requires_user_input',
-            message: '接口代码已生成，请在右侧确认 Diff 后接受。'
-          },
-          codeChanges: fullChangeSet(runId, buildTargets)
-        },
-        {
-          summary: {
-            phase: 'build',
-            status: 'requires_user_input',
-            message: '等待确认代码变更'
-          }
-        }
-      )
-    }
+    const buildTargets = endpointBuildTargets(meta.apiContractId, meta.endpointId)
+    const syncImplementEndpoint = (): Promise<WorkflowRunPayload> =>
+      runForegroundBuild({
+        runId,
+        buildTargets,
+        emit,
+        emitLifecycle,
+        onProcessSteps,
+        exec: (phase, status, pendingInteraction) =>
+          execEndpoint(runId, threadId, meta.apiContractId, meta.endpointId, phase, status, pendingInteraction),
+        generateCodeDetail: '按契约生成接口实现与数据访问代码。',
+        fileAcceptanceMessage: '接口代码已生成，请在右侧确认 Diff 后接受。'
+      })
+
     if (choice === 'sync') return syncImplementEndpoint()
     // 接口同步执行的代码变更确认续跑：接受 Diff 后补播构建检查，并落任务终态。
     if (answers.file_acceptance && resume) {
@@ -690,24 +625,10 @@ async function replayEndpointWorkbench(
       const buildNode = foregroundNodes.find((node) => node.id === 'build_and_test')!
       const confirmNode = foregroundNodes.find((node) => node.id === 'confirm_changes')!
       onProcessSteps?.([
-        {
-          id: confirmNode.id,
-          kind: 'workflow',
-          status: 'completed',
-          title: confirmNode.title,
-          detail: '已接受本次生成的代码变更，继续构建。',
-          sequence: 1
-        }
+        step(confirmNode, 'completed', 1, '已接受本次生成的代码变更，继续构建。')
       ])
       onProcessSteps?.([
-        {
-          id: buildNode.id,
-          kind: 'workflow',
-          status: 'running',
-          title: buildNode.title,
-          detail: buildNode.detail,
-          sequence: 1
-        }
+        step(buildNode, 'running', 1)
       ])
       emit(
         'build_and_test',
@@ -725,14 +646,7 @@ async function replayEndpointWorkbench(
       )
       await delay(1300)
       onProcessSteps?.([
-        {
-          id: buildNode.id,
-          kind: 'workflow',
-          status: 'completed',
-          title: buildNode.title,
-          detail: buildNode.detail,
-          sequence: 1
-        }
+        step(buildNode, 'completed', 1)
       ])
       // 代码变更已在对话内确认：同步交付当场完毕，不产生待验收状态；
       // 产物状态由已保存文件快照与工作流推导。
@@ -769,14 +683,7 @@ async function replayEndpointWorkbench(
         'completed',
         `已选择${BACKGROUND_TASK_SYSTEM_LABEL[choice]}，任务进入对应后台队列执行。`
       ),
-      {
-        id: dispatchNode.id,
-        kind: 'workflow',
-        status: 'completed',
-        title: dispatchNode.title,
-        detail: `已创建后台接口实现任务（${BACKGROUND_TASK_SYSTEM_LABEL[choice]}），可在对应任务系统查看执行进度。`,
-        sequence: 1
-      }
+      step(dispatchNode, 'completed', 1, `已创建后台接口实现任务（${BACKGROUND_TASK_SYSTEM_LABEL[choice]}），可在对应任务系统查看执行进度。`)
     ])
     return emit(
       'build',
@@ -860,8 +767,14 @@ export async function replayWorkbench(
   options: SendWorkflowMessageOptions,
   callbacks: ReplayCallbacks
 ): Promise<WorkflowRunPayload | undefined> {
-  const { onContent, onWorkflow, onApplicationLifecycle, onProcessSteps } = callbacks
+  // 页面/实体工作流全程不写正文文本：指引由步骤详情与授权条承载，消息里不混排文字。
+  const { onWorkflow, onApplicationLifecycle, onProcessSteps } = callbacks
   const resume = options.resumeState as WorkflowRunPayload | undefined
+  // 实体目标优先：实体开发独立于页面与接口目标（对话区确认绑定 + 生成数据适配逻辑）。
+  const entityTarget = resolveEntityTarget(options, resume)
+  if (entityTarget) {
+    return replayEntityWorkbench(threadId, entityTarget, options, callbacks)
+  }
   // 接口目标优先于页面：选中接口或续传快照带接口身份时走接口剧本。
   const endpointTarget = resolveEndpointTarget(options, resume)
   if (endpointTarget) {
@@ -869,15 +782,8 @@ export async function replayWorkbench(
   }
   const runId = resume?.runId || `mock-run-${Date.now()}`
   const page = pageMeta(options.selectedPageId || workflowPageId(resume))
-  const includesRecheckEndpoint = page.id === 'my-rechecks'
   const pageTaskIdentity = {
     selectedPageId: page.id,
-    ...(includesRecheckEndpoint
-      ? {
-          selectedApiContractId: 'rechecks',
-          selectedEndpointId: 'ep-my-rechecks'
-        }
-      : {}),
     detailTargetType: 'page'
   }
   const answers = (options.clarificationAnswers || {}) as Record<string, unknown>
@@ -912,490 +818,8 @@ export async function replayWorkbench(
 
   // 1. 详情审阅确认（或续跑）→ 在「选择执行方式」节点上选择同步执行或后台资源池。
   //    同步执行由剧本在对话内当场播放生成节点并落同一条任务记录；
-  //    异步/潮汐派发后台任务后前台立即收口，页面与依赖接口由同一任务联合交付。
+  //    异步/潮汐派发后台任务后前台立即收口；页面产物只交付页面文件，数据由实体操作提供。
   if (answers.detail_review || resume) {
-    // ——「我的回检」：页面 + 依赖接口双产物流程（状态机推进）——
-    // 每个产物一个完整闭环：选择执行方式 → 生成代码 → 确认变更 → 下一产物。
-    // 页面闭环先走，接口闭环后走；同步任务当场交付，后台任务进对应队列。
-    // 进度状态全部累积在 resume.state（stateSyncProgress），每轮据此决定当前动作。
-    if (includesRecheckEndpoint) {
-      const artifactId = pageArtifactId(page.id)
-      const endpointArtifact = endpointArtifactId('rechecks', 'ep-my-rechecks')
-      const foregroundNodes = workflowSegmentNodes('development', 'foreground_build')
-      const generateNode = foregroundNodes.find((node) => node.id === 'generate_code')!
-      const confirmNode = foregroundNodes.find((node) => node.id === 'confirm_changes')!
-      const previewNode = foregroundNodes.find((node) => node.id === 'launch_preview')!
-      const pageChoiceNode = workflowNode('development', 'choose_execution')
-      const endpointChoiceNode = workflowNode('development', 'choose_execution_endpoint')
-      const resumeState = (resume?.state || {}) as Record<string, unknown>
-      const endpointTitle = '接口 GET /api/rechecks/my'
-      const pageChoice = (resolveDispatchChoice(answers) ??
-        (typeof resumeState.pageChoice === 'string'
-          ? (resumeState.pageChoice as BackgroundDispatchChoice)
-          : undefined)) as BackgroundDispatchChoice | undefined
-      const endpointChoiceRaw = answers.background_dispatch_endpoint ?? resumeState.endpointChoice
-      const endpointChoice =
-        endpointChoiceRaw === 'sync' ||
-        endpointChoiceRaw === 'async' ||
-        endpointChoiceRaw === 'tide'
-          ? (endpointChoiceRaw as BackgroundDispatchChoice)
-          : undefined
-      const choiceLabel = (choice: BackgroundDispatchChoice): string =>
-        BACKGROUND_TASK_SYSTEM_LABEL[choice === 'tide' ? 'tide' : 'async']
-      const allTargets = buildFileTargets(page.id, true)
-      const pageTarget = allTargets.find((target) => target.key === 'page')
-      const endpointTarget = allTargets.find((target) => target.key === 'controller')
-      // 各阶段进度标记（累积在 resume.state，决定状态机当前应执行的动作）
-      const pageSyncConfirmed = Boolean(resumeState.pageSyncConfirmed)
-      const pageSyncPending = Boolean(resumeState.pageSyncPending)
-      const pageDispatched = Boolean(resumeState.pageDispatched)
-      const endpointSyncConfirmed = Boolean(resumeState.endpointSyncConfirmed)
-      const endpointSyncPending = Boolean(resumeState.endpointSyncPending)
-      const endpointDispatched = Boolean(resumeState.endpointDispatched)
-      const step = (
-        id: string,
-        status: ProcessStepRecord['status'],
-        title: string,
-        detail: string
-      ): ProcessStepRecord => ({ id, kind: 'workflow', status, title, detail, sequence: 1 })
-
-      /** 把本轮新产生的进度合并进累积状态，作为后续挂起的持久化上下文。 */
-      const mergeProgress = (extra: Record<string, unknown>): Record<string, unknown> => ({
-        ...resumeState,
-        ...extra
-      })
-
-      // ——① 页面产物：选择执行方式（挂起）——
-      if (!pageChoice) {
-        onContent?.(
-          '「' +
-            page.label +
-            '」页面与依赖接口 ' +
-            endpointTitle +
-            ' 的详细设计已确认，请先为页面选择执行方式。'
-        )
-        onProcessSteps?.([
-          step(
-            pageChoiceNode.id,
-            'requires_user_input',
-            pageChoiceNode.title,
-            pageChoiceNode.detail
-          )
-        ])
-        return emit(
-          'build',
-          'requires_user_input',
-          emitLifecycle(
-            exec(
-              runId,
-              threadId,
-              page.id,
-              'build',
-              'awaiting_user',
-              backgroundDispatchInteraction()
-            )
-          ),
-          {
-            clarification: {
-              mode: 'background_dispatch',
-              status: 'requires_user_input',
-              message: '请为页面「' + page.label + '」选择执行方式。',
-              questions: []
-            },
-            dispatchTarget: 'page'
-          },
-          {
-            summary: {
-              phase: 'build',
-              status: 'requires_user_input',
-              message: '等待页面执行方式选择'
-            }
-          }
-        )
-      }
-
-      // ——② 页面产物：同步执行（渐进生成 + 代码变更确认挂起）——
-      if (pageChoice === 'sync' && !pageSyncConfirmed && !pageSyncPending) {
-        onProcessSteps?.([
-          step(
-            pageChoiceNode.id,
-            'completed',
-            pageChoiceNode.title,
-            '已选择同步任务，页面实现在当前对话中直接执行。'
-          ),
-          step(generateNode.id, 'running', generateNode.title, generateNode.detail)
-        ])
-        const generateLifecycle = emitLifecycle(
-          exec(runId, threadId, page.id, 'generate_code', 'running')
-        )
-        if (pageTarget) {
-          const lines = pageTarget.content.split(String.fromCharCode(10))
-          for (let visible = 8; ; visible += 8) {
-            await delay(400)
-            emit('generate_code', 'running', generateLifecycle, {
-              codeChanges: changeSetFromContents(runId, [
-                {
-                  target: pageTarget,
-                  content: lines.slice(0, visible).join(String.fromCharCode(10))
-                }
-              ])
-            })
-            if (visible >= lines.length) break
-          }
-        }
-        onProcessSteps?.([
-          step(generateNode.id, 'completed', generateNode.title, generateNode.detail),
-          step(confirmNode.id, 'requires_user_input', confirmNode.title, confirmNode.detail)
-        ])
-        onContent?.('页面代码已生成，请在右侧源码区确认 Diff 并接受。')
-        return emit(
-          'build',
-          'requires_user_input',
-          emitLifecycle(
-            exec(runId, threadId, page.id, 'build', 'awaiting_user', fileAcceptanceInteraction())
-          ),
-          mergeProgress({
-            clarification: {
-              mode: 'file_acceptance',
-              status: 'requires_user_input',
-              message: '页面代码已生成，请在右侧确认 Diff 后接受。'
-            },
-            codeChanges: pageTarget ? fullChangeSet(runId, [pageTarget]) : undefined,
-            pageChoice: 'sync',
-            pageSyncConfirmed: false,
-            pageSyncPending: true
-          }),
-          {
-            summary: {
-              phase: 'build',
-              status: 'requires_user_input',
-              message: '等待确认页面代码变更'
-            }
-          }
-        )
-      }
-
-      // ——③ 页面产物：代码变更确认接受——落终态 + 产物审查，随后进入接口产物闭环——
-      if (pageChoice === 'sync' && pageSyncPending && !pageSyncConfirmed && resume) {
-        onProcessSteps?.([
-          step(confirmNode.id, 'completed', confirmNode.title, '页面代码变更已接受。'),
-          step(previewNode.id, 'running', previewNode.title, '正在打开当前产物的审查视图。')
-        ])
-        emit(
-          'launch_project',
-          'running',
-          emitLifecycle(exec(runId, threadId, page.id, 'launch_project', 'running'))
-        )
-        await delay(420)
-        markPageDesigned(page.id)
-        onContent?.('页面「' + page.label + '」交付完成，请继续为依赖接口选择执行方式。')
-        onProcessSteps?.([
-          step(
-            pageChoiceNode.id,
-            'completed',
-            pageChoiceNode.title,
-            '页面实现在当前对话中直接执行完毕。'
-          ),
-          step(
-            previewNode.id,
-            'completed',
-            previewNode.title,
-            '代码文件已保存，右侧已切换到开发产物，请审查当前产物。'
-          ),
-          step(
-            endpointChoiceNode.id,
-            'requires_user_input',
-            endpointChoiceNode.title,
-            endpointChoiceNode.detail
-          )
-        ])
-        return emit(
-          'build',
-          'requires_user_input',
-          emitLifecycle(
-            exec(
-              runId,
-              threadId,
-              page.id,
-              'build',
-              'awaiting_user',
-              backgroundDispatchInteraction()
-            )
-          ),
-          mergeProgress({
-            clarification: {
-              mode: 'background_dispatch',
-              status: 'requires_user_input',
-              message: '请为依赖接口 ' + endpointTitle + ' 选择执行方式。',
-              questions: []
-            },
-            dispatchTarget: 'endpoint',
-            pageChoice: 'sync',
-            pageSyncConfirmed: true,
-            pageSyncPending: false,
-            // 页面 Diff 已接受落库，清掉挂起态携带的旧变更，避免上一轮授权条残留。
-            codeChanges: undefined
-          }),
-          {
-            result: {
-              preview_url: MOCK_APPLICATION_PREVIEW_URL + page.path.replace(/^\//, ''),
-              review_target: { type: 'page', pageId: page.id }
-            },
-            summary: {
-              phase: 'build',
-              status: 'requires_user_input',
-              message: '页面已交付，等待接口执行方式选择'
-            }
-          }
-        )
-      }
-
-      // ——④ 页面产物：后台派发——
-      if (pageChoice !== 'sync' && !pageDispatched) {
-        dispatchImplementationTask({
-          options,
-          title: '页面「' + page.label + '」代码实现',
-          artifactIds: [artifactId],
-          primaryArtifactId: artifactId,
-          execTarget: { type: 'page', pageId: page.id, includeEndpoint: false },
-          choice: pageChoice
-        })
-        markPageDesigned(page.id)
-        onProcessSteps?.([
-          step(
-            pageChoiceNode.id,
-            'completed',
-            pageChoiceNode.title,
-            '已选择' + choiceLabel(pageChoice) + '，页面实现转入后台执行。'
-          ),
-          step(
-            'dispatch-page-' + page.id,
-            'completed',
-            '派发页面实现任务',
-            '已创建后台页面实现任务（' +
-              choiceLabel(pageChoice) +
-              '），可在「' +
-              BACKGROUND_TASK_SYSTEM_LABEL[pageChoice] +
-              '」抽屉查看进度。'
-          )
-        ])
-      }
-
-      // ——⑤ 接口产物：选择执行方式（挂起）——
-      if (!endpointChoice) {
-        onContent?.('页面已交付，请为依赖接口 ' + endpointTitle + ' 选择执行方式。')
-        onProcessSteps?.([
-          step(
-            pageChoiceNode.id,
-            'completed',
-            pageChoiceNode.title,
-            '页面实现任务已派发至所选任务系统。'
-          ),
-          step(
-            endpointChoiceNode.id,
-            'requires_user_input',
-            endpointChoiceNode.title,
-            endpointChoiceNode.detail
-          )
-        ])
-        return emit(
-          'build',
-          'requires_user_input',
-          emitLifecycle(
-            exec(
-              runId,
-              threadId,
-              page.id,
-              'build',
-              'awaiting_user',
-              backgroundDispatchInteraction()
-            )
-          ),
-          {
-            clarification: {
-              mode: 'background_dispatch',
-              status: 'requires_user_input',
-              message: '请为依赖接口 ' + endpointTitle + ' 选择执行方式。',
-              questions: []
-            },
-            dispatchTarget: 'endpoint',
-            pageChoice,
-            // 页面任务刚在本轮派发过，必须落进持久化状态，否则下一轮会重复派发。
-            ...(pageChoice !== 'sync' ? { pageDispatched: true } : {})
-          },
-          {
-            summary: {
-              phase: 'build',
-              status: 'requires_user_input',
-              message: '等待接口执行方式选择'
-            }
-          }
-        )
-      }
-
-      // ——⑥ 接口产物：同步执行（渐进生成 + 代码变更确认挂起）——
-      if (endpointChoice === 'sync' && !endpointSyncConfirmed && !endpointSyncPending) {
-        // 接口构建链使用 endpoint- 前缀的独立节点：轨迹按 id 合并只能往后追加，
-        // 复用页面轮的节点 id 会把已完成的历史节点回写成运行态，看起来像倒退。
-        onProcessSteps?.([
-          step(
-            endpointChoiceNode.id,
-            'completed',
-            endpointChoiceNode.title,
-            '已选择同步任务，接口实现在当前对话中直接执行。'
-          ),
-          step(
-            'endpoint-generate-code',
-            'running',
-            generateNode.title,
-            '生成接口控制器与数据访问代码。'
-          )
-        ])
-        const generateLifecycle = emitLifecycle(
-          exec(runId, threadId, page.id, 'generate_code', 'running')
-        )
-        if (endpointTarget) {
-          const lines = endpointTarget.content.split(String.fromCharCode(10))
-          for (let visible = 8; ; visible += 8) {
-            await delay(400)
-            emit('generate_code', 'running', generateLifecycle, {
-              codeChanges: changeSetFromContents(runId, [
-                {
-                  target: endpointTarget,
-                  content: lines.slice(0, visible).join(String.fromCharCode(10))
-                }
-              ])
-            })
-            if (visible >= lines.length) break
-          }
-        }
-        onProcessSteps?.([
-          step('endpoint-generate-code', 'completed', generateNode.title, generateNode.detail),
-          step(
-            'endpoint-confirm-changes',
-            'requires_user_input',
-            confirmNode.title,
-            '请确认接口实现生成的代码变更。'
-          )
-        ])
-        onContent?.('接口代码已生成，请在右侧源码区确认 Diff 并接受。')
-        return emit(
-          'build',
-          'requires_user_input',
-          emitLifecycle(
-            exec(runId, threadId, page.id, 'build', 'awaiting_user', fileAcceptanceInteraction())
-          ),
-          mergeProgress({
-            clarification: {
-              mode: 'file_acceptance',
-              status: 'requires_user_input',
-              message: '接口代码已生成，请在右侧确认 Diff 后接受。'
-            },
-            codeChanges: endpointTarget ? fullChangeSet(runId, [endpointTarget]) : undefined,
-            endpointChoice: 'sync',
-            endpointSyncConfirmed: false,
-            endpointSyncPending: true
-          }),
-          {
-            summary: {
-              phase: 'build',
-              status: 'requires_user_input',
-              message: '等待确认接口代码变更'
-            }
-          }
-        )
-      }
-
-      // ——⑦ 接口产物：代码变更确认接受——落终态并收口——
-      if (endpointChoice === 'sync' && endpointSyncPending && !endpointSyncConfirmed && resume) {
-        onProcessSteps?.([
-          step('endpoint-confirm-changes', 'completed', confirmNode.title, '接口代码变更已接受。'),
-          step(
-            'endpoint-launch-preview',
-            'running',
-            previewNode.title,
-            '正在打开当前产物的审查视图。'
-          )
-        ])
-        emit(
-          'launch_project',
-          'running',
-          emitLifecycle(exec(runId, threadId, page.id, 'launch_project', 'running'))
-        )
-        await delay(420)
-        onProcessSteps?.([
-          step(
-            'endpoint-launch-preview',
-            'completed',
-            previewNode.title,
-            '代码文件已保存，右侧已切换到开发产物，请审查当前产物。'
-          )
-        ])
-        markEndpointDesigned('rechecks', 'ep-my-rechecks')
-        onContent?.('接口交付完成。')
-        return emit(
-          'build',
-          'completed',
-          emitLifecycle(exec(runId, threadId, page.id, 'build', 'completed')),
-          {},
-          {
-            result: {
-              review_target: {
-                type: 'endpoint',
-                apiContractId: 'rechecks',
-                endpointId: 'ep-my-rechecks'
-              }
-            },
-            summary: { phase: 'build', status: 'completed', message: '接口实现已完成' }
-          }
-        )
-      }
-
-      // ——⑧ 接口产物：后台派发——
-      if (!endpointDispatched) {
-        dispatchImplementationTask({
-          options,
-          title: endpointTitle + ' 代码实现',
-          artifactIds: [endpointArtifact],
-          primaryArtifactId: endpointArtifact,
-          execTarget: { type: 'endpoint', apiContractId: 'rechecks', endpointId: 'ep-my-rechecks' },
-          choice: endpointChoice
-        })
-        markEndpointDesigned('rechecks', 'ep-my-rechecks')
-        onProcessSteps?.([
-          step(
-            endpointChoiceNode.id,
-            'completed',
-            endpointChoiceNode.title,
-            '已选择' + choiceLabel(endpointChoice) + '，接口实现转入后台执行。'
-          ),
-          step(
-            'dispatch-endpoint-' + endpointArtifact,
-            'completed',
-            '派发接口实现任务',
-            '已创建后台接口实现任务（' +
-              choiceLabel(endpointChoice) +
-              '），可在「' +
-              BACKGROUND_TASK_SYSTEM_LABEL[endpointChoice] +
-              '」抽屉查看进度。'
-          )
-        ])
-      }
-
-      // ——⑨ 收口：全部产物进入执行/交付——
-      onContent?.(
-        '页面与依赖接口的实现任务已全部发起（' +
-          [choiceLabel(pageChoice), choiceLabel(endpointChoice)].join('、') +
-          '），可在对应任务系统查看进度。'
-      )
-      return emit(
-        'build',
-        'completed',
-        emitLifecycle(exec(runId, threadId, page.id, 'build', 'completed')),
-        {},
-        { summary: { phase: 'build', status: 'completed', message: '实现任务已全部发起' } }
-      )
-    }
     // 同步执行的代码变更确认续跑：接受 Diff 后补播构建检查与产物审查，产物状态由文件快照推导。
     if (answers.file_acceptance && resume) {
       const foregroundNodes = workflowSegmentNodes('development', 'foreground_build')
@@ -1403,24 +827,10 @@ export async function replayWorkbench(
       const buildNode = foregroundNodes.find((node) => node.id === 'build_and_test')!
       const previewNode = foregroundNodes.find((node) => node.id === 'launch_preview')!
       onProcessSteps?.([
-        {
-          id: confirmNode.id,
-          kind: 'workflow',
-          status: 'completed',
-          title: confirmNode.title,
-          detail: '已接受本次生成的代码变更，继续构建。',
-          sequence: 1
-        }
+        step(confirmNode, 'completed', 1, '已接受本次生成的代码变更，继续构建。')
       ])
       onProcessSteps?.([
-        {
-          id: buildNode.id,
-          kind: 'workflow',
-          status: 'running',
-          title: buildNode.title,
-          detail: buildNode.detail,
-          sequence: 1
-        }
+        step(buildNode, 'running', 1)
       ])
       emit(
         'build_and_test',
@@ -1429,24 +839,10 @@ export async function replayWorkbench(
       )
       await delay(1300)
       onProcessSteps?.([
-        {
-          id: buildNode.id,
-          kind: 'workflow',
-          status: 'completed',
-          title: buildNode.title,
-          detail: buildNode.detail,
-          sequence: 1
-        }
+        step(buildNode, 'completed', 1)
       ])
       onProcessSteps?.([
-        {
-          id: previewNode.id,
-          kind: 'workflow',
-          status: 'running',
-          title: previewNode.title,
-          detail: '正在打开当前产物的审查视图。',
-          sequence: 1
-        }
+        step(previewNode, 'running', 1, '正在打开当前产物的审查视图。')
       ])
       emit(
         'launch_project',
@@ -1457,16 +853,8 @@ export async function replayWorkbench(
       // 代码变更已在对话内确认：同步交付当场完毕，不产生待验收状态。
       // 设计确认即标记「已设计」：下一页面的模板/详设卡可以立即自动投放。
       markPageDesigned(page.id)
-      if (includesRecheckEndpoint) markEndpointDesigned('rechecks', 'ep-my-rechecks')
       onProcessSteps?.([
-        {
-          id: previewNode.id,
-          kind: 'workflow',
-          status: 'completed',
-          title: previewNode.title,
-          detail: '代码文件已保存，右侧已切换到开发产物，请审查当前产物。',
-          sequence: 1
-        }
+        step(previewNode, 'completed', 1, '代码文件已保存，右侧已切换到开发产物，请审查当前产物。')
       ])
       return emit(
         'launch_project',
@@ -1488,9 +876,7 @@ export async function replayWorkbench(
     }
     const choice = resolveDispatchChoice(answers)
     const artifactId = pageArtifactId(page.id)
-    const relatedArtifactIds = includesRecheckEndpoint
-      ? [artifactId, endpointArtifactId('rechecks', 'ep-my-rechecks')]
-      : [artifactId]
+    const relatedArtifactIds = [artifactId]
     // 「选择执行方式」节点来自开发工作流底层 DAG（页面/接口两条设计分支在此汇聚）：
     // 挂起时为待输入节点（交互卡内嵌其上），选择后按同 id 落成已完成，轨迹按 id 合并保持连续。
     const executionNode = workflowNode('development', 'choose_execution')
@@ -1539,106 +925,30 @@ export async function replayWorkbench(
       )
     }
     /** 同步执行：在对话内按阶段播放代码生成过程；同步不进任务池，产物状态由工作流与已保存文件推导。 */
-    const syncImplementPage = async (): Promise<WorkflowRunPayload> => {
-      onProcessSteps?.([choiceStep('completed', '已选择同步任务，任务在当前对话中直接执行。')])
-      // 前台构建段节点取自开发工作流底层 DAG，与后台执行链共用同一套节点定义。
-      const foregroundNodes = workflowSegmentNodes('development', 'foreground_build')
-      const generateNode = foregroundNodes.find((node) => node.id === 'generate_code')!
-      const buildTargets = buildFileTargets(page.id, includesRecheckEndpoint)
-      // 生成构建计划属于后台分析动作，不在对话轨迹中展示；直接进入生成代码。
-      emit(
-        'build_dag',
-        'running',
-        emitLifecycle(exec(runId, threadId, page.id, 'build_dag', 'running'))
-      )
-      await delay(900)
-      // 生成代码：按行分帧渐进写入 Diff，模拟一段一段生成的过程。
-      onProcessSteps?.([
-        {
-          id: generateNode.id,
-          kind: 'workflow',
-          status: 'running',
-          title: generateNode.title,
-          detail: generateNode.detail,
-          sequence: 1
-        }
-      ])
-      const generateLifecycle = emitLifecycle(
-        exec(runId, threadId, page.id, 'generate_code', 'running')
-      )
-      const finishedSources: ChangeSource[] = []
-      for (const target of buildTargets) {
-        const lines = target.content.split('\n')
-        for (let visible = 8; ; visible += 8) {
-          await delay(400)
-          emit('generate_code', 'running', generateLifecycle, {
-            codeChanges: changeSetFromContents(runId, [
-              ...finishedSources,
-              { target, content: lines.slice(0, visible).join('\n') }
-            ])
-          })
-          if (visible >= lines.length) break
-        }
-        finishedSources.push({ target, content: target.content })
-      }
-      onProcessSteps?.([
-        {
-          id: generateNode.id,
-          kind: 'workflow',
-          status: 'completed',
-          title: generateNode.title,
-          detail: generateNode.detail,
-          sequence: 1
-        }
-      ])
-      // 生成代码完成：携带代码变更集，挂「确认代码变更」待输入节点（右侧源码区打开 Diff）。
-      const confirmNode = foregroundNodes.find((node) => node.id === 'confirm_changes')!
-      onProcessSteps?.([
-        {
-          id: confirmNode.id,
-          kind: 'workflow',
-          status: 'requires_user_input',
-          title: confirmNode.title,
-          detail: confirmNode.detail,
-          sequence: 1
-        }
-      ])
-      onContent?.(`「${page.label}」的代码已生成，请在右侧源码区确认 Diff 并接受，随后继续构建。`)
-      return emit(
-        'build',
-        'requires_user_input',
-        emitLifecycle(
-          exec(runId, threadId, page.id, 'build', 'awaiting_user', fileAcceptanceInteraction())
-        ),
-        {
-          clarification: {
-            mode: 'file_acceptance',
-            status: 'requires_user_input',
-            message: '代码已生成，请在右侧确认 Diff 后接受。'
-          },
-          codeChanges: fullChangeSet(runId, buildTargets)
-        },
-        {
-          summary: {
-            phase: 'build',
-            status: 'requires_user_input',
-            message: '等待确认代码变更'
-          }
-        }
-      )
-    }
+    const buildTargets = buildFileTargets(page.id)
+    const syncImplementPage = (): Promise<WorkflowRunPayload> =>
+      runForegroundBuild({
+        runId,
+        buildTargets,
+        emit,
+        emitLifecycle,
+        onProcessSteps,
+        exec: (phase, status, pendingInteraction) =>
+          exec(runId, threadId, page.id, phase, status, pendingInteraction),
+        fileAcceptanceMessage: '代码已生成，请在右侧确认 Diff 后接受。'
+      })
+
     if (choice === 'sync') return syncImplementPage()
     dispatchImplementationTask({
       options,
       title: `页面「${page.label}」代码实现`,
       artifactIds: relatedArtifactIds,
       primaryArtifactId: artifactId,
-      execTarget: { type: 'page', pageId: page.id, includeEndpoint: includesRecheckEndpoint },
+      execTarget: { type: 'page', pageId: page.id, includeEndpoint: false },
       choice: choice
     })
     // 设计确认即标记「已设计」：下一页面的模板/详设卡可以立即自动投放。
     markPageDesigned(page.id)
-    if (includesRecheckEndpoint) markEndpointDesigned('rechecks', 'ep-my-rechecks')
     // 选择节点落成已完成，再追加派发收口节点：合并回话按 id 归位并接在同一轨迹末尾。
     const dispatchNode = workflowNode('development', 'background_dispatch')
     onProcessSteps?.([
@@ -1646,14 +956,7 @@ export async function replayWorkbench(
         'completed',
         `已选择${BACKGROUND_TASK_SYSTEM_LABEL[choice]}，任务进入对应后台队列执行。`
       ),
-      {
-        id: dispatchNode.id,
-        kind: 'workflow',
-        status: 'completed',
-        title: dispatchNode.title,
-        detail: `已创建后台代码实现任务（${BACKGROUND_TASK_SYSTEM_LABEL[choice]}），可在对应任务系统查看执行进度。`,
-        sequence: 1
-      }
+      step(dispatchNode, 'completed', 1, `已创建后台代码实现任务（${BACKGROUND_TASK_SYSTEM_LABEL[choice]}），可在对应任务系统查看执行进度。`)
     ])
     return emit(
       'build',
@@ -1669,20 +972,13 @@ export async function replayWorkbench(
     // 注：不在开始设计时 markPageDesigned——「已设计」仅在详情审阅确认（派发后台任务）时标记。
     // 生成中以 processSteps 持续承载设计节点，保持同一条研发工作流轨迹。
     // 设计节点来自开发工作流底层 DAG 的「详细设计」段；标题与顺序以 DAG 为唯一来源。
-    const designDetailOverrides: Record<string, string> = includesRecheckEndpoint
-      ? {
-          design_context: '整合已确认的应用约束、项目计划、页面目标和依赖接口契约。',
-          design_scope: '明确页面职责、核心用户路径，以及页面与 GET /api/rechecks/my 的调用边界。',
-          design_breakdown: '拆解筛选、列表、状态反馈，并绑定接口请求参数和响应数据。',
-          design_edge: '补齐接口异常、空数据和页面验收标准。'
-        }
-      : {}
+    // 页面详设四步使用开发工作流 DAG 的中性文案：页面调用 实体.操作()，不再绑定依赖接口。
     const designSteps = workflowSegmentNodes('development', 'design')
       .filter((node) => node.id !== 'choose_execution')
       .map((node) => ({
         id: node.id,
         title: node.title,
-        detail: designDetailOverrides[node.id] || node.detail
+        detail: node.detail
       }))
     const steps: ProcessStepRecord[] = []
     // 设计阶段的节点总数 = 设计节点 + 派发收口节点；代码节点已移入后台任务。
@@ -1696,7 +992,7 @@ export async function replayWorkbench(
         summary: {
           phase: 'detail_confirmation',
           status: 'running',
-          message: includesRecheckEndpoint ? '正在生成页面与依赖接口设计…' : '正在生成页面详细设计…'
+          message: '正在生成页面详细设计…'
         }
       })
     )
@@ -1718,7 +1014,7 @@ export async function replayWorkbench(
         summary: {
           phase: 'detail_confirmation',
           status: 'completed',
-          message: includesRecheckEndpoint ? '页面与依赖接口设计已生成' : '页面详细设计已生成'
+          message: '页面详细设计已生成'
         }
       })
     )
@@ -1755,4 +1051,252 @@ export async function replayWorkbench(
   // 3. 其它（自由聊天/未知）→ 最小 running 态，不崩。
   const fallback = emitLifecycle(exec(runId, threadId, page.id, 'build', 'running'))
   return emit('build', 'running', fallback)
+}
+
+// —— 实体（business-object）工作台剧本 ——
+// 读取实体结构 → 对话区「确认绑定」卡逐操作确认数据实现 → 生成数据适配逻辑 → 确认代码变更。
+// 绑定/映射细节全部在对话卡内完成确认，右侧只按确认结果静态呈现；同步单通道执行，不进任务池。
+async function replayEntityWorkbench(
+  threadId: string,
+  target: { objectId: string },
+  options: SendWorkflowMessageOptions,
+  callbacks: ReplayCallbacks
+): Promise<WorkflowRunPayload | undefined> {
+  // 实体工作流全程不写正文文本：指引由步骤详情与交互卡承载，消息里不混排文字。
+  const { onWorkflow, onApplicationLifecycle, onProcessSteps } = callbacks
+  const resume = options.resumeState as WorkflowRunPayload | undefined
+  const runId = resume?.runId || `mock-entity-${Date.now()}`
+  const answers = (options.clarificationAnswers || {}) as Record<string, unknown>
+  const scenario = appDataByWorkspace()
+  // 实体绑定按版本隔离：读写都必须落在当前工作版本自己的缓存键上。
+  const entityVersionId = options.application?.currentVersionId || 'current'
+  const objects = readBusinessObjectsSnapshot(scenario.requirementSpec, entityVersionId)
+  const object = objects.find((item) => item.id === target.objectId) || objects[0]
+  // 轨迹节点取自开发工作流底层 DAG 的实体开发段 + 通用「确认代码变更」节点。
+  const entityNodes = workflowSegmentNodes('development', 'entity')
+  const structureNode = entityNodes.find((node) => node.id === 'entity_read_structure')!
+  const bindingNode = entityNodes.find((node) => node.id === 'entity_confirm_binding')!
+  const adapterNode = entityNodes.find((node) => node.id === 'entity_generate_adapter')!
+  const confirmNode = workflowNode('development', 'confirm_changes')
+  const stepTotal = entityNodes.length + 1
+
+  // 实体缺位（规划数据被清理等）时直接给完成态，避免悬挂的等待轨迹。
+  if (!object) {
+    const fallbackLifecycle = makeEmitLifecycle(
+      makeBaseLifecycle(options.application),
+      runId,
+      onApplicationLifecycle
+    )
+    return wf(
+      threadId,
+      runId,
+      'build',
+      'completed',
+      fallbackLifecycle({ scope: 'entity', targetId: target.objectId, threadId, runId, phase: 'build', status: 'completed', startedAt: '', updatedAt: '' }),
+      { selectedObjectId: target.objectId, detailTargetType: 'business-object' },
+      { summary: { phase: 'build', status: 'completed', message: '未找到该实体的规划数据' } }
+    )
+  }
+
+  const identity = {
+    selectedObjectId: object.id,
+    detailTargetType: 'business-object'
+  }
+  const entityWf = (
+    phase: string,
+    status: string,
+    lifecycle: ApplicationLifecycle | undefined,
+    state: Record<string, unknown> = {},
+    extra: Partial<WorkflowRunPayload> = {}
+  ): WorkflowRunPayload => {
+    const payload: Record<string, unknown> = {
+      runId,
+      threadId,
+      summary: { phase, status, message: '', ...(lifecycle ? { lifecycle } : {}) },
+      events: [{ type: 'workflow.node.started', nodeName: phase }],
+      state: { ...state, ...identity, ...(lifecycle ? { lifecycle } : {}) },
+      result: { ...identity, ...(lifecycle ? { lifecycle } : {}) },
+      ...extra
+    }
+    return payload as unknown as WorkflowRunPayload
+  }
+  const baseLifecycle = makeBaseLifecycle(options.application)
+  const emitLifecycle = makeEmitLifecycle(baseLifecycle, runId, onApplicationLifecycle)
+  const emit = (
+    phase: string,
+    status: string,
+    lifecycle: ApplicationLifecycle | undefined,
+    state: Record<string, unknown> = {},
+    extra: Partial<WorkflowRunPayload> = {}
+  ): WorkflowRunPayload => {
+    const payload = entityWf(phase, status, lifecycle, state, extra)
+    onWorkflow?.(payload)
+    return payload
+  }
+  const execEntity = (
+    phase: string,
+    status: string,
+    pendingInteraction?: Record<string, unknown>
+  ): WorkbenchExecutionLike => {
+    const now = new Date().toISOString()
+    return {
+      scope: 'entity',
+      targetId: object.id,
+      resourceKeys: [`business-object:${object.id}`],
+      threadId,
+      runId,
+      phase,
+      status,
+      startedAt: now,
+      updatedAt: now,
+      ...(pendingInteraction ? { pendingInteraction } : {})
+    }
+  }
+  /** 实体绑定确认交互：对话卡内逐操作确认数据实现，右侧不承载编辑动作。 */
+  const entityBindingInteraction = (plan: EntityBindingPlanRow[]): Record<string, unknown> => ({
+    id: `pi-entity-binding-${Date.now()}`,
+    type: 'entity_binding',
+    basedOnRevision: 1,
+    payload: { objectName: object.name, operations: plan },
+    createdAt: new Date().toISOString()
+  })
+
+  // 1. 绑定确认续跑：把意向写回实体演示状态（右侧随之呈现已绑定），再当场生成数据适配逻辑。
+  if (answers.entity_binding) {
+    const sources = readDataSources()
+    const confirmedObject = withConfirmedBindings(object, sources)
+    const confirmedCount = confirmedObject.operations.filter(
+      (operation) => operation.implementation.confirmed
+    ).length
+    saveBusinessObjects(
+      scenario.requirementSpec,
+      objects.map((item) => (item.id === confirmedObject.id ? confirmedObject : item)),
+      entityVersionId
+    )
+    onProcessSteps?.(
+      withProcessStepTotal(
+        [
+          step(structureNode, 'completed', 1),
+          step(bindingNode, 'completed', 2, `已确认 ${confirmedCount} 个操作的数据实现与字段映射，绑定结果已写入实体开发产物。`),
+          step(adapterNode, 'running', 3)
+        ],
+        stepTotal
+      )
+    )
+    // 生成代码：按行分帧渐进写入 Diff，右侧源码区逐帧跟随（generate_code 阶段）。
+    const generateLifecycle = emitLifecycle(execEntity('generate_code', 'running'))
+    emit('generate_code', 'running', generateLifecycle)
+    const adapterSource = buildEntityAdapterSource(confirmedObject)
+    const adapterTarget: BuildFileTarget = {
+      key: `entity-${object.id}`,
+      name: adapterSource.filePath.split('/').pop() || 'EntityAdapter.java',
+      path: appPath(adapterSource.filePath),
+      content: adapterSource.content,
+      sourceTool: 'entity_adapter_generator'
+    }
+    await streamCodeFrames([adapterTarget], { linesPerFrame: 8, intervalMs: 400 }, (_finished, partial) => {
+      emit('generate_code', 'running', generateLifecycle, {
+        codeChanges: changeSetFromContents(runId, [partial])
+      })
+    })
+    onProcessSteps?.(
+      withProcessStepTotal(
+        [
+          step(structureNode, 'completed', 1),
+          step(bindingNode, 'completed', 2, `已确认 ${confirmedCount} 个操作的数据实现与字段映射，绑定结果已写入实体开发产物。`),
+          step(adapterNode, 'completed', 3, '已按确认的绑定生成查询、组合、转换与本地业务规则。'),
+          step(confirmNode, 'requires_user_input', 4)
+        ],
+        stepTotal
+      )
+    )
+    return emit(
+      'build',
+      'requires_user_input',
+      emitLifecycle(execEntity('build', 'awaiting_user', fileAcceptanceInteraction())),
+      {
+        clarification: {
+          mode: 'file_acceptance',
+          status: 'requires_user_input',
+          message: '实体数据适配代码已生成，请在右侧确认 Diff 后接受。'
+        },
+        codeChanges: fullChangeSet(runId, [adapterTarget])
+      },
+      {
+        summary: {
+          phase: 'build',
+          status: 'requires_user_input',
+          message: '等待确认代码变更'
+        }
+      }
+    )
+  }
+
+  // 2. 代码变更确认续跑：接受 Diff 后工作流收口，实体状态由绑定确认结果推导为已完成。
+  if (answers.file_acceptance && resume) {
+    onProcessSteps?.(
+      withProcessStepTotal(
+        [
+          step(structureNode, 'completed', 1),
+          step(bindingNode, 'completed', 2, '已确认全部操作的数据实现与字段映射。'),
+          step(adapterNode, 'completed', 3, '已按确认的绑定生成查询、组合、转换与本地业务规则。'),
+          step(confirmNode, 'completed', 4, '已接受本次生成的代码变更，实体交付完成。')
+        ],
+        stepTotal
+      )
+    )
+    // 完成态不追加纯文本正文：收口只留工作流卡，避免同一条消息里工作流与文字混排。
+    return emit(
+      'build',
+      'completed',
+      emitLifecycle(execEntity('build', 'completed')),
+      {},
+      { summary: { phase: 'build', status: 'completed', message: '实体开发已完成' } }
+    )
+  }
+
+  // 3. 启动：读取实体结构后挂「绑定操作的数据实现」待输入节点，绑定方案整卡呈现在对话区。
+  emit('detail_confirmation', 'running', emitLifecycle(execEntity('detail_confirmation', 'running')))
+  onProcessSteps?.(
+    withProcessStepTotal(
+      [
+        step(structureNode, 'running', 1)
+      ],
+      stepTotal
+    )
+  )
+  await delay(650)
+  const plan = entityBindingPlan(object, readDataSources())
+  onProcessSteps?.(
+    withProcessStepTotal(
+      [
+        step(structureNode, 'completed', 1),
+        step(bindingNode, 'requires_user_input', 2)
+      ],
+      stepTotal
+    )
+  )
+  // 启动不追加纯文本正文：绑定方案的说明由确认卡自身承载，工作流消息里不混排文字（对齐页面工作流）。
+  const clarification = {
+    mode: 'entity_binding',
+    status: 'requires_user_input',
+    message: `请确认「${object.name}」各操作的数据实现，确认后生成数据适配逻辑。`,
+    objectName: object.name,
+    operations: plan
+  }
+  return emit(
+    'detail_confirmation',
+    'requires_user_input',
+    emitLifecycle(
+      execEntity('detail_confirmation', 'awaiting_user', entityBindingInteraction(plan))
+    ),
+    { clarification },
+    {
+      summary: {
+        phase: 'detail_confirmation',
+        status: 'requires_user_input',
+        message: '等待确认数据实现绑定'
+      }
+    }
+  )
 }

@@ -64,8 +64,8 @@ export async function openExternalPreviewUrl(url: string): Promise<void> {
   const targetUrl = normalizePreviewUrl(url)
   if (!targetUrl) return
 
-  if (window.xcodeAgent?.browser?.openExternal) {
-    await window.xcodeAgent.browser.openExternal(targetUrl)
+  if (window.aiStudio?.browser?.openExternal) {
+    await window.aiStudio.browser.openExternal(targetUrl)
     return
   }
 
@@ -77,14 +77,14 @@ export async function openPreviewWindow(url: string): Promise<void> {
   const targetUrl = normalizePreviewUrl(url)
   if (!targetUrl) return
 
-  if (window.xcodeAgent?.browser?.openPreviewWindow) {
-    await window.xcodeAgent.browser.openPreviewWindow(targetUrl)
+  if (window.aiStudio?.browser?.openPreviewWindow) {
+    await window.aiStudio.browser.openPreviewWindow(targetUrl)
     return
   }
 
   const openedWindow = window.open(
     targetUrl,
-    `xcode-agent-preview-${Date.now()}`,
+    `aistudio-preview-${Date.now()}`,
     'popup,width=1280,height=860,left=80,top=60,noopener,noreferrer'
   )
 

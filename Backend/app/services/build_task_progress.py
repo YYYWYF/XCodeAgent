@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Mapping
 from copy import deepcopy
 from typing import Any, Callable
 
 from langgraph.config import get_stream_writer
 
 from app.services.build_task_planner import tasks_from_build_task_plan
+from app.services.planning_frozen import plain_json
+from app.services.planning_run_contracts import PlanningRunProjection
+from app.services.planning_run_progress import (
+    DagGenerationSnapshot,
+    project_planning_run_progress,
+)
 
 ProgressWriter = Callable[[dict[str, Any]], None]
+PlanningRunSnapshotPublisher = Callable[[Mapping[str, Any]], Awaitable[None]]
 
 MAX_STAGE_RECORDS = 200
 MAX_STAGE_EDGES = 500
@@ -24,6 +32,88 @@ DAG_GENERATION_STAGES: tuple[tuple[str, str], ...] = (
     ("dag_validation", "校验任务 DAG"),
     ("artifact_persistence", "保存 DAG 产物"),
 )
+
+
+class PlanningRunProgressPublisher:
+    """把 Controller 的只读快照投影并写入现有 DAG custom stream。"""
+
+    def __init__(self, writer: ProgressWriter) -> None:
+        """绑定单个 Run 的同步 stream writer，并初始化 revision 顺序门禁。"""
+
+        self._writer = writer
+        self._planning_run_id: str | None = None
+        self._last_revision = -1
+
+    async def __call__(self, projection: Mapping[str, Any]) -> None:
+        """为一次已提交关键状态变化发送完整、严格递增的 Snapshot。"""
+
+        readonly = PlanningRunProjection.model_validate(plain_json(projection))
+        snapshot = project_planning_run_progress(readonly)
+        planning_run_id = snapshot["planningRunId"]
+        if self._planning_run_id is None:
+            self._planning_run_id = planning_run_id
+        elif self._planning_run_id != planning_run_id:
+            raise ValueError("同一个 progress publisher 不能混用多个 PlanningRun。")
+        if snapshot["revision"] <= self._last_revision:
+            raise ValueError("PlanningRun progress revision 必须严格递增。")
+        emit_dag_generation_progress(self._writer, snapshot)
+        self._last_revision = snapshot["revision"]
+
+
+def emit_dag_generation_progress(
+    writer: ProgressWriter,
+    snapshot: DagGenerationSnapshot,
+) -> None:
+    """沿既有事件类型发送一份完整的新协议 Snapshot，不拆分 delta。"""
+
+    writer(
+        {
+            "type": "prepare_build_tasks.progress",
+            "node_name": "prepare_build_tasks",
+            "status": "failed" if snapshot["status"] != "active" else "running",
+            "message": _planning_run_progress_message(snapshot),
+            "dag_generation": snapshot,
+        }
+    )
+
+
+def create_planning_run_progress_publisher() -> PlanningRunSnapshotPublisher | None:
+    """在 LangGraph custom-stream 上下文创建 publisher，离线调用安全降级。"""
+
+    try:
+        writer = get_stream_writer()
+    except (KeyError, RuntimeError):
+        return None
+    return PlanningRunProgressPublisher(writer)
+
+
+def _planning_run_progress_message(snapshot: DagGenerationSnapshot) -> str:
+    """从当前离散状态生成简短说明，不引入百分比或预测完成度。"""
+
+    if snapshot["status"] == "failed":
+        return "PlanningRun 已失败，DAG 生成停止。"
+    if snapshot["status"] == "cancelled":
+        return "PlanningRun 已取消，DAG 生成停止。"
+    active = next(
+        (
+            unit
+            for unit in snapshot["units"]
+            if unit["status"] in {"generating", "validating"}
+        ),
+        None,
+    )
+    if active is not None:
+        action = "校验" if active["status"] == "validating" else "生成"
+        return f"正在{action} Unit {active['id']}。"
+    ready = snapshot["summary"]["readyUnitCount"]
+    total = snapshot["summary"]["unitCount"]
+    if snapshot["phase"] == "global_check":
+        return f"正在执行 Global 检查，{ready}/{total} 个 Unit 已就绪。"
+    if snapshot["phase"] in {"assembling", "validating"}:
+        return f"正在{('组装' if snapshot['phase'] == 'assembling' else '校验')}完整 DAG。"
+    if snapshot["phase"] == "persisting_pending":
+        return "正在保存待确认的 Build Task Plan。"
+    return f"PlanningRun 已更新，{ready}/{total} 个 Unit 已就绪。"
 
 
 class BuildTaskProgressTracker:

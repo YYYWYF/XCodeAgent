@@ -8,6 +8,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.domain.models import (
+    BuildTaskExecutionContractError,
+    resolve_build_task_execution_contract,
+)
 from app.services.build_task_menu import (
     reconcile_live_page_paths,
 )
@@ -28,9 +32,18 @@ from app.services.build_unit_compiler import (
     apply_unit_compilation,
 )
 from app.services.task_scheduler import annotate_task_execution, build_execution_batches
+from app.services.deterministic_unit_candidates import is_deterministic_auth_resource_task
+from app.services.template_state import validate_template_context
 
 
 logger = logging.getLogger(__name__)
+
+
+def _template_context(context: dict[str, Any]) -> dict[str, Any]:
+    """读取正式绑定快照；脱离 Workspace 的纯结构编译保留空值供 Build 门禁拒绝。"""
+
+    value = context.get("template_context")
+    return validate_template_context(value) if value is not None else {}
 
 
 TASK_STATUSES = ("pending", "running", "completed", "failed", "already_satisfied")
@@ -407,6 +420,8 @@ def _normalize_agent_tasks(
         dependencies = _dedupe_normalized_strings(
             _string_list(item.get("dependencies"))
         )
+        execution_strategy = item.get("execution_strategy", "agent")
+        platform_executor = item.get("platform_executor")
         database_scope = _dict_value(item.get("database_scope"))
         allowed_paths = (
             _dedupe_normalized_strings(
@@ -435,6 +450,8 @@ def _normalize_agent_tasks(
             {
                 "id": task_id,
                 "owner": owner,
+                "execution_strategy": execution_strategy,
+                "platform_executor": platform_executor,
                 "task_type": _text(
                     item.get("task_type"),
                     default_task_type,
@@ -684,6 +701,10 @@ def _exact_duplicate_key(task: dict[str, Any]) -> str:
     """生成只包含确定性结构的完全重复任务键，不做语义相似度推断。"""
 
     owner = _normalized_text_key(_text(task.get("owner")))
+    execution_strategy = _normalized_text_key(
+        _text(task.get("execution_strategy"), "agent")
+    )
+    platform_executor = _normalized_text_key(_text(task.get("platform_executor")))
     unit_id = _normalized_text_key(_text(task.get("unit_id")))
     task_type = _normalized_text_key(_text(task.get("task_type")))
     target_files = sorted(
@@ -706,7 +727,17 @@ def _exact_duplicate_key(task: dict[str, Any]) -> str:
     target_key = _stable_json_key({"target_files": target_files, "change_scope": change_scope})
     if not target_files and not change_scope and not database_scope:
         return ""
-    return "|".join((owner, unit_id, task_type, target_key, database_scope))
+    return "|".join(
+        (
+            owner,
+            execution_strategy,
+            platform_executor,
+            unit_id,
+            task_type,
+            target_key,
+            database_scope,
+        )
+    )
 
 
 def _stable_json_key(value: Any) -> str:
@@ -785,6 +816,10 @@ def build_task_candidate_contract_errors(
                 errors.append(
                     f"Task {task_id} must not output platform-owned {field}."
                 )
+        try:
+            resolve_build_task_execution_contract(task)
+        except BuildTaskExecutionContractError as exc:
+            errors.append(str(exc))
         source_refs = task.get("source_refs")
         if isinstance(source_refs, dict) and "authorization" in source_refs:
             errors.append(
@@ -805,6 +840,10 @@ def build_task_candidate_contract_errors(
             )
         owner = _text(task.get("owner"))
         unit_id = _text(task.get("unit_id"))
+        if unit_id == "frontend:shell":
+            errors.append(
+                f"Task {task_id} must not belong to prerequisite_only frontend:shell."
+            )
         task_kind = _text(task.get("kind"))
         if task_kind == "repair":
             errors.append(
@@ -992,11 +1031,15 @@ def _task_semantic_errors(
         unit_id = str(task.get("unit_id") or "")
         task_type = str(task.get("task_type") or "")
         paths = _task_declared_paths(task)
+        try:
+            resolve_build_task_execution_contract(task)
+        except BuildTaskExecutionContractError as exc:
+            errors.append(str(exc))
         errors.extend(
             _template_boundary_errors(
                 task,
                 paths=paths,
-                template_variant=str(build_context.get("template_variant") or "main"),
+                allow_deterministic_auth_resources=build_context.get("_compile_auth_capability_dependencies") is True,
             )
         )
         if validate_task_scope and required_unit_ids and unit_id not in required_unit_ids:
@@ -1120,23 +1163,13 @@ def _template_boundary_errors(
     task: dict[str, Any],
     *,
     paths: list[str],
-    template_variant: str,
+    allow_deterministic_auth_resources: bool = False,
 ) -> list[str]:
-    """按模板变体报告职责越界，不修改候选任务以掩盖规划错误。"""
+    """对所有 capability 统一报告平台路由与权限基础设施职责越界。"""
 
     task_id = str(task.get("id") or "")
     errors: list[str] = []
     route_registry = str(task.get("unit_id") or "") == "frontend:route-registry"
-    if template_variant != "auth":
-        if route_registry:
-            return [f"Task {task_id} is auth-only and cannot run for main template."]
-        boundary_paths = sorted(path for path in paths if _is_template_boundary_path(path))
-        if boundary_paths:
-            errors.append(
-                f"Task {task_id} crosses the template initialization boundary and must not "
-                f"modify shared menu or route files: {', '.join(boundary_paths)}."
-            )
-        return errors
     boundary_paths = sorted(
         {
             path
@@ -1155,7 +1188,9 @@ def _template_boundary_errors(
         errors.append(
             f"Task {task_id} is platform-owned and must not be emitted by the model."
         )
-    elif registry_paths & _FRONTEND_ROUTE_REGISTRY_PATHS:
+    elif registry_paths & _FRONTEND_ROUTE_REGISTRY_PATHS and not (
+        allow_deterministic_auth_resources and is_deterministic_auth_resource_task(task, paths)
+    ):
         errors.append(
             f"Task {task_id} must not modify frontend route registry files: "
             f"{', '.join(sorted(registry_paths & _FRONTEND_ROUTE_REGISTRY_PATHS))}."
@@ -1273,10 +1308,18 @@ def replace_build_task_plan_tasks(
     build_task_plan: dict[str, Any],
     tasks: list[dict[str, Any]],
     build_context: dict[str, Any] | None = None,
+    *,
+    preserve_task_contract_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """用最新叶子任务重建 v2 注册表、任务图和执行批次。"""
+    """用最新叶子任务重建注册表、任务图和执行批次，可保留正式任务合同。"""
 
-    normalized_tasks = [_canonical_task(task) for task in tasks]
+    preserved_ids = preserve_task_contract_ids or set()
+    normalized_tasks = [
+        deepcopy(task)
+        if str(task.get("id") or "") in preserved_ids
+        else _canonical_task(task)
+        for task in tasks
+    ]
     annotated_tasks, execution_batches = _annotate_parallelism(normalized_tasks)
     build_units = deepcopy(
         build_task_plan.get("build_units")
@@ -1324,6 +1367,8 @@ def _canonical_task(task: dict[str, Any]) -> dict[str, Any]:
 
     canonical = dict(task)
     canonical["id"] = _text(task.get("id"), "task")
+    canonical["execution_strategy"] = task.get("execution_strategy", "agent")
+    canonical["platform_executor"] = task.get("platform_executor")
     canonical["unit_id"] = _text(task.get("unit_id"), "application:root")
     canonical["task_type"] = _text(
         task.get("task_type"),
@@ -1358,8 +1403,9 @@ def compile_build_task_plan_scope(
     *,
     validate_task_scope: bool = True,
     preserve_compiled_task_ids: set[str] | None = None,
+    preserve_task_contract_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """编译本轮任务契约，并在保留历史契约的前提下重建任务图。"""
+    """编译本轮任务契约，并按调用方指定范围保留历史合同后重建任务图。"""
 
     context = dict(build_context) if isinstance(build_context, dict) else {}
     preserved_ids = preserve_compiled_task_ids or set()
@@ -1399,6 +1445,7 @@ def compile_build_task_plan_scope(
             # 最终合并图只复核拓扑和职责，避免把保留任务误判为当前范围越界。
             "_validate_task_scope": validate_task_scope,
         },
+        preserve_task_contract_ids=preserve_task_contract_ids,
     )
     compiled["build_units"] = annotate_unit_inputs(
         compiled.get("build_units"),
@@ -1467,8 +1514,8 @@ def create_build_task_plan(
     plan = {
         **base_plan,
         "version": "3.0.0",
-        "schema_version": "build-dag.v3",
-        "template_variant": str(context.get("template_variant") or "main"),
+        "schema_version": "build-dag.v4",
+        "template_context": deepcopy(_template_context(context)),
         "status": (
             "ready"
             if task_graph["validation"]["is_valid"] and not blocked_batches

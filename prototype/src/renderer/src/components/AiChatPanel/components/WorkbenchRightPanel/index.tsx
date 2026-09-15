@@ -23,23 +23,13 @@ export default function WorkbenchRightPanel({
   tabs
 }: Props): ReactElement {
   if (layout === 'hidden') {
-    return (
-      <RightPanelLayoutControl
-        floating
-        onChange={onLayoutChange}
-        value={layout}
-      />
-    )
+    return <RightPanelLayoutControl floating onChange={onLayoutChange} value={layout} />
   }
 
   return (
     <div className={cx('embedded-preview-pane', 'workspace-pane')}>
       <RightPanelLayoutControl docked onChange={onLayoutChange} value={layout} />
-      <RightPanelTabs
-        tabs={tabs}
-        active={activeTab}
-        onChange={onTabChange}
-      />
+      <RightPanelTabs tabs={tabs} active={activeTab} onChange={onTabChange} />
       <div className={cx('workspace-content')}>{children}</div>
     </div>
   )

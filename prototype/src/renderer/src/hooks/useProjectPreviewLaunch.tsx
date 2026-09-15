@@ -89,7 +89,7 @@ export function useProjectPreviewLaunch({
         if (!launchStillCurrent) {
           if (result.status === 'running') {
             void stopProjectPreview(workspacePath).finally(() => {
-              void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
+              void window.aiStudio?.projectPreview?.unregisterWorkspace({
                 workspaceRoot: workspacePath
               })
             })
@@ -97,7 +97,7 @@ export function useProjectPreviewLaunch({
           return
         }
         if (result.status === 'running' && result.preview_url) {
-          void window.xcodeAgent?.projectPreview?.registerWorkspace({
+          void window.aiStudio?.projectPreview?.registerWorkspace({
             workspaceRoot: workspacePath
           })
           setPreviewBaseUrl(previewOrigin(result.preview_url))

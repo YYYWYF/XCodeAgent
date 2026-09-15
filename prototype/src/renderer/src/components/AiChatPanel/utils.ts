@@ -54,6 +54,11 @@ export function endpointDetailTargetKey(apiContractId: string, endpointId: strin
   return apiContractId && endpointId ? `endpoint:${apiContractId}:${endpointId}` : ''
 }
 
+/** 生成实体详情目标键，供临时运行状态按实体隔离。 */
+export function businessObjectDetailTargetKey(objectId: string): string {
+  return objectId ? `business-object:${objectId}` : ''
+}
+
 /** 生成 API 大纲的相对展示路径，仅移除完整匹配的 base path 前缀。 */
 export function apiEndpointDisplayPath(endpointPath: string, basePath: string): string {
   const normalizedEndpointPath = endpointPath.trim() || '/'
@@ -100,6 +105,10 @@ export function workflowDetailTargetKey(workflow: unknown): string {
   ).trim()
   if (apiContractId && endpointId) {
     return endpointDetailTargetKey(apiContractId, endpointId)
+  }
+  const objectId = String(state.selectedObjectId || result.selectedObjectId || '').trim()
+  if (objectId) {
+    return businessObjectDetailTargetKey(objectId)
   }
   const pageId = String(
     state.selectedPageId ||
@@ -165,7 +174,7 @@ export function isInternalWorkspaceChangePath(path: string): boolean {
     .replaceAll('\\', '/')
     .split('/')
     .filter((segment) => Boolean(segment) && segment !== '.')
-  return segments.includes('.xcodeagent')
+  return segments.includes('.aistudio')
 }
 
 /** 过滤内部状态文件，并按路径合并同一次运行中的多段文件变更。 */
@@ -221,6 +230,8 @@ export function stoppedAnswer(content: string): string {
  * 判断工作流是否处于指定 mode 的待确认门禁（requires_user_input）：
  * 阶段准入门都以“工作流自身的待输入节点”为唯一事实来源，弹框只是它的显示面。
  * 命中时返回原工作流，供调用方直接取 runId 与续跑参数。
+ * 已提交的历史确认卡（clarification.status !== requires_user_input）不再算待处理，
+ * 否则查看历史版本/重挂载时会误弹阶段门弹框（与 sessionRunBlocksConversationCreation 同一纪律）。
  */
 export function pendingGateWorkflow(
   workflow: WorkflowRunPayload | undefined,
@@ -234,7 +245,8 @@ export function pendingGateWorkflow(
     workflow?.summary?.status !== 'requires_user_input' ||
     !clarification ||
     typeof clarification !== 'object' ||
-    (clarification as { mode?: unknown }).mode !== mode
+    (clarification as { mode?: unknown }).mode !== mode ||
+    (clarification as { status?: unknown }).status !== 'requires_user_input'
   ) {
     return undefined
   }
@@ -245,6 +257,8 @@ export function workflowCodeChanges(
   workflow: WorkflowRunPayload | undefined
 ): WorkspaceCodeChangeSet | undefined {
   if (!workflow) return undefined
+  // 正式规划文档通过表单确认，所有设计与规划快照均不展示文档 Diff。
+  if (workflow.state?.planningGate || ['requirements', 'requirement_document', 'ui_confirmation', 'planning_stage_entry', 'technical_planning', 'template_generation', 'ready_for_workbench'].includes(String(workflow.summary.phase))) return undefined
   if (workflow.codeChanges?.files?.length) return workflow.codeChanges
 
   const stateCodeChanges = workflow.state?.codeChanges
@@ -326,7 +340,7 @@ export function requiresInitialDetailDesignSelection(hasPageDesigns: boolean): b
 
 /** 以当前页面的落盘详情状态判断是否需要锁定对话区。 */
 export function requiresPageDetailDesign(page: DevelopmentPlanningPageOption | undefined): boolean {
-  // 详设计划只是开发上下文；只有代码产物已交付(designed)才算页面完成。
+  // 详设计划只是开发上下文；只有代码产物已完成(designed)才算页面完成。
   return Boolean(page && !page.designed)
 }
 
