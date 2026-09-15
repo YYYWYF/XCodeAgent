@@ -21,6 +21,7 @@ class ProjectState(TypedDict, total=False):
     selected_skill_names: list[str]
     phase: str
     resume_from: str
+    workflow_action: str
     request_complexity: str
     complexity_reason: str
     complexity_decision: dict[str, Any]
@@ -49,6 +50,7 @@ class ProjectState(TypedDict, total=False):
     application_planning_interaction: dict[str, Any]
     requirement_revision_id: str
     authorization_config_conflict: dict[str, Any]
+    pending_application_config_target: dict[str, Any]
     direct_modification_owner: str
     direct_modification_scope: str
     direct_modification_confidence: float

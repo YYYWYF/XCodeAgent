@@ -212,6 +212,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         "continue_revision_build",
         "start_revision",
         "submit_revision_interaction",
+        "retry_template_reconcile",
     } and explicit_resume_from:
         raise ValueError(f"{workflow_action} 不接受 node 或 resume_from。")
     # UI 卡片的结构化动作是 ui_confirmation 的直接调用，不属于自由输入设计变更。
@@ -247,6 +248,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
                 target=retry_target,
             )
         )
+    elif workflow_action == "retry_template_reconcile":
+        if workflow_scope not in APPLICATION_PLANNING_SCOPES:
+            raise ValueError("retry_template_reconcile 只适用于 application_planning Graph。")
+        # 节点由专用 action 选择，普通恢复请求不能自行抵达 Template Reconcile。
+        resume_from = "template_reconcile"
     elif small_task_handoff_submission and workflow_scope not in APPLICATION_PLANNING_SCOPES:
         # 单测修复使用独立节点；恢复快照中的 repairReturnNode 是当前契约里
         # 唯一可靠的来源，不能让通用 SmallTask 节点吞掉开发阶段修复计数。
@@ -1163,6 +1169,7 @@ def _supported_workflow_action(value: str) -> str:
             "submit_revision_interaction",
             "start_entity_binding",
             "continue_after_entity_binding",
+            "retry_template_reconcile",
         }
         else ""
     )

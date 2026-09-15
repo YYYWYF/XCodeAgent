@@ -171,10 +171,7 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
                 <SummaryItem
                   description={itemText(item, ['description'])}
                   key={itemText(item, ['id', 'name']) || `role-${index}`}
-                  labels={[
-                    ...(asRecord(item)?.isInitialAdminRole === true ? ['初始系统管理员'] : []),
-                    ...(asRecord(item)?.isSystemRole === true ? ['系统角色'] : [])
-                  ]}
+                  labels={[]}
                   name={itemText(item, ['name']) || `角色 ${index + 1}`}
                 />
               )

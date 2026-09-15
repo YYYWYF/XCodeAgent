@@ -62,6 +62,8 @@ type Props = {
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试设计阶段规划任务。 */
   onRetryPlanning?: () => void
+  /** 通过专用动作重试失败的模板能力更新。 */
+  onRetryTemplateReconcile?: () => void
   /** 当前应用唯一的 Planning 业务状态。 */
   planningState?: ApplicationPlanningCurrentState
   theme: Theme
@@ -95,6 +97,7 @@ function WorkbenchPage({
   onStopPlanning,
   generatingTemplate,
   onRetryPlanning,
+  onRetryTemplateReconcile,
   planningState,
   theme
 }: Props): JSX.Element {
@@ -450,6 +453,7 @@ function WorkbenchPage({
                 onSessionHistoryReadyChange={handleSessionHistoryReadyChange}
                 generatingTemplate={generatingTemplate}
                 onRetryPlanning={onRetryPlanning}
+                onRetryTemplateReconcile={onRetryTemplateReconcile}
                 planningState={planningState}
                 theme={theme}
                 rightPanelOpen={rightPanelOpen}

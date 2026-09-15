@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import uuid
 import zipfile
 from dataclasses import dataclass, field
@@ -88,8 +89,8 @@ class WorkspaceMaterializer:
                 journal.moved_roots.append(target)
             journal.git_initialized = True
             self._git_manager.initialize_baseline(root)
-            _write_template_state(root / TEMPLATE_STATE_RELATIVE_PATH, template_state)
             journal.template_state_written = True
+            _write_template_state(root / TEMPLATE_STATE_RELATIVE_PATH, template_state)
             _remove_managed_path(journal.staging)
             _remove_empty_staging_parent(root)
             # Readiness 必须在 staging 已清除但仍可回滚的事务边界内执行。
@@ -152,7 +153,16 @@ def _remove_managed_path(path: Path) -> None:
     if path.is_symlink() or path.is_file():
         path.unlink(missing_ok=True)
     elif path.is_dir():
-        shutil.rmtree(path)
+        shutil.rmtree(path, onexc=_clear_readonly_and_retry)
+
+
+def _clear_readonly_and_retry(function: Callable[[str], None], path: str, error: BaseException) -> None:
+    """Windows 删除 Git 只读对象失败时清除只读属性并重试原操作。"""
+
+    if not isinstance(error, PermissionError):
+        raise error
+    os.chmod(path, stat.S_IWRITE)
+    function(path)
 
 
 def _remove_empty_staging_parent(workspace: Path) -> None:

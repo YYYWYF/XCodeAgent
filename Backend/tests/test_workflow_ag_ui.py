@@ -1465,6 +1465,109 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             event_names.index("workflow-run"),
         )
 
+    def test_regenerate_progress_clears_consumed_pending_before_dag_frame(self) -> None:
+        """Regenerate 首个 DAG progress 前必须广播 none，避免旧 Confirmation A 残留。"""
+
+        initial_lifecycle = {
+            "application": {"id": "app-regenerate-progress", "name": "测试应用"},
+            "updatedAt": "2026-07-23T00:00:00Z",
+            "revision": 2,
+            "initialization": {
+                "stage": "ready_for_workbench",
+                "status": "completed",
+            },
+            "activeExecutions": {},
+            "resourceLocks": {
+                "application": None,
+                "pages": {},
+                "apiContracts": {},
+                "dataSources": {},
+            },
+            "extensions": {
+                "planningRefresh": {
+                    "schemaVersion": "planning-refresh.v1",
+                    "source": "pending_plan",
+                    "status": "awaiting_confirmation",
+                    "planningRunId": "planning-a",
+                    "workflowRunId": "workflow-a",
+                    "draftDigest": "a" * 64,
+                }
+            },
+        }
+        idle_projection = {
+            "schemaVersion": "planning-refresh.v1",
+            "source": "none",
+            "status": "idle",
+            "message": "当前没有可恢复的 PendingPlan。",
+        }
+
+        async def collect() -> list[str]:
+            """收集 Regenerate 模拟流中的生命周期和 DAG progress 帧。"""
+
+            stream = build_workflow_ag_ui_stream(
+                graph=FakePlanningRunProgressGraph(),
+                payload={
+                    "threadId": "thread-regenerate-progress",
+                    "runId": "run-regenerate-progress",
+                    "messages": [{"role": "user", "content": "重新生成任务 DAG"}],
+                    "forwardedProps": {
+                        "resumeFrom": "prepare_build_tasks",
+                        "workspaceRoot": "/tmp/regenerate-progress",
+                    },
+                },
+            )
+            return [frame async for frame in stream]
+
+        with (
+            patch(
+                "app.protocols.workflow.runtime.begin_workflow_lifecycle",
+                return_value=initial_lifecycle,
+            ),
+            patch(
+                "app.protocols.workflow.runtime.load_application_lifecycle",
+                return_value=initial_lifecycle,
+            ),
+            patch(
+                "app.protocols.workflow.runtime.application_lifecycle_payload",
+                side_effect=lambda value: value,
+            ),
+            patch(
+                "app.protocols.workflow.runtime.resolve_planning_refresh_state",
+                return_value=idle_projection,
+            ),
+        ):
+            frames = asyncio.run(collect())
+
+        custom_events = _decode_custom_frames(frames)
+        lifecycle_values = [
+            event["value"]
+            for event in custom_events
+            if event.get("name") == "application-lifecycle"
+        ]
+        self.assertGreaterEqual(len(lifecycle_values), 2)
+        self.assertEqual(
+            lifecycle_values[0]["extensions"]["planningRefresh"]["source"],
+            "pending_plan",
+        )
+        self.assertEqual(
+            lifecycle_values[1]["extensions"]["planningRefresh"]["source"],
+            "none",
+        )
+        clear_index = next(
+            index
+            for index, event in enumerate(custom_events)
+            if event.get("name") == "application-lifecycle"
+            and event.get("value", {}).get("extensions", {}).get("planningRefresh", {}).get("source")
+            == "none"
+        )
+        dag_index = next(
+            index
+            for index, event in enumerate(custom_events)
+            if event.get("name") == "agent-process"
+            and isinstance(event.get("value", {}).get("dagGeneration"), dict)
+        )
+        self.assertLess(clear_index, dag_index)
+
     def test_cancel_run_request_cancels_the_active_workflow_task(self) -> None:
         graph = FakeBlockingGraph()
 

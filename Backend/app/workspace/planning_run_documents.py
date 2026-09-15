@@ -6,7 +6,7 @@ from typing import Any
 
 from app.services.planning_run_contracts import PlanningRun, PlanningRunProjection
 from app.workspace.json_documents import write_json_atomic
-from app.workspace.spec_documents import workflow_artifact_root
+from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
 
 def planning_run_json_path(state: dict[str, Any]) -> Path:
@@ -51,7 +51,7 @@ def write_planning_run_atomic(
 
     payload = project_planning_run(planning_run)
     path = planning_run_json_path(state)
-    with build_task_plan_lifecycle_lock:
+    with build_task_plan_lifecycle_lock(workspace_root(state)):
         write_json_atomic(path, payload)
     return str(path)
 

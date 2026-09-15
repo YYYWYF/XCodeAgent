@@ -30,6 +30,7 @@ import type {
   WorkflowWorkbenchPlanRevisionStart,
   WorkflowRevisionContinuation,
   WorkflowRunPayload,
+  WorkflowTemplatePreparation,
   WorkspaceCodeChangeSet
 } from '../../typings'
 import { CLASS_PREFIX, composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../utils'
@@ -42,7 +43,10 @@ import {
   planningMutationBlocked,
   type ApplicationPlanningCurrentState
 } from '../../service/activeApplicationPlanning'
-import { isTemplateGenerationOrphaned } from '../../service/templateApi'
+import {
+  isTemplateGenerationOrphaned,
+  isTemplateReconcileRetryable
+} from '../../service/templateApi'
 import type {
   RequirementSpecDraftSaveResult,
   WorkflowRevisionContinuationHandoff
@@ -129,6 +133,10 @@ import {
 } from './hooks/revisionSession'
 import { sessionIdentityFromSummary, sessionRuntimeKey } from './hooks/sessionRuntime'
 import type { SessionIdentity } from './hooks/sessionRuntime'
+import {
+  applicationMutationReadonlyForSession,
+  resolveApplicationMutationOwnership
+} from './applicationOwnership'
 import { chatCopy } from './constants'
 import type { AgentChatMessage, WorkspaceDocKey } from './types'
 import type { EndpointDesignSaveResult } from '../../typings'
@@ -143,8 +151,6 @@ import {
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
   pendingDagOwnerSessionId,
-  planningRefreshInterruption,
-  resolvePendingPlanGuard,
   stageOutputPhase
 } from './stageOutputState'
 import {
@@ -317,6 +323,8 @@ type Props = {
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试规划 Graph。 */
   onRetryPlanning?: () => void
+  /** 通过独立 AG-UI 动作重试 Template Reconcile。 */
+  onRetryTemplateReconcile?: () => void
   /** 当前应用唯一的 Planning 业务状态。 */
   planningState?: ApplicationPlanningCurrentState
   theme: 'light' | 'dark'
@@ -862,6 +870,7 @@ export default function AiChatPanel({
   onSessionHistoryReadyChange,
   generatingTemplate,
   onRetryPlanning,
+  onRetryTemplateReconcile,
   planningState,
   theme,
   rightPanelOpen,
@@ -1068,6 +1077,7 @@ export default function AiChatPanel({
     acquireSessionExecution,
     releaseSessionExecution,
     sessionExecutions,
+    updateSessionExecutionPhase,
     updateSessionExecutionStatus
   } = useSessionRuntimeStore()
 
@@ -1411,6 +1421,7 @@ export default function AiChatPanel({
     handleCreateSessionFromList,
     handleDeleteSession,
     handleOpenSession,
+    handleOpenSessionById,
     openSessionForPhase,
     loadSessionIdentity,
     loadingSessions,
@@ -1464,6 +1475,21 @@ export default function AiChatPanel({
         setRightPanel({ ...rightPanel, requestKey: crypto.randomUUID() })
     }
   })
+
+  // DAG Planning owner 只由 DAG-specific lifecycle/local execution 和有效 Pending 投影；
+  // resourceLocks 及其它 Workbench execution 只用于资源/阶段说明，不能形成 DAG lock。
+  const applicationOwnership = useMemo(
+    () =>
+      resolveApplicationMutationOwnership(applicationLifecycle, allSessions, sessionExecutions, {
+        applicationId: application.id,
+        workspaceRoot: application.workspaceRoot
+      }),
+    [application.id, application.workspaceRoot, allSessions, applicationLifecycle, sessionExecutions]
+  )
+  const applicationMutationReadonly = applicationMutationReadonlyForSession(
+    applicationOwnership,
+    activeSession
+  )
 
   // DOM 源码定位仅绑定当前会话，切换页面、接口或自由会话后要求用户重新选择。
   useEffect(() => {
@@ -2224,6 +2250,7 @@ export default function AiChatPanel({
     agUiSessionsRef,
     application,
     applicationLifecycle,
+    applicationMutationReadonly,
     draft,
     draftKey,
     editorMode,
@@ -2270,8 +2297,8 @@ export default function AiChatPanel({
     setDraftByKey,
     setSelectedSkillsByKey,
     setSessionMessages,
-    updateSessionExecutionStatus,
-    workbenchPhase: activeWorkbenchPhase
+    updateSessionExecutionPhase,
+    updateSessionExecutionStatus
   })
 
   // 同一执行归属同时决定停止按钮的显示与动作路由，普通 Workflow 保持原有优先级。
@@ -2841,39 +2868,40 @@ export default function AiChatPanel({
     pendingDagExecution,
     applicationLifecycle
   )
-  const pendingPlanGuard = resolvePendingPlanGuard(applicationLifecycle)
   const currentSessionId = activeSessionId || ''
+  const pendingPlanOwnerSessionId = applicationOwnership.pendingPlan?.ownerSessionId
+  const pendingPlanActionable = Boolean(
+    applicationOwnership.actionablePending &&
+      applicationOwnership.state !== 'invalid_pending_owner'
+  )
   const pendingPlanOwnedByCurrentSession = Boolean(
-    pendingPlanGuard.locked &&
-      pendingPlanGuard.ownerSessionId &&
-      pendingPlanGuard.ownerSessionId === currentSessionId
+    pendingPlanActionable &&
+      pendingPlanOwnerSessionId &&
+      pendingPlanOwnerSessionId === currentSessionId
   )
   // ownerSessionId 缺失时不能把所有会话误判为 owner 以外的会话，否则会造成全局只读。
   const pendingPlanOwnedByOtherSession = Boolean(
-    pendingPlanGuard.locked &&
-      pendingPlanGuard.ownerSessionId &&
-      pendingPlanGuard.ownerSessionId !== currentSessionId
+    pendingPlanActionable &&
+      pendingPlanOwnerSessionId &&
+      pendingPlanOwnerSessionId !== currentSessionId
   )
-  const invalidPendingPlanProjection = Boolean(
-    pendingPlanGuard.locked && !pendingPlanGuard.ownerSessionId
-  )
-  const pendingPlanLockActive = pendingPlanOwnedByCurrentSession || pendingPlanOwnedByOtherSession
+  const invalidPendingPlanProjection = applicationOwnership.state === 'invalid_pending_owner'
   useEffect(() => {
     if (!invalidPendingPlanProjection) return
     // 无 owner 的 PendingPlan projection 只记录诊断，不升级为全应用会话锁。
     console.error(
-      '[PendingPlanGuard] invalid pending-plan projection: ownerSessionId is missing.',
+      '[PendingPlanOwnership] invalid pending-plan projection: ownerSessionId is missing.',
       {
         applicationId: application.id,
-        planningRunId: pendingPlanGuard.planningRunId,
-        workflowRunId: pendingPlanGuard.workflowRunId
+        planningRunId: applicationOwnership.pendingPlan?.planningRunId,
+        workflowRunId: applicationOwnership.pendingPlan?.workflowRunId
       }
     )
   }, [
     application.id,
-    invalidPendingPlanProjection,
-    pendingPlanGuard.planningRunId,
-    pendingPlanGuard.workflowRunId
+    applicationOwnership.pendingPlan?.planningRunId,
+    applicationOwnership.pendingPlan?.workflowRunId,
+    invalidPendingPlanProjection
   ])
   const hasOwnedPendingPlan = Boolean(pendingDagExecution && pendingPlanOwnedByCurrentSession)
   const planningSessionRunActive = isApplicationPlanningPhase && planningPhaseRunning
@@ -2882,16 +2910,49 @@ export default function AiChatPanel({
       (!existingPlanningSession || existingPlanningSession.id !== activeSessionId)
   )
   const otherSessionExecutionLocked =
-    sessionExecutionLocked || planningRunLockedByOtherSession || pendingPlanOwnedByOtherSession
+    sessionExecutionLocked ||
+    applicationMutationReadonly ||
+    planningRunLockedByOtherSession ||
+    pendingPlanOwnedByOtherSession
   const phaseSessionRunActive =
-    Boolean(phaseExecution) || planningSessionRunActive || pendingPlanLockActive
-  const phaseExecutionSessionTitle = phaseExecution
-    ? allSessions.find((session) => session.id === phaseExecution.identity.sessionId)?.title
-    : pendingDagSession?.title || existingPlanningSession?.title
+    Boolean(phaseExecution) ||
+    planningSessionRunActive ||
+    applicationOwnership.state === 'owned' ||
+    applicationOwnership.state === 'conflicted'
+  const applicationOwnerSession = applicationOwnership.owner
+    ? allSessions.find(
+        (session) =>
+          (applicationOwnership.owner?.sessionId &&
+            session.id === applicationOwnership.owner.sessionId) ||
+          (applicationOwnership.owner?.threadId &&
+            session.threadId === applicationOwnership.owner.threadId)
+      )
+    : undefined
+  const phaseExecutionSessionTitle =
+    applicationOwnership.owner?.title ||
+    applicationOwnerSession?.title ||
+    (phaseExecution
+      ? allSessions.find((session) => session.id === phaseExecution.identity.sessionId)?.title
+      : pendingDagSession?.title || existingPlanningSession?.title)
+  const applicationOwnerStatus = applicationOwnership.owner?.status
   const phaseExecutionStatus =
-    phaseExecution?.status || (pendingPlanLockActive ? 'awaiting_user' : 'running')
+    applicationOwnerStatus === 'awaiting_confirmation' || applicationOwnerStatus === 'awaiting_user'
+      ? 'awaiting_user'
+      : applicationOwnerStatus === 'starting'
+        ? 'starting'
+        : applicationOwnerStatus === 'stopping'
+          ? 'stopping'
+          : applicationOwnerStatus === 'running'
+            ? 'running'
+            : phaseExecution?.status || 'running'
+  const phaseExecutionLabel =
+    applicationOwnership.owner?.workbenchPhase
+      ? WORKBENCH_PHASE_AGENTS[applicationOwnership.owner.workbenchPhase].label
+      : WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label
   const workflowInputLocked =
-    workspaceBusy || pendingPlanLockActive || planningMutationBlocked(planningState)
+    workspaceBusy ||
+    pendingPlanActionable ||
+    planningMutationBlocked(planningState)
   const displayedSessionRunStates =
     planningSessionRunActive && existingPlanningSession
       ? { ...sessionRunStates, [existingPlanningSession.id]: 'running' as const }
@@ -3219,6 +3280,13 @@ export default function AiChatPanel({
         : activePageOption?.taskSummary
   )
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
+  // 正式修订失败必须同时看到 lifecycle 失败态和 V2 Attempt 的 retryable 投影，才能提供安全重试。
+  const templateReconcileRetryable = isTemplateReconcileRetryable(
+    applicationLifecycle,
+    (latestWorkflowForDisplay?.summary?.templatePreparation ||
+      latestWorkflowForDisplay?.state?.templatePreparation ||
+      latestWorkflowForDisplay?.result?.templatePreparation) as WorkflowTemplatePreparation | undefined
+  )
   const currentStageSessionTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const stageOutputContextAligned = activeTargetKey
     ? currentStageSessionTargetKey === activeTargetKey
@@ -3249,7 +3317,6 @@ export default function AiChatPanel({
     () => latestDagGenerationSnapshot(stageOutputMessages, applicationLifecycle),
     [applicationLifecycle, stageOutputMessages]
   )
-  const interruptedPlanningRun = planningRefreshInterruption(applicationLifecycle)
   const dagConfirmationPlan = useMemo(
     () => (hasOwnedPendingPlan ? currentDagConfirmationPlan(stageOutputWorkflow) : undefined),
     [hasOwnedPendingPlan, stageOutputWorkflow]
@@ -3284,9 +3351,11 @@ export default function AiChatPanel({
       stageOutputWorkflow
     ]
   )
-  const currentStageOutputPhase = interruptedPlanningRun
-    ? 'generation'
-    : stageOutputPhase(stageOutputWorkflow, currentDagSnapshot, dagConfirmationPlan)
+  const currentStageOutputPhase = stageOutputPhase(
+    stageOutputWorkflow,
+    currentDagSnapshot,
+    dagConfirmationPlan
+  )
   const stageOutputSessionKey =
     hasOwnedPendingPlan && pendingDagExecution
       ? `${application.id}:pending-dag:${pendingDagExecution.runId}`
@@ -3741,7 +3810,7 @@ export default function AiChatPanel({
       continuation?: WorkflowDevelopmentContinuation
     }
   ): Promise<void> => {
-    if (pendingPlanLockActive) return
+    if (pendingPlanActionable) return
     const targetKey = `entity:${entityId}`
     setInteractingDetailTargetKey(targetKey)
     setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
@@ -3761,7 +3830,7 @@ export default function AiChatPanel({
 
   /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置页面、Endpoint 或实体目标。 */
   const handleQuickTaskStart = async (task: QuickTaskItem): Promise<void> => {
-    if (pendingPlanLockActive) return
+    if (pendingPlanActionable) return
     setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
@@ -3875,6 +3944,22 @@ export default function AiChatPanel({
     setGeneratingDetailTargetKey('')
     setActiveDetailTarget({ type: 'none' })
     await handleOpenSession(sessionId)
+  }
+
+  /** 打开 DAG Planning owner 会话；跨工作台阶段时先激活目标再切换视图。 */
+  const handleOpenApplicationSession = async (sessionId: string): Promise<void> => {
+    const targetSession = allSessions.find((session) => session.id === sessionId)
+    if (!targetSession || targetSession.workbenchPhase === activeWorkbenchPhase) {
+      await handleOpenChatSession(sessionId)
+      return
+    }
+    setTemporaryChatOpen(false)
+    setActiveView('chat')
+    setInteractingDetailTargetKey('')
+    setGeneratingDetailTargetKey('')
+    setActiveDetailTarget({ type: 'none' })
+    await handleOpenSessionById(sessionId)
+    switchPhase(targetSession.workbenchPhase)
   }
 
   /** 始终用原会话身份提交固定 DAG 卡；确认启动后才把中央对话切回该会话。 */
@@ -4461,7 +4546,11 @@ export default function AiChatPanel({
                     : undefined
               }
               onRetryTemplateGeneration={
-                templateGenerationRecoverable ? onRetryPlanning : undefined
+                templateGenerationRecoverable
+                  ? onRetryPlanning
+                  : templateReconcileRetryable
+                    ? onRetryTemplateReconcile
+                  : undefined
               }
               onSubmitClarification={handleSubmitWorkflowClarification}
               revertingCodeChangeIds={revertingCodeChangeIds}
@@ -4475,21 +4564,24 @@ export default function AiChatPanel({
               onEnterDevelopment={handleEnterDevelopment}
               generatingTemplate={generatingTemplate}
               templateGenerationOrphaned={templateGenerationOrphaned}
+              templateReconcileRetryable={templateReconcileRetryable}
               planningState={planningState}
             />
 
-            {otherSessionExecutionLocked || pendingPlanOwnedByCurrentSession ? (
+            {otherSessionExecutionLocked ? (
               <SessionExecutionLockDock
-                phaseLabel={WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label}
+                phaseLabel={phaseExecutionLabel}
                 sessionTitle={phaseExecutionSessionTitle}
                 status={phaseExecutionStatus}
-                onOpenSession={
-                  pendingPlanOwnedByOtherSession && pendingDagSession
+                onOpenSession={applicationOwnerSession
+                  ? () => {
+                      void handleOpenApplicationSession(applicationOwnerSession.id)
+                    }
+                  : pendingPlanOwnedByOtherSession && pendingDagSession
                     ? () => {
-                        void handleOpenChatSession(pendingDagSession.id)
+                        void handleOpenApplicationSession(pendingDagSession.id)
                       }
-                    : undefined
-                }
+                    : undefined}
               />
             ) : previewRuntime.repairSession ? (
               <PreviewRepairControls
@@ -4825,14 +4917,7 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             {stageOutputMatchesSession ? (
-              interruptedPlanningRun ? (
-                <Alert
-                  message="任务规划已中断"
-                  description={interruptedPlanningRun.message}
-                  showIcon
-                  type="warning"
-                />
-              ) : rightPanel.view === 'confirmation' && dagConfirmationPlan ? (
+              rightPanel.view === 'confirmation' && dagConfirmationPlan ? (
                 <StageOutputPanel
                   confirmationDisabled={
                     loading ||

@@ -225,9 +225,7 @@ export default function RequirementSpecEditor({ onChange, rootPath, spec }: Prop
           addItem('user_roles', {
             id: draftId('role'),
             name: '新角色',
-            description: '',
-            isSystemRole: false,
-            isInitialAdminRole: false
+            description: ''
           })
         }
         title="业务参与者"

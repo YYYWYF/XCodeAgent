@@ -10,7 +10,8 @@ from typing import Any
 from app.services.requirement_spec import validate_authorization_requirements
 
 
-AUTHORIZATION_MANIFEST_SCHEMA_VERSION = "authorization-manifest.v2"
+AUTHORIZATION_MANIFEST_SCHEMA_VERSION = "authorization-manifest.v3"
+SYSTEM_ADMIN_ROLE_SEED_KEY = "system_admin"
 SYSTEM_RESOURCE_KEY = "system_authorization_management"
 _LOWER_SNAKE_CASE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 _FORBIDDEN_FIELDS = {"dataRules", "dataPolicyBindings", "dataRuleKey", "policyKey", "requiredSubjectAttributes", "authorization_data_bindings"}
@@ -30,14 +31,18 @@ def _canonical_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     """按当前契约排序并去重 manifest，供指纹和严格比较共用。"""
     bindings = manifest.get("bindings") if isinstance(manifest.get("bindings"), dict) else {}
     authorization = manifest.get("defaultRoleAuthorization") if isinstance(manifest.get("defaultRoleAuthorization"), dict) else {}
+    system_authorization = manifest.get("systemAuthorization") if isinstance(manifest.get("systemAuthorization"), dict) else {}
     return {"schema_version": manifest.get("schema_version"),
             "resources": sorted(_dict_items(manifest.get("resources")), key=lambda item: str(item.get("resourceKey") or "")),
             "bindings": {"pages": sorted(_dict_items(bindings.get("pages")), key=lambda item: str(item.get("pageId") or "")),
                          "actions": sorted(_dict_items(bindings.get("actions")), key=lambda item: (str(item.get("pageId") or ""), str(item.get("actionId") or ""))),
                          "endpoints": sorted(_dict_items(bindings.get("endpoints")), key=lambda item: str(item.get("endpointId") or ""))},
+            "systemAuthorization": {
+                "adminRoleSeedKey": str(system_authorization.get("adminRoleSeedKey") or ""),
+                "managementResourceKey": str(system_authorization.get("managementResourceKey") or ""),
+            },
             "defaultRoleAuthorization": {"roles": sorted(_dict_items(authorization.get("roles")), key=lambda item: str(item.get("roleSeedKey") or "")),
-                                          "roleResourceGrants": sorted(_dict_items(authorization.get("roleResourceGrants")), key=lambda item: str(item.get("roleSeedKey") or "")),
-                                          "initialAdminRoleSeedKey": str(authorization.get("initialAdminRoleSeedKey") or "")}}
+                                          "roleResourceGrants": sorted(_dict_items(authorization.get("roleResourceGrants")), key=lambda item: str(item.get("roleSeedKey") or ""))}}
 
 
 def _with_fingerprint(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -79,9 +84,6 @@ def _authorization_errors(requirement_spec: dict[str, Any], *, authorization_ena
         errors.append("DATA_AUTHORIZATION_NOT_SUPPORTED：存在未解决的数据权限能力问题。")
     if authorization_enabled:
         roles = _dict_items(requirement_spec.get("user_roles")); role_ids = {str(item.get("id") or "").strip() for item in roles}
-        initial = str(authorization.get("initialAdminRoleId") or "").strip(); initial_roles = [item for item in roles if item.get("isInitialAdminRole") is True]
-        if not initial or initial not in role_ids or len(initial_roles) != 1:
-            errors.append("权限启用时必须存在唯一有效的初始系统管理员角色。")
         for rule in _dict_items(authorization.get("restrictedPages")) + _dict_items(authorization.get("restrictedOperations")):
             if not _text_items(rule.get("sourceRefs")) or not _text_items(rule.get("defaultGrantedRoleIds")):
                 errors.append("权限规则必须包含来源和非空 defaultGrantedRoleIds。")
@@ -145,7 +147,7 @@ def compile_authorization_manifest(requirement_spec: dict[str, Any], product_pla
         raise ValueError("；".join(errors))
     authorization = requirement_spec.get("authorization_requirements") if isinstance(requirement_spec.get("authorization_requirements"), dict) else {}
     if not enabled:
-        return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "resources": [], "bindings": {"pages": [], "actions": [], "endpoints": []}, "defaultRoleAuthorization": {"roles": [], "roleResourceGrants": [], "initialAdminRoleSeedKey": ""}})
+        return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "resources": [], "bindings": {"pages": [], "actions": [], "endpoints": []}, "systemAuthorization": {"adminRoleSeedKey": "", "managementResourceKey": ""}, "defaultRoleAuthorization": {"roles": [], "roleResourceGrants": []}})
     targets = product_plan.get("authorizationTargets") if isinstance(product_plan.get("authorizationTargets"), dict) else {}
     page_targets = {str(item.get("ruleId") or "").strip(): str(item.get("pageId") or "").strip() for item in _dict_items(targets.get("pageRules"))}
     action_targets = {
@@ -188,8 +190,9 @@ def compile_authorization_manifest(requirement_spec: dict[str, Any], product_pla
     mixed = sorted(endpoint_id for endpoint_id, values in endpoint_control.items() if len(values) > 1)
     if mixed: raise ValueError("ENDPOINT_AUTHORIZATION_MIXED_CONTROL：Endpoint 同时被受控与未受控操作引用：" + "、".join(mixed))
     endpoint_bindings = [{"endpointId": endpoint_id, "operationResourceKeys": sorted(endpoint_resources.get(endpoint_id, set()))} for endpoint_id in sorted(endpoint_control)]
-    roles = _dict_items(requirement_spec.get("user_roles")); initial = str(authorization.get("initialAdminRoleId") or "").strip(); grants.setdefault(initial, set()).add(SYSTEM_RESOURCE_KEY)
-    return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "resources": list(resources.values()), "bindings": {"pages": list(page_bindings.values()), "actions": list(action_bindings.values()), "endpoints": endpoint_bindings}, "defaultRoleAuthorization": {"roles": [{"roleSeedKey": str(role.get("id") or ""), "name": str(role.get("name") or ""), "description": str(role.get("description") or ""), "isSystemRole": role.get("isSystemRole") is True, "isInitialAdminRole": role.get("isInitialAdminRole") is True} for role in roles], "roleResourceGrants": [{"roleSeedKey": role_id, "resourceKeys": sorted(keys)} for role_id, keys in grants.items()], "initialAdminRoleSeedKey": initial}})
+    roles = _dict_items(requirement_spec.get("user_roles"))
+    # 系统管理员由平台固定创建；业务角色仅得到 RequirementSpec 明确授予的业务资源。
+    return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "resources": list(resources.values()), "bindings": {"pages": list(page_bindings.values()), "actions": list(action_bindings.values()), "endpoints": endpoint_bindings}, "systemAuthorization": {"adminRoleSeedKey": SYSTEM_ADMIN_ROLE_SEED_KEY, "managementResourceKey": SYSTEM_RESOURCE_KEY}, "defaultRoleAuthorization": {"roles": [{"roleSeedKey": str(role.get("id") or ""), "name": str(role.get("name") or ""), "description": str(role.get("description") or "")} for role in roles], "roleResourceGrants": [{"roleSeedKey": role_id, "resourceKeys": sorted(keys)} for role_id, keys in grants.items()]}})
 
 
 def validate_authorization_manifest(manifest: Any, requirement_spec: dict[str, Any], product_plan: dict[str, Any], api_contracts: list[dict[str, Any]], pages: list[dict[str, Any]], *, application_config: dict[str, Any]) -> list[str]:
@@ -199,7 +202,7 @@ def validate_authorization_manifest(manifest: Any, requirement_spec: dict[str, A
     try: expected = compile_authorization_manifest(requirement_spec, product_plan, api_contracts, pages, application_config=application_config)
     except ValueError as exc: return [str(exc)]
     errors: list[str] = []
-    if manifest.get("schema_version") != AUTHORIZATION_MANIFEST_SCHEMA_VERSION: errors.append("TechnicalPlan.authorization_manifest.schema_version 必须为 authorization-manifest.v2。")
+    if manifest.get("schema_version") != AUTHORIZATION_MANIFEST_SCHEMA_VERSION: errors.append("TechnicalPlan.authorization_manifest.schema_version 必须为 authorization-manifest.v3。")
     if _canonical_manifest(manifest) != _canonical_manifest(expected): errors.append("TechnicalPlan.authorization_manifest 必须由已确认规则、产品目标和技术绑定确定性编译。")
     if manifest.get("fingerprint") != expected.get("fingerprint"): errors.append("TechnicalPlan.authorization_manifest.fingerprint 与当前内容不一致。")
     return errors

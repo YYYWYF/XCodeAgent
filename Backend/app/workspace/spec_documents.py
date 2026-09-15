@@ -72,7 +72,10 @@ def _authorization_markdown(spec: dict[str, Any]) -> str:
     """渲染权限业务候选、默认角色授权和固定系统页面说明。"""
 
     authorization = spec.get("authorization_requirements")
-    if not isinstance(authorization, dict) or authorization.get("enabled") is not True:
+    if not isinstance(authorization, dict) or not any(
+        isinstance(authorization.get(field), list) and authorization[field]
+        for field in ("restrictedPages", "restrictedOperations")
+    ):
         return "- 不涉及应用级资源授权。"
 
     roles = {
@@ -117,13 +120,11 @@ def _authorization_markdown(spec: dict[str, Any]) -> str:
         "- 模板固定页面 `/roles`（`system_authorization_management`）：提供角色、成员与资源关系的运行态管理；"
         "不属于业务页面清单，不进入 ProductPlan 或 UiDesign。"
     )
-    initial_admin_role_id = str(authorization.get("initialAdminRoleId") or "").strip()
-    initial_admin_role = roles.get(initial_admin_role_id, "待确认")
     return "\n".join(
         [
             "- 应用级资源授权：启用。",
             "- 固定无权行为：页面和操作入口隐藏；直接访问页面或后端 Endpoint 返回 403。",
-            f"- 初始系统管理员角色：{initial_admin_role} <!-- initialAdminRoleId:{initial_admin_role_id} -->",
+            "- 初始权限管理员：由 application.json 的 initialAdministratorSubjects 初始化并绑定平台固定 SYSTEM_ADMIN。",
             "- 约束边界：身份认证不自动产生 RBAC 资源；以下仅列出用户需求明确提及的受控业务对象。",
             "",
             "### 受控页面",
@@ -139,7 +140,7 @@ def _authorization_markdown(spec: dict[str, Any]) -> str:
             "### 系统固定页面",
             fixed_page,
             "",
-            "- 权限关系遵循 RBAC 资源模型：本需求确认首次默认角色授权和初始系统管理员角色；运行态成员与角色资源关系可继续动态配置。",
+            "- 权限关系遵循 RBAC 资源模型：本需求只确认业务角色与默认业务资源授权；运行态成员与角色资源关系可继续动态配置。",
         ]
     )
 
@@ -185,8 +186,6 @@ def render_requirement_spec_markdown(spec: dict[str, Any]) -> str:
     roles = "\n".join(
         f"- `{role.get('id', 'user')}` {role.get('name', '用户')}："
         f"{role.get('description', '使用应用。')}"
-        f"{'；系统角色' if role.get('isSystemRole') else ''}"
-        f"{'；初始系统管理员' if role.get('isInitialAdminRole') else ''}"
         for role in spec.get("user_roles", [])
         if isinstance(role, dict)
     )

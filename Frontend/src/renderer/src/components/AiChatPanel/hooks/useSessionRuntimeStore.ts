@@ -5,7 +5,8 @@ import { clearEntityDesignDraftStore } from '../components/WorkflowRunCard/Entit
 import type { ChatMessageSkill } from '../../../typings'
 import type { AgentChatMessage } from '../types'
 import {
-  isSameSessionExecutionScope,
+  isDagPlanningPhase,
+  isSameDagPlanningScope,
   sessionRuntimeKeyBelongsToWorkspace,
   type SessionExecutionEntry,
   type SessionIdentity
@@ -15,7 +16,8 @@ export type SessionRuntimeStore = {
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   acquireSessionExecution: (
     identity: SessionIdentity,
-    conversation: boolean
+    conversation: boolean,
+    phase?: string
   ) => SessionExecutionEntry | undefined
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
   clearWorkspace: (workspaceRoot: string) => Promise<void>
@@ -41,6 +43,7 @@ export type SessionRuntimeStore = {
     sessionKey: string,
     status: SessionExecutionEntry['status']
   ) => void
+  updateSessionExecutionPhase: (sessionKey: string, phase?: string) => void
 }
 
 const SessionRuntimeContext = createContext<SessionRuntimeStore | undefined>(undefined)
@@ -121,16 +124,24 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     setSessionMessages(identity.key, messages)
   }
 
-  /** 原子获取同一应用阶段的执行权；返回占用者表示本次获取失败。 */
+  /** 原子登记本地 execution；只有 DAG Planning 才阻止其它会话跨阶段发送。 */
   const acquireSessionExecution = (
     identity: SessionIdentity,
-    conversation: boolean
+    conversation: boolean,
+    phase?: string
   ): SessionExecutionEntry | undefined => {
-    const blockingExecution = Object.values(sessionExecutionsRef.current).find((entry) =>
-      isSameSessionExecutionScope(entry.identity, identity)
+    const blockingExecution = Object.values(sessionExecutionsRef.current).find(
+      (entry) =>
+        entry.identity.key === identity.key ||
+        (isDagPlanningPhase(entry.phase) && isSameDagPlanningScope(entry.identity, identity))
     )
     if (blockingExecution) return blockingExecution
-    const entry: SessionExecutionEntry = { identity, status: 'starting', conversation }
+    const entry: SessionExecutionEntry = {
+      identity,
+      status: 'starting',
+      conversation,
+      phase: phase?.trim() || undefined
+    }
     sessionExecutionsRef.current = { ...sessionExecutionsRef.current, [identity.key]: entry }
     runningSessionsRef.current.set(identity.key, identity)
     setSessionExecutions(sessionExecutionsRef.current)
@@ -151,7 +162,19 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     setSessionExecutions(sessionExecutionsRef.current)
   }
 
-  /** 在 AG-UI Run 到达终态后释放阶段执行权，使其他历史会话可以重新输入。 */
+  /** 同步本地 execution 当前节点，使进入 prepare_build_tasks 后才形成 DAG 跨会话锁。 */
+  const updateSessionExecutionPhase = (sessionKey: string, phase?: string): void => {
+    const current = sessionExecutionsRef.current[sessionKey]
+    const normalizedPhase = phase?.trim() || undefined
+    if (!current || current.phase === normalizedPhase) return
+    sessionExecutionsRef.current = {
+      ...sessionExecutionsRef.current,
+      [sessionKey]: { ...current, phase: normalizedPhase }
+    }
+    setSessionExecutions(sessionExecutionsRef.current)
+  }
+
+  /** 在 AG-UI Run 到达终态后释放本地 execution，使 DAG 锁和会话运行态一起收口。 */
   const releaseSessionExecution = (sessionKey: string): void => {
     runningSessionsRef.current.delete(sessionKey)
     if (!sessionExecutionsRef.current[sessionKey]) return
@@ -241,6 +264,7 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     setDraftByKey,
     setSelectedSkillsByKey,
     setSessionMessages,
+    updateSessionExecutionPhase,
     updateSessionExecutionStatus
   }
 }

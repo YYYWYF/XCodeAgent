@@ -1,5 +1,5 @@
 import { SafetyCertificateOutlined } from '@ant-design/icons'
-import { Tag, Typography } from 'antd'
+import { Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import { authorizationDesignView, type AuthorizationRoleView } from './TechnicalPlanAuthorizationData'
@@ -16,10 +16,6 @@ function RoleCard({ role }: { role: AuthorizationRoleView }): ReactElement {
           <strong>{role.name}</strong>
           <code>{role.seedKey || '未声明 seed key'}</code>
           {role.description ? <Text type="secondary">{role.description}</Text> : null}
-        </div>
-        <div className={cx('technical-plan-authorization-role-tags')}>
-          {role.isInitialAdminRole ? <Tag>初始管理员</Tag> : null}
-          {role.isSystemRole ? <Tag>系统角色</Tag> : null}
         </div>
       </header>
       <Text type="secondary">{role.resourceCount} 项默认资源</Text>

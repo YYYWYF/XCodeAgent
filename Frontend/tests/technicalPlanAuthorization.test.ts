@@ -6,7 +6,7 @@ import { authorizationDesignView } from '../src/renderer/src/components/AiChatPa
 function enabledPlan(): Record<string, unknown> {
   return {
     authorization_manifest: {
-      enabled: true,
+      schema_version: 'authorization-manifest.v3',
       resources: [
         { resourceKey: 'system_authorization_management', name: '权限管理', type: 'system', targetResourceRef: 'system:authorization_management' },
         { resourceKey: 'people', name: '人员', type: 'page', targetResourceRef: 'page:people', sourceRuleIds: ['people_page'] },
@@ -19,14 +19,16 @@ function enabledPlan(): Record<string, unknown> {
           { endpointId: 'people_api.list', operationResourceKeys: [] }
         ]
       },
+      systemAuthorization: {
+        adminRoleSeedKey: 'system_admin',
+        managementResourceKey: 'system_authorization_management'
+      },
       defaultRoleAuthorization: {
         roles: [
-          { roleSeedKey: 'administrator', name: '系统管理员', isSystemRole: true, isInitialAdminRole: true },
           { roleSeedKey: 'editor', name: '编辑者', description: '维护人员资料。' },
           { roleSeedKey: 'viewer', name: '查看者' }
         ],
         roleResourceGrants: [
-          { roleSeedKey: 'administrator', resourceKeys: ['system_authorization_management'] },
           { roleSeedKey: 'editor', resourceKeys: ['people', 'people_edit'] }
         ]
       }
@@ -40,6 +42,7 @@ test('权限设计按角色汇总资源与 Endpoint ANY-OF', () => {
 
   assert.ok(view)
   assert.equal(view.roles.length, 3)
+  assert.equal(view.roles.find((role) => role.seedKey === 'system_admin')?.resourceCount, 1)
   const editor = view.roles.find((role) => role.seedKey === 'editor')
   assert.ok(editor)
   assert.deepEqual(editor.groups.map((group) => group.key), ['page', 'operation'])
@@ -52,7 +55,7 @@ test('权限设计按角色汇总资源与 Endpoint ANY-OF', () => {
 
 /** 验证权限关闭时不产生权限 Tab 的可展示数据。 */
 test('权限关闭时不生成权限设计视图', () => {
-  assert.equal(authorizationDesignView({ authorization_manifest: { enabled: false } }), undefined)
+  assert.equal(authorizationDesignView({ authorization_manifest: { schema_version: 'authorization-manifest.v2' } }), undefined)
 })
 
 /** 验证未知资源引用只显示为未解析项，不会令草稿阅读失败。 */

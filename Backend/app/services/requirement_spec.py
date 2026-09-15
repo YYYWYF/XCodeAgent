@@ -318,21 +318,15 @@ def normalize_authorization_requirements(
         if enabled
         else [],
     }
-    initial_admin_role_id = str(raw.get("initialAdminRoleId") or "").strip()
-    if not initial_admin_role_id and isinstance(existing_value, dict):
-        initial_admin_role_id = str(existing_value.get("initialAdminRoleId") or "").strip()
-    if enabled and initial_admin_role_id:
-        normalized["initialAdminRoleId"] = initial_admin_role_id
     return normalized
 
 
 def validate_authorization_requirements(
     value: dict[str, Any],
     *,
-    require_initial_admin: bool = True,
     authorization_enabled: bool | None = None,
 ) -> list[str]:
-    """校验权限候选的业务语义，并允许调用方注入唯一应用配置开关。"""
+    """校验业务授权事实，并允许调用方注入唯一应用配置开关。"""
 
     authorization = value.get("authorization_requirements") if isinstance(value, dict) else None
     if authorization is None and isinstance(value, dict):
@@ -363,8 +357,6 @@ def validate_authorization_requirements(
         for field in ("restrictedPages", "restrictedOperations"):
             if authorization.get(field):
                 errors.append(f"权限未启用时 {field} 必须为空")
-        if type(authorization_enabled) is bool and authorization.get("initialAdminRoleId"):
-            errors.append("权限未启用时不能保留 initialAdminRoleId")
         return errors
 
     for field_name, label in (
@@ -391,7 +383,6 @@ def validate_authorization_requirements(
     roles = value.get("user_roles") if isinstance(value, dict) else None
     roles = roles if isinstance(roles, list) else []
     role_ids: set[str] = set()
-    initial_roles: list[dict[str, Any]] = []
     for role in roles:
         if not isinstance(role, dict):
             errors.append("业务参与者必须是对象")
@@ -403,25 +394,6 @@ def validate_authorization_requirements(
             errors.append(f"业务参与者 {role_id} 的 id 重复")
         else:
             role_ids.add(role_id)
-        if not isinstance(role.get("isSystemRole"), bool):
-            errors.append(f"业务参与者 {role_id or '未命名'} 缺少 isSystemRole")
-        if not isinstance(role.get("isInitialAdminRole"), bool):
-            errors.append(f"业务参与者 {role_id or '未命名'} 缺少 isInitialAdminRole")
-        if role.get("isInitialAdminRole") is True:
-            initial_roles.append(role)
-            if role.get("isSystemRole") is not True:
-                errors.append(f"初始系统管理员角色 {role_id or '未命名'} 必须同时是系统角色")
-    if require_initial_admin and len(initial_roles) != 1:
-        errors.append("权限启用时必须且只能选择一个初始系统管理员角色")
-    initial_admin_role_id = str(authorization.get("initialAdminRoleId") or "").strip()
-    if require_initial_admin and not initial_admin_role_id:
-        errors.append("权限启用时缺少 initialAdminRoleId")
-    elif initial_admin_role_id and initial_admin_role_id not in role_ids:
-        errors.append("initialAdminRoleId 必须引用 user_roles 中的角色")
-    elif initial_admin_role_id and not any(
-        str(role.get("id") or "").strip() == initial_admin_role_id for role in initial_roles
-    ):
-        errors.append("initialAdminRoleId 必须引用唯一初始系统管理员角色")
 
     rule_ids: set[str] = set()
     for item in restricted_pages:
@@ -949,8 +921,6 @@ def create_requirement_spec(
             "id": "business_user",
             "name": "业务使用者",
             "description": "使用应用完成已确认的业务流程。",
-            "isSystemRole": False,
-            "isInitialAdminRole": False,
         },
     ] if allow_inferred_defaults else []
 
@@ -1004,8 +974,6 @@ def create_requirement_spec(
             {
                 "name": "用户",
                 "description": "使用应用。",
-                "isSystemRole": False,
-                "isInitialAdminRole": False,
             },
         ),
         "feature_modules": (
@@ -1053,12 +1021,12 @@ def create_requirement_spec(
     for page in spec["pages"]:
         if not str(page.get("module_id") or "").strip():
             page["module_id"] = default_module_id
-    # 用户角色保留首次系统管理员种子元数据，但不携带资源关系或运行态授权。
+    # RequirementSpec 只保存业务角色，系统角色和成员绑定由平台配置与初始化负责。
     for role in spec["user_roles"]:
         for forbidden_key in ("permissions", "allowed_roles", "allowedRoleIds", "roleIds"):
             role.pop(forbidden_key, None)
-        role["isSystemRole"] = bool(role.get("isSystemRole"))
-        role["isInitialAdminRole"] = bool(role.get("isInitialAdminRole"))
+        role.pop("isSystemRole", None)
+        role.pop("isInitialAdminRole", None)
     spec["entities"] = normalize_entities(
         spec.get("entities"),
         with_types=False,
@@ -1159,12 +1127,6 @@ def create_requirement_spec(
         ]
     if data_authorization_issues:
         spec["authorization_capability_issues"] = data_authorization_issues
-    if not authorization_has_current_rules:
-        # 关闭权限时不保留任何系统管理员角色种子，避免配置与需求事实冲突。
-        for role in spec["user_roles"]:
-            role["isSystemRole"] = False
-            role["isInitialAdminRole"] = False
-
     criteria = spec.get("acceptance_criteria")
     normalized_criteria = product_acceptance_criteria(criteria)
     has_authoritative_criteria = (
@@ -1255,7 +1217,7 @@ def _migrate_legacy_data_sources(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 _EDITOR_ITEM_FIELDS: dict[str, tuple[str, ...]] = {
-    "user_roles": ("id", "name", "description", "isSystemRole", "isInitialAdminRole"),
+    "user_roles": ("id", "name", "description"),
     "pages": ("pageId", "name", "path", "module_id", "description", "components"),
     "business_flows": ("id", "name", "description", "steps"),
     "entities": ("id", "name", "description", "fields"),

@@ -122,7 +122,7 @@ def _authorization_operation_action_instruction(requirement_spec: dict[str, Any]
 
     authorization = requirement_spec.get("authorization_requirements")
     authorization = authorization if isinstance(authorization, dict) else {}
-    if authorization.get("enabled") is not True:
+    if not isinstance(authorization.get("restrictedOperations"), list):
         return ""
     operation_names = [
         str(item.get("name") or "").strip()

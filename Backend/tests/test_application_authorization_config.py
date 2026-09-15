@@ -156,6 +156,53 @@ class ApplicationAuthorizationConfigTests(unittest.TestCase):
             self.assertTrue(persisted["auth"]["enable"])
             self.assertEqual(persisted["authorization"]["initialAdministratorSubjects"], ["ops@example.com"])
 
+    def test_explicit_enable_freezes_target_then_commits_with_subject(self) -> None:
+        """首次明确开启权限必须先持久化 Resolver target，再与 Subject 原子提交。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            target = _write_current_config(workspace)
+            first = requirements(
+                {
+                    "workflow_scope": "application_planning",
+                    "workspace": workspace,
+                    "request": "开启权限管理",
+                    "timeline": [],
+                }
+            )
+            self.assertEqual(first["clarification"]["questions"][0]["id"], "authorization_initial_admin")
+            pending = first["pending_application_config_target"]
+            self.assertTrue(pending["requiresInitialAdministratorSubjects"])
+            self.assertEqual(pending["changes"][0]["path"], "authorization.enabled")
+
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": create_requirement_spec("空权限业务需求"),
+                    "clarification": {"status": "clear", "questions": []},
+                },
+            ):
+                requirements(
+                    {
+                        "workflow_scope": "application_planning",
+                        "workspace": workspace,
+                        "request": "继续处理。",
+                        "timeline": [],
+                        "requirement_spec": first["requirement_spec"],
+                        "requirement_revision_id": first["requirement_revision_id"],
+                        "authorization_config_conflict": first["authorization_config_conflict"],
+                        "pending_application_config_target": pending,
+                        "application_planning_interaction": {
+                            "action": "answer",
+                            "answers": {"authorization_initial_admin": "user001"},
+                        },
+                    }
+                )
+            persisted = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["configRevision"], 2)
+            self.assertTrue(persisted["auth"]["enable"])
+            self.assertTrue(persisted["authorization"]["enabled"])
+            self.assertEqual(persisted["authorization"]["initialAdministratorSubjects"], ["user001"])
+
     def test_stale_authorization_conflict_is_not_consumed_by_new_requirement_revision(
         self,
     ) -> None:

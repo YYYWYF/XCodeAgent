@@ -29,6 +29,12 @@ from app.services.application_authorization_config import (
     authorization_configuration_is_enabled,
     persist_authorization_configuration,
 )
+from app.domain.application_config_change import ApplicationConfigChange
+from app.services.application_config import ApplicationConfigService
+from app.services.application_config_change_resolver import (
+    ApplicationConfigChangeResolutionError,
+    resolve_application_config_changes,
+)
 from app.services.application_revision_lifecycle import (
     stage_active_revision_initial_administrator_subjects,
 )
@@ -224,6 +230,21 @@ def requirements(state: ProjectState) -> dict:
                 return resolution["result"]
             request = str(resolution["request"])
             conflict_resolved = True
+    if application_planning_scope and not conflict and not conflict_resolved:
+        target = _explicit_authorization_config_target(state, request)
+        if target is not None:
+            # 首次规划也必须先冻结 Capability Intent，不能等业务规则反向决定应用能力。
+            return _authorization_config_conflict_result(
+                existing_spec if isinstance(existing_spec, dict) else {},
+                state,
+                {
+                    "requested": True,
+                    "evidence": [target["evidence"]],
+                    "pendingApplicationConfigTarget": target,
+                },
+                collecting_admin=True,
+                message="已识别到启用权限控制的应用能力目标。请补充真实初始管理员 Subject 后原子提交配置。",
+            )
     revision_requested = design_revision_requested or (
         interaction.get("action") == "revise"
         if application_planning_scope
@@ -323,7 +344,6 @@ def requirements(state: ProjectState) -> dict:
         clarification,
         spec,
     )
-    _clear_unselected_initial_admin(spec, existing_spec)
     answered_authorization_questions = _apply_authorization_business_answers(
         spec,
         interaction,
@@ -335,7 +355,6 @@ def requirements(state: ProjectState) -> dict:
     )
     authorization_errors = validate_authorization_requirements(
         spec,
-        require_initial_admin=False,
     )
     next_authorization_question = _next_authorization_business_question(
         spec,
@@ -365,6 +384,7 @@ def requirements(state: ProjectState) -> dict:
             "requirement_spec_json_path": "",
             "clarification": clarification,
             "authorization_config_conflict": {},
+            "pending_application_config_target": {},
             "timeline": ["requirements"],
         }
     next_clarification_round = clarification_round
@@ -423,6 +443,7 @@ def requirements(state: ProjectState) -> dict:
             "requirement_spec_json_path": "",
             "clarification": clarification,
             "authorization_config_conflict": {},
+            "pending_application_config_target": {},
             "timeline": ["requirements"],
         }
 
@@ -442,6 +463,7 @@ def requirements(state: ProjectState) -> dict:
             if conflict_resolved or conflict_invalidated
             else state.get("authorization_config_conflict", {})
         ),
+        "pending_application_config_target": {},
         "timeline": ["requirements"],
     }
 
@@ -455,6 +477,29 @@ def _authorization_config_answer_text(value: object) -> str:
             return ",".join(str(item).strip() for item in selected if str(item).strip())
         return str(selected or value.get("other") or "").strip()
     return str(value or "").strip()
+
+
+def _explicit_authorization_config_target(state: ProjectState, request: str) -> dict[str, Any] | None:
+    """把首次规划的显式权限意图冻结为可恢复目标，不在解析阶段写 application.json。"""
+
+    workspace = str(state.get("workspace") or "").strip()
+    if not workspace:
+        return None
+    try:
+        changes = resolve_application_config_changes(request, workspace_root=workspace)
+    except ApplicationConfigChangeResolutionError as exc:
+        raise ValueError(f"无法解析应用权限配置目标：{exc}") from exc
+    authorization_change = next(
+        (change for change in changes if change.path == "authorization.enabled"),
+        None,
+    )
+    if authorization_change is None or authorization_change.to_value is not True:
+        return None
+    return {
+        "changes": [change.model_dump(by_alias=True) for change in changes],
+        "requiresInitialAdministratorSubjects": True,
+        "evidence": authorization_change.evidence,
+    }
 
 
 def _authorization_subjects(value: object) -> list[str]:
@@ -548,6 +593,11 @@ def _authorization_config_conflict_result(
             "revisionId": revision_id,
             "decision": "enable" if collecting_admin else "",
         },
+        "pending_application_config_target": (
+            conflict.get("pendingApplicationConfigTarget", {})
+            if isinstance(conflict.get("pendingApplicationConfigTarget"), dict)
+            else {}
+        ),
         "requirement_revision_id": revision_id,
         "clarification": clarification,
         "timeline": ["requirements"],
@@ -628,13 +678,26 @@ def _resolve_authorization_config_conflict(
             subjects=subjects,
         )
         if staged_revision is None:
-            # 首次创建没有 active formal revision，沿用既有初始化路径。
+            # 首次创建提交被冻结的 Resolver 输出；配置不允许由 RequirementSpec 或 LLM 改写。
             try:
-                persist_authorization_configuration(
-                    workspace,
-                    initial_administrator_subjects=subjects,
+                target = conflict.get("pendingApplicationConfigTarget")
+                raw_changes = target.get("changes") if isinstance(target, dict) else None
+                changes = (
+                    [ApplicationConfigChange.model_validate(item) for item in raw_changes]
+                    if isinstance(raw_changes, list)
+                    else []
                 )
-            except ApplicationAuthorizationConfigError as exc:
+                if changes:
+                    ApplicationConfigService(workspace).apply(
+                        changes=changes,
+                        initial_administrator_subjects=subjects,
+                    )
+                else:
+                    persist_authorization_configuration(
+                        workspace,
+                        initial_administrator_subjects=subjects,
+                    )
+            except (ApplicationAuthorizationConfigError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
         return {
             "request": "\n".join(
@@ -742,30 +805,6 @@ def _authorization_validation_clarification(
     }
 
 
-def _clear_unselected_initial_admin(spec: dict, existing_spec: dict | None) -> None:
-    """首次角色提取只保留职责事实，等待结构化选择后才写入系统管理员属性。"""
-
-    existing_authorization = (
-        existing_spec.get("authorization_requirements")
-        if isinstance(existing_spec, dict)
-        and isinstance(existing_spec.get("authorization_requirements"), dict)
-        else {}
-    )
-    if str(existing_authorization.get("initialAdminRoleId") or "").strip():
-        return
-    authorization = spec.get("authorization_requirements")
-    if not isinstance(authorization, dict) or not _authorization_requested_by_requirement(spec):
-        return
-    authorization.pop("initialAdminRoleId", None)
-    roles = spec.get("user_roles")
-    if not isinstance(roles, list):
-        return
-    for role in roles:
-        if isinstance(role, dict):
-            role["isSystemRole"] = False
-            role["isInitialAdminRole"] = False
-
-
 def _next_authorization_business_question(
     spec: dict,
     *,
@@ -838,45 +877,10 @@ def _next_authorization_business_question(
             "header": "业务角色梳理",
             "dimension": "业务参与者",
             "question": (
-                "需求中尚未识别出业务角色。请先说明应用有哪些业务参与者，以及是否存在管理员类角色；"
-                "确认后再选择谁承担系统权限管理。"
+                "需求中尚未识别出业务角色。请先说明应用有哪些业务参与者及其职责。"
             ),
             "type": "text",
         }
-    initial_admin_role_id = str(authorization.get("initialAdminRoleId") or "").strip()
-    selected_initial_roles = [
-        role
-        for role in roles
-        if isinstance(role, dict) and role.get("isInitialAdminRole") is True
-    ]
-    if "authorization_initial_admin_role" not in answered_question_ids and (
-        len(selected_initial_roles) != 1
-        or not initial_admin_role_id
-        or str(selected_initial_roles[0].get("id") or "").strip()
-        != initial_admin_role_id
-        or selected_initial_roles[0].get("isSystemRole") is not True
-    ):
-        return {
-            "id": "authorization_initial_admin_role",
-            "header": "初始系统管理员",
-            "dimension": "系统权限管理角色",
-            "question": (
-                "已识别业务角色："
-                + "、".join(str(option["label"]) for option in role_options)
-                + "。请选择其中一个首次承担系统权限管理的角色；"
-                "如这些业务角色都不承担该职责，再选择新建独立系统管理员。"
-            ),
-            "type": "choice",
-            "allowOther": False,
-            "options": [
-                *role_options,
-                {
-                    "label": "新建独立系统管理员",
-                    "value": "__create_system_administrator__",
-                },
-            ],
-        }
-
     for field_name, label in (
         ("restrictedPages", "受控页面"),
         ("restrictedOperations", "受控操作"),
@@ -1046,48 +1050,6 @@ def _apply_authorization_business_answers(
             "sourceRefs": source_refs,
         }
         updated_authorization[field] = [fallback_item]
-
-    if "authorization_initial_admin_role" in answers:
-        selected = _authorization_answer_values(
-            answers["authorization_initial_admin_role"]
-        )
-        selected_role_id = selected[0] if len(selected) == 1 else ""
-        roles = spec.get("user_roles")
-        roles = deepcopy(roles) if isinstance(roles, list) else []
-        if selected_role_id == "__create_system_administrator__":
-            used_ids = {
-                str(role.get("id") or "").strip()
-                for role in roles
-                if isinstance(role, dict)
-            }
-            selected_role_id = "system_administrator"
-            suffix = 2
-            while selected_role_id in used_ids:
-                selected_role_id = f"system_administrator_{suffix}"
-                suffix += 1
-            roles.append(
-                {
-                    "id": selected_role_id,
-                    "name": "系统管理员",
-                    "description": "首次负责系统权限管理的角色。",
-                    "isSystemRole": True,
-                    "isInitialAdminRole": True,
-                }
-            )
-        if selected_role_id and any(
-            isinstance(role, dict)
-            and str(role.get("id") or "").strip() == selected_role_id
-            for role in roles
-        ):
-            for role in roles:
-                if not isinstance(role, dict):
-                    continue
-                is_selected = str(role.get("id") or "").strip() == selected_role_id
-                role["isInitialAdminRole"] = is_selected
-                role["isSystemRole"] = is_selected or bool(role.get("isSystemRole"))
-            spec["user_roles"] = roles
-            updated_authorization["initialAdminRoleId"] = selected_role_id
-            answered_question_ids.add("authorization_initial_admin_role")
 
     for question_id, answer in answers.items():
         if not str(question_id).startswith("authorization_default_grants_"):

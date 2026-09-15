@@ -27,12 +27,11 @@ class AuthorizationManifestTests(unittest.TestCase):
                 "pages": [{"pageId": "people", "name": "人员", "path": "/people", "module_id": "people", "description": "人员列表"}],
                 "authorization_requirements": {
                     "enabled": True,
-                    "initialAdminRoleId": "administrator",
                     "restrictedPages": [{"name": "人员", "targetPageId": "people", "description": "受控页面", "rationale": "内部资料", "sourceRefs": ["需求"], "defaultGrantedRoleIds": ["administrator"]}],
                     "restrictedOperations": [{"name": "编辑人员", "description": "受控操作", "rationale": "修改资料", "sourceRefs": ["需求"], "defaultGrantedRoleIds": ["editor"]}],
                 },
                 "user_roles": [
-                    {"id": "administrator", "name": "系统管理员", "description": "维护权限。", "isSystemRole": True, "isInitialAdminRole": True},
+                    {"id": "administrator", "name": "人员管理员", "description": "维护人员资料。"},
                     {"id": "editor", "name": "编辑者", "description": "编辑人员。"},
                 ],
             },
@@ -204,17 +203,15 @@ class AuthorizationManifestTests(unittest.TestCase):
             [detail["message"] for detail in closure["details"]],
         )
 
-    def test_deliverability_report_rejects_invalid_endpoint_and_missing_admin_system_resource(self) -> None:
-        """4E 必须把 Endpoint 目录和初始管理员授权分别标记为阻断项。"""
+    def test_deliverability_report_rejects_invalid_endpoint_and_invalid_system_contract(self) -> None:
+        """4E 必须把 Endpoint 目录和 SYSTEM_ADMIN 平台合同分别标记为阻断项。"""
 
         requirement, product, contracts, pages = self._inputs()
         manifest = compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
         manifest["bindings"]["endpoints"].append(
             {"endpointId": "person_api.missing", "operationResourceKeys": ["people_edit_person"]}
         )
-        for grant in manifest["defaultRoleAuthorization"]["roleResourceGrants"]:
-            if grant["roleSeedKey"] == "administrator":
-                grant["resourceKeys"].remove("system_authorization_management")
+        manifest["systemAuthorization"]["managementResourceKey"] = "business_resource"
         report = authorization_deliverability_report(
             manifest,
             requirement,
@@ -228,7 +225,7 @@ class AuthorizationManifestTests(unittest.TestCase):
         statuses = {check["id"]: check["status"] for check in report["checks"]}
         self.assertFalse(report["passed"])
         self.assertEqual(statuses["endpoint_bindings"], "fail")
-        self.assertEqual(statuses["initial_admin_system_resource"], "fail")
+        self.assertEqual(statuses["system_authorization_contract"], "fail")
 
     def test_deliverability_report_marks_each_reference_and_closure_break_as_blocking(self) -> None:
         """4E 必须逐项定位资源、页面、操作、闭环和 mixed-control 问题。"""

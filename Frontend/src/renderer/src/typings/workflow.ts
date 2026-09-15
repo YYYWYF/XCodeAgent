@@ -1142,23 +1142,14 @@ export type WorkbenchExecution = {
 /** 页面刷新时由 Backend 按磁盘、进程注册表和 Formal 事实解析的 Planning 状态。 */
 export type PlanningRefreshState = {
   schemaVersion: 'planning-refresh.v1'
-  source: 'pending_plan' | 'abandoned' | 'active_planning_run' | 'confirmed_plan' | 'none'
-  status:
-    | 'awaiting_confirmation'
-    | 'abandoned'
-    | 'planning'
-    | 'planning_run_interrupted'
-    | 'confirmed'
-    | 'idle'
+  source: 'pending_plan' | 'none'
+  status: 'awaiting_confirmation' | 'idle'
   planningRunId?: string
   workflowRunId?: string
-  threadId?: string
   ownerSessionId?: string
   draftDigest?: string
   buildExecutionScope?: WorkflowBuildExecutionScope
-  dagGeneration?: unknown
   confirmation?: WorkflowClarification
-  confirmedPlanDigest?: string
   message: string
 }
 
@@ -1269,6 +1260,7 @@ export type WorkflowRunPayload = {
 export type WorkflowAction =
   | 'retry_failed_tasks'
   | 'retry_code_review'
+  | 'retry_template_reconcile'
   | 'start_design_revision'
   | 'product_stage_conversation'
   | 'start_technical_revision'

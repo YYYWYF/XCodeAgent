@@ -50,6 +50,7 @@ export default function TemplatePreparingCard({
   const stage = lifecycle?.initialization?.stage
   const preparationFailed = templatePreparation?.status === 'FAILED'
   const failed = stage === 'application_template_generation_failed'
+  const reconcilingTemplate = Boolean(templatePreparation)
   const interrupted = orphaned && !retrying
   const ready = stage === 'ready_for_workbench'
 
@@ -58,7 +59,7 @@ export default function TemplatePreparingCard({
       <div className={cx('template-preparing-card', 'template-preparing-error')}>
         <div className={cx('template-preparing-head')}>
           <ExclamationCircleOutlined className={cx('template-preparing-icon', 'is-error')} />
-          <Text strong>{templatePreparation ? '模板能力更新失败' : '应用模板生成失败'}</Text>
+          <Text strong>{reconcilingTemplate ? '模板能力更新失败' : '应用模板生成失败'}</Text>
         </div>
         <Text type="secondary" className={cx('template-preparing-desc')}>
           {templatePreparation?.errorMessage || lifecycle?.error?.message || '应用模板文件生成失败，请查看错误信息。'}
@@ -70,7 +71,13 @@ export default function TemplatePreparingCard({
           onClick={onRetry}
           type="primary"
         >
-          {retrying ? '正在重新生成模板' : '重新生成模板'}
+          {retrying
+            ? reconcilingTemplate
+              ? '正在重试模板更新'
+              : '正在重新生成模板'
+            : reconcilingTemplate
+              ? '重试模板更新'
+              : '重新生成模板'}
         </Button>
       </div>
     )

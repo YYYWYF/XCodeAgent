@@ -33,6 +33,7 @@ from app.workspace.task_documents import (
     write_pending_build_task_plan_atomic,
 )
 from app.workspace.planning_run_documents import load_planning_run
+from app.workspace.spec_documents import workspace_root
 
 
 class PendingPlanPersistenceResult(FrozenPlanningModel):
@@ -84,7 +85,7 @@ def _persist_validated_pending_plan(
     """通过唯一 Pending storage authority 写入，并在同一锁内回读身份。"""
 
     run = planned.planning_run
-    with build_task_plan_lifecycle_lock:
+    with build_task_plan_lifecycle_lock(workspace_root(state)):
         persisted_run = load_planning_run(state)
         if (
             persisted_run is None

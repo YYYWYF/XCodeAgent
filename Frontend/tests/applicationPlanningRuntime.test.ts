@@ -212,6 +212,27 @@ async function waitForCondition<T>(
 
 // E：两个应用各自持有会话、事件和流式订阅。
 {
+  const h = harness()
+  const current = h.current()!
+  h.setCurrent({
+    ...current,
+    lifecycle: {
+      ...current.lifecycle,
+      activeFormalRevision: {
+        changeId: 'change-template', formalBranch: 'design_stage_revision',
+        impactInteractionId: 'impact-template', sourceThreadId: 'thread-source',
+        sourceRunId: 'run-source', planningThreadId: 'thread-A',
+        status: 'template_reconcile_failed'
+      }
+    }
+  })
+  await h.runtime.retryTemplateReconcile()
+  assert.equal(h.calls[0].options.workflowAction, 'retry_template_reconcile')
+  assert.equal(h.calls[0].options.workflowDebug, undefined)
+}
+
+// F：两个应用各自持有会话、事件和流式订阅。
+{
   const a = harness()
   const b = harness(planningState('app-B', 'thread-B'))
   a.onSend(async (options) => {
