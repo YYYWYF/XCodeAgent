@@ -9,17 +9,23 @@ import { readInitializationPlanningRecordByWorkspace, readLatestInitializationPl
 const lifecycleStore = new Map<string, { appId: string; appName: string; stage: string; status: string; threadId?: string }>()
 const createdLifecycleStore = new Map<string, { appId: string; appName: string; stage: string; status: string; threadId?: string }>()
 
-// 预置镜像应用的初始生命周期：pms-design → 设计(collecting_requirement)、pms-dev → 开发(ready_for_workbench)。
-// 这样 mockApplicationInPlanning 能按 workspace 区分设计期/开发期，sessions 与阶段自动分流。
-for (const app of mockApplications) {
-  const scenario = appDataByWorkspace(app.workspaceRoot)
-  const init = scenario.lifecycle.initialization
-  lifecycleStore.set(app.workspaceRoot || '', {
-    appId: app.id,
-    appName: app.name,
-    stage: init.stage,
-    status: init.status
-  })
+// 预置镜像应用的初始生命周期（pms-new → 开发就绪 ready_for_workbench）。
+// 惰性播种：历史回放生成器经剧本链路反向依赖本模块，模块加载顺序不定，
+// 不能在模块体读取 fixtures（循环依赖下的 TDZ），首次访问生命周期 store 时再播种。
+let presetSeedsApplied = false
+function ensurePresetLifecycleSeeds(): void {
+  if (presetSeedsApplied) return
+  presetSeedsApplied = true
+  for (const app of mockApplications) {
+    const scenario = appDataByWorkspace(app.workspaceRoot)
+    const init = scenario.lifecycle.initialization
+    lifecycleStore.set(app.workspaceRoot || '', {
+      appId: app.id,
+      appName: app.name,
+      stage: init.stage,
+      status: init.status
+    })
+  }
 }
 
 // 工作台剧本注册的当前 lifecycle（含 activeExecutions），供 get 时返回，
@@ -27,6 +33,11 @@ for (const app of mockApplications) {
 let registeredWorkbenchLifecycle: ApplicationLifecycle | undefined
 export function registerWorkbenchLifecycle(lifecycle: ApplicationLifecycle): void {
   registeredWorkbenchLifecycle = lifecycle
+}
+
+/** 历史回放生成结束后复位注册态：静态演示基线重新成为冷启动校准的权威来源。 */
+export function resetWorkbenchLifecycle(): void {
+  registeredWorkbenchLifecycle = undefined
 }
 
 const PLANNING_STAGES = new Set([
@@ -49,6 +60,7 @@ const PLANNING_STAGES = new Set([
 
 /** 工作区应用是否仍处于规划(设计)阶段——规划期的应用不返回已设计页会话。 */
 export function mockApplicationInPlanning(workspaceRoot: string, applicationId?: string): boolean {
+  ensurePresetLifecycleSeeds()
   const persisted = applicationId
     ? readLatestInitializationPlanningRecord(applicationId)
     : undefined
@@ -75,14 +87,38 @@ function lifecyclePayload(threadId: string, action: Record<string, unknown>): Re
   }
 
   const lifecycleApplicationId = requestedApplicationId || actionApplication?.id || ''
+  ensurePresetLifecycleSeeds()
   const persistedPlanning = readLatestInitializationPlanningRecord(lifecycleApplicationId) ||
     readInitializationPlanningRecordByWorkspace(workspaceRoot)
   const stored = createdLifecycleStore.get(lifecycleApplicationId) || lifecycleStore.get(workspaceRoot)
   const scenario = appDataByWorkspace(workspaceRoot)
 
-  // 预置完成版本（v1.3）是静态演示快照：同应用其它版本留下的运行实验记录
-  // （如回退实验的 analyzing_requirement）不能劫持它的 lifecycle 校准，否则锁定
-  // 视图的阶段定位与顶部比值口径一起漂移；这里恒返回发布完成态。
+  const app = persistedPlanning
+    ? { id: persistedPlanning.applicationId, name: persistedPlanning.applicationName }
+    : lifecycleApplicationId
+      ? { id: lifecycleApplicationId, name: actionApplication?.appName || scenario.app.name }
+    : stored
+      ? { id: stored.appId, name: stored.appName }
+      : { id: scenario.app.id, name: scenario.app.name }
+
+  // 工作台已注册的 lifecycle（含 activeExecutions）与目标应用匹配时，直接返回它。
+  // 注册态优先于静态基线：同一会话内已进入预置迭代版本演示旅程时，重进工作台的
+  // 校准读不应把运行中/已推进的旅程状态打回冷启动基线。
+  if (registeredWorkbenchLifecycle && registeredWorkbenchLifecycle.application.id === app.id) {
+    return {
+      schemaVersion: 1,
+      runId: `mock-lc-${Date.now()}`,
+      threadId,
+      status: 'completed',
+      action: action.action,
+      lifecycle: { ...registeredWorkbenchLifecycle, revision: (registeredWorkbenchLifecycle.revision || 0) + 1 }
+    }
+  }
+
+  // 预置迭代版本（v1.3）是静态演示基线：冷启动或跨会话重新打开时恒返回验收完成态
+  // （旅程走完、等待生成版本），同应用其它版本遗留的规划/运行记录（如回退实验的
+  // collecting_requirement）不能劫持它的阶段定位。放在注册态之后：版本内推进过的
+  // 旅程优先生效。
   if (
     action.action === 'get' &&
     lifecycleApplicationId === 'app-pms-new' &&
@@ -98,26 +134,6 @@ function lifecyclePayload(threadId: string, action: Record<string, unknown>): Re
         ...scenario.lifecycle,
         revision: (scenario.lifecycle.revision || 0) + 1
       }
-    }
-  }
-
-  const app = persistedPlanning
-    ? { id: persistedPlanning.applicationId, name: persistedPlanning.applicationName }
-    : lifecycleApplicationId
-      ? { id: lifecycleApplicationId, name: actionApplication?.appName || scenario.app.name }
-    : stored
-      ? { id: stored.appId, name: stored.appName }
-      : { id: scenario.app.id, name: scenario.app.name }
-
-  // 工作台已注册的 lifecycle（含 activeExecutions）与目标应用匹配时，直接返回它。
-  if (registeredWorkbenchLifecycle && registeredWorkbenchLifecycle.application.id === app.id) {
-    return {
-      schemaVersion: 1,
-      runId: `mock-lc-${Date.now()}`,
-      threadId,
-      status: 'completed',
-      action: action.action,
-      lifecycle: { ...registeredWorkbenchLifecycle, revision: (registeredWorkbenchLifecycle.revision || 0) + 1 }
     }
   }
 

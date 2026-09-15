@@ -102,9 +102,11 @@ type SharedTaskStoreState = {
   hydrated: boolean
 }
 
+// v3：预置版本用例基线统一由 preloadPresetTestCaseTasks 播种，换键弃掉旧口径的
+// localStorage 流水，保证演示基线与 lifecycle 状态一致。
 const STORAGE_KEYS: Record<BackgroundTaskSystem, string> = {
-  async: 'aistudio:prototype:async-tasks:v2',
-  tide: 'aistudio:prototype:tide-tasks:v2'
+  async: 'aistudio:prototype:async-tasks:v3',
+  tide: 'aistudio:prototype:tide-tasks:v3'
 }
 
 const WINDOW_SLOT: Record<BackgroundTaskSystem, string> = {
@@ -469,15 +471,18 @@ export function patchBackgroundTask(id: string, patch: Partial<BackgroundTask>):
 }
 
 /**
- * 预置一批「已完成」的用例生成任务，供没有运行历史的存量演示版本使用：
- * 预置应用 v1.3 是走完全部旅程后发布的演示快照，其用例必须直接呈现与真实旅程
- * 终态一致的「全部已生成」事实，而不是空的生成队列。已有同版本用例任务时
- * 幂等跳过，不影响运行中旅程的正常派发。
+ * 为没有运行历史的预置演示版本播种用例生成队列：预置应用 v1.3 是"验收完成、
+ * 等待生成版本"的当前迭代，其用例必须呈现与 lifecycle 全 passed 一致的
+ * 「全部已生成」终态（readyCount=6），而不是空队列或生成中。传入更小的
+ * readyCount 可呈现生成中的中间态；其余任务保持排队交给引擎推进。已有同版本
+ * 用例任务时幂等跳过，不影响运行中旅程的正常派发。
  */
-export function preloadCompletedTestCaseTasks(input: {
+export function preloadPresetTestCaseTasks(input: {
   applicationId: string
   versionId: string
   system: BackgroundTaskSystem
+  /** 播种时就绪的用例数量；其余任务保持排队交给引擎推进。 */
+  readyCount: number
   cases: Array<{ id: string; title: string; groupId: string; scenario: string }>
 }): void {
   const store = TASK_STORES[input.system]
@@ -494,10 +499,15 @@ export function preloadCompletedTestCaseTasks(input: {
     versionId: input.versionId,
     cases: input.cases
   })
-  // 派发后立即收口为就绪终态：引擎只推进非终态任务，不会再改动这批基线。
-  caseTasksOf().forEach((task) =>
-    store.patchTask(task.id, { status: 'completed', phase: 'ready', progress: 100 })
-  )
+  // 按派发次序把前 readyCount 条收口为就绪终态：引擎只推进非终态任务，
+  // 不会再改动这批基线；剩余任务交给引擎按队列节奏继续生成。
+  caseTasksOf()
+    .slice()
+    .sort((left, right) => left.createdAt - right.createdAt)
+    .forEach((task, index) => {
+      if (index >= input.readyCount) return
+      store.patchTask(task.id, { status: 'completed', phase: 'ready', progress: 100 })
+    })
 }
 
 /**

@@ -554,6 +554,51 @@ async function replayEndpointWorkbench(
   //    同步执行由剧本在对话内当场播放生成节点并落同一条任务记录；
   //    异步/潮汐派发后台任务后前台立即收口，执行到「完成」由后台引擎推进。
   if (answers.detail_review || resume) {
+    // 接口同步执行的代码变更确认续跑：接受 Diff 后补播构建检查，并落任务终态。
+    // 必须先于执行方式解析判断（与页面流程同序），否则接受 Diff 的续跑会因
+    // 续跑答案里没有执行方式选择而被重新拦回「选择执行方式」门禁。
+    if (answers.file_acceptance && resume) {
+      const foregroundNodes = workflowSegmentNodes('development', 'foreground_build')
+      const buildNode = foregroundNodes.find((node) => node.id === 'build_and_test')!
+      const confirmNode = foregroundNodes.find((node) => node.id === 'confirm_changes')!
+      onProcessSteps?.([
+        step(confirmNode, 'completed', 1, '已接受本次生成的代码变更，继续构建。')
+      ])
+      onProcessSteps?.([
+        step(buildNode, 'running', 1)
+      ])
+      emit(
+        'build_and_test',
+        'running',
+        emitLifecycle(
+          execEndpoint(
+            runId,
+            threadId,
+            meta.apiContractId,
+            meta.endpointId,
+            'build_and_test',
+            'running'
+          )
+        )
+      )
+      await delay(1300)
+      onProcessSteps?.([
+        step(buildNode, 'completed', 1)
+      ])
+      // 代码变更已在对话内确认：同步交付当场完毕，不产生待验收状态；
+      // 产物状态由已保存文件快照与工作流推导。
+      // 设计确认即视为「已设计」：主对话可立即继续设计下一个页面或接口。
+      markEndpointDesigned(meta.apiContractId, meta.endpointId)
+      return emit(
+        'build',
+        'completed',
+        emitLifecycle(
+          execEndpoint(runId, threadId, meta.apiContractId, meta.endpointId, 'build', 'completed')
+        ),
+        {},
+        { summary: { phase: 'build', status: 'completed', message: '接口实现已完成' } }
+      )
+    }
     const choice = resolveDispatchChoice(answers)
     const artifactId = endpointArtifactId(meta.apiContractId, meta.endpointId)
     // 接口分支与页面分支在同一张 DAG 上汇聚到「选择执行方式」节点。
@@ -619,49 +664,6 @@ async function replayEndpointWorkbench(
       })
 
     if (choice === 'sync') return syncImplementEndpoint()
-    // 接口同步执行的代码变更确认续跑：接受 Diff 后补播构建检查，并落任务终态。
-    if (answers.file_acceptance && resume) {
-      const foregroundNodes = workflowSegmentNodes('development', 'foreground_build')
-      const buildNode = foregroundNodes.find((node) => node.id === 'build_and_test')!
-      const confirmNode = foregroundNodes.find((node) => node.id === 'confirm_changes')!
-      onProcessSteps?.([
-        step(confirmNode, 'completed', 1, '已接受本次生成的代码变更，继续构建。')
-      ])
-      onProcessSteps?.([
-        step(buildNode, 'running', 1)
-      ])
-      emit(
-        'build_and_test',
-        'running',
-        emitLifecycle(
-          execEndpoint(
-            runId,
-            threadId,
-            meta.apiContractId,
-            meta.endpointId,
-            'build_and_test',
-            'running'
-          )
-        )
-      )
-      await delay(1300)
-      onProcessSteps?.([
-        step(buildNode, 'completed', 1)
-      ])
-      // 代码变更已在对话内确认：同步交付当场完毕，不产生待验收状态；
-      // 产物状态由已保存文件快照与工作流推导。
-      // 设计确认即视为「已设计」：主对话可立即继续设计下一个页面或接口。
-      markEndpointDesigned(meta.apiContractId, meta.endpointId)
-      return emit(
-        'build',
-        'completed',
-        emitLifecycle(
-          execEndpoint(runId, threadId, meta.apiContractId, meta.endpointId, 'build', 'completed')
-        ),
-        {},
-        { summary: { phase: 'build', status: 'completed', message: '接口实现已完成' } }
-      )
-    }
     dispatchImplementationTask({
       options,
       title: `接口 ${meta.label} 代码实现`,

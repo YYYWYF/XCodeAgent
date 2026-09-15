@@ -26,6 +26,7 @@ export const initialApplicationDraft: ApplicationDraft = {
   appIcon: defaultApplicationIcon,
   senario: '',
   projectPath: '',
+  gitRepoUrl: '',
   terminal: 'PC',
   layout: { type: 'side', useHeader: true, useFooter: false },
   theme: { primaryColor: '#6b3cf0' },
@@ -63,26 +64,9 @@ export const terminalLabels: Record<ApplicationTerminal, string> = {
   Mobile: '移动端'
 }
 
-/** 请求方式下拉建议项（用户也可自由输入其他值）。 */
+/** 请求方式下拉建议项（用户也可自由输入其他值）；设置页的埋点配置仍在使用。 */
 export const trackMethodOptions: Array<{ value: string; label: string }> = [
   { value: 'post', label: 'post' },
   { value: 'get', label: 'get' },
   { value: 'put', label: 'put' }
-]
-
-/** 数据源类型选项（对齐真实产品：外部 API 暂未开放，静态数据仅测试用）。 */
-export const datasourceTypeOptions: Array<{
-  value: 'DataBase' | 'API' | 'None'
-  label: string
-  description: string
-  disabled?: boolean
-}> = [
-  { value: 'DataBase', label: '数据库', description: '连接数据库进行增删改查。' },
-  {
-    value: 'API',
-    label: '外部 API',
-    description: '直接对接外部 API（暂未开放）。',
-    disabled: true
-  },
-  { value: 'None', label: '静态数据', description: '前端直接生成静态模拟数据，仅测试用。' }
 ]

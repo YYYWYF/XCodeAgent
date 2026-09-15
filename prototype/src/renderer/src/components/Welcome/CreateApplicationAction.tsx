@@ -84,7 +84,12 @@ export default function CreateApplicationAction({
   const handleCreateApplication = async (): Promise<void> => {
     setCreating(true)
     try {
-      const values = await form.validateFields()
+      // 表单只注册六个分区的字段；track/apiTrack/datasource 等滞后配置字段已无对应控件，
+      // validateFields 不会返回它们——用初始草稿兜底合并，防止落库字段变成 undefined。
+      const values: ApplicationDraft = {
+        ...initialApplicationDraft,
+        ...(await form.validateFields())
+      }
       const workspaceApi = window.aiStudio?.workspace
       if (!workspaceApi?.createProjectDirectory) {
         throw new Error('当前环境不能创建本地项目目录，请在桌面客户端中使用。')
@@ -127,7 +132,12 @@ export default function CreateApplicationAction({
       setModalOpen(false)
       onOpenWorkbenchAfterCreate(application, initialVersion.lifecycle)
     } catch (error) {
-      message.error(formatError(error, '创建应用失败'))
+      // antd 校验拒绝对象不是 Error：projectPath 等字段嵌在 noStyle 复合控件里，
+      // 字段级错误提示不冒泡显示，这里把首个校验消息透出到 toast，避免只报笼统的失败。
+      const firstValidationMessage = (
+        error as { errorFields?: Array<{ errors?: string[] }> }
+      )?.errorFields?.[0]?.errors?.[0]
+      message.error(firstValidationMessage || formatError(error, '创建应用失败'))
     } finally {
       setCreating(false)
     }

@@ -115,7 +115,9 @@
   width: 320px;
   padding: 6px;
   border-radius: 10px;
-  background: var(--wb-surface, #fff);
+  // Portal 浮层必须用不透明的 --wb-elevated：--wb-surface 是画布内卡片的半透明面，
+  // 用在弹层上会让下层工作台内容透出来，视觉上像被一层透明图层遮挡。
+  background: var(--wb-elevated, #fff);
   box-shadow: 0 12px 36px rgba(15, 18, 24, 0.16);
 }
 

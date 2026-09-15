@@ -30,7 +30,7 @@ import {
 } from '../service/applicationStorage'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { latestApplicationLifecycle } from '../hooks/useApplicationLifecycleStore'
-import { readInitializationPlanningRecord } from '../initializationPlanning'
+import { clearInitializationPlanningRecord, readInitializationPlanningRecord } from '../initializationPlanning'
 // 前端本地合成 lifecycle 快照的 revision 必须与剧本共享计数器，避免与下一帧撞号被拒合并
 import { nextSyntheticLifecycleRevision } from '../mock/scripts/revision'
 import {
@@ -49,6 +49,7 @@ import { resetBusinessObjectsCache } from '../components/BusinessObjects/store'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
+  ApplicationVersion,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntity,
   DevelopmentPlanningPageTreeNode,
@@ -314,10 +315,13 @@ function WorkbenchPage({
         console.warn('读取工作区 application.json 失败，继续使用已保存应用配置。', error)
       }
       try {
+        // 规划产物检查跟随"当前查看版本"：查看历史完成版本呈现已设计终态，
+        // 切回进行中的迭代重新还原为待开发基线（mock 侧按版本终态判定）。
+        const inspectedVersionId = viewingVersionId || workspaceCurrentVersionId
         const inspection = await inspectWorkspacePlanningArtifacts(
           application.workspaceRoot,
           application.id,
-          workspaceCurrentVersionId
+          inspectedVersionId
         )
         if (!active) return
         setDevelopmentPlanningPages(inspection.pages)
@@ -360,6 +364,7 @@ function WorkbenchPage({
     application.id,
     application.workspaceRoot,
     planningRefreshRevision,
+    viewingVersionId,
     workspaceCurrentVersionId
   ])
 
@@ -525,6 +530,17 @@ function WorkbenchPage({
     tide: <MoonOutlined />
   }
 
+  // 进入工作台时当前迭代若即已"可生成"（如预置的验收完成态快照），视为自动弹框已消费：
+  // 刚进入就弹出生成版本弹框会打断阶段回看，生成版本由顶栏按钮手动触发；
+  // 仅本会话内旅程推进到可生成（如审查完成）才保留自动弹出。
+  useEffect(() => {
+    if (versionReleasable) {
+      autoPublishShownRef.current = true
+    }
+    // 只按进入时的初始可生成状态判定一次；会话内推进由下方弹框 effect 捕获。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // 生成版本弹框：审查通过(finalize completed)后自动弹出(仅首次)，也由顶栏生成版本按钮手动打开。
   useEffect(() => {
     if (versionReleasable && !autoPublishShownRef.current) {
@@ -593,9 +609,13 @@ function WorkbenchPage({
     setGenerating(null)
     setPublishModalOpen(false)
     setVersionDescription('')
+    // 成功通知带上仓库落点：与弹框内的仓库展示同一来源，闭合"提交码云"的叙事。
+    const repoUrl = String(workspaceApplication.gitRepoUrl || '').trim()
     notification.success({
       message: '版本已生成',
-      description: `${publishedLabel} 已打包提交并打 Tag，锁定为只读版本，可发起新迭代继续开发。`,
+      description: repoUrl
+        ? `${publishedLabel} 已提交至 ${repoUrl} 并打 Tag，锁定为只读版本，可发起新迭代继续开发。`
+        : `${publishedLabel} 已打包提交并打 Tag，锁定为只读版本，可发起新迭代继续开发。`,
       placement: 'bottomRight',
       duration: 4
     })
@@ -619,6 +639,37 @@ function WorkbenchPage({
     })
   }
 
+  /** 新迭代版本的初始 lifecycle：回到需求收集（进需求分析阶段），revision 与剧本共享计数器撞号安全。 */
+  const makeResetLifecycle = (): ApplicationLifecycle => ({
+    ...makeInitialLifecycle(application.id, application.name),
+    revision: nextSyntheticLifecycleRevision(applicationLifecycle?.revision ?? 0)
+  })
+
+  /** 把派生的新迭代版本安装为当前工作版本（回退与发起新迭代共用）：
+   *  持久化版本链、把查看与工作指针切到新版本、重置规划产物、清掉同名版本遗留的
+   *  实体绑定缓存与规划记录（版本 id 重载后可能复用，否则上一轮的中间态会劫持阶段定位），
+   *  并复位自动弹框与生命周期，让新迭代从需求收集重新开始。 */
+  const installDerivedVersion = (next: ApplicationVersion, initialLifecycle: ApplicationLifecycle): void => {
+    const nextApplication = {
+      ...workspaceApplication,
+      versions: [...(workspaceApplication.versions || []), next],
+      currentVersionId: next.id
+    }
+    setWorkspaceApplication(nextApplication)
+    void saveStoredApplications(
+      loadCachedApplications().map((item) => (item.id === nextApplication.id ? nextApplication : item))
+    )
+    setViewingVersionId(next.id)
+    setDevelopmentPlanningPages(resetDevelopmentPlanningPages)
+    setDevelopmentPlanningPageTree(resetDevelopmentPlanningPageTree)
+    setDevelopmentPlanningApiContracts(resetDevelopmentPlanningApiContracts)
+    resetBusinessObjectsCache(next.id)
+    clearInitializationPlanningRecord({ id: workspaceApplication.id, currentVersionId: next.id })
+    setHasPageDesigns(false)
+    autoPublishShownRef.current = false
+    onApplicationLifecycleChange(initialLifecycle)
+  }
+
   /** 基于 historicalVersion 迭代：派生新顺序版本，lifecycle 重置回需求收集（进需求分析阶段），
    *  版本链以 currentHead 为父、restoredFromVersionId 标记内容来源，历史版本保持只读。 */
   const handleRollbackConfirm = (): void => {
@@ -628,11 +679,7 @@ function WorkbenchPage({
       setRollbackTargetId('')
       return
     }
-    const resetRevision = nextSyntheticLifecycleRevision(applicationLifecycle?.revision ?? 0)
-    const initialLifecycle = {
-      ...makeInitialLifecycle(application.id, application.name),
-      revision: resetRevision
-    }
+    const initialLifecycle = makeResetLifecycle()
     const next = createRollbackVersion(
       workspaceApplication.id,
       currentHead,
@@ -641,69 +688,17 @@ function WorkbenchPage({
       Date.now()
     )
     setRollbackTargetId('')
-    runVersionSwitch(next.versionLabel, () => {
-      const nextApplication = {
-        ...workspaceApplication,
-        versions: [...(workspaceApplication.versions || []), next],
-        currentVersionId: next.id
-      }
-      setWorkspaceApplication(nextApplication)
-      void saveStoredApplications(
-        loadCachedApplications().map((item) =>
-          item.id === nextApplication.id ? nextApplication : item
-        )
-      )
-      setViewingVersionId(next.id)
-      autoPublishShownRef.current = false
-      onApplicationLifecycleChange(initialLifecycle)
-      // 与发起新迭代一致：重置页面/接口开发任务，从需求分析阶段（迭代引导词）开始。
-      setDevelopmentPlanningPages(resetDevelopmentPlanningPages)
-      setDevelopmentPlanningPageTree(resetDevelopmentPlanningPageTree)
-      setDevelopmentPlanningApiContracts(resetDevelopmentPlanningApiContracts)
-      // 工作迭代 id 重载后可能复用，同步清掉同名版本遗留的实体绑定缓存。
-      resetBusinessObjectsCache(next.id)
-      setHasPageDesigns(false)
-    })
+    runVersionSwitch(next.versionLabel, () => installDerivedVersion(next, initialLifecycle))
   }
 
-  // 确认发起新迭代后派生顺序版本，并清空本版本的任务完成态与对话上下文。
+  // 确认发起新迭代后派生顺序版本：发起新迭代是全新空版本，无代码可切，不需要切换加载动画。
   const handleStartIterationConfirm = (): void => {
-    const resetRevision = nextSyntheticLifecycleRevision(applicationLifecycle?.revision ?? 0)
-    const initialLifecycle = {
-      ...makeInitialLifecycle(application.id, application.name),
-      revision: resetRevision
-    }
     const parent = findVersion(workspaceApplication, activeVersionId)
     if (!parent) return
-    const next = createIterationVersion(
-      workspaceApplication.id,
-      parent,
-      initialLifecycle,
-      Date.now()
-    )
     setIterationModalOpen(false)
-    // 发起新迭代是全新空版本,无代码可切,不需要切换加载动画;直接同步建立新版本。
-    const nextApplication = {
-      ...workspaceApplication,
-      versions: [...(workspaceApplication.versions || []), next],
-      currentVersionId: next.id
-    }
-    setWorkspaceApplication(nextApplication)
-    void saveStoredApplications(
-      loadCachedApplications().map((item) =>
-        item.id === nextApplication.id ? nextApplication : item
-      )
-    )
-    setViewingVersionId(next.id)
-    setDevelopmentPlanningPages(resetDevelopmentPlanningPages)
-    setDevelopmentPlanningPageTree(resetDevelopmentPlanningPageTree)
-    setDevelopmentPlanningApiContracts(resetDevelopmentPlanningApiContracts)
-    // 工作迭代 id 重载后可能复用，同步清掉同名版本遗留的实体绑定缓存。
-    resetBusinessObjectsCache(next.id)
-    setHasPageDesigns(false)
-    autoPublishShownRef.current = false
-    // 应用级 lifecycle 同步重置为新迭代初始态,避免版本 lifecycle 合并把上一版本的完成态盖回来。
-    onApplicationLifecycleChange(initialLifecycle)
+    const initialLifecycle = makeResetLifecycle()
+    const next = createIterationVersion(workspaceApplication.id, parent, initialLifecycle, Date.now())
+    installDerivedVersion(next, initialLifecycle)
   }
 
   // 页面或接口设计运行结束后重新读取规划目录，以持久化结果更新大纲状态。
@@ -844,6 +839,7 @@ function WorkbenchPage({
         generating={generating}
         iterationBaseVersionId={viewedVersion && iterationModalOpen ? viewedVersion.id : undefined}
         publishDescription={versionDescription}
+        publishRepoUrl={String(workspaceApplication.gitRepoUrl || '').trim() || undefined}
         publishVersionLabel={
           releaseVersion && publishModalOpen ? releaseVersion.versionLabel : undefined
         }

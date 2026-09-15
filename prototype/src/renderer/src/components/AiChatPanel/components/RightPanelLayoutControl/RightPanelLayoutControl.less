@@ -19,18 +19,26 @@
 
   &:hover,
   &:focus-within {
-    width: 30px;
-    height: 84px;
-    gap: 2px;
-    padding: 3px;
+    width: 88px;
+    height: 104px;
+    gap: 3px;
+    padding: 6px;
     background: var(--wb-surface);
     border: 1px solid var(--wb-border-strong);
     border-radius: 7px;
     box-shadow: 0 2px 8px rgb(24 27 36 / 8%);
 
+    .@{class-prefix}-right-panel-layout-caption {
+      height: 12px;
+      opacity: 1;
+    }
+
     .@{class-prefix}-right-panel-layout-option {
-      width: 24px;
+      width: 100%;
       height: 24px;
+      padding: 0 8px;
+      justify-content: flex-start;
+      gap: 6px;
       opacity: 1;
       pointer-events: auto;
       transform: none;
@@ -81,6 +89,7 @@
   height: 0;
   align-items: center;
   justify-content: center;
+  gap: 0;
   padding: 0;
   color: var(--wb-text-secondary);
   background: transparent;
@@ -94,6 +103,8 @@
   transition:
     width 0.16s ease,
     height 0.16s ease,
+    gap 0.16s ease,
+    padding 0.16s ease,
     opacity 0.12s ease,
     transform 0.16s ease;
 
@@ -110,10 +121,37 @@
   }
 }
 
+/* 展开时显示在控制条顶部的用途说明，收起时高度归零不占位。 */
+.@{class-prefix}-right-panel-layout-caption {
+  display: block;
+  width: 100%;
+  height: 0;
+  overflow: hidden;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+  line-height: 12px;
+  text-align: center;
+  white-space: nowrap;
+  opacity: 0;
+  transition:
+    height 0.16s ease,
+    opacity 0.12s ease;
+}
+
+/* 档位文字标签：与图标并排，补充图标无法自解释的档位语义。 */
+.@{class-prefix}-right-panel-layout-text {
+  flex-shrink: 0;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 /* 三个小图标复用同一个窗口轮廓，仅通过右侧区域展示对应布局。 */
 .@{class-prefix}-right-panel-layout-icon {
   position: relative;
   display: block;
+  flex-shrink: 0;
   width: 14px;
   height: 12px;
   box-sizing: border-box;

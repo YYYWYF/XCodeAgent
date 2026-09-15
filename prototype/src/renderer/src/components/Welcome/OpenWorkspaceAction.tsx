@@ -89,6 +89,8 @@ export default function OpenWorkspaceAction({ onOpenApplication }: Props): JSX.E
       }
 
       const workspaceName = workspace.name || pathBasename(workspace.workspaceRoot)
+      // 以新建表单的初始草稿为底：码云仓库等滞后配置字段沿用演示默认值
+      //（initialApplicationDraft 含演示预填），已有工作目录没有采集入口、不视为缺失。
       const schema = buildApplicationSchema({
         ...initialApplicationDraft,
         appName: workspaceName,

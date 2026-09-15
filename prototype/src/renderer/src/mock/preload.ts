@@ -36,12 +36,19 @@ import {
   mockApplications,
   mockLifecycle,
   mockWorkspaceApplication,
-  newAppScenario
+  newAppScenario,
+  presetCompletedVersionIds
 } from './fixtures'
 import { mockApplicationInPlanning } from './mockHttpAgent'
 import { isEndpointDesigned, isPageDesigned } from './designState'
-import { preloadCompletedTestCaseTasks } from '../backgroundTasks'
+import { preloadPresetTestCaseTasks } from '../backgroundTasks'
 import { TEST_CASE_BLUEPRINTS } from '../testCasePreparation'
+import {
+  createInitializationPlanningRecord,
+  persistInitializationPlanningRecord,
+  readInitializationPlanningRecord
+} from '../initializationPlanning'
+import type { InitializationPlanningSeed } from '../initializationPlanning'
 
 // 预览地址跟随当前页面主机名：本机访问走 127.0.0.1，局域网设备访问时自动指向原型所在机器。
 const MOCK_APPLICATION_PREVIEW_URL = `http://${window.location.hostname || '127.0.0.1'}:5190`
@@ -254,26 +261,34 @@ const aiStudio = {
     writeTemplatePages: (payload: unknown) => ok(payload),
     readApplication: ({ workspaceRoot }: { workspaceRoot?: string }) =>
       ok({ application: findAppSchema(workspaceRoot) }),
-    inspectPlanningArtifacts: ({ workspaceRoot, applicationId, versionId }: { workspaceRoot?: string; applicationId?: string; versionId?: string }) => {
+    inspectPlanningArtifacts: ({ workspaceRoot, versionId }: { workspaceRoot?: string; versionId?: string }) => {
       const artifacts = appDataByWorkspace(workspaceRoot).planningArtifacts
-      const isCompletedDemoVersion = applicationId === 'app-pms-new' && versionId === 'app-pms-new-v1-3'
-      return ok(withDesignedPages(isCompletedDemoVersion ? artifacts : asPendingPlanningArtifacts(artifacts as never)))
+      // 完成态版本集合由 mock-data 按 lifecycle 推导（测试+验收全通过）：
+      // 只读回看这些版本时呈现已设计的终态页面，其余版本一律还原为待开发基线。
+      return ok(
+        withDesignedPages(
+          presetCompletedVersionIds.has(String(versionId || ''))
+            ? artifacts
+            : asPendingPlanningArtifacts(artifacts as never)
+        )
+      )
     }
   },
   sessions: {
-    // 各应用镜像的对话历史来自 mock-data/{pms-new,pms-design,pms-dev}/chat-sessions.ts。
+    // 各应用镜像的对话历史来自 mock-data/{pms-new,pms-design,pms-dev}/chat-sessions.ts；
+    // 预置应用的历史由剧本回放生成（异步），故 list/read 均为异步实现。
     listWorkspaces: () => ok([]),
-    list: ({ workspaceRoot, editorMode, applicationId }: { workspaceRoot?: string; editorMode?: string; applicationId?: string }) => {
+    list: async ({ workspaceRoot, editorMode, applicationId }: { workspaceRoot?: string; applicationId?: string; editorMode?: string }) => {
       // 规划(需求分析/项目规划)阶段的应用不返回静态镜像的已设计页会话；但运行期保存的对话必须照常返回——
       // 需求分析/项目规划旅程本就处于计划阶段集合，若连实时会话一起隐藏，任何一次目录重载
       // 都会把默认常规对话清空，用户视角就是“默认对话点进去就没了”。
       const inPlanning = mockApplicationInPlanning(workspaceRoot || '', applicationId)
       const scriptedSessions = inPlanning
         ? []
-        : (appDataByWorkspace(workspaceRoot).chatSessions(
+        : ((await appDataByWorkspace(workspaceRoot || '').chatSessions(
             workspaceRoot || '',
             (editorMode || 'frontend') as never
-          ) as Array<{
+          )) as Array<{
             id: string; title: string; editorMode: string; threadId: string; pageId?: string
             createdByUser?: boolean; savedFiles?: unknown[]; apiContractId?: string; endpointId?: string; sessionKind?: string; versionId?: string
             createdAt: number; updatedAt: number; messages: unknown[]
@@ -302,12 +317,12 @@ const aiStudio = {
       }))
       return ok({ sessions: summaries })
     },
-    read: ({ workspaceRoot, editorMode, sessionId }: { workspaceRoot?: string; editorMode?: string; sessionId?: string }) => {
+    read: async ({ workspaceRoot, editorMode, sessionId }: { workspaceRoot?: string; editorMode?: string; sessionId?: string }) => {
       if (mockApplicationInPlanning(workspaceRoot || '')) return ok({ session: null })
-      const sessions = appDataByWorkspace(workspaceRoot).chatSessions(
+      const sessions = (await appDataByWorkspace(workspaceRoot).chatSessions(
         workspaceRoot || '',
         (editorMode || 'frontend') as never
-      ) as Array<Record<string, unknown>>
+      )) as Array<Record<string, unknown>>
       const savedSessions = mockSavedSessions(workspaceRoot || '')
       const session = mergeMockSessions(sessions, savedSessions).find((s) => s.id === sessionId)
       return ok({ session: session || null })
@@ -413,17 +428,49 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
 // 这里显式声明已就绪。
 void mockWorkspaceApplication
 
-// 预置应用 v1.3 的完成态用例基线：该版本是「照抄新建应用剧本数据、向后推延三个迭代」
-// 的已发布演示版本，打开工作台时测试用例应直接呈现 6/6 已生成的终态（与 lifecycle
-// 全 passed 一致），而不是空的生成队列。幂等：该版本已有用例任务时跳过。
-preloadCompletedTestCaseTasks({
-  applicationId: 'app-pms-new',
-  versionId: 'app-pms-new-v1-3',
-  system: 'async',
-  cases: TEST_CASE_BLUEPRINTS.map((blueprint) => ({
-    id: blueprint.id,
-    title: blueprint.title,
-    groupId: blueprint.groupId,
-    scenario: blueprint.scenario
-  }))
-})
+// 预置完成版本（lifecycle 测试+验收全通过）的演示基线播种：这些版本没有运行历史，
+// 打开工作台时必须直接呈现与真实走完旅程一致的终态，而不是空队列或未开始。
+const presetApp = mockApplications[0]
+const presetCompletedVersions = (presetApp.versions || []).filter((version) =>
+  presetCompletedVersionIds.has(version.id)
+)
+const presetTestCaseCases = TEST_CASE_BLUEPRINTS.map((blueprint) => ({
+  id: blueprint.id,
+  title: blueprint.title,
+  groupId: blueprint.groupId,
+  scenario: blueprint.scenario
+}))
+
+// ① 用例生成队列：每个完成版本 6/6 已就绪（幂等：已有该版本用例任务时跳过，
+// 不影响运行中旅程的正常派发）。
+for (const version of presetCompletedVersions) {
+  preloadPresetTestCaseTasks({
+    applicationId: presetApp.id,
+    versionId: version.id,
+    system: 'async',
+    readyCount: presetTestCaseCases.length,
+    cases: presetTestCaseCases
+  })
+}
+
+// ② 规划产物记录：为完成版本播种确认态记录，让"基于此版本迭代"读到真实的
+// 内容来源（新迭代继承该记录的 artifacts），而不是退回演示种子的叙事性继承。
+// v1.3 的记录随后会被历史回放生成器覆盖为带正式文档的更丰富版本。
+{
+  const scenario = appDataByWorkspace(presetApp.workspaceRoot || '')
+  const seed = {
+    requirementSpec: scenario.requirementSpec,
+    productPlan: scenario.productPlan,
+    uiDesigns: scenario.uiDesigns,
+    technicalPlan: scenario.technicalPlan
+  } as InitializationPlanningSeed
+  // 按版本链正序播种：后一个版本派生时能读到前一个版本的记录作为继承来源。
+  for (const version of presetCompletedVersions) {
+    const identity = { id: presetApp.id, currentVersionId: version.id }
+    if (readInitializationPlanningRecord(identity)) continue
+    persistInitializationPlanningRecord(
+      createInitializationPlanningRecord({ ...presetApp, currentVersionId: version.id }, seed),
+      identity
+    )
+  }
+}

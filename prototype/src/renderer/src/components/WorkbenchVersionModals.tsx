@@ -6,6 +6,7 @@ import {
   PlusOutlined
 } from '@ant-design/icons'
 import { Input, Modal, Progress, Steps } from 'antd'
+import type { ReactElement } from 'react'
 import RichLoading from './AiChatPanel/components/DesignProgress/RichLoading'
 import { findVersion } from '../service/applicationVersions'
 import type { ApplicationConfig } from '../typings'
@@ -19,6 +20,8 @@ type PublishModalProps = {
   /** 版本日志草稿。 */
   description: string
   onDescriptionChange: (value: string) => void
+  /** 码云仓库地址：提交与 Tag 的远程落点，弹框与进度中回显闭合叙事。 */
+  repoUrl?: string
   generating: VersionGenerateState
   onCancel: () => void
   onGenerate: () => void
@@ -29,6 +32,7 @@ function PublishVersionModal({
   versionLabel,
   description,
   onDescriptionChange,
+  repoUrl,
   generating,
   onCancel,
   onGenerate
@@ -57,6 +61,13 @@ function PublishVersionModal({
           </span>
         </header>
         <div className={cx('workbench-publish-modal-body')}>
+          {repoUrl ? (
+            // 仓库地址两个分支（确认/生成中）都在场：提交码云的落点可见，地址超长时折行。
+            <div className={cx('workbench-generate-repo')} title={repoUrl}>
+              <CloudUploadOutlined aria-hidden="true" />
+              <span className={cx('workbench-generate-repo-url')}>{repoUrl}</span>
+            </div>
+          ) : null}
           {generating ? (
             <div className={cx('workbench-generate-progress')}>
               <Progress
@@ -132,6 +143,80 @@ function PublishVersionModal({
   )
 }
 
+type DerivedVersionModalProps = {
+  /** 弹框标题。 */
+  title: string
+  /** 标题下的一句话说明。 */
+  subtitle: string
+  /** 徽标图标的模式类（is-iteration / is-rollback）。 */
+  iconVariant: string
+  icon: ReactElement
+  /** 正文引导段（可含强调版本号）。 */
+  lead: ReactElement
+  onCancel: () => void
+  onConfirm: () => void
+  /** 确认按钮文案与图标。 */
+  confirmLabel: string
+}
+
+/** 派生新版本确认弹框（发起新迭代 / 基于此版本迭代共用同一壳）：
+ *  徽标 + 标题 + 引导段 + 底部确认，强调"既有版本保持只读、可随时切换查看"。 */
+function DerivedVersionModal({
+  title,
+  subtitle,
+  iconVariant,
+  icon,
+  lead,
+  onCancel,
+  onConfirm,
+  confirmLabel
+}: DerivedVersionModalProps): JSX.Element {
+  return (
+    <Modal
+      centered
+      className={cx('workbench-publish-modal')}
+      closable
+      footer={null}
+      onCancel={onCancel}
+      open
+      width={420}
+    >
+      <div className={cx('workbench-publish-modal-inner')}>
+        <header className={cx('workbench-publish-modal-header')}>
+          <span
+            aria-hidden="true"
+            className={cx('workbench-publish-modal-icon', iconVariant)}
+          >
+            {icon}
+          </span>
+          <span className={cx('workbench-publish-modal-title')}>
+            <strong>{title}</strong>
+            <small>{subtitle}</small>
+          </span>
+        </header>
+        <div className={cx('workbench-publish-modal-body')}>
+          <p className={cx('workbench-publish-modal-lead')}>{lead}</p>
+          <div className={cx('workbench-publish-modal-meta')}>
+            <CheckCircleFilled aria-hidden="true" /> 已生成版本保持锁定，可随时切换查看
+          </div>
+        </div>
+        <footer className={cx('workbench-publish-modal-footer')}>
+          <button className={cx('workbench-publish-modal-cancel')} type="button" onClick={onCancel}>
+            取消
+          </button>
+          <button
+            className={cx('workbench-publish-modal-confirm')}
+            type="button"
+            onClick={onConfirm}
+          >
+            {icon} {confirmLabel}
+          </button>
+        </footer>
+      </div>
+    </Modal>
+  )
+}
+
 type IterationModalProps = {
   /** 发起新迭代所基于的当前版本标签。 */
   versionLabel: string
@@ -152,48 +237,21 @@ function StartIterationModal({
   onConfirm
 }: IterationModalProps): JSX.Element {
   return (
-    <Modal
-      centered
-      className={cx('workbench-publish-modal')}
-      closable
-      footer={null}
+    <DerivedVersionModal
+      confirmLabel="确认发起"
+      icon={<PlusOutlined />}
+      iconVariant="is-iteration"
+      lead={
+        <>
+          将基于 <strong className={cx('workbench-publish-modal-version')}>{versionLabel}</strong>{' '}
+          创建 v{major}.{minor + 1} 。新版本会从需求分析阶段开始，使用全新的对话记录。
+        </>
+      }
       onCancel={onCancel}
-      open
-      width={420}
-    >
-      <div className={cx('workbench-publish-modal-inner')}>
-        <header className={cx('workbench-publish-modal-header')}>
-          <span className={cx('workbench-publish-modal-icon', 'is-iteration')} aria-hidden="true">
-            <PlusOutlined />
-          </span>
-          <span className={cx('workbench-publish-modal-title')}>
-            <strong>发起新迭代</strong>
-            <small>创建新版本并重新进入需求分析阶段</small>
-          </span>
-        </header>
-        <div className={cx('workbench-publish-modal-body')}>
-          <p className={cx('workbench-publish-modal-lead')}>
-            将基于 <strong className={cx('workbench-publish-modal-version')}>{versionLabel}</strong>{' '}
-            创建 v{major}.{minor + 1} 。新版本会从需求分析阶段开始，使用全新的对话记录。
-          </p>
-          <div className={cx('workbench-publish-modal-meta')}>
-            <CheckCircleFilled aria-hidden="true" /> 已生成版本保持锁定，可随时切换查看
-          </div>
-        </div>
-        <footer className={cx('workbench-publish-modal-footer')}>
-          <button className={cx('workbench-publish-modal-cancel')} type="button" onClick={onCancel}>
-            取消
-          </button>
-          <button
-            className={cx('workbench-publish-modal-confirm')}
-            type="button"
-            onClick={onConfirm}
-          >
-            <PlusOutlined aria-hidden="true" /> 确认发起
-          </button>
-        </footer>
-      </div>
-    </Modal>
+      onConfirm={onConfirm}
+      subtitle="创建新版本并重新进入需求分析阶段"
+      title="发起新迭代"
+    />
   )
 }
 
@@ -214,51 +272,24 @@ function RollbackVersionModal({
   onConfirm
 }: RollbackModalProps): JSX.Element {
   return (
-    <Modal
-      centered
-      className={cx('workbench-publish-modal')}
-      closable
-      footer={null}
+    <DerivedVersionModal
+      confirmLabel="确认迭代"
+      icon={<HistoryOutlined />}
+      iconVariant="is-rollback"
+      lead={
+        <>
+          将基于{' '}
+          <strong className={cx('workbench-publish-modal-version')}>{restoredVersionLabel}</strong>{' '}
+          的内容生成新迭代版本{' '}
+          <strong className={cx('workbench-publish-modal-version')}>{nextVersionLabel}</strong>
+          ，以该历史版本为基础继续开发。原有版本保持只读、可随时切换查看，不会被覆盖。
+        </>
+      }
       onCancel={onCancel}
-      open
-      width={420}
-    >
-      <div className={cx('workbench-publish-modal-inner')}>
-        <header className={cx('workbench-publish-modal-header')}>
-          <span className={cx('workbench-publish-modal-icon', 'is-rollback')} aria-hidden="true">
-            <HistoryOutlined />
-          </span>
-          <span className={cx('workbench-publish-modal-title')}>
-            <strong>基于此版本迭代</strong>
-            <small>以历史版本为基础生成新迭代版本</small>
-          </span>
-        </header>
-        <div className={cx('workbench-publish-modal-body')}>
-          <p className={cx('workbench-publish-modal-lead')}>
-            将基于{' '}
-            <strong className={cx('workbench-publish-modal-version')}>{restoredVersionLabel}</strong>{' '}
-            的内容生成新迭代版本{' '}
-            <strong className={cx('workbench-publish-modal-version')}>{nextVersionLabel}</strong>
-            ，以该历史版本为基础继续开发。原有版本保持只读、可随时切换查看，不会被覆盖。
-          </p>
-          <div className={cx('workbench-publish-modal-meta')}>
-            <CheckCircleFilled aria-hidden="true" /> 历史版本保持只读，可随时切换查看
-          </div>
-        </div>
-        <footer className={cx('workbench-publish-modal-footer')}>
-          <button className={cx('workbench-publish-modal-cancel')} type="button" onClick={onCancel}>
-            取消
-          </button>
-          <button
-            className={cx('workbench-publish-modal-confirm')}
-            type="button"
-            onClick={onConfirm}
-          >
-            <HistoryOutlined aria-hidden="true" /> 确认迭代
-          </button>
-        </footer>
-      </div>
-    </Modal>
+      onConfirm={onConfirm}
+      subtitle="以历史版本为基础生成新迭代版本"
+      title="基于此版本迭代"
+    />
   )
 }
 
@@ -267,6 +298,8 @@ type WorkbenchVersionModalsProps = {
   /** 发布弹框：待发布版本标签（仅在可发布且弹框开启时传入）。 */
   publishVersionLabel?: string
   publishDescription: string
+  /** 发布弹框：码云仓库地址（提交与 Tag 的远程落点）。 */
+  publishRepoUrl?: string
   onDescriptionChange: (value: string) => void
   generating: VersionGenerateState
   onCancelPublish: () => void
@@ -290,6 +323,7 @@ export default function WorkbenchVersionModals({
   application,
   publishVersionLabel,
   publishDescription,
+  publishRepoUrl,
   onDescriptionChange,
   generating,
   onCancelPublish,
@@ -318,6 +352,7 @@ export default function WorkbenchVersionModals({
           versionLabel={publishVersionLabel}
           description={publishDescription}
           onDescriptionChange={onDescriptionChange}
+          repoUrl={publishRepoUrl}
           generating={generating}
           onCancel={onCancelPublish}
           onGenerate={onGenerate}

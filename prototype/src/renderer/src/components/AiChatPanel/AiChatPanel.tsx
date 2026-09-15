@@ -350,7 +350,9 @@ export default function AiChatPanel({
   )
   const { record: initializationPlanning } = useInitializationPlanningRecord(
     application,
-    initializationPlanningSeed
+    initializationPlanningSeed,
+    // 已生成版本回看是只读旅程：规划记录缺失时用内存态呈现，不向 localStorage 写入。
+    { readOnly: versionReadOnly }
   )
   // 实体绑定按版本隔离：查看哪个版本就读取哪个版本的实体状态，新迭代自动回到未开始。
   const [businessObjects] = useBusinessObjects(
@@ -584,6 +586,17 @@ export default function AiChatPanel({
       (!activeSession?.sessionKind && conversationPhase === activeWorkbenchPhase))
   const stageSessionSwitching = loadingSessions || !activeSessionMatchesStage
 
+  // 审查阶段是否已有落盘的审查报告（审查工作流历史上已完成）。
+  // 回看已走完审查的迭代时不得自动重放审查工作流，否则会话里会出现
+  // 第二条审查轨迹和一份待确认的报告 Diff，破坏"历史阶段静态回看"的口径。
+  const reviewHistoryPresent = sessions.some(
+    (session) =>
+      session.sessionKind === 'review' &&
+      (session.savedFiles || []).some((file) =>
+        String(file.path).replace(/\\/g, '/').endsWith('docs/code-review.md')
+      )
+  )
+
   const {
     activeWorkflow,
     error,
@@ -635,9 +648,12 @@ export default function AiChatPanel({
     autoStartTesting: allDevelopmentModulesComplete && testingTransitionRequested,
     acceptancePhase: displayIsAcceptancePhase,
     // 全部业务用例执行通过后才开放审查；进入审查后由审查 Agent 自动开启默认对话。
+    // 审查历史已存在（报告已落盘）或会话目录尚未加载完成时不自动重放审查工作流。
     autoStartReview:
       !versionReadOnly &&
       activeWorkbenchPhase === 'review' &&
+      !loadingSessions &&
+      !reviewHistoryPresent &&
       // 进入审查的准入由顶部/测试门禁负责；一旦当前阶段已是审查，
       // 即使冷启动快照暂时缺少 testExecutionStatus，也必须启动审查 Workflow。
       (testExecutionPassedForEntry || compareWorkbenchPhases(reachedPhase, 'review') >= 0),
@@ -755,13 +771,15 @@ export default function AiChatPanel({
 
   useEffect(() => {
     // 全部业务用例执行通过后只提示进入审查，测试阶段仍停留在当前工作台供用户查看结果。
+    // 旅程已到达审查或更后阶段（如回看验收完成态的迭代）时不自动弹"进入审查"门禁。
     if (
       versionReadOnly ||
       activeWorkbenchPhase !== 'testing' ||
       !testExecutionPassedForEntry ||
       reviewTransitionRequested ||
       loading ||
-      workspaceBusy
+      workspaceBusy ||
+      compareWorkbenchPhases(reachedPhase, 'review') >= 0
     ) {
       if (activeWorkbenchPhase !== 'testing') reviewCompletionPromptRef.current = ''
       return
@@ -776,6 +794,7 @@ export default function AiChatPanel({
     applicationLifecycle,
     loading,
     onApplicationLifecycleChange,
+    reachedPhase,
     reviewTransitionRequested,
     testExecutionPassedForEntry,
     versionReadOnly,
@@ -1223,7 +1242,10 @@ export default function AiChatPanel({
       versionReadOnly ||
       developmentWorkflowRunning ||
       !allDevelopmentModulesComplete ||
-      testingTransitionRequested
+      testingTransitionRequested ||
+      // 旅程已越过开发阶段（如回看验收完成态的迭代）时不再自动弹"进入测试"门禁，
+      // 只有真正停在开发阶段等待推进的版本才自动提醒。
+      compareWorkbenchPhases(reachedPhase, 'testing') >= 0
     )
       return
     const promptKey = `${versionViewKey}:development-complete`
@@ -1234,6 +1256,7 @@ export default function AiChatPanel({
     activeWorkbenchPhase,
     allDevelopmentModulesComplete,
     developmentWorkflowRunning,
+    reachedPhase,
     testingTransitionRequested,
     versionReadOnly,
     versionViewKey
@@ -2702,8 +2725,10 @@ export default function AiChatPanel({
       setRightPanel({ type: 'test-cases' })
       setRightPanelLayout('split')
     } else if (activeWorkbenchPhase === 'review') {
-      // 审查阶段默认展示审查报告；应用预览由独立页签承载。
+      // 审查阶段默认展示审查报告并回到分栏；应用预览由独立页签承载。
+      // 不重置布局会让验收阶段带入的全宽残留到审查，违反"除验收外默认分栏"的口径。
       setRightPanel({ type: 'doc' })
+      setRightPanelLayout('split')
     }
 
     const stageSession = latestStageSession(sessions, activeWorkbenchPhase)

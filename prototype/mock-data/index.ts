@@ -50,7 +50,7 @@ export type AppScenario = {
   pageDesigns: Record<string, unknown>
   designedPageDesigns: Record<string, unknown>
   endpointDesigns: Record<string, unknown>
-  chatSessions: (workspaceRoot: string, editorMode: EditorMode) => unknown[]
+  chatSessions: (workspaceRoot: string, editorMode: EditorMode) => Promise<unknown[]>
 }
 
 function scenario(
@@ -69,7 +69,7 @@ function scenario(
   pageDesigns: Record<string, unknown>,
   designedPageDesigns: Record<string, unknown>,
   endpointDesigns: Record<string, unknown>,
-  chatSessions: (workspaceRoot: string, editorMode: EditorMode) => unknown[]
+  chatSessions: (workspaceRoot: string, editorMode: EditorMode) => Promise<unknown[]>
 ): AppScenario {
   return {
     app,
@@ -113,6 +113,25 @@ const NEW_SCENARIO: AppScenario = scenario(
 
 /** 最近项目列表：单一新建旅程场景。 */
 export const mockApplications: ApplicationConfig[] = [pmsNewApplication]
+
+/**
+ * lifecycle 声明测试与验收全部通过的预置版本（v1.0-v1.3）。
+ * 同一应用并存多版本、多状态是演示刚需：这些版本按"旅程走完"的完成态呈现
+ * （实体绑定、用例队列、规划基线共享同一判定），未走完的版本自然不进集合。
+ */
+export const presetCompletedVersionIds: ReadonlySet<string> = new Set(
+  mockApplications.flatMap((app) =>
+    (app.versions || [])
+      .filter((version) => {
+        const extensions = (version.lifecycle?.extensions || {}) as Record<string, unknown>
+        return (
+          String(extensions.testExecutionStatus || '') === 'passed' &&
+          String(extensions.acceptanceStatus || '') === 'passed'
+        )
+      })
+      .map((version) => version.id)
+  )
+)
 
 /** 按 workspaceRoot 路由；唯一场景直接返回新建应用数据。 */
 export function appDataByWorkspace(_workspaceRoot?: string): AppScenario {

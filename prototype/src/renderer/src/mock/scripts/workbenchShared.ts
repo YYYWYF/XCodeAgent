@@ -10,6 +10,7 @@ import type { ProcessStepRecord, SendWorkflowMessageOptions } from '../../servic
 import { WORKBENCH_PAGES as PAGES } from '../../../../../mock-data/pms-new/workbench-pages'
 import { mockPlanningArtifacts } from '../../../../../mock-data/pms-new/planning-artifacts'
 import { registerWorkbenchLifecycle } from '../mockHttpAgent'
+import { replayDelay } from './replayClock'
 import { nextLifecycleRevision } from './revision'
 
 export type ReplayCallbacks = {
@@ -289,7 +290,8 @@ export type BuildFileTarget = {
   sourceTool: string
 }
 
-export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+// 演示等待统一走剧本时钟：历史回放快进时立即兑现，交互演示保持真实节奏。
+export const delay = (ms: number): Promise<void> => replayDelay(ms)
 
 /** 单个代码内容源：目标文件 + 当前内容（分帧场景下可能是部分行）。 */
 export type ChangeSource = { target: BuildFileTarget; content: string }

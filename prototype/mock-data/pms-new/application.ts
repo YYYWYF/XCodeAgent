@@ -26,6 +26,8 @@ export function makeSchema(
     appName: '武汉分行需求回检系统',
     appIcon: 'ProjectOutlined',
     senario: '需求回检填报与审核',
+    // 存量应用的码云仓库：v1.0-v1.2 的提交与 Tag 均指向该仓库（模拟行内地址）。
+    gitRepoUrl: 'https://gitee.example.com/wuhan-branch/pms-requirement-recheck.git',
     terminal: 'PC',
     layout: { type: 'side', useHeader: true, useFooter: false },
     theme: { primaryColor: '#6b3cf0' },
@@ -73,7 +75,9 @@ export const pmsNewApplication: ApplicationConfig = {
   defaultPage: '/recheck-introduction',
   schema: makeSchema(),
   createdAt: Date.now(),
-  // 版本演示:v1.3 为当前已发布版本，v1.0-v1.2 保留为可切换的只读历史。
+  // 版本演示:v1.0-v1.2 是已生成版本(锁定只读,带码云提交与 Tag 模拟值),
+  // v1.3 是当前迭代 —— 旅程已走完并停在验收阶段,等待用户点击"生成新版本";
+  // 呈现"已生成历史 + 最新迭代并存"的混合状态,也为后续 Git 文件管理衔接留出语义。
   versions: [
     {
       id: 'app-pms-new-v1-0',
@@ -85,6 +89,15 @@ export const pmsNewApplication: ApplicationConfig = {
       releasedAt: Date.now() - 2 * 86400000,
       lifecycle: makeCompleteLifecycle('app-pms-new', '武汉分行需求回检系统'),
       description: '首版上线,支持个人回检记录查询。',
+      gitRef: {
+        commitSha: '3f9a21c7e5d84b01a6c2f708d9e4b513a0c7f221',
+        tag: 'v1.0',
+        committedAt: Date.now() - 2 * 86400000
+      },
+      artifactSummary: {
+        pageIds: ['/recheck-introduction', '/my-rechecks'],
+        deployableScript: 'deploy-v1.0.sh'
+      },
       snapshot: {
         pageIds: ['/recheck-introduction', '/my-rechecks'],
         requirementSummary: '首版上线个人回检记录查询。'
@@ -101,6 +114,15 @@ export const pmsNewApplication: ApplicationConfig = {
       releasedAt: Date.now() - 4 * 86400000,
       lifecycle: makeCompleteLifecycle('app-pms-new', '武汉分行需求回检系统'),
       description: '新增状态筛选和待办统计。',
+      gitRef: {
+        commitSha: '8c2d54e1b7a94f3d0e6b8a25c1f4793d2e8b604a',
+        tag: 'v1.1',
+        committedAt: Date.now() - 4 * 86400000
+      },
+      artifactSummary: {
+        pageIds: ['/recheck-introduction', '/my-rechecks'],
+        deployableScript: 'deploy-v1.1.sh'
+      },
       snapshot: {
         pageIds: ['/recheck-introduction', '/my-rechecks'],
         requirementSummary: '新增状态筛选和待办统计。'
@@ -117,6 +139,15 @@ export const pmsNewApplication: ApplicationConfig = {
       releasedAt: Date.now() - 2 * 86400000,
       lifecycle: makeCompleteLifecycle('app-pms-new', '武汉分行需求回检系统'),
       description: '新增在线提交回检单。',
+      gitRef: {
+        commitSha: 'b5e70f2d9c3a481690d1e57b3a2c846f17d90b33',
+        tag: 'v1.2',
+        committedAt: Date.now() - 2 * 86400000
+      },
+      artifactSummary: {
+        pageIds: ['/recheck-introduction', '/my-rechecks'],
+        deployableScript: 'deploy-v1.2.sh'
+      },
       snapshot: {
         pageIds: ['/recheck-introduction', '/my-rechecks'],
         requirementSummary: '新增在线提交回检单。'
@@ -127,16 +158,12 @@ export const pmsNewApplication: ApplicationConfig = {
       versionLabel: 'v1.3',
       major: 1,
       minor: 3,
-      status: 'released',
+      // 当前迭代已走完全部旅程(测试/审查/验收均通过),定位验收阶段;
+      // releasedAt/description/gitRef/snapshot 都在生成版本时才写入。
+      status: 'iterating',
       parentVersionId: 'app-pms-new-v1-2',
       createdAt: Date.now() - 86400000,
-      releasedAt: Date.now() - 3600000,
-      lifecycle: makeCompleteLifecycle('app-pms-new', '武汉分行需求回检系统'),
-      description: '完善我的回检查询、状态筛选和状态跟踪。',
-      snapshot: {
-        pageIds: ['/recheck-introduction', '/my-rechecks'],
-        requirementSummary: '完善我的回检查询、状态筛选和状态跟踪。'
-      }
+      lifecycle: makeCompleteLifecycle('app-pms-new', '武汉分行需求回检系统')
     }
   ],
   currentVersionId: 'app-pms-new-v1-3'

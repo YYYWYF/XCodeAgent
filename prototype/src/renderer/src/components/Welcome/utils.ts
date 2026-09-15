@@ -42,6 +42,8 @@ export function buildApplicationSchema(values: ApplicationDraft): ApplicationSch
     appName: values.appName.trim(),
     appIcon: values.appIcon.trim(),
     senario: values.senario.trim(),
+    // 码云仓库地址已由表单必填校验，这里再兜底裁剪空白。
+    gitRepoUrl: values.gitRepoUrl.trim(),
     terminal: values.terminal,
     layout: values.layout,
     theme: values.theme,

@@ -3,7 +3,6 @@ import {
   CheckCircleOutlined,
   CloseOutlined,
   DeleteOutlined,
-  DatabaseOutlined,
   EyeOutlined,
   InfoCircleOutlined,
   LoadingOutlined,
@@ -18,6 +17,7 @@ import { useState } from 'react'
 import type { TestCasePreparationSnapshot } from '../../../../testCasePreparation'
 import { testCasePreparationLabel } from '../../../../testCasePreparation'
 import { cx } from '../../../../utils'
+import databaseFilledIcon from '../../../../assets/icons/database-filled.svg'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
 import DataSourcesPage from '../../../DataSources/DataSourcesPage'
 import './AuxiliaryDrawer.less'
@@ -185,7 +185,9 @@ function ConversationManagement({
   }
 
   return (
-    <div className={cx('conversation-management')}>
+    // 类名必须与抽屉根节点的模式类（conversation-management）区分开：
+    // 根节点会携带模式类，若视图类同名，视图的 padding/gap 会误命中抽屉根节点。
+    <div className={cx('conversation-management-view')}>
       {/* 固定 Tab 分栏与异步/潮汐任务抽屉同款交互：下划线选中态 + 数量角标，右侧挂新建按钮。 */}
       <div className={cx('conversation-tabbar')}>
         <nav aria-label="任务分段" className={cx('conversation-tabs')}>
@@ -403,6 +405,14 @@ const DRAWER_HEADERS: Record<AuxiliaryDrawerMode, { title: string; description: 
   'data-sources': { title: '数据来源', description: '管理应用使用的数据库与外部 API 连接' }
 }
 
+/** 抽屉徽标图标按模式选择：所有模式统一走 mask 实底图标槽位，保证头部视觉规则一致。 */
+const DRAWER_BADGE_ICONS: Record<AuxiliaryDrawerMode, string> = {
+  'conversation-management': freeChatIcon,
+  'temporary-conversation': freeChatIcon,
+  'test-preparation': freeChatIcon,
+  'data-sources': databaseFilledIcon
+}
+
 /** 在同一辅助槽位中承载任务管理、临时问答和测试准备，禁止抽屉叠加。 */
 export default function AuxiliaryDrawer(props: Props): ReactElement {
   // 临时任务按需创建、初始为空，可多开，但永远不具备 Workflow 与工作区写入能力。
@@ -456,17 +466,15 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
     <section className={cx('auxiliary-drawer', props.mode)} aria-label={header.title}>
       <header>
         <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
-          {props.mode === 'data-sources' ? (
-            <DatabaseOutlined />
-          ) : (
-            <span
-              aria-hidden="true"
-              className={cx('auxiliary-drawer-badge-icon')}
-              style={
-                { '--auxiliary-drawer-badge-source': `url("${freeChatIcon}")` } as CSSProperties
-              }
-            />
-          )}
+          <span
+            aria-hidden="true"
+            className={cx('auxiliary-drawer-badge-icon')}
+            style={
+              {
+                '--auxiliary-drawer-badge-source': `url("${DRAWER_BADGE_ICONS[props.mode]}")`
+              } as CSSProperties
+            }
+          />
         </span>
         <div>
           <strong>{header.title}</strong>

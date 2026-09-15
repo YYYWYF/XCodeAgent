@@ -1,34 +1,39 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createBusinessObjects, withConfirmedBindings, type BusinessObject } from './model'
 import { readDataSources } from '../DataSources/catalog'
+import { presetCompletedVersionIds } from '../../mock/fixtures'
 
 const CHANGE_EVENT = 'aistudio:prototype:business-objects-changed'
 
-/** 预置演示应用 v1.3 的固定版本号：该版本是走完全部旅程后发布的完成态演示快照。 */
-const PRELOADED_COMPLETED_VERSION_ID = 'app-pms-new-v1-3'
+// 缓存键前缀集中定义：结构升级即换版本号弃旧缓存，回退/迭代的清理也引用同一前缀，
+// 避免键升级后清理过滤器仍停在旧版本号、把复位变成空操作。
+const STORAGE_PREFIX = 'aistudio:prototype:business-objects:v10'
 
 /**
  * 根据应用名、实体集合和版本生成稳定的演示缓存键。
  * 版本必须参与键名：实体绑定是版本内的交付事实，发起新迭代后实体要回到未开始状态，
  * 已生成版本的只读回看则继续呈现该版本自己的绑定结果。
+ * v10：v1.3 基线定为"验收完成待生成版本"，实体按完成态呈现；换键弃掉历史实验缓存
+ * （含中间方案写入的未绑定缓存），保证打开即重落确认绑定基线。
  */
 function storageKey(spec: Record<string, unknown>, versionId = 'current'): string {
   const app = (spec.app_info || {}) as Record<string, unknown>
   const entityIds = (Array.isArray(spec.entities) ? spec.entities : [])
     .map((item) => String((item as Record<string, unknown>).id || ''))
     .join('-')
-  return `aistudio:prototype:business-objects:v8:${String(app.name || 'application')}:${entityIds}:${versionId}`
+  return `${STORAGE_PREFIX}:${String(app.name || 'application')}:${entityIds}:${versionId}`
 }
 
 /**
- * 缓存未命中时的初始化：预置完成版本没有运行历史，版本隔离缓存键让它读不到任何
- * 绑定事实，按空缓存推导会得到「未开始」，与 lifecycle 全 passed 的发布终态矛盾。
+ * 缓存未命中时的初始化：预置完成版本（lifecycle 测试与验收全通过，见
+ * mock-data 的 presetCompletedVersionIds）没有运行历史，版本隔离缓存键让它读不到
+ * 任何绑定事实，按空缓存推导会得到「未开始」，与 lifecycle 全 passed 的完成态矛盾。
  * 这里按「确认绑定」的同一权威路径（withConfirmedBindings）落实全部操作并写回缓存，
  * 让产物目录、顶部进度与真实走完旅程的版本同构；其余版本从需求意向状态开始。
  */
 function initializeObjects(spec: Record<string, unknown>, versionId: string): BusinessObject[] {
   const objects = createBusinessObjects(spec)
-  if (versionId !== PRELOADED_COMPLETED_VERSION_ID) return objects
+  if (!presetCompletedVersionIds.has(versionId)) return objects
   try {
     const completed = objects.map((object) => withConfirmedBindings(object, readDataSources()))
     window.localStorage.setItem(storageKey(spec, versionId), JSON.stringify(completed))
@@ -93,7 +98,7 @@ export function resetBusinessObjectsCache(versionId: string): void {
   if (typeof window === 'undefined' || !versionId) return
   const suffix = `:${versionId}`
   const staleKeys = Object.keys(window.localStorage).filter(
-    (key) => key.startsWith('aistudio:prototype:business-objects:v8:') && key.endsWith(suffix)
+    (key) => key.startsWith(`${STORAGE_PREFIX}:`) && key.endsWith(suffix)
   )
   staleKeys.forEach((key) => window.localStorage.removeItem(key))
 }
