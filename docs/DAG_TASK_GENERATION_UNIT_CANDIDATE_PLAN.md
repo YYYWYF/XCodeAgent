@@ -997,7 +997,7 @@ max_tokens_override
     = settings.dag_unit_max_tokens
 
 max_retries_override
-    = 0
+    = 2 (production Unit policy; UnitGenerationPolicy default = 0)
 ```
 
 不会修改其他 Agent 使用的：
@@ -1515,7 +1515,7 @@ generation_attempt
 | Local 额度 | 每个 Unit 每轮最多 3 次完整内容生成尝试，包含首次生成；JSON／内容校验失败进入本轮下一次尝试。首次通过即停止，不为用满额度而继续生成。 |
 | Global 额度 | 每个 PlanningRun 最多 2 轮修复；初次检查不占额度。一次检查中的问题先聚合，同一批选定 Unit 合计消耗一轮；各 Unit 获得新的完整 Local 额度。两轮之后仍做最后一次 Global 检查，通过可保存草稿，仍有阻断问题则失败。 |
 | 局部耗尽 | 只返回该 Unit 本轮无有效 Candidate 的失败结果和原因，其他 Unit 继续。本轮收尾后由 Global 判断缺项并在剩余额度内补生成；其他有效 Candidate 与历史 Tasks 保持不变。 |
-| 基础设施调用失败 | DAG 规划链路不增加外层基础设施 retry；production Unit policy 将 SDK retry 限制为 2 次（DTO 默认仍为 0）。SDK retry 耗尽后立即结束当前 PlanningRun 并上报上层，不消耗 Global 额度尝试恢复。用户重新生成时创建新 Run，不恢复旧 Run。 |
+| 基础设施调用失败 | DAG 规划链路不增加外层基础设施 retry；production Unit policy 将 SDK max_retries 设置为 2（DTO 默认仍为 0）。SDK 支持范围内的基础设施重试仍无法完成调用后立即结束当前 PlanningRun 并上报上层，不消耗 Global 额度尝试恢复。用户重新生成时创建新 Run，不恢复旧 Run。 |
 | 重试反馈 | 冻结输入之外显式分区：Global 反馈是本 Unit 对本轮全局问题必须达成的修复目标，在整轮 Local 尝试中持续保留；最新 Local 错误是最近一次生成暴露的具体问题，按尝试更新。两类不能混成无来源的错误列表，最终须同时满足。输出始终是该 Unit 完整本轮 Candidate，其他 Unit 的 Candidate 正文不进入输入。 |
 | 最终失败或用户取消 | 停止派发、停止自动重试，尝试取消进行中调用，拒收迟到结果；不组装或提交失败 Candidate，不覆盖正式 DAG。通过现有 AG-UI 向上层输出已结束的状态及原因，不保留 PlanningRun 内人工暂停／继续。 |
 
@@ -1528,7 +1528,7 @@ generation_attempt
 ### 当前实现与可复用逻辑
 
 - `Backend/app/agents/main/task_preparer.py::prepare_build_tasks_with_main_agent` 使用 `build_task_plan_max_retries`，当前代码默认 2 次重试，即 3 次总尝试；原始候选错误、编译失败、最终组装校验失败仍共用一个 Scope 级循环。可复用配置及错误反馈入口，但需拆成已确认的 Unit Local 与 Global 两层控制。
-- `Backend/app/agents/model_factory.py::create_chat_model` 将 `model_max_retries` 传给模型 SDK；`Backend/app/config.py` 的代码默认值为 2。这是独立的模型调用层重试，实际配置可覆盖默认值；不能在外层再悄悄套相同重试循环。
+- `Backend/app/agents/model_factory.py::create_chat_model` 将 `model_max_retries` 传给模型 SDK；`Backend/app/config.py` 的代码默认值为 2。这是独立的 SDK infrastructure retry，实际配置可覆盖默认值；不能在外层再悄悄套相同重试循环。
 - `Backend/app/agents/main/task_preparer_prompt.py::_task_plan_retry_feedback` 已把校验错误注入下一次完整任务生成请求，当前最多插入 20 条字符串。可复用反馈入口，改为根据结构化问题投射当前 Unit 的反馈；该固定截取不能直接当作最终完整反馈契约。
 
 ### 已确认的默认预算
@@ -1537,7 +1537,7 @@ generation_attempt
 | --- | --- |
 | Unit 每轮内容生成 | 最多 3 次总尝试，即首次生成加 2 次局部重试。每次 Global 选中该 Unit 时恢复完整额度。 |
 | Global 修复 | 最多 2 轮；首次 Global 检查不计入修复轮数，每轮选定多个 Unit 也只计一轮。耗尽后仍缺项或完整 DAG 不通过，Run 失败。 |
-| 单次模型请求的基础设施重试 | DAG 规划链路不增加外层基础设施 retry；production Unit policy 显式启用模型 SDK 最多 2 次重试，DTO 默认仍为 0，不修改其他功能的模型配置。SDK retry 耗尽后结束当前 PlanningRun 并向上层报告；用户选择重新生成任务时创建新 Run，不是当前 Run 内部重试。 |
+| 单次模型请求的基础设施重试 | DAG 规划链路不增加外层基础设施 retry；production Unit policy 显式启用模型 SDK max_retries=2，DTO 默认仍为 0，不修改其他功能的模型配置。SDK 支持范围内的重试仍无法完成调用后结束当前 PlanningRun 并向上层报告；用户选择重新生成任务时创建新 Run，不是当前 Run 内部重试。 |
 
 基础设施调用失败单独记录，不通过 Local 或 Global 内容修复额度继续自动调用。用户从上层重新发起任务准备时创建新 Run，新 Run 拥有自己的次数预算，旧 Run 记录不清除。成功取得模型响应后出现因输出长度限制导致的 JSON 截断、结构错误或候选校验失败，属于内容失败，消耗当前 Local 尝试。传输中断而无法取得完整响应，按调用失败处理，不接收部分 Tasks。
 
@@ -1545,7 +1545,7 @@ generation_attempt
 
 常见调用失败需按异常类型及服务端错误码判断：连接短暂中断、服务端暂时故障、短时限流可能通过稍后重试恢复；超时可能是短暂拥塞，也可能是请求持续超过服务能力；凭据无效、权限不足、额度耗尽、模型／请求配置错误通常需先处理原因，重复相同请求不能修复。不能只凭 HTTP 429 就判断短时限流，也不能保证所有 5xx 或超时都会恢复。当前没有本项目按错误类型统计的自动重试恢复率，不能断言自动重试效果普遍很小。
 
-`Backend/app/config.py` 当前请求超时配置默认 120 秒，SDK 全局默认自动重试 2 次；DAG Unit 通过 `UnitGenerationPolicy` 显式传入 production retry=2，连续超时可能累积数分钟等待；该请求超时不等于整个 Unit 会话的总耗时上限。DAG 链路不增加另一层基础设施 retry。
+`Backend/app/config.py` 当前请求超时配置默认 120 秒，SDK 全局默认 max_retries=2；DAG Unit 通过 `UnitGenerationPolicy` 显式传入 production SDK max_retries=2，连续超时可能累积数分钟等待；该请求超时不等于整个 Unit 会话的总耗时上限。DAG 链路不增加另一层基础设施 retry。
 
 错误发生后将当前 PlanningRun 标记为 failed，停止新调用与自动重试，按失败收尾规则处理正在进行的调用及迟到结果。通过现有 AG-UI 失败流程向上层报告故障 Unit、原因及是否需要先处理配置，明确结束当前生成进度；不交给 Global 作为内容缺项自动修复，也不在 PlanningRun 内保留等待用户决定的运行状态。
 

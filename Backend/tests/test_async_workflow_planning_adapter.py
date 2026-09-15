@@ -73,7 +73,7 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_production_unit_generation_policy_enables_only_sdk_retry(self) -> None:
-        """production policy 开启 SDK retry=2，同时保持 Local、timeout、token 和 reader 预算。"""
+        """production policy 开启 SDK max_retries=2，同时保持 Local、timeout、token 和 reader 预算。"""
 
         policy = production_unit_generation_policy()
 

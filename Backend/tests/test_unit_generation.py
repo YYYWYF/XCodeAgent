@@ -174,12 +174,13 @@ class UnitGenerationOnceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(issue.retryable)
 
     async def test_transport_exception_is_classified_and_raised(self) -> None:
-        """SDK retry 耗尽后的传输异常仍以 infrastructure 分类上抛，不转换为内容 Issue。"""
+        """模型调用最终抛出的 transport exception 仍按 infrastructure failure 分类并上抛。"""
 
         model = FakeAsyncModel(
             "",
             exception=httpx.ReadError("connection reset"),
         )
+        # Fake Model 直接模拟最终异常；本测试只验证错误边界，不覆盖 SDK retry 过程。
         with patch(
             "app.services.unit_generation.build_unit_generation_prompt",
             return_value="test prompt",
@@ -208,7 +209,7 @@ class UnitGenerationOnceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_sdk_retry_policy_is_forwarded_as_call_override(self) -> None:
-        """Unit policy 的 SDK retry 值原样传给模型工厂，不消耗额外 Local attempt。"""
+        """Unit policy 的 SDK max_retries 值原样传给模型工厂，不消耗额外 Local attempt。"""
 
         with patch(
             "app.services.unit_generation.build_unit_generation_prompt",
