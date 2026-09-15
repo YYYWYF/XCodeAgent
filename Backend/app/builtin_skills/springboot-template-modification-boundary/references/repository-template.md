@@ -117,6 +117,8 @@ public class ProjectRepositoryImpl implements ProjectRepository {
 - `save`：`converter.toPO` 后 `insert`，回写自增 id
 - `update`：用 `LambdaUpdateWrapper` 按业务 id 定位，`.set` 各字段
 - `softDelete`：用 `LambdaUpdateWrapper` 设 `isDeleted=true` + 审计字段
+- 普通单表条件、排序、模糊查询、`IN`、计数和分页继续组合 Lambda Wrapper，并调用 `BaseMapper`；不得为这些操作新增 Mapper 接口方法或 XML SQL
+- Mapper XML 始终作为 namespace 占位文件保留；只有多表 JOIN、聚合/分组、UNION、子查询、窗口函数、数据库特有 SQL，或有明确记录且 `BaseMapper` 无法清晰表达的性能敏感查询才允许补写
 
 ## PO 转换器 Converter
 

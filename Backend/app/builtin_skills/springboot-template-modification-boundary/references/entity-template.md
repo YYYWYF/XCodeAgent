@@ -115,7 +115,7 @@ private String deletedBy;
 
 ## Mapper 接口
 
-`extends BaseMapper<XxxPO>` + `@Mapper`。基础 CRUD（insert/deleteById/updateById/selectById/selectList/selectPage）由 MyBatis-Plus 自动提供，不需要写任何方法。
+`extends BaseMapper<XxxPO>` + `@Mapper`。基础 CRUD（insert/deleteById/updateById/selectById/selectOne/selectList/selectCount/selectPage/update/delete）由 MyBatis-Plus 提供，不需要重复声明方法；普通条件、排序、模糊查询和 `IN` 使用 Lambda Wrapper。
 
 ```java
 package com.cmbchina.backend.project.infrastructure.mapper;
@@ -130,7 +130,9 @@ public interface ProjectMapper extends BaseMapper<ProjectPO> {
 }
 ```
 
-### 需要自定义 SQL 时
+### 达到自定义 SQL 门槛时
+
+只有多表 JOIN、聚合/分组、UNION、子查询、窗口函数、数据库特有 SQL，或有明确记录且 `BaseMapper` 无法清晰表达的性能敏感查询，才允许增加自定义方法。普通动态条件不属于自定义 SQL 理由。
 
 ```java
 @Mapper
@@ -141,7 +143,7 @@ public interface ProjectMapper extends BaseMapper<ProjectPO> {
 
 ## Mapper XML
 
-只含 namespace 声明。需要自定义 SQL 时在此写 `<select>`/`<insert>` 等。
+平台始终创建只含 namespace 声明的 Mapper XML 占位文件，即使暂时不使用也保留。文件存在不代表需要补写 SQL；普通单表操作必须让该文件保持不变。
 
 ```xml
 <?xml version="1.0" encoding="UTF-8" ?>
@@ -151,7 +153,7 @@ public interface ProjectMapper extends BaseMapper<ProjectPO> {
 </mapper>
 ```
 
-### 需要自定义 SQL 时
+### 达到自定义 SQL 门槛时
 
 ```xml
 <mapper namespace="com.cmbchina.backend.project.infrastructure.mapper.ProjectMapper">

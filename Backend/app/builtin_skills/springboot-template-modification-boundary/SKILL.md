@@ -140,11 +140,11 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 
 ### Mapper 接口：`infrastructure/mapper/<Entity>Mapper.java`
 
-`extends BaseMapper<XxxPO>` + `@Mapper`。基础 CRUD 由 MyBatis-Plus 提供，只在需要自定义 SQL 时加方法。
+`extends BaseMapper<XxxPO>` + `@Mapper`。主键查询/更新/删除、新增、条件单条/列表查询、计数、分页、排序、模糊查询和 `IN` 查询必须优先调用 `BaseMapper` 并配合 Lambda Wrapper，不得重复声明等价方法。
 
 ### Mapper XML：`src/main/resources/mapper/<module>/<Entity>Mapper.xml`
 
-只含 namespace 声明。需要自定义 SQL 时在此写 `<select>`/`<insert>` 等。
+始终保留只含 namespace 声明的占位文件；未使用也不删除。文件存在不代表需要自定义 SQL。仅当已确认接口明确需要多表 JOIN、聚合/分组、UNION、子查询、窗口函数、数据库特有 SQL，或有明确记录且 `BaseMapper` 无法清晰表达的性能敏感查询时，才允许在此写语句。
 
 ### 仓储接口：`domain/repository/<Entity>Repository.java`
 
@@ -183,7 +183,7 @@ MapStruct `@Mapper(componentModel = "spring")` 接口，Entity ↔ PO 互转。
 | `domain/entity/<Entity>.java` | 全部字段 + `@Data` | 无（已完整） |
 | `infrastructure/po/<Entity>PO.java` | `@TableName` + 全部字段注解 + 审计字段 | 无（已完整） |
 | `infrastructure/mapper/<Entity>Mapper.java` | `extends BaseMapper` + `@Mapper` | 需要时加自定义方法 |
-| `resources/mapper/<module>/<Entity>Mapper.xml` | namespace 声明 | 需要时加自定义 SQL |
+| `resources/mapper/<module>/<Entity>Mapper.xml` | namespace 声明的占位文件 | 达到自定义 SQL 门槛时才加语句，否则保持不变 |
 | `domain/repository/<Entity>Repository.java` | CRUD 方法签名 | 需要时加自定义方法 |
 | `infrastructure/repository/impl/<Entity>RepositoryImpl.java` | BaseMapper 调用实现 | 需要时加自定义实现 |
 | `infrastructure/repository/converter/<Entity>Converter.java` | MapStruct Entity↔PO | 无（已完整） |
@@ -205,7 +205,7 @@ MapStruct `@Mapper(componentModel = "spring")` 接口，Entity ↔ PO 互转。
 
 1. **读取预置文件**：检查 `prebuilt_files` 列出的文件是否已存在且完整。
 2. **补充 Repository 自定义方法**（如需）：在接口加方法签名，在 Impl 加实现。
-3. **补充 Mapper 自定义方法**（如需）：在 Mapper 接口加方法，在 XML 写 SQL。
+3. **实现持久化调用**：普通单表 CRUD、条件查询、排序、模糊查询、`IN` 和分页直接使用 `BaseMapper` + Lambda Wrapper，并保持 Mapper XML 为占位；只有达到上述自定义 SQL 门槛时才在 Mapper 接口和 XML 中补充方法与语句。
 4. **编写 ApplicationService 方法体**：补充 CRUD 方法体内的业务编排逻辑、校验、事务。
 5. **补充 DTO 校验注解**（如需）：加 `@NotBlank`/`@Size` 等。
 6. **编写 Assembler 转换逻辑**：DTO ↔ Entity 互转。

@@ -36,11 +36,44 @@ configuration work here.
 
 - Bind the confirmed table and columns with MyBatis-Plus annotations; do not infer a schema
   change or persistence rule that is absent from the design.
-- Prefer MyBatis-Plus for basic single-table operations. Use custom Mapper XML only when
-  the current endpoint genuinely requires joins, aggregation, dynamic filters, or custom
-  SQL.
+- Use MyBatis-Plus `BaseMapper` for single-table insert, primary-key lookup/update/delete,
+  conditional single/list queries, count, pagination, sorting, fuzzy matching, and `IN`
+  predicates. Express their conditions with `LambdaQueryWrapper` or
+  `LambdaUpdateWrapper`; do not declare a custom Mapper method or XML statement for them.
+- Keep the namespace-only Mapper XML placeholder created by the platform, even when no
+  custom statement is needed. Its existence is not evidence that custom SQL should be
+  added.
+- Use a custom Mapper method and XML statement only when the confirmed endpoint concretely
+  requires a join, aggregation/grouping, `UNION`, subquery, window function,
+  database-specific SQL, or a documented performance-sensitive query that `BaseMapper`
+  cannot express clearly.
 - Follow existing project and table conventions for primary-key strategy, logical
   deletion, audit fields, and tenant filtering. Do not add them without evidence.
+
+**BaseMapper Method Selection**
+
+Prefer the narrowest existing `BaseMapper` method that matches the confirmed endpoint;
+do not add every method to a Repository when the endpoint does not need it:
+
+- `selectById(id)`: look up one row by its primary key.
+- `selectOne(queryWrapper)`: look up one row by confirmed business conditions.
+- `selectList(queryWrapper)`: return a conditionally filtered and sorted list.
+- `selectCount(queryWrapper)`: count rows matching confirmed conditions.
+- `selectPage(page, queryWrapper)`: execute confirmed pagination with conditions and
+  ordering in a lambda query wrapper.
+- `insert(entity)`: insert one persistence object.
+- `updateById(entity)`: update one row when the confirmed operation is keyed by the
+  primary key and the entity contains the intended update values.
+- `update(entity, updateWrapper)`: update selected fields or locate rows by confirmed
+  business conditions with a `LambdaUpdateWrapper`.
+- `deleteById(id)`: delete by primary key, including the project's configured logical
+  deletion behavior.
+- `delete(queryWrapper)`: delete by confirmed business conditions, including configured
+  logical deletion behavior.
+
+Use these inherited methods directly from the generated Mapper interface. Do not
+redeclare an identically behaving method under a business-specific name merely to make it
+callable from `RepositoryImpl`.
 
 ## Layer Responsibilities
 
@@ -74,10 +107,15 @@ configuration work here.
 
 ### Repository
 
-- Extend `BaseMapper<PO>` from the Mapper and prefer MyBatis-Plus for basic single-table
-  operations.
-- Use Mapper XML only for joins, aggregation, dynamic filters, or custom SQL genuinely
-  required by the current endpoint. Do not create empty XML or duplicate basic CRUD SQL.
+- Extend `BaseMapper<PO>` from the Mapper. Keep the platform-created namespace-only Mapper
+  XML as a placeholder, but leave it unchanged unless the endpoint meets the custom-SQL
+  threshold above.
+- Call `selectById`, `selectOne`, `selectList`, `selectCount`, `selectPage`, `insert`,
+  `updateById`, `update`, `deleteById`, or `delete` as appropriate instead of redeclaring
+  equivalent Mapper methods. Use lambda wrappers for ordinary conditions and updates.
+- Before adding any custom Mapper method or XML statement, state the concrete unsupported
+  query feature in the implementation result. Do not treat ordinary dynamic filters as a
+  reason for XML, and do not duplicate behavior already provided by `BaseMapper`.
 - Declare only domain operations required by the current endpoint and existing module in
   the Repository interface. Do not force a generic five-method CRUD surface.
 - Inject the Mapper and Converter into `RepositoryImpl`. Query conditions and pagination

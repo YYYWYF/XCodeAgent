@@ -368,12 +368,19 @@ def _planning_algorithm_section(
             f"{objects_scope}"
         )
         rules.append(
-            "Prefer assigning a module-level `domain/exception/<Module>ErrorCode.java` to "
-            "the `service` task when the current API Contract declares `error_codes` and no "
-            "existing task or module convention already owns that file. Prefer implementing "
-            "confirmed business failure branches and raising endpoint-facing `BizException` "
-            "in ApplicationService. This is a planning recommendation, not an exclusive "
-            "ownership constraint; preserve an explicit existing ownership convention."
+            "Whenever implementation of a confirmed business failure branch requires "
+            "`throw new BizException(...)`, also plan the concrete module-level "
+            "`domain/exception/<Module>ErrorCode.java` enum implementing `IBizErrorCode`. "
+            "Decide this during planning from the confirmed API Contract error_codes and "
+            "Endpoint semantics, and create ErrorCode work only for business failure "
+            "branches that the implementation actually needs. "
+            "Use operation=add when that exact file is absent from WorkspaceSnapshot and "
+            "operation=modify when it exists, and include the path in one responsible "
+            "backend task's change_scope, allowed_paths, target_files, and deliverable so "
+            "the plan never imports a missing ErrorCode type. Prefer assigning this work to "
+            "the `service` task and raising the business exception in ApplicationService. "
+            "Service ownership is a planning recommendation, not an exclusive constraint; "
+            "preserve an explicit existing ownership convention."
         )
     if "database" in source_groups:
         rules.append(
@@ -382,10 +389,18 @@ def _planning_algorithm_section(
             "then complete the typed conversion edges. It declares one `backend.objects` deliverable covering those files; "
             "do not emit a separate converter task or converter deliverable. The converter "
             "responsibility does not own persistence access. "
-            "The `repository` task owns the MyBatis Mapper interface, optional Mapper XML, "
+            "The `repository` task owns the MyBatis Mapper interface, placeholder Mapper XML, "
             "Repository interface and Repository implementation as one layer. RepositoryImpl "
             "injects Mapper plus the converter and names every confirmed sourceId/table/column. "
-            "Mapper is not a separate pipeline stage or task."
+            "Mapper is not a separate pipeline stage or task. Always keep or create the Mapper "
+            "interface extending `BaseMapper<PO>` and the namespace-only Mapper XML placeholder. "
+            "For single-table insert, primary-key lookup/update/delete, conditional single/list "
+            "queries, count, pagination, sorting, fuzzy matching, and IN predicates, the task must "
+            "call BaseMapper with LambdaQueryWrapper/LambdaUpdateWrapper and leave the placeholder "
+            "XML unchanged. Plan a custom Mapper method and XML statement only when the confirmed "
+            "Endpoint concretely requires a join, aggregation/grouping, UNION, subquery, window "
+            "function, database-specific SQL, or a documented performance-sensitive query that "
+            "BaseMapper cannot express clearly; name that reason in the task description."
         )
     if "external_api" in source_groups:
         rules.append(

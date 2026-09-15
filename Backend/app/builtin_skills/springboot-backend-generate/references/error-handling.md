@@ -8,6 +8,14 @@
 - Every generated concrete ErrorCode type must be an enum that implements `IBizErrorCode`.
   Do not generate a plain enum, implement only `IErrorCode`, or represent a confirmed
   business error as a free-form string constant.
+- When the implementation needs a new `throw new BizException(...)` branch, treat the
+  referenced module ErrorCode enum and constant as part of the same implementation need.
+  Verify both before writing the branch: create the enum when it is absent, or add the
+  confirmed constant when it is missing, provided the exact ErrorCode path is writable by
+  the current task. Never leave code importing an ErrorCode type that was not created.
+- Infer each branch only from confirmed endpoint semantics and the actual business outcome.
+  A declared error code does not by itself justify an exception branch when the confirmed
+  behavior treats that outcome as successful.
 - Prefer letting the `service` task create or maintain the module error-code enum because it
   owns the business failure branches that consume those codes. Reuse the enum when it
   already contains the required constants; otherwise create or extend the single
@@ -16,9 +24,10 @@
   not create one enum per Controller method.
 - This is a recommended ownership pattern, not an exclusive constraint. Follow an explicit
   existing task/module convention when another stage owns the ErrorCode file. If the
-  required file is not writable by the current task, return `plan_mismatch` with
-  `change_request`; do not write a reference to a missing type, substitute another code,
-  use a raw string, or edit the template `common` classes.
+  required enum or constant is missing and its file is not writable by the current task,
+  return `plan_mismatch` with `change_request`; do not write the exception branch, reference
+  a missing type, substitute another code, use a raw string, or edit the template `common`
+  classes.
 
 Follow the existing module's enum and Lombok conventions. With the template defaults, the
 enum constant name becomes `returnCode` through `IErrorCode.getErrorCodeStr()`, while the
@@ -49,8 +58,8 @@ Choose the message deterministically from the first available source:
    confirmed business object/action.
 
 For the fallback in step 3, translate only semantics clearly present in the code name. For
-example, `*_NOT_FOUND` describes the confirmed business object as not found,
-`*_ALREADY_EXISTS` as already existing, `*_CONFLICT` as a business conflict,
+example, `*_ALREADY_EXISTS` describes the confirmed business object as already existing,
+`*_CONFLICT` as a business conflict,
 `*_QUERY_FAILED` as a failed query, and `*_CREATE_FAILED`, `*_UPDATE_FAILED`, or
 `*_DELETE_FAILED` as the corresponding failed action. For a generic code whose precise
 reason is not confirmed, use the endpoint's business action plus a neutral failure phrase;
@@ -77,7 +86,6 @@ request bodies, raw upstream payloads, or exception messages as formatting argum
 @Getter
 @RequiredArgsConstructor
 public enum ProductErrorCode implements IBizErrorCode {
-    PRODUCT_NOT_FOUND("Product not found"),
     PRODUCT_STATUS_CONFLICT("Product status does not allow {0}");
 
     private final String errorMessage;
@@ -113,10 +121,6 @@ with those used by the confirmed Endpoint artifacts.
   faults follow the project's existing global handling.
 
 ```java
-Product product = productRepository.findById(productId);
-if (product == null) {
-    throw new BizException(ProductErrorCode.PRODUCT_NOT_FOUND);
-}
 if (!product.canPerform(action)) {
     throw new BizException(ProductErrorCode.PRODUCT_STATUS_CONFLICT, action);
 }

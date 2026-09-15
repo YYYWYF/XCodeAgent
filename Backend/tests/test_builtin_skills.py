@@ -169,6 +169,7 @@ class BuiltinSkillsTests(unittest.TestCase):
         self.assertIn("Prefer raising endpoint-facing `BizException`", error_handling)
         self.assertIn("must be an enum that implements `IBizErrorCode`", error_handling)
         self.assertIn("constructing `BizException` with that enum", error_handling)
+        self.assertIn("Never leave code importing an ErrorCode type that was not created", error_handling)
         for result_name in (
             "already_satisfied",
             "contract_mismatch",
