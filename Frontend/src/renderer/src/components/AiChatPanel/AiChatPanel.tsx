@@ -145,8 +145,6 @@ import {
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
   pendingDagOwnerSessionId,
-  planningRefreshInterruption,
-  resolvePendingPlanGuard,
   stageOutputPhase
 } from './stageOutputState'
 import {
@@ -2832,39 +2830,40 @@ export default function AiChatPanel({
     pendingDagExecution,
     applicationLifecycle
   )
-  const pendingPlanGuard = resolvePendingPlanGuard(applicationLifecycle)
   const currentSessionId = activeSessionId || ''
+  const pendingPlanOwnerSessionId = applicationOwnership.pendingPlan?.ownerSessionId
+  const pendingPlanActionable = Boolean(
+    applicationOwnership.actionablePending &&
+      applicationOwnership.state !== 'invalid_pending_owner'
+  )
   const pendingPlanOwnedByCurrentSession = Boolean(
-    pendingPlanGuard.locked &&
-      pendingPlanGuard.ownerSessionId &&
-      pendingPlanGuard.ownerSessionId === currentSessionId
+    pendingPlanActionable &&
+      pendingPlanOwnerSessionId &&
+      pendingPlanOwnerSessionId === currentSessionId
   )
   // ownerSessionId 缺失时不能把所有会话误判为 owner 以外的会话，否则会造成全局只读。
   const pendingPlanOwnedByOtherSession = Boolean(
-    pendingPlanGuard.locked &&
-      pendingPlanGuard.ownerSessionId &&
-      pendingPlanGuard.ownerSessionId !== currentSessionId
+    pendingPlanActionable &&
+      pendingPlanOwnerSessionId &&
+      pendingPlanOwnerSessionId !== currentSessionId
   )
-  const invalidPendingPlanProjection = Boolean(
-    pendingPlanGuard.locked && !pendingPlanGuard.ownerSessionId
-  )
-  const pendingPlanLockActive = pendingPlanOwnedByCurrentSession || pendingPlanOwnedByOtherSession
+  const invalidPendingPlanProjection = applicationOwnership.state === 'invalid_pending_owner'
   useEffect(() => {
     if (!invalidPendingPlanProjection) return
     // 无 owner 的 PendingPlan projection 只记录诊断，不升级为全应用会话锁。
     console.error(
-      '[PendingPlanGuard] invalid pending-plan projection: ownerSessionId is missing.',
+      '[PendingPlanOwnership] invalid pending-plan projection: ownerSessionId is missing.',
       {
         applicationId: application.id,
-        planningRunId: pendingPlanGuard.planningRunId,
-        workflowRunId: pendingPlanGuard.workflowRunId
+        planningRunId: applicationOwnership.pendingPlan?.planningRunId,
+        workflowRunId: applicationOwnership.pendingPlan?.workflowRunId
       }
     )
   }, [
     application.id,
-    invalidPendingPlanProjection,
-    pendingPlanGuard.planningRunId,
-    pendingPlanGuard.workflowRunId
+    applicationOwnership.pendingPlan?.planningRunId,
+    applicationOwnership.pendingPlan?.workflowRunId,
+    invalidPendingPlanProjection
   ])
   const hasOwnedPendingPlan = Boolean(pendingDagExecution && pendingPlanOwnedByCurrentSession)
   const planningSessionRunActive = isApplicationPlanningPhase && planningPhaseRunning
@@ -2880,7 +2879,6 @@ export default function AiChatPanel({
   const phaseSessionRunActive =
     Boolean(phaseExecution) ||
     planningSessionRunActive ||
-    pendingPlanLockActive ||
     applicationOwnership.state === 'owned' ||
     applicationOwnership.state === 'conflicted'
   const applicationOwnerSession = applicationOwnership.owner
@@ -2908,15 +2906,14 @@ export default function AiChatPanel({
           ? 'stopping'
           : applicationOwnerStatus === 'running'
             ? 'running'
-            : phaseExecution?.status ||
-              (pendingPlanLockActive ? 'awaiting_user' : 'running')
+            : phaseExecution?.status || 'running'
   const phaseExecutionLabel =
     applicationOwnership.owner?.workbenchPhase
       ? WORKBENCH_PHASE_AGENTS[applicationOwnership.owner.workbenchPhase].label
       : WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label
   const workflowInputLocked =
     workspaceBusy ||
-    pendingPlanLockActive ||
+    pendingPlanActionable ||
     planningMutationBlocked(planningState)
   const displayedSessionRunStates =
     planningSessionRunActive && existingPlanningSession
@@ -3275,7 +3272,6 @@ export default function AiChatPanel({
     () => latestDagGenerationSnapshot(stageOutputMessages, applicationLifecycle),
     [applicationLifecycle, stageOutputMessages]
   )
-  const interruptedPlanningRun = planningRefreshInterruption(applicationLifecycle)
   const dagConfirmationPlan = useMemo(
     () => (hasOwnedPendingPlan ? currentDagConfirmationPlan(stageOutputWorkflow) : undefined),
     [hasOwnedPendingPlan, stageOutputWorkflow]
@@ -3310,9 +3306,11 @@ export default function AiChatPanel({
       stageOutputWorkflow
     ]
   )
-  const currentStageOutputPhase = interruptedPlanningRun
-    ? 'generation'
-    : stageOutputPhase(stageOutputWorkflow, currentDagSnapshot, dagConfirmationPlan)
+  const currentStageOutputPhase = stageOutputPhase(
+    stageOutputWorkflow,
+    currentDagSnapshot,
+    dagConfirmationPlan
+  )
   const stageOutputSessionKey =
     hasOwnedPendingPlan && pendingDagExecution
       ? `${application.id}:pending-dag:${pendingDagExecution.runId}`
@@ -3767,7 +3765,7 @@ export default function AiChatPanel({
       continuation?: WorkflowDevelopmentContinuation
     }
   ): Promise<void> => {
-    if (pendingPlanLockActive) return
+    if (pendingPlanActionable) return
     const targetKey = `entity:${entityId}`
     setInteractingDetailTargetKey(targetKey)
     setGeneratingDetailTargetKey(hasDetailPlan ? '' : targetKey)
@@ -3787,7 +3785,7 @@ export default function AiChatPanel({
 
   /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置页面、Endpoint 或实体目标。 */
   const handleQuickTaskStart = async (task: QuickTaskItem): Promise<void> => {
-    if (pendingPlanLockActive) return
+    if (pendingPlanActionable) return
     setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
@@ -4856,14 +4854,7 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             {stageOutputMatchesSession ? (
-              interruptedPlanningRun ? (
-                <Alert
-                  message="任务规划已中断"
-                  description={interruptedPlanningRun.message}
-                  showIcon
-                  type="warning"
-                />
-              ) : rightPanel.view === 'confirmation' && dagConfirmationPlan ? (
+              rightPanel.view === 'confirmation' && dagConfirmationPlan ? (
                 <StageOutputPanel
                   confirmationDisabled={
                     loading ||

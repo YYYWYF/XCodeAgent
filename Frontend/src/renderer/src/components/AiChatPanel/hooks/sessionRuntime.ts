@@ -74,18 +74,6 @@ export function createSessionIdentity(input: {
   }
 }
 
-/** 判断两个会话是否竞争同一应用阶段的单会话执行权，保留阶段级兼容判断。 */
-export function isSameSessionExecutionScope(
-  left: SessionIdentity,
-  right: SessionIdentity
-): boolean {
-  return (
-    left.workspaceRoot === right.workspaceRoot &&
-    left.workflowId === right.workflowId &&
-    left.workbenchPhase === right.workbenchPhase
-  )
-}
-
 /** 判断节点是否属于当前唯一需要跨会话互斥的 DAG Planning 阶段。 */
 export function isDagPlanningPhase(value: unknown): boolean {
   return value === DAG_PLANNING_PHASE

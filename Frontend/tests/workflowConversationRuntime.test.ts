@@ -7,9 +7,9 @@ import {
   currentDagConfirmationPlan,
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
-  pendingDagOwnerSessionId,
-  resolvePendingPlanGuard
+  pendingDagOwnerSessionId
 } from '../src/renderer/src/components/AiChatPanel/stageOutputState'
+import { resolveApplicationMutationOwnership } from '../src/renderer/src/components/AiChatPanel/applicationOwnership'
 import {
   createSessionIdentity,
   type SessionExecutionEntry,
@@ -320,13 +320,27 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
     assert.equal(lifecycleState.extensions?.planningRefresh?.status, 'awaiting_confirmation')
 
     // PendingPlan owner 仍是唯一可操作会话，其他会话不能借 lifecycle guard 绕过归属。
-    const guard = resolvePendingPlanGuard(pendingLifecycle)
-    assert.equal(guard.locked, true)
-    assert.equal(guard.ownerSessionId, ownerIdentity.sessionId)
-    assert.equal(guard.ownerSessionId === ownerIdentity.sessionId, true)
-    assert.equal(guard.ownerSessionId === otherIdentity.sessionId, false)
+    const ownership = resolveApplicationMutationOwnership(pendingLifecycle, [
+      {
+        id: ownerIdentity.sessionId,
+        title: 'Owner',
+        threadId: ownerIdentity.threadId,
+        workbenchPhase: 'development'
+      },
+      {
+        id: otherIdentity.sessionId,
+        title: 'Other',
+        threadId: otherIdentity.threadId,
+        workbenchPhase: 'development'
+      }
+    ])
+    assert.equal(ownership.state, 'owned')
+    assert.equal(ownership.pendingPlan?.ownerSessionId, ownerIdentity.sessionId)
+    assert.equal(ownership.pendingPlan?.workflowRunId, 'workflow-runtime-test')
+    assert.equal(ownership.owner?.sessionId, ownerIdentity.sessionId)
+    assert.equal(ownership.owner?.sessionId === otherIdentity.sessionId, false)
     assert.equal(
-      guard.locked && guard.ownerSessionId !== otherIdentity.sessionId,
+      ownership.owner?.sessionId !== otherIdentity.sessionId,
       true,
       '非 owner session 必须继续受到 PendingPlan guard 保护'
     )

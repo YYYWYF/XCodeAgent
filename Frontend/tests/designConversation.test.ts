@@ -52,7 +52,6 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
 import {
   createSessionIdentity,
-  isSameSessionExecutionScope,
   isSessionExecutionOwner
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import {
@@ -808,24 +807,6 @@ const designRevisionIdentity = createSessionIdentity({
   entryKey: 'revision-plan:change-1:gate-1',
   revisionContext: boundDesignRevisionContext
 })
-assert.equal(
-  isSameSessionExecutionScope(designRevisionIdentity, {
-    ...designRevisionIdentity,
-    key: 'another-session',
-    sessionId: 'another-session',
-    editorMode: 'backend'
-  }),
-  true
-)
-assert.equal(
-  isSameSessionExecutionScope(designRevisionIdentity, {
-    ...designRevisionIdentity,
-    key: 'development-session',
-    sessionId: 'development-session',
-    workbenchPhase: 'development'
-  }),
-  false
-)
 assert.equal(
   isSessionExecutionOwner(
     { identity: designRevisionIdentity, status: 'running', conversation: false },

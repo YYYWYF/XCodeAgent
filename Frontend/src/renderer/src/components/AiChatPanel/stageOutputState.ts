@@ -1,5 +1,5 @@
 import type { DagGenerationSnapshot, DagGenerationUnitRecord } from '../../service/agUiAgent'
-import { newerDagGenerationSnapshot, readDagGenerationSnapshot } from '../../service/agUiAgent'
+import { newerDagGenerationSnapshot } from '../../service/agUiAgent'
 import { processStepsForDisplay } from '../../service/processStepHistory'
 import type {
   ApplicationLifecycle,
@@ -14,13 +14,6 @@ import type { AgentChatMessage } from './types'
 
 export type StageOutputPhase = 'generation' | 'confirmation' | 'other'
 
-export type PendingPlanGuard = {
-  locked: boolean
-  ownerSessionId?: string
-  planningRunId?: string
-  workflowRunId?: string
-}
-
 /** 读取并校验 lifecycle GET 临时附加的 Planning refresh 投影。 */
 export function planningRefreshState(
   lifecycle: ApplicationLifecycle | undefined
@@ -29,47 +22,12 @@ export function planningRefreshState(
   if (
     !value ||
     value.schemaVersion !== 'planning-refresh.v1' ||
-    !['pending_plan', 'abandoned', 'active_planning_run', 'confirmed_plan', 'none'].includes(
-      value.source
-    ) ||
-    ![
-      'awaiting_confirmation',
-      'abandoned',
-      'planning',
-      'planning_run_interrupted',
-      'confirmed',
-      'idle'
-    ].includes(value.status)
+    !['pending_plan', 'none'].includes(value.source) ||
+    !['awaiting_confirmation', 'idle'].includes(value.status)
   ) {
     return undefined
   }
   return value
-}
-
-/** 只按当前 PendingPlan 的刷新投影解析会话门禁，不读取 execution 或交互状态。 */
-export function resolvePendingPlanGuard(
-  lifecycle: ApplicationLifecycle | undefined
-): PendingPlanGuard {
-  const refresh = lifecycle?.extensions?.planningRefresh
-
-  if (refresh?.source !== 'pending_plan' || refresh.status !== 'awaiting_confirmation') {
-    return { locked: false }
-  }
-
-  return {
-    locked: true,
-    ownerSessionId: refresh.ownerSessionId,
-    planningRunId: refresh.planningRunId,
-    workflowRunId: refresh.workflowRunId
-  }
-}
-
-/** 返回 Backend 重启导致的明确中断状态，禁止把磁盘 active 误当成仍在执行。 */
-export function planningRefreshInterruption(
-  lifecycle: ApplicationLifecycle | undefined
-): PlanningRefreshState | undefined {
-  const state = planningRefreshState(lifecycle)
-  return state?.status === 'planning_run_interrupted' ? state : undefined
 }
 
 /** 从服务端草稿身份中读取可比较键，确保同 run/thread 的旧确认卡不会串到新草稿。 */
@@ -149,9 +107,7 @@ export function pendingDagConfirmationExecution(
           )
         : pending
       if (identityMatchedPending) return identityMatchedPending
-      const threadId = String(
-        recovery.threadId || ownerSessionThreadId || exact?.threadId || ''
-      ).trim()
+      const threadId = String(ownerSessionThreadId || exact?.threadId || '').trim()
       if (!recovery.workflowRunId || !threadId) return undefined
       const now = lifecycle?.updatedAt || new Date(0).toISOString()
       const scope = recovery.buildExecutionScope || { type: 'application', targetId: 'application' }
@@ -175,15 +131,7 @@ export function pendingDagConfirmationExecution(
         updatedAt: now
       }
     }
-    // Planning refresh 与 execution 来自不同帧：若同 Run 已进入待确认，优先采用该精确
-    // execution；否则选择 revision 最新的一张卡，不能让历史 Pending 抢占当前会话锁。
-    if (recovery.source === 'active_planning_run' && recovery.status === 'planning') {
-      const exact = recovery.workflowRunId
-        ? lifecycle?.activeExecutions?.[recovery.workflowRunId]
-        : undefined
-      return isAwaitingDagConfirmation(exact) ? exact : pending
-    }
-    // abandoned / confirmed / idle / interrupted 都是明确的非 Pending 状态，禁止旧 execution 复活。
+    // none/idle 是明确的非 Pending 状态，禁止旧 execution 复活。
     return undefined
   }
   return pending
@@ -226,7 +174,7 @@ export function pendingDagConfirmationWorkflow(
   ) {
     return {
       runId: recovery.workflowRunId || execution.runId,
-      threadId: recovery.threadId || execution.threadId,
+      threadId: execution.threadId,
       events: [],
       summary: {
         status: 'requires_user_input',
@@ -292,16 +240,8 @@ export function latestDagGenerationSnapshot(
     if (reachedPreviousRun) break
   }
   if (!recovery) return latest
-  if (recovery.source === 'active_planning_run' && recovery.status === 'planning') {
-    return readRecoveredDagGenerationSnapshot(recovery.dagGeneration) || latest
-  }
   // Refresh 已给出权威终态或 Pending 时，不允许历史消息里的旧 DAG 再次占据阶段产物。
   return undefined
-}
-
-/** 复用 AG-UI 的严格 Snapshot parser 读取 Backend refresh 投影。 */
-function readRecoveredDagGenerationSnapshot(value: unknown): DagGenerationSnapshot | undefined {
-  return readDagGenerationSnapshot(value)
 }
 
 /** 仅在当前 Workflow 正处于 DAG 确认时读取任务计划，避免历史确认数据污染后续阶段。 */

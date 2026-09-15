@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any, Literal, TypedDict
 
 from app.services.build_task_confirmation import build_task_confirmation_read_model
@@ -126,18 +125,13 @@ def resolve_actionable_pending_plan(
 
 def resolve_planning_refresh_state(
     workspace: str,
-    *,
-    lifecycle: Any | None = None,
-    runtime_active: Callable[[str], bool] | None = None,
 ) -> PlanningRefreshState:
     """只按当前 PendingPlan 是否仍可行动返回 awaiting_confirmation 或 idle。
 
     旧的 awaiting_user、activeRunId、resourceLocks 或其他运行时残留不参与判断；
-    Confirm/Abandon 的清理残留由其精确终态身份压制。保留的两个旧调用参数仅用于
-    平滑切换读取调用方，函数不会读取它们。
+    Confirm/Abandon 的清理残留由其精确终态身份压制。
     """
 
-    del lifecycle, runtime_active
     actionable = resolve_actionable_pending_plan(workspace)
     if actionable is None:
         return {

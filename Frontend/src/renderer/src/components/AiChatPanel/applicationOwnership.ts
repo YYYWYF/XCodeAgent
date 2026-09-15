@@ -1,8 +1,7 @@
 import type {
   ApplicationLifecycle,
   WorkbenchExecution,
-  WorkbenchExecutionStatus,
-  WorkflowRunPayload
+  WorkbenchExecutionStatus
 } from '../../typings'
 import type { ChatSessionSummary } from '../../service/chatSessions'
 import type { WorkbenchPhase } from '../../workbenchPhase'
@@ -19,19 +18,21 @@ export type ApplicationMutationOwner = {
   workbenchPhase?: WorkbenchPhase
   status: string
   runId?: string
-  source: 'active_dag_execution' | 'active_planning_run' | 'pending_plan'
+  source: 'active_dag_execution' | 'pending_plan'
+}
+
+export type PendingPlanOwnership = {
+  ownerSessionId?: string
+  planningRunId?: string
+  workflowRunId?: string
 }
 
 export type ApplicationMutationOwnership = {
   state: 'free' | 'owned' | 'conflicted' | 'invalid_pending_owner'
   owner?: ApplicationMutationOwner
   actionablePending: boolean
-}
-
-export type CurrentWorkflowInteraction = {
-  mode: string
-  status?: string
-  source: 'current_clarification' | 'historical_dag_confirmation'
+  /** 保留当前 Pending 的最小身份，供 UI 锁定和诊断共用同一选择结果。 */
+  pendingPlan?: PendingPlanOwnership
 }
 
 type OwnershipCandidate = ApplicationMutationOwner & {
@@ -152,23 +153,31 @@ export function resolveApplicationMutationOwnership(
       refresh.source === 'pending_plan' &&
       refresh.status === 'awaiting_confirmation'
   )
+  const pendingPlan = actionablePending
+    ? {
+        ownerSessionId: String(refresh?.ownerSessionId || '').trim() || undefined,
+        planningRunId: String(refresh?.planningRunId || '').trim() || undefined,
+        workflowRunId: String(refresh?.workflowRunId || '').trim() || undefined
+      }
+    : undefined
   if (actionablePending) {
-    const ownerSessionId = String(refresh?.ownerSessionId || '').trim()
+    const ownerSessionId = pendingPlan?.ownerSessionId
     // PendingPlan 缺少 owner 时只报告非法投影，不能把所有历史会话变成 readonly。
     if (!ownerSessionId) {
-      return { state: 'invalid_pending_owner', actionablePending: true }
+      return { state: 'invalid_pending_owner', actionablePending: true, pendingPlan }
     }
-    const session = sessionForOwner(sessions, ownerSessionId, refresh?.threadId)
+    const session = sessionForOwner(sessions, ownerSessionId)
     return {
       state: 'owned',
       actionablePending: true,
+      pendingPlan,
       owner: {
         sessionId: ownerSessionId,
-        threadId: String(refresh?.threadId || session?.threadId || '').trim() || undefined,
+        threadId: session?.threadId,
         title: session?.title,
         workbenchPhase: session?.workbenchPhase,
         status: 'awaiting_confirmation',
-        runId: refresh?.workflowRunId,
+        runId: pendingPlan?.workflowRunId,
         source: 'pending_plan'
       }
     }
@@ -197,27 +206,6 @@ export function resolveApplicationMutationOwnership(
     }
   })
 
-  const planningRun =
-    refresh?.schemaVersion === 'planning-refresh.v1' &&
-    refresh.source === 'active_planning_run' &&
-    refresh.status === 'planning'
-      ? refresh
-      : undefined
-  if (planningRun) {
-    const threadId = String(planningRun.threadId || '').trim() || undefined
-    const session = sessionForOwner(sessions, undefined, threadId)
-    candidates.push({
-      sessionId: session?.id,
-      threadId,
-      title: session?.title,
-      workbenchPhase: session?.workbenchPhase,
-      status: 'running',
-      runId: planningRun.workflowRunId,
-      source: 'active_planning_run',
-      updatedAt: ''
-    })
-  }
-
   const owners = mergeOwnershipCandidates(candidates)
   if (owners.length === 0) return { state: 'free', actionablePending: false }
   // DAG 活动状态出现多个无法归并的 thread 时 fail closed，避免任意一个会话误获写权限。
@@ -244,38 +232,4 @@ export function applicationMutationReadonlyForSession(
     identity && ownership.owner.threadId && identity.threadId === ownership.owner.threadId
   )
   return !sameSession && !sameThread
-}
-
-/** 从 Workflow 投影中读取当前交互，只有当前 clarification 缺失时才回退历史 DAG。 */
-export function currentWorkflowInteraction(
-  workflow: WorkflowRunPayload
-): CurrentWorkflowInteraction | undefined {
-  const currentCandidates: unknown[] = [
-    workflow.summary.clarification,
-    workflow.state?.clarification,
-    workflow.result?.clarification,
-    workflow.summary.reviewPhaseConfirmation,
-    workflow.summary.acceptancePhaseConfirmation
-  ]
-  const current = currentCandidates
-    .map(readWorkflowInteraction)
-    .find((interaction): interaction is Omit<CurrentWorkflowInteraction, 'source'> =>
-      Boolean(interaction)
-    )
-  if (current) return { ...current, source: 'current_clarification' }
-
-  const historical = readWorkflowInteraction(workflow.summary.buildTaskPlanConfirmation)
-  return historical?.mode === 'build_task_plan_confirmation'
-    ? { ...historical, source: 'historical_dag_confirmation' }
-    : undefined
-}
-
-/** 从未知投影值中读取带 mode 的交互载荷。 */
-function readWorkflowInteraction(
-  value: unknown
-): Omit<CurrentWorkflowInteraction, 'source'> | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-  const record = value as Record<string, unknown>
-  const mode = String(record.mode || '').trim()
-  return mode ? { mode, status: String(record.status || '').trim() || undefined } : undefined
 }
