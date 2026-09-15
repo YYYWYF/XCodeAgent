@@ -325,6 +325,9 @@ function AppEntryContent(): JSX.Element {
                     }
                   : () => void planningRuntimeController.retryCurrentFailure(activeApplication.id)
             }
+            onRetryTemplateReconcile={() =>
+              void planningRuntimeController.retryTemplateReconcile(activeApplication.id)
+            }
             generatingTemplate={planningController.generatingAppIds.has(activeApplication.id)}
             planningState={activePlanning}
             theme={theme}

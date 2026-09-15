@@ -25,6 +25,7 @@ from app.domain.application_lifecycle import (
 )
 from app.domain.application_revision import RevisionImpact, RevisionTarget
 from app.protocols.application_page_planning import (
+    _prepare_retry_template_reconcile_payload,
     application_page_planning_capabilities,
     build_application_page_planning_ag_ui_stream,
 )
@@ -860,10 +861,18 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             self.assertEqual(persisted["confirmation_status"], "confirmed")
             self.assertEqual(
                 _route_start(
-                    {"workspace": str(workspace), "resume_from": "technical_planning"}
+                    {
+                        "workspace": str(workspace),
+                        "resume_from": "template_reconcile",
+                        "workflow_action": "retry_template_reconcile",
+                    }
                 ),
                 "template_reconcile",
             )
+            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "只能通过"):
+                _route_start(
+                    {"workspace": str(workspace), "resume_from": "template_reconcile"}
+                )
 
             issued = SimpleNamespace(
                 change_id=active.change_id,
@@ -1077,6 +1086,49 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
         self.assertIs(result, sentinel)
         self.assertEqual(stream.call_args.kwargs["payload"]["workflowScope"], "application_planning")
+
+    def test_template_reconcile_retry_rebuilds_server_owned_thread_and_request(self) -> None:
+        """模板更新重试只能重用 lifecycle 绑定的 Planning 身份，不能信任客户端输入。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            plan_path = Path(directory) / ".xcodeagent" / "plans" / "technical-plan.json"
+            plan_path.parent.mkdir(parents=True)
+            plan_path.write_text(
+                json.dumps(
+                    {"artifact_type": "technical-plan", "confirmation_status": "confirmed"}
+                ),
+                encoding="utf-8",
+            )
+            active = SimpleNamespace(
+                status="template_reconcile_failed",
+                planning_thread_id="authoritative-thread",
+                request="生命周期绑定的修订请求",
+            )
+            lifecycle = SimpleNamespace(active_formal_revision=active)
+            attempt = SimpleNamespace(status="FAILED", phase="FAILED")
+            with patch(
+                "app.protocols.application_page_planning.load_application_lifecycle",
+                return_value=lifecycle,
+            ), patch(
+                "app.protocols.application_page_planning.load_current_attempt",
+                return_value=attempt,
+            ):
+                result = _prepare_retry_template_reconcile_payload(
+                    {
+                        "threadId": "forged-thread",
+                        "request": "forged request",
+                        "forwardedProps": {
+                            "workspaceRoot": directory,
+                            "workflowAction": "retry_template_reconcile",
+                        },
+                    }
+                )
+
+        self.assertEqual(result["threadId"], "authoritative-thread")
+        self.assertEqual(result["request"], "生命周期绑定的修订请求")
+        self.assertEqual(
+            result["forwardedProps"]["workflowAction"], "retry_template_reconcile"
+        )
 
 
 if __name__ == "__main__":

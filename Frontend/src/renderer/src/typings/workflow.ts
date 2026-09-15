@@ -1260,6 +1260,7 @@ export type WorkflowRunPayload = {
 export type WorkflowAction =
   | 'retry_failed_tasks'
   | 'retry_code_review'
+  | 'retry_template_reconcile'
   | 'start_design_revision'
   | 'product_stage_conversation'
   | 'start_technical_revision'

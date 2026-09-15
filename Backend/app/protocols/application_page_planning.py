@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
+from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,6 +36,7 @@ from app.services.requirement_spec import (
     SaveRequirementSpecDraftRequest,
     save_requirement_spec_draft,
 )
+from app.services.template_reconcile.runtime_v2 import load_current_attempt
 
 
 REQUIREMENT_SPEC_DRAFT_EVENT_NAME = "requirement-spec-draft"
@@ -75,6 +78,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "stateSnapshotKey": "workflow",
         "customEventName": "workflow-run",
         "recoveryActionField": "forwardedProps.applicationPlanningRecovery",
+        "workflowActions": ["retry_template_reconcile"],
         "phases": [
             "requirements",
             "product_planning",
@@ -214,6 +218,27 @@ def build_application_page_planning_ag_ui_stream(
                     )
                     or "start_design_revision"
                 ),
+                accept=accept,
+            )
+    try:
+        retry_template_reconcile = _retry_template_reconcile_input(normalized_payload)
+    except Exception as exc:
+        return _build_start_design_revision_error_stream(
+            payload=normalized_payload,
+            error=exc,
+            action="retry_template_reconcile",
+            accept=accept,
+        )
+    if retry_template_reconcile:
+        try:
+            normalized_payload = _prepare_retry_template_reconcile_payload(
+                normalized_payload,
+            )
+        except Exception as exc:
+            return _build_start_design_revision_error_stream(
+                payload=normalized_payload,
+                error=exc,
+                action="retry_template_reconcile",
                 accept=accept,
             )
     draft_input = _requirement_spec_draft_input(normalized_payload)
@@ -515,6 +540,56 @@ def _start_design_revision_input(payload: dict[str, Any]) -> dict[str, Any] | No
     if not isinstance(value, dict):
         raise ValueError("revision action 必须提供 revisionRequest。")
     return value
+
+
+def _retry_template_reconcile_input(payload: dict[str, Any]) -> bool:
+    """识别模板更新重试意图，并拒绝客户端选择 Graph 节点。"""
+
+    forwarded_props = payload.get("forwardedProps")
+    if not isinstance(forwarded_props, dict):
+        return False
+    if str(forwarded_props.get("workflowAction") or "").strip() != "retry_template_reconcile":
+        return False
+    for key in ("resumeFrom", "resume_from", "node"):
+        if key in forwarded_props or key in payload:
+            raise ValueError("retry_template_reconcile 不接受客户端节点或 resume_from。")
+    return True
+
+
+def _prepare_retry_template_reconcile_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """按权威 lifecycle 重建失败模板更新的唯一线程、请求和受控恢复入口。"""
+
+    forwarded_props = dict(payload.get("forwardedProps") or {})
+    workspace = str(forwarded_props.get("workspaceRoot") or "").strip()
+    if not workspace:
+        application = forwarded_props.get("application")
+        workspace = str(application.get("workspaceRoot") or "").strip() if isinstance(application, dict) else ""
+    if not workspace:
+        raise ValueError("retry_template_reconcile 必须提供 workspaceRoot。")
+    lifecycle = load_application_lifecycle(workspace)
+    active = lifecycle.active_formal_revision if lifecycle is not None else None
+    if active is None or active.status != "template_reconcile_failed":
+        raise ValueError("当前没有可重试的 Template Reconcile 失败记录。")
+    plan_path = Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+    try:
+        technical_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("已确认的 TechnicalPlan 不可读取，不能重试模板更新。") from exc
+    if not isinstance(technical_plan, dict) or technical_plan.get("artifact_type") != "technical-plan" or technical_plan.get("confirmation_status") != "confirmed":
+        raise ValueError("TechnicalPlan 尚未确认，不能重试模板更新。")
+    attempt = load_current_attempt(workspace)
+    if attempt is None or attempt.status != "FAILED" or attempt.phase != "FAILED":
+        raise ValueError("当前没有可重试的失败 Template Reconcile Attempt。")
+    return {
+        **payload,
+        "threadId": active.planning_thread_id,
+        "request": active.request,
+        "forwardedProps": {
+            **forwarded_props,
+            "workspaceRoot": workspace,
+            "workflowAction": "retry_template_reconcile",
+        },
+    }
 
 
 def _prepare_start_design_revision_payload(

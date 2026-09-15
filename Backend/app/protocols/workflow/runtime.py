@@ -561,6 +561,7 @@ def build_workflow_ag_ui_stream(
             initial_state: dict[str, Any] = {
                 **checkpoint_values,
                 "request": request,
+                "workflow_action": workflow_inputs.get("workflow_action") or "",
                 "selected_skill_names": list(selected_skill_names),
                 "timeline": [],
                 "observability": observability,

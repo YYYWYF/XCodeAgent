@@ -75,13 +75,16 @@ def _route_start(state: ProjectState) -> str:
     if resume_from == "design_intent_analysis":
         return "design_intent_analysis"
     if (
-        resume_from == "technical_planning"
+        resume_from == "template_reconcile"
+        and state.get("workflow_action") == "retry_template_reconcile"
         and lifecycle is not None
         and lifecycle.active_formal_revision is not None
         and lifecycle.active_formal_revision.status == "template_reconcile_failed"
     ):
-        # Reconcile 失败后的恢复必须复用已确认的 TechnicalPlan，不能重放旧确认动作。
+        # 专用重试必须复用已确认的 TechnicalPlan，不能重放旧确认动作。
         return "template_reconcile"
+    if resume_from == "template_reconcile":
+        raise ApplicationLifecycleConflictError("Template Reconcile 只能通过 retry_template_reconcile 动作重试。")
     allowed_resume_stages = {
         "requirements": {
             ApplicationLifecycleStage.COLLECTING_REQUIREMENT,

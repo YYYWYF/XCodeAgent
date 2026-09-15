@@ -181,6 +181,18 @@ export class ApplicationPlanningRuntime {
     await this.runPlanning(buildApplicationPlanningRequest(current.application))
   }
 
+  /** 通过独立 AG-UI 动作重试失败的 Template Reconcile，不伪造技术规划恢复。 */
+  async retryTemplateReconcile(): Promise<void> {
+    const current = this.requireCurrentState()
+    this.assertMutationAllowed()
+    await this.runPlanning(
+      buildApplicationPlanningRequest(current.application),
+      undefined,
+      undefined,
+      'retry_template_reconcile'
+    )
+  }
+
   /** 正式设计修订直接使用原 Planning 会话发送用户请求。 */
   async startDesignRevision(input: WorkflowDesignStageRevisionStart): Promise<void> {
     this.assertMutationAllowed()
@@ -374,7 +386,8 @@ export class ApplicationPlanningRuntime {
   private async runPlanning(
     messageText: string,
     interaction?: ApplicationPlanningInteraction,
-    designRevision?: WorkflowDesignStageRevisionStart
+    designRevision?: WorkflowDesignStageRevisionStart,
+    workflowAction?: SendWorkflowMessageOptions['workflowAction']
   ): Promise<void> {
     const current = this.requireCurrentState()
     if (!current.application.workspaceRoot) return
@@ -388,7 +401,7 @@ export class ApplicationPlanningRuntime {
         const merged = await this.sendMessageWithinTransport(
           currentToken,
           messageText,
-          this.planningRunOptions(latest, interaction, designRevision)
+          this.planningRunOptions(latest, interaction, designRevision, workflowAction)
         )
         await this.handlePlanningResult(currentToken, merged)
       }, {
@@ -397,14 +410,14 @@ export class ApplicationPlanningRuntime {
       })
     } catch (reason) {
       if (token === undefined || !this.isCurrentRun(token)) {
-        if (interaction || designRevision) throw reason
+        if (interaction || designRevision || workflowAction) throw reason
         return
       }
       const outcome = await this.handleExecutionFailure(
         reason,
         planningRuntimeError(reason, '创建规划运行失败')
       )
-      if ((interaction || designRevision) && outcome !== 'recovered') throw reason
+      if ((interaction || designRevision || workflowAction) && outcome !== 'recovered') throw reason
     }
   }
 
@@ -412,18 +425,19 @@ export class ApplicationPlanningRuntime {
   private planningRunOptions(
     current: ApplicationPlanningCurrentState,
     interaction?: ApplicationPlanningInteraction,
-    designRevision?: WorkflowDesignStageRevisionStart
+    designRevision?: WorkflowDesignStageRevisionStart,
+    workflowAction?: SendWorkflowMessageOptions['workflowAction']
   ): SendWorkflowMessageOptions {
     return {
       application: current.application, applicationPlanningInteraction: interaction, editorMode: 'frontend',
       originalRequest: buildApplicationPlanningRequest(current.application),
-      workflowAction: designRevision ? 'start_design_revision' : undefined,
+      workflowAction: designRevision ? 'start_design_revision' : workflowAction,
       revisionRequest: designRevision ? {
         source: 'conversation_handoff', formalBranch: designRevision.impact.formalBranch,
         target: designRevision.target, request: designRevision.request,
         confirmedImpact: { interactionId: designRevision.impact.interactionId }
       } : undefined,
-      workflowDebug: interaction || designRevision ? undefined : { enabled: true, resumeFrom: planningResumeFrom(current.lifecycle) },
+      workflowDebug: interaction || designRevision || workflowAction ? undefined : { enabled: true, resumeFrom: planningResumeFrom(current.lifecycle) },
       workflowScope: 'application_planning', workspaceRoot: current.application.workspaceRoot
     }
   }

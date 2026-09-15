@@ -19,6 +19,7 @@ import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/comp
 import { developmentContinuationFromWorkflow } from '../src/renderer/src/components/AiChatPanel/developmentContinuation'
 import DevelopmentContinuationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/DevelopmentContinuationCard'
 import RemainingEntityBindingsCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/RemainingEntityBindingsCard'
+import TemplatePreparingCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/TemplatePreparingCard'
 import WorkflowRunCard, { BuildExecutionRunCard } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import {
   deriveDisplayedPlanExecutionMode,
@@ -70,9 +71,11 @@ import {
   isObjectEditableInPhase,
   workbenchPhaseForNode
 } from '../src/renderer/src/workbenchPhase'
+import { isTemplateReconcileRetryable } from '../src/renderer/src/service/templateApi'
 import type {
   ApplicationLifecycle,
   WorkflowBuildExecutionSlice,
+  WorkflowTemplatePreparation,
   WorkbenchExecution,
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
@@ -714,6 +717,50 @@ test('应用模板卡只允许首次新建且尚未进入开发时显示', () =>
   assert.equal(isApplicationTemplatePreparationEligible('new', false), true)
   assert.equal(isApplicationTemplatePreparationEligible('new', true), false)
   assert.equal(isApplicationTemplatePreparationEligible('existing-workspace', false), false)
+})
+
+test('已失败的 Template Reconcile Attempt 应开放专用重试入口', () => {
+  const lifecycle = planLifecycle(pageExecution())
+  lifecycle.activeFormalRevision = {
+    changeId: 'change-template',
+    formalBranch: 'design_stage_revision',
+    impactInteractionId: 'impact-template',
+    sourceThreadId: 'thread-template',
+    sourceRunId: 'run-template',
+    planningThreadId: 'thread-planning',
+    status: 'template_reconcile_failed'
+  }
+  const failedAttempt: WorkflowTemplatePreparation = {
+    operationType: 'UPDATE',
+    status: 'FAILED',
+    phase: 'FAILED',
+    completedOperations: 2,
+    totalOperations: 4,
+    retryable: true
+  }
+
+  assert.equal(isTemplateReconcileRetryable(lifecycle, failedAttempt), true)
+  assert.equal(
+    isTemplateReconcileRetryable(lifecycle, { ...failedAttempt, retryable: false }),
+    false
+  )
+  assert.equal(
+    isTemplateReconcileRetryable(
+      { ...lifecycle, activeFormalRevision: { ...lifecycle.activeFormalRevision, status: 'template_reconciling' } },
+      failedAttempt
+    ),
+    false
+  )
+
+  const markup = renderToStaticMarkup(
+    createElement(TemplatePreparingCard, {
+      lifecycle,
+      templatePreparation: failedAttempt,
+      onRetry: () => {}
+    })
+  )
+  assert.match(markup, /模板能力更新失败/)
+  assert.match(markup, /重试模板更新/)
 })
 
 test('最近项目订阅会响应应用索引变化并在清理后停止响应', () => {

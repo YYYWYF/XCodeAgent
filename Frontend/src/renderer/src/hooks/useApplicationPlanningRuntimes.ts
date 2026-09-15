@@ -26,6 +26,7 @@ export type ApplicationPlanningRuntimesController = {
   saveRequirementSpec: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['saveRequirementSpec']>) => ReturnType<ApplicationPlanningRuntime['saveRequirementSpec']>
   startDesignRevision: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['startDesignRevision']>) => Promise<void>
   retryCurrentFailure: (applicationId: string) => Promise<void>
+  retryTemplateReconcile: (applicationId: string) => Promise<void>
   reconcileCurrentState: (applicationId: string) => ReturnType<ApplicationPlanningRuntime['reconcileCurrentState']>
   stop: (applicationId: string) => Promise<void>
   subscribeStreamingContent: (applicationId: string, listener: (content: string) => void) => () => void
@@ -137,6 +138,8 @@ export function useApplicationPlanningRuntimes(
     startDesignRevision: (applicationId, ...args) => requireRuntime(applicationId).startDesignRevision(...args),
     /** 使用调用时的当前状态重试。 */
     retryCurrentFailure: (applicationId) => requireRuntime(applicationId).retryCurrentFailure(),
+    /** 使用专用 AG-UI 动作重试 Template Reconcile。 */
+    retryTemplateReconcile: (applicationId) => requireRuntime(applicationId).retryTemplateReconcile(),
     /** 只读同步指定应用当前权威状态。 */
     reconcileCurrentState: (applicationId) => requireRuntime(applicationId).reconcileCurrentState(),
     /** 停止指定应用的会话。 */

@@ -403,6 +403,7 @@ def _workflow_start_node(
                 "product_planning",
                 "ui_confirmation",
                 "technical_planning",
+                "template_reconcile",
                 "project_planning",
             }
             else "requirements"

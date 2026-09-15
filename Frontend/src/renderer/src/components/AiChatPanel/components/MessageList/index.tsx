@@ -283,6 +283,8 @@ type MessageListProps = {
   generatingTemplate?: boolean
   /** lifecycle 仍在模板阶段但当前 renderer 没有对应生成任务。 */
   templateGenerationOrphaned?: boolean
+  /** 二次 Template Reconcile 已由后端记录为可重试的失败 Attempt。 */
+  templateReconcileRetryable?: boolean
   /** 当前应用唯一的 Planning 业务状态。 */
   planningState?: ApplicationPlanningCurrentState
   loading: boolean
@@ -332,6 +334,7 @@ export default function MessageList({
   onEnterDevelopment,
   generatingTemplate,
   templateGenerationOrphaned,
+  templateReconcileRetryable = false,
   planningState,
   loading,
   messages,
@@ -383,16 +386,21 @@ export default function MessageList({
   const canonicalPlanningError = planningSyncError || canonicalPlanningStateError
   const canonicalPlanningFailure =
     canonicalPlanningError || workflowFailureMessage(planningWorkflow)
+  const latestAssistantMessage = findLastAssistantMessage(messages)
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
-  const latestAssistantMessage = findLastAssistantMessage(messages)
+  const templatePreparation =
+    readTemplatePreparation(planningWorkflow) ||
+    readTemplatePreparation(latestAssistantMessage?.workflow)
+  // 模板更新失败与首次 Bootstrap 失败都由下方专用卡片承载，避免再显示没有重试入口的通用错误卡。
+  const templatePreparationFailed = templateGenerationFailed || templateReconcileRetryable
   const latestAssistantMessageError = latestAssistantMessage
     ? latestAssistantMessage.error?.trim() ||
       workflowFailureMessage(latestAssistantMessage.workflow)
     : ''
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
   const showStandaloneError = Boolean(
-    !templateGenerationFailed &&
+    !templatePreparationFailed &&
     !templateGenerationOrphaned &&
     visibleError &&
     visibleError !== latestAssistantMessageError &&
@@ -403,12 +411,13 @@ export default function MessageList({
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
   const pendingPhaseDetail = phasePendingDetail(currentPhase)
-  const templatePreparation = readTemplatePreparation(planningWorkflow)
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
   const templatePreparationVisible =
-    applicationTemplatePreparationEligible &&
     designPhasePlanning &&
-    (generatingTemplate || isTemplatePreparing(applicationLifecycle) || Boolean(templatePreparation))
+    ((applicationTemplatePreparationEligible &&
+      (generatingTemplate || isTemplatePreparing(applicationLifecycle))) ||
+      templateReconcileRetryable ||
+      templatePreparation?.status === 'RUNNING')
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -841,7 +850,7 @@ export default function MessageList({
                           />
                         ) : null}
                         {/* 模板失败由下方唯一的模板卡片展示后端详情，避免历史通用错误卡重复。 */}
-                        {messageError && !templateGenerationFailed ? (
+                        {messageError && !templatePreparationFailed ? (
                           <AgentErrorCard
                             error={messageError}
                             onRetry={isCurrentErrorMessage ? onRetryError : undefined}

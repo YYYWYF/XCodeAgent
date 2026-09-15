@@ -30,6 +30,7 @@ import type {
   WorkflowWorkbenchPlanRevisionStart,
   WorkflowRevisionContinuation,
   WorkflowRunPayload,
+  WorkflowTemplatePreparation,
   WorkspaceCodeChangeSet
 } from '../../typings'
 import { CLASS_PREFIX, composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../utils'
@@ -42,7 +43,10 @@ import {
   planningMutationBlocked,
   type ApplicationPlanningCurrentState
 } from '../../service/activeApplicationPlanning'
-import { isTemplateGenerationOrphaned } from '../../service/templateApi'
+import {
+  isTemplateGenerationOrphaned,
+  isTemplateReconcileRetryable
+} from '../../service/templateApi'
 import type {
   RequirementSpecDraftSaveResult,
   WorkflowRevisionContinuationHandoff
@@ -319,6 +323,8 @@ type Props = {
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试规划 Graph。 */
   onRetryPlanning?: () => void
+  /** 通过独立 AG-UI 动作重试 Template Reconcile。 */
+  onRetryTemplateReconcile?: () => void
   /** 当前应用唯一的 Planning 业务状态。 */
   planningState?: ApplicationPlanningCurrentState
   theme: 'light' | 'dark'
@@ -864,6 +870,7 @@ export default function AiChatPanel({
   onSessionHistoryReadyChange,
   generatingTemplate,
   onRetryPlanning,
+  onRetryTemplateReconcile,
   planningState,
   theme,
   rightPanelOpen,
@@ -3273,6 +3280,13 @@ export default function AiChatPanel({
         : activePageOption?.taskSummary
   )
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
+  // 正式修订失败必须同时看到 lifecycle 失败态和 V2 Attempt 的 retryable 投影，才能提供安全重试。
+  const templateReconcileRetryable = isTemplateReconcileRetryable(
+    applicationLifecycle,
+    (latestWorkflowForDisplay?.summary?.templatePreparation ||
+      latestWorkflowForDisplay?.state?.templatePreparation ||
+      latestWorkflowForDisplay?.result?.templatePreparation) as WorkflowTemplatePreparation | undefined
+  )
   const currentStageSessionTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const stageOutputContextAligned = activeTargetKey
     ? currentStageSessionTargetKey === activeTargetKey
@@ -4532,7 +4546,11 @@ export default function AiChatPanel({
                     : undefined
               }
               onRetryTemplateGeneration={
-                templateGenerationRecoverable ? onRetryPlanning : undefined
+                templateGenerationRecoverable
+                  ? onRetryPlanning
+                  : templateReconcileRetryable
+                    ? onRetryTemplateReconcile
+                  : undefined
               }
               onSubmitClarification={handleSubmitWorkflowClarification}
               revertingCodeChangeIds={revertingCodeChangeIds}
@@ -4546,6 +4564,7 @@ export default function AiChatPanel({
               onEnterDevelopment={handleEnterDevelopment}
               generatingTemplate={generatingTemplate}
               templateGenerationOrphaned={templateGenerationOrphaned}
+              templateReconcileRetryable={templateReconcileRetryable}
               planningState={planningState}
             />
 

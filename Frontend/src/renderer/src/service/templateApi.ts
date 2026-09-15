@@ -1,4 +1,8 @@
-import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
+import type {
+  ApplicationConfig,
+  ApplicationLifecycle,
+  WorkflowTemplatePreparation
+} from '../typings'
 import {
   bootstrapApplicationTemplateGeneration,
   retryApplicationTemplateGeneration
@@ -17,6 +21,18 @@ export function isTemplateGenerationOrphaned(
   return (
     lifecycle?.initialization?.stage === 'generating_application_template_files' &&
     !generatingTemplate
+  )
+}
+
+/** 判断正式修订的 Template Reconcile 是否同时具备后端确认的失败状态和 Retry Attempt。 */
+export function isTemplateReconcileRetryable(
+  lifecycle?: ApplicationLifecycle,
+  preparation?: WorkflowTemplatePreparation
+): boolean {
+  return (
+    lifecycle?.activeFormalRevision?.status === 'template_reconcile_failed' &&
+    preparation?.status === 'FAILED' &&
+    preparation.retryable === true
   )
 }
 
