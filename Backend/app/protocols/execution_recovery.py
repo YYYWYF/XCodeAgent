@@ -11,6 +11,7 @@ from ag_ui.core import (
     RunErrorEvent,
     RunFinishedEvent,
     RunStartedEvent,
+    StateSnapshotEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
@@ -27,6 +28,7 @@ from app.persistence.execution_recovery import (
     get_execution,
     list_recovery_projection_candidates,
     list_recovery_attempts_from_source,
+    reconcile_interrupted_execution_status,
 )
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.execution_recovery_executor import (
@@ -45,9 +47,10 @@ from app.services.execution_recovery_policies import (
 from app.services.execution_recovery_action_planner import (
     build_recovery_facts,
     plan_failed_node_reentry_action,
+    plan_interrupted_continue_action,
     plan_recovery_action,
 )
-from app.services.workflow_reentry import FailureTargetResolver
+from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 
 
 _FORBIDDEN_RECOVERY_FIELDS = {
@@ -182,6 +185,65 @@ def build_execution_recovery_ag_ui_stream(
                         source=source,
                         reentry_plan=reentry_plan,
                     )
+            elif source.status is DurableExecutionStatus.INTERRUPTED:
+                resolution = await InterruptedTargetResolver().resolve(
+                    workspace=workspace,
+                    source=source,
+                    graph=graph,
+                )
+                if resolution.kind in {"completed", "awaiting_user"}:
+                    target_status = (
+                        DurableExecutionStatus.COMPLETED
+                        if resolution.kind == "completed"
+                        else DurableExecutionStatus.AWAITING_USER
+                    )
+                    reconciled = await reconcile_interrupted_execution_status(
+                        workspace=workspace,
+                        run_id=source.run_id,
+                        status=target_status,
+                    )
+                    if reconciled is None:
+                        raise RecoveryExecutionError(
+                            "RECOVERY_SOURCE_CHANGED",
+                            "INTERRUPTED source 在对账前已经发生变化，请刷新后继续。",
+                        )
+                    reconciliation = (
+                        "completed"
+                        if target_status is DurableExecutionStatus.COMPLETED
+                        else "awaiting_user"
+                    )
+                    message = (
+                        "当前执行已经完成。"
+                        if reconciliation == "completed"
+                        else "当前执行正在等待已提交的用户确认。"
+                    )
+                    for frame in _reconciled_recovery_frames(
+                        encoder=encoder,
+                        message_id=message_id,
+                        thread_id=source.thread_id,
+                        run_id=request_run_id,
+                        source_run_id=source.run_id,
+                        reconciliation=reconciliation,
+                        message=message,
+                    ):
+                        yield frame
+                    return
+                if resolution.kind == "continue" and resolution.reentry_plan is not None:
+                    reentry_plan = resolution.reentry_plan
+                    action_plan = plan_interrupted_continue_action(
+                        workspace=workspace,
+                        source=source,
+                        reentry_plan=reentry_plan,
+                    )
+                else:
+                    action_plan = plan_interrupted_continue_action(
+                        workspace=workspace,
+                        source=source,
+                        error=RecoveryExecutionError(
+                            resolution.reason_code,
+                            resolution.reason,
+                        ),
+                    )
             else:
                 recovery_plan = await _prepare_recovery_plan(
                     workspace=workspace,
@@ -229,21 +291,29 @@ def build_execution_recovery_ag_ui_stream(
                     reentry_plan=reentry_plan,
                 )
             elif kind is RecoveryActionKind.CONTINUE_CHECKPOINT:
-                if recovery_plan is None:
+                if reentry_plan is not None:
+                    context = await WorkflowReentryExecutor().prepare_interrupted_continue(
+                        workspace=workspace,
+                        source_run_id=source.run_id,
+                        graph=graph,
+                        reentry_plan=reentry_plan,
+                    )
+                elif recovery_plan is None:
                     raise RecoveryExecutionError(
                         "RECOVERY_ACTION_NOT_EXECUTABLE",
                         "FAILED execution 不能走 legacy continue checkpoint。",
                     )
-                context = await prepare_native_recovery(
-                    workspace=workspace,
-                    source_run_id=source.run_id,
-                    graph=graph,
-                    replay_policies=(
-                        replay_policies
-                        if replay_policies is not None
-                        else production_recovery_replay_policies()
-                    ),
-                )
+                else:
+                    context = await prepare_native_recovery(
+                        workspace=workspace,
+                        source_run_id=source.run_id,
+                        graph=graph,
+                        replay_policies=(
+                            replay_policies
+                            if replay_policies is not None
+                            else production_recovery_replay_policies()
+                        ),
+                    )
             elif kind is RecoveryActionKind.RETRY_OPERATION:
                 if recovery_plan is None:
                     raise RecoveryExecutionError(
@@ -317,6 +387,34 @@ def build_execution_recovery_ag_ui_stream(
             )
 
     return stream()
+
+
+def _reconciled_recovery_frames(
+    *,
+    encoder: EventEncoder,
+    message_id: str,
+    thread_id: str,
+    run_id: str,
+    source_run_id: str,
+    reconciliation: str,
+    message: str,
+) -> list[str]:
+    """生成 terminal 或 native interrupt 对账成功时的完整 AG-UI 生命周期。"""
+
+    result = {
+        "status": "reconciled",
+        "sourceRunId": source_run_id,
+        "reconciliation": reconciliation,
+    }
+    return [
+        encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id)),
+        encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant")),
+        encoder.encode(CustomEvent(name="execution-recovery", value=result)),
+        encoder.encode(StateSnapshotEvent(snapshot={"executionRecovery": result})),
+        encoder.encode(TextMessageContentEvent(messageId=message_id, delta=message)),
+        encoder.encode(TextMessageEndEvent(messageId=message_id)),
+        encoder.encode(RunFinishedEvent(threadId=thread_id, runId=run_id, result=result)),
+    ]
 
 
 async def _resolve_current_recovery_source(
@@ -476,6 +574,39 @@ async def _resolve_action_source_run(
                     workspace=workspace,
                     source=record,
                     reentry_plan=reentry_plan,
+                )
+        elif record.status is DurableExecutionStatus.INTERRUPTED:
+            resolution = await InterruptedTargetResolver().resolve(
+                workspace=workspace,
+                source=record,
+                graph=graph,
+            )
+            if resolution.kind in {"completed", "awaiting_user"}:
+                await reconcile_interrupted_execution_status(
+                    workspace=workspace,
+                    run_id=record.run_id,
+                    status=(
+                        DurableExecutionStatus.COMPLETED
+                        if resolution.kind == "completed"
+                        else DurableExecutionStatus.AWAITING_USER
+                    ),
+                )
+                continue
+            if resolution.kind == "continue" and resolution.reentry_plan is not None:
+                reentry_plan = resolution.reentry_plan
+                action_plan = plan_interrupted_continue_action(
+                    workspace=workspace,
+                    source=record,
+                    reentry_plan=reentry_plan,
+                )
+            else:
+                action_plan = plan_interrupted_continue_action(
+                    workspace=workspace,
+                    source=record,
+                    error=RecoveryExecutionError(
+                        resolution.reason_code,
+                        resolution.reason,
+                    ),
                 )
         else:
             plan = await _prepare_recovery_plan(

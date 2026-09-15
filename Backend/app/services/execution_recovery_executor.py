@@ -77,6 +77,7 @@ from app.services.execution_lease_heartbeat import (
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 from app.services.workflow_reentry import (
     FailureTargetResolver,
+    InterruptedTargetResolver,
     recovery_plan_from_reentry,
     semantic_context_sha256,
 )
@@ -176,6 +177,40 @@ class WorkflowReentryExecutor:
             reentry_plan=reentry_plan,
         )
 
+    async def prepare_interrupted_continue(
+        self,
+        *,
+        workspace: str,
+        source_run_id: str,
+        graph: Any,
+        reentry_plan: WorkflowReentryPlan | None = None,
+    ) -> NativeRecoveryRuntimeContext:
+        """解析最新 INTERRUPTED checkpoint 后复用统一 claim、handoff 与 fork transaction。"""
+
+        source = await get_execution(workspace, source_run_id)
+        if source is None:
+            raise RecoveryExecutionError("SOURCE_EXECUTION_NOT_FOUND", "source execution 不存在。")
+        if reentry_plan is None:
+            resolution = await InterruptedTargetResolver().resolve(
+                workspace=workspace,
+                source=source,
+                graph=graph,
+            )
+            if resolution.kind != "continue" or resolution.reentry_plan is None:
+                raise RecoveryExecutionError(resolution.reason_code, resolution.reason)
+            reentry_plan = resolution.reentry_plan
+        if reentry_plan.reason is not WorkflowReentryReason.INTERRUPTED_CONTINUE:
+            raise RecoveryExecutionError(
+                "WORKFLOW_REENTRY_PLAN_INVALID",
+                "INTERRUPTED continue 必须使用 INTERRUPTED_CONTINUE authority。",
+            )
+        return await prepare_native_recovery(
+            workspace=workspace,
+            source_run_id=source_run_id,
+            graph=graph,
+            reentry_plan=reentry_plan,
+        )
+
     def materialize_revision_context(
         self,
         *,
@@ -242,22 +277,53 @@ async def prepare_native_recovery(
             "当前 recovery source 已被新的 child execution 替代，请刷新后继续。",
             details={"currentSourceRunId": lineage.head.run_id},
         )
-    if reentry_plan is not None or source.status is DurableExecutionStatus.FAILED:
+    if reentry_plan is not None or source.status in {
+        DurableExecutionStatus.FAILED,
+        DurableExecutionStatus.INTERRUPTED,
+    }:
         if reentry_plan is not None and (
             reentry_plan.source_run_id != source.run_id
             or reentry_plan.thread_id != source.thread_id
-            or reentry_plan.target_node != source.current_node
             or reentry_plan.execution_kind != source.execution_kind
+            or (
+                source.status is DurableExecutionStatus.FAILED
+                and reentry_plan.target_node != source.current_node
+            )
         ):
             raise RecoveryExecutionError(
                 "WORKFLOW_REENTRY_PLAN_INVALID",
                 "WorkflowReentryPlan 与当前 source execution identity 不一致。",
             )
-        fresh_reentry_plan = await FailureTargetResolver().resolve(
-            workspace=workspace,
-            source=source,
-            graph=graph,
-        )
+        if source.status is DurableExecutionStatus.FAILED:
+            if reentry_plan is not None and reentry_plan.reason is not WorkflowReentryReason.FAILURE_RETRY:
+                raise RecoveryExecutionError(
+                    "WORKFLOW_REENTRY_PLAN_INVALID",
+                    "FAILED source 只能使用 FAILURE_RETRY authority。",
+                )
+            fresh_reentry_plan = await FailureTargetResolver().resolve(
+                workspace=workspace,
+                source=source,
+                graph=graph,
+            )
+        elif source.status is DurableExecutionStatus.INTERRUPTED:
+            if reentry_plan is not None and reentry_plan.reason is not WorkflowReentryReason.INTERRUPTED_CONTINUE:
+                raise RecoveryExecutionError(
+                    "WORKFLOW_REENTRY_PLAN_INVALID",
+                    "INTERRUPTED source 只能使用 INTERRUPTED_CONTINUE authority。",
+                )
+            resolution = await InterruptedTargetResolver().resolve(
+                workspace=workspace,
+                source=source,
+                graph=graph,
+            )
+            if resolution.kind != "continue" or resolution.reentry_plan is None:
+                raise RecoveryExecutionError(resolution.reason_code, resolution.reason)
+            fresh_reentry_plan = resolution.reentry_plan
+        else:
+            raise RecoveryExecutionError(
+                "WORKFLOW_REENTRY_PLAN_INVALID",
+                "当前 source 不支持 checkpoint Workflow Re-entry。",
+            )
         if reentry_plan is not None:
             _require_fresh_reentry_plan(
                 expected=reentry_plan,
@@ -273,8 +339,11 @@ async def prepare_native_recovery(
             graph=graph,
             replay_policies=replay_policies,
         )
-    if source.status is DurableExecutionStatus.FAILED:
-        _require_failed_node_reentry_plan(plan, source=source)
+    if source.status in {
+        DurableExecutionStatus.FAILED,
+        DurableExecutionStatus.INTERRUPTED,
+    }:
+        _require_checkpoint_reentry_plan(plan, source=source)
     else:
         _require_native_plan(plan)
     source_point = await get_recovery_point(workspace, plan.recovery_point_id or "")
@@ -866,8 +935,11 @@ async def finalize_handed_off_recovery_attempt(
             workspace_revision=source_point.workspace_revision,
             workspace_snapshot_hash=source_point.workspace_snapshot_hash,
         )
-        if source.status is DurableExecutionStatus.FAILED:
-            _require_failed_node_reentry_plan(plan, source=source)
+        if source.status in {
+            DurableExecutionStatus.FAILED,
+            DurableExecutionStatus.INTERRUPTED,
+        }:
+            _require_checkpoint_reentry_plan(plan, source=source)
         else:
             _require_native_plan(plan)
         await _revalidate_finalizing_recovery(
@@ -1081,14 +1153,18 @@ async def _fork_and_start(
 ) -> NativeRecoveryRuntimeContext:
     """只写 runtime identity 的 fork checkpoint，并在 durable point 后标记 STARTED。"""
 
-    if source.status is DurableExecutionStatus.FAILED:
-        _require_failed_node_reentry_plan(plan, source=source)
+    if source.status in {
+        DurableExecutionStatus.FAILED,
+        DurableExecutionStatus.INTERRUPTED,
+    }:
+        _require_checkpoint_reentry_plan(plan, source=source)
     else:
         _require_native_plan(plan)
-    _validate_failed_node_reentry_source(
+    _validate_checkpoint_reentry_source(
         source=source,
         source_point=source_point,
         attempt=attempt,
+        plan=plan,
     )
     if not hasattr(graph, "aupdate_state") or not hasattr(graph, "aget_state"):
         raise RecoveryExecutionError(
@@ -1114,6 +1190,13 @@ async def _fork_and_start(
         raise RecoveryExecutionError(
             "RECOVERY_FORK_CONTROL_FLOW_DRIFT",
             "source Node Entry checkpoint 的 nextNodes 已偏离 Recovery authority。",
+        )
+    source_values = getattr(source_snapshot, "values", {})
+    source_values = source_values if isinstance(source_values, dict) else {}
+    if str(source_values.get("active_run_id") or "") != source.run_id:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_CHECKPOINT_INVALID",
+            "source Node Entry checkpoint 不属于当前 source run。",
         )
     observability = _recovery_observability(
         run_id=new_run_id,
@@ -1298,7 +1381,7 @@ async def _revalidate_finalizing_recovery(
             "RECOVERY_STATE_DRIFT",
             "Native Recovery 的 source checkpoint authority 已发生变化。",
         )
-    _validate_failed_node_reentry_source(
+    _validate_checkpoint_reentry_source(
         source=source,
         source_point=source_point,
         attempt=attempt,
@@ -1337,6 +1420,13 @@ async def _revalidate_finalizing_recovery(
             "RECOVERY_SOURCE_CHECKPOINT_INVALID",
             "source checkpoint identity 已偏离 RecoveryAttempt。",
         )
+    values = getattr(snapshot, "values", {})
+    values = values if isinstance(values, dict) else {}
+    if str(values.get("active_run_id") or "") != source.run_id:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_CHECKPOINT_INVALID",
+            "source checkpoint 不属于当前 source run。",
+        )
     next_nodes = [str(node) for node in (getattr(snapshot, "next", ()) or ())]
     if next_nodes != source_point.next_nodes:
         raise RecoveryExecutionError(
@@ -1371,30 +1461,37 @@ async def _revalidate_finalizing_recovery(
     return snapshot
 
 
-def _validate_failed_node_reentry_source(
+def _validate_checkpoint_reentry_source(
     *,
     source: DurableExecutionRecord,
     source_point: RecoveryPoint,
     attempt: RecoveryAttempt,
+    plan: RecoveryPlan | None = None,
 ) -> None:
-    """在 Native fork 前重新证明 FAILED source 与 Node Entry authority 完全一致。"""
+    """在 Native fork 前重新证明 FAILED 或 INTERRUPTED source 的 checkpoint authority。"""
 
-    if source.status is not DurableExecutionStatus.FAILED:
-        return
-    failed_node = source.current_node
     if (
-        not failed_node
+        source.status
+        not in {
+            DurableExecutionStatus.FAILED,
+            DurableExecutionStatus.INTERRUPTED,
+        }
         or source_point.run_id != source.run_id
         or source_point.thread_id != source.thread_id
         or source_point.kind is not RecoveryPointKind.CHECKPOINT
         or source_point.checkpoint_id != attempt.source_checkpoint_id
         or source_point.checkpoint_ns != attempt.source_checkpoint_ns
         or source_point.recovery_point_id != attempt.source_recovery_point_id
-        or source_point.next_nodes != [failed_node]
+        or len(source_point.next_nodes) != 1
+        or (plan is not None and source_point.next_nodes != plan.next_nodes)
+        or (
+            source.status is DurableExecutionStatus.FAILED
+            and source_point.next_nodes != [source.current_node]
+        )
     ):
         raise RecoveryExecutionError(
             "RECOVERY_STATE_DRIFT",
-            "FAILED source 的 Node Entry checkpoint 已偏离当前失败节点或 RecoveryAttempt authority。",
+            "source 的 Node Entry checkpoint 已偏离当前节点或 RecoveryAttempt authority。",
         )
 
 
@@ -1530,12 +1627,12 @@ def _require_native_plan(plan: RecoveryPlan) -> None:
     raise RecoveryExecutionError(capability.reason_code, capability.reason)
 
 
-def _require_failed_node_reentry_plan(
+def _require_checkpoint_reentry_plan(
     plan: RecoveryPlan,
     *,
     source: DurableExecutionRecord,
 ) -> None:
-    """验证 FAILED 的 transaction bridge，不调用旧 Native capability。"""
+    """验证 FAILED 或 INTERRUPTED 的 transaction bridge，不调用旧 Native capability。"""
 
     if (
         plan.decision is not RecoveryDecision.READY_NATIVE
@@ -1543,11 +1640,15 @@ def _require_failed_node_reentry_plan(
         or not plan.recovery_point_id
         or not plan.checkpoint_id
         or plan.checkpoint_ns != ""
-        or plan.next_nodes != [source.current_node]
+        or len(plan.next_nodes) != 1
+        or (
+            source.status is DurableExecutionStatus.FAILED
+            and plan.next_nodes != [source.current_node]
+        )
     ):
         raise RecoveryExecutionError(
             "WORKFLOW_REENTRY_PLAN_INVALID",
-            "FAILED Node Re-entry 缺少 root checkpoint transaction authority。",
+            "Node Re-entry 缺少 root checkpoint transaction authority。",
         )
 
 

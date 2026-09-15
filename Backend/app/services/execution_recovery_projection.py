@@ -7,12 +7,17 @@ from datetime import datetime, timezone
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
+    DurableExecutionStatus,
     ExecutionRecoveryProjection,
     ExecutionRecoveryProjectionCandidate,
+    RecoveryExecutionError,
 )
 from app.graph.application_planning_workflow import application_planning_graph_for_request
 from app.graph.workflow import workflow_graph_for_request
-from app.persistence.execution_recovery import list_recovery_projection_candidates
+from app.persistence.execution_recovery import (
+    list_recovery_projection_candidates,
+    reconcile_interrupted_execution_status,
+)
 from app.services.execution_recovery_coordinator import prepare_continue
 from app.services.execution_recovery_policies import (
     production_recovery_replay_policies,
@@ -20,10 +25,10 @@ from app.services.execution_recovery_policies import (
 from app.services.execution_recovery_action_planner import (
     build_recovery_facts,
     plan_failed_node_reentry_action,
+    plan_interrupted_continue_action,
     plan_recovery_action,
 )
-from app.services.workflow_reentry import FailureTargetResolver
-from app.domain.execution_recovery import RecoveryExecutionError
+from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -53,7 +58,7 @@ def recovery_failure_diagnostic(
 async def resolve_execution_recovery_projection(
     workspace: str,
 ) -> ExecutionRecoveryProjection:
-    """只读解析当前工作区可展示的异常终止执行，不创建恢复 child 或修改业务状态。"""
+    """解析当前工作区可展示的异常终止执行，不创建恢复 child 或执行 Graph。"""
 
     generated_at = datetime.now(timezone.utc)
     try:
@@ -91,7 +96,7 @@ async def resolve_execution_recovery_projection(
 async def _resolve_candidate(
     record: DurableExecutionRecord,
 ) -> ExecutionRecoveryProjectionCandidate | None:
-    """为单条记录选择 Graph，FAILED 走 Node Re-entry，其余保留旧路径。"""
+    """为单条记录选择 Graph，FAILED 与 INTERRUPTED 均走各自 authority resolver。"""
 
     graph_factory = (
         application_planning_graph_for_request
@@ -102,7 +107,8 @@ async def _resolve_candidate(
         workspace=record.workspace,
         project_id=record.project_id,
     )
-    if record.status.value == "failed":
+    authority_plan = None
+    if record.status is DurableExecutionStatus.FAILED:
         try:
             reentry_plan = await FailureTargetResolver().resolve(
                 workspace=record.workspace,
@@ -122,7 +128,47 @@ async def _resolve_candidate(
                 source=record,
                 reentry_plan=reentry_plan,
             )
-            plan = reentry_plan
+            authority_plan = reentry_plan
+            plan = None
+    elif record.status is DurableExecutionStatus.INTERRUPTED:
+        resolution = await InterruptedTargetResolver().resolve(
+            workspace=record.workspace,
+            source=record,
+            graph=graph,
+        )
+        if resolution.kind == "completed":
+            await reconcile_interrupted_execution_status(
+                workspace=record.workspace,
+                run_id=record.run_id,
+                status=DurableExecutionStatus.COMPLETED,
+            )
+            return None
+        if resolution.kind == "awaiting_user":
+            # 原生 interrupt 已经是现有交互的 authority；只对账，不生成恢复 action。
+            await reconcile_interrupted_execution_status(
+                workspace=record.workspace,
+                run_id=record.run_id,
+                status=DurableExecutionStatus.AWAITING_USER,
+            )
+            return None
+        if resolution.kind == "continue" and resolution.reentry_plan is not None:
+            action_plan = plan_interrupted_continue_action(
+                workspace=record.workspace,
+                source=record,
+                reentry_plan=resolution.reentry_plan,
+            )
+            authority_plan = resolution.reentry_plan
+            plan = None
+        else:
+            action_plan = plan_interrupted_continue_action(
+                workspace=record.workspace,
+                source=record,
+                error=RecoveryExecutionError(
+                    resolution.reason_code,
+                    resolution.reason,
+                ),
+            )
+            plan = None
     else:
         plan = await prepare_continue(
             workspace=record.workspace,
@@ -152,7 +198,7 @@ async def _resolve_candidate(
     }[action_plan.status.value]
     owner_session_id = await _resolve_owner_session_id(
         record=record,
-        plan=plan,
+        plan=authority_plan or plan,
         graph=graph,
     )
     if owner_session_id is None:

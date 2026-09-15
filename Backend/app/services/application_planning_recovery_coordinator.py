@@ -1,4 +1,4 @@
-"""Application Planning 多套恢复事实的唯一只读解释层。"""
+"""Application Planning 多套恢复事实的唯一解释与状态对账层。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,11 @@ from app.domain.execution_recovery import (
     RecoveryExecutionError,
     RecoveryPoint,
 )
-from app.persistence.execution_recovery import get_recovery_point, list_recovery_points
+from app.persistence.execution_recovery import (
+    get_recovery_point,
+    list_recovery_points,
+    reconcile_interrupted_execution_status,
+)
 from app.protocols.application_planning_interrupt import (
     application_planning_interrupt_from_snapshot,
 )
@@ -28,24 +32,20 @@ from app.services.application_planning_recovery_contracts import (
     resolve_application_planning_recovery_contract,
 )
 from app.services.execution_recovery import capture_recovery_point
-from app.services.execution_recovery_coordinator import prepare_continue
 from app.services.execution_recovery_lineage import (
     RecoveryLineageResolution,
     RecoveryLineageState,
 )
 from app.services.execution_recovery_source_admission import assess_recovery_source
-from app.services.execution_recovery_policies import (
-    production_recovery_replay_policies,
-)
 from app.services.execution_recovery_action_planner import (
-    build_recovery_facts,
     plan_failed_node_reentry_action,
+    plan_interrupted_continue_action,
     plan_recovery_action,
 )
 from app.services.execution_recovery_capability import (
     assess_native_recovery_capability,
 )
-from app.services.workflow_reentry import FailureTargetResolver
+from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 
 
 @dataclass(frozen=True)
@@ -92,10 +92,17 @@ async def resolve_application_planning_recovery(
     source: DurableExecutionRecord | None,
     lineage_resolution: RecoveryLineageResolution | None = None,
 ) -> ApplicationPlanningRecoveryProjection:
-    """按 Native Interrupt、Durable、索引和策略顺序解析唯一恢复分类。"""
+    """按 Native Interrupt、Durable 与最新 checkpoint authority 解析唯一恢复分类。"""
 
     interrupt = application_planning_interrupt_from_snapshot(snapshot)
-    if interrupt is not None:
+    lineage_source_is_interrupted = bool(
+        source is not None and source.status is DurableExecutionStatus.INTERRUPTED
+    ) or bool(
+        lineage_resolution is not None
+        and lineage_resolution.head is not None
+        and lineage_resolution.head.status is DurableExecutionStatus.INTERRUPTED
+    )
+    if interrupt is not None and not lineage_source_is_interrupted:
         return _projection(
             classification="awaiting_user",
             source=source,
@@ -161,6 +168,10 @@ async def resolve_application_planning_recovery(
     if (
         lifecycle_status is ApplicationLifecycleStatus.AWAITING_USER
         and not committed_transition_candidate
+        and not (
+            source is not None
+            and source.status is DurableExecutionStatus.INTERRUPTED
+        )
     ):
         return _projection(
             classification="conflict",
@@ -249,32 +260,56 @@ async def resolve_application_planning_recovery(
             )
         plan = None
     else:
-        await ensure_application_planning_recovery_point(
-            source=source,
-            graph=graph,
-            snapshot=snapshot,
-        )
-        plan = await prepare_continue(
-            workspace=workspace,
-            source_run_id=source.run_id,
-            graph=graph,
-            replay_policies=production_recovery_replay_policies(),
-        )
-        facts = await build_recovery_facts(
+        resolution = await InterruptedTargetResolver().resolve(
             workspace=workspace,
             source=source,
-            recovery_plan=plan,
             graph=graph,
-            lifecycle=lifecycle,
         )
-        action_plan, _stage_assessment = await plan_recovery_action(
-            workspace=workspace,
-            source=source,
-            recovery_plan=plan,
-            point=facts.point,
-            snapshot=facts.snapshot,
-            lifecycle=facts.lifecycle,
-        )
+        if resolution.kind == "completed":
+            reconciled = await reconcile_interrupted_execution_status(
+                workspace=workspace,
+                run_id=source.run_id,
+                status=DurableExecutionStatus.COMPLETED,
+            )
+            return _projection(
+                classification="completed",
+                source=reconciled or source,
+                thread_id=thread_id,
+                reason_code=resolution.reason_code,
+                message="当前规划已经完成。",
+                input_committed=input_committed,
+            )
+        if resolution.kind == "awaiting_user":
+            reconciled = await reconcile_interrupted_execution_status(
+                workspace=workspace,
+                run_id=source.run_id,
+                status=DurableExecutionStatus.AWAITING_USER,
+            )
+            return _projection(
+                classification="awaiting_user",
+                source=reconciled or source,
+                thread_id=thread_id,
+                user_action_required=True,
+                reason_code=resolution.reason_code,
+                message="当前应用规划正在等待你的确认。",
+                input_committed=input_committed,
+            )
+        if resolution.kind == "continue" and resolution.reentry_plan is not None:
+            action_plan = plan_interrupted_continue_action(
+                workspace=workspace,
+                source=source,
+                reentry_plan=resolution.reentry_plan,
+            )
+        else:
+            action_plan = plan_interrupted_continue_action(
+                workspace=workspace,
+                source=source,
+                error=RecoveryExecutionError(
+                    resolution.reason_code,
+                    resolution.reason,
+                ),
+            )
+        plan = None
     # Action Planner 一旦返回结果，后续任何 projection 分支都必须复用同一份当前事实。
     recovery_action_plan = action_plan.model_dump(mode="json", by_alias=True)
     native_capability = (

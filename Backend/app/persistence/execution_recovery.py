@@ -1451,6 +1451,65 @@ async def mark_execution_interrupted(
         return _execution_from_row(row) if row is not None else None
 
 
+async def reconcile_interrupted_execution_status(
+    *,
+    workspace: str | Path,
+    run_id: str,
+    status: DurableExecutionStatus,
+) -> DurableExecutionRecord | None:
+    """只允许把 INTERRUPTED 对账为已完成或等待用户，并释放残留 lease。"""
+
+    if status not in {
+        DurableExecutionStatus.COMPLETED,
+        DurableExecutionStatus.AWAITING_USER,
+    }:
+        raise ValueError("INTERRUPTED 只能对账为 COMPLETED 或 AWAITING_USER。")
+    await initialize_execution_recovery_store(workspace)
+    now = datetime.now(timezone.utc)
+    now_text = _utc_iso(now)
+    ended_at_expression = (
+        "COALESCE(ended_at, ?)"
+        if status is DurableExecutionStatus.COMPLETED
+        else "NULL"
+    )
+    status_parameters = (
+        (status.value, now_text, now_text, run_id, DurableExecutionStatus.INTERRUPTED.value)
+        if status is DurableExecutionStatus.COMPLETED
+        else (status.value, now_text, run_id, DurableExecutionStatus.INTERRUPTED.value)
+    )
+    async with _connection(workspace) as connection:
+        cursor = await connection.execute(
+            f"""
+            UPDATE execution_records
+            SET status = ?, updated_at = ?, ended_at = {ended_at_expression}
+            WHERE run_id = ? AND status = ?
+            """,
+            status_parameters,
+        )
+        if cursor.rowcount != 1:
+            row = await _fetch_execution_row(connection, run_id)
+            if row is None or str(row[8]) != status.value:
+                return None
+            return _execution_from_row(row)
+        await connection.execute(
+            """
+            UPDATE execution_leases
+            SET status = ?, released_at = COALESCE(released_at, ?)
+            WHERE run_id = ? AND status = ?
+            """,
+            (
+                ExecutionLeaseStatus.RELEASED.value,
+                now_text,
+                run_id,
+                ExecutionLeaseStatus.ACTIVE.value,
+            ),
+        )
+        row = await _fetch_execution_row(connection, run_id)
+        if row is None or str(row[8]) != status.value:
+            return None
+        return _execution_from_row(row)
+
+
 async def reconcile_orphaned_executions(
     *,
     workspace: str | Path,

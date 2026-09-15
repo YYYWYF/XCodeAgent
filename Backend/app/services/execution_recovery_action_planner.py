@@ -20,6 +20,7 @@ from app.domain.execution_recovery import (
     RecoveryPlan,
     RecoveryPoint,
     WorkflowReentryPlan,
+    WorkflowReentryReason,
     execution_failure_sha256,
 )
 from app.persistence.execution_recovery import get_recovery_point
@@ -35,7 +36,7 @@ from app.services.execution_retry_dispatcher import (
     RetryOperationCapability,
     assess_retry_operation,
 )
-from app.services.workflow_reentry import FailureTargetResolver
+from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +138,34 @@ async def plan_recovery_action(
                 )
         return (
             plan_failed_node_reentry_action(
+                workspace=workspace,
+                source=source,
+                reentry_plan=reentry_plan,
+            ),
+            None,
+        )
+    if source.status is DurableExecutionStatus.INTERRUPTED:
+        if reentry_plan is None and graph is not None:
+            resolution = await InterruptedTargetResolver().resolve(
+                workspace=workspace,
+                source=source,
+                graph=graph,
+            )
+            reentry_plan = resolution.reentry_plan
+            if resolution.kind != "continue":
+                return (
+                    plan_interrupted_continue_action(
+                        workspace=workspace,
+                        source=source,
+                        error=RecoveryExecutionError(
+                            resolution.reason_code,
+                            resolution.reason,
+                        ),
+                    ),
+                    None,
+                )
+        return (
+            plan_interrupted_continue_action(
                 workspace=workspace,
                 source=source,
                 reentry_plan=reentry_plan,
@@ -319,6 +348,59 @@ def plan_failed_node_reentry_action(
     )
 
 
+def plan_interrupted_continue_action(
+    *,
+    workspace: str,
+    source: DurableExecutionRecord,
+    reentry_plan: WorkflowReentryPlan | None = None,
+    error: RecoveryExecutionError | None = None,
+) -> RecoveryActionPlan:
+    """把 INTERRUPTED 的最新 checkpoint 解析结果投影为 continue action。"""
+
+    lifecycle = load_application_lifecycle(workspace)
+    incident_id = _incident_id(
+        source=source,
+        point=None,
+        lifecycle=lifecycle,
+        stage_assessment=None,
+        reentry_plan=reentry_plan,
+        reentry_error_code=error.code if error is not None else None,
+    )
+    if error is not None:
+        return _action_plan(
+            source=source,
+            incident_id=incident_id,
+            status=RecoveryIncidentStatus.NEEDS_ATTENTION,
+            reason_code=error.code,
+            message="中断现场缺少唯一、最新且可验证的 checkpoint，已阻止降级恢复。",
+        )
+    if (
+        reentry_plan is None
+        or reentry_plan.reason is not WorkflowReentryReason.INTERRUPTED_CONTINUE
+    ):
+        return _action_plan(
+            source=source,
+            incident_id=incident_id,
+            status=RecoveryIncidentStatus.NEEDS_ATTENTION,
+            reason_code="WORKFLOW_REENTRY_PLAN_INVALID",
+            message="中断现场缺少可执行的 Workflow Re-entry 计划，已阻止降级恢复。",
+        )
+    action = _action(
+        incident_id=incident_id,
+        kind=RecoveryActionKind.CONTINUE_CHECKPOINT,
+        label="继续执行",
+        description="从最新已验证的 checkpoint 继续执行未完成步骤。",
+    )
+    return _action_plan(
+        source=source,
+        incident_id=incident_id,
+        status=RecoveryIncidentStatus.RECOVERABLE,
+        reason_code="INTERRUPTED_CONTINUE_READY",
+        message="已验证中断执行的最新 checkpoint，可以继续执行。",
+        primary_action=action,
+    )
+
+
 def _action_plan(
     *,
     source: DurableExecutionRecord,
@@ -430,5 +512,6 @@ __all__ = [
     "RecoveryFacts",
     "build_recovery_facts",
     "plan_failed_node_reentry_action",
+    "plan_interrupted_continue_action",
     "plan_recovery_action",
 ]

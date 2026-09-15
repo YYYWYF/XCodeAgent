@@ -124,9 +124,10 @@ class RecoveryPointKind(StrEnum):
 
 
 class WorkflowReentryReason(StrEnum):
-    """区分失败重试与正式修订两种 Workflow Node 重入来源。"""
+    """区分失败重试、中断继续与正式修订三种 Workflow Node 重入来源。"""
 
     FAILURE_RETRY = "failure_retry"
+    INTERRUPTED_CONTINUE = "interrupted_continue"
     REVISION = "revision"
 
 
@@ -217,9 +218,12 @@ class WorkflowReentryPlan(ExecutionRecoveryModel):
 
     @model_validator(mode="after")
     def validate_reason_contract(self) -> "WorkflowReentryPlan":
-        """强制失败重试只接受 source checkpoint，正式修订只接受新修订上下文。"""
+        """强制 checkpoint 重入绑定 source lineage，正式修订只接受新语义上下文。"""
 
-        if self.reason is WorkflowReentryReason.FAILURE_RETRY:
+        if self.reason in {
+            WorkflowReentryReason.FAILURE_RETRY,
+            WorkflowReentryReason.INTERRUPTED_CONTINUE,
+        }:
             if (
                 not self.source_run_id
                 or self.lineage_parent_run_id != self.source_run_id
@@ -228,8 +232,11 @@ class WorkflowReentryPlan(ExecutionRecoveryModel):
                 or self.context_authority.source_run_id != self.source_run_id
                 or self.context_authority.thread_id != self.thread_id
                 or self.context_authority.target_node != self.target_node
+                or self.context_authority.checkpoint_ns != ""
             ):
-                raise ValueError("failure_retry 必须绑定 source lineage 与 CHECKPOINT authority。")
+                raise ValueError(
+                    "checkpoint re-entry 必须绑定 source lineage 与 root CHECKPOINT authority。"
+                )
         elif (
             self.context_authority.kind
             is not WorkflowReentryContextAuthorityKind.REVISION_CONTEXT

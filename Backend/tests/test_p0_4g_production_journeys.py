@@ -35,9 +35,9 @@ from app.domain.application_revision import (
 )
 from app.domain.execution_recovery import (
     DurableExecutionStatus,
+    RecoveryActionKind,
     RecoveryDecision,
     RecoveryExecutionError,
-    RecoveryStrategy,
 )
 from app.graph.application_planning_workflow import (
     application_planning_graph_for_request,
@@ -64,7 +64,6 @@ from app.services.application_lifecycle import (
 )
 from app.services.application_revision_lifecycle import register_revision_impact
 from app.services.execution_recovery_coordinator import prepare_continue
-from app.services.execution_recovery_executor import prepare_native_recovery
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 from app.services.execution_recovery_policies import production_recovery_replay_policies
 from app.services.execution_recovery_projection import (
@@ -1045,8 +1044,8 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(generation_calls), 2)
         self.assertNotEqual(generation_calls[0], generation_calls[1])
 
-    async def test_backend_crash_reloads_durable_checkpoint_and_exposes_gap(self) -> None:
-        """真实 Backend 崩溃窗口重启后必须暴露当前 production crash-resume 能力缺口。"""
+    async def test_backend_crash_reloads_durable_checkpoint_and_continues_node(self) -> None:
+        """真实 Backend 崩溃窗口重启后从最新 checkpoint 继续 ui_confirmation Node。"""
 
         project_id = "p0-5-d-crash-app"
         thread_id = "p0-5-d-crash-thread"
@@ -1180,32 +1179,45 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(tuple(checkpoint.next), ("ui_confirmation",))
 
-                production_plan = await prepare_continue(
-                    workspace=str(workspace),
-                    source_run_id=source_run_id,
-                    graph=restarted_graph,
-                    replay_policies=production_recovery_replay_policies(),
+                projection = await resolve_execution_recovery_projection(str(workspace))
+                candidate = next(
+                    item
+                    for item in projection.candidates
+                    if item.source_run_id == source_run_id
                 )
+                assert candidate.recovery_action_plan is not None
+                action_plan = candidate.recovery_action_plan.model_dump(
+                    mode="json",
+                    by_alias=True,
+                )
+                assert action_plan["primaryAction"] is not None
                 self.assertEqual(
-                    production_plan.decision,
-                    RecoveryDecision.REQUIRES_HANDLER,
+                    action_plan["primaryAction"]["kind"],
+                    RecoveryActionKind.CONTINUE_CHECKPOINT.value,
                 )
-                self.assertEqual(
-                    production_plan.strategy,
-                    RecoveryStrategy.HANDLER,
-                )
-                self.assertEqual(
-                    production_plan.reason_code,
-                    "REPLAY_SAFETY_UNASSESSED",
-                )
-                with self.assertRaises(RecoveryExecutionError) as raised:
-                    await prepare_native_recovery(
-                        workspace=str(workspace),
-                        source_run_id=source_run_id,
-                        graph=restarted_graph,
-                        replay_policies=production_recovery_replay_policies(),
+                recovery_frames = await _consume(
+                    build_execution_recovery_ag_ui_stream(
+                        payload={
+                            "forwardedProps": {
+                                "workspaceRoot": str(workspace),
+                                "executionRecovery": {
+                                    "action": "execute",
+                                    "incidentId": action_plan["incidentId"],
+                                    "actionId": action_plan["primaryAction"]["actionId"],
+                                },
+                            }
+                        }
                     )
-                self.assertEqual(raised.exception.code, "NATIVE_DECISION_REQUIRED")
+                )
+                self.assertFalse(any("RUN_ERROR" in frame for frame in recovery_frames))
+                resolution = await resolve_recovery_lineage_head(
+                    str(workspace),
+                    thread_id=thread_id,
+                    execution_kind="application_planning",
+                )
+                assert resolution.head is not None
+                self.assertNotEqual(resolution.head.run_id, source_run_id)
+                self.assertEqual(resolution.head.first_node, "ui_confirmation")
             finally:
                 dependency_release.set()
                 if runtime_task is not None:

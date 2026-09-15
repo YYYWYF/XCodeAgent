@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from app.domain.execution_recovery import (
@@ -31,6 +32,7 @@ from app.persistence.execution_recovery import (
     insert_recovery_point,
 )
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 
 
 SYNTHETIC_WORKFLOW_ENTRY_NODE = "workflow_entry"
@@ -104,6 +106,173 @@ class FailureTargetResolver:
                 revision=lifecycle.revision if lifecycle is not None else None,
             ),
             lineage_parent_run_id=source.run_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InterruptedTargetResolution:
+    """保存最新 INTERRUPTED checkpoint 的唯一解释结果。"""
+
+    kind: Literal["continue", "completed", "awaiting_user", "needs_attention"]
+    snapshot: Any | None
+    reentry_plan: WorkflowReentryPlan | None
+    reason_code: str
+    reason: str
+
+
+class InterruptedTargetResolver:
+    """只用最新 source-owned root checkpoint 解析 INTERRUPTED 的位置。"""
+
+    async def resolve(
+        self,
+        *,
+        workspace: str,
+        source: DurableExecutionRecord,
+        graph: Any,
+    ) -> InterruptedTargetResolution:
+        """解释最新中断现场，不回退历史 checkpoint 或使用业务策略。"""
+
+        if source.status is not DurableExecutionStatus.INTERRUPTED:
+            return _interrupted_needs_attention(
+                "INTERRUPTED_SOURCE_REQUIRED",
+                "当前 source 不是 INTERRUPTED execution。",
+            )
+        try:
+            lineage = await resolve_recovery_lineage_head(
+                workspace,
+                thread_id=source.thread_id,
+                execution_kind=source.execution_kind,
+            )
+        except Exception as exc:
+            return _interrupted_needs_attention(
+                "RECOVERY_LINEAGE_UNAVAILABLE",
+                "当前 INTERRUPTED source 的 lineage 无法安全解析。",
+                cause=exc,
+            )
+        if (
+            lineage.head is None
+            or lineage.head.run_id != source.run_id
+            or lineage.head.status is not DurableExecutionStatus.INTERRUPTED
+            or lineage.state.value == "AMBIGUOUS"
+        ):
+            return _interrupted_needs_attention(
+                "RECOVERY_SOURCE_NOT_CURRENT",
+                "当前 INTERRUPTED source 不是唯一的 lineage head。",
+            )
+
+        history_reader = getattr(graph, "aget_state_history", None)
+        if not callable(history_reader):
+            return _interrupted_needs_attention(
+                "INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING",
+                "当前 production Graph 无法读取 committed checkpoint history。",
+            )
+        try:
+            async for snapshot in history_reader(
+                {"configurable": {"thread_id": source.thread_id, "checkpoint_ns": ""}}
+            ):
+                config = _snapshot_config(snapshot)
+                values = getattr(snapshot, "values", {})
+                values = values if isinstance(values, dict) else {}
+                if str(values.get("active_run_id") or "") != source.run_id:
+                    continue
+                if config is None or str(config.get("checkpoint_ns") or "") != "":
+                    continue
+                identity = _snapshot_identity(snapshot)
+                if identity is None:
+                    return _interrupted_needs_attention(
+                        "INTERRUPTED_CHECKPOINT_IDENTITY_INVALID",
+                        "最新 source-owned root checkpoint 缺少完整 identity.",
+                        snapshot=snapshot,
+                    )
+                thread_id, checkpoint_ns, checkpoint_id = identity
+                if thread_id != source.thread_id or checkpoint_ns != "":
+                    return _interrupted_needs_attention(
+                        "INTERRUPTED_CHECKPOINT_IDENTITY_INVALID",
+                        "最新 source-owned checkpoint 不是当前 thread 的 root checkpoint。",
+                        snapshot=snapshot,
+                    )
+                next_nodes = [
+                    str(node) for node in (getattr(snapshot, "next", ()) or ())
+                ]
+                if _snapshot_has_native_interrupt(snapshot):
+                    return InterruptedTargetResolution(
+                        kind="awaiting_user",
+                        snapshot=snapshot,
+                        reentry_plan=None,
+                        reason_code="INTERRUPTED_NATIVE_INTERRUPT",
+                        reason="最新 checkpoint 已提交原生用户交互，不能重新执行产生交互的 Node。",
+                    )
+                if not next_nodes or all(
+                    node.strip().lower() in {"end", "__end__"}
+                    for node in next_nodes
+                ):
+                    return InterruptedTargetResolution(
+                        kind="completed",
+                        snapshot=snapshot,
+                        reentry_plan=None,
+                        reason_code="INTERRUPTED_GRAPH_COMPLETED",
+                        reason="最新 source-owned checkpoint 已到达 Graph terminal。",
+                    )
+                if len(next_nodes) != 1 or not next_nodes[0].strip():
+                    return _interrupted_needs_attention(
+                        "INTERRUPTED_CHECKPOINT_AMBIGUOUS",
+                        "最新 checkpoint 包含无法安全重入的多个或空 Node。",
+                        snapshot=snapshot,
+                    )
+                try:
+                    boundary = await _persist_boundary(
+                        workspace=workspace,
+                        source=source,
+                        target_node=next_nodes[0],
+                        checkpoint_id=checkpoint_id,
+                        checkpoint_ns=checkpoint_ns,
+                        values=values,
+                    )
+                except Exception as exc:
+                    return _interrupted_needs_attention(
+                        "INTERRUPTED_BOUNDARY_PERSIST_FAILED",
+                        "最新 checkpoint 的 Node Entry index 无法持久化。",
+                        snapshot=snapshot,
+                        cause=exc,
+                    )
+                lifecycle = load_application_lifecycle(workspace)
+                plan = WorkflowReentryPlan(
+                    reason=WorkflowReentryReason.INTERRUPTED_CONTINUE,
+                    execution_kind=source.execution_kind,
+                    target_node=next_nodes[0],
+                    thread_id=source.thread_id,
+                    source_run_id=source.run_id,
+                    context_authority=WorkflowReentryContextAuthority(
+                        kind=WorkflowReentryContextAuthorityKind.CHECKPOINT,
+                        boundary_id=boundary.boundary_id,
+                        source_run_id=boundary.source_run_id,
+                        thread_id=boundary.thread_id,
+                        target_node=boundary.target_node,
+                        checkpoint_id=boundary.checkpoint_id,
+                        checkpoint_ns=boundary.checkpoint_ns,
+                    ),
+                    lifecycle_authority=WorkflowReentryLifecycleAuthority(
+                        owner_run_id=source.run_id,
+                        revision=lifecycle.revision if lifecycle is not None else None,
+                    ),
+                    lineage_parent_run_id=source.run_id,
+                )
+                return InterruptedTargetResolution(
+                    kind="continue",
+                    snapshot=snapshot,
+                    reentry_plan=plan,
+                    reason_code="INTERRUPTED_CONTINUE_READY",
+                    reason="已验证最新 source-owned checkpoint，可以从其唯一 pending Node 继续。",
+                )
+        except Exception as exc:
+            return _interrupted_needs_attention(
+                "INTERRUPTED_CHECKPOINT_READ_FAILED",
+                "无法读取最新 source-owned committed checkpoint。",
+                cause=exc,
+            )
+        return _interrupted_needs_attention(
+            "INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING",
+            "没有找到最新 source-owned root checkpoint。",
         )
 
 
@@ -266,15 +435,20 @@ async def resolve_current_node_entry_boundary(
 
 
 def recovery_plan_from_reentry(plan: WorkflowReentryPlan) -> RecoveryPlan:
-    """把 failure re-entry contract 投影到既有 durable claim/fork 内部合同。"""
+    """把 checkpoint re-entry contract 投影到既有 durable claim/fork 内部合同。"""
 
     authority = plan.context_authority
     if (
-        plan.reason is not WorkflowReentryReason.FAILURE_RETRY
+        plan.reason
+        not in {
+            WorkflowReentryReason.FAILURE_RETRY,
+            WorkflowReentryReason.INTERRUPTED_CONTINUE,
+        }
         or authority.kind is not WorkflowReentryContextAuthorityKind.CHECKPOINT
         or not plan.source_run_id
         or not authority.boundary_id
         or not authority.checkpoint_id
+        or authority.checkpoint_ns != ""
     ):
         raise RecoveryExecutionError(
             "WORKFLOW_REENTRY_PLAN_INVALID",
@@ -290,8 +464,16 @@ def recovery_plan_from_reentry(plan: WorkflowReentryPlan) -> RecoveryPlan:
         checkpoint_id=authority.checkpoint_id,
         checkpoint_ns=authority.checkpoint_ns,
         next_nodes=[plan.target_node],
-        reason_code="FAILED_NODE_REENTRY_READY",
-        reason="已验证失败 Node 之前的精确 Semantic Context checkpoint。",
+        reason_code=(
+            "FAILED_NODE_REENTRY_READY"
+            if plan.reason is WorkflowReentryReason.FAILURE_RETRY
+            else "INTERRUPTED_CONTINUE_READY"
+        ),
+        reason=(
+            "已验证失败 Node 之前的精确 Semantic Context checkpoint。"
+            if plan.reason is WorkflowReentryReason.FAILURE_RETRY
+            else "已验证最新 source-owned checkpoint 的精确 Node Entry。"
+        ),
         lifecycle_revision=plan.lifecycle_authority.revision,
     )
 
@@ -413,6 +595,42 @@ def _snapshot_identity(snapshot: Any) -> tuple[str, str, str] | None:
     return thread_id, str(configurable.get("checkpoint_ns") or ""), checkpoint_id
 
 
+def _snapshot_config(snapshot: Any) -> dict[str, Any] | None:
+    """读取 StateSnapshot 的 configurable 配置，供最新 checkpoint 筛选。"""
+
+    config = getattr(snapshot, "config", None)
+    configurable = config.get("configurable") if isinstance(config, dict) else None
+    return configurable if isinstance(configurable, dict) else None
+
+
+def _snapshot_has_native_interrupt(snapshot: Any) -> bool:
+    """只识别 LangGraph 已提交的真实 interrupt，不推断业务阶段。"""
+
+    return any(
+        bool(getattr(task, "interrupts", ()) or ())
+        for task in (getattr(snapshot, "tasks", ()) or ())
+    )
+
+
+def _interrupted_needs_attention(
+    reason_code: str,
+    reason: str,
+    *,
+    snapshot: Any | None = None,
+    cause: Exception | None = None,
+) -> InterruptedTargetResolution:
+    """构造 INTERRUPTED 的 fail-closed 解析结果，并保留原始异常供日志使用。"""
+
+    del cause
+    return InterruptedTargetResolution(
+        kind="needs_attention",
+        snapshot=snapshot,
+        reentry_plan=None,
+        reason_code=reason_code,
+        reason=reason,
+    )
+
+
 def _optional_text(value: Any) -> str | None:
     """把可选值规范化为非空文本。"""
 
@@ -422,6 +640,8 @@ def _optional_text(value: Any) -> str | None:
 
 __all__ = [
     "FailureTargetResolver",
+    "InterruptedTargetResolution",
+    "InterruptedTargetResolver",
     "RevisionTargetResolver",
     "SYNTHETIC_WORKFLOW_ENTRY_NODE",
     "recovery_plan_from_reentry",
