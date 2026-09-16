@@ -135,6 +135,34 @@ test('会话删除严格按 Pending 收口、lifecycle 回灌、会话删除顺�
   assert.deepEqual(events, ['release', 'merge', 'delete'])
 })
 
+test('Pending 收口期间会话重新运行时不会删除会话', async () => {
+  let running = false
+  const runningObservations: boolean[] = []
+  let mergeCalls = 0
+  let deleteCalls = 0
+  const deleted = await releasePendingBeforeSessionDelete(
+    () => {
+      runningObservations.push(running)
+      return running
+    },
+    async () => {
+      running = true
+      return {} as ApplicationLifecycle
+    },
+    () => {
+      mergeCalls += 1
+    },
+    async () => {
+      deleteCalls += 1
+    }
+  )
+
+  assert.deepEqual(runningObservations, [false, true])
+  assert.equal(mergeCalls, 1)
+  assert.equal(deleted, false)
+  assert.equal(deleteCalls, 0)
+})
+
 test('Backend 报告没有 owned Pending 时仍正常删除会话', async () => {
   let deleteCalls = 0
   const deleted = await releasePendingBeforeSessionDelete(

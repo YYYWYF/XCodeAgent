@@ -175,6 +175,10 @@ export async function releasePendingBeforeSessionDelete(
   if (isRunning()) return false
   const lifecycle = await releasePending()
   onApplicationLifecycleChange(lifecycle)
+
+  // Backend round-trip 期间 Session 可能重新进入运行态，真正删除前必须再次确认。
+  if (isRunning()) return false
+
   await deleteSession()
   return true
 }
