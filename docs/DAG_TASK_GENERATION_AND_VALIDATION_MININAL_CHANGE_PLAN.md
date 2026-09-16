@@ -24,7 +24,7 @@ TechnicalPlan Endpoint 契约和当前 Endpoint API 设计。运行时的 `proje
 6. 用户取消只提供 Workflow/PlanningRun 级能力，不提供 Unit 级取消。取消 active PlanningRun 时停止派发、取消活动 Unit worker、标记 Run cancelled 并拒收晚到结果。
 7. 页面刷新只恢复权威状态投影，不承诺原 DAG 生成请求继续运行。将 Workflow 从 SSE 请求中解耦、支持重新订阅或断点续跑属于较大架构调整，本期明确延期；应用关闭、应用切换和其他断连同样允许结束当前生成运行。
 8. Pending 归属页面对话 `sessionId`，不归属某一次 Workflow Run；同一对话的 Regenerate 可以产生多个 Run，但新 Pending 必须继承原 `owner_session_id`。
-9. 删除 owner 对话时的二次确认、取消生成或放弃 Pending 联动本期不实施，作为独立后续功能。
+9. 删除非运行中的 owner 对话时，先通过独立 lifecycle action 精确收口其拥有的 PendingPlan；该动作复用 Abandon，只处理确认门 execution，不取消生成中的 Workflow。
 
 ## 2. 调整边界
 

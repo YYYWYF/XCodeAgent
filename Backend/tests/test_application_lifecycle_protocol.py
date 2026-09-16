@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
+from app.domain.application_lifecycle import ApplicationLifecycle
 from app.protocols.application_lifecycle import (
     application_lifecycle_capabilities,
     build_application_lifecycle_ag_ui_stream,
@@ -20,6 +20,10 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.preview_runtime_guard import claim_maintenance, release_maintenance
+from app.workspace.task_documents import (
+    load_pending_build_task_plan,
+    write_pending_build_task_plan_atomic,
+)
 
 
 class ApplicationLifecycleProtocolTests(unittest.TestCase):
@@ -41,8 +45,117 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                 "bootstrap_template_generation",
                 "retry_bootstrap_template_generation",
                 "workspace_attach",
+                "release_session_pending",
             ],
         )
+
+    def test_release_session_pending_requires_session_id(self) -> None:
+        """Session Pending 收口动作缺少合法 sessionId 时必须由协议拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            stream = build_application_lifecycle_ag_ui_stream(
+                payload={
+                    "threadId": "release-thread",
+                    "runId": "release-run",
+                    "forwardedProps": {
+                        "applicationLifecycle": {
+                            "action": "release_session_pending",
+                            "workspaceRoot": directory,
+                        }
+                    },
+                }
+            )
+
+            async def collect() -> str:
+                """消费缺少 Session 身份的失败事件流。"""
+
+                return "".join([frame async for frame in stream])
+
+            frames = asyncio.run(collect())
+
+        self.assertIn("release_session_pending", frames)
+        self.assertIn("sessionId", frames)
+        self.assertIn('"status":"failed"', frames)
+
+    def test_release_session_pending_returns_recomputed_refresh(self) -> None:
+        """owner 匹配时 AG-UI 应返回 released 标记和最新 idle planningRefresh。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = {"workspace": directory}
+            write_pending_build_task_plan_atomic(
+                state,
+                {
+                    "schema_version": "build-dag.v4",
+                    "status": "ready",
+                    "task_graph": {"validation": {"is_valid": True, "errors": []}},
+                },
+                owner_session_id="session-release",
+                planning_run_id="planning-release",
+                workflow_run_id="workflow-release",
+                base_confirmed_plan_digest=None,
+                input_fingerprint="a" * 64,
+                build_execution_scope={"type": "application", "targetId": "application"},
+                created_at="2026-09-16T00:00:00Z",
+            )
+            pending = load_pending_build_task_plan(state)
+            assert pending is not None
+            lifecycle = ApplicationLifecycle.model_validate(
+                {
+                    "application": {"id": "app-release", "name": "收口测试"},
+                    "updatedAt": "2026-09-16T00:00:00Z",
+                    "revision": 1,
+                    "initialization": {
+                        "stage": "ready_for_workbench",
+                        "status": "completed",
+                    },
+                    "activeRunId": "workflow-release",
+                    "activeExecutions": {
+                        "workflow-release": {
+                            "scope": "application",
+                            "targetId": "application",
+                            "threadId": "thread-release",
+                            "runId": "workflow-release",
+                            "phase": "prepare_build_tasks",
+                            "status": "awaiting_user",
+                            "pendingInteraction": {
+                                "id": "pending-release",
+                                "type": "task_plan_confirmation",
+                                "basedOnRevision": 1,
+                                "payload": {"mode": "build_task_plan_confirmation"},
+                                "artifactRefs": [],
+                                "createdAt": "2026-09-16T00:00:00Z",
+                            },
+                            "startedAt": "2026-09-16T00:00:00Z",
+                            "updatedAt": "2026-09-16T00:00:00Z",
+                        }
+                    },
+                }
+            )
+            write_application_lifecycle(directory, lifecycle)
+            stream = build_application_lifecycle_ag_ui_stream(
+                payload={
+                    "threadId": "release-request-thread",
+                    "runId": "release-request-run",
+                    "forwardedProps": {
+                        "applicationLifecycle": {
+                            "action": "release_session_pending",
+                            "workspaceRoot": directory,
+                            "sessionId": "session-release",
+                        }
+                    },
+                }
+            )
+
+            async def collect() -> str:
+                """消费 Session Pending 收口的完整 AG-UI 事件流。"""
+
+                return "".join([frame async for frame in stream])
+
+            frames = asyncio.run(collect())
+
+        self.assertIn('"sessionPendingReleased":true', frames)
+        self.assertIn('"source":"none"', frames)
+        self.assertIn('"status":"completed"', frames)
 
     def test_create_action_emits_complete_ag_ui_lifecycle(self) -> None:
         """独立端点创建状态时应发送事件、快照和完成事件。"""

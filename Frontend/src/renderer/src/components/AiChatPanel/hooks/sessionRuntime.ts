@@ -1,4 +1,4 @@
-import type { EditorMode } from '../../../typings'
+import type { ApplicationLifecycle, EditorMode } from '../../../typings'
 import type { WorkbenchPhase } from '../../../workbenchPhase'
 import type {
   AgentStage,
@@ -163,4 +163,22 @@ export function sessionIdentityFromSummary(
     developmentTarget: summary.developmentTarget,
     revisionContext: summary.revisionContext
   })
+}
+
+/** 在删除前收口服务端 Pending；运行中、收口失败或删除失败都不伪造本地成功。 */
+export async function releasePendingBeforeSessionDelete(
+  isRunning: () => boolean,
+  releasePending: () => Promise<ApplicationLifecycle>,
+  onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void,
+  deleteSession: () => Promise<void>
+): Promise<boolean> {
+  if (isRunning()) return false
+  const lifecycle = await releasePending()
+  onApplicationLifecycleChange(lifecycle)
+
+  // Backend round-trip 期间 Session 可能重新进入运行态，真正删除前必须再次确认。
+  if (isRunning()) return false
+
+  await deleteSession()
+  return true
 }

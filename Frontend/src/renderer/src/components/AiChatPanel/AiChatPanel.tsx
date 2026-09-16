@@ -1434,6 +1434,7 @@ export default function AiChatPanel({
     onCloseRightPanel: () => {
       if (isApplicationPlanningPhase) setRightPanel(undefined)
     },
+    onApplicationLifecycleChange,
     designPhasePlanning: isApplicationPlanningPhase
   })
 

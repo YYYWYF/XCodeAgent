@@ -22,15 +22,18 @@ import {
 } from '../../../service/chatSessions'
 import type {
   ApplicationConfig,
+  ApplicationLifecycle,
   ChatMessageSkill,
   EditorMode,
   WorkflowRevisionContinuation
 } from '../../../typings'
+import { releaseSessionPendingPlan } from '../../../service/applicationLifecycle'
 import type { WorkbenchPhase } from '../../../workbenchPhase'
 import type { AgentChatMessage } from '../types'
 import {
   createSessionIdentity,
   pendingDraftKey,
+  releasePendingBeforeSessionDelete,
   sameDevelopmentTarget,
   sessionIdentityFromSummary,
   sessionRuntimeKey,
@@ -93,6 +96,7 @@ type UseChatSessionsParams = {
   editorMode: EditorMode
   workbenchPhase: WorkbenchPhase
   onCloseRightPanel: () => void
+  onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   /** 设计阶段：规划 session 由 ensurePlanningSession 激活，loadSessionsForMode
    *  只加载会话列表不自动 openChatSession，避免覆盖规划 session 的 activeSessionId。 */
   designPhasePlanning?: boolean
@@ -150,6 +154,7 @@ export function useChatSessions({
   editorMode,
   workbenchPhase,
   onCloseRightPanel,
+  onApplicationLifecycleChange,
   designPhasePlanning = false
 }: UseChatSessionsParams): UseChatSessionsResult {
   const { recordReachedPhase } = useWorkbenchPhase()
@@ -736,7 +741,13 @@ export function useChatSessions({
     setSessionErrors((current) => ({ ...current, [editorMode]: undefined }))
 
     try {
-      await deleteChatSession(application.workspaceRoot, editorMode, sessionId)
+      const releaseSucceeded = await releasePendingBeforeSessionDelete(
+        () => runningSessionsRef.current.has(key),
+        () => releaseSessionPendingPlan(application.workspaceRoot, sessionId),
+        onApplicationLifecycleChange,
+        () => deleteChatSession(application.workspaceRoot, editorMode, sessionId)
+      )
+      if (!releaseSucceeded) return
       setSessionSummaries((current) => ({
         ...current,
         [editorMode]: current[editorMode].filter((session) => session.id !== sessionId)
