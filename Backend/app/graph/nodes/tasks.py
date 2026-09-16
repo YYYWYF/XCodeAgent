@@ -17,7 +17,7 @@ from app.services.artifact_invalidation import (
     canonical_sha256,
     stale_artifact_keys,
 )
-from app.services.build_context_resolver import resolve_target_build_context
+from app.services.build_context_resolver import resolve_confirmation_context
 from app.services.build_task_confirmation import (
     build_task_confirmation_read_model,
 )
@@ -31,7 +31,6 @@ from app.services.planning_issues import ValidationIssue
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.template_state import effective_capabilities, load_template_state
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
-from app.workspace.endpoint_design_documents import technical_plan_path
 from app.workspace.plan_documents import (
     load_project_plan_json,
     project_plan_json_path,
@@ -558,20 +557,13 @@ def _resolve_build_context(
     """按范围解析详情上下文；应用范围保留全局信息但不伪造单页详情。"""
 
     target_type = build_execution_scope["type"]
-    target_id = build_execution_scope["targetId"]
     if target_type != "application":
-        context = resolve_target_build_context(
-            project_plan,
-            target_type=target_type,
-            target_id=target_id,
-            api_contract_id=str(
-                build_execution_scope.get("apiContractId")
-                or build_execution_scope.get("api_contract_id")
-                or ""
-            ).strip() or None,
-            project_plan_path=technical_plan_path(workspace_from_state(state)),
+        resolved = resolve_confirmation_context(
+            workspace_from_state(state) or "",
+            build_execution_scope,
+            project_plan=project_plan,
         )
-        return context
+        return resolved["build_context"]
     return {
         "target": {"type": "application", "id": "application"},
         "page_implementation_contract": None,

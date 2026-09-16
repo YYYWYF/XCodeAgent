@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,126 @@ from app.services.api_design import (
 )
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
 from app.services.page_identity import page_id_to_page_key
+from app.services.page_implementation_contract import materialize_technical_plan_runtime
+from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
+from app.workspace.endpoint_design_documents import technical_plan_path
+from app.workspace.plan_documents import load_project_plan_json
+from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
+
+
+def resolve_confirmation_context(
+    workspace: str | Path,
+    build_execution_scope: Mapping[str, Any],
+    *,
+    project_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """从当前正式产物或实时计划重建确认卡所需的只读上下文。"""
+
+    if not str(workspace or "").strip():
+        raise ValueError("恢复确认卡缺少 workspace。")
+    if not isinstance(build_execution_scope, Mapping):
+        raise ValueError("恢复确认卡缺少合法的 build_execution_scope。")
+
+    target_type = str(build_execution_scope.get("type") or "").strip()
+    target_id = str(
+        build_execution_scope.get("targetId")
+        or build_execution_scope.get("target_id")
+        or ""
+    ).strip()
+    if target_type not in {"page", "endpoint"} or not target_id:
+        raise ValueError(f"不支持恢复确认详情的 Build Scope：{target_type or 'unknown'}。")
+
+    workspace_root = Path(workspace).expanduser().resolve()
+    plan_path = technical_plan_path(workspace_root)
+    if project_plan is None:
+        project_plan = _load_current_confirmation_plan(
+            workspace_root,
+            target_type=target_type,
+            plan_path=plan_path,
+        )
+    elif not isinstance(project_plan, dict):
+        raise ValueError("实时确认上下文的 ProjectPlan 不是 JSON object。")
+
+    build_context = resolve_target_build_context(
+        project_plan,
+        target_type=target_type,
+        target_id=target_id,
+        api_contract_id=str(
+            build_execution_scope.get("apiContractId")
+            or build_execution_scope.get("api_contract_id")
+            or ""
+        ).strip()
+        or None,
+        project_plan_path=plan_path,
+    )
+    return {
+        "project_plan": project_plan,
+        "build_context": build_context,
+    }
+
+
+def _load_current_confirmation_plan(
+    workspace_root: Path,
+    *,
+    target_type: str,
+    plan_path: Path,
+) -> dict[str, Any]:
+    """读取当前正式 TechnicalPlan，并按页面目标重建运行时派生契约。"""
+
+    try:
+        technical_plan = load_project_plan_json(
+            plan_path,
+            hydrate_detail_designs=True,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError(f"当前正式 TechnicalPlan 无法读取：{plan_path}。") from exc
+    if not isinstance(technical_plan, dict):
+        raise ValueError("当前正式 TechnicalPlan 的根结构不是 JSON object。")
+    if technical_plan.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE:
+        raise ValueError("当前正式 TechnicalPlan 类型不正确。")
+    if technical_plan.get("confirmation_status") != "confirmed":
+        raise ValueError("当前正式 TechnicalPlan 未确认。")
+    if target_type != "page":
+        return technical_plan
+    return _materialize_page_confirmation_plan(workspace_root, technical_plan)
+
+
+def _materialize_page_confirmation_plan(
+    workspace_root: Path,
+    technical_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """按当前正式上游物化 PageImplementationContract，不读取 Pending 副本。"""
+
+    requirement_path = workspace_root / ".xcodeagent/specs/requirement-spec.json"
+    product_path = workspace_root / ".xcodeagent/plans/product-plan.json"
+    ui_path = workspace_root / ".xcodeagent/specs/ui-designs.json"
+    try:
+        requirement_spec = load_requirement_spec_json(requirement_path)
+        product_plan = load_project_plan_json(
+            product_path,
+            hydrate_detail_designs=True,
+        )
+        ui_designs = load_ui_designs_json(ui_path)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError("当前正式 RequirementSpec、ProductPlan 或 UiManifest 无法读取。") from exc
+    if not all(
+        isinstance(artifact, dict) and artifact
+        for artifact in (requirement_spec, product_plan, ui_designs)
+    ):
+        raise ValueError("当前正式 RequirementSpec、ProductPlan 或 UiManifest 不完整。")
+    if requirement_spec.get("confirmation_status") != "confirmed":
+        raise ValueError("当前正式 RequirementSpec 未确认。")
+    if product_plan.get("confirmation_status") != "confirmed":
+        raise ValueError("当前正式 ProductPlan 未确认。")
+    if ui_designs.get("confirmation_status") not in {"confirmed", "skipped"}:
+        raise ValueError("当前正式 UiManifest 未确认或未明确跳过。")
+    return materialize_technical_plan_runtime(
+        technical_plan,
+        requirement_spec,
+        product_plan,
+        ui_designs,
+    )
 
 
 def _endpoint_contract(
