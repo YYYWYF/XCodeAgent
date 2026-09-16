@@ -1,6 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 from pathlib import Path
+
+from code_review_graph.parser import EXTENSION_TO_LANGUAGE
 
 from PyInstaller.utils.hooks import (
     collect_data_files,
@@ -11,6 +14,30 @@ from PyInstaller.utils.hooks import (
 
 
 backend_root = Path(SPECPATH).parent.resolve()
+grammar_profile = os.environ.get("XCODEAGENT_BACKEND_GRAMMARS", "full")
+if grammar_profile not in {"full", "builtin"}:
+    raise ValueError(f"Unsupported backend grammar profile: {grammar_profile}")
+
+# 精简包保留代码图默认语言，以及后端 AST 校验直接使用的 Java/TypeScript/TSX。
+builtin_grammars = frozenset(EXTENSION_TO_LANGUAGE.values()) | {
+    "java",
+    "typescript",
+    "tsx",
+}
+
+
+def include_grammar_module(module_name: str) -> bool:
+    """只过滤语言包的语法绑定模块，保留包入口和默认语法。"""
+
+    prefix = "tree_sitter_language_pack.bindings."
+    return not module_name.startswith(prefix) or module_name[len(prefix):] in builtin_grammars
+
+
+def include_grammar_binary(binary: tuple[str, str]) -> bool:
+    """防止动态库收集路径重新带入精简包排除的语法。"""
+
+    source, destination = binary
+    return "bindings" not in Path(destination).parts or Path(source).name.split(".")[0] in builtin_grammars
 
 datas = [
     (
@@ -29,7 +56,10 @@ for package_name in (
     "tree_sitter_language_pack",
 ):
     datas += collect_data_files(package_name)
-    binaries += collect_dynamic_libs(package_name)
+    package_binaries = collect_dynamic_libs(package_name)
+    if grammar_profile == "builtin" and package_name == "tree_sitter_language_pack":
+        package_binaries = [binary for binary in package_binaries if include_grammar_binary(binary)]
+    binaries += package_binaries
 
 for distribution_name in (
     "ag-ui-protocol",
@@ -64,7 +94,10 @@ for package_name in (
     "tree_sitter",
     "tree_sitter_language_pack",
 ):
-    hiddenimports += collect_submodules(package_name)
+    if grammar_profile == "builtin" and package_name == "tree_sitter_language_pack":
+        hiddenimports += collect_submodules(package_name, filter=include_grammar_module)
+    else:
+        hiddenimports += collect_submodules(package_name)
 
 hiddenimports += [
     "uvicorn.lifespan.on",

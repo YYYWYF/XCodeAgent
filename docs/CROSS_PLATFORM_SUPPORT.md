@@ -32,6 +32,11 @@ frontend dependencies beforehand; the entries call `pnpm` directly and do not re
 `node_modules`. Install the pnpm version declared by `Frontend/package.json` before a clean
 `pnpm install --frozen-lockfile` so it matches the checked-in lockfile.
 
+The default package includes all Tree-sitter language bindings. To build a smaller package, append
+`--slim` to either macOS entry or `-Slim` to the Windows entry. The slim profile retains grammars
+used by the code graph's built-in extension mapping and the backend's Java/TypeScript/TSX AST
+validators. Custom workspace grammars outside that set are not available in slim packages.
+
 The macOS backend script uses `Backend/.venv/bin/python` when present, or a system Python 3.14/3.12.
 Set `PYTHON=/absolute/path/to/python` to select a different supported interpreter. The Windows
 script defaults to `py -3.12`; pass `-Python C:\path\to\python.exe` to build with Python 3.14.

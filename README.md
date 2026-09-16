@@ -39,6 +39,13 @@ Intel Mac（`uname -m` 输出 `x86_64`）：
 bash scripts/mac_pack_x64.sh
 ```
 
+默认打完整语法包。如需精简包，在对应命令后加 `--slim`：
+
+```bash
+bash scripts/mac_pack_arm64.sh --slim  # Apple Silicon
+bash scripts/mac_pack_x64.sh --slim    # Intel Mac
+```
+
 脚本会校验当前机器的架构，不支持在 arm64 Mac 上直接打 x64 包，或反过来打包。如需指定 Python，可在命令前设置 `PYTHON`，例如：
 
 ```bash
@@ -61,11 +68,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\win_pack.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\win_pack.ps1 -Python 'C:\path\to\python.exe'
 ```
 
+精简包加 `-Slim`，也可与 `-Python` 一起使用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\win_pack.ps1 -Slim
+```
+
 成功后，Windows 安装程序（`*-setup.exe`）及解包目录位于 `Frontend/dist/`。
 
 ## 注意事项
 
 - 这三个一键脚本构建的是 `dev` 包。macOS 没有可用签名证书时会生成未签名的包；对外发布前还需要完成签名、公证等发布配置。
+- 精简包只内置代码图默认语言及后端 AST 校验需要的语法；工作区通过 `.code-review-graph/languages.toml` 指定的其他 Tree-sitter 语法将不可用。需要完整自定义语言支持时，不加 `--slim` / `-Slim`。
 - `Backend/.env` 会随后端一起进入安装包。不要把包含真实密钥的产物上传、公开分享或提交到 Git。
 - 如果只需分别执行两步，可使用 `scripts/build-backend-mac.sh` / `scripts/build-backend-win.ps1` 和 `Frontend/package.json` 中对应的 `build:mac:<arch>:dev` / `build:win:dev` 命令。平台与架构必须保持一致。
 

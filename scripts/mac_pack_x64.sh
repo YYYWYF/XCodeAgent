@@ -10,7 +10,17 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
-bash "$SCRIPT_DIR/build-backend-mac.sh" x64
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--slim" ]; }; then
+  echo "Usage: bash scripts/mac_pack_x64.sh [--slim]" >&2
+  exit 1
+fi
+
+GRAMMAR_PROFILE="full"
+if [ "${1:-}" = "--slim" ]; then
+  GRAMMAR_PROFILE="builtin"
+fi
+
+XCODEAGENT_BACKEND_GRAMMARS="$GRAMMAR_PROFILE" bash "$SCRIPT_DIR/build-backend-mac.sh" x64
 cd "$REPO_ROOT/Frontend"
 pnpm build:mac:x64:dev
 
