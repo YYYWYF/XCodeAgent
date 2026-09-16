@@ -452,7 +452,7 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 native_attempt.source_authority_kind,
                 RecoverySourceAuthorityKind.CHECKPOINT,
             )
-            self.assertIsNotNone(native_attempt.source_recovery_point_id)
+            self.assertIsNone(native_attempt.source_recovery_point_id)
             self.assertIsNotNone(native_attempt.source_checkpoint_id)
 
             executions = await list_executions_for_thread(
@@ -527,7 +527,7 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                     attempt.source_authority_kind,
                     RecoverySourceAuthorityKind.CHECKPOINT,
                 )
-                self.assertIsNotNone(attempt.source_recovery_point_id)
+                self.assertIsNone(attempt.source_recovery_point_id)
                 self.assertIsNotNone(attempt.source_checkpoint_id)
 
             executions = await list_executions_for_thread(

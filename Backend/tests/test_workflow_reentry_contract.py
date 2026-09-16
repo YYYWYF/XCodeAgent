@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypedDict
@@ -21,11 +22,13 @@ from app.domain.execution_recovery import (
     WorkflowReentryReason,
 )
 from app.persistence.execution_recovery import (
+    execution_recovery_db_path,
     get_node_entry_boundary,
     insert_node_entry_boundary,
     insert_execution,
 )
 from app.services.execution_recovery_executor import WorkflowReentryExecutor
+from app.services.execution_recovery_action_planner import plan_failed_node_reentry_action
 from app.services.workflow_reentry import (
     FailureTargetResolver,
     RevisionTargetResolver,
@@ -351,6 +354,26 @@ class WorkflowReentryContractTests(unittest.IsolatedAsyncioTestCase):
                 thread_id=source.thread_id,
                 target_node="A",
             )
+            first_action = plan_failed_node_reentry_action(
+                workspace=str(workspace),
+                source=source,
+                reentry_plan=rebuilt_plan,
+            )
+            with sqlite3.connect(execution_recovery_db_path(workspace)) as connection:
+                connection.execute(
+                    "DELETE FROM node_entry_boundaries WHERE source_run_id = ?",
+                    (source.run_id,),
+                )
+            cacheless_plan = await FailureTargetResolver().resolve(
+                workspace=str(workspace),
+                source=source,
+                graph=graph,
+            )
+            cacheless_action = plan_failed_node_reentry_action(
+                workspace=str(workspace),
+                source=source,
+                reentry_plan=cacheless_plan,
+            )
 
         self.assertEqual(
             rebuilt_plan.context_authority.checkpoint_id,
@@ -360,6 +383,17 @@ class WorkflowReentryContractTests(unittest.IsolatedAsyncioTestCase):
         assert rebuilt_boundary is not None
         self.assertEqual(rebuilt_boundary.checkpoint_id, first_boundary.checkpoint_id)
         self.assertNotEqual(rebuilt_boundary.boundary_id, "corrupt-boundary-index")
+        self.assertEqual(
+            cacheless_plan.context_authority.checkpoint_id,
+            rebuilt_plan.context_authority.checkpoint_id,
+        )
+        self.assertEqual(cacheless_action.incident_id, first_action.incident_id)
+        assert cacheless_action.primary_action is not None
+        assert first_action.primary_action is not None
+        self.assertEqual(
+            cacheless_action.primary_action.action_id,
+            first_action.primary_action.action_id,
+        )
 
     async def test_missing_source_owned_checkpoint_fails_closed(self) -> None:
         """只有其他 run 的同节点 checkpoint 时不得回退到旧现场或阶段重启 fallback。"""

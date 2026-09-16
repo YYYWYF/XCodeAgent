@@ -15,8 +15,6 @@ from app.domain.execution_recovery import (
     DurableExecutionStatus,
     ExecutionLease,
     ExecutionLeaseStatus,
-    RecoveryPoint,
-    RecoveryPointKind,
 )
 from app.persistence.execution_recovery import (
     finish_execution_and_release_lease,
@@ -24,8 +22,6 @@ from app.persistence.execution_recovery import (
     get_execution_lease,
     insert_execution,
     insert_execution_with_lease,
-    insert_recovery_point,
-    list_recovery_points,
     mark_execution_interrupted,
     reconcile_orphaned_executions,
     renew_execution_lease,
@@ -389,15 +385,11 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.status, DurableExecutionStatus.CANCELLED)
         self.assertEqual(lease.status, ExecutionLeaseStatus.RELEASED)
 
-    async def test_legacy_running_without_lease_is_interrupted_and_point_is_kept(self) -> None:
-        """P0.1 的 RUNNING/no-lease 记录可被 scanner 修正且不删除 RecoveryPoint。"""
+    async def test_legacy_running_without_lease_is_interrupted(self) -> None:
+        """P0.1 的 RUNNING/no-lease 记录仍可被 scanner 修正。"""
 
         record = self._record("run-legacy", thread_id="thread-legacy")
         await insert_execution(record)
-        await insert_recovery_point(
-            workspace=self.workspace,
-            point=self._point("run-legacy", "legacy-point"),
-        )
 
         result = await reconcile_workspace_recovery(
             self.workspace,
@@ -408,11 +400,9 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.interrupted_run_ids, ["run-legacy"])
         loaded = await get_execution(self.workspace, "run-legacy")
-        points = await list_recovery_points(self.workspace, "run-legacy")
         self.assertIsNotNone(loaded)
         assert loaded is not None
         self.assertEqual(loaded.status, DurableExecutionStatus.INTERRUPTED)
-        self.assertEqual([point.recovery_point_id for point in points], ["legacy-point"])
 
     async def test_old_backend_owner_is_interrupted_even_before_lease_expiry(self) -> None:
         """Backend 重启后旧 owner 的未来 lease 也必须收敛为 INTERRUPTED/EXPIRED。"""
@@ -818,7 +808,6 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
             ]
 
         old = await get_execution(self.workspace, "run-runtime-conflict")
-        points = await list_recovery_points(self.workspace, "run-runtime-conflict")
         payload = "".join(frames)
         self.assertIn("DURABLE_EXECUTION_RUN_ID_CONFLICT", payload)
         self.assertIn('"type":"RUN_ERROR"', payload)
@@ -828,7 +817,6 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(old)
         assert old is not None
         self.assertEqual(old.status, DurableExecutionStatus.INTERRUPTED)
-        self.assertEqual(points, [])
 
     async def test_runtime_active_registry_conflict_preserves_old_owner(self) -> None:
         """进程内 active 冲突必须阻止新请求且保留旧 task 的取消 owner。"""
@@ -916,7 +904,6 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"type":"RUN_FINISHED"', "".join(frames))
         self.assertIsNone(await get_execution(self.workspace, "run-fail-open"))
         self.assertIsNone(await get_execution_lease(self.workspace, "run-fail-open"))
-        self.assertEqual(await list_recovery_points(self.workspace, "run-fail-open"), [])
 
     async def test_best_effort_observation_rethrows_run_id_conflict(self) -> None:
         """通用旁路 helper 只能吞恢复故障，不能吞 runId 身份冲突。"""
@@ -1002,19 +989,6 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
             status=DurableExecutionStatus.RUNNING,
             started_at=timestamp,
             updated_at=timestamp,
-        )
-
-    def _point(self, run_id: str, point_id: str) -> RecoveryPoint:
-        """构造可用于 legacy scanner 断言的 ENTRY RecoveryPoint。"""
-
-        return RecoveryPoint(
-            recovery_point_id=point_id,
-            run_id=run_id,
-            thread_id=f"thread-{run_id}",
-            kind=RecoveryPointKind.ENTRY,
-            graph_node="A",
-            next_nodes=["A"],
-            captured_at=datetime.now(timezone.utc),
         )
 
     def _workflow_payload(self, *, thread_id: str, run_id: str) -> dict[str, object]:

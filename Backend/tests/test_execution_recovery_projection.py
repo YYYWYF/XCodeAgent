@@ -70,7 +70,6 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
             lineage_parent_run_id=run_id,
             context_authority=WorkflowReentryContextAuthority(
                 kind=WorkflowReentryContextAuthorityKind.CHECKPOINT,
-                boundary_id="projection-boundary",
                 source_run_id=run_id,
                 thread_id="thread-A",
                 target_node="build",

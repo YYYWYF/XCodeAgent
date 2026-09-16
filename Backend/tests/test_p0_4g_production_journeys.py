@@ -2088,17 +2088,6 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                         )
                     )
 
-                points = await list_recovery_points(workspace, source_run_id)
-                entry = next(
-                    point
-                    for point in reversed(points)
-                    if point.completed_node is None
-                    and point.next_nodes == ["ui_confirmation"]
-                    and point.checkpoint_id is not None
-                )
-                self.assertEqual(entry.thread_id, thread_id)
-                self.assertEqual(entry.checkpoint_ns, "")
-
                 # 必须清掉旧 Graph/cache 并关闭旧 SQLite connection，随后才模拟新 Backend。
                 clear_application_planning_graph_cache()
                 self.assertTrue(

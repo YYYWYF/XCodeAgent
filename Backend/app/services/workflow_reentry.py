@@ -17,8 +17,6 @@ from app.domain.execution_recovery import (
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
-    RecoveryPoint,
-    RecoveryPointKind,
     RecoveryStrategy,
     WorkflowReentryContextAuthority,
     WorkflowReentryContextAuthorityKind,
@@ -27,9 +25,7 @@ from app.domain.execution_recovery import (
     WorkflowReentryReason,
 )
 from app.persistence.execution_recovery import (
-    get_node_entry_boundary,
     insert_node_entry_boundary,
-    insert_recovery_point,
 )
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.execution_recovery import durable_execution_status
@@ -95,7 +91,6 @@ class FailureTargetResolver:
             source_run_id=source.run_id,
             context_authority=WorkflowReentryContextAuthority(
                 kind=WorkflowReentryContextAuthorityKind.CHECKPOINT,
-                boundary_id=boundary.boundary_id,
                 source_run_id=boundary.source_run_id,
                 thread_id=boundary.thread_id,
                 target_node=boundary.target_node,
@@ -131,6 +126,7 @@ class InterruptedTargetResolver:
         workspace: str,
         source: DurableExecutionRecord,
         graph: Any,
+        require_current_lineage: bool = True,
     ) -> InterruptedTargetResolution:
         """解释最新中断现场，不回退历史 checkpoint 或使用业务策略。"""
 
@@ -139,28 +135,29 @@ class InterruptedTargetResolver:
                 "INTERRUPTED_SOURCE_REQUIRED",
                 "当前 source 不是 INTERRUPTED execution。",
             )
-        try:
-            lineage = await resolve_recovery_lineage_head(
-                workspace,
-                thread_id=source.thread_id,
-                execution_kind=source.execution_kind,
-            )
-        except Exception as exc:
-            return _interrupted_needs_attention(
-                "RECOVERY_LINEAGE_UNAVAILABLE",
-                "当前 INTERRUPTED source 的 lineage 无法安全解析。",
-                cause=exc,
-            )
-        if (
-            lineage.head is None
-            or lineage.head.run_id != source.run_id
-            or lineage.head.status is not DurableExecutionStatus.INTERRUPTED
-            or lineage.state.value == "AMBIGUOUS"
-        ):
-            return _interrupted_needs_attention(
-                "RECOVERY_SOURCE_NOT_CURRENT",
-                "当前 INTERRUPTED source 不是唯一的 lineage head。",
-            )
+        if require_current_lineage:
+            try:
+                lineage = await resolve_recovery_lineage_head(
+                    workspace,
+                    thread_id=source.thread_id,
+                    execution_kind=source.execution_kind,
+                )
+            except Exception as exc:
+                return _interrupted_needs_attention(
+                    "RECOVERY_LINEAGE_UNAVAILABLE",
+                    "当前 INTERRUPTED source 的 lineage 无法安全解析。",
+                    cause=exc,
+                )
+            if (
+                lineage.head is None
+                or lineage.head.run_id != source.run_id
+                or lineage.head.status is not DurableExecutionStatus.INTERRUPTED
+                or lineage.state.value == "AMBIGUOUS"
+            ):
+                return _interrupted_needs_attention(
+                    "RECOVERY_SOURCE_NOT_CURRENT",
+                    "当前 INTERRUPTED source 不是唯一的 lineage head。",
+                )
 
         history_reader = getattr(graph, "aget_state_history", None)
         if not callable(history_reader):
@@ -239,22 +236,14 @@ class InterruptedTargetResolver:
                         "最新 checkpoint 包含无法安全重入的多个或空 Node。",
                         snapshot=snapshot,
                     )
-                try:
-                    boundary = await _persist_boundary(
-                        workspace=workspace,
-                        source=source,
-                        target_node=next_nodes[0],
-                        checkpoint_id=checkpoint_id,
-                        checkpoint_ns=checkpoint_ns,
-                        values=values,
-                    )
-                except Exception as exc:
-                    return _interrupted_needs_attention(
-                        "INTERRUPTED_BOUNDARY_PERSIST_FAILED",
-                        "最新 checkpoint 的 Node Entry index 无法持久化。",
-                        snapshot=snapshot,
-                        cause=exc,
-                    )
+                boundary = await _persist_boundary_index(
+                    workspace=workspace,
+                    source=source,
+                    target_node=next_nodes[0],
+                    checkpoint_id=checkpoint_id,
+                    checkpoint_ns=checkpoint_ns,
+                    values=values,
+                )
                 lifecycle = load_application_lifecycle(workspace)
                 plan = WorkflowReentryPlan(
                     reason=WorkflowReentryReason.INTERRUPTED_CONTINUE,
@@ -264,7 +253,6 @@ class InterruptedTargetResolver:
                     source_run_id=source.run_id,
                     context_authority=WorkflowReentryContextAuthority(
                         kind=WorkflowReentryContextAuthorityKind.CHECKPOINT,
-                        boundary_id=boundary.boundary_id,
                         source_run_id=boundary.source_run_id,
                         thread_id=boundary.thread_id,
                         target_node=boundary.target_node,
@@ -342,19 +330,6 @@ async def resolve_node_entry_boundary(
 ) -> NodeEntryBoundary:
     """从 committed checkpoint history 恢复精确 Node Entry authority 并重建旁路索引。"""
 
-    indexed = await get_node_entry_boundary(
-        workspace,
-        source_run_id=source.run_id,
-        thread_id=source.thread_id,
-        target_node=target_node,
-    )
-    if indexed is not None:
-        snapshot = await _read_boundary_snapshot(graph=graph, boundary=indexed)
-        if _snapshot_matches_boundary(snapshot, boundary=indexed, source=source):
-            return indexed
-        # 旁路表只保存索引，不能把损坏的索引升级成 State authority；继续从
-        # 同一 source/thread/target 的 committed history 精确重建，找不到才 fail closed。
-
     history_reader = getattr(graph, "aget_state_history", None)
     if not callable(history_reader):
         raise RecoveryExecutionError(
@@ -379,7 +354,7 @@ async def resolve_node_entry_boundary(
                 or str(values.get("active_run_id") or "") != source.run_id
             ):
                 continue
-            return await _persist_boundary(
+            return await _persist_boundary_index(
                 workspace=workspace,
                 source=source,
                 target_node=target_node,
@@ -433,7 +408,7 @@ async def resolve_current_node_entry_boundary(
                 or str(values.get("active_run_id") or "") != source.run_id
             ):
                 continue
-            return await _persist_boundary(
+            return await _persist_boundary_index(
                 workspace=workspace,
                 source=source,
                 target_node=next_nodes[0],
@@ -466,7 +441,6 @@ def recovery_plan_from_reentry(plan: WorkflowReentryPlan) -> RecoveryPlan:
         }
         or authority.kind is not WorkflowReentryContextAuthorityKind.CHECKPOINT
         or not plan.source_run_id
-        or not authority.boundary_id
         or not authority.checkpoint_id
         or authority.checkpoint_ns != ""
     ):
@@ -480,7 +454,6 @@ def recovery_plan_from_reentry(plan: WorkflowReentryPlan) -> RecoveryPlan:
         decision=RecoveryDecision.READY_NATIVE,
         strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
         lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
-        recovery_point_id=authority.boundary_id,
         checkpoint_id=authority.checkpoint_id,
         checkpoint_ns=authority.checkpoint_ns,
         next_nodes=[plan.target_node],
@@ -512,7 +485,7 @@ def semantic_context_sha256(state: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-async def _persist_boundary(
+async def _persist_boundary_index(
     *,
     workspace: str,
     source: DurableExecutionRecord,
@@ -521,84 +494,26 @@ async def _persist_boundary(
     checkpoint_ns: str,
     values: dict[str, Any],
 ) -> NodeEntryBoundary:
-    """同时写入新 Boundary 索引与旧 interrupted 路径仍消费的轻量 RecoveryPoint。"""
+    """best-effort 写入可删除的 checkpoint 索引，失败时仍返回真实 authority。"""
 
-    lifecycle = load_application_lifecycle(workspace)
+    del values
     captured_at = datetime.now(timezone.utc)
-    point = await insert_recovery_point(
-        workspace=workspace,
-        point=RecoveryPoint(
-            recovery_point_id=f"node-entry-{uuid4().hex}",
-            run_id=source.run_id,
-            thread_id=source.thread_id,
-            kind=RecoveryPointKind.CHECKPOINT,
-            checkpoint_id=checkpoint_id,
-            checkpoint_ns=checkpoint_ns,
-            graph_node=target_node,
-            completed_node=None,
-            next_nodes=[target_node],
-            phase=str(values.get("phase") or target_node),
-            state_status=str(values.get("status") or "running"),
-            lifecycle_revision=lifecycle.revision if lifecycle is not None else None,
-            workspace_revision=_optional_text(values.get("workspace_revision")),
-            workspace_snapshot_hash=_optional_text(values.get("workspace_snapshot_hash")),
-            captured_at=captured_at,
-        ),
+    boundary = NodeEntryBoundary(
+        boundary_id=f"node-entry-{uuid4().hex}",
+        source_run_id=source.run_id,
+        thread_id=source.thread_id,
+        target_node=target_node,
+        checkpoint_id=checkpoint_id,
+        checkpoint_ns=checkpoint_ns,
+        captured_at=captured_at,
     )
-    return await insert_node_entry_boundary(
-        workspace=workspace,
-        boundary=NodeEntryBoundary(
-            boundary_id=point.recovery_point_id,
-            source_run_id=source.run_id,
-            thread_id=source.thread_id,
-            target_node=target_node,
-            checkpoint_id=checkpoint_id,
-            checkpoint_ns=checkpoint_ns,
-            lifecycle_revision=point.lifecycle_revision,
-            workspace_revision=point.workspace_revision,
-            workspace_snapshot_hash=point.workspace_snapshot_hash,
-            captured_at=point.captured_at,
-        ),
-    )
-
-
-async def _read_boundary_snapshot(*, graph: Any, boundary: NodeEntryBoundary) -> Any | None:
-    """按完整 checkpoint identity 回读已有 Boundary 的真实 StateSnapshot。"""
-
-    if not hasattr(graph, "aget_state"):
-        return None
     try:
-        return await graph.aget_state(
-            {
-                "configurable": {
-                    "thread_id": boundary.thread_id,
-                    "checkpoint_ns": boundary.checkpoint_ns,
-                    "checkpoint_id": boundary.checkpoint_id,
-                }
-            }
+        return await insert_node_entry_boundary(
+            workspace=workspace,
+            boundary=boundary,
         )
     except Exception:
-        return None
-
-
-def _snapshot_matches_boundary(
-    snapshot: Any,
-    *,
-    boundary: NodeEntryBoundary,
-    source: DurableExecutionRecord,
-) -> bool:
-    """验证 checkpoint identity、successor 与 source run semantic ownership。"""
-
-    identity = _snapshot_identity(snapshot)
-    values = getattr(snapshot, "values", {}) if snapshot is not None else {}
-    values = values if isinstance(values, dict) else {}
-    return bool(
-        identity
-        == (boundary.thread_id, boundary.checkpoint_ns, boundary.checkpoint_id)
-        and [str(node) for node in (getattr(snapshot, "next", ()) or ())]
-        == [boundary.target_node]
-        and str(values.get("active_run_id") or "") == source.run_id
-    )
+        return boundary
 
 
 def _snapshot_identity(snapshot: Any) -> tuple[str, str, str] | None:

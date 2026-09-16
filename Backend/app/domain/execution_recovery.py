@@ -116,13 +116,6 @@ class ExecutionLeaseStatus(StrEnum):
     EXPIRED = "expired"
 
 
-class RecoveryPointKind(StrEnum):
-    """区分没有真实 checkpoint 的入口现场和 LangGraph checkpoint 现场。"""
-
-    ENTRY = "entry"
-    CHECKPOINT = "checkpoint"
-
-
 class WorkflowReentryReason(StrEnum):
     """区分失败重试、中断继续与正式修订三种 Workflow Node 重入来源。"""
 
@@ -147,9 +140,6 @@ class NodeEntryBoundary(ExecutionRecoveryModel):
     target_node: str = Field(min_length=1, max_length=256)
     checkpoint_id: str = Field(min_length=1, max_length=512)
     checkpoint_ns: str = Field(default="", max_length=512)
-    lifecycle_revision: int | None = Field(default=None, ge=0)
-    workspace_revision: str | None = Field(default=None, max_length=512)
-    workspace_snapshot_hash: str | None = Field(default=None, max_length=512)
     captured_at: datetime
 
 
@@ -157,7 +147,6 @@ class WorkflowReentryContextAuthority(ExecutionRecoveryModel):
     """保存重入语义上下文的权威身份，不在 Recovery DB 复制业务 State。"""
 
     kind: WorkflowReentryContextAuthorityKind
-    boundary_id: str | None = Field(default=None, max_length=512)
     source_run_id: str | None = Field(default=None, max_length=512)
     thread_id: str | None = Field(default=None, max_length=512)
     target_node: str | None = Field(default=None, max_length=256)
@@ -176,8 +165,7 @@ class WorkflowReentryContextAuthority(ExecutionRecoveryModel):
 
         if self.kind is WorkflowReentryContextAuthorityKind.CHECKPOINT:
             if (
-                not self.boundary_id
-                or not self.source_run_id
+                not self.source_run_id
                 or not self.thread_id
                 or not self.target_node
                 or not self.checkpoint_id
@@ -186,7 +174,6 @@ class WorkflowReentryContextAuthority(ExecutionRecoveryModel):
                 raise ValueError("CHECKPOINT context authority 缺少 Node Entry 身份。")
         elif (
             not self.revision_context_sha256
-            or self.boundary_id is not None
             or self.source_run_id is not None
             or self.thread_id is not None
             or self.target_node is not None
@@ -369,36 +356,6 @@ class ExecutionLease(ExecutionRecoveryModel):
     released_at: datetime | None = None
 
 
-class RecoveryPoint(ExecutionRecoveryModel):
-    """保存一个可供未来恢复协调器检索的 checkpoint 边界索引。"""
-
-    recovery_point_id: str = Field(min_length=1, max_length=512)
-    run_id: str = Field(min_length=1, max_length=512)
-    thread_id: str = Field(min_length=1, max_length=512)
-    kind: RecoveryPointKind
-    checkpoint_id: str | None = Field(default=None, max_length=512)
-    checkpoint_ns: str = Field(default="", max_length=512)
-    graph_node: str | None = Field(default=None, max_length=256)
-    completed_node: str | None = Field(default=None, max_length=256)
-    next_nodes: list[str] = Field(default_factory=list, max_length=256)
-    phase: str | None = Field(default=None, max_length=256)
-    state_status: str | None = Field(default=None, max_length=128)
-    lifecycle_revision: int | None = Field(default=None, ge=0)
-    workspace_revision: str | None = Field(default=None, max_length=512)
-    workspace_snapshot_hash: str | None = Field(default=None, max_length=512)
-    replay_safety: Literal["unassessed"] = "unassessed"
-    captured_at: datetime
-
-
-class ExecutionFailureBoundary(ExecutionRecoveryModel):
-    """固定一次失败证据所依据的 exact durable Graph boundary。"""
-
-    recovery_point_id: str = Field(min_length=1, max_length=512)
-    checkpoint_id: str = Field(min_length=1, max_length=512)
-    checkpoint_ns: str = Field(default="", max_length=512)
-    operation: str = Field(min_length=1, max_length=256)
-
-
 class RecoveryPlan(ExecutionRecoveryModel):
     """保存只读恢复协调结果，不复制完整 Graph State 或业务产物。"""
 
@@ -409,15 +366,12 @@ class RecoveryPlan(ExecutionRecoveryModel):
     lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode = (
         RecoveryLifecycleOwnershipMode.SOURCE_OWNED
     )
-    recovery_point_id: str | None = Field(default=None, max_length=512)
     checkpoint_id: str | None = Field(default=None, max_length=512)
     checkpoint_ns: str = Field(default="", max_length=512)
     next_nodes: list[str] = Field(default_factory=list, max_length=256)
     reason_code: str = Field(min_length=1, max_length=128)
     reason: str = Field(min_length=1, max_length=2048)
     lifecycle_revision: int | None = Field(default=None, ge=0)
-    workspace_revision: str | None = Field(default=None, max_length=512)
-    workspace_snapshot_hash: str | None = Field(default=None, max_length=512)
 
 
 class RecoveryActionKind(StrEnum):
@@ -533,7 +487,8 @@ class RecoveryAttempt(ExecutionRecoveryModel):
     new_run_id: str = Field(min_length=1, max_length=512)
     thread_id: str = Field(min_length=1, max_length=512)
     source_authority_kind: RecoverySourceAuthorityKind
-    # 以下 formal-stage authority 字段仅保留用于读取旧 durable row；当前 claim 不再写入。
+    # formal-stage identity 仅用于读取旧 durable row；lifecycle revision 也固定
+    # 当前 checkpoint claim 的 handoff authority，供 PREPARING 崩溃收敛使用。
     source_authority_sha256: str | None = Field(
         default=None,
         min_length=64,
@@ -542,6 +497,7 @@ class RecoveryAttempt(ExecutionRecoveryModel):
     )
     source_stage: str | None = Field(default=None, max_length=256)
     source_lifecycle_revision: int | None = Field(default=None, ge=0)
+    # 仅解码历史 SQLite durable row；当前 writer 始终持久化 NULL。
     source_recovery_point_id: str | None = Field(default=None, max_length=512)
     source_checkpoint_id: str | None = Field(default=None, max_length=512)
     source_checkpoint_ns: str = Field(default="", max_length=512)
@@ -565,8 +521,8 @@ class RecoveryAttempt(ExecutionRecoveryModel):
         """确保 checkpoint 与正式阶段 authority 不会互相伪装或缺少必要事实。"""
 
         if self.source_authority_kind is RecoverySourceAuthorityKind.CHECKPOINT:
-            if not self.source_recovery_point_id or not self.source_checkpoint_id:
-                raise ValueError("checkpoint recovery attempt 必须包含 RecoveryPoint 和 checkpointId。")
+            if not self.source_checkpoint_id or self.source_checkpoint_ns:
+                raise ValueError("checkpoint recovery attempt 必须包含 root checkpoint identity。")
         elif self.source_authority_kind is RecoverySourceAuthorityKind.FORMAL_STAGE:
             if (
                 not self.source_authority_sha256

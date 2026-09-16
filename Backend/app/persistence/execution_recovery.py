@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -26,8 +25,6 @@ from app.domain.execution_recovery import (
     RecoveryDecision,
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
-    RecoveryPoint,
-    RecoveryPointKind,
     RecoveryPlan,
     RecoverySourceAuthorityKind,
     RecoveryStrategy,
@@ -66,27 +63,6 @@ def _parse_datetime(value: str) -> datetime:
         if parsed.tzinfo is None
         else parsed
     )
-
-
-def _dedupe_key(point: RecoveryPoint) -> str:
-    """按 checkpoint 和 lifecycle observation 事实生成稳定幂等键。"""
-
-    payload = {
-        "runId": point.run_id,
-        "checkpointId": point.checkpoint_id,
-        "checkpointNs": point.checkpoint_ns,
-        "completedNode": point.completed_node,
-        "nextNodes": point.next_nodes,
-        "kind": point.kind.value,
-        "lifecycleRevision": point.lifecycle_revision,
-    }
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
 
 
 @asynccontextmanager
@@ -177,6 +153,7 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_execution_leases_owner
                 ON execution_leases(owner_backend_instance_id);
 
+            -- Legacy durable compatibility only; production has no current reader/writer.
             CREATE TABLE IF NOT EXISTS recovery_points (
                 recovery_point_id TEXT PRIMARY KEY,
                 run_id TEXT NOT NULL,
@@ -505,7 +482,7 @@ async def _claim_recovery_attempt(
             "RecoveryPlan 与 source execution 不属于同一条运行记录。",
         )
     checkpoint_complete = bool(
-        plan.recovery_point_id and plan.checkpoint_id and len(plan.next_nodes) == 1
+        plan.checkpoint_id and plan.checkpoint_ns == "" and len(plan.next_nodes) == 1
     )
     native_valid = (
         plan.decision is RecoveryDecision.READY_NATIVE
@@ -554,8 +531,8 @@ async def _claim_recovery_attempt(
         source_authority_kind=RecoverySourceAuthorityKind.CHECKPOINT,
         source_authority_sha256=None,
         source_stage=None,
-        source_lifecycle_revision=None,
-        source_recovery_point_id=plan.recovery_point_id,
+        source_lifecycle_revision=plan.lifecycle_revision,
+        source_recovery_point_id=None,
         source_checkpoint_id=plan.checkpoint_id,
         source_checkpoint_ns=plan.checkpoint_ns,
         strategy=plan.strategy,
@@ -664,7 +641,7 @@ async def _claim_recovery_attempt(
                     attempt.source_authority_sha256,
                     attempt.source_stage,
                     attempt.source_lifecycle_revision,
-                    attempt.source_recovery_point_id,
+                    None,
                     attempt.source_checkpoint_id,
                     attempt.source_checkpoint_ns,
                     None,
@@ -1592,63 +1569,6 @@ async def update_execution_status(
         )
 
 
-async def insert_recovery_point(
-    *,
-    workspace: str | Path,
-    point: RecoveryPoint,
-) -> RecoveryPoint:
-    """在同一事务中幂等写入现场并更新执行记录的 latest 指针。"""
-
-    await initialize_execution_recovery_store(workspace)
-    dedupe_key = _dedupe_key(point)
-    async with _connection(workspace) as connection:
-        cursor = await connection.execute(
-            """
-            INSERT INTO recovery_points(
-                recovery_point_id, run_id, thread_id, kind, checkpoint_id,
-                checkpoint_ns, graph_node, completed_node, next_nodes_json,
-                phase, state_status, lifecycle_revision, workspace_revision,
-                workspace_snapshot_hash, replay_safety, dedupe_key, captured_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(dedupe_key) DO NOTHING
-            """,
-            (
-                point.recovery_point_id,
-                point.run_id,
-                point.thread_id,
-                point.kind.value,
-                point.checkpoint_id,
-                point.checkpoint_ns,
-                point.graph_node,
-                point.completed_node,
-                json.dumps(point.next_nodes, ensure_ascii=False),
-                point.phase,
-                point.state_status,
-                point.lifecycle_revision,
-                point.workspace_revision,
-                point.workspace_snapshot_hash,
-                point.replay_safety,
-                dedupe_key,
-                _utc_iso(point.captured_at),
-            ),
-        )
-        inserted = cursor.rowcount == 1
-        row = await _fetch_recovery_point_row_by_dedupe(connection, dedupe_key)
-        if row is None:
-            raise RuntimeError(f"无法读取刚写入的恢复现场：{point.recovery_point_id}")
-        persisted = _recovery_point_from_row(row)
-        if inserted:
-            await connection.execute(
-                """
-                UPDATE execution_records
-                SET last_recovery_point_id = ?, updated_at = ?
-                WHERE run_id = ?
-                """,
-                (persisted.recovery_point_id, _utc_iso(persisted.captured_at), point.run_id),
-            )
-        return persisted
-
-
 async def insert_node_entry_boundary(
     *,
     workspace: str | Path,
@@ -1664,13 +1584,10 @@ async def insert_node_entry_boundary(
                 boundary_id, source_run_id, thread_id, target_node,
                 checkpoint_id, checkpoint_ns, lifecycle_revision,
                 workspace_revision, workspace_snapshot_hash, captured_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
             ON CONFLICT(source_run_id, thread_id, target_node, checkpoint_id, checkpoint_ns)
             DO UPDATE SET
                 boundary_id = excluded.boundary_id,
-                lifecycle_revision = excluded.lifecycle_revision,
-                workspace_revision = excluded.workspace_revision,
-                workspace_snapshot_hash = excluded.workspace_snapshot_hash,
                 captured_at = excluded.captured_at
             """,
             (
@@ -1680,17 +1597,13 @@ async def insert_node_entry_boundary(
                 boundary.target_node,
                 boundary.checkpoint_id,
                 boundary.checkpoint_ns,
-                boundary.lifecycle_revision,
-                boundary.workspace_revision,
-                boundary.workspace_snapshot_hash,
                 _utc_iso(boundary.captured_at),
             ),
         )
         cursor = await connection.execute(
             """
             SELECT boundary_id, source_run_id, thread_id, target_node,
-                   checkpoint_id, checkpoint_ns, lifecycle_revision,
-                   workspace_revision, workspace_snapshot_hash, captured_at
+                   checkpoint_id, checkpoint_ns, captured_at
             FROM node_entry_boundaries
             WHERE source_run_id = ? AND thread_id = ? AND target_node = ?
               AND checkpoint_id = ? AND checkpoint_ns = ?
@@ -1723,8 +1636,7 @@ async def get_node_entry_boundary(
         cursor = await connection.execute(
             """
             SELECT boundary_id, source_run_id, thread_id, target_node,
-                   checkpoint_id, checkpoint_ns, lifecycle_revision,
-                   workspace_revision, workspace_snapshot_hash, captured_at
+                   checkpoint_id, checkpoint_ns, captured_at
             FROM node_entry_boundaries
             WHERE source_run_id = ? AND thread_id = ? AND target_node = ?
             ORDER BY captured_at DESC, boundary_id DESC
@@ -1872,81 +1784,6 @@ async def list_recovery_projection_candidates(
     return [_execution_from_row(row) for row in rows]
 
 
-async def get_latest_recovery_point(
-    workspace: str | Path,
-    run_id: str,
-) -> RecoveryPoint | None:
-    """按捕获时间读取指定执行的最新恢复现场。"""
-
-    await initialize_execution_recovery_store(workspace)
-    async with _connection(workspace) as connection:
-        cursor = await connection.execute(
-            """
-            SELECT recovery_point_id, run_id, thread_id, kind, checkpoint_id,
-                   checkpoint_ns, graph_node, completed_node, next_nodes_json,
-                   phase, state_status, lifecycle_revision, workspace_revision,
-                   workspace_snapshot_hash, replay_safety, dedupe_key, captured_at
-            FROM recovery_points
-            WHERE run_id = ?
-            ORDER BY captured_at DESC, recovery_point_id DESC
-            LIMIT 1
-            """,
-            (run_id,),
-        )
-        row = await cursor.fetchone()
-        return _recovery_point_from_row(row) if row is not None else None
-
-
-async def get_recovery_point(
-    workspace: str | Path,
-    recovery_point_id: str,
-) -> RecoveryPoint | None:
-    """按稳定 recoveryPointId 读取单个恢复现场。"""
-
-    await initialize_execution_recovery_store(workspace)
-    async with _connection(workspace) as connection:
-        cursor = await connection.execute(
-            """
-            SELECT recovery_point_id, run_id, thread_id, kind, checkpoint_id,
-                   checkpoint_ns, graph_node, completed_node, next_nodes_json,
-                   phase, state_status, lifecycle_revision, workspace_revision,
-                   workspace_snapshot_hash, replay_safety, dedupe_key, captured_at
-            FROM recovery_points
-            WHERE recovery_point_id = ?
-            """,
-            (recovery_point_id,),
-        )
-        row = await cursor.fetchone()
-        return _recovery_point_from_row(row) if row is not None else None
-
-
-async def list_recovery_points(
-    workspace: str | Path,
-    run_id: str,
-    *,
-    newest_first: bool = False,
-) -> list[RecoveryPoint]:
-    """按捕获时间稳定读取一次执行的完整现场历史。"""
-
-    await initialize_execution_recovery_store(workspace)
-    order = "DESC" if newest_first else "ASC"
-    async with _connection(workspace) as connection:
-        cursor = await connection.execute(
-            f"""
-            SELECT recovery_point_id, run_id, thread_id, kind, checkpoint_id,
-                   checkpoint_ns, graph_node, completed_node, next_nodes_json,
-                   phase, state_status, lifecycle_revision, workspace_revision,
-                   workspace_snapshot_hash, replay_safety, dedupe_key, captured_at
-            FROM recovery_points
-            WHERE run_id = ?
-            ORDER BY captured_at {order}, recovery_point_id {order}
-            """,
-            (run_id,),
-        )
-        rows = await cursor.fetchall()
-        return [_recovery_point_from_row(row) for row in rows]
-
-
 async def _fetch_execution_row(
     connection: aiosqlite.Connection,
     run_id: str,
@@ -2034,26 +1871,6 @@ async def _fetch_execution_lease_row(
         WHERE run_id = ?
         """,
         (run_id,),
-    )
-    return await cursor.fetchone()
-
-
-async def _fetch_recovery_point_row_by_dedupe(
-    connection: aiosqlite.Connection,
-    dedupe_key: str,
-) -> tuple[object, ...] | None:
-    """按幂等键读取持久化后的现场行。"""
-
-    cursor = await connection.execute(
-        """
-        SELECT recovery_point_id, run_id, thread_id, kind, checkpoint_id,
-               checkpoint_ns, graph_node, completed_node, next_nodes_json,
-               phase, state_status, lifecycle_revision, workspace_revision,
-               workspace_snapshot_hash, replay_safety, dedupe_key, captured_at
-        FROM recovery_points
-        WHERE dedupe_key = ?
-        """,
-        (dedupe_key,),
     )
     return await cursor.fetchone()
 
@@ -2154,32 +1971,6 @@ def _recovery_attempt_from_row(row: tuple[object, ...]) -> RecoveryAttempt:
     )
 
 
-def _recovery_point_from_row(row: tuple[object, ...]) -> RecoveryPoint:
-    """将恢复现场表行恢复为严格的领域模型。"""
-
-    next_nodes = json.loads(str(row[8]))
-    if not isinstance(next_nodes, list):
-        raise ValueError("recovery_points.next_nodes_json 必须是数组。")
-    return RecoveryPoint(
-        recovery_point_id=str(row[0]),
-        run_id=str(row[1]),
-        thread_id=str(row[2]),
-        kind=RecoveryPointKind(str(row[3])),
-        checkpoint_id=str(row[4]) if row[4] is not None else None,
-        checkpoint_ns=str(row[5] or ""),
-        graph_node=str(row[6]) if row[6] is not None else None,
-        completed_node=str(row[7]) if row[7] is not None else None,
-        next_nodes=[str(value) for value in next_nodes],
-        phase=str(row[9]) if row[9] is not None else None,
-        state_status=str(row[10]) if row[10] is not None else None,
-        lifecycle_revision=int(row[11]) if row[11] is not None else None,
-        workspace_revision=str(row[12]) if row[12] is not None else None,
-        workspace_snapshot_hash=str(row[13]) if row[13] is not None else None,
-        replay_safety=str(row[14]),
-        captured_at=_parse_datetime(str(row[16])),
-    )
-
-
 def _node_entry_boundary_from_row(row: tuple[object, ...]) -> NodeEntryBoundary:
     """将 Node Entry Boundary 表行恢复为严格领域模型。"""
 
@@ -2190,8 +1981,5 @@ def _node_entry_boundary_from_row(row: tuple[object, ...]) -> NodeEntryBoundary:
         target_node=str(row[3]),
         checkpoint_id=str(row[4]),
         checkpoint_ns=str(row[5] or ""),
-        lifecycle_revision=int(row[6]) if row[6] is not None else None,
-        workspace_revision=str(row[7]) if row[7] is not None else None,
-        workspace_snapshot_hash=str(row[8]) if row[8] is not None else None,
-        captured_at=_parse_datetime(str(row[9])),
+        captured_at=_parse_datetime(str(row[6])),
     )

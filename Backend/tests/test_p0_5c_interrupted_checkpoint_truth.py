@@ -510,7 +510,6 @@ class InterruptedCheckpointTruthTests(unittest.IsolatedAsyncioTestCase):
             lineage_parent_run_id=self.source.run_id,
             context_authority=WorkflowReentryContextAuthority(
                 kind=WorkflowReentryContextAuthorityKind.CHECKPOINT,
-                boundary_id="boundary-build",
                 source_run_id=self.source.run_id,
                 thread_id=self.source.thread_id,
                 target_node="build",

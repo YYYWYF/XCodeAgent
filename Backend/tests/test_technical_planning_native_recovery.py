@@ -32,7 +32,6 @@ from app.domain.execution_recovery import (
     RecoveryDecision,
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
-    RecoveryPoint,
 )
 from app.graph.application_planning_interrupts import (
     route_technical_planning_review,
@@ -57,7 +56,6 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.application_revision_lifecycle import register_revision_impact
-from app.services.execution_recovery import capture_recovery_point
 from app.services.execution_recovery_executor import prepare_native_recovery
 from app.services.execution_recovery_lineage import resolve_recovery_head
 from app.services.execution_lease_heartbeat import stop_execution_heartbeat
@@ -74,7 +72,6 @@ class _TechnicalRecoveryScenario:
     runtime_graph: Any
     source_config: dict[str, Any]
     source: DurableExecutionRecord
-    point: RecoveryPoint
     counters: dict[str, int]
     candidate: dict[str, Any]
 
@@ -258,7 +255,7 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
         formal_revision: bool = False,
         succeeds: bool = True,
     ) -> _TechnicalRecoveryScenario:
-        """建立真实 source checkpoint、RecoveryPoint 和共享 runtime Graph。"""
+        """建立真实 source checkpoint 和共享 runtime Graph。"""
 
         raw_workspace = tempfile.TemporaryDirectory()
         workspace = Path(raw_workspace.name)
@@ -342,24 +339,12 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             ended_at=now,
         )
         await insert_execution(source)
-        point = await capture_recovery_point(
-            graph=source_graph,
-            config=source_config,
-            workspace=str(workspace),
-            thread_id=thread_id,
-            run_id=source_run_id,
-            workflow_scope="application_planning",
-            completed_node=None,
-            snapshot=source_snapshot,
-        )
-        assert point is not None
         return _TechnicalRecoveryScenario(
             workspace=workspace,
             source_graph=source_graph,
             runtime_graph=runtime_graph,
             source_config=source_config,
             source=source,
-            point=point,
             counters=counters,
             candidate=candidate,
         )
@@ -616,7 +601,6 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 runtime_graph=scenario.runtime_graph,
                 source_config=scenario.source_config,
                 source=await get_execution(scenario.workspace, child_id),
-                point=scenario.point,
                 counters=scenario.counters,
                 candidate=scenario.candidate,
             )
@@ -660,15 +644,6 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
         _plan, context = await self._prepare(scenario)
         snapshot = await self._run_child(scenario, context)
         self.assertTrue(any(task.interrupts for task in snapshot.tasks))
-        await capture_recovery_point(
-            graph=scenario.runtime_graph,
-            config=context.observation_config,
-            workspace=str(scenario.workspace),
-            thread_id=context.thread_id,
-            run_id=context.new_run_id,
-            workflow_scope="application_planning",
-            snapshot=snapshot,
-        )
         await mark_execution_interrupted(
             workspace=scenario.workspace,
             run_id=context.new_run_id,
@@ -740,7 +715,6 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             runtime_graph=scenario.runtime_graph,
             source_config=scenario.source_config,
             source=child,
-            point=scenario.point,
             counters=scenario.counters,
             candidate=scenario.candidate,
         )

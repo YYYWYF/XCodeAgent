@@ -18,7 +18,6 @@ from app.domain.execution_recovery import (
 from app.persistence.execution_recovery import (
     fail_recovery_attempt_prestart,
     get_execution,
-    get_recovery_point,
     get_recovery_attempt,
     list_executions_for_thread,
     list_recovery_attempts_for_thread,
@@ -296,11 +295,7 @@ async def reconcile_recovery_attempt(
                 status=RecoveryAttemptStatus.HANDED_OFF,
             )
         elif attempt.lifecycle_ownership_mode is RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP:
-            source_point = await get_recovery_point(
-                workspace,
-                attempt.source_recovery_point_id,
-            )
-            if lifecycle is None or source_point is None:
+            if lifecycle is None or attempt.source_lifecycle_revision is None:
                 attempt = await fail_recovery_attempt_prestart(
                     workspace=workspace,
                     new_run_id=new_run_id,
@@ -312,7 +307,7 @@ async def reconcile_recovery_attempt(
                         workspace,
                         new_run_id=attempt.new_run_id,
                         thread_id=attempt.thread_id,
-                        expected_lifecycle_revision=source_point.lifecycle_revision,
+                        expected_lifecycle_revision=attempt.source_lifecycle_revision,
                     )
                 except Exception:
                     attempt = await fail_recovery_attempt_prestart(

@@ -6,18 +6,14 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypeVar
-from uuid import uuid4
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionRunConflictError,
     DurableExecutionStatus,
-    ExecutionFailureBoundary,
     ExecutionLease,
     ExecutionLeaseStatus,
     ExecutionFailureEvidence,
-    RecoveryPoint,
-    RecoveryPointKind,
 )
 from app.config import execution_recovery_lease_ttl_seconds
 from app.persistence.execution_recovery import (
@@ -25,11 +21,9 @@ from app.persistence.execution_recovery import (
     get_execution,
     initialize_execution_recovery_store,
     insert_execution_with_lease,
-    insert_recovery_point,
     reconcile_execution_current_node,
     update_execution_node,
 )
-from app.services.application_lifecycle import load_application_lifecycle
 from app.services.backend_instance import current_backend_instance
 from app.services.execution_failure_classifier import classify_execution_failure
 
@@ -191,81 +185,6 @@ async def observe_node_started(
     )
 
 
-async def capture_recovery_point(
-    *,
-    graph: Any,
-    config: dict[str, Any],
-    workspace: str | None,
-    thread_id: str,
-    run_id: str,
-    workflow_scope: str | None,
-    completed_node: str | None = None,
-    first_node: str | None = None,
-    snapshot: Any | None = None,
-) -> RecoveryPoint | None:
-    """从真实 StateSnapshot 捕获轻量 checkpoint 索引，不复制完整 Graph State。"""
-
-    if not workspace:
-        return None
-    if snapshot is None:
-        if not hasattr(graph, "aget_state"):
-            return None
-        snapshot = await graph.aget_state(config)
-
-    raw_config = getattr(snapshot, "config", {})
-    snapshot_config = raw_config if isinstance(raw_config, dict) else {}
-    configurable = snapshot_config.get("configurable", {})
-    configurable = configurable if isinstance(configurable, dict) else {}
-    raw_checkpoint_id = configurable.get("checkpoint_id")
-    checkpoint_id = str(raw_checkpoint_id) if raw_checkpoint_id else None
-    checkpoint_ns = str(configurable.get("checkpoint_ns") or "")
-    raw_next_nodes = getattr(snapshot, "next", ()) or ()
-    next_nodes = [str(node_name) for node_name in raw_next_nodes]
-    values = getattr(snapshot, "values", {}) or {}
-    values = dict(values) if isinstance(values, dict) else {}
-    phase = values.get("phase")
-    state_status = values.get("status")
-    lifecycle_revision = _lifecycle_revision(workspace)
-    graph_node = (
-        str(completed_node)
-        if completed_node
-        else (next_nodes[0] if next_nodes else None)
-    )
-    point = RecoveryPoint(
-        recovery_point_id=f"recovery-point-{uuid4().hex}",
-        run_id=run_id,
-        thread_id=thread_id,
-        kind=(
-            RecoveryPointKind.CHECKPOINT
-            if checkpoint_id
-            else RecoveryPointKind.ENTRY
-        ),
-        checkpoint_id=checkpoint_id,
-        checkpoint_ns=checkpoint_ns,
-        graph_node=graph_node or first_node,
-        completed_node=completed_node,
-        next_nodes=next_nodes or ([first_node] if first_node and not completed_node else []),
-        phase=str(phase) if phase is not None else None,
-        state_status=str(state_status) if state_status is not None else None,
-        lifecycle_revision=lifecycle_revision,
-        workspace_revision=_optional_string(values.get("workspace_revision")),
-        workspace_snapshot_hash=_optional_string(values.get("workspace_snapshot_hash")),
-        captured_at=_utc_now(),
-    )
-    persisted = await insert_recovery_point(workspace=workspace, point=point)
-    logger.info(
-        "recovery.point.captured runId=%s threadId=%s workflowScope=%s "
-        "node=%s checkpointId=%s nextNodes=%s",
-        run_id,
-        thread_id,
-        workflow_scope,
-        completed_node,
-        checkpoint_id,
-        next_nodes,
-    )
-    return persisted
-
-
 async def observe_execution_finished(
     *,
     workspace: str | None,
@@ -311,20 +230,18 @@ async def observe_execution_failed(
     workflow_scope: str | None,
     backend_instance_id: str | None = None,
     exception: BaseException | None = None,
-    failure_boundary: ExecutionFailureBoundary | None = None,
+    authoritative_node: str | None = None,
     failure: ExecutionFailureEvidence | None = None,
 ) -> None:
     """记录未处理异常对应的失败终态。"""
 
-    authoritative_operation = (
-        failure_boundary.operation if failure_boundary is not None else None
-    )
-    if failure_boundary is not None and workspace:
+    authoritative_operation = str(authoritative_node or "").strip() or None
+    if authoritative_operation is not None and workspace:
         try:
             await reconcile_execution_current_node(
                 workspace=workspace,
                 run_id=run_id,
-                authoritative_node=failure_boundary.operation,
+                authoritative_node=authoritative_operation,
             )
         except Exception as exc:
             # mirror 收敛仍是旁路观测；即使它失败，也必须继续写入原始 FAILED 终态。
@@ -332,7 +249,7 @@ async def observe_execution_failed(
                 "recovery.failure_authority.mirror_reconcile_failed "
                 "runId=%s operation=%s error=%s",
                 run_id,
-                failure_boundary.operation,
+                authoritative_operation,
                 exc,
                 exc_info=True,
             )
@@ -409,25 +326,6 @@ def durable_execution_status(
     if observed_status == "stopped":
         return DurableExecutionStatus.STOPPED
     return DurableExecutionStatus.COMPLETED
-
-
-def _lifecycle_revision(workspace: str) -> int | None:
-    """读取可选 lifecycle revision；生命周期读取失败不阻断恢复现场记录。"""
-
-    try:
-        lifecycle = load_application_lifecycle(workspace)
-    except (OSError, ValueError):
-        return None
-    return lifecycle.revision if lifecycle is not None else None
-
-
-def _optional_string(value: Any) -> str | None:
-    """将状态中的可选字段压缩为非空字符串或 None。"""
-
-    if value is None:
-        return None
-    normalized = str(value)
-    return normalized if normalized else None
 
 
 async def _observe_terminal_status(

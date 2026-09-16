@@ -12,13 +12,10 @@ from app.domain.execution_recovery import (
     DurableExecutionStatus,
     ExecutionFailureEvidence,
     ExecutionFailureOrigin,
-    RecoveryPoint,
-    RecoveryPointKind,
 )
 from app.persistence.execution_recovery import (
     get_execution,
     insert_execution,
-    insert_recovery_point,
     list_recovery_attempts_from_source,
 )
 from app.protocols.execution_recovery import (
@@ -206,8 +203,8 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
             [],
         )
 
-    async def test_requires_handler_has_no_recovery_side_effects(self) -> None:
-        """默认 replay safety 未评估时只返回结构化拒绝，不 claim child 或修改 lifecycle。"""
+    async def test_missing_committed_history_has_no_recovery_side_effects(self) -> None:
+        """没有 committed history 时必须 fail closed，且不 claim child。"""
 
         now = datetime.now(timezone.utc)
         source = DurableExecutionRecord(
@@ -225,24 +222,10 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
             ended_at=now,
         )
         await insert_execution(source)
-        await insert_recovery_point(
-            workspace=self.workspace,
-            point=RecoveryPoint(
-                recovery_point_id="source-point",
-                run_id=source.run_id,
-                thread_id=source.thread_id,
-                kind=RecoveryPointKind.CHECKPOINT,
-                checkpoint_id="source-checkpoint",
-                checkpoint_ns="",
-                graph_node="B",
-                next_nodes=["B"],
-                captured_at=now,
-            ),
-        )
         snapshot = _RecoverySnapshot(source.thread_id, "source-checkpoint")
 
         async def aget_state(_config: dict[str, object]) -> _RecoverySnapshot:
-            """返回与 RecoveryPoint 完全一致的 checkpoint。"""
+            """保留 direct state reader，但不提供 committed history reader。"""
 
             return snapshot
 
@@ -268,7 +251,7 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
             ]
 
         output = "".join(frames)
-        self.assertIn("RECOVERY_REQUIRES_HANDLER", output)
+        self.assertIn("INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING", output)
         self.assertEqual(await list_recovery_attempts_from_source(self.workspace, source.run_id), [])
         self.assertIsNone(await get_execution(self.workspace, "recovery-child"))
 

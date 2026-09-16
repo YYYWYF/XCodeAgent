@@ -199,7 +199,6 @@ def _incident_id(
         'failure': execution_failure_sha256(source.failure),
         'failedNode': source.current_node,
         'lifecycleRevision': lifecycle.revision if lifecycle else None,
-        'nodeEntryBoundaryId': authority.boundary_id if authority else None,
         'nodeEntrySourceRunId': authority.source_run_id if authority else None,
         'nodeEntryThreadId': authority.thread_id if authority else None,
         'nodeEntryTargetNode': authority.target_node if authority else None,

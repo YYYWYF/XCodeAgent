@@ -32,8 +32,6 @@ from app.domain.execution_recovery import (
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
-    RecoveryPoint,
-    RecoveryPointKind,
     RecoverySourceAuthorityKind,
     RecoveryStrategy,
     WorkflowReentryPlan,
@@ -47,9 +45,7 @@ from app.persistence.execution_recovery import (
     get_execution,
     get_execution_lease,
     get_recovery_attempt,
-    get_recovery_point,
     fail_recovery_attempt_prestart,
-    insert_recovery_point,
     insert_node_entry_boundary,
     update_recovery_attempt,
 )
@@ -93,7 +89,6 @@ class NativeRecoveryRuntimeContext:
     source_execution: DurableExecutionRecord
     child_execution: DurableExecutionRecord
     recovery_plan: RecoveryPlan
-    source_recovery_point: RecoveryPoint | None
     new_run_id: str
     thread_id: str
     project_id: str | None
@@ -325,12 +320,6 @@ async def prepare_native_recovery(
         plan=plan,
     )
     _require_checkpoint_reentry_plan(plan, source=source)
-    source_point = await get_recovery_point(workspace, plan.recovery_point_id or "")
-    if source_point is None:
-        raise RecoveryExecutionError(
-            "INVALID_RECOVERY_POINT",
-            "RecoveryPlan 引用的 RecoveryPoint 已不存在。",
-        )
     identity = current_backend_instance()
     new_run_id = f"recovery-{uuid4().hex[:12]}"
     child_execution, _, attempt = await claim_native_recovery_attempt(
@@ -632,37 +621,24 @@ async def finalize_handed_off_recovery_attempt(
                 "RECOVERY_STRATEGY_UNSUPPORTED",
                 "Native Checkpoint Recovery 必须使用 checkpoint authority。",
             )
-        source_point = await get_recovery_point(
-            workspace,
-            attempt.source_recovery_point_id or "",
-        )
-        if source_point is None:
-            raise RecoveryExecutionError(
-                "INVALID_RECOVERY_POINT",
-                "RecoveryAttempt 的 source RecoveryPoint 不存在。",
-            )
-
         plan = RecoveryPlan(
             source_run_id=source.run_id,
             thread_id=source.thread_id,
             decision="ready_native",
             strategy=attempt.strategy,
             lifecycle_ownership_mode=attempt.lifecycle_ownership_mode,
-            recovery_point_id=attempt.source_recovery_point_id,
             checkpoint_id=attempt.source_checkpoint_id,
             checkpoint_ns=attempt.source_checkpoint_ns,
-            next_nodes=list(source_point.next_nodes),
+            next_nodes=[child_execution.first_node],
             reason_code="RECOVERY_RECONCILED",
             reason="reconciled handed-off recovery",
-            lifecycle_revision=source_point.lifecycle_revision,
-            workspace_revision=source_point.workspace_revision,
-            workspace_snapshot_hash=source_point.workspace_snapshot_hash,
+            lifecycle_revision=attempt.source_lifecycle_revision,
         )
         _require_checkpoint_reentry_plan(plan, source=source)
-        await _revalidate_finalizing_recovery(
+        source_snapshot = await _revalidate_finalizing_recovery(
             workspace=workspace,
             source=source,
-            source_point=source_point,
+            child_execution=child_execution,
             attempt=attempt,
             graph=graph,
             lifecycle=lifecycle,
@@ -671,7 +647,7 @@ async def finalize_handed_off_recovery_attempt(
             workspace=workspace,
             source=source,
             plan=plan,
-            source_point=source_point,
+            source_snapshot=source_snapshot,
             new_run_id=new_run_id,
             graph=graph,
             lifecycle=lifecycle,
@@ -694,7 +670,7 @@ async def _fork_and_start(
     workspace: str,
     source: DurableExecutionRecord,
     plan: RecoveryPlan,
-    source_point: RecoveryPoint,
+    source_snapshot: Any,
     new_run_id: str,
     graph: Any,
     lifecycle: Any,
@@ -702,7 +678,7 @@ async def _fork_and_start(
     child_execution: DurableExecutionRecord,
     heartbeat_task: asyncio.Task[None] | None,
 ) -> NativeRecoveryRuntimeContext:
-    """只写 runtime identity 的 fork checkpoint，并在 durable point 后标记 STARTED。"""
+    """只写 runtime identity 的 fork checkpoint，并把 cache 写入降级为 best-effort。"""
 
     if source.status not in {
         DurableExecutionStatus.FAILED,
@@ -715,9 +691,9 @@ async def _fork_and_start(
     _require_checkpoint_reentry_plan(plan, source=source)
     _validate_checkpoint_reentry_source(
         source=source,
-        source_point=source_point,
         attempt=attempt,
         plan=plan,
+        target_node=child_execution.first_node,
     )
     if not hasattr(graph, "aupdate_state") or not hasattr(graph, "aget_state"):
         raise RecoveryExecutionError(
@@ -731,15 +707,18 @@ async def _fork_and_start(
             "checkpoint_id": plan.checkpoint_id,
         }
     }
-    try:
-        source_snapshot = await graph.aget_state(source_config)
-    except Exception as exc:
+    source_thread_id, source_ns, source_checkpoint_id = _snapshot_identity(source_snapshot)
+    if (
+        source_thread_id != source.thread_id
+        or source_ns != plan.checkpoint_ns
+        or source_checkpoint_id != plan.checkpoint_id
+    ):
         raise RecoveryExecutionError(
             "RECOVERY_SOURCE_CHECKPOINT_INVALID",
-            "source Node Entry checkpoint 无法在 fork 前重新读取。",
-        ) from exc
+            "source Node Entry checkpoint identity 已偏离 RecoveryAttempt。",
+        )
     source_next = [str(node) for node in (getattr(source_snapshot, "next", ()) or ())]
-    if source_next != source_point.next_nodes or source_next != plan.next_nodes:
+    if source_next != plan.next_nodes:
         raise RecoveryExecutionError(
             "RECOVERY_FORK_CONTROL_FLOW_DRIFT",
             "source Node Entry checkpoint 的 nextNodes 已偏离 Recovery authority。",
@@ -806,48 +785,19 @@ async def _fork_and_start(
             "RECOVERY_FORK_IDENTITY_MISMATCH",
             "fork checkpoint 未写入 child active_run_id。",
         )
-    lifecycle_revision = getattr(lifecycle, "revision", None)
-    point = RecoveryPoint(
-        recovery_point_id=f"recovery-point-{uuid4().hex}",
-        run_id=new_run_id,
-        thread_id=source.thread_id,
-        kind=RecoveryPointKind.CHECKPOINT,
-        checkpoint_id=fork_checkpoint_id,
-        checkpoint_ns="",
-        graph_node=plan.next_nodes[0],
-        completed_node=None,
-        next_nodes=list(plan.next_nodes),
-        phase=str(values.get("phase") or plan.next_nodes[0]),
-        state_status=str(values.get("status") or "running"),
-        lifecycle_revision=lifecycle_revision
-        if lifecycle_revision is not None
-        else plan.lifecycle_revision,
-        workspace_revision=plan.workspace_revision,
-        workspace_snapshot_hash=plan.workspace_snapshot_hash,
-        captured_at=datetime.now(timezone.utc),
-    )
-    persisted_point = await insert_recovery_point(workspace=workspace, point=point)
-    await insert_node_entry_boundary(
-        workspace=workspace,
-        boundary=NodeEntryBoundary(
-            boundary_id=persisted_point.recovery_point_id,
-            source_run_id=new_run_id,
-            thread_id=source.thread_id,
-            target_node=plan.next_nodes[0],
-            checkpoint_id=fork_checkpoint_id,
-            checkpoint_ns="",
-            lifecycle_revision=persisted_point.lifecycle_revision,
-            workspace_revision=persisted_point.workspace_revision,
-            workspace_snapshot_hash=persisted_point.workspace_snapshot_hash,
-            captured_at=persisted_point.captured_at,
-        ),
-    )
     await update_recovery_attempt(
         workspace=workspace,
         new_run_id=new_run_id,
         status=RecoveryAttemptStatus.STARTED,
         replay_checkpoint_id=fork_checkpoint_id,
         replay_checkpoint_ns="",
+    )
+    await _persist_child_boundary_index(
+        workspace=workspace,
+        run_id=new_run_id,
+        thread_id=source.thread_id,
+        target_node=plan.next_nodes[0],
+        checkpoint_id=fork_checkpoint_id,
     )
     workspace_lease = _acquire_workspace_lease(
         workspace=workspace,
@@ -873,7 +823,6 @@ async def _fork_and_start(
         source_execution=source,
         child_execution=child_execution,
         recovery_plan=plan,
-        source_recovery_point=source_point,
         new_run_id=new_run_id,
         thread_id=source.thread_id,
         project_id=source.project_id,
@@ -892,11 +841,38 @@ async def _fork_and_start(
     )
 
 
+async def _persist_child_boundary_index(
+    *,
+    workspace: str,
+    run_id: str,
+    thread_id: str,
+    target_node: str,
+    checkpoint_id: str,
+) -> None:
+    """best-effort 索引 child fork，不让 cache 故障触发第二次 Graph fork。"""
+
+    try:
+        await insert_node_entry_boundary(
+            workspace=workspace,
+            boundary=NodeEntryBoundary(
+                boundary_id=f"node-entry-{uuid4().hex}",
+                source_run_id=run_id,
+                thread_id=thread_id,
+                target_node=target_node,
+                checkpoint_id=checkpoint_id,
+                checkpoint_ns="",
+                captured_at=datetime.now(timezone.utc),
+            ),
+        )
+    except Exception:
+        return
+
+
 async def _revalidate_finalizing_recovery(
     *,
     workspace: str,
     source: DurableExecutionRecord,
-    source_point: RecoveryPoint,
+    child_execution: DurableExecutionRecord,
     attempt: RecoveryAttempt,
     graph: Any,
     lifecycle: Any,
@@ -921,14 +897,11 @@ async def _revalidate_finalizing_recovery(
         )
     if (
         source.thread_id != attempt.thread_id
-        or source_point.kind is not RecoveryPointKind.CHECKPOINT
-        or source_point.recovery_point_id != attempt.source_recovery_point_id
-        or source_point.run_id != source.run_id
-        or source_point.thread_id != source.thread_id
-        or source_point.checkpoint_id != attempt.source_checkpoint_id
-        or source_point.checkpoint_ns != attempt.source_checkpoint_ns
-        or source_point.checkpoint_ns != ""
-        or len(source_point.next_nodes) != 1
+        or attempt.source_authority_kind is not RecoverySourceAuthorityKind.CHECKPOINT
+        or not attempt.source_checkpoint_id
+        or attempt.source_checkpoint_ns != ""
+        or child_execution.thread_id != source.thread_id
+        or child_execution.first_node.strip() == ""
     ):
         raise RecoveryExecutionError(
             "RECOVERY_STATE_DRIFT",
@@ -936,8 +909,8 @@ async def _revalidate_finalizing_recovery(
         )
     _validate_checkpoint_reentry_source(
         source=source,
-        source_point=source_point,
         attempt=attempt,
+        target_node=child_execution.first_node,
     )
     if not hasattr(graph, "aget_state"):
         raise RecoveryExecutionError(
@@ -981,10 +954,10 @@ async def _revalidate_finalizing_recovery(
             "source checkpoint 不属于当前 source run。",
         )
     next_nodes = [str(node) for node in (getattr(snapshot, "next", ()) or ())]
-    if next_nodes != source_point.next_nodes:
+    if next_nodes != [child_execution.first_node]:
         raise RecoveryExecutionError(
             "RECOVERY_SOURCE_CHECKPOINT_INVALID",
-            "source checkpoint nextNodes 已偏离 RecoveryPoint。",
+            "source checkpoint nextNodes 已偏离 child first Node。",
         )
     if source.status is DurableExecutionStatus.FAILED and next_nodes != [source.current_node]:
         raise RecoveryExecutionError(
@@ -997,9 +970,47 @@ async def _revalidate_finalizing_recovery(
             "source checkpoint 仍在等待交互，不能走 Native Recovery finalization。",
         )
 
+    if source.status is DurableExecutionStatus.FAILED:
+        fresh_plan = await FailureTargetResolver().resolve(
+            workspace=workspace,
+            source=source,
+            graph=graph,
+        )
+        fresh_authority = fresh_plan.context_authority
+        if (
+            fresh_plan.target_node != child_execution.first_node
+            or fresh_authority.checkpoint_id != attempt.source_checkpoint_id
+            or fresh_authority.checkpoint_ns != attempt.source_checkpoint_ns
+        ):
+            raise RecoveryExecutionError(
+                "RECOVERY_STATE_DRIFT",
+                "FAILED source 的最新 checkpoint authority 已发生变化。",
+            )
+    else:
+        resolution = await InterruptedTargetResolver().resolve(
+            workspace=workspace,
+            source=source,
+            graph=graph,
+            require_current_lineage=False,
+        )
+        fresh_plan = resolution.reentry_plan
+        fresh_authority = fresh_plan.context_authority if fresh_plan is not None else None
+        if (
+            resolution.kind != "continue"
+            or fresh_plan is None
+            or fresh_plan.target_node != child_execution.first_node
+            or fresh_authority is None
+            or fresh_authority.checkpoint_id != attempt.source_checkpoint_id
+            or fresh_authority.checkpoint_ns != attempt.source_checkpoint_ns
+        ):
+            raise RecoveryExecutionError(
+                "RECOVERY_STATE_DRIFT",
+                "INTERRUPTED source 的最新 checkpoint authority 已发生变化。",
+            )
+
     _validate_recovery_workspace_authority(
         workspace=workspace,
-        point=source_point,
+        values=values,
     )
     _validate_finalization_lifecycle(
         source=source,
@@ -1012,16 +1023,18 @@ async def _revalidate_finalizing_recovery(
 def _validate_recovery_workspace_authority(
     *,
     workspace: str,
-    point: RecoveryPoint,
+    values: dict[str, Any],
 ) -> None:
-    """在 finalization 内直接验证 RecoveryPoint 绑定的 workspace authority。"""
+    """在 finalization 内直接验证 LangGraph State 绑定的 workspace authority。"""
 
-    if point.workspace_revision is None and point.workspace_snapshot_hash is None:
+    workspace_revision = _optional_text(values.get("workspace_revision"))
+    workspace_snapshot_hash = _optional_text(values.get("workspace_snapshot_hash"))
+    if workspace_revision is None and workspace_snapshot_hash is None:
         return
-    if point.workspace_revision is None:
+    if workspace_revision is None:
         raise RecoveryExecutionError(
             "WORKSPACE_STATE_UNVERIFIABLE",
-            "RecoveryPoint 缺少 workspaceRevision，无法验证当前磁盘状态。",
+            "LangGraph checkpoint 缺少 workspaceRevision，无法验证当前磁盘状态。",
         )
 
     workspace_root = Path(workspace).expanduser().resolve()
@@ -1042,12 +1055,12 @@ def _validate_recovery_workspace_authority(
             "WORKSPACE_STATE_UNVERIFIABLE",
             "当前工作区未能生成有效 revision，无法安全验证恢复现场。",
         )
-    if current_revision != point.workspace_revision:
+    if current_revision != workspace_revision:
         raise RecoveryExecutionError(
             "WORKSPACE_DRIFT",
-            "当前 workspace revision 已偏离 RecoveryPoint。",
+            "当前 workspace revision 已偏离 LangGraph checkpoint。",
         )
-    if point.workspace_snapshot_hash is None:
+    if workspace_snapshot_hash is None:
         return
 
     snapshot = _load_workspace_snapshot_for_revision(workspace, current_revision)
@@ -1056,10 +1069,10 @@ def _validate_recovery_workspace_authority(
             "WORKSPACE_SNAPSHOT_UNAVAILABLE",
             "当前 workspace revision 缺少可验证的 snapshot 证据。",
         )
-    if snapshot_hash(snapshot) != point.workspace_snapshot_hash:
+    if snapshot_hash(snapshot) != workspace_snapshot_hash:
         raise RecoveryExecutionError(
             "WORKSPACE_DRIFT",
-            "当前 workspace snapshot hash 已偏离 RecoveryPoint。",
+            "当前 workspace snapshot hash 已偏离 LangGraph checkpoint。",
         )
 
 
@@ -1089,11 +1102,18 @@ def _load_workspace_snapshot_for_revision(
     return None
 
 
+def _optional_text(value: Any) -> str | None:
+    """把 checkpoint 中的可选 authority 字段规范化为非空文本。"""
+
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
 def _validate_checkpoint_reentry_source(
     *,
     source: DurableExecutionRecord,
-    source_point: RecoveryPoint,
     attempt: RecoveryAttempt,
+    target_node: str,
     plan: RecoveryPlan | None = None,
 ) -> None:
     """在 Native fork 前重新证明 FAILED 或 INTERRUPTED source 的 checkpoint authority。"""
@@ -1104,22 +1124,21 @@ def _validate_checkpoint_reentry_source(
             DurableExecutionStatus.FAILED,
             DurableExecutionStatus.INTERRUPTED,
         }
-        or source_point.run_id != source.run_id
-        or source_point.thread_id != source.thread_id
-        or source_point.kind is not RecoveryPointKind.CHECKPOINT
-        or source_point.checkpoint_id != attempt.source_checkpoint_id
-        or source_point.checkpoint_ns != attempt.source_checkpoint_ns
-        or source_point.recovery_point_id != attempt.source_recovery_point_id
-        or len(source_point.next_nodes) != 1
-        or (plan is not None and source_point.next_nodes != plan.next_nodes)
+        or source.thread_id != attempt.thread_id
+        or not attempt.source_checkpoint_id
+        or attempt.source_checkpoint_ns != ""
+        or not target_node
+        or (plan is not None and plan.checkpoint_id != attempt.source_checkpoint_id)
+        or (plan is not None and plan.checkpoint_ns != attempt.source_checkpoint_ns)
+        or (plan is not None and plan.next_nodes != [target_node])
         or (
             source.status is DurableExecutionStatus.FAILED
-            and source_point.next_nodes != [source.current_node]
+            and target_node != source.current_node
         )
     ):
         raise RecoveryExecutionError(
             "RECOVERY_STATE_DRIFT",
-            "source 的 Node Entry checkpoint 已偏离当前节点或 RecoveryAttempt authority。",
+            "source checkpoint identity 已偏离当前节点或 RecoveryAttempt authority。",
         )
 
 
@@ -1256,7 +1275,6 @@ def _require_checkpoint_reentry_plan(
     if (
         plan.decision is not RecoveryDecision.READY_NATIVE
         or plan.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT
-        or not plan.recovery_point_id
         or not plan.checkpoint_id
         or plan.checkpoint_ns != ""
         or len(plan.next_nodes) != 1
@@ -1285,7 +1303,6 @@ def _require_fresh_reentry_plan(
         or expected.thread_id != fresh.thread_id
         or expected.target_node != fresh.target_node
         or expected.execution_kind != fresh.execution_kind
-        or expected_authority.boundary_id != fresh_authority.boundary_id
         or expected_authority.source_run_id != fresh_authority.source_run_id
         or expected_authority.thread_id != fresh_authority.thread_id
         or expected_authority.target_node != fresh_authority.target_node

@@ -97,7 +97,6 @@ class FailedNodeReentryArchitectureTests(unittest.IsolatedAsyncioTestCase):
             lineage_parent_run_id=source.run_id,
             context_authority=WorkflowReentryContextAuthority(
                 kind=WorkflowReentryContextAuthorityKind.CHECKPOINT,
-                boundary_id="boundary-build",
                 source_run_id=source.run_id,
                 thread_id=source.thread_id,
                 target_node="build",

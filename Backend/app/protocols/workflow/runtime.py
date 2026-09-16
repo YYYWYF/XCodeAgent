@@ -64,7 +64,6 @@ from app.protocols.workflow.stream_events import (
 from app.config import Settings
 from app.domain.execution_recovery import (
     DurableExecutionRunConflictError,
-    ExecutionFailureBoundary,
 )
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
 from app.graph.application_planning_interrupts import (
@@ -80,7 +79,6 @@ from app.services.application_lifecycle import (
 from app.services.execution_recovery import (
     assert_run_id_available,
     best_effort_recovery_observation,
-    capture_recovery_point,
     durable_execution_status,
     observe_execution_cancelled,
     observe_execution_failed,
@@ -1978,25 +1976,6 @@ def build_workflow_ag_ui_stream(
                 snapshot = await active_graph.aget_state(
                     recovery_observation_config or config
                 )
-                if durable_execution_started:
-                    await best_effort_recovery_observation(
-                        operation="point.captured",
-                        workspace=workspace,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        workflow_scope=workflow_scope,
-                        callback=lambda: capture_recovery_point(
-                            graph=active_graph,
-                            config=recovery_observation_config or config or {},
-                            workspace=workspace,
-                            thread_id=thread_id,
-                            run_id=run_id,
-                            workflow_scope=workflow_scope,
-                            completed_node=current_phase,
-                            first_node=first_node_name,
-                            snapshot=snapshot,
-                        ),
-                    )
                 result = dict(snapshot.values)
                 if workflow_scope == "application_planning":
                     result = project_application_planning_interrupt(result, snapshot)
@@ -2070,22 +2049,6 @@ def build_workflow_ag_ui_stream(
         except asyncio.CancelledError:
             if durable_execution_started and active_graph is not None and config is not None:
                 await best_effort_recovery_observation(
-                    operation="point.captured",
-                    workspace=workspace,
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    workflow_scope=workflow_scope,
-                    callback=lambda: capture_recovery_point(
-                        graph=active_graph,
-                        config=recovery_observation_config or config or {},
-                        workspace=workspace,
-                        thread_id=thread_id,
-                        run_id=run_id,
-                        workflow_scope=workflow_scope,
-                        completed_node=None,
-                    ),
-                )
-                await best_effort_recovery_observation(
                     operation="execution.cancelled",
                     workspace=workspace,
                     run_id=run_id,
@@ -2114,7 +2077,7 @@ def build_workflow_ag_ui_stream(
 
             # AG-UI 失败帧可能先于权威对账到达，先脱敏再向任何 UI 文本/事件暴露。
             safe_error_message = sanitize_failure_diagnostic(exc) or type(exc).__name__
-            failure_boundary = None
+            authoritative_node = None
             gate_blocked = isinstance(exc, DevelopmentArtifactsIncompleteError)
             run_id_conflict = isinstance(
                 exc,
@@ -2181,7 +2144,7 @@ def build_workflow_ag_ui_stream(
             if error_code:
                 summary["errorCode"] = error_code
             if durable_execution_started and active_graph is not None and config is not None:
-                async def resolve_failure_node_entry() -> ExecutionFailureBoundary | None:
+                async def resolve_failure_node_entry() -> str | None:
                     """直接从 committed history 解析失败 Node 的精确 Entry Boundary。"""
 
                     source = await get_execution(workspace, run_id) if workspace else None
@@ -2192,16 +2155,11 @@ def build_workflow_ag_ui_stream(
                         source=source,
                         graph=active_graph,
                     )
-                    return ExecutionFailureBoundary(
-                        recovery_point_id=boundary.boundary_id,
-                        checkpoint_id=boundary.checkpoint_id,
-                        checkpoint_ns=boundary.checkpoint_ns,
-                        operation=boundary.target_node,
-                    )
+                    return boundary.target_node
 
                 # LangGraph checkpoint 是唯一 State authority；旁路表只缓存刚解析出的
                 # identity，observer 是否及时消费 update 不再决定 FAILED 可恢复性。
-                failure_boundary = await best_effort_recovery_observation(
+                authoritative_node = await best_effort_recovery_observation(
                     operation="node_entry.resolved",
                     workspace=workspace,
                     run_id=run_id,
@@ -2240,7 +2198,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             workflow_scope=workflow_scope,
                             exception=exc,
-                            failure_boundary=failure_boundary,
+                            authoritative_node=authoritative_node,
                         ),
                     )
             failed_event = _workflow_event(

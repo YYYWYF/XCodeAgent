@@ -17,8 +17,6 @@ from app.domain.execution_recovery import (
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
-    RecoveryPoint,
-    RecoveryPointKind,
     RecoveryStrategy,
 )
 from app.persistence.execution_recovery import (
@@ -28,7 +26,6 @@ from app.persistence.execution_recovery import (
     get_execution_lease,
     get_recovery_attempt,
     insert_execution,
-    insert_recovery_point,
     reconcile_orphaned_executions,
     takeover_pre_runtime_recovery_lease,
     update_recovery_attempt,
@@ -114,6 +111,8 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             attempt.lifecycle_ownership_mode,
             RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
         )
+        self.assertIsNone(attempt.source_recovery_point_id)
+        self.assertEqual(attempt.source_checkpoint_id, plan.checkpoint_id)
         persisted = await get_recovery_attempt(self.workspace, child.run_id)
         self.assertIsNotNone(persisted)
         assert persisted is not None
@@ -121,6 +120,7 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             persisted.lifecycle_ownership_mode,
             RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
         )
+        self.assertIsNone(persisted.source_recovery_point_id)
 
     async def test_started_attempt_cannot_be_taken_over_pre_runtime(self) -> None:
         """STARTED child 已进入 Graph replay 后必须拒绝 pre-runtime takeover。"""
@@ -236,27 +236,14 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             ended_at=now,
         )
         await insert_execution(source)
-        point = RecoveryPoint(
-            recovery_point_id="planning-source-point",
-            run_id=source.run_id,
-            thread_id=source.thread_id,
-            kind=RecoveryPointKind.CHECKPOINT,
-            checkpoint_id="planning-source-checkpoint",
-            checkpoint_ns="",
-            graph_node="technical_planning_begin",
-            next_nodes=["technical_planning_begin"],
-            captured_at=now,
-        )
-        await insert_recovery_point(workspace=self.workspace, point=point)
         plan = RecoveryPlan(
             source_run_id=source.run_id,
             thread_id=source.thread_id,
             decision="ready_native",
             strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
-            recovery_point_id=point.recovery_point_id,
-            checkpoint_id=point.checkpoint_id,
+            checkpoint_id="planning-source-checkpoint",
             checkpoint_ns="",
-            next_nodes=list(point.next_nodes),
+            next_nodes=["technical_planning_begin"],
             reason_code="TEST",
             reason="test",
             lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
@@ -281,11 +268,12 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
                         "configurable": {
                             "thread_id": source.thread_id,
                             "checkpoint_ns": "",
-                            "checkpoint_id": point.checkpoint_id,
+                            "checkpoint_id": "planning-source-checkpoint",
                         }
                     },
-                    next=tuple(point.next_nodes),
+                    next=("technical_planning_begin",),
                     tasks=(),
+                    values={"active_run_id": source.run_id},
                 )
             )
         )
@@ -681,25 +669,12 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             ended_at=now,
         )
         await insert_execution(source)
-        point = RecoveryPoint(
-            recovery_point_id="source-point",
-            run_id=source.run_id,
-            thread_id=source.thread_id,
-            kind=RecoveryPointKind.CHECKPOINT,
-            checkpoint_id="source-checkpoint",
-            checkpoint_ns="",
-            graph_node="B",
-            next_nodes=["B"],
-            captured_at=now,
-        )
-        await insert_recovery_point(workspace=self.workspace, point=point)
         return source, RecoveryPlan(
             source_run_id=source.run_id,
             thread_id=source.thread_id,
             decision="ready_native",
             strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
-            recovery_point_id=point.recovery_point_id,
-            checkpoint_id=point.checkpoint_id,
+            checkpoint_id="source-checkpoint",
             checkpoint_ns="",
             next_nodes=["B"],
             reason_code="TEST",

@@ -17,8 +17,6 @@ from app.domain.execution_recovery import (
     DurableExecutionStatus,
     ExecutionLeaseStatus,
     RecoveryPlan,
-    RecoveryPoint,
-    RecoveryPointKind,
     RecoveryExecutionError,
     RecoveryStrategy,
     RecoveryAttemptStatus,
@@ -30,12 +28,9 @@ from app.persistence.execution_recovery import (
     get_recovery_attempt,
     initialize_execution_recovery_store,
     insert_execution,
-    insert_recovery_point,
-    list_recovery_points,
     update_recovery_attempt,
 )
 from app.services.backend_instance import current_backend_instance
-from app.services.execution_recovery import capture_recovery_point
 from app.services.execution_recovery_executor import (
     finalize_handed_off_recovery_attempt,
 )
@@ -97,7 +92,7 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
             source_config = {"configurable": {"thread_id": thread_id}}
             await graph.ainvoke(
                 {
-                    "active_run_id": "old-run",
+                    "active_run_id": source_run_id,
                     "active_thread_id": thread_id,
                     "execution_log": [],
                 },
@@ -125,25 +120,11 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
                 ended_at=captured_at,
             )
             await insert_execution(source)
-            source_point = RecoveryPoint(
-                recovery_point_id="langgraph-native-source-point",
-                run_id=source_run_id,
-                thread_id=thread_id,
-                kind=RecoveryPointKind.CHECKPOINT,
-                checkpoint_id=source_checkpoint_id,
-                checkpoint_ns=source_checkpoint_ns,
-                graph_node="A",
-                completed_node="A",
-                next_nodes=["B"],
-                captured_at=source.updated_at,
-            )
-            await insert_recovery_point(workspace=workspace, point=source_point)
             plan = RecoveryPlan(
                 source_run_id=source_run_id,
                 thread_id=thread_id,
                 decision="ready_native",
                 strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
-                recovery_point_id=source_point.recovery_point_id,
                 checkpoint_id=source_checkpoint_id,
                 checkpoint_ns=source_checkpoint_ns,
                 next_nodes=["B"],
@@ -172,26 +153,6 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
             await graph.ainvoke(None, config=context.fork_config)
             await stop_execution_heartbeat(context.heartbeat_task)
 
-            child_config = context.observation_config
-            history = [snapshot async for snapshot in graph.aget_state_history(child_config)]
-            for completed_node in ("B", "C"):
-                target_log = ["A", "B"] if completed_node == "B" else ["A", "B", "C"]
-                target = next(
-                    snapshot
-                    for snapshot in history
-                    if list(snapshot.values.get("execution_log", [])) == target_log
-                )
-                await capture_recovery_point(
-                    graph=graph,
-                    config=child_config,
-                    workspace=str(workspace),
-                    thread_id=thread_id,
-                    run_id=child_run_id,
-                    workflow_scope="application_planning",
-                    completed_node=completed_node,
-                    snapshot=target,
-                )
-            points = await list_recovery_points(workspace, child_run_id)
             source_after = await graph.aget_state(
                 {
                     "configurable": {
@@ -205,7 +166,7 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
             durable_child = await get_execution(workspace, child_run_id)
 
         self.assertEqual(counters, {"A": 1, "B": 1, "C": 1})
-        self.assertEqual(source_after.values.get("active_run_id"), "old-run")
+        self.assertEqual(source_after.values.get("active_run_id"), source_run_id)
         self.assertEqual(context.fork_snapshot.values.get("active_run_id"), child_run_id)
         self.assertIsNotNone(attempt)
         assert attempt is not None
@@ -213,9 +174,6 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(durable_child)
         assert durable_child is not None
         self.assertEqual(durable_child.status, DurableExecutionStatus.RUNNING)
-        self.assertTrue(any(point.run_id == child_run_id and point.completed_node is None for point in points))
-        self.assertTrue(any(point.completed_node == "B" and point.next_nodes == ["C"] for point in points))
-        self.assertTrue(any(point.completed_node == "C" and point.next_nodes == [] for point in points))
 
     async def test_handed_off_restart_detects_workspace_drift_before_fork(self) -> None:
         """HANDED_OFF 重启遇到磁盘漂移时不能调用 aupdate_state。"""
@@ -242,27 +200,12 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
                 ended_at=captured_at,
             )
             await insert_execution(source)
-            source_point = RecoveryPoint(
-                recovery_point_id="workspace-drift-point",
-                run_id=source.run_id,
-                thread_id=source.thread_id,
-                kind=RecoveryPointKind.CHECKPOINT,
-                checkpoint_id="workspace-drift-checkpoint",
-                checkpoint_ns="",
-                graph_node="A",
-                completed_node="A",
-                next_nodes=["B"],
-                workspace_revision=workspace_revision,
-                captured_at=captured_at,
-            )
-            await insert_recovery_point(workspace=workspace, point=source_point)
             plan = RecoveryPlan(
                 source_run_id=source.run_id,
                 thread_id=source.thread_id,
                 decision="ready_native",
                 strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
-                recovery_point_id=source_point.recovery_point_id,
-                checkpoint_id=source_point.checkpoint_id,
+                checkpoint_id="workspace-drift-checkpoint",
                 checkpoint_ns="",
                 next_nodes=["B"],
                 reason_code="TEST",
@@ -293,14 +236,22 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
                     self.fork_called = False
 
                 async def aget_state(self, config: dict[str, Any]) -> Any:
-                    """返回与 source RecoveryPoint 一致的 checkpoint 快照。"""
+                    """返回与 RecoveryAttempt 一致且携带 workspace authority 的 checkpoint。"""
 
                     return SimpleNamespace(
                         config=config,
                         next=("B",),
                         tasks=(),
-                        values={"active_run_id": source.run_id},
+                        values={
+                            "active_run_id": source.run_id,
+                            "workspace_revision": workspace_revision,
+                        },
                     )
+
+                async def aget_state_history(self, config: dict[str, Any]):
+                    """提供 latest source-owned root checkpoint，禁止 scan-back。"""
+
+                    yield await self.aget_state(config)
 
                 async def aupdate_state(self, _config: dict[str, Any], _updates: dict[str, Any]) -> Any:
                     """记录任何不应发生的 fork 写入。"""

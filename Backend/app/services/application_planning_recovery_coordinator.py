@@ -14,15 +14,10 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     RecoveryExecutionError,
-    RecoveryPoint,
-)
-from app.persistence.execution_recovery import (
-    list_recovery_points,
 )
 from app.protocols.application_planning_interrupt import (
     application_planning_interrupt_from_snapshot,
 )
-from app.services.execution_recovery import capture_recovery_point
 from app.services.execution_recovery_lineage import (
     RecoveryLineageResolution,
     RecoveryLineageState,
@@ -348,45 +343,6 @@ def _terminal_projection_fields(
     }[status]
 
 
-async def ensure_application_planning_recovery_point(
-    *,
-    source: DurableExecutionRecord,
-    graph: Any,
-    snapshot: Any,
-) -> RecoveryPoint | None:
-    """只为通过 source admission 的真实活跃 checkpoint 幂等补写恢复索引。"""
-
-    if not assess_recovery_source(source).admissible:
-        return None
-    values = getattr(snapshot, "values", {})
-    values = values if isinstance(values, dict) else {}
-    if str(values.get("active_run_id") or "").strip() != source.run_id:
-        return None
-    config = getattr(snapshot, "config", {})
-    config = config if isinstance(config, dict) else {}
-    configurable = config.get("configurable")
-    configurable = configurable if isinstance(configurable, dict) else {}
-    checkpoint_id = str(configurable.get("checkpoint_id") or "").strip()
-    checkpoint_ns = str(configurable.get("checkpoint_ns") or "")
-    next_nodes = [str(node) for node in (getattr(snapshot, "next", ()) or ())]
-    if not checkpoint_id or not next_nodes:
-        return None
-    for point in await list_recovery_points(source.workspace, source.run_id):
-        if point.checkpoint_id == checkpoint_id and point.checkpoint_ns == checkpoint_ns:
-            return point
-    return await capture_recovery_point(
-        graph=graph,
-        config=config,
-        workspace=source.workspace,
-        thread_id=source.thread_id,
-        run_id=source.run_id,
-        workflow_scope=source.workflow_scope,
-        completed_node=None,
-        first_node=source.first_node,
-        snapshot=snapshot,
-    )
-
-
 def sanitize_application_planning_recovery_result(
     values: dict[str, Any],
     *,
@@ -506,7 +462,6 @@ def _failure_diagnostic(
 
 __all__ = [
     "ApplicationPlanningRecoveryProjection",
-    "ensure_application_planning_recovery_point",
     "resolve_application_planning_recovery",
     "sanitize_application_planning_recovery_result",
 ]
