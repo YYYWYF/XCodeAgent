@@ -28,6 +28,7 @@ import {
   planExecutionContextForPage,
   planExecutionForPage,
   planExecutionShowsDebugResume,
+  resolveWorkflowForDisplay,
   shouldRenderPlanExecutionDock,
   withWorkflowExecutionStatus,
   workflowCanRetryFailedTasks,
@@ -1198,6 +1199,21 @@ test('失败计划只为可恢复的 Build 失败显示恢复动作', () => {
     }),
     true
   )
+})
+
+test('最后一个 Build 任务失败并清空实时 Workflow 后仍从终态消息显示重试动作', () => {
+  const finalWorkflow = previewWorkflow({
+    status: 'failed',
+    phase: 'build',
+    buildSummary: { recovery_available: true, retryable_failures: 1 }
+  })
+  const workflow = resolveWorkflowForDisplay(undefined, [
+    { workflow: previewWorkflow({ status: 'running', phase: 'build' }) },
+    { workflow: finalWorkflow }
+  ])
+
+  assert.equal(workflow, finalWorkflow)
+  assert.equal(workflowCanRetryFailedTasks(workflow), true)
 })
 
 test('仅后端签发的审查模型失败快照提供重试动作', () => {

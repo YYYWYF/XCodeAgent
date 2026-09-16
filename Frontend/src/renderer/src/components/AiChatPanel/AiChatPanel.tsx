@@ -171,6 +171,7 @@ import {
   planExecutionContextForEndpoint,
   planExecutionContextForPage,
   planExecutionContextForRun,
+  resolveWorkflowForDisplay,
   shouldRenderPlanExecutionDock,
   workflowCanRetryFailedTasks,
   workflowCodeReviewRetry,
@@ -770,16 +771,6 @@ function workflowHasDetailReview(workflow: unknown): boolean {
       typeof clarification === 'object' &&
       (clarification as Record<string, unknown>).mode === 'entity_source_binding'
   )
-}
-
-/** 从当前消息历史里读取最后一个 Workflow，弥补 activeWorkflow 在运行结束瞬间的状态空窗。 */
-function latestMessageWorkflow(
-  messages: Array<{ workflow?: WorkflowRunPayload }>
-): WorkflowRunPayload | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].workflow) return messages[index].workflow
-  }
-  return undefined
 }
 
 /** 按页面名称递归查找对应的菜单配置。 */
@@ -3160,6 +3151,7 @@ export default function AiChatPanel({
           workflowIdentity
         )
   const scopedExecution = targetExecutionContext.execution
+  const latestWorkflowForDisplay = resolveWorkflowForDisplay(activeWorkflow, messages)
   // 新建对话的空白草稿不归属于任何历史 Run；应用级 execution 不能重新锁住输入区。
   const detachedConversationDraft =
     !isApplicationPlanningPhase && !activeSession && activeDetailTarget.type === 'none'
@@ -3172,7 +3164,10 @@ export default function AiChatPanel({
           loading,
           Boolean(applicationLifecycle)
         )
-  const canRetryFailedTasks = workflowCanRetryFailedTasks(activeWorkflow, scopedExecution)
+  const canRetryFailedTasks = workflowCanRetryFailedTasks(
+    latestWorkflowForDisplay,
+    scopedExecution
+  )
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
   const activePageTitle =
@@ -3279,7 +3274,6 @@ export default function AiChatPanel({
         ? undefined
         : activePageOption?.taskSummary
   )
-  const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
   // 正式修订失败必须同时看到 lifecycle 失败态和 V2 Attempt 的 retryable 投影，才能提供安全重试。
   const templateReconcileRetryable = isTemplateReconcileRetryable(
     applicationLifecycle,
@@ -4620,7 +4614,7 @@ export default function AiChatPanel({
                     onConfirmInteraction={handleConfirmPlanInteraction}
                     onEnd={() => void handleEndPlan(scopedExecution?.runId)}
                     onOpenPreview={() => void handleOpenFullscreenPreview()}
-                    onRetry={() => void handleRetryPlan()}
+                    onRetry={() => void handleRetryPlan(latestWorkflowForDisplay)}
                     onStop={
                       currentGenerationLoading
                         ? handleStopCurrentGeneration

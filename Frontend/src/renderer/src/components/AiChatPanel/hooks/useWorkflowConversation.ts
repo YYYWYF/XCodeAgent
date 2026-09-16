@@ -206,7 +206,7 @@ type UseWorkflowConversationResult = {
   ) => Promise<boolean>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleRetryCodeReview: () => Promise<void>
-  handleRetryPlan: () => Promise<void>
+  handleRetryPlan: (workflow?: WorkflowRunPayload) => Promise<void>
   handleStopPlan: (runId?: string) => Promise<void>
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleStartDetailConfirmation: (
@@ -1969,18 +1969,20 @@ export function useWorkflowConversation({
     return handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
   }
 
-  /** 从当前可恢复节点重新执行失败或已停止的计划切片。 */
-  const handleRetryPlan = async (): Promise<void> => {
-    if (!activeWorkflow || loading || workspaceBusy) return
-    const execution = planExecutionForPage(activeWorkflow.summary.lifecycle, selectedPageId, {
-      runId: activeWorkflow.runId,
-      threadId: activeWorkflow.threadId
+  /** 从实时或终态消息快照的可恢复节点重新执行失败或已停止的计划切片。 */
+  const handleRetryPlan = async (workflow?: WorkflowRunPayload): Promise<void> => {
+    const retryWorkflow = workflow || activeWorkflow
+    if (!retryWorkflow || loading || workspaceBusy) return
+    const execution = planExecutionForPage(retryWorkflow.summary.lifecycle, selectedPageId, {
+      runId: retryWorkflow.runId,
+      threadId: retryWorkflow.threadId
     })
-    const isStopped = execution?.status === 'stopped' || activeWorkflow.summary.status === 'stopped'
+    const isStopped =
+      execution?.status === 'stopped' || retryWorkflow.summary.status === 'stopped'
     await sendWorkflowMessage('重试当前计划任务。', {
-      resumeState: activeWorkflow,
-      resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || selectedPageId,
+      resumeState: retryWorkflow,
+      resumeExecutionRunId: execution?.runId || retryWorkflow.runId,
+      selectedPageId: workflowSelectedPageId(retryWorkflow) || selectedPageId,
       titleFrom: '重试计划任务',
       ...(!isStopped ? { workflowAction: 'retry_failed_tasks' as const } : {})
     })

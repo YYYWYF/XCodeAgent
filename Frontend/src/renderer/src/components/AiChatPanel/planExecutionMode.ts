@@ -26,6 +26,18 @@ export type PagePlanExecutionContext = {
 
 export type WorkflowInteractionAvailability = 'active' | 'stale' | 'unavailable'
 
+/** 优先返回实时 Workflow；运行结束清空实时态后，回退到消息历史中的最新终态快照。 */
+export function resolveWorkflowForDisplay(
+  activeWorkflow: WorkflowRunPayload | undefined,
+  messages: Array<{ workflow?: WorkflowRunPayload }>
+): WorkflowRunPayload | undefined {
+  if (activeWorkflow) return activeWorkflow
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].workflow) return messages[index].workflow
+  }
+  return undefined
+}
+
 /** 判断 Workflow 是否承载 Build DAG 确认，统一兼容当前 AG-UI 投影位置。 */
 function isDagConfirmationWorkflow(workflow: WorkflowRunPayload): boolean {
   return workflowClarification(workflow)?.mode === 'build_task_plan_confirmation'
