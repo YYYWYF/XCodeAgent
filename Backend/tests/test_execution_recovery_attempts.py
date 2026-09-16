@@ -9,10 +9,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from app.domain.application_lifecycle import (
+    ApplicationInitialization,
+    ApplicationLifecycle,
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+)
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     ExecutionLeaseStatus,
+    RecoveryAttempt,
     RecoveryAttemptAlreadyClaimedError,
     RecoveryAttemptStatus,
     RecoveryExecutionError,
@@ -28,15 +35,24 @@ from app.persistence.execution_recovery import (
     get_recovery_attempt,
     initialize_execution_recovery_store,
     insert_execution,
+    list_recovery_attempts_from_source,
     reconcile_orphaned_executions,
     takeover_pre_runtime_recovery_lease,
     update_recovery_attempt,
+)
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    load_application_lifecycle,
+    write_application_lifecycle,
 )
 from app.services.execution_recovery_executor import (
     _start_recovery_heartbeat,
     finalize_handed_off_recovery_attempt,
 )
-from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
+from app.services.execution_recovery_lineage import (
+    reconcile_recovery_attempt,
+    resolve_recovery_lineage_head,
+)
 from app.services.execution_lease_heartbeat import stop_execution_heartbeat
 
 
@@ -124,6 +140,99 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
         )
         self.assertEqual(persisted.source_checkpoint_id, plan.checkpoint_id)
+
+    async def test_pre_ownership_preparing_crash_reconciles_to_handed_off(self) -> None:
+        """PREPARING crash 在 lifecycle 未漂移时必须凭 durable facts 完成 handoff。"""
+
+        lifecycle, source, child, claimed = await self._prepare_pre_ownership_crash(
+            child_run_id="pre-ownership-child-success",
+        )
+        lease_before = await get_execution_lease(self.workspace, child.run_id)
+
+        reconciled = await reconcile_recovery_attempt(
+            workspace=str(self.workspace),
+            new_run_id=child.run_id,
+            graph=None,
+        )
+
+        lifecycle_after = load_application_lifecycle(self.workspace)
+        child_after = await get_execution(self.workspace, child.run_id)
+        lease_after = await get_execution_lease(self.workspace, child.run_id)
+        attempts = await list_recovery_attempts_from_source(
+            self.workspace,
+            source.run_id,
+        )
+        self.assertEqual(claimed.status, RecoveryAttemptStatus.PREPARING)
+        self.assertEqual(
+            claimed.lifecycle_ownership_mode,
+            RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+        )
+        self.assertEqual(claimed.source_lifecycle_revision, lifecycle.revision)
+        self.assertEqual(child.status, DurableExecutionStatus.RUNNING)
+        self.assertIsNotNone(lease_before)
+        assert lease_before is not None
+        self.assertEqual(lease_before.status, ExecutionLeaseStatus.ACTIVE)
+        self.assertIsNotNone(reconciled)
+        assert reconciled is not None
+        self.assertEqual(reconciled.status, RecoveryAttemptStatus.HANDED_OFF)
+        self.assertEqual(reconciled.source_lifecycle_revision, lifecycle.revision)
+        self.assertIsNotNone(lifecycle_after)
+        assert lifecycle_after is not None
+        self.assertEqual(lifecycle_after.active_run_id, child.run_id)
+        self.assertEqual(lifecycle_after.initialization.thread_id, source.thread_id)
+        self.assertIsNotNone(child_after)
+        self.assertIsNotNone(lease_after)
+        assert child_after is not None
+        assert lease_after is not None
+        self.assertEqual(child_after.status, DurableExecutionStatus.RUNNING)
+        self.assertEqual(lease_after.status, ExecutionLeaseStatus.ACTIVE)
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0].new_run_id, child.run_id)
+
+    async def test_pre_ownership_preparing_crash_fails_closed_after_revision_drift(
+        self,
+    ) -> None:
+        """PREPARING crash 遇到 lifecycle revision 漂移时必须失败并释放 child。"""
+
+        lifecycle, source, child, claimed = await self._prepare_pre_ownership_crash(
+            child_run_id="pre-ownership-child-drift",
+        )
+        drifted = lifecycle.model_copy(
+            update={
+                "revision": lifecycle.revision + 1,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        write_application_lifecycle(
+            self.workspace,
+            drifted,
+            expected_revision=lifecycle.revision,
+        )
+
+        reconciled = await reconcile_recovery_attempt(
+            workspace=str(self.workspace),
+            new_run_id=child.run_id,
+            graph=None,
+        )
+
+        lifecycle_after = load_application_lifecycle(self.workspace)
+        child_after = await get_execution(self.workspace, child.run_id)
+        lease_after = await get_execution_lease(self.workspace, child.run_id)
+        self.assertEqual(claimed.status, RecoveryAttemptStatus.PREPARING)
+        self.assertIsNotNone(reconciled)
+        assert reconciled is not None
+        self.assertEqual(reconciled.status, RecoveryAttemptStatus.FAILED_PRESTART)
+        self.assertEqual(reconciled.failure_code, "RECOVERY_STATE_DRIFT")
+        self.assertIsNotNone(child_after)
+        self.assertIsNotNone(lease_after)
+        assert child_after is not None
+        assert lease_after is not None
+        self.assertEqual(child_after.status, DurableExecutionStatus.FAILED)
+        self.assertEqual(lease_after.status, ExecutionLeaseStatus.RELEASED)
+        self.assertIsNotNone(lifecycle_after)
+        assert lifecycle_after is not None
+        self.assertNotEqual(lifecycle_after.active_run_id, child.run_id)
+        self.assertEqual(lifecycle_after.active_run_id, source.run_id)
 
     async def test_started_attempt_cannot_be_taken_over_pre_runtime(self) -> None:
         """STARTED child 已进入 Graph replay 后必须拒绝 pre-runtime takeover。"""
@@ -844,6 +953,75 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             checkpoint_id="source-checkpoint",
             checkpoint_ns="",
         )
+
+    async def _prepare_pre_ownership_crash(
+        self,
+        *,
+        child_run_id: str,
+    ) -> tuple[
+        ApplicationLifecycle,
+        DurableExecutionRecord,
+        DurableExecutionRecord,
+        RecoveryAttempt,
+    ]:
+        """创建 claim 已提交但 lifecycle 尚未 handoff 的真实 PRE_OWNERSHIP 现场。"""
+
+        source_run_id = f"{child_run_id}-source"
+        thread_id = f"{child_run_id}-thread"
+        lifecycle = create_application_lifecycle(
+            application_id=f"{child_run_id}-app",
+            application_name="PRE_OWNERSHIP Crash",
+            initialization_thread_id=thread_id,
+            active_run_id=source_run_id,
+        ).model_copy(
+            update={
+                "initialization": ApplicationInitialization(
+                    stage=ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+                    status=ApplicationLifecycleStatus.AWAITING_USER,
+                    threadId=thread_id,
+                )
+            }
+        )
+        lifecycle = write_application_lifecycle(
+            self.workspace,
+            lifecycle,
+            expected_revision=0,
+        )
+        now = datetime.now(timezone.utc)
+        source = DurableExecutionRecord(
+            run_id=source_run_id,
+            thread_id=thread_id,
+            owner_session_id="pre-ownership-session",
+            workspace=str(self.workspace),
+            project_id=lifecycle.application.id,
+            execution_kind="application_planning",
+            workflow_scope="application_planning",
+            first_node="technical_planning_begin",
+            current_node="technical_planning_begin",
+            status=DurableExecutionStatus.INTERRUPTED,
+            started_at=now,
+            updated_at=now,
+            ended_at=now,
+        )
+        await insert_execution(source)
+        plan = RecoveryPlan(
+            source_run_id=source.run_id,
+            thread_id=source.thread_id,
+            target_node="technical_planning_begin",
+            checkpoint_id=f"{child_run_id}-checkpoint",
+            checkpoint_ns="",
+            lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
+            lifecycle_revision=lifecycle.revision,
+        )
+        child, _lease, attempt = await claim_native_recovery_attempt(
+            source=source,
+            plan=plan,
+            new_run_id=child_run_id,
+            owner_backend_instance_id="backend-before-crash",
+            owner_pid=101,
+            lease_ttl_seconds=60,
+        )
+        return lifecycle, source, child, attempt
 
 
 __all__ = ["ExecutionRecoveryAttemptTests"]
