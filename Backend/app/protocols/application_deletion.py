@@ -41,6 +41,7 @@ from app.services.ui_design_generation_pool import get_ui_design_generation_pool
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.workspace.run_lease import workspace_run_leases
+from app.workspace.task_documents import build_task_plan_lifecycle_lock
 
 
 APPLICATION_DELETION_EVENT_NAME = "application-deletion"
@@ -202,6 +203,8 @@ async def prepare_application_deletion(
             )
         if preview_result.get("status") == "failed":
             raise RuntimeError(str(preview_result.get("message") or "应用预览停止失败。"))
+        # 阶段 B 前排空 Pending lifecycle 临界区，确保已有 Abandon writer 完整结束。
+        await asyncio.to_thread(_drain_pending_lifecycle, workspace)
     except BaseException:
         template_mutation_coordinator.cancel_deletion(workspace)
         workflow_run_registry.end_workspace_deletion(workspace_text)
@@ -284,6 +287,14 @@ async def prepare_application_deletion(
             )
         )
     return report_data
+
+
+def _drain_pending_lifecycle(workspace: Path) -> None:
+    """在删除释放持久化资源前等待当前工作区的 Pending 生命周期操作退出。"""
+
+    # RLock 必须在同一个 to_thread 线程内取得并释放，不能跨线程拆分生命周期。
+    with build_task_plan_lifecycle_lock(workspace):
+        pass
 
 
 def complete_application_deletion(

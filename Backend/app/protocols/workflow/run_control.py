@@ -34,6 +34,7 @@ from app.services.build_task_plan_lifecycle import (
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.services.workspace_process_registry import workspace_process_registry
+from app.workspace.task_documents import build_task_plan_lifecycle_lock
 
 WorkflowCancellationStatus = Literal[
     "cancelled",
@@ -389,19 +390,26 @@ def build_workflow_plan_control_ag_ui_stream(
         if not target_run_id:
             raise ValueError("计划控制动作缺少目标 runId。")
         if action == "abandon":
-            _assert_pending_control_owner(workspace, target_run_id, owner_session_id)
-            result = abandon_pending_build_task_plan(
-                {"workspace": workspace},
-                planning_run_id=planning_run_id,
-                draft_digest=draft_digest,
-            )
+            # deleting 检查必须与 Abandon 写入共用同一把锁，避免检查后再加锁的 TOCTOU。
+            with build_task_plan_lifecycle_lock(workspace):
+                if workflow_run_registry.is_workspace_deleting(workspace):
+                    raise ApplicationLifecycleConflictError(
+                        "当前应用正在删除，不能放弃 Pending Build DAG。"
+                    )
+                _assert_pending_control_owner(workspace, target_run_id, owner_session_id)
+                result = abandon_pending_build_task_plan(
+                    {"workspace": workspace},
+                    planning_run_id=planning_run_id,
+                    draft_digest=draft_digest,
+                )
+                lifecycle = _planning_lifecycle_payload(workspace)
             for frame in _build_abandon_frames(
                 encoder=encoder,
                 thread_id=thread_id,
                 run_id=run_id,
                 message_id=message_id,
                 result=result,
-                lifecycle=_planning_lifecycle_payload(workspace),
+                lifecycle=lifecycle,
             ):
                 yield frame
             return
