@@ -8,14 +8,74 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.agents.test_generation.generator import _build_prompt
+from app.domain.application_lifecycle import (
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+    PendingInteractionType,
+    WorkbenchExecutionStatus,
+)
 from app.graph.subgraphs.testing import collect_unit_test_targets
 from app.services.api_design import ApiDesignError
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    start_workbench_execution,
+    update_workbench_execution,
+    write_application_lifecycle,
+)
 from app.protocols.workflow.request import (
     _build_execution_scope,
     _resume_values,
     _retry_failed_execution_node,
     workflow_run_inputs,
+    _authoritative_failed_execution_phase,
 )
+
+
+def _write_ready_workbench_lifecycle(workspace: Path) -> None:
+    """为请求协议测试创建一个允许登记工作台 execution 的生命周期快照。"""
+
+    lifecycle = create_application_lifecycle(
+        application_id="app-request-test",
+        application_name="请求协议测试应用",
+    )
+    lifecycle = lifecycle.model_copy(
+        update={
+            "initialization": lifecycle.initialization.model_copy(
+                update={
+                    "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    "status": ApplicationLifecycleStatus.COMPLETED,
+                }
+            )
+        }
+    )
+    write_application_lifecycle(workspace, lifecycle)
+
+
+def _record_execution(
+    workspace: Path,
+    *,
+    run_id: str,
+    phase: str,
+    scope: str = "application",
+    target_id: str = "application",
+) -> None:
+    """在请求协议测试中登记并推进一个工作台 execution 到指定阶段。"""
+
+    start_workbench_execution(
+        workspace,
+        scope=scope,
+        target_id=target_id,
+        page_id=target_id if scope == "page" else None,
+        thread_id=f"thread-{run_id}",
+        run_id=run_id,
+        phase=phase,
+    )
+    update_workbench_execution(
+        workspace,
+        run_id=run_id,
+        phase=phase,
+        status=WorkbenchExecutionStatus.FAILED,
+    )
 
 
 class WorkflowRequestTests(unittest.TestCase):
@@ -1811,6 +1871,130 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
         self.assertFalse(inputs["resume_values"]["retry_failed_tasks"])
 
+    def test_prepare_failure_uses_authoritative_lifecycle_phase_on_first_retry(self) -> None:
+        """Prepare 在首个 update 前失败时，Retry 必须直接回到 Prepare。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            _write_ready_workbench_lifecycle(workspace)
+            _record_execution(
+                workspace,
+                run_id="old-prepare-run",
+                phase="prepare_build_tasks",
+            )
+            inputs = workflow_run_inputs(
+                {
+                    "workspace": str(workspace),
+                    "forwardedProps": {
+                        "workflowAction": "retry_failed_tasks",
+                        "resumeExecutionRunId": "old-prepare-run",
+                        "resumeState": {
+                            "events": [],
+                            "state": {
+                                "buildExecutionScope": {
+                                    "type": "application",
+                                    "targetId": "application",
+                                },
+                                "buildSummary": {"gate_errors": []},
+                            },
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+
+    def test_genuine_build_failure_uses_authoritative_build_phase(self) -> None:
+        """没有门禁覆盖时，服务端记录的真实 Build 失败仍恢复 Build。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            _write_ready_workbench_lifecycle(workspace)
+            _record_execution(workspace, run_id="old-build-run", phase="build")
+            inputs = workflow_run_inputs(
+                {
+                    "workspace": str(workspace),
+                    "forwardedProps": {
+                        "workflowAction": "retry_failed_tasks",
+                        "resumeExecutionRunId": "old-build-run",
+                        "resumeState": {
+                            "state": {
+                                "buildExecutionScope": {
+                                    "type": "application",
+                                    "targetId": "application",
+                                },
+                                "buildSummary": {"gate_errors": []},
+                            }
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "build")
+        self.assertTrue(inputs["resume_values"]["retry_failed_tasks"])
+
+    def test_build_gate_override_precedes_authoritative_build_phase(self) -> None:
+        """Build 已登记失败但存在 gate_errors 时，恢复目标仍必须是 Prepare。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            _write_ready_workbench_lifecycle(workspace)
+            _record_execution(workspace, run_id="old-build-gate-run", phase="build")
+            inputs = workflow_run_inputs(
+                {
+                    "workspace": str(workspace),
+                    "forwardedProps": {
+                        "workflowAction": "retry_failed_tasks",
+                        "resumeExecutionRunId": "old-build-gate-run",
+                        "resumeState": {
+                            "state": {
+                                "buildExecutionScope": {
+                                    "type": "application",
+                                    "targetId": "application",
+                                },
+                                "buildSummary": {
+                                    "gate_errors": ["DAG 不存在或范围已过期。"]
+                                },
+                            }
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+
+    def test_authoritative_development_gate_maps_application_scope_to_inspection(self) -> None:
+        """应用级 development readiness 失败应从工作区扫描入口恢复。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            _write_ready_workbench_lifecycle(workspace)
+            _record_execution(
+                workspace,
+                run_id="old-development-gate-run",
+                phase="development_readiness_gate",
+            )
+            inputs = workflow_run_inputs(
+                {
+                    "workspace": str(workspace),
+                    "forwardedProps": {
+                        "workflowAction": "retry_failed_tasks",
+                        "resumeExecutionRunId": "old-development-gate-run",
+                        "resumeState": {
+                            "state": {
+                                "buildExecutionScope": {
+                                    "type": "application",
+                                    "targetId": "application",
+                                },
+                                "buildSummary": {"gate_errors": []},
+                            }
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "inspect_workspace")
+
     def test_failed_application_revision_gate_retries_from_workspace_inspection(self) -> None:
         """已消费 continuation 的 application execution 应从扫描节点恢复原任务。"""
 
@@ -1860,9 +2044,103 @@ class WorkflowRequestTests(unittest.TestCase):
                     "build_execution_scope": {"type": "page", "targetId": "orders"},
                 },
             },
+            authoritative_failed_phase="build",
         )
 
         self.assertEqual(node, "prepare_build_tasks")
+
+    def test_legacy_failed_events_remain_retry_fallback(self) -> None:
+        """没有生命周期 execution 时，旧快照的失败节点仍可兼容恢复。"""
+
+        for node_name in ("prepare_build_tasks", "build"):
+            with self.subTest(node_name=node_name):
+                node = _retry_failed_execution_node(
+                    {"events": [{"status": "failed", "nodeName": node_name}]},
+                    {"build_execution_scope": {"type": "page", "targetId": "orders"}},
+                )
+                self.assertEqual(node, node_name)
+
+    def test_retry_uses_exact_failed_execution_run_id(self) -> None:
+        """多个失败 execution 并存时，Retry 只能读取明确指定的 runId。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            _write_ready_workbench_lifecycle(workspace)
+            _record_execution(
+                workspace,
+                run_id="run-A",
+                phase="prepare_build_tasks",
+                scope="page",
+                target_id="orders",
+            )
+            _record_execution(
+                workspace,
+                run_id="run-B",
+                phase="build",
+                scope="page",
+                target_id="customers",
+            )
+            inputs = workflow_run_inputs(
+                {
+                    "workspace": str(workspace),
+                    "forwardedProps": {
+                        "workflowAction": "retry_failed_tasks",
+                        "resumeExecutionRunId": "run-A",
+                        "resumeState": {
+                            "state": {
+                                "buildExecutionScope": {
+                                    "type": "page",
+                                    "targetId": "orders",
+                                },
+                                "buildSummary": {"gate_errors": []},
+                            }
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+
+    def test_non_failed_execution_is_not_failed_phase_authority(self) -> None:
+        """running、stopped 和 awaiting_user execution 都不能提供失败阶段 authority。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            _write_ready_workbench_lifecycle(workspace)
+            start_workbench_execution(
+                workspace,
+                scope="application",
+                target_id="application",
+                page_id=None,
+                thread_id="thread-non-failed",
+                run_id="non-failed-run",
+                phase="prepare_build_tasks",
+            )
+            self.assertEqual(
+                _authoritative_failed_execution_phase(str(workspace), "non-failed-run"),
+                "",
+            )
+            update_workbench_execution(
+                workspace,
+                run_id="non-failed-run",
+                phase="prepare_build_tasks",
+                status=WorkbenchExecutionStatus.STOPPED,
+            )
+            self.assertEqual(
+                _authoritative_failed_execution_phase(str(workspace), "non-failed-run"),
+                "",
+            )
+            update_workbench_execution(
+                workspace,
+                run_id="non-failed-run",
+                phase="prepare_build_tasks",
+                status=WorkbenchExecutionStatus.AWAITING_USER,
+                pending_type=PendingInteractionType.PLAN_ADJUSTMENT,
+            )
+            self.assertEqual(
+                _authoritative_failed_execution_phase(str(workspace), "non-failed-run"),
+                "",
+            )
 
     def test_forwards_explicit_build_execution_scope(self) -> None:
         """AG-UI 请求应把页面/数据源范围作为 Workflow State 的结构化输入。"""
@@ -2177,21 +2455,18 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_values"]["repair_task_plan"], {})
         self.assertEqual(inputs["resume_values"]["repair_tasks"], [])
 
-    def test_retry_failed_tasks_is_an_explicit_build_action(self) -> None:
-        """显式重试动作必须固定从 Build 恢复，并写入受控 Graph State。"""
+    def test_retry_failed_tasks_rejects_ambiguous_failure_without_authority(self) -> None:
+        """没有生命周期或失败事件事实时，Retry 必须拒绝而不能默认进入 Build。"""
 
-        inputs = workflow_run_inputs(
-            {
-                "forwardedProps": {
-                    "workflowAction": "retry_failed_tasks",
-                    "resumeFrom": "integration_test",
+        with self.assertRaisesRegex(ValueError, "无法确认原失败阶段"):
+            workflow_run_inputs(
+                {
+                    "forwardedProps": {
+                        "workflowAction": "retry_failed_tasks",
+                        "resumeFrom": "integration_test",
+                    }
                 }
-            }
-        )
-
-        self.assertEqual(inputs["workflow_action"], "retry_failed_tasks")
-        self.assertEqual(inputs["resume_from"], "build")
-        self.assertTrue(inputs["resume_values"]["retry_failed_tasks"])
+            )
 
     def test_retry_code_review_scan_clears_stale_review_state(self) -> None:
         """扫描模型失败重试必须回到 code_scan，并清除旧修复上下文。"""
@@ -2308,6 +2583,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 "forwardedProps": {
                     "workflowAction": "retry_failed_tasks",
                     "resumeState": {
+                        "events": [{"status": "failed", "nodeName": "build"}],
                         "state": {
                             "buildSummary": {"repairable_failures": 1},
                             "repairTaskPlan": repair_plan,
@@ -2344,6 +2620,7 @@ class WorkflowRequestTests(unittest.TestCase):
                     "forwardedProps": {
                         "workflowAction": "retry_failed_tasks",
                         "resumeState": {
+                            "events": [{"status": "failed", "nodeName": "build"}],
                             "state": {
                                 "buildSummary": {
                                     "repairable_failures": 1,

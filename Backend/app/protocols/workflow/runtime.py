@@ -1734,6 +1734,10 @@ def build_workflow_ag_ui_stream(
                         repair_preparation_attempt = None
 
                     for next_node in next_nodes:
+                        if len(next_nodes) == 1:
+                            # 顺序 Workflow 已确定唯一下一节点；即使该节点在首个 update 前异常，
+                            # fail_workflow_lifecycle 也必须记录已经投影 started 的真实 phase。
+                            current_phase = next_node
                         next_attempt = _next_node_attempt(node_attempts, next_node)
                         next_iteration_kind = _iteration_kind(next_node, next_attempt)
                         next_started_result = dict(stream_state)
