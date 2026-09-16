@@ -12,6 +12,7 @@ from app.workspace.planning_run_documents import (
     planning_run_json_path,
     write_planning_run_atomic,
 )
+from app.workspace.task_documents import build_task_plan_pending_json_path
 from tests.planning_run_fixtures import AT, ready, run
 
 
@@ -55,8 +56,9 @@ class PlanningRunDocumentTests(unittest.TestCase):
             state = {"workspace": directory}
             planning_path = Path(write_planning_run_atomic(state, run()))
             confirmed = planning_path.parent / "build-task-plan.json"
-            pending = planning_path.parent / "build-task-plan.pending.json"
+            pending = build_task_plan_pending_json_path(state)
             confirmed.write_text('{"confirmation_status":"confirmed"}\n', encoding="utf-8")
+            pending.parent.mkdir(parents=True, exist_ok=True)
             pending.write_text('{"confirmation_status":"pending"}\n', encoding="utf-8")
 
             self.assertTrue(delete_planning_run(state))

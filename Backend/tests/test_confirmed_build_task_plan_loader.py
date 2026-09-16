@@ -10,6 +10,7 @@ from unittest.mock import patch
 from app.graph.nodes.tasks import _existing_build_task_plan
 from app.workspace.task_documents import (
     build_task_plan_json_path,
+    build_task_plan_pending_json_path,
     load_confirmed_build_task_plan,
     write_build_task_plan_json,
 )
@@ -82,7 +83,7 @@ class ConfirmedBuildTaskPlanLoaderTests(unittest.TestCase):
     def test_pending_file_is_never_a_baseline(self) -> None:
         """即使 pending 文件错误标记为 confirmed，也不能代替正式路径。"""
 
-        pending_path = self.formal_path.with_name("build-task-plan.pending.json")
+        pending_path = build_task_plan_pending_json_path(self.state)
         pending_path.parent.mkdir(parents=True)
         for status in ("pending", "confirmed"):
             with self.subTest(confirmation_status=status):
@@ -110,7 +111,8 @@ class ConfirmedBuildTaskPlanLoaderTests(unittest.TestCase):
             "confirmation_status": "pending",
             "confirmed_at": None,
         }
-        pending_path = self.formal_path.with_name("build-task-plan.pending.json")
+        pending_path = build_task_plan_pending_json_path(self.state)
+        pending_path.parent.mkdir(parents=True)
         pending_path.write_text(json.dumps(pending), encoding="utf-8")
         state = {
             **self.state,

@@ -130,9 +130,13 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         plans = Path(self.workspace["workspace"]) / ".xcodeagent" / "plans"
         plans.mkdir(parents=True, exist_ok=True)
+        draft_plans = (
+            Path(self.workspace["workspace"]) / ".xcodeagent" / "drafts" / "plans"
+        )
+        draft_plans.mkdir(parents=True, exist_ok=True)
         files = {}
         for name in ("build-task-plan.json", "technical-plan.json", "build-task-plan.pending.json"):
-            path = plans / name
+            path = draft_plans / name if name.endswith(".pending.json") else plans / name
             payload = json.dumps({"sentinel": name}).encode()
             path.write_bytes(payload)
             files[path] = payload

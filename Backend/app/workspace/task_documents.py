@@ -73,7 +73,12 @@ def build_task_plan_json_path(state: dict[str, Any]) -> Path:
 def build_task_plan_pending_json_path(state: dict[str, Any]) -> Path:
     """返回当前工作区唯一的 Pending Build Task Plan JSON 路径。"""
 
-    return workflow_artifact_root(state) / "plans" / "build-task-plan.pending.json"
+    return (
+        workflow_artifact_root(state)
+        / "drafts"
+        / "plans"
+        / "build-task-plan.pending.json"
+    )
 
 
 def build_task_plan_sha256(build_task_plan: dict[str, Any]) -> str:

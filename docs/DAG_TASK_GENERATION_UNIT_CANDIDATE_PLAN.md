@@ -2432,7 +2432,7 @@ fatal Run result
 路径：
 
 ```text
-.xcodeagent/plans/build-task-plan.pending.json
+.xcodeagent/drafts/plans/build-task-plan.pending.json
 ```
 
 身份：
