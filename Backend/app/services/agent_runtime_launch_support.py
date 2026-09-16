@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import socket
@@ -11,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 from app.config import Settings
@@ -173,14 +175,11 @@ def start_agent_runtime_server(
         )
     stdout.close()
     stderr.close()
-    pid_path = runtime_root / "agent-runtime.pid"
-    pid_path.write_text(str(process.pid), encoding="utf-8")
     return (
         {
             "argv": argv,
             "cwd": str(agent_runtime_root),
             "pid": process.pid,
-            "pid_file": str(pid_path),
             "stdout_log": str(stdout_path),
             "stderr_log": str(stderr_path),
             "started_at": datetime.now(UTC).isoformat(),
@@ -210,29 +209,114 @@ def allocate_loopback_port(*, preferred_port: int | None = None) -> int:
 def wait_for_agent_runtime_ready(
     runtime_url: str,
     process: subprocess.Popen[bytes],
-) -> bool:
-    """监督子进程并等待 Runtime 健康契约就绪。"""
+) -> tuple[bool, int | str | None]:
+    """监督子进程并等待 Runtime 健康契约就绪，同时返回最近一次探测结果。"""
 
+    last_health: int | str | None = None
     deadline = time.monotonic() + AGENT_RUNTIME_READY_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            return False
-        if agent_runtime_is_ready(runtime_url):
-            return True
+            return False, last_health
+        health, ready = probe_agent_runtime_health_url(runtime_url)
+        last_health = health
+        if ready:
+            return True, health
         time.sleep(AGENT_RUNTIME_READY_INTERVAL_SECONDS)
-    return False
+    return False, last_health if last_health is not None else "ETIMEDOUT"
 
 
 def agent_runtime_is_ready(runtime_url: str) -> bool:
     """校验 Runtime /health 的无敏感状态响应。"""
 
+    _health, ready = probe_agent_runtime_health_url(runtime_url)
+    return ready
+
+
+def probe_agent_runtime_health(
+    host: str,
+    port: int,
+    *,
+    timeout: float = 1.0,
+) -> tuple[int | str | None, bool]:
+    """探测 loopback 端口与 /health，返回标量 health 以及契约是否就绪。"""
+
     try:
-        with urlopen(f"{runtime_url}/health", timeout=1) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, HTTPError, URLError, UnicodeError, json.JSONDecodeError):
-        return False
-    return (
-        isinstance(payload, dict)
-        and payload.get("service") == "agent-runtime"
-        and payload.get("status") == "ok"
-    )
+        with socket.create_connection((host, port), timeout=timeout):
+            pass
+    except TimeoutError:
+        return "ETIMEDOUT", False
+    except OSError as exc:
+        return normalize_agent_runtime_socket_error(exc), False
+
+    try:
+        with urlopen(f"http://{host}:{port}/health", timeout=timeout) as response:
+            status_code = int(getattr(response, "status", 200) or 200)
+            raw = response.read()
+    except HTTPError as exc:
+        return int(exc.code), False
+    except TimeoutError:
+        return "ETIMEDOUT", False
+    except URLError as exc:
+        reason = exc.reason
+        if isinstance(reason, TimeoutError):
+            return "ETIMEDOUT", False
+        if isinstance(reason, OSError):
+            return normalize_agent_runtime_socket_error(reason), False
+        return "ETIMEDOUT", False
+    except OSError as exc:
+        return normalize_agent_runtime_socket_error(exc), False
+
+    body_ok = False
+    if status_code == 200:
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            payload = None
+        body_ok = (
+            isinstance(payload, dict)
+            and payload.get("service") == "agent-runtime"
+            and payload.get("status") == "ok"
+        )
+    return status_code, body_ok
+
+
+def probe_agent_runtime_health_url(
+    runtime_url: str,
+    *,
+    timeout: float = 1.0,
+) -> tuple[int | str | None, bool]:
+    """从 Runtime URL 解析 host/port 后再做健康探测。"""
+
+    parsed = urlparse(runtime_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port
+    if port is None:
+        return "ECONNREFUSED", False
+    return probe_agent_runtime_health(host, port, timeout=timeout)
+
+
+def normalize_agent_runtime_socket_error(exc: OSError) -> str:
+    """把 POSIX errno 与 Windows WSA* 归一成状态文件使用的 TCP 错误名。"""
+
+    code = getattr(exc, "winerror", None) if os.name == "nt" else exc.errno
+    if code is None:
+        code = exc.errno
+    mapping = {
+        errno.ECONNREFUSED: "ECONNREFUSED",
+        errno.ETIMEDOUT: "ETIMEDOUT",
+        errno.ECONNRESET: "ECONNRESET",
+        10061: "ECONNREFUSED",
+        10060: "ETIMEDOUT",
+        10054: "ECONNRESET",
+    }
+    if code in mapping:
+        return mapping[code]
+    name = errno.errorcode.get(code or -1, "")
+    if name in {"ECONNREFUSED", "ETIMEDOUT", "ECONNRESET"}:
+        return name
+    detail = str(exc).lower()
+    if "timed out" in detail or "timedout" in detail:
+        return "ETIMEDOUT"
+    if "reset" in detail:
+        return "ECONNRESET"
+    return "ECONNREFUSED"

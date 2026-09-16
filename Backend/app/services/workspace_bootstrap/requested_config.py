@@ -31,6 +31,27 @@ def compile_template_requested_config(workspace_root: str | Path) -> dict[str, A
         raise TemplateConfigError(str(exc)) from exc
 
 
+def bootstrap_managed_roots(workspace_root: str | Path) -> tuple[str, ...]:
+    """根据已确认 TechnicalPlan 决定首次 Bootstrap 是否包含 Agent Runtime。"""
+
+    root = Path(workspace_root).expanduser().resolve()
+    technical_plan = _load_object(
+        root / ".xcodeagent/plans/technical-plan.json", "technical-plan.json"
+    )
+    _validate_technical_plan(technical_plan)
+    agent_contracts = technical_plan.get("agent_contracts")
+    if not isinstance(agent_contracts, list):
+        raise TemplateConfigError("TechnicalPlan.agent_contracts 必须是 JSON 数组。")
+    if any(not isinstance(item, dict) for item in agent_contracts):
+        raise TemplateConfigError(
+            "TechnicalPlan.agent_contracts 的每一项都必须是 JSON 对象。"
+        )
+    roots = ["frontend", "backend"]
+    if agent_contracts:
+        roots.append("agent-runtime")
+    return tuple(roots)
+
+
 def _load_object(path: Path, label: str) -> dict[str, Any]:
     """读取一个正式 JSON 对象，避免把损坏文件传给 Engine。"""
 

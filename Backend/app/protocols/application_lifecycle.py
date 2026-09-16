@@ -139,8 +139,14 @@ def build_application_lifecycle_ag_ui_stream(
             )
             message = "应用生命周期已创建。"
         elif request.action == "get":
+            from app.services.agent_runtime_debug_state import (
+                reconcile_stale_running_agent_runtime_debug_state_for_workspace,
+            )
             from app.services.development_artifacts import refresh_development_artifacts
 
+            reconcile_stale_running_agent_runtime_debug_state_for_workspace(
+                request.workspace_root
+            )
             state = refresh_development_artifacts(request.workspace_root)
             message = "已读取应用生命周期。"
         elif request.action in {
@@ -168,8 +174,16 @@ def build_application_lifecycle_ag_ui_stream(
             }
             return AgUiActionResult(data=data, message=message)
         elif request.action == "workspace_attach":
+            from app.services.agent_runtime_debug_state import (
+                reconcile_stale_running_agent_runtime_debug_state_for_workspace,
+            )
+
             attached = await asyncio.to_thread(
                 template_mutation_coordinator.attach_workspace,
+                request.workspace_root,
+            )
+            await asyncio.to_thread(
+                reconcile_stale_running_agent_runtime_debug_state_for_workspace,
                 request.workspace_root,
             )
             state = load_application_lifecycle(request.workspace_root)
