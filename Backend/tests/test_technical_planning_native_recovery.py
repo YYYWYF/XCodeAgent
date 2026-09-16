@@ -429,7 +429,7 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(lifecycle.active_run_id, context.new_run_id)
         self.assertEqual(
             lifecycle.initialization.stage,
-            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
         )
         self.assertIsNotNone(lifecycle.active_formal_revision)
         self.assertEqual(tuple(child_snapshot.next), ("technical_planning_review",))
@@ -540,8 +540,11 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
         after = load_application_lifecycle(scenario.workspace)
         self.assertIsNotNone(after)
         assert after is not None
-        self.assertEqual(after.initialization.stage, ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN)
-        self.assertEqual(after.revision, before.revision + 1)
+        self.assertEqual(
+            after.initialization.stage,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        )
+        self.assertEqual(after.revision, before.revision + 2)
         self.assertEqual(scenario.counters["model"], 1)
 
     async def test_generation_ready_recovery_allows_one_model_call(self) -> None:

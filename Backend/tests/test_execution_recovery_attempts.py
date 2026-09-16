@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,7 @@ from app.domain.execution_recovery import (
 from app.persistence.execution_recovery import (
     claim_recovery_finalization,
     claim_native_recovery_attempt,
+    execution_recovery_db_path,
     get_execution,
     get_execution_lease,
     get_recovery_attempt,
@@ -558,7 +560,7 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             workspace=self.workspace,
             current_backend_instance_id="backend-new",
             locally_active_run_ids=set(),
-            now=future,
+            now=future + timedelta(seconds=61),
         )
         self.assertEqual([record.run_id for record in interrupted], [child.run_id])
         interrupted_child = await get_execution(self.workspace, child.run_id)
@@ -648,6 +650,95 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(successes), 1)
         self.assertEqual(len(failures), 1)
         self.assertIsInstance(failures[0], RecoveryAttemptAlreadyClaimedError)
+
+    async def test_legacy_attempt_strategies_decode_but_finalization_fails_closed(
+        self,
+    ) -> None:
+        """旧 Stage Restart/Operation Retry 可读取，但不得触发任何 Graph 调用。"""
+
+        for strategy in (
+            RecoveryStrategy.STAGE_RESTART,
+            RecoveryStrategy.OPERATION_RETRY,
+        ):
+            with self.subTest(strategy=strategy.value):
+                with tempfile.TemporaryDirectory() as raw_workspace:
+                    workspace = Path(raw_workspace)
+                    now = datetime.now(timezone.utc)
+                    source = DurableExecutionRecord(
+                        run_id=f"legacy-source-{strategy.value}",
+                        thread_id=f"legacy-thread-{strategy.value}",
+                        owner_session_id="legacy-session",
+                        workspace=str(workspace),
+                        project_id=None,
+                        execution_kind="workbench",
+                        workflow_scope=None,
+                        first_node="B",
+                        current_node="B",
+                        status=DurableExecutionStatus.INTERRUPTED,
+                        started_at=now,
+                        updated_at=now,
+                        ended_at=now,
+                    )
+                    await insert_execution(source)
+                    plan = RecoveryPlan(
+                        source_run_id=source.run_id,
+                        thread_id=source.thread_id,
+                        decision="ready_native",
+                        strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+                        checkpoint_id="legacy-checkpoint",
+                        checkpoint_ns="",
+                        next_nodes=["B"],
+                        reason_code="TEST_LEGACY_ATTEMPT",
+                        reason="seed a current row before applying the legacy strategy",
+                    )
+                    child, _lease, _attempt = await claim_native_recovery_attempt(
+                        source=source,
+                        plan=plan,
+                        new_run_id=f"legacy-child-{strategy.value}",
+                        owner_backend_instance_id="legacy-backend",
+                        owner_pid=101,
+                        lease_ttl_seconds=30,
+                    )
+                    await update_recovery_attempt(
+                        workspace=workspace,
+                        new_run_id=child.run_id,
+                        status=RecoveryAttemptStatus.HANDED_OFF,
+                    )
+
+                    connection = sqlite3.connect(execution_recovery_db_path(workspace))
+                    try:
+                        connection.execute(
+                            "UPDATE recovery_attempts SET strategy = ? WHERE new_run_id = ?",
+                            (strategy.value, child.run_id),
+                        )
+                        connection.commit()
+                    finally:
+                        connection.close()
+
+                    decoded = await get_recovery_attempt(workspace, child.run_id)
+                    self.assertIsNotNone(decoded)
+                    assert decoded is not None
+                    self.assertEqual(decoded.strategy, strategy)
+                    graph = SimpleNamespace(
+                        aget_state=AsyncMock(),
+                        aget_state_history=AsyncMock(),
+                        aupdate_state=AsyncMock(),
+                    )
+
+                    with self.assertRaises(RecoveryExecutionError) as raised:
+                        await finalize_handed_off_recovery_attempt(
+                            workspace=str(workspace),
+                            new_run_id=child.run_id,
+                            graph=graph,
+                        )
+
+                    self.assertEqual(
+                        raised.exception.code,
+                        "RECOVERY_STRATEGY_UNSUPPORTED",
+                    )
+                    graph.aget_state.assert_not_awaited()
+                    graph.aget_state_history.assert_not_awaited()
+                    graph.aupdate_state.assert_not_awaited()
 
     async def _prepare_source_and_plan(self) -> tuple[DurableExecutionRecord, RecoveryPlan]:
         """写入可供 Native claim 使用的中断 source 与 checkpoint plan。"""

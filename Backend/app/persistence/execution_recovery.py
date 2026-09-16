@@ -1093,7 +1093,7 @@ async def takeover_pre_runtime_recovery_lease(
                 "RECOVERY_ATTEMPT_NOT_FOUND",
                 "pre-runtime recovery attempt 不存在。",
             )
-        attempt_status = RecoveryAttemptStatus(str(attempt_row[10]))
+        attempt_status = _recovery_attempt_from_row(attempt_row).status
         if attempt_status is RecoveryAttemptStatus.STARTED:
             raise RecoveryExecutionError(
                 "RECOVERY_ATTEMPT_ALREADY_STARTED",

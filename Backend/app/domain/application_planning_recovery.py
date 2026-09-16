@@ -107,6 +107,7 @@ def application_planning_boundary_payload(
     """由服务端事实构造可写入 Graph State 的 camelCase boundary payload。"""
 
     model = ApplicationPlanningBoundary(
+        schemaVersion="application-planning-boundary.v1",
         operationId=operation_id,
         artifact=ApplicationPlanningArtifact.TECHNICAL_PLAN,
         operation=operation,

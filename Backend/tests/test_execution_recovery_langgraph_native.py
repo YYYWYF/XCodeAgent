@@ -8,10 +8,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TypedDict
+from unittest.mock import patch
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from app.domain.application_lifecycle import (
+    ApplicationInitialization,
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+)
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
@@ -31,6 +37,11 @@ from app.persistence.execution_recovery import (
     update_recovery_attempt,
 )
 from app.services.backend_instance import current_backend_instance
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    handoff_application_planning_run_for_recovery,
+    write_application_lifecycle,
+)
 from app.services.execution_recovery_executor import (
     finalize_handed_off_recovery_attempt,
 )
@@ -104,6 +115,25 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
             source_checkpoint_id = str(source_identity["checkpoint_id"])
             source_checkpoint_ns = str(source_identity.get("checkpoint_ns") or "")
 
+            lifecycle = create_application_lifecycle(
+                application_id="langgraph-native-replay-app",
+                application_name="LangGraph Native Replay",
+                initialization_thread_id=thread_id,
+                active_run_id=source_run_id,
+            ).model_copy(
+                update={
+                    "initialization": ApplicationInitialization(
+                        stage=ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
+                        status=ApplicationLifecycleStatus.RUNNING,
+                        threadId=thread_id,
+                    )
+                }
+            )
+            lifecycle = write_application_lifecycle(
+                workspace,
+                lifecycle,
+                expected_revision=0,
+            )
             captured_at = datetime.now(timezone.utc)
             source = DurableExecutionRecord(
                 run_id=source_run_id,
@@ -130,26 +160,43 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
                 next_nodes=["B"],
                 reason_code="TEST",
                 reason="real LangGraph replay",
+                lifecycle_revision=lifecycle.revision,
             )
-            identity = current_backend_instance()
             child, _lease, _attempt = await claim_native_recovery_attempt(
                 source=source,
                 plan=plan,
                 new_run_id=child_run_id,
-                owner_backend_instance_id=identity.instance_id,
-                owner_pid=identity.pid,
+                owner_backend_instance_id="backend-before-restart",
+                owner_pid=101,
                 lease_ttl_seconds=60,
             )
+            handed_off_lifecycle = handoff_application_planning_run_for_recovery(
+                workspace,
+                source_run_id=source_run_id,
+                new_run_id=child_run_id,
+                thread_id=thread_id,
+                expected_lifecycle_revision=lifecycle.revision,
+            )
+            self.assertIsNotNone(handed_off_lifecycle)
+            assert handed_off_lifecycle is not None
+            self.assertEqual(handed_off_lifecycle.active_run_id, child_run_id)
             await update_recovery_attempt(
                 workspace=workspace,
                 new_run_id=child_run_id,
                 status=RecoveryAttemptStatus.HANDED_OFF,
             )
-            context = await finalize_handed_off_recovery_attempt(
-                workspace=str(workspace),
-                new_run_id=child_run_id,
-                graph=graph,
-            )
+            with patch(
+                "app.services.execution_recovery_executor.current_backend_instance",
+                return_value=SimpleNamespace(
+                    instance_id="backend-after-restart",
+                    pid=202,
+                ),
+            ):
+                context = await finalize_handed_off_recovery_attempt(
+                    workspace=str(workspace),
+                    new_run_id=child_run_id,
+                    graph=graph,
+                )
             await graph.ainvoke(None, config=context.fork_config)
             await stop_execution_heartbeat(context.heartbeat_task)
 
@@ -164,6 +211,7 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
             )
             attempt = await get_recovery_attempt(workspace, child_run_id)
             durable_child = await get_execution(workspace, child_run_id)
+            child_lease = await get_execution_lease(workspace, child_run_id)
 
         self.assertEqual(counters, {"A": 1, "B": 1, "C": 1})
         self.assertEqual(source_after.values.get("active_run_id"), source_run_id)
@@ -174,6 +222,12 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(durable_child)
         assert durable_child is not None
         self.assertEqual(durable_child.status, DurableExecutionStatus.RUNNING)
+        self.assertIsNotNone(child_lease)
+        assert child_lease is not None
+        self.assertEqual(
+            child_lease.owner_backend_instance_id,
+            "backend-after-restart",
+        )
 
     async def test_handed_off_restart_detects_workspace_drift_before_fork(self) -> None:
         """HANDED_OFF 重启遇到磁盘漂移时不能调用 aupdate_state。"""
@@ -184,6 +238,25 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
             tracked_file.write_text("before", encoding="utf-8")
             await initialize_execution_recovery_store(workspace)
             _files, workspace_revision = workspace_inventory(workspace)
+            lifecycle = create_application_lifecycle(
+                application_id="workspace-drift-app",
+                application_name="Workspace Drift",
+                initialization_thread_id="workspace-drift-thread",
+                active_run_id="workspace-drift-source",
+            ).model_copy(
+                update={
+                    "initialization": ApplicationInitialization(
+                        stage=ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
+                        status=ApplicationLifecycleStatus.RUNNING,
+                        threadId="workspace-drift-thread",
+                    )
+                }
+            )
+            lifecycle = write_application_lifecycle(
+                workspace,
+                lifecycle,
+                expected_revision=0,
+            )
             captured_at = datetime.now(timezone.utc)
             source = DurableExecutionRecord(
                 run_id="workspace-drift-source",
@@ -210,6 +283,7 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
                 next_nodes=["B"],
                 reason_code="TEST",
                 reason="workspace drift",
+                lifecycle_revision=lifecycle.revision,
             )
             identity = current_backend_instance()
             child, _lease, _attempt = await claim_native_recovery_attempt(
@@ -220,6 +294,14 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
                 owner_pid=identity.pid,
                 lease_ttl_seconds=60,
             )
+            handed_off_lifecycle = handoff_application_planning_run_for_recovery(
+                workspace,
+                source_run_id=source.run_id,
+                new_run_id=child.run_id,
+                thread_id=source.thread_id,
+                expected_lifecycle_revision=lifecycle.revision,
+            )
+            self.assertIsNotNone(handed_off_lifecycle)
             await update_recovery_attempt(
                 workspace=workspace,
                 new_run_id=child.run_id,
@@ -251,7 +333,16 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
                 async def aget_state_history(self, config: dict[str, Any]):
                     """提供 latest source-owned root checkpoint，禁止 scan-back。"""
 
-                    yield await self.aget_state(config)
+                    del config
+                    yield await self.aget_state(
+                        {
+                            "configurable": {
+                                "thread_id": source.thread_id,
+                                "checkpoint_ns": "",
+                                "checkpoint_id": plan.checkpoint_id,
+                            }
+                        }
+                    )
 
                 async def aupdate_state(self, _config: dict[str, Any], _updates: dict[str, Any]) -> Any:
                     """记录任何不应发生的 fork 写入。"""
@@ -270,7 +361,11 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
             failed_child = await get_execution(workspace, child.run_id)
             failed_lease = await get_execution_lease(workspace, child.run_id)
 
-        self.assertEqual(raised.exception.code, "WORKSPACE_DRIFT")
+        self.assertEqual(
+            raised.exception.code,
+            "WORKSPACE_DRIFT",
+            str(raised.exception),
+        )
         self.assertFalse(graph.fork_called)
         self.assertIsNotNone(failed_attempt)
         self.assertIsNotNone(failed_child)

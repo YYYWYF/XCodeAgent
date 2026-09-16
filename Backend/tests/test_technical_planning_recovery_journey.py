@@ -34,6 +34,7 @@ from app.persistence.checkpoints import (
 )
 from app.persistence.execution_recovery import (
     get_execution,
+    get_node_entry_boundary,
     list_executions_for_thread,
     list_recovery_attempts_for_thread,
 )
@@ -465,8 +466,8 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 {source_a.run_id, run_b.run_id},
             )
 
-    async def test_repeated_failed_technical_planning_reentry_keeps_same_node(self) -> None:
-        """失败子执行再次失败时仍只能创建同一 Node 的 retry child。"""
+    async def test_g7_repeated_failure_retries_from_canonical_child_checkpoint(self) -> None:
+        """G7 锁定 A→B 失败后只从 B 的同 Node checkpoint 再次恢复。"""
 
         with (
             patch(
@@ -480,20 +481,39 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self.harness.initialize_graph()
             await self.harness.run_initial()
-            _source_a, _projection_a, action_a = await self.harness.resolve_action()
+            source_a, _projection_a, action_a = await self.harness.resolve_action()
 
             self.harness.model_name = "MiMo"
             run_b = await self.harness.execute_action(action_a)
-            _source_b, _projection_b, action_b = await self.harness.resolve_action()
+            source_b, _projection_b, action_b = await self.harness.resolve_action()
+            self.assertEqual(source_b.run_id, run_b.run_id)
+            self.assertEqual(source_b.status, DurableExecutionStatus.FAILED)
+            self.assertEqual(source_b.current_node, source_a.current_node)
             self.assertEqual(
                 action_b["primaryAction"]["kind"],
                 RecoveryActionKind.RETRY_FAILED_NODE.value,
             )
 
+            attempts_after_b = await list_recovery_attempts_for_thread(
+                self.harness.workspace,
+                thread_id=self.harness.thread_id,
+            )
+            self.assertEqual(len(attempts_after_b), 1)
+            attempt_from_a = attempts_after_b[0]
+            boundary_b = await get_node_entry_boundary(
+                self.harness.workspace,
+                source_run_id=run_b.run_id,
+                thread_id=self.harness.thread_id,
+                target_node=source_b.current_node or "",
+            )
+            self.assertIsNotNone(boundary_b)
+            assert boundary_b is not None
+
             self.harness.model_name = "working-model"
             run_c = await self.harness.execute_action(action_b)
             self.assertNotEqual(run_c.run_id, run_b.run_id)
             self.assertEqual(run_b.first_node, "technical_planning_generate")
+            self.assertEqual(run_c.first_node, source_b.current_node)
             self.assertNotEqual(run_c.status, DurableExecutionStatus.FAILED)
 
             lifecycle = load_application_lifecycle(self.harness.workspace)
@@ -514,6 +534,18 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 thread_id=self.harness.thread_id,
             )
             self.assertEqual(len(attempts), 2)
+            attempt_from_b = next(
+                attempt for attempt in attempts if attempt.source_run_id == run_b.run_id
+            )
+            self.assertEqual(attempt_from_b.source_run_id, source_b.run_id)
+            self.assertEqual(
+                attempt_from_b.source_checkpoint_id,
+                boundary_b.checkpoint_id,
+            )
+            self.assertNotEqual(
+                attempt_from_b.source_checkpoint_id,
+                attempt_from_a.source_checkpoint_id,
+            )
             strategies_by_source = {
                 attempt.source_run_id: attempt.strategy for attempt in attempts
             }
@@ -521,7 +553,10 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 strategies_by_source[self.harness.source_run_id],
                 RecoveryStrategy.NATIVE_CHECKPOINT,
             )
-            self.assertEqual(strategies_by_source[run_b.run_id], RecoveryStrategy.NATIVE_CHECKPOINT)
+            self.assertEqual(
+                strategies_by_source[run_b.run_id],
+                RecoveryStrategy.NATIVE_CHECKPOINT,
+            )
             for attempt in attempts:
                 self.assertEqual(
                     attempt.source_authority_kind,
