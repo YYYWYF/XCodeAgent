@@ -38,6 +38,7 @@ from app.services.frontend_page_tree import (
     group_pages_into_menu_tree,
     rebuild_frontend_page_tree,
 )
+from app.services.product_plan import project_active_agent_product_plan
 from app.services.page_dependencies import normalize_page_dependencies
 from app.services.requirement_spec import product_acceptance_criteria
 from app.services.authorization_manifest import compile_authorization_manifest
@@ -2535,7 +2536,7 @@ def validate_technical_plan_agent_contracts(
     plan: dict[str, Any],
     product_plan: dict[str, Any],
 ) -> list[str]:
-    """以同一编译器校验落盘完整 Agent Contract，拒绝任何派生字段漂移。"""
+    """以启用产品投影和同一编译器校验完整 Agent Contract，拒绝派生字段漂移。"""
 
     raw_contracts = plan.get("agent_contracts")
     if not isinstance(raw_contracts, list):
@@ -2543,20 +2544,21 @@ def validate_technical_plan_agent_contracts(
     contracts = _dict_items(raw_contracts)
     if len(contracts) != len(raw_contracts):
         return ["TechnicalPlan.agent_contracts 的每一项都必须是 JSON 对象。"]
+    active_product_plan = project_active_agent_product_plan(product_plan)
     candidates = technical_agent_contract_model_input(contracts)
     candidate_plan = {"agent_contracts": candidates}
     api_contracts = _dict_items(plan.get("api_contracts"))
     pages = _dict_items(plan.get("pages"))
     errors = _technical_agent_contract_model_errors(
         candidate_plan,
-        product_plan,
+        active_product_plan,
         api_contracts,
         pages,
     )
     if errors:
         return errors
     expected = _technical_agent_contracts(
-        product_plan,
+        active_product_plan,
         candidate_plan,
         api_contracts,
     )

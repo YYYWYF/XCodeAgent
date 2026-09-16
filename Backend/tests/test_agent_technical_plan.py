@@ -6,7 +6,10 @@ from copy import deepcopy
 
 from app.agents.main.planner import _technical_planning_prompt
 from app.agents.main.product_planner import _product_plan_json_example
-from app.services.product_plan import create_product_plan
+from app.services.product_plan import (
+    create_product_plan,
+    project_active_agent_product_plan,
+)
 from app.services.project_plan import (
     create_technical_plan,
     validate_technical_plan_agent_contracts,
@@ -363,6 +366,38 @@ class AgentTechnicalPlanTests(unittest.TestCase):
         self.assertIn("智能体运行时契约", markdown)
         self.assertIn("Python 3.12", markdown)
         self.assertIn("AG-UI SSE", markdown)
+
+    def test_agent_contract_validation_uses_enabled_product_projection(self) -> None:
+        """禁用 Agent Surface 后，生成与校验必须绑定同一启用产品投影。"""
+
+        requirement = self._requirement_with_product_agent()
+        product_plan = deepcopy(requirement["confirmed_product_plan"])
+        disabled_page = product_plan["pages"][1]
+        disabled_action_id = disabled_page["actions"][0]["actionId"]
+        product_plan["agents"][0]["entryPageIds"].append(disabled_page["pageId"])
+        product_plan["agents"][0]["pageActionBindings"].append(
+            {
+                "pageId": disabled_page["pageId"],
+                "actionIds": [disabled_action_id],
+                "surface": {
+                    "type": "floating_panel",
+                    "enabled": False,
+                    "contextItemIds": [],
+                },
+            }
+        )
+        planning_requirement = {
+            **requirement,
+            "confirmed_product_plan": product_plan,
+            "active_agent_product_plan": project_active_agent_product_plan(product_plan),
+        }
+
+        plan = create_technical_plan(
+            planning_requirement,
+            agent_plan=self._technical_model_plan(planning_requirement),
+        )
+
+        self.assertEqual(validate_technical_plan_agent_contracts(plan, product_plan), [])
 
     def test_complete_single_agent_object_matches_array_without_mutation(self) -> None:
         """单智能体完整对象必须无损收敛为数组，且不修改原始模型响应。"""
