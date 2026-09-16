@@ -11,20 +11,33 @@ from app.domain.application_revision import (
     StartRevisionRequest,
 )
 from app.domain.application_lifecycle import ApplicationLifecycleStage
+from app.domain.execution_recovery import (
+    DurableExecutionRecord,
+    DurableExecutionStatus,
+    RecoveryExecutionError,
+)
 from app.graph.application_planning_revision import (
     technical_plan_revision_reset_state,
 )
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.protocols.application_planning_interrupt import (
+    application_planning_interrupt_from_snapshot,
     project_application_planning_interrupt,
+)
+from app.protocols.application_planning_recovery_projection import (
+    ApplicationPlanningRecoveryProjection,
+    application_planning_input_committed,
+    build_application_planning_recovery_projection,
+    project_application_planning_recovery_snapshot,
+    terminal_application_planning_projection_fields,
 )
 from app.protocols.application_planning_run_lock import application_planning_run_lock
 from app.protocols.application_lifecycle import application_lifecycle_input
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_summary, _workflow_visual_payload
-from app.services.application_planning_recovery_coordinator import (
-    resolve_application_planning_recovery,
-    sanitize_application_planning_recovery_result,
+from app.services.execution_recovery_action_planner import (
+    plan_failed_node_reentry_action,
+    plan_interrupted_continue_action,
 )
 from app.services.execution_recovery_lineage import (
     RecoveryLineageResolution,
@@ -32,6 +45,10 @@ from app.services.execution_recovery_lineage import (
     resolve_recovery_lineage_head,
 )
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
+from app.services.execution_recovery_reconciliation import (
+    reconcile_interrupted_execution_state,
+)
+from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.ui_design_manifest import present_ui_pages
 from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_path
 from app.services.application_lifecycle import (
@@ -43,6 +60,7 @@ from app.services.requirement_spec import (
     SaveRequirementSpecDraftRequest,
     save_requirement_spec_draft,
 )
+from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 
 
 REQUIREMENT_SPEC_DRAFT_EVENT_NAME = "requirement-spec-draft"
@@ -71,6 +89,207 @@ class ProductStageConversationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request: str = Field(min_length=1, max_length=16_000)
+
+
+async def _build_application_planning_recovery_projection(
+    *,
+    workspace: str,
+    thread_id: str,
+    graph: Any,
+    snapshot: Any,
+    source: DurableExecutionRecord | None,
+    lineage_resolution: RecoveryLineageResolution | None = None,
+) -> ApplicationPlanningRecoveryProjection:
+    """在公开 Workflow 边界调用 Generic Recovery authority 并生成 Planning DTO。"""
+
+    if lineage_resolution is not None:
+        if lineage_resolution.state is RecoveryLineageState.AMBIGUOUS:
+            return build_application_planning_recovery_projection(
+                classification="blocked",
+                source=None,
+                thread_id=thread_id,
+                reason_code=lineage_resolution.reason_code,
+                message="当前规划状态无法安全自动恢复，请查看恢复状态。",
+            )
+        if lineage_resolution.state is RecoveryLineageState.NO_HEAD:
+            source = None
+        elif lineage_resolution.head is None:
+            return build_application_planning_recovery_projection(
+                classification="blocked",
+                source=None,
+                thread_id=thread_id,
+                reason_code="RECOVERY_LINEAGE_HEAD_MISSING",
+                message="当前规划状态无法安全自动恢复，请查看恢复状态。",
+            )
+        else:
+            source = lineage_resolution.head
+
+    input_committed = application_planning_input_committed(source, snapshot)
+    interrupt = application_planning_interrupt_from_snapshot(snapshot)
+    if interrupt is not None and (
+        source is None
+        or source.status
+        not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}
+    ):
+        return build_application_planning_recovery_projection(
+            classification="awaiting_user",
+            source=source,
+            thread_id=thread_id,
+            user_action_required=True,
+            input_committed=input_committed,
+            reason_code="NATIVE_APPLICATION_PLANNING_INTERRUPT",
+            message="当前应用规划正在等待你的确认。",
+        )
+    if source is None:
+        return build_application_planning_recovery_projection(
+            classification="legacy_unverified",
+            source=None,
+            thread_id=thread_id,
+            reason_code="DURABLE_APPLICATION_PLANNING_EXECUTION_MISSING",
+            message="当前规划现场缺少可验证的执行记录，无法安全自动恢复。",
+        )
+
+    if source.status is DurableExecutionStatus.RUNNING:
+        return build_application_planning_recovery_projection(
+            classification="running",
+            source=source,
+            thread_id=thread_id,
+            input_committed=input_committed,
+            reason_code="DURABLE_APPLICATION_PLANNING_RUNNING",
+            message="当前规划仍在运行。",
+        )
+    if source.status in {
+        DurableExecutionStatus.COMPLETED,
+        DurableExecutionStatus.CANCELLED,
+        DurableExecutionStatus.STOPPED,
+    }:
+        classification, message, _ = terminal_application_planning_projection_fields(
+            source.status
+        )
+        return build_application_planning_recovery_projection(
+            classification=classification,
+            source=source,
+            thread_id=thread_id,
+            input_committed=input_committed,
+            reason_code=f"DURABLE_APPLICATION_PLANNING_{source.status.name}",
+            message=message,
+        )
+    if source.status is DurableExecutionStatus.AWAITING_USER:
+        return build_application_planning_recovery_projection(
+            classification="conflict",
+            source=source,
+            thread_id=thread_id,
+            input_committed=input_committed,
+            reason_code="DURABLE_AWAITING_USER_WITHOUT_NATIVE_INTERRUPT",
+            message="当前规划状态需要重新校准。",
+        )
+
+    if source.status is DurableExecutionStatus.FAILED:
+        admission = assess_recovery_source(source)
+        if not admission.admissible:
+            action_plan = plan_failed_node_reentry_action(
+                workspace=workspace,
+                source=source,
+                error=RecoveryExecutionError(
+                    admission.reason_code,
+                    "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
+                ),
+            )
+        else:
+            try:
+                reentry_plan = await FailureTargetResolver().resolve(
+                    workspace=workspace,
+                    source=source,
+                    graph=graph,
+                )
+            except RecoveryExecutionError as exc:
+                action_plan = plan_failed_node_reentry_action(
+                    workspace=workspace,
+                    source=source,
+                    error=exc,
+                )
+            else:
+                action_plan = plan_failed_node_reentry_action(
+                    workspace=workspace,
+                    source=source,
+                    reentry_plan=reentry_plan,
+                )
+    elif source.status is DurableExecutionStatus.INTERRUPTED:
+        resolution = await InterruptedTargetResolver().resolve(
+            workspace=workspace,
+            source=source,
+            graph=graph,
+        )
+        if resolution.kind in {"terminal", "awaiting_user"}:
+            status = resolution.terminal_status or (
+                DurableExecutionStatus.AWAITING_USER
+                if resolution.kind == "awaiting_user"
+                else DurableExecutionStatus.COMPLETED
+            )
+            reconciled = await reconcile_interrupted_execution_state(
+                workspace=workspace,
+                source=source,
+                status=status,
+                snapshot=resolution.snapshot,
+            )
+            classification, message, user_action_required = (
+                terminal_application_planning_projection_fields(status)
+            )
+            return build_application_planning_recovery_projection(
+                classification=classification,
+                source=reconciled or source,
+                thread_id=thread_id,
+                user_action_required=user_action_required,
+                input_committed=input_committed,
+                reason_code=resolution.reason_code,
+                message=message,
+            )
+        if resolution.kind == "continue" and resolution.reentry_plan is not None:
+            action_plan = plan_interrupted_continue_action(
+                workspace=workspace,
+                source=source,
+                reentry_plan=resolution.reentry_plan,
+            )
+        else:
+            action_plan = plan_interrupted_continue_action(
+                workspace=workspace,
+                source=source,
+                error=RecoveryExecutionError(
+                    resolution.reason_code,
+                    resolution.reason,
+                ),
+            )
+    else:
+        return build_application_planning_recovery_projection(
+            classification="blocked",
+            source=source,
+            thread_id=thread_id,
+            input_committed=input_committed,
+            reason_code="DURABLE_APPLICATION_PLANNING_NOT_CONTINUABLE",
+            message="当前计划状态无法安全自动恢复，请查看恢复状态。",
+        )
+
+    recovery_action_plan = action_plan.model_dump(mode="json", by_alias=True)
+    if action_plan.primary_action is not None:
+        return build_application_planning_recovery_projection(
+            classification="ready_to_continue",
+            source=source,
+            thread_id=thread_id,
+            can_continue=True,
+            input_committed=input_committed,
+            reason_code=action_plan.reason_code,
+            message=action_plan.message,
+            recovery_action_plan=recovery_action_plan,
+        )
+    return build_application_planning_recovery_projection(
+        classification="blocked",
+        source=source,
+        thread_id=thread_id,
+        input_committed=input_committed,
+        reason_code=action_plan.reason_code,
+        message=action_plan.message,
+        recovery_action_plan=recovery_action_plan,
+    )
 
 
 def application_page_planning_capabilities() -> dict[str, Any]:
@@ -311,19 +530,17 @@ def _build_application_planning_recovery_ag_ui_stream(
                 raise ApplicationPlanningCheckpointNotFoundError(
                     "没有找到可恢复的应用规划 checkpoint。"
                 )
-            lifecycle = load_application_lifecycle(request.workspaceRoot)
-            projection = await resolve_application_planning_recovery(
+            projection = await _build_application_planning_recovery_projection(
                 workspace=request.workspaceRoot,
                 thread_id=thread_id,
                 graph=active_graph,
                 snapshot=snapshot,
-                lifecycle=lifecycle,
                 source=source,
                 lineage_resolution=lineage_resolution,
             )
             if projection.classification == "awaiting_user":
                 result = project_application_planning_interrupt(result, snapshot)
-            result = sanitize_application_planning_recovery_result(
+            result = project_application_planning_recovery_snapshot(
                 result,
                 projection=projection,
             )
@@ -346,6 +563,7 @@ def _build_application_planning_recovery_ag_ui_stream(
                         clarification["pages"] = present_ui_pages(
                             manifest, product_plan
                         )
+            lifecycle = load_application_lifecycle(request.workspaceRoot)
         if lifecycle is not None:
             result["lifecycle"] = application_lifecycle_payload(lifecycle)
         recovery_run_id = str(result.get("active_run_id") or f"recovery:{thread_id}")
