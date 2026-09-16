@@ -279,7 +279,13 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
             release_maintenance(request.workspace, thread_id)
             return AgUiActionResult(data=snapshot(request.workspace, thread_id), message="已停止修复。")
         with maintenance_lock:
-            blocker = blocking_task(request.workspace, thread_id)
+            # 手动重启只维护生成项目的运行进程，不修改业务代码或正式产物；
+            # 因此允许它与应用任务并行，避免短时重启占用反向打断 Workflow。
+            blocker = (
+                None
+                if request.action == "restart"
+                else blocking_task(request.workspace, thread_id)
+            )
             if blocker:
                 raise ValueError(blocker["message"])
             owner = maintenance_owner(request.workspace)

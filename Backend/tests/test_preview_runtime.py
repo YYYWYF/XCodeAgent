@@ -89,14 +89,20 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["status"], "failed")
         self.assertIsNone(maintenance_owner(self.workspace))
 
-    async def test_waiting_execution_blocks_restart(self) -> None:
-        """其他阶段等待确认时阻止重启，并允许读取状态。"""
+    async def test_waiting_execution_allows_restart(self) -> None:
+        """其他阶段执行或等待确认时仍允许手动重启预览服务。"""
         lifecycle = SimpleNamespace(active_executions={"task": SimpleNamespace(thread_id="other", run_id="other-run", status="awaiting_user")})
-        with patch("app.protocols.preview_runtime.load_application_lifecycle", return_value=lifecycle), patch("app.protocols.preview_runtime.launch_project_preview") as launch:
-            self.assertEqual(self.result(await self.request("restart"))["status"], "failed")
+        launch_result = {"status": "running", "message": "项目预览已启动。"}
+        with patch("app.protocols.preview_runtime.load_application_lifecycle", return_value=lifecycle), patch("app.protocols.preview_runtime.launch_project_preview", return_value=launch_result) as launch:
+            self.assertEqual(self.result(await self.request("restart"))["status"], "completed")
             value = self.result(await self.request("get"))
-        launch.assert_not_called()
+        launch.assert_called_once()
         self.assertEqual(value["blockedBy"]["threadId"], "other")
+
+    def test_restart_maintenance_does_not_block_application_tasks(self) -> None:
+        """短时服务重启占用不能让并行应用任务启动或恢复失败。"""
+        claim_maintenance(self.workspace, self.thread, "restart")
+        require_no_maintenance(self.workspace)
 
     async def test_stale_attempt_cannot_diagnose(self) -> None:
         """拒绝用上一轮失败身份诊断新的代码。"""
@@ -428,9 +434,14 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 value = self.result(await self.request("restart"))
                 self.assertEqual(value["status"], "failed")
                 self.assertIsNotNone(maintenance_owner(self.workspace))
-                with self.assertRaises(RuntimeError):
-                    from app.protocols.workflow.run_control import workflow_run_registry
-                    workflow_run_registry.register("ordinary", asyncio.current_task(), workspace=self.workspace)
+                from app.protocols.workflow.run_control import workflow_run_registry
+
+                ordinary_task = asyncio.current_task()
+                self.assertIsNotNone(ordinary_task)
+                workflow_run_registry.register(
+                    "ordinary", ordinary_task, workspace=self.workspace
+                )
+                workflow_run_registry.unregister("ordinary", ordinary_task)
             finally:
                 finish.set()
                 await first

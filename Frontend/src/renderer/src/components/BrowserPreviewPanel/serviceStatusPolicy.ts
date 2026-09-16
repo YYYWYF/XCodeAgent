@@ -3,7 +3,7 @@ export type PreviewServiceActionAvailability = {
   canDiagnose: boolean
 }
 
-/** 根据真实占用与执行状态决定维护操作，初始快照尚未返回时仍允许提交重启。 */
+/** 允许服务重启与应用任务并行，仅让诊断修复继续遵守任务占用。 */
 export function previewServiceActionAvailability(input: {
   busy: boolean
   blockedReason: string
@@ -11,7 +11,7 @@ export function previewServiceActionAvailability(input: {
 }): PreviewServiceActionAvailability {
   const maintenanceAvailable = !input.busy && !input.blockedReason
   return {
-    canRestart: maintenanceAvailable,
+    canRestart: !input.busy,
     canDiagnose: maintenanceAvailable && input.repairAvailable === true
   }
 }

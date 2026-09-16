@@ -28,9 +28,13 @@ def maintenance_owner(workspace: str | Path) -> dict[str, Any] | None:
 
 
 def require_no_maintenance(workspace: str | Path, thread_id: str = "") -> None:
-    """阻止普通任务在预览维护期间启动或恢复。"""
+    """阻止普通任务与会修改代码的预览维护并发，服务重启不阻断任务。"""
     owner = maintenance_owner(workspace)
-    if owner and owner["threadId"] != thread_id:
+    if (
+        owner
+        and owner["threadId"] != thread_id
+        and str(owner.get("action") or "") != "restart"
+    ):
         raise RuntimeError("当前应用正在进行预览服务维护，请完成或停止后再启动任务。")
 
 

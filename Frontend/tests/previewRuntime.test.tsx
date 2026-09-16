@@ -81,7 +81,8 @@ try {
   )
   assert.equal(
     previewServiceActionAvailability({ busy: false, blockedReason: '会话执行中' }).canRestart,
-    false
+    true,
+    '应用任务占用期间仍应允许手动重启服务'
   )
 
   const awaiting = renderToStaticMarkup(
