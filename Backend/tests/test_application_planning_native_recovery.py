@@ -39,15 +39,13 @@ from app.services.application_planning_recovery_coordinator import (
 )
 from app.services.execution_lease_heartbeat import stop_execution_heartbeat
 from app.services.execution_recovery_executor import prepare_native_recovery
-from app.services.execution_recovery_policies import (
-    production_recovery_replay_policies,
-)
 from app.graph.application_planning_interrupts import (
     ApplicationPlanningRoutingError,
     requirements_review,
     route_requirements_review,
 )
 from app.graph.state import ProjectState
+from app.services.workflow_reentry import InterruptedTargetResolver
 from tests.helpers.native_recovery_contract import (
     assert_native_recovery_fork_stable,
 )
@@ -297,11 +295,19 @@ class ApplicationPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(projection.can_continue)
             self.assertTrue(projection.input_committed)
 
+            resolution = await InterruptedTargetResolver().resolve(
+                workspace=str(workspace),
+                source=source,
+                graph=graph,
+            )
+            self.assertEqual(resolution.kind, "continue")
+            self.assertIsNotNone(resolution.reentry_plan)
+            assert resolution.reentry_plan is not None
             context = await prepare_native_recovery(
                 workspace=str(workspace),
                 source_run_id=source_run_id,
                 graph=graph,
-                replay_policies=production_recovery_replay_policies(),
+                reentry_plan=resolution.reentry_plan,
             )
             handed_off = load_application_lifecycle(workspace)
             self.assertIsNotNone(handed_off)

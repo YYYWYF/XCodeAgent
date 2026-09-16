@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from dataclasses import dataclass
 from typing import Any
 
 from app.domain.execution_recovery import (
@@ -14,182 +13,13 @@ from app.domain.execution_recovery import (
     RecoveryAction,
     RecoveryActionKind,
     RecoveryActionPlan,
-    RecoveryDecision,
     RecoveryExecutionError,
     RecoveryIncidentStatus,
-    RecoveryPlan,
-    RecoveryPoint,
     WorkflowReentryPlan,
     WorkflowReentryReason,
     execution_failure_sha256,
 )
-from app.persistence.execution_recovery import get_recovery_point
 from app.services.application_lifecycle import ApplicationLifecycle, load_application_lifecycle
-from app.services.execution_recovery_capability import (
-    assess_native_recovery_capability,
-)
-from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
-
-
-@dataclass(frozen=True, slots=True)
-class RecoveryFacts:
-    """保存 projection 与 execute 共同消费的精确 source facts。"""
-
-    point: RecoveryPoint | None
-    snapshot: Any
-    lifecycle: ApplicationLifecycle | None
-
-
-async def build_recovery_facts(
-    *,
-    workspace: str,
-    source: DurableExecutionRecord,
-    recovery_plan: RecoveryPlan,
-    graph: Any,
-    lifecycle: ApplicationLifecycle | None = None,
-) -> RecoveryFacts:
-    """只按完整 checkpoint identity 读取 facts，禁止按 thread 猜当前快照。"""
-
-    point = (
-        await get_recovery_point(workspace, recovery_plan.recovery_point_id)
-        if recovery_plan.recovery_point_id
-        else None
-    )
-    if point is not None and (
-        point.run_id != source.run_id or point.thread_id != source.thread_id
-    ):
-        point = None
-    snapshot: Any = type("EmptyRecoverySnapshot", (), {"values": {}})()
-    if point is not None and point.checkpoint_id and hasattr(graph, "aget_state"):
-        config = {
-            "configurable": {
-                "thread_id": source.thread_id,
-                "checkpoint_ns": point.checkpoint_ns,
-                "checkpoint_id": point.checkpoint_id,
-            }
-        }
-        try:
-            resolved = await graph.aget_state(config)
-            if resolved is not None:
-                snapshot = resolved
-        except Exception:
-            # facts 读取失败时保留空快照；Native 是否可执行仍由其自身
-            # finalization revalidation 决定。
-            pass
-    return RecoveryFacts(
-        point=point,
-        snapshot=snapshot,
-        lifecycle=lifecycle or load_application_lifecycle(workspace),
-    )
-
-
-async def plan_recovery_action(
-    *,
-    workspace: str,
-    source: DurableExecutionRecord,
-    recovery_plan: RecoveryPlan,
-    point: RecoveryPoint | None,
-    snapshot: Any,
-    lifecycle: ApplicationLifecycle | None = None,
-    graph: Any | None = None,
-    reentry_plan: WorkflowReentryPlan | None = None,
-) -> RecoveryActionPlan:
-    """基于 durable facts 选择最近的确定性恢复入口，不执行任何动作。"""
-
-    current_lifecycle = lifecycle or load_application_lifecycle(workspace)
-    if source.status is DurableExecutionStatus.FAILED:
-        # FAILED 的准入只由 Workflow Node Re-entry authority 决定；旧的
-        # RecoveryPlan、ReplayPolicy 和 Native capability 不能成为第二套判断。
-        if reentry_plan is None:
-            if graph is None:
-                return plan_failed_node_reentry_action(
-                    workspace=workspace,
-                    source=source,
-                    error=RecoveryExecutionError(
-                        "NODE_ENTRY_AUTHORITY_MISSING",
-                        "当前 production Graph 无法解析失败 Node 的精确入口。",
-                    ),
-                )
-            try:
-                reentry_plan = await FailureTargetResolver().resolve(
-                    workspace=workspace,
-                    source=source,
-                    graph=graph,
-                )
-            except RecoveryExecutionError as exc:
-                return plan_failed_node_reentry_action(
-                    workspace=workspace,
-                    source=source,
-                    error=exc,
-                )
-        return plan_failed_node_reentry_action(
-            workspace=workspace,
-            source=source,
-            reentry_plan=reentry_plan,
-        )
-    if source.status is DurableExecutionStatus.INTERRUPTED:
-        if reentry_plan is None and graph is not None:
-            resolution = await InterruptedTargetResolver().resolve(
-                workspace=workspace,
-                source=source,
-                graph=graph,
-            )
-            reentry_plan = resolution.reentry_plan
-            if resolution.kind != "continue":
-                return plan_interrupted_continue_action(
-                    workspace=workspace,
-                    source=source,
-                    error=RecoveryExecutionError(
-                        resolution.reason_code,
-                        resolution.reason,
-                    ),
-                )
-        return plan_interrupted_continue_action(
-            workspace=workspace,
-            source=source,
-            reentry_plan=reentry_plan,
-        )
-    native_capability = assess_native_recovery_capability(recovery_plan)
-    incident_id = _incident_id(
-        source=source,
-        point=point,
-        lifecycle=current_lifecycle,
-    )
-    if recovery_plan.decision is RecoveryDecision.AWAITING_USER:
-        return _action_plan(
-            source=source,
-            incident_id=incident_id,
-            status=RecoveryIncidentStatus.AWAITING_USER,
-            reason_code="RECOVERY_AWAITING_USER",
-            message="当前执行正在等待用户确认，完成确认后才能继续。",
-        )
-    if native_capability.executable:
-        action = _action(
-            incident_id=incident_id,
-            kind=RecoveryActionKind.CONTINUE_CHECKPOINT,
-            label="继续执行",
-            description="从已验证的安全 checkpoint 继续执行，并使用当前模型配置。",
-        )
-        return _action_plan(
-            source=source,
-            incident_id=incident_id,
-            status=RecoveryIncidentStatus.RECOVERABLE,
-            reason_code=recovery_plan.reason_code,
-            message="已找到可验证的恢复入口，可以继续执行。",
-            primary_action=action,
-        )
-    return _action_plan(
-        source=source,
-        incident_id=incident_id,
-        status=RecoveryIncidentStatus.NEEDS_ATTENTION,
-        reason_code=(
-            native_capability.reason_code
-            if recovery_plan.decision is RecoveryDecision.READY_NATIVE
-            and not native_capability.executable
-            else recovery_plan.reason_code
-        ),
-        message="当前现场没有可证明安全的自动恢复入口，需要人工处理。",
-    )
 
 
 def plan_failed_node_reentry_action(
@@ -211,7 +41,6 @@ def plan_failed_node_reentry_action(
     lifecycle = load_application_lifecycle(workspace)
     incident_id = _incident_id(
         source=source,
-        point=None,
         lifecycle=lifecycle,
         reentry_plan=reentry_plan,
         reentry_error_code=error.code if error is not None else None,
@@ -260,7 +89,6 @@ def plan_interrupted_continue_action(
     lifecycle = load_application_lifecycle(workspace)
     incident_id = _incident_id(
         source=source,
-        point=None,
         lifecycle=lifecycle,
         reentry_plan=reentry_plan,
         reentry_error_code=error.code if error is not None else None,
@@ -357,7 +185,6 @@ def _failed_node_retry_label(node: str | None) -> str:
 def _incident_id(
     *,
     source: DurableExecutionRecord,
-    point: RecoveryPoint | None,
     lifecycle: ApplicationLifecycle | None,
     reentry_plan: WorkflowReentryPlan | None = None,
     reentry_error_code: str | None = None,
@@ -371,7 +198,6 @@ def _incident_id(
         'threadId': source.thread_id,
         'failure': execution_failure_sha256(source.failure),
         'failedNode': source.current_node,
-        'recoveryPointId': point.recovery_point_id if point else None,
         'lifecycleRevision': lifecycle.revision if lifecycle else None,
         'nodeEntryBoundaryId': authority.boundary_id if authority else None,
         'nodeEntrySourceRunId': authority.source_run_id if authority else None,
@@ -391,9 +217,6 @@ def _digest(value: dict[str, Any]) -> str:
 
 
 __all__ = [
-    "RecoveryFacts",
-    "build_recovery_facts",
     "plan_failed_node_reentry_action",
     "plan_interrupted_continue_action",
-    "plan_recovery_action",
 ]

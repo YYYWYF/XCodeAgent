@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Sequence
+from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from app.config import Settings
+from app.domain.application_lifecycle import (
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+)
+from app.domain.application_planning_recovery import (
+    ApplicationPlanningOperation,
+    ApplicationPlanningRecoveryBoundary,
+    application_planning_sha256,
+    parse_application_planning_boundary,
+)
+from app.domain.application_revision import RevisionTarget
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
@@ -49,17 +62,15 @@ from app.services.application_lifecycle import (
     resource_claims_for_run,
 )
 from app.services.backend_instance import current_backend_instance
-from app.services.execution_recovery_coordinator import (
-    prepare_continue,
-    validate_recovery_workspace_state,
-)
 from app.services.execution_recovery_source_admission import assess_recovery_source
-from app.services.execution_recovery_capability import (
-    assess_native_recovery_capability,
-)
 from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
     resolve_recovery_lineage_head,
+)
+from app.services.workspace_inspector import (
+    INSPECTOR_SCHEMA_VERSION,
+    snapshot_hash,
+    workspace_inventory,
 )
 from app.services.execution_lease_heartbeat import (
     maintain_execution_heartbeat,
@@ -72,6 +83,7 @@ from app.services.workflow_reentry import (
     recovery_plan_from_reentry,
     semantic_context_sha256,
 )
+from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
 
 @dataclass(slots=True)
@@ -223,16 +235,23 @@ async def prepare_native_recovery(
     workspace: str,
     source_run_id: str,
     graph: Any,
-    replay_policies: Sequence[Any] | None = None,
-    reentry_plan: WorkflowReentryPlan | None = None,
+    reentry_plan: WorkflowReentryPlan,
 ) -> NativeRecoveryRuntimeContext:
-    """重新准备 P0.3A plan，并按规定顺序完成 claim、handoff、fork 和 STARTED。"""
+    """消费已解析的 Node Re-entry authority，并完成 claim、handoff、fork 和 STARTED。"""
 
     source = await get_execution(workspace, source_run_id)
     if source is None:
         raise RecoveryExecutionError(
             "SOURCE_EXECUTION_NOT_FOUND",
             "source execution 不存在。",
+        )
+    if source.status not in {
+        DurableExecutionStatus.FAILED,
+        DurableExecutionStatus.INTERRUPTED,
+    }:
+        raise RecoveryExecutionError(
+            "WORKFLOW_REENTRY_PLAN_INVALID",
+            "当前 source 不是 FAILED 或 INTERRUPTED，不能执行 checkpoint re-entry。",
         )
     lineage = await resolve_recovery_lineage_head(
         workspace,
@@ -255,75 +274,57 @@ async def prepare_native_recovery(
             "当前 recovery source 已被新的 child execution 替代，请刷新后继续。",
             details={"currentSourceRunId": lineage.head.run_id},
         )
-    if reentry_plan is not None or source.status in {
-        DurableExecutionStatus.FAILED,
-        DurableExecutionStatus.INTERRUPTED,
-    }:
-        if reentry_plan is not None and (
-            reentry_plan.source_run_id != source.run_id
-            or reentry_plan.thread_id != source.thread_id
-            or reentry_plan.execution_kind != source.execution_kind
-            or (
-                source.status is DurableExecutionStatus.FAILED
-                and reentry_plan.target_node != source.current_node
-            )
-        ):
-            raise RecoveryExecutionError(
-                "WORKFLOW_REENTRY_PLAN_INVALID",
-                "WorkflowReentryPlan 与当前 source execution identity 不一致。",
-            )
-        if source.status is DurableExecutionStatus.FAILED:
-            if reentry_plan is not None and reentry_plan.reason is not WorkflowReentryReason.FAILURE_RETRY:
-                raise RecoveryExecutionError(
-                    "WORKFLOW_REENTRY_PLAN_INVALID",
-                    "FAILED source 只能使用 FAILURE_RETRY authority。",
-                )
-            fresh_reentry_plan = await FailureTargetResolver().resolve(
-                workspace=workspace,
-                source=source,
-                graph=graph,
-            )
-        elif source.status is DurableExecutionStatus.INTERRUPTED:
-            if reentry_plan is not None and reentry_plan.reason is not WorkflowReentryReason.INTERRUPTED_CONTINUE:
-                raise RecoveryExecutionError(
-                    "WORKFLOW_REENTRY_PLAN_INVALID",
-                    "INTERRUPTED source 只能使用 INTERRUPTED_CONTINUE authority。",
-                )
-            resolution = await InterruptedTargetResolver().resolve(
-                workspace=workspace,
-                source=source,
-                graph=graph,
-            )
-            if resolution.kind != "continue" or resolution.reentry_plan is None:
-                raise RecoveryExecutionError(resolution.reason_code, resolution.reason)
-            fresh_reentry_plan = resolution.reentry_plan
-        else:
-            raise RecoveryExecutionError(
-                "WORKFLOW_REENTRY_PLAN_INVALID",
-                "当前 source 不支持 checkpoint Workflow Re-entry。",
-            )
-        if reentry_plan is not None:
-            _require_fresh_reentry_plan(
-                expected=reentry_plan,
-                fresh=fresh_reentry_plan,
-            )
-        # 这里只把已验证的 WorkflowReentryPlan 投影为现有 claim/fork
-        # transaction DTO；不再经过 RecoveryCoordinator 或 replay policy。
-        plan = recovery_plan_from_reentry(fresh_reentry_plan)
-    else:
-        plan = await prepare_continue(
-            workspace=workspace,
-            source_run_id=source_run_id,
-            graph=graph,
-            replay_policies=replay_policies,
+    if (
+        reentry_plan.source_run_id != source.run_id
+        or reentry_plan.thread_id != source.thread_id
+        or reentry_plan.execution_kind != source.execution_kind
+        or (
+            source.status is DurableExecutionStatus.FAILED
+            and reentry_plan.target_node != source.current_node
         )
-    if source.status in {
-        DurableExecutionStatus.FAILED,
-        DurableExecutionStatus.INTERRUPTED,
-    }:
-        _require_checkpoint_reentry_plan(plan, source=source)
+    ):
+        raise RecoveryExecutionError(
+            "WORKFLOW_REENTRY_PLAN_INVALID",
+            "WorkflowReentryPlan 与当前 source execution identity 不一致。",
+        )
+    if source.status is DurableExecutionStatus.FAILED:
+        if reentry_plan.reason is not WorkflowReentryReason.FAILURE_RETRY:
+            raise RecoveryExecutionError(
+                "WORKFLOW_REENTRY_PLAN_INVALID",
+                "FAILED source 只能使用 FAILURE_RETRY authority。",
+            )
+        fresh_reentry_plan = await FailureTargetResolver().resolve(
+            workspace=workspace,
+            source=source,
+            graph=graph,
+        )
     else:
-        _require_native_plan(plan)
+        if reentry_plan.reason is not WorkflowReentryReason.INTERRUPTED_CONTINUE:
+            raise RecoveryExecutionError(
+                "WORKFLOW_REENTRY_PLAN_INVALID",
+                "INTERRUPTED source 只能使用 INTERRUPTED_CONTINUE authority。",
+            )
+        resolution = await InterruptedTargetResolver().resolve(
+            workspace=workspace,
+            source=source,
+            graph=graph,
+        )
+        if resolution.kind != "continue" or resolution.reentry_plan is None:
+            raise RecoveryExecutionError(resolution.reason_code, resolution.reason)
+        fresh_reentry_plan = resolution.reentry_plan
+    _require_fresh_reentry_plan(
+        expected=reentry_plan,
+        fresh=fresh_reentry_plan,
+    )
+    # 这里只把已验证的 WorkflowReentryPlan 投影为现有 claim/fork transaction DTO。
+    plan = recovery_plan_from_reentry(fresh_reentry_plan)
+    plan = await _apply_application_planning_transaction_authority(
+        workspace=workspace,
+        source=source,
+        graph=graph,
+        plan=plan,
+    )
+    _require_checkpoint_reentry_plan(plan, source=source)
     source_point = await get_recovery_point(workspace, plan.recovery_point_id or "")
     if source_point is None:
         raise RecoveryExecutionError(
@@ -383,6 +384,193 @@ async def prepare_native_recovery(
         ) from exc
 
 
+async def _apply_application_planning_transaction_authority(
+    *,
+    workspace: str,
+    source: DurableExecutionRecord,
+    graph: Any,
+    plan: RecoveryPlan,
+) -> RecoveryPlan:
+    """直接读取 TechnicalPlan INPUT_COMMITTED boundary，保留既有 lifecycle handoff 语义。"""
+
+    if source.execution_kind != "application_planning":
+        return plan
+    state_reader = getattr(graph, "aget_state", None)
+    if not callable(state_reader):
+        return plan
+    config = {
+        "configurable": {
+            "thread_id": source.thread_id,
+            "checkpoint_ns": plan.checkpoint_ns,
+            "checkpoint_id": plan.checkpoint_id,
+        }
+    }
+    try:
+        snapshot = await state_reader(config)
+    except Exception as exc:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_CHECKPOINT_INVALID",
+            "TechnicalPlan transaction boundary 的 source checkpoint 无法读取。",
+        ) from exc
+    values = getattr(snapshot, "values", {})
+    values = values if isinstance(values, dict) else {}
+    boundary = parse_application_planning_boundary(
+        values.get("application_planning_recovery_boundary")
+    )
+    if boundary is None or boundary.boundary is not ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED:
+        return plan
+
+    lifecycle = load_application_lifecycle(workspace)
+    if lifecycle is None:
+        raise RecoveryExecutionError(
+            "LIFECYCLE_DRIFT",
+            "TechnicalPlan INPUT_COMMITTED boundary 缺少 ApplicationLifecycle authority。",
+        )
+    request = _technical_request_from_values(values)
+    if boundary.request_sha256 != application_planning_sha256(request):
+        raise RecoveryExecutionError(
+            "LIFECYCLE_DRIFT",
+            "TechnicalPlan transaction boundary 的 request authority 已发生变化。",
+        )
+    if (
+        boundary.operation
+        in {
+            ApplicationPlanningOperation.REVISE,
+            ApplicationPlanningOperation.REPAIR,
+        }
+        and boundary.baseline_sha256 is None
+    ):
+        raise RecoveryExecutionError(
+            "LIFECYCLE_DRIFT",
+            "TechnicalPlan 修订或修复 boundary 缺少 baseline authority。",
+        )
+
+    change_id = str(values.get("change_id") or "").strip()
+    if boundary.operation is ApplicationPlanningOperation.REVISE and change_id:
+        _validate_formal_revision_transaction_identity(
+            values=values,
+            boundary=boundary,
+            lifecycle=lifecycle,
+        )
+
+    stage = lifecycle.initialization.stage
+    status = lifecycle.initialization.status
+    mode = RecoveryLifecycleOwnershipMode.SOURCE_OWNED
+    if stage is ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY:
+        if (
+            boundary.operation is not ApplicationPlanningOperation.INITIAL
+            or status is not ApplicationLifecycleStatus.AWAITING_USER
+        ):
+            raise RecoveryExecutionError(
+                "LIFECYCLE_DRIFT",
+                "TechnicalPlan initial INPUT_COMMITTED boundary 不在允许的 lifecycle 窗口。",
+            )
+        mode = RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
+    elif stage is ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION:
+        if (
+            boundary.operation
+            not in {
+                ApplicationPlanningOperation.REVISE,
+                ApplicationPlanningOperation.REPAIR,
+            }
+            or status is not ApplicationLifecycleStatus.AWAITING_USER
+        ):
+            raise RecoveryExecutionError(
+                "LIFECYCLE_DRIFT",
+                "TechnicalPlan 修订 INPUT_COMMITTED boundary 不在允许的 lifecycle 窗口。",
+            )
+        mode = RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
+    elif (
+        boundary.operation is ApplicationPlanningOperation.REVISE
+        and lifecycle.initialization.status is ApplicationLifecycleStatus.COMPLETED
+        and stage is ApplicationLifecycleStage.READY_FOR_WORKBENCH
+        and (
+            lifecycle.pending_revision_impact is not None
+            or lifecycle.active_formal_revision is not None
+        )
+    ):
+        mode = RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
+    elif not (
+        stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
+        and status is ApplicationLifecycleStatus.RUNNING
+        and lifecycle.active_run_id == source.run_id
+    ):
+        raise RecoveryExecutionError(
+            "LIFECYCLE_DRIFT",
+            "TechnicalPlan INPUT_COMMITTED boundary 的 lifecycle ownership 已发生变化。",
+        )
+    return plan.model_copy(update={"lifecycle_ownership_mode": mode})
+
+
+def _validate_formal_revision_transaction_identity(
+    *,
+    values: dict[str, Any],
+    boundary: Any,
+    lifecycle: Any,
+) -> None:
+    """验证 Formal Revision transaction 的 change、gate、请求、分支和目标事实一致。"""
+
+    change_id = str(values.get("change_id") or "").strip()
+    target_value = values.get("change_target")
+    if not change_id or not isinstance(target_value, dict):
+        raise RecoveryExecutionError(
+            "LIFECYCLE_DRIFT",
+            "Formal Revision INPUT_COMMITTED boundary 缺少 change identity。",
+        )
+    try:
+        target = RevisionTarget.model_validate(target_value)
+    except Exception as exc:
+        raise RecoveryExecutionError(
+            "LIFECYCLE_DRIFT",
+            "Formal Revision INPUT_COMMITTED boundary 的 target identity 无效。",
+        ) from exc
+    request = _technical_request_from_values(values)
+    pending = lifecycle.pending_revision_impact
+    active = lifecycle.active_formal_revision
+    if pending is not None and active is not None:
+        raise RecoveryExecutionError(
+            "LIFECYCLE_DRIFT",
+            "Formal Revision lifecycle 同时存在 pending 与 active authority。",
+        )
+    if pending is not None:
+        matches = (
+            pending.change_id == change_id
+            and pending.interaction_id == str(boundary.gate_id or "")
+            and pending.request == request
+            and pending.impact.formal_branch.value == "workbench_plan_revision"
+            and pending.target == target
+        )
+    elif active is not None:
+        matches = (
+            active.change_id == change_id
+            and active.impact_interaction_id == str(boundary.gate_id or "")
+            and active.request == request
+            and active.formal_branch.value == "workbench_plan_revision"
+            and active.target == target
+        )
+    else:
+        matches = False
+    if not matches:
+        raise RecoveryExecutionError(
+            "LIFECYCLE_DRIFT",
+            "Formal Revision INPUT_COMMITTED boundary 的 lifecycle authority 不匹配。",
+        )
+
+
+def _technical_request_from_values(values: dict[str, Any]) -> str:
+    """按 Graph State 当前请求优先级读取 TechnicalPlan transaction 的输入原文。"""
+
+    interaction = values.get("application_planning_interaction")
+    if isinstance(interaction, dict) and interaction:
+        return str(interaction.get("request") or "").strip()
+    return str(
+        values.get("design_change_generation_request")
+        or values.get("design_change_request")
+        or values.get("request")
+        or ""
+    ).strip()
+
+
 async def finalize_handed_off_recovery_attempt(
     *,
     workspace: str,
@@ -425,6 +613,14 @@ async def finalize_handed_off_recovery_attempt(
                 "RECOVERY_EXECUTION_NOT_FOUND",
                 "FINALIZING recovery 的 child execution 不存在。",
             )
+        if source.status not in {
+            DurableExecutionStatus.FAILED,
+            DurableExecutionStatus.INTERRUPTED,
+        }:
+            raise RecoveryExecutionError(
+                "WORKFLOW_REENTRY_PLAN_INVALID",
+                "当前 source 不是 FAILED 或 INTERRUPTED，不能执行 checkpoint re-entry。",
+            )
         lifecycle = load_application_lifecycle(workspace)
         if attempt.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT:
             raise RecoveryExecutionError(
@@ -462,13 +658,7 @@ async def finalize_handed_off_recovery_attempt(
             workspace_revision=source_point.workspace_revision,
             workspace_snapshot_hash=source_point.workspace_snapshot_hash,
         )
-        if source.status in {
-            DurableExecutionStatus.FAILED,
-            DurableExecutionStatus.INTERRUPTED,
-        }:
-            _require_checkpoint_reentry_plan(plan, source=source)
-        else:
-            _require_native_plan(plan)
+        _require_checkpoint_reentry_plan(plan, source=source)
         await _revalidate_finalizing_recovery(
             workspace=workspace,
             source=source,
@@ -514,13 +704,15 @@ async def _fork_and_start(
 ) -> NativeRecoveryRuntimeContext:
     """只写 runtime identity 的 fork checkpoint，并在 durable point 后标记 STARTED。"""
 
-    if source.status in {
+    if source.status not in {
         DurableExecutionStatus.FAILED,
         DurableExecutionStatus.INTERRUPTED,
     }:
-        _require_checkpoint_reentry_plan(plan, source=source)
-    else:
-        _require_native_plan(plan)
+        raise RecoveryExecutionError(
+            "WORKFLOW_REENTRY_PLAN_INVALID",
+            "当前 source 不是 FAILED 或 INTERRUPTED，不能执行 checkpoint re-entry。",
+        )
+    _require_checkpoint_reentry_plan(plan, source=source)
     _validate_checkpoint_reentry_source(
         source=source,
         source_point=source_point,
@@ -805,21 +997,96 @@ async def _revalidate_finalizing_recovery(
             "source checkpoint 仍在等待交互，不能走 Native Recovery finalization。",
         )
 
-    workspace_state = validate_recovery_workspace_state(
+    _validate_recovery_workspace_authority(
         workspace=workspace,
         point=source_point,
     )
-    if workspace_state.decision is not None:
-        raise RecoveryExecutionError(
-            workspace_state.reason_code or "RECOVERY_STATE_DRIFT",
-            workspace_state.reason or "当前 workspace 不能安全验证。",
-        )
     _validate_finalization_lifecycle(
         source=source,
         attempt=attempt,
         lifecycle=lifecycle,
     )
     return snapshot
+
+
+def _validate_recovery_workspace_authority(
+    *,
+    workspace: str,
+    point: RecoveryPoint,
+) -> None:
+    """在 finalization 内直接验证 RecoveryPoint 绑定的 workspace authority。"""
+
+    if point.workspace_revision is None and point.workspace_snapshot_hash is None:
+        return
+    if point.workspace_revision is None:
+        raise RecoveryExecutionError(
+            "WORKSPACE_STATE_UNVERIFIABLE",
+            "RecoveryPoint 缺少 workspaceRevision，无法验证当前磁盘状态。",
+        )
+
+    workspace_root = Path(workspace).expanduser().resolve()
+    if not workspace_root.is_dir():
+        raise RecoveryExecutionError(
+            "WORKSPACE_STATE_UNVERIFIABLE",
+            "当前工作区不存在，无法安全读取真实磁盘状态。",
+        )
+    try:
+        _files, current_revision = workspace_inventory(workspace_root)
+    except (OSError, ValueError) as exc:
+        raise RecoveryExecutionError(
+            "WORKSPACE_STATE_UNVERIFIABLE",
+            "当前工作区状态无法安全读取。",
+        ) from exc
+    if not current_revision:
+        raise RecoveryExecutionError(
+            "WORKSPACE_STATE_UNVERIFIABLE",
+            "当前工作区未能生成有效 revision，无法安全验证恢复现场。",
+        )
+    if current_revision != point.workspace_revision:
+        raise RecoveryExecutionError(
+            "WORKSPACE_DRIFT",
+            "当前 workspace revision 已偏离 RecoveryPoint。",
+        )
+    if point.workspace_snapshot_hash is None:
+        return
+
+    snapshot = _load_workspace_snapshot_for_revision(workspace, current_revision)
+    if snapshot is None:
+        raise RecoveryExecutionError(
+            "WORKSPACE_SNAPSHOT_UNAVAILABLE",
+            "当前 workspace revision 缺少可验证的 snapshot 证据。",
+        )
+    if snapshot_hash(snapshot) != point.workspace_snapshot_hash:
+        raise RecoveryExecutionError(
+            "WORKSPACE_DRIFT",
+            "当前 workspace snapshot hash 已偏离 RecoveryPoint。",
+        )
+
+
+def _load_workspace_snapshot_for_revision(
+    workspace: str,
+    revision: str,
+) -> dict[str, Any] | None:
+    """按精确 revision 和当前 inspector schema 读取已有 workspace snapshot。"""
+
+    roots = (
+        Path(workspace).expanduser().resolve()
+        / ".xcodeagent"
+        / "cache"
+        / "workspace-snapshots",
+        Path(workspace).expanduser().resolve() / "cache" / "workspace-snapshots",
+    )
+    for root in roots:
+        path = root / f"{revision}.{INSPECTOR_SCHEMA_VERSION}.json"
+        if not path.is_file():
+            continue
+        try:
+            snapshot = load_workspace_snapshot_json(path)
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(snapshot, dict):
+            return snapshot
+    return None
 
 
 def _validate_checkpoint_reentry_source(
@@ -979,21 +1246,12 @@ def _acquire_workspace_lease(
     )
 
 
-def _require_native_plan(plan: RecoveryPlan) -> None:
-    """复用统一 capability，把不可执行计划转换为结构化拒绝。"""
-
-    capability = assess_native_recovery_capability(plan)
-    if capability.executable:
-        return
-    raise RecoveryExecutionError(capability.reason_code, capability.reason)
-
-
 def _require_checkpoint_reentry_plan(
     plan: RecoveryPlan,
     *,
     source: DurableExecutionRecord,
 ) -> None:
-    """验证 FAILED 或 INTERRUPTED 的 transaction bridge，不调用旧 Native capability。"""
+    """直接验证 FAILED 或 INTERRUPTED 的 checkpoint transaction bridge。"""
 
     if (
         plan.decision is not RecoveryDecision.READY_NATIVE
@@ -1039,12 +1297,6 @@ def _require_fresh_reentry_plan(
             "WORKFLOW_REENTRY_PLAN_STALE",
             "重新验证后的 Workflow Node Entry authority 已偏离原始计划。",
         )
-
-
-def _validate_root_plan(plan: RecoveryPlan) -> None:
-    """保留旧的内部入口，但实际校验统一委托给 Native capability。"""
-
-    _require_native_plan(plan)
 
 
 def _snapshot_identity(snapshot: Any) -> tuple[str, str, str]:

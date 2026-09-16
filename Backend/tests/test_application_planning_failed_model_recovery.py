@@ -25,6 +25,7 @@ from app.domain.execution_recovery import (
     ExecutionFailureOrigin,
     RecoveryDecision,
     RecoveryActionKind,
+    RecoveryExecutionError,
     RecoveryPoint,
     RecoveryPointKind,
 )
@@ -46,14 +47,17 @@ from app.services.application_lifecycle import (
 from app.services.application_planning_recovery_coordinator import (
     resolve_application_planning_recovery,
 )
-from app.services.execution_recovery_coordinator import prepare_continue
 from app.services.execution_recovery_executor import prepare_native_recovery
 from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
     resolve_recovery_lineage_head,
 )
-from app.services.execution_recovery_policies import (
-    production_recovery_replay_policies,
+from app.services.execution_recovery_action_planner import (
+    plan_failed_node_reentry_action,
+)
+from app.services.workflow_reentry import (
+    FailureTargetResolver,
+    recovery_plan_from_reentry,
 )
 from app.services.execution_recovery import observe_node_started as persist_node_started
 
@@ -240,12 +244,12 @@ async def _prepare_and_run_child(
         RecoveryActionKind.RETRY_FAILED_NODE.value,
     )
 
-    plan = await prepare_continue(
+    reentry_plan = await FailureTargetResolver().resolve(
         workspace=str(workspace),
-        source_run_id=source.run_id,
+        source=source,
         graph=graph,
-        replay_policies=production_recovery_replay_policies(),
     )
+    plan = recovery_plan_from_reentry(reentry_plan)
     testcase.assertEqual(plan.decision, RecoveryDecision.READY_NATIVE)
     testcase.assertEqual(plan.reason_code, "FAILED_NODE_REENTRY_READY")
     testcase.assertEqual(plan.next_nodes, [source.current_node])
@@ -257,7 +261,7 @@ async def _prepare_and_run_child(
         workspace=str(workspace),
         source_run_id=source.run_id,
         graph=graph,
-        replay_policies=production_recovery_replay_policies(),
+        reentry_plan=reentry_plan,
     )
     testcase.assertNotEqual(context.new_run_id, source.run_id)
     testcase.assertEqual(context.thread_id, source.thread_id)
@@ -854,15 +858,24 @@ class ApplicationPlanningFailedModelRecoveryTests(unittest.IsolatedAsyncioTestCa
                         point=point,
                         values={"active_run_id": run_id},
                     )
-                    plan = await prepare_continue(
+                    with self.assertRaises(RecoveryExecutionError) as raised:
+                        await FailureTargetResolver().resolve(
+                            workspace=str(workspace),
+                            source=source,
+                            graph=graph,
+                        )
+                    action_plan = plan_failed_node_reentry_action(
                         workspace=str(workspace),
-                        source_run_id=run_id,
-                        graph=graph,
-                        replay_policies=production_recovery_replay_policies(),
+                        source=source,
+                        error=raised.exception,
                     )
 
                     self.assertIsNone(source.failure.operation)
-                    self.assertNotEqual(plan.decision, RecoveryDecision.READY_NATIVE)
+                    self.assertEqual(
+                        action_plan.reason_code,
+                        "NODE_ENTRY_AUTHORITY_MISSING",
+                    )
+                    self.assertIsNone(action_plan.primary_action)
 
 
 class _FixedSnapshotGraph:

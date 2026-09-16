@@ -13,22 +13,14 @@ from app.domain.application_planning_recovery import parse_application_planning_
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
-    RecoveryDecision,
     RecoveryExecutionError,
     RecoveryPoint,
 )
 from app.persistence.execution_recovery import (
-    get_recovery_point,
     list_recovery_points,
 )
 from app.protocols.application_planning_interrupt import (
     application_planning_interrupt_from_snapshot,
-)
-from app.services.application_planning_recovery_policy import (
-    application_planning_committed_input,
-)
-from app.services.application_planning_recovery_contracts import (
-    resolve_application_planning_recovery_contract,
 )
 from app.services.execution_recovery import capture_recovery_point
 from app.services.execution_recovery_lineage import (
@@ -42,10 +34,6 @@ from app.services.execution_recovery_source_admission import assess_recovery_sou
 from app.services.execution_recovery_action_planner import (
     plan_failed_node_reentry_action,
     plan_interrupted_continue_action,
-    plan_recovery_action,
-)
-from app.services.execution_recovery_capability import (
-    assess_native_recovery_capability,
 )
 from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 
@@ -260,7 +248,6 @@ async def resolve_application_planning_recovery(
                 source=source,
                 reentry_plan=reentry_plan,
             )
-        plan = None
     else:
         resolution = await InterruptedTargetResolver().resolve(
             workspace=workspace,
@@ -319,53 +306,14 @@ async def resolve_application_planning_recovery(
                     resolution.reason,
                 ),
             )
-        plan = None
-    # Action Planner 一旦返回结果，后续任何 projection 分支都必须复用同一份当前事实。
+    # Action Planner 只投影已解析的 authority，不再经过 generic eligibility 层。
     recovery_action_plan = action_plan.model_dump(mode="json", by_alias=True)
-    native_capability = (
-        assess_native_recovery_capability(plan) if plan is not None else None
-    )
-    if (
-        plan is not None
-        and plan.decision is RecoveryDecision.READY_NATIVE
-        and native_capability is not None
-        and native_capability.executable
-    ):
-        contract = resolve_application_planning_recovery_contract(
-            source=source,
-            point=await _recovery_point_for_plan(source, plan),
-            snapshot=snapshot,
-        )
-        return _projection(
-            classification="ready_to_continue",
-            source=source,
-            thread_id=thread_id,
-            can_continue=True,
-            input_committed=input_committed,
-            reason_code=plan.reason_code,
-            message=(
-                action_plan.message
-                if contract is not None
-                else action_plan.message
-            ),
-            recovery_action_plan=recovery_action_plan,
-        )
     if action_plan.primary_action is not None:
         return _projection(
             classification="ready_to_continue",
             source=source,
             thread_id=thread_id,
             can_continue=True,
-            input_committed=input_committed,
-            reason_code=action_plan.reason_code,
-            message=action_plan.message,
-            recovery_action_plan=recovery_action_plan,
-        )
-    if plan is not None and plan.decision is RecoveryDecision.AWAITING_USER:
-        return _projection(
-            classification="conflict",
-            source=source,
-            thread_id=thread_id,
             input_committed=input_committed,
             reason_code=action_plan.reason_code,
             message=action_plan.message,
@@ -482,29 +430,28 @@ def _input_committed_for_source(
         return parsed_boundary.boundary.value == "input_committed"
     return bool(
         str(values.get("active_run_id") or "").strip() == source.run_id
-        and application_planning_committed_input(snapshot)
+        and _application_planning_committed_input(snapshot)
         and application_planning_interrupt_from_snapshot(snapshot) is None
     )
 
 
-async def _recovery_point_for_plan(
-    source: DurableExecutionRecord,
-    plan: Any,
-) -> RecoveryPoint:
-    """从当前计划引用恢复点索引，供恢复文案 Contract 解析使用。"""
+def _application_planning_committed_input(snapshot: Any) -> bool:
+    """判断 checkpoint 是否持久保存了完整的 Requirement 澄清回答。"""
 
-    point = await _point_by_id(source.workspace, plan.recovery_point_id)
-    if point is None:
-        raise ValueError("READY_NATIVE 计划缺少可解释的 RecoveryPoint。")
-    return point
-
-
-async def _point_by_id(workspace: str, point_id: str | None) -> RecoveryPoint | None:
-    """按恢复计划的稳定 ID 读取 RecoveryPoint。"""
-
-    if not point_id:
-        return None
-    return await get_recovery_point(workspace, point_id)
+    values = getattr(snapshot, "values", {})
+    values = values if isinstance(values, dict) else {}
+    interaction = values.get("application_planning_interaction")
+    if not isinstance(interaction, dict):
+        return False
+    answers = interaction.get("answers")
+    request = str(interaction.get("request") or "").strip()
+    return (
+        interaction.get("action") == "answer"
+        and interaction.get("artifact") == "requirement_spec"
+        and bool(str(interaction.get("gate_id") or "").strip())
+        and bool(str(interaction.get("artifact_revision") or "").strip())
+        and ((isinstance(answers, dict) and bool(answers)) or bool(request))
+    )
 
 
 def _projection(

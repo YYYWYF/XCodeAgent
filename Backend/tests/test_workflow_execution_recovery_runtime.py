@@ -41,10 +41,9 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.execution_recovery_action_planner import (
-    build_recovery_facts,
-    plan_recovery_action,
+    plan_failed_node_reentry_action,
 )
-from app.services.execution_recovery_coordinator import prepare_continue
+from app.services.workflow_reentry import FailureTargetResolver, recovery_plan_from_reentry
 
 
 def _linear_runtime_graph(
@@ -360,29 +359,20 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
             points = await list_recovery_points(workspace, run_id)
             source = await get_execution(workspace, run_id)
             lifecycle = load_application_lifecycle(workspace)
-            recovery_plan = await prepare_continue(
-                workspace=str(workspace),
-                source_run_id=run_id,
-                graph=graph,
-            )
             self.assertIsNotNone(source)
             self.assertIsNotNone(lifecycle)
             assert source is not None
             assert lifecycle is not None
-            facts = await build_recovery_facts(
+            reentry_plan = await FailureTargetResolver().resolve(
                 workspace=str(workspace),
                 source=source,
-                recovery_plan=recovery_plan,
                 graph=graph,
             )
-            action_plan = await plan_recovery_action(
-                workspace=str(workspace),
+            recovery_plan = recovery_plan_from_reentry(reentry_plan)
+            action_plan = plan_failed_node_reentry_action(
                 source=source,
-                recovery_plan=recovery_plan,
-                point=facts.point,
-                snapshot=facts.snapshot,
-                lifecycle=facts.lifecycle,
-                graph=graph,
+                workspace=str(workspace),
+                reentry_plan=reentry_plan,
             )
 
         predecessor_points = [

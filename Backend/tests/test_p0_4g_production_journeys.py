@@ -37,8 +37,6 @@ from app.domain.application_revision import (
 from app.domain.execution_recovery import (
     DurableExecutionStatus,
     RecoveryActionKind,
-    RecoveryDecision,
-    RecoveryExecutionError,
 )
 from app.graph.application_planning_workflow import (
     application_planning_graph_for_request,
@@ -66,10 +64,8 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.application_revision_lifecycle import register_revision_impact
-from app.services.execution_recovery_coordinator import prepare_continue
 from app.services.execution_recovery import observe_execution_started
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
-from app.services.execution_recovery_policies import production_recovery_replay_policies
 from app.services.execution_recovery_projection import (
     resolve_execution_recovery_projection,
 )
@@ -2276,16 +2272,6 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                     "requires_user_input",
                 )
 
-                recovery_plan = await prepare_continue(
-                    workspace=str(workspace),
-                    source_run_id=source_run_id,
-                    graph=graph,
-                    replay_policies=production_recovery_replay_policies(),
-                )
-                self.assertEqual(
-                    recovery_plan.decision,
-                    RecoveryDecision.AWAITING_USER,
-                )
                 projection = await resolve_execution_recovery_projection(
                     str(workspace)
                 )

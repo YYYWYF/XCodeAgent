@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, AsyncIterator, Sequence
+from typing import Any, AsyncIterator
 from uuid import uuid4
 
 from ag_ui.core import (
@@ -33,19 +33,13 @@ from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.execution_recovery_executor import (
     NativeRecoveryRuntimeContext,
     WorkflowReentryExecutor,
-    prepare_native_recovery,
 )
 from app.services.execution_recovery_lineage import reconcile_recovery_attempt
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 from app.services.execution_recovery_lineage import RecoveryLineageState
-from app.services.execution_recovery_policies import (
-    production_recovery_replay_policies,
-)
 from app.services.execution_recovery_action_planner import (
-    build_recovery_facts,
     plan_failed_node_reentry_action,
     plan_interrupted_continue_action,
-    plan_recovery_action,
 )
 from app.services.execution_recovery_reconciliation import (
     reconcile_interrupted_execution_state,
@@ -103,7 +97,6 @@ def build_execution_recovery_ag_ui_stream(
     *,
     payload: dict[str, Any],
     accept: str | None = None,
-    replay_policies: Sequence[Any] | None = None,
 ) -> AsyncIterator[str]:
     """校验恢复请求并把已准备的 Native context 交给现有 Runtime stream。"""
 
@@ -155,6 +148,14 @@ def build_execution_recovery_ag_ui_stream(
                     "INVALID_EXECUTION_RECOVERY_REQUEST",
                     "workspaceRoot 与 source execution 的 workspace 不一致。",
                 )
+            if source.status not in {
+                DurableExecutionStatus.FAILED,
+                DurableExecutionStatus.INTERRUPTED,
+            }:
+                raise RecoveryExecutionError(
+                    "RECOVERY_SOURCE_NOT_ACTIONABLE",
+                    "当前 source 不是 FAILED 或 INTERRUPTED，不能进入 Generic Recovery。",
+                )
             graph_factory = (
                 application_planning_graph_for_request
                 if source.execution_kind == "application_planning"
@@ -164,7 +165,6 @@ def build_execution_recovery_ag_ui_stream(
                 workspace=workspace,
                 project_id=source.project_id,
             )
-            recovery_plan = None
             reentry_plan = None
             if source.status is DurableExecutionStatus.FAILED:
                 admission = assess_recovery_source(source)
@@ -254,28 +254,6 @@ def build_execution_recovery_ag_ui_stream(
                             resolution.reason,
                         ),
                     )
-            else:
-                recovery_plan = await _prepare_recovery_plan(
-                    workspace=workspace,
-                    source=source,
-                    graph=graph,
-                    replay_policies=replay_policies,
-                )
-                facts = await build_recovery_facts(
-                    workspace=workspace,
-                    source=source,
-                    recovery_plan=recovery_plan,
-                    graph=graph,
-                )
-                action_plan = await plan_recovery_action(
-                    workspace=workspace,
-                    source=source,
-                    recovery_plan=recovery_plan,
-                    point=facts.point,
-                    snapshot=facts.snapshot,
-                    lifecycle=facts.lifecycle,
-                    graph=graph,
-                )
             if action == "execute" and (
                 action_plan.incident_id != incident_id
                 or action_plan.primary_action is None
@@ -308,21 +286,10 @@ def build_execution_recovery_ag_ui_stream(
                         graph=graph,
                         reentry_plan=reentry_plan,
                     )
-                elif recovery_plan is None:
-                    raise RecoveryExecutionError(
-                        "RECOVERY_ACTION_NOT_EXECUTABLE",
-                        "FAILED execution 不能走 legacy continue checkpoint。",
-                    )
                 else:
-                    context = await prepare_native_recovery(
-                        workspace=workspace,
-                        source_run_id=source.run_id,
-                        graph=graph,
-                        replay_policies=(
-                            replay_policies
-                            if replay_policies is not None
-                            else production_recovery_replay_policies()
-                        ),
+                    raise RecoveryExecutionError(
+                        "WORKFLOW_REENTRY_PLAN_INVALID",
+                        "CONTINUE_CHECKPOINT action 缺少 Workflow Re-entry 计划。",
                     )
             else:
                 raise RecoveryExecutionError(
@@ -502,29 +469,6 @@ def _parse_request(payload: dict[str, Any]) -> tuple[str, str, str, str, str]:
     return workspace, action, source_run_id, incident_id, action_id
 
 
-async def _prepare_recovery_plan(
-    *,
-    workspace: str,
-    source: Any,
-    graph: Any,
-    replay_policies: Sequence[Any] | None,
-) -> Any:
-    """重新读取当前 source 的安全 RecoveryPlan，避免客户端决定执行策略。"""
-
-    from app.services.execution_recovery_coordinator import prepare_continue
-
-    return await prepare_continue(
-        workspace=workspace,
-        source_run_id=source.run_id,
-        graph=graph,
-        replay_policies=(
-            replay_policies
-            if replay_policies is not None
-            else production_recovery_replay_policies()
-        ),
-    )
-
-
 async def _resolve_action_source_run(
     *,
     workspace: str,
@@ -535,6 +479,13 @@ async def _resolve_action_source_run(
 
     records = await list_recovery_projection_candidates(workspace, limit=128)
     for record in records:
+        # persistence candidate query 只返回 FAILED/INTERRUPTED；异常记录不进入旧
+        # Generic Recovery planner，避免查询边界漂移重新打开 fallback。
+        if record.status not in {
+            DurableExecutionStatus.FAILED,
+            DurableExecutionStatus.INTERRUPTED,
+        }:
+            continue
         graph_factory = (
             application_planning_graph_for_request
             if record.execution_kind == "application_planning"
@@ -606,28 +557,6 @@ async def _resolve_action_source_run(
                         resolution.reason,
                     ),
                 )
-        else:
-            plan = await _prepare_recovery_plan(
-                workspace=workspace,
-                source=record,
-                graph=graph,
-                replay_policies=None,
-            )
-            facts = await build_recovery_facts(
-                workspace=workspace,
-                source=record,
-                recovery_plan=plan,
-                graph=graph,
-            )
-            action_plan = await plan_recovery_action(
-                workspace=workspace,
-                source=record,
-                recovery_plan=plan,
-                point=facts.point,
-                snapshot=facts.snapshot,
-                lifecycle=facts.lifecycle,
-                graph=graph,
-            )
         if (
             action_plan.incident_id == incident_id
             and action_plan.primary_action is not None

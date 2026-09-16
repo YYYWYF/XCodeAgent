@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.domain.execution_recovery import (
@@ -11,9 +12,11 @@ from app.domain.execution_recovery import (
     DurableExecutionStatus,
     ExecutionFailureEvidence,
     ExecutionFailureOrigin,
-    RecoveryDecision,
-    RecoveryPlan,
-    RecoveryStrategy,
+    WorkflowReentryContextAuthority,
+    WorkflowReentryContextAuthorityKind,
+    WorkflowReentryLifecycleAuthority,
+    WorkflowReentryPlan,
+    WorkflowReentryReason,
 )
 from app.services.execution_recovery_projection import (
     recovery_failure_diagnostic,
@@ -55,31 +58,29 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
             ended_at=now,
         )
 
-    def _plan(self, run_id: str, decision: RecoveryDecision) -> RecoveryPlan:
-        """构造 P0.3A 返回的只读判断结果。"""
+    def _reentry_plan(self, run_id: str) -> WorkflowReentryPlan:
+        """构造 projection 使用的中断 checkpoint authority。"""
 
-        return RecoveryPlan(
-            source_run_id=run_id,
+        return WorkflowReentryPlan(
+            reason=WorkflowReentryReason.INTERRUPTED_CONTINUE,
+            execution_kind="workbench",
+            target_node="build",
             thread_id="thread-A",
-            decision=decision,
-            strategy=(
-                RecoveryStrategy.NATIVE_CHECKPOINT
-                if decision is RecoveryDecision.READY_NATIVE
-                else RecoveryStrategy.NONE
+            source_run_id=run_id,
+            lineage_parent_run_id=run_id,
+            context_authority=WorkflowReentryContextAuthority(
+                kind=WorkflowReentryContextAuthorityKind.CHECKPOINT,
+                boundary_id="projection-boundary",
+                source_run_id=run_id,
+                thread_id="thread-A",
+                target_node="build",
+                checkpoint_id="projection-checkpoint",
+                checkpoint_ns="",
             ),
-            recovery_point_id=(
-                "projection-point"
-                if decision is RecoveryDecision.READY_NATIVE
-                else None
+            lifecycle_authority=WorkflowReentryLifecycleAuthority(
+                owner_run_id=run_id,
+                revision=None,
             ),
-            checkpoint_id=(
-                "projection-checkpoint"
-                if decision is RecoveryDecision.READY_NATIVE
-                else None
-            ),
-            next_nodes=["build"] if decision is RecoveryDecision.READY_NATIVE else [],
-            reason_code=decision.value.upper(),
-            reason="projection test",
         )
 
     async def test_empty_projection_when_no_interrupted_execution_exists(self) -> None:
@@ -107,8 +108,13 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=object()),
             ),
             patch(
-                "app.services.execution_recovery_projection.prepare_continue",
-                new=AsyncMock(return_value=self._plan(record.run_id, RecoveryDecision.READY_NATIVE)),
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        kind="continue",
+                        reentry_plan=self._reentry_plan(record.run_id),
+                    )
+                ),
             ),
         ):
             projection = await resolve_execution_recovery_projection(str(self.workspace))
@@ -128,43 +134,47 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertNotIn(forbidden, candidate)
 
-    async def test_non_ready_decisions_are_mapped_without_exposing_reason_text(self) -> None:
-        """handler、drift 与 user input 状态映射为普通用户可理解的 UI 状态。"""
+    async def test_invalid_interrupted_authority_is_blocked(self) -> None:
+        """最新中断 authority 无效时只投影 blocked，不生成恢复 action。"""
 
-        decisions = (
-            (RecoveryDecision.REQUIRES_HANDLER, "requires_handler", False),
-            (RecoveryDecision.STATE_DRIFT, "blocked", False),
-            (RecoveryDecision.INVALID_RECOVERY_POINT, "blocked", False),
-            (RecoveryDecision.AWAITING_USER, "awaiting_user", False),
-        )
-        for decision, availability, can_continue in decisions:
-            record = self._record(f"run-{decision.value}")
-            with self.subTest(decision=decision):
-                with (
-                    patch(
-                        "app.services.execution_recovery_projection.list_recovery_projection_candidates",
-                        new=AsyncMock(return_value=[record]),
-                    ),
-                    patch(
-                        "app.services.execution_recovery_projection.workflow_graph_for_request",
-                        new=AsyncMock(return_value=object()),
-                    ),
-                    patch(
-                        "app.services.execution_recovery_projection.prepare_continue",
-                        new=AsyncMock(return_value=self._plan(record.run_id, decision)),
-                    ),
-                ):
-                    projection = await resolve_execution_recovery_projection(str(self.workspace))
-            self.assertEqual(projection.candidates[0].availability, availability)
-            self.assertEqual(projection.candidates[0].can_continue, can_continue)
+        record = self._record("run-invalid")
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=object()),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        kind="needs_attention",
+                        reentry_plan=None,
+                        reason_code="INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING",
+                        reason="missing latest checkpoint",
+                    )
+                ),
+            ),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(projection.candidates[0].availability, "blocked")
+        self.assertFalse(projection.candidates[0].can_continue)
 
     async def test_legacy_record_uses_exact_checkpoint_owner_without_mutating_record(self) -> None:
         """旧记录只允许从 P0.3A 精确 checkpoint 读取 ownership。"""
 
         record = self._record("run-legacy").model_copy(update={"owner_session_id": None})
         snapshot = type("Snapshot", (), {"values": {"owner_session_id": "session-legacy"}})()
-        plan = self._plan(record.run_id, RecoveryDecision.READY_NATIVE).model_copy(
-            update={"checkpoint_id": "checkpoint-exact", "checkpoint_ns": "namespace"}
+        plan = self._reentry_plan(record.run_id).model_copy(
+            update={
+                "context_authority": self._reentry_plan(record.run_id).context_authority.model_copy(
+                    update={"checkpoint_id": "checkpoint-exact", "checkpoint_ns": "namespace"}
+                )
+            }
         )
         graph = type("Graph", (), {"aget_state": AsyncMock(return_value=snapshot)})()
         with (
@@ -177,8 +187,10 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=graph),
             ),
             patch(
-                "app.services.execution_recovery_projection.prepare_continue",
-                new=AsyncMock(return_value=plan),
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(kind="continue", reentry_plan=plan)
+                ),
             ),
         ):
             projection = await resolve_execution_recovery_projection(str(self.workspace))
@@ -200,8 +212,12 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
 
         record = self._record("run-unowned").model_copy(update={"owner_session_id": None})
         snapshot = type("Snapshot", (), {"values": {}})()
-        plan = self._plan(record.run_id, RecoveryDecision.READY_NATIVE).model_copy(
-            update={"checkpoint_id": "checkpoint-exact"}
+        plan = self._reentry_plan(record.run_id).model_copy(
+            update={
+                "context_authority": self._reentry_plan(record.run_id).context_authority.model_copy(
+                    update={"checkpoint_id": "checkpoint-exact"}
+                )
+            }
         )
         graph = type("Graph", (), {"aget_state": AsyncMock(return_value=snapshot)})()
         with (
@@ -214,8 +230,10 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=graph),
             ),
             patch(
-                "app.services.execution_recovery_projection.prepare_continue",
-                new=AsyncMock(return_value=plan),
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(kind="continue", reentry_plan=plan)
+                ),
             ),
         ):
             projection = await resolve_execution_recovery_projection(str(self.workspace))

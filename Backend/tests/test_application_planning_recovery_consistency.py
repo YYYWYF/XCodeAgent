@@ -14,11 +14,6 @@ from app.domain.application_lifecycle import (
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
-    RecoveryDecision,
-    RecoveryPoint,
-    RecoveryPointKind,
-    RecoveryPlan,
-    RecoveryStrategy,
 )
 from app.persistence.execution_recovery import insert_execution, list_recovery_points
 from app.services.application_lifecycle import (
@@ -28,9 +23,6 @@ from app.services.application_lifecycle import (
 from app.services.application_planning_recovery_coordinator import (
     resolve_application_planning_recovery,
     sanitize_application_planning_recovery_result,
-)
-from app.services.application_planning_recovery_policy import (
-    ApplicationPlanningCommittedInputReplayPolicy,
 )
 
 
@@ -186,38 +178,20 @@ class ApplicationPlanningRecoveryConsistencyTests(unittest.IsolatedAsyncioTestCa
     async def test_needs_attention_action_plan_is_preserved_in_projection(self) -> None:
         """Action Planner 已判定 needs_attention 时，Coordinator 不得丢失当前 ActionPlan。"""
 
-        source = await self._insert_source(DurableExecutionStatus.FAILED)
+        source = await self._insert_source(DurableExecutionStatus.INTERRUPTED)
         snapshot = self._snapshot()
-        recovery_plan = RecoveryPlan(
-            source_run_id=source.run_id,
-            thread_id=source.thread_id,
-            decision=RecoveryDecision.READY_NATIVE,
-            strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
-            recovery_point_id="recovery-point",
-            checkpoint_id="checkpoint",
-            checkpoint_ns="recovery-stage-C",
-            next_nodes=["requirements"],
-            reason_code="READY_FOR_NATIVE_REPLAY",
-            reason="test",
-        )
-        facts = SimpleNamespace(
-            point=None,
-            snapshot=SimpleNamespace(values={}),
-            lifecycle=None,
-        )
 
         with (
             patch(
-                "app.services.application_planning_recovery_coordinator.ensure_application_planning_recovery_point",
-                new=AsyncMock(),
-            ),
-            patch(
-                "app.services.application_planning_recovery_coordinator.prepare_continue",
-                new=AsyncMock(return_value=recovery_plan),
-            ),
-            patch(
-                "app.services.application_planning_recovery_coordinator.build_recovery_facts",
-                new=AsyncMock(return_value=facts),
+                "app.services.application_planning_recovery_coordinator.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        kind="needs_attention",
+                        reentry_plan=None,
+                        reason_code="INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING",
+                        reason="missing latest checkpoint",
+                    )
+                ),
             ),
         ):
             projection = await resolve_application_planning_recovery(
@@ -236,92 +210,12 @@ class ApplicationPlanningRecoveryConsistencyTests(unittest.IsolatedAsyncioTestCa
         self.assertIsNone(projection.recovery_action_plan["primaryAction"])
         self.assertEqual(
             projection.recovery_action_plan["reasonCode"],
-            "NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED",
+            "INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING",
         )
         self.assertEqual(
             projection.message,
             projection.recovery_action_plan["message"],
         )
-
-    async def test_replay_policy_denies_every_other_planning_checkpoint(self) -> None:
-        """节点、动作、身份或中断任一不匹配时都不能获得 Native Replay。"""
-
-        source = await self._insert_source(DurableExecutionStatus.INTERRUPTED)
-        base_snapshot = self._snapshot()
-        base_point = RecoveryPoint(
-            recovery_point_id="policy-point",
-            run_id=source.run_id,
-            thread_id=source.thread_id,
-            kind=RecoveryPointKind.CHECKPOINT,
-            checkpoint_id="cp-committed",
-            checkpoint_ns="",
-            graph_node="requirements",
-            completed_node=None,
-            next_nodes=["requirements"],
-            captured_at=self.now,
-        )
-        policy = ApplicationPlanningCommittedInputReplayPolicy()
-        cases: list[tuple[str, DurableExecutionRecord, RecoveryPoint, SimpleNamespace]] = []
-
-        cases.append(
-            (
-                "other_next",
-                source,
-                base_point.model_copy(update={"next_nodes": ["product_planning"]}),
-                base_snapshot,
-            )
-        )
-        for name, interaction_patch in (
-            ("confirm", {"action": "confirm"}),
-            ("design_change", {"action": "design_change"}),
-            ("gate_missing", {"gate_id": ""}),
-            ("revision_missing", {"artifact_revision": ""}),
-        ):
-            values = dict(base_snapshot.values)
-            values["application_planning_interaction"] = {
-                **values["application_planning_interaction"],
-                **interaction_patch,
-            }
-            cases.append((name, source, base_point, base_snapshot.__class__(**{
-                **base_snapshot.__dict__,
-                "values": values,
-            })))
-        missing_values = dict(base_snapshot.values)
-        missing_values.pop("application_planning_interaction")
-        cases.append((
-            "interaction_missing",
-            source,
-            base_point,
-            base_snapshot.__class__(**{**base_snapshot.__dict__, "values": missing_values}),
-        ))
-        interrupt_snapshot = self._snapshot(
-            tasks=(
-                SimpleNamespace(
-                    interrupts=(
-                        SimpleNamespace(
-                            value={"type": "application_planning_review"},
-                        ),
-                    )
-                ),
-            )
-        )
-        cases.append(("native_interrupt", source, base_point, interrupt_snapshot))
-        cases.append((
-            "workbench_source",
-            source.model_copy(update={"execution_kind": "workbench"}),
-            base_point,
-            base_snapshot,
-        ))
-
-        for name, case_source, point, snapshot in cases:
-            with self.subTest(name=name):
-                self.assertIsNone(
-                    policy.assess(
-                        source=case_source,
-                        point=point,
-                        snapshot=snapshot,
-                    )
-                )
 
     async def _insert_source(
         self,

@@ -56,14 +56,12 @@ from app.services.application_lifecycle import (
     load_application_lifecycle,
     write_application_lifecycle,
 )
-from app.services.application_planning_recovery_contracts import TechnicalPlanningRecoveryContract
 from app.services.application_revision_lifecycle import register_revision_impact
 from app.services.execution_recovery import capture_recovery_point
-from app.services.execution_recovery_coordinator import prepare_continue
 from app.services.execution_recovery_executor import prepare_native_recovery
 from app.services.execution_recovery_lineage import resolve_recovery_head
-from app.services.execution_recovery_policies import production_recovery_replay_policies
 from app.services.execution_lease_heartbeat import stop_execution_heartbeat
+from app.services.workflow_reentry import InterruptedTargetResolver
 from tests.helpers.native_recovery_contract import assert_native_recovery_fork_stable
 
 
@@ -375,21 +373,25 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self,
         scenario: _TechnicalRecoveryScenario,
     ) -> tuple[Any, Any]:
-        """先执行只读 Coordinator，再执行真实 Native Recovery claim/fork。"""
+        """先解析最新 checkpoint authority，再执行真实 Native Recovery claim/fork。"""
 
-        plan = await prepare_continue(
+        resolution = await InterruptedTargetResolver().resolve(
             workspace=str(scenario.workspace),
-            source_run_id=scenario.source.run_id,
+            source=scenario.source,
             graph=scenario.runtime_graph,
-            replay_policies=production_recovery_replay_policies(),
         )
+        if resolution.kind != "continue" or resolution.reentry_plan is None:
+            raise AssertionError(
+                f"checkpoint authority did not resolve: {resolution.reason_code}"
+            )
+        reentry_plan = resolution.reentry_plan
         context = await prepare_native_recovery(
             workspace=str(scenario.workspace),
             source_run_id=scenario.source.run_id,
             graph=scenario.runtime_graph,
-            replay_policies=production_recovery_replay_policies(),
+            reentry_plan=reentry_plan,
         )
-        return plan, context
+        return context.recovery_plan, context
 
     async def _run_child(
         self,
@@ -478,14 +480,14 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             expected_revision=lifecycle.revision,
         )
 
-        plan = await prepare_continue(
+        resolution = await InterruptedTargetResolver().resolve(
             workspace=str(scenario.workspace),
-            source_run_id=scenario.source.run_id,
+            source=scenario.source,
             graph=scenario.runtime_graph,
-            replay_policies=production_recovery_replay_policies(),
         )
-        self.assertEqual(plan.decision, RecoveryDecision.STATE_DRIFT)
-        self.assertEqual(plan.reason_code, "LIFECYCLE_DRIFT")
+        self.assertEqual(resolution.kind, "continue")
+        self.assertIsNotNone(resolution.reentry_plan)
+        assert resolution.reentry_plan is not None
 
         with patch(
             "app.services.execution_recovery_executor.claim_native_recovery_attempt",
@@ -496,7 +498,7 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     workspace=str(scenario.workspace),
                     source_run_id=scenario.source.run_id,
                     graph=scenario.runtime_graph,
-                    replay_policies=production_recovery_replay_policies(),
+                    reentry_plan=resolution.reentry_plan,
                 )
 
         self.assertEqual(raised.exception.code, "LIFECYCLE_DRIFT")
@@ -672,13 +674,18 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             run_id=context.new_run_id,
             interrupted_at=datetime.now(timezone.utc),
         )
-        recovery = await prepare_continue(
-            workspace=str(scenario.workspace),
-            source_run_id=context.new_run_id,
-            graph=scenario.runtime_graph,
-            replay_policies=production_recovery_replay_policies(),
+        interrupted_source = await get_execution(
+            scenario.workspace,
+            context.new_run_id,
         )
-        self.assertEqual(recovery.decision, RecoveryDecision.AWAITING_USER)
+        self.assertIsNotNone(interrupted_source)
+        assert interrupted_source is not None
+        resolution = await InterruptedTargetResolver().resolve(
+            workspace=str(scenario.workspace),
+            source=interrupted_source,
+            graph=scenario.runtime_graph,
+        )
+        self.assertEqual(resolution.kind, "awaiting_user")
 
     async def test_all_five_boundaries_are_fork_stable(self) -> None:
         """五个 production boundary 的 identity-only fork 必须保留 successor 集合。"""
@@ -741,54 +748,5 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_context.thread_id, scenario.source.thread_id)
         self.assertNotEqual(second_context.new_run_id, first_context.new_run_id)
         await stop_execution_heartbeat(second_context.heartbeat_task)
-
-    async def test_pre_ownership_negative_identity_matrix_fails_closed(self) -> None:
-        """Formal pre-ownership 的请求、baseline、target 和 lifecycle 漂移不得越权放行。"""
-
-        scenario = await self._scenario(
-            pause_before="technical_planning_begin",
-            operation=ApplicationPlanningOperation.REVISE,
-            lifecycle_stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
-            lifecycle_status=ApplicationLifecycleStatus.COMPLETED,
-            formal_revision=True,
-        )
-        snapshot = await scenario.runtime_graph.aget_state(scenario.source_config)
-        boundary = dict(snapshot.values["application_planning_recovery_boundary"])
-        cases = (
-            {"change_id": "wrong-change"},
-            {"change_target": {"type": "page"}},
-            {"application_planning_recovery_boundary": {**boundary, "gateId": "wrong-gate"}},
-            {"application_planning_recovery_boundary": {**boundary, "requestSha256": "0" * 64}},
-            {"application_planning_recovery_boundary": {**boundary, "baselineSha256": "0" * 64}},
-        )
-        for update in cases:
-            with self.subTest(update=update):
-                candidate_config = await scenario.runtime_graph.aupdate_state(
-                    scenario.source_config,
-                    update,
-                )
-                candidate_snapshot = await scenario.runtime_graph.aget_state(candidate_config)
-                candidate_point = scenario.point.model_copy(
-                    update={
-                        "checkpoint_id": candidate_config["configurable"]["checkpoint_id"],
-                    }
-                )
-                lifecycle = load_application_lifecycle(scenario.workspace)
-                self.assertIsNotNone(lifecycle)
-                assert lifecycle is not None
-                contract = TechnicalPlanningRecoveryContract()
-                matches = contract.match(
-                    source=scenario.source,
-                    point=candidate_point,
-                    snapshot=candidate_snapshot,
-                )
-                assessment = contract.assess_lifecycle(
-                    source=scenario.source,
-                    point=candidate_point,
-                    snapshot=candidate_snapshot,
-                    lifecycle=lifecycle,
-                ) if matches else None
-                self.assertTrue(not matches or not assessment.compatible)
-
 
 __all__ = ["TechnicalPlanningNativeRecoveryTests"]

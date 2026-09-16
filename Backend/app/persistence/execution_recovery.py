@@ -1838,7 +1838,7 @@ async def list_recovery_projection_candidates(
     *,
     limit: int = 16,
 ) -> list[DurableExecutionRecord]:
-    """读取没有正式恢复 child 的异常终止 execution 叶子。"""
+    """只读取没有正式恢复 child 的 FAILED/INTERRUPTED execution 叶子。"""
 
     await initialize_execution_recovery_store(workspace)
     bounded_limit = max(1, min(int(limit), 128))

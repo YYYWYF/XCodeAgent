@@ -17,15 +17,9 @@ from app.graph.workflow import workflow_graph_for_request
 from app.persistence.execution_recovery import (
     list_recovery_projection_candidates,
 )
-from app.services.execution_recovery_coordinator import prepare_continue
-from app.services.execution_recovery_policies import (
-    production_recovery_replay_policies,
-)
 from app.services.execution_recovery_action_planner import (
-    build_recovery_facts,
     plan_failed_node_reentry_action,
     plan_interrupted_continue_action,
-    plan_recovery_action,
 )
 from app.services.execution_recovery_reconciliation import (
     reconcile_interrupted_execution_state,
@@ -101,6 +95,14 @@ async def _resolve_candidate(
 ) -> ExecutionRecoveryProjectionCandidate | None:
     """为单条记录选择 Graph，FAILED 与 INTERRUPTED 均走各自 authority resolver。"""
 
+    # persistence candidate query 只返回 FAILED/INTERRUPTED；即使未来查询边界漂移，
+    # projection 也必须在进入 Generic Recovery 前直接 fail closed。
+    if record.status not in {
+        DurableExecutionStatus.FAILED,
+        DurableExecutionStatus.INTERRUPTED,
+    }:
+        return None
+
     graph_factory = (
         application_planning_graph_for_request
         if record.execution_kind == "application_planning"
@@ -142,7 +144,6 @@ async def _resolve_candidate(
                     reentry_plan=reentry_plan,
                 )
                 authority_plan = reentry_plan
-        plan = None
     elif record.status is DurableExecutionStatus.INTERRUPTED:
         resolution = await InterruptedTargetResolver().resolve(
             workspace=record.workspace,
@@ -173,7 +174,6 @@ async def _resolve_candidate(
                 reentry_plan=resolution.reentry_plan,
             )
             authority_plan = resolution.reentry_plan
-            plan = None
         else:
             action_plan = plan_interrupted_continue_action(
                 workspace=record.workspace,
@@ -183,29 +183,6 @@ async def _resolve_candidate(
                     resolution.reason,
                 ),
             )
-            plan = None
-    else:
-        plan = await prepare_continue(
-            workspace=record.workspace,
-            source_run_id=record.run_id,
-            graph=graph,
-            replay_policies=production_recovery_replay_policies(),
-        )
-        facts = await build_recovery_facts(
-            workspace=record.workspace,
-            source=record,
-            recovery_plan=plan,
-            graph=graph,
-        )
-        action_plan = await plan_recovery_action(
-            workspace=record.workspace,
-            source=record,
-            recovery_plan=plan,
-            point=facts.point,
-            snapshot=facts.snapshot,
-            lifecycle=facts.lifecycle,
-            graph=graph,
-        )
     availability = {
         "recoverable": "ready",
         "awaiting_user": "awaiting_user",
@@ -213,7 +190,7 @@ async def _resolve_candidate(
     }[action_plan.status.value]
     owner_session_id = await _resolve_owner_session_id(
         record=record,
-        plan=authority_plan or plan,
+        plan=authority_plan,
         graph=graph,
     )
     if owner_session_id is None:
@@ -274,24 +251,6 @@ async def _resolve_owner_session_id(
         return None
     resolved = str(values.get("owner_session_id") or "").strip()
     return resolved or None
-
-
-def _message_for_availability(
-    availability: str,
-    record: DurableExecutionRecord,
-) -> str:
-    """生成面向普通用户的恢复文案，隐藏节点和技术错误码。"""
-
-    return {
-        "ready": (
-            "上一次模型调用失败，当前执行现场可以安全继续，将使用当前模型配置重新执行未完成步骤。"
-            if record.status.value == "failed"
-            else "上一次执行被中断，可以从已保存的现场继续。"
-        ),
-        "requires_handler": "当前步骤暂不能自动继续。",
-        "blocked": "工作区或流程状态已经发生变化，无法直接从旧现场继续。",
-        "awaiting_user": "当前执行正在等待用户确认。",
-    }[availability]
 
 
 __all__ = ["recovery_failure_diagnostic", "resolve_execution_recovery_projection"]

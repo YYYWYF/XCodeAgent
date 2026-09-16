@@ -26,6 +26,7 @@ from app.protocols.execution_recovery import _resolve_action_source_run
 from app.services.execution_recovery_action_planner import (
     plan_failed_node_reentry_action,
 )
+from app.services.execution_recovery_executor import prepare_native_recovery
 from app.services.execution_recovery_projection import _resolve_candidate
 
 
@@ -109,7 +110,7 @@ class FailedNodeReentryArchitectureTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def test_failed_projection_fails_fast_if_legacy_coordinator_is_used(self) -> None:
+    async def test_failed_projection_uses_only_node_entry_authority(self) -> None:
         """FAILED projection 必须只调用 FailureTargetResolver 和薄 ActionPlan。"""
 
         with (
@@ -120,10 +121,6 @@ class FailedNodeReentryArchitectureTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "app.services.execution_recovery_projection.FailureTargetResolver.resolve",
                 new=AsyncMock(return_value=self.reentry_plan),
-            ),
-            patch(
-                "app.services.execution_recovery_projection.prepare_continue",
-                new=AsyncMock(side_effect=AssertionError("FAILED used legacy coordinator")),
             ),
         ):
             candidate = await _resolve_candidate(self.source)
@@ -153,10 +150,6 @@ class FailedNodeReentryArchitectureTests(unittest.IsolatedAsyncioTestCase):
                         "missing exact predecessor",
                     )
                 ),
-            ),
-            patch(
-                "app.services.execution_recovery_projection.prepare_continue",
-                new=AsyncMock(side_effect=AssertionError("FAILED used legacy coordinator")),
             ),
         ):
             candidate = await _resolve_candidate(self.source)
@@ -214,10 +207,6 @@ class FailedNodeReentryArchitectureTests(unittest.IsolatedAsyncioTestCase):
                 "app.protocols.execution_recovery.FailureTargetResolver.resolve",
                 new=AsyncMock(return_value=self.reentry_plan),
             ),
-            patch(
-                "app.protocols.execution_recovery._prepare_recovery_plan",
-                new=AsyncMock(side_effect=AssertionError("FAILED used legacy planner")),
-            ),
         ):
             source_run_id = await _resolve_action_source_run(
                 workspace=str(self.workspace),
@@ -226,6 +215,35 @@ class FailedNodeReentryArchitectureTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(source_run_id, self.source.run_id)
+
+    async def test_executor_rejects_non_actionable_source_statuses(self) -> None:
+        """直接调用 checkpoint re-entry Executor 也必须拒绝任意非异常终态。"""
+
+        for status in (
+            DurableExecutionStatus.RUNNING,
+            DurableExecutionStatus.COMPLETED,
+            DurableExecutionStatus.AWAITING_USER,
+        ):
+            with self.subTest(status=status.value):
+                source = self.source.model_copy(
+                    update={"status": status, "failure": None}
+                )
+                with patch(
+                    "app.services.execution_recovery_executor.get_execution",
+                    new=AsyncMock(return_value=source),
+                ):
+                    with self.assertRaises(RecoveryExecutionError) as raised:
+                        await prepare_native_recovery(
+                            workspace=str(self.workspace),
+                            source_run_id=source.run_id,
+                            graph=object(),
+                            reentry_plan=self._reentry_plan(source),
+                        )
+
+                self.assertEqual(
+                    raised.exception.code,
+                    "WORKFLOW_REENTRY_PLAN_INVALID",
+                )
 
 
 if __name__ == "__main__":

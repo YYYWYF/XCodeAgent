@@ -498,7 +498,7 @@ class InterruptedCheckpointTruthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolution.kind, "needs_attention")
         self.assertEqual(resolution.reason_code, "INTERRUPTED_CHECKPOINT_AMBIGUOUS")
 
-    async def test_interrupted_projection_skips_legacy_replay_policy(self) -> None:
+    async def test_interrupted_projection_uses_resolver_action_only(self) -> None:
         """INTERRUPTED projection 只能使用 resolver 与 continue action。"""
 
         plan = WorkflowReentryPlan(
@@ -537,10 +537,6 @@ class InterruptedCheckpointTruthTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
                 new=AsyncMock(return_value=result),
-            ),
-            patch(
-                "app.services.execution_recovery_projection.prepare_continue",
-                new=AsyncMock(side_effect=AssertionError("INTERRUPTED used legacy replay")),
             ),
         ):
             candidate = await _resolve_candidate(self.source)

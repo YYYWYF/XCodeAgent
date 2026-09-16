@@ -26,6 +26,7 @@ from app.domain.execution_recovery import (
     ExecutionFailureOrigin,
     RecoveryActionKind,
     RecoveryAttemptStatus,
+    RecoveryExecutionError,
     RecoveryPoint,
     RecoveryPointKind,
     RecoverySourceAuthorityKind,
@@ -58,17 +59,19 @@ from app.services.execution_recovery import (
     observe_execution_finished,
 )
 from app.services.execution_recovery_action_planner import (
-    build_recovery_facts,
-    plan_recovery_action,
+    plan_failed_node_reentry_action,
+    plan_interrupted_continue_action,
 )
-from app.services.execution_recovery_coordinator import prepare_continue
 from app.services.execution_recovery_executor import (
     WorkflowReentryExecutor,
-    prepare_native_recovery,
 )
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
-from app.services.execution_recovery_strategy import AllowNodePolicy
 from app.services.execution_lease_heartbeat import stop_execution_heartbeat
+from app.services.workflow_reentry import (
+    FailureTargetResolver,
+    InterruptedTargetResolver,
+    recovery_plan_from_reentry,
+)
 
 
 class FakeModelNotFoundError(Exception):
@@ -164,12 +167,6 @@ def _settings(model_name: str, *, provider: str = "openai") -> Settings:
         execution_recovery_heartbeat_seconds=0.01,
         execution_recovery_lease_ttl_seconds=60.0,
     )
-
-
-def _replay_policy() -> tuple[AllowNodePolicy, ...]:
-    """返回只允许 technical_planning successor 的测试 replay policy。"""
-
-    return (AllowNodePolicy({"technical_planning"}),)
 
 
 def _failure(
@@ -381,39 +378,63 @@ class FailedNodeReplayDurableHarness:
             "execution_log": [],
         }
 
-    async def resolve_action(
-        self,
-        *,
-        replay_policies: tuple[Any, ...] | None = None,
-    ) -> tuple[Any, Any]:
-        """经由 Coordinator 和 Action Planner 重新解析当前 Backend action。"""
+    async def resolve_action(self) -> tuple[Any, Any]:
+        """经由当前 Workflow authority 和薄 Action Planner 解析 Backend action。"""
 
         if self.graph is None or self.source is None:
             raise AssertionError("harness is not started")
         source = await get_execution(self.workspace, self.source.run_id)
         if source is None:
             raise AssertionError("source execution disappeared")
-        recovery_plan = await prepare_continue(
-            workspace=str(self.workspace),
-            source_run_id=source.run_id,
-            graph=self.graph,
-            replay_policies=replay_policies,
-        )
-        facts = await build_recovery_facts(
-            workspace=str(self.workspace),
-            source=source,
-            recovery_plan=recovery_plan,
-            graph=self.graph,
-        )
-        action_plan = await plan_recovery_action(
-            workspace=str(self.workspace),
-            source=source,
-            recovery_plan=recovery_plan,
-            point=facts.point,
-            snapshot=facts.snapshot,
-            lifecycle=facts.lifecycle,
-            graph=self.graph,
-        )
+        if source.status is DurableExecutionStatus.FAILED:
+            try:
+                reentry_plan = await FailureTargetResolver().resolve(
+                    workspace=str(self.workspace),
+                    source=source,
+                    graph=self.graph,
+                )
+            except RecoveryExecutionError as exc:
+                action_plan = plan_failed_node_reentry_action(
+                    workspace=str(self.workspace),
+                    source=source,
+                    error=exc,
+                )
+            else:
+                action_plan = plan_failed_node_reentry_action(
+                    workspace=str(self.workspace),
+                    source=source,
+                    reentry_plan=reentry_plan,
+                )
+        elif source.status is DurableExecutionStatus.INTERRUPTED:
+            resolution = await InterruptedTargetResolver().resolve(
+                workspace=str(self.workspace),
+                source=source,
+                graph=self.graph,
+            )
+            if resolution.kind == "continue" and resolution.reentry_plan is not None:
+                action_plan = plan_interrupted_continue_action(
+                    workspace=str(self.workspace),
+                    source=source,
+                    reentry_plan=resolution.reentry_plan,
+                )
+            else:
+                action_plan = plan_interrupted_continue_action(
+                    workspace=str(self.workspace),
+                    source=source,
+                    error=RecoveryExecutionError(
+                        resolution.reason_code,
+                        resolution.reason,
+                    ),
+                )
+        else:
+            action_plan = plan_failed_node_reentry_action(
+                workspace=str(self.workspace),
+                source=source,
+                error=RecoveryExecutionError(
+                    "RECOVERY_SOURCE_NOT_ACTIONABLE",
+                    "当前 source 不是 FAILED 或 INTERRUPTED。",
+                ),
+            )
         return source, action_plan
 
     async def run_child(self, context: Any) -> None:
@@ -518,25 +539,16 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
         )
         await self._point("point-c", "checkpoint-c", ["other_node"], 3)
         graph = self._graph(["checkpoint-b"])
-        recovery_plan = await prepare_continue(
-            workspace=str(self.workspace),
-            source_run_id=self.source_run_id,
-            graph=graph,
-        )
-        facts = await build_recovery_facts(
+        reentry_plan = await FailureTargetResolver().resolve(
             workspace=str(self.workspace),
             source=self.source,
-            recovery_plan=recovery_plan,
             graph=graph,
         )
-        action_plan = await plan_recovery_action(
+        recovery_plan = recovery_plan_from_reentry(reentry_plan)
+        action_plan = plan_failed_node_reentry_action(
             workspace=str(self.workspace),
             source=self.source,
-            recovery_plan=recovery_plan,
-            point=facts.point,
-            snapshot=facts.snapshot,
-            lifecycle=None,
-            graph=graph,
+            reentry_plan=reentry_plan,
         )
 
         self.assertEqual(recovery_plan.checkpoint_id, predecessor.checkpoint_id)
@@ -553,14 +565,15 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
         )
         await self._point("point-c", "checkpoint-c", ["other_node"], 2)
         graph = self._graph(["checkpoint-b"])
-        plan = await prepare_continue(
+        reentry_plan = await FailureTargetResolver().resolve(
             workspace=str(self.workspace),
-            source_run_id=self.source_run_id,
+            source=self.source,
             graph=graph,
         )
+        recovery_plan = recovery_plan_from_reentry(reentry_plan)
 
-        self.assertEqual(plan.checkpoint_id, predecessor.checkpoint_id)
-        self.assertEqual(plan.next_nodes, ["technical_planning"])
+        self.assertEqual(recovery_plan.checkpoint_id, predecessor.checkpoint_id)
+        self.assertEqual(recovery_plan.next_nodes, ["technical_planning"])
 
     async def test_multi_successor_checkpoint_is_not_failed_node_authority(self) -> None:
         """包含多个 successor 的 checkpoint 必须拒绝作为 failed-node authority。"""
@@ -581,15 +594,20 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
                 )
             }
         )
-        plan = await prepare_continue(
-            workspace=str(self.workspace),
-            source_run_id=self.source_run_id,
-            graph=graph,
-        )
+        with self.assertRaises(RecoveryExecutionError) as raised:
+            await FailureTargetResolver().resolve(
+                workspace=str(self.workspace),
+                source=self.source,
+                graph=graph,
+            )
 
-        self.assertEqual(plan.reason_code, "NODE_ENTRY_AUTHORITY_MISSING")
-        self.assertNotEqual(plan.reason_code, "FAILED_NODE_REENTRY_READY")
-        self.assertIsNone(plan.recovery_point_id)
+        action_plan = plan_failed_node_reentry_action(
+            workspace=str(self.workspace),
+            source=self.source,
+            error=raised.exception,
+        )
+        self.assertEqual(action_plan.reason_code, "NODE_ENTRY_AUTHORITY_MISSING")
+        self.assertIsNone(action_plan.primary_action)
 
     async def test_missing_predecessor_never_falls_back_to_latest_checkpoint(self) -> None:
         """找不到 exact predecessor 时不得把 latest checkpoint 伪装成 Native Replay。"""
@@ -598,15 +616,20 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
         await self._point("point-c", "checkpoint-c", ["page_design"], 2)
         await self._point("point-d", "checkpoint-d", ["build"], 3)
         graph = self._graph([])
-        plan = await prepare_continue(
-            workspace=str(self.workspace),
-            source_run_id=self.source_run_id,
-            graph=graph,
-        )
+        with self.assertRaises(RecoveryExecutionError) as raised:
+            await FailureTargetResolver().resolve(
+                workspace=str(self.workspace),
+                source=self.source,
+                graph=graph,
+            )
 
-        self.assertEqual(plan.reason_code, "NODE_ENTRY_AUTHORITY_MISSING")
-        self.assertIsNone(plan.recovery_point_id)
-        self.assertEqual(plan.next_nodes, [])
+        action_plan = plan_failed_node_reentry_action(
+            workspace=str(self.workspace),
+            source=self.source,
+            error=raised.exception,
+        )
+        self.assertEqual(action_plan.reason_code, "NODE_ENTRY_AUTHORITY_MISSING")
+        self.assertIsNone(action_plan.primary_action)
 
 
 class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -911,31 +934,23 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolution.head.run_id, second_context.new_run_id)
 
     async def _resolve_current_action(self, source_run_id: str) -> tuple[Any, Any]:
-        """按指定当前 source 重新走 Coordinator 与 Action Planner。"""
+        """按指定当前 source 重新走 Workflow authority 与 Action Planner。"""
 
         assert self.harness.graph is not None
         source = await get_execution(self.harness.workspace, source_run_id)
         if source is None:
             raise AssertionError("lineage source disappeared")
-        recovery_plan = await prepare_continue(
-            workspace=str(self.harness.workspace),
-            source_run_id=source_run_id,
-            graph=self.harness.graph,
-        )
-        facts = await build_recovery_facts(
+        if source.status is not DurableExecutionStatus.FAILED:
+            raise AssertionError("test helper only resolves failed-node actions")
+        reentry_plan = await FailureTargetResolver().resolve(
             workspace=str(self.harness.workspace),
             source=source,
-            recovery_plan=recovery_plan,
             graph=self.harness.graph,
         )
-        action_plan = await plan_recovery_action(
+        action_plan = plan_failed_node_reentry_action(
             workspace=str(self.harness.workspace),
             source=source,
-            recovery_plan=recovery_plan,
-            point=facts.point,
-            snapshot=facts.snapshot,
-            lifecycle=facts.lifecycle,
-            graph=self.harness.graph,
+            reentry_plan=reentry_plan,
         )
         return source, action_plan
 
@@ -1066,9 +1081,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             "app.config.Settings.from_env",
             side_effect=self.harness.settings,
         ):
-            source, action_plan = await self.harness.resolve_action(
-                replay_policies=_replay_policy()
-            )
+            source, action_plan = await self.harness.resolve_action()
             self.assertEqual(source.status, DurableExecutionStatus.INTERRUPTED)
             self.assertIsNotNone(action_plan.primary_action)
             assert action_plan.primary_action is not None
@@ -1076,11 +1089,10 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
                 action_plan.primary_action.kind,
                 RecoveryActionKind.CONTINUE_CHECKPOINT,
             )
-            context = await prepare_native_recovery(
+            context = await WorkflowReentryExecutor().prepare_interrupted_continue(
                 workspace=str(self.harness.workspace),
                 source_run_id=source.run_id,
                 graph=self.harness.graph,
-                replay_policies=_replay_policy(),
             )
             self.harness.heartbeat_tasks.append(context.heartbeat_task)
 
