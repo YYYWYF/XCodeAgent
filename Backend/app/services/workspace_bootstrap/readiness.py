@@ -6,6 +6,10 @@ import json
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.services.agent_runtime_template_policy import (
+    AgentRuntimeTemplatePolicyError,
+    load_agent_runtime_template_policy,
+)
 from app.services.template_state import effective_capabilities, load_template_state, requested_capabilities
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapReadinessError
@@ -24,6 +28,7 @@ def validate_workspace_bootstrap_readiness(
     workspace: str | Path,
     *,
     requested_config: dict[str, Any],
+    managed_roots: tuple[str, ...] = ("frontend", "backend"),
     git_manager: GitBaselineVerifier | None = None,
 ) -> None:
     """验证正式产物、真实入口、State 映射、Git 和 staging 均符合当前契约。"""
@@ -32,10 +37,10 @@ def validate_workspace_bootstrap_readiness(
     if not root.is_dir() or root.is_symlink():
         raise WorkspaceBootstrapReadinessError("Workspace 必须是非符号链接目录。")
     _validate_formal_artifacts(root)
-    _validate_template_roots(root)
+    _validate_template_roots(root, managed_roots)
     state = load_template_state(root)
     _validate_requested_capabilities(state, requested_config)
-    _validate_entrypoints(root)
+    _validate_entrypoints(root, managed_roots)
     _validate_staging_absent(root)
     (git_manager or BootstrapGitManager()).verify_baseline(root)
 
@@ -61,10 +66,12 @@ def _validate_formal_artifacts(workspace: Path) -> None:
         raise WorkspaceBootstrapReadinessError("正式产物未确认，不能完成 Workspace Bootstrap。")
 
 
-def _validate_template_roots(workspace: Path) -> None:
-    """确认两个模板根与 Git 元数据是受管的真实目录。"""
+def _validate_template_roots(
+    workspace: Path, managed_roots: tuple[str, ...]
+) -> None:
+    """确认本轮模板 roots 与 Git 元数据是受管的真实目录。"""
 
-    for name in ("frontend", "backend", ".git"):
+    for name in (*managed_roots, ".git"):
         path = workspace / name
         if not path.is_dir() or path.is_symlink():
             raise WorkspaceBootstrapReadinessError(f"Bootstrap 缺少有效 {name}。")
@@ -105,8 +112,10 @@ def _enabled_requested_capabilities(requested_config: dict[str, Any]) -> dict[st
     return {capability_id: enabled[capability_id] for capability_id in sorted(enabled)}
 
 
-def _validate_entrypoints(workspace: Path) -> None:
-    """验证前后端最小真实入口，避免空目录或仅占位文件成为 READY。"""
+def _validate_entrypoints(
+    workspace: Path, managed_roots: tuple[str, ...]
+) -> None:
+    """验证本轮三端最小真实入口，避免空目录或占位文件成为 READY。"""
 
     package_json = workspace / "frontend/package.json"
     pom = workspace / "backend/pom.xml"
@@ -119,6 +128,13 @@ def _validate_entrypoints(workspace: Path) -> None:
         path.is_file() and not path.is_symlink() for path in java_root.rglob("*Application.java")
     ):
         raise WorkspaceBootstrapReadinessError("Bootstrap 缺少 backend Spring Boot Application 入口。")
+    if "agent-runtime" in managed_roots:
+        try:
+            load_agent_runtime_template_policy(workspace / "agent-runtime")
+        except AgentRuntimeTemplatePolicyError as exc:
+            raise WorkspaceBootstrapReadinessError(
+                f"Bootstrap Agent Runtime 模板无效：{exc}"
+            ) from exc
 
 
 def _validate_staging_absent(workspace: Path) -> None:

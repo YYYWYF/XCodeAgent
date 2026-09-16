@@ -16,18 +16,22 @@
 工作台“启动 Runtime”
   -> /agent-runtime-debug/run（独立 AG-UI 动作）
   -> 校验 XCodeAgent 受管工作区
-  -> 安全停止该工作区的旧 Runtime
-  -> uv sync --frozen
+  -> 写入 status=cleaning，安全停止该工作区的旧 Runtime
+  -> 写入 status=validating；必要时用官方脚本安装 uv
+  -> 写入 status=installing，执行 uv sync --frozen
   -> 优先复用工作区上次端口；被其他服务占用时分配新端口
   -> 生成本次启动专用随机 Token
   -> 注入模型 fallback、端口和 AGENT_RUNTIME_GATEWAY_TOKEN
   -> uv --directory <agent-runtime> run agent-runtime
+  -> 写入 status=starting 和 JSON pid
   -> 调用 /health 等待 readiness
-  -> 写入工作区调试状态文件
+  -> 写入 status=running，并启动 Backend 心跳
   -> 前端展示可复制的 Runtime 地址和 Bearer Token
 ```
 
-该流程独立于主 Workflow，不执行需求、产品规划、技术规划或 Agent Build。
+该流程独立于主 Workflow，不执行需求、产品规划、技术规划或 Agent Build。预览启动走同一状态文件，但不写入 `debugToken`。
+
+启动失败会把融合后的 `status` 写入同一 JSON：`cleanup_failed` / `validation_failed` / `install_failed` / `start_failed` / `debug_state_failed`。`/health` 超时写入 `offline` 和 `health=ETIMEDOUT`，不是 `start_failed`。AG-UI 仍从这些 status 映射既有 `failedStage`（例如 `install_failed` → `agent_runtime_install`），Renderer 契约不变。
 
 ## 3. 模板模型配置 fallback
 
@@ -76,7 +80,7 @@ Token 在当前 Runtime 进程生命周期内保持不变。重新启动 Runtime
 
 ## 5. 工作区调试状态文件
 
-显式调试启动成功后写入：
+调试启动和预览启动都会写入：
 
 ```text
 <workspace>/.xcodeagent/runtime/launch/agent-runtime-debug.json
@@ -86,33 +90,44 @@ Token 在当前 Runtime 进程生命周期内保持不变。重新启动 Runtime
 
 ```json
 {
-  "status": "running",
   "service": "agent-runtime",
+  "status": "running",
+  "message": "Agent Runtime 已启动并就绪。",
+  "updateTime": "2026-09-16T09:24:22.010+08:00",
+  "pid": 18432,
   "host": "127.0.0.1",
   "port": 61245,
-  "health": {
-    "status": "healthy"
-  },
-  "reused": false,
-  "errorCode": null,
-  "message": "Agent Runtime 已启动",
+  "health": 200,
   "debugToken": "<本次启动专用随机 Token>"
 }
 ```
+
+`status` 是唯一步骤/结果字段：进行中为 `cleaning` / `validating` / `installing` / `starting`，成功为 `running`，失败为 `*_failed`，连不上或监督断开为 `offline`，主动停止为 `stopped`。不使用 `unhealthy`。
+
+`health` 是标量：尚未分配端口或已 `stopped` 时为 `null`；TCP 失败为 `"ECONNREFUSED"` / `"ETIMEDOUT"` / `"ECONNRESET"`（Windows `WSA*` 归一成这些名字）；TCP 通后记 HTTP 状态码整数。只有 `200` 且 `/health` body 为 `service=agent-runtime`、`status=ok` 时，顶层 `status` 才保持 `running`。
+
+文件不再包含 `schemaVersion`、`stage`、`failedStage`、`errorCode`、`reused`、`logs` 或独立 `agent-runtime.pid`。进程号只写在 JSON `pid`：`Popen` 成功进入 `starting` 时写入。重试时按 `status` 打开固定日志：
+
+- `validating` / `validation_failed` / `installing` / `install_failed` → `agent-runtime-install.stdout.log` / `agent-runtime-install.stderr.log`
+- 其余步骤 → `agent-runtime.stdout.log` / `agent-runtime.stderr.log`
+
+四个日志文件名和写入方式保持现状：install 覆盖写，runtime 追加写。
 
 文件行为：
 
 - 使用同目录临时文件原子覆盖，避免读取到半写入 JSON；
 - macOS/Linux 权限固定为 `0600`；
+- 任何写入都刷新 `updateTime`；该字段使用固定 UTC+8 偏移（`+08:00`），过期判断按绝对时间；
 - 正常重新启动复用当前工作区端口并生成新 Token；
 - 上次端口被其他服务占用时分配新端口并覆盖记录；
-- Runtime 停止后，`status` 和 `health.status` 更新为 `stopped`；
-- Runtime 停止后，`debugToken` 更新为 `null`；
+- Runtime 主动停止后 `status=stopped`，`pid` / `health` / `debugToken` 为 `null`；
+- `offline` 且 `health` 不是 `200` 时清空 Token；监督断开且上次 `health` 仍为 `200` 时可保留 Token；
+- 心跳每 5 秒刷新 `running`；`running` 的 `updateTime` 超过约 15 秒时，下一次启动、Workspace Attach 或生命周期读取会先改成 `offline`；
 - 文件不属于生成应用源码或正式部署配置。
 
 ## 6. 旧进程安全恢复
 
-XCodeAgent 后端重启后，内存中的 `subprocess.Popen` 登记会丢失，因此启动器需要通过工作区 PID 文件恢复并清理旧 Runtime。
+XCodeAgent 后端重启后，内存中的 `subprocess.Popen` 登记会丢失，因此启动器通过状态文件中的 `pid` 恢复并清理旧 Runtime。历史 `agent-runtime.pid` 只删除、不当恢复来源。
 
 原实现要求进程命令行同时包含 `agent-runtime` 和工作区绝对路径，但旧启动命令可能只有：
 
@@ -132,9 +147,11 @@ uv run agent-runtime
 - 同名进程位于其他工作区时仍拒绝终止；
 - PID 无效、复用、身份不匹配或终止失败时继续 fail-closed，避免误杀。
 
-POSIX 上恢复 PID 文件中的进程时必须同时满足两项独立证据：命令行包含 `agent-runtime` 标识，并且进程实际工作目录精确等于当前工作区的 `agent-runtime/`。Windows 无法可靠读取其他进程工作目录，因此要求命令行同时包含 `agent-runtime` 标识和当前工作区 Runtime 绝对路径。任何证据缺失、读取失败或不匹配都拒绝终止。
+POSIX 上恢复状态文件中的进程时必须同时满足两项独立证据：命令行包含 `agent-runtime` 标识，并且进程实际工作目录精确等于当前工作区的 `agent-runtime/`。Windows 无法可靠读取其他进程工作目录，因此要求命令行同时包含 `agent-runtime` 标识和当前工作区 Runtime 绝对路径。任何证据缺失、读取失败或不匹配都拒绝终止。
 
 每个工作区还使用独立启动锁串行化 Runtime 启动。每次启动必须先完成该工作区旧进程清理；只要清理失败，本次启动立即失败，不会继续创建第二个受管 Runtime。因此端口复用负责保持调试地址稳定，启动锁与 fail-closed 清理负责保证一个工作区只有一个由 XCodeAgent 管理的 Runtime。端口探测只决定复用旧端口还是申请新端口，绝不根据端口占用直接终止进程或其他服务。
+
+Backend 为每个已 `running` 的工作区启动一条 5 秒心跳线程，探测不要占用启动锁。心跳失败写入 `offline` 后停线程，不自动拉起。FastAPI lifespan 退出时把仍受监督的 `running` 改成 `offline`。
 
 调试 AG-UI 会把经过换行和长度裁剪的清理失败原因返回前端，不再只显示笼统的“无法安全停止上一次 Agent Runtime 进程”。
 
@@ -230,9 +247,11 @@ RUN_FINISHED
 XCodeAgent Backend：
 
 - `Backend/app/services/agent_runtime_launch_support.py`
+- `Backend/app/services/agent_runtime_uv.py`
 - `Backend/app/services/agent_runtime_process_registry.py`
 - `Backend/app/services/agent_runtime_project_launcher.py`
 - `Backend/app/services/agent_runtime_debug_state.py`
+- `Backend/app/services/agent_runtime_heartbeat.py`
 - `Backend/app/protocols/agent_runtime_debug.py`
 - `Backend/app/main.py`
 
@@ -253,7 +272,7 @@ Agent Runtime Template：
 测试：
 
 - `Backend/tests/test_agent_runtime_project_launcher.py`
-- `Backend/tests/test_agent_runtime_debug_protocol.py`
+- `Backend/tests/test_agent_runtime_debug_protocol.py``
 - 模板仓库 `tests/test_runtime.py`
 
 ## 10. 验证记录
@@ -268,8 +287,7 @@ Agent Runtime Template：
 未完成：
 
 - Frontend `pnpm build` 尚未通过环境级启动检查。当前全局 `pnpm 11.5.1` 要求 Node.js `>=22.13`，而执行环境是 Node.js `20.20.2`，因此在进入项目 TypeScript 编译前报 `ERR_UNKNOWN_BUILTIN_MODULE: node:sqlite`；
-- 尚未完成 Java Agent Gateway 与 Runtime 的正式双向地址、内部凭据和业务 Tool 联调；
-- 尚未实现 Runtime 意外退出后的持续健康状态回写，当前状态文件在受管启动和受管停止边界更新。
+- 尚未完成 Java Agent Gateway 与 Runtime 的正式双向地址、内部凭据和业务 Tool 联调。
 
 ## 11. 安全边界
 
@@ -283,4 +301,5 @@ Agent Runtime Template：
 - 端口探测只决定复用或更换端口，绝不直接终止端口占用者；
 - POSIX PID 恢复同时要求 Runtime 命令标识和精确工作目录匹配；
 - Windows PID 恢复同时要求 Runtime 命令标识和命令行中的精确工作区路径匹配；
-- 任一身份依据缺失、读取失败或不匹配时，拒绝终止旧进程并停止新启动。
+- 任一身份依据缺失、读取失败或不匹配时，拒绝终止旧进程并停止新启动；
+- 心跳不得改写或打印 `debugToken`，探测不占用启动锁。

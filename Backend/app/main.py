@@ -17,6 +17,7 @@ from app.graph.application_planning_workflow import (
 from app.graph.direct_modification_workflow import clear_direct_modification_graph_cache
 from app.middleware.approvals import approval_store
 from app.persistence.checkpoints import close_workflow_checkpointer
+from app.services.agent_runtime_heartbeat import stop_all_agent_runtime_heartbeats
 from app.protocols.preview_runtime import preview_runtime_capabilities, build_preview_runtime_stream
 
 from app.protocols.agent_files import (
@@ -95,6 +96,7 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        stop_all_agent_runtime_heartbeats(mark_offline=True)
         clear_workflow_graph_cache()
         clear_application_planning_graph_cache()
         clear_direct_modification_graph_cache()
