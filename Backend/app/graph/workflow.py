@@ -68,6 +68,8 @@ def route_workflow_start(state: ProjectState) -> str:
         return "finalize_project"
     if str(state.get("selected_entity_id") or "").strip():
         return "entity_source_binding"
+    if str(state.get("selected_agent_id") or "").strip():
+        return "development_readiness_gate"
     return "api_design_readiness_gate"
 
 
