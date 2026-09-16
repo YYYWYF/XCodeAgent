@@ -8,6 +8,9 @@
 
 PyInstaller and macOS code signing must run on macOS. Build the x64 and arm64 packages on matching
 macOS hosts; do not reuse one architecture's frozen backend for the other architecture.
+Backend packaging supports Python 3.12 and 3.14. Frontend packaging supports the Node 20.19.0
+development baseline and Node 24.x; use the pnpm version declared in `Frontend/package.json`
+with the checked-in lockfile.
 
 ## Development
 
@@ -17,11 +20,23 @@ macOS hosts; do not reuse one architecture's frozen backend for the other archit
 
 ## Packaging
 
-1. On Windows x64, run `scripts/build-backend-win.ps1`, then `pnpm build:win:<environment>`.
-2. On an Intel Mac, run `bash scripts/build-backend-mac.sh x64`, then
-   `pnpm build:mac:x64:<environment>`.
-3. On an Apple Silicon Mac, run `bash scripts/build-backend-mac.sh arm64`, then
-   `pnpm build:mac:arm64:<environment>`.
+From the repository root, use the matching one-command development package entry:
+
+- Windows x64: `powershell -ExecutionPolicy Bypass -File scripts/win_pack.ps1`
+- macOS Intel: `bash scripts/mac_pack_x64.sh`
+- macOS Apple Silicon: `bash scripts/mac_pack_arm64.sh`
+
+Each entry builds and stages the backend first, then builds the matching Electron package in
+`Frontend/dist`. Run the macOS entry only on a host with the matching architecture. Install the
+frontend dependencies beforehand; the entries call `pnpm` directly and do not reinstall
+`node_modules`. Install the pnpm version declared by `Frontend/package.json` before a clean
+`pnpm install --frozen-lockfile` so it matches the checked-in lockfile.
+
+The macOS backend script uses `Backend/.venv/bin/python` when present, or a system Python 3.14/3.12.
+Set `PYTHON=/absolute/path/to/python` to select a different supported interpreter. The Windows
+script defaults to `py -3.12`; pass `-Python C:\path\to\python.exe` to build with Python 3.14.
+Pass that option to `scripts/win_pack.ps1` when using the one-command Windows entry.
+For a clean frontend install, run `pnpm install --frozen-lockfile` using the declared pnpm version.
 
 Production macOS commands enable electron-builder notarization. Supply signing and notarization
 credentials through CI secrets such as `CSC_LINK`, `CSC_KEY_PASSWORD`, and the supported Apple

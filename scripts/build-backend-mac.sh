@@ -20,17 +20,22 @@ if [ -n "$REQUESTED_ARCH" ] && [ "$REQUESTED_ARCH" != "$BUILD_ARCH" ]; then
 fi
 if [ -n "${PYTHON:-}" ]; then
   PYTHON_BIN="$PYTHON"
-elif [ -x "$BACKEND_ROOT/.venv/bin/python3.12" ]; then
-  PYTHON_BIN="$BACKEND_ROOT/.venv/bin/python3.12"
+elif [ -x "$BACKEND_ROOT/.venv/bin/python" ]; then
+  PYTHON_BIN="$BACKEND_ROOT/.venv/bin/python"
+elif command -v python3.14 >/dev/null 2>&1; then
+  PYTHON_BIN="python3.14"
 else
   PYTHON_BIN="python3.12"
 fi
 
 PYTHON_VERSION="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-if [ "$PYTHON_VERSION" != "3.12" ]; then
-  echo "Python 3.12 is required to build the macOS backend. Current Python version: $PYTHON_VERSION" >&2
-  exit 1
-fi
+case "$PYTHON_VERSION" in
+  3.12|3.14) ;;
+  *)
+    echo "Python 3.12 or 3.14 is required to build the macOS backend. Current Python version: $PYTHON_VERSION" >&2
+    exit 1
+    ;;
+esac
 
 ENV_FILE="$BACKEND_ROOT/.env"
 SPEC_FILE="$BACKEND_ROOT/packaging/xcodeagent-backend.spec"

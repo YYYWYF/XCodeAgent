@@ -2,7 +2,7 @@
 # 1. 打开powershell,在 64 位 Windows 机器的项目根目录执行本脚本：
 #    powershell -ExecutionPolicy Bypass -File scripts/build-backend-win.ps1
 # 2. 执行前请确保 Backend\.env 已存在。
-# 3. 请安装 64 位 Python 3.12；脚本会在调用 PyInstaller 前检查 Python 版本和架构。
+# 3. 默认使用 64 位 Python 3.12；也可通过 -Python 指定 64 位 Python 3.14。
 # 4. 打包后的后端产物会被拷贝到 Frontend\resources\backend\win32。
 # 5. 本脚本成功后，再构建 Electron Windows 安装包：
 #    cd Frontend
@@ -56,10 +56,10 @@ Push-Location $BackendRoot
 try {
   $PythonVersion = & $PythonCommand @PythonCommandArgs -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
   if ($LASTEXITCODE -ne 0) {
-    throw "Failed to inspect Python version. Install 64-bit Python 3.12."
+    throw "Failed to inspect Python version. Install 64-bit Python 3.12 or 3.14."
   }
-  if ($PythonVersion.Trim() -ne "3.12") {
-    throw "Python 3.12 is required to build the Windows backend. Current Python version: $PythonVersion"
+  if ($PythonVersion.Trim() -notin @("3.12", "3.14")) {
+    throw "Python 3.12 or 3.14 is required to build the Windows backend. Current Python version: $PythonVersion"
   }
 
   $PythonArchitecture = & $PythonCommand @PythonCommandArgs -c "import platform; print(platform.architecture()[0])"

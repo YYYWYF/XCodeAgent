@@ -27,7 +27,7 @@ These instructions apply to the whole XCodeAgent repository. Every Codex agent s
 - Existing infrastructure endpoints such as `/health`, documentation lookup, and low-level workspace/tool routes may remain on their established contracts, but they must not be copied as the transport pattern for new product features. If an external standard makes AG-UI technically impossible for a new product API, stop before implementation, document the conflict, and obtain explicit user approval for the exception.
 - For frontend UI work, follow the existing Ant Design v4 patterns and local styles. Do not add another UI framework or a large dependency unless there is a clear need.
 - Every new or materially changed UI feature must support both light and dark themes. Define and verify readable colors, borders, backgrounds, hover/focus states, overlays, and empty/loading/error states in both themes. UI changes must inherit the existing theme tokens or add matched light/dark overrides; do not introduce standalone hard-coded visual colors (especially default blue) that diverge from the current purple theme.
-- Use `pnpm` for frontend package scripts. The expected Node version is `20.19.0`.
+- Use `pnpm` for frontend package scripts. Node `20.19.0` is the development baseline; Node `24.x` is also supported for packaging. Use the `packageManager` version in `Frontend/package.json` for frozen installs.
 - Keep secrets out of the repository. Do not print, copy, or commit values from `.env`; update `.env.example` when documenting configuration.
 
 ## Current-Contract-Only Rule
