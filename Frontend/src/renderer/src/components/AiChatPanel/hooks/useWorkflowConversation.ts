@@ -712,7 +712,7 @@ export function useWorkflowConversation({
   const sessionExecutionLocked = Boolean(phaseExecution && !activeSessionOwnsExecution)
   const workspaceBusy = sessionExecutionLocked
 
-  /** 提交当前 Backend action 或永久 Retry Entry，恢复策略仍由 Backend 重新解析。 */
+  /** 只提交 Backend 签发的当前恢复动作，缺少 action identity 时保持 fail closed。 */
   const handleExecuteRecoveryAction = async (
     recovery: ExecutionRecoveryCandidate
   ): Promise<boolean> => {
@@ -740,8 +740,8 @@ export function useWorkflowConversation({
       loading ||
       workspaceBusy ||
       recoveringSourceRunId === recovery.sourceRunId ||
-      (actionPlan.status !== 'needs_attention' &&
-        (actionPlan.status !== 'recoverable' || !primaryAction))
+      actionPlan.status !== 'recoverable' ||
+      !primaryAction
     ) {
       return false
     }
@@ -750,17 +750,11 @@ export function useWorkflowConversation({
     setRecoveryError(undefined)
     try {
       return await sendWorkflowMessage(primaryAction?.label || '重试', {
-        executionRecovery:
-          actionPlan.status === 'recoverable' && primaryAction
-            ? {
-                action: 'execute',
-                incidentId: actionPlan.incidentId,
-                actionId: primaryAction.actionId
-              }
-            : {
-                action: 'retry_current_failure',
-                sourceRunId: actionPlan.sourceRunId
-              },
+        executionRecovery: {
+          action: 'execute',
+          incidentId: actionPlan.incidentId,
+          actionId: primaryAction.actionId
+        },
         executionThreadId: recovery.threadId,
         sessionIdentity,
         titleFrom: primaryAction?.label || '重试',
@@ -967,15 +961,11 @@ export function useWorkflowConversation({
       revisionInteraction?: WorkflowRevisionDraftInteraction
       workflowScope?: string
       executionRecovery?:
-        | {
-            action: 'execute'
-            incidentId: string
-            actionId: string
-          }
-        | {
-            action: 'retry_current_failure'
-            sourceRunId: string
-          }
+        {
+          action: 'execute'
+          incidentId: string
+          actionId: string
+        }
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()

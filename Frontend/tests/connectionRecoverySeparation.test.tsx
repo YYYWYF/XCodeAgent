@@ -47,7 +47,7 @@ function recoveryCandidate(
       message: '可以重试失败节点。',
       primaryAction: {
         actionId,
-        kind: 'retry_operation',
+        kind: 'retry_failed_node',
         targetNode: 'backend-owned-node',
         label: '重试失败节点',
         description: '执行 Backend 签发的恢复动作。',

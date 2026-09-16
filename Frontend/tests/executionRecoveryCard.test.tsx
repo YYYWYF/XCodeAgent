@@ -147,6 +147,13 @@ function recovery(
     canContinue: availability === 'ready',
     reasonCode: 'RECOVERY_TEST',
     message: '恢复测试',
+    failureDiagnostic: {
+      sourceRunId: 'run-A',
+      origin: 'model_call',
+      code: 'WORKBENCH_RECOVERY_DIAGNOSTIC',
+      operation: 'failed_node',
+      message: 'Workbench diagnostic visible'
+    },
     recoveryActionPlan: {
       schemaVersion: 'recovery-action-plan.v1',
       incidentId: 'incident-run-A',
@@ -203,18 +210,25 @@ test('Workbench Recovery Incident exposes the Backend primary action', () => {
   assert.match(markup, /继续执行/)
 })
 
-test('needs_attention Recovery Incident keeps a permanent retry entry', () => {
+test('Workbench needs_attention is display-only and cannot reach onAction', () => {
   for (const availability of ['blocked', 'requires_handler'] as const) {
     const incident = workbenchRecoveryIncident(recovery(availability))
     if (!incident) throw new Error('测试候选未生成 Workbench Incident。')
+    let actionCalls = 0
     const markup = renderToStaticMarkup(
       createElement(RecoveryIncidentCard, {
         incident,
-        onAction: () => undefined
+        onAction: () => {
+          actionCalls += 1
+        }
       })
     )
-    assert.match(markup, /重试/)
+    assert.match(markup, /RECOVERY_TEST/)
+    assert.match(markup, /Workbench diagnostic visible/)
+    assert.doesNotMatch(markup, /<button/)
+    assert.doesNotMatch(markup, /重试/)
     assert.doesNotMatch(markup, /继续执行/)
+    assert.equal(actionCalls, 0)
   }
 })
 
@@ -381,7 +395,8 @@ test('connection error stays outside Recovery and offers only resync', () => {
   assert.doesNotMatch(markup, /重新执行技术规划/)
 })
 
-test('needs_attention Incident shows reason and a permanent retry entry', () => {
+test('Planning needs_attention is display-only and cannot reach onAction', () => {
+  let actionCalls = 0
   const markup = renderToStaticMarkup(
     createElement(ApplicationPlanningRecoveryIncidentCard, {
       planning: {
@@ -408,6 +423,13 @@ test('needs_attention Incident shows reason and a permanent retry entry', () => 
           inputCommitted: false,
           reasonCode: 'RECOVERY_BLOCKED',
           message: '无法安全恢复。',
+          failureDiagnostic: {
+            sourceRunId: 'run-B',
+            origin: 'model_call',
+            code: 'PLANNING_RECOVERY_DIAGNOSTIC',
+            operation: 'technical_planning',
+            message: 'Planning diagnostic visible'
+          },
           recoveryActionPlan: {
             schemaVersion: 'recovery-action-plan.v1',
             incidentId: 'incident-B',
@@ -422,11 +444,16 @@ test('needs_attention Incident shows reason and a permanent retry entry', () => 
           }
         }
       } as ApplicationPlanningCurrentState,
-      onAction: () => undefined
+      onAction: () => {
+        actionCalls += 1
+      }
     })
   )
   assert.match(markup, /RECOVERY_BLOCKED/)
-  assert.match(markup, /重试/)
+  assert.match(markup, /Planning diagnostic visible/)
+  assert.doesNotMatch(markup, /<button/)
+  assert.doesNotMatch(markup, /重试/)
+  assert.equal(actionCalls, 0)
 })
 
 test('caller keeps historical errors unchanged and renders one current Incident', () => {
@@ -477,7 +504,7 @@ test('caller updates only the current Incident when the canonical source moves f
   )
 })
 
-test('caller projects needs_attention as the only current Incident with retry entry', () => {
+test('caller projects needs_attention as the only display-only current Incident', () => {
   const markup = renderPlanningRecoverySurface(
     ['404 model-A', '404 model-B'],
     planningStateFromRecovery({
@@ -494,7 +521,8 @@ test('caller projects needs_attention as the only current Incident with retry en
   )
   assert.match(markup, /NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED/)
   assert.match(markup, /当前现场没有可证明安全的自动恢复入口，需要人工处理/)
-  assert.match(markup, /重试/)
+  assert.doesNotMatch(markup, /<button/)
+  assert.doesNotMatch(markup, /重试/)
   assert.doesNotMatch(markup, /重新执行技术规划/)
 })
 

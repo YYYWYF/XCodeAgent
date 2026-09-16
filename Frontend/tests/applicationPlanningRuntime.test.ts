@@ -858,6 +858,10 @@ async function waitForCondition<T>(
     incidentId: 'incident-AA',
     actionId: 'action-AA'
   })
+  assert.equal('sourceRunId' in (recoveryOptions?.executionRecovery || {}), false)
+  assert.equal('targetNode' in (recoveryOptions?.executionRecovery || {}), false)
+  assert.equal('currentNode' in (recoveryOptions?.executionRecovery || {}), false)
+  assert.equal('phase' in (recoveryOptions?.executionRecovery || {}), false)
   assert.equal(recoveryOptions?.applicationPlanningInteraction, undefined)
   assert.equal(recoveryOptions?.workflowDebug, undefined)
   assert.equal(h.calls.length, 0)
@@ -896,7 +900,7 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.recovery?.inputCommitted, true)
 }
 
-// AC：needs_attention 的永久 Retry Entry 只提交当前失败意图，不伪造 action authority。
+// AC：needs_attention 缺少 Backend action identity 时保持 fail closed，不创建 Recovery 请求。
 {
   const current = planningState()
   let recoveryOptions: SendWorkflowMessageOptions | undefined
@@ -934,10 +938,7 @@ async function waitForCondition<T>(
 
   await h.runtime.retryCurrentFailure()
 
-  assert.deepEqual(recoveryOptions?.executionRecovery, {
-    action: 'retry_current_failure',
-    sourceRunId: 'run-needs-attention'
-  })
+  assert.equal(recoveryOptions, undefined)
 }
 
 console.log('application planning runtime tests passed')

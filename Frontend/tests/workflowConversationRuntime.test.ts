@@ -193,7 +193,7 @@ function buildRecoveryLifecycle(incidentId: string, actionId: string): Applicati
             executionStatus: 'failed',
             availability: 'ready',
             canContinue: true,
-            reasonCode: 'RETRY_OPERATION_AVAILABLE',
+            reasonCode: 'RETRY_FAILED_NODE',
             message: '当前失败可以安全重试。',
             failureDiagnostic: {
               sourceRunId: incidentId === 'incident-B' ? 'run-B' : 'run-A',
@@ -209,11 +209,11 @@ function buildRecoveryLifecycle(incidentId: string, actionId: string): Applicati
               threadId: OWNER_THREAD_ID,
               executionKind: 'workbench',
               status: 'recoverable',
-              reasonCode: 'RETRY_OPERATION_AVAILABLE',
+              reasonCode: 'RETRY_FAILED_NODE',
               message: '当前失败可以安全重试。',
               primaryAction: {
                 actionId,
-                kind: 'retry_operation',
+                kind: 'retry_failed_node',
                 label: '重试当前失败操作',
                 description: '重新执行当前失败操作。',
                 requiresConfirmation: false
@@ -531,13 +531,13 @@ test('STALE_RECOVERY_ACTION 会读取并替换最新 Incident，且不写入历�
   }
 })
 
-test('needs_attention Retry Entry 只提交 retry_current_failure 与当前 source hint', async () => {
+test('J13 needs_attention without primaryAction sends no Recovery execute request', async () => {
   const originalFetch = globalThis.fetch
   const originalWindow = globalThis.window
   const ownerIdentity = buildSessionIdentity()
   const application = {
     id: APPLICATION_ID,
-    appName: 'Recovery retry entry application',
+    appName: 'Recovery fail-closed application',
     workspaceRoot: WORKSPACE_ROOT,
     source: 'existing-workspace'
   } as unknown as ApplicationConfig
@@ -597,11 +597,80 @@ test('needs_attention Retry Entry 只提交 retry_current_failure 与当前 sour
   try {
     renderToStaticMarkup(createElement(Probe))
     assert.ok(captured)
+    const result = await captured.handleExecuteRecoveryAction(candidate)
+    assert.equal(result, false)
+    assert.equal(recoveryRequest, undefined)
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow
+    })
+  }
+})
+
+test('J14 recoverable Backend primaryAction sends only incidentId and actionId', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  const ownerIdentity = buildSessionIdentity()
+  const application = {
+    id: APPLICATION_ID,
+    appName: 'Recovery action identity application',
+    workspaceRoot: WORKSPACE_ROOT,
+    source: 'existing-workspace'
+  } as unknown as ApplicationConfig
+  const lifecycle = buildRecoveryLifecycle('incident-J14', 'action-J14')
+  const candidate = lifecycle.extensions.executionRecovery
+    ?.candidates[0] as ExecutionRecoveryCandidate
+  let recoveryRequest: Record<string, unknown> | undefined
+  let captured: ReturnType<typeof useWorkflowConversation> | undefined
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      threadId: string
+      runId: string
+      forwardedProps?: { executionRecovery?: Record<string, unknown> }
+    }
+    if (String(input).endsWith('/application-lifecycle/run')) {
+      return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+    }
+    recoveryRequest = request.forwardedProps?.executionRecovery
+    return sseErrorResponse(request.threadId, request.runId)
+  }
+
+  const params = buildRuntimeParams({
+    activeSession: ownerIdentity,
+    application,
+    applicationLifecycle: lifecycle,
+    agUiSessionsRef: { current: {} as Record<string, AgUiChatSession> },
+    acquireSessionExecution: () => undefined,
+    releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined
+  })
+
+  /** 捕获 Hook 暴露的 Backend action identity 执行入口。 */
+  function Probe(): ReactElement {
+    captured = useWorkflowConversation(params)
+    return createElement('div')
+  }
+
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.ok(captured)
     await captured.handleExecuteRecoveryAction(candidate)
     assert.deepEqual(recoveryRequest, {
-      action: 'retry_current_failure',
-      sourceRunId: 'run-A'
+      action: 'execute',
+      incidentId: 'incident-J14',
+      actionId: 'action-J14'
     })
+    assert.equal('sourceRunId' in (recoveryRequest || {}), false)
+    assert.equal('targetNode' in (recoveryRequest || {}), false)
+    assert.equal('currentNode' in (recoveryRequest || {}), false)
+    assert.equal('phase' in (recoveryRequest || {}), false)
   } finally {
     globalThis.fetch = originalFetch
     Object.defineProperty(globalThis, 'window', {

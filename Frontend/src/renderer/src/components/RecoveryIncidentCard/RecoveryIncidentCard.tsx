@@ -31,7 +31,7 @@ export default function RecoveryIncidentCard({
   testId = 'recovery-incident'
 }: RecoveryIncidentCardProps): ReactElement {
   const action = incident.kind === 'recoverable' ? incident.action : undefined
-  const hasAction = incident.kind === 'needs_attention' || Boolean(action)
+  const hasAction = incident.kind === 'recoverable' && Boolean(action)
 
   /** 遵循 Backend requiresConfirmation，确认策略不由前端猜测。 */
   const handleAction = (): void => {
@@ -109,7 +109,7 @@ export default function RecoveryIncidentCard({
           onClick={handleAction}
           type="primary"
         >
-          {incident.kind === 'needs_attention' ? '重试' : action?.label}
+          {action?.label}
         </Button>
       ) : null}
     </section>
