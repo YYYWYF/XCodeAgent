@@ -32,6 +32,7 @@ from app.services.unit_generation_contracts import (
 )
 from app.workspace.planning_run_documents import load_planning_run
 from app.workspace.task_documents import (
+    build_task_plan_pending_json_path,
     load_pending_build_task_plan,
     write_build_task_plan_json,
     write_pending_build_task_plan_atomic,
@@ -144,7 +145,7 @@ class BuildTaskPlanRegenerateTests(unittest.IsolatedAsyncioTestCase):
         """旧 digest 不能删除当前 Pending，也不能装载输入或创建 PlanningRun。"""
 
         identity, old_run = await self._write_old_pending()
-        pending_path = Path(self.state["workspace"]) / ".xcodeagent/plans/build-task-plan.pending.json"
+        pending_path = build_task_plan_pending_json_path(self.state)
         pending_bytes = pending_path.read_bytes()
         factory = Mock(return_value="planning-should-not-start")
 

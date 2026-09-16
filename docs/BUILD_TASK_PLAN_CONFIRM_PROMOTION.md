@@ -3,7 +3,8 @@
 ## 当前生产状态和目标动作
 
 生产 Workflow 已默认绑定 async Planning/Confirm adapter：生成成功只写
-`build-task-plan.pending.json`，Confirm 才提升到 `build-task-plan.json`。确认卡的目标动作集合为：
+`.xcodeagent/drafts/plans/build-task-plan.pending.json`，Confirm 才提升到
+`.xcodeagent/plans/build-task-plan.json`。确认卡的目标动作集合为：
 
 ```text
 confirm

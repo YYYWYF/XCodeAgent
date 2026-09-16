@@ -24,7 +24,7 @@ Source Field 节点可实时读取直属 MySQL 表列，也可读取数据源目
 
 开发确认成功后，门禁立即把页面或接口对应的完整映射集合随原工作流消息保存；该快照只代表当次确认结果，后续开发停止、失败或重新配置都不会覆盖历史卡片。切回会话时优先读取消息中的确认快照。独立 `/endpoint-designs/run` 按 `workspaceRoot + apiContractId + endpointId` 提供 `get/prepare/save`，右侧“开发产物”与门禁确认卡片共用只读投影；缺失结果显示 pending，TechnicalPlan 指纹变化或双文件异常显示 stale。任务规划继续读取当前正式磁盘映射，不消费门禁快照，也不增加基于 lifecycle 或开发状态的映射锁定。
 
-Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。它把已确认 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效 Endpoint API Design 和权限切片冻结到 PlanningRun；EntitySourceBinding 不进入该输入。Unit Candidate 由平台 FIFO Worker Pool 有界并行生成并执行 Unit Local Retry，完整 Scope Assembly 和 Global Validation/Repair 通过后只写 `.xcodeagent/plans/build-task-plan.pending.json`。已有正式 `.xcodeagent/plans/build-task-plan.json` 保持不变。
+Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。它把已确认 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效 Endpoint API Design 和权限切片冻结到 PlanningRun；EntitySourceBinding 不进入该输入。Unit Candidate 由平台 FIFO Worker Pool 有界并行生成并执行 Unit Local Retry，完整 Scope Assembly 和 Global Validation/Repair 通过后只写 `.xcodeagent/drafts/plans/build-task-plan.pending.json`。已有正式 `.xcodeagent/plans/build-task-plan.json` 保持不变。
 
 确认卡是只读 Planning-result 门禁：`confirm` 精确验证 `planning_run_id + draft_digest` 后提升当前 Pending 并进入 Build；`abandon` 删除当前 Pending、结束对应 Workflow execution，但保留聊天会话和已有正式计划；结构化 `regenerate` 先删除旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun，后续失败不恢复旧 Pending。同一应用的所有页面和 Scope 共用一个 DAG Planning/待确认互斥域。活跃生成只允许取消整个 Workflow/PlanningRun，当前权威运行卡显示“取消运行”；待确认阶段改用确认卡上的放弃/重新生成/确认，不提供 Unit 级取消。刷新只恢复服务端权威状态投影，不保证原请求继续执行或事件补发；唯一 Pending 和精确 DraftIdentity 是确认权威，没有 Pending 时不得从聊天历史、旧卡片或旧 execution 恢复待确认状态。
 

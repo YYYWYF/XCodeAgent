@@ -37,6 +37,7 @@ class ConfirmPromotionTests(unittest.TestCase):
         self.state = {"workspace": directory.name}
         self.formal_path = build_task_plan_json_path(self.state)
         self.pending_path = build_task_plan_pending_json_path(self.state)
+        self.formal_path.parent.mkdir(parents=True, exist_ok=True)
         self.plan = project_plan()
         self.scope = execution_scope()
         self.context = build_context(self.plan, self.scope)

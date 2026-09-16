@@ -87,6 +87,23 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         """首次写入应创建固定 Pending 文件并可原样读取。"""
 
         plan = _validated_plan()
+        workspace_root = self.workspace.resolve()
+        legacy_pending_path = (
+            workspace_root / ".xcodeagent" / "plans" / "build-task-plan.pending.json"
+        )
+
+        self.assertEqual(
+            self.pending_path,
+            workspace_root
+            / ".xcodeagent"
+            / "drafts"
+            / "plans"
+            / "build-task-plan.pending.json",
+        )
+        self.assertEqual(
+            self.formal_path,
+            workspace_root / ".xcodeagent" / "plans" / "build-task-plan.json",
+        )
 
         written_path = self._write_pending(plan)
         loaded = load_pending_build_task_plan(self.state)
@@ -100,6 +117,7 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         self.assertEqual(loaded["draft_identity"]["workflow_run_id"], WORKFLOW_RUN_ID)
         self.assertIsInstance(validate_pending_self_digest(loaded), DraftIdentity)
         self.assertFalse(self.formal_path.exists())
+        self.assertFalse(legacy_pending_path.exists())
 
     def test_write_pending_preserves_formal_bytes(self) -> None:
         """写 Pending 前后 Formal 的原始字节必须完全不变。"""
@@ -134,6 +152,7 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         original = _validated_plan("page:orders::old")
         self._write_pending(original)
         original_pending_bytes = self.pending_path.read_bytes()
+        self.formal_path.parent.mkdir(parents=True, exist_ok=True)
         self.formal_path.write_text('{"sentinel":"formal"}\n', encoding="utf-8")
         original_formal_bytes = self.formal_path.read_bytes()
 

@@ -17,7 +17,7 @@ TechnicalPlan Endpoint 契约和当前 Endpoint API 设计。运行时的 `proje
 以下决策覆盖本文后续章节中与旧单文件 pending 方案或旧确认动作集合冲突的描述：
 
 1. 同一应用任一时刻只允许存在一个 active DAG PlanningRun 或一个待确认 PendingPlan；不同页面、Endpoint 或其他 Scope 不得并行处于 DAG 生成或待确认状态。
-2. 生成成功只写 `.xcodeagent/plans/build-task-plan.pending.json`；正式 `.xcodeagent/plans/build-task-plan.json` 在用户确认前保持不变。
+2. 生成成功只写 `.xcodeagent/drafts/plans/build-task-plan.pending.json`；正式 `.xcodeagent/plans/build-task-plan.json` 在用户确认前保持不变。
 3. `confirm` 必须精确确认当前最新 Pending 的 `planning_run_id + draft_digest`，成功后原子提升为 Formal、删除匹配 Pending，并由 `prepare_build_tasks` 的既有路由进入 Build。
 4. `abandon` 精确删除当前 Pending、结束本次 Workflow execution 并释放 lifecycle/resource/session 输入门禁；它不删除聊天记录，也不改写已有 Formal。
 5. 新增结构化 `regenerate` 动作。它先消费并删除精确匹配的旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun；成功后写入新的 Pending 并再次等待确认。新生成失败时旧 Pending 不恢复。
@@ -399,7 +399,7 @@ Workflow/PlanningRun，而不是单个 Unit。待确认状态的终止统一使�
 
 ```text
 .xcodeagent/plans/build-task-plan.json          # 仅 ConfirmedPlan，Build 唯一输入
-.xcodeagent/plans/build-task-plan.pending.json  # 仅当前待确认 PendingPlan
+.xcodeagent/drafts/plans/build-task-plan.pending.json  # 仅当前待确认 PendingPlan
 ```
 
 两者不构成历史版本：每个工作区最多各一份，且 Pending 绝不能成为下一 PlanningRun 的 baseline。
@@ -511,7 +511,7 @@ dag_fingerprint
 ```
 
 Unit 内已有的 `input_fingerprint` 继续由 Unit 编译器维护，不能因为本期不增加 DAG 根 fingerprint 而删除。
-本期不维护 DAG 历史版本，每次确认的对象都是 `.xcodeagent/plans/build-task-plan.pending.json` 中由精确 DraftIdentity 标识的最新任务规划。
+本期不维护 DAG 历史版本，每次确认的对象都是 `.xcodeagent/drafts/plans/build-task-plan.pending.json` 中由精确 DraftIdentity 标识的最新任务规划。
 revision 和 DAG 根 fingerprint 可在后续需要防止并发覆盖、检测外部文件修改或提供历史审计时再引入。
 
 ## 7. Build 入口门禁

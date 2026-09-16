@@ -363,7 +363,7 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 
 节点成功后只写入待确认任务 DAG，不修改已有正式计划：
 
-- `.xcodeagent/plans/build-task-plan.pending.json`：当前唯一 PendingPlan，携带后端签发的 `planning_run_id + draft_digest`，不得被 BuildScheduler 消费；
+- `.xcodeagent/drafts/plans/build-task-plan.pending.json`：当前唯一 PendingPlan，携带后端签发的 `planning_run_id + draft_digest`，不得被 BuildScheduler 消费；
 - `.xcodeagent/plans/build-task-plan.json`：仅保存 ConfirmedPlan，是 BuildScheduler、调试续跑和后续节点的唯一规划权威；
 - v3 task registry 使用 snake_case 单一字段，不再写入或读取旧 DAG 同义字段；不再生成或读取 `BUILD_TASK_DAG.md`。
 
@@ -388,7 +388,7 @@ active 生成阶段的取消粒度为整个 Workflow/PlanningRun，不提供 Uni
 {workspace}/.xcodeagent/plans/technical-plan.{md,json}
 {workspace}/.xcodeagent/checkpoints/checkpoints.sqlite
 {workspace}/.xcodeagent/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json
-{workspace}/.xcodeagent/plans/build-task-plan.pending.json
+{workspace}/.xcodeagent/drafts/plans/build-task-plan.pending.json
 {workspace}/.xcodeagent/plans/build-task-plan.json
 {workspace}/.xcodeagent/plans/repair-task-plan.json
 {workspace}/.xcodeagent/reports/test-report.json
