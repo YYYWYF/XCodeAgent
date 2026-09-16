@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import secrets
-import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,9 +11,17 @@ from typing import Any
 
 from app.config import Settings
 from app.services.agent_runtime_debug_state import (
+    discard_legacy_agent_runtime_pid_file,
+    failed_stage_for_status,
+    mark_agent_runtime_debug_state_offline,
     mark_agent_runtime_debug_state_stopped,
     read_agent_runtime_debug_port,
-    write_running_agent_runtime_debug_state,
+    reconcile_stale_running_agent_runtime_debug_state,
+    write_agent_runtime_debug_state,
+)
+from app.services.agent_runtime_heartbeat import (
+    start_agent_runtime_heartbeat,
+    stop_agent_runtime_heartbeat,
 )
 from app.services.agent_runtime_launch_support import (
     agent_runtime_environment as _agent_runtime_environment,
@@ -29,6 +36,9 @@ from app.services.agent_runtime_process_registry import (
     stop_previous_agent_runtime_process,
     terminate_agent_runtime_process,
 )
+from app.services.agent_runtime_uv import install_uv_with_official_script, resolve_uv_command
+from app.services.workspace_bootstrap.git_template_package import GitTemplatePackageBuilder
+from app.services.workspace_bootstrap.models import GitTemplateError
 
 
 class AgentRuntimeLaunchError(ValueError):
@@ -69,33 +79,13 @@ def launch_agent_runtime_project(
 
     root = Path(workspace_path).expanduser().resolve()
     agent_runtime_root = root / "agent-runtime"
-    pyproject_path = agent_runtime_root / "pyproject.toml"
     runtime_root = root / ".xcodeagent" / "runtime" / "launch"
-    if agent_runtime_root.is_symlink() or not pyproject_path.is_file():
-        return _failed_agent_runtime_launch(
-            "未找到有效的 Agent Runtime 工程：agent-runtime/pyproject.toml。",
-            root=root,
-            agent_runtime_root=agent_runtime_root,
-            runtime_root=runtime_root,
-            failed_stage="agent_runtime_validation",
-        )
-    uv_command = shutil.which("uv")
-    if not uv_command:
-        return _failed_agent_runtime_launch(
-            "未找到 Agent Runtime 包管理器命令：uv。",
-            root=root,
-            agent_runtime_root=agent_runtime_root,
-            runtime_root=runtime_root,
-            failed_stage="agent_runtime_validation",
-        )
-
     runtime_root.mkdir(parents=True, exist_ok=True)
     with agent_runtime_launch_lock(root):
         return _launch_agent_runtime_project_locked(
             root=root,
             agent_runtime_root=agent_runtime_root,
             runtime_root=runtime_root,
-            uv_command=uv_command,
             settings=settings or Settings.from_env(),
             include_debug_access=include_debug_access,
         )
@@ -106,28 +96,90 @@ def _launch_agent_runtime_project_locked(
     root: Path,
     agent_runtime_root: Path,
     runtime_root: Path,
-    uv_command: str,
     settings: Settings,
     include_debug_access: bool,
 ) -> dict[str, Any]:
-    """在工作区锁内完成旧进程清理、依赖同步和 Runtime 启动。"""
+    """在工作区锁内按 cleaning → validating → installing → starting 启动 Runtime。"""
 
+    stop_agent_runtime_heartbeat(root)
+    reconcile_stale_running_agent_runtime_debug_state(runtime_root)
+    preferred_port = read_agent_runtime_debug_port(runtime_root)
+    discard_legacy_agent_runtime_pid_file(runtime_root)
+    write_agent_runtime_debug_state(
+        runtime_root,
+        status="cleaning",
+        message="正在停止上一次 Agent Runtime。",
+    )
     prelaunch_cleanup = stop_previous_agent_runtime_process(
         workspace=root,
         agent_runtime_root=agent_runtime_root,
         runtime_root=runtime_root,
     )
     if not prelaunch_cleanup["success"]:
-        return _failed_agent_runtime_launch(
+        return _fail_launch(
             "无法安全停止上一次 Agent Runtime 进程。",
             root=root,
             agent_runtime_root=agent_runtime_root,
             runtime_root=runtime_root,
-            failed_stage="agent_runtime_cleanup",
+            status="cleanup_failed",
             prelaunch_cleanup=prelaunch_cleanup,
         )
-    mark_agent_runtime_debug_state_stopped(runtime_root)
 
+    write_agent_runtime_debug_state(
+        runtime_root,
+        status="validating",
+        message="正在校验 Agent Runtime 工程。",
+    )
+    pyproject_path = agent_runtime_root / "pyproject.toml"
+    if agent_runtime_root.is_symlink():
+        return _fail_launch(
+            "未找到有效的 Agent Runtime 工程：agent-runtime/pyproject.toml。",
+            root=root,
+            agent_runtime_root=agent_runtime_root,
+            runtime_root=runtime_root,
+            status="validation_failed",
+            prelaunch_cleanup=prelaunch_cleanup,
+        )
+    if not pyproject_path.is_file():
+        try:
+            GitTemplatePackageBuilder(settings).materialize_missing_agent_runtime_root(root)
+        except GitTemplateError as exc:
+            return _fail_launch(
+                str(exc) or "未找到有效的 Agent Runtime 工程：agent-runtime/pyproject.toml。",
+                root=root,
+                agent_runtime_root=agent_runtime_root,
+                runtime_root=runtime_root,
+                status="validation_failed",
+                prelaunch_cleanup=prelaunch_cleanup,
+            )
+    if not pyproject_path.is_file():
+        return _fail_launch(
+            "未找到有效的 Agent Runtime 工程：agent-runtime/pyproject.toml。",
+            root=root,
+            agent_runtime_root=agent_runtime_root,
+            runtime_root=runtime_root,
+            status="validation_failed",
+            prelaunch_cleanup=prelaunch_cleanup,
+        )
+    uv_command = resolve_uv_command()
+    if not uv_command:
+        install_uv_with_official_script(runtime_root=runtime_root)
+        uv_command = resolve_uv_command()
+    if not uv_command:
+        return _fail_launch(
+            "未找到 Agent Runtime 包管理器命令：uv。",
+            root=root,
+            agent_runtime_root=agent_runtime_root,
+            runtime_root=runtime_root,
+            status="validation_failed",
+            prelaunch_cleanup=prelaunch_cleanup,
+        )
+
+    write_agent_runtime_debug_state(
+        runtime_root,
+        status="installing",
+        message="正在同步 Agent Runtime 依赖。",
+    )
     install = _run_agent_runtime_install(
         workspace=root,
         agent_runtime_root=agent_runtime_root,
@@ -135,17 +187,16 @@ def _launch_agent_runtime_project_locked(
         uv_command=uv_command,
     )
     if install["returncode"] != 0:
-        return _failed_agent_runtime_launch(
+        return _fail_launch(
             "Agent Runtime 依赖同步失败。",
             root=root,
             agent_runtime_root=agent_runtime_root,
             runtime_root=runtime_root,
-            failed_stage="agent_runtime_install",
+            status="install_failed",
             install=install,
             prelaunch_cleanup=prelaunch_cleanup,
         )
 
-    preferred_port = read_agent_runtime_debug_port(runtime_root)
     port = _allocate_loopback_port(preferred_port=preferred_port)
     runtime_url = f"http://127.0.0.1:{port}"
     gateway_token = secrets.token_urlsafe(32)
@@ -160,33 +211,81 @@ def _launch_agent_runtime_project_locked(
         runtime_root=runtime_root,
         environment=environment,
     )
-    if process is not None:
-        register_agent_runtime_process(root, process)
-    ready = process is not None and _wait_for_agent_runtime_ready(
-        runtime_url, process
+    pid = process.pid if process is not None else None
+    if process is None:
+        return _fail_launch(
+            "Agent Runtime 启动命令执行失败。",
+            root=root,
+            agent_runtime_root=agent_runtime_root,
+            runtime_root=runtime_root,
+            status="start_failed",
+            install=install,
+            server=server_result,
+            prelaunch_cleanup=prelaunch_cleanup,
+            host="127.0.0.1",
+            port=port,
+        )
+    register_agent_runtime_process(root, process)
+    write_agent_runtime_debug_state(
+        runtime_root,
+        status="starting",
+        message="正在启动 Agent Runtime。",
+        pid=pid,
+        host="127.0.0.1",
+        port=port,
     )
-    returncode = process.poll() if process is not None else None
+    if process.poll() is not None:
+        returncode = process.poll()
+        return _fail_launch(
+            f"Agent Runtime 进程已退出（退出码：{returncode}）。",
+            root=root,
+            agent_runtime_root=agent_runtime_root,
+            runtime_root=runtime_root,
+            status="start_failed",
+            install=install,
+            server={**server_result, "returncode": returncode},
+            prelaunch_cleanup=prelaunch_cleanup,
+            host="127.0.0.1",
+            port=port,
+            process=process,
+        )
+
+    ready, health = _wait_for_agent_runtime_ready(runtime_url, process)
+    returncode = process.poll()
     server = {
         **server_result,
         "ready": ready,
         "returncode": returncode,
         "ready_checked_at": datetime.now(UTC).isoformat(),
     }
-    if not ready or returncode is not None:
+    if not ready:
         if returncode is not None:
-            message = f"Agent Runtime 进程已退出（退出码：{returncode}）。"
-        elif process is None:
-            message = "Agent Runtime 启动命令执行失败。"
-        else:
-            message = "Agent Runtime 健康检查超时。"
-        if process is not None:
-            server["cleanup"] = terminate_agent_runtime_process(
-                workspace=root,
+            return _fail_launch(
+                f"Agent Runtime 进程已退出（退出码：{returncode}）。",
+                root=root,
+                agent_runtime_root=agent_runtime_root,
+                runtime_root=runtime_root,
+                status="start_failed",
+                install=install,
+                server=server,
+                prelaunch_cleanup=prelaunch_cleanup,
+                host="127.0.0.1",
+                port=port,
                 process=process,
-                pid_file=Path(str(server_result["pid_file"])),
             )
+        server["cleanup"] = terminate_agent_runtime_process(
+            workspace=root,
+            process=process,
+            pid_file=None,
+        )
+        mark_agent_runtime_debug_state_offline(
+            runtime_root,
+            message="Agent Runtime 健康检查超时。",
+            health=health if health is not None else "ETIMEDOUT",
+            clear_pid=True,
+        )
         return _failed_agent_runtime_launch(
-            message,
+            "Agent Runtime 健康检查超时。",
             root=root,
             agent_runtime_root=agent_runtime_root,
             runtime_root=runtime_root,
@@ -196,30 +295,37 @@ def _launch_agent_runtime_project_locked(
             prelaunch_cleanup=prelaunch_cleanup,
         )
 
-    if include_debug_access:
-        try:
-            write_running_agent_runtime_debug_state(
-                runtime_root=runtime_root,
-                port=port,
-                debug_token=gateway_token,
-            )
-        except OSError as exc:
-            server["cleanup"] = terminate_agent_runtime_process(
-                workspace=root,
-                process=process,
-                pid_file=Path(str(server_result["pid_file"])),
-            )
-            return _failed_agent_runtime_launch(
-                f"Agent Runtime 已启动，但无法记录工作区调试状态：{exc}",
-                root=root,
-                agent_runtime_root=agent_runtime_root,
-                runtime_root=runtime_root,
-                failed_stage="agent_runtime_debug_state",
-                install=install,
-                server=server,
-                prelaunch_cleanup=prelaunch_cleanup,
-            )
+    try:
+        write_agent_runtime_debug_state(
+            runtime_root,
+            status="running",
+            message="Agent Runtime 已启动并就绪。",
+            pid=pid,
+            host="127.0.0.1",
+            port=port,
+            health=200,
+            debug_token=gateway_token if include_debug_access else None,
+        )
+    except OSError as exc:
+        server["cleanup"] = terminate_agent_runtime_process(
+            workspace=root,
+            process=process,
+            pid_file=None,
+        )
+        return _fail_launch(
+            f"Agent Runtime 已启动，但无法记录工作区调试状态：{exc}",
+            root=root,
+            agent_runtime_root=agent_runtime_root,
+            runtime_root=runtime_root,
+            status="debug_state_failed",
+            install=install,
+            server=server,
+            prelaunch_cleanup=prelaunch_cleanup,
+            host="127.0.0.1",
+            port=port,
+        )
 
+    start_agent_runtime_heartbeat(root)
     result = {
         **_base_agent_runtime_payload(root, agent_runtime_root, runtime_root),
         "status": "running",
@@ -228,11 +334,9 @@ def _launch_agent_runtime_project_locked(
         "server": server,
         "prelaunch_cleanup": prelaunch_cleanup,
         "failed_stage": None,
-        # 仅用于本轮后续失败时回滚，写入节点状态前由聚合启动器移除。
         "_process": process,
     }
     if include_debug_access:
-        # 临时调试动作显式请求时才返回；普通预览启动和持久化结果不携带凭据。
         result["_debug_access"] = {
             "runtime_url": runtime_url,
             "gateway_token": gateway_token,
@@ -247,17 +351,20 @@ def stop_agent_runtime_project(
     """停止本次启动的 Runtime，并把清理证据写回启动结果。"""
 
     root = Path(str(launch_result["workspace"])).expanduser().resolve()
+    runtime_root = Path(str(launch_result.get("runtime_root") or ""))
+    stop_agent_runtime_heartbeat(root)
     server = launch_result.get("server")
     if not isinstance(server, dict):
         server = {}
         launch_result["server"] = server
-    pid_file_value = server.get("pid_file")
     with agent_runtime_launch_lock(root):
         cleanup = terminate_agent_runtime_process(
             workspace=root,
             process=process,
-            pid_file=Path(str(pid_file_value)) if pid_file_value else None,
+            pid_file=None,
         )
+        if runtime_root:
+            mark_agent_runtime_debug_state_stopped(runtime_root)
     server["cleanup"] = cleanup
     launch_result["status"] = "stopped"
     launch_result["message"] = "预览启动失败，已停止本次 Agent Runtime。"
@@ -273,6 +380,7 @@ def stop_workspace_agent_runtime_project(
     agent_runtime_root = root / "agent-runtime"
     runtime_root = root / ".xcodeagent" / "runtime" / "launch"
     runtime_root.mkdir(parents=True, exist_ok=True)
+    stop_agent_runtime_heartbeat(root)
     with agent_runtime_launch_lock(root):
         cleanup = stop_previous_agent_runtime_process(
             workspace=root,
@@ -310,6 +418,51 @@ def _base_agent_runtime_payload(
         "agent_runtime_relative_path": "agent-runtime",
         "runtime_root": str(runtime_root),
     }
+
+
+def _fail_launch(
+    message: str,
+    *,
+    root: Path,
+    agent_runtime_root: Path,
+    runtime_root: Path,
+    status: str,
+    install: dict[str, Any] | None = None,
+    server: dict[str, Any] | None = None,
+    prelaunch_cleanup: dict[str, Any] | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    process: subprocess.Popen[bytes] | None = None,
+) -> dict[str, Any]:
+    """写入融合失败 status，并返回不泄露 fallback 配置的启动失败结果。"""
+
+    if process is not None:
+        current_server = server if isinstance(server, dict) else {}
+        current_server["cleanup"] = terminate_agent_runtime_process(
+            workspace=root,
+            process=process,
+            pid_file=None,
+        )
+        server = current_server
+    write_agent_runtime_debug_state(
+        runtime_root,
+        status=status,
+        message=message,
+        host=host,
+        port=port,
+        health=None,
+        debug_token=None,
+    )
+    return _failed_agent_runtime_launch(
+        message,
+        root=root,
+        agent_runtime_root=agent_runtime_root,
+        runtime_root=runtime_root,
+        failed_stage=failed_stage_for_status(status) or status,
+        install=install,
+        server=server,
+        prelaunch_cleanup=prelaunch_cleanup,
+    )
 
 
 def _failed_agent_runtime_launch(

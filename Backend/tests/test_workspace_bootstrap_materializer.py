@@ -16,7 +16,7 @@ from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 class _FailingGitManager:
     """模拟 Git 初始化后 baseline commit 失败的受控依赖。"""
 
-    def initialize_baseline(self, workspace: str | Path) -> str:
+    def initialize_baseline(self, workspace: str | Path, **_kwargs: object) -> str:
         """留下 `.git` 后失败，用于验证 Journal 的受管回滚。"""
 
         Path(workspace, ".git").mkdir()

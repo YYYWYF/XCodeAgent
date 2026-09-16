@@ -168,6 +168,12 @@ def _cleanup_interrupted_bootstrap(workspace: Path) -> None:
         raise WorkspaceBootstrapError("Workspace Attach 未能清理受管产物：" + "、".join(remaining))
 
 
+def clear_failed_bootstrap_outputs(workspace: str | Path) -> None:
+    """重试首次 Bootstrap 前清除上一轮失败残留的受管产物，保留规划与 lifecycle。"""
+
+    _cleanup_interrupted_bootstrap(Path(workspace).expanduser().resolve(strict=False))
+
+
 def _workspace_key(workspace: str | Path) -> str:
     """生成跨调用一致的工作区键。"""
 

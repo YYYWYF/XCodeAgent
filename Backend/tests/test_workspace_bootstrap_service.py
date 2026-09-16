@@ -30,6 +30,11 @@ def _settings() -> SimpleNamespace:
         template_package_max_bytes=1024 * 1024,
         template_package_max_files=100,
         template_package_max_extracted_bytes=1024 * 1024,
+        template_git_agent_runtime_repository_url=(
+            "https://github.com/Bettetman/agent-runtime-template.git"
+        ),
+        template_git_agent_runtime_branch="master",
+        template_git_clone_timeout_seconds=30,
     )
 
 
@@ -61,6 +66,7 @@ def _prepare_generating_workspace(workspace: Path) -> None:
                 "sourceConfigRevision": 1,
                 "authorization_manifest": {"enabled": False},
                 "template_capabilities": {},
+                "agent_contracts": [],
             },
         ),
     ):
@@ -152,3 +158,40 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
                     asyncio.run(service._run(workspace))
 
             generate.assert_not_awaited()
+
+    def test_engine_source_supplements_agent_runtime_for_agent_contracts(self) -> None:
+        """有业务 Agent 时 Engine 下载后必须补齐第三根，再进入统一校验。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            _prepare_generating_workspace(workspace)
+            plan_file = workspace / ".xcodeagent/plans/technical-plan.json"
+            plan = json.loads(plan_file.read_text(encoding="utf-8"))
+            plan["agent_contracts"] = [{"agentId": "policy_assistant"}]
+            plan_file.write_text(json.dumps(plan), encoding="utf-8")
+            package = workspace / "engine.zip"
+            _write_package(package, include_application=True)
+            download = TemplatePackageDownload(
+                temporary_path=package,
+                sha256="ignored",
+                size=package.stat().st_size,
+                content_type="application/zip",
+            )
+            service = WorkspaceBootstrapService(_settings())
+            with patch(
+                "app.services.workspace_bootstrap.service.TemplateEngineClient.generate",
+                new=AsyncMock(return_value=download),
+            ), patch(
+                "app.services.workspace_bootstrap.service.GitTemplatePackageBuilder.supplement_engine_package",
+                return_value=download,
+            ) as supplement:
+                with self.assertRaisesRegex(
+                    WorkspaceBootstrapError, "必须包含本轮全部 managed roots"
+                ):
+                    asyncio.run(service._run(workspace))
+
+            supplement.assert_called_once()
+            self.assertEqual(
+                supplement.call_args.args[-1],
+                ("frontend", "backend", "agent-runtime"),
+            )

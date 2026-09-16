@@ -8,7 +8,6 @@ from app.branding import WORKSPACE_ARTIFACT_DIR_NAME
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapError
 from app.services.workspace_process_registry import workspace_process_registry
 
-
 class BootstrapGitError(WorkspaceBootstrapError):
     """表示首次 Git 初始化或 baseline 提交未完成。"""
 
@@ -27,8 +26,13 @@ _GITIGNORE_CONTENT = "\n".join(
 class BootstrapGitManager:
     """为新工作区创建模板 baseline（含 .devagentstudio 规划产物）。"""
 
-    def initialize_baseline(self, workspace: str | Path) -> str:
-        """初始化独立仓库、固定本地身份并提交 frontend/backend/.devagentstudio 规划产物。"""
+    def initialize_baseline(
+        self,
+        workspace: str | Path,
+        *,
+        managed_roots: tuple[str, ...] = ("frontend", "backend"),
+    ) -> str:
+        """初始化独立仓库，并提交本轮模板 roots 与 .devagentstudio 规划产物。"""
 
         root = Path(workspace).expanduser().resolve()
         self._run(root, ["git", "init"])
@@ -38,8 +42,8 @@ class BootstrapGitManager:
         gitignore = root / ".gitignore"
         if not gitignore.exists():
             gitignore.write_text(_GITIGNORE_CONTENT, encoding="utf-8")
-        # 提交 frontend/backend 和 .devagentstudio 规划产物（运行时目录已被 gitignore 排除）。
-        add_paths = ["frontend", "backend", ".gitignore"]
+        # 提交动态模板 roots 和 .devagentstudio 规划产物（运行时目录已被 gitignore 排除）。
+        add_paths = [*managed_roots, ".gitignore"]
         if (root / WORKSPACE_ARTIFACT_DIR_NAME).is_dir():
             add_paths.append(WORKSPACE_ARTIFACT_DIR_NAME)
         self._run(root, ["git", "add", "--", *add_paths])

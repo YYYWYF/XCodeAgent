@@ -10,6 +10,11 @@ from unittest.mock import MagicMock, patch
 
 from app.config import Settings
 from app.services import agent_runtime_process_registry
+from app.services.agent_runtime_debug_state import (
+    reconcile_stale_running_agent_runtime_debug_state,
+    write_agent_runtime_debug_state,
+)
+from app.services.agent_runtime_heartbeat import tick_agent_runtime_heartbeat
 from app.services.agent_runtime_project_launcher import (
     AgentRuntimeLaunchError,
     _agent_runtime_environment,
@@ -155,7 +160,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
             (runtime / "pyproject.toml").write_text("[project]\nname='test'\n")
             with (
                 patch(
-                    "app.services.agent_runtime_project_launcher.shutil.which",
+                    "app.services.agent_runtime_project_launcher.resolve_uv_command",
                     return_value="/usr/local/bin/uv",
                 ),
                 patch(
@@ -172,20 +177,14 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
                 ),
                 patch(
                     "app.services.agent_runtime_project_launcher._start_agent_runtime_server",
-                    return_value=(
-                        {
-                            "pid": 12345,
-                            "pid_file": str(
-                                root
-                                / ".xcodeagent/runtime/launch/agent-runtime.pid"
-                            ),
-                        },
-                        fake_process,
-                    ),
+                    return_value=({"pid": 12345}, fake_process),
                 ) as start,
                 patch(
                     "app.services.agent_runtime_project_launcher._wait_for_agent_runtime_ready",
-                    return_value=True,
+                    return_value=(True, 200),
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.start_agent_runtime_heartbeat"
                 ),
                 patch(
                     "app.services.agent_runtime_project_launcher.secrets.token_urlsafe",
@@ -193,10 +192,17 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
                 ),
             ):
                 result = launch_agent_runtime_project(root, settings=_settings())
+            state = json.loads(
+                (
+                    root / ".xcodeagent/runtime/launch/agent-runtime-debug.json"
+                ).read_text(encoding="utf-8")
+            )
 
         self.assertEqual(result["status"], "running")
         self.assertNotIn("managed-test-key", repr(result))
         self.assertNotIn("generated-runtime-token", repr(result))
+        self.assertIsNone(state["debugToken"])
+        self.assertNotIn("managed-test-key", json.dumps(state))
         self.assertEqual(
             start.call_args.kwargs["environment"][
                 "XCODEAGENT_FALLBACK_MODEL_API_KEY"
@@ -216,7 +222,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
             (runtime / "pyproject.toml").write_text("[project]\nname='test'\n")
             with (
                 patch(
-                    "app.services.agent_runtime_project_launcher.shutil.which",
+                    "app.services.agent_runtime_project_launcher.resolve_uv_command",
                     return_value="/usr/local/bin/uv",
                 ),
                 patch(
@@ -233,19 +239,14 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
                 ) as allocate_port,
                 patch(
                     "app.services.agent_runtime_project_launcher._start_agent_runtime_server",
-                    return_value=(
-                        {
-                            "pid": 12345,
-                            "pid_file": str(
-                                root / ".xcodeagent/runtime/launch/agent-runtime.pid"
-                            ),
-                        },
-                        fake_process,
-                    ),
+                    return_value=({"pid": 12345}, fake_process),
                 ),
                 patch(
                     "app.services.agent_runtime_project_launcher._wait_for_agent_runtime_ready",
-                    return_value=True,
+                    return_value=(True, 200),
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.start_agent_runtime_heartbeat"
                 ),
                 patch(
                     "app.services.agent_runtime_project_launcher.secrets.token_urlsafe",
@@ -263,13 +264,26 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
                 / ".xcodeagent/runtime/launch/agent-runtime-debug.json"
             )
             state = json.loads(state_path.read_text(encoding="utf-8"))
+            leftover_pid = (
+                root / ".xcodeagent/runtime/launch/agent-runtime.pid"
+            ).exists()
 
         self.assertEqual(result["status"], "running")
         allocate_port.assert_called_once_with(preferred_port=None)
         self.assertEqual(state["status"], "running")
+        self.assertEqual(state["service"], "agent-runtime")
         self.assertEqual(state["port"], 18110)
-        self.assertEqual(state["health"], {"status": "healthy"})
+        self.assertEqual(state["pid"], 12345)
+        self.assertEqual(state["health"], 200)
         self.assertEqual(state["debugToken"], "generated-runtime-token")
+        self.assertIn("updateTime", state)
+        self.assertTrue(str(state["updateTime"]).endswith("+08:00"))
+        self.assertNotIn("errorCode", state)
+        self.assertNotIn("reused", state)
+        self.assertNotIn("stage", state)
+        self.assertNotIn("failedStage", state)
+        self.assertNotIn("logs", state)
+        self.assertFalse(leftover_pid)
 
     def test_pid_recovery_accepts_runtime_command_with_matching_cwd(self) -> None:
         """验证后端重启后可通过进程工作目录识别旧 Runtime。"""
@@ -280,9 +294,16 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
             runtime.mkdir()
             runtime_root = root / ".xcodeagent/runtime/launch"
             runtime_root.mkdir(parents=True)
-            (runtime_root / "agent-runtime.pid").write_text(
-                "12345", encoding="utf-8"
+            write_agent_runtime_debug_state(
+                runtime_root,
+                status="offline",
+                message="Agent Runtime 监督已断开。",
+                pid=12345,
+                host="127.0.0.1",
+                port=18110,
+                health=200,
             )
+            (runtime_root / "agent-runtime.pid").write_text("99999", encoding="utf-8")
 
             def mark_terminated(pid: int, cleanup: dict[str, object]) -> None:
                 """模拟成功结束已经通过身份校验的恢复进程。"""
@@ -321,8 +342,12 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
                     )
                 )
 
+            leftover_pid = (runtime_root / "agent-runtime.pid").exists()
+
         self.assertTrue(cleanup["success"])
         self.assertTrue(cleanup["identity_matched"])
+        self.assertEqual(cleanup["source"], "debug_state")
+        self.assertFalse(leftover_pid)
 
     def test_pid_recovery_rejects_runtime_command_from_another_cwd(self) -> None:
         """验证同名 Runtime 位于其他工作区时仍会拒绝终止。"""
@@ -333,8 +358,14 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
             runtime.mkdir()
             runtime_root = root / ".xcodeagent/runtime/launch"
             runtime_root.mkdir(parents=True)
-            (runtime_root / "agent-runtime.pid").write_text(
-                "12345", encoding="utf-8"
+            write_agent_runtime_debug_state(
+                runtime_root,
+                status="offline",
+                message="Agent Runtime 监督已断开。",
+                pid=12345,
+                host="127.0.0.1",
+                port=18110,
+                health=200,
             )
 
             with (
@@ -346,7 +377,10 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
                 patch.object(
                     agent_runtime_process_registry,
                     "_query_process_command",
-                    return_value=(f"uv --directory {runtime} run agent-runtime", None),
+                    return_value=(
+                        f"uv --directory {root / 'another-runtime'} run agent-runtime",
+                        None,
+                    ),
                 ),
                 patch.object(
                     agent_runtime_process_registry,
@@ -416,6 +450,261 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["failed_stage"], "agent_runtime_start")
         stop_backend.assert_called_once_with(backend, backend_process)
         launch_frontend.assert_not_called()
+
+    def test_install_failure_persists_install_failed_status(self) -> None:
+        """验证依赖同步失败会在状态文件写下 install_failed。"""
+
+        install = {
+            "returncode": 1,
+            "stdout_log": "agent-runtime-install.stdout.log",
+            "stderr_log": "agent-runtime-install.stderr.log",
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            runtime = root / "agent-runtime"
+            runtime.mkdir()
+            (runtime / "pyproject.toml").write_text("[project]\nname='test'\n")
+            statuses: list[str] = []
+
+            def capture_status(runtime_root: Path, **kwargs):  # type: ignore[no-untyped-def]
+                """记录启动器写入的融合 status，并继续落盘。"""
+
+                statuses.append(str(kwargs.get("status")))
+                return write_agent_runtime_debug_state(runtime_root, **kwargs)
+
+            with (
+                patch(
+                    "app.services.agent_runtime_project_launcher.resolve_uv_command",
+                    return_value="/usr/local/bin/uv",
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.stop_previous_agent_runtime_process",
+                    return_value={"success": True, "attempted": False},
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._run_agent_runtime_install",
+                    return_value=install,
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.write_agent_runtime_debug_state",
+                    side_effect=capture_status,
+                ),
+            ):
+                result = launch_agent_runtime_project(root, settings=_settings())
+            state = json.loads(
+                (
+                    root / ".xcodeagent/runtime/launch/agent-runtime-debug.json"
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failed_stage"], "agent_runtime_install")
+        self.assertEqual(
+            statuses,
+            ["cleaning", "validating", "installing", "install_failed"],
+        )
+        self.assertEqual(state["status"], "install_failed")
+        self.assertIsNone(state["health"])
+        self.assertNotIn("unhealthy", json.dumps(state))
+        self.assertIn("agent-runtime-install.stderr.log", install["stderr_log"])
+
+    def test_health_timeout_persists_offline_status(self) -> None:
+        """验证 /health 超时写入 offline 而不是 start_failed。"""
+
+        fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            runtime = root / "agent-runtime"
+            runtime.mkdir()
+            (runtime / "pyproject.toml").write_text("[project]\nname='test'\n")
+            with (
+                patch(
+                    "app.services.agent_runtime_project_launcher.resolve_uv_command",
+                    return_value="/usr/local/bin/uv",
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.stop_previous_agent_runtime_process",
+                    return_value={"success": True, "attempted": False},
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._run_agent_runtime_install",
+                    return_value={"returncode": 0},
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._allocate_loopback_port",
+                    return_value=18110,
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._start_agent_runtime_server",
+                    return_value=({"pid": 12345}, fake_process),
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._wait_for_agent_runtime_ready",
+                    return_value=(False, "ETIMEDOUT"),
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.terminate_agent_runtime_process",
+                    return_value={"success": True},
+                ),
+            ):
+                result = launch_agent_runtime_project(root, settings=_settings())
+            state = json.loads(
+                (
+                    root / ".xcodeagent/runtime/launch/agent-runtime-debug.json"
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failed_stage"], "agent_runtime_start")
+        self.assertEqual(state["status"], "offline")
+        self.assertEqual(state["health"], "ETIMEDOUT")
+        self.assertIsNone(state["pid"])
+        self.assertIsNone(state["debugToken"])
+
+    def test_missing_uv_tries_official_install_before_validation_failed(self) -> None:
+        """验证找不到 uv 时先走官方安装，仍失败才写 validation_failed。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            runtime = root / "agent-runtime"
+            runtime.mkdir()
+            (runtime / "pyproject.toml").write_text("[project]\nname='test'\n")
+            with (
+                patch(
+                    "app.services.agent_runtime_project_launcher.resolve_uv_command",
+                    return_value=None,
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.install_uv_with_official_script",
+                    return_value={"succeeded": False},
+                ) as install_uv,
+                patch(
+                    "app.services.agent_runtime_project_launcher.stop_previous_agent_runtime_process",
+                    return_value={"success": True, "attempted": False},
+                ),
+            ):
+                result = launch_agent_runtime_project(root, settings=_settings())
+            state = json.loads(
+                (
+                    root / ".xcodeagent/runtime/launch/agent-runtime-debug.json"
+                ).read_text(encoding="utf-8")
+            )
+
+        install_uv.assert_called_once()
+        self.assertEqual(result["failed_stage"], "agent_runtime_validation")
+        self.assertEqual(state["status"], "validation_failed")
+
+    def test_missing_runtime_project_is_provisioned_from_git_template(self) -> None:
+        """工作区缺少 pyproject.toml 时先从 Git 模板补齐，再继续启动。"""
+
+        fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
+        install = {"returncode": 0, "stdout_log": "", "stderr_log": ""}
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+
+            def provision_runtime(_self, workspace_path):  # type: ignore[no-untyped-def]
+                """模拟 Git 模板把 pyproject.toml 写入工作区。"""
+
+                runtime = Path(workspace_path) / "agent-runtime"
+                runtime.mkdir()
+                (runtime / "pyproject.toml").write_text("[project]\nname='test'\n")
+                return True
+
+            with (
+                patch(
+                    "app.services.agent_runtime_project_launcher.GitTemplatePackageBuilder.materialize_missing_agent_runtime_root",
+                    new=provision_runtime,
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.resolve_uv_command",
+                    return_value="/usr/local/bin/uv",
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.stop_previous_agent_runtime_process",
+                    return_value={"success": True, "attempted": False},
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._run_agent_runtime_install",
+                    return_value=install,
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._allocate_loopback_port",
+                    return_value=18110,
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._start_agent_runtime_server",
+                    return_value=({"pid": 12345}, fake_process),
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._wait_for_agent_runtime_ready",
+                    return_value=(True, 200),
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.start_agent_runtime_heartbeat"
+                ),
+            ):
+                result = launch_agent_runtime_project(root, settings=_settings())
+            self.assertEqual(result["status"], "running")
+            self.assertTrue((root / "agent-runtime/pyproject.toml").is_file())
+
+    def test_stale_running_status_is_rewritten_offline(self) -> None:
+        """验证超过约 15 秒未刷新的 running 会被改成 offline。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            runtime_root = Path(workspace) / ".xcodeagent/runtime/launch"
+            runtime_root.mkdir(parents=True)
+            write_agent_runtime_debug_state(
+                runtime_root,
+                status="running",
+                message="Agent Runtime 已启动并就绪。",
+                pid=18432,
+                host="127.0.0.1",
+                port=61245,
+                health=200,
+                debug_token="keep-token",
+            )
+            stale = json.loads(
+                (runtime_root / "agent-runtime-debug.json").read_text(encoding="utf-8")
+            )
+            stale["updateTime"] = "2026-09-16T09:00:00.000+08:00"
+            (runtime_root / "agent-runtime-debug.json").write_text(
+                json.dumps(stale), encoding="utf-8"
+            )
+            reconciled = reconcile_stale_running_agent_runtime_debug_state(runtime_root)
+
+        self.assertEqual(reconciled["status"], "offline")
+        self.assertEqual(reconciled["health"], 200)
+        self.assertEqual(reconciled["pid"], 18432)
+        self.assertEqual(reconciled["debugToken"], "keep-token")
+
+    def test_heartbeat_marks_offline_when_port_refused(self) -> None:
+        """验证心跳探测到 ECONNREFUSED 后把 running 改成 offline 并清掉 Token。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            runtime_root = root / ".xcodeagent/runtime/launch"
+            runtime_root.mkdir(parents=True)
+            write_agent_runtime_debug_state(
+                runtime_root,
+                status="running",
+                message="Agent Runtime 已启动并就绪。",
+                pid=18432,
+                host="127.0.0.1",
+                port=61245,
+                health=200,
+                debug_token="debug-token",
+            )
+            with patch(
+                "app.services.agent_runtime_heartbeat.probe_agent_runtime_health",
+                return_value=("ECONNREFUSED", False),
+            ):
+                state = tick_agent_runtime_heartbeat(root)
+
+        self.assertEqual(state["status"], "offline")
+        self.assertEqual(state["health"], "ECONNREFUSED")
+        self.assertEqual(state["pid"], 18432)
+        self.assertIsNone(state["debugToken"])
+        self.assertNotEqual(state["status"], "unhealthy")
 
 
 if __name__ == "__main__":

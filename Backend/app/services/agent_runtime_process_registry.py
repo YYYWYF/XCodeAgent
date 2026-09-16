@@ -12,6 +12,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.services.agent_runtime_debug_state import (
+    discard_legacy_agent_runtime_pid_file,
+    read_agent_runtime_debug_pid,
+)
+
 
 AGENT_RUNTIME_STOP_TIMEOUT_SECONDS = 5
 AGENT_RUNTIME_STOP_POLL_INTERVAL_SECONDS = 0.05
@@ -39,9 +44,12 @@ def register_agent_runtime_process(
 
 
 def clear_agent_runtime_process_registry_workspace(workspace: str | Path) -> bool:
-    """应用删除完成后移除目标工作区遗留的 Runtime 进程和锁缓存。"""
+    """应用删除完成后移除目标工作区遗留的 Runtime 进程、心跳和锁缓存。"""
 
     workspace_path = Path(workspace).expanduser().resolve(strict=False)
+    from app.services.agent_runtime_heartbeat import stop_agent_runtime_heartbeat
+
+    stop_agent_runtime_heartbeat(workspace_path)
     workspace_key = _workspace_key(workspace_path)
     with _AGENT_RUNTIME_REGISTRY_GUARD:
         process = _AGENT_RUNTIME_PROCESSES.get(workspace_key)
@@ -58,22 +66,22 @@ def stop_previous_agent_runtime_process(
     agent_runtime_root: Path,
     runtime_root: Path,
 ) -> dict[str, Any]:
-    """优先停止内存登记进程，并安全回退到 PID 文件。"""
+    """优先停止内存登记进程，并安全回退到状态文件中的 PID。"""
 
-    pid_file = runtime_root / "agent-runtime.pid"
+    discard_legacy_agent_runtime_pid_file(runtime_root)
     with _AGENT_RUNTIME_REGISTRY_GUARD:
         process = _AGENT_RUNTIME_PROCESSES.get(_workspace_key(workspace))
     if process is not None:
         return terminate_agent_runtime_process(
             workspace=workspace,
             process=process,
-            pid_file=pid_file,
+            pid_file=None,
             source="memory",
         )
-    return _stop_agent_runtime_process_from_pid_file(
+    return _stop_agent_runtime_process_from_debug_state(
         workspace=workspace,
         agent_runtime_root=agent_runtime_root,
-        pid_file=pid_file,
+        runtime_root=runtime_root,
     )
 
 
@@ -118,35 +126,26 @@ def terminate_agent_runtime_process(
     return cleanup
 
 
-def _stop_agent_runtime_process_from_pid_file(
+def _stop_agent_runtime_process_from_debug_state(
     *,
     workspace: Path,
     agent_runtime_root: Path,
-    pid_file: Path,
+    runtime_root: Path,
 ) -> dict[str, Any]:
-    """校验 PID 对应命令属于当前 Runtime 后再终止恢复出的进程。"""
+    """校验状态文件 PID 对应命令属于当前 Runtime 后再终止恢复出的进程。"""
 
-    if not pid_file.is_file():
+    pid = read_agent_runtime_debug_pid(runtime_root)
+    if pid is None:
         cleanup = _cleanup_result(attempted=False, source="none", pid=None)
         cleanup["success"] = True
         cleanup["finished_at"] = datetime.now(UTC).isoformat()
         return cleanup
-    try:
-        pid = int(pid_file.read_text(encoding="utf-8").strip())
-        if pid <= 0:
-            raise ValueError("PID 必须为正整数")
-    except (OSError, ValueError) as exc:
-        cleanup = _cleanup_result(attempted=False, source="pid_file", pid=None)
-        cleanup["error"] = f"无法读取有效的 Agent Runtime PID 文件：{exc}"
-        cleanup["finished_at"] = datetime.now(UTC).isoformat()
-        return cleanup
 
-    cleanup = _cleanup_result(attempted=True, source="pid_file", pid=pid)
+    cleanup = _cleanup_result(attempted=True, source="debug_state", pid=pid)
     if not _pid_is_running(pid):
         cleanup["attempted"] = False
         cleanup["stale"] = True
         cleanup["success"] = True
-        _remove_pid_file(pid_file, cleanup, expected_pid=pid)
         cleanup["finished_at"] = datetime.now(UTC).isoformat()
         return cleanup
 
@@ -179,7 +178,6 @@ def _stop_agent_runtime_process_from_pid_file(
     _terminate_recovered_pid(pid, cleanup)
     if cleanup["success"]:
         _unregister_agent_runtime_process(workspace, None)
-        _remove_pid_file(pid_file, cleanup, expected_pid=pid)
     cleanup["finished_at"] = datetime.now(UTC).isoformat()
     return cleanup
 
