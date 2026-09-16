@@ -61,6 +61,23 @@ class WorkflowRoutingTests(unittest.TestCase):
             "api_design_readiness_gate",
         )
 
+    def test_workflow_start_routes_agent_to_development_readiness(self) -> None:
+        """首次开发 Agent 必须进入专用开发前置检查，不能误入页面/API 门禁。"""
+
+        self.assertEqual(
+            route_workflow_start(
+                {
+                    "selected_agent_id": "support_agent",
+                    "detail_target_type": "agent",
+                    "build_execution_scope": {
+                        "type": "agent",
+                        "targetId": "support_agent",
+                    },
+                }
+            ),
+            "development_readiness_gate",
+        )
+
     def test_workflow_start_can_resume_from_entity_source_binding(self) -> None:
         self.assertEqual(
             route_workflow_start({"resume_from": "entity_source_binding"}),
