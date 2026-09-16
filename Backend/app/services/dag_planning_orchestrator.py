@@ -266,7 +266,9 @@ async def plan_dag_sequential(
         try:
             assembled = assemble_scope_build_task_plan(
                 base_confirmed_plan=frozen.base_confirmed_plan, skeleton_plan=frozen.skeleton_plan,
-                project_plan=frozen.project_plan, build_context=frozen.build_context,
+                project_plan=frozen.project_plan,
+                product_plan=frozen.formal_contract_inputs.product_plan.content,
+                build_context=frozen.build_context,
                 build_execution_scope=frozen.build_execution_scope,
                 reuse_facts=frozen.reuse_facts, generation_requirements_by_unit=requirements.generation_requirements_by_unit,
                 candidates_by_unit={key: snapshot.candidates[snapshot.unit_states[key].latest_candidate_id]

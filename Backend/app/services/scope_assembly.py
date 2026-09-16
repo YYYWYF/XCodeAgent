@@ -29,7 +29,11 @@ from app.services.planning_frozen import (
     tuple_input,
 )
 from app.services.planning_issues import ValidationIssue
-from app.services.route_projection import RouteProjectionError, compile_route_projection
+from app.services.template_route_projector import (
+    TemplateRouteProjectorError,
+    build_route_projector_input,
+    requires_route_projection,
+)
 from app.services.template_state import validate_template_context
 from app.services.unit_generation_contracts import (
     CandidateAttempt,
@@ -399,6 +403,7 @@ def assemble_scope_build_task_plan(
     base_confirmed_plan: Mapping[str, Any] | None,
     skeleton_plan: Mapping[str, Any],
     project_plan: Mapping[str, Any],
+    product_plan: Mapping[str, Any],
     build_context: Mapping[str, Any],
     build_execution_scope: Mapping[str, Any],
     reuse_facts: ReuseFacts | Mapping[str, Any],
@@ -417,7 +422,8 @@ def assemble_scope_build_task_plan(
         isinstance(value, Mapping)
         for value in (
             skeleton_plan,
-            project_plan,
+        project_plan,
+        product_plan,
             build_context,
             build_execution_scope,
             generation_requirements_by_unit,
@@ -438,13 +444,18 @@ def assemble_scope_build_task_plan(
             "当前 Frozen Planning Inputs 的 template_context 不满足 V2 绑定契约。",
             error=str(exc),
         )
-    # Route Projection 是应用级 Build DAG Root 事实，必须由完整 TechnicalPlan 提前冻结。
+    # Route Projection 只消费 ProductPlan 与 authorization manifest，DAG 不保存页面正文。
     try:
-        route_projection = compile_route_projection(plain_json(project_plan))
-    except RouteProjectionError as exc:
+        route_input = build_route_projector_input(
+            plain_json(product_plan), plain_json(project_plan.get("authorization_manifest")),
+        )
+        route_projection_required = requires_route_projection(
+            build_context.get("previous_successful_route_facts"), route_input,
+        )
+    except TemplateRouteProjectorError as exc:
         _raise_input(
-            "SCOPE_ROUTE_PROJECTION_INVALID",
-            "当前 TechnicalPlan 无法生成 Route Projection。",
+            "SCOPE_ROUTE_PROJECTOR_INPUT_INVALID",
+            "当前正式产物无法生成 Route Projector Input。",
             error=str(exc),
         )
     _, retained = _retained_tasks(base_confirmed_plan)
@@ -460,6 +471,18 @@ def assemble_scope_build_task_plan(
         raise ScopeAssemblyError(collision_issues)
 
     all_tasks = [*retained, *candidates]
+    if route_projection_required:
+        normal_task_ids = [str(task["id"]) for task in all_tasks]
+        all_tasks.append({
+            "id": "platform_route_projection", "unit_id": "application:root",
+            "owner": "frontend", "task_type": "platform.action",
+            "execution_strategy": "deterministic", "platform_executor": "template.route_projection",
+            "description": "根据确认的页面事实调用模板 Route Projector 统一注册业务路由。",
+            "dependencies": normal_task_ids, "target_files": [], "allowed_paths": [],
+            "provides_capabilities": ["platform.route_projection"],
+            "source_refs": {"artifact": "confirmed-product-plan", "kind": "route_projection"},
+            "deliverables": [],
+        })
     skeleton = _validate_task_units(skeleton_plan, all_tasks)
     retained_task_ids = tuple(str(task["id"]) for task in retained)
     candidate_task_ids = tuple(str(task["id"]) for task in candidates)
@@ -510,8 +533,8 @@ def assemble_scope_build_task_plan(
     ):
         assembled.pop(field, None)
     assembled["status"] = "ready" if graph_valid and not blocked_batches else "blocked"
-    # 不继承基线或按本次 Scope 裁剪；始终覆盖为当前完整页面事实的确定性投影。
-    assembled["route_projection"] = deepcopy(route_projection)
+    # 页面正文只在模板执行时由冻结正式输入组装，DAG 仅表达是否存在该平台动作。
+    assembled.pop("route_projection", None)
     task_origins = {
         **{task_id: "retained" for task_id in retained_task_ids},
         **{task_id: "candidate" for task_id in candidate_task_ids},

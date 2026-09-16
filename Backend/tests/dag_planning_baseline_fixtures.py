@@ -13,7 +13,6 @@ from app.services.authorization_overlay import compile_authorization_overlay
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.build_task_planner import create_build_task_plan
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
-from app.services.route_projection import compile_route_projection
 from app.workspace.endpoint_design_documents import (
     technical_plan_sha256,
     write_endpoint_design,
@@ -252,8 +251,6 @@ def compiled_plan(plan: dict, scope: dict, *, baseline: dict | None = None) -> d
         plan, agent_plan={"tasks": candidate_tasks(context)}, workspace_snapshot=snapshot,
         base_build_task_plan=skeleton, build_context=context, build_execution_scope=scope,
     )
-    # 夹具显式模拟已完成的正式 Planning Root 编译，不由 Build 测试 Helper 隐式修补。
-    compiled["route_projection"] = compile_route_projection(plan)
     return compiled
 
 

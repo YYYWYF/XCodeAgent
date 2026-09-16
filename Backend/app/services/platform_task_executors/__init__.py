@@ -10,6 +10,10 @@ from app.services.platform_task_executors.authorization_frontend_resources impor
     EXECUTOR_NAME as AUTHORIZATION_FRONTEND_RESOURCES_EXECUTOR,
     execute_authorization_frontend_resources,
 )
+from app.services.platform_task_executors.template_route_projection import (
+    EXECUTOR_NAME as TEMPLATE_ROUTE_PROJECTION_EXECUTOR,
+    execute_template_route_projection,
+)
 
 
 PlatformTaskExecutor = Callable[
@@ -27,6 +31,7 @@ _PLATFORM_TASK_EXECUTORS: Mapping[str, PlatformTaskExecutor] = MappingProxyType(
         AUTHORIZATION_FRONTEND_RESOURCES_EXECUTOR: (
             execute_authorization_frontend_resources
         ),
+        TEMPLATE_ROUTE_PROJECTION_EXECUTOR: execute_template_route_projection,
     }
 )
 
@@ -49,5 +54,6 @@ __all__ = [
     "PlatformTaskExecutor",
     "PlatformTaskExecutorRegistryError",
     "execute_authorization_frontend_resources",
+    "execute_template_route_projection",
     "resolve_platform_task_executor",
 ]

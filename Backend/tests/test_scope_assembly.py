@@ -103,6 +103,7 @@ def _base_inputs() -> dict:
         "base_confirmed_plan": baseline,
         "skeleton_plan": skeleton,
         "project_plan": plan,
+        "product_plan": {"pages": [{"pageId": "orders", "name": "订单"}, {"pageId": "customers", "name": "客户"}]},
         "build_context": context,
         "build_execution_scope": current_scope,
         "reuse_facts": _reuse_facts(baseline),
@@ -180,30 +181,20 @@ def _auth_inputs(*, providers: tuple[tuple[str, str, str], ...] = ()) -> tuple[d
 
 
 class ScopeAssemblyTests(unittest.TestCase):
-    def test_assembly_generates_route_projection_from_full_project_plan(self) -> None:
-        """单页面 Scope 也必须冻结当前 TechnicalPlan 的全部业务路由。"""
+    def test_assembly_appends_route_projector_when_success_baseline_is_missing(self) -> None:
+        """缺少成功 Run 路由证据时，Assembly 必须追加确定性模板投影任务。"""
 
         inputs = _base_inputs()
         assembled = plain_json(assemble_scope_build_task_plan(**inputs).assembled_plan)
 
-        self.assertEqual(
-            {page["path"] for page in assembled["route_projection"]["pages"]},
-            {"/orders", "/customers"},
-        )
+        self.assertIn("platform_route_projection", assembled["task_registry"])
 
-    def test_assembly_replaces_stale_baseline_route_projection(self) -> None:
-        """Assembly 不得继承 confirmed baseline 中陈旧的路由投影。"""
+    def test_assembly_does_not_persist_route_projection_pages(self) -> None:
+        """DAG 只能表达平台动作，不能保存第二份页面事实。"""
 
         inputs = _base_inputs()
-        inputs["base_confirmed_plan"]["route_projection"] = {
-            "pages": [{"pageId": "old", "path": "/old", "pageKey": "Old"}]
-        }
         assembled = plain_json(assemble_scope_build_task_plan(**inputs).assembled_plan)
-
-        self.assertEqual(
-            {page["path"] for page in assembled["route_projection"]["pages"]},
-            {"/orders", "/customers"},
-        )
+        self.assertNotIn("route_projection", assembled)
     def test_assembled_draft_never_claims_confirmation_lifecycle_status(self) -> None:
         """无论图是否 ready，Assembly 都不能继承 confirmed 或提前声称正式 pending。"""
 
@@ -311,7 +302,7 @@ class ScopeAssemblyTests(unittest.TestCase):
 
         self.assertEqual(set(result.retained_task_ids), set(inputs["base_confirmed_plan"]["task_registry"]))
         self.assertEqual(result.candidate_task_ids, ("customers:api-current",))
-        self.assertEqual(set(registry), set(result.retained_task_ids) | set(result.candidate_task_ids))
+        self.assertEqual(set(registry), set(result.retained_task_ids) | set(result.candidate_task_ids) | {"platform_route_projection"})
         self.assertTrue(all(result.task_origins[task_id] == "retained" for task_id in result.retained_task_ids))
         self.assertEqual(result.task_origins["customers:api-current"], "candidate")
         self.assertEqual(result.candidate_unit_by_task_id, {"customers:api-current": SHARED_UNIT})

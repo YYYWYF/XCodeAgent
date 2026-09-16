@@ -48,10 +48,10 @@ from app.services.build_task_planner import (
     tasks_from_build_task_plan,
 )
 from app.services.template_state import assert_template_context_matches, load_template_state
-from app.services.route_projection import (
-    RouteProjectionError,
-    compile_route_projection,
-    validate_route_projection,
+from app.services.template_route_projector import (
+    TemplateRouteProjectorError,
+    build_route_projector_input,
+    extract_route_facts,
 )
 from app.services.build_tool_activity import (
     path_matches_task_scope,
@@ -85,6 +85,7 @@ from app.workspace.task_documents import (
     build_task_plan_json_path,
     load_build_task_plan_json,
     write_build_run_task_plan_json,
+    persist_build_run_success_evidence,
     write_build_task_plan_execution_state,
 )
 from app.workspace.task_documents import write_repair_task_plan_json
@@ -424,6 +425,8 @@ def _execute_deterministic_task(
     context = {
         "workspace": workspace or "",
         "formal_plan": state.get("project_plan"),
+        "product_plan": state.get("product_plan"),
+        "build_run_id": state.get("build_run_id"),
     }
     source_tool = platform_executor
     try:
@@ -434,10 +437,10 @@ def _execute_deterministic_task(
                 action=lambda: executor(task, context),
             )
             raw_result = captured.value
-            change_set = _filter_change_set_for_tasks(
-                captured.code_change_set,
-                [task],
-                source_tool=source_tool,
+            change_set = (
+                captured.code_change_set
+                if platform_executor == "template.route_projection"
+                else _filter_change_set_for_tasks(captured.code_change_set, [task], source_tool=source_tool)
             )
         else:
             raw_result = executor(task, context)
@@ -1032,20 +1035,8 @@ def _latest_build_task_plan_for_build(
     errors: list[str] = []
     if build_task_plan.get("schema_version") != "build-dag.v4":
         errors.append("最新 Build DAG schema_version 不是 build-dag.v4。")
-    # 在任何 Agent 调度前拒绝缺失或畸形的不可变 Route Projection。
-    try:
-        validate_route_projection(build_task_plan.get("route_projection"))
-    except RouteProjectionError as exc:
-        errors.append(f"Build DAG route_projection 无效：{exc}")
-    current_project_plan = state.get("project_plan")
-    # 轻量恢复态可只携带版本等投影字段；仅在完整页面事实已装载时做漂移比对。
-    if isinstance(current_project_plan, dict) and isinstance(current_project_plan.get("pages"), list) and current_project_plan["pages"]:
-        try:
-            expected_route_projection = compile_route_projection(current_project_plan)
-            if build_task_plan.get("route_projection") != expected_route_projection:
-                errors.append("Build DAG route_projection 与当前 TechnicalPlan 不一致。")
-        except RouteProjectionError as exc:
-            errors.append(f"当前 TechnicalPlan 无法生成 route_projection：{exc}")
+    if "route_projection" in build_task_plan:
+        errors.append("最新 Build DAG 不得包含已删除的 route_projection 页面正文。")
     if "template_variant" in build_task_plan:
         errors.append("最新 Build DAG 不得包含已删除的 template_variant。")
     if workspace:
@@ -1807,6 +1798,20 @@ def run_build_scheduler(
             if edd_errors:
                 workflow_status = "failed"
                 build_summary = {**build_summary, "status": "failed", "authorization_edd_errors": edd_errors}
+        if workflow_status == "completed":
+            try:
+                route_input = build_route_projector_input(
+                    current_state.get("product_plan") or state.get("product_plan") or {},
+                    (current_state.get("project_plan") or state.get("project_plan") or {}).get("authorization_manifest"),
+                )
+                evidence_path = persist_build_run_success_evidence(
+                    current_state, build_run_id=str(build_run_binding.get("build_run_id") or ""),
+                    route_facts=extract_route_facts(route_input),
+                )
+                build_summary = {**build_summary, "routeFactsEvidencePath": evidence_path}
+            except (TemplateRouteProjectorError, OSError, ValueError) as exc:
+                workflow_status = "failed"
+                build_summary = {**build_summary, "status": "failed", "route_facts_evidence_error": str(exc)}
     else:
         platform_projection_evidence = state.get("platform_projection_evidence", {})
     clarification = (

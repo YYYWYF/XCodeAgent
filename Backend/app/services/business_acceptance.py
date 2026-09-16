@@ -265,7 +265,7 @@ def _compile_task(task: dict[str, Any], context: dict[str, Any]) -> dict[str, An
     compiled = deepcopy(task)
     deliverables = normalize_deliverables(task.get("deliverables"))
     compiled["deliverables"] = deliverables
-    if not deliverables:
+    if not deliverables and task.get("platform_executor") != "template.route_projection":
         compiled["business_acceptance_checks"] = []
         return compiled
     if task.get("kind") == "repair" and _dict_items(task.get("business_acceptance_checks")):
@@ -1218,6 +1218,8 @@ def _requires_business_deliverable(task: dict[str, Any]) -> bool:
     """判断任务是否属于需要业务交付物的可执行代码任务。"""
 
     if _text(task.get("kind")) == "repair":
+        return False
+    if _text(task.get("platform_executor")) == "template.route_projection":
         return False
     owner = _text(task.get("owner"))
     unit_id = _text(task.get("unit_id"))

@@ -21,19 +21,19 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
             first = apply_platform_projections(workspace, self._plan())
             second = apply_platform_projections(workspace, self._plan())
 
-        self.assertEqual(first["summary"]["files"], 3)
+        self.assertEqual(first["summary"]["files"], 2)
         self.assertEqual(second["summary"]["files"], 0)
 
-    def test_edd_reports_route_drift_without_rewrite(self) -> None:
-        """EDD 仅报告业务路由漂移，不能通过重写掩盖失败。"""
+    def test_edd_reports_resource_drift_without_rewrite(self) -> None:
+        """EDD 仅报告权限资源漂移，不能通过重写掩盖失败。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             self._write_template(workspace)
             plan = self._plan()
             apply_platform_projections(workspace, plan)
-            route_file = workspace / "frontend/src/constants/routes.tsx"
-            route_file.write_text("// drift", encoding="utf-8")
+            resource_file = workspace / "frontend/src/constants/resources.ts"
+            resource_file.write_text("// drift", encoding="utf-8")
             errors = verify_authorization_edd(workspace, plan)
 
         self.assertTrue(any("权限共享投影 EDD 失败" in error for error in errors), errors)
@@ -42,7 +42,6 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
         """构造最小确认 Build DAG 权限投影。"""
 
         return {
-            "route_projection": {"pages": [{"pageId": "orders", "path": "/orders", "pageKey": "Orders", "name": "订单", "menu": True}]},
             "authorization_frontend_projection": {
                 "resources": [
                     {"group": "SYSTEM", "name": "AUTHORIZATION_MANAGEMENT", "resourceKey": "system_authorization_management"},
@@ -65,8 +64,6 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
             "appliedAdditions": {},
         }))
         self._write(workspace / "frontend/src/constants/resources.ts", "export const RESOURCES = {} as const;\n")
-        self._write(workspace / "frontend/src/constants/routes.tsx", "import { RESOURCES } from '@/constants/resources';\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\nexport const PAGE_ROUTES = [\n// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n];\n")
-        self._write(workspace / "frontend/src/pages/Orders/index.tsx", "export default null;\n")
         self._write(workspace / "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java", "// XCODEAGENT_AUTH_CONSTANTS_START\n// XCODEAGENT_AUTH_CONSTANTS_END\n")
 
     def _write(self, path: Path, content: str) -> None:

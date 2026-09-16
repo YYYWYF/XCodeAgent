@@ -13,10 +13,6 @@ from app.services.authorization_frontend_projection import (
     AuthorizationFrontendProjectionError,
     apply_authorization_frontend_projection,
 )
-from app.services.route_projection import (
-    RouteProjectionError,
-    apply_route_projection,
-)
 from app.services.template_state import has_capability, load_template_state
 from app.workspace.task_documents import build_task_plan_sha256
 from app.workspace.code_changes import capture_workspace_changes
@@ -40,36 +36,23 @@ def apply_platform_projections(
     actual_plan_sha256 = build_task_plan_sha256(build_task_plan)
     if plan_sha256 and plan_sha256 != actual_plan_sha256:
         raise PlatformProjectionError("Build Run 绑定的任务计划摘要与投影输入不一致。")
-    route_projection = build_task_plan.get("route_projection")
     frontend_projection = build_task_plan.get("authorization_frontend_projection")
     constants_projection = build_task_plan.get("authorization_constants_projection")
-    if route_projection is None:
-        raise PlatformProjectionError("Build DAG 缺少通用 route_projection。")
     if frontend_projection is None and constants_projection is None:
         authorization_decorations = None
     else:
         state = load_template_state(workspace)
         if not has_capability(state, "authorization"):
             raise PlatformProjectionError("权限投影要求 TemplateState.effective 含 authorization。")
-        authorization_decorations = (
-            frontend_projection.get("routeDecorations")
-            if isinstance(frontend_projection, dict)
-            else None
-        )
     workspace_path = Path(workspace).expanduser().resolve()
     if not workspace_path.is_dir():
         raise PlatformProjectionError("平台共享投影工作区不存在或不是目录。")
 
     def _apply() -> dict[str, Any]:
-        """严格按确认 DAG 写入通用路由、可选权限资源和后端常量。"""
+        """严格按确认 DAG 写入仍保留的权限共享投影。"""
 
         try:
             return {
-                "routes": apply_route_projection(
-                    workspace_path,
-                    route_projection,
-                    authorization_decorations=authorization_decorations,
-                ),
                 "frontend": apply_authorization_frontend_projection(
                     workspace_path,
                     frontend_projection,
@@ -82,7 +65,6 @@ def apply_platform_projections(
         except (
             AuthorizationFrontendProjectionError,
             AuthorizationConstantsProjectionError,
-            RouteProjectionError,
             OSError,
             ValueError,
         ) as exc:
@@ -101,7 +83,6 @@ def apply_platform_projections(
         "buildRunId": build_run_id,
         "planSha256": actual_plan_sha256,
         "frontend": captured.value["frontend"],
-        "routes": captured.value["routes"],
         "authConstants": captured.value["authConstants"],
         "files": list(change_set.get("files") or []),
         "summary": dict(

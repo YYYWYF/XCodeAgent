@@ -16,7 +16,6 @@ from app.services.planning_frozen import (
     plain_json,
 )
 from app.services.planning_run_contracts import PlanningRun
-from app.services.route_projection import RouteProjectionError, compile_route_projection
 from app.services.template_state import validate_template_context
 from app.workspace.spec_documents import workspace_root
 
@@ -218,15 +217,8 @@ def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
         )
     ):
         return ["Pending DAG 的 Task registry 或 Unit 归属无效。"]
-    # Confirm 只接受由当前冻结 TechnicalPlan 精确编译出的 Root Projection。
-    try:
-        expected_route_projection = compile_route_projection(
-            plain_json(inputs.project_plan)
-        )
-    except RouteProjectionError as exc:
-        return [f"当前 Planning Inputs 无法生成 route_projection：{exc}"]
-    if plan.get("route_projection") != expected_route_projection:
-        return ["Pending DAG 的 route_projection 与当前 TechnicalPlan 不一致。"]
+    if "route_projection" in plan:
+        return ["Pending DAG 不得持久化已删除的 route_projection 页面正文。"]
     baseline = plain_json(inputs.base_confirmed_plan) or {}
     retained_ids = set(baseline.get("task_registry", {}))
     if not retained_ids <= set(registry):
