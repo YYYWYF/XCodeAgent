@@ -26,14 +26,11 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     NodeEntryBoundary,
-    RecoveryDecision,
     RecoveryAttempt,
     RecoveryAttemptStatus,
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
-    RecoverySourceAuthorityKind,
-    RecoveryStrategy,
     WorkflowReentryPlan,
     WorkflowReentryReason,
     execution_failure_sha256,
@@ -611,27 +608,13 @@ async def finalize_handed_off_recovery_attempt(
                 "当前 source 不是 FAILED 或 INTERRUPTED，不能执行 checkpoint re-entry。",
             )
         lifecycle = load_application_lifecycle(workspace)
-        if attempt.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT:
-            raise RecoveryExecutionError(
-                "RECOVERY_STRATEGY_UNSUPPORTED",
-                "当前 RecoveryAttempt strategy 不支持 finalization。",
-            )
-        if attempt.source_authority_kind is not RecoverySourceAuthorityKind.CHECKPOINT:
-            raise RecoveryExecutionError(
-                "RECOVERY_STRATEGY_UNSUPPORTED",
-                "Native Checkpoint Recovery 必须使用 checkpoint authority。",
-            )
         plan = RecoveryPlan(
             source_run_id=source.run_id,
             thread_id=source.thread_id,
-            decision="ready_native",
-            strategy=attempt.strategy,
-            lifecycle_ownership_mode=attempt.lifecycle_ownership_mode,
+            target_node=child_execution.first_node,
             checkpoint_id=attempt.source_checkpoint_id,
             checkpoint_ns=attempt.source_checkpoint_ns,
-            next_nodes=[child_execution.first_node],
-            reason_code="RECOVERY_RECONCILED",
-            reason="reconciled handed-off recovery",
+            lifecycle_ownership_mode=attempt.lifecycle_ownership_mode,
             lifecycle_revision=attempt.source_lifecycle_revision,
         )
         _require_checkpoint_reentry_plan(plan, source=source)
@@ -718,7 +701,7 @@ async def _fork_and_start(
             "source Node Entry checkpoint identity 已偏离 RecoveryAttempt。",
         )
     source_next = [str(node) for node in (getattr(source_snapshot, "next", ()) or ())]
-    if source_next != plan.next_nodes:
+    if source_next != [plan.target_node]:
         raise RecoveryExecutionError(
             "RECOVERY_FORK_CONTROL_FLOW_DRIFT",
             "source Node Entry checkpoint 的 nextNodes 已偏离 Recovery authority。",
@@ -789,14 +772,12 @@ async def _fork_and_start(
         workspace=workspace,
         new_run_id=new_run_id,
         status=RecoveryAttemptStatus.STARTED,
-        replay_checkpoint_id=fork_checkpoint_id,
-        replay_checkpoint_ns="",
     )
     await _persist_child_boundary_index(
         workspace=workspace,
         run_id=new_run_id,
         thread_id=source.thread_id,
-        target_node=plan.next_nodes[0],
+        target_node=plan.target_node,
         checkpoint_id=fork_checkpoint_id,
     )
     workspace_lease = _acquire_workspace_lease(
@@ -897,7 +878,6 @@ async def _revalidate_finalizing_recovery(
         )
     if (
         source.thread_id != attempt.thread_id
-        or attempt.source_authority_kind is not RecoverySourceAuthorityKind.CHECKPOINT
         or not attempt.source_checkpoint_id
         or attempt.source_checkpoint_ns != ""
         or child_execution.thread_id != source.thread_id
@@ -1130,7 +1110,7 @@ def _validate_checkpoint_reentry_source(
         or not target_node
         or (plan is not None and plan.checkpoint_id != attempt.source_checkpoint_id)
         or (plan is not None and plan.checkpoint_ns != attempt.source_checkpoint_ns)
-        or (plan is not None and plan.next_nodes != [target_node])
+        or (plan is not None and plan.target_node != target_node)
         or (
             source.status is DurableExecutionStatus.FAILED
             and target_node != source.current_node
@@ -1232,7 +1212,7 @@ def _handoff_lifecycle(
         source_run_id=source.run_id,
         new_run_id=new_run_id,
         thread_id=source.thread_id,
-        phase=plan.next_nodes[0],
+        phase=plan.target_node,
         expected_lifecycle_revision=plan.lifecycle_revision,
     )
 
@@ -1273,14 +1253,12 @@ def _require_checkpoint_reentry_plan(
     """直接验证 FAILED 或 INTERRUPTED 的 checkpoint transaction bridge。"""
 
     if (
-        plan.decision is not RecoveryDecision.READY_NATIVE
-        or plan.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT
-        or not plan.checkpoint_id
+        not plan.checkpoint_id
         or plan.checkpoint_ns != ""
-        or len(plan.next_nodes) != 1
+        or not plan.target_node
         or (
             source.status is DurableExecutionStatus.FAILED
-            and plan.next_nodes != [source.current_node]
+            and plan.target_node != source.current_node
         )
     ):
         raise RecoveryExecutionError(

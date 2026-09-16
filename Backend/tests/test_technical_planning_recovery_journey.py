@@ -22,8 +22,6 @@ from app.domain.application_planning_recovery import (
 from app.domain.execution_recovery import (
     DurableExecutionStatus,
     RecoveryActionKind,
-    RecoverySourceAuthorityKind,
-    RecoveryStrategy,
 )
 from app.graph.application_planning_workflow import (
     application_planning_graph_for_request,
@@ -445,16 +443,9 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 for attempt in attempts
                 if attempt.source_run_id == source_a.run_id
             )
-            self.assertEqual(
-                native_attempt.strategy,
-                RecoveryStrategy.NATIVE_CHECKPOINT,
-            )
-            self.assertEqual(
-                native_attempt.source_authority_kind,
-                RecoverySourceAuthorityKind.CHECKPOINT,
-            )
-            self.assertIsNone(native_attempt.source_recovery_point_id)
             self.assertIsNotNone(native_attempt.source_checkpoint_id)
+            self.assertNotIn("strategy", native_attempt.model_fields)
+            self.assertNotIn("source_authority_kind", native_attempt.model_fields)
 
             executions = await list_executions_for_thread(
                 self.harness.workspace,
@@ -546,23 +537,12 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 attempt_from_b.source_checkpoint_id,
                 attempt_from_a.source_checkpoint_id,
             )
-            strategies_by_source = {
-                attempt.source_run_id: attempt.strategy for attempt in attempts
-            }
-            self.assertEqual(
-                strategies_by_source[self.harness.source_run_id],
-                RecoveryStrategy.NATIVE_CHECKPOINT,
+            attempts_by_source = {attempt.source_run_id: attempt for attempt in attempts}
+            self.assertIsNotNone(
+                attempts_by_source[self.harness.source_run_id].source_checkpoint_id
             )
-            self.assertEqual(
-                strategies_by_source[run_b.run_id],
-                RecoveryStrategy.NATIVE_CHECKPOINT,
-            )
+            self.assertIsNotNone(attempts_by_source[run_b.run_id].source_checkpoint_id)
             for attempt in attempts:
-                self.assertEqual(
-                    attempt.source_authority_kind,
-                    RecoverySourceAuthorityKind.CHECKPOINT,
-                )
-                self.assertIsNone(attempt.source_recovery_point_id)
                 self.assertIsNotNone(attempt.source_checkpoint_id)
 
             executions = await list_executions_for_thread(

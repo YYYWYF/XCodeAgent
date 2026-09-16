@@ -232,38 +232,6 @@ class WorkflowReentryPlan(ExecutionRecoveryModel):
         return self
 
 
-class RecoveryDecision(StrEnum):
-    """定义 P0.3A 对一次恢复判断给出的安全决策。"""
-
-    READY_NATIVE = "ready_native"
-    REQUIRES_HANDLER = "requires_handler"
-    AWAITING_USER = "awaiting_user"
-    NOT_RECOVERABLE = "not_recoverable"
-    INVALID_RECOVERY_POINT = "invalid_recovery_point"
-    STATE_DRIFT = "state_drift"
-
-
-class RecoveryStrategy(StrEnum):
-    """定义恢复结果交给哪一种后续执行策略。"""
-
-    NATIVE_CHECKPOINT = "native_checkpoint"
-    HANDLER = "handler"
-    # 仅用于读取历史 RecoveryAttempt durable row；当前 production 不创建或执行。
-    OPERATION_RETRY = "operation_retry"
-    # 仅用于读取旧 RecoveryAttempt durable row；当前 production 不再创建或执行。
-    STAGE_RESTART = "stage_restart"
-    RECONCILE_STATE = "reconcile_state"
-    NONE = "none"
-
-
-class RecoverySourceAuthorityKind(StrEnum):
-    """定义恢复尝试的 source authority 来自 checkpoint 还是历史正式阶段事实。"""
-
-    CHECKPOINT = "checkpoint"
-    # 仅用于读取旧 RecoveryAttempt durable row；新的 claim 一律使用 CHECKPOINT。
-    FORMAL_STAGE = "formal_stage"
-
-
 class RecoveryLifecycleOwnershipMode(StrEnum):
     """定义 Native Recovery 在 fork 前如何取得 ApplicationLifecycle ownership。"""
 
@@ -328,7 +296,6 @@ class DurableExecutionRecord(ExecutionRecoveryModel):
     first_node: str = Field(min_length=1, max_length=256)
     current_node: str | None = Field(default=None, max_length=256)
     status: DurableExecutionStatus
-    last_recovery_point_id: str | None = Field(default=None, max_length=512)
     started_at: datetime
     updated_at: datetime
     ended_at: datetime | None = None
@@ -357,21 +324,25 @@ class ExecutionLease(ExecutionRecoveryModel):
 
 
 class RecoveryPlan(ExecutionRecoveryModel):
-    """保存只读恢复协调结果，不复制完整 Graph State 或业务产物。"""
+    """保存一次 checkpoint transaction 所需的最小 durable authority。"""
 
     source_run_id: str = Field(min_length=1, max_length=512)
-    thread_id: str = Field(default="", max_length=512)
-    decision: RecoveryDecision
-    strategy: RecoveryStrategy
+    thread_id: str = Field(min_length=1, max_length=512)
+    target_node: str = Field(min_length=1, max_length=256)
+    checkpoint_id: str = Field(min_length=1, max_length=512)
+    checkpoint_ns: str = Field(default="", max_length=512)
     lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode = (
         RecoveryLifecycleOwnershipMode.SOURCE_OWNED
     )
-    checkpoint_id: str | None = Field(default=None, max_length=512)
-    checkpoint_ns: str = Field(default="", max_length=512)
-    next_nodes: list[str] = Field(default_factory=list, max_length=256)
-    reason_code: str = Field(min_length=1, max_length=128)
-    reason: str = Field(min_length=1, max_length=2048)
     lifecycle_revision: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_root_checkpoint(self) -> "RecoveryPlan":
+        """限制 Generic Recovery 只使用 root namespace 的单节点 checkpoint。"""
+
+        if self.checkpoint_ns:
+            raise ValueError("RecoveryPlan 只允许 root checkpoint namespace。")
+        return self
 
 
 class RecoveryActionKind(StrEnum):
@@ -486,24 +457,9 @@ class RecoveryAttempt(ExecutionRecoveryModel):
     source_run_id: str = Field(min_length=1, max_length=512)
     new_run_id: str = Field(min_length=1, max_length=512)
     thread_id: str = Field(min_length=1, max_length=512)
-    source_authority_kind: RecoverySourceAuthorityKind
-    # formal-stage identity 仅用于读取旧 durable row；lifecycle revision 也固定
-    # 当前 checkpoint claim 的 handoff authority，供 PREPARING 崩溃收敛使用。
-    source_authority_sha256: str | None = Field(
-        default=None,
-        min_length=64,
-        max_length=64,
-        pattern=r"^[0-9a-f]{64}$",
-    )
-    source_stage: str | None = Field(default=None, max_length=256)
     source_lifecycle_revision: int | None = Field(default=None, ge=0)
-    # 仅解码历史 SQLite durable row；当前 writer 始终持久化 NULL。
-    source_recovery_point_id: str | None = Field(default=None, max_length=512)
     source_checkpoint_id: str | None = Field(default=None, max_length=512)
     source_checkpoint_ns: str = Field(default="", max_length=512)
-    replay_checkpoint_id: str | None = Field(default=None, max_length=512)
-    replay_checkpoint_ns: str = Field(default="", max_length=512)
-    strategy: RecoveryStrategy
     lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode = (
         RecoveryLifecycleOwnershipMode.SOURCE_OWNED
     )
@@ -517,22 +473,15 @@ class RecoveryAttempt(ExecutionRecoveryModel):
     source_failure_sha256: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
-    def validate_source_authority(self) -> "RecoveryAttempt":
-        """确保 checkpoint 与正式阶段 authority 不会互相伪装或缺少必要事实。"""
+    def validate_source_checkpoint(self) -> "RecoveryAttempt":
+        """活动 transaction 必须持有 root checkpoint；历史终态 edge 可缺少旧身份。"""
 
-        if self.source_authority_kind is RecoverySourceAuthorityKind.CHECKPOINT:
-            if not self.source_checkpoint_id or self.source_checkpoint_ns:
-                raise ValueError("checkpoint recovery attempt 必须包含 root checkpoint identity。")
-        elif self.source_authority_kind is RecoverySourceAuthorityKind.FORMAL_STAGE:
-            if (
-                not self.source_authority_sha256
-                or self.source_stage != "technical_planning"
-                or self.source_lifecycle_revision is None
-                or self.source_recovery_point_id is not None
-                or self.source_checkpoint_id is not None
-                or self.source_checkpoint_ns
-            ):
-                raise ValueError(
-                    "formal stage recovery attempt 必须只包含 authority、stage 和 lifecycle revision。"
-                )
+        if self.source_checkpoint_ns:
+            raise ValueError("RecoveryAttempt 只允许 root checkpoint namespace。")
+        if self.status in {
+            RecoveryAttemptStatus.PREPARING,
+            RecoveryAttemptStatus.HANDED_OFF,
+            RecoveryAttemptStatus.FINALIZING,
+        } and not self.source_checkpoint_id:
+            raise ValueError("活动 RecoveryAttempt 必须包含 source checkpoint identity。")
         return self

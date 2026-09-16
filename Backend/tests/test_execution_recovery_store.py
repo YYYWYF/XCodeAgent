@@ -41,13 +41,41 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
         self._temporary_workspace.cleanup()
 
     async def test_initialize_creates_versioned_store(self) -> None:
-        """初始化必须创建独立数据库并写入 schema version。"""
+        """fresh v9 只创建 canonical attempt columns，并删除 recovery_points。"""
 
         await initialize_execution_recovery_store(self.workspace)
-        self.assertTrue(execution_recovery_db_path(self.workspace).exists())
+        database_path = execution_recovery_db_path(self.workspace)
+        self.assertTrue(database_path.exists())
+        connection = sqlite3.connect(database_path)
+        try:
+            columns = [
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(recovery_attempts)")
+            ]
+            recovery_points = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'recovery_points'"
+            ).fetchone()
+            version = connection.execute(
+                "SELECT value FROM recovery_meta WHERE key = 'schema_version'"
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual(
+            columns,
+            [
+                "new_run_id", "source_run_id", "thread_id",
+                "source_checkpoint_id", "source_checkpoint_ns",
+                "source_lifecycle_revision", "lifecycle_ownership_mode",
+                "status", "created_at", "handed_off_at", "started_at",
+                "failed_at", "failure_code", "source_status",
+                "source_failure_sha256",
+            ],
+        )
+        self.assertIsNone(recovery_points)
+        self.assertEqual(version[0] if version else None, "9")
 
-    async def test_initialize_migrates_v3_records_without_rebuilding_history(self) -> None:
-        """v3/v4 恢复记录必须原地补字段并保留旧历史。"""
+    async def test_initialize_migrates_v8_native_checkpoint_attempt(self) -> None:
+        """v8 native checkpoint HANDED_OFF row 必须无损迁移为 v9 transaction。"""
 
         database_path = execution_recovery_db_path(self.workspace)
         database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -56,7 +84,7 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
             connection.executescript(
                 """
                 CREATE TABLE recovery_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                INSERT INTO recovery_meta(key, value) VALUES ('schema_version', '3');
+                INSERT INTO recovery_meta(key, value) VALUES ('schema_version', '8');
                 CREATE TABLE execution_records (
                     run_id TEXT PRIMARY KEY,
                     thread_id TEXT NOT NULL,
@@ -76,25 +104,33 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
                     new_run_id TEXT PRIMARY KEY,
                     source_run_id TEXT NOT NULL,
                     thread_id TEXT NOT NULL,
-                    source_recovery_point_id TEXT NOT NULL,
-                    source_checkpoint_id TEXT NOT NULL,
+                    source_authority_kind TEXT NOT NULL,
+                    source_authority_sha256 TEXT,
+                    source_stage TEXT,
+                    source_lifecycle_revision INTEGER,
+                    source_recovery_point_id TEXT,
+                    source_checkpoint_id TEXT,
                     source_checkpoint_ns TEXT NOT NULL DEFAULT '',
                     replay_checkpoint_id TEXT,
                     replay_checkpoint_ns TEXT NOT NULL DEFAULT '',
                     strategy TEXT NOT NULL,
+                    lifecycle_ownership_mode TEXT NOT NULL DEFAULT 'source_owned',
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     handed_off_at TEXT,
                     started_at TEXT,
                     failed_at TEXT,
-                    failure_code TEXT
+                    failure_code TEXT,
+                    source_status TEXT,
+                    source_failure_sha256 TEXT
                 );
+                CREATE TABLE recovery_points (recovery_point_id TEXT PRIMARY KEY);
                 """
             )
             connection.execute(
                 """
                 INSERT INTO execution_records VALUES (
-                    'legacy-run', 'graph-thread', ?, 'project', 'workbench', 'page',
+                    'legacy-source', 'graph-thread', ?, 'project', 'workbench', 'page',
                     'A', 'A', 'interrupted', NULL, '2026-09-12T00:00:00+00:00',
                     '2026-09-12T00:00:01+00:00', '2026-09-12T00:00:01+00:00'
                 )
@@ -103,10 +139,23 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
             )
             connection.execute(
                 """
+                INSERT INTO execution_records VALUES (
+                    'legacy-child', 'graph-thread', ?, 'project', 'workbench', 'page',
+                    'A', 'A', 'running', NULL, '2026-09-12T00:00:02+00:00',
+                    '2026-09-12T00:00:02+00:00', NULL
+                )
+                """,
+                (str(self.workspace),),
+            )
+            connection.execute(
+                """
                 INSERT INTO recovery_attempts VALUES (
-                    'legacy-child', 'legacy-run', 'graph-thread', 'legacy-point',
-                    'legacy-checkpoint', '', NULL, '', 'native_checkpoint',
-                    'preparing', '2026-09-12T00:00:02+00:00', NULL, NULL, NULL, NULL
+                    'legacy-child', 'legacy-source', 'graph-thread', 'checkpoint',
+                    NULL, NULL, 7, NULL, 'legacy-checkpoint', '', NULL, '',
+                    'native_checkpoint', 'source_owned', 'handed_off',
+                    '2026-09-12T00:00:02+00:00',
+                    '2026-09-12T00:00:03+00:00', NULL, NULL, NULL,
+                    'interrupted', NULL
                 )
                 """
             )
@@ -115,8 +164,9 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
             connection.close()
 
         await initialize_execution_recovery_store(self.workspace)
+        await initialize_execution_recovery_store(self.workspace)
 
-        loaded = await get_execution(self.workspace, "legacy-run")
+        loaded = await get_execution(self.workspace, "legacy-source")
         self.assertIsNotNone(loaded)
         assert loaded is not None
         self.assertEqual(loaded.thread_id, "graph-thread")
@@ -124,7 +174,9 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
         attempt = await get_recovery_attempt(self.workspace, "legacy-child")
         self.assertIsNotNone(attempt)
         assert attempt is not None
-        self.assertEqual(attempt.status, RecoveryAttemptStatus.PREPARING)
+        self.assertEqual(attempt.status, RecoveryAttemptStatus.HANDED_OFF)
+        self.assertEqual(attempt.source_checkpoint_id, "legacy-checkpoint")
+        self.assertEqual(attempt.source_lifecycle_revision, 7)
         self.assertEqual(
             attempt.lifecycle_ownership_mode,
             RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
@@ -149,7 +201,8 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
         finally:
             connection.close()
         self.assertIn("owner_session_id", execution_columns)
-        self.assertIn("lifecycle_ownership_mode", attempt_columns)
+        self.assertNotIn("strategy", attempt_columns)
+        self.assertNotIn("source_authority_kind", attempt_columns)
         self.assertEqual(
             {
                 "boundary_id",
@@ -163,7 +216,7 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
             - boundary_columns,
             set(),
         )
-        self.assertEqual(version[0] if version else None, "8")
+        self.assertEqual(version[0] if version else None, "9")
 
     async def test_insert_and_reload_execution(self) -> None:
         """ExecutionRecord 关闭连接后仍应能按 runId 重新读取。"""

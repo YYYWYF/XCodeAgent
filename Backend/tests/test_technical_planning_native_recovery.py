@@ -29,7 +29,6 @@ from app.domain.application_revision import ActiveFormalRevision, RevisionImpact
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
-    RecoveryDecision,
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
 )
@@ -57,7 +56,7 @@ from app.services.application_lifecycle import (
 )
 from app.services.application_revision_lifecycle import register_revision_impact
 from app.services.execution_recovery_executor import prepare_native_recovery
-from app.services.execution_recovery_lineage import resolve_recovery_head
+from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 from app.services.execution_lease_heartbeat import stop_execution_heartbeat
 from app.services.workflow_reentry import InterruptedTargetResolver
 from tests.helpers.native_recovery_contract import assert_native_recovery_fork_stable
@@ -415,7 +414,7 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             formal_revision=True,
         )
         plan, context = await self._prepare(scenario)
-        self.assertEqual(plan.decision, RecoveryDecision.READY_NATIVE)
+        self.assertEqual(plan.target_node, scenario.source.current_node)
         self.assertEqual(
             plan.lifecycle_ownership_mode,
             RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
@@ -595,8 +594,12 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             run_id=child_id,
             interrupted_at=datetime.now(timezone.utc),
         )
-        head_before = await resolve_recovery_head(str(scenario.workspace), scenario.source.run_id)
-        self.assertEqual(head_before, child_id)
+        head_before = await resolve_recovery_lineage_head(
+            str(scenario.workspace),
+            thread_id=scenario.source.thread_id,
+            execution_kind=scenario.source.execution_kind,
+        )
+        self.assertEqual(head_before.head.run_id, child_id)
         _child_plan, second_context = await self._prepare(
             _TechnicalRecoveryScenario(
                 workspace=scenario.workspace,
@@ -707,8 +710,12 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             run_id=first_context.new_run_id,
             interrupted_at=datetime.now(timezone.utc),
         )
-        head = await resolve_recovery_head(str(scenario.workspace), scenario.source.run_id)
-        self.assertEqual(head, first_context.new_run_id)
+        head = await resolve_recovery_lineage_head(
+            str(scenario.workspace),
+            thread_id=scenario.source.thread_id,
+            execution_kind=scenario.source.execution_kind,
+        )
+        self.assertEqual(head.head.run_id, first_context.new_run_id)
         child = await get_execution(scenario.workspace, first_context.new_run_id)
         self.assertIsNotNone(child)
         assert child is not None

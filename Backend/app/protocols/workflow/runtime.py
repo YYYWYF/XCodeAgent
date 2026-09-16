@@ -452,7 +452,6 @@ def build_workflow_ag_ui_stream(
                         "sourceRunId": native_recovery_context.source_execution.run_id,
                         "runId": native_recovery_context.new_run_id,
                         "threadId": native_recovery_context.thread_id,
-                        "strategy": native_recovery_context.recovery_plan.strategy.value,
                     },
                 )
             )
@@ -730,7 +729,7 @@ def build_workflow_ag_ui_stream(
                 # 仍然在下方固定为 None，避免 reducer 重新注入完整业务 state。
                 initial_state = dict(checkpoint_values)
                 observability = native_recovery_context.observability
-                first_node_name = native_recovery_context.recovery_plan.next_nodes[0]
+                first_node_name = native_recovery_context.recovery_plan.target_node
                 current_phase = first_node_name
             elif _is_formal_revision_reentry(initial_state):
                 # ChangeImpactAnalyzer 与 Revision Coordinator 已经决定 target/context；

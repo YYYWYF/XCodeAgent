@@ -17,7 +17,6 @@ from app.domain.execution_recovery import (
 )
 from app.persistence.execution_recovery import (
     fail_recovery_attempt_prestart,
-    get_execution,
     get_recovery_attempt,
     list_executions_for_thread,
     list_recovery_attempts_for_thread,
@@ -51,7 +50,7 @@ class RecoveryLineageResolution:
     reason_code: str
 
 
-_FORMAL_CHILD_ATTEMPT_STATUSES = frozenset(
+_LINEAGE_EDGE_STATUSES = frozenset(
     {
         RecoveryAttemptStatus.PREPARING,
         RecoveryAttemptStatus.HANDED_OFF,
@@ -95,7 +94,7 @@ async def resolve_recovery_lineage_head(
         thread_id=thread_id,
     )
     records = {record.run_id: record for record in executions}
-    formal_edges: dict[str, list[RecoveryAttempt]] = {}
+    recovery_edges: dict[str, list[RecoveryAttempt]] = {}
     incoming_edges: dict[str, list[RecoveryAttempt]] = {}
     ignored_prestart_children: set[str] = set()
     malformed = False
@@ -125,10 +124,10 @@ async def resolve_recovery_lineage_head(
         if attempt.status is RecoveryAttemptStatus.FAILED_PRESTART:
             ignored_prestart_children.add(attempt.new_run_id)
             continue
-        if attempt.status not in _FORMAL_CHILD_ATTEMPT_STATUSES:
+        if attempt.status not in _LINEAGE_EDGE_STATUSES:
             malformed = True
             continue
-        formal_edges.setdefault(attempt.source_run_id, []).append(attempt)
+        recovery_edges.setdefault(attempt.source_run_id, []).append(attempt)
         incoming_edges.setdefault(attempt.new_run_id, []).append(attempt)
 
     if malformed:
@@ -147,7 +146,7 @@ async def resolve_recovery_lineage_head(
         )
         and record.run_id not in ignored_prestart_children
     }
-    for source_run_id, children in formal_edges.items():
+    for source_run_id, children in recovery_edges.items():
         participants.add(source_run_id)
         participants.update(attempt.new_run_id for attempt in children)
     if not participants:
@@ -157,7 +156,7 @@ async def resolve_recovery_lineage_head(
             reason_code="RECOVERY_LINEAGE_NO_HEAD",
         )
 
-    if any(len(children) != 1 for children in formal_edges.values()) or any(
+    if any(len(children) != 1 for children in recovery_edges.values()) or any(
         len(parents) != 1 for parents in incoming_edges.values()
     ):
         return RecoveryLineageResolution(
@@ -177,7 +176,7 @@ async def resolve_recovery_lineage_head(
                     reason_code="RECOVERY_LINEAGE_AMBIGUOUS",
                 )
             visited.add(current)
-            children = formal_edges.get(current, ())
+            children = recovery_edges.get(current, ())
             if not children:
                 break
             current = children[0].new_run_id
@@ -193,7 +192,7 @@ async def resolve_recovery_lineage_head(
         for run_id in participants
         if not any(
             attempt.new_run_id in participants
-            for attempt in formal_edges.get(run_id, ())
+            for attempt in recovery_edges.get(run_id, ())
         )
     ]
     if len(leaves) != 1:
@@ -243,31 +242,6 @@ def _workspace_identity(value: str) -> str:
     """把 durable workspace 路径规范化为可比较的身份键。"""
 
     return str(Path(value).expanduser().resolve(strict=False))
-
-
-async def resolve_recovery_head(
-    workspace: str,
-    source_run_id: str,
-    *,
-    max_hops: int = 32,
-) -> str:
-    """按 source 所属 thread 解析 canonical head，兼容旧的 runId 调用点。"""
-
-    source = await get_execution(workspace, source_run_id)
-    if source is None:
-        return source_run_id
-    resolution = await resolve_recovery_lineage_head(
-        workspace,
-        thread_id=source.thread_id,
-        execution_kind=source.execution_kind,
-        max_hops=max_hops,
-    )
-    if resolution.state is RecoveryLineageState.AMBIGUOUS:
-        raise RecoveryExecutionError(
-            resolution.reason_code,
-            "RecoveryAttempt lineage 存在无法解释的当前 head。",
-        )
-    return resolution.head.run_id if resolution.head is not None else source_run_id
 
 
 async def reconcile_recovery_attempt(
@@ -372,6 +346,5 @@ __all__ = [
     "RecoveryLineageResolution",
     "RecoveryLineageState",
     "reconcile_recovery_attempt",
-    "resolve_recovery_head",
     "resolve_recovery_lineage_head",
 ]

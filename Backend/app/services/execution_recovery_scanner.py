@@ -82,12 +82,10 @@ async def reconcile_workspace_recovery(
     interrupted_ids = [record.run_id for record in interrupted]
     for record in interrupted:
         logger.warning(
-            "recovery.execution.interrupted runId=%s workspace=%s "
-            "backendInstanceId=%s lastRecoveryPointId=%s",
+            "recovery.execution.interrupted runId=%s workspace=%s backendInstanceId=%s",
             record.run_id,
             workspace_text,
             backend_instance_id,
-            record.last_recovery_point_id,
         )
     result = RecoveryScanResult(
         workspace=workspace_text,

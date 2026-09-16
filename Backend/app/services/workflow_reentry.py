@@ -13,11 +13,9 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     NodeEntryBoundary,
-    RecoveryDecision,
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
-    RecoveryStrategy,
     WorkflowReentryContextAuthority,
     WorkflowReentryContextAuthorityKind,
     WorkflowReentryLifecycleAuthority,
@@ -451,22 +449,10 @@ def recovery_plan_from_reentry(plan: WorkflowReentryPlan) -> RecoveryPlan:
     return RecoveryPlan(
         source_run_id=plan.source_run_id,
         thread_id=plan.thread_id,
-        decision=RecoveryDecision.READY_NATIVE,
-        strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
-        lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
+        target_node=plan.target_node,
         checkpoint_id=authority.checkpoint_id,
         checkpoint_ns=authority.checkpoint_ns,
-        next_nodes=[plan.target_node],
-        reason_code=(
-            "FAILED_NODE_REENTRY_READY"
-            if plan.reason is WorkflowReentryReason.FAILURE_RETRY
-            else "INTERRUPTED_CONTINUE_READY"
-        ),
-        reason=(
-            "已验证失败 Node 之前的精确 Semantic Context checkpoint。"
-            if plan.reason is WorkflowReentryReason.FAILURE_RETRY
-            else "已验证最新 source-owned checkpoint 的精确 Node Entry。"
-        ),
+        lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
         lifecycle_revision=plan.lifecycle_authority.revision,
     )
 

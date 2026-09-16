@@ -18,7 +18,6 @@ from app.domain.execution_recovery import (
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
-    RecoveryStrategy,
 )
 from app.persistence.execution_recovery import (
     claim_recovery_finalization,
@@ -27,6 +26,7 @@ from app.persistence.execution_recovery import (
     get_execution,
     get_execution_lease,
     get_recovery_attempt,
+    initialize_execution_recovery_store,
     insert_execution,
     reconcile_orphaned_executions,
     takeover_pre_runtime_recovery_lease,
@@ -36,6 +36,7 @@ from app.services.execution_recovery_executor import (
     _start_recovery_heartbeat,
     finalize_handed_off_recovery_attempt,
 )
+from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 from app.services.execution_lease_heartbeat import stop_execution_heartbeat
 
 
@@ -113,8 +114,8 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             attempt.lifecycle_ownership_mode,
             RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
         )
-        self.assertIsNone(attempt.source_recovery_point_id)
         self.assertEqual(attempt.source_checkpoint_id, plan.checkpoint_id)
+        self.assertNotIn("source_recovery_point_id", type(attempt).model_fields)
         persisted = await get_recovery_attempt(self.workspace, child.run_id)
         self.assertIsNotNone(persisted)
         assert persisted is not None
@@ -122,7 +123,7 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             persisted.lifecycle_ownership_mode,
             RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
         )
-        self.assertIsNone(persisted.source_recovery_point_id)
+        self.assertEqual(persisted.source_checkpoint_id, plan.checkpoint_id)
 
     async def test_started_attempt_cannot_be_taken_over_pre_runtime(self) -> None:
         """STARTED child 已进入 Graph replay 后必须拒绝 pre-runtime takeover。"""
@@ -152,7 +153,6 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             workspace=self.workspace,
             new_run_id=child.run_id,
             status=RecoveryAttemptStatus.STARTED,
-            replay_checkpoint_id="fork-checkpoint",
         )
 
         with self.assertRaises(RecoveryExecutionError) as raised:
@@ -241,13 +241,9 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         plan = RecoveryPlan(
             source_run_id=source.run_id,
             thread_id=source.thread_id,
-            decision="ready_native",
-            strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+            target_node="technical_planning_begin",
             checkpoint_id="planning-source-checkpoint",
             checkpoint_ns="",
-            next_nodes=["technical_planning_begin"],
-            reason_code="TEST",
-            reason="test",
             lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP,
         )
         child, _lease, _attempt = await claim_native_recovery_attempt(
@@ -554,7 +550,6 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
             workspace=self.workspace,
             new_run_id=child.run_id,
             status=RecoveryAttemptStatus.STARTED,
-            replay_checkpoint_id="fork-checkpoint",
         )
         interrupted = await reconcile_orphaned_executions(
             workspace=self.workspace,
@@ -651,22 +646,69 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(failures), 1)
         self.assertIsInstance(failures[0], RecoveryAttemptAlreadyClaimedError)
 
-    async def test_legacy_attempt_strategies_decode_but_finalization_fails_closed(
+    async def test_v8_incompatible_attempts_migrate_without_replay(
         self,
     ) -> None:
-        """旧 Stage Restart/Operation Retry 可读取，但不得触发任何 Graph 调用。"""
+        """v8 非 checkpoint active row 收口，已 STARTED edge 则只保留 lineage。"""
 
-        for strategy in (
-            RecoveryStrategy.STAGE_RESTART,
-            RecoveryStrategy.OPERATION_RETRY,
+        for (
+            strategy,
+            authority_kind,
+            old_status,
+            expected_status,
+            child_status,
+            lease_status,
+            failure_code,
+            keep_checkpoint,
+        ) in (
+            (
+                "stage_restart",
+                "checkpoint",
+                "preparing",
+                RecoveryAttemptStatus.FAILED_PRESTART,
+                DurableExecutionStatus.FAILED,
+                ExecutionLeaseStatus.RELEASED,
+                "RECOVERY_STRATEGY_UNSUPPORTED",
+                True,
+            ),
+            (
+                "operation_retry",
+                "checkpoint",
+                "handed_off",
+                RecoveryAttemptStatus.FINALIZATION_FAILED,
+                DurableExecutionStatus.INTERRUPTED,
+                ExecutionLeaseStatus.RELEASED,
+                "RECOVERY_STRATEGY_UNSUPPORTED",
+                True,
+            ),
+            (
+                "native_checkpoint",
+                "formal_stage",
+                "finalizing",
+                RecoveryAttemptStatus.FINALIZATION_FAILED,
+                DurableExecutionStatus.INTERRUPTED,
+                ExecutionLeaseStatus.RELEASED,
+                "RECOVERY_STRATEGY_UNSUPPORTED",
+                True,
+            ),
+            (
+                "operation_retry",
+                "formal_stage",
+                "started",
+                RecoveryAttemptStatus.STARTED,
+                DurableExecutionStatus.RUNNING,
+                ExecutionLeaseStatus.ACTIVE,
+                None,
+                False,
+            ),
         ):
-            with self.subTest(strategy=strategy.value):
+            with self.subTest(strategy=strategy, status=old_status):
                 with tempfile.TemporaryDirectory() as raw_workspace:
                     workspace = Path(raw_workspace)
                     now = datetime.now(timezone.utc)
                     source = DurableExecutionRecord(
-                        run_id=f"legacy-source-{strategy.value}",
-                        thread_id=f"legacy-thread-{strategy.value}",
+                        run_id=f"legacy-source-{strategy}-{old_status}",
+                        thread_id=f"legacy-thread-{strategy}-{old_status}",
                         owner_session_id="legacy-session",
                         workspace=str(workspace),
                         project_id=None,
@@ -683,62 +725,97 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
                     plan = RecoveryPlan(
                         source_run_id=source.run_id,
                         thread_id=source.thread_id,
-                        decision="ready_native",
-                        strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+                        target_node="B",
                         checkpoint_id="legacy-checkpoint",
                         checkpoint_ns="",
-                        next_nodes=["B"],
-                        reason_code="TEST_LEGACY_ATTEMPT",
-                        reason="seed a current row before applying the legacy strategy",
                     )
                     child, _lease, _attempt = await claim_native_recovery_attempt(
                         source=source,
                         plan=plan,
-                        new_run_id=f"legacy-child-{strategy.value}",
+                        new_run_id=f"legacy-child-{strategy}-{old_status}",
                         owner_backend_instance_id="legacy-backend",
                         owner_pid=101,
                         lease_ttl_seconds=30,
                     )
-                    await update_recovery_attempt(
-                        workspace=workspace,
-                        new_run_id=child.run_id,
-                        status=RecoveryAttemptStatus.HANDED_OFF,
-                    )
-
                     connection = sqlite3.connect(execution_recovery_db_path(workspace))
                     try:
+                        connection.executescript(
+                            """
+                            DROP INDEX idx_recovery_attempts_source;
+                            DROP INDEX idx_recovery_attempts_status;
+                            DROP INDEX idx_recovery_attempts_active_source;
+                            ALTER TABLE recovery_attempts RENAME TO recovery_attempts_v9_seed;
+                            CREATE TABLE recovery_attempts (
+                                new_run_id TEXT PRIMARY KEY,
+                                source_run_id TEXT NOT NULL,
+                                thread_id TEXT NOT NULL,
+                                source_authority_kind TEXT NOT NULL,
+                                source_authority_sha256 TEXT,
+                                source_stage TEXT,
+                                source_lifecycle_revision INTEGER,
+                                source_recovery_point_id TEXT,
+                                source_checkpoint_id TEXT,
+                                source_checkpoint_ns TEXT NOT NULL DEFAULT '',
+                                replay_checkpoint_id TEXT,
+                                replay_checkpoint_ns TEXT NOT NULL DEFAULT '',
+                                strategy TEXT NOT NULL,
+                                lifecycle_ownership_mode TEXT NOT NULL DEFAULT 'source_owned',
+                                status TEXT NOT NULL,
+                                created_at TEXT NOT NULL,
+                                handed_off_at TEXT,
+                                started_at TEXT,
+                                failed_at TEXT,
+                                failure_code TEXT,
+                                source_status TEXT,
+                                source_failure_sha256 TEXT
+                            );
+                            """
+                        )
+                        seed = connection.execute(
+                            "SELECT * FROM recovery_attempts_v9_seed WHERE new_run_id = ?",
+                            (child.run_id,),
+                        ).fetchone()
+                        assert seed is not None
                         connection.execute(
-                            "UPDATE recovery_attempts SET strategy = ? WHERE new_run_id = ?",
-                            (strategy.value, child.run_id),
+                            """
+                            INSERT INTO recovery_attempts VALUES (
+                                ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, '', NULL, '',
+                                ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?
+                            )
+                            """,
+                            (
+                                seed[0], seed[1], seed[2], authority_kind,
+                                seed[5], seed[3] if keep_checkpoint else None,
+                                strategy, seed[6], old_status,
+                                seed[8], seed[13], seed[14],
+                            ),
+                        )
+                        connection.execute("DROP TABLE recovery_attempts_v9_seed")
+                        connection.execute(
+                            "UPDATE recovery_meta SET value = '8' WHERE key = 'schema_version'"
                         )
                         connection.commit()
                     finally:
                         connection.close()
 
+                    await initialize_execution_recovery_store(workspace)
                     decoded = await get_recovery_attempt(workspace, child.run_id)
                     self.assertIsNotNone(decoded)
                     assert decoded is not None
-                    self.assertEqual(decoded.strategy, strategy)
-                    graph = SimpleNamespace(
-                        aget_state=AsyncMock(),
-                        aget_state_history=AsyncMock(),
-                        aupdate_state=AsyncMock(),
-                    )
-
-                    with self.assertRaises(RecoveryExecutionError) as raised:
-                        await finalize_handed_off_recovery_attempt(
-                            workspace=str(workspace),
-                            new_run_id=child.run_id,
-                            graph=graph,
+                    self.assertEqual(decoded.status, expected_status)
+                    self.assertEqual(decoded.failure_code, failure_code)
+                    migrated_child = await get_execution(workspace, child.run_id)
+                    migrated_lease = await get_execution_lease(workspace, child.run_id)
+                    self.assertEqual(migrated_child.status, child_status)
+                    self.assertEqual(migrated_lease.status, lease_status)
+                    if expected_status is RecoveryAttemptStatus.STARTED:
+                        self.assertIsNone(decoded.source_checkpoint_id)
+                        lineage = await resolve_recovery_lineage_head(
+                            str(workspace),
+                            thread_id=source.thread_id,
+                            execution_kind=source.execution_kind,
                         )
-
-                    self.assertEqual(
-                        raised.exception.code,
-                        "RECOVERY_STRATEGY_UNSUPPORTED",
-                    )
-                    graph.aget_state.assert_not_awaited()
-                    graph.aget_state_history.assert_not_awaited()
-                    graph.aupdate_state.assert_not_awaited()
+                        self.assertEqual(lineage.head.run_id, child.run_id)
 
     async def _prepare_source_and_plan(self) -> tuple[DurableExecutionRecord, RecoveryPlan]:
         """写入可供 Native claim 使用的中断 source 与 checkpoint plan。"""
@@ -763,13 +840,9 @@ class ExecutionRecoveryAttemptTests(unittest.IsolatedAsyncioTestCase):
         return source, RecoveryPlan(
             source_run_id=source.run_id,
             thread_id=source.thread_id,
-            decision="ready_native",
-            strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+            target_node="B",
             checkpoint_id="source-checkpoint",
             checkpoint_ns="",
-            next_nodes=["B"],
-            reason_code="TEST",
-            reason="test",
         )
 
 

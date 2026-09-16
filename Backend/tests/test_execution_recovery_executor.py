@@ -14,7 +14,6 @@ from app.domain.execution_recovery import (
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
-    RecoveryStrategy,
 )
 from app.services.execution_recovery_executor import (
     _handoff_lifecycle,
@@ -46,13 +45,9 @@ class ExecutionRecoveryExecutorTests(unittest.TestCase):
         plan = RecoveryPlan(
             source_run_id=source.run_id,
             thread_id=source.thread_id,
-            decision="ready_native",
-            strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+            target_node="technical_planning_begin",
             checkpoint_id="checkpoint-1",
             checkpoint_ns="",
-            next_nodes=["technical_planning_begin"],
-            reason_code="TEST",
-            reason="test",
         )
 
         with tempfile.TemporaryDirectory() as workspace:

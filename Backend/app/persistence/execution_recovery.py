@@ -22,21 +22,42 @@ from app.domain.execution_recovery import (
     RecoveryAttempt,
     RecoveryAttemptAlreadyClaimedError,
     RecoveryAttemptStatus,
-    RecoveryDecision,
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
-    RecoverySourceAuthorityKind,
-    RecoveryStrategy,
 )
 
 
 RECOVERY_DATABASE_RELATIVE_PATH = Path(
     ".xcodeagent/recovery/execution-recovery.sqlite"
 )
-RECOVERY_SCHEMA_VERSION = "8"
+RECOVERY_SCHEMA_VERSION = "9"
 EXECUTION_ROW_WIDTH = 15
 EXECUTION_LEASE_ROW_WIDTH = 8
+_RECOVERY_ATTEMPT_COLUMNS = (
+    "new_run_id",
+    "source_run_id",
+    "thread_id",
+    "source_checkpoint_id",
+    "source_checkpoint_ns",
+    "source_lifecycle_revision",
+    "lifecycle_ownership_mode",
+    "status",
+    "created_at",
+    "handed_off_at",
+    "started_at",
+    "failed_at",
+    "failure_code",
+    "source_status",
+    "source_failure_sha256",
+)
+
+
+def _recovery_attempt_select_columns(table_alias: str | None = None) -> str:
+    """生成统一 RecoveryAttempt SELECT 列表，避免 schema 演进后位置漂移。"""
+
+    prefix = f"{table_alias}." if table_alias else ""
+    return ", ".join(f"{prefix}{column}" for column in _RECOVERY_ATTEMPT_COLUMNS)
 
 
 def execution_recovery_db_path(workspace: str | Path) -> Path:
@@ -97,7 +118,7 @@ async def _connection_after_initialize(
 
 
 async def initialize_execution_recovery_store(workspace: str | Path) -> None:
-    """创建恢复库表，并把旧恢复库原地扩展到当前 schema v8。"""
+    """创建恢复库表，并把旧 v8 RecoveryAttempt 原地收敛到 schema v9。"""
 
     async with _connection(workspace) as connection:
         await connection.executescript(
@@ -117,7 +138,7 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 first_node TEXT NOT NULL,
                 current_node TEXT,
                 status TEXT NOT NULL,
-                last_recovery_point_id TEXT,
+                last_recovery_point_id TEXT, -- legacy unused column
                 started_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 ended_at TEXT,
@@ -153,36 +174,6 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_execution_leases_owner
                 ON execution_leases(owner_backend_instance_id);
 
-            -- Legacy durable compatibility only; production has no current reader/writer.
-            CREATE TABLE IF NOT EXISTS recovery_points (
-                recovery_point_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                thread_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                checkpoint_id TEXT,
-                checkpoint_ns TEXT NOT NULL DEFAULT '',
-                graph_node TEXT,
-                completed_node TEXT,
-                next_nodes_json TEXT NOT NULL,
-                phase TEXT,
-                state_status TEXT,
-                lifecycle_revision INTEGER,
-                workspace_revision TEXT,
-                workspace_snapshot_hash TEXT,
-                replay_safety TEXT NOT NULL,
-                dedupe_key TEXT NOT NULL UNIQUE,
-                captured_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_recovery_points_run
-                ON recovery_points(run_id);
-            CREATE INDEX IF NOT EXISTS idx_recovery_points_thread
-                ON recovery_points(thread_id);
-            CREATE INDEX IF NOT EXISTS idx_recovery_points_checkpoint
-                ON recovery_points(checkpoint_id);
-            CREATE INDEX IF NOT EXISTS idx_recovery_points_captured
-                ON recovery_points(captured_at);
-
             CREATE TABLE IF NOT EXISTS node_entry_boundaries (
                 boundary_id TEXT PRIMARY KEY,
                 source_run_id TEXT NOT NULL,
@@ -206,16 +197,9 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 new_run_id TEXT PRIMARY KEY,
                 source_run_id TEXT NOT NULL,
                 thread_id TEXT NOT NULL,
-                source_authority_kind TEXT NOT NULL,
-                source_authority_sha256 TEXT,
-                source_stage TEXT,
-                source_lifecycle_revision INTEGER,
-                source_recovery_point_id TEXT,
                 source_checkpoint_id TEXT,
                 source_checkpoint_ns TEXT NOT NULL DEFAULT '',
-                replay_checkpoint_id TEXT,
-                replay_checkpoint_ns TEXT NOT NULL DEFAULT '',
-                strategy TEXT NOT NULL,
+                source_lifecycle_revision INTEGER,
                 lifecycle_ownership_mode TEXT NOT NULL DEFAULT 'source_owned',
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL,
@@ -223,7 +207,7 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
                 started_at TEXT,
                 failed_at TEXT,
                 failure_code TEXT,
-                source_status TEXT,
+                source_status TEXT NOT NULL,
                 source_failure_sha256 TEXT,
                 FOREIGN KEY(source_run_id)
                     REFERENCES execution_records(run_id),
@@ -250,63 +234,15 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
             await connection.execute(
                 "ALTER TABLE execution_records ADD COLUMN failure_json TEXT"
             )
-        attempts_columns_cursor = await connection.execute(
-            "PRAGMA table_info(recovery_attempts)"
-        )
+        attempts_columns_cursor = await connection.execute("PRAGMA table_info(recovery_attempts)")
         attempts_columns = await attempts_columns_cursor.fetchall()
         attempt_column_names = {str(column[1]) for column in attempts_columns}
-        source_checkpoint_not_null = any(
-            str(column[1]) == "source_checkpoint_id" and int(column[3]) == 1
-            for column in attempts_columns
-        )
-        required_attempt_columns = {
-            "source_authority_kind",
-            "source_authority_sha256",
-            "source_stage",
-            "source_lifecycle_revision",
-            "source_recovery_point_id",
-            "source_checkpoint_id",
-            "source_checkpoint_ns",
-            "replay_checkpoint_id",
-            "replay_checkpoint_ns",
-            "strategy",
-            "lifecycle_ownership_mode",
-            "status",
-            "created_at",
-            "handed_off_at",
-            "started_at",
-            "failed_at",
-            "failure_code",
-            "source_status",
-            "source_failure_sha256",
-        }
-        if source_checkpoint_not_null or not required_attempt_columns.issubset(
-            attempt_column_names
-        ):
-            await _rebuild_recovery_attempts_v7(
+        if attempt_column_names != set(_RECOVERY_ATTEMPT_COLUMNS):
+            await _migrate_recovery_attempts_v9(
                 connection,
                 existing_columns=attempt_column_names,
             )
-        index_cursor = await connection.execute(
-            """
-            SELECT sql
-            FROM sqlite_master
-            WHERE type = 'index' AND name = 'idx_recovery_attempts_active_source'
-            """
-        )
-        index_row = await index_cursor.fetchone()
-        index_sql = str(index_row[0] or "").lower() if index_row else ""
-        if "finalizing" not in index_sql:
-            await connection.execute(
-                "DROP INDEX IF EXISTS idx_recovery_attempts_active_source"
-            )
-            await connection.execute(
-                """
-                CREATE UNIQUE INDEX idx_recovery_attempts_active_source
-                ON recovery_attempts(source_run_id)
-                WHERE status IN ('preparing', 'handed_off', 'finalizing', 'started')
-                """
-            )
+        await connection.execute("DROP TABLE IF EXISTS recovery_points")
         await connection.execute(
             """
             INSERT INTO recovery_meta(key, value)
@@ -317,23 +253,79 @@ async def initialize_execution_recovery_store(workspace: str | Path) -> None:
         )
 
 
-async def _rebuild_recovery_attempts_v7(
+async def _migrate_recovery_attempts_v9(
     connection: aiosqlite.Connection,
     *,
     existing_columns: set[str],
 ) -> None:
-    """重建 recovery_attempts，使 source checkpoint 字段真正允许为空。"""
+    """把旧 attempt 策略行解释一次，并以 fail-closed 状态写入 v9 edge。"""
 
-    def old_column(name: str, fallback: str) -> str:
-        """为 v3-v6 表生成安全的固定列表达式。"""
+    def old_column(name: str, fallback: str, *, alias: str = "a") -> str:
+        """为旧表生成安全的固定列表达式。"""
 
-        return name if name in existing_columns else fallback
+        return f"{alias}.{name}" if name in existing_columns else fallback
+
+    strategy = old_column("strategy", "'unsupported'")
+    authority_kind = old_column("source_authority_kind", "'unsupported'")
+    checkpoint_id = old_column("source_checkpoint_id", "NULL")
+    checkpoint_ns = old_column("source_checkpoint_ns", "''")
+    compatible = (
+        f"({strategy} = 'native_checkpoint' "
+        f"AND {authority_kind} = 'checkpoint' "
+        f"AND NULLIF({checkpoint_id}, '') IS NOT NULL "
+        f"AND COALESCE({checkpoint_ns}, '') = '')"
+    )
+    active_incompatible = (
+        f"(NOT {compatible} AND a.status IN "
+        "('preparing', 'handed_off', 'finalizing'))"
+    )
+    migrated_at = _utc_iso(datetime.now(timezone.utc))
 
     await connection.execute("DROP INDEX IF EXISTS idx_recovery_attempts_source")
     await connection.execute("DROP INDEX IF EXISTS idx_recovery_attempts_status")
     await connection.execute("DROP INDEX IF EXISTS idx_recovery_attempts_active_source")
+    await connection.execute("ALTER TABLE recovery_attempts RENAME TO recovery_attempts_v8")
+
+    # 旧 active strategy 无法伪装成 checkpoint re-entry；按既有 prestart/finalization
+    # 语义同步收口 child execution 与 lease，保证迁移后不会再触发 Graph 副作用。
     await connection.execute(
-        "ALTER TABLE recovery_attempts RENAME TO recovery_attempts_v6"
+        f"""
+        UPDATE execution_records
+        SET status = CASE
+                WHEN run_id IN (
+                    SELECT new_run_id FROM recovery_attempts_v8 AS a
+                    WHERE NOT {compatible} AND a.status = 'preparing'
+                ) THEN 'failed'
+                ELSE 'interrupted'
+            END,
+            updated_at = ?,
+            ended_at = COALESCE(ended_at, ?),
+            failure_json = CASE
+                WHEN run_id IN (
+                    SELECT new_run_id FROM recovery_attempts_v8 AS a
+                    WHERE NOT {compatible} AND a.status = 'preparing'
+                ) THEN NULL
+                ELSE failure_json
+            END
+        WHERE status = 'running'
+          AND run_id IN (
+              SELECT new_run_id FROM recovery_attempts_v8 AS a
+              WHERE {active_incompatible}
+          )
+        """,
+        (migrated_at, migrated_at),
+    )
+    await connection.execute(
+        f"""
+        UPDATE execution_leases
+        SET status = 'released', released_at = COALESCE(released_at, ?)
+        WHERE status = 'active'
+          AND run_id IN (
+              SELECT new_run_id FROM recovery_attempts_v8 AS a
+              WHERE {active_incompatible}
+          )
+        """,
+        (migrated_at,),
     )
     await connection.execute(
         """
@@ -341,16 +333,9 @@ async def _rebuild_recovery_attempts_v7(
             new_run_id TEXT PRIMARY KEY,
             source_run_id TEXT NOT NULL,
             thread_id TEXT NOT NULL,
-            source_authority_kind TEXT NOT NULL,
-            source_authority_sha256 TEXT,
-            source_stage TEXT,
-            source_lifecycle_revision INTEGER,
-            source_recovery_point_id TEXT,
             source_checkpoint_id TEXT,
             source_checkpoint_ns TEXT NOT NULL DEFAULT '',
-            replay_checkpoint_id TEXT,
-            replay_checkpoint_ns TEXT NOT NULL DEFAULT '',
-            strategy TEXT NOT NULL,
+            source_lifecycle_revision INTEGER,
             lifecycle_ownership_mode TEXT NOT NULL DEFAULT 'source_owned',
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -358,7 +343,7 @@ async def _rebuild_recovery_attempts_v7(
             started_at TEXT,
             failed_at TEXT,
             failure_code TEXT,
-            source_status TEXT,
+            source_status TEXT NOT NULL,
             source_failure_sha256 TEXT,
             FOREIGN KEY(source_run_id)
                 REFERENCES execution_records(run_id),
@@ -369,32 +354,55 @@ async def _rebuild_recovery_attempts_v7(
     )
     await connection.execute(
         f"""
-        INSERT INTO recovery_attempts(
-            new_run_id, source_run_id, thread_id,
-            source_authority_kind, source_authority_sha256, source_stage,
-            source_lifecycle_revision, source_recovery_point_id,
-            source_checkpoint_id, source_checkpoint_ns, replay_checkpoint_id,
-            replay_checkpoint_ns, strategy, lifecycle_ownership_mode, status,
-            created_at, handed_off_at, started_at, failed_at, failure_code,
-            source_status, source_failure_sha256
-        )
+        INSERT INTO recovery_attempts({_recovery_attempt_select_columns()})
         SELECT
-            new_run_id, source_run_id, thread_id,
-            'checkpoint', NULL, NULL,
-            NULL, {old_column('source_recovery_point_id', 'NULL')},
-            {old_column('source_checkpoint_id', 'NULL')},
-            {old_column('source_checkpoint_ns', "''")},
-            {old_column('replay_checkpoint_id', 'NULL')},
-            {old_column('replay_checkpoint_ns', "''")},
-            strategy,
+            a.new_run_id, a.source_run_id, a.thread_id,
+            CASE
+                WHEN COALESCE({checkpoint_ns}, '') = '' THEN {checkpoint_id}
+                ELSE NULL
+            END,
+            '',
+            {old_column('source_lifecycle_revision', 'NULL')},
             {old_column('lifecycle_ownership_mode', "'source_owned'")},
-            status, created_at, handed_off_at, started_at, failed_at,
-            failure_code, {old_column('source_status', 'NULL')},
+            CASE
+                WHEN NOT {compatible} AND a.status = 'preparing'
+                    THEN 'failed_prestart'
+                WHEN NOT {compatible} AND a.status IN ('handed_off', 'finalizing')
+                    THEN 'finalization_failed'
+                ELSE a.status
+            END,
+            a.created_at,
+            {old_column('handed_off_at', 'NULL')},
+            {old_column('started_at', 'NULL')},
+            CASE
+                WHEN {active_incompatible} THEN COALESCE({old_column('failed_at', 'NULL')}, ?)
+                ELSE {old_column('failed_at', 'NULL')}
+            END,
+            CASE
+                WHEN {active_incompatible} THEN 'RECOVERY_STRATEGY_UNSUPPORTED'
+                ELSE {old_column('failure_code', 'NULL')}
+            END,
+            COALESCE({old_column('source_status', 'NULL')}, source.status, 'interrupted'),
             {old_column('source_failure_sha256', 'NULL')}
-        FROM recovery_attempts_v6
+        FROM recovery_attempts_v8 AS a
+        LEFT JOIN execution_records AS source ON source.run_id = a.source_run_id
+        """,
+        (migrated_at,),
+    )
+    await connection.execute("DROP TABLE recovery_attempts_v8")
+    await connection.execute(
+        "CREATE INDEX idx_recovery_attempts_source ON recovery_attempts(source_run_id)"
+    )
+    await connection.execute(
+        "CREATE INDEX idx_recovery_attempts_status ON recovery_attempts(status)"
+    )
+    await connection.execute(
+        """
+        CREATE UNIQUE INDEX idx_recovery_attempts_active_source
+        ON recovery_attempts(source_run_id)
+        WHERE status IN ('preparing', 'handed_off', 'finalizing', 'started')
         """
     )
-    await connection.execute("DROP TABLE recovery_attempts_v6")
 
 
 async def insert_execution(
@@ -409,9 +417,8 @@ async def insert_execution(
             INSERT INTO execution_records(
                 run_id, thread_id, workspace, project_id, execution_kind,
                 workflow_scope, first_node, current_node, status,
-                last_recovery_point_id, started_at, updated_at, ended_at,
-                owner_session_id, failure_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, updated_at, ended_at, owner_session_id, failure_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id) DO NOTHING
             """,
             (
@@ -424,7 +431,6 @@ async def insert_execution(
                 record.first_node,
                 record.current_node,
                 record.status.value,
-                record.last_recovery_point_id,
                 _utc_iso(record.started_at),
                 _utc_iso(record.updated_at),
                 _utc_iso(record.ended_at) if record.ended_at else None,
@@ -481,18 +487,19 @@ async def _claim_recovery_attempt(
             "RECOVERY_SOURCE_MISMATCH",
             "RecoveryPlan 与 source execution 不属于同一条运行记录。",
         )
-    checkpoint_complete = bool(
-        plan.checkpoint_id and plan.checkpoint_ns == "" and len(plan.next_nodes) == 1
-    )
-    native_valid = (
-        plan.decision is RecoveryDecision.READY_NATIVE
-        and plan.strategy is RecoveryStrategy.NATIVE_CHECKPOINT
-        and checkpoint_complete
-    )
-    if not native_valid:
+    if (
+        plan.thread_id != source.thread_id
+        or not plan.checkpoint_id
+        or plan.checkpoint_ns != ""
+        or not plan.target_node
+        or (
+            source.status is DurableExecutionStatus.FAILED
+            and plan.target_node != source.current_node
+        )
+    ):
         raise RecoveryExecutionError(
-            "RECOVERY_NOT_READY_NATIVE",
-            "当前 RecoveryPlan 未被 Recovery Action Planner 明确允许。",
+            "WORKFLOW_REENTRY_PLAN_INVALID",
+            "RecoveryPlan 缺少合法的 root checkpoint transaction authority。",
         )
     admission = assess_recovery_source(source)
     if not admission.admissible:
@@ -518,8 +525,8 @@ async def _claim_recovery_attempt(
         execution_kind=source.execution_kind,
         workflow_scope=source.workflow_scope,
         owner_session_id=source.owner_session_id,
-        first_node=plan.next_nodes[0],
-        current_node=plan.next_nodes[0],
+        first_node=plan.target_node,
+        current_node=plan.target_node,
         status=DurableExecutionStatus.RUNNING,
         started_at=now,
         updated_at=now,
@@ -528,14 +535,9 @@ async def _claim_recovery_attempt(
         source_run_id=source.run_id,
         new_run_id=new_run_id,
         thread_id=source.thread_id,
-        source_authority_kind=RecoverySourceAuthorityKind.CHECKPOINT,
-        source_authority_sha256=None,
-        source_stage=None,
         source_lifecycle_revision=plan.lifecycle_revision,
-        source_recovery_point_id=None,
         source_checkpoint_id=plan.checkpoint_id,
         source_checkpoint_ns=plan.checkpoint_ns,
-        strategy=plan.strategy,
         lifecycle_ownership_mode=plan.lifecycle_ownership_mode,
         status=RecoveryAttemptStatus.PREPARING,
         created_at=now,
@@ -578,10 +580,9 @@ async def _claim_recovery_attempt(
                 """
                 INSERT INTO execution_records(
                     run_id, thread_id, workspace, project_id, execution_kind,
-                workflow_scope, first_node, current_node, status,
-                last_recovery_point_id, started_at, updated_at, ended_at,
-                owner_session_id, failure_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    workflow_scope, first_node, current_node, status,
+                    started_at, updated_at, ended_at, owner_session_id, failure_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -593,7 +594,6 @@ async def _claim_recovery_attempt(
                     record.first_node,
                     record.current_node,
                     record.status.value,
-                    record.last_recovery_point_id,
                     _utc_iso(record.started_at),
                     _utc_iso(record.updated_at),
                     None,
@@ -623,30 +623,19 @@ async def _claim_recovery_attempt(
                 """
                 INSERT INTO recovery_attempts(
                     new_run_id, source_run_id, thread_id,
-                    source_authority_kind, source_authority_sha256, source_stage,
-                    source_lifecycle_revision, source_recovery_point_id,
-                    source_checkpoint_id,
-                    source_checkpoint_ns, replay_checkpoint_id,
-                    replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
-                    status, created_at,
-                    handed_off_at, started_at, failed_at, failure_code,
-                    source_status, source_failure_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_checkpoint_id, source_checkpoint_ns,
+                    source_lifecycle_revision, lifecycle_ownership_mode,
+                    status, created_at, handed_off_at, started_at, failed_at,
+                    failure_code, source_status, source_failure_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt.new_run_id,
                     attempt.source_run_id,
                     attempt.thread_id,
-                    attempt.source_authority_kind.value,
-                    attempt.source_authority_sha256,
-                    attempt.source_stage,
-                    attempt.source_lifecycle_revision,
-                    None,
                     attempt.source_checkpoint_id,
                     attempt.source_checkpoint_ns,
-                    None,
-                    attempt.replay_checkpoint_ns,
-                    attempt.strategy.value,
+                    attempt.source_lifecycle_revision,
                     attempt.lifecycle_ownership_mode.value,
                     attempt.status.value,
                     _utc_iso(attempt.created_at),
@@ -693,16 +682,8 @@ async def list_recovery_attempts_from_source(
     await initialize_execution_recovery_store(workspace)
     async with _connection(workspace) as connection:
         cursor = await connection.execute(
-            """
-            SELECT new_run_id, source_run_id, thread_id,
-                   source_authority_kind, source_authority_sha256, source_stage,
-                   source_lifecycle_revision, source_recovery_point_id,
-                   source_checkpoint_id,
-                   source_checkpoint_ns, replay_checkpoint_id,
-                   replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
-                   status, created_at,
-                   handed_off_at, started_at, failed_at, failure_code,
-                   source_status, source_failure_sha256
+            f"""
+            SELECT {_recovery_attempt_select_columns()}
             FROM recovery_attempts
             WHERE source_run_id = ?
             ORDER BY created_at ASC, new_run_id ASC
@@ -718,8 +699,6 @@ async def update_recovery_attempt(
     workspace: str | Path,
     new_run_id: str,
     status: RecoveryAttemptStatus,
-    replay_checkpoint_id: str | None = None,
-    replay_checkpoint_ns: str | None = None,
     failure_code: str | None = None,
     updated_at: datetime | None = None,
 ) -> RecoveryAttempt | None:
@@ -757,16 +736,6 @@ async def update_recovery_attempt(
             )
         updates = {
             "status": status.value,
-            "replay_checkpoint_id": (
-                replay_checkpoint_id
-                if replay_checkpoint_id is not None
-                else current_attempt.replay_checkpoint_id
-            ),
-            "replay_checkpoint_ns": (
-                replay_checkpoint_ns
-                if replay_checkpoint_ns is not None
-                else current_attempt.replay_checkpoint_ns
-            ),
             "handed_off_at": (
                 _utc_iso(now)
                 if status
@@ -797,13 +766,12 @@ async def update_recovery_attempt(
         await connection.execute(
             """
             UPDATE recovery_attempts
-            SET status = ?, replay_checkpoint_id = ?, replay_checkpoint_ns = ?,
-                handed_off_at = ?, started_at = ?, failed_at = ?, failure_code = ?
+            SET status = ?, handed_off_at = ?, started_at = ?, failed_at = ?,
+                failure_code = ?
             WHERE new_run_id = ?
             """,
             (
-                updates["status"], updates["replay_checkpoint_id"],
-                updates["replay_checkpoint_ns"], updates["handed_off_at"],
+                updates["status"], updates["handed_off_at"],
                 updates["started_at"], updates["failed_at"],
                 updates["failure_code"], new_run_id,
             ),
@@ -901,7 +869,7 @@ async def claim_recovery_finalization(
                     "RecoveryAttempt 的 finalization claim 已被其他请求获得。",
                 )
         cursor = await connection.execute(
-            """
+            f"""
             UPDATE execution_leases
             SET owner_backend_instance_id = ?, owner_pid = ?, status = ?,
                 heartbeat_at = ?, expires_at = ?, released_at = NULL
@@ -993,10 +961,9 @@ async def insert_execution_with_lease(
                 """
                 INSERT INTO execution_records(
                     run_id, thread_id, workspace, project_id, execution_kind,
-                workflow_scope, first_node, current_node, status,
-                last_recovery_point_id, started_at, updated_at, ended_at,
-                owner_session_id, failure_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    workflow_scope, first_node, current_node, status,
+                    started_at, updated_at, ended_at, owner_session_id, failure_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -1008,7 +975,6 @@ async def insert_execution_with_lease(
                     record.first_node,
                     record.current_node,
                     record.status.value,
-                    record.last_recovery_point_id,
                     _utc_iso(record.started_at),
                     _utc_iso(record.updated_at),
                     _utc_iso(record.ended_at) if record.ended_at else None,
@@ -1248,11 +1214,11 @@ async def list_running_executions_with_leases(
     await initialize_execution_recovery_store(workspace)
     async with _connection(workspace) as connection:
         cursor = await connection.execute(
-            """
+            f"""
             SELECT
                 e.run_id, e.thread_id, e.workspace, e.project_id,
                 e.execution_kind, e.workflow_scope, e.first_node,
-                e.current_node, e.status, e.last_recovery_point_id,
+                e.current_node, e.status, NULL AS last_recovery_point_id,
                 e.started_at, e.updated_at, e.ended_at, e.owner_session_id,
                 e.failure_json,
                 l.run_id, l.owner_backend_instance_id, l.owner_pid,
@@ -1455,16 +1421,16 @@ async def _list_running_executions_with_leases_and_attempts(
     await initialize_execution_recovery_store(workspace)
     async with _connection(workspace) as connection:
         cursor = await connection.execute(
-            """
+            f"""
             SELECT
                 e.run_id, e.thread_id, e.workspace, e.project_id,
                 e.execution_kind, e.workflow_scope, e.first_node,
-                e.current_node, e.status, e.last_recovery_point_id,
+                e.current_node, e.status, NULL AS last_recovery_point_id,
                 e.started_at, e.updated_at, e.ended_at, e.owner_session_id,
                 e.failure_json,
                 l.run_id, l.owner_backend_instance_id, l.owner_pid,
                 l.status, l.acquired_at, l.heartbeat_at, l.expires_at,
-                l.released_at, a.status
+                l.released_at, {_recovery_attempt_select_columns('a')}
             FROM execution_records AS e
             LEFT JOIN execution_leases AS l ON l.run_id = e.run_id
             LEFT JOIN recovery_attempts AS a ON a.new_run_id = e.run_id
@@ -1482,7 +1448,9 @@ async def _list_running_executions_with_leases_and_attempts(
             )
             if row[EXECUTION_ROW_WIDTH] is not None
             else None,
-            RecoveryAttemptStatus(str(row[EXECUTION_ROW_WIDTH + EXECUTION_LEASE_ROW_WIDTH]))
+            _recovery_attempt_from_row(
+                row[EXECUTION_ROW_WIDTH + EXECUTION_LEASE_ROW_WIDTH :]
+            ).status
             if row[EXECUTION_ROW_WIDTH + EXECUTION_LEASE_ROW_WIDTH] is not None
             else None,
         )
@@ -1674,7 +1642,7 @@ async def get_latest_execution_for_thread(
             """
             SELECT run_id, thread_id, workspace, project_id, execution_kind,
                    workflow_scope, first_node, current_node, status,
-                   last_recovery_point_id, started_at, updated_at, ended_at,
+                   NULL AS last_recovery_point_id, started_at, updated_at, ended_at,
                    owner_session_id, failure_json
             FROM execution_records
             WHERE thread_id = ?
@@ -1702,7 +1670,7 @@ async def list_executions_for_thread(
             """
             SELECT run_id, thread_id, workspace, project_id, execution_kind,
                    workflow_scope, first_node, current_node, status,
-                   last_recovery_point_id, started_at, updated_at, ended_at,
+                   NULL AS last_recovery_point_id, started_at, updated_at, ended_at,
                    owner_session_id, failure_json
             FROM execution_records
             WHERE thread_id = ?
@@ -1725,16 +1693,8 @@ async def list_recovery_attempts_for_thread(
     await initialize_execution_recovery_store(workspace)
     async with _connection(workspace) as connection:
         cursor = await connection.execute(
-            """
-            SELECT new_run_id, source_run_id, thread_id,
-                   source_authority_kind, source_authority_sha256, source_stage,
-                   source_lifecycle_revision, source_recovery_point_id,
-                   source_checkpoint_id,
-                   source_checkpoint_ns, replay_checkpoint_id,
-                   replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
-                   status, created_at,
-                   handed_off_at, started_at, failed_at, failure_code,
-                   source_status, source_failure_sha256
+            f"""
+            SELECT {_recovery_attempt_select_columns()}
             FROM recovery_attempts
             WHERE thread_id = ?
             ORDER BY created_at ASC, new_run_id ASC
@@ -1759,7 +1719,7 @@ async def list_recovery_projection_candidates(
             """
             SELECT e.run_id, e.thread_id, e.workspace, e.project_id,
                    e.execution_kind, e.workflow_scope, e.first_node,
-                   e.current_node, e.status, e.last_recovery_point_id,
+                   e.current_node, e.status, NULL AS last_recovery_point_id,
                    e.started_at, e.updated_at, e.ended_at, e.owner_session_id,
                    e.failure_json
             FROM execution_records AS e
@@ -1794,7 +1754,7 @@ async def _fetch_execution_row(
         """
         SELECT run_id, thread_id, workspace, project_id, execution_kind,
                workflow_scope, first_node, current_node, status,
-               last_recovery_point_id, started_at, updated_at, ended_at,
+               NULL AS last_recovery_point_id, started_at, updated_at, ended_at,
                owner_session_id, failure_json
         FROM execution_records
         WHERE run_id = ?
@@ -1811,16 +1771,8 @@ async def _fetch_active_attempt_row(
     """读取 source 当前仍占用唯一恢复分支的 child 行。"""
 
     cursor = await connection.execute(
-        """
-        SELECT new_run_id, source_run_id, thread_id,
-               source_authority_kind, source_authority_sha256, source_stage,
-               source_lifecycle_revision, source_recovery_point_id,
-               source_checkpoint_id,
-               source_checkpoint_ns, replay_checkpoint_id,
-               replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
-               status, created_at,
-               handed_off_at, started_at, failed_at, failure_code,
-               source_status, source_failure_sha256
+        f"""
+        SELECT {_recovery_attempt_select_columns()}
         FROM recovery_attempts
         WHERE source_run_id = ?
           AND status IN ('preparing', 'handed_off', 'finalizing', 'started')
@@ -1839,16 +1791,8 @@ async def _fetch_recovery_attempt_row(
     """按 child runId 读取恢复 lineage 原始行。"""
 
     cursor = await connection.execute(
-        """
-        SELECT new_run_id, source_run_id, thread_id,
-               source_authority_kind, source_authority_sha256, source_stage,
-               source_lifecycle_revision, source_recovery_point_id,
-               source_checkpoint_id,
-               source_checkpoint_ns, replay_checkpoint_id,
-               replay_checkpoint_ns, strategy, lifecycle_ownership_mode,
-               status, created_at,
-               handed_off_at, started_at, failed_at, failure_code,
-               source_status, source_failure_sha256
+        f"""
+        SELECT {_recovery_attempt_select_columns()}
         FROM recovery_attempts
         WHERE new_run_id = ?
         """,
@@ -1888,9 +1832,6 @@ def _execution_from_row(row: tuple[object, ...]) -> DurableExecutionRecord:
         first_node=str(row[6]),
         current_node=str(row[7]) if row[7] is not None else None,
         status=DurableExecutionStatus(str(row[8])),
-        last_recovery_point_id=(
-            str(row[9]) if row[9] is not None else None
-        ),
         started_at=_parse_datetime(str(row[10])),
         updated_at=_parse_datetime(str(row[11])),
         ended_at=_parse_datetime(str(row[12])) if row[12] is not None else None,
@@ -1943,31 +1884,20 @@ def _recovery_attempt_from_row(row: tuple[object, ...]) -> RecoveryAttempt:
         new_run_id=str(row[0]),
         source_run_id=str(row[1]),
         thread_id=str(row[2]),
-        source_authority_kind=RecoverySourceAuthorityKind(str(row[3])),
-        source_authority_sha256=(
-            str(row[4]) if row[4] is not None else None
-        ),
-        source_stage=str(row[5]) if row[5] is not None else None,
+        source_checkpoint_id=str(row[3]) if row[3] is not None else None,
+        source_checkpoint_ns=str(row[4] or ""),
         source_lifecycle_revision=(
-            int(row[6]) if row[6] is not None else None
+            int(row[5]) if row[5] is not None else None
         ),
-        source_recovery_point_id=str(row[7]) if row[7] is not None else None,
-        source_checkpoint_id=str(row[8]) if row[8] is not None else None,
-        source_checkpoint_ns=str(row[9] or ""),
-        replay_checkpoint_id=str(row[10]) if row[10] is not None else None,
-        replay_checkpoint_ns=str(row[11] or ""),
-        strategy=RecoveryStrategy(str(row[12])),
-        lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode(str(row[13])),
-        status=RecoveryAttemptStatus(str(row[14])),
-        created_at=_parse_datetime(str(row[15])),
-        handed_off_at=_parse_datetime(str(row[16])) if row[16] is not None else None,
-        started_at=_parse_datetime(str(row[17])) if row[17] is not None else None,
-        failed_at=_parse_datetime(str(row[18])) if row[18] is not None else None,
-        failure_code=str(row[19]) if row[19] is not None else None,
-        source_status=DurableExecutionStatus(str(row[20]))
-        if row[20] is not None
-        else DurableExecutionStatus.INTERRUPTED,
-        source_failure_sha256=str(row[21]) if row[21] is not None else None,
+        lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode(str(row[6])),
+        status=RecoveryAttemptStatus(str(row[7])),
+        created_at=_parse_datetime(str(row[8])),
+        handed_off_at=_parse_datetime(str(row[9])) if row[9] is not None else None,
+        started_at=_parse_datetime(str(row[10])) if row[10] is not None else None,
+        failed_at=_parse_datetime(str(row[11])) if row[11] is not None else None,
+        failure_code=str(row[12]) if row[12] is not None else None,
+        source_status=DurableExecutionStatus(str(row[13])),
+        source_failure_sha256=str(row[14]) if row[14] is not None else None,
     )
 
 

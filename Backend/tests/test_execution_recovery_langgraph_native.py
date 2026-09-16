@@ -24,7 +24,6 @@ from app.domain.execution_recovery import (
     ExecutionLeaseStatus,
     RecoveryPlan,
     RecoveryExecutionError,
-    RecoveryStrategy,
     RecoveryAttemptStatus,
 )
 from app.persistence.execution_recovery import (
@@ -153,13 +152,9 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
             plan = RecoveryPlan(
                 source_run_id=source_run_id,
                 thread_id=thread_id,
-                decision="ready_native",
-                strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+                target_node="B",
                 checkpoint_id=source_checkpoint_id,
                 checkpoint_ns=source_checkpoint_ns,
-                next_nodes=["B"],
-                reason_code="TEST",
-                reason="real LangGraph replay",
                 lifecycle_revision=lifecycle.revision,
             )
             child, _lease, _attempt = await claim_native_recovery_attempt(
@@ -276,13 +271,9 @@ class ExecutionRecoveryLangGraphNativeTests(unittest.IsolatedAsyncioTestCase):
             plan = RecoveryPlan(
                 source_run_id=source.run_id,
                 thread_id=source.thread_id,
-                decision="ready_native",
-                strategy=RecoveryStrategy.NATIVE_CHECKPOINT,
+                target_node="B",
                 checkpoint_id="workspace-drift-checkpoint",
                 checkpoint_ns="",
-                next_nodes=["B"],
-                reason_code="TEST",
-                reason="workspace drift",
                 lifecycle_revision=lifecycle.revision,
             )
             identity = current_backend_instance()
