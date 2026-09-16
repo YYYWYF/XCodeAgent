@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { randomUUID } from '@ag-ui/client'
 import { workflowDebugResumeSource } from '../workflowDebugResume'
+import { executionRecoveryForSession } from '../executionRecoveryState'
 import {
   AgUiChatSession,
   AgUiRunError,
@@ -18,6 +19,13 @@ import { getApplicationLifecycle } from '../../../service/applicationLifecycle'
 import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
+import {
+  beginConnectionRequest,
+  completeConnectionRequest,
+  failConnectionRequest,
+  initialConnectionState,
+  type ConnectionState
+} from '../../../service/connectionState'
 import type {
   ApplicationConfig,
   ApplicationPlanningInteraction,
@@ -180,6 +188,7 @@ type UseWorkflowConversationParams = {
 
 type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
+  connectionState: ConnectionState
   conversationRunning: boolean
   error?: string
   handleAcceptPreview: () => Promise<boolean>
@@ -238,6 +247,7 @@ type UseWorkflowConversationResult = {
   workspaceBusy: boolean
   recoveryRunning: boolean
   recoveryError?: string
+  refreshConnection: () => Promise<boolean>
 }
 
 /** 从 Workflow 快照中读取最近一次页面选择，作为确认继续时的兜底上下文。 */
@@ -649,6 +659,22 @@ export function useWorkflowConversation({
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
   const [recoveringSourceRunId, setRecoveringSourceRunId] = useState<string>()
   const [recoveryError, setRecoveryError] = useState<string>()
+  const [connectionState, setConnectionState] = useState<ConnectionState>(() =>
+    initialConnectionState(Boolean(applicationLifecycle))
+  )
+  const connectionRequestGenerationRef = useRef(0)
+  const applicationLifecycleRef = useRef(applicationLifecycle)
+  const connectionStateRef = useRef(connectionState)
+  applicationLifecycleRef.current = applicationLifecycle
+  connectionStateRef.current = connectionState
+
+  // 任一成功到达的 Backend lifecycle 都能恢复连接维度，但不会改写 Recovery projection。
+  useEffect(() => {
+    if (!applicationLifecycle) return
+    setConnectionState((current) =>
+      completeConnectionRequest(current, current.requestGeneration)
+    )
+  }, [applicationLifecycle])
   // 记录用户已明确结束的会话，保证自由输入不依赖后端控制请求或生命周期回传时序。
   const [endedPlanSessionKeys, setEndedPlanSessionKeys] = useState<Record<string, boolean>>({})
 
@@ -690,11 +716,27 @@ export function useWorkflowConversation({
   const handleExecuteRecoveryAction = async (
     recovery: ExecutionRecoveryCandidate
   ): Promise<boolean> => {
-    const actionPlan = recovery.recoveryActionPlan
+    const latestRecovery = executionRecoveryForSession(
+      applicationLifecycleRef.current,
+      activeSession?.sessionId
+    )
+    const requestedActionId = recovery.recoveryActionPlan.primaryAction?.actionId
+    const latestActionId = latestRecovery?.recoveryActionPlan.primaryAction?.actionId
+    if (
+      !latestRecovery ||
+      latestRecovery.recoveryActionPlan.incidentId !== recovery.recoveryActionPlan.incidentId ||
+      latestActionId !== requestedActionId
+    ) {
+      setRecoveryError('当前恢复操作已更新，请使用最新的恢复状态。')
+      return false
+    }
+    recovery = latestRecovery
+    const actionPlan = latestRecovery.recoveryActionPlan
     const primaryAction = actionPlan.primaryAction
     if (
       !activeSession ||
       activeSession.sessionId !== recovery.ownerSessionId ||
+      connectionStateRef.current.status !== 'healthy' ||
       loading ||
       workspaceBusy ||
       recoveringSourceRunId === recovery.sourceRunId ||
@@ -725,12 +767,7 @@ export function useWorkflowConversation({
         conversation: false
       })
     } finally {
-      try {
-        const latestLifecycle = await getApplicationLifecycle(application, sessionIdentity.threadId)
-        onApplicationLifecycleChange(latestLifecycle)
-      } catch (error) {
-        setRecoveryError(error instanceof Error ? error.message : '恢复状态刷新失败。')
-      }
+      await refreshExecutionRecoveryLifecycle()
       setRecoveringSourceRunId(undefined)
     }
   }
@@ -851,14 +888,34 @@ export function useWorkflowConversation({
 
   /** 重新读取当前 Execution Recovery Incident，避免 stale action 继续占据控制面。 */
   const refreshExecutionRecoveryLifecycle = async (): Promise<boolean> => {
+    const requestGeneration = ++connectionRequestGenerationRef.current
+    setConnectionState((current) => beginConnectionRequest(current, requestGeneration))
     try {
       const lifecycle = await getApplicationLifecycle(application)
       onApplicationLifecycleChange(lifecycle)
+      setConnectionState((current) => completeConnectionRequest(current, requestGeneration))
       return true
-    } catch {
+    } catch (error) {
+      setConnectionState((current) =>
+        failConnectionRequest(
+          current,
+          requestGeneration,
+          error instanceof Error ? error.message : 'Backend 暂时不可用，无法同步最新状态。'
+        )
+      )
       return false
     }
   }
+
+  // 浏览器网络恢复只触发 durable truth 刷新，绝不自动执行 Recovery action。
+  useEffect(() => {
+    const handleOnline = (): void => {
+      if (connectionState.status !== 'unavailable') return
+      void refreshExecutionRecoveryLifecycle()
+    }
+    window.addEventListener('online', handleOnline)
+    return () => window.removeEventListener('online', handleOnline)
+  }, [connectionState.status])
 
   /** 发送并持久化 Workflow 对话，认证失败时恢复发送前的界面状态。 */
   const sendWorkflowMessage = async (
@@ -1065,6 +1122,9 @@ export function useWorkflowConversation({
     let apiConfirmationPersistFailed = false
     let apiConfirmationPersistPromise: Promise<void> = Promise.resolve()
     let executionStartedNotified = false
+    let connectionRequestGeneration = 0
+    let backendRequestStarted = false
+    let backendRunSettled = false
     const updateAssistantMessage = (
       content: string,
       workflow?: WorkflowRunPayload,
@@ -1155,6 +1215,8 @@ export function useWorkflowConversation({
           conversation: Boolean(options?.conversation)
         }
       }))
+      connectionRequestGeneration = ++connectionRequestGenerationRef.current
+      backendRequestStarted = true
       const {
         answer: rawAnswer,
         workflow,
@@ -1226,6 +1288,10 @@ export function useWorkflowConversation({
           )
         }
       })
+      backendRunSettled = true
+      setConnectionState((current) =>
+        completeConnectionRequest(current, connectionRequestGeneration)
+      )
       const stopped = Boolean(stopRequestedRef.current[identity.key])
       const answer = stopped ? stoppedAnswer(streamedContent || rawAnswer) : rawAnswer.trim()
       const finalWorkflow = stopped
@@ -1285,6 +1351,23 @@ export function useWorkflowConversation({
       publishAiMessage(identity.editorMode, answer)
       return true
     } catch (caughtError) {
+      if (backendRequestStarted && !backendRunSettled && !isAbortedStreamError(caughtError)) {
+        if (caughtError instanceof AgUiRunError || isAuthenticationFailure(caughtError)) {
+          setConnectionState((current) =>
+            completeConnectionRequest(current, connectionRequestGeneration)
+          )
+        } else {
+          setConnectionState((current) =>
+            failConnectionRequest(
+              current,
+              connectionRequestGeneration,
+              caughtError instanceof Error
+                ? caughtError.message
+                : 'Backend 暂时不可用，无法同步最新状态。'
+            )
+          )
+        }
+      }
       if (isAuthenticationFailure(caughtError)) {
         if (apiConfirmationSnapshotKey) {
           // 确认结果已经收到时，认证失败不能回滚到确认前的未绑定消息。
@@ -1361,7 +1444,7 @@ export function useWorkflowConversation({
         failedWorkflow,
         failedToolCalls,
         failedProcessSteps,
-        options?.executionRecovery ? undefined : failedContent
+        !options?.executionRecovery && runError ? failedContent : undefined
       )
       if (failedWorkflow) {
         setLiveWorkflows((current) => ({
@@ -1377,7 +1460,7 @@ export function useWorkflowConversation({
         threadId: identity.threadId,
         titleFrom: options?.titleFrom || message
       })
-      if (!options?.executionRecovery) {
+      if (!options?.executionRecovery && runError) {
         setErrors((current) => ({
           ...current,
           [identity.key]: failedContent
@@ -1386,16 +1469,18 @@ export function useWorkflowConversation({
       if (options?.executionRecovery) {
         // Recovery endpoint 的内部错误码不写入历史错误卡，避免 stale action 形成第二控制面。
         if (staleRecoveryAction) {
-          setRecoveryError('当前恢复操作已过期，正在刷新最新状态。')
+          setRecoveryError('当前恢复操作已过期。')
           const refreshed = await refreshExecutionRecoveryLifecycle()
           if (refreshed) {
             setRecoveryError(undefined)
-          } else {
-            setRecoveryError('恢复操作已过期，但最新恢复状态刷新失败，请重试。')
           }
         } else {
           setRecoveryError('无法安全执行当前恢复操作，请查看最新状态。')
         }
+      }
+      if (runError && !options?.executionRecovery) {
+        // Backend 已返回业务 RUN_ERROR；只读刷新 durable truth，绝不根据错误文本猜恢复动作。
+        await refreshExecutionRecoveryLifecycle()
       }
       return false
     } finally {
@@ -2142,6 +2227,7 @@ export function useWorkflowConversation({
 
   return {
     activeWorkflow,
+    connectionState,
     conversationRunning,
     error,
     handleAcceptPreview,
@@ -2166,7 +2252,8 @@ export function useWorkflowConversation({
     stopping,
     workspaceBusy,
     recoveryRunning: Boolean(recoveringSourceRunId),
-    recoveryError
+    recoveryError,
+    refreshConnection: refreshExecutionRecoveryLifecycle
   }
 }
 

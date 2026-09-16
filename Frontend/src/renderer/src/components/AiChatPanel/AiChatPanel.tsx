@@ -148,6 +148,7 @@ import {
   stageOutputPhase
 } from './stageOutputState'
 import { executionRecoveryForSession } from './executionRecoveryState'
+import ConnectionStatusBanner from '../ConnectionStatusBanner'
 import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
@@ -868,7 +869,7 @@ export default function AiChatPanel({
 }: Props): ReactElement {
   const planningThreadId = planningState?.threadId
   const currentPlanningWorkflow = planningState?.workflow
-  const planningError = planningState?.syncError || planningState?.error
+  const planningError = planningState?.error
   const restorePlanningArtifactsFromDisk = planningState?.restoreArtifactsFromDisk === true
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
@@ -2165,6 +2166,7 @@ export default function AiChatPanel({
   const {
     activeWorkflow,
     conversationRunning,
+    connectionState,
     error,
     handleAcceptPreview,
     handleContinueDevelopment: continueDevelopmentExecution,
@@ -2188,7 +2190,8 @@ export default function AiChatPanel({
     stopping,
     workspaceBusy,
     recoveryError,
-    recoveryRunning
+    recoveryRunning,
+    refreshConnection
   } = useWorkflowConversation({
     acquireSessionExecution,
     activeSession,
@@ -3445,6 +3448,8 @@ export default function AiChatPanel({
   const activeExecutionRecovery = useMemo(() => {
     return executionRecoveryForSession(applicationLifecycle, activeSession?.sessionId)
   }, [activeSession?.sessionId, applicationLifecycle])
+  const activeConnectionState =
+    isApplicationPlanningPhase && planningState ? planningState.connection : connectionState
   const activeSessionTargetKey = currentStageSessionTargetKey
   const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const activeWorkflowMatchesTarget = Boolean(
@@ -4458,7 +4463,22 @@ export default function AiChatPanel({
               planningState={planningState}
             />
 
+            <ConnectionStatusBanner
+              connection={activeConnectionState}
+              onReconnect={
+                isApplicationPlanningPhase
+                  ? onRetryPlanning
+                  : () => {
+                      void refreshConnection()
+                    }
+              }
+            />
+
             <RecoverySurface
+              actionDisabled={
+                activeConnectionState.status !== 'healthy' ||
+                (isApplicationPlanningPhase && planningMutationBlocked(planningState))
+              }
               activeExecutionRecovery={activeExecutionRecovery}
               isApplicationPlanningPhase={isApplicationPlanningPhase}
               onExecuteRecoveryAction={(recovery) => {

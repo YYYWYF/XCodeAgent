@@ -19,12 +19,13 @@ import type {
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
+import { initialConnectionState } from '../src/renderer/src/service/connectionState'
 
 /** 构造带稳定身份的最小 Planning 当前状态，不挂载任何 React 视图。 */
 function planningState(applicationId = 'app-A', threadId = 'thread-A'): ApplicationPlanningCurrentState {
   const application = { id: applicationId, appName: applicationId, workspaceRoot: `/workspace/${applicationId}` } as ApplicationConfig
   return {
-    application, threadId, transportState: 'idle',
+    application, threadId, transportState: 'idle', connection: initialConnectionState(true),
     lifecycle: {
       application: { id: applicationId, name: applicationId }, revision: 1, updatedAt: '2026-09-10T00:00:00Z',
       initialization: { threadId, stage: 'generating_requirement_document', status: 'running' },
@@ -244,7 +245,7 @@ async function waitForCondition<T>(
   assert.equal(h.readCalls(), 1)
   assert.equal(h.current()?.workflow?.summary.clarification?.mode, 'technical_plan_confirmation')
   assert.equal(h.current()?.error, undefined)
-  assert.equal(h.current()?.syncError, undefined)
+  assert.equal(h.current()?.connection.status, 'healthy')
   assert.equal(h.current()?.transportState, 'idle')
 }
 
@@ -460,7 +461,7 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.workflow?.summary.status, 'requires_user_input')
   assert.equal(h.current()?.workflow?.summary.clarification?.mode, 'technical_plan_confirmation')
   assert.equal(h.current()?.transportState, 'idle')
-  assert.equal(h.current()?.syncError, undefined)
+  assert.equal(h.current()?.connection.status, 'healthy')
   assert.equal(h.current()?.error, undefined)
 }
 
@@ -505,27 +506,31 @@ async function waitForCondition<T>(
   )
 }
 
-// Q：transport 与 recovery 都失败时只进入 uncertain/syncError，不写业务 error。
+// Q：transport 与 durable refresh 都失败时只更新 Connection State，不写业务 error。
 {
   const h = harness()
   h.onSend(async () => { throw new Error('fetch failed') })
   h.onRead(async () => { throw new Error('recovery unavailable') })
   await h.runtime.ensureStarted()
-  assert.equal(h.current()?.transportState, 'uncertain')
-  assert.equal(h.current()?.syncError, 'recovery unavailable')
+  assert.equal(h.current()?.transportState, 'idle')
+  assert.equal(h.current()?.connection.status, 'unavailable')
+  assert.equal(h.current()?.connection.lastError, 'recovery unavailable')
   assert.equal(h.current()?.error, undefined)
 }
 
-// R：手动 reconcile 成功会清理 uncertain/syncError 并原子恢复 idle。
+// R：手动 reconcile 成功会恢复 Connection healthy 并原子恢复 idle。
 {
   const current = planningState()
-  current.transportState = 'uncertain'
-  current.syncError = '状态尚未确认'
+  current.connection = {
+    ...current.connection,
+    status: 'unavailable',
+    lastError: '状态尚未确认'
+  }
   const h = harness(current)
   const outcome = await h.runtime.reconcileCurrentState()
   assert.deepEqual(outcome, { status: 'recovered' })
   assert.equal(h.current()?.transportState, 'idle')
-  assert.equal(h.current()?.syncError, undefined)
+  assert.equal(h.current()?.connection.status, 'healthy')
   assert.equal(h.events.filter((event) => event.type === 'reconcile_received').length, 1)
 }
 
@@ -594,8 +599,9 @@ async function waitForCondition<T>(
   })
   await h.runtime.ensureStarted()
   assert.equal(h.calls.length, 0)
-  assert.equal(h.current()?.transportState, 'uncertain')
-  assert.equal(h.current()?.syncError, 'checkpoint missing')
+  assert.equal(h.current()?.transportState, 'idle')
+  assert.equal(h.current()?.connection.status, 'unavailable')
+  assert.equal(h.current()?.connection.lastError, 'checkpoint missing')
 }
 
 // W：stop transport 失败后以权威 stopped lifecycle 收敛，不虚构本地停止结果。
@@ -656,11 +662,14 @@ async function waitForCondition<T>(
   )
 }
 
-// Y：uncertain 状态禁止保存 RequirementSpec，不能触达写接口。
+// Y：Connection unavailable 时禁止保存 RequirementSpec，不能触达写接口。
 {
   const current = planningState()
-  current.transportState = 'uncertain'
-  current.syncError = '状态尚未确认'
+  current.connection = {
+    ...current.connection,
+    status: 'unavailable',
+    lastError: '状态尚未确认'
+  }
   current.workflow = confirmationWorkflow()
   let saveCalls = 0
   const h = harness(current, {

@@ -14,6 +14,7 @@ export type RecoverySurfaceProps = {
   activeExecutionRecovery?: ExecutionRecoveryCandidate
   recoveryError?: string
   recoveryRunning: boolean
+  actionDisabled?: boolean
   onExecuteRecoveryAction: (candidate: ExecutionRecoveryCandidate) => void
 }
 
@@ -25,6 +26,7 @@ export default function RecoverySurface({
   activeExecutionRecovery,
   recoveryError,
   recoveryRunning,
+  actionDisabled = false,
   onExecuteRecoveryAction
 }: RecoverySurfaceProps): ReactElement | null {
   const incident = isApplicationPlanningPhase
@@ -35,6 +37,7 @@ export default function RecoverySurface({
   return (
     <RecoveryIncidentCard
       incident={incident}
+      disabled={actionDisabled}
       error={recoveryError}
       onAction={
         isApplicationPlanningPhase

@@ -7,11 +7,13 @@ import RecoveryIncidentCard from '../src/renderer/src/components/RecoveryInciden
 import ApplicationPagePlanningModal from '../src/renderer/src/components/Welcome/ApplicationPagePlanningModal'
 import AgentErrorCard from '../src/renderer/src/components/AgentErrorCard'
 import ApplicationPlanningRecoveryIncidentCard from '../src/renderer/src/components/ApplicationPlanningRecoveryIncidentCard'
+import ConnectionStatusBanner from '../src/renderer/src/components/ConnectionStatusBanner'
 import MessageList from '../src/renderer/src/components/AiChatPanel/components/MessageList'
 import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recoverySurface'
 import { WORKBENCH_PHASE_AGENTS } from '../src/renderer/src/workbenchPhase'
 import { applicationPlanningRecoveryProjection } from '../src/renderer/src/service/applicationPlanningRecovery'
 import type { ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
+import { initialConnectionState } from '../src/renderer/src/service/connectionState'
 import { workbenchRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
 import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
 
@@ -94,6 +96,7 @@ function planningStateFromRecovery(options: {
   return {
     application: { id: 'app-A', appName: 'Demo App' },
     threadId: 'thread-A',
+    connection: initialConnectionState(true),
     transportState: 'idle',
     error: options.diagnosticMessage,
     lifecycle: {
@@ -221,6 +224,7 @@ test('planning Recovery Incident shows safe failure summary and Backend action',
       planning: {
         application: { id: 'app-A', appName: 'Demo App' },
         threadId: 'thread-A',
+        connection: initialConnectionState(true),
         transportState: 'idle',
         error: 'Model not found',
         lifecycle: {
@@ -360,29 +364,19 @@ test('MessageList renders legacy recovery guidance as history while keeping Curr
   assert.doesNotMatch(markup, /请查看错误详情和相关执行记录后重试/)
 })
 
-test('sync error Incident stays outside history and offers only resync', () => {
+test('connection error stays outside Recovery and offers only resync', () => {
+  const connection = {
+    ...initialConnectionState(true),
+    status: 'unavailable' as const,
+    lastError: '与后端连接中断，当前规划状态尚未确认。'
+  }
   const markup = renderToStaticMarkup(
-    createElement(ApplicationPlanningRecoveryIncidentCard, {
-      planning: {
-        application: { id: 'app-A', appName: 'Demo App' },
-        threadId: 'thread-A',
-        transportState: 'reconciling',
-        syncError: '与后端连接中断，当前规划状态尚未确认。',
-        lifecycle: {
-          application: { id: 'app-A', name: 'Demo App' },
-          revision: 1,
-          updatedAt: '2026-09-12T00:00:00.000Z',
-          initialization: { status: 'running', stage: 'generating_technical_plan' },
-          activeExecutions: {},
-          extensions: {}
-        }
-      } as ApplicationPlanningCurrentState,
-      onAction: () => undefined
-    })
+    createElement(ConnectionStatusBanner, { connection, onReconnect: () => undefined })
   )
-  assert.match(markup, /规划状态尚未同步/)
+  assert.match(markup, /Backend 暂时不可用/)
   assert.match(markup, /与后端连接中断，当前规划状态尚未确认/)
   assert.match(markup, /重新同步状态/)
+  assert.doesNotMatch(markup, /recovery-incident/)
   assert.doesNotMatch(markup, /错误详情/)
   assert.doesNotMatch(markup, /重新执行技术规划/)
 })
@@ -393,6 +387,7 @@ test('needs_attention Incident shows reason and a permanent retry entry', () => 
       planning: {
         application: { id: 'app-A', appName: 'Demo App' },
         threadId: 'thread-A',
+        connection: initialConnectionState(true),
         transportState: 'idle',
         error: '人工处理',
         lifecycle: {
@@ -529,12 +524,13 @@ test('Workbench caller renders one unified current Recovery Incident', () => {
   assert.equal(countOccurrences(markup, 'data-testid="workbench-recovery-incident"'), 1)
 })
 
-test('awaiting_user leaves the business confirmation card as the only control surface', () => {
+test('J8 awaiting_user leaves the business confirmation card as the only control surface', () => {
   const markup = renderToStaticMarkup(
     createElement(ApplicationPlanningRecoveryIncidentCard, {
       planning: {
         application: { id: 'app-A', appName: 'Demo App' },
         threadId: 'thread-A',
+        connection: initialConnectionState(true),
         transportState: 'idle',
         lifecycle: {
           application: { id: 'app-A', name: 'Demo App' },
@@ -567,6 +563,7 @@ test('application planning modal renders the shared current incident', () => {
   const planning = {
     application: { id: 'app-A', appName: 'Demo App' },
     threadId: 'thread-A',
+    connection: initialConnectionState(true),
     transportState: 'idle',
     error: 'Service Unavailable',
     lifecycle: {

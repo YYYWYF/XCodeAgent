@@ -7,6 +7,7 @@ import {
 } from '../service/activeApplicationPlanning'
 import { APPLICATIONS_CHANGED_EVENT } from '../service/applicationStorage'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
+import { initialConnectionState } from '../service/connectionState'
 import { useApplicationTemplateGeneration } from './useApplicationTemplateGeneration'
 
 type UseActiveApplicationPlanningsOptions = {
@@ -144,6 +145,7 @@ export function useActiveApplicationPlannings({
         lifecycle,
         restoreArtifactsFromDisk,
         threadId,
+        connection: initialConnectionState(true),
         transportState: 'idle'
       }
       commitPlannings((current) => [

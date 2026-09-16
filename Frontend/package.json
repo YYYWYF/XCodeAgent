@@ -15,6 +15,7 @@
     "test:design-conversation": "node scripts/run-design-conversation-tests.mjs",
     "test:application-planning-runtime": "node scripts/run-application-planning-runtime-tests.mjs",
     "test:application-planning-recovery": "node scripts/run-application-planning-recovery-tests.mjs",
+    "test:connection-recovery": "node scripts/run-connection-recovery-tests.mjs",
     "test:stage-sessions": "node scripts/run-stage-session-tests.mjs",
     "test:message-list-scroll": "node scripts/run-message-list-scroll-tests.mjs",
     "test:managed-workspace": "node scripts/run-managed-workspace-tests.mjs",

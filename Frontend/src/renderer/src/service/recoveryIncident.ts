@@ -8,12 +8,6 @@ import type {
 
 export type RecoveryIncidentPresentation =
   | {
-      kind: 'sync_error'
-      title: string
-      message: string
-      actionLabel: '重新同步状态'
-    }
-  | {
       kind: 'recoverable'
       title: string
       failureDiagnostic?: RecoveryFailureDiagnostic | null
@@ -29,11 +23,6 @@ export type RecoveryIncidentPresentation =
       failureMessage?: string
       recoveryMessage: string
       reasonCode: string
-    }
-  | {
-      kind: 'reconciling_failure'
-      title: string
-      failureMessage: string
     }
 
 /** 从当前 Planning State 提取真实失败摘要，不把恢复说明误当成原始错误。 */
@@ -56,21 +45,11 @@ function currentPlanningFailureMessage(
   })?.trim()
 }
 
-/** 按 Planning 的 sync、ActionPlan、reconcile failure 优先级生成唯一当前 Incident。 */
+/** 只从 Backend durable ActionPlan 生成 Planning Recovery Incident。 */
 export function applicationPlanningRecoveryIncident(
   state?: ApplicationPlanningCurrentState
 ): RecoveryIncidentPresentation | undefined {
   if (!state) return undefined
-  const syncError = state.syncError?.trim()
-  if (syncError) {
-    return {
-      kind: 'sync_error',
-      title: '规划状态尚未同步',
-      message: syncError,
-      actionLabel: '重新同步状态'
-    }
-  }
-
   const recovery = state.recovery
   const actionPlan = recovery?.recoveryActionPlan
   if (recovery && actionPlan?.status === 'recoverable' && actionPlan.primaryAction) {
@@ -98,14 +77,6 @@ export function applicationPlanningRecoveryIncident(
   // awaiting_user 的业务确认卡已经是唯一当前控制面，Recovery Incident 必须退让。
   if (actionPlan?.status === 'awaiting_user' || recovery?.classification === 'awaiting_user') {
     return undefined
-  }
-  const failureMessage = currentPlanningFailureMessage(state, actionPlan)
-  if (failureMessage && state.transportState === 'reconciling') {
-    return {
-      kind: 'reconciling_failure',
-      title: '正在确认规划状态',
-      failureMessage
-    }
   }
   return undefined
 }

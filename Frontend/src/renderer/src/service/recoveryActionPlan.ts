@@ -26,6 +26,8 @@ export type RecoveryFailureDiagnostic = {
 export type RecoveryAction = {
   actionId: string
   kind: RecoveryActionKind
+  /** Backend 选择的恢复目标，仅用于展示，绝不作为 Frontend request authority。 */
+  targetNode?: string
   label: string
   description: string
   requiresConfirmation: boolean
@@ -77,6 +79,7 @@ export function parseRecoveryAction(value: unknown): RecoveryAction | undefined 
   const kind = requiredRecoveryText(candidate.kind)
   const label = requiredRecoveryText(candidate.label)
   const description = requiredRecoveryText(candidate.description)
+  const targetNode = requiredRecoveryText(candidate.targetNode)
   if (
     !actionId ||
     !kind ||
@@ -90,6 +93,7 @@ export function parseRecoveryAction(value: unknown): RecoveryAction | undefined 
   return {
     actionId,
     kind: kind as RecoveryActionKind,
+    ...(targetNode ? { targetNode } : {}),
     label,
     description,
     requiresConfirmation: candidate.requiresConfirmation

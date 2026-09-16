@@ -4,6 +4,7 @@ import {
   type ApplicationPlanningCurrentState
 } from '../../service/activeApplicationPlanning'
 import { applicationPlanningRecoveryIncident } from '../../service/recoveryIncident'
+import { connectionAllowsMutation } from '../../service/connectionState'
 import RecoveryIncidentCard from '../RecoveryIncidentCard/RecoveryIncidentCard'
 
 export type ApplicationPlanningRecoveryIncidentCardProps = {
@@ -23,6 +24,7 @@ export default function ApplicationPlanningRecoveryIncidentCard({
   return (
     <RecoveryIncidentCard
       incident={incident}
+      disabled={!connectionAllowsMutation(planning.connection)}
       onAction={onAction}
       retrying={retrying ?? planningTransportBusy(planning)}
       testId="application-planning-recovery-incident"

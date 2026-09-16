@@ -11,6 +11,7 @@ import { isAuthenticationFailure } from '../../service/authentication'
 import { cx } from '../../utils'
 import { formatError } from './utils'
 import ApplicationPlanningRecoveryIncidentCard from '../ApplicationPlanningRecoveryIncidentCard'
+import ConnectionStatusBanner from '../ConnectionStatusBanner'
 import ApplicationPlanningProgress from './ApplicationPlanningProgress'
 import ApplicationPlanningQuestionPanel from './ApplicationPlanningQuestionPanel'
 import UiDesignStreamingPreview from './UiDesignStreamingPreview'
@@ -174,6 +175,7 @@ export default function ApplicationPagePlanningModal({
 
       <div className={cx('page-planning-screen-body')}>
         <div className={cx('page-planning-screen-content')}>
+          <ConnectionStatusBanner connection={planning.connection} onReconnect={onRetry} />
           {recoveryIncident ? (
             <ApplicationPlanningRecoveryIncidentCard
               onAction={onRetry}

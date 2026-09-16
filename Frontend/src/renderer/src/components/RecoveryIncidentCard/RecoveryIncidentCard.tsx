@@ -1,8 +1,6 @@
 import {
-  CloseCircleOutlined,
   LoadingOutlined,
   RedoOutlined,
-  SyncOutlined,
   WarningOutlined
 } from '@ant-design/icons'
 import { Button, Modal, Typography } from 'antd'
@@ -18,6 +16,7 @@ export type RecoveryIncidentCardProps = {
   incident: RecoveryIncidentPresentation
   onAction?: () => void
   retrying?: boolean
+  disabled?: boolean
   error?: string
   testId?: string
 }
@@ -27,16 +26,16 @@ export default function RecoveryIncidentCard({
   incident,
   onAction,
   retrying = false,
+  disabled = false,
   error,
   testId = 'recovery-incident'
 }: RecoveryIncidentCardProps): ReactElement {
   const action = incident.kind === 'recoverable' ? incident.action : undefined
-  const hasAction =
-    incident.kind === 'sync_error' || incident.kind === 'needs_attention' || Boolean(action)
+  const hasAction = incident.kind === 'needs_attention' || Boolean(action)
 
   /** 遵循 Backend requiresConfirmation，确认策略不由前端猜测。 */
   const handleAction = (): void => {
-    if (!onAction || retrying || !hasAction) return
+    if (!onAction || retrying || disabled || !hasAction) return
     if (action?.requiresConfirmation) {
       Modal.confirm({
         title: '确定执行此恢复操作？',
@@ -50,15 +49,7 @@ export default function RecoveryIncidentCard({
     onAction()
   }
 
-  const icon = retrying ? (
-    <LoadingOutlined spin />
-  ) : incident.kind === 'sync_error' ? (
-    <SyncOutlined />
-  ) : incident.kind === 'reconciling_failure' ? (
-    <CloseCircleOutlined />
-  ) : (
-    <WarningOutlined />
-  )
+  const icon = retrying ? <LoadingOutlined spin /> : <WarningOutlined />
 
   return (
     <section
@@ -75,59 +66,50 @@ export default function RecoveryIncidentCard({
         <Text className={cx('application-planning-recovery-incident-title')} strong>
           {incident.title}
         </Text>
-        {incident.kind === 'sync_error' ? (
-          <Text className={cx('application-planning-recovery-incident-message')}>
-            {incident.message}
+        <>
+          <FailureSummary
+            diagnostic={incident.failureDiagnostic}
+            message={incident.failureMessage}
+          />
+          <Text
+            className={cx('application-planning-recovery-incident-recovery-message')}
+            type="secondary"
+          >
+            {incident.recoveryMessage}
           </Text>
-        ) : incident.kind === 'reconciling_failure' ? (
-          <Text className={cx('application-planning-recovery-incident-message')}>
-            {incident.failureMessage}
-          </Text>
-        ) : (
-          <>
-            <FailureSummary
-              diagnostic={incident.failureDiagnostic}
-              message={incident.failureMessage}
-            />
-            <Text
-              className={cx('application-planning-recovery-incident-recovery-message')}
-              type="secondary"
-            >
-              {incident.recoveryMessage}
+          {incident.kind === 'recoverable' && incident.action.targetNode ? (
+            <Text className={cx('application-planning-recovery-incident-reason')} type="secondary">
+              恢复目标：{incident.action.targetNode}
             </Text>
-            {error ? (
-              <Text className={cx('application-planning-recovery-incident-message')} type="danger">
-                {error}
-              </Text>
-            ) : null}
-            {incident.kind === 'needs_attention' ? (
-              <Text className={cx('application-planning-recovery-incident-reason')} type="secondary">
-                原因代码：{incident.reasonCode}
-              </Text>
-            ) : null}
-            {incident.failureDiagnostic || incident.kind === 'needs_attention' ? (
-              <DiagnosticDetails
-                diagnostic={incident.failureDiagnostic}
-                reasonCode={incident.kind === 'needs_attention' ? incident.reasonCode : undefined}
-              />
-            ) : null}
-          </>
-        )}
+          ) : null}
+          {error ? (
+            <Text className={cx('application-planning-recovery-incident-message')} type="danger">
+              {error}
+            </Text>
+          ) : null}
+          {incident.kind === 'needs_attention' ? (
+            <Text className={cx('application-planning-recovery-incident-reason')} type="secondary">
+              原因代码：{incident.reasonCode}
+            </Text>
+          ) : null}
+          {incident.failureDiagnostic || incident.kind === 'needs_attention' ? (
+            <DiagnosticDetails
+              diagnostic={incident.failureDiagnostic}
+              reasonCode={incident.kind === 'needs_attention' ? incident.reasonCode : undefined}
+            />
+          ) : null}
+        </>
       </div>
       {hasAction && onAction ? (
         <Button
           className={cx('application-planning-recovery-incident-action')}
-          disabled={retrying}
+          disabled={retrying || disabled}
           icon={retrying ? <LoadingOutlined spin /> : <RedoOutlined />}
           loading={retrying}
           onClick={handleAction}
           type="primary"
         >
-          {incident.kind === 'sync_error'
-            ? incident.actionLabel
-            : incident.kind === 'needs_attention'
-              ? '重试'
-              : action?.label}
+          {incident.kind === 'needs_attention' ? '重试' : action?.label}
         </Button>
       ) : null}
     </section>

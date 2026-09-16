@@ -319,12 +319,17 @@ export class ApplicationPlanningRuntime {
     }
   }
 
-  /** 执行一次只读对账，任何失败都只进入 syncError，不伪造业务失败。 */
+  /** 执行一次只读对账，失败只更新 Connection State，不伪造业务 Recovery。 */
   private async performReconcile(): Promise<PlanningReconcileOutcome> {
     const current = this.requireCurrentState()
     if (this.runActive) throw new Error('当前 Planning write transport 尚未结束。')
     const token = ++this.runToken
-    this.dispatch({ type: 'reconcile_started', applicationId: this.applicationId, threadId: this.threadId })
+    this.dispatch({
+      type: 'reconcile_started',
+      applicationId: this.applicationId,
+      threadId: this.threadId,
+      requestGeneration: token
+    })
     try {
       const read = this.dependencies.readAuthoritativeSnapshot ?? readApplicationPlanningAuthoritativeSnapshot
       const snapshot = await read(current.application, this.threadId)
@@ -337,7 +342,8 @@ export class ApplicationPlanningRuntime {
       }
       this.dispatch({
         type: 'reconcile_received', applicationId: this.applicationId, threadId: this.threadId,
-        lifecycle: snapshot.lifecycle, workflow: snapshot.workflow, recovery: snapshot.recovery
+        lifecycle: snapshot.lifecycle, workflow: snapshot.workflow, recovery: snapshot.recovery,
+        requestGeneration: token
       })
       const workflow = this.requireCurrentState().workflow
       if (workflow) this.dependencies.publishWorkflow(workflow)
@@ -352,13 +358,19 @@ export class ApplicationPlanningRuntime {
         } else {
           this.dispatch({
             type: 'reconcile_failed', applicationId: this.applicationId, threadId: this.threadId,
-            error: reason.message
+            error: reason.message, requestGeneration: token
           })
         }
         return { status: 'checkpoint_missing' }
       }
       const error = planningRuntimeError(reason, PLANNING_SYNC_ERROR)
-      this.dispatch({ type: 'reconcile_failed', applicationId: this.applicationId, threadId: this.threadId, error })
+      this.dispatch({
+        type: 'reconcile_failed',
+        applicationId: this.applicationId,
+        threadId: this.threadId,
+        error,
+        requestGeneration: token
+      })
       return { status: 'uncertain', error }
     }
   }
@@ -370,7 +382,8 @@ export class ApplicationPlanningRuntime {
     if (outcome.status === 'checkpoint_missing') {
       this.dispatch({
         type: 'reconcile_failed', applicationId: this.applicationId, threadId: this.threadId,
-        error: PLANNING_SYNC_ERROR
+        error: PLANNING_SYNC_ERROR,
+        requestGeneration: this.runToken
       })
     }
     return 'uncertain'
@@ -412,6 +425,8 @@ export class ApplicationPlanningRuntime {
         },
         { onToken: (token) => { recoveryToken = token } }
       )
+      // Recovery action 成功只代表请求完成；继续读取 durable truth 后才允许替换旧 Incident。
+      await this.reconcileCurrentState()
     } catch (reason) {
       if (recoveryToken === undefined || !this.isCurrentRun(recoveryToken)) return
       await this.handleExecutionFailure(

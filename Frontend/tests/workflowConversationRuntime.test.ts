@@ -555,6 +555,9 @@ test('needs_attention Retry Entry 只提交 retry_current_failure 与当前 sour
       primaryAction: null
     }
   }
+  if (lifecycle.extensions.executionRecovery) {
+    lifecycle.extensions.executionRecovery.candidates = [candidate]
+  }
   let recoveryRequest: Record<string, unknown> | undefined
   let captured: ReturnType<typeof useWorkflowConversation> | undefined
 
