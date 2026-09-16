@@ -25,10 +25,6 @@ from app.domain.execution_recovery import (
 )
 from app.persistence.execution_recovery import get_recovery_point
 from app.services.application_lifecycle import ApplicationLifecycle, load_application_lifecycle
-from app.services.application_planning_stage_recovery import (
-    ApplicationPlanningStageRecoveryContract,
-    TechnicalPlanningStageRestartAssessment,
-)
 from app.services.execution_recovery_capability import (
     assess_native_recovery_capability,
 )
@@ -81,8 +77,8 @@ async def build_recovery_facts(
             if resolved is not None:
                 snapshot = resolved
         except Exception:
-            # facts 读取失败时保留空快照，让 Stage Restart 仍只依赖正式 authority；
-            # Native 是否可执行仍由其自身 finalization revalidation 决定。
+            # facts 读取失败时保留空快照；Native 是否可执行仍由其自身
+            # finalization revalidation 决定。
             pass
     return RecoveryFacts(
         point=point,
@@ -101,7 +97,7 @@ async def plan_recovery_action(
     lifecycle: ApplicationLifecycle | None = None,
     graph: Any | None = None,
     reentry_plan: WorkflowReentryPlan | None = None,
-) -> tuple[RecoveryActionPlan, TechnicalPlanningStageRestartAssessment | None]:
+) -> RecoveryActionPlan:
     """基于 durable facts 选择最近的确定性恢复入口，不执行任何动作。"""
 
     current_lifecycle = lifecycle or load_application_lifecycle(workspace)
@@ -110,16 +106,13 @@ async def plan_recovery_action(
         # RecoveryPlan、ReplayPolicy 和 Native capability 不能成为第二套判断。
         if reentry_plan is None:
             if graph is None:
-                return (
-                    plan_failed_node_reentry_action(
-                        workspace=workspace,
-                        source=source,
-                        error=RecoveryExecutionError(
-                            "NODE_ENTRY_AUTHORITY_MISSING",
-                            "当前 production Graph 无法解析失败 Node 的精确入口。",
-                        ),
+                return plan_failed_node_reentry_action(
+                    workspace=workspace,
+                    source=source,
+                    error=RecoveryExecutionError(
+                        "NODE_ENTRY_AUTHORITY_MISSING",
+                        "当前 production Graph 无法解析失败 Node 的精确入口。",
                     ),
-                    None,
                 )
             try:
                 reentry_plan = await FailureTargetResolver().resolve(
@@ -128,21 +121,15 @@ async def plan_recovery_action(
                     graph=graph,
                 )
             except RecoveryExecutionError as exc:
-                return (
-                    plan_failed_node_reentry_action(
-                        workspace=workspace,
-                        source=source,
-                        error=exc,
-                    ),
-                    None,
+                return plan_failed_node_reentry_action(
+                    workspace=workspace,
+                    source=source,
+                    error=exc,
                 )
-        return (
-            plan_failed_node_reentry_action(
-                workspace=workspace,
-                source=source,
-                reentry_plan=reentry_plan,
-            ),
-            None,
+        return plan_failed_node_reentry_action(
+            workspace=workspace,
+            source=source,
+            reentry_plan=reentry_plan,
         )
     if source.status is DurableExecutionStatus.INTERRUPTED:
         if reentry_plan is None and graph is not None:
@@ -153,35 +140,20 @@ async def plan_recovery_action(
             )
             reentry_plan = resolution.reentry_plan
             if resolution.kind != "continue":
-                return (
-                    plan_interrupted_continue_action(
-                        workspace=workspace,
-                        source=source,
-                        error=RecoveryExecutionError(
-                            resolution.reason_code,
-                            resolution.reason,
-                        ),
+                return plan_interrupted_continue_action(
+                    workspace=workspace,
+                    source=source,
+                    error=RecoveryExecutionError(
+                        resolution.reason_code,
+                        resolution.reason,
                     ),
-                    None,
                 )
-        return (
-            plan_interrupted_continue_action(
-                workspace=workspace,
-                source=source,
-                reentry_plan=reentry_plan,
-            ),
-            None,
-        )
-    native_capability = assess_native_recovery_capability(recovery_plan)
-    stage_assessment: TechnicalPlanningStageRestartAssessment | None = None
-    if source.execution_kind == "application_planning":
-        stage_assessment = ApplicationPlanningStageRecoveryContract().assess(
+        return plan_interrupted_continue_action(
             workspace=workspace,
             source=source,
-            point=point,
-            snapshot=snapshot,
-            lifecycle=current_lifecycle,
+            reentry_plan=reentry_plan,
         )
+    native_capability = assess_native_recovery_capability(recovery_plan)
     retry_capability = RetryOperationCapability(
         executable=False,
         handler=None,
@@ -199,51 +171,21 @@ async def plan_recovery_action(
             source=source,
             graph=graph,
         )
-    stage_restart_available = bool(
-        stage_assessment is not None
-        and stage_assessment.available
-        and not native_capability.executable
-    )
     incident_id = _incident_id(
         source=source,
         point=point,
         lifecycle=current_lifecycle,
-        stage_assessment=stage_assessment if stage_restart_available else None,
         retry_handler=(
             retry_capability.handler if retry_capability.executable else None
         ),
     )
     if recovery_plan.decision is RecoveryDecision.AWAITING_USER:
-        return (
-            _action_plan(
-                source=source,
-                incident_id=incident_id,
-                status=RecoveryIncidentStatus.AWAITING_USER,
-                reason_code="RECOVERY_AWAITING_USER",
-                message="当前执行正在等待用户确认，完成确认后才能继续。",
-            ),
-            stage_assessment,
-        )
-    if (
-        stage_assessment is not None
-        and stage_restart_available
-    ):
-        action = _action(
+        return _action_plan(
+            source=source,
             incident_id=incident_id,
-            kind=RecoveryActionKind.RESTART_STAGE,
-            label="重新执行技术规划",
-            description=stage_assessment.reason,
-        )
-        return (
-            _action_plan(
-                source=source,
-                incident_id=incident_id,
-                status=RecoveryIncidentStatus.RECOVERABLE,
-                reason_code=stage_assessment.reason_code,
-                message="当前 checkpoint 无法继续时，已验证正式产物，可从 Technical Planning 阶段重新执行。",
-                primary_action=action,
-            ),
-            stage_assessment,
+            status=RecoveryIncidentStatus.AWAITING_USER,
+            reason_code="RECOVERY_AWAITING_USER",
+            message="当前执行正在等待用户确认，完成确认后才能继续。",
         )
     if native_capability.executable:
         action = _action(
@@ -252,16 +194,13 @@ async def plan_recovery_action(
             label="继续执行",
             description="从已验证的安全 checkpoint 继续执行，并使用当前模型配置。",
         )
-        return (
-            _action_plan(
-                source=source,
-                incident_id=incident_id,
-                status=RecoveryIncidentStatus.RECOVERABLE,
-                reason_code=recovery_plan.reason_code,
-                message="已找到可验证的恢复入口，可以继续执行。",
-                primary_action=action,
-            ),
-            stage_assessment,
+        return _action_plan(
+            source=source,
+            incident_id=incident_id,
+            status=RecoveryIncidentStatus.RECOVERABLE,
+            reason_code=recovery_plan.reason_code,
+            message="已找到可验证的恢复入口，可以继续执行。",
+            primary_action=action,
         )
     if retry_capability.executable and retry_capability.handler is not None:
         action = _action(
@@ -270,31 +209,25 @@ async def plan_recovery_action(
             label=_retry_label(retry_capability.handler),
             description=retry_capability.reason,
         )
-        return (
-            _action_plan(
-                source=source,
-                incident_id=incident_id,
-                status=RecoveryIncidentStatus.RECOVERABLE,
-                reason_code=retry_capability.reason_code,
-                message="当前失败操作可以安全重试，具体执行方式由 Backend 决定。",
-                primary_action=action,
-            ),
-            stage_assessment,
-        )
-    return (
-        _action_plan(
+        return _action_plan(
             source=source,
             incident_id=incident_id,
-            status=RecoveryIncidentStatus.NEEDS_ATTENTION,
-            reason_code=(
-                native_capability.reason_code
-                if recovery_plan.decision is RecoveryDecision.READY_NATIVE
-                and not native_capability.executable
-                else recovery_plan.reason_code
-            ),
-            message="当前现场没有可证明安全的自动恢复入口，需要人工处理。",
+            status=RecoveryIncidentStatus.RECOVERABLE,
+            reason_code=retry_capability.reason_code,
+            message="当前失败操作可以安全重试，具体执行方式由 Backend 决定。",
+            primary_action=action,
+        )
+    return _action_plan(
+        source=source,
+        incident_id=incident_id,
+        status=RecoveryIncidentStatus.NEEDS_ATTENTION,
+        reason_code=(
+            native_capability.reason_code
+            if recovery_plan.decision is RecoveryDecision.READY_NATIVE
+            and not native_capability.executable
+            else recovery_plan.reason_code
         ),
-        stage_assessment,
+        message="当前现场没有可证明安全的自动恢复入口，需要人工处理。",
     )
 
 
@@ -319,7 +252,6 @@ def plan_failed_node_reentry_action(
         source=source,
         point=None,
         lifecycle=lifecycle,
-        stage_assessment=None,
         reentry_plan=reentry_plan,
         reentry_error_code=error.code if error is not None else None,
     )
@@ -369,7 +301,6 @@ def plan_interrupted_continue_action(
         source=source,
         point=None,
         lifecycle=lifecycle,
-        stage_assessment=None,
         reentry_plan=reentry_plan,
         reentry_error_code=error.code if error is not None else None,
     )
@@ -476,7 +407,6 @@ def _incident_id(
     source: DurableExecutionRecord,
     point: RecoveryPoint | None,
     lifecycle: ApplicationLifecycle | None,
-    stage_assessment: TechnicalPlanningStageRestartAssessment | None,
     retry_handler: str | None = None,
     reentry_plan: WorkflowReentryPlan | None = None,
     reentry_error_code: str | None = None,
@@ -492,11 +422,6 @@ def _incident_id(
         'failedNode': source.current_node,
         'recoveryPointId': point.recovery_point_id if point else None,
         'lifecycleRevision': lifecycle.revision if lifecycle else None,
-        'stageAuthoritySha256': (
-            stage_assessment.authority.authority_sha256
-            if stage_assessment is not None and stage_assessment.authority is not None
-            else None
-        ),
         'retryHandler': retry_handler,
         'nodeEntryBoundaryId': authority.boundary_id if authority else None,
         'nodeEntrySourceRunId': authority.source_run_id if authority else None,

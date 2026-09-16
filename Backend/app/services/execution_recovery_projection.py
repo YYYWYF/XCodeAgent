@@ -197,7 +197,7 @@ async def _resolve_candidate(
             recovery_plan=plan,
             graph=graph,
         )
-        action_plan, _stage_assessment = await plan_recovery_action(
+        action_plan = await plan_recovery_action(
             workspace=record.workspace,
             source=record,
             recovery_plan=plan,

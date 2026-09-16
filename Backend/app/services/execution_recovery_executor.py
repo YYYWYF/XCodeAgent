@@ -31,7 +31,6 @@ from app.domain.execution_recovery import (
 from app.persistence.execution_recovery import (
     claim_recovery_finalization,
     claim_operation_retry_attempt,
-    claim_stage_restart_attempt,
     claim_native_recovery_attempt,
     finish_execution_and_release_lease,
     get_execution,
@@ -58,9 +57,6 @@ from app.services.execution_recovery_coordinator import (
     validate_recovery_workspace_state,
 )
 from app.services.execution_recovery_source_admission import assess_recovery_source
-from app.services.application_planning_stage_recovery import (
-    ApplicationPlanningStageRecoveryContract,
-)
 from app.services.execution_recovery_capability import (
     assess_native_recovery_capability,
 )
@@ -723,119 +719,6 @@ async def _finalize_operation_retry(
     )
 
 
-async def prepare_stage_restart(
-    *,
-    workspace: str,
-    source_run_id: str,
-    graph: Any,
-    assessment: Any,
-) -> NativeRecoveryRuntimeContext:
-    """只完成 Stage Restart preparation，并把 child 交给统一 finalizer。"""
-
-    source = await get_execution(workspace, source_run_id)
-    if source is None:
-        raise RecoveryExecutionError("SOURCE_EXECUTION_NOT_FOUND", "source execution 不存在。")
-    lineage = await resolve_recovery_lineage_head(
-        workspace,
-        thread_id=source.thread_id,
-        execution_kind=source.execution_kind,
-    )
-    if lineage.state is RecoveryLineageState.AMBIGUOUS:
-        raise RecoveryExecutionError(lineage.reason_code, "Recovery lineage 存在多个无法安全解释的当前 head。")
-    if lineage.head is None or lineage.head.run_id != source.run_id:
-        raise RecoveryExecutionError("RECOVERY_SOURCE_SUPERSEDED", "当前 recovery source 已被新的 child execution 替代，请刷新后继续。")
-    if (
-        not getattr(assessment, "available", False)
-        or getattr(assessment, "authority", None) is None
-    ):
-        raise RecoveryExecutionError(
-            getattr(assessment, "reason_code", None) or "STAGE_RESTART_NOT_AVAILABLE",
-            getattr(assessment, "reason", None) or "当前正式产物不能支持 Stage Restart。",
-        )
-    lifecycle = load_application_lifecycle(workspace)
-    if lifecycle is None:
-        raise RecoveryExecutionError("STAGE_RESTART_LIFECYCLE_MISSING", "ApplicationLifecycle 不存在。")
-    current_assessment = ApplicationPlanningStageRecoveryContract().assess_before_handoff(
-        workspace=workspace,
-        source=source,
-        snapshot=SimpleNamespace(values={}),
-        lifecycle=lifecycle,
-    )
-    if not current_assessment.available or current_assessment.authority is None:
-        raise RecoveryExecutionError(
-            current_assessment.reason_code or "STAGE_RESTART_NOT_AVAILABLE",
-            current_assessment.reason or "当前正式产物不能支持 Stage Restart。",
-        )
-    if current_assessment.authority.authority_sha256 != assessment.authority.authority_sha256:
-        raise RecoveryExecutionError(
-            "STALE_RECOVERY_ACTION",
-            "恢复动作已经过期，请刷新当前 Recovery Incident。",
-        )
-    authority = current_assessment.authority
-    identity = current_backend_instance()
-    new_run_id = f"recovery-{uuid4().hex[:12]}"
-    plan = RecoveryPlan(
-        source_run_id=source.run_id,
-        thread_id=source.thread_id,
-        decision=RecoveryDecision.REQUIRES_HANDLER,
-        strategy=RecoveryStrategy.STAGE_RESTART,
-        lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
-        next_nodes=["technical_planning_begin"],
-        reason_code="TECHNICAL_PLANNING_STAGE_RESTART",
-        reason="从当前正式 RequirementSpec、ProductPlan 和 UiDesign 重建 Technical Planning 输入。",
-        lifecycle_revision=authority.lifecycle_revision,
-        source_authority_sha256=authority.authority_sha256,
-        source_stage=authority.stage,
-    )
-    child_execution, _, attempt = await claim_stage_restart_attempt(
-        source=source,
-        plan=plan,
-        authority=authority,
-        new_run_id=new_run_id,
-        owner_backend_instance_id=identity.instance_id,
-        owner_pid=identity.pid,
-        lease_ttl_seconds=Settings.from_env().execution_recovery_lease_ttl_seconds,
-    )
-    heartbeat_task = _start_recovery_heartbeat(
-        workspace=workspace,
-        run_id=new_run_id,
-        owner_backend_instance_id=identity.instance_id,
-    )
-    handoff_completed = False
-    try:
-        lifecycle = _handoff_lifecycle(
-            workspace,
-            source=source,
-            plan=plan,
-            new_run_id=new_run_id,
-        )
-        handoff_completed = True
-        await update_recovery_attempt(
-            workspace=workspace,
-            new_run_id=new_run_id,
-            status=RecoveryAttemptStatus.HANDED_OFF,
-        )
-        await stop_execution_heartbeat(heartbeat_task)
-        heartbeat_task = None
-        return await finalize_handed_off_recovery_attempt(
-            workspace=workspace,
-            new_run_id=new_run_id,
-            graph=graph,
-        )
-    except Exception as exc:
-        await stop_execution_heartbeat(heartbeat_task)
-        await _handle_pre_runtime_failure(
-            workspace=workspace,
-            new_run_id=new_run_id,
-            attempt=await get_recovery_attempt(workspace, new_run_id),
-            error_code=_recovery_error_code(exc),
-            handoff_completed=handoff_completed,
-        )
-        if isinstance(exc, RecoveryExecutionError):
-            raise
-        raise RecoveryExecutionError("RECOVERY_PRESTART_FAILED", "Stage Restart 在 Graph 启动前失败。") from exc
-
-
 async def finalize_handed_off_recovery_attempt(
     *,
     workspace: str,
@@ -879,16 +762,6 @@ async def finalize_handed_off_recovery_attempt(
                 "FINALIZING recovery 的 child execution 不存在。",
             )
         lifecycle = load_application_lifecycle(workspace)
-        if attempt.strategy is RecoveryStrategy.STAGE_RESTART:
-            return await _finalize_stage_restart(
-                workspace=workspace,
-                source=source,
-                child_execution=child_execution,
-                attempt=attempt,
-                graph=graph,
-                lifecycle=lifecycle,
-                heartbeat_task=heartbeat_task,
-            )
         if attempt.strategy is RecoveryStrategy.OPERATION_RETRY:
             return await _finalize_operation_retry(
                 workspace=workspace,
@@ -970,172 +843,6 @@ async def finalize_handed_off_recovery_attempt(
             error_code=_recovery_error_code(exc),
         )
         raise
-
-
-async def _finalize_stage_restart(
-    *,
-    workspace: str,
-    source: DurableExecutionRecord,
-    child_execution: DurableExecutionRecord,
-    attempt: RecoveryAttempt,
-    graph: Any,
-    lifecycle: Any,
-    heartbeat_task: asyncio.Task[None] | None,
-) -> NativeRecoveryRuntimeContext:
-    """重验正式阶段 authority，写入 ENTRY boundary 后才标记 STARTED。"""
-
-    if (
-        not attempt.source_authority_sha256
-        or not attempt.source_stage
-        or attempt.source_lifecycle_revision is None
-    ):
-        raise RecoveryExecutionError(
-            "STAGE_RESTART_AUTHORITY_MISSING",
-            "RecoveryAttempt 缺少完整的正式阶段 authority。",
-        )
-    admission = assess_recovery_source(source)
-    if not admission.admissible:
-        raise RecoveryExecutionError(
-            "RECOVERY_STATE_DRIFT",
-            "source execution 不再满足 Stage Restart 的 source admission。",
-        )
-    if source.status is not attempt.source_status:
-        raise RecoveryExecutionError(
-            "RECOVERY_STATE_DRIFT",
-            "source execution 的终止状态已偏离 RecoveryAttempt。",
-        )
-    if execution_failure_sha256(source.failure) != attempt.source_failure_sha256:
-        raise RecoveryExecutionError(
-            "RECOVERY_STATE_DRIFT",
-            "source execution 的 failure evidence 已偏离 RecoveryAttempt。",
-        )
-    if source.execution_kind != "application_planning":
-        raise RecoveryExecutionError(
-            "STAGE_RESTART_NOT_SUPPORTED",
-            "Stage Restart 只支持 Application Planning。",
-        )
-    contract = ApplicationPlanningStageRecoveryContract()
-    assessment = contract.revalidate_after_handoff(
-        workspace=workspace,
-        source=source,
-        snapshot=SimpleNamespace(values={}),
-        lifecycle=lifecycle,
-        expected_owner=attempt.new_run_id,
-        expected_authority_sha256=attempt.source_authority_sha256,
-        expected_lifecycle_revision=attempt.source_lifecycle_revision,
-    )
-    if not assessment.available or assessment.authority is None:
-        raise RecoveryExecutionError(
-            assessment.reason_code or "RECOVERY_STAGE_AUTHORITY_DRIFT",
-            assessment.reason or "正式阶段 authority 已发生变化。",
-        )
-    if assessment.authority.stage != attempt.source_stage:
-        raise RecoveryExecutionError(
-            "RECOVERY_STAGE_AUTHORITY_DRIFT",
-            "Stage Restart 的 source stage 已发生变化。",
-        )
-    _validate_finalization_lifecycle(
-        source=source,
-        attempt=attempt,
-        lifecycle=lifecycle,
-    )
-    fresh_state = dict(assessment.reconstructed_state or {})
-    observability = _recovery_observability(
-        run_id=attempt.new_run_id,
-        thread_id=source.thread_id,
-        project_id=source.project_id,
-        workspace=workspace,
-    )
-    fresh_state.update(
-        {
-            "active_thread_id": source.thread_id,
-            "active_run_id": attempt.new_run_id,
-            "workspace": workspace,
-            "workflow_scope": "application_planning",
-            "lifecycle": application_lifecycle_payload(lifecycle),
-            "observability": observability,
-            "resume_from": "technical_planning_begin",
-            "phase": "technical_planning_begin",
-            "status": "running",
-        }
-    )
-    namespace = f"recovery-stage-{attempt.new_run_id}"
-    entry_point = RecoveryPoint(
-        recovery_point_id=f"recovery-point-{uuid4().hex}",
-        run_id=attempt.new_run_id,
-        thread_id=source.thread_id,
-        kind=RecoveryPointKind.ENTRY,
-        checkpoint_id=None,
-        checkpoint_ns=namespace,
-        graph_node="technical_planning_begin",
-        completed_node=None,
-        next_nodes=["technical_planning_begin"],
-        phase="technical_planning_begin",
-        state_status="running",
-        lifecycle_revision=lifecycle.revision if lifecycle is not None else None,
-        captured_at=datetime.now(timezone.utc),
-    )
-    persisted_entry = await insert_recovery_point(
-        workspace=workspace,
-        point=entry_point,
-    )
-    await update_recovery_attempt(
-        workspace=workspace,
-        new_run_id=attempt.new_run_id,
-        status=RecoveryAttemptStatus.STARTED,
-    )
-    return NativeRecoveryRuntimeContext(
-        source_execution=source,
-        child_execution=child_execution,
-        recovery_plan=RecoveryPlan(
-            source_run_id=source.run_id,
-            thread_id=source.thread_id,
-            decision=RecoveryDecision.REQUIRES_HANDLER,
-            strategy=RecoveryStrategy.STAGE_RESTART,
-            lifecycle_ownership_mode=attempt.lifecycle_ownership_mode,
-            next_nodes=["technical_planning_begin"],
-            reason_code="TECHNICAL_PLANNING_STAGE_RESTART",
-            reason="从已重验的正式产物重建 Technical Planning 输入。",
-            lifecycle_revision=attempt.source_lifecycle_revision,
-            source_authority_sha256=attempt.source_authority_sha256,
-            source_stage=attempt.source_stage,
-        ),
-        source_recovery_point=None,
-        new_run_id=attempt.new_run_id,
-        thread_id=source.thread_id,
-        project_id=source.project_id,
-        workspace=workspace,
-        workflow_scope="application_planning",
-        graph=graph,
-        fork_config={
-            "configurable": {
-                "thread_id": source.thread_id,
-                "checkpoint_ns": namespace,
-            }
-        },
-        observation_config={
-            "configurable": {
-                "thread_id": source.thread_id,
-                "checkpoint_ns": namespace,
-            }
-        },
-        fork_snapshot=SimpleNamespace(
-            config={
-                "configurable": {
-                    "thread_id": source.thread_id,
-                    "checkpoint_ns": namespace,
-                }
-            },
-            next=("technical_planning_begin",),
-            values=fresh_state,
-        ),
-        lifecycle_payload=application_lifecycle_payload(lifecycle),
-        workspace_lease=None,
-        observability=observability,
-        heartbeat_task=heartbeat_task,
-        fresh_start=True,
-        recovery_action_kind="restart_stage",
-    )
 
 
 async def _fork_and_start(
@@ -1842,5 +1549,4 @@ __all__ = [
     "NativeRecoveryRuntimeContext",
     "finalize_handed_off_recovery_attempt",
     "prepare_native_recovery",
-    "prepare_stage_restart",
 ]

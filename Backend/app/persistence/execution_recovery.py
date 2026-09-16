@@ -481,7 +481,6 @@ async def claim_native_recovery_attempt(
         owner_pid=owner_pid,
         lease_ttl_seconds=lease_ttl_seconds,
         created_at=created_at,
-        source_authority_kind=RecoverySourceAuthorityKind.CHECKPOINT,
     )
 
 
@@ -510,55 +509,6 @@ async def claim_operation_retry_attempt(
         owner_pid=owner_pid,
         lease_ttl_seconds=lease_ttl_seconds,
         created_at=created_at,
-        source_authority_kind=RecoverySourceAuthorityKind.CHECKPOINT,
-    )
-
-
-async def claim_stage_restart_attempt(
-    *,
-    source: DurableExecutionRecord,
-    plan: RecoveryPlan,
-    authority: object,
-    new_run_id: str,
-    owner_backend_instance_id: str,
-    owner_pid: int,
-    lease_ttl_seconds: float,
-    created_at: datetime | None = None,
-) -> tuple[DurableExecutionRecord, ExecutionLease, RecoveryAttempt]:
-    """校验正式阶段 authority，并原子创建 Stage Restart child transaction。"""
-
-    authority_sha256 = str(getattr(authority, "authority_sha256", "") or "").strip()
-    source_stage = str(getattr(authority, "stage", "") or "").strip()
-    lifecycle_revision = getattr(authority, "lifecycle_revision", None)
-    normalized_lifecycle_revision = (
-        int(lifecycle_revision) if lifecycle_revision is not None else None
-    )
-    if not authority_sha256 or source_stage != "technical_planning":
-        raise RecoveryExecutionError(
-            "STAGE_RESTART_AUTHORITY_MISSING",
-            "Stage Restart 缺少完整的正式阶段 authority。",
-        )
-    if (
-        plan.source_authority_sha256 != authority_sha256
-        or plan.source_stage != source_stage
-        or plan.lifecycle_revision != normalized_lifecycle_revision
-    ):
-        raise RecoveryExecutionError(
-            "STAGE_RESTART_AUTHORITY_MISMATCH",
-            "RecoveryPlan 与正式阶段 authority 不一致。",
-        )
-    return await _claim_recovery_attempt(
-        source=source,
-        plan=plan,
-        new_run_id=new_run_id,
-        owner_backend_instance_id=owner_backend_instance_id,
-        owner_pid=owner_pid,
-        lease_ttl_seconds=lease_ttl_seconds,
-        created_at=created_at,
-        source_authority_kind=RecoverySourceAuthorityKind.FORMAL_STAGE,
-        source_authority_sha256=authority_sha256,
-        source_stage=source_stage,
-        source_lifecycle_revision=normalized_lifecycle_revision,
     )
 
 
@@ -571,12 +521,8 @@ async def _claim_recovery_attempt(
     owner_pid: int,
     lease_ttl_seconds: float,
     created_at: datetime | None,
-    source_authority_kind: RecoverySourceAuthorityKind,
-    source_authority_sha256: str | None = None,
-    source_stage: str | None = None,
-    source_lifecycle_revision: int | None = None,
 ) -> tuple[DurableExecutionRecord, ExecutionLease, RecoveryAttempt]:
-    """在一个 SQLite 写事务中统一 claim source、child、lease 和 attempt。"""
+    """以 checkpoint authority 在一个 SQLite 写事务中统一 claim source、child、lease 和 attempt。"""
 
     from app.domain.execution_recovery import RecoveryExecutionError
     from app.services.execution_recovery_source_admission import assess_recovery_source
@@ -586,43 +532,26 @@ async def _claim_recovery_attempt(
             "RECOVERY_SOURCE_MISMATCH",
             "RecoveryPlan 与 source execution 不属于同一条运行记录。",
         )
-    if source_authority_kind is RecoverySourceAuthorityKind.CHECKPOINT:
-        checkpoint_complete = bool(
-            plan.recovery_point_id and plan.checkpoint_id and len(plan.next_nodes) == 1
+    checkpoint_complete = bool(
+        plan.recovery_point_id and plan.checkpoint_id and len(plan.next_nodes) == 1
+    )
+    native_valid = (
+        plan.decision.value == "ready_native"
+        and plan.strategy is RecoveryStrategy.NATIVE_CHECKPOINT
+        and checkpoint_complete
+    )
+    operation_valid = (
+        plan.decision is RecoveryDecision.REQUIRES_HANDLER
+        and plan.strategy is RecoveryStrategy.OPERATION_RETRY
+        and checkpoint_complete
+        and source.status is DurableExecutionStatus.FAILED
+        and source.execution_kind == "workbench"
+    )
+    if not native_valid and not operation_valid:
+        raise RecoveryExecutionError(
+            "RECOVERY_NOT_READY_NATIVE",
+            "当前 RecoveryPlan 未被 Recovery Action Planner 明确允许。",
         )
-        native_valid = (
-            plan.decision.value == "ready_native"
-            and plan.strategy is RecoveryStrategy.NATIVE_CHECKPOINT
-            and checkpoint_complete
-        )
-        operation_valid = (
-            plan.decision is RecoveryDecision.REQUIRES_HANDLER
-            and plan.strategy is RecoveryStrategy.OPERATION_RETRY
-            and checkpoint_complete
-            and source.status is DurableExecutionStatus.FAILED
-            and source.execution_kind == "workbench"
-        )
-        if not native_valid and not operation_valid:
-            raise RecoveryExecutionError(
-                "RECOVERY_NOT_READY_NATIVE",
-                "当前 RecoveryPlan 未被 Recovery Action Planner 明确允许。",
-            )
-    else:
-        if (
-            plan.strategy is not RecoveryStrategy.STAGE_RESTART
-            or plan.decision is not RecoveryDecision.REQUIRES_HANDLER
-            or plan.next_nodes != ["technical_planning_begin"]
-            or not source_authority_sha256
-            or source_stage != "technical_planning"
-            or source_lifecycle_revision is None
-            or plan.recovery_point_id is not None
-            or plan.checkpoint_id is not None
-            or plan.checkpoint_ns
-        ):
-            raise RecoveryExecutionError(
-                "STAGE_RESTART_PLAN_INCOMPLETE",
-                "Stage Restart 缺少正式阶段 strategy、入口或 authority。",
-            )
     admission = assess_recovery_source(source)
     if not admission.admissible:
         raise RecoveryExecutionError(
@@ -657,10 +586,10 @@ async def _claim_recovery_attempt(
         source_run_id=source.run_id,
         new_run_id=new_run_id,
         thread_id=source.thread_id,
-        source_authority_kind=source_authority_kind,
-        source_authority_sha256=source_authority_sha256,
-        source_stage=source_stage,
-        source_lifecycle_revision=source_lifecycle_revision,
+        source_authority_kind=RecoverySourceAuthorityKind.CHECKPOINT,
+        source_authority_sha256=None,
+        source_stage=None,
+        source_lifecycle_revision=None,
         source_recovery_point_id=plan.recovery_point_id,
         source_checkpoint_id=plan.checkpoint_id,
         source_checkpoint_ns=plan.checkpoint_ns,

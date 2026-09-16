@@ -33,7 +33,6 @@ from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.execution_recovery_executor import (
     NativeRecoveryRuntimeContext,
     WorkflowReentryExecutor,
-    prepare_stage_restart,
     prepare_native_recovery,
     prepare_operation_retry,
 )
@@ -167,7 +166,6 @@ def build_execution_recovery_ag_ui_stream(
                 project_id=source.project_id,
             )
             recovery_plan = None
-            stage_assessment = None
             reentry_plan = None
             if source.status is DurableExecutionStatus.FAILED:
                 admission = assess_recovery_source(source)
@@ -270,7 +268,7 @@ def build_execution_recovery_ag_ui_stream(
                     recovery_plan=recovery_plan,
                     graph=graph,
                 )
-                action_plan, stage_assessment = await plan_recovery_action(
+                action_plan = await plan_recovery_action(
                     workspace=workspace,
                     source=source,
                     recovery_plan=recovery_plan,
@@ -338,18 +336,6 @@ def build_execution_recovery_ag_ui_stream(
                     source_run_id=source.run_id,
                     graph=graph,
                     recovery_plan=recovery_plan,
-                )
-            elif kind is RecoveryActionKind.RESTART_STAGE:
-                if recovery_plan is None:
-                    raise RecoveryExecutionError(
-                        "RECOVERY_ACTION_NOT_EXECUTABLE",
-                        "FAILED execution 不能走 stage restart。",
-                    )
-                context = await prepare_stage_restart(
-                    workspace=workspace,
-                    source_run_id=source.run_id,
-                    graph=graph,
-                    assessment=stage_assessment,
                 )
             else:
                 raise RecoveryExecutionError(
@@ -646,7 +632,7 @@ async def _resolve_action_source_run(
                 recovery_plan=plan,
                 graph=graph,
             )
-            action_plan, _assessment = await plan_recovery_action(
+            action_plan = await plan_recovery_action(
                 workspace=workspace,
                 source=record,
                 recovery_plan=plan,

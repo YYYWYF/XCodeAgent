@@ -362,7 +362,7 @@ class WorkflowReentryContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(rebuilt_boundary.boundary_id, "corrupt-boundary-index")
 
     async def test_missing_source_owned_checkpoint_fails_closed(self) -> None:
-        """只有其他 run 的同节点 checkpoint 时不得回退到旧现场或 Stage Restart。"""
+        """只有其他 run 的同节点 checkpoint 时不得回退到旧现场或阶段重启 fallback。"""
 
         def node_a(_state: ReentryState) -> dict[str, Any]:
             """执行无业务更新的测试节点。"""

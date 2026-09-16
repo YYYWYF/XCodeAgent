@@ -385,7 +385,7 @@ class FailedNodeReplayDurableHarness:
         self,
         *,
         replay_policies: tuple[Any, ...] | None = None,
-    ) -> tuple[Any, Any, Any]:
+    ) -> tuple[Any, Any]:
         """经由 Coordinator 和 Action Planner 重新解析当前 Backend action。"""
 
         if self.graph is None or self.source is None:
@@ -405,7 +405,7 @@ class FailedNodeReplayDurableHarness:
             recovery_plan=recovery_plan,
             graph=self.graph,
         )
-        action_plan, assessment = await plan_recovery_action(
+        action_plan = await plan_recovery_action(
             workspace=str(self.workspace),
             source=source,
             recovery_plan=recovery_plan,
@@ -414,7 +414,7 @@ class FailedNodeReplayDurableHarness:
             lifecycle=facts.lifecycle,
             graph=self.graph,
         )
-        return source, action_plan, assessment
+        return source, action_plan
 
     async def run_child(self, context: Any) -> None:
         """从真实 fork checkpoint 执行 child，并登记 heartbeat 清理任务。"""
@@ -529,7 +529,7 @@ class FailedNodeReplaySelectorTests(unittest.IsolatedAsyncioTestCase):
             recovery_plan=recovery_plan,
             graph=graph,
         )
-        action_plan, _assessment = await plan_recovery_action(
+        action_plan = await plan_recovery_action(
             workspace=str(self.workspace),
             source=self.source,
             recovery_plan=recovery_plan,
@@ -647,7 +647,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.harness.close()
         self.harness = FailedNodeReplayDurableHarness(failure=failure)
         await self._start()
-        source, action_plan, _assessment = await self.harness.resolve_action()
+        source, action_plan = await self.harness.resolve_action()
         self.assertEqual(source.status, DurableExecutionStatus.FAILED)
         self.assertEqual(action_plan.reason_code, "FAILED_NODE_REENTRY_READY")
         self.assertIsNotNone(action_plan.primary_action)
@@ -684,7 +684,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.harness.close()
         self.harness = FailedNodeReplayDurableHarness(failure=None)
         await self._start()
-        source, action_plan, _assessment = await self.harness.resolve_action()
+        source, action_plan = await self.harness.resolve_action()
 
         self.assertEqual(source.status, DurableExecutionStatus.FAILED)
         self.assertEqual(
@@ -776,7 +776,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=self.harness.graph),
             ),
         ):
-            source, action_plan, _assessment = await self.harness.resolve_action()
+            source, action_plan = await self.harness.resolve_action()
             self.assertEqual(source.run_id, self.harness.source_run_id)
             self.assertIsNotNone(action_plan.primary_action)
             assert action_plan.primary_action is not None
@@ -827,7 +827,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self._start()
         assert self.harness.graph is not None
         self.harness.current_model = "deepseek-child-failing"
-        source, first_action, _assessment = await self.harness.resolve_action()
+        source, first_action = await self.harness.resolve_action()
         assert first_action.primary_action is not None
         first_payload = {
             "forwardedProps": {
@@ -862,7 +862,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.harness.workspace,
                 first_child_run_id,
             )
-            second_source, second_action, _assessment = await self._resolve_current_action(
+            second_source, second_action = await self._resolve_current_action(
                 first_child_run_id
             )
             self.assertEqual(second_source.run_id, first_child_run_id)
@@ -910,7 +910,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
         assert resolution.head is not None
         self.assertEqual(resolution.head.run_id, second_context.new_run_id)
 
-    async def _resolve_current_action(self, source_run_id: str) -> tuple[Any, Any, Any]:
+    async def _resolve_current_action(self, source_run_id: str) -> tuple[Any, Any]:
         """按指定当前 source 重新走 Coordinator 与 Action Planner。"""
 
         assert self.harness.graph is not None
@@ -928,7 +928,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             recovery_plan=recovery_plan,
             graph=self.harness.graph,
         )
-        action_plan, assessment = await plan_recovery_action(
+        action_plan = await plan_recovery_action(
             workspace=str(self.harness.workspace),
             source=source,
             recovery_plan=recovery_plan,
@@ -937,14 +937,14 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             lifecycle=facts.lifecycle,
             graph=self.harness.graph,
         )
-        return source, action_plan, assessment
+        return source, action_plan
 
     async def test_public_execute_double_click_creates_one_failed_node_child(self) -> None:
         """同一 incident/action 并发执行只能 claim 一个 child execution。"""
 
         await self._start()
         assert self.harness.graph is not None
-        _source, action_plan, _assessment = await self.harness.resolve_action()
+        _source, action_plan = await self.harness.resolve_action()
         assert action_plan.primary_action is not None
         payload = {
             "forwardedProps": {
@@ -1014,7 +1014,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         await self._start()
         assert self.harness.graph is not None
-        _source, action_plan, _assessment = await self.harness.resolve_action()
+        _source, action_plan = await self.harness.resolve_action()
         await update_execution_node(
             workspace=self.harness.workspace,
             run_id=self.harness.source_run_id,
@@ -1066,7 +1066,7 @@ class FailedNodeReplayExecutionTests(unittest.IsolatedAsyncioTestCase):
             "app.config.Settings.from_env",
             side_effect=self.harness.settings,
         ):
-            source, action_plan, _assessment = await self.harness.resolve_action(
+            source, action_plan = await self.harness.resolve_action(
                 replay_policies=_replay_policy()
             )
             self.assertEqual(source.status, DurableExecutionStatus.INTERRUPTED)

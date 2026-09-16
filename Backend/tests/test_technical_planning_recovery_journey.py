@@ -112,7 +112,7 @@ class TechnicalPlanningRecoveryJourneyHarness:
         self.temporary_workspace.cleanup()
 
     def _seed_formal_artifacts(self) -> None:
-        """用现有生产 helper 写入 Stage Restart 所需的正式上游 JSON。"""
+        """用现有生产 helper 写入 Technical Planning journey 所需的正式上游 JSON。"""
 
         state = {"workspace": str(self.workspace)}
         requirement_spec = create_requirement_spec(self.request)

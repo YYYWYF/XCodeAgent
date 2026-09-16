@@ -5,22 +5,14 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
 
-from app.domain.application_lifecycle import (
-    ApplicationLifecycleStage,
-    ApplicationLifecycleStatus,
-)
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     RecoveryDecision,
+    RecoveryIncidentStatus,
     RecoveryPlan,
     RecoveryStrategy,
-)
-from app.services.application_planning_stage_recovery import (
-    ApplicationPlanningStageRecoveryContract,
-    _request_from_formal_artifacts,
 )
 from app.services.execution_recovery_action_planner import plan_recovery_action
 from app.services.execution_recovery_capability import (
@@ -29,20 +21,7 @@ from app.services.execution_recovery_capability import (
 
 
 class P04BRecoveryContractTests(unittest.IsolatedAsyncioTestCase):
-    """覆盖首次 Technical Planning request 与 Native fallback 的关键边界。"""
-
-    def test_source_request_is_the_first_initial_request_authority(self) -> None:
-        """RequirementSpec.source_request 必须优先于旧字段和 ProductPlan。"""
-
-        request = _request_from_formal_artifacts(
-            {
-                "source_request": "创建一个天气预报应用",
-                "request": "旧的 RequirementSpec 请求",
-            },
-            {"request": "旧的 ProductPlan 请求"},
-        )
-
-        self.assertEqual(request, "创建一个天气预报应用")
+    """覆盖 P0.5-D 删除 Stage Restart 后的 Native fail-closed 边界。"""
 
     def test_native_capability_accepts_only_root_single_successor_plan(self) -> None:
         """Native capability 必须与 Executor 的 root/single-successor 硬约束一致。"""
@@ -73,7 +52,7 @@ class P04BRecoveryContractTests(unittest.IsolatedAsyncioTestCase):
             self._native_plan().model_copy(
                 update={
                     "decision": RecoveryDecision.REQUIRES_HANDLER,
-                    "strategy": RecoveryStrategy.STAGE_RESTART,
+                    "strategy": RecoveryStrategy.HANDLER,
                 }
             )
         )
@@ -81,8 +60,8 @@ class P04BRecoveryContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(capability.executable)
         self.assertEqual(capability.reason_code, "NATIVE_DECISION_REQUIRED")
 
-    async def test_native_non_root_plan_falls_back_to_stage_restart(self) -> None:
-        """Native 不可执行且正式阶段有效时，Action Planner 必须返回 Stage Restart。"""
+    async def test_native_non_root_plan_fails_closed_without_stage_restart(self) -> None:
+        """Native 不可执行时，Action Planner 必须直接 fail closed。"""
 
         now = datetime.now(timezone.utc)
         source = DurableExecutionRecord(
@@ -94,75 +73,28 @@ class P04BRecoveryContractTests(unittest.IsolatedAsyncioTestCase):
             workflow_scope="application_planning",
             first_node="technical_planning_begin",
             current_node="technical_planning_generate",
-            status=DurableExecutionStatus.FAILED,
+            status=DurableExecutionStatus.RUNNING,
             started_at=now,
             updated_at=now,
-            ended_at=now,
         )
-        assessment = SimpleNamespace(
-            available=True,
-            reason_code="TECHNICAL_PLANNING_STAGE_RESTART_AVAILABLE",
-            reason="stage restart is available",
-            authority=SimpleNamespace(authority_sha256="a" * 64),
-        )
-        with patch(
-            "app.services.execution_recovery_action_planner.ApplicationPlanningStageRecoveryContract.assess",
-            return_value=assessment,
-        ):
-            action_plan, _ = await plan_recovery_action(
-                workspace=source.workspace,
-                source=source,
-                recovery_plan=self._native_plan().model_copy(
-                    update={
-                        "source_run_id": source.run_id,
-                        "thread_id": source.thread_id,
-                        "checkpoint_ns": "recovery-stage-C",
-                    }
-                ),
-                point=None,
-                snapshot=SimpleNamespace(values={}),
-                lifecycle=SimpleNamespace(revision=1),
-            )
-
-        self.assertIsNotNone(action_plan.primary_action)
-        assert action_plan.primary_action is not None
-        self.assertEqual(action_plan.primary_action.kind.value, "restart_stage")
-
-    def test_initial_stage_restart_missing_request_is_unavailable(self) -> None:
-        """首次 Technical Planning 缺少原始需求时必须在 Contract 层拒绝。"""
-
-        source = self._source()
-        lifecycle = SimpleNamespace(
-            active_run_id=source.run_id,
-            revision=1,
-            initialization=SimpleNamespace(
-                thread_id=source.thread_id,
-                stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-                status=ApplicationLifecycleStatus.RUNNING,
+        action_plan = await plan_recovery_action(
+            workspace=source.workspace,
+            source=source,
+            recovery_plan=self._native_plan().model_copy(
+                update={
+                    "source_run_id": source.run_id,
+                    "thread_id": source.thread_id,
+                    "checkpoint_ns": "recovery-stage-C",
+                }
             ),
-            active_formal_revision=None,
-            pending_revision_impact=None,
-            application=SimpleNamespace(name="测试应用"),
+            point=None,
+            snapshot=SimpleNamespace(values={}),
+            lifecycle=SimpleNamespace(revision=1),
         )
-        with patch(
-            "app.services.application_planning_stage_recovery._load_formal_artifacts",
-            return_value=(
-                {"confirmation_status": "confirmed"},
-                {"confirmation_status": "confirmed"},
-                {"confirmation_status": "confirmed"},
-                {},
-            ),
-        ):
-            assessment = ApplicationPlanningStageRecoveryContract().assess(
-                workspace=source.workspace,
-                source=source,
-                point=None,
-                snapshot=SimpleNamespace(values={}),
-                lifecycle=lifecycle,
-            )
 
-        self.assertFalse(assessment.available)
-        self.assertEqual(assessment.reason_code, "STAGE_RESTART_REQUEST_MISSING")
+        self.assertEqual(action_plan.status, RecoveryIncidentStatus.NEEDS_ATTENTION)
+        self.assertIsNone(action_plan.primary_action)
+        self.assertEqual(action_plan.reason_code, "NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED")
 
     @staticmethod
     def _native_plan() -> RecoveryPlan:
@@ -179,26 +111,6 @@ class P04BRecoveryContractTests(unittest.IsolatedAsyncioTestCase):
             next_nodes=["technical_planning_generate"],
             reason_code="READY_FOR_NATIVE_REPLAY",
             reason="test",
-        )
-
-    @staticmethod
-    def _source() -> DurableExecutionRecord:
-        """构造首次 Technical Planning 的失败 source execution。"""
-
-        now = datetime.now(timezone.utc)
-        return DurableExecutionRecord(
-            run_id="source-run",
-            thread_id="planning-thread",
-            workspace="/tmp/p0-4b-recovery",
-            project_id="app-1",
-            execution_kind="application_planning",
-            workflow_scope="application_planning",
-            first_node="technical_planning_begin",
-            current_node="technical_planning_generate",
-            status=DurableExecutionStatus.FAILED,
-            started_at=now,
-            updated_at=now,
-            ended_at=now,
         )
 
 

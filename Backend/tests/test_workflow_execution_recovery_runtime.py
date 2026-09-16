@@ -375,7 +375,7 @@ class WorkflowExecutionRecoveryRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 recovery_plan=recovery_plan,
                 graph=graph,
             )
-            action_plan, _assessment = await plan_recovery_action(
+            action_plan = await plan_recovery_action(
                 workspace=str(workspace),
                 source=source,
                 recovery_plan=recovery_plan,

@@ -465,7 +465,7 @@ class OperationRetryRecoveryTests(unittest.IsolatedAsyncioTestCase):
             run_id="public-source",
         )
         graph = _RetryGraph(snapshot)
-        action_plan, _stage = await plan_recovery_action(
+        action_plan = await plan_recovery_action(
             workspace=str(self.workspace),
             source=source,
             recovery_plan=plan,
@@ -699,7 +699,7 @@ class OperationRetryRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 "thread_id": child_b.thread_id,
             }
         )
-        action_b, _stage = await plan_recovery_action(
+        action_b = await plan_recovery_action(
             workspace=str(self.workspace),
             source=source_b,
             recovery_plan=plan_b,

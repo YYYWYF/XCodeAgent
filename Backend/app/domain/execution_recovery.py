@@ -262,15 +262,17 @@ class RecoveryStrategy(StrEnum):
     NATIVE_CHECKPOINT = "native_checkpoint"
     HANDLER = "handler"
     OPERATION_RETRY = "operation_retry"
+    # 仅用于读取旧 RecoveryAttempt durable row；当前 production 不再创建或执行。
     STAGE_RESTART = "stage_restart"
     RECONCILE_STATE = "reconcile_state"
     NONE = "none"
 
 
 class RecoverySourceAuthorityKind(StrEnum):
-    """定义恢复尝试的 source authority 来自 checkpoint 还是正式阶段事实。"""
+    """定义恢复尝试的 source authority 来自 checkpoint 还是历史正式阶段事实。"""
 
     CHECKPOINT = "checkpoint"
+    # 仅用于读取旧 RecoveryAttempt durable row；新的 claim 一律使用 CHECKPOINT。
     FORMAL_STAGE = "formal_stage"
 
 
@@ -415,13 +417,6 @@ class RecoveryPlan(ExecutionRecoveryModel):
     lifecycle_revision: int | None = Field(default=None, ge=0)
     workspace_revision: str | None = Field(default=None, max_length=512)
     workspace_snapshot_hash: str | None = Field(default=None, max_length=512)
-    source_authority_sha256: str | None = Field(
-        default=None,
-        min_length=64,
-        max_length=64,
-        pattern=r"^[0-9a-f]{64}$",
-    )
-    source_stage: str | None = Field(default=None, max_length=256)
 
 
 class RecoveryActionKind(StrEnum):
@@ -430,7 +425,6 @@ class RecoveryActionKind(StrEnum):
     CONTINUE_CHECKPOINT = "continue_checkpoint"
     RETRY_FAILED_NODE = "retry_failed_node"
     RETRY_OPERATION = "retry_operation"
-    RESTART_STAGE = "restart_stage"
     RECONCILE_STATE = "reconcile_state"
     AWAIT_USER = "await_user"
     NEEDS_ATTENTION = "needs_attention"
@@ -539,6 +533,7 @@ class RecoveryAttempt(ExecutionRecoveryModel):
     new_run_id: str = Field(min_length=1, max_length=512)
     thread_id: str = Field(min_length=1, max_length=512)
     source_authority_kind: RecoverySourceAuthorityKind
+    # 以下 formal-stage authority 字段仅保留用于读取旧 durable row；当前 claim 不再写入。
     source_authority_sha256: str | None = Field(
         default=None,
         min_length=64,
