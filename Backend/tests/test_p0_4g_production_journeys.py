@@ -287,6 +287,74 @@ class _ProductionModelBoundary:
         yield self._invoke(prompt)
 
 
+class _BlockingProductionModelBoundary(_ProductionModelBoundary):
+    """在指定的最低模型 transport 边界阻塞一次，保留真实 Node/Runtime。"""
+
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        request: str,
+        calls: list[tuple[str, str]],
+        block_state: dict[str, bool],
+        dependency_started: threading.Event,
+        dependency_release: threading.Event,
+        dependency_finished: threading.Event,
+    ) -> None:
+        """保存一次性阻塞门及其完成信号。"""
+
+        super().__init__(
+            settings=settings,
+            request=request,
+            calls=calls,
+            failed_model=None,
+        )
+        self.block_state = block_state
+        self.dependency_started = dependency_started
+        self.dependency_release = dependency_release
+        self.dependency_finished = dependency_finished
+
+    def _invoke(self, prompt: str) -> AIMessage:
+        """在首个 Requirements transport 调用处制造可控的真实运行窗口。"""
+
+        kind = self._kind(prompt)
+        if kind == "requirements" and not self.block_state["consumed"]:
+            self.block_state["consumed"] = True
+            self.dependency_started.set()
+            if not self.dependency_release.wait(timeout=30):
+                raise TimeoutError("blocking production model dependency timed out")
+            self.dependency_finished.set()
+        return super()._invoke(prompt)
+
+
+def _blocking_model_factory(
+    *,
+    request: str,
+    calls: list[tuple[str, str]],
+    dependency_started: threading.Event,
+    dependency_release: threading.Event,
+    dependency_finished: threading.Event,
+):
+    """创建只在首个 Requirements transport 调用阻塞一次的 production factory。"""
+
+    block_state = {"consumed": False}
+
+    def factory(settings: Settings, **_kwargs: Any) -> _BlockingProductionModelBoundary:
+        """为每次真实 Node 调用创建共享一次性阻塞 transport。"""
+
+        return _BlockingProductionModelBoundary(
+            settings=settings,
+            request=request,
+            calls=calls,
+            block_state=block_state,
+            dependency_started=dependency_started,
+            dependency_release=dependency_release,
+            dependency_finished=dependency_finished,
+        )
+
+    return factory
+
+
 class _InvalidTechnicalPlanTransport:
     """只在 TechnicalPlan 生成的模型 transport 边界返回无效 JSON。"""
 
@@ -422,6 +490,108 @@ async def _read_current_continue_action(
     return action_plan
 
 
+async def _execute_current_continue_action(
+    workspace: Path,
+    *,
+    run_id: str,
+) -> Any:
+    """执行 Projection 签发的 CONTINUE_CHECKPOINT，并返回新的 lineage head。"""
+
+    projection = await resolve_execution_recovery_projection(str(workspace))
+    candidate = next(
+        candidate
+        for candidate in projection.candidates
+        if candidate.source_run_id == run_id
+    )
+    assert candidate.recovery_action_plan is not None
+    action_plan = candidate.recovery_action_plan.model_dump(
+        mode="json",
+        by_alias=True,
+    )
+    primary_action = action_plan["primaryAction"]
+    assert primary_action["kind"] == RecoveryActionKind.CONTINUE_CHECKPOINT.value
+    frames = await _consume(
+        build_execution_recovery_ag_ui_stream(
+            payload={
+                "forwardedProps": {
+                    "workspaceRoot": str(workspace),
+                    "executionRecovery": {
+                        "action": "execute",
+                        "incidentId": action_plan["incidentId"],
+                        "actionId": primary_action["actionId"],
+                    },
+                }
+            }
+        )
+    )
+    if any('"status":"failed"' in frame for frame in frames):
+        attempts = await list_recovery_attempts_from_source(workspace, run_id)
+        raise AssertionError(
+            "CONTINUE_CHECKPOINT failed: "
+            + " | ".join(frames[-6:])
+            + f" attempts={attempts}"
+        )
+    resolution = await resolve_recovery_lineage_head(
+        str(workspace),
+        thread_id=candidate.thread_id,
+        execution_kind=candidate.execution_kind,
+    )
+    assert resolution.head is not None
+    return resolution.head
+
+
+def _write_real_workbench_formal_artifacts(
+    workspace: Path,
+    plan: dict[str, Any],
+) -> None:
+    """写入真实 Workbench 运行所需的最小完整正式产物与 Endpoint Design。"""
+
+    for page in plan.get("pages", []):
+        references = page.setdefault("references", {})
+        references["endpoint_dependencies"] = [
+            {"endpoint_id": f"{page['pageId']}.list"}
+        ]
+    technical_plan = dict(formal_artifacts(plan)["technical_plan"])
+    requirement_spec = {
+        "confirmation_status": "confirmed",
+        "app_info": {
+            "name": "生产旅程应用",
+            "summary": "验证真实 Workbench 工作区执行。",
+        },
+    }
+    product_plan = {
+        "confirmation_status": "confirmed",
+        "app": {"name": "生产旅程应用", "summary": "生产旅程应用产品规划。"},
+        "pages": [
+            {
+                "pageId": page["pageId"],
+                "path": page["path"],
+                "name": page["pageId"],
+                "description": "生产旅程页面。",
+                "actions": [],
+            }
+            for page in plan.get("pages", [])
+        ],
+    }
+    write_json(
+        workspace,
+        ".xcodeagent/specs/requirement-spec.json",
+        requirement_spec,
+    )
+    write_json(workspace, ".xcodeagent/plans/product-plan.json", product_plan)
+    write_json(
+        workspace,
+        ".xcodeagent/specs/ui-designs.json",
+        {"confirmation_status": "skipped", "pages": []},
+    )
+    write_json(
+        workspace,
+        ".xcodeagent/plans/technical-plan.json",
+        technical_plan,
+    )
+    write_confirmed_endpoint_designs(workspace, plan)
+
+
 def _planning_payload(
     workspace: Path,
     *,
@@ -554,58 +724,6 @@ async def _seed_planning_checkpoint(
     return graph, requirement_spec, product_plan
 
 
-async def _seed_first_requirements_crash_checkpoint(
-    workspace: Path,
-    *,
-    thread_id: str,
-    run_id: str,
-    project_id: str,
-) -> tuple[Any, Any]:
-    """用真实 Application Planning Graph 提交 workflow_entry 后的 requirements checkpoint。"""
-
-    _write_planning_lifecycle(
-        workspace,
-        thread_id=thread_id,
-        run_id=run_id,
-        project_id=project_id,
-        stage=ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
-        status=ApplicationLifecycleStatus.PENDING,
-    )
-    graph = await application_planning_graph_for_request(
-        workspace=str(workspace),
-        project_id=project_id,
-    )
-    await observe_execution_started(
-        workspace=str(workspace),
-        project_id=project_id,
-        thread_id=thread_id,
-        run_id=run_id,
-        workflow_scope="application_planning",
-        first_node="requirements",
-        owner_session_id=f"{thread_id}-session",
-        lease_ttl=1,
-    )
-    await graph.aupdate_state(
-        {"configurable": {"thread_id": thread_id}},
-        {
-            "workspace": str(workspace),
-            "project_id": project_id,
-            "workflow_scope": "application_planning",
-            "request": "创建一个生产旅程应用",
-            "application_name": "生产旅程应用",
-            "active_thread_id": thread_id,
-            "active_run_id": run_id,
-            "owner_session_id": f"{thread_id}-session",
-            "phase": "workflow_entry",
-            "status": "running",
-            "resume_from": "",
-        },
-        as_node="workflow_entry",
-    )
-    snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-    return graph, snapshot
-
-
 async def _seed_native_planning_interrupt_checkpoint(
     workspace: Path,
     *,
@@ -676,7 +794,7 @@ async def _seed_workbench_middle_crash_checkpoint(
     run_id: str,
     project_id: str,
 ) -> tuple[Any, Any]:
-    """用真实 Workbench Graph 提交 inspect success 后的 prepare_build_tasks checkpoint。"""
+    """为 C4 reconciliation characterization 写入 deterministic terminal 前 checkpoint。"""
 
     plan = project_plan()
     for key, payload in formal_artifacts(plan).items():
@@ -752,61 +870,180 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
     """验证真实生产入口、checkpoint 对账、公开 Recovery action 与 child context 闭环。"""
 
     async def test_c2_first_node_crash_restarts_at_requirements_checkpoint(self) -> None:
-        """workflow_entry 后 Backend 崩溃，重启只能继续 requirements，不能回到 START。"""
+        """真实首节点 transport 阻塞后，CONTINUE action 必须启动 requirements child。"""
 
         project_id = "p0-5c-first-node-app"
         thread_id = "p0-5c-first-node-thread"
         source_run_id = "p0-5c-first-node-source"
+        model_calls: list[tuple[str, str]] = []
+        dependency_started = threading.Event()
+        dependency_release = threading.Event()
+        dependency_finished = threading.Event()
+        runtime_task: asyncio.Task[list[str]] | None = None
         with tempfile.TemporaryDirectory() as raw_workspace:
             workspace = Path(raw_workspace)
-            old_graph, snapshot = await _seed_first_requirements_crash_checkpoint(
-                workspace,
-                thread_id=thread_id,
-                run_id=source_run_id,
-                project_id=project_id,
-            )
             try:
-                self.assertEqual(tuple(snapshot.next), ("requirements",))
-                scan = await reconcile_workspace_recovery(
-                    workspace,
-                    locally_active_run_ids=set(),
-                    current_backend_instance_id="backend-after-c2-restart",
-                    now=datetime.now(timezone.utc) + timedelta(days=1),
-                )
-                self.assertEqual(scan.interrupted_run_ids, [source_run_id])
-                source = await get_execution(workspace, source_run_id)
-                self.assertIsNotNone(source)
-                assert source is not None
-                self.assertEqual(source.status, DurableExecutionStatus.INTERRUPTED)
+                with (
+                    patch(
+                        "app.config.Settings.from_env",
+                        side_effect=lambda: _settings_for("MiMo"),
+                    ),
+                    patch(
+                        "app.agents.main.requirements_analyzer.create_chat_model",
+                        new=_blocking_model_factory(
+                            request="创建一个生产旅程应用",
+                            calls=model_calls,
+                            dependency_started=dependency_started,
+                            dependency_release=dependency_release,
+                            dependency_finished=dependency_finished,
+                        ),
+                    ),
+                    patch(
+                        "app.agents.main.product_planner.create_chat_model",
+                        new=_model_factory(
+                            request="创建一个生产旅程应用",
+                            calls=model_calls,
+                            failed_model=None,
+                        ),
+                    ),
+                ):
+                    old_graph = await application_planning_graph_for_request(
+                        workspace=str(workspace),
+                        project_id=project_id,
+                    )
+                    _write_planning_lifecycle(
+                        workspace,
+                        thread_id=thread_id,
+                        run_id=source_run_id,
+                        project_id=project_id,
+                        stage=ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
+                        status=ApplicationLifecycleStatus.PENDING,
+                    )
+                    runtime_task = asyncio.create_task(
+                        _consume(
+                            build_application_page_planning_ag_ui_stream(
+                                graph=application_planning_graph_for_request,
+                                payload=_planning_payload(
+                                    workspace,
+                                    thread_id=thread_id,
+                                    run_id=source_run_id,
+                                    project_id=project_id,
+                                    resume_from="requirements",
+                                ),
+                            )
+                        )
+                    )
+                    self.assertTrue(
+                        await asyncio.wait_for(
+                            asyncio.to_thread(dependency_started.wait, 5),
+                            timeout=10,
+                        )
+                    )
+                    # transport 线程发出信号后，Durable execution 的 current_node 可能
+                    # 仍在提交边界；轮询确保断言观察到已落盘的 Requirements 执行状态。
+                    running = None
+                    for _ in range(100):
+                        running = await get_execution(workspace, source_run_id)
+                        if (
+                            running is not None
+                            and running.status is DurableExecutionStatus.RUNNING
+                            and running.current_node == "requirements"
+                        ):
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertIsNotNone(running)
+                    assert running is not None
+                    self.assertEqual(running.status, DurableExecutionStatus.RUNNING)
+                    self.assertEqual(running.current_node, "requirements")
+                    source_snapshot = await old_graph.aget_state(
+                        {"configurable": {"thread_id": thread_id}}
+                    )
+                    self.assertEqual(tuple(source_snapshot.next), ("requirements",))
 
-                clear_application_planning_graph_cache()
-                await close_workflow_checkpointer_for_workspace(
-                    workspace=str(workspace),
-                    project_id=project_id,
-                )
-                restarted_graph = await application_planning_graph_for_request(
-                    workspace=str(workspace),
-                    project_id=project_id,
-                )
-                self.assertIsNot(restarted_graph, old_graph)
-                action_plan = await _read_current_continue_action(
+                    scan = await reconcile_workspace_recovery(
+                        workspace,
+                        locally_active_run_ids=set(),
+                        current_backend_instance_id="backend-after-c2-restart",
+                        now=datetime.now(timezone.utc) + timedelta(days=1),
+                    )
+                    self.assertEqual(scan.interrupted_run_ids, [source_run_id])
+                    source = await get_execution(workspace, source_run_id)
+                    self.assertIsNotNone(source)
+                    assert source is not None
+                    self.assertEqual(source.status, DurableExecutionStatus.INTERRUPTED)
+
+                    runtime_task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await runtime_task
+                    runtime_task = None
+
+                    clear_application_planning_graph_cache()
+                    self.assertTrue(
+                        await close_workflow_checkpointer_for_workspace(
+                            workspace=str(workspace),
+                            project_id=project_id,
+                        )
+                    )
+                    restarted_graph = await application_planning_graph_for_request(
+                        workspace=str(workspace),
+                        project_id=project_id,
+                    )
+                    self.assertIsNot(restarted_graph, old_graph)
+                    action_plan = await _read_current_continue_action(
+                        workspace,
+                        run_id=source_run_id,
+                    )
+                    self.assertEqual(
+                        action_plan["primaryAction"]["kind"],
+                        RecoveryActionKind.CONTINUE_CHECKPOINT.value,
+                    )
+                    # 同步 transport 在被取消的旧线程中仍可能持有执行权；先完成
+                    # child fork，再释放它，避免旧线程在 fork 前推进 lifecycle。
+                    child = await _execute_current_continue_action(
+                        workspace,
+                        run_id=source_run_id,
+                    )
+                    dependency_release.set()
+                    self.assertTrue(
+                        await asyncio.wait_for(
+                            asyncio.to_thread(dependency_finished.wait, 5),
+                            timeout=10,
+                        )
+                    )
+
+                self.assertNotEqual(child.run_id, source_run_id)
+                self.assertEqual(child.first_node, "requirements")
+                self.assertNotIn(child.first_node, {"START", "workflow_entry"})
+                child_boundary = await get_node_entry_boundary(
                     workspace,
-                    run_id=source_run_id,
-                )
-                self.assertEqual(
-                    action_plan["primaryAction"]["kind"],
-                    RecoveryActionKind.CONTINUE_CHECKPOINT.value,
-                )
-                boundary = await get_node_entry_boundary(
-                    workspace,
-                    source_run_id=source_run_id,
+                    source_run_id=child.run_id,
                     thread_id=thread_id,
                     target_node="requirements",
                 )
-                self.assertIsNotNone(boundary)
-                assert boundary is not None
-                self.assertEqual(boundary.checkpoint_id, snapshot.config["configurable"]["checkpoint_id"])
+                self.assertIsNotNone(child_boundary)
+                assert child_boundary is not None
+                child_snapshot = await restarted_graph.aget_state(
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": child_boundary.checkpoint_ns,
+                            "checkpoint_id": child_boundary.checkpoint_id,
+                        }
+                    }
+                )
+                self.assertEqual(tuple(child_snapshot.next), ("requirements",))
+                self.assertTrue(
+                    any(kind == "requirements" for _model, kind in model_calls)
+                )
             finally:
+                dependency_release.set()
+                if runtime_task is not None:
+                    if not runtime_task.done():
+                        runtime_task.cancel()
+                    try:
+                        await runtime_task
+                    except asyncio.CancelledError:
+                        pass
                 clear_application_planning_graph_cache()
                 await close_workflow_checkpointer_for_workspace(
                     workspace=str(workspace),
@@ -816,72 +1053,191 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
     async def test_c3_workbench_middle_node_crash_continues_prepare_without_rescan(
         self,
     ) -> None:
-        """inspect success 后 prepare running 崩溃，重启 target 为 prepare 且扫描总数保持 1。"""
+        """真实 inspect→prepare 阻塞后 owner loss，CONTINUE child 不得重跑 inspect。"""
 
         project_id = "p0-5c-middle-node-app"
         thread_id = "p0-5c-middle-node-thread"
         source_run_id = "p0-5c-middle-node-source"
+        dependency_started = asyncio.Event()
+        dependency_release = asyncio.Event()
+        generation_calls: list[str] = []
+        inspection_calls: list[str] = []
+        runtime_task: asyncio.Task[list[str]] | None = None
+
+        async def generate_once(job: Any, **_kwargs: Any) -> UnitGenerationAttemptResult:
+            """在真实 prepare_build_tasks 的首个外部规划调用处阻塞一次。"""
+
+            generation_calls.append(job.identity.planning_run_id)
+            if len(generation_calls) == 1:
+                dependency_started.set()
+                await dependency_release.wait()
+            tasks = model_tasks(job)
+            return UnitGenerationAttemptResult(
+                identity=job.identity,
+                input_fingerprint=job.context.input_fingerprint,
+                raw_response=json.dumps({"tasks": tasks}),
+                tasks=tasks,
+            )
+
+        def inspection_spy(*args: Any, **kwargs: Any) -> Any:
+            """观察真实 inspect_workspace service 调用，不替换 production Node。"""
+
+            inspection_calls.append("inspect_workspace")
+            from app.services.workspace_inspector import inspect_workspace as real_inspect
+
+            return real_inspect(*args, **kwargs)
+
         with tempfile.TemporaryDirectory() as raw_workspace:
             workspace = Path(raw_workspace)
-            old_graph, snapshot = await _seed_workbench_middle_crash_checkpoint(
+            plan = project_plan()
+            _write_real_workbench_formal_artifacts(workspace, plan)
+            template_ready = _ready_template(workspace)
+            _write_planning_lifecycle(
                 workspace,
                 thread_id=thread_id,
                 run_id=source_run_id,
                 project_id=project_id,
+                stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                status=ApplicationLifecycleStatus.COMPLETED,
             )
             try:
-                self.assertEqual(tuple(snapshot.next), ("prepare_build_tasks",))
-                self.assertEqual(
-                    snapshot.values["workspace_snapshot_summary"]["file_manifest"][
-                        "total_files_indexed"
-                    ],
-                    1,
-                )
-                scan = await reconcile_workspace_recovery(
-                    workspace,
-                    locally_active_run_ids=set(),
-                    current_backend_instance_id="backend-after-c3-restart",
-                    now=datetime.now(timezone.utc) + timedelta(days=1),
-                )
-                self.assertEqual(scan.interrupted_run_ids, [source_run_id])
-                clear_workflow_graph_cache()
-                await close_workflow_checkpointer_for_workspace(
-                    workspace=str(workspace),
-                    project_id=project_id,
-                )
-                restarted_graph = await workflow_graph_for_request(
-                    workspace=str(workspace),
-                    project_id=project_id,
-                )
-                self.assertIsNot(restarted_graph, old_graph)
-                action_plan = await _read_current_continue_action(
-                    workspace,
-                    run_id=source_run_id,
-                )
-                self.assertEqual(
-                    action_plan["primaryAction"]["kind"],
-                    RecoveryActionKind.CONTINUE_CHECKPOINT.value,
-                )
-                boundary = await get_node_entry_boundary(
-                    workspace,
-                    source_run_id=source_run_id,
-                    thread_id=thread_id,
-                    target_node="prepare_build_tasks",
-                )
-                self.assertIsNotNone(boundary)
-                lifecycle = load_application_lifecycle(workspace)
-                self.assertIsNotNone(lifecycle)
-                assert lifecycle is not None
-                self.assertEqual(
-                    lifecycle.active_executions[source_run_id].status,
-                    WorkbenchExecutionStatus.RUNNING,
-                )
+                with (
+                    patch(
+                        "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
+                        return_value=template_ready,
+                    ),
+                    patch(
+                        "app.graph.nodes.tasks.inspect_template_generation_readiness",
+                        return_value=template_ready,
+                    ),
+                    patch(
+                        "app.services.dag_planning_orchestrator.generate_unit_candidate_once",
+                        new=generate_once,
+                    ),
+                    patch(
+                        "app.graph.nodes.workspace_inspection.inspect_workspace_service",
+                        new=inspection_spy,
+                    ),
+                ):
+                    old_graph = await workflow_graph_for_request(
+                        workspace=str(workspace),
+                        project_id=project_id,
+                    )
+                    runtime_task = asyncio.create_task(
+                        _consume(
+                            build_workflow_ag_ui_stream(
+                                graph=workflow_graph_for_request,
+                                payload={
+                                    "threadId": thread_id,
+                                    "runId": source_run_id,
+                                    "projectId": project_id,
+                                    "sessionId": "p0-5c-middle-node-session",
+                                    "request": "开始构建生产旅程应用",
+                                    "resumeFrom": "inspect_workspace",
+                                    "forwardedProps": {
+                                        "workspaceRoot": str(workspace),
+                                        "buildExecutionScope": {
+                                            "type": "page",
+                                            "targetId": "customers",
+                                        },
+                                        "application": {
+                                            "id": project_id,
+                                            "name": "生产旅程应用",
+                                        },
+                                    },
+                                },
+                            )
+                        )
+                    )
+                    try:
+                        await asyncio.wait_for(dependency_started.wait(), timeout=10)
+                    except asyncio.TimeoutError as exc:
+                        current = await get_execution(workspace, source_run_id)
+                        self.fail(
+                            "prepare external dependency was not reached: "
+                            f"execution={current} task_done={runtime_task.done()} "
+                            f"inspection_calls={inspection_calls} generation_calls={generation_calls}"
+                        )
+                        raise exc
+                    running = await get_execution(workspace, source_run_id)
+                    self.assertIsNotNone(running)
+                    assert running is not None
+                    self.assertEqual(running.status, DurableExecutionStatus.RUNNING)
+                    self.assertEqual(
+                        running.current_node,
+                        "prepare_build_tasks",
+                        f"status={running.status} task_done={runtime_task.done()}",
+                    )
+                    source_snapshot = await old_graph.aget_state(
+                        {"configurable": {"thread_id": thread_id}}
+                    )
+                    self.assertEqual(tuple(source_snapshot.next), ("prepare_build_tasks",))
+                    self.assertEqual(len(inspection_calls), 1)
+
+                    scan = await reconcile_workspace_recovery(
+                        workspace,
+                        locally_active_run_ids=set(),
+                        current_backend_instance_id="backend-after-c3-restart",
+                        now=datetime.now(timezone.utc) + timedelta(days=1),
+                    )
+                    self.assertEqual(scan.interrupted_run_ids, [source_run_id])
+                    source_after_scan = await get_execution(workspace, source_run_id)
+                    self.assertIsNotNone(source_after_scan)
+                    assert source_after_scan is not None
+                    self.assertEqual(
+                        source_after_scan.status,
+                        DurableExecutionStatus.INTERRUPTED,
+                    )
+
+                    runtime_task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await runtime_task
+                    runtime_task = None
+                    dependency_release.set()
+
+                    clear_workflow_graph_cache()
+                    self.assertTrue(
+                        await close_workflow_checkpointer_for_workspace(
+                            workspace=str(workspace),
+                            project_id=project_id,
+                        )
+                    )
+                    restarted_graph = await workflow_graph_for_request(
+                        workspace=str(workspace),
+                        project_id=project_id,
+                    )
+                    self.assertIsNot(restarted_graph, old_graph)
+                    action_plan = await _read_current_continue_action(
+                        workspace,
+                        run_id=source_run_id,
+                    )
+                    self.assertEqual(
+                        action_plan["primaryAction"]["kind"],
+                        RecoveryActionKind.CONTINUE_CHECKPOINT.value,
+                    )
+                    child = await _execute_current_continue_action(
+                        workspace,
+                        run_id=source_run_id,
+                    )
+                    self.assertNotEqual(child.run_id, source_run_id)
+                    self.assertEqual(child.first_node, "prepare_build_tasks")
+                    self.assertNotIn(child.first_node, {"START", "workflow_entry"})
             finally:
+                dependency_release.set()
+                if runtime_task is not None:
+                    if not runtime_task.done():
+                        runtime_task.cancel()
+                    try:
+                        await runtime_task
+                    except asyncio.CancelledError:
+                        pass
                 clear_workflow_graph_cache()
                 await close_workflow_checkpointer_for_workspace(
                     workspace=str(workspace),
                     project_id=project_id,
                 )
+
+        self.assertEqual(len(inspection_calls), 1)
 
     async def test_c5_native_interrupt_restarts_as_awaiting_user_without_child(self) -> None:
         """原生交互 checkpoint 提交后崩溃，重启保留 interaction 且不创建 child。"""
@@ -956,7 +1312,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
     async def test_c4_terminal_commit_reconciles_workbench_before_new_execution(
         self,
     ) -> None:
-        """terminal checkpoint 先提交时，重启只对账 lifecycle，不重跑 finalize 或创建 child。"""
+        """保留 terminal checkpoint 对账 characterization，不将其宣称为 Runtime crash E2E。"""
 
         project_id = "p0-5c-terminal-finalization-app"
         thread_id = "p0-5c-terminal-finalization-thread"
@@ -971,7 +1327,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                 project_id=project_id,
             )
             try:
-                terminal_snapshot = await graph.aupdate_state(
+                terminal_config = await graph.aupdate_state(
                     {"configurable": {"thread_id": thread_id}},
                     {
                         "active_run_id": source_run_id,
@@ -981,6 +1337,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                     },
                     as_node="finalize_project",
                 )
+                terminal_snapshot = await graph.aget_state(terminal_config)
                 self.assertEqual(tuple(terminal_snapshot.next), ())
                 scan = await reconcile_workspace_recovery(
                     workspace,
@@ -1156,11 +1513,16 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
             ["DeepSeek", "MiMo"],
         )
 
-    async def test_c6_formal_revision_retry_preserves_context_after_backend_restart(self) -> None:
-        """Formal Revision R1 重启后继续原 target，不创建 R2 或重新分析。"""
+    async def test_c6_formal_revision_interrupted_continue_preserves_context_after_backend_restart(
+        self,
+    ) -> None:
+        """Formal Revision R1 在 Requirements 阻塞时中断，恢复仍只进入同一 target。"""
 
-        model_config = {"name": "DeepSeek"}
         model_calls: list[tuple[str, str]] = []
+        dependency_started = threading.Event()
+        dependency_release = threading.Event()
+        dependency_finished = threading.Event()
+        runtime_task: asyncio.Task[list[str]] | None = None
         project_id = "p0-4g-formal-revision-app"
         thread_id = "p0-4g-formal-revision-thread"
         baseline_run_id = "p0-4g-formal-baseline"
@@ -1168,7 +1530,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
         change_request = "修改首页展示核心信息"
         with tempfile.TemporaryDirectory() as raw_workspace:
             workspace = Path(raw_workspace)
-            graph, requirement_spec, _product_plan = await _seed_planning_checkpoint(
+            graph, _requirement_spec, _product_plan = await _seed_planning_checkpoint(
                 workspace,
                 thread_id=thread_id,
                 run_id=baseline_run_id,
@@ -1258,14 +1620,16 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                 with (
                     patch(
                         "app.config.Settings.from_env",
-                        side_effect=lambda: _settings_for(model_config["name"]),
+                        side_effect=lambda: _settings_for("MiMo"),
                     ),
                     patch(
                         "app.agents.main.requirements_analyzer.create_chat_model",
-                        new=_model_factory(
+                        new=_blocking_model_factory(
                             request=change_request,
                             calls=model_calls,
-                            failed_model="DeepSeek",
+                            dependency_started=dependency_started,
+                            dependency_release=dependency_release,
+                            dependency_finished=dependency_finished,
                         ),
                     ),
                     patch(
@@ -1277,70 +1641,130 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                         ),
                     ),
                 ):
-                    await _consume(
-                        build_application_page_planning_ag_ui_stream(
-                            graph=application_planning_graph_for_request,
-                            payload=start_payload,
+                    runtime_task = asyncio.create_task(
+                        _consume(
+                            build_application_page_planning_ag_ui_stream(
+                                graph=application_planning_graph_for_request,
+                                payload=start_payload,
+                            )
                         )
                     )
-                    source = await get_execution(workspace, source_run_id)
-                    self.assertIsNotNone(source)
-                    assert source is not None
-                    self.assertEqual(source.status, DurableExecutionStatus.FAILED)
-                    self.assertEqual(source.current_node, "requirements")
+                    self.assertTrue(
+                        await asyncio.wait_for(
+                            asyncio.to_thread(dependency_started.wait, 5),
+                            timeout=10,
+                        )
+                    )
+                    # Analyzer transport 的信号先于 Runtime mirror 更新，等待同一
+                    # execution 的 current_node 稳定为目标节点再模拟 owner loss。
+                    running = None
+                    for _ in range(100):
+                        running = await get_execution(workspace, source_run_id)
+                        if (
+                            running is not None
+                            and running.status is DurableExecutionStatus.RUNNING
+                            and running.current_node == "requirements"
+                        ):
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertIsNotNone(running)
+                    assert running is not None
+                    self.assertEqual(running.status, DurableExecutionStatus.RUNNING)
+                    self.assertEqual(
+                        running.current_node,
+                        "requirements",
+                        f"status={running.status} task_done={runtime_task.done()}",
+                    )
+
+                    source_snapshot = await graph.aget_state(
+                        {"configurable": {"thread_id": thread_id}}
+                    )
+                    self.assertEqual(tuple(source_snapshot.next), ("requirements",))
+                    self.assertEqual(
+                        source_snapshot.values.get("request"),
+                        change_request,
+                    )
+                    source_context_digest = semantic_context_sha256(
+                        dict(source_snapshot.values)
+                    )
+
                     lifecycle = load_application_lifecycle(workspace)
                     self.assertIsNotNone(lifecycle)
                     assert lifecycle is not None
                     self.assertIsNotNone(lifecycle.active_formal_revision)
                     assert lifecycle.active_formal_revision is not None
                     change_id = lifecycle.active_formal_revision.change_id
-                    self.assertEqual(lifecycle.active_formal_revision.current_artifact, "requirement-spec")
+                    revision_target = lifecycle.active_formal_revision.target.model_dump(
+                        mode="json"
+                    )
+                    revision_request = lifecycle.active_formal_revision.request
+                    self.assertEqual(
+                        lifecycle.active_formal_revision.current_artifact,
+                        "requirement-spec",
+                    )
                     self.assertEqual(
                         lifecycle.active_formal_revision.impact_interaction_id,
                         pending.interaction_id,
                     )
 
-                    boundary = await get_node_entry_boundary(
+                    # 新 Backend 看不到旧 owner，且读取时间已越过旧 lease，模拟 owner loss。
+                    scan = await reconcile_workspace_recovery(
                         workspace,
-                        source_run_id=source_run_id,
-                        thread_id=thread_id,
-                        target_node="requirements",
+                        locally_active_run_ids=set(),
+                        current_backend_instance_id="backend-after-c6-restart",
+                        now=datetime.now(timezone.utc) + timedelta(days=1),
                     )
-                    self.assertIsNotNone(boundary)
-                    assert boundary is not None
-                    source_snapshot = await graph.aget_state(
-                        {
-                            "configurable": {
-                                "thread_id": thread_id,
-                                "checkpoint_ns": boundary.checkpoint_ns,
-                                "checkpoint_id": boundary.checkpoint_id,
-                            }
-                        }
+                    self.assertEqual(scan.interrupted_run_ids, [source_run_id])
+                    source_after_scan = await get_execution(workspace, source_run_id)
+                    self.assertIsNotNone(source_after_scan)
+                    assert source_after_scan is not None
+                    self.assertEqual(
+                        source_after_scan.status,
+                        DurableExecutionStatus.INTERRUPTED,
                     )
-                    self.assertEqual(tuple(source_snapshot.next), ("requirements",))
-                    source_context_digest = semantic_context_sha256(
-                        dict(source_snapshot.values)
+                    self.assertEqual(source_after_scan.current_node, "requirements")
+
+                    # 旧 Runtime 被杀死后只释放阻塞 transport，不把旧执行当成恢复动作。
+                    runtime_task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await runtime_task
+                    runtime_task = None
+                    dependency_release.set()
+                    self.assertTrue(
+                        await asyncio.wait_for(
+                            asyncio.to_thread(dependency_finished.wait, 5),
+                            timeout=10,
+                        )
                     )
 
-                    # 清理运行时 Graph/cache 后重新创建，验证 source/action 仍由持久化事实驱动。
                     clear_application_planning_graph_cache()
-                    await close_workflow_checkpointer_for_workspace(
+                    self.assertTrue(
+                        await close_workflow_checkpointer_for_workspace(
+                            workspace=str(workspace),
+                            project_id=project_id,
+                        )
+                    )
+                    restarted_graph = await application_planning_graph_for_request(
                         workspace=str(workspace),
                         project_id=project_id,
                     )
-                    model_config["name"] = "MiMo"
-                    child = await _execute_current_recovery_action(
+                    self.assertIsNot(restarted_graph, graph)
+                    action_plan = await _read_current_continue_action(
+                        workspace,
+                        run_id=source_run_id,
+                    )
+                    self.assertEqual(
+                        action_plan["primaryAction"]["kind"],
+                        RecoveryActionKind.CONTINUE_CHECKPOINT.value,
+                    )
+                    child = await _execute_current_continue_action(
                         workspace,
                         run_id=source_run_id,
                     )
                     self.assertNotEqual(child.run_id, source_run_id)
                     self.assertEqual(child.first_node, "requirements")
-                    self.assertNotEqual(child.status, DurableExecutionStatus.FAILED)
+                    self.assertNotIn(child.first_node, {"START", "workflow_entry"})
 
-                    restarted_graph = await application_planning_graph_for_request(
-                        workspace=str(workspace),
-                        project_id=project_id,
-                    )
                     child_boundary = await get_node_entry_boundary(
                         workspace,
                         source_run_id=child.run_id,
@@ -1366,33 +1790,52 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                     final_lifecycle = load_application_lifecycle(workspace)
                     self.assertIsNotNone(final_lifecycle)
                     assert final_lifecycle is not None
+                    self.assertIsNone(final_lifecycle.pending_revision_impact)
+                    self.assertIsNotNone(final_lifecycle.active_formal_revision)
+                    assert final_lifecycle.active_formal_revision is not None
+                    # 同一 active formal revision 仍是唯一 R1，不产生第二个 revision identity。
                     self.assertEqual(
-                        final_lifecycle.active_formal_revision.change_id
-                        if final_lifecycle.active_formal_revision
-                        else None,
+                        final_lifecycle.active_formal_revision.change_id,
                         change_id,
                     )
-                    self.assertEqual(impact_model.calls, 1)
-                    assert final_lifecycle.active_formal_revision is not None
+                    self.assertEqual(
+                        final_lifecycle.active_formal_revision.target.model_dump(mode="json"),
+                        revision_target,
+                    )
                     self.assertEqual(
                         final_lifecycle.active_formal_revision.request,
-                        change_request,
+                        revision_request,
                     )
                     self.assertEqual(
-                        final_lifecycle.active_formal_revision.target.type,
-                        "application",
+                        final_lifecycle.active_formal_revision.source_run_id,
+                        baseline_run_id,
+                    )
+                    self.assertEqual(impact_model.calls, 1)
+                    self.assertEqual(
+                        [kind for _model, kind in model_calls if kind == "requirements"],
+                        ["requirements", "requirements"],
+                    )
+                    source_after_recovery = await get_execution(workspace, source_run_id)
+                    self.assertIsNotNone(source_after_recovery)
+                    assert source_after_recovery is not None
+                    self.assertEqual(
+                        source_after_recovery.status,
+                        DurableExecutionStatus.INTERRUPTED,
                     )
             finally:
+                dependency_release.set()
+                if runtime_task is not None:
+                    if not runtime_task.done():
+                        runtime_task.cancel()
+                    try:
+                        await runtime_task
+                    except asyncio.CancelledError:
+                        pass
                 clear_application_planning_graph_cache()
                 await close_workflow_checkpointer_for_workspace(
                     workspace=str(workspace),
                     project_id=project_id,
                 )
-
-        self.assertEqual(
-            [model for model, kind in model_calls if kind == "requirements"],
-            ["DeepSeek", "MiMo"],
-        )
 
     async def test_workbench_retries_prepare_build_tasks_without_rerunning_inspection(self) -> None:
         """真实 Workbench A→B 中 B 外部规划失败后 child 从 B 重入且 A 只执行一次。"""
