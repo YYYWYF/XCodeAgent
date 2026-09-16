@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.utils.subprocess_output import subprocess_output_text
+
 
 BACKEND_STOP_TIMEOUT_SECONDS = 5
 BACKEND_STOP_POLL_INTERVAL_SECONDS = 0.05
@@ -195,13 +197,16 @@ def _force_kill_pid(pid: int) -> None:
     if os.name == "nt":
         completed = subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
-            text=True,
             capture_output=True,
             timeout=BACKEND_STOP_TIMEOUT_SECONDS,
             check=False,
         )
         if completed.returncode != 0 and _pid_is_running(pid):
-            message = (completed.stderr or completed.stdout or "taskkill 执行失败").strip()
+            message = (
+                subprocess_output_text(completed.stderr)
+                or subprocess_output_text(completed.stdout)
+                or "taskkill 执行失败"
+            ).strip()
             raise OSError(message)
         return
     os.kill(pid, signal.SIGKILL)
@@ -259,16 +264,15 @@ def _query_process_command(pid: int) -> tuple[str, str | None]:
             argv = ["ps", "-ww", "-p", str(pid), "-o", "command="]
         completed = subprocess.run(
             argv,
-            text=True,
             capture_output=True,
             timeout=BACKEND_STOP_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return "", f"无法读取后端进程命令行：{exc}"
-    command = (completed.stdout or "").strip()
+    command = subprocess_output_text(completed.stdout).strip()
     if completed.returncode != 0 or not command:
-        detail = (completed.stderr or "").strip()
+        detail = subprocess_output_text(completed.stderr).strip()
         return "", detail or "无法确认后端进程命令行。"
     return command, None
 

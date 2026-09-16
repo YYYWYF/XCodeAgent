@@ -51,7 +51,6 @@ def _run_backend_repackage(
             workspace=workspace,
             run_id=run_id,
             cwd=str(cwd),
-            text=True,
             capture_output=True,
             timeout=BACKEND_REPACKAGE_TIMEOUT_SECONDS,
             check=False,

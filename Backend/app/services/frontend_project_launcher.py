@@ -14,8 +14,11 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
-from app.utils.subprocess_output import subprocess_output_text
 from app.services.workspace_process_registry import workspace_process_registry
+from app.utils.subprocess_output import subprocess_output_text
+from app.utils.subprocess_platform import preview_process_creation_options
+
+
 INSTALL_TIMEOUT_SECONDS = 120
 SERVER_READY_TIMEOUT_SECONDS = 20
 SERVER_READY_INTERVAL_SECONDS = 1
@@ -360,7 +363,6 @@ def _run_install(
             argv,
             workspace=workspace,
             cwd=str(cwd),
-            text=True,
             capture_output=True,
             timeout=INSTALL_TIMEOUT_SECONDS,
             check=False,
@@ -426,9 +428,8 @@ def _start_dev_server(
             stdout=stdout,
             stderr=stderr,
             stdin=subprocess.DEVNULL,
-            # macOS 预览进程继承 Electron 后端进程组，应用退出时可统一回收。
-            start_new_session=os.name == "nt",
             env=env,
+            **preview_process_creation_options(),
         )
     except OSError as exc:
         stdout.close()
@@ -687,7 +688,12 @@ def _terminate_frontend_process(
         "forced": False,
     }
     try:
-        if process.poll() is None:
+        if process.poll() is None and os.name == "nt" and pid is not None:
+            # Windows 直接终止启动器及其子进程树，不向共享控制台发送 Ctrl+C。
+            cleanup["forced"] = True
+            _force_kill_pid(pid)
+            process.wait(timeout=FRONTEND_STOP_TIMEOUT_SECONDS)
+        elif process.poll() is None:
             process.terminate()
             try:
                 process.wait(timeout=FRONTEND_STOP_TIMEOUT_SECONDS)
@@ -730,14 +736,17 @@ def _force_kill_pid(pid: int) -> None:
 
     if os.name == "nt":
         completed = subprocess.run(
-            ["taskkill", "/PID", str(pid), "/F"],
-            text=True,
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
             timeout=FRONTEND_STOP_TIMEOUT_SECONDS,
             check=False,
         )
         if completed.returncode != 0 and _pid_is_running(pid):
-            message = (completed.stderr or completed.stdout or "taskkill 执行失败").strip()
+            message = (
+                subprocess_output_text(completed.stderr)
+                or subprocess_output_text(completed.stdout)
+                or "taskkill 执行失败"
+            ).strip()
             raise OSError(message)
         return
     os.kill(pid, signal.SIGKILL)

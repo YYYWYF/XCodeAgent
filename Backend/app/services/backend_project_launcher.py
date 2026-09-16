@@ -21,8 +21,9 @@ from app.services.backend_launch_support import (
     _jar_has_main_class,
     _run_backend_repackage,
 )
-from app.utils.subprocess_output import subprocess_output_text
 from app.services.workspace_process_registry import workspace_process_registry
+from app.utils.subprocess_output import subprocess_output_text
+from app.utils.subprocess_platform import preview_process_creation_options
 
 
 BACKEND_BUILD_TIMEOUT_SECONDS = 600
@@ -423,7 +424,6 @@ def _run_backend_build(
             argv,
             workspace=workspace,
             cwd=str(cwd),
-            text=True,
             capture_output=True,
             timeout=BACKEND_BUILD_TIMEOUT_SECONDS,
             check=False,
@@ -489,8 +489,7 @@ def _start_backend_server(
             stderr=stderr,
             stdin=subprocess.DEVNULL,
             env=environment,
-            # macOS Java 服务继承 Electron 后端进程组，应用退出时可统一回收。
-            start_new_session=os.name == "nt",
+            **preview_process_creation_options(),
         )
     except OSError as exc:
         stdout.close()

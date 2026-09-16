@@ -14,6 +14,28 @@ from app.services.workspace_process_registry import WorkspaceProcessRegistry
 class WorkspaceProcessRegistryTests(unittest.TestCase):
     """验证应用删除可终止同步命令及其工作区后续启动。"""
 
+    def test_text_capture_replaces_invalid_local_encoding_bytes(self) -> None:
+        """非法本地编码字节不得让 subprocess reader 线程异常退出。"""
+
+        registry = WorkspaceProcessRegistry()
+        with TemporaryDirectory() as directory:
+            completed = registry.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(bytes([0x89])); sys.stdout.flush()",
+                ],
+                workspace=directory,
+                text=True,
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIsInstance(completed.stdout, str)
+        self.assertTrue(completed.stdout)
+
     @unittest.skipUnless(os.name == "posix", "POSIX 信号回收场景")
     def test_cancel_run_reaps_repackage_command_ignoring_sigterm(self) -> None:
         """补打包的同步 communicate 也观察停止，不会等到十分钟构建超时。"""

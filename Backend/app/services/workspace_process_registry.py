@@ -111,6 +111,7 @@ class WorkspaceProcessRegistry:
                 )
             kwargs["stdout"] = subprocess.PIPE
             kwargs["stderr"] = subprocess.PIPE
+        _configure_text_decoding(kwargs)
         _configure_process_group(kwargs)
         with self.managed_process(*popenargs, workspace=workspace, run_id=run_id, **kwargs) as process:
             try:
@@ -274,6 +275,13 @@ def _configure_process_group(kwargs: dict[str, Any]) -> None:
         kwargs.setdefault("start_new_session", True)
 
 
+def _configure_text_decoding(kwargs: dict[str, Any]) -> None:
+    """为文本管道启用容错解码，避免子线程因非法本地编码字节退出。"""
+
+    if kwargs.get("text") or kwargs.get("universal_newlines"):
+        kwargs.setdefault("errors", "replace")
+
+
 def _terminate_process_group(process: subprocess.Popen[Any], *, force: bool) -> None:
     """跨平台终止命令及其派生子进程，进程已退出时视为成功。"""
 
@@ -281,13 +289,15 @@ def _terminate_process_group(process: subprocess.Popen[Any], *, force: bool) -> 
         return
     try:
         if os.name == "nt":
+            # Windows 的非强制控制台关闭可能向共享控制台传播控制事件；
+            # 受控命令取消时直接终止已登记进程树，避免影响宿主 Uvicorn。
             subprocess.run(
                 [
                     "taskkill",
                     "/PID",
                     str(process.pid),
                     "/T",
-                    *(["/F"] if force else []),
+                    "/F",
                 ],
                 capture_output=True,
                 timeout=2,

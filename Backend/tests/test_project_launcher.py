@@ -28,6 +28,7 @@ from app.services.backend_process_registry import (
 from app.services.frontend_project_launcher import (
     _dev_server_log_is_ready,
     _preview_is_ready,
+    _terminate_frontend_process,
     _wait_until_ready,
 )
 from app.services.project_launcher import (
@@ -37,6 +38,11 @@ from app.services.project_launcher import (
     launch_project_preview,
     run_project_restart_validation,
     stop_backend_project,
+)
+from app.utils.subprocess_platform import (
+    WINDOWS_CREATE_NEW_PROCESS_GROUP,
+    WINDOWS_CREATE_NO_WINDOW,
+    preview_process_creation_options,
 )
 
 
@@ -75,6 +81,19 @@ class ProjectLauncherTests(unittest.TestCase):
             ready = _preview_is_ready("http://127.0.0.1:3000")
 
         self.assertTrue(ready)
+
+    def test_preview_process_creation_options_are_platform_safe(self) -> None:
+        """验证 Windows 隔离宿主控制台且 macOS 保留既有进程组语义。"""
+
+        windows = preview_process_creation_options("nt")
+        posix = preview_process_creation_options("posix")
+
+        self.assertEqual(
+            windows["creationflags"],
+            WINDOWS_CREATE_NEW_PROCESS_GROUP | WINDOWS_CREATE_NO_WINDOW,
+        )
+        self.assertNotIn("start_new_session", windows)
+        self.assertEqual(posix, {})
 
     def test_readiness_falls_back_to_current_launch_log_when_http_is_blocked(self) -> None:
         """验证 Python socket 受限时可通过本次 CRA 编译成功日志确认就绪。"""
@@ -144,12 +163,16 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["script"], "dev")
         self.assertEqual(result["server"]["pid"], 12345)
         self.assertEqual(run.call_args.args[0], [package_manager_command, "install"])
+        self.assertNotIn("text", run.call_args.kwargs)
         self.assertEqual(
             popen.call_args.args[0],
             [package_manager_command, "run", "dev"],
         )
         self.assertEqual(popen.call_args.kwargs["env"]["HOST"], "localhost")
         self.assertEqual(popen.call_args.kwargs["env"]["BROWSER"], "none")
+        for key, value in preview_process_creation_options().items():
+            self.assertEqual(popen.call_args.kwargs[key], value)
+        self.assertNotIn("start_new_session", popen.call_args.kwargs)
 
     def test_react_scripts_launch_does_not_force_loopback_host(self) -> None:
         """验证 CRA 启动时移除可能导致 allowedHosts 校验失败的 HOST。"""
@@ -391,13 +414,43 @@ class ProjectLauncherTests(unittest.TestCase):
             [maven_command, "clean", "install"],
         )
         self.assertEqual(Path(run.call_args.kwargs["cwd"]), backend.resolve())
+        self.assertNotIn("text", run.call_args.kwargs)
         self.assertEqual(
             popen.call_args.args[0],
             [java_command, "-jar", str(jar_path.resolve())],
         )
         self.assertEqual(Path(popen.call_args.kwargs["cwd"]), target.resolve())
+        for key, value in preview_process_creation_options().items():
+            self.assertEqual(popen.call_args.kwargs[key], value)
+        self.assertNotIn("start_new_session", popen.call_args.kwargs)
         self.assertTrue(result["prebuild_cleanup"]["success"])
         self.assertEqual(result["prebuild_cleanup"]["source"], "none")
+
+    def test_windows_frontend_stop_terminates_only_registered_process_tree(self) -> None:
+        """验证 Windows 停止前端时强制回收子树且不发送控制台 Ctrl+C。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            pid_file = workspace / "frontend.pid"
+            pid_file.write_text("12345", encoding="utf-8")
+            process = MagicMock(pid=12345)
+            process.poll.side_effect = [None, None, 0]
+            with (
+                patch("app.services.frontend_project_launcher.os.name", "nt"),
+                patch(
+                    "app.services.frontend_project_launcher._force_kill_pid"
+                ) as force_kill,
+            ):
+                cleanup = _terminate_frontend_process(
+                    workspace=workspace,
+                    process=process,
+                    pid_file=pid_file,
+                )
+
+        self.assertTrue(cleanup["success"])
+        self.assertTrue(cleanup["forced"])
+        force_kill.assert_called_once_with(12345)
+        process.terminate.assert_not_called()
 
     def test_launch_backend_project_supports_uppercase_backend_directory(self) -> None:
         """验证大小写敏感文件系统上的 Backend Maven 工程可正常启动。"""
