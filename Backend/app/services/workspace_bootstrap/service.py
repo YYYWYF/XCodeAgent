@@ -11,7 +11,13 @@ from app.services.application_lifecycle import (
     begin_application_template_generation,
     complete_workspace_bootstrap,
 )
-from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
+from app.services.workspace_bootstrap.coordinator import (
+    clear_failed_bootstrap_outputs,
+    template_mutation_coordinator,
+)
+from app.services.workspace_bootstrap.git_template_package import (
+    GitTemplatePackageBuilder,
+)
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 from app.services.workspace_bootstrap.models import ArchiveLimits, WorkspaceBootstrapError
 from app.services.workspace_bootstrap.readiness import (
@@ -19,7 +25,10 @@ from app.services.workspace_bootstrap.readiness import (
     classify_workspace_template,
     validate_workspace_bootstrap_readiness,
 )
-from app.services.workspace_bootstrap.requested_config import compile_template_requested_config
+from app.services.workspace_bootstrap.requested_config import (
+    bootstrap_managed_roots,
+    compile_template_requested_config,
+)
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
 from app.services.workspace_bootstrap.template_package import validate_template_package
 
@@ -71,6 +80,9 @@ class WorkspaceBootstrapService:
         coordinator_started = True
         try:
             requested_config = await asyncio.to_thread(compile_template_requested_config, workspace)
+            managed_roots = await asyncio.to_thread(
+                bootstrap_managed_roots, workspace
+            )
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             # 新迭代沿用已有工程：模板请求只由 application.json 派生，各迭代完全一致，
             # 因此已物化的模板本来就在正确的状态。重新下载会把应用累积的业务代码整体覆盖掉。
@@ -78,6 +90,7 @@ class WorkspaceBootstrapService:
                 classify_workspace_template,
                 workspace,
                 requested_config=requested_config,
+                managed_roots=managed_roots,
             )
             if template_status is WorkspaceTemplateStatus.READY:
                 lifecycle = await asyncio.to_thread(
@@ -97,6 +110,8 @@ class WorkspaceBootstrapService:
                     "为避免覆盖已有代码，本次不会重新拉取模板；"
                     "请改用独立的项目目录重建应用，或先手工清理该工作区。"
                 )
+            # ABSENT 仍可能残留未形成工程根的 staging；下载前统一清理失败事务残留。
+            await asyncio.to_thread(clear_failed_bootstrap_outputs, workspace)
             client = TemplateEngineClient(
                 base_url=self._settings.template_engine_base_url,
                 connect_timeout=self._settings.template_engine_connect_timeout_seconds,
@@ -104,6 +119,13 @@ class WorkspaceBootstrapService:
                 max_package_bytes=self._settings.template_package_max_bytes,
             )
             download = await client.generate(requested_config)
+            # Engine V1 ZIP 只有 frontend/backend；有业务 Agent 时从 Git 补齐第三根。
+            download = await asyncio.to_thread(
+                GitTemplatePackageBuilder(self._settings).supplement_engine_package,
+                workspace,
+                download,
+                managed_roots,
+            )
             download_path = download.temporary_path
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             package = await asyncio.to_thread(
@@ -114,6 +136,7 @@ class WorkspaceBootstrapService:
                     max_files=self._settings.template_package_max_files,
                     max_extracted_bytes=self._settings.template_package_max_extracted_bytes,
                 ),
+                managed_roots,
             )
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             template_mutation_coordinator.enter_commit_section(workspace)
@@ -126,6 +149,7 @@ class WorkspaceBootstrapService:
                 validate_workspace_bootstrap_readiness(
                     root,
                     requested_config=requested_config,
+                    managed_roots=managed_roots,
                 )
                 lifecycle = complete_workspace_bootstrap(
                     root,
@@ -138,6 +162,7 @@ class WorkspaceBootstrapService:
                 workspace=workspace,
                 archive_path=package.archive_path,
                 template_state=package.template_state,
+                managed_roots=managed_roots,
                 readiness=commit_readiness,
             )
             if lifecycle is None:

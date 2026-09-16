@@ -79,6 +79,17 @@ class Settings:
     langsmith_project: str = ""
     langsmith_endpoint: str = ""
     template_engine_base_url: str = ""
+    template_git_frontend_repository_url: str = (
+        "https://github.com/ruyue1/frontend-template.git"
+    )
+    template_git_backend_repository_url: str = (
+        "https://github.com/Hupy2118/springboot-template.git"
+    )
+    template_git_agent_runtime_repository_url: str = (
+        "https://github.com/Bettetman/agent-runtime-template.git"
+    )
+    template_git_agent_runtime_branch: str = "master"
+    template_git_clone_timeout_seconds: float = 120.0
     template_engine_connect_timeout_seconds: float = 10.0
     template_engine_read_timeout_seconds: float = 120.0
     template_package_max_bytes: int = 104857600
@@ -224,6 +235,27 @@ class Settings:
             template_engine_base_url=os.getenv(
                 "XCODEAGENT_TEMPLATE_ENGINE_BASE_URL", ""
             ).rstrip("/"),
+            template_git_frontend_repository_url=os.getenv(
+                "XCODEAGENT_TEMPLATE_GIT_FRONTEND_REPOSITORY_URL",
+                "https://github.com/ruyue1/frontend-template.git",
+            ).strip(),
+            template_git_backend_repository_url=os.getenv(
+                "XCODEAGENT_TEMPLATE_GIT_BACKEND_REPOSITORY_URL",
+                "https://github.com/Hupy2118/springboot-template.git",
+            ).strip(),
+            template_git_agent_runtime_repository_url=os.getenv(
+                "XCODEAGENT_TEMPLATE_GIT_AGENT_RUNTIME_REPOSITORY_URL",
+                "https://github.com/Bettetman/agent-runtime-template.git",
+            ).strip(),
+            template_git_agent_runtime_branch=(
+                os.getenv(
+                    "XCODEAGENT_TEMPLATE_GIT_AGENT_RUNTIME_BRANCH", "master"
+                ).strip()
+                or "master"
+            ),
+            template_git_clone_timeout_seconds=float(
+                os.getenv("XCODEAGENT_TEMPLATE_GIT_CLONE_TIMEOUT_SECONDS", "120")
+            ),
             template_engine_connect_timeout_seconds=float(
                 os.getenv("XCODEAGENT_TEMPLATE_ENGINE_CONNECT_TIMEOUT_SECONDS", "10")
             ),

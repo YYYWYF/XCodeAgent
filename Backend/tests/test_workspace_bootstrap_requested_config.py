@@ -6,7 +6,10 @@ import unittest
 from pathlib import Path
 
 from app.services.workspace_bootstrap.models import TemplateConfigError
-from app.services.workspace_bootstrap.requested_config import compile_template_requested_config
+from app.services.workspace_bootstrap.requested_config import (
+    bootstrap_managed_roots,
+    compile_template_requested_config,
+)
 
 
 class RequestedConfigTests(unittest.TestCase):
@@ -38,6 +41,24 @@ class RequestedConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(TemplateConfigError, "过期 application.json"):
                 compile_template_requested_config(root)
 
+    def test_includes_agent_runtime_only_for_confirmed_agent_contracts(self) -> None:
+        """确认第三根只由 TechnicalPlan 的正式 Agent Contract 决定。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write(root, login=False, authorization=False)
+            plan_file = root / ".xcodeagent/plans/technical-plan.json"
+            plan = json.loads(plan_file.read_text(encoding="utf-8"))
+            self.assertEqual(
+                bootstrap_managed_roots(root), ("frontend", "backend")
+            )
+            plan["agent_contracts"] = [{"agentId": "policy_assistant"}]
+            plan_file.write_text(json.dumps(plan), encoding="utf-8")
+            self.assertEqual(
+                bootstrap_managed_roots(root),
+                ("frontend", "backend", "agent-runtime"),
+            )
+
     def _write(self, root: Path, *, login: bool, authorization: bool) -> None:
         """写入最小且正式的 Application 与 confirmed TechnicalPlan fixture。"""
 
@@ -48,6 +69,6 @@ class RequestedConfigTests(unittest.TestCase):
             encoding="utf-8",
         )
         (xcodeagent / "plans/technical-plan.json").write_text(
-            json.dumps({"artifact_type": "technical-plan", "confirmation_status": "confirmed", "sourceConfigRevision": 1, "authorization_manifest": {}}),
+            json.dumps({"artifact_type": "technical-plan", "confirmation_status": "confirmed", "sourceConfigRevision": 1, "authorization_manifest": {}, "agent_contracts": []}),
             encoding="utf-8",
         )

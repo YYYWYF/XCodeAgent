@@ -368,17 +368,24 @@ def stop_standard_project_preview(workspace_path: str | Path) -> dict[str, Any]:
 
 
 def inspect_project_preview(workspace_path: str | Path) -> dict[str, Any]:
-    """只读取 standard preview PID 存活状态，不启动、停止或修改工作区。"""
+    """只读取 standard preview 与 Agent Runtime 存活状态，不启动、停止或修改工作区。"""
+
+    from app.services.agent_runtime_debug_state import read_agent_runtime_debug_pid
 
     root = Path(workspace_path).expanduser().resolve()
     runtime_root = root / ".xcodeagent" / "runtime" / "launch"
     backend = {"running": _pid_file_is_running(runtime_root / "backend.pid")}
     frontend = {"running": _pid_file_is_running(runtime_root / "frontend.pid")}
+    agent_runtime_pid = read_agent_runtime_debug_pid(runtime_root)
+    agent_runtime = {
+        "running": _process_pid_is_running(agent_runtime_pid),
+    }
     return {
         "workspace": str(root),
         "backend": backend,
         "frontend": frontend,
-        "running": backend["running"] or frontend["running"],
+        "agent_runtime": agent_runtime,
+        "running": backend["running"] or frontend["running"] or agent_runtime["running"],
     }
 
 
@@ -469,11 +476,20 @@ def _pid_file_is_running(path: Path) -> bool:
 
     try:
         pid = int(path.read_text(encoding="utf-8").strip())
-        if pid <= 0:
-            return False
+    except (OSError, ValueError):
+        return False
+    return _process_pid_is_running(pid)
+
+
+def _process_pid_is_running(pid: int | None) -> bool:
+    """以零信号确认指定 PID 仍存活。"""
+
+    if pid is None or pid <= 0:
+        return False
+    try:
         os.kill(pid, 0)
         return True
-    except (OSError, ValueError):
+    except OSError:
         return False
 
 
