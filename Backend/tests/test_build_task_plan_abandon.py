@@ -15,7 +15,10 @@ from app.services.application_lifecycle import (
     load_application_lifecycle,
     write_application_lifecycle,
 )
-from app.services.build_task_plan_lifecycle import abandon_pending_build_task_plan
+from app.services.build_task_plan_lifecycle import (
+    abandon_pending_build_task_plan,
+    release_session_owned_pending_build_task_plan,
+)
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.workspace.planning_run_documents import load_planning_run, write_planning_run_atomic
 from app.workspace.task_documents import (
@@ -92,6 +95,24 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
                 "revision": 4,
                 "initialization": {"stage": "ready_for_workbench", "status": "completed"},
                 "activeRunId": "workflow-current",
+                "resourceLocks": {
+                    "application": {
+                        "runId": "workflow-current",
+                        "ownerPageId": "orders",
+                        "role": "primary",
+                        "reason": "primary_target",
+                        "acquiredAt": "2026-09-08T00:00:00Z",
+                    },
+                    "pages": {
+                        "orders": {
+                            "runId": "workflow-current",
+                            "ownerPageId": "orders",
+                            "role": "primary",
+                            "reason": "primary_target",
+                            "acquiredAt": "2026-09-08T00:00:00Z",
+                        }
+                    },
+                },
                 "activeExecutions": {
                     "workflow-current": {
                         "scope": "page",
@@ -116,6 +137,105 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         write_application_lifecycle(self.state["workspace"], lifecycle)
+
+    def test_release_session_owned_pending_closes_dag_and_lifecycle_resources(self) -> None:
+        """owner 匹配时复用 Abandon，删除 Pending/PlanningRun 并释放确认门资源。"""
+
+        request = load_pending_build_task_plan(self.state)["draft_identity"]
+        self._write_planning_run(request["planning_run_id"])
+        self._write_lifecycle()
+
+        released = release_session_owned_pending_build_task_plan(
+            self.state,
+            owner_session_id="session-abandon",
+        )
+
+        self.assertTrue(released)
+        self.assertIsNone(load_pending_build_task_plan(self.state))
+        self.assertIsNone(load_planning_run(self.state))
+        lifecycle = load_application_lifecycle(self.state["workspace"])
+        self.assertIsNotNone(lifecycle)
+        self.assertNotIn("workflow-current", lifecycle.active_executions)
+        self.assertIsNone(lifecycle.resource_locks.application)
+        self.assertNotIn("orders", lifecycle.resource_locks.pages)
+        self.assertEqual(self.formal_path.read_bytes(), self.formal_bytes)
+
+    def test_release_session_pending_owner_mismatch_is_noop(self) -> None:
+        """Pending 属于其它 Session 时不得改变任何 DAG 或 lifecycle 状态。"""
+
+        request = load_pending_build_task_plan(self.state)["draft_identity"]
+        self._write_planning_run(request["planning_run_id"])
+        self._write_lifecycle()
+        pending_before = self.pending_path.read_bytes()
+        planning_before = load_planning_run(self.state)
+        lifecycle_before = load_application_lifecycle(self.state["workspace"])
+
+        released = release_session_owned_pending_build_task_plan(
+            self.state,
+            owner_session_id="session-other",
+        )
+
+        self.assertFalse(released)
+        self.assertEqual(self.pending_path.read_bytes(), pending_before)
+        self.assertEqual(load_planning_run(self.state), planning_before)
+        self.assertEqual(load_application_lifecycle(self.state["workspace"]), lifecycle_before)
+        self.assertEqual(self.formal_path.read_bytes(), self.formal_bytes)
+
+    def test_release_session_pending_rejects_planning_run_cleanup_failure(self) -> None:
+        """匹配 PlanningRun 清理失败时必须报错，不能继续允许删除 Session。"""
+
+        request = load_pending_build_task_plan(self.state)["draft_identity"]
+        self._write_planning_run(request["planning_run_id"])
+        self._write_lifecycle()
+
+        with patch(
+            "app.workspace.planning_run_documents.delete_planning_run",
+            return_value=False,
+        ):
+            with self.assertRaisesRegex(OSError, "PlanningRun"):
+                release_session_owned_pending_build_task_plan(
+                    self.state,
+                    owner_session_id="session-abandon",
+                )
+
+        self.assertFalse(self.pending_path.exists())
+        self.assertEqual(
+            load_planning_run(self.state)["planning_run_id"],
+            request["planning_run_id"],
+        )
+        self.assertEqual(self.formal_path.read_bytes(), self.formal_bytes)
+
+    def test_release_session_pending_without_pending_is_idempotent(self) -> None:
+        """没有 Pending 时按 owner 收口是幂等 no-op，不触碰 Formal 或 lifecycle。"""
+
+        self.pending_path.unlink()
+        self._write_lifecycle()
+        lifecycle_before = load_application_lifecycle(self.state["workspace"])
+
+        released = release_session_owned_pending_build_task_plan(
+            self.state,
+            owner_session_id="session-abandon",
+        )
+
+        self.assertFalse(released)
+        self.assertEqual(load_application_lifecycle(self.state["workspace"]), lifecycle_before)
+        self.assertEqual(self.formal_path.read_bytes(), self.formal_bytes)
+
+    def test_release_session_pending_rejects_tampered_pending(self) -> None:
+        """Pending 自摘要损坏时必须 fail closed，不能把损坏文件当作无主数据跳过。"""
+
+        pending = load_pending_build_task_plan(self.state)
+        pending["tampered"] = True
+        self.pending_path.write_text(json.dumps(pending), encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "draft_digest"):
+            release_session_owned_pending_build_task_plan(
+                self.state,
+                owner_session_id="session-abandon",
+            )
+
+        self.assertTrue(self.pending_path.exists())
+        self.assertEqual(self.formal_path.read_bytes(), self.formal_bytes)
 
     def test_normal_abandon_deletes_pending_and_preserves_formal(self) -> None:
         """精确身份应删除 Pending，刷新读取为空且 Formal 字节不变。"""

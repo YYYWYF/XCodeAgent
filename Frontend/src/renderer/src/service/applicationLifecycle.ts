@@ -14,7 +14,9 @@ type ApplicationLifecyclePayload = {
     | 'bootstrap_template_generation'
     | 'retry_bootstrap_template_generation'
     | 'workspace_attach'
+    | 'release_session_pending'
   lifecycle?: ApplicationLifecycle
+  sessionPendingReleased?: boolean
   error?: { message?: string }
 }
 
@@ -145,6 +147,21 @@ export async function getApplicationLifecycle(
       lifecycleReadRequests.delete(workspaceRoot)
     }
   }
+}
+
+// 通过独立 lifecycle AG-UI 收口指定 Session 拥有的 Pending Build DAG。
+export async function releaseSessionPendingPlan(
+  workspaceRoot: string,
+  sessionId: string
+): Promise<ApplicationLifecycle> {
+  if (!workspaceRoot.trim()) throw new Error('收口 PendingPlan 前需要工作目录。')
+  const normalizedSessionId = sessionId.trim()
+  if (!normalizedSessionId) throw new Error('收口 PendingPlan 前需要合法的 sessionId。')
+  return runApplicationLifecycleAction(randomUUID(), {
+    action: 'release_session_pending',
+    workspaceRoot,
+    sessionId: normalizedSessionId
+  })
 }
 
 // 接管指定工作区的中断 Bootstrap；同一工作区的并发恢复请求必须共用一次 AG-UI 调用。

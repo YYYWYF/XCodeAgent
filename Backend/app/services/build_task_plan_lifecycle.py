@@ -147,6 +147,57 @@ def abandon_pending_build_task_plan(
         return AbandonPendingResult(status="abandoned", draft_identity=identity)
 
 
+def release_session_owned_pending_build_task_plan(
+    state: dict[str, Any],
+    *,
+    owner_session_id: str,
+) -> bool:
+    """按服务端签发的 owner 收口当前 PendingPlan，并确认其已被删除。"""
+
+    from app.workspace.task_documents import (
+        build_task_plan_lifecycle_lock,
+        load_pending_build_task_plan,
+        validate_pending_self_digest,
+    )
+    from app.workspace.planning_run_documents import load_planning_run
+
+    if not isinstance(owner_session_id, str) or not owner_session_id.strip():
+        raise ValueError("PendingPlan owner session_id 不能为空。")
+
+    with build_task_plan_lifecycle_lock(workspace_root(state)):
+        pending = load_pending_build_task_plan(state)
+        if pending is None:
+            return False
+
+        # 先验证完整 DraftIdentity 和自摘要；损坏的 Pending 不能被当作无主数据跳过。
+        identity = validate_pending_self_digest(pending)
+        if identity.owner_session_id != owner_session_id:
+            return False
+
+        result = abandon_pending_build_task_plan(
+            state,
+            planning_run_id=identity.planning_run_id,
+            draft_digest=identity.draft_digest,
+        )
+        if result.status not in {"abandoned", "already_abandoned", "already_confirmed"}:
+            detail = "；".join(result.errors) or result.status
+            raise RuntimeError(f"按 Session 收口 PendingPlan 失败：{detail}")
+        if result.errors:
+            raise RuntimeError(f"按 Session 收口 PendingPlan 未完成：{'；'.join(result.errors)}")
+
+        # Abandon 的删除失败必须向上抛出，不能让调用方继续删除 Session 形成孤儿 Pending。
+        if load_pending_build_task_plan(state) is not None:
+            raise OSError("Abandon 后 PendingPlan 仍然存在，已拒绝删除 Session。")
+        # 既有 Abandon 对 PlanningRun 删除是 best-effort；这里必须确认匹配快照也已消失。
+        planning_run = load_planning_run(state)
+        if (
+            planning_run is not None
+            and planning_run.get("planning_run_id") == identity.planning_run_id
+        ):
+            raise OSError("Abandon 后匹配的 PlanningRun 仍然存在，已拒绝删除 Session。")
+        return True
+
+
 def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
     """按当前 v4 Unit/Task Graph 合同复核原稿，并复用现有任务编译器。"""
 

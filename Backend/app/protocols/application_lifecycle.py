@@ -5,7 +5,7 @@ import asyncio
 
 from typing import Any, AsyncIterator, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.protocols.ag_ui_action_stream import (
     AgUiActionResult,
@@ -16,6 +16,9 @@ from app.services.application_lifecycle import (
     ensure_application_lifecycle,
     load_application_lifecycle,
     retry_application_template_generation,
+)
+from app.services.build_task_plan_lifecycle import (
+    release_session_owned_pending_build_task_plan,
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
@@ -34,7 +37,7 @@ class ApplicationLifecycleApplication(BaseModel):
 
 
 class ApplicationLifecycleAction(BaseModel):
-    """校验生命周期创建、读取和应用模板文件生成结果动作。"""
+    """校验生命周期创建、读取、模板生成和 Session Pending 收口动作。"""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -44,9 +47,19 @@ class ApplicationLifecycleAction(BaseModel):
         "bootstrap_template_generation",
         "retry_bootstrap_template_generation",
         "workspace_attach",
+        "release_session_pending",
     ]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     application: ApplicationLifecycleApplication | None = None
+    session_id: str | None = Field(default=None, alias="sessionId", max_length=256)
+
+    @model_validator(mode="after")
+    def validate_release_session_id(self) -> "ApplicationLifecycleAction":
+        """要求 Session Pending 收口动作携带合法的非空 sessionId。"""
+
+        if self.action == "release_session_pending" and not str(self.session_id or "").strip():
+            raise ValueError("release_session_pending 必须提供合法非空的 sessionId。")
+        return self
 
 
 def application_lifecycle_capabilities() -> dict[str, Any]:
@@ -64,6 +77,7 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "bootstrap_template_generation",
             "retry_bootstrap_template_generation",
             "workspace_attach",
+            "release_session_pending",
         ],
         "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
         "stateSnapshotKey": "applicationLifecycle",
@@ -162,6 +176,16 @@ def build_application_lifecycle_ag_ui_stream(
             if state is None:
                 raise ValueError("application-lifecycle.json 不存在。")
             message = "Workspace Attach 已完成。"
+        elif request.action == "release_session_pending":
+            released = await asyncio.to_thread(
+                release_session_owned_pending_build_task_plan,
+                {"workspace": request.workspace_root},
+                owner_session_id=request.session_id or "",
+            )
+            state = load_application_lifecycle(request.workspace_root)
+            if state is None:
+                raise ValueError("application-lifecycle.json 不存在。")
+            message = "已收口当前 Session 拥有的 Pending Build DAG。"
         data = {
             "action": request.action,
             "lifecycle": application_lifecycle_payload(state),
@@ -172,12 +196,14 @@ def build_application_lifecycle_ag_ui_stream(
                 "cleaned": attached.cleaned,
                 "lifecycleChanged": attached.lifecycle_changed,
             }
-        if request.action == "get":
-            # 恢复投影仅附加到当前响应，不能伪装成可跨重启持久化的生命周期事实。
+        if request.action in {"get", "release_session_pending"}:
+            # 恢复或收口后的投影仅附加到当前响应，不能伪装成可跨重启持久化的生命周期事实。
             data["lifecycle"]["extensions"] = {
                 **dict(data["lifecycle"].get("extensions") or {}),
                 "planningRefresh": resolve_planning_refresh_state(request.workspace_root),
             }
+        if request.action == "release_session_pending":
+            data["sessionPendingReleased"] = released
         return AgUiActionResult(data=data, message=message)
 
     action = str(resolved_input.get("action") or "")
