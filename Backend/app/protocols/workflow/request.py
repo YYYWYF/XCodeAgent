@@ -17,6 +17,7 @@ from app.domain.development_continuation import (
 from app.services.entity_design import normalize_entity_design_action
 from app.services.api_design import ApiDesignError, normalize_api_design_gate_action
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
+from app.domain.application_lifecycle import WorkbenchExecutionStatus
 from app.services.execution_resource_scope import resolve_execution_resource_claims
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
@@ -84,6 +85,19 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     forwarded_props = _optional_dict(payload.get("forwardedProps")) or {}
     application = _optional_dict(forwarded_props.get("application")) or {}
     state = _optional_dict(payload.get("state")) or {}
+    workspace = (
+        _optional_text(payload.get("workspace"))
+        or _optional_text(payload.get("workspaceRoot"))
+        or _optional_text(forwarded_props.get("workspaceRoot"))
+        or _optional_text(application.get("workspaceRoot"))
+    )
+    # 先提取客户端明确指定的失败 execution；Retry 只能用它查询服务端事实，不能按最近运行猜测。
+    explicit_resume_execution_run_id = (
+        _optional_text(payload.get("resumeExecutionRunId"))
+        or _optional_text(payload.get("resume_execution_run_id"))
+        or _optional_text(forwarded_props.get("resumeExecutionRunId"))
+        or _optional_text(forwarded_props.get("resume_execution_run_id"))
+    )
     clarification_answers = (
         payload.get("clarificationAnswers")
         or forwarded_props.get("clarificationAnswers")
@@ -229,11 +243,21 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if workflow_action == "retry_failed_tasks":
         if workflow_scope in APPLICATION_PLANNING_SCOPES:
             raise ValueError("retry_failed_tasks 只适用于主工作流的 Build 阶段。")
-        # Build 门禁失败通常表示当前范围还没有可执行 DAG；此时必须回到任务生成，
-        # 否则会反复读取旧范围的 build-task-plan.json 并形成不可恢复的失败循环。
+        authoritative_failed_phase = _authoritative_failed_execution_phase(
+            workspace,
+            explicit_resume_execution_run_id,
+        )
         resume_from = _retry_failed_execution_node(
             resume_state,
             resume_values_from_state,
+            authoritative_failed_phase=authoritative_failed_phase,
+        )
+        # Retry 开启新 execution 时显式覆盖旧 checkpoint 的瞬时失败信息，避免历史错误污染本轮失败投影。
+        resume_values_from_state.update(
+            {
+                "message": "",
+                "error": "",
+            }
         )
     elif workflow_action == "retry_code_review":
         if workflow_scope in APPLICATION_PLANNING_SCOPES:
@@ -412,12 +436,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selectedPageId = ""
         selected_endpoint_id = ""
         selected_api_contract_id = ""
-    workspace = (
-        _optional_text(payload.get("workspace"))
-        or _optional_text(payload.get("workspaceRoot"))
-        or _optional_text(forwarded_props.get("workspaceRoot"))
-        or _optional_text(application.get("workspaceRoot"))
-    )
     # 页面会话是 PendingPlan 的业务归属；同一会话可跨多个 Workflow Run 继续操作。
     owner_session_id = (
         _optional_text(payload.get("sessionId"))
@@ -694,10 +712,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     )
     resume_execution_run_id = (
         development_continuation_source_run_id
-        or _optional_text(payload.get("resumeExecutionRunId"))
-        or _optional_text(payload.get("resume_execution_run_id"))
-        or _optional_text(forwarded_props.get("resumeExecutionRunId"))
-        or _optional_text(forwarded_props.get("resume_execution_run_id"))
+        or explicit_resume_execution_run_id
     )
     if workflow_action == "retry_code_review" and not resume_execution_run_id:
         raise ValueError("retry_code_review 必须携带失败执行的 resumeExecutionRunId。")
@@ -1355,8 +1370,10 @@ def _resume_from_state(
 def _retry_failed_execution_node(
     resume_state: dict[str, Any] | None,
     resume_values: dict[str, Any],
+    *,
+    authoritative_failed_phase: str = "",
 ) -> str:
-    """让失败 execution 回到当前范围最早需要重做的可恢复节点。"""
+    """按覆盖规则、服务端失败事实和旧事件确定失败 execution 的恢复节点。"""
 
     current_scope = resume_values.get("build_execution_scope")
     build_task_plan = resume_values.get("build_task_plan")
@@ -1383,6 +1400,14 @@ def _retry_failed_execution_node(
     if isinstance(gate_errors, list) and any(str(error).strip() for error in gate_errors):
         return "prepare_build_tasks"
 
+    # 生命周期只提供原失败阶段；development readiness 的实际入口仍需按当前 scope 映射。
+    authoritative_node = _retry_failed_phase_node(
+        authoritative_failed_phase,
+        current_scope,
+    )
+    if authoritative_node:
+        return authoritative_node
+
     events = resume_state.get("events") if isinstance(resume_state, dict) else None
     if isinstance(events, list):
         for event in reversed(events):
@@ -1391,24 +1416,53 @@ def _retry_failed_execution_node(
             node_name = _optional_text(event.get("nodeName"))
             node = _optional_dict(event.get("node"))
             node_name = node_name or (_optional_text(node.get("id")) if node else "")
-            if node_name == "development_readiness_gate":
-                scope_type = (
-                    str(current_scope.get("type") or "")
-                    if isinstance(current_scope, dict)
-                    else ""
-                )
-                return (
-                    "inspect_workspace"
-                    if scope_type == "application"
-                    else "development_readiness_gate"
-                )
-            if node_name == "inspect_workspace":
-                return "inspect_workspace"
-            if node_name == "prepare_build_tasks":
-                return "prepare_build_tasks"
-            if node_name == "build":
-                return "build"
-    return "build"
+            legacy_node = _retry_failed_phase_node(node_name, current_scope)
+            if legacy_node:
+                return legacy_node
+    raise ValueError("retry_failed_tasks 无法确认原失败阶段，请刷新后重试。")
+
+
+def _authoritative_failed_execution_phase(
+    workspace: str,
+    resume_execution_run_id: str,
+) -> str:
+    """从服务端生命周期读取指定 runId 的失败阶段，拒绝客户端投影和非失败 execution。"""
+
+    if not workspace or not resume_execution_run_id:
+        return ""
+    try:
+        lifecycle = load_application_lifecycle(workspace)
+    except (OSError, TypeError, ValueError):
+        # 生命周期不可读时不猜测恢复节点，后续仍可使用明确的旧事件兼容路径。
+        return ""
+    if lifecycle is None:
+        return ""
+    execution = lifecycle.active_executions.get(resume_execution_run_id)
+    if execution is None or execution.status != WorkbenchExecutionStatus.FAILED:
+        return ""
+    return _optional_text(execution.phase)
+
+
+def _retry_failed_phase_node(
+    failed_phase: str,
+    current_scope: Any,
+) -> str:
+    """把受支持的失败阶段映射为本次 Retry 的实际恢复节点。"""
+
+    if failed_phase == "development_readiness_gate":
+        scope_type = (
+            str(current_scope.get("type") or "")
+            if isinstance(current_scope, dict)
+            else ""
+        )
+        return "inspect_workspace" if scope_type == "application" else failed_phase
+    if failed_phase in {
+        "inspect_workspace",
+        "prepare_build_tasks",
+        "build",
+    }:
+        return failed_phase
+    return ""
 
 
 def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:

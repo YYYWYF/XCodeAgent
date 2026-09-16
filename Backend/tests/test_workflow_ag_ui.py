@@ -11,10 +11,20 @@ from unittest.mock import AsyncMock, patch
 
 from langgraph.graph import END, START, StateGraph
 
+from app.domain.application_lifecycle import (
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+    WorkbenchExecutionStatus,
+)
 from app.graph.state import ProjectState
 from app.graph.subgraphs.acceptance import acceptance_subgraph
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.run_control import WorkflowRunRegistry
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    load_application_lifecycle,
+    write_application_lifecycle,
+)
 from app.protocols.workflow.projection import (
     _workflow_confirmation_artifact,
     _workflow_next_nodes,
@@ -673,6 +683,23 @@ class FakeDagGenerationProgressGraph:
                 "timeline": ["prepare_build_tasks"],
             }
         )
+
+
+class FakeImmediateNextNodeFailureGraph:
+    """模拟唯一下一节点已启动但在首个 update 前抛异常的顺序 Workflow。"""
+
+    async def astream(self, initial_state, *, config, stream_mode):
+        """完成工作区扫描后立即让 Prepare 节点失败。"""
+
+        del initial_state, config, stream_mode
+        yield "updates", {
+            "inspect_workspace": {
+                "phase": "inspect_workspace",
+                "status": "completed",
+                "timeline": ["inspect_workspace"],
+            }
+        }
+        raise RuntimeError("prepare_build_tasks failed before first update")
 
 
 class FakePlanningRunProgressGraph:
@@ -1495,6 +1522,53 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             event_names.index("application-lifecycle"),
             event_names.index("workflow-run"),
         )
+
+    def test_runtime_records_unique_projected_next_node_when_it_fails_immediately(self) -> None:
+        """唯一下一节点已发 started 后立即异常时，生命周期必须记录该节点。"""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            lifecycle = create_application_lifecycle(
+                application_id="app-runtime-phase",
+                application_name="Runtime phase test",
+            )
+            lifecycle = lifecycle.model_copy(
+                update={
+                    "initialization": lifecycle.initialization.model_copy(
+                        update={
+                            "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                            "status": ApplicationLifecycleStatus.COMPLETED,
+                        }
+                    )
+                }
+            )
+            write_application_lifecycle(workspace, lifecycle)
+
+            async def collect() -> list[str]:
+                """收集下一节点立即失败场景的完整 AG-UI 流。"""
+
+                stream = build_workflow_ag_ui_stream(
+                    graph=FakeImmediateNextNodeFailureGraph(),
+                    payload={
+                        "threadId": "thread-immediate-prepare-failure",
+                        "runId": "run-immediate-prepare-failure",
+                        "request": "继续构建",
+                        "workspace": str(workspace),
+                        "forwardedProps": {"resumeFrom": "inspect_workspace"},
+                    },
+                )
+                return [frame async for frame in stream]
+
+            frames = asyncio.run(collect())
+            recorded = load_application_lifecycle(workspace)
+
+        self.assertTrue(frames)
+        self.assertIsNotNone(recorded)
+        assert recorded is not None
+        execution = recorded.active_executions["run-immediate-prepare-failure"]
+        self.assertEqual(execution.phase, "prepare_build_tasks")
+        self.assertEqual(execution.status, WorkbenchExecutionStatus.FAILED)
+        self.assertIn("prepare_build_tasks", "\n".join(frames))
 
     def test_regenerate_progress_clears_consumed_pending_before_dag_frame(self) -> None:
         """Regenerate 首个 DAG progress 前必须广播 none，避免旧 Confirmation A 残留。"""
