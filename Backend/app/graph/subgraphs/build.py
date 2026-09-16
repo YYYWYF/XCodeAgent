@@ -1712,6 +1712,14 @@ def run_build_scheduler(
         _results_for_tasks(build_results, execution_slice["tasks"]),
         repair_task_plan=repair_task_plan,
     )
+    # 本轮新生成的 RepairPlanner 确认计划尚未进入下一次恢复请求，摘要必须立即
+    # 投影为 requires_confirmation；否则会同时返回确认载荷和 failed 状态，生命周期
+    # 无法登记 repair_scope_confirmation，前端只能退化成没有动作的通用暂停态。
+    if (
+        isinstance(repair_task_plan, dict)
+        and repair_task_plan.get("decision") == "requires_user_confirmation"
+    ):
+        build_summary = {**build_summary, "status": "requires_confirmation"}
     if retry_requested:
         build_summary.update(
             {

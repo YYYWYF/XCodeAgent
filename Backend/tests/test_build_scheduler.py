@@ -153,6 +153,17 @@ class BuildSchedulerTests(unittest.TestCase):
 
         self.assertEqual(decision["action"], "repair")
 
+    def test_classifies_contract_or_plan_mismatch_through_repair_planner(self) -> None:
+        """合同或计划不匹配必须先进入 RepairPlanner，避免落入无动作的通用暂停态。"""
+
+        for category in ("contract_mismatch", "plan_mismatch"):
+            with self.subTest(category=category):
+                decision = classify_task_result(
+                    {"task_id": "api", "status": "failed", "failure_category": category}
+                )
+
+                self.assertEqual(decision["action"], "repair")
+
     def test_classifies_invalid_structured_response_as_retry(self) -> None:
         """损坏且无法恢复的 Agent 终态报告应进入受控重试分类。"""
 

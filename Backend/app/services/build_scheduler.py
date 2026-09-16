@@ -21,9 +21,11 @@ RETRYABLE_FAILURES = {
 }
 REPAIRABLE_FAILURES = {
     "compile_error",
+    "contract_mismatch",
     "type_error",
     "test_failure",
     "lint_failure",
+    "plan_mismatch",
     "runtime_error",
     "acceptance_failed",
     "acceptance_verification_failed",
@@ -31,8 +33,6 @@ REPAIRABLE_FAILURES = {
     "no_file_changes",
 }
 CONFIRMATION_FAILURES = {
-    "contract_mismatch",
-    "plan_mismatch",
     "workspace_snapshot_stale",
     "database_approval_required",
 }

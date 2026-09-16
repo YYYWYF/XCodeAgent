@@ -131,7 +131,7 @@ export default function PlanExecutionDock({
               <>
                 <Button onClick={() => onConfirmInteraction('reject')}>拒绝</Button>
                 <Button onClick={() => onConfirmInteraction('once')} type="primary">
-                  确认修复范围
+                  确认并重试失败任务
                 </Button>
                 <Button danger onClick={onStop}>
                   暂停执行

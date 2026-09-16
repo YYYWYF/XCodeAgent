@@ -1816,6 +1816,92 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             ["repair-skill"],
         )
 
+    def test_contract_mismatch_exposes_repair_confirmation_instead_of_empty_pause(self) -> None:
+        """契约不匹配必须生成可操作的修复确认，不能退化为待确认事项为零。"""
+
+        tasks = [
+            {
+                "id": "api",
+                "owner": "backend",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [
+                    {"operation": "add", "path": "Backend/app/api.py"}
+                ],
+                "allowed_paths": ["Backend/app/**"],
+            }
+        ]
+
+        def backend_runner(**_kwargs):
+            return [
+                {
+                    "task_id": "api",
+                    "owner": "backend",
+                    "status": "failed",
+                    "failure_category": "contract_mismatch",
+                    "failure_reason": "接口合同缺少实现所需语义。",
+                    "change_request": {"reason": "请确认补充接口语义。"},
+                }
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_data_sources_with_deep_agent",
+                    side_effect=backend_runner,
+                ),
+                patch(
+                    "app.graph.subgraphs.build.plan_build_failure_repair_with_repair_planner_agent",
+                    return_value={
+                        "decision": "requires_user_confirmation",
+                        "strategy": "确认接口语义后重试失败任务。",
+                        "reason": "当前契约信息不足。",
+                        "boundaries": {
+                            "requested_resources": [
+                                {"type": "api_contract", "targetId": "age-api"}
+                            ]
+                        },
+                        "repair_tasks": [],
+                    },
+                ),
+            ):
+                result = build(
+                    _ready_build_state(
+                        workspace,
+                        {
+                            "workspace": workspace,
+                            "project_plan": {"version": "1.0.0"},
+                            "build_task_plan": replace_build_task_plan_tasks(
+                                {
+                                    "schema_version": "build-dag.v4",
+                                    "build_units": {
+                                        "application:root": {
+                                            "id": "application:root",
+                                            "kind": "application",
+                                            "task_ids": ["api"],
+                                        }
+                                    },
+                                    "unit_graph": {
+                                        "nodes": ["application:root"],
+                                        "edges": [],
+                                    },
+                                },
+                                tasks,
+                            ),
+                            "timeline": [],
+                        },
+                    )
+                )
+
+        self.assertEqual(result["status"], "requires_user_input")
+        self.assertEqual(result["build_summary"]["status"], "requires_confirmation")
+        self.assertEqual(result["clarification"]["mode"], "repair_scope_confirmation")
+        self.assertTrue(result["clarification"]["planId"])
+        self.assertEqual(
+            result["clarification"]["requestedResources"],
+            [{"type": "api_contract", "targetId": "age-api"}],
+        )
+
     def test_failed_task_does_not_abort_independent_ready_tasks(self) -> None:
         """失败任务不应阻止与其无依赖关系的独立任务继续执行。"""
         tasks = [
