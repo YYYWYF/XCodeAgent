@@ -227,6 +227,26 @@ class ConfirmPromotionTests(unittest.TestCase):
         self.assertFalse(self.pending_path.exists())
         self.assertEqual(load_application_lifecycle(self.state["workspace"]).active_run_id, "workflow-r3")
 
+    def test_confirm_rejects_missing_route_projection(self):
+        """Confirm 必须拒绝删除了 application-level Route Projection 的 Pending DAG。"""
+
+        pending = load_pending_build_task_plan(self.state)
+        pending.pop("route_projection")
+        self._rewrite(pending, resign=True)
+
+        result = self._assert_rejected("invalid_dag")
+        self.assertIn("route_projection", "；".join(result.errors))
+
+    def test_confirm_rejects_stale_route_projection(self):
+        """Confirm 必须拒绝与当前 TechnicalPlan 页面事实漂移的 Projection。"""
+
+        pending = load_pending_build_task_plan(self.state)
+        pending["route_projection"]["pages"][0]["path"] = "/old-orders"
+        self._rewrite(pending, resign=True)
+
+        result = self._assert_rejected("invalid_dag")
+        self.assertIn("route_projection", "；".join(result.errors))
+
     def test_normal_confirm_replaces_exact_baseline(self):
         """已有 ConfirmedPlan 时精确绑定旧摘要，并替换成新确认身份。"""
 

@@ -8,6 +8,7 @@ from app.services.route_projection import (
     RouteProjectionError,
     apply_route_projection,
     compile_route_projection,
+    validate_route_projection,
     verify_route_projection,
 )
 
@@ -75,6 +76,33 @@ class RouteProjectionTests(unittest.TestCase):
             with self.assertRaisesRegex(RouteProjectionError, "真实页面入口"):
                 apply_route_projection(root, compile_route_projection(self._plan()))
             self.assertFalse((root / "frontend/src/pages/Orders/index.tsx").exists())
+
+    def test_rejects_duplicate_page_key(self) -> None:
+        """冻结 Projection 不得让两个页面共享同一个 React 组件身份。"""
+
+        with self.assertRaisesRegex(RouteProjectionError, "重复"):
+            validate_route_projection({"pages": [
+                {"pageId": "orders", "path": "/orders", "pageKey": "Orders"},
+                {"pageId": "history", "path": "/history", "pageKey": "Orders"},
+            ]})
+
+    def test_verify_rejects_page_entry_deleted_after_apply(self) -> None:
+        """EDD 必须发现投影完成后页面入口被删除的漂移。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            routes = root / "frontend/src/constants/routes.tsx"
+            routes.parent.mkdir(parents=True)
+            projection = compile_route_projection(self._plan())
+            for page in projection["pages"]:
+                entry = root / "frontend/src/pages" / str(page["pageKey"]) / "index.tsx"
+                entry.parent.mkdir(parents=True, exist_ok=True)
+                entry.write_text("export default null;\n", encoding="utf-8")
+            routes.write_text("// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n// XCODEAGENT_BUSINESS_ROUTES_START\n// XCODEAGENT_BUSINESS_ROUTES_END\n", encoding="utf-8")
+            apply_route_projection(root, projection)
+            (root / "frontend/src/pages/Orders/index.tsx").unlink()
+            with self.assertRaisesRegex(RouteProjectionError, "真实页面入口"):
+                verify_route_projection(root, projection)
 
     def _plan(self) -> dict[str, object]:
         """构造一个公开页与一个受控候选页的最小 TechnicalPlan 页面事实。"""

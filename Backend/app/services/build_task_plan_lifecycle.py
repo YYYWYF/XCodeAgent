@@ -10,11 +10,15 @@ from pydantic import StringConstraints, ValidationError
 
 from app.services.dag_planning_inputs import SequentialPlanningInputs, _input_digest
 from app.services.build_task_planner import replace_build_task_plan_tasks
-from app.services.planning_frozen import FrozenJsonObject, FrozenPlanningModel, plain_json
+from app.services.planning_frozen import (
+    FrozenJsonObject,
+    FrozenPlanningModel,
+    plain_json,
+)
 from app.services.planning_run_contracts import PlanningRun
+from app.services.route_projection import RouteProjectionError, compile_route_projection
 from app.services.template_state import validate_template_context
 from app.workspace.spec_documents import workspace_root
-
 
 _Identifier = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
 _Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -43,7 +47,14 @@ class ConfirmedFrom(FrozenPlanningModel):
 class ConfirmPromotionResult(FrozenPlanningModel):
     """区分业务拒绝、提交成功及提交后的 Pending 清理故障。"""
 
-    status: Literal["confirmed", "already_confirmed", "stale_draft", "stale_base", "stale_inputs", "invalid_dag"]
+    status: Literal[
+        "confirmed",
+        "already_confirmed",
+        "stale_draft",
+        "stale_base",
+        "stale_inputs",
+        "invalid_dag",
+    ]
     confirmed_plan: FrozenJsonObject | None = None
     pending_cleanup_error: str | None = None
     errors: tuple[str, ...] = ()
@@ -51,6 +62,7 @@ class ConfirmPromotionResult(FrozenPlanningModel):
 
 class AbandonPendingResult(FrozenPlanningModel):
     """区分成功、终态重复请求、无 Pending 与身份已过期的 Abandon 结果。"""
+
     status: Literal[
         "abandoned",
         "already_abandoned",
@@ -167,29 +179,54 @@ def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
         return ["Pending DAG 的 template_context 与当前 Planning Inputs 不一致。"]
 
     unit_graph = plan.get("unit_graph")
-    unit_validation = unit_graph.get("validation") if isinstance(unit_graph, dict) else None
+    unit_validation = (
+        unit_graph.get("validation") if isinstance(unit_graph, dict) else None
+    )
     graph = plan.get("task_graph")
     validation = graph.get("validation") if isinstance(graph, dict) else None
     execution = plan.get("execution")
-    if (plan.get("schema_version") != "build-dag.v4" or plan.get("status") != "ready"
-            or plan.get("confirmation_status") != "pending"
-            or not isinstance(unit_validation, dict)
-            or unit_validation.get("is_valid") is not True
-            or unit_validation.get("errors")
-            or not isinstance(validation, dict) or validation.get("is_valid") is not True
-            or validation.get("errors") or not isinstance(execution, dict)
-            or execution.get("blocked_batches")
-            or not isinstance(execution.get("batches"), list)
-            or any(not isinstance(batch, dict) or batch.get("mode") == "blocked"
-                   for batch in execution["batches"])):
+    if (
+        plan.get("schema_version") != "build-dag.v4"
+        or plan.get("status") != "ready"
+        or plan.get("confirmation_status") != "pending"
+        or not isinstance(unit_validation, dict)
+        or unit_validation.get("is_valid") is not True
+        or unit_validation.get("errors")
+        or not isinstance(validation, dict)
+        or validation.get("is_valid") is not True
+        or validation.get("errors")
+        or not isinstance(execution, dict)
+        or execution.get("blocked_batches")
+        or not isinstance(execution.get("batches"), list)
+        or any(
+            not isinstance(batch, dict) or batch.get("mode") == "blocked"
+            for batch in execution["batches"]
+        )
+    ):
         return ["Pending DAG 未通过 ready/validation/execution 门禁。"]
     registry = plan.get("task_registry")
     units = plan.get("build_units")
-    if (not isinstance(registry, dict) or not isinstance(units, dict)
-            or any(not isinstance(task, dict) or task.get("id") != key
-                   or not isinstance(task.get("unit_id"), str)
-                   or task["unit_id"] not in units for key, task in registry.items())):
+    if (
+        not isinstance(registry, dict)
+        or not isinstance(units, dict)
+        or any(
+            not isinstance(task, dict)
+            or task.get("id") != key
+            or not isinstance(task.get("unit_id"), str)
+            or task["unit_id"] not in units
+            for key, task in registry.items()
+        )
+    ):
         return ["Pending DAG 的 Task registry 或 Unit 归属无效。"]
+    # Confirm 只接受由当前冻结 TechnicalPlan 精确编译出的 Root Projection。
+    try:
+        expected_route_projection = compile_route_projection(
+            plain_json(inputs.project_plan)
+        )
+    except RouteProjectionError as exc:
+        return [f"当前 Planning Inputs 无法生成 route_projection：{exc}"]
+    if plan.get("route_projection") != expected_route_projection:
+        return ["Pending DAG 的 route_projection 与当前 TechnicalPlan 不一致。"]
     baseline = plain_json(inputs.base_confirmed_plan) or {}
     retained_ids = set(baseline.get("task_registry", {}))
     if not retained_ids <= set(registry):
@@ -197,17 +234,25 @@ def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
     context = {
         **plain_json(inputs.build_context),
         "project_plan": plain_json(inputs.project_plan),
-        "executable_details": plain_json(inputs.project_plan.get("executable_details")
-                                         or inputs.build_context.get("executable_details") or {}),
+        "executable_details": plain_json(
+            inputs.project_plan.get("executable_details")
+            or inputs.build_context.get("executable_details")
+            or {}
+        ),
         "_validate_task_scope": False,
         "_allow_missing_business_deliverable_task_ids": sorted(retained_ids),
         "_compile_auth_capability_dependencies": True,
-        "external_capabilities": [item.model_dump(mode="json") for item in inputs.reuse_facts.external_capabilities],
+        "external_capabilities": [
+            item.model_dump(mode="json")
+            for item in inputs.reuse_facts.external_capabilities
+        ],
     }
     # 保留全部 Task 合同，不调用候选修复/补齐；只消费重新计算的语义和拓扑结论。
     try:
         checked = replace_build_task_plan_tasks(
-            deepcopy(plan), deepcopy(list(registry.values())), context,
+            deepcopy(plan),
+            deepcopy(list(registry.values())),
+            context,
             preserve_task_contract_ids=set(registry),
         )
     except (ValueError, TypeError, KeyError) as exc:
@@ -218,12 +263,19 @@ def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
     # canonical digest 不依赖 JSON 对象键顺序；图校验也不能依赖 registry 插入顺序。
     for field in ("nodes", "topological_order"):
         values = graph.get(field)
-        if (not isinstance(values, list) or any(not isinstance(value, str) for value in values)
-                or sorted(values) != sorted(registry)):
+        if (
+            not isinstance(values, list)
+            or any(not isinstance(value, str) for value in values)
+            or sorted(values) != sorted(registry)
+        ):
             errors.append(f"Pending DAG 的 {field} 与 Task registry 不一致。")
     edges = graph.get("edges")
-    if (not isinstance(edges, list) or any(not isinstance(edge, dict) for edge in edges)
-            or sorted(edges, key=_input_digest) != sorted(checked["task_graph"]["edges"], key=_input_digest)):
+    if (
+        not isinstance(edges, list)
+        or any(not isinstance(edge, dict) for edge in edges)
+        or sorted(edges, key=_input_digest)
+        != sorted(checked["task_graph"]["edges"], key=_input_digest)
+    ):
         errors.append("Pending DAG 的 edges 与 Task registry 不一致。")
     if not errors:
         positions = {key: index for index, key in enumerate(graph["topological_order"])}
@@ -236,12 +288,16 @@ def _cleanup_matching_pending(state: dict, request: ConfirmedFrom) -> str | None
     """只清理摘要自洽且匹配本次请求的 Pending，绝不删除较新的草稿。"""
 
     from app.workspace.task_documents import (
-        build_task_plan_pending_json_path, load_pending_build_task_plan, validate_pending_self_digest,
+        build_task_plan_pending_json_path,
+        load_pending_build_task_plan,
+        validate_pending_self_digest,
     )
 
     try:
         pending = load_pending_build_task_plan(state)
-        if pending is None or not _matches_request(pending.get("draft_identity"), request):
+        if pending is None or not _matches_request(
+            pending.get("draft_identity"), request
+        ):
             return None
         validate_pending_self_digest(pending)
         build_task_plan_pending_json_path(state).unlink(missing_ok=True)
@@ -253,8 +309,11 @@ def _cleanup_matching_pending(state: dict, request: ConfirmedFrom) -> str | None
 def _matches_request(value: Any, request: ConfirmedFrom) -> bool:
     """仅精确比较 Run 与 digest，不修剪、转换或采用旧版本别名。"""
 
-    return (isinstance(value, dict) and value.get("planning_run_id") == request.planning_run_id
-            and value.get("draft_digest") == request.draft_digest)
+    return (
+        isinstance(value, dict)
+        and value.get("planning_run_id") == request.planning_run_id
+        and value.get("draft_digest") == request.draft_digest
+    )
 
 
 def _end_matching_planning_run(state: dict[str, Any], planning_run_id: str) -> None:
@@ -265,7 +324,10 @@ def _end_matching_planning_run(state: dict[str, Any], planning_run_id: str) -> N
     Pending 或写入 Formal。
     """
 
-    from app.workspace.planning_run_documents import delete_planning_run, load_planning_run
+    from app.workspace.planning_run_documents import (
+        delete_planning_run,
+        load_planning_run,
+    )
 
     try:
         run = load_planning_run(state)
@@ -308,11 +370,16 @@ def _confirmed_request_matches(state: dict[str, Any], request: ConfirmedFrom) ->
         formal = load_confirmed_build_task_plan(workspace_root(state))
     except (OSError, ValueError, TypeError):
         return False
-    return formal is not None and _matches_request(formal.get("confirmed_from"), request)
+    return formal is not None and _matches_request(
+        formal.get("confirmed_from"), request
+    )
 
 
 def confirm_pending_build_task_plan(
-    state: dict[str, Any], *, planning_run_id: str, draft_digest: str,
+    state: dict[str, Any],
+    *,
+    planning_run_id: str,
+    draft_digest: str,
     current_inputs: SequentialPlanningInputs,
 ) -> ConfirmPromotionResult:
     """核验当前文件并原子提升 Pending；Formal 写入失败抛 OSError，成功后不回滚。
@@ -326,14 +393,22 @@ def confirm_pending_build_task_plan(
     # 延迟导入避免 task_documents 的 DraftIdentity 类型依赖形成循环。
     from app.workspace.json_documents import write_json_atomic
     from app.workspace.task_documents import (
-        build_task_plan_json_path, build_task_plan_lifecycle_lock, build_task_plan_sha256,
-        load_confirmed_build_task_plan, load_pending_build_task_plan, validate_pending_self_digest,
+        build_task_plan_json_path,
+        build_task_plan_lifecycle_lock,
+        build_task_plan_sha256,
+        load_confirmed_build_task_plan,
+        load_pending_build_task_plan,
+        validate_pending_self_digest,
     )
 
     try:
-        request = ConfirmedFrom(planning_run_id=planning_run_id, draft_digest=draft_digest)
+        request = ConfirmedFrom(
+            planning_run_id=planning_run_id, draft_digest=draft_digest
+        )
     except ValidationError:
-        return ConfirmPromotionResult(status="stale_draft", errors=("确认请求缺少有效 Draft identity。",))
+        return ConfirmPromotionResult(
+            status="stale_draft", errors=("确认请求缺少有效 Draft identity。",)
+        )
 
     with build_task_plan_lifecycle_lock(workspace_root(state)):
         path = build_task_plan_json_path(state)
@@ -344,20 +419,26 @@ def confirm_pending_build_task_plan(
             formal, invalid_formal = None, True
 
         # Formal replace 是提交点：重试不能因旧 baseline 或新 inputs 再次提升。
-        if formal is not None and _matches_request(formal.get("confirmed_from"), request):
+        if formal is not None and _matches_request(
+            formal.get("confirmed_from"), request
+        ):
             return ConfirmPromotionResult(
-                status="already_confirmed", confirmed_plan=formal,
+                status="already_confirmed",
+                confirmed_plan=formal,
                 pending_cleanup_error=_cleanup_matching_pending(state, request),
             )
         # Abandon tombstone 是结果生命周期的提交点；匹配的 Pending 即使因 cleanup
         # 故障仍留在磁盘，也只能视为 residue，绝不能再次 Promote。
         if _abandoned_request_matches(state, request):
             return ConfirmPromotionResult(
-                status="stale_draft", errors=("该 PendingPlan 已被放弃，不能再次确认。",)
+                status="stale_draft",
+                errors=("该 PendingPlan 已被放弃，不能再次确认。",),
             )
         try:
             pending = load_pending_build_task_plan(state)
-            if pending is None or not _matches_request(pending.get("draft_identity"), request):
+            if pending is None or not _matches_request(
+                pending.get("draft_identity"), request
+            ):
                 return ConfirmPromotionResult(status="stale_draft")
             identity = validate_pending_self_digest(pending)
         except (ValueError, TypeError) as exc:
@@ -369,12 +450,21 @@ def confirm_pending_build_task_plan(
         try:
             inputs = SequentialPlanningInputs.model_validate(current_inputs)
             # 与 PlanningRun.create_run/正式 Formal 使用同一个 canonical planning digest，仍保持严格相等校验。
-            supplied_base = (build_task_plan_sha256(plain_json(inputs.base_confirmed_plan))
-                             if inputs.base_confirmed_plan is not None else None)
-            if (supplied_base != base_digest or inputs.input_fingerprint() != identity.input_fingerprint
-                    or inputs.build_execution_scope != identity.build_execution_scope
-                    or ("build_execution_scope" in pending
-                        and pending["build_execution_scope"] != plain_json(identity.build_execution_scope))):
+            supplied_base = (
+                build_task_plan_sha256(plain_json(inputs.base_confirmed_plan))
+                if inputs.base_confirmed_plan is not None
+                else None
+            )
+            if (
+                supplied_base != base_digest
+                or inputs.input_fingerprint() != identity.input_fingerprint
+                or inputs.build_execution_scope != identity.build_execution_scope
+                or (
+                    "build_execution_scope" in pending
+                    and pending["build_execution_scope"]
+                    != plain_json(identity.build_execution_scope)
+                )
+            ):
                 return ConfirmPromotionResult(status="stale_inputs")
         except (ValueError, TypeError) as exc:
             return ConfirmPromotionResult(status="stale_inputs", errors=(str(exc),))
@@ -385,12 +475,14 @@ def confirm_pending_build_task_plan(
         confirmed = deepcopy(pending)
         confirmed.pop("draft_identity")
         confirmed.update(
-            confirmation_status="confirmed", confirmed_at=datetime.now(UTC).isoformat(),
+            confirmation_status="confirmed",
+            confirmed_at=datetime.now(UTC).isoformat(),
             confirmed_from=request.model_dump(mode="json"),
             build_execution_scope=plain_json(identity.build_execution_scope),
         )
         write_json_atomic(path, confirmed)
         return ConfirmPromotionResult(
-            status="confirmed", confirmed_plan=confirmed,
+            status="confirmed",
+            confirmed_plan=confirmed,
             pending_cleanup_error=_cleanup_matching_pending(state, request),
         )

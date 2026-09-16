@@ -32,6 +32,20 @@ def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
         f.write(f"// auto-generated: {rel_path}\n")
 
 
+def _valid_route_projection() -> dict:
+    """显式构造仅供需要合法 Confirmed DAG 的调度器测试使用的 Route Projection。"""
+
+    return {
+        "pages": [{
+            "pageId": "scheduler-test",
+            "path": "/scheduler-test",
+            "pageKey": "SchedulerTest",
+            "name": "调度器测试",
+            "menu": True,
+        }]
+    }
+
+
 def _ready_build_state(workspace: str, state: dict) -> dict:
     """为调度器测试落盘一份已确认的当前 JSON DAG，匹配真实 Build 门禁。"""
 
@@ -52,31 +66,25 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
             )
     # v4 计划必须绑定与工作区一致的 TemplateState，夹具不能绕过真实门禁。
     plan.setdefault("template_context", template_context(load_template_state(workspace)))
+    # 测试必须显式提供 Route Projection；禁止由通用 Helper 掩盖非法 DAG。
     if "route_projection" not in plan:
-        # 非路由测试也要满足 v4 的统一平台投影前置，避免复用已废弃的 v3 夹具。
-        routes_path = os.path.join(workspace, "frontend/src/constants/routes.tsx")
-        _write_workspace_file(workspace, "frontend/src/pages/SchedulerTest/index.tsx")
-        os.makedirs(os.path.dirname(routes_path), exist_ok=True)
-        if not os.path.exists(routes_path):
-            with open(routes_path, "w", encoding="utf-8") as handle:
-                handle.write(
-                    "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n"
-                    "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n"
-                    "export const PAGE_ROUTES = [\n"
-                    "// XCODEAGENT_BUSINESS_ROUTES_START\n"
-                    "// XCODEAGENT_BUSINESS_ROUTES_END\n];\n"
-                )
-        plan["route_projection"] = {
-            "pages": [
-                {
-                    "pageId": "scheduler-test",
-                    "path": "/scheduler-test",
-                    "pageKey": "SchedulerTest",
-                    "name": "调度器测试",
-                    "menu": True,
-                }
-            ]
-        }
+        raise AssertionError("调度器测试的 confirmed Build DAG 必须显式包含 route_projection。")
+    routes_path = os.path.join(workspace, "frontend/src/constants/routes.tsx")
+    os.makedirs(os.path.dirname(routes_path), exist_ok=True)
+    if not os.path.exists(routes_path):
+        with open(routes_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n"
+                "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n"
+                "export const PAGE_ROUTES = [\n"
+                "// XCODEAGENT_BUSINESS_ROUTES_START\n"
+                "// XCODEAGENT_BUSINESS_ROUTES_END\n];\n"
+            )
+    for page in plan["route_projection"].get("pages", []):
+        _write_workspace_file(
+            workspace,
+            f"frontend/src/pages/{page['pageKey']}/index.tsx",
+        )
     plan["status"] = "ready"
     plan["confirmation_status"] = "confirmed"
     plan["confirmed_at"] = "2026-08-19T00:00:00+00:00"
@@ -94,6 +102,41 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_build_gate_rejects_missing_route_projection_before_execution(self) -> None:
+        """缺少 Root Projection 的确认 DAG 必须在任何执行器或平台投影前失败。"""
+
+        plan = {
+            "schema_version": "build-dag.v4",
+            "status": "ready",
+            "confirmation_status": "confirmed",
+            "build_execution_scope": {},
+            "task_registry": {},
+            "task_graph": {"nodes": [], "validation": {"is_valid": True, "errors": []}},
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            template_path = os.path.join(workspace, ".xcodeagent", "template-state.json")
+            os.makedirs(os.path.dirname(template_path), exist_ok=True)
+            with open(template_path, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "schemaVersion": 2,
+                    "templateRevision": "scheduler-missing-route-r1",
+                    "requested": {}, "effective": {}, "appliedAdditions": {},
+                }, handle)
+            plan["template_context"] = template_context(load_template_state(workspace))
+            plan_path = os.path.join(workspace, ".xcodeagent", "plans", "build-task-plan.json")
+            os.makedirs(os.path.dirname(plan_path), exist_ok=True)
+            with open(plan_path, "w", encoding="utf-8") as handle:
+                json.dump(plan, handle)
+            with patch("app.graph.subgraphs.build._execute_ready_tasks") as executor, patch(
+                "app.graph.subgraphs.build.apply_platform_projections"
+            ) as apply:
+                result = run_build_scheduler({"workspace": workspace, "build_task_plan": plan})
+
+        self.assertEqual(result["build_summary"]["status"], "failed")
+        self.assertIn("route_projection", result["error"])
+        executor.assert_not_called()
+        apply.assert_not_called()
+
     def test_build_debug_rerun_reuses_all_completed_tasks(self) -> None:
         """从 Build 调试重跑时复用当前 DAG 中全部已完成任务。"""
 
@@ -454,6 +497,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "topological_order": [task["id"] for task in tasks],
                 "validation": {"is_valid": True, "errors": []},
             },
+            "route_projection": _valid_route_projection(),
         }
 
         with tempfile.TemporaryDirectory() as workspace:
@@ -472,6 +516,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             "build_execution_scope": {},
             "task_registry": {},
             "task_graph": {"nodes": [], "validation": {"is_valid": True, "errors": []}},
+            "route_projection": _valid_route_projection(),
         }
         with tempfile.TemporaryDirectory() as workspace:
             state = _ready_build_state(workspace, {"workspace": workspace, "build_task_plan": plan})

@@ -7,7 +7,13 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BeforeValidator, PlainSerializer, StringConstraints, ValidationError
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    PlainSerializer,
+    StringConstraints,
+    ValidationError,
+)
 
 from app.services.build_task_planner import (
     compile_build_task_plan_scope,
@@ -23,9 +29,12 @@ from app.services.planning_frozen import (
     tuple_input,
 )
 from app.services.planning_issues import ValidationIssue
+from app.services.route_projection import RouteProjectionError, compile_route_projection
 from app.services.template_state import validate_template_context
-from app.services.unit_generation_contracts import CandidateAttempt, GenerationRequirement
-
+from app.services.unit_generation_contracts import (
+    CandidateAttempt,
+    GenerationRequirement,
+)
 
 _Id = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
 _Ids = Annotated[tuple[_Id, ...], BeforeValidator(tuple_input)]
@@ -103,13 +112,18 @@ def _identity(value: Any) -> str | None:
     return value
 
 
-def _retained_tasks(base_confirmed_plan: Mapping[str, Any] | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _retained_tasks(
+    base_confirmed_plan: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """深复制并读取完整 confirmed registry，拒绝非法身份和基线内重复。"""
 
     if base_confirmed_plan is None:
         return {}, []
     if not isinstance(base_confirmed_plan, Mapping):
-        _raise_input("SCOPE_BASELINE_INVALID", "base_confirmed_plan 必须是 confirmed v4 DAG 或 None。")
+        _raise_input(
+            "SCOPE_BASELINE_INVALID",
+            "base_confirmed_plan 必须是 confirmed v4 DAG 或 None。",
+        )
     plan = deepcopy(plain_json(base_confirmed_plan))
     registry = plan.get("task_registry")
     graph = plan.get("task_graph")
@@ -122,7 +136,10 @@ def _retained_tasks(base_confirmed_plan: Mapping[str, Any] | None) -> tuple[dict
         or not isinstance(validation, dict)
         or validation.get("is_valid") is not True
     ):
-        _raise_input("SCOPE_BASELINE_INVALID", "base_confirmed_plan 必须是正式 confirmed 且有效的 v4 DAG。")
+        _raise_input(
+            "SCOPE_BASELINE_INVALID",
+            "base_confirmed_plan 必须是正式 confirmed 且有效的 v4 DAG。",
+        )
 
     task_ids = [
         task_id
@@ -135,12 +152,16 @@ def _retained_tasks(base_confirmed_plan: Mapping[str, Any] | None) -> tuple[dict
         if count > 1 and _identity(task_id)
     )
     if duplicate_ids:
-        raise ScopeAssemblyError([_issue(
-            "GLOBAL_TASK_ID_COLLISION",
-            "confirmed baseline 内存在重复 Task ID，不能建立累计 registry。",
-            task_ids=duplicate_ids,
-            duplicate_source="retained",
-        )])
+        raise ScopeAssemblyError(
+            [
+                _issue(
+                    "GLOBAL_TASK_ID_COLLISION",
+                    "confirmed baseline 内存在重复 Task ID，不能建立累计 registry。",
+                    task_ids=duplicate_ids,
+                    duplicate_source="retained",
+                )
+            ]
+        )
     invalid_registry_ids = [
         str(task_id)
         for task_id, task in registry.items()
@@ -157,7 +178,9 @@ def _retained_tasks(base_confirmed_plan: Mapping[str, Any] | None) -> tuple[dict
         )
     tasks = [deepcopy(task) for task in tasks_from_build_task_plan(plan)]
     if len(tasks) != len(registry) or {task["id"] for task in tasks} != set(registry):
-        _raise_input("SCOPE_BASELINE_INVALID", "confirmed task graph 未完整覆盖正式 registry。")
+        _raise_input(
+            "SCOPE_BASELINE_INVALID", "confirmed task graph 未完整覆盖正式 registry。"
+        )
     return plan, tasks
 
 
@@ -170,12 +193,18 @@ def _validate_reuse_facts(
     try:
         facts = ReuseFacts.model_validate(reuse_facts)
     except (ValidationError, TypeError, ValueError) as exc:
-        _raise_input("SCOPE_REUSE_FACTS_INVALID", "ReuseFacts 不满足冻结事实契约。", error=str(exc))
+        _raise_input(
+            "SCOPE_REUSE_FACTS_INVALID",
+            "ReuseFacts 不满足冻结事实契约。",
+            error=str(exc),
+        )
     if facts.issues:
-        raise ScopeAssemblyError([
-            issue.model_copy(update={"retryable": False, "retry_unit_ids": ()})
-            for issue in facts.issues
-        ])
+        raise ScopeAssemblyError(
+            [
+                issue.model_copy(update={"retryable": False, "retry_unit_ids": ()})
+                for issue in facts.issues
+            ]
+        )
     expected = {(str(task["id"]), str(task["unit_id"])) for task in retained_tasks}
     actual_pairs = [
         (task_id, unit_id)
@@ -190,13 +219,19 @@ def _validate_reuse_facts(
     return facts
 
 
-def _required_candidate_units(generation_requirements_by_unit: Mapping[str, Any]) -> set[str]:
+def _required_candidate_units(
+    generation_requirements_by_unit: Mapping[str, Any],
+) -> set[str]:
     """校验 generation requirements，并返回本轮必须提供 Candidate 的 Unit。"""
 
     required: set[str] = set()
     for raw_unit_id, requirements in generation_requirements_by_unit.items():
         unit_id = _identity(raw_unit_id)
-        if unit_id is None or isinstance(requirements, (str, bytes)) or not isinstance(requirements, Sequence):
+        if (
+            unit_id is None
+            or isinstance(requirements, (str, bytes))
+            or not isinstance(requirements, Sequence)
+        ):
             _raise_input(
                 "SCOPE_GENERATION_REQUIREMENTS_INVALID",
                 "generation_requirements_by_unit 必须按有效 Unit ID 映射到 Requirement 数组。",
@@ -248,7 +283,11 @@ def _candidate_tasks(
                 unit_id=unit_id,
                 error=str(exc),
             )
-        if candidate.identity.unit_id != unit_id or candidate.status != "valid" or candidate.validation_issues:
+        if (
+            candidate.identity.unit_id != unit_id
+            or candidate.status != "valid"
+            or candidate.validation_issues
+        ):
             _raise_input(
                 "SCOPE_CANDIDATE_INVALID",
                 f"Unit {unit_id} 必须提供归属一致、无问题的 valid Candidate。",
@@ -299,30 +338,34 @@ def _collision_issues(
     issues: list[ValidationIssue] = []
     for task_id in sorted(retained_ids & set(candidate_occurrences)):
         unit_id = candidate_occurrences[task_id][0]
-        issues.append(_issue(
-            "GLOBAL_TASK_ID_COLLISION",
-            f"Candidate Task {task_id} 与 retained Task ID 冲突。",
-            unit_ids=(unit_id,),
-            task_ids=(task_id,),
-            retry_unit_ids=(unit_id,),
-            category="generation",
-            retained=True,
-            candidate_unit_id=candidate_units.get(task_id, unit_id),
-        ))
+        issues.append(
+            _issue(
+                "GLOBAL_TASK_ID_COLLISION",
+                f"Candidate Task {task_id} 与 retained Task ID 冲突。",
+                unit_ids=(unit_id,),
+                task_ids=(task_id,),
+                retry_unit_ids=(unit_id,),
+                category="generation",
+                retained=True,
+                candidate_unit_id=candidate_units.get(task_id, unit_id),
+            )
+        )
     for task_id, units in sorted(candidate_occurrences.items()):
         if len(units) < 2:
             continue
         unique_units = tuple(sorted(set(units)))
         retry_units = unique_units if len(unique_units) == 1 else ()
-        issues.append(_issue(
-            "GLOBAL_TASK_ID_COLLISION",
-            f"多个 Candidate 使用了相同 Task ID：{task_id}。",
-            unit_ids=unique_units,
-            task_ids=(task_id,),
-            retry_unit_ids=retry_units,
-            category="generation",
-            candidate_units=units,
-        ))
+        issues.append(
+            _issue(
+                "GLOBAL_TASK_ID_COLLISION",
+                f"多个 Candidate 使用了相同 Task ID：{task_id}。",
+                unit_ids=unique_units,
+                task_ids=(task_id,),
+                retry_unit_ids=retry_units,
+                category="generation",
+                candidate_units=units,
+            )
+        )
     return issues
 
 
@@ -335,8 +378,13 @@ def _validate_task_units(
     skeleton = deepcopy(plain_json(skeleton_plan))
     units = skeleton.get("build_units")
     if not isinstance(units, dict) or not isinstance(skeleton.get("unit_graph"), dict):
-        _raise_input("SCOPE_SKELETON_INVALID", "skeleton_plan 必须包含 build_units 与 unit_graph。")
-    missing_units = sorted({str(task["unit_id"]) for task in tasks if task["unit_id"] not in units})
+        _raise_input(
+            "SCOPE_SKELETON_INVALID",
+            "skeleton_plan 必须包含 build_units 与 unit_graph。",
+        )
+    missing_units = sorted(
+        {str(task["unit_id"]) for task in tasks if task["unit_id"] not in units}
+    )
     if missing_units:
         _raise_input(
             "SCOPE_TASK_UNIT_MISSING",
@@ -365,15 +413,20 @@ def assemble_scope_build_task_plan(
     任一来源或 ID 冲突均在 registry 建立前失败，禁止自动 rename 或精确重复合并。
     """
 
-    if not all(isinstance(value, Mapping) for value in (
-        skeleton_plan,
-        project_plan,
-        build_context,
-        build_execution_scope,
-        generation_requirements_by_unit,
-        candidates_by_unit,
-    )):
-        _raise_input("SCOPE_ASSEMBLY_INPUT_INVALID", "Scope Assembly 的映射输入类型无效。")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (
+            skeleton_plan,
+            project_plan,
+            build_context,
+            build_execution_scope,
+            generation_requirements_by_unit,
+            candidates_by_unit,
+        )
+    ):
+        _raise_input(
+            "SCOPE_ASSEMBLY_INPUT_INVALID", "Scope Assembly 的映射输入类型无效。"
+        )
     # 先冻结并规范化本轮模板事实，避免 compiler 或 confirmed baseline 提供隐式回退。
     try:
         frozen_template_context = validate_template_context(
@@ -385,11 +438,24 @@ def assemble_scope_build_task_plan(
             "当前 Frozen Planning Inputs 的 template_context 不满足 V2 绑定契约。",
             error=str(exc),
         )
+    # Route Projection 是应用级 Build DAG Root 事实，必须由完整 TechnicalPlan 提前冻结。
+    try:
+        route_projection = compile_route_projection(plain_json(project_plan))
+    except RouteProjectionError as exc:
+        _raise_input(
+            "SCOPE_ROUTE_PROJECTION_INVALID",
+            "当前 TechnicalPlan 无法生成 Route Projection。",
+            error=str(exc),
+        )
     _, retained = _retained_tasks(base_confirmed_plan)
     facts = _validate_reuse_facts(reuse_facts, retained)
     required_units = _required_candidate_units(generation_requirements_by_unit)
-    candidates, candidate_unit_by_task_id = _candidate_tasks(candidates_by_unit, required_units)
-    collision_issues = _collision_issues(retained, candidates, candidate_unit_by_task_id)
+    candidates, candidate_unit_by_task_id = _candidate_tasks(
+        candidates_by_unit, required_units
+    )
+    collision_issues = _collision_issues(
+        retained, candidates, candidate_unit_by_task_id
+    )
     if collision_issues:
         raise ScopeAssemblyError(collision_issues)
 
@@ -425,7 +491,9 @@ def assemble_scope_build_task_plan(
         )
     except BuildUnitCompilationError as exc:
         raise ScopeAssemblyError(exc.issues) from exc
-    graph_valid = assembled.get("task_graph", {}).get("validation", {}).get("is_valid") is True
+    graph_valid = (
+        assembled.get("task_graph", {}).get("validation", {}).get("is_valid") is True
+    )
     blocked_batches = assembled.get("execution", {}).get("blocked_batches", [])
     assembled = dict(assembled)
     # Plan root 的 scope 与 TemplateState 都只绑定当前 PlanningRun，不能继承旧 baseline。
@@ -442,6 +510,8 @@ def assemble_scope_build_task_plan(
     ):
         assembled.pop(field, None)
     assembled["status"] = "ready" if graph_valid and not blocked_batches else "blocked"
+    # 不继承基线或按本次 Scope 裁剪；始终覆盖为当前完整页面事实的确定性投影。
+    assembled["route_projection"] = deepcopy(route_projection)
     task_origins = {
         **{task_id: "retained" for task_id in retained_task_ids},
         **{task_id: "candidate" for task_id in candidate_task_ids},

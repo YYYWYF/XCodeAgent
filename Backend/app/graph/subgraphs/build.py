@@ -48,6 +48,11 @@ from app.services.build_task_planner import (
     tasks_from_build_task_plan,
 )
 from app.services.template_state import assert_template_context_matches, load_template_state
+from app.services.route_projection import (
+    RouteProjectionError,
+    compile_route_projection,
+    validate_route_projection,
+)
 from app.services.build_tool_activity import (
     path_matches_task_scope,
     task_ids_for_tool_activity,
@@ -1027,6 +1032,20 @@ def _latest_build_task_plan_for_build(
     errors: list[str] = []
     if build_task_plan.get("schema_version") != "build-dag.v4":
         errors.append("最新 Build DAG schema_version 不是 build-dag.v4。")
+    # 在任何 Agent 调度前拒绝缺失或畸形的不可变 Route Projection。
+    try:
+        validate_route_projection(build_task_plan.get("route_projection"))
+    except RouteProjectionError as exc:
+        errors.append(f"Build DAG route_projection 无效：{exc}")
+    current_project_plan = state.get("project_plan")
+    # 轻量恢复态可只携带版本等投影字段；仅在完整页面事实已装载时做漂移比对。
+    if isinstance(current_project_plan, dict) and isinstance(current_project_plan.get("pages"), list) and current_project_plan["pages"]:
+        try:
+            expected_route_projection = compile_route_projection(current_project_plan)
+            if build_task_plan.get("route_projection") != expected_route_projection:
+                errors.append("Build DAG route_projection 与当前 TechnicalPlan 不一致。")
+        except RouteProjectionError as exc:
+            errors.append(f"当前 TechnicalPlan 无法生成 route_projection：{exc}")
     if "template_variant" in build_task_plan:
         errors.append("最新 Build DAG 不得包含已删除的 template_variant。")
     if workspace:
@@ -1782,7 +1801,8 @@ def run_build_scheduler(
             # EDD 必须在投影完成后只读验证，避免以验收重写掩盖投影失败。
             edd_errors = verify_authorization_edd(
                 workspace_from_state(current_state) or "",
-                current_state.get("build_task_plan", build_task_plan),
+                # EDD 与 Apply 必须消费同一份不可变 Confirmed DAG，而非调度写回态。
+                confirmed_build_task_plan,
             )
             if edd_errors:
                 workflow_status = "failed"

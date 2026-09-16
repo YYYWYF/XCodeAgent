@@ -180,6 +180,30 @@ def _auth_inputs(*, providers: tuple[tuple[str, str, str], ...] = ()) -> tuple[d
 
 
 class ScopeAssemblyTests(unittest.TestCase):
+    def test_assembly_generates_route_projection_from_full_project_plan(self) -> None:
+        """单页面 Scope 也必须冻结当前 TechnicalPlan 的全部业务路由。"""
+
+        inputs = _base_inputs()
+        assembled = plain_json(assemble_scope_build_task_plan(**inputs).assembled_plan)
+
+        self.assertEqual(
+            {page["path"] for page in assembled["route_projection"]["pages"]},
+            {"/orders", "/customers"},
+        )
+
+    def test_assembly_replaces_stale_baseline_route_projection(self) -> None:
+        """Assembly 不得继承 confirmed baseline 中陈旧的路由投影。"""
+
+        inputs = _base_inputs()
+        inputs["base_confirmed_plan"]["route_projection"] = {
+            "pages": [{"pageId": "old", "path": "/old", "pageKey": "Old"}]
+        }
+        assembled = plain_json(assemble_scope_build_task_plan(**inputs).assembled_plan)
+
+        self.assertEqual(
+            {page["path"] for page in assembled["route_projection"]["pages"]},
+            {"/orders", "/customers"},
+        )
     def test_assembled_draft_never_claims_confirmation_lifecycle_status(self) -> None:
         """无论图是否 ready，Assembly 都不能继承 confirmed 或提前声称正式 pending。"""
 

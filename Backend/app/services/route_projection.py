@@ -59,7 +59,7 @@ def apply_route_projection(
 ) -> dict[str, Any]:
     """幂等写入全部业务页面路由，并按可选 decoration 标注受控页面。"""
 
-    value = _projection_value(projection)
+    value = validate_route_projection(projection)
     decorations = _decoration_map(authorization_decorations, value["pages"])
     root = Path(workspace).expanduser().resolve()
     _validate_page_entries(root, value["pages"])
@@ -94,9 +94,12 @@ def verify_route_projection(
 ) -> dict[str, Any]:
     """只读核对共享路由托管区，不以重写掩盖 marker 或内容漂移。"""
 
-    value = _projection_value(projection)
+    value = validate_route_projection(projection)
     decorations = _decoration_map(authorization_decorations, value["pages"])
-    routes_path = Path(workspace).expanduser().resolve() / ROUTES_RELATIVE_PATH
+    root = Path(workspace).expanduser().resolve()
+    # EDD 还必须确认页面入口没有在投影后被误删，不能仅比对 routes.tsx 文本。
+    _validate_page_entries(root, value["pages"])
+    routes_path = root / ROUTES_RELATIVE_PATH
     if not routes_path.is_file() or routes_path.is_symlink():
         raise RouteProjectionError("模板缺少 frontend/src/constants/routes.tsx。")
     source = routes_path.read_text(encoding="utf-8")
@@ -109,6 +112,12 @@ def verify_route_projection(
     return {"verified": True, "pageCount": len(value["pages"]), "protectedPageCount": len(decorations)}
 
 
+def validate_route_projection(projection: Any) -> dict[str, list[dict[str, str | bool]]]:
+    """公开校验冻结 Projection 结构，供 Confirm、Build 与 EDD 复用。"""
+
+    return _projection_value(projection)
+
+
 def _projection_value(value: Any) -> dict[str, list[dict[str, str | bool]]]:
     """严格校验持久化 Route Projection 的页面集合。"""
 
@@ -118,16 +127,25 @@ def _projection_value(value: Any) -> dict[str, list[dict[str, str | bool]]]:
     result: list[dict[str, str | bool]] = []
     page_ids: set[str] = set()
     paths: set[str] = set()
+    page_keys: set[str] = set()
     for item in pages:
         if not isinstance(item, dict):
             raise RouteProjectionError("route_projection.pages 包含非法页面对象。")
         page_id = str(item.get("pageId") or "").strip()
         path = str(item.get("path") or "").strip()
         page_key = str(item.get("pageKey") or "").strip()
-        if not page_id or not path.startswith("/") or not page_key or page_id in page_ids or path in paths:
+        if (
+            not page_id
+            or not path.startswith("/")
+            or not page_key
+            or page_id in page_ids
+            or path in paths
+            or page_key in page_keys
+        ):
             raise RouteProjectionError("route_projection.pages 包含缺失、重复或非法页面标识。")
         page_ids.add(page_id)
         paths.add(path)
+        page_keys.add(page_key)
         result.append({"pageId": page_id, "path": path, "pageKey": page_key, "name": str(item.get("name") or page_id), "menu": item.get("menu") is True})
     return {"pages": sorted(result, key=lambda item: (str(item["path"]), str(item["pageId"]))) }
 

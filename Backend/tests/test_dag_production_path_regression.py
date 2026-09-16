@@ -166,6 +166,11 @@ class DagProductionPathCutoverTests(unittest.IsolatedAsyncioTestCase):
             pending["template_context"],
             result["build_context"]["template_context"],
         )
+        # 生产路径必须由真实 Scope Assembly 冻结完整页面 Projection，禁止 fixture 补写。
+        self.assertEqual(
+            {page["path"] for page in pending["route_projection"]["pages"]},
+            {page["path"] for page in self._state(scope)["project_plan"]["pages"]},
+        )
         identity = validate_pending_self_digest(pending)
         self.assertFalse(build_task_plan_json_path(self._state(scope)).exists())
         # Graph 停在等用户确认，并投影精确 DraftIdentity。
