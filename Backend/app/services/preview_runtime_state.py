@@ -16,6 +16,7 @@ from app.services.preview_runtime_guard import maintenance_owner
 
 _lock = RLock()
 LOG_LIMIT = 32_768
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 LOG_FILES = {
     "frontend": ("install.stdout.log", "install.stderr.log", "frontend.stdout.log", "frontend.stderr.log"),
     "backend": ("backend-build.stdout.log", "backend-build.stderr.log", "backend-repackage.stdout.log", "backend-repackage.stderr.log", "backend.stdout.log", "backend.stderr.log"),
@@ -77,6 +78,12 @@ def redact(text: str) -> str:
     text = re.sub(r"(?i)((?:password|passwd|secret|token|api[_-]?key|authorization)[\"']?\s*[=:]\s*[\"']?)[^\s,;\"']+", r"\1[REDACTED]", text)
     text = re.sub(r"(?is)(<(?:password|secret|token)>).*?(</(?:password|secret|token)>)", r"\1[REDACTED]\2", text)
     return re.sub(r"(://[^\s/:]+:)[^\s@]+@", r"\1[REDACTED]@", text)
+
+
+def _plain_log_text(text: str) -> str:
+    """去掉终端颜色控制码后再脱敏，避免抽屉显示乱码或颜色码绕过脱敏。"""
+
+    return redact(ANSI_ESCAPE_PATTERN.sub("", text))
 
 
 def read_record(workspace: str | Path) -> dict[str, Any]:
@@ -194,7 +201,7 @@ def read_logs(workspace: str | Path) -> dict[str, Any]:
             with path.open("rb") as stream:
                 size = os.fstat(stream.fileno()).st_size
                 stream.seek(max(0, size - LOG_LIMIT))
-                content = redact(stream.read(LOG_LIMIT).decode("utf-8", errors="replace"))
+                content = _plain_log_text(stream.read(LOG_LIMIT).decode("utf-8", errors="replace"))
             if content:
                 entries.append({"name": name, "stream": "stderr" if ".stderr." in name else "stdout", "stage": "install" if name.startswith("install") else "build" if "build" in name or "repackage" in name else "start", "content": content, "truncated": size > LOG_LIMIT})
         logs[layer] = entries

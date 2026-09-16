@@ -467,9 +467,11 @@ def _start_dev_server(
 
 
 def _launch_environment(script_command: str) -> dict[str, str]:
-    """构造受控启动环境，避免 CRA 在代理配置下收到非法 loopback HOST。"""
+    """构造无终端颜色的启动环境，并避免 CRA 收到非法 loopback HOST。"""
 
-    env = {**os.environ, "BROWSER": "none"}
+    env = {**os.environ, "BROWSER": "none", "NO_COLOR": "1"}
+    # FORCE_COLOR 会覆盖 NO_COLOR；重定向到日志文件时不应继承终端颜色设置。
+    env.pop("FORCE_COLOR", None)
     if "react-scripts" in script_command:
         env.pop("HOST", None)
     else:

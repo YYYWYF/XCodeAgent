@@ -262,6 +262,25 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret-value", logs[0]["content"])
         self.assertNotIn(":private@", logs[0]["content"])
 
+    def test_logs_strip_ansi_colors_before_redaction(self) -> None:
+        """Windows 日志中的 Vite 颜色码不进入抽屉，且不能拆开敏感字段。"""
+        self.fail_launch()
+        log = runtime_root(self.workspace) / "frontend.stdout.log"
+        log.write_text(
+            "\x1b[32mVITE\x1b[39m ready in 909 ms\n"
+            "\x1b[1mLocal\x1b[22m: http://localhost:3000/\n"
+            "pass\x1b[32mword\x1b[39m=secret-value\n",
+            encoding="utf-8",
+        )
+
+        content = read_logs(self.workspace)["frontend"][0]["content"]
+
+        self.assertIn("VITE ready in 909 ms", content)
+        self.assertIn("Local: http://localhost:3000/", content)
+        self.assertNotIn("\x1b", content)
+        self.assertNotIn("secret-value", content)
+        self.assertIn("password=[REDACTED]", content)
+
     def test_dead_process_is_not_healthy(self) -> None:
         """历史成功的已退出进程必须显示失败。"""
         begin_attempt(self.workspace)

@@ -136,6 +136,7 @@ class ProjectLauncherTests(unittest.TestCase):
             fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
             package_manager_command = r"C:\Program Files\nodejs\pnpm.cmd"
             with (
+                patch.dict("app.services.frontend_project_launcher.os.environ", {"FORCE_COLOR": "3"}),
                 patch(
                     "app.services.frontend_project_launcher.shutil.which",
                     return_value=package_manager_command,
@@ -170,6 +171,8 @@ class ProjectLauncherTests(unittest.TestCase):
         )
         self.assertEqual(popen.call_args.kwargs["env"]["HOST"], "localhost")
         self.assertEqual(popen.call_args.kwargs["env"]["BROWSER"], "none")
+        self.assertEqual(popen.call_args.kwargs["env"]["NO_COLOR"], "1")
+        self.assertNotIn("FORCE_COLOR", popen.call_args.kwargs["env"])
         for key, value in preview_process_creation_options().items():
             self.assertEqual(popen.call_args.kwargs[key], value)
         self.assertNotIn("start_new_session", popen.call_args.kwargs)
