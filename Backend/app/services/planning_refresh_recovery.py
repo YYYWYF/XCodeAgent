@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, TypedDict
 
+from app.services.build_context_resolver import resolve_confirmation_context
 from app.services.build_task_confirmation import build_task_confirmation_read_model
 from app.workspace.task_documents import (
     build_task_plan_lifecycle_lock,
@@ -42,12 +43,32 @@ def _pending_plan(workspace: str) -> tuple[dict[str, Any] | None, Any | None]:
     return pending, validate_pending_self_digest(pending)
 
 
-def _pending_confirmation(pending: dict[str, Any], identity: Any) -> dict[str, Any]:
+def _pending_confirmation(
+    workspace: str,
+    pending: dict[str, Any],
+    identity: Any,
+) -> dict[str, Any]:
     """从当前 Pending 构造与实时 DAG 确认卡相同的安全只读投影。"""
 
     scope = dict(identity.build_execution_scope)
     read_model = build_task_confirmation_read_model(pending, scope)
-    return {
+    target_type = str(scope.get("type") or "")
+    context_error: str | None = None
+    if target_type in {"page", "endpoint"}:
+        try:
+            context = resolve_confirmation_context(workspace, scope)
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            # Refresh 只读恢复不能因正式上下文损坏而伪造空接口详情或升级为 500。
+            context_error = str(exc).strip() or "正式上下文解析失败。"
+        else:
+            read_model = build_task_confirmation_read_model(
+                pending,
+                scope,
+                project_plan=context["project_plan"],
+                build_context=context["build_context"],
+            )
+
+    confirmation: dict[str, Any] = {
         "mode": "build_task_plan_confirmation",
         "status": "requires_user_input",
         "message": "Build DAG 已生成，请确认任务规划后再进入 Build。",
@@ -69,8 +90,16 @@ def _pending_confirmation(pending: dict[str, Any], identity: Any) -> dict[str, A
             "reusedPrerequisites": read_model["reusedPrerequisites"],
             "retainedTaskSummary": read_model["retainedTaskSummary"],
         },
-        "targetReview": read_model["targetReview"],
     }
+    if context_error is None or target_type not in {"page", "endpoint"}:
+        confirmation["targetReview"] = read_model["targetReview"]
+    else:
+        confirmation["errors"] = [
+            "当前 PendingPlan 仍存在，但无法从最新正式 TechnicalPlan 重建目标详情。",
+            context_error,
+        ]
+        confirmation["message"] = "当前 PendingPlan 仍存在，但无法恢复目标详情。"
+    return confirmation
 
 
 def _identity_matches(value: Any, identity: Any, *, camel_case: bool = False) -> bool:
@@ -161,7 +190,7 @@ def _resolve_planning_refresh_state_locked(
         "ownerSessionId": pending_identity.owner_session_id,
         "draftDigest": pending_identity.draft_digest,
         "buildExecutionScope": dict(pending_identity.build_execution_scope),
-        "confirmation": _pending_confirmation(pending, pending_identity),
+        "confirmation": _pending_confirmation(workspace, pending, pending_identity),
         "message": "已从 PendingPlan 恢复待确认任务规划。",
     }
 
