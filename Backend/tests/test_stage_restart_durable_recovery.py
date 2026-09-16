@@ -110,6 +110,48 @@ class StageRestartRemovalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(persisted_child.status, DurableExecutionStatus.INTERRUPTED)
         self.assertEqual(graph.calls, 0)
 
+    async def test_legacy_operation_retry_attempt_fails_closed_without_graph(self) -> None:
+        """历史 operation_retry attempt 只能进入 finalization failure，不能启动 Graph。"""
+
+        source, native_plan = await self._prepare_source_and_plan()
+        child, _lease, _attempt = await claim_native_recovery_attempt(
+            source=source,
+            plan=native_plan,
+            new_run_id="legacy-operation-child",
+            owner_backend_instance_id="backend-a",
+            owner_pid=101,
+            lease_ttl_seconds=30,
+        )
+        await update_recovery_attempt(
+            workspace=self.workspace,
+            new_run_id=child.run_id,
+            status=RecoveryAttemptStatus.HANDED_OFF,
+        )
+        self._rewrite_attempt_as_legacy_operation_retry(child.run_id)
+
+        graph = _GraphMustNotRun()
+        with self.assertRaises(RecoveryExecutionError) as raised:
+            await reconcile_recovery_attempt(
+                workspace=self.workspace,
+                new_run_id=child.run_id,
+                graph=graph,
+            )
+
+        self.assertEqual(raised.exception.code, "RECOVERY_STRATEGY_UNSUPPORTED")
+        persisted_attempt = await get_recovery_attempt(self.workspace, child.run_id)
+        persisted_child = await get_execution(self.workspace, child.run_id)
+        self.assertIsNotNone(persisted_attempt)
+        self.assertIsNotNone(persisted_child)
+        assert persisted_attempt is not None
+        assert persisted_child is not None
+        self.assertEqual(persisted_attempt.strategy, RecoveryStrategy.OPERATION_RETRY)
+        self.assertEqual(
+            persisted_attempt.status,
+            RecoveryAttemptStatus.FINALIZATION_FAILED,
+        )
+        self.assertEqual(persisted_child.status, DurableExecutionStatus.INTERRUPTED)
+        self.assertEqual(graph.calls, 0)
+
     def _rewrite_attempt_as_legacy_stage_restart(self, new_run_id: str) -> None:
         """把当前测试 attempt 改写成旧 SQLite row 的 Stage Restart 形状。"""
 
@@ -129,6 +171,23 @@ class StageRestartRemovalTests(unittest.IsolatedAsyncioTestCase):
                 WHERE new_run_id = ?
                 """,
                 ("a" * 64, new_run_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def _rewrite_attempt_as_legacy_operation_retry(self, new_run_id: str) -> None:
+        """把当前测试 attempt 改写成旧 SQLite row 的 Operation Retry 形状。"""
+
+        connection = sqlite3.connect(execution_recovery_db_path(self.workspace))
+        try:
+            connection.execute(
+                """
+                UPDATE recovery_attempts
+                SET strategy = 'operation_retry'
+                WHERE new_run_id = ?
+                """,
+                (new_run_id,),
             )
             connection.commit()
         finally:

@@ -261,6 +261,7 @@ class RecoveryStrategy(StrEnum):
 
     NATIVE_CHECKPOINT = "native_checkpoint"
     HANDLER = "handler"
+    # 仅用于读取历史 RecoveryAttempt durable row；当前 production 不创建或执行。
     OPERATION_RETRY = "operation_retry"
     # 仅用于读取旧 RecoveryAttempt durable row；当前 production 不再创建或执行。
     STAGE_RESTART = "stage_restart"
@@ -424,7 +425,6 @@ class RecoveryActionKind(StrEnum):
 
     CONTINUE_CHECKPOINT = "continue_checkpoint"
     RETRY_FAILED_NODE = "retry_failed_node"
-    RETRY_OPERATION = "retry_operation"
     RECONCILE_STATE = "reconcile_state"
     AWAIT_USER = "await_user"
     NEEDS_ATTENTION = "needs_attention"

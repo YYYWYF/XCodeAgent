@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import Any, Sequence
 from uuid import uuid4
 
@@ -30,14 +29,12 @@ from app.domain.execution_recovery import (
 )
 from app.persistence.execution_recovery import (
     claim_recovery_finalization,
-    claim_operation_retry_attempt,
     claim_native_recovery_attempt,
     finish_execution_and_release_lease,
     get_execution,
     get_execution_lease,
     get_recovery_attempt,
     get_recovery_point,
-    get_latest_recovery_point,
     fail_recovery_attempt_prestart,
     insert_recovery_point,
     insert_node_entry_boundary,
@@ -60,8 +57,6 @@ from app.services.execution_recovery_source_admission import assess_recovery_sou
 from app.services.execution_recovery_capability import (
     assess_native_recovery_capability,
 )
-from app.services.execution_retry_dispatcher import assess_retry_operation, _retry_payload
-from app.protocols.workflow.request import workflow_run_inputs
 from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
     resolve_recovery_lineage_head,
@@ -100,23 +95,14 @@ class NativeRecoveryRuntimeContext:
     workspace_lease: WorkspaceRunLease | None
     observability: dict[str, Any]
     heartbeat_task: asyncio.Task[None] | None
-    fresh_start: bool = False
-    recovery_action_kind: str = "continue_checkpoint"
-    workflow_input_override: dict[str, Any] | None = None
 
     def workflow_inputs(self) -> dict[str, Any]:
         """生成 Runtime 内部使用的最小字段集合，不重新解析外部 workflow request。"""
 
-        if self.workflow_input_override is not None:
-            return dict(self.workflow_input_override)
         values = getattr(self.fork_snapshot, "values", {})
         values = values if isinstance(values, dict) else {}
         return {
-            "request": (
-                str(values.get("request") or "").strip()
-                if self.fresh_start
-                else "从 durable checkpoint 继续执行。"
-            ),
+            "request": "从 durable checkpoint 继续执行。",
             "selected_skills_error": None,
             "selected_skill_names": list(values.get("selected_skill_names") or []),
             "project_id": self.project_id or "",
@@ -124,11 +110,7 @@ class NativeRecoveryRuntimeContext:
             "editor_mode": str(values.get("editor_mode") or "") or None,
             "workflow_scope": self.workflow_scope or "",
             "application_planning_interaction": None,
-            "resume_from": (
-                str(values.get("resume_from") or "technical_planning_begin")
-                if self.fresh_start
-                else ""
-            ),
+            "resume_from": "",
             "resume_values": {},
             "application_name": str(values.get("application_name") or "") or None,
             "workflow_debug_enabled": False,
@@ -401,324 +383,6 @@ async def prepare_native_recovery(
         ) from exc
 
 
-async def prepare_operation_retry(
-    *,
-    workspace: str,
-    source_run_id: str,
-    graph: Any,
-    recovery_plan: RecoveryPlan,
-) -> NativeRecoveryRuntimeContext:
-    """把 Backend 选定的 operation retry 接入同一 Durable RecoveryAttempt 状态机。"""
-
-    source = await get_execution(workspace, source_run_id)
-    if source is None:
-        raise RecoveryExecutionError("SOURCE_EXECUTION_NOT_FOUND", "source execution 不存在。")
-    lineage = await resolve_recovery_lineage_head(
-        workspace,
-        thread_id=source.thread_id,
-        execution_kind=source.execution_kind,
-    )
-    if lineage.state is RecoveryLineageState.AMBIGUOUS:
-        raise RecoveryExecutionError(lineage.reason_code, "Recovery lineage 存在多个无法安全解释的当前 head。")
-    if lineage.head is None or lineage.head.run_id != source.run_id:
-        raise RecoveryExecutionError(
-            "RECOVERY_SOURCE_SUPERSEDED",
-            "当前 recovery source 已被新的 child execution 替代，请刷新后继续。",
-        )
-    capability = await assess_retry_operation(
-        workspace=workspace,
-        source=source,
-        graph=graph,
-    )
-    if not capability.executable or capability.handler is None or capability.snapshot is None:
-        raise RecoveryExecutionError(capability.reason_code, capability.reason)
-    point = await get_recovery_point(workspace, source.last_recovery_point_id or "")
-    if point is None:
-        raise RecoveryExecutionError("RETRY_SOURCE_CHECKPOINT_INVALID", "当前失败的 RecoveryPoint 无效。")
-    resume_from = capability.resume_from or (point.next_nodes[0] if point.next_nodes else "")
-    if not resume_from:
-        raise RecoveryExecutionError("RETRY_SOURCE_CHECKPOINT_INVALID", "当前失败缺少 operation retry 入口。")
-    operation_plan = recovery_plan.model_copy(
-        update={
-            "decision": RecoveryDecision.REQUIRES_HANDLER,
-            "strategy": RecoveryStrategy.OPERATION_RETRY,
-            "next_nodes": [resume_from],
-            "reason_code": capability.reason_code,
-            "reason": capability.reason,
-        }
-    )
-    identity = current_backend_instance()
-    new_run_id = f"recovery-{uuid4().hex[:12]}"
-    child_execution, _, attempt = await claim_operation_retry_attempt(
-        source=source,
-        plan=operation_plan,
-        new_run_id=new_run_id,
-        owner_backend_instance_id=identity.instance_id,
-        owner_pid=identity.pid,
-        lease_ttl_seconds=Settings.from_env().execution_recovery_lease_ttl_seconds,
-    )
-    heartbeat_task = _start_recovery_heartbeat(
-        workspace=workspace,
-        run_id=new_run_id,
-        owner_backend_instance_id=identity.instance_id,
-    )
-    handoff_completed = False
-    try:
-        lifecycle = _handoff_lifecycle(
-            workspace,
-            source=source,
-            plan=operation_plan,
-            new_run_id=new_run_id,
-        )
-        handoff_completed = True
-        await update_recovery_attempt(
-            workspace=workspace,
-            new_run_id=new_run_id,
-            status=RecoveryAttemptStatus.HANDED_OFF,
-        )
-        await stop_execution_heartbeat(heartbeat_task)
-        heartbeat_task = None
-        return await finalize_operation_retry_attempt(
-            workspace=workspace,
-            new_run_id=new_run_id,
-            graph=graph,
-            lifecycle=lifecycle,
-            heartbeat_task=heartbeat_task,
-        )
-    except Exception as exc:
-        await stop_execution_heartbeat(heartbeat_task)
-        await _handle_pre_runtime_failure(
-            workspace=workspace,
-            new_run_id=new_run_id,
-            attempt=await get_recovery_attempt(workspace, new_run_id),
-            error_code=_recovery_error_code(exc),
-            handoff_completed=handoff_completed,
-        )
-        if isinstance(exc, RecoveryExecutionError):
-            raise
-        raise RecoveryExecutionError("RECOVERY_PRESTART_FAILED", "Operation Retry 在 Graph 启动前失败。") from exc
-
-
-async def finalize_operation_retry_attempt(
-    *,
-    workspace: str,
-    new_run_id: str,
-    graph: Any,
-    lifecycle: Any,
-    heartbeat_task: asyncio.Task[None] | None,
-) -> NativeRecoveryRuntimeContext:
-    """独占 FINALIZING 后进入统一 Operation Retry finalizer。"""
-
-    attempt = await get_recovery_attempt(workspace, new_run_id)
-    if attempt is None or attempt.status not in {
-        RecoveryAttemptStatus.HANDED_OFF,
-        RecoveryAttemptStatus.FINALIZING,
-    }:
-        raise RecoveryExecutionError("RECOVERY_ATTEMPT_NOT_READY", "Operation Retry Attempt 当前不可启动。")
-    identity = current_backend_instance()
-    attempt, _lease = await claim_recovery_finalization(
-        workspace=workspace,
-        new_run_id=new_run_id,
-        new_owner_backend_instance_id=identity.instance_id,
-        new_owner_pid=identity.pid,
-        lease_ttl_seconds=Settings.from_env().execution_recovery_lease_ttl_seconds,
-    )
-    if heartbeat_task is None:
-        heartbeat_task = _start_recovery_heartbeat(
-            workspace=workspace,
-            run_id=new_run_id,
-            owner_backend_instance_id=identity.instance_id,
-        )
-    try:
-        source = await get_execution(workspace, attempt.source_run_id)
-        child = await get_execution(workspace, new_run_id)
-        if source is None or child is None:
-            raise RecoveryExecutionError("RECOVERY_EXECUTION_NOT_FOUND", "RecoveryAttempt execution 不存在。")
-        return await _finalize_operation_retry(
-            workspace=workspace,
-            source=source,
-            child_execution=child,
-            attempt=attempt,
-            graph=graph,
-            lifecycle=lifecycle,
-            heartbeat_task=heartbeat_task,
-        )
-    except Exception as exc:
-        await stop_execution_heartbeat(heartbeat_task)
-        await _handle_finalization_failure(
-            workspace=workspace,
-            new_run_id=new_run_id,
-            error_code=_recovery_error_code(exc),
-        )
-        if isinstance(exc, RecoveryExecutionError):
-            raise
-        raise RecoveryExecutionError("RECOVERY_PRESTART_FAILED", "Operation Retry finalization 失败。") from exc
-
-
-async def _finalize_operation_retry(
-    *,
-    workspace: str,
-    source: DurableExecutionRecord,
-    child_execution: DurableExecutionRecord,
-    attempt: RecoveryAttempt,
-    graph: Any,
-    lifecycle: Any,
-    heartbeat_task: asyncio.Task[None] | None,
-) -> NativeRecoveryRuntimeContext:
-    """只依据 durable attempt 重验 source，并幂等创建 Operation Retry child runtime。"""
-
-    if (
-        attempt.strategy is not RecoveryStrategy.OPERATION_RETRY
-        or attempt.source_authority_kind is not RecoverySourceAuthorityKind.CHECKPOINT
-    ):
-        raise RecoveryExecutionError(
-            "RECOVERY_STRATEGY_UNSUPPORTED",
-            "当前 RecoveryAttempt 不是可执行的 Operation Retry transaction。",
-        )
-    source_point = await get_recovery_point(workspace, attempt.source_recovery_point_id or "")
-    if (
-        source_point is None
-        or source_point.kind is not RecoveryPointKind.CHECKPOINT
-        or source_point.run_id != source.run_id
-        or source_point.thread_id != attempt.thread_id
-        or source_point.checkpoint_id != attempt.source_checkpoint_id
-        or source_point.checkpoint_ns != attempt.source_checkpoint_ns
-        or source.last_recovery_point_id != attempt.source_recovery_point_id
-        or len(source_point.next_nodes) != 1
-    ):
-        raise RecoveryExecutionError(
-            "RECOVERY_STATE_DRIFT",
-            "Operation Retry 的 source RecoveryPoint 已发生变化。",
-        )
-    if (
-        source.thread_id != attempt.thread_id
-        or child_execution.thread_id != attempt.thread_id
-        or source.status is not attempt.source_status
-        or source.status is not DurableExecutionStatus.FAILED
-        or execution_failure_sha256(source.failure) != attempt.source_failure_sha256
-    ):
-        raise RecoveryExecutionError(
-            "RECOVERY_STATE_DRIFT",
-            "Operation Retry 的 source execution identity 已发生变化。",
-        )
-    capability = await assess_retry_operation(
-        workspace=workspace,
-        source=source,
-        graph=graph,
-    )
-    if (
-        not capability.executable
-        or capability.handler is None
-        or capability.snapshot is None
-        or capability.resume_from != (source_point.next_nodes[0] if source_point.next_nodes else None)
-    ):
-        raise RecoveryExecutionError(
-            "RECOVERY_STATE_DRIFT",
-            "Operation Retry capability 已不再满足 durable source 事实。",
-        )
-    _validate_finalization_lifecycle(
-        source=source,
-        attempt=attempt,
-        lifecycle=lifecycle,
-    )
-    payload = _retry_payload(
-        source,
-        capability.snapshot,
-        capability.handler,
-        new_run_id=attempt.new_run_id,
-    )
-    workflow_inputs = workflow_run_inputs(payload)
-    namespace = f"recovery-operation-{attempt.new_run_id}"
-    values = getattr(capability.snapshot, "values", {})
-    values = dict(values) if isinstance(values, dict) else {}
-    values.update(workflow_inputs.get("resume_values") or {})
-    resume_from = source_point.next_nodes[0]
-    values.update(
-        {
-            "active_thread_id": source.thread_id,
-            "active_run_id": attempt.new_run_id,
-            "status": "running",
-            "phase": resume_from,
-            "workflow_scope": source.workflow_scope or "",
-        }
-    )
-    entry_point = RecoveryPoint(
-        recovery_point_id=f"recovery-point-{attempt.new_run_id}-entry",
-        run_id=attempt.new_run_id,
-        thread_id=source.thread_id,
-        kind=RecoveryPointKind.ENTRY,
-        checkpoint_id=None,
-        checkpoint_ns=namespace,
-        graph_node=resume_from,
-        completed_node=None,
-        next_nodes=[resume_from],
-        phase=resume_from,
-        state_status="running",
-        lifecycle_revision=getattr(lifecycle, "revision", None),
-        captured_at=datetime.now(timezone.utc),
-    )
-    persisted_entry = await insert_recovery_point(workspace=workspace, point=entry_point)
-    await update_recovery_attempt(
-        workspace=workspace,
-        new_run_id=attempt.new_run_id,
-        status=RecoveryAttemptStatus.STARTED,
-    )
-    workspace_lease = _acquire_workspace_lease(
-        workspace=workspace,
-        source=source,
-        new_run_id=attempt.new_run_id,
-        lifecycle=lifecycle,
-    )
-    config = {"configurable": {"thread_id": source.thread_id, "checkpoint_ns": namespace}}
-    return NativeRecoveryRuntimeContext(
-        source_execution=source,
-        child_execution=child_execution,
-        recovery_plan=RecoveryPlan(
-            source_run_id=source.run_id,
-            thread_id=source.thread_id,
-            decision=RecoveryDecision.REQUIRES_HANDLER,
-            strategy=RecoveryStrategy.OPERATION_RETRY,
-            lifecycle_ownership_mode=attempt.lifecycle_ownership_mode,
-            recovery_point_id=persisted_entry.recovery_point_id,
-            next_nodes=[resume_from],
-            reason_code="RETRY_OPERATION_AVAILABLE",
-            reason="从 durable RecoveryAttempt 继续 Operation Retry。",
-            lifecycle_revision=getattr(lifecycle, "revision", None),
-        ),
-        source_recovery_point=source_point,
-        new_run_id=attempt.new_run_id,
-        thread_id=source.thread_id,
-        project_id=source.project_id,
-        workspace=workspace,
-        workflow_scope=source.workflow_scope,
-        graph=graph,
-        fork_config=config,
-        observation_config=config,
-        fork_snapshot=SimpleNamespace(
-            config={
-                "configurable": {
-                    "thread_id": source.thread_id,
-                    "checkpoint_ns": namespace,
-                }
-            },
-            next=(resume_from,),
-            values=values,
-        ),
-        lifecycle_payload=application_lifecycle_payload(lifecycle),
-        workspace_lease=workspace_lease,
-        observability=_recovery_observability(
-            run_id=attempt.new_run_id,
-            thread_id=source.thread_id,
-            project_id=source.project_id,
-            workspace=workspace,
-        ),
-        heartbeat_task=heartbeat_task,
-        fresh_start=True,
-        recovery_action_kind="retry_operation",
-        workflow_input_override=workflow_inputs,
-    )
-
-
 async def finalize_handed_off_recovery_attempt(
     *,
     workspace: str,
@@ -762,16 +426,6 @@ async def finalize_handed_off_recovery_attempt(
                 "FINALIZING recovery 的 child execution 不存在。",
             )
         lifecycle = load_application_lifecycle(workspace)
-        if attempt.strategy is RecoveryStrategy.OPERATION_RETRY:
-            return await _finalize_operation_retry(
-                workspace=workspace,
-                source=source,
-                child_execution=child_execution,
-                attempt=attempt,
-                graph=graph,
-                lifecycle=lifecycle,
-                heartbeat_task=heartbeat_task,
-            )
         if attempt.strategy is not RecoveryStrategy.NATIVE_CHECKPOINT:
             raise RecoveryExecutionError(
                 "RECOVERY_STRATEGY_UNSUPPORTED",

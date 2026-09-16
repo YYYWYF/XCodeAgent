@@ -34,7 +34,6 @@ from app.services.execution_recovery_executor import (
     NativeRecoveryRuntimeContext,
     WorkflowReentryExecutor,
     prepare_native_recovery,
-    prepare_operation_retry,
 )
 from app.services.execution_recovery_lineage import reconcile_recovery_attempt
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
@@ -325,18 +324,6 @@ def build_execution_recovery_ag_ui_stream(
                             else production_recovery_replay_policies()
                         ),
                     )
-            elif kind is RecoveryActionKind.RETRY_OPERATION:
-                if recovery_plan is None:
-                    raise RecoveryExecutionError(
-                        "RECOVERY_ACTION_NOT_EXECUTABLE",
-                        "FAILED execution 不能走 operation retry。",
-                    )
-                context = await prepare_operation_retry(
-                    workspace=workspace,
-                    source_run_id=source.run_id,
-                    graph=graph,
-                    recovery_plan=recovery_plan,
-                )
             else:
                 raise RecoveryExecutionError(
                     "RECOVERY_ACTION_NOT_EXECUTABLE",

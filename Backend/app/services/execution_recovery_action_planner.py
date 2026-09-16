@@ -28,10 +28,6 @@ from app.services.application_lifecycle import ApplicationLifecycle, load_applic
 from app.services.execution_recovery_capability import (
     assess_native_recovery_capability,
 )
-from app.services.execution_retry_dispatcher import (
-    RetryOperationCapability,
-    assess_retry_operation,
-)
 from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 
 
@@ -154,30 +150,10 @@ async def plan_recovery_action(
             reentry_plan=reentry_plan,
         )
     native_capability = assess_native_recovery_capability(recovery_plan)
-    retry_capability = RetryOperationCapability(
-        executable=False,
-        handler=None,
-        reason_code="RETRY_HANDLER_NOT_AVAILABLE",
-        reason="当前失败暂未接入可执行的 operation retry handler。",
-    )
-    if (
-        graph is not None
-        and source.execution_kind == "workbench"
-        and source.status.value == "failed"
-        and not native_capability.executable
-    ):
-        retry_capability = await assess_retry_operation(
-            workspace=workspace,
-            source=source,
-            graph=graph,
-        )
     incident_id = _incident_id(
         source=source,
         point=point,
         lifecycle=current_lifecycle,
-        retry_handler=(
-            retry_capability.handler if retry_capability.executable else None
-        ),
     )
     if recovery_plan.decision is RecoveryDecision.AWAITING_USER:
         return _action_plan(
@@ -200,21 +176,6 @@ async def plan_recovery_action(
             status=RecoveryIncidentStatus.RECOVERABLE,
             reason_code=recovery_plan.reason_code,
             message="已找到可验证的恢复入口，可以继续执行。",
-            primary_action=action,
-        )
-    if retry_capability.executable and retry_capability.handler is not None:
-        action = _action(
-            incident_id=incident_id,
-            kind=RecoveryActionKind.RETRY_OPERATION,
-            label=_retry_label(retry_capability.handler),
-            description=retry_capability.reason,
-        )
-        return _action_plan(
-            source=source,
-            incident_id=incident_id,
-            status=RecoveryIncidentStatus.RECOVERABLE,
-            reason_code=retry_capability.reason_code,
-            message="当前失败操作可以安全重试，具体执行方式由 Backend 决定。",
             primary_action=action,
         )
     return _action_plan(
@@ -381,15 +342,6 @@ def _action(
     )
 
 
-def _retry_label(handler: str) -> str:
-    """把 Backend 内部 retry handler 映射为用户可见动作标签。"""
-
-    return {
-        "retry_code_review": "重试代码审查",
-        "retry_failed_tasks": "重试失败任务",
-    }.get(handler, "重试失败操作")
-
-
 def _failed_node_retry_label(node: str | None) -> str:
     """把失败节点映射为用户可见的重新执行文案。"""
 
@@ -407,7 +359,6 @@ def _incident_id(
     source: DurableExecutionRecord,
     point: RecoveryPoint | None,
     lifecycle: ApplicationLifecycle | None,
-    retry_handler: str | None = None,
     reentry_plan: WorkflowReentryPlan | None = None,
     reentry_error_code: str | None = None,
 ) -> str:
@@ -422,7 +373,6 @@ def _incident_id(
         'failedNode': source.current_node,
         'recoveryPointId': point.recovery_point_id if point else None,
         'lifecycleRevision': lifecycle.revision if lifecycle else None,
-        'retryHandler': retry_handler,
         'nodeEntryBoundaryId': authority.boundary_id if authority else None,
         'nodeEntrySourceRunId': authority.source_run_id if authority else None,
         'nodeEntryThreadId': authority.thread_id if authority else None,
