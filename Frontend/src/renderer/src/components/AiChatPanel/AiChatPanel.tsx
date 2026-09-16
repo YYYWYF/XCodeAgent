@@ -1699,7 +1699,7 @@ export default function AiChatPanel({
     switchPhase('acceptance')
   }, [switchPhase])
 
-  // 同步工作台自动启动返回的最新前端端口和错误，不进行任何浏览器持久化。
+  // 同步外部运行状态返回的最新前端端口和错误，不进行任何浏览器持久化。
   // useState 合并后用一次 setPreview 替代 2 次独立 setter 调用。
   useEffect(() => {
     setPreview((s) => ({

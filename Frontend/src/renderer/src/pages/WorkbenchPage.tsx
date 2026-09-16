@@ -25,12 +25,7 @@ import type {
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
 } from '../typings'
-import { cx, previewOrigin } from '../utils'
-import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
-import {
-  hasApplicationEnteredDevelopment,
-  subscribeApplicationDevelopmentEntry
-} from '../workbenchPhase'
+import { cx } from '../utils'
 import './WorkbenchPage.less'
 
 type Props = {
@@ -118,26 +113,12 @@ function WorkbenchPage({
   >([])
   const [chatSessionHistoryReady, setChatSessionHistoryReady] = useState(false)
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
-  const [previewBaseUrl, setPreviewBaseUrl] = useState('')
-  const [previewLaunchError, setPreviewLaunchError] = useState('')
-  // 预览启动中状态：驱动左侧上下文头“预览页面”按钮的 loading 呈现。
-  const [previewLaunchLoading, setPreviewLaunchLoading] = useState(false)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const entryStartedAtRef = useRef(Date.now())
   const entryStageRef = useRef<WorkbenchEntryStage>('loading')
   const entryFailureHandledRef = useRef(false)
-  const launchedWorkspaceRef = useRef<string>()
-  const activeLaunchWorkspaceRef = useRef('')
-  const launchRunIdRef = useRef(0)
-  const launchCleanupPendingRef = useRef(false)
-  const launchCleanupTimerRef = useRef<number>()
-  const [developmentEntryConfirmed, setDevelopmentEntryConfirmed] = useState(
-    () => application.source !== 'new' || hasApplicationEnteredDevelopment(application.id)
-  )
-  // 模板是否就绪（lifecycle=ready_for_workbench）。用 boolean 而非整个 lifecycle 作为预览启动
-  // effect 的依赖，避免规划期流式 workflow 事件频繁递增 revision 导致 effect 反复 cleanup，
-  // 进而中断正在进行的 npm install / dev server 启动。
+  // 模板是否就绪（lifecycle=ready_for_workbench），用于校准正式规划产物。
   const lifecycleReadyForWorkbench = isApplicationCreationComplete(applicationLifecycle)
 
   // 入口失败只处理一次：提示原因、返回首页，并由顶层卸载损坏的工作台实例。
@@ -163,124 +144,6 @@ function WorkbenchPage({
     )
     return () => window.clearTimeout(timer)
   }, [entryStage, failWorkbenchEntry])
-
-  useEffect(() => {
-    if (application.source !== 'new') {
-      setDevelopmentEntryConfirmed(true)
-      return
-    }
-    setDevelopmentEntryConfirmed(hasApplicationEnteredDevelopment(application.id))
-    return subscribeApplicationDevelopmentEntry(application.id, () => {
-      setDevelopmentEntryConfirmed(true)
-    })
-  }, [application.id, application.source])
-
-  // 进入开发阶段后自动异步尝试启动项目预览（首次创建和重新进入均生效）。
-  // 新建应用必须同时满足模板就绪与用户已进入开发，避免在设计阶段末尾提前启动项目。
-  useEffect(() => {
-    const workspacePath = application.workspaceRoot || application.projectParentPath || ''
-    if (launchCleanupTimerRef.current !== undefined) {
-      window.clearTimeout(launchCleanupTimerRef.current)
-      launchCleanupTimerRef.current = undefined
-    }
-    launchCleanupPendingRef.current = false
-    if (!workspacePath) {
-      activeLaunchWorkspaceRef.current = ''
-      setPreviewLaunchLoading(false)
-      return
-    }
-    // 新建应用只有进入开发阶段且模板就绪后才能启动；已有工程打开时默认已处于开发阶段。
-    if (
-      application.source === 'new' &&
-      (!lifecycleReadyForWorkbench || !developmentEntryConfirmed)
-    ) {
-      activeLaunchWorkspaceRef.current = ''
-      setPreviewLaunchLoading(false)
-      return
-    }
-    activeLaunchWorkspaceRef.current = workspacePath
-    if (launchedWorkspaceRef.current === workspacePath) {
-      // 同一工作区的启动请求可能因 Strict Mode 重放 effect 再次进入这里；
-      // 保留现有 loading，直到原请求明确成功或失败，避免按钮提前结束加载态。
-      const existingLaunchRunId = launchRunIdRef.current
-      return () => {
-        launchCleanupPendingRef.current = true
-        launchCleanupTimerRef.current = window.setTimeout(() => {
-          if (
-            launchRunIdRef.current === existingLaunchRunId &&
-            activeLaunchWorkspaceRef.current === workspacePath
-          ) {
-            activeLaunchWorkspaceRef.current = ''
-          }
-        }, 0)
-      }
-    }
-    const launchRunId = launchRunIdRef.current + 1
-    launchRunIdRef.current = launchRunId
-    launchedWorkspaceRef.current = workspacePath
-    setPreviewBaseUrl('')
-    setPreviewLaunchError('')
-    setPreviewLaunchLoading(true)
-
-    startProjectLaunch(workspacePath)
-      .then((result) => {
-        const launchStillCurrent =
-          launchRunIdRef.current === launchRunId &&
-          activeLaunchWorkspaceRef.current === workspacePath &&
-          !launchCleanupPendingRef.current
-        if (!launchStillCurrent) {
-          if (result.status === 'running') {
-            void stopProjectPreview(workspacePath).finally(() => {
-              void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
-                workspaceRoot: workspacePath
-              })
-            })
-          }
-          return
-        }
-        setPreviewLaunchLoading(false)
-        if (result.status === 'running' && result.preview_url) {
-          void window.xcodeAgent?.projectPreview?.registerWorkspace({
-            workspaceRoot: workspacePath
-          })
-          setPreviewBaseUrl(previewOrigin(result.preview_url))
-          setPreviewLaunchError('')
-        } else {
-          const errorMsg = result.message || '未知错误'
-          setPreviewBaseUrl('')
-          setPreviewLaunchError(errorMsg)
-        }
-      })
-      .catch((err) => {
-        const launchStillCurrent =
-          launchRunIdRef.current === launchRunId &&
-          activeLaunchWorkspaceRef.current === workspacePath &&
-          !launchCleanupPendingRef.current
-        if (!launchStillCurrent) return
-        setPreviewLaunchLoading(false)
-        const errorMsg = err instanceof Error ? err.message : '网络请求失败'
-        setPreviewBaseUrl('')
-        setPreviewLaunchError(errorMsg)
-      })
-    return () => {
-      launchCleanupPendingRef.current = true
-      launchCleanupTimerRef.current = window.setTimeout(() => {
-        if (
-          launchRunIdRef.current === launchRunId &&
-          activeLaunchWorkspaceRef.current === workspacePath
-        ) {
-          activeLaunchWorkspaceRef.current = ''
-        }
-      }, 0)
-    }
-  }, [
-    application.id,
-    application.source,
-    application.projectParentPath,
-    application.workspaceRoot,
-    developmentEntryConfirmed,
-    lifecycleReadyForWorkbench
-  ])
 
   useEffect(() => {
     let active = true
@@ -438,9 +301,9 @@ function WorkbenchPage({
                 editorMode={editorMode}
                 onApplicationUpdate={handleApplicationUpdate}
                 onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
-                previewBaseUrl={previewBaseUrl}
-                previewLaunchError={previewLaunchError}
-                previewLaunchLoading={previewLaunchLoading}
+                previewBaseUrl=""
+                previewLaunchError=""
+                previewLaunchLoading={false}
                 onApplicationLifecycleChange={onApplicationLifecycleChange}
                 onReturnWelcome={onReturnWelcome}
                 onSubmitPlanningClarification={onSubmitPlanningClarification}

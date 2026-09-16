@@ -6,7 +6,6 @@ import type { WorkspaceCodeChangeSet } from '../typings'
 export type PreviewAction =
   | 'get'
   | 'watch'
-  | 'start'
   | 'restart'
   | 'stop'
   | 'diagnose'

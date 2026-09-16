@@ -89,6 +89,12 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["status"], "failed")
         self.assertIsNone(maintenance_owner(self.workspace))
 
+    async def test_start_action_is_not_public(self) -> None:
+        """进入工作台不能再通过公开动作自动启动服务。"""
+        value = self.result(await self.request("start"))
+        self.assertEqual(value["status"], "failed")
+        self.assertIsNone(maintenance_owner(self.workspace))
+
     async def test_waiting_execution_allows_restart(self) -> None:
         """其他阶段执行或等待确认时仍允许手动重启预览服务。"""
         lifecycle = SimpleNamespace(active_executions={"task": SimpleNamespace(thread_id="other", run_id="other-run", status="awaiting_user")})
@@ -99,9 +105,22 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         launch.assert_called_once()
         self.assertEqual(value["blockedBy"]["threadId"], "other")
 
+    async def test_waiting_execution_allows_exit_stop(self) -> None:
+        """应用任务占用期间仍允许退出清理停止前后端服务。"""
+        lifecycle = SimpleNamespace(active_executions={"task": SimpleNamespace(thread_id="other", run_id="other-run", status="running")})
+        stop_result = {"status": "stopped", "message": "工作区预览服务已停止。"}
+        with patch("app.protocols.preview_runtime.load_application_lifecycle", return_value=lifecycle), patch("app.protocols.preview_runtime.stop_project_preview", return_value=stop_result) as stop:
+            self.assertEqual(self.result(await self.request("stop"))["status"], "completed")
+        stop.assert_called_once()
+
     def test_restart_maintenance_does_not_block_application_tasks(self) -> None:
         """短时服务重启占用不能让并行应用任务启动或恢复失败。"""
         claim_maintenance(self.workspace, self.thread, "restart")
+        require_no_maintenance(self.workspace)
+
+    def test_repair_maintenance_does_not_block_application_tasks(self) -> None:
+        """诊断修复占用也不能再让普通应用任务启动或恢复失败。"""
+        claim_maintenance(self.workspace, self.thread, "diagnose")
         require_no_maintenance(self.workspace)
 
     async def test_stale_attempt_cannot_diagnose(self) -> None:
@@ -161,11 +180,11 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         stop_preview.assert_called_once()
         self.assertEqual(Path(stop_preview.call_args.args[0]), Path(self.workspace).resolve())
 
-    async def test_get_recovers_orphaned_start_after_server_restart(self) -> None:
-        """服务重启丢失内存任务后，读取状态应清理孤儿启动并开放重新启动。"""
+    async def test_get_recovers_orphaned_restart_after_server_restart(self) -> None:
+        """平台重启丢失内存任务后，读取状态应清理孤儿重启并开放再次操作。"""
 
         begin_attempt(self.workspace)
-        claim_maintenance(self.workspace, "orphaned-start", "start")
+        claim_maintenance(self.workspace, "orphaned-restart", "restart")
 
         with patch(
             "app.protocols.preview_runtime.stop_project_preview",
@@ -214,12 +233,13 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.result(await self.request("get"))["status"], "completed")
         self.assertEqual(self.result(await self.request("restart"))["status"], "failed")
 
-    def test_reverse_guard_and_workspace_isolation(self) -> None:
-        """普通任务启动受维护栅栏约束，不影响其他应用。"""
+    def test_preview_maintenance_only_serializes_preview_operations(self) -> None:
+        """预览维护只约束其他预览操作，不再反向阻止普通任务。"""
         claim_maintenance(self.workspace, self.thread, "diagnose")
-        with self.assertRaises(RuntimeError):
-            require_no_maintenance(self.workspace)
+        require_no_maintenance(self.workspace)
         require_no_maintenance(self.workspace + "-other")
+        with self.assertRaises(RuntimeError):
+            claim_maintenance(self.workspace, "other-preview", "restart")
 
     def test_new_attempt_clears_old_logs(self) -> None:
         """本轮没有前端输出时不能把上轮错误交给模型。"""

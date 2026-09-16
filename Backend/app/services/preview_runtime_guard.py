@@ -28,20 +28,16 @@ def maintenance_owner(workspace: str | Path) -> dict[str, Any] | None:
 
 
 def require_no_maintenance(workspace: str | Path, thread_id: str = "") -> None:
-    """阻止普通任务与会修改代码的预览维护并发，服务重启不阻断任务。"""
-    owner = maintenance_owner(workspace)
-    if (
-        owner
-        and owner["threadId"] != thread_id
-        and str(owner.get("action") or "") != "restart"
-    ):
-        raise RuntimeError("当前应用正在进行预览服务维护，请完成或停止后再启动任务。")
+    """保留调用边界但不再让预览维护阻断普通应用任务。"""
+    del workspace, thread_id
 
 
 def claim_maintenance(workspace: str, thread_id: str, action: str) -> None:
     """调用方持有共享锁时登记独占维护身份。"""
     with maintenance_lock:
-        require_no_maintenance(workspace, thread_id)
+        owner = maintenance_owner(workspace)
+        if owner and owner["threadId"] != thread_id:
+            raise RuntimeError("当前应用已有预览维护任务，请完成或停止后再操作。")
         _owners[workspace_key(workspace)] = {"threadId": thread_id, "action": action}
         path = Path(workspace_key(workspace)) / ".xcodeagent/runtime/preview-maintenance.json"
         path.parent.mkdir(parents=True, exist_ok=True)

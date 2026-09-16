@@ -189,7 +189,7 @@ function AppEntryContent(): JSX.Element {
     [openWorkbench, planningController]
   )
 
-  // 返回欢迎页时结束预览维护占用；再次打开项目会等待本次清理完成。
+  // 返回欢迎页时立即触发预览维护释放和前后端双重停止，不等待后台清理即可导航。
   const handleReturnWelcome = (): void => {
     const workspace = activeApplication ? applicationPreviewWorkspace(activeApplication) : ''
     releasePreviewMaintenanceExecutions(workspace)

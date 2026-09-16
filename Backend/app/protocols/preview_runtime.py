@@ -27,7 +27,7 @@ class PreviewRuntimeInput(BaseModel):
     """在协议边界约束工作区、动作和本次确认身份。"""
     model_config = ConfigDict(extra="forbid")
     workspace: str = Field(min_length=1, max_length=4096)
-    action: Literal["get", "watch", "start", "restart", "stop", "diagnose", "confirm", "revise", "cancel", "leave"]
+    action: Literal["get", "watch", "restart", "stop", "diagnose", "confirm", "revise", "cancel", "leave"]
     attemptId: str = ""
     planId: str = ""
     feedback: str = Field(default="", max_length=4000)
@@ -102,7 +102,7 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
         if not owner:
             return
         action = str(owner.get("action") or "")
-        if action not in {"start", "restart", "stop"}:
+        if action not in {"restart", "stop"}:
             return
         key = (str(Path(workspace).expanduser().resolve()), str(owner.get("threadId") or ""))
         job = _jobs.get(key)
@@ -119,7 +119,7 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
             else ""
         )
         stop_project_preview(workspace)
-        if action in {"start", "restart"}:
+        if action == "restart":
             mark_interrupted_attempt(workspace, layer=layer)
         release_maintenance(workspace, str(owner.get("threadId") or ""))
 
@@ -159,13 +159,13 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
     try:
         if task is not None:
             workflow_run_registry.register(run_id, task, workspace=workspace, maintenance_thread_id=thread_id)
-        if request.action in {"start", "restart", "stop"}:
+        if request.action in {"restart", "stop"}:
             progress("restart", "正在停止旧服务并启动预览…" if request.action == "restart" else "正在更新预览服务…")
             if request.action == "stop":
                 result = await synchronous(stop_project_preview, workspace)
                 await synchronous(finish_attempt, workspace, result)
             else:
-                result = await synchronous(launch_project_preview, workspace, force_restart=request.action == "restart", on_progress=lambda stage, status, message: progress(stage, message))
+                result = await synchronous(launch_project_preview, workspace, force_restart=True, on_progress=lambda stage, status, message: progress(stage, message))
             return {**snapshot(workspace, thread_id), "launchResult": result}
         repair = load_repair(workspace, thread_id)
         if request.action == "confirm":
@@ -283,7 +283,7 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
             # 因此允许它与应用任务并行，避免短时重启占用反向打断 Workflow。
             blocker = (
                 None
-                if request.action == "restart"
+                if request.action in {"restart", "stop"}
                 else blocking_task(request.workspace, thread_id)
             )
             if blocker:

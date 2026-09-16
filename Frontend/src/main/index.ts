@@ -1045,7 +1045,7 @@ function setupBrowserIpc(): void {
   })
 }
 
-/** 记录本次 Electron 会话中被工作台启动过的项目预览工作区。 */
+/** 记录本次 Electron 会话中手动启动或检测为运行中的项目预览工作区。 */
 function setupProjectPreviewIpc(): void {
   ipcMain.handle('project-preview:register-workspace', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
