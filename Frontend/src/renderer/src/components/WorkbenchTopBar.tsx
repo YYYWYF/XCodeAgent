@@ -1,5 +1,5 @@
-import { Fragment, useState } from 'react'
-import { Tag } from 'antd'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { message, Tag } from 'antd'
 import { BlockOutlined, LeftOutlined, FolderOutlined } from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
@@ -30,6 +30,7 @@ type Props = {
  */
 export default function WorkbenchTopBar({
   application,
+  lifecycle,
   workspaceRoot,
   onReturnWelcome,
   rightPanelOpen,
@@ -38,6 +39,18 @@ export default function WorkbenchTopBar({
   const { phase, derivedPhase, reachedPhase, manualOverride, switchPhase, agent, testEntryGate } =
     useWorkbenchPhase()
   const following = manualOverride === null
+  const previousPhaseRef = useRef<WorkbenchPhase | null>(null)
+
+  // 进入开发阶段时提醒用户通过服务状态抽屉手动启动前后端预览服务。
+  useEffect(() => {
+    // lifecycle 未同步完成时阶段默认为 development，等待权威状态避免误提示。
+    if (!lifecycle && manualOverride === null) return
+    if (phase === 'development' && previousPhaseRef.current !== 'development') {
+      message.info('可在预览->服务状态内点击启动服务按钮进行前后端服务启动并预览。')
+    }
+    previousPhaseRef.current = phase
+  }, [lifecycle, manualOverride, phase])
+
   // 回退切阶段（切到旅程上游 = 增量迭代）需二次确认；向前推进 / 同级直接切。
   const [confirmPhase, setConfirmPhase] = useState<WorkbenchPhase | null>(null)
   const handlePhaseClick = (phaseKey: WorkbenchPhase): void => {

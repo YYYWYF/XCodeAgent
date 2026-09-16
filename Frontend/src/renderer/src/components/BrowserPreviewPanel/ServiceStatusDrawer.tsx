@@ -217,7 +217,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               disabled={!actionAvailability.canRestart}
               onClick={props.onRestart}
             >
-              重启服务
+              启动服务
             </Button>
             <Button
               className="preview-service-action-button is-repair"
