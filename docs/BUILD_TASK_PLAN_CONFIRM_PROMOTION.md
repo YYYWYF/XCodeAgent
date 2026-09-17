@@ -52,7 +52,8 @@ workspace_snapshot 和 reuse_facts。传入的基线摘要还必须与实际 For
 7. 删除仍匹配本请求且摘要自洽的 Pending。
 
 正式文件保存 `confirmation_status=confirmed`、一次生成的 `confirmed_at` 和
-`confirmed_from={planning_run_id, draft_digest}`，移除草稿专用的 `draft_identity`。
+`confirmed_from={planning_run_id, draft_digest}`，移除草稿专用的 `draft_identity` 与
+Pending-only 的 `planning_provenance`。
 任务正文、任务图和其他产物内容保持原稿不变；Scope 来自已验证的 DraftIdentity。
 
 业务结果包括 `confirmed`、`already_confirmed`、`stale_draft`、`stale_base`、

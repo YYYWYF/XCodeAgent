@@ -435,6 +435,7 @@ def confirm_pending_build_task_plan(
             return ConfirmPromotionResult(status="invalid_dag", errors=tuple(errors))
         confirmed = deepcopy(pending)
         confirmed.pop("draft_identity")
+        confirmed.pop("planning_provenance", None)
         confirmed.update(
             confirmation_status="confirmed", confirmed_at=datetime.now(UTC).isoformat(),
             confirmed_from=request.model_dump(mode="json"),

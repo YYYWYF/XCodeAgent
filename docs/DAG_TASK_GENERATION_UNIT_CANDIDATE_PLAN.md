@@ -2449,6 +2449,21 @@ DraftIdentity
 
 `draft_digest` 对去除自身字段后的 canonical PendingPlan 计算。
 
+Pending root 另外携带 Pending-only 的 `planning_provenance`：
+
+```json
+{
+  "schema_version": "planning-provenance.v1",
+  "new_task_ids": ["本次相对于 confirmed baseline 新进入累计 registry 的 Task ID"]
+}
+```
+
+`new_task_ids` 由最终 assembled `task_registry` 减去 Assembly 的
+`retained_task_ids` 得出，并按 `task_graph.topological_order` 保持稳定顺序。
+确认投影从该字段和 Task Graph 推导 `reviewTasks`：新增任务标记 `new`，其 retained
+依赖祖先标记 `reused`，无关历史任务只进入摘要。该 provenance 在 Confirm 提升 Formal
+前删除，不能成为 Build execution authority。
+
 Pending 成功写入后：
 
 ```text

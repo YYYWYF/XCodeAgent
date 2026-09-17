@@ -80,6 +80,10 @@ class ExecutionResourceLockTests(unittest.TestCase):
                 input_fingerprint="a" * 64,
                 build_execution_scope={"type": "application", "targetId": "application"},
                 created_at="2026-09-11T00:00:00Z",
+                planning_provenance={
+                    "schema_version": "planning-provenance.v1",
+                    "new_task_ids": [],
+                },
             )
 
             # 模拟 Confirm service 已完成 Formal 原子提交和 Pending 删除，再进入 lifecycle 边界。

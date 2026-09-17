@@ -1,4 +1,4 @@
-// 任务计划确认页：既有能力摘要、任务折叠卡及底部操作区样式。
+// 任务计划确认页：历史任务摘要、统一任务折叠卡及底部操作区样式。
 .@{class-prefix}-workflow-dag-confirmation-existing-summary {
   display: flex;
   min-width: 0;
@@ -19,29 +19,6 @@
 
   > .ant-typography-secondary {
     font-size: 10px;
-  }
-}
-
-.@{class-prefix}-workflow-dag-confirmation-prerequisites {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-wrap: wrap;
-  gap: 5px;
-
-  > span {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 2px 6px;
-    color: var(--wb-text-secondary);
-    background: var(--wb-surface);
-    border: 1px solid var(--wb-border);
-    border-radius: 5px;
-  }
-
-  small {
-    color: var(--wb-text-tertiary);
   }
 }
 
@@ -107,11 +84,34 @@
   flex: 1;
   flex-direction: column;
   gap: 2px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-title-line {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 
   > .ant-typography {
     margin: 0;
   }
+}
 
+.@{class-prefix}-workflow-dag-confirmation-task-role.ant-tag {
+  margin: 0;
+  padding: 0 5px;
+  color: var(--wb-accent);
+  font-size: 10px;
+  line-height: 16px;
+  background: var(--wb-accent-soft);
+  border-color: var(--wb-accent-border);
+  border-radius: 4px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-role-reused.ant-tag {
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface-subtle);
 }
 
 .@{class-prefix}-workflow-dag-confirmation-task-details,

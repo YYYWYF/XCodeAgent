@@ -317,13 +317,14 @@ DAG 编译和校验通过后：
 1. 页面目标读取运行时 `PageImplementationContract.productAcceptance`，其正式来源是 ProductPlan 页面的 `acceptance_criteria`；
 2. 页面只有在存在直接关联 Endpoint 时才返回 `relatedEndpoints`，接口摘要来自 TechnicalPlan `api_contracts[].endpoints[]`；
 3. 直接开发 Endpoint 时只返回该 Endpoint 目标，不伪造页面；
-4. `scopeTasks` 完整返回当前 `required_unit_ids` 范围内的任务；
-5. 当前任务跨范围依赖的既有任务以 `reusedPrerequisites` 最小字段返回；
-6. 其余累计任务只在 `retainedTaskSummary` 中按状态汇总。
+4. Pending-only `planning_provenance.new_task_ids` 记录本次 PlanningRun 相对于 Confirmed baseline 新进入累计 DAG 的 Task ID，来源为最终 assembled registry 减去 `retained_task_ids`，并在 Draft digest 计算前写入；
+5. `reviewTasks` 从 `planning_provenance` 和 `task_graph` 确定性推导，沿新增任务依赖递归标记 retained ancestor 为 `reviewRole=reused`，新增任务标记为 `reviewRole=new`，整体保持拓扑顺序；
+6. 其余累计任务只在 `retainedTaskSummary` 中按状态汇总；BuildContext 仅继续负责 Page/Endpoint 的 `targetReview`。
 
 上述字段属于 AG-UI 确认投影，不删除、裁剪或改写 `.xcodeagent/plans/build-task-plan.json` 的累计任务注册表。
-确认载荷不再下发完整历史 `taskPlan.tasks`；界面只消费 `scopeTasks`、`reusedPrerequisites` 和
-`retainedTaskSummary`。页面没有直接关联 Endpoint 时不返回也不渲染接口内容。
+确认载荷不再下发完整历史 `taskPlan.tasks`；界面只消费统一的 `reviewTasks` 和
+`retainedTaskSummary`。页面没有直接关联 Endpoint 时不返回也不渲染接口内容。缺少 provenance
+的旧 Pending 只有在完整 BuildContext 可恢复时才使用 legacy 分类，否则必须引导 Regenerate。
 
 确认界面通过 AG-UI 传递结构化动作，最小载荷如下：
 

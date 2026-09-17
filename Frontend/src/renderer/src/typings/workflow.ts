@@ -916,18 +916,8 @@ export type WorkflowBuildTaskPlan = {
   status?: 'ready' | 'blocked' | string
   confirmationStatus?: 'pending' | 'confirmed' | string
   summary?: Record<string, unknown>
-  scopeTasks?: WorkflowBuildTaskPlanTask[]
-  reusedPrerequisites?: WorkflowBuildTaskPlanPrerequisite[]
+  reviewTasks?: WorkflowBuildTaskPlanTask[]
   retainedTaskSummary?: WorkflowBuildTaskPlanRetainedSummary
-}
-
-export type WorkflowBuildTaskPlanPrerequisite = {
-  id: string
-  title: string
-  owner?: string
-  unitId?: string
-  status?: string
-  dependencies?: string[]
 }
 
 export type WorkflowBuildTaskPlanRetainedSummary = {
@@ -978,6 +968,7 @@ export type WorkflowBuildTaskPlanTask = {
   id: string
   title: string
   description: string
+  reviewRole?: 'new' | 'reused'
   owner?: string
   unit_id?: string
   dependencies?: string[]

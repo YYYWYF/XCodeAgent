@@ -25,6 +25,7 @@ from app.services.unit_generation_contracts import (
 )
 from app.workspace.spec_documents import workspace_root
 from app.workspace.task_documents import (
+    build_planning_provenance,
     build_task_plan_json_path,
     load_confirmed_build_task_plan,
     load_pending_build_task_plan,
@@ -108,9 +109,14 @@ async def regenerate_pending_build_task_plan(
         publish=publish,
     )
     run = planned.planning_run
+    assembled_plan = plain_json(planned.assembly.assembled_plan)
+    planning_provenance = build_planning_provenance(
+        assembled_plan,
+        planned.assembly.retained_task_ids,
+    )
     write_pending_build_task_plan_atomic(
         state,
-        plain_json(planned.assembly.assembled_plan),
+        assembled_plan,
         owner_session_id=owner_session_id,
         planning_run_id=run.planning_run_id,
         workflow_run_id=run.workflow_run_id,
@@ -118,6 +124,7 @@ async def regenerate_pending_build_task_plan(
         input_fingerprint=run.input_fingerprint,
         build_execution_scope=plain_json(run.build_execution_scope),
         created_at=run.updated_at,
+        planning_provenance=planning_provenance,
     )
     pending = load_pending_build_task_plan(state)
     if pending is None:

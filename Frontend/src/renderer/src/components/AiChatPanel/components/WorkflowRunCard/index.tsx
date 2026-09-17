@@ -266,7 +266,7 @@ export default function WorkflowRunCard({
   const confirmationItemCount = detailReview
     ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
     : dagConfirmation
-      ? dagTaskPlan?.scopeTasks?.length || 0
+      ? dagTaskPlan?.reviewTasks?.length || 0
       : testPhaseConfirmation
         ? 1
         : reviewPhaseConfirmation

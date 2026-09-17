@@ -339,6 +339,10 @@ class ApplicationOwnerAdmissionTests(unittest.TestCase):
                 input_fingerprint="a" * 64,
                 build_execution_scope={"type": "application", "targetId": "application"},
                 created_at="2026-09-14T00:00:00Z",
+                planning_provenance={
+                    "schema_version": "planning-provenance.v1",
+                    "new_task_ids": [],
+                },
             )
 
             with self.assertRaises(ApplicationLifecycleConflictError):

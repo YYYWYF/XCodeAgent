@@ -396,11 +396,16 @@ def _build_task_plan_confirmation_payload(
         project_plan=project_plan,
         build_context=build_context,
     )
+    projection_errors = list(read_model.get("classificationErrors") or [])
+    projection_errors.extend(errors or [])
+    action_values = ["confirm", "abandon", "regenerate"]
+    if read_model.get("classificationBlocked"):
+        action_values = ["regenerate", "abandon"]
     payload: dict[str, Any] = {
         "mode": "build_task_plan_confirmation",
         "status": "requires_user_input",
         "message": "Build DAG 已生成，请确认任务规划后再进入 Build。",
-        "actionValues": ["confirm", "abandon", "regenerate"],
+        "actionValues": action_values,
         "confirmationStatus": build_task_plan.get("confirmation_status") or "pending",
         "buildExecutionScope": build_execution_scope or build_task_plan.get("build_execution_scope") or {},
         "taskPlan": {
@@ -409,8 +414,7 @@ def _build_task_plan_confirmation_payload(
             "status": build_task_plan.get("status"),
             "confirmationStatus": build_task_plan.get("confirmation_status"),
             "summary": build_task_plan.get("summary") or {},
-            "scopeTasks": read_model["scopeTasks"],
-            "reusedPrerequisites": read_model["reusedPrerequisites"],
+            "reviewTasks": read_model["reviewTasks"],
             "retainedTaskSummary": read_model["retainedTaskSummary"],
         },
         "targetReview": read_model["targetReview"],
@@ -431,9 +435,13 @@ def _build_task_plan_confirmation_payload(
                 "planningRunId": planning_run_id,
                 "draftDigest": draft_digest,
             }
-    if errors:
-        payload["errors"] = errors
-        payload["message"] = "Build DAG 需要处理后才能继续。"
+    if projection_errors:
+        payload["errors"] = projection_errors
+        payload["message"] = (
+            "当前 PendingPlan 缺少可恢复的任务来源，请重新生成后再确认。"
+            if read_model.get("classificationBlocked")
+            else "Build DAG 需要处理后才能继续。"
+        )
     return payload
 
 

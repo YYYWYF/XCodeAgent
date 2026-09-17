@@ -21,6 +21,7 @@ from app.services.unit_generation_contracts import (
 )
 from app.workspace.planning_run_documents import load_planning_run
 from app.workspace.task_documents import (
+    build_planning_provenance,
     build_task_plan_json_path,
     load_pending_build_task_plan,
     validate_pending_self_digest,
@@ -112,6 +113,13 @@ class BuildTaskPlanningServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.draft_identity.owner_session_id, "session-mainline")
         self.assertEqual(result.draft_identity.workflow_run_id, inputs.workflow_run_id)
         self.assertEqual(plain_json(result.pending_plan), pending)
+        self.assertEqual(
+            pending["planning_provenance"],
+            build_planning_provenance(
+                result.validated_assembled_plan.assembly.assembled_plan,
+                result.validated_assembled_plan.assembly.retained_task_ids,
+            ),
+        )
         self.assertEqual(persisted_run["planning_run_id"], result.planning_run_id)
         # 写 Pending 之前必须先提交 PendingPersistenceStarted，Run 不能停留在 validating。
         self.assertEqual((persisted_run["status"], persisted_run["phase"]), ("active", "persisting_pending"))

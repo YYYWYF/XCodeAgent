@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 import hashlib
 import hmac
@@ -40,6 +40,7 @@ _SUMMARY_RUNTIME_FIELDS = {
     "failed",
     "results",
 }
+PLANNING_PROVENANCE_SCHEMA_VERSION = "planning-provenance.v1"
 
 # 同一后端进程内按规范化工作区隔离 Pending 写入与 Confirm 的读验写删，避免不同应用互相阻塞。
 _PENDING_LIFECYCLE_LOCKS: dict[str, RLock] = {}
@@ -142,6 +143,87 @@ def build_task_plan_draft_sha256(pending_plan: Mapping[str, Any]) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _stable_task_registry_order(build_task_plan: Mapping[str, Any]) -> list[str]:
+    """按 DAG 拓扑顺序返回完整 registry ID，并用 registry 顺序补齐防御性缺口。"""
+
+    registry = build_task_plan.get("task_registry")
+    if not isinstance(registry, Mapping):
+        return []
+    task_ids = {str(task_id) for task_id in registry}
+    task_graph = build_task_plan.get("task_graph")
+    topology = task_graph.get("topological_order") if isinstance(task_graph, Mapping) else None
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for raw_task_id in [*(topology if isinstance(topology, list) else []), *registry.keys()]:
+        task_id = str(raw_task_id).strip()
+        if task_id in task_ids and task_id not in seen:
+            ordered.append(task_id)
+            seen.add(task_id)
+    return ordered
+
+
+def build_planning_provenance(
+    build_task_plan: Mapping[str, Any],
+    retained_task_ids: Iterable[str],
+) -> dict[str, Any]:
+    """根据累计 registry 与 Assembly retained 集合计算本轮新增 Task 来源。"""
+
+    ordered_task_ids = _stable_task_registry_order(build_task_plan)
+    registry = build_task_plan.get("task_registry")
+    registry_ids = {str(task_id) for task_id in registry} if isinstance(registry, Mapping) else set()
+    if set(ordered_task_ids) != registry_ids:
+        raise ValueError("BuildTaskPlan 的 task_graph.topological_order 与 task_registry 不一致。")
+    retained_ids = {str(task_id) for task_id in retained_task_ids if str(task_id).strip()}
+    new_task_ids = [task_id for task_id in ordered_task_ids if task_id not in retained_ids]
+    return {
+        "schema_version": PLANNING_PROVENANCE_SCHEMA_VERSION,
+        "new_task_ids": new_task_ids,
+    }
+
+
+def validate_pending_planning_provenance(
+    build_task_plan: Mapping[str, Any],
+    planning_provenance: Any,
+) -> dict[str, Any]:
+    """校验 Pending-only provenance，并确保每个新增 ID 都存在于当前 Task registry。"""
+
+    if not isinstance(planning_provenance, Mapping):
+        raise ValueError("PendingPlan 的 planning_provenance 必须是 JSON object。")
+    unexpected = sorted(
+        str(key)
+        for key in planning_provenance
+        if key not in {"schema_version", "new_task_ids"}
+    )
+    if unexpected:
+        raise ValueError(
+            "PendingPlan 的 planning_provenance 不允许额外来源字段："
+            + "、".join(unexpected)
+            + "。"
+        )
+    if planning_provenance.get("schema_version") != PLANNING_PROVENANCE_SCHEMA_VERSION:
+        raise ValueError("PendingPlan 的 planning_provenance schema_version 无效。")
+    new_task_ids = planning_provenance.get("new_task_ids")
+    if not isinstance(new_task_ids, list):
+        raise ValueError("PendingPlan 的 planning_provenance.new_task_ids 必须是数组。")
+    if any(not isinstance(task_id, str) or not task_id.strip() for task_id in new_task_ids):
+        raise ValueError("PendingPlan 的 planning_provenance.new_task_ids 必须是非空字符串。")
+    if len(set(new_task_ids)) != len(new_task_ids):
+        raise ValueError("PendingPlan 的 planning_provenance.new_task_ids 不能重复。")
+    registry = build_task_plan.get("task_registry")
+    registry_ids = {str(task_id) for task_id in registry} if isinstance(registry, Mapping) else set()
+    missing = [task_id for task_id in new_task_ids if task_id not in registry_ids]
+    if missing:
+        raise ValueError(
+            "PendingPlan 的 planning_provenance 包含不存在的 Task ID："
+            + "、".join(missing)
+            + "。"
+        )
+    return {
+        "schema_version": PLANNING_PROVENANCE_SCHEMA_VERSION,
+        "new_task_ids": list(new_task_ids),
+    }
 
 
 def validate_pending_self_digest(pending_plan: Mapping[str, Any]) -> DraftIdentity:
@@ -304,6 +386,7 @@ def write_pending_build_task_plan_atomic(
     input_fingerprint: str,
     build_execution_scope: Mapping[str, Any],
     created_at: str,
+    planning_provenance: Mapping[str, Any],
 ) -> str:
     """由后端元数据构造 DraftIdentity，并原子写入已验证的 PendingPlan。
 
@@ -315,6 +398,12 @@ def write_pending_build_task_plan_atomic(
         raise ValueError("PendingPlan 必须是 JSON object。")
     if "draft_identity" in build_task_plan:
         raise ValueError("assembled BuildTaskPlan 不得预置 draft_identity。")
+    if "planning_provenance" in build_task_plan:
+        raise ValueError("assembled BuildTaskPlan 不得预置 planning_provenance。")
+    validated_provenance = validate_pending_planning_provenance(
+        build_task_plan,
+        planning_provenance,
+    )
     task_graph = build_task_plan.get("task_graph")
     validation = task_graph.get("validation") if isinstance(task_graph, dict) else None
     if (
@@ -344,6 +433,8 @@ def write_pending_build_task_plan_atomic(
     pending_plan["build_execution_scope"] = authoritative_scope
     pending_plan["confirmation_status"] = "pending"
     pending_plan["confirmed_at"] = None
+    # provenance 属于 Pending-only 的本轮来源事实，必须先写入再计算 Draft digest。
+    pending_plan["planning_provenance"] = validated_provenance
     identity = DraftIdentity(
         owner_session_id=owner_session_id,
         planning_run_id=planning_run_id,

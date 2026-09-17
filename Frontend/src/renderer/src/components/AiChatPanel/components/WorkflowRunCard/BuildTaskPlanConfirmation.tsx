@@ -13,7 +13,7 @@ import type {
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import {
-  ReusedCapabilitySummary,
+  RetainedTaskSummary,
   TargetScopeReview,
   TaskDetails,
   TaskHeader
@@ -31,7 +31,7 @@ type BuildTaskPlanConfirmationProps = {
   onSubmit: (action: WorkflowBuildTaskPlanConfirmation) => void
 }
 
-/** 展示当前开发目标和范围内任务的只读确认信息。 */
+/** 展示当前开发目标和本轮待确认任务的只读确认信息。 */
 export default function BuildTaskPlanConfirmation({
   disabled,
   dockedActions,
@@ -40,10 +40,7 @@ export default function BuildTaskPlanConfirmation({
   errors,
   onSubmit
 }: BuildTaskPlanConfirmationProps): JSX.Element {
-  const tasks = Array.isArray(plan?.scopeTasks) ? plan.scopeTasks : []
-  const reusedPrerequisites = Array.isArray(plan?.reusedPrerequisites)
-    ? plan.reusedPrerequisites
-    : []
+  const tasks = Array.isArray(plan?.reviewTasks) ? plan.reviewTasks : []
   const retainedSummary = plan?.retainedTaskSummary
 
   return (
@@ -74,10 +71,7 @@ export default function BuildTaskPlanConfirmation({
 
         {targetReview ? <TargetScopeReview review={targetReview} /> : null}
 
-        <ReusedCapabilitySummary
-          prerequisites={reusedPrerequisites}
-          retainedSummary={retainedSummary}
-        />
+        <RetainedTaskSummary retainedSummary={retainedSummary} />
 
         <section className={cx('workflow-dag-confirmation-task-section')}>
           <div className={cx('workflow-dag-confirmation-section-heading')}>
@@ -102,7 +96,7 @@ export default function BuildTaskPlanConfirmation({
               ))}
             </Collapse>
           ) : (
-            <div className={cx('workflow-dag-confirmation-empty')}>暂无本次范围内的任务</div>
+            <div className={cx('workflow-dag-confirmation-empty')}>暂无本轮需要确认的任务</div>
           )}
         </section>
       </div>

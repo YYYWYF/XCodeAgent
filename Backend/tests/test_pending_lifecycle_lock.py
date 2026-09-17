@@ -86,6 +86,10 @@ def _write_pending(workspace: str) -> dict[str, str]:
         input_fingerprint="a" * 64,
         build_execution_scope={"type": "application", "targetId": "application"},
         created_at="2026-09-15T00:00:00Z",
+        planning_provenance={
+            "schema_version": "planning-provenance.v1",
+            "new_task_ids": [],
+        },
     )
     pending = load_pending_build_task_plan({"workspace": workspace})
     assert pending is not None

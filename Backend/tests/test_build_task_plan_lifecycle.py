@@ -62,6 +62,10 @@ class ConfirmPromotionTests(unittest.TestCase):
             if self.inputs.base_confirmed_plan is not None else None,
             input_fingerprint=_input_digest(self.inputs.model_dump(mode="json")),
             build_execution_scope=self.scope, created_at="2026-09-06T00:00:00Z",
+            planning_provenance={
+                "schema_version": "planning-provenance.v1",
+                "new_task_ids": list(self.draft.get("task_registry", {})),
+            },
         )
         identity = load_pending_build_task_plan(self.state)["draft_identity"]
         self.request = {key: identity[key] for key in ("planning_run_id", "draft_digest")}
@@ -141,8 +145,14 @@ class ConfirmPromotionTests(unittest.TestCase):
         self.assertTrue(formal["confirmed_at"])
         self.assertNotIn("draft_identity", formal)
         for key, value in pending.items():
-            if key not in {"confirmation_status", "confirmed_at", "draft_identity"}:
+            if key not in {
+                "confirmation_status",
+                "confirmed_at",
+                "draft_identity",
+                "planning_provenance",
+            }:
                 self.assertEqual(formal[key], value)
+        self.assertNotIn("planning_provenance", formal)
         self.assertFalse(self.pending_path.exists())
 
     def test_real_v4_pending_confirm_can_take_over_new_workflow_run(self):
@@ -558,6 +568,10 @@ class EndpointDesignStalePromotionTests(unittest.TestCase):
             input_fingerprint=self.inputs.input_fingerprint(),
             build_execution_scope=scope,
             created_at="2026-09-10T00:00:00Z",
+            planning_provenance={
+                "schema_version": "planning-provenance.v1",
+                "new_task_ids": [],
+            },
         )
         identity = load_pending_build_task_plan(self.state)["draft_identity"]
         self.request = {
@@ -651,6 +665,10 @@ class PlanningPromotionIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 workflow_run_id=run.workflow_run_id,
                 base_confirmed_plan_digest=run.base_confirmed_plan_digest, input_fingerprint=run.input_fingerprint,
                 build_execution_scope=plain_json(run.build_execution_scope), created_at=run.updated_at,
+                planning_provenance={
+                    "schema_version": "planning-provenance.v1",
+                    "new_task_ids": list(result.assembly.assembled_plan.get("task_registry", {})),
+                },
             )
             identity = load_pending_build_task_plan(state)["draft_identity"]
             confirmed = confirm_pending_build_task_plan(
