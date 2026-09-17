@@ -106,6 +106,80 @@ type ConversationTarget =
       endpointId: string
     }
 
+type PlanControlRequestGuard = {
+  requestId: string
+  identity: SessionIdentity
+  targetRunId: string
+}
+
+type ActivePlanControlContext = {
+  identity?: SessionIdentity
+  targetRunId?: string
+}
+
+/** 读取当前 Workflow 的控制目标；Plan Control 自身没有 active execution 时保持未指定。 */
+function planControlTargetFromWorkflow(
+  workflow: WorkflowRunPayload | undefined,
+  pageId: string | undefined
+): string | undefined {
+  if (!workflow) return undefined
+  const execution = planExecutionForPage(workflow.summary.lifecycle, pageId, {
+    runId: workflow.runId,
+    threadId: workflow.threadId
+  })
+  if (execution) return execution.runId
+  if (
+    workflow.summary.phase === 'plan_control' ||
+    workflow.summary.phase === 'build_task_plan_abandon'
+  ) {
+    return undefined
+  }
+  return workflow.runId
+}
+
+/** 创建一次带会话、阶段、目标和 requestId 的 Plan Control 哨兵。 */
+function createPlanControlRequestGuard(
+  identity: SessionIdentity,
+  targetRunId: string
+): PlanControlRequestGuard {
+  return {
+    requestId: randomUUID(),
+    identity,
+    targetRunId
+  }
+}
+
+/** 判断两个 Plan Control 哨兵是否仍指向同一个会话身份。 */
+function samePlanControlIdentity(left: SessionIdentity, right: SessionIdentity): boolean {
+  return (
+    left.key === right.key &&
+    left.sessionId === right.sessionId &&
+    left.threadId === right.threadId &&
+    left.workflowId === right.workflowId &&
+    left.workbenchPhase === right.workbenchPhase &&
+    left.workspaceRoot === right.workspaceRoot &&
+    left.editorMode === right.editorMode
+  )
+}
+
+/** 判断迟到的 Plan Control 响应是否仍属于当前 request 和 active session。 */
+function isCurrentPlanControlRequest(
+  request: PlanControlRequestGuard,
+  latestRequest: PlanControlRequestGuard | undefined,
+  context: ActivePlanControlContext | undefined
+): boolean {
+  const currentIdentity = context?.identity
+  if (
+    !latestRequest ||
+    latestRequest.requestId !== request.requestId ||
+    !currentIdentity ||
+    !samePlanControlIdentity(currentIdentity, request.identity)
+  ) {
+    return false
+  }
+  return !context?.targetRunId || context.targetRunId === request.targetRunId
+}
+
 /** 从当前工作台选择提取页面或接口目标，让“这个页面”等指代随普通自然语言请求到达后端。 */
 function conversationTargetFromSelection(
   pageId?: string,
@@ -665,6 +739,8 @@ export function useWorkflowConversation({
   const connectionRequestGenerationRef = useRef(0)
   const applicationLifecycleRef = useRef(applicationLifecycle)
   const connectionStateRef = useRef(connectionState)
+  const planControlRequestRef = useRef<PlanControlRequestGuard>()
+  const activePlanControlContextRef = useRef<ActivePlanControlContext>()
   applicationLifecycleRef.current = applicationLifecycle
   connectionStateRef.current = connectionState
 
@@ -708,6 +784,10 @@ export function useWorkflowConversation({
       ? liveWorkflows[activeRuntimeKey]
       : (liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey)))
     : undefined
+  activePlanControlContextRef.current = {
+    identity: activeSession,
+    targetRunId: planControlTargetFromWorkflow(activeWorkflow, selectedPageId)
+  }
   // 只有非持有者会话只读；是否有局部 activeRun 不再参与所有权判断。
   const sessionExecutionLocked = Boolean(phaseExecution && !activeSessionOwnsExecution)
   const workspaceBusy = sessionExecutionLocked
@@ -933,6 +1013,7 @@ export function useWorkflowConversation({
       buildExecutionScope?: WorkflowBuildExecutionScope
       planControlAction?: 'stop' | 'end' | 'abandon'
       planControlRunId?: string
+      planControlRequest?: PlanControlRequestGuard
       planningRunId?: string
       draftDigest?: string
       resumeExecutionRunId?: string
@@ -980,6 +1061,15 @@ export function useWorkflowConversation({
     }
 
     const identity = options?.sessionIdentity || (await ensureActiveSession())
+    const activePlanControlIdentity = activePlanControlContextRef.current?.identity
+    if (
+      options?.planControlAction &&
+      activePlanControlIdentity &&
+      !samePlanControlIdentity(activePlanControlIdentity, identity)
+    ) {
+      // 请求恢复期间会话已切换时，旧控制请求不得重新取得任何本地执行权。
+      return false
+    }
     const blockingExecution = acquireSessionExecution(identity, Boolean(options?.conversation))
     if (blockingExecution) {
       const sameSession = blockingExecution.identity.key === identity.key
@@ -989,6 +1079,18 @@ export function useWorkflowConversation({
       }))
       return false
     }
+    const planControlRequest = options?.planControlAction
+      ? options.planControlRequest ||
+        createPlanControlRequestGuard(identity, options.planControlRunId || '')
+      : undefined
+    if (planControlRequest) planControlRequestRef.current = planControlRequest
+    const isPlanControlResponseCurrent = (): boolean =>
+      !planControlRequest ||
+      isCurrentPlanControlRequest(
+        planControlRequest,
+        planControlRequestRef.current,
+        activePlanControlContextRef.current
+      )
 
     const explicitBuildExecutionScope =
       options?.buildExecutionScope || options?.workflowDebug?.buildExecutionScope
@@ -1144,6 +1246,7 @@ export function useWorkflowConversation({
 
     /** 在 AG-UI 实时回调中立即转交一次成功启动信号，避免被最终运行态更新批处理丢失。 */
     const updateWorkflow = (nextWorkflow: WorkflowRunPayload): void => {
+      if (!isPlanControlResponseCurrent()) return
       if (
         !executionStartedNotified &&
         nextWorkflow.summary.lifecycle?.activeExecutions?.[nextWorkflow.runId]
@@ -1187,6 +1290,11 @@ export function useWorkflowConversation({
       notifiedPreviewTargetsRef.current.add(previewTarget.key)
       onPreviewReady(previewTarget)
     }
+    /** 过滤迟到的 Plan Control lifecycle，避免旧请求覆盖新会话的全局快照。 */
+    const onPlanControlLifecycle = (lifecycle: ApplicationLifecycle): void => {
+      if (!isPlanControlResponseCurrent()) return
+      onApplicationLifecycleChange(lifecycle)
+    }
 
     try {
       await persistSession({
@@ -1220,7 +1328,7 @@ export function useWorkflowConversation({
         applicationPlanningInteraction: options?.applicationPlanningInteraction,
         productStageConversation: options?.productStageConversation,
         originalRequest: options?.originalRequest,
-        onApplicationLifecycle: onApplicationLifecycleChange,
+        onApplicationLifecycle: onPlanControlLifecycle,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
         selectedPageId: effectiveSelectedPageId,
         selectedApiContractId: effectiveSelectedApiContractId,
@@ -1258,6 +1366,7 @@ export function useWorkflowConversation({
       workflowScope: options?.workflowScope,
       executionRecovery: options?.executionRecovery,
         onContent: (content) => {
+          if (!isPlanControlResponseCurrent()) return
           streamedContent = content
           updateAssistantMessage(content, streamedWorkflow, streamedToolCalls)
         },
@@ -1265,10 +1374,12 @@ export function useWorkflowConversation({
           updateWorkflow(nextWorkflow)
         },
         onToolCalls: (nextToolCalls) => {
+          if (!isPlanControlResponseCurrent()) return
           streamedToolCalls = nextToolCalls
           updateAssistantMessage(streamedContent, streamedWorkflow, nextToolCalls)
         },
         onProcessSteps: (nextProcessSteps) => {
+          if (!isPlanControlResponseCurrent()) return
           streamedProcessSteps = nextProcessSteps
           updateAssistantMessage(
             streamedContent,
@@ -1278,6 +1389,11 @@ export function useWorkflowConversation({
           )
         }
       })
+      if (!isPlanControlResponseCurrent()) {
+        // 迟到结果只负责释放本地 request 占用，不得提交旧会话的成功状态。
+        backendRunSettled = true
+        return false
+      }
       backendRunSettled = true
       setConnectionState((current) =>
         completeConnectionRequest(current, connectionRequestGeneration)
@@ -1341,6 +1457,11 @@ export function useWorkflowConversation({
       publishAiMessage(identity.editorMode, answer)
       return true
     } catch (caughtError) {
+      if (!isPlanControlResponseCurrent()) {
+        // 旧 Plan Control 的错误同样丢弃，不能改变新会话的连接或错误状态。
+        backendRunSettled = true
+        return false
+      }
       if (backendRequestStarted && !backendRunSettled && !isAbortedStreamError(caughtError)) {
         if (caughtError instanceof AgUiRunError || isAuthenticationFailure(caughtError)) {
           setConnectionState((current) =>
@@ -1468,7 +1589,7 @@ export function useWorkflowConversation({
           setRecoveryError('无法安全执行当前恢复操作，请查看最新状态。')
         }
       }
-      if (runError && !options?.executionRecovery) {
+      if (runError && !options?.executionRecovery && !options?.planControlAction) {
         // Backend 已返回业务 RUN_ERROR；只读刷新 durable truth，绝不根据错误文本猜恢复动作。
         await refreshExecutionRecoveryLifecycle()
       }
@@ -2154,14 +2275,26 @@ export function useWorkflowConversation({
     )
 
     // 只有 Backend 返回成功的权威 lifecycle 后，前端才标记结束并解锁计划输入。
+    const planControlRequest = createPlanControlRequestGuard(controlIdentity, targetRunId)
     const ended = await sendWorkflowMessage('结束当前计划。', {
       planControlAction: 'end',
       planControlRunId: targetRunId,
       selectedPageId,
       sessionIdentity: controlIdentity,
+      planControlRequest,
       titleFrom: '结束计划'
     })
-    if (!ended || endedSessionKeys.length === 0) return
+    if (
+      !ended ||
+      !isCurrentPlanControlRequest(
+        planControlRequest,
+        planControlRequestRef.current,
+        activePlanControlContextRef.current
+      ) ||
+      endedSessionKeys.length === 0
+    ) {
+      return
+    }
     setEndedPlanSessionKeys((current) => {
       const next = { ...current }
       endedSessionKeys.forEach((key) => {
@@ -2182,11 +2315,13 @@ export function useWorkflowConversation({
     const controlIdentity = activeRun?.identity || matchingActiveSession || activeSession
     if (!targetRunId || !controlIdentity) return
     // Stop 的 stopping/stopped 投影均由 Backend lifecycle stream 驱动，前端不先猜测状态。
+    const planControlRequest = createPlanControlRequestGuard(controlIdentity, targetRunId)
     await sendWorkflowMessage('暂停当前计划执行。', {
       planControlAction: 'stop',
       planControlRunId: targetRunId,
       selectedPageId,
       sessionIdentity: controlIdentity,
+      planControlRequest,
       titleFrom: '暂停计划'
     })
   }
