@@ -100,7 +100,11 @@ class BuildTaskPlanRegenerateTests(unittest.IsolatedAsyncioTestCase):
             planning_provenance={
                 "schema_version": "planning-provenance.v2",
                 "review_task_ids": list(old.assembly.review_task_ids),
-                "new_task_ids": list(old.assembly.candidate_task_ids),
+                "platform_task_ids": list(old.assembly.platform_task_ids),
+                "new_task_ids": [
+                    *old.assembly.candidate_task_ids,
+                    *old.assembly.platform_task_ids,
+                ],
                 "reused_task_ids": list(old.assembly.reused_task_ids),
             },
         )

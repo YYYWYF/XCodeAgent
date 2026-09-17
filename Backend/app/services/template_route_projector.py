@@ -13,11 +13,24 @@ from app.services.workspace_process_registry import workspace_process_registry
 
 ROUTE_PROJECTOR_PROTOCOL = "route-projector.v1"
 ROUTE_PROJECTOR_CONTRACT = Path(".xcodeagent/template-contracts/route-projector.json")
+ROUTE_PROJECTION_TASK_ID = "platform_route_projection"
+ROUTE_PROJECTION_EXECUTOR = "template.route_projection"
 _COMMAND_TIMEOUT_SECONDS = 30
 
 
 class TemplateRouteProjectorError(ValueError):
     """表示模板 Route Projector 契约、输入或执行结果无效。"""
+
+
+def is_route_projection_task(task: Mapping[str, Any]) -> bool:
+    """识别唯一的平台路由投影 Task，不从描述或运行状态推断来源。"""
+
+    return (
+        isinstance(task, Mapping)
+        and task.get("id") == ROUTE_PROJECTION_TASK_ID
+        and task.get("execution_strategy") == "deterministic"
+        and task.get("platform_executor") == ROUTE_PROJECTION_EXECUTOR
+    )
 
 
 def load_route_projector_contract(workspace: str | Path) -> dict[str, Any]:

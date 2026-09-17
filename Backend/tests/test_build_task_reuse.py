@@ -91,6 +91,35 @@ class BuildTaskReuseTests(unittest.TestCase):
         self.assertEqual(facts.reusable_capabilities_by_unit["frontend:api-client"], {capability: ("users-api",)})
         self.assertEqual(facts.issues, ())
 
+    def test_route_projection_is_not_retained_or_reusable(self) -> None:
+        """正式 Route Projection 不得进入 retained、capability 或 Endpoint owner 事实。"""
+
+        route_task = {
+            **_task("platform_route_projection", unit_id="application:root"),
+            "task_type": "platform.action",
+            "execution_strategy": "deterministic",
+            "platform_executor": "template.route_projection",
+        }
+        self.inputs["confirmed_plan"] = _plan(route_task, _task("users-api"))
+
+        facts = resolve_reuse_facts(**self.inputs)
+
+        self.assertNotIn("platform_route_projection", {
+            task_id
+            for task_ids in facts.retained_task_ids_by_unit.values()
+            for task_id in task_ids
+        })
+        self.assertNotIn(
+            "platform_route_projection",
+            {
+                task_id
+                for capabilities in facts.reusable_capabilities_by_unit.values()
+                for task_ids in capabilities.values()
+                for task_id in task_ids
+            },
+        )
+        self.assertEqual(facts.retained_endpoint_owners, ())
+
     def test_accepts_confirmed_loader_output_without_using_skeleton_tasks(self) -> None:
         """联用 T2.1 正式 loader；骨架携带的较新任务不能被当作 confirmed baseline。"""
 

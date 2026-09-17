@@ -10,6 +10,7 @@ from app.services.authorization_resource_inspection import verified_auth_resourc
 from app.services.build_task_reuse_contracts import ExternalCapability, RetainedEndpointOwner, ReuseFacts
 from app.services.planning_frozen import plain_json
 from app.services.planning_issues import IssueCategory, ValidationIssue
+from app.services.template_route_projector import is_route_projection_task
 
 
 _IMPLEMENTATION_CHECKS = {"frontend.api_contract", "frontend.static_data_contract"}
@@ -69,6 +70,9 @@ def _baseline_tasks(
                 "CONFIRMED_TASK_IDENTITY_INVALID", "正式任务缺失身份或与 registry key 不一致。",
                 tasks=[task_id] if _identity(task_id) else (),
             ))
+            continue
+        # 平台路由 Task 由当前 route facts 确定性重算，不进入 retained/reuse 事实。
+        if is_route_projection_task(task):
             continue
         unit_id = task["unit_id"]
         if unit_id not in units:

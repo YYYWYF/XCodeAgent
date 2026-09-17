@@ -110,6 +110,7 @@ def _persist_validated_pending_plan(
             planned.assembly.retained_task_ids,
             planned.assembly.review_task_ids,
             planned.assembly.reused_task_ids,
+            planned.assembly.platform_task_ids,
         )
         pending_path = write_pending_build_task_plan_atomic(
             state,

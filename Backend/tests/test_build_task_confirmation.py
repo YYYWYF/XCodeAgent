@@ -66,6 +66,7 @@ def _cumulative_plan() -> dict:
                 "orders-backend",
                 "orders-page",
             ],
+            "platform_task_ids": [],
             "new_task_ids": ["orders-backend", "orders-page"],
             "reused_task_ids": ["shared-base", "shared-client"],
         },
@@ -76,7 +77,7 @@ class BuildTaskConfirmationTests(unittest.TestCase):
     """验证确认任务只从 Pending provenance 与 Task Graph 派生。"""
 
     def test_provenance_contains_assembly_review_scope_in_topological_order(self) -> None:
-        """Pending provenance 保留 Assembly 的 review、new、reused 三组来源。"""
+        """Pending provenance 保留 Assembly 的 review、platform、new、reused 四组来源。"""
 
         plan = _cumulative_plan()
         self.assertEqual(
@@ -94,6 +95,7 @@ class BuildTaskConfirmationTests(unittest.TestCase):
                     "orders-backend",
                     "orders-page",
                 ],
+                "platform_task_ids": [],
                 "new_task_ids": ["orders-backend", "orders-page"],
                 "reused_task_ids": ["shared-base", "shared-client"],
             },
@@ -146,6 +148,40 @@ class BuildTaskConfirmationTests(unittest.TestCase):
                 ("orders-page", "reused"),
             ],
         )
+        self.assertEqual(read_model["retainedTaskSummary"]["total"], 1)
+        self.assertNotIn("classificationBlocked", read_model)
+
+    def test_platform_task_is_covered_but_hidden_from_confirmation(self) -> None:
+        """平台内部 Task 必须被 provenance 覆盖，但不能进入 review 或 retained 摘要。"""
+
+        plan = _cumulative_plan()
+        route_task = {
+            "id": "platform_route_projection",
+            "title": "Route Projection",
+            "unit_id": "application:root",
+            "dependencies": [],
+            "execution_strategy": "deterministic",
+            "platform_executor": "template.route_projection",
+            "status": "pending",
+        }
+        plan["task_registry"][route_task["id"]] = route_task
+        plan["task_graph"]["nodes"].append(route_task["id"])
+        plan["task_graph"]["topological_order"].append(route_task["id"])
+        plan["planning_provenance"] = build_planning_provenance(
+            plan,
+            ("history-task", "shared-base", "shared-client"),
+            ("shared-base", "shared-client", "orders-backend", "orders-page"),
+            ("shared-base", "shared-client"),
+            (route_task["id"],),
+        )
+
+        read_model = build_task_confirmation_read_model(
+            plan,
+            {"type": "page", "targetId": "orders"},
+            build_context={},
+        )
+
+        self.assertNotIn(route_task["id"], {task["id"] for task in read_model["reviewTasks"]})
         self.assertEqual(read_model["retainedTaskSummary"]["total"], 1)
         self.assertNotIn("classificationBlocked", read_model)
 

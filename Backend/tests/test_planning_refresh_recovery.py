@@ -226,6 +226,7 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
             planning_provenance={
                 "schema_version": "planning-provenance.v2",
                 "review_task_ids": list(_validated_plan().get("task_registry", {})),
+                "platform_task_ids": [],
                 "new_task_ids": list(_validated_plan().get("task_registry", {})),
                 "reused_task_ids": [],
             },

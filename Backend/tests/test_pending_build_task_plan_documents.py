@@ -88,6 +88,7 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
                 {
                     "schema_version": "planning-provenance.v2",
                     "review_task_ids": list(registry) if isinstance(registry, dict) else [],
+                    "platform_task_ids": [],
                     "new_task_ids": list(registry) if isinstance(registry, dict) else [],
                     "reused_task_ids": [],
                 },
@@ -129,6 +130,7 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
             {
                 "schema_version": "planning-provenance.v2",
                 "review_task_ids": ["page:orders::render"],
+                "platform_task_ids": [],
                 "new_task_ids": ["page:orders::render"],
                 "reused_task_ids": [],
             },
@@ -138,6 +140,38 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         self.assertIsInstance(validate_pending_self_digest(loaded), DraftIdentity)
         self.assertFalse(self.formal_path.exists())
         self.assertFalse(legacy_pending_path.exists())
+
+    def test_platform_task_can_be_pending_without_review_entry(self) -> None:
+        """平台内部 Task 可进入 Pending registry，但 review 集合可以不包含它。"""
+
+        plan = _validated_plan()
+        route_task = {
+            "id": "platform_route_projection",
+            "unit_id": "application:root",
+            "execution_strategy": "deterministic",
+            "platform_executor": "template.route_projection",
+        }
+        plan["task_registry"][route_task["id"]] = route_task
+        plan["task_graph"]["nodes"].append(route_task["id"])
+        plan["task_graph"]["topological_order"].append(route_task["id"])
+
+        self._write_pending(
+            plan,
+            planning_provenance={
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": ["page:orders::render"],
+                "platform_task_ids": ["platform_route_projection"],
+                "new_task_ids": ["page:orders::render", "platform_route_projection"],
+                "reused_task_ids": [],
+            },
+        )
+
+        loaded = load_pending_build_task_plan(self.state)
+        assert loaded is not None
+        self.assertEqual(
+            loaded["planning_provenance"]["platform_task_ids"],
+            ["platform_route_projection"],
+        )
 
     def test_write_pending_preserves_formal_bytes(self) -> None:
         """写 Pending 前后 Formal 的原始字节必须完全不变。"""
@@ -347,19 +381,29 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
             {
                 "schema_version": "planning-provenance.v2",
                 "review_task_ids": ["page:orders::render", "page:orders::render"],
+                "platform_task_ids": [],
                 "new_task_ids": ["page:orders::render"],
                 "reused_task_ids": [],
             },
             {
                 "schema_version": "planning-provenance.v2",
                 "review_task_ids": ["missing-task"],
+                "platform_task_ids": [],
                 "new_task_ids": ["missing-task"],
                 "reused_task_ids": [],
             },
             {
                 "schema_version": "planning-provenance.v2",
                 "review_task_ids": ("page:orders::render",),
+                "platform_task_ids": [],
                 "new_task_ids": ["page:orders::render"],
+                "reused_task_ids": [],
+            },
+            {
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": [],
+                "platform_task_ids": ["page:orders::render"],
+                "new_task_ids": [],
                 "reused_task_ids": [],
             },
             {

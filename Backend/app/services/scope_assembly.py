@@ -30,8 +30,11 @@ from app.services.planning_frozen import (
 )
 from app.services.planning_issues import ValidationIssue
 from app.services.template_route_projector import (
+    ROUTE_PROJECTION_TASK_ID,
+    ROUTE_PROJECTION_EXECUTOR,
     TemplateRouteProjectorError,
     build_route_projector_input,
+    is_route_projection_task,
     requires_route_projection,
 )
 from app.services.template_state import validate_template_context
@@ -43,7 +46,7 @@ from app.services.unit_generation_contracts import (
 _Id = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
 _Ids = Annotated[tuple[_Id, ...], BeforeValidator(tuple_input)]
 _TaskOrigins = Annotated[
-    Mapping[_Id, Literal["retained", "candidate"]],
+    Mapping[_Id, Literal["retained", "candidate", "platform"]],
     BeforeValidator(plain_json),
     AfterValidator(freeze_json),
     PlainSerializer(plain_json, return_type=dict[str, str]),
@@ -62,6 +65,7 @@ class ScopeAssemblyResult(FrozenPlanningModel):
     assembled_plan: FrozenJsonObject
     retained_task_ids: _Ids
     candidate_task_ids: _Ids
+    platform_task_ids: _Ids
     review_task_ids: _Ids
     reused_task_ids: _Ids
     task_origins: _TaskOrigins
@@ -324,6 +328,14 @@ def _candidate_tasks(
                     unit_id=unit_id,
                     candidate_id=candidate.candidate_id,
                 )
+            if task_id == ROUTE_PROJECTION_TASK_ID:
+                _raise_input(
+                    "SCOPE_RESERVED_PLATFORM_TASK_ID",
+                    f"Candidate 不得占用平台保留 Task ID：{ROUTE_PROJECTION_TASK_ID}。",
+                    unit_id=unit_id,
+                    candidate_id=candidate.candidate_id,
+                    task_id=task_id,
+                )
             tasks.append(task)
             unit_by_task_id.setdefault(task_id, unit_id)
     return tasks, unit_by_task_id
@@ -419,12 +431,27 @@ def _stable_plan_task_ids(build_task_plan: Mapping[str, Any]) -> tuple[str, ...]
     return tuple(ordered)
 
 
+def _platform_task_ids(build_task_plan: Mapping[str, Any]) -> tuple[str, ...]:
+    """按最终 DAG 顺序返回当前 Assembly 产生的平台内部 Task。"""
+
+    registry = build_task_plan.get("task_registry")
+    if not isinstance(registry, Mapping):
+        return ()
+    return tuple(
+        task_id
+        for task_id in _stable_plan_task_ids(build_task_plan)
+        if isinstance(registry.get(task_id), Mapping)
+        and is_route_projection_task(registry[task_id])
+    )
+
+
 def _scope_review_task_ids(
     assembled_plan: Mapping[str, Any],
     *,
     current_unit_ids: set[str],
     retained_task_ids: Sequence[str],
     candidate_task_ids: Sequence[str],
+    platform_task_ids: Sequence[str],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """在 Assembly 中确定当前 Scope 任务及其依赖闭包，不让 Confirmation 重新猜测来源。"""
 
@@ -436,23 +463,27 @@ def _scope_review_task_ids(
         for task in registry.values()
         if isinstance(task, Mapping) and _identity(task.get("id")) is not None
     }
+    platform_ids = {str(task_id) for task_id in platform_task_ids}
     # required Unit 是当前 Scope 的直接范围；Candidate 即使没有被 Unit 元数据回写也必须纳入 review。
     seed_ids = {
         task_id
         for task_id, task in tasks_by_id.items()
-        if str(task.get("unit_id") or "") in current_unit_ids
+        if task_id not in platform_ids
+        and str(task.get("unit_id") or "") in current_unit_ids
     }
-    seed_ids.update(str(task_id) for task_id in candidate_task_ids)
+    seed_ids.update(
+        str(task_id) for task_id in candidate_task_ids if str(task_id) not in platform_ids
+    )
     ancestors: set[str] = set()
     pending = [
         str(dependency)
         for task_id in seed_ids
         for dependency in tasks_by_id.get(task_id, {}).get("dependencies") or []
-        if str(dependency)
+        if str(dependency) and str(dependency) not in platform_ids
     ]
     while pending:
         task_id = pending.pop()
-        if task_id in ancestors:
+        if task_id in ancestors or task_id in platform_ids:
             continue
         task = tasks_by_id.get(task_id)
         if task is None:
@@ -461,9 +492,13 @@ def _scope_review_task_ids(
         pending.extend(
             str(dependency)
             for dependency in task.get("dependencies") or []
-            if str(dependency) and str(dependency) not in ancestors
+            if (
+                str(dependency)
+                and str(dependency) not in ancestors
+                and str(dependency) not in platform_ids
+            )
         )
-    review_ids = seed_ids | ancestors
+    review_ids = (seed_ids | ancestors) - platform_ids
     retained_ids = set(str(task_id) for task_id in retained_task_ids)
     reused_ids = review_ids & retained_ids
     ordered_ids = _stable_plan_task_ids(assembled_plan)
@@ -534,6 +569,8 @@ def assemble_scope_build_task_plan(
             error=str(exc),
         )
     _, retained = _retained_tasks(base_confirmed_plan)
+    # Route Projection 是平台内部 Task；每轮只按当前 route facts 重算，不能进入历史基线。
+    retained = [task for task in retained if not is_route_projection_task(task)]
     facts = _validate_reuse_facts(reuse_facts, retained)
     required_units = _required_candidate_units(generation_requirements_by_unit)
     candidates, candidate_unit_by_task_id = _candidate_tasks(
@@ -547,17 +584,14 @@ def assemble_scope_build_task_plan(
 
     # 路由投影是每轮根据当前页面事实重建的平台任务；旧正式 DAG 中的同名任务
     # 不能与新任务并存，也不能作为新任务的依赖或跳过本轮验收编译。
-    retained_for_assembly = [
-        task for task in retained
-        if not (route_projection_required and task["id"] == "platform_route_projection")
-    ]
+    retained_for_assembly = retained
     all_tasks = [*retained_for_assembly, *candidates]
     if route_projection_required:
         normal_task_ids = [str(task["id"]) for task in all_tasks]
         all_tasks.append({
-            "id": "platform_route_projection", "unit_id": "application:root",
+            "id": ROUTE_PROJECTION_TASK_ID, "unit_id": "application:root",
             "owner": "frontend", "task_type": "platform.action",
-            "execution_strategy": "deterministic", "platform_executor": "template.route_projection",
+            "execution_strategy": "deterministic", "platform_executor": ROUTE_PROJECTION_EXECUTOR,
             "description": "根据确认的页面事实调用模板 Route Projector 统一注册业务路由。",
             "dependencies": normal_task_ids, "target_files": [], "allowed_paths": [],
             "status": "pending",
@@ -631,20 +665,24 @@ def assemble_scope_build_task_plan(
             if str(unit_id).strip()
         }
         current_unit_ids = normalized_context_units
+    platform_task_ids = _platform_task_ids(assembled)
     review_task_ids, reused_task_ids = _scope_review_task_ids(
         assembled,
         current_unit_ids=current_unit_ids,
         retained_task_ids=retained_task_ids,
         candidate_task_ids=candidate_task_ids,
+        platform_task_ids=platform_task_ids,
     )
     task_origins = {
         **{task_id: "retained" for task_id in retained_task_ids},
         **{task_id: "candidate" for task_id in candidate_task_ids},
+        **{task_id: "platform" for task_id in platform_task_ids},
     }
     return ScopeAssemblyResult(
         assembled_plan=assembled,
         retained_task_ids=retained_task_ids,
         candidate_task_ids=candidate_task_ids,
+        platform_task_ids=platform_task_ids,
         review_task_ids=review_task_ids,
         reused_task_ids=reused_task_ids,
         task_origins=task_origins,

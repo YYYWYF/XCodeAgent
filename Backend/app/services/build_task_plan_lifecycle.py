@@ -16,6 +16,7 @@ from app.services.planning_frozen import (
     plain_json,
 )
 from app.services.planning_run_contracts import PlanningRun
+from app.services.template_route_projector import is_route_projection_task
 from app.services.template_state import validate_template_context
 from app.workspace.spec_documents import workspace_root
 
@@ -271,7 +272,12 @@ def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
     if "route_projection" in plan:
         return ["Pending DAG 不得持久化已删除的 route_projection 页面正文。"]
     baseline = plain_json(inputs.base_confirmed_plan) or {}
-    retained_ids = set(baseline.get("task_registry", {}))
+    baseline_registry = baseline.get("task_registry", {})
+    retained_ids = {
+        str(task_id)
+        for task_id, task in baseline_registry.items()
+        if not is_route_projection_task(task)
+    }
     if not retained_ids <= set(registry):
         return ["Pending DAG 缺少正式基线中的 retained Task。"]
     context = {

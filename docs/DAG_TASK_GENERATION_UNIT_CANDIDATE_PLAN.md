@@ -2455,16 +2455,18 @@ Pending root 另外携带 Pending-only 的 `planning_provenance`：
 {
   "schema_version": "planning-provenance.v2",
   "review_task_ids": ["当前 Scope 需要展示给用户确认的 Task ID"],
+  "platform_task_ids": ["当前 Scope 内由平台确定性生成且不需用户确认的 Task ID"],
   "new_task_ids": ["本次相对于 confirmed baseline 新进入累计 registry 的 Task ID"],
   "reused_task_ids": ["当前 Scope 复用的 retained Task ID"]
 }
 ```
 
-上述三组 ID 由 Scope Assembly 在组装阶段确定，并按 `task_graph.topological_order` 保持稳定顺序；
+上述四组 ID 由 Scope Assembly 在组装阶段确定，并按 `task_graph.topological_order` 保持稳定顺序；
 其中 `new_task_ids` 由最终 assembled `task_registry` 减去 Assembly 的 `retained_task_ids` 得出，
-`review_task_ids` 必须准确覆盖新增与复用两组。确认投影直接按 `review_task_ids` 从 Pending
-`task_registry` 读取任务，新增任务标记 `new`，复用任务标记 `reused`，不在 Confirmation 阶段
-重新推导依赖闭包。该 provenance 在 Confirm 提升 Formal
+`review_task_ids` 与 `platform_task_ids` 的并集必须准确覆盖 `new_task_ids` 与 `reused_task_ids` 的并集，
+且 `platform_task_ids` 只能来自 `new_task_ids`。确认投影直接按 `review_task_ids` 从 Pending
+`task_registry` 读取任务，新增任务标记 `new`，复用任务标记 `reused`，平台内部任务不展示，
+不在 Confirmation 阶段重新推导依赖闭包。该 provenance 在 Confirm 提升 Formal
 前删除，不能成为 Build execution authority。
 
 Pending 成功写入后：

@@ -201,8 +201,9 @@ def build_planning_provenance(
     retained_task_ids: Iterable[str],
     review_task_ids: Iterable[str],
     reused_task_ids: Iterable[str],
+    platform_task_ids: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """把 Assembly 已确定的 Scope review 来源编译为 Pending provenance v2。"""
+    """把 Assembly 已确定的用户与平台范围编译为 Pending provenance v2。"""
 
     ordered_task_ids = _stable_task_registry_order(build_task_plan)
     registry = build_task_plan.get("task_registry")
@@ -220,8 +221,9 @@ def build_planning_provenance(
     new_task_ids = [task_id for task_id in ordered_task_ids if task_id not in retained_ids]
     review_ids = _provenance_id_list(review_task_ids, "review_task_ids")
     reused_ids = _provenance_id_list(reused_task_ids, "reused_task_ids")
-    if not set(review_ids) <= registry_ids or not set(reused_ids) <= registry_ids:
-        missing = sorted((set(review_ids) | set(reused_ids)) - registry_ids)
+    platform_ids = _provenance_id_list(platform_task_ids, "platform_task_ids")
+    if not set(review_ids) <= registry_ids or not set(reused_ids) <= registry_ids or not set(platform_ids) <= registry_ids:
+        missing = sorted((set(review_ids) | set(reused_ids) | set(platform_ids)) - registry_ids)
         raise ValueError(
             "PendingPlan 的 planning_provenance 包含不存在的 Task ID："
             + "、".join(missing)
@@ -231,13 +233,19 @@ def build_planning_provenance(
         raise ValueError("PendingPlan 的 planning_provenance.reused_task_ids 必须来自 retained Task。")
     if set(new_task_ids) & set(reused_ids):
         raise ValueError("PendingPlan 的 planning_provenance.new_task_ids 与 reused_task_ids 不能重叠。")
-    if set(review_ids) != set(new_task_ids) | set(reused_ids):
+    if set(reused_ids) & set(platform_ids):
+        raise ValueError("PendingPlan 的 planning_provenance.reused_task_ids 与 platform_task_ids 不能重叠。")
+    if set(review_ids) & set(platform_ids):
+        raise ValueError("PendingPlan 的 planning_provenance.review_task_ids 与 platform_task_ids 不能重叠。")
+    pending_task_ids = set(new_task_ids) | set(reused_ids)
+    if set(review_ids) | set(platform_ids) != pending_task_ids:
         raise ValueError(
-            "PendingPlan 的 planning_provenance.review_task_ids 必须准确覆盖 new_task_ids 与 reused_task_ids。"
+            "PendingPlan 的 review_task_ids 与 platform_task_ids 必须准确覆盖全部 pending Task。"
         )
     return {
         "schema_version": PLANNING_PROVENANCE_SCHEMA_VERSION,
         "review_task_ids": _ordered_subset(ordered_task_ids, review_ids),
+        "platform_task_ids": _ordered_subset(ordered_task_ids, platform_ids),
         "new_task_ids": new_task_ids,
         "reused_task_ids": _ordered_subset(ordered_task_ids, reused_ids),
     }
@@ -247,7 +255,7 @@ def validate_pending_planning_provenance(
     build_task_plan: Mapping[str, Any],
     planning_provenance: Any,
 ) -> dict[str, Any]:
-    """校验 Pending-only provenance v2，并确保三组来源能覆盖当前 registry 子集。"""
+    """校验 Pending-only provenance v2，并确保用户与平台两类范围覆盖全部 pending Task。"""
 
     if not isinstance(planning_provenance, Mapping):
         raise ValueError("PendingPlan 的 planning_provenance 必须是 JSON object。")
@@ -257,6 +265,7 @@ def validate_pending_planning_provenance(
         if key not in {
             "schema_version",
             "review_task_ids",
+            "platform_task_ids",
             "new_task_ids",
             "reused_task_ids",
         }
@@ -284,9 +293,14 @@ def validate_pending_planning_provenance(
         "reused_task_ids",
         require_json_array=True,
     )
+    platform_task_ids = _provenance_id_list(
+        planning_provenance.get("platform_task_ids"),
+        "platform_task_ids",
+        require_json_array=True,
+    )
     registry = build_task_plan.get("task_registry")
     registry_ids = {str(task_id) for task_id in registry} if isinstance(registry, Mapping) else set()
-    source_ids = set(review_task_ids) | set(new_task_ids) | set(reused_task_ids)
+    source_ids = set(review_task_ids) | set(platform_task_ids) | set(new_task_ids) | set(reused_task_ids)
     missing = sorted(source_ids - registry_ids)
     if missing:
         raise ValueError(
@@ -296,14 +310,22 @@ def validate_pending_planning_provenance(
         )
     if set(new_task_ids) & set(reused_task_ids):
         raise ValueError("PendingPlan 的 planning_provenance.new_task_ids 与 reused_task_ids 不能重叠。")
-    if set(review_task_ids) != set(new_task_ids) | set(reused_task_ids):
+    if set(platform_task_ids) & set(reused_task_ids):
+        raise ValueError("PendingPlan 的 planning_provenance.platform_task_ids 必须来自 new_task_ids。")
+    if not set(platform_task_ids) <= set(new_task_ids):
+        raise ValueError("PendingPlan 的 planning_provenance.platform_task_ids 必须来自 new_task_ids。")
+    if set(review_task_ids) & set(platform_task_ids):
+        raise ValueError("PendingPlan 的 review_task_ids 与 platform_task_ids 不能重叠。")
+    pending_task_ids = set(new_task_ids) | set(reused_task_ids)
+    if set(review_task_ids) | set(platform_task_ids) != pending_task_ids:
         raise ValueError(
-            "PendingPlan 的 planning_provenance.review_task_ids 必须准确覆盖 new_task_ids 与 reused_task_ids。"
+            "PendingPlan 的 review_task_ids 与 platform_task_ids 必须准确覆盖全部 pending Task。"
         )
     ordered_task_ids = _stable_task_registry_order(build_task_plan)
     return {
         "schema_version": PLANNING_PROVENANCE_SCHEMA_VERSION,
         "review_task_ids": _ordered_subset(ordered_task_ids, review_task_ids),
+        "platform_task_ids": _ordered_subset(ordered_task_ids, platform_task_ids),
         "new_task_ids": _ordered_subset(ordered_task_ids, new_task_ids),
         "reused_task_ids": _ordered_subset(ordered_task_ids, reused_task_ids),
     }

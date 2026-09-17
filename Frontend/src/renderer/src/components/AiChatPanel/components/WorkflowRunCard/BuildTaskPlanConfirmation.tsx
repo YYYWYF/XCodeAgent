@@ -42,6 +42,8 @@ export default function BuildTaskPlanConfirmation({
 }: BuildTaskPlanConfirmationProps): JSX.Element {
   const tasks = Array.isArray(plan?.reviewTasks) ? plan.reviewTasks : []
   const retainedSummary = plan?.retainedTaskSummary
+  const confirmDisabled =
+    disabled || (tasks.length === 0 && plan?.status !== 'ready')
 
   return (
     <div className={cx('workflow-dag-confirmation', dockedActions && 'docked-actions')}>
@@ -133,7 +135,7 @@ export default function BuildTaskPlanConfirmation({
             </Button>
           </Popconfirm>
           <Button
-            disabled={disabled || tasks.length === 0}
+            disabled={confirmDisabled}
             icon={<PlayCircleOutlined />}
             onClick={() => onSubmit({ mode: 'build_task_plan_confirmation', action: 'confirm' })}
             size="small"

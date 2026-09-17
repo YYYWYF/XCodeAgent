@@ -65,6 +65,7 @@ class ConfirmPromotionTests(unittest.TestCase):
             planning_provenance={
                 "schema_version": "planning-provenance.v2",
                 "review_task_ids": list(self.draft.get("task_registry", {})),
+                "platform_task_ids": [],
                 "new_task_ids": list(self.draft.get("task_registry", {})),
                 "reused_task_ids": [],
             },
@@ -240,21 +241,11 @@ class ConfirmPromotionTests(unittest.TestCase):
         self.assertFalse(self.pending_path.exists())
         self.assertEqual(load_application_lifecycle(self.state["workspace"]).active_run_id, "workflow-r3")
 
-    def test_confirm_rejects_missing_route_projection(self):
-        """Confirm 必须拒绝删除了 application-level Route Projection 的 Pending DAG。"""
+    def test_confirm_rejects_persisted_route_projection_payload(self):
+        """Confirm 必须拒绝把已删除的 route_projection 页面正文持久化进 Pending。"""
 
         pending = load_pending_build_task_plan(self.state)
-        pending.pop("route_projection")
-        self._rewrite(pending, resign=True)
-
-        result = self._assert_rejected("invalid_dag")
-        self.assertIn("route_projection", "；".join(result.errors))
-
-    def test_confirm_rejects_stale_route_projection(self):
-        """Confirm 必须拒绝与当前 TechnicalPlan 页面事实漂移的 Projection。"""
-
-        pending = load_pending_build_task_plan(self.state)
-        pending["route_projection"]["pages"][0]["path"] = "/old-orders"
+        pending["route_projection"] = {"pages": []}
         self._rewrite(pending, resign=True)
 
         result = self._assert_rejected("invalid_dag")
@@ -593,6 +584,7 @@ class EndpointDesignStalePromotionTests(unittest.TestCase):
             planning_provenance={
                 "schema_version": "planning-provenance.v2",
                 "review_task_ids": [],
+                "platform_task_ids": [],
                 "new_task_ids": [],
                 "reused_task_ids": [],
             },
@@ -692,7 +684,11 @@ class PlanningPromotionIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 planning_provenance={
                     "schema_version": "planning-provenance.v2",
                     "review_task_ids": list(result.assembly.review_task_ids),
-                    "new_task_ids": list(result.assembly.candidate_task_ids),
+                    "platform_task_ids": list(result.assembly.platform_task_ids),
+                    "new_task_ids": [
+                        *result.assembly.candidate_task_ids,
+                        *result.assembly.platform_task_ids,
+                    ],
                     "reused_task_ids": list(result.assembly.reused_task_ids),
                 },
             )

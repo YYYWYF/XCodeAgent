@@ -120,6 +120,7 @@ class BuildTaskPlanningServiceTests(unittest.IsolatedAsyncioTestCase):
                 result.validated_assembled_plan.assembly.retained_task_ids,
                 result.validated_assembled_plan.assembly.review_task_ids,
                 result.validated_assembled_plan.assembly.reused_task_ids,
+                result.validated_assembled_plan.assembly.platform_task_ids,
             ),
         )
         self.assertEqual(persisted_run["planning_run_id"], result.planning_run_id)
@@ -167,7 +168,7 @@ class BuildTaskPlanningServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             {task["unit_id"] for task in assembled["task_registry"].values()},
-            {"page:a", "page:b"},
+            {"application:root", "page:a", "page:b"},
         )
         self.assertEqual(
             set(result.pending_plan["task_registry"]),

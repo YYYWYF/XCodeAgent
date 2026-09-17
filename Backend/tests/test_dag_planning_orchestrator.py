@@ -213,7 +213,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         """B/C 同时归因后并发修复，A Candidate 不变且整批完成后才再过 Global。"""
 
         plan = plain_json(planning_inputs().project_plan)
-        plan["pages"].append({"pageId": "history2", "path": "/history2"})
+        plan["pages"].append({"pageId": "history2", "name": "HISTORY2", "path": "/history2"})
         plan["page_implementation_contracts"].append({
             "schema_version": "page-implementation-contract.v1",
             "pageId": "history2",
@@ -226,7 +226,11 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         ))
         baseline = plain_json(historical.assembly.assembled_plan)
         baseline.update(confirmation_status="confirmed", confirmed_at=AT)
-        retained_ids = tuple(baseline["task_registry"])
+        retained_ids = tuple(
+            task_id
+            for task_id in baseline["task_registry"]
+            if task_id != "platform_route_projection"
+        )
         self.assertEqual(len(retained_ids), 2)
         self.calls.clear()
         self.phases.clear()
@@ -455,7 +459,11 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         result = await self._plan(planning_inputs(required=[]))
         self.assertEqual(self.calls, [])
-        self.assertEqual(result.assembly.assembled_plan["task_registry"], {})
+        self.assertEqual(
+            set(result.assembly.assembled_plan["task_registry"]),
+            {"platform_route_projection"},
+        )
+        self.assertEqual(result.assembly.platform_task_ids, ("platform_route_projection",))
         self.assertEqual(result.planning_run.planning_unit_ids, ())
 
     async def test_compiler_error_without_attribution_is_fatal(self):

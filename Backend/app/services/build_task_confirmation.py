@@ -116,12 +116,13 @@ def _partition_confirmation_tasks(
         )
     review_task_ids = validated["review_task_ids"]
     new_task_ids = set(validated["new_task_ids"])
+    platform_task_ids = set(validated["platform_task_ids"])
     tasks_by_id = {
         str(task.get("id") or ""): task
         for task in tasks
         if str(task.get("id") or "")
     }
-    missing = sorted(set(review_task_ids) - set(tasks_by_id))
+    missing = sorted((set(review_task_ids) | platform_task_ids) - set(tasks_by_id))
     if missing:
         return (
             [],
@@ -141,6 +142,7 @@ def _partition_confirmation_tasks(
         task
         for task in tasks
         if str(task.get("id") or "") not in review_ids
+        and str(task.get("id") or "") not in platform_task_ids
     ]
     return review_tasks, retained_tasks, (), False
 

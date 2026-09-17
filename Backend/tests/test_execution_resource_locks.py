@@ -83,6 +83,7 @@ class ExecutionResourceLockTests(unittest.TestCase):
                 planning_provenance={
                     "schema_version": "planning-provenance.v2",
                     "review_task_ids": [],
+                    "platform_task_ids": [],
                     "new_task_ids": [],
                     "reused_task_ids": [],
                 },

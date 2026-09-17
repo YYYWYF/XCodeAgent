@@ -20,6 +20,7 @@ from app.services.planning_frozen import FrozenPlanningModel, plain_json
 from app.services.planning_issues import ValidationIssue
 from app.services.planning_run_contracts import PlanningRun, UnitRunState
 from app.services.planning_run_controller import PlanningRunController, SnapshotPublisher
+from app.services.template_route_projector import is_route_projection_task
 from app.services.planning_run_events import (
     AssemblyStarted, CandidateReady, GenerationStarted, GlobalValidationStarted,
     PendingPersistenceStarted, RunFailed, UnitAttemptStarted,
@@ -116,7 +117,14 @@ def _attribute(
     owners = [CandidateOwnership.from_candidate(snapshot.candidates[snapshot.unit_states[key].latest_candidate_id])
               for key in snapshot.planning_unit_ids]
     retained = inputs.base_confirmed_plan["task_registry"] if inputs.base_confirmed_plan is not None else {}
-    provenance = [TaskProvenance(task_id=key, unit_id=task["unit_id"], source="retained") for key, task in retained.items()]
+    provenance = [
+        TaskProvenance(
+            task_id=key,
+            unit_id=task["unit_id"],
+            source="platform" if is_route_projection_task(task) else "retained",
+        )
+        for key, task in retained.items()
+    ]
     provenance.extend(TaskProvenance(task_id=key, unit_id=owner.unit_id, source="candidate", candidate_id=owner.candidate_id)
                       for owner in owners for key in owner.task_ids)
     return attribute_global_issues(
