@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import stat
@@ -19,6 +20,7 @@ from app.services.workspace_bootstrap.models import TemplatePackageError, Worksp
 
 BOOTSTRAP_STAGING_RELATIVE_PATH = Path(".xcodeagent/bootstrap-staging")
 _ROOTS = ("frontend", "backend")
+_PLATFORM_RESERVED_PATHS = frozenset({Path(".git"), BOOTSTRAP_STAGING_RELATIVE_PATH})
 
 
 @dataclass
@@ -75,18 +77,23 @@ class WorkspaceMaterializer:
         template_state: TemplateStateV2,
         readiness: Callable[[Path], None] | None = None,
     ) -> str:
-        """在 staging 解压后提交两个根、Git baseline 与唯一 TemplateState。"""
+        """完整提交 ZIP 的安全文件、Git baseline 与唯一 TemplateState。"""
 
         root = Path(workspace).expanduser().resolve()
         self._preflight(root)
         journal = BootstrapJournal(workspace=root)
         try:
             journal.staging = self._extract_to_staging(root, Path(archive_path))
-            for name in _ROOTS:
-                source = journal.staging / name
-                target = root / name
+            manifest = _build_file_manifest(journal.staging)
+            targets = _materialization_targets(journal.staging)
+            _validate_materialization_targets_available(root, targets)
+            for relative_path in targets:
+                source = journal.staging / relative_path
+                target = root / relative_path
+                target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(source, target)
                 journal.moved_roots.append(target)
+            _verify_materialized_files(root, manifest)
             journal.git_initialized = True
             self._git_manager.initialize_baseline(root)
             journal.template_state_written = True
@@ -145,6 +152,71 @@ def _write_template_state(path: Path, template_state: TemplateStateV2) -> None:
     """以同目录原子替换落盘 Engine 原样输出的 TemplateState。"""
 
     atomic_write_json(path, template_state.model_dump(mode="json"))
+
+
+def _materialization_targets(staging: Path) -> list[Path]:
+    """返回 ZIP 全部可提交顶层单元，且不覆盖平台专属路径。"""
+
+    targets: list[Path] = []
+    for child in sorted(staging.iterdir(), key=lambda item: item.name):
+        if child.name == ".git":
+            raise TemplatePackageError("模板 ZIP 不允许写入平台 Git 元数据。")
+        if child.name != ".xcodeagent":
+            targets.append(Path(child.name))
+            continue
+
+        # `.xcodeagent` 同时承载平台数据和模板契约，只逐项提交其模板子项。
+        for nested_child in sorted(child.iterdir(), key=lambda item: item.name):
+            relative_path = Path(".xcodeagent") / nested_child.name
+            if relative_path in _PLATFORM_RESERVED_PATHS:
+                raise TemplatePackageError("模板 ZIP 不允许写入 Bootstrap staging。")
+            targets.append(relative_path)
+    return targets
+
+
+def _build_file_manifest(staging: Path) -> dict[Path, str]:
+    """为 staging 中每个 ZIP 文件记录 SHA-256，作为完整物化校验依据。"""
+
+    manifest: dict[Path, str] = {}
+    for path in sorted(staging.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        relative_path = path.relative_to(staging)
+        manifest[relative_path] = _sha256_file(path)
+    return manifest
+
+
+def _validate_materialization_targets_available(workspace: Path, targets: list[Path]) -> None:
+    """在任何移动前确认全部目标空闲，避免可预见的半提交。"""
+
+    collisions = [
+        relative_path.as_posix()
+        for relative_path in targets
+        if (workspace / relative_path).exists() or (workspace / relative_path).is_symlink()
+    ]
+    if collisions:
+        raise WorkspaceBootstrapError("Workspace 已存在 ZIP 物化目标：" + "、".join(collisions))
+
+
+def _verify_materialized_files(workspace: Path, manifest: dict[Path, str]) -> None:
+    """确认 ZIP 的每个文件均按原相对路径、原字节内容提交到 Workspace。"""
+
+    for relative_path, expected_sha256 in manifest.items():
+        target = workspace / relative_path
+        if not target.is_file() or target.is_symlink() or _sha256_file(target) != expected_sha256:
+            raise WorkspaceBootstrapError(
+                f"模板 ZIP 完整性校验失败：{relative_path.as_posix()} 未被完整物化。"
+            )
+
+
+def _sha256_file(path: Path) -> str:
+    """计算单个普通文件的 SHA-256，避免把整个文件读入内存。"""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _remove_managed_path(path: Path) -> None:

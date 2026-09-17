@@ -145,23 +145,23 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         """平台内部 Task 可进入 Pending registry，但 review 集合可以不包含它。"""
 
         plan = _validated_plan()
-        route_task = {
-            "id": "platform_route_projection",
+        platform_task = {
+            "id": "platform_metadata_projection",
             "unit_id": "application:root",
             "execution_strategy": "deterministic",
-            "platform_executor": "template.route_projection",
+            "platform_executor": "template.metadata_projection",
         }
-        plan["task_registry"][route_task["id"]] = route_task
-        plan["task_graph"]["nodes"].append(route_task["id"])
-        plan["task_graph"]["topological_order"].append(route_task["id"])
+        plan["task_registry"][platform_task["id"]] = platform_task
+        plan["task_graph"]["nodes"].append(platform_task["id"])
+        plan["task_graph"]["topological_order"].append(platform_task["id"])
 
         self._write_pending(
             plan,
             planning_provenance={
                 "schema_version": "planning-provenance.v2",
                 "review_task_ids": ["page:orders::render"],
-                "platform_task_ids": ["platform_route_projection"],
-                "new_task_ids": ["page:orders::render", "platform_route_projection"],
+                "platform_task_ids": ["platform_metadata_projection"],
+                "new_task_ids": ["page:orders::render", "platform_metadata_projection"],
                 "reused_task_ids": [],
             },
         )
@@ -170,7 +170,7 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         assert loaded is not None
         self.assertEqual(
             loaded["planning_provenance"]["platform_task_ids"],
-            ["platform_route_projection"],
+            ["platform_metadata_projection"],
         )
 
     def test_write_pending_preserves_formal_bytes(self) -> None:

@@ -352,66 +352,6 @@ def build_run_task_plan_json_path(state: dict[str, Any], build_run_id: str) -> P
     return workflow_artifact_root(state) / "plans" / "build-runs" / f"{normalized_id}.json"
 
 
-def build_run_success_evidence_path(state: dict[str, Any], build_run_id: str) -> Path:
-    """返回 Build Run 成功执行证据路径，和只读 Task Plan 副本严格分离。"""
-
-    normalized_id = str(build_run_id or "").strip()
-    if not re.fullmatch(r"build-[a-f0-9]{32}", normalized_id):
-        raise ValueError("Build Run 标识无效，不能定位成功执行证据。")
-    return workflow_artifact_root(state) / "plans" / "build-runs" / f"{normalized_id}.evidence.json"
-
-
-def persist_build_run_success_evidence(
-    state: dict[str, Any], *, build_run_id: str, route_facts: Mapping[str, Any],
-) -> str:
-    """仅在整个 Build 成功后原子写入该 Run 的最小路由事实执行证据。"""
-
-    facts = _validated_route_facts(route_facts)
-    path = build_run_success_evidence_path(state, build_run_id)
-    write_json_atomic(path, {
-        "buildRunId": build_run_id,
-        "status": "completed",
-        "completedAt": datetime.now(UTC).isoformat(),
-        "routeFacts": facts,
-    })
-    return str(path)
-
-
-def load_latest_successful_build_route_facts(state: dict[str, Any]) -> dict[str, dict[str, str | None]] | None:
-    """读取最近成功 Build 的路由执行证据；旧 Run 缺失该字段时返回空基线。"""
-
-    directory = workflow_artifact_root(state) / "plans" / "build-runs"
-    if not directory.is_dir():
-        return None
-    candidates: list[tuple[str, dict[str, dict[str, str | None]]]] = []
-    for path in directory.glob("build-*.evidence.json"):
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(value, Mapping) or value.get("status") != "completed":
-                continue
-            completed_at = value.get("completedAt")
-            if not isinstance(completed_at, str) or not completed_at:
-                continue
-            candidates.append((completed_at, _validated_route_facts(value.get("routeFacts"))))
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-    return max(candidates, key=lambda item: item[0])[1] if candidates else None
-
-
-def _validated_route_facts(value: Mapping[str, Any] | Any) -> dict[str, dict[str, str | None]]:
-    """校验成功证据中的最小 Route Facts，拒绝把损坏证据当成比较基线。"""
-
-    if not isinstance(value, Mapping):
-        raise ValueError("Build Run routeFacts 必须是对象。")
-    facts: dict[str, dict[str, str | None]] = {}
-    for page_id, fact in value.items():
-        if not isinstance(page_id, str) or not page_id.strip() or not isinstance(fact, Mapping):
-            raise ValueError("Build Run routeFacts 页面身份无效。")
-        name, resource_key = fact.get("name"), fact.get("resourceKey")
-        if not isinstance(name, str) or not name.strip() or resource_key is not None and (not isinstance(resource_key, str) or not resource_key.strip()):
-            raise ValueError("Build Run routeFacts 内容无效。")
-        facts[page_id] = {"name": name, "resourceKey": resource_key}
-    return facts
 
 
 def write_build_run_task_plan_json(

@@ -206,11 +206,7 @@ def _apply_unit_task_dependencies(
         same_unit_or_unknown_dependencies = [
             dependency
             for dependency in explicit_dependencies
-            if (
-                task.get("platform_executor") == "template.route_projection"
-                or dependency not in task_units
-                or task_units[dependency] == unit_id
-            )
+            if dependency not in task_units or task_units[dependency] == unit_id
         ]
         dependencies = _dedupe_strings(
             [*same_unit_or_unknown_dependencies, *inherited_dependencies]

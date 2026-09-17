@@ -29,14 +29,6 @@ from app.services.planning_frozen import (
     tuple_input,
 )
 from app.services.planning_issues import ValidationIssue
-from app.services.template_route_projector import (
-    ROUTE_PROJECTION_TASK_ID,
-    ROUTE_PROJECTION_EXECUTOR,
-    TemplateRouteProjectorError,
-    build_route_projector_input,
-    is_route_projection_task,
-    requires_route_projection,
-)
 from app.services.template_state import validate_template_context
 from app.services.unit_generation_contracts import (
     CandidateAttempt,
@@ -328,14 +320,6 @@ def _candidate_tasks(
                     unit_id=unit_id,
                     candidate_id=candidate.candidate_id,
                 )
-            if task_id == ROUTE_PROJECTION_TASK_ID:
-                _raise_input(
-                    "SCOPE_RESERVED_PLATFORM_TASK_ID",
-                    f"Candidate 不得占用平台保留 Task ID：{ROUTE_PROJECTION_TASK_ID}。",
-                    unit_id=unit_id,
-                    candidate_id=candidate.candidate_id,
-                    task_id=task_id,
-                )
             tasks.append(task)
             unit_by_task_id.setdefault(task_id, unit_id)
     return tasks, unit_by_task_id
@@ -420,29 +404,20 @@ def _stable_plan_task_ids(build_task_plan: Mapping[str, Any]) -> tuple[str, ...]
         return ()
     registry_ids = {str(task_id) for task_id in registry}
     task_graph = build_task_plan.get("task_graph")
-    topology = task_graph.get("topological_order") if isinstance(task_graph, Mapping) else None
+    topology = (
+        task_graph.get("topological_order") if isinstance(task_graph, Mapping) else None
+    )
     ordered: list[str] = []
     seen: set[str] = set()
-    for raw_task_id in [*(topology if isinstance(topology, (list, tuple)) else ()), *registry]:
+    for raw_task_id in [
+        *(topology if isinstance(topology, (list, tuple)) else ()),
+        *registry,
+    ]:
         task_id = str(raw_task_id).strip()
         if task_id in registry_ids and task_id not in seen:
             ordered.append(task_id)
             seen.add(task_id)
     return tuple(ordered)
-
-
-def _platform_task_ids(build_task_plan: Mapping[str, Any]) -> tuple[str, ...]:
-    """按最终 DAG 顺序返回当前 Assembly 产生的平台内部 Task。"""
-
-    registry = build_task_plan.get("task_registry")
-    if not isinstance(registry, Mapping):
-        return ()
-    return tuple(
-        task_id
-        for task_id in _stable_plan_task_ids(build_task_plan)
-        if isinstance(registry.get(task_id), Mapping)
-        and is_route_projection_task(registry[task_id])
-    )
 
 
 def _scope_review_task_ids(
@@ -472,7 +447,9 @@ def _scope_review_task_ids(
         and str(task.get("unit_id") or "") in current_unit_ids
     }
     seed_ids.update(
-        str(task_id) for task_id in candidate_task_ids if str(task_id) not in platform_ids
+        str(task_id)
+        for task_id in candidate_task_ids
+        if str(task_id) not in platform_ids
     )
     ancestors: set[str] = set()
     pending = [
@@ -532,8 +509,8 @@ def assemble_scope_build_task_plan(
         isinstance(value, Mapping)
         for value in (
             skeleton_plan,
-        project_plan,
-        product_plan,
+            project_plan,
+            product_plan,
             build_context,
             build_execution_scope,
             generation_requirements_by_unit,
@@ -554,23 +531,7 @@ def assemble_scope_build_task_plan(
             "当前 Frozen Planning Inputs 的 template_context 不满足 V2 绑定契约。",
             error=str(exc),
         )
-    # Route Projection 只消费 ProductPlan 与 authorization manifest，DAG 不保存页面正文。
-    try:
-        route_input = build_route_projector_input(
-            plain_json(product_plan), plain_json(project_plan.get("authorization_manifest")),
-        )
-        route_projection_required = requires_route_projection(
-            build_context.get("previous_successful_route_facts"), route_input,
-        )
-    except TemplateRouteProjectorError as exc:
-        _raise_input(
-            "SCOPE_ROUTE_PROJECTOR_INPUT_INVALID",
-            "当前正式产物无法生成 Route Projector Input。",
-            error=str(exc),
-        )
     _, retained = _retained_tasks(base_confirmed_plan)
-    # Route Projection 是平台内部 Task；每轮只按当前 route facts 重算，不能进入历史基线。
-    retained = [task for task in retained if not is_route_projection_task(task)]
     facts = _validate_reuse_facts(reuse_facts, retained)
     required_units = _required_candidate_units(generation_requirements_by_unit)
     candidates, candidate_unit_by_task_id = _candidate_tasks(
@@ -582,23 +543,9 @@ def assemble_scope_build_task_plan(
     if collision_issues:
         raise ScopeAssemblyError(collision_issues)
 
-    # 路由投影是每轮根据当前页面事实重建的平台任务；旧正式 DAG 中的同名任务
-    # 不能与新任务并存，也不能作为新任务的依赖或跳过本轮验收编译。
+    # Route Projection 已移至成功 DAG 的固定收尾阶段，当前 DAG 只保留业务 Task。
     retained_for_assembly = retained
     all_tasks = [*retained_for_assembly, *candidates]
-    if route_projection_required:
-        normal_task_ids = [str(task["id"]) for task in all_tasks]
-        all_tasks.append({
-            "id": ROUTE_PROJECTION_TASK_ID, "unit_id": "application:root",
-            "owner": "frontend", "task_type": "platform.action",
-            "execution_strategy": "deterministic", "platform_executor": ROUTE_PROJECTION_EXECUTOR,
-            "description": "根据确认的页面事实调用模板 Route Projector 统一注册业务路由。",
-            "dependencies": normal_task_ids, "target_files": [], "allowed_paths": [],
-            "status": "pending",
-            "provides_capabilities": ["platform.route_projection"],
-            "source_refs": {"artifact": "confirmed-product-plan", "kind": "route_projection"},
-            "deliverables": [],
-        })
     skeleton = _validate_task_units(skeleton_plan, all_tasks)
     retained_task_ids = tuple(str(task["id"]) for task in retained_for_assembly)
     candidate_task_ids = tuple(str(task["id"]) for task in candidates)
@@ -649,7 +596,7 @@ def assemble_scope_build_task_plan(
     ):
         assembled.pop(field, None)
     assembled["status"] = "ready" if graph_valid and not blocked_batches else "blocked"
-    # 页面正文只在模板执行时由冻结正式输入组装，DAG 仅表达是否存在该平台动作。
+    # 路由页面事实仅在成功 DAG 的 Finalization 中使用，DAG 不保存第二份页面事实。
     assembled.pop("route_projection", None)
     current_unit_ids = {
         str(unit_id).strip()
@@ -665,7 +612,8 @@ def assemble_scope_build_task_plan(
             if str(unit_id).strip()
         }
         current_unit_ids = normalized_context_units
-    platform_task_ids = _platform_task_ids(assembled)
+    # 当前 Route Projection 不再是 DAG Task；保留 provenance 字段以维持 PendingPlan 契约。
+    platform_task_ids: tuple[str, ...] = ()
     review_task_ids, reused_task_ids = _scope_review_task_ids(
         assembled,
         current_unit_ids=current_unit_ids,

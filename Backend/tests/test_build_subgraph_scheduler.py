@@ -32,20 +32,6 @@ def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
         f.write(f"// auto-generated: {rel_path}\n")
 
 
-def _valid_route_projection() -> dict:
-    """显式构造仅供需要合法 Confirmed DAG 的调度器测试使用的 Route Projection。"""
-
-    return {
-        "pages": [{
-            "pageId": "scheduler-test",
-            "path": "/scheduler-test",
-            "pageKey": "SchedulerTest",
-            "name": "调度器测试",
-            "menu": True,
-        }]
-    }
-
-
 def _ready_build_state(workspace: str, state: dict) -> dict:
     """为调度器测试落盘一份已确认的当前 JSON DAG，匹配真实 Build 门禁。"""
 
@@ -66,25 +52,18 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
             )
     # v4 计划必须绑定与工作区一致的 TemplateState，夹具不能绕过真实门禁。
     plan.setdefault("template_context", template_context(load_template_state(workspace)))
-    # 测试必须显式提供 Route Projection；禁止由通用 Helper 掩盖非法 DAG。
-    if "route_projection" not in plan:
-        raise AssertionError("调度器测试的 confirmed Build DAG 必须显式包含 route_projection。")
-    routes_path = os.path.join(workspace, "frontend/src/constants/routes.tsx")
-    os.makedirs(os.path.dirname(routes_path), exist_ok=True)
-    if not os.path.exists(routes_path):
-        with open(routes_path, "w", encoding="utf-8") as handle:
-            handle.write(
-                "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n"
-                "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n"
-                "export const PAGE_ROUTES = [\n"
-                "// XCODEAGENT_BUSINESS_ROUTES_START\n"
-                "// XCODEAGENT_BUSINESS_ROUTES_END\n];\n"
-            )
-    for page in plan["route_projection"].get("pages", []):
-        _write_workspace_file(
-            workspace,
-            f"frontend/src/pages/{page['pageKey']}/index.tsx",
-        )
+    contracts = os.path.join(workspace, ".xcodeagent", "template-contracts")
+    os.makedirs(contracts, exist_ok=True)
+    with open(os.path.join(contracts, "route-projector.json"), "w", encoding="utf-8") as handle:
+        json.dump({"schemaVersion": "route-projector-contract.v2", "protocol": "route-projector.v2", "inputSchema": "route-projector-input.schema.json", "outputSchema": "route-projector-output.schema.json", "command": ["node", ".xcodeagent/template-contracts/route-projector-test.mjs"]}, handle)
+    schema = {"type": "object", "required": ["protocol", "pages"], "properties": {"protocol": {"const": "route-projector.v2"}, "pages": {"type": "array"}}}
+    with open(os.path.join(contracts, "route-projector-input.schema.json"), "w", encoding="utf-8") as handle:
+        json.dump(schema, handle)
+    output_schema = {"type": "object", "required": ["status", "requestedPageIds", "appliedPageIds", "skippedPageIds"], "properties": {"status": {"const": "applied"}, "requestedPageIds": {"type": "array"}, "appliedPageIds": {"type": "array"}, "skippedPageIds": {"type": "array"}}}
+    with open(os.path.join(contracts, "route-projector-output.schema.json"), "w", encoding="utf-8") as handle:
+        json.dump(output_schema, handle)
+    with open(os.path.join(contracts, "route-projector-test.mjs"), "w", encoding="utf-8") as handle:
+        handle.write("import fs from 'node:fs'; const input = JSON.parse(fs.readFileSync(0, 'utf8')); const directory = (id) => id.split('_').map((part) => part[0].toUpperCase() + part.slice(1)).join(''); const appliedPageIds = input.pages.map((page) => page.pageId).filter((id) => fs.existsSync(`frontend/src/pages/${directory(id)}/index.tsx`)); const skippedPageIds = input.pages.map((page) => page.pageId).filter((id) => !appliedPageIds.includes(id)); process.stdout.write(JSON.stringify({status: 'applied', requestedPageIds: input.pages.map((page) => page.pageId), appliedPageIds, skippedPageIds}));\n")
     plan["status"] = "ready"
     plan["confirmation_status"] = "confirmed"
     plan["confirmed_at"] = "2026-08-19T00:00:00+00:00"
@@ -98,12 +77,19 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(plan, handle, ensure_ascii=False)
-    return {**state, "build_task_plan": plan}
+    pages = [
+        {"pageId": item["target_id"], "name": item["target_id"]}
+        for task in plan.get("tasks", [])
+        if isinstance(task, dict)
+        for item in task.get("deliverables", [])
+        if isinstance(item, dict) and item.get("kind") == "frontend.page" and item.get("target_id")
+    ]
+    return {**state, "build_task_plan": plan, "product_plan": state.get("product_plan", {"pages": pages})}
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
-    def test_build_gate_rejects_missing_route_projection_before_execution(self) -> None:
-        """缺少 Root Projection 的确认 DAG 必须在任何执行器或平台投影前失败。"""
+    def test_empty_dag_enters_post_dag_finalization(self) -> None:
+        """没有业务任务的确认 DAG 仍必须进入 Post-DAG Finalization。"""
 
         plan = {
             "schema_version": "build-dag.v4",
@@ -127,15 +113,103 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             os.makedirs(os.path.dirname(plan_path), exist_ok=True)
             with open(plan_path, "w", encoding="utf-8") as handle:
                 json.dump(plan, handle)
-            with patch("app.graph.subgraphs.build._execute_ready_tasks") as executor, patch(
-                "app.graph.subgraphs.build.apply_platform_projections"
-            ) as apply:
-                result = run_build_scheduler({"workspace": workspace, "build_task_plan": plan})
+            state = _ready_build_state(workspace, {"workspace": workspace, "project_plan": {"version": "1.0.0"}, "build_task_plan": plan})
+            with patch("app.graph.subgraphs.build._finalize_build", return_value=({}, {}, None, ["scheduler:route_projection_applied"], None)) as finalize:
+                result = run_build_scheduler(state)
 
-        self.assertEqual(result["build_summary"]["status"], "failed")
-        self.assertIn("route_projection", result["error"])
-        executor.assert_not_called()
-        apply.assert_not_called()
+        self.assertEqual(result["build_summary"]["status"], "completed")
+        finalize.assert_called_once()
+
+    def test_route_projection_runs_for_application_and_page_scopes(self) -> None:
+        """application 与 page 成功收尾时仍以完整 ProductPlan 投影路由。"""
+
+        pages = [
+            {"pageId": "orders", "name": "订单"},
+            {"pageId": "users", "name": "用户"},
+        ]
+        for scope in (
+            {"type": "application", "targetId": "application"},
+            {"type": "page", "targetId": "orders"},
+        ):
+            with self.subTest(scope=scope["type"]), tempfile.TemporaryDirectory() as workspace:
+                plan = {
+                    "schema_version": "build-dag.v4",
+                    "status": "ready",
+                    "confirmation_status": "confirmed",
+                    "build_execution_scope": scope,
+                    "task_registry": {},
+                    "task_graph": {"nodes": [], "validation": {"is_valid": True, "errors": []}},
+                }
+                route_result = {
+                    "status": "applied",
+                    "requestedPageIds": ["orders", "users"],
+                    "appliedPageIds": [],
+                    "skippedPageIds": ["orders", "users"],
+                }
+                with (
+                    patch("app.graph.subgraphs.build.apply_template_route_projection", return_value=route_result) as projection,
+                    patch("app.graph.subgraphs.build.apply_platform_projections", return_value={"status": "applied", "files": []}),
+                    patch("app.graph.subgraphs.build.verify_authorization_edd", return_value=[]),
+                ):
+                    result = run_build_scheduler(
+                        _ready_build_state(
+                            workspace,
+                            {
+                                "workspace": workspace,
+                                "product_plan": {"pages": pages},
+                                "project_plan": {"version": "1.0.0"},
+                                "build_execution_scope": scope,
+                                "build_task_plan": plan,
+                                "timeline": [],
+                            },
+                        )
+                    )
+
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(projection.call_args.args[1]["pages"], pages)
+                self.assertIn("scheduler:route_projection_applied", result["build_events"])
+
+    def test_route_projection_skips_endpoint_and_data_source_scopes(self) -> None:
+        """endpoint 与 data_source 成功收尾跳过路由但继续平台投影和 EDD。"""
+
+        for scope in (
+            {"type": "endpoint", "apiContractId": "orders", "targetId": "list"},
+            {"type": "data_source", "targetId": "orders"},
+        ):
+            with self.subTest(scope=scope["type"]), tempfile.TemporaryDirectory() as workspace:
+                plan = {
+                    "schema_version": "build-dag.v4",
+                    "status": "ready",
+                    "confirmation_status": "confirmed",
+                    "build_execution_scope": scope,
+                    "task_registry": {},
+                    "task_graph": {"nodes": [], "validation": {"is_valid": True, "errors": []}},
+                }
+                with (
+                    patch("app.graph.subgraphs.build.apply_template_route_projection") as projection,
+                    patch("app.graph.subgraphs.build.apply_platform_projections", return_value={"status": "applied", "files": []}) as platform_projection,
+                    patch("app.graph.subgraphs.build.verify_authorization_edd", return_value=[]) as edd,
+                ):
+                    result = run_build_scheduler(
+                        _ready_build_state(
+                            workspace,
+                            {
+                                "workspace": workspace,
+                                "product_plan": {"pages": [{"pageId": "orders", "name": "订单"}]},
+                                "project_plan": {"version": "1.0.0"},
+                                "build_execution_scope": scope,
+                                "build_task_plan": plan,
+                                "timeline": [],
+                            },
+                        )
+                    )
+
+                self.assertEqual(result["status"], "completed")
+                projection.assert_not_called()
+                platform_projection.assert_called_once()
+                edd.assert_called_once()
+                self.assertEqual(result["route_projection_evidence"], {})
+                self.assertIn("scheduler:route_projection_skipped_no_route_impact", result["build_events"])
 
     def test_build_debug_rerun_reuses_all_completed_tasks(self) -> None:
         """从 Build 调试重跑时复用当前 DAG 中全部已完成任务。"""
@@ -263,6 +337,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     {
                         "workspace": workspace,
                         "project_plan": {"version": "1.0.0"},
+                        "product_plan": {"pages": []},
                         "build_execution_scope": {
                             "type": "endpoint",
                             "apiContractId": "orders",
@@ -325,8 +400,8 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         projection.assert_not_called()
         self.assertEqual(result["platform_projection_evidence"], {})
 
-    def test_platform_projection_waits_for_real_page_file(self) -> None:
-        """页面任务成功但未落盘时，投影必须在任务后失败并阻断 Build。"""
+    def test_route_projection_skips_missing_page_file(self) -> None:
+        """页面任务未落盘时，模板应返回 skipped 而非将 Route Projection 视为异常。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan = self._platform_projection_plan(workspace)
@@ -347,10 +422,9 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     )
                 )
 
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result.get("platform_projection_evidence", {}).get("status"), "failed", result)
-        self.assertIn("缺少真实页面入口", result["platform_projection_evidence"]["error"])
-        self.assertIn("scheduler:platform_projection_failed", result["build_events"])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["route_projection_evidence"]["skippedPageIds"], ["orders"])
+        self.assertIn("scheduler:route_projection_applied", result["build_events"])
 
     def test_platform_projection_runs_after_page_task_and_stays_out_of_agent_changes(self) -> None:
         """真实页面生成后才写入 routes，平台差异不能混入 Agent change set。"""
@@ -435,7 +509,6 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             "unit_graph": {"nodes": ["application:root"], "edges": []},
             "task_registry": {"page-orders": task},
             "task_graph": {"nodes": ["page-orders"], "topological_order": ["page-orders"], "validation": {"is_valid": True, "errors": []}},
-            "route_projection": {"pages": [{"pageId": "orders", "path": "/orders", "pageKey": "Orders", "name": "订单", "menu": True}]},
         }
     def test_backend_workspace_snapshot_loads_from_inspection_artifact(self) -> None:
         """Build 应通过独立快照路径读取 WorkspaceSnapshot，而不是读取任务计划。"""
@@ -497,7 +570,6 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "topological_order": [task["id"] for task in tasks],
                 "validation": {"is_valid": True, "errors": []},
             },
-            "route_projection": _valid_route_projection(),
         }
 
         with tempfile.TemporaryDirectory() as workspace:
@@ -516,7 +588,6 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             "build_execution_scope": {},
             "task_registry": {},
             "task_graph": {"nodes": [], "validation": {"is_valid": True, "errors": []}},
-            "route_projection": _valid_route_projection(),
         }
         with tempfile.TemporaryDirectory() as workspace:
             state = _ready_build_state(workspace, {"workspace": workspace, "build_task_plan": plan})

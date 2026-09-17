@@ -20,7 +20,6 @@ from app.services.planning_frozen import FrozenPlanningModel, plain_json
 from app.services.planning_issues import ValidationIssue
 from app.services.planning_run_contracts import PlanningRun, UnitRunState
 from app.services.planning_run_controller import PlanningRunController, SnapshotPublisher
-from app.services.template_route_projector import is_route_projection_task
 from app.services.planning_run_events import (
     AssemblyStarted, CandidateReady, GenerationStarted, GlobalValidationStarted,
     PendingPersistenceStarted, RunFailed, UnitAttemptStarted,
@@ -121,7 +120,7 @@ def _attribute(
         TaskProvenance(
             task_id=key,
             unit_id=task["unit_id"],
-            source="platform" if is_route_projection_task(task) else "retained",
+            source="retained",
         )
         for key, task in retained.items()
     ]

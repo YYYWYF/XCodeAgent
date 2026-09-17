@@ -155,24 +155,24 @@ class BuildTaskConfirmationTests(unittest.TestCase):
         """平台内部 Task 必须被 provenance 覆盖，但不能进入 review 或 retained 摘要。"""
 
         plan = _cumulative_plan()
-        route_task = {
-            "id": "platform_route_projection",
-            "title": "Route Projection",
+        platform_task = {
+            "id": "platform_metadata_projection",
+            "title": "Platform Metadata Projection",
             "unit_id": "application:root",
             "dependencies": [],
             "execution_strategy": "deterministic",
-            "platform_executor": "template.route_projection",
+            "platform_executor": "template.metadata_projection",
             "status": "pending",
         }
-        plan["task_registry"][route_task["id"]] = route_task
-        plan["task_graph"]["nodes"].append(route_task["id"])
-        plan["task_graph"]["topological_order"].append(route_task["id"])
+        plan["task_registry"][platform_task["id"]] = platform_task
+        plan["task_graph"]["nodes"].append(platform_task["id"])
+        plan["task_graph"]["topological_order"].append(platform_task["id"])
         plan["planning_provenance"] = build_planning_provenance(
             plan,
             ("history-task", "shared-base", "shared-client"),
             ("shared-base", "shared-client", "orders-backend", "orders-page"),
             ("shared-base", "shared-client"),
-            (route_task["id"],),
+            (platform_task["id"],),
         )
 
         read_model = build_task_confirmation_read_model(
@@ -181,7 +181,7 @@ class BuildTaskConfirmationTests(unittest.TestCase):
             build_context={},
         )
 
-        self.assertNotIn(route_task["id"], {task["id"] for task in read_model["reviewTasks"]})
+        self.assertNotIn(platform_task["id"], {task["id"] for task in read_model["reviewTasks"]})
         self.assertEqual(read_model["retainedTaskSummary"]["total"], 1)
         self.assertNotIn("classificationBlocked", read_model)
 

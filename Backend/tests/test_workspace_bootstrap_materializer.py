@@ -35,13 +35,15 @@ def _template_state() -> TemplateStateV2:
     })
 
 
-def _write_package(path: Path) -> None:
+def _write_package(path: Path, extra_entries: dict[str, str] | None = None) -> None:
     """写入已经通过上游 Package 校验的最小 frontend/backend ZIP。"""
 
     with zipfile.ZipFile(path, "w") as package:
         package.writestr("frontend/package.json", "{}\n")
         package.writestr("backend/pom.xml", "<project />\n")
         package.writestr(str(TEMPLATE_STATE_RELATIVE_PATH), json.dumps(_template_state().model_dump(mode="json")))
+        for entry_name, content in (extra_entries or {}).items():
+            package.writestr(entry_name, content)
 
 
 class WorkspaceMaterializerTests(unittest.TestCase):
@@ -70,6 +72,52 @@ class WorkspaceMaterializerTests(unittest.TestCase):
             exclude = (workspace / ".git/info/exclude").read_text(encoding="utf-8")
             self.assertIn(".xcodeagent/", exclude)
             self.assertTrue(BootstrapGitManager().verify_baseline(workspace))
+
+    def test_materialize_commits_all_safe_zip_files_including_template_contracts(self) -> None:
+        """模板新增任意安全文件时，Bootstrap 必须按原路径完整提交而非依赖 allow-list。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            archive = Path(directory) / "template.zip"
+            _write_package(archive, {
+                ".xcodeagent/template-contracts/route-projector.json": '{"schemaVersion": "route-projector-contract.v2"}\n',
+                ".xcodeagent/template-contracts/route-projector-input.schema.json": '{"type": "object"}\n',
+                "infra/deployment.yaml": "version: v1\n",
+                "README.md": "# generated app\n",
+            })
+
+            WorkspaceMaterializer().materialize(
+                workspace=workspace,
+                archive_path=archive,
+                template_state=_template_state(),
+            )
+
+            self.assertTrue((workspace / ".xcodeagent/template-contracts/route-projector.json").is_file())
+            self.assertTrue((workspace / ".xcodeagent/template-contracts/route-projector-input.schema.json").is_file())
+            self.assertEqual((workspace / "infra/deployment.yaml").read_text(encoding="utf-8"), "version: v1\n")
+            self.assertEqual((workspace / "README.md").read_text(encoding="utf-8"), "# generated app\n")
+
+    def test_materialize_rejects_existing_generic_zip_target_before_any_move(self) -> None:
+        """未知模板路径与既有平台文件冲突时必须整体失败，不能先提交部分根目录。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            existing_contract = workspace / ".xcodeagent/template-contracts"
+            existing_contract.mkdir(parents=True)
+            archive = workspace / "template.zip"
+            _write_package(archive, {".xcodeagent/template-contracts/route-projector.json": "{}\n"})
+
+            with self.assertRaisesRegex(Exception, "ZIP 物化目标"):
+                WorkspaceMaterializer().materialize(
+                    workspace=workspace,
+                    archive_path=archive,
+                    template_state=_template_state(),
+                )
+
+            self.assertFalse((workspace / "frontend").exists())
+            self.assertFalse((workspace / "backend").exists())
+            self.assertTrue(existing_contract.is_dir())
 
     def test_second_root_move_failure_rolls_back_all_managed_outputs(self) -> None:
         """第二个 root 的移动失败时不得留下第一个 root、Git 或 TemplateState。"""

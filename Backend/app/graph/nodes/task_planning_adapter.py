@@ -49,20 +49,12 @@ from app.services.planning_frozen import plain_json
 from app.services.planning_run_contracts import PlanningRun
 from app.services.planning_run_progress import project_planning_run_progress
 from app.services.template_state import load_template_state, template_context
-from app.workspace.task_documents import load_latest_successful_build_route_facts
 from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
     UnitGenerationPolicy,
 )
 
 
-def _latest_successful_route_facts(state: ProjectState) -> dict[str, dict[str, str | None]] | None:
-    """安全读取最近成功 Build 的执行证据；旧项目或损坏证据一律触发一次完整投影。"""
-
-    try:
-        return load_latest_successful_build_route_facts(state)
-    except (OSError, ValueError):
-        return None
 from app.workspace.task_documents import (
     build_task_plan_json_path,
     build_task_plan_pending_json_path,
@@ -387,8 +379,6 @@ def _assemble_planning_context(
         **build_context,
         "scope": scope,
         "template_context": current_template_context,
-        # 成功 Build 的执行证据是 Route Facts 比较基线，不是新的规划产物。
-        "previous_successful_route_facts": _latest_successful_route_facts(state),
     }
     reuse_facts = resolve_reuse_facts(
         confirmed_plan=confirmed_plan,

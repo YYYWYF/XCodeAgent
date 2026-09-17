@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+import logging
 from copy import deepcopy
 from uuid import uuid4
 
@@ -50,8 +51,8 @@ from app.services.build_task_planner import (
 from app.services.template_state import assert_template_context_matches, load_template_state
 from app.services.template_route_projector import (
     TemplateRouteProjectorError,
+    apply_template_route_projection,
     build_route_projector_input,
-    extract_route_facts,
 )
 from app.services.build_tool_activity import (
     path_matches_task_scope,
@@ -64,6 +65,7 @@ from app.services.build_scheduler import (
     normalize_task_results,
     ready_repair_task_ids,
     reset_failed_tasks_for_retry,
+    build_scope_has_route_impact,
     resolve_execution_slice,
     retryable_failed_task_ids,
     select_ready_build_batch,
@@ -76,6 +78,7 @@ from app.services.platform_task_executors import (
 )
 from app.workspace.code_changes import (
     build_code_change_set,
+    capture_workspace_changes,
     code_change_state_update,
     merge_code_change_sets,
 )
@@ -85,7 +88,6 @@ from app.workspace.task_documents import (
     build_task_plan_json_path,
     load_build_task_plan_json,
     write_build_run_task_plan_json,
-    persist_build_run_success_evidence,
     write_build_task_plan_execution_state,
 )
 from app.workspace.task_documents import write_repair_task_plan_json
@@ -99,6 +101,7 @@ BatchToolActivityCallback = Callable[
     None,
 ]
 MAX_PARALLEL_BUILD_TASKS = 3
+logger = logging.getLogger("uvicorn.error")
 
 
 def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
@@ -437,10 +440,8 @@ def _execute_deterministic_task(
                 action=lambda: executor(task, context),
             )
             raw_result = captured.value
-            change_set = (
-                captured.code_change_set
-                if platform_executor == "template.route_projection"
-                else _filter_change_set_for_tasks(captured.code_change_set, [task], source_tool=source_tool)
+            change_set = _filter_change_set_for_tasks(
+                captured.code_change_set, [task], source_tool=source_tool
             )
         else:
             raw_result = executor(task, context)
@@ -1280,6 +1281,129 @@ def _dedupe_build_gate_errors(errors: list[str]) -> list[str]:
     return result
 
 
+def _finalize_build(
+    *,
+    state: ProjectState,
+    confirmed_build_task_plan: dict[str, Any],
+    build_run_binding: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, list[str], str | None]:
+    """按固定顺序完成成功 DAG 的可选路由、权限投影和 EDD，失败时不继续后续步骤。"""
+
+    workspace = workspace_from_state(state)
+    product_plan = state.get("product_plan")
+    project_plan = state.get("project_plan")
+    if not workspace or not isinstance(product_plan, dict) or not isinstance(project_plan, dict):
+        logger.warning(
+            "build_finalization_blocked run_id=%s workspace=%s product_plan=%s project_plan=%s",
+            build_run_binding.get("build_run_id"),
+            bool(workspace),
+            isinstance(product_plan, dict),
+            isinstance(project_plan, dict),
+        )
+        return {}, {}, None, [], "Post-DAG Finalization 缺少冻结的 workspace、ProductPlan 或 TechnicalPlan。"
+    route_impact = build_scope_has_route_impact(
+        confirmed_build_task_plan.get("build_execution_scope")
+    )
+    logger.info(
+        "build_finalization_started run_id=%s page_count=%s route_impact=%s",
+        build_run_binding.get("build_run_id"),
+        len(product_plan.get("pages") or []),
+        route_impact,
+    )
+    route_evidence: dict[str, Any] = {}
+    route_change_set: dict[str, Any] | None = None
+    finalization_events: list[str] = []
+    if route_impact:
+        try:
+            route_input = build_route_projector_input(
+                product_plan, project_plan.get("authorization_manifest")
+            )
+            logger.info(
+                "build_finalization_route_projection_started run_id=%s requested_page_count=%s",
+                build_run_binding.get("build_run_id"),
+                len(route_input["pages"]),
+            )
+            captured = capture_workspace_changes(
+                workspace=workspace,
+                source_tool="template.route_projection",
+                action=lambda: apply_template_route_projection(
+                    workspace, route_input, run_id=str(build_run_binding.get("build_run_id") or "")
+                ),
+            )
+            route_change_set = captured.code_change_set
+            route_result = captured.value
+            route_evidence = {
+                **route_result,
+                "changedFiles": [
+                    str(item.get("path"))
+                    for item in (route_change_set or {}).get("files", [])
+                    if isinstance(item, dict) and item.get("path")
+                ],
+            }
+            finalization_events.append("scheduler:route_projection_applied")
+            logger.info(
+                "build_finalization_route_projection_completed run_id=%s applied=%s skipped=%s changed_files=%s",
+                build_run_binding.get("build_run_id"),
+                len(route_result["appliedPageIds"]),
+                len(route_result["skippedPageIds"]),
+                len(route_evidence["changedFiles"]),
+            )
+        except (TemplateRouteProjectorError, OSError, ValueError) as exc:
+            logger.warning(
+                "build_finalization_route_projection_failed run_id=%s error=%s",
+                build_run_binding.get("build_run_id"),
+                exc,
+            )
+            return {}, {}, None, [], f"Route Projection Finalization 失败：{exc}"
+    else:
+        finalization_events.append("scheduler:route_projection_skipped_no_route_impact")
+        logger.info(
+            "build_finalization_route_projection_skipped run_id=%s scope=%s",
+            build_run_binding.get("build_run_id"),
+            confirmed_build_task_plan.get("build_execution_scope"),
+        )
+    try:
+        logger.info(
+            "build_finalization_authorization_projection_started run_id=%s",
+            build_run_binding.get("build_run_id"),
+        )
+        platform_evidence = apply_platform_projections(
+            workspace,
+            confirmed_build_task_plan,
+            build_run_id=build_run_binding.get("build_run_id"),
+            plan_sha256=build_run_binding.get("build_run_plan_sha256"),
+        )
+        logger.info(
+            "build_finalization_authorization_projection_completed run_id=%s changed_files=%s",
+            build_run_binding.get("build_run_id"),
+            len(platform_evidence.get("files") or []),
+        )
+    except PlatformProjectionError as exc:
+        logger.warning(
+            "build_finalization_authorization_projection_failed run_id=%s error=%s",
+            build_run_binding.get("build_run_id"),
+            exc,
+        )
+        return route_evidence, {}, route_change_set, finalization_events, f"Authorization Platform Projection 失败：{exc}"
+    logger.info(
+        "build_finalization_edd_started run_id=%s",
+        build_run_binding.get("build_run_id"),
+    )
+    edd_errors = verify_authorization_edd(workspace, confirmed_build_task_plan)
+    if edd_errors:
+        logger.warning(
+            "build_finalization_edd_failed run_id=%s error_count=%s",
+            build_run_binding.get("build_run_id"),
+            len(edd_errors),
+        )
+        return route_evidence, platform_evidence, route_change_set, [*finalization_events, "scheduler:platform_projection_applied"], f"Authorization EDD 失败：{'；'.join(edd_errors)}"
+    logger.info(
+        "build_finalization_completed run_id=%s",
+        build_run_binding.get("build_run_id"),
+    )
+    return route_evidence, platform_evidence, route_change_set, [*finalization_events, "scheduler:platform_projection_applied", "scheduler:authorization_edd_passed"], None
+
+
 def run_build_scheduler(
     state: ProjectState,
     *,
@@ -1426,21 +1550,6 @@ def run_build_scheduler(
         )
 
     tasks = tasks_from_build_task_plan(build_task_plan)
-    if not tasks:
-        return {
-            "phase": "build",
-            "ready_tasks": [],
-            "build_summary": {
-                "total": 0,
-                "completed": 0,
-                "failed": 0,
-                "pending": 0,
-                "results": len(state.get("build_results", [])),
-                "status": "completed",
-            },
-            "build_events": ["scheduler:no_tasks"],
-            "status": "completed",
-        }
 
     current_state: ProjectState = {
         **state,
@@ -1726,6 +1835,9 @@ def run_build_scheduler(
         _results_for_tasks(build_results, execution_slice["tasks"]),
         repair_task_plan=repair_task_plan,
     )
+    # 空 DAG 没有任何可运行 Task，却代表当前执行切片已自然成功；必须进入收尾。
+    if not execution_slice["tasks"]:
+        build_summary = {**build_summary, "status": "completed"}
     # 本轮新生成的 RepairPlanner 确认计划尚未进入下一次恢复请求，摘要必须立即
     # 投影为 requires_confirmation；否则会同时返回确认载荷和 failed 状态，生命周期
     # 无法登记 repair_scope_confirmation，前端只能退化成没有动作的通用暂停态。
@@ -1762,60 +1874,26 @@ def run_build_scheduler(
         if build_summary.get("status") == "requires_confirmation"
         else "failed"
     )
+    route_projection_evidence: dict[str, Any] = {}
     if workflow_status == "completed":
-        try:
-            # 仅当所有页面/API/后端任务已成功后，才验证真实页面并写入平台托管区。
-            # apply_platform_projections 内部的 Route Projection 会拒绝缺失的页面文件。
-            platform_projection_evidence = apply_platform_projections(
-                workspace_from_state(current_state) or "",
-                # 使用 Build Run 的不可变确认 DAG；current_state 会随着任务状态更新，
-                # 不能再参与摘要校验或改变平台投影输入。
-                confirmed_build_task_plan,
-                build_run_id=build_run_binding.get("build_run_id"),
-                plan_sha256=build_run_binding.get("build_run_plan_sha256"),
-            )
-            build_events.append("scheduler:platform_projection_applied")
-        except PlatformProjectionError as exc:
-            workflow_status = "failed"
-            platform_projection_evidence = {
-                "status": "failed",
-                "source": "platform.projection",
-                "buildRunId": build_run_binding.get("build_run_id"),
-                "planSha256": build_run_binding.get("build_run_plan_sha256"),
-                "error": str(exc),
-                "files": [],
-                "summary": {"files": 0, "additions": 0, "deletions": 0},
-            }
+        route_projection_evidence, platform_projection_evidence, route_change_set, finalization_events, finalization_error = _finalize_build(
+            state=current_state,
+            confirmed_build_task_plan=confirmed_build_task_plan,
+            build_run_binding=build_run_binding,
+        )
+        build_events.extend(finalization_events)
+        if route_change_set:
+            merged_code_changes = merge_code_change_sets([*all_code_change_sets, route_change_set])
+        if route_projection_evidence:
+            # Build Summary 只记录模板的业务投影结果；真实文件差异仍来自 Change Capture。
             build_summary = {
                 **build_summary,
-                "status": "failed",
-                "platform_projection_errors": [str(exc)],
+                "routeProjection": route_projection_evidence,
             }
-            build_events.append("scheduler:platform_projection_failed")
-        if workflow_status == "completed":
-            # EDD 必须在投影完成后只读验证，避免以验收重写掩盖投影失败。
-            edd_errors = verify_authorization_edd(
-                workspace_from_state(current_state) or "",
-                # EDD 与 Apply 必须消费同一份不可变 Confirmed DAG，而非调度写回态。
-                confirmed_build_task_plan,
-            )
-            if edd_errors:
-                workflow_status = "failed"
-                build_summary = {**build_summary, "status": "failed", "authorization_edd_errors": edd_errors}
-        if workflow_status == "completed":
-            try:
-                route_input = build_route_projector_input(
-                    current_state.get("product_plan") or state.get("product_plan") or {},
-                    (current_state.get("project_plan") or state.get("project_plan") or {}).get("authorization_manifest"),
-                )
-                evidence_path = persist_build_run_success_evidence(
-                    current_state, build_run_id=str(build_run_binding.get("build_run_id") or ""),
-                    route_facts=extract_route_facts(route_input),
-                )
-                build_summary = {**build_summary, "routeFactsEvidencePath": evidence_path}
-            except (TemplateRouteProjectorError, OSError, ValueError) as exc:
-                workflow_status = "failed"
-                build_summary = {**build_summary, "status": "failed", "route_facts_evidence_error": str(exc)}
+        if finalization_error:
+            workflow_status = "failed"
+            build_summary = {**build_summary, "status": "failed", "finalization_error": finalization_error}
+            build_events.append("scheduler:finalization_failed")
     else:
         platform_projection_evidence = state.get("platform_projection_evidence", {})
     clarification = (
@@ -1850,6 +1928,7 @@ def run_build_scheduler(
         "repair_iteration": int(state.get("repair_iteration", 0) or 0)
         + (1 if repair_dispatched else 0),
         "platform_projection_evidence": platform_projection_evidence,
+        "route_projection_evidence": route_projection_evidence,
         **code_change_state_update(merged_code_changes),
         "timeline": ["build"],
     }

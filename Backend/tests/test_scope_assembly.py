@@ -11,11 +11,6 @@ from app.services.build_task_reuse_contracts import ExternalCapability, ReuseFac
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.planning_frozen import plain_json
 from app.services.scope_assembly import ScopeAssemblyError, assemble_scope_build_task_plan
-from app.services.template_route_projector import (
-    build_route_projector_input,
-    extract_route_facts,
-    is_route_projection_task,
-)
 from app.services.unit_generation_contracts import (
     AttemptIdentity,
     CandidateAttempt,
@@ -71,8 +66,6 @@ def _reuse_facts(plan: dict) -> ReuseFacts:
 
     retained: dict[str, list[str]] = {}
     for task_id, retained_task in plan["task_registry"].items():
-        if is_route_projection_task(retained_task):
-            continue
         retained.setdefault(retained_task["unit_id"], []).append(task_id)
     return ReuseFacts(
         retained_task_ids_by_unit=retained,
@@ -187,23 +180,20 @@ def _auth_inputs(*, providers: tuple[tuple[str, str, str], ...] = ()) -> tuple[d
 
 
 class ScopeAssemblyTests(unittest.TestCase):
-    def test_assembly_appends_route_projector_when_success_baseline_is_missing(self) -> None:
-        """缺少成功 Run 路由证据时，Assembly 必须追加确定性模板投影任务。"""
+    def test_assembly_never_appends_route_projector_task(self) -> None:
+        """Route Projection 已是成功 DAG 的收尾步骤，Assembly 不得添加伪业务任务。"""
 
         inputs = _base_inputs()
         result = assemble_scope_build_task_plan(**inputs)
         assembled = plain_json(result.assembled_plan)
 
-        self.assertIn("platform_route_projection", assembled["task_registry"])
-        self.assertEqual(result.platform_task_ids, ("platform_route_projection",))
-        self.assertNotIn("platform_route_projection", result.review_task_ids)
-        self.assertEqual(result.task_origins["platform_route_projection"], "platform")
+        self.assertNotIn("platform_route_projection", assembled["task_registry"])
+        self.assertEqual(result.platform_task_ids, ())
 
-    def test_new_page_rebuilds_retained_route_projector_once(self) -> None:
-        """第二轮页面规划重建旧路由任务，保持唯一身份、验收检查和末尾依赖。"""
+    def test_new_page_does_not_append_route_projector_task(self) -> None:
+        """页面规划只产生业务任务，路由由成功后的统一 Finalization 处理。"""
 
         first = plain_json(assemble_scope_build_task_plan(**_base_inputs()).assembled_plan)
-        first["task_registry"]["platform_route_projection"]["old_marker"] = "must-not-reuse"
         confirmed = {**first, "confirmation_status": "confirmed"}
         inputs = _base_inputs()
         inputs["base_confirmed_plan"] = confirmed
@@ -221,34 +211,9 @@ class ScopeAssemblyTests(unittest.TestCase):
 
         result = assemble_scope_build_task_plan(**inputs)
         assembled = plain_json(result.assembled_plan)
-        route_task = assembled["task_registry"]["platform_route_projection"]
-
         self.assertTrue(assembled["task_graph"]["validation"]["is_valid"])
-        self.assertEqual(assembled["task_graph"]["nodes"].count("platform_route_projection"), 1)
+        self.assertNotIn("platform_route_projection", assembled["task_graph"]["nodes"])
         self.assertNotIn("platform_route_projection", result.retained_task_ids)
-        self.assertEqual(result.platform_task_ids, ("platform_route_projection",))
-        self.assertNotIn("platform_route_projection", result.review_task_ids)
-        self.assertEqual(route_task["status"], "pending")
-        self.assertTrue(route_task["acceptance_checks"])
-        self.assertIn("customers:page-current", route_task["dependencies"])
-        self.assertNotIn("platform_route_projection", route_task["dependencies"])
-        self.assertNotIn("old_marker", route_task)
-
-    def test_successful_route_evidence_suppresses_platform_task_recreation(self) -> None:
-        """当前成功 route facts 完全匹配时，不创建新的平台 Route Projection。"""
-
-        inputs = _base_inputs()
-        route_input = build_route_projector_input(
-            inputs["product_plan"],
-            inputs["project_plan"].get("authorization_manifest"),
-        )
-        inputs["build_context"]["previous_successful_route_facts"] = extract_route_facts(
-            route_input
-        )
-
-        result = assemble_scope_build_task_plan(**inputs)
-
-        self.assertNotIn("platform_route_projection", result.assembled_plan["task_registry"])
         self.assertEqual(result.platform_task_ids, ())
 
     def test_assembly_does_not_persist_route_projection_pages(self) -> None:
@@ -364,7 +329,7 @@ class ScopeAssemblyTests(unittest.TestCase):
 
         self.assertEqual(set(result.retained_task_ids), set(inputs["base_confirmed_plan"]["task_registry"]))
         self.assertEqual(result.candidate_task_ids, ("customers:api-current",))
-        self.assertEqual(set(registry), set(result.retained_task_ids) | set(result.candidate_task_ids) | {"platform_route_projection"})
+        self.assertEqual(set(registry), set(result.retained_task_ids) | set(result.candidate_task_ids))
         self.assertTrue(all(result.task_origins[task_id] == "retained" for task_id in result.retained_task_ids))
         self.assertEqual(result.task_origins["customers:api-current"], "candidate")
         self.assertEqual(result.candidate_unit_by_task_id, {"customers:api-current": SHARED_UNIT})

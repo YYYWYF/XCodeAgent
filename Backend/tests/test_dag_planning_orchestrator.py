@@ -226,11 +226,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         ))
         baseline = plain_json(historical.assembly.assembled_plan)
         baseline.update(confirmation_status="confirmed", confirmed_at=AT)
-        retained_ids = tuple(
-            task_id
-            for task_id in baseline["task_registry"]
-            if task_id != "platform_route_projection"
-        )
+        retained_ids = tuple(baseline["task_registry"])
         self.assertEqual(len(retained_ids), 2)
         self.calls.clear()
         self.phases.clear()
@@ -331,7 +327,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         assembled = result.assembly.assembled_plan["task_registry"]
         self.assertEqual(
             set(assembled) - set(baseline["task_registry"]),
-            {"frontend:api-client-r1-a1-0", "platform_route_projection"},
+            {"frontend:api-client-r1-a1-0"},
         )
         for key, task in baseline["task_registry"].items():
             self._assert_retained_contract(assembled[key], task)
@@ -461,22 +457,21 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(
             set(result.assembly.assembled_plan["task_registry"]),
-            {"platform_route_projection"},
+            set(),
         )
-        self.assertEqual(result.assembly.platform_task_ids, ("platform_route_projection",))
+        self.assertEqual(result.assembly.platform_task_ids, ())
         self.assertEqual(result.planning_run.planning_unit_ids, ())
 
-    async def test_compiler_error_without_attribution_is_fatal(self):
-        """真实编译器报告页面入口错误时阻断，不解析字符串并猜测 Global 修复目标。"""
+    async def test_missing_candidate_uses_unit_scoped_global_repair(self):
+        """移除 Route Task 后，页面入口错误应由有归属的 Candidate 重试处理。"""
 
         self.wrong_page_entry = True
         verify = self._assert_formal_untouched()
         with self.assertRaises(DagPlanningError) as caught:
             await self._plan(planning_inputs())
-        self.assertEqual(caught.exception.issues[0].code, "GLOBAL_COMPILED_PLAN_INVALID")
-        self.assertTrue(caught.exception.issues[0].details["validation"]["errors"])
-        self.assertEqual(caught.exception.snapshot.global_repair_round, 0)
-        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(caught.exception.issues[0].code, "GLOBAL_CANDIDATE_MISSING")
+        self.assertEqual(caught.exception.snapshot.global_repair_round, 2)
+        self.assertEqual(len(self.calls), 27)
         verify()
 
     async def test_supplied_requirements_must_match_current_inputs(self):

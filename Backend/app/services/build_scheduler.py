@@ -651,6 +651,12 @@ def resolve_execution_slice(
     }
 
 
+def build_scope_has_route_impact(scope: dict[str, Any] | None) -> bool:
+    """根据规范化后的 Build scope 判断本轮是否需要全量路由收敛。"""
+
+    return _normalized_scope(scope)["type"] in {"application", "page"}
+
+
 def _overall_status(
     tasks: list[dict[str, Any]],
     repairable: list[dict[str, Any]],

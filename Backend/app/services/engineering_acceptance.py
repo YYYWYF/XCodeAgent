@@ -84,7 +84,6 @@ def engineering_acceptance_contract_errors(task: dict[str, Any]) -> list[str]:
         errors.append(f"Task {task_id} contains duplicate acceptance check ids.")
     if (
         str(task.get("owner") or "") != "database"
-        and task.get("platform_executor") != "template.route_projection"
         and str(task.get("status") or "pending") not in {"completed", "already_satisfied"}
         and not any(
             check.get("kind") in {"file_operation", "repair_change"}
@@ -108,9 +107,7 @@ def _compile_task(
     compiled.pop("acceptance_criteria", None)
     compiled.pop("verification_commands", None)
     checks: list[dict[str, Any]] = []
-    if task.get("platform_executor") == "template.route_projection":
-        checks.append({"id": f"acceptance:{task.get('id')}:template-projector", "kind": "template_projector", "description": "模板 Route Projector 必须由确定性执行器成功完成。", "required": True, "target_paths": [], "expected": {}, "verification_stage": "build"})
-    elif str(task.get("owner") or "") == "database":
+    if str(task.get("owner") or "") == "database":
         checks.extend(_database_checks(task))
     else:
         checks.extend(_file_operation_checks(task))

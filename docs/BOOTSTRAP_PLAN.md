@@ -194,7 +194,7 @@ XCodeAgent 不可以：
 
 ## 1.5 Template Package Contract
 
-### 1.5.1 V1 顶层 Root 固定
+### 1.5.1 V1 必需 Root 与完整物化
 
 V1 `/v1/generate` ZIP 固定为：
 
@@ -206,25 +206,27 @@ template-package.zip
     └── template-state.json
 ```
 
-V1 不允许其他 Workspace 顶层 managed root。
+`frontend/` 与 `backend/` 是 V1 的最小必需根，但 ZIP 可携带未来模板新增的其它安全文件或目录。
 
-XCodeAgent Materializer 固定：
+XCodeAgent Materializer 不维护模板文件 allow-list；它对已通过 ZIP 安全校验的条目执行通用完整物化：
 
 ```python
-MANAGED_ROOTS = ("frontend", "backend")
+for entry in safe_zip_entries_except_template_state:
+    atomically_move_from_staging(entry)
+verify_every_file_by_relative_path_and_sha256()
 ```
 
-未来若新增 `infra/` 等 root，必须同时升级 Engine Package Contract 与 XCodeAgent allow-list。
+因此未来新增 `infra/`、根级说明文件或 `.xcodeagent/template-contracts/**` 不需要修改 XCodeAgent 的模板内容 allow-list。`frontend/`、`backend/` 仍由 Package 校验保证存在；平台保留 `.git/**`、`.xcodeagent/bootstrap-staging/**`，且 `.xcodeagent/template-state.json` 继续只由 XCodeAgent 写回。
 
-### 1.5.2 `.xcodeagent` exact allow-list
+### 1.5.2 `.xcodeagent` 平台保留路径
 
-唯一允许：
+`.xcodeagent/template-state.json` 不从 ZIP 直接提交，而由 XCodeAgent 原子写入唯一 State：
 
 ```text
 .xcodeagent/template-state.json
 ```
 
-禁止其他 `.xcodeagent/**` 和 `.git/**`。
+其它 `.xcodeagent/**` 文件（例如模板契约）与普通 ZIP 文件一样完整物化；若其目标已存在则整个事务失败并回滚。禁止 `.git/**` 与 `.xcodeagent/bootstrap-staging/**`，防止模板覆盖平台事务元数据。
 
 ### 1.5.3 Engine 契约一致性
 

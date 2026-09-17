@@ -23,7 +23,6 @@ from app.services.planning_frozen import (
     tuple_input,
 )
 from app.services.planning_run_contracts import PlanningRun, UnitRunState
-from app.services.template_route_projector import is_route_projection_task
 from app.services.unit_generation_contracts import UnitGenerationContext
 from app.services.unit_generation_requirement_targets import scoped_formal_targets
 from app.services.unit_generation_requirements import resolve_generation_requirements
@@ -89,14 +88,8 @@ class SequentialPlanningInputs(FrozenPlanningModel):
             if isinstance(value, Mapping)
             and value.get("id") == key
             and isinstance(value.get("unit_id"), str)
-            and not is_route_projection_task(value)
         ]
-        # Route Projection 不属于历史 retained 集合，ReuseFacts 也必须按同一边界计数。
-        expected_retained_count = sum(
-            1
-            for value in registry.values()
-            if not is_route_projection_task(value)
-        )
+        expected_retained_count = len(registry)
         actual = [(key, unit) for unit, keys in self.reuse_facts.retained_task_ids_by_unit.items() for key in keys]
         if len(retained) != expected_retained_count or len(actual) != len(set(actual)) or set(retained) != set(actual):
             fail_requirement_input("PLANNING_REUSE_BASELINE_MISMATCH", "ReuseFacts 必须精确覆盖完整 ConfirmedPlan。")

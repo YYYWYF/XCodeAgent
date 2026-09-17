@@ -7,7 +7,7 @@ TaskStatus = Literal["pending", "running", "completed", "failed"]
 BuildUnitKind = Literal["application", "database", "backend", "frontend", "page"]
 BuildTaskOwner = Literal["database", "backend", "frontend"]
 BuildTaskExecutionStrategy = Literal["agent", "deterministic"]
-BuildTaskPlatformExecutor = Literal["authorization.frontend_resources", "template.route_projection"]
+BuildTaskPlatformExecutor = Literal["authorization.frontend_resources"]
 BuildTaskType = Literal[
     "database.change",
     "database.seed",
@@ -20,7 +20,7 @@ BuildTaskType = Literal[
 ]
 BuildTaskRisk = Literal["low", "medium", "high"]
 DETERMINISTIC_PLATFORM_EXECUTOR_ALLOWLIST = frozenset(
-    {"authorization.frontend_resources", "template.route_projection"}
+    {"authorization.frontend_resources"}
 )
 
 
