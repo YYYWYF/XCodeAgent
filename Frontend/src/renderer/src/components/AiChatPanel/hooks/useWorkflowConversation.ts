@@ -675,7 +675,7 @@ export function useWorkflowConversation({
       completeConnectionRequest(current, current.requestGeneration)
     )
   }, [applicationLifecycle])
-  // 记录用户已明确结束的会话，保证自由输入不依赖后端控制请求或生命周期回传时序。
+  // 记录已由 Backend 确认结束的会话，避免生命周期回传时序短暂阻塞自由输入。
   const [endedPlanSessionKeys, setEndedPlanSessionKeys] = useState<Record<string, boolean>>({})
 
   const phaseExecution = sessionExecutions.find(
@@ -2144,6 +2144,7 @@ export function useWorkflowConversation({
     })
     const targetRunId = runId || execution?.runId || activeWorkflow?.runId
     const controlIdentity = activeRun?.identity || matchingActiveSession || activeSession
+    if (loading || workspaceBusy || !targetRunId || !controlIdentity) return
     const endedSessionKeys = Array.from(
       new Set(
         [activeRuntimeKey, controlIdentity?.key, draftKey].filter((key): key is string =>
@@ -2152,34 +2153,21 @@ export function useWorkflowConversation({
       )
     )
 
-    // 先释放前端输入门禁；即使没有 runId 或后端控制请求失败，用户也不能被卡在计划栏。
-    if (endedSessionKeys.length > 0) {
-      setEndedPlanSessionKeys((current) => {
-        const next = { ...current }
-        endedSessionKeys.forEach((key) => {
-          next[key] = true
-        })
-        return next
-      })
-      setLiveWorkflows((current) => {
-        const next = { ...current }
-        endedSessionKeys.forEach((key) => {
-          const workflow = current[key] || (key === activeRuntimeKey ? activeWorkflow : undefined)
-          const endedWorkflow = withWorkflowExecutionStatus(workflow, 'stopped', targetRunId)
-          if (endedWorkflow) next[key] = endedWorkflow
-        })
-        return next
-      })
-    }
-
-    // 结束动作的 UI 解锁不等待后端；请求仍尽力释放服务端工作区锁。
-    if (loading || workspaceBusy || !targetRunId) return
-    await sendWorkflowMessage('结束当前计划。', {
+    // 只有 Backend 返回成功的权威 lifecycle 后，前端才标记结束并解锁计划输入。
+    const ended = await sendWorkflowMessage('结束当前计划。', {
       planControlAction: 'end',
       planControlRunId: targetRunId,
       selectedPageId,
       sessionIdentity: controlIdentity,
       titleFrom: '结束计划'
+    })
+    if (!ended || endedSessionKeys.length === 0) return
+    setEndedPlanSessionKeys((current) => {
+      const next = { ...current }
+      endedSessionKeys.forEach((key) => {
+        next[key] = true
+      })
+      return next
     })
   }
 
@@ -2191,28 +2179,16 @@ export function useWorkflowConversation({
       threadId: activeWorkflow?.threadId
     })
     const targetRunId = runId || execution?.runId || activeWorkflow?.runId
-    if (!targetRunId) return
-    const resumeWorkflow = activeWorkflow
-    if (activeRuntimeKey && resumeWorkflow) {
-      setLiveWorkflows((current) => ({
-        ...current,
-        [activeRuntimeKey]:
-          withWorkflowExecutionStatus(resumeWorkflow, 'stopping', targetRunId) || resumeWorkflow
-      }))
-    }
-    const stopped = await sendWorkflowMessage('暂停当前计划执行。', {
+    const controlIdentity = activeRun?.identity || matchingActiveSession || activeSession
+    if (!targetRunId || !controlIdentity) return
+    // Stop 的 stopping/stopped 投影均由 Backend lifecycle stream 驱动，前端不先猜测状态。
+    await sendWorkflowMessage('暂停当前计划执行。', {
       planControlAction: 'stop',
       planControlRunId: targetRunId,
       selectedPageId,
+      sessionIdentity: controlIdentity,
       titleFrom: '暂停计划'
     })
-    if (stopped && activeRuntimeKey && resumeWorkflow) {
-      setLiveWorkflows((current) => ({
-        ...current,
-        [activeRuntimeKey]:
-          withWorkflowExecutionStatus(resumeWorkflow, 'stopped', targetRunId) || resumeWorkflow
-      }))
-    }
   }
 
   return {

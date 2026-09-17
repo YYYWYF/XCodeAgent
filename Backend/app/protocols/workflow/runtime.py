@@ -375,6 +375,7 @@ def build_workflow_ag_ui_stream(
             draft_digest=workflow_inputs.get("plan_control_draft_digest") or "",
             thread_id=thread_id,
             run_id=run_id,
+            owner_session_id=owner_session_id,
             accept=accept,
         )
     cancel_run_id = workflow_inputs["cancel_run_id"]
