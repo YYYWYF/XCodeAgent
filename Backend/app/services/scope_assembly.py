@@ -470,7 +470,13 @@ def assemble_scope_build_task_plan(
     if collision_issues:
         raise ScopeAssemblyError(collision_issues)
 
-    all_tasks = [*retained, *candidates]
+    # 路由投影是每轮根据当前页面事实重建的平台任务；旧正式 DAG 中的同名任务
+    # 不能与新任务并存，也不能作为新任务的依赖或跳过本轮验收编译。
+    retained_for_assembly = [
+        task for task in retained
+        if not (route_projection_required and task["id"] == "platform_route_projection")
+    ]
+    all_tasks = [*retained_for_assembly, *candidates]
     if route_projection_required:
         normal_task_ids = [str(task["id"]) for task in all_tasks]
         all_tasks.append({
@@ -479,12 +485,13 @@ def assemble_scope_build_task_plan(
             "execution_strategy": "deterministic", "platform_executor": "template.route_projection",
             "description": "根据确认的页面事实调用模板 Route Projector 统一注册业务路由。",
             "dependencies": normal_task_ids, "target_files": [], "allowed_paths": [],
+            "status": "pending",
             "provides_capabilities": ["platform.route_projection"],
             "source_refs": {"artifact": "confirmed-product-plan", "kind": "route_projection"},
             "deliverables": [],
         })
     skeleton = _validate_task_units(skeleton_plan, all_tasks)
-    retained_task_ids = tuple(str(task["id"]) for task in retained)
+    retained_task_ids = tuple(str(task["id"]) for task in retained_for_assembly)
     candidate_task_ids = tuple(str(task["id"]) for task in candidates)
     retained_id_set = set(retained_task_ids)
     context = {

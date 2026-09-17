@@ -188,6 +188,37 @@ class ScopeAssemblyTests(unittest.TestCase):
 
         self.assertIn("platform_route_projection", assembled["task_registry"])
 
+    def test_new_page_rebuilds_retained_route_projector_once(self) -> None:
+        """第二轮页面规划重建旧路由任务，保持唯一身份、验收检查和末尾依赖。"""
+
+        first = plain_json(assemble_scope_build_task_plan(**_base_inputs()).assembled_plan)
+        confirmed = {**first, "confirmation_status": "confirmed"}
+        inputs = _base_inputs()
+        inputs["base_confirmed_plan"] = confirmed
+        inputs["reuse_facts"] = _reuse_facts(confirmed)
+        page_unit = "page:customers"
+        inputs["generation_requirements_by_unit"] = {
+            page_unit: _requirement(page_unit)
+        }
+        inputs["candidates_by_unit"] = {
+            page_unit: _candidate(page_unit, [task(
+                "customers:page-current", page_unit, "frontend.page",
+                "frontend/src/pages/Customers/index.tsx", "customers",
+            )], "b")
+        }
+
+        result = assemble_scope_build_task_plan(**inputs)
+        assembled = plain_json(result.assembled_plan)
+        route_task = assembled["task_registry"]["platform_route_projection"]
+
+        self.assertTrue(assembled["task_graph"]["validation"]["is_valid"])
+        self.assertEqual(assembled["task_graph"]["nodes"].count("platform_route_projection"), 1)
+        self.assertNotIn("platform_route_projection", result.retained_task_ids)
+        self.assertEqual(route_task["status"], "pending")
+        self.assertTrue(route_task["acceptance_checks"])
+        self.assertIn("customers:page-current", route_task["dependencies"])
+        self.assertNotIn("platform_route_projection", route_task["dependencies"])
+
     def test_assembly_does_not_persist_route_projection_pages(self) -> None:
         """DAG 只能表达平台动作，不能保存第二份页面事实。"""
 
