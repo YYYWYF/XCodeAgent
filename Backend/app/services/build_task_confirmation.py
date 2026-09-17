@@ -58,8 +58,6 @@ def build_task_confirmation_read_model(
     review_tasks, retained_tasks, classification_errors, classification_blocked = _partition_confirmation_tasks(
         tasks,
         build_task_plan,
-        scope,
-        context,
     )
     read_model: dict[str, Any] = {
         "targetReview": _target_review(project_plan or {}, scope, context),
@@ -91,139 +89,60 @@ def _effective_build_context(
 def _partition_confirmation_tasks(
     tasks: list[dict[str, Any]],
     build_task_plan: dict[str, Any],
-    scope: dict[str, Any],
-    build_context: dict[str, Any],
 ) -> tuple[list[tuple[dict[str, Any], str]], list[dict[str, Any]], tuple[str, ...], bool]:
-    """优先按 Pending provenance 分类，旧草稿才临时使用可恢复的 BuildContext。"""
+    """只按当前 Pending provenance 投影任务，缺少来源事实时 fail closed。"""
 
     provenance = build_task_plan.get("planning_provenance")
-    if isinstance(provenance, Mapping):
-        try:
-            validated = validate_pending_planning_provenance(build_task_plan, provenance)
-        except ValueError as exc:
-            return (
-                [],
-                tasks,
-                (f"当前 PendingPlan 的 planning_provenance 无效：{exc}",),
-                True,
-            )
-        new_task_ids = set(validated["new_task_ids"])
-        task_ids = {str(task.get("id") or "") for task in tasks}
-        missing = sorted(new_task_ids - task_ids)
-        if missing:
-            return (
-                [],
-                tasks,
-                ("当前 PendingPlan 的 provenance 缺少可展示的 Task：" + "、".join(missing) + "。",),
-                True,
-            )
-        new_tasks = [task for task in tasks if str(task.get("id") or "") in new_task_ids]
-        tasks_by_id = {str(task.get("id") or ""): task for task in tasks}
-        reused_ids = _dependency_ancestor_ids(new_tasks, tasks_by_id) - new_task_ids
-        review_ids = new_task_ids | reused_ids
-        review_tasks = [
-            (
-                task,
-                "new" if str(task.get("id") or "") in new_task_ids else "reused",
-            )
-            for task in tasks
-            if str(task.get("id") or "") in review_ids
-        ]
-        retained_tasks = [
-            task
-            for task in tasks
-            if str(task.get("id") or "") not in review_ids
-        ]
-        return review_tasks, retained_tasks, (), False
-
-    if "planning_provenance" in build_task_plan:
+    if not isinstance(provenance, Mapping):
+        message = (
+            "当前 PendingPlan 的 planning_provenance 缺少有效对象，请重新生成。"
+            if "planning_provenance" in build_task_plan
+            else "当前 PendingPlan 缺少 planning_provenance，请重新生成。"
+        )
         return (
             [],
             tasks,
-            ("当前 PendingPlan 的 planning_provenance 缺少有效对象，请重新生成。",),
+            (message,),
             True,
         )
-    required_unit_ids = _legacy_required_unit_ids(build_context)
-    if required_unit_ids is None:
+    try:
+        validated = validate_pending_planning_provenance(build_task_plan, provenance)
+    except ValueError as exc:
         return (
             [],
             tasks,
-            ("旧 PendingPlan 缺少 planning_provenance，且无法从 BuildContext 恢复本轮任务来源，请重新生成。",),
+            (f"当前 PendingPlan 的 planning_provenance 无效：{exc}",),
             True,
         )
-    target_type = str(scope.get("type") or "")
-    # 只有能恢复完整旧 BuildContext 时才保留 application 旧草稿的全量兼容语义。
-    if target_type == "application":
-        return [(task, "new") for task in tasks], [], (), False
-
-    scope_tasks = [
-        task for task in tasks if str(task.get("unit_id") or "") in required_unit_ids
+    review_task_ids = validated["review_task_ids"]
+    new_task_ids = set(validated["new_task_ids"])
+    tasks_by_id = {
+        str(task.get("id") or ""): task
+        for task in tasks
+        if str(task.get("id") or "")
+    }
+    missing = sorted(set(review_task_ids) - set(tasks_by_id))
+    if missing:
+        return (
+            [],
+            tasks,
+            ("当前 PendingPlan 的 provenance 缺少可展示的 Task：" + "、".join(missing) + "。",),
+            True,
+        )
+    review_tasks = [
+        (
+            tasks_by_id[task_id],
+            "new" if task_id in new_task_ids else "reused",
+        )
+        for task_id in review_task_ids
     ]
-    scope_task_ids = {str(task.get("id") or "") for task in scope_tasks}
-    tasks_by_id = {str(task.get("id") or ""): task for task in tasks}
-    prerequisite_ids = _dependency_ancestor_ids(scope_tasks, tasks_by_id) - scope_task_ids
-    reused_prerequisites = [
-        task for task in tasks if str(task.get("id") or "") in prerequisite_ids
-    ]
+    review_ids = set(review_task_ids)
     retained_tasks = [
         task
         for task in tasks
-        if str(task.get("id") or "") not in scope_task_ids | prerequisite_ids
-    ]
-    review_ids = scope_task_ids | prerequisite_ids
-    review_tasks = [
-        (
-            task,
-            "new" if str(task.get("id") or "") in scope_task_ids else "reused",
-        )
-        for task in tasks
-        if str(task.get("id") or "") in review_ids
+        if str(task.get("id") or "") not in review_ids
     ]
     return review_tasks, retained_tasks, (), False
-
-
-def _legacy_required_unit_ids(build_context: Mapping[str, Any]) -> set[str] | None:
-    """读取旧 Pending 兼容分类所需的完整 required_unit_ids 字段。"""
-
-    if "required_unit_ids" not in build_context:
-        return None
-    value = build_context.get("required_unit_ids")
-    if not isinstance(value, (list, tuple, set)):
-        return None
-    return {
-        str(unit_id).strip()
-        for unit_id in value
-        if str(unit_id).strip()
-    }
-
-
-def _dependency_ancestor_ids(
-    scope_tasks: list[dict[str, Any]],
-    tasks_by_id: dict[str, dict[str, Any]],
-) -> set[str]:
-    """递归收集当前任务依赖的既有祖先，保留跨 Unit 的完整阻塞链。"""
-
-    ancestors: set[str] = set()
-    pending = [
-        str(dependency)
-        for task in scope_tasks
-        for dependency in task.get("dependencies") or []
-        if str(dependency)
-    ]
-    while pending:
-        task_id = pending.pop()
-        if task_id in ancestors:
-            continue
-        task = tasks_by_id.get(task_id)
-        if task is None:
-            continue
-        ancestors.add(task_id)
-        pending.extend(
-            str(dependency)
-            for dependency in task.get("dependencies") or []
-            if str(dependency) and str(dependency) not in ancestors
-        )
-    return ancestors
 
 
 def _retained_task_summary(tasks: list[dict[str, Any]]) -> dict[str, Any]:

@@ -292,6 +292,24 @@ class ScopeAssemblyTests(unittest.TestCase):
         self.assertEqual(result.task_origins["customers:api-current"], "candidate")
         self.assertEqual(result.candidate_unit_by_task_id, {"customers:api-current": SHARED_UNIT})
 
+    def test_fully_reused_scope_records_review_and_reused_task_ids(self) -> None:
+        """没有 Candidate 的当前 Scope 也必须在 Assembly 产出完整复用任务集合。"""
+
+        inputs = _base_inputs()
+        inputs["build_context"]["required_unit_ids"] = [SHARED_UNIT]
+        inputs["generation_requirements_by_unit"] = {SHARED_UNIT: ()}
+        inputs["candidates_by_unit"] = {}
+
+        result = assemble_scope_build_task_plan(**inputs)
+
+        self.assertEqual(result.candidate_task_ids, ())
+        self.assertEqual(result.review_task_ids, ("api:adapter", "orders:api"))
+        self.assertEqual(result.reused_task_ids, ("api:adapter", "orders:api"))
+        self.assertTrue(all(
+            result.task_origins[task_id] == "retained"
+            for task_id in result.review_task_ids
+        ))
+
     def test_candidate_retained_id_collision_fails_before_registry_rebuild(self) -> None:
         """Candidate 撞正式 Task ID 时归因当前 Unit，且不 rename 或覆盖历史任务。"""
 

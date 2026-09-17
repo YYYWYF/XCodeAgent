@@ -224,8 +224,10 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
             ),
             created_at=self.planning.updated_at,
             planning_provenance={
-                "schema_version": "planning-provenance.v1",
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": list(_validated_plan().get("task_registry", {})),
                 "new_task_ids": list(_validated_plan().get("task_registry", {})),
+                "reused_task_ids": [],
             },
         )
         pending = load_pending_build_task_plan(self.state)

@@ -59,8 +59,15 @@ def _cumulative_plan() -> dict:
             "validation": {"is_valid": True, "errors": []},
         },
         "planning_provenance": {
-            "schema_version": "planning-provenance.v1",
+            "schema_version": "planning-provenance.v2",
+            "review_task_ids": [
+                "shared-base",
+                "shared-client",
+                "orders-backend",
+                "orders-page",
+            ],
             "new_task_ids": ["orders-backend", "orders-page"],
+            "reused_task_ids": ["shared-base", "shared-client"],
         },
     }
 
@@ -68,15 +75,27 @@ def _cumulative_plan() -> dict:
 class BuildTaskConfirmationTests(unittest.TestCase):
     """验证确认任务只从 Pending provenance 与 Task Graph 派生。"""
 
-    def test_provenance_is_registry_minus_retained_in_topological_order(self) -> None:
-        """本轮新增集合来自最终 registry 减去 Assembly retained 集合。"""
+    def test_provenance_contains_assembly_review_scope_in_topological_order(self) -> None:
+        """Pending provenance 保留 Assembly 的 review、new、reused 三组来源。"""
 
         plan = _cumulative_plan()
         self.assertEqual(
-            build_planning_provenance(plan, ("history-task", "shared-base", "shared-client")),
+            build_planning_provenance(
+                plan,
+                ("history-task", "shared-base", "shared-client"),
+                ("shared-base", "shared-client", "orders-backend", "orders-page"),
+                ("shared-base", "shared-client"),
+            ),
             {
-                "schema_version": "planning-provenance.v1",
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": [
+                    "shared-base",
+                    "shared-client",
+                    "orders-backend",
+                    "orders-page",
+                ],
                 "new_task_ids": ["orders-backend", "orders-page"],
+                "reused_task_ids": ["shared-base", "shared-client"],
             },
         )
 
@@ -101,8 +120,37 @@ class BuildTaskConfirmationTests(unittest.TestCase):
         self.assertEqual(read_model["retainedTaskSummary"]["total"], 1)
         self.assertNotIn("classificationBlocked", read_model)
 
-    def test_legacy_pending_without_context_fails_closed(self) -> None:
-        """旧 Pending 缺少 provenance 与 BuildContext 时必须引导重新生成。"""
+    def test_fully_reused_scope_projects_all_review_tasks(self) -> None:
+        """本轮没有新增 Task 时，Confirmation 仍按 Assembly provenance 展示完整 Scope。"""
+
+        plan = _cumulative_plan()
+        plan["planning_provenance"] = build_planning_provenance(
+            plan,
+            tuple(plan["task_registry"]),
+            ("shared-base", "shared-client", "orders-backend", "orders-page"),
+            ("shared-base", "shared-client", "orders-backend", "orders-page"),
+        )
+
+        read_model = build_task_confirmation_read_model(
+            plan,
+            {"type": "page", "targetId": "orders"},
+            build_context={},
+        )
+
+        self.assertEqual(
+            [(task["id"], task["reviewRole"]) for task in read_model["reviewTasks"]],
+            [
+                ("shared-base", "reused"),
+                ("shared-client", "reused"),
+                ("orders-backend", "reused"),
+                ("orders-page", "reused"),
+            ],
+        )
+        self.assertEqual(read_model["retainedTaskSummary"]["total"], 1)
+        self.assertNotIn("classificationBlocked", read_model)
+
+    def test_pending_without_provenance_fails_closed(self) -> None:
+        """Pending 缺少当前 provenance 时必须引导重新生成。"""
 
         plan = _cumulative_plan()
         plan.pop("planning_provenance")

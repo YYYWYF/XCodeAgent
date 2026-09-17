@@ -63,8 +63,10 @@ class ConfirmPromotionTests(unittest.TestCase):
             input_fingerprint=_input_digest(self.inputs.model_dump(mode="json")),
             build_execution_scope=self.scope, created_at="2026-09-06T00:00:00Z",
             planning_provenance={
-                "schema_version": "planning-provenance.v1",
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": list(self.draft.get("task_registry", {})),
                 "new_task_ids": list(self.draft.get("task_registry", {})),
+                "reused_task_ids": [],
             },
         )
         identity = load_pending_build_task_plan(self.state)["draft_identity"]
@@ -569,8 +571,10 @@ class EndpointDesignStalePromotionTests(unittest.TestCase):
             build_execution_scope=scope,
             created_at="2026-09-10T00:00:00Z",
             planning_provenance={
-                "schema_version": "planning-provenance.v1",
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": [],
                 "new_task_ids": [],
+                "reused_task_ids": [],
             },
         )
         identity = load_pending_build_task_plan(self.state)["draft_identity"]
@@ -666,8 +670,10 @@ class PlanningPromotionIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 base_confirmed_plan_digest=run.base_confirmed_plan_digest, input_fingerprint=run.input_fingerprint,
                 build_execution_scope=plain_json(run.build_execution_scope), created_at=run.updated_at,
                 planning_provenance={
-                    "schema_version": "planning-provenance.v1",
-                    "new_task_ids": list(result.assembly.assembled_plan.get("task_registry", {})),
+                    "schema_version": "planning-provenance.v2",
+                    "review_task_ids": list(result.assembly.review_task_ids),
+                    "new_task_ids": list(result.assembly.candidate_task_ids),
+                    "reused_task_ids": list(result.assembly.reused_task_ids),
                 },
             )
             identity = load_pending_build_task_plan(state)["draft_identity"]

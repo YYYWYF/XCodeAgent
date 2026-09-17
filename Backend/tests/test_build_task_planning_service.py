@@ -118,6 +118,8 @@ class BuildTaskPlanningServiceTests(unittest.IsolatedAsyncioTestCase):
             build_planning_provenance(
                 result.validated_assembled_plan.assembly.assembled_plan,
                 result.validated_assembled_plan.assembly.retained_task_ids,
+                result.validated_assembled_plan.assembly.review_task_ids,
+                result.validated_assembled_plan.assembly.reused_task_ids,
             ),
         )
         self.assertEqual(persisted_run["planning_run_id"], result.planning_run_id)

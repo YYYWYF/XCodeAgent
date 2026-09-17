@@ -86,8 +86,10 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
             planning_provenance=metadata.get(
                 "planning_provenance",
                 {
-                    "schema_version": "planning-provenance.v1",
+                    "schema_version": "planning-provenance.v2",
+                    "review_task_ids": list(registry) if isinstance(registry, dict) else [],
                     "new_task_ids": list(registry) if isinstance(registry, dict) else [],
+                    "reused_task_ids": [],
                 },
             ),
         )
@@ -125,8 +127,10 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         self.assertEqual(
             loaded["planning_provenance"],
             {
-                "schema_version": "planning-provenance.v1",
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": ["page:orders::render"],
                 "new_task_ids": ["page:orders::render"],
+                "reused_task_ids": [],
             },
         )
         self.assertEqual(loaded["draft_identity"]["owner_session_id"], OWNER_SESSION_ID)
@@ -337,16 +341,30 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         self.assertFalse(self.pending_path.exists())
 
     def test_writer_rejects_invalid_planning_provenance(self) -> None:
-        """Pending writer 必须拒绝重复或不存在的本轮新增 Task ID。"""
+        """Pending writer 必须拒绝重复、非法类型或不存在的 provenance Task ID。"""
 
         for provenance in (
             {
-                "schema_version": "planning-provenance.v1",
-                "new_task_ids": ["page:orders::render", "page:orders::render"],
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": ["page:orders::render", "page:orders::render"],
+                "new_task_ids": ["page:orders::render"],
+                "reused_task_ids": [],
+            },
+            {
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": ["missing-task"],
+                "new_task_ids": ["missing-task"],
+                "reused_task_ids": [],
+            },
+            {
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": ("page:orders::render",),
+                "new_task_ids": ["page:orders::render"],
+                "reused_task_ids": [],
             },
             {
                 "schema_version": "planning-provenance.v1",
-                "new_task_ids": ["missing-task"],
+                "new_task_ids": ["page:orders::render"],
             },
         ):
             with self.subTest(provenance=provenance):

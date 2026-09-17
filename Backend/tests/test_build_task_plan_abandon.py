@@ -71,8 +71,10 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
             build_execution_scope={"type": "page", "targetId": "orders"},
             created_at="2026-09-06T00:00:00Z",
             planning_provenance={
-                "schema_version": "planning-provenance.v1",
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": [],
                 "new_task_ids": [],
+                "reused_task_ids": [],
             },
         )
         identity = load_pending_build_task_plan(self.state)["draft_identity"]
