@@ -34,7 +34,7 @@ def project_plan(*, authorization: bool = False) -> dict:
     }
     for name, entity in (("orders", "Order"), ("customers", "Customer")):
         plan["pages"].append({
-            "pageId": name, "path": f"/{name}",
+            "pageId": name, "name": entity, "path": f"/{name}",
             "references": {"permissions": ["admin" if authorization else "anonymous"]},
         })
         plan["page_implementation_contracts"].append({
@@ -230,10 +230,7 @@ def candidate_tasks(context: dict) -> list[dict]:
     if endpoint_unit in units:
         tasks.append(task(f"{name}:controller", endpoint_unit, "backend.endpoint_controller", f"backend/src/main/java/example/{name.title()}Controller.java", f"{name}.list"))
     if "frontend:api-client" in units:
-        tasks.extend([
-            task("api:adapter", "frontend:api-client", "frontend.shared_capability", "frontend/src/apis/response.ts", "frontend:api-client"),
-            task(f"{name}:api", "frontend:api-client", "frontend.api_module", f"frontend/src/apis/{name}.ts", f"{name}.list", dependencies=("api:adapter",)),
-        ])
+        tasks.append(task(f"{name}:api", "frontend:api-client", "frontend.api_module", f"frontend/src/apis/{name}.ts", f"{name}.list"))
     if "frontend:data:static" in units:
         tasks.append(task(f"{name}:static", "frontend:data:static", "frontend.static_data_module", f"frontend/src/data/{name}.ts", f"{name}.list"))
     if f"page:{name}" in units:
@@ -262,7 +259,7 @@ def confirmed_baseline(plan: dict, scope: dict) -> dict:
         raise AssertionError(baseline["task_graph"]["validation"]["errors"])
     baseline["confirmation_status"] = "confirmed"
     baseline["confirmed_at"] = "2026-09-04T00:00:00+00:00"
-    for task_id in ("api:adapter", "backend:bootstrap::config"):
+    for task_id in ("backend:bootstrap::config",):
         if task_id in baseline["task_registry"]:
             baseline["task_registry"][task_id]["status"] = "completed"
     return baseline

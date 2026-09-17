@@ -96,10 +96,7 @@ def _unit_responsibilities(
     if unit_id == "frontend:api-client":
         if not endpoints:
             return []
-        return [responsibility(
-            "frontend.response-entity-adapter", description="提供统一 ResponseEntity 传输适配器，供业务 API 模块复用。",
-            kind="frontend.shared_capability", target_id="response-entity-adapter",
-        ), *_endpoint_requirements("frontend.api_module", list(endpoints))]
+        return _endpoint_requirements("frontend.api_module", list(endpoints))
     if unit_id.startswith("frontend:data:"):
         source_id = unit_id.removeprefix("frontend:data:")
         if source_id != "static":

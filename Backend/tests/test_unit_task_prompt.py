@@ -304,18 +304,13 @@ class UnitTaskPromptTests(unittest.TestCase):
             (
                 _unit_context("frontend:api-client", "frontend", [
                     _requirement(
-                        "frontend.shared_capability",
-                        "response-entity-adapter",
-                        target_id="response-entity-adapter",
-                    ),
-                    _requirement(
                         "frontend.api_module",
                         "orders-api:orders.list",
                         api_contract_id="orders-api",
                         endpoint_id="orders.list",
                     ),
                 ]),
-                ("frontend:api-client::response-entity-adapter", "SUC0000"),
+                ("frontend:api-client::<api_contract_id>::api-module", "platform-owned `frontend/src/apis/service.ts`"),
             ),
             (
                 _unit_context("frontend:data:static", "frontend", [

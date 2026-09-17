@@ -151,7 +151,7 @@ SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `sta
 
 页面任务只继承 `frontend:*` 公共 Unit 和同页面 Unit 内部依赖，不把 `backend:endpoint:*` 或 `database:*` 编译成任务依赖。数据库前置任务完成后，BuildScheduler 可把依赖已满足且文件锁不重叠的 backend 与 page 任务放入同一批次，Build Subgraph 再按 owner 并发调用前后端 Agent；并发工作区快照按各自任务的 `change_scope/target_files/allowed_paths` 过滤后再归属，防止前端文件计入后端结果。API Contract 是并行期间的共同事实来源，`app:integration` 仍等待 endpoint 与 page 两边完成后统一验证。该设计沿用 learn-coding-agent 的契约先行、执行后验证循环，采用 OpenCode 的独立 owner/tool 执行边界，并让 Deep Agents 的专业 Agent 仅获得各自任务范围；每个 owner 仍只接收当前批次的紧凑任务与正式产物引用，符合 128k 上下文预算。
 
-真实后端接口的 `frontend:api-client` Unit 由一个唯一共享任务生成 `frontend/src/apis/responseEntity.ts`，同 Unit 的业务 API 模块依赖并复用它；已复用公共 Unit 时不得重建适配器或复制历史任务 ID。TechnicalPlan API Contract 保持原有业务 Schema：`response_schema_ref` 表示 `ResponseEntity<T>.body` 中的 `T`，后端 Controller 通过模板 `common.response.ResponseEntity<T>` 返回，前端 API 模块按实际 `service.ts` 返回约定统一解包后只向页面暴露 `Promise<T>`。成功码固定为 `SUC0000`；无响应 Schema 的空结果只校验 envelope，static 前端数据模块不使用该 HTTP 传输适配器。
+真实后端接口的 `frontend:api-client` Unit 按 API Contract 生成业务 API 模块，并复用模板内置的 `frontend/src/apis/service.ts`；业务 API Task 不生成独立响应适配器，也不依赖共享适配器任务。TechnicalPlan API Contract 保持原有业务 Schema：`response_schema_ref` 表示后端 `common.response.ResponseEntity<T>.body` 中的 `T`，模板 `service.ts` 统一校验响应和业务码并直接返回 `body`，前端 API 模块通过 `service.<method><T>()` 向页面暴露 `Promise<T>`；无响应 Schema 的接口执行 `service.<method><void>()`，static 前端数据模块不使用 HTTP 传输层。
 
 `inspect_workspace` 完成后固定进入 `prepare_build_tasks`。数据库字段候选只在独立 `ApiDesignConfigModal` 配置流中为直属 MySQL 按需实时读取；字段映射配置不执行 DDL。Builtin 与 DBID 明确不支持实时元数据读取，外部 API 只读数据源目录中最新保存的 Operation Schema，不发起真实请求。
 

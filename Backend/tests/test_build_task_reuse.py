@@ -84,10 +84,11 @@ class BuildTaskReuseTests(unittest.TestCase):
     def test_pending_historical_task_is_retained(self) -> None:
         """confirmed DAG 中 pending Task 已占据职责，不能因未执行而再次规划。"""
 
-        self.inputs["confirmed_plan"] = _plan(_task("adapter", provides=["frontend.response-entity-adapter"]))
+        capability = "frontend.api_module:users-api:users.list"
+        self.inputs["confirmed_plan"] = _plan(_task("users-api", provides=[capability]))
         facts = resolve_reuse_facts(**self.inputs)
-        self.assertEqual(facts.retained_task_ids_by_unit["frontend:api-client"], ("adapter",))
-        self.assertEqual(facts.reusable_capabilities_by_unit["frontend:api-client"], {"frontend.response-entity-adapter": ("adapter",)})
+        self.assertEqual(facts.retained_task_ids_by_unit["frontend:api-client"], ("users-api",))
+        self.assertEqual(facts.reusable_capabilities_by_unit["frontend:api-client"], {capability: ("users-api",)})
         self.assertEqual(facts.issues, ())
 
     def test_accepts_confirmed_loader_output_without_using_skeleton_tasks(self) -> None:
@@ -114,16 +115,24 @@ class BuildTaskReuseTests(unittest.TestCase):
         self.assertEqual(snapshots[0]["retained_task_ids_by_unit"]["frontend:api-client"], ["users"])
 
     def test_shared_unit_retains_existing_responsibilities_without_claiming_missing_ones(self) -> None:
-        """共享 Unit 同时保有 adapter/users 职责，orders 缺项仍未被任何事实覆盖。"""
+        """共享 Unit 保有 users 接口职责，orders 缺项仍未被任何事实覆盖。"""
 
         self.inputs["confirmed_plan"] = _plan(
-            _task("adapter", provides=["frontend.response-entity-adapter"]),
-            _owner("users", "users-api", "users.list", provides=["users.api"]),
+            _owner(
+                "users", "users-api", "users.list",
+                provides=["frontend.api_module:users-api:users.list"],
+            ),
         )
         facts = resolve_reuse_facts(**self.inputs)
-        self.assertEqual(facts.retained_task_ids_by_unit["frontend:api-client"], ("adapter", "users"))
-        self.assertEqual(set(facts.reusable_capabilities_by_unit["frontend:api-client"]), {"frontend.response-entity-adapter", "users.api"})
-        self.assertNotIn("orders.api", facts.reusable_capabilities_by_unit["frontend:api-client"])
+        self.assertEqual(facts.retained_task_ids_by_unit["frontend:api-client"], ("users",))
+        self.assertEqual(
+            set(facts.reusable_capabilities_by_unit["frontend:api-client"]),
+            {"frontend.api_module:users-api:users.list"},
+        )
+        self.assertNotIn(
+            "frontend.api_module:orders-api:orders.list",
+            facts.reusable_capabilities_by_unit["frontend:api-client"],
+        )
         self.assertEqual([owner.endpoint_id for owner in facts.retained_endpoint_owners], ["users.list"])
         self.assertEqual(set(facts.model_dump()), {
             "retained_task_ids_by_unit", "reusable_capabilities_by_unit", "retained_endpoint_owners", "external_capabilities", "issues",

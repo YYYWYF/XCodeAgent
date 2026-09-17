@@ -164,36 +164,25 @@ TemplateState 是唯一模板能力事实源：页面任务只生成真实 `src/
 
 ```ts
 // src/apis/dutyApi.ts
-import { service } from './service';
-import type { ResponseEntity } from './responseEntity';
-import { unwrapResponseEntity } from './responseEntity';
+import service from './service';
 
 export async function fetchDutyList(params: DutyListQuery): Promise<DutyListResponse> {
-  const response = await service.get<ResponseEntity<DutyListResponse>>('/duty/list', { params });
-  return unwrapResponseEntity(response);
+  return service.get<DutyListResponse>('/duty/list', { params });
 }
 ```
 
-模板 `service.ts` 的响应拦截器会直接返回 HTTP 响应数据，因此所有 HTTP 方法的
-业务 API 都必须把 `service.get/post/put/patch/delete` 返回值本身传给共享解包函数。
-例如 POST 接口调用 `unwrapResponseEntity(response)`；空响应调用
-`unwrapEmptyResponseEntity(response)`。所有 HTTP 方法保持相同的解包边界，不得修改
-`service.ts`。
+模板 `service.ts` 是平台提供的 HTTP 客户端。它的响应拦截器负责校验后端统一响应、
+处理业务返回码，并在成功时直接返回业务 `body`。业务 API 按模板现有导出方式导入
+`service`，不得修改 `service.ts`。
 
 真实后端业务接口统一遵守以下传输边界：
 
 - API Contract 的 `response_schema_ref` 描述业务类型 `T`，对应后端
-  `common.response.ResponseEntity<T>.body`，不是 HTTP JSON 根结构。
-- `src/apis/responseEntity.ts` 是 `frontend:api-client` Unit 的唯一共享适配器，固定导出
-  `ResponseEntity<T>`、`ResponseEntityBusinessError`、
-  `ResponseEntityProtocolError`、`unwrapResponseEntity<T>()` 和
-  `unwrapEmptyResponseEntity()`；成功码固定为 `SUC0000`。
-- 有 `response_schema_ref` 的接口使用 `unwrapResponseEntity<T>()` 并向页面返回
-  `Promise<T>`；没有响应 Schema 的空结果接口使用 `unwrapEmptyResponseEntity()`。
-- 页面、hooks、ProTable request 和 response binding 不得感知 `ResponseEntity` 或
-  `.body`。各业务 API 文件不得重复定义 envelope、成功码、异常类或解包逻辑。
-- `responseEntity.ts` 中每个函数和方法都必须有中文用途注释；协议结构损坏、非成功业务码
-  和成功响应缺少必需业务体必须分别显式失败，不能静默返回 `undefined`。
+  `common.response.ResponseEntity<T>.body`，即 `service` 成功返回的业务值。
+- 有 `response_schema_ref` 的接口使用 `service.get/post/put/delete<T>()` 并向页面返回
+  `Promise<T>`。
+- 没有响应 Schema 的空结果接口执行 `await service.<method><void>()` 后正常返回。
+- 页面、hooks、ProTable request 和 response binding 只消费业务 API 函数返回的业务类型。
 
 ### 🔴 数据源类型决定 API 写法（Static vs Database）
 
@@ -203,8 +192,7 @@ export async function fetchDutyList(params: DutyListQuery): Promise<DutyListResp
 
 当正式数据源类型是 `static`，且详情实现来源为 `frontend_mock` 时，页面**不调用任何真实后端接口**，`src/apis/<biz>Api.ts` 里写**内存数据访问函数**：模块级维护一组测试记录，用 `delay(ms)` 模拟网络延迟，导出的 async 函数严格按 API 契约对记录做筛选、分页、增删改后返回。**不要** `import service`、**不要** `service.get('/api/...')`、**不要**改 `vite.config.ts` 加 Mock 插件；页面组件也不得自行维护业务静态数组。
 
-Static 模块没有 HTTP 传输层，必须直接返回业务类型 `T`，不得导入
-`ResponseEntity` 或 `responseEntity.ts` 的解包函数。
+Static 模块没有 HTTP 传输层，必须直接返回业务类型 `T`。
 
 ```ts
 // src/apis/dutyApi.ts —— Static 前端内存数据模块写法

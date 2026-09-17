@@ -36,13 +36,14 @@ def _requirement(unit_id: str) -> dict:
             },
         }
     if unit_id == "frontend:api-client":
+        capability = "frontend.api_module:orders-api:orders.list"
         return {
-            "requirement_id": "frontend.response-entity-adapter",
-            "description": "实现公共响应适配器",
+            "requirement_id": capability,
+            "description": "实现订单 API 模块",
             "source_refs": {
-                "artifact": "technical-plan", "kind": "frontend.shared_capability",
-                "capability_id": "frontend.response-entity-adapter",
-                "target_id": "response-entity-adapter",
+                "artifact": "technical-plan", "kind": "frontend.api_module",
+                "capability_id": capability, "api_contract_id": "orders-api",
+                "endpoint_id": "orders.list",
             },
         }
     capability = "frontend.api_module:orders-api:orders.list"
@@ -414,7 +415,16 @@ class UnitCandidateValidatorTests(unittest.TestCase):
 
         context_payload = _context("frontend:api-client").model_dump(mode="json")
         api_requirement = _requirement("frontend:api-module")
-        shared_requirement = _requirement("frontend:api-client")
+        shared_requirement = {
+            "requirement_id": "frontend.auth.resources:catalog-v1",
+            "description": "生成当前权限资源目录",
+            "source_refs": {
+                "artifact": "technical-plan",
+                "kind": "frontend.shared_capability",
+                "capability_id": "frontend.auth.resources:catalog-v1",
+                "target_id": "catalog-v1",
+            },
+        }
         context_payload["generation_requirements"] = [
             api_requirement,
             shared_requirement,

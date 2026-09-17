@@ -114,17 +114,17 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertIn("provided array order", data_source_prompt)
         self.assertNotIn("regular backend verification", data_source_prompt)
 
-    def test_frontend_execution_prompt_requires_shared_response_entity_adapter(self) -> None:
-        """真实业务 API 必须按公共适配器解包，页面侧只消费业务类型。"""
+    def test_frontend_execution_prompt_uses_template_service_business_body(self) -> None:
+        """真实业务 API 必须直接消费模板 service 返回的业务类型。"""
 
         prompt = _frontend_generation_prompt(
             project_plan={"app": {"name": "demo"}},
             build_task_plan={"summary": {}},
             tasks=[
                 {
-                    "id": "frontend:api-client::response-entity-adapter",
+                    "id": "frontend:api-client::orders-api::api-module",
                     "unit_id": "frontend:api-client",
-                    "allowed_paths": ["frontend/src/apis/responseEntity.ts"],
+                    "allowed_paths": ["frontend/src/apis/ordersApi.ts"],
                     "source_refs": {
                         "entity_designs": [
                             {"entity_id": "Order", "data_source_type": "database"}
@@ -134,25 +134,20 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
             ],
         )
 
-        self.assertIn("ResponseEntity transport boundary", prompt)
-        self.assertIn("`response_schema_ref` describes `T`", prompt)
+        self.assertIn("Template service response boundary", prompt)
+        self.assertIn("`response_schema_ref` describes the business value `T`", prompt)
         self.assertIn("response interceptor", prompt)
-        self.assertIn("a POST implementation must call", prompt)
-        self.assertIn("`unwrapResponseEntity(response)`", prompt)
-        self.assertIn("`unwrapEmptyResponseEntity(response)`", prompt)
-        self.assertNotIn("response.data", prompt)
-        self.assertIn("`src/apis/responseEntity.ts`", prompt)
-        self.assertIn("`unwrapResponseEntity<T>()`", prompt)
-        self.assertIn("`unwrapEmptyResponseEntity()`", prompt)
-        self.assertIn("never expose ResponseEntity or `.body` to pages", prompt)
-        self.assertIn("Keep `service.ts` untouched", prompt)
+        self.assertIn("`service.get<T>()`", prompt)
+        self.assertIn("return the service result directly", prompt)
+        self.assertIn("`service.<method><void>()`", prompt)
+        self.assertIn("Keep `src/apis/service.ts` unchanged", prompt)
 
     def test_frontend_execution_prompt_requires_exact_resources_import(self) -> None:
         """受控页面任务必须收到唯一 RESOURCES 目录的精确导入约束。"""
 
         prompt = _frontend_generation_prompt(
             project_plan={"app": {"name": "demo"}},
-            build_task_plan={"summary": {}, "template_context": {"state_path": ".xcodeagent/template-state.json", "template_revision": "r1", "effective_capabilities": {"authorization": {"enabled": True}}}},
+            build_task_plan={"summary": {}, "template_context": {"state_path": ".xcodeagent/template-state.json", "template_revision": "r1", "effective_capabilities": {"authorization": {"enabled": True, "config": {}}}}},
             tasks=[
                 {
                     "id": "page:assets",
@@ -288,7 +283,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertNotIn("Data source is STATIC", page_prompt)
         self.assertIn("frontend-static-data-generate", static_prompt)
         self.assertIn("Data source is STATIC", static_prompt)
-        self.assertIn("must not import ResponseEntity or the adapter", static_prompt)
+        self.assertIn("Static frontend data modules continue to return", static_prompt)
 
     def test_empty_or_unavailable_tool_result_keeps_workspace_search_fallback(self) -> None:
         """空图结果和查询异常必须显式返回文件搜索降级信息。"""

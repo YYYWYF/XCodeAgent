@@ -75,7 +75,6 @@ shell 缺少 T2.2 提供的外部 `frontend.shell.ready` 平台证据时前置�
 | 职责 | requirement_id / capability_id |
 | --- | --- |
 | 页面实现 | `frontend.page:<page_id>` |
-| 公共 ResponseEntity adapter | `frontend.response-entity-adapter`（沿用当前已明确的能力名） |
 | 前端正式接口模块 | `frontend.api_module:<api_contract_id>:<endpoint_id>` |
 | 静态接口模块 | `frontend.static_data_module:<api_contract_id>:<endpoint_id>` |
 | bootstrap 数据源能力 | `backend.bootstrap:database` / `backend.bootstrap:external_api` |

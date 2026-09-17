@@ -65,7 +65,7 @@ class GlobalPlanningIntegrationTests(unittest.TestCase):
 
         inputs = _base_inputs()
         inputs["candidates_by_unit"] = {
-            SHARED_UNIT: _candidate(SHARED_UNIT, [_customer_api_task("api:adapter")])
+            SHARED_UNIT: _candidate(SHARED_UNIT, [_customer_api_task("orders:api")])
         }
 
         decision = attribute_global_issues(
@@ -150,13 +150,13 @@ class GlobalPlanningIntegrationTests(unittest.TestCase):
 
         inputs = _base_inputs()
         inputs["candidates_by_unit"] = {
-            SHARED_UNIT: _candidate(SHARED_UNIT, [_customer_api_task("api:adapter")])
+            SHARED_UNIT: _candidate(SHARED_UNIT, [_customer_api_task("orders:api")])
         }
         issues = [*_caught_assembly_issues(inputs), ValidationIssue(
             code="GLOBAL_COMPILER_ERROR",
             level="global",
             category="platform",
-            task_ids=("api:adapter",),
+            task_ids=("orders:api",),
             retryable=False,
             message="平台编译阻断。",
         )]

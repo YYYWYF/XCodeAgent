@@ -190,37 +190,21 @@ def _frontend_generation_prompt(
         if has_static_data_source
         else ""
     )
-    response_entity_instruction = (
-        "## ResponseEntity transport boundary\n"
-        "The confirmed API Contract remains the business-data contract: an endpoint's "
-        "`response_schema_ref` describes `T`, which is the value carried by the backend "
-        "`common.response.ResponseEntity<T>.body`; it does not describe the HTTP JSON root. "
-        "For every real backend business API, keep page/hooks types as `T` and exported API "
-        "functions as `Promise<T>`. The shared `src/apis/service.ts` response interceptor "
-        "already returns the HTTP response payload for every HTTP method. Always pass the "
-        "value returned by `service.get/post/put/patch/delete` directly to the shared unwrap "
-        "helper. For example, a POST implementation must call "
-        "`unwrapResponseEntity(response)`. The same rule applies to "
-        "`unwrapEmptyResponseEntity(response)`. Keep this boundary consistent across all HTTP "
-        "methods. "
-        "Type the HTTP payload as `ResponseEntity<T>` and never expose ResponseEntity or "
-        "`.body` to pages, hooks, ProTable requests, or response bindings.\n"
-        "The task `frontend:api-client::response-entity-adapter`, when dispatched, must create "
-        "exactly `src/apis/responseEntity.ts`. It exports `ResponseEntity<T>` with "
-        "`returnCode`, nullable/optional `errorMsg`, and nullable/optional `body`; "
-        "`ResponseEntityBusinessError` carrying returnCode and errorMsg; "
-        "`ResponseEntityProtocolError` for a malformed envelope or a missing non-empty body; "
-        "`unwrapResponseEntity<T>()`, which accepts the envelope, requires returnCode "
-        "`SUC0000`, requires a non-null body, and returns `T`; and "
-        "`unwrapEmptyResponseEntity()`, which requires only a valid SUC0000 envelope and "
-        "returns void. Every function and method in that file must have a Chinese purpose "
-        "comment. Business API modules import these definitions from `./responseEntity`; they "
-        "must not redeclare the envelope, success code, errors, or unwrap logic.\n"
-        "Endpoints with `response_schema_ref` use `unwrapResponseEntity<T>()`. Endpoints "
-        "without a response schema, such as an empty delete result, use "
-        "`unwrapEmptyResponseEntity()`. Static frontend data modules have no HTTP transport: "
-        "they must not import ResponseEntity or the adapter and continue returning their "
-        "contract business value directly. Keep `service.ts` untouched.\n\n"
+    service_response_instruction = (
+        "## Template service response boundary\n"
+        "`src/apis/service.ts` is the platform-owned HTTP client. Its response interceptor "
+        "validates the backend response envelope, handles the business return code, and "
+        "resolves a successful request to its business body.\n"
+        "For a real backend endpoint, `response_schema_ref` describes the business value `T` "
+        "returned by service. Import service using the template's existing export style and "
+        "type the request as `service.get<T>()`, `service.post<T>()`, `service.put<T>()`, or "
+        "`service.delete<T>()`.\n"
+        "Export each business API function as `Promise<T>` and return the service result "
+        "directly. For an endpoint without a response schema, await the corresponding "
+        "`service.<method><void>()` call and return normally.\n"
+        "Keep `src/apis/service.ts` unchanged. Pages and components consume the generated "
+        "business API functions. Static frontend data modules continue to return their "
+        "contract business values directly.\n\n"
     )
     authorization_boundary = (
         "## Authorization boundary\n"
@@ -261,7 +245,7 @@ def _frontend_generation_prompt(
         + _page_template_instruction(page_template)
         + _ui_design_reference_instruction(ui_designs)
         + data_source_instruction
-        + response_entity_instruction
+        + service_response_instruction
         + authorization_boundary
         + "For business APIs, import functions from `src/apis/` "
         "and invoke them through `useRequest`; page and component code must never call `fetch`, `axios`, or `service` directly. "

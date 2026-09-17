@@ -311,18 +311,20 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cursor, len(expected_progression), self.phases)
 
     async def test_shared_unit_retains_history_and_appends_missing_api_only(self):
-        """共享 Unit 精确复用 adapter/旧接口，只追加 customers 缺失职责并保留所有历史合同。"""
+        """共享 Unit 精确复用旧接口，只追加 customers 缺失职责并保留所有历史合同。"""
 
         baseline = confirmed_baseline(project_plan(), execution_scope())
-        baseline["task_registry"]["api:adapter"]["provides_capabilities"] = ["frontend.response-entity-adapter"]
         inputs = shared_inputs(baseline)
         result = await self._plan(inputs)
         self.assertEqual(len(self.calls), 1)
         context = self.calls[0][0].context
         self.assertEqual([item.requirement_id for item in context.generation_requirements], ["frontend.api_module:customers-api:customers.list"])
-        self.assertEqual({item["id"] for item in context.dependency_context["retained_task_summaries"]}, {"api:adapter", "orders:api"})
+        self.assertEqual({item["id"] for item in context.dependency_context["retained_task_summaries"]}, {"orders:api"})
         assembled = result.assembly.assembled_plan["task_registry"]
-        self.assertEqual(len(assembled), len(baseline["task_registry"]) + 1)
+        self.assertEqual(
+            set(assembled) - set(baseline["task_registry"]),
+            {"frontend:api-client-r1-a1-0", "platform_route_projection"},
+        )
         for key, task in baseline["task_registry"].items():
             self._assert_retained_contract(assembled[key], task)
 

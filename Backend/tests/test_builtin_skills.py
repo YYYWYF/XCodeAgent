@@ -269,24 +269,19 @@ class BuiltinSkillsTests(unittest.TestCase):
             self.assertIn("allowed_paths", content)
         self.assertIn("must not modify, copy, or regenerate", bootstrap)
 
-    def test_frontend_skill_requires_shared_response_entity_unwrap(self) -> None:
-        """前端边界 Skill 必须固定真实接口的公共响应解包规则。"""
+    def test_frontend_skill_uses_template_service_business_body(self) -> None:
+        """前端边界 Skill 必须固定模板 service 直接返回业务值的规则。"""
 
         root = builtin_skills.validate_required_builtin_skills()
         content = (
             root / "frontend-template-modification-boundary" / "SKILL.md"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("src/apis/responseEntity.ts", content)
-        self.assertIn("ResponseEntityBusinessError", content)
-        self.assertIn("ResponseEntityProtocolError", content)
-        self.assertIn("unwrapResponseEntity<T>()", content)
-        self.assertIn("unwrapEmptyResponseEntity()", content)
-        self.assertIn("SUC0000", content)
-        self.assertIn("POST 接口调用 `unwrapResponseEntity(response)`", content)
-        self.assertIn("`unwrapEmptyResponseEntity(response)`", content)
-        self.assertNotIn("response.data", content)
-        self.assertIn("不得导入", content)
+        self.assertIn("import service from './service'", content)
+        self.assertIn("service.get<DutyListResponse>", content)
+        self.assertIn("成功时直接返回业务 `body`", content)
+        self.assertIn("`service.get/post/put/delete<T>()`", content)
+        self.assertIn("`await service.<method><void>()`", content)
 
     def test_source_tree_skills_are_available_and_complete(self) -> None:
         """确认源码内置技能完整且能生成页面卡片元数据。"""

@@ -31,7 +31,7 @@ class DagPlanningBaselineTests(unittest.TestCase):
                     if target == "endpoint"
                     else {
                         "backend:bootstrap::config", "orders:controller",
-                        "api:adapter", "orders:api", "orders:page",
+                        "orders:api", "orders:page",
                     }
                 )
                 self.assertEqual(result["status"], "ready")
@@ -50,13 +50,13 @@ class DagPlanningBaselineTests(unittest.TestCase):
 
         plan = project_plan()
         baseline = confirmed_baseline(plan, execution_scope())
-        baseline["task_registry"]["api:adapter"]["acceptance_evidence"] = [{"status": "passed"}]
+        baseline["task_registry"]["orders:api"]["acceptance_evidence"] = [{"status": "passed"}]
         before = deepcopy(baseline)
         reused = ensure_build_unit_skeleton(plan, workspace_snapshot(), baseline)
         self.assertTrue(reused["unit_skeleton"]["reused"])
         for key in ("task_registry", "task_graph", "build_units", "confirmation_status"):
             self.assertEqual(reused[key], before[key])
-        reused["task_registry"]["api:adapter"]["acceptance_evidence"][0]["status"] = "failed"
+        reused["task_registry"]["orders:api"]["acceptance_evidence"][0]["status"] = "failed"
         self.assertEqual(baseline, before)
 
     def test_workspace_revision_refresh_keeps_confirmed_task_contracts(self) -> None:
@@ -108,8 +108,8 @@ class DagPlanningBaselineTests(unittest.TestCase):
         dependencies = {key: set(value["dependencies"]) for key, value in result["task_registry"].items()}
         self.assertEqual(dependencies, {
             "backend:bootstrap::config": set(), "orders:controller": {"backend:bootstrap::config"},
-            "api:adapter": set(), "orders:api": {"api:adapter"},
-            "orders:page": {"api:adapter", "orders:api"},
+            "orders:api": set(),
+            "orders:page": {"orders:api"},
         })
         graph = result["task_graph"]
         expected_edges = {(dependency, task_id) for task_id, values in dependencies.items() for dependency in values}
@@ -128,7 +128,7 @@ class DagPlanningBaselineTests(unittest.TestCase):
         for invalid_dependency in ("orders:api", "missing-task"):
             with self.subTest(dependency=invalid_dependency):
                 candidates = candidate_tasks(context)
-                next(t for t in candidates if t["id"] == "api:adapter")["dependencies"] = [invalid_dependency]
+                next(t for t in candidates if t["id"] == "orders:api")["dependencies"] = [invalid_dependency]
                 result = create_build_task_plan(
                     plan, agent_plan={"tasks": candidates}, build_context=context,
                     base_build_task_plan=ensure_build_unit_skeleton(plan, workspace_snapshot()),
@@ -232,7 +232,7 @@ class DagPlanningBaselineTests(unittest.TestCase):
                 sliced = resolve_execution_slice(build_task_plan=baseline, tasks=tasks, build_execution_scope=execution_scope())
                 self.assertEqual(set(sliced["task_ids"]), set(baseline["task_registry"]))
                 self.assertNotIn("page:customers", sliced["unit_ids"])
-                expected_reused = {"api:adapter", "backend:bootstrap::config"}
+                expected_reused = {"backend:bootstrap::config"}
                 self.assertEqual(set(sliced["reusable_task_ids"]), expected_reused)
                 self.assertEqual(set(sliced["pending_task_ids"]), set(baseline["task_registry"]) - expected_reused)
                 endpoint = resolve_execution_slice(build_task_plan=baseline, tasks=tasks, build_execution_scope=execution_scope("endpoint"))

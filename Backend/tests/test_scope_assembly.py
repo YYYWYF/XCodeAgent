@@ -84,7 +84,6 @@ def _customer_api_task(task_id: str = "customers:api-current") -> dict:
         "frontend.api_module",
         "frontend/src/apis/customers.ts",
         "customers.list",
-        dependencies=("api:adapter",),
     )
     candidate["task_type"] = "frontend.code"
     return candidate
@@ -313,7 +312,7 @@ class ScopeAssemblyTests(unittest.TestCase):
         inputs = _base_inputs()
         inputs["candidates_by_unit"] = {SHARED_UNIT: _candidate(
             SHARED_UNIT,
-            [_customer_api_task("api:adapter")],
+            [_customer_api_task("orders:api")],
         )}
         before = deepcopy(inputs["base_confirmed_plan"])
 
@@ -322,7 +321,7 @@ class ScopeAssemblyTests(unittest.TestCase):
 
         issue = raised.exception.issues[0]
         self.assertEqual(issue.code, "GLOBAL_TASK_ID_COLLISION")
-        self.assertEqual(issue.task_ids, ("api:adapter",))
+        self.assertEqual(issue.task_ids, ("orders:api",))
         self.assertEqual(issue.retry_unit_ids, (SHARED_UNIT,))
         self.assertEqual(inputs["base_confirmed_plan"], before)
 

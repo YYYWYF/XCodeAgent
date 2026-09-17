@@ -112,7 +112,7 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
         by_unit = result.generation_requirements_by_unit
         self.assertEqual([item.requirement_id for item in by_unit["page:orders"]], ["frontend.page:orders"])
         self.assertEqual([item.requirement_id for item in by_unit["frontend:api-client"]], [
-            "frontend.api_module:orders-api:orders.list", "frontend.response-entity-adapter",
+            "frontend.api_module:orders-api:orders.list",
         ])
         self.assertEqual(len(by_unit["backend:endpoint:orders-api:orders.list"]), 4)
         self.assertEqual(set(result.planning_unit_ids), {
@@ -134,10 +134,9 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
                 self.assertEqual(result.planning_unit_ids, ())
 
     def test_shared_api_client_appends_only_missing_endpoint(self) -> None:
-        """已有 adapter/users API 的共享 Unit 仍可 retain + generate orders API。"""
+        """已有 users API 的共享 Unit 仍可 retain + generate orders API。"""
 
         inputs = _inputs(
-            _task("adapter", provides=["frontend.response-entity-adapter"]),
             _owner("users", "users-api", "users.list"),
         )
         inputs["required_unit_ids"] = ["frontend:api-client"]
@@ -146,7 +145,7 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
         self.assertEqual([item.requirement_id for item in result.generation_requirements_by_unit["frontend:api-client"]], ["frontend.api_module:orders-api:orders.list"])
         self.assertEqual(result.generation_strategy_by_unit["frontend:api-client"], "model")
         self.assertEqual(result.planning_unit_ids, ("frontend:api-client",))
-        self.assertEqual(inputs["reuse_facts"].retained_task_ids_by_unit["frontend:api-client"], ("adapter", "users"))
+        self.assertEqual(inputs["reuse_facts"].retained_task_ids_by_unit["frontend:api-client"], ("users",))
         self.assertEqual(inputs["reuse_facts"].model_dump_json(), before_facts)
         self.assertNotIn("replacement", result.model_dump_json())
 
@@ -154,7 +153,6 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
         """正式接口 owner 即使属于其他 Unit，也可证明接口职责已登记。"""
 
         inputs = _inputs(
-            _task("adapter", provides=["frontend.response-entity-adapter"]),
             _owner("orders-api-owner", "orders-api", "orders.list", unit_id="page:users"),
         )
         inputs["required_unit_ids"] = ["frontend:api-client"]
@@ -162,15 +160,15 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
         self.assertEqual(result.generation_strategy_by_unit["frontend:api-client"], "reuse_only")
         self.assertEqual(result.planning_unit_ids, ())
 
-    def test_existing_tasks_do_not_prove_adapter_capability(self) -> None:
-        """不能因 Unit 有普通任务就省略 adapter；描述相似也不提供精确能力。"""
+    def test_existing_tasks_do_not_prove_endpoint_capability(self) -> None:
+        """不能因 Unit 有普通任务就省略 Endpoint API；描述相似也不提供精确能力。"""
 
-        task = _task("similar", provides=["some-other-adapter"])
-        task["description"] = "提供统一 ResponseEntity 传输适配器"
-        inputs = _inputs(task, _owner("orders", "orders-api", "orders.list"))
+        task = _task("similar", provides=["some-other-api"])
+        task["description"] = "实现订单查询业务 API"
+        inputs = _inputs(task)
         inputs["required_unit_ids"] = ["frontend:api-client"]
         result = resolve_generation_requirements(**inputs)
-        self.assertEqual([item.requirement_id for item in result.generation_requirements_by_unit["frontend:api-client"]], ["frontend.response-entity-adapter"])
+        self.assertEqual([item.requirement_id for item in result.generation_requirements_by_unit["frontend:api-client"]], ["frontend.api_module:orders-api:orders.list"])
 
     def test_structural_units_never_generate(self) -> None:
         """结构 Unit 不受骨架 task_ids 或状态影响，始终保持 structural_only。"""
@@ -240,7 +238,7 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
             "not_required",
         )
         self.assertNotIn("frontend:data:static", result.generation_requirements_by_unit)
-        self.assertIn("frontend.response-entity-adapter", result.model_dump_json())
+        self.assertIn("frontend.api_module:orders-api:orders.list", result.model_dump_json())
 
     def test_backend_bootstrap_adds_missing_source_capability(self) -> None:
         """共享 bootstrap 的 database 已满足时，external_api 仍作为本轮增量。"""

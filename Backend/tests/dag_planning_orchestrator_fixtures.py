@@ -175,7 +175,7 @@ def planning_inputs(*, plan=None, baseline=None, required=None, scope=None, cont
         plan = {
             "artifact_type": "technical-plan", "confirmation_status": "confirmed",
             "architecture": {"frontend": "React"}, "entities": [], "api_contracts": [],
-            "pages": [{"pageId": key, "path": f"/{key}"} for key in ("a", "b", "c", "history")],
+            "pages": [{"pageId": key, "name": key.upper(), "path": f"/{key}"} for key in ("a", "b", "c", "history")],
             "page_implementation_contracts": [{
                 "schema_version": "page-implementation-contract.v1", "pageId": key,
                 "uiDesignRef": {"path": f".xcodeagent/ui-design/pages/{key.title()}/index.tsx"},

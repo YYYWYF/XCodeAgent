@@ -102,12 +102,6 @@ def example_task_id(context: UnitGenerationContext) -> str:
     refs = first.source_refs if first is not None else {}
     kind = _text(refs.get("kind"))
     if context.unit_id == "frontend:api-client":
-        if any(
-            _text(requirement.source_refs.get("kind"))
-            == "frontend.shared_capability"
-            for requirement in requirements
-        ):
-            return "frontend:api-client::response-entity-adapter"
         contract_id = _text(refs.get("api_contract_id")) or "api-contract-id"
         return f"{context.unit_id}::{contract_id}::api-module"
     stage = _BACKEND_STAGE_BY_KIND.get(kind)
@@ -199,13 +193,9 @@ def _page_rules(context: UnitGenerationContext) -> tuple[str, ...]:
 
 
 def _frontend_api_rules(context: UnitGenerationContext) -> tuple[str, ...]:
-    """定义当前共享响应适配器和前端业务 API 模块规则。"""
+    """定义复用模板 service 的前端业务 API 模块规则。"""
 
-    kinds = {
-        _text(requirement.source_refs.get("kind"))
-        for requirement in context.generation_requirements
-    }
-    rules = [
+    return (
         "Group all `frontend.api_module` requirements by `api_contract_id`. For each "
         "distinct api_contract_id, emit exactly ONE business API Task with ID "
         "`frontend:api-client::<api_contract_id>::api-module`. That single Task implements "
@@ -220,34 +210,12 @@ def _frontend_api_rules(context: UnitGenerationContext) -> tuple[str, ...]:
         "Multiple endpoints of the same API Contract share the same Task, the same file, "
         "and the same change_scope path; do not split them into separate tasks or files.",
         "Across this Candidate, each api_contract_id + endpoint_id has exactly one "
-        "implementation owner. Business API Tasks must import "
-        "`frontend/src/apis/responseEntity.ts`; they must not repeat ResponseEntity types, "
-        "success-code handling, protocol errors, business errors, or unwrap logic.",
+        "implementation owner. Every business API Task has dependencies `[]`, owns only "
+        "`frontend/src/apis/<biz>Api.ts`, and reuses the platform-owned "
+        "`frontend/src/apis/service.ts` for HTTP requests.",
         "Do not emit pages, static-data modules, backend work, route/menu registration, "
         "tests, builds, verification, or acceptance responsibilities.",
-    ]
-    if "frontend.shared_capability" in kinds:
-        rules.insert(
-            0,
-            "Emit exactly one shared transport Task with id "
-            "`frontend:api-client::response-entity-adapter` and dependencies `[]`. It owns "
-            "only `frontend/src/apis/responseEntity.ts` and declares exactly one "
-            "frontend.shared_capability deliverable with target_id "
-            "`response-entity-adapter` and provides "
-            "`frontend.response-entity-adapter`. Its Chinese description must require "
-            "ResponseEntity<T>, ResponseEntityBusinessError, ResponseEntityProtocolError, "
-            "unwrapResponseEntity<T>(), unwrapEmptyResponseEntity(), and `SUC0000` as the "
-            "only success code. Every business API Task in this Candidate depends on it."
-        )
-    else:
-        rules.insert(
-            0,
-            "The shared ResponseEntity adapter is not an incremental requirement, so it is "
-            "already satisfied or outside this attempt. Do not recreate or modify it and "
-            "do not copy a retained adapter Task ID into dependencies; new business API "
-            "modules still import `frontend/src/apis/responseEntity.ts`."
-        )
-    return tuple(rules)
+    )
 
 
 def _frontend_static_rules(context: UnitGenerationContext) -> tuple[str, ...]:
