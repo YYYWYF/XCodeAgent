@@ -1,9 +1,8 @@
 import { ApiOutlined, CheckCircleOutlined, FileTextOutlined } from '@ant-design/icons'
-import { Collapse, Typography } from 'antd'
+import { Collapse, Tag, Typography } from 'antd'
 import type {
   WorkflowBuildTargetReview,
   WorkflowBuildTargetReviewEndpoint,
-  WorkflowBuildTaskPlanPrerequisite,
   WorkflowBuildTaskPlanRetainedSummary,
   WorkflowBuildTaskPlanTask
 } from '../../../../typings'
@@ -102,36 +101,19 @@ function EndpointContract({
   )
 }
 
-/** 展示不属于本次修改范围、但会被当前任务复用的既有能力和历史汇总。 */
-export function ReusedCapabilitySummary({
-  prerequisites,
+/** 展示与本轮无关的累计任务状态摘要。 */
+export function RetainedTaskSummary({
   retainedSummary
 }: {
-  prerequisites: WorkflowBuildTaskPlanPrerequisite[]
   retainedSummary?: WorkflowBuildTaskPlanRetainedSummary
 }): JSX.Element | null {
-  if (prerequisites.length === 0 && !retainedSummary?.total) return null
+  if (!retainedSummary?.total) return null
   return (
     <aside className={cx('workflow-dag-confirmation-existing-summary')}>
-      {prerequisites.length > 0 ? (
-        <div>
-          <Typography.Text strong>已有前置能力</Typography.Text>
-          <span className={cx('workflow-dag-confirmation-prerequisites')}>
-            {prerequisites.map((item) => (
-              <span key={item.id}>
-                {item.title}
-                <small>{taskStatusLabel(item.status)}</small>
-              </span>
-            ))}
-          </span>
-        </div>
-      ) : null}
-      {retainedSummary?.total ? (
-        <Typography.Text type="secondary">
-          另有 {retainedSummary.total} 个累计任务不在本次修改范围内
-          {retainedSummary.completed ? `，其中 ${retainedSummary.completed} 个已完成` : ''}
-        </Typography.Text>
-      ) : null}
+      <Typography.Text type="secondary">
+        另有 {retainedSummary.total} 个累计任务不在本轮确认范围内
+        {retainedSummary.completed ? `，其中 ${retainedSummary.completed} 个已完成` : ''}
+      </Typography.Text>
     </aside>
   )
 }
@@ -144,11 +126,25 @@ export function TaskHeader({
   index: number
   task: WorkflowBuildTaskPlanTask
 }): JSX.Element {
+  const reviewRoleLabel =
+    task.reviewRole === 'new' ? '新增' : task.reviewRole === 'reused' ? '复用' : ''
   return (
     <div className={cx('workflow-dag-confirmation-task-header')}>
       <span className={cx('workflow-dag-confirmation-task-index')}>{index + 1}</span>
       <span className={cx('workflow-dag-confirmation-task-copy')}>
-        <Typography.Text strong>{task.title || `开发任务 ${index + 1}`}</Typography.Text>
+        <span className={cx('workflow-dag-confirmation-task-title-line')}>
+          <Typography.Text strong>{task.title || `开发任务 ${index + 1}`}</Typography.Text>
+          {reviewRoleLabel ? (
+            <Tag
+              className={cx(
+                'workflow-dag-confirmation-task-role',
+                `workflow-dag-confirmation-task-role-${task.reviewRole}`
+              )}
+            >
+              {reviewRoleLabel}
+            </Tag>
+          ) : null}
+        </span>
       </span>
     </div>
   )
@@ -316,12 +312,4 @@ function acceptanceTexts(checks?: Array<Record<string, unknown>>): string[] {
     return []
   })
   return [...new Set(values)]
-}
-
-/** 将内部任务状态压缩为复用能力旁的简短状态。 */
-function taskStatusLabel(status?: string): string {
-  if (status === 'completed' || status === 'already_satisfied') return '已具备'
-  if (status === 'failed') return '需处理'
-  if (status === 'running') return '进行中'
-  return '待执行'
 }

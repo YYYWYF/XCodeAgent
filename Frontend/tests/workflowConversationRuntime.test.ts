@@ -44,7 +44,7 @@ function buildDagConfirmation(): Record<string, unknown> {
     },
     taskPlan: {
       confirmationStatus: 'pending',
-      scopeTasks: [{ id: 'task-runtime-test', title: '测试任务' }]
+      reviewTasks: [{ id: 'task-runtime-test', title: '测试任务' }]
     }
   }
 }
@@ -315,7 +315,7 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
     assert.equal(pendingDagOwnerSessionId(pendingLifecycle), ownerIdentity.sessionId)
     assert.equal(workflowClarification(pendingWorkflow)?.mode, 'build_task_plan_confirmation')
     assert.equal(workflowClarification(pendingWorkflow)?.status, 'requires_user_input')
-    assert.equal(currentDagConfirmationPlan(pendingWorkflow)?.scopeTasks?.length, 1)
+    assert.equal(currentDagConfirmationPlan(pendingWorkflow)?.reviewTasks?.length, 1)
     assert.equal(lifecycleState.extensions?.planningRefresh?.source, 'pending_plan')
     assert.equal(lifecycleState.extensions?.planningRefresh?.status, 'awaiting_confirmation')
 

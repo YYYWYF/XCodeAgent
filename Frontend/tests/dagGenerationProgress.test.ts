@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import {
   buildWorkflowForwardedProps,
   newerDagGenerationSnapshot,
@@ -40,6 +42,7 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import { maybeRefreshPendingPlanLifecycleAfterGeneration } from '../src/renderer/src/components/AiChatPanel/pendingPlanLifecycleRefresh'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
+import { TaskHeader } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/BuildTaskPlanConfirmationContent'
 import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import type {
@@ -48,6 +51,28 @@ import type {
   WorkbenchExecution,
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
+
+test('统一 DAG 任务列表为新增和复用任务显示对应 Tag', () => {
+  const markup = renderToStaticMarkup(
+    createElement(
+      'div',
+      null,
+      createElement(TaskHeader, {
+        index: 0,
+        task: { id: 'new-task', title: '实现订单接口', description: '', reviewRole: 'new' }
+      }),
+      createElement(TaskHeader, {
+        index: 1,
+        task: { id: 'reused-task', title: '复用基础客户端', description: '', reviewRole: 'reused' }
+      })
+    )
+  )
+
+  assert.match(markup, />新增<\/span>/)
+  assert.match(markup, />复用<\/span>/)
+  assert.match(markup, /实现订单接口/)
+  assert.match(markup, /复用基础客户端/)
+})
 
 /** 构造 DAG Planning owner 测试所需的最小活动 execution。 */
 function ownershipExecution(overrides: Partial<WorkbenchExecution> = {}): WorkbenchExecution {
@@ -250,7 +275,7 @@ function dagConfirmationWorkflow(lifecycle: ApplicationLifecycle): WorkflowRunPa
       planningRunId: 'planning-dag-transition',
       draftDigest: DAG_DRAFT_DIGEST
     },
-    taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+    taskPlan: { confirmationStatus: 'pending', reviewTasks: [] }
   }
   return {
     runId: execution.runId,
@@ -307,7 +332,7 @@ function unitTestConfirmationTransition(): {
   const historicalDagConfirmation = {
     mode: 'build_task_plan_confirmation',
     status: 'completed',
-    taskPlan: { confirmationStatus: 'confirmed', scopeTasks: [] }
+    taskPlan: { confirmationStatus: 'confirmed', reviewTasks: [] }
   }
   return {
     lifecycle,
@@ -349,7 +374,7 @@ test('Confirm completed 的 clear confirmation 即使带旧 taskPlan 也不可�
         mode: 'build_task_plan_confirmation',
         status: 'clear',
         confirmationStatus: 'confirmed',
-        taskPlan: { confirmationStatus: 'confirmed', scopeTasks: [] }
+        taskPlan: { confirmationStatus: 'confirmed', reviewTasks: [] }
       }
     },
     state: { clarification: {} },
@@ -391,7 +416,7 @@ test('当前 clarification 缺失时，PendingPlan recovery 仍使用历史 DAG 
       planningRunId: 'planning-recovered',
       draftDigest: 'a'.repeat(64)
     },
-    taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+    taskPlan: { confirmationStatus: 'pending', reviewTasks: [] }
   }
   const lifecycle = {
     application: { id: 'app-recovered', name: 'App' },
@@ -707,7 +732,7 @@ test('待确认 DAG 由持久化 lifecycle 锁定且只匹配原 run 和 thread 
       status: 'requires_user_input',
       clarification: {
         mode: 'build_task_plan_confirmation',
-        taskPlan: { scopeTasks: [] }
+        taskPlan: { reviewTasks: [] }
       }
     }
   } as unknown as WorkflowRunPayload
@@ -818,7 +843,7 @@ test('refresh Pending 使用 Backend 确认投影，stale chat message 不能覆
           },
           taskPlan: {
             confirmationStatus: 'pending',
-            scopeTasks: [{ id: 'current-task', title: '当前任务', description: '' }]
+            reviewTasks: [{ id: 'current-task', title: '当前任务', description: '' }]
           }
         },
         message: '已从 PendingPlan 恢复待确认任务规划。'
@@ -835,7 +860,7 @@ test('refresh Pending 使用 Backend 确认投影，stale chat message 不能覆
         mode: 'build_task_plan_confirmation',
         taskPlan: {
           confirmationStatus: 'pending',
-          scopeTasks: [{ id: 'stale-task', title: '旧任务', description: '' }]
+          reviewTasks: [{ id: 'stale-task', title: '旧任务', description: '' }]
         }
       }
     }
@@ -850,7 +875,7 @@ test('refresh Pending 使用 Backend 确认投影，stale chat message 不能覆
   assert.equal(restoredExecution?.runId, 'workflow-current')
   assert.equal(pendingDagOwnerSessionId(lifecycle), 'session-current')
   assert.equal(
-    restoredWorkflow?.summary.clarification?.taskPlan?.scopeTasks?.[0]?.id,
+    restoredWorkflow?.summary.clarification?.taskPlan?.reviewTasks?.[0]?.id,
     'current-task'
   )
 })
@@ -1186,7 +1211,7 @@ test('Pending Ready 才提供 Abandon，GENERATING lifecycle 没有结果级控�
             planningRunId: 'planning-pending',
             draftDigest: 'c'.repeat(64)
           },
-          taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+          taskPlan: { confirmationStatus: 'pending', reviewTasks: [] }
         },
         message: '待确认。'
       }
@@ -1233,7 +1258,7 @@ test('PendingPlan recovery 缺少 threadId 仍按 owner、WorkflowRunId 和 Draf
         planningRunId: 'planning-recovered',
         draftDigest: 'a'.repeat(64)
       },
-      taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+      taskPlan: { confirmationStatus: 'pending', reviewTasks: [] }
     },
     message: '已从 PendingPlan 恢复待确认任务规划。'
   }
@@ -1383,7 +1408,7 @@ test('同 run/thread 的旧 DAG 卡不能越过工作区唯一 Pending 的 Draft
             planningRunId: 'planning-regenerated',
             draftDigest: regeneratedDigest
           },
-          taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+          taskPlan: { confirmationStatus: 'pending', reviewTasks: [] }
         },
         message: '已恢复重新生成后的唯一 Pending。'
       }
@@ -1692,7 +1717,7 @@ test('authoritative Abandon 在 reload、stale snapshot 与 late progress 后都
       status: 'requires_user_input',
       clarification: {
         mode: 'build_task_plan_confirmation',
-        taskPlan: { confirmationStatus: 'pending', scopeTasks: [] }
+        taskPlan: { confirmationStatus: 'pending', reviewTasks: [] }
       }
     }
   } as unknown as WorkflowRunPayload

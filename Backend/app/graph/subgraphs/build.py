@@ -1212,12 +1212,17 @@ def _build_gate_result(
             project_plan=state.get("project_plan"),
             build_context=state.get("build_context"),
         )
+        projection_errors = list(read_model.get("classificationErrors") or [])
+        projection_errors.extend(errors)
+        action_values = ["confirm", "abandon", "regenerate"]
+        if read_model.get("classificationBlocked"):
+            action_values = ["regenerate", "abandon"]
         clarification = {
             "mode": "build_task_plan_confirmation",
             "status": "requires_user_input",
             "message": "Build DAG 已生成，请先确认最新任务规划。",
-            "actionValues": ["confirm", "abandon", "regenerate"],
-            "errors": errors,
+            "actionValues": action_values,
+            "errors": projection_errors,
             "buildExecutionScope": build_execution_scope,
             "taskPlan": {
                 "version": build_task_plan.get("version"),
@@ -1225,8 +1230,7 @@ def _build_gate_result(
                 "status": build_task_plan.get("status"),
                 "confirmationStatus": confirmation_status,
                 "summary": build_task_plan.get("summary") or {},
-                "scopeTasks": read_model["scopeTasks"],
-                "reusedPrerequisites": read_model["reusedPrerequisites"],
+                "reviewTasks": read_model["reviewTasks"],
                 "retainedTaskSummary": read_model["retainedTaskSummary"],
             },
             "targetReview": read_model["targetReview"],

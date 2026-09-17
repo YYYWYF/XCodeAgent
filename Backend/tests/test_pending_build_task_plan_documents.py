@@ -67,9 +67,11 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
     def _write_pending(self, plan: dict | None = None, **metadata) -> str:
         """使用固定服务端元数据写 Pending，允许测试只覆盖单个身份字段。"""
 
+        selected_plan = plan if plan is not None else _validated_plan()
+        registry = selected_plan.get("task_registry")
         return write_pending_build_task_plan_atomic(
             self.state,
-            plan if plan is not None else _validated_plan(),
+            selected_plan,
             owner_session_id=metadata.get("owner_session_id", OWNER_SESSION_ID),
             planning_run_id=metadata.get("planning_run_id", PLANNING_RUN_ID),
             workflow_run_id=metadata.get("workflow_run_id", WORKFLOW_RUN_ID),
@@ -81,6 +83,15 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
                 "build_execution_scope", BUILD_EXECUTION_SCOPE
             ),
             created_at=metadata.get("created_at", CREATED_AT),
+            planning_provenance=metadata.get(
+                "planning_provenance",
+                {
+                    "schema_version": "planning-provenance.v2",
+                    "review_task_ids": list(registry) if isinstance(registry, dict) else [],
+                    "new_task_ids": list(registry) if isinstance(registry, dict) else [],
+                    "reused_task_ids": [],
+                },
+            ),
         )
 
     def test_write_pending_plan_to_independent_path(self) -> None:
@@ -113,6 +124,15 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         self.assertIsNone(loaded["confirmed_at"])
         self.assertEqual(loaded["build_execution_scope"], BUILD_EXECUTION_SCOPE)
         self.assertEqual(loaded["task_registry"], plan["task_registry"])
+        self.assertEqual(
+            loaded["planning_provenance"],
+            {
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": ["page:orders::render"],
+                "new_task_ids": ["page:orders::render"],
+                "reused_task_ids": [],
+            },
+        )
         self.assertEqual(loaded["draft_identity"]["owner_session_id"], OWNER_SESSION_ID)
         self.assertEqual(loaded["draft_identity"]["workflow_run_id"], WORKFLOW_RUN_ID)
         self.assertIsInstance(validate_pending_self_digest(loaded), DraftIdentity)
@@ -318,8 +338,49 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "不得预置"):
             self._write_pending(plan)
-
         self.assertFalse(self.pending_path.exists())
+
+    def test_writer_rejects_invalid_planning_provenance(self) -> None:
+        """Pending writer 必须拒绝重复、非法类型或不存在的 provenance Task ID。"""
+
+        for provenance in (
+            {
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": ["page:orders::render", "page:orders::render"],
+                "new_task_ids": ["page:orders::render"],
+                "reused_task_ids": [],
+            },
+            {
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": ["missing-task"],
+                "new_task_ids": ["missing-task"],
+                "reused_task_ids": [],
+            },
+            {
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": ("page:orders::render",),
+                "new_task_ids": ["page:orders::render"],
+                "reused_task_ids": [],
+            },
+            {
+                "schema_version": "planning-provenance.v1",
+                "new_task_ids": ["page:orders::render"],
+            },
+        ):
+            with self.subTest(provenance=provenance):
+                with self.assertRaisesRegex(ValueError, "planning_provenance"):
+                    self._write_pending(planning_provenance=provenance)
+
+    def test_provenance_is_covered_by_pending_digest(self) -> None:
+        """篡改 Pending provenance 后，Draft self digest 必须失效。"""
+
+        self._write_pending()
+        pending = load_pending_build_task_plan(self.state)
+        assert pending is not None
+        pending["planning_provenance"]["new_task_ids"] = []
+
+        with self.assertRaisesRegex(ValueError, "draft_digest"):
+            validate_pending_self_digest(pending)
 
     def test_tampered_pending_is_detected(self) -> None:
         """落盘后篡改任务内容必须被 self-digest 校验拒绝。"""

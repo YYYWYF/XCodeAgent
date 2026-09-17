@@ -27,6 +27,7 @@ from app.services.unit_generation_contracts import (
     UnitGenerationPolicy,
 )
 from app.workspace.task_documents import (
+    build_planning_provenance,
     build_task_plan_lifecycle_lock,
     load_pending_build_task_plan,
     validate_pending_self_digest,
@@ -103,9 +104,16 @@ def _persist_validated_pending_plan(
             raise RuntimeError(
                 "写入 PendingPlan 前 PlanningRun 已不处于当前 active/persisting_pending 状态。"
             )
+        assembled_plan = plain_json(planned.assembly.assembled_plan)
+        planning_provenance = build_planning_provenance(
+            assembled_plan,
+            planned.assembly.retained_task_ids,
+            planned.assembly.review_task_ids,
+            planned.assembly.reused_task_ids,
+        )
         pending_path = write_pending_build_task_plan_atomic(
             state,
-            plain_json(planned.assembly.assembled_plan),
+            assembled_plan,
             owner_session_id=owner_session_id,
             planning_run_id=run.planning_run_id,
             workflow_run_id=run.workflow_run_id,
@@ -113,6 +121,7 @@ def _persist_validated_pending_plan(
             input_fingerprint=run.input_fingerprint,
             build_execution_scope=plain_json(run.build_execution_scope),
             created_at=run.updated_at,
+            planning_provenance=planning_provenance,
         )
         pending = load_pending_build_task_plan(state)
         if pending is None:

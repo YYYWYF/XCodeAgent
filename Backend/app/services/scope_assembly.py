@@ -62,6 +62,8 @@ class ScopeAssemblyResult(FrozenPlanningModel):
     assembled_plan: FrozenJsonObject
     retained_task_ids: _Ids
     candidate_task_ids: _Ids
+    review_task_ids: _Ids
+    reused_task_ids: _Ids
     task_origins: _TaskOrigins
     candidate_unit_by_task_id: _CandidateUnits
 
@@ -398,6 +400,79 @@ def _validate_task_units(
     return skeleton
 
 
+def _stable_plan_task_ids(build_task_plan: Mapping[str, Any]) -> tuple[str, ...]:
+    """按最终 DAG 拓扑顺序返回完整 registry ID，兼顾无效图的确定性回退。"""
+
+    registry = build_task_plan.get("task_registry")
+    if not isinstance(registry, Mapping):
+        return ()
+    registry_ids = {str(task_id) for task_id in registry}
+    task_graph = build_task_plan.get("task_graph")
+    topology = task_graph.get("topological_order") if isinstance(task_graph, Mapping) else None
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for raw_task_id in [*(topology if isinstance(topology, (list, tuple)) else ()), *registry]:
+        task_id = str(raw_task_id).strip()
+        if task_id in registry_ids and task_id not in seen:
+            ordered.append(task_id)
+            seen.add(task_id)
+    return tuple(ordered)
+
+
+def _scope_review_task_ids(
+    assembled_plan: Mapping[str, Any],
+    *,
+    current_unit_ids: set[str],
+    retained_task_ids: Sequence[str],
+    candidate_task_ids: Sequence[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """在 Assembly 中确定当前 Scope 任务及其依赖闭包，不让 Confirmation 重新猜测来源。"""
+
+    registry = assembled_plan.get("task_registry")
+    if not isinstance(registry, Mapping):
+        return (), ()
+    tasks_by_id = {
+        str(task.get("id")): task
+        for task in registry.values()
+        if isinstance(task, Mapping) and _identity(task.get("id")) is not None
+    }
+    # required Unit 是当前 Scope 的直接范围；Candidate 即使没有被 Unit 元数据回写也必须纳入 review。
+    seed_ids = {
+        task_id
+        for task_id, task in tasks_by_id.items()
+        if str(task.get("unit_id") or "") in current_unit_ids
+    }
+    seed_ids.update(str(task_id) for task_id in candidate_task_ids)
+    ancestors: set[str] = set()
+    pending = [
+        str(dependency)
+        for task_id in seed_ids
+        for dependency in tasks_by_id.get(task_id, {}).get("dependencies") or []
+        if str(dependency)
+    ]
+    while pending:
+        task_id = pending.pop()
+        if task_id in ancestors:
+            continue
+        task = tasks_by_id.get(task_id)
+        if task is None:
+            continue
+        ancestors.add(task_id)
+        pending.extend(
+            str(dependency)
+            for dependency in task.get("dependencies") or []
+            if str(dependency) and str(dependency) not in ancestors
+        )
+    review_ids = seed_ids | ancestors
+    retained_ids = set(str(task_id) for task_id in retained_task_ids)
+    reused_ids = review_ids & retained_ids
+    ordered_ids = _stable_plan_task_ids(assembled_plan)
+    return (
+        tuple(task_id for task_id in ordered_ids if task_id in review_ids),
+        tuple(task_id for task_id in ordered_ids if task_id in reused_ids),
+    )
+
+
 def assemble_scope_build_task_plan(
     *,
     base_confirmed_plan: Mapping[str, Any] | None,
@@ -542,6 +617,26 @@ def assemble_scope_build_task_plan(
     assembled["status"] = "ready" if graph_valid and not blocked_batches else "blocked"
     # 页面正文只在模板执行时由冻结正式输入组装，DAG 仅表达是否存在该平台动作。
     assembled.pop("route_projection", None)
+    current_unit_ids = {
+        str(unit_id).strip()
+        for unit_id in generation_requirements_by_unit
+        if str(unit_id).strip()
+    }
+    # 当前冻结 BuildContext 的 required_unit_ids 优先；显式空数组也表示空 Scope，不能被生成表回填。
+    context_required_unit_ids = build_context.get("required_unit_ids")
+    if isinstance(context_required_unit_ids, (list, tuple, set)):
+        normalized_context_units = {
+            str(unit_id).strip()
+            for unit_id in context_required_unit_ids
+            if str(unit_id).strip()
+        }
+        current_unit_ids = normalized_context_units
+    review_task_ids, reused_task_ids = _scope_review_task_ids(
+        assembled,
+        current_unit_ids=current_unit_ids,
+        retained_task_ids=retained_task_ids,
+        candidate_task_ids=candidate_task_ids,
+    )
     task_origins = {
         **{task_id: "retained" for task_id in retained_task_ids},
         **{task_id: "candidate" for task_id in candidate_task_ids},
@@ -550,6 +645,8 @@ def assemble_scope_build_task_plan(
         assembled_plan=assembled,
         retained_task_ids=retained_task_ids,
         candidate_task_ids=candidate_task_ids,
+        review_task_ids=review_task_ids,
+        reused_task_ids=reused_task_ids,
         task_origins=task_origins,
         candidate_unit_by_task_id=candidate_unit_by_task_id,
     )

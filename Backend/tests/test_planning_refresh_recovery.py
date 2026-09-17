@@ -223,6 +223,12 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
                 build_execution_scope or self.planning.build_execution_scope
             ),
             created_at=self.planning.updated_at,
+            planning_provenance={
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": list(_validated_plan().get("task_registry", {})),
+                "new_task_ids": list(_validated_plan().get("task_registry", {})),
+                "reused_task_ids": [],
+            },
         )
         pending = load_pending_build_task_plan(self.state)
         assert pending is not None
@@ -427,6 +433,11 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
             confirmation["errors"][0],
         )
         self.assertNotIn("targetReview", confirmation)
+        self.assertEqual(
+            confirmation["taskPlan"]["reviewTasks"][0]["reviewRole"],
+            "new",
+        )
+        self.assertIn("confirm", confirmation["actionValues"])
 
     def test_case_b_missing_pending_is_idle_even_with_active_planning_run(self) -> None:
         """没有 PendingPlan 时，旧 PlanningRun 不能伪造待确认状态。"""

@@ -97,6 +97,12 @@ class BuildTaskPlanRegenerateTests(unittest.IsolatedAsyncioTestCase):
             input_fingerprint=run.input_fingerprint,
             build_execution_scope=plain_json(run.build_execution_scope),
             created_at=run.updated_at,
+            planning_provenance={
+                "schema_version": "planning-provenance.v2",
+                "review_task_ids": list(old.assembly.review_task_ids),
+                "new_task_ids": list(old.assembly.candidate_task_ids),
+                "reused_task_ids": list(old.assembly.reused_task_ids),
+            },
         )
         pending = load_pending_build_task_plan(self.state)
         return pending["draft_identity"], run

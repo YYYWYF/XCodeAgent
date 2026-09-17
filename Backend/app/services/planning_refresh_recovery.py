@@ -72,7 +72,11 @@ def _pending_confirmation(
         "mode": "build_task_plan_confirmation",
         "status": "requires_user_input",
         "message": "Build DAG 已生成，请确认任务规划后再进入 Build。",
-        "actionValues": ["confirm", "abandon", "regenerate"],
+        "actionValues": (
+            ["regenerate", "abandon"]
+            if read_model.get("classificationBlocked")
+            else ["confirm", "abandon", "regenerate"]
+        ),
         "confirmationStatus": "pending",
         "buildExecutionScope": scope,
         "draftIdentity": {
@@ -86,19 +90,28 @@ def _pending_confirmation(
             "status": pending.get("status"),
             "confirmationStatus": "pending",
             "summary": pending.get("summary") or {},
-            "scopeTasks": read_model["scopeTasks"],
-            "reusedPrerequisites": read_model["reusedPrerequisites"],
+            "reviewTasks": read_model["reviewTasks"],
             "retainedTaskSummary": read_model["retainedTaskSummary"],
         },
     }
+    classification_errors = list(read_model.get("classificationErrors") or [])
+    if classification_errors:
+        confirmation["errors"] = classification_errors
+        if read_model.get("classificationBlocked"):
+            confirmation["message"] = "当前 PendingPlan 缺少可恢复的任务来源，请重新生成。"
     if context_error is None or target_type not in {"page", "endpoint"}:
         confirmation["targetReview"] = read_model["targetReview"]
     else:
         confirmation["errors"] = [
+            *classification_errors,
             "当前 PendingPlan 仍存在，但无法从最新正式 TechnicalPlan 重建目标详情。",
             context_error,
         ]
-        confirmation["message"] = "当前 PendingPlan 仍存在，但无法恢复目标详情。"
+        confirmation["message"] = (
+            "当前 PendingPlan 缺少可恢复的任务来源，请重新生成。"
+            if read_model.get("classificationBlocked")
+            else "当前 PendingPlan 仍存在，但无法恢复目标详情。"
+        )
     return confirmation
 
 
