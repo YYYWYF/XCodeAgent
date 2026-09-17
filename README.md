@@ -54,6 +54,8 @@ PYTHON=/absolute/path/to/python bash scripts/mac_pack_arm64.sh
 
 成功后，DMG、ZIP 和解包的 `.app` 均位于 `Frontend/dist/`。请以本次运行新生成的文件为准；目录中可能还保留着之前的旧产物。
 
+正式包只收录编译后的前端文件、应用元数据和图标，不重复打入前端 `node_modules`；后端仍作为独立资源随包提供。macOS 和 Windows 打包入口均使用这条规则。
+
 ## Windows x64 打包
 
 在 Windows PowerShell 中，从项目根目录执行：
