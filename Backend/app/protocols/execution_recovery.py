@@ -18,6 +18,7 @@ from ag_ui.core import (
 )
 from ag_ui.encoder import EventEncoder
 from app.domain.execution_recovery import (
+    DurableExecutionRecord,
     DurableExecutionStatus,
     RecoveryActionKind,
     RecoveryExecutionError,
@@ -138,7 +139,7 @@ def build_execution_recovery_ag_ui_stream(
                 ):
                     yield frame
                 return
-            source = await _resolve_current_recovery_source(
+            source = await _load_requested_recovery_source(
                 workspace=workspace,
                 requested_source_run_id=source_run_id,
             )
@@ -164,6 +165,11 @@ def build_execution_recovery_ag_ui_stream(
             graph = await graph_factory(
                 workspace=workspace,
                 project_id=source.project_id,
+            )
+            source = await _resolve_current_recovery_source(
+                workspace=workspace,
+                requested=source,
+                graph=graph,
             )
             reentry_plan = None
             if source.status is DurableExecutionStatus.FAILED:
@@ -373,25 +379,39 @@ def _reconciled_recovery_frames(
 async def _resolve_current_recovery_source(
     *,
     workspace: str,
-    requested_source_run_id: str,
-) -> Any:
-    """在创建 recovery child 前校验请求仍指向当前唯一 lineage head。"""
+    requested: DurableExecutionRecord,
+    graph: Any,
+) -> DurableExecutionRecord:
+    """以最新 checkpoint execution identity 校验请求仍指向当前 lineage head。"""
 
-    requested = await get_execution(workspace, requested_source_run_id)
-    if requested is None:
+    state_reader = getattr(graph, "aget_state", None)
+    if not callable(state_reader):
         raise RecoveryExecutionError(
-            "SOURCE_EXECUTION_NOT_FOUND",
-            "source execution 不存在。",
+            "RECOVERY_CHECKPOINT_RUN_INVALID",
+            "当前 production Graph 无法读取最新 root checkpoint execution identity。",
         )
-    if _workspace_identity(requested.workspace) != _workspace_identity(workspace):
+    try:
+        snapshot = await state_reader(
+            {
+                "configurable": {
+                    "thread_id": requested.thread_id,
+                    "checkpoint_ns": "",
+                }
+            }
+        )
+    except Exception as exc:
         raise RecoveryExecutionError(
-            "INVALID_EXECUTION_RECOVERY_REQUEST",
-            "workspaceRoot 与 source execution 的 workspace 不一致。",
-        )
+            "RECOVERY_CHECKPOINT_RUN_INVALID",
+            "最新 root checkpoint execution identity 无法读取。",
+        ) from exc
+    values = getattr(snapshot, "values", {})
+    values = values if isinstance(values, dict) else {}
+    checkpoint_run_id = str(values.get("active_run_id") or "").strip()
     resolution = await resolve_recovery_lineage_head(
         workspace,
         thread_id=requested.thread_id,
         execution_kind=requested.execution_kind,
+        authoritative_run_id=checkpoint_run_id,
     )
     if resolution.state is RecoveryLineageState.AMBIGUOUS:
         raise RecoveryExecutionError(
@@ -408,6 +428,27 @@ async def _resolve_current_recovery_source(
             "RECOVERY_SOURCE_SUPERSEDED",
             "当前 recovery source 已被新的 child execution 替代，请刷新后继续。",
             details={"currentSourceRunId": resolution.head.run_id},
+        )
+    return requested
+
+
+async def _load_requested_recovery_source(
+    *,
+    workspace: str,
+    requested_source_run_id: str,
+) -> DurableExecutionRecord:
+    """只加载客户端或 Backend action 定位的 source，当前性稍后由 checkpoint 校验。"""
+
+    requested = await get_execution(workspace, requested_source_run_id)
+    if requested is None:
+        raise RecoveryExecutionError(
+            "SOURCE_EXECUTION_NOT_FOUND",
+            "source execution 不存在。",
+        )
+    if _workspace_identity(requested.workspace) != _workspace_identity(workspace):
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "workspaceRoot 与 source execution 的 workspace 不一致。",
         )
     return requested
 

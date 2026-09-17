@@ -219,6 +219,7 @@ async def _build_application_planning_recovery_projection(
             workspace=workspace,
             source=source,
             graph=graph,
+            latest_snapshot=snapshot,
         )
         if resolution.kind in {"terminal", "awaiting_user"}:
             status = resolution.terminal_status or (
@@ -497,15 +498,31 @@ def _build_application_planning_recovery_ag_ui_stream(
         if inspect.isawaitable(active_graph):
             active_graph = await active_graph
         lock = application_planning_run_lock(thread_id)
-        # 与同 thread writer 共用屏障；锁内先收敛旧 owner，再读取同一稳定世界的
-        # Durable source、Graph checkpoint 和 Lifecycle，禁止由历史 clarification 猜门禁。
+        # 与同 thread writer 共用屏障；锁内先收敛旧 owner，再用同一 Graph snapshot
+        # 锚定 Durable lineage、恢复投影和 Lifecycle，禁止由历史 clarification 猜门禁。
         async with lock:
             await reconcile_workspace_recovery(request.workspaceRoot)
+            snapshot = await active_graph.aget_state(
+                {
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "checkpoint_ns": "",
+                    }
+                }
+            )
+            values = getattr(snapshot, "values", {})
+            result = dict(values) if isinstance(values, dict) else {}
+            if not result:
+                raise ApplicationPlanningCheckpointNotFoundError(
+                    "没有找到可恢复的应用规划 checkpoint。"
+                )
+            checkpoint_run_id = str(result.get("active_run_id") or "").strip()
             try:
                 lineage_resolution = await resolve_recovery_lineage_head(
                     request.workspaceRoot,
                     thread_id=thread_id,
                     execution_kind="application_planning",
+                    authoritative_run_id=checkpoint_run_id,
                 )
                 source = lineage_resolution.head
             except Exception as exc:
@@ -521,15 +538,6 @@ def _build_application_planning_recovery_ag_ui_stream(
                     reason_code="RECOVERY_LINEAGE_UNAVAILABLE",
                 )
                 source = None
-            snapshot = await active_graph.aget_state(
-                {"configurable": {"thread_id": thread_id}}
-            )
-            values = getattr(snapshot, "values", {})
-            result = dict(values) if isinstance(values, dict) else {}
-            if not result:
-                raise ApplicationPlanningCheckpointNotFoundError(
-                    "没有找到可恢复的应用规划 checkpoint。"
-                )
             projection = await _build_application_planning_recovery_projection(
                 workspace=request.workspaceRoot,
                 thread_id=thread_id,

@@ -498,6 +498,51 @@ class InterruptedCheckpointTruthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolution.kind, "needs_attention")
         self.assertEqual(resolution.reason_code, "INTERRUPTED_CHECKPOINT_AMBIGUOUS")
 
+    async def test_latest_checkpoint_owner_does_not_fall_back_to_older_source(self) -> None:
+        """最新 active_run_id 已切换时不得扫描旧 checkpoint 证明 stale source。"""
+
+        latest = self._snapshot(
+            checkpoint_id="latest-child",
+            next_nodes=("build",),
+        )
+        latest.values["active_run_id"] = "recovery-child"
+        older = self._snapshot(
+            checkpoint_id="older-source",
+            next_nodes=("build",),
+        )
+        child = self.source.model_copy(
+            update={
+                "run_id": "recovery-child",
+                "status": DurableExecutionStatus.RUNNING,
+                "ended_at": None,
+            }
+        )
+        lineage = SimpleNamespace(
+            head=child,
+            state=SimpleNamespace(value="RUNNING_HEAD"),
+            reason_code="RECOVERY_LINEAGE_HEAD_RUNNING",
+        )
+        resolver = AsyncMock(return_value=lineage)
+
+        with patch(
+            "app.services.workflow_reentry.resolve_recovery_lineage_head",
+            new=resolver,
+        ):
+            resolution = await InterruptedTargetResolver().resolve(
+                workspace=str(self.workspace),
+                source=self.source,
+                graph=_HistoryGraph([latest, older]),
+            )
+
+        self.assertEqual(resolution.kind, "needs_attention")
+        self.assertEqual(resolution.reason_code, "RECOVERY_SOURCE_NOT_CURRENT")
+        resolver.assert_awaited_once_with(
+            str(self.workspace),
+            thread_id=self.source.thread_id,
+            execution_kind=self.source.execution_kind,
+            authoritative_run_id="recovery-child",
+        )
+
     async def test_interrupted_projection_uses_resolver_action_only(self) -> None:
         """INTERRUPTED projection 只能使用 resolver 与 continue action。"""
 

@@ -245,10 +245,34 @@ async def prepare_native_recovery(
             "WORKFLOW_REENTRY_PLAN_INVALID",
             "当前 source 不是 FAILED 或 INTERRUPTED，不能执行 checkpoint re-entry。",
         )
+    state_reader = getattr(graph, "aget_state", None)
+    if not callable(state_reader):
+        raise RecoveryExecutionError(
+            "RECOVERY_CHECKPOINT_RUN_INVALID",
+            "当前 production Graph 无法读取最新 root checkpoint execution identity。",
+        )
+    try:
+        latest_snapshot = await state_reader(
+            {
+                "configurable": {
+                    "thread_id": source.thread_id,
+                    "checkpoint_ns": "",
+                }
+            }
+        )
+    except Exception as exc:
+        raise RecoveryExecutionError(
+            "RECOVERY_CHECKPOINT_RUN_INVALID",
+            "最新 root checkpoint execution identity 无法读取。",
+        ) from exc
+    latest_values = getattr(latest_snapshot, "values", {})
+    latest_values = latest_values if isinstance(latest_values, dict) else {}
+    checkpoint_run_id = str(latest_values.get("active_run_id") or "").strip()
     lineage = await resolve_recovery_lineage_head(
         workspace,
         thread_id=source.thread_id,
         execution_kind=source.execution_kind,
+        authoritative_run_id=checkpoint_run_id,
     )
     if lineage.state is RecoveryLineageState.AMBIGUOUS:
         raise RecoveryExecutionError(

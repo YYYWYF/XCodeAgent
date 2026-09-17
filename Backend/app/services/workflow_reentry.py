@@ -125,6 +125,7 @@ class InterruptedTargetResolver:
         source: DurableExecutionRecord,
         graph: Any,
         require_current_lineage: bool = True,
+        latest_snapshot: Any | None = None,
     ) -> InterruptedTargetResolution:
         """解释最新中断现场，不回退历史 checkpoint 或使用业务策略。"""
 
@@ -133,47 +134,72 @@ class InterruptedTargetResolver:
                 "INTERRUPTED_SOURCE_REQUIRED",
                 "当前 source 不是 INTERRUPTED execution。",
             )
-        if require_current_lineage:
-            try:
-                lineage = await resolve_recovery_lineage_head(
-                    workspace,
-                    thread_id=source.thread_id,
-                    execution_kind=source.execution_kind,
-                )
-            except Exception as exc:
+        if latest_snapshot is None:
+            history_reader = getattr(graph, "aget_state_history", None)
+            if not callable(history_reader):
                 return _interrupted_needs_attention(
-                    "RECOVERY_LINEAGE_UNAVAILABLE",
-                    "当前 INTERRUPTED source 的 lineage 无法安全解析。",
-                    cause=exc,
+                    "INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING",
+                    "当前 production Graph 无法读取 committed checkpoint history。",
                 )
-            if (
-                lineage.head is None
-                or lineage.head.run_id != source.run_id
-                or lineage.head.status is not DurableExecutionStatus.INTERRUPTED
-                or lineage.state.value == "AMBIGUOUS"
-            ):
-                return _interrupted_needs_attention(
-                    "RECOVERY_SOURCE_NOT_CURRENT",
-                    "当前 INTERRUPTED source 不是唯一的 lineage head。",
-                )
-
-        history_reader = getattr(graph, "aget_state_history", None)
-        if not callable(history_reader):
-            return _interrupted_needs_attention(
-                "INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING",
-                "当前 production Graph 无法读取 committed checkpoint history。",
-            )
-        try:
-            async for snapshot in history_reader(
+            snapshots = history_reader(
                 {"configurable": {"thread_id": source.thread_id, "checkpoint_ns": ""}}
-            ):
+            )
+        else:
+            async def supplied_snapshot():
+                """把调用方已锁定的最新 snapshot 暴露为单元素异步序列。"""
+
+                yield latest_snapshot
+
+            snapshots = supplied_snapshot()
+        try:
+            async for snapshot in snapshots:
                 config = _snapshot_config(snapshot)
                 values = getattr(snapshot, "values", {})
                 values = values if isinstance(values, dict) else {}
-                if str(values.get("active_run_id") or "") != source.run_id:
-                    continue
                 if config is None or str(config.get("checkpoint_ns") or "") != "":
-                    continue
+                    return _interrupted_needs_attention(
+                        "INTERRUPTED_CHECKPOINT_IDENTITY_INVALID",
+                        "最新 checkpoint 不是当前 thread 的 root checkpoint。",
+                        snapshot=snapshot,
+                    )
+                checkpoint_run_id = str(values.get("active_run_id") or "").strip()
+                if require_current_lineage:
+                    try:
+                        lineage = await resolve_recovery_lineage_head(
+                            workspace,
+                            thread_id=source.thread_id,
+                            execution_kind=source.execution_kind,
+                            authoritative_run_id=checkpoint_run_id,
+                        )
+                    except Exception as exc:
+                        return _interrupted_needs_attention(
+                            "RECOVERY_LINEAGE_UNAVAILABLE",
+                            "当前 INTERRUPTED source 的 lineage 无法安全解析。",
+                            cause=exc,
+                        )
+                    if lineage.state.value == "RECOVERY_IN_FLIGHT":
+                        return _interrupted_needs_attention(
+                            "RECOVERY_IN_FLIGHT",
+                            "当前 INTERRUPTED source 正在切换到 recovery child。",
+                            snapshot=snapshot,
+                        )
+                    if lineage.state.value == "AMBIGUOUS":
+                        return _interrupted_needs_attention(
+                            lineage.reason_code,
+                            "当前 checkpoint execution identity 无法安全解析。",
+                            snapshot=snapshot,
+                        )
+                    if (
+                        checkpoint_run_id != source.run_id
+                        or lineage.head is None
+                        or lineage.head.run_id != source.run_id
+                        or lineage.head.status is not DurableExecutionStatus.INTERRUPTED
+                    ):
+                        return _interrupted_needs_attention(
+                            "RECOVERY_SOURCE_NOT_CURRENT",
+                            "当前 INTERRUPTED source 不是 checkpoint 指向的 lineage head。",
+                            snapshot=snapshot,
+                        )
                 identity = _snapshot_identity(snapshot)
                 if identity is None:
                     return _interrupted_needs_attention(

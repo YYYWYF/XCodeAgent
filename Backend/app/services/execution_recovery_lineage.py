@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -26,6 +27,9 @@ from app.services.application_lifecycle import (
     claim_application_planning_run_for_recovery,
     load_application_lifecycle,
 )
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class RecoveryLineageState(StrEnum):
@@ -81,9 +85,10 @@ async def resolve_recovery_lineage_head(
     *,
     thread_id: str,
     execution_kind: str | None = None,
+    authoritative_run_id: str | None = None,
     max_hops: int = 32,
 ) -> RecoveryLineageResolution:
-    """按 thread 的完整 durable facts 解析唯一当前 recovery source。"""
+    """优先以 checkpoint 当前 execution 为锚点，否则沿用 DB-only head 解析。"""
 
     executions = await list_executions_for_thread(
         workspace,
@@ -94,6 +99,37 @@ async def resolve_recovery_lineage_head(
         thread_id=thread_id,
     )
     records = {record.run_id: record for record in executions}
+    if authoritative_run_id is not None:
+        resolution, recovery_hop_count = _resolve_anchored_recovery_lineage(
+            workspace=workspace,
+            thread_id=thread_id,
+            execution_kind=execution_kind,
+            authoritative_run_id=authoritative_run_id,
+            records=records,
+            attempts=attempts,
+            max_hops=max_hops,
+        )
+        log_method = (
+            logger.warning
+            if resolution.state
+            in {RecoveryLineageState.AMBIGUOUS, RecoveryLineageState.BLOCKED}
+            else logger.debug
+        )
+        log_method(
+            "recovery.lineage.%s threadId=%s checkpointActiveRunId=%s "
+            "headRunId=%s state=%s reasonCode=%s recoveryHopCount=%s",
+            "blocked"
+            if resolution.state
+            in {RecoveryLineageState.AMBIGUOUS, RecoveryLineageState.BLOCKED}
+            else "resolved",
+            thread_id,
+            str(authoritative_run_id or ""),
+            resolution.head.run_id if resolution.head is not None else "",
+            resolution.state.value,
+            resolution.reason_code,
+            recovery_hop_count,
+        )
+        return resolution
     recovery_edges: dict[str, list[RecoveryAttempt]] = {}
     incoming_edges: dict[str, list[RecoveryAttempt]] = {}
     ignored_prestart_children: set[str] = set()
@@ -210,7 +246,172 @@ async def resolve_recovery_lineage_head(
             reason_code="RECOVERY_LINEAGE_AMBIGUOUS",
         )
     head_attempts = incoming_edges.get(head.run_id, ())
-    if len(head_attempts) == 1 and head_attempts[0].status in _IN_FLIGHT_ATTEMPT_STATUSES:
+    return _resolution_for_lineage_head(
+        head,
+        head_attempts[0] if len(head_attempts) == 1 else None,
+    )
+
+
+def _resolve_anchored_recovery_lineage(
+    *,
+    workspace: str,
+    thread_id: str,
+    execution_kind: str | None,
+    authoritative_run_id: str,
+    records: dict[str, DurableExecutionRecord],
+    attempts: list[RecoveryAttempt],
+    max_hops: int,
+) -> tuple[RecoveryLineageResolution, int]:
+    """从 checkpoint execution 只向前遍历 RecoveryAttempt，隔离普通 resume 历史。"""
+
+    anchor_run_id = str(authoritative_run_id or "").strip()
+    anchor = records.get(anchor_run_id)
+    if anchor is None or not _record_matches_lineage_query(
+        anchor,
+        workspace=workspace,
+        thread_id=thread_id,
+        execution_kind=execution_kind,
+    ):
+        return (
+            RecoveryLineageResolution(
+                head=None,
+                state=RecoveryLineageState.AMBIGUOUS,
+                reason_code="RECOVERY_CHECKPOINT_RUN_INVALID",
+            ),
+            0,
+        )
+
+    current_run_id = anchor.run_id
+    visited: set[str] = set()
+    incoming_attempt: RecoveryAttempt | None = None
+    recovery_hop_count = 0
+    while True:
+        if current_run_id in visited:
+            return _ambiguous_anchored_resolution(recovery_hop_count)
+        visited.add(current_run_id)
+
+        incoming = [
+            attempt
+            for attempt in attempts
+            if attempt.new_run_id == current_run_id
+            and attempt.status is not RecoveryAttemptStatus.FAILED_PRESTART
+        ]
+        if len(incoming) > 1:
+            return _ambiguous_anchored_resolution(recovery_hop_count)
+        if incoming and not _attempt_matches_lineage_query(
+            incoming[0],
+            records=records,
+            workspace=workspace,
+            thread_id=thread_id,
+            execution_kind=execution_kind,
+        ):
+            return _ambiguous_anchored_resolution(recovery_hop_count)
+        if incoming:
+            incoming_attempt = incoming[0]
+
+        children = [
+            attempt
+            for attempt in attempts
+            if attempt.source_run_id == current_run_id
+            and attempt.status is not RecoveryAttemptStatus.FAILED_PRESTART
+        ]
+        if len(children) > 1:
+            return _ambiguous_anchored_resolution(recovery_hop_count)
+        if not children:
+            break
+        attempt = children[0]
+        if (
+            attempt.status not in _LINEAGE_EDGE_STATUSES
+            or not _attempt_matches_lineage_query(
+                attempt,
+                records=records,
+                workspace=workspace,
+                thread_id=thread_id,
+                execution_kind=execution_kind,
+            )
+            or recovery_hop_count >= max_hops
+        ):
+            return _ambiguous_anchored_resolution(recovery_hop_count)
+        incoming_attempt = attempt
+        current_run_id = attempt.new_run_id
+        recovery_hop_count += 1
+
+    head = records.get(current_run_id)
+    if head is None:
+        return _ambiguous_anchored_resolution(recovery_hop_count)
+    return _resolution_for_lineage_head(head, incoming_attempt), recovery_hop_count
+
+
+def _record_matches_lineage_query(
+    record: DurableExecutionRecord,
+    *,
+    workspace: str,
+    thread_id: str,
+    execution_kind: str | None,
+) -> bool:
+    """验证 execution 确实属于 checkpoint 指定的 workspace、thread 与 kind。"""
+
+    return (
+        record.thread_id == thread_id
+        and _workspace_identity(record.workspace) == _workspace_identity(workspace)
+        and (execution_kind is None or record.execution_kind == execution_kind)
+    )
+
+
+def _attempt_matches_lineage_query(
+    attempt: RecoveryAttempt,
+    *,
+    records: dict[str, DurableExecutionRecord],
+    workspace: str,
+    thread_id: str,
+    execution_kind: str | None,
+) -> bool:
+    """验证当前 component 的 RecoveryAttempt 两端均由同一 durable scope 支撑。"""
+
+    source = records.get(attempt.source_run_id)
+    child = records.get(attempt.new_run_id)
+    return (
+        attempt.thread_id == thread_id
+        and attempt.status in _LINEAGE_EDGE_STATUSES
+        and source is not None
+        and child is not None
+        and _record_matches_lineage_query(
+            source,
+            workspace=workspace,
+            thread_id=thread_id,
+            execution_kind=execution_kind,
+        )
+        and _record_matches_lineage_query(
+            child,
+            workspace=workspace,
+            thread_id=thread_id,
+            execution_kind=execution_kind,
+        )
+    )
+
+
+def _ambiguous_anchored_resolution(
+    recovery_hop_count: int,
+) -> tuple[RecoveryLineageResolution, int]:
+    """统一返回 anchor component 的 fail-closed corruption 结果。"""
+
+    return (
+        RecoveryLineageResolution(
+            head=None,
+            state=RecoveryLineageState.AMBIGUOUS,
+            reason_code="RECOVERY_LINEAGE_AMBIGUOUS",
+        ),
+        recovery_hop_count,
+    )
+
+
+def _resolution_for_lineage_head(
+    head: DurableExecutionRecord,
+    incoming_attempt: RecoveryAttempt | None,
+) -> RecoveryLineageResolution:
+    """把解析出的 durable head 与 incoming transaction 映射为稳定产品状态。"""
+
+    if incoming_attempt is not None and incoming_attempt.status in _IN_FLIGHT_ATTEMPT_STATUSES:
         state = RecoveryLineageState.RECOVERY_IN_FLIGHT
         reason_code = "RECOVERY_IN_FLIGHT"
     elif head.status is DurableExecutionStatus.RUNNING:
