@@ -252,6 +252,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             resume_values_from_state,
             authoritative_failed_phase=authoritative_failed_phase,
         )
+        # Retry 开启新 execution 时显式覆盖旧 checkpoint 的瞬时失败信息，避免历史错误污染本轮失败投影。
+        resume_values_from_state.update(
+            {
+                "message": "",
+                "error": "",
+            }
+        )
     elif workflow_action == "retry_code_review":
         if workflow_scope in APPLICATION_PLANNING_SCOPES:
             raise ValueError("retry_code_review 只适用于主工作流的审查阶段。")

@@ -1923,7 +1923,21 @@ class WorkflowRequestTests(unittest.TestCase):
                                     "type": "application",
                                     "targetId": "application",
                                 },
-                                "buildSummary": {"gate_errors": []},
+                                "buildSummary": {
+                                    "gate_errors": [],
+                                    "summary": "历史 Build 摘要",
+                                },
+                                "buildTaskPlan": {
+                                    "build_execution_scope": {
+                                        "type": "application",
+                                        "targetId": "application",
+                                    },
+                                    "tasks": [
+                                        {"id": "task-1", "status": "completed"},
+                                    ],
+                                },
+                                "message": "旧失败消息",
+                                "error": "Build DAG scope 与当前 Build scope 不一致",
                             }
                         },
                     },
@@ -1932,6 +1946,20 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["resume_from"], "build")
         self.assertTrue(inputs["resume_values"]["retry_failed_tasks"])
+        self.assertEqual(inputs["resume_values"]["message"], "")
+        self.assertEqual(inputs["resume_values"]["error"], "")
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "application", "targetId": "application"},
+        )
+        self.assertEqual(
+            inputs["resume_values"]["build_task_plan"]["tasks"],
+            [{"id": "task-1", "status": "completed"}],
+        )
+        self.assertEqual(
+            inputs["resume_values"]["build_summary"]["summary"],
+            "历史 Build 摘要",
+        )
 
     def test_build_gate_override_precedes_authoritative_build_phase(self) -> None:
         """Build 已登记失败但存在 gate_errors 时，恢复目标仍必须是 Prepare。"""
@@ -1955,6 +1983,8 @@ class WorkflowRequestTests(unittest.TestCase):
                                 "buildSummary": {
                                     "gate_errors": ["DAG 不存在或范围已过期。"]
                                 },
+                                "message": "旧失败消息",
+                                "error": "旧 Build 错误",
                             }
                         },
                     },
@@ -1962,6 +1992,26 @@ class WorkflowRequestTests(unittest.TestCase):
             )
 
         self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+        self.assertEqual(inputs["resume_values"]["message"], "")
+        self.assertEqual(inputs["resume_values"]["error"], "")
+
+    def test_non_retry_does_not_inject_failure_state_reset(self) -> None:
+        """普通 Workflow 不应在没有 Retry 边界时注入失败状态清理字段。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "继续当前 Workflow",
+                "resumeState": {
+                    "state": {
+                        "message": "旧失败消息",
+                        "error": "旧错误",
+                    }
+                },
+            }
+        )
+
+        self.assertNotIn("message", inputs["resume_values"])
+        self.assertNotIn("error", inputs["resume_values"])
 
     def test_authoritative_development_gate_maps_application_scope_to_inspection(self) -> None:
         """应用级 development readiness 失败应从工作区扫描入口恢复。"""
