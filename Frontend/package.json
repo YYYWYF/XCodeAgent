@@ -1,7 +1,7 @@
 {
   "name": "LT54.06_XCODE_AGENT_FRONTEND_APP",
   "version": "1.0.0",
-  "description": "AIStudio(生成低开应用)",
+  "description": "DevAgent Studio(生成低开应用)",
   "main": "./out/main/index.js",
   "author": "80303865",
   "scripts": {

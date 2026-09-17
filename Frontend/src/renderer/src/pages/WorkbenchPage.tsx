@@ -340,7 +340,7 @@ function WorkbenchPage({
               <span />
               <span />
             </div>
-            <div className={cx('workbench-entry-kicker')}>AIStudio WORKSPACE</div>
+            <div className={cx('workbench-entry-kicker')}>DevAgent Studio WORKSPACE</div>
             <h1>正在进入工作台</h1>
             <p>正在同步项目配置、页面设计与历史会话</p>
             <div className={cx('workbench-entry-progress')} aria-hidden="true">

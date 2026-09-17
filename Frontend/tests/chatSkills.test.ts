@@ -2175,7 +2175,7 @@ test('自由对话完成后仍保留与摘要相同的助手正文', () => {
       status: 'completed',
       phase: 'conversation',
       intent: 'casual_chat',
-      message: '我是 AIStudio。'
+      message: '我是 DevAgent Studio。'
     },
     events: [],
     state: {},
@@ -2183,8 +2183,8 @@ test('自由对话完成后仍保留与摘要相同的助手正文', () => {
   }
 
   assert.equal(
-    workflowMessageContentForDisplay('我是 AIStudio。', workflow, true),
-    '我是 AIStudio。'
+    workflowMessageContentForDisplay('我是 DevAgent Studio。', workflow, true),
+    '我是 DevAgent Studio。'
   )
 })
 

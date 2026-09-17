@@ -25,7 +25,7 @@ type Props = {
 }
 
 /**
- * 工作台顶部单条：左 = Logo(AIStudio)，分隔线后 = 应用卡 + 阶段横排 stepper，
+ * 工作台顶部单条：左 = Logo(DevAgent Studio)，分隔线后 = 应用卡 + 阶段横排 stepper，
  * 右侧 = 状态提示（当前 Agent + 跟随旅程）+ 预览开关，主题入口统一放在左侧快捷栏。
  */
 export default function WorkbenchTopBar({

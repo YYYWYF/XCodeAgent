@@ -71,7 +71,7 @@ export function LoginApp(): JSX.Element {
               <span className={cx('login-logo')}>
                 <CodeOutlined />
               </span>
-              <strong>AIStudio</strong>
+              <strong>DevAgent Studio</strong>
             </div>
           </header>
 
@@ -89,7 +89,7 @@ export function LoginApp(): JSX.Element {
               <code>agent://secure-session</code>
             </div>
             <div className={cx('login-terminal-body')}>
-              <code><em>$</em> aistudio connect --workspace</code>
+              <code><em>$</em> DevAgent Studio connect --workspace</code>
               <code><b>✓</b> runtime ready · context protected</code>
               <span className={cx('login-terminal-cursor')} />
             </div>

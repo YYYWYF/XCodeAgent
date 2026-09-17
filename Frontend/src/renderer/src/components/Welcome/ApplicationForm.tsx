@@ -101,7 +101,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
       <section className={cx('application-form-section', 'application-form-section--full')}>
         <SectionTitle icon={<FolderOpenOutlined />}>项目位置</SectionTitle>
         <Form.Item
-          extra="请输入一个新的项目目录，或选择一个空目录；已有 AIStudio 应用目录不能复用。"
+          extra="请输入一个新的项目目录，或选择一个空目录；已有 DevAgent Studio 应用目录不能复用。"
           label="新应用项目目录"
           required
         >
