@@ -1,6 +1,6 @@
 // 预置应用 v1.3 历史会话回放生成器。
 // 不再手写"简化剧本"：直接复用交互演示的同一组剧本（设计/规划状态机、页面与接口
-// 工作台、实体数据实现、应用测试、代码审查、应用验收），按版本终态无头快进驱动——
+// 工作台、应用API数据绑定、应用测试、代码审查、应用验收），按版本终态无头快进驱动——
 // 门禁用演示预置应答逐个原地落定，采集真实工作流轨迹后组装成静态历史会话。
 // 生成结论与新建应用旅程同构：工作流消息不带文字正文；设计/规划一轮用户消息一来回；
 // 开发/测试/审查/验收的原地确认复用同一条消息；测试按用例切换消息分段。
@@ -33,7 +33,7 @@ import { appDataByWorkspace } from '../../../../../mock-data/index'
 type ClarificationAnswers = Record<string, unknown>
 
 /** 剧本回调的采集面板：由链路执行器填充，剧本本身无感知。 */
-type ReplaySink = Pick<ReplayCallbacks, 'onContent' | 'onWorkflow' | 'onProcessSteps'>
+type ReplaySink = Pick<ReplayCallbacks, 'onContent' | 'onWorkflow' | 'onProcessSteps' | 'onAcceptFiles'>
 
 /** 单条链路的最大门禁轮数：超过即认为遇到未知门禁，防御性中断避免死循环。 */
 const MAX_GATE_ROUNDS = 40
@@ -124,8 +124,40 @@ function cannedAnswerFor(payload: WorkflowRunPayload): ClarificationAnswers | un
       return { code_review: 'confirmed' }
     case 'application_acceptance':
       return { application_acceptance: 'accepted' }
-    case 'entity_binding':
-      return { entity_binding: 'confirmed' }
+    case 'api_binding': {
+      // 历史用户按卡面预填草稿确认映射：原样回显来源选定步骤写入的草稿（无草稿的旧载荷兜底为已确认）。
+      const state = (payload.state || {}) as Record<string, unknown>
+      const clarification = (state.clarification || {}) as Record<string, unknown>
+      return clarification.draft && typeof clarification.draft === 'object'
+        ? { api_binding: clarification.draft }
+        : { api_binding: 'confirmed' }
+    }
+    case 'api_source_type': {
+      // 类型选择按技术规划意向作答（卡面建议项）；无意向时按数据表处理。
+      const state = (payload.state || {}) as Record<string, unknown>
+      const clarification = (state.clarification || {}) as Record<string, unknown>
+      return { api_source_type: String(clarification.suggestion || '数据库') }
+    }
+    case 'api_source_select': {
+      // 来源选择取目录里第一个可绑定对象：外部API选首个接口，数据表选首个连接下的首张表。
+      const state = (payload.state || {}) as Record<string, unknown>
+      const clarification = (state.clarification || {}) as Record<string, unknown>
+      const externals = Array.isArray(clarification.externals)
+        ? (clarification.externals as Array<Record<string, unknown>>)
+        : []
+      const external = externals[0]
+      if (external) return { api_source_select: String(external.key) }
+      const databases = Array.isArray(clarification.databases)
+        ? (clarification.databases as Array<{ tables?: Array<{ key?: unknown }> }>)
+        : []
+      const table = databases[0]?.tables?.[0]
+      return table && typeof table.key === 'string'
+        ? { api_source_select: table.key }
+        : undefined
+    }
+    case 'api_source_missing':
+      // 目录为空在预置旅程中不出现；无预置应答让链路提前收口并给出告警，避免盲目重试。
+      return undefined
     default:
       return undefined
   }
@@ -289,6 +321,16 @@ async function runChain(
           const last = buffers[buffers.length - 1]
           last.steps = mergeSteps(last.steps, next)
         }
+      },
+      // 确定性生成物（应用API数据适配）不过 Diff 门禁：交付即沉淀进会话文件快照。
+      onAcceptFiles: (files) => {
+        files.forEach((file) => {
+          savedFiles.push({
+            path: file.path,
+            content: file.content,
+            savedAt: nextTime()
+          })
+        })
       }
     }
     payload = undefined
@@ -399,7 +441,7 @@ let historyCache: ChatSessionRecord[] | undefined
 
 /**
  * 生成预置应用 v1.3 的全阶段历史会话（进程内只回放一次）。
- * 链路顺序对齐真实旅程：设计/规划确认门 → 页面与接口实现 → 实体数据实现 →
+ * 链路顺序对齐真实旅程：设计/规划确认门 → 应用页面与接口实现 → 应用API数据绑定 →
  * 应用测试 → 代码审查 → 应用验收；结束后复位剧本注册态，冷启动校准仍走静态基线。
  */
 export async function generateHistorySessions(workspaceRoot: string): Promise<ChatSessionRecord[]> {
@@ -517,7 +559,7 @@ export async function generateHistorySessions(workspaceRoot: string): Promise<Ch
       await collectDesign()
     }
 
-    // —— 开发：介绍页 → 我的回检页面 → 我的回检查询接口 → 回检单实体数据实现。——
+    // —— 开发：回检介绍应用页面 → 我的回检应用页面 → 我的回检查询接口 → 回检单应用API数据绑定。——
     const introPage = await buildChain({
       threadId: 'thread-development-v1-3',
       requestText: '开始实现：回检介绍',
@@ -549,26 +591,37 @@ export async function generateHistorySessions(workspaceRoot: string): Promise<Ch
         detailTargetType: 'endpoint'
       },
     })
-    const entity = await buildChain({
+    const myRechecksApi = await buildChain({
       threadId: 'thread-development-v1-3',
-      requestText: '开始开发实体：回检单',
+      requestText: '开始开发应用API：查询我的回检',
       agentPhase: 'development',
       reuseMessage: reuseWorkbenchMessage,
       answerFor: cannedAnswerFor,
       invoke: (options, sink) => replayWorkbench('thread-development-v1-3', options, sink),
-      baseOptions: { selectedObjectId: 'recheck_record', detailTargetType: 'business-object' },
+      baseOptions: { selectedObjectId: 'query_my_rechecks', detailTargetType: 'app-api' },
+    })
+    const reviewerApi = await buildChain({
+      threadId: 'thread-development-v1-3',
+      requestText: '开始开发应用API：查询审核人信息',
+      agentPhase: 'development',
+      reuseMessage: reuseWorkbenchMessage,
+      answerFor: cannedAnswerFor,
+      invoke: (options, sink) => replayWorkbench('thread-development-v1-3', options, sink),
+      baseOptions: { selectedObjectId: 'query_recheck_reviewer', detailTargetType: 'app-api' },
     })
     const developmentMessages = [
       ...introPage.messages,
       ...myRechecksPage.messages,
       ...myRechecksEndpoint.messages,
-      ...entity.messages
+      ...myRechecksApi.messages,
+      ...reviewerApi.messages
     ]
     const developmentFiles = [
       ...introPage.savedFiles,
       ...myRechecksPage.savedFiles,
       ...myRechecksEndpoint.savedFiles,
-      ...entity.savedFiles
+      ...myRechecksApi.savedFiles,
+      ...reviewerApi.savedFiles
     ]
 
     // —— 测试：非功测试 + 六条用例逐一确认执行（每条用例一段消息）。——

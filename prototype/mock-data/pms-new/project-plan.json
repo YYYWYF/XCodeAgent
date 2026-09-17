@@ -1,5 +1,5 @@
 {
-  "summary": "本方案规划回检介绍、我的回检两个页面和一个查询接口。回检介绍为无接口依赖的静态页面；我的回检与 GET /api/rechecks/my 由同一个开发任务完成并联调。",
+  "summary": "本方案规划回检介绍、我的回检两个应用页面和一个查询接口。回检介绍为无接口依赖的静态应用页面；我的回检与 GET /api/rechecks/my 由同一个开发任务完成并联调。",
   "tech_stack": {
     "frontend": "React 18 + TypeScript + Ant Design 4 + Vite",
     "backend": "Spring Boot 3 + MyBatis-Plus",
@@ -52,7 +52,7 @@
     },
     { "order": 2, "task": "配置 MySQL 数据源与基础数据（回检状态字典）", "target": "数据源初始化" },
     { "order": 3, "task": "实现侧边导航与整体布局（PC 管理端模板）", "target": "全局布局" },
-    { "order": 4, "task": "实现回检介绍静态页面", "target": "回检介绍" },
+    { "order": 4, "task": "实现回检介绍静态应用页面", "target": "回检介绍" },
     {
       "order": 5,
       "task": "实现我的回检页面与查询接口",

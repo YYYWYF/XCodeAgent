@@ -115,7 +115,7 @@ function persistUserApplications(applications: unknown[]): unknown[] {
 const ok = <T>(data: T): Promise<T> => Promise.resolve(data)
 const noop = (): Promise<unknown> => Promise.resolve({})
 
-// 实时会话（页面/接口开发、审查）在走完时存到 window 内存。list/read 必须合并它们，
+// 实时会话（应用页面/接口开发、审查）在走完时存到 window 内存。list/read 必须合并它们，
 // 否则切回开发阶段后大纲点页面/接口，静态 mock 会话找不到实时开发历史 → 会话丢失。
 function mockSavedSessions(workspaceRoot?: string): Array<Record<string, unknown>> {
   const all = (window as unknown as { __mockSavedSessions?: Array<Record<string, unknown>> })
@@ -293,7 +293,7 @@ const aiStudio = {
             createdByUser?: boolean; savedFiles?: unknown[]; apiContractId?: string; endpointId?: string; sessionKind?: string; versionId?: string
             createdAt: number; updatedAt: number; messages: unknown[]
           }>)
-      // 合并走完的实时会话（页面/接口开发、审查），否则切回开发阶段后大纲点页面/接口，
+      // 合并走完的实时会话（应用页面/接口开发、审查），否则切回开发阶段后大纲点应用页面/接口，
       // list 只返回静态 mock，实时开发会话（messageCount>0）找不到 → 会话历史丢失。
       const saved = mockSavedSessions(workspaceRoot || '')
       const merged = mergeMockSessions(scriptedSessions, saved)

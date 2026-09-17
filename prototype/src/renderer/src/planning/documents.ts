@@ -15,14 +15,14 @@ const artifactFields = {
   'technical-plan': 'technicalPlan'
 } as const
 const labels: Record<string, string> = {
-  business_operations: '需要支持的业务操作',
+  operations: '需要支持的方法',
   app_info: '应用目标',
   app: '应用目标',
   name: '名称',
   description: '说明',
   summary: '概述',
   user_roles: '用户角色',
-  pages: '页面',
+  pages: '应用页面',
   business_flows: '业务流程',
   steps: '流程步骤',
   permissions: '职责与权限',
@@ -46,9 +46,8 @@ const labels: Record<string, string> = {
   frontend: '前端',
   backend: '后端',
   data: '数据',
-  entities: '实体',
+  apis: '应用API',
   fields: '字段',
-  api_contracts: 'API 契约',
   endpoints: '接口',
   schemas: '数据结构',
   properties: '属性',
@@ -59,7 +58,8 @@ const labels: Record<string, string> = {
   endpoint_dependencies: '接口依赖',
   action_implementations: '动作实现',
   method: '请求方法',
-  base_path: '基础路径',
+  response: '返回字段',
+  params: '参数',
   response_schema_ref: '响应结构',
   request_schema_ref: '请求结构',
   endpointId: '接口引用',
@@ -131,6 +131,19 @@ export function planningMarkdown(
     }
     if (Array.isArray(value)) {
       value.forEach((item, index) => {
+        if (item && typeof item === 'object' && !Array.isArray(item) && 'name' in item && 'code' in item) {
+          // 契约出入参条目（code+name）：单行渲染为「code（name）」，标识属契约身份不作编辑字段。
+          const code = String(item.code || '')
+          const name = String(item.name || '')
+          const required = Boolean(item.required)
+          const summary = String(item.summary || '')
+          const label = code && name ? `${code}（${name}）` : name || code
+          lines.push(
+            `- ${labels[field] || field}：${label}${required ? '' : ' · 可选'}${summary ? `——${summary}` : ''}`,
+            ''
+          )
+          return
+        }
         if (typeof item === 'object')
           lines.push(
             `${'#'.repeat(Math.min(depth, 4))} ${item.name || item.label || item.pageId || item.id || `${labels[field] || field} ${index + 1}`}`,

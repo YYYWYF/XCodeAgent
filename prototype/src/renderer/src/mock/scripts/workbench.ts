@@ -11,17 +11,22 @@ import type {
 import type { ProcessStepRecord, SendWorkflowMessageOptions } from '../../service/agUiAgent'
 import {
   buildEndpointSource,
-  buildEntityAdapterSource,
+  buildAppApiAdapterSource,
   buildPageSource,
   type PageDesign
 } from '../../workbenchArtifacts'
-import { readBusinessObjectsSnapshot, saveBusinessObjects } from '../../components/BusinessObjects/store'
+import { readAppApisSnapshot, saveAppApis } from '../../components/AppApis/store'
 import {
-  entityBindingPlan,
+  bindingDraftFrom,
+  contractRequestParams,
+  emptyImplementation,
+  withAppliedBindingDraft,
   withConfirmedBindings,
-  type EntityBindingPlanRow
-} from '../../components/BusinessObjects/model'
-import { readDataSources } from '../../components/DataSources/catalog'
+  withSelectedSource,
+  type BindingDraft,
+  type ImplementationKind
+} from '../../components/AppApis/model'
+import { flattenTargets, readDataSources } from '../../components/DataSources/catalog'
 import {
   BACKGROUND_TASK_SYSTEM_LABEL,
   acceptArtifactTask,
@@ -50,7 +55,7 @@ import {
   pageMeta,
   step,
   resolveEndpointTarget,
-  resolveEntityTarget,
+  resolveAppApiTarget,
   streamCodeFrames,
   wf,
   withProcessStepTotal,
@@ -148,7 +153,7 @@ export async function replayArtifactAcceptance(
   // 解析验收目标产物的展示名，页面与接口共用同一套确认文案。
   const targetLabel = endpointTarget
     ? `接口 ${endpointMeta(endpointTarget.apiContractId, endpointTarget.endpointId)?.label || endpointTarget.endpointId}`
-    : `页面「${page?.label || ''}」`
+    : `应用页面「${page?.label || ''}」`
 
   /** 定位本次验收关联的后台实现任务；找不到说明任务已被处理或已失效。 */
   const artifactId = endpointTarget
@@ -302,7 +307,7 @@ export async function replayArtifactAcceptance(
 // 审查阶段检查矩阵（规范 / 安全 / 健康度 三项通过）。
 
 // 把生成的完整文件内容包装成新增文件的行级 Diff（bare diff 由前端自动补统一格式头）。
-// 页面产物只交付页面文件：数据能力由实体操作的实现提供，页面不再携带依赖接口文件。
+// 应用页面产物只交付页面文件：数据能力由应用API方法的绑定提供，应用页面不再携带依赖接口文件。
 function buildFileTargets(pageId: string): BuildFileTarget[] {
   const scenario = appDataByWorkspace()
   const targets: BuildFileTarget[] = []
@@ -587,7 +592,7 @@ async function replayEndpointWorkbench(
       ])
       // 代码变更已在对话内确认：同步交付当场完毕，不产生待验收状态；
       // 产物状态由已保存文件快照与工作流推导。
-      // 设计确认即视为「已设计」：主对话可立即继续设计下一个页面或接口。
+      // 设计确认即视为「已设计」：主对话可立即继续设计下一个应用页面或接口。
       markEndpointDesigned(meta.apiContractId, meta.endpointId)
       return emit(
         'build',
@@ -676,7 +681,7 @@ async function replayEndpointWorkbench(
       },
       choice: choice
     })
-    // 设计确认即视为「已设计」：主对话可立即继续设计下一个页面或接口。
+    // 设计确认即视为「已设计」：主对话可立即继续设计下一个应用页面或接口。
     markEndpointDesigned(meta.apiContractId, meta.endpointId)
     // 选择节点落成已完成，再追加派发收口节点：合并回话按 id 归位并接在同一轨迹末尾。
     const dispatchNode = workflowNode('development', 'background_dispatch')
@@ -769,13 +774,13 @@ export async function replayWorkbench(
   options: SendWorkflowMessageOptions,
   callbacks: ReplayCallbacks
 ): Promise<WorkflowRunPayload | undefined> {
-  // 页面/实体工作流全程不写正文文本：指引由步骤详情与授权条承载，消息里不混排文字。
+  // 应用页面/应用API工作流全程不写正文文本：指引由步骤详情与授权条承载，消息里不混排文字。
   const { onWorkflow, onApplicationLifecycle, onProcessSteps } = callbacks
   const resume = options.resumeState as WorkflowRunPayload | undefined
-  // 实体目标优先：实体开发独立于页面与接口目标（对话区确认绑定 + 生成数据适配逻辑）。
-  const entityTarget = resolveEntityTarget(options, resume)
-  if (entityTarget) {
-    return replayEntityWorkbench(threadId, entityTarget, options, callbacks)
+  // 应用API目标优先：应用API开发独立于应用页面与接口目标（对话区确认绑定 + 生成数据适配逻辑）。
+  const appApiTarget = resolveAppApiTarget(options, resume)
+  if (appApiTarget) {
+    return replayAppApiWorkbench(threadId, appApiTarget, options, callbacks)
   }
   // 接口目标优先于页面：选中接口或续传快照带接口身份时走接口剧本。
   const endpointTarget = resolveEndpointTarget(options, resume)
@@ -820,7 +825,7 @@ export async function replayWorkbench(
 
   // 1. 详情审阅确认（或续跑）→ 在「选择执行方式」节点上选择同步执行或后台资源池。
   //    同步执行由剧本在对话内当场播放生成节点并落同一条任务记录；
-  //    异步/潮汐派发后台任务后前台立即收口；页面产物只交付页面文件，数据由实体操作提供。
+  //    异步/潮汐派发后台任务后前台立即收口；应用页面产物只交付页面文件，数据由应用API提供。
   if (answers.detail_review || resume) {
     // 同步执行的代码变更确认续跑：接受 Diff 后补播构建检查与产物审查，产物状态由文件快照推导。
     if (answers.file_acceptance && resume) {
@@ -879,7 +884,7 @@ export async function replayWorkbench(
     const choice = resolveDispatchChoice(answers)
     const artifactId = pageArtifactId(page.id)
     const relatedArtifactIds = [artifactId]
-    // 「选择执行方式」节点来自开发工作流底层 DAG（页面/接口两条设计分支在此汇聚）：
+    // 「选择执行方式」节点来自开发工作流底层 DAG（应用页面/接口两条设计分支在此汇聚）：
     // 挂起时为待输入节点（交互卡内嵌其上），选择后按同 id 落成已完成，轨迹按 id 合并保持连续。
     const executionNode = workflowNode('development', 'choose_execution')
     const choiceStep = (
@@ -943,7 +948,7 @@ export async function replayWorkbench(
     if (choice === 'sync') return syncImplementPage()
     dispatchImplementationTask({
       options,
-      title: `页面「${page.label}」代码实现`,
+      title: `应用页面「${page.label}」代码实现`,
       artifactIds: relatedArtifactIds,
       primaryArtifactId: artifactId,
       execTarget: { type: 'page', pageId: page.id, includeEndpoint: false },
@@ -974,7 +979,7 @@ export async function replayWorkbench(
     // 注：不在开始设计时 markPageDesigned——「已设计」仅在详情审阅确认（派发后台任务）时标记。
     // 生成中以 processSteps 持续承载设计节点，保持同一条研发工作流轨迹。
     // 设计节点来自开发工作流底层 DAG 的「详细设计」段；标题与顺序以 DAG 为唯一来源。
-    // 页面详设四步使用开发工作流 DAG 的中性文案：页面调用 实体.操作()，不再绑定依赖接口。
+    // 应用页面详设四步使用开发工作流 DAG 的中性文案：应用页面调用 应用API.方法()，不再绑定依赖接口。
     const designSteps = workflowSegmentNodes('development', 'design')
       .filter((node) => node.id !== 'choose_execution')
       .map((node) => ({
@@ -1055,34 +1060,36 @@ export async function replayWorkbench(
   return emit('build', 'running', fallback)
 }
 
-// —— 实体（business-object）工作台剧本 ——
-// 读取实体结构 → 对话区「确认绑定」卡逐操作确认数据实现 → 生成数据适配逻辑 → 确认代码变更。
+// —— 应用API（app-api）工作台剧本 ——
+// 读取 API 契约 → 对话区「确认绑定」卡逐方法确认数据绑定 → 生成数据适配逻辑 → 确认代码变更。
 // 绑定/映射细节全部在对话卡内完成确认，右侧只按确认结果静态呈现；同步单通道执行，不进任务池。
-async function replayEntityWorkbench(
+async function replayAppApiWorkbench(
   threadId: string,
   target: { objectId: string },
   options: SendWorkflowMessageOptions,
   callbacks: ReplayCallbacks
 ): Promise<WorkflowRunPayload | undefined> {
-  // 实体工作流全程不写正文文本：指引由步骤详情与交互卡承载，消息里不混排文字。
+  // 应用API工作流全程不写正文文本：指引由步骤详情与交互卡承载，消息里不混排文字。
   const { onWorkflow, onApplicationLifecycle, onProcessSteps } = callbacks
   const resume = options.resumeState as WorkflowRunPayload | undefined
-  const runId = resume?.runId || `mock-entity-${Date.now()}`
+  const runId = resume?.runId || `mock-app-api-${Date.now()}`
   const answers = (options.clarificationAnswers || {}) as Record<string, unknown>
   const scenario = appDataByWorkspace()
-  // 实体绑定按版本隔离：读写都必须落在当前工作版本自己的缓存键上。
-  const entityVersionId = options.application?.currentVersionId || 'current'
-  const objects = readBusinessObjectsSnapshot(scenario.requirementSpec, entityVersionId)
+  // 应用API绑定按版本隔离：读写都必须落在当前工作版本自己的缓存键上。
+  const apiVersionId = options.application?.currentVersionId || 'current'
+  const objects = readAppApisSnapshot(scenario.requirementSpec, apiVersionId, scenario.technicalPlan)
   const object = objects.find((item) => item.id === target.objectId) || objects[0]
-  // 轨迹节点取自开发工作流底层 DAG 的实体开发段 + 通用「确认代码变更」节点。
-  const entityNodes = workflowSegmentNodes('development', 'entity')
-  const structureNode = entityNodes.find((node) => node.id === 'entity_read_structure')!
-  const bindingNode = entityNodes.find((node) => node.id === 'entity_confirm_binding')!
-  const adapterNode = entityNodes.find((node) => node.id === 'entity_generate_adapter')!
-  const confirmNode = workflowNode('development', 'confirm_changes')
-  const stepTotal = entityNodes.length + 1
+  // 轨迹节点取自开发工作流底层 DAG 的应用API开发段；适配逻辑由配置确定性生成，
+  // 不再经过「确认代码变更」Diff 门禁，生成即交付完成。
+  const apiNodes = workflowSegmentNodes('development', 'app-api')
+  const structureNode = apiNodes.find((node) => node.id === 'api_read_contract')!
+  const typeNode = apiNodes.find((node) => node.id === 'api_select_source_type')!
+  const sourceNode = apiNodes.find((node) => node.id === 'api_select_source')!
+  const bindingNode = apiNodes.find((node) => node.id === 'api_confirm_binding')!
+  const adapterNode = apiNodes.find((node) => node.id === 'api_generate_adapter')!
+  const stepTotal = apiNodes.length
 
-  // 实体缺位（规划数据被清理等）时直接给完成态，避免悬挂的等待轨迹。
+  // 应用API缺位（规划数据被清理等）时直接给完成态，避免悬挂的等待轨迹。
   if (!object) {
     const fallbackLifecycle = makeEmitLifecycle(
       makeBaseLifecycle(options.application),
@@ -1094,17 +1101,17 @@ async function replayEntityWorkbench(
       runId,
       'build',
       'completed',
-      fallbackLifecycle({ scope: 'entity', targetId: target.objectId, threadId, runId, phase: 'build', status: 'completed', startedAt: '', updatedAt: '' }),
-      { selectedObjectId: target.objectId, detailTargetType: 'business-object' },
-      { summary: { phase: 'build', status: 'completed', message: '未找到该实体的规划数据' } }
+      fallbackLifecycle({ scope: 'app-api', targetId: target.objectId, threadId, runId, phase: 'build', status: 'completed', startedAt: '', updatedAt: '' }),
+      { selectedObjectId: target.objectId, detailTargetType: 'app-api' },
+      { summary: { phase: 'build', status: 'completed', message: '未找到该应用API的规划数据' } }
     )
   }
 
   const identity = {
     selectedObjectId: object.id,
-    detailTargetType: 'business-object'
+    detailTargetType: 'app-api'
   }
-  const entityWf = (
+  const apiWf = (
     phase: string,
     status: string,
     lifecycle: ApplicationLifecycle | undefined,
@@ -1131,20 +1138,20 @@ async function replayEntityWorkbench(
     state: Record<string, unknown> = {},
     extra: Partial<WorkflowRunPayload> = {}
   ): WorkflowRunPayload => {
-    const payload = entityWf(phase, status, lifecycle, state, extra)
+    const payload = apiWf(phase, status, lifecycle, state, extra)
     onWorkflow?.(payload)
     return payload
   }
-  const execEntity = (
+  const execApi = (
     phase: string,
     status: string,
     pendingInteraction?: Record<string, unknown>
   ): WorkbenchExecutionLike => {
     const now = new Date().toISOString()
     return {
-      scope: 'entity',
+      scope: 'app-api',
       targetId: object.id,
-      resourceKeys: [`business-object:${object.id}`],
+      resourceKeys: [`app-api:${object.id}`],
       threadId,
       runId,
       phase,
@@ -1154,95 +1161,29 @@ async function replayEntityWorkbench(
       ...(pendingInteraction ? { pendingInteraction } : {})
     }
   }
-  /** 实体绑定确认交互：对话卡内逐操作确认数据实现，右侧不承载编辑动作。 */
-  const entityBindingInteraction = (plan: EntityBindingPlanRow[]): Record<string, unknown> => ({
-    id: `pi-entity-binding-${Date.now()}`,
-    type: 'entity_binding',
+  /** 应用API映射绑定交互：对话卡承载完整映射配置，确认时携带整份草稿。 */
+  const apiBindingInteraction = (clarification: Record<string, unknown>): Record<string, unknown> => ({
+    id: `pi-api-binding-${Date.now()}`,
+    type: 'api_binding',
     basedOnRevision: 1,
-    payload: { objectName: object.name, operations: plan },
+    payload: clarification,
     createdAt: new Date().toISOString()
   })
 
-  // 1. 绑定确认续跑：把意向写回实体演示状态（右侧随之呈现已绑定），再当场生成数据适配逻辑。
-  if (answers.entity_binding) {
-    const sources = readDataSources()
-    const confirmedObject = withConfirmedBindings(object, sources)
-    const confirmedCount = confirmedObject.operations.filter(
-      (operation) => operation.implementation.confirmed
-    ).length
-    saveBusinessObjects(
-      scenario.requirementSpec,
-      objects.map((item) => (item.id === confirmedObject.id ? confirmedObject : item)),
-      entityVersionId
-    )
-    onProcessSteps?.(
-      withProcessStepTotal(
-        [
-          step(structureNode, 'completed', 1),
-          step(bindingNode, 'completed', 2, `已确认 ${confirmedCount} 个操作的数据实现与字段映射，绑定结果已写入实体开发产物。`),
-          step(adapterNode, 'running', 3)
-        ],
-        stepTotal
-      )
-    )
-    // 生成代码：按行分帧渐进写入 Diff，右侧源码区逐帧跟随（generate_code 阶段）。
-    const generateLifecycle = emitLifecycle(execEntity('generate_code', 'running'))
-    emit('generate_code', 'running', generateLifecycle)
-    const adapterSource = buildEntityAdapterSource(confirmedObject)
-    const adapterTarget: BuildFileTarget = {
-      key: `entity-${object.id}`,
-      name: adapterSource.filePath.split('/').pop() || 'EntityAdapter.java',
-      path: appPath(adapterSource.filePath),
-      content: adapterSource.content,
-      sourceTool: 'entity_adapter_generator'
-    }
-    await streamCodeFrames([adapterTarget], { linesPerFrame: 8, intervalMs: 400 }, (_finished, partial) => {
-      emit('generate_code', 'running', generateLifecycle, {
-        codeChanges: changeSetFromContents(runId, [partial])
-      })
-    })
-    onProcessSteps?.(
-      withProcessStepTotal(
-        [
-          step(structureNode, 'completed', 1),
-          step(bindingNode, 'completed', 2, `已确认 ${confirmedCount} 个操作的数据实现与字段映射，绑定结果已写入实体开发产物。`),
-          step(adapterNode, 'completed', 3, '已按确认的绑定生成查询、组合、转换与本地业务规则。'),
-          step(confirmNode, 'requires_user_input', 4)
-        ],
-        stepTotal
-      )
-    )
-    return emit(
-      'build',
-      'requires_user_input',
-      emitLifecycle(execEntity('build', 'awaiting_user', fileAcceptanceInteraction())),
-      {
-        clarification: {
-          mode: 'file_acceptance',
-          status: 'requires_user_input',
-          message: '实体数据适配代码已生成，请在右侧确认 Diff 后接受。'
-        },
-        codeChanges: fullChangeSet(runId, [adapterTarget])
-      },
-      {
-        summary: {
-          phase: 'build',
-          status: 'requires_user_input',
-          message: '等待确认代码变更'
-        }
-      }
-    )
-  }
+  // 节点链固定次序：读取契约 → 选类型 → 选来源 → 配置映射绑定 → 生成适配 → 确认代码。
+  // 各续跑分支按“已回答到哪一步”重组轨迹状态，答案逐轮提交、互不合并。
 
-  // 2. 代码变更确认续跑：接受 Diff 后工作流收口，实体状态由绑定确认结果推导为已完成。
+  // 1. 代码变更确认续跑：仅服务历史轨迹的遗留门禁——新链路生成即完成，不再产生该门禁；
+  // 收口时不触碰绑定状态（历史回放兼容，防止旧应答重放覆盖人工映射）。
   if (answers.file_acceptance && resume) {
     onProcessSteps?.(
       withProcessStepTotal(
         [
           step(structureNode, 'completed', 1),
-          step(bindingNode, 'completed', 2, '已确认全部操作的数据实现与字段映射。'),
-          step(adapterNode, 'completed', 3, '已按确认的绑定生成查询、组合、转换与本地业务规则。'),
-          step(confirmNode, 'completed', 4, '已接受本次生成的代码变更，实体交付完成。')
+          step(typeNode, 'completed', 2),
+          step(sourceNode, 'completed', 3),
+          step(bindingNode, 'completed', 4, '已确认全部方法的数据绑定与字段映射。'),
+          step(adapterNode, 'completed', 5, '已按确认的绑定生成查询、组合、转换与本地业务规则，适配代码直接交付。')
         ],
         stepTotal
       )
@@ -1251,14 +1192,262 @@ async function replayEntityWorkbench(
     return emit(
       'build',
       'completed',
-      emitLifecycle(execEntity('build', 'completed')),
+      emitLifecycle(execApi('build', 'completed')),
       {},
-      { summary: { phase: 'build', status: 'completed', message: '实体开发已完成' } }
+      { summary: { phase: 'build', status: 'completed', message: '应用API开发已完成' } }
     )
   }
 
-  // 3. 启动：读取实体结构后挂「绑定操作的数据实现」待输入节点，绑定方案整卡呈现在对话区。
-  emit('detail_confirmation', 'running', emitLifecycle(execEntity('detail_confirmation', 'running')))
+  // 2. 映射绑定确认续跑：对话卡提交的映射草稿写回应用API状态，再当场生成数据适配逻辑。
+  if (answers.api_binding) {
+    const sources = readDataSources()
+    const draftAnswer = answers.api_binding
+    const confirmedObject =
+      draftAnswer && typeof draftAnswer === 'object'
+        ? withAppliedBindingDraft(object, draftAnswer as BindingDraft, sources)
+        : withConfirmedBindings(object, sources)
+    saveAppApis(
+      scenario.requirementSpec,
+      objects.map((item) => (item.id === confirmedObject.id ? confirmedObject : item)),
+      apiVersionId
+    )
+    onProcessSteps?.(
+      withProcessStepTotal(
+        [
+          step(structureNode, 'completed', 1),
+          step(typeNode, 'completed', 2),
+          step(sourceNode, 'completed', 3),
+          step(bindingNode, 'completed', 4, `「${object.name}」的映射绑定已在对话卡内确认，绑定结果已写入应用API开发产物。`),
+          step(adapterNode, 'running', 5)
+        ],
+        stepTotal
+      )
+    )
+    // 适配代码由确认的配置确定性生成：没有可审核的 Diff，不展示代码生成过程，
+    // 右侧面板保持产物视图不动；文件直接交付进应用文件，工作流收口为完成态。
+    const adapterSource = buildAppApiAdapterSource(confirmedObject)
+    const adapterTarget: BuildFileTarget = {
+      key: `app-api-${object.id}`,
+      name: adapterSource.filePath.split('/').pop() || 'ApiAdapter.java',
+      path: appPath(adapterSource.filePath),
+      content: adapterSource.content,
+      sourceTool: 'app_api_adapter_generator'
+    }
+    await delay(650)
+    options.onAcceptFiles?.([{ path: adapterTarget.path, content: adapterTarget.content }])
+    onProcessSteps?.(
+      withProcessStepTotal(
+        [
+          step(structureNode, 'completed', 1),
+          step(typeNode, 'completed', 2),
+          step(sourceNode, 'completed', 3),
+          step(bindingNode, 'completed', 4, `「${object.name}」的映射绑定已在对话卡内确认，绑定结果已写入应用API开发产物。`),
+          step(adapterNode, 'completed', 5, '已按确认的绑定生成查询、组合、转换与本地业务规则。')
+        ],
+        stepTotal
+      )
+    )
+    return emit(
+      'build',
+      'completed',
+      emitLifecycle(execApi('build', 'completed')),
+      {},
+      {
+        summary: {
+          phase: 'build',
+          status: 'completed',
+          message: '应用API开发已完成'
+        }
+      }
+    )
+  }
+
+  // 3. 来源选定续跑：把绑定写入应用API（模板槽位 + AI 初步字段映射 + 推荐表达式），
+  // 随后停在「配置映射绑定」节点——映射配置整卡呈现在对话区，确认草稿后生成适配。
+  if (answers.api_source_select) {
+    const sources = readDataSources()
+    const selectedKey = String(answers.api_source_select)
+    const target = flattenTargets(sources).find((item) => item.key === selectedKey)
+    const boundObject = target ? withSelectedSource(object, target, sources) : object
+    saveAppApis(
+      scenario.requirementSpec,
+      objects.map((item) => (item.id === boundObject.id ? boundObject : item)),
+      apiVersionId
+    )
+    onProcessSteps?.(
+      withProcessStepTotal(
+        [
+          step(structureNode, 'completed', 1),
+          step(typeNode, 'completed', 2, `已选择绑定${boundObject.implementation.kind === '外部服务' ? '外部API' : '数据表'}。`),
+          step(sourceNode, 'completed', 3, target ? `已选定数据来源：${boundObject.implementation.bindings[0]?.sourceName} · ${boundObject.implementation.bindings[0]?.targetName}。` : ''),
+          step(bindingNode, 'requires_user_input', 4)
+        ],
+        stepTotal
+      )
+    )
+    const binding = boundObject.implementation.bindings[0]
+    const clarification = {
+      mode: 'api_binding',
+      status: 'requires_user_input',
+      message: `请在下方完成「${object.name}」的映射绑定并确认，确认后生成数据适配逻辑。`,
+      objectName: object.name,
+      kind: boundObject.implementation.kind,
+      appMethod: object.method,
+      appPath: object.path,
+      sourceName: binding?.sourceName || '',
+      targetName: binding?.targetName || '',
+      method: target?.method || '',
+      op: boundObject.implementation.tableOp || '',
+      columns: target ? target.fields : [],
+      requestParams: target ? target.requestParams : [],
+      inputParams: contractRequestParams(boundObject).map((param) => ({
+        code: param.code,
+        name: param.name,
+        summary: param.summary,
+        required: param.required
+      })),
+      outputs: boundObject.response,
+      draft: bindingDraftFrom(boundObject)
+    }
+    return emit(
+      'detail_confirmation',
+      'requires_user_input',
+      emitLifecycle(
+        execApi('detail_confirmation', 'awaiting_user', apiBindingInteraction(clarification))
+      ),
+      { clarification },
+      {
+        summary: {
+          phase: 'detail_confirmation',
+          status: 'requires_user_input',
+          message: '等待完成映射绑定'
+        }
+      }
+    )
+  }
+
+  // 4. 类型选定 / 重新检测续跑：检查目录中该类型的可用来源——
+  // 有则列出来源选择卡；没有则引导先到「数据来源」抽屉配置，配置后可一键重新检测。
+  if (answers.api_source_type || answers.api_source_check) {
+    const sources = readDataSources()
+    const kind: ImplementationKind = answers.api_source_type
+      ? (String(answers.api_source_type) as ImplementationKind)
+      : object.implementation.kind
+    let current = object
+    if (answers.api_source_type && object.implementation.kind !== kind) {
+      // 类型切换落回意向态：清空此前的绑定与映射，避免跨类型残留。
+      current = {
+        ...object,
+        implementation: {
+          ...emptyImplementation(kind),
+          kind,
+          intentSources: object.implementation.intentSources
+        }
+      }
+      saveAppApis(
+        scenario.requirementSpec,
+        objects.map((item) => (item.id === current.id ? current : item)),
+        apiVersionId
+      )
+    }
+    const isExternal = kind === '外部服务'
+    const kindLabel = isExternal ? '外部API接口' : '数据表'
+    const targets = flattenTargets(sources).filter(
+      (item) => item.sourceKind === (isExternal ? 'external_service' : 'database')
+    )
+    onProcessSteps?.(
+      withProcessStepTotal(
+        [
+          step(structureNode, 'completed', 1),
+          step(typeNode, 'completed', 2, `已选择绑定${isExternal ? '外部API' : '数据表'}。`),
+          step(sourceNode, 'requires_user_input', 3)
+        ],
+        stepTotal
+      )
+    )
+    if (targets.length) {
+      // 数据表按连接分组做级联选项；外部API是单层下拉——都是一个表单项解决选择。
+      const databaseGroups = new Map<string, typeof targets>()
+      targets
+        .filter((item) => item.sourceKind === 'database')
+        .forEach((item) => {
+          databaseGroups.set(item.sourceId, [...(databaseGroups.get(item.sourceId) || []), item])
+        })
+      const databases = [...databaseGroups.values()].map((list) => ({
+        connection: list[0].sourceName,
+        tables: list.map((item) => ({
+          key: item.key,
+          label: `${item.targetName}（${item.targetComment}）`
+        }))
+      }))
+      const externals = targets
+        .filter((item) => item.sourceKind === 'external_service')
+        .map((item) => ({ key: item.key, label: `${item.sourceName}（${item.targetName}）` }))
+      const clarification = {
+        mode: 'api_source_select',
+        status: 'requires_user_input',
+        message: `请选择「${object.name}」绑定的${isExternal ? '外部接口' : '数据表'}。`,
+        objectName: object.name,
+        kind,
+        kindLabel,
+        databases,
+        externals
+      }
+      return emit(
+        'detail_confirmation',
+        'requires_user_input',
+        emitLifecycle(
+          execApi('detail_confirmation', 'awaiting_user', {
+            id: `pi-api-source-select-${Date.now()}`,
+            type: 'api_source_select',
+            basedOnRevision: 1,
+            payload: { objectName: object.name, kindLabel, databases, externals },
+            createdAt: new Date().toISOString()
+          })
+        ),
+        { clarification },
+        {
+          summary: {
+            phase: 'detail_confirmation',
+            status: 'requires_user_input',
+            message: '等待选择数据来源'
+          }
+        }
+      )
+    }
+    const clarification = {
+      mode: 'api_source_missing',
+      status: 'requires_user_input',
+      message: `目录中还没有可绑定的${kindLabel}，请先配置数据来源。`,
+      objectName: object.name,
+      kindLabel
+    }
+    return emit(
+      'detail_confirmation',
+      'requires_user_input',
+      emitLifecycle(
+        execApi('detail_confirmation', 'awaiting_user', {
+          id: `pi-api-source-missing-${Date.now()}`,
+          type: 'api_source_missing',
+          basedOnRevision: 1,
+          payload: { objectName: object.name, kindLabel },
+          createdAt: new Date().toISOString()
+        })
+      ),
+      { clarification },
+      {
+        summary: {
+          phase: 'detail_confirmation',
+          status: 'requires_user_input',
+          message: '等待配置数据来源'
+        }
+      }
+    )
+  }
+
+  // 5. 启动：读取 API 契约后挂「选择数据来源类型」待输入节点；
+  // 技术规划有数据实现意向的建议项在卡上带「建议」角标。
+  emit('detail_confirmation', 'running', emitLifecycle(execApi('detail_confirmation', 'running')))
   onProcessSteps?.(
     withProcessStepTotal(
       [
@@ -1268,36 +1457,56 @@ async function replayEntityWorkbench(
     )
   )
   await delay(650)
-  const plan = entityBindingPlan(object, readDataSources())
+  const startSources = readDataSources()
+  const externalNames = new Set(
+    startSources.filter((item) => item.type === 'external_service').map((item) => item.name)
+  )
+  const intentName = object.implementation.intentSources[0] || ''
+  // 意向缺失（历史绑定保留的接口）时回退到接口已确立的实现类型，避免建议项偏离原绑定方向。
+  const fallbackKind = ['数据库', '外部服务'].includes(object.implementation.kind)
+    ? object.implementation.kind
+    : ''
+  const suggestion = intentName
+    ? externalNames.has(intentName)
+      ? '外部服务'
+      : '数据库'
+    : fallbackKind
   onProcessSteps?.(
     withProcessStepTotal(
       [
         step(structureNode, 'completed', 1),
-        step(bindingNode, 'requires_user_input', 2)
+        step(typeNode, 'requires_user_input', 2)
       ],
       stepTotal
     )
   )
-  // 启动不追加纯文本正文：绑定方案的说明由确认卡自身承载，工作流消息里不混排文字（对齐页面工作流）。
+  // 启动不追加纯文本正文：类型选择的说明由交互卡自身承载，工作流消息里不混排文字（对齐应用页面工作流）。
+  // suggestion 不在卡面展示（用什么类型由用户自己判断）；仅作历史回放预置应答的取值依据。
   const clarification = {
-    mode: 'entity_binding',
+    mode: 'api_source_type',
     status: 'requires_user_input',
-    message: `请确认「${object.name}」各操作的数据实现，确认后生成数据适配逻辑。`,
+    message: `请选择「${object.name}」绑定的数据来源类型，映射绑定方式随类型而定。`,
     objectName: object.name,
-    operations: plan
+    suggestion
   }
   return emit(
     'detail_confirmation',
     'requires_user_input',
     emitLifecycle(
-      execEntity('detail_confirmation', 'awaiting_user', entityBindingInteraction(plan))
+      execApi('detail_confirmation', 'awaiting_user', {
+        id: `pi-api-source-type-${Date.now()}`,
+        type: 'api_source_type',
+        basedOnRevision: 1,
+        payload: { objectName: object.name, suggestion },
+        createdAt: new Date().toISOString()
+      })
     ),
     { clarification },
     {
       summary: {
         phase: 'detail_confirmation',
         status: 'requires_user_input',
-        message: '等待确认数据实现绑定'
+        message: '等待选择数据来源类型'
       }
     }
   )

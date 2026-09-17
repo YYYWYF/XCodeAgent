@@ -69,7 +69,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
 const routerTsx = `import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
-// 路由表：页面由 AIStudio 按产物生成，新增页面自动追加到此处。
+// 路由表：应用页面由 AIStudio 按产物生成，新增应用页面自动追加到此处。
 const RecheckIntroduction = lazy(() => import('./pages/recheck-introduction'))
 const MyRechecks = lazy(() => import('./pages/my-rechecks'))
 

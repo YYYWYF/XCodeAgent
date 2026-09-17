@@ -68,8 +68,8 @@ export function exactTaskTranslation(value: string): string {
   return translations[value] || "";
 }
 
-/** 从英文任务内容推导实体的中文名称。 */
-export function taskEntityLabel(value: string): string {
+/** 从英文任务内容推导业务资源的中文名称。 */
+export function taskResourceLabel(value: string): string {
   const lowerValue = value.toLowerCase();
   if (lowerValue.includes("employee")) return "员工";
   if (lowerValue.includes("user")) return "用户";
@@ -88,16 +88,16 @@ export function taskEndpointTexts(value: string): string[] {
 /** 按任务文本中的接口、资源和技术栈生成中文说明，兜底处理历史英文任务。 */
 export function generatedTaskTranslation(value: string, task: WorkflowBuildExecutionTask): string {
   const lowerValue = value.toLowerCase();
-  const entityLabel = taskEntityLabel(value);
+  const resourceLabel = taskResourceLabel(value);
   const endpoints = taskEndpointTexts(value);
   if (lowerValue.includes("crud") && lowerValue.includes("api")) {
-    return `实现${entityLabel}的 CRUD API 接口${endpoints.length > 0 ? `：${endpoints.join("、")}` : ""}。`;
+    return `实现${resourceLabel}的 CRUD API 接口${endpoints.length > 0 ? `：${endpoints.join("、")}` : ""}。`;
   }
   if (lowerValue.includes("express") && lowerValue.includes("backend")) {
-    return `创建 Express 后端服务，完成${entityLabel}相关接口、内存数据存储和健康检查。`;
+    return `创建 Express 后端服务，完成${resourceLabel}相关接口、内存数据存储和健康检查。`;
   }
   if (lowerValue.includes("in-memory")) {
-    return `使用内存存储完成${entityLabel}数据的增删改查逻辑。`;
+    return `使用内存存储完成${resourceLabel}数据的增删改查逻辑。`;
   }
   if (lowerValue.includes("health")) {
     return "服务需要提供 /health 健康检查接口，并返回成功状态。";
@@ -106,7 +106,7 @@ export function generatedTaskTranslation(value: string, task: WorkflowBuildExecu
     return `实现并验证接口：${endpoints.join("、")}。`;
   }
   if (task.owner === "data_source") {
-    return `完成${entityLabel}后端数据与接口实现，并通过相关验证。`;
+    return `完成${resourceLabel}后端数据与接口实现，并通过相关验证。`;
   }
   if (task.owner === "frontend") {
     return `完成页面功能实现，并通过相关验证。`;

@@ -4,7 +4,6 @@ import type {
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
-  DevelopmentPlanningEntity,
   DevelopmentPlanningPageOption,
   DevelopmentPlanningPageTreeNode,
   EditorMode
@@ -29,7 +28,6 @@ type Props = {
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
-  developmentPlanningEntities: DevelopmentPlanningEntity[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
@@ -93,7 +91,6 @@ export default function LeftPanel({
   developmentPlanningPages,
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
-  developmentPlanningEntities,
   editorMode,
   onApplicationUpdate,
   onApplicationLifecycleChange,
@@ -139,7 +136,6 @@ export default function LeftPanel({
             developmentPlanningPages={developmentPlanningPages}
             developmentPlanningPageTree={developmentPlanningPageTree}
             developmentPlanningApiContracts={developmentPlanningApiContracts}
-            developmentPlanningEntities={developmentPlanningEntities}
             editorMode={editorMode}
             onApplicationUpdate={onApplicationUpdate}
             onApplicationLifecycleChange={onApplicationLifecycleChange}

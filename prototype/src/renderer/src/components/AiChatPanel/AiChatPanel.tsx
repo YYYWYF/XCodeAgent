@@ -13,7 +13,6 @@ import type {
   DevelopmentPlanningApiContract,
   DevelopmentPlanningPageOption,
   DevelopmentPlanningPageTreeNode,
-  DevelopmentPlanningEntity,
   EditorMode,
   WorkflowRunPayload
 } from '../../typings'
@@ -68,11 +67,20 @@ import {
   TestingStageCompleteModal
 } from './components/StageCompleteModal'
 import PageContextHeader from './components/PageContextHeader'
-import { type ClarificationAnswers } from './components/WorkflowRunCard'
+import { workflowClarification, type ClarificationAnswers } from './components/WorkflowRunCard'
+import FieldMappingPanel, { type FieldMappingContext, type MappingFieldOption } from './components/FieldMappingPanel'
 import type { ProcessStepRecord } from '../../service/agUiAgent'
 import type { ComposerArtifactTarget } from './artifactMention'
-import { businessObjectArtifactId } from '../BusinessObjects/model'
-import { useBusinessObjects } from '../BusinessObjects/store'
+import {
+  appApiArtifactId,
+  bindingDraftFrom,
+  confirmedBindingView,
+  withSavedBindingDraft,
+  type BindingDraft
+} from '../AppApis/model'
+import { readAppApisSnapshot } from '../AppApis/store'
+import { readDataSources } from '../DataSources/catalog'
+import { useAppApis } from '../AppApis/store'
 import type { ConversationManagementContent } from './components/AuxiliaryDrawer'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import SettingsPage from '../SettingsPage/SettingsPage'
@@ -140,7 +148,6 @@ type Props = {
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
-  developmentPlanningEntities: DevelopmentPlanningEntity[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
@@ -206,7 +213,7 @@ type ActiveApiEndpointTarget = {
 type ActiveDetailTarget =
   | { type: 'none' }
   | { type: 'page'; pageId: string }
-  | { type: 'business-object'; objectId: string }
+  | { type: 'app-api'; objectId: string }
   | ({ type: 'endpoint' } & ActiveApiEndpointTarget)
 
 type DevelopmentAutoTarget = {
@@ -215,10 +222,10 @@ type DevelopmentAutoTarget = {
   page: DevelopmentPlanningPageOption
 }
 
-/** 产物发起目标：页面进入布局交互设计，实体进入数据绑定工作台。 */
+/** 产物发起目标：应用页面进入布局交互设计，应用API进入数据绑定工作台。 */
 type DevelopmentTemplateTarget =
   | { kind: 'page'; artifactId: string; page: DevelopmentPlanningPageOption }
-  | { kind: 'business-object'; artifactId: string; objectId: string; label: string }
+  | { kind: 'app-api'; artifactId: string; objectId: string; label: string }
   | {
       kind: 'endpoint'
       artifactId: string
@@ -236,7 +243,6 @@ export default function AiChatPanel({
   developmentPlanningPages,
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
-  developmentPlanningEntities,
   editorMode,
   onApplicationUpdate,
   onApplicationLifecycleChange,
@@ -354,10 +360,11 @@ export default function AiChatPanel({
     // 已生成版本回看是只读旅程：规划记录缺失时用内存态呈现，不向 localStorage 写入。
     { readOnly: versionReadOnly }
   )
-  // 实体绑定按版本隔离：查看哪个版本就读取哪个版本的实体状态，新迭代自动回到未开始。
-  const [businessObjects] = useBusinessObjects(
+  // 应用API绑定按版本隔离：查看哪个版本就读取哪个版本的应用API状态，新迭代自动回到未开始。
+  const [appApis, saveAppApisList] = useAppApis(
     initializationPlanning.artifacts.requirementSpec,
-    versionViewKey || application.currentVersionId || 'current'
+    versionViewKey || application.currentVersionId || 'current',
+    initializationPlanning.artifacts.technicalPlan
   )
   const pageDesignCatalog = useMemo(
     () => ({
@@ -376,9 +383,9 @@ export default function AiChatPanel({
   const displayIsReviewPhase = renderedTaskPhase === 'review'
   const displayIsAcceptancePhase = renderedTaskPhase === 'acceptance'
   const viewingHistoricalStage = renderedTaskPhase !== activeWorkbenchPhase
-  // 所有用户产物(页面+实体)开发完成后仅提示用户确认，由用户决定是否进入测试阶段。
+  // 所有用户产物(页面+应用API)开发完成后仅提示用户确认，由用户决定是否进入测试阶段。
   // 准入必须读取当前工作台动态产物清单，不能读取静态演示剧本，否则未开始页面会被误判为已完成。
-  // 内部 API 契约不再是用户产物（数据能力由实体提供），不参与完成判定。
+  // 应用API是用户产物：全部应用页面完成且全部应用API完成绑定确认，才开放进入测试。
   const planningPages = developmentPlanningPages
   const allDevelopmentModulesComplete =
     planningPages.length > 0 &&
@@ -389,10 +396,10 @@ export default function AiChatPanel({
         developmentStatusState.statuses[pageArtifactId(pageId)] === 'completed'
       )
     }) &&
-    businessObjects.length > 0 &&
-    businessObjects.every((object) =>
+    appApis.length > 0 &&
+    appApis.every((object) =>
       developmentStatusState.versionKey === versionViewKey &&
-      developmentStatusState.statuses[businessObjectArtifactId(object.id)] === 'completed'
+      developmentStatusState.statuses[appApiArtifactId(object.id)] === 'completed'
     )
   const testExecutionExtensions = (applicationLifecycle?.extensions || {}) as Record<
     string,
@@ -602,7 +609,7 @@ export default function AiChatPanel({
     error,
     handleSend,
     handleStartEndpointDetailConfirmation,
-    handleStartBusinessObjectWorkflow,
+    handleStartAppApiWorkflow,
     handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,
@@ -619,6 +626,7 @@ export default function AiChatPanel({
     applicationLifecycle,
     draft,
     draftKey,
+    recordAcceptedFile,
     editorMode,
     ensureActiveSession,
     ensureDevelopmentSession,
@@ -820,7 +828,7 @@ export default function AiChatPanel({
   )
   const composerPlaceholder = displayIsDesignPhase
     ? viewingTaskPhase === 'planning'
-      ? '描述技术规划方案需要调整的架构、接口或实体范围…'
+      ? '描述技术规划方案需要调整的架构、应用API或页面范围…'
       : iterationVersion?.parentVersionId
         ? '描述本次迭代要补充或调整的需求，例如新增功能、调整流程…'
         : '描述应用的核心场景与业务需求，或确认当前设计文档…'
@@ -833,7 +841,7 @@ export default function AiChatPanel({
           : '描述应用整体调整，或确认开发计划…'
   const copy = { ...baseChatCopy, placeholder: composerPlaceholder }
   const activePageTitle =
-    activePageOption?.label || application.defaultPage || application.pages[0] || '页面'
+    activePageOption?.label || application.defaultPage || application.pages[0] || '应用页面'
   const activePage = useMemo(
     () => findPageMenuItem(application.menus?.items || [], activePageTitle),
     [activePageTitle, application.menus?.items]
@@ -892,7 +900,7 @@ export default function AiChatPanel({
           title: application.name,
           path: '/',
           description: application.senario || '完整应用预览与版本成果',
-          keyFeatures: ['应用级预览', '页面与接口完成情况', '版本成果']
+          keyFeatures: ['应用级预览', '应用页面与接口完成情况', '版本成果']
         }
   const latestWorkflowForDisplay = activeWorkflow || latestMessageWorkflow(messages)
   const developmentArtifactRefreshRef = useRef('')
@@ -1007,6 +1015,8 @@ export default function AiChatPanel({
     }
     // 测试阶段必须让用户看到用例工作台，不沿用开发阶段手动关闭面板的状态。
     if (displayIsTestingPhase) state.dismissed = false
+    // 字段映射面板打开期间右侧被用户显式占用：阶段自动跟随不得抢占，确认后由收口逻辑归还。
+    if (rightPanel?.type === 'field-mapping') return
     // 从其他阶段回到开发时不沿用旧的应用预览；先回到应用文件，等待本轮编码 Diff。
     if (activeWorkbenchPhase === 'development' && rightPanel?.type === 'preview') {
       state.dismissed = false
@@ -1075,6 +1085,22 @@ export default function AiChatPanel({
     ) {
       state.type = null
       // 详细设计仍是工作流内部过程，没有新文件时保持用户当前查看的文件页。
+      return
+    }
+    // 应用API数据适配由配置确定性生成，全程无 Diff：生成与完成都不联动右侧切代码/文件视图。
+    // 完成收口时若右侧仍停在源码区（历史遗留联动的残留），拉回产物视图；其余情况保持不动。
+    if (
+      activeWorkbenchPhase === 'development' &&
+      activeWorkflow?.summary?.phase === 'build' &&
+      developmentWorkflowArtifactId(activeWorkflow).startsWith('app-api:')
+    ) {
+      state.type = null
+      if (
+        activeWorkflow.summary.status === 'completed' &&
+        rightPanel?.type === 'source'
+      ) {
+        setRightPanel({ type: 'development-artifacts' })
+      }
       return
     }
     // 代码工作流尚未产生 Diff 时不展示旧的设计文档；代码交付完成后切到源码区。
@@ -1158,7 +1184,7 @@ export default function AiChatPanel({
       return
     }
     if (!activePageOption) return
-    // 预览在页面开发完成（integration_test 通过）即可展示；launch_project/acceptance 向前兼容。
+    // 预览在应用页面开发完成（integration_test 通过）即可展示；launch_project/acceptance 向前兼容。
     const previewLaunched =
       (activeWorkflow?.summary?.phase === 'launch_project' &&
         activeWorkflow.summary.status === 'completed') ||
@@ -1303,7 +1329,7 @@ export default function AiChatPanel({
     [versionBackgroundTasks]
   )
   useEffect(() => {
-    /** 共享路由等公共文件可能由另一个页面会话交付；状态按整个版本的正式文件快照判定。 */
+    /** 共享路由等公共文件可能由另一个应用页面会话交付；状态按整个版本的正式文件快照判定。 */
     const savedFileExists = (suffix: string): boolean =>
       sessions.some((session) =>
         (session.savedFiles || []).some((file) => {
@@ -1314,18 +1340,15 @@ export default function AiChatPanel({
     const artifactFilesComplete = (artifactId: string): boolean => {
       if (artifactId.startsWith('page:')) {
         const pageId = artifactId.replace(/^page:/, '')
-        // 路由属于应用初始化脚手架，不是页面产物；页面源码授权完成即可完成页面产物。
+        // 路由属于应用初始化脚手架，不是应用页面产物；应用页面源码授权完成即可完成应用页面产物。
         return savedFileExists(`frontend/pages/${pageId}.tsx`)
       }
       if (artifactId.startsWith('endpoint:'))
         return savedFileExists('backend/rechecks-controller.java')
-      if (artifactId.startsWith('business-object:')) {
-        const objectId = artifactId.replace(/^business-object:/, '')
-        const object = businessObjects.find((item) => item.id === objectId)
-        return Boolean(
-          object?.operations.length &&
-            object.operations.every((operation) => operation.implementation.confirmed)
-        )
+      if (artifactId.startsWith('app-api:')) {
+        const objectId = artifactId.replace(/^app-api:/, '')
+        const object = appApis.find((item) => item.id === objectId)
+        return Boolean(object?.implementation.confirmed)
       }
       return false
     }
@@ -1362,13 +1385,11 @@ export default function AiChatPanel({
           nextStatuses[artifactId] = statusForArtifact(artifactId)
         })
       })
-      businessObjects.forEach((object) => {
-        const artifactId = businessObjectArtifactId(object.id)
-        const hasStarted = object.operations.some(
-          (operation) =>
-            operation.implementation.bindings.length > 0 ||
-            operation.implementation.mappings.length > 0
-        )
+      appApis.forEach((object) => {
+        const artifactId = appApiArtifactId(object.id)
+        const hasStarted =
+          object.implementation.bindings.length > 0 ||
+          object.implementation.mappings.length > 0
         nextStatuses[artifactId] = artifactFilesComplete(artifactId)
           ? 'completed'
           : hasStarted
@@ -1395,7 +1416,7 @@ export default function AiChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     artifactTaskStatusSignature,
-    businessObjects,
+    appApis,
     developmentPlanningApiContracts,
     developmentPlanningPages,
     messages,
@@ -1414,15 +1435,15 @@ export default function AiChatPanel({
         path: page.path,
         status: developmentArtifactStatusById[pageArtifactId(page.pageId)] || 'not-started'
       })),
-      ...businessObjects.map((object) => ({
-        id: businessObjectArtifactId(object.id),
-        kind: 'business-object' as const,
+      ...appApis.map((object) => ({
+        id: appApiArtifactId(object.id),
+        kind: 'app-api' as const,
         label: object.name,
-        path: `${object.fields.length} 个字段 · ${object.operations.length} 个操作`,
-        status: developmentArtifactStatusById[businessObjectArtifactId(object.id)] || 'not-started'
+        path: `${object.method} ${object.path}`,
+        status: developmentArtifactStatusById[appApiArtifactId(object.id)] || 'not-started'
       }))
     ],
-    [developmentArtifactStatusById, businessObjects, developmentPlanningPages]
+    [developmentArtifactStatusById, appApis, developmentPlanningPages]
   )
   const developmentArtifactProgress = useMemo<WorkbenchArtifactProgress>(() => {
     const previous = developmentArtifactProgressRef.current
@@ -1546,7 +1567,7 @@ export default function AiChatPanel({
             kind: 'workflow',
             status: 'completed',
             title: '完成产物审查',
-            detail: '页面产物已完成，可在开发产物中查看。',
+            detail: '应用页面产物已完成，可在开发产物中查看。',
             sequence: 3,
             nodeName: 'launch_project'
           }
@@ -1767,6 +1788,131 @@ export default function AiChatPanel({
         icon: 'application'
       }
     : undefined
+  // —— 字段映射面板：应用API映射绑定的编辑工作台（对话卡只保留摘要与入口）——
+  // 活动的映射绑定澄清：取最新一条待确认的 api_binding 工作流；面板上下文与确认动作都由它派生。
+  const activeBindingWorkflow = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const candidate = messages[index].workflow
+      const clarification = candidate ? workflowClarification(candidate) : null
+      if (clarification?.mode === 'api_binding' && clarification.status === 'requires_user_input') {
+        return candidate
+      }
+    }
+    return undefined
+  }, [messages])
+  // 面板编辑中的草稿正本：null 表示没有进行中的字段映射会话；目录选中态也由面板层持有，
+  // 这样「打开字段映射」能把目录定位到当前绑定的那个应用API。
+  const [fieldMappingDraft, setFieldMappingDraft] = useState<BindingDraft | null>(null)
+  const [fieldMappingSelectedId, setFieldMappingSelectedId] = useState('')
+  const [fieldMappingSubmitting, setFieldMappingSubmitting] = useState(false)
+  /** 面板初始草稿：优先应用API状态里的已存草稿（保存过/来源选定推导过），缺位退回澄清载荷。 */
+  const initialBindingDraft = (): BindingDraft | null => {
+    const storedObject = appApis.find((item) => item.id === activeBindingObjectId)
+    if (storedObject) return bindingDraftFrom(storedObject)
+    const clarification = activeBindingWorkflow ? workflowClarification(activeBindingWorkflow) : null
+    if (clarification?.draft && typeof clarification.draft === 'object') {
+      return clarification.draft as BindingDraft
+    }
+    return null
+  }
+  // 绑定工作流当前推进到的对象 id：面板目录据此定位并默认选中。
+  const activeBindingObjectId = String(
+    (activeBindingWorkflow?.state as { selectedObjectId?: unknown } | undefined)?.selectedObjectId || ''
+  )
+  /**
+   * 字段映射视图：随选中目录项的状态流转——
+   * 活动绑定 → 可编辑草稿（澄清载荷）；已确认绑定 → 只读常驻（从实现提取，不随工作流结束消失）；
+   * 未开始 → 空视图。面板据此切换编辑/只读形态。
+   */
+  const fieldMappingView = useMemo(() => {
+    const selectedId = fieldMappingSelectedId || activeBindingObjectId
+    // 直接做一次新鲜读取：工作流刚确认时内存 appApis 可能尚未同步，这里以存储为准。
+    const storeObjects = readAppApisSnapshot(
+      initializationPlanning.artifacts.requirementSpec,
+      versionViewKey || application.currentVersionId || 'current',
+      initializationPlanning.artifacts.technicalPlan
+    )
+    const object = storeObjects.find((item) => item.id === selectedId)
+    if (!object) return null
+    if (selectedId === activeBindingObjectId && activeBindingWorkflow) {
+      const clarification = workflowClarification(activeBindingWorkflow)
+      if (clarification?.mode === 'api_binding') {
+        return {
+          readOnly: false,
+          context: {
+            kind: String(clarification.kind || '数据库') === '外部服务' ? '外部服务' : '数据库',
+            objectName: object.name,
+            appMethod: String(clarification.appMethod || object.method),
+            appPath: String(clarification.appPath || object.path),
+            sourceName: String(clarification.sourceName || ''),
+            targetName: String(clarification.targetName || ''),
+            op: String(clarification.op || ''),
+            columns: Array.isArray(clarification.columns)
+              ? (clarification.columns as MappingFieldOption[])
+              : [],
+            requestParams: Array.isArray(clarification.requestParams)
+              ? (clarification.requestParams as MappingFieldOption[])
+              : [],
+            inputParams: Array.isArray(clarification.inputParams)
+              ? (clarification.inputParams as FieldMappingContext['inputParams'])
+              : [],
+            outputs: Array.isArray(clarification.outputs)
+              ? (clarification.outputs as FieldMappingContext['outputs'])
+              : []
+          } as FieldMappingContext,
+          draft: fieldMappingDraft
+        }
+      }
+    }
+    if (object.implementation.confirmed) {
+      const view = confirmedBindingView(object, readDataSources())
+      if (view) {
+        return {
+          readOnly: true,
+          context: {
+            kind: view.kind,
+            objectName: object.name,
+            appMethod: object.method,
+            appPath: object.path,
+            sourceName: view.sourceName,
+            targetName: view.targetName,
+            op: view.op,
+            columns: view.columns,
+            requestParams: view.requestParams,
+            inputParams: view.inputParams,
+            outputs: view.outputs
+          } as FieldMappingContext,
+          draft: view.draft
+        }
+      }
+    }
+    return null
+  }, [fieldMappingSelectedId, activeBindingObjectId, activeBindingWorkflow, fieldMappingDraft, appApis])
+
+  // 绑定步骤出现即自动打开右侧「字段映射」面板并初始化草稿；草稿就绪后本 effect 不再执行，
+  // 用户切走 Tab 不会被拽回，重进面板走节点卡上的「打开字段映射」。
+  useEffect(() => {
+    if (!activeBindingWorkflow || fieldMappingDraft) return
+    setFieldMappingDraft(
+      initialBindingDraft() || {
+        op: '',
+        conditions: [],
+        setters: [],
+        orderBy: '',
+        mappings: [],
+        expressions: {},
+        requestParamMap: {}
+      }
+    )
+    setFieldMappingSelectedId(activeBindingObjectId)
+    setRightPanel({ type: 'field-mapping' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBindingWorkflow, fieldMappingDraft])
+  /** 字段映射目录：应用全部API名称（方法与来源在右侧内容区呈现）。 */
+  const fieldMappingApis = useMemo(
+    () => appApis.map((object) => ({ id: object.id, name: object.name })),
+    [appApis]
+  )
   const designPlanningTabs: WorkspaceTab[] = displayIsDesignPhase
     ? activeWorkbenchPhase === 'analysis'
       ? [
@@ -1790,7 +1936,7 @@ export default function AiChatPanel({
             available: initializationPlanning.artifactStatus['technical-plan'] !== 'draft',
             icon: 'document'
           },
-          // 计划阶段保留只读的需求规格说明书：审阅技术规划方案（实体、页面绑定）时
+          // 计划阶段保留只读的需求规格说明书：审阅技术规划方案（应用API、页面绑定）时
           // 需要并排对照需求来源，否则用户只能去“应用文件”里翻 Markdown，路径过深。
           {
             key: 'requirement-spec',
@@ -1823,6 +1969,17 @@ export default function AiChatPanel({
           ]
         : []),
     { key: 'project' as const, label: '应用文件', available: true, icon: 'project' as const },
+    // 字段映射工作台排在「应用文件」之后：绑定步骤出现时自动打开，目录随时可浏览。
+    ...(displayIsDevelopmentPhase
+      ? [
+          {
+            key: 'field-mapping' as const,
+            label: '字段映射',
+            available: true,
+            icon: 'mapping' as const
+          }
+        ]
+      : []),
     ...(acceptancePreviewTab ? [acceptancePreviewTab] : [])
   ]
   // 当前激活的工作区 tab：预览面板 → 浏览器；文档/源码面板统一归入“应用文件”。
@@ -1831,17 +1988,19 @@ export default function AiChatPanel({
       ? rightPanel.artifactKey
       : rightPanel?.type === 'development-artifacts'
         ? 'development-artifacts'
-        : rightPanel?.type === 'test-cases'
-          ? 'test-cases'
-          : rightPanel?.type === 'preview'
-            ? rightPanel.requestKey?.endsWith(':page')
-              ? ('page-preview' as WorkspaceTabKey)
-              : displayIsAcceptancePhase
-                ? rightPanel.requestKey?.endsWith(':acceptance')
-                  ? 'application-preview'
+        : rightPanel?.type === 'field-mapping'
+          ? 'field-mapping'
+          : rightPanel?.type === 'test-cases'
+            ? 'test-cases'
+            : rightPanel?.type === 'preview'
+              ? rightPanel.requestKey?.endsWith(':page')
+                ? ('page-preview' as WorkspaceTabKey)
+                : displayIsAcceptancePhase
+                  ? rightPanel.requestKey?.endsWith(':acceptance')
+                    ? 'application-preview'
+                    : 'preview'
                   : 'preview'
-                : 'preview'
-            : 'project'
+              : 'project'
   const isAcceptancePreviewTab =
     displayIsAcceptancePhase && activeWorkspaceTab === 'application-preview'
   const openWorkspaceTab = (key: WorkspaceTabKey): void => {
@@ -1871,6 +2030,9 @@ export default function AiChatPanel({
       setRightPanel({ type: activeSource ? 'source' : 'doc' })
     } else if (key === 'development-artifacts') {
       setRightPanel({ type: 'development-artifacts' })
+    } else if (key === 'field-mapping') {
+      // 字段映射工作台随时可进入：无进行中的绑定时目录仍可浏览（内容区给出只读说明）。
+      setRightPanel({ type: 'field-mapping' })
     } else if (key === 'test-cases') {
       setRightPanel({ type: 'test-cases' })
     } else if (['requirement-spec', 'ui-designs', 'technical-plan'].includes(key)) {
@@ -1886,10 +2048,10 @@ export default function AiChatPanel({
       if (page) setActiveDetailTarget({ type: 'page', pageId: page.pageId })
       return
     }
-    if (item.kind === 'business-object') {
+    if (item.kind === 'app-api') {
       setActiveDetailTarget({
-        type: 'business-object',
-        objectId: item.id.replace(/^business-object:/, '')
+        type: 'app-api',
+        objectId: item.id.replace(/^app-api:/, '')
       })
       return
     }
@@ -1909,13 +2071,20 @@ export default function AiChatPanel({
       }
     }
   }
+  // 当前选中目标为应用API且其适配生成进行中：产物内容区切到富加载态（对齐设计/计划阶段生成页）。
+  const appApiGenerating = Boolean(
+    activeWorkflow &&
+      String(activeWorkflow.summary?.phase || '') === 'build' &&
+      String(activeWorkflow.summary?.status || '') === 'running' &&
+      (developmentWorkflowArtifactId(activeWorkflow) || '').startsWith('app-api:')
+  )
   const activeDevelopmentArtifactId =
     activeDetailTarget.type === 'page'
       ? pageArtifactId(activeDetailTarget.pageId)
       : activeDetailTarget.type === 'endpoint'
         ? endpointArtifactId(activeDetailTarget.apiContractId, activeDetailTarget.endpointId)
-        : activeDetailTarget.type === 'business-object'
-          ? businessObjectArtifactId(activeDetailTarget.objectId)
+        : activeDetailTarget.type === 'app-api'
+          ? appApiArtifactId(activeDetailTarget.objectId)
           : undefined
 
   // 同步任务的「启动产物审查」节点落定后，右侧工作区切换到「开发产物」并定位当前产物：
@@ -2025,7 +2194,7 @@ export default function AiChatPanel({
   useEffect(() => {
     if (activeApiEndpoint) return
     setActiveDetailTarget((currentTarget) => {
-      if (currentTarget.type === 'endpoint' || currentTarget.type === 'business-object')
+      if (currentTarget.type === 'endpoint' || currentTarget.type === 'app-api')
         return currentTarget
       if (currentTarget.type === 'none') return currentTarget
       const currentPageId = currentTarget.pageId
@@ -2070,7 +2239,7 @@ export default function AiChatPanel({
     }
     const sessionPageId = session?.pageId
     if (!sessionPageId) {
-      // 开发主对话不绑定某个页面；保留用户从开发产物目录显式选择的预览目标。
+      // 开发主对话不绑定某个应用页面；保留用户从开发产物目录显式选择的预览目标。
       if (session.sessionKind !== 'development') {
         setActiveDetailTarget({ type: 'none' })
       }
@@ -2163,7 +2332,7 @@ export default function AiChatPanel({
   }
 
   /**
-   * 产物面板候选：页面与实体；已完成、进行中或已被后台任务接管的产物不可再次发起，
+   * 产物面板候选：应用页面与应用API；已完成、进行中或已被后台任务接管的产物不可再次发起，
    * 但工作流已完成而留有后续步骤的产物会改写为「继续处理」入口（见 withArtifactContinuation）。
    */
   const composerMentionItems: ComposerArtifactTarget[] = [
@@ -2180,22 +2349,22 @@ export default function AiChatPanel({
         pageId: page.pageId,
         state: resolveArtifactState(artifactId, delivered),
         disabled: blocked,
-        disabledReason: delivered ? '该页面已完成' : occupancy.reason || '该页面不可重复发起'
+        disabledReason: delivered ? '该应用页面已完成' : occupancy.reason || '该应用页面不可重复发起'
       }
     }),
-    ...businessObjects.map((object) => {
-      const artifactId = businessObjectArtifactId(object.id)
+    ...appApis.map((object) => {
+      const artifactId = appApiArtifactId(object.id)
       const occupancy = resolveArtifactOccupancy(artifactId)
-      const delivered = object.operations.every((operation) => operation.implementation.confirmed)
+      const delivered = object.implementation.confirmed
       return {
         artifactId,
-        kind: 'business-object' as const,
+        kind: 'app-api' as const,
         label: object.name,
-        hint: `${object.fields.length} 个字段 · ${object.operations.length} 个操作`,
-        businessObjectId: object.id,
+        hint: `${object.method} ${object.path}`,
+        appApiId: object.id,
         state: resolveArtifactState(artifactId, delivered),
         disabled: delivered || occupancy.blocked,
-        disabledReason: delivered ? '该实体已完成全部数据绑定' : occupancy.reason
+        disabledReason: delivered ? '该应用API已完成全部数据绑定' : occupancy.reason
       }
     })
   ].map(withArtifactContinuation)
@@ -2208,11 +2377,11 @@ export default function AiChatPanel({
       const page = developmentPlanningPages.find((candidate) => candidate.pageId === mention.pageId)
       return page ? { kind: 'page', artifactId: mention.artifactId, page } : undefined
     }
-    if (mention.kind === 'business-object' && mention.businessObjectId) {
+    if (mention.kind === 'app-api' && mention.appApiId) {
       return {
-        kind: 'business-object',
+        kind: 'app-api',
         artifactId: mention.artifactId,
-        objectId: mention.businessObjectId,
+        objectId: mention.appApiId,
         label: mention.label
       }
     }
@@ -2225,7 +2394,7 @@ export default function AiChatPanel({
    * 上一次尝试已启动 Workflow 时允许重新发起，并可选携带触发本次发起的用户消息。
    */
   const presentDevelopmentTemplateSelector = async (
-    target: Exclude<DevelopmentTemplateTarget, { kind: 'business-object' }>,
+    target: Exclude<DevelopmentTemplateTarget, { kind: 'app-api' }>,
     options?: { identity?: SessionIdentity; userMessageText?: string }
   ): Promise<void> => {
     const identity = options?.identity || (await ensureDevelopmentSession())
@@ -2276,8 +2445,8 @@ export default function AiChatPanel({
                     id: `detail-template-${pageDetailTargetKey(target.page.pageId)}`,
                     kind: 'workflow',
                     status: 'requires_user_input',
-                    title: '选择页面模板',
-                    detail: '请选择页面模板后开始详细设计。',
+                    title: '选择应用页面模板',
+                    detail: '请选择应用页面模板后开始详细设计。',
                     sequence: 1,
                     nodeName: 'detail_confirmation'
                   } satisfies ProcessStepRecord
@@ -2373,7 +2542,7 @@ export default function AiChatPanel({
     })
   }
 
-  /** 启动实体开发工作流：剧本在对话区挂绑定确认卡，右侧只按确认结果静态呈现。 */
+  /** 启动应用API开发工作流：剧本在对话区挂绑定确认卡，右侧只按确认结果静态呈现。 */
 
   // 空开发对话首次进入时由研发 Agent 投放一次「产物」发起引导；已投放的会话不再重复。
   // 只在当前可编辑的对话里投放：只读对话的「产物」按钮不可用，引导应等到取得权限后出现。
@@ -2432,18 +2601,18 @@ export default function AiChatPanel({
     setActiveView('chat')
     setViewingTaskPhase('development')
     setGeneratingDetailTargetKey('')
-    if (target.kind === 'business-object') {
+    if (target.kind === 'app-api') {
       setActiveArtifactTab('development-artifacts')
-      setActiveDetailTarget({ type: 'business-object', objectId: target.objectId })
+      setActiveDetailTarget({ type: 'app-api', objectId: target.objectId })
       setRightPanel({ type: 'development-artifacts' })
-      void autoRenameTaskAfterFirstRound(identity, `开发实体「${target.label}」`)
-      // 实体工作流没有模板选择卡：产物选点即启动，绑定确认卡是第一个对话内交互节点。
-      const started = await handleStartBusinessObjectWorkflow({
+      void autoRenameTaskAfterFirstRound(identity, `开发应用API「${target.label}」`)
+      // 应用API工作流没有模板选择卡：产物选点即启动，绑定确认卡是第一个对话内交互节点。
+      const started = await handleStartAppApiWorkflow({
         objectId: target.objectId,
         objectLabel: target.label
       })
       if (!started) {
-        setPreviewError('实体开发工作流未能启动，请稍后重试。')
+        setPreviewError('应用API开发工作流未能启动，请稍后重试。')
       }
       return
     }
@@ -2699,9 +2868,10 @@ export default function AiChatPanel({
     if (activeWorkbenchPhase === 'development') {
       // 开发阶段始终进入唯一主对话；页面/API 只作为 Workflow 目标，不再决定会话身份。
       setViewingTaskPhase('development')
-      // 阶段入口先展示应用文件源码区；编码 Diff 在这里呈现，页面预览完成后再切到开发产物。
+      // 开发阶段入口直接展示开发产物：视觉重心是产物视图（看做好的 API/页面长什么样），
+      // 编码 Diff 出现时才由 Diff 分支临时接管源码区，应用API全程不联动。
       setActiveDetailTarget({ type: 'none' })
-      setRightPanel({ type: 'source' })
+      setRightPanel({ type: 'development-artifacts' })
       setRightPanelLayout('split')
       ensureDevelopmentSession()
         .then((identity) => handleOpenChatSession(identity.sessionId))
@@ -2955,6 +3125,67 @@ export default function AiChatPanel({
     }
     return submitted
   }
+
+  /** 节点卡「打开字段映射」：初始化草稿、把目录定位到当前绑定的API并打开面板（含布局兜底）。 */
+  const openFieldMapping = (): void => {
+    if (!activeBindingWorkflow) return
+    if (!fieldMappingDraft) {
+      setFieldMappingDraft(
+        initialBindingDraft() || {
+          op: '',
+          conditions: [],
+          setters: [],
+          orderBy: '',
+          mappings: [],
+          expressions: {},
+          requestParamMap: {}
+        }
+      )
+    }
+    setFieldMappingSelectedId(activeBindingObjectId)
+    setRightPanel({ type: 'field-mapping' })
+    // 面板被收起时恢复分栏；已分栏/全宽则保持用户当前布局。
+    if (rightPanelLayout === 'hidden') setRightPanelLayout('split')
+  }
+  /** 目录手动切换选中：只影响面板查看对象，不改变当前绑定工作流的目标。 */
+  const handleFieldMappingSelectApi = (id: string): void => setFieldMappingSelectedId(id)
+  /** 面板内草稿编辑回写：草稿正本在面板层持有，切 Tab 不丢。 */
+  const handleFieldMappingChange = (draft: BindingDraft): void => setFieldMappingDraft(draft)
+  /** 面板「保存」：把当前草稿写回应用API状态但不提交确认，工作流仍停在待确认。 */
+  const handleFieldMappingSave = (draft: BindingDraft): void => {
+    const storedObject = appApis.find((item) => item.id === activeBindingObjectId)
+    if (!storedObject) return
+    saveAppApisList(
+      appApis.map((item) => (item.id === storedObject.id ? withSavedBindingDraft(item, draft) : item))
+    )
+  }
+  /** 面板确认：整份草稿随 api_binding 答案提交，成功后收口回开发产物视图。 */
+  const handleFieldMappingConfirm = (draft: BindingDraft): void => {
+    if (!activeBindingWorkflow || fieldMappingSubmitting) return
+    setFieldMappingSubmitting(true)
+    void handleSubmitWorkflowClarification(activeBindingWorkflow, { api_binding: draft })
+      .then((submitted) => {
+        setFieldMappingDraft(null)
+        if (submitted && rightPanel?.type === 'field-mapping') {
+          setRightPanel({ type: 'development-artifacts' })
+        }
+      })
+      .finally(() => setFieldMappingSubmitting(false))
+  }
+  // 节点卡的字段映射控制：ready = 面板草稿就绪；confirm 以面板当前草稿提交（确认动作在节点卡上）。
+  const fieldMappingControl = {
+    ready: Boolean(fieldMappingDraft),
+    open: openFieldMapping,
+    confirm: () => {
+      if (fieldMappingDraft) handleFieldMappingConfirm(fieldMappingDraft)
+    }
+  }
+  // 绑定澄清被解答或会话切换后上下文消失：字段映射会话同步收口，面板退回开发产物。
+  useEffect(() => {
+    if (!fieldMappingDraft || activeBindingWorkflow) return
+    setFieldMappingDraft(null)
+    if (rightPanel?.type === 'field-mapping') setRightPanel({ type: 'development-artifacts' })
+  }, [activeBindingWorkflow, fieldMappingDraft, rightPanel])
 
   /**
    * 保存待接受的全部文件变更并继续当前工作流。
@@ -3391,9 +3622,10 @@ export default function AiChatPanel({
                   : undefined
               }
               onDiscardArtifact={handleDiscardArtifact}
+              fieldMappingControl={fieldMappingControl}
               onSubmitClarification={handleSubmitWorkflowClarification}
               onStartDetailDesign={handleStartDetailDesign}
-              // UI 设计确认卡逐页选模板的实时页面清单：右侧审阅区与对话卡消费同一份规划记录。
+              // UI 设计确认卡逐页选模板的实时应用页面清单：右侧审阅区与对话卡消费同一份规划记录。
               uiDesignPages={initializationPlanning.artifacts.uiDesigns.pages}
               // 是否已提交过版式选择：卡片据此区分首轮「待选择版式」与改稿轮「生成中显示已选模板」。
               uiDesignTemplatesSelected={Boolean(
@@ -3521,6 +3753,7 @@ export default function AiChatPanel({
           rightPanel?.type === 'source' ||
           rightPanel?.type === 'planning-artifact' ||
           rightPanel?.type === 'development-artifacts' ||
+          rightPanel?.type === 'field-mapping' ||
           rightPanel?.type === 'test-cases') &&
         (rightPanelLayout === 'hidden' || Boolean(rightPanel)) && (
           <WorkbenchRightPanel
@@ -3575,14 +3808,30 @@ export default function AiChatPanel({
               <DevelopmentArtifactsPanel
                 application={application}
                 requirementSpec={initializationPlanning.artifacts.requirementSpec}
+                technicalPlan={initializationPlanning.artifacts.technicalPlan}
                 activeId={activeDevelopmentArtifactId}
                 apiContracts={developmentPlanningApiContracts}
-                entities={developmentPlanningEntities}
                 items={developmentArtifactItems}
                 pageTree={developmentPlanningPageTree}
                 pagePreviewUrl={pagePreviewUrl}
                 pages={developmentPlanningPages}
                 onSelect={handleSelectDevelopmentArtifact}
+                appApiGenerating={appApiGenerating}
+              />
+            )}
+            {rightPanel?.type === 'field-mapping' && (
+              <FieldMappingPanel
+                apis={fieldMappingApis}
+                activeApiId={activeBindingObjectId}
+                selectedApiId={fieldMappingSelectedId || activeBindingObjectId}
+                onSelectApi={handleFieldMappingSelectApi}
+                context={fieldMappingView?.context ?? null}
+                draft={fieldMappingView?.draft ?? null}
+                readOnly={fieldMappingView ? fieldMappingView.readOnly : true}
+                submitting={fieldMappingSubmitting}
+                onChange={handleFieldMappingChange}
+                onSave={handleFieldMappingSave}
+                onConfirm={handleFieldMappingConfirm}
               />
             )}
             {rightPanel?.type === 'test-cases' && (

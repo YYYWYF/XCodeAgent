@@ -1,22 +1,22 @@
 /**
  * 开发阶段的产物目标模型与消息提及渲染工具。
- * 开发阶段通过「产物」按钮直接选择页面 / 实体发起实施（不再经输入框 @ 键入）；
+ * 开发阶段通过「产物」按钮直接选择应用页面 / 应用API发起实施（不再经输入框 @ 键入）；
  * 这里集中维护候选目标的状态描述与历史消息中 @ 提及的轻格式渲染，便于独立复用与测试。
  */
 
 /** 产物候选与直接发起共用的目标描述。 */
 export type ComposerArtifactTarget = {
-  /** 领域产物 ID（page:xxx / business-object:xxx）。 */
+  /** 领域产物 ID（page:xxx / app-api:xxx）。 */
   artifactId: string
-  kind: 'business-object' | 'page'
+  kind: 'app-api' | 'page'
   /** 候选项展示名。 */
   label: string
-  /** 搜索匹配用的补充文本（页面路由、实体字段与操作数）；只参与过滤，不进候选行展示层。 */
+  /** 搜索匹配用的补充文本（页面路由、应用API的字段与方法数）；只参与过滤，不进候选行展示层。 */
   hint: string
   /** 页面目标的 pageId。 */
   pageId?: string
-  /** 实体目标身份。 */
-  businessObjectId?: string
+  /** 应用API目标身份。 */
+  appApiId?: string
   /** 产物当前实施状态，决定可否再次发起并渲染为面板状态徽标。 */
   state: ComposerArtifactState
   /** 产物已被后台任务接管、进行中或已完成时禁用再次发起，并给出原因。 */

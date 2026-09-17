@@ -411,7 +411,7 @@ export function useChatSessions({
     return createNewSession()
   }
 
-  /** 为指定页面显式创建正式会话，并可一并登记该页面任务负责的依赖接口。 */
+  /** 为指定应用页面显式创建正式会话，并可一并登记该应用页面任务负责的依赖接口。 */
   const createPageSession = async (
     pageId: string,
     pageLabel: string,

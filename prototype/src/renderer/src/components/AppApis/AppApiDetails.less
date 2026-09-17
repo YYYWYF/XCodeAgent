@@ -1,0 +1,260 @@
+// 应用API终态面板（ApiTerminalPanel）：数据来源摘要 + POSTMAN 式接口调试视图。
+// 绑定过程在工作流节点卡内完成，这里只呈现终态，用于测试验证与产物验收。
+.@{class-prefix}-api-terminal {
+  display: grid;
+  gap: 14px;
+}
+
+.@{class-prefix}-api-terminal-placeholder {
+  display: grid;
+  gap: 6px;
+  padding: 22px 16px;
+  border: 1px dashed var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface-subtle);
+  text-align: center;
+
+  strong {
+    color: var(--wb-text-secondary);
+    font-size: 12.5px;
+  }
+
+  span {
+    color: var(--wb-text-muted);
+    font-size: 11px;
+    line-height: 1.7;
+  }
+}
+
+.@{class-prefix}-api-terminal-warning {
+  padding: 10px 12px;
+  border: 1px solid var(--wb-border-strong);
+  border-left: 3px solid var(--wb-warning);
+  border-radius: 8px;
+  color: var(--wb-text-muted);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.@{class-prefix}-api-terminal-source {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface);
+
+  code {
+    flex: 0 0 auto;
+    padding: 3px 8px;
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border: 1px solid var(--wb-accent-border);
+    border-radius: 6px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 1px;
+  }
+
+  > div {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  strong {
+    overflow: hidden;
+    color: var(--wb-text);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  small {
+    color: var(--wb-text-muted);
+    font-size: 10.5px;
+  }
+}
+
+.@{class-prefix}-api-terminal-success {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  color: var(--wb-success);
+  font-size: 11px;
+}
+
+.@{class-prefix}-api-terminal-section {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface);
+}
+
+.@{class-prefix}-api-terminal-section-title {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-api-terminal-urlbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .ant-btn {
+    margin-left: auto;
+  }
+}
+
+.@{class-prefix}-api-terminal-method {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  color: var(--wb-success);
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.@{class-prefix}-api-terminal-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 5px 10px;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-api-terminal-params {
+  display: grid;
+  gap: 6px;
+}
+
+.@{class-prefix}-api-terminal-params-title {
+  color: var(--wb-text-tertiary);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-api-terminal-param {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  code {
+    flex: 0 0 110px;
+    overflow: hidden;
+    padding: 1px 6px;
+    color: var(--wb-text);
+    background: var(--wb-surface-subtle);
+    border: 1px solid var(--wb-border);
+    border-radius: 5px;
+    font-size: 10.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ant-input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  small {
+    flex: 0 0 auto;
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+  }
+}
+
+.@{class-prefix}-api-terminal-response {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.@{class-prefix}-api-terminal-response-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--wb-surface-subtle);
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-api-terminal-status {
+  padding: 1px 8px;
+  color: var(--wb-success);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.@{class-prefix}-api-terminal-response-head small {
+  color: var(--wb-text-tertiary);
+  font-size: 10px;
+}
+
+.@{class-prefix}-api-terminal-response-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--wb-border);
+  font-size: 11.5px;
+
+  &:last-child {
+    border-bottom: 0;
+  }
+
+  > span {
+    flex: 0 0 40%;
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > strong {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--wb-text);
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 11px;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > small {
+    flex: 0 0 auto;
+    max-width: 38%;
+    overflow: hidden;
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-api-terminal-hint {
+  margin: 0;
+  color: var(--wb-text-muted);
+  font-size: 11px;
+}

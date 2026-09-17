@@ -43,7 +43,14 @@ import {
 } from '../../workflowContinuation'
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode'
 import BackgroundDispatchCard, { type BackgroundDispatchOption } from '../BackgroundDispatchCard'
-import EntityBindingCard, { type EntityBindingPlanItem } from '../EntityBindingCard'
+import {
+  ApiSourceMissingCard,
+  ApiSourceSelectCard,
+  ApiSourceTypeCard,
+  type ApiSourceDatabaseGroup,
+  type ApiSourceExternalOption,
+  type ApiSourceTypeOption
+} from '../ApiSourceStepCards'
 import { DetailReviewAuthBar } from './DetailReview'
 import {
   taskId,
@@ -88,7 +95,7 @@ const ARTIFACT_CONFIRMATION_MAP: Record<
   technical_plan_confirmation: {
     docKey: 'technical-plan',
     title: '技术规划方案',
-    summary: '技术架构、实体、数据来源意向与页面使用关系已生成，请确认。'
+    summary: '技术架构、应用API、数据来源意向与应用页面使用关系已生成，请确认。'
   }
 }
 
@@ -121,11 +128,13 @@ type WorkflowRunCardProps = {
   /** 是否作为流程节点的内嵌动作渲染，避免形成独立的对话卡片。 */
   embedded?: boolean
   interactionAvailability: WorkflowInteractionAvailability
-  /** UI 设计确认卡逐页选模板用的实时页面清单（模板名随剧本重写同步刷新）。 */
+  /** UI 设计确认卡逐页选模板用的实时应用页面清单（模板名随剧本重写同步刷新）。 */
   uiDesignPages?: UiDesignPage[]
   /** 用户是否已提交过一轮版式选择：区分首轮“待选择版式”与改稿轮“生成中显示已选模板”。 */
   uiDesignTemplatesSelected?: boolean
   onDiscard?: (docKey: WorkspaceDocKey) => void
+  /** 字段映射面板控制：面板是否就绪、打开面板、以面板当前草稿完成确认。 */
+  fieldMappingControl?: { ready: boolean; open: () => void; confirm: () => void }
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
@@ -139,6 +148,7 @@ export default function WorkflowRunCard({
   interactionAvailability,
   uiDesignPages,
   uiDesignTemplatesSelected = false,
+  fieldMappingControl,
   onSubmitClarification,
   workflow
 }: WorkflowRunCardProps): ReactElement | null {
@@ -210,7 +220,7 @@ export default function WorkflowRunCard({
   const [technicalPlanRevisionOpen, setTechnicalPlanRevisionOpen] = useState(false)
   const [technicalPlanFeedback, setTechnicalPlanFeedback] = useState('')
   // UI 设计确认卡的逐页选模板：展开哪一页的选择器、当前翻看的模板序号、已记录的版式选择。
-  // 选模板只记录选择，不触发生成；全部页面选定后自动批量交后台重画，右侧一次性统一呈现。
+  // 选模板只记录选择，不触发生成；全部应用页面选定后自动批量交后台重画，右侧一次性统一呈现。
   const uiTemplates = useMemo(() => getAvailableTemplates(), [])
   const [uiTemplatePickerPageId, setUiTemplatePickerPageId] = useState('')
   const [uiTemplateIndex, setUiTemplateIndex] = useState(0)
@@ -332,7 +342,7 @@ export default function WorkflowRunCard({
           </div>
         )}
         <Text className={cx('workflow-ui-design-copy')}>
-          请在右侧审阅架构、实体、API 契约与页面技术绑定；确认后才会生成应用模板。
+          请在右侧审阅架构、应用API契约与页面技术绑定；确认后才会生成应用模板。
         </Text>
         {/* 重新生成展开为“意见输入 + 提交”两步：默认收起不加视觉负担，展开后意见选填。 */}
         {requiresConfirmation && technicalPlanRevisionOpen && (
@@ -456,11 +466,66 @@ export default function WorkflowRunCard({
     )
   }
 
-  // 实体绑定确认是「绑定操作的数据实现」节点的动作：绑定/映射细节全部在对话卡内确认，
-  // 右侧只按确认结果静态呈现；确认后同一轨迹继续生成数据适配逻辑。
-  if (clarification?.mode === 'entity_binding' && requiresConfirmation) {
-    const operations = Array.isArray(clarification.operations)
-      ? (clarification.operations as EntityBindingPlanItem[])
+  // 应用API数据来源类型选择：「选择数据来源类型」节点的动作，点击选项即提交。
+  // 用什么类型的数据源是用户自己的判断，卡面不给建议。
+  if (clarification?.mode === 'api_source_type' && requiresConfirmation) {
+    const options: ApiSourceTypeOption[] = [
+      {
+        key: '数据库',
+        label: '数据表',
+        description: '绑定数据库表，按增删查改固定模板把契约出入参填进槽位，配置量小。'
+      },
+      {
+        key: '外部服务',
+        label: '外部API',
+        description: '绑定外部API接口，做契约与接口之间的出入参参数适配，可加函数表达式。'
+      }
+    ]
+    return (
+      <div
+        className={cx(
+          'workflow-run-card',
+          'workflow-run-card-test-case-authorization',
+          'workflow-run-card-pending',
+          embedded && 'workflow-run-card-embedded'
+        )}
+      >
+        {!embedded && <span className={cx('workflow-run-signal')} aria-hidden="true" />}
+        {!embedded && (
+          <Text className={cx('workflow-run-name')} strong>
+            选择数据来源类型
+          </Text>
+        )}
+        <ApiSourceTypeCard
+          objectName={String(clarification.objectName || '')}
+          options={options}
+          disabled={actionDisabled}
+          submitting={isSubmittingClarification}
+          onSelect={(kind) => submitClarification({ api_source_type: kind })}
+        />
+        {interactionAvailability !== 'active' && (
+          <Alert
+            className={cx('workflow-dispatch-availability')}
+            message={
+              interactionAvailability === 'unavailable'
+                ? '正在校准确认状态，请稍候。'
+                : '该确认已提交或已失效，请在当前工作流继续操作。'
+            }
+            showIcon
+            type="info"
+          />
+        )}
+      </div>
+    )
+  }
+
+  // 应用API数据来源选择：「选择数据来源」节点的动作，单个表单项（表用级联、外部API用下拉）。
+  if (clarification?.mode === 'api_source_select' && requiresConfirmation) {
+    const databases: ApiSourceDatabaseGroup[] = Array.isArray(clarification.databases)
+      ? (clarification.databases as ApiSourceDatabaseGroup[])
+      : []
+    const externals: ApiSourceExternalOption[] = Array.isArray(clarification.externals)
+      ? (clarification.externals as ApiSourceExternalOption[])
       : []
     return (
       <div
@@ -474,17 +539,111 @@ export default function WorkflowRunCard({
         {!embedded && <span className={cx('workflow-run-signal')} aria-hidden="true" />}
         {!embedded && (
           <Text className={cx('workflow-run-name')} strong>
-            确认数据实现绑定
+            选择数据来源
           </Text>
         )}
-        <EntityBindingCard
+        <ApiSourceSelectCard
+          kind={String(clarification.kind || '数据库') === '外部服务' ? '外部服务' : '数据库'}
+          databases={databases}
+          externals={externals}
           disabled={actionDisabled}
-          message={String(clarification.message || '')}
-          objectName={String(clarification.objectName || '')}
-          operations={operations}
           submitting={isSubmittingClarification}
-          onConfirm={() => submitClarification({ entity_binding: 'confirmed' })}
+          onSelect={(key) => submitClarification({ api_source_select: key })}
         />
+        {interactionAvailability !== 'active' && (
+          <Alert
+            className={cx('workflow-dispatch-availability')}
+            message={
+              interactionAvailability === 'unavailable'
+                ? '正在校准确认状态，请稍候。'
+                : '该确认已提交或已失效，请在当前工作流继续操作。'
+            }
+            showIcon
+            type="info"
+          />
+        )}
+      </div>
+    )
+  }
+
+  // 应用API来源缺失引导：「选择数据来源」节点在目录为空时的引导动作。
+  if (clarification?.mode === 'api_source_missing' && requiresConfirmation) {
+    return (
+      <div
+        className={cx(
+          'workflow-run-card',
+          'workflow-run-card-test-case-authorization',
+          'workflow-run-card-pending',
+          embedded && 'workflow-run-card-embedded'
+        )}
+      >
+        {!embedded && <span className={cx('workflow-run-signal')} aria-hidden="true" />}
+        {!embedded && (
+          <Text className={cx('workflow-run-name')} strong>
+            选择数据来源
+          </Text>
+        )}
+        <ApiSourceMissingCard
+          kindLabel={String(clarification.kindLabel || '数据表')}
+          disabled={actionDisabled}
+          submitting={isSubmittingClarification}
+          onRetry={() => submitClarification({ api_source_check: 'retry' })}
+        />
+        {interactionAvailability !== 'active' && (
+          <Alert
+            className={cx('workflow-dispatch-availability')}
+            message={
+              interactionAvailability === 'unavailable'
+                ? '正在校准确认状态，请稍候。'
+                : '该确认已提交或已失效，请在当前工作流继续操作。'
+            }
+            showIcon
+            type="info"
+          />
+        )}
+      </div>
+    )
+  }
+
+  // 应用API映射绑定：绑定配置整体在右侧「字段映射」面板完成，节点卡只保留文本提示
+  // 与最重要的确认动作——「打开字段映射」进入面板，「保存并确认」以面板草稿进入下一步。
+  if (clarification?.mode === 'api_binding' && requiresConfirmation) {
+    const objectName = String(clarification.objectName || '')
+    const sourceSummary = [String(clarification.sourceName || ''), String(clarification.targetName || '')]
+      .filter(Boolean)
+      .join(' · ')
+    return (
+      <div
+        className={cx(
+          'workflow-run-card',
+          'workflow-run-card-test-case-authorization',
+          'workflow-run-card-pending',
+          embedded && 'workflow-run-card-embedded'
+        )}
+      >
+        {!embedded && <span className={cx('workflow-run-signal')} aria-hidden="true" />}
+        {!embedded && (
+          <Text className={cx('workflow-run-name')} strong>
+            配置映射绑定
+          </Text>
+        )}
+        <p className={cx('api-binding-step-hint')}>
+          请在右侧「字段映射」面板完成「{objectName}」与 {sourceSummary || '数据来源'} 的映射绑定；
+          保存并确认后将生成数据适配逻辑。
+        </p>
+        <div className={cx('api-binding-step-actions')}>
+          <Button disabled={actionDisabled} onClick={() => fieldMappingControl?.open()}>
+            打开字段映射
+          </Button>
+          <Button
+            type="primary"
+            disabled={actionDisabled || !fieldMappingControl?.ready}
+            loading={isSubmittingClarification}
+            onClick={() => fieldMappingControl?.confirm()}
+          >
+            保存并确认
+          </Button>
+        </div>
       </div>
     )
   }
@@ -500,7 +659,7 @@ export default function WorkflowRunCard({
     const uiPagesReady =
       uiPages.length > 0 &&
       uiPages.every((page) => page.status === 'generated' || page.status === 'confirmed')
-    // 终态记录：全部页面已确认，或已跳过（页面清空且本卡已提交）。
+    // 终态记录：全部应用页面已确认，或已跳过（页面清空且本卡已提交）。
     // 生成中的运行态不算终态——卡保持交互布局、仅按钮禁用，避免动作区闪没又闪回。
     const uiDesignRecord =
       !uiDesignGenerating &&
@@ -508,7 +667,7 @@ export default function WorkflowRunCard({
         ? uiPages.every((page) => page.status === 'confirmed')
         : Boolean(isSubmittedConfirmation))
     const uiDesignSkipped = uiDesignRecord && uiPages.length === 0
-    /** 记录一页的版式选择：只写本地不触发生成；选满全部页面后一次性批量交后台重画（右侧统一刷新）。 */
+    /** 记录一页的版式选择：只写本地不触发生成；选满全部应用页面后一次性批量交后台重画（右侧统一刷新）。 */
     const applyUiTemplateSelection = (pageId: string, template: string): void => {
       const next = { ...uiTemplateSelections, [pageId]: template }
       setUiTemplateSelections(next)
@@ -553,7 +712,7 @@ export default function WorkflowRunCard({
           {uiDesignSkipped
             ? '已跳过 UI 设计稿，未生成页面设计。'
             : uiDesignRecord
-              ? '全部页面设计稿已确认。'
+              ? '全部应用页面设计稿已确认。'
               : '为每页选择版式模板；全部选定后统一生成，右侧一次性呈现所有设计稿。'}
         </Text>
         {uiPages.length > 0 && (
@@ -994,7 +1153,7 @@ function BuildExecutionSliceProgress({
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0
   const targetLabel =
     scope.type === 'page'
-      ? '页面'
+      ? '应用页面'
       : scope.type === 'data_source'
         ? '数据源'
         : scope.type === 'endpoint'
@@ -1375,7 +1534,7 @@ function WorkflowContext({ context }: { context: Record<string, unknown> }): Rea
     <div className={cx('workflow-page-context')}>
       {Object.keys(page).length > 0 && (
         <div className={cx('workflow-page-context-row')}>
-          <Text strong>{stringValue(page.name) || '页面'}</Text>
+          <Text strong>{stringValue(page.name) || '应用页面'}</Text>
           <Text type="secondary">
             {stringValue(page.path)}
             {stringValue(page.goal) ? `：${stringValue(page.goal)}` : ''}
@@ -1645,9 +1804,19 @@ export function buildClarificationContinuationMessage(
   if (acceptanceMessage) return acceptanceMessage
   const dispatchMessage = backgroundDispatchContinuationMessage(clarification, answers)
   if (dispatchMessage) return dispatchMessage
-  // 实体绑定确认：单卡一次写回全部操作的绑定，续跑进入数据适配生成。
-  if (clarification?.mode === 'entity_binding' && answers.entity_binding !== undefined) {
-    return '已确认全部操作的数据实现与字段映射，请生成数据适配逻辑。'
+  // 应用API数据绑定链路的续跑文案：与各步骤卡的提交动作逐字对齐。
+  if (clarification?.mode === 'api_source_type' && answers.api_source_type !== undefined) {
+    return `已选择绑定${answers.api_source_type === '外部服务' ? '外部API' : '数据表'}，请选择具体数据来源。`
+  }
+  if (clarification?.mode === 'api_source_select' && answers.api_source_select !== undefined) {
+    return '已选定数据来源，请在右侧配置面板完成映射绑定。'
+  }
+  if (clarification?.mode === 'api_source_missing' && answers.api_source_check !== undefined) {
+    return '已配置数据来源，请重新检测可用来源。'
+  }
+  // 应用API映射绑定确认：映射在右侧配置面板收口，续跑进入数据适配生成。
+  if (clarification?.mode === 'api_binding' && answers.api_binding !== undefined) {
+    return '已完成映射绑定确认，请生成数据适配逻辑。'
   }
   if (clarification?.mode === 'detail_review' && answers.detail_review) {
     const submission = answers.detail_review
@@ -1656,7 +1825,7 @@ export function buildClarificationContinuationMessage(
       !Array.isArray(submission) &&
       'review_status' in submission
     ) {
-      return '已整体审阅并确认全部页面和数据源设计，请合并本次结构化修改后继续。'
+      return '已整体审阅并确认全部应用页面和数据源设计，请合并本次结构化修改后继续。'
     }
   }
   const mode = clarification?.mode

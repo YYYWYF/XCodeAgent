@@ -97,7 +97,7 @@ export function transitionInitializationPlanning(
       status['ui-designs'] = 'pending'
       break
     case 'ui_designs_ready':
-      // 首轮生成只准备页面清单并打开确认门，不产出设计稿——右侧与对话卡都在等待版式选择；
+      // 首轮生成只准备应用页面清单并打开确认门，不产出设计稿——右侧与对话卡都在等待版式选择；
       // 用户选完模板后的再生成（templates_selected 已置位）才把页面标记为已生成。
       if (!next.artifacts.uiDesigns.templates_selected) {
         next.artifacts.uiDesigns.pages.forEach((page) => {

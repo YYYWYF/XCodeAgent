@@ -91,7 +91,7 @@ export async function confirmApplicationDevelopmentPlan(
 ): Promise<ConfirmedDevelopmentPlan> {
   const response = await runDevelopmentPlanningAgent(
     threadId,
-    '我确认使用这个页面开发计划。',
+    '我确认使用这个应用页面开发计划。',
     { action: 'confirm', workspaceRoot, selectedPageKey, plan },
     onProgress
   )

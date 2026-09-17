@@ -1,8 +1,5 @@
-// 武汉分行需求回检系统 · 规划产物（两个页面、一个接口、两个开发任务）。
-import type {
-  DevelopmentPlanningApiContract,
-  DevelopmentPlanningEntity
-} from '../../src/renderer/src/typings'
+// 武汉分行需求回检系统 · 规划产物（两个应用页面、一个接口、两个开发任务）。
+import type { DevelopmentPlanningApiContract } from '../../src/renderer/src/typings'
 
 export const PMS_PAGES = [
   {
@@ -75,9 +72,6 @@ export const PMS_API_CONTRACTS: DevelopmentPlanningApiContract[] = [
   }
 ]
 
-/** 当前只保留实体概念提示，不生成具体实体产物或实体工作流。 */
-export const PMS_ENTITIES: DevelopmentPlanningEntity[] = []
-
 export const mockPlanningArtifacts = {
   ready: true,
   hasPageDesigns: true,
@@ -85,6 +79,5 @@ export const mockPlanningArtifacts = {
   invalid: [],
   pages: PMS_PAGES,
   pageTree: PMS_PAGE_TREE,
-  apiContracts: PMS_API_CONTRACTS,
-  entities: PMS_ENTITIES
+  apiContracts: PMS_API_CONTRACTS
 }

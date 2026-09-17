@@ -20,6 +20,9 @@ import { cx } from '../../../../utils'
 import databaseFilledIcon from '../../../../assets/icons/database-filled.svg'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
 import DataSourcesPage from '../../../DataSources/DataSourcesPage'
+import ExternalApiDetailPage from '../../../DataSources/ExternalApiDetailPage'
+import DatabaseTableDetailPage from '../../../DataSources/DatabaseTableDetailPage'
+import { externalApiSignature, importedTables, useDataSources, type ExternalApiSource } from '../../../DataSources/catalog'
 import './AuxiliaryDrawer.less'
 
 const { Panel } = Collapse
@@ -30,6 +33,34 @@ export type AuxiliaryDrawerMode =
   | 'temporary-conversation'
   | 'test-preparation'
   | 'data-sources'
+
+/** 数据来源详情层的定位：接口维护（含新增）或数据表详情。 */
+export type DataSourcesDetailTarget =
+  | { kind: 'api'; id: string }
+  | { kind: 'api-new' }
+  | { kind: 'table'; sourceId: string; name: string }
+
+/** 解析数据来源详情层的头部文案：接口名+契约签名，或表名+说明。 */
+function describeDataSourcesDetail(
+  target: DataSourcesDetailTarget,
+  sources: ReturnType<typeof useDataSources>[0]
+): { title: string; subtitle: string } {
+  if (target.kind === 'api-new') return { title: '新增外部 API', subtitle: '按 Postman 语义维护接口定义' }
+  if (target.kind === 'api') {
+    const source = sources.find(
+      (item): item is ExternalApiSource => item.id === target.id && item.type === 'external_service'
+    )
+    return source
+      ? { title: source.name, subtitle: externalApiSignature(source) }
+      : { title: '外部 API', subtitle: '该接口已不在来源清单中' }
+  }
+  const item = importedTables(sources).find(
+    (entry) => entry.sourceId === target.sourceId && entry.table.name === target.name
+  )
+  return item
+    ? { title: item.table.name, subtitle: item.table.comment }
+    : { title: target.name, subtitle: '该数据表已不在来源清单中' }
+}
 
 /** 任务管理抽屉的内容快照：由工作台在打开抽屉时向聊天面板查询获得。 */
 export type ConversationManagementContent = {
@@ -402,7 +433,7 @@ const DRAWER_HEADERS: Record<AuxiliaryDrawerMode, { title: string; description: 
   },
   'temporary-conversation': { title: '临时问答', description: '只读问答，不触发工作流' },
   'test-preparation': { title: '测试准备', description: '后台异步生成业务测试用例' },
-  'data-sources': { title: '数据来源', description: '管理应用使用的数据库与外部 API 连接' }
+  'data-sources': { title: '数据来源', description: '已添加的数据表与外部 API 接口，按表和出入参粒度绑定' }
 }
 
 /** 抽屉徽标图标按模式选择：所有模式统一走 mask 实底图标槽位，保证头部视觉规则一致。 */
@@ -415,6 +446,10 @@ const DRAWER_BADGE_ICONS: Record<AuxiliaryDrawerMode, string> = {
 
 /** 在同一辅助槽位中承载任务管理、临时问答和测试准备，禁止抽屉叠加。 */
 export default function AuxiliaryDrawer(props: Props): ReactElement {
+  // 数据来源模式：右侧衔接的详情维护层定位；其它模式恒为空。
+  const [dataSourcesDetail, setDataSourcesDetail] = useState<DataSourcesDetailTarget | null>(null)
+  const [sources] = useDataSources()
+  const detailHead = dataSourcesDetail ? describeDataSourcesDetail(dataSourcesDetail, sources) : null
   // 临时任务按需创建、初始为空，可多开，但永远不具备 Workflow 与工作区写入能力。
   const [temporaryConversations, setTemporaryConversations] = useState<
     TemporaryConversationRecord[]
@@ -463,7 +498,8 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
     })
   }
   return (
-    <section className={cx('auxiliary-drawer', props.mode)} aria-label={header.title}>
+    <>
+      <section className={cx('auxiliary-drawer', props.mode)} aria-label={header.title}>
       <header>
         <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
           <span
@@ -496,7 +532,7 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
       </header>
       <div className={cx('auxiliary-drawer-body')}>
         {props.mode === 'data-sources' ? (
-          <DataSourcesPage />
+          <DataSourcesPage onOpenDetail={setDataSourcesDetail} />
         ) : props.mode === 'conversation-management' && props.conversationManagement ? (
           <ConversationManagement
             content={props.conversationManagement}
@@ -540,6 +576,43 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
           <TestPreparation onRetry={props.onRetryTestCases} snapshot={props.testPreparation} />
         )}
       </div>
-    </section>
+      </section>
+      {/* 数据来源详情层：衔接在列表抽屉右侧的第二个抽屉，承载接口/表的维护页。
+          头部与列表抽屉同构：左侧标题，右上角关闭按钮只收起详情层、回到列表。 */}
+      {props.mode === 'data-sources' && dataSourcesDetail && detailHead ? (
+        <section className={cx('auxiliary-drawer', 'data-sources-detail')} aria-label="数据来源详情">
+          <header>
+            <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
+              <span
+                aria-hidden="true"
+                className={cx('auxiliary-drawer-badge-icon')}
+                style={
+                  {
+                    '--auxiliary-drawer-badge-source': `url("${DRAWER_BADGE_ICONS['data-sources']}")`
+                  } as CSSProperties
+                }
+              />
+            </span>
+            <div>
+              <strong>{detailHead.title}</strong>
+              <small>{detailHead.subtitle}</small>
+            </div>
+            <button aria-label="关闭详情" onClick={() => setDataSourcesDetail(null)} type="button">
+              <CloseOutlined />
+            </button>
+          </header>
+          <div className={cx('auxiliary-drawer-body')}>
+            {dataSourcesDetail.kind === 'table' ? (
+              <DatabaseTableDetailPage
+                onBack={() => setDataSourcesDetail(null)}
+                target={dataSourcesDetail}
+              />
+            ) : (
+              <ExternalApiDetailPage onBack={() => setDataSourcesDetail(null)} target={dataSourcesDetail} />
+            )}
+          </div>
+        </section>
+      ) : null}
+    </>
   )
 }

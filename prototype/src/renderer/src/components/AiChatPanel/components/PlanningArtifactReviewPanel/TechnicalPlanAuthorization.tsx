@@ -2,7 +2,7 @@ import { SafetyCertificateOutlined } from '@ant-design/icons'
 import { Empty, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
-import type { ProjectedContract } from './TechnicalPlanContractsProjection'
+import type { ProjectedEndpoint } from './AppApiContractsProjection'
 
 const { Text } = Typography
 
@@ -23,31 +23,29 @@ function normalizePermissionName(name: string): string {
 /** 把需求角色权限映射到契约接口：命中时返回 METHOD path 标签，未命中保持待开发绑定。 */
 function permissionEndpoints(
   permission: string,
-  contracts: ProjectedContract[]
+  endpoints: ProjectedEndpoint[]
 ): Array<{ id: string; label: string }> {
   const wanted = normalizePermissionName(permission)
   const hits: Array<{ id: string; label: string }> = []
-  contracts.forEach((contract) =>
-    contract.endpoints.forEach((endpoint) => {
-      const operationName = normalizePermissionName(endpoint.operationName)
-      // 仅在双方都非空时做双向包含匹配：避免“提交回检”这类只共享“回检”二字的权限误命中。
-      const hit =
-        Boolean(wanted) &&
-        Boolean(operationName) &&
-        (operationName === wanted ||
-          operationName.includes(wanted) ||
-          wanted.includes(operationName))
-      if (wanted && hit)
-        hits.push({ id: endpoint.id, label: `${endpoint.method} ${endpoint.path}` })
-    })
-  )
+  endpoints.forEach((endpoint) => {
+    const operationName = normalizePermissionName(endpoint.operationName)
+    // 仅在双方都非空时做双向包含匹配：避免“提交回检”这类只共享“回检”二字的权限误命中。
+    const hit =
+      Boolean(wanted) &&
+      Boolean(operationName) &&
+      (operationName === wanted ||
+        operationName.includes(wanted) ||
+        wanted.includes(operationName))
+    if (wanted && hit)
+      hits.push({ id: endpoint.id, label: `${endpoint.method} ${endpoint.path}` })
+  })
   return hits
 }
 
 /** 从需求说明书的 user_roles 投影权限角色视图；不补写需求之外的角色事实。 */
 function authorizationRoles(
   requirementSpec: Record<string, unknown>,
-  contracts: ProjectedContract[]
+  endpoints: ProjectedEndpoint[]
 ): AuthorizationRoleView[] {
   const roles = Array.isArray(requirementSpec.user_roles) ? requirementSpec.user_roles : []
   return roles.map((role) => {
@@ -60,7 +58,7 @@ function authorizationRoles(
       isSystemRole: record.isSystemRole === true,
       permissions: permissions.map((permission) => ({
         name: String(permission),
-        endpoints: permissionEndpoints(String(permission), contracts)
+        endpoints: permissionEndpoints(String(permission), endpoints)
       }))
     }
   })
@@ -71,13 +69,13 @@ function authorizationRoles(
  * 页面权限与操作权限相互独立；未显式授权的接口按契约默认可访问。
  */
 export function AuthorizationSection({
-  contracts,
+  endpoints,
   requirementSpec
 }: {
-  contracts: ProjectedContract[]
+  endpoints: ProjectedEndpoint[]
   requirementSpec: Record<string, unknown>
 }): ReactElement {
-  const roles = authorizationRoles(requirementSpec, contracts)
+  const roles = authorizationRoles(requirementSpec, endpoints)
   if (!roles.length) {
     return <Empty description="需求说明书中尚未定义用户角色" image={Empty.PRESENTED_IMAGE_SIMPLE} />
   }

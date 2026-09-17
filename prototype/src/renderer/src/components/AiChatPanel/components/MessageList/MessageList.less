@@ -16,8 +16,28 @@
   overflow: auto;
   background: var(--wb-canvas);
   scrollbar-width: thin;
+  scrollbar-color: var(--wb-control) transparent;
   // 首节点展开/切换状态时保持滚动条槽位，避免内容区瞬间向左偏移再回弹。
   scrollbar-gutter: stable;
+
+  // 纵向滚动条弱化为细条：常驻可见提示位置，但低对比不抢注意力，悬停加深。
+  &::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    border-radius: 3px;
+    background: var(--wb-control);
+  }
+
+  &:hover::-webkit-scrollbar-thumb {
+    background: var(--wb-control-hover);
+  }
 }
 
 .@{class-prefix}-scroll-to-bottom-button {

@@ -44,7 +44,7 @@ export type BackgroundTaskNextStep = {
 export type BackgroundTask = {
   id: string
   kind: BackgroundTaskKind
-  /** 展示主标题，例如「页面「我的回检」代码实现」。 */
+  /** 展示主标题，例如「应用页面「我的回检」代码实现」。 */
   title: string
   applicationId: string
   versionId: string

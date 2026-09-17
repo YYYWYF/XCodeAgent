@@ -19,6 +19,7 @@ import WorkflowRunCard, {
   BuildExecutionRunCard,
   workflowClarification
 } from '../WorkflowRunCard'
+import { API_BINDING_STEP_MODES } from '../ApiSourceStepCards'
 import type { WorkflowInteractionAvailability } from '../../planExecutionMode'
 import DagGenerationProgress from './DagGenerationProgress'
 import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
@@ -42,6 +43,8 @@ type Props = {
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
   ) => Promise<boolean>
+  /** 字段映射面板控制：面板是否就绪、打开面板、以面板当前草稿完成确认。 */
+  fieldMappingControl?: { ready: boolean; open: () => void; confirm: () => void }
   waitingPrompt?: string
   waitingForInput?: boolean
 }
@@ -57,6 +60,7 @@ export default function ProcessSteps({
   interactionAvailability = 'stale',
   interactionDisabled = false,
   onSubmitClarification,
+  fieldMappingControl,
   waitingPrompt = '',
   waitingForInput = false
 }: Props): ReactElement {
@@ -64,8 +68,9 @@ export default function ProcessSteps({
   const dispatchPending =
     workflowClarification(workflow)?.mode === 'background_dispatch' &&
     workflowClarification(workflow)?.status === 'requires_user_input'
+  // 应用API数据绑定链路的四张步骤卡（类型/来源/缺失引导/映射绑定）任一待输入都呈现等待态。
   const entityBindingPending =
-    workflowClarification(workflow)?.mode === 'entity_binding' &&
+    API_BINDING_STEP_MODES.includes(workflowClarification(workflow)?.mode || '') &&
     workflowClarification(workflow)?.status === 'requires_user_input'
   const statusClassName = loading
     ? 'running'
@@ -82,7 +87,7 @@ export default function ProcessSteps({
   const statusHint = loading
     ? currentStepLabel(steps)
     : inlineFirstNodePending
-      ? '请选择页面模板后开始详细设计'
+      ? '请选择应用页面模板后开始详细设计'
       : dispatchPending
         ? '请选择执行方式后继续'
         : entityBindingPending
@@ -133,6 +138,7 @@ export default function ProcessSteps({
             interactionAvailability={interactionAvailability}
             interactionDisabled={interactionDisabled}
             onSubmitClarification={onSubmitClarification}
+            fieldMappingControl={fieldMappingControl}
             waitingForInput={waitingForInput}
             waitingPrompt={waitingPrompt}
           />
@@ -156,6 +162,7 @@ function ProcessStep({
   interactionAvailability,
   interactionDisabled,
   onSubmitClarification,
+  fieldMappingControl,
   waitingForInput,
   waitingPrompt
 }: {
@@ -174,6 +181,8 @@ function ProcessStep({
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
   ) => Promise<boolean>
+  /** 字段映射面板控制：面板是否就绪、打开面板、以面板当前草稿完成确认。 */
+  fieldMappingControl?: { ready: boolean; open: () => void; confirm: () => void }
   waitingForInput: boolean
   waitingPrompt: string
 }): ReactElement {
@@ -186,7 +195,7 @@ function ProcessStep({
   const expandable =
     hasDetail || hasResult || hasChecks || hasBuildRun || hasDagGeneration || hasWorkspaceInspection
   const awaitingInput = waitingForInput && step.status === 'requires_user_input'
-  // 四类节点动作（用例授权 / 产物验收 / 执行方式选择 / 实体绑定）共用同一条内嵌轨迹渲染：
+  // 四类节点动作（用例授权 / 产物验收 / 执行方式选择 / 应用API绑定）共用同一条内嵌轨迹渲染：
   // 节点进入待输入态时把 WorkflowRunCard 内嵌在流程轨迹里，不再脱离流程单独渲染。
   const awaitingEmbeddedAction =
     step.status === 'requires_user_input' &&
@@ -238,6 +247,7 @@ function ProcessStep({
             disabled={interactionDisabled}
             interactionAvailability={interactionAvailability}
             onSubmitClarification={onSubmitClarification}
+            fieldMappingControl={fieldMappingControl}
             workflow={workflow}
           />
         </div>
@@ -266,9 +276,16 @@ function ProcessStep({
     )
   }
 
+  // 拖选文本时不要触发折叠：带选区的点击只保留选区，不切换展开态。
+  const handleSummaryClick = (event: React.MouseEvent<HTMLElement>): void => {
+    if ((window.getSelection()?.toString() || '').length > 0) {
+      event.preventDefault()
+    }
+  }
+
   return (
     <details className={className}>
-      <summary className={cx('process-step-summary')}>{summaryContent}</summary>
+      <summary className={cx('process-step-summary')} onClick={handleSummaryClick}>{summaryContent}</summary>
       <div className={cx('process-step-detail')}>
         {!hasChecks && !hasDagGeneration && !hasWorkspaceInspection && step.detail && (
           <DetailBlock

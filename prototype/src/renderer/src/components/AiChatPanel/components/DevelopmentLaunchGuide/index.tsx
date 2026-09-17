@@ -1,4 +1,4 @@
-import { AppstoreOutlined, LayoutOutlined } from '@ant-design/icons'
+import { ApiOutlined, LayoutOutlined } from '@ant-design/icons'
 import { Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { ComposerArtifactState, ComposerArtifactTarget } from '../../artifactMention'
@@ -23,12 +23,12 @@ const LAUNCH_SECTIONS: Array<{
   icon: ReactElement
   emptyText: string
 }> = [
-  { kind: 'page', title: '页面', icon: <LayoutOutlined />, emptyText: '暂无页面产物' },
+  { kind: 'page', title: '应用页面', icon: <LayoutOutlined />, emptyText: '暂无应用页面产物' },
   {
-    kind: 'business-object',
-    title: '实体',
-    icon: <AppstoreOutlined />,
-    emptyText: '暂无实体产物'
+    kind: 'app-api',
+    title: '应用API',
+    icon: <ApiOutlined />,
+    emptyText: '暂无应用API产物'
   }
 ]
 
@@ -116,7 +116,7 @@ type DevelopmentLaunchGuideProps = {
 
 /**
  * 开发阶段的产物发起引导卡：卡壳复用 workflow-run-card（与澄清卡/确认卡同一套背景与区块设计），
- * 卡内分“页面 / 实体”两个浅色区块平铺候选，每行只有名称与状态徽标；
+ * 卡内分“应用页面 / 应用API”两个浅色区块平铺候选，每行只有名称与状态徽标；
  * 候选与发起链路复用产物面板，两个入口永远一致。
  */
 export default function DevelopmentLaunchGuide({

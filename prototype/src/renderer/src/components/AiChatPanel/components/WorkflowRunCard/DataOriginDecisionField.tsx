@@ -204,7 +204,7 @@ function inferDecisionDraft(origin: Record<string, unknown>): DecisionDraft {
   };
 }
 
-// 根据所选方案切换表名默认值：新表偏向业务实体，现有表偏向已发现表。
+// 根据所选方案切换表名默认值：新表偏向业务资源名，现有表偏向已发现表。
 function draftForStrategy(
   strategy: DecisionStrategy,
   draft: DecisionDraft,

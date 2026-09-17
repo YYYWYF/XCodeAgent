@@ -1,18 +1,17 @@
-import { ApiOutlined, ClusterOutlined, DatabaseOutlined } from '@ant-design/icons'
+import { ClusterOutlined, DatabaseOutlined } from '@ant-design/icons'
 import { Tabs, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useMemo } from 'react'
-import TechnicalBusinessObjectsReview from '../../../BusinessObjects/TechnicalBusinessObjectsReview'
-import { useBusinessObjects } from '../../../BusinessObjects/store'
+import { useAppApis } from '../../../AppApis/store'
 import {
   DATABASE_MODE_LABEL,
-  externalOperationCount,
+  externalApiSignature,
   useDataSourceIndex
 } from '../../../DataSources/catalog'
 import { cx } from '../../../../utils'
 import { AuthorizationSection } from './TechnicalPlanAuthorization'
-import { ApiContractsSection } from './TechnicalPlanContracts'
-import { apiContractsFromObjects } from './TechnicalPlanContractsProjection'
+import { AppApiContractsSection } from './AppApiContracts'
+import { apiEndpointsFromObjects, type ProjectedEndpoint } from './AppApiContractsProjection'
 import './TechnicalPlanReview.less'
 
 const { Paragraph, Text, Title } = Typography
@@ -33,7 +32,7 @@ function textOf(value: Record<string, unknown>, ...keys: string[]): string {
   return ''
 }
 
-/** 「架构」页签：三层技术架构 + 数据架构（接入来源目录）。 */
+/** 「架构」页签：技术架构三段说明 + 数据架构接入来源，平铺的段落与清单排版。 */
 function ArchitectureContent({ value }: { value: Record<string, unknown> }): ReactElement {
   const architecture = asRecord(value.architecture)
   const dataSourceIndex = useDataSourceIndex()
@@ -42,83 +41,62 @@ function ArchitectureContent({ value }: { value: Record<string, unknown> }): Rea
       <Title level={5}>
         <ClusterOutlined /> 技术架构
       </Title>
-      <div className={cx('planning-architecture-grid')}>
-        {['frontend', 'backend', 'data'].map((key) => (
-          <article key={key}>
-            <Text type="secondary">
-              {key === 'frontend' ? '前端' : key === 'backend' ? '后端' : '数据'}
-            </Text>
-            <Paragraph>{String(architecture[key] || '待补充')}</Paragraph>
-          </article>
-        ))}
-      </div>
+      {(['frontend', 'backend', 'data'] as const).map((key) => (
+        <Paragraph key={key}>
+          <Text strong>{key === 'frontend' ? '前端：' : key === 'backend' ? '后端：' : '数据：'}</Text>
+          {String(architecture[key] || '待补充')}
+        </Paragraph>
+      ))}
       <Title level={5}>
         <DatabaseOutlined /> 数据架构 · 接入来源
       </Title>
-      <div className={cx('planning-data-architecture')}>
-        {dataSourceIndex.databases.map((source) => (
-          <article key={source.id}>
-            <strong>
-              <DatabaseOutlined /> {source.name}
-            </strong>
-            <small>
-              {DATABASE_MODE_LABEL[source.mode]} · {source.tables.length} 张表
-            </small>
-            <span>{source.tables.map((table) => table.name).join('、') || '尚未登记数据表'}</span>
-          </article>
-        ))}
+      <ul>
+        {dataSourceIndex.databases.map((source) => {
+          const imported = source.tables.filter((table) => table.imported)
+          return (
+            <li key={source.id}>
+              <Text strong>{source.name}</Text>：{DATABASE_MODE_LABEL[source.mode]} · 已引入 {imported.length}{' '}
+              张表（{imported.map((table) => table.name).join('、') || '尚未引入数据表'}）
+            </li>
+          )
+        })}
         {dataSourceIndex.externalServices.map((source) => (
-          <article key={source.id}>
-            <strong>
-              <ApiOutlined /> {source.name}
-            </strong>
-            <small>
-              {externalOperationCount(source)} 个接口 · {source.directories.length} 个目录
-            </small>
-            <span>
-              {source.directories
-                .flatMap((directory) => directory.operations.map((operation) => operation.name))
-                .join('、') || '尚未登记接口'}
-            </span>
-          </article>
+          <li key={source.id}>
+            <Text strong>{source.name}</Text>：外部 API ·{' '}
+            <Text code>{externalApiSignature(source)}</Text>（{source.description}）
+          </li>
         ))}
-        {!dataSourceIndex.sources.length && (
-          <Text type="secondary">
-            尚未登记数据来源；可在左侧「数据来源」中接入数据库与外部服务。
-          </Text>
-        )}
-      </div>
-      <Text type="secondary">
-        来源目录在左侧「数据来源」中维护；每个实体操作在开发阶段选择具体数据能力并完成字段映射。
-      </Text>
+      </ul>
+      {!dataSourceIndex.sources.length && (
+        <Paragraph type="secondary">
+          尚未登记数据来源；可在左侧「数据来源」中接入数据库与外部服务。
+        </Paragraph>
+      )}
     </section>
   )
 }
 
-/** 「页面」页签里的单个页面卡：页面 → 调用的实体操作 → 承接的接口。 */
+/** 「应用页面」页签里的单个页面卡：页面标题行 + 描述 + 调用的应用API清单（平铺文档行）。 */
 function PageBindingCard({
   page,
   requirementPages,
   objects,
-  endpointByOperation
+  endpointByApi
 }: {
   page: Record<string, unknown>
   requirementPages: Record<string, unknown>[]
-  objects: ReturnType<typeof useBusinessObjects>[0]
-  endpointByOperation: Map<string, { method: string; path: string }>
+  objects: ReturnType<typeof useAppApis>[0]
+  endpointByApi: Map<string, ProjectedEndpoint>
 }): ReactElement {
   const pageId = textOf(page, 'pageId', 'id')
   const requirementPage = requirementPages.find((item) => textOf(item, 'pageId', 'id') === pageId)
   const pageName = textOf(requirementPage || page, 'name', 'pageId', 'id')
-  const usages = objects.flatMap((object) =>
-    object.operations
-      .filter((operation) => operation.pages.includes(pageName))
-      .map((operation) => ({
-        call: `${object.name}.${operation.name}()`,
-        purpose: operation.description,
-        endpoint: endpointByOperation.get(`${object.id}.${operation.id}`)
-      }))
-  )
+  const usages = objects
+    .filter((object) => object.pages.includes(pageName))
+    .map((object) => ({
+      call: `${object.name}()`,
+      endpoint: endpointByApi.get(object.id)
+    }))
   return (
     <article>
       <div className={cx('planning-page-binding-heading')}>
@@ -128,36 +106,35 @@ function PageBindingCard({
         ) : null}
       </div>
       <Paragraph>
-        {textOf(requirementPage || page, 'description') || '页面通过实体操作使用数据能力。'}
+        {textOf(requirementPage || page, 'description') || '应用页面通过应用API使用数据能力。'}
       </Paragraph>
-      <div className={cx('planning-page-usages')}>
-        {usages.length ? (
-          usages.map((usage) => (
-            <div className={cx('planning-page-usage')} key={usage.call}>
-              <strong>{usage.call}</strong>
+      {usages.length ? (
+        <ul>
+          {usages.map((usage) => (
+            <li key={usage.call}>
+              <Text strong>{usage.call}</Text>{' '}
               {usage.endpoint ? (
-                <code>
+                <Text code>
                   {usage.endpoint.method} {usage.endpoint.path}
-                </code>
+                </Text>
               ) : (
-                <Text type="secondary">开发阶段落实接口</Text>
+                <Text type="secondary">接口在开发阶段落实</Text>
               )}
-            </div>
-          ))
-        ) : (
-          <div className={cx('planning-page-usage')}>
-            <strong>静态页面 · 无需数据操作</strong>
-          </div>
-        )}
-      </div>
-      <Text type="secondary">页面只调用实体操作；数据库与外部服务由操作的数据实现承接。</Text>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <Paragraph type="secondary">静态应用页面，无需数据操作</Paragraph>
+      )}
     </article>
   )
 }
 
 /**
- * 计划阶段技术规划方案审阅：架构 / 实体 / API 契约 / 页面 / 权限 五个二级页签。
- * 右侧只承载静态审阅与阅读位置切换；确认动作仍在对话区的「确认技术规划方案」卡完成。
+ * 计划阶段技术规划方案审阅：架构 / 应用API / 页面 / 权限 四个二级页签。
+ * 全部页签采用与需求文档一致的平铺文档排版（段落、清单、collection 卡片，无强调底色）；
+ * 应用API页签是静态接口文档：需求契约只声明接口面，这里为每个接口铺开技术细节与数据实现意向。
+ * 右侧只承载静态审阅；确认动作仍在对话区的「确认技术规划方案」卡完成。
  */
 export default function TechnicalPlanReview({
   value,
@@ -173,46 +150,33 @@ export default function TechnicalPlanReview({
     ? requirementSpec.pages.map(asRecord).filter((item) => Object.keys(item).length)
     : []
   const pages = technicalPages.length > 0 ? technicalPages : requirementPages
-  const [objects] = useBusinessObjects(requirementSpec)
-  const contracts = useMemo(() => apiContractsFromObjects(objects), [objects])
-  const endpointByOperation = useMemo(
-    () =>
-      new Map(
-        contracts.flatMap((contract) =>
-          contract.endpoints.map((endpoint) => [
-            endpoint.id,
-            { method: endpoint.method, path: endpoint.path }
-          ])
-        )
-      ),
-    [contracts]
+  const [objects] = useAppApis(requirementSpec, undefined, value)
+  const endpoints = useMemo(() => apiEndpointsFromObjects(objects), [objects])
+  const endpointByApi = useMemo(
+    () => new Map<string, ProjectedEndpoint>(endpoints.map((endpoint) => [endpoint.id, endpoint])),
+    [endpoints]
   )
   return (
     <div className={cx('planning-review-document')}>
       <Tabs
-        defaultActiveKey="business-objects"
+        defaultActiveKey="app-apis"
         items={[
           { key: 'architecture', label: '架构', children: <ArchitectureContent value={value} /> },
           {
-            key: 'business-objects',
-            label: '实体',
-            children: <TechnicalBusinessObjectsReview requirementSpec={requirementSpec} />
-          },
-          {
-            key: 'api-contracts',
-            label: 'API 契约',
-            children: <ApiContractsSection contracts={contracts} />
+            key: 'app-apis',
+            label: '应用API',
+            children: <AppApiContractsSection endpoints={endpoints} />
           },
           {
             key: 'pages',
-            label: '页面',
+            label: '应用页面',
             children: (
               <section>
-                <Title level={5}>页面绑定的业务能力</Title>
+                <Title level={5}>应用页面绑定的业务能力</Title>
                 <div className={cx('planning-review-collection')}>
                   {pages.map((page, index) => (
                     <PageBindingCard
-                      endpointByOperation={endpointByOperation}
+                      endpointByApi={endpointByApi}
                       key={textOf(page, 'pageId', 'id') || index}
                       objects={objects}
                       page={page}
@@ -227,7 +191,7 @@ export default function TechnicalPlanReview({
             key: 'authorization',
             label: '权限',
             children: (
-              <AuthorizationSection contracts={contracts} requirementSpec={requirementSpec} />
+              <AuthorizationSection endpoints={endpoints} requirementSpec={requirementSpec} />
             )
           }
         ]}

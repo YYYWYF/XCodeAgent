@@ -157,7 +157,7 @@ export default function ApplicationDevelopmentPlanningGate({ applicationName, pa
   const taskCount = useMemo(() => plan ? plan.menuPlans.reduce((sum, item) => sum + item.tasks.length, 0) : 0, [plan])
   const selectedPage = useMemo(() => pages.find((page) => page.key === selectedPageKey), [pages, selectedPageKey])
 
-  // 页面清单异步读取完成后默认选中第一个可规划页面。
+  // 应用页面清单异步读取完成后默认选中第一个可规划应用页面。
   useEffect(() => {
     if (!pages.some((page) => page.key === selectedPageKey)) setSelectedPageKey(pages[0]?.key || '')
   }, [pages, selectedPageKey])
@@ -252,8 +252,8 @@ export default function ApplicationDevelopmentPlanningGate({ applicationName, pa
           <section className={cx('development-planning-intro')}>
             <span className={cx('development-planning-logo')}><RocketOutlined /></span>
             <Text className={cx('development-planning-eyebrow')}>WORKBENCH READY</Text>
-            <Title level={2}>想先从「{applicationName}」的哪个页面开始？</Title>
-            <Paragraph>选择第一个要开发的页面。我会复用现有路由、API 调用、导航和布局能力，为该页面拆分任务、依赖与验收清单。</Paragraph>
+            <Title level={2}>想先从「{applicationName}」的哪个应用页面开始？</Title>
+            <Paragraph>选择第一个要开发的应用页面。我会复用现有路由、API 调用、导航和布局能力，为该应用页面拆分任务、依赖与验收清单。</Paragraph>
             {pages.length ? (
               <Radio.Group className={cx('development-planning-page-options')} onChange={(event) => setSelectedPageKey(event.target.value)} value={selectedPageKey}>
                 {pages.map((page) => (

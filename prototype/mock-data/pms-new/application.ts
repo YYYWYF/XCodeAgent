@@ -1,4 +1,4 @@
-// 武汉分行需求回检系统 · 新建应用参考配置（两个页面与一个查询接口）。
+// 武汉分行需求回检系统 · 新建应用参考配置（两个应用页面与一个查询接口）。
 import type { ApplicationConfig, ApplicationSchemaConfig } from '../../src/renderer/src/typings'
 import { makeCompleteLifecycle } from './lifecycle'
 

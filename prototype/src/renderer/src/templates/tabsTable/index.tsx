@@ -9,7 +9,7 @@ import { ReloadOutlined, DeleteOutlined } from '@ant-design/icons'
  * ╔══════════════════════════════════════════════════════════╗
  * ║  多标签页表格页面模板（骨架）                            ║
  * ║                                                        ║
- * ║  本模板提供带 Tabs 切换的多实体表格 UI 框架。          ║
+ * ║  本模板提供带 Tabs 切换的多组数据表格 UI 框架。        ║
  * ║  每个 Tab 下包含独立的搜索筛选 + ProTable + CRUD。      ║
  * ║                                                        ║
  * ║  使用时请根据项目计划填充：                              ║

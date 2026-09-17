@@ -255,7 +255,7 @@ export default function PlanningArtifactReviewPanel({
   const requirementItems =
     requirementEditing && requirementDraft
       ? buildRequirementEditorItems(requirementDraft, setRequirementDraft)
-      : buildRequirementReviewItems(record.artifacts, status === 'confirmed')
+      : buildRequirementReviewItems(record.artifacts)
   // 需求规格说明书待确认期间提供“预览/编辑”本机切换；确认与跳过后只保留只读预览。
   const requirementModeSwitch =
     visibleArtifactKey === 'requirement-spec' && status === 'pending' && onRequirementEditorOpen ? (

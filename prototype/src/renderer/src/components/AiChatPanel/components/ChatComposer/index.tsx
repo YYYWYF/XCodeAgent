@@ -1,5 +1,5 @@
 import {
-  AppstoreOutlined,
+  ApiOutlined,
   LayoutOutlined,
   PaperClipOutlined,
   PartitionOutlined,
@@ -95,8 +95,8 @@ export default function ChatComposer({
   const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>([])
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false)
   // 两级选择器当前选中的产物类别：左侧列选类别，右侧列列该类别下的产物。
-  const [artifactCategory, setArtifactCategory] = useState<'business-object' | 'page'>('page')
-  // 产物搜索词：真实应用会有几十个页面 / 实体，靠名称或说明即时过滤才能快速定位。
+  const [artifactCategory, setArtifactCategory] = useState<'app-api' | 'page'>('page')
+  // 产物搜索词：真实应用会有几十个应用页面 / 应用API，靠名称或说明即时过滤才能快速定位。
   const [artifactSearch, setArtifactSearch] = useState('')
   const textAreaRef = useRef<HTMLTextAreaElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
@@ -105,11 +105,11 @@ export default function ChatComposer({
     () => (mentionItems || []).filter((item) => item.kind === 'page'),
     [mentionItems]
   )
-  const businessObjectItems = useMemo(
-    () => (mentionItems || []).filter((item) => item.kind === 'business-object'),
+  const appApiItems = useMemo(
+    () => (mentionItems || []).filter((item) => item.kind === 'app-api'),
     [mentionItems]
   )
-  const activeArtifactItems = artifactCategory === 'page' ? pageItems : businessObjectItems
+  const activeArtifactItems = artifactCategory === 'page' ? pageItems : appApiItems
   // 按搜索词过滤当前类别的产物：名称与补充匹配文本（路由/字段数，不直接展示）都不区分大小写。
   const visibleArtifactItems = useMemo(() => {
     const keyword = artifactSearch.trim().toLowerCase()
@@ -136,7 +136,7 @@ export default function ChatComposer({
   }
 
   /** 切换两级选择器左列选中的产物类别；类别变化后旧搜索词不再适用，一并清空。 */
-  const selectArtifactCategory = (kind: 'business-object' | 'page'): void => {
+  const selectArtifactCategory = (kind: 'app-api' | 'page'): void => {
     setArtifactCategory(kind)
     setArtifactSearch('')
   }
@@ -186,7 +186,7 @@ export default function ChatComposer({
 
   /** 两级选择器的左列项：类别名 + 数量，选中态高亮并带右箭头，与资源菜单同一套样式。 */
   const renderArtifactCategoryItem = (
-    kind: 'business-object' | 'page',
+    kind: 'app-api' | 'page',
     title: string,
     icon: ReactElement,
     count: number
@@ -244,12 +244,12 @@ export default function ChatComposer({
       {artifactEnabled ? (
         <div aria-label="产物选择" className={cx('composer-artifact-popover')} role="tree">
           <div className={cx('composer-resource-primary')}>
-            {renderArtifactCategoryItem('page', '页面', <LayoutOutlined />, pageItems.length)}
+            {renderArtifactCategoryItem('page', '应用页面', <LayoutOutlined />, pageItems.length)}
             {renderArtifactCategoryItem(
-              'business-object',
-              '实体',
-              <AppstoreOutlined />,
-              businessObjectItems.length
+              'app-api',
+              '应用API',
+              <ApiOutlined />,
+              appApiItems.length
             )}
           </div>
           <div className={cx('composer-artifact-secondary')}>
@@ -262,7 +262,7 @@ export default function ChatComposer({
                 allowClear
                 aria-label="搜索产物"
                 bordered={false}
-                placeholder={artifactCategory === 'page' ? '搜索页面名称 / 路径' : '搜索实体'}
+                placeholder={artifactCategory === 'page' ? '搜索应用页面名称 / 路径' : '搜索应用API'}
                 prefix={<SearchOutlined />}
                 value={artifactSearch}
                 onChange={(event) => setArtifactSearch(event.target.value)}
@@ -277,8 +277,8 @@ export default function ChatComposer({
                     artifactSearch.trim()
                       ? '未找到匹配的产物'
                       : artifactCategory === 'page'
-                        ? '暂无页面产物'
-                        : '暂无实体产物'
+                        ? '暂无应用页面产物'
+                        : '暂无应用API产物'
                   }
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />

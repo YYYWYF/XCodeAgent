@@ -36,7 +36,7 @@ export function planningSnapshot(
     awaiting_technical_plan_confirmation: [
       'technical_planning',
       'technical_plan_confirmation',
-      '请审阅架构、实体、API 契约与页面绑定。'
+      '请审阅架构、应用API与应用页面绑定。'
     ],
     generating_application_template_files: ['template_generation', '', '正在准备应用模板。'],
     // 开发准入门：模板生成完成后等用户在统一弹框中选择任务类型确认进入开发。

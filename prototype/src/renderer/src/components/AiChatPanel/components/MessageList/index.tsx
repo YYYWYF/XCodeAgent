@@ -15,6 +15,7 @@ import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import ToolCallCard from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
+import { API_BINDING_STEP_MODES } from '../ApiSourceStepCards'
 import WorkflowRunCard, {
   type ClarificationAnswers,
   workflowClarification
@@ -170,7 +171,7 @@ function designPlanningActivityCopy(
     },
     ui_confirmation: {
       title: '正在生成 UI 设计稿',
-      detail: '正在生成各页面的布局、视觉与交互呈现。'
+      detail: '正在生成各应用页面的布局、视觉与交互呈现。'
     },
     technical_planning: {
       title: '正在生成技术规划方案',
@@ -285,11 +286,13 @@ type MessageListProps = {
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers
   ) => Promise<boolean>
+  /** 字段映射面板控制：面板是否就绪、打开面板、以面板当前草稿完成确认。 */
+  fieldMappingControl?: { ready: boolean; open: () => void; confirm: () => void }
   onDiscardArtifact: (docKey: WorkspaceDocKey) => void
   onStartDetailDesign?: DetailConfirmationStart
   /** 开发阶段产物发起引导卡的候选：与输入区「产物」按钮共用同一份 composerMentionItems。 */
   launchItems?: ComposerArtifactTarget[]
-  /** UI 设计确认卡逐页选模板用的实时页面清单（来自规划记录，模板名随剧本重写同步刷新）。 */
+  /** UI 设计确认卡逐页选模板用的实时应用页面清单（来自规划记录，模板名随剧本重写同步刷新）。 */
   uiDesignPages?: UiDesignPage[]
   /** 用户是否已提交过一轮版式选择（规划记录的 templates_selected），透传给 UI 设计确认卡。 */
   uiDesignTemplatesSelected?: boolean
@@ -312,6 +315,7 @@ export default function MessageList({
   onDiscardArtifact,
   onLaunchArtifact,
   onResumePendingWorkflow,
+  fieldMappingControl,
   onSubmitClarification,
   onStartDetailDesign,
   uiDesignPages,
@@ -543,10 +547,12 @@ export default function MessageList({
                 workflowClarification(message.workflow)?.mode === 'background_dispatch' &&
                 requiresClarification &&
                 Boolean(visibleProcessSteps?.length)
-              // 实体绑定确认卡内嵌在「绑定操作的数据实现」节点上；节点轨迹存在时不再重复渲染独立卡。
-              const inlineEntityBinding =
+              // 应用API数据来源步骤卡与映射绑定卡内嵌在对应节点上；节点轨迹存在时不再重复渲染独立卡。
+              const inlineApiBinding =
                 Boolean(message.workflow) &&
-                workflowClarification(message.workflow)?.mode === 'entity_binding' &&
+                API_BINDING_STEP_MODES.includes(
+                  workflowClarification(message.workflow)?.mode || ''
+                ) &&
                 requiresClarification &&
                 Boolean(visibleProcessSteps?.length)
               // 设计/计划阶段对齐原工程对话逻辑：一轮对话一条消息，每条消息至多一张交互卡；
@@ -639,10 +645,10 @@ export default function MessageList({
                         title:
                           message.detailBlocker?.type === 'endpoint'
                             ? '确认接口详细设计'
-                            : '选择页面模板',
+                            : '选择应用页面模板',
                         detail: detailBlockerWorkflowStarted
                           ? '模板已确认，继续执行详细设计 Workflow。'
-                          : '请选择页面模板后开始详细设计。',
+                          : '请选择应用页面模板后开始详细设计。',
                         sequence: 1,
                         nodeName: 'detail_confirmation'
                       }
@@ -701,6 +707,7 @@ export default function MessageList({
                                 interactionsDisabled || loading || messageLoading
                               }
                               onSubmitClarification={onSubmitClarification}
+                              fieldMappingControl={fieldMappingControl}
                               waitingForInput={waitingForDirectModificationInput}
                               waitingPrompt={message.workflow?.summary?.message}
                             />
@@ -728,7 +735,7 @@ export default function MessageList({
                           </div>
                         )}
                         {message.guideAction === 'artifact-launch' && launchItems ? (
-                          // 产物发起引导大卡：平铺页面 / 实体让用户直接点选，
+                          // 产物发起引导大卡：平铺应用页面 / 应用API让用户直接点选，
                           // 引导正文由卡片标题与说明承载，不再重复渲染纯文本。
                           <DevelopmentLaunchGuide
                             disabled={interactionsDisabled || loading || messageLoading}
@@ -755,7 +762,7 @@ export default function MessageList({
                               !inlineTestCaseAuthorization &&
                               !inlineArtifactAcceptance &&
                               !inlineBackgroundDispatch &&
-                              !inlineEntityBinding) && (
+                              !inlineApiBinding) && (
                             <WorkflowRunCard
                               disabled={
                                 interactionsDisabled ||
@@ -767,6 +774,7 @@ export default function MessageList({
                               uiDesignPages={uiDesignPages}
                               uiDesignTemplatesSelected={uiDesignTemplatesSelected}
                               onDiscard={onDiscardArtifact}
+                              fieldMappingControl={fieldMappingControl}
                               onSubmitClarification={onSubmitClarification}
                               workflow={message.workflow}
                             />
@@ -846,7 +854,7 @@ function renderUserContentWithMentions(
   )
 }
 
-/** 判断 Workflow 是否属于指定页面或接口，兼容页面携带依赖接口身份的任务快照。 */
+/** 判断 Workflow 是否属于指定应用页面或接口，兼容应用页面携带依赖接口身份的任务快照。 */
 function workflowMatchesTarget(workflow: WorkflowRunPayload, targetKey: string): boolean {
   if (workflowDetailTargetKey(workflow) === targetKey) return true
   if (!targetKey.startsWith('page:')) return false

@@ -44,7 +44,7 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
     key: 'development',
     label: '开发',
     role: '研发 Agent',
-    responsibility: '实现页面、接口与实体操作并交付代码产物'
+    responsibility: '实现应用页面与应用API并交付代码产物'
   },
   testing: {
     key: 'testing',

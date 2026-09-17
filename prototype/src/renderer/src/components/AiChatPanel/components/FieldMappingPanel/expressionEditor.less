@@ -1,0 +1,153 @@
+// 函数表达式编辑弹框：API 适配数据加工的维护界面。
+// 左侧函数/变量目录 + 右侧 Prism 高亮编辑器（react-simple-code-editor），
+// 主题色全部走 --wb-* 变量，明暗主题自动跟随。
+.@{class-prefix}-fx-editor-layout {
+  display: flex;
+  gap: 12px;
+  min-height: 320px;
+}
+
+.@{class-prefix}-fx-editor-catalog {
+  display: flex;
+  flex: 0 0 236px;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 360px;
+  padding: 8px 10px;
+  border-right: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface-subtle);
+  overflow-y: auto;
+  // 目录可滚动但隐藏滚动条，视觉上保持一块安静的候选区。
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.@{class-prefix}-fx-editor-catalog-title {
+  margin: 6px 0 2px;
+  color: var(--wb-text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+
+  &:first-child {
+    margin-top: 0;
+  }
+}
+
+.@{class-prefix}-fx-editor-catalog-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-text);
+  text-align: left;
+  cursor: pointer;
+
+  code {
+    padding: 1px 6px;
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border: 1px solid var(--wb-accent-border);
+    border-radius: 5px;
+    font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+    font-size: 10.5px;
+    font-weight: 700;
+  }
+
+  small {
+    color: var(--wb-text-tertiary);
+    font-size: 10.5px;
+    line-height: 1.5;
+    text-align: left;
+  }
+
+  &:hover {
+    background: var(--wb-surface-hover);
+    border-color: var(--wb-border);
+  }
+}
+
+.@{class-prefix}-fx-editor-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+// 编辑器表面：等宽字体 + 浅底边框，焦点态由内部 textarea 自带轮廓承担。
+.@{class-prefix}-fx-editor-surface {
+  min-height: 220px;
+  padding: 10px 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface-subtle);
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+
+  &:focus-within {
+    border-color: var(--wb-accent-border);
+  }
+
+  textarea {
+    outline: none !important;
+    caret-color: var(--wb-text);
+  }
+
+  // Prism 语法配色：全部走主题变量，明暗主题自动跟随。
+  .token.function {
+    color: var(--wb-accent);
+    font-weight: 700;
+  }
+
+  .token.variable {
+    color: var(--wb-success);
+  }
+
+  .token.string {
+    color: var(--wb-code-delete-text);
+  }
+
+  .token.number {
+    color: var(--wb-accent);
+  }
+
+  .token.punctuation,
+  .token.operator {
+    color: var(--wb-text-secondary);
+  }
+
+  .token.comment {
+    color: var(--wb-text-tertiary);
+    font-style: italic;
+  }
+}
+
+.@{class-prefix}-fx-editor-textarea {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.@{class-prefix}-fx-editor-meta {
+  min-height: 20px;
+}
+
+.@{class-prefix}-fx-editor-hint {
+  color: var(--wb-text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.@{class-prefix}-fx-editor-error {
+  color: var(--wb-danger);
+  font-size: 11.5px;
+}

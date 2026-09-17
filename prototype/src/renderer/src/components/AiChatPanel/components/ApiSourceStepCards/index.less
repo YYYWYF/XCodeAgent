@@ -1,0 +1,106 @@
+// 应用API数据来源步骤卡：类型选择 / 来源选择 / 来源缺失引导三类节点内嵌交互卡共用样式。
+.@{class-prefix}-api-source-cards {
+  display: grid;
+  gap: 7px;
+  width: 100%;
+
+  // 来源选择是单个表单项：标签 + 下拉级联一行排布，几十张表也只占一行。
+  &.form {
+    padding: 10px 12px;
+    border: 1px solid var(--wb-border);
+    border-radius: 8px;
+    background: var(--wb-surface);
+  }
+
+  // 来源缺失引导态：说明文案 + 动作按钮行，弱化选择卡观感。
+  &.missing {
+    padding: 10px 12px;
+    border: 1px solid var(--wb-border-strong);
+    border-left: 3px solid var(--wb-warning);
+    border-radius: 8px;
+    background: var(--wb-surface);
+  }
+}
+
+.@{class-prefix}-api-source-cards-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.@{class-prefix}-api-source-cards-field-label {
+  flex: 0 0 auto;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-api-source-cards-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.@{class-prefix}-api-source-cards-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  color: var(--wb-text);
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease;
+
+  &:hover:not(:disabled) {
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent-border);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+}
+
+.@{class-prefix}-api-source-cards-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+
+  strong {
+    color: var(--wb-text);
+    font-size: 12.5px;
+  }
+
+  small {
+    overflow: hidden;
+    color: var(--wb-text-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-api-source-cards-missing-text {
+  margin: 0 0 10px;
+  color: var(--wb-text-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.@{class-prefix}-api-source-cards-missing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

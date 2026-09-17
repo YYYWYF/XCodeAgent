@@ -246,8 +246,8 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
   const explicitPageId = normalizePageId(session.pageId)
   const explicitApiContractId = normalizeEndpointField(session.apiContractId)
   const explicitEndpointId = normalizeEndpointField(session.endpointId)
-  // 开发阶段主对话允许承载多个页面/接口；不能从最新 Workflow 反推单一目标，
-  // 否则会话重新读取后会被错误绑定到第一个页面，导致后续预览选中态漂移。
+  // 开发阶段主对话允许承载多个应用页面/接口；不能从最新 Workflow 反推单一目标，
+  // 否则会话重新读取后会被错误绑定到第一个应用页面，导致后续预览选中态漂移。
   const isDevelopmentMainSession =
     normalizedSessionKind === 'development' && session.title === '应用开发'
   const endpointContext = isDevelopmentMainSession
@@ -407,7 +407,7 @@ export function inferEndpointContextFromMessages(value: unknown):
         payload.result?.detailTargetType ||
         reviewSummary?.detailTargetType
     )
-    // 页面工作流可能引用接口，但接口产物关系只能由独立接口工作流建立。
+    // 应用页面工作流可能引用接口，但接口产物关系只能由独立接口工作流建立。
     if (detailTargetType !== 'endpoint') continue
     const apiContractId = normalizeEndpointField(
       payload.state?.selectedApiContractId ||

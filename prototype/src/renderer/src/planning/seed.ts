@@ -31,8 +31,8 @@ export function personalizePlanningSeed(
       source === 'None'
         ? '前端本地静态演示数据；无需数据库连接。'
         : source === 'API'
-          ? '通过外部 API 获取业务数据；字段关系在实体设计阶段确认。'
-          : '使用数据库存储业务数据；连接与字段关系在实体设计阶段确认。'
+          ? '通过外部 API 获取业务数据；字段映射在应用API开发阶段确认。'
+          : '使用数据库存储业务数据；连接与字段映射在应用API开发阶段确认。'
   }
   artifacts.technicalPlan.data_source_type = source
   return artifacts

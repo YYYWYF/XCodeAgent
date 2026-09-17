@@ -82,7 +82,7 @@ export function selectableEndpointSessionId(
   )?.id
 }
 
-/** 判断运行会话是否属于当前页面、接口或无目标自由对话，禁止跨目标复用运行进度。 */
+/** 判断运行会话是否属于当前应用页面、接口或无目标自由对话，禁止跨目标复用运行进度。 */
 export function sessionIdentityMatchesTarget(
   identity: SessionIdentity,
   target: {

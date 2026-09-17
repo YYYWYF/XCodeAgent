@@ -1212,3 +1212,18 @@
     }
   }
 }
+
+// 应用API映射绑定节点：绑定配置在右侧「字段映射」面板完成，节点卡只保留
+// 文本提示与「打开面板 / 完成绑定」两个动作，提示与按钮左对齐、间距统一。
+.@{class-prefix}-api-binding-step-hint {
+  margin: 0;
+  color: var(--wb-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.@{class-prefix}-api-binding-step-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

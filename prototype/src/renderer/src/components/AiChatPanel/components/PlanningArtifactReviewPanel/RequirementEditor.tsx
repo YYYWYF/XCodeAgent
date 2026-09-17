@@ -14,167 +14,117 @@ const { TextArea } = Input
 
 type DraftChange = (draft: RequirementFormDraft) => void
 
-/** 编辑需求中的实体：仅描述用途、需要记录的信息及业务操作，不进行技术建模。 */
-function EntitiesEditor({
+/** 编辑需求中的「API契约」分栏：扁平的接口清单——每个接口即名称、方法、路径与用途。 */
+const API_METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'DELETE'].map((method) => ({
+  label: method,
+  value: method
+}))
+
+function ApisEditor({
   draft,
   onChange
 }: {
   draft: RequirementFormDraft
   onChange: DraftChange
 }): ReactElement {
-  const entities = Array.isArray(draft.spec.entities) ? draft.spec.entities : []
-  /** 页面下拉选项：把使用关系挂到页面 ID 上，与审阅态的页面名显示保持一致。 */
+  const apis = Array.isArray(draft.spec.apis) ? draft.spec.apis : []
+  /** 应用页面下拉选项：把调用关系挂到页面 ID 上，与审阅态的页面名显示保持一致。 */
   const pageOptions = (Array.isArray(draft.spec.pages) ? draft.spec.pages : []).map(
     (page: any, index: number) => ({
       value: String(page.pageId || `page-${index + 1}`),
       label: String(page.name || page.pageId || `页面 ${index + 1}`)
     })
   )
-  /** 更新实体集合，保持其余 RequirementSpec 事实不变。 */
-  const updateEntities = (items: unknown[]): void =>
-    onChange({ ...draft, spec: { ...draft.spec, entities: items } })
-  /** 从多行业务字段说明保留业务含义，给后续技术规划方案继续细化。 */
-  const fieldsFromText = (
-    value: string,
-    previous: Array<Record<string, unknown>>
-  ): Array<Record<string, unknown>> =>
-    value
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line, index) => {
-        const [label, description = '业务字段'] = line.split(/[：:]/, 2)
-        return {
-          ...previous[index],
-          name: previous[index]?.name || `field_${index + 1}`,
-          label: label.trim(),
-          description: description.trim()
-        }
-      })
+  /** 更新接口集合，保持其余 RequirementSpec 事实不变。 */
+  const updateApis = (items: unknown[]): void =>
+    onChange({ ...draft, spec: { ...draft.spec, apis: items } })
+  /** 更新单条接口契约的一个字段。 */
+  const patchApi = (index: number, patch: Record<string, unknown>): void =>
+    updateApis(
+      apis.map((item: any, itemIndex: number) =>
+        itemIndex === index ? { ...item, ...patch } : item
+      )
+    )
   return (
     <div className={cx('requirement-editor')}>
       <div className={cx('requirement-editor-toolbar')}>
         <Text type="secondary">
-          描述这是什么、需要记录什么、用户能对它做什么。数据结构与实现方式在计划阶段确定。
+          API契约即接口清单：每个接口声明名称、方法、路径与用途，应用页面通过它们读写数据。
         </Text>
         <Button
           icon={<PlusOutlined />}
           onClick={() =>
-            updateEntities([
-              ...entities,
+            updateApis([
+              ...apis,
               {
-                id: `entity_${entities.length + 1}`,
-                name: '新实体',
-                description: '',
-                fields: []
+                id: `api_${apis.length + 1}`,
+                name: '',
+                method: 'GET',
+                path: '',
+                summary: '',
+                used_by_pages: []
               }
             ])
           }
           size="small"
           type="text"
         >
-          新增实体
+          新增接口
         </Button>
       </div>
-      {entities.map((entity: any, index: number) => (
-        <section className={cx('requirement-editor-section')} key={entity.id || index}>
+      {apis.map((api: any, index: number) => (
+        <section className={cx('requirement-editor-section')} key={api.id || index}>
           <header>
-            <Text strong>{`实体 ${index + 1}`}</Text>
+            <Text strong>{`接口 ${index + 1}`}</Text>
             <Button
-              aria-label="删除该实体"
+              aria-label="删除该接口"
               className={cx('requirement-editor-remove')}
               icon={<DeleteOutlined />}
-              onClick={() =>
-                updateEntities(entities.filter((_item, itemIndex) => itemIndex !== index))
-              }
+              onClick={() => updateApis(apis.filter((_item, itemIndex) => itemIndex !== index))}
               size="small"
               type="text"
             />
           </header>
           <label className={cx('requirement-editor-field')}>
-            实体名称
+            接口名称
             <Input
-              onChange={(event) =>
-                updateEntities(
-                  entities.map((item: any, itemIndex: number) =>
-                    itemIndex === index ? { ...item, name: event.target.value } : item
-                  )
-                )
-              }
-              value={entity.name || ''}
+              onChange={(event) => patchApi(index, { name: event.target.value })}
+              placeholder="如：查询我的回检"
+              value={api.name || ''}
             />
           </label>
           <label className={cx('requirement-editor-field')}>
-            实体用途
-            <TextArea
-              autoSize={{ minRows: 2, maxRows: 4 }}
-              onChange={(event) =>
-                updateEntities(
-                  entities.map((item: any, itemIndex: number) =>
-                    itemIndex === index ? { ...item, description: event.target.value } : item
-                  )
-                )
+            方法与路径
+            <Input
+              addonBefore={
+                <Select
+                  aria-label="请求方法"
+                  onChange={(value: string) => patchApi(index, { method: value })}
+                  options={API_METHOD_OPTIONS}
+                  style={{ width: 84 }}
+                  value={api.method || 'GET'}
+                />
               }
-              value={entity.description || ''}
+              onChange={(event) => patchApi(index, { path: event.target.value })}
+              placeholder="/api/rechecks/my"
+              value={api.path || ''}
             />
           </label>
           <label className={cx('requirement-editor-field')}>
-            业务字段（每行“名称：业务含义”）
-            <TextArea
-              autoSize={{ minRows: 3 }}
-              onChange={(event) =>
-                updateEntities(
-                  entities.map((item: any, itemIndex: number) =>
-                    itemIndex === index
-                      ? { ...item, fields: fieldsFromText(event.target.value, item.fields || []) }
-                      : item
-                  )
-                )
-              }
-              value={(entity.fields || [])
-                .map((field: any) => `${field.label || field.name}：${field.description || ''}`)
-                .join('\n')}
+            用途说明
+            <Input
+              onChange={(event) => patchApi(index, { summary: event.target.value })}
+              value={api.summary || ''}
             />
           </label>
           <label className={cx('requirement-editor-field')}>
-            需要支持的业务操作（每行“操作名称()：业务目的；预期结果”）
-            <TextArea
-              autoSize={{ minRows: 3 }}
-              placeholder={
-                '查询我的回检()：查看自己提交的回检及处理状态；返回可跟踪的记录\n提交回检()：提交填报内容并进入审核；返回待审核状态\n审核回检()：给出结论，驳回时说明原因；返回审核结果'
-              }
-              value={(entity.business_operations || [])
-                .map((item: any) =>
-                  typeof item === 'string'
-                    ? item
-                    : String(item.name || '') + '：' + String(item.description || '')
-                )
-                .join('\n')}
-              onChange={(event) =>
-                updateEntities(
-                  entities.map((item: any, itemIndex: number) =>
-                    itemIndex === index
-                      ? { ...item, business_operations: event.target.value.split('\n') }
-                      : item
-                  )
-                )
-              }
-            />
-          </label>
-          <label className={cx('requirement-editor-field')}>
-            使用该实体的页面
+            调用页面
             <Select
-              aria-label="使用该实体的页面"
+              aria-label="调用页面"
               mode="multiple"
-              placeholder="选择会使用该实体的页面"
-              value={(entity.used_by_pages || []) as string[]}
-              onChange={(value: string[]) =>
-                updateEntities(
-                  entities.map((item: any, itemIndex: number) =>
-                    itemIndex === index ? { ...item, used_by_pages: value } : item
-                  )
-                )
-              }
+              placeholder="选择会调用该接口的应用页面"
+              value={(api.used_by_pages || []) as string[]}
+              onChange={(value: string[]) => patchApi(index, { used_by_pages: value })}
               options={pageOptions}
             />
           </label>
@@ -199,7 +149,7 @@ function FlowsEditor({
   return (
     <div className={cx('requirement-editor')}>
       <div className={cx('requirement-editor-toolbar')}>
-        <Text type="secondary">按步骤拆分业务流程，步骤顺序即页面与接口设计的推进顺序。</Text>
+        <Text type="secondary">按步骤拆分业务流程，步骤顺序即应用页面与接口设计的推进顺序。</Text>
         <Button
           icon={<PlusOutlined />}
           onClick={() =>
@@ -287,7 +237,7 @@ export function buildRequirementEditorItems(
       children: (
         <div className={cx('requirement-editor')}>
           <Alert
-            description="确认前必须覆盖功能模块、实体的用途与业务操作、可验证的验收结果；这些事实会直接供 UI、技术规划方案和测试用例使用。"
+            description="确认前必须覆盖功能模块、API契约（应用页面调用哪些内部接口）、可验证的验收结果；这些事实会直接供 UI、技术规划方案和测试用例使用。"
             message="需求规格质量要求"
             showIcon
             type="info"
@@ -300,19 +250,19 @@ export function buildRequirementEditorItems(
       )
     },
     {
+      key: 'apis',
+      label: 'API契约',
+      children: <ApisEditor draft={draft} onChange={onChange} />
+    },
+    {
       key: 'pages',
-      label: '页面与操作',
+      label: '应用页面与操作',
       children: <RequirementPagesEditor draft={draft} onChange={onChange} />
     },
     {
       key: 'flows',
       label: '业务流程',
       children: <FlowsEditor draft={draft} onChange={onChange} />
-    },
-    {
-      key: 'entities',
-      label: '实体',
-      children: <EntitiesEditor draft={draft} onChange={onChange} />
     },
     {
       key: 'authorization',

@@ -3,7 +3,6 @@ export {}
 import type {
   ApplicationMenuItem,
   ApplicationSchemaConfig,
-  DevelopmentPlanningEntity,
   DevelopmentPlanningPageTreeNode
 } from './typings'
 
@@ -99,7 +98,6 @@ declare global {
               designed?: boolean
             }>
           }>
-          entities: DevelopmentPlanningEntity[]
         }>
       }
       sessions?: {

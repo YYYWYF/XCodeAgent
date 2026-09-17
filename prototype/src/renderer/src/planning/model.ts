@@ -24,7 +24,7 @@ export type InitializationPlanningArtifacts = {
   uiDesigns: {
     schema_version: 'ui-manifest.v3'
     confirmation_status: 'pending_user_confirmation' | 'confirmed' | 'skipped'
-    /** 用户是否已完成一轮版式选择：首轮生成只准备页面清单，选完模板后才真正产出设计稿。 */
+    /** 用户是否已完成一轮版式选择：首轮生成只准备应用页面清单，选完模板后才真正产出设计稿。 */
     templates_selected?: boolean
     pages: UiDesignPage[]
   }

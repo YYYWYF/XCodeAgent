@@ -48,7 +48,7 @@ type Props = {
   selectedPage?: DevelopmentPlanningPageOption;
 };
 
-/** 未设计目标（页面/接口）的流内挡板卡：目标信息 + 页面模板选择 + 开始详细设计。
+/** 未设计目标（应用页面/接口）的流内挡板卡：目标信息 + 应用页面模板选择 + 开始详细设计。
  * 由对话区承载，不再整列覆盖弹框。 */
 export default function DetailConfirmationPageSelector({
   disabled,
@@ -91,7 +91,7 @@ export default function DetailConfirmationPageSelector({
       : undefined;
   };
 
-  // 仅页面目标支持选择页面模板，让后端 LLM 学习模板源码后再生成。
+  // 仅应用页面目标支持选择应用页面模板，让后端 LLM 学习模板源码后再生成。
   const lockedTemplateVisible = progressTargetType === "page" && templates.length > 0;
 
   const focusedTemplate = templates[focusedTemplateIndex] || templates[0];
@@ -140,7 +140,7 @@ export default function DetailConfirmationPageSelector({
           <div className={cx("detail-page-selector-inline-title")}>
             <span className={cx("detail-page-selector-inline-signal")} aria-hidden="true" />
             <Text className={cx("detail-page-selector-inline-name")} strong>
-              {progressTargetType === "endpoint" ? "接口详细设计" : "选择页面模板"}
+              {progressTargetType === "endpoint" ? "接口详细设计" : "选择应用页面模板"}
             </Text>
           </div>
           {lockedTemplateVisible && (

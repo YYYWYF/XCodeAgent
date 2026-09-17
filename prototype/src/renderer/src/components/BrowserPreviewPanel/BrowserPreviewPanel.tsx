@@ -50,7 +50,7 @@ type PreviewPageOption = {
   value: string
 }
 
-/** 递归提取应用菜单中的页面名称和路由，用于没有 ProjectPlan 页面清单的预览入口。 */
+/** 递归提取应用菜单中的页面名称和路由，用于没有 ProjectPlan 应用页面清单的预览入口。 */
 function menuPreviewPages(items: ApplicationMenuItem[]): PreviewPageOption[] {
   return items.flatMap((item) => [
     ...(item.type === 'page' ? [{ label: item.label, value: item.path }] : []),

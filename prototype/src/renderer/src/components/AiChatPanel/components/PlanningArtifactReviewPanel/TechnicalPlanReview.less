@@ -1,209 +1,23 @@
-// 技术规划审阅的专属样式：架构、API 契约、页面绑定与权限。
-// 审阅区整体节奏（页签行、章节标题、卡片圆角与底色）沿用 PlanningArtifactReviewPanel.less 的既有 token。
+// 技术规划审阅的专属样式：应用API 接口文档与页面绑定行的少量补充排版。
+// 审阅区整体节奏（页签行、章节标题、段落、清单与卡片底色）沿用 PlanningArtifactReviewPanel.less
+// 的既有 token；架构与应用页面两页签直接复用文档的段落与清单排版，不再定义专属卡片底色。
 
-.@{class-prefix}-planning-architecture-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  article {
-    padding: 14px 16px;
-    border: 1px solid var(--wb-border);
-    border-radius: 9px;
-    background: var(--wb-surface);
-  }
-  p.ant-typography {
-    margin: 7px 0 0;
-  }
-}
-
-.@{class-prefix}-planning-data-architecture {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin: 0 0 14px;
-  article {
-    display: grid;
-    gap: 5px;
-    padding: 13px 15px;
-    border: 1px solid var(--wb-accent-border);
-    border-radius: 9px;
-    background: var(--wb-accent-soft);
-    strong {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      color: var(--wb-text);
-      font-size: 12.5px;
-      .anticon {
-        color: var(--wb-accent);
-      }
-    }
-    small {
-      color: var(--wb-accent);
-      font-size: 11px;
-    }
-    span {
-      overflow: hidden;
-      color: var(--wb-text-muted);
-      font-size: 11px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-}
-
-// 「API 契约」页签：资源契约卡片 + 接口表 + Inspector。
-.@{class-prefix}-planning-api-contract-list {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.@{class-prefix}-planning-api-contract {
+// 「应用API」页签：静态接口文档——每个接口一节（标题行 + 用途 + 技术细节 + 数据实现 + 响应字段），
+// 标题行复用 planning-review-item-title；页签内没有选择交互，全部内容随文档直接铺开。
+.@{class-prefix}-planning-api-contract-pages {
   overflow: hidden;
-  border: 1px solid var(--wb-border);
-  border-radius: 9px;
-  background: var(--wb-surface);
-
-  > header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 11px 14px;
-    border-bottom: 1px solid var(--wb-border);
-    background: var(--wb-surface-subtle);
-
-    strong {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      color: var(--wb-text);
-      font-size: 13px;
-      .anticon {
-        color: var(--wb-accent);
-      }
-    }
-    code {
-      color: var(--wb-accent);
-      font-size: 12px;
-    }
-    .ant-tag {
-      margin-left: auto;
-      margin-right: 0;
-    }
-  }
-}
-
-.@{class-prefix}-planning-api-endpoint-table {
-  display: grid;
-  padding: 6px 8px 8px;
-}
-
-.@{class-prefix}-planning-api-endpoint-head,
-.@{class-prefix}-planning-api-endpoint {
-  display: grid;
-  grid-template-columns: 58px minmax(150px, 0.9fr) minmax(0, 1.4fr) minmax(64px, 0.4fr);
-  gap: 10px;
-  align-items: center;
-}
-
-.@{class-prefix}-planning-api-endpoint-head {
-  padding: 5px 8px;
+  margin-left: auto;
   color: var(--wb-text-muted);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.@{class-prefix}-planning-api-endpoint {
-  width: 100%;
-  padding: 8px;
-  border: 0;
-  border-radius: 7px;
-  color: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-  background: transparent;
-
-  &:hover {
-    background: var(--wb-surface-hover);
-  }
-  &.@{class-prefix}-is-selected {
-    background: var(--wb-surface-selected);
-  }
-  > code {
-    overflow: hidden;
-    color: var(--wb-text);
-    font-size: 11.5px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  > span {
-    overflow: hidden;
-    color: var(--wb-text-secondary);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-}
-
-.@{class-prefix}-planning-api-endpoint-pages {
-  text-align: right;
-}
-
-.@{class-prefix}-planning-api-method {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 44px;
-  padding: 1px 6px;
-  border-radius: 5px;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-
-  &.@{class-prefix}-is-get {
-    color: var(--wb-success);
-    background: color-mix(in srgb, var(--wb-success) 12%, transparent);
-  }
-  &.@{class-prefix}-is-post {
-    color: var(--wb-accent);
-    background: var(--wb-accent-soft);
-  }
-  &.@{class-prefix}-is-put {
-    color: var(--wb-warning);
-    background: color-mix(in srgb, var(--wb-warning) 12%, transparent);
-  }
-  &.@{class-prefix}-is-delete {
-    color: var(--wb-danger);
-    background: var(--wb-danger-soft);
-  }
-}
-
-.@{class-prefix}-planning-api-inspector {
-  display: grid;
-  gap: 11px;
-  margin: 0 10px 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--wb-accent-border);
-  border-radius: 8px;
-  background: var(--wb-accent-soft);
-}
-
-.@{class-prefix}-planning-api-inspector-title {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-
-  code {
-    color: var(--wb-text);
-    font-size: 12.5px;
-  }
-}
-
-.@{class-prefix}-planning-api-inspector-grid {
+.@{class-prefix}-planning-api-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px 18px;
-  margin: 0;
+  margin: 10px 0 2px;
 
   > div {
     display: grid;
@@ -224,22 +38,18 @@
   }
 }
 
-.@{class-prefix}-planning-api-outputs {
-  display: grid;
-  gap: 6px;
+.@{class-prefix}-planning-api-output-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 
-  > div {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-
-    .ant-tag {
-      margin-right: 0;
-    }
+  .ant-tag {
+    margin-inline-end: 0;
+    margin-right: 0;
   }
 }
 
-// 「页面」页签：页面 → 实体.操作() → 接口 的绑定行。
+// 「应用页面」页签：页面标题行（名称 + 路径 code），调用的接口直接用文档清单呈现。
 .@{class-prefix}-planning-page-binding-heading {
   display: flex;
   align-items: center;
@@ -247,30 +57,6 @@
 
   code {
     color: var(--wb-text-muted);
-    font-size: 11.5px;
-  }
-}
-
-.@{class-prefix}-planning-page-usages {
-  display: grid;
-  gap: 6px;
-  margin: 10px 0;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--wb-accent-soft);
-}
-
-.@{class-prefix}-planning-page-usage {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-
-  strong {
-    color: var(--wb-accent);
-  }
-  code {
-    color: var(--wb-text);
     font-size: 11.5px;
   }
 }
@@ -336,29 +122,6 @@
       color: var(--wb-text-secondary);
       font-size: 11px;
       background: var(--wb-surface-subtle);
-    }
-  }
-}
-
-@media (max-width: 1080px) {
-  .@{class-prefix}-planning-architecture-grid,
-  .@{class-prefix}-planning-data-architecture {
-    grid-template-columns: 1fr;
-  }
-  // 窄屏只保留方法与路径两列：表头与数据行同步隐藏后两列，避免错位。
-  .@{class-prefix}-planning-api-endpoint-head {
-    grid-template-columns: 52px minmax(0, 1fr);
-    > span:nth-child(n + 3) {
-      display: none;
-    }
-  }
-  .@{class-prefix}-planning-api-endpoint {
-    grid-template-columns: 52px minmax(0, 1fr);
-    > span {
-      display: none;
-    }
-    > code {
-      display: block;
     }
   }
 }

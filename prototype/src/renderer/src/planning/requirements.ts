@@ -24,11 +24,11 @@ export function applyRequirementForm(current: InitializationPlanningRecord, draf
   const spec = structuredClone(draft.spec)
   const appInfo = spec.app_info || {}
   if (!String(appInfo.name || '').trim() || !String(appInfo.target || appInfo.description || '').trim()) throw new Error('请填写应用名称和应用目标。')
-  const pages = validateItems(spec.pages, '页面', 'pageId')
-  if (!pages.length) throw new Error('请至少保留一个页面。')
+  const pages = validateItems(spec.pages, '应用页面', 'pageId')
+  if (!pages.length) throw new Error('请至少保留一个应用页面。')
   const paths = new Set<string>()
   for (const page of pages) {
-    if (!/^\/(?!\/)[^\s?#]*$/.test(page.path || '')) throw new Error(`页面「${page.name}」的路由应以 / 开头，不能包含空格、查询参数或锚点。`)
+    if (!/^\/(?!\/)[^\s?#]*$/.test(page.path || '')) throw new Error(`应用页面「${page.name}」的路由应以 / 开头，不能包含空格、查询参数或锚点。`)
     if (paths.has(page.path)) throw new Error(`页面路由 ${page.path} 重复。`)
     paths.add(page.path)
   }

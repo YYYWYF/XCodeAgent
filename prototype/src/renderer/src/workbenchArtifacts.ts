@@ -4,7 +4,13 @@
  */
 
 import { backendControllerPath, frontendPagePath } from './mock/workspaceFiles'
-import type { BusinessObject } from './components/BusinessObjects/model'
+import type { AppApi } from './components/AppApis/model'
+import {
+  adaptationExpressionKey,
+  conditionSqlFragment,
+  externalAdaptations
+} from './components/AppApis/model'
+import { readDataSources } from './components/DataSources/catalog'
 import {
   TEST_CASE_ESTIMATE_GROUPS,
   type TestCaseExecutionSnapshot,
@@ -95,7 +101,7 @@ function buildTestCaseEstimateSection(source?: Record<string, unknown>): string[
 
 /** 把页面详细设计序列化为富 markdown（覆盖目标/布局/交互/接口/验收等）。 */
 export function buildPageDesignDoc(design: PageDesign): string {
-  const lines: string[] = [`# ${design.name || '页面'} 页面详细设计`, '']
+  const lines: string[] = [`# ${design.name || ''} 应用页面详细设计`, '']
   if (design.path) lines.push(`- **路由**：\`${design.path}\``, '')
 
   if (design.page_goal) {
@@ -188,7 +194,7 @@ export function buildPageSource(
     ? apis
         .map((api) => `// ${api.method || 'GET'} ${api.path || ''} — ${api.purpose || ''}`)
         .join('\n  ')
-    : '// 数据通过 实体.操作() 提供，数据实现由实体开发工作流确认'
+    : '// 数据通过 应用API.方法() 提供，数据绑定由应用API开发工作流确认'
 
   const content = [
     `import { Button, Card, Space, Table, Tag, message } from 'antd'`,
@@ -210,7 +216,7 @@ export function buildPageSource(
     ``,
     `  async function loadList() {`,
     `    setLoading(true)`,
-    `    // 调用实体操作并绑定响应`,
+    `    // 调用应用API并绑定响应`,
     `    setRows([])`,
     `    setLoading(false)`,
     `    message.success('${name}数据已加载')`,
@@ -332,7 +338,7 @@ export function buildEndpointSource(design: Record<string, any>): {
 
 export function buildPageDocFallback(pageLabel: string, path: string, purpose: string): string {
   return [
-    `# ${pageLabel} 页面设计`,
+    `# ${pageLabel} 应用页面设计`,
     '',
     `- **路由**：\`${path}\``,
     `- **用途**：${purpose || '暂无说明'}`,
@@ -360,8 +366,8 @@ export function buildAppRequirementDoc(
   }>
 ): string {
   const lines: string[] = [`# ${applicationName || '应用'} 需求文档`, '']
-  lines.push('## 页面清单')
-  if (pages.length === 0) lines.push('_暂无页面_')
+  lines.push('## 应用页面清单')
+  if (pages.length === 0) lines.push('_暂无应用页面_')
   pages.forEach((page) =>
     lines.push(`- **${page.label}** \`${page.path || ''}\` — ${page.purpose || ''}`)
   )
@@ -398,7 +404,7 @@ export function buildRequirementSpecDoc(spec: Record<string, any>, appName?: str
       lines.push(`  权限：${role.permissions.join('、')}`)
     }
   }
-  lines.push('', '## 页面清单')
+  lines.push('', '## 应用页面清单')
   for (const page of (spec.pages || []) as Array<Record<string, any>>) {
     lines.push(`- **${page.name}** \`${page.path}\`：${page.description}`)
   }
@@ -417,7 +423,7 @@ export function buildRequirementSpecDoc(spec: Record<string, any>, appName?: str
   return lines.join('\n')
 }
 
-/** 从项目计划数据渲染 Markdown（页面树 + 技术栈 + 接口契约 + 执行顺序）。 */
+/** 从项目计划数据渲染 Markdown（应用页面树 + 技术栈 + 接口契约 + 执行顺序）。 */
 export function buildProjectPlanDoc(plan: Record<string, any>, appName?: string): string {
   const tech = (plan.tech_stack || {}) as Record<string, any>
   const lines = [
@@ -431,8 +437,8 @@ export function buildProjectPlanDoc(plan: Record<string, any>, appName?: string)
     '## 规划摘要',
     String(plan.summary || ''),
     '',
-    '## 页面',
-    '| 菜单 | 页面 | 路由 |',
+    '## 应用页面',
+    '| 菜单 | 应用页面 | 路由 |',
     '| --- | --- | --- |'
   ]
   const walk = (nodes: Array<Record<string, any>>): void => {
@@ -466,7 +472,7 @@ export function buildProductPlanDoc(plan: Record<string, any>, appName?: string)
     '',
     String(app.summary || ''),
     '',
-    '## 页面与产品行为'
+    '## 应用页面与产品行为'
   ]
   for (const page of (plan.pages || []) as Array<Record<string, any>>) {
     lines.push('', `### ${page.name || page.pageId} · \`${page.path || ''}\``)
@@ -501,7 +507,7 @@ export function buildProductPlanDoc(plan: Record<string, any>, appName?: string)
   return lines.join('\n')
 }
 
-/** 从 TechnicalPlan 当前契约渲染架构、实体、API 与页面技术绑定 Markdown。 */
+/** 从 TechnicalPlan 当前契约渲染架构、应用API与应用页面技术绑定 Markdown。 */
 export function buildTechnicalPlanDoc(plan: Record<string, any>, appName?: string): string {
   const architecture = (plan.architecture || {}) as Record<string, any>
   const lines = [
@@ -512,32 +518,20 @@ export function buildTechnicalPlanDoc(plan: Record<string, any>, appName?: strin
     `- 后端：${architecture.backend || ''}`,
     `- 数据：${architecture.data || ''}`,
     '',
-    '## 实体'
+    '## 应用API'
   ]
-  for (const entity of (plan.entities || []) as Array<Record<string, any>>) {
-    lines.push(`- **${entity.name || entity.id}**：${entity.description || ''}`)
-    for (const field of (entity.fields || []) as Array<Record<string, any>>) {
-      lines.push(
-        `  - ${field.label || field.name} · ${field.type || 'text'}${field.required ? ' · 必填' : ''}`
-      )
-    }
+  for (const api of (plan.apis || []) as Array<Record<string, any>>) {
+    lines.push(
+      `- \`${api.method || ''}${api.method ? ' ' : ''}${api.path || ''}\` **${api.name || api.id}**${api.data_intent ? `（数据意向：${api.data_intent}）` : ''}：${api.summary || ''}`
+    )
   }
-  lines.push('', '## API 契约')
-  for (const contract of (plan.api_contracts || []) as Array<Record<string, any>>) {
-    lines.push(`- **${contract.name || contract.id}** \`${contract.base_path || ''}\``)
-    for (const endpoint of (contract.endpoints || []) as Array<Record<string, any>>) {
-      lines.push(
-        `  - \`${endpoint.method || ''}\` \`${endpoint.path || ''}\`：${endpoint.summary || ''}`
-      )
-    }
-  }
-  lines.push('', '## 页面技术绑定')
+  lines.push('', '## 应用页面技术绑定')
   for (const page of (plan.pages || []) as Array<Record<string, any>>) {
     const references = (page.references || {}) as Record<string, any>
     const endpoints = Array.isArray(references.endpoint_dependencies)
       ? references.endpoint_dependencies.join('、') || '无'
       : '无'
-    lines.push(`- **${page.pageId || '页面'}**：Endpoint 依赖 ${endpoints}`)
+    lines.push(`- **${page.pageId || '应用页面'}**：Endpoint 依赖 ${endpoints}`)
   }
   return lines.join('\n')
 }
@@ -709,7 +703,7 @@ export function buildReviewReport(testExecution?: TestCaseExecutionSnapshot): st
     : '全部业务测试用例已执行'
   return `# 代码审查报告
 
-> 审查依据：${testBasis} · 审查范围：全部页面与接口模块 · 结论：**通过，可生成版本**
+> 审查依据：${testBasis} · 审查范围：全部应用页面与接口模块 · 结论：**通过，可生成版本**
 
 ## 总览
 
@@ -744,114 +738,172 @@ export function buildReviewReport(testExecution?: TestCaseExecutionSnapshot): st
 `
 }
 
-// 平台内置操作到数据适配方法名的固定映射：适配层代码按这套命名生成。
-const BUILTIN_ADAPTER_METHODS: Record<string, string> = {
-  分页查询: 'pageQuery',
-  查询详情: 'queryById',
-  查询回检详情: 'queryById',
-  新增: 'insert',
-  更新: 'update',
-  删除: 'delete'
+/** 接口契约方法名到适配方法的驼峰命名：取接口 id（如 query_my_rechecks → queryMyRechecks）。 */
+function adapterMethodName(id: string): string {
+  const pascal = id
+    .split(/[-_]/)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join('')
+  return pascal.charAt(0).toLowerCase() + pascal.slice(1)
 }
 
-/** 从字段映射标签里还原来源列名：标签形如「武汉回检数据库 · project_name（关联项目）」。 */
+/** 从字段映射标签里还原来源列名：兼容「RECHECK_DB · col（说明）」与草稿简写「col（说明）」。 */
 function columnNameFromMapping(sourceLabel: string): string {
-  const matched = sourceLabel.match(/· (.+?)（/)
-  return matched ? matched[1] : sourceLabel
+  const prefixed = sourceLabel.match(/· (.+?)（/)
+  if (prefixed) return prefixed[1]
+  const short = sourceLabel.match(/^(.+?)（/)
+  return short ? short[1] : sourceLabel
 }
 
 /**
- * 从实体确认后的绑定生成数据适配层源码：数据库绑定产出 SQL 适配，外部服务绑定产出
- * 契约调用与出参翻译。对话区「确认绑定」后由开发工作流把这份文件作为实体交付物生成。
+ * 从应用API（单条接口）确认后的绑定生成数据适配层源码：数据库绑定产出 SQL 适配，
+ * 外部服务绑定产出契约调用与出参翻译。对话区「确认绑定」后由开发工作流把这份文件作为交付物生成。
  */
-export function buildEntityAdapterSource(object: BusinessObject): {
+export function buildAppApiAdapterSource(object: AppApi): {
   filePath: string
   content: string
 } {
-  const className = `${pascalCase(object.id)}EntityAdapter`
-  const bindingSummary = Array.from(
-    new Set(
-      object.operations.flatMap((operation) =>
-        operation.implementation.bindings.map(
-          (binding) =>
-            binding.targetName
-              ? `${binding.sourceName} · ${binding.targetName}（${binding.targetComment}）`
-              : binding.sourceName
-        )
-      )
+  const className = `${pascalCase(object.id)}ApiAdapter`
+  const implementation = object.implementation
+  const binding = implementation.bindings[0]
+  const bindingSummary = binding
+    ? binding.targetName
+      ? `${binding.sourceName} · ${binding.targetName}（${binding.targetComment}）`
+      : binding.sourceName
+    : '业务规则推导'
+  const mappingComments = object.response.map((output) => {
+    const mapping = implementation.mappings.find(
+      (item) => item.field === output.name && item.sourceLabel
     )
-  ).join(' + ')
-  const mappingComments = object.fields.map((field) => {
-    const mapping = object.operations
-      .flatMap((operation) => operation.implementation.mappings)
-      .find((item) => item.field === field.name && item.sourceLabel)
-    return `    //   ${field.name} → ${mapping ? mapping.sourceLabel : '业务规则推导'}`
+    const contractLabel = output.code ? `${output.code}（${output.name}）` : output.name
+    return `    //   ${contractLabel} → ${mapping ? mapping.sourceLabel : '业务规则推导'}`
   })
-
-  let customIndex = 0
-  const methodBlocks = object.operations.map((operation) => {
-    const implementation = operation.implementation
-    const binding = implementation.bindings[0]
-    const builtinMethod = BUILTIN_ADAPTER_METHODS[operation.name]
-    const methodName =
-      operation.operationType === 'builtin' && builtinMethod
-        ? builtinMethod
-        : `customOp${(customIndex += 1)}`
-    const targetLabel = binding
-      ? binding.targetName
-        ? `${binding.sourceName} · ${binding.targetName}`
-        : binding.sourceName
-      : '业务规则推导'
-    const head = [
-      '    /**',
-      `     * ${operation.name}（${operation.operationType === 'builtin' ? '平台内置' : '需求自定义'}） → ${targetLabel}`,
-      '     */'
-    ]
-    // 本地实现：不产生数据访问代码，只落到业务规则服务。
-    if (!binding || binding.sourceId === 'local') {
-      return [
-        ...head,
-        `    public List<Map<String, Object>> ${methodName}(Map<String, Object> input) {`,
-        `        // 本地业务规则：${implementation.rule || '校验输入 → 执行业务规则 → 返回结果'}`,
-        '        return businessRuleService.execute(input);',
-        '    }'
-      ]
-    }
-    // 外部服务绑定：按固定契约调用并翻译出参，映射关系来自确认的绑定。
-    if (implementation.kind === '外部服务') {
-      const translations = implementation.mappings
-        .filter((mapping) => mapping.sourceLabel)
-        .map((mapping) => `        //   response.${columnNameFromMapping(mapping.sourceLabel)} → ${mapping.field}`)
-      return [
-        ...head,
-        `    public Map<String, Object> ${methodName}(Map<String, Object> input) {`,
-        '        // 调用外部服务并按确认的映射翻译出参',
-        ...translations,
-        `        Map<String, Object> response = externalClient.invoke("${binding.sourceName}", "${binding.targetName}", input);`,
-        '        return responseTranslator.translate(response);',
-        '    }'
-      ]
-    }
-    // 数据库绑定：按映射出的来源列拼装查询，表名来自确认的库表绑定。
-    const columns = implementation.mappings
-      .filter((mapping) => mapping.sourceLabel)
-      .map((mapping) => columnNameFromMapping(mapping.sourceLabel))
-    const columnList = Array.from(new Set(columns)).join(', ') || '*'
-    const table = binding.targetName || 'table'
-    const kindNote = operation.operationType === 'builtin' ? '平台按表结构模板生成' : '按确认的绑定生成'
-    return [
-      ...head,
-      `    public List<Map<String, Object>> ${methodName}(Map<String, Object> query) {`,
-      `        // ${kindNote}：字段映射沿用绑定确认结果`,
-      `        String sql = "SELECT ${columnList} FROM ${table}";`,
-      '        return jdbcTemplate.queryForList(sql, query);',
+  const methodName = adapterMethodName(object.id)
+  const targetLabel = binding
+    ? binding.targetName
+      ? `${binding.sourceName} · ${binding.targetName}`
+      : binding.sourceName
+    : '业务规则推导'
+  const head = [
+    '    /**',
+    `     * ${object.name}（${object.method} ${object.path} 契约实现） → ${targetLabel}`,
+    '     */'
+  ]
+  // 本地实现：不产生数据访问代码，只落到业务规则服务。
+  let methodBlock: string[]
+  if (!binding || binding.sourceId === 'local') {
+    methodBlock = [
+      `    public Map<String, Object> ${methodName}(Map<String, Object> input) {`,
+      `        // 本地业务规则：${implementation.rule || '校验输入 → 执行业务规则 → 返回结果'}`,
+      '        return businessRuleService.execute(input);',
       '    }'
     ]
-  })
+  } else if (implementation.kind === '外部服务') {
+    // 外部服务绑定：入参按确认的请求部位装配（路径拼 URL、查询/请求体进参数表），
+    // 出参取响应 data 层按确认映射翻译。全部来自确定性配置，没有可审核的生成过程。
+    const rows = externalAdaptations(object, readDataSources())
+    const locationLabel = (location: string): string =>
+      location === 'path' ? '路径' : location === 'query' ? '查询' : '请求体'
+    const requestLines = rows
+      .filter((row) => row.direction === '入参适配' && row.matched)
+      .flatMap((row) => {
+        const expression = object.implementation.expressions[adaptationExpressionKey(row)] || ''
+        const tail = expression ? `〔${expression}〕` : '〔透传〕'
+        return [
+          `        //   [${locationLabel(row.location)}] ${row.external} ← ${row.param}${tail}`,
+          `        request.put("${row.external}", input.get("${row.param}"));`
+        ]
+      })
+    const outComments = rows
+      .filter((row) => row.direction === '出参适配' && row.matched)
+      .map((row) => {
+        const expression = object.implementation.expressions[adaptationExpressionKey(row)] || ''
+        const tail = expression ? `〔${expression}〕` : ''
+        return `        //   ${row.param} ← ${row.external}${tail}`
+      })
+    methodBlock = [
+      `    public Map<String, Object> ${methodName}(Map<String, Object> input) {`,
+      '        // 请求装配：入参按确认的部位对齐外部接口后发起调用',
+      '        Map<String, Object> request = new HashMap<>();',
+      ...requestLines,
+      `        Map<String, Object> response = externalClient.invoke("${binding.sourceName}", "${binding.targetName}", request);`,
+      '        // 出参映射：响应 data 层字段翻译为契约出参',
+      ...outComments,
+      '        return responseTranslator.translate(response);',
+      '    }'
+    ]
+  } else {
+    // 数据库绑定：按套用的增删查改模板生成 SQL 骨架，槽位全部来自确认的绑定。
+    const table = binding.targetName || 'table'
+    const op = implementation.tableOp || '查询'
+    // 未落列的槽位（人工尚未选择）不进 SQL。
+    const conditions = implementation.conditions.filter((condition) => condition.column)
+    const setters = implementation.setters.filter((setter) => setter.column)
+    const whereClause = conditions.length
+      ? ` WHERE ${conditions
+          .map((condition) =>
+            conditionSqlFragment(
+              condition.column,
+              condition.operator,
+              condition.fixed ? ':currentUser' : `:${condition.column}`
+            )
+          )
+          .join(' AND ')}`
+      : ''
+    const orderClause = implementation.orderBy ? ` ORDER BY ${implementation.orderBy}` : ''
+    if (op === '新增') {
+      const setterColumns = setters.map((setter) => setter.column)
+      methodBlock = [
+        `    public Map<String, Object> ${methodName}(Map<String, Object> input) {`,
+        `        // 新增模板：契约入参按确认的槽位写入 ${table}`,
+        `        String sql = "INSERT INTO ${table} (${setterColumns.join(', ')}) VALUES (${setterColumns
+          .map((column) => `:${column}`)
+          .join(', ')})";`,
+        '        jdbcTemplate.update(sql, input);',
+        '        return input;',
+        '    }'
+      ]
+    } else if (op === '修改') {
+      const setClause = setters
+        .map((setter) => `${setter.column} = :${setter.column}`)
+        .join(', ')
+      methodBlock = [
+        `    public Map<String, Object> ${methodName}(Map<String, Object> input) {`,
+        '        // 修改模板：写入字段与定位条件均来自确认的模板槽位',
+        `        String sql = "UPDATE ${table} SET ${setClause || '…'}${whereClause || ' WHERE id = :id'}";`,
+        '        jdbcTemplate.update(sql, input);',
+        '        return input;',
+        '    }'
+      ]
+    } else if (op === '删除') {
+      methodBlock = [
+        `    public Map<String, Object> ${methodName}(Map<String, Object> input) {`,
+        '        // 删除模板：定位条件来自确认的模板槽位',
+        `        String sql = "DELETE FROM ${table}${whereClause || ' WHERE id = :id'}";`,
+        '        jdbcTemplate.update(sql, input);',
+        '        return input;',
+        '    }'
+      ]
+    } else {
+      // 查询模板：返回字段清单 + 条件/排序来自确认的槽位。
+      const columns = implementation.mappings
+        .filter((mapping) => mapping.sourceLabel)
+        .map((mapping) => columnNameFromMapping(mapping.sourceLabel))
+      const columnList = Array.from(new Set(columns)).join(', ') || '*'
+      methodBlock = [
+        `    public List<Map<String, Object>> ${methodName}(Map<String, Object> query) {`,
+        '        // 查询模板：返回字段、条件与排序沿用确认的绑定槽位',
+        `        String sql = "SELECT ${columnList} FROM ${table}${whereClause}${orderClause}";`,
+        '        return jdbcTemplate.queryForList(sql, query);',
+        '    }'
+      ]
+    }
+  }
 
   const content = [
-    'package com.aistudio.recheck.entity.adapter;',
+    'package com.aistudio.recheck.api.adapter;',
     '',
+    'import java.util.HashMap;',
     'import java.util.List;',
     'import java.util.Map;',
     '',
@@ -859,19 +911,22 @@ export function buildEntityAdapterSource(object: BusinessObject): {
     'import org.springframework.stereotype.Repository;',
     '',
     '/**',
-    ` * 由 AIStudio 生成 · 实体「${object.name}」数据适配层`,
+    ` * 由 AIStudio 生成 · 应用API「${object.name}」数据适配层`,
+    ` * 契约：${object.method} ${object.path}`,
     ` * 数据绑定：${bindingSummary}`,
-    ' * 字段映射在绑定确认时自动推导；页面统一通过 实体.操作() 消费这份数据能力。',
+    ' * 字段映射在绑定确认时自动推导；页面统一通过 应用API.方法() 消费这份数据能力。',
     ' */',
     '@Repository',
     `public class ${className} {`,
     '',
-    '    // 实体字段 → 来源字段映射',
+    '    // 契约返回字段 → 来源字段映射',
     ...mappingComments,
     '',
-    ...methodBlocks.flat(),
+    ...head,
+    ...methodBlock,
+    '',
     '}',
     ''
   ].join('\n')
-  return { filePath: `backend/entity-adapters/${object.id}-entity-adapter.java`, content }
+  return { filePath: `backend/api-adapters/${object.id}-api-adapter.java`, content }
 }

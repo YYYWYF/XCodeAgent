@@ -34,7 +34,9 @@ import {
   selectedSkillNames
 } from '../skillSelection'
 import { stoppedAnswer, workflowCodeChanges, workflowPreviewTarget } from '../utils'
+import { API_BINDING_STEP_MODES } from '../components/ApiSourceStepCards'
 import type { WorkflowPreviewTarget } from '../utils'
+import type { ChatSessionSavedFile } from '../../../service/chatSessions'
 import type { PersistSessionInput } from './useChatSessions'
 import {
   sessionIdentityMatchesTarget,
@@ -103,6 +105,11 @@ type UseWorkflowConversationParams = {
   ) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   persistSession: (input: PersistSessionInput) => Promise<void>
+  /** 把确定性生成物（应用API数据适配）作为已接受文件沉淀进会话快照。 */
+  recordAcceptedFile: (
+    sessionId: string,
+    file: Omit<ChatSessionSavedFile, 'savedAt'>
+  ) => Promise<void>
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onPreviewReady: (target: WorkflowPreviewTarget) => void
   publishAiMessage: (mode: EditorMode, content: string) => void
@@ -147,7 +154,7 @@ type UseWorkflowConversationResult = {
     endpointLabel: string
     hasDetailPlan?: boolean
   }) => Promise<boolean>
-  handleStartBusinessObjectWorkflow: (target: {
+  handleStartAppApiWorkflow: (target: {
     objectId: string
     objectLabel: string
   }) => Promise<boolean>
@@ -180,7 +187,7 @@ function workflowEndpointExecutionScope(
   const detailTargetType = String(
     workflow.state?.detailTargetType || workflow.result?.detailTargetType || ''
   ).trim()
-  // 页面任务可以携带依赖接口身份，但仍由页面工作流一次交付，不能误分流到独立接口工作流。
+  // 应用页面任务可以携带依赖接口身份，但仍由应用页面工作流一次交付，不能误分流到独立接口工作流。
   if (detailTargetType && detailTargetType !== 'endpoint') return undefined
   const stateApiContractId =
     workflow.state?.selected_api_contract_id || workflow.state?.selectedApiContractId
@@ -297,6 +304,7 @@ export function useWorkflowConversation({
   ensureAcceptanceSession,
   getSessionMessages,
   persistSession,
+  recordAcceptedFile,
   onApplicationLifecycleChange,
   onPreviewReady,
   publishAiMessage,
@@ -573,7 +581,7 @@ export function useWorkflowConversation({
       selectedApiContractId?: string
       selectedEndpointId?: string
       endpointLabel?: string
-      detailTargetType?: 'page' | 'endpoint' | 'business-object' | 'application'
+      detailTargetType?: 'page' | 'endpoint' | 'app-api' | 'application'
       sessionIdentity?: SessionIdentity
       pageTemplate?: {
         id?: string
@@ -805,6 +813,12 @@ export function useWorkflowConversation({
             streamedToolCalls,
             streamedProcessSteps
           )
+        },
+        // 确定性生成物（应用API数据适配）跳过 Diff 门禁：剧本直接交付，等价于用户接受。
+        onAcceptFiles: (files) => {
+          files.forEach((file) => {
+            void recordAcceptedFile(identity.sessionId, file)
+          })
         }
       })
       const stopped = Boolean(stopRequestedRef.current[identity.key])
@@ -967,9 +981,14 @@ export function useWorkflowConversation({
       clarificationMode === 'background_dispatch' &&
       (answers.background_dispatch !== undefined ||
         answers.background_dispatch_endpoint !== undefined)
-    // 实体绑定确认的续跑复用原工作流消息：确认卡原地落定，适配生成继续演进在同一条轨迹上。
-    const entityBindingContinuation =
-      clarificationMode === 'entity_binding' && answers.entity_binding !== undefined
+    // 应用API数据绑定链路的续跑复用原工作流消息：类型/来源/缺失引导/映射绑定四张步骤卡
+    // 原地落定，后续节点继续演进在同一条轨迹上。
+    const apiBindingContinuation =
+      API_BINDING_STEP_MODES.includes(String(clarificationMode || '')) &&
+      (answers.api_source_type !== undefined ||
+        answers.api_source_select !== undefined ||
+        answers.api_source_check !== undefined ||
+        answers.api_binding !== undefined)
     const requirementConfirmation = [
       'requirement_spec_confirmation',
       'requirement_document_confirmation',
@@ -1031,7 +1050,7 @@ export function useWorkflowConversation({
         testingResume ||
         acceptanceContinuation ||
         backgroundDispatchContinuation ||
-        entityBindingContinuation ||
+        apiBindingContinuation ||
         Boolean(options?.quietRun),
       // 需求分析/项目计划阶段确认必须继续走对应的工作台规划剧本，否则会被默认路由到
       // replayWorkbench，导致提交确认后不推进规划节点。
@@ -1134,23 +1153,23 @@ export function useWorkflowConversation({
     )
   }
 
-  /** 以用户选定的实体作为开发工作流起点：绑定确认、适配生成都演进在同一条工作流轨迹上。 */
-  const handleStartBusinessObjectWorkflow = async (target: {
+  /** 以用户选定的应用API作为开发工作流起点：绑定确认、适配生成都演进在同一条工作流轨迹上。 */
+  const handleStartAppApiWorkflow = async (target: {
     objectId: string
     objectLabel: string
   }): Promise<boolean> => {
     if (!target.objectId || loading || workspaceBusy) return false
-    // 开发阶段复用当前打开的开发对话；实体身份仅通过本轮 Workflow 参数传递。
+    // 开发阶段复用当前打开的开发对话；应用API身份仅通过本轮 Workflow 参数传递。
     const identity =
       activeSession?.sessionKind === 'development'
         ? activeSession
         : await ensureDevelopmentSession()
-    return sendWorkflowMessage(`开始开发实体：${target.objectLabel}`, {
+    return sendWorkflowMessage(`开始开发应用API：${target.objectLabel}`, {
       selectedObjectId: target.objectId,
-      detailTargetType: 'business-object',
+      detailTargetType: 'app-api',
       sessionIdentity: identity,
-      titleFrom: `开发实体${target.objectLabel}`,
-      // 实体没有模板选择卡，直接追加新的 assistant 消息承载整条工作流轨迹。
+      titleFrom: `开发应用API「${target.objectLabel}」`,
+      // 应用API没有模板选择卡，直接追加新的 assistant 消息承载整条工作流轨迹。
       suppressUserMessage: true
     })
   }
@@ -1232,7 +1251,7 @@ export function useWorkflowConversation({
     error,
     handleSend,
     handleStartEndpointDetailConfirmation,
-    handleStartBusinessObjectWorkflow,
+    handleStartAppApiWorkflow,
     handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,

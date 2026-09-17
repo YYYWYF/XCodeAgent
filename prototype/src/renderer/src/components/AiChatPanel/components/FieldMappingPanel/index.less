@@ -1,0 +1,385 @@
+// 字段映射面板：应用API映射绑定的编辑工作台。
+// 布局对齐「开发产物」Tab 的双栏结构：左侧 220px 应用API目录（状态点 + 绑定摘要），
+// 右侧内容区为当前绑定对象的映射编辑——契约头 + api-terminal 式分节卡片，
+// 行网格全段共用（参数列 | 关系符 | 字段列 | fx），纵向严格对齐。
+.@{class-prefix}-field-mapping-panel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--wb-canvas);
+}
+
+.@{class-prefix}-field-mapping-directory {
+  display: flex;
+  flex: 0 0 180px;
+  flex-direction: column;
+  width: 180px;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--wb-border);
+  background: var(--wb-surface-subtle);
+}
+
+.@{class-prefix}-field-mapping-directory-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px 12px 20px;
+  overflow-y: auto;
+}
+
+.@{class-prefix}-field-mapping-directory-title {
+  padding: 0 8px 7px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+}
+
+.@{class-prefix}-field-mapping-directory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.@{class-prefix}-field-mapping-api-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 7px;
+  padding: 7px 8px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-text);
+  cursor: pointer;
+  font-size: 12.5px;
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease;
+
+  > .anticon {
+    flex: 0 0 auto;
+    color: var(--wb-text-tertiary);
+  }
+
+  &.@{class-prefix}-selected > .anticon,
+  &.@{class-prefix}-active > .anticon {
+    color: var(--wb-accent);
+  }
+
+  .@{class-prefix}-field-mapping-api-name {
+    overflow: hidden;
+    min-width: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &:hover {
+    background: var(--wb-surface-hover);
+  }
+
+  &.@{class-prefix}-selected {
+    border-color: var(--wb-accent-soft);
+    background: var(--wb-accent-soft);
+  }
+}
+
+.@{class-prefix}-field-mapping-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.@{class-prefix}-field-mapping-empty-state {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px;
+  color: var(--wb-text-tertiary);
+  font-size: 12px;
+  text-align: center;
+
+  strong {
+    color: var(--wb-text-secondary);
+    font-size: 12.5px;
+  }
+}
+
+.@{class-prefix}-field-mapping-editor {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  // 单列轨道钳制为可用宽度：请求预览等长内容不得把面板撑出横向滚动。
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 14px;
+  padding: 18px 16px;
+  overflow: hidden auto;
+}
+
+// 契约头：方法徽标 + 等宽路径 + 数据来源摘要，下沿分隔线，对齐开发产物内容头。
+.@{class-prefix}-field-mapping-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--wb-border);
+
+  strong {
+    color: var(--wb-text);
+    font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+    font-size: 14px;
+  }
+}
+
+.@{class-prefix}-field-mapping-method {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  color: var(--wb-success);
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.@{class-prefix}-field-mapping-head-source {
+  flex-basis: 100%;
+  overflow: hidden;
+  color: var(--wb-text-tertiary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// 标题行右侧的动作区：保存 / 保存并确认，与接口调试视图的发送按钮同位。
+.@{class-prefix}-field-mapping-head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+// 分节卡片：与接口调试视图同一套容器（边框 + 圆角 + 浅底）。
+.@{class-prefix}-field-mapping-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface);
+}
+
+.@{class-prefix}-field-mapping-card-title {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+// 入参适配的部位分组：标题行 + 组内行，组间用细分隔留白。
+.@{class-prefix}-field-mapping-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.@{class-prefix}-field-mapping-group + .@{class-prefix}-field-mapping-group {
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-field-mapping-group-title {
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+}
+
+.@{class-prefix}-field-mapping-row {
+  display: grid;
+  // 契约参数（定宽，纵向对齐）| 关系符 | 来源字段 | fx（仅外部行有）。
+  grid-template-columns: minmax(150px, 220px) 26px minmax(130px, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 7px;
+
+  // 未映射行用浅底提示，不加强边框。
+  &.@{class-prefix}-row-pending {
+    background: var(--wb-accent-soft);
+  }
+
+  // 条件行：参数 | 操作符 | 落列。
+  &.@{class-prefix}-row-condition {
+    grid-template-columns: minmax(150px, 220px) 92px minmax(130px, 1fr);
+  }
+
+  // 外部适配行：参数 | 箭头 | 外部参数 | fx 取值。
+  &.@{class-prefix}-row-external {
+    grid-template-columns: minmax(150px, 220px) 26px minmax(130px, 1fr) 92px;
+  }
+}
+
+.@{class-prefix}-field-mapping-arrow {
+  color: var(--wb-text-tertiary);
+  justify-self: center;
+}
+
+.@{class-prefix}-field-mapping-param {
+  display: flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  justify-self: start;
+
+  code {
+    max-width: 100%;
+    overflow: hidden;
+    padding: 2px 7px;
+    color: var(--wb-text);
+    background: var(--wb-surface-subtle);
+    border: 1px solid var(--wb-border);
+    border-radius: 5px;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  em {
+    flex: 0 0 auto;
+    padding: 1px 5px;
+    color: var(--wb-text-tertiary);
+    border: 1px solid var(--wb-border);
+    border-radius: 5px;
+    font-size: 10px;
+    font-style: normal;
+  }
+}
+
+.@{class-prefix}-field-mapping-operator,
+.@{class-prefix}-field-mapping-field {
+  width: 100%;
+  min-width: 0;
+}
+
+// fx 取值配置钮：透传灰显；配置过表达式后高亮。
+.@{class-prefix}-field-mapping-fx {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  color: var(--wb-text-tertiary);
+  background: var(--wb-canvas);
+  border: 1px dashed var(--wb-border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+
+  em {
+    flex: 0 0 auto;
+    color: var(--wb-accent);
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 11.5px;
+    font-style: italic;
+    font-weight: 700;
+  }
+
+  span {
+    overflow: hidden;
+    min-width: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &:hover:not(:disabled) {
+    color: var(--wb-text);
+    border-color: var(--wb-accent-border);
+  }
+
+  &.@{class-prefix}-active {
+    color: var(--wb-text);
+    border: 1px solid var(--wb-accent-border);
+    background: var(--wb-accent-soft);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+}
+
+.@{class-prefix}-field-mapping-fx-pop {
+  display: grid;
+  width: 264px;
+  gap: 8px;
+}
+
+.@{class-prefix}-field-mapping-fx-pop-title {
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.@{class-prefix}-field-mapping-fx-quick {
+  display: flex;
+  gap: 6px;
+
+  .@{class-prefix}-field-mapping-fx-option {
+    flex: 1 1 auto;
+    padding: 4px 8px;
+    color: var(--wb-text-muted);
+    background: var(--wb-canvas);
+    border: 1px solid var(--wb-border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 11px;
+
+    &.@{class-prefix}-active {
+      color: var(--wb-accent);
+      border-color: var(--wb-accent-border);
+      background: var(--wb-accent-soft);
+    }
+  }
+}
+
+.@{class-prefix}-field-mapping-fx-hint {
+  color: var(--wb-text-tertiary);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.@{class-prefix}-field-mapping-note {
+  margin: 0;
+  color: var(--wb-text-muted);
+  font-size: 11px;
+}
+
+// SQL / 请求预览：等宽字体代码块，改动即时反映。
+.@{class-prefix}-field-mapping-preview {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--wb-text);
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 7px;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.7;
+  overflow-x: auto;
+
+  code {
+    padding: 0;
+    background: none;
+    border: none;
+  }
+}

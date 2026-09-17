@@ -18,7 +18,7 @@ import {
   pageArtifactId,
   type WorkbenchArtifactStatus
 } from '../../workbenchDomain'
-import { businessObjectArtifactId } from '../BusinessObjects/model'
+import { appApiArtifactId } from '../AppApis/model'
 import type { FormalArtifactKey } from '../../initializationPlanning'
 import type { PageDesign } from '../../workbenchArtifacts'
 import type { TestCaseExecutionSnapshot } from '../../testCasePreparation'
@@ -37,7 +37,7 @@ export function detailBlockerTargetKey(blocker: AgentChatMessage['detailBlocker'
 }
 
 /** 开发阶段的产物发起引导话术：空对话首次进入与无目标发送共用的落库文本；渲染层由产物发起引导卡承载。 */
-export const DEVELOPMENT_GUIDE_TEXT = '请选择“页面”或“实体”开始开发，点选产物即可直接发起实施。'
+export const DEVELOPMENT_GUIDE_TEXT = '请选择“应用页面”或“应用API”开始开发，点选产物即可直接发起实施。'
 
 /** 将后台实现任务状态映射为开发产物的扩展状态；未涉及产物返回 undefined。 */
 export function backgroundTaskArtifactStatus(task: BackgroundTask): WorkbenchArtifactStatus | undefined {
@@ -288,8 +288,8 @@ export function developmentWorkflowArtifactId(workflow?: WorkflowRunPayload): st
   const objectId = String(
     state.selectedObjectId || result.selectedObjectId || ''
   ).trim()
-  // 页面工作流即使带有依赖接口，也只推进页面产物；接口工作流才推进 endpoint。
-  if (objectId && detailTargetType === 'business-object') return businessObjectArtifactId(objectId)
+  // 应用页面工作流即使带有依赖接口，也只推进应用页面产物；接口工作流才推进 endpoint。
+  if (objectId && detailTargetType === 'app-api') return appApiArtifactId(objectId)
   if (pageId && detailTargetType !== 'endpoint') return pageArtifactId(pageId)
   if (apiContractId && endpointId) return endpointArtifactId(apiContractId, endpointId)
   return pageId ? pageArtifactId(pageId) : ''

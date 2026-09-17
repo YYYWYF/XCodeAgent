@@ -44,8 +44,8 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
     },
     {
       id: 'design_scope',
-      title: '梳理页面范围',
-      detail: '明确页面职责、核心功能与关键用户路径。',
+      title: '梳理应用页面范围',
+      detail: '明确应用页面职责、核心功能与关键用户路径。',
       surface: 'conversation'
     },
     {
@@ -69,7 +69,7 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
     {
       id: 'endpoint_design_scope',
       title: '梳理请求与响应',
-      detail: '明确查询参数、响应结构和页面调用关系。',
+      detail: '明确查询参数、响应结构和应用页面调用关系。',
       surface: 'conversation'
     },
     {
@@ -79,27 +79,39 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
       surface: 'conversation'
     },
     {
-      id: 'entity_read_structure',
-      title: '读取实体结构',
-      detail: '载入技术规划方案确认的字段、内置操作与自定义操作。',
+      id: 'api_read_contract',
+      title: '读取 API 契约',
+      detail: '载入技术规划方案确认的应用API资源、方法出入参契约与数据意向。',
       surface: 'conversation'
     },
     {
-      id: 'entity_confirm_binding',
-      title: '绑定操作的数据实现',
-      detail: '为每个操作绑定数据库表或外部服务能力，AI 自动推导字段映射。',
+      id: 'api_select_source_type',
+      title: '选择数据来源类型',
+      detail: '确认本接口绑定数据表还是外部API，后续映射绑定方式随类型而定。',
       surface: 'conversation'
     },
     {
-      id: 'entity_generate_adapter',
+      id: 'api_select_source',
+      title: '选择数据来源',
+      detail: '检查目录中该类型的可用来源并选择绑定对象；目录为空时先到「数据来源」配置。',
+      surface: 'conversation'
+    },
+    {
+      id: 'api_confirm_binding',
+      title: '配置映射绑定',
+      detail: '在右侧配置面板完成映射绑定：数据表按增删查改模板填槽位，外部API做出入参参数适配。',
+      surface: 'conversation'
+    },
+    {
+      id: 'api_generate_adapter',
       title: '生成数据适配逻辑',
       detail: '按确认的绑定生成查询、组合、转换与本地业务规则。',
       surface: 'conversation'
     },
     {
       id: 'choose_execution',
-      title: '选择页面执行方式',
-      detail: '页面产物：同步任务在当前对话中直接完成；异步/潮汐任务转入对应任务系统后台执行。',
+      title: '选择应用页面执行方式',
+      detail: '应用页面产物：同步任务在当前对话中直接完成；异步/潮汐任务转入对应任务系统后台执行。',
       surface: 'conversation'
     },
     {
@@ -124,7 +136,7 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
     {
       id: 'generate_code',
       title: '生成代码',
-      detail: '按模板生成页面与依赖接口源码。',
+      detail: '按模板生成应用页面与依赖接口源码。',
       surface: 'background'
     },
     {
@@ -148,7 +160,7 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
     {
       id: 'acceptance_preview',
       title: '打开产物审查',
-      detail: '右侧工作区切换到开发产物，审查页面效果与接口内容。',
+      detail: '右侧工作区切换到开发产物，审查应用页面效果与接口内容。',
       surface: 'conversation'
     },
     {
@@ -160,7 +172,7 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
     {
       id: 'adjustment_plan',
       title: '制定调整方案',
-      detail: '根据验收反馈确定需要调整的页面与接口范围。',
+      detail: '根据验收反馈确定需要调整的应用页面与接口范围。',
       surface: 'conversation'
     },
     {
@@ -175,7 +187,7 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
     ['design_scope', 'design_breakdown'],
     ['design_breakdown', 'design_edge'],
     ['design_edge', 'choose_execution'],
-    // 接口设计分支与页面设计分支在同一张 DAG 上交织；两个产物各自有「选择执行方式」决策点。
+    // 接口设计分支与应用页面设计分支在同一张 DAG 上交织；两个产物各自有「选择执行方式」决策点。
     ['endpoint_design_context', 'endpoint_design_scope'],
     ['endpoint_design_scope', 'endpoint_design_edge'],
     ['endpoint_design_edge', 'choose_execution_endpoint'],
@@ -227,11 +239,17 @@ const DEVELOPMENT_WORKFLOW: WorkflowDefinition = {
       label: '产物验收',
       nodeIds: ['acceptance_preview', 'acceptance_confirm']
     },
-    /** 实体开发段：读取结构 → 对话区确认绑定 → 生成数据适配逻辑（同步执行，不进任务池）。 */
-    entity: {
-      id: 'entity',
-      label: '实体开发',
-      nodeIds: ['entity_read_structure', 'entity_confirm_binding', 'entity_generate_adapter']
+    /** 应用API开发段：读取契约 → 选类型 → 选来源 → 配置映射绑定 → 生成数据适配逻辑（同步执行，不进任务池）。 */
+    'app-api': {
+      id: 'app-api',
+      label: '应用API开发',
+      nodeIds: [
+        'api_read_contract',
+        'api_select_source_type',
+        'api_select_source',
+        'api_confirm_binding',
+        'api_generate_adapter'
+      ]
     },
     /** 调整段：验收后需要修改时回流执行的预留链路。 */
     adjustment: {
@@ -372,8 +390,8 @@ const PROJECT_PLANNING_WORKFLOW: WorkflowDefinition = {
     },
     {
       id: 'planning_scope',
-      title: '规划实体与 API 契约',
-      detail: '定义技术架构、实体字段与操作、API 契约与数据结构。',
+      title: '规划应用API与接口契约',
+      detail: '继承需求阶段定稿的应用API契约，规划每个接口的数据实现方式与页面技术绑定。',
       surface: 'conversation'
     },
     {

@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useMemo, useState, type ReactElement } from 'react'
 import type {
   ApplicationConfig,
   DevelopmentPlanningApiContract,
-  DevelopmentPlanningEntity,
   DevelopmentPlanningPageOption,
   DevelopmentPlanningPageTreeNode
 } from '../../../../typings'
-import BusinessObjectDevelopmentPanel from '../../../BusinessObjects/BusinessObjectDevelopmentPanel'
-import { useBusinessObjects } from '../../../BusinessObjects/store'
+import AppApiDevelopmentPanel from '../../../AppApis/AppApiDevelopmentPanel'
+import RichLoading from '../DesignProgress/RichLoading'
+import { useAppApis } from '../../../AppApis/store'
 import type { WorkbenchArtifactStatus } from '../../../../workbenchDomain'
 import { cx } from '../../../../utils'
 import { DevelopmentArtifactTree } from '../SessionSidebar/DevelopmentArtifactTree'
@@ -17,7 +17,7 @@ export type DevelopmentArtifactItem = {
   groupId?: string
   groupLabel?: string
   id: string
-  kind: 'business-object' | 'page'
+  kind: 'app-api' | 'page'
   label: string
   path: string
   status: WorkbenchArtifactStatus
@@ -28,12 +28,15 @@ type Props = {
   apiContracts: DevelopmentPlanningApiContract[]
   application: ApplicationConfig
   requirementSpec: Record<string, unknown>
-  entities: DevelopmentPlanningEntity[]
+  /** 技术规划方案：为接口提供计划阶段确定的数据实现意向。 */
+  technicalPlan: Record<string, unknown>
   items: DevelopmentArtifactItem[]
   onSelect: (item: DevelopmentArtifactItem) => void
   pagePreviewUrl: string
   pages: DevelopmentPlanningPageOption[]
   pageTree: DevelopmentPlanningPageTreeNode[]
+  /** 当前选中的应用API适配生成进行中（来自开发工作流状态）。 */
+  appApiGenerating?: boolean
 }
 
 /** 直接嵌入原型随 Vite 启动的 5190 预览应用，避免浏览器工作台的工具栏和加载遮罩。 */
@@ -66,38 +69,36 @@ function PageArtifactPreview({
   )
 }
 
-/** 页面产物是否已可预览：后台实现启动预览后（待验收）与验收完成（已完成）均可打开。 */
+/** 应用页面产物是否已可预览：后台实现启动预览后（待验收）与验收完成（已完成）均可打开。 */
 function pagePreviewReady(status: WorkbenchArtifactStatus): boolean {
   return status === 'completed' || status === 'awaiting-review'
 }
 
-/** 按当前产物类型呈现页面预览或实体的数据绑定工作台。 */
+/** 按当前产物类型呈现页面预览或应用API的数据绑定工作台。 */
 function DevelopmentArtifactContent({
   activeItem,
-  addMethodTick,
-  methodId,
-  onMethodSelect,
+  appApiGenerating = false,
   pagePreviewUrl,
   requirementSpec,
+  technicalPlan,
   versionKey
 }: {
   activeItem?: DevelopmentArtifactItem
-  addMethodTick: number
-  methodId: string
-  onMethodSelect: (methodId: string) => void
+  /** 当前选中的是应用API且其适配生成进行中。 */
+  appApiGenerating?: boolean
   pagePreviewUrl: string
   requirementSpec: Record<string, unknown>
+  technicalPlan: Record<string, unknown>
   versionKey: string
 }): ReactElement {
-  if (activeItem?.kind === 'business-object') {
+  if (activeItem?.kind === 'app-api') {
     return (
-      <BusinessObjectDevelopmentPanel
-        addMethodTick={addMethodTick}
-        methodId={methodId}
-        objectId={activeItem.id.replace(/^business-object:/, '')}
-        onMethodSelect={onMethodSelect}
+      <AppApiDevelopmentPanel
+        objectId={activeItem.id.replace(/^app-api:/, '')}
         requirementSpec={requirementSpec}
         versionKey={versionKey}
+        technicalPlan={technicalPlan}
+        generating={appApiGenerating}
       />
     )
   }
@@ -115,14 +116,21 @@ function DevelopmentArtifactContent({
     )
   }
   if (!pagePreviewReady(activeItem.status)) {
+    if (activeItem.status === 'implementing' || activeItem.status === 'impl-queued') {
+      // 与设计/计划阶段同一生成态视觉：页面在后台实现中，这里给出富加载页。
+      return (
+        <div className={cx('development-artifact-content-empty')}>
+          <RichLoading
+            title={`正在实现「${activeItem.label}」`}
+            hint="后台任务完成后即可在这里预览与验收页面效果。"
+          />
+        </div>
+      )
+    }
     return (
       <div className={cx('development-artifact-content-empty')}>
         <strong>{activeItem.label}</strong>
-        <span>
-          {activeItem.status === 'not-started'
-            ? '开始详细设计并派发后台实现任务后，这里会显示最终页面效果。'
-            : '后台正在实现当前页面，任务进入待继续后即可在这里预览。'}
-        </span>
+        <span>开始详细设计并派发后台实现任务后，这里会显示最终页面效果。</span>
       </div>
     )
   }
@@ -132,15 +140,16 @@ function DevelopmentArtifactContent({
 /** 承载旧版产物目录和当前产物内容，复用“应用文件”的右目录布局。 */
 export default function DevelopmentArtifactsPanel({
   activeId,
+  appApiGenerating = false,
   apiContracts,
   application,
   requirementSpec,
-  entities,
+  technicalPlan,
   items,
   onSelect,
   pagePreviewUrl,
   pages,
-  pageTree
+  pageTree,
 }: Props): ReactElement {
   const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const artifactStatusById = useMemo(
@@ -148,21 +157,9 @@ export default function DevelopmentArtifactsPanel({
     [items]
   )
   const activeItem = activeId ? itemById.get(activeId) : undefined
-  const activeObjectId =
-    activeItem?.kind === 'business-object' ? activeItem.id.replace(/^business-object:/, '') : ''
-  // 实体绑定按版本隔离：产物目录与实体工作台都读当前工作版本自己的缓存键。
-  const entityVersionKey = application.currentVersionId || 'current'
-  const [businessObjects] = useBusinessObjects(requirementSpec, entityVersionKey)
-  // 方法级选择留在产物面板内部：选中方法右侧打开其定义，选中对象则回到字段维护。
-  const [selectedMethodId, setSelectedMethodId] = useState('')
-  // 「新增方法」入口在目录树里，用自增计数把打开编辑弹窗的信号传给对象面板。
-  const [addMethodTick, setAddMethodTick] = useState(0)
-
-  // 只在切换到另一个实体（或离开实体）时退出方法定义视图；
-  // 依赖对象 id 而非 activeId，避免同一对象内点方法时被误清空。
-  useEffect(() => {
-    setSelectedMethodId('')
-  }, [activeObjectId])
+  // 应用API绑定按版本隔离：产物目录与应用API工作台都读当前工作版本自己的缓存键。
+  const apiVersionKey = application.currentVersionId || 'current'
+  const [appApis] = useAppApis(requirementSpec, apiVersionKey, technicalPlan)
 
   /** 将旧产物树的页面选择转换为开发产物内容区的当前项。 */
   const handlePageSelect = (page: DevelopmentPlanningPageOption): void => {
@@ -170,25 +167,10 @@ export default function DevelopmentArtifactsPanel({
     if (item) onSelect(item)
   }
 
-  /** 实体选择直接打开字段维护，并清掉方法级选择。 */
-  const handleBusinessObjectSelect = (objectId: string): void => {
-    setSelectedMethodId('')
-    const item = itemById.get(`business-object:${objectId}`)
+  /** 应用API选择直接打开契约与数据绑定工作台。 */
+  const handleAppApiSelect = (objectId: string): void => {
+    const item = itemById.get(`app-api:${objectId}`)
     if (item) onSelect(item)
-  }
-
-  /** 方法选择：对象尚未激活时先激活它；已激活则不动产物级选中，只切换方法定义。 */
-  const handleBusinessObjectMethodSelect = (objectId: string, methodId: string): void => {
-    const item = itemById.get(`business-object:${objectId}`)
-    if (item && activeId !== item.id) onSelect(item)
-    setSelectedMethodId(methodId)
-  }
-
-  /** 目录树「新增方法」：先确保对象被选中（右侧面板挂载），再发打开编辑弹窗的信号。 */
-  const handleBusinessObjectAddMethod = (objectId: string): void => {
-    const item = itemById.get(`business-object:${objectId}`)
-    if (item && activeId !== item.id) onSelect(item)
-    setAddMethodTick((tick) => tick + 1)
   }
 
   return (
@@ -199,23 +181,19 @@ export default function DevelopmentArtifactsPanel({
             <DevelopmentArtifactTree
               apiContracts={apiContracts}
               applicationName={application.name}
-              businessObjects={businessObjects}
+              appApis={appApis}
               artifactStatusById={artifactStatusById}
-              entities={entities}
               onApiEndpointSelect={() => undefined}
-              onBusinessObjectSelect={handleBusinessObjectSelect}
-              onBusinessObjectMethodSelect={handleBusinessObjectMethodSelect}
-              onBusinessObjectAddMethod={handleBusinessObjectAddMethod}
+              onAppApiSelect={handleAppApiSelect}
               onPageSelect={handlePageSelect}
               pages={pages}
               pageTree={pageTree}
               selectedApiEndpointKey=""
-              selectedBusinessObjectId={
-                activeItem?.kind === 'business-object'
-                  ? activeItem.id.replace(/^business-object:/, '')
+              selectedAppApiId={
+                activeItem?.kind === 'app-api'
+                  ? activeItem.id.replace(/^app-api:/, '')
                   : ''
               }
-              selectedMethodId={selectedMethodId}
               selectedPageId={
                 activeItem?.kind === 'page' ? activeItem.id.replace(/^page:/, '') : ''
               }
@@ -225,12 +203,11 @@ export default function DevelopmentArtifactsPanel({
         <main className={cx('development-artifacts-content')}>
           <DevelopmentArtifactContent
             activeItem={activeItem}
-            addMethodTick={addMethodTick}
-            methodId={selectedMethodId}
-            onMethodSelect={setSelectedMethodId}
+            appApiGenerating={appApiGenerating}
             pagePreviewUrl={pagePreviewUrl}
             requirementSpec={requirementSpec}
-            versionKey={entityVersionKey}
+            technicalPlan={technicalPlan}
+            versionKey={apiVersionKey}
           />
         </main>
       </div>

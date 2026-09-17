@@ -104,7 +104,7 @@ function ActionItem({
   )
 }
 
-/** 按审阅态“页面与操作”分栏编辑页面：基础信息与页面行为、状态、验收保持同一章节。 */
+/** 按审阅态“应用页面与操作”分栏编辑应用页面：基础信息与页面行为、状态、验收保持同一章节。 */
 export default function RequirementPagesEditor({ draft, onChange }: Props): ReactElement {
   const specPages = recordList(draft.spec.pages)
   const behaviorPages = recordList(draft.productPlan.pages)
@@ -114,7 +114,7 @@ export default function RequirementPagesEditor({ draft, onChange }: Props): Reac
   const pageOptions = specPages
     .map((item) => ({ label: textValue(item.name) || textValue(item.pageId), value: textValue(item.pageId) }))
     .filter((item) => item.value)
-  // Collapse 默认展开第一个页面；键的归一化规则与渲染循环保持一致。
+  // Collapse 默认展开第一个应用页面；键的归一化规则与渲染循环保持一致。
   const firstPageKey = specPages.length ? textValue(specPages[0].pageId) || 'page-0' : ''
 
   /** 更新 spec.pages 的页面基础字段（名称、路由、说明、模块）。 */
@@ -143,7 +143,7 @@ export default function RequirementPagesEditor({ draft, onChange }: Props): Reac
       ...specPages,
       {
         pageId: draftId('page'),
-        name: '新页面',
+        name: '新应用页面',
         path: '/',
         module_id: moduleOptions[0]?.value || '',
         description: ''
@@ -167,9 +167,9 @@ export default function RequirementPagesEditor({ draft, onChange }: Props): Reac
   return (
     <div className={cx('requirement-editor')}>
       <div className={cx('requirement-editor-toolbar')}>
-        <Text type="secondary">{`共 ${specPages.length} 个页面；页面行为、状态与验收已合并到各页面内维护。`}</Text>
+        <Text type="secondary">{`共 ${specPages.length} 个应用页面；页面行为、状态与验收已合并到各应用页面内维护。`}</Text>
         <Button icon={<PlusOutlined />} onClick={addPage} size="small" type="text">
-          新增页面
+          新增应用页面
         </Button>
       </div>
       <Collapse defaultActiveKey={firstPageKey ? [firstPageKey] : []}>
@@ -186,7 +186,7 @@ export default function RequirementPagesEditor({ draft, onChange }: Props): Reac
             <Collapse.Panel
               extra={
                 <Button
-                  aria-label="删除该页面"
+                  aria-label="删除该应用页面"
                   className={cx('requirement-editor-remove')}
                   icon={<DeleteOutlined />}
                   onClick={(event) => {
@@ -197,7 +197,7 @@ export default function RequirementPagesEditor({ draft, onChange }: Props): Reac
                   type="text"
                 />
               }
-              header={textValue(page.name) || '未命名页面'}
+              header={textValue(page.name) || '未命名应用页面'}
               key={pageId}
             >
               <div className={cx('requirement-editor-grid')}>

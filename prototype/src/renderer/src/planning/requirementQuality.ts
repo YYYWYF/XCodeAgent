@@ -6,13 +6,13 @@ export const REQUIREMENT_SPEC_GENERATION_PROMPT = `
 1. app_info：应用名称、面向对象、业务目标与摘要；
 2. user_roles：每个参与者的稳定 id、职责与业务权限；
 3. feature_modules：模块名称、业务说明与优先级；
-4. pages：稳定 pageId、路由、所属模块和页面说明；
-5. entities：实体、用途、需要记录的信息（fields）与需要支持的业务操作描述（business_operations）；这里只描述业务需求，不设计字段类型、操作参数、返回结构或数据实现；
+4. pages：应用页面需包含稳定 pageId、路由、所属模块和页面说明；
+5. apis：API契约——扁平的接口清单，每个接口包含稳定 id、name（接口名）、method、path、summary 用途说明与调用页面（used_by_pages）；应用页面通过这些内部接口读写业务数据，契约只约定接口面，不设计参数细节、响应结构、错误码或数据实现；
 6. business_flows：端到端流程及可执行步骤；
 7. authorization_requirements：仅记录用户明确提出的页面或操作控制；
 8. acceptance_criteria：可由用户验证的产品结果。
 
-同时为每个页面补齐后续旅程需要的业务事实：页面目标、信息项、用户操作及预期结果、加载/空/失败/成功/校验状态、页面验收标准。页面、实体、流程、操作和验收标准必须可以相互追溯；不要编造数据源、接口、数据库、技术方案或未确认权限。缺失的关键业务事实必须在确认前标记为待补充，而不是静默省略。
+同时为每个应用页面补齐后续旅程需要的业务事实：页面目标、信息项、用户操作及预期结果、加载/空/失败/成功/校验状态、页面验收标准。应用页面、应用API、流程、方法和验收标准必须可以相互追溯；不要编造数据源、接口契约、数据库、技术方案或未确认权限。缺失的关键业务事实必须在确认前标记为待补充，而不是静默省略。
 `.trim()
 
 export type RequirementReadinessIssue = {
@@ -52,8 +52,8 @@ export function requirementReadinessIssues(
   const requiredLists: Array<[string, string]> = [
     ['user_roles', '业务参与者'],
     ['feature_modules', '功能模块'],
-    ['pages', '页面清单'],
-    ['entities', '实体'],
+    ['pages', '应用页面清单'],
+    ['apis', 'API契约'],
     ['business_flows', '业务流程'],
     ['acceptance_criteria', '应用验收标准']
   ]
@@ -94,26 +94,12 @@ export function requirementReadinessIssues(
       })
     }
   })
-  recordsOf(spec.entities).forEach((entity, index) => {
-    const operations = Array.isArray(entity.business_operations) ? entity.business_operations : []
-    const hasBusinessOperation = operations.some((operation) =>
-      typeof operation === 'string'
-        ? hasText(operation)
-        : Boolean(
-            operation &&
-              typeof operation === 'object' &&
-              hasText((operation as Record<string, unknown>).name)
-          )
-    )
-    if (
-      ![entity.id, entity.name, entity.description].every(hasText) ||
-      !recordsOf(entity.fields).length ||
-      !hasBusinessOperation
-    ) {
+  recordsOf(spec.apis).forEach((api, index) => {
+    if (![api.id, api.name, api.method, api.path, api.summary].every(hasText)) {
       issues.push({
-        key: `entity-${index}`,
-        label: `实体 ${index + 1}`,
-        detail: '需包含稳定标识、名称、用途、至少一个需要记录的信息和一项业务操作。'
+        key: `api-${index}`,
+        label: String(api.name || `接口 ${index + 1}`),
+        detail: '需包含稳定标识、接口名、方法、路径与用途说明。'
       })
     }
   })

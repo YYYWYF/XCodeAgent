@@ -54,9 +54,9 @@ export function endpointDetailTargetKey(apiContractId: string, endpointId: strin
   return apiContractId && endpointId ? `endpoint:${apiContractId}:${endpointId}` : ''
 }
 
-/** 生成实体详情目标键，供临时运行状态按实体隔离。 */
-export function businessObjectDetailTargetKey(objectId: string): string {
-  return objectId ? `business-object:${objectId}` : ''
+/** 生成应用API详情目标键，供临时运行状态按应用API隔离。 */
+export function appApiDetailTargetKey(objectId: string): string {
+  return objectId ? `app-api:${objectId}` : ''
 }
 
 /** 生成 API 大纲的相对展示路径，仅移除完整匹配的 base path 前缀。 */
@@ -108,7 +108,7 @@ export function workflowDetailTargetKey(workflow: unknown): string {
   }
   const objectId = String(state.selectedObjectId || result.selectedObjectId || '').trim()
   if (objectId) {
-    return businessObjectDetailTargetKey(objectId)
+    return appApiDetailTargetKey(objectId)
   }
   const pageId = String(
     state.selectedPageId ||

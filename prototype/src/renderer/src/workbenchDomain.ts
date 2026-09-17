@@ -5,7 +5,7 @@ import {
   type WorkbenchPhase
 } from './workbenchPhase'
 
-export type WorkbenchArtifactType = 'document' | 'page' | 'endpoint' | 'entity'
+export type WorkbenchArtifactType = 'document' | 'page' | 'endpoint' | 'app-api'
 /**
  * 开发产物扩展状态：文档类沿用三档；开发对象在后台实现任务接入后增加
  * 实现排队/实现中/待验收/失败四档，由统一后台任务流水推导。
@@ -66,7 +66,7 @@ export function documentArtifactId(
   return `document:${key}`
 }
 
-/** 生成页面产物的稳定领域标识。 */
+/** 生成应用页面产物的稳定领域标识。 */
 export function pageArtifactId(pageId: string): string {
   return `page:${pageId.trim()}`
 }
@@ -74,11 +74,6 @@ export function pageArtifactId(pageId: string): string {
 /** 生成接口产物的稳定领域标识，契约和 endpoint 共同确定唯一性。 */
 export function endpointArtifactId(apiContractId: string, endpointId: string): string {
   return `endpoint:${apiContractId.trim()}:${endpointId.trim()}`
-}
-
-/** 生成实体占位产物的稳定领域标识。 */
-export function entityArtifactId(entityId: string): string {
-  return `entity:${entityId.trim()}`
 }
 
 

@@ -18,6 +18,9 @@ export type ReplayCallbacks = {
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onProcessSteps?: (steps: ProcessStepRecord[]) => void
+  /** 确定性生成物（应用API数据适配）不过 Diff 门禁，由剧本直接交付的已接受文件。 */
+  onAcceptFiles?: (files: Array<{ path: string; content: string }>) => void
+  signal?: AbortSignal
 }
 
 /** 页面与接口 execution 共用的最小结构，供 lifecycleWith 组装 activeExecutions。 */
@@ -106,7 +109,7 @@ export function resolveEndpointTarget(
   const detailTargetType = String(
     options.detailTargetType || state.detailTargetType || result.detailTargetType || ''
   ).trim()
-  // 页面任务会携带依赖接口身份；它仍属于页面工作流，不能误走独立接口剧本。
+  // 应用页面任务会携带依赖接口身份；它仍属于应用页面工作流，不能误走独立接口剧本。
   if (detailTargetType === 'page') return undefined
   if (detailTargetType === 'endpoint' || (apiContractId && endpointId)) {
     return apiContractId && endpointId ? { apiContractId, endpointId } : undefined
@@ -188,7 +191,7 @@ export function lifecycleWith(
   } as ApplicationLifecycle
 }
 
-// 工作台三剧本（页面/接口/审查）共享的 base ApplicationLifecycle：ready_for_workbench 初始化基底。
+// 工作台三剧本（应用页面/接口/审查）共享的 base ApplicationLifecycle：ready_for_workbench 初始化基底。
 // 集中构造避免 application/initialization 字段在三处重复散落。
 
 export function makeBaseLifecycle(
@@ -299,7 +302,7 @@ export type ChangeSource = { target: BuildFileTarget; content: string }
 /**
  * 按行分帧渐进产出代码内容：每个目标按 linesPerFrame 逐帧增长，帧间等待 intervalMs。
  * frame 回调收到「已完成文件 + 当前部分文件」，由剧本组装变更集后 emit，
- * 让右侧源码区与 Diff 页签跟随刷新（页面/接口/实体/审查报告共用同一节奏）。
+ * 让右侧源码区与 Diff 页签跟随刷新（页面/接口/应用API/审查报告共用同一节奏）。
  */
 export async function streamCodeFrames(
   targets: BuildFileTarget[],
@@ -320,10 +323,10 @@ export async function streamCodeFrames(
 
 /** 判断测试用例检查卡是否确认按当前清单执行。 */
 
-// —— 实体（business-object）目标识别 ——
-// 实体开发工作流的启动与续传只带 selectedObjectId / resumeState，
+// —— 应用API（app-api）目标识别 ——
+// 应用API开发工作流的启动与续传只带 selectedObjectId / resumeState，
 // 因此同时读 options 与 workflow.state / result 中持久化的目标身份。
-export function resolveEntityTarget(
+export function resolveAppApiTarget(
   options: SendWorkflowMessageOptions,
   resume?: WorkflowRunPayload
 ): { objectId: string } | undefined {
@@ -335,6 +338,6 @@ export function resolveEntityTarget(
   const objectId = String(
     options.selectedObjectId || state.selectedObjectId || result.selectedObjectId || ''
   ).trim()
-  if (objectId && detailTargetType === 'business-object') return { objectId }
+  if (objectId && detailTargetType === 'app-api') return { objectId }
   return undefined
 }

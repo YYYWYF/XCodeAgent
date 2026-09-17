@@ -1,10 +1,7 @@
 // 演示数据统一入口：单一 pms-new 新建旅程场景（需求回检单模块），按 workspace 路由。
 // 换演示案例 = 替换 mock-data/pms-new/ 内容，脚本按 workspaceRoot 取场景数据。
 import type { ApplicationConfig, ApplicationLifecycle, EditorMode } from '../src/renderer/src/typings'
-import type {
-  DevelopmentPlanningApiContract,
-  DevelopmentPlanningEntity
-} from '../src/renderer/src/typings'
+import type { DevelopmentPlanningApiContract } from '../src/renderer/src/typings'
 
 // —— pms-new 新建主旅程（需求回检单模块）——
 import { pmsNewApplication, WORKSPACE_ROOT as NEW_ROOT } from './pms-new/application'
@@ -31,7 +28,6 @@ export type PlanningArtifactsShape = {
   pages: Array<Record<string, unknown>>
   pageTree: Array<Record<string, unknown>>
   apiContracts: DevelopmentPlanningApiContract[]
-  entities: DevelopmentPlanningEntity[]
 }
 
 export type AppScenario = {
@@ -117,7 +113,7 @@ export const mockApplications: ApplicationConfig[] = [pmsNewApplication]
 /**
  * lifecycle 声明测试与验收全部通过的预置版本（v1.0-v1.3）。
  * 同一应用并存多版本、多状态是演示刚需：这些版本按"旅程走完"的完成态呈现
- * （实体绑定、用例队列、规划基线共享同一判定），未走完的版本自然不进集合。
+ * （应用API绑定、用例队列、规划基线共享同一判定），未走完的版本自然不进集合。
  */
 export const presetCompletedVersionIds: ReadonlySet<string> = new Set(
   mockApplications.flatMap((app) =>

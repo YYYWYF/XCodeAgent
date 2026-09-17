@@ -14,7 +14,34 @@
   box-shadow: 12px 0 30px rgba(27, 20, 55, 0.14);
   animation: auxiliary-drawer-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+// 数据来源详情层：衔接在列表抽屉右侧的第二个抽屉，从列表右缘向右展开，
+// 承载接口/表的维护页；列表抽屉保持 420px 不动。
+// 与列表抽屉同处一个图层：左缘不加框（列表的右框线即内部分隔）；
+// 悬浮投影只向右伸展——负 spread 抵消模糊的左半影，不会叠印到列表抽屉上。
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources-detail {
+  left: 420px;
+  width: 680px;
+  max-width: calc(100% - 420px);
+  border-left: 0;
+  border-right: 1px solid var(--wb-border);
+  box-shadow: 32px 0 30px -16px rgba(27, 20, 55, 0.16);
+  animation: auxiliary-drawer-detail-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes auxiliary-drawer-detail-in {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-auxiliary-drawer-body { padding: 14px; overflow: hidden; }
+// 详情层与列表抽屉同款内边距，维护页的通栏头尾按 14px 负边距抵消。
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources-detail .@{class-prefix}-auxiliary-drawer-body { padding: 14px; overflow: hidden; }
 // 数据来源抽屉 body 内边距为 14px 且视图容器无额外留白（任务管理是 16px + 顶部 2px），
 // Tab 条通栏负边距需按实际内边距抵消，才能与任务管理抽屉一样贴住抽屉头下缘。
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-conversation-tabbar { margin: -14px -14px 0; }
@@ -301,6 +328,8 @@
   cursor: pointer;
   font: inherit;
   font-size: 12px;
+  // 选中态不改变字重：加粗会让当前 Tab 变宽、兄弟 Tab 位移（视觉抖动），统一 600 只靠颜色与下划线区分。
+  font-weight: 600;
   white-space: nowrap;
 
   em {
@@ -326,14 +355,13 @@
 
   &.@{class-prefix}-active {
     color: var(--wb-accent);
-    font-weight: 600;
 
     em {
       color: var(--wb-accent);
       background: var(--wb-accent-soft);
     }
 
-    // 选中下划线与异步/潮汐任务抽屉保持一致。
+    // 选中下划线与异步/潮汐任务抽屉保持一致：对称内缩、贴合内容宽，切换无过渡位移。
     &::after {
       position: absolute;
       right: 8px;

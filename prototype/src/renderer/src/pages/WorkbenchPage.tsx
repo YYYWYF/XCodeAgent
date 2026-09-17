@@ -45,13 +45,12 @@ import {
   resetDevelopmentPlanningPageTree,
   resetDevelopmentPlanningPages
 } from '../service/developmentPlanningState'
-import { resetBusinessObjectsCache } from '../components/BusinessObjects/store'
+import { resetAppApisCache } from '../components/AppApis/store'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
   ApplicationVersion,
   DevelopmentPlanningApiContract,
-  DevelopmentPlanningEntity,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   EditorMode
@@ -139,7 +138,7 @@ function makeInitialLifecycle(appId: string, appName: string): ApplicationLifecy
   } as ApplicationLifecycle
 }
 
-// 组织工作台状态，并以正式 ProjectPlan 页面清单驱动首个页面规划选择。
+// 组织工作台状态，并以正式 ProjectPlan 应用页面清单驱动首个应用页面规划选择。
 function WorkbenchPage({
   application,
   applicationLifecycle,
@@ -160,9 +159,6 @@ function WorkbenchPage({
   >([])
   const [developmentPlanningApiContracts, setDevelopmentPlanningApiContracts] = useState<
     DevelopmentPlanningApiContract[]
-  >([])
-  const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
-    DevelopmentPlanningEntity[]
   >([])
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
 
@@ -244,6 +240,15 @@ function WorkbenchPage({
     const timer = window.setInterval(refresh, 700)
     return () => window.clearInterval(timer)
   }, [auxiliaryDrawerMode])
+  // 对话区「来源缺失引导卡」请求打开数据来源抽屉：收到事件即展开并互斥关闭其它抽屉。
+  useEffect(() => {
+    const open = (): void => {
+      setBackgroundTasksDrawer(null)
+      setAuxiliaryDrawerMode('data-sources')
+    }
+    window.addEventListener('aistudio:prototype:open-data-sources', open)
+    return () => window.removeEventListener('aistudio:prototype:open-data-sources', open)
+  }, [])
   /** 打开指定任务系统的队列抽屉，并互斥关闭任务管理抽屉。 */
   const openBackgroundTasksDrawer = (system: BackgroundTaskSystem): void => {
     setAuxiliaryDrawerMode(null)
@@ -331,9 +336,6 @@ function WorkbenchPage({
         setDevelopmentPlanningApiContracts(
           Array.isArray(inspection.apiContracts) ? inspection.apiContracts : []
         )
-        setDevelopmentPlanningEntities(
-          Array.isArray(inspection.entities) ? inspection.entities : []
-        )
         setHasPageDesigns(inspection.hasPageDesigns)
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
@@ -343,7 +345,6 @@ function WorkbenchPage({
         setDevelopmentPlanningPages([])
         setDevelopmentPlanningPageTree([])
         setDevelopmentPlanningApiContracts([])
-        setDevelopmentPlanningEntities([])
         setHasPageDesigns(false)
         console.warn('检查 specs/plans 规划产物失败。', error)
       } finally {
@@ -647,7 +648,7 @@ function WorkbenchPage({
 
   /** 把派生的新迭代版本安装为当前工作版本（回退与发起新迭代共用）：
    *  持久化版本链、把查看与工作指针切到新版本、重置规划产物、清掉同名版本遗留的
-   *  实体绑定缓存与规划记录（版本 id 重载后可能复用，否则上一轮的中间态会劫持阶段定位），
+   *  应用API绑定缓存与规划记录（版本 id 重载后可能复用，否则上一轮的中间态会劫持阶段定位），
    *  并复位自动弹框与生命周期，让新迭代从需求收集重新开始。 */
   const installDerivedVersion = (next: ApplicationVersion, initialLifecycle: ApplicationLifecycle): void => {
     const nextApplication = {
@@ -663,7 +664,7 @@ function WorkbenchPage({
     setDevelopmentPlanningPages(resetDevelopmentPlanningPages)
     setDevelopmentPlanningPageTree(resetDevelopmentPlanningPageTree)
     setDevelopmentPlanningApiContracts(resetDevelopmentPlanningApiContracts)
-    resetBusinessObjectsCache(next.id)
+    resetAppApisCache(next.id)
     clearInitializationPlanningRecord({ id: workspaceApplication.id, currentVersionId: next.id })
     setHasPageDesigns(false)
     autoPublishShownRef.current = false
@@ -751,7 +752,6 @@ function WorkbenchPage({
                 developmentPlanningPages={developmentPlanningPages}
                 developmentPlanningPageTree={developmentPlanningPageTree}
                 developmentPlanningApiContracts={developmentPlanningApiContracts}
-                developmentPlanningEntities={developmentPlanningEntities}
                 editorMode={editorMode}
                 onApplicationUpdate={handleApplicationUpdate}
                 onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}

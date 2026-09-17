@@ -19,7 +19,7 @@ export type AgentChatMessage = {
   codeChanges?: WorkspaceCodeChangeSet
   toolCalls?: ToolCallRecord[]
   processSteps?: ProcessStepRecord[]
-  /** 待设计目标挡板：作为对话历史消息持久化，支持页面与接口两类详细设计入口。 */
+  /** 待设计目标挡板：作为对话历史消息持久化，支持应用页面与接口两类详细设计入口。 */
   detailBlocker?:
     | {
         type: 'page'
@@ -62,6 +62,8 @@ export type RightPanelState =
   | { type: 'source' }
   /** 开发阶段的交付清单；仅用于选择当前 Workflow 目标，不承载写入权限。 */
   | { type: 'development-artifacts' }
+  /** 字段映射工作台：应用API映射绑定的完整编辑区，由摘要卡显式打开，不自动抢占。 */
+  | { type: 'field-mapping' }
   /** 测试阶段的业务用例目录与结果内容区。 */
   | { type: 'test-cases' }
 

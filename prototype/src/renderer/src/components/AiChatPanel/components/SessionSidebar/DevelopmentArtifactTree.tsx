@@ -1,23 +1,18 @@
-import { Dropdown } from 'antd'
 import {
   ApiOutlined,
   AppstoreOutlined,
-  BlockOutlined,
   CaretDownOutlined,
   CaretRightOutlined,
   FileTextOutlined,
-  FolderOutlined,
-  FunctionOutlined,
-  LockOutlined,
-  MoreOutlined
+  FolderOutlined
 } from '@ant-design/icons'
 import type { ReactElement } from 'react'
 import { useMemo, useState } from 'react'
 import type { WorkspaceDocKey } from '../../types'
-import { businessObjectArtifactId, type BusinessObject } from '../../../BusinessObjects/model'
+import { appApiArtifactId, type AppApi } from '../../../AppApis/model'
+import { groupAppApis } from '../../../AppApis/grouping'
 import type {
   DevelopmentPlanningApiContract,
-  DevelopmentPlanningEntity,
   DevelopmentPlanningPageOption,
   DevelopmentPlanningPageTreeNode
 } from '../../../../typings'
@@ -25,7 +20,6 @@ import { cx } from '../../../../utils'
 import { apiEndpointDisplayPath } from '../../utils'
 import {
   documentArtifactId,
-  entityArtifactId,
   endpointArtifactId,
   pageArtifactId
 } from '../../../../workbenchDomain'
@@ -76,7 +70,7 @@ function pageTreeProgress(
   )
 }
 
-/** 递归渲染页面菜单树，菜单节点只组织层级，页面叶子承载产物操作。 */
+/** 递归渲染应用页面菜单树，菜单节点只组织层级，页面叶子承载产物操作。 */
 function PageArtifactNode({
   artifactAccessById,
   artifactStatusById,
@@ -180,21 +174,16 @@ function PageArtifactNode({
 type ArtifactNavigationProps = {
   apiContracts: DevelopmentPlanningApiContract[]
   applicationName: string
-  businessObjects: BusinessObject[]
+  appApis: AppApi[]
   artifactAccessById: Record<string, WorkbenchArtifactAccess>
   artifactStatusById: Record<string, WorkbenchArtifactStatus>
   designArtifacts: DesignArtifactItem[]
-  entities: DevelopmentPlanningEntity[]
   /** 开发产物工作区不展示需求分析/项目计划阶段文档，只复用原有开发目录树。 */
   hideDesignArtifacts?: boolean
-  /** 开发产物目录不展示应用根节点，页面/接口/实体直接作为一级分组。 */
+  /** 开发产物目录不展示应用根节点，应用页面/应用API直接作为一级分组。 */
   hideApplicationRoot?: boolean
-  /** 选择实体后在右侧打开字段维护；再次点击折叠/展开方法清单。 */
-  onBusinessObjectSelect?: (objectId: string) => void
-  /** 选择方法后在右侧打开该方法的出入参与数据实现定义。 */
-  onBusinessObjectMethodSelect?: (objectId: string, methodId: string) => void
-  /** 在该方法清单末尾发起「新增方法」。 */
-  onBusinessObjectAddMethod?: (objectId: string) => void
+  /** 选择应用API后在右侧打开契约与数据绑定工作台。 */
+  onAppApiSelect?: (objectId: string) => void
   onApiEndpointSelect: (target: {
     apiContractId: string
     endpointId: string
@@ -216,22 +205,24 @@ type ArtifactNavigationProps = {
   selectedApiEndpointKey: string
   selectedDesignArtifactKey?: WorkbenchDocumentKey
   selectedPageId: string
-  selectedBusinessObjectId?: string
-  /** 当前在右侧打开定义的方法；空串表示右侧停留在对象字段维护。 */
-  selectedMethodId?: string
+  selectedAppApiId?: string
   showDevelopmentTasks: boolean
 }
 
-/** 渲染以应用为根的完整产物树，页面和接口分别保留业务分组。 */
+/** 渲染以应用为根的完整产物树，应用页面和应用API分别保留业务分组。 */
 function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
   const [applicationExpanded, setApplicationExpanded] = useState(true)
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apisExpanded, setApisExpanded] = useState(true)
-  const [businessObjectsExpanded, setBusinessObjectsExpanded] = useState(true)
-  // 实体默认展开方法清单，只记录被手动折叠的对象，新增对象自动展开。
-  const [collapsedObjects, setCollapsedObjects] = useState<Set<string>>(() => new Set())
+  const [appApisExpanded, setAppApisExpanded] = useState(true)
+  // 应用API分组默认全部展开（与页面菜单一致），集合里只记录被手动折叠的分组。
+  const [collapsedApiGroups, setCollapsedApiGroups] = useState<Set<string>>(() => new Set())
   const [expandedContracts, setExpandedContracts] = useState<Set<string>>(
     () => new Set(props.apiContracts.map((contract) => contract.id))
+  )
+  const appApiGroups = useMemo(
+    () => groupAppApis(props.appApis, props.pageTree),
+    [props.appApis, props.pageTree]
   )
   const pagesById = useMemo(
     () => new Map(props.pages.map((page) => [page.pageId, page])),
@@ -260,18 +251,28 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
       }).length,
     0
   )
-  const completedBusinessObjects = props.businessObjects.filter(
-    (object) => props.artifactStatusById[businessObjectArtifactId(object.id)] === 'completed'
+  const completedAppApis = props.appApis.filter(
+    (object) => props.artifactStatusById[appApiArtifactId(object.id)] === 'completed'
   ).length
   const completedDocuments = props.designArtifacts.filter(
     (artifact) => artifact.status === 'completed'
   ).length
-  // 页面与实体只有在项目计划确认保存后才进入正式产物树。
+  // 页面与应用API只有在项目计划确认保存后才进入正式产物树。
   const developmentArtifactsKnown = props.showDevelopmentTasks
-  const completedTotal = completedDocuments + completedPages + completedBusinessObjects
+  const completedTotal = completedDocuments + completedPages + completedAppApis
   const artifactTotal =
     props.designArtifacts.length +
-    (developmentArtifactsKnown ? props.pages.length + props.businessObjects.length : 0)
+    (developmentArtifactsKnown ? props.pages.length + props.appApis.length : 0)
+
+  /** 单独折叠/展开一个应用API分组，不影响其他分组。 */
+  const toggleAppApiGroup = (groupKey: string): void => {
+    setCollapsedApiGroups((current) => {
+      const next = new Set(current)
+      if (next.has(groupKey)) next.delete(groupKey)
+      else next.add(groupKey)
+      return next
+    })
+  }
 
   /** 单独切换一个接口分组，不影响其他契约树节点。 */
   const toggleContract = (contractId: string): void => {
@@ -355,7 +356,7 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
                 type="button"
               >
                 <CaretDownOutlined className={cx(!pagesExpanded && 'collapsed')} />
-                <span>页面</span>
+                <span>应用页面</span>
                 <small>
                   {completedPages}/{props.pages.length}
                 </small>
@@ -495,127 +496,91 @@ function ArtifactNavigation(props: ArtifactNavigationProps): ReactElement {
                 </div>
               ) : null}
 
-              <>
-                <button
-                  aria-expanded={businessObjectsExpanded}
-                  className={cx('artifact-section-row')}
-                  onClick={() => setBusinessObjectsExpanded((value) => !value)}
-                  type="button"
-                >
-                  <CaretDownOutlined className={cx(!businessObjectsExpanded && 'collapsed')} />
-                  <BlockOutlined />
-                  <span>实体</span>
-                  <small>{props.businessObjects.length}</small>
-                </button>
-                {businessObjectsExpanded ? (
-                  <div className={cx('artifact-tree-children', 'section-children')}>
-                    {props.businessObjects.length === 0 ? (
-                      <div
-                        className={cx('artifact-branch-row', 'static')}
-                        style={{ paddingLeft: 22 }}
-                      >
-                        <CaretRightOutlined />
-                        <span>请先在需求说明书中描述实体</span>
-                      </div>
-                    ) : (
-                      // 不设文件夹级：实体直接罗列，展开下一级即方法清单（统一术语「方法」）。
-                      props.businessObjects.map((object) => {
-                        const expanded = !collapsedObjects.has(object.id)
-                        return (
-                          <div className={cx('artifact-business-object')} key={object.id}>
-                            <div className={cx('artifact-object-row')}>
-                              <button
-                                aria-expanded={expanded}
-                                className={cx(
-                                  'artifact-branch-row',
-                                  object.id === props.selectedBusinessObjectId && 'selected'
-                                )}
-                                onClick={() => {
-                                  // 点击对象即选中（右侧呈现字段维护），同时切换方法清单展开态。
-                                  setCollapsedObjects((current) => {
-                                    const next = new Set(current)
-                                    if (next.has(object.id)) next.delete(object.id)
-                                    else next.add(object.id)
-                                    return next
-                                  })
-                                  props.onBusinessObjectSelect?.(object.id)
-                                }}
-                                style={{ paddingLeft: 22 }}
-                                type="button"
-                              >
-                                <CaretDownOutlined className={cx(!expanded && 'collapsed')} />
-                                <BlockOutlined />
-                                <span>{object.name}</span>
-                                <span
-                                  aria-label={
-                                    props.artifactStatusById[businessObjectArtifactId(object.id)] ||
-                                    'not-started'
-                                  }
-                                  className={cx(
-                                    'artifact-status-dot',
-                                    props.artifactStatusById[businessObjectArtifactId(object.id)] ||
-                                      'not-started'
-                                  )}
-                                />
-                              </button>
-                              {/* 目录以导航为主：更多操作（新增方法）收在对象行尾的省略号里，悬停显现。 */}
-                              <Dropdown
-                                menu={{
-                                  items: [
-                                    {
-                                      key: 'add-method',
-                                      label: '新增方法',
-                                      onClick: () => props.onBusinessObjectAddMethod?.(object.id)
-                                    }
-                                  ]
-                                }}
-                                placement="bottomRight"
-                                trigger={['click']}
-                              >
-                                <button
-                                  aria-label={`${object.name} 更多操作`}
-                                  className={cx('artifact-object-more')}
-                                  onClick={(event) => event.stopPropagation()}
-                                  type="button"
-                                >
-                                  <MoreOutlined />
-                                </button>
-                              </Dropdown>
-                            </div>
-                            {expanded ? (
-                              <div className={cx('artifact-tree-children')}>
-                                {object.operations.map((method) => (
-                                  <div className={cx('artifact-row-shell')} key={method.id}>
-                                    <button
-                                      className={cx(
-                                        'artifact-row',
-                                        props.selectedMethodId === method.id && 'selected'
-                                      )}
-                                      onClick={() =>
-                                        props.onBusinessObjectMethodSelect?.(object.id, method.id)
+              {/* 应用API分区头与应用页面保持一致：第一级只有折叠箭头，不带业务图标。 */}
+              <button
+                aria-expanded={appApisExpanded}
+                className={cx('artifact-section-row')}
+                onClick={() => setAppApisExpanded((value) => !value)}
+                type="button"
+              >
+                <CaretDownOutlined className={cx(!appApisExpanded && 'collapsed')} />
+                <span>应用API</span>
+                <small>
+                  {completedAppApis}/{props.appApis.length}
+                </small>
+              </button>
+              {appApisExpanded ? (
+                <div className={cx('artifact-tree-children', 'section-children')}>
+                  {props.appApis.length === 0 ? (
+                    <div
+                      className={cx('artifact-branch-row', 'static')}
+                      style={{ paddingLeft: 22 }}
+                    >
+                      <CaretRightOutlined />
+                      <span>请先在需求说明书的API契约中定义接口</span>
+                    </div>
+                  ) : (
+                    // 接口即产物：应用API按业务模块（页面菜单）分组呈现，与页面目录同一套业务视角。
+                    appApiGroups.map((group) => {
+                      const expanded = !collapsedApiGroups.has(group.key)
+                      const groupCompleted = group.apis.filter(
+                        (object) =>
+                          props.artifactStatusById[appApiArtifactId(object.id)] === 'completed'
+                      ).length
+                      return (
+                        <div className={cx('artifact-tree-node')} key={group.key}>
+                          <button
+                            aria-expanded={expanded}
+                            className={cx('artifact-branch-row')}
+                            onClick={() => toggleAppApiGroup(group.key)}
+                            style={{ paddingLeft: 22 }}
+                            type="button"
+                          >
+                            <CaretDownOutlined className={cx(!expanded && 'collapsed')} />
+                            <FolderOutlined />
+                            <span>{group.label}</span>
+                            <small>
+                              {groupCompleted}/{group.apis.length}
+                            </small>
+                          </button>
+                          {expanded ? (
+                            <div className={cx('artifact-tree-children')}>
+                              {group.apis.map((object) => (
+                                <div className={cx('artifact-row-shell')} key={object.id}>
+                                  <button
+                                    className={cx(
+                                      'artifact-row',
+                                      props.selectedAppApiId === object.id && 'selected'
+                                    )}
+                                    onClick={() => props.onAppApiSelect?.(object.id)}
+                                    style={{ paddingLeft: 36 }}
+                                    title={`${object.name} · ${object.method} ${object.path}`}
+                                    type="button"
+                                  >
+                                    <ApiOutlined />
+                                    <span className={cx('artifact-label')}>{object.name}</span>
+                                    <span
+                                      aria-label={
+                                        props.artifactStatusById[appApiArtifactId(object.id)] ||
+                                        'not-started'
                                       }
-                                      style={{ paddingLeft: 36 }}
-                                      type="button"
-                                    >
-                                      {/* 内置方法=平台锁定的模板动作，自定义方法=业务自定义函数。 */}
-                                      {method.operationType === 'builtin' ? (
-                                        <LockOutlined />
-                                      ) : (
-                                        <FunctionOutlined />
+                                      className={cx(
+                                        'artifact-status-dot',
+                                        props.artifactStatusById[appApiArtifactId(object.id)] ||
+                                          'not-started'
                                       )}
-                                      <span className={cx('artifact-label')}>{method.name}</span>
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : null}
-                          </div>
-                        )
-                      })
-                    )}
-                  </div>
-                ) : null}
-              </>
+                                    />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              ) : null}
             </>
           ) : null}
         </div>
@@ -628,43 +593,35 @@ export type DevelopmentArtifactTreeProps = {
   apiContracts: DevelopmentPlanningApiContract[]
   applicationName: string
   artifactStatusById: Record<string, WorkbenchArtifactStatus>
-  businessObjects: BusinessObject[]
-  entities: DevelopmentPlanningEntity[]
+  appApis: AppApi[]
   onApiEndpointSelect: (target: {
     apiContractId: string
     endpointId: string
     endpointKey: string
     label: string
   }) => void
-  onBusinessObjectSelect?: (objectId: string) => void
-  onBusinessObjectMethodSelect?: (objectId: string, methodId: string) => void
-  onBusinessObjectAddMethod?: (objectId: string) => void
+  onAppApiSelect?: (objectId: string) => void
   onPageSelect: (page: DevelopmentPlanningPageOption) => void
   pages: DevelopmentPlanningPageOption[]
   pageTree: DevelopmentPlanningPageTreeNode[]
   selectedApiEndpointKey: string
-  selectedBusinessObjectId?: string
-  selectedMethodId?: string
+  selectedAppApiId?: string
   selectedPageId: string
 }
 
-/** 开发产物目录只展示页面和实体一级节点，方法明细留在对象开发面板。 */
+/** 开发产物目录只展示应用页面和应用API一级节点，接口的契约与绑定明细留在应用API开发面板。 */
 export function DevelopmentArtifactTree({
   apiContracts,
   applicationName,
   artifactStatusById,
-  businessObjects,
-  entities,
+  appApis,
   onApiEndpointSelect,
-  onBusinessObjectSelect,
-  onBusinessObjectMethodSelect,
-  onBusinessObjectAddMethod,
+  onAppApiSelect,
   onPageSelect,
   pages,
   pageTree,
   selectedApiEndpointKey,
-  selectedBusinessObjectId,
-  selectedMethodId,
+  selectedAppApiId,
   selectedPageId
 }: DevelopmentArtifactTreeProps): ReactElement {
   const artifactAccessById = useMemo<Record<string, WorkbenchArtifactAccess>>(() => {
@@ -684,27 +641,24 @@ export function DevelopmentArtifactTree({
         access[endpointArtifactId(apiContractId, endpointId)] = editableAccess
       })
     })
-    entities.forEach((entity) => {
-      access[entityArtifactId(entity.entityId)] = editableAccess
+    appApis.forEach((object) => {
+      access[appApiArtifactId(object.id)] = editableAccess
     })
     return access
-  }, [apiContracts, entities, pages])
+  }, [apiContracts, appApis, pages])
 
   return (
     <ArtifactNavigation
       apiContracts={[]}
       applicationName={applicationName}
-      businessObjects={businessObjects}
+      appApis={appApis}
       artifactAccessById={artifactAccessById}
       artifactStatusById={artifactStatusById}
       designArtifacts={[]}
-      entities={entities}
       hideApplicationRoot
       hideDesignArtifacts
       onApiEndpointSelect={onApiEndpointSelect}
-      onBusinessObjectSelect={onBusinessObjectSelect}
-      onBusinessObjectMethodSelect={onBusinessObjectMethodSelect}
-      onBusinessObjectAddMethod={onBusinessObjectAddMethod}
+      onAppApiSelect={onAppApiSelect}
       onCreateDocumentTask={() => undefined}
       onCreateEndpointTask={() => undefined}
       onCreatePageTask={() => undefined}
@@ -714,8 +668,7 @@ export function DevelopmentArtifactTree({
       pageTree={pageTree}
       readOnly
       selectedApiEndpointKey={selectedApiEndpointKey}
-      selectedBusinessObjectId={selectedBusinessObjectId}
-      selectedMethodId={selectedMethodId}
+      selectedAppApiId={selectedAppApiId}
       selectedPageId={selectedPageId}
       showDevelopmentTasks
     />

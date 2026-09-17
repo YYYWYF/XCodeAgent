@@ -33,7 +33,7 @@ export type SendWorkflowMessageOptions = {
   selectedObjectId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
-  detailTargetType?: 'page' | 'endpoint' | 'business-object' | 'application'
+  detailTargetType?: 'page' | 'endpoint' | 'app-api' | 'application'
   buildExecutionScope?: WorkflowBuildExecutionScope
   resumeState?: WorkflowRunPayload
   workflowScope?: string
@@ -42,6 +42,8 @@ export type SendWorkflowMessageOptions = {
   onWorkflow?: (workflow: WorkflowRunPayload) => void
   onToolCalls?: (toolCalls: ToolCallRecord[]) => void
   onProcessSteps?: (steps: ProcessStepRecord[]) => void
+  /** 确定性生成物（如应用API数据适配）跳过 Diff 门禁时，由剧本直接交付的已接受文件。 */
+  onAcceptFiles?: (files: Array<{ path: string; content: string }>) => void
   planControlAction?: 'stop' | 'end'
   planControlRunId?: string
   resumeExecutionRunId?: string
@@ -329,6 +331,7 @@ export class AgUiChatSession {
           onWorkflow: options.onWorkflow,
           onApplicationLifecycle: options.onApplicationLifecycle,
           onProcessSteps: options.onProcessSteps,
+          onAcceptFiles: options.onAcceptFiles,
           signal: controller.signal
         }
         const result =

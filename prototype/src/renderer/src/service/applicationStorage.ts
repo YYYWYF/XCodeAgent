@@ -2,7 +2,6 @@ import type {
   ApplicationConfig,
   ApplicationSchemaConfig,
   DevelopmentPlanningApiContract,
-  DevelopmentPlanningEntity,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption
 } from '../typings';
@@ -154,7 +153,6 @@ export async function inspectWorkspacePlanningArtifacts(
   pages: DevelopmentPlanningPageOption[];
   pageTree: DevelopmentPlanningPageTreeNode[];
   apiContracts: DevelopmentPlanningApiContract[];
-  entities: DevelopmentPlanningEntity[];
 }> {
   const workspaceApi = window.aiStudio?.workspace;
   if (!workspaceApi?.inspectPlanningArtifacts) {

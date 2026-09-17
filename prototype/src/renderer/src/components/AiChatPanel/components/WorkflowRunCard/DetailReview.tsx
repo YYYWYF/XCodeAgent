@@ -39,7 +39,7 @@ export function DetailReviewAuthBar({
         <CheckCircleOutlined aria-hidden="true" />
         「{label}」{hasRelatedEndpoint ? "页面与依赖接口设计" : "页面详细设计"}已生成
         {summary
-          ? `（页面 ${summary.page_count} · 接口 ${summary.endpoint_count} · API 契约 ${summary.api_contract_count}）`
+          ? `（应用页面 ${summary.page_count} · 接口 ${summary.endpoint_count} · API 契约 ${summary.api_contract_count}）`
           : ""}
       </span>
       <span className={cx("artifact-auth-actions")}>
@@ -219,9 +219,9 @@ export default function DetailReview({
 
 // 将后端审核对象类型转换为用户可读标签。
 function targetKindLabel(targetType: WorkflowDetailReviewTarget["target_type"]): string {
-  if (targetType === "page") return "页面";
+  if (targetType === "page") return "应用页面";
   if (targetType === "endpoint") return "接口";
-  return "实体";
+  return "应用API";
 }
 
 function PageReviewEditor({

@@ -113,7 +113,7 @@ export default function BrowserPreviewToolbar({
         </span>
       </Tooltip>
       <Select
-        aria-label="页面"
+        aria-label="应用页面"
         className={cx('browser-page-select')}
         options={pageOptions}
         value={selectedPage}
