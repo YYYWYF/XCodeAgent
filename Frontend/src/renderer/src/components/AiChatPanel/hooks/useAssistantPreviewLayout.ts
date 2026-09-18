@@ -5,7 +5,11 @@ import type {
   RefObject
 } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { DEFAULT_ASSISTANT_PANEL_RATIO, DEFAULT_DIFF_PANEL_WIDTH } from '../constants'
+import {
+  DEFAULT_ASSISTANT_PANEL_RATIO,
+  DEFAULT_DIFF_PANEL_WIDTH,
+  DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO
+} from '../constants'
 import type { RightPanelState } from '../types'
 import { clampAssistantPanelRatio } from '../utils'
 
@@ -21,6 +25,7 @@ type AssistantPreviewLayout = {
   splitDragging: boolean
 }
 
+/** 管理对话区与右侧工作区的分栏宽度、拖拽及预览初始比例。 */
 export function useAssistantPreviewLayout({
   rightPanelOpen
 }: {
@@ -38,10 +43,14 @@ export function useAssistantPreviewLayout({
       } as CSSProperties)
     : undefined
 
-  /** 每次首次打开 Diff 面板时按 500px 目标宽度换算成比例初始化，拖拽后的比例仍由用户控制。 */
+  /** 切入预览时扩宽右侧面板；切入 Diff 时按目标宽度初始化，之后允许拖拽。 */
   useLayoutEffect(() => {
     const previousType = previousRightPanelTypeRef.current
     previousRightPanelTypeRef.current = rightPanel?.type
+    if (rightPanel?.type === 'preview' && previousType !== 'preview') {
+      setAssistantPanelRatio(DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO)
+      return
+    }
     if (rightPanel?.type !== 'diff' || previousType === 'diff') return
 
     const panelWidth = panelRef.current?.getBoundingClientRect().width ?? 0

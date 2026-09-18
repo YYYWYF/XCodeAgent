@@ -157,7 +157,6 @@ type UseWorkflowConversationParams = {
   onRollbackTestSession: (identity: SessionIdentity, source?: SessionIdentity) => Promise<void>
   createReviewSession: (target: ReviewPhaseSessionTarget) => Promise<SessionIdentity>
   createAcceptanceSession: (target: AcceptancePhaseSessionTarget) => Promise<SessionIdentity>
-  acceptanceConversationSessionKey?: string
   ensureActiveSession: () => Promise<SessionIdentity>
   ensureDevelopmentSession: (target: ChatSessionDevelopmentTarget) => Promise<SessionIdentity>
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
@@ -617,7 +616,6 @@ export function useWorkflowConversation({
   onRollbackTestSession,
   createReviewSession,
   createAcceptanceSession,
-  acceptanceConversationSessionKey,
   ensureActiveSession,
   ensureDevelopmentSession,
   getSessionMessages,
@@ -710,18 +708,16 @@ export function useWorkflowConversation({
     }
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
-    const acceptanceConversationSession =
-      acceptanceConversationSessionKey && activeSession?.key === acceptanceConversationSessionKey
-        ? activeSession
-        : undefined
     const sessionIdentity =
-      acceptanceConversationSession ||
-      (isConversationWorkflow(activeWorkflow) && activeSession
+      isConversationWorkflow(activeWorkflow) && activeSession
         ? matchingActiveSession
-        : await ensureActiveSession())
-    const conversation =
-      Boolean(acceptanceConversationSession) ||
-      shouldUseConversation(conversationEnabled, activeWorkflow, workflowDebug, inputMode)
+        : await ensureActiveSession()
+    const conversation = shouldUseConversation(
+      conversationEnabled,
+      activeWorkflow,
+      workflowDebug,
+      inputMode
+    )
     const requestMessage = conversation
       ? appendElementContextToConversationPrompt(message, inspectedElementContext)
       : message
@@ -749,7 +745,6 @@ export function useWorkflowConversation({
       sessionIdentity,
       titleFrom: message,
       workflowDebug,
-      // 验收“不通过”只恢复普通对话；即使之前输入模式是 workflow，也必须走 conversation 端点。
       conversation,
       conversationElementContext: conversation ? inspectedElementContext : undefined
     })

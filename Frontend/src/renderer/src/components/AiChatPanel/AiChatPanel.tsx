@@ -885,8 +885,8 @@ export default function AiChatPanel({
   // 设计阶段自由变更是主规划 Workflow 的显式中断模式，默认保持锁定。
   const [interactingDetailTargetKey, setInteractingDetailTargetKey] = useState('')
   const [generatingDetailTargetKey, setGeneratingDetailTargetKey] = useState('')
-  // 验收阶段拒绝结果仅恢复普通对话，不改变后端 page_acceptance 待验收状态。
-  const [acceptanceConversationSessionKey, setAcceptanceConversationSessionKey] = useState('')
+  const [acceptanceRejecting, setAcceptanceRejecting] = useState(false)
+  const acceptanceRejectingRef = useRef(false)
   // 元素审查：是否激活 + 当前审查的元素上下文。两者语义相关，合并减少 state 数量。
   const [inspection, setInspection] = useState<{
     active: boolean
@@ -1072,9 +1072,8 @@ export default function AiChatPanel({
     updateSessionExecutionStatus
   } = useSessionRuntimeStore()
 
-  // 切换应用或规划线程时清空验收会话 key 和二次修改去重 ref。
+  // 切换应用或规划线程时清空二次修改去重 ref。
   useEffect(() => {
-    setAcceptanceConversationSessionKey('')
     designRevisionStartInteractionRef.current = ''
     formalRevisionSessionIdentitiesRef.current = {}
   }, [application.id, isApplicationPlanningPhase, planningThreadId, application.workspaceRoot])
@@ -1977,17 +1976,6 @@ export default function AiChatPanel({
     persistRevisionDevelopmentEntry,
     persistRevisionDevelopmentReceipt
   ])
-  // 切换到其他会话时清除“不通过后恢复对话”的局部状态，避免串用普通输入模式。
-  useEffect(() => {
-    if (
-      acceptanceConversationSessionKey &&
-      activeSession?.key &&
-      activeSession.key !== acceptanceConversationSessionKey
-    ) {
-      setAcceptanceConversationSessionKey('')
-    }
-  }, [acceptanceConversationSessionKey, activeSession?.key])
-
   /** 创建 formal revision 的独立可见会话；后端 Graph thread 与前端 conversation thread 分离。 */
   const prepareFormalRevisionSession = useCallback(
     async (input: WorkflowDesignStageRevisionStart): Promise<SessionIdentity> => {
@@ -2249,7 +2237,6 @@ export default function AiChatPanel({
     createTestSession,
     createReviewSession,
     createAcceptanceSession,
-    acceptanceConversationSessionKey,
     ensureActiveSession,
     ensureDevelopmentSession,
     getSessionMessages,
@@ -3532,7 +3519,10 @@ export default function AiChatPanel({
     ]
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
-  const acceptanceAwaiting = displayedPlanExecutionMode === 'awaiting_acceptance'
+  const acceptanceAwaiting =
+    activeWorkbenchPhase === 'acceptance' && displayedPlanExecutionMode === 'awaiting_acceptance'
+  const acceptancePreviewFocus =
+    activeWorkbenchPhase === 'acceptance' && showRightPanel && rightPanel?.type === 'preview'
   const activeSessionTargetKey = currentStageSessionTargetKey
   const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const activeWorkflowMatchesTarget = Boolean(
@@ -3682,10 +3672,24 @@ export default function AiChatPanel({
     setRightPanel(undefined)
   }
 
-  /** 验收不通过只解锁当前验收会话的普通对话，不向后端提交验收结果。 */
-  const handleAcceptanceReject = useCallback((): void => {
-    setAcceptanceConversationSessionKey(activeSession?.key || draftKey)
-  }, [activeSession?.key, draftKey])
+  /** 验收不通过时建立开发阶段对话，保留验收预览供用户描述二次修改。 */
+  const handleAcceptanceReject = useCallback(async (): Promise<void> => {
+    if (acceptanceRejectingRef.current) return
+    acceptanceRejectingRef.current = true
+    setAcceptanceRejecting(true)
+    try {
+      await createDevelopmentConversation('验收反馈：二次修改')
+      setTemporaryChatOpen(false)
+      setActiveView('chat')
+      setActiveDetailTarget({ type: 'none' })
+      switchPhase('development')
+    } catch (error) {
+      message.error(formatError(error, '进入开发阶段失败'))
+    } finally {
+      acceptanceRejectingRef.current = false
+      setAcceptanceRejecting(false)
+    }
+  }, [createDevelopmentConversation, switchPhase])
 
   /** 验收通过暂未接线，保留按钮并明确告知用户当前能力边界。 */
   const handleAcceptanceApprove = useCallback((): void => {
@@ -4403,6 +4407,7 @@ export default function AiChatPanel({
         showRightPanel && 'embedded-preview-open',
         rightPanel?.type === 'diff' && 'diff-panel-open',
         acceptanceAwaiting && 'acceptance-awaiting',
+        acceptancePreviewFocus && 'acceptance-preview-focus',
         elementInspectionActive && 'element-inspection-active',
         splitDragging && 'split-dragging'
       )}
@@ -4867,9 +4872,9 @@ export default function AiChatPanel({
           />
           {acceptanceAwaiting && (
             <AcceptanceDecisionDock
-              disabled={loading || workspaceBusy}
+              disabled={loading || workspaceBusy || acceptanceRejecting}
               onAccept={handleAcceptanceApprove}
-              onReject={handleAcceptanceReject}
+              onReject={() => void handleAcceptanceReject()}
             />
           )}
         </div>

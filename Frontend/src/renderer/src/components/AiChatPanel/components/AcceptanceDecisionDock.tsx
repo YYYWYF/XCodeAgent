@@ -12,7 +12,7 @@ type Props = {
   onAccept: () => void
 }
 
-/** 验收待确认底栏：拒绝只恢复对话，验收通过暂时只提示未开放。 */
+/** 验收待确认底栏：不通过返回开发对话，通过动作由上层处理。 */
 export default function AcceptanceDecisionDock({
   disabled = false,
   onReject,
@@ -29,7 +29,7 @@ export default function AcceptanceDecisionDock({
           disabled={disabled}
           icon={<CloseCircleOutlined />}
           onClick={onReject}
-          type="default"
+          type="primary"
         >
           不通过，进入对话
         </Button>

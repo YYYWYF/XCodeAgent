@@ -1,7 +1,8 @@
 import type { ChatCopy } from './types'
 
-// 左右分栏按比例分配，适配不同屏幕尺寸：左侧对话区默认占 2/3。
+// 普通右侧面板默认保留 2/3 给对话区，预览首次打开时使用更宽的独立比例。
 export const DEFAULT_ASSISTANT_PANEL_RATIO = 2 / 3
+export const DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO = 0.4
 export const MIN_ASSISTANT_PANEL_RATIO = 0.3
 export const MIN_RIGHT_PANEL_RATIO = 0.2
 // diff 面板首次打开时按固定目标宽度（px）初始化，内容宽度需求稳定。

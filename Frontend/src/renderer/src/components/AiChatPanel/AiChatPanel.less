@@ -11,13 +11,25 @@
   background: var(--wb-canvas);
 }
 
-// 验收待验收时为右侧预览预留决策底栏，同时保留验收 Agent 对话区。
+// 验收待确认时预览占满主区域，并为底部决策栏预留空间。
 .@{class-prefix}-acceptance-awaiting {
   --acceptance-decision-dock-height: 84px;
 
   .@{class-prefix}-embedded-preview-pane {
     box-sizing: border-box;
     padding-bottom: var(--acceptance-decision-dock-height);
+  }
+}
+
+.@{class-prefix}-acceptance-preview-focus {
+  .@{class-prefix}-ai-chat-assistant,
+  .@{class-prefix}-panel-split-handle {
+    display: none;
+  }
+
+  .@{class-prefix}-embedded-preview-pane {
+    flex: 1 1 100%;
+    width: 100%;
   }
 }
 

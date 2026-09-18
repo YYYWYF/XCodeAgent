@@ -13,11 +13,11 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/utils'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
 import { projectLaunchProgress } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/projectLaunchProgress'
-import { phasePendingDetail } from '../src/renderer/src/components/AiChatPanel/components/MessageList/phasePending'
 import {
   preparePhaseTransitionSession,
   sessionsForWorkbenchPhase
 } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
+import { DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO } from '../src/renderer/src/components/AiChatPanel/constants'
 import type {
   ApplicationLifecycle,
   WorkbenchExecution,
@@ -239,14 +239,21 @@ test('验收 Agent 头像拥有可见的阶段背景', () => {
   )
 })
 
-test('验收空白会话展示验收 Agent 启动提示且预览不隐藏对话区', () => {
+test('验收预览占满主区域，普通预览首次打开时右侧占六成', () => {
   const panelStyles = readFileSync(
     path.join(process.cwd(), 'src/renderer/src/components/AiChatPanel/AiChatPanel.less'),
     'utf8'
   )
 
-  assert.equal(phasePendingDetail('acceptance'), '正在启动项目准备验收…')
-  assert.doesNotMatch(panelStyles, /acceptance-preview-focus/)
+  assert.equal(DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO, 0.4)
+  assert.match(
+    panelStyles,
+    /acceptance-preview-focus[\s\S]*ai-chat-assistant,[\s\S]*panel-split-handle\s*\{\s*display:\s*none/
+  )
+  assert.match(
+    panelStyles,
+    /acceptance-preview-focus[\s\S]*embedded-preview-pane\s*\{[^}]*width:\s*100%/
+  )
 })
 
 test('阶段交接等待会话创建完成后才切换阶段', async () => {
