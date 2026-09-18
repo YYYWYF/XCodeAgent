@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -109,3 +110,40 @@ class EndpointDesignDetailTests(unittest.TestCase):
                 )
             self.assertEqual(result["artifactRevision"], "revision-1")
             self.assertEqual(result["payload"]["draft"]["fieldMappings"], [])
+
+    def test_save_does_not_invalidate_formal_build_task_plan(self) -> None:
+        """保存独立 API 映射时不得改写工作区唯一的 Formal DAG 计划。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan_path = Path(workspace) / ".xcodeagent" / "plans" / "build-task-plan.json"
+            plan_path.parent.mkdir(parents=True)
+            formal_plan = {
+                "status": "ready",
+                "confirmation_status": "confirmed",
+                "marker": "formal-plan-a",
+            }
+            plan_path.write_text(json.dumps(formal_plan), encoding="utf-8")
+            request = EndpointDesignSaveRequest(
+                workspaceRoot=workspace,
+                apiContractId="orders-api",
+                endpointId="orders.list",
+                baseRevision="a" * 32,
+                draft={"apiContractId": "orders-api", "endpointId": "orders.list"},
+            )
+            with patch(
+                "app.services.endpoint_design_detail._read_current_technical_plan",
+                return_value={"api_contracts": []},
+            ), patch(
+                "app.services.endpoint_design_detail.read_endpoint_design",
+                return_value={"artifactRevision": "a" * 32},
+            ), patch(
+                "app.services.endpoint_design_detail.confirm_api_design",
+                return_value={"design": {"artifactRevision": "b" * 32}, "artifacts": {}},
+            ), patch(
+                "app.services.endpoint_design_detail.endpoint_design_status",
+                return_value={"status": "confirmed", "designed": True, "reason": ""},
+            ):
+                result = save_endpoint_design(request)
+
+            self.assertEqual(result["status"], "saved")
+            self.assertEqual(json.loads(plan_path.read_text(encoding="utf-8")), formal_plan)

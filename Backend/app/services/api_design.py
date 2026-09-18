@@ -34,7 +34,6 @@ from app.services.api_design_mapping_rules import (
     mapping_sources,
     validate_unique_sources,
 )
-from app.services.artifact_invalidation import mark_artifact_document_stale
 from app.services.api_design_schema import resolve_mapping_schema
 from app.services.data_sources import (
     DataSourceError,
@@ -57,14 +56,6 @@ _CONFIRMED_FIELD_MAPPING_ADAPTER = TypeAdapter(ConfirmedFieldMapping)
 
 class ApiDesignError(ValueError):
     """表示 API 动态映射目标、来源或关系不符合当前契约。"""
-
-
-def invalidate_api_design_consumers(workspace_root: str | Path) -> None:
-    """字段映射保存后使旧 Build DAG 计划失效，避免继续消费旧来源快照。"""
-
-    path = Path(workspace_root).expanduser().resolve() / ".xcodeagent" / "plans" / "build-task-plan.json"
-    if path.is_file():
-        mark_artifact_document_stale(path)
 
 
 def normalize_api_design_action(value: Any) -> dict[str, Any] | None:

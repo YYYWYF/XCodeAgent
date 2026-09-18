@@ -18,7 +18,6 @@ from app.services.api_design import (
     ApiDesignError,
     confirm_api_design,
     initial_api_design_payload,
-    invalidate_api_design_consumers,
 )
 
 
@@ -129,7 +128,6 @@ def save_endpoint_design(request: EndpointDesignSaveRequest) -> dict[str, Any]:
             "draft": request.draft,
         },
     )
-    invalidate_api_design_consumers(workspace)
     return {
         "status": "saved",
         "apiContractId": request.api_contract_id,

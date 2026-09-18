@@ -82,22 +82,6 @@ def mark_artifact_documents_stale(
     return stale
 
 
-def mark_artifact_document_stale(path: str | Path) -> None:
-    """把一个已确定受影响的直接下游正式产物原子标记为 stale。"""
-
-    document_path = Path(path)
-    try:
-        value = json.loads(document_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ArtifactInvalidationError(f"正式产物无法读取：{document_path}") from exc
-    if not isinstance(value, dict):
-        raise ArtifactInvalidationError(f"正式产物必须是对象：{document_path}")
-    _write_json_atomically(
-        document_path,
-        {**value, "confirmation_status": "stale", "status": "stale"},
-    )
-
-
 def assert_confirmed_artifact_closure(
     artifacts: dict[str, dict[str, Any]],
     *,

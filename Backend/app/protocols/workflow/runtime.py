@@ -1501,6 +1501,10 @@ def build_workflow_ag_ui_stream(
 
                 if stream_mode == "messages":
                     message_chunk, metadata = chunk
+                    node_name = ""
+                    if isinstance(metadata, dict):
+                        node_name = str(metadata.get("langgraph_node") or "")
+                    expose_tool_activity = node_name != "prepare_build_tasks"
                     process_frames, process_sequence = _message_process_frames(
                         encoder,
                         message_chunk=message_chunk,
@@ -1509,6 +1513,7 @@ def build_workflow_ag_ui_stream(
                         tool_steps=tool_steps,
                         tool_indexes=tool_indexes,
                         sequence=process_sequence,
+                        expose_tool_activity=expose_tool_activity,
                     )
                     for frame in process_frames:
                         yield frame

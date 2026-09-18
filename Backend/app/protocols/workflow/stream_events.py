@@ -232,6 +232,7 @@ def _message_process_frames(
     tool_steps: dict[str, dict[str, str]],
     tool_indexes: dict[int, str],
     sequence: int,
+    expose_tool_activity: bool = True,
 ) -> tuple[list[str], int]:
     frames: list[str] = []
     metadata = metadata if isinstance(metadata, dict) else {}
@@ -254,6 +255,10 @@ def _message_process_frames(
                 sequence=sequence,
             )
         )
+
+    # DAG Unit Generation 仍保留模型推理/文本投影，但在注册工具状态前截断，避免内部工具活动进入 AG-UI。
+    if not expose_tool_activity:
+        return frames, sequence
 
     tool_call_id = str(getattr(message_chunk, "tool_call_id", "") or "")
     if tool_call_id and tool_call_id in tool_steps:

@@ -410,6 +410,11 @@ class FakeCodeChangesGraph:
 
 
 class FakeStreamingToolGraph:
+    def __init__(self, node_name: str = "direct_modification") -> None:
+        """设置消息流使用的 LangGraph 节点名称。"""
+
+        self.node_name = node_name
+
     async def astream(self, initial_state, *, config, stream_mode):
         yield (
             "messages",
@@ -422,7 +427,7 @@ class FakeStreamingToolGraph:
                         {"id": "call-1", "name": "read_file", "args": '{"path":', "index": 0}
                     ],
                 ),
-                {"langgraph_node": "direct_modification"},
+                {"langgraph_node": self.node_name},
             ),
         )
         yield (
@@ -436,7 +441,7 @@ class FakeStreamingToolGraph:
                         {"id": None, "name": None, "args": '"README.md"}', "index": 0}
                     ],
                 ),
-                {"langgraph_node": "direct_modification"},
+                {"langgraph_node": self.node_name},
             ),
         )
         yield (
@@ -449,7 +454,7 @@ class FakeStreamingToolGraph:
                     tool_call_id="call-1",
                     tool_call_chunks=[],
                 ),
-                {"langgraph_node": "direct_modification"},
+                {"langgraph_node": self.node_name},
             ),
         )
         yield (
@@ -597,6 +602,32 @@ class FakeDagGenerationProgressGraph:
                 "artifacts": [],
             },
         }
+        yield "messages", (
+            SimpleNamespace(
+                id="dag-tool-message",
+                content="",
+                additional_kwargs={"reasoning_content": "正在读取冻结合同片段。"},
+                tool_call_chunks=[
+                    {
+                        "id": "dag-call-1",
+                        "name": "frozen_contract_fragment",
+                        "args": '{"contractId":"endpoint:users"}',
+                        "index": 0,
+                    }
+                ],
+            ),
+            {"langgraph_node": "prepare_build_tasks"},
+        )
+        yield "messages", (
+            SimpleNamespace(
+                id="dag-tool-result",
+                content="internal frozen contract result",
+                additional_kwargs={},
+                tool_call_id="dag-call-1",
+                tool_call_chunks=[],
+            ),
+            {"langgraph_node": "prepare_build_tasks"},
+        )
         yield "custom", {
             "type": "prepare_build_tasks.progress",
             "message": "正在调用任务规划模型。",
@@ -1763,7 +1794,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
     def test_stream_emits_incremental_standard_tool_call_events(self) -> None:
         async def collect() -> list[str]:
             stream = build_workflow_ag_ui_stream(
-                graph=FakeStreamingToolGraph(),
+                graph=FakeStreamingToolGraph(node_name="build"),
                 payload={
                     "threadId": "thread-tools",
                     "runId": "run-tools",
@@ -1820,7 +1851,9 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             )
             return [frame async for frame in stream]
 
-        frames = _decode_agent_process_frames(asyncio.run(collect()))
+        raw_frames = asyncio.run(collect())
+        payload = "\n".join(raw_frames)
+        frames = _decode_agent_process_frames(raw_frames)
         dag_frames = [
             frame
             for frame in frames
@@ -1828,6 +1861,14 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             and isinstance(frame.get("dagGeneration"), dict)
         ]
 
+        self.assertNotIn("TOOL_CALL_START", payload)
+        self.assertNotIn("TOOL_CALL_ARGS", payload)
+        self.assertNotIn("TOOL_CALL_END", payload)
+        self.assertNotIn("TOOL_CALL_RESULT", payload)
+        self.assertFalse(
+            any(frame.get("kind") in {"tool", "command"} for frame in frames)
+        )
+        self.assertTrue(any(frame.get("kind") == "reasoning" for frame in frames))
         self.assertEqual([frame["status"] for frame in dag_frames], ["running", "running", "completed"])
         self.assertEqual(dag_frames[0]["dagGeneration"]["stages"][0]["status"], "running")
         self.assertEqual(dag_frames[1]["dagGeneration"]["stages"][1]["status"], "running")
