@@ -43,6 +43,7 @@ export function usePreviewRuntime(options: Options): {
   const [open, setOpen] = useState(false)
   const [snapshot, setSnapshot] = useState<PreviewRuntimePayload>()
   const [busy, setBusy] = useState(false)
+  const [busyLaunchLabel, setBusyLaunchLabel] = useState<ServiceStatusControl['busyLaunchLabel']>()
   const [error, setError] = useState('')
   const [repairs, setRepairs] = useState<Record<string, PreviewRuntimePayload['repair']>>({})
   const busyRef = useRef(false)
@@ -238,6 +239,14 @@ export function usePreviewRuntime(options: Options): {
     }
     cancelRequestedRef.current = false
     busyRef.current = true
+    setBusyLaunchLabel(
+      action === 'restart'
+        ? snapshot?.runtime?.frontend.status === 'running' &&
+          snapshot.runtime.backend.status === 'running'
+          ? '重启服务'
+          : '启动服务'
+        : undefined
+    )
     setBusy(true)
     setError('')
     const previous = identity ? captured.getMessages(identity.key) : []
@@ -371,6 +380,7 @@ export function usePreviewRuntime(options: Options): {
         activeRunControllerRef.current = null
       busyRef.current = false
       setBusy(false)
+      setBusyLaunchLabel(undefined)
       if (identity && !awaitingConfirmation) releaseSessionExecution(identity.key)
     }
     if (identity) {
@@ -405,6 +415,7 @@ export function usePreviewRuntime(options: Options): {
       setOpen,
       snapshot,
       busy,
+      busyLaunchLabel,
       error,
       blockedReason,
       onRestart: () => {

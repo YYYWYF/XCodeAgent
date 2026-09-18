@@ -21,6 +21,7 @@ export type ServiceStatusControl = {
   setOpen: (open: boolean) => void
   snapshot?: PreviewRuntimePayload
   busy: boolean
+  busyLaunchLabel?: '启动服务' | '重启服务'
   error: string
   blockedReason: string
   onRestart: () => void
@@ -90,6 +91,11 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
   })
   const actionTone = busy ? 'is-busy' : blockedReason ? 'is-blocked' : 'is-ready'
   const actionLabel = busy ? '处理中' : blockedReason ? '任务占用' : runtime ? '可操作' : '可启动'
+  const launchLabel =
+    runtime?.frontend.status === 'running' && runtime?.backend.status === 'running'
+      ? '重启服务'
+      : '启动服务'
+  const launching = busy && !!props.busyLaunchLabel
 
   useEffect(() => {
     if (runtime?.failedStage)
@@ -210,14 +216,14 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
           </div>
           <div className="preview-service-actions__buttons">
             <Button
-              className="preview-service-action-button is-restart"
+              className={`preview-service-action-button is-restart${launching ? ' is-launching' : ''}`}
               type="primary"
               icon={<ReloadOutlined />}
-              loading={busy}
+              loading={launching}
               disabled={!actionAvailability.canRestart}
               onClick={props.onRestart}
             >
-              启动服务
+              {launching ? `${props.busyLaunchLabel}中` : launchLabel}
             </Button>
             <Button
               className="preview-service-action-button is-repair"
