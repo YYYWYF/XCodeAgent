@@ -102,10 +102,3 @@ export function clearInitializationPlanningRecord(application: Pick<ApplicationC
   window.localStorage.removeItem(storageKey(application))
   window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: { applicationId: application.id, versionId: application.currentVersionId || 'current' } }))
 }
-
-/** 清除原型规划记录，静态演示基线仍保留在演示数据目录中。 */
-export function clearInitializationPlanningRecords(): void {
-  if (typeof window === 'undefined') return
-  Object.keys(window.localStorage).filter((key) => key.startsWith(STORAGE_PREFIX)).forEach((key) => window.localStorage.removeItem(key))
-  window.dispatchEvent(new CustomEvent(CHANGE_EVENT))
-}

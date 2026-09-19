@@ -467,7 +467,11 @@ for (const version of presetCompletedVersions) {
   // 按版本链正序播种：后一个版本派生时能读到前一个版本的记录作为继承来源。
   for (const version of presetCompletedVersions) {
     const identity = { id: presetApp.id, currentVersionId: version.id }
-    if (readInitializationPlanningRecord(identity)) continue
+    // released 预置版本是只读静态基线，每次加载都按当前种子重播：持久化记录可能播种于
+    // 旧契约形态（如应用API契约加入前缺 apis），留着会让历史版本回看缺产物、
+    // “基于此版本迭代”继承到空契约；真实用户进度只存在于 iterating 版本，不受影响。
+    // iterating 的 v1.3 保持跳过：其记录由历史回放生成器覆盖为带正式文档的版本。
+    if (version.status !== 'released' && readInitializationPlanningRecord(identity)) continue
     persistInitializationPlanningRecord(
       createInitializationPlanningRecord({ ...presetApp, currentVersionId: version.id }, seed),
       identity

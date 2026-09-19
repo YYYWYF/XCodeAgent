@@ -84,6 +84,25 @@ function buildDefaultVersionLog(): string {
   return '新增回检单填报与审核功能'
 }
 
+// 后台测试用例准备的启动阶段集合：需求文档确认后即开始，覆盖设计后段与计划全程。
+const TEST_PREPARATION_STAGES = new Set([
+  'generating_ui_designs',
+  'awaiting_ui_design_confirmation',
+  'generating_technical_plan',
+  'awaiting_technical_plan_confirmation',
+  'generating_application_template_files',
+  'awaiting_development_entry',
+  'ready_for_workbench'
+])
+
+// 顶部比值数字的显示阶段集合：技术规划确认后（模板生成、开发准入门、工作台与已发布版本）
+// 才展示开发产物比例与用例数量；准备任务的启动集合比它更宽（见 TEST_PREPARATION_STAGES）。
+const PLAN_COUNTERS_STAGES = new Set([
+  'generating_application_template_files',
+  'awaiting_development_entry',
+  'ready_for_workbench'
+])
+
 /** 抽屉空间有限：运行中只对外表达整体是否在执行（执行中/排队中），不展示内部子节点阶段。 */
 function backgroundTaskPhaseText(task: BackgroundTask): string {
   if (task.status === 'queued') return '排队中'
@@ -138,6 +157,22 @@ function makeInitialLifecycle(appId: string, appName: string): ApplicationLifecy
   } as ApplicationLifecycle
 }
 
+/** 阶段准入门状态对：available 由聊天面板上报（具备进入条件），request 自增用于再次唤起弹框。 */
+type EntryGate = {
+  available: boolean
+  setAvailable: (value: boolean) => void
+  request: number
+  requestOpen: () => void
+}
+
+/** “允许进入”与“请求唤起”是同一准入门的两个协同状态，四个门共用这一封装。 */
+function useEntryGate(): EntryGate {
+  const [available, setAvailable] = useState(false)
+  const [request, setRequest] = useState(0)
+  const requestOpen = useCallback((): void => setRequest((count) => count + 1), [])
+  return { available, setAvailable, request, requestOpen }
+}
+
 // 组织工作台状态，并以正式 ProjectPlan 应用页面清单驱动首个应用页面规划选择。
 function WorkbenchPage({
   application,
@@ -169,18 +204,12 @@ function WorkbenchPage({
     projectParentPath: application.projectParentPath || ''
   })
   const [iterationModalOpen, setIterationModalOpen] = useState(false)
-  // 审查阶段进入口：聊天面板上报“允许进入”（全部开发产物完成），顶部阶段条发起“进入确认”。
-  // “允不允许进入”与“当前进没进去”是两个状态，分别由这两个 state 承载。
-  const [testingEntryAvailable, setTestingEntryAvailable] = useState(false)
-  const [testingEntryRequest, setTestingEntryRequest] = useState(0)
-  // 开发准入门（计划确认后的进入开发弹框）：与测试/审查共用“可进入 + 重新唤起请求”模式。
-  const [developmentEntryAvailable, setDevelopmentEntryAvailable] = useState(false)
-  const [developmentEntryRequest, setDevelopmentEntryRequest] = useState(0)
-  // 项目规划准入门（需求文档确认后的进入项目规划弹框）：与开发准入门同一模式。
-  const [planningEntryAvailable, setPlanningEntryAvailable] = useState(false)
-  const [planningEntryRequest, setPlanningEntryRequest] = useState(0)
-  const [reviewEntryAvailable, setReviewEntryAvailable] = useState(false)
-  const [reviewEntryRequest, setReviewEntryRequest] = useState(0)
+  // 四个阶段准入门（规划/开发/测试/审查）统一为“可进入 + 重新唤起请求”模式：
+  // “允不允许进入”与“当前进没进去”是两个状态，分别由 available 与 request 承载。
+  const planningEntry = useEntryGate()
+  const developmentEntry = useEntryGate()
+  const testingEntry = useEntryGate()
+  const reviewEntry = useEntryGate()
   const [developmentArtifactProgress, setDevelopmentArtifactProgress] =
     useState<WorkbenchArtifactProgress>({ completed: 0, total: 0 })
   const [testPreparationOpenRequest, setTestPreparationOpenRequest] = useState(0)
@@ -224,10 +253,15 @@ function WorkbenchPage({
     }
     setAuxiliaryDrawerMode('conversation-management')
   }
-  /** 左侧数据来源入口与其它抽屉互斥；重复点击同一入口时收起。 */
+  /** 左侧数据源入口与其它抽屉互斥；重复点击同一入口时收起。 */
   const toggleDataSourcesDrawer = (): void => {
     setBackgroundTasksDrawer(null)
     setAuxiliaryDrawerMode((current) => (current === 'data-sources' ? null : 'data-sources'))
+  }
+  /** 左侧外部API入口与其它抽屉互斥；重复点击同一入口时收起。 */
+  const toggleExternalApisDrawer = (): void => {
+    setBackgroundTasksDrawer(null)
+    setAuxiliaryDrawerMode((current) => (current === 'external-apis' ? null : 'external-apis'))
   }
   // 抽屉打开期间轮询快照；切走或关闭时停止。
   useEffect(() => {
@@ -240,11 +274,12 @@ function WorkbenchPage({
     const timer = window.setInterval(refresh, 700)
     return () => window.clearInterval(timer)
   }, [auxiliaryDrawerMode])
-  // 对话区「来源缺失引导卡」请求打开数据来源抽屉：收到事件即展开并互斥关闭其它抽屉。
+  // 对话区「来源缺失引导卡」请求打开来源抽屉：按缺失类型展开数据源或外部API抽屉，并互斥关闭其它抽屉。
   useEffect(() => {
-    const open = (): void => {
+    const open = (event: Event): void => {
+      const kind = (event as CustomEvent<{ kind?: 'database' | 'external' }>).detail?.kind
       setBackgroundTasksDrawer(null)
-      setAuxiliaryDrawerMode('data-sources')
+      setAuxiliaryDrawerMode(kind === 'external' ? 'external-apis' : 'data-sources')
     }
     window.addEventListener('aistudio:prototype:open-data-sources', open)
     return () => window.removeEventListener('aistudio:prototype:open-data-sources', open)
@@ -428,24 +463,17 @@ function WorkbenchPage({
     isViewingActiveVersion && viewedVersion?.lifecycle && applicationLifecycle
       ? latestApplicationLifecycle(viewedVersion.lifecycle, applicationLifecycle)
       : viewedVersion?.lifecycle || applicationLifecycle
-  const testCasePreparationEnabled = new Set([
-    'generating_ui_designs',
-    'awaiting_ui_design_confirmation',
-    'generating_technical_plan',
-    'awaiting_technical_plan_confirmation',
-    'generating_application_template_files',
-    'awaiting_development_entry',
-    'ready_for_workbench'
-  ]).has(String(versionLifecycle?.initialization?.stage || ''))
-  // 顶部比值数字（开发产物完成比例 / 测试用例数量）的显示口径：技术规划方案确认后才
-  // 出现，确认前（设计全程 + 技术规划生成与确认）一律不显示。后台用例准备任务早于
-  // 显示口径启动（testCasePreparationEnabled），这里只约束「看得见」，不约束「做没做」。
-  const planCountersVisible = new Set([
-    // 技术规划确认后进入模板生成与开发准入门，ready_for_workbench 覆盖工作台与已发布版本。
-    'generating_application_template_files',
-    'awaiting_development_entry',
-    'ready_for_workbench'
-  ]).has(String(versionLifecycle?.initialization?.stage || ''))
+  // 后台测试用例准备的启动阶段集合：需求文档确认后即开始准备（覆盖 UI 设计、
+  // 技术规划生成与确认全程），只约束“做没做”，不约束顶部数字“看不看得见”。
+  const testCasePreparationEnabled = TEST_PREPARATION_STAGES.has(
+    String(versionLifecycle?.initialization?.stage || '')
+  )
+  // 顶部比值数字（开发产物完成比例 / 测试用例数量）的显示阶段集合：技术规划方案确认后
+  // 才出现，确认前（设计全程 + 技术规划生成与确认）一律不显示；用例准备任务早于
+  // 显示口径启动，这里只约束「看得见」。
+  const planCountersVisible = PLAN_COUNTERS_STAGES.has(
+    String(versionLifecycle?.initialization?.stage || '')
+  )
   const testCasePreparation = useAsyncTestCasePreparation(
     workspaceApplication.id,
     viewedVersion?.id || activeVersionId || 'current',
@@ -488,31 +516,23 @@ function WorkbenchPage({
     },
     []
   )
-  /** 两套任务系统的抽屉条目按各自流水独立映射；交互结构一致，仅数据源不同。 */
+  /** 两套任务系统的抽屉条目：同一映射、同一交互结构，仅按算力池过滤数据源。 */
   const backgroundTaskItems = useMemo<Record<BackgroundTaskSystem, BackgroundTaskItem[]>>(
-    () => ({
+    () => {
       // 抽屉是后台队列任务的唯一入口；同步执行在工作流内当场完成，不进任何任务池。
-      async: versionBackgroundTasks
-        .filter((task) => task.pool === 'async')
-        .map((task) =>
-          mapBackgroundTaskItem(
-            task,
-            handleAcceptBackgroundTask,
-            handleSwitchBackgroundTaskQueue,
-            Boolean(acceptanceInFlight[task.id])
+      const itemsFor = (pool: BackgroundTaskSystem): BackgroundTaskItem[] =>
+        versionBackgroundTasks
+          .filter((task) => task.pool === pool)
+          .map((task) =>
+            mapBackgroundTaskItem(
+              task,
+              handleAcceptBackgroundTask,
+              handleSwitchBackgroundTaskQueue,
+              Boolean(acceptanceInFlight[task.id])
+            )
           )
-        ),
-      tide: versionBackgroundTasks
-        .filter((task) => task.pool === 'tide')
-        .map((task) =>
-          mapBackgroundTaskItem(
-            task,
-            handleAcceptBackgroundTask,
-            handleSwitchBackgroundTaskQueue,
-            Boolean(acceptanceInFlight[task.id])
-          )
-        )
-    }),
+      return { async: itemsFor('async'), tide: itemsFor('tide') }
+    },
     [
       acceptanceInFlight,
       handleAcceptBackgroundTask,
@@ -601,11 +621,7 @@ function WorkbenchPage({
       )
     }
     setWorkspaceApplication(nextApplication)
-    void saveStoredApplications(
-      loadCachedApplications().map((item) =>
-        item.id === nextApplication.id ? nextApplication : item
-      )
-    )
+    persistApplicationToIndex(nextApplication)
     generatingRef.current = false
     setGenerating(null)
     setPublishModalOpen(false)
@@ -646,6 +662,13 @@ function WorkbenchPage({
     revision: nextSyntheticLifecycleRevision(applicationLifecycle?.revision ?? 0)
   })
 
+  /** 把更新后的应用按 id 合并回持久化索引；工作台内的内存态先落，磁盘随后跟上。 */
+  const persistApplicationToIndex = (next: ApplicationConfig): void => {
+    void saveStoredApplications(
+      loadCachedApplications().map((item) => (item.id === next.id ? next : item))
+    )
+  }
+
   /** 把派生的新迭代版本安装为当前工作版本（回退与发起新迭代共用）：
    *  持久化版本链、把查看与工作指针切到新版本、重置规划产物、清掉同名版本遗留的
    *  应用API绑定缓存与规划记录（版本 id 重载后可能复用，否则上一轮的中间态会劫持阶段定位），
@@ -657,9 +680,7 @@ function WorkbenchPage({
       currentVersionId: next.id
     }
     setWorkspaceApplication(nextApplication)
-    void saveStoredApplications(
-      loadCachedApplications().map((item) => (item.id === nextApplication.id ? nextApplication : item))
-    )
+    persistApplicationToIndex(nextApplication)
     setViewingVersionId(next.id)
     setDevelopmentPlanningPages(resetDevelopmentPlanningPages)
     setDevelopmentPlanningPageTree(resetDevelopmentPlanningPageTree)
@@ -729,14 +750,14 @@ function WorkbenchPage({
               onRollbackVersion={setRollbackTargetId}
               onStartIteration={() => setIterationModalOpen(true)}
               onVersionSelect={handleVersionSelect}
-              canEnterTestingStage={testingEntryAvailable}
-              onRequestEnterTesting={() => setTestingEntryRequest((count) => count + 1)}
-              canEnterDevelopmentStage={developmentEntryAvailable}
-              onRequestEnterDevelopment={() => setDevelopmentEntryRequest((count) => count + 1)}
-              canEnterPlanningStage={planningEntryAvailable}
-              onRequestEnterPlanning={() => setPlanningEntryRequest((count) => count + 1)}
-              canEnterReviewStage={reviewEntryAvailable}
-              onRequestEnterReview={() => setReviewEntryRequest((count) => count + 1)}
+              canEnterTestingStage={testingEntry.available}
+              onRequestEnterTesting={testingEntry.requestOpen}
+              canEnterDevelopmentStage={developmentEntry.available}
+              onRequestEnterDevelopment={developmentEntry.requestOpen}
+              canEnterPlanningStage={planningEntry.available}
+              onRequestEnterPlanning={planningEntry.requestOpen}
+              canEnterReviewStage={reviewEntry.available}
+              onRequestEnterReview={reviewEntry.requestOpen}
               developmentArtifactProgress={developmentArtifactProgress}
               planConfirmed={planCountersVisible}
               testCasePreparation={testCasePreparation.snapshot}
@@ -760,14 +781,14 @@ function WorkbenchPage({
                 onApplicationLifecycleChange={onApplicationLifecycleChange}
                 versionViewKey={viewedVersion?.id || ''}
                 versionReadOnly={!isViewingActiveVersion || viewedVersion?.status === 'released'}
-                testingEntryRequest={testingEntryRequest}
-                onTestingEntryAvailableChange={setTestingEntryAvailable}
-                developmentEntryRequest={developmentEntryRequest}
-                onDevelopmentEntryAvailableChange={setDevelopmentEntryAvailable}
-                planningEntryRequest={planningEntryRequest}
-                onPlanningEntryAvailableChange={setPlanningEntryAvailable}
-                reviewEntryRequest={reviewEntryRequest}
-                onReviewEntryAvailableChange={setReviewEntryAvailable}
+                testingEntryRequest={testingEntry.request}
+                onTestingEntryAvailableChange={testingEntry.setAvailable}
+                developmentEntryRequest={developmentEntry.request}
+                onDevelopmentEntryAvailableChange={developmentEntry.setAvailable}
+                planningEntryRequest={planningEntry.request}
+                onPlanningEntryAvailableChange={planningEntry.setAvailable}
+                reviewEntryRequest={reviewEntry.request}
+                onReviewEntryAvailableChange={reviewEntry.setAvailable}
                 onDevelopmentArtifactProgressChange={setDevelopmentArtifactProgress}
                 testCasePreparation={testCasePreparation.snapshot}
                 testPreparationOpenRequest={testPreparationOpenRequest}
@@ -779,6 +800,8 @@ function WorkbenchPage({
                 conversationDrawerOpen={auxiliaryDrawerMode === 'conversation-management'}
                 onOpenDataSources={toggleDataSourcesDrawer}
                 dataSourcesDrawerOpen={auxiliaryDrawerMode === 'data-sources'}
+                onOpenExternalApis={toggleExternalApisDrawer}
+                externalApisDrawerOpen={auxiliaryDrawerMode === 'external-apis'}
                 onConversationManagementReady={handleConversationManagementReady}
                 onCloseAuxiliaryDrawer={() => setAuxiliaryDrawerMode(null)}
                 backgroundTaskAcceptRequest={backgroundTaskAcceptRequest}
@@ -812,21 +835,20 @@ function WorkbenchPage({
                     title={BACKGROUND_TASK_SYSTEM_LABEL[system]}
                   />
                 ))}
-                {auxiliaryDrawerMode ? (
-                  <AuxiliaryDrawer
-                    conversationManagement={conversationManagementContent}
-                    mode={auxiliaryDrawerMode}
-                    onClose={() => setAuxiliaryDrawerMode(null)}
-                    onOpenConversationManagement={() =>
-                      setAuxiliaryDrawerMode('conversation-management')
-                    }
-                    onOpenTemporaryConversation={() =>
-                      setAuxiliaryDrawerMode('temporary-conversation')
-                    }
-                    onRetryTestCases={testCasePreparation.retry}
-                    testPreparation={testCasePreparation.snapshot}
-                  />
-                ) : null}
+                {/* 抽屉常挂载：mode 为 null 即收起态，靠过渡滑出；展开/收起/切换模式动画统一。 */}
+                <AuxiliaryDrawer
+                  conversationManagement={conversationManagementContent}
+                  mode={auxiliaryDrawerMode}
+                  onClose={() => setAuxiliaryDrawerMode(null)}
+                  onOpenConversationManagement={() =>
+                    setAuxiliaryDrawerMode('conversation-management')
+                  }
+                  onOpenTemporaryConversation={() =>
+                    setAuxiliaryDrawerMode('temporary-conversation')
+                  }
+                  onRetryTestCases={testCasePreparation.retry}
+                  testPreparation={testCasePreparation.snapshot}
+                />
               </div>
             </div>
           </div>

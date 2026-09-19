@@ -80,12 +80,18 @@ export default function DatabaseConnectionModal({
     if (open) setDraft(editing ? draftFromSource(editing) : createDraft())
   }, [editing, open])
 
-  /** 校验必填与模式专属字段；错误就地提示，不关闭弹窗。 */
+  /** 校验必填项；错误就地提示，不关闭弹窗。名称必填；本地直连要求完整连接参数，DBID 要求实例标识。 */
   const validate = (): string => {
     if (!draft.name.trim()) return '请输入数据源名称。'
-    const savedPassword = editing ? editing.hasPassword : false
-    if (draft.mode === 'direct' && !savedPassword && !draft.password.trim())
-      return '本地直连必须填写密码。'
+    if (draft.mode === 'direct') {
+      if (!draft.domain.trim()) return '请输入数据库地址。'
+      if (!draft.port) return '请输入端口。'
+      if (!draft.schema.trim()) return '请输入 Schema。'
+      if (!draft.userName.trim()) return '请输入用户名。'
+      const savedPassword = editing ? editing.hasPassword : false
+      if (!savedPassword && !draft.password.trim()) return '本地直连必须填写密码。'
+    }
+    if (draft.mode === 'dbid' && !draft.dbid.trim()) return '请输入 DBID。'
     return ''
   }
 
@@ -147,10 +153,13 @@ export default function DatabaseConnectionModal({
     >
       <div className={cx('ds-editor-form')}>
         <label>
-          名称
+          <span>
+            <em aria-hidden="true" className={cx('ds-editor-required')}>*</em>
+            名称
+          </span>
           <Input
             onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-            placeholder="例如：RECHECK_DB"
+            placeholder="例如：回检业务库"
             value={draft.name}
           />
         </label>
@@ -185,9 +194,15 @@ export default function DatabaseConnectionModal({
         ) : null}
         {draft.mode === 'builtin' ? null : (
           <>
+            {/* 直连专属的连接参数在 DBID 模式仍展示备用，但只有直连时才是必填（红星随之显隐）。 */}
             <div className={cx('ds-editor-grid')}>
               <label>
-                数据库地址
+                <span>
+                  {draft.mode === 'direct' ? (
+                    <em aria-hidden="true" className={cx('ds-editor-required')}>*</em>
+                  ) : null}
+                  数据库地址
+                </span>
                 <Input
                   onChange={(event) => setDraft({ ...draft, domain: event.target.value })}
                   placeholder="例如：127.0.0.1"
@@ -195,7 +210,12 @@ export default function DatabaseConnectionModal({
                 />
               </label>
               <label>
-                端口
+                <span>
+                  {draft.mode === 'direct' ? (
+                    <em aria-hidden="true" className={cx('ds-editor-required')}>*</em>
+                  ) : null}
+                  端口
+                </span>
                 <InputNumber
                   className={cx('ds-editor-port')}
                   max={65535}
@@ -209,7 +229,12 @@ export default function DatabaseConnectionModal({
                 />
               </label>
               <label>
-                Schema
+                <span>
+                  {draft.mode === 'direct' ? (
+                    <em aria-hidden="true" className={cx('ds-editor-required')}>*</em>
+                  ) : null}
+                  Schema
+                </span>
                 <Input
                   onChange={(event) => setDraft({ ...draft, schema: event.target.value })}
                   placeholder="请输入数据库 Schema"
@@ -217,7 +242,12 @@ export default function DatabaseConnectionModal({
                 />
               </label>
               <label>
-                用户名
+                <span>
+                  {draft.mode === 'direct' ? (
+                    <em aria-hidden="true" className={cx('ds-editor-required')}>*</em>
+                  ) : null}
+                  用户名
+                </span>
                 <Input
                   onChange={(event) => setDraft({ ...draft, userName: event.target.value })}
                   placeholder="请输入数据库用户名"
@@ -227,7 +257,10 @@ export default function DatabaseConnectionModal({
             </div>
             {draft.mode === 'dbid' ? (
               <label>
-                DBID
+                <span>
+                  <em aria-hidden="true" className={cx('ds-editor-required')}>*</em>
+                  DBID
+                </span>
                 <Input
                   onChange={(event) => setDraft({ ...draft, dbid: event.target.value })}
                   placeholder="请输入 DBID"
@@ -237,7 +270,10 @@ export default function DatabaseConnectionModal({
             ) : null}
             {draft.mode === 'direct' ? (
               <label>
-                密码
+                <span>
+                  <em aria-hidden="true" className={cx('ds-editor-required')}>*</em>
+                  密码
+                </span>
                 {editing?.hasPassword ? '（留空保持不变）' : ''}
                 <Input.Password
                   autoComplete="new-password"

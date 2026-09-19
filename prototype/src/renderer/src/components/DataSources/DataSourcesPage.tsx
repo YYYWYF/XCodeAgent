@@ -6,17 +6,11 @@ import { cx } from '../../utils'
 import type { DataSourcesDetailTarget } from '../AiChatPanel/components/AuxiliaryDrawer'
 import DatabaseConnectionModal from './DatabaseConnectionModal'
 import DatabaseImportModal from './DatabaseImportModal'
-import {
-  DATABASE_MODE_LABEL,
-  importedTables,
-  type DatabaseDataSource,
-  type ExternalApiSource,
-  useDataSources
-} from './catalog'
+import { importedTables, type DatabaseDataSource, useDataSources } from './catalog'
 import './DataSourcesPage.less'
 
 type Props = {
-  /** 打开右侧衔接的详情维护层：接口（含新增）或数据表。 */
+  /** 打开右侧衔接的详情维护层：数据表详情。 */
   onOpenDetail: (target: DataSourcesDetailTarget) => void
 }
 
@@ -53,13 +47,13 @@ function ListRow({
 }
 
 /**
- * 数据来源抽屉列表：第一个 Tab 固定「外部 API」（平铺接口），其后一个数据库连接一个 Tab
- * （该连接已添加的表），末尾「＋」添加数据库。行点击在右侧衔接的详情层中维护。
+ * 数据源抽屉列表：一个数据库连接一个 Tab（该连接已添加的表），末尾「＋」新建连接。
+ * 外部 API 已拆分到独立的「外部API」抽屉，按域登记维护。行点击在右侧衔接的详情层中维护。
  */
 export default function DataSourcesPage({ onOpenDetail }: Props): JSX.Element {
   const [sources, saveSources] = useDataSources()
-  /** 当前 Tab：'external' 为外部 API，其余值为数据库连接 id。 */
-  const [activeTab, setActiveTab] = useState<string>('external')
+  /** 当前 Tab：数据库连接 id；连接被删除后自动回落到剩余第一个。 */
+  const [activeTab, setActiveTab] = useState<string>('')
   const [importOpen, setImportOpen] = useState(false)
   const [connectionModal, setConnectionModal] = useState<{ open: boolean; editing: DatabaseDataSource | null }>({
     open: false,
@@ -67,10 +61,10 @@ export default function DataSourcesPage({ onOpenDetail }: Props): JSX.Element {
   })
 
   const databases = sources.filter((source): source is DatabaseDataSource => source.type === 'database')
-  const externalApis = sources.filter((source): source is ExternalApiSource => source.type === 'external_service')
-  const activeSource = databases.find((source) => source.id === activeTab)
-  const activeTables = importedTables(sources).filter((item) => item.sourceId === activeTab)
-  const showingExternal = !activeSource
+  const activeSource = databases.find((source) => source.id === activeTab) || databases[0]
+  const activeTables = activeSource
+    ? importedTables(sources).filter((item) => item.sourceId === activeSource.id)
+    : []
 
   /** 保存数据库连接：保留连接下已发现/已添加的表结构，新建后切到该连接的 Tab。 */
   const saveConnection = (source: DatabaseDataSource): void => {
@@ -81,7 +75,7 @@ export default function DataSourcesPage({ onOpenDetail }: Props): JSX.Element {
     message.success(isNew ? '数据库连接已创建' : '数据库连接已更新')
   }
 
-  /** 删除数据库连接前二次确认：连接与其已添加表一并移除，Tab 回到外部 API。 */
+  /** 删除数据库连接前二次确认：连接与其已添加表一并移除，Tab 回到剩余第一个连接。 */
   const deleteConnection = (source: DatabaseDataSource): void => {
     Modal.confirm({
       centered: true,
@@ -92,7 +86,7 @@ export default function DataSourcesPage({ onOpenDetail }: Props): JSX.Element {
       onOk: () => {
         saveSources(sources.filter((item) => item.id !== source.id))
         setConnectionModal({ open: false, editing: null })
-        if (activeTab === source.id) setActiveTab('external')
+        if (activeTab === source.id) setActiveTab('')
         message.success('数据库连接已删除')
       },
       title: `删除数据库连接「${source.name}」？`
@@ -106,21 +100,13 @@ export default function DataSourcesPage({ onOpenDetail }: Props): JSX.Element {
 
   return (
     <section className={cx('data-sources-page')}>
-      {/* 活跃 Tab 栏：第一个固定「外部 API」，其后一个数据库连接一个 Tab，末尾「＋」添加数据库。 */}
+      {/* 活跃 Tab 栏：一个数据库连接一个 Tab，末尾「＋」新建连接。 */}
       <div className={cx('conversation-tabbar', 'ds-tabbar')}>
-        <nav aria-label="数据来源分段" className={cx('conversation-tabs')}>
-          <button
-            aria-pressed={showingExternal}
-            className={cx('conversation-tab', showingExternal && 'active')}
-            onClick={() => setActiveTab('external')}
-            type="button"
-          >
-            外部 API
-          </button>
+        <nav aria-label="数据源分段" className={cx('conversation-tabs')}>
           {databases.map((source) => (
             <button
-              aria-pressed={activeTab === source.id}
-              className={cx('conversation-tab', activeTab === source.id && 'active')}
+              aria-pressed={activeSource?.id === source.id}
+              className={cx('conversation-tab', activeSource?.id === source.id && 'active')}
               key={source.id}
               onClick={() => setActiveTab(source.id)}
               title={source.name}
@@ -140,46 +126,25 @@ export default function DataSourcesPage({ onOpenDetail }: Props): JSX.Element {
           </button>
         </nav>
       </div>
-      {showingExternal ? (
-        <p className={cx('ds-hint')}>
-          <span className={cx('ds-hint-text')}>每个外部 API 按接口登记，点击进入接口维护页。</span>
-          <span className={cx('ds-hint-actions')}>
-            <Button onClick={() => onOpenDetail({ kind: 'api-new' })} size="small" type="primary">
-              新增接口
-            </Button>
-          </span>
-        </p>
-      ) : (
-        <p className={cx('ds-hint')}>
-          <span className={cx('ds-hint-text')}>
-            {DATABASE_MODE_LABEL[activeSource.mode]} · 已添加 {activeTables.length} 张表，点击查看与移除。
-          </span>
-          <span className={cx('ds-hint-actions')}>
-            <Button onClick={() => setConnectionModal({ open: true, editing: activeSource })} size="small">
-              连接设置
-            </Button>
-            <Button
-              onClick={() => setImportOpen(true)}
-              size="small"
-              type="primary"
-            >
-              添加数据表
-            </Button>
-          </span>
-        </p>
-      )}
-      <div className={cx('ds-list')}>
-        {showingExternal
-          ? externalApis.map((source) => (
-              <ListRow
-                icon={<span className={cx('ds-method')}>{source.method}</span>}
-                key={source.id}
-                label={source.name}
-                meta={source.description}
-                onOpen={() => onOpenDetail({ kind: 'api', id: source.id })}
-              />
-            ))
-          : activeTables.map((item) => (
+      {activeSource ? (
+        <>
+          <p className={cx('ds-hint')}>
+            <span className={cx('ds-hint-text')}>数据表按字段粒度参与应用API绑定。</span>
+            <span className={cx('ds-hint-actions')}>
+              <Button onClick={() => setConnectionModal({ open: true, editing: activeSource })} size="small">
+                连接设置
+              </Button>
+              <Button
+                onClick={() => setImportOpen(true)}
+                size="small"
+                type="primary"
+              >
+                添加数据表
+              </Button>
+            </span>
+          </p>
+          <div className={cx('ds-list')}>
+            {activeTables.map((item) => (
               <ListRow
                 icon={<TableOutlined />}
                 key={`${item.sourceId}:${item.table.name}`}
@@ -188,13 +153,30 @@ export default function DataSourcesPage({ onOpenDetail }: Props): JSX.Element {
                 onOpen={() => onOpenDetail({ kind: 'table', sourceId: item.sourceId, name: item.table.name })}
               />
             ))}
-        {showingExternal && externalApis.length === 0 ? (
-          <Empty description="暂无外部 API 接口" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : null}
-        {!showingExternal && activeTables.length === 0 ? (
-          <Empty description="该连接暂未添加数据表" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : null}
-      </div>
+            {activeTables.length === 0 ? (
+              <Empty description="该连接暂未添加数据表" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <>
+          <p className={cx('ds-hint')}>
+            <span className={cx('ds-hint-text')}>先建立数据库连接，再从库中发现并添加数据表。</span>
+            <span className={cx('ds-hint-actions')}>
+              <Button
+                onClick={() => setConnectionModal({ open: true, editing: null })}
+                size="small"
+                type="primary"
+              >
+                新建数据库连接
+              </Button>
+            </span>
+          </p>
+          <div className={cx('ds-list')}>
+            <Empty description="暂无数据库连接" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          </div>
+        </>
+      )}
       <DatabaseImportModal
         onClose={() => setImportOpen(false)}
         onImport={(next) => {
@@ -203,7 +185,7 @@ export default function DataSourcesPage({ onOpenDetail }: Props): JSX.Element {
           message.success('数据表已添加')
         }}
         open={importOpen}
-        sourceId={activeTab}
+        sourceId={activeSource?.id || ''}
         sources={sources}
       />
       <DatabaseConnectionModal

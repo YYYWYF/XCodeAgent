@@ -71,10 +71,14 @@ type Props = {
   onOpenConversationManagement?: () => void
   /** 任务管理抽屉是否展开（透传给聊天面板菜单激活态）。 */
   conversationDrawerOpen?: boolean
-  /** 左侧菜单打开数据来源抽屉。 */
+  /** 左侧菜单打开数据源抽屉。 */
   onOpenDataSources?: () => void
-  /** 数据来源抽屉是否展开。 */
+  /** 数据源抽屉是否展开。 */
   dataSourcesDrawerOpen?: boolean
+  /** 左侧菜单打开外部API抽屉。 */
+  onOpenExternalApis?: () => void
+  /** 外部API抽屉是否展开。 */
+  externalApisDrawerOpen?: boolean
   /** 聊天面板注册任务管理内容查询函数（透传给工作台页）。 */
   onConversationManagementReady?: (query: () => ConversationManagementContent) => void
   /** 关闭辅助抽屉（透传给聊天面板）。 */
@@ -120,6 +124,8 @@ export default function LeftPanel({
   conversationDrawerOpen,
   onOpenDataSources,
   dataSourcesDrawerOpen,
+  onOpenExternalApis,
+  externalApisDrawerOpen,
   onConversationManagementReady,
   onCloseAuxiliaryDrawer,
   onTestCaseGenerationTaskTypeChange
@@ -165,6 +171,8 @@ export default function LeftPanel({
             conversationDrawerOpen={conversationDrawerOpen}
             onOpenDataSources={onOpenDataSources}
             dataSourcesDrawerOpen={dataSourcesDrawerOpen}
+            onOpenExternalApis={onOpenExternalApis}
+            externalApisDrawerOpen={externalApisDrawerOpen}
             onConversationManagementReady={onConversationManagementReady}
             onCloseAuxiliaryDrawer={onCloseAuxiliaryDrawer}
             onTestCaseGenerationTaskTypeChange={onTestCaseGenerationTaskTypeChange}

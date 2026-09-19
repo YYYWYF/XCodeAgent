@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 
 /**
- * 数据来源目录 v6：表维度 + 接口维度两个平铺清单。
+ * 数据来源目录 v7：数据源（数据库）与外部 API 两个独立清单。
  * 数据库按「连接（配置）→ 已添加的表（清单主体）」组织，添加是有步骤的：
- * 先绑定数据库连接，再勾选表添加；外部 API 不再有站点/目录层级，每条来源就是一个
- * 接口，参数按 Postman 语义维护（Headers / Query / 入参 / 出参 Response），
- * 供开发阶段绑定映射消费。
+ * 先绑定数据库连接，再勾选表添加；外部 API 按「域（同一域名下的后端系统）→ 接口」
+ * 两级组织，每个域一个 Tab，接口参数按 Postman 语义维护
+ * （Headers / Query / 入参 / 出参 Response），供开发阶段绑定映射消费。
  */
 
 export type DatabaseTableColumn = { name: string; comment: string }
@@ -60,12 +60,14 @@ export const EXTERNAL_PARAM_LOCATION_LABEL: Record<ExternalApiParamLocation, str
 }
 
 /**
- * 外部 API 来源：每条就是一个接口（不再有站点/目录层级）。
+ * 外部 API 来源：每条就是一个接口，归属一个域（domainId）。
  * url 为完整地址，路径参数用 {id} 占位；requestParams 收录全部入参并逐条声明部位。
  */
 export type ExternalApiSource = {
   type: 'external_service'
   id: string
+  /** 所属域 id：外部 API 抽屉按域分 Tab，接口只能挂在已有域下。 */
+  domainId: string
   name: string
   description: string
   method: ExternalApiMethod
@@ -73,6 +75,17 @@ export type ExternalApiSource = {
   headers: ExternalApiHeader[]
   requestParams: ExternalApiParam[]
   responseFields: ExternalApiField[]
+}
+
+/** 外部 API 域：同一域名下的后端系统，是外部 API 抽屉的 Tab 维度与接口的挂载点。 */
+export type ExternalApiDomain = {
+  type: 'external_domain'
+  id: string
+  /** 域显示名：例如「门户平台」。 */
+  name: string
+  /** 域名地址：该域下接口共用的高位 URL，例如 https://portal.example.com。 */
+  baseUrl: string
+  description: string
 }
 
 /** 外部接口入参按部位分组：映射表单的「路径参数 / 查询参数 / 请求体」分组依据。 */
@@ -88,11 +101,11 @@ export function groupExternalRequestParams(params: ExternalApiParam[]): {
   }
 }
 
-export type DataSource = DatabaseDataSource | ExternalApiSource
+export type DataSource = DatabaseDataSource | ExternalApiSource | ExternalApiDomain
 
 // 结构升级即换缓存键：旧目录数据直接丢弃，不做兼容迁移。
-// v11：外部接口入参合并为单一 requestParams 并逐条声明部位（path/query/body），旧 Query/入参两清单作废。
-const STORAGE_KEY = 'aistudio:prototype:data-sources:v11'
+// v14：模拟库连接名改「回检系统库」（贴近真实场景，避免与“模拟数据库”模式语义重复）。
+const STORAGE_KEY = 'aistudio:prototype:data-sources:v16'
 const CHANGE_EVENT = 'aistudio:prototype:data-sources-changed'
 
 export const DATABASE_MODE_LABEL: Record<DatabaseSourceMode, string> = {
@@ -121,7 +134,7 @@ export const DEFAULT_DATA_SOURCES: DataSource[] = [
   {
     type: 'database',
     id: 'wuhan-recheck-db',
-    name: 'RECHECK_DB',
+    name: '回检业务库',
     mode: 'direct',
     domain: 'mysql.wuhan-branch.internal',
     port: 3306,
@@ -173,7 +186,7 @@ export const DEFAULT_DATA_SOURCES: DataSource[] = [
   {
     type: 'database',
     id: 'project-db',
-    name: 'PROJECT_DB',
+    name: '回检系统库',
     mode: 'builtin',
     domain: '',
     port: undefined,
@@ -198,12 +211,49 @@ export const DEFAULT_DATA_SOURCES: DataSource[] = [
         ]
   },
   {
+    type: 'external_domain',
+    id: 'portal-domain',
+    name: '门户平台',
+    baseUrl: 'https://portal.wuhan-branch.example',
+    description: '行内门户：员工信息与消息通知等公共服务接口。'
+  },
+  {
+    type: 'external_domain',
+    id: 'recheck-domain',
+    name: '回检中心',
+    baseUrl: 'https://recheck-center.wuhan-branch.example',
+    description: '需求回检系统：回检单查询与流转接口。'
+  },
+  {
+    type: 'external_service',
+    id: 'recheck-detail',
+    domainId: 'recheck-domain',
+    name: '回检单详情',
+    description: '按回检单号查询回检单明细，含审核人信息。',
+    method: 'GET',
+    url: 'https://recheck-center.wuhan-branch.example/api/rechecks/{recheck_id}',
+    headers: [{ name: 'Accept', value: 'application/json' }],
+    requestParams: [
+      { name: 'recheck_id', comment: '回检单号', required: true, location: 'path' },
+      { name: 'with_reviewer', comment: '是否返回审核人：Y/N', required: false, location: 'query' }
+    ],
+    responseFields: [
+      { name: 'recheck_id', comment: '回检单号' },
+      { name: 'project_name', comment: '关联项目' },
+      { name: 'status', comment: '处理状态' },
+      { name: 'reviewer_name', comment: '审核人姓名' },
+      { name: 'reviewer_dept', comment: '审核人所属部门' },
+      { name: 'created_at', comment: '提交时间' }
+    ]
+  },
+  {
     type: 'external_service',
     id: 'query-user',
+    domainId: 'portal-domain',
     name: '查询用户信息',
     description: '按员工工号返回姓名与所属部门。',
     method: 'GET',
-    url: 'https://user-center.wuhan-branch.example/users/{id}',
+    url: 'https://portal.wuhan-branch.example/users/{id}',
     headers: [{ name: 'Accept', value: 'application/json' }],
     requestParams: [{ name: 'id', comment: '员工工号', required: true, location: 'path' }],
     responseFields: [
@@ -214,10 +264,11 @@ export const DEFAULT_DATA_SOURCES: DataSource[] = [
   {
     type: 'external_service',
     id: 'send-notify',
+    domainId: 'portal-domain',
     name: '发送消息通知',
     description: '向指定员工发送站内提醒消息。',
     method: 'POST',
-    url: 'https://notify.wuhan-branch.example/messages',
+    url: 'https://portal.wuhan-branch.example/messages',
     headers: [{ name: 'Content-Type', value: 'application/json' }],
     requestParams: [
       { name: 'channel', comment: '通知渠道，默认站内', required: false, location: 'query' },
@@ -232,6 +283,7 @@ export const DEFAULT_DATA_SOURCES: DataSource[] = [
   {
     type: 'external_service',
     id: 'recheck-center',
+    domainId: 'recheck-domain',
     name: '回检中心查询',
     description: '按处理状态查询回检单列表，返回回检明细。',
     method: 'GET',
@@ -349,6 +401,23 @@ export type BindableTarget = {
   method: ExternalApiMethod | ''
 }
 
+/** 提取目录中的域清单：外部 API 抽屉的 Tab 数据源，保持登记顺序。 */
+export function externalDomains(sources: DataSource[]): ExternalApiDomain[] {
+  return sources.filter((item): item is ExternalApiDomain => item.type === 'external_domain')
+}
+
+/** 按 id 查找一个域；不存在（如刚被删除）返回 null。 */
+export function externalDomainById(sources: DataSource[], domainId: string): ExternalApiDomain | null {
+  return externalDomains(sources).find((item) => item.id === domainId) || null
+}
+
+/** 取某个域下登记的全部接口：域 Tab 的清单主体。 */
+export function externalApisOfDomain(sources: DataSource[], domainId: string): ExternalApiSource[] {
+  return sources.filter(
+    (item): item is ExternalApiSource => item.type === 'external_service' && item.domainId === domainId
+  )
+}
+
 /** 把整个目录展开为可绑定目标列表；只有已添加的表和已登记的接口会出现在这份扁平视图。 */
 export function flattenTargets(sources: DataSource[]): BindableTarget[] {
   return sources.flatMap((source): BindableTarget[] => {
@@ -367,6 +436,8 @@ export function flattenTargets(sources: DataSource[]): BindableTarget[] {
           method: ''
         }))
     }
+    // 域是组织层级不是可绑定来源，这里只展开真正的接口。
+    if (source.type !== 'external_service') return []
     return [
       {
         key: bindingKey(source.id, externalApiSignature(source)),
@@ -387,6 +458,7 @@ export function flattenTargets(sources: DataSource[]): BindableTarget[] {
 export function useDataSourceIndex(): {
   sources: DataSource[]
   databases: DatabaseDataSource[]
+  externalDomains: ExternalApiDomain[]
   externalServices: ExternalApiSource[]
   targets: BindableTarget[]
   targetByKey: Map<string, BindableTarget>
@@ -402,6 +474,7 @@ export function useDataSourceIndex(): {
     return {
       sources,
       databases,
+      externalDomains: externalDomains(sources),
       externalServices,
       targets,
       targetByKey: new Map(targets.map((target) => [target.key, target])),

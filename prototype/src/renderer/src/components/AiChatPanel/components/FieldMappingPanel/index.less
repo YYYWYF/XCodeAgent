@@ -123,19 +123,69 @@
   overflow: hidden auto;
 }
 
-// 契约头：方法徽标 + 等宽路径 + 数据来源摘要，下沿分隔线，对齐开发产物内容头。
+// 契约头：两行写清对应关系——上行应用API（动作按钮跟随行尾），下行外部API或数据表。
 .@{class-prefix}-field-mapping-head {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 7px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--wb-border);
 
   strong {
     color: var(--wb-text);
     font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
-    font-size: 14px;
+    font-size: 13px;
+  }
+}
+
+.@{class-prefix}-field-mapping-head-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+// 行首身份标签：数据来源行的「外部API/数据表」用中性色小标签标记。
+.@{class-prefix}-field-mapping-head-role {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface-subtle);
+  font-size: 10.5px;
+  font-style: normal;
+}
+
+.@{class-prefix}-field-mapping-head-name {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// 数据来源行：主标题始终是应用API，外部API/数据表作为次行来源标记弱化呈现。
+.@{class-prefix}-field-mapping-head-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  overflow: hidden;
+
+  .@{class-prefix}-field-mapping-head-source-label {
+    flex: 0 0 auto;
+    color: var(--wb-text-tertiary);
+    font-size: 11px;
+  }
+
+  .@{class-prefix}-field-mapping-head-source-text {
+    overflow: hidden;
+    min-width: 0;
+    color: var(--wb-text-tertiary);
+    font-size: 11.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 
@@ -148,15 +198,6 @@
   border-radius: 6px;
   font-size: 10.5px;
   font-weight: 700;
-}
-
-.@{class-prefix}-field-mapping-head-source {
-  flex-basis: 100%;
-  overflow: hidden;
-  color: var(--wb-text-tertiary);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 // 标题行右侧的动作区：保存 / 保存并确认，与接口调试视图的发送按钮同位。
@@ -185,26 +226,9 @@
   font-weight: 600;
 }
 
-// 入参适配的部位分组：标题行 + 组内行，组间用细分隔留白。
-.@{class-prefix}-field-mapping-group {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-}
-
-.@{class-prefix}-field-mapping-group + .@{class-prefix}-field-mapping-group {
-  padding-top: 8px;
-  border-top: 1px solid var(--wb-border);
-}
-
-.@{class-prefix}-field-mapping-group-title {
-  color: var(--wb-text-tertiary);
-  font-size: 11px;
-}
-
 .@{class-prefix}-field-mapping-row {
   display: grid;
-  // 契约参数（定宽，纵向对齐）| 关系符 | 来源字段 | fx（仅外部行有）。
+  // 契约参数（定宽，纵向对齐）| 关系符 | 来源字段。
   grid-template-columns: minmax(150px, 220px) 26px minmax(130px, 1fr);
   gap: 8px;
   align-items: center;
@@ -219,11 +243,6 @@
   // 条件行：参数 | 操作符 | 落列。
   &.@{class-prefix}-row-condition {
     grid-template-columns: minmax(150px, 220px) 92px minmax(130px, 1fr);
-  }
-
-  // 外部适配行：参数 | 箭头 | 外部参数 | fx 取值。
-  &.@{class-prefix}-row-external {
-    grid-template-columns: minmax(150px, 220px) 26px minmax(130px, 1fr) 92px;
   }
 }
 
@@ -270,26 +289,242 @@
   min-width: 0;
 }
 
-// fx 取值配置钮：透传灰显；配置过表达式后高亮。
-.@{class-prefix}-field-mapping-fx {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  color: var(--wb-text-tertiary);
-  background: var(--wb-canvas);
-  border: 1px dashed var(--wb-border);
-  border-radius: 6px;
-  cursor: pointer;
+.@{class-prefix}-field-mapping-note {
+  margin: 0;
+  color: var(--wb-text-muted);
   font-size: 11px;
+}
+
+// 状态徽标：必填未连接（红）/ 必填已就绪（绿）/ 已确认（灰），挂在操作指引条行尾。
+.@{class-prefix}-field-mapping-status {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 9px;
+  font-size: 10.5px;
+
+  &.@{class-prefix}-danger {
+    color: var(--wb-danger, #ff4d4f);
+    background: var(--wb-danger-soft, rgba(255, 77, 79, 0.1));
+  }
+
+  &.@{class-prefix}-ok {
+    color: var(--wb-success);
+    background: var(--wb-surface-subtle);
+  }
+
+  &.@{class-prefix}-muted {
+    color: var(--wb-text-tertiary);
+    background: var(--wb-surface-subtle);
+  }
+}
+
+// 必填未连接的警示行：紧随操作指引条之下。
+.@{class-prefix}-field-mapping-warning {
+  margin: 0;
+  color: var(--wb-danger, #ff4d4f);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+// 顶部单条操作指引：连线是核心交互，说明只出现一次；只读态换为状态横幅说明调整途径。
+.@{class-prefix}-field-mapping-guide-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.@{class-prefix}-field-mapping-guide {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface-subtle);
+  border: 1px dashed var(--wb-border);
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.6;
 
   em {
     flex: 0 0 auto;
     color: var(--wb-accent);
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 600;
+  }
+}
+
+// —— 双列连线画布（外部服务映射）：网格层承接节点，SVG 层画连线；空白点击穿透用于取消待连接。——
+.@{class-prefix}-field-mapping-canvas {
+  position: relative;
+}
+
+.@{class-prefix}-field-mapping-wires {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.@{class-prefix}-field-mapping-wire-line {
+  fill: none;
+  stroke: var(--wb-accent);
+  stroke-width: 1.6;
+}
+
+.@{class-prefix}-field-mapping-wire-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+}
+
+g.@{class-prefix}-field-mapping-wire {
+  .@{class-prefix}-field-mapping-wire-hit {
+    pointer-events: stroke;
+    cursor: pointer;
+  }
+
+  // 悬停整条线转警示色，提示可点击断开；只读画布整体禁用。
+  &:hover .@{class-prefix}-field-mapping-wire-line {
+    stroke: var(--wb-danger, #ff4d4f);
+    stroke-dasharray: none;
+  }
+}
+
+.@{class-prefix}-field-mapping-wire-pending {
+  stroke: var(--wb-accent);
+  stroke-dasharray: 4 4;
+  stroke-width: 1.4;
+}
+
+.@{class-prefix}-field-mapping-canvas-grid {
+  display: grid;
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) 96px minmax(0, 1fr);
+  // 网格与列容器不拦截指针：点击空白落到画布根节点（取消待连接），节点自身单独恢复。
+  pointer-events: none;
+}
+
+// 列标题（应用API/外部API）与行标题（入参/出参）同一样式：灰色、同字号、常规字重。
+.@{class-prefix}-field-mapping-canvas-colhdr {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+}
+
+// 行标题（入参/出参）：窄列右对齐，文字对齐分区第一行参数（下方留空时不下坠）。
+.@{class-prefix}-field-mapping-canvas-rowhdr {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 8px 4px 0 0;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+}
+
+// 参数行：保留标签框样式承载可点区域，必填红星在名称前同 span 内。
+.@{class-prefix}-field-mapping-node {
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  background: var(--wb-surface-subtle);
+  color: var(--wb-text);
+  cursor: pointer;
+  font-size: 12px;
+  pointer-events: auto;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+
+  .@{class-prefix}-field-mapping-node-text {
+    flex: 0 1 auto;
+    overflow: hidden;
+    min-width: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    // 必填红星：紧跟参数名之前、同一行内。
+    .@{class-prefix}-req-star {
+      margin-right: 1px;
+      color: var(--wb-danger, #ff4d4f);
+      font-style: normal;
+      font-weight: 600;
+    }
+  }
+
+  // 部位标识（路径参数/查询参数/请求体）：纯文本弱化。
+  .@{class-prefix}-field-mapping-marker {
+    flex: 0 0 auto;
+    color: var(--wb-text-tertiary);
+    font-size: 10.5px;
+    font-style: normal;
+  }
+
+  &:hover {
+    border-color: var(--wb-accent-border);
+  }
+
+  // 待连接源节点：主题色浅底 + 左侧色条。
+  &.@{class-prefix}-pending {
+    border-color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    box-shadow: inset 3px 0 0 var(--wb-accent);
+  }
+
+  // 可连接目标：虚线内描边示意「连到这里」。
+  &.@{class-prefix}-ready {
+    background: var(--wb-surface-hover);
+    outline: 1px dashed var(--wb-accent-border);
+    outline-offset: -1px;
+  }
+
+  // 必填未连接：浅红底。
+  &.@{class-prefix}-danger {
+    border-color: var(--wb-danger, #ff4d4f);
+    background: var(--wb-danger-soft, rgba(255, 77, 79, 0.08));
+  }
+
+  // 只读画布：去除交互感，但保留警示底色。
+  &.@{class-prefix}-off {
+    cursor: default;
+
+    &:not(.@{class-prefix}-danger):hover {
+      border-color: var(--wb-border);
+    }
+  }
+}
+
+// 节点内的 fx 取值钮：链接近文本样式，配置过表达式则高亮主题色。
+.@{class-prefix}-field-mapping-node-fx {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  max-width: 45%;
+  margin-left: auto;
+  padding: 2px 6px;
+  overflow: hidden;
+  color: var(--wb-text-tertiary);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 10.5px;
+
+  em {
+    padding: 0;
+    color: var(--wb-accent);
+    border: none;
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 11.5px;
+    font-size: 11px;
     font-style: italic;
     font-weight: 700;
   }
@@ -303,65 +538,21 @@
 
   &:hover:not(:disabled) {
     color: var(--wb-text);
-    border-color: var(--wb-accent-border);
+    background: var(--wb-surface-hover);
   }
 
   &.@{class-prefix}-active {
-    color: var(--wb-text);
-    border: 1px solid var(--wb-accent-border);
-    background: var(--wb-accent-soft);
+    color: var(--wb-accent);
+
+    em {
+      color: var(--wb-accent);
+    }
   }
 
   &:disabled {
     cursor: not-allowed;
-    opacity: 0.6;
+    opacity: 0.55;
   }
-}
-
-.@{class-prefix}-field-mapping-fx-pop {
-  display: grid;
-  width: 264px;
-  gap: 8px;
-}
-
-.@{class-prefix}-field-mapping-fx-pop-title {
-  color: var(--wb-text-tertiary);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.@{class-prefix}-field-mapping-fx-quick {
-  display: flex;
-  gap: 6px;
-
-  .@{class-prefix}-field-mapping-fx-option {
-    flex: 1 1 auto;
-    padding: 4px 8px;
-    color: var(--wb-text-muted);
-    background: var(--wb-canvas);
-    border: 1px solid var(--wb-border);
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 11px;
-
-    &.@{class-prefix}-active {
-      color: var(--wb-accent);
-      border-color: var(--wb-accent-border);
-      background: var(--wb-accent-soft);
-    }
-  }
-}
-
-.@{class-prefix}-field-mapping-fx-hint {
-  color: var(--wb-text-tertiary);
-  font-size: 10.5px;
-  line-height: 1.5;
-}
-
-.@{class-prefix}-field-mapping-note {
-  margin: 0;
-  color: var(--wb-text-muted);
-  font-size: 11px;
 }
 
 // SQL / 请求预览：等宽字体代码块，改动即时反映。

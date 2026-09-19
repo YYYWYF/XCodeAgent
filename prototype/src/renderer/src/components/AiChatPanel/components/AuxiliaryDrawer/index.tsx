@@ -13,13 +13,15 @@ import {
 } from '@ant-design/icons'
 import { Button, Collapse, Empty, Input, Modal, Progress, Tag } from 'antd'
 import type { CSSProperties, ReactElement } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { TestCasePreparationSnapshot } from '../../../../testCasePreparation'
 import { testCasePreparationLabel } from '../../../../testCasePreparation'
 import { cx } from '../../../../utils'
 import databaseFilledIcon from '../../../../assets/icons/database-filled.svg'
+import apiFilledIcon from '../../../../assets/icons/api-filled.svg'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
 import DataSourcesPage from '../../../DataSources/DataSourcesPage'
+import ExternalApisPage from '../../../DataSources/ExternalApisPage'
 import ExternalApiDetailPage from '../../../DataSources/ExternalApiDetailPage'
 import DatabaseTableDetailPage from '../../../DataSources/DatabaseTableDetailPage'
 import { externalApiSignature, importedTables, useDataSources, type ExternalApiSource } from '../../../DataSources/catalog'
@@ -33,11 +35,12 @@ export type AuxiliaryDrawerMode =
   | 'temporary-conversation'
   | 'test-preparation'
   | 'data-sources'
+  | 'external-apis'
 
-/** 数据来源详情层的定位：接口维护（含新增）或数据表详情。 */
+/** 数据来源详情层的定位：接口维护（含新增，外部API抽屉）或数据表详情（数据源抽屉）。 */
 export type DataSourcesDetailTarget =
   | { kind: 'api'; id: string }
-  | { kind: 'api-new' }
+  | { kind: 'api-new'; domainId?: string }
   | { kind: 'table'; sourceId: string; name: string }
 
 /** 解析数据来源详情层的头部文案：接口名+契约签名，或表名+说明。 */
@@ -85,7 +88,8 @@ export type ConversationManagementContent = {
 }
 
 type Props = {
-  mode: AuxiliaryDrawerMode
+  /** 当前抽屉模式；null 表示收起。抽屉常挂载，收起只是滑出隐藏，展开/收起/切换模式都有统一动画。 */
+  mode: AuxiliaryDrawerMode | null
   onClose: () => void
   onRetryTestCases: () => void
   testPreparation: TestCasePreparationSnapshot
@@ -425,7 +429,7 @@ function TestPreparation({
   )
 }
 
-/** 抽屉头文案按模式切换，保持同一槽位三种视图的结构一致。 */
+/** 抽屉头文案按模式切换，保持同一槽位各视图的结构一致。 */
 const DRAWER_HEADERS: Record<AuxiliaryDrawerMode, { title: string; description: string }> = {
   'conversation-management': {
     title: '任务管理',
@@ -433,7 +437,8 @@ const DRAWER_HEADERS: Record<AuxiliaryDrawerMode, { title: string; description: 
   },
   'temporary-conversation': { title: '临时问答', description: '只读问答，不触发工作流' },
   'test-preparation': { title: '测试准备', description: '后台异步生成业务测试用例' },
-  'data-sources': { title: '数据来源', description: '已添加的数据表与外部 API 接口，按表和出入参粒度绑定' }
+  'data-sources': { title: '数据源', description: '已接入的数据库连接与数据表，按字段粒度绑定' },
+  'external-apis': { title: '外部API', description: '已登记的接口域与外部接口，按出入参粒度绑定' }
 }
 
 /** 抽屉徽标图标按模式选择：所有模式统一走 mask 实底图标槽位，保证头部视觉规则一致。 */
@@ -441,15 +446,54 @@ const DRAWER_BADGE_ICONS: Record<AuxiliaryDrawerMode, string> = {
   'conversation-management': freeChatIcon,
   'temporary-conversation': freeChatIcon,
   'test-preparation': freeChatIcon,
-  'data-sources': databaseFilledIcon
+  'data-sources': databaseFilledIcon,
+  'external-apis': apiFilledIcon
 }
 
-/** 在同一辅助槽位中承载任务管理、临时问答和测试准备，禁止抽屉叠加。 */
+/** 在同一辅助槽位中承载任务管理、临时问答和测试准备、数据源与外部API，禁止抽屉叠加。 */
 export default function AuxiliaryDrawer(props: Props): ReactElement {
   // 数据来源模式：右侧衔接的详情维护层定位；其它模式恒为空。
   const [dataSourcesDetail, setDataSourcesDetail] = useState<DataSourcesDetailTarget | null>(null)
   const [sources] = useDataSources()
-  const detailHead = dataSourcesDetail ? describeDataSourcesDetail(dataSourcesDetail, sources) : null
+  // 一级抽屉切换或收起后，二级抽屉不再自动恢复展开——详情只随行点击显式打开，
+  // 切换过程就只有一级抽屉自己的滑入/滑出动画，规则统一无例外。
+  useEffect(() => {
+    setDataSourcesDetail(null)
+  }, [props.mode])
+  // 抽屉常挂载：展示模式滞后于 props.mode——收起动画期间（0.26s）继续渲染原内容，
+  // 滑出完成后才清空，避免滑出过程露出空抽屉。
+  const [displayMode, setDisplayMode] = useState<AuxiliaryDrawerMode | null>(props.mode)
+  useEffect(() => {
+    if (props.mode) {
+      setDisplayMode(props.mode)
+      return
+    }
+    const timer = window.setTimeout(() => setDisplayMode(null), 300)
+    return () => window.clearTimeout(timer)
+  }, [props.mode])
+  const open = props.mode != null
+  // 详情层内容同样滞后清空：关闭滑出动画期间保留原内容。
+  const [detailRender, setDetailRender] = useState<DataSourcesDetailTarget | null>(null)
+  useEffect(() => {
+    if (dataSourcesDetail) {
+      setDetailRender(dataSourcesDetail)
+      return
+    }
+    const timer = window.setTimeout(() => setDetailRender(null), 300)
+    return () => window.clearTimeout(timer)
+  }, [dataSourcesDetail])
+  const detailHead = detailRender ? describeDataSourcesDetail(detailRender, sources) : null
+  // 详情层按抽屉模式过滤目标类型：数据源只出数据表，外部API只出接口；模式切换后的残留目标不展开。
+  const detailVisible = detailRender
+    ? displayMode === 'data-sources'
+      ? detailRender.kind === 'table'
+      : displayMode === 'external-apis'
+        ? detailRender.kind !== 'table'
+        : false
+    : false
+  // 详情层只在其列表抽屉家族展开时滑出；列表抽屉收起时跟随收起。
+  const familyOpen = open && (displayMode === 'data-sources' || displayMode === 'external-apis')
+  const detailOpen = Boolean(familyOpen && dataSourcesDetail && detailVisible)
   // 临时任务按需创建、初始为空，可多开，但永远不具备 Workflow 与工作区写入能力。
   const [temporaryConversations, setTemporaryConversations] = useState<
     TemporaryConversationRecord[]
@@ -460,13 +504,14 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
   ) ||
     // 占位记录仅在临时列表为空时兜底：此时不应停留在临时问答视图。
     { id: '', title: '临时问答', messages: [] as TemporaryMessage[] }
-  const header =
-    props.mode === 'temporary-conversation'
+  const header = displayMode
+    ? displayMode === 'temporary-conversation'
       ? {
           title: activeTemporaryConversation.title,
           description: '查阅与 Chat 类事务，不触发 Workflow 或写入工作区'
         }
-      : DRAWER_HEADERS[props.mode]
+      : DRAWER_HEADERS[displayMode]
+    : null
 
   /** 新建并进入一条功能受限的临时任务。 */
   const createTemporaryConversation = (): void => {
@@ -499,7 +544,16 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
   }
   return (
     <>
-      <section className={cx('auxiliary-drawer', props.mode)} aria-label={header.title}>
+      {/* 抽屉常挂载：滑入/滑出只发生在「关闭↔展开」的开关切换（transform 过渡）；
+          已展开时切换模式原地替换内容、不做整抽屉动画——尤其二级抽屉开着时切换一级，
+          抽屉体保持不动，仅详情层向右收回，中间不会出现被腾空的区域。 */}
+      <section
+        aria-hidden={!open}
+        aria-label={header?.title || '辅助抽屉'}
+        className={cx('auxiliary-drawer', displayMode, open && 'open')}
+      >
+      {header && displayMode ? (
+      <>
       <header>
         <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
           <span
@@ -507,7 +561,7 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
             className={cx('auxiliary-drawer-badge-icon')}
             style={
               {
-                '--auxiliary-drawer-badge-source': `url("${DRAWER_BADGE_ICONS[props.mode]}")`
+                '--auxiliary-drawer-badge-source': `url("${DRAWER_BADGE_ICONS[displayMode]}")`
               } as CSSProperties
             }
           />
@@ -516,7 +570,7 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
           <strong>{header.title}</strong>
           <small>{header.description}</small>
         </div>
-        {props.mode === 'temporary-conversation' ? (
+        {displayMode === 'temporary-conversation' ? (
           <button
             aria-label="返回任务管理"
             onClick={props.onOpenConversationManagement}
@@ -531,9 +585,11 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
         </button>
       </header>
       <div className={cx('auxiliary-drawer-body')}>
-        {props.mode === 'data-sources' ? (
+        {displayMode === 'data-sources' ? (
           <DataSourcesPage onOpenDetail={setDataSourcesDetail} />
-        ) : props.mode === 'conversation-management' && props.conversationManagement ? (
+        ) : displayMode === 'external-apis' ? (
+          <ExternalApisPage onOpenDetail={setDataSourcesDetail} />
+        ) : displayMode === 'conversation-management' && props.conversationManagement ? (
           <ConversationManagement
             content={props.conversationManagement}
             onCreateTemporaryConversation={createTemporaryConversation}
@@ -544,9 +600,9 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
             }}
             temporaryConversations={temporaryConversations}
           />
-        ) : props.mode === 'conversation-management' ? (
+        ) : displayMode === 'conversation-management' ? (
           <Empty description="任务信息加载中" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : props.mode === 'temporary-conversation' ? (
+        ) : displayMode === 'temporary-conversation' ? (
           <TemporaryConversation
             messages={activeTemporaryConversation.messages}
             onSend={(content) => {
@@ -576,11 +632,20 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
           <TestPreparation onRetry={props.onRetryTestCases} snapshot={props.testPreparation} />
         )}
       </div>
+      </>
+      ) : null}
       </section>
       {/* 数据来源详情层：衔接在列表抽屉右侧的第二个抽屉，承载接口/表的维护页。
-          头部与列表抽屉同构：左侧标题，右上角关闭按钮只收起详情层、回到列表。 */}
-      {props.mode === 'data-sources' && dataSourcesDetail && detailHead ? (
-        <section className={cx('auxiliary-drawer', 'data-sources-detail')} aria-label="数据来源详情">
+          头部与列表抽屉同构：左侧标题，右上角关闭按钮只收起详情层、回到列表。
+          两个抽屉各维护自己的目标类型：数据源只出数据表详情，外部API只出接口详情。
+          渲染只看滞后的 detailRender（300ms 后清空）：切换/收起时详情层向右收回淡出，
+          滑出动画期间内容保留，不会瞬间消失；是否展开由模式与目标类型匹配决定。 */}
+      {detailRender && detailHead ? (
+        <section
+          aria-hidden={!detailOpen}
+          aria-label="数据来源详情"
+          className={cx('auxiliary-drawer', 'data-sources-detail', detailOpen && 'open')}
+        >
           <header>
             <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
               <span
@@ -588,7 +653,9 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
                 className={cx('auxiliary-drawer-badge-icon')}
                 style={
                   {
-                    '--auxiliary-drawer-badge-source': `url("${DRAWER_BADGE_ICONS['data-sources']}")`
+                    '--auxiliary-drawer-badge-source': `url("${
+                      detailRender.kind === 'table' ? databaseFilledIcon : apiFilledIcon
+                    }")`
                   } as CSSProperties
                 }
               />
@@ -602,13 +669,13 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
             </button>
           </header>
           <div className={cx('auxiliary-drawer-body')}>
-            {dataSourcesDetail.kind === 'table' ? (
+            {detailRender.kind === 'table' ? (
               <DatabaseTableDetailPage
                 onBack={() => setDataSourcesDetail(null)}
-                target={dataSourcesDetail}
+                target={detailRender}
               />
             ) : (
-              <ExternalApiDetailPage onBack={() => setDataSourcesDetail(null)} target={dataSourcesDetail} />
+              <ExternalApiDetailPage onBack={() => setDataSourcesDetail(null)} target={detailRender} />
             )}
           </div>
         </section>

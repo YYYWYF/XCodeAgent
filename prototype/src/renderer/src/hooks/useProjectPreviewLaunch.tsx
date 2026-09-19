@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { LoadingOutlined } from '@ant-design/icons'
+import {
+  CheckCircleOutlined,
+  ExclamationCircleOutlined,
+  LoadingOutlined
+} from '@ant-design/icons'
 import { notification } from 'antd'
 import { startProjectLaunch, stopProjectPreview } from '../service/projectLaunch'
 import { cx, previewOrigin } from '../utils'
@@ -18,6 +22,23 @@ type UseProjectPreviewLaunchResult = {
   previewBaseUrl: string
   /** 启动失败的错误文案；成功时为空。 */
   previewLaunchError: string
+}
+
+/**
+ * 关闭“启动中”通知：antd v4 静态通知实例经 React 18 并发调度异步挂载，实例未就绪时
+ * close(key) 是空操作，会把“启动中”永留屏幕；用同 key、同内容、极短自动关闭的通知
+ * 顶替（与加载通知走同一条排队路径，时序无关），观感等同直接消失。
+ */
+function dismissLaunchNotice(key: string): void {
+  notification.open({
+    key,
+    message: '项目正在启动中',
+    description: '正在安装依赖并启动开发服务器，请稍候...',
+    placement: 'bottomRight',
+    duration: 0.01,
+    icon: <LoadingOutlined />,
+    className: cx('project-launch-loading')
+  })
 }
 
 /**
@@ -85,7 +106,7 @@ export function useProjectPreviewLaunch({
           launchRunIdRef.current === launchRunId &&
           activeLaunchWorkspaceRef.current === workspacePath &&
           !launchCleanupPendingRef.current
-        notification.close(loadingKey)
+        dismissLaunchNotice(loadingKey)
         if (!launchStillCurrent) {
           if (result.status === 'running') {
             void stopProjectPreview(workspacePath).finally(() => {
@@ -102,26 +123,32 @@ export function useProjectPreviewLaunch({
           })
           setPreviewBaseUrl(previewOrigin(result.preview_url))
           setPreviewLaunchError('')
-          notification.success({
+          // 结果通知复用加载通知的 key 原位顶替：antd v4 静态通知实例异步挂载，
+          // 先 close 再另开新通知会在竞态下留下永驻的“启动中”条目。
+          notification.open({
+            key: loadingKey,
             message: '项目预览已启动',
             description: '可在预览面板中查看效果',
             placement: 'bottomRight',
-            duration: 3
+            duration: 3,
+            icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />
           })
         } else {
           const errorMsg = result.message || '未知错误'
           setPreviewBaseUrl('')
           setPreviewLaunchError(errorMsg)
-          notification.warning({
+          notification.open({
+            key: loadingKey,
             message: '项目预览启动失败',
             description: `${errorMsg}，可在预览区查看详情`,
             placement: 'bottomRight',
-            duration: 3
+            duration: 3,
+            icon: <ExclamationCircleOutlined style={{ color: '#faad14' }} />
           })
         }
       })
       .catch((err) => {
-        notification.close(loadingKey)
+        dismissLaunchNotice(loadingKey)
         const launchStillCurrent =
           launchRunIdRef.current === launchRunId &&
           activeLaunchWorkspaceRef.current === workspacePath &&

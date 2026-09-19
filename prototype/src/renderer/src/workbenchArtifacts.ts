@@ -747,7 +747,7 @@ function adapterMethodName(id: string): string {
   return pascal.charAt(0).toLowerCase() + pascal.slice(1)
 }
 
-/** 从字段映射标签里还原来源列名：兼容「RECHECK_DB · col（说明）」与草稿简写「col（说明）」。 */
+/** 从字段映射标签里还原来源列名：兼容「回检业务库 · col（说明）」与草稿简写「col（说明）」。 */
 function columnNameFromMapping(sourceLabel: string): string {
   const prefixed = sourceLabel.match(/· (.+?)（/)
   if (prefixed) return prefixed[1]

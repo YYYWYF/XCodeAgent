@@ -92,6 +92,8 @@ type Props = {
   open: boolean
   /** 正在配置的字段（契约出入参），用于标题与说明。 */
   paramLabel: string
+  /** 完整标题覆写：固定值等非函数表达式场景使用；缺省按「配置函数表达式 · 字段」拼装。 */
+  title?: string
   value: string
   variables: ExpressionVariable[]
   onCancel: () => void
@@ -107,6 +109,7 @@ type Props = {
 export default function ExpressionEditorModal({
   open,
   paramLabel,
+  title,
   value,
   variables,
   onCancel,
@@ -148,7 +151,7 @@ export default function ExpressionEditorModal({
       onCancel={onCancel}
       onOk={() => onOk(code.trim())}
       visible={open}
-      title={`配置函数表达式 · ${paramLabel}`}
+      title={title || `配置函数表达式 · ${paramLabel}`}
       width={720}
       footer={[
         <Button key="clear" onClick={() => setCode('')}>

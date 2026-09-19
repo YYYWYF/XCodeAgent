@@ -162,7 +162,7 @@ export type TemplateSetterRow = {
 
 export type Implementation = {
   kind: ImplementationKind
-  /** 计划阶段的来源级意向（显示名，如“RECHECK_DB”）。 */
+  /** 计划阶段的来源级意向（显示名，如“回检业务库”）。 */
   intentSources: string[]
   /** 开发阶段的结构化绑定；意向阶段为空数组。 */
   bindings: SourceBinding[]
@@ -176,10 +176,10 @@ export type Implementation = {
   setters: TemplateSetterRow[]
   /** 查询模板自动建议的排序（如 created_at DESC），为空表示无自动排序。 */
   orderBy: string
-  /** 外部接口参数适配的函数表达式：键见 adaptationExpressionKey，为空表示直接透传。 */
+  /** 外部接口参数适配的函数表达式：键见 adaptationExpressionKey（in:/out: 两类前缀），为空表示直接透传。 */
   expressions: Record<string, string>
-  /** 外部绑定的入参对齐：契约入参名 → 外部接口入参名；未登记时按名称推导。 */
-  requestParamMap: Record<string, string>
+  /** 外部绑定的入参连接（显式登记）：外部入参名 → 契约入参名；空值或缺 key 即未连接，没有备选来源就不显示连线。 */
+  requestFeeders: Record<string, string>
   /** 本地实现/多来源组合的规则说明。 */
   rule: string
   matched: boolean
@@ -229,7 +229,7 @@ export function emptyImplementation(kind: ImplementationKind = '数据库'): Imp
     setters: [],
     orderBy: '',
     expressions: {},
-    requestParamMap: {},
+    requestFeeders: {},
     rule: '',
     matched: false,
     confirmed: false
@@ -594,7 +594,8 @@ export type BindingDraft = {
   orderBy: string
   mappings: FieldMapping[]
   expressions: Record<string, string>
-  requestParamMap: Record<string, string>
+  /** 外部入参连接（显式登记）：外部入参名 → 契约入参名；空值/缺 key = 未连接。 */
+  requestFeeders: Record<string, string>
 }
 
 /** 从当前实现提取映射绑定草稿：对话卡初始值与历史回放预置应答共用同一来源。 */
@@ -607,7 +608,7 @@ export function bindingDraftFrom(object: AppApi): BindingDraft {
     orderBy: implementation.orderBy,
     mappings: implementation.mappings.map((row) => ({ ...row })),
     expressions: { ...implementation.expressions },
-    requestParamMap: { ...implementation.requestParamMap }
+    requestFeeders: { ...implementation.requestFeeders }
   }
 }
 
@@ -670,7 +671,50 @@ export function withSavedBindingDraft(object: AppApi, draft: BindingDraft): AppA
       orderBy: draft.orderBy,
       mappings: draft.mappings,
       expressions: draft.expressions,
-      requestParamMap: draft.requestParamMap
+      requestFeeders: draft.requestFeeders
+    }
+  }
+}
+
+/**
+ * 来源名跟随当前目录：来源名是用户自建的自定义标签，绑定确认时只存了快照，
+ * 目录改名后旧快照会让绑定视图、产物页与适配摘要新旧名混杂。读取边界统一调用本函数，
+ * 按 sourceId 对齐目录当前名改写绑定、字段映射标签前缀与计划意向名；无变化时原样返回。
+ */
+export function withLiveSourceNames(object: AppApi, sources: DataSource[]): AppApi {
+  const implementation = object.implementation
+  if (!implementation.bindings.length) return object
+  const liveNameBySourceId = new Map(
+    flattenTargets(sources).map((target) => [target.sourceId, target.sourceName])
+  )
+  /** 收集需要改名的绑定：旧名 → 目录当前名。 */
+  const renames: Array<{ from: string; to: string }> = []
+  const bindings = implementation.bindings.map((binding) => {
+    const liveName = liveNameBySourceId.get(binding.sourceId)
+    if (!liveName || liveName === binding.sourceName) return binding
+    renames.push({ from: binding.sourceName, to: liveName })
+    return { ...binding, sourceName: liveName }
+  })
+  if (!renames.length) return object
+  // 字段映射标签以「来源名 · 字段（说明）」为前缀，仅当旧前缀命中改名来源时改写，
+  // 「业务规则 ·」等非来源前缀原样保留。
+  const rewriteLabel = (label: string): string => {
+    for (const { from, to } of renames) {
+      if (label.startsWith(`${from} · `)) return `${to}${label.slice(from.length)}`
+    }
+    return label
+  }
+  return {
+    ...object,
+    implementation: {
+      ...implementation,
+      bindings,
+      mappings: implementation.mappings.map((row) =>
+        row.sourceLabel ? { ...row, sourceLabel: rewriteLabel(row.sourceLabel) } : row
+      ),
+      intentSources: implementation.intentSources.map(
+        (intent) => renames.find((item) => item.from === intent)?.to || intent
+      )
     }
   }
 }
@@ -688,7 +732,7 @@ export function withConfirmedBindings(object: AppApi, sources: DataSource[]): Ap
     intentSources: object.implementation.intentSources,
     rule: object.implementation.rule,
     expressions: object.implementation.expressions,
-    requestParamMap: object.implementation.requestParamMap,
+    requestFeeders: object.implementation.requestFeeders,
     bindings,
     matched: true
   }
@@ -850,12 +894,12 @@ function suggestOrderBy(
   return timeColumn ? `${timeColumn.column} DESC` : ''
 }
 
-/** 一条参数适配行：契约侧与外部侧如何互译；出参适配待人工确认时 external 为空。 */
+/** 一条参数适配行：外部侧一行一条，描述它的取值来源；未连接行 matched=false。 */
 export type AdaptationRow = {
   direction: '入参适配' | '出参适配'
-  /** 契约侧名称：入参适配为契约入参，出参适配为契约出参。 */
+  /** 契约侧供值入参名；未连接行为空。 */
   param: string
-  /** 契约侧业务含义（仅入参适配提供）。 */
+  /** 契约侧业务含义（仅入参适配且来自契约入参时提供）。 */
   paramSummary: string
   required: boolean
   /** 外部侧名称；出参适配未匹配时为空字符串。 */
@@ -863,7 +907,7 @@ export type AdaptationRow = {
   externalComment: string
   /** 入参适配的外部请求部位：路径参数/查询参数/请求体；出参适配为空。 */
   location: ExternalApiParamLocation | ''
-  /** 该行是否已确定来源；入参适配随对齐结果，出参适配随字段映射状态。 */
+  /** 该行是否已连接取值来源；入参适配随连接登记，出参适配随字段映射状态。 */
   matched: boolean
 }
 
@@ -881,10 +925,10 @@ function externalNameFromMapping(sourceLabel: string): string {
 }
 
 /**
- * 外部服务绑定的参数适配视图：入参适配把契约入参对齐到外部接口入参
- * （人工在 requestParamMap 登记的对齐优先，其次按名称匹配；语义对不上就留空待人工
- * 选择，不做“唯一入参硬凑”——部位与含义都由用户判断）；出参适配直接读取字段映射
- * 的确认结果，保证与「确认绑定」状态和生成的适配代码一致。
+ * 外部服务绑定的参数适配视图：外部入参一行一条，取值来源以 requestFeeders 的
+ * 显式连接登记为准（契约入参名），没有登记即未连接——不再按名称隐式推导，也不做
+ * 固定值补位：应用侧没有对应入参就连线都不显示；出参适配直接读取字段映射的确认
+ * 结果，保证与「确认绑定」状态和生成的适配代码一致。
  */
 export function externalAdaptations(object: AppApi, sources: DataSource[]): AdaptationRow[] {
   if (object.implementation.kind !== '外部服务') return []
@@ -896,23 +940,20 @@ export function externalAdaptations(object: AppApi, sources: DataSource[]): Adap
       )
   )
   if (!target) return []
-  const requestRows: AdaptationRow[] = contractRequestParams(object).map((param) => {
-    const manual = object.implementation.requestParamMap?.[param.name]
-    const matched =
-      (manual ? target.requestParams.find((candidate) => candidate.name === manual) : undefined) ||
-      target.requestParams.find((candidate) => candidate.name === param.name) ||
-      undefined
+  const feeders = object.implementation.requestFeeders || {}
+  const contractParams = contractRequestParams(object)
+  const requestRows: AdaptationRow[] = target.requestParams.map((param) => {
+    const feederName = feeders[param.name] || ''
+    const contractParam = contractParams.find((item) => item.name === feederName)
     return {
       direction: '入参适配',
-      param: param.name,
-      paramSummary: param.summary,
-      required: param.required || Boolean(matched?.required),
-      external: matched ? matched.name : '',
-      externalComment: matched
-        ? matched.comment
-        : '尚未对齐外部入参，请在字段映射面板选择',
-      location: matched?.location || '',
-      matched: Boolean(matched)
+      param: contractParam?.name || '',
+      paramSummary: contractParam?.summary || '',
+      required: Boolean(param.required),
+      external: param.name,
+      externalComment: param.comment,
+      location: param.location,
+      matched: Boolean(contractParam)
     }
   })
   const responseRows: AdaptationRow[] = object.response.map((output) => {
@@ -932,6 +973,20 @@ export function externalAdaptations(object: AppApi, sources: DataSource[]): Adap
     }
   })
   return [...requestRows, ...responseRows]
+}
+
+/**
+ * 外部必填入参中尚未连接取值来源的名单：映射画布的警示条与「保存并确认」门禁共用，
+ * 连接登记是唯一事实（requestFeeders 登记了契约入参名即已连接），缺登记即未连接。
+ */
+export function missingRequiredFeeders(
+  requestParams: Array<{ name: string; required?: boolean }>,
+  draft: Pick<BindingDraft, 'requestFeeders'>
+): string[] {
+  const feeders = draft.requestFeeders || {}
+  return requestParams
+    .filter((param) => param.required && !feeders[param.name])
+    .map((param) => param.name)
 }
 
 /** 判断两段业务含义是否指同一件事：去掉“路径参数”等套话后看有无二字片段重合。 */
@@ -961,6 +1016,8 @@ export function recommendAdaptationExpressions(
     const key = adaptationExpressionKey(row)
     if (seeded[key]) return
     if (row.direction === '入参适配') {
+      // 未连接行没有契约入参语义，不做跨域取数推荐。
+      if (!row.param) return
       if (termsOverlap(row.paramSummary, row.externalComment)) return
       if (/回检/.test(row.paramSummary) && /工号|员工/.test(row.externalComment)) {
         seeded[key] = 'LOOKUP(recheck_audit, recheck_id, reviewer_id)'

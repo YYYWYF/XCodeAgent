@@ -1,4 +1,6 @@
-/* 后台任务队列抽屉：定位在裁剪宿主（菜单栏右边线）之内，滑出即从边线开始。 */
+/* 后台任务队列抽屉：定位在裁剪宿主（菜单栏右边线）之内，滑出即从边线开始。
+   收起时整体平移一个自身宽度；visibility 延迟到滑出结束再隐藏，收起动画可见，
+   与辅助抽屉（任务管理/数据源/外部API等）保持同一条开合轨迹。 */
 .@{class-prefix}-background-task-drawer {
   position: absolute;
   z-index: 30;
@@ -13,12 +15,17 @@
   box-shadow: 12px 0 30px rgba(27, 20, 55, 0.14);
   /* 收起时整体平移一个自身宽度：右边缘恰好停在裁剪边界上，滑入即从菜单栏右边线移出。 */
   transform: translateX(-100%);
-  transition: transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition:
+    transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s linear 0.26s;
   visibility: hidden;
 
   &.@{class-prefix}-open {
     transform: translateX(0);
     visibility: visible;
+    transition:
+      transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+      visibility 0s;
   }
 }
 
@@ -206,7 +213,10 @@
   border: 0;
   background: transparent;
   color: var(--wb-text-secondary);
+  // 与辅助抽屉 Tab 同款排版：继承主题字体、全部状态统一 600 字重（只靠颜色与下划线区分选中）。
+  font: inherit;
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
 
@@ -233,7 +243,6 @@
 
   &.@{class-prefix}-active {
     color: var(--wb-accent);
-    font-weight: 600;
 
     em {
       background: var(--wb-accent-soft);

@@ -191,10 +191,14 @@ type Props = {
   onOpenConversationManagement?: () => void
   /** 任务管理抽屉是否展开（工作台页持有，用于菜单激活态）。 */
   conversationDrawerOpen?: boolean
-  /** 打开数据来源抽屉。 */
+  /** 打开数据源抽屉。 */
   onOpenDataSources?: () => void
-  /** 数据来源抽屉是否展开。 */
+  /** 数据源抽屉是否展开。 */
   dataSourcesDrawerOpen?: boolean
+  /** 打开外部API抽屉。 */
+  onOpenExternalApis?: () => void
+  /** 外部API抽屉是否展开。 */
+  externalApisDrawerOpen?: boolean
   /** 聊天面板向工作台页注册任务管理内容查询函数。 */
   onConversationManagementReady?: (query: () => ConversationManagementContent) => void
   /** 关闭辅助抽屉（工作台页统一处理互斥）。 */
@@ -272,6 +276,8 @@ export default function AiChatPanel({
   conversationDrawerOpen,
   onOpenDataSources,
   dataSourcesDrawerOpen,
+  onOpenExternalApis,
+  externalApisDrawerOpen,
   onConversationManagementReady,
   onCloseAuxiliaryDrawer,
   onTestCaseGenerationTaskTypeChange
@@ -1867,6 +1873,10 @@ export default function AiChatPanel({
     if (object.implementation.confirmed) {
       const view = confirmedBindingView(object, readDataSources())
       if (view) {
+        // 已确认绑定可继续调整：面板内编辑过的草稿优先（按选中对象限定范围），
+        // 没有编辑时展示实现里的已存配置。
+        const localDraft =
+          fieldMappingDraft && fieldMappingSelectedId === selectedId ? fieldMappingDraft : view.draft
         return {
           readOnly: true,
           context: {
@@ -1882,7 +1892,7 @@ export default function AiChatPanel({
             inputParams: view.inputParams,
             outputs: view.outputs
           } as FieldMappingContext,
-          draft: view.draft
+          draft: localDraft
         }
       }
     }
@@ -1901,7 +1911,7 @@ export default function AiChatPanel({
         orderBy: '',
         mappings: [],
         expressions: {},
-        requestParamMap: {}
+        requestFeeders: {}
       }
     )
     setFieldMappingSelectedId(activeBindingObjectId)
@@ -3138,7 +3148,7 @@ export default function AiChatPanel({
           orderBy: '',
           mappings: [],
           expressions: {},
-          requestParamMap: {}
+          requestFeeders: {}
         }
       )
     }
@@ -3151,9 +3161,10 @@ export default function AiChatPanel({
   const handleFieldMappingSelectApi = (id: string): void => setFieldMappingSelectedId(id)
   /** 面板内草稿编辑回写：草稿正本在面板层持有，切 Tab 不丢。 */
   const handleFieldMappingChange = (draft: BindingDraft): void => setFieldMappingDraft(draft)
-  /** 面板「保存」：把当前草稿写回应用API状态但不提交确认，工作流仍停在待确认。 */
+  /** 面板「保存」：把当前草稿写回应用API状态但不提交确认；已确认绑定保存即更新配置。 */
   const handleFieldMappingSave = (draft: BindingDraft): void => {
-    const storedObject = appApis.find((item) => item.id === activeBindingObjectId)
+    const targetId = fieldMappingSelectedId || activeBindingObjectId
+    const storedObject = appApis.find((item) => item.id === targetId)
     if (!storedObject) return
     saveAppApisList(
       appApis.map((item) => (item.id === storedObject.id ? withSavedBindingDraft(item, draft) : item))
@@ -3180,12 +3191,6 @@ export default function AiChatPanel({
       if (fieldMappingDraft) handleFieldMappingConfirm(fieldMappingDraft)
     }
   }
-  // 绑定澄清被解答或会话切换后上下文消失：字段映射会话同步收口，面板退回开发产物。
-  useEffect(() => {
-    if (!fieldMappingDraft || activeBindingWorkflow) return
-    setFieldMappingDraft(null)
-    if (rightPanel?.type === 'field-mapping') setRightPanel({ type: 'development-artifacts' })
-  }, [activeBindingWorkflow, fieldMappingDraft, rightPanel])
 
   /**
    * 保存待接受的全部文件变更并继续当前工作流。
@@ -3514,6 +3519,7 @@ export default function AiChatPanel({
         backgroundTasksRunning={backgroundTasksRunning}
         conversationDrawerOpen={conversationDrawerOpen}
         dataSourcesDrawerOpen={dataSourcesDrawerOpen}
+        externalApisDrawerOpen={externalApisDrawerOpen}
         onOpenConversationManagement={() => {
           setActiveView('chat')
           onOpenConversationManagement?.()
@@ -3521,6 +3527,7 @@ export default function AiChatPanel({
         onOpenBackgroundTasks={(system) => onOpenBackgroundTasks?.(system)}
         onShowFiles={handleShowFiles}
         onShowDataSources={() => onOpenDataSources?.()}
+        onShowExternalApis={() => onOpenExternalApis?.()}
         onShowSettings={handleShowSettings}
         onShowSkills={handleShowSkills}
       />

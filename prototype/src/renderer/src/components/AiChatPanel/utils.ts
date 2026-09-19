@@ -44,6 +44,22 @@ type DetailSessionIdentity = {
   pageId?: string
 }
 
+/**
+ * 读取 Workflow 快照 state/result 中的选中项字段：兼容 camelCase 与 snake_case
+ * 两种键名（真实工程与 mock 剧本都可能出现），缺失时回退空串。
+ * 字段名只传驼峰后半段（如 'PageId'），自动尝试 selected 前缀两种拼写。
+ */
+export function workflowStateField(
+  state: Record<string, unknown>,
+  result: Record<string, unknown>,
+  camelSuffix: string,
+  snakeSuffix: string
+): string {
+  const camel = `selected${camelSuffix}`
+  const snake = `selected_${snakeSuffix}`
+  return String(state[camel] || state[snake] || result[camel] || result[snake] || '').trim()
+}
+
 /** 生成页面详情目标键，供临时运行状态按页面隔离。 */
 export function pageDetailTargetKey(pageId: string): string {
   return pageId ? `page:${pageId}` : ''
@@ -89,20 +105,8 @@ export function workflowDetailTargetKey(workflow: unknown): string {
   }
   const state = payload.state || {}
   const result = payload.result || {}
-  const apiContractId = String(
-    state.selectedApiContractId ||
-      state.selected_api_contract_id ||
-      result.selectedApiContractId ||
-      result.selected_api_contract_id ||
-      ''
-  ).trim()
-  const endpointId = String(
-    state.selectedEndpointId ||
-      state.selected_endpoint_id ||
-      result.selectedEndpointId ||
-      result.selected_endpoint_id ||
-      ''
-  ).trim()
+  const apiContractId = workflowStateField(state, result, 'ApiContractId', 'api_contract_id')
+  const endpointId = workflowStateField(state, result, 'EndpointId', 'endpoint_id')
   if (apiContractId && endpointId) {
     return endpointDetailTargetKey(apiContractId, endpointId)
   }
@@ -110,13 +114,7 @@ export function workflowDetailTargetKey(workflow: unknown): string {
   if (objectId) {
     return appApiDetailTargetKey(objectId)
   }
-  const pageId = String(
-    state.selectedPageId ||
-      state.selected_page_id ||
-      result.selectedPageId ||
-      result.selected_page_id ||
-      ''
-  ).trim()
+  const pageId = workflowStateField(state, result, 'PageId', 'page_id')
   return pageDetailTargetKey(pageId)
 }
 

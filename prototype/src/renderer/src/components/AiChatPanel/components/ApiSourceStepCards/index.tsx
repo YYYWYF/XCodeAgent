@@ -67,7 +67,7 @@ export function ApiSourceTypeCard({
 
 /** 级联的一段：一个数据库连接及其下已添加的数据表。 */
 export type ApiSourceDatabaseGroup = {
-  /** 连接显示名（RECHECK_DB）。 */
+  /** 连接显示名（如“回检业务库”）。 */
   connection: string
   /** 该连接下可绑定的表：绑定键 + 展示名（表名（说明））。 */
   tables: Array<{ key: string; label: string }>
@@ -155,14 +155,14 @@ type MissingCardProps = {
   kindLabel: string
   disabled?: boolean
   submitting?: boolean
-  /** 用户表示已在「数据来源」中配置完成，重新检测可用来源。 */
+  /** 用户表示已在对应抽屉中配置完成，重新检测可用来源。 */
   onRetry: () => void
 }
 
 /**
  * 来源缺失引导卡：目录中没有该类型的可用来源时不做选择，
- * 引导用户到左侧「数据来源」抽屉配置；配置完成后一键重新检测继续旅程。
- * 该卡作为工作流节点内嵌在节点轨迹中渲染，不单独成块。
+ * 引导用户到左侧对应抽屉配置（数据表→数据源，外部API→外部API抽屉按域登记）；
+ * 配置完成后一键重新检测继续旅程。该卡作为工作流节点内嵌在节点轨迹中渲染，不单独成块。
  */
 export function ApiSourceMissingCard({
   kindLabel,
@@ -170,15 +170,20 @@ export function ApiSourceMissingCard({
   submitting = false,
   onRetry
 }: MissingCardProps): ReactElement {
-  /** 打开左侧「数据来源」抽屉：由工作台页面监听事件后展开对应抽屉。 */
+  const isDatabase = kindLabel === '数据表'
+  /** 打开左侧对应抽屉：由工作台页面监听事件后按缺失类型展开数据源或外部API抽屉。 */
   const openDataSources = (): void => {
-    window.dispatchEvent(new CustomEvent('aistudio:prototype:open-data-sources'))
+    window.dispatchEvent(
+      new CustomEvent('aistudio:prototype:open-data-sources', {
+        detail: { kind: isDatabase ? 'database' : 'external' }
+      })
+    )
   }
   return (
     <div aria-label="数据来源待配置" className={cx('api-source-cards', 'missing')} role="group">
       <p className={cx('api-source-cards-missing-text')}>
-        目录中还没有可绑定的{kindLabel}。请先打开左侧「数据来源」抽屉
-        {kindLabel === '数据表' ? '连接数据库并添加数据表' : '登记外部API接口'}
+        目录中还没有可绑定的{kindLabel}。请先打开左侧「{isDatabase ? '数据源' : '外部API'}」抽屉
+        {isDatabase ? '连接数据库并添加数据表' : '在对应域下登记接口'}
         ，配置完成后再回来继续绑定。
       </p>
       <div className={cx('api-source-cards-missing-actions')}>
@@ -186,7 +191,7 @@ export function ApiSourceMissingCard({
           disabled={disabled || submitting}
           onClick={openDataSources}
         >
-          打开数据来源
+          打开{isDatabase ? '数据源' : '外部API'}
         </Button>
         <Button
           type="primary"

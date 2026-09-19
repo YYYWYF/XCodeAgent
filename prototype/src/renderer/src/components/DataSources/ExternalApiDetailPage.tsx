@@ -5,6 +5,7 @@ import { cx } from '../../utils'
 import {
   useDataSources,
   EXTERNAL_PARAM_LOCATION_LABEL,
+  externalDomainById,
   type ExternalApiMethod,
   type ExternalApiParamLocation,
   type ExternalApiSource
@@ -28,13 +29,13 @@ const LOCATION_OPTIONS = (Object.keys(EXTERNAL_PARAM_LOCATION_LABEL) as External
   (value) => ({ value, label: EXTERNAL_PARAM_LOCATION_LABEL[value] })
 )
 
-/** 生成空白接口草稿：新增态默认 GET，自带一条空 Headers 行便于直接填写。 */
-function createDraft(): Draft {
+/** 生成空白接口草稿：新增态默认 GET；传入域地址时预填 URL 前缀，自带一条空 Headers 行便于直接填写。 */
+function createDraft(domainBaseUrl = ''): Draft {
   return {
     name: '',
     description: '',
     method: 'GET',
-    url: '',
+    url: domainBaseUrl ? `${domainBaseUrl}/` : '',
     headers: [{ name: '', value: '' }],
     requestParams: [],
     responseParams: []
@@ -77,8 +78,8 @@ function cleanParams(params: ParamDraft[]): ExternalApiSource['requestParams'] {
 }
 
 type Props = {
-  /** 维护目标：接口 id（编辑）或新增态。 */
-  target: { kind: 'api'; id: string } | { kind: 'api-new' }
+  /** 维护目标：接口 id（编辑）或新增态（可携带所属域 id，用于预填 URL 前缀与落域）。 */
+  target: { kind: 'api'; id: string } | { kind: 'api-new'; domainId?: string }
   onBack: () => void
 }
 
@@ -100,11 +101,16 @@ export default function ExternalApiDetailPage({ target, onBack }: Props): JSX.El
     target.kind === 'api'
       ? sources.find((item): item is ExternalApiSource => item.id === target.id && item.type === 'external_service') || null
       : null
-  const [draft, setDraft] = useState<Draft>(() => (source ? draftFromSource(source) : createDraft()))
+  // 新增态的所属域：接口只能挂在已有域下，域地址用于预填 URL 前缀。
+  const newDomain =
+    target.kind === 'api-new' && target.domainId ? externalDomainById(sources, target.domainId) : null
+  const [draft, setDraft] = useState<Draft>(() =>
+    source ? draftFromSource(source) : createDraft(newDomain?.baseUrl || '')
+  )
 
   // 切换维护对象（或进入新增态）时重建草稿。
   useEffect(() => {
-    setDraft(source ? draftFromSource(source) : createDraft())
+    setDraft(source ? draftFromSource(source) : createDraft(newDomain?.baseUrl || ''))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target.kind, target.kind === 'api' ? target.id : ''])
 
@@ -129,6 +135,7 @@ export default function ExternalApiDetailPage({ target, onBack }: Props): JSX.El
     const next: ExternalApiSource = {
       type: 'external_service',
       id: source?.id || `api-${Date.now()}`,
+      domainId: source?.domainId || newDomain?.id || '',
       name: draft.name.trim(),
       description: draft.description.trim(),
       method: draft.method,
@@ -286,7 +293,10 @@ export default function ExternalApiDetailPage({ target, onBack }: Props): JSX.El
     <div className={cx('ds-detail-page')}>
       <div className={cx('ds-detail-form')}>
         <label>
-          接口名称
+          <span>
+            <em aria-hidden="true" className={cx('ds-editor-required')}>*</em>
+            接口名称
+          </span>
           <Input
             onChange={(event) => setDraft({ ...draft, name: event.target.value })}
             placeholder="例如：查询用户信息"
@@ -302,6 +312,7 @@ export default function ExternalApiDetailPage({ target, onBack }: Props): JSX.El
           />
         </label>
         <div className={cx('ds-api-request-line')}>
+          <em aria-hidden="true" className={cx('ds-editor-required')}>*</em>
           <Select
             className={cx('ds-api-method')}
             onChange={(value) => setDraft({ ...draft, method: value })}

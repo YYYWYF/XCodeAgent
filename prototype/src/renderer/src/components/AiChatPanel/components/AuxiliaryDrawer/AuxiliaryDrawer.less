@@ -1,4 +1,7 @@
-/* 临时任务等辅助抽屉：与后台任务抽屉同款同位，定位在裁剪宿主内从菜单栏右边线滑出。 */
+/* 临时任务等辅助抽屉：与后台任务抽屉同款同位，定位在裁剪宿主内从菜单栏右边线滑出。
+   抽屉常挂载：滑入/滑出都走同一条 transform 过渡；visibility 延迟到滑出结束再隐藏，
+   保证收起动画可见。已展开时切换模式（如数据源↔外部API↔任务管理）不做整抽屉动画，
+   原地替换内容——二级抽屉开着时切换一级，中间不会出现被腾空的区域。 */
 .@{class-prefix}-auxiliary-drawer {
   position: absolute;
   z-index: 30;
@@ -12,12 +15,26 @@
   background: var(--wb-canvas);
   border-right: 1px solid var(--wb-border);
   box-shadow: 12px 0 30px rgba(27, 20, 55, 0.14);
-  animation: auxiliary-drawer-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s linear 0.26s;
+
+  &.@{class-prefix}-open {
+    transform: translateX(0);
+    visibility: visible;
+    transition:
+      transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+      visibility 0s;
+  }
 }
 // 数据来源详情层：衔接在列表抽屉右侧的第二个抽屉，从列表右缘向右展开，
 // 承载接口/表的维护页；列表抽屉保持 420px 不动。
 // 与列表抽屉同处一个图层：左缘不加框（列表的右框线即内部分隔）；
 // 悬浮投影只向右伸展——负 spread 抵消模糊的左半影，不会叠印到列表抽屉上。
+// 开合同为水平运动：展开时从列表右缘滑入，收起时向右收回并淡出——
+// 列表抽屉切换/收起时两层沿同一水平轴各自运动，不再出现一层滑动、一层原地淡出的割裂感。
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources-detail {
   left: 420px;
   width: 680px;
@@ -25,13 +42,29 @@
   border-left: 0;
   border-right: 1px solid var(--wb-border);
   box-shadow: 32px 0 30px -16px rgba(27, 20, 55, 0.16);
-  animation: auxiliary-drawer-detail-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  opacity: 0;
+  transform: translateX(48px);
+  transition:
+    transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s linear 0.26s;
+
+  &.@{class-prefix}-open {
+    opacity: 1;
+    transform: translateX(0);
+    visibility: visible;
+    transition:
+      transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+      opacity 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+      visibility 0s;
+    animation: auxiliary-drawer-detail-in 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
 }
 
 @keyframes auxiliary-drawer-detail-in {
   from {
     opacity: 0;
-    transform: translateX(-18px);
+    transform: translateX(48px);
   }
 
   to {
@@ -39,23 +72,14 @@
     transform: translateX(0);
   }
 }
-.@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-auxiliary-drawer-body { padding: 14px; overflow: hidden; }
+// 列表型抽屉（数据源 / 外部API）body 内边距统一 14px，Tab 条通栏负边距按 14px 抵消，
+// 与任务管理（16px + 视图 2px 留白）的贴头位置在视觉上完全一致。
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-auxiliary-drawer-body,
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-external-apis .@{class-prefix}-auxiliary-drawer-body { padding: 14px; overflow: hidden; }
 // 详情层与列表抽屉同款内边距，维护页的通栏头尾按 14px 负边距抵消。
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources-detail .@{class-prefix}-auxiliary-drawer-body { padding: 14px; overflow: hidden; }
-// 数据来源抽屉 body 内边距为 14px 且视图容器无额外留白（任务管理是 16px + 顶部 2px），
-// Tab 条通栏负边距需按实际内边距抵消，才能与任务管理抽屉一样贴住抽屉头下缘。
-.@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-conversation-tabbar { margin: -14px -14px 0; }
-
-@keyframes auxiliary-drawer-in {
-  from {
-    /* 起点整体藏在裁剪边界之外，滑入时从菜单栏右边线移出。 */
-    transform: translateX(-100%);
-  }
-
-  to {
-    transform: translateX(0);
-  }
-}
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-conversation-tabbar,
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-external-apis .@{class-prefix}-conversation-tabbar { margin: -14px -14px 0; }
 
 .@{class-prefix}-auxiliary-drawer > header {
   display: flex;

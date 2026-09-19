@@ -46,7 +46,7 @@
   }
 }
 
-// 清单上方的说明行：左侧说明文字，右侧挂当前层级的内容操作（新增接口/引入数据表等）。
+// 清单上方的操作行：左侧一句静态说明（文案要短，保证不被省略），右侧挂当前层级的操作按钮。
 .@{class-prefix}-ds-hint {
   display: flex;
   flex: 0 0 auto;
@@ -71,6 +71,7 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 6px;
+  margin-left: auto;
 }
 
 .@{class-prefix}-ds-list {
@@ -319,6 +320,14 @@
   }
 }
 
+// 必填字段红星：行内元素与字段文本同行，走主题危险色适配明暗两套主题。
+.@{class-prefix}-ds-editor-required {
+  margin-right: 2px;
+  color: var(--wb-danger, #ff4d4f);
+  font-style: normal;
+  font-weight: 600;
+}
+
 // 连接明细两列栅格：地址/端口、Schema/用户名 同行摆放。
 .@{class-prefix}-ds-editor-grid {
   display: grid;
@@ -376,7 +385,8 @@
 
 .@{class-prefix}-ds-import-tables {
   display: flex;
-  max-height: 260px;
+  // 高度随视口自适应：小屏不低于 320px，大屏至多 620px，尽量少滚动多展示可添加的表。
+  max-height: clamp(320px, 56vh, 620px);
   flex-direction: column;
   gap: 4px;
   overflow-y: auto;

@@ -12,17 +12,6 @@ export function currentVersion(app: ApplicationConfig): ApplicationVersion | und
   return app.versions.find((v) => v.id === app.currentVersionId)
 }
 
-/** 已发布里程碑列表(按时间正序)。 */
-export function releasedVersions(app: ApplicationConfig): ApplicationVersion[] {
-  return (app.versions || []).filter((v) => v.status === 'released')
-}
-
-/** 当前迭代版本(当前版本且状态为 iterating)。无当前迭代时返回 undefined。 */
-export function iteratingVersion(app: ApplicationConfig): ApplicationVersion | undefined {
-  const v = currentVersion(app)
-  return v && v.status === 'iterating' ? v : undefined
-}
-
 /** 按 id 查版本。 */
 export function findVersion(app: ApplicationConfig, versionId: string): ApplicationVersion | undefined {
   return (app.versions || []).find((v) => v.id === versionId)
@@ -34,7 +23,7 @@ export function isVersionEditable(v?: ApplicationVersion): boolean {
 }
 
 /** 生成版本稳定 id。 */
-export function createApplicationVersionId(
+function createApplicationVersionId(
   applicationId: string,
   major: number,
   minor: number
@@ -43,12 +32,12 @@ export function createApplicationVersionId(
 }
 
 /** 拼版本号标签。 */
-export function formatVersionLabel(major: number, minor: number): string {
+function formatVersionLabel(major: number, minor: number): string {
   return `v${major}.${minor}`
 }
 
 /** 基于父版本递增版本号(minor 递增;major 留接口不做)。 */
-export function bumpVersionLabel(parent: {
+function bumpVersionLabel(parent: {
   major: number
   minor: number
 }): { major: number; minor: number; versionLabel: string } {

@@ -1,5 +1,6 @@
 import {
   DownOutlined,
+  ApiOutlined,
   DatabaseOutlined,
   FolderOutlined,
   HourglassOutlined,
@@ -27,10 +28,14 @@ type Props = {
   backgroundTasksRunning?: Record<BackgroundTaskSystem, boolean>
   /** 打开应用文件工作区。 */
   onShowFiles: () => void
-  /** 打开数据来源目录；这里只管理来源接入配置，不承担应用API的数据绑定。 */
+  /** 打开数据源抽屉；这里只管理数据库连接接入，不承担应用API的数据绑定。 */
   onShowDataSources: () => void
-  /** 数据来源抽屉是否展开。 */
+  /** 数据源抽屉是否展开。 */
   dataSourcesDrawerOpen?: boolean
+  /** 打开外部API抽屉；按域登记外部接口。 */
+  onShowExternalApis: () => void
+  /** 外部API抽屉是否展开。 */
+  externalApisDrawerOpen?: boolean
   /** 打开应用配置页。 */
   onShowSettings: () => void
   /** 打开技能页。 */
@@ -87,9 +92,11 @@ export default function PhaseNavigation({
   backgroundTasksRunning = { async: false, tide: false },
   conversationDrawerOpen = false,
   dataSourcesDrawerOpen = false,
+  externalApisDrawerOpen = false,
   onOpenConversationManagement,
   onOpenBackgroundTasks,
   onShowDataSources,
+  onShowExternalApis,
   onShowFiles,
   onShowSettings,
   onShowSkills
@@ -127,13 +134,22 @@ export default function PhaseNavigation({
             </RailButton>
           )
         })}
+        {/* 数据源与外部API是两个独立目录：数据库连接一张抽屉，外部接口按域一张抽屉。 */}
         <RailButton
           active={dataSourcesDrawerOpen}
-          ariaLabel="数据来源"
+          ariaLabel="数据源"
           onClick={onShowDataSources}
-          title="数据来源（仅管理连接）"
+          title="数据源（仅管理数据库连接）"
         >
           <DatabaseOutlined />
+        </RailButton>
+        <RailButton
+          active={externalApisDrawerOpen}
+          ariaLabel="外部API"
+          onClick={onShowExternalApis}
+          title="外部API（按域管理接口）"
+        >
+          <ApiOutlined />
         </RailButton>
         <span aria-hidden="true" className={cx('phase-navigation-divider')} />
       </nav>

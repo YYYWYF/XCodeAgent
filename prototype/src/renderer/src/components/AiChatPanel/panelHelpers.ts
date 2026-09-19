@@ -22,7 +22,12 @@ import { appApiArtifactId } from '../AppApis/model'
 import type { FormalArtifactKey } from '../../initializationPlanning'
 import type { PageDesign } from '../../workbenchArtifacts'
 import type { TestCaseExecutionSnapshot } from '../../testCasePreparation'
-import { endpointDetailTargetKey, pageDetailTargetKey, pendingGateWorkflow } from './utils'
+import {
+  endpointDetailTargetKey,
+  pageDetailTargetKey,
+  pendingGateWorkflow,
+  workflowStateField
+} from './utils'
 import type { AgentChatMessage } from './types'
 import type { SessionRunStatus } from './hooks/sessionRuntime'
 import type { RelatedEndpointContext } from './hooks/useChatSessions'
@@ -264,27 +269,9 @@ export function developmentWorkflowArtifactId(workflow?: WorkflowRunPayload): st
   const state = (workflow.state || {}) as Record<string, unknown>
   const result = (workflow.result || {}) as Record<string, unknown>
   const detailTargetType = String(state.detailTargetType || result.detailTargetType || '').trim()
-  const apiContractId = String(
-    state.selectedApiContractId ||
-      state.selected_api_contract_id ||
-      result.selectedApiContractId ||
-      result.selected_api_contract_id ||
-      ''
-  ).trim()
-  const endpointId = String(
-    state.selectedEndpointId ||
-      state.selected_endpoint_id ||
-      result.selectedEndpointId ||
-      result.selected_endpoint_id ||
-      ''
-  ).trim()
-  const pageId = String(
-    state.selectedPageId ||
-      state.selected_page_id ||
-      result.selectedPageId ||
-      result.selected_page_id ||
-      ''
-  ).trim()
+  const apiContractId = workflowStateField(state, result, 'ApiContractId', 'api_contract_id')
+  const endpointId = workflowStateField(state, result, 'EndpointId', 'endpoint_id')
+  const pageId = workflowStateField(state, result, 'PageId', 'page_id')
   const objectId = String(
     state.selectedObjectId || result.selectedObjectId || ''
   ).trim()

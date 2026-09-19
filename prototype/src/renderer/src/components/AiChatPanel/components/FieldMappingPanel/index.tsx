@@ -1,52 +1,19 @@
 import { ApiOutlined } from '@ant-design/icons'
 import { Button, Select } from 'antd'
-import { useState } from 'react'
 import type { ReactElement } from 'react'
 import type { BindingDraft } from '../../../AppApis/model'
 import {
   CONDITION_OPERATORS,
   conditionSqlFragment,
-  contractFieldLabel
+  contractFieldLabel,
+  missingRequiredFeeders
 } from '../../../AppApis/model'
-import {
-  EXTERNAL_PARAM_LOCATION_LABEL,
-  type ExternalApiParamLocation
-} from '../../../DataSources/catalog'
-import ExpressionEditorModal, { type ExpressionVariable } from './ExpressionEditorModal'
+import ExternalMappingCards from './ExternalMapping'
 import { cx } from '../../../../utils'
+import type { FieldMappingApiItem, FieldMappingContext } from './types'
 import './index.less'
 
-/** 一条映射候选：表列 / 外部出参 / 外部入参，comment 为业务说明，location 为请求部位。 */
-export type MappingFieldOption = {
-  name: string
-  comment: string
-  required?: boolean
-  location?: ExternalApiParamLocation
-}
-
-/**
- * 字段映射面板的上下文：由待确认的应用API「映射绑定」澄清载荷派生。
- * 应用侧是契约出入参，目标侧是数据表列或外部接口的结构化定义。
- */
-export type FieldMappingContext = {
-  kind: '数据库' | '外部服务'
-  objectName: string
-  appMethod: string
-  appPath: string
-  sourceName: string
-  targetName: string
-  op: string
-  columns: MappingFieldOption[]
-  requestParams: MappingFieldOption[]
-  inputParams: Array<{ code: string; name: string; summary: string; required: boolean }>
-  outputs: Array<{ code: string; name: string }>
-}
-
-/** 目录里的一个应用API条目：只展示名称，方法与来源在右侧内容区呈现。 */
-export type FieldMappingApiItem = {
-  id: string
-  name: string
-}
+export type { FieldMappingApiItem, FieldMappingContext, MappingFieldOption } from './types'
 
 type Props = {
   /** 应用API目录：以应用的全部接口为导航主体。 */
@@ -110,67 +77,11 @@ function buildSqlPreview(draft: BindingDraft, table: string): string {
   return lines.join('\n')
 }
 
-/** 外部参数下拉选项文案：部位前缀让用户直观看到值会发到请求的哪个部位。 */
-function externalParamLabel(param: MappingFieldOption): string {
-  const location = param.location ? `${EXTERNAL_PARAM_LOCATION_LABEL[param.location]} · ` : ''
-  return `${param.name}（${location}${param.comment}）`
-}
-
-/**
- * fx 取值配置钮：点击打开函数表达式编辑弹框。值即草稿 expressions 里的字符串
- * （空串 = 透传）；按钮常态灰显「透传」，配置过则高亮显示表达式摘要。
- */
-function ExpressionFx({
-  disabled,
-  onChange,
-  paramLabel,
-  value,
-  variables
-}: {
-  disabled: boolean
-  value: string
-  /** 弹框标题用的契约字段标签。 */
-  paramLabel: string
-  /** 可插入的变量候选：当前登录用户 + 入参侧的契约入参。 */
-  variables: ExpressionVariable[]
-  onChange: (value: string) => void
-}): ReactElement {
-  const [open, setOpen] = useState(false)
-  /** 触发钮文案：透传灰显；配置过则高亮显示表达式摘要。 */
-  const summary = value === '' ? '透传' : value === ':currentUser' ? '登录用户' : value
-  return (
-    <>
-      <button
-        aria-label="配置取值表达式"
-        className={cx('field-mapping-fx', value !== '' && 'active')}
-        disabled={disabled}
-        onClick={() => setOpen(true)}
-        title={value || '直接透传'}
-        type="button"
-      >
-        <em>fx</em>
-        <span>{summary}</span>
-      </button>
-      <ExpressionEditorModal
-        onCancel={() => setOpen(false)}
-        onOk={(next) => {
-          onChange(next)
-          setOpen(false)
-        }}
-        open={open}
-        paramLabel={paramLabel}
-        value={value}
-        variables={variables}
-      />
-    </>
-  )
-}
-
 /**
  * 字段映射面板：应用API映射绑定的编辑工作台。左侧以应用的全部API为目录
  * （状态点标注进行中/已确认），右侧是当前绑定对象的映射编辑区——数据库形态为
- * 模板槽位 + SQL 预览卡片，外部API形态把入参按「路径参数/查询参数/请求体」分组装配、
- * 出参取响应 data 层字段、fx 表达式做简单加工，底部请求预览实时拼出实际调用。
+ * 模板槽位 + SQL 预览卡片；外部API形态为「双列连线映射」：应用与外部的出入参
+ * 两列平铺，中段连线表达取值关系，外部必填入参未连接时警示并拦截确认。
  * 确认动作在工作流节点卡上，这里只承载配置本身。
  */
 export default function FieldMappingPanel({
@@ -229,7 +140,9 @@ export default function FieldMappingPanel({
           <FieldMappingEditor
             context={context}
             draft={draft}
-            locked={submitting || readOnly}
+            // 画布与控件只在提交瞬间锁定；已确认绑定为「可调整」态（保存更新配置）。
+            locked={submitting}
+            readOnly={readOnly}
             submitting={submitting}
             onChange={onChange}
             onSave={onSave}
@@ -241,27 +154,25 @@ export default function FieldMappingPanel({
   )
 }
 
-/** 编辑区入参：当前绑定对象的契约上下文 + 共享草稿；locked 时控件禁用且隐藏动作区。 */
+/** 编辑区入参：当前绑定对象的契约上下文 + 共享草稿；locked（提交中）时控件禁用。 */
 type EditorProps = {
   context: FieldMappingContext
   draft: BindingDraft
   locked: boolean
+  /** 已确认绑定：可继续调整并保存，但不出现「保存并确认」（无待推进的工作流）。 */
+  readOnly: boolean
   submitting: boolean
   onChange: (draft: BindingDraft) => void
   onSave: (draft: BindingDraft) => void
   onConfirm: (draft: BindingDraft) => void
 }
 
-/** 映射编辑区：契约头（动作按钮跟随标题行右侧，只读态隐藏）+ 分节卡片；行网格全段共用，纵向严格对齐。 */
-function FieldMappingEditor({ context, draft, locked, submitting, onChange, onSave, onConfirm }: EditorProps): ReactElement {
+/** 映射编辑区：契约头（动作按钮跟随标题行右侧）+ 分节卡片；数据库为模板槽位，外部为双列连线画布。 */
+function FieldMappingEditor({ context, draft, locked, readOnly, submitting, onChange, onSave, onConfirm }: EditorProps): ReactElement {
   const isExternal = context.kind === '外部服务'
   const columnOptions = context.columns.map((column) => ({
     value: column.name,
     label: `${column.name}（${column.comment}）`
-  }))
-  const externalParamOptions = context.requestParams.map((param) => ({
-    value: param.name,
-    label: externalParamLabel(param)
   }))
   const operatorOptions = CONDITION_OPERATORS.map((value) => ({ value }))
   /** 契约入参展示标签：按参数名回查英文标识。 */
@@ -313,295 +224,152 @@ function FieldMappingEditor({ context, draft, locked, submitting, onChange, onSa
       )
     })
   }
-  /** 调整函数表达式；置空即直接透传。 */
-  const updateExpression = (key: string, expression: string): void => {
-    patchDraft({ expressions: { ...draft.expressions, [key]: expression } })
-  }
-  /** 调整契约入参对齐的外部入参；清空选择即回到待对齐。 */
-  const updateRequestParam = (param: string, externalName: string): void => {
-    patchDraft({ requestParamMap: { ...draft.requestParamMap, [param]: externalName } })
-  }
-  /** 入参适配的当前对齐值：人工登记优先，其次按名称；对不上留空待选（不硬凑）。 */
-  const alignedExternal = (param: string): string => {
-    const manual = draft.requestParamMap[param]
-    if (manual) return manual
-    const byName = context.requestParams.find((item) => item.name === param)
-    return byName ? byName.name : ''
-  }
-  /** 找到对齐到某个外部入参的契约入参：请求预览的取值占位用它。 */
-  const feederOf = (externalName: string): { code: string } | null => {
-    const param = context.inputParams.find((item) => alignedExternal(item.name) === externalName)
-    return param ? { code: param.code || param.name } : null
-  }
 
-  // 外部入参按部位分组：行跟随其对外对齐的参数落位，尚未对齐的契约入参进「待对齐」组。
-  const locationOrder: Array<{ key: ExternalApiParamLocation; label: string }> = [
-    { key: 'path', label: '路径参数' },
-    { key: 'query', label: '查询参数' },
-    { key: 'body', label: '请求体' }
-  ]
-  type InputGroup = {
-    key: ExternalApiParamLocation | 'pending'
-    label: string
-    rows: FieldMappingContext['inputParams']
-  }
-  const inputGroups: InputGroup[] = locationOrder
-    .map(({ key, label }) => ({
-      key: key as ExternalApiParamLocation | 'pending',
-      label,
-      rows: context.inputParams.filter((param) => {
-        const target = context.requestParams.find((item) => item.name === alignedExternal(param.name))
-        return target?.location === key
-      })
-    }))
-    .filter((group) => group.rows.length > 0)
-  const pendingRows = context.inputParams.filter((param) => {
-    const target = context.requestParams.find((item) => item.name === alignedExternal(param.name))
-    return !target
-  })
-  if (pendingRows.length > 0) {
-    inputGroups.push({ key: 'pending', label: '待对齐', rows: pendingRows })
-  }
-
-  /** 入参适配的变量候选：当前登录用户 + 契约入参（:code）。 */
-  const inputVariables: ExpressionVariable[] = [
-    { label: '当前登录用户', insert: ':currentUser' },
-    ...context.inputParams.map((param) => ({
-      label: param.name,
-      insert: `:${param.code || param.name}`
-    }))
-  ]
-  /** 出参适配的变量候选：当前登录用户（外部出参取回的原始值作为表达式输入隐含传入）。 */
-  const outputVariables: ExpressionVariable[] = [{ label: '当前登录用户', insert: ':currentUser' }]
-
-  /** 由当前草稿实时拼出外部请求预览：与适配生成器共用同一份确认数据。 */
-  const buildRequestPreview = (): string => {
-    const [method = 'GET', ...rest] = context.targetName.split(' ')
-    let path = rest.join(' ')
-    const query: string[] = []
-    const body: string[] = []
-    context.requestParams.forEach((param) => {
-      const feeder = feederOf(param.name)
-      const value = `{${feeder ? feeder.code : '?'}}`
-      if (param.location === 'path') {
-        path = path.split(`{${param.name}}`).join(value)
-        return
-      }
-      if (param.location === 'query') {
-        query.push(`${param.name}=${value}`)
-        return
-      }
-      body.push(`  "${param.name}": ${value}`)
-    })
-    const lines = [`${method} ${path}${query.length ? `?${query.join('&')}` : ''}`]
-    if (body.length > 0) {
-      lines.push('', '{', ...body, '}')
-    }
-    return lines.join('\n')
-  }
-
-  const sourceText = [context.sourceName, context.targetName].filter(Boolean).join(' · ')
+  // 外部必填入参未连接的名单：连接登记是唯一事实，命中即拦截「保存并确认」，
+  // 避免外部调用缺参数的隐患随确认进入应用。
+  const missingFeeders = isExternal ? missingRequiredFeeders(context.requestParams, draft) : []
 
   return (
     <div className={cx('field-mapping-editor')}>
       <header className={cx('field-mapping-head')}>
-        <code className={cx('field-mapping-method')}>{context.appMethod}</code>
-        <strong>{context.appPath}</strong>
-        {/* 保存 / 保存并确认跟随接口标题行右侧，与接口调试视图的发送按钮同位；只读态隐藏。 */}
-        {!locked && (
-          <div className={cx('field-mapping-head-actions')}>
-            <Button onClick={() => onSave(draft)}>保存</Button>
-            <Button loading={submitting} onClick={() => onConfirm(draft)} type="primary">
-              保存并确认
-            </Button>
-          </div>
-        )}
-        <span className={cx('field-mapping-head-source')} title={sourceText}>
-          {context.objectName} → {sourceText}
-        </span>
+        <div className={cx('field-mapping-head-row')}>
+          <code className={cx('field-mapping-method')}>{context.appMethod}</code>
+          <strong>{context.appPath}</strong>
+          <span className={cx('field-mapping-head-name')}>{context.objectName}</span>
+          {/* 保存跟随主标题行右侧（已确认绑定为「保存更新」），与接口调试视图的发送按钮同位；
+              「保存并确认」只在有待推进工作流时出现，且被外部必填门禁拦截。 */}
+          {!locked && (
+            <div className={cx('field-mapping-head-actions')}>
+              <Button onClick={() => onSave(draft)}>{readOnly ? '保存更新' : '保存'}</Button>
+              {!readOnly && (
+                <Button
+                  disabled={missingFeeders.length > 0}
+                  loading={submitting}
+                  onClick={() => onConfirm(draft)}
+                  title={
+                    missingFeeders.length > 0
+                      ? `「${missingFeeders.join('、')}」为外部接口必填入参，尚未连接取值来源`
+                      : undefined
+                  }
+                  type="primary"
+                >
+                  保存并确认
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+        {/* 数据来源行：主标题始终是应用API，外部API/数据表作为来源标记放在次行。 */}
+        <p className={cx('field-mapping-head-source')}>
+          <span className={cx('field-mapping-head-source-label')}>数据来源</span>
+          <em className={cx('field-mapping-head-role', 'ext')}>{isExternal ? '外部API' : '数据表'}</em>
+          <span className={cx('field-mapping-head-source-text')}>
+            {context.sourceName}
+            {context.targetName ? ` · ${context.targetName}` : ''}
+          </span>
+        </p>
       </header>
-      {!isExternal && (context.op === '查询' || context.op === '删除') && draft.conditions.length > 0 && (
-        <section className={cx('field-mapping-card')}>
-          <div className={cx('field-mapping-card-title')}>
-            {context.op === '查询' ? '查询条件' : '定位条件'}
-          </div>
-          {draft.conditions.map((row, index) => (
-            <div key={`${row.param}-${index}`} className={cx('field-mapping-row', 'row-condition', row.fixed && 'row-fixed')}>
-              <span className={cx('field-mapping-param')} title={inputLabel(row.param)}>
-                <em>{row.fixed ? '登录用户' : '入参'}</em>
-                <code>{row.fixed ? row.param : inputLabel(row.param)}</code>
-              </span>
-              <Select
-                aria-label={`${row.param} 条件操作符`}
-                className={cx('field-mapping-operator')}
-                disabled={locked}
-                options={operatorOptions}
-                value={row.operator}
-                onChange={(operator) => updateCondition(index, { operator })}
-              />
-              <Select
-                aria-label={`${row.param} 条件落列`}
-                className={cx('field-mapping-field')}
-                disabled={locked}
-                options={columnOptions}
-                placeholder="选择落列"
-                value={row.column || undefined}
-                onChange={(column) => {
-                  const columnInfo = context.columns.find((item) => item.name === column)
-                  updateCondition(index, { column, columnComment: columnInfo?.comment || '' })
-                }}
-              />
-            </div>
-          ))}
-        </section>
-      )}
-      {!isExternal && (context.op === '新增' || context.op === '修改') && draft.setters.length > 0 && (
-        <section className={cx('field-mapping-card')}>
-          <div className={cx('field-mapping-card-title')}>写入字段</div>
-          {draft.setters.map((row, index) => (
-            <div key={`${row.param}-${index}`} className={cx('field-mapping-row', 'row-mapping')}>
-              <span className={cx('field-mapping-param')} title={inputLabel(row.param)}>
-                <em>入参</em>
-                <code>{inputLabel(row.param)}</code>
-                {row.required ? <em>必填</em> : null}
-              </span>
-              <span className={cx('field-mapping-arrow')}>→</span>
-              <Select
-                aria-label={`${row.param} 写入列`}
-                className={cx('field-mapping-field')}
-                disabled={locked}
-                options={columnOptions}
-                placeholder="选择写入列"
-                value={row.column || undefined}
-                onChange={(column) => {
-                  const columnInfo = context.columns.find((item) => item.name === column)
-                  updateSetter(index, { column, columnComment: columnInfo?.comment || '' })
-                }}
-              />
-            </div>
-          ))}
-        </section>
-      )}
-      {!isExternal && context.op === '查询' && (
-        <section className={cx('field-mapping-card')}>
-          <div className={cx('field-mapping-card-title')}>返回字段</div>
-          {draft.mappings.map((mapping) => (
-            <div
-              key={mapping.field}
-              className={cx('field-mapping-row', 'row-mapping', !mapping.matched && 'row-pending')}
-            >
-              <span className={cx('field-mapping-param')} title={outputLabel(mapping.field)}>
-                <em>出参</em>
-                <code>{outputLabel(mapping.field)}</code>
-              </span>
-              <span className={cx('field-mapping-arrow')}>←</span>
-              <Select
-                aria-label={`选择 ${mapping.field} 的来源列`}
-                className={cx('field-mapping-field')}
-                disabled={locked}
-                options={columnOptions}
-                placeholder={mapping.matched ? undefined : '选择来源列'}
-                value={mapping.matched ? sourceNameOf(mapping.sourceLabel) : undefined}
-                onChange={(source) => updateMapping(mapping.field, source)}
-              />
-            </div>
-          ))}
-        </section>
-      )}
-      {!isExternal && context.op && (
-        <section className={cx('field-mapping-card')}>
-          <div className={cx('field-mapping-card-title')}>SQL 预览</div>
-          <pre className={cx('field-mapping-preview')}>
-            <code>{buildSqlPreview(draft, context.targetName)}</code>
-          </pre>
-        </section>
-      )}
-      {isExternal && (
+      {isExternal ? (
+        // 外部服务：双列连线映射画布（入参适配 / 出参适配 / 请求预览）。
+        <ExternalMappingCards confirmed={readOnly} context={context} draft={draft} locked={locked} patch={patchDraft} />
+      ) : (
         <>
-          <section className={cx('field-mapping-card')}>
-            <div className={cx('field-mapping-card-title')}>入参适配</div>
-            {context.requestParams.length === 0 ? (
-              <p className={cx('field-mapping-note')}>
-                外部接口未提供入参定义，契约入参按名称透传。
-              </p>
-            ) : (
-              inputGroups.map((group) => (
-                <div className={cx('field-mapping-group')} key={group.key}>
-                  <div className={cx('field-mapping-group-title')}>{group.label}</div>
-                  {group.rows.map((param) => (
-                    <div
-                      key={`in-${param.name}`}
-                      className={cx(
-                        'field-mapping-row',
-                        'row-external',
-                        group.key === 'pending' && 'row-pending'
-                      )}
-                    >
-                      <span className={cx('field-mapping-param')} title={inputLabel(param.name)}>
-                        <em>入参</em>
-                        <code>{contractFieldLabel(param.code, param.name)}</code>
-                        {param.required ? <em>必填</em> : null}
-                      </span>
-                      <span className={cx('field-mapping-arrow')}>→</span>
-                      <Select
-                        aria-label={`${param.name} 对齐的外部入参`}
-                        className={cx('field-mapping-field')}
-                        disabled={locked}
-                        options={externalParamOptions}
-                        placeholder="选择外部入参"
-                        value={alignedExternal(param.name) || undefined}
-                        onChange={(value) => updateRequestParam(param.name, value)}
-                      />
-                      <ExpressionFx
-                        disabled={locked}
-                        paramLabel={inputLabel(param.name)}
-                        value={draft.expressions[`in:${param.name}`] || ''}
-                        variables={inputVariables}
-                        onChange={(expression) => updateExpression(`in:${param.name}`, expression)}
-                      />
-                    </div>
-                  ))}
-                </div>
-              ))
-            )}
-          </section>
-          <section className={cx('field-mapping-card')}>
-            <div className={cx('field-mapping-card-title')}>出参适配</div>
-            {draft.mappings.map((mapping) => (
-              <div
-                key={`out-${mapping.field}`}
-                className={cx('field-mapping-row', 'row-external', !mapping.matched && 'row-pending')}
-              >
-                <span className={cx('field-mapping-param')} title={outputLabel(mapping.field)}>
-                  <em>出参</em>
-                  <code>{outputLabel(mapping.field)}</code>
-                </span>
-                <span className={cx('field-mapping-arrow')}>←</span>
-                <Select
-                  aria-label={`选择 ${mapping.field} 的外部出参`}
-                  className={cx('field-mapping-field')}
-                  disabled={locked}
-                  options={columnOptions}
-                  placeholder="选择外部出参"
-                  value={mapping.matched ? sourceNameOf(mapping.sourceLabel) : undefined}
-                  onChange={(source) => updateMapping(mapping.field, source)}
-                />
-                <ExpressionFx
-                  disabled={locked}
-                  paramLabel={outputLabel(mapping.field)}
-                  value={draft.expressions[`out:${mapping.field}`] || ''}
-                  variables={outputVariables}
-                  onChange={(expression) => updateExpression(`out:${mapping.field}`, expression)}
-                />
+          {(context.op === '查询' || context.op === '删除') && draft.conditions.length > 0 && (
+            <section className={cx('field-mapping-card')}>
+              <div className={cx('field-mapping-card-title')}>
+                {context.op === '查询' ? '查询条件' : '定位条件'}
               </div>
-            ))}
-          </section>
-          <section className={cx('field-mapping-card')}>
-            <div className={cx('field-mapping-card-title')}>请求预览</div>
-            <pre className={cx('field-mapping-preview')}>
-              <code>{buildRequestPreview()}</code>
-            </pre>
-          </section>
+              {draft.conditions.map((row, index) => (
+                <div key={`${row.param}-${index}`} className={cx('field-mapping-row', 'row-condition', row.fixed && 'row-fixed')}>
+                  <span className={cx('field-mapping-param')} title={inputLabel(row.param)}>
+                    <em>{row.fixed ? '登录用户' : '入参'}</em>
+                    <code>{row.fixed ? row.param : inputLabel(row.param)}</code>
+                  </span>
+                  <Select
+                    aria-label={`${row.param} 条件操作符`}
+                    className={cx('field-mapping-operator')}
+                    disabled={locked}
+                    options={operatorOptions}
+                    value={row.operator}
+                    onChange={(operator) => updateCondition(index, { operator })}
+                  />
+                  <Select
+                    aria-label={`${row.param} 条件落列`}
+                    className={cx('field-mapping-field')}
+                    disabled={locked}
+                    options={columnOptions}
+                    placeholder="选择落列"
+                    value={row.column || undefined}
+                    onChange={(column) => {
+                      const columnInfo = context.columns.find((item) => item.name === column)
+                      updateCondition(index, { column, columnComment: columnInfo?.comment || '' })
+                    }}
+                  />
+                </div>
+              ))}
+            </section>
+          )}
+          {(context.op === '新增' || context.op === '修改') && draft.setters.length > 0 && (
+            <section className={cx('field-mapping-card')}>
+              <div className={cx('field-mapping-card-title')}>写入字段</div>
+              {draft.setters.map((row, index) => (
+                <div key={`${row.param}-${index}`} className={cx('field-mapping-row', 'row-mapping')}>
+                  <span className={cx('field-mapping-param')} title={inputLabel(row.param)}>
+                    <em>入参</em>
+                    <code>{inputLabel(row.param)}</code>
+                    {row.required ? <em>必填</em> : null}
+                  </span>
+                  <span className={cx('field-mapping-arrow')}>→</span>
+                  <Select
+                    aria-label={`${row.param} 写入列`}
+                    className={cx('field-mapping-field')}
+                    disabled={locked}
+                    options={columnOptions}
+                    placeholder="选择写入列"
+                    value={row.column || undefined}
+                    onChange={(column) => {
+                      const columnInfo = context.columns.find((item) => item.name === column)
+                      updateSetter(index, { column, columnComment: columnInfo?.comment || '' })
+                    }}
+                  />
+                </div>
+              ))}
+            </section>
+          )}
+          {context.op === '查询' && (
+            <section className={cx('field-mapping-card')}>
+              <div className={cx('field-mapping-card-title')}>返回字段</div>
+              {draft.mappings.map((mapping) => (
+                <div
+                  key={mapping.field}
+                  className={cx('field-mapping-row', 'row-mapping', !mapping.matched && 'row-pending')}
+                >
+                  <span className={cx('field-mapping-param')} title={outputLabel(mapping.field)}>
+                    <em>出参</em>
+                    <code>{outputLabel(mapping.field)}</code>
+                  </span>
+                  <span className={cx('field-mapping-arrow')}>←</span>
+                  <Select
+                    aria-label={`选择 ${mapping.field} 的来源列`}
+                    className={cx('field-mapping-field')}
+                    disabled={locked}
+                    options={columnOptions}
+                    placeholder={mapping.matched ? undefined : '选择来源列'}
+                    value={mapping.matched ? sourceNameOf(mapping.sourceLabel) : undefined}
+                    onChange={(source) => updateMapping(mapping.field, source)}
+                  />
+                </div>
+              ))}
+            </section>
+          )}
+          {context.op && (
+            <section className={cx('field-mapping-card')}>
+              <div className={cx('field-mapping-card-title')}>SQL 预览</div>
+              <pre className={cx('field-mapping-preview')}>
+                <code>{buildSqlPreview(draft, context.targetName)}</code>
+              </pre>
+            </section>
+          )}
         </>
       )}
     </div>

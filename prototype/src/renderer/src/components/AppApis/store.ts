@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createAppApis, withConfirmedBindings, type AppApi } from './model'
+import { createAppApis, withConfirmedBindings, withLiveSourceNames, type AppApi } from './model'
 import { readDataSources } from '../DataSources/catalog'
 import { presetCompletedVersionIds } from '../../mock/fixtures'
 
@@ -9,7 +9,8 @@ const CHANGE_EVENT = 'aistudio:prototype:app-apis-changed'
 // v2：模型扁平化（接口即产物，AppApi 不再有 operations 分组），换键弃掉旧结构缓存。
 // v3：契约补入参 request，绑定按来源分流为增删查改模板 / 外部参数适配，换键弃掉旧结构缓存。
 // v4：外部绑定新增入参对齐 requestParamMap，换键弃掉旧结构缓存。
-const STORAGE_PREFIX = 'aistudio:prototype:app-apis:v4'
+// v5：入参对齐反转为显式连接 requestFeeders（外部入参 → 契约入参，空串=固定值），换键弃掉旧缓存。
+const STORAGE_PREFIX = 'aistudio:prototype:app-apis:v5'
 
 /**
  * 根据应用名、应用API集合和版本生成稳定的演示缓存键。
@@ -74,17 +75,24 @@ function readObjects(
           Array.isArray(object.implementation.conditions) &&
           Array.isArray(object.implementation.setters) &&
           Boolean(object.implementation.expressions) &&
-          Boolean(object.implementation.requestParamMap)
+          Boolean(object.implementation.requestFeeders)
       )
     if (!valid) return initializeObjects(spec, versionId, technicalPlan)
-    // 读取边界统一契约形态：存量缓存里的纯中文名出参/无 code 入参归一为 code+name 结构。
-    return parsed.map((object) => ({
-      ...object,
-      request: object.request.map((param) => ({ ...param, code: param.code || '' })),
-      response: object.response.map((item) =>
-        typeof item === 'string' ? { code: '', name: item } : item
+    const sources = readDataSources()
+    // 读取边界统一契约形态：存量缓存里的纯中文名出参/无 code 入参归一为 code+name 结构；
+    // 同时让已确认绑定里的来源名跟随当前目录（目录改名后视图不再展示旧快照名）。
+    return parsed.map((object) =>
+      withLiveSourceNames(
+        {
+          ...object,
+          request: object.request.map((param) => ({ ...param, code: param.code || '' })),
+          response: object.response.map((item) =>
+            typeof item === 'string' ? { code: '', name: item } : item
+          )
+        },
+        sources
       )
-    }))
+    )
   } catch {
     return initializeObjects(spec, versionId, technicalPlan)
   }
