@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.services.binding_workspace import BINDING_STATE_LOCK, BindingTarget, read_binding_draft, clear_binding_draft, validate_binding_selection
 
 from app.workspace.endpoint_design_documents import (
     endpoint_design_paths,
     endpoint_design_status,
     read_endpoint_design,
     technical_plan_path,
+    technical_plan_sha256,
 )
 from app.services.api_design import (
     ApiDesignError,
@@ -39,6 +41,8 @@ class EndpointDesignSaveRequest(EndpointDesignDetailRequest):
     """校验独立字段映射保存请求及其乐观并发版本。"""
 
     draft: dict[str, Any] = Field(default_factory=dict)
+    binding_selection: BindingTarget | None = Field(default=None, alias="bindingSelection")
+    technical_plan_hash: str | None = Field(default=None, alias="technicalPlanHash", pattern=r"^[0-9a-f]{64}$")
     base_revision: str | None = Field(
         default=None,
         alias="baseRevision",
@@ -100,14 +104,29 @@ def prepare_endpoint_design(request: EndpointDesignPrepareRequest) -> dict[str, 
         "endpointId": request.endpoint_id,
         "payload": payload,
         "artifactRevision": str(existing.get("artifactRevision") or "") if existing else None,
+        "technicalPlanHash": technical_plan_sha256(workspace),
+        "bindingDraft": read_binding_draft(workspace, request.api_contract_id, request.endpoint_id),
     }
 
 
 def save_endpoint_design(request: EndpointDesignSaveRequest) -> dict[str, Any]:
     """校验独立编辑器草稿、检查修订冲突并保存当前 Endpoint 映射。"""
 
+    with BINDING_STATE_LOCK:
+        return _save_endpoint_design_locked(request)
+
+
+def _save_endpoint_design_locked(request: EndpointDesignSaveRequest) -> dict[str, Any]:
+    """将版本检查、正式写入和草稿清理放在同一临界区内。"""
+
     workspace = Path(request.workspace_root).expanduser().resolve()
     project_plan = _read_current_technical_plan(workspace)
+    if request.technical_plan_hash is not None and request.technical_plan_hash != technical_plan_sha256(workspace):
+        raise ApiDesignError("TechnicalPlan 已变化，请重新加载后再确认。")
+    if request.binding_selection is not None:
+        if request.technical_plan_hash is None:
+            raise ApiDesignError("简化绑定确认必须提供 TechnicalPlan 指纹。")
+        validate_binding_selection(workspace, request.binding_selection, request.draft)
     existing = read_endpoint_design(
         workspace,
         request.api_contract_id,
@@ -128,6 +147,7 @@ def save_endpoint_design(request: EndpointDesignSaveRequest) -> dict[str, Any]:
             "draft": request.draft,
         },
     )
+    clear_binding_draft(workspace, request.api_contract_id, request.endpoint_id)
     return {
         "status": "saved",
         "apiContractId": request.api_contract_id,

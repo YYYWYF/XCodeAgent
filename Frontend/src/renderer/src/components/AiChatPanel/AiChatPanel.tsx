@@ -1,5 +1,5 @@
 import { HolderOutlined } from '@ant-design/icons'
-import { Alert, message } from 'antd'
+import { Alert, Button, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useUncommittedChanges, useWorkbench, useWorkbenchPhase } from '../../context'
@@ -93,7 +93,8 @@ import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import MilestoneCommitReminder from './components/MilestoneCommitReminder'
-import ApiDesignConfigModal from './components/WorkflowRunCard/ApiDesignConfigModal'
+import FieldMappingWorkspace from './components/FieldMapping'
+import type { BindingControl } from './components/FieldMapping/useBindingWorkspace'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
 import {
   appendPlanningLoadingPlaceholder,
@@ -117,7 +118,7 @@ import WorkspaceDebugDock from './components/WorkspaceDebugDock'
 import EntityInfoPanel from './components/EntityInfoPanel'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
-import DataSourcesPage from '../DataSourcesPage/DataSourcesPage'
+import DataSourcesDrawer from '../DataSourcesPage/DataSourcesDrawer'
 import SettingsPage from '../SettingsPage/SettingsPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
@@ -351,7 +352,7 @@ type Props = {
   onRightPanelOpenChange: (open: boolean) => void
 }
 
-type ActiveView = 'chat' | 'skills' | 'files' | 'settings' | 'dataSources'
+type ActiveView = 'chat' | 'skills' | 'files' | 'settings' | 'dataSources' | 'externalApis'
 
 type ActiveApiEndpointTarget = {
   apiContractId: string
@@ -866,14 +867,31 @@ export default function AiChatPanel({
   const planningError = planningState?.syncError || planningState?.error
   const restorePlanningArtifactsFromDisk = planningState?.restoreArtifactsFromDisk === true
   const [activeView, setActiveView] = useState<ActiveView>('chat')
+  const sourceNavigationGuard = useRef<((action: () => void) => void)>()
+  /** 登记数据来源详情的未保存保护，供左栏导航复用。 */
+  const registerSourceNavigationGuard = useCallback((guard?: (action: () => void) => void): void => { sourceNavigationGuard.current = guard }, [])
+  /** 离开数据来源前保护输入，并确保辅助抽屉互斥。 */
+  const handleSidebarNavigation = (action: () => void): void => {
+    const navigate = (): void => { if (activeView === 'dataSources' || activeView === 'externalApis') setActiveView('chat'); action() }
+    if ((activeView === 'dataSources' || activeView === 'externalApis') && sourceNavigationGuard.current) sourceNavigationGuard.current(navigate)
+    else navigate()
+  }
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
   const [apiDesignConfigTarget, setApiDesignConfigTarget] = useState<ApiDesignConfigTarget>()
+  const [bindingControl, setBindingControl] = useState<BindingControl>()
   const [apiDesignConfigGateWorkflow, setApiDesignConfigGateWorkflow] =
     useState<WorkflowRunPayload>()
   const [apiDesignSavedMappingKeys, setApiDesignSavedMappingKeys] = useState<Set<string>>(
     () => new Set()
   )
   const [apiDesignRefreshKey, setApiDesignRefreshKey] = useState(0)
+  // 工作区切换只清理当前界面目标；磁盘草稿仍按工作区和接口独立保存。
+  useEffect(() => {
+    setApiDesignConfigTarget(undefined)
+    setApiDesignConfigGateWorkflow(undefined)
+    setApiDesignSavedMappingKeys(new Set())
+    setBindingControl(undefined)
+  }, [application.workspaceRoot])
   // 临时对话仅控制覆盖层可见性，不切换当前工作流会话或持久化上下文。
   const [temporaryChatOpen, setTemporaryChatOpen] = useState(false)
   // 设计阶段自由变更是主规划 Workflow 的显式中断模式，默认保持锁定。
@@ -1546,7 +1564,8 @@ export default function AiChatPanel({
     : [
         { key: 'outline', label: '开发产物', available: true },
         { key: 'preview', label: '预览', available: Boolean(application.workspaceRoot) },
-        { key: 'source', label: '源码', available: Boolean(activePageOption) },
+        { key: 'source', label: '应用文件', available: Boolean(application.workspaceRoot) },
+        { key: 'field-mapping', label: '字段映射', available: Boolean(application.workspaceRoot) },
         { key: 'doc', label: '文档', available: true },
         { key: 'stage-output', label: '阶段产物', available: true }
       ]
@@ -1555,7 +1574,7 @@ export default function AiChatPanel({
       designDocs?.find((doc) => doc.available)?.key ||
       designDocs?.[0]?.key ||
       'requirement-spec'
-    : rightPanel?.type === 'outline'
+    : rightPanel?.type === 'field-mapping' ? 'field-mapping' : rightPanel?.type === 'outline'
       ? 'outline'
       : rightPanel?.type === 'preview'
         ? 'preview'
@@ -1571,6 +1590,8 @@ export default function AiChatPanel({
         const target = designDocs?.find((doc) => doc.key === key)
         if (!target || (!target.available && target.key !== generatingDesignDocKey)) return
         setRightPanel({ type: 'doc', docKey: key as WorkspaceDocKey })
+      } else if (key === 'field-mapping') {
+        setRightPanel({ type: 'field-mapping' })
       } else if (key === 'outline') {
         setRightPanel({ type: 'outline' })
       } else if (key === 'preview') {
@@ -3816,11 +3837,18 @@ export default function AiChatPanel({
     setActiveView('settings')
   }
 
-  /** 打开独立数据源管理页，并退出当前对话目标上下文。 */
+  /** 在当前对话之上打开数据来源抽屉，保留右侧映射与会话上下文。 */
   const handleShowDataSources = (): void => {
     setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('dataSources')
+    setTemporaryChatOpen(false)
+    setActiveView((current) => current === 'dataSources' ? 'chat' : 'dataSources')
+  }
+
+  /** 在当前对话之上打开外部 API 抽屉，复用数据来源的导航保护。 */
+  const handleShowExternalApis = (): void => {
+    setPreviewError('')
+    setTemporaryChatOpen(false)
+    setActiveView((current) => current === 'externalApis' ? 'chat' : 'externalApis')
   }
 
   /** 打开独立临时对话浮层，不改变底层工作区选择和会话上下文。 */
@@ -4333,13 +4361,15 @@ export default function AiChatPanel({
     await handleSubmitClarification(workflow, answers)
   }
 
-  /** 打开独立 API 映射弹窗；保存后只更新当前门禁的本地配置状态。 */
+  /** 打开并定位右侧字段映射；确认后只更新当前门禁的本地配置状态。 */
   const handleOpenApiDesignConfig = useCallback(
     (target: ApiDesignConfigTarget, _workflow?: WorkflowRunPayload): void => {
       setApiDesignConfigTarget(target)
       setApiDesignConfigGateWorkflow(_workflow)
+      setRightPanel({ type: 'field-mapping' })
+      onRightPanelOpenChange(true)
     },
-    []
+    [setRightPanel, onRightPanelOpenChange]
   )
 
   /** 保存独立映射后更新当前门禁的已配置标记，不触发检测或继续开发。 */
@@ -4347,7 +4377,6 @@ export default function AiChatPanel({
     async (target: ApiDesignConfigTarget, _result: EndpointDesignSaveResult): Promise<void> => {
       void _result
       const gateWorkflow = apiDesignConfigGateWorkflow
-      setApiDesignConfigTarget(undefined)
       setApiDesignConfigGateWorkflow(undefined)
       if (gateWorkflow) {
         const scopeKey = `${gateWorkflow.threadId}:${gateWorkflow.runId}`
@@ -4517,6 +4546,7 @@ export default function AiChatPanel({
             temporaryChatActive={temporaryChatOpen}
             outlineLocked={false}
             onCloseTemporaryChat={handleCloseTemporaryChat}
+            onBeforeNavigate={handleSidebarNavigation}
             onCreateFreeChatSession={handleCreateChatSession}
             onDeleteSession={handleDeleteSession}
             onOpenTemporaryChat={handleOpenTemporaryChat}
@@ -4524,6 +4554,7 @@ export default function AiChatPanel({
             onReturnWelcome={onReturnWelcome}
             onShowFiles={handleShowFiles}
             onShowDataSources={handleShowDataSources}
+            onShowExternalApis={handleShowExternalApis}
             onShowSettings={handleShowSettings}
             onShowSkills={handleShowSkills}
             onThemeChange={onThemeChange}
@@ -4534,6 +4565,7 @@ export default function AiChatPanel({
             {...artifactOutlineProps}
             filesActive={activeView === 'files'}
             dataSourcesActive={activeView === 'dataSources'}
+            externalApisActive={activeView === 'externalApis'}
             dataSourcesEnabled={!isApplicationPlanningPhase && Boolean(application.workspaceRoot)}
             sessionError={sessionError}
             sessionCreationDisabled={phaseSessionRunActive}
@@ -4547,8 +4579,6 @@ export default function AiChatPanel({
           />
           {activeView === 'skills' ? (
             <SkillsPage onSkillDisabled={handleSkillDisabled} theme={theme} />
-          ) : activeView === 'dataSources' ? (
-            <DataSourcesPage theme={theme} workspaceRoot={application.workspaceRoot || ''} />
           ) : activeView === 'files' ? (
             <AgentFilesPage />
           ) : activeView === 'settings' ? (
@@ -4666,6 +4696,45 @@ export default function AiChatPanel({
                 templateReconcileRetryable={templateReconcileRetryable}
                 planningState={planningState}
               />
+
+              {bindingControl && !otherSessionExecutionLocked ? (
+                <section className="binding-guide" aria-label="字段映射配置步骤">
+                  <ol>
+                    {['读取 API 契约', '选择数据来源类型', '选择数据来源', '配置映射绑定'].map(
+                      (label, index) => (
+                        <li
+                          key={label}
+                          className={bindingControl.step === index ? 'current' : ''}
+                        >
+                          {label}
+                        </li>
+                      )
+                    )}
+                  </ol>
+                  <p>
+                    请在右侧完成「{bindingControl.target.label || bindingControl.target.endpointId}」
+                    的字段映射。确认后仍需通过开发门禁。
+                  </p>
+                  <Button
+                    disabled={bindingControl.busy}
+                    onClick={() => {
+                      setApiDesignConfigTarget(bindingControl.target)
+                      setRightPanel({ type: 'field-mapping' })
+                      onRightPanelOpenChange(true)
+                    }}
+                  >
+                    打开字段映射
+                  </Button>{' '}
+                  <Button
+                    type="primary"
+                    loading={bindingControl.busy}
+                    disabled={!bindingControl.canConfirm}
+                    onClick={bindingControl.confirm}
+                  >
+                    保存并确认
+                  </Button>
+                </section>
+              ) : null}
 
               {milestoneCommitReminderProps && (
                 <MilestoneCommitReminder
@@ -4817,16 +4886,7 @@ export default function AiChatPanel({
 
       {temporaryChatOpen ? <TemporaryChatOverlay onClose={handleCloseTemporaryChat} /> : null}
 
-      <ApiDesignConfigModal
-        onClose={() => {
-          setApiDesignConfigTarget(undefined)
-          setApiDesignConfigGateWorkflow(undefined)
-        }}
-        onSaved={handleApiDesignConfigSaved}
-        open={Boolean(apiDesignConfigTarget)}
-        target={apiDesignConfigTarget}
-        workspaceRoot={workspaceRoot}
-      />
+      {(activeView === 'dataSources' || activeView === 'externalApis') ? <DataSourcesDrawer key={`${workspaceRoot}:${activeView}`} mode={activeView === 'externalApis' ? 'external_api' : 'database'} theme={theme} workspaceRoot={workspaceRoot || ''} onNavigationGuard={registerSourceNavigationGuard} onClose={() => setActiveView('chat')} /> : null}
 
       {showRightPanel && (
         <div
@@ -4845,6 +4905,12 @@ export default function AiChatPanel({
         </div>
       )}
 
+      {!isApplicationPlanningPhase && workspaceRoot ? <div className={cx('embedded-preview-pane', 'workspace-pane')} style={{ display: showRightPanel && rightPanel?.type === 'field-mapping' ? undefined : 'none' }}>
+        <RightPanelTabs tabs={displayedWorkspaceTabs} active="field-mapping" onChange={openDisplayedWorkspaceTab} onClose={() => { setRightPanel(undefined); onRightPanelOpenChange(false) }} />
+        <div className={cx('workspace-content')}><FieldMappingWorkspace key={workspaceRoot} workspaceRoot={workspaceRoot} target={apiDesignConfigTarget}
+          contracts={developmentPlanningApiContracts} onSelect={setApiDesignConfigTarget} onOpenSources={handleShowDataSources} onOpenExternalSources={handleShowExternalApis} onSaved={handleApiDesignConfigSaved} onControl={setBindingControl} /></div>
+      </div> : null}
+
       {showRightPanel && rightPanel?.type === 'outline' && (
         <div className={cx('embedded-preview-pane', 'workspace-pane')}>
           <RightPanelTabs
@@ -4858,6 +4924,7 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
+              onConfigureApi={(target) => handleOpenApiDesignConfig(target)}
               developmentArtifacts={applicationLifecycle?.developmentArtifacts}
               apiContracts={developmentPlanningApiContracts}
               entities={developmentPlanningEntities}

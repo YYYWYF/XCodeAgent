@@ -4,7 +4,7 @@
 
 Workbench 读取 `.xcodeagent/plans/technical-plan.json`，以 ProductPlan `pages` 作为页面事实，并按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲从 `api_contracts` 投射 Endpoint。Endpoint 只有在当前版 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md` 均存在、JSON 已确认且其中的 TechnicalPlan 契约指纹与当前文件一致时才标记“已设计”。仅有 TechnicalPlan 声明或单个 Markdown 文件都不能放行。实体大纲只展示 TechnicalPlan 顶层 `entities`；实体没有全局数据源绑定状态。
 
-点击大纲只选择本次目标。Endpoint 的“设计 API/重新设计”动作打开独立的 `ApiDesignConfigModal`，通过 `/endpoint-designs/run` 的 AG-UI `prepare/save` 动作保存正式映射，不进入主工作流；页面或 API 开发先进入 `api_design_readiness_gate`，门禁缺失时暂停并展示缺失清单，用户点击具体条目后才打开同一弹窗，保存后仍需在原会话确认继续开发。会话不归属于页面、接口或实体，已有 Workflow 消息及用户显式打开的历史会话继续展示运行结果。
+点击大纲只选择本次目标。Endpoint 的配置动作打开右侧“字段映射”工作台，已有复杂映射保留 `ApiDesignConfigModal` 完整编辑器；通过 `/endpoint-designs/run` 的 AG-UI `prepare/save_draft/save` 动作分别准备、暂存和确认正式映射，不进入主工作流；页面或 API 开发先进入 `api_design_readiness_gate`，门禁缺失时暂停并展示缺失清单，用户点击具体条目后才打开并定位同一字段映射工作台，保存后仍需在原会话确认继续开发。会话不归属于页面、接口或实体，已有 Workflow 消息及用户显式打开的历史会话继续展示运行结果。
 
 页面视觉、组件、交互入口和状态呈现以已确认 React UI 稿为权威；UI 阶段被跳过时依据 ProductPlan、TechnicalPlan 和模板技能实现。`PageImplementationContract` 仍由 ProductPlan、UiManifest 和 TechnicalPlan 在运行时确定性编译，不写入独立页面详设。
 
@@ -16,17 +16,27 @@ Source Field 节点可实时读取直属 MySQL 表列，也可读取数据源目
 
 保存配置时后端校验所有必填 API 叶子字段，生成无敏感信息的来源快照，并写入带同一 `artifactRevision` 修订号的 Endpoint JSON 与用户可见 Markdown；双文件任一替换失败会回滚上一版，缺失、残缺或修订号不一致一律视为 stale。保存配置只固化可复用版本，不自动开始开发；开发门禁再次校验 Endpoint、契约和 revision，工作流回显本次版本并等待“确认并继续开发”。确认成功后才进入当前 Endpoint 的工作区检查、任务规划、代码生成、测试、审查和验收流程。TechnicalPlan 改变导致契约指纹不匹配时，Endpoint 变为“需重新设计”；数据源目录后续变化不会主动使设计失效，Build 使用当前已确认的磁盘产物，但数据源被删除或运行凭据不可用会作为 Build 失败报告。
 
-页面开发时，就绪检查一次性返回全部缺少或过期设计的关联 Endpoint；卡片可逐项打开同一独立弹窗，保存后重新检查原页面门禁，不绕过现有检查。全部配置有效后仍等待用户确认继续开发。单 Endpoint 开发只检查自身当前版设计。通过确认后继续 `inspect_workspace -> prepare_build_tasks -> Build DAG`，`prepare_build_tasks` 在 Build 边界再次执行同一 Endpoint 设计复检。
+页面开发时，就绪检查一次性返回全部缺少或过期设计的关联 Endpoint；卡片可逐项打开同一工作台，保存并确认后仍由用户主动触发原页面门禁检查，不绕过现有检查。全部配置有效后仍等待用户确认继续开发。单 Endpoint 开发只检查自身当前版设计。通过确认后继续 `inspect_workspace -> prepare_build_tasks -> Build DAG`，`prepare_build_tasks` 在 Build 边界再次执行同一 Endpoint 设计复检。
 
 旧 EntitySourceBinding 的节点、服务、页面和独立入口继续保留，可单独使用；其结果不参与 API 设计状态、正常开发旅程门禁或 Build 上下文。独立映射配置和页面/API 开发门禁都使用 AG-UI 生命周期；不新增 REST 产品接口，普通协作继续使用独立 `/conversation/run`。
 
 独立的 `/application-development-planning/run` 编号任务规划能力保持原状，但不承担 Endpoint 动态映射；Endpoint 映射统一属于 `/endpoint-designs/run`，主 `/workflow/run` 只负责开发门禁和继续开发确认。
 
-开发确认成功后，门禁立即把页面或接口对应的完整映射集合随原工作流消息保存；该快照只代表当次确认结果，后续开发停止、失败或重新配置都不会覆盖历史卡片。切回会话时优先读取消息中的确认快照。独立 `/endpoint-designs/run` 按 `workspaceRoot + apiContractId + endpointId` 提供 `get/prepare/save`，右侧“开发产物”与门禁确认卡片共用只读投影；缺失结果显示 pending，TechnicalPlan 指纹变化或双文件异常显示 stale。任务规划继续读取当前正式磁盘映射，不消费门禁快照，也不增加基于 lifecycle 或开发状态的映射锁定。
+开发确认成功后，门禁立即把页面或接口对应的完整映射集合随原工作流消息保存；该快照只代表当次确认结果，后续开发停止、失败或重新配置都不会覆盖历史卡片。切回会话时优先读取消息中的确认快照。独立 `/endpoint-designs/run` 按 `workspaceRoot + apiContractId + endpointId` 提供 `get/prepare/save/save_draft/discard_draft`，右侧“开发产物”与门禁确认卡片共用只读投影；缺失结果显示 pending，TechnicalPlan 指纹变化或双文件异常显示 stale。任务规划继续读取当前正式磁盘映射，不消费门禁快照，也不增加基于 lifecycle 或开发状态的映射锁定。
 
 Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。它把已确认 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效 Endpoint API Design 和权限切片冻结到 PlanningRun；EntitySourceBinding 不进入该输入。Unit Candidate 由平台 FIFO Worker Pool 有界并行生成并执行 Unit Local Retry，完整 Scope Assembly 和 Global Validation/Repair 通过后只写 `.xcodeagent/drafts/plans/build-task-plan.pending.json`。已有正式 `.xcodeagent/plans/build-task-plan.json` 保持不变。
 
 确认卡是只读 Planning-result 门禁：`confirm` 精确验证 `planning_run_id + draft_digest` 后提升当前 Pending 并进入 Build；`abandon` 删除当前 Pending、结束对应 Workflow execution，但保留聊天会话和已有正式计划；结构化 `regenerate` 先删除旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun，后续失败不恢复旧 Pending。同一应用的所有页面和 Scope 共用一个 DAG Planning/待确认互斥域。活跃生成只允许取消整个 Workflow/PlanningRun，当前权威运行卡显示“取消运行”；待确认阶段改用确认卡上的放弃/重新生成/确认，不提供 Unit 级取消。刷新只恢复服务端权威状态投影，不保证原请求继续执行或事件补发；唯一 Pending 和精确 DraftIdentity 是确认权威，没有 Pending 时不得从聊天历史、旧卡片或旧 execution 恢复待确认状态。
+
+## 数据源配置与直接映射工作台
+
+- 左侧拆为“数据源”和“外部 API”两个互斥入口，均采用列表与详情双层抽屉，打开不改变当前会话或右侧映射选择。数据源侧只展示数据库连接和已添加表；外部 API 侧先创建接口域，再按域 Tab 展示域内平铺接口。当前界面隐藏目录管理和目录选择，新增接口统一写入当前域的“默认目录”；域名、目录、Operation 的正式存储结构不变。数据库仍只允许一个，连接编辑按 ID 读取完整详情，不用列表摘要回填连接字段。
+- 数据库仅已添加表可进入简化绑定候选。“添加数据表”读取实时直连 MySQL 元数据、搜索与批量添加；“移除”只移除应用候选，不执行 DDL。Builtin/DBID 保留配置但不伪造元数据读取。删除源、目录、接口和移除表之前查询正式 Endpoint 引用，正式映射不会被自动删除。
+- 右侧“应用文件”之后提供常驻“字段映射”页签。目录按现有 API Contract/Endpoint 投影；读取契约→选择类型→选择对象→配置映射是前端交互步骤，不是新增 Workflow 节点。单个 Endpoint 选择一张表或一个外部接口，每字段只允许直接映射；数据库沿用行式选择，外部 API 的入参和出参分别用一个大箭头说明方向，再按目标字段逐行下拉选择来源，支持搜索和“仅看未配置”，不展示逐字段连线。不引入登录用户条件、表达式、常量、SQL 编辑或模拟调试；外部 Path/Query 的实时必填字段未配置时只能保存草稿，不能正式确认。无可映射字段的 Endpoint 可保存来源选择草稿，但不能确认来源绑定，避免正式产物丢失选择；未选择来源时，工作台与对话卡均可确认空字段映射；已选择来源的草稿需用户明确清除选择后才能确认无来源映射，不能提交时静默丢弃。该路径仍校验 TechnicalPlan 指纹与 baseRevision，后续沿用开发门禁。
+- “保存”只写中间草稿，允许未配置字段；“保存并确认”校验来源清单、单对象一致性、TechnicalPlan 指纹与正式 baseRevision，再调用原有确认服务。成功后清空草稿并展示常驻只读结果。两处确认按钮共用提交锁。编辑、保存和正式确认均不会自动推进开发或修改开发完成计数。
+- 对应数据库 JSON 的 `managedTables` 保存 source 所属的已添加表名和说明；表字段结构在数据源详情、绑定选择和正式确认时实时读取，不写入数据源。`.xcodeagent/binding-workspace` 仅保存 `draft-<复合身份 SHA256>.json` 草稿、selection、baseRevision、technicalPlanHash、savedAt；无凭据副本，不改变正式 Endpoint JSON/Markdown。连接设置更新保留最新表清单，模式、地址、端口、Schema 或 DBID 变化会清空清单；确认冲突保留输入，用户可明确放弃草稿重新加载。
+- 数据源 AG-UI 增加 `/data-sources/selected-tables`、`add-tables`、`remove-tables`、`references`；Endpoint AG-UI 增加 `save_draft`、`discard_draft`。`prepare` 增加 technicalPlanHash/bindingDraft；`save` 的简化旅程可携带 bindingSelection/technicalPlanHash，完整编辑器保持原调用方式。正式产物保持 endpoint-field-mapping.v3。
+- 定向回归：`tests.test_binding_workspace`、Endpoint 详情/协议、数据源路由、API Design/readiness，覆盖外部必填字段缺失和重复来源。UI 静态检查使用 `pnpm typecheck:web`；本次按用户要求不执行前端测试、pnpm build、/health 或 Electron 验证，视觉与运行时验收未执行。
 
 ## Initial Development Completion and Test Entry
 

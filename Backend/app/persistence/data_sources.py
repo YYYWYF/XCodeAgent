@@ -185,6 +185,8 @@ def _index_entry(source: dict[str, Any]) -> dict[str, Any]:
                 "name": source.get("name"),
                 "mode": source.get("mode"),
                 "hasPassword": bool(source.get("passwordCiphertext")),
+                # 已管理表清单是数据源列表需要的轻量投影，字段结构仍只在实时元数据动作中读取。
+                "managedTables": source.get("managedTables") or [],
             }.items()
             if value is not None
         }

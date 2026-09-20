@@ -40,6 +40,7 @@ export type WorkspaceDocKey =
   | 'ui-design'
 
 export type RightPanelState =
+  | { type: 'field-mapping' }
   | { type: 'preview'; requestKey?: string; url?: string }
   | {
       type: 'diff'

@@ -48,6 +48,12 @@ export type DataSourceDirectory = {
   operations: DataSourceOperation[]
 }
 
+/** 描述数据库连接下由应用管理的表清单条目，不保存字段结构。 */
+export type ManagedDataTable = {
+  table: string
+  description: string
+}
+
 /** 描述数据库数据源的脱敏公开信息。 */
 export type DatabaseDataSource = {
   type: 'database'
@@ -60,6 +66,7 @@ export type DatabaseDataSource = {
   userName?: string
   dbid?: string
   hasPassword: boolean
+  managedTables: ManagedDataTable[]
 }
 
 /** 描述外部 API 数据源的公开信息。 */
@@ -80,9 +87,10 @@ export type DataSourceCatalog = {
 }
 
 /** 创建或更新数据库数据源时提交的编辑值。 */
-export type DatabaseDataSourceInput = Omit<DatabaseDataSource, 'id' | 'hasPassword'> & {
+export type DatabaseDataSourceInput = Omit<DatabaseDataSource, 'id' | 'hasPassword' | 'managedTables'> & {
   id?: string
   passwordCiphertext?: string
+  managedTables?: ManagedDataTable[]
 }
 
 /** 创建或更新外部 API 数据源时提交的编辑值。 */

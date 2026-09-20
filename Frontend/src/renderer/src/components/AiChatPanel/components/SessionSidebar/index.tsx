@@ -1,5 +1,6 @@
 import {
   DatabaseOutlined,
+  ApiOutlined,
   FolderOutlined,
   HistoryOutlined,
   HourglassOutlined,
@@ -59,9 +60,11 @@ type SessionSidebarProps = {
   filesActive: boolean
   dataSourcesActive: boolean
   dataSourcesEnabled: boolean
+  externalApisActive: boolean
   forceCollapsed?: boolean
   loadingSessions: boolean
   onCloseTemporaryChat: () => void
+  onBeforeNavigate?: (action: () => void) => void
   onCreateFreeChatSession: () => void
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenTemporaryChat: () => void
@@ -78,6 +81,7 @@ type SessionSidebarProps = {
   onReturnWelcome: () => void
   onShowFiles: () => void
   onShowDataSources: () => void
+  onShowExternalApis: () => void
   onShowSettings: () => void
   onShowSkills: () => void
   onThemeChange: (theme: 'light' | 'dark') => void
@@ -108,9 +112,11 @@ export default function SessionSidebar({
   filesActive,
   dataSourcesActive,
   dataSourcesEnabled,
+  externalApisActive,
   forceCollapsed = false,
   loadingSessions,
   onCloseTemporaryChat,
+  onBeforeNavigate,
   onCreateFreeChatSession,
   onDeleteSession,
   onOpenTemporaryChat,
@@ -121,6 +127,7 @@ export default function SessionSidebar({
   onThemeChange,
   onShowFiles,
   onShowDataSources,
+  onShowExternalApis,
   onShowSettings,
   onShowSkills,
   outlineLocked,
@@ -154,21 +161,24 @@ export default function SessionSidebar({
 
   /** 关闭历史侧栏并执行用户选择的左栏导航。 */
   const handleRailNavigation = (navigate: () => void): void => {
-    setHistoryOpen(false)
-    navigate()
+    const action = (): void => { setHistoryOpen(false); navigate() }
+    if (onBeforeNavigate) onBeforeNavigate(action)
+    else action()
   }
 
   /** 从历史侧栏新建自由对话，并保留原有持久会话能力。 */
   const handleCreateHistorySession = (): void => {
     if (sessionCreationDisabled) return
-    onCreateFreeChatSession()
+    if (onBeforeNavigate) onBeforeNavigate(onCreateFreeChatSession)
+    else onCreateFreeChatSession()
   }
 
   /** 打开历史会话面板时先关闭临时对话，避免两个浮层相互遮挡。 */
   const handleHistoryToggle = (): void => {
     const next = !historyOpen
-    if (next) onCloseTemporaryChat()
-    setHistoryOpen(next)
+    const action = (): void => { if (next) onCloseTemporaryChat(); setHistoryOpen(next) }
+    if (next && onBeforeNavigate) onBeforeNavigate(action)
+    else action()
   }
 
   /** 从历史侧栏切换会话，保留侧栏以明确当前会话并支持连续切换。 */
@@ -319,6 +329,17 @@ export default function SessionSidebar({
                   >
                     <DatabaseOutlined />
                     <span>数据源</span>
+                  </button>
+                ) : null}
+                {dataSourcesEnabled ? (
+                  <button
+                    className={cx(externalApisActive && 'active')}
+                    onClick={() => handleRailNavigation(onShowExternalApis)}
+                    title="外部 API"
+                    type="button"
+                  >
+                    <ApiOutlined />
+                    <span>外部 API</span>
                   </button>
                 ) : null}
                 <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">

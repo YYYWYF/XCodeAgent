@@ -12,7 +12,15 @@ from app.services.api_design import (
     load_database_tables,
     load_external_operation,
 )
-from app.services.data_sources import mutate_catalog, public_catalog, validate_saved_source, validate_source
+from app.services.data_sources import (
+    change_selected_tables,
+    mutate_catalog,
+    public_catalog,
+    selected_tables,
+    validate_saved_source,
+    validate_source,
+)
+from app.services.binding_workspace import source_references
 
 
 DATA_SOURCES_EVENT_NAME = "data-sources"
@@ -26,6 +34,7 @@ DataSourceActionName = Literal[
     "database_tables",
     "database_columns",
     "external_operation",
+    "selected_tables", "add_tables", "remove_tables", "references",
 ]
 
 
@@ -40,6 +49,7 @@ class DataSourceRequest(BaseModel):
     table: str | None = Field(default=None, max_length=256)
     directory_id: str | None = Field(default=None, alias="directoryId", max_length=128)
     source: dict[str, Any] | None = None
+    tables: list[str] = Field(default_factory=list, max_length=2000)
 
 
 def data_sources_capabilities() -> dict[str, Any]:
@@ -52,6 +62,7 @@ def data_sources_capabilities() -> dict[str, Any]:
         "actions": [
             "list", "create", "update", "delete", "validate", "detail",
             "database_tables", "database_columns", "external_operation",
+            "selected_tables", "add_tables", "remove_tables", "references",
         ],
         "endpoints": {
             "list": "/data-sources/list",
@@ -63,6 +74,10 @@ def data_sources_capabilities() -> dict[str, Any]:
             "database_tables": "/data-sources/database-tables",
             "database_columns": "/data-sources/database-columns",
             "external_operation": "/data-sources/external-operation",
+            "selected_tables": "/data-sources/selected-tables",
+            "add_tables": "/data-sources/add-tables",
+            "remove_tables": "/data-sources/remove-tables",
+            "references": "/data-sources/references",
         },
         "customEventName": DATA_SOURCES_EVENT_NAME,
         "stateSnapshotKey": "dataSources",
@@ -88,6 +103,14 @@ def build_data_sources_ag_ui_stream(
 
         request = DataSourceRequest.model_validate(action_input)
         _validate_action_input(request, action)
+        if action == "selected_tables":
+            return AgUiActionResult(data={"action": action, "tables": selected_tables(request.workspace_root)}, message="已读取添加的数据表。")
+        if action in {"add_tables", "remove_tables"}:
+            tables = change_selected_tables(request.workspace_root, str(request.source_id), request.tables, action == "remove_tables")
+            return AgUiActionResult(data={"action": action, "tables": tables}, message="已更新应用数据表清单，数据库未被修改。")
+        if action == "references":
+            references = source_references(request.workspace_root, str(request.source_id), request.table, request.directory_id, request.operation_id)
+            return AgUiActionResult(data={"action": action, "references": references}, message="已读取映射引用。")
         if action == "list":
             catalog = public_catalog(request.workspace_root)
             return AgUiActionResult(
@@ -172,7 +195,13 @@ def _validate_action_input(
 ) -> None:
     """校验固定动作所需字段，避免不同路由之间混用请求参数。"""
 
-    if action == "list":
+    if action in {"add_tables", "remove_tables", "references"}:
+        if not request.source_id or request.source is not None:
+            raise ValueError("清单和引用操作必须提供 sourceId。")
+        if action != "references" and (not request.tables or any(not name or len(name) > 256 for name in request.tables)):
+            raise ValueError("请选择有效的数据表。")
+        return
+    if action in {"list", "selected_tables"}:
         if request.source is not None or request.operation_id is not None:
             raise ValueError("读取数据源列表只需要 workspaceRoot，接口详情请使用 detail 端点。")
         if request.source_id is not None:

@@ -19,6 +19,10 @@ type DataSourceAction =
   | 'database_tables'
   | 'database_columns'
   | 'external_operation'
+  | 'selected_tables' | 'add_tables' | 'remove_tables' | 'references'
+
+/** 已添加表只保存资源身份，不复制连接凭据或字段结构。 */
+export type SelectedDataTable = { sourceId: string; schema: string; table: string; description: string }
 
 export type ApiDesignDatabaseMetadata = {
   sourceId?: string
@@ -52,7 +56,29 @@ type DataSourcesPayload = {
   catalog?: DataSourceCatalog
   metadata?: ApiDesignDatabaseMetadata | ApiDesignExternalOperationMetadata
   validation?: DataSourceValidation
+  tables?: SelectedDataTable[]
+  references?: string[]
   error?: { type?: string; message?: string }
+}
+
+/** 读取应用已添加表，候选与实时元数据分离。 */
+export async function requestSelectedTables(workspaceRoot: string): Promise<SelectedDataTable[]> {
+  const result = await runDataSourceAction(workspaceRoot, 'selected_tables', {}, '读取已添加表。')
+  if (!result.tables) throw new Error('接口未返回表清单。')
+  return result.tables
+}
+
+/** 增量更新应用表清单，不执行数据库写操作。 */
+export async function changeSelectedTables(workspaceRoot: string, sourceId: string, tables: string[], remove = false): Promise<SelectedDataTable[]> {
+  const result = await runDataSourceAction(workspaceRoot, remove ? 'remove_tables' : 'add_tables', { sourceId, tables }, '更新已添加表。')
+  if (!result.tables) throw new Error('接口未返回表清单。')
+  return result.tables
+}
+
+/** 删除前读取正式映射引用，展示受影响接口。 */
+export async function requestSourceReferences(workspaceRoot: string, sourceId: string, target: { table?: string; directoryId?: string; operationId?: string } = {}): Promise<string[]> {
+  const result = await runDataSourceAction(workspaceRoot, 'references', { sourceId, ...target }, '读取数据源引用。')
+  return result.references || []
 }
 
 /** 将内部动作名转换为独立数据源路由的短横线路径。 */

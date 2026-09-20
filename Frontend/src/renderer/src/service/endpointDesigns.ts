@@ -8,6 +8,7 @@ import type {
   EndpointDesignsPayload,
   WorkflowApiDesignAction
 } from '../typings'
+import type { BindingDraft, BindingSelection } from '../typings/endpointDesign'
 import { createAgUiHttpAgent } from './authentication'
 
 /** 返回 Endpoint 设计独立 AG-UI 路由地址。 */
@@ -77,14 +78,15 @@ export async function requestEndpointDesignPreparation(
 export async function saveEndpointDesign(
   workspaceRoot: string,
   action: WorkflowApiDesignAction,
-  baseRevision?: string | null
+  baseRevision?: string | null,
+  binding?: { bindingSelection?: BindingSelection; technicalPlanHash: string }
 ): Promise<EndpointDesignSaveResult> {
   const payload = await runEndpointDesignAction(
     'save',
     workspaceRoot,
     action.apiContractId,
     action.endpointId,
-    { draft: action.draft, baseRevision: baseRevision || undefined },
+    { draft: action.draft, baseRevision: baseRevision || undefined, ...binding },
     '保存 Endpoint API 映射配置。'
   )
   if (!payload.saved) throw new Error('Endpoint 设计接口没有返回保存结果。')
@@ -93,7 +95,7 @@ export async function saveEndpointDesign(
 
 /** 运行一次独立 Endpoint 设计 AG-UI 动作并收敛最终状态。 */
 async function runEndpointDesignAction(
-  action: 'get' | 'prepare' | 'save',
+  action: 'get' | 'prepare' | 'save' | 'save_draft' | 'discard_draft',
   workspaceRoot: string,
   apiContractId: string,
   endpointId: string,
@@ -122,4 +124,18 @@ async function runEndpointDesignAction(
   if (!payload) throw new Error('Endpoint 设计接口没有返回有效状态。')
   if (payload.status === 'failed') throw new Error(payload.error?.message || 'Endpoint 设计接口操作失败。')
   return payload
+}
+
+/** 持久化未确认草稿，既不生成正式产物也不推进主工作流。 */
+export async function saveEndpointBindingDraft(workspaceRoot: string, value: BindingDraft): Promise<BindingDraft> {
+  const { savedAt: _savedAt, ...input } = value
+  const result = await runEndpointDesignAction('save_draft', workspaceRoot, value.draft.apiContractId,
+    value.draft.endpointId, input, '保存字段映射草稿。')
+  if (!result.draft) throw new Error('接口未返回已保存草稿。')
+  return result.draft
+}
+
+/** 用户明确放弃时只清理中间草稿，不修改已确认映射。 */
+export async function discardEndpointBindingDraft(workspaceRoot: string, apiContractId: string, endpointId: string): Promise<void> {
+  await runEndpointDesignAction('discard_draft', workspaceRoot, apiContractId, endpointId, undefined, '放弃字段映射草稿。')
 }

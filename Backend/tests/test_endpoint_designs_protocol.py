@@ -27,7 +27,7 @@ class EndpointDesignsProtocolTests(unittest.TestCase):
 
         capabilities = endpoint_designs_capabilities()
         self.assertEqual(capabilities["endpoint"], "/endpoint-designs/run")
-        self.assertEqual(capabilities["actions"], ["get", "prepare", "save"])
+        self.assertEqual(capabilities["actions"], ["get", "prepare", "save", "save_draft", "discard_draft"])
         self.assertTrue(capabilities["workflowIndependent"])
         self.assertFalse(capabilities["readOnly"])
 

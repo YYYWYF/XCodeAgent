@@ -1,3 +1,4 @@
+import { confirmWorkspaceAction } from '../workspaceDialogs'
 import { Alert, Button, Modal, Select } from 'antd'
 import type { ReactElement } from 'react'
 import { useEffect, useRef, useState } from 'react'
@@ -16,6 +17,11 @@ type Props = {
   open: boolean
   saving: boolean
   theme: 'light' | 'dark'
+  embedded?: boolean
+  hideDirectory?: boolean
+  onDirtyChange?: (dirty: boolean) => void
+  onDelete?: () => void
+  onCreateDirectory?: () => void
 }
 
 /** 解析可选 JSON 样例并返回用户可理解的错误。 */
@@ -25,11 +31,21 @@ function parseSample(value: string, label: string): unknown {
 }
 
 /** 管理外部 API 单个接口及其目录归属的居中弹窗。 */
-export default function DataSourceOperationModal({ directories, editing, initialDirectoryId, onClose, onSave, open, saving, theme }: Props): ReactElement {
+export default function DataSourceOperationModal({ directories, editing, initialDirectoryId, onClose, onSave, open, saving, theme, embedded, hideDirectory = false, onDirtyChange, onDelete, onCreateDirectory }: Props): ReactElement {
   const [operation, setOperation] = useState<OperationDraft>(() => operationDraftFromSource(editing))
   const [directoryId, setDirectoryId] = useState(initialDirectoryId || directories[0]?.id || '')
   const [error, setError] = useState('')
   const initializedTargetRef = useRef<string>()
+  const baseline = useRef(JSON.stringify({ operation, directoryId }))
+  const dirty = JSON.stringify({ operation, directoryId }) !== baseline.current
+  useEffect(() => { onDirtyChange?.(dirty) }, [dirty, onDirtyChange])
+
+  /** 独立弹窗自行保护输入；嵌入详情由父级统一保护关闭与切换。 */
+  const cancel = (): void => {
+    if (saving) return
+    if (embedded || !dirty) { onClose(); return }
+    confirmWorkspaceAction({ title: '放弃未保存修改？', okText: '放弃修改', cancelText: '继续编辑', onOk: onClose })
+  }
 
   useEffect(() => {
     if (!open) {
@@ -40,8 +56,11 @@ export default function DataSourceOperationModal({ directories, editing, initial
     const target = editing?.id || 'new'
     if (initializedTargetRef.current === target) return
     initializedTargetRef.current = target
-    setOperation(operationDraftFromSource(editing))
-    setDirectoryId(initialDirectoryId || directories[0]?.id || '')
+    const nextOperation = operationDraftFromSource(editing)
+    const nextDirectory = initialDirectoryId || directories[0]?.id || ''
+    baseline.current = JSON.stringify({ operation: nextOperation, directoryId: nextDirectory })
+    setOperation(nextOperation)
+    setDirectoryId(nextDirectory)
     setError('')
   }, [directories, editing, initialDirectoryId, open])
 
@@ -76,19 +95,27 @@ export default function DataSourceOperationModal({ directories, editing, initial
     }
   }
 
+  const form = <>
+    {error ? <Alert className={cx('data-source-editor-error')} message={error} showIcon type="error" /> : null}
+    <div className={cx('data-source-editor-form')}>
+      {directories.length === 0 ? <Alert message="当前接口域缺少默认目录，请重新创建接口域。" type="warning" showIcon action={onCreateDirectory ? <Button type="link" onClick={onCreateDirectory}>创建目录</Button> : undefined} /> : hideDirectory ? null : <label><span>所属目录</span><Select disabled={saving} onChange={setDirectoryId} options={directories.map((directory) => ({ label: directory.name, value: directory.id }))} value={directoryId || undefined} /></label>}
+      <fieldset disabled={saving} style={{ border: 0, padding: 0, minWidth: 0 }}><OperationFields onChange={setOperation} operation={operation} theme={theme} /></fieldset>
+    </div>
+  </>
+  const actions = <div className={cx('data-source-modal-footer')}>
+    {onDelete && editing ? <Button danger disabled={saving} onClick={onDelete}>删除接口</Button> : null}
+    <Button disabled={saving} onClick={cancel}>取消</Button><Button disabled={saving || directories.length === 0} loading={saving} onClick={() => void handleSave()} type="primary">保存</Button>
+  </div>
+  if (embedded) return <div className="source-operation-editor">{form}{actions}</div>
   return (
     <Modal
       bodyStyle={{ maxHeight: 'calc(100vh - 170px)', overflowY: 'auto', padding: '0 28px 28px' }}
       centered className={cx('data-source-editor-modal')} destroyOnClose
-      footer={<div className={cx('data-source-modal-footer')}><Button disabled={saving} onClick={onClose}>取消</Button><Button loading={saving} onClick={() => void handleSave()} type="primary">保存</Button></div>}
-      keyboard={!saving} maskClosable={!saving} onCancel={onClose} title={editing ? '编辑接口' : '新增接口'} visible={open} width={1100}
+      footer={actions}
+      keyboard={!saving} maskClosable={!saving} onCancel={cancel} title={editing ? '编辑接口' : '新增接口'} visible={open} width={1100}
       wrapClassName={cx('data-source-editor-modal-wrap', `theme-${theme}`)}
     >
-      {error ? <Alert className={cx('data-source-editor-error')} message={error} showIcon type="error" /> : null}
-      <div className={cx('data-source-editor-form')}>
-        <label><span>所属目录</span><Select disabled={directories.length === 0} onChange={setDirectoryId} options={directories.map((directory) => ({ label: directory.name, value: directory.id }))} value={directoryId || undefined} /></label>
-        <OperationFields onChange={setOperation} operation={operation} theme={theme} />
-      </div>
+      {form}
     </Modal>
   )
 }

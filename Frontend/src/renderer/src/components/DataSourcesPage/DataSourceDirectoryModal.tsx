@@ -1,3 +1,4 @@
+import { confirmWorkspaceAction } from '../workspaceDialogs'
 import { Alert, Button, Input, Modal } from 'antd'
 import type { ReactElement } from 'react'
 import { useEffect, useState } from 'react'
@@ -37,15 +38,22 @@ export default function DataSourceDirectoryModal({ editing, onClose, onSave, ope
     }
   }
 
+  /** 保护尚未保存的目录名称。 */
+  const cancel = (): void => {
+    if (saving) return
+    if (name === (editing?.name || '')) { onClose(); return }
+    confirmWorkspaceAction({ title: '放弃未保存修改？', okText: '放弃修改', cancelText: '继续编辑', onOk: onClose })
+  }
+
   return (
     <Modal
       centered
       className={cx('data-source-editor-modal')}
       destroyOnClose
-      footer={<div className={cx('data-source-modal-footer')}><Button disabled={saving} onClick={onClose}>取消</Button><Button loading={saving} onClick={() => void handleSave()} type="primary">保存</Button></div>}
+      footer={<div className={cx('data-source-modal-footer')}><Button disabled={saving} onClick={cancel}>取消</Button><Button loading={saving} onClick={() => void handleSave()} type="primary">保存</Button></div>}
       keyboard={!saving}
       maskClosable={!saving}
-      onCancel={onClose}
+      onCancel={cancel}
       title={editing ? '编辑目录' : '新增目录'}
       visible={open}
       width={520}
@@ -53,7 +61,7 @@ export default function DataSourceDirectoryModal({ editing, onClose, onSave, ope
     >
       {error ? <Alert className={cx('data-source-editor-error')} message={error} showIcon type="error" /> : null}
       <div className={cx('data-source-editor-form')}>
-        <label><span>目录名称</span><Input autoFocus onChange={(event) => setName(event.target.value)} placeholder="例如：商品接口" value={name} /></label>
+        <label><span><em className={cx('data-source-required')}>*</em>目录名称</span><Input autoFocus onChange={(event) => setName(event.target.value)} placeholder="例如：商品接口" value={name} /></label>
       </div>
     </Modal>
   )

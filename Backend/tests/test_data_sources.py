@@ -10,9 +10,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from pydantic import ValidationError
+
 from app.persistence import data_sources as data_source_storage
 from app.services.data_sources import (
+    DatabaseSourceInput,
     DataSourceError,
+    change_selected_tables,
     mutate_catalog,
     public_catalog,
     validate_source,
@@ -61,7 +65,7 @@ class DataSourcesServiceTests(unittest.TestCase):
         self.assertEqual(source.mode, "builtin")
         self.assertNotIn("revision", json.loads(self.data_sources_file().read_text(encoding="utf-8")))
         index_entry = json.loads(self.data_sources_file().read_text(encoding="utf-8"))["sources"][0]
-        self.assertEqual(set(index_entry), {"id", "type", "name", "mode", "hasPassword"})
+        self.assertEqual(set(index_entry), {"id", "type", "name", "mode", "hasPassword", "managedTables"})
 
     def test_first_read_imports_dbid_application_database_without_password(self) -> None:
         """首次读取 DBID 应映射连接字段且不保存密码。"""
@@ -751,6 +755,48 @@ class DataSourcesServiceTests(unittest.TestCase):
         )
         self.assertNotIn("passwordCiphertext", persisted)
         self.assertNotIn("domain", persisted)
+
+    def test_managed_tables_belong_to_database_object_and_validate_strictly(self) -> None:
+        """数据库对象保存已管理表清单，字段结构不进入数据源文件且模型保持严格校验。"""
+
+        source = mutate_catalog(
+            self.workspace,
+            action="create",
+            source={
+                "type": "database",
+                "mode": "direct",
+                "name": "订单库",
+                "domain": "127.0.0.1",
+                "port": 3306,
+                "schema": "orders",
+                "userName": "app",
+                "passwordCiphertext": "xcodeagent-secret:v1:key:cipher",
+            },
+        )
+        source_id = source.sources[0].id
+        with patch(
+            "app.services.api_design.load_database_tables",
+            return_value={"schema": "orders", "tables": [{"name": "orders", "description": "订单"}]},
+        ):
+            selected = change_selected_tables(self.workspace, source_id, ["orders"], False)
+        self.assertEqual(selected[0]["table"], "orders")
+        stored_path = self.workspace / ".xcodeagent" / "datasource" / "databases" / f"{source_id}.json"
+        stored = json.loads(stored_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored["managedTables"], [{"table": "orders", "description": "订单"}])
+        self.assertNotIn("columns", stored)
+        public = public_catalog(self.workspace).sources[0].model_dump(by_alias=True)
+        self.assertEqual(public["managedTables"][0]["table"], "orders")
+
+        with self.assertRaises(ValidationError):
+            DatabaseSourceInput.model_validate({
+                "type": "database", "mode": "builtin", "name": "重复表",
+                "managedTables": [{"table": "orders"}, {"table": "ORDERS"}],
+            })
+        with self.assertRaises(ValidationError):
+            DatabaseSourceInput.model_validate({
+                "type": "database", "mode": "builtin", "name": "未知字段",
+                "managedTables": [], "unexpected": True,
+            })
 
 
 if __name__ == "__main__":

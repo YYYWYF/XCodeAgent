@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
+from app.services.binding_workspace import BindingDraftRequest, save_binding_draft, clear_binding_draft
 from app.services.endpoint_design_detail import (
     EndpointDesignDetailRequest,
     EndpointDesignPrepareRequest,
@@ -25,7 +26,7 @@ def endpoint_designs_capabilities() -> dict[str, Any]:
         "name": "endpoint-designs",
         "endpoint": "/endpoint-designs/run",
         "transport": "ag-ui-sse",
-        "actions": ["get", "prepare", "save"],
+        "actions": ["get", "prepare", "save", "save_draft", "discard_draft"],
         "customEventName": ENDPOINT_DESIGNS_EVENT_NAME,
         "stateSnapshotKey": "endpointDesigns",
         "workflowIndependent": True,
@@ -45,6 +46,13 @@ def build_endpoint_designs_ag_ui_stream(
 
         action = str(request_input.get("action") or "get")
         request_values = {key: value for key, value in request_input.items() if key != "action"}
+        if action == "discard_draft":
+            request = EndpointDesignDetailRequest.model_validate(request_values)
+            clear_binding_draft(request.workspace_root, request.api_contract_id, request.endpoint_id)
+            return AgUiActionResult(data={"action": action}, message="已放弃映射草稿，正式产物未变更。")
+        if action == "save_draft":
+            draft = save_binding_draft(BindingDraftRequest.model_validate(request_values))
+            return AgUiActionResult(data={"action": action, "draft": draft}, message="映射草稿已保存，尚未确认。")
         if action == "get":
             request = EndpointDesignDetailRequest.model_validate(request_values)
             detail = read_endpoint_design_detail(request)
@@ -57,7 +65,7 @@ def build_endpoint_designs_ag_ui_stream(
             request = EndpointDesignSaveRequest.model_validate(request_values)
             saved = save_endpoint_design(request)
             return AgUiActionResult(data={"action": action, "saved": saved, "detail": saved.get("detail")}, message="Endpoint API 映射配置已保存。")
-        raise ValueError("endpointDesigns.action 必须是 get、prepare 或 save。")
+        raise ValueError("endpointDesigns.action 必须是 get、prepare、save、save_draft 或 discard_draft。")
 
     return build_ag_ui_action_stream(
         payload=payload,

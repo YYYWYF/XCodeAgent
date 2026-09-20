@@ -16,6 +16,42 @@ from app.protocols.data_sources import (
 data_sources_router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 
 
+@data_sources_router.post("/selected-tables")
+async def selected_tables(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """读取已添加表，不进入主工作流。"""
+    return _data_source_response(action="selected_tables", input_data=input_data, accept=accept)
+
+
+@data_sources_router.post("/add-tables")
+async def add_tables(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """添加应用数据表，不进入主工作流。"""
+    return _data_source_response(action="add_tables", input_data=input_data, accept=accept)
+
+
+@data_sources_router.post("/remove-tables")
+async def remove_tables(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """移除应用数据表，不进入主工作流。"""
+    return _data_source_response(action="remove_tables", input_data=input_data, accept=accept)
+
+
+@data_sources_router.post("/references")
+async def references(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """读取映射引用，不进入主工作流。"""
+    return _data_source_response(action="references", input_data=input_data, accept=accept)
+
+
 def _data_source_response(
     *,
     action: DataSourceActionName,

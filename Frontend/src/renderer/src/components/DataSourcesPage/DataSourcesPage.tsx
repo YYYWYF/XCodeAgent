@@ -23,6 +23,7 @@ import ExternalApiManagerModal from './ExternalApiManagerModal'
 import { mergeExternalSourceChanges, requireOperationDetails } from './dataSourceOperations'
 import { useOperationDetails } from './useOperationDetails'
 import './DataSourcesPage.less'
+import { confirmReferencedRemoval } from './confirmReferencedRemoval'
 
 const { Text, Title } = Typography
 type Source = DatabaseDataSource | ExternalApiDataSource
@@ -62,7 +63,7 @@ function DatabaseRow({ source, onDelete, onEdit, onValidate }: { source: Databas
     <div className={cx('data-source-directory-row')} onClick={() => onEdit(source)} onKeyDown={onKeyDown} role="button" tabIndex={0}>
       <span className={cx('data-source-directory-row-icon')}><DatabaseOutlined /></span>
       <span className={cx('data-source-directory-row-main')}><span className={cx('data-source-directory-row-name')}>{source.name}</span></span>
-      <span className={cx('data-source-directory-row-tags')}><Tag>{databaseModeLabel(source.mode)}</Tag>{source.mode === 'direct' ? <Tag color={source.hasPassword ? 'green' : 'red'}>{source.hasPassword ? '密码已配置' : '缺少密码'}</Tag> : null}</span>
+      <span className={cx('data-source-directory-row-tags')}><Tag>{databaseModeLabel(source.mode)}</Tag><Tag>{source.managedTables.length} 张已添加表</Tag>{source.mode === 'direct' ? <Tag color={source.hasPassword ? 'green' : 'red'}>{source.hasPassword ? '密码已配置' : '缺少密码'}</Tag> : null}</span>
       <span className={cx('data-source-directory-row-actions')} onClick={(event) => event.stopPropagation()}><MoreActions actions={[...(source.mode === 'direct' ? [{ key: 'validate', label: '检测连接', onClick: () => onValidate(source) }] : []), { key: 'edit', label: '编辑', onClick: () => onEdit(source) }, { key: 'delete', label: '删除', danger: true, onClick: () => onDelete(source) }]} /></span>
     </div>
   )
@@ -88,7 +89,7 @@ function DirectorySection({ title, countLabel, expanded, onToggle, onCreate, emp
 }
 
 /** 管理独立数据源目录页及域名、目录和接口的 AG-UI 保存。 */
-export default function DataSourcesPage({ theme, workspaceRoot }: { theme: 'light' | 'dark'; workspaceRoot: string }): ReactElement {
+export default function DataSourcesPage({ theme, workspaceRoot, externalOnly = false, sourceId }: { theme: 'light' | 'dark'; workspaceRoot: string; externalOnly?: boolean; sourceId?: string }): ReactElement {
   const [catalog, setCatalog] = useState<DataSourceCatalog>()
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -115,7 +116,7 @@ export default function DataSourcesPage({ theme, workspaceRoot }: { theme: 'ligh
   const catalogRequestRef = useRef(0)
   const operationRequestRef = useRef(0)
   const databaseSources = useMemo(() => (catalog?.sources || []).filter((source): source is DatabaseDataSource => source.type === 'database'), [catalog])
-  const apiSources = useMemo(() => (catalog?.sources || []).filter((source): source is ExternalApiDataSource => source.type === 'external_api'), [catalog])
+  const apiSources = useMemo(() => (catalog?.sources || []).filter((source): source is ExternalApiDataSource => source.type === 'external_api' && (!sourceId || source.id === sourceId)), [catalog, sourceId])
   const managerDetails = useOperationDetails({ workspaceRoot, sourceId: managerSourceId, operationId: managerOperationId, open: managerOpen, catalog })
 
   /** 读取最新目录并在工作区切换时丢弃过期响应。 */
@@ -255,10 +256,10 @@ export default function DataSourcesPage({ theme, workspaceRoot }: { theme: 'ligh
   }
 
   /** 删除域名并提示级联删除的目录和接口数量。 */
-  const handleDeleteSource = (source: Source): void => { const detail = source.type === 'external_api' ? `将同时删除 ${source.directories.length} 个目录和 ${operationCount(source)} 个接口。` : '将移除该独立数据源配置。'; Modal.confirm({ centered: true, title: '确认删除数据源？', content: `${detail} 此操作无法恢复。`, cancelText: '取消', okText: '删除', okButtonProps: { danger: true }, onOk: async () => { try { const next = await deleteDataSource(workspaceRoot, source.id); setCatalog(next); if (source.id === managerSourceId) closeManager(); message.success('数据源已删除') } catch (caughtError) { message.error(caughtError instanceof Error ? caughtError.message : '数据源删除失败。') } } }) }
+  const handleDeleteSource = (source: Source): void => { const detail = source.type === 'external_api' ? `将同时删除 ${source.directories.length} 个目录和 ${operationCount(source)} 个接口。` : '将移除该独立数据源配置。'; confirmReferencedRemoval(workspaceRoot, source.id, {}, { centered: true, title: '确认删除数据源？', content: `${detail} 此操作无法恢复。`, cancelText: '取消', okText: '删除', okButtonProps: { danger: true }, onOk: async () => { try { const next = await deleteDataSource(workspaceRoot, source.id); setCatalog(next); if (source.id === managerSourceId) closeManager(); message.success('数据源已删除') } catch (caughtError) { message.error(caughtError instanceof Error ? caughtError.message : '数据源删除失败。') } } }) }
   /** 删除目录并提示级联删除的接口数量，仅在删除当前目录时调整右侧选择。 */
   const handleDeleteDirectory = (source: ExternalApiDataSource, directory: DataSourceDirectory): void => {
-    Modal.confirm({
+    confirmReferencedRemoval(workspaceRoot, source.id, { directoryId: directory.id }, {
       centered: true,
       title: '确认删除目录？',
       content: `目录“${directory.name}”包含 ${directory.operations.length} 个接口，删除后无法恢复。`,
@@ -283,7 +284,7 @@ export default function DataSourcesPage({ theme, workspaceRoot }: { theme: 'ligh
   }
   /** 删除单个接口，并在删除当前接口后选择相邻接口。 */
   const handleDeleteOperation = (source: ExternalApiDataSource, directory: DataSourceDirectory, operation: DataSourceOperation): void => {
-    Modal.confirm({
+    confirmReferencedRemoval(workspaceRoot, source.id, { operationId: operation.id }, {
       centered: true,
       title: '确认删除接口？',
       content: `删除“${operation.name}”后无法恢复。`,
@@ -342,12 +343,12 @@ export default function DataSourcesPage({ theme, workspaceRoot }: { theme: 'ligh
   }
 
   return <section aria-label="数据源" className={cx('data-sources-page')}>
-    <header className={cx('data-sources-header')}><div className={cx('data-sources-title')}><span className={cx('data-sources-title-icon')}><DatabaseOutlined /></span><div><Title level={4}>数据源</Title><Text>独立管理数据库和外部 API 配置</Text></div></div><div className={cx('data-sources-actions')}><Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void loadCatalog(true)}>刷新</Button><Button icon={<PlusOutlined />} onClick={() => openCreate()} type="primary">新增数据源</Button></div></header>
+    <header className={cx('data-sources-header')}><div className={cx('data-sources-title')}><span className={cx('data-sources-title-icon')}><DatabaseOutlined /></span><div><Title level={4}>数据源</Title><Text>独立管理数据库和外部 API 配置</Text></div></div><div className={cx('data-sources-actions')}><Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void loadCatalog(true)}>刷新</Button><Button icon={<PlusOutlined />} onClick={() => openCreate(externalOnly ? 'external_api' : undefined)} type="primary">{externalOnly ? '新增域名' : '新增数据源'}</Button></div></header>
     <div aria-live="polite" className={cx('data-sources-content')}>
       {loading ? <div className={cx('data-sources-state')}><Spin /><Text type="secondary">正在读取数据源目录...</Text></div> : error && !catalog ? <div className={cx('data-sources-state')}><Alert action={<Button onClick={() => void loadCatalog()}>重试</Button>} description={error} message="无法读取数据源" showIcon type="error" /></div> : <>
         {error ? <Alert className={cx('data-sources-inline-error')} closable onClose={() => setError('')} showIcon description={error} message="刷新数据源目录失败" type="error" /> : null}
         <div className={cx('data-source-directory')}>
-          <DirectorySection countLabel={`${databaseSources.length} / 1`} emptyText="暂无数据库数据源，点击右侧新增" onCreate={() => openCreate('database')} onToggle={() => setDatabaseExpanded((current) => !current)} title="数据库" expanded={databaseExpanded}>{databaseSources.map((source) => <DatabaseRow key={source.id} onDelete={handleDeleteSource} onEdit={openEdit} onValidate={(item) => void handleValidateSaved(item)} source={source} />)}</DirectorySection>
+          {!externalOnly && <DirectorySection countLabel={`${databaseSources.length} / 1`} emptyText="暂无数据库数据源，点击右侧新增" onCreate={() => openCreate('database')} onToggle={() => setDatabaseExpanded((current) => !current)} title="数据库" expanded={databaseExpanded}>{databaseSources.map((source) => <DatabaseRow key={source.id} onDelete={handleDeleteSource} onEdit={openEdit} onValidate={(item) => void handleValidateSaved(item)} source={source} />)}</DirectorySection>}
           <DirectorySection countLabel={`${apiSources.length}`} emptyText="暂无外部 API 域名，点击右侧新增" onCreate={() => openCreate('external_api')} onToggle={() => setExternalApiExpanded((current) => !current)} title="外部 API" expanded={externalApiExpanded}>{apiSources.map((source) => <ApiDomainRow key={source.id} onDelete={handleDeleteSource} onEdit={openEdit} onManage={openManager} onValidate={(item) => void handleValidateSaved(item)} source={source} />)}</DirectorySection>
         </div>
       </>}

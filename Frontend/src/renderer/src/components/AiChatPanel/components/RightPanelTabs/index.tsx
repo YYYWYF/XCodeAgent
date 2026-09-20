@@ -1,4 +1,4 @@
-import { CloseOutlined } from '@ant-design/icons'
+import { CloseOutlined, NodeIndexOutlined } from '@ant-design/icons'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import type { WorkspaceDocKey } from '../../types'
@@ -7,6 +7,7 @@ import './RightPanelTabs.less'
 
 /** 工作区 tab 键：预览/源码/文档/报告/过程/阶段产物 + 设计阶段的正式产物文档。 */
 export type WorkspaceTabKey =
+  | 'field-mapping'
   | 'preview'
   | 'source'
   | 'doc'
@@ -47,7 +48,7 @@ export default function RightPanelTabs({ tabs, active, onChange, onClose }: Prop
               title={available ? tab.label : `${tab.label}（暂无内容）`}
               onClick={() => onChange(tab.key)}
             >
-              {tab.label}
+              {tab.key === 'field-mapping' ? <NodeIndexOutlined style={{ marginRight: 6 }} /> : null}{tab.label}
             </button>
           )
         })}

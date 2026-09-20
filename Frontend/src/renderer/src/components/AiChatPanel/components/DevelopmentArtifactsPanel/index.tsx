@@ -12,6 +12,7 @@ type Props = ApplicationOutlineProps & {
   apiTarget?: { apiContractId: string; endpointId: string }
   workspaceRoot?: string
   apiDesignRefreshKey?: string
+  onConfigureApi?: (target: { apiContractId: string; endpointId: string; label?: string }) => void
 }
 
 /** 并排展示常驻菜单和随选中产物更新的详情占位，菜单选择不切换工作区标签。 */
@@ -20,6 +21,7 @@ export default function DevelopmentArtifactsPanel({
   apiTarget,
   workspaceRoot,
   apiDesignRefreshKey,
+  onConfigureApi,
   ...outlineProps
 }: Props): ReactElement {
   const { detail, error, loading, reload } = useEndpointDesignDetail(
@@ -36,6 +38,7 @@ export default function DevelopmentArtifactsPanel({
         aria-label={detailLabel ? `${detailLabel}详情` : '开发产物详情'}
         className={cx('development-artifacts-detail')}
       >
+        {apiTarget && onConfigureApi ? <Button onClick={() => onConfigureApi({ ...apiTarget, label: detailLabel })}>打开字段映射</Button> : null}
         {apiTarget ? (
           loading ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>正在读取映射结果…</h3></div>
             : error ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>读取失败</h3><p>{error}</p><Button onClick={reload} type="primary">重试</Button></div>

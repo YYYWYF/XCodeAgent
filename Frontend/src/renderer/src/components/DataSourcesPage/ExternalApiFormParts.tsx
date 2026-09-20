@@ -181,7 +181,7 @@ export function OperationFields({
     <div className={cx('data-source-operation-fields')}>
       <div className={cx('data-source-form-grid', 'data-source-operation-basic')}>
         <label>
-          <span>接口名称</span>
+          <span><em className={cx('data-source-required')}>*</em>接口名称</span>
           <Input onChange={(event) => onChange({ ...operation, name: event.target.value })} placeholder="例如：查询商品" value={operation.name} />
         </label>
         <label>
@@ -193,7 +193,7 @@ export function OperationFields({
           />
         </label>
         <label className={cx('data-source-form-grid-wide')}>
-          <span>路径</span>
+          <span><em className={cx('data-source-required')}>*</em>路径</span>
           <Input onChange={(event) => onChange({ ...operation, path: event.target.value })} placeholder="/products/{productId}" value={operation.path} />
         </label>
       </div>

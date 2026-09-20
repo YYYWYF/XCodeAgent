@@ -100,6 +100,8 @@ class EndpointDesignDetailTests(unittest.TestCase):
             ), patch(
                 "app.services.endpoint_design_detail.read_endpoint_design",
                 return_value={"artifactRevision": "revision-1", "fieldMappings": []},
+            ), patch(
+                "app.services.endpoint_design_detail.technical_plan_sha256", return_value="c" * 64,
             ):
                 result = prepare_endpoint_design(
                     EndpointDesignDetailRequest(

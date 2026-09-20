@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import re
 import socket
+from threading import RLock
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.persistence.data_sources import (
     DataSourceStorageError,
@@ -33,6 +34,7 @@ MAX_DIRECTORIES = 50
 MAX_OPERATIONS = 50
 MAX_HEADERS = 50
 MAX_SAMPLE_BYTES = 256 * 1024
+DATA_SOURCE_LOCK = RLock()
 
 
 class DataSourceError(ValueError):
@@ -85,6 +87,27 @@ class ApiDirectory(DataSourceModel):
     operations: list[ApiOperation] = Field(default_factory=list, max_length=MAX_OPERATIONS)
 
 
+class ManagedTable(DataSourceModel):
+    """描述数据库连接下由应用管理的表清单条目，不保存实时字段结构。"""
+
+    table: str = Field(min_length=1, max_length=256)
+    description: str = Field(default="", max_length=2048)
+
+
+def _validate_managed_table_names(value: list[ManagedTable]) -> list[ManagedTable]:
+    """校验同一数据库连接内的已管理表名称唯一。"""
+
+    for item in value:
+        item.table = item.table.strip()
+        item.description = item.description.strip()
+        if not item.table:
+            raise ValueError("数据库已管理表名称不能为空。")
+    names = [item.table.lower() for item in value]
+    if len(names) != len(set(names)):
+        raise ValueError("数据库已管理表名称不能重复。")
+    return value
+
+
 class DatabaseSourceInput(DataSourceModel):
     """描述数据库数据源的创建或更新输入。"""
 
@@ -98,6 +121,9 @@ class DatabaseSourceInput(DataSourceModel):
     user_name: str | None = Field(default=None, alias="userName", max_length=256)
     dbid: str | None = Field(default=None, max_length=256)
     password_ciphertext: str | None = Field(default=None, alias="passwordCiphertext", max_length=16384)
+    managed_tables: list[ManagedTable] = Field(default_factory=list, alias="managedTables", max_length=2000)
+
+    _managed_table_names = field_validator("managed_tables")(_validate_managed_table_names)
 
 
 class ExternalApiSourceInput(DataSourceModel):
@@ -129,6 +155,9 @@ class DatabaseSourcePublic(DataSourceModel):
     user_name: str | None = Field(default=None, alias="userName")
     dbid: str | None = None
     has_password: bool = Field(alias="hasPassword")
+    managed_tables: list[ManagedTable] = Field(default_factory=list, alias="managedTables", max_length=2000)
+
+    _managed_table_names = field_validator("managed_tables")(_validate_managed_table_names)
 
 
 class ExternalApiSourcePublic(DataSourceModel):
@@ -567,6 +596,7 @@ def _public_source(source: dict[str, Any]) -> DataSourcePublic:
             userName=source.get("userName"),
             dbid=source.get("dbid"),
             hasPassword=bool(source.get("passwordCiphertext") or source.get("hasPassword")),
+            managedTables=source.get("managedTables") or [],
         )
     return ExternalApiSourcePublic.model_validate(source)
 
@@ -608,50 +638,124 @@ def mutate_catalog(
 ) -> DataSourceCatalogPublic:
     """执行一次独立数据源目录变更，不启用目录版本或并发冲突保护。"""
 
-    sources = _read_catalog(workspace_root)
-    next_sources = [dict(item) for item in sources]
-    if action == "create":
-        if source is None:
-            raise DataSourceError("创建数据源必须提供 source。")
-        candidate = _normalize_source(dict(source))
-        candidate["id"] = str(candidate.get("id") or f"ds-{uuid4().hex[:16]}")
-        candidate = _add_default_directory_on_create(candidate)
-        candidate = _normalize_source(candidate)
-        _validate_source(candidate)
-        next_sources.append(candidate)
-    elif action == "update":
-        if source is None or not source.get("id"):
-            raise DataSourceError("更新数据源必须提供 source.id。")
-        source_key = str(source["id"])
-        if not any(str(item.get("id")) == source_key for item in next_sources):
-            raise DataSourceError("目标数据源不存在。")
-        candidate = _normalize_source(dict(source))
-        current_sources = next_sources
-        next_sources = []
-        for item in current_sources:
-            if str(item.get("id")) != source_key:
-                next_sources.append(item)
+    with DATA_SOURCE_LOCK:
+        sources = _read_catalog(workspace_root)
+        next_sources = [dict(item) for item in sources]
+        if action == "create":
+            if source is None:
+                raise DataSourceError("创建数据源必须提供 source。")
+            candidate = _normalize_source(dict(source))
+            candidate["id"] = str(candidate.get("id") or f"ds-{uuid4().hex[:16]}")
+            candidate = _add_default_directory_on_create(candidate)
+            candidate = _normalize_source(candidate)
+            _validate_source(candidate)
+            next_sources.append(candidate)
+        elif action == "update":
+            if source is None or not source.get("id"):
+                raise DataSourceError("更新数据源必须提供 source.id。")
+            source_key = str(source["id"])
+            if not any(str(item.get("id")) == source_key for item in next_sources):
+                raise DataSourceError("目标数据源不存在。")
+            candidate = _normalize_source(dict(source))
+            current_sources = next_sources
+            next_sources = []
+            for item in current_sources:
+                if str(item.get("id")) != source_key:
+                    next_sources.append(item)
+                    continue
+                merged = dict(candidate)
+                if candidate.get("type") == "database" and item.get("type") == "database":
+                    location_fields = ("mode", "domain", "port", "schema", "dbid")
+                    location_changed = any(candidate.get(field) != item.get(field) for field in location_fields)
+                    # 表清单由数据源对象拥有；更新表单不能用旧快照覆盖最新清单。
+                    merged["managedTables"] = [] if location_changed else list(item.get("managedTables") or [])
+                if (
+                    candidate.get("type") == "database"
+                    and candidate.get("mode") == "direct"
+                    and not candidate.get("passwordCiphertext")
+                    and item.get("passwordCiphertext")
+                ):
+                    merged["passwordCiphertext"] = item["passwordCiphertext"]
+                next_sources.append(merged)
+        elif action == "delete":
+            if not source_id:
+                raise DataSourceError("删除数据源必须提供 sourceId。")
+            if not any(str(item.get("id")) == source_id for item in next_sources):
+                raise DataSourceError("目标数据源不存在。")
+            next_sources = [item for item in next_sources if str(item.get("id")) != source_id]
+        else:
+            raise DataSourceError("不支持的数据源目录动作。")
+        _validate_stored_sources(next_sources)
+        _write_catalog(workspace_root, next_sources)
+        return DataSourceCatalogPublic(sources=[_public_source(item) for item in next_sources])
+
+
+def selected_tables(workspace_root: str | Path) -> list[dict[str, str]]:
+    """从数据库数据源对象投影已管理表清单，不读取或保存字段结构。"""
+
+    with DATA_SOURCE_LOCK:
+        result: list[dict[str, str]] = []
+        # 先读轻量索引，再按数据库 ID 读取详情，避免无关外部 API 的字段结构阻塞表清单。
+        summaries = _read_catalog(workspace_root, detail=False)
+        for summary in summaries:
+            if summary.get("type") != "database":
                 continue
-            merged = dict(candidate)
-            if (
-                candidate.get("type") == "database"
-                and candidate.get("mode") == "direct"
-                and not candidate.get("passwordCiphertext")
-                and item.get("passwordCiphertext")
-            ):
-                merged["passwordCiphertext"] = item["passwordCiphertext"]
-            next_sources.append(merged)
-    elif action == "delete":
-        if not source_id:
-            raise DataSourceError("删除数据源必须提供 sourceId。")
-        if not any(str(item.get("id")) == source_id for item in next_sources):
-            raise DataSourceError("目标数据源不存在。")
-        next_sources = [item for item in next_sources if str(item.get("id")) != source_id]
-    else:
-        raise DataSourceError("不支持的数据源目录动作。")
-    _validate_stored_sources(next_sources)
-    _write_catalog(workspace_root, next_sources)
-    return DataSourceCatalogPublic(sources=[_public_source(item) for item in next_sources])
+            source = next(
+                (item for item in _read_catalog(workspace_root, source_id=str(summary["id"]))
+                 if str(item.get("id")) == str(summary["id"])),
+                None,
+            )
+            if source is None:
+                continue
+            schema = str(source.get("schema") or "")
+            for managed in source.get("managedTables") or []:
+                if str(managed.get("table") or ""):
+                    result.append({
+                        "sourceId": str(source["id"]),
+                        "schema": schema,
+                        "table": str(managed["table"]),
+                        "description": str(managed.get("description") or ""),
+                    })
+        return sorted(result, key=lambda item: (item["sourceId"], item["table"]))
+
+
+def change_selected_tables(
+    workspace_root: str | Path,
+    source_id: str,
+    tables: list[str],
+    remove: bool,
+) -> list[dict[str, str]]:
+    """增量更新所属数据库对象的已管理表清单，不向真实数据库写入。"""
+
+    from app.services.api_design import load_database_tables
+
+    with DATA_SOURCE_LOCK:
+        sources = _read_catalog(workspace_root)
+        source = next((item for item in sources if str(item.get("id")) == source_id), None)
+        if source is None or source.get("type") != "database":
+            raise DataSourceError("目标数据源不是数据库或不存在。")
+        managed = list(source.get("managedTables") or [])
+        requested = list(dict.fromkeys(tables))
+        if remove:
+            remove_set = set(requested)
+            source["managedTables"] = [item for item in managed if str(item.get("table")) not in remove_set]
+        else:
+            metadata = load_database_tables(workspace_root, source_id)
+            if metadata.get("schema") != source.get("schema"):
+                raise DataSourceError("数据库 Schema 已变化，请先刷新连接配置。")
+            available = {str(item.get("name")): item for item in metadata.get("tables", [])}
+            if any(table not in available for table in requested):
+                raise DataSourceError("待添加的数据表不存在，请刷新表清单。")
+            existing = {str(item.get("table")): item for item in managed}
+            for table in requested:
+                existing[table] = {
+                    "table": table,
+                    "description": str(available[table].get("description") or ""),
+                }
+            source["managedTables"] = list(existing.values())
+        _validate_stored_sources(sources)
+        _write_catalog(workspace_root, sources)
+        return selected_tables(workspace_root)
 
 
 def validate_saved_source(workspace_root: str | Path, source_id: str) -> dict[str, Any]:
