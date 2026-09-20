@@ -404,3 +404,76 @@ export function isEntityDesignWorkflow(workflow: WorkflowRunPayload | undefined)
   }
   return false
 }
+
+/**
+ * 是否展示右侧工作区（开发产物 / 预览 / 源码等页签所在的那一块）。
+ *
+ * 回看历史版本时整块都不展示：内容区已由 ReleasedVersionPanel 承载——应用文件自带
+ * 目录树、应用预览自带服务状态与地址栏——再挂一排指向当前迭代产物的页签既重复，
+ * 也与只读回看的口径冲突。当前版本保持原样（对话区卡片 + 右侧页签）。
+ */
+export function shouldShowRightWorkspace(input: {
+  versionReadOnly: boolean
+  rightPanelOpen: boolean
+  hasRightPanel: boolean
+}): boolean {
+  return !input.versionReadOnly && input.rightPanelOpen && input.hasRightPanel
+}
+
+/**
+ * 规划会话回放完缓存后仍无消息时，是否要注入"正在处理"占位消息。
+ *
+ * 占位的作用是避免只显示 Agent 头像，等真正的 workflow 帧到达后由它接管。
+ * 但"等用户输入新迭代需求"这一态不能注入：那一轮不会有任何 workflow 到达，
+ * 占位卡会一直转圈，把真正该显示的「请描述本次迭代的需求」输入卡挡掉。
+ *
+ * 判据用 stage 而不是 status：后端写盘的 lifecycle 是 pending，只有前端
+ * handleConfirmIteration 在内存里把它标成 awaiting_user。重新打开应用或切换版本后，
+ * planning state 带着的是磁盘那份，按 status 判会漏掉这一情形、误注入占位。
+ */
+export function shouldInjectPlanningPlaceholder(input: {
+  messageCount: number
+  stage?: string
+  hasWorkflow: boolean
+}): boolean {
+  if (input.messageCount > 0) return false
+  const awaitingIterationRequest = input.stage === 'collecting_requirement' && !input.hasWorkflow
+  return !awaitingIterationRequest
+}
+
+/**
+ * 至少一份设计文档已确认（需求文档确认之后、模板生成之前的全部设计/计划阶段）。
+ *
+ * 用于「设计文档已确认，可保存为设计版本」这条弱提醒：它必须等文档**确认之后**才出现，
+ * 否则在需求还在澄清时就提示"已确认"是错的。
+ *
+ * 刻意排除 `ready_for_workbench`：那一步由模板就绪卡承载提交入口，两边都提示会重复。
+ */
+const CONFIRMED_DESIGN_STAGES = new Set([
+  'generating_ui_designs',
+  'awaiting_ui_design_confirmation',
+  'awaiting_planning_stage_entry',
+  'generating_technical_plan',
+  'awaiting_technical_plan_confirmation'
+])
+
+export function hasConfirmedDesignDocument(stage?: string): boolean {
+  return CONFIRMED_DESIGN_STAGES.has(String(stage || ''))
+}
+
+/**
+ * 执行失败/被停止但留下了代码变更时，是否提示"存在未完成修改"（中等提示）。
+ *
+ * 主操作是**审阅**而不是提交：失败或半途停止的代码不该被包装成可提交版本。
+ *
+ * `coveredByVersionReminder` 用于去重：快速修改（implementation_fix）失败时，
+ * 消息下方已有 VersionCommitReminder 的失败态在说同一件事，这里不再重复。
+ */
+export function shouldShowIncompleteChangesHint(input: {
+  failed: boolean
+  hasCodeChanges: boolean
+  coveredByVersionReminder: boolean
+}): boolean {
+  if (input.coveredByVersionReminder) return false
+  return input.failed && input.hasCodeChanges
+}

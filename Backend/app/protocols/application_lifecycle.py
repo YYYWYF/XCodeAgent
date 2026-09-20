@@ -12,7 +12,9 @@ from app.protocols.ag_ui_action_stream import (
     build_ag_ui_action_stream,
 )
 from app.services.application_lifecycle import (
+    ApplicationLifecycleMissingError,
     application_lifecycle_payload,
+    completed_development_artifacts,
     ensure_application_lifecycle,
     load_application_lifecycle,
     retry_application_template_generation,
@@ -52,6 +54,10 @@ class ApplicationLifecycleAction(BaseModel):
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     application: ApplicationLifecycleApplication | None = None
     session_id: str | None = Field(default=None, alias="sessionId", max_length=256)
+    # 发起新迭代时由调用方带入上一版本的产物进度，服务端只继承其中的 completed 事实。
+    inherited_development_artifacts: dict[str, Any] | None = Field(
+        default=None, alias="inheritedDevelopmentArtifacts"
+    )
 
     @model_validator(mode="after")
     def validate_release_session_id(self) -> "ApplicationLifecycleAction":
@@ -136,6 +142,9 @@ def build_application_lifecycle_ag_ui_stream(
                 application_name=application.app_name,
                 initialization_thread_id=str(payload.get("threadId") or "") or None,
                 active_run_id=str(payload.get("runId") or "") or None,
+                inherited_artifacts=completed_development_artifacts(
+                    request.inherited_development_artifacts
+                ),
             )
             message = "应用生命周期已创建。"
         elif request.action == "get":
@@ -174,7 +183,7 @@ def build_application_lifecycle_ag_ui_stream(
             )
             state = load_application_lifecycle(request.workspace_root)
             if state is None:
-                raise ValueError("application-lifecycle.json 不存在。")
+                raise ApplicationLifecycleMissingError("application-lifecycle.json 不存在。")
             message = "Workspace Attach 已完成。"
         elif request.action == "release_session_pending":
             released = await asyncio.to_thread(
@@ -184,7 +193,7 @@ def build_application_lifecycle_ag_ui_stream(
             )
             state = load_application_lifecycle(request.workspace_root)
             if state is None:
-                raise ValueError("application-lifecycle.json 不存在。")
+                raise ApplicationLifecycleMissingError("application-lifecycle.json 不存在。")
             message = "已收口当前 Session 拥有的 Pending Build DAG。"
         data = {
             "action": request.action,

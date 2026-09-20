@@ -1,0 +1,125 @@
+.@{class-prefix}-released-version-panel {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--wb-surface);
+}
+
+// 最左侧窄栏：纯图标，文案只在悬停时以 title 提示，因此按图标宽度收紧。
+.@{class-prefix}-released-version-rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  width: 46px;
+  padding: 10px 0;
+  border-right: 1px solid var(--wb-border);
+  background: var(--wb-surface-subtle);
+
+  .@{class-prefix}-session-rail-primary,
+  .@{class-prefix}-session-rail-secondary {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+
+  button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--wb-text-secondary);
+    cursor: pointer;
+    font-size: 15px;
+
+    &:hover {
+      background: var(--wb-surface-hover);
+    }
+
+    &.@{class-prefix}-active {
+      background: var(--wb-accent-soft);
+      color: var(--wb-accent);
+    }
+  }
+
+  .@{class-prefix}-session-rail-divider {
+    width: 22px;
+    height: 1px;
+    margin: 8px auto;
+    background: var(--wb-border);
+  }
+
+  .@{class-prefix}-session-user {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 0;
+  }
+
+  .@{class-prefix}-session-user-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--wb-accent);
+    color: #fff;
+    font-size: 12px;
+  }
+}
+
+// SVG 资源图标：以 currentColor 遮罩，跟随按钮配色与悬停态。
+.@{class-prefix}-released-version-rail-asset-icon {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  background: currentColor;
+  mask: var(--released-version-rail-icon-source) center / contain no-repeat;
+}
+
+// 抽屉占位：固定宽度贴在窄栏右侧，不挤压内容区宽度语义。
+.@{class-prefix}-released-version-drawer {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: 260px;
+  border-right: 1px solid var(--wb-border);
+  background: var(--wb-surface);
+
+  .@{class-prefix}-released-version-drawer-head {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--wb-border);
+  }
+
+  .@{class-prefix}-released-version-drawer-body {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+  }
+}
+
+.@{class-prefix}-released-version-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.@{class-prefix}-released-version-panel-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}

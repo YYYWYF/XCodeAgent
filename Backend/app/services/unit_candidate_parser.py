@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any, NoReturn
 
 from app.services.planning_issues import ValidationIssue
+from app.utils.model_output import extract_json_root_object_with_repair
 
 
 class _DuplicateJsonKey(ValueError):
@@ -110,18 +111,25 @@ def parse_raw_unit_candidate(
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as exc:
-        raise RawUnitCandidateParseError(
-            [
-                _generation_issue(
-                    "RAW_CANDIDATE_JSON_MALFORMED",
-                    "Unit Candidate 原始响应不是完整且合法的 JSON。",
-                    unit_id=unit_id,
-                    line=exc.lineno,
-                    column=exc.colno,
-                    position=exc.pos,
-                )
-            ]
-        ) from exc
+        # 严格解析失败时，先尝试一次受控语法修复（json_repair），处理模型在
+        # JSON 字符串值内未转义双引号等常见语法错误（如 description 含
+        # "hello world" 未转义）。修复成功则继续走后续结构校验；修复失败
+        # 再报原始语法错误，保持 fail-closed 语义。
+        repaired = extract_json_root_object_with_repair(raw_text)
+        if repaired is None:
+            raise RawUnitCandidateParseError(
+                [
+                    _generation_issue(
+                        "RAW_CANDIDATE_JSON_MALFORMED",
+                        "Unit Candidate 原始响应不是完整且合法的 JSON。",
+                        unit_id=unit_id,
+                        line=exc.lineno,
+                        column=exc.colno,
+                        position=exc.pos,
+                    )
+                ]
+            ) from exc
+        document = repaired
     except _DuplicateJsonKey as exc:
         raise RawUnitCandidateParseError(
             [

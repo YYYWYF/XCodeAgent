@@ -1,0 +1,48 @@
+.@{class-prefix}-acceptance-commit-dock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--wb-surface, #fff);
+  border: 1px solid var(--wb-border, #eef0f3);
+
+  &.saved {
+    background: rgba(22, 163, 74, 0.06);
+    border-color: rgba(22, 163, 74, 0.2);
+  }
+
+  &.warning {
+    background: rgba(250, 140, 22, 0.08);
+    border-color: rgba(250, 140, 22, 0.28);
+  }
+}
+
+.@{class-prefix}-acceptance-commit-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  color: var(--wb-accent, #6b3cf0);
+
+  .@{class-prefix}-acceptance-commit-dock.saved & {
+    color: #16a34a;
+  }
+
+  .@{class-prefix}-acceptance-commit-dock.warning & {
+    color: var(--wb-warning, #fa8c16);
+  }
+}
+
+.@{class-prefix}-acceptance-commit-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+
+  // 提交信息可能较长（含文件数），允许换行而不是撑破卡片。
+  > .ant-typography {
+    font-size: 13px;
+    word-break: break-word;
+  }
+}

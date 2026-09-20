@@ -13,6 +13,7 @@ import type {
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../../../typings'
+import { useUncommittedChanges } from '../../../../context'
 import { cx } from '../../../../utils'
 import './VersionCommitReminder.less'
 
@@ -38,6 +39,9 @@ export default function VersionCommitReminder({
     () => Array.from(new Set(codeChanges.files.map((file) => file.path))),
     [codeChanges.files]
   )
+  // 常驻快照：提交成功后回填，让顶部角标立刻归零（见 useMilestoneCommit 的说明）。
+  const { apply: applyUncommittedChanges, refresh: refreshUncommittedChanges } =
+    useUncommittedChanges()
   const [snapshot, setSnapshot] = useState<VersionControlSnapshot>()
   const [commitResult, setCommitResult] = useState<VersionControlCommitResult>()
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
@@ -131,6 +135,10 @@ export default function VersionCommitReminder({
       })
       setCommitResult(result)
       setSnapshot(result.snapshot)
+      // 先采纳提交结果让角标立刻归零，再整读一次校准：提交返回的快照只覆盖本次
+      // 请求的文件，直接留在共享 store 里会让后续消费者看到不完整的工作区视图。
+      applyUncommittedChanges(result.snapshot)
+      void refreshUncommittedChanges()
       setModalVisible(false)
       message.success(`本次修改已提交：${result.commitSha.slice(0, 8)}`)
     } catch (error) {

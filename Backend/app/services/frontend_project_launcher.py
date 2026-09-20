@@ -695,14 +695,27 @@ def _terminate_frontend_process(
             cleanup["forced"] = True
             _force_kill_pid(pid)
             process.wait(timeout=FRONTEND_STOP_TIMEOUT_SECONDS)
-        elif process.poll() is None:
-            process.terminate()
+        elif process.poll() is None and pid is not None:
+            # POSIX 同样必须整树终止：包装链里的开发服务器是子进程，
+            # 只 terminate Popen 会让它变成孤儿并继续重建受管目录。
+            tree_exited, forced = _terminate_process_tree(pid)
+            cleanup["forced"] = forced
+            # 先回收 Popen，再判定结果：未回收的僵尸会让存活检查误判为仍在运行。
             try:
                 process.wait(timeout=FRONTEND_STOP_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired:
                 cleanup["forced"] = True
                 process.kill()
                 process.wait(timeout=FRONTEND_STOP_TIMEOUT_SECONDS)
+            cleanup["terminated"] = process.poll() is not None and not _running_pids(
+                _process_tree_pids(pid)
+            )
+            cleanup["success"] = cleanup["terminated"] and tree_exited
+            cleanup["finished_at"] = datetime.now(UTC).isoformat()
+            if cleanup["success"]:
+                _unregister_frontend_process(workspace, process, runtime_subdir=runtime_subdir)
+                _remove_pid_file(pid_file, cleanup, expected_pid=pid)
+            return cleanup
         cleanup["terminated"] = process.poll() is not None
         cleanup["success"] = cleanup["terminated"]
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -715,22 +728,124 @@ def _terminate_frontend_process(
 
 
 def _terminate_frontend_pid(pid: int, cleanup: dict[str, Any]) -> None:
-    """先温和停止前端启动进程，超时后再强制结束。"""
+    """先温和停止前端启动进程及其全部后代，超时后再强制结束。"""
 
     try:
-        os.kill(pid, signal.SIGTERM)
-        if _wait_for_pid_exit(pid, FRONTEND_STOP_TIMEOUT_SECONDS):
-            cleanup["terminated"] = True
-            cleanup["success"] = True
-            return
-        cleanup["forced"] = True
-        _force_kill_pid(pid)
-        cleanup["terminated"] = _wait_for_pid_exit(pid, FRONTEND_STOP_TIMEOUT_SECONDS)
-        cleanup["success"] = cleanup["terminated"]
-        if not cleanup["success"]:
+        success, forced = _terminate_process_tree(pid)
+        cleanup["forced"] = forced
+        cleanup["terminated"] = success
+        cleanup["success"] = success
+        if not success:
             cleanup["error"] = "强制结束前端预览进程后仍无法确认进程退出。"
     except OSError as exc:
         cleanup["error"] = str(exc)
+
+
+def _process_tree_pids(pid: int) -> list[int]:
+    """展开指定进程及其全部后代，父进程排在子进程之前。
+
+    预览前端由包管理器包装启动（`pnpm run dev` 实际是 外层 pnpm → 内层 pnpm → vite
+    三层），只终止记录在案的 PID 会把真正的开发服务器留成孤儿——它继续运行并重建
+    `frontend/.vite/deps`，让下一次 Bootstrap 误判成"已存在受管产物"而拒绝生成模板。
+    POSIX 没有 `taskkill /T` 的等价物，必须自己展开进程树。
+
+    父进程退出后子进程会被 reparent 到 1，树就再也找不回来了，因此调用方必须在
+    发送任何终止信号之前完成展开。
+    """
+
+    try:
+        completed = subprocess.run(
+            ["ps", "-eo", "pid=,ppid="],
+            capture_output=True,
+            timeout=FRONTEND_STOP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return [pid]
+
+    children: dict[int, list[int]] = {}
+    for line in subprocess_output_text(completed.stdout).splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        try:
+            child_pid, parent_pid = int(fields[0]), int(fields[1])
+        except ValueError:
+            continue
+        children.setdefault(parent_pid, []).append(child_pid)
+
+    ordered = [pid]
+    cursor = 0
+    while cursor < len(ordered):
+        ordered.extend(children.get(ordered[cursor], []))
+        cursor += 1
+    return ordered
+
+
+def _terminate_process_tree(pid: int) -> tuple[bool, bool]:
+    """终止指定进程及其全部后代，返回 (是否确认全部退出, 是否动用了强制终止)。"""
+
+    targets = _process_tree_pids(pid)
+    for target in targets:
+        try:
+            os.kill(target, signal.SIGTERM)
+        except OSError:
+            continue
+    if _wait_for_pids_exit(targets, FRONTEND_STOP_TIMEOUT_SECONDS):
+        return True, False
+    for target in targets:
+        if not _pid_is_running(target):
+            continue
+        try:
+            os.kill(target, signal.SIGKILL)
+        except OSError:
+            continue
+    return _wait_for_pids_exit(targets, FRONTEND_STOP_TIMEOUT_SECONDS), True
+
+
+def _wait_for_pids_exit(pids: list[int], timeout_seconds: float) -> bool:
+    """在有限时间内轮询一组 PID 是否全部退出。"""
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not _running_pids(pids):
+            return True
+        time.sleep(FRONTEND_STOP_POLL_INTERVAL_SECONDS)
+    return not _running_pids(pids)
+
+
+def _running_pids(pids: list[int]) -> set[int]:
+    """返回其中仍真实在运行的 PID。
+
+    不能直接用 `os.kill(pid, 0)`：它对**僵尸进程**同样成功（进程已退出但尚未被父进程
+    回收），等待循环会因此永远超时而误报"无法确认进程退出"。这里按进程状态排除 Z。
+    """
+
+    if not pids:
+        return set()
+    try:
+        completed = subprocess.run(
+            ["ps", "-o", "pid=,stat=", "-p", ",".join(str(pid) for pid in pids)],
+            capture_output=True,
+            timeout=FRONTEND_STOP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # 状态查询不可用时退回零信号检查，宁可保守也不要漏判存活。
+        return {pid for pid in pids if _pid_is_running(pid)}
+
+    running: set[int] = set()
+    for line in subprocess_output_text(completed.stdout).splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        try:
+            pid = int(fields[0])
+        except ValueError:
+            continue
+        if not fields[1].upper().startswith("Z"):
+            running.add(pid)
+    return running
 
 
 def _force_kill_pid(pid: int) -> None:

@@ -14,25 +14,39 @@ class BootstrapGitError(WorkspaceBootstrapError):
     code = "WORKSPACE_BOOTSTRAP_GIT_FAILED"
 
 
+# .xcodeagent 下的运行时产物目录，不应进入版本控制。
+_RUNTIME_ARTIFACT_DIRS = ("runtime", "cache", "checkpoints")
+
+_GITIGNORE_CONTENT = "\n".join(
+    f".xcodeagent/{name}/"
+    for name in _RUNTIME_ARTIFACT_DIRS
+) + "\n"
+
+
 class BootstrapGitManager:
-    """只为新工作区创建不含 `.xcodeagent` 的模板 baseline。"""
+    """为新工作区创建模板 baseline（含 .xcodeagent 规划产物）。"""
 
     def initialize_baseline(self, workspace: str | Path) -> str:
-        """初始化独立仓库、固定本地身份并提交 frontend/backend。"""
+        """初始化独立仓库、固定本地身份并提交 frontend/backend/.xcodeagent 规划产物。"""
 
         root = Path(workspace).expanduser().resolve()
         self._run(root, ["git", "init"])
         self._run(root, ["git", "config", "--local", "user.name", "XcodeAgent"])
         self._run(root, ["git", "config", "--local", "user.email", "xcodeagent@local"])
-        exclude = root / ".git" / "info" / "exclude"
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        exclude.write_text(".xcodeagent/\n", encoding="utf-8")
-        self._run(root, ["git", "add", "--", "frontend", "backend"])
-        self._run(root, ["git", "commit", "-m", "chore: initialize workspace from template"])
+        # 排除运行时产物，避免日志、缓存和 checkpoint 污染后续提交检查。
+        gitignore = root / ".gitignore"
+        if not gitignore.exists():
+            gitignore.write_text(_GITIGNORE_CONTENT, encoding="utf-8")
+        # 提交 frontend/backend 和 .xcodeagent 规划产物（运行时目录已被 gitignore 排除）。
+        add_paths = ["frontend", "backend", ".gitignore"]
+        if (root / ".xcodeagent").is_dir():
+            add_paths.append(".xcodeagent")
+        self._run(root, ["git", "add", "--", *add_paths])
+        self._run(root, ["git", "commit", "-m", "chore: 模板初始化"])
         return self._run(root, ["git", "rev-parse", "HEAD"]).strip()
 
     def verify_baseline(self, workspace: str | Path) -> str:
-        """确认 baseline 已存在、工作树干净且未追踪平台内部状态。"""
+        """确认 baseline 已存在且工作树干净。"""
 
         root = Path(workspace).expanduser().resolve()
         head = self._run(root, ["git", "rev-parse", "--verify", "HEAD"]).strip()
@@ -40,8 +54,6 @@ class BootstrapGitManager:
             raise BootstrapGitError("Git baseline 缺少 HEAD 提交。")
         if self._run(root, ["git", "status", "--porcelain"]).strip():
             raise BootstrapGitError("Git baseline 提交后工作树必须保持干净。")
-        if self._run(root, ["git", "ls-files", "--", ".xcodeagent"]).strip():
-            raise BootstrapGitError("Git baseline 不得追踪 .xcodeagent 内部状态。")
         return head
 
     def _run(self, workspace: Path, arguments: list[str]) -> str:

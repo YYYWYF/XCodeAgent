@@ -77,6 +77,10 @@ class DevelopmentArtifacts(DevelopmentArtifactModel):
     entities: dict[str, EntityDevelopmentProgress] = Field(default_factory=dict)
     endpoints: dict[str, dict[str, DevelopmentArtifactProgress]] = Field(default_factory=dict)
     catalog_error: str | None = Field(default="开发产物目录尚未就绪。", alias="catalogError")
+    # 本次迭代构建范围之外的产物键（见 development_artifact_key）。
+    # 迭代是增量的：未变更的产物不会被重新开发，也就拿不到本轮的完成记录，
+    # 但它们并不需要开发，因此不参与测试门禁统计，否则门禁永远无法满足。
+    out_of_scope: list[str] = Field(default_factory=list, alias="outOfScope")
 
 
 class TestEntryGate(DevelopmentArtifactModel):

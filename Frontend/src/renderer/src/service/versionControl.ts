@@ -4,7 +4,7 @@ import type { Message } from '@ag-ui/core'
 import type { VersionControlCommitResult, VersionControlSnapshot } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 
-type VersionControlAction = 'inspect' | 'commit'
+type VersionControlAction = 'inspect' | 'inspect_all' | 'commit'
 
 type VersionControlAgUiPayload = {
   schemaVersion: 1
@@ -73,6 +73,8 @@ function isVersionControlSnapshot(value: unknown): value is VersionControlSnapsh
     Array.isArray(snapshot.files) &&
     Array.isArray(snapshot.requestedPaths) &&
     Array.isArray(snapshot.eligiblePaths) &&
+    Array.isArray(snapshot.codePaths) &&
+    typeof snapshot.headMessage === 'string' &&
     Array.isArray(snapshot.unavailablePaths)
   )
 }
@@ -119,6 +121,20 @@ export async function inspectVersionControl(input: {
   const response = await runVersionControl(
     { action: 'inspect', ...input },
     '重新检查本次快速修改的 Git 状态。'
+  )
+  if (!isVersionControlSnapshot(response.snapshot)) {
+    throw new Error('版本控制接口没有返回完整的 Git 状态。')
+  }
+  return response.snapshot
+}
+
+/** 读取工作区全部 Git 变更（里程碑提醒用，不限定文件范围）。 */
+export async function inspectAllVersionControl(
+  workspaceRoot: string
+): Promise<VersionControlSnapshot> {
+  const response = await runVersionControl(
+    { action: 'inspect_all', workspaceRoot },
+    '读取工作区全部 Git 状态。'
   )
   if (!isVersionControlSnapshot(response.snapshot)) {
     throw new Error('版本控制接口没有返回完整的 Git 状态。')

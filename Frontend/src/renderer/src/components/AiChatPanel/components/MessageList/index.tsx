@@ -1,13 +1,15 @@
 import {
   ArrowDownOutlined,
+  ArrowUpOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  ExclamationCircleOutlined,
   LoadingOutlined,
   RobotOutlined,
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import { Button, Tag, Typography } from 'antd'
+import { Button, Input, Tag, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWorkbenchPhase } from '../../../../context'
@@ -58,6 +60,7 @@ import type { ChatSessionDevelopmentContinuation } from '../../../../service/cha
 import { isConversationWorkflow } from '../../conversationMode'
 import {
   isEntityDesignWorkflow,
+  shouldShowIncompleteChangesHint,
   workflowCodeChanges,
   workflowCodeChangesBeforeConfirmation,
   workflowFinalResultPresentation,
@@ -171,6 +174,67 @@ function PhasePendingCard({
   )
 }
 
+/** 新迭代需求输入卡片：产品 Agent 引导用户描述本次迭代要做的变更。 */
+function IterationRequestCard({
+  agentKey,
+  onSubmit
+}: {
+  agentKey: WorkbenchPhase
+  onSubmit: (request: string) => Promise<void>
+}): ReactElement {
+  const { TextArea } = Input
+  const [value, setValue] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const canSubmit = value.trim().length > 0 && !submitting
+
+  const handleSubmit = useCallback(async () => {
+    const trimmed = value.trim()
+    if (!trimmed || submitting) return
+    setSubmitting(true)
+    try {
+      await onSubmit(trimmed)
+    } finally {
+      setSubmitting(false)
+    }
+  }, [value, submitting, onSubmit])
+
+  return (
+    <article className={cx('ai-message', 'assistant')}>
+      <div className={cx('ai-message-content')}>
+        <MessageAgentHeader agentKey={agentKey} />
+        <div className={cx('iteration-request-card-body')}>
+          <Text strong>请描述本次迭代的需求</Text>
+          <Text type="secondary">
+            描述本次迭代要做的变更，产品 Agent 会基于上一迭代的上下文开始需求分析。
+          </Text>
+          <div className={cx('iteration-request-input-wrap')}>
+            <TextArea
+              autoSize={{ minRows: 2, maxRows: 4 }}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault()
+                  if (canSubmit) void handleSubmit()
+                }
+              }}
+              placeholder="描述本次迭代要做的变更，如「新增用户登录功能」「优化问卷提交流程」。Enter 发送，Shift+Enter 换行。"
+              value={value}
+            />
+            <Button
+              className={cx('iteration-request-send-btn')}
+              disabled={!canSubmit}
+              icon={submitting ? <LoadingOutlined /> : <ArrowUpOutlined />}
+              onClick={() => void handleSubmit()}
+              shape="circle"
+              type="primary"
+            />
+          </div>
+        </div>
+      </div>
+    </article>
+  )
+}
+
 /** 展示来源会话中的正式二次修改交接回执，并允许用户打开对应阶段会话。 */
 function RevisionHandoffCard({
   handoff,
@@ -266,6 +330,8 @@ type MessageListProps = {
   /** 设计阶段：规划 workflow 确认卡始终可提交（由 planningSubmitRef 驱动），
    *  不走开发 execution 的 workflowInteractionAvailability 判定。 */
   designPhasePlanning?: boolean
+  /** 当前是迭代（已有历史版本）：模板沿用已有工程，未重新拉取。 */
+  reusedExistingTemplate?: boolean
   /** UI 设计稿确认：当前选中页 id（与右侧预览面板联动）。 */
   uiDesignActivePageId?: string
   /** UI 设计稿确认：选中页变化时通知外部（联动右侧预览）。 */
@@ -315,8 +381,12 @@ type MessageListProps = {
   onRetryError?: () => void
   /** 模板生成失败时，只重试模板下载与初始化阶段。 */
   onRetryTemplateGeneration?: () => void
+  /** 新迭代发起后用户提交迭代需求，启动 planning workflow。 */
+  onStartIterationPlanning?: (request: string) => Promise<void>
   revertingCodeChangeIds: ReadonlySet<string>
   workspaceRoot?: string
+  /** 模板就绪卡片提交操作是否被禁用（Agent 运行中等）。 */
+  commitDisabled?: boolean
 }
 
 /** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
@@ -329,6 +399,7 @@ export default function MessageList({
   entityDesignSession = false,
   emptyContent,
   designPhasePlanning = false,
+  reusedExistingTemplate = false,
   error,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
@@ -352,9 +423,11 @@ export default function MessageList({
   onRevertCodeChanges,
   onRetryError,
   onRetryTemplateGeneration,
+  onStartIterationPlanning,
   revertingCodeChangeIds,
   onSubmitClarification,
-  workspaceRoot
+  workspaceRoot,
+  commitDisabled = false
 }: MessageListProps): ReactElement {
   const planningWorkflow = planningState?.workflow
   const currentPlanningMessageIndex = findCurrentPlanningMessageIndex(messages, planningWorkflow)
@@ -376,7 +449,7 @@ export default function MessageList({
     planningSyncError,
     syncErrorHostMessageIndex
   )
-  const { phase: currentPhase } = useWorkbenchPhase()
+  const { phase: currentPhase, locked: phaseLocked } = useWorkbenchPhase()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
   const followLatestContentRef = useRef(true)
@@ -405,23 +478,27 @@ export default function MessageList({
   // 外部错误属于新的系统提示；只有它已经被当前错误消息承载时才跳过独立追加，避免重复显示。
   const showStandaloneError = Boolean(
     !templatePreparationFailed &&
-    !templateGenerationOrphaned &&
-    visibleError &&
-    visibleError !== latestAssistantMessageError &&
-    !planningMessageCanHostSyncError &&
-    (currentPlanningMessageIndex < 0 || visibleError !== canonicalPlanningFailure)
+      !templateGenerationOrphaned &&
+      visibleError &&
+      visibleError !== latestAssistantMessageError &&
+      !planningMessageCanHostSyncError &&
+      (currentPlanningMessageIndex < 0 || visibleError !== canonicalPlanningFailure)
   )
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
   const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
   const pendingPhaseDetail = phasePendingDetail(currentPhase)
+
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
+  // 失败态（首次 Bootstrap 失败 / 模板增量更新失败）不再依赖阶段与资格门禁：它会阻断整个
+  // 应用，恢复入口若被门禁挡掉，用户就只能靠重建工作区脱困。只读回看（已发布/非活跃版本）
+  // 仍不显示，避免把活跃迭代的失败卡带进历史版本的视图。
   const templatePreparationVisible =
-    designPhasePlanning &&
-    ((applicationTemplatePreparationEligible &&
-      (generatingTemplate || isTemplatePreparing(applicationLifecycle))) ||
-      templateReconcileRetryable ||
-      templatePreparation?.status === 'RUNNING')
+    (templatePreparationFailed && !phaseLocked) ||
+    (designPhasePlanning &&
+      ((applicationTemplatePreparationEligible &&
+        (generatingTemplate || isTemplatePreparing(applicationLifecycle))) ||
+        templatePreparation?.status === 'RUNNING'))
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -514,7 +591,18 @@ export default function MessageList({
       >
         <div className={cx('ai-message-column')} ref={messageColumnRef}>
           {messages.length === 0 && !visibleError && !templatePreparationVisible ? (
-            designPhasePlanning ? (
+            // 需求输入卡只属于**设计阶段**：它让用户描述本次迭代要做的变更，是产品 Agent
+            // 的职责。计划阶段做的是技术规划，在需求收集之后，不该出现这张卡
+            // （原判据用 designPhasePlanning，它同时覆盖设计与计划两个阶段）。
+            currentPhase === 'product' &&
+            applicationLifecycle?.initialization?.stage === 'collecting_requirement' ? (
+              // 新迭代 collecting_requirement 阶段（pending 或 awaiting_user）：显示需求输入卡片，
+              // 用户提交后启动 planning workflow。
+              <IterationRequestCard
+                agentKey={currentPhase}
+                onSubmit={(request) => onStartIterationPlanning?.(request) ?? Promise.resolve()}
+              />
+            ) : designPhasePlanning ? (
               // 设计阶段空态也渲染为消息流里的同一张边框加载卡，不再使用全屏 Spin。
               <article className={cx('ai-message', 'assistant')}>
                 <div className={cx('ai-message-content')}>
@@ -930,6 +1018,20 @@ export default function MessageList({
                             </div>
                           </div>
                         )}
+                        {/* 中等提示：失败但留下了代码变更时引导审阅。
+                            主操作是审阅而不是提交——半成品不该被包装成可提交版本。 */}
+                        {!messageLoading &&
+                        visibleCodeChanges &&
+                        shouldShowIncompleteChangesHint({
+                          failed: finalResult.failed,
+                          hasCodeChanges: Boolean(visibleCodeChanges),
+                          coveredByVersionReminder: message.id === latestVersionReminderMessageId
+                        }) ? (
+                          <div className={cx('incomplete-changes-hint')}>
+                            <ExclamationCircleOutlined />
+                            <Text type="secondary">存在未完成修改，请审阅、继续修复或撤销</Text>
+                          </div>
+                        ) : null}
                         {effectiveAssistantContent && (
                           <div
                             className={cx(
@@ -1083,6 +1185,9 @@ export default function MessageList({
                   onRetry={onRetryTemplateGeneration}
                   orphaned={templateGenerationOrphaned}
                   retrying={generatingTemplate}
+                  reusedExistingTemplate={reusedExistingTemplate}
+                  workspaceRoot={workspaceRoot}
+                  commitDisabled={commitDisabled}
                 />
               </div>
             </article>

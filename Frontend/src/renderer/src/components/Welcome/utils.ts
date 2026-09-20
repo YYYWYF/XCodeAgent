@@ -128,10 +128,7 @@ export function buildDatasourceConfig(
 /** 判断外部数据库连接方案是否填写了任意连接字段。 */
 function _hasConnectionFields(value: Record<string, unknown>, keys: string[]): boolean {
   return keys.some(
-    (key) =>
-      value[key] !== undefined &&
-      value[key] !== null &&
-      String(value[key]).trim() !== ''
+    (key) => value[key] !== undefined && value[key] !== null && String(value[key]).trim() !== ''
   )
 }
 
@@ -168,6 +165,8 @@ export function buildApplicationSchema(values: ApplicationDraft): ApplicationSch
     appName: values.appName.trim(),
     appIcon: values.appIcon.trim(),
     senario: values.senario.trim(),
+    versionNo: values.versionNo.trim(),
+    repoUrl: values.repoUrl.trim(),
     terminal: values.terminal,
     layout: values.layout,
     theme: values.theme,

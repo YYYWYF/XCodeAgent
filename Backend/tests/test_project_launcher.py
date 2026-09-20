@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -27,11 +28,16 @@ from app.services.backend_process_registry import (
 )
 from app.services.frontend_project_launcher import (
     _dev_server_log_is_ready,
+    _pid_is_running,
     _preview_is_ready,
+    _process_tree_pids,
+    _running_pids,
     _terminate_frontend_process,
+    _terminate_process_tree,
     _wait_until_ready,
 )
 from app.services.project_launcher import (
+    _application_has_no_backend_business,
     find_backend_project_root,
     launch_backend_project,
     launch_frontend_project,
@@ -54,6 +60,87 @@ def _write_manifest_jar(path: Path, main_class: str | None = None) -> None:
         manifest += f"Main-Class: {main_class}\n"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("META-INF/MANIFEST.MF", manifest)
+
+
+class NoBackendBusinessDetectionTests(unittest.TestCase):
+    """纯前端应用不该被拉起后端；计划文件缺失不等于"需要后端"。"""
+
+    def _workspace(self, directory: str) -> Path:
+        root = Path(directory)
+        (root / ".xcodeagent" / "plans").mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _write_plan(self, root: Path, *, entities: object, api_contracts: object) -> None:
+        (root / ".xcodeagent" / "plans" / "technical-plan.json").write_text(
+            json.dumps({"entities": entities, "api_contracts": api_contracts}), encoding="utf-8"
+        )
+
+    def _write_lifecycle(self, root: Path, *, entities: dict, endpoints: dict) -> None:
+        (root / ".xcodeagent" / "application-lifecycle.json").write_text(
+            json.dumps({"developmentArtifacts": {"entities": entities, "endpoints": endpoints}}),
+            encoding="utf-8",
+        )
+
+    def test_plan_with_no_entities_or_contracts_is_pure_frontend(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            self._write_plan(root, entities=[], api_contracts=[])
+            self.assertTrue(_application_has_no_backend_business(root))
+
+    def test_plan_with_entities_needs_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            self._write_plan(root, entities=[{"id": "order"}], api_contracts=[])
+            self.assertFalse(_application_has_no_backend_business(root))
+
+    def test_plan_with_api_contracts_needs_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            self._write_plan(root, entities=[], api_contracts=[{"id": "orders"}])
+            self.assertFalse(_application_has_no_backend_business(root))
+
+    def test_missing_plan_falls_back_to_lifecycle(self) -> None:
+        """发起新迭代会清空 plans/，此时"计划文件不存在"只说明还没规划，不等于需要后端。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            self._write_lifecycle(root, entities={}, endpoints={})
+            self.assertFalse((root / ".xcodeagent" / "plans" / "technical-plan.json").exists())
+            self.assertTrue(
+                _application_has_no_backend_business(root),
+                "计划文件缺失时误判为需要后端：纯前端应用会白拉一个后端",
+            )
+
+    def test_missing_plan_with_lifecycle_entities_needs_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            self._write_lifecycle(
+                root, entities={"order": {"initialDevelopmentStatus": "completed"}}, endpoints={}
+            )
+            self.assertFalse(_application_has_no_backend_business(root))
+
+    def test_unreadable_plan_falls_back_to_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            (root / ".xcodeagent" / "plans" / "technical-plan.json").write_text("{", encoding="utf-8")
+            self._write_lifecycle(root, entities={}, endpoints={})
+            self.assertTrue(_application_has_no_backend_business(root))
+
+    def test_both_sources_unavailable_is_conservative(self) -> None:
+        """两处状态都读不到时不猜：保守认为需要后端，避免漏起真正需要的服务。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            self.assertFalse(_application_has_no_backend_business(root))
+
+
+def _zombie_state(pid: int) -> bool:
+    """判断指定 PID 是否已退出但尚未被父进程回收（僵尸）。"""
+
+    completed = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
+    )
+    return completed.stdout.strip().upper().startswith("Z")
 
 
 class ProjectLauncherTests(unittest.TestCase):
@@ -454,6 +541,64 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertTrue(cleanup["forced"])
         force_kill.assert_called_once_with(12345)
         process.terminate.assert_not_called()
+
+    def test_posix_frontend_stop_terminates_wrapped_dev_server(self) -> None:
+        """POSIX 停止前端必须整树终止：开发服务器是包管理器包装链里的子进程。
+
+        `pnpm run dev` 实际是 外层 pnpm → 内层 pnpm → vite 三层；只终止记录在案的
+        PID 会把真正的开发服务器留成孤儿，它继续运行并重建 `frontend/.vite/deps`，
+        让下一次 Bootstrap 误判成"已存在受管产物"而拒绝生成模板。
+        """
+
+        if os.name == "nt":
+            self.skipTest("本用例验证 POSIX 进程树终止。")
+
+        # 复刻包装链：两层 shell 再挂一个长驻进程。
+        parent = subprocess.Popen(["sh", "-c", "sh -c 'sleep 60' & sleep 60"])
+        try:
+            time.sleep(0.5)
+            tree = _process_tree_pids(parent.pid)
+            self.assertGreaterEqual(
+                len(tree), 2, f"进程树未展开出后代，实际只找到 {tree}"
+            )
+            descendants = [pid for pid in tree if pid != parent.pid]
+            self.assertTrue(
+                all(_pid_is_running(pid) for pid in descendants),
+                "前置条件不成立：后代进程未全部存活",
+            )
+
+            success, _forced = _terminate_process_tree(parent.pid)
+            parent.wait(timeout=10)
+
+            self.assertTrue(success, "整树终止未确认成功")
+            self.assertEqual(
+                _running_pids(descendants),
+                set(),
+                "包装链里的后代进程仍存活：只终止了记录在案的 PID",
+            )
+        finally:
+            if parent.poll() is None:
+                parent.kill()
+                parent.wait(timeout=10)
+
+    def test_running_pids_excludes_zombies(self) -> None:
+        """僵尸进程不算运行，否则等待循环永远超时并误报"无法确认进程退出"。"""
+
+        if os.name == "nt":
+            self.skipTest("僵尸进程语义仅在 POSIX 下成立。")
+
+        parent = subprocess.Popen(["sh", "-c", "true"])
+        try:
+            # 不回收直接等待：子进程退出后成为僵尸，零信号检查仍返回存活。
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not _zombie_state(parent.pid):
+                time.sleep(0.05)
+            if not _zombie_state(parent.pid):
+                self.skipTest("未能构造出僵尸进程。")
+            self.assertTrue(_pid_is_running(parent.pid), "前置条件：零信号检查对僵尸返回存活")
+            self.assertEqual(_running_pids([parent.pid]), set())
+        finally:
+            parent.wait(timeout=10)
 
     def test_launch_backend_project_supports_uppercase_backend_directory(self) -> None:
         """验证大小写敏感文件系统上的 Backend Maven 工程可正常启动。"""

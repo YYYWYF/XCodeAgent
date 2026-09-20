@@ -55,6 +55,14 @@ from app.protocols.version_control import (
     build_version_control_ag_ui_stream,
     version_control_capabilities,
 )
+from app.protocols.version_publish import (
+    build_version_publish_ag_ui_stream,
+    version_publish_capabilities,
+)
+from app.protocols.iteration_service import (
+    build_iteration_service_ag_ui_stream,
+    iteration_service_capabilities,
+)
 from app.protocols.direct_modification import (
     build_conversation_ag_ui_stream,
     conversation_capabilities,
@@ -144,6 +152,8 @@ async def health() -> dict[str, object]:
             "endpoint_designs": endpoint_designs_capabilities(),
             "code_changes": code_changes_capabilities(),
             "version_control": version_control_capabilities(),
+            "version_publish": version_publish_capabilities(),
+            "iteration_service": iteration_service_capabilities(),
             "conversation": conversation_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
@@ -293,6 +303,34 @@ async def run_version_control(
 
     return StreamingResponse(
         build_version_control_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/version-publish/run")
+async def run_version_publish(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 流执行版本发布：提交、打 Tag、推送到远程仓库。"""
+
+    return StreamingResponse(
+        build_version_publish_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/iteration-service/run")
+async def run_iteration_service(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 流发起新迭代：清空规划产物，保留 AGENTS.md。"""
+
+    return StreamingResponse(
+        build_iteration_service_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

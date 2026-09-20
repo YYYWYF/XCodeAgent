@@ -354,7 +354,7 @@
 }
 
 .@{class-prefix}-ai-message-agent.@{class-prefix}-development .@{class-prefix}-ai-message-agent-avatar {
-  background: linear-gradient(135deg, #4dabf7, #1f7aeb);
+  background: linear-gradient(135deg, #a97aff, #6b3cf0);
 }
 
 .@{class-prefix}-ai-message-agent.@{class-prefix}-test .@{class-prefix}-ai-message-agent-avatar {
@@ -411,4 +411,43 @@
       width: fit-content;
     }
   }
+}
+
+/* 新迭代需求输入卡片 */
+.@{class-prefix}-iteration-request-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--wb-border, #d8e0ea);
+  border-radius: 12px;
+  background: var(--wb-surface, #f7f8fc);
+}
+
+.@{class-prefix}-iteration-request-input-wrap {
+  position: relative;
+
+  .ant-input {
+    padding-right: 48px;
+    border: 1px solid var(--wb-border, #d8e0ea);
+    border-radius: 8px;
+    background: var(--wb-canvas, #fff);
+  }
+}
+
+.@{class-prefix}-iteration-request-send-btn.ant-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 1;
+}
+
+// 中等提示：失败但有代码变更时的审阅引导。
+.@{class-prefix}-incomplete-changes-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
 }

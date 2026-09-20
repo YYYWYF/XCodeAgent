@@ -115,7 +115,7 @@ declare global {
           workspaceRoot: string
           workflowId: string
           editorMode: 'frontend' | 'backend'
-          workbenchPhase: 'product' | 'planning' | 'development' | 'test' | 'review' | 'acceptance'
+          workbenchPhase: 'product' | 'planning' | 'development' | 'test' | 'review' | 'acceptance' | 'release'
           entryKey?: string
           title?: string
           developmentTarget?:

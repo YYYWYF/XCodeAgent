@@ -7,8 +7,10 @@ from typing import Any, AsyncIterator
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.services.version_control import (
     CommitVersionControlRequest,
+    InspectAllVersionControlRequest,
     InspectVersionControlRequest,
     commit_version_control,
+    inspect_all_version_control,
     inspect_version_control,
 )
 
@@ -23,7 +25,7 @@ def version_control_capabilities() -> dict[str, Any]:
         "name": "version-control",
         "endpoint": "/version-control/run",
         "transport": "ag-ui-sse",
-        "actions": ["inspect", "commit"],
+        "actions": ["inspect", "inspect_all", "commit"],
         "customEventName": VERSION_CONTROL_EVENT_NAME,
         "stateSnapshotKey": "versionControl",
         "workflowIndependent": True,
@@ -46,13 +48,18 @@ def build_version_control_ag_ui_stream(
             snapshot = inspect_version_control(request)
             data = {"action": action, "snapshot": snapshot.model_dump(by_alias=True)}
             message = "已重新读取当前 Git 状态。"
+        elif action == "inspect_all":
+            request = InspectAllVersionControlRequest.model_validate(version_control_input)
+            snapshot = inspect_all_version_control(request)
+            data = {"action": action, "snapshot": snapshot.model_dump(by_alias=True)}
+            message = "已读取工作区全部 Git 状态。"
         elif action == "commit":
             request = CommitVersionControlRequest.model_validate(version_control_input)
             result = commit_version_control(request)
             data = result.model_dump(by_alias=True)
             message = f"已提交本次修改：{result.commit_sha[:8]}。"
         else:
-            raise ValueError("versionControl.action 必须是 inspect 或 commit。")
+            raise ValueError("versionControl.action 必须是 inspect、inspect_all 或 commit。")
         return AgUiActionResult(data=data, message=message)
 
     return build_ag_ui_action_stream(

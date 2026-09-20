@@ -14,6 +14,8 @@ export type WorkbenchPhaseContextValue = {
   switchPhase: (phase: WorkbenchPhase | null) => void
   agent: WorkbenchAgentIdentity
   canEdit: (objectType: EditableObjectType) => boolean
+  /** 已发布版本或非活跃版本：阶段切换与 Agent 调度锁定，只能回看。 */
+  locked: boolean
 }
 
 export const WorkbenchPhaseContext = createContext<WorkbenchPhaseContextValue | null>(null)

@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import ValidationError
 from app.services.preview_runtime_guard import maintenance_lock, require_no_maintenance
 
+from app.domain.development_artifacts import DevelopmentArtifacts
 from app.domain.application_lifecycle import (
     ApplicationIdentity,
     ApplicationInitialization,
@@ -50,6 +51,14 @@ class ApplicationLifecycleCorruptedError(ApplicationLifecyclePersistenceError):
 
 class ApplicationLifecycleConflictError(ApplicationLifecyclePersistenceError):
     """表示 revision、交互 ID 或状态转换发生冲突。"""
+
+
+class ApplicationLifecycleMissingError(ApplicationLifecyclePersistenceError):
+    """表示工作区尚未建立生命周期状态（文件不存在）。
+
+    单独成类是为了让客户端能区分"缺状态可补建"与"状态损坏/归属冲突"，
+    从而只在前者上做幂等补建，不掩盖真实故障。
+    """
 
 
 ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecycleStage]] = {
@@ -126,19 +135,61 @@ def application_lifecycle_path(workspace: str | Path) -> Path:
     return Path(workspace).expanduser().resolve() / APPLICATION_LIFECYCLE_RELATIVE_PATH
 
 
+def completed_development_artifacts(value: Any) -> DevelopmentArtifacts | None:
+    """从上一版本的产物进度中提取**已完成**的事实，供新迭代继承。
+
+    只保留 `completed`：发起新迭代保留已有工程代码，上一版本已开发的产物仍然存在，
+    因此"已开发"是事实、可以继承；而 `pending`/`in_progress` 描述的是"还要做什么"，
+    必须由新迭代按本轮计划重新推导，不能继承（否则会凭空标记未完成的工作为进行中）。
+
+    入参缺失或不可解析时返回 None：宁可不继承，也不写入错误的完成事实。
+    """
+
+    if not isinstance(value, dict):
+        return None
+    try:
+        source = DevelopmentArtifacts.model_validate(value)
+    except ValidationError:
+        return None
+
+    def completed(progress: Any) -> bool:
+        return getattr(progress, "initial_development_status", None) == "completed"
+
+    inherited = DevelopmentArtifacts(catalog_error=None)
+    inherited.pages = {key: item for key, item in source.pages.items() if completed(item)}
+    inherited.entities = {key: item for key, item in source.entities.items() if completed(item)}
+    inherited.endpoints = {
+        contract_id: {endpoint_id: item for endpoint_id, item in endpoints.items() if completed(item)}
+        for contract_id, endpoints in source.endpoints.items()
+    }
+    inherited.endpoints = {
+        contract_id: endpoints for contract_id, endpoints in inherited.endpoints.items() if endpoints
+    }
+    if not (inherited.pages or inherited.entities or inherited.endpoints):
+        return None
+    return inherited
+
+
 def create_application_lifecycle(
     *,
     application_id: str,
     application_name: str,
     initialization_thread_id: str | None = None,
     active_run_id: str | None = None,
+    inherited_artifacts: DevelopmentArtifacts | None = None,
 ) -> ApplicationLifecycle:
-    """创建处于收集需求阶段的首个生命周期快照。"""
+    """创建处于收集需求阶段的首个生命周期快照。
+
+    `inherited_artifacts` 供发起新迭代时继承上一版本**已完成**的产物进度使用：
+    新迭代保留已有工程代码，上一版本已开发的产物仍然存在，不应重新变回"未开发"，
+    否则"全部产物完成"的测试门禁在增量迭代里永远无法满足。
+    """
 
     return ApplicationLifecycle(
         application=ApplicationIdentity(id=application_id, name=application_name),
         updatedAt=utc_now(),
         revision=1,
+        developmentArtifacts=inherited_artifacts or DevelopmentArtifacts(),
         initialization=ApplicationInitialization(
             stage=ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
             status=ApplicationLifecycleStatus.PENDING,
@@ -235,6 +286,7 @@ def ensure_application_lifecycle(
     application_name: str,
     initialization_thread_id: str | None = None,
     active_run_id: str | None = None,
+    inherited_artifacts: DevelopmentArtifacts | None = None,
 ) -> ApplicationLifecycle:
     """读取现有权威状态，缺失时以 CAS 方式创建首版。"""
 
@@ -246,6 +298,7 @@ def ensure_application_lifecycle(
         application_name=application_name,
         initialization_thread_id=initialization_thread_id,
         active_run_id=active_run_id,
+        inherited_artifacts=inherited_artifacts,
     )
     return write_application_lifecycle(workspace, created, expected_revision=0)
 

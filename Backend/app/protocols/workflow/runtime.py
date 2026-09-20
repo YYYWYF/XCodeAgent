@@ -560,7 +560,7 @@ def build_workflow_ag_ui_stream(
                 return
             initial_state: dict[str, Any] = {
                 **checkpoint_values,
-                "request": request,
+                "request": _augment_request_with_iteration_context(request, workspace),
                 "workflow_action": workflow_inputs.get("workflow_action") or "",
                 "selected_skill_names": list(selected_skill_names),
                 "timeline": [],
@@ -1995,3 +1995,27 @@ def _workflow_observability(
             else "",
         }
     }
+
+
+def _augment_request_with_iteration_context(request: str, workspace: str | None) -> str:
+    """新迭代时把 .xcodeagent/AGENTS.md 的内容拼到用户需求前面，让大模型了解应用现状。"""
+
+    if not workspace:
+        return request
+    from pathlib import Path
+
+    agents_md = Path(workspace).expanduser() / ".xcodeagent" / "AGENTS.md"
+    if not agents_md.is_file():
+        return request
+    try:
+        context = agents_md.read_text(encoding="utf-8").strip()
+    except OSError:
+        return request
+    if not context:
+        return request
+    return (
+        f"以下是上一迭代的应用现状总结（来自 AGENTS.md），请基于此理解当前应用状态：\n\n"
+        f"{context}\n\n"
+        f"---\n\n"
+        f"本次迭代的新需求：\n{request}"
+    )

@@ -22,6 +22,71 @@ INITIAL_DEVELOPMENT_PHASES = frozenset({
     "test_phase_confirmation",
 })
 ACTIVE_STATUSES = frozenset({"running", "stopping", "awaiting_user"})
+_BUILD_PLAN_RELATIVE_PATH = Path(".xcodeagent/plans/build-task-plan.json")
+
+
+def development_artifact_key(target: DevelopmentArtifactTarget) -> str:
+    """生成产物的稳定标识，用于标记"本轮范围之外"。"""
+
+    if target.type == "page":
+        return f"page:{target.page_id}"
+    if target.type == "entity":
+        return f"entity:{target.entity_id}"
+    return f"endpoint:{target.api_contract_id}:{target.endpoint_id}"
+
+
+def _target_unit_id(target: DevelopmentArtifactTarget) -> str | None:
+    """映射产物到它在构建计划里的 Unit 标识；实体没有独立 Unit。"""
+
+    if target.type == "page":
+        return f"page:{target.page_id}"
+    if target.type == "endpoint":
+        return f"backend:endpoint:{target.api_contract_id}:{target.endpoint_id}"
+    return None
+
+
+def in_scope_unit_ids(workspace: str | Path) -> set[str] | None:
+    """读取构建计划里本次迭代**在范围内**的 Unit 标识；计划不可用时返回 None。
+
+    范围的唯一标记是 Unit 上的 `input_fingerprint`：它只对进入 `required_unit_ids`
+    的 Unit 写入（见 build_unit_compiler）。规划器据此把未变更的产物排除在本轮之外，
+    它们不会被重新开发，因此也不该参与测试门禁统计。
+
+    计划缺失或不可解析时返回 None，调用方应退回"全部产物都算"的保守口径。
+    """
+
+    plan_path = Path(workspace).expanduser().resolve() / _BUILD_PLAN_RELATIVE_PATH
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(plan, dict):
+        return None
+    units = plan.get("build_units")
+    if not isinstance(units, dict):
+        return None
+    return {
+        unit_id
+        for unit_id, unit in units.items()
+        if isinstance(unit, dict) and "input_fingerprint" in unit
+    }
+
+
+def out_of_scope_keys(
+    workspace: str | Path, targets: list[DevelopmentArtifactTarget]
+) -> list[str]:
+    """列出本次迭代范围之外的产物键；无法判定范围时返回空列表。"""
+
+    scope = in_scope_unit_ids(workspace)
+    if scope is None:
+        return []
+    keys: list[str] = []
+    for target in targets:
+        unit_id = _target_unit_id(target)
+        if unit_id is None or unit_id in scope:
+            continue
+        keys.append(development_artifact_key(target))
+    return keys
 
 
 class DevelopmentArtifactsIncompleteError(ValueError):
@@ -117,6 +182,9 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
             "catalog_error": f"开发产物目录不可用：{exc}",
         })})
     artifacts = DevelopmentArtifacts(catalogError=None)
+    # 迭代是增量的：未变更的产物被规划器排除在本轮构建之外，不会被重新开发，
+    # 也就拿不到本轮的完成记录。标记它们，让门禁只统计本轮真正要做的产物。
+    artifacts.out_of_scope = out_of_scope_keys(workspace, targets)
     for target in targets:
         if target.type == "entity":
             # 只认当前正式绑定的显式确认；选表、生成设计和等待确认都不算完成。
@@ -164,6 +232,15 @@ def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
         (DevelopmentArtifactTarget(type="entity", entityId=key), progress)
         for key, progress in artifacts.entities.items()
     ]
+    # 本轮构建范围之外的产物不参与门禁：它们不需要开发，只是还没有本轮的完成记录。
+    # 不排除的话，增量迭代会卡在"未变更的产物未完成"上，永远进不了测试阶段。
+    out_of_scope = set(artifacts.out_of_scope)
+    if out_of_scope:
+        records = [
+            (target, progress)
+            for target, progress in records
+            if development_artifact_key(target) not in out_of_scope
+        ]
     completed = sum(progress.initial_development_status == "completed" for _, progress in records)
     in_progress = sum(progress.initial_development_status == "in_progress" for _, progress in records)
     reason = artifacts.catalog_error
@@ -186,13 +263,14 @@ def refresh_development_artifacts(workspace: str | Path) -> ApplicationLifecycle
 
     from app.services.application_lifecycle import (
         _application_lifecycle_lock, application_lifecycle_path,
-        load_application_lifecycle, write_application_lifecycle,
+        ApplicationLifecycleMissingError, load_application_lifecycle,
+        write_application_lifecycle,
     )
 
     with _application_lifecycle_lock(application_lifecycle_path(workspace)):
         current = load_application_lifecycle(workspace)
         if current is None:
-            raise ValueError("应用生命周期尚未创建。")
+            raise ApplicationLifecycleMissingError("应用生命周期尚未创建。")
         updated = reconcile_development_artifacts(workspace, current)
         if updated.development_artifacts == current.development_artifacts:
             return current

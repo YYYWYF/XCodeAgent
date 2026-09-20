@@ -17,7 +17,29 @@ type ApplicationLifecyclePayload = {
     | 'release_session_pending'
   lifecycle?: ApplicationLifecycle
   sessionPendingReleased?: boolean
-  error?: { message?: string }
+  error?: { type?: string; message?: string }
+}
+
+/** 工作区尚未建立生命周期状态：后端以 ApplicationLifecycleMissingError 单独标识，可幂等补建。 */
+const MISSING_LIFECYCLE_ERROR_TYPE = 'ApplicationLifecycleMissingError'
+
+/** 携带后端错误类型的生命周期动作失败，供调用方按类型决定是否补建状态。 */
+class ApplicationLifecycleActionError extends Error {
+  readonly errorType: string | undefined
+
+  constructor(errorType: string | undefined, message: string) {
+    super(message)
+    this.name = 'ApplicationLifecycleActionError'
+    this.errorType = errorType
+  }
+}
+
+/** 判定失败是否只是"工作区还没有生命周期状态"，区别于损坏或归属冲突等真实故障。 */
+function isLifecycleMissingError(error: unknown): boolean {
+  return (
+    error instanceof ApplicationLifecycleActionError &&
+    error.errorType === MISSING_LIFECYCLE_ERROR_TYPE
+  )
 }
 
 const lifecycleReadRequests = new Map<string, Promise<ApplicationLifecycle>>()
@@ -48,9 +70,7 @@ function getApplicationLifecycleUrl(): string {
 }
 
 // 校验生命周期 AG-UI 动作的统一响应信封。
-function readApplicationLifecyclePayload(
-  value: unknown
-): ApplicationLifecyclePayload | undefined {
+function readApplicationLifecyclePayload(value: unknown): ApplicationLifecyclePayload | undefined {
   if (!value || typeof value !== 'object') return undefined
   const payload = value as Partial<ApplicationLifecyclePayload>
   if (
@@ -96,23 +116,30 @@ async function runApplicationLifecycleAction(
   payload = readApplicationLifecycleState(result.result) ?? payload
   if (!payload) throw new Error('生命周期接口没有返回有效的 AG-UI 状态。')
   if (payload.status === 'failed') {
-    throw new Error(payload.error?.message || '生命周期操作失败。')
+    throw new ApplicationLifecycleActionError(
+      payload.error?.type,
+      payload.error?.message || '生命周期操作失败。'
+    )
   }
   if (!payload.lifecycle) throw new Error('生命周期接口没有返回 lifecycle。')
   return payload.lifecycle
 }
 
 // 为新应用显式创建生命周期状态，不读取或推断旧数据。
+// inheritedArtifacts 仅在发起新迭代时传入：新迭代保留已有工程代码，上一版本已开发的
+// 产物仍然存在，服务端只继承其中的 completed 事实（pending/in_progress 由本轮重新推导）。
 export async function createApplicationLifecycle(
-  application: ApplicationConfig,
-  threadId: string
+  application: Pick<ApplicationConfig, 'workspaceRoot' | 'id' | 'appName'>,
+  threadId: string,
+  inheritedArtifacts?: ApplicationLifecycle['developmentArtifacts']
 ): Promise<ApplicationLifecycle> {
   if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
   return assertApplicationLifecycleOwnership(
     await runApplicationLifecycleAction(threadId, {
       action: 'create',
       workspaceRoot: application.workspaceRoot,
-      application: { id: application.id, appName: application.appName }
+      application: { id: application.id, appName: application.appName },
+      ...(inheritedArtifacts ? { inheritedDevelopmentArtifacts: inheritedArtifacts } : {})
     }),
     application.id,
     threadId
@@ -121,7 +148,8 @@ export async function createApplicationLifecycle(
 
 // 先接管可能中断的 Workspace，再读取权威生命周期，并合并 StrictMode 等并发请求。
 export async function getApplicationLifecycle(
-  application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>,
+  application: Pick<ApplicationConfig, 'workspaceRoot'> &
+    Partial<Pick<ApplicationConfig, 'id' | 'appName'>>,
   threadId = randomUUID()
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot
@@ -133,11 +161,23 @@ export async function getApplicationLifecycle(
 
   // 每次冷读取前先 Attach：后端 get 始终只读，孤儿 Bootstrap 的回收只能由 Attach 完成。
   const request = (async (): Promise<ApplicationLifecycle> => {
-    await attachApplicationWorkspace(application, threadId)
-    return runApplicationLifecycleAction(threadId, {
-      action: 'get',
-      workspaceRoot
-    })
+    try {
+      await attachApplicationWorkspace(application, threadId)
+      return await runApplicationLifecycleAction(threadId, {
+        action: 'get',
+        workspaceRoot
+      })
+    } catch (error) {
+      // 发起新迭代会先删掉 lifecycle 文件再由前端重建；这一步中途失败（或文件被外部清理）
+      // 会让 Attach 与 Get 双双失败，工作区从此打不开。用本应用已知身份补建一份再读：
+      // 后端 create 幂等（已存在则原样返回），损坏或归属冲突仍会照常抛出，不会掩盖真实故障。
+      if (!isLifecycleMissingError(error) || !application.id || !application.appName) throw error
+      await createApplicationLifecycle(
+        { workspaceRoot, id: application.id, appName: application.appName },
+        threadId
+      )
+      return runApplicationLifecycleAction(threadId, { action: 'get', workspaceRoot })
+    }
   })()
   lifecycleReadRequests.set(workspaceRoot, request)
   try {

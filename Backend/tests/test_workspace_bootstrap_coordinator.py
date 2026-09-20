@@ -163,7 +163,12 @@ class TemplateMutationCoordinatorTests(unittest.TestCase):
             workspace = Path(directory)
             _generating_workspace(workspace)
             (workspace / "frontend").mkdir()
-            with patch("app.services.workspace_bootstrap.coordinator.shutil.rmtree", side_effect=OSError("busy")):
+            # 受管清理已收敛到 materializer.clear_bootstrap_managed_artifacts，
+            # 故障注入点随之移到该实现的删除原语上。
+            with patch(
+                "app.services.workspace_bootstrap.materializer.shutil.rmtree",
+                side_effect=OSError("busy"),
+            ):
                 result = TemplateMutationCoordinator().attach_workspace(workspace)
 
             lifecycle = load_application_lifecycle(workspace)

@@ -30,6 +30,7 @@ import './BrowserPreviewPanel.less'
 import { useElementInspector } from './useElementInspector'
 import ServiceStatusDrawer from './ServiceStatusDrawer'
 import type { ServiceStatusControl } from './ServiceStatusDrawer'
+import { previewServiceState } from './serviceStatusPolicy'
 
 const { Text } = Typography
 
@@ -103,19 +104,7 @@ export default function BrowserPreviewPanel({
     previewUrl
   })
   const serviceRuntime = serviceControl?.snapshot?.runtime
-  const serviceStatus =
-    serviceRuntime?.status === 'failed' ||
-    serviceRuntime?.frontend.status === 'failed' ||
-    serviceRuntime?.backend.status === 'failed'
-      ? 'failed'
-      : serviceRuntime?.status === 'starting' ||
-          serviceRuntime?.frontend.status === 'starting' ||
-          serviceRuntime?.backend.status === 'starting'
-        ? 'starting'
-        : serviceRuntime?.frontend.status === 'running' ||
-            serviceRuntime?.backend.status === 'running'
-          ? 'running'
-          : 'idle'
+  const serviceStatus = previewServiceState(serviceRuntime)
   const serviceStatusLabel =
     serviceStatus === 'failed'
       ? '需处理'

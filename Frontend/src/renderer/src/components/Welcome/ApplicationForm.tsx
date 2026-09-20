@@ -7,6 +7,7 @@ import {
   DesktopOutlined,
   FolderOpenOutlined,
   FundOutlined,
+  GithubOutlined,
   LayoutOutlined,
   LockOutlined,
   MenuOutlined,
@@ -18,7 +19,7 @@ import {
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import { Button, Form, Input, Radio, Select, Switch } from 'antd'
+import { Button, Form, Input, Radio, Select, Switch, Tooltip } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useMemo, useState } from 'react'
@@ -67,7 +68,11 @@ function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode
 }
 
 /** 渲染应用创建配置与项目目录提示。 */
-export default function ApplicationForm({ form, onSelectProjectParent, selectingParent }: Props): ReactElement {
+export default function ApplicationForm({
+  form,
+  onSelectProjectParent,
+  selectingParent
+}: Props): ReactElement {
   const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? true
   const authorizationEnabled = Form.useWatch(['authorization', 'enabled'], form) ?? false
   const trackEnabled = Form.useWatch(['track', 'enable'], form) ?? true
@@ -80,9 +85,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
   const trackMethodFilteredOptions = useMemo(() => {
     const keyword = trackMethodSearch.trim().toLowerCase()
     if (!keyword) return trackMethodOptions
-    return trackMethodOptions.filter((option) =>
-      option.value.toLowerCase().includes(keyword)
-    )
+    return trackMethodOptions.filter((option) => option.value.toLowerCase().includes(keyword))
   }, [trackMethodSearch])
 
   const headerBar = useHeaderEnabled ? (
@@ -146,15 +149,15 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
           </Form.Item>
         </div>
         <Form.Item label="应用图标" name="appIcon">
-          <Radio.Group className={cx('application-icon-picker')} optionType="button" buttonStyle="solid">
+          <Radio.Group
+            className={cx('application-icon-picker')}
+            optionType="button"
+            buttonStyle="solid"
+          >
             {applicationIconOptions.map((option) => {
               const Icon = iconComponents[option.value]
               return (
-                <Radio.Button
-                  key={option.value}
-                  aria-label={option.label}
-                  value={option.value}
-                >
+                <Radio.Button key={option.value} aria-label={option.label} value={option.value}>
                   {Icon ? <Icon /> : null}
                 </Radio.Button>
               )
@@ -168,6 +171,29 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
           rules={[{ required: true, whitespace: true, message: '请输入应用场景' }]}
         >
           <TextArea rows={3} />
+        </Form.Item>
+        <Form.Item
+          label="码云地址"
+          name="repoUrl"
+          extra={
+            <Tooltip title="当前阶段为固定地址，后续将开放自定义仓库地址。">
+              <span className={cx('application-form-hint')}>暂为固定地址，后续开放自定义</span>
+            </Tooltip>
+          }
+        >
+          <Input
+            prefix={<GithubOutlined />}
+            readOnly
+            style={{ cursor: 'default', color: 'rgba(0, 0, 0, 0.65)' }}
+          />
+        </Form.Item>
+        <Form.Item
+          label="版本号"
+          name="versionNo"
+          rules={[{ required: true, whitespace: true, message: '请输入版本号' }]}
+          extra="作为应用首个版本标签，如 v1.0；发起新迭代时自动递增。"
+        >
+          <Input placeholder="v1.0" />
         </Form.Item>
       </section>
 
@@ -198,7 +224,16 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
                       {headerBar}
                       {footerBar}
                     </g>
-                    <rect fill="none" height="64" rx="5" stroke="#d9d9d9" strokeWidth="1" width="96" x="0" y="0" />
+                    <rect
+                      fill="none"
+                      height="64"
+                      rx="5"
+                      stroke="#d9d9d9"
+                      strokeWidth="1"
+                      width="96"
+                      x="0"
+                      y="0"
+                    />
                   </svg>
                   <span className={cx('nav-preview-label')}>左侧导航</span>
                 </span>
@@ -217,7 +252,16 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
                       {headerBar}
                       {footerBar}
                     </g>
-                    <rect fill="none" height="64" rx="5" stroke="#d9d9d9" strokeWidth="1" width="96" x="0" y="0" />
+                    <rect
+                      fill="none"
+                      height="64"
+                      rx="5"
+                      stroke="#d9d9d9"
+                      strokeWidth="1"
+                      width="96"
+                      x="0"
+                      y="0"
+                    />
                   </svg>
                   <span className={cx('nav-preview-label')}>顶部导航</span>
                 </span>
@@ -243,7 +287,16 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
                       {headerBar}
                       {footerBar}
                     </g>
-                    <rect fill="none" height="64" rx="5" stroke="#d9d9d9" strokeWidth="1" width="96" x="0" y="0" />
+                    <rect
+                      fill="none"
+                      height="64"
+                      rx="5"
+                      stroke="#d9d9d9"
+                      strokeWidth="1"
+                      width="96"
+                      x="0"
+                      y="0"
+                    />
                   </svg>
                   <span className={cx('nav-preview-label')}>混合导航</span>
                 </span>
@@ -288,15 +341,17 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
             }
           ]}
         >
-          <TabHintInput form={form} fieldName={['menus', 'rootPath']} placeholder="请输入页面根路由" />
+          <TabHintInput
+            form={form}
+            fieldName={['menus', 'rootPath']}
+            placeholder="请输入页面根路由"
+          />
         </Form.Item>
       </section>
 
       <section className={cx('application-form-section', 'application-form-section--full')}>
         <SectionTitle icon={<BgColorsOutlined />}>主题</SectionTitle>
-        <Form.Item
-          label="主题色"
-        >
+        <Form.Item label="主题色">
           <Form.Item name={['theme', 'primaryColor']} hidden>
             <Input />
           </Form.Item>
@@ -332,7 +387,12 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
       <DatasourceConfigFields form={form} />
 
       <section
-        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !authEnabled && 'application-form-section--disabled')}
+        className={cx(
+          'application-form-section',
+          'application-form-section--full',
+          'application-form-section--toggle',
+          !authEnabled && 'application-form-section--disabled'
+        )}
       >
         <div className={cx('application-form-section-head')}>
           <SectionTitle icon={<LockOutlined />}>认证</SectionTitle>
@@ -366,7 +426,12 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
       </section>
 
       <section
-        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !authorizationEnabled && 'application-form-section--disabled')}
+        className={cx(
+          'application-form-section',
+          'application-form-section--full',
+          'application-form-section--toggle',
+          !authorizationEnabled && 'application-form-section--disabled'
+        )}
       >
         <div className={cx('application-form-section-head')}>
           <SectionTitle icon={<LockOutlined />}>权限控制</SectionTitle>
@@ -382,9 +447,7 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
               onChange={(enabled) => {
                 // 权限控制依赖身份认证，关闭权限时同步清空管理员种子。
                 if (enabled) {
-                  form.setFields([
-                    { name: ['auth', 'enable'], value: true }
-                  ])
+                  form.setFields([{ name: ['auth', 'enable'], value: true }])
                   return
                 }
                 form.setFields([
@@ -426,7 +489,12 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
       </section>
 
       <section
-        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !trackEnabled && 'application-form-section--disabled')}
+        className={cx(
+          'application-form-section',
+          'application-form-section--full',
+          'application-form-section--toggle',
+          !trackEnabled && 'application-form-section--disabled'
+        )}
       >
         <div className={cx('application-form-section-head')}>
           <SectionTitle icon={<RadarChartOutlined />}>页面埋点</SectionTitle>
@@ -466,7 +534,12 @@ export default function ApplicationForm({ form, onSelectProjectParent, selecting
       </section>
 
       <section
-        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !apiTrackEnabled && 'application-form-section--disabled')}
+        className={cx(
+          'application-form-section',
+          'application-form-section--full',
+          'application-form-section--toggle',
+          !apiTrackEnabled && 'application-form-section--disabled'
+        )}
       >
         <div className={cx('application-form-section-head')}>
           <SectionTitle icon={<RadarChartOutlined />}>接口埋点</SectionTitle>

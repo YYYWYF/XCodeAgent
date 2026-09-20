@@ -162,6 +162,9 @@ export class ApplicationPlanningRuntime {
     }
     if (['generating_application_template_files', 'application_template_generation_failed', 'ready_for_workbench'].includes(current.lifecycle.initialization.stage)) return
     if (current.lifecycle.initialization.status === 'awaiting_user') {
+      // 新迭代发起时前端标记 awaiting_user 但后端 checkpoint 尚未建立，
+      // 跳过 reconcile 避免误报"规划状态尚未同步"，等用户输入需求后再触发。
+      if (!current.restoreArtifactsFromDisk && !current.workflow) return
       await this.reconcileCurrentState()
       return
     }
@@ -179,6 +182,15 @@ export class ApplicationPlanningRuntime {
       return
     }
     await this.runPlanning(buildApplicationPlanningRequest(current.application))
+  }
+
+  /** 新迭代发起后用户输入需求，用用户输入的消息启动 planning workflow。 */
+  async startIterationPlanning(userRequest: string): Promise<void> {
+    const current = this.requireCurrentState()
+    this.assertMutationAllowed()
+    if (workflowConfirmation(current.workflow)) return
+    const request = userRequest.trim() || buildApplicationPlanningRequest(current.application)
+    await this.runPlanning(request)
   }
 
   /** 通过独立 AG-UI 动作重试失败的 Template Reconcile，不伪造技术规划恢复。 */

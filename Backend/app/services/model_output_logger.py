@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -199,6 +200,110 @@ def log_model_output(
     if tool_calls:
         _print("[model-tool-calls]", flush=True)
         _print(_stringify_content(tool_calls), flush=True)
+
+
+def log_unit_generation_response(
+    *,
+    identity: Any,
+    response: Any,
+    raw_response: str,
+    phase: str,
+    issues: Sequence[Any] = (),
+) -> None:
+    """以不可歧义的 repr 记录 DAG Unit 响应及其严格解析输入。
+
+    该诊断只在调用方显式开启 MODEL_OUTPUT_LOG_ENABLED 时触发，使用单次加锁输出
+    避免并发 Unit 的响应边界互相穿插；不记录 prompt、API Key 或请求头。
+    """
+
+    content = getattr(response, "content", None)
+    block_summary: list[dict[str, Any]] = []
+    if isinstance(content, list):
+        for index, block in enumerate(content):
+            if isinstance(block, dict):
+                block_summary.append(
+                    {
+                        "position": index,
+                        "type": block.get("type"),
+                        "block_index": block.get("index"),
+                        "text_length": (
+                            len(block["text"])
+                            if isinstance(block.get("text"), str)
+                            else None
+                        ),
+                        "thinking_length": (
+                            len(block["thinking"])
+                            if isinstance(block.get("thinking"), str)
+                            else None
+                        ),
+                        "reasoning_length": (
+                            len(block["reasoning"])
+                            if isinstance(block.get("reasoning"), str)
+                            else None
+                        ),
+                    }
+                )
+            else:
+                block_summary.append(
+                    {
+                        "position": index,
+                        "type": type(block).__name__,
+                    }
+                )
+
+    response_metadata = getattr(response, "response_metadata", None)
+    metadata_summary: dict[str, Any] = {}
+    if isinstance(response_metadata, dict):
+        for key in ("finish_reason", "stop_reason", "model", "usage", "id"):
+            if key in response_metadata:
+                metadata_summary[key] = response_metadata[key]
+
+    issue_summary: list[Any] = []
+    for issue in issues:
+        if hasattr(issue, "model_dump"):
+            try:
+                issue_summary.append(issue.model_dump(mode="json"))
+                continue
+            except Exception:
+                pass
+        issue_summary.append(repr(issue))
+
+    identity_summary = {
+        key: getattr(identity, key, None)
+        for key in (
+            "planning_run_id",
+            "unit_id",
+            "generation_round",
+            "attempt_in_round",
+            "attempt_id",
+        )
+    }
+    lines = [
+        f"[dag-unit-response phase={phase}]",
+        "identity=" + json.dumps(identity_summary, ensure_ascii=False, default=str),
+        "response_type=" + type(response).__module__ + "." + type(response).__qualname__,
+        "content_type=" + type(content).__module__ + "." + type(content).__qualname__,
+        "content_block_summary="
+        + json.dumps(block_summary, ensure_ascii=False, default=str),
+        "content_repr=" + repr(content),
+        f"raw_response_len={len(raw_response)}",
+        "raw_response_repr=" + repr(raw_response),
+    ]
+    if metadata_summary:
+        lines.append(
+            "response_metadata="
+            + json.dumps(metadata_summary, ensure_ascii=False, default=str)
+        )
+    tool_calls = getattr(response, "tool_calls", None)
+    if tool_calls:
+        lines.append("tool_calls_repr=" + repr(tool_calls))
+    if issue_summary:
+        lines.append(
+            "parse_issues="
+            + json.dumps(issue_summary, ensure_ascii=False, default=str)
+        )
+    lines.append("[dag-unit-response-end]")
+    _print("\n".join(lines), flush=True)
 
 
 def _stringify_content(value: Any) -> str:

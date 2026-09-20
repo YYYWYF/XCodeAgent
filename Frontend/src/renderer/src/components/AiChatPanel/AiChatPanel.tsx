@@ -2,7 +2,12 @@ import { HolderOutlined } from '@ant-design/icons'
 import { Alert, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useWorkbench, useWorkbenchPhase } from '../../context'
+import { useUncommittedChanges, useWorkbench, useWorkbenchPhase } from '../../context'
+import {
+  orphanUncommittedPaths,
+  summarizePaths,
+  useModuleOwnedFiles
+} from '../../hooks/useModuleOwnedFiles'
 import {
   hasApplicationEnteredDevelopment,
   isApplicationTemplatePreparationEligible,
@@ -77,6 +82,7 @@ import {
   productConversationRoute,
   productConversationSendBlocked
 } from './components/ChatComposer/productConversation'
+import AcceptanceCommitDock from './components/AcceptanceCommitDock'
 import AcceptanceDecisionDock from './components/AcceptanceDecisionDock'
 import CodeDiffDetailPanel from './components/CodeDiffDetailPanel'
 import SessionExecutionLockDock from './components/SessionExecutionLockDock'
@@ -86,6 +92,7 @@ import StageOutputPanel from './components/StageOutputPanel'
 import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
+import MilestoneCommitReminder from './components/MilestoneCommitReminder'
 import ApiDesignConfigModal from './components/WorkflowRunCard/ApiDesignConfigModal'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
 import {
@@ -101,6 +108,7 @@ import RightPanelTabs, {
   type WorkspaceTab,
   type WorkspaceTabKey
 } from './components/RightPanelTabs'
+import ReleasedVersionPanel from './components/ReleasedVersionPanel'
 import SessionSidebar from './components/SessionSidebar'
 import TemporaryChatOverlay from './components/TemporaryChatOverlay'
 import QuickTaskGuide from './components/QuickTaskGuide'
@@ -155,12 +163,16 @@ import {
 } from './stageOutputState'
 import {
   endpointDetailTargetKey,
+  hasConfirmedDesignDocument,
   pageDetailTargetKey,
+  shouldInjectPlanningPlaceholder,
+  shouldShowRightWorkspace,
   workflowShouldShowCodeChanges,
   workflowDetailTargetKey,
   type WorkflowPreviewTarget
 } from './utils'
 import { isConversationWorkflow } from './conversationMode'
+import { LOCAL_DESIGN_ARTIFACTS } from './designArtifacts'
 import {
   planningArtifactRecoveryKeys,
   type PlanningArtifactRecoveryKey
@@ -308,6 +320,7 @@ type Props = {
     designChangeRequest?: string
   ) => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
+  onStartIterationPlanning: (request: string) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
@@ -330,6 +343,10 @@ type Props = {
   planningState?: ApplicationPlanningCurrentState
   theme: 'light' | 'dark'
   rightPanelOpen: boolean
+  /** 正在查看已生成版本：对话区替换为只读的应用文件/应用预览双 tab。 */
+  versionReadOnly?: boolean
+  /** 所查看历史版本的 Git tag：应用文件按它读取该版本当时的文档与源码。 */
+  viewedVersionTag?: string
   onRightPanelOpenChange: (open: boolean) => void
 }
 
@@ -400,33 +417,6 @@ const REQUIREMENT_SPEC_JSON_PATHS = [
   '.xcodeagent/drafts/specs/requirement-spec.json',
   '.xcodeagent/specs/requirement-spec.json'
 ] as const
-
-const LOCAL_DESIGN_ARTIFACTS: ReadonlyArray<{
-  key: DesignDocArtifactKey
-  markdownPaths: readonly string[]
-  contentPaths?: readonly string[]
-}> = [
-  {
-    key: 'requirement-spec',
-    markdownPaths: [
-      '.xcodeagent/drafts/specs/requirement-spec.md',
-      '.xcodeagent/specs/requirement-spec.md'
-    ]
-  },
-  {
-    key: 'product-plan',
-    markdownPaths: ['.xcodeagent/drafts/plans/product-plan.md', '.xcodeagent/plans/product-plan.md']
-  },
-  {
-    key: 'ui-design',
-    markdownPaths: [],
-    contentPaths: ['.xcodeagent/specs/ui-designs.json']
-  },
-  {
-    key: 'technical-plan',
-    markdownPaths: ['.xcodeagent/plans/technical-plan.md']
-  }
-]
 
 const DESIGN_ARTIFACT_PATH_FIELDS: Record<DesignDocArtifactKey, readonly string[]> = {
   'requirement-spec': ['requirement_spec_path'],
@@ -853,6 +843,7 @@ export default function AiChatPanel({
   onReturnWelcome,
   onSubmitPlanningClarification,
   onStartDesignStageRevision,
+  onStartIterationPlanning,
   onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
@@ -865,7 +856,9 @@ export default function AiChatPanel({
   planningState,
   theme,
   rightPanelOpen,
-  onRightPanelOpenChange
+  onRightPanelOpenChange,
+  versionReadOnly = false,
+  viewedVersionTag
 }: Props): ReactElement {
   const planningThreadId = planningState?.threadId
   const currentPlanningWorkflow = planningState?.workflow
@@ -1091,20 +1084,27 @@ export default function AiChatPanel({
   // 仅凭 derivedPhase 会误触发拦截，导致后续真正完成时 ref 已置位、gate 不再出现。
   const lifecycleReadyForWorkbench =
     applicationLifecycle?.initialization?.stage === 'ready_for_workbench'
+  // 进入开发门禁按「应用 + 当前迭代版本」隔离：每次迭代都要重新走一遍设计/计划并进入开发，
+  // 若按应用存，上一轮迭代进入过开发就会永久压制本轮的就绪卡与"进入开发阶段"入口。
+  const iterationScopeId = application.currentVersionId || application.id
   const [enterDevConfirmed, setEnterDevConfirmed] = useState(() =>
-    hasApplicationEnteredDevelopment(application.id)
+    hasApplicationEnteredDevelopment(application.id, iterationScopeId)
   )
-  // “进入开发”可能来自模板卡或顶部阶段切换；任一路径确认后都永久关闭本应用的模板卡。
+  // “进入开发”可能来自模板卡或顶部阶段切换；本轮迭代确认后即关闭本轮的模板卡。
   useEffect(() => {
-    setEnterDevConfirmed(hasApplicationEnteredDevelopment(application.id))
-    return subscribeApplicationDevelopmentEntry(application.id, () => {
+    const scopeId = application.currentVersionId || application.id
+    setEnterDevConfirmed(hasApplicationEnteredDevelopment(application.id, scopeId))
+    return subscribeApplicationDevelopmentEntry(application.id, scopeId, () => {
       setEnterDevConfirmed(true)
     })
-  }, [application.id])
+  }, [application.id, application.currentVersionId])
   const applicationTemplatePreparationEligible = isApplicationTemplatePreparationEligible(
     application.source,
     enterDevConfirmed
   )
+  // 已有历史版本即处于迭代：模板请求只由 application.json 派生，各迭代一致，
+  // 因此本轮沿用已有工程、不重新拉取模板，就绪卡文案需要说明这一点。
+  const reusingExistingTemplate = (application.versions?.length ?? 0) > 1
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
   const templateGenerationOrphaned = isTemplateGenerationOrphaned(
@@ -1122,6 +1122,26 @@ export default function AiChatPanel({
     // 后端已完成模板生成（lifecycle=ready_for_workbench）：锁住计划阶段，等用户手动进入开发。
     switchPhase('planning')
   }, [lifecycleReadyForWorkbench, enterDevConfirmed, switchPhase])
+
+  // —— 里程碑代码提交提醒 ——
+  // 验收通过时展示 MilestoneCommitReminder；模板初始化场景的提交已合并进 TemplatePreparingCard。
+  const acceptancePassed = applicationLifecycle?.extensions?.acceptanceStatus === 'passed'
+  const milestoneCommitReminderProps = useMemo<
+    | { workspaceRoot: string; title: string; defaultCommitMessage: string; milestoneId: string }
+    | undefined
+  >(() => {
+    if (!application.workspaceRoot) return undefined
+    // 验收通过后。
+    if (acceptancePassed) {
+      return {
+        workspaceRoot: application.workspaceRoot,
+        title: '验收已通过，建议提交本次模块代码',
+        defaultCommitMessage: 'feat: 完成验收模块代码',
+        milestoneId: `${application.id}:acceptance-${applicationLifecycle?.revision ?? 0}`
+      }
+    }
+    return undefined
+  }, [application.id, application.workspaceRoot, acceptancePassed, applicationLifecycle?.revision])
 
   const {
     assistantPanelRatio,
@@ -1150,7 +1170,12 @@ export default function AiChatPanel({
   )
   // 右侧面板实际展示：外部开关 + 面板有内容。开关由 WorkbenchPage 顶栏控制，
   // 面板内容（preview/doc/diff）由本组件按目标类型设置。
-  const showRightPanel = rightPanelOpen && Boolean(rightPanel)
+  // 历史版本下整块不展示，理由见 shouldShowRightWorkspace。
+  const showRightPanel = shouldShowRightWorkspace({
+    versionReadOnly,
+    rightPanelOpen,
+    hasRightPanel: Boolean(rightPanel)
+  })
 
   // ---- 创建计划阶段：设计阶段展示产品产物，计划阶段只展示 TechnicalPlan。 ----
   // 需求文档在模型生成后即可展示；确认状态只决定它是草稿还是正式文档。
@@ -1476,7 +1501,13 @@ export default function AiChatPanel({
         applicationId: application.id,
         workspaceRoot: application.workspaceRoot
       }),
-    [application.id, application.workspaceRoot, allSessions, applicationLifecycle, sessionExecutions]
+    [
+      application.id,
+      application.workspaceRoot,
+      allSessions,
+      applicationLifecycle,
+      sessionExecutions
+    ]
   )
   const applicationMutationReadonly = applicationMutationReadonlyForSession(
     applicationOwnership,
@@ -2863,8 +2894,7 @@ export default function AiChatPanel({
   const currentSessionId = activeSessionId || ''
   const pendingPlanOwnerSessionId = applicationOwnership.pendingPlan?.ownerSessionId
   const pendingPlanActionable = Boolean(
-    applicationOwnership.actionablePending &&
-      applicationOwnership.state !== 'invalid_pending_owner'
+    applicationOwnership.actionablePending && applicationOwnership.state !== 'invalid_pending_owner'
   )
   const pendingPlanOwnedByCurrentSession = Boolean(
     pendingPlanActionable &&
@@ -2937,14 +2967,11 @@ export default function AiChatPanel({
           : applicationOwnerStatus === 'running'
             ? 'running'
             : phaseExecution?.status || 'running'
-  const phaseExecutionLabel =
-    applicationOwnership.owner?.workbenchPhase
-      ? WORKBENCH_PHASE_AGENTS[applicationOwnership.owner.workbenchPhase].label
-      : WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label
+  const phaseExecutionLabel = applicationOwnership.owner?.workbenchPhase
+    ? WORKBENCH_PHASE_AGENTS[applicationOwnership.owner.workbenchPhase].label
+    : WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label
   const workflowInputLocked =
-    workspaceBusy ||
-    pendingPlanActionable ||
-    planningMutationBlocked(planningState)
+    workspaceBusy || pendingPlanActionable || planningMutationBlocked(planningState)
   const displayedSessionRunStates =
     planningSessionRunActive && existingPlanningSession
       ? { ...sessionRunStates, [existingPlanningSession.id]: 'running' as const }
@@ -3026,8 +3053,21 @@ export default function AiChatPanel({
           }
         }
         // 规划会话回放完缓存后仍无消息时注入即时占位，避免只显示 Agent 头像。
+        // 但"等用户输入新迭代需求"时不能注入：那一轮不会有任何 workflow 到达，
+        // 占位卡会一直转圈，把真正该显示的「请描述本次迭代的需求」输入卡挡掉。
+        //
+        // 判据用 stage 而不是 status：后端写盘的 lifecycle 是 pending，只有前端
+        // handleConfirmIteration 在内存里把它标成 awaiting_user。重新打开应用或
+        // 切换版本后 planning state 带着的是磁盘那份，按 status 判会漏掉这一情形。
+        const planningState = planningCurrentStateRef.current
         const currentMsgs = getSessionMessagesRef.current(identity.key)
-        if (currentMsgs.length === 0) {
+        if (
+          shouldInjectPlanningPlaceholder({
+            messageCount: currentMsgs.length,
+            stage: planningState?.lifecycle?.initialization?.stage,
+            hasWorkflow: Boolean(planningState?.workflow)
+          })
+        ) {
           const placeholderId = Date.now() * 1000 + (planningMessageIdRef.current++ % 1000)
           setSessionMessagesRef.current(identity.key, (messages) =>
             appendPlanningLoadingPlaceholder(messages, {
@@ -3165,10 +3205,7 @@ export default function AiChatPanel({
           loading,
           Boolean(applicationLifecycle)
         )
-  const canRetryFailedTasks = workflowCanRetryFailedTasks(
-    latestWorkflowForDisplay,
-    scopedExecution
-  )
+  const canRetryFailedTasks = workflowCanRetryFailedTasks(latestWorkflowForDisplay, scopedExecution)
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
   const activePageTitle =
@@ -3280,7 +3317,9 @@ export default function AiChatPanel({
     applicationLifecycle,
     (latestWorkflowForDisplay?.summary?.templatePreparation ||
       latestWorkflowForDisplay?.state?.templatePreparation ||
-      latestWorkflowForDisplay?.result?.templatePreparation) as WorkflowTemplatePreparation | undefined
+      latestWorkflowForDisplay?.result?.templatePreparation) as
+      | WorkflowTemplatePreparation
+      | undefined
   )
   const currentStageSessionTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const stageOutputContextAligned = activeTargetKey
@@ -3533,6 +3572,15 @@ export default function AiChatPanel({
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
   const acceptanceAwaiting = displayedPlanExecutionMode === 'awaiting_acceptance'
+  // 「检查遗漏变更」：未提交文件里没被任何模块任务认领的部分。
+  // 用 codePaths 而不是 eligiblePaths —— `.xcodeagent` 平台产物永远不在构建计划的
+  // 模块归属里，算进来会把每个产物文件都误报成"未关联到任何模块"。
+  const moduleOwnedFiles = useModuleOwnedFiles(application.workspaceRoot || '')
+  const { snapshot: uncommittedSnapshot } = useUncommittedChanges()
+  const orphanChangePaths = orphanUncommittedPaths({
+    uncommittedPaths: uncommittedSnapshot?.codePaths ?? [],
+    moduleOwnedFiles
+  })
   const activeSessionTargetKey = currentStageSessionTargetKey
   const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
   const activeWorkflowMatchesTarget = Boolean(
@@ -3687,10 +3735,25 @@ export default function AiChatPanel({
     setAcceptanceConversationSessionKey(activeSession?.key || draftKey)
   }, [activeSession?.key, draftKey])
 
-  /** 验收通过暂未接线，保留按钮并明确告知用户当前能力边界。 */
+  /** 验收通过：将验收状态标记为 passed，解锁后续"生成新版本"节点。 */
   const handleAcceptanceApprove = useCallback((): void => {
-    message.info('验收通过功能暂未开放')
-  }, [])
+    if (!applicationLifecycle) return
+    const nextLifecycle: ApplicationLifecycle = {
+      ...applicationLifecycle,
+      // 递增 revision，确保 lifecycle store 采纳本次 extensions 更新而非丢弃。
+      revision: applicationLifecycle.revision + 1,
+      extensions: {
+        ...applicationLifecycle.extensions,
+        // 能进入验收阶段说明测试与审查均已通过；一并补齐状态，
+        // 让 isVersionReleasable 的三项前置条件同时满足。
+        testExecutionStatus: 'passed',
+        reviewStatus: 'passed',
+        acceptanceStatus: 'passed'
+      }
+    }
+    onApplicationLifecycleChange(nextLifecycle)
+    message.success('验收已通过，可以生成新版本')
+  }, [applicationLifecycle, onApplicationLifecycleChange])
 
   /** 使用当前前端端口和所选页面路由打开独立全屏预览窗口。 */
   const handleOpenFullscreenPreview = async (): Promise<void> => {
@@ -4311,12 +4374,17 @@ export default function AiChatPanel({
   /** 把自由输入交给原创建规划 Graph 先做意图识别，当前等待阶段不能决定变更目标。 */
   const handleInitialProductConversationSend = async (): Promise<void> => {
     const trimmed = draft.trim()
-    if (
-      !trimmed ||
-      !currentPlanningWorkflow ||
-      productConversationSendDisabled ||
-      workflowInputLocked
-    ) {
+    if (!trimmed || productConversationSendDisabled || workflowInputLocked) {
+      return
+    }
+    // 新迭代发起后尚无 workflow（awaiting_user），用 onStartIterationPlanning 启动 planning workflow。
+    if (!currentPlanningWorkflow) {
+      setGeneratingDetailTargetKey('')
+      planningNewRoundRef.current = true
+      lastUiDesignRunIdRef.current = undefined
+      appendPlanningUserMessage({ design_change_request: trimmed })
+      await onStartIterationPlanning(trimmed)
+      setDraftByKey(draftKey, '')
       return
     }
     // 设计阶段二次修改同样不能沿用开发阶段页面的临时生成状态。
@@ -4365,7 +4433,7 @@ export default function AiChatPanel({
 
   /** 用户点击"进入开发阶段"：放开 planning 锁并进入带快捷任务的空白对话。 */
   const handleEnterDevelopment = useCallback((): void => {
-    markApplicationEnteredDevelopment(application.id)
+    markApplicationEnteredDevelopment(application.id, iterationScopeId)
     setEnterDevConfirmed(true)
     clearActiveSession()
     setActiveDetailTarget({ type: 'none' })
@@ -4374,7 +4442,7 @@ export default function AiChatPanel({
     setRightPanel(undefined)
     setActiveView('chat')
     switchPhase(null)
-  }, [application.id, switchPhase, clearActiveSession, setRightPanel])
+  }, [application.id, iterationScopeId, switchPhase, clearActiveSession, setRightPanel])
 
   /** 把底部结构化确认转换为当前 Workflow 已支持的确认答案。 */
   const handleConfirmPlanInteraction = (decision: 'reject' | 'once' | 'always'): void => {
@@ -4409,276 +4477,325 @@ export default function AiChatPanel({
       ref={panelRef}
       style={panelStyle}
     >
-      <div className={cx('ai-chat-assistant')}>
-        <SessionSidebar
-          activeSessionId={activeSessionId}
+      {versionReadOnly ? (
+        // 已生成版本：不保留历史会话，只提供应用文件与应用预览两个只读入口。
+        <ReleasedVersionPanel
           application={application}
-          deletingSessionId={deletingSessionId}
-          forceCollapsed
-          loadingSessions={loadingSessions}
-          temporaryChatActive={temporaryChatOpen}
-          outlineLocked={false}
-          onCloseTemporaryChat={handleCloseTemporaryChat}
-          onCreateFreeChatSession={handleCreateChatSession}
-          onDeleteSession={handleDeleteSession}
-          onOpenTemporaryChat={handleOpenTemporaryChat}
-          onOpenSession={handleOpenChatSession}
-          onReturnWelcome={onReturnWelcome}
-          onShowFiles={handleShowFiles}
-          onShowDataSources={handleShowDataSources}
-          onShowSettings={handleShowSettings}
-          onShowSkills={handleShowSkills}
-          onThemeChange={onThemeChange}
           pages={displayedPlanningPages}
-          pageTree={displayedPlanningPageTree}
-          apiContracts={developmentPlanningApiContracts}
-          entities={developmentPlanningEntities}
-          {...artifactOutlineProps}
-          filesActive={activeView === 'files'}
-          dataSourcesActive={activeView === 'dataSources'}
-          dataSourcesEnabled={!isApplicationPlanningPhase && Boolean(application.workspaceRoot)}
-          sessionError={sessionError}
-          sessionCreationDisabled={phaseSessionRunActive}
-          sessionRunStates={displayedSessionRunStates}
-          sessions={sessions}
-          showDevelopmentActions={showDevelopmentSidebarActions}
-          settingsActive={activeView === 'settings'}
-          skillsActive={activeView === 'skills'}
-          theme={theme}
+          previewBaseUrl={runtimePreviewBaseUrl}
+          previewErrorMessage={runtimePreviewLaunchError}
+          revision={viewedVersionTag}
+          serviceControl={previewRuntime.control}
           workspaceRoot={workspaceRoot}
         />
-        {activeView === 'skills' ? (
-          <SkillsPage onSkillDisabled={handleSkillDisabled} theme={theme} />
-        ) : activeView === 'dataSources' ? (
-          <DataSourcesPage theme={theme} workspaceRoot={application.workspaceRoot || ''} />
-        ) : activeView === 'files' ? (
-          <AgentFilesPage />
-        ) : activeView === 'settings' ? (
-          <SettingsPage application={application} onSaved={onApplicationUpdate} />
-        ) : showEntityInfoPanel ? (
-          <div className={cx('ai-chat-main')}>
-            <EntityInfoPanel
-              entity={activeEntityOption}
-              theme={theme}
-              workspaceRoot={application.workspaceRoot || ''}
-            />
-          </div>
-        ) : (
-          <div className={cx('ai-chat-main')}>
-            {activeDetailTarget.type !== 'none' ? (
-              <PageContextHeader
-                description={activeHeaderTarget.description}
-                isPageOpen={activeHeaderTarget.type === 'page' && rightPanel?.type === 'preview'}
-                keyFeatures={activeHeaderTarget.keyFeatures}
-                lastAnalyzedAt={activeSessionUpdatedAt}
-                onClosePage={handleClosePage}
-                onOpenFullscreenPage={handleOpenFullscreenPreview}
-                onOpenPage={handleOpenPage}
-                pagePath={activeHeaderTarget.path}
-                pageTitle={activeHeaderTarget.title}
-                previewAvailable={showPreviewActions && Boolean(runtimePreviewBaseUrl)}
-                previewLaunchError={showPreviewActions ? runtimePreviewLaunchError : ''}
-                previewLaunchLoading={previewLaunchLoading}
-                status={activeHeaderStatus}
-                targetType={activeHeaderTarget.type}
+      ) : (
+        <div className={cx('ai-chat-assistant')}>
+          <SessionSidebar
+            activeSessionId={activeSessionId}
+            application={application}
+            deletingSessionId={deletingSessionId}
+            forceCollapsed
+            loadingSessions={loadingSessions}
+            temporaryChatActive={temporaryChatOpen}
+            outlineLocked={false}
+            onCloseTemporaryChat={handleCloseTemporaryChat}
+            onCreateFreeChatSession={handleCreateChatSession}
+            onDeleteSession={handleDeleteSession}
+            onOpenTemporaryChat={handleOpenTemporaryChat}
+            onOpenSession={handleOpenChatSession}
+            onReturnWelcome={onReturnWelcome}
+            onShowFiles={handleShowFiles}
+            onShowDataSources={handleShowDataSources}
+            onShowSettings={handleShowSettings}
+            onShowSkills={handleShowSkills}
+            onThemeChange={onThemeChange}
+            pages={displayedPlanningPages}
+            pageTree={displayedPlanningPageTree}
+            apiContracts={developmentPlanningApiContracts}
+            entities={developmentPlanningEntities}
+            {...artifactOutlineProps}
+            filesActive={activeView === 'files'}
+            dataSourcesActive={activeView === 'dataSources'}
+            dataSourcesEnabled={!isApplicationPlanningPhase && Boolean(application.workspaceRoot)}
+            sessionError={sessionError}
+            sessionCreationDisabled={phaseSessionRunActive}
+            sessionRunStates={displayedSessionRunStates}
+            sessions={sessions}
+            showDevelopmentActions={showDevelopmentSidebarActions}
+            settingsActive={activeView === 'settings'}
+            skillsActive={activeView === 'skills'}
+            theme={theme}
+            workspaceRoot={workspaceRoot}
+          />
+          {activeView === 'skills' ? (
+            <SkillsPage onSkillDisabled={handleSkillDisabled} theme={theme} />
+          ) : activeView === 'dataSources' ? (
+            <DataSourcesPage theme={theme} workspaceRoot={application.workspaceRoot || ''} />
+          ) : activeView === 'files' ? (
+            <AgentFilesPage />
+          ) : activeView === 'settings' ? (
+            <SettingsPage application={application} onSaved={onApplicationUpdate} />
+          ) : showEntityInfoPanel ? (
+            <div className={cx('ai-chat-main')}>
+              <EntityInfoPanel
+                entity={activeEntityOption}
                 theme={theme}
+                workspaceRoot={application.workspaceRoot || ''}
               />
-            ) : null}
+            </div>
+          ) : (
+            <div className={cx('ai-chat-main')}>
+              {activeDetailTarget.type !== 'none' ? (
+                <PageContextHeader
+                  description={activeHeaderTarget.description}
+                  isPageOpen={activeHeaderTarget.type === 'page' && rightPanel?.type === 'preview'}
+                  keyFeatures={activeHeaderTarget.keyFeatures}
+                  lastAnalyzedAt={activeSessionUpdatedAt}
+                  onClosePage={handleClosePage}
+                  onOpenFullscreenPage={handleOpenFullscreenPreview}
+                  onOpenPage={handleOpenPage}
+                  pagePath={activeHeaderTarget.path}
+                  pageTitle={activeHeaderTarget.title}
+                  previewAvailable={showPreviewActions && Boolean(runtimePreviewBaseUrl)}
+                  previewLaunchError={showPreviewActions ? runtimePreviewLaunchError : ''}
+                  previewLaunchLoading={previewLaunchLoading}
+                  status={activeHeaderStatus}
+                  targetType={activeHeaderTarget.type}
+                  theme={theme}
+                />
+              ) : null}
 
-            {previewError && (
-              <Alert
-                className={cx('preview-action-error')}
-                message={previewError}
-                showIcon
-                type="error"
-              />
-            )}
-
-            <MessageList
-              applicationLifecycle={applicationLifecycle}
-              applicationTemplatePreparationEligible={applicationTemplatePreparationEligible}
-              codeChangeActionsDisabled={
-                loading || workflowInputLocked || otherSessionExecutionLocked
-              }
-              conversationRunning={conversationRunning}
-              dagConfirmationInStageOutput={Boolean(
-                stageOutputMatchesSession &&
-                  rightPanel?.type === 'stage-output' &&
-                  rightPanel.view === 'confirmation' &&
-                  dagConfirmationPlan
+              {previewError && (
+                <Alert
+                  className={cx('preview-action-error')}
+                  message={previewError}
+                  showIcon
+                  type="error"
+                />
               )}
-              entityDesignSession={entityDesignChatActive}
-              designPhasePlanning={isApplicationPlanningPhase}
-              emptyContent={
-                !isApplicationPlanningPhase ? (
-                  <QuickTaskGuide
-                    developmentArtifacts={applicationLifecycle?.developmentArtifacts}
-                    apiContracts={developmentPlanningApiContracts}
-                    disabled={loading || workflowInputLocked}
-                    entities={developmentPlanningEntities}
-                    loading={loadingSessions || !developmentPlanningReady}
-                    onStart={handleQuickTaskStart}
-                    pages={displayedPlanningPages}
-                  />
-                ) : undefined
-              }
-              error={planningError || error}
-              key={activeSession?.key || draftKey}
-              loading={loading || otherSessionExecutionLocked}
-              messages={messages}
-              apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
-              onContinueDevelopment={handleContinueDevelopment}
-              onEntityDesignGateJump={handleEntityDesignGateJump}
-              onOpenApiDesignConfig={handleOpenApiDesignConfig}
-              onOpenCodeChangeFile={handleOpenCodeChangeFile}
-              onOpenRevisionSession={handleOpenRevisionSession}
-              onRevertCodeChanges={requestCodeChangeRevert}
-              onRetryError={
-                planningError
-                  ? onRetryPlanning
-                  : workflowCodeReviewRetry(activeWorkflow)
-                    ? () => void handleRetryCodeReview()
-                    : undefined
-              }
-              onRetryTemplateGeneration={
-                templateGenerationRecoverable
-                  ? onRetryPlanning
-                  : templateReconcileRetryable
-                    ? onRetryTemplateReconcile
-                  : undefined
-              }
-              onSubmitClarification={handleSubmitWorkflowClarification}
-              revertingCodeChangeIds={revertingCodeChangeIds}
-              workspaceRoot={application.workspaceRoot || undefined}
-              uiDesignActivePageId={uiDesignActivePageId}
-              onUiDesignActivePageChange={handleUiDesignActivePageChange}
-              uiDesignActingPageIds={uiDesignActingPageIds}
-              onUiDesignActingPageIdsChange={setUiDesignActingPageIds}
-              onSaveRequirementSpec={handleSaveRequirementSpec}
-              rootPath={application.menus?.rootPath || '/'}
-              onEnterDevelopment={handleEnterDevelopment}
-              generatingTemplate={generatingTemplate}
-              templateGenerationOrphaned={templateGenerationOrphaned}
-              templateReconcileRetryable={templateReconcileRetryable}
-              planningState={planningState}
-            />
 
-            {otherSessionExecutionLocked ? (
-              <SessionExecutionLockDock
-                phaseLabel={phaseExecutionLabel}
-                sessionTitle={phaseExecutionSessionTitle}
-                status={phaseExecutionStatus}
-                onOpenSession={applicationOwnerSession
-                  ? () => {
-                      void handleOpenApplicationSession(applicationOwnerSession.id)
-                    }
-                  : pendingPlanOwnedByOtherSession && pendingDagSession
-                    ? () => {
-                        void handleOpenApplicationSession(pendingDagSession.id)
-                      }
-                    : undefined}
-              />
-            ) : previewRuntime.repairSession ? (
-              <PreviewRepairControls
-                repair={previewRuntime.repairState}
-                busy={previewRuntime.repairBusy}
-                onAction={previewRuntime.act}
-                onRevision={(message) => {
-                  void createDevelopmentConversation('预览修复：正式修订').then((identity) => {
-                    setDraftByKey(identity.key, message)
-                    switchPhase('development')
-                  })
+              <MessageList
+                applicationLifecycle={applicationLifecycle}
+                applicationTemplatePreparationEligible={applicationTemplatePreparationEligible}
+                codeChangeActionsDisabled={
+                  loading || workflowInputLocked || otherSessionExecutionLocked
+                }
+                conversationRunning={conversationRunning}
+                dagConfirmationInStageOutput={Boolean(
+                  stageOutputMatchesSession &&
+                    rightPanel?.type === 'stage-output' &&
+                    rightPanel.view === 'confirmation' &&
+                    dagConfirmationPlan
+                )}
+                entityDesignSession={entityDesignChatActive}
+                designPhasePlanning={isApplicationPlanningPhase}
+                reusedExistingTemplate={reusingExistingTemplate}
+                emptyContent={
+                  !isApplicationPlanningPhase ? (
+                    <QuickTaskGuide
+                      developmentArtifacts={applicationLifecycle?.developmentArtifacts}
+                      apiContracts={developmentPlanningApiContracts}
+                      disabled={loading || workflowInputLocked}
+                      entities={developmentPlanningEntities}
+                      loading={loadingSessions || !developmentPlanningReady}
+                      onStart={handleQuickTaskStart}
+                      pages={displayedPlanningPages}
+                    />
+                  ) : undefined
+                }
+                error={planningError || error}
+                key={activeSession?.key || draftKey}
+                loading={loading || otherSessionExecutionLocked}
+                messages={messages}
+                apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
+                onContinueDevelopment={handleContinueDevelopment}
+                onEntityDesignGateJump={handleEntityDesignGateJump}
+                onOpenApiDesignConfig={handleOpenApiDesignConfig}
+                onOpenCodeChangeFile={handleOpenCodeChangeFile}
+                onOpenRevisionSession={handleOpenRevisionSession}
+                onRevertCodeChanges={requestCodeChangeRevert}
+                onRetryError={
+                  planningError
+                    ? onRetryPlanning
+                    : workflowCodeReviewRetry(activeWorkflow)
+                      ? () => void handleRetryCodeReview()
+                      : undefined
+                }
+                onRetryTemplateGeneration={
+                  templateGenerationRecoverable
+                    ? onRetryPlanning
+                    : templateReconcileRetryable
+                      ? onRetryTemplateReconcile
+                      : undefined
+                }
+                onSubmitClarification={handleSubmitWorkflowClarification}
+                onStartIterationPlanning={async (request) => {
+                  appendPlanningUserMessage({ design_change_request: request })
+                  await onStartIterationPlanning(request)
                 }}
+                revertingCodeChangeIds={revertingCodeChangeIds}
+                workspaceRoot={application.workspaceRoot || undefined}
+                commitDisabled={loading || workspaceBusy}
+                uiDesignActivePageId={uiDesignActivePageId}
+                onUiDesignActivePageChange={handleUiDesignActivePageChange}
+                uiDesignActingPageIds={uiDesignActingPageIds}
+                onUiDesignActingPageIdsChange={setUiDesignActingPageIds}
+                onSaveRequirementSpec={handleSaveRequirementSpec}
+                rootPath={application.menus?.rootPath || '/'}
+                onEnterDevelopment={handleEnterDevelopment}
+                generatingTemplate={generatingTemplate}
+                templateGenerationOrphaned={templateGenerationOrphaned}
+                templateReconcileRetryable={templateReconcileRetryable}
+                planningState={planningState}
               />
-            ) : !entityDesignChatActive &&
-              !acceptanceAwaiting &&
-              shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive) ? (
-              <WorkspaceDebugDock
-                activeWorkflow={activeWorkflow}
-                copy={copy}
-                initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
-                loading={currentGenerationLoading}
-                onSend={
-                  planExecutionShowsDebugResume(displayedPlanExecutionMode) && activeWorkflow
-                    ? handleResumePlan
-                    : handleSend
-                }
-                onStopGenerating={handleStopCurrentGeneration}
-                rightContent={
-                  <PlanExecutionDock
-                    canRetryFailedTasks={canRetryFailedTasks}
-                    dependencyLocked={targetExecutionContext.dependencyLocked}
-                    error={scopedExecution?.error?.message || error}
-                    execution={scopedExecution}
-                    mode={displayedPlanExecutionMode}
-                    onAccept={handleAcceptPreview}
-                    onConfirmInteraction={handleConfirmPlanInteraction}
-                    onEnd={() => void handleEndPlan(scopedExecution?.runId)}
-                    onOpenPreview={() => void handleOpenFullscreenPreview()}
-                    onRetry={() => void handleRetryPlan(latestWorkflowForDisplay)}
-                    onStop={
-                      currentGenerationLoading
-                        ? handleStopCurrentGeneration
-                        : () => void handleStopPlan(scopedExecution?.runId)
-                    }
-                    onViewPlan={handleViewPlan}
-                  />
-                }
-                stopping={stopping}
-                workspaceBusy={workflowInputLocked}
-                workspaceRoot={workspaceRoot}
-              />
-            ) : (
-              <>
-                <ChatComposer
+
+              {milestoneCommitReminderProps && (
+                <MilestoneCommitReminder
+                  {...milestoneCommitReminderProps}
+                  disabled={loading || workspaceBusy}
+                />
+              )}
+
+              {/* 弱提醒：设计文档确认后提示可保存设计版本。
+                  与代码提交入口分开用不同文案，且只在用户点击时打开弹窗、不自动弹。
+
+                  唯一传 includePlatformArtifacts 的提醒：设计阶段唯一的变更就是
+                  `.xcodeagent` 规划产物，按业务代码口径算永远是 0，提醒会彻底消失。
+                  文档 §4.3 正是把它定位成与"代码提交入口分开"的第二条通道。 */}
+              {hasConfirmedDesignDocument(applicationLifecycle?.initialization?.stage) ? (
+                <MilestoneCommitReminder
+                  workspaceRoot={application.workspaceRoot || ''}
+                  title="设计文档已确认，可保存为设计版本"
+                  defaultCommitMessage="docs: 保存设计版本"
+                  milestoneId={`${application.id}:design`}
+                  disabled={loading || workspaceBusy}
+                  includePlatformArtifacts
+                  // 设计阶段仓库可能尚未建立（bootstrap 之后才有），读不到就静默。
+                  hideWhenUnavailable
+                />
+              ) : null}
+
+              {otherSessionExecutionLocked ? (
+                <SessionExecutionLockDock
+                  phaseLabel={phaseExecutionLabel}
+                  sessionTitle={phaseExecutionSessionTitle}
+                  status={phaseExecutionStatus}
+                  onOpenSession={
+                    applicationOwnerSession
+                      ? () => {
+                          void handleOpenApplicationSession(applicationOwnerSession.id)
+                        }
+                      : pendingPlanOwnedByOtherSession && pendingDagSession
+                        ? () => {
+                            void handleOpenApplicationSession(pendingDagSession.id)
+                          }
+                        : undefined
+                  }
+                />
+              ) : previewRuntime.repairSession ? (
+                <PreviewRepairControls
+                  repair={previewRuntime.repairState}
+                  busy={previewRuntime.repairBusy}
+                  onAction={previewRuntime.act}
+                  onRevision={(message) => {
+                    void createDevelopmentConversation('预览修复：正式修订').then((identity) => {
+                      setDraftByKey(identity.key, message)
+                      switchPhase('development')
+                    })
+                  }}
+                />
+              ) : !entityDesignChatActive &&
+                !acceptanceAwaiting &&
+                shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive) ? (
+                <WorkspaceDebugDock
                   activeWorkflow={activeWorkflow}
                   copy={copy}
-                  draft={draft}
-                  inspectedElementContext={inspectedElementContext}
+                  initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
                   loading={currentGenerationLoading}
-                  onDraftChange={(value) => setDraftByKey(draftKey, value)}
-                  onInspectedElementContextClear={() => setInspectedElementContext(undefined)}
-                  onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
-                  placeholder={
-                    productConversationAvailable ? PRODUCT_CONVERSATION_PLACEHOLDER : undefined
-                  }
-                  sendDisabled={productConversationSendDisabled}
-                  sendDisabledHint={
-                    productConversationSendDisabled ? PRODUCT_CONVERSATION_RUNNING_HINT : undefined
-                  }
-                  // 产品阶段始终使用 Product Coordinator；完成态修改再进入 formal revision。
-                  // 当前节点的澄清和确认只能通过上方结构化卡片提交，不能劫持普通输入语义。
                   onSend={
-                    productConversationAvailable
-                      ? handleProductConversationSend
-                      : handleConversationSend
+                    planExecutionShowsDebugResume(displayedPlanExecutionMode) && activeWorkflow
+                      ? handleResumePlan
+                      : handleSend
                   }
                   onStopGenerating={handleStopCurrentGeneration}
+                  rightContent={
+                    <PlanExecutionDock
+                      canRetryFailedTasks={canRetryFailedTasks}
+                      dependencyLocked={targetExecutionContext.dependencyLocked}
+                      error={scopedExecution?.error?.message || error}
+                      execution={scopedExecution}
+                      mode={displayedPlanExecutionMode}
+                      onAccept={handleAcceptPreview}
+                      onConfirmInteraction={handleConfirmPlanInteraction}
+                      onEnd={() => void handleEndPlan(scopedExecution?.runId)}
+                      onOpenPreview={() => void handleOpenFullscreenPreview()}
+                      onRetry={() => void handleRetryPlan(latestWorkflowForDisplay)}
+                      onStop={
+                        currentGenerationLoading
+                          ? handleStopCurrentGeneration
+                          : () => void handleStopPlan(scopedExecution?.runId)
+                      }
+                      onViewPlan={handleViewPlan}
+                    />
+                  }
                   stopping={stopping}
-                  selectedSkills={selectedSkills}
                   workspaceBusy={workflowInputLocked}
                   workspaceRoot={workspaceRoot}
                 />
-                {!entityDesignChatActive &&
-                displayedPlanExecutionMode !== 'idle' &&
-                !conversationActive ? (
-                  <WorkspaceDebugDock
+              ) : (
+                <>
+                  <ChatComposer
                     activeWorkflow={activeWorkflow}
                     copy={copy}
-                    initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
+                    draft={draft}
+                    inspectedElementContext={inspectedElementContext}
                     loading={currentGenerationLoading}
-                    onSend={handleSend}
+                    onDraftChange={(value) => setDraftByKey(draftKey, value)}
+                    onInspectedElementContextClear={() => setInspectedElementContext(undefined)}
+                    onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
+                    placeholder={
+                      productConversationAvailable ? PRODUCT_CONVERSATION_PLACEHOLDER : undefined
+                    }
+                    sendDisabled={productConversationSendDisabled}
+                    sendDisabledHint={
+                      productConversationSendDisabled
+                        ? PRODUCT_CONVERSATION_RUNNING_HINT
+                        : undefined
+                    }
+                    // 产品阶段始终使用 Product Coordinator；完成态修改再进入 formal revision。
+                    // 当前节点的澄清和确认只能通过上方结构化卡片提交，不能劫持普通输入语义。
+                    onSend={
+                      productConversationAvailable
+                        ? handleProductConversationSend
+                        : handleConversationSend
+                    }
                     onStopGenerating={handleStopCurrentGeneration}
                     stopping={stopping}
+                    selectedSkills={selectedSkills}
                     workspaceBusy={workflowInputLocked}
                     workspaceRoot={workspaceRoot}
                   />
-                ) : null}
-              </>
-            )}
-          </div>
-        )}
-      </div>
+                  {!entityDesignChatActive &&
+                  displayedPlanExecutionMode !== 'idle' &&
+                  !conversationActive ? (
+                    <WorkspaceDebugDock
+                      activeWorkflow={activeWorkflow}
+                      copy={copy}
+                      initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
+                      loading={currentGenerationLoading}
+                      onSend={handleSend}
+                      onStopGenerating={handleStopCurrentGeneration}
+                      stopping={stopping}
+                      workspaceBusy={workflowInputLocked}
+                      workspaceRoot={workspaceRoot}
+                    />
+                  ) : null}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {temporaryChatOpen ? <TemporaryChatOverlay onClose={handleCloseTemporaryChat} /> : null}
 
@@ -4866,11 +4983,46 @@ export default function AiChatPanel({
             onElementContextChange={setInspectedElementContext}
           />
           {acceptanceAwaiting && (
-            <AcceptanceDecisionDock
-              disabled={loading || workspaceBusy}
-              onAccept={handleAcceptanceApprove}
-              onReject={handleAcceptanceReject}
-            />
+            <>
+              {/* 验收是质量门禁通过后的稳定边界，此时把工作区自动快照成一个独立
+                  commit（与模板 baseline 同一性质），让"验收通过那一刻"有可回滚的落点。
+                  结果照模板卡的做法展示出来 —— 自动提交由平台发起、用户没参与写信息，
+                  不显示就成了黑盒。
+
+                  不能自动提交时（有暂存内容、含敏感文件、读不到状态）降级为手动提醒，
+                  由用户自己审阅，不替他做决定。 */}
+              <AcceptanceCommitDock
+                workspaceRoot={application.workspaceRoot || ''}
+                disabled={loading || workspaceBusy}
+                renderManualReview={() =>
+                  orphanChangePaths.length > 0 ? (
+                    <MilestoneCommitReminder
+                      workspaceRoot={application.workspaceRoot || ''}
+                      title={`有 ${orphanChangePaths.length} 个文件未关联到任何模块，请确认归属`}
+                      description={`未归属模块：${summarizePaths(orphanChangePaths)}`}
+                      defaultCommitMessage="chore: 提交遗漏变更"
+                      milestoneId={`${application.id}:quality-gate-${application.currentVersionId || ''}`}
+                      disabled={loading || workspaceBusy}
+                      hideWhenUnavailable
+                    />
+                  ) : (
+                    <MilestoneCommitReminder
+                      workspaceRoot={application.workspaceRoot || ''}
+                      title="代码已通过自动检查，可先创建版本"
+                      defaultCommitMessage="chore: 保存当前模块代码"
+                      milestoneId={`${application.id}:quality-gate-${application.currentVersionId || ''}`}
+                      disabled={loading || workspaceBusy}
+                      hideWhenUnavailable
+                    />
+                  )
+                }
+              />
+              <AcceptanceDecisionDock
+                disabled={loading || workspaceBusy}
+                onAccept={handleAcceptanceApprove}
+                onReject={handleAcceptanceReject}
+              />
+            </>
           )}
         </div>
       )}

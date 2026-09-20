@@ -1,74 +1,100 @@
 import type { ApplicationLifecycle } from './typings'
-import { clearReachedWorkbenchPhase } from './workbenchPhaseNavigation'
+import {
+  clearReachedWorkbenchPhase,
+  removeLocalStorageKeysWithPrefix
+} from './workbenchPhaseNavigation'
 
 const DEVELOPMENT_ENTRY_STORAGE_PREFIX = 'xcodeagent:enter-dev-confirmed:'
 const DEVELOPMENT_ENTRY_EVENT = 'xcodeagent:development-entered'
 const WORKBENCH_PHASE_STORAGE_PREFIX = 'xcodeagent:workbench-phase:'
 
-/** 生成指定应用的界面阶段恢复键。 */
-function workbenchPhaseStorageKey(applicationId: string): string {
-  return `${WORKBENCH_PHASE_STORAGE_PREFIX}${applicationId}`
+/**
+ * 手动阶段覆盖按「应用 + 版本」隔离。覆盖表达的是"用户在当前这次迭代旅程里
+ * 想停在哪个阶段"（例如切回产品做增量迭代）；一旦发起新迭代就是另一段旅程，
+ * 必须重新跟随后端生命周期推导，否则上一轮的验收覆盖会把新迭代按在验收阶段。
+ */
+function workbenchPhaseStorageKey(applicationId: string, versionId: string): string {
+  return `${WORKBENCH_PHASE_STORAGE_PREFIX}${applicationId}:${versionId}`
 }
 
-/** 读取用户上次手动选择的工作台阶段，空值表示跟随生命周期。 */
-export function getPersistedWorkbenchPhase(applicationId: string): WorkbenchPhase | null {
-  const value = window.localStorage.getItem(workbenchPhaseStorageKey(applicationId))
+/** 读取用户在当前迭代里手动选择的工作台阶段，空值表示跟随生命周期。 */
+export function getPersistedWorkbenchPhase(
+  applicationId: string,
+  versionId: string
+): WorkbenchPhase | null {
+  const value = window.localStorage.getItem(workbenchPhaseStorageKey(applicationId, versionId))
   return isWorkbenchPhase(value) ? value : null
 }
 
 /** 持久化用户手动选择的工作台阶段；传 null 清除覆盖并恢复生命周期推导。 */
 export function setPersistedWorkbenchPhase(
   applicationId: string,
+  versionId: string,
   phase: WorkbenchPhase | null
 ): void {
-  const key = workbenchPhaseStorageKey(applicationId)
+  const key = workbenchPhaseStorageKey(applicationId, versionId)
   if (phase) window.localStorage.setItem(key, phase)
   else window.localStorage.removeItem(key)
 }
 
-/** 生成应用进入开发阶段的持久化键。 */
-function developmentEntryStorageKey(applicationId: string): string {
-  return `${DEVELOPMENT_ENTRY_STORAGE_PREFIX}${applicationId}`
+/**
+ * "已进入开发"按「应用 + 版本」隔离。每次迭代都从设计/计划重新走一遍，进入开发是
+ * **本轮迭代**的事实；若按应用存，v1.0 进入过开发就会永久压制后续迭代的模板就绪卡，
+ * 用户在新迭代里既看不到就绪卡也拿不到"进入开发阶段"入口。
+ */
+function developmentEntryStorageKey(applicationId: string, versionId: string): string {
+  return `${DEVELOPMENT_ENTRY_STORAGE_PREFIX}${applicationId}:${versionId}`
 }
 
-/** 判断用户是否已明确让指定新应用进入开发阶段。 */
-export function hasApplicationEnteredDevelopment(applicationId: string): boolean {
-  return window.localStorage.getItem(developmentEntryStorageKey(applicationId)) === '1'
+/** 判断用户是否已明确让当前迭代进入开发阶段。 */
+export function hasApplicationEnteredDevelopment(
+  applicationId: string,
+  versionId: string
+): boolean {
+  return window.localStorage.getItem(developmentEntryStorageKey(applicationId, versionId)) === '1'
 }
 
-/** 持久化进入开发阶段的决定，并通知当前窗口内依赖该门禁的功能。 */
-export function markApplicationEnteredDevelopment(applicationId: string): void {
-  window.localStorage.setItem(developmentEntryStorageKey(applicationId), '1')
-  window.dispatchEvent(new CustomEvent(DEVELOPMENT_ENTRY_EVENT, { detail: { applicationId } }))
+/** 持久化当前迭代进入开发阶段的决定，并通知当前窗口内依赖该门禁的功能。 */
+export function markApplicationEnteredDevelopment(applicationId: string, versionId: string): void {
+  window.localStorage.setItem(developmentEntryStorageKey(applicationId, versionId), '1')
+  window.dispatchEvent(
+    new CustomEvent(DEVELOPMENT_ENTRY_EVENT, { detail: { applicationId, versionId } })
+  )
 }
 
-/** 删除应用时清除工作台阶段和进入开发门禁的本地持久化状态。 */
+/** 删除应用时清除工作台阶段和进入开发门禁的本地持久化状态（覆盖该应用所有版本）。 */
 export function clearApplicationWorkbenchState(applicationId: string): void {
   clearReachedWorkbenchPhase(applicationId)
-  window.localStorage.removeItem(workbenchPhaseStorageKey(applicationId))
-  window.localStorage.removeItem(developmentEntryStorageKey(applicationId))
+  removeLocalStorageKeysWithPrefix(`${WORKBENCH_PHASE_STORAGE_PREFIX}${applicationId}:`)
+  removeLocalStorageKeysWithPrefix(`${DEVELOPMENT_ENTRY_STORAGE_PREFIX}${applicationId}:`)
 }
 
-/** 判断首次新建应用的模板准备卡是否仍有资格出现。 */
+/** 判断应用的模板准备卡是否仍有资格出现。
+ *  原仅限 source='new'，但历史应用（existing-workspace）从首页进入计划阶段时
+ *  lifecycle 已是 ready_for_workbench，同样需要展示"应用模板已就绪"卡片；
+ *  只要尚未进入开发即应显示，source 不作为排除条件。 */
 export function isApplicationTemplatePreparationEligible(
-  applicationSource: 'new' | 'existing-workspace' | undefined,
+  _applicationSource: 'new' | 'existing-workspace' | undefined,
   enteredDevelopment: boolean
 ): boolean {
-  return applicationSource === 'new' && !enteredDevelopment
+  return !enteredDevelopment
 }
 
-/** 监听指定应用进入开发阶段的决定，兼顾当前窗口操作与其他窗口同步。 */
+/** 监听指定迭代进入开发阶段的决定，兼顾当前窗口操作与其他窗口同步。 */
 export function subscribeApplicationDevelopmentEntry(
   applicationId: string,
+  versionId: string,
   listener: () => void
 ): () => void {
   const handleDevelopmentEntry = (event: Event): void => {
-    const enteredApplicationId = (event as CustomEvent<{ applicationId?: string }>).detail
-      ?.applicationId
-    if (enteredApplicationId === applicationId) listener()
+    const detail = (event as CustomEvent<{ applicationId?: string; versionId?: string }>).detail
+    if (detail?.applicationId === applicationId && detail?.versionId === versionId) listener()
   }
   const handleStorage = (event: StorageEvent): void => {
-    if (event.key === developmentEntryStorageKey(applicationId) && event.newValue === '1') {
+    if (
+      event.key === developmentEntryStorageKey(applicationId, versionId) &&
+      event.newValue === '1'
+    ) {
       listener()
     }
   }
@@ -92,6 +118,7 @@ export type WorkbenchPhase =
   | 'test'
   | 'review'
   | 'acceptance'
+  | 'release'
 
 /** 判断持久化值是否属于当前支持的工作台阶段。 */
 function isWorkbenchPhase(value: string | null): value is WorkbenchPhase {
@@ -101,7 +128,8 @@ function isWorkbenchPhase(value: string | null): value is WorkbenchPhase {
     value === 'development' ||
     value === 'test' ||
     value === 'review' ||
-    value === 'acceptance'
+    value === 'acceptance' ||
+    value === 'release'
   )
 }
 
@@ -152,6 +180,12 @@ export const WORKBENCH_PHASE_AGENTS: Record<WorkbenchPhase, WorkbenchAgentIdenti
     label: '验收',
     role: '验收 Agent',
     responsibility: '项目预览与用户验收'
+  },
+  release: {
+    key: 'release',
+    label: '生成新版本',
+    role: '发布 Agent',
+    responsibility: '打包应用资产、提交码云仓库并打 Tag，锁定版本里程碑'
   }
 }
 
@@ -166,6 +200,7 @@ export type EditableObjectType =
   | 'endpoint_spec'
   | 'code'
   | 'acceptance'
+  | 'release'
 
 /** 各阶段可编辑的对象集合；不在集合里的对象在该阶段只读。 */
 const PHASE_EDITABLE_OBJECTS: Record<WorkbenchPhase, EditableObjectType[]> = {
@@ -177,7 +212,8 @@ const PHASE_EDITABLE_OBJECTS: Record<WorkbenchPhase, EditableObjectType[]> = {
   // 测试阶段：以跑+看+确认为主，仅验收可确认。
   test: [],
   review: [],
-  acceptance: ['acceptance']
+  acceptance: ['acceptance'],
+  release: ['release']
 }
 
 /** 阶段门禁：某对象在指定阶段是否可编辑。 */
@@ -233,10 +269,7 @@ const TEST_PHASE_NODES = new Set([
   'small_task_repair',
   'review_phase_confirmation'
 ])
-const REVIEW_PHASE_NODES = new Set([
-  'code_review',
-  'acceptance_phase_confirmation'
-])
+const REVIEW_PHASE_NODES = new Set(['code_review', 'acceptance_phase_confirmation'])
 const ACCEPTANCE_PHASE_NODES = new Set([
   'launch_project',
   'acceptance_review',

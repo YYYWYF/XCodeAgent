@@ -67,7 +67,11 @@ import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
 import { workflowClarification } from './workflowClarification'
-import { buildTaskDisplayStatus } from './buildTaskStatus'
+import {
+  buildTaskDisplayStatus,
+  isCheckpointCandidate,
+  isModuleCheckpointCandidate
+} from './buildTaskStatus'
 import {
   bindDagConfirmationDraftIdentity,
   currentDagConfirmationDraftIdentity
@@ -314,8 +318,7 @@ export default function WorkflowRunCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow.threadId, clarificationFingerprint])
 
-  const awaitingApiDesignConfirmation =
-    apiDesignResult?.status === 'ready' && apiDesignConfirmation
+  const awaitingApiDesignConfirmation = apiDesignResult?.status === 'ready' && apiDesignConfirmation
   // 映射结果会保留在后续节点快照中，仅映射门禁自身可以独占卡片，避免遮蔽单元测试等确认入口。
   const showingApiDesignGate =
     apiDesignConfirmation || workflow.summary.phase === 'api_design_readiness_gate'
@@ -1412,6 +1415,13 @@ export function BuildExecutionRunCard({
         </Tag>
       </div>
       <BuildExecutionSliceProgress executionSlice={executionSlice} />
+      {/* 中等提示：本轮模块做完而整体未结束时，记一个候选提交点。
+          只提示不弹窗，避免打断后续批次。 */}
+      {isModuleCheckpointCandidate({ executionStatus: status, tasks: executionSlice.tasks }) ? (
+        <Text className={cx('workflow-build-checkpoint-hint')} type="secondary">
+          本轮模块改动已完成，可在版本入口创建提交
+        </Text>
+      ) : null}
     </section>
   )
 }
@@ -1468,6 +1478,15 @@ function BuildExecutionTaskHeader({
         >
           {taskStatusText(status)}
         </Tag>
+        {/* 弱提醒：任务完成且确实写过文件时标记"可形成检查点"，只做标记、不弹窗。 */}
+        {isCheckpointCandidate(task) ? (
+          <Tag
+            className={cx('workflow-build-task-checkpoint-tag')}
+            title="本轮改动已落盘，可在版本入口创建提交"
+          >
+            可形成检查点
+          </Tag>
+        ) : null}
       </div>
       {buildToolActivityPlacement(task, expanded) === 'header' && (
         <BuildToolActivity activity={task.activeToolActivity!} />

@@ -16,6 +16,7 @@ export function hasNonTerminalApplicationExecution(lifecycle?: ApplicationLifecy
 export function useApplicationLifecycleStore(applicationId: string): {
   lifecycle?: ApplicationLifecycle
   mergeLifecycle: (lifecycle: ApplicationLifecycle) => void
+  resetLifecycle: (lifecycle: ApplicationLifecycle) => void
 } {
   const [lifecycle, setLifecycle] = useState<ApplicationLifecycle>()
   const applicationLifecycle = lifecycle?.application.id === applicationId ? lifecycle : undefined
@@ -30,5 +31,10 @@ export function useApplicationLifecycleStore(applicationId: string): {
     setLifecycle((current) => latestApplicationLifecycle(current, incoming))
   }, [])
 
-  return { lifecycle: applicationLifecycle, mergeLifecycle }
+  // 强制覆盖 lifecycle（发起新迭代时 revision 从 1 重新开始，需绕过 revision 单调合并）。
+  const resetLifecycle = useCallback((incoming: ApplicationLifecycle): void => {
+    setLifecycle(incoming)
+  }, [])
+
+  return { lifecycle: applicationLifecycle, mergeLifecycle, resetLifecycle }
 }

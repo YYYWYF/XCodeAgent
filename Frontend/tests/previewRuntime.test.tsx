@@ -3,7 +3,11 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { leavePreviewRuntime, runPreviewRuntime } from '../src/renderer/src/service/previewRuntime'
 import PreviewRepairControls from '../src/renderer/src/components/BrowserPreviewPanel/PreviewRepairControls'
-import { previewServiceActionAvailability } from '../src/renderer/src/components/BrowserPreviewPanel/serviceStatusPolicy'
+import {
+  previewServiceActionAvailability,
+  previewServiceState,
+  shouldAutoStartPreviewService
+} from '../src/renderer/src/components/BrowserPreviewPanel/serviceStatusPolicy'
 
 const originalFetch = globalThis.fetch
 Object.assign(globalThis, { window: { xcodeAgent: { agentBaseUrl: 'http://127.0.0.1:8000' } } })
@@ -84,6 +88,46 @@ try {
     true,
     '应用任务占用期间仍应允许手动重启服务'
   )
+
+  // 服务状态收敛：它同时驱动面板状态标签与"切到预览 tab 是否要自动启动"，
+  // 判错会导致要么该启动不启动（白屏），要么把正在跑的服务重复拉起。
+  assert.equal(previewServiceState(undefined), 'idle', '无快照时视为未启动')
+  assert.equal(previewServiceState({}), 'idle')
+  assert.equal(
+    previewServiceState({ frontend: { status: 'stopped' }, backend: { status: 'stopped' } }),
+    'idle'
+  )
+  assert.equal(previewServiceState({ frontend: { status: 'running' } }), 'running')
+  assert.equal(previewServiceState({ backend: { status: 'running' } }), 'running')
+  assert.equal(previewServiceState({ frontend: { status: 'starting' } }), 'starting')
+  assert.equal(previewServiceState({ frontend: { status: 'failed' } }), 'failed')
+  // failed/starting 优先于 running：一端在跑另一端已失败时不能报"运行中"。
+  assert.equal(
+    previewServiceState({ frontend: { status: 'running' }, backend: { status: 'failed' } }),
+    'failed'
+  )
+  assert.equal(
+    previewServiceState({ frontend: { status: 'running' }, backend: { status: 'starting' } }),
+    'starting'
+  )
+
+  // 切到预览 tab 的自动启动判断：漏判会让历史版本预览白屏，误判会重复拉起正在跑的服务。
+  const autoStart = (over: Partial<Parameters<typeof shouldAutoStartPreviewService>[0]> = {}) =>
+    shouldAutoStartPreviewService({
+      activeTabIsPreview: true,
+      hasSnapshot: true,
+      busy: false,
+      status: 'idle',
+      alreadyRequested: false,
+      ...over
+    })
+  assert.equal(autoStart(), true, '停在预览 tab 且服务未启动时应自动拉起')
+  assert.equal(autoStart({ activeTabIsPreview: false }), false, '停在应用文件 tab 不应启动服务')
+  assert.equal(autoStart({ hasSnapshot: false }), false, '快照未到达时不得当成待启动')
+  assert.equal(autoStart({ status: 'running' }), false, '服务已在运行不应重复拉起')
+  assert.equal(autoStart({ status: 'starting' }), false, '正在启动不应重复拉起')
+  assert.equal(autoStart({ status: 'failed' }), false, '失败交给用户诊断，不自动重启')
+  assert.equal(autoStart({ busy: false, alreadyRequested: true }), false, '同一次进入只启动一次')
 
   const awaiting = renderToStaticMarkup(
     createElement(PreviewRepairControls, {
