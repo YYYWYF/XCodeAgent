@@ -60,6 +60,7 @@ import DetailReview from './DetailReview'
 import ApiDesignReadinessGateCard from './ApiDesignReadinessGateCard'
 import type { ApiDesignConfigTarget } from './ApiDesignConfigModal'
 import EntityDesignGateCard from './EntityDesignGateCard'
+import AgentGatewayGateCard from './AgentGatewayGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
@@ -129,6 +130,7 @@ type WorkflowRunCardProps = {
   /** 已答完的历史澄清卡：header→答案 映射，存在时按原控件形态回填答案并以禁用态展示。 */
   historicalClarificationAnswers?: Record<string, string>
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
+  onAgentGatewayJump?: (agentId: string) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
@@ -161,6 +163,7 @@ export default function WorkflowRunCard({
   historicalClarificationAnswers,
   interactionAvailability,
   onEntityDesignGateJump,
+  onAgentGatewayJump,
   onOpenApiDesignConfig,
   onSubmitClarification,
   uiDesignActivePageId,
@@ -196,6 +199,7 @@ export default function WorkflowRunCard({
     ? []
     : clarification?.questions || []
   const entityDesignGate = clarification?.mode === 'entity_source_binding_required'
+  const agentGatewayGate = clarification?.mode === 'agent_gateway_dependency_required'
   const apiDesignRequired = clarification?.mode === 'api_design_required'
   const apiDesignReadinessGate = apiDesignRequired
   const entityGateDevelopmentTarget = clarification?.development_target as
@@ -428,6 +432,7 @@ export default function WorkflowRunCard({
         </div>
       )}
       {(clarificationQuestions.length > 0 ||
+        agentGatewayGate ||
         unitTestConfirmation ||
         detailReview ||
         technicalPlanGenerationError ||
@@ -437,20 +442,24 @@ export default function WorkflowRunCard({
         reviewPhaseConfirmation ||
         acceptancePhaseConfirmation) && (
         <div className={cx('workflow-clarification', apiDesignReadinessGate && 'workflow-clarification-api-design-readiness')}>
-          {!apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
-            <div className={cx('workflow-clarification-header')}>
-              <div>
-                <Text strong>待确认事项</Text>
+          {!apiDesignReadinessGate && !revisionImpact &&
+            !entityDesignReview &&
+            !entityDesignGate &&
+            !agentGatewayGate &&
+            !planningStageEntry && (
+              <div className={cx('workflow-clarification-header')}>
+                <div>
+                  <Text strong>待确认事项</Text>
+                </div>
+                <Tag
+                  className={cx('workflow-confirmation-count')}
+                  color={requiresConfirmation ? 'gold' : 'default'}
+                >
+                  {confirmationItemCount}
+                </Tag>
               </div>
-              <Tag
-                className={cx('workflow-confirmation-count')}
-                color={requiresConfirmation ? 'gold' : 'default'}
-              >
-                {confirmationItemCount}
-              </Tag>
-            </div>
-          )}
-          {requiresConfirmation && interactionAvailability !== 'active' && (
+            )}
+          {requiresConfirmation && !agentGatewayGate && interactionAvailability !== 'active' && (
             <Alert
               message={
                 interactionAvailability === 'unavailable'
@@ -626,6 +635,13 @@ export default function WorkflowRunCard({
                 })
               }
               statements={databaseApproval.statements}
+            />
+          ) : agentGatewayGate ? (
+            <AgentGatewayGateCard
+              agentId={String(clarification?.agentId || '')}
+              agentLabel={String(clarification?.agentLabel || '')}
+              message={String(clarification?.message || '')}
+              onJump={(agentId) => onAgentGatewayJump?.(agentId)}
             />
           ) : entityDesignGate ? (
             <EntityDesignGateCard

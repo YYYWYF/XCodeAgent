@@ -6,6 +6,7 @@ import type {
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageOption
 } from '../../../../typings'
+import { apiEndpointSelectionKey, gatewayEndpointKeys } from '../ApplicationOutline/outlineUtils'
 
 type QuickTaskItemBase = {
   progress?: DevelopmentArtifactProgress
@@ -24,6 +25,7 @@ export type PageQuickTaskItem = QuickTaskItemBase & {
 
 export type EndpointQuickTaskItem = QuickTaskItemBase & {
   kind: 'endpoint'
+  isAgentGateway: boolean
   apiContractId: string
   endpointId: string
   endpointLabel: string
@@ -58,6 +60,7 @@ export function buildQuickTasks(
   artifacts?: DevelopmentArtifacts,
   agents: DevelopmentPlanningAgentOption[] = []
 ): QuickTaskItem[] {
+  const agentGateways = gatewayEndpointKeys(agents)
   const pageTasks: PageQuickTaskItem[] = pages.map((page) => ({
     progress: artifacts?.pages[page.pageId],
     description: String(page.purpose || '从这个页面开始讨论和开发。').trim(),
@@ -84,6 +87,7 @@ export function buildQuickTasks(
         ).trim(),
         id: `endpoint:${apiContractId}:${endpointId}`,
         kind: 'endpoint' as const,
+        isAgentGateway: agentGateways.has(apiEndpointSelectionKey(apiContractId, endpointId)),
         apiContractId,
         endpointId,
         endpointLabel: `${method} ${path}`,

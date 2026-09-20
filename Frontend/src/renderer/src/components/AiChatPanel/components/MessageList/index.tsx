@@ -371,6 +371,7 @@ type MessageListProps = {
   loading: boolean
   messages: AgentChatMessage[]
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
+  onAgentGatewayJump?: (agentId: string) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
   /** 在当前会话中恢复实体门禁前的页面或 Endpoint 正式任务。 */
   onContinueDevelopment?: (
@@ -428,6 +429,7 @@ export default function MessageList({
   loading,
   messages,
   onEntityDesignGateJump,
+  onAgentGatewayJump,
   onOpenApiDesignConfig,
   onContinueDevelopment,
   onOpenRevisionSession,
@@ -1088,6 +1090,7 @@ export default function MessageList({
                               interactionAvailability={interactionAvailability}
                               apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
                               onEntityDesignGateJump={onEntityDesignGateJump}
+                              onAgentGatewayJump={onAgentGatewayJump}
                               onOpenApiDesignConfig={onOpenApiDesignConfig}
                               onSubmitClarification={onSubmitClarification}
                               uiDesignActivePageId={uiDesignActivePageId}

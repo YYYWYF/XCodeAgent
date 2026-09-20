@@ -1,4 +1,8 @@
-import type { ApplicationMenuItem, DevelopmentPlanningPageTreeNode } from '../../../../typings'
+import type {
+  ApplicationMenuItem,
+  DevelopmentPlanningAgentOption,
+  DevelopmentPlanningPageTreeNode
+} from '../../../../typings'
 
 /** 把页面树节点递归转换为大纲复用的菜单项结构。 */
 export function pageTreeItems(nodes: DevelopmentPlanningPageTreeNode[]): ApplicationMenuItem[] {
@@ -85,4 +89,15 @@ export function containsMenuKey(items: ApplicationMenuItem[], key: string): bool
 /** 生成 API endpoint 在应用大纲中的稳定选中键。 */
 export function apiEndpointSelectionKey(contractId: string, endpointId: string): string {
   return `${contractId}:${endpointId}`
+}
+
+/** 仅从当前智能体契约投影提取完整的 Gateway Endpoint 键，普通 Tool Endpoint 不标记。 */
+export function gatewayEndpointKeys(agents: DevelopmentPlanningAgentOption[]): Set<string> {
+  const keys = new Set<string>()
+  agents.forEach((agent) => {
+    const contractId = String(agent.dependencies.gateway.apiContractId || '').trim()
+    const endpointId = String(agent.dependencies.gateway.endpointId || '').trim()
+    if (contractId && endpointId) keys.add(apiEndpointSelectionKey(contractId, endpointId))
+  })
+  return keys
 }

@@ -354,6 +354,10 @@ def project_workflow_lifecycle_boundary(
             "status": "discarded",
         }
         return application_lifecycle_payload(ended)
+    if node_name == "api_design_readiness_gate" and clarification_mode(update) == "agent_gateway_dependency_required":
+        # Gateway 接口只提示跳转；释放本次 Endpoint execution，避免占用智能体开发资源。
+        ended = end_workbench_execution(workspace, run_id=run_id, missing_ok=True)
+        return application_lifecycle_payload(ended)
     if (
         node_name == "launch_project" or clarification_mode(update) == "page_acceptance"
     ) and status == "requires_user_input":

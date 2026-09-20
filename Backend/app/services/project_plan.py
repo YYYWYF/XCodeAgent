@@ -1733,7 +1733,7 @@ def _validate_technical_pagination(
 def validate_technical_plan_api_contracts(
     plan: dict[str, Any],
 ) -> list[str]:
-    """校验 API Contract 的实体绑定、Schema 引用和分页契约。"""
+    """校验 API Contract 的实体绑定、纯 Agent 网关例外和 Schema 契约。"""
 
     raw_entities = _dict_items(plan.get("entities"))
     known_entity_ids = {
@@ -1749,6 +1749,13 @@ def validate_technical_plan_api_contracts(
         }
         for entity in raw_entities
         if str(entity.get("id") or "").strip()
+    }
+    gateway_endpoint_ids = {
+        str(invocation.get("gatewayEndpointId") or "").strip()
+        for agent in _dict_items(plan.get("agent_contracts"))
+        for invocation in [agent.get("invocation")]
+        if isinstance(invocation, dict)
+        and str(invocation.get("gatewayEndpointId") or "").strip()
     }
     errors: list[str] = []
     for contract in _dict_items(plan.get("api_contracts")):
@@ -1786,7 +1793,18 @@ def validate_technical_plan_api_contracts(
             )
         raw_ids = contract.get("entity_ids")
         ids = [str(value).strip() for value in raw_ids if str(value).strip()] if isinstance(raw_ids, list) else []
-        if not ids:
+        endpoints = _dict_items(contract.get("endpoints"))
+        # 无业务实体时，只有全部 Endpoint 均为当前 Agent Gateway 的分组可不绑定实体。
+        entityless_gateway = (
+            not known_entity_ids
+            and raw_ids == []
+            and bool(endpoints)
+            and all(
+                str(endpoint.get("id") or "").strip() in gateway_endpoint_ids
+                for endpoint in endpoints
+            )
+        )
+        if not ids and not entityless_gateway:
             errors.append(f"TechnicalPlan API Contract {contract_id} 必须声明非空 entity_ids。")
             continue
         if len(ids) != len(raw_ids) or len(ids) != len(set(ids)):
@@ -1805,7 +1823,7 @@ def validate_technical_plan_api_contracts(
                     entity_fields=entity_fields,
                 )
             )
-        for endpoint in _dict_items(contract.get("endpoints")):
+        for endpoint in endpoints:
             endpoint_id = str(endpoint.get("id") or "unknown")
             errors.extend(
                 _validate_technical_api_name(
@@ -2304,9 +2322,9 @@ def _technical_agent_contract_model_errors(
             errors.append(
                 f"{location}.agentSettings.knowledge 在 Retriever 实现前必须关闭。"
             )
-        if settings.get("context") != _agent_context_settings():
+        if not isinstance(settings.get("context"), dict):
             errors.append(
-                f"{location}.agentSettings.context 必须使用当前无压缩平台策略。"
+                f"{location}.agentSettings.context 必须是 JSON 对象。"
             )
     return errors
 
@@ -2442,6 +2460,8 @@ def _technical_agent_contracts(
         product_agent = product_by_id.get(agent_id, {})
         settings = deepcopy(raw.get("agentSettings"))
         settings["tools"] = _resolved_agent_tools(settings, api_contracts)
+        # Context 属于平台固定策略；模型只提供候选，正式 Contract 统一由平台编译。
+        settings["context"] = _agent_context_settings()
         capability_tools = {
             str(item.get("capabilityId") or "").strip(): deepcopy(item.get("toolIds"))
             for item in _dict_items(raw.get("capabilityBindings"))

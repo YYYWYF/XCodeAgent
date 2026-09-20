@@ -1,5 +1,5 @@
 import { ApiOutlined, CaretDownOutlined, FolderOpenOutlined } from '@ant-design/icons'
-import { Tooltip } from 'antd'
+import { Tag, Tooltip } from 'antd'
 import type { DevelopmentArtifacts, DevelopmentPlanningApiContract } from '../../../../typings'
 import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import { cx } from '../../../../utils'
@@ -16,18 +16,20 @@ type Props = {
   currentBranch?: string
   developmentArtifacts?: DevelopmentArtifacts
   expanded: boolean
+  gatewayEndpointKeys?: Set<string>
   onToggle: () => void
   onSelect: ApplicationOutlineProps['onApiEndpointSelect']
   selectedKey: string
 }
 
-/** 展示接口分组与三态圆点，分组计数始终包含被搜索条件隐藏的接口。 */
+/** 展示普通接口分组或单个智能体接口，并按未过滤的接口计算三态进度。 */
 export default function ApiOutlineGroup({
   contract,
   allEndpoints,
   currentBranch,
   developmentArtifacts,
   expanded,
+  gatewayEndpointKeys,
   onToggle,
   onSelect,
   selectedKey
@@ -38,30 +40,39 @@ export default function ApiOutlineGroup({
         developmentArtifacts?.endpoints[endpoint.apiContractId || contract.id]?.[endpoint.id]
     )
   )
+  // 只扁平展示完整 Contract 中唯一的智能体接口，避免搜索结果改变分组结构。
+  const standaloneAgentGateway =
+    allEndpoints.length === 1 &&
+    gatewayEndpointKeys?.has(
+      apiEndpointSelectionKey(allEndpoints[0].apiContractId || contract.id, allEndpoints[0].id)
+    ) === true
   return (
     <div>
-      <button
-        aria-expanded={expanded}
-        aria-label={`${contract.name || '未命名接口分组'}，${contract.label}`}
-        className={cx('api-group-title')}
-        onClick={onToggle}
-        type="button"
-      >
-        <CaretDownOutlined className={cx(!expanded && 'collapsed')} />
-        <FolderOpenOutlined />
-        <span className={cx('api-group-label')}>
-          <strong>{contract.name || '未命名接口分组'}</strong>
-        </span>
-        <span className={cx('development-count')}>
-          {completed}/{allEndpoints.length}
-        </span>
-      </button>
-      {expanded ? (
-        <div className={cx('api-list')}>
+      {!standaloneAgentGateway ? (
+        <button
+          aria-expanded={expanded}
+          aria-label={`${contract.name || '未命名接口分组'}，${contract.label}`}
+          className={cx('api-group-title')}
+          onClick={onToggle}
+          type="button"
+        >
+          <CaretDownOutlined className={cx(!expanded && 'collapsed')} />
+          <FolderOpenOutlined />
+          <span className={cx('api-group-label')}>
+            <strong>{contract.name || '未命名接口分组'}</strong>
+          </span>
+          <span className={cx('development-count')}>
+            {completed}/{allEndpoints.length}
+          </span>
+        </button>
+      ) : null}
+      {standaloneAgentGateway || expanded ? (
+        <div className={cx('api-list', standaloneAgentGateway && 'api-list-flat')}>
           {contract.endpoints.map((endpoint) => {
             const endpointId = endpoint.id
             const apiContractId = endpoint.apiContractId || contract.id
             const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
+            const isAgentGateway = gatewayEndpointKeys?.has(endpointKey) === true
             const displayPath = apiEndpointDisplayPath(endpoint.path, contract.label)
             return (
               <div className={cx('api-node')} key={endpointKey}>
@@ -81,14 +92,15 @@ export default function ApiOutlineGroup({
                   <span className={cx('api-tooltip-anchor')}>
                     <button
                       aria-current={selectedKey === endpointKey ? 'true' : undefined}
-                      aria-label={`${endpoint.name || displayPath}，${endpoint.method} ${endpoint.path}${endpoint.summary ? `，${endpoint.summary}` : ''}`}
+                      aria-label={`${endpoint.name || displayPath}，${endpoint.method} ${endpoint.path}${isAgentGateway ? '，智能体接口' : ''}${endpoint.summary ? `，${endpoint.summary}` : ''}`}
                       className={cx('api-row', selectedKey === endpointKey && 'selected')}
                       onClick={() =>
                         onSelect({
                           apiContractId,
                           endpointId,
                           endpointKey,
-                          label: `${endpoint.name || displayPath} · ${endpoint.method} ${displayPath}`.trim()
+                          label:
+                            `${endpoint.name || displayPath} · ${endpoint.method} ${displayPath}`.trim()
                         })
                       }
                       type="button"
@@ -97,6 +109,9 @@ export default function ApiOutlineGroup({
                       <span className={cx('api-copy')}>
                         <strong>{endpoint.name || displayPath}</strong>
                       </span>
+                      {isAgentGateway ? (
+                        <Tag className={cx('agent-gateway-tag')}>智能体接口</Tag>
+                      ) : null}
                       <DevelopmentStatusDot
                         progress={developmentArtifacts?.endpoints[apiContractId]?.[endpointId]}
                       />

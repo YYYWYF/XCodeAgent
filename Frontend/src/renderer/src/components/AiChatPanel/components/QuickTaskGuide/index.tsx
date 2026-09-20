@@ -115,7 +115,12 @@ function QuickTaskSection({
                       <Text className={cx('quick-task-item-meta')}>{item.meta}</Text>
                     </span>
                     {item.kind === 'endpoint' ? (
-                      <code className={cx('quick-task-item-path')}>{item.endpointPath}</code>
+                      <span className={cx('quick-task-endpoint-details')}>
+                        <code className={cx('quick-task-item-path')}>{item.endpointPath}</code>
+                        {item.isAgentGateway ? (
+                          <span className={cx('quick-task-agent-gateway-tag')}>智能体接口</span>
+                        ) : null}
+                      </span>
                     ) : null}
                     <Text className={cx('quick-task-item-description')} type="secondary">
                       {item.description}

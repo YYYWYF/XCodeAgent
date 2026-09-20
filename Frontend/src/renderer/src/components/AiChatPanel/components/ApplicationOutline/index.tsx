@@ -29,6 +29,7 @@ import {
   collectRelatedKeys,
   collectVisibleKeys,
   containsMenuKey,
+  gatewayEndpointKeys,
   pageTreeItems
 } from './outlineUtils'
 
@@ -87,6 +88,7 @@ export default function ApplicationOutline({
     () => new Set()
   )
   const [onlyRelated, setOnlyRelated] = useState(false)
+  const agentGatewayKeys = useMemo(() => gatewayEndpointKeys(agents), [agents])
   const pagesById = useMemo(() => new Map(pages.map((page) => [page.pageId, page])), [pages])
   const pageItems = useMemo<ApplicationMenuItem[]>(
     () =>
@@ -281,6 +283,7 @@ export default function ApplicationOutline({
                       }
                       currentBranch={currentBranch}
                       developmentArtifacts={developmentArtifacts}
+                      gatewayEndpointKeys={agentGatewayKeys}
                       expanded={!collapsedApiContractIds.has(contract.id)}
                       onToggle={() => handleApiContractToggle(contract.id)}
                       onSelect={onApiEndpointSelect}

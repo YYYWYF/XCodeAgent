@@ -242,7 +242,7 @@ TechnicalPlan 包含：
 
 - `architecture` 默认包含前端、Java 后端和数据三段；存在业务智能体时额外包含平台确定性生成的 `agent_runtime`，固定为独立 Python 3.12 + DeepAgents sidecar；
 - `entities` 由技术规划模型根据已确认 ProductPlan 的页面、信息项、业务操作与业务流程独立生成，是实体与 API 的唯一字段事实源；技术规划不读取 RequirementSpec 的 `entities`；
-- API Contract 通过 `entity_ids` 关联实体；Schema 字段可使用 `entity_field_ref` 表示实体来源，计算、聚合和传输字段可以不做实体映射；
+- 普通 API Contract 通过非空 `entity_ids` 关联真实业务实体；无业务实体且分组内全部 Endpoint 都是当前 Agent Contract 声明的 Gateway 时，该纯 Gateway Contract 使用 `entity_ids: []`，不能将 Agent ID 或传输消息伪装为实体；Schema 字段可使用 `entity_field_ref` 表示实体来源，计算、聚合和传输字段可以不做实体映射；
 - ProductPlan 中 `business` action/step 到 endpoint 的 `action_implementations`；
 - 根级 `agent_contracts`：与 ProductPlan `agents[]` 按 `agentId` 一一对应，是包含产品派生快照、七段 `agentSettings`、Gateway、Runtime、安全、产物、检查和 Evaluation 的完整执行契约；普通应用固定为 `[]`；
 - ProductPlan 与 UiManifest 的上游内容哈希。
@@ -335,13 +335,13 @@ TechnicalPlan 确认摘要和右侧阅读面板必须在 `agent_contracts` 非�
 TechnicalPlan 不再持久化 `app`、`requirements_overview`、`project_acceptance_criteria`、
 `business_flows`、`acceptance_criteria`、`risks`、`data_sources`、`permission_model`、
 `frontend_pages` 或 `page_implementation_contracts`。页面字段来自 ProductPlan；实体字段来自
-TechnicalPlan 顶层 `entities`；实体不做全局数据源绑定，数据源身份只存在于后续已确认的 Endpoint API 设计。API 设计场景 Entity 只能从当前 Contract 关联的 TechnicalPlan 实体复制，复制后保持只读且不回写全局实体；模板实体或字段变化会因 TechnicalPlan 契约指纹变化使 Endpoint 设计失效。API Contract 必须通过非空
-`entity_ids` 关联一个或多个实体，禁止 `data_source_id`。角色/跳转/状态来自 ProductPlan；UI 路径与控件映射来自已确认 UiManifest，跳过时不提供 UI 路径和控件映射；
+TechnicalPlan 顶层 `entities`；实体不做全局数据源绑定，数据源身份只存在于后续已确认的 Endpoint API 设计。API 设计场景 Entity 只能从当前 Contract 关联的 TechnicalPlan 实体复制，复制后保持只读且不回写全局实体；模板实体或字段变化会因 TechnicalPlan 契约指纹变化使 Endpoint 设计失效。普通 API Contract 必须通过非空
+`entity_ids` 关联一个或多个实体；仅无业务实体且全部 Endpoint 都是已声明 Agent Gateway 的 Contract 使用空数组，不进入普通 Endpoint 映射流程。禁止 `data_source_id`。角色/跳转/状态来自 ProductPlan；UI 路径与控件映射来自已确认 UiManifest，跳过时不提供 UI 路径和控件映射；
 运行时按当前构建范围组合这些正式上游产物。
 
 每个 API Contract 和 Endpoint 都必须持久化非空且至少包含一个中文字符的 `name`，允许混合英文缩写。Contract `name` 表示接口分组名称，Endpoint `name` 表示操作名称；Endpoint `summary` 继续保存较完整的接口说明。两层 `name` 不参与稳定身份或引用，关联关系仍只使用 Contract/Endpoint `id`。当前 Markdown 不展示这两个名称，因此用户编辑 Markdown 后同步 JSON 时，平台按稳定 ID 保留既有名称；新增 Contract 或 Endpoint 仍必须由同步结果提供合法名称。
 
-技术规划阶段的右侧结构化文档面板展示这两层名称：Contract 卡片显示分组名称和 `base_path`，Endpoint 列表显示方法、接口名称、路径和 `summary`，选中接口的详情标题也显示接口名称。进入工作台后的接口快捷任务入口、开发产物接口树和字段映射目录均突出显示 Endpoint `name`；字段映射目录同时显示 Contract `name` 与 Endpoint `name`，并沿用开发产物 API 树的紧凑层级、缩进连接线、紫色接口图标和悬停高亮，悬停接口一秒后显示方法与完整路径。选中接口的编辑区标题继续显示 Contract 名称、请求方法和完整路径；开发产物接口树的请求方法和完整路径继续通过悬停查看。Contract 分组只突出显示 Contract `name`，不增加分组悬停信息，并统一使用“接口”作为界面文案。页面绑定、Endpoint 设计及 Markdown 展示仍保持各自现有格式。
+技术规划阶段的右侧结构化文档面板展示这两层名称：Contract 卡片显示分组名称和 `base_path`，Endpoint 列表显示方法、接口名称、路径和 `summary`，选中接口的详情标题也显示接口名称。进入工作台后的接口快捷任务入口、开发产物接口树和字段映射目录均突出显示 Endpoint `name`；字段映射目录同时显示 Contract `name` 与 Endpoint `name`，并沿用开发产物 API 树的紧凑层级、缩进连接线、紫色接口图标和悬停高亮，悬停接口一秒后显示方法与完整路径。选中接口的编辑区标题继续显示 Contract 名称、请求方法和完整路径；开发产物接口树的请求方法和完整路径继续通过悬停查看。Contract 分组只突出显示 Contract `name`，不增加分组悬停信息，并统一使用“接口”作为界面文案。完整 Contract 仅有一个且该 Endpoint 为智能体 Gateway 时，开发产物接口树直接显示带“智能体接口”标识的 Endpoint，不额外显示 Contract 分组；内部 Contract/Endpoint 关联不变。页面绑定、Endpoint 设计及 Markdown 展示仍保持各自现有格式。
 
 Endpoint 是否存在请求体由业务语义决定，不由 HTTP Method 单独决定。只依赖路径参数、查询参数和登录态即可完整表达的命令型 `POST`、`PUT` 或 `PATCH` 可以使用 `request_schema_ref: null`；实际消费请求体字段的 Endpoint 必须引用同一 API Contract `schemas` 内的真实请求 Schema，禁止为了通过校验生成无业务字段的空请求对象。
 

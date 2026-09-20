@@ -4,7 +4,7 @@
 
 Workbench 读取 `.devagentstudio/plans/technical-plan.json`，以 ProductPlan `pages` 作为页面事实，并按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲从 `api_contracts` 投射 Endpoint。Endpoint 只有在当前版 `.devagentstudio/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md` 均存在、JSON 已确认且其中的 TechnicalPlan 契约指纹与当前文件一致时才标记“已设计”。仅有 TechnicalPlan 声明或单个 Markdown 文件都不能放行。实体大纲只展示 TechnicalPlan 顶层 `entities`；实体没有全局数据源绑定状态。
 
-点击大纲只选择本次目标。Endpoint 的配置动作打开右侧“字段映射”工作台，已有复杂映射保留 `ApiDesignConfigModal` 完整编辑器；通过 `/endpoint-designs/run` 的 AG-UI `prepare/save_draft/save` 动作分别准备、暂存和确认正式映射，不进入主工作流；页面或 API 开发先进入 `api_design_readiness_gate`，只要目标包含 Endpoint，首次进入就展示目标范围内全部 Endpoint 的已完成、待配置和已失效状态，用户点击任一条目后打开并定位同一字段映射工作台。字段映射的步骤、保存和修改均在右侧工作台处理，不再额外渲染对话区引导卡。全部映射已完成时，门禁卡仍用于查看或修改；用户点击“确认并检测”后统一复检，全部有效时直接继续开发，不再进入独立的 API 映射确认步骤。无关联 Endpoint 的纯静态页面直接放行。会话不归属于页面、接口或实体，已有 Workflow 消息及用户显式打开的历史会话继续展示运行结果。
+点击大纲只选择本次目标。Endpoint 的配置动作打开右侧“字段映射”工作台，已有复杂映射保留 `ApiDesignConfigModal` 完整编辑器；通过 `/endpoint-designs/run` 的 AG-UI `prepare/save_draft/save` 动作分别准备、暂存和确认正式映射，不进入主工作流；页面或 API 开发先进入 `api_design_readiness_gate`，只要目标包含 Endpoint，若选中的 Endpoint 是当前 TechnicalPlan 唯一绑定的 Agent Gateway，门禁只展示智能体依赖与“去开发智能体”入口，结束本次接口执行；点击该入口复用现有 Agent 开发任务，不进入普通 Java 接口字段映射，也不启动 Gateway 开发。首次进入就展示目标范围内全部 Endpoint 的已完成、待配置和已失效状态，用户点击任一条目后打开并定位同一字段映射工作台。字段映射的步骤、保存和修改均在右侧工作台处理，不再额外渲染对话区引导卡。全部映射已完成时，门禁卡仍用于查看或修改；用户点击“确认并检测”后统一复检，全部有效时直接继续开发，不再进入独立的 API 映射确认步骤。无关联 Endpoint 的纯静态页面直接放行。会话不归属于页面、接口或实体，已有 Workflow 消息及用户显式打开的历史会话继续展示运行结果。
 
 页面视觉、组件、交互入口和状态呈现以已确认 React UI 稿为权威；UI 阶段被跳过时依据 ProductPlan、TechnicalPlan 和模板技能实现。`PageImplementationContract` 仍由 ProductPlan、UiManifest 和 TechnicalPlan 在运行时确定性编译，不写入独立页面详设。
 

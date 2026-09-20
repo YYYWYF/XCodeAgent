@@ -1857,7 +1857,9 @@ def _technical_plan_retry_feedback(errors: list[str]) -> str:
     return (
         "系统 TechnicalPlan 一致性校验未通过。请基于已确认的 ProductPlan 与 UiManifest，"
         "在本次重新生成中返回完整 TechnicalPlan 并修复下列问题；不得猜测或省略业务 action/step，"
-        "必须完整保留当前 TechnicalPlan 实体并通过 entity_ids 绑定 API Contract，禁止 data_source_id；"
+        "必须完整保留当前 TechnicalPlan 业务实体并让普通 API Contract 通过 entity_ids 绑定真实实体；"
+        "若无业务实体，纯 Agent Gateway Contract 应使用 entity_ids: []，不可将 agentId 伪装成实体；"
+        "禁止 data_source_id；"
         "每个 endpointId 必须同时存在于 api_contracts 和对应页面 endpoint_dependencies。"
         "不要要求用户重试，也不要解释校验过程：\n"
         f"{diagnostics}"

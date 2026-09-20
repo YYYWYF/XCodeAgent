@@ -51,6 +51,33 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         raise ApiDesignError("API 映射门禁动作与原 API Contract 不一致。")
     if action and str(action.get("action") or "") != "refresh":
         raise ApiDesignError("API 映射门禁仅支持重新检测当前字段映射。")
+    if target_type == "endpoint":
+        agent = _gateway_owner(project_plan, api_contract_id, target_id)
+        if agent is not None:
+            agent_id = str(agent.get("agentId") or "").strip()
+            identity = agent.get("identity") if isinstance(agent.get("identity"), dict) else {}
+            agent_label = str(identity.get("name") or agent_id).strip()
+            message = f"此接口是智能体「{agent_label}」的 Gateway 接口，请先进入智能体开发。"
+            return {
+                "phase": "api_design_readiness_gate",
+                "status": "requires_user_input",
+                "api_design_gate_action": {},
+                "api_design_readiness": {},
+                "api_design_result": {},
+                "clarification": {
+                    "mode": "agent_gateway_dependency_required",
+                    "status": "requires_user_input",
+                    "message": message,
+                    "agentId": agent_id,
+                    "agentLabel": agent_label,
+                    "developmentTarget": {
+                        "type": "endpoint",
+                        "id": target_id,
+                        "apiContractId": api_contract_id,
+                    },
+                },
+                "timeline": ["api_design_readiness_gate"],
+            }
     readiness = api_design_readiness(
         workspace,
         project_plan,
@@ -117,6 +144,35 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         "clarification": clarification,
         "timeline": ["api_design_readiness_gate"],
     }
+
+
+def _gateway_owner(
+    project_plan: dict[str, Any], api_contract_id: str | None, endpoint_id: str
+) -> dict[str, Any] | None:
+    """仅在当前 TechnicalPlan 中唯一绑定的真实 Gateway Endpoint 上识别智能体。"""
+
+    contracts = project_plan.get("api_contracts")
+    contracts = contracts if isinstance(contracts, list) else []
+    endpoint_matches = [
+        endpoint
+        for contract in contracts
+        if isinstance(contract, dict) and str(contract.get("id") or "").strip() == api_contract_id
+        for endpoint in (contract.get("endpoints") or [])
+        if isinstance(endpoint, dict) and str(endpoint.get("id") or "").strip() == endpoint_id
+    ]
+    if len(endpoint_matches) != 1:
+        return None
+    agents = project_plan.get("agent_contracts")
+    agents = agents if isinstance(agents, list) else []
+    owners = [
+        agent
+        for agent in agents
+        if isinstance(agent, dict)
+        and str(agent.get("agentId") or "").strip()
+        and isinstance(agent.get("invocation"), dict)
+        and str(agent["invocation"].get("gatewayEndpointId") or "").strip() == endpoint_id
+    ]
+    return owners[0] if len(owners) == 1 else None
 
 
 def _development_target_label(

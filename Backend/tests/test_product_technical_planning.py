@@ -59,6 +59,89 @@ def technical_model_entities(requirement_spec: dict) -> dict:
 class ProductTechnicalPlanningTests(unittest.TestCase):
     """验证 ProductPlan 与 PageImplementationContract 的核心确定性边界。"""
 
+    def test_entityless_agent_gateway_does_not_require_business_entity(self) -> None:
+        """无业务实体的纯 Agent 网关可只携带传输 Schema，普通接口仍需实体。"""
+
+        gateway = {
+            "id": "agent_gateway_api",
+            "name": "智能体网关",
+            "entity_ids": [],
+            "base_path": "/api/agents",
+            "schemas": {"MessageOutput": {"type": "object", "properties": {"text": {"type": "string"}}}},
+            "endpoints": [{
+                "id": "agent_gateway_api.message",
+                "name": "发送消息",
+                "method": "POST",
+                "path": "/api/agents/messages",
+                "request_schema_ref": None,
+                "response_schema_ref": "MessageOutput",
+            }],
+        }
+        plan = {
+            "entities": [],
+            "api_contracts": [gateway],
+            "agent_contracts": [{
+                "agentId": "verification_assistant",
+                "invocation": {"gatewayEndpointId": "agent_gateway_api.message"},
+            }],
+        }
+
+        self.assertEqual(validate_technical_plan_api_contracts(plan), [])
+        ordinary = deepcopy(plan)
+        ordinary["agent_contracts"] = []
+        self.assertIn(
+            "TechnicalPlan API Contract agent_gateway_api 必须声明非空 entity_ids。",
+            validate_technical_plan_api_contracts(ordinary),
+        )
+        mixed = deepcopy(plan)
+        mixed["api_contracts"][0]["endpoints"].append({
+            "id": "agent_gateway_api.status",
+            "name": "查询状态",
+            "method": "GET",
+            "path": "/api/agents/status",
+        })
+        self.assertIn(
+            "TechnicalPlan API Contract agent_gateway_api 必须声明非空 entity_ids。",
+            validate_technical_plan_api_contracts(mixed),
+        )
+        fake_entity = deepcopy(plan)
+        fake_entity["api_contracts"][0]["entity_ids"] = ["verification_assistant"]
+        self.assertIn(
+            "TechnicalPlan API Contract agent_gateway_api 引用了未知实体：verification_assistant。",
+            validate_technical_plan_api_contracts(fake_entity),
+        )
+
+    def test_entityless_gateway_repair_prompt_requests_empty_entity_binding(self) -> None:
+        """无实体 Gateway 的局部修复提示不得要求模型伪造实体绑定。"""
+
+        plan = {
+            "entities": [],
+            "api_contracts": [{
+                "id": "agent_gateway_api",
+                "entity_ids": ["verification_assistant"],
+                "schemas": {"MessageOutput": {"type": "object"}},
+                "endpoints": [{"id": "agent_gateway_api.message", "method": "POST"}],
+            }],
+            "pages": [],
+            "agent_contracts": [{
+                "agentId": "verification_assistant",
+                "invocation": {"gatewayEndpointId": "agent_gateway_api.message"},
+                "agentSettings": {"tools": {"bindings": []}},
+            }],
+        }
+        errors = [
+            "TechnicalPlan API Contract agent_gateway_api 引用了未知实体：verification_assistant。"
+        ]
+        prompt = _technical_contract_repair_prompt(
+            {"confirmed_product_plan": {"pages": []}},
+            plan,
+            errors,
+            _technical_contract_ids_for_errors(plan, errors),
+        )
+
+        self.assertIn("no business entities: it must use entity_ids: []", prompt)
+        self.assertIn("never use an agentId as an entityId", prompt)
+
     def test_product_plan_preserves_requirement_page_set_and_actions(self) -> None:
         """产品规划必须保持需求页面集合，纯展示页可以没有伪造的查看操作。"""
 

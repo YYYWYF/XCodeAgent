@@ -14,6 +14,8 @@ import { useWorkbenchPhase } from '../src/renderer/src/context/workbenchPhaseSta
 import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
 import DevelopmentStatusDot from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/DevelopmentStatusDot'
 import ApiOutlineGroup from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/ApiOutlineGroup'
+import AgentGatewayGateCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/AgentGatewayGateCard'
+import { gatewayEndpointKeys } from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/outlineUtils'
 import TestPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/TestPhaseConfirmationCard'
 import PlanExecutionDock from '../src/renderer/src/components/AiChatPanel/components/PlanExecutionDock'
 import QuickTaskGuide from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide'
@@ -115,6 +117,103 @@ test('开发产物接口树展示 Contract 和 Endpoint 名称并通过悬停提
   assert.match(html, /商品管理，\/api\/product/)
   assert.match(html, /查询商品列表/)
   assert.match(html, /查询商品列表，GET \/api\/product/)
+})
+
+test('只把智能体正式 Gateway 标记为智能体接口', () => {
+  const agents = [
+    {
+      agentId: 'helper',
+      label: '助手',
+      purpose: '',
+      capabilities: [],
+      dependencies: { gateway: { apiContractId: 'api', endpointId: 'gateway' } }
+    }
+  ]
+  const keys = gatewayEndpointKeys(agents as never)
+  assert.deepEqual([...keys], ['api:gateway'])
+  assert.equal(keys.has('api:tool'), false)
+  const contract = {
+    id: 'api',
+    label: '/api',
+    name: '混合接口分组',
+    endpoints: [
+      { id: 'gateway', name: '对话', method: 'POST', path: '/chat', summary: '' },
+      { id: 'tool', name: '工具', method: 'GET', path: '/tool', summary: '' }
+    ]
+  }
+  const html = renderToStaticMarkup(
+    <ApiOutlineGroup
+      allEndpoints={contract.endpoints}
+      contract={contract}
+      expanded
+      gatewayEndpointKeys={keys}
+      onSelect={() => undefined}
+      onToggle={() => undefined}
+      selectedKey=""
+    />
+  )
+  assert.equal((html.match(/智能体接口/g) || []).length, 2)
+  assert.match(html, /混合接口分组/)
+  assert.match(html, /工具/)
+  const quickTaskHtml = renderToStaticMarkup(
+    <QuickTaskGuide
+      apiContracts={[contract]}
+      agents={agents as never}
+      disabled={false}
+      entities={[]}
+      loading={false}
+      onStart={async () => undefined}
+      pages={[]}
+    />
+  )
+  assert.equal((quickTaskHtml.match(/智能体接口/g) || []).length, 1)
+})
+
+test('单个智能体接口直接展示，不显示额外的 Contract 分组', () => {
+  const endpoint = {
+    id: 'agent-api.chat',
+    name: '发送智能体消息',
+    method: 'POST',
+    path: '/api/agents/helper/messages',
+    summary: ''
+  }
+  const html = renderToStaticMarkup(
+    <ApiOutlineGroup
+      allEndpoints={[endpoint]}
+      contract={{
+        id: 'agent-api',
+        label: '/api/agents',
+        name: '智能体会话网关',
+        endpoints: [endpoint]
+      }}
+      expanded={false}
+      gatewayEndpointKeys={new Set(['agent-api:agent-api.chat'])}
+      onSelect={() => undefined}
+      onToggle={() => undefined}
+      selectedKey=""
+    />
+  )
+
+  assert.doesNotMatch(html, /智能体会话网关|api-group-title/)
+  assert.match(html, /发送智能体消息/)
+  assert.match(html, /智能体接口/)
+  assert.match(html, /POST \/api\/agents\/helper\/messages/)
+})
+
+test('智能体接口门禁引导进入智能体开发，不提供继续接口开发动作', () => {
+  const html = renderToStaticMarkup(
+    <AgentGatewayGateCard
+      agentId="helper"
+      agentLabel="助手"
+      message="请先开发助手"
+      onJump={() => undefined}
+    />
+  )
+  assert.match(html, /智能体接口开发前置/)
+  assert.match(html, /去开发智能体/)
+  assert.match(html, /点击后进入智能体开发任务/)
+  assert.doesNotMatch(html, /只跳转到智能体详情/)
+  assert.doesNotMatch(html, /继续接口开发/)
 })
 
 test('测试门禁正确展示未确认的实体名称', () => {

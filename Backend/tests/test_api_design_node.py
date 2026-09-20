@@ -7,10 +7,13 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.domain.api_design import EndpointApiDesign
 from app.graph.nodes.api_design import api_design_readiness_gate
 from app.services.api_design import ApiDesignError
+from app.protocols.workflow.lifecycle import project_workflow_lifecycle_boundary
 from app.workspace.endpoint_design_documents import technical_plan_sha256, write_endpoint_design
 
 
@@ -33,6 +36,58 @@ class ApiDesignNodeTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "requires_user_input")
             self.assertEqual(result["clarification"]["mode"], "api_design_required")
+
+    def test_agent_gateway_redirects_before_api_mapping(self) -> None:
+        """Agent Gateway 只提示其智能体依赖，不进入普通接口映射门禁。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = _plan()
+            plan["agent_contracts"] = [{
+                "agentId": "order_assistant",
+                "identity": {"name": "订单助手"},
+                "invocation": {"gatewayEndpointId": "orders.list"},
+            }]
+            _write_plan(workspace, plan)
+            result = api_design_readiness_gate(_endpoint_state(workspace, plan))
+            self.assertEqual(result["status"], "requires_user_input")
+            self.assertEqual(result["clarification"]["mode"], "agent_gateway_dependency_required")
+            self.assertEqual(result["clarification"]["agentId"], "order_assistant")
+            self.assertEqual(result["api_design_result"], {})
+
+    def test_non_gateway_endpoint_keeps_api_mapping_gate(self) -> None:
+        """同一 Contract 中非 Gateway 的普通接口仍按原 Java 接口入口检查。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = _plan()
+            plan["agent_contracts"] = [{
+                "agentId": "order_assistant",
+                "identity": {"name": "订单助手"},
+                "invocation": {"gatewayEndpointId": "orders.create"},
+            }]
+            _write_plan(workspace, plan)
+            result = api_design_readiness_gate(_endpoint_state(workspace, plan))
+            self.assertEqual(result["clarification"]["mode"], "api_design_required")
+
+    def test_gateway_redirect_releases_endpoint_execution(self) -> None:
+        """依赖提示是终止本次接口执行，不留下等待确认的资源锁。"""
+
+        lifecycle = SimpleNamespace(active_executions={"run": object()})
+        with patch("app.protocols.workflow.lifecycle.load_application_lifecycle", return_value=lifecycle), patch(
+            "app.protocols.workflow.lifecycle.end_workbench_execution", return_value=lifecycle
+        ) as end_execution, patch(
+            "app.protocols.workflow.lifecycle.application_lifecycle_payload", return_value={"released": True}
+        ):
+            result = project_workflow_lifecycle_boundary(
+                "/workspace",
+                run_id="run",
+                node_name="api_design_readiness_gate",
+                update={
+                    "status": "requires_user_input",
+                    "clarification": {"mode": "agent_gateway_dependency_required"},
+                },
+            )
+        self.assertEqual(result, {"released": True})
+        end_execution.assert_called_once_with("/workspace", run_id="run", missing_ok=True)
 
     def test_required_gate_projects_all_endpoint_states(self) -> None:
         """部分 Endpoint 已完成时，门禁澄清仍投影目标范围内的完整状态列表。"""

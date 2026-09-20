@@ -4360,6 +4360,16 @@ export default function AiChatPanel({
     )
   }
 
+  /** Gateway 依赖卡复用现有智能体开发入口，进入目标智能体任务。 */
+  const handleAgentGatewayJump = async (agentId: string): Promise<void> => {
+    const agent = developmentPlanningAgents.find((item) => item.agentId === agentId)
+    if (!agent) {
+      message.error('当前智能体契约不可用，请刷新开发产物后重试。')
+      return
+    }
+    await handleStartAgentBuild(agent)
+  }
+
   /** 从历史面板恢复原有会话，并关闭临时对话浮层避免遮挡持久会话。 */
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
     setTemporaryChatOpen(false)
@@ -5060,6 +5070,7 @@ export default function AiChatPanel({
                 apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
                 onContinueDevelopment={handleContinueDevelopment}
                 onEntityDesignGateJump={handleEntityDesignGateJump}
+                onAgentGatewayJump={handleAgentGatewayJump}
                 onOpenApiDesignConfig={handleOpenApiDesignConfig}
                 onOpenCodeChangeFile={handleOpenCodeChangeFile}
                 onOpenRevisionSession={handleOpenRevisionSession}
