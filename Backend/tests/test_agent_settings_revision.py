@@ -14,7 +14,10 @@ from app.domain.application_lifecycle import (
 from app.services.agent_development_readiness import agent_contract_sha256
 from app.services.agent_settings_revision import execute_agent_settings_revision
 from app.services.agent_settings_revision_models import parse_agent_settings_revision_request
-from app.services.agent_settings_revision_support import document_sha256
+from app.services.agent_settings_revision_support import (
+    document_sha256,
+    invalidate_old_agent_build_plan,
+)
 from app.protocols.application_page_planning import (
     build_application_page_planning_ag_ui_stream,
 )
@@ -102,6 +105,40 @@ class AgentSettingsRevisionTests(unittest.TestCase):
                 "model": {"generation": {"temperature": 0.4}},
             },
         }
+
+    def test_invalidates_matching_agent_build_plan_with_current_atomic_writer(self) -> None:
+        """Agent Contract 更新后使用当前原子写入合同失效对应 BuildTaskPlan。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plans = root / ".xcodeagent" / "plans"
+            plans.mkdir(parents=True)
+            path = plans / "build-task-plan.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "confirmation_status": "confirmed",
+                        "build_context": {
+                            "target": {"type": "agent", "id": "inventory_assistant"},
+                            "contract_hash": "old-contract-hash",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            invalidated = invalidate_old_agent_build_plan(
+                root,
+                agent_id="inventory_assistant",
+                old_contract_hash="old-contract-hash",
+            )
+
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(invalidated, ["build-task-plan"])
+            self.assertEqual(saved["confirmation_status"], "stale")
 
     def test_prepare_and_confirm_recompile_formal_technical_plan(self) -> None:
         """预览不覆盖 canonical，确认后更新七段 Contract 并释放正式修订。"""
