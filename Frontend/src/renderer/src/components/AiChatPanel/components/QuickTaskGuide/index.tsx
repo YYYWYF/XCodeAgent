@@ -104,6 +104,9 @@ function QuickTaskSection({
                       </Text>
                       <Text className={cx('quick-task-item-meta')}>{item.meta}</Text>
                     </span>
+                    {item.kind === 'endpoint' ? (
+                      <code className={cx('quick-task-item-path')}>{item.endpointPath}</code>
+                    ) : null}
                     <Text className={cx('quick-task-item-description')} type="secondary">
                       {item.description}
                     </Text>
@@ -129,7 +132,7 @@ function QuickTaskSection({
   )
 }
 
-/** 在空白对话区并排展示页面、Endpoint 与实体快捷任务，并保留底部自由输入入口。 */
+/** 在空白对话区并排展示页面、接口与实体快捷任务，并保留底部自由输入入口。 */
 export default function QuickTaskGuide({
   developmentArtifacts,
   apiContracts,
@@ -156,7 +159,7 @@ export default function QuickTaskGuide({
         <div>
           <Title level={3}>今天想从哪里开始？</Title>
           <Text type="secondary">
-            选择一个页面、Endpoint 或实体开始正式任务，也可以直接在下方自由对话。
+            选择一个页面、接口或实体开始正式任务，也可以直接在下方自由对话。
           </Text>
         </div>
       </header>
@@ -177,10 +180,10 @@ export default function QuickTaskGuide({
           />
           <QuickTaskSection
             disabled={disabled}
-            emptyText="项目计划中暂无 Endpoint。"
+            emptyText="项目计划中暂无接口。"
             items={endpointTasks}
             onStart={onStart}
-            title="Endpoint"
+            title="接口"
             type="endpoint"
           />
           <QuickTaskSection

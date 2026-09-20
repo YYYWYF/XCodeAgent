@@ -26,6 +26,7 @@ export type EndpointQuickTaskItem = QuickTaskItemBase & {
   apiContractId: string
   endpointId: string
   endpointLabel: string
+  endpointPath: string
   hasDetailPlan: boolean
 }
 
@@ -74,9 +75,10 @@ export function buildQuickTasks(
         apiContractId,
         endpointId,
         endpointLabel: `${method} ${path}`,
+        endpointPath: path,
         hasDetailPlan: Boolean(endpoint.hasDetailPlan),
         meta: method,
-        title: path
+        title: String(endpoint.name || path).trim() || path
       }
     })
   )

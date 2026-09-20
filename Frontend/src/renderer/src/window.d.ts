@@ -74,10 +74,12 @@ declare global {
           apiContracts: Array<{
             id: string
             label: string
+            name?: string
             entityIds?: string[]
             endpoints: Array<{
               apiContractId?: string
               id: string
+              name?: string
               method: string
               path: string
               summary: string

@@ -44,6 +44,7 @@ export type DevelopmentPlanningPageTreeNode = {
 export type DevelopmentPlanningApiEndpoint = {
   apiContractId?: string
   id: string
+  name?: string
   method: string
   path: string
   summary: string
@@ -54,6 +55,7 @@ export type DevelopmentPlanningApiEndpoint = {
 export type DevelopmentPlanningApiContract = {
   id: string
   label: string
+  name?: string
   entityIds?: string[]
   endpoints: DevelopmentPlanningApiEndpoint[]
 }

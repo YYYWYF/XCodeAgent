@@ -1,4 +1,5 @@
-import { ApiOutlined, CaretDownOutlined } from '@ant-design/icons'
+import { ApiOutlined, CaretDownOutlined, FolderOpenOutlined } from '@ant-design/icons'
+import { Tooltip } from 'antd'
 import type { DevelopmentArtifacts, DevelopmentPlanningApiContract } from '../../../../typings'
 import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import { cx } from '../../../../utils'
@@ -37,13 +38,16 @@ export default function ApiOutlineGroup({
     <div>
       <button
         aria-expanded={expanded}
+        aria-label={`${contract.name || '未命名接口分组'}，${contract.label}`}
         className={cx('api-group-title')}
         onClick={onToggle}
         type="button"
       >
         <CaretDownOutlined className={cx(!expanded && 'collapsed')} />
-        <ApiOutlined />
-        <code>{contract.label}</code>
+        <FolderOpenOutlined />
+        <span className={cx('api-group-label')}>
+          <strong>{contract.name || '未命名接口分组'}</strong>
+        </span>
         <span className={cx('development-count')}>
           {completed}/{allEndpoints.length}
         </span>
@@ -57,28 +61,44 @@ export default function ApiOutlineGroup({
             const displayPath = apiEndpointDisplayPath(endpoint.path, contract.label)
             return (
               <div className={cx('api-node')} key={endpointKey}>
-                <button
-                  aria-current={selectedKey === endpointKey ? 'true' : undefined}
-                  className={cx('api-row', selectedKey === endpointKey && 'selected')}
-                  onClick={() =>
-                    onSelect({
-                      apiContractId,
-                      endpointId,
-                      endpointKey,
-                      label: `${endpoint.method} ${displayPath}`.trim()
-                    })
+                <Tooltip
+                  align={{ offset: [4, 0] }}
+                  mouseEnterDelay={1}
+                  mouseLeaveDelay={0.08}
+                  overlayClassName={cx('api-hover-tooltip')}
+                  placement="right"
+                  title={
+                    <span className={cx('api-hover-tooltip-content')}>
+                      <span className={cx('api-hover-tooltip-method')}>{endpoint.method}</span>
+                      <code>{endpoint.path}</code>
+                    </span>
                   }
-                  title={endpoint.summary}
-                  type="button"
                 >
-                  <span className={cx('api-method', endpoint.method.toLocaleLowerCase())}>
-                    {endpoint.method}
+                  <span className={cx('api-tooltip-anchor')}>
+                    <button
+                      aria-current={selectedKey === endpointKey ? 'true' : undefined}
+                      aria-label={`${endpoint.name || displayPath}，${endpoint.method} ${endpoint.path}${endpoint.summary ? `，${endpoint.summary}` : ''}`}
+                      className={cx('api-row', selectedKey === endpointKey && 'selected')}
+                      onClick={() =>
+                        onSelect({
+                          apiContractId,
+                          endpointId,
+                          endpointKey,
+                          label: `${endpoint.name || displayPath} · ${endpoint.method} ${displayPath}`.trim()
+                        })
+                      }
+                      type="button"
+                    >
+                      <ApiOutlined className={cx('api-endpoint-icon')} />
+                      <span className={cx('api-copy')}>
+                        <strong>{endpoint.name || displayPath}</strong>
+                      </span>
+                      <DevelopmentStatusDot
+                        progress={developmentArtifacts?.endpoints[apiContractId]?.[endpointId]}
+                      />
+                    </button>
                   </span>
-                  <code>{displayPath}</code>
-                  <DevelopmentStatusDot
-                    progress={developmentArtifacts?.endpoints[apiContractId]?.[endpointId]}
-                  />
-                </button>
+                </Tooltip>
               </div>
             )
           })}

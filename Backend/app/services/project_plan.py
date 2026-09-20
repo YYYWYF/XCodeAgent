@@ -799,6 +799,7 @@ def _api_contracts(
                 }
                 endpoints.append({
                     "id": f"{contract_id}.list",
+                    "name": f"查询{entity_name}列表",
                     "method": "GET",
                     "path": f"/api/{route_base}",
                     "summary": f"查询{entity_name}列表。",
@@ -812,6 +813,7 @@ def _api_contracts(
             if "detail" in operations:
                 endpoints.append({
                     "id": f"{contract_id}.detail",
+                    "name": f"查询{entity_name}详情",
                     "method": "GET",
                     "path": f"/api/{route_base}/{{id}}",
                     "summary": f"查询单条{entity_name}详情。",
@@ -823,6 +825,7 @@ def _api_contracts(
                 schemas[f"{entity}CreateInput"] = _write_schema(entity_schema, partial=False)
                 endpoints.append({
                     "id": f"{contract_id}.create",
+                    "name": f"创建{entity_name}",
                     "method": "POST",
                     "path": f"/api/{route_base}",
                     "summary": f"创建{entity_name}。",
@@ -834,6 +837,7 @@ def _api_contracts(
                 schemas[f"{entity}UpdateInput"] = _write_schema(entity_schema, partial=True)
                 endpoints.append({
                     "id": f"{contract_id}.update",
+                    "name": f"更新{entity_name}",
                     "method": "PATCH",
                     "path": f"/api/{route_base}/{{id}}",
                     "summary": f"更新{entity_name}。",
@@ -845,6 +849,7 @@ def _api_contracts(
             if "delete" in operations:
                 endpoints.append({
                     "id": f"{contract_id}.delete",
+                    "name": f"删除{entity_name}",
                     "method": "DELETE",
                     "path": f"/api/{route_base}/{{id}}",
                     "summary": f"删除{entity_name}。",
@@ -854,6 +859,7 @@ def _api_contracts(
             contracts.append(
                 {
                     "id": contract_id,
+                    "name": f"{entity_name}管理",
                     "entity_ids": [entity],
                     "base_path": f"/api/{route_base}",
                     "authentication": {"required": True},
@@ -1345,6 +1351,7 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
     normalized = _normalize_api_contracts(items)
     contract_keys = (
         "id",
+        "name",
         "entity_ids",
         "base_path",
         "authentication",
@@ -1353,6 +1360,7 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
     )
     endpoint_keys = (
         "id",
+        "name",
         "method",
         "path",
         "summary",
@@ -1682,6 +1690,7 @@ def validate_technical_plan_api_contracts(
             "endpoints",
             "entity_ids",
             "id",
+            "name",
             "schemas",
         }
         required_keys = allowed_keys - {"authentication"}
@@ -1691,6 +1700,12 @@ def validate_technical_plan_api_contracts(
             errors.append(f"TechnicalPlan API Contract {contract_id} 包含非法字段：{'、'.join(unexpected)}。")
         if missing:
             errors.append(f"TechnicalPlan API Contract {contract_id} 缺少必需字段：{'、'.join(missing)}。")
+        errors.extend(
+            _validate_technical_api_name(
+                contract.get("name"),
+                owner=f"API Contract {contract_id}",
+            )
+        )
         authentication = contract.get("authentication")
         if authentication is not None and (
             not isinstance(authentication, dict)
@@ -1722,6 +1737,13 @@ def validate_technical_plan_api_contracts(
                 )
             )
         for endpoint in _dict_items(contract.get("endpoints")):
+            endpoint_id = str(endpoint.get("id") or "unknown")
+            errors.extend(
+                _validate_technical_api_name(
+                    endpoint.get("name"),
+                    owner=f"Endpoint {endpoint_id}",
+                )
+            )
             endpoint_authentication = endpoint.get("authentication")
             if endpoint_authentication is not None and (
                 not isinstance(endpoint_authentication, dict)
@@ -1737,6 +1759,16 @@ def validate_technical_plan_api_contracts(
                     errors.append(f"TechnicalPlan Endpoint {endpoint.get('id') or 'unknown'} 的 {key} 未解析到本契约 Schema。")
             errors.extend(_validate_technical_pagination(contract, endpoint))
     return errors
+
+
+def _validate_technical_api_name(value: Any, *, owner: str) -> list[str]:
+    """要求技术规划接口名称是非空且至少包含一个中文字符的字符串。"""
+
+    if not isinstance(value, str) or not value.strip():
+        return [f"TechnicalPlan {owner} 的 name 必须是非空中文名称。"]
+    if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", value) is None:
+        return [f"TechnicalPlan {owner} 的 name 必须包含中文字符。"]
+    return []
 
 
 def create_technical_plan(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import re
 from typing import Any
@@ -12,6 +13,7 @@ from app.services.project_plan import (
     TECHNICAL_PLAN_ARTIFACT_TYPE,
     create_project_plan,
     create_technical_plan,
+    validate_technical_plan_api_contracts,
     validate_project_plan_datasource_policy,
 )
 from app.services.product_plan import create_product_plan, validate_product_plan
@@ -23,6 +25,42 @@ from app.utils.model_output import extract_json_object
 
 
 _REQUIREMENT_RULE_ID_MARKER = re.compile(r"<!--\s*ruleId\s*:\s*([^\s>]+)")
+
+
+def _preserve_technical_api_names(
+    synced_plan: dict[str, Any],
+    existing_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """按稳定标识恢复 Markdown 未展示的 Contract 与 Endpoint 中文名称。"""
+
+    result = deepcopy(synced_plan)
+    existing_contracts = {
+        str(contract.get("id") or "").strip(): contract
+        for contract in existing_plan.get("api_contracts", [])
+        if isinstance(contract, dict) and str(contract.get("id") or "").strip()
+    }
+    for contract in result.get("api_contracts", []):
+        if not isinstance(contract, dict):
+            continue
+        existing_contract = existing_contracts.get(str(contract.get("id") or "").strip())
+        if not isinstance(existing_contract, dict):
+            continue
+        if "name" in existing_contract:
+            contract["name"] = deepcopy(existing_contract.get("name"))
+        existing_endpoints = {
+            str(endpoint.get("id") or "").strip(): endpoint
+            for endpoint in existing_contract.get("endpoints", [])
+            if isinstance(endpoint, dict) and str(endpoint.get("id") or "").strip()
+        }
+        for endpoint in contract.get("endpoints", []):
+            if not isinstance(endpoint, dict):
+                continue
+            existing_endpoint = existing_endpoints.get(
+                str(endpoint.get("id") or "").strip()
+            )
+            if isinstance(existing_endpoint, dict) and "name" in existing_endpoint:
+                endpoint["name"] = deepcopy(existing_endpoint.get("name"))
+    return result
 
 
 def _requirement_rule_ids(spec: dict[str, Any]) -> set[str]:
@@ -199,6 +237,8 @@ def sync_project_plan_from_markdown(
         edited_markdown=edited_markdown,
         datasource_type=datasource_type,
     )
+    if is_technical_plan:
+        synced = _preserve_technical_api_names(synced, existing_plan)
     normalized = (
         create_technical_plan(
             requirement_spec,
@@ -226,7 +266,9 @@ def sync_project_plan_from_markdown(
     if not is_technical_plan and isinstance(synced.get("app"), dict):
         normalized["app"] = synced["app"]
     errors = validate_api_contract_consistency(normalized)
-    if not is_technical_plan:
+    if is_technical_plan:
+        errors.extend(validate_technical_plan_api_contracts(normalized))
+    else:
         errors.extend(validate_project_plan_datasource_policy(normalized))
     if errors:
         raise ValueError("编辑后的项目计划存在不一致：" + "; ".join(errors))

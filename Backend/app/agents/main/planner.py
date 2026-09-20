@@ -99,6 +99,7 @@ def _technical_planning_prompt(
         "api_contracts": [
             {
                 "id": contract_id,
+                "name": "订单管理",
                 "entity_ids": [entity_id],
                 "base_path": f"/api/{entity_id.lower()}",
                 "authentication": {"required": True},
@@ -128,6 +129,7 @@ def _technical_planning_prompt(
                 "endpoints": [
                     {
                         "id": f"{contract_id}.list",
+                        "name": "查询订单列表",
                         "method": "GET",
                         "path": f"/api/{entity_id.lower()}",
                         "summary": "Query a paginated list.",
@@ -201,7 +203,8 @@ def _technical_planning_prompt(
         "Treat the supplied Existing TechnicalPlan as the authoritative baseline. Preserve all valid unaffected "
         "technical decisions. Change only facts explicitly required by planning_adjustment_request and consistency "
         "changes directly caused by those edits. Do not rename, remove, or redesign unrelated entities, API Contracts, "
-        "Endpoints, Schemas, architecture decisions, or page bindings without a concrete dependency reason.\n"
+        "Endpoints, Schemas, architecture decisions, or page bindings without a concrete dependency reason. Preserve "
+        "the Chinese name of every unchanged API Contract and Endpoint.\n"
         f"Existing TechnicalPlan:\n{json.dumps(existing_plan, ensure_ascii=False)}\n\n"
         if existing_plan
         else "Create a new TechnicalPlan.\n"
@@ -217,16 +220,19 @@ def _technical_planning_prompt(
         "has a stable id, name, description, and fields. Each field contains name, label, description, "
         "type, and required; enum fields also contain enum_values. type is one of text, long_text, "
         "number, decimal, date, datetime, enum, or boolean. Field names use snake_case.\n"
-        "3. api_contracts is the interface contract collection. Each contract contains id, entity_ids, base_path, "
+        "3. api_contracts is the interface contract collection. Each contract contains id, name, entity_ids, base_path, "
         "authentication, schemas, and endpoints. entity_ids identifies every related business entity. A business "
+        "Contract name is a concise user-facing Chinese name such as 订单管理; it is distinct from the stable id. "
         "Schema properties may use interface-specific names. Add entity_field_ref=<EntityId>.<field_name> when a "
         "property is directly sourced from an entity field; computed, aggregated, and transport properties may omit "
         "the mapping. Structural properties organize the response. A paginated list response object has exactly four "
         "same-level properties: total, pageSize, current, and list. It has no other sibling properties. Its query "
         "parameters use current and pageSize, while fields inside list items follow the item Schema. "
-        "Schema references resolve to names in the same contract. Each Endpoint contains id, method, path, summary, "
-        "parameters, request_schema_ref, response_schema_ref, error_codes, and authentication. Decide whether a request "
-        "body exists from the operation semantics, never from the HTTP method alone. If the operation consumes body "
+        "Schema references resolve to names in the same contract. Each Endpoint contains id, name, method, path, summary, "
+        "parameters, request_schema_ref, response_schema_ref, error_codes, and authentication. "
+        "Endpoint name is a concise user-facing Chinese operation name such as 查询订单列表; summary remains the detailed "
+        "interface description. Both name fields must be non-empty strings containing at least one Chinese character. "
+        "Decide whether a request body exists from the operation semantics, never from the HTTP method alone. If the operation consumes body "
         "fields, request_schema_ref is a non-empty bare schema name and that schema is defined in the same contract. "
         "If path/query parameters plus authentication context fully describe a command, request_schema_ref is null even "
         "for POST, PUT, or PATCH. Never invent an empty request object merely to satisfy a method convention. Before "
@@ -569,7 +575,7 @@ def _technical_action_binding_repair_prompt(
             "endpoints": [
                 {
                     key: endpoint.get(key)
-                    for key in ("id", "method", "path", "summary")
+                    for key in ("id", "name", "method", "path", "summary")
                     if endpoint.get(key) is not None
                 }
                 for endpoint in contract.get("endpoints", [])
@@ -757,7 +763,9 @@ def _technical_contract_repair_prompt(
         "You repair API Contracts inside an existing TechnicalPlan. Return exactly one JSON object with the sole "
         "top-level key api_contracts. Return complete replacement objects for exactly the requested contract ids; "
         "do not return architecture, entities, pages, markdown, or commentary. Preserve stable contract ids, endpoint "
-        "ids, paths, and unrelated valid semantics. Resolve every schema reference inside the same contract. Decide "
+        "ids, paths, Chinese names, and unrelated valid semantics. Every Contract and Endpoint must contain a non-empty "
+        "name with at least one Chinese character; Endpoint summary remains its detailed description. Resolve every "
+        "schema reference inside the same contract. Decide "
         "whether a request body exists from operation semantics, not HTTP method: bodyless commands may use null "
         "request_schema_ref; operations that consume body fields must define and reference a real request schema. "
         "Never add an empty request schema only to silence validation.\n\n"

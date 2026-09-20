@@ -29,6 +29,12 @@ def _string_items(value: Any) -> list[str]:
     return result
 
 
+def _normalize_display_name(value: Any) -> Any:
+    """仅清理字符串名称两端空白，并保留非法类型供上层严格校验。"""
+
+    return value.strip() if isinstance(value, str) else deepcopy(value)
+
+
 def normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """规范化当前紧凑业务契约，只保留实体绑定和接口定义字段。"""
 
@@ -49,6 +55,7 @@ def normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]
         normalized.append(
             {
                 "id": contract_id,
+                "name": _normalize_display_name(item.get("name")),
                 "entity_ids": _string_items(item.get("entity_ids")),
                 "resource": str(item.get("resource") or contract_id),
                 "base_path": str(item.get("base_path") or "/api/resource"),
@@ -457,6 +464,7 @@ def _normalize_endpoint(
     return {
         **endpoint,
         "id": endpoint_id,
+        "name": _normalize_display_name(endpoint.get("name")),
         "method": method,
         "path": path,
         "summary": str(endpoint.get("summary") or endpoint.get("description") or endpoint_id),

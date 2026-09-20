@@ -111,10 +111,12 @@ function normalizeWorkbenchNodeLabel(value: unknown, fallback: string): string {
 type WorkbenchApiContract = {
   id: string
   label: string
+  name: string
   entityIds: string[]
   endpoints: Array<{
     apiContractId: string
     id: string
+    name: string
     method: string
     path: string
     summary: string
@@ -318,6 +320,7 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
     const group = groupedContracts.get(basePath) || {
       id: basePath,
       label: basePath,
+      name: normalizeWorkbenchNodeLabel(record.name, '未命名接口分组'),
       entityIds: [],
       endpoints: []
     }
@@ -336,6 +339,7 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
           {
             apiContractId: contractId,
             id: String(endpointRecord.id || endpointIndex + 1),
+            name: normalizeWorkbenchNodeLabel(endpointRecord.name, '未命名接口'),
             method,
             path: normalizeApiPath(endpointPath, '/'),
             summary: String(endpointRecord.summary || ''),

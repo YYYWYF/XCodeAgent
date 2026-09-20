@@ -42,7 +42,10 @@ from app.services.product_plan import (
     validate_product_plan_model_output,
 )
 from app.services.requirement_spec import create_requirement_spec
-from app.services.project_plan import create_technical_plan
+from app.services.project_plan import (
+    create_technical_plan,
+    validate_technical_plan_api_contracts,
+)
 from app.workspace.spec_documents import render_requirement_spec_markdown
 from app.workspace.plan_documents import render_project_plan_markdown
 
@@ -430,6 +433,10 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("command-with-body", prompt)
         self.assertIn("command-without-body", prompt)
         self.assertIn("Never invent an empty request object", prompt)
+        self.assertIn("Contract name is a concise user-facing Chinese name", prompt)
+        self.assertIn("Endpoint name is a concise user-facing Chinese operation name", prompt)
+        self.assertIn('"name": "订单管理"', prompt)
+        self.assertIn('"name": "查询订单列表"', prompt)
         self.assertIn("RequirementSpec entities are not provided", prompt)
         self.assertNotIn("REQUIREMENT_ENTITY_SENTINEL", prompt)
         self.assertNotIn("requirement_field_sentinel", prompt)
@@ -463,7 +470,68 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("Existing TechnicalPlan", prompt)
         self.assertIn("planning_adjustment_request", prompt)
         self.assertIn("Preserve all valid unaffected technical decisions", prompt)
+        self.assertIn("Preserve the Chinese name", prompt)
         self.assertIn("BASELINE_SENTINEL", prompt)
+
+    def test_technical_api_names_are_required_and_must_contain_chinese(self) -> None:
+        """TechnicalPlan 的 Contract 与 Endpoint 名称必须是包含中文的非空字符串。"""
+
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan = create_product_plan(requirement_spec)
+        plan = create_technical_plan(
+            {**requirement_spec, "confirmed_product_plan": product_plan},
+            agent_plan=technical_model_entities(requirement_spec),
+        )
+        contract = plan["api_contracts"][0]
+        endpoint = contract["endpoints"][0]
+        self.assertFalse(
+            any("name 必须" in error for error in validate_technical_plan_api_contracts(plan))
+        )
+
+        for invalid_name in (None, "   ", 42, "Inventory API"):
+            with self.subTest(scope="contract", invalid_name=invalid_name):
+                invalid = deepcopy(plan)
+                invalid["api_contracts"][0]["name"] = invalid_name
+                errors = validate_technical_plan_api_contracts(invalid)
+                self.assertTrue(
+                    any(
+                        f"API Contract {contract['id']}" in error
+                        and "name 必须" in error
+                        for error in errors
+                    )
+                )
+            with self.subTest(scope="endpoint", invalid_name=invalid_name):
+                invalid = deepcopy(plan)
+                invalid["api_contracts"][0]["endpoints"][0]["name"] = invalid_name
+                errors = validate_technical_plan_api_contracts(invalid)
+                self.assertTrue(
+                    any(
+                        f"Endpoint {endpoint['id']}" in error
+                        and "name 必须" in error
+                        for error in errors
+                    )
+                )
+
+        mixed = deepcopy(plan)
+        mixed["api_contracts"][0]["name"] = "订单 API 管理"
+        mixed["api_contracts"][0]["endpoints"][0]["name"] = "查询 API 订单列表"
+        self.assertFalse(
+            any("name 必须" in error for error in validate_technical_plan_api_contracts(mixed))
+        )
+
+        normalized = normalize_api_contracts(
+            [
+                {
+                    "id": "invalid_name_api",
+                    "name": 42,
+                    "endpoints": [
+                        {"id": "invalid_name_api.list", "name": ["非法名称"]}
+                    ],
+                }
+            ]
+        )[0]
+        self.assertEqual(normalized["name"], 42)
+        self.assertEqual(normalized["endpoints"][0]["name"], ["非法名称"])
 
     def test_action_binding_issues_follow_product_business_behavior(self) -> None:
         """结构化 issue 只覆盖直接业务动作和组合中的业务步骤。"""
@@ -869,6 +937,53 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             create_plan.call_args.kwargs["agent_plan"],
         )
 
+    def test_technical_markdown_sync_preserves_hidden_api_names(self) -> None:
+        """Markdown 未展示的既有 API 名称必须按稳定 ID 从正式 JSON 恢复。"""
+
+        existing_plan = {
+            "artifact_type": "technical-plan",
+            "api_contracts": [
+                {
+                    "id": "orders_api",
+                    "name": "订单管理",
+                    "endpoints": [
+                        {"id": "orders.list", "name": "查询订单列表"}
+                    ],
+                }
+            ],
+        }
+        synced_plan = {
+            "architecture": {},
+            "entities": [],
+            "api_contracts": [
+                {
+                    "id": "orders_api",
+                    "name": "模型误改名称",
+                    "endpoints": [
+                        {"id": "orders.list", "name": "模型误改接口名称"},
+                        {"id": "orders.create", "name": "创建订单"},
+                    ],
+                }
+            ],
+            "pages": [],
+        }
+        with patch(
+            "app.agents.main.document_sync._invoke_sync_model",
+            return_value=synced_plan,
+        ), patch(
+            "app.agents.main.document_sync.create_technical_plan",
+            return_value={},
+        ) as create_plan, patch(
+            "app.agents.main.document_sync.validate_api_contract_consistency",
+            return_value=[],
+        ):
+            sync_project_plan_from_markdown(existing_plan, {}, "# TechnicalPlan")
+
+        contract = create_plan.call_args.kwargs["agent_plan"]["api_contracts"][0]
+        self.assertEqual(contract["name"], "订单管理")
+        self.assertEqual(contract["endpoints"][0]["name"], "查询订单列表")
+        self.assertEqual(contract["endpoints"][1]["name"], "创建订单")
+
     def test_technical_plan_entities_come_only_from_model_output(self) -> None:
         """TechnicalPlan 实体不得继承 RequirementSpec.entities。"""
 
@@ -971,6 +1086,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
 
         self.assertEqual(contract_ids, ["photo_api"])
         self.assertIn("photo_api.like", prompt)
+        self.assertIn("Every Contract and Endpoint must contain", prompt)
         self.assertIn("like-photo", prompt)
         self.assertNotIn("user_api.unrelated_endpoint", prompt)
         self.assertNotIn("UnrelatedSchema", prompt)
@@ -1147,8 +1263,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
 
         self.assertIn("at most 3 clarification rounds", first_prompt)
-        self.assertIn("5 to 8 focused questions", first_prompt)
-        self.assertIn("If fewer than 5 material gaps remain, ask exactly all remaining gaps", first_prompt)
+        self.assertIn("call ask_user once for exactly those missing fields", first_prompt)
+        self.assertIn("do not count gaps", first_prompt)
         self.assertIn("clarification round 1 of 3", first_prompt)
         self.assertIn("never call ask_user in this pass", final_prompt)
         self.assertIn("After the user has answered round 3, never call ask_user again", final_prompt)
@@ -1349,7 +1465,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
                 "api_contracts",
                 "pages",
                 "authorization_manifest",
-                "template_capabilities",
+                "sourceConfigRevision",
                 "product_plan_sha256",
                 "ui_designs_sha256",
             },
@@ -1370,6 +1486,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
                 set(contract)
                 == {
                     "id",
+                    "name",
                     "entity_ids",
                     "base_path",
                     "authentication",
@@ -1384,6 +1501,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
                 set(endpoint)
                 == {
                     "id",
+                    "name",
                     "method",
                     "path",
                     "summary",

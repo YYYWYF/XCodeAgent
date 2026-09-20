@@ -13,6 +13,7 @@ import { WorkbenchPhaseProvider } from '../src/renderer/src/context/WorkbenchPha
 import { useWorkbenchPhase } from '../src/renderer/src/context/workbenchPhaseState'
 import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
 import DevelopmentStatusDot from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/DevelopmentStatusDot'
+import ApiOutlineGroup from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/ApiOutlineGroup'
 import TestPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/TestPhaseConfirmationCard'
 import QuickTaskGuide from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide'
 import type { ApplicationLifecycle, TestEntryGate } from '../src/renderer/src/typings'
@@ -56,7 +57,9 @@ test('新会话卡片按权威状态显示页面、接口和实体三态', () =>
         {
           id: 'api',
           label: '接口',
-          endpoints: [{ id: 'get', method: 'GET', path: '/api', summary: '读取' }]
+          endpoints: [
+            { id: 'get', name: '读取数据', method: 'GET', path: '/api', summary: '读取' }
+          ]
         }
       ]}
       entities={[{ id: 'entity', label: '实体', purpose: '记录', dataSourceType: 'database' }]}
@@ -70,6 +73,8 @@ test('新会话卡片按权威状态显示页面、接口和实体三态', () =>
       onStart={async () => undefined}
     />
   )
+  assert.match(html, /读取数据/)
+  assert.match(html, />接口</)
   for (const [status, label] of [
     ['completed', '已初次完成'],
     ['in_progress', '开发中'],
@@ -77,6 +82,37 @@ test('新会话卡片按权威状态显示页面、接口和实体三态', () =>
   ]) {
     assert.match(html, new RegExp(`data-status="${status}">${label}</span>`))
   }
+})
+
+test('开发产物接口树展示 Contract 和 Endpoint 名称并通过悬停提供路径', () => {
+  const endpoint = {
+    apiContractId: 'product-api',
+    id: 'product-api.list',
+    name: '查询商品列表',
+    method: 'GET',
+    path: '/api/product',
+    summary: '查询商品'
+  }
+  const html = renderToStaticMarkup(
+    <ApiOutlineGroup
+      allEndpoints={[endpoint]}
+      contract={{
+        id: 'product-api',
+        label: '/api/product',
+        name: '商品管理',
+        endpoints: [endpoint]
+      }}
+      expanded
+      onSelect={() => undefined}
+      onToggle={() => undefined}
+      selectedKey=""
+    />
+  )
+
+  assert.match(html, /商品管理/)
+  assert.match(html, /商品管理，\/api\/product/)
+  assert.match(html, /查询商品列表/)
+  assert.match(html, /查询商品列表，GET \/api\/product/)
 })
 
 test('测试门禁正确展示未确认的实体名称', () => {

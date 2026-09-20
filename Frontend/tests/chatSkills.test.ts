@@ -36,6 +36,7 @@ import WorkflowRunCard, {
   PlanConfirmationCard,
   workflowOriginalRequest
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
+import { ContractSection } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanDocSections'
 import { WorkbenchPhaseProvider } from '../src/renderer/src/context'
 import { workflowInteractionAvailability } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
@@ -2270,6 +2271,58 @@ test('技术规划确认不依赖 Markdown confirmationArtifact 也能展示结�
   assert.match(markup, /开发技术规划/)
   assert.match(markup, /React/)
   assert.doesNotMatch(markup, /结构化数据暂不可用/)
+})
+
+test('技术规划 API 契约面板展示 Contract 与 Endpoint 名称并保留接口说明', () => {
+  const endpoint = {
+    id: 'orders.list',
+    name: '查询订单列表',
+    method: 'GET',
+    path: '/api/orders',
+    summary: '分页查询订单并返回列表展示所需字段。'
+  }
+  const contract = {
+    id: 'orders-api',
+    name: '订单管理',
+    base_path: '/api/orders',
+    entity_ids: ['Order'],
+    authentication: 'none',
+    endpoints: [endpoint],
+    schemas: {}
+  }
+  const markup = renderToStaticMarkup(
+    createElement(ContractSection, {
+      contracts: [contract],
+      onContractChange: () => undefined,
+      onEndpointChange: () => undefined,
+      sectionKey: 'api-contracts',
+      selectedContract: contract,
+      selectedContractId: 'orders-api',
+      selectedEndpoint: endpoint,
+      selectedEndpointId: 'orders.list'
+    })
+  )
+
+  assert.match(markup, /订单管理/)
+  assert.match(markup, /查询订单列表/)
+  assert.match(markup, /\/api\/orders/)
+  assert.match(markup, /分页查询订单并返回列表展示所需字段/)
+
+  const missingNameMarkup = renderToStaticMarkup(
+    createElement(ContractSection, {
+      contracts: [{ ...contract, name: undefined }],
+      onContractChange: () => undefined,
+      onEndpointChange: () => undefined,
+      sectionKey: 'api-contracts',
+      selectedContract: { ...contract, name: undefined },
+      selectedContractId: 'orders-api',
+      selectedEndpoint: { ...endpoint, name: undefined },
+      selectedEndpointId: 'orders.list'
+    })
+  )
+
+  assert.match(missingNameMarkup, /未命名接口分组/)
+  assert.match(missingNameMarkup, /未命名接口/)
 })
 
 test('技术规划确认卡展示修改入口，其他计划确认保持原有放弃入口', () => {

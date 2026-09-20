@@ -307,7 +307,9 @@ class ProjectPlanTests(unittest.TestCase):
         )
         endpoint = contract["endpoints"][0]
 
+        self.assertRegex(contract["name"], r"[\u4e00-\u9fff]")
         self.assertTrue(endpoint["id"])
+        self.assertRegex(endpoint["name"], r"[\u4e00-\u9fff]")
         self.assertTrue(endpoint["path"].startswith("/api/"))
         self.assertIsInstance(endpoint["parameters"], list)
         self.assertIn(endpoint["response_schema_ref"], contract["schemas"])
@@ -325,6 +327,7 @@ class ProjectPlanTests(unittest.TestCase):
                 "api_contracts": [
                     {
                         "id": "inventory_api",
+                        "name": "  库存 API 管理  ",
                         "data_source_id": "inventory_management_source",
                         "resource": "Inventory",
                         "base_path": "/api/inventory",
@@ -338,8 +341,10 @@ class ProjectPlanTests(unittest.TestCase):
                         "endpoints": [
                             {
                                 "id": "inventory.search",
+                                "name": "  查询库存  ",
                                 "method": "get",
                                 "path": "/api/inventory",
+                                "summary": "按条件查询库存。",
                                 "response_schema_ref": "Inventory",
                             }
                         ],
@@ -349,9 +354,13 @@ class ProjectPlanTests(unittest.TestCase):
             authoritative_agent_plan=True,
         )
 
-        endpoint = plan["api_contracts"][0]["endpoints"][0]
+        contract = plan["api_contracts"][0]
+        endpoint = contract["endpoints"][0]
+        self.assertEqual(contract["name"], "库存 API 管理")
+        self.assertEqual(endpoint["name"], "查询库存")
         self.assertEqual(endpoint["method"], "GET")
         self.assertEqual(endpoint["path"], "/api/inventory")
+        self.assertEqual(endpoint["summary"], "按条件查询库存。")
         self.assertEqual(endpoint["response_schema_ref"], "Inventory")
         self.assertEqual(validate_api_contract_consistency(plan), [])
 

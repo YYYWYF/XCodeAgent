@@ -40,7 +40,16 @@ def project_planning(state: dict) -> dict:
             source_type = candidate
     config_dir = workspace / ".xcodeagent"
     config_dir.mkdir(parents=True, exist_ok=True)
-    application_config: dict = {"datasource": {"type": source_type}}
+    application_config: dict = {
+        "schemaVersion": 6,
+        "configRevision": 1,
+        "datasource": {"type": source_type},
+        "auth": {"enable": False},
+        "authorization": {
+            "enabled": False,
+            "initialAdministratorSubjects": [],
+        },
+    }
     if source_type == "database":
         # 创建应用填写了数据库连接时，实体默认数据源为 database。
         application_config["datasource"]["db"] = {
@@ -123,10 +132,22 @@ class ProjectPlanningConfirmationTests(unittest.TestCase):
                     "timeline": [],
                 }
             )
+            persisted = json.loads(
+                Path(result["technical_plan_json_path"]).read_text(encoding="utf-8")
+            )
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["clarification"]["status"], "clear")
         self.assertEqual(result["technical_plan"]["confirmation_status"], "confirmed")
+        self.assertTrue(persisted["api_contracts"])
+        self.assertTrue(all(contract.get("name") for contract in persisted["api_contracts"]))
+        self.assertTrue(
+            all(
+                endpoint.get("name")
+                for contract in persisted["api_contracts"]
+                for endpoint in contract["endpoints"]
+            )
+        )
 
     def test_application_planning_recovery_text_cannot_confirm_plan(self) -> None:
         """创建规划的继续文案没有结构化提交时不得确认 ProjectPlan。"""

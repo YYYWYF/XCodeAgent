@@ -523,6 +523,7 @@ test('页面和 Endpoint 快捷任务保留本次运行目标且不生成会话�
         endpoints: [
           {
             id: 'list-orders',
+            name: '查询订单',
             method: 'get',
             path: '/orders',
             summary: '查询订单',
@@ -551,11 +552,12 @@ test('页面和 Endpoint 快捷任务保留本次运行目标且不生成会话�
     progress: undefined,
     endpointId: 'list-orders',
     endpointLabel: 'GET /orders',
+    endpointPath: '/orders',
     hasDetailPlan: true,
     id: 'endpoint:orders-api:list-orders',
     kind: 'endpoint',
     meta: 'GET',
-    title: '/orders'
+    title: '查询订单'
   })
   assert.equal('sessionId' in tasks[0], false)
   assert.equal('threadId' in tasks[1], false)

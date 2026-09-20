@@ -343,6 +343,17 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
   white-space: nowrap;
 }
 
+.@{class-prefix}-quick-task-item-path {
+  display: block;
+  overflow: hidden;
+  color: var(--wb-text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .@{class-prefix}-quick-task-item-arrow {
   flex: 0 0 auto;
   color: var(--wb-text-tertiary);
@@ -445,6 +456,11 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
 
   .@{class-prefix}-quick-task-item-description.ant-typography {
     display: none;
+  }
+
+  .@{class-prefix}-quick-task-item-path {
+    font-size: 9px;
+    line-height: 14px;
   }
 
   .@{class-prefix}-quick-task-item-arrow {

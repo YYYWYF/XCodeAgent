@@ -264,7 +264,7 @@
 
 .@{class-prefix}-technical-plan-endpoint {
   display: grid;
-  grid-template-columns: 48px minmax(72px, 0.85fr) minmax(88px, 1.15fr);
+  grid-template-columns: 48px minmax(72px, 0.6fr) minmax(100px, 1fr) minmax(160px, 1.8fr);
   align-items: center;
   gap: 7px;
   width: 100%;
@@ -306,6 +306,16 @@
     white-space: nowrap;
   }
 
+  .@{class-prefix}-technical-plan-endpoint-name {
+    overflow: hidden;
+    min-width: 0;
+    color: var(--wb-text);
+    font-size: 10px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   > span:last-child {
     overflow: hidden;
     color: var(--wb-text-secondary);
@@ -324,7 +334,7 @@
 
 .@{class-prefix}-technical-plan-endpoint-head {
   display: grid;
-  grid-template-columns: 48px minmax(72px, 0.85fr) minmax(88px, 1.15fr);
+  grid-template-columns: 48px minmax(72px, 0.6fr) minmax(100px, 1fr) minmax(160px, 1.8fr);
   gap: 7px;
   padding: 7px 8px;
   color: var(--wb-text-tertiary);
@@ -394,6 +404,16 @@
   align-items: center;
   gap: 7px;
   min-width: 0;
+
+  .@{class-prefix}-technical-plan-endpoint-name {
+    overflow: hidden;
+    min-width: 0;
+    color: var(--wb-text);
+    font-size: 11px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   code {
     overflow: hidden;
@@ -910,7 +930,7 @@
 @container (max-width: 360px) {
   .@{class-prefix}-technical-plan-endpoint,
   .@{class-prefix}-technical-plan-endpoint-head {
-    grid-template-columns: 42px minmax(70px, 0.9fr) minmax(78px, 1.1fr);
+    grid-template-columns: 42px minmax(64px, 0.7fr) minmax(84px, 1fr) minmax(110px, 1.6fr);
   }
 
   .@{class-prefix}-technical-plan-page-binding-group {

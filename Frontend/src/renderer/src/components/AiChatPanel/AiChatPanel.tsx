@@ -3213,7 +3213,7 @@ export default function AiChatPanel({
       : activeApiEndpoint
         ? {
             type: 'api' as const,
-            title: activeApiEndpoint.label,
+            title: activeApiEndpointOption?.endpoint.name || activeApiEndpoint.label,
             path:
               activeApiEndpointOption?.endpoint.path ||
               activeApiEndpoint.label.replace(/^[A-Z]+\s+/, ''),

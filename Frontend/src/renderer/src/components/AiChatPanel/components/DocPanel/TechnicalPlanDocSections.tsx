@@ -200,7 +200,7 @@ export function ContractSection({
       <div className={cx('technical-plan-contract-workbench')}>
         <div className={cx('technical-plan-contract-column')}>
           <div className={cx('technical-plan-subtitle')}>
-            <span>Base_Path</span>
+            <span>接口分组</span>
             <span>{contracts.length}</span>
           </div>
           <div className={cx('technical-plan-contract-list')}>
@@ -219,7 +219,8 @@ export function ContractSection({
                     type="button"
                   >
                     <span className={cx('technical-plan-contract-main')}>
-                      <strong>{textValue(contract.base_path, '/api/resource')}</strong>
+                      <strong>{textValue(contract.name, '未命名接口分组')}</strong>
+                      <code>{textValue(contract.base_path, '/api/resource')}</code>
                     </span>
                     <span className={cx('technical-plan-contract-tags')}>
                       {entityIds.slice(0, 2).map((entityId) => (
@@ -245,6 +246,7 @@ export function ContractSection({
           <div className={cx('technical-plan-endpoint-table')}>
             <div className={cx('technical-plan-endpoint-head')} aria-hidden="true">
               <span>方法</span>
+              <span>名称</span>
               <span>路径</span>
               <span>说明</span>
             </div>
@@ -268,6 +270,9 @@ export function ContractSection({
                     >
                       <span className={cx('technical-plan-method', methodClass(method))}>
                         {method}
+                      </span>
+                      <span className={cx('technical-plan-endpoint-name')}>
+                        {textValue(endpoint.name, '未命名接口')}
                       </span>
                       <code>{textValue(endpoint.path, '/')}</code>
                       <span>{textValue(endpoint.summary, '待补充接口说明')}</span>
@@ -313,6 +318,9 @@ export function EndpointInspector({
         >
           {textValue(endpoint.method, 'GET').toUpperCase()}
         </span>
+        <strong className={cx('technical-plan-endpoint-name')}>
+          {textValue(endpoint.name, '未命名接口')}
+        </strong>
         <code>{textValue(endpoint.path, '/')}</code>
       </div>
       <dl className={cx('technical-plan-inspector-grid')}>
