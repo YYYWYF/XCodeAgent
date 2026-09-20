@@ -12,7 +12,8 @@ from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
     load_application_lifecycle,
 )
-from app.services.artifact_invalidation import canonical_sha256, mark_artifact_document_stale
+from app.services.artifact_invalidation import canonical_sha256
+from app.workspace.json_documents import write_json_atomic
 from app.workspace.plan_documents import load_project_plan_json
 
 
@@ -166,7 +167,7 @@ def invalidate_old_agent_build_plan(
         or str(context.get("contract_hash") or "") != old_contract_hash
     ):
         return []
-    mark_artifact_document_stale(path)
+    write_json_atomic(path, {**value, "confirmation_status": "stale"})
     return ["build-task-plan"]
 
 

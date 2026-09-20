@@ -2304,9 +2304,9 @@ def _technical_agent_contract_model_errors(
             errors.append(
                 f"{location}.agentSettings.knowledge 在 Retriever 实现前必须关闭。"
             )
-        if settings.get("context") != _agent_context_settings():
+        if not isinstance(settings.get("context"), dict):
             errors.append(
-                f"{location}.agentSettings.context 必须使用当前无压缩平台策略。"
+                f"{location}.agentSettings.context 必须是 JSON 对象。"
             )
     return errors
 
@@ -2442,6 +2442,8 @@ def _technical_agent_contracts(
         product_agent = product_by_id.get(agent_id, {})
         settings = deepcopy(raw.get("agentSettings"))
         settings["tools"] = _resolved_agent_tools(settings, api_contracts)
+        # Context 属于平台固定策略；模型只提供候选，正式 Contract 统一由平台编译。
+        settings["context"] = _agent_context_settings()
         capability_tools = {
             str(item.get("capabilityId") or "").strip(): deepcopy(item.get("toolIds"))
             for item in _dict_items(raw.get("capabilityBindings"))

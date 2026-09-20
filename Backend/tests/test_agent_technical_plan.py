@@ -723,6 +723,37 @@ class AgentTechnicalPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "必须要求 observability"):
             create_technical_plan(requirement, agent_plan=raw_plan)
 
+    def test_no_tool_agent_context_is_compiled_by_platform(self) -> None:
+        """无 Tool Agent 的模型建议不得覆盖平台固定 Context 策略。"""
+
+        requirement = self._requirement_with_product_agent()
+        raw_plan = self._technical_model_plan(requirement)
+        contract = raw_plan["agent_contracts"][0]
+        contract["capabilityBindings"] = [
+            {**binding, "toolIds": []}
+            for binding in contract["capabilityBindings"]
+        ]
+        settings = contract["agentSettings"]
+        settings["tools"] = {"enabled": False, "bindings": []}
+        settings["model"]["requiredCapabilities"]["toolCalling"] = False
+        settings["context"]["sources"][2]["enabled"] = False
+
+        plan = create_technical_plan(requirement, agent_plan=raw_plan)
+
+        context_sources = plan["agent_contracts"][0]["agentSettings"]["context"][
+            "sources"
+        ]
+        tool_results = next(
+            source for source in context_sources if source["type"] == "tool_results"
+        )
+        self.assertTrue(tool_results["enabled"])
+        self.assertEqual(
+            validate_technical_plan_agent_contracts(
+                plan, requirement["confirmed_product_plan"]
+            ),
+            [],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
