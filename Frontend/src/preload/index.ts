@@ -59,6 +59,7 @@ const xcodeAgentApi = {
     }),
     save: (payload) => ipcRenderer.invoke('sessions:save', payload),
     delete: (payload) => ipcRenderer.invoke('sessions:delete', payload),
+    clearWorkspace: (payload) => ipcRenderer.invoke('sessions:clear-workspace', payload),
   },
   browser: {
     openExternal: (url) => {

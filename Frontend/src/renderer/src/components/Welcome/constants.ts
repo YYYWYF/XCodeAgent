@@ -25,6 +25,8 @@ export const initialApplicationDraft: ApplicationDraft = {
   appIcon: defaultApplicationIcon,
   senario: '',
   projectPath: '',
+  versionNo: 'v1.0',
+  repoUrl: 'https://github.com/ruyue1/user-application',
   terminal: 'PC',
   layout: { type: 'side', useHeader: true, useFooter: false },
   theme: { primaryColor: '#6b3cf0' },

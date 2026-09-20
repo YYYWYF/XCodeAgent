@@ -10,3 +10,38 @@ export function buildTaskDisplayStatus(
   if (status === 'running' || status === 'failed') return status
   return 'pending'
 }
+
+/**
+ * 该任务是否形成了可提交的检查点（弱提醒，只做标记不打断）。
+ *
+ * 要求任务**真正写过文件**：`already_satisfied` 表示"检查后确认无需改动"，它虽然展示为
+ * 完成，但工作区没有产生新变更，不该被标成检查点。用 `targetFiles` 作为"本轮写了哪些
+ * 文件"的依据 —— 它是任务声明的写入范围，服务端执行前就已确定。
+ */
+export function isCheckpointCandidate(task: WorkflowBuildExecutionTask): boolean {
+  if (task.status !== 'completed') return false
+  const targetFiles = task.targetFiles ?? task.target_files ?? []
+  return targetFiles.length > 0
+}
+
+/**
+ * 该构建轮次是否已形成一个可提交的模块级检查点（中等提示）。
+ *
+ * 条件：本轮次**全部任务都已完成**，但整个工作流**仍在运行** —— 即"这一个模块做完了、
+ * 整体还没结束"。这正是文档说的候选提交点：值得让用户知道，但不该弹窗打断后续批次。
+ *
+ * 轮次自身已经 completed 时不提示：那时整体结果卡会承载收尾语义，再提示是重复。
+ *
+ * 还要求**至少有一个任务真正写过文件**（沿用 `isCheckpointCandidate` 的口径）：整批都是
+ * `already_satisfied` 时本轮没有产生任何新变更，这时说"可创建提交"是空头支票。
+ */
+export function isModuleCheckpointCandidate(input: {
+  executionStatus: 'running' | 'completed' | 'failed' | 'requires_user_input'
+  tasks: WorkflowBuildExecutionTask[] | undefined
+}): boolean {
+  if (input.executionStatus !== 'running') return false
+  const tasks = input.tasks ?? []
+  if (tasks.length === 0) return false
+  if (!tasks.every((task) => buildTaskDisplayStatus(task.status) === 'completed')) return false
+  return tasks.some((task) => isCheckpointCandidate(task))
+}

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { message } from 'antd'
 import {
   loadActiveApplicationPlannings,
   reduceApplicationPlanningCurrentState,
   type ApplicationPlanningCurrentEvent,
   type ApplicationPlanningCurrentState
 } from '../service/activeApplicationPlanning'
-import { APPLICATIONS_CHANGED_EVENT } from '../service/applicationStorage'
+import { APPLICATIONS_CHANGED_EVENT, loadStoredApplications } from '../service/applicationStorage'
+import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { useApplicationTemplateGeneration } from './useApplicationTemplateGeneration'
 
@@ -54,9 +56,7 @@ export function useActiveApplicationPlannings({
   // 同步更新 React 状态和异步回调读取的最新规划引用。
   const commitPlannings = useCallback(
     (
-      updater: (
-        current: ApplicationPlanningCurrentState[]
-      ) => ApplicationPlanningCurrentState[]
+      updater: (current: ApplicationPlanningCurrentState[]) => ApplicationPlanningCurrentState[]
     ): void => {
       const next = updater(activePlanningsRef.current)
       activePlanningsRef.current = next
@@ -68,9 +68,7 @@ export function useActiveApplicationPlannings({
   // 直接读取同步权威引用，确保长期异步 Runtime 能立即看到刚提交的规划事件。
   const getPlanningState = useCallback(
     (applicationId: string): ApplicationPlanningCurrentState | undefined =>
-      activePlanningsRef.current.find(
-        (planning) => planning.application.id === applicationId
-      ),
+      activePlanningsRef.current.find((planning) => planning.application.id === applicationId),
     []
   )
 
@@ -237,14 +235,39 @@ export function useActiveApplicationPlannings({
   )
 
   const onTechnicalPlanConfirmed = runTemplateGeneration
+
+  /**
+   * 模板失败重试：工作区内的恢复入口不能依赖"必须先有活动规划状态"。
+   *
+   * 冷启动恢复会跳过已完成/已失败终态的规划（`loadActiveApplicationPlannings` 只收未完成项），
+   * 于是重开工作区后 `activePlannings` 为空，而工作台仍能从 lifecycle 文件读出失败态并渲染
+   * 「重新生成模板」。此时直接返回 false 会变成"点了没反应"的静默失败——用户只能靠重建工作区脱困。
+   * 模板重试本来就不重启规划 Graph，只需工作区与线程标识，因此这里用当前应用现场补建状态。
+   */
   const retryTemplateGeneration = useCallback(
-    (applicationId: string): Promise<boolean> => {
-      const planning = activePlanningsRef.current.find(
+    async (applicationId: string): Promise<boolean> => {
+      const registered = activePlanningsRef.current.find(
         (candidate) => candidate.application.id === applicationId
       )
-      return planning ? retryApplicationTemplateFiles(planning) : Promise.resolve(false)
+      if (registered) return retryApplicationTemplateFiles(registered)
+
+      const application = (await loadStoredApplications()).find(
+        (candidate) => candidate.id === applicationId
+      )
+      if (!application?.workspaceRoot) {
+        message.error('无法重试模板生成：找不到该应用的工作目录。')
+        return false
+      }
+      const lifecycle = await getApplicationLifecycle(application)
+      const threadId = lifecycle.initialization.threadId || application.planningThreadId
+      if (!threadId) {
+        message.error('无法重试模板生成：该应用缺少初始化线程标识。')
+        return false
+      }
+      const planning = startPlanning(application, threadId, lifecycle, false, false)
+      return retryApplicationTemplateFiles(planning)
     },
-    [retryApplicationTemplateFiles]
+    [retryApplicationTemplateFiles, startPlanning]
   )
 
   // 返回首页时只隐藏当前规划，所有后台 Runtime 继续运行。

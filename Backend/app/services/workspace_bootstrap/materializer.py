@@ -22,6 +22,30 @@ BOOTSTRAP_STAGING_RELATIVE_PATH = Path(".xcodeagent/bootstrap-staging")
 _ROOTS = ("frontend", "backend")
 _PLATFORM_RESERVED_PATHS = frozenset({Path(".git"), BOOTSTRAP_STAGING_RELATIVE_PATH})
 
+# Bootstrap 受管产物的唯一清单：受管根、基线仓库、模板状态与 staging 要么齐全、要么全无。
+# `_preflight` 按它拒绝覆盖，发起新迭代与中断收尾按它退回未 Bootstrap 状态；
+# 三处共用同一份清单，避免出现"删了状态却留着根目录"的半状态导致后续 Bootstrap 必然冲突。
+BOOTSTRAP_MANAGED_RELATIVE_PATHS: tuple[Path, ...] = (
+    Path(_ROOTS[0]),
+    Path(_ROOTS[1]),
+    Path(".git"),
+    TEMPLATE_STATE_RELATIVE_PATH,
+    BOOTSTRAP_STAGING_RELATIVE_PATH,
+)
+
+
+def clear_bootstrap_managed_artifacts(workspace: str | Path) -> None:
+    """把 Workspace 退回未 Bootstrap 状态，使下一次 Bootstrap 可以重新物化模板。
+
+    发起新迭代要以全新模板重建应用代码，必须先走这一步：只清 `.xcodeagent` 规划产物
+    会留下受管根目录，`_preflight` 随即以"已存在受管产物"拒绝 Bootstrap。
+    """
+
+    root = Path(workspace).expanduser().resolve(strict=False)
+    for relative in BOOTSTRAP_MANAGED_RELATIVE_PATHS:
+        _remove_managed_path(root / relative)
+
+
 
 @dataclass
 class BootstrapJournal:
@@ -94,10 +118,10 @@ class WorkspaceMaterializer:
                 os.replace(source, target)
                 journal.moved_roots.append(target)
             _verify_materialized_files(root, manifest)
-            journal.git_initialized = True
-            self._git_manager.initialize_baseline(root)
             journal.template_state_written = True
             _write_template_state(root / TEMPLATE_STATE_RELATIVE_PATH, template_state)
+            journal.git_initialized = True
+            self._git_manager.initialize_baseline(root)
             _remove_managed_path(journal.staging)
             _remove_empty_staging_parent(root)
             # Readiness 必须在 staging 已清除但仍可回滚的事务边界内执行。

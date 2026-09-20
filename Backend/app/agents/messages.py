@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
+
+from json_repair import repair_json
+
+from app.utils.model_output import extract_json_object
 
 
 NO_AGENT_TEXT = "Agent completed without a text message."
@@ -101,3 +106,73 @@ def _coerce_content_text(content: Any) -> str:
                 parts.append(block)
         return "\n".join(parts)
     return str(content) if content else ""
+
+
+def extract_candidate_text(content: Any) -> str:
+    """提取 Unit Candidate 正文，text block 为空时回退到 thinking block。
+
+    某些推理模型（如 deepseek-v4-flash 走 Anthropic 协议）在工具调用后，
+    会把最终 JSON 放进 ``{"type": "thinking", "thinking": "..."}`` block，
+    而非 text block。常规 ``_coerce_content_text`` 按设计跳过 thinking，
+    导致 raw_response 为空、JSON 解析在 position 0 失败。
+
+    本函数先按常规方式提取 text block；若结果为空，则遍历 thinking/reasoning
+    block 提取 ``{"tasks": ...}`` envelope。thinking 里常夹杂自然语言描述的
+    伪 JSON 片段（如 ``{operation: "add", ...}`` 无引号 key），且模型可能在
+    JSON 字符串值内使用未转义双引号，因此分两步：
+    1. ``extract_json_object`` 扫描首个合法 JSON 对象（跳过伪 JSON 片段）；
+    2. 若 1 失败（未转义双引号等语法错误），用 ``json_repair`` 受控修复，
+       从修复结果中取含 ``tasks`` 字段的对象。
+    """
+
+    primary = _coerce_content_text(content)
+    if primary.strip():
+        return primary
+
+    if not isinstance(content, list):
+        return primary
+
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type not in ("thinking", "reasoning"):
+            continue
+        thought = block.get("thinking") or block.get("reasoning") or ""
+        if not isinstance(thought, str) or not thought.strip():
+            continue
+        # 1. 严格提取首个合法 JSON 对象（容忍前导自然语言与伪 JSON 片段）。
+        parsed = extract_json_object(thought)
+        if parsed is not None and "tasks" in parsed:
+            return json.dumps(parsed, ensure_ascii=False)
+        # 2. 严格解析失败时，用 json_repair 受控修复；repair_json 可能返回
+        #    list（混合文本里多个对象）或 dict，从中找含 tasks 字段的对象。
+        try:
+            repaired = repair_json(
+                thought, return_objects=True, ensure_ascii=False, skip_json_loads=True
+            )
+        except Exception:
+            continue
+        candidate = _find_tasks_object(repaired)
+        if candidate is not None:
+            return json.dumps(candidate, ensure_ascii=False)
+
+    return primary
+
+
+def _find_tasks_object(value: Any) -> dict[str, Any] | None:
+    """从 json_repair 的返回值（dict 或 list）中找含 tasks 字段的对象。"""
+
+    if isinstance(value, dict):
+        if "tasks" in value:
+            return value
+        for item in value.values():
+            found = _find_tasks_object(item)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_tasks_object(item)
+            if found is not None:
+                return found
+    return None

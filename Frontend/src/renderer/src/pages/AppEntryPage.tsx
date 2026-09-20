@@ -1,11 +1,15 @@
 import { useCallback, useRef, useState } from 'react'
+import { message, Modal } from 'antd'
 import {
   SessionRuntimeProvider,
   useSessionRuntimeStore
 } from '../components/AiChatPanel/hooks/useSessionRuntimeStore'
 import ApplicationPagePlanningModal from '../components/Welcome/ApplicationPagePlanningModal'
 import { useActiveApplicationPlannings } from '../hooks/useActiveApplicationPlannings'
-import { useApplicationLifecycleStore } from '../hooks/useApplicationLifecycleStore'
+import {
+  hasNonTerminalApplicationExecution,
+  useApplicationLifecycleStore
+} from '../hooks/useApplicationLifecycleStore'
 import { useApplicationPlanningRuntimes } from '../hooks/useApplicationPlanningRuntimes'
 import { useApplicationPlanningStreamingContent } from '../hooks/useApplicationPlanningStreamingContent'
 import { useApplicationPlanningWorkbenchBridge } from '../hooks/useApplicationPlanningWorkbenchBridge'
@@ -18,6 +22,7 @@ import { getApplicationLifecycle } from '../service/applicationLifecycle'
 import { isTemplateGenerationOrphaned } from '../service/templateApi'
 import { stopProjectPreview } from '../service/projectLaunch'
 import { leavePreviewRuntime } from '../service/previewRuntime'
+import { inspectAllVersionControl } from '../service/versionControl'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -50,8 +55,11 @@ function AppEntryContent(): JSX.Element {
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
   const activePreviewWorkspaceRef = useRef('')
-  const { lifecycle: applicationLifecycle, mergeLifecycle: mergeApplicationLifecycle } =
-    useApplicationLifecycleStore(activeApplication?.id || '')
+  const {
+    lifecycle: applicationLifecycle,
+    mergeLifecycle: mergeApplicationLifecycle,
+    resetLifecycle: resetApplicationLifecycle
+  } = useApplicationLifecycleStore(activeApplication?.id || '')
 
   // 切换到另一个应用工作区前停止上一个应用的生成项目预览。
   const stopPreviousPreviewIfNeeded = useCallback(async (nextApplication: ApplicationConfig) => {
@@ -190,7 +198,8 @@ function AppEntryContent(): JSX.Element {
   )
 
   // 返回欢迎页时立即触发预览维护释放和前后端双重停止，不等待后台清理即可导航。
-  const handleReturnWelcome = (): void => {
+  /** 真正离开工作台：清理预览维护后切回欢迎页。 */
+  const leaveWorkbench = useCallback((): void => {
     const workspace = activeApplication ? applicationPreviewWorkspace(activeApplication) : ''
     releasePreviewMaintenanceExecutions(workspace)
     activePreviewWorkspaceRef.current = ''
@@ -200,7 +209,50 @@ function AppEntryContent(): JSX.Element {
       })
     }
     setActiveSurface('welcome')
-  }
+  }, [activeApplication, releasePreviewMaintenanceExecutions])
+
+  /**
+   * 中等提示：返回欢迎页前，若有已验证但未提交的变更则确认一次。
+   *
+   * 这里**当场重新读取** Git 状态，而不是复用工作台里的常驻快照 —— 即将离开工作台，
+   * 常驻快照可能已过期，而"是否还有未提交代码"正是这次判断的全部依据。
+   *
+   * Agent 仍在运行时只提示、不阻断、也不启动提交（代码还没写完，提交没有意义）。
+   */
+  const handleReturnWelcome = useCallback(async (): Promise<void> => {
+    const workspace = activeApplication ? applicationPreviewWorkspace(activeApplication) : ''
+    if (!workspace) {
+      leaveWorkbench()
+      return
+    }
+    if (hasNonTerminalApplicationExecution(applicationLifecycle)) {
+      message.info('当前有任务正在执行，返回首页后会在后台继续。')
+      leaveWorkbench()
+      return
+    }
+    let pending = 0
+    try {
+      // 只算业务代码：`.xcodeagent` 平台产物（规划文档、状态快照）不算"用户改了代码"，
+      // 否则新建迭代清空产物后，一进工作台就会因为这个弹窗被拦一次。
+      pending = (await inspectAllVersionControl(workspace)).codePaths.length
+    } catch {
+      // 读不到 Git（未建仓库等）时直接返回，不因为辅助提示挡住导航。
+      leaveWorkbench()
+      return
+    }
+    if (pending === 0) {
+      leaveWorkbench()
+      return
+    }
+    Modal.confirm({
+      centered: true,
+      title: '仍有未提交的代码变更',
+      content: `当前工作区有 ${pending} 个文件未提交。返回首页不会丢失代码，但建议先提交形成可追溯版本。`,
+      okText: '仍然返回',
+      cancelText: '取消',
+      onOk: () => leaveWorkbench()
+    })
+  }, [activeApplication, applicationLifecycle, leaveWorkbench])
 
   // 工作台首次加载失败时卸载本次工作台实例，确保再次打开应用会重新执行完整恢复。
   const handleWorkbenchEntryFailure = useCallback((): void => {
@@ -225,7 +277,15 @@ function AppEntryContent(): JSX.Element {
       try {
         const lifecycle = await getApplicationLifecycle(application)
         const readyForWorkbench = lifecycle?.initialization?.stage === 'ready_for_workbench'
-        if (readyForWorkbench && hasApplicationEnteredDevelopment(application.id)) {
+        // 进入开发门禁按「应用 + 当前迭代版本」隔离：新迭代已就绪但本轮还没进过开发时，
+        // 不能跳过规划状态恢复，否则就绪卡与"进入开发阶段"入口都不会出现。
+        if (
+          readyForWorkbench &&
+          hasApplicationEnteredDevelopment(
+            application.id,
+            application.currentVersionId || application.id
+          )
+        ) {
           planningController.dismissPlanning(application.id)
           await openWorkbench(application, lifecycle)
           return
@@ -299,6 +359,7 @@ function AppEntryContent(): JSX.Element {
             application={activeApplication}
             applicationLifecycle={applicationLifecycle}
             onApplicationLifecycleChange={mergeApplicationLifecycle}
+            onApplicationLifecycleReset={resetApplicationLifecycle}
             onEntryLoadFailure={handleWorkbenchEntryFailure}
             onReturnWelcome={handleReturnWelcome}
             onSubmitPlanningClarification={(...args) =>
@@ -306,6 +367,12 @@ function AppEntryContent(): JSX.Element {
             }
             onStartDesignStageRevision={(input) =>
               handleStartDesignStageRevision(activeApplication, input)
+            }
+            onIterationStarted={(application, threadId, lifecycle) => {
+              planningController.startPlanning(application, threadId, lifecycle, false, false)
+            }}
+            onStartIterationPlanning={(applicationId, request) =>
+              planningRuntimeController.startIterationPlanning(applicationId, request)
             }
             onRevisionContinuationHandlerChange={(handler) =>
               registerRevisionContinuation(activeApplication.id, handler)

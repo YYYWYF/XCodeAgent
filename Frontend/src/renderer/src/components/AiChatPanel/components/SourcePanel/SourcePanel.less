@@ -8,17 +8,94 @@
   background: var(--wb-canvas);
 }
 
-// 左栏：目录树
+// 右栏：目录树（规划文档 + 工程源码）。内容在左、树在右，与原型口径一致。
 .@{class-prefix}-source-panel-tree {
   display: flex;
-  flex: 0 0 220px;
+  flex: 0 0 240px;
   flex-direction: column;
-  width: 220px;
+  width: 240px;
+  min-height: 0;
+  background: var(--wb-surface-subtle);
+  border-left: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-source-panel-tree-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--wb-border);
+
+  button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--wb-text-secondary);
+    cursor: pointer;
+
+    &:hover {
+      background: var(--wb-surface-hover);
+    }
+  }
+}
+
+.@{class-prefix}-source-panel-tree-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+// 收起后的窄条：点它重新展开目录树。
+.@{class-prefix}-source-panel-tree-rail {
+  display: flex;
+  flex: 0 0 34px;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 34px;
+  padding: 10px 0;
+  border: 0;
+  border-left: 1px solid var(--wb-border);
   background: var(--wb-surface-subtle);
-  border-right: 1px solid var(--wb-border);
+  color: var(--wb-text-secondary);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+  }
+
+  .@{class-prefix}-source-panel-tree-rail-label {
+    writing-mode: vertical-rl;
+    font-size: 12px;
+    letter-spacing: 2px;
+  }
+}
+
+// 规划文档分组：与工程目录树用一条分隔线区分，避免被当成工程内文件。
+.@{class-prefix}-source-doc-tree {
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-source-tree-row.is-missing {
+  opacity: 0.45;
+  cursor: default;
+}
+
+// 文档正文：Markdown 渲染区，保持可读宽度与内边距。
+.@{class-prefix}-source-panel-doc {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
 }
 
 .@{class-prefix}-source-panel-tree-loading,
@@ -68,6 +145,20 @@
     flex: 0 0 auto;
     font-size: 13px;
     color: var(--wb-text-tertiary);
+  }
+
+  // 三份规划文档各给一个色调，便于在树里一眼区分。取中间调，明暗主题下都清晰；
+  // 放在 is-dir / is-selected 之前，选中态与目录态仍按后者的规则覆盖。
+  &.@{class-prefix}-is-requirement > .anticon {
+    color: #3b82f6;
+  }
+
+  &.@{class-prefix}-is-product > .anticon {
+    color: #10b981;
+  }
+
+  &.@{class-prefix}-is-technical > .anticon {
+    color: #f59e0b;
   }
 
   &.@{class-prefix}-is-dir {

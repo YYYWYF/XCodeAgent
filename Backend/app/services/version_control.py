@@ -47,6 +47,13 @@ class VersionControlSnapshot(BaseModel):
     files: list[VersionControlFile]
     requested_paths: list[str] = Field(alias="requestedPaths")
     eligible_paths: list[str] = Field(alias="eligiblePaths")
+    # eligible_paths 里排除 .xcodeagent 平台产物后的业务代码变更。
+    # 提交提醒（角标、返回首页确认、各档提醒）按这个口径计数，避免平台自身的
+    # 状态流转被当成"用户改了代码"。提交弹窗与提交校验仍用 eligible_paths，
+    # 所以产物照常可见、可勾选、可提交。
+    code_paths: list[str] = Field(alias="codePaths")
+    # HEAD 的提交信息首行；未建立基线时为空串。
+    head_message: str = Field(alias="headMessage")
     unavailable_paths: list[str] = Field(alias="unavailablePaths")
 
 
@@ -58,6 +65,15 @@ class InspectVersionControlRequest(BaseModel):
     action: Literal["inspect"]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1)
     requested_paths: list[str] = Field(alias="requestedPaths", min_length=1, max_length=200)
+
+
+class InspectAllVersionControlRequest(BaseModel):
+    """校验一次全量只读 Git 状态检查请求（里程碑提醒用，不限定文件范围）。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: Literal["inspect_all"]
+    workspace_root: str = Field(alias="workspaceRoot", min_length=1)
 
 
 class CommitVersionControlRequest(BaseModel):
@@ -131,7 +147,42 @@ def inspect_version_control(request: InspectVersionControlRequest) -> VersionCon
         files=[status_by_path[path] for path in eligible_paths],
         requestedPaths=requested_paths,
         eligiblePaths=eligible_paths,
+        codePaths=_business_code_paths(eligible_paths),
+        headMessage=_read_head_message(repository_root),
         unavailablePaths=unavailable_paths,
+    )
+
+
+def inspect_all_version_control(request: InspectAllVersionControlRequest) -> VersionControlSnapshot:
+    """读取工作区全部 Git 变更，不限定文件范围（里程碑提醒用）。"""
+
+    workspace_root = _resolve_workspace_root(request.workspace_root)
+    repository_root = _resolve_independent_repository_root(workspace_root)
+    status_bytes, status_files = _read_status(repository_root)
+    all_paths = [item.path for item in status_files]
+    head = _read_head(repository_root)
+    branch = _read_branch(repository_root)
+    fingerprint = _build_fingerprint(
+        repository_root,
+        workspace_root,
+        head,
+        status_bytes,
+        status_files,
+    )
+    return VersionControlSnapshot(
+        workspaceRoot=str(workspace_root),
+        repositoryRoot=str(repository_root),
+        branch=branch,
+        head=head,
+        fingerprint=fingerprint,
+        dirty=bool(status_files),
+        hasStagedChanges=any(item.staged for item in status_files),
+        files=status_files,
+        requestedPaths=all_paths,
+        eligiblePaths=all_paths,
+        codePaths=_business_code_paths(all_paths),
+        headMessage=_read_head_message(repository_root),
+        unavailablePaths=[],
     )
 
 
@@ -163,22 +214,28 @@ def commit_version_control(
     if any(path not in eligible_paths for path in selected_paths):
         raise VersionControlError("所选文件已不属于当前可提交变更，请重新审阅。")
 
-    _run_git_checked(
-        repository_root,
-        ["diff", "--check", "--", *selected_paths],
-        "所选文件未通过空白错误检查",
-    )
+    # 只对业务代码做空白预检。`diff --check -- <无路径>` 会退化成检查全量，
+    # 所以没有业务代码时必须整个跳过，否则"只提交产物"的场景仍会被产物自己挡住
+    # （设计版本提醒提交的就是清一色 .xcodeagent 文件）。
+    checked_paths = _business_paths(selected_paths)
+    if checked_paths:
+        _run_git_checked(
+            repository_root,
+            ["diff", "--check", "--", *checked_paths],
+            "所选文件未通过空白错误检查",
+        )
     _run_git_checked(
         repository_root,
         ["add", "--", *selected_paths],
         "无法暂存所选文件",
     )
     try:
-        _run_git_checked(
-            repository_root,
-            ["diff", "--cached", "--check"],
-            "暂存内容未通过提交前检查",
-        )
+        if checked_paths:
+            _run_git_checked(
+                repository_root,
+                ["diff", "--cached", "--check", "--", *checked_paths],
+                "暂存内容未通过提交前检查",
+            )
         staged_paths = _read_staged_paths(repository_root)
         if set(staged_paths) != set(selected_paths):
             raise VersionControlError("暂存内容与所选文件不一致，已停止提交。")
@@ -261,13 +318,64 @@ def _normalize_requested_paths(workspace_root: Path, values: list[str]) -> list[
             target.relative_to(workspace_root)
         except ValueError as exc:
             raise VersionControlError(f"变更文件超出工作目录：{value}") from exc
-        if ".git" in path.parts or ".xcodeagent" in path.parts or _is_sensitive_path(target):
+        if ".git" in path.parts or _is_sensitive_path(target):
             raise VersionControlError(f"敏感或内部文件不能提交：{normalized}")
         if normalized not in normalized_paths:
             normalized_paths.append(normalized)
     if not normalized_paths:
         raise VersionControlError("至少需要一个变更文件。")
     return normalized_paths
+
+
+_RUNTIME_ARTIFACT_PREFIXES = (
+    ".xcodeagent/runtime/",
+    ".xcodeagent/cache/",
+    ".xcodeagent/checkpoints/",
+)
+
+
+def _is_runtime_artifact_path(path: str) -> bool:
+    """判断 git status 路径是否属于 .xcodeagent 运行时产物。"""
+
+    normalized = path.replace("\\", "/").lstrip("/")
+    return any(normalized.startswith(prefix) for prefix in _RUNTIME_ARTIFACT_PREFIXES)
+
+
+_PLATFORM_ARTIFACT_PREFIX = ".xcodeagent/"
+
+
+def _is_platform_artifact_path(path: str) -> bool:
+    """判断路径是否属于 .xcodeagent 平台产物（规划文档、状态快照、报告）。
+
+    与 `_is_runtime_artifact_path` 的区别：运行时产物（日志/缓存/checkpoint）**根本不进**
+    提交候选；平台产物要进版本、要能被追溯，只是**不计入"用户改了代码"的提醒口径**。
+    """
+
+    return path.replace("\\", "/").lstrip("/").startswith(_PLATFORM_ARTIFACT_PREFIX)
+
+
+def _business_code_paths(eligible_paths: list[str]) -> list[str]:
+    """从可提交文件里筛出业务代码，供提交提醒计数使用。"""
+
+    return [path for path in eligible_paths if not _is_platform_artifact_path(path)]
+
+
+def _business_paths(paths: list[str]) -> list[str]:
+    """筛出参与提交前空白检查的路径：排除 `.xcodeagent` 平台产物。
+
+    空白检查是为了在提交前拦住手写代码里的疏忽（文档 §5.2 的确定性预检）。但
+    `.xcodeagent` 下的规划文档、状态快照与 AGENTS.md 都是**平台自己生成**的，
+    用户改不了也不该为它们负责 —— 平台生成的内容触发平台自己的门禁、反过来挡住
+    用户提交，是纯粹的误伤（AGENTS.md 曾因 `', '.join` 产出悬空逗号而触发过）。
+
+    生成侧已按行清理行尾空白（见 iteration_service._build_iteration_section）；
+    这里是第二层保险，同时让**已存在**的旧产物不再卡住提交。
+
+    调用方必须处理返回空列表的情形：`git diff --check --` 不带路径会退化成检查
+    全量，反而把被排除的产物又检查回来。
+    """
+
+    return [path for path in paths if not _is_platform_artifact_path(path)]
 
 
 def _read_status(repository_root: Path) -> tuple[bytes, list[VersionControlFile]]:
@@ -303,6 +411,12 @@ def _read_status(repository_root: Path) -> tuple[bytes, list[VersionControlFile]
             continue
         status_code = record[:2].decode("ascii", errors="replace")
         path = record[3:].decode("utf-8", errors="replace")
+        # 跳过 .xcodeagent 下的运行时产物，避免日志、缓存和 checkpoint
+        # 污染提交候选列表与提交前空白检查。
+        if _is_runtime_artifact_path(path):
+            if status_code[0] in {"R", "C"} and index < len(records):
+                index += 1
+            continue
         index_status, worktree_status = status_code[0], status_code[1]
         files.append(
             VersionControlFile(
@@ -324,6 +438,18 @@ def _read_head(repository_root: Path) -> str:
 
     completed = _run_git(repository_root, ["rev-parse", "HEAD"])
     return completed.stdout.strip() if completed.returncode == 0 else "UNBORN"
+
+
+def _read_head_message(repository_root: Path) -> str:
+    """读取 HEAD 的提交信息首行。
+
+    界面用它说明"当前保存的是什么" —— 自动提交（模板 baseline、验收）由平台发起，
+    用户没有参与写信息，所以更要把它显示出来，否则那个 commit 对用户是黑盒。
+    未建立基线时返回空串。
+    """
+
+    completed = _run_git(repository_root, ["log", "-1", "--format=%s"])
+    return completed.stdout.strip() if completed.returncode == 0 else ""
 
 
 def _read_branch(repository_root: Path) -> str:

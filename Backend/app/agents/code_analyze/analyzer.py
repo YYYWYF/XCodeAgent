@@ -92,6 +92,7 @@ def normalize_code_review_result(
 
     reported_status = str(payload.get("status") or "").strip().lower()
     frontend_scan_warning = _frontend_scan_warning()
+    skill_requires_pnpm_install = _frontend_skill_requires_pnpm_install()
     issues: list[dict[str, Any]] = []
     normalized_issue_count = 0
     seen: set[tuple[str, str, str, int, str]] = set()
@@ -160,6 +161,9 @@ def normalize_code_review_result(
             normalized["id"] = _issue_id(identity)
         seen_ids.add(normalized["id"])
         normalized_issue_count += 1
+        _enforce_skill_repair_actions(
+            normalized, skill_requires_pnpm_install=skill_requires_pnpm_install
+        )
         if len(issues) < MAX_REVIEW_ISSUES:
             issues.append(normalized)
 
@@ -524,6 +528,51 @@ def _normalize_repair_actions(value: Any, *, side: str) -> list[str]:
     if actions and side != "frontend":
         raise ValueError("后端审查问题不能声明前端修复动作。")
     return actions
+
+
+def _frontend_skill_requires_pnpm_install() -> bool:
+    """确定性判断前端扫描 Skill 的修复方案是否要求执行 pnpm install。
+
+    模型偶尔会漏标 repair_actions，这里以 Skill 文档原文为权威来源补全：
+    当修复方案明确出现 pnpm i / pnpm install 指令时，视为需要该动作。
+    """
+
+    try:
+        skill_path = resolve_builtin_skills_root() / FRONTEND_CODE_SCAN_SKILL_NAME / "SKILL.md"
+        content = skill_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return False
+    body = content.split("---", 2)[-1]
+    return ("pnpm install" in body.lower()) or ("pnpm i" in body.lower())
+
+
+def _enforce_skill_repair_actions(
+    issue: dict[str, Any], *, skill_requires_pnpm_install: bool
+) -> None:
+    """当 Skill 确定性要求 pnpm install 且问题指向锁文件依赖版本风险时补全动作。
+
+    模型可能漏标 repair_actions，导致修复 Agent 选用无 pnpm 工具的变体，
+    无法重生成 pnpm-lock.yaml。这里以 Skill 文档为权威，对指向 pnpm-lock.yaml
+    的前端依赖版本风险问题强制补 pnpm_install，保证修复链路获得正确授权。
+    """
+
+    if not skill_requires_pnpm_install:
+        return
+    if issue.get("side") != "frontend":
+        return
+    if "pnpm_install" in (issue.get("repair_actions") or []):
+        return
+    file_path = str(issue.get("file") or "")
+    title = str(issue.get("title") or "")
+    summary = str(issue.get("summary") or "")
+    touches_lockfile = file_path.endswith("pnpm-lock.yaml") or "pnpm-lock.yaml" in summary
+    is_dependency_risk = any(
+        token in (title + summary).lower()
+        for token in ("版本", "version", "依赖", "depend", "form-data", "axios")
+    )
+    if touches_lockfile and is_dependency_risk:
+        issue["repair_actions"] = ["pnpm_install"]
+
 
 
 def _frontend_scan_warning() -> str | None:

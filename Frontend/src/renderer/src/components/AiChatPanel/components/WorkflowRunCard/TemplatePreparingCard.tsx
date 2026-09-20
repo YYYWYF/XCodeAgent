@@ -1,8 +1,16 @@
-import { CheckCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
+import {
+  CheckCircleOutlined,
+  ExclamationCircleOutlined,
+  GitlabOutlined,
+  ReloadOutlined
+} from '@ant-design/icons'
 import { Button, Progress, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { ApplicationLifecycle, WorkflowTemplatePreparation } from '../../../../typings'
 import { cx } from '../../../../utils'
+import MilestoneCommitModal from '../MilestoneCommitReminder/MilestoneCommitModal'
+import { useMilestoneCommit } from '../MilestoneCommitReminder/useMilestoneCommit'
+import { resolveTemplateCommitRow } from './templateCommitRow'
 
 const { Text } = Typography
 
@@ -19,6 +27,12 @@ type Props = {
   retrying?: boolean
   /** lifecycle 仍在模板阶段但当前 renderer 没有对应生成任务。 */
   orphaned?: boolean
+  /** 工作区根目录；就绪态用于驱动初始化提交。 */
+  workspaceRoot?: string
+  /** 提交操作是否被禁用（Agent 运行中等）。 */
+  commitDisabled?: boolean
+  /** 当前是迭代：模板沿用已有工程，未重新拉取远端模板。 */
+  reusedExistingTemplate?: boolean
 }
 
 const TEMPLATE_STAGES = new Set([
@@ -45,7 +59,10 @@ export default function TemplatePreparingCard({
   onEnterDevelopment,
   onRetry,
   retrying = false,
-  orphaned = false
+  orphaned = false,
+  workspaceRoot,
+  commitDisabled = false,
+  reusedExistingTemplate = false
 }: Props): ReactElement {
   const stage = lifecycle?.initialization?.stage
   const preparationFailed = templatePreparation?.status === 'FAILED'
@@ -62,7 +79,9 @@ export default function TemplatePreparingCard({
           <Text strong>{reconcilingTemplate ? '模板能力更新失败' : '应用模板生成失败'}</Text>
         </div>
         <Text type="secondary" className={cx('template-preparing-desc')}>
-          {templatePreparation?.errorMessage || lifecycle?.error?.message || '应用模板文件生成失败，请查看错误信息。'}
+          {templatePreparation?.errorMessage ||
+            lifecycle?.error?.message ||
+            '应用模板文件生成失败，请查看错误信息。'}
         </Text>
         <Button
           className={cx('template-preparing-retry-btn')}
@@ -91,9 +110,16 @@ export default function TemplatePreparingCard({
           <Text strong>应用模板准备已中断</Text>
         </div>
         <Text type="secondary" className={cx('template-preparing-desc')}>
-          上一次 Workspace Bootstrap 已停止；已确认的需求和 TechnicalPlan 不受影响，可以继续执行模板准备。
+          上一次 Workspace Bootstrap 已停止；已确认的需求和 TechnicalPlan
+          不受影响，可以继续执行模板准备。
         </Text>
-        <Button className={cx('template-preparing-retry-btn')} disabled={!onRetry} loading={retrying} onClick={onRetry} type="primary">
+        <Button
+          className={cx('template-preparing-retry-btn')}
+          disabled={!onRetry}
+          loading={retrying}
+          onClick={onRetry}
+          type="primary"
+        >
           继续准备模板
         </Button>
       </div>
@@ -102,23 +128,12 @@ export default function TemplatePreparingCard({
 
   if (ready) {
     return (
-      <div className={cx('template-preparing-card', 'template-preparing-ready')}>
-        <div className={cx('template-preparing-head')}>
-          <CheckCircleOutlined className={cx('template-preparing-icon', 'is-ready')} />
-          <Text strong>应用模板已就绪</Text>
-        </div>
-        <Text type="secondary" className={cx('template-preparing-desc')}>
-          TechnicalPlan 已确认，应用模板已生成。点击下方按钮进入开发阶段，开始详细设计与构建。
-        </Text>
-        <Button
-          className={cx('template-preparing-enter-btn')}
-          onClick={() => onEnterDevelopment?.()}
-          size="large"
-          type="primary"
-        >
-          进入开发阶段
-        </Button>
-      </div>
+      <ReadyCard
+        onEnterDevelopment={onEnterDevelopment}
+        reusedExistingTemplate={reusedExistingTemplate}
+        workspaceRoot={workspaceRoot}
+        commitDisabled={commitDisabled}
+      />
     )
   }
 
@@ -131,7 +146,9 @@ export default function TemplatePreparingCard({
     <div className={cx('template-preparing-card', 'template-preparing-loading')}>
       <div className={cx('template-preparing-head')}>
         {/* <Spin size="small" /> */}
-        <Text strong>{retrying ? '产品 Agent 正在重试应用模板生成' : '产品 Agent 正在准备应用模板'}</Text>
+        <Text strong>
+          {retrying ? '产品 Agent 正在重试应用模板生成' : '产品 Agent 正在准备应用模板'}
+        </Text>
       </div>
       <Text type="secondary" className={cx('template-preparing-desc')}>
         {templatePreparation
@@ -146,6 +163,154 @@ export default function TemplatePreparingCard({
           {templatePreparation.logs[templatePreparation.logs.length - 1]?.message}
         </Text>
       ) : null}
+    </div>
+  )
+}
+
+/** 就绪态卡片：模板就绪 + 初始化提交区 + 进入开发阶段按钮。
+ *  提交成功后只关闭弹窗并在卡片留痕，不自动进入开发；用户需点"进入开发阶段"。 */
+function ReadyCard({
+  onEnterDevelopment,
+  reusedExistingTemplate = false,
+  workspaceRoot,
+  commitDisabled
+}: {
+  onEnterDevelopment?: () => void
+  reusedExistingTemplate?: boolean
+  workspaceRoot?: string
+  commitDisabled: boolean
+}): ReactElement {
+  // 无 workspaceRoot 时跳过提交区，仅展示就绪态与进入开发按钮。
+  const commit = useMilestoneCommit(workspaceRoot ?? '', 'template-init', 'chore: 初始化应用工程')
+  const {
+    snapshot,
+    commitResult,
+    eligiblePaths,
+    inspectError,
+    inspecting,
+    dismissed,
+    handleDefer,
+    handleOpenCommit,
+    loadSnapshot
+  } = commit
+
+  // 提交区该显示哪一行：见 templateCommitRow 的说明（这里最容易写出"建议一个做不到的动作"）。
+  const commitRow = resolveTemplateCommitRow({
+    showCommitArea: Boolean(workspaceRoot && !dismissed && !commitResult),
+    inspectError,
+    inspecting,
+    hasSnapshot: Boolean(snapshot),
+    eligibleCount: eligiblePaths.length
+  })
+
+  return (
+    <div className={cx('template-preparing-card', 'template-preparing-ready')}>
+      <div className={cx('template-preparing-head')}>
+        <CheckCircleOutlined className={cx('template-preparing-icon', 'is-ready')} />
+        <Text strong>应用模板已就绪</Text>
+      </div>
+      <Text type="secondary" className={cx('template-preparing-desc')}>
+        {reusedExistingTemplate
+          ? 'TechnicalPlan 已确认，沿用本应用已有工程（未重新拉取模板）。'
+          : 'TechnicalPlan 已确认，应用模板已生成。'}
+      </Text>
+
+      {/* 读不到 Git 状态：模板已生成，仓库本该存在，值得报出来并允许重试。 */}
+      {commitRow === 'error' ? (
+        <div className={cx('template-preparing-commit-row')}>
+          <span className={cx('template-preparing-commit-icon')}>
+            <ReloadOutlined />
+          </span>
+          <div className={cx('template-preparing-commit-copy')}>
+            <Text strong>暂时无法准备提交</Text>
+            <Text type="secondary">{inspectError}</Text>
+          </div>
+          <div className={cx('template-preparing-commit-actions')}>
+            <Button
+              disabled={commitDisabled || inspecting}
+              icon={<ReloadOutlined />}
+              onClick={() => void loadSnapshot()}
+              size="small"
+            >
+              重试
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* 有业务代码变更才给提交入口。 */}
+      {commitRow === 'reminder' ? (
+        <div className={cx('template-preparing-commit-row')}>
+          <span className={cx('template-preparing-commit-icon')}>
+            <GitlabOutlined />
+          </span>
+          <div className={cx('template-preparing-commit-copy')}>
+            <Text strong>建议创建初始化提交</Text>
+            <Text type="secondary">{`当前 ${eligiblePaths.length} 个文件可提交。`}</Text>
+          </div>
+          <div className={cx('template-preparing-commit-actions')}>
+            <Button disabled={commitDisabled || inspecting} onClick={handleDefer} size="small">
+              稍后
+            </Button>
+            <Button
+              disabled={commitDisabled || inspecting}
+              onClick={() => void handleOpenCommit()}
+              size="small"
+              type="primary"
+            >
+              审阅并提交
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* 没有待提交的业务代码：报告代码已存好、无需操作，而不是建议一个做不到的动作。
+          早先这里固定显示"建议创建初始化提交 / 当前 0 个文件可提交"加一个灰按钮，
+          因为 bootstrap 早就把模板提交了，那块区域实际是个空壳。 */}
+      {commitRow === 'baseline' ? (
+        <div className={cx('template-preparing-commit-row')}>
+          <span className={cx('template-preparing-commit-icon')}>
+            <CheckCircleOutlined />
+          </span>
+          <div className={cx('template-preparing-commit-copy')}>
+            <Text strong>{reusedExistingTemplate ? '工程代码已保存' : '模板代码已保存'}</Text>
+            <Text type="secondary">
+              {reusedExistingTemplate ? '沿用已有工程，无需重新提交' : '已自动提交，无需手动操作'}
+              {/* 提交信息来自 HEAD（后端 headMessage）：自动提交是平台发起的，
+                  用户没参与写信息，所以要显示出来，否则这个 commit 对用户是黑盒。 */}
+              {snapshot?.headMessage ? ` · ${snapshot.headMessage}` : ''}
+              {` · ${snapshot?.head.slice(0, 8) || '—'}`}
+            </Text>
+          </div>
+        </div>
+      ) : null}
+
+      {commitResult && (
+        <div className={cx('template-preparing-committed-mark')}>
+          <CheckCircleOutlined className={cx('template-preparing-committed-icon')} />
+          <Text type="secondary">
+            已提交 · {commitResult.commitSha.slice(0, 8)} · {commitResult.committedPaths.length}{' '}
+            个文件
+          </Text>
+        </div>
+      )}
+
+      <Button
+        className={cx('template-preparing-enter-btn')}
+        onClick={() => onEnterDevelopment?.()}
+        size="large"
+        type="primary"
+      >
+        进入开发阶段
+      </Button>
+
+      {workspaceRoot && (
+        <MilestoneCommitModal
+          title="应用模板已就绪，建议创建初始化提交"
+          disabled={commitDisabled}
+          commit={commit}
+        />
+      )}
     </div>
   )
 }

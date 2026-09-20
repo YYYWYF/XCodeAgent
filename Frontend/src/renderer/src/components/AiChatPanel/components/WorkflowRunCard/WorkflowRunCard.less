@@ -1609,6 +1609,54 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
   border-radius: 10px;
 }
 
+// 就绪态内嵌的初始化提交区，复用 version-commit-reminder 的视觉语言。
+.@{class-prefix}-template-preparing-commit-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--wb-surface, #fff);
+  border: 1px solid var(--wb-border, #eef0f3);
+}
+
+.@{class-prefix}-template-preparing-commit-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--wb-accent, #6b3cf0);
+}
+
+.@{class-prefix}-template-preparing-commit-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.@{class-prefix}-template-preparing-commit-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+// 提交成功后的留痕行。
+.@{class-prefix}-template-preparing-committed-mark {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(22, 163, 74, 0.06);
+  border: 1px solid rgba(22, 163, 74, 0.2);
+}
+
+.@{class-prefix}-template-preparing-committed-icon {
+  color: #16a34a;
+}
+
 .@{class-prefix}-workflow-run-progress {
   display: flex;
   align-items: center;
@@ -1811,3 +1859,20 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
 }
 
 @import './WorkflowRunCardConsole.less';
+
+// 弱提醒：任务级"可形成检查点"标记，克制配色，不与状态标签抢视觉。
+.@{class-prefix}-workflow-build-task-checkpoint-tag {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
+  border-color: transparent;
+  background: var(--wb-accent-soft);
+  color: var(--wb-accent);
+  font-size: 11px;
+}
+
+// 中等提示：模块级候选提交点，只提示不弹窗。
+.@{class-prefix}-workflow-build-checkpoint-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+}

@@ -3,6 +3,7 @@ import { message, Tag } from 'antd'
 import { BlockOutlined, LeftOutlined, FolderOutlined } from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
+import VersionActions from './VersionActions'
 import { useWorkbenchPhase } from '../context'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
@@ -16,12 +17,24 @@ import {
 import './WorkbenchTopBar.less'
 
 type Props = {
-  application: Pick<ApplicationConfig, 'id' | 'name'>
+  application: Pick<ApplicationConfig, 'id' | 'name' | 'versions' | 'currentVersionId'>
   workspaceRoot: string
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
   rightPanelOpen: boolean
   onToggleRightPanel: () => void
+  /** 生成新版本：打开生成版本弹框。 */
+  onPublishVersion?: () => void
+  /** 基于历史版本迭代：打开回退弹框。 */
+  onRollbackVersion?: (versionId: string) => void
+  /** 发起新迭代：打开迭代弹框。 */
+  onStartIteration?: () => void
+  /** 切换查看版本。 */
+  onVersionSelect?: (versionId: string) => void
+  /** 当前查看的版本 id。 */
+  viewingVersionId?: string
+  /** 正在回看历史版本：右侧的 Agent 身份、跟随开关与预览开关都不适用，整组隐藏。 */
+  versionReadOnly?: boolean
 }
 
 /**
@@ -34,10 +47,24 @@ export default function WorkbenchTopBar({
   workspaceRoot,
   onReturnWelcome,
   rightPanelOpen,
-  onToggleRightPanel
+  onToggleRightPanel,
+  onPublishVersion,
+  onRollbackVersion,
+  onStartIteration,
+  onVersionSelect,
+  viewingVersionId,
+  versionReadOnly = false
 }: Props): JSX.Element {
-  const { phase, derivedPhase, reachedPhase, manualOverride, switchPhase, agent, testEntryGate } =
-    useWorkbenchPhase()
+  const {
+    phase,
+    derivedPhase,
+    reachedPhase,
+    manualOverride,
+    switchPhase,
+    agent,
+    testEntryGate,
+    locked
+  } = useWorkbenchPhase()
   const following = manualOverride === null
   const previousPhaseRef = useRef<WorkbenchPhase | null>(null)
 
@@ -54,14 +81,18 @@ export default function WorkbenchTopBar({
   // 回退切阶段（切到旅程上游 = 增量迭代）需二次确认；向前推进 / 同级直接切。
   const [confirmPhase, setConfirmPhase] = useState<WorkbenchPhase | null>(null)
   const handlePhaseClick = (phaseKey: WorkbenchPhase): void => {
+    if (locked) return
     if (PHASE_ORDER.indexOf(phaseKey) < PHASE_ORDER.indexOf(derivedPhase)) {
       setConfirmPhase(phaseKey)
       return
     }
     // 用户主动切到开发阶段时，标记已确认进入开发（与对话区"进入开发"按钮一致），
-    // 避免重挂载后自动阶段推导再次回到 product。
+    // 避免重挂载后自动阶段推导再次回到 product。作用域为当前迭代版本。
     if (phaseKey === 'development') {
-      markApplicationEnteredDevelopment(application.id)
+      markApplicationEnteredDevelopment(
+        application.id,
+        application.currentVersionId || application.id
+      )
     }
     switchPhase(phaseKey)
   }
@@ -86,9 +117,24 @@ export default function WorkbenchTopBar({
         <span className={cx('workbench-topbar-app-name')}>{application.name}</span>
       </button>
 
-      <div className={cx('workbench-topbar-phase')}>
+      {application.versions && application.versions.length > 0 ? (
+        <VersionActions
+          application={application as ApplicationConfig}
+          lifecycle={lifecycle}
+          viewingVersionId={viewingVersionId}
+          onPublish={onPublishVersion || (() => {})}
+          onRollback={onRollbackVersion || (() => {})}
+          onStartIteration={onStartIteration || (() => {})}
+          onVersionSelect={onVersionSelect || (() => {})}
+          part="selector"
+        />
+      ) : null}
+
+      <div className={cx('workbench-topbar-phase', locked && 'locked')}>
         <div className={cx('workbench-topbar-stepper')} role="tablist" aria-label="阶段">
           {PHASE_ORDER.map((phaseKey, idx) => {
+            // 已生成版本（locked）也要高亮当前阶段：它只读、不可点，但仍要指明这个版本
+            // 停在哪个阶段（历史版本冻结在验收），否则阶段条上没有任何位置提示。
             const isActive = phase === phaseKey
             // 回访资格使用独立的到达记录，不能随当前视图回退或 execution 收口而降低。
             const reached = PHASE_ORDER.indexOf(reachedPhase) >= idx
@@ -108,8 +154,16 @@ export default function WorkbenchTopBar({
                     isActive && 'active',
                     reached && !isActive && 'reached'
                   )}
-                  disabled={phaseKey === 'test' ? testEntryGate?.allowed !== true : !reached}
-                  title={phaseKey === 'test' ? testEntryGateReason(testEntryGate) : undefined}
+                  disabled={
+                    locked || (phaseKey === 'test' ? testEntryGate?.allowed !== true : !reached)
+                  }
+                  title={
+                    locked
+                      ? '该版本已生成，阶段和 Agent 调度均已锁定'
+                      : phaseKey === 'test'
+                        ? testEntryGateReason(testEntryGate)
+                        : undefined
+                  }
                   onClick={() => handlePhaseClick(phaseKey)}
                 >
                   <span className={cx('workbench-topbar-phase-dot')} aria-hidden="true" />
@@ -126,27 +180,54 @@ export default function WorkbenchTopBar({
         </div>
       </div>
 
-      <div className={cx('workbench-topbar-tail')}>
-        <span className={cx('workbench-topbar-agent')}>{agent.role}</span>
-        <Tag
-          className={cx('workbench-topbar-follow')}
-          color={following ? undefined : 'processing'}
-          onClick={following ? undefined : () => switchPhase(null)}
-        >
-          {following ? '跟随旅程' : '恢复自动'}
-        </Tag>
-      </div>
+      {application.versions && application.versions.length > 0 ? (
+        <>
+          <span
+            aria-hidden="true"
+            className={cx('workbench-topbar-arrow', 'workbench-topbar-terminal-arrow')}
+          >
+            →
+          </span>
+          <VersionActions
+            application={application as ApplicationConfig}
+            lifecycle={lifecycle}
+            viewingVersionId={viewingVersionId}
+            onPublish={onPublishVersion || (() => {})}
+            onRollback={onRollbackVersion || (() => {})}
+            onStartIteration={onStartIteration || (() => {})}
+            onVersionSelect={onVersionSelect || (() => {})}
+            part="terminal"
+          />
+        </>
+      ) : null}
 
-      <button
-        className={cx('workbench-topbar-preview-toggle', rightPanelOpen && 'active')}
-        onClick={onToggleRightPanel}
-        title={rightPanelOpen ? '隐藏右侧预览' : '显示右侧预览'}
-        type="button"
-        aria-label="切换右侧预览"
-        aria-pressed={rightPanelOpen}
-      >
-        <BlockOutlined />
-      </button>
+      {/* 历史版本只读回看：Agent 身份、跟随开关与预览开关都指向"当前迭代的推进"，
+          在这里既无意义也无处可去，整组隐藏。 */}
+      {!versionReadOnly ? (
+        <>
+          <div className={cx('workbench-topbar-tail')}>
+            <span className={cx('workbench-topbar-agent')}>{agent.role}</span>
+            <Tag
+              className={cx('workbench-topbar-follow')}
+              color={following ? undefined : 'processing'}
+              onClick={following ? undefined : () => switchPhase(null)}
+            >
+              {following ? '跟随旅程' : '恢复自动'}
+            </Tag>
+          </div>
+
+          <button
+            className={cx('workbench-topbar-preview-toggle', rightPanelOpen && 'active')}
+            onClick={onToggleRightPanel}
+            title={rightPanelOpen ? '隐藏右侧预览' : '显示右侧预览'}
+            type="button"
+            aria-label="切换右侧预览"
+            aria-pressed={rightPanelOpen}
+          >
+            <BlockOutlined />
+          </button>
+        </>
+      ) : null}
 
       <PhaseSwitchConfirmModal
         fromPhase={derivedPhase}

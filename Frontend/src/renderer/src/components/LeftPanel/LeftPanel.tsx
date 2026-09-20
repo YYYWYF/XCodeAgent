@@ -47,6 +47,7 @@ type Props = {
     designChangeRequest?: string
   ) => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
+  onStartIterationPlanning: (request: string) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
@@ -69,6 +70,10 @@ type Props = {
   planningState?: ApplicationPlanningCurrentState
   theme: 'light' | 'dark'
   rightPanelOpen: boolean
+  /** 正在查看已生成版本：对话区改为只读的应用文件/应用预览双 tab。 */
+  versionReadOnly?: boolean
+  /** 所查看历史版本的 Git tag：应用文件按它读取该版本当时的内容。 */
+  viewedVersionTag?: string
   onRightPanelOpenChange: (open: boolean) => void
 }
 
@@ -91,6 +96,7 @@ export default function LeftPanel({
   onReturnWelcome,
   onSubmitPlanningClarification,
   onStartDesignStageRevision,
+  onStartIterationPlanning,
   onRevisionContinuationHandlerChange,
   onThemeChange,
   onPlanningStreamReady,
@@ -103,6 +109,8 @@ export default function LeftPanel({
   planningState,
   theme,
   rightPanelOpen,
+  versionReadOnly = false,
+  viewedVersionTag,
   onRightPanelOpenChange
 }: Props): ReactElement {
   return (
@@ -127,6 +135,7 @@ export default function LeftPanel({
             onReturnWelcome={onReturnWelcome}
             onSubmitPlanningClarification={onSubmitPlanningClarification}
             onStartDesignStageRevision={onStartDesignStageRevision}
+            onStartIterationPlanning={onStartIterationPlanning}
             onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
             onThemeChange={onThemeChange}
             onPlanningStreamReady={onPlanningStreamReady}
@@ -140,6 +149,8 @@ export default function LeftPanel({
             theme={theme}
             rightPanelOpen={rightPanelOpen}
             onRightPanelOpenChange={onRightPanelOpenChange}
+            versionReadOnly={versionReadOnly}
+            viewedVersionTag={viewedVersionTag}
           />
         </div>
       </Sider>

@@ -1098,7 +1098,8 @@ function assertWorkbenchPhase(value: unknown): WorkbenchPhase {
     value !== 'development' &&
     value !== 'test' &&
     value !== 'review' &&
-    value !== 'acceptance'
+    value !== 'acceptance' &&
+    value !== 'release'
   ) {
     throw new Error('workbenchPhase must be a supported workbench phase')
   }
@@ -1409,8 +1410,7 @@ async function createChatSession(
       )
       if (existing) {
         const identityMatches =
-          existing.editorMode === editorMode &&
-          existing.workbenchPhase === workbenchPhase
+          existing.editorMode === editorMode && existing.workbenchPhase === workbenchPhase
         if (!identityMatches) throw new Error('entryKey is already bound to another phase session')
         return existing
       }
@@ -1586,7 +1586,6 @@ function setupWorkspaceIpc(): void {
       path: projectPath
     }
   })
-
 }
 
 function setupSessionStorageIpc(): void {
@@ -1653,6 +1652,13 @@ function setupSessionStorageIpc(): void {
   ipcMain.handle('sessions:delete', async (_event, payload = {}) => {
     const sessionFile = getSessionFile(payload.workspaceRoot, payload.editorMode, payload.sessionId)
     await fs.rm(sessionFile, { force: true })
+    return { ok: true }
+  })
+
+  // 发起新迭代时清空当前工作区的全部会话历史，避免上一版本的对话卡片串入新迭代。
+  ipcMain.handle('sessions:clear-workspace', async (_event, payload = {}) => {
+    const workspaceSessionRoot = getWorkspaceSessionRoot(payload.workspaceRoot)
+    await fs.rm(workspaceSessionRoot, { recursive: true, force: true })
     return { ok: true }
   })
 }

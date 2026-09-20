@@ -14,7 +14,11 @@ from app.services.application_lifecycle import (
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 from app.services.workspace_bootstrap.models import ArchiveLimits, WorkspaceBootstrapError
-from app.services.workspace_bootstrap.readiness import validate_workspace_bootstrap_readiness
+from app.services.workspace_bootstrap.readiness import (
+    WorkspaceTemplateStatus,
+    classify_workspace_template,
+    validate_workspace_bootstrap_readiness,
+)
 from app.services.workspace_bootstrap.requested_config import compile_template_requested_config
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
 from app.services.workspace_bootstrap.template_package import validate_template_package
@@ -68,6 +72,31 @@ class WorkspaceBootstrapService:
         try:
             requested_config = await asyncio.to_thread(compile_template_requested_config, workspace)
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
+            # 新迭代沿用已有工程：模板请求只由 application.json 派生，各迭代完全一致，
+            # 因此已物化的模板本来就在正确的状态。重新下载会把应用累积的业务代码整体覆盖掉。
+            template_status = await asyncio.to_thread(
+                classify_workspace_template,
+                workspace,
+                requested_config=requested_config,
+            )
+            if template_status is WorkspaceTemplateStatus.READY:
+                lifecycle = await asyncio.to_thread(
+                    complete_workspace_bootstrap,
+                    workspace,
+                    succeeded=True,
+                    readiness_verified=True,
+                )
+                return {
+                    "workspaceRoot": str(workspace),
+                    "reusedExistingTemplate": True,
+                    "lifecycle": lifecycle.model_dump(mode="json", by_alias=True),
+                }
+            if template_status is WorkspaceTemplateStatus.STALE:
+                raise WorkspaceBootstrapError(
+                    "工作区已有工程产物，但模板状态与应用当前配置不一致（或工程不完整）。"
+                    "为避免覆盖已有代码，本次不会重新拉取模板；"
+                    "请改用独立的项目目录重建应用，或先手工清理该工作区。"
+                )
             client = TemplateEngineClient(
                 base_url=self._settings.template_engine_base_url,
                 connect_timeout=self._settings.template_engine_connect_timeout_seconds,

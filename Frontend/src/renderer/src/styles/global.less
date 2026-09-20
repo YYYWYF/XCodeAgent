@@ -44,6 +44,19 @@ html[data-platform='windows'] body {
   -webkit-font-smoothing: auto;
 }
 
+// 全局禁用规范：禁用控件只呈现灰化结果，不显示禁用鼠标、不响应 hover。
+button[disabled],
+input[disabled],
+select[disabled],
+textarea[disabled],
+[aria-disabled='true'],
+.ant-btn-disabled,
+.ant-input-disabled,
+.ant-select-disabled {
+  cursor: default !important;
+  pointer-events: none;
+}
+
 .@{class-prefix}-workbench-shell {
   --wb-bg: #f5f5f5;
   --wb-canvas: #ffffff;
@@ -59,6 +72,7 @@ html[data-platform='windows'] body {
   --wb-text-secondary: #65666a;
   --wb-text-tertiary: #909196;
   --wb-border: rgba(0, 0, 0, 0.075);
+  --wb-border-soft: rgba(0, 0, 0, 0.04);
   --wb-border-strong: rgba(0, 0, 0, 0.115);
   --wb-focus: rgba(0, 0, 0, 0.24);
   --wb-shadow: 0 10px 32px rgba(0, 0, 0, 0.055);
@@ -91,6 +105,33 @@ html[data-platform='windows'] body {
 /* Ant Design 浮层通过 Portal 挂载到 body，需要从当前页面同步主题。 */
 body:has(.@{class-prefix}-workbench-shell[data-theme='light']),
 body:has(.@{class-prefix}-welcome-page[data-theme='light']) {
+  /* 桥接主题变量：Modal/Dropdown 等 Portal 浮层在 body 下也能解析 --wb-*。 */
+  --wb-bg: #f5f5f5;
+  --wb-canvas: #ffffff;
+  --wb-sidebar: #f2f2f2;
+  --wb-editor: #f7f7f7;
+  --wb-surface: rgba(255, 255, 255, 0.78);
+  --wb-surface-subtle: rgba(0, 0, 0, 0.025);
+  --wb-surface-hover: rgba(0, 0, 0, 0.045);
+  --wb-surface-selected: rgba(0, 0, 0, 0.055);
+  --wb-control: rgba(0, 0, 0, 0.06);
+  --wb-control-hover: rgba(0, 0, 0, 0.095);
+  --wb-text: #202124;
+  --wb-text-secondary: #65666a;
+  --wb-text-tertiary: #909196;
+  --wb-border: rgba(0, 0, 0, 0.075);
+  --wb-border-soft: rgba(0, 0, 0, 0.04);
+  --wb-border-strong: rgba(0, 0, 0, 0.115);
+  --wb-focus: rgba(0, 0, 0, 0.24);
+  --wb-shadow: 0 10px 32px rgba(0, 0, 0, 0.055);
+  --wb-accent: #6b3cf0;
+  --wb-accent-hover: #7e50f4;
+  --wb-accent-active: #5d31dc;
+  --wb-accent-soft: rgba(107, 60, 240, 0.07);
+  --wb-accent-border: rgba(107, 60, 240, 0.34);
+  --wb-danger: #b42318;
+  --wb-warning: #8a5a00;
+
   .ant-tooltip-inner,
   .ant-popover-inner {
     color: #202124;
@@ -128,6 +169,33 @@ body:has(.@{class-prefix}-welcome-page[data-theme='light']) {
 
 body:has(.@{class-prefix}-workbench-shell[data-theme='dark']),
 body:has(.@{class-prefix}-welcome-page[data-theme='dark']) {
+  /* 桥接主题变量：Modal/Dropdown 等 Portal 浮层在 body 下也能解析 --wb-*。 */
+  --wb-bg: #1b1b1d;
+  --wb-canvas: #151a24;
+  --wb-sidebar: #202023;
+  --wb-editor: #19191b;
+  --wb-surface: rgba(255, 255, 255, 0.055);
+  --wb-surface-subtle: rgba(255, 255, 255, 0.035);
+  --wb-surface-hover: rgba(255, 255, 255, 0.075);
+  --wb-surface-selected: rgba(255, 255, 255, 0.095);
+  --wb-control: rgba(255, 255, 255, 0.1);
+  --wb-control-hover: rgba(255, 255, 255, 0.145);
+  --wb-text: #f2f2f2;
+  --wb-text-secondary: #a6a6aa;
+  --wb-text-tertiary: #737378;
+  --wb-border: rgba(255, 255, 255, 0.075);
+  --wb-border-soft: rgba(255, 255, 255, 0.04);
+  --wb-border-strong: rgba(255, 255, 255, 0.13);
+  --wb-focus: rgba(255, 255, 255, 0.28);
+  --wb-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
+  --wb-accent: #a782ff;
+  --wb-accent-hover: #b488ff;
+  --wb-accent-active: #8d62ea;
+  --wb-accent-soft: rgba(167, 130, 255, 0.1);
+  --wb-accent-border: rgba(167, 130, 255, 0.4);
+  --wb-danger: #ff8a80;
+  --wb-warning: #e8c06a;
+
   .ant-message-notice-content {
     color: #f2f2f2;
     background: #28282b;
@@ -201,6 +269,7 @@ body:has(.@{class-prefix}-welcome-page[data-theme='dark']) {
   --wb-text-secondary: #a6a6aa;
   --wb-text-tertiary: #737378;
   --wb-border: rgba(255, 255, 255, 0.075);
+  --wb-border-soft: rgba(255, 255, 255, 0.04);
   --wb-border-strong: rgba(255, 255, 255, 0.13);
   --wb-focus: rgba(255, 255, 255, 0.28);
   --wb-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);

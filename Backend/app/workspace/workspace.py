@@ -106,6 +106,9 @@ class TreeRequest(WorkspacePathRequest):
     max_depth: int = Field(default=3, ge=1, le=8)
     include_hidden: bool = Field(default=False)
     limit: int = Field(default=500, ge=1, le=3000)
+    revision: Optional[str] = Field(
+        default=None, description="按该 Git 版本读取（如 tag）；缺省读当前工作区。"
+    )
 
 
 class ReadFileRequest(WorkspacePathRequest):
@@ -114,6 +117,9 @@ class ReadFileRequest(WorkspacePathRequest):
     max_chars: int = Field(default=20000, ge=200, le=200000)
     allow_sensitive: bool = Field(default=False)
     approval: Optional[ApprovalGrant] = Field(default=None)
+    revision: Optional[str] = Field(
+        default=None, description="按该 Git 版本读取（如 tag）；缺省读当前工作区。"
+    )
 
 
 class WriteFileRequest(WorkspacePathRequest):
@@ -308,6 +314,19 @@ def list_files(request: ListFilesRequest) -> Dict[str, Any]:
 
 def workspace_tree(request: TreeRequest) -> Dict[str, Any]:
     root = _workspace_root(request.workspace_root)
+    if request.revision:
+        # 延迟导入：revision_workspace 依赖 version_control，而后者在模块级导入本模块，
+        # 顶层导入会形成循环。
+        from app.workspace.revision_workspace import revision_tree
+
+        return revision_tree(
+            root,
+            request.revision,
+            path=request.path,
+            max_depth=request.max_depth,
+            include_hidden=request.include_hidden,
+            limit=request.limit,
+        )
     base = _safe_path(root, request.path)
     if not base.exists():
         _fail(404, f"Path does not exist: {request.path}")
@@ -332,6 +351,18 @@ def workspace_tree(request: TreeRequest) -> Dict[str, Any]:
 
 def read_file(request: ReadFileRequest) -> Dict[str, Any]:
     root = _workspace_root(request.workspace_root)
+    if request.revision:
+        # 同 workspace_tree：按版本读取走只读的 Git 原语，不检出工作区。
+        from app.workspace.revision_workspace import revision_file
+
+        return revision_file(
+            root,
+            request.revision,
+            request.path,
+            start_line=request.start_line,
+            max_lines=request.max_lines,
+            max_chars=request.max_chars,
+        )
     path = _safe_path(root, request.path)
     _assert_existing_file(path, root)
     if _is_sensitive_path(path):

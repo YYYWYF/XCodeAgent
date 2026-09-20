@@ -27,7 +27,8 @@ type Props = {
   tabs: WorkspaceTab[]
   active: WorkspaceTabKey
   onChange: (key: WorkspaceTabKey) => void
-  onClose: () => void
+  /** 关闭右侧面板；不传时不渲染关闭按钮（只读回看没有"关闭"语义）。 */
+  onClose?: () => void
 }
 
 /** 右侧工作区的 tab 条：预览始终可用，其余无内容的 tab 灰显。 */
@@ -51,14 +52,16 @@ export default function RightPanelTabs({ tabs, active, onChange, onClose }: Prop
           )
         })}
       </div>
-      <button
-        type="button"
-        className={cx('workspace-tabs-close')}
-        aria-label="关闭右侧面板"
-        onClick={onClose}
-      >
-        <CloseOutlined />
-      </button>
+      {onClose ? (
+        <button
+          type="button"
+          className={cx('workspace-tabs-close')}
+          aria-label="关闭右侧面板"
+          onClick={onClose}
+        >
+          <CloseOutlined />
+        </button>
+      ) : null}
     </header>
   )
 }

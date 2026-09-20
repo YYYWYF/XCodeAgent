@@ -83,6 +83,8 @@ class Settings:
     template_package_max_files: int = 10000
     template_package_max_extracted_bytes: int = 524288000
     template_reconcile_enabled: bool = True
+    git_username: str = ""
+    git_token: str = ""
 
     @property
     def model_api_name(self) -> str:
@@ -231,6 +233,8 @@ class Settings:
             template_reconcile_enabled=_env_bool(
                 "XCODEAGENT_TEMPLATE_RECONCILE_ENABLED", default=True
             ),
+            git_username=os.getenv("XCODEAGENT_GIT_USERNAME", ""),
+            git_token=os.getenv("XCODEAGENT_GIT_TOKEN", ""),
         )
 
 

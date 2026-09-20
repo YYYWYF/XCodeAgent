@@ -114,7 +114,7 @@ declare global {
           workspaceRoot: string
           workflowId: string
           editorMode: 'frontend' | 'backend'
-          workbenchPhase: 'product' | 'planning' | 'development' | 'test' | 'review' | 'acceptance'
+          workbenchPhase: 'product' | 'planning' | 'development' | 'test' | 'review' | 'acceptance' | 'release'
           entryKey?: string
           title?: string
           developmentTarget?:
@@ -136,6 +136,7 @@ declare global {
           editorMode: 'frontend' | 'backend'
           sessionId: string
         }) => Promise<{ ok?: boolean }>
+        clearWorkspace: (payload: { workspaceRoot: string }) => Promise<{ ok?: boolean }>
       }
       browser?: {
         openExternal: (url: string) => Promise<{ ok?: boolean }>

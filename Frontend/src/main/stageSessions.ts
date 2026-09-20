@@ -7,6 +7,7 @@ export type WorkbenchPhase =
   | 'test'
   | 'review'
   | 'acceptance'
+  | 'release'
 
 export type AgentStage = 'DESIGN' | 'PLAN' | 'DEVELOPMENT'
 

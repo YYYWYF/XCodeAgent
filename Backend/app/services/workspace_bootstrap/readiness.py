@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -11,6 +12,7 @@ from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapReadinessError
 
 _STAGING_RELATIVE_PATH = Path(".xcodeagent/bootstrap-staging")
+_MANAGED_ROOT_NAMES = ("frontend", "backend", ".git")
 
 
 class GitBaselineVerifier(Protocol):
@@ -18,6 +20,65 @@ class GitBaselineVerifier(Protocol):
 
     def verify_baseline(self, workspace: str | Path) -> str:
         """验证工作区 Git baseline 并返回 HEAD。"""
+
+
+class WorkspaceTemplateStatus(StrEnum):
+    """描述工作区模板相对当前请求的状态，决定 Bootstrap 是否还要拉取模板。"""
+
+    ABSENT = "absent"
+    """尚无工程痕迹：正常下载并物化模板。"""
+
+    READY = "ready"
+    """已物化且与当前请求一致：沿用已有工程，跳过下载与物化。"""
+
+    STALE = "stale"
+    """已有工程痕迹但与当前请求不一致或不完整：不得覆盖，由调用方报明确错误。"""
+
+
+def classify_workspace_template(
+    workspace: str | Path,
+    *,
+    requested_config: dict[str, Any],
+) -> WorkspaceTemplateStatus:
+    """判断工作区模板是否已就绪，供 Bootstrap 决定"沿用已有工程"还是重新拉取。
+
+    与 `validate_workspace_bootstrap_readiness` 的关键区别：本函数**不校验 Git 工作树是否干净**。
+    那条校验是给"即将写入并提交"的物化事务准备的；而迭代期间 `.xcodeagent` 自身的状态文件
+    本就是脏的（lifecycle/application.json 随规划不断改写），用严格版会把每次迭代都误判成
+    "未物化"，从而重新拉取模板并覆盖用户累积的代码。`.git` 目录本身的有效性由
+    `_validate_template_roots` 覆盖。
+    """
+
+    root = Path(workspace).expanduser().resolve()
+    state = _load_template_state_or_none(root)
+    present_roots = [
+        name for name in _MANAGED_ROOT_NAMES if (root / name).exists() or (root / name).is_symlink()
+    ]
+    if state is None or len(present_roots) < len(_MANAGED_ROOT_NAMES):
+        # 完全没有工程痕迹才需要真正拉取；只留下一半痕迹属于状态不一致，
+        # 交给调用方报明确错误，绝不静默覆盖。
+        return (
+            WorkspaceTemplateStatus.STALE if present_roots else WorkspaceTemplateStatus.ABSENT
+        )
+    try:
+        _validate_formal_artifacts(root)
+        _validate_template_roots(root)
+        _validate_requested_capabilities(state, requested_config)
+        _validate_entrypoints(root)
+        _validate_staging_absent(root)
+    except ValueError:
+        # 正式产物未确认、入口缺失、能力不匹配、staging 残留等一律视为不可沿用。
+        return WorkspaceTemplateStatus.STALE
+    return WorkspaceTemplateStatus.READY
+
+
+def _load_template_state_or_none(workspace: Path) -> dict[str, Any] | None:
+    """读取 V2 TemplateState；缺失或不符合当前协议时返回 None，不抛错。"""
+
+    try:
+        return load_template_state(workspace)
+    except (ValueError, OSError):
+        return None
 
 
 def validate_workspace_bootstrap_readiness(

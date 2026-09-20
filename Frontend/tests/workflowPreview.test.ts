@@ -20,7 +20,9 @@ import { developmentContinuationFromWorkflow } from '../src/renderer/src/compone
 import DevelopmentContinuationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/DevelopmentContinuationCard'
 import RemainingEntityBindingsCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/RemainingEntityBindingsCard'
 import TemplatePreparingCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/TemplatePreparingCard'
-import WorkflowRunCard, { BuildExecutionRunCard } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
+import WorkflowRunCard, {
+  BuildExecutionRunCard
+} from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
@@ -105,18 +107,36 @@ test('单测调试复用仍登记的 Build thread，避免聊天 thread 丢失�
   const lifecycle = planLifecycle(execution)
   const build = previewWorkflow({ buildSummary: { status: 'completed', total: 7, completed: 7 } })
   build.threadId = execution.threadId
-  const latest = { ...build, runId: 'failed-response', summary: { phase: 'failed', status: 'failed' } }
+  const latest = {
+    ...build,
+    runId: 'failed-response',
+    summary: { phase: 'failed', status: 'failed' }
+  }
   const emptyDebug = { ...latest, threadId: 'chat-thread', runId: 'empty-debug' }
   const messages: AgentChatMessage[] = [build, latest, emptyDebug].map((workflow, id) => ({
-    id, role: 'assistant', content: '', workflow
+    id,
+    role: 'assistant',
+    content: '',
+    workflow
   }))
   const result = workflowDebugResumeSource(emptyDebug, messages, lifecycle, 'unit_test')
   assert.equal(result?.threadId, execution.threadId)
   assert.equal(result?.runId, execution.runId)
   assert.equal(workflowDebugResumeSource(emptyDebug, messages, lifecycle, 'build'), emptyDebug)
   assert.equal(workflowDebugResumeSource(emptyDebug, messages, undefined, 'unit_test'), emptyDebug)
-  const newerBuild = { ...emptyDebug, summary: { buildSummary: { status: 'failed', total: 1, failed: 1 } } }
-  assert.equal(workflowDebugResumeSource(emptyDebug, [...messages, { id: 4, role: 'assistant', content: '', workflow: newerBuild }], lifecycle, 'unit_test'), emptyDebug)
+  const newerBuild = {
+    ...emptyDebug,
+    summary: { buildSummary: { status: 'failed', total: 1, failed: 1 } }
+  }
+  assert.equal(
+    workflowDebugResumeSource(
+      emptyDebug,
+      [...messages, { id: 4, role: 'assistant', content: '', workflow: newerBuild }],
+      lifecycle,
+      'unit_test'
+    ),
+    emptyDebug
+  )
 })
 
 test('实时成功 launch 会生成可去重的预览目标', () => {
@@ -486,11 +506,7 @@ test('缺少有效前端启动地址时不生成页面预览 URL', () => {
 
 test('项目异步启动成功后将 about:blank 自动导航到当前页面', () => {
   const blank = { history: ['about:blank'], index: 0 }
-  const started = navigatePreviewToStartedProject(
-    blank,
-    'http://127.0.0.1:5178',
-    '/page/age'
-  )
+  const started = navigatePreviewToStartedProject(blank, 'http://127.0.0.1:5178', '/page/age')
 
   assert.deepEqual(started, {
     history: ['about:blank', 'http://127.0.0.1:5178/page/age'],
@@ -637,7 +653,12 @@ test('实体部分确认后仍显示原接口的剩余实体，且不提前提�
       action: 'start_entity_binding',
       sourceThreadId: 'source-thread',
       sourceRunId: 'source-run',
-      target: { type: 'endpoint', apiContractId: 'orders-api', endpointId: 'list', label: 'GET /orders' },
+      target: {
+        type: 'endpoint',
+        apiContractId: 'orders-api',
+        endpointId: 'list',
+        label: 'GET /orders'
+      },
       requiredEntityIds: ['Order', 'Customer'],
       remainingEntityIds: ['Customer']
     }
@@ -648,9 +669,12 @@ test('实体部分确认后仍显示原接口的剩余实体，且不提前提�
   assert.match(markup, /Customer/)
   assert.match(markup, /去设计实体/)
   assert.doesNotMatch(markup, /<button[^>]*disabled/)
-  const historicalMarkup = renderToStaticMarkup(createElement(RemainingEntityBindingsCard, {
-    workflow, disabled: true
-  }))
+  const historicalMarkup = renderToStaticMarkup(
+    createElement(RemainingEntityBindingsCard, {
+      workflow,
+      disabled: true
+    })
+  )
   assert.match(historicalMarkup, /disabled/)
 })
 
@@ -716,10 +740,17 @@ test('只有初始化完成阶段视为模板与开发预览就绪', () => {
   assert.equal(isApplicationCreationComplete(lifecycle), false)
 })
 
-test('应用模板卡只允许首次新建且尚未进入开发时显示', () => {
+test('应用模板卡只要尚未进入开发就显示，不限应用来源', () => {
   assert.equal(isApplicationTemplatePreparationEligible('new', false), true)
   assert.equal(isApplicationTemplatePreparationEligible('new', true), false)
-  assert.equal(isApplicationTemplatePreparationEligible('existing-workspace', false), false)
+  // 历史应用（existing-workspace）从首页进入计划阶段时 lifecycle 已是
+  // ready_for_workbench，同样需要这张卡（含迭代的"沿用已有工程"文案）；
+  // 只要尚未进入开发即应显示，source 不作为排除条件。
+  assert.equal(isApplicationTemplatePreparationEligible('existing-workspace', false), true)
+  assert.equal(isApplicationTemplatePreparationEligible('existing-workspace', true), false)
+  // source 缺失（旧数据）时按"尚未进入开发"判断。
+  assert.equal(isApplicationTemplatePreparationEligible(undefined, false), true)
+  assert.equal(isApplicationTemplatePreparationEligible(undefined, true), false)
 })
 
 test('已失败的 Template Reconcile Attempt 应开放专用重试入口', () => {
@@ -749,7 +780,10 @@ test('已失败的 Template Reconcile Attempt 应开放专用重试入口', () =
   )
   assert.equal(
     isTemplateReconcileRetryable(
-      { ...lifecycle, activeFormalRevision: { ...lifecycle.activeFormalRevision, status: 'template_reconciling' } },
+      {
+        ...lifecycle,
+        activeFormalRevision: { ...lifecycle.activeFormalRevision, status: 'template_reconciling' }
+      },
       failedAttempt
     ),
     false
@@ -1477,7 +1511,9 @@ test('已确认 API 映射不遮蔽构建后的单元测试选择', (context) =>
     canEdit: () => false
   }
   const markup = renderToStaticMarkup(
-    createElement(WorkbenchPhaseContext.Provider, { value: phaseContext },
+    createElement(
+      WorkbenchPhaseContext.Provider,
+      { value: phaseContext },
       createElement(WorkflowRunCard, {
         workflow,
         interactionAvailability: 'active'
@@ -1491,7 +1527,9 @@ test('已确认 API 映射不遮蔽构建后的单元测试选择', (context) =>
 
   // 原始映射门禁的已确认快照仍展示正式映射结果。
   const historicalMarkup = renderToStaticMarkup(
-    createElement(WorkbenchPhaseContext.Provider, { value: phaseContext },
+    createElement(
+      WorkbenchPhaseContext.Provider,
+      { value: phaseContext },
       createElement(WorkflowRunCard, {
         workflow: {
           ...workflow,
@@ -1524,8 +1562,13 @@ test('构建卡片将已满足要求的任务展示为完成，并与其他状�
   const markup = renderToStaticMarkup(
     createElement(BuildExecutionRunCard, { executionSlice, status: 'running' })
   )
-  const tags = [...markup.matchAll(/class="[^"]*workflow-build-task-status-tag[^"]*"[^>]*>(.*?)<\/span>/g)]
-  assert.deepEqual(tags.map((match) => match[1]), ['完成', '完成', '运行中', '失败', '待执行'])
+  const tags = [
+    ...markup.matchAll(/class="[^"]*workflow-build-task-status-tag[^"]*"[^>]*>(.*?)<\/span>/g)
+  ]
+  assert.deepEqual(
+    tags.map((match) => match[1]),
+    ['完成', '完成', '运行中', '失败', '待执行']
+  )
   const panels = [...markup.matchAll(/class="([^"]*workflow-build-task-panel[^"]*)"/g)]
   assert.equal(panels.length, 5)
   assert.match(panels[0][1], /completed/)
@@ -1549,8 +1592,13 @@ test('构建完成快照有无汇总时都把已满足要求的任务计入完�
       createElement(BuildExecutionRunCard, { executionSlice, status: 'completed' })
     )
     assert.match(markup, /100% 完成/)
-    const tags = [...markup.matchAll(/class="[^"]*workflow-build-task-status-tag[^"]*"[^>]*>(.*?)<\/span>/g)]
-    assert.deepEqual(tags.map((match) => match[1]), ['完成', '完成'])
+    const tags = [
+      ...markup.matchAll(/class="[^"]*workflow-build-task-status-tag[^"]*"[^>]*>(.*?)<\/span>/g)
+    ]
+    assert.deepEqual(
+      tags.map((match) => match[1]),
+      ['完成', '完成']
+    )
     assert.doesNotMatch(markup, /workflow-build-task-panel[^"<>]*already_satisfied/)
   }
 })
@@ -1601,15 +1649,25 @@ test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、�
 
 // 单测失败矩阵必须同时展示终止原因，避免额度耗尽看起来像跳过了修复。
 test('单测矩阵显示修复额度耗尽原因', () => {
-  const markup = renderToStaticMarkup(createElement(ProcessSteps, {
-    loading: false,
-    steps: [{
-      id: 'unit-failed', kind: 'workflow', status: 'failed', sequence: 1,
-      title: '开发阶段单元测试', nodeName: 'unit_test',
-      detail: '单元测试子步骤已用完各 10 次修复额度：前端单元测试',
-      checks: [{ id: 'frontend_unit_tests', name: '前端单元测试', status: 'failed', required: true }]
-    }]
-  }))
+  const markup = renderToStaticMarkup(
+    createElement(ProcessSteps, {
+      loading: false,
+      steps: [
+        {
+          id: 'unit-failed',
+          kind: 'workflow',
+          status: 'failed',
+          sequence: 1,
+          title: '开发阶段单元测试',
+          nodeName: 'unit_test',
+          detail: '单元测试子步骤已用完各 10 次修复额度：前端单元测试',
+          checks: [
+            { id: 'frontend_unit_tests', name: '前端单元测试', status: 'failed', required: true }
+          ]
+        }
+      ]
+    })
+  )
   assert.match(markup, /单元测试子步骤已用完各 10 次修复额度/)
   assert.match(markup, /集成检查矩阵/)
 })

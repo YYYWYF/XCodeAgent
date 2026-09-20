@@ -65,6 +65,8 @@ export type ReadWorkspaceFileRequest = {
   start_line?: number
   max_lines?: number
   max_chars?: number
+  /** 按该 Git 版本读取（如已发布版本的 tag）；缺省读当前工作区。 */
+  revision?: string
 }
 
 export type ReadWorkspaceFileResult = {
@@ -93,6 +95,8 @@ export type WorkspaceTreeRequest = {
   max_depth?: number
   include_hidden?: boolean
   limit?: number
+  /** 按该 Git 版本读取（如已发布版本的 tag）；缺省读当前工作区。 */
+  revision?: string
 }
 
 export type WorkspaceTreeResult = {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -19,6 +20,64 @@ from app.services.frontend_project_launcher import (
 
 LaunchProgressCallback = Callable[[str, str, str], None]
 LaunchValidationProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _empty_list(value: Any) -> bool:
+    """判断是否为"存在且为空"的列表；字段缺失或类型不符都不算空。"""
+
+    return isinstance(value, list) and len(value) == 0
+
+
+def _plan_declares_no_backend_business(root: Path) -> bool | None:
+    """从 TechnicalPlan 判定是否无后端业务；计划文件不可用时返回 None。"""
+
+    plan_path = root / ".xcodeagent" / "plans" / "technical-plan.json"
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(plan, dict):
+        return None
+    return _empty_list(plan.get("entities")) and _empty_list(plan.get("api_contracts"))
+
+
+def _lifecycle_declares_no_backend_business(root: Path) -> bool | None:
+    """从 lifecycle 的已确认产物判定是否无后端业务；状态文件不可用时返回 None。"""
+
+    lifecycle_path = root / ".xcodeagent" / "application-lifecycle.json"
+    try:
+        lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(lifecycle, dict):
+        return None
+    artifacts = lifecycle.get("developmentArtifacts")
+    if not isinstance(artifacts, dict):
+        return None
+    # 产物进度按对象 id 建字典：没有任何实体与接口即纯前端运行时。
+    entities = artifacts.get("entities")
+    endpoints = artifacts.get("endpoints")
+    if not isinstance(entities, dict) or not isinstance(endpoints, dict):
+        return None
+    return not entities and not endpoints
+
+
+def _application_has_no_backend_business(root: Path) -> bool:
+    """工作区无后端业务实体且无 API 契约时，视为纯前端运行时。
+
+    与 integration_test_runner._application_has_no_backend_business 同样的判定，
+    但直接读工作区状态文件，因为启动入口只有 workspace_path 而无 Graph state。
+
+    计划文件优先，缺失时回退读 lifecycle：发起新迭代会清空 `.xcodeagent/plans`，
+    此时"计划文件不存在"只说明还没规划，**不等于"需要后端"**——按后者处理会让纯前端
+    应用白白拉起一个后端（慢、占端口，且本机没有 java 时直接启动失败、连预览都看不到）。
+    两处状态都读不到时才保守认为需要后端。
+    """
+
+    declared = _plan_declares_no_backend_business(root)
+    if declared is not None:
+        return declared
+    return _lifecycle_declares_no_backend_business(root) is True
 
 
 def launch_project_preview(
@@ -74,13 +133,22 @@ def _launch_project_preview(
     root = Path(workspace_path).expanduser().resolve()
     report("structure", "running", "正在识别工程结构…")
     backend_project_root = find_backend_project_root(root)
+    no_backend_business = _application_has_no_backend_business(root)
     report("structure", "completed", "工程结构识别完成")
     backend_process = None
-    if backend_project_root is None:
+    if backend_project_root is None or no_backend_business:
         backend = {
             "status": "skipped",
-            "reason": "backend_project_missing",
-            "message": "未识别到后端 Maven 工程，已跳过后端启动。",
+            "reason": (
+                "no_backend_business"
+                if no_backend_business
+                else "backend_project_missing"
+            ),
+            "message": (
+                "应用无后端业务实体与 API 契约，跳过后端启动。"
+                if no_backend_business
+                else "未识别到后端 Maven 工程，已跳过后端启动。"
+            ),
             "workspace": str(root),
             "failed_stage": None,
         }

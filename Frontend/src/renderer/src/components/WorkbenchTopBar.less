@@ -66,6 +66,35 @@
   flex: 0 0 auto;
 }
 
+.@{class-prefix}-workbench-topbar-phase.@{class-prefix}-locked {
+  .@{class-prefix}-workbench-topbar-phase-item[disabled],
+  .@{class-prefix}-workbench-topbar-phase-item[disabled].@{class-prefix}-reached {
+    color: var(--wb-text);
+    background: transparent;
+    border-color: transparent;
+    font-weight: 400;
+    cursor: default;
+
+    &:hover {
+      background: transparent;
+    }
+  }
+
+  // 已生成版本仍要指明它停在哪个阶段（历史版本冻结在验收）：保留强调色与浅底，
+  // 但不给 hover 反馈，读起来是"只读定位"而不是可点击的当前阶段。
+  .@{class-prefix}-workbench-topbar-phase-item[disabled].@{class-prefix}-active {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border-color: transparent;
+    font-weight: 600;
+    cursor: default;
+
+    &:hover {
+      background: var(--wb-accent-soft);
+    }
+  }
+}
+
 .@{class-prefix}-workbench-topbar-stepper {
   display: flex;
   align-items: center;

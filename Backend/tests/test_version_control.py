@@ -14,15 +14,145 @@ from app.protocols.version_control import (
 )
 from app.services.version_control import (
     CommitVersionControlRequest,
+    InspectAllVersionControlRequest,
     InspectVersionControlRequest,
     VersionControlError,
     commit_version_control,
+    inspect_all_version_control,
     inspect_version_control,
 )
 
 
 class VersionControlTests(unittest.TestCase):
     """验证提交前复核、并发保护和精确文件提交。"""
+
+    def test_code_paths_exclude_platform_artifacts_but_keep_them_eligible(self) -> None:
+        """验证业务代码口径排除 .xcodeagent 产物，但产物仍可提交。
+
+        平台产物（规划文档、状态快照）要进版本、要能被追溯，所以必须在 eligible_paths 里；
+        但它们不该让"用户改了代码"的提醒亮起来，所以要从 code_paths 里排除。
+        """
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = self._init_repository(Path(workspace))
+            (root / ".xcodeagent" / "plans").mkdir(parents=True)
+            (root / ".xcodeagent" / "plans" / "product-plan.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            (root / ".xcodeagent" / "application-lifecycle.json").write_text(
+                '{"revision": 2}\n', encoding="utf-8"
+            )
+            (root / "src").mkdir()
+            (root / "src" / "App.tsx").write_text("changed\n", encoding="utf-8")
+
+            snapshot = inspect_all_version_control(
+                InspectAllVersionControlRequest(action="inspect_all", workspaceRoot=str(root))
+            )
+
+            self.assertIn("src/App.tsx", snapshot.eligible_paths)
+            self.assertIn(".xcodeagent/plans/product-plan.json", snapshot.eligible_paths)
+            self.assertIn(".xcodeagent/application-lifecycle.json", snapshot.eligible_paths)
+            # 产物仍可提交（追溯能力不变），但不算业务代码。
+            self.assertEqual(snapshot.code_paths, ["src/App.tsx"])
+
+    def test_snapshot_reports_head_commit_message(self) -> None:
+        """验证快照带上 HEAD 的提交信息，供界面说明自动提交存了什么。
+
+        自动提交（模板 baseline、验收）由平台发起，用户没参与写信息；界面要把它显示
+        出来，否则那个 commit 对用户是黑盒。
+        """
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = self._init_repository(Path(workspace))
+            snapshot = inspect_all_version_control(
+                InspectAllVersionControlRequest(action="inspect_all", workspaceRoot=str(root))
+            )
+            # _init_repository 用的提交信息是 "initial"。
+            self.assertEqual(snapshot.head_message, "initial")
+            # 未建立基线时为空串，而不是抛错或占位文本。
+            (root / "tracked.txt").write_text("changed\n", encoding="utf-8")
+            self.assertEqual(
+                inspect_all_version_control(
+                    InspectAllVersionControlRequest(
+                        action="inspect_all", workspaceRoot=str(root)
+                    )
+                ).head_message,
+                "initial",
+            )
+
+    def test_code_paths_empty_when_only_artifacts_changed(self) -> None:
+        """验证只有产物变更时业务代码口径为空 —— 迭代启动后角标不该亮。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = self._init_repository(Path(workspace))
+            (root / ".xcodeagent").mkdir()
+            (root / ".xcodeagent" / "application-lifecycle.json").write_text(
+                '{"revision": 2}\n', encoding="utf-8"
+            )
+
+            snapshot = inspect_all_version_control(
+                InspectAllVersionControlRequest(action="inspect_all", workspaceRoot=str(root))
+            )
+
+            self.assertTrue(snapshot.eligible_paths, "产物仍应可提交")
+            self.assertEqual(snapshot.code_paths, [], "只有产物变更时业务代码变更应为空")
+
+    def test_commit_allows_platform_artifacts_with_trailing_whitespace(self) -> None:
+        """验证平台产物里的行尾空格不会挡住提交。
+
+        回归：设计版本提醒提交的是清一色 `.xcodeagent` 文件，而 AGENTS.md 由平台生成、
+        曾因 `', '.join` 产出悬空逗号带出行尾空格，被提交前的 `git diff --check` 判为
+        空白错误 —— 平台生成的内容触发平台自己的门禁、反过来挡住用户提交。
+        业务代码仍照常做空白预检（见下一个用例）。
+        """
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = self._init_repository(Path(workspace))
+            (root / ".xcodeagent").mkdir()
+            # 模拟平台生成物：行尾带空格。
+            (root / ".xcodeagent" / "AGENTS.md").write_text(
+                "# 迭代上下文\n\n  - 信息项：, \n", encoding="utf-8"
+            )
+            paths = [".xcodeagent/AGENTS.md"]
+            snapshot = self._inspect(root, paths)
+
+            result = commit_version_control(
+                CommitVersionControlRequest(
+                    action="commit",
+                    confirmed=True,
+                    workspaceRoot=str(root),
+                    requestedPaths=paths,
+                    selectedPaths=paths,
+                    expectedFingerprint=snapshot.fingerprint,
+                    message="docs: 保存设计版本",
+                )
+            )
+
+            self.assertEqual(result.committed_paths, paths)
+            self.assertFalse(result.remaining_dirty)
+
+    def test_commit_still_checks_whitespace_in_business_code(self) -> None:
+        """验证业务代码的行尾空格仍被拦下 —— 排除产物不能顺手放过用户代码。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = self._init_repository(Path(workspace))
+            (root / "tracked.txt").write_text("bad trailing space \n", encoding="utf-8")
+            snapshot = self._inspect(root, ["tracked.txt"])
+
+            with self.assertRaisesRegex(VersionControlError, "空白"):
+                commit_version_control(
+                    CommitVersionControlRequest(
+                        action="commit",
+                        confirmed=True,
+                        workspaceRoot=str(root),
+                        requestedPaths=["tracked.txt"],
+                        selectedPaths=["tracked.txt"],
+                        expectedFingerprint=snapshot.fingerprint,
+                        message="fix: 修改",
+                    )
+                )
+            # 失败后必须把已暂存内容还原，不能污染用户的暂存区。
+            self.assertEqual(self._git(root, "diff", "--cached", "--name-only").strip(), "")
 
     def test_inspect_filters_current_status_to_requested_paths(self) -> None:
         """验证只返回本轮变更集仍然存在的实际 Git 修改。"""

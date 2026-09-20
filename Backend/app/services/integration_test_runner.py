@@ -33,6 +33,19 @@ class PackageProject:
     package_manager: str
 
 
+def _application_has_no_backend_business(state: dict[str, Any]) -> bool:
+    """应用无后端业务实体且无 API 契约时，视为纯前端运行时。"""
+
+    plan = state.get("technical_plan")
+    if not isinstance(plan, dict):
+        return False
+    entities = plan.get("entities")
+    api_contracts = plan.get("api_contracts")
+    entities_empty = isinstance(entities, list) and len(entities) == 0
+    api_empty = isinstance(api_contracts, list) and len(api_contracts) == 0
+    return entities_empty and api_empty
+
+
 def run_integration_checks(
     state: dict[str, Any],
     *,
@@ -100,8 +113,20 @@ def run_integration_checks(
     for result in frontend_results:
         results.append(result)
         events.append(result["id"])
+    no_backend_business = _application_has_no_backend_business(state)
+    # 纯前端应用（无实体、无 API 契约）即使数据源为 database，也不启动 Maven/Java，
+    # 避免后端骨架模板触发环境级阻塞（如 macOS 未注册 JRE）。
+    if no_backend_business:
+        backend_results = _backend_checks_skipped_for_frontend_only(
+            phase=phase,
+            include_backend_startup=include_backend_startup,
+            on_progress=on_progress,
+        )
+        for result in backend_results:
+            results.append(result)
+            events.append(result["id"])
     # Static 是纯前端运行时，即使模板保留 pom.xml 也不得触发后端质量门。
-    if "backend" in selected_layers and datasource_type != "static":
+    elif "backend" in selected_layers and datasource_type != "static":
         if (
             "frontend" in selected_layers
             and frontend is not None
@@ -1033,6 +1058,42 @@ def _backend_checks_skipped_after_frontend_failure(
         )
         for check_id, name, required in checks
     ]
+
+
+def _backend_checks_skipped_for_frontend_only(
+    *,
+    phase: IntegrationCheckPhase,
+    include_backend_startup: bool,
+    on_progress: CheckProgressCallback | None,
+) -> list[dict[str, Any]]:
+    """纯前端应用跳过全部后端检查，不启动 Maven/Java。"""
+
+    checks: list[tuple[str, str, bool]] = []
+    if phase in {"all", "build"}:
+        checks.append(("backend_build", "后端构建检查", False))
+        checks.append(("backend_static_check", "后端静态检查通过", False))
+    if phase in {"all", "unit"}:
+        checks.append(("backend_unit_tests", "后端单元测试", False))
+    results = [
+        _skipped_after_blocking_failure_result(
+            check_id=check_id,
+            name=name,
+            layer="backend",
+            language="java",
+            evidence="应用无后端业务实体与 API 契约，跳过后端检查。",
+            required=required,
+            on_progress=on_progress,
+        )
+        for check_id, name, required in checks
+    ]
+    if include_backend_startup and phase in {"all", "build"}:
+        results.append(_skipped_after_blocking_failure_result(
+            check_id="backend_startup", name="后端启动检查", layer="backend",
+            language="java",
+            evidence="应用无后端业务实体与 API 契约，跳过后端启动检查。",
+            required=False, on_progress=on_progress,
+        ))
+    return results
 
 
 def _skipped_after_blocking_failure_result(

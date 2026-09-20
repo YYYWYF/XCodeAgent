@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 from app.agents.main.unit_task_prompt import build_unit_generation_prompt
-from app.agents.messages import _coerce_content_text
+from app.agents.messages import extract_candidate_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.frozen_contract_reader import FrozenContractReader
@@ -170,7 +170,7 @@ async def generate_unit_candidate_once(
                         cause=exc,
                     ) from exc
                 model_turns += 1
-                raw_response = _coerce_content_text(getattr(response, "content", "")) or ""
+                raw_response = extract_candidate_text(getattr(response, "content", "")) or ""
                 metadata = _generation_metadata(
                     response,
                     settings=active_settings,
