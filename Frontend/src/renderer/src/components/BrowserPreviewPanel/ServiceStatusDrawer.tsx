@@ -89,8 +89,8 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
     blockedReason,
     repairAvailable: runtime?.repairAvailable
   })
-  const actionTone = busy ? 'is-busy' : blockedReason ? 'is-blocked' : 'is-ready'
-  const actionLabel = busy ? '处理中' : blockedReason ? '任务占用' : runtime ? '可操作' : '可启动'
+  const actionTone = busy ? 'is-busy' : 'is-ready'
+  const actionLabel = busy ? '处理中' : runtime ? '可操作' : '可启动'
   const launchLabel =
     runtime?.frontend.status === 'running' && runtime?.backend.status === 'running'
       ? '重启服务'
@@ -146,7 +146,6 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
         >
           <div className="preview-section-heading">
             <div>
-              <span className="preview-section-kicker">SERVICE MATRIX</span>
               <h3 id="preview-service-status-heading">服务状态</h3>
             </div>
             <span className="preview-section-caption">受控进程 · 就绪检测</span>
@@ -165,10 +164,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
                       <span className="preview-service-card__icon">
                         <LayerIcon />
                       </span>
-                      <div>
-                        <strong>{serviceLabel(layer)}</strong>
-                        <span>{layer === 'frontend' ? 'WEB CLIENT' : 'API SERVER'}</span>
-                      </div>
+                      <strong>{serviceLabel(layer)}</strong>
                     </div>
                     <span className={`preview-service-status-pill is-${meta.tone}`}>
                       <span>{meta.icon}</span>
@@ -207,12 +203,13 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
         >
           <div className="preview-section-heading">
             <div>
-              <span className="preview-section-kicker">RUNTIME CONTROL</span>
               <h3 id="preview-service-actions-heading">维护操作</h3>
             </div>
-            <span className={`preview-action-state ${actionTone}`}>
-              <span /> {actionLabel}
-            </span>
+            {(busy || !blockedReason) && (
+              <span className={`preview-action-state ${actionTone}`}>
+                <span /> {actionLabel}
+              </span>
+            )}
           </div>
           <div className="preview-service-actions__buttons">
             <Button
@@ -235,22 +232,6 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               诊断并修复
             </Button>
           </div>
-          {blockedReason && (
-            <Alert
-              className="preview-service-callout is-blocked"
-              type="info"
-              showIcon
-              message={blockedReason}
-            />
-          )}
-          {!blockedReason && !runtime?.repairAvailable && (
-            <div className="preview-service-action-note">
-              <span className="preview-service-action-note__icon">
-                <ExclamationCircleFilled />
-              </span>
-              <span>仅在本次启动失败且没有其他阶段任务占用时开放诊断修复。</span>
-            </div>
-          )}
           {(props.error || copyError) && (
             <Alert
               className="preview-service-callout is-error"
@@ -265,7 +246,6 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
           <div className="preview-log-panel__header">
             <div className="preview-section-heading">
               <div>
-                <span className="preview-section-kicker">OBSERVABILITY</span>
                 <h3 id="preview-log-heading">启动日志</h3>
               </div>
             </div>
