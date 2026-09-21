@@ -22,7 +22,17 @@ export type UncommittedChangesStore = {
  * 读取失败**静默降级**为"无角标"：提醒是辅助信息，Git 不可用（未安装、非仓库、
  * 权限问题）不该在界面上抛错打断主流程。
  */
-export function useUncommittedChangesStore(workspaceRoot: string): UncommittedChangesStore {
+export function useUncommittedChangesStore(
+  workspaceRoot: string,
+  /**
+   * 会随"工作区内容发生变化"而变的信号（调用方传 lifecycle revision 之类）。
+   *
+   * 只按 workspaceRoot 读一次会停在挂载那一刻：构建跑十分钟、窗口一直没失焦，
+   * 快照就还是构建前的（通常是模板刚提交完的 0），角标因此不出现。
+   * 传这个 key 让构建推进时重读。
+   */
+  refreshKey?: string
+): UncommittedChangesStore {
   const [snapshot, setSnapshot] = useState<VersionControlSnapshot>()
   // 用 ref 而不是闭包里的 workspaceRoot：在途请求回来时工作区可能已经切走，
   // 闭包拿到的是旧值，会把上一个工作区的快照写进当前视图。
@@ -43,11 +53,12 @@ export function useUncommittedChangesStore(workspaceRoot: string): UncommittedCh
     }
   }, [workspaceRoot, apply])
 
-  // 切换工作区时先丢弃上一份快照，避免短暂串用另一个应用的未提交数。
+  // 切换工作区时先丢弃上一份快照，避免短暂串用另一个应用的未提交数；
+  // 同一工作区内 refreshKey 变化（构建推进、文件落盘）时重读。
   useEffect(() => {
     setSnapshot((current) => (current?.workspaceRoot === workspaceRoot ? current : undefined))
     void refresh()
-  }, [workspaceRoot, refresh])
+  }, [workspaceRoot, refresh, refreshKey])
 
   // 窗口重新聚焦时校准：用户可能在外部 IDE 里改过文件。
   useEffect(() => {

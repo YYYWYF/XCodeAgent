@@ -637,6 +637,9 @@ function WorkbenchPage({
             workspaceRoot={
               workspaceApplication.workspaceRoot || workspaceApplication.projectParentPath || ''
             }
+            // 构建推进时 lifecycle revision 会变（执行状态流转、任务完成），
+            // 用它驱动未提交快照重读 —— 否则构建期间窗口不失焦，角标会停在构建前的 0。
+            refreshKey={String(applicationLifecycle?.revision ?? '')}
           >
             <div className={cx('workbench-shell-column')}>
               <WorkbenchTopBar

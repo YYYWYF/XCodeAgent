@@ -11,12 +11,15 @@ import { UncommittedChangesContext } from './uncommittedChangesState'
  */
 export function UncommittedChangesProvider({
   workspaceRoot,
+  refreshKey,
   children
 }: {
   workspaceRoot: string
+  /** 见 useUncommittedChangesStore：内容变化信号，用于构建推进时重读。 */
+  refreshKey?: string
   children: ReactNode
 }): JSX.Element {
-  const store = useUncommittedChangesStore(workspaceRoot)
+  const store = useUncommittedChangesStore(workspaceRoot, refreshKey)
   return (
     <UncommittedChangesContext.Provider value={store}>
       {children}
