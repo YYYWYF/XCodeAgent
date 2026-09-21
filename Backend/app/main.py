@@ -51,6 +51,10 @@ from app.protocols.data_sources import data_sources_capabilities
 from app.protocols.endpoint_designs import endpoint_designs_capabilities
 from app.routes.data_sources import data_sources_router
 from app.routes.endpoint_designs import endpoint_designs_router
+from app.protocols.revision_preview import (
+    build_revision_preview_ag_ui_stream,
+    revision_preview_capabilities,
+)
 from app.protocols.version_control import (
     build_version_control_ag_ui_stream,
     version_control_capabilities,
@@ -151,6 +155,7 @@ async def health() -> dict[str, object]:
             "data_sources": data_sources_capabilities(),
             "endpoint_designs": endpoint_designs_capabilities(),
             "code_changes": code_changes_capabilities(),
+            "revision_preview": revision_preview_capabilities(),
             "version_control": version_control_capabilities(),
             "version_publish": version_publish_capabilities(),
             "iteration_service": iteration_service_capabilities(),
@@ -289,6 +294,20 @@ async def run_code_changes(
 
     return StreamingResponse(
         build_code_changes_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/revision-preview/run")
+async def run_revision_preview(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 流物化并启动历史版本的只读预览。"""
+
+    return StreamingResponse(
+        build_revision_preview_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

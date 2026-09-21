@@ -35,6 +35,7 @@ def launch_frontend_project(
     runtime_subdir: str = "launch",
     skip_install: bool = False,
     force_restart: bool = False,
+    linked_dependencies: bool = False,
 ) -> dict[str, Any]:
     """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
 
@@ -44,6 +45,11 @@ def launch_frontend_project(
     "launch-ui-design" 以独立 PID 文件避免与正式前端预览冲突。
     skip_install 为 True 时复用调用方已经完成的依赖安装，不再重复执行
     install；性能测试节点在集成测试完成安装后使用该模式。
+    linked_dependencies 为 True 时表示该工程的 node_modules 是指向别处的软链（历史版本
+    预览复用工作区依赖就是这么做的），需要让包管理器跳过"启动前校验依赖是否最新"这一步：
+    pnpm 的校验按 lstat 判断 node_modules 是不是目录，软链会被判成"没有依赖目录"，于是它
+    去执行 install，而 install 又要先清空这个它不认识的目录 —— 无终端时直接以
+    ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY 失败，dev server 根本起不来。
     force_restart 为 True 时不复用健康服务，而是停止 standard preview 后
     重新安装、启动并执行 Ready 检查，供模板更新后的真实工程验收使用。
     """
@@ -158,6 +164,7 @@ def launch_frontend_project(
         cwd=package_path.parent,
         runtime_root=runtime_root,
         preview_url=preview_url,
+        extra_argv=_dependency_check_bypass_argv(package_manager, linked_dependencies),
     )
     if process is not None:
         _register_frontend_process(root, process, runtime_subdir=runtime_subdir)
@@ -404,6 +411,20 @@ def _run_install(
     }
 
 
+def _dependency_check_bypass_argv(
+    package_manager: str, linked_dependencies: bool
+) -> list[str]:
+    """复用软链依赖时，给出跳过"启动前依赖校验"的包管理器参数。
+
+    只有 pnpm 有这一步校验（见 `launch_frontend_project` 的 linked_dependencies 说明）。
+    只认 CLI 参数：同名设置的 .npmrc 与 npm_config_* 环境变量实测都拦不住它。
+    """
+
+    if not linked_dependencies or package_manager != "pnpm":
+        return []
+    return ["--config.verify-deps-before-run=false"]
+
+
 def _start_dev_server(
     *,
     package_manager_command: str,
@@ -412,9 +433,11 @@ def _start_dev_server(
     cwd: Path,
     runtime_root: Path,
     preview_url: str,
+    extra_argv: list[str] | None = None,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """以后台进程启动开发服务器，并保留进程对象供健康检查监督。"""
-    argv = [package_manager_command, "run", script_name]
+    # 额外参数要排在子命令之前：pnpm 只把 `run` 之前的参数当自己的选项。
+    argv = [package_manager_command, *(extra_argv or []), "run", script_name]
     stdout_path = runtime_root / "frontend.stdout.log"
     stderr_path = runtime_root / "frontend.stderr.log"
     stdout = stdout_path.open("ab")

@@ -123,3 +123,23 @@
   min-height: 0;
   overflow: hidden;
 }
+
+/* 历史版本预览的加载/错误态：占满内容区并居中，与预览面板本身等宽等高，
+   避免启动过程中右侧留出一条空白。 */
+.@{class-prefix}-released-version-preview-state {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  background: var(--wb-surface);
+}
+
+.@{class-prefix}-released-version-preview-hint {
+  max-width: 380px;
+  font-size: 12px;
+  line-height: 1.6;
+}

@@ -207,6 +207,9 @@ def build_ag_ui_action_stream(
                 "runId": run_id,
                 "threadId": thread_id,
                 "status": "completed",
+                # 注意：动作数据在信封字段之后展开，所以它里面的 `status` 会顶掉上面这个
+                # 运行态。前端的载荷校验只认 completed / failed，被顶掉后整条结果会被判成
+                # 无效（历史版本预览就踩过这个坑）。动作数据请另起字段名，别用 `status`。
                 **result.data,
             }
             message = result.message

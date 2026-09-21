@@ -53,14 +53,17 @@ export function previewServiceActionAvailability(input: {
 }
 
 /**
- * 判断切到预览 tab 时是否要自动把服务拉起来。
+ * 判断切到预览 tab 时是否要自动把工作区预览服务拉起来。
  *
- * 只读回看历史版本时预览服务不会被任何流程启动（正常流程由验收阶段的 launch_project
- * 节点拉起），所以切到该 tab 时要主动启动，否则用户看到的是"待启动 / about:blank"。
+ * 预览服务在前端不会自动启动（`usePreviewRuntime` 只轮询状态），正常流程里它是被
+ * 验收阶段的 launch_project 节点拉起的。所以切到该 tab 时要主动启动一次，否则用户
+ * 看到的是"待启动 / about:blank"。
  *
- * 两个必须守住的边界：
+ * 三个必须守住的边界：
  * - **快照未到达时不下判断**：状态未知不等于"待启动"，否则会把正在跑的服务重复拉起；
- * - **只在 idle 时启动**：failed 交给用户诊断修复，starting/running 不插手。
+ * - **只在 idle 时启动**：failed 交给用户诊断修复，starting/running 不插手；
+ * - **历史版本不启动**：那时预览由该版本自己的 dev server 承载
+ *   （见 `useRevisionPreview`），再拉起工作区服务只会多出一个没人看的进程。
  */
 export function shouldAutoStartPreviewService(input: {
   activeTabIsPreview: boolean
@@ -68,8 +71,11 @@ export function shouldAutoStartPreviewService(input: {
   busy: boolean
   status: PreviewServiceState
   alreadyRequested: boolean
+  /** 当前是否在回看某个历史版本。 */
+  hasRevision?: boolean
 }): boolean {
   if (!input.activeTabIsPreview || input.alreadyRequested) return false
+  if (input.hasRevision) return false
   if (!input.hasSnapshot || input.busy) return false
   return input.status === 'idle'
 }

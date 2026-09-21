@@ -8,7 +8,7 @@ import {
   SettingOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
-import { Empty, Typography } from 'antd'
+import { Button, Empty, Spin, Typography } from 'antd'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
 import type { ApplicationConfig, DevelopmentPlanningPageOption } from '../../../../typings'
 import { cx } from '../../../../utils'
@@ -20,6 +20,7 @@ import {
 } from '../../../BrowserPreviewPanel/serviceStatusPolicy'
 import RightPanelTabs, { type WorkspaceTab, type WorkspaceTabKey } from '../RightPanelTabs'
 import SourcePanel from '../SourcePanel'
+import { revisionPreviewPresentation, useRevisionPreview } from './useRevisionPreview'
 import './ReleasedVersionPanel.less'
 
 const { Text } = Typography
@@ -90,6 +91,19 @@ export default function ReleasedVersionPanel({
   const autoStartRequestedRef = useRef(false)
   const activeDrawerLabel = RAIL_DRAWERS.find((item) => item.key === activeDrawer)?.label
 
+  // 历史版本的预览要跑该版本当时的代码，得单独物化并起一个 dev server；
+  // 只在预览 tab 激活时才启动，在应用文件上翻文件不会白白拉起进程。
+  const revisionPreview = useRevisionPreview({
+    workspaceRoot,
+    revision,
+    enabled: activeTab === TAB_KEYS.preview
+  })
+  const previewPresentation = revisionPreviewPresentation({
+    revision,
+    url: revisionPreview.url,
+    error: revisionPreview.error
+  })
+
   /**
    * 切到应用预览时把服务拉起来。
    *
@@ -97,6 +111,8 @@ export default function ReleasedVersionPanel({
    * 验收阶段的 launch_project 节点拉起的，历史版本没有这一步，于是面板停在
    * "待启动 / about:blank"。切 tab 是明确的"我要看这个应用"意图，在这里启动最合适——
    * 只在应用文件 tab 上翻文件不会白白拉起前后端。
+   *
+   * 历史版本走 `useRevisionPreview` 那条路，这里不再拉起工作区服务。
    */
   useEffect(() => {
     if (activeTab !== TAB_KEYS.preview) {
@@ -109,14 +125,15 @@ export default function ReleasedVersionPanel({
         hasSnapshot: Boolean(serviceControl?.snapshot),
         busy: Boolean(serviceControl?.busy),
         status: serviceStatus,
-        alreadyRequested: autoStartRequestedRef.current
+        alreadyRequested: autoStartRequestedRef.current,
+        hasRevision: Boolean(revision)
       })
     ) {
       return
     }
     autoStartRequestedRef.current = true
     serviceControl?.onRestart()
-  }, [activeTab, serviceControl, serviceStatus])
+  }, [activeTab, serviceControl, serviceStatus, revision])
 
   return (
     <div className={cx('released-version-panel')}>
@@ -174,14 +191,43 @@ export default function ReleasedVersionPanel({
         <RightPanelTabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
         <div className={cx('released-version-panel-body')}>
           {activeTab === TAB_KEYS.preview ? (
-            <BrowserPreviewPanel
-              application={application}
-              pages={pages}
-              previewBaseUrl={previewBaseUrl}
-              serviceControl={serviceControl}
-              selectedPagePath="/"
-              errorMessage={previewErrorMessage}
-            />
+            previewPresentation.kind === 'loading' ? (
+              <div className={cx('released-version-preview-state')}>
+                <Spin size="small" />
+                <Text type="secondary">正在准备该版本的预览…</Text>
+                <Text className={cx('released-version-preview-hint')} type="secondary">
+                  首次预览需要物化该版本的代码；依赖与当前工作区不一致时还要安装依赖，
+                  可能要几分钟。
+                </Text>
+              </div>
+            ) : previewPresentation.kind === 'error' ? (
+              <div className={cx('released-version-preview-state')}>
+                <Empty
+                  description={previewPresentation.message}
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+                <Button onClick={revisionPreview.retry} size="small">
+                  重试
+                </Button>
+              </div>
+            ) : (
+              <BrowserPreviewPanel
+                application={application}
+                pages={pages}
+                previewBaseUrl={
+                  previewPresentation.kind === 'revision' ? previewPresentation.url : previewBaseUrl
+                }
+                // 历史版本的 dev server 不归工作台预览运行时管：状态抽屉里的
+                // 重启/诊断都指向工作区那套进程，接上去只会给出错误的状态与操作。
+                serviceControl={
+                  previewPresentation.kind === 'revision' ? undefined : serviceControl
+                }
+                selectedPagePath="/"
+                errorMessage={
+                  previewPresentation.kind === 'revision' ? undefined : previewErrorMessage
+                }
+              />
+            )
           ) : (
             <SourcePanel revision={revision} workspaceRoot={workspaceRoot} />
           )}

@@ -6,10 +6,15 @@ import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ReleasedVersionPanel from '../src/renderer/src/components/AiChatPanel/components/ReleasedVersionPanel'
 import {
+  revisionPreviewPresentation,
+  shouldRunRevisionPreview
+} from '../src/renderer/src/components/AiChatPanel/components/ReleasedVersionPanel/useRevisionPreview'
+import {
   shouldInjectPlanningPlaceholder,
   shouldShowRightWorkspace
 } from '../src/renderer/src/components/AiChatPanel/utils'
 import RightPanelTabs from '../src/renderer/src/components/AiChatPanel/components/RightPanelTabs'
+import { shouldAutoStartPreviewService } from '../src/renderer/src/components/BrowserPreviewPanel/serviceStatusPolicy'
 import type { ApplicationConfig } from '../src/renderer/src/typings'
 
 /** 最小可用应用配置：只提供该面板实际读取的字段。 */
@@ -124,6 +129,86 @@ function readProbeCharsFromSource(): number {
   return Number(matched[1])
 }
 
+test('历史版本的预览用该版本自己的地址，没有 tag 时退回工作区预览', () => {
+  const decide = (
+    over: Partial<Parameters<typeof revisionPreviewPresentation>[0]> = {}
+  ): ReturnType<typeof revisionPreviewPresentation> =>
+    revisionPreviewPresentation({ url: '', error: '', ...over })
+
+  // 就绪后必须用该版本 dev server 的地址 —— 用工作区的地址就是回到"看到最新版本"的老问题。
+  assert.deepEqual(decide({ revision: 'v1.0', url: 'http://localhost:3001/' }), {
+    kind: 'revision',
+    url: 'http://localhost:3001/'
+  })
+  // 没有 tag 的旧记录退回工作区预览，行为与引入历史预览之前完全一致。
+  assert.deepEqual(decide({ url: 'http://localhost:3000/' }), { kind: 'workspace' })
+  assert.deepEqual(decide({}), { kind: 'workspace' })
+})
+
+test('历史版本预览未就绪时只给加载态，不落到空白 iframe', () => {
+  const decide = (
+    over: Partial<Parameters<typeof revisionPreviewPresentation>[0]> = {}
+  ): ReturnType<typeof revisionPreviewPresentation> =>
+    revisionPreviewPresentation({ url: '', error: '', ...over })
+
+  // 还没开始启动与正在物化/安装/启动都只该看到加载态：提前渲染 about:blank 的
+  // iframe 会让人以为预览坏了，而实际上它正在跑。
+  assert.deepEqual(decide({ revision: 'v1.0' }), { kind: 'loading' })
+  // 启动失败给出错误与重试入口，而不是停在加载态里转圈。
+  assert.deepEqual(decide({ revision: 'v1.0', error: '依赖安装失败' }), {
+    kind: 'error',
+    message: '依赖安装失败'
+  })
+  // 错误优先于加载态：两者同时成立说明上一次启动已经失败，不该继续转圈。
+  assert.deepEqual(decide({ revision: 'v1.0', url: '', error: '依赖安装失败' }), {
+    kind: 'error',
+    message: '依赖安装失败'
+  })
+})
+
+test('历史版本预览只在预览 tab 激活时启动（懒启动）', () => {
+  const decide = (over: Partial<Parameters<typeof shouldRunRevisionPreview>[0]> = {}): boolean =>
+    shouldRunRevisionPreview({
+      enabled: true,
+      revision: 'v1.0',
+      workspaceRoot: '/workspace',
+      ...over
+    })
+
+  assert.equal(decide(), true, '预览 tab + 有 tag + 有工作区时应启动')
+  // 停留在「应用文件」tab 上翻文件不该白白拉起一个 dev server。
+  assert.equal(decide({ enabled: false }), false, '非预览 tab 不应启动历史版本预览')
+  // 没有 tag 的旧版本没有可物化的对象，退回工作区预览那条路。
+  assert.equal(decide({ revision: undefined }), false, '缺少 tag 时不应启动')
+  assert.equal(decide({ revision: '' }), false, 'tag 为空串时不应启动')
+  assert.equal(decide({ workspaceRoot: '' }), false, '缺少工作区路径时不应启动')
+})
+
+test('历史版本不自动拉起工作区预览服务', () => {
+  const decide = (
+    over: Partial<Parameters<typeof shouldAutoStartPreviewService>[0]> = {}
+  ): boolean =>
+    shouldAutoStartPreviewService({
+      activeTabIsPreview: true,
+      hasSnapshot: true,
+      busy: false,
+      status: 'idle',
+      alreadyRequested: false,
+      ...over
+    })
+
+  // 当前版本：idle 时照旧自动启动，这条老行为不能被改动抹掉。
+  assert.equal(decide(), true, '当前版本在 idle 时仍应自动启动')
+  assert.equal(decide({ hasRevision: true }), false, '历史版本不应拉起工作区预览服务')
+  // 历史版本的判断优先级要高于状态判断：即使服务正跑着，也不该被这个入口再动一次。
+  assert.equal(decide({ hasRevision: true, status: 'running' }), false)
+  // 常规边界仍然生效。
+  assert.equal(decide({ status: 'failed' }), false)
+  assert.equal(decide({ busy: true }), false)
+  assert.equal(decide({ hasSnapshot: false }), false)
+  assert.equal(decide({ alreadyRequested: true }), false)
+})
+
 test('三份规划文档各有不同的图标与色调', () => {
   const html = renderToStaticMarkup(
     <ReleasedVersionPanel application={application()} workspaceRoot="/workspace" />
@@ -155,6 +240,16 @@ test('窄栏顶部入口使用与 prototype 一致的图标', () => {
   assert.ok(rail.includes('anticon-database'), '数据来源应为数据库图标')
   // 任务管理用 SVG 资源图标（与工作台窄栏同款），不是 antd 图标。
   assert.ok(rail.includes('released-version-rail-asset-icon'), '任务管理应为 SVG 资源图标')
+})
+
+test('带 tag 的历史版本仍能正常渲染面板', () => {
+  // 新增的历史预览接线会在面板里挂一个 hook；这条守住"传了 revision 不会渲染失败"，
+  // 因为历史版本入口必然带 tag，一旦这里抛错整块回看就白屏。
+  const html = renderToStaticMarkup(
+    <ReleasedVersionPanel application={application()} revision="v1.0" workspaceRoot="/workspace" />
+  )
+  assert.ok(html.includes('应用文件'), '带 tag 时仍应渲染两个只读入口')
+  assert.ok(html.includes('目录树'), '带 tag 时仍应渲染目录树')
 })
 
 test('历史版本不展示关闭按钮，当前版本仍有', () => {
