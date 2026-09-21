@@ -30,7 +30,8 @@ import './BrowserPreviewPanel.less'
 import { useElementInspector } from './useElementInspector'
 import ServiceStatusDrawer from './ServiceStatusDrawer'
 import type { ServiceStatusControl } from './ServiceStatusDrawer'
-import { previewServiceState } from './serviceStatusPolicy'
+import type { PreviewServiceState } from './serviceStatusPolicy'
+import { previewServiceBadge, previewServiceState } from './serviceStatusPolicy'
 
 const { Text } = Typography
 
@@ -38,6 +39,13 @@ type PreviewViewport = 'desktop' | 'tablet' | 'mobile'
 
 type Props = {
   serviceControl?: ServiceStatusControl
+  /**
+   * 外部托管预览的服务状态（历史版本预览用）。
+   *
+   * 传入时状态角标以它为准，且不接工作台预览运行时的重启/诊断 —— 那些操作都指向工作区
+   * 那套进程，对另一个 dev server 不成立。不传则完全沿用原有行为。
+   */
+  externalServiceStatus?: PreviewServiceState
   application: ApplicationConfig
   requestKey?: string
   requestedUrl?: string
@@ -65,6 +73,7 @@ function menuPreviewPages(items: ApplicationMenuItem[]): PreviewPageOption[] {
 /** 展示可由 Workflow 目标地址驱动的内嵌浏览器预览。 */
 export default function BrowserPreviewPanel({
   serviceControl,
+  externalServiceStatus,
   application,
   requestKey,
   requestedUrl,
@@ -104,15 +113,11 @@ export default function BrowserPreviewPanel({
     previewUrl
   })
   const serviceRuntime = serviceControl?.snapshot?.runtime
-  const serviceStatus = previewServiceState(serviceRuntime)
-  const serviceStatusLabel =
-    serviceStatus === 'failed'
-      ? '需处理'
-      : serviceStatus === 'starting'
-        ? '启动中'
-        : serviceStatus === 'running'
-          ? '运行中'
-          : '待启动'
+  const serviceBadge = previewServiceBadge({
+    hasServiceControl: Boolean(serviceControl),
+    runtimeStatus: previewServiceState(serviceRuntime),
+    externalStatus: externalServiceStatus
+  })
 
   useEffect(() => {
     setDraftUrl(previewUrl)
@@ -189,12 +194,12 @@ export default function BrowserPreviewPanel({
       {serviceControl && <ServiceStatusDrawer {...serviceControl} />}
       <div className={cx('browser-preview-toolbar-scroll')}>
         <header className={cx('browser-preview-toolbar')}>
-          <Tooltip title="查看前后端服务状态、重启与诊断日志">
+          <Tooltip title={serviceBadge.tooltip}>
             <span className={cx('browser-service-status-shell')}>
               <Button
                 aria-label="打开服务状态"
-                className={cx('browser-service-status-button', `is-${serviceStatus}`)}
-                disabled={!serviceControl}
+                className={cx('browser-service-status-button', `is-${serviceBadge.status}`)}
+                disabled={!serviceBadge.interactive}
                 onClick={() => serviceControl?.setOpen(true)}
               >
                 <span className={cx('browser-service-status-button__icon')}>
@@ -203,7 +208,7 @@ export default function BrowserPreviewPanel({
                 <span className={cx('browser-service-status-button__label')}>服务状态</span>
                 <span className={cx('browser-service-status-button__state')}>
                   <span />
-                  {serviceStatusLabel}
+                  {serviceBadge.label}
                 </span>
               </Button>
             </span>

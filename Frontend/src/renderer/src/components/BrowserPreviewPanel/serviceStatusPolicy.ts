@@ -79,3 +79,46 @@ export function shouldAutoStartPreviewService(input: {
   if (!input.hasSnapshot || input.busy) return false
   return input.status === 'idle'
 }
+
+/** 服务状态对应的界面文案。 */
+export function previewServiceStatusLabel(status: PreviewServiceState): string {
+  if (status === 'failed') return '需处理'
+  if (status === 'starting') return '启动中'
+  if (status === 'running') return '运行中'
+  return '待启动'
+}
+
+/** 预览工具栏上服务状态角标的呈现口径。 */
+export type PreviewServiceBadge = {
+  status: PreviewServiceState
+  label: string
+  /** 是否可点开服务状态抽屉（重启 / 诊断）。 */
+  interactive: boolean
+  tooltip: string
+}
+
+/**
+ * 决定预览工具栏上那个服务状态角标显示什么、能不能点。
+ *
+ * 历史版本预览由该版本自己的 dev server 提供，不在工作台预览运行时的登记里。照运行时
+ * 状态显示就会是"待启动"，而页面上明明已经渲染出内容了。所以外部状态优先。
+ *
+ * 同时禁掉抽屉：里面的重启/诊断都指向工作区那套进程，接上去只会作用到错误的进程。
+ */
+export function previewServiceBadge(input: {
+  hasServiceControl: boolean
+  runtimeStatus: PreviewServiceState
+  /** 外部托管预览的已知状态；不传表示该预览归工作台预览运行时管。 */
+  externalStatus?: PreviewServiceState
+}): PreviewServiceBadge {
+  const externallyManaged = input.externalStatus !== undefined
+  const status = input.externalStatus ?? input.runtimeStatus
+  return {
+    status,
+    label: previewServiceStatusLabel(status),
+    interactive: !externallyManaged && input.hasServiceControl,
+    tooltip: externallyManaged
+      ? '该版本的预览由独立服务提供，不归工作台预览运行时管理'
+      : '查看前后端服务状态、重启与诊断日志'
+  }
+}

@@ -14,7 +14,11 @@ import {
   shouldShowRightWorkspace
 } from '../src/renderer/src/components/AiChatPanel/utils'
 import RightPanelTabs from '../src/renderer/src/components/AiChatPanel/components/RightPanelTabs'
-import { shouldAutoStartPreviewService } from '../src/renderer/src/components/BrowserPreviewPanel/serviceStatusPolicy'
+import BrowserPreviewPanel from '../src/renderer/src/components/BrowserPreviewPanel/BrowserPreviewPanel'
+import {
+  previewServiceBadge,
+  shouldAutoStartPreviewService
+} from '../src/renderer/src/components/BrowserPreviewPanel/serviceStatusPolicy'
 import type { ApplicationConfig } from '../src/renderer/src/typings'
 
 /** 最小可用应用配置：只提供该面板实际读取的字段。 */
@@ -25,6 +29,54 @@ function application(): ApplicationConfig {
     workspaceRoot: '/workspace'
   } as ApplicationConfig
 }
+
+/** 预览面板要读菜单与页面清单，缺了会直接抛错；这份是给它的最小配置。 */
+function previewApplication(): ApplicationConfig {
+  return {
+    id: 'app-1',
+    appName: '欢迎页',
+    workspaceRoot: '/workspace',
+    menus: { items: [] },
+    pages: []
+  } as unknown as ApplicationConfig
+}
+
+test('历史版本预览：工具栏角标报运行中且不可点开抽屉', () => {
+  // 这条守的是接线而不只是策略函数：页面已经渲染出来了，角标却报"待启动"。
+  const html = renderToStaticMarkup(
+    <BrowserPreviewPanel
+      application={previewApplication()}
+      externalServiceStatus="running"
+      previewBaseUrl="http://localhost:3001"
+      selectedPagePath="/"
+    />
+  )
+  const badge = html.slice(
+    html.indexOf('browser-service-status-button'),
+    html.indexOf('browser-navigation')
+  )
+  assert.ok(badge.includes('运行中'), '历史版本预览已就绪时角标应报运行中')
+  assert.ok(!badge.includes('待启动'), '不应再报待启动')
+  assert.ok(badge.includes('is-running'), '角标样式应跟随运行态')
+  assert.ok(badge.includes('disabled'), '历史版本下不应可点开服务状态抽屉')
+})
+
+test('当前版本预览：不传外部状态时角标行为不变', () => {
+  const html = renderToStaticMarkup(
+    <BrowserPreviewPanel
+      application={previewApplication()}
+      previewBaseUrl="http://localhost:3000"
+      selectedPagePath="/"
+    />
+  )
+  const badge = html.slice(
+    html.indexOf('browser-service-status-button'),
+    html.indexOf('browser-navigation')
+  )
+  // 没有运行时句柄也没有外部状态时照旧报待启动 —— 这条老行为不能被改动抹掉。
+  assert.ok(badge.includes('待启动'), '无外部状态时应照旧报待启动')
+  assert.ok(badge.includes('is-idle'), '角标样式应保持 idle')
+})
 
 test('已生成版本面板默认渲染应用文件，且不出现会话相关结构', () => {
   const html = renderToStaticMarkup(
@@ -209,6 +261,38 @@ test('历史版本不自动拉起工作区预览服务', () => {
   assert.equal(decide({ alreadyRequested: true }), false)
 })
 
+test('历史版本预览的服务角标报"运行中"，且不可点开抽屉', () => {
+  const decide = (
+    over: Partial<Parameters<typeof previewServiceBadge>[0]> = {}
+  ): ReturnType<typeof previewServiceBadge> =>
+    previewServiceBadge({ hasServiceControl: false, runtimeStatus: 'idle', ...over })
+
+  // 页面已经渲染出来了，角标却报"待启动"就是这个 bug：外部状态必须优先。
+  const revision = decide({ externalStatus: 'running' })
+  assert.equal(revision.label, '运行中', '历史版本预览已就绪时角标应报运行中')
+  assert.equal(revision.status, 'running')
+  // 抽屉里的重启/诊断指向工作区那套进程，对历史版本的 dev server 不成立。
+  assert.equal(revision.interactive, false, '历史版本不应可点开服务状态抽屉')
+  assert.ok(!revision.tooltip.includes('重启'), '不该再提示重启/诊断')
+})
+
+test('当前版本的角标行为完全不变', () => {
+  const decide = (
+    over: Partial<Parameters<typeof previewServiceBadge>[0]> = {}
+  ): ReturnType<typeof previewServiceBadge> =>
+    previewServiceBadge({ hasServiceControl: true, runtimeStatus: 'idle', ...over })
+
+  assert.equal(decide().label, '待启动')
+  assert.equal(decide().interactive, true, '当前版本应可点开服务状态抽屉')
+  assert.ok(decide().tooltip.includes('重启'), '当前版本仍提示重启/诊断')
+  // 各状态文案照旧。
+  assert.equal(decide({ runtimeStatus: 'running' }).label, '运行中')
+  assert.equal(decide({ runtimeStatus: 'starting' }).label, '启动中')
+  assert.equal(decide({ runtimeStatus: 'failed' }).label, '需处理')
+  // 没有运行时句柄时照旧不可点（原有行为）。
+  assert.equal(decide({ hasServiceControl: false }).interactive, false)
+})
+
 test('三份规划文档各有不同的图标与色调', () => {
   const html = renderToStaticMarkup(
     <ReleasedVersionPanel application={application()} workspaceRoot="/workspace" />
@@ -284,7 +368,12 @@ test('RightPanelTabs：不传 onClose 时不渲染关闭按钮', () => {
 
 test('等用户输入新迭代需求时不注入 loading 占位', () => {
   const decide = (over: Partial<Parameters<typeof shouldInjectPlanningPlaceholder>[0]> = {}) =>
-    shouldInjectPlanningPlaceholder({ messageCount: 0, stage: 'ready_for_workbench', hasWorkflow: true, ...over })
+    shouldInjectPlanningPlaceholder({
+      messageCount: 0,
+      stage: 'ready_for_workbench',
+      hasWorkflow: true,
+      ...over
+    })
 
   // 收集需求且本轮还没开始 workflow：那一轮不会有任何帧到达，注入占位会一直转圈。
   // pending 与 awaiting_user 都要覆盖：后端写盘的是 pending，只有前端内存里才是 awaiting_user。

@@ -222,6 +222,11 @@ export default function ReleasedVersionPanel({
                 serviceControl={
                   previewPresentation.kind === 'revision' ? undefined : serviceControl
                 }
+                // 但状态角标要说实话：走到这里该版本的服务已经就绪（地址拿到了），
+                // 沿用运行时状态会显示成"待启动"，而页面上已经渲染出内容了。
+                externalServiceStatus={
+                  previewPresentation.kind === 'revision' ? 'running' : undefined
+                }
                 selectedPagePath="/"
                 errorMessage={
                   previewPresentation.kind === 'revision' ? undefined : previewErrorMessage
