@@ -133,7 +133,8 @@ type UseWorkflowConversationParams = {
   acquireSessionExecution: (
     identity: SessionIdentity,
     conversation: boolean,
-    phase?: string
+    phase?: string,
+    executionThreadId?: string
   ) => SessionExecutionEntry | undefined
   activeSession?: SessionIdentity
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
@@ -868,13 +869,17 @@ export function useWorkflowConversation({
     }
 
     const identity = options?.sessionIdentity || (await ensureActiveSession())
+    // 可见会话 threadId 用于消息归属；resumeState/显式参数的 threadId 才是本次 Graph 执行线程。
+    const executionThreadId =
+      options?.executionThreadId || options?.resumeState?.threadId || identity.threadId
     const initialExecutionPhase =
       String(options?.workflowDebug?.resumeFrom || '').trim() ||
       workflowExecutionPhase(options?.resumeState)
     const blockingExecution = acquireSessionExecution(
       identity,
       Boolean(options?.conversation),
-      initialExecutionPhase
+      initialExecutionPhase,
+      executionThreadId
     )
     if (blockingExecution) {
       const sameSession = blockingExecution.identity.key === identity.key
@@ -938,8 +943,6 @@ export function useWorkflowConversation({
       : options?.workflowScope === 'application_planning'
         ? getApplicationPlanningUrl()
         : getWorkflowUrl()
-    const executionThreadId =
-      options?.executionThreadId || options?.resumeState?.threadId || identity.threadId
     const currentAgUiSession = agUiSessionsRef.current[identity.key]
     const agUiSession =
       currentAgUiSession &&

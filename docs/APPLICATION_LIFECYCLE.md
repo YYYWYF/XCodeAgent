@@ -46,6 +46,8 @@ UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不
 不得反向把初始化改回待确认或运行中。不符合当前结构的阶段和字段不做迁移或兼容，
 读取时直接拒绝。
 
+每个 `WorkbenchExecution` 可选持久化 `ownerSessionId`，它是该 Workflow execution 所属可见 Chat Session 的稳定业务标识；旧 lifecycle 文件缺少该字段时按 `None` 兼容读取。`threadId` 仍只表示 Workflow/Graph execution thread，不等价于 Chat Session thread。DAG Planning application-level lock 的唯一 execution source 是 `phase=prepare_build_tasks` 且 `status=running/stopping`；PendingPlan 的 `awaiting_user` 归属由 Pending/DraftIdentity 的 `ownerSessionId` 投影负责，普通 Build、authorization bootstrap、Unit Test、Review、Acceptance 不因 active execution 或 `ownerSessionId` 产生 DAG lock。Confirm 接管、phase/status 更新必须保留原 `ownerSessionId`，不得重新猜测。
+
 主 Workflow 获取范围登记时在 `activeExecutions` 中创建运行，并由后端从正式 ProjectPlan 计算资源集合。页面主目标、导航关联页、直接使用的 API 契约及其数据源，以及共享这些 API/数据源的其他页面和契约会原子写入 `resourceLocks`。当前阶段 `resourceLocks` 仅作为可观测、可持久化的资源元数据，不参与启动门禁：同工作区、同页面、共享 API/数据源或应用级范围均不会因为已有登记被拒绝；同一资源键以最近一次运行记录为准。等待授权、修复确认、验收、失败和停止仍保留登记，只有 `finalize_project` 成功或用户明确“结束计划”才清理该 run 当前拥有的登记。已停止或失败的执行继续运行时，前端只提交旧 runId 作为同一执行的恢复令牌；后端仍验证同一 thread、scope 和 target，并在一次写入中转移旧 run 当前可见的资源记录。结构化测试阶段确认与审查阶段确认是仅有可跨 thread 转交 execution 的恢复动作，分别用于进入空白测试会话和审查会话；scope 与 target 校验不放宽。该令牌不参与 Graph 状态重建。
 
 当前实现只关闭业务资源集合的互斥执法，不放宽文件、命令、敏感操作或 Agent 工具权限。`resourceLocks` 只保存稳定资源键和紧凑 owner 元数据，恢复业务互斥前应重新引入显式策略开关和冲突 UX，而不是让持久化字段隐式阻断。
@@ -80,6 +82,7 @@ Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase
       "targetId": "orders",
       "pageId": "orders",
       "threadId": "thread-orders",
+      "ownerSessionId": "session-orders",
       "runId": "run-orders-7",
       "phase": "build",
       "status": "awaiting_user",

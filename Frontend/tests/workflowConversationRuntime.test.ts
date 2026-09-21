@@ -28,6 +28,7 @@ const WORKSPACE_ROOT = '/tmp/devagentstudio-workflow-runtime-test'
 const APPLICATION_ID = 'application-workflow-runtime-test'
 const OWNER_SESSION_ID = 'session-owner'
 const OWNER_THREAD_ID = 'thread-owner'
+const WORKFLOW_EXECUTION_THREAD_ID = 'workflow-thread-regenerate'
 const DRAFT_DIGEST = 'a'.repeat(64)
 type WorkflowConversationParams = Parameters<typeof useWorkflowConversation>[0]
 
@@ -50,11 +51,11 @@ function buildDagConfirmation(): Record<string, unknown> {
 }
 
 /** 构造实际 Workflow 终态，确保 production sendWorkflowMessage 能识别 DAG confirmation。 */
-function buildGenerationWorkflow(): WorkflowRunPayload {
+function buildGenerationWorkflow(threadId = OWNER_THREAD_ID): WorkflowRunPayload {
   const clarification = buildDagConfirmation()
   return {
     runId: 'workflow-runtime-test',
-    threadId: OWNER_THREAD_ID,
+    threadId,
     events: [],
     summary: {
       status: 'requires_user_input',
@@ -223,6 +224,7 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
   const pendingLifecycle = buildPendingLifecycle()
   const lifecycleState = buildIdleLifecycle()
   const executionLog: Array<{ type: 'acquire' | 'release'; sessionKey: string }> = []
+  const acquiredExecutionThreadIds: string[] = []
   const lifecyclePublishExecutionCounts: number[] = []
   let activeExecution: SessionExecutionEntry | undefined
   let lifecycleGetCount = 0
@@ -231,10 +233,13 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
 
   const acquireSessionExecution: WorkflowConversationParams['acquireSessionExecution'] = (
     identity,
-    conversation
+    conversation,
+    _phase,
+    executionThreadId
   ) => {
     if (activeExecution) return activeExecution
-    activeExecution = { identity, conversation, status: 'starting' }
+    activeExecution = { identity, conversation, executionThreadId, status: 'starting' }
+    acquiredExecutionThreadIds.push(executionThreadId || '')
     executionLog.push({ type: 'acquire', sessionKey: identity.key })
     return undefined
   }
@@ -255,10 +260,15 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
       runId: string
       forwardedProps?: {
         planControlAction?: string
+        applicationLifecycle?: {
+          action?: string
+        }
       }
     }
     if (url.endsWith('/application-lifecycle/run')) {
-      lifecycleGetCount += 1
+      if (request.forwardedProps?.applicationLifecycle?.action === 'get') {
+        lifecycleGetCount += 1
+      }
       return sseResponse(request.threadId, request.runId, {
         applicationLifecycle: lifecycleAfterWorkflow
       })
@@ -307,6 +317,7 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
     )
     assert.equal(workflowRequestCount, 1)
     assert.equal(lifecycleGetCount, 1)
+    assert.equal(acquiredExecutionThreadIds[0], OWNER_THREAD_ID)
 
     const pendingExecution = pendingDagConfirmationExecution(pendingLifecycle, OWNER_THREAD_ID)
     const pendingWorkflow = pendingDagConfirmationWorkflow([], pendingExecution, pendingLifecycle)
@@ -351,8 +362,12 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
       'abandon'
     ]
     for (const action of actions) {
+      const actionWorkflow =
+        action === 'regenerate'
+          ? buildGenerationWorkflow(WORKFLOW_EXECUTION_THREAD_ID)
+          : generationWorkflow
       const result = await captured.handleSubmitClarification(
-        generationWorkflow,
+        actionWorkflow,
         {
           build_task_plan_confirmation: {
             mode: 'build_task_plan_confirmation',
@@ -368,6 +383,13 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
     }
 
     assert.equal(workflowRequestCount, 4)
+    // Regenerate/Confirm/Abandon 使用 resumeState.threadId 作为真实 Graph execution thread，
+    // 不得把当前可见会话的 threadId 写入本地 DAG execution。
+    assert.deepEqual(acquiredExecutionThreadIds.slice(1, 4), [
+      OWNER_THREAD_ID,
+      WORKFLOW_EXECUTION_THREAD_ID,
+      OWNER_THREAD_ID
+    ])
     // 首次 generation 1 次，三个 action 各沿已有 action wrapper 刷新 1 次；没有额外 generation refresh。
     assert.equal(lifecycleGetCount, 4)
     assert.equal(executionLog.filter((entry) => entry.type === 'acquire').length, 4)

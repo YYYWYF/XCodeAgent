@@ -33,6 +33,7 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
   applicationMutationReadonlyForSession,
+  hasActiveSessionExecution,
   resolveApplicationMutationOwnership
 } from '../src/renderer/src/components/AiChatPanel/applicationOwnership'
 import {
@@ -124,7 +125,8 @@ function localDagExecution(
   status: SessionExecutionEntry['status'] = 'starting',
   sessionId = 'session-a',
   threadId = 'thread-a',
-  phase = 'prepare_build_tasks'
+  phase = 'prepare_build_tasks',
+  executionThreadId = threadId
 ): SessionExecutionEntry {
   return {
     identity: createSessionIdentity({
@@ -135,6 +137,7 @@ function localDagExecution(
       workflowId: 'app-owner',
       workbenchPhase: 'development'
     }),
+    executionThreadId,
     status,
     conversation: false,
     phase
@@ -1937,17 +1940,190 @@ test('Regenerate 在旧 Pending 已消费且新 Pending 未生成时仍保持 DA
       message: '旧 Pending 已消费，正在生成新 Pending。'
     }),
     sessions,
-    [localDagExecution('starting')],
+    [
+      localDagExecution(
+        'starting',
+        'session-a',
+        'thread-a',
+        'prepare_build_tasks',
+        'workflow-thread-a'
+      )
+    ],
     { applicationId: 'app-owner', workspaceRoot: '/workspace/app' }
   )
 
   assert.equal(ownership.state, 'owned')
   assert.equal(ownership.owner?.sessionId, 'session-a')
+  assert.equal(ownership.owner?.threadId, 'workflow-thread-a')
   assert.equal(ownership.actionablePending, false)
+  assert.equal(
+    applicationMutationReadonlyForSession(ownership, {
+      sessionId: 'session-a',
+      threadId: 'thread-a'
+    }),
+    false
+  )
   assert.equal(
     applicationMutationReadonlyForSession(ownership, {
       sessionId: 'session-b',
       threadId: 'thread-b'
+    }),
+    true
+  )
+  assert.equal(
+    applicationMutationReadonlyForSession(ownership, {
+      sessionId: 'session-b',
+      threadId: 'workflow-thread-persisted-owner'
+    }),
+    true,
+    '持久化 ownerSessionId 存在时，不能用 execution thread 放宽其它会话权限'
+  )
+})
+
+test('可见会话 thread 与 Workflow execution thread 分离时仍归并为同一个 DAG owner', () => {
+  const executionThreadId = 'workflow-thread-a'
+  const ownership = resolveApplicationMutationOwnership(
+    ownershipLifecycle([ownershipExecution({ threadId: executionThreadId })]),
+    ownershipSessions(),
+    [
+      localDagExecution(
+        'running',
+        'session-a',
+        'thread-a',
+        'prepare_build_tasks',
+        executionThreadId
+      )
+    ],
+    { applicationId: 'app-owner', workspaceRoot: '/workspace/app' }
+  )
+
+  assert.equal(ownership.state, 'owned')
+  assert.equal(ownership.owner?.sessionId, 'session-a')
+  assert.equal(ownership.owner?.threadId, executionThreadId)
+})
+
+test('Confirm 后本地 execution 进入 authorization_bootstrap 或 Build 仍保持 DAG owner 身份', () => {
+  const executionThreadId = 'workflow-thread-confirmed'
+  for (const phase of ['authorization_bootstrap', 'build'] as const) {
+    const localExecution = localDagExecution(
+      'running',
+      'session-a',
+      'thread-a',
+      phase,
+      executionThreadId
+    )
+    const ownership = resolveApplicationMutationOwnership(
+      ownershipLifecycle([
+        ownershipExecution({
+          threadId: executionThreadId,
+          phase: 'prepare_build_tasks'
+        })
+      ]),
+      ownershipSessions(),
+      [localExecution],
+      { applicationId: 'app-owner', workspaceRoot: '/workspace/app' }
+    )
+
+    assert.equal(hasActiveSessionExecution([localExecution], localExecution.identity), true, phase)
+    assert.equal(ownership.state, 'owned', phase)
+    assert.equal(ownership.owner?.sessionId, 'session-a', phase)
+    assert.equal(
+      applicationMutationReadonlyForSession(ownership, {
+        sessionId: 'session-a',
+        threadId: 'thread-a'
+      }),
+      false,
+      phase
+    )
+    assert.equal(
+      applicationMutationReadonlyForSession(ownership, {
+        sessionId: 'session-b',
+        threadId: 'thread-b'
+      }),
+      true,
+      phase
+    )
+  }
+})
+
+test('WorkbenchExecution.ownerSessionId 优先于 execution thread 的可见会话 fallback', () => {
+  const ownership = resolveApplicationMutationOwnership(
+    ownershipLifecycle([
+      ownershipExecution({
+        threadId: 'workflow-thread-persisted-owner',
+        ownerSessionId: 'session-a'
+      })
+    ]),
+    ownershipSessions(),
+    [],
+    { applicationId: 'app-owner', workspaceRoot: '/workspace/app' }
+  )
+
+  assert.equal(ownership.state, 'owned')
+  assert.equal(ownership.owner?.sessionId, 'session-a')
+  assert.equal(
+    applicationMutationReadonlyForSession(ownership, {
+      sessionId: 'session-a',
+      threadId: 'thread-a'
+    }),
+    false
+  )
+  assert.equal(
+    applicationMutationReadonlyForSession(ownership, {
+      sessionId: 'session-b',
+      threadId: 'thread-b'
+    }),
+    true
+  )
+})
+
+test('DAG owner 的 readonly 判断优先使用 session ID，其他 session 仍保持只读', () => {
+  const executionThreadId = 'workflow-thread-a'
+  const ownership = resolveApplicationMutationOwnership(
+    ownershipLifecycle([ownershipExecution({ threadId: executionThreadId })]),
+    ownershipSessions(),
+    [
+      localDagExecution(
+        'running',
+        'session-a',
+        'thread-a',
+        'prepare_build_tasks',
+        executionThreadId
+      )
+    ],
+    { applicationId: 'app-owner', workspaceRoot: '/workspace/app' }
+  )
+
+  assert.equal(
+    applicationMutationReadonlyForSession(ownership, {
+      sessionId: 'session-a',
+      threadId: 'thread-a'
+    }),
+    false
+  )
+  assert.equal(
+    applicationMutationReadonlyForSession(ownership, {
+      sessionId: 'session-b',
+      threadId: 'thread-b'
+    }),
+    true
+  )
+})
+
+test('两个不同的 Workflow execution thread 仍然保持 fail-closed conflicted', () => {
+  const ownership = resolveApplicationMutationOwnership(
+    ownershipLifecycle([
+      ownershipExecution({ runId: 'run-a', threadId: 'workflow-thread-a' }),
+      ownershipExecution({ runId: 'run-b', threadId: 'workflow-thread-b' })
+    ]),
+    ownershipSessions()
+  )
+
+  assert.equal(ownership.state, 'conflicted')
+  assert.equal(
+    applicationMutationReadonlyForSession(ownership, {
+      sessionId: 'session-a',
+      threadId: 'thread-a'
     }),
     true
   )
@@ -2064,22 +2240,25 @@ test('workflowClarification 优先当前 clarification，缺失时才回退历�
 
 test('本地只有标记为 prepare_build_tasks 的 execution 才形成 DAG lock', () => {
   const sessions = ownershipSessions()
-  const nonDagLocal = localDagExecution('running', 'session-a', 'thread-a', 'unit_test')
-  const ownership = resolveApplicationMutationOwnership(
-    ownershipLifecycle(),
-    sessions,
-    [nonDagLocal],
-    { applicationId: 'app-owner', workspaceRoot: '/workspace/app' }
-  )
+  for (const phase of ['authorization_bootstrap', 'build', 'unit_test'] as const) {
+    const nonDagLocal = localDagExecution('running', 'session-a', 'thread-a', phase)
+    const ownership = resolveApplicationMutationOwnership(
+      ownershipLifecycle(),
+      sessions,
+      [nonDagLocal],
+      { applicationId: 'app-owner', workspaceRoot: '/workspace/app' }
+    )
 
-  assert.equal(ownership.state, 'free')
-  assert.equal(
-    applicationMutationReadonlyForSession(ownership, {
-      sessionId: 'session-b',
-      threadId: 'thread-b'
-    }),
-    false
-  )
+    assert.equal(ownership.state, 'free', phase)
+    assert.equal(
+      applicationMutationReadonlyForSession(ownership, {
+        sessionId: 'session-b',
+        threadId: 'thread-b'
+      }),
+      false,
+      phase
+    )
+  }
 })
 
 test('本地 DAG registry 只在同一 workspace/application 范围内互斥', () => {

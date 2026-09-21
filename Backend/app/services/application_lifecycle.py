@@ -500,6 +500,7 @@ def start_workbench_execution(
             ]
         )
         acquired_at = utc_now()
+        normalized_owner_session_id = str(owner_session_id or "").strip() or None
         next_locks = _resource_locks_with_claims(
             resource_locks,
             claims=claims,
@@ -515,6 +516,7 @@ def start_workbench_execution(
                 targetId=target_id,
                 pageId=page_id,
                 threadId=thread_id,
+                ownerSessionId=normalized_owner_session_id,
                 runId=run_id,
                 phase=phase,
                 status=WorkbenchExecutionStatus.RUNNING,

@@ -1127,6 +1127,7 @@ export type WorkbenchExecution = {
   targetId: string
   pageId?: string
   threadId: string
+  ownerSessionId?: string
   runId: string
   phase: string
   status: WorkbenchExecutionStatus

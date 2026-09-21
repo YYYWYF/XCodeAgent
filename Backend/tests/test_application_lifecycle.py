@@ -376,6 +376,47 @@ class ApplicationLifecycleTests(unittest.TestCase):
             self.assertNotIn("project", payload)
             self.assertNotIn("delivery", payload)
 
+    def test_legacy_workbench_execution_without_owner_session_id_still_loads(self) -> None:
+        """旧生命周期文件缺少 ownerSessionId 时仍可按当前 schema 读取。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = create_application_lifecycle(
+                application_id="app-legacy-owner",
+                application_name="Legacy owner",
+            )
+            state = state.model_copy(
+                update={
+                    "initialization": state.initialization.model_copy(
+                        update={
+                            "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                            "status": ApplicationLifecycleStatus.COMPLETED,
+                        }
+                    )
+                }
+            )
+            write_application_lifecycle(directory, state)
+            started = start_workbench_execution(
+                directory,
+                scope="application",
+                target_id="application",
+                page_id=None,
+                thread_id="workflow-thread-legacy",
+                run_id="run-legacy",
+                phase="build",
+                owner_session_id="session-legacy",
+            )
+            payload = started.model_dump(mode="json", by_alias=True)
+            payload["activeExecutions"]["run-legacy"].pop("ownerSessionId", None)
+            application_lifecycle_path(directory).write_text(
+                json.dumps(payload),
+                encoding="utf-8",
+            )
+
+            loaded = load_application_lifecycle(directory)
+
+        self.assertIsNotNone(loaded)
+        self.assertIsNone(loaded.active_executions["run-legacy"].owner_session_id)
+
     def test_workbench_execution_requires_completed_creation_planning(self) -> None:
         """创建规划完成前不能登记工作台执行或改变生命周期 revision。"""
 

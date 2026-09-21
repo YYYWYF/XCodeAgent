@@ -26,6 +26,8 @@ TechnicalPlan Endpoint 契约和当前 Endpoint API 设计。运行时的 `proje
 8. Pending 归属页面对话 `sessionId`，不归属某一次 Workflow Run；同一对话的 Regenerate 可以产生多个 Run，但新 Pending 必须继承原 `owner_session_id`。
 9. 删除非运行中的 owner 对话时，先通过独立 lifecycle action 精确收口其拥有的 PendingPlan；该动作复用 Abandon，只处理确认门 execution，不取消生成中的 Workflow。
 
+本次 ownership 设计还必须保持以下当前合同：`prepare_build_tasks + running/stopping` 是唯一由 lifecycle execution 产生的 application-level DAG lock source；`WorkbenchExecution.ownerSessionId` 是稳定的 Chat Session ownership identity，`threadId` 只是 Workflow/Graph execution thread。local `executionThreadId` 可以把仍 active 的本地 runtime entry 与 lifecycle execution 做跨 phase identity correlation，即使本地 phase 已进入 `authorization_bootstrap` 或 `build`，但它不能把这些 phase 变成 lock source。刷新丢失 local entry 时优先使用持久化 `ownerSessionId`；当前 owner session 有 active local entry 时，UI 必须保留 Workflow Debug/End controls，不能以 LockDock 覆盖；普通 Build、Test、Review、Acceptance 和 `prepare_build_tasks + awaiting_user` 仍不通过 running execution 形成 DAG lock。
+
 ## 2. 调整边界
 
 ### 2.1 本期处理范围

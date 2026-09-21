@@ -45,6 +45,54 @@ def write_ready_lifecycle(workspace: str) -> None:
 class ApplicationOwnerAdmissionTests(unittest.TestCase):
     """验证带 session 身份的 Workflow 入口不会绕过 DAG Planning owner。"""
 
+    def test_owner_session_id_persists_across_phase_transition(self) -> None:
+        """execution 从 DAG 交接到权限或 Build 后仍保留原页面会话归属。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            write_ready_lifecycle(workspace)
+            running = start_workbench_execution(
+                workspace,
+                scope="application",
+                target_id="application",
+                page_id=None,
+                thread_id="workflow-thread-confirmed",
+                run_id="run-confirmed-source",
+                phase="prepare_build_tasks",
+                owner_session_id="session-owner",
+            )
+            self.assertEqual(
+                running.active_executions["run-confirmed-source"].owner_session_id,
+                "session-owner",
+            )
+
+            for phase in ("authorization_bootstrap", "build"):
+                running = update_workbench_execution(
+                    workspace,
+                    run_id="run-confirmed-source",
+                    phase=phase,
+                    status=WorkbenchExecutionStatus.RUNNING,
+                )
+                self.assertEqual(
+                    running.active_executions["run-confirmed-source"].owner_session_id,
+                    "session-owner",
+                )
+
+            replaced = start_workbench_execution(
+                workspace,
+                scope="application",
+                target_id="application",
+                page_id=None,
+                thread_id="workflow-thread-confirmed",
+                run_id="run-confirmed-build",
+                phase="build",
+                owner_session_id="session-owner",
+                replaces_run_id="run-confirmed-source",
+            )
+            self.assertEqual(
+                replaced.active_executions["run-confirmed-build"].owner_session_id,
+                "session-owner",
+            )
+
     def test_active_dag_owner_rejects_conflicting_session_until_terminal(self) -> None:
         """DAG generation 期间拒绝其它会话和同会话的无令牌新 mutation。"""
 
@@ -384,3 +432,7 @@ class ApplicationOwnerAdmissionTests(unittest.TestCase):
             )
             self.assertNotIn("run-pending", replaced.active_executions)
             self.assertIn("run-confirmed", replaced.active_executions)
+            self.assertEqual(
+                replaced.active_executions["run-confirmed"].owner_session_id,
+                "session-owner",
+            )

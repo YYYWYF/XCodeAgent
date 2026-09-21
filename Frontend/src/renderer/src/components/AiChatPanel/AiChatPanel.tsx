@@ -143,6 +143,7 @@ import { sessionIdentityFromSummary, sessionRuntimeKey } from './hooks/sessionRu
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import {
   applicationMutationReadonlyForSession,
+  hasActiveSessionExecution,
   resolveApplicationMutationOwnership
 } from './applicationOwnership'
 import { chatCopy } from './constants'
@@ -2928,18 +2929,21 @@ export default function AiChatPanel({
     applicationMutationReadonly ||
     planningRunLockedByOtherSession ||
     pendingPlanOwnedByOtherSession
+  // 当前可见会话只要仍有 active runtime entry，就必须保留自己的 Workflow 控制入口。
+  // 该判断独立于 ownership 的 loading/conflicted 投影，避免 LockDock 覆盖停止/结束按钮。
+  const currentSessionExecuting = hasActiveSessionExecution(sessionExecutions, activeSession)
+  const showSessionExecutionLock = otherSessionExecutionLocked && !currentSessionExecuting
   const phaseSessionRunActive =
     Boolean(phaseExecution) ||
     planningSessionRunActive ||
     applicationOwnership.state === 'owned' ||
     applicationOwnership.state === 'conflicted'
   const applicationOwnerSession = applicationOwnership.owner
-    ? allSessions.find(
-        (session) =>
-          (applicationOwnership.owner?.sessionId &&
-            session.id === applicationOwnership.owner.sessionId) ||
-          (applicationOwnership.owner?.threadId &&
-            session.threadId === applicationOwnership.owner.threadId)
+    ? allSessions.find((session) =>
+        applicationOwnership.owner?.sessionId
+          ? session.id === applicationOwnership.owner.sessionId
+          : applicationOwnership.owner?.threadId &&
+            session.threadId === applicationOwnership.owner.threadId
       )
     : undefined
   const phaseExecutionSessionTitle =
@@ -4693,7 +4697,7 @@ export default function AiChatPanel({
                 />
               ) : null}
 
-              {otherSessionExecutionLocked ? (
+              {showSessionExecutionLock ? (
                 <SessionExecutionLockDock
                   phaseLabel={phaseExecutionLabel}
                   sessionTitle={phaseExecutionSessionTitle}

@@ -199,6 +199,11 @@ class WorkbenchExecution(ApplicationLifecycleModel):
     target_id: str = Field(alias="targetId", min_length=1, max_length=512)
     page_id: str | None = Field(default=None, alias="pageId", max_length=512)
     thread_id: str = Field(alias="threadId", min_length=1, max_length=512)
+    owner_session_id: str | None = Field(
+        default=None,
+        alias="ownerSessionId",
+        max_length=512,
+    )
     run_id: str = Field(alias="runId", min_length=1, max_length=512)
     phase: str = Field(min_length=1, max_length=128)
     status: WorkbenchExecutionStatus

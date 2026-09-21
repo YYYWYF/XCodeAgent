@@ -17,7 +17,8 @@ export type SessionRuntimeStore = {
   acquireSessionExecution: (
     identity: SessionIdentity,
     conversation: boolean,
-    phase?: string
+    phase?: string,
+    executionThreadId?: string
   ) => SessionExecutionEntry | undefined
   runningSessionsRef: MutableRefObject<Map<string, SessionIdentity>>
   clearWorkspace: (workspaceRoot: string) => Promise<void>
@@ -128,7 +129,8 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
   const acquireSessionExecution = (
     identity: SessionIdentity,
     conversation: boolean,
-    phase?: string
+    phase?: string,
+    executionThreadId?: string
   ): SessionExecutionEntry | undefined => {
     const blockingExecution = Object.values(sessionExecutionsRef.current).find(
       (entry) =>
@@ -136,8 +138,12 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
         (isDagPlanningPhase(entry.phase) && isSameDagPlanningScope(entry.identity, identity))
     )
     if (blockingExecution) return blockingExecution
+    // SessionIdentity.threadId 是可见会话线程；DAG ownership 必须记录真实 Graph 执行线程。
+    // 预览等没有独立 Graph 线程的调用仍可沿用会话线程作为本地 execution 标识。
+    const workflowExecutionThreadId = executionThreadId?.trim() || identity.threadId
     const entry: SessionExecutionEntry = {
       identity,
+      executionThreadId: workflowExecutionThreadId,
       status: 'starting',
       conversation,
       phase: phase?.trim() || undefined
