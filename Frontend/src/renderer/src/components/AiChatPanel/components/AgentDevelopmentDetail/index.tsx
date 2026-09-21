@@ -5,7 +5,6 @@ import {
   RobotOutlined
 } from '@ant-design/icons'
 import { Button, message, Modal, Tag, Tooltip, Typography } from 'antd'
-import { useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
   ApplicationLifecycle,
@@ -13,7 +12,10 @@ import type {
   WorkbenchExecution
 } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { startAgentRuntimeDebug } from '../../../../service/agentRuntimeDebug'
+import {
+  startWorkspaceAgentRuntimeDebug,
+  useAgentRuntimeDebugStatus
+} from '../../../../service/agentRuntimeDebugStore'
 import AgentDependenciesView from './AgentDependenciesView'
 import AgentSettingsView from './AgentSettingsView'
 import './AgentDevelopmentDetail.less'
@@ -42,17 +44,13 @@ export default function AgentDevelopmentDetail({
   onStartDevelopment
 }: Props): ReactElement {
   const summary = agent.taskSummary
-  const [runtimeDebugStatus, setRuntimeDebugStatus] = useState<
-    'idle' | 'starting' | 'running' | 'failed'
-  >('idle')
+  const runtimeDebugStatus = useAgentRuntimeDebugStatus(workspaceRoot)
 
   /** 直接启动工作区 Runtime，供生成流程之外临时验证模板与模型配置。 */
   const handleStartRuntimeDebug = async (): Promise<void> => {
     if (!workspaceRoot || runtimeDebugStatus === 'starting') return
-    setRuntimeDebugStatus('starting')
     try {
-      const result = await startAgentRuntimeDebug(workspaceRoot)
-      setRuntimeDebugStatus('running')
+      const result = await startWorkspaceAgentRuntimeDebug(workspaceRoot)
       void window.xcodeAgent?.projectPreview?.registerWorkspace({ workspaceRoot })
       message.success(result.message)
       Modal.success({
@@ -72,7 +70,6 @@ export default function AgentDevelopmentDetail({
         )
       })
     } catch (error) {
-      setRuntimeDebugStatus('failed')
       message.error(error instanceof Error ? error.message : 'Agent Runtime 启动失败。')
     }
   }

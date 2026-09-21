@@ -32,7 +32,8 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/conversationMode'
 import {
   workflowDebugBuildScope,
-  workflowDebugClarificationAnswers
+  workflowDebugClarificationAnswers,
+  workflowResumeIdentityFields
 } from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
 import WorkflowRunCard, {
   buildToolActivityPlacement,
@@ -222,6 +223,67 @@ test('prepare_build_tasks 调试默认继承当前页面范围', () => {
   })
 
   assert.deepEqual(scope, { type: 'page', targetId: 'pet_list_page' })
+})
+
+test('调试恢复默认继承当前 Agent 范围，不把大纲页面写进恢复请求', () => {
+  const workflow = {
+    runId: 'run-agent',
+    threadId: 'thread-agent',
+    summary: {
+      lifecycle: {
+        activeExecutions: {
+          'run-agent': {
+            runId: 'run-agent',
+            threadId: 'thread-agent',
+            scope: 'agent' as const,
+            targetId: 'agent_travel_planner',
+            status: 'failed' as const,
+            phase: 'inspect_workspace',
+            resourceKeys: [],
+            startedAt: '2026-09-21T00:00:00.000Z',
+            updatedAt: '2026-09-21T00:00:00.000Z'
+          }
+        }
+      }
+    },
+    events: [],
+    state: {
+      buildExecutionScope: {
+        type: 'agent' as const,
+        targetId: 'agent_travel_planner'
+      }
+    }
+  }
+
+  assert.deepEqual(workflowDebugBuildScope(workflow), {
+    type: 'agent',
+    targetId: 'agent_travel_planner'
+  })
+  assert.deepEqual(workflowResumeIdentityFields(workflow), {
+    selectedPageId: '',
+    selectedApiContractId: '',
+    selectedEndpointId: '',
+    selectedAgentId: 'agent_travel_planner',
+    detailTargetType: 'agent',
+    buildExecutionScope: {
+      type: 'agent',
+      targetId: 'agent_travel_planner'
+    }
+  })
+  assert.deepEqual(
+    workflowResumeIdentityFields({ ...workflow, state: {} }),
+    {
+      selectedPageId: '',
+      selectedApiContractId: '',
+      selectedEndpointId: '',
+      selectedAgentId: 'agent_travel_planner',
+      detailTargetType: 'agent',
+      buildExecutionScope: {
+        type: 'agent',
+        targetId: 'agent_travel_planner'
+      }
+    }
+  )
 })
 
 test('页面、Endpoint 和 Agent 开发目标严格规范化并投影到 Workflow scope', () => {

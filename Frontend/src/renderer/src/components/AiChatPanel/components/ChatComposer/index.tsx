@@ -47,7 +47,8 @@ const buildScopeOptions: Array<{ value: WorkflowBuildExecutionScope['type']; lab
   { value: 'application', label: '整个应用' },
   { value: 'page', label: '单个页面' },
   { value: 'data_source', label: '单个数据源' },
-  { value: 'endpoint', label: '单个接口' }
+  { value: 'endpoint', label: '单个接口' },
+  { value: 'agent', label: '单个智能体' }
 ]
 
 type ChatComposerProps = {
@@ -250,7 +251,9 @@ export default function ChatComposer({
                               ? '页面 ID'
                               : buildScopeType === 'endpoint'
                                 ? '接口 ID'
-                                : '数据源 ID'
+                                : buildScopeType === 'agent'
+                                  ? '智能体 ID'
+                                  : '数据源 ID'
                           }
                           disabled={loading}
                           placeholder={
@@ -258,7 +261,9 @@ export default function ChatComposer({
                               ? '输入 pageId，例如 orders'
                               : buildScopeType === 'endpoint'
                                 ? '输入 endpointId，例如 orders.list'
-                                : '输入 dataSourceId，例如 orders'
+                                : buildScopeType === 'agent'
+                                  ? '输入 agentId，例如 agent_travel_planner'
+                                  : '输入 dataSourceId，例如 orders'
                           }
                           value={buildScopeTargetId}
                           onChange={(event) => setBuildScopeTargetId(event.target.value)}

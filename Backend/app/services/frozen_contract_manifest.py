@@ -42,6 +42,40 @@ _SCOPED_REQUIREMENT_KINDS = {
     "backend.bootstrap",
     "frontend.auth.resources",
 }
+_AGENT_REQUIREMENT_KIND = "agent.runtime"
+
+
+def _agent_contract_selector(
+    technical: FrozenContract,
+    *,
+    unit_id: str,
+    unit_kind: BuildUnitKind,
+    source_refs: Mapping[str, Any],
+) -> str:
+    """把 Agent 职责精确绑定到当前 TechnicalPlan 中唯一的 Agent Contract。"""
+
+    agent_id = exact_manifest_id(
+        source_refs.get("agent_id"),
+        "agent.runtime.agent_id",
+    )
+    if unit_kind != "agent" or unit_id != f"agent:{agent_id}":
+        raise ContractCatalogBindingError(
+            f"Agent requirement {agent_id} 与 Unit {unit_id} 身份不一致。"
+        )
+    contracts = manifest_sequence(
+        technical.content.get("agent_contracts"),
+        "TechnicalPlan.agent_contracts",
+    )
+    matches = [
+        index
+        for index, contract in enumerate(contracts)
+        if isinstance(contract, Mapping) and contract.get("agentId") == agent_id
+    ]
+    if len(matches) != 1:
+        raise ContractCatalogBindingError(
+            f"TechnicalPlan 无法唯一定位 Agent Contract {agent_id}。"
+        )
+    return f"/agent_contracts/{matches[0]}"
 
 
 def _endpoint_keys_for_requirement(
@@ -125,6 +159,7 @@ def compile_expected_unit_formal_source_refs(
     scoped_keys = set(scoped_endpoint_keys)
     if any(key not in endpoints for key in scoped_keys):
         raise ContractCatalogBindingError("当前 Scope 含 Frozen Store 中不存在的 Endpoint。")
+    gateway_keys = _agent_gateway_endpoint_keys(technical, endpoints)
 
     grants: dict[tuple[str, str], tuple[FrozenContract, set[str]]] = {}
 
@@ -138,15 +173,31 @@ def compile_expected_unit_formal_source_refs(
 
     for raw_requirement in generation_requirements:
         requirement_id, source_refs = requirement_record(raw_requirement)
-        grant(requirement_id, technical, {"/architecture"})
-        page_id, relevant_keys = _endpoint_keys_for_requirement(
-            unit_id=unit_id,
-            unit_kind=unit_kind,
-            source_refs=source_refs,
-            page_contracts=pages,
-            endpoint_index=endpoints,
-            scoped_endpoint_keys=scoped_keys,
-        )
+        requirement_kind = source_refs.get("kind")
+        if requirement_kind == _AGENT_REQUIREMENT_KIND:
+            grant(
+                requirement_id,
+                technical,
+                {
+                    _agent_contract_selector(
+                        technical,
+                        unit_id=unit_id,
+                        unit_kind=unit_kind,
+                        source_refs=source_refs,
+                    )
+                },
+            )
+            page_id, relevant_keys = None, set()
+        else:
+            grant(requirement_id, technical, {"/architecture"})
+            page_id, relevant_keys = _endpoint_keys_for_requirement(
+                unit_id=unit_id,
+                unit_kind=unit_kind,
+                source_refs=source_refs,
+                page_contracts=pages,
+                endpoint_index=endpoints,
+                scoped_endpoint_keys=scoped_keys,
+            )
         if page_id is not None:
             grant(requirement_id, pages[page_id], {"/"})
 
@@ -157,8 +208,11 @@ def compile_expected_unit_formal_source_refs(
             relevant_keys = {
                 key
                 for key in relevant_keys
-                if source_type in endpoint_api_design_source_types(
-                    _required_endpoint_api_design(endpoint_api_designs, key)
+                if _endpoint_has_physical_source_type(
+                    endpoint_api_designs,
+                    key,
+                    source_type,
+                    gateway_keys,
                 )
             }
 
@@ -172,8 +226,13 @@ def compile_expected_unit_formal_source_refs(
             for key in relevant_keys:
                 if key[0] != contract.content.get("id"):
                     continue
-                endpoint_api_design = _required_endpoint_api_design(endpoint_api_designs, key)
-                grant(requirement_id, endpoint_api_design, {"/"})
+                endpoint_api_design = _endpoint_api_design_if_required(
+                    endpoint_api_designs,
+                    key,
+                    gateway_keys,
+                )
+                if endpoint_api_design is not None:
+                    grant(requirement_id, endpoint_api_design, {"/"})
 
         relevant_endpoint_ids = {key[1] for key in relevant_keys}
         for contract in authorization_matches(
@@ -197,6 +256,71 @@ def compile_expected_unit_formal_source_refs(
         for (requirement_id, _), (contract, selectors) in grants.items()
     )
     return canonicalize_formal_source_refs(bindings)
+
+
+def _agent_gateway_endpoint_keys(
+    technical: FrozenContract,
+    endpoints: Mapping[tuple[str, str], tuple[FrozenContract, int]],
+) -> set[tuple[str, str]]:
+    """从冻结 TechnicalPlan 读取 Java Gateway Endpoint，不猜测 API 归属。"""
+
+    agents = technical.content.get("agent_contracts")
+    if agents in (None, []):
+        return set()
+    agents = manifest_sequence(agents, "TechnicalPlan.agent_contracts")
+    by_endpoint_id: dict[str, set[tuple[str, str]]] = {}
+    for key in endpoints:
+        by_endpoint_id.setdefault(key[1], set()).add(key)
+    keys: set[tuple[str, str]] = set()
+    for index, agent in enumerate(agents):
+        if not isinstance(agent, Mapping):
+            raise ContractCatalogBindingError(
+                f"TechnicalPlan.agent_contracts[{index}] 必须为对象。"
+            )
+        invocation = (
+            agent.get("invocation") if isinstance(agent.get("invocation"), Mapping) else {}
+        )
+        gateway_id = invocation.get("gatewayEndpointId")
+        if not isinstance(gateway_id, str) or not gateway_id or gateway_id != gateway_id.strip():
+            continue
+        matches = by_endpoint_id.get(gateway_id, set())
+        if len(matches) != 1:
+            raise ContractCatalogBindingError(
+                f"Agent Gateway Endpoint {gateway_id} 缺失或无法唯一确定 API Contract。"
+            )
+        keys.update(matches)
+    return keys
+
+
+def _endpoint_has_physical_source_type(
+    designs: Mapping[tuple[str, str], FrozenContract],
+    key: tuple[str, str],
+    source_type: str,
+    gateway_keys: set[tuple[str, str]],
+) -> bool:
+    """Gateway 无字段映射时不含物理来源；其余 Endpoint 仍以 API Design 为准。"""
+
+    design = _endpoint_api_design_if_required(designs, key, gateway_keys)
+    if design is None:
+        return False
+    return source_type in endpoint_api_design_source_types(design)
+
+
+def _endpoint_api_design_if_required(
+    designs: Mapping[tuple[str, str], FrozenContract],
+    key: tuple[str, str],
+    gateway_keys: set[tuple[str, str]],
+) -> FrozenContract | None:
+    """普通 Endpoint 必须有 API Design；Agent Gateway 允许仅使用 TechnicalPlan 契约。"""
+
+    design = designs.get(key)
+    if design is not None:
+        return design
+    if key in gateway_keys:
+        return None
+    raise ContractCatalogBindingError(
+        f"Endpoint {key[0]}/{key[1]} 缺少 endpoint_api_design。"
+    )
 
 
 def _required_endpoint_api_design(

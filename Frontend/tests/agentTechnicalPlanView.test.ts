@@ -9,6 +9,11 @@ import agentSettingsViewSource from '../src/renderer/src/components/AiChatPanel/
 import agentSettingsSummarySource from '../src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/AgentSettingsSummary.tsx?raw'
 import agentDependenciesViewSource from '../src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/AgentDependenciesView.tsx?raw'
 import agentSettingsRevisionSource from '../src/renderer/src/service/agentSettingsRevision.ts?raw'
+import {
+  clearAgentRuntimeDebugStore,
+  mapAgentRuntimeDebugButtonStatus,
+  setAgentRuntimeDebugStatus
+} from '../src/renderer/src/service/agentRuntimeDebugStore'
 
 const agentPlan = {
   architecture: {
@@ -228,67 +233,74 @@ assert.match(agentDependenciesViewSource, /requiredChecks\.map\(\(check, index\)
 assert.match(agentDevelopmentDetailSource, /aria-label="查看 Contract Hash"/)
 assert.match(agentDevelopmentDetailSource, /agent-contract-hash-tooltip/)
 assert.doesNotMatch(agentDevelopmentDetailSource, /className=\{cx\('agent-contract-hash'\)\}/)
+assert.match(agentDevelopmentDetailSource, /useAgentRuntimeDebugStatus/)
+assert.doesNotMatch(
+  agentDevelopmentDetailSource,
+  /useState<\s*'idle' \| 'starting' \| 'running' \| 'failed'\s*>/
+)
 assert.match(agentSettingsRevisionSource, /@ag-ui\/client/)
 assert.match(agentSettingsRevisionSource, /basedOnTechnicalPlanSha256/)
 assert.match(agentSettingsRevisionSource, /agent-settings-revision/)
 
+const inventoryAssistant = {
+  key: 'agent:inventory_assistant',
+  agentId: 'inventory_assistant',
+  label: '库存助手',
+  purpose: '帮助用户理解库存状态。',
+  boundaries: [],
+  capabilities: [],
+  entryPageIds: ['inventory_home'],
+  entryActions: [
+    {
+      pageId: 'inventory_home',
+      pageLabel: '库存首页',
+      actionIds: ['inventory_home_ask_assistant'],
+      surface: {
+        type: 'floating_panel',
+        label: '悬浮问答面板',
+        enabled: true,
+        contextItemIds: ['inventory_summary']
+      }
+    },
+    {
+      pageId: 'inventory_details',
+      pageLabel: '库存详情',
+      actionIds: [],
+      surface: {
+        type: 'unknown',
+        label: '未知载体（只读）',
+        enabled: false,
+        contextItemIds: []
+      }
+    }
+  ],
+  interaction: {},
+  contractHash: 'sha256:inventory-assistant',
+  agentSettings: {
+    prompt: {},
+    model: {},
+    memory: {},
+    tools: {},
+    skills: {},
+    knowledge: {},
+    context: {}
+  },
+  dependencies: {
+    gateway: {},
+    tools: [],
+    entities: [],
+    pages: [],
+    runtime: {}
+  },
+  runtime: {},
+  security: {},
+  artifacts: [],
+  requiredChecks: []
+}
+
 const agentDevelopmentMarkup = renderToStaticMarkup(
   createElement(AgentDevelopmentDetail, {
-    agent: {
-      key: 'agent:inventory_assistant',
-      agentId: 'inventory_assistant',
-      label: '库存助手',
-      purpose: '帮助用户理解库存状态。',
-      boundaries: [],
-      capabilities: [],
-      entryPageIds: ['inventory_home'],
-      entryActions: [
-        {
-          pageId: 'inventory_home',
-          pageLabel: '库存首页',
-          actionIds: ['inventory_home_ask_assistant'],
-          surface: {
-            type: 'floating_panel',
-            label: '悬浮问答面板',
-            enabled: true,
-            contextItemIds: ['inventory_summary']
-          }
-        },
-        {
-          pageId: 'inventory_details',
-          pageLabel: '库存详情',
-          actionIds: [],
-          surface: {
-            type: 'unknown',
-            label: '未知载体（只读）',
-            enabled: false,
-            contextItemIds: []
-          }
-        }
-      ],
-      interaction: {},
-      contractHash: 'sha256:inventory-assistant',
-      agentSettings: {
-        prompt: {},
-        model: {},
-        memory: {},
-        tools: {},
-        skills: {},
-        knowledge: {},
-        context: {}
-      },
-      dependencies: {
-        gateway: {},
-        tools: [],
-        entities: [],
-        pages: [],
-        runtime: {}
-      },
-      runtime: {},
-      security: {},
-      artifacts: [],
-      requiredChecks: []
-    },
+    agent: inventoryAssistant,
     onSettingsApplied: () => undefined,
     onStartDevelopment: () => undefined
   })
@@ -298,3 +310,32 @@ assert.match(agentDevelopmentMarkup, /库存首页/)
 assert.match(agentDevelopmentMarkup, /悬浮问答面板/)
 assert.match(agentDevelopmentMarkup, /inventory_summary/)
 assert.match(agentDevelopmentMarkup, /未知载体（只读）/)
+
+assert.equal(mapAgentRuntimeDebugButtonStatus('running'), 'running')
+assert.equal(mapAgentRuntimeDebugButtonStatus('starting'), 'starting')
+assert.equal(mapAgentRuntimeDebugButtonStatus('install_failed'), 'failed')
+assert.equal(mapAgentRuntimeDebugButtonStatus('offline'), 'idle')
+
+clearAgentRuntimeDebugStore()
+const workspaceRoot = 'D:/workspace/weather-app'
+setAgentRuntimeDebugStatus(workspaceRoot, 'running')
+const remountedRuntimeMarkup = renderToStaticMarkup(
+  createElement(AgentDevelopmentDetail, {
+    agent: inventoryAssistant,
+    workspaceRoot,
+    onSettingsApplied: () => undefined,
+    onStartDevelopment: () => undefined
+  })
+)
+assert.match(remountedRuntimeMarkup, /重新启动 Runtime/)
+clearAgentRuntimeDebugStore(workspaceRoot)
+const idleRuntimeMarkup = renderToStaticMarkup(
+  createElement(AgentDevelopmentDetail, {
+    agent: inventoryAssistant,
+    workspaceRoot,
+    onSettingsApplied: () => undefined,
+    onStartDevelopment: () => undefined
+  })
+)
+assert.match(idleRuntimeMarkup, /启动 Runtime/)
+assert.doesNotMatch(idleRuntimeMarkup, /重新启动 Runtime/)

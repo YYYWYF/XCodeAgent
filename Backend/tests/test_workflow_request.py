@@ -10,11 +10,21 @@ from unittest.mock import patch
 from app.agents.test_generation.generator import _build_prompt
 from app.graph.subgraphs.testing import collect_unit_test_targets
 from app.services.api_design import ApiDesignError
+from app.domain.application_lifecycle import (
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+)
 from app.protocols.workflow.request import (
     _build_execution_scope,
     _resume_values,
     _retry_failed_execution_node,
     workflow_run_inputs,
+)
+from app.graph.nodes.tasks import _workspace_snapshot_from_state
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    start_workbench_execution,
+    write_application_lifecycle,
 )
 
 
@@ -1923,6 +1933,100 @@ class WorkflowRequestTests(unittest.TestCase):
             "failed-revision-run",
         )
 
+    def test_debug_resume_pins_agent_scope_when_page_is_currently_selected(self) -> None:
+        """inspect_workspace 调试恢复必须沿用原 Agent 执行，不能改写成当前选中页面。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = create_application_lifecycle(
+                application_id="app-1",
+                application_name="旅游规划",
+            )
+            state = state.model_copy(
+                update={
+                    "initialization": state.initialization.model_copy(
+                        update={
+                            "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                            "status": ApplicationLifecycleStatus.COMPLETED,
+                        }
+                    )
+                }
+            )
+            write_application_lifecycle(directory, state)
+            start_workbench_execution(
+                directory,
+                scope="agent",
+                target_id="agent_travel_planner",
+                page_id=None,
+                thread_id="thread-agent",
+                run_id="run-agent",
+                phase="inspect_workspace",
+            )
+            inputs = workflow_run_inputs(
+                {
+                    "request": "从 inspect_workspace 节点继续执行 workflow 调试。",
+                    "workspace": directory,
+                    "forwardedProps": {
+                        "resumeExecutionRunId": "run-agent",
+                        "selectedPageId": "currently-selected-page",
+                        "workflowDebug": {
+                            "enabled": True,
+                            "resumeFrom": "inspect_workspace",
+                        },
+                        "resumeState": {
+                            "runId": "run-agent",
+                            "state": {},
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "agent", "targetId": "agent_travel_planner"},
+        )
+        self.assertEqual(
+            inputs["resume_values"]["selected_agent_id"],
+            "agent_travel_planner",
+        )
+        self.assertNotIn("selectedPageId", inputs["resume_values"])
+
+    def test_debug_resume_pins_agent_scope_from_snapshot_without_lifecycle(self) -> None:
+        """没有 lifecycle 文件时，调试恢复仍应使用原快照 Agent 范围而不是当前页面。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "从 inspect_workspace 节点继续执行 workflow 调试。",
+                "forwardedProps": {
+                    "resumeExecutionRunId": "run-agent",
+                    "selectedPageId": "currently-selected-page",
+                    "workflowDebug": {
+                        "enabled": True,
+                        "resumeFrom": "inspect_workspace",
+                    },
+                    "resumeState": {
+                        "runId": "run-agent",
+                        "state": {
+                            "selectedAgentId": "agent_travel_planner",
+                            "buildExecutionScope": {
+                                "type": "agent",
+                                "targetId": "agent_travel_planner",
+                            },
+                        },
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "agent", "targetId": "agent_travel_planner"},
+        )
+        self.assertEqual(
+            inputs["resume_values"]["selected_agent_id"],
+            "agent_travel_planner",
+        )
+        self.assertNotIn("selectedPageId", inputs["resume_values"])
+
     def test_scope_mismatch_retry_recovers_without_gate_error_projection(self) -> None:
         """历史快照缺少 gate_errors 时也应根据计划范围不一致恢复 DAG 生成。"""
 
@@ -1937,6 +2041,112 @@ class WorkflowRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(node, "prepare_build_tasks")
+
+    def test_retry_missing_build_plan_returns_to_workspace_inspection(self) -> None:
+        """公开 summary 中的缺 DAG 门禁必须先扫描工作区，不能原地重复 Build。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "重试当前计划任务。",
+                "forwardedProps": {
+                    "workflowAction": "retry_failed_tasks",
+                    "resumeState": {
+                        "summary": {
+                            "status": "failed",
+                            "message": "Workflow failed：完成 2 个节点。",
+                            "buildSummary": {
+                                "status": "failed",
+                                "gate_errors": [
+                                    "工作区中不存在最新 build-task-plan.json，Build 已被阻止。"
+                                ],
+                            },
+                        },
+                        "events": [{"status": "failed", "nodeName": "build"}],
+                        "state": {
+                            "buildExecutionScope": {
+                                "type": "agent",
+                                "targetId": "weather_qa_agent",
+                            }
+                        },
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "inspect_workspace")
+        self.assertFalse(inputs["resume_values"]["retry_failed_tasks"])
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "agent", "targetId": "weather_qa_agent"},
+        )
+
+    def test_retry_plan_changed_starts_new_build_run(self) -> None:
+        """新确认 DAG 相对旧 Build Run 漂移时，必须清空绑定并按新计划启动 Build。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "重试当前计划任务。",
+                "forwardedProps": {
+                    "workflowAction": "retry_failed_tasks",
+                    "resumeState": {
+                        "summary": {
+                            "status": "failed",
+                            "message": (
+                                "已绑定 Build Run 的任务计划已变化；"
+                                "请以新的已确认计划重新启动 Build。"
+                            ),
+                            "buildSummary": {
+                                "status": "failed",
+                                "gate_errors": [
+                                    "已绑定 Build Run 的任务计划已变化；"
+                                    "请以新的已确认计划重新启动 Build。"
+                                ],
+                            },
+                        },
+                        "events": [{"status": "failed", "nodeName": "build"}],
+                        "state": {
+                            "buildExecutionScope": {
+                                "type": "agent",
+                                "targetId": "weather_qa_agent",
+                            }
+                        },
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(inputs["resume_from"], "build")
+        self.assertTrue(inputs["resume_values"]["retry_failed_tasks"])
+        self.assertEqual(inputs["resume_values"]["build_run_id"], "")
+        self.assertEqual(inputs["resume_values"]["build_run_plan_path"], "")
+        self.assertEqual(inputs["resume_values"]["build_run_plan_sha256"], "")
+        self.assertEqual(
+            inputs["resume_values"]["build_execution_scope"],
+            {"type": "agent", "targetId": "weather_qa_agent"},
+        )
+
+    def test_retry_missing_snapshot_revision_returns_to_workspace_inspection(self) -> None:
+        """GenerationRequirements 缺 snapshot revision 时必须回到工作区扫描。"""
+
+        node = _retry_failed_execution_node(
+            {
+                "summary": {
+                    "status": "failed",
+                    "message": (
+                        "GenerationRequirementsError: 模板能力证据缺少 workspace snapshot revision。"
+                    ),
+                },
+                "events": [{"status": "failed", "type": "workflow.run.failed"}],
+            },
+            {
+                "build_execution_scope": {
+                    "type": "agent",
+                    "targetId": "weather_qa_agent",
+                }
+            },
+        )
+
+        self.assertEqual(node, "inspect_workspace")
 
     def test_forwards_explicit_build_execution_scope(self) -> None:
         """AG-UI 请求应把页面/数据源范围作为 Workflow State 的结构化输入。"""
@@ -2116,6 +2326,42 @@ class WorkflowRequestTests(unittest.TestCase):
             inputs["resume_values"]["workspace_snapshot_summary"]["workspace_revision"],
             "rev-123",
         )
+
+    def test_preserves_camel_case_workspace_snapshot_refs_from_resume_state(self) -> None:
+        """前端 camelCase 工作区快照引用必须能恢复到 Graph State。"""
+
+        inputs = workflow_run_inputs(
+            {
+                "request": "从任务拆分继续",
+                "forwardedProps": {
+                    "resumeState": {
+                        "state": {
+                            "workspaceSnapshotSummary": {
+                                "workspace_revision": "rev-camel"
+                            },
+                            "workspaceSnapshotPath": "/tmp/camel-snapshot.json",
+                            "workspaceSnapshotHash": "hash-camel",
+                            "workspaceRevision": "rev-camel",
+                        }
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(
+            inputs["resume_values"]["workspace_snapshot_path"],
+            "/tmp/camel-snapshot.json",
+        )
+        self.assertEqual(inputs["resume_values"]["workspace_revision"], "rev-camel")
+
+    def test_missing_workspace_snapshot_is_inspected_from_workspace(self) -> None:
+        """Planning 恢复缺少快照时必须补扫工作区并生成 revision。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            Path(workspace, "README.md").write_text("weather qa", encoding="utf-8")
+            snapshot = _workspace_snapshot_from_state({"workspace": workspace})
+
+        self.assertTrue(str(snapshot.get("workspace_revision") or "").strip())
 
     def test_loads_workspace_snapshot_from_debug_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

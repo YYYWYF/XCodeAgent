@@ -75,11 +75,22 @@ class UnitRunState(FrozenPlanningModel):
     def validate_lifecycle(self) -> UnitRunState:
         """校验参与方式、模型预算及候选/在途身份与状态的一致性。"""
 
-        fixed = {"frontend:shell": "prerequisite_only", "application:root": "structural_only", "app:integration": "structural_only"}
+        fixed = {
+            "frontend:shell": "prerequisite_only",
+            "agent:runtime": "prerequisite_only",
+            "application:root": "structural_only",
+            "app:integration": "structural_only",
+        }
         if self.unit_id in fixed and (self.participation != fixed[self.unit_id] or self.generation_strategy != fixed[self.unit_id]):
             raise ValueError("shell/structural Unit 的参与方式和生成策略不可改变。")
         if self.unit_id == "frontend:auth-guard" and self.generation_strategy not in {"not_required", "deterministic", "reuse_only"}:
             raise ValueError("auth-guard 只能不参与、复用或产生 deterministic Candidate。")
+        if (
+            self.unit_id.startswith("agent:")
+            and self.unit_id != "agent:runtime"
+            and self.generation_strategy not in {"not_required", "deterministic", "reuse_only"}
+        ):
+            raise ValueError("业务 Agent Unit 只能不参与、复用或产生 deterministic Candidate。")
         generates = self.participation in GENERATING_PARTICIPATIONS
         if generates != (self.generation_strategy in {"model", "deterministic"}):
             raise ValueError("只有生成参与者可以使用 model/deterministic 策略。")

@@ -26,7 +26,11 @@ resolve_generation_requirements(
 
 - `required_unit_ids`：上游已解析的列表或元组；本层不扩展依赖闭包。
 - `build_execution_scope`：当前字段 `type`、`targetId`，Endpoint 还必须提供 `apiContractId`。
-  支持当前 resolver 的 application/page/endpoint；其他类型显式失败。
+  支持当前 resolver 的 application/page/endpoint/agent；其他类型显式失败。
+  Agent Scope 只投射 `required_unit_ids` 闭包内的页面实现契约和 Endpoint。
+  Java Gateway Endpoint 以 Agent Contract Invocation 与 TechnicalPlan API Contract
+  为权威，不要求 Endpoint API Design；物理来源集合为空。入口页面和 Tool REST
+  Endpoint 仍按各自 page/endpoint Scope 开发，不并入 Agent DAG。
 - `unit_skeleton`：现有 `ensure_build_unit_skeleton` 输出。required Unit 必须存在，key 与节点 id 必须一致。
 - `reuse_facts`：T2.2 ReuseFacts。存在 issues 时先失败，不返回部分 planning 结果。
 - `formal_target`：完整、confirmed 的 TechnicalPlan 运行时投影，不是页面 ID 或任意描述。
@@ -53,9 +57,10 @@ application Scope 使用全部正式页面实现契约和 Endpoint。
 | Unit/情况 | 策略 | 是否进入 planning |
 | --- | --- | --- |
 | `application:root`、`app:integration` | structural_only | 永不 |
-| `frontend:shell` | prerequisite_only | 永不 |
+| `frontend:shell`、`agent:runtime` | prerequisite_only | 永不 |
 | 有正式职责，且全部由精确 reuse 事实满足 | reuse_only | 否 |
 | `frontend:auth-guard` 有资源目录缺项 | deterministic | 是 |
+| `agent:<agentId>` 有模块缺项 | deterministic | 是 |
 | 其他支持的 Unit 有缺项 | model | 是 |
 | model Unit 在当前 Scope 没有适用职责 | model，空需求 | 否 |
 | 权限关闭，骨架仍包含 auth-guard | deterministic，空需求 | 否 |
@@ -80,6 +85,7 @@ shell 缺少 T2.2 提供的外部 `frontend.shell.ready` 平台证据时前置�
 | bootstrap 数据源能力 | `backend.bootstrap:database` / `backend.bootstrap:external_api` |
 | 后端实体职责 | `<deliverable_kind>:<api_contract_id>:<endpoint_id>:<entity_id>` |
 | 当前权限资源目录 | `frontend.auth.resources:<resource_catalog_fingerprint>` |
+| 业务 Agent 七模块 | `agent.<agentId>.<module>` |
 
 database Endpoint 涉及 domain_mapping、repository、application_service、endpoint_controller；
 external_api Endpoint 涉及 external_api_client、external_api_mapping、application_service、

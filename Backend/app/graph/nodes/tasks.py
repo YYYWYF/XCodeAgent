@@ -46,7 +46,11 @@ from app.workspace.task_documents import (
     build_task_plan_json_path,
     load_confirmed_build_task_plan,
 )
-from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
+from app.services.workspace_inspector import inspect_workspace as inspect_workspace_service
+from app.workspace.workspace_snapshot_documents import (
+    load_workspace_snapshot_json,
+    workspace_snapshot_cache_root,
+)
 
 
 def _latest_project_plan(
@@ -487,6 +491,16 @@ def _pending_build_task_plan_result(
     }
 
 
+def _fresh_build_run_binding() -> dict[str, str]:
+    """清空 checkpoint 中的旧 Build Run 绑定，让随后的 Build 入口创建新副本。"""
+
+    return {
+        "build_run_id": "",
+        "build_run_plan_path": "",
+        "build_run_plan_sha256": "",
+    }
+
+
 def _confirmed_build_task_plan_result(
     state: ProjectState,
     project_plan: dict[str, Any],
@@ -495,7 +509,7 @@ def _confirmed_build_task_plan_result(
     *,
     path: str | None = None,
 ) -> dict[str, Any]:
-    """返回已确认 DAG 的结果，让既有主图路由继续进入 Build。"""
+    """返回已确认 DAG 的结果，并新开 Build Run 进入调度。"""
 
     return {
         **_pending_build_task_plan_result(
@@ -504,6 +518,7 @@ def _confirmed_build_task_plan_result(
             build_task_plan,
             build_execution_scope,
         ),
+        **_fresh_build_run_binding(),
         "status": "completed",
         "build_task_plan_path": path or str(build_task_plan_json_path(state)),
         "build_task_plan_confirmation": {
@@ -517,13 +532,31 @@ def _confirmed_build_task_plan_result(
 
 
 def _workspace_snapshot_from_state(state: ProjectState) -> dict:
+    """读取已有工作区快照；恢复时若完全缺失则补扫，避免跳过 inspect_workspace。"""
+
     snapshot = state.get("workspace_snapshot")
     if isinstance(snapshot, dict) and snapshot:
         return snapshot
     snapshot_path = state.get("workspace_snapshot_path")
     if snapshot_path:
         return load_workspace_snapshot_json(snapshot_path)
-    return {}
+    return _inspect_workspace_snapshot_if_needed(state)
+
+
+def _inspect_workspace_snapshot_if_needed(state: ProjectState) -> dict:
+    """Planning 入口缺少快照证据时补扫工作区，生成 workspace_revision。"""
+
+    root = workspace_from_state(state)
+    if not str(root or "").strip():
+        return {}
+    try:
+        snapshot, _path, _cache_hit = inspect_workspace_service(
+            Path(root),
+            cache_root=workspace_snapshot_cache_root(state),
+        )
+    except (OSError, TypeError, ValueError):
+        return {}
+    return snapshot if isinstance(snapshot, dict) else {}
 
 
 def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
@@ -650,7 +683,11 @@ def _required_unit_closure(
     build_task_plan: dict[str, Any],
     root_unit_ids: list[str],
 ) -> list[str]:
-    """按 depends_on 反向收集 Agent、网关与入口页面的全部前置 Unit。"""
+    """按 depends_on 反向收集 Agent 与 Java Gateway 的前置 Unit。
+
+    入口页面和 Tool 绑定的 REST Endpoint 仍由各自的 page/endpoint 开发生成，
+    不能在 Agent Scope 里因为缺少 Endpoint API Design 而阻断网关与 Runtime。
+    """
 
     build_units = build_task_plan.get("build_units")
     build_units = build_units if isinstance(build_units, dict) else {}
@@ -666,10 +703,20 @@ def _required_unit_closure(
             prerequisites.setdefault(consumer, []).append(predecessor)
     ordered: list[str] = []
     visiting: set[str] = set()
+    gateway_unit_ids = {
+        str(unit_id)
+        for unit_id in root_unit_ids
+        if str(unit_id).startswith("backend:endpoint:")
+    }
 
     def visit(unit_id: str) -> None:
         """深度优先加入前置 Unit，并保持 Unit Graph 的稳定顺序。"""
 
+        if (
+            unit_id.startswith("backend:endpoint:")
+            and unit_id not in gateway_unit_ids
+        ):
+            return
         if unit_id in visiting:
             return
         if unit_id not in build_units:

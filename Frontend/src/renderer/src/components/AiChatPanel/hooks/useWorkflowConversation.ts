@@ -79,7 +79,10 @@ import {
   workflowInteractionAvailability
 } from '../planExecutionMode'
 import { maybeRefreshPendingPlanLifecycleAfterGeneration } from '../pendingPlanLifecycleRefresh'
-import { workflowDebugClarificationAnswers } from '../debugExecutionScope'
+import {
+  workflowDebugClarificationAnswers,
+  workflowResumeIdentityFields
+} from '../debugExecutionScope'
 
 type SessionRunEntry = {
   identity: SessionIdentity
@@ -430,7 +433,8 @@ function workflowFieldsFromBuildScope(scope?: WorkflowBuildExecutionScope): {
   selectedPageId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
-  detailTargetType?: 'page' | 'endpoint'
+  selectedAgentId?: string
+  detailTargetType?: 'page' | 'endpoint' | 'agent'
 } {
   if (!scope) return {}
   if (scope.type === 'page') {
@@ -438,6 +442,7 @@ function workflowFieldsFromBuildScope(scope?: WorkflowBuildExecutionScope): {
       selectedPageId: String(scope.targetId || '').trim(),
       selectedApiContractId: '',
       selectedEndpointId: '',
+      selectedAgentId: '',
       detailTargetType: 'page'
     }
   }
@@ -446,13 +451,24 @@ function workflowFieldsFromBuildScope(scope?: WorkflowBuildExecutionScope): {
       selectedPageId: '',
       selectedApiContractId: String(scope.apiContractId || '').trim(),
       selectedEndpointId: String(scope.targetId || '').trim(),
+      selectedAgentId: '',
       detailTargetType: 'endpoint'
+    }
+  }
+  if (scope.type === 'agent') {
+    return {
+      selectedPageId: '',
+      selectedApiContractId: '',
+      selectedEndpointId: '',
+      selectedAgentId: String(scope.targetId || '').trim(),
+      detailTargetType: 'agent'
     }
   }
   return {
     selectedPageId: '',
     selectedApiContractId: '',
-    selectedEndpointId: ''
+    selectedEndpointId: '',
+    selectedAgentId: ''
   }
 }
 
@@ -898,6 +914,7 @@ export function useWorkflowConversation({
       options?.selectedPageId !== undefined ||
       options?.selectedApiContractId !== undefined ||
       options?.selectedEndpointId !== undefined ||
+      options?.selectedAgentId !== undefined ||
       options?.detailTargetType === 'entity'
     const sessionTargetFields =
       explicitBuildExecutionScope || hasExplicitTargetSelection
@@ -936,6 +953,10 @@ export function useWorkflowConversation({
       options?.detailTargetType ||
       explicitScopeFields.detailTargetType ||
       sessionTargetFields.detailTargetType
+    const effectiveSelectedAgentId =
+      options?.selectedAgentId !== undefined
+        ? options.selectedAgentId
+        : explicitScopeFields.selectedAgentId ?? sessionTargetFields.selectedAgentId
     const effectiveBuildExecutionScope =
       explicitBuildExecutionScope || sessionTargetFields.buildExecutionScope
 
@@ -1130,7 +1151,7 @@ export function useWorkflowConversation({
         selectedApiContractId: effectiveSelectedApiContractId,
         selectedEndpointId: effectiveSelectedEndpointId,
         selectedEntityId: options?.selectedEntityId,
-        selectedAgentId: options?.selectedAgentId,
+        selectedAgentId: effectiveSelectedAgentId,
         detailTargetType: effectiveDetailTargetType,
         buildExecutionScope: effectiveBuildExecutionScope,
         workflowAction: options?.workflowAction,
@@ -2006,7 +2027,7 @@ export function useWorkflowConversation({
     await sendWorkflowMessage('重试当前计划任务。', {
       resumeState: retryWorkflow,
       resumeExecutionRunId: execution?.runId || retryWorkflow.runId,
-      selectedPageId: workflowSelectedPageId(retryWorkflow) || selectedPageId,
+      ...workflowResumeIdentityFields(retryWorkflow),
       titleFrom: '重试计划任务',
       ...(!isStopped ? { workflowAction: 'retry_failed_tasks' as const } : {})
     })
@@ -2024,8 +2045,7 @@ export function useWorkflowConversation({
     await sendWorkflowMessage('重试当前代码审查请求。', {
       resumeState: activeWorkflow,
       resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
-      selectedPageId: workflowSelectedPageId(activeWorkflow) || selectedPageId,
-      buildExecutionScope: activeWorkflow.summary.buildExecutionScope,
+      ...workflowResumeIdentityFields(activeWorkflow),
       titleFrom: '重试代码审查',
       workflowAction: 'retry_code_review'
     })
@@ -2054,7 +2074,7 @@ export function useWorkflowConversation({
       resumeState: source,
       // Mock 或旧会话可能没有 lifecycle projection，但 Workflow runId 仍是可校验的恢复令牌。
       resumeExecutionRunId: execution?.runId || source.runId,
-      selectedPageId: workflowSelectedPageId(source) || selectedPageId,
+      ...workflowResumeIdentityFields(source),
       titleFrom: '从指定节点继续执行',
       workflowDebug
     })

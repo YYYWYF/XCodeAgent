@@ -35,6 +35,8 @@
 
 启动失败会把融合后的 `status` 写入同一 JSON：`cleanup_failed` / `validation_failed` / `install_failed` / `start_failed` / `debug_state_failed`。`/health` 超时写入 `offline` 和 `health=ETIMEDOUT`，不是 `start_failed`。AG-UI 仍从这些 status 映射既有 `failedStage`（例如 `install_failed` → `agent_runtime_install`），Renderer 契约不变。
 
+工作台“启动 Runtime”按钮按工作区而不是按 Agent 详情页实例保存状态。切到其他页面再回来、或在同一应用的不同智能体之间切换，都读取同一份 `idle/starting/running/failed`。启动成功显示“重新启动 Runtime”。卸载后再次挂载时，会从工作区状态文件只读取 `status` 做恢复，不把 `debugToken` 留在按钮 store 里。
+
 ## 3. 模板模型配置 fallback
 
 模板仓库：`/Users/frank/agent-runtime-template`
@@ -260,6 +262,7 @@ XCodeAgent Backend：
 XCodeAgent Frontend：
 
 - `Frontend/src/renderer/src/service/agentRuntimeDebug.ts`
+- `Frontend/src/renderer/src/service/agentRuntimeDebugStore.ts`
 - `Frontend/src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/index.tsx`
 - `Frontend/src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail/AgentRuntimeDebugButton.less`
 
@@ -274,7 +277,8 @@ Agent Runtime Template：
 测试：
 
 - `Backend/tests/test_agent_runtime_project_launcher.py`
-- `Backend/tests/test_agent_runtime_debug_protocol.py``
+- `Backend/tests/test_agent_runtime_debug_protocol.py`
+- `Frontend/tests/agentTechnicalPlanView.test.ts`
 - 模板仓库 `tests/test_runtime.py`
 
 ## 10. 验证记录

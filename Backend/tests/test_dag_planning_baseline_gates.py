@@ -8,7 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from app.graph.nodes.tasks import (
-    _build_prerequisite_errors, _existing_build_task_plan, _resolve_build_context,
+    _build_prerequisite_errors, _confirmed_build_task_plan_result,
+    _existing_build_task_plan, _resolve_build_context,
 )
 from app.graph.subgraphs.build import (
     _bound_build_task_plan_for_build, _latest_build_task_plan_for_build,
@@ -188,3 +189,20 @@ class DagPlanningBaselineGateTests(unittest.TestCase):
             _, _, drift_errors = _bound_build_task_plan_for_build({**state, **binding})
             self.assertTrue(any("已变化" in error for error in drift_errors), drift_errors)
             self.assertEqual(snapshot_path.read_bytes(), snapshot_bytes)
+
+    def test_confirmed_plan_result_clears_stale_build_run_binding(self) -> None:
+        """新确认 DAG 必须清空旧 Build Run 绑定，避免沿用过期只读副本。"""
+
+        baseline = confirmed_baseline(project_plan(), execution_scope())
+        with tempfile.TemporaryDirectory() as workspace:
+            result = _confirmed_build_task_plan_result(
+                {"workspace": workspace, "build_run_id": "build-old"},
+                project_plan(),
+                baseline,
+                execution_scope(),
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["build_run_id"], "")
+        self.assertEqual(result["build_run_plan_path"], "")
+        self.assertEqual(result["build_run_plan_sha256"], "")

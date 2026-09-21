@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.nodes.development_readiness import development_readiness_gate
-from app.graph.nodes.tasks import _agent_generation_unit_ids
+from app.graph.nodes.tasks import _agent_generation_unit_ids, _required_unit_closure
 from app.services.agent_development_readiness import (
     _append_page_binding_blockers,
     inspect_agent_development_readiness,
@@ -312,6 +312,117 @@ class AgentDevelopmentReadinessTests(unittest.TestCase):
                 "support_agent",
             ),
             ["agent:runtime", "agent:support_agent"],
+        )
+
+    def test_agent_build_context_roots_exclude_pages_and_tool_endpoints(self) -> None:
+        """Agent DAG 只以 Runtime、业务 Agent 和 Java Gateway 为根，不并入入口页。"""
+
+        context = resolve_target_build_context(
+            {
+                "api_contracts": [
+                    {
+                        "id": "weather_api",
+                        "entity_ids": ["Weather"],
+                        "endpoints": [{"id": "weather_api.current"}],
+                    },
+                    {
+                        "id": "agent_gateway_api",
+                        "entity_ids": ["Weather"],
+                        "endpoints": [{"id": "agent_gateway_api.message"}],
+                    },
+                ],
+                "frontend_pages": [{"pageId": "page_weather_qa"}],
+                "pages": [{"pageId": "page_weather_qa", "path": "/weather"}],
+                "page_implementation_contracts": [
+                    {
+                        "schema_version": "page-implementation-contract.v1",
+                        "pageId": "page_weather_qa",
+                        "uiDesignRef": {"path": "", "sha256": ""},
+                        "requiredEndpointIds": ["agent_gateway_api.message"],
+                    }
+                ],
+                "agent_contracts": [
+                    {
+                        "agentId": "weather_qa_agent",
+                        "invocation": {
+                            "gatewayEndpointId": "agent_gateway_api.message"
+                        },
+                        "agentSettings": {"tools": {"bindings": [
+                            {
+                                "toolId": "get_weather",
+                                "endpoint": {
+                                    "apiContractId": "weather_api",
+                                    "endpointId": "weather_api.current",
+                                },
+                            }
+                        ]}},
+                    }
+                ],
+            },
+            target_type="agent",
+            target_id="weather_qa_agent",
+            product_plan={
+                "agents": [
+                    {
+                        "agentId": "weather_qa_agent",
+                        "entryPageIds": ["page_weather_qa"],
+                    }
+                ]
+            },
+            allow_deferred_agent_entities=True,
+        )
+
+        self.assertEqual(
+            context["required_unit_root_ids"],
+            [
+                "agent:weather_qa_agent",
+                "backend:endpoint:agent_gateway_api:agent_gateway_api.message",
+            ],
+        )
+        self.assertEqual(
+            _required_unit_closure(
+                {
+                    "build_units": {
+                        "agent:runtime": {},
+                        "agent:weather_qa_agent": {},
+                        "backend:bootstrap": {},
+                        "backend:endpoint:agent_gateway_api:agent_gateway_api.message": {},
+                        "backend:endpoint:weather_api:weather_api.current": {},
+                        "page:page_weather_qa": {},
+                    },
+                    "unit_graph": {
+                        "edges": [
+                            {
+                                "from": "agent:runtime",
+                                "to": "agent:weather_qa_agent",
+                                "type": "depends_on",
+                            },
+                            {
+                                "from": "backend:endpoint:weather_api:weather_api.current",
+                                "to": "agent:weather_qa_agent",
+                                "type": "depends_on",
+                            },
+                            {
+                                "from": "agent:weather_qa_agent",
+                                "to": "backend:endpoint:agent_gateway_api:agent_gateway_api.message",
+                                "type": "depends_on",
+                            },
+                            {
+                                "from": "backend:bootstrap",
+                                "to": "backend:endpoint:agent_gateway_api:agent_gateway_api.message",
+                                "type": "depends_on",
+                            },
+                        ]
+                    },
+                },
+                context["required_unit_root_ids"],
+            ),
+            [
+                "agent:runtime",
+                "agent:weather_qa_agent",
+                "backend:bootstrap",
+                "backend:endpoint:agent_gateway_api:agent_gateway_api.message",
+            ],
         )
 
 

@@ -1,6 +1,6 @@
 """从当前正式 TechnicalPlan、Endpoint API Design 和 Scope 提取职责目标。"""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import quote
 
@@ -36,15 +36,23 @@ def object_index(value: Any, key: str, label: str) -> dict[str, Mapping[str, Any
     return result
 
 
-def scoped_formal_targets(plan: dict, scope: Mapping) -> tuple[dict[str, dict], dict[tuple[str, str], dict]]:
-    """按 application/page/endpoint Scope 选择完整正式目标，拒绝模糊 Endpoint 归属。"""
+def scoped_formal_targets(
+    plan: dict,
+    scope: Mapping,
+    *,
+    required_unit_ids: Sequence[str] = (),
+) -> tuple[dict[str, dict], dict[tuple[str, str], dict]]:
+    """按当前 Scope 选择完整正式目标，Agent 只投射其 Unit 闭包内的页面和 Endpoint。"""
 
     if plan.get("confirmation_status") != "confirmed":
         fail_requirement_input("FORMAL_GENERATION_INPUT_UNCONFIRMED", "生成职责必须来自已确认的正式 TechnicalPlan。")
     scope_type = scope.get("type")
     target_id = exact_id(scope.get("targetId"), "BuildExecutionScope.targetId")
-    if scope_type not in {"application", "page", "endpoint"}:
-        fail_requirement_input("GENERATION_SCOPE_UNSUPPORTED", "当前生成职责仅支持 application/page/endpoint Scope。")
+    if scope_type not in {"application", "page", "endpoint", "agent"}:
+        fail_requirement_input(
+            "GENERATION_SCOPE_UNSUPPORTED",
+            "当前生成职责仅支持 application/page/endpoint/agent Scope。",
+        )
     pages = object_index(plan.get("page_implementation_contracts", []), "pageId", "PageImplementationContract")
     contracts = object_index(plan.get("api_contracts", []), "id", "API Contract")
     endpoints = {
@@ -56,6 +64,50 @@ def scoped_formal_targets(plan: dict, scope: Mapping) -> tuple[dict[str, dict], 
         if target_id != "application":
             fail_requirement_input("GENERATION_SCOPE_MISMATCH", "application Scope 的 targetId 必须为 application。")
         return pages, endpoints
+    if scope_type == "agent":
+        agents = object_index(plan.get("agent_contracts", []), "agentId", "Agent Contract")
+        if target_id not in agents:
+            fail_requirement_input(
+                "FORMAL_GENERATION_TARGET_MISSING",
+                f"正式目录缺少 Agent Contract {target_id}。",
+            )
+        required = {
+            exact_id(unit_id, "required_unit_ids")
+            for unit_id in required_unit_ids
+        }
+        selected_pages = {
+            page_id: page
+            for page_id, page in pages.items()
+            if f"page:{page_id}" in required
+        }
+        selected_endpoints = {
+            key: endpoint
+            for key, endpoint in endpoints.items()
+            if f"backend:endpoint:{key[0]}:{key[1]}" in required
+        }
+        missing_page_units = sorted(
+            unit_id
+            for unit_id in required
+            if unit_id.startswith("page:")
+            and unit_id.removeprefix("page:") not in selected_pages
+        )
+        missing_endpoint_units = sorted(
+            unit_id
+            for unit_id in required
+            if unit_id.startswith("backend:endpoint:")
+            and unit_id not in {
+                f"backend:endpoint:{key[0]}:{key[1]}"
+                for key in selected_endpoints
+            }
+        )
+        if missing_page_units or missing_endpoint_units:
+            fail_requirement_input(
+                "FORMAL_GENERATION_TARGET_MISSING",
+                "Agent Scope 的 required Unit 无法映射到正式页面或 Endpoint："
+                + "、".join([*missing_page_units, *missing_endpoint_units])
+                + "。",
+            )
+        return selected_pages, selected_endpoints
     if scope_type == "endpoint":
         key = (exact_id(scope.get("apiContractId"), "BuildExecutionScope.apiContractId"), target_id)
         if key not in endpoints:
@@ -79,11 +131,47 @@ def scoped_formal_targets(plan: dict, scope: Mapping) -> tuple[dict[str, dict], 
 ENDPOINT_PHYSICAL_SOURCE_TYPES = frozenset({"database", "external_api"})
 
 
+def agent_gateway_endpoint_keys(plan: Mapping[str, Any]) -> frozenset[tuple[str, str]]:
+    """从已确认 Agent Contract 读取 Java Gateway Endpoint 的复合身份。"""
+
+    agents = plan.get("agent_contracts")
+    if agents in (None, []):
+        return frozenset()
+    if not isinstance(agents, (list, tuple)):
+        fail_requirement_input("FORMAL_GENERATION_INPUT_INVALID", "Agent Contract 必须为数组。")
+    contracts = object_index(plan.get("api_contracts", []), "id", "API Contract")
+    by_endpoint_id: dict[str, list[tuple[str, str]]] = {}
+    for contract_id, contract in contracts.items():
+        for endpoint_id in object_index(contract.get("endpoints"), "id", "Endpoint"):
+            by_endpoint_id.setdefault(endpoint_id, []).append((contract_id, endpoint_id))
+    keys: set[tuple[str, str]] = set()
+    for agent in agents:
+        if not isinstance(agent, Mapping):
+            fail_requirement_input("FORMAL_GENERATION_INPUT_INVALID", "Agent Contract 项必须为对象。")
+        invocation = agent.get("invocation") if isinstance(agent.get("invocation"), Mapping) else {}
+        gateway_id = invocation.get("gatewayEndpointId")
+        if not isinstance(gateway_id, str) or not gateway_id or gateway_id != gateway_id.strip():
+            continue
+        matches = by_endpoint_id.get(gateway_id, [])
+        if len(matches) != 1:
+            fail_requirement_input(
+                "FORMAL_GENERATION_ENDPOINT_AMBIGUOUS",
+                f"Agent Gateway Endpoint {gateway_id} 缺失或无法唯一确定 API Contract。",
+            )
+        keys.add(matches[0])
+    return frozenset(keys)
+
+
 def endpoint_source_types(
     endpoint_designs: Any,
     endpoints: Mapping,
+    *,
+    gateway_keys: frozenset[tuple[str, str]] = frozenset(),
 ) -> dict[tuple[str, str], frozenset[str]]:
-    """从完整 Endpoint API Design 的 fieldMappings 派生每个 Endpoint 的物理来源集合。"""
+    """从完整 Endpoint API Design 的 fieldMappings 派生每个 Endpoint 的物理来源集合。
+
+    Agent Java Gateway 以 TechnicalPlan Invocation/API Contract 为权威，不要求字段映射。
+    """
 
     designs: dict[tuple[str, str], Mapping[str, Any]] = {}
     if not isinstance(endpoint_designs, (list, tuple)):
@@ -107,10 +195,14 @@ def endpoint_source_types(
             )
         designs[key] = design
 
+    allowed_gateways = gateway_keys
     result: dict[tuple[str, str], frozenset[str]] = {}
     for key in sorted(endpoints):
         design = designs.get(key)
         if design is None:
+            if key in allowed_gateways:
+                result[key] = frozenset()
+                continue
             fail_requirement_input(
                 "GENERATION_ENDPOINT_API_DESIGN_MISSING",
                 f"Endpoint {key[0]}/{key[1]} 缺少当前 Endpoint API Design。",

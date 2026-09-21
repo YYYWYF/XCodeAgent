@@ -386,7 +386,6 @@ def _agent_context(
         "required_unit_root_ids": [
             f"agent:{agent_id}",
             _endpoint_unit_id(gateway_contract_id, gateway_id),
-            *(f"page:{page_id}" for page_id in entry_page_ids),
         ],
         "required_unit_ids": [],
         "source_refs": {

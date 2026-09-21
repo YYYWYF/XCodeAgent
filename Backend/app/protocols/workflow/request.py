@@ -474,7 +474,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             thread_id=request_thread_id,
         )
         request = validated_continuation.request
-        resume_from = "api_design_readiness_gate"
         resume_values_from_state = {}
         development_continuation_id = validated_continuation.id
         development_continuation_source_run_id = validated_continuation.source_run_id
@@ -486,6 +485,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             selected_entity_id = ""
             selected_agent_id = ""
             detail_target_type = "page"
+            resume_from = "api_design_readiness_gate"
         elif target.type == "endpoint":
             selectedPageId = ""
             selected_api_contract_id = str(target.api_contract_id or "")
@@ -493,6 +493,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             selected_entity_id = ""
             selected_agent_id = ""
             detail_target_type = "endpoint"
+            resume_from = "api_design_readiness_gate"
         else:
             selectedPageId = ""
             selected_api_contract_id = ""
@@ -500,6 +501,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             selected_entity_id = ""
             selected_agent_id = str(target.agent_id or "")
             detail_target_type = "agent"
+            # Agent 开发不经过页面/API 字段映射门禁；续接必须回到专用就绪检查。
+            resume_from = "development_readiness_gate"
     continuation_change_id = ""
     revision_continuation_replaces_run_id = ""
     revision_build_target_type = ""
@@ -620,6 +623,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
                 resume_values_from_state,
             ),
         }
+        if _requires_new_build_run(
+            _retry_error_texts_from(resume_state, resume_values_from_state)
+        ):
+            # 新确认 DAG 不能继续旧 Build Run 的只读副本；空字符串覆盖 checkpoint 绑定。
+            resume_values_from_state.update(_fresh_build_run_binding())
     editor_mode = _supported_editor_mode(
         _optional_text(payload.get("editor_mode"))
         or _optional_text(payload.get("editorMode"))
@@ -663,14 +671,31 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             selected_agent_id=selected_agent_id,
             project_plan=project_plan_start_values.get("project_plan"),
         )
+    resume_execution_run_id = (
+        development_continuation_source_run_id
+        or _optional_text(payload.get("resumeExecutionRunId"))
+        or _optional_text(payload.get("resume_execution_run_id"))
+        or _optional_text(forwarded_props.get("resumeExecutionRunId"))
+        or _optional_text(forwarded_props.get("resume_execution_run_id"))
+    )
+    # 带 resumeExecutionRunId 的恢复必须沿用原工作台执行目标；调试面板当前
+    # 选中的页面不得把 Agent/Endpoint 执行改写成 page/application。
+    pin_registered_scope = workflow_action == "retry_failed_tasks" or (
+        bool(resume_execution_run_id)
+        and not revision_build_target_type
+        and workflow_action != "continue_after_entity_binding"
+    )
     retry_scope = (
-        _optional_dict(resume_values_from_state.get("build_execution_scope"))
-        if workflow_action == "retry_failed_tasks"
+        (
+            _execution_scope_from_lifecycle(workspace, resume_execution_run_id)
+            or _optional_dict(resume_values_from_state.get("build_execution_scope"))
+        )
+        if pin_registered_scope
         else None
     )
     if retry_scope:
-        # 失败 execution 只能在自己已登记的范围上恢复；公开快照中的
-        # scope 会在 lifecycle 层与 resumeExecutionRunId 复验，当前 UI 选择不得改写它。
+        # 原工作台 execution 只能在自己已登记的范围上恢复；公开快照或
+        # 当前大纲选择不得改写它，lifecycle 仍会与 resumeExecutionRunId 复验。
         build_execution_scope = _build_execution_scope(
             {},
             forwarded_props={},
@@ -742,13 +767,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         )
         if workflow_scope not in APPLICATION_PLANNING_SCOPES
         else []
-    )
-    resume_execution_run_id = (
-        development_continuation_source_run_id
-        or _optional_text(payload.get("resumeExecutionRunId"))
-        or _optional_text(payload.get("resume_execution_run_id"))
-        or _optional_text(forwarded_props.get("resumeExecutionRunId"))
-        or _optional_text(forwarded_props.get("resume_execution_run_id"))
     )
     if workflow_action == "retry_code_review" and not resume_execution_run_id:
         raise ValueError("retry_code_review 必须携带失败执行的 resumeExecutionRunId。")
@@ -955,6 +973,38 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             or _optional_text(payload.get("runId"))
         ),
     }
+
+
+def _execution_scope_from_lifecycle(
+    workspace: str | None,
+    run_id: str,
+) -> dict[str, str] | None:
+    """从已登记的工作台执行读取不可改写的恢复范围。"""
+
+    if not workspace or not run_id:
+        return None
+    lifecycle = load_application_lifecycle(workspace)
+    if lifecycle is None:
+        return None
+    execution = lifecycle.active_executions.get(run_id)
+    if execution is None:
+        return None
+    scope_type = str(execution.scope)
+    target_id = str(execution.target_id or "").strip()
+    if scope_type == "application":
+        return {"type": "application", "targetId": "application"}
+    if not target_id:
+        return None
+    scope: dict[str, str] = {"type": scope_type, "targetId": target_id}
+    development_target = execution.development_target
+    api_contract_id = (
+        str(getattr(development_target, "api_contract_id", "") or "").strip()
+        if development_target is not None
+        else ""
+    )
+    if scope_type == "endpoint" and api_contract_id:
+        scope["apiContractId"] = api_contract_id
+    return scope
 
 
 def _build_execution_scope(
@@ -1420,6 +1470,103 @@ def _resume_from_state(
     return ""
 
 
+_PLAN_REGENERATION_MARKERS = (
+    "build-task-plan.json",
+    "workspace snapshot revision",
+    "模板能力证据缺少",
+    "GenerationRequirementsError",
+)
+_NEW_BUILD_RUN_MARKERS = (
+    "任务计划已变化",
+    "请以新的已确认计划重新启动 Build",
+)
+
+
+def _retry_error_texts(
+    resume_state: dict[str, Any] | None,
+    gate_errors: list[Any],
+) -> list[str]:
+    """收集重试快照中的门禁和失败原因，用于判断是否必须重新扫描并生成 DAG。"""
+
+    texts = [str(error).strip() for error in gate_errors if str(error).strip()]
+    if not isinstance(resume_state, dict):
+        return texts
+    for source in (
+        resume_state,
+        _optional_dict(resume_state.get("summary")),
+        _optional_dict(resume_state.get("result")),
+        _optional_dict(resume_state.get("state")),
+    ):
+        if not source:
+            continue
+        for key in ("message", "error"):
+            text = str(source.get(key) or "").strip()
+            if text:
+                texts.append(text)
+        clarification = _optional_dict(source.get("clarification"))
+        if clarification:
+            message = str(clarification.get("message") or "").strip()
+            if message:
+                texts.append(message)
+            errors = clarification.get("errors")
+            if isinstance(errors, list):
+                texts.extend(
+                    str(item).strip() for item in errors if str(item).strip()
+                )
+    events = resume_state.get("events")
+    if isinstance(events, list):
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            for key in ("message", "error"):
+                text = str(event.get(key) or "").strip()
+                if text:
+                    texts.append(text)
+    return [text for text in texts if text]
+
+
+def _requires_plan_regeneration(texts: list[str]) -> bool:
+    """缺少 Formal DAG 或工作区快照时，不能原地重复进入 Build。"""
+
+    blob = "\n".join(texts)
+    return any(marker in blob for marker in _PLAN_REGENERATION_MARKERS)
+
+
+def _requires_new_build_run(texts: list[str]) -> bool:
+    """已确认 DAG 相对旧 Build Run 漂移时，应按新计划新开 Build，而不是重新生成 DAG。"""
+
+    blob = "\n".join(texts)
+    return any(marker in blob for marker in _NEW_BUILD_RUN_MARKERS)
+
+
+def _fresh_build_run_binding() -> dict[str, str]:
+    """用空字符串覆盖 checkpoint 中的旧 Build Run 绑定。"""
+
+    return {
+        "build_run_id": "",
+        "build_run_plan_path": "",
+        "build_run_plan_sha256": "",
+    }
+
+
+def _retry_error_texts_from(
+    resume_state: dict[str, Any] | None,
+    resume_values: dict[str, Any],
+) -> list[str]:
+    """从重试快照和 Build 摘要中收集失败文本。"""
+
+    build_summary = resume_values.get("build_summary")
+    gate_errors = (
+        build_summary.get("gate_errors")
+        if isinstance(build_summary, dict)
+        else []
+    )
+    return _retry_error_texts(
+        resume_state,
+        gate_errors if isinstance(gate_errors, list) else [],
+    )
+
+
 def _retry_failed_execution_node(
     resume_state: dict[str, Any] | None,
     resume_values: dict[str, Any],
@@ -1442,12 +1589,17 @@ def _retry_failed_execution_node(
     ):
         return "prepare_build_tasks"
 
+    error_texts = _retry_error_texts_from(resume_state, resume_values)
     build_summary = resume_values.get("build_summary")
     gate_errors = (
         build_summary.get("gate_errors")
         if isinstance(build_summary, dict)
         else []
     )
+    if _requires_plan_regeneration(error_texts):
+        return "inspect_workspace"
+    if _requires_new_build_run(error_texts):
+        return "build"
     if isinstance(gate_errors, list) and any(str(error).strip() for error in gate_errors):
         return "prepare_build_tasks"
 
@@ -1524,7 +1676,9 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
 
     state = _optional_dict(value.get("state")) or {}
     result = _optional_dict(value.get("result")) or {}
-    merged = {**state, **result}
+    summary = _optional_dict(value.get("summary")) or {}
+    # 公开投影把 buildSummary 放在 summary；重试必须读到 gate_errors，不能只看 state/result。
+    merged = {**summary, **state, **result}
     allowed_keys = {
         "product_plan",
         "product_plan_path",
@@ -1671,6 +1825,10 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "test_report_path": "testReportPath",
         "build_results": "buildResults",
         "build_summary": "buildSummary",
+        "workspace_snapshot_summary": "workspaceSnapshotSummary",
+        "workspace_snapshot_path": "workspaceSnapshotPath",
+        "workspace_snapshot_hash": "workspaceSnapshotHash",
+        "workspace_revision": "workspaceRevision",
         "code_changes": "codeChanges",
         "repair_task_plan": "repairTaskPlan",
         "repair_tasks": "repairTasks",
@@ -1948,13 +2106,7 @@ def _debug_resume_values(
             values["tasks"] = tasks_from_build_task_plan(build_task_plan)
             # 显式 Build 调试属于新的 Build Run：清空 checkpoint 中的旧绑定，
             # 但继续使用权威 DAG 的任务终态，任何已完成任务都不再派发。
-            values.update(
-                {
-                    "build_run_id": "",
-                    "build_run_plan_path": "",
-                    "build_run_plan_sha256": "",
-                }
-            )
+            values.update(_fresh_build_run_binding())
 
     workspace_snapshot_path = _resolve_debug_workspace_snapshot_path(
         debug_state,

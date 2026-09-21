@@ -156,7 +156,11 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         """为当前 Unit 构造 Frozen Store catalog，绝不内联合同或读取 Candidate。"""
 
         plan = plain_json(self.project_plan)
-        pages, endpoints = scoped_formal_targets(plan, self.build_execution_scope)
+        pages, endpoints = scoped_formal_targets(
+            plan,
+            self.build_execution_scope,
+            required_unit_ids=run.required_unit_ids,
+        )
         duties = requirements.generation_requirements_by_unit[unit_id]
         selected_pages = [page for key, page in pages.items() if unit_id == f"page:{key}"]
         endpoint_keys = {(duty.source_refs.get("api_contract_id"), duty.source_refs.get("endpoint_id"))
@@ -276,6 +280,7 @@ def assemble_mainline_planning_inputs(
     _, endpoints = scoped_formal_targets(
         plain_json(provisional.project_plan),
         provisional.build_execution_scope,
+        required_unit_ids=provisional.build_context.get("required_unit_ids", ()),
     )
     formal_source_refs = tuple(
         source_ref

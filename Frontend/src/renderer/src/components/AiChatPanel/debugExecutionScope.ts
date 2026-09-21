@@ -9,7 +9,8 @@ const BUILD_SCOPE_TYPES = new Set<WorkflowBuildExecutionScope['type']>([
   'application',
   'page',
   'data_source',
-  'endpoint'
+  'endpoint',
+  'agent'
 ])
 
 /** 从 Workflow 状态中的未知值读取合法构建范围。 */
@@ -66,6 +67,55 @@ export function workflowDebugBuildScope(
         targetId: execution.targetId,
         ...(execution.scope === 'endpoint' && apiContractId ? { apiContractId } : {})
       }
+}
+
+/** 调试或重试恢复必须继承原工作台执行目标，不能把当前大纲选中的页面写进 Agent 执行。 */
+export function workflowResumeIdentityFields(workflow?: WorkflowRunPayload): {
+  selectedPageId: string
+  selectedApiContractId: string
+  selectedEndpointId: string
+  selectedAgentId: string
+  detailTargetType?: 'page' | 'endpoint' | 'agent'
+  buildExecutionScope: WorkflowBuildExecutionScope
+} {
+  const scope = workflowDebugBuildScope(workflow)
+  if (scope.type === 'page') {
+    return {
+      selectedPageId: String(scope.targetId || '').trim(),
+      selectedApiContractId: '',
+      selectedEndpointId: '',
+      selectedAgentId: '',
+      detailTargetType: 'page',
+      buildExecutionScope: scope
+    }
+  }
+  if (scope.type === 'endpoint') {
+    return {
+      selectedPageId: '',
+      selectedApiContractId: String(scope.apiContractId || '').trim(),
+      selectedEndpointId: String(scope.targetId || '').trim(),
+      selectedAgentId: '',
+      detailTargetType: 'endpoint',
+      buildExecutionScope: scope
+    }
+  }
+  if (scope.type === 'agent') {
+    return {
+      selectedPageId: '',
+      selectedApiContractId: '',
+      selectedEndpointId: '',
+      selectedAgentId: String(scope.targetId || '').trim(),
+      detailTargetType: 'agent',
+      buildExecutionScope: scope
+    }
+  }
+  return {
+    selectedPageId: '',
+    selectedApiContractId: '',
+    selectedEndpointId: '',
+    selectedAgentId: '',
+    buildExecutionScope: scope
+  }
 }
 
 /** 为必须由结构化动作驱动的调试恢复节点补齐正式确认，避免把提示文本误当作节点输入。 */

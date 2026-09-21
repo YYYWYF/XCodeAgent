@@ -6,7 +6,7 @@ import unittest
 from pydantic import ValidationError
 
 from app.services.build_task_reuse import resolve_reuse_facts
-from app.services.build_task_reuse_contracts import ExternalCapability, ReuseFacts
+from app.services.build_task_reuse_contracts import ExternalCapability, ReuseFacts, ReuseFacts
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.planning_frozen import freeze_json
 from app.services.unit_generation_requirements import (
@@ -103,6 +103,142 @@ def _inputs(*tasks: dict, source_type: str = "database", formal_plan: dict | Non
 
 
 class UnitGenerationRequirementsTests(unittest.TestCase):
+    def test_agent_scope_uses_prerequisite_and_deterministic_units(self) -> None:
+        """Agent Scope 必须跳过 runtime 模型任务并确定性规划七个业务模块。"""
+
+        plan = {
+            "confirmation_status": "confirmed",
+            "page_implementation_contracts": [],
+            "api_contracts": [],
+            "agent_contracts": [{"agentId": "support_agent"}],
+        }
+        skeleton = ensure_build_unit_skeleton(plan, {})
+        result = resolve_generation_requirements(
+            required_unit_ids=["agent:runtime", "agent:support_agent"],
+            build_execution_scope={
+                "type": "agent",
+                "targetId": "support_agent",
+            },
+            unit_skeleton=skeleton,
+            reuse_facts=ReuseFacts(
+                retained_task_ids_by_unit={},
+                reusable_capabilities_by_unit={},
+                retained_endpoint_owners=[],
+                external_capabilities=[],
+                issues=[],
+            ),
+            formal_target=plan,
+        )
+
+        self.assertEqual(
+            result.generation_strategy_by_unit["agent:runtime"],
+            "prerequisite_only",
+        )
+        self.assertEqual(
+            result.generation_strategy_by_unit["agent:support_agent"],
+            "deterministic",
+        )
+        self.assertEqual(
+            [
+                requirement.requirement_id
+                for requirement in result.generation_requirements_by_unit[
+                    "agent:support_agent"
+                ]
+            ],
+            [
+                f"agent.support_agent.{module_name}"
+                for module_name in (
+                    "context",
+                    "knowledge",
+                    "memory",
+                    "model",
+                    "prompt",
+                    "skills",
+                    "tools",
+                )
+            ],
+        )
+        self.assertEqual(result.planning_unit_ids, ("agent:support_agent",))
+
+    def test_agent_gateway_does_not_require_endpoint_api_design(self) -> None:
+        """Agent Java Gateway 以 TechnicalPlan 为权威，缺少字段映射也不能阻断职责计算。"""
+
+        plan = {
+            "confirmation_status": "confirmed",
+            "page_implementation_contracts": [],
+            "api_contracts": [
+                {
+                    "id": "weather_api",
+                    "entity_ids": ["Weather"],
+                    "endpoints": [{"id": "weather_api.current", "method": "GET"}],
+                },
+                {
+                    "id": "agent_gateway_api",
+                    "entity_ids": ["Weather"],
+                    "endpoints": [{"id": "agent_gateway_api.message", "method": "POST"}],
+                },
+            ],
+            "agent_contracts": [
+                {
+                    "agentId": "weather_qa_agent",
+                    "invocation": {"gatewayEndpointId": "agent_gateway_api.message"},
+                    "agentSettings": {
+                        "tools": {
+                            "bindings": [
+                                {
+                                    "toolId": "get_weather",
+                                    "endpoint": {
+                                        "apiContractId": "weather_api",
+                                        "endpointId": "weather_api.current",
+                                    },
+                                }
+                            ]
+                        }
+                    },
+                }
+            ],
+        }
+        skeleton = ensure_build_unit_skeleton(plan, {})
+        result = resolve_generation_requirements(
+            required_unit_ids=[
+                "agent:runtime",
+                "agent:weather_qa_agent",
+                "backend:bootstrap",
+                "backend:endpoint:agent_gateway_api:agent_gateway_api.message",
+            ],
+            build_execution_scope={
+                "type": "agent",
+                "targetId": "weather_qa_agent",
+            },
+            unit_skeleton=skeleton,
+            reuse_facts=ReuseFacts(
+                retained_task_ids_by_unit={},
+                reusable_capabilities_by_unit={},
+                retained_endpoint_owners=[],
+                external_capabilities=[],
+                issues=[],
+            ),
+            formal_target=plan,
+            endpoint_designs=[],
+        )
+
+        gateway_duties = result.generation_requirements_by_unit[
+            "backend:endpoint:agent_gateway_api:agent_gateway_api.message"
+        ]
+        self.assertEqual(
+            {item.requirement_id for item in gateway_duties},
+            {
+                "backend.endpoint.objects:agent_gateway_api:agent_gateway_api.message",
+                "backend.application_service:agent_gateway_api:agent_gateway_api.message",
+                "backend.endpoint_controller:agent_gateway_api:agent_gateway_api.message",
+            },
+        )
+        self.assertNotIn(
+            "backend:endpoint:weather_api:weather_api.current",
+            result.generation_requirements_by_unit,
+        )
+        self.assertEqual(result.generation_strategy_by_unit["backend:bootstrap"], "not_required")
+
     def test_first_time_page_computes_scoped_responsibilities(self) -> None:
         """首次页面只规划本 Scope 的缺项，保留 required 与 planning 的区别。"""
 
