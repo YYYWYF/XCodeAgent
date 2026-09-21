@@ -68,19 +68,24 @@ ConfirmService = Callable[..., ConfirmPromotionResult]
 RegenerateService = Callable[..., Awaitable[RegeneratePendingResult]]
 
 
-def production_unit_generation_policy() -> UnitGenerationPolicy:
+def production_unit_generation_policy(
+    *, settings: Settings | None = None,
+) -> UnitGenerationPolicy:
     """返回 production Workflow 使用的 Unit 生成策略。
 
-    Local=3、SDK max_retries=2，token budget 保持 4096；这里的超时、turn 与
-    Frozen Contract 读取预算也是 cutover 的显式生产取值，不再依赖测试常量。
+    Local=3、SDK max_retries=2，token budget 从 DAG 专属 Settings 读取；未提供
+    Settings 时保留 4096 的直接调用默认值。这里的超时、turn 与 Frozen Contract
+    读取预算也是 cutover 的显式生产取值，不再依赖测试常量。
     Production DAG Unit generation enables SDK max_retries=2. This relies on the
     model SDK's supported retry behavior for transient request/infrastructure failures.
     It does not provide stream resume or custom reconnect semantics after a streaming
     response has already begun.
     """
 
+    model_max_tokens = settings.dag_unit_max_tokens if settings is not None else 4096
     return UnitGenerationPolicy(
         model_max_retries=2,
+        model_max_tokens=model_max_tokens,
         request_timeout=120.0,
         unit_session_timeout=600.0,
         model_turn_limit=8,
@@ -103,9 +108,16 @@ def create_async_workflow_planning_adapter(
 ) -> Callable[[ProjectState], Awaitable[dict[str, Any]]]:
     """创建 production Graph 节点：生成、确认和重新生成各走唯一业务 authority。"""
 
-    frozen_policy = UnitGenerationPolicy.model_validate(
-        policy or production_unit_generation_policy()
-    )
+    active_settings = settings
+    if policy is None:
+        # 默认 production policy 必须绑定当前环境配置，避免 DAG token budget
+        # 只停留在 Settings 而没有进入实际 UnitAttemptJob。
+        active_settings = active_settings or Settings.from_env()
+        frozen_policy = UnitGenerationPolicy.model_validate(
+            production_unit_generation_policy(settings=active_settings)
+        )
+    else:
+        frozen_policy = UnitGenerationPolicy.model_validate(policy)
 
     async def async_workflow_planning_adapter(state: ProjectState) -> dict[str, Any]:
         """解析 Workflow state，按本轮动作分派 generation、Confirm 或 Regenerate。"""
@@ -113,7 +125,7 @@ def create_async_workflow_planning_adapter(
         return await _run_async_workflow_planning_adapter(
             state,
             policy=frozen_policy,
-            settings=settings,
+            settings=active_settings,
             generate_once=generate_once,
             planning_service=planning_service,
             confirm_service=confirm_service,

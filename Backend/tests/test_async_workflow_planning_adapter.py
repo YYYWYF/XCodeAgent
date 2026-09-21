@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from langgraph.checkpoint.memory import InMemorySaver
 
+from app.config import Settings
 from app.graph.nodes.task_planning_adapter import (
     create_async_workflow_planning_adapter,
     production_unit_generation_policy,
@@ -88,6 +89,38 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             "max_total_bytes": 2_000_000,
             "max_bytes_per_read": 200_000,
         })
+
+    def test_production_policy_binds_configured_unit_token_budget(self) -> None:
+        """production policy 必须把 DAG Settings 的 token budget 绑定到 Unit Policy。"""
+
+        settings = Settings(
+            model_base_url="https://example.com/v1",
+            model_api_key="test-key",
+            model_name="test-model",
+            dag_unit_max_tokens=8192,
+        )
+
+        policy = production_unit_generation_policy(settings=settings)
+
+        self.assertEqual(policy.model_max_tokens, 8192)
+
+    def test_default_adapter_passes_settings_to_production_policy(self) -> None:
+        """默认 Adapter 必须用传入 Settings 创建 production policy，而不是丢弃配置。"""
+
+        settings = Settings(
+            model_base_url="https://example.com/v1",
+            model_api_key="test-key",
+            model_name="test-model",
+            dag_unit_max_tokens=8192,
+        )
+
+        with patch(
+            "app.graph.nodes.task_planning_adapter.production_unit_generation_policy",
+            wraps=production_unit_generation_policy,
+        ) as policy_factory:
+            create_async_workflow_planning_adapter(settings=settings)
+
+        policy_factory.assert_called_once_with(settings=settings)
 
     def _state(self, scope: dict[str, str]) -> dict:
         """构造与 Workflow runtime 一致的 generation 分支输入。"""

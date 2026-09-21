@@ -2923,6 +2923,30 @@ export default function AiChatPanel({
     applicationMutationReadonly ||
     planningRunLockedByOtherSession ||
     pendingPlanOwnedByOtherSession
+  console.debug('[DAG ownership]', {
+    state: applicationOwnership.state,
+    readonly: applicationMutationReadonly,
+    owner: applicationOwnership.owner,
+    activeSession: {
+      sessionId: activeSession?.sessionId,
+      threadId: activeSession?.threadId
+    },
+    phaseExecution: {
+      sessionId: phaseExecution?.identity.sessionId,
+      threadId: phaseExecution?.identity.threadId,
+      phase: phaseExecution?.phase,
+      status: phaseExecution?.status
+    },
+    lifecyclePrepare: Object.values(applicationLifecycle?.activeExecutions || {})
+      .filter((item) => item.phase === 'prepare_build_tasks')
+      .map((item) => ({
+        runId: item.runId,
+        threadId: item.threadId,
+        status: item.status
+      })),
+    pendingRefresh: applicationLifecycle?.extensions?.planningRefresh,
+    otherSessionExecutionLocked
+  })
   const phaseSessionRunActive =
     Boolean(phaseExecution) ||
     planningSessionRunActive ||
