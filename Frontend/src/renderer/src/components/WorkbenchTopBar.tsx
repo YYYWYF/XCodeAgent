@@ -7,7 +7,7 @@ import VersionActions from './VersionActions'
 import { useWorkbenchPhase } from '../context'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
-import { testEntryGateReason } from '../developmentArtifacts'
+import { developmentArtifactTotals, testEntryGateReason } from '../developmentArtifacts'
 import { WORKBENCH_PHASE_ORDER as PHASE_ORDER } from '../workbenchPhaseNavigation'
 import {
   markApplicationEnteredDevelopment,
@@ -67,6 +67,9 @@ export default function WorkbenchTopBar({
   } = useWorkbenchPhase()
   const following = manualOverride === null
   const previousPhaseRef = useRef<WorkbenchPhase | null>(null)
+  const developmentTotals = lifecycle?.developmentArtifacts
+    ? developmentArtifactTotals(lifecycle.developmentArtifacts)
+    : testEntryGate
 
   // 进入开发阶段时提醒用户通过服务状态抽屉手动启动前后端预览服务。
   useEffect(() => {
@@ -168,9 +171,9 @@ export default function WorkbenchTopBar({
                 >
                   <span className={cx('workbench-topbar-phase-dot')} aria-hidden="true" />
                   {WORKBENCH_PHASE_AGENTS[phaseKey].label}阶段
-                  {phaseKey === 'development' && testEntryGate ? (
+                  {phaseKey === 'development' && developmentTotals ? (
                     <span>
-                      {testEntryGate.completed}/{testEntryGate.total}
+                      {developmentTotals.completed}/{developmentTotals.total}
                     </span>
                   ) : null}
                 </button>

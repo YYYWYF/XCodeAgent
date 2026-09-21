@@ -1,4 +1,4 @@
-import type { DevelopmentArtifactProgress, TestEntryGate } from './typings'
+import type { DevelopmentArtifactProgress, DevelopmentArtifacts, TestEntryGate } from './typings'
 import type { WorkbenchPhase } from './workbenchPhase'
 
 /** 根据权威门禁约束测试视图，覆盖手动选择、冷启动恢复与自动阶段推导。 */
@@ -30,4 +30,17 @@ export function developmentCompletedCount(
   records: (DevelopmentArtifactProgress | undefined)[]
 ): number {
   return records.filter((record) => record?.initialDevelopmentStatus === 'completed').length
+}
+
+/** 统计完整开发产物目录；顶部进度不受本轮测试门禁的构建范围裁剪影响。 */
+export function developmentArtifactTotals(artifacts: DevelopmentArtifacts): {
+  completed: number
+  total: number
+} {
+  const records = [
+    ...Object.values(artifacts.pages),
+    ...Object.values(artifacts.entities),
+    ...Object.values(artifacts.endpoints).flatMap((endpoints) => Object.values(endpoints))
+  ]
+  return { completed: developmentCompletedCount(records), total: records.length }
 }

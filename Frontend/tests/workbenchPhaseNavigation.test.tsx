@@ -128,6 +128,41 @@ function assertPhaseActive(html: string, label: string): void {
   assert.ok(active[0].includes(`${label}阶段`), `高亮阶段应为${label}`)
 }
 
+test('顶部开发进度统计完整产物目录，测试门禁仍按本轮范围判断', () =>
+  withStorage(() => {
+    const lifecycle: ApplicationLifecycle = {
+      application: { id: 'three-artifacts', name: 'three-artifacts' },
+      updatedAt: '',
+      revision: 1,
+      initialization: { stage: 'ready_for_workbench', status: 'completed' },
+      activeExecutions: {},
+      testEntryGate: allowed,
+      developmentArtifacts: {
+        pages: { home: { initialDevelopmentStatus: 'completed' } },
+        endpoints: { age: { save: { initialDevelopmentStatus: 'completed' } } },
+        entities: { AgeRecord: { initialDevelopmentStatus: 'completed' } }
+      }
+    }
+    const html = renderToStaticMarkup(
+      <WorkbenchPhaseProvider
+        applicationId="three-artifacts"
+        versionId={VERSION}
+        lifecycle={lifecycle}
+      >
+        <WorkbenchTopBar
+          application={lifecycle.application}
+          lifecycle={lifecycle}
+          workspaceRoot="/workspace"
+          onReturnWelcome={() => {}}
+          rightPanelOpen={false}
+          onToggleRightPanel={() => {}}
+        />
+      </WorkbenchPhaseProvider>
+    )
+    assert.match(html, /开发阶段<span>3\/3<\/span>/)
+    assert.equal(lifecycle.testEntryGate?.total, 2)
+  }))
+
 test('已生成版本（locked）高亮冻结阶段且全部阶段不可点', () =>
   withStorage(() => {
     // 历史版本冻结在验收：其 lifecycle 的 execution 停在 acceptance。
