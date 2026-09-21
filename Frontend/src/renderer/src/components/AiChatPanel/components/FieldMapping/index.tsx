@@ -1,13 +1,15 @@
 import { confirmWorkspaceAction } from '../../../workspaceDialogs'
-import { ApiOutlined, NodeIndexOutlined } from '@ant-design/icons'
-import { Alert, Button, Empty, Radio, Select, Space, Spin, Tag } from 'antd'
+import { ApiOutlined, CaretDownOutlined, FolderOpenOutlined, NodeIndexOutlined } from '@ant-design/icons'
+import { Alert, Button, Empty, Radio, Select, Space, Spin, Tag, Tooltip } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { DevelopmentPlanningApiContract, EndpointDesignSaveResult, WorkflowApiField } from '../../../../typings'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
+import { cx } from '../../../../utils'
 import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
 import ApiDesignConfigModal from '../WorkflowRunCard/ApiDesignConfigModal'
 import { apiDesignFieldKey, createUnconfiguredFieldMapping, validateApiDesignDraft } from '../WorkflowRunCard/apiDesignSerialization'
+import { apiEndpointDisplayPath } from '../../utils'
 import ExternalMapping from './ExternalMapping'
 import { mappingCandidates, selectionKey, setDirectMapping, sourceFieldKey, tableIsSelected } from './model'
 import { useBindingWorkspace } from './useBindingWorkspace'
@@ -63,6 +65,11 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
       return { value: selectionKey(next), label: `${source.name} / ${directory.name} / ${operation.name} · ${operation.method} ${operation.path}`, selection: next }
     })) : [])
   const sourceLabel = candidates.find((item) => item.value === selectionKey(selection))?.label || (selection?.sourceType === 'database' ? selection.table : selection?.operationId) || '尚未选择'
+  const activeContract = target ? contracts.find((contract) => contract.id === target.apiContractId || contract.endpoints.some((endpoint) => endpoint.id === target.endpointId && (endpoint.apiContractId || contract.id) === target.apiContractId)) : undefined
+  const activeEndpoint = activeContract?.endpoints.find((endpoint) => endpoint.id === target?.endpointId)
+  const activeContractName = activeContract?.name || '未命名接口分组'
+  const activeEndpointName = activeEndpoint?.name || String(entry?.preparation.payload.endpoint.name || '') || target?.label || target?.endpointId || '未命名接口'
+  const activeEndpointPath = String(entry?.preparation.payload.endpoint.path || activeEndpoint?.path || target?.endpointId || '/')
 
   /** 更换来源必须显式放弃当前映射，取消不修改草稿。 */
   const changeSelection = (next: BindingSelection | null, nextKind = next?.sourceType): void => {
@@ -98,17 +105,29 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   }
 
   return <div className="binding-workspace">
-    <nav className="binding-directory" aria-label="应用 API"><h4>应用 API</h4>{contracts.map((contract) => <section key={contract.id}>
-      <small>{contract.label}</small>{contract.endpoints.map((endpoint) => <button key={endpoint.id} disabled={busy}
-        className={target?.apiContractId === contract.id && target.endpointId === endpoint.id ? 'selected' : ''}
-        onClick={() => onSelect({ apiContractId: contract.id, endpointId: endpoint.id, label: endpoint.summary || endpoint.path })}>
-        <ApiOutlined />{endpoint.summary || endpoint.path}</button>)}</section>)}</nav>
+    <nav className="binding-directory" aria-label="应用 API"><h4>应用 API</h4>{contracts.map((contract) => <section className="binding-contract" key={contract.id}>
+      <div className="binding-contract-heading"><CaretDownOutlined /><FolderOpenOutlined /><strong>{contract.name || '未命名接口分组'}</strong></div>
+      <div className="binding-endpoint-list">{contract.endpoints.map((endpoint) => {
+        const endpointPath = endpoint.path || '/'
+        const displayPath = apiEndpointDisplayPath(endpointPath, contract.label)
+        const endpointName = endpoint.name || displayPath || '未命名接口'
+        const apiContractId = endpoint.apiContractId || contract.id
+        const selected = target?.apiContractId === apiContractId && target.endpointId === endpoint.id
+        return <Tooltip align={{ offset: [4, 0] }} key={endpoint.id} mouseEnterDelay={1} mouseLeaveDelay={0.08} overlayClassName={cx('api-hover-tooltip')} placement="right"
+          title={<span className={cx('api-hover-tooltip-content')}><span className={cx('api-hover-tooltip-method')}>{endpoint.method}</span><code>{endpointPath}</code></span>}>
+          <span className={cx('api-tooltip-anchor')}><button aria-current={selected ? 'true' : undefined} aria-label={`${contract.name || '未命名接口分组'}，${endpointName}，${endpoint.method} ${endpointPath}`} className={selected ? 'selected' : ''} disabled={busy}
+            onClick={() => onSelect({ apiContractId, endpointId: endpoint.id, label: endpointName })}>
+            <ApiOutlined className="binding-endpoint-icon" /><span className="binding-endpoint-copy"><strong>{endpointName}</strong></span>
+          </button></span>
+        </Tooltip>
+      })}</div>
+    </section>)}</nav>
     <main className="binding-editor">
       {!target ? <Empty description="请选择应用 API" /> : loading && !entry ? <Spin tip="正在读取 API 契约…" /> : null}
       {error ? <Alert type="error" showIcon message={error} action={<Space><Button onClick={state.refreshSources}>重试</Button>{entry && <Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃草稿并重新加载？', content: '未确认的修改将被清除，正式映射不变。', okText: '放弃并加载', cancelText: '继续编辑', onOk: state.discard })}>重新加载</Button>}</Space>} /> : null}
       {entry && <>
-        <header className="binding-heading"><div><strong><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{String(entry.preparation.payload.endpoint.path || target?.endpointId)}</code></strong>
-          <p>{target?.label || target?.endpointId} → {withoutSource ? '不绑定数据来源' : sourceLabel}</p></div><Space>
+        <header className="binding-heading"><div className="binding-heading-copy"><span className="binding-heading-contract">{activeContractName}</span><strong className="binding-heading-endpoint"><span className="binding-heading-name">{activeEndpointName}</span><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{activeEndpointPath}</code></strong>
+          <p>{withoutSource ? '不绑定数据来源' : sourceLabel}</p></div><Space>
           {entry.readOnly ? <Button onClick={() => state.update({ ...entry, readOnly: false })}>修改映射</Button> : !entry.complex ? <>
             <Button loading={busy} disabled={entry.conflict} onClick={() => void state.save(false)}>保存</Button>
             <Button type="primary" loading={busy} disabled={!canConfirm} onClick={() => void state.save(true)}>保存并确认</Button>

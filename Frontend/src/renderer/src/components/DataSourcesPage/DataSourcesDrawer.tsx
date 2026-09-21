@@ -1,5 +1,5 @@
 import { confirmWorkspaceAction } from '../workspaceDialogs'
-import { ApiOutlined, CloseOutlined, DatabaseOutlined, PlusOutlined, TableOutlined } from '@ant-design/icons'
+import { ApiOutlined, CloseOutlined, DatabaseOutlined, DeleteOutlined, EditOutlined, PlusOutlined, TableOutlined } from '@ant-design/icons'
 import { Alert, Button, Empty, Input, Spin, Tooltip, message } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
@@ -7,6 +7,7 @@ import type { DataSourceCatalog, DataSourceOperation, DatabaseDataSource, Databa
 import { createDataSource, deleteDataSource, requestDataSources, requestDataSourceDetails, requestSelectedTables, requestSourceReferences, updateDataSource, validateDataSource } from '../../service/dataSources'
 import type { SelectedDataTable } from '../../service/dataSources'
 import DataSourceEditorModal from './DataSourceEditorModal'
+import DataSourceOperationDetails from './DataSourceOperationDetails'
 import DataSourceOperationModal from './DataSourceOperationModal'
 import ExternalApisPane, { type ExternalApiListItem } from './ExternalApisPane'
 import { AddDatabaseTables, DatabaseTableDetail } from './DatabaseTables'
@@ -29,9 +30,11 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [dirty, setDirty] = useState(false)
+  const [operationEditing, setOperationEditing] = useState(false)
   const [editor, setEditor] = useState<{ createType?: DrawerMode; editing?: DatabaseDataSource | ExternalApiDataSource; open: boolean }>({ open: false })
   const [addingTables, setAddingTables] = useState(false)
   const requestId = useRef(0)
+  const detailContentRef = useRef<HTMLDivElement>(null)
   const mounted = useRef(true)
   const databases = catalog.sources.filter((source): source is DatabaseDataSource => source.type === 'database')
   const externals = catalog.sources.filter((source): source is ExternalApiDataSource => source.type === 'external_api')
@@ -71,12 +74,25 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
   // 左侧导航离开抽屉时沿用相同保护，避免卸载详情导致输入丢失。
   useEffect(() => { onNavigationGuard(guard); return () => onNavigationGuard(undefined) }, [dirty, saving, onNavigationGuard])
   /** 收起详情时取消在途响应，保持一级列表位置。 */
-  const closeDetail = (): void => { requestId.current += 1; setDetail(undefined); setFullSource(undefined); setDetailLoading(false); setDirty(false) }
+  const closeDetail = (): void => { requestId.current += 1; setDetail(undefined); setFullSource(undefined); setDetailLoading(false); setDirty(false); setOperationEditing(false) }
+
+  /** 退出接口编辑态并回到刚才的只读详情，必要时先确认放弃修改。 */
+  const closeOperationEditor = (): void => {
+    if (saving) return
+    const leave = (): void => { setOperationEditing(false); setDirty(false) }
+    if (!dirty) { leave(); return }
+    confirmWorkspaceAction({ title: '放弃未保存修改？', okText: '放弃修改', cancelText: '继续编辑', onOk: leave })
+  }
+  /** 进入编辑态时回到表单顶部，确保基本信息卡片始终从首屏开始展示。 */
+  useEffect(() => {
+    if (!operationEditing) return
+    detailContentRef.current?.scrollTo({ top: 0 })
+  }, [detail?.kind === 'operation' ? detail.operationId : undefined, operationEditing])
 
   /** 打开接口前按需读取完整域名，列表摘要绝不作为保存输入。 */
   const openOperation = async (sourceId: string, directoryId: string, operationId?: string): Promise<void> => {
     const id = ++requestId.current
-    setDetailLoading(true); setError(''); setDetail({ kind: 'operation', sourceId, directoryId, operationId }); setFullSource(undefined)
+    setDetailLoading(true); setError(''); setDetail({ kind: 'operation', sourceId, directoryId, operationId }); setFullSource(undefined); setOperationEditing(!operationId)
     try {
       const response = await requestDataSourceDetails(workspaceRoot, sourceId)
       if (id !== requestId.current) return
@@ -84,7 +100,7 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
       if (!source) throw new Error('域名不存在，请刷新重试。')
       const operation = source.directories.flatMap((item) => item.operations).find((item) => item.id === operationId)
       if (operationId && !operation) throw new Error('接口不存在，请刷新重试。')
-      setFullSource(source); setDetail({ kind: 'operation', sourceId, directoryId, operationId, operation }); setDirty(false)
+      setFullSource(source); setDetail({ kind: 'operation', sourceId, directoryId, operationId, operation }); setDirty(false); setOperationEditing(!operationId)
     } catch (reason) { if (id === requestId.current) setError(reason instanceof Error ? reason.message : '读取详情失败。') }
     finally { if (id === requestId.current) setDetailLoading(false) }
   }
@@ -154,15 +170,23 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
   /** 从最新完整域名中只替换目标接口，保留兄弟接口及并发目录修改。 */
   const saveOperation = async (operation: DataSourceOperation, directoryId: string): Promise<void> => {
     if (detail?.kind !== 'operation') return
+    const sourceId = detail.sourceId
     setSaving(true)
     try {
-      const response = await requestDataSourceDetails(workspaceRoot, detail.sourceId)
-      const latest = response.sources.find((source): source is ExternalApiDataSource => source.type === 'external_api' && source.id === detail.sourceId)
+      const response = await requestDataSourceDetails(workspaceRoot, sourceId)
+      const latest = response.sources.find((source): source is ExternalApiDataSource => source.type === 'external_api' && source.id === sourceId)
       if (!latest?.directories.some((directory) => directory.id === directoryId)) throw new Error('目标目录已不存在，请重新选择。')
       const next = { ...operation, id: operation.id || `operation-${crypto.randomUUID()}` }
       const directories = latest.directories.map((directory) => ({ ...directory, operations: [
         ...directory.operations.filter((item) => item.id !== next.id), ...(directory.id === directoryId ? [next] : [])] }))
-      setCatalog(await updateDataSource(workspaceRoot, { ...latest, directories })); closeDetail(); message.success('接口已保存')
+      const savedSource = { ...latest, directories }
+      setCatalog(await updateDataSource(workspaceRoot, savedSource))
+      setFullSource(savedSource)
+      setDetail({ kind: 'operation', sourceId, directoryId, operationId: next.id, operation: next })
+      setOperationEditing(false)
+      setDirty(false)
+      detailContentRef.current?.scrollTo({ top: 0 })
+      message.success('接口已保存')
     } finally { setSaving(false) }
   }
   /** 单接口删除只移除对应资源，不覆盖同域名其他接口。 */
@@ -180,10 +204,11 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
   }
   const allOperations = (mode === 'external_api' && activeExternal ? [activeExternal] : []).flatMap((source) => source.directories.flatMap((directory) => directory.operations.map((operation) => ({ source, directory, operation }))))
   const operations = allOperations
-    .filter(({ source, operation }) => `${operation.name} ${operation.path} ${source.name}`.toLowerCase().includes(search.toLowerCase()))
+    .filter(({ source, operation }) => `${operation.name} ${operation.description || ''} ${operation.path} ${source.name}`.toLowerCase().includes(search.toLowerCase()))
   const allVisibleTables = tables.filter((table) => mode === 'database' && table.sourceId === tab)
   const visibleTables = allVisibleTables.filter((table) => `${table.table} ${table.description}`.toLowerCase().includes(search.toLowerCase()))
   const showSearch = mode === 'external_api' ? allOperations.length >= 5 : allVisibleTables.length >= 5
+  const selectedOperationDirectory = detail?.kind === 'operation' ? fullSource?.directories.find((directory) => directory.id === detail.directoryId) : undefined
 
   /** 将表清单动作结果同步到数据源公开对象，避免列表计数等待下一次全量读取。 */
   const syncManagedTables = (next: SelectedDataTable[]): void => {
@@ -212,12 +237,17 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
         {visibleTables.map((table) => <button key={`${table.sourceId}:${table.schema}:${table.table}`} onClick={() => guard(() => { closeDetail(); setDetail({ kind: 'table', table }) })} type="button"><TableOutlined /><strong>{table.table}</strong><span>{table.description}</span></button>)}
         {!loading && !visibleTables.length && <Empty description="暂未添加数据表" />}</div> : null}</Spin>
     </section>
-    {detail && <section className="source-drawer-detail"><header className="source-drawer-header">{detail.kind === 'table' ? <TableOutlined /> : <ApiOutlined />}<div><h3>{detail.kind === 'table' ? detail.table.table : detail.operation?.name || '新增接口'}</h3></div><Button type="text" aria-label="关闭详情" icon={<CloseOutlined />} onClick={() => guard(closeDetail)} /></header>
-      <div className="source-detail-content"><Spin spinning={detailLoading}>{detail.kind === 'table' ? <DatabaseTableDetail workspaceRoot={workspaceRoot} table={detail.table} onRemoved={(next) => { syncManagedTables(next); closeDetail() }} /> : fullSource && <>
-        <DataSourceOperationModal key={`${detail.sourceId}:${detail.operation?.id || 'new'}`} embedded hideDirectory open saving={saving} theme={theme} directories={fullSource.directories} editing={detail.operation} initialDirectoryId={detail.directoryId}
-          onDirtyChange={setDirty} onClose={() => guard(closeDetail)} onSave={saveOperation} onDelete={() => void deleteOperation()} />
-      </>}</Spin></div></section>}
-    {addingTables && database && <AddDatabaseTables workspaceRoot={workspaceRoot} source={database} selected={tables} onClose={() => setAddingTables(false)} onSaved={syncManagedTables} />}
+    {detail && <section className="source-drawer-detail"><header className={`source-drawer-header ${detail.kind === 'operation' ? 'source-drawer-operation-header' : ''}`}>{detail.kind === 'table' ? <TableOutlined /> : <span className="source-operation-header-icon"><ApiOutlined /><small>API</small></span>}<div><h3>{detail.kind === 'table' ? detail.table.table : operationEditing ? detail.operation ? '编辑 API' : '新建 API' : detail.operation?.name || '新建 API'}</h3>{detail.kind === 'table' ? <p>查看数据表及字段信息</p> : operationEditing ? <p>配置接口的请求信息、参数及请求/响应体</p> : null}</div><div className="source-drawer-header-actions">{detail.kind === 'operation' && detail.operation && !operationEditing ? <><Button className="source-operation-header-edit" icon={<EditOutlined />} onClick={() => { setDirty(false); setOperationEditing(true) }}>编辑接口</Button><Button className="source-operation-header-delete" danger icon={<DeleteOutlined />} onClick={() => void deleteOperation()}>删除</Button></> : null}<Button className="source-operation-header-close" type="text" aria-label="关闭详情" icon={<CloseOutlined />} onClick={() => guard(closeDetail)} /></div></header>
+      <div className={`source-detail-content ${detail.kind === 'operation' && detail.operation && !operationEditing ? 'source-operation-detail-content' : ''}`} ref={detailContentRef}><Spin spinning={detailLoading}>{detail.kind === 'table' ? <DatabaseTableDetail workspaceRoot={workspaceRoot} table={detail.table} onRemoved={(next) => { syncManagedTables(next); closeDetail() }} /> : fullSource && detail.operation && !operationEditing && selectedOperationDirectory ? <DataSourceOperationDetails
+        directory={selectedOperationDirectory}
+        key={detail.operation.id}
+        onDelete={() => void deleteOperation()}
+        onEdit={() => { setDirty(false); setOperationEditing(true) }}
+        operation={detail.operation}
+        showHeader={false}
+      /> : fullSource ? <DataSourceOperationModal key={`${detail.sourceId}:${detail.operation?.id || 'new'}`} embedded hideDirectory open saving={saving} theme={theme} directories={fullSource.directories} editing={detail.operation} initialDirectoryId={detail.directoryId}
+        onDirtyChange={setDirty} onClose={closeOperationEditor} onSave={saveOperation} /> : null}</Spin></div></section>}
+    {addingTables && database && <AddDatabaseTables theme={theme} workspaceRoot={workspaceRoot} source={database} selected={tables} onClose={() => setAddingTables(false)} onSaved={syncManagedTables} />}
     <DataSourceEditorModal createType={editor.createType} editing={editor.editing} open={editor.open} onClose={() => setEditor({ open: false })} onDelete={editor.editing ? editor.editing.type === 'external_api' ? () => void deleteDomain(editor.editing as ExternalApiDataSource) : () => void deleteConnection() : undefined} saving={saving} theme={theme} onSave={saveSource} onValidate={validate} />
   </div>
 }

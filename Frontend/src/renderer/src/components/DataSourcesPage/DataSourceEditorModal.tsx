@@ -156,7 +156,7 @@ export default function DataSourceEditorModal({ createType, editing, onClose, on
             <label><span>配置键（可选）</span><Input onChange={(event) => setApi({ ...api, baseUrlConfigKey: event.target.value })} placeholder="services.product.base-url" value={api.baseUrlConfigKey} /></label>
             <label><span>超时（毫秒）</span><InputNumber className={cx('data-source-full-control')} min={100} max={120000} onChange={(value) => setApi({ ...api, timeoutMs: Number(value || 10000) })} value={api.timeoutMs} /></label>
           </div>
-          <HeaderEditor description="目录中的接口会继承这些普通请求头" headers={api.headers} onChange={(headers) => setApi({ ...api, headers })} title="共享 Header" />
+          <HeaderEditor headers={api.headers} onChange={(headers) => setApi({ ...api, headers })} title="共享 Header" />
         </div>
       )}
     </Modal>

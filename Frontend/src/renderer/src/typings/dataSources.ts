@@ -30,6 +30,7 @@ export type DataSourceJsonStructure = {
 export type DataSourceOperation = {
   id: string
   name: string
+  description: string
   method: 'GET' | 'POST' | 'PUT' | 'DELETE'
   path: string
   pathParameters: DataSourceParameter[]
@@ -40,6 +41,9 @@ export type DataSourceOperation = {
   requestStructure: DataSourceJsonStructure | null
   responseStructure: DataSourceJsonStructure | null
 }
+
+/** 描述外部 API 编辑器可按需启用的配置模块。 */
+export type DataSourceOperationSection = 'path' | 'query' | 'header' | 'requestBody' | 'responseBody'
 
 /** 描述外部 API 域名下的普通接口目录。 */
 export type DataSourceDirectory = {

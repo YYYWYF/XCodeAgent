@@ -1,17 +1,23 @@
 import { confirmWorkspaceAction } from '../workspaceDialogs'
-import { Alert, Button, Checkbox, Empty, Input, Modal, Space, Spin, Table } from 'antd'
+import { SearchOutlined } from '@ant-design/icons'
+import { Alert, Button, Checkbox, Empty, Input, Modal, Space, Spin, Table, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { DatabaseDataSource } from '../../typings'
 import { changeSelectedTables, requestApiDesignDatabaseColumns, requestApiDesignDatabaseTables, requestSourceReferences } from '../../service/dataSources'
 import type { ApiDesignDatabaseMetadata, SelectedDataTable } from '../../service/dataSources'
+import { cx } from '../../utils'
+import './DatabaseTables.less'
 
-type ImportProps = { workspaceRoot: string; source: DatabaseDataSource; selected: SelectedDataTable[]; onClose: () => void; onSaved: (tables: SelectedDataTable[]) => void }
+const { Text } = Typography
+
+type ImportProps = { workspaceRoot: string; source: DatabaseDataSource; selected: SelectedDataTable[]; theme: 'light' | 'dark'; onClose: () => void; onSaved: (tables: SelectedDataTable[]) => void }
 
 /** 从实时发现的数据库表中批量添加应用候选，不创建或修改数据库表。 */
-export function AddDatabaseTables({ workspaceRoot, source, selected, onClose, onSaved }: ImportProps): ReactElement {
+export function AddDatabaseTables({ workspaceRoot, source, selected, theme, onClose, onSaved }: ImportProps): ReactElement {
   const [metadata, setMetadata] = useState<ApiDesignDatabaseMetadata>()
-  const [search, setSearch] = useState('')
+  const [filterInput, setFilterInput] = useState('')
+  const [filterText, setFilterText] = useState('')
   const [checked, setChecked] = useState<string[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -40,15 +46,35 @@ export function AddDatabaseTables({ workspaceRoot, source, selected, onClose, on
     if (!checked.length) { onClose(); return }
     confirmWorkspaceAction({ title: '放弃未添加的数据表选择？', okText: '放弃选择', cancelText: '继续选择', onOk: onClose })
   }
-  const visible = (metadata?.tables || []).filter((table) => `${table.name} ${table.description}`.toLowerCase().includes(search.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name))
-  return <Modal visible width={680} bodyStyle={{ maxHeight: 'calc(100vh - 160px)', overflowY: 'auto' }} title={`添加数据表 · ${source.name}`} onCancel={cancel} onOk={() => void save()}
-    okText={`添加 ${checked.length} 张表`} cancelText="取消" okButtonProps={{ disabled: !checked.length || loading, loading: saving }} getContainer={false}>
-    <Input.Search aria-label="搜索数据表" placeholder="搜索表名或说明" value={search} onChange={(event) => setSearch(event.target.value)} />
-    {error ? <Alert type="error" message={error} action={<Button onClick={() => setRetry((value) => value + 1)}>重试</Button>} /> : null}
-    <Spin spinning={loading}><div className="source-table-picker">{visible.map((table) => <Checkbox key={table.name} disabled={added.has(table.name) || saving} checked={added.has(table.name) || checked.includes(table.name)}
-      onChange={(event) => setChecked((value) => event.target.checked ? [...value, table.name] : value.filter((name) => name !== table.name))}>
-      <code>{table.name}</code> {table.description} {added.has(table.name) ? '（已添加）' : ''}</Checkbox>)}
-      {!loading && !visible.length && <Empty description="暂无符合条件的数据表" />}</div></Spin>
+  /** 仅在用户按下回车后应用当前输入的前端筛选条件。 */
+  const applyFilter = (): void => { setFilterText(filterInput.trim()) }
+  /** 清空输入时同步清除已生效的筛选结果，其余输入只保留待提交文本。 */
+  const changeFilterInput = (value: string): void => { setFilterInput(value); if (!value) setFilterText('') }
+  // 只在前端按表名和说明筛选，不改变实时元数据请求与提交的数据边界。
+  const normalizedFilter = filterText.trim().toLowerCase()
+  const visible = (metadata?.tables || []).filter((table) => `${table.name} ${table.description || ''}`.toLowerCase().includes(normalizedFilter)).sort((a, b) => a.name.localeCompare(b.name))
+  return <Modal centered className={cx('data-source-table-picker-modal')} destroyOnClose getContainer={false}
+    title={`添加数据表 · ${source.name}`} visible width={480} wrapClassName={cx('data-source-editor-modal-wrap', `theme-${theme}`)}
+    bodyStyle={{ padding: 0, overflow: 'hidden' }} onCancel={cancel} onOk={() => void save()}
+    okText={`添加 ${checked.length} 张表`} cancelText="取消" okButtonProps={{ disabled: !checked.length || loading, loading: saving }}>
+    <div className={cx('data-source-table-picker-body')}>
+      <Text className={cx('data-source-table-picker-hint')} type="secondary">勾选「{source.name}」中要添加的数据表</Text>
+      {error ? <Alert className={cx('data-source-table-picker-error')} type="error" message={error} showIcon action={<Button onClick={() => setRetry((value) => value + 1)}>重试</Button>} /> : null}
+      <Input allowClear aria-label="筛选数据表" className={cx('data-source-table-picker-filter')} onChange={(event) => changeFilterInput(event.target.value)} onPressEnter={applyFilter} placeholder="筛选表名或说明，按回车筛选" prefix={<SearchOutlined />} value={filterInput} />
+      <Spin spinning={loading}><div className={cx('data-source-table-picker-list')}>
+        {visible.map((table) => {
+          const alreadyAdded = added.has(table.name)
+          const columnCount = typeof table.columnCount === 'number' ? ` · ${table.columnCount} 字段` : ''
+          return <label className={cx('data-source-table-picker-item', alreadyAdded && 'is-added')} key={table.name}>
+            <Checkbox disabled={alreadyAdded || saving} checked={alreadyAdded || checked.includes(table.name)}
+              onChange={(event) => setChecked((value) => event.target.checked ? [...value, table.name] : value.filter((name) => name !== table.name))} />
+            <span className={cx('data-source-table-picker-item-main')}><strong>{table.name}</strong><small>{table.description || '暂无说明'}{columnCount}</small></span>
+            {alreadyAdded ? <em>已添加</em> : null}
+          </label>
+        })}
+        {!loading && !visible.length ? <Empty description={normalizedFilter ? '暂无匹配的数据表' : '暂无可添加的数据表'} /> : null}
+      </div></Spin>
+    </div>
   </Modal>
 }
 

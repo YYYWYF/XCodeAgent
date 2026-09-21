@@ -8,6 +8,52 @@
   border-radius: 8px;
 }
 
+.@{class-prefix}-data-source-json-panel-content-only {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+}
+
+.@{class-prefix}-data-source-json-panel.@{class-prefix}-data-source-json-panel-content-only .ant-tabs-content {
+  padding: 0;
+}
+
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-structure,
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-tree,
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-tree-header,
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-tree-row {
+  min-width: 0;
+}
+
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-structure {
+  overflow-x: hidden;
+  min-height: 0;
+}
+
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-tree-header,
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-tree-row {
+  grid-template-columns: minmax(0, 30%) minmax(90px, 18%) minmax(0, 52%);
+}
+
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-tree-header {
+  padding: 7px 10px;
+}
+
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-tree-row {
+  min-height: 44px;
+  padding: 4px 10px;
+}
+
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-type-select .ant-select-selector,
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-tree-description-input.ant-input {
+  min-height: 32px;
+}
+
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-tree-description-input.ant-input {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
 .@{class-prefix}-data-source-json-panel > .ant-tabs {
   margin: 0;
   color: var(--data-source-modal-text);
@@ -280,6 +326,11 @@
   border: 1px solid var(--data-source-modal-border);
   border-radius: 6px;
   outline: none;
+}
+
+.@{class-prefix}-data-source-json-panel-content-only .@{class-prefix}-data-source-json-editor {
+  min-height: 140px;
+  padding: 10px 12px;
 }
 
 .@{class-prefix}-data-source-json-editor:focus {

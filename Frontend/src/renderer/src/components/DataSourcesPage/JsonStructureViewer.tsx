@@ -64,7 +64,7 @@ function renderTreeRows(shape: JsonShape, label: string, path: string, level: nu
         <Select
           aria-label={`${label} 字段类型`}
           className={cx('data-source-json-type-select')}
-          getPopupContainer={(trigger: HTMLElement) => trigger.closest<HTMLElement>('.ant-modal-wrap') || trigger.parentElement!}
+          getPopupContainer={(trigger: HTMLElement) => trigger.closest<HTMLElement>('.ant-modal-wrap') || trigger.closest<HTMLElement>('.source-drawer-stack') || document.body}
           onChange={(type: DataSourceFieldType | 'auto') => onTypeChange?.(path, type === 'auto' ? undefined : type)}
           options={[{ label: shape.kind, value: 'auto' }, ...FIELD_TYPE_OPTIONS]}
           value={fieldTypes[path] || 'auto'}
@@ -97,17 +97,20 @@ export function JsonStructureViewer({ value, descriptions = {}, editable = false
 
 
 /** 渲染请求或响应 JSON 的结构/样例页签，编辑态支持实时预览和字段说明。 */
-export function JsonSampleTabs({ label, text, value, descriptions = {}, editable = false, onChange, onDescriptionChange, fieldTypes, onTypeChange, structure }: { label: string; text?: string; value?: unknown; descriptions?: Record<string, string>; editable?: boolean; onChange?: (text: string) => void; onDescriptionChange?: (path: string, description: string) => void } & FieldTypeProps): ReactElement {
+export function JsonSampleTabs({ activeKey: controlledActiveKey, label, text, value, descriptions = {}, editable = false, onActiveKeyChange, onChange, onDescriptionChange, fieldTypes, onTypeChange, showTabs = true, showTitle = true, structure }: { activeKey?: string; label: string; text?: string; value?: unknown; descriptions?: Record<string, string>; editable?: boolean; onActiveKeyChange?: (key: string) => void; onChange?: (text: string) => void; onDescriptionChange?: (path: string, description: string) => void; showTabs?: boolean; showTitle?: boolean } & FieldTypeProps): ReactElement {
   const sampleText = editable ? text || '' : formatJsonSample(value)
   const parsed = useMemo(() => parseJsonSampleText(sampleText), [sampleText])
-  const [activeKey, setActiveKey] = useState('structure')
+  const [internalActiveKey, setInternalActiveKey] = useState('structure')
+  const activeKey = controlledActiveKey || internalActiveKey
+  /** 同步 JSON 结构/样例当前页签，兼容内部状态和标题栏外置页签。 */
+  const changeActiveKey = (key: string): void => { setInternalActiveKey(key); onActiveKeyChange?.(key) }
   const hasNoDescribableFields = parsed.value === null
   const displayedSampleText = editable && hasNoDescribableFields ? '' : sampleText
   return (
-    <section className={cx('data-source-json-panel')}>
-      <Tabs activeKey={activeKey} defaultActiveKey="structure" destroyInactiveTabPane={false} onChange={setActiveKey} tabBarExtraContent={{ left: <div className={cx('data-source-json-panel-title')}><strong>{label}</strong><span>可选</span><small>用于记录接口请求和响应示例</small></div> }}>
+    <section className={cx('data-source-json-panel', !showTabs && 'data-source-json-panel-content-only')}>
+      <Tabs activeKey={activeKey} destroyInactiveTabPane={false} onChange={changeActiveKey} tabBarExtraContent={showTitle ? { left: <div className={cx('data-source-json-panel-title')}><strong>{label}</strong><small>用于记录接口请求和响应示例</small></div> } : undefined} tabBarStyle={showTabs ? undefined : { display: 'none' }}>
         <TabPane key="structure" tab="结构">
-          {!editable ? structure ? <JsonStructureViewer structure={structure} value={value} /> : <div className={cx('data-source-json-empty')}>没有对应的结构内容。</div> : parsed.error ? <Alert message={parsed.error} showIcon type="warning" /> : parsed.value === undefined ? <div className={cx('data-source-json-empty')}><span>添加 JSON 样例后，可查看结构并配置字段类型与说明。</span>{editable ? <Button onClick={() => setActiveKey('sample')} type="link">去填写样例</Button> : null}</div> : hasNoDescribableFields ? <div className={cx('data-source-json-empty')}>没有对应的结构内容。</div> : <JsonStructureViewer descriptions={descriptions} editable={editable} onDescriptionChange={onDescriptionChange} fieldTypes={fieldTypes} onTypeChange={onTypeChange} value={parsed.value} />}
+          {!editable ? structure ? <JsonStructureViewer structure={structure} value={value} /> : <div className={cx('data-source-json-empty')}>没有对应的结构内容。</div> : parsed.error ? <Alert message={parsed.error} showIcon type="warning" /> : parsed.value === undefined ? <div className={cx('data-source-json-empty')}><span>添加 JSON 样例后，可查看结构并配置字段类型与说明。</span>{editable ? <Button onClick={() => changeActiveKey('sample')} type="link">去填写样例</Button> : null}</div> : hasNoDescribableFields ? <div className={cx('data-source-json-empty')}>没有对应的结构内容。</div> : <JsonStructureViewer descriptions={descriptions} editable={editable} onDescriptionChange={onDescriptionChange} fieldTypes={fieldTypes} onTypeChange={onTypeChange} value={parsed.value} />}
         </TabPane>
         <TabPane key="sample" tab="样例">
           {editable ? <textarea aria-label={label} className={cx('data-source-json-editor')} onChange={(event) => onChange?.(event.target.value)} placeholder={'{\n  "items": []\n}'} value={displayedSampleText} /> : hasNoDescribableFields ? <div className={cx('data-source-json-empty', 'data-source-json-example')}><span>暂无样例内容，可参考：</span><code>{'{\n  "items": []\n}'}</code></div> : sampleText ? <pre className={cx('data-source-manager-json')}>{sampleText}</pre> : <div className={cx('data-source-json-empty')}>未配置 JSON 样例</div>}

@@ -28,7 +28,7 @@ export type ApiDesignDatabaseMetadata = {
   sourceId?: string
   schema?: string
   table?: string
-  tables?: Array<{ name: string; description?: string }>
+  tables?: Array<{ name: string; description?: string; columnCount?: number }>
   columns?: Array<{ name: string; type: string; required?: boolean; description?: string }>
 }
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { convertJsonFieldType, convertJsonValue, matchesJsonFieldType, normalizeJsonFieldTypes } from '../src/renderer/src/components/DataSourcesPage/jsonFieldTypes'
 import { mergeExternalSourceChanges, requireOperationDetails, validateOperationParameters } from '../src/renderer/src/components/DataSourcesPage/dataSourceOperations'
+import { clearOperationSection, configuredSections, validateSelectedSections } from '../src/renderer/src/components/DataSourcesPage/dataSourceOperationConfig'
 import type { DataSourceFieldType, DataSourceOperation, DataSourceParameter, ExternalApiDataSource } from '../src/renderer/src/typings/dataSources'
 
 const conversions: [unknown, DataSourceFieldType, unknown][] = [
@@ -78,7 +79,7 @@ assert.throws(() => validateOperationParameters('/items/{}', [], []), /格式无
 assert.throws(() => validateOperationParameters('/items/{id}', [pathParameter], Array.from({ length: 50 }, (_, index) => ({ ...queryParameter, name: `q-${index}` }))), /合计/)
 
 const operation: DataSourceOperation = {
-  id: 'op-a', name: '查询', method: 'GET', path: '/items/{id}', pathParameters: [pathParameter], queryParameters: [queryParameter],
+  id: 'op-a', name: '查询', description: '', method: 'GET', path: '/items/{id}', pathParameters: [pathParameter], queryParameters: [queryParameter],
   headers: [{ name: 'X-Version', value: '2' }], requestSample: { id: 0 }, responseSample: { id: '1' },
   requestStructure: { type: 'object', properties: { id: { type: 'number', description: '请求编号' } } },
   responseStructure: { type: 'object', properties: { id: { type: 'string', description: '响应编号' } } }
@@ -93,7 +94,7 @@ const latest: ExternalApiDataSource = {
 }
 const latestBefore = JSON.stringify(latest)
 // 模拟详情切换后接口再次变成列表摘要，历史加载标记不能让它覆盖完整配置。
-const summaryOperation: DataSourceOperation = { id: operation.id, name: operation.name, method: operation.method, path: operation.path, pathParameters: [], queryParameters: [], headers: [], requestStructure: null, responseStructure: null }
+const summaryOperation: DataSourceOperation = { id: operation.id, name: operation.name, description: '', method: operation.method, path: operation.path, pathParameters: [], queryParameters: [], headers: [], requestStructure: null, responseStructure: null }
 const candidate: ExternalApiDataSource = {
   ...latest, timeoutMs: 10000, headers: [], baseUrlConfigKey: undefined,
   directories: [{ id: 'dir-a', name: '重命名', operations: [{ ...summaryOperation, id: 'op-b' }] }, { id: 'dir-b', name: '二', operations: [summaryOperation] }]
@@ -117,3 +118,17 @@ assert.equal('parameters' in merged.directories[1].operations[0], false)
 assert.equal(requireOperationDetails({ sources: [latest] }, 'domain', 'op-a'), operation)
 assert.throws(() => requireOperationDetails({ sources: [latest] }, 'other-domain', 'op-a'), /不存在/)
 assert.throws(() => requireOperationDetails({ sources: [latest] }, 'domain', 'missing-operation'), /不存在/)
+
+assert.deepEqual(configuredSections(operation), ['path', 'query', 'header', 'requestBody', 'responseBody'])
+const draft = {
+  ...operation,
+  pathParameters: operation.pathParameters.map((item) => ({ ...item, rowId: 'path-1' })),
+  queryParameters: operation.queryParameters.map((item) => ({ ...item, rowId: 'query-1' })),
+  requestSampleText: JSON.stringify(operation.requestSample),
+  responseSampleText: JSON.stringify(operation.responseSample),
+  requestFieldDescriptionsDraft: {}, responseFieldDescriptionsDraft: {}, requestFieldTypesDraft: {}, responseFieldTypesDraft: {}
+}
+assert.throws(() => validateSelectedSections({ ...draft, pathParameters: [] }, new Set(['path'])), /至少填写一条参数/)
+assert.throws(() => validateSelectedSections({ ...draft, responseSampleText: '' }, new Set(['responseBody'])), /非空 JSON/)
+assert.deepEqual(clearOperationSection(draft, 'header').headers, [])
+assert.equal(clearOperationSection(draft, 'requestBody').requestSampleText, '')

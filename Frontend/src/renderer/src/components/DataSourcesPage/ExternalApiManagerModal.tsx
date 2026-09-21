@@ -1,7 +1,5 @@
 import {
-  DeleteOutlined,
   DownOutlined,
-  EditOutlined,
   FolderOpenOutlined,
   FolderOutlined,
   MoreOutlined,
@@ -13,9 +11,9 @@ import type { KeyboardEvent, ReactElement } from 'react'
 import { useEffect, useState } from 'react'
 import type { DataSourceDirectory, DataSourceOperation, ExternalApiDataSource } from '../../typings'
 import { cx } from '../../utils'
-import { JsonSampleTabs } from './JsonStructureViewer'
+import DataSourceOperationDetails from './DataSourceOperationDetails'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 type MoreAction = { key: string; label: string; danger?: boolean; onClick: () => void }
 
 /** 渲染目录或接口的更多操作菜单。 */
@@ -63,36 +61,6 @@ function DirectorySection({ directory, expanded, selected, selectedOperationId, 
         {directory.operations.length ? directory.operations.map((operation) => <OperationRow key={operation.id} onDelete={() => onDeleteOperation(operation)} onEdit={() => onEditOperation(operation)} onSelect={() => onSelectOperation(operation)} operation={operation} selected={selectedOperationId === operation.id} />) : <div className={cx('data-source-manager-directory-empty')}>暂无接口</div>}
       </div> : null}
     </section>
-  )
-}
-
-/** 渲染接口详情中的列表字段。 */
-function DetailList({ emptyText = '未配置', items, renderItem }: { emptyText?: string; items: unknown[]; renderItem: (item: unknown, index: number) => ReactElement }): ReactElement {
-  return items.length ? <div className={cx('data-source-manager-detail-list')}>{items.map((item, index) => renderItem(item, index))}</div> : <Text className={cx('data-source-manager-detail-empty')} type="secondary">{emptyText}</Text>
-}
-
-/** 渲染选中接口的只读配置详情。 */
-function OperationDetails({ directory, operation, onDelete, onEdit }: { directory: DataSourceDirectory; operation: DataSourceOperation; onDelete: () => void; onEdit: () => void }): ReactElement {
-  return (
-    <article className={cx('data-source-manager-detail')}>
-      <header className={cx('data-source-manager-detail-header')}>
-        <div className={cx('data-source-manager-detail-title')}><div><Title level={4}>{operation.name}</Title><Text type="secondary">{directory.name}</Text></div><Tag>{operation.method}</Tag></div>
-        <div className={cx('data-source-manager-detail-actions')}><Button icon={<EditOutlined />} onClick={onEdit}>编辑接口</Button><Button danger icon={<DeleteOutlined />} onClick={onDelete} type="text">删除</Button></div>
-      </header>
-      <div className={cx('data-source-manager-detail-body')}>
-        <section className={cx('data-source-manager-detail-section')}><div className={cx('data-source-manager-detail-section-title')}>请求路径</div><code className={cx('data-source-manager-detail-path')}>{operation.path}</code></section>
-        {(['path', 'query'] as const).map((location) => <section className={cx('data-source-manager-detail-section')} key={location}>
-          <div className={cx('data-source-manager-detail-section-title')}>{location === 'path' ? 'Path 参数' : 'Query 参数'}</div>
-          <DetailList items={location === 'path' ? operation.pathParameters : operation.queryParameters} renderItem={(item, index) => {
-            const parameter = item as DataSourceOperation['pathParameters'][number]
-            return <div className={cx('data-source-manager-detail-list-row')} key={`${parameter.name}-${index}`}><span>{parameter.name}</span><code>{parameter.type}</code><span>{parameter.required ? '必填' : '可选'}</span><Text type="secondary">{parameter.description || '无描述'}</Text></div>
-          }} />
-        </section>)}
-        <section className={cx('data-source-manager-detail-section')}><div className={cx('data-source-manager-detail-section-title')}>接口 Header</div><DetailList items={operation.headers} renderItem={(item, index) => { const header = item as DataSourceOperation['headers'][number]; return <div className={cx('data-source-manager-detail-list-row')} key={`${header.name}-${index}`}><span>{header.name || `Header ${index + 1}`}</span><Text className={cx('data-source-manager-detail-value')} ellipsis={{ tooltip: header.value }} type="secondary">{header.value || '空值'}</Text></div> }} /></section>
-        <JsonSampleTabs structure={operation.requestStructure} label="请求体" value={operation.requestSample} />
-        <JsonSampleTabs structure={operation.responseStructure} label="响应体" value={operation.responseSample} />
-      </div>
-    </article>
   )
 }
 
@@ -166,7 +134,7 @@ export default function ExternalApiManagerModal({ source, selectedDirectoryId, s
             </div>
           </aside>
           <main className={cx('data-source-manager-detail-pane')}>
-            {selectedOperation && selectedDirectory ? operationError ? <div className={cx('data-source-manager-placeholder')}><Alert message="接口详情读取失败" description={operationError} showIcon type="error" action={<Button onClick={onRetryOperation}>重试</Button>} /></div> : detail ? <Spin className={cx('data-source-manager-detail-loading')} spinning={operationLoading}><OperationDetails directory={selectedDirectory} onDelete={() => onDeleteOperation(selectedDirectory, detail)} onEdit={() => onEditOperation(selectedDirectory, detail)} operation={detail} /></Spin> : <div aria-live="polite" className={cx('data-source-manager-placeholder')}><Spin tip="正在读取接口配置..." /></div> : <ManagerPlaceholder directory={selectedDirectory} hasDirectories={source.directories.length > 0} onCreateDirectory={onCreateDirectory} onCreateOperation={onCreateOperation} />}
+            {selectedOperation && selectedDirectory ? operationError ? <div className={cx('data-source-manager-placeholder')}><Alert message="接口详情读取失败" description={operationError} showIcon type="error" action={<Button onClick={onRetryOperation}>重试</Button>} /></div> : detail ? <Spin className={cx('data-source-manager-detail-loading')} spinning={operationLoading}><DataSourceOperationDetails directory={selectedDirectory} onDelete={() => onDeleteOperation(selectedDirectory, detail)} onEdit={() => onEditOperation(selectedDirectory, detail)} operation={detail} /></Spin> : <div aria-live="polite" className={cx('data-source-manager-placeholder')}><Spin tip="正在读取接口配置..." /></div> : <ManagerPlaceholder directory={selectedDirectory} hasDirectories={source.directories.length > 0} onCreateDirectory={onCreateDirectory} onCreateOperation={onCreateOperation} />}
           </main>
         </div>
       </div>

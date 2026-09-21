@@ -198,6 +198,7 @@ def _index_entry(source: dict[str, Any]) -> dict[str, Any]:
                 {
                     "id": operation.get("id"),
                     "name": operation.get("name"),
+                    "description": operation.get("description", ""),
                     "method": operation.get("method"),
                     "path": operation.get("path"),
                 }

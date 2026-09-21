@@ -68,6 +68,7 @@ class ApiOperation(DataSourceModel):
 
     id: str | None = Field(default=None, max_length=128)
     name: str = Field(min_length=1, max_length=256)
+    description: str = Field(default="", max_length=500)
     method: Literal["GET", "POST", "PUT", "DELETE"]
     path: str = Field(min_length=1, max_length=2048)
     path_parameters: list[ApiParameter] = Field(default_factory=list, alias="pathParameters", max_length=50)
@@ -391,6 +392,7 @@ def _validate_operation(operation: ApiOperation, *, stored: bool = False) -> Non
 
     if not operation.path.startswith("/"):
         raise DataSourceError("外部 API 操作路径必须以 / 开头。")
+    operation.description = operation.description.strip()
     placeholders = set(re.findall(r"\{([^{}\/]+)\}", operation.path))
     remainder = re.sub(r"\{([^{}\/]+)\}", "", operation.path)
     path_names = {parameter.name.strip() for parameter in operation.path_parameters}
@@ -536,6 +538,10 @@ def _normalize_source(source: dict[str, Any]) -> dict[str, Any]:
             by_alias=True, exclude_none=True
         )
         for directory in normalized.get("directories") or []:
+            for operation in directory.get("operations", []):
+                operation["name"] = str(operation.get("name") or "").strip()
+                operation["description"] = str(operation.get("description") or "").strip()
+                operation["path"] = str(operation.get("path") or "").strip()
             try:
                 directory["operations"] = [
                     normalize_operation_fields(operation) for operation in directory.get("operations", [])

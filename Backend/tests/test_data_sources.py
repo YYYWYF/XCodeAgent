@@ -295,7 +295,7 @@ class DataSourcesServiceTests(unittest.TestCase):
         )
         self.assertEqual(
             set(index_entry["directories"][1]["operations"][1]),
-            {"id", "name", "method", "path"},
+                        {"id", "name", "description", "method", "path"},
         )
         self.assertTrue((self.workspace / ".xcodeagent" / "datasource" / "index.json").is_file())
         self.assertFalse((self.workspace / ".xcodeagent" / "data-sources.json").exists())
@@ -483,6 +483,7 @@ class DataSourcesServiceTests(unittest.TestCase):
                         "operations": [
                             {
                                 "name": "查询",
+                                "description": "  查询商品分类  ",
                                 "method": "GET",
                                 "path": "/products",
                                 "requestSample": {"filter.value": "书", "items": [{"sku": "A1", "name": "商品"}]},
@@ -505,6 +506,7 @@ class DataSourcesServiceTests(unittest.TestCase):
         )
 
         operation = created.sources[0].directories[1].operations[0]
+        self.assertEqual(operation.description, "查询商品分类")
         self.assertEqual(operation.request_structure.properties["filter.value"].description, "过滤文本")
         self.assertEqual(operation.response_structure.properties["data"].properties["total"].description, "结果总数")
         source_id = created.sources[0].id
@@ -520,6 +522,9 @@ class DataSourcesServiceTests(unittest.TestCase):
                 / f"{operation_id}.json"
             ).read_text(encoding="utf-8")
         )
+        self.assertEqual(persisted_operation["description"], "查询商品分类")
+        index = json.loads((self.workspace / ".xcodeagent" / "datasource" / "index.json").read_text(encoding="utf-8"))
+        self.assertEqual(index["sources"][0]["directories"][1]["operations"][0]["description"], "查询商品分类")
         self.assertEqual(persisted_operation["requestStructure"]["properties"]["items"]["items"]["properties"]["sku"]["description"], "商品编码")
 
         updated = mutate_catalog(

@@ -221,11 +221,17 @@ def load_database_tables(workspace_root: str | Path, source_id: str) -> dict[str
     """实时读取直属 MySQL 表清单，不返回任何连接凭据。"""
 
     payload = _mysql_metadata(workspace_root, source_id)
+    schemas = payload.get("schemas") if isinstance(payload.get("schemas"), dict) else {}
     return {
         "sourceId": source_id,
         "schema": str(payload.get("database") or ""),
         "tables": [
-            {"name": str(item.get("table_name") or ""), "description": str(item.get("comment") or "")}
+            {
+                "name": str(item.get("table_name") or ""),
+                "description": str(item.get("comment") or ""),
+                # 表清单复用只读元数据中的字段结构，供添加弹窗展示字段数量。
+                "columnCount": len(_dict_items(schemas.get(str(item.get("table_name") or "")))),
+            }
             for item in _dict_items(payload.get("tables"))
             if str(item.get("table_name") or "").strip()
         ],

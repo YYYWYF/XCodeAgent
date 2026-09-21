@@ -237,7 +237,7 @@ TechnicalPlan 顶层 `entities`；实体不做全局数据源绑定，数据源�
 
 每个 API Contract 和 Endpoint 都必须持久化非空且至少包含一个中文字符的 `name`，允许混合英文缩写。Contract `name` 表示接口分组名称，Endpoint `name` 表示操作名称；Endpoint `summary` 继续保存较完整的接口说明。两层 `name` 不参与稳定身份或引用，关联关系仍只使用 Contract/Endpoint `id`。当前 Markdown 不展示这两个名称，因此用户编辑 Markdown 后同步 JSON 时，平台按稳定 ID 保留既有名称；新增 Contract 或 Endpoint 仍必须由同步结果提供合法名称。
 
-技术规划阶段的右侧结构化文档面板展示这两层名称：Contract 卡片显示分组名称和 `base_path`，Endpoint 列表显示方法、接口名称、路径和 `summary`，选中接口的详情标题也显示接口名称。进入工作台后的接口快捷任务入口和开发产物接口树突出显示 Endpoint `name`，请求方法和完整路径通过悬停查看；Contract 分组只突出显示 Contract `name`，不增加分组悬停信息，并统一使用“接口”作为界面文案。页面绑定、Endpoint 设计及 Markdown 展示仍保持各自现有格式。
+技术规划阶段的右侧结构化文档面板展示这两层名称：Contract 卡片显示分组名称和 `base_path`，Endpoint 列表显示方法、接口名称、路径和 `summary`，选中接口的详情标题也显示接口名称。进入工作台后的接口快捷任务入口、开发产物接口树和字段映射目录均突出显示 Endpoint `name`；字段映射目录同时显示 Contract `name` 与 Endpoint `name`，并沿用开发产物 API 树的紧凑层级、缩进连接线、紫色接口图标和悬停高亮，悬停接口一秒后显示方法与完整路径。选中接口的编辑区标题继续显示 Contract 名称、请求方法和完整路径；开发产物接口树的请求方法和完整路径继续通过悬停查看。Contract 分组只突出显示 Contract `name`，不增加分组悬停信息，并统一使用“接口”作为界面文案。页面绑定、Endpoint 设计及 Markdown 展示仍保持各自现有格式。
 
 Endpoint 是否存在请求体由业务语义决定，不由 HTTP Method 单独决定。只依赖路径参数、查询参数和登录态即可完整表达的命令型 `POST`、`PUT` 或 `PATCH` 可以使用 `request_schema_ref: null`；实际消费请求体字段的 Endpoint 必须引用同一 API Contract `schemas` 内的真实请求 Schema，禁止为了通过校验生成无业务字段的空请求对象。
 

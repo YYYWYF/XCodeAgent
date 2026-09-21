@@ -1,15 +1,34 @@
 .binding-workspace {
   display: flex; height: 100%; min-height: 0; min-width: 0; color: var(--wb-text); background: var(--wb-canvas);
-  .binding-directory { flex: 0 0 180px; padding: 16px 12px; overflow: auto; border-right: 1px solid var(--wb-border); background: var(--wb-surface-subtle);
-    h4, small { color: var(--wb-text-secondary); }
-    button { display: flex; gap: 8px; align-items: center; width: 100%; padding: 12px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--wb-text); text-align: left; cursor: pointer; overflow-wrap: anywhere;
-      &:hover { background: var(--wb-surface-hover); }
+  .binding-directory { flex: 0 0 198px; padding: 16px 12px; overflow: auto; border-right: 1px solid var(--wb-border); background: var(--wb-surface-subtle);
+    h4 { margin: 0 10px 14px; color: var(--wb-text-secondary); }
+    .binding-contract { min-width: 0; margin: 0 0 14px; }
+    .binding-contract-heading { display: flex; min-width: 0; align-items: center; gap: 8px; min-height: 27px; padding: 0 10px 4px;
+      > .anticon:first-child { width: 10px; flex: 0 0 auto; color: var(--wb-text-secondary); font-size: 9px; }
+      > .anticon:nth-child(2) { flex: 0 0 auto; color: var(--wb-text-secondary); font-size: 13px; }
+      strong { min-width: 0; overflow: hidden; color: var(--wb-text); font-size: 12px; font-weight: 600; line-height: 15px; text-overflow: ellipsis; white-space: nowrap; }
+    }
+    .binding-endpoint-list { position: relative; min-width: 0; margin-left: 23px; padding-left: 17px;
+      &::before { position: absolute; top: 0; bottom: 4px; left: 0; width: 1px; content: ''; background: var(--wb-border); }
+    }
+    button { display: flex; gap: 8px; align-items: center; width: 100%; min-width: 0; min-height: 30px; padding: 0 4px; border: 0; border-radius: 4px; background: transparent; color: var(--wb-text); text-align: left; cursor: pointer; transition: color .16s ease, background .16s ease;
+      &:hover, &:focus-visible { color: var(--wb-accent-hover); background: linear-gradient(110deg, var(--wb-accent-soft), transparent 78%); outline: none; }
       &.selected { background: var(--wb-accent-soft); color: var(--wb-accent); }
+      > .anticon { flex: 0 0 auto; color: var(--wb-accent); font-size: 12px; }
+    }
+    .binding-endpoint-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px;
+      strong { overflow: hidden; font-size: 11px; font-weight: 500; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
     }
   }
   .binding-editor { flex: 1; min-width: 0; overflow: auto; padding: 22px; }
   .binding-heading { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--wb-border); padding-bottom: 16px;
-    code { overflow-wrap: anywhere; } p { color: var(--wb-text-secondary); margin: 10px 0 0; }
+    .binding-heading-copy { min-width: 0; }
+    .binding-heading-contract { display: block; overflow: hidden; color: var(--wb-text-secondary); font-size: 12px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+    .binding-heading-endpoint { display: flex; min-width: 0; align-items: center; gap: 8px; margin-top: 5px;
+      .binding-heading-name { overflow: hidden; font-size: 16px; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
+      code { overflow: hidden; color: var(--wb-text-secondary); font-size: 12px; font-weight: 400; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+    }
+    p { color: var(--wb-text-secondary); margin: 10px 0 0; }
   }
   .binding-section { margin-top: 18px; border: 1px solid var(--wb-border); border-radius: 10px; padding: 16px; min-width: 0;
     h4, h5 { color: var(--wb-text-secondary); margin-bottom: 14px; } h5 { margin-top: 12px; }
@@ -49,7 +68,7 @@
   ol { display: flex; flex-wrap: wrap; gap: 8px 22px; padding-left: 20px; color: var(--wb-text-secondary); } .current { color: var(--wb-accent); font-weight: 600; }
 }
 @media (max-width: 1150px) {
-  .binding-workspace .binding-directory { flex-basis: 150px; }
+  .binding-workspace .binding-directory { flex-basis: 170px; }
   .binding-workspace .binding-editor { padding: 12px; }
   .binding-workspace .binding-field { grid-template-columns: minmax(110px, 150px) 16px minmax(0, 1fr); }
   .binding-workspace .external-mapping-row { grid-template-columns: 1fr; gap: 7px; }
