@@ -14,6 +14,7 @@ import type { WorkbenchPhase } from '../../workbenchPhase'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
+  DevelopmentArtifactTarget,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningAgentOption,
   DevelopmentPlanningEntityOption,
@@ -3920,6 +3921,50 @@ export default function AiChatPanel({
     }
   }
 
+  /** 从未完成产物列表启动其余页面、接口或实体的正式开发，并切换到对应新会话。 */
+  const handleStartRemainingDevelopment = async (
+    target: DevelopmentArtifactTarget
+  ): Promise<void> => {
+    if (pendingPlanActionable) return
+    setTemporaryChatOpen(false)
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('chat')
+    if (target.type === 'page') {
+      const page = displayedPlanningPages.find((item) => item.pageId === target.pageId)
+      await handleStartPageDesign(
+        target.pageId,
+        String(page?.label || target.pageId).trim(),
+        Boolean(page?.hasDetailPlan)
+      )
+      return
+    }
+    if (target.type === 'entity') {
+      const entity = developmentPlanningEntities.find((item) => item.id === target.entityId)
+      await handleStartEntityDesign(
+        target.entityId,
+        String(entity?.label || target.entityId).trim(),
+        Boolean(entity?.hasDetailPlan)
+      )
+      return
+    }
+    const contract = developmentPlanningApiContracts.find((item) => item.id === target.apiContractId)
+    const endpoint = contract?.endpoints.find((item) => item.id === target.endpointId)
+    const method = String(endpoint?.method || 'API')
+      .trim()
+      .toUpperCase()
+    const path = String(endpoint?.path || '/').trim()
+    await handleStartEndpointDesign(
+      target.endpointId,
+      endpoint ? `${method} ${path}` : `${target.apiContractId}/${target.endpointId}`,
+      Boolean(endpoint?.hasDetailPlan || endpoint?.designed),
+      {
+        apiContractId: target.apiContractId,
+        endpointId: target.endpointId
+      }
+    )
+  }
+
   /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置所选开发目标。 */
   const handleQuickTaskStart = async (task: QuickTaskItem): Promise<void> => {
     if (pendingPlanActionable) return
@@ -4696,6 +4741,7 @@ export default function AiChatPanel({
               messages={messages}
               apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
               onContinueDevelopment={handleContinueDevelopment}
+              onStartRemainingDevelopment={handleStartRemainingDevelopment}
               onEntityDesignGateJump={handleEntityDesignGateJump}
               onOpenApiDesignConfig={handleOpenApiDesignConfig}
               onOpenCodeChangeFile={handleOpenCodeChangeFile}
@@ -4922,6 +4968,7 @@ export default function AiChatPanel({
                 await handleOpenChatSession(session.id)
               }}
               onStartAgentDevelopment={(agent) => void handleStartAgentBuild(agent)}
+              onStartDevelopment={handleStartRemainingDevelopment}
               outlineLocked={false}
               pages={displayedPlanningPages}
               pageTree={displayedPlanningPageTree}

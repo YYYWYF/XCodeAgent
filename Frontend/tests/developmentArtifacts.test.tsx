@@ -7,12 +7,14 @@ import {
   developmentCompletedCount,
   developmentStatusLabel,
   gateWorkbenchPhase,
-  testEntryGateReason
+  testEntryGateReason,
+  testPhaseDockCopy
 } from '../src/renderer/src/developmentArtifacts'
 import { WorkbenchPhaseProvider } from '../src/renderer/src/context/WorkbenchPhaseContext'
 import { useWorkbenchPhase } from '../src/renderer/src/context/workbenchPhaseState'
 import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
 import DevelopmentStatusDot from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/DevelopmentStatusDot'
+import PlanExecutionDock from '../src/renderer/src/components/AiChatPanel/components/PlanExecutionDock'
 import TestPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/TestPhaseConfirmationCard'
 import QuickTaskGuide from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide'
 import type { ApplicationLifecycle, TestEntryGate } from '../src/renderer/src/typings'
@@ -119,6 +121,36 @@ function CurrentPhase(): JSX.Element {
 
 /** 在实际阶段上下文中渲染确认卡，隔离服务端测试所需的本地存储。 */
 function renderConfirmation(gate?: TestEntryGate, disabled = false): string {
+  return renderWithLifecycle(
+    gate,
+        <TestPhaseConfirmationCard
+          disabled={disabled}
+          onStartRemaining={() => undefined}
+          target={{ type: 'endpoint', id: 'age', label: 'POST /api/age' }}
+          onSubmit={() => assert.fail('渲染卡片不应启动测试')}
+        />
+  )
+}
+
+/** 在实际阶段上下文中渲染底部控制栏，核对测试门禁文案。 */
+function renderDock(gate?: TestEntryGate): string {
+  return renderWithLifecycle(
+    gate,
+    <PlanExecutionDock
+      mode="awaiting_test_phase_confirmation"
+      onAccept={async () => false}
+      onConfirmInteraction={() => undefined}
+      onEnd={() => undefined}
+      onOpenPreview={() => undefined}
+      onRetry={() => undefined}
+      onStop={() => undefined}
+      onViewPlan={() => undefined}
+    />
+  )
+}
+
+/** 为确认卡和控制栏提供同一生命周期 Provider 与本地存储隔离。 */
+function renderWithLifecycle(gate: TestEntryGate | undefined, child: JSX.Element): string {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
@@ -127,11 +159,7 @@ function renderConfirmation(gate?: TestEntryGate, disabled = false): string {
   try {
     return renderToStaticMarkup(
       <WorkbenchPhaseProvider applicationId="test" lifecycle={lifecycle(gate)}>
-        <TestPhaseConfirmationCard
-          disabled={disabled}
-          target={{ type: 'endpoint', id: 'age', label: 'POST /api/age' }}
-          onSubmit={() => assert.fail('渲染卡片不应启动测试')}
-        />
+        {child}
       </WorkbenchPhaseProvider>
     )
   } finally {
@@ -150,7 +178,33 @@ test('未全部完成时只逐项展示剩余产物，隐藏测试目标和测�
   assert.match(html, /two/)
   assert.match(html, /api\/get/)
   assert.equal((html.match(/<li>/g) || []).length, 2)
-  assert.doesNotMatch(html, /测试目标|POST \/api\/age|<button/)
+  assert.match(html, /去开发/)
+  assert.doesNotMatch(html, /测试目标|POST \/api\/age|进入测试阶段/)
+})
+
+test('底部控制栏未全量完成时不得引导进入测试', () => {
+  const copy = testPhaseDockCopy(blocked)
+  assert.equal(copy.title, '当前产物开发已完成')
+  assert.equal(copy.description, blocked.reason)
+  assert.equal(copy.interaction, '请在上方未完成产物中点「去开发」，或新建对话后选择其余产物。')
+  const html = renderDock(blocked)
+  assert.match(html, /当前产物开发已完成/)
+  assert.match(html, /完成全部开发产物后可进入测试，当前 1\/3/)
+  assert.match(html, /请在上方未完成产物中点「去开发」/)
+  assert.doesNotMatch(html, /等待进入测试阶段/)
+  assert.doesNotMatch(html, /请在上方确认进入测试阶段/)
+  assert.equal(testPhaseDockCopy().title, '当前产物开发已完成')
+  assert.match(testPhaseDockCopy().description, /正在读取/)
+})
+
+test('底部控制栏全量完成后才引导确认进入测试', () => {
+  const copy = testPhaseDockCopy(allowed)
+  assert.equal(copy.title, '等待进入测试阶段')
+  assert.match(copy.description, /请在上方确认进入测试阶段/)
+  const html = renderDock(allowed)
+  assert.match(html, /等待进入测试阶段/)
+  assert.match(html, /请在上方确认进入测试阶段/)
+  assert.doesNotMatch(html, /请在上方未完成产物中点「去开发」/)
 })
 
 test('全量门禁解锁后恢复测试目标和入口，提交期间保留禁用行为', () => {

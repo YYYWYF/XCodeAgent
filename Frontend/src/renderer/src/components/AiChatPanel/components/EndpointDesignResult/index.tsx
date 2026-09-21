@@ -17,7 +17,12 @@ type Props = {
 export default function EndpointDesignResult({ detail, compact = false, historyLayout = false }: Props): ReactElement {
   if (!detail) return <Empty description="尚未读取 Endpoint API 映射结果" />
   const summary = endpointDesignSummary(detail)
-  const statusLabel = detail.status === 'confirmed' ? '已确认' : detail.status === 'stale' ? '已失效' : '待设计'
+  const statusLabel =
+    detail.status === 'confirmed'
+      ? '映射已确认'
+      : detail.status === 'stale'
+        ? '映射已失效'
+        : '待配置字段映射'
   const statusColor = detail.status === 'confirmed' ? 'success' : detail.status === 'stale' ? 'warning' : 'default'
   const design = detail.design || {}
   const endpoint = design.endpointContract as Record<string, unknown> | undefined

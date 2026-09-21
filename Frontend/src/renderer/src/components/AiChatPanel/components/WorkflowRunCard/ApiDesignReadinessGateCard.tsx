@@ -47,8 +47,8 @@ export default function ApiDesignReadinessGateCard({
   return (
     <section className={cx('api-design-readiness-gate')}>
       <Alert
-        description="可逐项保存字段映射，全部配置完成后点击确认统一检测。"
-        message={message || '存在未完成或已失效的 API 字段映射。'}
+        description={gateDescription(items)}
+        message={message || '当前开发目标还缺字段映射，开发已暂停。'}
         showIcon
         type="warning"
       />
@@ -89,6 +89,15 @@ export default function ApiDesignReadinessGateCard({
       </div>
     </section>
   )
+}
+
+/** 按缺失项状态说明操作步骤，避免把尚未配置说成产品设计未完成。 */
+function gateDescription(items: MissingDesignItem[]): string {
+  const statuses = new Set(items.map((item) => item.status || 'pending'))
+  if (statuses.size > 0 && [...statuses].every((status) => status === 'stale')) {
+    return '接口契约变更后，已保存的映射不再有效。请逐项重新打开「配置映射」并保存，全部变为「已配置，待检测」后再点确认。'
+  }
+  return '这不是产品设计未完成。请逐项打开「配置映射」并保存，清单全部变为「已配置，待检测」后，再点确认做统一检测。'
 }
 
 /** 把后端缺失项规范为独立映射弹窗和门禁列表共用的展示结构。 */

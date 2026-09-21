@@ -1,7 +1,7 @@
 import { CheckCircleOutlined, RightOutlined } from '@ant-design/icons'
 import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
-import type { WorkflowTestTarget } from '../../../../typings'
+import type { DevelopmentArtifactTarget, WorkflowTestTarget } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { useTestEntryGate } from '../../../../context'
 import { testEntryGateReason } from '../../../../developmentArtifacts'
@@ -12,7 +12,20 @@ const { Text } = Typography
 type Props = {
   disabled?: boolean
   target?: WorkflowTestTarget
+  onStartRemaining?: (target: DevelopmentArtifactTarget) => void
   onSubmit: () => void
+}
+
+/** 为测试门禁剩余项生成稳定展示名。 */
+function remainingArtifactName(item: DevelopmentArtifactTarget): string {
+  if (item.type === 'page') return item.pageId
+  if (item.type === 'entity') return item.entityId
+  return `${item.apiContractId}/${item.endpointId}`
+}
+
+/** 为测试门禁剩余项生成类型标签。 */
+function remainingArtifactKind(item: DevelopmentArtifactTarget): string {
+  return item.type === 'page' ? '页面' : item.type === 'entity' ? '实体' : '接口'
 }
 
 const TEST_PHASE_CONFIRMATION_DESCRIPTION =
@@ -22,6 +35,7 @@ const TEST_PHASE_CONFIRMATION_DESCRIPTION =
 export default function TestPhaseConfirmationCard({
   disabled,
   target,
+  onStartRemaining,
   onSubmit
 }: Props): ReactElement {
   const gate = useTestEntryGate()
@@ -57,15 +71,21 @@ export default function TestPhaseConfirmationCard({
             {gate.blockers.map((item) => (
               <li key={JSON.stringify(item)}>
                 <span className={cx('workflow-test-phase-confirmation-kind')}>
-                  {item.type === 'page' ? '页面' : item.type === 'entity' ? '实体' : '接口'}
+                  {remainingArtifactKind(item)}
                 </span>
                 <span className={cx('workflow-test-phase-confirmation-name')}>
-                  {item.type === 'page'
-                    ? item.pageId
-                    : item.type === 'entity'
-                      ? item.entityId
-                      : `${item.apiContractId}/${item.endpointId}`}
+                  {remainingArtifactName(item)}
                 </span>
+                {onStartRemaining ? (
+                  <Button
+                    disabled={disabled}
+                    onClick={() => onStartRemaining(item)}
+                    size="small"
+                    type="link"
+                  >
+                    去开发
+                  </Button>
+                ) : null}
               </li>
             ))}
           </ul>

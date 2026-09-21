@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.domain.api_design import EndpointApiDesign
-from app.graph.nodes.api_design import api_design_readiness_gate
+from app.graph.nodes.api_design import _missing_mapping_copy, api_design_readiness_gate
 from app.workspace.endpoint_design_documents import technical_plan_sha256, write_endpoint_design
 
 
@@ -32,6 +32,28 @@ class ApiDesignNodeTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "requires_user_input")
             self.assertEqual(result["clarification"]["mode"], "api_design_required")
+            self.assertEqual(
+                result["clarification"]["message"],
+                "当前开发目标还缺字段映射，开发已暂停。",
+            )
+            question = result["clarification"]["questions"][0]["question"]
+            self.assertIn("尚未完成字段映射", question)
+            self.assertNotIn("尚未完成设计", question)
+            self.assertNotIn("已失效", result["clarification"]["message"])
+
+    def test_missing_mapping_copy_distinguishes_pending_and_stale(self) -> None:
+        """未配置不得写成已失效，契约变更才提示重新配置。"""
+
+        pending, pending_question = _missing_mapping_copy(
+            [{"status": "pending", "method": "GET", "path": "/orders"}]
+        )
+        self.assertEqual(pending, "当前开发目标还缺字段映射，开发已暂停。")
+        self.assertIn("尚未完成字段映射", pending_question)
+        stale, stale_question = _missing_mapping_copy(
+            [{"status": "stale", "method": "GET", "path": "/orders"}]
+        )
+        self.assertEqual(stale, "当前开发目标的字段映射已失效，需要重新配置后继续开发。")
+        self.assertIn("已失效", stale_question)
 
     def test_endpoint_ready_waits_for_version_confirmation(self) -> None:
         """接口自身映射有效后仍需用户确认当前版本。"""

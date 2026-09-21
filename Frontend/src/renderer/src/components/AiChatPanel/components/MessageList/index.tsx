@@ -24,6 +24,7 @@ import {
 } from '../../../Welcome/planningWorkflowState'
 import type {
   ApplicationLifecycle,
+  DevelopmentArtifactTarget,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
 } from '../../../../typings'
@@ -297,6 +298,8 @@ type MessageListProps = {
   messages: AgentChatMessage[]
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
+  /** 未完成产物点击后启动对应页面、接口或实体的正式开发。 */
+  onStartRemainingDevelopment?: (target: DevelopmentArtifactTarget) => void
   /** 在当前会话中恢复实体门禁前的页面或 Endpoint 正式任务。 */
   onContinueDevelopment?: (
     messageId: number,
@@ -346,6 +349,7 @@ export default function MessageList({
   messages,
   onEntityDesignGateJump,
   onOpenApiDesignConfig,
+  onStartRemainingDevelopment,
   onContinueDevelopment,
   onOpenRevisionSession,
   onOpenCodeChangeFile,
@@ -981,6 +985,7 @@ export default function MessageList({
                               apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
                               onEntityDesignGateJump={onEntityDesignGateJump}
                               onOpenApiDesignConfig={onOpenApiDesignConfig}
+                              onStartRemainingDevelopment={onStartRemainingDevelopment}
                               onSubmitClarification={onSubmitClarification}
                               uiDesignActivePageId={uiDesignActivePageId}
                               onUiDesignActivePageChange={onUiDesignActivePageChange}

@@ -9,6 +9,8 @@ import {
 import { Button, Modal, Popconfirm, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
+import { useTestEntryGate } from '../../../../context'
+import { testPhaseDockCopy, type TestPhaseDockCopy } from '../../../../developmentArtifacts'
 import type { WorkbenchExecution } from '../../../../typings'
 import { cx } from '../../../../utils'
 import type { PlanExecutionMode } from '../../planExecutionMode'
@@ -52,6 +54,8 @@ export default function PlanExecutionDock({
   const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
   const [accepting, setAccepting] = useState(false)
   const pending = execution?.pendingInteraction
+  const testEntryGate = useTestEntryGate()
+  const testPhaseCopy = testPhaseDockCopy(testEntryGate)
 
   useEffect(() => {
     setAcceptanceConfirmOpen(false)
@@ -87,7 +91,11 @@ export default function PlanExecutionDock({
           )}
         </span>
         <div className={cx('plan-execution-dock-copy')}>
-          <Text strong>{dependencyLocked ? '该页面被关联计划锁定' : planModeTitle(mode)}</Text>
+          <Text strong>
+            {dependencyLocked
+              ? '该页面被关联计划锁定'
+              : planModeTitle(mode, testPhaseCopy)}
+          </Text>
           <Text type="secondary">
             {dependencyLocked
               ? dependencyLockDescription(ownerPageId, execution?.phase)
@@ -96,7 +104,8 @@ export default function PlanExecutionDock({
                   execution?.phase,
                   pending?.payload,
                   error,
-                  canRetryFailedTasks
+                  canRetryFailedTasks,
+                  testPhaseCopy
                 )}
           </Text>
         </div>
@@ -150,7 +159,7 @@ export default function PlanExecutionDock({
             )}
             {mode === 'awaiting_test_phase_confirmation' && (
               <div className={cx('plan-execution-dock-interaction')}>
-                开发已完成，请在上方确认进入测试阶段。
+                {testPhaseCopy.interaction}
               </div>
             )}
             {mode === 'awaiting_review_phase_confirmation' && (
@@ -264,7 +273,10 @@ function dependencyLockDescription(ownerPageId?: string, phase?: string): string
 }
 
 /** 返回计划控制栏当前状态的主标题。 */
-function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
+function planModeTitle(
+  mode: Exclude<PlanExecutionMode, 'idle'>,
+  testPhaseCopy: TestPhaseDockCopy
+): string {
   return {
     running: '计划执行期间已暂停自由输入',
     stopping: '正在暂停计划执行…',
@@ -272,7 +284,7 @@ function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
     awaiting_repair_confirmation: 'RepairPlanner 需要你的确认',
     awaiting_unit_test_confirmation: '等待单元测试选择',
     awaiting_frontend_performance_confirmation: '等待前端性能测试选择',
-    awaiting_test_phase_confirmation: '等待进入测试阶段',
+    awaiting_test_phase_confirmation: testPhaseCopy.title,
     awaiting_review_phase_confirmation: '等待进入审查阶段',
     awaiting_acceptance_phase_confirmation: '等待进入验收阶段',
     awaiting_code_review_repair_confirmation: '等待一键修复代码问题',
@@ -286,10 +298,11 @@ function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
 /** 组合当前阶段与结构化交互摘要，避免在底部复制完整日志。 */
 function planModeDescription(
   mode: Exclude<PlanExecutionMode, 'idle'>,
-  phase?: string,
-  payload?: Record<string, unknown>,
-  error?: string,
-  canRetryFailedTasks = false
+  phase: string | undefined,
+  payload: Record<string, unknown> | undefined,
+  error: string | undefined,
+  canRetryFailedTasks: boolean,
+  testPhaseCopy: TestPhaseDockCopy
 ): string {
   if (mode === 'failed') {
     return (
@@ -303,7 +316,7 @@ function planModeDescription(
     return String(payload?.reason || payload?.message || '修复范围发生变化，确认后继续。')
   }
   if (mode === 'awaiting_test_phase_confirmation') {
-    return '开发已完成，请在上方确认进入测试阶段。'
+    return testPhaseCopy.description
   }
   if (mode === 'awaiting_review_phase_confirmation') {
     return '测试已通过，请在上方确认进入审查阶段。'

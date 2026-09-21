@@ -21,6 +21,7 @@ import {
 import type { ReactElement } from 'react'
 import { useEffect, useState } from 'react'
 import type {
+  DevelopmentArtifactTarget,
   WorkflowBuildExecutionSlice,
   WorkflowBuildExecutionTask,
   WorkflowClarification,
@@ -125,6 +126,8 @@ type WorkflowRunCardProps = {
   historicalClarificationAnswers?: Record<string, string>
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
+  /** 未完成产物点击后启动对应页面、接口或实体的正式开发。 */
+  onStartRemainingDevelopment?: (target: DevelopmentArtifactTarget) => void
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
@@ -157,6 +160,7 @@ export default function WorkflowRunCard({
   interactionAvailability,
   onEntityDesignGateJump,
   onOpenApiDesignConfig,
+  onStartRemainingDevelopment,
   onSubmitClarification,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
@@ -554,6 +558,7 @@ export default function WorkflowRunCard({
           ) : testPhaseConfirmation && requiresConfirmation ? (
             <TestPhaseConfirmationCard
               disabled={disabled || interactionAvailability !== 'active'}
+              onStartRemaining={onStartRemainingDevelopment}
               onSubmit={() =>
                 onSubmitClarification?.(workflow, {
                   test_phase_confirmation: {

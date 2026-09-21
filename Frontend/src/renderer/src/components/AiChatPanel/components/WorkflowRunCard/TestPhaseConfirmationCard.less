@@ -85,9 +85,28 @@
   li {
     display: flex;
     min-width: 0;
-    align-items: baseline;
+    align-items: center;
     gap: 10px;
     line-height: 1.6;
+  }
+
+  .ant-btn-link {
+    flex: 0 0 auto;
+    margin-left: auto;
+    height: auto;
+    padding: 0;
+    color: var(--wb-accent);
+    font-size: 12px;
+
+    &:hover,
+    &:focus {
+      color: var(--wb-accent-hover, var(--wb-accent));
+    }
+
+    &[disabled],
+    &.ant-btn-disabled {
+      color: var(--wb-text-secondary);
+    }
   }
 }
 

@@ -116,16 +116,14 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
             "timeline": ["api_design_readiness_gate"],
         }
     missing = readiness["missing_api_designs"]
-    labels = "、".join(
-        f"{item.get('method')} {item.get('path')}" for item in missing
-    )
+    message, question = _missing_mapping_copy(missing)
     clarification = build_ask_user_payload(
         [
             AskUserQuestion(
-                header="API 设计前置",
-                question=f"当前目标依赖的 API 尚未完成设计：{labels}。请分别配置后重新检测。",
+                header="字段映射前置",
+                question=question,
                 type="text",
-                placeholder="请通过门禁卡片配置映射并重新检测。",
+                placeholder="请通过门禁卡片配置映射并保存，全部完成后点击确认。",
             )
         ]
     )
@@ -133,7 +131,7 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         {
             "mode": "api_design_required",
             "status": "requires_user_input",
-            "message": "存在未完成或已失效的 API 设计，当前开发目标已暂停。",
+            "message": message,
             "missingApiDesigns": missing,
             "developmentTarget": {
                 "type": target_type,
@@ -152,6 +150,44 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         "clarification": clarification,
         "timeline": ["api_design_readiness_gate"],
     }
+
+
+def _missing_mapping_copy(missing: list[Any]) -> tuple[str, str]:
+    """按 pending/stale 生成门禁文案，避免把尚未配置说成设计失效。"""
+
+    statuses = {
+        str(item.get("status") or "pending")
+        for item in missing
+        if isinstance(item, dict)
+    }
+    labels = "、".join(
+        f"{item.get('method')} {item.get('path')}"
+        for item in missing
+        if isinstance(item, dict)
+    )
+    if statuses <= {"pending"}:
+        return (
+            "当前开发目标还缺字段映射，开发已暂停。",
+            (
+                f"当前目标依赖的接口尚未完成字段映射：{labels}。"
+                "请逐项配置并保存，全部完成后点击确认统一检测。"
+            ),
+        )
+    if statuses <= {"stale"}:
+        return (
+            "当前开发目标的字段映射已失效，需要重新配置后继续开发。",
+            (
+                f"当前目标依赖的接口字段映射已失效：{labels}。"
+                "请逐项重新配置并保存，全部完成后点击确认统一检测。"
+            ),
+        )
+    return (
+        "存在未完成或已失效的字段映射，当前开发目标已暂停。",
+        (
+            f"当前目标依赖的接口字段映射未完成或已失效：{labels}。"
+            "请逐项配置并保存，全部完成后点击确认统一检测。"
+        ),
+    )
 
 
 def _gate_versions_match(action: dict[str, Any], result: dict[str, Any]) -> bool:

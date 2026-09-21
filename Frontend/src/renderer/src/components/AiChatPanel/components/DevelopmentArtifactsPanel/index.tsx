@@ -5,12 +5,14 @@ import ApplicationOutline from '../ApplicationOutline'
 import AgentDevelopmentDetail from '../AgentDevelopmentDetail'
 import type {
   ApplicationLifecycle,
+  DevelopmentArtifactTarget,
   DevelopmentPlanningAgentOption,
   WorkbenchExecution
 } from '../../../../typings'
 import type { ApplicationOutlineProps } from '../ApplicationOutline'
 import EndpointDesignResult from '../EndpointDesignResult'
 import { useEndpointDesignDetail } from '../../hooks/useEndpointDesignDetail'
+import DevelopmentTargetDetail from './DevelopmentTargetDetail'
 import './DevelopmentArtifactsPanel.less'
 
 type Props = ApplicationOutlineProps & {
@@ -23,10 +25,11 @@ type Props = ApplicationOutlineProps & {
   onOpenAgentExecution?: (execution: WorkbenchExecution) => Promise<void>
   onAgentSettingsApplied?: () => void
   onStartAgentDevelopment?: (agent: DevelopmentPlanningAgentOption) => void
+  onStartDevelopment?: (target: DevelopmentArtifactTarget) => void
   workspaceRoot?: string
 }
 
-/** 并排展示常驻菜单和随选中产物更新的详情占位，菜单选择不切换工作区标签。 */
+/** 并排展示常驻菜单和当前选中产物的开发详情。 */
 export default function DevelopmentArtifactsPanel({
   detailLabel,
   apiTarget,
@@ -37,12 +40,30 @@ export default function DevelopmentArtifactsPanel({
   onOpenAgentExecution,
   onAgentSettingsApplied,
   onStartAgentDevelopment,
+  onStartDevelopment,
   workspaceRoot,
   ...outlineProps
 }: Props): ReactElement {
   const selectedAgent = outlineProps.agents.find(
     (agent) => agent.agentId === outlineProps.selectedAgentId
   )
+  const selectedPage = outlineProps.pages.find((page) => page.pageId === outlineProps.selectedPageId)
+  const selectedEntity = outlineProps.entities.find(
+    (entity) => entity.id === outlineProps.selectedEntityId
+  )
+  const selectedEndpoint = apiTarget
+    ? outlineProps.apiContracts
+        .flatMap((contract) =>
+          contract.endpoints.map((endpoint) => ({
+            ...endpoint,
+            apiContractId: endpoint.apiContractId || contract.id
+          }))
+        )
+        .find(
+          (endpoint) =>
+            endpoint.apiContractId === apiTarget.apiContractId && endpoint.id === apiTarget.endpointId
+        )
+    : undefined
   const { detail, error, loading, reload } = useEndpointDesignDetail(
     workspaceRoot,
     apiTarget,
@@ -90,12 +111,55 @@ export default function DevelopmentArtifactsPanel({
               </Button>
             </div>
           ) : (
-            <EndpointDesignResult detail={detail} />
+            <DevelopmentTargetDetail
+              description={selectedEndpoint?.summary}
+              disabled={developmentDisabled}
+              extra={<EndpointDesignResult detail={detail} />}
+              kind="endpoint"
+              progress={
+                outlineProps.developmentArtifacts?.endpoints[apiTarget.apiContractId]?.[
+                  apiTarget.endpointId
+                ]
+              }
+              subtitle={`${String(selectedEndpoint?.method || 'API').toUpperCase()} ${selectedEndpoint?.path || ''}`}
+              title={detailLabel || apiTarget.endpointId}
+              onStart={() =>
+                onStartDevelopment?.({
+                  type: 'endpoint',
+                  apiContractId: apiTarget.apiContractId,
+                  endpointId: apiTarget.endpointId
+                })
+              }
+            />
           )
+        ) : selectedPage ? (
+          <DevelopmentTargetDetail
+            description={selectedPage.purpose}
+            disabled={developmentDisabled}
+            kind="page"
+            progress={outlineProps.developmentArtifacts?.pages[selectedPage.pageId]}
+            subtitle={selectedPage.path}
+            title={selectedPage.label}
+            onStart={() =>
+              onStartDevelopment?.({ type: 'page', pageId: selectedPage.pageId })
+            }
+          />
+        ) : selectedEntity ? (
+          <DevelopmentTargetDetail
+            description={selectedEntity.purpose}
+            disabled={developmentDisabled}
+            kind="entity"
+            progress={outlineProps.developmentArtifacts?.entities[selectedEntity.id]}
+            subtitle={selectedEntity.dataSourceType}
+            title={selectedEntity.label}
+            onStart={() =>
+              onStartDevelopment?.({ type: 'entity', entityId: selectedEntity.id })
+            }
+          />
         ) : (
           <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status">
-            <h3>{detailLabel || '请选择开发产物'}</h3>
-            <p>{detailLabel ? '详情内容待设计' : '点击左侧菜单查看详情'}</p>
+            <h3>请选择开发产物</h3>
+            <p>点击左侧菜单查看开发状态，并开始尚未完成的页面、接口或实体。</p>
           </div>
         )}
       </section>
