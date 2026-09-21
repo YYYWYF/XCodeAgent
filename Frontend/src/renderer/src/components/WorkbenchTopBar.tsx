@@ -21,6 +21,7 @@ type Props = {
   workspaceRoot: string
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
+  developmentTotals?: { completed: number; total: number }
   rightPanelOpen: boolean
   onToggleRightPanel: () => void
   /** 生成新版本：打开生成版本弹框。 */
@@ -44,6 +45,7 @@ type Props = {
 export default function WorkbenchTopBar({
   application,
   lifecycle,
+  developmentTotals: providedDevelopmentTotals,
   workspaceRoot,
   onReturnWelcome,
   rightPanelOpen,
@@ -67,9 +69,11 @@ export default function WorkbenchTopBar({
   } = useWorkbenchPhase()
   const following = manualOverride === null
   const previousPhaseRef = useRef<WorkbenchPhase | null>(null)
-  const developmentTotals = lifecycle?.developmentArtifacts
-    ? developmentArtifactTotals(lifecycle.developmentArtifacts)
-    : testEntryGate
+  const developmentTotals =
+    providedDevelopmentTotals ||
+    (lifecycle?.developmentArtifacts
+      ? developmentArtifactTotals(lifecycle.developmentArtifacts)
+      : testEntryGate)
 
   // 进入开发阶段时提醒用户通过服务状态抽屉手动启动前后端预览服务。
   useEffect(() => {

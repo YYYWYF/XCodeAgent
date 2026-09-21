@@ -161,6 +161,21 @@ test('顶部开发进度统计完整产物目录，测试门禁仍按本轮范�
     )
     assert.match(html, /开发阶段<span>3\/3<\/span>/)
     assert.equal(lifecycle.testEntryGate?.total, 2)
+
+    const newVersionHtml = renderToStaticMarkup(
+      <WorkbenchPhaseProvider applicationId="new-version" versionId="v2" lifecycle={lifecycle}>
+        <WorkbenchTopBar
+          application={{ ...lifecycle.application, id: 'new-version' }}
+          lifecycle={lifecycle}
+          developmentTotals={{ completed: 0, total: 0 }}
+          workspaceRoot="/workspace"
+          onReturnWelcome={() => {}}
+          rightPanelOpen={false}
+          onToggleRightPanel={() => {}}
+        />
+      </WorkbenchPhaseProvider>
+    )
+    assert.match(newVersionHtml, /开发阶段<span>0\/0<\/span>/)
   }))
 
 test('已生成版本（locked）高亮冻结阶段且全部阶段不可点', () =>

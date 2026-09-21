@@ -44,6 +44,7 @@ import type {
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
 } from '../typings'
+import { developmentArtifactTotals, developmentCompletedCount } from '../developmentArtifacts'
 import { cx } from '../utils'
 import './WorkbenchPage.less'
 
@@ -349,6 +350,33 @@ function WorkbenchPage({
   // 是否在回看历史版本（非活跃版本）。顶部栏与内容区共用这一个口径：
   // 不能复用 versionLocked —— 它把"当前版本已发布"也算作锁定，那是阶段不可点的语义。
   const viewingHistoricalVersion = isViewingHistoricalVersion(activeVersionId, viewedVersion?.id)
+  // 活跃版本顶部计数必须跟随当前正式规划目录；新迭代清空目录后应立即显示 0/0，
+  // 不能把 lifecycle 内为增量门禁保留的上一版本完成事实展示成当前版本产物。
+  const topBarLifecycle = isViewingActiveVersion ? applicationLifecycle : viewedVersion?.lifecycle
+  const activeDevelopmentRecords = [
+    ...developmentPlanningPages.map(
+      (page) => applicationLifecycle?.developmentArtifacts?.pages[page.pageId]
+    ),
+    ...developmentPlanningApiContracts.flatMap((contract) =>
+      contract.endpoints.map(
+        (endpoint) =>
+          applicationLifecycle?.developmentArtifacts?.endpoints[
+            endpoint.apiContractId || contract.id
+          ]?.[endpoint.id]
+      )
+    ),
+    ...developmentPlanningEntities.map(
+      (entity) => applicationLifecycle?.developmentArtifacts?.entities[entity.id]
+    )
+  ]
+  const topBarDevelopmentTotals = isViewingActiveVersion
+    ? {
+        completed: developmentCompletedCount(activeDevelopmentRecords),
+        total: activeDevelopmentRecords.length
+      }
+    : topBarLifecycle?.developmentArtifacts
+      ? developmentArtifactTotals(topBarLifecycle.developmentArtifacts)
+      : undefined
   // 当前活跃迭代版本是否可发布（验收通过等条件齐全）。
   const releaseVersionTarget = isViewingActiveVersion ? viewedVersion : undefined
   const versionReleasable = Boolean(
@@ -617,7 +645,8 @@ function WorkbenchPage({
                   workspaceApplication.workspaceRoot || workspaceApplication.projectParentPath || ''
                 }
                 onReturnWelcome={onReturnWelcome}
-                lifecycle={applicationLifecycle}
+                lifecycle={topBarLifecycle}
+                developmentTotals={topBarDevelopmentTotals}
                 rightPanelOpen={rightPanelOpen}
                 onToggleRightPanel={() => setRightPanelOpen((open) => !open)}
                 onPublishVersion={handleOpenPublish}
