@@ -740,6 +740,34 @@
   overflow-wrap: anywhere;
 }
 
+.@{class-prefix}-workflow-code-review-current-file {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  margin-left: 35px;
+
+  .anticon {
+    color: var(--wb-accent);
+  }
+
+  .ant-typography {
+    min-width: 0;
+    margin: 0;
+  }
+
+  .ant-typography code {
+    display: block;
+    overflow: hidden;
+    color: var(--wb-text);
+    border-color: var(--wb-border);
+    background: var(--wb-canvas);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 .@{class-prefix}-workflow-code-review-completion {
   display: flex;
   min-width: 0;

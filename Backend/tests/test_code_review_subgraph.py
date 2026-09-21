@@ -9,8 +9,10 @@ from unittest.mock import patch
 from app.graph.subgraphs.code_review import (
     MAX_CODE_REVIEW_REPAIR_ITERATIONS,
     _route_review_start,
+    _reviewed_source_file,
     _public_build_checks,
     build_code_review_subgraph,
+    code_scan,
     code_review_repair,
     review_build_checks,
 )
@@ -79,6 +81,86 @@ def _frontend_dependency_issue() -> dict:
 
 class CodeReviewSubgraphTests(unittest.TestCase):
     """验证代码审查子图的扫描、恢复和构建回环边界。"""
+
+    def test_reviewed_source_file_rejects_non_source_activity(self) -> None:
+        """审查进度只能公开授权源码读取，不能泄露 Skill 或宿主机路径。"""
+
+        self.assertEqual(
+            _reviewed_source_file(
+                {
+                    "tool": "read_file",
+                    "path": "/backend/src/main/java/example/App.java",
+                }
+            ),
+            "backend/src/main/java/example/App.java",
+        )
+        self.assertEqual(
+            _reviewed_source_file(
+                {
+                    "tool": "read_file",
+                    "path": "/.xcodeagent/builtin-skills/backend-code-scan/SKILL.md",
+                }
+            ),
+            "",
+        )
+        self.assertEqual(
+            _reviewed_source_file(
+                {"tool": "read_file", "path": "/Users/example/private/App.java"}
+            ),
+            "",
+        )
+        self.assertEqual(
+            _reviewed_source_file(
+                {"tool": "grep", "path": "/frontend/src/App.tsx"}
+            ),
+            "",
+        )
+
+    def test_code_scan_streams_each_current_source_file(self) -> None:
+        """扫描节点应按 Agent 实际读取顺序动态发送当前源码相对路径。"""
+
+        events: list[dict] = []
+
+        def analyze(_state, _workspace, *, on_tool_activity=None):
+            """模拟 Skill 读取、代码搜索和两个连续源码读取。"""
+
+            assert on_tool_activity is not None
+            for activity in (
+                {
+                    "tool": "read_file",
+                    "status": "running",
+                    "path": "/.xcodeagent/builtin-skills/backend-code-scan/SKILL.md",
+                },
+                {"tool": "grep", "status": "running", "path": "/frontend/src"},
+                {
+                    "tool": "read_file",
+                    "status": "running",
+                    "path": "/frontend/src/App.tsx",
+                },
+                {
+                    "tool": "read_file",
+                    "status": "running",
+                    "path": "/backend/src/main/java/example/App.java",
+                },
+            ):
+                on_tool_activity(activity)
+            return _scan_result()
+
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.graph.subgraphs.code_review._writer",
+            return_value=events.append,
+        ), patch(
+            "app.graph.subgraphs.code_review.analyze_workspace_code",
+            side_effect=analyze,
+        ):
+            result = code_scan({"workspace": workspace, "status": "in_progress"})
+
+        self.assertEqual(result["status"], "completed")
+        self.assertNotIn("code_review_scan", result)
+        self.assertEqual(
+            [event["current_file"] for event in events if event.get("current_file")],
+            ["frontend/src/App.tsx", "backend/src/main/java/example/App.java"],
+        )
 
     def test_scan_model_failure_exposes_scan_retry(self) -> None:
         """扫描 Agent 的网络或业务异常必须标记为可重试扫描。"""

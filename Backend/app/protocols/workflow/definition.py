@@ -304,6 +304,7 @@ def workflow_capabilities() -> dict[str, Any]:
                 "workflow.node.started",
                 "workflow.node.progress",
                 "workflow.node.completed",
+                "code_review.scan",
                 "code_review.repair",
                 "code_review.build_checks",
                 "agent-process",
@@ -311,6 +312,15 @@ def workflow_capabilities() -> dict[str, Any]:
                 "workflow.run.failed",
                 "application-revision",
             ],
+            "codeReviewScan": {
+                "event": "code_review.scan",
+                "stateField": "codeReviewScan",
+                "fields": {
+                    "status": "running",
+                    "currentFile": "workspace-relative authorized source path",
+                },
+                "persistence": "ephemeral-run-state-only",
+            },
             "revisionProjection": {
                 "impactMode": "revision_impact_confirmation",
                 "draftMode": "revision_draft_confirmation",

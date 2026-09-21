@@ -48,6 +48,7 @@ export type WorkflowSummary = {
   acceptancePhaseConfirmation?: WorkflowClarification
   testReportResult?: WorkflowTestReportResult
   codeReviewResult?: WorkflowCodeReviewResult
+  codeReviewScan?: WorkflowCodeReviewScan
   apiDesignResult?: Record<string, unknown>
   codeReviewRepair?: WorkflowCodeReviewRepair
   codeReviewRetry?: WorkflowCodeReviewRetry
@@ -279,6 +280,12 @@ export type WorkflowCodeReviewResult = {
     file?: string
     line?: number
   }>
+}
+
+/** 代码审查运行期间的瞬态当前文件。 */
+export type WorkflowCodeReviewScan = {
+  status: 'running'
+  currentFile: string
 }
 
 /** 测试阶段生成的用户可读 Markdown 报告。 */

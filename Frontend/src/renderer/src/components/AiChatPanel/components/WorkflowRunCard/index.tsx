@@ -33,6 +33,7 @@ import type {
   WorkflowConfirmationArtifact,
   WorkflowCodeReviewResult,
   WorkflowCodeReviewRepair,
+  WorkflowCodeReviewScan,
   WorkflowRevisionDraft,
   WorkflowRevisionDraftInteraction,
   WorkflowRevisionImpact,
@@ -183,6 +184,7 @@ export default function WorkflowRunCard({
   const acceptancePhaseConfirmation = clarification?.mode === 'acceptance_phase_confirmation'
   const codeReviewResult = readCodeReviewResult(workflow)
   const codeReviewRepair = readCodeReviewRepair(workflow)
+  const codeReviewScan = readCodeReviewScan(workflow)
   const codeReviewRepairConfirmation = clarification?.mode === 'code_review_repair_confirmation'
   // 恢复或重跑测试节点时快照可能短暂携带上一轮审查结果，必须以当前阶段为显示边界。
   const codeReview = workflowShouldShowCodeReview(workflow)
@@ -424,6 +426,7 @@ export default function WorkflowRunCard({
         <CodeReviewCard
           result={codeReviewResult}
           repair={codeReviewRepair}
+          scan={codeReviewScan}
           running={workflow.summary.phase === 'code_review' && status === 'running'}
           canRepair={
             codeReviewRepairConfirmation &&
@@ -881,6 +884,23 @@ function readCodeReviewResult(workflow: WorkflowRunPayload): WorkflowCodeReviewR
       value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0
   )
   return candidate as WorkflowCodeReviewResult | undefined
+}
+
+/** 从本次运行的公开快照读取瞬态审查文件，完成态不会回退到旧进度。 */
+function readCodeReviewScan(workflow: WorkflowRunPayload): WorkflowCodeReviewScan | undefined {
+  const candidates: unknown[] = [
+    workflow.summary.codeReviewScan,
+    workflow.state?.codeReviewScan,
+    workflow.result?.codeReviewScan
+  ]
+  return candidates.find(
+    (value): value is WorkflowCodeReviewScan =>
+      Boolean(value) &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      (value as WorkflowCodeReviewScan).status === 'running' &&
+      Boolean(String((value as WorkflowCodeReviewScan).currentFile || '').trim())
+  )
 }
 
 /** 从 summary/state/result 读取代码审查修复状态。 */

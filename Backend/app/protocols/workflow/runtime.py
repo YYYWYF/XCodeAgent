@@ -30,6 +30,7 @@ from app.protocols.workflow.projection import (
     _public_workflow_state,
     _workflow_artifacts,
     _workflow_code_review_repair,
+    _workflow_code_review_scan,
     _workflow_event,
     _workflow_next_nodes,
     _workflow_node_detail,
@@ -1325,6 +1326,47 @@ def build_workflow_ag_ui_stream(
                             ),
                         )
                         continue
+                    if event_type == "code_review.scan":
+                        public_scan = _workflow_code_review_scan(progress)
+                        current_file = public_scan.get("currentFile")
+                        if not current_file:
+                            continue
+                        process_sequence += 1
+                        progress_node = "code_review"
+                        progress_attempt = _current_node_attempt(node_attempts, progress_node)
+                        scan_state = {
+                            "status": "running",
+                            "current_file": current_file,
+                        }
+                        # 当前文件只存在于本次 AG-UI 运行态，不进入 LangGraph checkpoint。
+                        stream_state["code_review_scan"] = scan_state
+                        progress_state = {
+                            **stream_state,
+                            "phase": "code_review",
+                            "status": "in_progress",
+                        }
+                        progress_message = f"正在审查文件：{current_file}"
+                        for frame in _workflow_ag_ui_frames(
+                            encoder,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            events=events,
+                            result=progress_state,
+                        ):
+                            yield frame
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id(progress_node, progress_attempt),
+                            kind="workflow",
+                            status="running",
+                            title="正在执行代码审查",
+                            detail=progress_message,
+                            sequence=process_sequence,
+                            node_name=progress_node,
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(progress_node, progress_attempt),
+                        )
+                        continue
                     if event_type in {"code_review.repair", "code_review.build_checks"}:
                         process_sequence += 1
                         progress_node = "code_review"
@@ -1524,6 +1566,9 @@ def build_workflow_ag_ui_stream(
                         continue
                     if not isinstance(update, dict):
                         continue
+                    if node_name == "code_review":
+                        # 扫描完成、失败或进入修复后立即清除瞬态文件，防止终帧残留。
+                        stream_state.pop("code_review_scan", None)
                     # 节点更新是 LangGraph 的增量结果；先合并进运行态，供后续
                     # launch_project.progress 和 code_review.build_checks 帧继续投影。
                     stream_state.update(update)

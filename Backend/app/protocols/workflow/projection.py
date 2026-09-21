@@ -46,6 +46,26 @@ def _workflow_code_review_retry(value: Any) -> dict[str, Any]:
     return {"available": True, "target": target} if target in {"scan", "repair"} else {}
 
 
+def _workflow_code_review_scan(value: Any) -> dict[str, str]:
+    """投影瞬态审查文件进度，仅公开授权源码的工作区相对路径。"""
+
+    if not isinstance(value, dict) or value.get("status") != "running":
+        return {}
+    current_file = str(
+        value.get("current_file", value.get("currentFile")) or ""
+    ).strip().replace("\\", "/").lstrip("/")
+    if not current_file or not is_code_review_change_path(current_file):
+        return {}
+    return {"status": "running", "currentFile": current_file}
+
+
+def _workflow_code_review_scan_field(value: Any) -> dict[str, dict[str, str]]:
+    """仅在存在有效瞬态审查进度时添加公开字段。"""
+
+    scan = _workflow_code_review_scan(value)
+    return {"codeReviewScan": scan} if scan else {}
+
+
 def _code_review_projection_phase(value: dict[str, Any], phase: Any) -> Any:
     """审查模型失败时继续公开有限扫描/修复快照，供同线程受控重试。"""
 
@@ -342,6 +362,7 @@ def _workflow_progress_summary(
             "acceptance_phase_confirmation", {}
         ),
         "codeReviewRetry": _workflow_code_review_retry(result.get("code_review_retry")),
+        **_workflow_code_review_scan_field(result.get("code_review_scan")),
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
             _code_review_projection_phase(result, phase),
@@ -622,6 +643,10 @@ def _public_workflow_state(
     retry = _workflow_code_review_retry(value.get("code_review_retry"))
     public_state.pop("code_review_retry", None)
     public_state["codeReviewRetry"] = retry
+    scan = _workflow_code_review_scan(value.get("code_review_scan"))
+    public_state.pop("code_review_scan", None)
+    if scan:
+        public_state["codeReviewScan"] = scan
     projection_phase = _code_review_projection_phase(
         value,
         phase if phase is not None else value.get("phase"),
@@ -1452,6 +1477,7 @@ def _workflow_summary(
             "acceptance_phase_confirmation", {}
         ),
         "codeReviewRetry": _workflow_code_review_retry(result.get("code_review_retry")),
+        **_workflow_code_review_scan_field(result.get("code_review_scan")),
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
             _code_review_projection_phase(result, result.get("phase")),
@@ -1572,6 +1598,7 @@ def _workflow_visual_payload(
             "acceptance_phase_confirmation", {}
         ),
         "codeReviewRetry": _workflow_code_review_retry(result.get("code_review_retry")),
+        **_workflow_code_review_scan_field(result.get("code_review_scan")),
         "codeReviewResult": _workflow_code_review_result_for_phase(
             result.get("code_review_result"),
             _code_review_projection_phase(result, summary.get("phase")),

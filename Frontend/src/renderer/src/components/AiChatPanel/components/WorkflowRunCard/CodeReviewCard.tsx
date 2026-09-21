@@ -7,7 +7,11 @@ import {
 } from '@ant-design/icons'
 import { Button, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
-import type { WorkflowCodeReviewRepair, WorkflowCodeReviewResult } from '../../../../typings'
+import type {
+  WorkflowCodeReviewRepair,
+  WorkflowCodeReviewResult,
+  WorkflowCodeReviewScan
+} from '../../../../typings'
 import { cx } from '../../../../utils'
 
 const { Text } = Typography
@@ -15,6 +19,7 @@ const { Text } = Typography
 type Props = {
   result?: WorkflowCodeReviewResult
   repair?: WorkflowCodeReviewRepair
+  scan?: WorkflowCodeReviewScan
   running?: boolean
   canRepair?: boolean
   onRepairAll?: () => void
@@ -54,6 +59,7 @@ function displayFile(issue: NonNullable<WorkflowCodeReviewResult['issues']>[numb
 export default function CodeReviewCard({
   result,
   repair,
+  scan,
   running = false,
   canRepair = false,
   onRepairAll
@@ -95,9 +101,19 @@ export default function CodeReviewCard({
           </span>
           <Text strong>正在审查前后端代码，请稍候…</Text>
         </div>
-        <Text className={cx('workflow-code-review-loading-hint')} type="secondary">
-          扫描完成后将在右侧生成完整审查报告
-        </Text>
+        {scan?.currentFile ? (
+          <div className={cx('workflow-code-review-current-file')}>
+            <FileTextOutlined aria-hidden="true" />
+            <Text type="secondary">当前审查文件</Text>
+            <Text code title={scan.currentFile}>
+              {scan.currentFile}
+            </Text>
+          </div>
+        ) : (
+          <Text className={cx('workflow-code-review-loading-hint')} type="secondary">
+            扫描完成后将在右侧生成完整审查报告
+          </Text>
+        )}
       </section>
     )
   }

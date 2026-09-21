@@ -277,6 +277,58 @@ class FakeCodeReviewBuildProgressGraph:
         )
 
 
+class FakeCodeReviewScanProgressGraph:
+    """模拟审查 Agent 连续读取两个源码文件并完成扫描。"""
+
+    async def astream(self, initial_state, *, config, stream_mode):
+        """发送两个瞬态文件进度，随后返回不携带进度字段的完成更新。"""
+
+        del initial_state, config, stream_mode
+        for current_file in (
+            "frontend/src/App.tsx",
+            "backend/src/main/java/example/App.java",
+        ):
+            yield "custom", {
+                "type": "code_review.scan",
+                "status": "running",
+                "current_file": current_file,
+            }
+        yield "updates", {
+            "code_review": {
+                "phase": "code_review",
+                "status": "completed",
+                "message": "代码审查完成。",
+                "code_review_result": {
+                    "status": "completed",
+                    "summary": "代码审查完成。",
+                    "issue_count": 0,
+                    "targets": [],
+                    "issues": [],
+                },
+                "timeline": ["code_review", "code_scan"],
+            }
+        }
+
+    async def aget_state(self, config):
+        """返回已完成且没有瞬态当前文件的最终 checkpoint。"""
+
+        del config
+        return SimpleNamespace(
+            values={
+                "phase": "code_review",
+                "status": "completed",
+                "code_review_result": {
+                    "status": "completed",
+                    "summary": "代码审查完成。",
+                    "issue_count": 0,
+                    "targets": [],
+                    "issues": [],
+                },
+                "timeline": ["code_review", "code_scan"],
+            }
+        )
+
+
 class FakeProjectPlanningWaitGraph:
     def __init__(self, project_plan_path: str = "var/plans/project-plan.md") -> None:
         self.project_plan_path = project_plan_path
@@ -2412,6 +2464,50 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             [check["id"] for check in repair["buildChecks"]],
             ["frontend_install", "frontend_build", "backend_build"],
         )
+
+    def test_code_review_scan_streams_current_file_without_persisting_it(self) -> None:
+        """审查文件应动态更新同一步骤，并在扫描完成快照中消失。"""
+
+        graph = FakeCodeReviewScanProgressGraph()
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=graph,
+                payload={
+                    "threadId": "thread-code-review-scan",
+                    "runId": "run-code-review-scan",
+                    "messages": [{"role": "user", "content": "开始代码审查"}],
+                },
+            )
+            return [frame async for frame in stream]
+
+        frames = asyncio.run(collect())
+        workflow_frames = _decode_workflow_run_frames(frames)
+        process_frames = _decode_agent_process_frames(frames)
+        scan_frames = [
+            frame
+            for frame in workflow_frames
+            if frame.get("summary", {}).get("codeReviewScan", {}).get("currentFile")
+        ]
+
+        self.assertEqual(
+            [frame["summary"]["codeReviewScan"]["currentFile"] for frame in scan_frames],
+            [
+                "frontend/src/App.tsx",
+                "backend/src/main/java/example/App.java",
+            ],
+        )
+        self.assertEqual(
+            {
+                frame["id"]
+                for frame in process_frames
+                if frame.get("nodeName") == "code_review"
+            },
+            {"workflow:code_review"},
+        )
+        final_frame = workflow_frames[-1]
+        self.assertFalse(final_frame.get("summary", {}).get("codeReviewScan"))
+        self.assertFalse(final_frame.get("state", {}).get("codeReviewScan"))
 
     def test_stream_exposes_project_planning_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:

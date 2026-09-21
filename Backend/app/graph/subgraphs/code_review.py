@@ -184,6 +184,18 @@ def _model_retry_payload(target: str) -> dict[str, Any]:
     return {"available": True, "target": target}
 
 
+def _reviewed_source_file(activity: dict[str, Any]) -> str:
+    """从只读工具活动提取安全的工作区源码相对路径。"""
+
+    if activity.get("tool") != "read_file":
+        return ""
+    raw_path = str(activity.get("path") or "").strip().replace("\\", "/")
+    normalized = raw_path.lstrip("/")
+    if not normalized or not is_code_review_change_path(normalized):
+        return ""
+    return normalized
+
+
 def _route_review_start(state: ProjectState) -> str:
     """首次进入扫描，确认一键修复后直接进入修复，避免重复扫描。"""
 
@@ -203,8 +215,31 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
     workspace = workspace_from_state(state)
     writer = _writer()
     writer({"type": "code_review.scan", "status": "running"})
+    last_current_file = ""
+
+    def report_tool_activity(activity: dict[str, Any]) -> None:
+        """将当前读取的源码文件实时投影为审查进度。"""
+
+        nonlocal last_current_file
+        current_file = _reviewed_source_file(activity)
+        if not current_file or current_file == last_current_file:
+            return
+        last_current_file = current_file
+        writer(
+            {
+                "type": "code_review.scan",
+                "status": "running",
+                "current_file": current_file,
+                "message": f"正在审查文件：{current_file}",
+            }
+        )
+
     try:
-        result = analyze_workspace_code(state, workspace)
+        result = analyze_workspace_code(
+            state,
+            workspace,
+            on_tool_activity=report_tool_activity,
+        )
     except Exception as exc:  # noqa: BLE001 - 子图边界统一转换为失败状态
         return {
             "phase": "code_review",

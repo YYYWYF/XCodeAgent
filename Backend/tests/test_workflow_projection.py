@@ -4,6 +4,7 @@ import unittest
 
 from app.protocols.workflow.projection import (
     _public_workflow_state,
+    _workflow_code_review_scan,
     _workflow_next_nodes,
     _workflow_summary,
     _workflow_visual_payload,
@@ -11,6 +12,30 @@ from app.protocols.workflow.projection import (
 
 
 class WorkflowProjectionTests(unittest.TestCase):
+    def test_code_review_scan_projects_only_safe_relative_source_path(self) -> None:
+        """瞬态审查进度只公开当前契约允许的工作区源码相对路径。"""
+
+        scan = {"status": "running", "current_file": "/frontend/src/App.tsx"}
+        self.assertEqual(
+            _workflow_code_review_scan(scan),
+            {"status": "running", "currentFile": "frontend/src/App.tsx"},
+        )
+        self.assertEqual(
+            _workflow_code_review_scan(
+                {
+                    "status": "running",
+                    "current_file": "/.xcodeagent/builtin-skills/frontend-code-scan/SKILL.md",
+                }
+            ),
+            {},
+        )
+        self.assertEqual(
+            _public_workflow_state({"phase": "code_review", "code_review_scan": scan})[
+                "codeReviewScan"
+            ],
+            {"status": "running", "currentFile": "frontend/src/App.tsx"},
+        )
+
     def test_api_design_gate_projects_waiting_and_completed_routes(self) -> None:
         """字段映射门禁等待时停图，确认完成后投影工作区检查。"""
 

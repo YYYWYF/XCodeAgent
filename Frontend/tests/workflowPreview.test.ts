@@ -23,6 +23,7 @@ import TemplatePreparingCard from '../src/renderer/src/components/AiChatPanel/co
 import WorkflowRunCard, {
   BuildExecutionRunCard
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
+import CodeReviewCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/CodeReviewCard'
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
@@ -253,6 +254,41 @@ test('测试重跑和审查确认节点不会展示恢复快照中的旧代码�
     ),
     true
   )
+})
+
+test('代码审查卡动态展示当前源码相对路径并在完成后清除', () => {
+  const waitingMarkup = renderToStaticMarkup(createElement(CodeReviewCard, { running: true }))
+  assert.match(waitingMarkup, /扫描完成后将在右侧生成完整审查报告/)
+  assert.doesNotMatch(waitingMarkup, /当前审查文件/)
+
+  const runningMarkup = renderToStaticMarkup(
+    createElement(CodeReviewCard, {
+      running: true,
+      scan: {
+        status: 'running',
+        currentFile: 'backend/src/main/java/example/UserService.java'
+      }
+    })
+  )
+  assert.match(runningMarkup, /当前审查文件/)
+  assert.match(runningMarkup, /backend\/src\/main\/java\/example\/UserService.java/)
+
+  const completedMarkup = renderToStaticMarkup(
+    createElement(CodeReviewCard, {
+      running: false,
+      scan: {
+        status: 'running',
+        currentFile: 'backend/src/main/java/example/UserService.java'
+      },
+      result: {
+        status: 'completed',
+        issueCount: 0,
+        issues: []
+      }
+    })
+  )
+  assert.match(completedMarkup, /代码审查已完成/)
+  assert.doesNotMatch(completedMarkup, /当前审查文件/)
 })
 
 test('审查和验收阶段所有节点均隐藏代码差异', () => {
