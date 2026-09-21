@@ -561,6 +561,12 @@ def assemble_scope_build_task_plan(
         ),
         "_allow_missing_business_deliverable_task_ids": sorted(retained_id_set),
         "_compile_auth_capability_dependencies": True,
+        # retained owner 是当前正式基线的唯一事实；验收据此允许旧 Endpoint
+        # 继续存在于同一个 canonical API module，但不创建第二个 owner。
+        "frontend_endpoint_owner_constraints": [
+            owner.model_dump(mode="json")
+            for owner in facts.retained_endpoint_owners
+        ],
         "external_capabilities": [
             capability.model_dump(mode="json")
             for capability in facts.external_capabilities

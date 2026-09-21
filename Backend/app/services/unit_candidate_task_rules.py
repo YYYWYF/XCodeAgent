@@ -10,6 +10,8 @@ from typing import Any
 from app.services.business_acceptance import (
     DELIVERABLE_KINDS,
     DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND,
+    canonical_frontend_api_module_path,
+    frontend_api_task_id,
     normalize_repo_path,
 )
 from app.services.page_identity import canonical_page_entry_path
@@ -595,6 +597,138 @@ def _requirement_issues(
     return issues
 
 
+def _frontend_api_contract_issues(
+    context: UnitGenerationContext,
+    candidate_tasks: Sequence[Mapping[str, Any]],
+) -> list[ValidationIssue]:
+    """校验前端 API 按 Contract 聚合、canonical 文件和稳定 Task ID。"""
+
+    requirements = {
+        item.requirement_id: item
+        for item in context.generation_requirements
+        if _identity(item.source_refs.get("kind")) == "frontend.api_module"
+    }
+    if not requirements:
+        return []
+
+    records_by_contract: dict[str, list[dict[str, Any]]] = {}
+    task_contracts: dict[str, set[str]] = {}
+    for task in candidate_tasks:
+        task_id = _task_id(task)
+        for deliverable in task.get("deliverables", ()) if isinstance(task.get("deliverables"), (list, tuple)) else ():
+            if not isinstance(deliverable, Mapping) or deliverable.get("kind") != "frontend.api_module":
+                continue
+            capability_ids = [
+                capability
+                for capability in deliverable.get("provides", ())
+                if capability in requirements
+            ] if isinstance(deliverable.get("provides"), (list, tuple)) else []
+            for capability in capability_ids:
+                contract_id = _identity(requirements[capability].source_refs.get("api_contract_id"))
+                endpoint_id = _identity(requirements[capability].source_refs.get("endpoint_id"))
+                if not contract_id or not endpoint_id:
+                    continue
+                records_by_contract.setdefault(contract_id, []).append({
+                    "task_id": task_id,
+                    "deliverable_id": _identity(deliverable.get("id")) or "",
+                    "requirement_id": capability,
+                    "endpoint_id": endpoint_id,
+                    "paths": tuple(
+                        path for path in deliverable.get("paths", ())
+                        if isinstance(path, str)
+                    ) if isinstance(deliverable.get("paths"), (list, tuple)) else (),
+                })
+                task_contracts.setdefault(task_id, set()).add(contract_id)
+
+    issues: list[ValidationIssue] = []
+    for task_id, contracts in sorted(task_contracts.items()):
+        if len(contracts) <= 1:
+            continue
+        issues.append(_issue(
+            "CANDIDATE_FRONTEND_API_TASK_CONTRACT_MIXED",
+            f"Candidate Task {task_id or '<unknown>'} 不得同时实现多个 API Contract。",
+            context=context,
+            task_ids=(task_id,),
+            api_contract_ids=sorted(contracts),
+        ))
+
+    expected_by_contract: dict[str, tuple[str, ...]] = {}
+    for requirement in requirements.values():
+        contract_id = _identity(requirement.source_refs.get("api_contract_id"))
+        endpoint_id = _identity(requirement.source_refs.get("endpoint_id"))
+        if contract_id and endpoint_id:
+            expected_by_contract.setdefault(contract_id, ())
+            expected_by_contract[contract_id] = tuple(
+                sorted({*expected_by_contract[contract_id], endpoint_id})
+            )
+
+    for contract_id, endpoint_ids in sorted(expected_by_contract.items()):
+        records = records_by_contract.get(contract_id, [])
+        task_ids = sorted({record["task_id"] for record in records if record["task_id"]})
+        if len(task_ids) > 1:
+            issues.append(_issue(
+                "CANDIDATE_FRONTEND_API_TASK_SPLIT",
+                f"API Contract {contract_id} 的 frontend.api_module requirements 必须由一个 Contract-level Task 覆盖。",
+                context=context,
+                task_ids=task_ids,
+                api_contract_id=contract_id,
+            ))
+        seen_requirements: dict[str, int] = {}
+        for record in records:
+            seen_requirements[record["requirement_id"]] = seen_requirements.get(record["requirement_id"], 0) + 1
+        duplicate_requirements = sorted(
+            requirement_id
+            for requirement_id, count in seen_requirements.items()
+            if count > 1
+        )
+        if duplicate_requirements:
+            issues.append(_issue(
+                "CANDIDATE_FRONTEND_API_ENDPOINT_DUPLICATE",
+                f"API Contract {contract_id} 的 Endpoint implementation responsibility 不得重复声明。",
+                context=context,
+                task_ids=task_ids,
+                api_contract_id=contract_id,
+                requirement_ids=duplicate_requirements,
+            ))
+        try:
+            canonical_path = canonical_frontend_api_module_path(contract_id)
+            expected_task_id = frontend_api_task_id(
+                context.unit_id, contract_id, endpoint_ids
+            )
+        except ValueError as exc:
+            issues.append(_issue(
+                "CANDIDATE_FRONTEND_API_CANONICAL_ID_INVALID",
+                f"API Contract {contract_id} 无法生成确定性前端 API 身份：{exc}。",
+                context=context,
+                task_ids=task_ids,
+                api_contract_id=contract_id,
+            ))
+            continue
+        for record in records:
+            if record["paths"] != (canonical_path,):
+                issues.append(_issue(
+                    "CANDIDATE_FRONTEND_API_CANONICAL_MODULE_MISMATCH",
+                    f"API Contract {contract_id} 的 deliverable {record['deliverable_id'] or '<unknown>'} 必须引用 canonical API module {canonical_path}。",
+                    context=context,
+                    task_ids=(record["task_id"],),
+                    api_contract_id=contract_id,
+                    endpoint_id=record["endpoint_id"],
+                    expected_path=canonical_path,
+                    actual_paths=list(record["paths"]),
+                ))
+        if len(task_ids) == 1 and task_ids[0] != expected_task_id:
+            issues.append(_issue(
+                "CANDIDATE_FRONTEND_API_TASK_ID_INVALID",
+                f"API Contract {contract_id} 的 Task ID 必须稳定绑定本轮 Endpoint 集合：{expected_task_id}。",
+                context=context,
+                task_ids=(task_ids[0],),
+                api_contract_id=contract_id,
+                endpoint_ids=list(endpoint_ids),
+                expected_task_id=expected_task_id,
+            ))
+    return issues
+
+
 def validate_candidate_task_rules(
     context: UnitGenerationContext,
     candidate_tasks: Sequence[Mapping[str, Any]],
@@ -641,4 +775,5 @@ def validate_candidate_task_rules(
                 context=context, task_ids=owner_task_ids, deliverable_id=deliverable_id,
             ))
     issues.extend(_requirement_issues(context, all_records))
+    issues.extend(_frontend_api_contract_issues(context, candidate_tasks))
     return issues, all_records

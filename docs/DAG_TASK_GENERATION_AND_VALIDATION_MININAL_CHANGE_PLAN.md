@@ -256,7 +256,9 @@ endpoint-only 与前后端混合规划使用相同规则；只有 static-only �
 
 前端 API 实现另有一条不依赖自然语言相似度的确定性规则：编译完正式来源绑定的
 `business_acceptance_checks` 后，以 `api_contract_id + endpoint_id` 为键建立唯一 owner。
-同一普通前端任务可以负责多个 Endpoint，但同一 Endpoint 不得同时属于两个普通任务或两个业务 API 文件；
+同一普通前端任务可以负责同一 Contract 的多个 Endpoint，并共同写入该 Contract 的唯一
+`frontend/src/apis/<biz>Api.ts`；同一 Endpoint 不得同时属于两个普通任务。不同 Endpoint 的
+deliverable 或不同 PlanningRun 的增量 Task 可以共享该物理文件，但文件路径不参与 owner 身份判断；
 后续页面只能通过 Unit 依赖复用已有 owner。Repair 任务继承父任务的业务检查，不作为新的 owner 参与统计。
 每次 DAG 生成在计算实际可替换 Unit 后，从保留的非 Repair 任务实时提取 owner 表；该表只包含
 `api_contract_id`、`endpoint_id`、`owner_task_id`、`owner_unit_id` 和 `policy=reuse_only`，不使用
@@ -586,7 +588,8 @@ confirmation_status == confirmed
 13. 任务字段不可编辑，AG-UI 请求边界拒绝已移除的 patch 动作；
 14. 全量重新生成必须携带旧 Pending 的 `planning_run_id + draft_digest`；系统先删除该 Pending，再回到 `prepare_build_tasks` 创建新 PlanningRun；成功后写入全新 Pending，失败时旧 Pending 不恢复；
 15. 完全重复任务被自动合并，依赖引用、Unit task_ids 和 source_refs 同步改写；
-16. 同一前端 Endpoint 被不同 API 文件重复实现时，DAG 在确认前阻断并自动重生成；正常 Repair 不会被误判为第二个 owner；
+16. 同一 API Contract 的多个 Endpoint 共用 canonical API module；同一前端 Endpoint 被不同普通 Task
+    重复实现时，DAG 在确认前阻断并自动重生成；正常 Repair 不会被误判为第二个 owner；
 17. 初次执行创建文件后失败，重试修改该文件不会因 `add/modify` 不一致被误判；
 18. 缺失依赖、循环依赖、路径冲突和详细设计缺失能够定位到具体任务、路径或上游产物；
 19. DAG 任务边界或拓扑校验失败时由平台自动重生成，用户只接收通过校验的 DAG 确认，不需要人工修正任务拆分；

@@ -239,6 +239,24 @@ def _endpoint_api_design() -> dict:
     }
 
 
+def _add_update_endpoint(context: dict) -> None:
+    """把第二个订单 Endpoint 加入正式 API Contract，模拟增量规划输入。"""
+
+    context["project_plan"]["api_contracts"][0]["endpoints"].append({
+        "id": "orders.update",
+        "method": "PUT",
+        "path": "/orders/{id}",
+        "request_schema_ref": "#/schemas/OrderRequest",
+        "response_schema_ref": "#/schemas/OrderResponse",
+        "parameters": [{
+            "name": "id",
+            "in": "path",
+            "required": True,
+            "schema": {"type": "string"},
+        }],
+    })
+
+
 def _task(kind: str, *, path: str, owner: str, unit_id: str, target_id: str = "") -> dict:
     """构造带跨平台路径和交付物声明的候选 Build Task。"""
 
@@ -504,6 +522,72 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
         self.assertEqual(
             compiled["business_acceptance_checks"][0]["target_paths"],
             ["backend/src/domain/Order.java", *sibling_paths],
+        )
+        self.assertEqual(business_acceptance_contract_errors(compiled), [])
+
+    def test_frontend_api_deliverables_may_share_one_canonical_module_path(self) -> None:
+        """同一 Contract 的多个 Endpoint 交付物可共享 canonical API module 文件。"""
+
+        context = _formal_context()
+        _add_update_endpoint(context)
+        path = "frontend/src/apis/ordersApi.ts"
+        task = _task(
+            "frontend.api_module",
+            path=path,
+            owner="frontend",
+            unit_id="frontend:api-client",
+            target_id="orders.list",
+        )
+        task["source_refs"]["endpoint_ids"] = ["orders.list", "orders.update"]
+        task["deliverables"].append({
+            "id": "deliverable-frontend-api-update",
+            "kind": "frontend.api_module",
+            "target_id": "orders.update",
+            "paths": [path],
+            "provides": ["frontend.api_module:orders.update"],
+        })
+
+        compiled = compile_business_acceptance([task], context)[0]
+        errors = business_acceptance_contract_errors(compiled)
+
+        self.assertFalse(any("assigns path" in error for error in errors), errors)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            compiled["business_acceptance_checks"][0]["target_paths"],
+            [path],
+        )
+
+    def test_incremental_frontend_api_check_separates_required_and_retained_endpoints(self) -> None:
+        """增量 API Task 只要求新 Endpoint，同时允许正式 retained Endpoint 留在同一文件。"""
+
+        context = _formal_context()
+        _add_update_endpoint(context)
+        context["endpoint_ids"] = ["orders.update"]
+        context["frontend_endpoint_owner_constraints"] = [{
+            "api_contract_id": "orders-api",
+            "endpoint_id": "orders.list",
+            "owner_task_id": "frontend:api-client::orders-api::api-module::old",
+            "owner_unit_id": "frontend:api-client",
+        }]
+        task = _task(
+            "frontend.api_module",
+            path="frontend/src/apis/ordersApi.ts",
+            owner="frontend",
+            unit_id="frontend:api-client",
+            target_id="orders.update",
+        )
+        task["source_refs"]["endpoint_ids"] = ["orders.update"]
+
+        compiled = compile_business_acceptance([task], context)[0]
+        expected = compiled["business_acceptance_checks"][0]["expected"]
+
+        self.assertEqual(
+            [(item["api_contract_id"], item["endpoint_id"]) for item in expected["required_endpoints"]],
+            [("orders-api", "orders.update")],
+        )
+        self.assertEqual(
+            [(item["api_contract_id"], item["endpoint_id"]) for item in expected["allowed_existing_endpoints"]],
+            [("orders-api", "orders.list")],
         )
         self.assertEqual(business_acceptance_contract_errors(compiled), [])
 

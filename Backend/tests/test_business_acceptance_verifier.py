@@ -319,6 +319,47 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             "getRoleList",
         )
 
+    def test_incremental_frontend_api_accepts_retained_endpoint_but_rejects_unknown_call(self) -> None:
+        """增量 API 验收允许 retained Endpoint，但仍拒绝 union 之外的公共调用。"""
+
+        expected = {
+            "required_endpoints": [{
+                "api_contract_id": "profile-api",
+                "endpoint_id": "profile_api.update",
+                "method": "PUT",
+                "path": "/profile/{id}",
+            }],
+            "allowed_existing_endpoints": [{
+                "api_contract_id": "profile-api",
+                "endpoint_id": "profile_api.get",
+                "method": "GET",
+                "path": "/profile",
+            }],
+        }
+        source = """
+        export function getProfile() {
+          return service.get('/profile')
+        }
+        export function updateProfile(id: string, payload: unknown) {
+          return service.put(`/profile/${id}`, payload)
+        }
+        """
+
+        passed = verify_api_contract_source(
+            {"frontend/src/apis/profileApi.ts": source},
+            expected,
+        )
+
+        self.assertEqual(passed["status"], "passed", passed)
+
+        failed = verify_api_contract_source(
+            {"frontend/src/apis/profileApi.ts": source + "\nexport function probe() { return service.get('/profile/debug') }"},
+            expected,
+        )
+
+        self.assertEqual(failed["status"], "failed", failed)
+        self.assertIn("契约外路径", failed["evidence"])
+
     def test_wrong_endpoint_and_comment_only_evidence_fail(self) -> None:
         """错误路径和只存在于注释中的实现证据都必须失败。"""
 

@@ -6,6 +6,10 @@ from copy import deepcopy
 import unittest
 
 from app.services.build_task_reuse_contracts import RetainedEndpointOwner, ReuseFacts
+from app.services.business_acceptance import (
+    canonical_frontend_api_module_path,
+    frontend_api_task_id,
+)
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_candidate_validator import validate_unit_candidate
 from app.services.unit_generation_contracts import UnitGenerationContext
@@ -92,6 +96,27 @@ def _context(unit_id: str = "page:orders") -> UnitGenerationContext:
     )
 
 
+def _frontend_api_context(*endpoint_ids: str) -> UnitGenerationContext:
+    """构造同一 API Contract 含多个当前 Endpoint 职责的冻结 Context。"""
+
+    payload = _context("frontend:api-client").model_dump(mode="json")
+    payload["generation_requirements"] = [
+        {
+            "requirement_id": f"frontend.api_module:orders-api:{endpoint_id}",
+            "description": f"实现订单 API Endpoint {endpoint_id}",
+            "source_refs": {
+                "artifact": "technical-plan",
+                "kind": "frontend.api_module",
+                "capability_id": f"frontend.api_module:orders-api:{endpoint_id}",
+                "api_contract_id": "orders-api",
+                "endpoint_id": endpoint_id,
+            },
+        }
+        for endpoint_id in endpoint_ids
+    ]
+    return UnitGenerationContext(**payload)
+
+
 def _page_context(page_id: str) -> UnitGenerationContext:
     """构造带指定正式 pageId 的 Page Unit Context。"""
 
@@ -134,10 +159,12 @@ def _task(unit_id: str = "page:orders", task_id: str = "task-orders") -> dict:
     path = (
         "backend/src/main/java/com/example/orders/OrderController.java"
         if owner == "backend"
-        else "frontend/src/apis/orders.ts"
+        else canonical_frontend_api_module_path("orders-api")
         if kind in {"frontend.api_module", "frontend.shared_capability"}
         else "frontend/src/pages/Orders/index.tsx"
     )
+    if unit_id == "frontend:api-client" and kind == "frontend.api_module":
+        task_id = frontend_api_task_id(unit_id, "orders-api", ("orders.list",))
     target_id = (
         requirement["source_refs"].get("target_id")
         or requirement["source_refs"].get("endpoint_id")
@@ -208,6 +235,77 @@ class UnitCandidateValidatorTests(unittest.TestCase):
         ):
             with self.subTest(unit_id=unit_id):
                 self.assertEqual(validate_unit_candidate(_context(unit_id), [_task(unit_id)]), [])
+
+    def test_same_contract_endpoints_share_one_canonical_task_and_module(self) -> None:
+        """同次 PlanningRun 的同 Contract 多 Endpoint 可由一个 Task 的多个交付物共同实现。"""
+
+        context = _frontend_api_context("orders.list", "orders.update")
+        module_path = canonical_frontend_api_module_path("orders-api")
+        task_id = frontend_api_task_id(
+            context.unit_id,
+            "orders-api",
+            ("orders.list", "orders.update"),
+        )
+        task = _task("frontend:api-client")
+        task["id"] = task_id
+        task["target_files"] = [module_path]
+        task["allowed_paths"] = [module_path]
+        task["change_scope"] = [{
+            "operation": "modify",
+            "path": module_path,
+            "description": "增量扩展订单 API 模块",
+        }]
+        task["deliverables"] = [
+            {
+                "id": f"{task_id}-list",
+                "kind": "frontend.api_module",
+                "target_id": "orders.list",
+                "paths": [module_path],
+                "provides": ["frontend.api_module:orders-api:orders.list"],
+            },
+            {
+                "id": f"{task_id}-update",
+                "kind": "frontend.api_module",
+                "target_id": "orders.update",
+                "paths": [module_path],
+                "provides": ["frontend.api_module:orders-api:orders.update"],
+            },
+        ]
+
+        self.assertEqual(validate_unit_candidate(context, [task]), [])
+
+    def test_same_contract_split_modules_fail_local_validation(self) -> None:
+        """同一 Contract 拆成多个 Task 或多个 API 文件时必须在 Local 阶段失败。"""
+
+        context = _frontend_api_context("orders.list", "orders.update")
+        first = _task("frontend:api-client")
+        first["id"] = frontend_api_task_id(
+            context.unit_id, "orders-api", ("orders.list",)
+        )
+        second = deepcopy(first)
+        second["id"] = frontend_api_task_id(
+            context.unit_id, "orders-api", ("orders.update",)
+        )
+        second["deliverables"][0].update({
+            "id": f"{second['id']}-update",
+            "target_id": "orders.update",
+            "paths": ["frontend/src/apis/orderUpdateApi.ts"],
+            "provides": ["frontend.api_module:orders-api:orders.update"],
+        })
+        second["target_files"] = ["frontend/src/apis/orderUpdateApi.ts"]
+        second["allowed_paths"] = ["frontend/src/apis/orderUpdateApi.ts"]
+        second["change_scope"] = [{
+            "operation": "add",
+            "path": "frontend/src/apis/orderUpdateApi.ts",
+            "description": "新增订单更新 API 模块",
+        }]
+
+        issues = validate_unit_candidate(context, [first, second])
+
+        codes = {issue.code for issue in issues}
+        self.assertIn("CANDIDATE_FRONTEND_API_TASK_SPLIT", codes)
+        self.assertIn("CANDIDATE_FRONTEND_API_CANONICAL_MODULE_MISMATCH", codes)
+        self._assert_local_retry(issues, context.unit_id)
 
     def test_page_candidate_requires_canonical_entry_in_all_path_fields(self) -> None:
         """正确 Page entry 通过，四处一致的错误目录仍在 Local 阶段失败。"""

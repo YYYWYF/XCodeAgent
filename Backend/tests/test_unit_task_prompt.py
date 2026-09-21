@@ -8,8 +8,13 @@ from typing import Any
 
 from app.agents.main.unit_task_prompt import build_unit_generation_prompt
 from app.agents.main.unit_task_rules import (
+    frontend_api_task_manifest,
     requirement_output_contracts,
     resolve_unit_task_rules,
+)
+from app.services.business_acceptance import (
+    canonical_frontend_api_module_path,
+    frontend_api_task_id,
 )
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_generation_contracts import UnitGenerationContext
@@ -370,6 +375,46 @@ class UnitTaskPromptTests(unittest.TestCase):
                 self.assertIn(context.generation_requirements[0].requirement_id, rendered)
                 for fragment in expected_fragments:
                     self.assertIn(fragment, rendered)
+
+    def test_frontend_api_manifest_uses_contract_aggregate_and_stable_endpoint_set_id(self) -> None:
+        """前端 API Prompt manifest 必须聚合同 Contract，并绑定排序后的当前 Endpoint 集合。"""
+
+        context = _unit_context(
+            "frontend:api-client",
+            "frontend",
+            [
+                _requirement(
+                    "frontend.api_module",
+                    "orders-api:orders.update",
+                    api_contract_id="orders-api",
+                    endpoint_id="orders.update",
+                ),
+                _requirement(
+                    "frontend.api_module",
+                    "orders-api:orders.list",
+                    api_contract_id="orders-api",
+                    endpoint_id="orders.list",
+                ),
+            ],
+        )
+
+        manifest = frontend_api_task_manifest(context)
+
+        self.assertEqual(len(manifest), 1)
+        self.assertEqual(manifest[0]["endpoint_ids"], ["orders.list", "orders.update"])
+        self.assertEqual(
+            manifest[0]["module_path"],
+            canonical_frontend_api_module_path("orders-api"),
+        )
+        self.assertEqual(
+            manifest[0]["task_id"],
+            frontend_api_task_id(
+                context.unit_id,
+                "orders-api",
+                ("orders.list", "orders.update"),
+            ),
+        )
+        self.assertIn(manifest[0]["task_id"], "\n".join(resolve_unit_task_rules(context)))
 
     def test_mixed_backend_rules_form_endpoint_branch_join_without_mapping_task(self) -> None:
         """Mixed Endpoint 只生成五个 responsibility Task，并在 service 汇合两条来源分支。"""

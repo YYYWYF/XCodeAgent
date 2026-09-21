@@ -940,13 +940,6 @@ export function useWorkflowConversation({
         : getWorkflowUrl()
     const executionThreadId =
       options?.executionThreadId || options?.resumeState?.threadId || identity.threadId
-    console.debug('[DAG Regenerate thread]', {
-      sessionId: identity.sessionId,
-      identityThreadId: identity.threadId,
-      resumeStateThreadId: options?.resumeState?.threadId,
-      executionThreadId,
-      resumeRunId: options?.resumeState?.runId
-    })  
     const currentAgUiSession = agUiSessionsRef.current[identity.key]
     const agUiSession =
       currentAgUiSession &&

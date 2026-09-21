@@ -134,7 +134,6 @@ def business_acceptance_contract_errors(
         errors.append(f"Task {task_id} must declare at least one deliverable.")
 
     deliverable_ids: set[str] = set()
-    owned_paths: set[str] = set()
     allowed_paths = _task_allowed_paths(task)
     for deliverable in deliverables:
         deliverable_id = deliverable["id"]
@@ -168,10 +167,6 @@ def business_acceptance_contract_errors(
                 errors.append(
                     f"Deliverable {deliverable_id} path {path} is outside the task scope."
                 )
-            normalized_key = normalized.casefold()
-            if normalized_key in owned_paths:
-                errors.append(f"Task {task_id} assigns path {path} to multiple deliverables.")
-            owned_paths.add(normalized_key)
         if kind == "backend.endpoint_controller":
             errors.extend(_endpoint_deliverable_errors(task, deliverable))
     errors.extend(_page_deliverable_errors(task, deliverables, context or {}))
@@ -259,6 +254,50 @@ def normalize_repo_path(value: Any) -> str:
     return "/".join(part for part in text.split("/") if part not in {"", "."})
 
 
+def canonical_frontend_api_module_path(api_contract_id: str) -> str:
+    """按 API Contract 身份生成唯一的前端业务 API 模块路径。"""
+
+    contract_id = str(api_contract_id or "").strip()
+    if not contract_id or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", contract_id):
+        raise ValueError(f"API Contract ID 不能用于生成前端 API 模块路径：{api_contract_id!r}")
+    stem_source = re.sub(r"(?:[_-])api$", "", contract_id, flags=re.IGNORECASE)
+    parts = [part for part in re.split(r"[_-]+", stem_source) if part]
+    if not parts:
+        raise ValueError(f"API Contract ID 缺少业务模块名：{api_contract_id!r}")
+    stem = parts[0][:1].lower() + parts[0][1:]
+    stem += "".join(part[:1].upper() + part[1:] for part in parts[1:])
+    return f"frontend/src/apis/{stem}Api.ts"
+
+
+def frontend_api_task_id(
+    unit_id: str,
+    api_contract_id: str,
+    endpoint_ids: list[str] | tuple[str, ...],
+) -> str:
+    """按当前 Unit、Contract 和本轮 Endpoint 集合生成稳定的前端 API Task ID。"""
+
+    normalized_unit = str(unit_id or "").strip()
+    normalized_contract = str(api_contract_id or "").strip()
+    normalized_endpoints = tuple(sorted({str(endpoint_id).strip() for endpoint_id in endpoint_ids}))
+    if not normalized_unit or not normalized_contract or not normalized_endpoints or any(
+        not endpoint_id for endpoint_id in normalized_endpoints
+    ):
+        raise ValueError("前端 API Task ID 必须绑定有效的 Unit、Contract 和 Endpoint 集合。")
+    payload = {
+        "unit_id": normalized_unit,
+        "api_contract_id": normalized_contract,
+        "endpoint_ids": normalized_endpoints,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    suffix = sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return f"{normalized_unit}::{normalized_contract}::api-module::{suffix}"
+
+
 def _compile_task(task: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """根据单个任务的交付物和正式产物生成稳定的业务检查列表。"""
 
@@ -318,6 +357,9 @@ def _checks_for_deliverable(
     kind = deliverable["kind"]
     if kind == "frontend.api_module":
         endpoints = _frontend_api_endpoint_expectations(formal, deliverable)
+        allowed_existing_endpoints = _frontend_api_allowed_existing_endpoint_expectations(
+            formal, endpoints
+        )
         return [
             _business_check(
                 task,
@@ -325,7 +367,13 @@ def _checks_for_deliverable(
                 "frontend.api_contract",
                 "前端业务 API 模块必须实现已确认的 method、path、请求参数和响应结构。",
                 _api_sources(formal, endpoints),
-                {"endpoints": endpoints},
+                {
+                    # endpoints 保留为 required 的兼容投影，owner/reuse 只消费它，
+                    # verifier 则同时读取 required 与 allowed-existing 两个集合。
+                    "endpoints": endpoints,
+                    "required_endpoints": endpoints,
+                    "allowed_existing_endpoints": allowed_existing_endpoints,
+                },
             )
         ] if endpoints else []
     if kind == "frontend.page":
@@ -616,11 +664,16 @@ def _formal_inputs(context: dict[str, Any], task: dict[str, Any]) -> dict[str, A
         "entity_details": entity_details,
         "endpoint_ids": endpoint_ids,
         "api_contract_ids": sorted(api_contract_ids),
+        "retained_endpoint_owner_constraints": _dict_items(
+            context.get("frontend_endpoint_owner_constraints")
+        ),
         "source_refs": source_refs,
     }
 
 
-def _endpoint_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
+def _endpoint_expectations(
+    formal: dict[str, Any], *, include_all: bool = False
+) -> list[dict[str, Any]]:
     """提取当前任务负责的 endpoint、参数和请求响应结构。"""
 
     endpoint_ids = set(_string_list(formal.get("endpoint_ids")))
@@ -633,7 +686,7 @@ def _endpoint_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
         schemas = _dict_value(contract.get("schemas"))
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = _text(endpoint.get("id"))
-            if endpoint_ids and endpoint_id not in endpoint_ids:
+            if not include_all and endpoint_ids and endpoint_id not in endpoint_ids:
                 continue
             if not endpoint_id:
                 continue
@@ -651,6 +704,42 @@ def _endpoint_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
                 }
             )
     return result[:_MAX_ITEMS]
+
+
+def _frontend_api_allowed_existing_endpoint_expectations(
+    formal: dict[str, Any], required: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """从平台注入的 retained owner 事实投射本任务允许保留的旧 Endpoint。"""
+
+    required_keys = {
+        (_text(endpoint.get("api_contract_id")), _text(endpoint.get("endpoint_id")))
+        for endpoint in required
+    }
+    contract_ids = {
+        contract_id
+        for contract_id, _ in required_keys
+        if contract_id
+    }
+    retained_keys = {
+        (
+            _text(owner.get("api_contract_id")),
+            _text(owner.get("endpoint_id")),
+        )
+        for owner in _dict_items(formal.get("retained_endpoint_owner_constraints"))
+    }
+    allowed_keys = {
+        key
+        for key in retained_keys
+        if key[0] in contract_ids and key not in required_keys and key[0] and key[1]
+    }
+    return [
+        endpoint
+        for endpoint in _endpoint_expectations(formal, include_all=True)
+        if (
+            _text(endpoint.get("api_contract_id")),
+            _text(endpoint.get("endpoint_id")),
+        ) in allowed_keys
+    ]
 
 
 def _required_endpoint_ids(formal: dict[str, Any]) -> list[str]:

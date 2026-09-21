@@ -206,6 +206,18 @@ def _frontend_generation_prompt(
         "business API functions. Static frontend data modules continue to return their "
         "contract business values directly.\n\n"
     )
+    incremental_api_module_instruction = (
+        "## Incremental API Contract module rule\n"
+        "For every `frontend.api_module` task, the declared target file is the canonical "
+        "`frontend/src/apis/<biz>Api.ts` for that task's API Contract. If that file already "
+        "exists, read it before editing. Preserve every existing formal Endpoint export and "
+        "its implementation, then add only the Endpoint responsibilities declared by the "
+        "current task. A retained Endpoint may remain in the file even when it is not in the "
+        "current task's required list; it is not an error and must not be deleted. Never "
+        "create a second per-Endpoint API module, split one Contract into multiple files, or "
+        "remove existing exports because this task is an incremental PlanningRun. Pages must "
+        "continue importing all business API functions from the shared Contract module.\n\n"
+    )
     authorization_boundary = (
         "## Authorization boundary\n"
         "A task may contain platform-owned `source_refs.authorization.actions`. This is the only action-permission input. "
@@ -246,6 +258,7 @@ def _frontend_generation_prompt(
         + _ui_design_reference_instruction(ui_designs)
         + data_source_instruction
         + service_response_instruction
+        + incremental_api_module_instruction
         + authorization_boundary
         + "For business APIs, import functions from `src/apis/` "
         "and invoke them through `useRequest`; page and component code must never call `fetch`, `axios`, or `service` directly. "

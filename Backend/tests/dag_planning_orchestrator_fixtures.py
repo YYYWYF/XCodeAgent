@@ -2,6 +2,10 @@
 
 from app.services.build_task_reuse import resolve_reuse_facts
 from app.services.build_task_reuse_contracts import ExternalCapability
+from app.services.business_acceptance import (
+    canonical_frontend_api_module_path,
+    frontend_api_task_id,
+)
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.dag_planning_inputs import SequentialPlanningInputs
 from app.services.frozen_contract_manifest import compile_expected_unit_formal_source_refs
@@ -247,7 +251,7 @@ def shared_inputs(baseline):
 
 
 def model_tasks(job):
-    """每条正式缺项生成一个严格任务，职责身份和 owner 均来自本 Unit 冻结输入。"""
+    """生成遵守当前 Unit 规则的测试任务，按 Contract 聚合前端 API 职责。"""
 
     tasks = []
     backend_stage_by_kind = {
@@ -271,9 +275,70 @@ def model_tasks(job):
         for stage in backend_stages
         if stage
     }
+    handled_api_contracts = set()
     for index, requirement in enumerate(job.context.generation_requirements):
         refs = requirement.source_refs
         kind = refs["kind"]
+        if kind == "frontend.api_module":
+            contract_id = refs["api_contract_id"]
+            if contract_id in handled_api_contracts:
+                continue
+            contract_requirements = [
+                item
+                for item in job.context.generation_requirements
+                if item.source_refs.get("kind") == kind
+                and item.source_refs.get("api_contract_id") == contract_id
+            ]
+            endpoint_ids = tuple(sorted(
+                str(item.source_refs["endpoint_id"])
+                for item in contract_requirements
+            ))
+            path = canonical_frontend_api_module_path(contract_id)
+            task_id = frontend_api_task_id(
+                job.identity.unit_id, contract_id, endpoint_ids
+            )
+            value = task(
+                task_id,
+                job.identity.unit_id,
+                kind,
+                path,
+                contract_id,
+            )
+            value.update({
+                "title": "实现本 Unit 正式职责",
+                "source_refs": {
+                    **dict(refs),
+                    "api_contract_ids": [contract_id],
+                    "endpoint_ids": list(endpoint_ids),
+                },
+                "task_type": "frontend.code",
+                "status": "pending",
+                "can_run_in_parallel": False,
+                "parallel_reason": "串行测试",
+                "impact_scope": {
+                    "summary": "当前职责",
+                    "affected_modules": [],
+                    "public_contracts": [],
+                    "risks": [],
+                },
+            })
+            value["change_scope"][0]["description"] = "按正式职责修改"
+            value["deliverables"] = [
+                {
+                    "id": f"{task_id}::deliverable::{endpoint_id}",
+                    "kind": kind,
+                    "target_id": endpoint_id,
+                    "paths": [path],
+                    "provides": [item.requirement_id],
+                }
+                for endpoint_id, item in sorted(
+                    ((item.source_refs["endpoint_id"], item) for item in contract_requirements),
+                    key=lambda pair: pair[0],
+                )
+            ]
+            tasks.append(value)
+            handled_api_contracts.add(contract_id)
+            continue
         target = refs.get("page_id") if kind == "frontend.page" else (
             refs.get("endpoint_id") if kind in {"frontend.api_module", "frontend.static_data_module", "backend.endpoint_controller"}
             else refs.get("target_id") if kind == "frontend.shared_capability"

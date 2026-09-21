@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.services.build_scheduler import resolve_execution_slice
+from app.services.business_acceptance import frontend_api_task_id
 
 
 class ExecutionSliceResolverTests(unittest.TestCase):
@@ -134,6 +135,43 @@ class ExecutionSliceResolverTests(unittest.TestCase):
             execution_slice["task_ids"],
             ["backend-bootstrap", "users-db", "user-list-api"],
         )
+
+    def test_incremental_shared_api_scope_dispatches_only_new_pending_task(self) -> None:
+        """同一共享 API Unit 中 retained completed Task 只复用，新 Task 才进入执行切片。"""
+
+        build_task_plan = {
+            "unit_graph": {
+                "nodes": ["frontend:api-client"],
+                "edges": [],
+            }
+        }
+        tasks = [
+            {
+                "id": frontend_api_task_id(
+                    "frontend:api-client", "profile-api", ("profile_api.get",)
+                ),
+                "unit_id": "frontend:api-client",
+                "status": "completed",
+            },
+            {
+                "id": frontend_api_task_id(
+                    "frontend:api-client", "profile-api", ("profile_api.update",)
+                ),
+                "unit_id": "frontend:api-client",
+                "status": "pending",
+            },
+        ]
+
+        execution_slice = resolve_execution_slice(
+            build_task_plan=build_task_plan,
+            tasks=tasks,
+            build_execution_scope={"type": "application", "targetId": "application"},
+        )
+
+        self.assertEqual(execution_slice["reusable_task_ids"], [tasks[0]["id"]])
+        self.assertEqual(execution_slice["pending_task_ids"], [tasks[1]["id"]])
+        self.assertEqual(execution_slice["summary"]["reused"], 1)
+        self.assertEqual(execution_slice["summary"]["pending"], 1)
 
 
 if __name__ == "__main__":

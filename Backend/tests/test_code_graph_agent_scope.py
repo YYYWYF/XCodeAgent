@@ -141,6 +141,9 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         self.assertIn("return the service result directly", prompt)
         self.assertIn("`service.<method><void>()`", prompt)
         self.assertIn("Keep `src/apis/service.ts` unchanged", prompt)
+        self.assertIn("Incremental API Contract module rule", prompt)
+        self.assertIn("read it before editing", prompt)
+        self.assertIn("Never create a second per-Endpoint API module", prompt)
 
     def test_frontend_execution_prompt_requires_exact_resources_import(self) -> None:
         """受控页面任务必须收到唯一 RESOURCES 目录的精确导入约束。"""

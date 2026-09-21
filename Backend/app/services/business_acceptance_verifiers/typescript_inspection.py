@@ -35,15 +35,20 @@ def verify_api_contract_source(
             "业务 API 模块直接调用 axios/fetch，未通过公共 service。",
             facts={"direct_http_calls": direct_calls},
         )
-    endpoints = _dict_items(expected.get("endpoints"))
+    required_endpoints = _dict_items(expected.get("required_endpoints"))
+    if not required_endpoints:
+        # 兼容当前已编译的旧检查：旧 expected.endpoints 的语义就是 required。
+        required_endpoints = _dict_items(expected.get("endpoints"))
+    allowed_existing_endpoints = _dict_items(expected.get("allowed_existing_endpoints"))
+    accepted_endpoints = [*required_endpoints, *allowed_existing_endpoints]
     declared_paths = {
         str(endpoint.get("path") or "")
-        for endpoint in endpoints
+        for endpoint in accepted_endpoints
         if str(endpoint.get("path") or "")
     }
     facts: list[dict[str, Any]] = []
     errors: list[str] = []
-    for endpoint in endpoints:
+    for endpoint in required_endpoints:
         endpoint_id = str(endpoint.get("endpoint_id") or "")
         method = str(endpoint.get("method") or "GET").upper()
         path = str(endpoint.get("path") or "")
@@ -86,7 +91,7 @@ def verify_api_contract_source(
         errors.append("业务 API 模块实现了契约外路径：" + "、".join(dict.fromkeys(unexpected_paths)))
     if errors:
         return verification_result("failed", "；".join(errors), facts={"endpoint_exports": facts})
-    if not facts and endpoints:
+    if not facts and required_endpoints:
         return verification_result(
             "blocked",
             "AST 未提取到可验证的 TypeScript endpoint 导出。",

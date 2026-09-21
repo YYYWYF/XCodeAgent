@@ -7,7 +7,11 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.agents.main.backend_unit_task_rules import resolve_backend_unit_task_rules
-from app.services.business_acceptance import DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND
+from app.services.business_acceptance import (
+    DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND,
+    canonical_frontend_api_module_path,
+    frontend_api_task_id,
+)
 from app.services.page_identity import canonical_page_entry_path, page_id_to_page_key
 from app.services.unit_generation_contracts import (
     GenerationRequirement,
@@ -102,8 +106,11 @@ def example_task_id(context: UnitGenerationContext) -> str:
     refs = first.source_refs if first is not None else {}
     kind = _text(refs.get("kind"))
     if context.unit_id == "frontend:api-client":
+        manifest = frontend_api_task_manifest(context)
+        if manifest:
+            return str(manifest[0]["task_id"])
         contract_id = _text(refs.get("api_contract_id")) or "api-contract-id"
-        return f"{context.unit_id}::{contract_id}::api-module"
+        return frontend_api_task_id(context.unit_id, contract_id, ("endpoint-id",))
     stage = _BACKEND_STAGE_BY_KIND.get(kind)
     if stage is None:
         raise ValueError(
@@ -134,8 +141,9 @@ def _common_rules(context: UnitGenerationContext) -> tuple[str, ...]:
         "set of exact workspace-relative paths. allowed_paths must authorize every one of "
         "those paths, and every deliverables[].paths item must belong to that same Task "
         "scope. Use operation=modify only when the exact path exists in WorkspaceContext; "
-        "otherwise use operation=add. Do not emit duplicate paths, fields, Task IDs, "
-        "deliverable IDs, or capabilities.",
+        "otherwise use operation=add. Do not duplicate a path within one path array, field, "
+        "Task ID, deliverable ID, or capability. Different logical deliverables may reference "
+        "the same physical file when the Unit rule explicitly requires a shared module.",
         "Dependencies may reference only Candidate Task IDs or explicitly listed same-Unit "
         "retained Task IDs. Use the exact dependencies prescribed by the Unit rules below; "
         "never reference another Unit or a cross-Unit Task, because the platform compiles "
@@ -195,10 +203,16 @@ def _page_rules(context: UnitGenerationContext) -> tuple[str, ...]:
 def _frontend_api_rules(context: UnitGenerationContext) -> tuple[str, ...]:
     """定义复用模板 service 的前端业务 API 模块规则。"""
 
+    manifest = frontend_api_task_manifest(context)
     return (
         "Group all `frontend.api_module` requirements by `api_contract_id`. For each "
-        "distinct api_contract_id, emit exactly ONE business API Task with ID "
-        "`frontend:api-client::<api_contract_id>::api-module`. That single Task implements "
+        "distinct api_contract_id, emit exactly ONE business API Task. The deterministic "
+        "Contract manifest below supplies the exact Task ID, Endpoint set, and canonical "
+        "module path. The base namespace is "
+        "`frontend:api-client::<api_contract_id>::api-module`; append the manifest's stable "
+        "suffix, and do not shorten, rename, or reuse an ID from a retained Task:\n"
+        + _stable_json(manifest)
+        + "\nThat single Task implements "
         "every endpoint belonging to that API Contract and writes all of them into exactly "
         "ONE shared file `frontend/src/apis/<biz>Api.ts`, where `<biz>` is the "
         "api_contract_id converted to lowerCamelCase with the `_api` suffix stripped "
@@ -216,6 +230,47 @@ def _frontend_api_rules(context: UnitGenerationContext) -> tuple[str, ...]:
         "Do not emit pages, static-data modules, backend work, route/menu registration, "
         "tests, builds, verification, or acceptance responsibilities.",
     )
+
+
+def frontend_api_task_manifest(
+    context: UnitGenerationContext,
+) -> tuple[dict[str, Any], ...]:
+    """把当前 frontend API requirements 编译为按 Contract 分组的稳定任务清单。"""
+
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    for requirement in context.generation_requirements:
+        refs = requirement.source_refs
+        if _text(refs.get("kind")) != "frontend.api_module":
+            raise ValueError(
+                f"Frontend API Unit {context.unit_id} 含非 frontend.api_module 职责。"
+            )
+        contract_id = _text(refs.get("api_contract_id"))
+        endpoint_id = _text(refs.get("endpoint_id"))
+        if not contract_id or not endpoint_id:
+            raise ValueError(
+                f"Frontend API Unit {context.unit_id} 的职责缺少 Contract 或 Endpoint 身份。"
+            )
+        grouped.setdefault(contract_id, []).append((endpoint_id, requirement.requirement_id))
+
+    manifest: list[dict[str, Any]] = []
+    for contract_id in sorted(grouped):
+        records = grouped[contract_id]
+        endpoint_ids = tuple(sorted(endpoint_id for endpoint_id, _ in records))
+        if len(endpoint_ids) != len(set(endpoint_ids)):
+            raise ValueError(
+                f"Frontend API Unit {context.unit_id} 含重复职责 {contract_id} 的 Endpoint。"
+            )
+        manifest.append({
+            "api_contract_id": contract_id,
+            "endpoint_ids": list(endpoint_ids),
+            "requirement_ids": [
+                requirement_id
+                for _, requirement_id in sorted(records, key=lambda item: item[0])
+            ],
+            "task_id": frontend_api_task_id(context.unit_id, contract_id, endpoint_ids),
+            "module_path": canonical_frontend_api_module_path(contract_id),
+        })
+    return tuple(manifest)
 
 
 def _frontend_static_rules(context: UnitGenerationContext) -> tuple[str, ...]:

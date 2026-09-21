@@ -911,7 +911,7 @@ traceability metadata
 | Unit | 需要的专属输入 | 切片与来源 |
 | --- | --- | --- |
 | `frontend:shell` | 前端模板／工作区就绪事实、平台选定的本轮 shell 职责、保留 shell 任务摘要 | 沿用现有前置检查与前端快照。异常作为前置条件不满足；不新增菜单、页面入口自动补齐。无可复用任务时，仅为原有规划职责提供输入，不在本节扩张 shell 职责。 |
-| `frontend:api-client` | 本轮需要生成模块的 Endpoint 引用及 API Contract；固定响应适配约定；保留适配器任务及 Endpoint owner 信息 | 按 `(api_contract_id, endpoint_id)` 选择 Endpoint，保留所属契约的 schemas。工作区只提供相关前端目录、API 文件及 service 路径事实。不提供后端 Candidate 或数据库实现绑定；接口请求、响应和空响应等约定来自正式 API 合同。 |
+| `frontend:api-client` | 本轮需要生成模块的 Endpoint 引用及 API Contract；固定响应适配约定；保留适配器任务及 Endpoint owner 信息 | 按 `(api_contract_id, endpoint_id)` 选择 Endpoint，保留所属契约的 schemas。同一 Contract 的本轮缺失 Endpoint 聚合为一个 Contract-level Task，并共同写入唯一 canonical `frontend/src/apis/<biz>Api.ts`；后续 PlanningRun 追加新的稳定 Task ID，不能改写 retained Task。不提供后端 Candidate 或数据库实现绑定；接口请求、响应和空响应等约定来自正式 API 合同。 |
 | `frontend:auth-guard` | 有效能力及确认的权限事实 | 不构造资源注入 Candidate；共享资源由 Build 后平台投影写入，Page 只消费本页权限切片。 |
 | `backend:bootstrap` | 当前 Scope 所需的后端数据来源类型及正式实体绑定引用、既有基础能力规则、后端工程路径事实、保留 bootstrap 任务职责 | 复用现有 resolver、实体摘要和后端快照裁剪。具体连接配置的复用／新增判断继续延期；本节不据此设计多数据源配置或新的缺口判定算法。 |
 | `backend:endpoint:<contractId>:<endpointId>` | 当前 Endpoint 的完整实施语义、所属 API Contract 的 schema、相关实体字段及确认的数据来源绑定、当前 Endpoint 权限切片 | 固定为一个接口，包含该接口相关实体，整个 Unit 的阶段任务使用同一份输入。数据库保留表／字段映射；外部 API 只保留通过该接口引用匹配到的操作、请求响应结构和字段映射。复用 `_endpoint_context`、`entity_design_summaries` 和 `unit_authorization_slice`，不读取 bootstrap Candidate 或其他 Endpoint Candidate。 |
@@ -1132,7 +1132,7 @@ CandidateAttempt
 
 | 模型返回字段 | 必填规则 |
 | --- | --- |
-| `id` | 必填，在当前 Candidate 内唯一，遵守对应 Unit 的 ID 规则；Endpoint 沿用实体／阶段 ID 格式。 |
+| `id` | 必填，在当前 Candidate 内唯一，遵守对应 Unit 的 ID 规则；Backend Endpoint 沿用阶段 ID 格式，`frontend:api-client` 则按 `unit_id + api_contract_id + 本轮 Endpoint ID 集合` 的稳定哈希后缀生成，不能复用 retained Task ID。 |
 | `unit_id`、`owner` | 必填，必须与平台指定的当前 Unit 及 owner 范围一致，不能通过归一化修改错误归属。 |
 | `title`、`description` | 必填，使用中文说明具体实施职责。 |
 | `dependencies` | 必填数组，可为空；仅引用本 Candidate 内的 Task ID。跨 Unit 及历史保留任务依赖由平台组装。 |
@@ -1756,7 +1756,7 @@ unit_ids != retry_unit_ids
 | V4 | `build_task_planner.py::_database_task_semantic_errors` | 数据库任务类型受支持、database_scope 非空、不修改代码文件、高风险操作有审批要求。 | 保留既有适用检查；本轮普通 Unit 生成先按 V3 排除数据库变更任务，不扩展数据库任务生成。 |
 | V5 | `build_task_planner.py::_template_boundary_errors / _authorization_coverage_errors` | 普通任务不得修改共享 routes、resources、AuthConstants 或模板基础设施。 | Unit Local；资源注入不享有 Task 例外，平台在全部任务成功后统一投影。 |
 | V6 | `business_acceptance.py::business_acceptance_contract_errors` | 适用任务有交付物，交付物 ID 在 Task 内不重复，kind 受支持且与 owner／Unit 域匹配。 | Unit Local。 |
-| V7 | 同上 | 交付物路径非空（现有 shared_capability 例外）、相对且无 `..`、落在 Task 文件范围；同一 Task 不得将同一路径分配给多个交付物。 | Unit Local。最后一项是现有 Task 内规则，不等于多个 Task 修改同文件就冲突。 |
+| V7 | 同上 | 交付物路径非空（现有 shared_capability 例外）、相对且无 `..`、落在 Task 文件范围；同一 Task 内不同 `frontend.api_module` deliverable 可以共同引用同一个 canonical API module，不能因此放宽路径安全、scope 或 Endpoint ownership。 | Unit Local。文件共享不等于职责共享；多个历史增量 Task 也可以继续修改同一 canonical module。 |
 | V8 | `business_acceptance.py::_page_deliverable_errors` | 含 frontend.page 交付物的 Task 恰好声明一个此类交付物；覆盖指定页面入口；精确 page_key 存在时 change_scope／allowed_paths 也包含入口。 | Unit Local，读取本页入口事实。当前函数逐 Task 检查，不能宣称已有整个 Page Unit 的交付物唯一性检查。 |
 | V9 | `business_acceptance.py::_endpoint_deliverable_errors`；`build_unit_compiler.py::_task_entity_ids` | Controller target 属于当前 Endpoint；多实体 Endpoint Task 可按固定 ID 确定实体归属。 | Unit Local，读取正式 Endpoint／实体集合。当前单实体分支仍有宽松回退；第 3 项的严格 ID 契约需显式检查。 |
 | V10 | `business_acceptance.py::business_acceptance_contract_errors / _expected_field_errors` | 来源实体／Endpoint／Page 不越出 Unit；业务检查 ID 非空且无重复，关联已有 deliverable，kind／verifier 合法，正式来源 artifact／target／pointer／hash 完整，target_paths 在范围内，采用确定性且必需的 Build 阶段检查，各 kind 的 expected 必要字段存在。 | 编译后 Unit Local 检查。若模型声明错误目标导致失败，重生成 Candidate；若平台漏注入来源或错误编译 verifier 等字段，则为 System。 |

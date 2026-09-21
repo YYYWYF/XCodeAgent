@@ -88,6 +88,11 @@ capability 和正式 Endpoint owner。不会因此产生 orders API 的 capabili
 方法或自然语言相似度猜测等价。缺失身份、未知正式身份均显式报错。
 同一任务对同一 Endpoint 的多条检查只证明一个 owner，不合并任何 Task。
 
+对 `frontend.api_module`，多个 Endpoint deliverable 或不同 PlanningRun 的增量 Task
+可以继续引用同一个 `frontend/src/apis/<biz>Api.ts` canonical module；物理路径只作为
+执行范围和锁的事实，不作为 Endpoint owner 身份。正式 owner 仍严格按
+`(api_contract_id, endpoint_id)` 判断，同一复合身份只能有一个实现 owner。
+
 多个 confirmed Task 声明同一 Endpoint 时，保留全部 owner 供诊断，并返回
 `CONFIRMED_ENDPOINT_OWNER_CONFLICT`：`level=pre_generation`、
 `category=platform`、`retryable=false`、`retry_unit_ids=[]`。

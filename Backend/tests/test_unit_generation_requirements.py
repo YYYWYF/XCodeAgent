@@ -149,6 +149,41 @@ class UnitGenerationRequirementsTests(unittest.TestCase):
         self.assertEqual(inputs["reuse_facts"].model_dump_json(), before_facts)
         self.assertNotIn("replacement", result.model_dump_json())
 
+    def test_shared_api_client_incremental_contract_generates_only_new_endpoint(self) -> None:
+        """同一 Contract 已有 get owner 时，后续 Scope 只生成 update requirement。"""
+
+        formal_plan = _formal_plan()
+        formal_plan["api_contracts"][0]["endpoints"].append({
+            "id": "orders.update",
+            "method": "PUT",
+            "path": "/orders/{id}",
+        })
+        formal_plan["page_implementation_contracts"][0]["requiredEndpointIds"] = [
+            "orders.list",
+            "orders.update",
+        ]
+        inputs = _inputs(
+            _owner("orders-api-get", "orders-api", "orders.list"),
+            formal_plan=formal_plan,
+        )
+        inputs["required_unit_ids"] = ["frontend:api-client"]
+
+        result = resolve_generation_requirements(**inputs)
+
+        self.assertEqual(
+            [
+                item.requirement_id
+                for item in result.generation_requirements_by_unit["frontend:api-client"]
+            ],
+            ["frontend.api_module:orders-api:orders.update"],
+        )
+        self.assertEqual(result.generation_strategy_by_unit["frontend:api-client"], "model")
+        self.assertEqual(result.planning_unit_ids, ("frontend:api-client",))
+        self.assertEqual(
+            inputs["reuse_facts"].retained_endpoint_owners[0].endpoint_id,
+            "orders.list",
+        )
+
     def test_shared_api_client_can_be_fully_reused_by_formal_owner(self) -> None:
         """正式接口 owner 即使属于其他 Unit，也可证明接口职责已登记。"""
 

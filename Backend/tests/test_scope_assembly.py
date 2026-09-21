@@ -7,7 +7,20 @@ from app.services.authorization_capability_dependency import (
     AUTH_GUARD_UNIT_ID,
     current_auth_resource_capability,
 )
-from app.services.build_task_reuse_contracts import ExternalCapability, ReuseFacts
+from app.services.build_task_reuse_contracts import (
+    ExternalCapability,
+    RetainedEndpointOwner,
+    ReuseFacts,
+)
+from app.services.build_task_planner import (
+    create_build_task_plan,
+    frontend_endpoint_ownership_errors,
+    retained_frontend_endpoint_owner_conflict_errors,
+)
+from app.services.business_acceptance import (
+    canonical_frontend_api_module_path,
+    frontend_api_task_id,
+)
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.planning_frozen import plain_json
 from app.services.scope_assembly import ScopeAssemblyError, assemble_scope_build_task_plan
@@ -18,6 +31,7 @@ from app.services.unit_generation_contracts import (
 )
 from tests.dag_planning_baseline_fixtures import (
     build_context,
+    candidate_tasks,
     confirmed_baseline,
     execution_scope,
     project_plan,
@@ -87,6 +101,73 @@ def _customer_api_task(task_id: str = "customers:api-current") -> dict:
     )
     candidate["task_type"] = "frontend.code"
     return candidate
+
+
+def _api_requirement(endpoint_id: str) -> GenerationRequirement:
+    """构造同一 API Contract 的当前增量 Endpoint requirement。"""
+
+    return GenerationRequirement(
+        requirement_id=f"frontend.api_module:orders-api:{endpoint_id}",
+        description=f"实现订单 API Endpoint {endpoint_id}",
+        source_refs={
+            "artifact": "technical-plan",
+            "kind": "frontend.api_module",
+            "capability_id": f"frontend.api_module:orders-api:{endpoint_id}",
+            "api_contract_id": "orders-api",
+            "endpoint_id": endpoint_id,
+        },
+    )
+
+
+def _canonicalize_api_candidate(
+    candidate: dict, *, endpoint_ids: tuple[str, ...], task_id: str
+) -> dict:
+    """将测试 Candidate 的 API 交付物绑定到共享 canonical module。"""
+
+    path = canonical_frontend_api_module_path("orders-api")
+    candidate["id"] = task_id
+    candidate.setdefault("source_refs", {})["endpoint_ids"] = list(endpoint_ids)
+    candidate["target_files"] = [path]
+    candidate["allowed_paths"] = [path]
+    candidate["change_scope"] = [{
+        "operation": "modify",
+        "path": path,
+        "description": "扩展订单 API canonical module",
+    }]
+    candidate["deliverables"][0].update({
+        "id": f"{task_id}:deliverable",
+        "paths": [path],
+    })
+    return candidate
+
+
+def _canonical_confirmed_baseline() -> tuple[dict, dict, dict]:
+    """建立已有 orders.list canonical API Task 的 confirmed DAG 夹具。"""
+
+    plan = project_plan()
+    scope = execution_scope()
+    snapshot = workspace_snapshot()
+    context = build_context(plan, scope)
+    skeleton = ensure_build_unit_skeleton(plan, snapshot)
+    generated = candidate_tasks(context)
+    api_candidate = next(item for item in generated if item["unit_id"] == SHARED_UNIT)
+    _canonicalize_api_candidate(
+        api_candidate,
+        endpoint_ids=("orders.list",),
+        task_id=frontend_api_task_id(SHARED_UNIT, "orders-api", ("orders.list",)),
+    )
+    baseline = create_build_task_plan(
+        plan,
+        agent_plan={"tasks": generated},
+        workspace_snapshot=snapshot,
+        base_build_task_plan=skeleton,
+        build_context=context,
+        build_execution_scope=scope,
+    )
+    if baseline["status"] != "ready":
+        raise AssertionError(baseline["task_graph"]["validation"]["errors"])
+    baseline["confirmation_status"] = "confirmed"
+    return baseline, plan, scope
 
 
 def _base_inputs() -> dict:
@@ -333,6 +414,149 @@ class ScopeAssemblyTests(unittest.TestCase):
         self.assertTrue(all(result.task_origins[task_id] == "retained" for task_id in result.retained_task_ids))
         self.assertEqual(result.task_origins["customers:api-current"], "candidate")
         self.assertEqual(result.candidate_unit_by_task_id, {"customers:api-current": SHARED_UNIT})
+
+    def test_incremental_same_contract_appends_new_task_without_mutating_retained_api_task(self) -> None:
+        """同 Contract 增量 Endpoint 使用新 Task ID、共享 canonical 文件并保留旧 Task。"""
+
+        baseline, plan, scope = _canonical_confirmed_baseline()
+        plan["api_contracts"][0]["endpoints"].append({
+            "id": "orders.update",
+            "method": "PUT",
+            "path": "/orders/{id}",
+            "request_schema_ref": "#/schemas/Order",
+            "response_schema_ref": "#/schemas/Order",
+            "parameters": [{
+                "name": "id",
+                "in": "path",
+                "required": True,
+                "schema": {"type": "string"},
+            }],
+            "operation_semantics": {"operation_kind": "update"},
+        })
+        snapshot = workspace_snapshot()
+        current_context = build_context(plan, scope)
+        update_task_id = frontend_api_task_id(
+            SHARED_UNIT, "orders-api", ("orders.update",)
+        )
+        update_task = task(
+            update_task_id,
+            SHARED_UNIT,
+            "frontend.api_module",
+            canonical_frontend_api_module_path("orders-api"),
+            "orders.update",
+        )
+        update_task["task_type"] = "frontend.code"
+        update_task.setdefault("source_refs", {})["endpoint_ids"] = ["orders.update"]
+        facts = _reuse_facts(baseline).model_copy(update={
+            "retained_endpoint_owners": (
+                RetainedEndpointOwner(
+                    api_contract_id="orders-api",
+                    endpoint_id="orders.list",
+                    owner_task_id=next(
+                        task_id
+                        for task_id, item in baseline["task_registry"].items()
+                        if item.get("unit_id") == SHARED_UNIT
+                    ),
+                    owner_unit_id=SHARED_UNIT,
+                ),
+            ),
+        })
+        inputs = {
+            "base_confirmed_plan": baseline,
+            "skeleton_plan": ensure_build_unit_skeleton(plan, snapshot, baseline),
+            "project_plan": plan,
+            "product_plan": {
+                "pages": [
+                    {"pageId": "orders", "name": "订单"},
+                    {"pageId": "customers", "name": "客户"},
+                ]
+            },
+            "build_context": current_context,
+            "build_execution_scope": scope,
+            "reuse_facts": facts,
+            "generation_requirements_by_unit": {
+                SHARED_UNIT: (_api_requirement("orders.update"),),
+            },
+            "candidates_by_unit": {
+                SHARED_UNIT: _candidate(SHARED_UNIT, [update_task], "b"),
+            },
+        }
+
+        result = assemble_scope_build_task_plan(**inputs)
+        registry = result.assembled_plan["task_registry"]
+        retained_api_task_id = next(
+            task_id for task_id, item in baseline["task_registry"].items()
+            if item.get("unit_id") == SHARED_UNIT
+        )
+
+        self.assertIn(retained_api_task_id, registry)
+        self.assertIn(update_task_id, registry)
+        self.assertEqual(result.retained_task_ids.count(retained_api_task_id), 1)
+        self.assertEqual(result.candidate_task_ids, (update_task_id,))
+        self.assertEqual(
+            registry[update_task_id]["deliverables"][0]["paths"],
+            (canonical_frontend_api_module_path("orders-api"),),
+        )
+        self.assertEqual(
+            registry[retained_api_task_id]["deliverables"][0]["paths"],
+            (canonical_frontend_api_module_path("orders-api"),),
+        )
+
+    def test_endpoint_ownership_uses_contract_endpoint_not_shared_path(self) -> None:
+        """不同 Endpoint 共用 API 文件时允许并存，但重复复合身份仍失败。"""
+
+        def api_check(endpoint_id: str) -> dict:
+            return {
+                "kind": "frontend.api_contract",
+                "expected": {
+                    "endpoints": [{
+                        "api_contract_id": "profile-api",
+                        "endpoint_id": endpoint_id,
+                    }]
+                },
+                "target_paths": ["frontend/src/apis/profileApi.ts"],
+            }
+
+        distinct_owners = [
+            {
+                "id": "profile-get",
+                "unit_id": "frontend:api-client",
+                "owner": "frontend",
+                "business_acceptance_checks": [api_check("profile_api.get")],
+            },
+            {
+                "id": "profile-update",
+                "unit_id": "frontend:api-client",
+                "owner": "frontend",
+                "business_acceptance_checks": [api_check("profile_api.update")],
+            },
+        ]
+
+        self.assertEqual(frontend_endpoint_ownership_errors(distinct_owners), [])
+
+        duplicate_owner = [
+            distinct_owners[0],
+            {
+                **distinct_owners[1],
+                "id": "profile-get-duplicate",
+                "business_acceptance_checks": [api_check("profile_api.get")],
+            },
+        ]
+        errors = frontend_endpoint_ownership_errors(duplicate_owner)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("profile-api + profile_api.get", errors[0])
+        self.assertEqual(
+            retained_frontend_endpoint_owner_conflict_errors(
+                [distinct_owners[0]],
+                [{
+                    "api_contract_id": "profile-api",
+                    "endpoint_id": "profile_api.get",
+                    "owner_task_id": "profile-get",
+                    "owner_unit_id": SHARED_UNIT,
+                }],
+            ),
+            [],
+        )
 
     def test_fully_reused_scope_records_review_and_reused_task_ids(self) -> None:
         """没有 Candidate 的当前 Scope 也必须在 Assembly 产出完整复用任务集合。"""

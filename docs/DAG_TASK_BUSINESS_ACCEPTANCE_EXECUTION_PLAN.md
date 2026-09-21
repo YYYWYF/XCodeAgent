@@ -249,7 +249,9 @@ backend.upstream_contract
 
 ### 4.2 交付物类型
 
-一个任务可能同时产生多个交付物，因此使用 `deliverables` 数组，不使用单个 `deliverable`。
+一个任务可能同时产生多个逻辑交付物，因此使用 `deliverables` 数组，不使用单个 `deliverable`。
+交付物表示业务职责，不表示物理文件的独占权；同一 API Contract 的多个 Endpoint
+deliverable 可以共同引用同一个 canonical API module 文件。
 
 第一阶段允许的交付物类型：
 
@@ -314,7 +316,8 @@ backend.bootstrap
 5. `backend.endpoint_controller` 必须属于当前 endpoint Unit；
 6. backend endpoint 任务的交付目标必须是当前 Endpoint ID；职责不再经由
    `source_refs.entity_designs` 或 Entity binding 中转；
-7. 同一精确路径不能被同批次多个交付物重复拥有；
+7. 同一精确路径可以被同一 API Task 的多个 Endpoint deliverable 共同引用；路径安全性、
+   Task scope 归属和 Endpoint ownership 仍必须分别校验；
 8. 每个业务检查必须引用一个真实 `deliverable_id`。
 
 ## 5. 业务检查契约
@@ -414,9 +417,18 @@ typings、constants、hooks、utils 和可复用 components。以下属于工程
 
 ### 6.2 前端业务 API 模块
 
-`frontend.api_module` 通常是 `frontend/src/apis/<biz>Api.ts`；它不等于模板已提供且只读的
-`frontend:api-client` / `src/apis/service.ts`。业务 API 模块可与单个页面同任务交付，多页面共享时应拆成
-独立前置任务和交付物。
+`frontend.api_module` 的 canonical 物理文件是 `frontend/src/apis/<biz>Api.ts`；它不等于模板已提供且只读的
+`frontend:api-client` / `src/apis/service.ts`。同一 API Contract 的多个 Endpoint 在一次 PlanningRun
+中聚合到一个 Contract-level API Task，并由多个逻辑 deliverable 共同引用该文件。后续 PlanningRun
+只为新的 Endpoint 追加增量 Task，保留历史 Task 和已有导出，不创建第二个 per-Endpoint API 文件。
+
+验收编译器为 `frontend.api_contract` 分别投射：
+
+- `required_endpoints`：当前 Task 本轮必须实现的 Endpoint；
+- `allowed_existing_endpoints`：由 retained formal owner 事实确定、允许继续留在同一模块中的历史 Endpoint。
+
+Verifier 必须要求所有 `required_endpoints`，并仅将 `required ∪ allowed-existing` 之外的公共调用判为契约外实现。
+同一 `(api_contract_id, endpoint_id)` 仍只能有一个正式实现 owner，文件共享不等于 ownership 共享。
 
 | 检查类型 | 正式输入 | 验证内容 |
 | --- | --- | --- |

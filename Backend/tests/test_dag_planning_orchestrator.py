@@ -17,6 +17,7 @@ from app.services.api_design import (
     api_design_mapping_flows,
     api_design_source_types,
 )
+from app.services.business_acceptance import frontend_api_task_id
 from app.services.dag_planning_orchestrator import DagPlanningError, ValidatedAssembledPlan, plan_dag_sequential
 from app.services.planning_frozen import plain_json
 from app.services.unit_generation import generate_unit_candidate_once
@@ -327,7 +328,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         assembled = result.assembly.assembled_plan["task_registry"]
         self.assertEqual(
             set(assembled) - set(baseline["task_registry"]),
-            {"frontend:api-client-r1-a1-0"},
+            {frontend_api_task_id("frontend:api-client", "customers-api", ("customers.list",))},
         )
         for key, task in baseline["task_registry"].items():
             self._assert_retained_contract(assembled[key], task)

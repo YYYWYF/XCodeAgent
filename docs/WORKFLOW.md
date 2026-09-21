@@ -153,6 +153,8 @@ SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `sta
 
 真实后端接口的 `frontend:api-client` Unit 按 API Contract 生成业务 API 模块，并复用模板内置的 `frontend/src/apis/service.ts`；业务 API Task 不生成独立响应适配器，也不依赖共享适配器任务。TechnicalPlan API Contract 保持原有业务 Schema：`response_schema_ref` 表示后端 `common.response.ResponseEntity<T>.body` 中的 `T`，模板 `service.ts` 统一校验响应和业务码并直接返回 `body`，前端 API 模块通过 `service.<method><T>()` 向页面暴露 `Promise<T>`；无响应 Schema 的接口执行 `service.<method><void>()`，static 前端数据模块不使用 HTTP 传输层。
 
+同一 API Contract 的多个 Endpoint 在同一次 PlanningRun 中聚合到一个 Contract-level API Task，多个 Endpoint deliverable 共同引用 `frontend/src/apis/<biz>Api.ts`；后续 PlanningRun 只追加新的增量 Task，保留 retained Task 和已有导出并继续扩展同一 canonical module。路径共享不等于职责共享，Endpoint owner 始终按 `(api_contract_id, endpoint_id)` 唯一确定；业务验收分别区分当前 Task 的 `required_endpoints` 与 retained 的 `allowed_existing_endpoints`。
+
 `inspect_workspace` 完成后固定进入 `prepare_build_tasks`。数据库字段候选只在独立 `ApiDesignConfigModal` 配置流中为直属 MySQL 按需实时读取；字段映射配置不执行 DDL。Builtin 与 DBID 明确不支持实时元数据读取，外部 API 只读数据源目录中最新保存的 Operation Schema，不发起真实请求。
 
 任务准备只读取已确认 Endpoint 设计的有界摘要。来源快照包含数据源身份、表/Operation 与字段引用，不包含连接凭据或完整元数据；运行凭据只在需要执行时按 `sourceId` 安全解析，不写入主 Graph State 或任务规划模型上下文。

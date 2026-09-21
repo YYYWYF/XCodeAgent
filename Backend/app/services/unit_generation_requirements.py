@@ -20,7 +20,7 @@ _FRONTEND_ENDPOINT_KINDS = {"frontend.api_module", "frontend.static_data_module"
 
 
 def _endpoint_requirements(kind: str, keys: Sequence[tuple[str, str]]) -> list[GenerationRequirement]:
-    """每个正式 Endpoint 对应一个前端实现职责，不跨接口猜测 API 模块等价。"""
+    """为每个正式 Endpoint 建立实现职责，由上层按 Contract 聚合共享 API 模块 Task。"""
 
     return [responsibility(
         kind, contract_id, endpoint_id, description=f"实现正式接口 {contract_id}/{endpoint_id} 的前端业务访问职责。",

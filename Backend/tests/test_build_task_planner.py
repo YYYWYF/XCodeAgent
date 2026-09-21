@@ -31,7 +31,11 @@ from app.services.build_task_planner import (
     retained_frontend_endpoint_owner_conflict_errors,
     tasks_from_build_task_plan,
 )
-from app.services.business_acceptance import DELIVERABLE_KINDS
+from app.services.business_acceptance import (
+    DELIVERABLE_KINDS,
+    canonical_frontend_api_module_path,
+    frontend_api_task_id,
+)
 from app.services.build_unit_compiler import annotate_unit_inputs
 
 
@@ -2389,7 +2393,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertEqual(tasks[0]["source_refs"]["contracts"], [{"id": "home-api"}])
 
     def test_task_graph_rejects_duplicate_frontend_endpoint_owners(self) -> None:
-        """不同 API 文件重复实现同一 Endpoint 时必须阻断候选 DAG。"""
+        """不同 frontend Task 重复实现同一 Endpoint 时必须阻断候选 DAG。"""
 
         project_plan = {
             "api_contracts": [
@@ -2445,8 +2449,8 @@ class BuildTaskPlannerTests(unittest.TestCase):
         self.assertIn("home-api (frontend/src/apis/homeApi.ts)", errors)
         self.assertIn("role-api (frontend/src/apis/role.ts)", errors)
 
-    def test_frontend_api_deliverable_target_scopes_endpoint_owner(self) -> None:
-        """同一 API Client Unit 的独立 Endpoint 模块不得互相冒充实现 owner。"""
+    def test_frontend_api_contract_aggregates_endpoint_deliverables_and_scopes_owner(self) -> None:
+        """同 Contract Endpoint 交付物聚合到一个 canonical 模块 Task，且 owner 仍按 Endpoint 区分。"""
 
         project_plan = {
             "api_contracts": [
@@ -2482,40 +2486,60 @@ class BuildTaskPlannerTests(unittest.TestCase):
                 },
             ]
         }
+        product_path = canonical_frontend_api_module_path("product_api")
+        product_task_id = frontend_api_task_id(
+            "frontend:api-client",
+            "product_api",
+            ("product_api.list", "product_api.delete"),
+        )
+        category_path = canonical_frontend_api_module_path("category_api")
+        category_task_id = frontend_api_task_id(
+            "frontend:api-client",
+            "category_api",
+            ("category_api.options",),
+        )
         tasks = [
             {
-                "id": task_id,
+                "id": product_task_id,
                 "unit_id": "frontend:api-client",
                 "owner": "frontend",
-                "description": f"实现 {endpoint_id}",
-                "change_scope": [{"operation": "add", "path": target_path}],
+                "description": "实现 product_api 的当前 Endpoint 集合",
+                "target_files": [product_path],
+                "allowed_paths": [product_path],
+                "change_scope": [{"operation": "add", "path": product_path}],
                 "deliverables": [
                     {
-                        "id": f"deliverable:{task_id}",
+                        "id": f"deliverable:{product_task_id}:list",
                         "kind": "frontend.api_module",
-                        "target_id": endpoint_id,
-                        "paths": [target_path],
-                        "provides": [f"frontend.api.{endpoint_id}"],
-                    }
+                        "target_id": "product_api.list",
+                        "paths": [product_path],
+                        "provides": ["frontend.api.product_api.list"],
+                    },
+                    {
+                        "id": f"deliverable:{product_task_id}:delete",
+                        "kind": "frontend.api_module",
+                        "target_id": "product_api.delete",
+                        "paths": [product_path],
+                        "provides": ["frontend.api.product_api.delete"],
+                    },
                 ],
-            }
-            for task_id, endpoint_id, target_path in (
-                (
-                    "frontend:api-client::product-api-list",
-                    "product_api.list",
-                    "frontend/src/apis/product/list.ts",
-                ),
-                (
-                    "frontend:api-client::product-api-delete",
-                    "product_api.delete",
-                    "frontend/src/apis/product/delete.ts",
-                ),
-                (
-                    "frontend:api-client::category-api-options",
-                    "category_api.options",
-                    "frontend/src/apis/category/options.ts",
-                ),
-            )
+            },
+            {
+                "id": category_task_id,
+                "unit_id": "frontend:api-client",
+                "owner": "frontend",
+                "description": "实现 category_api 的当前 Endpoint 集合",
+                "target_files": [category_path],
+                "allowed_paths": [category_path],
+                "change_scope": [{"operation": "add", "path": category_path}],
+                "deliverables": [{
+                    "id": f"deliverable:{category_task_id}:options",
+                    "kind": "frontend.api_module",
+                    "target_id": "category_api.options",
+                    "paths": [category_path],
+                    "provides": ["frontend.api.category_api.options"],
+                }],
+            },
         ]
 
         plan = create_build_task_plan(
@@ -2535,17 +2559,16 @@ class BuildTaskPlannerTests(unittest.TestCase):
             plan["task_graph"]["validation"]["is_valid"],
             plan["task_graph"]["validation"]["errors"],
         )
+        owners_by_task: dict[str, set[str]] = {}
+        for owner in frontend_endpoint_implementation_owners(
+            list(plan["task_registry"].values())
+        ):
+            owners_by_task.setdefault(owner["owner_task_id"], set()).add(owner["endpoint_id"])
         self.assertEqual(
+            owners_by_task,
             {
-                owner["owner_task_id"]: owner["endpoint_id"]
-                for owner in frontend_endpoint_implementation_owners(
-                    list(plan["task_registry"].values())
-                )
-            },
-            {
-                "frontend:api-client::product-api-list": "product_api.list",
-                "frontend:api-client::product-api-delete": "product_api.delete",
-                "frontend:api-client::category-api-options": "category_api.options",
+                product_task_id: {"product_api.list", "product_api.delete"},
+                category_task_id: {"category_api.options"},
             },
         )
 
@@ -2579,7 +2602,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                         "change_scope": [
                             {
                                 "operation": "add",
-                                "path": "frontend/src/apis/product/list.ts",
+                                "path": canonical_frontend_api_module_path("product_api"),
                             }
                         ],
                         "deliverables": [
@@ -2587,7 +2610,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
                                 "id": "deliverable:product-list-api",
                                 "kind": "frontend.api_module",
                                 "target_id": "product_api.lsit",
-                                "paths": ["frontend/src/apis/product/list.ts"],
+                                "paths": [canonical_frontend_api_module_path("product_api")],
                                 "provides": ["frontend.api.product_api.list"],
                             }
                         ],

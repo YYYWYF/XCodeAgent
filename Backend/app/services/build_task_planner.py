@@ -681,7 +681,9 @@ def retained_frontend_endpoint_owner_conflict_errors(
             str(candidate.get("endpoint_id") or "").casefold(),
         )
         retained = retained_by_endpoint.get(endpoint_key)
-        if not retained:
+        if not retained or candidate.get("owner_task_id") == retained.get("owner_task_id"):
+            # Scope Assembly 会把 retained 与 Candidate 一起送入最终编译；同一历史
+            # owner 自身不是重复声明，只有不同 Task 才构成 retained 冲突。
             continue
         errors.append(
             "retained_frontend_endpoint_owner_conflict: "
