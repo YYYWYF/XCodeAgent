@@ -43,7 +43,8 @@ class TemplateEngineClient:
         size = 0
         try:
             timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
-            async with self._client_factory(timeout=timeout) as client:
+            # trust_env=False：模板引擎是本机直连的基础设施；httpx 在 Windows 会采用注册表系统代理但不执行其排除列表，回环请求会被代理拦截。
+            async with self._client_factory(timeout=timeout, trust_env=False) as client:
                 async with client.stream("POST", f"{self._base_url}/v1/generate", json={"requestedConfig": requested_config}, headers={"Accept": "application/zip"}) as response:
                     if response.status_code >= 400:
                         raise await _engine_response_error(response, "Template Engine 拒绝请求")
@@ -98,7 +99,8 @@ class TemplateEngineClient:
                 str(current_template_state.get("templateRevision") or "unknown"),
             )
             timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
-            async with self._client_factory(timeout=timeout) as client:
+            # trust_env=False：模板引擎是本机直连的基础设施；httpx 在 Windows 会采用注册表系统代理但不执行其排除列表，回环请求会被代理拦截。
+            async with self._client_factory(timeout=timeout, trust_env=False) as client:
                 async with client.stream(
                     "POST",
                     f"{self._base_url}/v1/update",
@@ -156,10 +158,19 @@ class TemplateEngineClient:
 async def _engine_response_error(response: httpx.Response, prefix: str) -> TemplateEngineError:
     """先读取流式错误 body，再保留 Engine 标准字段和 HTTP status，避免 ResponseNotRead。"""
 
+    raw = await response.aread()
     try:
-        payload = json.loads(await response.aread())
+        payload = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError):
+        # 非 JSON 错误响应通常来自中间层（如本机代理拦截）而非 Engine 本身，记录响应头与片段便于定位。
         payload = None
+        logger.warning(
+            "Template Engine 返回非 JSON 错误响应：status=%s，content-type=%s，server=%s，body=%r。",
+            response.status_code,
+            response.headers.get("content-type", ""),
+            response.headers.get("server", ""),
+            raw[:300],
+        )
     if isinstance(payload, dict) and all(key in payload for key in ("code", "message")):
         engine_error = {
             key: payload[key]
