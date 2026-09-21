@@ -17,6 +17,24 @@ from app.persistence.checkpoints import (
 )
 
 
+def _route_prepare_build_tasks_resume(state: ProjectState) -> str:
+    """恢复点落在 Build DAG 生成时，确保先补齐工作区快照身份。
+
+    DAG 生成的模板能力证据需要 `workspace_revision`，而全图只有 `inspect_workspace`
+    会产出它。直接跳回 `prepare_build_tasks` 会让该字段为空，随后在
+    `_external_capabilities` 里报
+    `GenerationRequirementsError: 模板能力证据缺少 workspace snapshot revision。`
+
+    所以缺这个字段时先绕到 `inspect_workspace`，再由既有的
+    `inspect_workspace → prepare_build_tasks` 边继续；已有身份时保持原样，
+    不为了恢复多做一次全量代码扫描。
+    """
+
+    if str(state.get("workspace_revision") or "").strip():
+        return "prepare_build_tasks"
+    return "inspect_workspace"
+
+
 def route_workflow_start(state: ProjectState) -> str:
     """让主 Workflow 从 API 门禁、开发检查、旧实体入口或指定节点开始。"""
 
@@ -35,9 +53,9 @@ def route_workflow_start(state: ProjectState) -> str:
     if state.get("resume_from") == "inspect_workspace":
         return "inspect_workspace"
     if state.get("resume_from") == "inspect_database_context":
-        return "prepare_build_tasks"
+        return _route_prepare_build_tasks_resume(state)
     if state.get("resume_from") == "prepare_build_tasks":
-        return "prepare_build_tasks"
+        return _route_prepare_build_tasks_resume(state)
     if state.get("resume_from") == "build":
         return (
             "authorization_bootstrap"

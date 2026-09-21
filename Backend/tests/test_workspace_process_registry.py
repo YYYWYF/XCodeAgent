@@ -113,3 +113,58 @@ class WorkspaceProcessRegistryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManagedProcessRegistrationTests(unittest.TestCase):
+    """_processes 必须全按 list 存。
+
+    回归背景：`managed_process` 曾写成 `setdefault(key, set()).add(process)`，
+    与 `__init__` 的 list 类型声明、以及 destroy/cleanup 路径的 `.append` 相矛盾。
+    该 key 一旦由 `.append` 建过，setdefault 返回的就是 list，`.add()` 直接抛
+    `AttributeError: 'list' object has no attribute 'add'` —— 只在特定时序下触发
+    （同一个 workspace 先被别的路径登记过），表现为工作流在 inspect_workspace
+    阶段随机失败、且报错只有类型没有位置。
+    """
+
+    def test_managed_process_works_after_start(self) -> None:
+        """先经 start()（list 路径）登记，再走 managed_process 不得抛 AttributeError。
+
+        这是线上真实的触发时序：应用预览/启动验收先经 `start()` 为工作区登记长生命
+        周期进程（建出 list），随后构建期的 `inspect_workspace` 用 `managed_process`
+        跑 git 命令，撞上 `setdefault(key, set()).add(...)` 直接抛
+        `AttributeError: 'list' object has no attribute 'add'`。
+
+        没有先 `start()` 时该 key 不存在，setdefault 建的是 set，所以不炸 —— 这正是
+        它只在特定时序下复现、且报错只有类型没有位置的原因。
+        """
+
+        with TemporaryDirectory() as workspace:
+            registry = WorkspaceProcessRegistry()
+            # 先让 _processes[key] 由 .append 路径建出来（模拟预览进程已登记）。
+            started = registry.start(workspace, [sys.executable, "-c", "pass"])
+            try:
+                with registry.managed_process(
+                    [sys.executable, "-c", "pass"], workspace=workspace
+                ) as process:
+                    self.assertIsNotNone(process.pid)
+            finally:
+                registry.release(workspace, started)
+
+    def test_managed_process_registers_into_list(self) -> None:
+        """登记结果必须是 list：与类型声明及其余用法一致。
+
+        必须在上下文**内**断言：退出时 finally 会回收进程并清掉空 key。
+        """
+
+        with TemporaryDirectory() as workspace:
+            registry = WorkspaceProcessRegistry()
+            with registry.managed_process(
+                [sys.executable, "-c", "pass"], workspace=workspace
+            ):
+                key = next(iter(registry._processes))
+                self.assertIsInstance(
+                    registry._processes[key],
+                    list,
+                    "_processes 必须按 list 存，否则 .add 会炸",
+                )
+                self.assertEqual(len(registry._processes[key]), 1)

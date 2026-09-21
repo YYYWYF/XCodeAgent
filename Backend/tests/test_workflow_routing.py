@@ -106,17 +106,46 @@ class WorkflowRoutingTests(unittest.TestCase):
             "api_design_readiness_gate",
         )
 
-    def test_workflow_start_can_resume_from_prepare_build_tasks(self) -> None:
+    def test_workflow_start_resumes_prepare_build_tasks_when_identity_present(self) -> None:
+        """已有工作区快照身份时直接恢复，不为恢复多做一次全量代码扫描。"""
+
         self.assertEqual(
-            route_workflow_start({"resume_from": "prepare_build_tasks"}),
+            route_workflow_start(
+                {"resume_from": "prepare_build_tasks", "workspace_revision": "rev-1"}
+            ),
             "prepare_build_tasks",
         )
 
+    def test_workflow_start_backfills_snapshot_identity_before_prepare_build_tasks(self) -> None:
+        """缺工作区快照身份时先绕到 inspect_workspace 补齐。
+
+        回归：DAG 生成的模板能力证据需要 workspace_revision，而全图只有
+        inspect_workspace 会产出它。直接跳回 prepare_build_tasks 会让该字段为空，
+        随后报 `GenerationRequirementsError: 模板能力证据缺少 workspace snapshot
+        revision.`，把开发阶段整个卡住。
+        """
+
+        for resume_from in ("prepare_build_tasks", "inspect_database_context"):
+            with self.subTest(resume_from=resume_from):
+                self.assertEqual(
+                    route_workflow_start({"resume_from": resume_from}),
+                    "inspect_workspace",
+                )
+                # 空串与纯空白同样视为缺失，不能被当成已有身份。
+                self.assertEqual(
+                    route_workflow_start(
+                        {"resume_from": resume_from, "workspace_revision": "   "}
+                    ),
+                    "inspect_workspace",
+                )
+
     def test_workflow_start_can_resume_from_database_context(self) -> None:
-        """旧数据库上下文恢复标识直接兼容到任务准备节点。"""
+        """旧数据库上下文恢复标识兼容到任务准备节点（身份齐备时）。"""
 
         self.assertEqual(
-            route_workflow_start({"resume_from": "inspect_database_context"}),
+            route_workflow_start(
+                {"resume_from": "inspect_database_context", "workspace_revision": "rev-1"}
+            ),
             "prepare_build_tasks",
         )
 

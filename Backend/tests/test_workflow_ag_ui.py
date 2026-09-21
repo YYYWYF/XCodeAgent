@@ -19,6 +19,7 @@ from app.domain.application_lifecycle import (
 from app.graph.state import ProjectState
 from app.graph.subgraphs.acceptance import acceptance_subgraph
 from app.protocols.workflow import build_workflow_ag_ui_stream
+from app.protocols.workflow.lifecycle import _error_frames
 from app.protocols.workflow.run_control import WorkflowRunRegistry
 from app.services.application_lifecycle import (
     create_application_lifecycle,
@@ -2780,3 +2781,52 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ErrorFrameExtractionTests(unittest.TestCase):
+    """失败详情要能定位到出错的业务代码行。
+
+    回归背景：此前只记录 type + message，遇到
+    `AttributeError: 'list' object has no attribute 'add'` 这类只有类型没有位置的错误
+    时无从下手 —— 答不出"哪个文件哪一行"，只能靠反复复现。
+
+    注意用 try/except 而不是 assertRaises：后者会 `with_traceback(None)` 清掉堆栈，
+    拿不到任何帧（生产路径的 `except ... as exc` 不会）。
+    """
+
+    def _raise_from_app(self) -> BaseException:
+        from app.services.api_design import api_design_readiness
+
+        try:
+            api_design_readiness("/tmp", {}, target_type="page", target_id="x")
+        except Exception as error:  # noqa: BLE001 - 测试就是要抓住它取堆栈
+            return error
+        raise AssertionError("预期 api_design_readiness 抛出异常")
+
+    def test_extracts_app_frames_only(self) -> None:
+        """只留 app/ 下的帧：库内部的几十帧对定位无帮助。"""
+
+        frames = _error_frames(self._raise_from_app()).get("frames") or []
+        self.assertTrue(frames, "应抽取出应用帧")
+        for frame in frames:
+            self.assertTrue(
+                frame.startswith(("services/", "graph/", "protocols/", "workspace/", "domain/")),
+                frame,
+            )
+            self.assertNotIn("/Users/", frame, "不得把本机绝对路径写进工作区状态")
+        # 由外到内，最内层是真正抛错的位置。
+        self.assertIn("_target_endpoints", frames[-1])
+
+    def test_returns_empty_when_no_app_frame(self) -> None:
+        """纯库内异常（无应用帧）时不产出空壳字段。"""
+
+        try:
+            raise AttributeError("'list' object has no attribute 'add'")
+        except AttributeError as error:
+            self.assertEqual(_error_frames(error), {})
+
+    def test_frames_are_capped(self) -> None:
+        """帧数有上限：这条摘要要写进 lifecycle JSON，不能被堆栈撑爆。"""
+
+        frames = _error_frames(self._raise_from_app()).get("frames") or []
+        self.assertLessEqual(len(frames), 8)

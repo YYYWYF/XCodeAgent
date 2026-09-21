@@ -55,7 +55,11 @@ class WorkspaceProcessRegistry:
             if key in self._deleting_workspaces or run_id in self._cancelled_runs:
                 raise RuntimeError("工作区或当前运行已停止，拒绝启动检测进程。")
             process = subprocess.Popen(*popenargs, **kwargs)
-            self._processes.setdefault(key, set()).add(process)
+            # _processes 按 list 存（见 __init__ 的类型声明，以及下方 destroy/cleanup
+            # 路径的 .append 与按 list 过滤）。这里曾经写成 set() + .add()，与声明矛盾：
+            # 该 key 若已由 .append 建过，setdefault 返回的是 list，.add() 直接抛
+            # AttributeError: 'list' object has no attribute 'add'。
+            self._processes.setdefault(key, []).append(process)
             if run_id:
                 self._run_processes.setdefault(run_id, set()).add(process)
         try:

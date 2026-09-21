@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 from typing import Any
 
 from app.domain.application_lifecycle import (
@@ -511,12 +512,40 @@ def fail_workflow_lifecycle(
             message=str(error)[:2048] or "Workflow 运行失败。",
             recoverable=True,
             occurredAt=utc_now(),
-            details={"phase": phase, "type": type(error).__name__},
+            details={"phase": phase, "type": type(error).__name__, **_error_frames(error)},
         ),
     )
     _sync_active_revision_status(workspace, "failed")
     state = load_application_lifecycle(workspace) or state
     return application_lifecycle_payload(state)
+
+
+def _error_frames(error: Exception) -> dict[str, Any]:
+    """抽取异常堆栈里的**应用帧**，供失败详情定位。
+
+    只留 `app/` 下的帧：库内部（langgraph/langchain）的几十帧对定位无帮助，
+    而真正出错的业务代码就在应用帧里。此前只记录 type + message，遇到
+    `AttributeError: 'list' object has no attribute 'add'` 这类只有类型没有位置的
+    错误时无从下手 —— 连"哪个文件哪一行"都答不出来，只能靠反复复现。
+
+    限制帧数与单帧长度：这条摘要要写进 lifecycle JSON，不能因为堆栈把状态撑爆。
+    """
+
+    frames: list[str] = []
+    try:
+        for frame in traceback.extract_tb(error.__traceback__):
+            normalized = frame.filename.replace("\\", "/")
+            if "/app/" not in normalized:
+                continue
+            # 只保留 app/ 之后的相对路径，避免把本机绝对路径写进工作区状态。
+            relative = normalized.split("/app/", 1)[-1]
+            frames.append(f"{relative}:{frame.lineno} in {frame.name}")
+    except Exception:
+        return {}
+    if not frames:
+        return {}
+    # 由外到内，保留最靠近出错点的若干帧。
+    return {"frames": frames[-8:]}
 
 
 def _pending_interaction(
