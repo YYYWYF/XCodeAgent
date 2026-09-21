@@ -567,6 +567,24 @@ def _repair_task(
                 if isinstance(parent_task.get("source_refs"), dict)
                 else {}
             ),
+            # Java 执行器从任务直接来源读取唯一 Endpoint 设计，修复任务必须继承它。
+            **(
+                {
+                    "endpoint_designs": [
+                        dict(item)
+                        for item in parent_task["source_refs"]["endpoint_designs"]
+                        if isinstance(item, dict)
+                    ],
+                    **(
+                        {"business_descriptions": list(parent_task["source_refs"]["business_descriptions"])}
+                        if isinstance(parent_task["source_refs"].get("business_descriptions"), list)
+                        else {}
+                    ),
+                }
+                if isinstance(parent_task.get("source_refs"), dict)
+                and isinstance(parent_task["source_refs"].get("endpoint_designs"), list)
+                else {}
+            ),
             # 权限切片必须作为 Repair Task 的直接只读来源，不能只埋在 parent 下。
             **(
                 {

@@ -15,6 +15,7 @@ from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
 )
+from app.agents.data_source.prompt_context import task_implementation_contract
 
 
 class BuildRepairPlannerTests(unittest.TestCase):
@@ -227,8 +228,9 @@ class BuildRepairPlannerTests(unittest.TestCase):
             "change_scope": [{"operation": "modify", "path": "backend/OrdersController.java"}],
             "allowed_paths": ["backend/OrdersController.java"],
             "source_refs": {
+                "endpoint_designs": [{"endpointId": "orders.approve", "fieldMappings": []}],
                 "authorization": {
-                    "endpoints": [{"endpointId": "orders.approve", "operationResourceKeys": ["orders_approve"]}],
+                    "endpoints": [{"apiContractId": "orders_api", "endpointId": "orders.approve", "httpMethod": "POST", "path": "/orders/approve", "semantics": "ANY_OF", "operationResourceKeys": ["orders_approve"]}],
                     "authConstants": [{"name": "ORDERS_APPROVE_RESOURCE", "resourceKey": "orders_approve"}],
                 }
             },
@@ -251,6 +253,10 @@ class BuildRepairPlannerTests(unittest.TestCase):
 
         self.assertEqual(plan["tasks"][0]["unit_id"], task["unit_id"])
         self.assertEqual(plan["tasks"][0]["source_refs"]["authorization"], task["source_refs"]["authorization"])
+        self.assertEqual(
+            task_implementation_contract({}, plan["tasks"][0])["api_design"],
+            task["source_refs"]["endpoint_designs"][0],
+        )
 
     def test_formal_source_change_requires_dag_replan_instead_of_repair(self) -> None:
         """正式产物哈希变化时必须终止当前 Repair，并要求重新生成 Build DAG。"""

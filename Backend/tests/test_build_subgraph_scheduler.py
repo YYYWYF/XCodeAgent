@@ -1290,6 +1290,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                             }
                         ],
                         "repair_task_plan": {
+                            "source": "build_scheduler",
                             "status": "ready",
                             "decision": "repair",
                             "tasks": [repair_task],
@@ -1303,6 +1304,47 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["build_summary"]["recovery_mode"], "repair")
         self.assertIn("scheduler:retry:repair:repair-page", result["build_events"])
+
+    def test_retry_does_not_dispatch_integration_repair_as_build_task(self) -> None:
+        """测试阶段的修复计划不能在 Build 重试时进入 Build DAG。"""
+
+        task = {
+            "id": "api",
+            "owner": "backend",
+            "status": "failed",
+            "failure_category": "runner_protocol_error",
+            "dependencies": [],
+        }
+        leaked_task = {"id": "repair:test:backend_build:backend", "kind": "repair", "owner": "backend", "status": "failed", "dependencies": []}
+        with tempfile.TemporaryDirectory() as workspace:
+            result = run_build_scheduler(
+                _ready_build_state(workspace, {
+                    "workspace": workspace,
+                    "project_plan": {"version": "1.0.0"},
+                    "build_task_plan": replace_build_task_plan_tasks(
+                        {
+                            "schema_version": "build-dag.v4",
+                            "build_units": {"application:root": {"id": "application:root", "kind": "application", "task_ids": ["api"]}},
+                            "unit_graph": {"nodes": ["application:root"], "edges": []},
+                        },
+                        [task, leaked_task],
+                    ),
+                    "tasks": [task, leaked_task],
+                    "build_results": [{"task_id": "api", "owner": "backend", "status": "failed", "failure_category": "runner_protocol_error"}],
+                    "repair_task_plan": {
+                        "source": "integration_test",
+                        "status": "ready",
+                        "decision": "repair",
+                        "tasks": [{**leaked_task, "status": "pending"}],
+                    },
+                    "retry_failed_tasks": True,
+                    "timeline": [],
+                })
+            )
+
+        self.assertEqual(result["build_summary"]["status"], "failed")
+        self.assertEqual([item["id"] for item in result["tasks"]], ["api"])
+        self.assertIn("scheduler:retry:no_candidates", result["build_events"])
 
     def test_explicit_retry_resets_stale_failed_repair_task_before_dispatch(self) -> None:
         """恢复计划仍为 pending 时，必须重置 DAG 中同 ID 的旧失败修复节点。"""
@@ -1379,6 +1421,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                             }
                         ],
                         "repair_task_plan": {
+                            "source": "build_scheduler",
                             "status": "ready",
                             "decision": "repair",
                             "tasks": [repair_task],
@@ -2289,6 +2332,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                         ),
                         "tasks": tasks,
                         "repair_task_plan": {
+                            "source": "build_scheduler",
                             "status": "ready",
                             "decision": "repair",
                             "tasks": [repair_task],

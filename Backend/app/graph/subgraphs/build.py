@@ -1418,6 +1418,17 @@ def run_build_scheduler(
     confirmed_build_task_plan = deepcopy(build_task_plan)
     # 当前契约直接使用最新计划，不对历史 DAG 做运行时迁移或字段回填。
     canonical_tasks = list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan))
+    candidate_repair_plan = state.get("repair_task_plan")
+    if isinstance(candidate_repair_plan, dict) and candidate_repair_plan.get("source") == "integration_test":
+        # 清除旧运行中误追加进 Build DAG 的测试修复节点，保证失败后重试可恢复。
+        integration_task_ids = {
+            str(task.get("id"))
+            for task in candidate_repair_plan.get("tasks", [])
+            if isinstance(task, dict) and task.get("id")
+        }
+        canonical_tasks = [
+            task for task in canonical_tasks if str(task.get("id")) not in integration_task_ids
+        ]
     build_task_plan = replace_build_task_plan_tasks(build_task_plan, canonical_tasks)
     state = {
         **state,
@@ -1429,7 +1440,13 @@ def run_build_scheduler(
             list(state.get("build_results", [])),
         ),
     }
-    incoming_repair_task_plan = state.get("repair_task_plan")
+    # 测试阶段也使用 repair_task_plan；Build 只能恢复自身调度器生成的计划。
+    incoming_repair_task_plan = (
+        candidate_repair_plan
+        if isinstance(candidate_repair_plan, dict)
+        and candidate_repair_plan.get("source") == "build_scheduler"
+        else {}
+    )
     request = str(state.get("request") or "")
     database_paused_tasks = [
         task
