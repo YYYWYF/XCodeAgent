@@ -25,6 +25,7 @@ from app.services.agent_runtime_heartbeat import (
 )
 from app.services.agent_runtime_launch_support import (
     agent_runtime_environment as _agent_runtime_environment,
+    agent_runtime_ready_timeout_seconds,
     allocate_loopback_port as _allocate_loopback_port,
     run_agent_runtime_install as _run_agent_runtime_install,
     start_agent_runtime_server as _start_agent_runtime_server,
@@ -131,6 +132,8 @@ def _launch_agent_runtime_project_locked(
         message="正在校验 Agent Runtime 工程。",
     )
     pyproject_path = agent_runtime_root / "pyproject.toml"
+    # 记录本次是否刚从 Git 模板补齐 Runtime 工程，作为冷启动判定的一部分。
+    runtime_project_provisioned = False
     if agent_runtime_root.is_symlink():
         return _fail_launch(
             "未找到有效的 Agent Runtime 工程：agent-runtime/pyproject.toml。",
@@ -142,7 +145,9 @@ def _launch_agent_runtime_project_locked(
         )
     if not pyproject_path.is_file():
         try:
-            GitTemplatePackageBuilder(settings).materialize_missing_agent_runtime_root(root)
+            runtime_project_provisioned = GitTemplatePackageBuilder(
+                settings
+            ).materialize_missing_agent_runtime_root(root)
         except GitTemplateError as exc:
             return _fail_launch(
                 str(exc) or "未找到有效的 Agent Runtime 工程：agent-runtime/pyproject.toml。",
@@ -180,6 +185,9 @@ def _launch_agent_runtime_project_locked(
         status="installing",
         message="正在同步 Agent Runtime 依赖。",
     )
+    # 冷启动判定：.venv 缺失或本次刚从 Git 模板补齐工程时，依赖同步与首次
+    # 进程冷启动明显更慢，需要更长的 /health 就绪宽限。
+    cold_start = not (agent_runtime_root / ".venv").is_dir() or runtime_project_provisioned
     install = _run_agent_runtime_install(
         workspace=root,
         agent_runtime_root=agent_runtime_root,
@@ -250,12 +258,18 @@ def _launch_agent_runtime_project_locked(
             process=process,
         )
 
-    ready, health = _wait_for_agent_runtime_ready(runtime_url, process)
+    # 冷启动使用更长的就绪宽限；热启动沿用标准超时窗口。
+    ready_timeout = agent_runtime_ready_timeout_seconds(cold_start=cold_start)
+    ready, health = _wait_for_agent_runtime_ready(
+        runtime_url, process, timeout_seconds=ready_timeout
+    )
     returncode = process.poll()
     server = {
         **server_result,
         "ready": ready,
         "returncode": returncode,
+        "cold_start": cold_start,
+        "ready_timeout_seconds": ready_timeout,
         "ready_checked_at": datetime.now(UTC).isoformat(),
     }
     if not ready:

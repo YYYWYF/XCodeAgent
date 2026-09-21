@@ -31,6 +31,8 @@
 
 该流程独立于主 Workflow，不执行需求、产品规划、技术规划或 Agent Build。预览启动走同一状态文件，但不写入 `debugToken`。
 
+`/health` 就绪等待默认 30 秒（`AGENT_RUNTIME_READY_TIMEOUT_SECONDS`）。当判定为冷启动——`agent-runtime/.venv` 不存在（首次 `uv sync` 重建虚拟环境）或本次启动刚从 Git 模板补齐 `agent-runtime/` 工程——就绪宽限放大到 180 秒（`AGENT_RUNTIME_COLD_START_READY_TIMEOUT_SECONDS`），避免首次启动因依赖下载和字节码编译超过固定窗口而被误判为“健康检查超时”。冷启动判定发生在 `uv sync` 之前；启动结果 `server.cold_start` 与 `server.ready_timeout_seconds` 记录实际判定和窗口。
+
 启动失败会把融合后的 `status` 写入同一 JSON：`cleanup_failed` / `validation_failed` / `install_failed` / `start_failed` / `debug_state_failed`。`/health` 超时写入 `offline` 和 `health=ETIMEDOUT`，不是 `start_failed`。AG-UI 仍从这些 status 映射既有 `failedStage`（例如 `install_failed` → `agent_runtime_install`），Renderer 契约不变。
 
 ## 3. 模板模型配置 fallback

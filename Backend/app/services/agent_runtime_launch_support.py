@@ -22,6 +22,9 @@ from app.utils.subprocess_output import subprocess_output_text
 
 AGENT_RUNTIME_INSTALL_TIMEOUT_SECONDS = 300
 AGENT_RUNTIME_READY_TIMEOUT_SECONDS = 30
+# 冷启动（.venv 缺失、首次 uv sync 重建）时进程要完成建环境和字节码编译，
+# 首次 /health 响应明显更慢，因此单独给一段更长的就绪宽限。
+AGENT_RUNTIME_COLD_START_READY_TIMEOUT_SECONDS = 180
 AGENT_RUNTIME_READY_INTERVAL_SECONDS = 0.5
 _INHERITED_MODEL_ENVIRONMENT_NAMES = (
     "MODEL_BASE_URL",
@@ -206,14 +209,26 @@ def allocate_loopback_port(*, preferred_port: int | None = None) -> int:
         return int(server.getsockname()[1])
 
 
+def agent_runtime_ready_timeout_seconds(*, cold_start: bool) -> float:
+    """冷启动使用更长的就绪宽限；热启动沿用标准 30 秒窗口。"""
+
+    return (
+        AGENT_RUNTIME_COLD_START_READY_TIMEOUT_SECONDS
+        if cold_start
+        else AGENT_RUNTIME_READY_TIMEOUT_SECONDS
+    )
+
+
 def wait_for_agent_runtime_ready(
     runtime_url: str,
     process: subprocess.Popen[bytes],
+    *,
+    timeout_seconds: float = AGENT_RUNTIME_READY_TIMEOUT_SECONDS,
 ) -> tuple[bool, int | str | None]:
     """监督子进程并等待 Runtime 健康契约就绪，同时返回最近一次探测结果。"""
 
     last_health: int | str | None = None
-    deadline = time.monotonic() + AGENT_RUNTIME_READY_TIMEOUT_SECONDS
+    deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if process.poll() is not None:
             return False, last_health

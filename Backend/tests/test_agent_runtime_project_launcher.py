@@ -21,7 +21,11 @@ from app.services.agent_runtime_project_launcher import (
     agent_runtime_launch_required,
     launch_agent_runtime_project,
 )
-from app.services.agent_runtime_launch_support import allocate_loopback_port
+from app.services.agent_runtime_launch_support import (
+    AGENT_RUNTIME_COLD_START_READY_TIMEOUT_SECONDS,
+    AGENT_RUNTIME_READY_TIMEOUT_SECONDS,
+    allocate_loopback_port,
+)
 from app.services.project_launcher import launch_project_preview
 
 
@@ -560,6 +564,74 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
         self.assertEqual(state["health"], "ETIMEDOUT")
         self.assertIsNone(state["pid"])
         self.assertIsNone(state["debugToken"])
+
+    def test_cold_start_launch_uses_extended_ready_timeout(self) -> None:
+        """验证 .venv 缺失的冷启动使用更长的就绪宽限，热启动沿用标准窗口。"""
+
+        observed_timeouts: list[float] = []
+
+        def capture_wait(url: str, process, **kwargs) -> tuple[bool, int]:  # type: ignore[no-untyped-def]
+            """记录本次启动传入的就绪宽限，并直接判定就绪。"""
+
+            observed_timeouts.append(float(kwargs.get("timeout_seconds", 0)))
+            return True, 200
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            runtime = root / "agent-runtime"
+            runtime.mkdir()
+            (runtime / "pyproject.toml").write_text("[project]\nname='test'\n")
+            fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
+            with (
+                patch(
+                    "app.services.agent_runtime_project_launcher.resolve_uv_command",
+                    return_value="/usr/local/bin/uv",
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.stop_previous_agent_runtime_process",
+                    return_value={"success": True, "attempted": False},
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._run_agent_runtime_install",
+                    return_value={"returncode": 0},
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._allocate_loopback_port",
+                    return_value=18110,
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._start_agent_runtime_server",
+                    return_value=({"pid": 12345}, fake_process),
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher._wait_for_agent_runtime_ready",
+                    side_effect=capture_wait,
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.start_agent_runtime_heartbeat"
+                ),
+                patch(
+                    "app.services.agent_runtime_project_launcher.secrets.token_urlsafe",
+                    return_value="generated-runtime-token",
+                ),
+            ):
+                cold_result = launch_agent_runtime_project(root, settings=_settings())
+                # 第二次启动前 .venv 已存在，应回到标准 30 秒窗口。
+                (runtime / ".venv").mkdir()
+                warm_result = launch_agent_runtime_project(root, settings=_settings())
+
+        self.assertEqual(cold_result["status"], "running")
+        self.assertEqual(warm_result["status"], "running")
+        self.assertTrue(cold_result["server"]["cold_start"])
+        self.assertEqual(
+            observed_timeouts[0],
+            AGENT_RUNTIME_COLD_START_READY_TIMEOUT_SECONDS,
+        )
+        self.assertFalse(warm_result["server"]["cold_start"])
+        self.assertEqual(
+            observed_timeouts[1],
+            AGENT_RUNTIME_READY_TIMEOUT_SECONDS,
+        )
 
     def test_missing_uv_tries_official_install_before_validation_failed(self) -> None:
         """验证找不到 uv 时先走官方安装，仍失败才写 validation_failed。"""
