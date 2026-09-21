@@ -214,7 +214,9 @@
 
 **额外验证：**
 
-生产 `file://` 模式目前还存在实现错误：`/design-runtime/design-frame.html` 会解析为 `file:///C:/design-runtime/design-frame.html`，而不是安装包资源路径。因此生产包很可能先表现为预览失效。**这不是安全修复**；以后修路径时若不同时隔离执行环境，P0 风险会立即在生产恢复。
+原实现的生产 `file://` 模式还存在路径错误：`/design-runtime/design-frame.html` 会解析为 `file:///C:/design-runtime/design-frame.html`，而不是安装包资源路径，因此生产包先表现为预览失效。**这不是安全修复**；修路径时必须同时隔离执行环境，否则 P0 风险会在生产恢复。
+
+**2026-09-20 修复记录：** 上述根路径错误已改为仅服务两份静态资源的 `xcodeagent-design://runtime` 协议。iframe 与主窗口不再同源；编译产物在 iframe 内挂载，主窗口不再读取 iframe DOM，且移除了弹窗和表单 sandbox 权限。已在 Electron 的打包式 `file://` 页面及 asar 资源上验证渲染握手。模型生成的 JavaScript 仍会执行，这不是对任意代码执行风险的完整消除；后续仍应评估受限 DSL 或独立执行进程。
 
 **建议：**
 

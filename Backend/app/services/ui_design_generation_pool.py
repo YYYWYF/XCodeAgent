@@ -21,12 +21,12 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from app.config import Settings
+from app.services.page_templates import load_template_source
 from app.services.ui_design_generator import (
     UiDesignStreamCancelled,
     delete_page_code,
     generate_adjusted_page_react_code,
     generate_page_react_code,
-    load_template_source,
     persist_page_code,
 )
 from app.services.ui_design_manifest import (

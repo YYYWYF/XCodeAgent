@@ -90,7 +90,7 @@ if (-not (Test-Path $DistDir -PathType Container)) {
 
 & $PythonCommand @PythonCommandArgs (Join-Path $BackendRoot "packaging\verify_bundled_skills.py") $DistDir
 if ($LASTEXITCODE -ne 0) {
-  throw "Bundled built-in skill verification failed."
+  throw "Bundled backend resource verification failed."
 }
 
 if (Test-Path $TargetDir) {

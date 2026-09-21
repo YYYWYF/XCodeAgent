@@ -8,15 +8,14 @@
   改用独立 HTML 文件作为 iframe src，它有自己宽松的 CSP，不继承父窗口，
   inline script 可正常执行。
 
-  通信：主窗口 postMessage 把编译后的 JS 代码发过来，本文档监听 message
-  事件，在 window 上下文执行，把默认导出组件挂到 window.__DESIGN_COMPONENT__，
-  再 postMessage 通知主窗口取回渲染。
+  通信：主窗口 postMessage 把编译后的 JS 代码发过来，本文档在隔离的 iframe
+  内执行并挂载组件，再 postMessage 通知主窗口；主窗口不读取 iframe DOM。
 -->
 <html>
 <head>
 <meta charset="utf-8" />
 <meta http-equiv="Content-Security-Policy"
-  content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' http://localhost:* https://localhost:* ws://localhost:*;" />
+  content="default-src 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src data: https:; connect-src 'none';" />
 <style>
   html,body{margin:0;padding:0;height:100%;}
   #root{height:100%;}
@@ -29,12 +28,27 @@
   // process shim：兜底 antd5 依赖里残留的 process.versions 等读取。
   window.process = window.process || { env: { NODE_ENV: 'production' }, versions: {}, platform: 'browser' };
 </script>
-<script src="/design-runtime/antd5-runtime.js"></script>
+<script src="./antd5-runtime.js"></script>
 <script>
+  var nonce = new URLSearchParams(window.location.hash.slice(1)).get('nonce');
+  var root = null;
+
+  // 仅向父窗口报告真实的运行时状态，防止丢失首个 ready 消息时永久等待。
+  function reportReady() {
+    window.parent.postMessage(window.__DESIGN_RUNTIME__
+      ? { type: 'design-frame-ready', nonce: nonce }
+      : { type: 'design-frame-error', nonce: nonce, error: 'antd5 runtime bundle 未加载' }, '*');
+  }
+
   // 监听主窗口发来的编译产物，在本文档 window 上下文执行。
   window.addEventListener('message', function (event) {
     if (event.source !== window.parent) return;
     var data = event.data || {};
+    if (!nonce || data.nonce !== nonce) return;
+    if (data.type === 'design-frame-ping') {
+      reportReady();
+      return;
+    }
     if (data.type !== 'design-render') return;
 
     // 清空上一次状态
@@ -43,18 +57,27 @@
     window.__DESIGN_ERROR_STACK__ = undefined;
 
     try {
+      if (!window.__DESIGN_RUNTIME__) throw new Error('antd5 runtime bundle 未加载');
+      if (typeof data.compiled !== 'string' || data.compiled.length > 1000000) {
+        throw new Error('设计稿编译产物无效或过大');
+      }
       // data.compiled 是 compileTsx 产物：声明 __design_exports__ 并把
       // 默认导出挂到 window.__DESIGN_COMPONENT__。
       (new Function(data.compiled))();
+      var component = window.__DESIGN_COMPONENT__;
+      if (typeof component !== 'function') throw new Error('设计稿没有有效的默认导出组件');
+      var runtime = window.__DESIGN_RUNTIME__;
+      if (!root) root = runtime.ReactDOMClient.createRoot(document.getElementById('root'));
+      root.render(runtime.React.createElement(component));
       window.parent.postMessage({
         type: 'design-rendered',
-        ok: typeof window.__DESIGN_COMPONENT__ === 'function',
-        componentType: typeof window.__DESIGN_COMPONENT__,
-        exportKeys: Object.keys(window.__design_exports__ || {})
+        nonce: nonce,
+        ok: true
       }, '*');
     } catch (e) {
       window.parent.postMessage({
         type: 'design-rendered',
+        nonce: nonce,
         ok: false,
         error: (e && e.message) ? e.message : String(e),
         stack: (e && e.stack) ? String(e.stack).slice(0, 1000) : ''
@@ -63,7 +86,7 @@
   });
 
   // 通知主窗口：iframe 已就绪，可以发 code 了。
-  window.parent.postMessage({ type: 'design-frame-ready' }, '*');
+  reportReady();
 </script>
 </body>
 </html>

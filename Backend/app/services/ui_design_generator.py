@@ -1364,51 +1364,6 @@ def delete_page_code(project_dir: str, page_key: str) -> None:
         logger.warning("ui_design_delete_failed page_key=%s", page_key)
 
 
-# 页面模板在 Frontend 工程的源码目录，与前端 templateService 的 import.meta.glob
-# （../templates/*/manifest.json）对应。后端用 REPOSITORY_ROOT 定位 Frontend 工程。
-_TEMPLATES_DIR = REPOSITORY_ROOT / "Frontend" / "src" / "renderer" / "src" / "templates"
-
-
-def load_template_source(template_id: str) -> str:
-    """按 manifest.id 读取页面模板的 index.tsx 源码，供选模板作设计稿时直接落盘。
-
-    遍历 templates/*/manifest.json 匹配 id，返回对应目录下的 index.tsx 内容。
-    模板源码是成熟可运行的 Pro 组件页面，直接用作设计稿无需 LLM 生成或校验。
-    找不到模板时抛 ValueError，由调用方（ui_confirmation 节点）捕获标记失败。
-    """
-
-    template_id = str(template_id or "").strip()
-    if not template_id:
-        raise ValueError("load_template_source: template_id 为空。")
-    if not _TEMPLATES_DIR.is_dir():
-        raise ValueError(
-            f"load_template_source: 模板目录不存在：{_TEMPLATES_DIR}。"
-            "请确认 Frontend 工程的 src/renderer/src/templates 已就绪。"
-        )
-    for entry in _TEMPLATES_DIR.iterdir():
-        if not entry.is_dir():
-            continue
-        manifest_path = entry / "manifest.json"
-        if not manifest_path.is_file():
-            continue
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if str(manifest.get("id") or "").strip() != template_id:
-            continue
-        index_path = entry / "index.tsx"
-        if not index_path.is_file():
-            raise ValueError(
-                f"load_template_source: 模板 {template_id} 缺少 index.tsx：{index_path}。"
-            )
-        return index_path.read_text(encoding="utf-8")
-    raise ValueError(
-        f"load_template_source: 未找到 id={template_id} 的页面模板，"
-        f"已扫描目录：{_TEMPLATES_DIR}。"
-    )
-
-
 def _read_page_file(target: Path) -> str | None:
     """读取单个 .tsx 文件，缺失或不可读时返回 None。"""
 

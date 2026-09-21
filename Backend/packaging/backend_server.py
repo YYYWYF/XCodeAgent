@@ -24,13 +24,17 @@ def main() -> None:
 
 
 def load_backend_env() -> None:
+    """加载后端配置并在启动前校验冻结资源完整性。"""
+
     env_file = resolve_env_file()
     if env_file:
         load_dotenv(env_file, override=False)
 
     from app.services.builtin_skills import validate_required_builtin_skills
+    from app.services.page_templates import validate_page_templates
 
     validate_required_builtin_skills()
+    validate_page_templates()
 
 
 def resolve_env_file() -> Path | None:

@@ -7,6 +7,7 @@ import path from 'node:path'
 import icon from '../../resources/icon.png?asset'
 import { XCODE_AGENT_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
+import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './designRuntimeProtocol'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
@@ -28,6 +29,13 @@ import {
   hasValidAuthToken,
   loginWithCmbDeviceFlow
 } from './auth'
+
+registerDesignRuntimeScheme()
+
+// 源码开发进程使用独立数据目录，避免被已安装应用的单实例锁拦截。
+if (!app.isPackaged) {
+  app.setPath('userData', path.join(app.getPath('appData'), `${app.getName()}-source-dev`))
+}
 
 let mainWindow: BrowserWindow | null = null
 let loginWindow: BrowserWindow | null = null
@@ -1878,6 +1886,8 @@ async function clearAuthStateBeforeStartup(): Promise<boolean> {
 
 /** 初始化获得单实例锁的主进程，成功后才允许窗口恢复。 */
 async function initializePrimaryApplication(): Promise<boolean> {
+  installDesignRuntimeProtocol()
+
   // Set app user model id for windows
   if (process.platform === 'win32') {
     app.setAppUserModelId(process.execPath)
