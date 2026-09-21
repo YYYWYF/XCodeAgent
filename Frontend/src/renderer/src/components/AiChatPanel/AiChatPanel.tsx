@@ -1086,17 +1086,21 @@ export default function AiChatPanel({
   // 进入开发门禁按「应用 + 当前迭代版本」隔离：每次迭代都要重新走一遍设计/计划并进入开发，
   // 若按应用存，上一轮迭代进入过开发就会永久压制本轮的就绪卡与"进入开发阶段"入口。
   const iterationScopeId = application.currentVersionId || application.id
+  // 版本 id 是确定性的（`${applicationId}-v${major}-${minor}`），重建同名版本会复用；
+  // 再带上 lifecycle threadId（每次迭代都是新 randomUUID）才能区分"同名但不同轮"，
+  // 否则新迭代会继承同名旧版本的"已进入开发"标记。
+  const iterationToken = String(applicationLifecycle?.initialization?.threadId || '')
   const [enterDevConfirmed, setEnterDevConfirmed] = useState(() =>
-    hasApplicationEnteredDevelopment(application.id, iterationScopeId)
+    hasApplicationEnteredDevelopment(application.id, iterationScopeId, iterationToken)
   )
   // “进入开发”可能来自模板卡或顶部阶段切换；本轮迭代确认后即关闭本轮的模板卡。
   useEffect(() => {
     const scopeId = application.currentVersionId || application.id
-    setEnterDevConfirmed(hasApplicationEnteredDevelopment(application.id, scopeId))
+    setEnterDevConfirmed(hasApplicationEnteredDevelopment(application.id, scopeId, iterationToken))
     return subscribeApplicationDevelopmentEntry(application.id, scopeId, () => {
       setEnterDevConfirmed(true)
     })
-  }, [application.id, application.currentVersionId])
+  }, [application.id, application.currentVersionId, iterationToken])
   const applicationTemplatePreparationEligible = isApplicationTemplatePreparationEligible(
     application.source,
     enterDevConfirmed
@@ -1119,7 +1123,7 @@ export default function AiChatPanel({
     planningConfirmedSeenRef.current = true
     if (enterDevConfirmed) return
     // 后端已完成模板生成（lifecycle=ready_for_workbench）：锁住计划阶段，等用户手动进入开发。
-    switchPhase('planning')
+    switchPhase('planning', 'auto')
   }, [lifecycleReadyForWorkbench, enterDevConfirmed, switchPhase])
 
   // —— 里程碑代码提交提醒 ——
@@ -4466,7 +4470,7 @@ export default function AiChatPanel({
 
   /** 用户点击"进入开发阶段"：放开 planning 锁并进入带快捷任务的空白对话。 */
   const handleEnterDevelopment = useCallback((): void => {
-    markApplicationEnteredDevelopment(application.id, iterationScopeId)
+    markApplicationEnteredDevelopment(application.id, iterationScopeId, iterationToken)
     setEnterDevConfirmed(true)
     clearActiveSession()
     setActiveDetailTarget({ type: 'none' })

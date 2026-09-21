@@ -73,6 +73,7 @@ import { phasePendingDetail } from './phasePending'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import PlanningWorkflowActivity from './PlanningWorkflowActivity'
 import {
+  isResiduePlanningPlaceholder,
   isSupersededPlanningStageEntryMessage,
   isSupersededPlanningPhaseMessage,
   isSupersededPlanningProgressMessage,
@@ -590,7 +591,11 @@ export default function MessageList({
         ref={scrollContainerRef}
       >
         <div className={cx('ai-message-column')} ref={messageColumnRef}>
-          {messages.length === 0 && !visibleError && !templatePreparationVisible ? (
+          {/* 全是残留占位时按"空"处理：那条占位不会再有 chunk 到达，
+              却会让列表非空、把只在空态渲染的需求输入卡永久挡住。 */}
+          {messages.every(isResiduePlanningPlaceholder) &&
+          !visibleError &&
+          !templatePreparationVisible ? (
             // 需求输入卡只属于**设计阶段**：它让用户描述本次迭代要做的变更，是产品 Agent
             // 的职责。计划阶段做的是技术规划，在需求收集之后，不该出现这张卡
             // （原判据用 designPhasePlanning，它同时覆盖设计与计划两个阶段）。

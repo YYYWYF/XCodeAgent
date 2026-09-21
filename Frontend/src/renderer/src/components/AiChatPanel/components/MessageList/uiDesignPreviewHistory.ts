@@ -72,9 +72,7 @@ export function isSupersededPlanningPhaseMessage(
   // 模板处理已经接管当前轮次时，仅隐藏旧的技术规划运行帧；确认结果仍作为
   // 历史记录保留，避免用户失去已确认 TechnicalPlan 的可追溯性。
   if (['template_preparation', 'template_reconcile'].includes(currentPhase)) {
-    return (
-      messagePhase === 'technical_planning' && message.workflow.summary?.status === 'running'
-    )
+    return messagePhase === 'technical_planning' && message.workflow.summary?.status === 'running'
   }
   return currentPhase === 'ui_confirmation' && messagePhase === 'technical_planning'
 }
@@ -108,15 +106,22 @@ export function isSupersededTechnicalPlanTransitionMessage(
     .some((item) => item.revisionHandoff?.kind === 'revision_development')
 }
 
+/**
+ * 规划占位消息但既无正文也无 workflow：属于**残留**，不会再有 chunk 到达来接管它。
+ *
+ * 这类残留会一直渲染成"正在处理"的加载卡；更糟的是它让消息列表非空，而需求输入卡
+ * 只在空列表下渲染（见 MessageList 的空态分支），于是永久挡住「请描述本次迭代的需求」。
+ */
+export function isResiduePlanningPlaceholder(message: AgentChatMessage): boolean {
+  return Boolean(message.planningLoading) && !message.content.trim() && !message.workflow
+}
+
 /** 判断入口点击后的 assistant 消息是否只是失败恢复残留。 */
 function isFailedPlanningEntryAttempt(message: AgentChatMessage): boolean {
   if (message.role !== 'assistant') return false
   const status = String(message.workflow?.summary?.status || '')
   const phase = String(message.workflow?.summary?.phase || '')
-  return (
-    (status === 'failed' && phase === 'failed') ||
-    (Boolean(message.planningLoading) && !message.content.trim() && !message.workflow)
-  )
+  return (status === 'failed' && phase === 'failed') || isResiduePlanningPlaceholder(message)
 }
 
 /** 定位消息流中最后一张 UI 设计预览卡，旧版本不再重复渲染预览。 */

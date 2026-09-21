@@ -98,7 +98,9 @@ export default function WorkbenchTopBar({
     if (phaseKey === 'development') {
       markApplicationEnteredDevelopment(
         application.id,
-        application.currentVersionId || application.id
+        application.currentVersionId || application.id,
+        // 与 AiChatPanel 同一作用域口径：版本 id 可复用，需再带 lifecycle threadId。
+        String(lifecycle?.initialization?.threadId || '')
       )
     }
     switchPhase(phaseKey)

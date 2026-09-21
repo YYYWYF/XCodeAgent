@@ -117,6 +117,16 @@ export interface ApplicationSchemaConfig {
   senario: string
   /** 应用首个版本号标签，如 v1.0；新建时由用户填写，作为版本链起点。 */
   versionNo: string
+  /**
+   * 应用所有版本里程碑，按时间正序；单线只读归档，无分叉。
+   *
+   * application.json 确实持久化这份版本链（`applicationSchemaOf` 不剥离它，
+   * 前端发布/迭代后经 `saveWorkspaceApplicationConfig` 写回）。此前类型漏声明，
+   * 导致读取方只能绕开它、改用内存里的副本，磁盘上的权威版本链被丢弃。
+   */
+  versions?: ApplicationVersion[]
+  /** 当前迭代版本指针；指向 versions 中正在编辑的版本。 */
+  currentVersionId?: string
   /** 应用代码提交目标仓库地址（码云/GitHub）；当前阶段固定写死，后续开放自定义。 */
   repoUrl: string
   terminal: ApplicationTerminal
@@ -407,10 +417,6 @@ export interface ApplicationConfig extends ApplicationSchemaConfig, ApplicationI
   /** 应用规划线程 id，模板生成时持久化，供从历史恢复设计阶段历史卡片使用
    *  （后端在 lifecycle=ready_for_workbench 时会清空 threadId，前端需自行保留）。 */
   planningThreadId?: string
-  /** 应用所有版本里程碑，按时间正序；单线只读归档，无分叉。 */
-  versions?: ApplicationVersion[]
-  /** 当前迭代版本指针；指向 versions 中正在编辑的版本。 */
-  currentVersionId?: string
 }
 
 /**

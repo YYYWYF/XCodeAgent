@@ -13,28 +13,98 @@ const WORKBENCH_PHASE_STORAGE_PREFIX = 'xcodeagent:workbench-phase:'
  * 想停在哪个阶段"（例如切回产品做增量迭代）；一旦发起新迭代就是另一段旅程，
  * 必须重新跟随后端生命周期推导，否则上一轮的验收覆盖会把新迭代按在验收阶段。
  */
-function workbenchPhaseStorageKey(applicationId: string, versionId: string): string {
-  return `${WORKBENCH_PHASE_STORAGE_PREFIX}${applicationId}:${versionId}`
+/**
+ * 阶段覆盖的作用域键。
+ *
+ * 不能用 versionId 单打独斗：版本 id 是 `${applicationId}-v${major}-${minor}` 的**确定性**
+ * 结果，重建同名版本会得到同一个 id。线上出现过——v1.1 被一次错误写回从
+ * application.json 抹掉后，用户重新生成 v1.1，新版本复用了旧 id，于是**继承了上一轮
+ * v1.1 留下的 `planning` 覆盖**，一进新迭代就停在计划阶段。
+ *
+ * `iterationToken`（版本自带的 lifecycle threadId）每次发起迭代都是新的 randomUUID，
+ * 用它区分"同名但不同轮"的迭代。缺省时退回 versionId，保持旧行为。
+ */
+function workbenchPhaseStorageKey(
+  applicationId: string,
+  versionId: string,
+  iterationToken?: string
+): string {
+  const scope = iterationToken ? `${versionId}:${iterationToken}` : versionId
+  return `${WORKBENCH_PHASE_STORAGE_PREFIX}${applicationId}:${scope}`
 }
 
 /** 读取用户在当前迭代里手动选择的工作台阶段，空值表示跟随生命周期。 */
 export function getPersistedWorkbenchPhase(
   applicationId: string,
-  versionId: string
+  versionId: string,
+  iterationToken?: string
 ): WorkbenchPhase | null {
-  const value = window.localStorage.getItem(workbenchPhaseStorageKey(applicationId, versionId))
+  const value = window.localStorage.getItem(
+    workbenchPhaseStorageKey(applicationId, versionId, iterationToken)
+  )
   return isWorkbenchPhase(value) ? value : null
 }
 
-/** 持久化用户手动选择的工作台阶段；传 null 清除覆盖并恢复生命周期推导。 */
+/**
+ * 记录阶段覆盖的来源，便于排查"新迭代一进来就停在计划阶段"这类问题。
+ *
+ * 覆盖本身没有来源信息时，只能靠反复复现去猜是谁写的 —— 而 `switchPhase` 既被
+ * 用户点击调用、也被平台的自动锁调用（AiChatPanel 在 lifecycle=ready_for_workbench
+ * 时锁住计划阶段）。这条旁路记录把"何时、被谁、当时的 lifecycle stage 是什么"留在
+ * 存储里，直接回答"是谁写的"，不改变任何业务行为。
+ */
+export type WorkbenchPhaseOverrideSource = 'user' | 'auto' | 'test-gate'
+
+function recordPhaseOverrideTrace(input: {
+  applicationId: string
+  versionId: string
+  phase: WorkbenchPhase | null
+  source: WorkbenchPhaseOverrideSource
+  stage?: string
+}): void {
+  try {
+    const key = `xcodeagent:workbench-phase-trace:${input.applicationId}:${input.versionId}`
+    const entry = JSON.stringify({
+      at: new Date().toISOString(),
+      phase: input.phase,
+      source: input.source,
+      stage: input.stage ?? ''
+    })
+    const previous = window.localStorage.getItem(key) || '[]'
+    const parsed: unknown = JSON.parse(previous)
+    const history = Array.isArray(parsed) ? parsed : []
+    // 只留最近 10 条：这是排查用的旁路，不该无限增长。
+    window.localStorage.setItem(key, JSON.stringify([...history.slice(-9), JSON.parse(entry)]))
+  } catch {
+    // 诊断记录失败不影响阶段持久化本身。
+  }
+}
+
+/**
+ * 持久化用户手动选择的工作台阶段；传 null 清除覆盖并恢复生命周期推导。
+ *
+ * `source` 与 `stage` 只用于诊断记录，不参与任何判定。
+ */
 export function setPersistedWorkbenchPhase(
   applicationId: string,
   versionId: string,
-  phase: WorkbenchPhase | null
+  phase: WorkbenchPhase | null,
+  trace?: {
+    source: WorkbenchPhaseOverrideSource
+    stage?: string
+    iterationToken?: string
+  }
 ): void {
-  const key = workbenchPhaseStorageKey(applicationId, versionId)
+  const key = workbenchPhaseStorageKey(applicationId, versionId, trace?.iterationToken)
   if (phase) window.localStorage.setItem(key, phase)
   else window.localStorage.removeItem(key)
+  recordPhaseOverrideTrace({
+    applicationId,
+    versionId,
+    phase,
+    source: trace?.source ?? 'user',
+    stage: trace?.stage
+  })
 }
 
 /**
@@ -42,21 +112,39 @@ export function setPersistedWorkbenchPhase(
  * **本轮迭代**的事实；若按应用存，v1.0 进入过开发就会永久压制后续迭代的模板就绪卡，
  * 用户在新迭代里既看不到就绪卡也拿不到"进入开发阶段"入口。
  */
-function developmentEntryStorageKey(applicationId: string, versionId: string): string {
-  return `${DEVELOPMENT_ENTRY_STORAGE_PREFIX}${applicationId}:${versionId}`
+function developmentEntryStorageKey(
+  applicationId: string,
+  versionId: string,
+  iterationToken?: string
+): string {
+  // 与阶段覆盖同一理由：版本 id 可重复，同名不同轮必须靠 iterationToken 区分。
+  const scope = iterationToken ? `${versionId}:${iterationToken}` : versionId
+  return `${DEVELOPMENT_ENTRY_STORAGE_PREFIX}${applicationId}:${scope}`
 }
 
 /** 判断用户是否已明确让当前迭代进入开发阶段。 */
 export function hasApplicationEnteredDevelopment(
   applicationId: string,
-  versionId: string
+  versionId: string,
+  iterationToken?: string
 ): boolean {
-  return window.localStorage.getItem(developmentEntryStorageKey(applicationId, versionId)) === '1'
+  return (
+    window.localStorage.getItem(
+      developmentEntryStorageKey(applicationId, versionId, iterationToken)
+    ) === '1'
+  )
 }
 
 /** 持久化当前迭代进入开发阶段的决定，并通知当前窗口内依赖该门禁的功能。 */
-export function markApplicationEnteredDevelopment(applicationId: string, versionId: string): void {
-  window.localStorage.setItem(developmentEntryStorageKey(applicationId, versionId), '1')
+export function markApplicationEnteredDevelopment(
+  applicationId: string,
+  versionId: string,
+  iterationToken?: string
+): void {
+  window.localStorage.setItem(
+    developmentEntryStorageKey(applicationId, versionId, iterationToken),
+    '1'
+  )
   window.dispatchEvent(
     new CustomEvent(DEVELOPMENT_ENTRY_EVENT, { detail: { applicationId, versionId } })
   )

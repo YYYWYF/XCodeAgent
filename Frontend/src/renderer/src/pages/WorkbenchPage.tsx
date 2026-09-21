@@ -22,7 +22,9 @@ import {
   findVersion,
   isVersionReleasable,
   isViewingHistoricalVersion,
-  releaseVersion
+  mergeVersionChain,
+  releaseVersion,
+  resolveVersionChain
 } from '../service/applicationVersions'
 import { publishVersion } from '../service/versionPublish'
 import { startIteration } from '../service/iterationService'
@@ -207,9 +209,14 @@ function WorkbenchPage({
         setWorkspaceApplication((prev) => ({
           ...application,
           ...applicationConfig,
-          // 保留前端初始化的版本链，避免 application.json 无 versions 字段时覆盖丢失。
-          versions: prev.versions,
-          currentVersionId: prev.currentVersionId
+          // 磁盘是版本链的权威来源；只在磁盘没有版本链时才回退到内存那份。
+          // 详见 resolveVersionChain 的说明（此前无条件取内存，会把已发布的多版本链冲成单个 v1.0）。
+          ...resolveVersionChain({
+            diskVersions: applicationConfig.versions,
+            diskCurrentVersionId: applicationConfig.currentVersionId,
+            memoryVersions: prev.versions,
+            memoryCurrentVersionId: prev.currentVersionId
+          })
         }))
       } catch (error) {
         console.warn('读取工作区 application.json 失败，终止本次工作台加载。', error)
@@ -386,6 +393,38 @@ function WorkbenchPage({
         lifecycle: applicationLifecycle || releaseVersionTarget.lifecycle
       })
   )
+  /**
+   * 把内存里的应用配置写回 application.json，**先与磁盘合并版本链**。
+   *
+   * 直接写内存那份会静默抹掉磁盘上的版本：内存状态可能陈旧于磁盘（发起迭代/发布/
+   * 回退都是先改内存再写盘，期间若有别的写入或状态未及时同步）。线上出现过 v1.1
+   * 已写盘、随后一次写回把 application.json 退回成只有 v1.0，界面顶部只剩 v1.0。
+   * 见 mergeVersionChain 的说明。
+   */
+  const persistApplicationConfig = useCallback(async (next: ApplicationConfig): Promise<void> => {
+    let merged = next
+    try {
+      const disk = await loadWorkspaceApplicationConfig(next.workspaceRoot)
+      const chain = mergeVersionChain({
+        memoryVersions: next.versions,
+        diskVersions: disk.versions,
+        memoryCurrentVersionId: next.currentVersionId,
+        diskCurrentVersionId: disk.currentVersionId
+      })
+      merged = { ...next, ...chain }
+    } catch (error) {
+      // 读不到磁盘配置时按原样写回：不能因为合并失败就阻断用户操作。
+      console.warn('读取磁盘 application.json 失败，按内存状态写回。', error)
+    }
+    await saveWorkspaceApplicationConfig(merged.workspaceRoot, merged)
+    // 内存也采纳合并结果，避免界面与磁盘再次脱节。
+    setWorkspaceApplication((prev) =>
+      prev.id === merged.id
+        ? { ...merged, versions: merged.versions, currentVersionId: merged.currentVersionId }
+        : prev
+    )
+  }, [])
+
   const autoPublishShownRef = useRef(false)
 
   // 打开生成版本弹框。
@@ -470,7 +509,7 @@ function WorkbenchPage({
       setWorkspaceApplication(nextApplication)
       // 持久化到 application.json，刷新后版本状态不丢失。
       try {
-        await saveWorkspaceApplicationConfig(nextApplication.workspaceRoot, nextApplication)
+        await persistApplicationConfig(nextApplication)
       } catch (saveError) {
         console.warn('保存 application.json 失败，版本状态仅保留在内存。', saveError)
       }
@@ -489,7 +528,13 @@ function WorkbenchPage({
       setVersionGenerating(null)
       message.error(error instanceof Error ? error.message : '生成版本失败')
     }
-  }, [applicationLifecycle, publishDescription, viewedVersion, workspaceApplication])
+  }, [
+    applicationLifecycle,
+    persistApplicationConfig,
+    publishDescription,
+    viewedVersion,
+    workspaceApplication
+  ])
 
   // 确认发起新迭代：基于当前版本派生下一版本（minor+1），回到需求分析阶段。
   // 调后端清空 .xcodeagent 规划产物（保留 AGENTS.md），重置 lifecycle 为 collecting_requirement。
@@ -553,8 +598,8 @@ function WorkbenchPage({
         currentVersionId: next.id
       }
       setWorkspaceApplication(nextApp)
-      // 4. 持久化 application.json（版本链更新）。
-      await saveWorkspaceApplicationConfig(nextApp.workspaceRoot, nextApp)
+      // 4. 持久化 application.json（版本链更新，写回前与磁盘合并）。
+      await persistApplicationConfig(nextApp)
       // 5. 阶段覆盖与浏览进度均按版本作用域持久化，新版本天然从生命周期重新推导，
       //    无需再手动清除上一迭代遗留的覆盖。
       // 6. 重置前端规划状态，新迭代从空白开始。
@@ -572,6 +617,7 @@ function WorkbenchPage({
     }
   }, [
     applicationLifecycle,
+    persistApplicationConfig,
     viewedVersion,
     workspaceApplication,
     onApplicationLifecycleReset,
@@ -603,11 +649,11 @@ function WorkbenchPage({
     setDevelopmentPlanningEntities([])
     setViewingVersionId('')
     autoPublishShownRef.current = false
-    void saveWorkspaceApplicationConfig(nextApp.workspaceRoot, nextApp).catch((saveError) => {
+    void persistApplicationConfig(nextApp).catch((saveError) => {
       console.warn('保存 application.json 失败。', saveError)
     })
     message.success('已基于历史版本生成新迭代版本。')
-  }, [activeVersionId, rollbackTargetVersionId, workspaceApplication])
+  }, [activeVersionId, persistApplicationConfig, rollbackTargetVersionId, workspaceApplication])
 
   // 切换查看版本：展示切换加载层后切到目标版本。
   const handleVersionSelect = useCallback(

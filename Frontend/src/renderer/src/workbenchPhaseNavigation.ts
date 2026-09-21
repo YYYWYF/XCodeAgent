@@ -35,13 +35,26 @@ export function removeLocalStorageKeysWithPrefix(prefix: string): void {
  * 浏览进度按「应用 + 版本」隔离：发起新迭代会开出一条全新的旅程，
  * 上一版本的审查/验收到达事实不能给新迭代解锁回访入口。
  */
-function reachedPhaseStorageKey(applicationId: string, versionId: string): string {
-  return `${REACHED_PHASE_PREFIX}${applicationId}:${versionId}`
+function reachedPhaseStorageKey(
+  applicationId: string,
+  versionId: string,
+  iterationToken?: string
+): string {
+  // 与阶段覆盖同一理由：版本 id 是确定性的、重建会复用，需靠 iterationToken
+  // （版本自带的 lifecycle threadId）区分"同名但不同轮"的迭代。
+  const scope = iterationToken ? `${versionId}:${iterationToken}` : versionId
+  return `${REACHED_PHASE_PREFIX}${applicationId}:${scope}`
 }
 
 /** 读取当前迭代的浏览进度；该记录不授予任何工作流执行权限。 */
-export function getReachedWorkbenchPhase(applicationId: string, versionId: string): WorkbenchPhase {
-  const stored = window.localStorage.getItem(reachedPhaseStorageKey(applicationId, versionId))
+export function getReachedWorkbenchPhase(
+  applicationId: string,
+  versionId: string,
+  iterationToken?: string
+): WorkbenchPhase {
+  const stored = window.localStorage.getItem(
+    reachedPhaseStorageKey(applicationId, versionId, iterationToken)
+  )
   return WORKBENCH_PHASE_ORDER.find((phase) => phase === stored) || 'product'
 }
 
@@ -49,10 +62,17 @@ export function getReachedWorkbenchPhase(applicationId: string, versionId: strin
 export function recordReachedWorkbenchPhase(
   applicationId: string,
   versionId: string,
-  phase: WorkbenchPhase
+  phase: WorkbenchPhase,
+  iterationToken?: string
 ): WorkbenchPhase {
-  const reached = furthestWorkbenchPhase(getReachedWorkbenchPhase(applicationId, versionId), phase)
-  window.localStorage.setItem(reachedPhaseStorageKey(applicationId, versionId), reached)
+  const reached = furthestWorkbenchPhase(
+    getReachedWorkbenchPhase(applicationId, versionId, iterationToken),
+    phase
+  )
+  window.localStorage.setItem(
+    reachedPhaseStorageKey(applicationId, versionId, iterationToken),
+    reached
+  )
   return reached
 }
 

@@ -437,6 +437,12 @@ export function shouldInjectPlanningPlaceholder(input: {
   hasWorkflow: boolean
 }): boolean {
   if (input.messageCount > 0) return false
+  // stage 未知（规划状态尚未就绪）时不注入。没有正面证据说明"正在处理"，
+  // 而这条占位注入后不会被清除（那一轮没有任何 workflow 会到达），
+  // 它会一直渲染成"正在处理"的加载卡，并让消息列表非空 —— 需求输入卡只在
+  // 空态渲染，于是「请描述本次迭代的需求」被永久挡住。
+  // 状态就绪后若确实在处理，workflow 帧自己会渲染进度。
+  if (!input.stage) return false
   const awaitingIterationRequest = input.stage === 'collecting_requirement' && !input.hasWorkflow
   return !awaitingIterationRequest
 }

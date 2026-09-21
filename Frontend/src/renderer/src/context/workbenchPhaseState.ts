@@ -1,6 +1,11 @@
 import { createContext, useContext } from 'react'
 import type { TestEntryGate } from '../typings'
-import type { EditableObjectType, WorkbenchAgentIdentity, WorkbenchPhase } from '../workbenchPhase'
+import type {
+  EditableObjectType,
+  WorkbenchAgentIdentity,
+  WorkbenchPhase,
+  WorkbenchPhaseOverrideSource
+} from '../workbenchPhase'
 
 export type WorkbenchPhaseContextValue = {
   testEntryGate?: TestEntryGate
@@ -11,7 +16,8 @@ export type WorkbenchPhaseContextValue = {
   reachedPhase: WorkbenchPhase
   recordReachedPhase: (phase: WorkbenchPhase) => void
   manualOverride: WorkbenchPhase | null
-  switchPhase: (phase: WorkbenchPhase | null) => void
+  /** source 只用于诊断记录（区分用户点击与平台自动锁），不参与判定。 */
+  switchPhase: (phase: WorkbenchPhase | null, source?: WorkbenchPhaseOverrideSource) => void
   agent: WorkbenchAgentIdentity
   canEdit: (objectType: EditableObjectType) => boolean
   /** 已发布版本或非活跃版本：阶段切换与 Agent 调度锁定，只能回看。 */

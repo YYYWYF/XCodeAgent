@@ -26,6 +26,7 @@ import {
   resolveCommitScope
 } from '../src/renderer/src/components/AiChatPanel/components/MilestoneCommitReminder/visibility'
 import { resolveTemplateCommitRow } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/templateCommitRow'
+import { shouldInjectPlanningPlaceholder } from '../src/renderer/src/components/AiChatPanel/utils'
 import {
   areAllSelected,
   isSelectionScopeValid,
@@ -687,4 +688,38 @@ test('候选提交点要过滤到"文件还没提交"，否则提交后角标不
   )
   // 没有已完成模块时不报错。
   assert.deepEqual(actionableCandidates({ candidates: [], uncommittedPaths: ['x.ts'] }), [])
+})
+
+test('规划状态未就绪时不注入占位，避免永久挡住需求输入卡', () => {
+  const decide = (
+    over: Partial<Parameters<typeof shouldInjectPlanningPlaceholder>[0]> = {}
+  ): boolean =>
+    shouldInjectPlanningPlaceholder({
+      messageCount: 0,
+      stage: 'generating_requirement_document',
+      hasWorkflow: false,
+      ...over
+    })
+
+  // 回归：规划状态尚未就绪（stage 未知）时不能注入。
+  // 这条占位注入后不会被清除（那一轮没有任何 workflow 会到达），会一直渲染成
+  // "正在处理"的加载卡，并让消息列表非空 —— 而需求输入卡只在空态渲染。
+  assert.equal(
+    decide({ stage: undefined }),
+    false,
+    'stage 未知时没有正面证据说明正在处理，不应注入占位'
+  )
+  assert.equal(decide({ stage: '' }), false, '空串同样视为未知')
+
+  // 新迭代等待用户输入需求：不注入，让输入卡显示。
+  assert.equal(decide({ stage: 'collecting_requirement' }), false)
+  // 但确实有 workflow 在跑时，说明正在处理，仍要注入。
+  assert.equal(decide({ stage: 'collecting_requirement', hasWorkflow: true }), true)
+
+  // 其它设计/计划阶段确实在处理：注入占位。
+  assert.equal(decide({ stage: 'generating_ui_designs' }), true)
+  assert.equal(decide({ stage: 'awaiting_technical_plan_confirmation' }), true)
+
+  // 已有消息时不注入（占位只用于"空列表且正在处理"）。
+  assert.equal(decide({ messageCount: 3 }), false)
 })

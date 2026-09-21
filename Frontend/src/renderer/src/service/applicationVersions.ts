@@ -201,3 +201,106 @@ export function releaseVersion(
     }
   }
 }
+
+/**
+ * 解析当前版本指针，强制"指针指向正在编辑的那一轮迭代"这一不变式。
+ *
+ * `currentVersionId` 的语义是**当前迭代版本**（见 ApplicationVersion 的类型说明），
+ * 而"已发布"是历史。所以只要有 `iterating` 版本，指针就必须指向**最后一个** iterating ——
+ * 陈旧快照（如发起迭代前注册进规划状态的那份应用配置）会把指针留在上一轮已发布的
+ * 版本上，界面顶部就会显示旧版本号，而实际在编辑的是新版本。
+ *
+ * 线上出现过：v1.1 已创建，模板就绪时一份旧快照写回，versions 数组还在（合并保住了）
+ * 但指针被拉回 v1.0，顶部版本号从 v1.1 掉成 v1.0。
+ *
+ * 没有 iterating 版本时（刚发布、尚未发起迭代）保留传入的指针，只要它在链上有效。
+ */
+export function resolveCurrentVersionId(
+  versions: ApplicationVersion[],
+  preferred?: string
+): string | undefined {
+  if (versions.length === 0) return undefined
+  const latestIterating = versions.filter((version) => version.status === 'iterating').at(-1)
+  if (latestIterating) return latestIterating.id
+  if (preferred && versions.some((version) => version.id === preferred)) return preferred
+  return versions.at(-1)?.id
+}
+
+/**
+ * 决定版本链以谁为准：磁盘上的 application.json，还是内存里的当前状态。
+ *
+ * 磁盘是权威来源 —— 它由发布/迭代流程经 `saveWorkspaceApplicationConfig` 写入，
+ * 刷新后仍然存在。内存那份可能是组件挂载时初始化的占位（例如刚造出的 `[v1.0]`）。
+ *
+ * 曾经这里无条件取内存那份，导致从首页打开一个已发布多个版本的应用时，磁盘上的
+ * v1.0/v1.1/v1.2 被内存里刚初始化的 `[v1.0]` 冲掉：版本选择器只剩 v1.0，
+ * 下拉列表里看不到其它版本。回退到内存只应发生在**磁盘确实没有版本链**时
+ * （旧数据兼容：application.json 尚无 versions 字段）。
+ */
+export function resolveVersionChain(input: {
+  diskVersions?: ApplicationVersion[]
+  diskCurrentVersionId?: string
+  memoryVersions?: ApplicationVersion[]
+  memoryCurrentVersionId?: string
+}): { versions?: ApplicationVersion[]; currentVersionId?: string } {
+  const diskVersions = Array.isArray(input.diskVersions) ? input.diskVersions : []
+  if (diskVersions.length > 0) {
+    return {
+      versions: diskVersions,
+      // 同一不变式：磁盘指针也可能陈旧（见 resolveCurrentVersionId）。
+      currentVersionId: resolveCurrentVersionId(
+        diskVersions,
+        (typeof input.diskCurrentVersionId === 'string' && input.diskCurrentVersionId) ||
+          input.memoryCurrentVersionId
+      )
+    }
+  }
+  const memoryVersions = input.memoryVersions ?? []
+  return {
+    versions: memoryVersions,
+    currentVersionId: resolveCurrentVersionId(memoryVersions, input.memoryCurrentVersionId)
+  }
+}
+
+/**
+ * 写回 application.json 前，把内存里的版本链与磁盘上的合并。
+ *
+ * **内存状态可能陈旧于磁盘**：发起迭代 / 发布 / 回退都是先改内存再写盘，期间若有别的
+ * 写入（或状态未及时同步），直接把内存那份写回去会**静默抹掉磁盘上的版本**。
+ * 线上出现过：v1.1 已创建并写盘，随后一次写回把 application.json 退回成只有 v1.0，
+ * 界面顶部只剩 v1.0、下拉里没有 v1.1 —— 而磁盘上 v1.1 的提交记录还在。
+ *
+ * 规则：磁盘是权威，内存只能**推进**、不能减少。
+ * - 磁盘有、内存没有的版本：补回来（内存落后了）
+ * - 两边都有：以内存为准（它刚被本次操作更新过，例如发布把 v1.0 转成 released）
+ * - 内存有、磁盘没有：保留（本次新建的版本）
+ *
+ * 顺序按磁盘的既有顺序排列，新增的追加在末尾，保持"单线只读归档"的时间正序。
+ */
+export function mergeVersionChain(input: {
+  memoryVersions?: ApplicationVersion[]
+  diskVersions?: ApplicationVersion[]
+  memoryCurrentVersionId?: string
+  diskCurrentVersionId?: string
+}): { versions: ApplicationVersion[]; currentVersionId?: string } {
+  const memory = Array.isArray(input.memoryVersions) ? input.memoryVersions : []
+  const disk = Array.isArray(input.diskVersions) ? input.diskVersions : []
+
+  const memoryById = new Map(memory.map((version) => [version.id, version]))
+  const diskIds = new Set(disk.map((version) => version.id))
+
+  const merged: ApplicationVersion[] = disk.map((version) => memoryById.get(version.id) ?? version)
+  for (const version of memory) {
+    if (!diskIds.has(version.id)) merged.push(version)
+  }
+
+  // 指针按不变式解析：有 iterating 版本时必须指向它，不能被陈旧快照拉回已发布版本。
+  // 内存的指针优先于磁盘的（它反映本次操作的结果），但两者都要过这一层校验。
+  return {
+    versions: merged,
+    currentVersionId: resolveCurrentVersionId(
+      merged,
+      input.memoryCurrentVersionId || input.diskCurrentVersionId
+    )
+  }
+}
