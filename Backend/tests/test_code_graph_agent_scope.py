@@ -150,7 +150,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
 
         prompt = _frontend_generation_prompt(
             project_plan={"app": {"name": "demo"}},
-            build_task_plan={"summary": {}, "template_context": {"state_path": ".xcodeagent/template-state.json", "template_revision": "r1", "effective_capabilities": {"authorization": {"enabled": True, "config": {}}}}},
+            build_task_plan={"summary": {}, "template_context": {"state_path": ".devagentstudio/template-state.json", "template_revision": "r1", "effective_capabilities": {"authorization": {"enabled": True, "config": {}}}}},
             tasks=[
                 {
                     "id": "page:assets",
@@ -294,7 +294,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             tool = create_code_graph_context_tool(workspace)
             empty = {
-                "schemaVersion": "xcodeagent.code_graph_context.v1",
+                "schemaVersion": "devagentstudio.code_graph_context.v1",
                 "status": "ready",
                 "matches": [],
                 "relations": [],

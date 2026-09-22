@@ -76,7 +76,7 @@ class DeleteFileToolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             target = (
                 Path(workspace)
-                / ".xcodeagent"
+                / ".devagentstudio"
                 / "builtin-skills"
                 / "react-develop-specification"
                 / "SKILL.md"
@@ -97,7 +97,7 @@ class DeleteFileToolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             target = (
                 Path(workspace)
-                / ".xcodeagent"
+                / ".devagentstudio"
                 / "user-skills"
                 / "sample"
                 / "SKILL.md"
@@ -203,7 +203,7 @@ class DeleteFileToolTests(unittest.TestCase):
             root = Path(workspace)
             backend_file = root / "backend" / "obsolete.java"
             frontend_file = root / "frontend" / "App.tsx"
-            internal_file = root / ".xcodeagent" / "application.json"
+            internal_file = root / ".devagentstudio" / "application.json"
             for target in (backend_file, frontend_file, internal_file):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("keep", encoding="utf-8")
@@ -226,7 +226,7 @@ class DeleteFileToolTests(unittest.TestCase):
             allowed = json.loads(delete_tool.invoke({"file_path": "/backend/obsolete.java"}))
             denied_frontend = json.loads(delete_tool.invoke({"file_path": "/frontend/App.tsx"}))
             denied_internal = json.loads(
-                delete_tool.invoke({"file_path": "/.xcodeagent/application.json"})
+                delete_tool.invoke({"file_path": "/.devagentstudio/application.json"})
             )
 
             self.assertEqual(allowed["status"], "deleted")

@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { build } from 'vite'
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
-const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-workbench-phase-'))
+const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-workbench-phase-'))
 const outputFile = path.join(outputDirectory, 'workbenchPhaseNavigation.test.mjs')
 
 try {

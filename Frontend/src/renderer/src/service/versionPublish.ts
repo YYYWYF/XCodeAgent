@@ -38,7 +38,7 @@ type VersionPublishAgUiPayload = {
 
 /** 返回版本发布 AG-UI 动作地址。 */
 function getVersionPublishUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/version-publish/run`
     : '/api/agent/version-publish/run'

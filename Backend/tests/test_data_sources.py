@@ -36,7 +36,7 @@ class DataSourcesServiceTests(unittest.TestCase):
     def write_application(self, payload: dict[str, object]) -> None:
         """把测试用 application.json 写入隔离工作区。"""
 
-        application_directory = self.workspace / ".xcodeagent"
+        application_directory = self.workspace / ".devagentstudio"
         application_directory.mkdir(parents=True, exist_ok=True)
         (application_directory / "application.json").write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
@@ -45,7 +45,7 @@ class DataSourcesServiceTests(unittest.TestCase):
     def data_sources_file(self) -> Path:
         """返回测试工作区的独立数据源索引路径。"""
 
-        return self.workspace / ".xcodeagent" / "datasource" / "index.json"
+        return self.workspace / ".devagentstudio" / "datasource" / "index.json"
 
     def test_first_read_imports_builtin_application_database(self) -> None:
         """首次读取时应把应用内置数据库导入独立目录。"""
@@ -94,7 +94,7 @@ class DataSourcesServiceTests(unittest.TestCase):
         self.assertEqual(detailed_source.dbid, "dbid-order")
         self.assertFalse(source.has_password)
         persisted = json.loads(
-            (self.workspace / ".xcodeagent" / "datasource" / "databases" / "application-database.json").read_text(
+            (self.workspace / ".devagentstudio" / "datasource" / "databases" / "application-database.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -103,7 +103,7 @@ class DataSourcesServiceTests(unittest.TestCase):
     def test_first_read_imports_direct_application_database_and_redacts_password(self) -> None:
         """首次读取直连数据库应保留密文但公开目录不得泄露密文。"""
 
-        ciphertext = "xcodeagent-secret:v1:rsa-oaep-256:key:cipher"
+        ciphertext = "devagentstudio-secret:v1:rsa-oaep-256:key:cipher"
         self.write_application(
             {
                 "appName": "库存管理",
@@ -128,7 +128,7 @@ class DataSourcesServiceTests(unittest.TestCase):
         public_source = catalog.sources[0].model_dump(by_alias=True)
         self.assertNotIn("passwordCiphertext", public_source)
         persisted = json.loads(
-            (self.workspace / ".xcodeagent" / "datasource" / "databases" / "application-database.json").read_text(
+            (self.workspace / ".devagentstudio" / "datasource" / "databases" / "application-database.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -170,7 +170,7 @@ class DataSourcesServiceTests(unittest.TestCase):
     def test_legacy_single_file_is_not_read_or_migrated(self) -> None:
         """当前契约不读取旧单文件，首次访问直接建立新的空索引。"""
 
-        agent_directory = self.workspace / ".xcodeagent"
+        agent_directory = self.workspace / ".devagentstudio"
         agent_directory.mkdir(parents=True, exist_ok=True)
         (agent_directory / "data-sources.json").write_text(
             json.dumps({"sources": [{"id": "legacy", "type": "external_api"}]}), encoding="utf-8"
@@ -184,7 +184,7 @@ class DataSourcesServiceTests(unittest.TestCase):
     def test_invalid_application_json_does_not_create_catalog(self) -> None:
         """非法 application.json 应返回数据源错误且不生成半成品目录。"""
 
-        application_directory = self.workspace / ".xcodeagent"
+        application_directory = self.workspace / ".devagentstudio"
         application_directory.mkdir(parents=True, exist_ok=True)
         (application_directory / "application.json").write_text("{invalid", encoding="utf-8")
 
@@ -210,14 +210,14 @@ class DataSourcesServiceTests(unittest.TestCase):
         self.assertEqual(catalog.sources[0].directories[1].operations[0].id, "operation-1")
         self.assertEqual(catalog.sources[0].directories[0].name, "默认目录")
         persisted = json.loads(
-            (self.workspace / ".xcodeagent" / "datasource" / "external-apis" / catalog.sources[0].id / "source.json").read_text(
+            (self.workspace / ".devagentstudio" / "datasource" / "external-apis" / catalog.sources[0].id / "source.json").read_text(
                 encoding="utf-8"
             )
         )
         self.assertNotIn("operations", persisted["directories"][1])
         operation_id = catalog.sources[0].directories[1].operations[0].id
         self.assertTrue(
-            (self.workspace / ".xcodeagent" / "datasource" / "external-apis" / catalog.sources[0].id / "operations" / f"{operation_id}.json").is_file()
+            (self.workspace / ".devagentstudio" / "datasource" / "external-apis" / catalog.sources[0].id / "operations" / f"{operation_id}.json").is_file()
         )
 
     def test_new_external_domain_creates_plain_default_directory(self) -> None:
@@ -274,12 +274,12 @@ class DataSourcesServiceTests(unittest.TestCase):
             },
         )
         source = created.sources[0]
-        source_dir = self.workspace / ".xcodeagent" / "datasource" / "external-apis" / source.id
+        source_dir = self.workspace / ".devagentstudio" / "datasource" / "external-apis" / source.id
         operation_a, operation_b = source.directories[1].operations
         operation_a_path = source_dir / "operations" / f"{operation_a.id}.json"
         operation_b_path = source_dir / "operations" / f"{operation_b.id}.json"
         source_path = source_dir / "source.json"
-        index_path = self.workspace / ".xcodeagent" / "datasource" / "index.json"
+        index_path = self.workspace / ".devagentstudio" / "datasource" / "index.json"
         operation_a_before = operation_a_path.read_bytes()
         source_before = source_path.read_bytes()
         index_before = index_path.read_bytes()
@@ -293,8 +293,8 @@ class DataSourcesServiceTests(unittest.TestCase):
             set(index_entry["directories"][1]["operations"][1]),
             {"id", "name", "method", "path"},
         )
-        self.assertTrue((self.workspace / ".xcodeagent" / "datasource" / "index.json").is_file())
-        self.assertFalse((self.workspace / ".xcodeagent" / "data-sources.json").exists())
+        self.assertTrue((self.workspace / ".devagentstudio" / "datasource" / "index.json").is_file())
+        self.assertFalse((self.workspace / ".devagentstudio" / "data-sources.json").exists())
         summary = public_catalog(self.workspace)
         self.assertEqual(summary.sources[0].directories[1].operations[1].path_parameters, [])
         detailed = public_catalog(self.workspace, source_id=source.id, operation_id=operation_b.id)
@@ -341,7 +341,7 @@ class DataSourcesServiceTests(unittest.TestCase):
         operation_id = created.sources[0].directories[1].operations[0].id
         operation_path = (
             self.workspace
-            / ".xcodeagent"
+            / ".devagentstudio"
             / "datasource"
             / "external-apis"
             / created.sources[0].id
@@ -371,7 +371,7 @@ class DataSourcesServiceTests(unittest.TestCase):
                 "directories": [{"name": "目录", "operations": [{"name": "列表", "method": "GET", "path": "/items"}]}],
             },
         )
-        directory = self.workspace / ".xcodeagent" / "datasource"
+        directory = self.workspace / ".devagentstudio" / "datasource"
         before = {path.relative_to(directory): path.read_bytes() for path in directory.rglob("*") if path.is_file()}
         source = created.sources[0]
         updated = {
@@ -508,7 +508,7 @@ class DataSourcesServiceTests(unittest.TestCase):
         persisted_operation = json.loads(
             (
                 self.workspace
-                / ".xcodeagent"
+                / ".devagentstudio"
                 / "datasource"
                 / "external-apis"
                 / source_id
@@ -614,7 +614,7 @@ class DataSourcesServiceTests(unittest.TestCase):
     def test_database_validation_decrypts_ciphertext_before_connecting(self) -> None:
         """直连数据库检测必须先解密密文，再把明文密码交给驱动。"""
 
-        ciphertext = "xcodeagent-secret:v1:rsa-oaep-256:platform-key-v1:cipher"
+        ciphertext = "devagentstudio-secret:v1:rsa-oaep-256:platform-key-v1:cipher"
         connection = Mock()
         connect = Mock(return_value=connection)
         source = {
@@ -640,7 +640,7 @@ class DataSourcesServiceTests(unittest.TestCase):
     def test_database_validation_reuses_stored_ciphertext_when_edit_password_is_blank(self) -> None:
         """编辑直连数据库留空密码时，应继续使用目录中已有的加密密码。"""
 
-        ciphertext = "xcodeagent-secret:v1:rsa-oaep-256:platform-key-v1:cipher"
+        ciphertext = "devagentstudio-secret:v1:rsa-oaep-256:platform-key-v1:cipher"
         created = mutate_catalog(
             self.workspace,
             action="create",
@@ -688,7 +688,7 @@ class DataSourcesServiceTests(unittest.TestCase):
             "port": 3306,
             "schema": "inventory",
             "userName": "app",
-            "passwordCiphertext": "xcodeagent-secret:v1:rsa-oaep-256:platform-key-v1:cipher",
+            "passwordCiphertext": "devagentstudio-secret:v1:rsa-oaep-256:platform-key-v1:cipher",
         }
         with patch(
             "app.services.data_sources.decrypt_password", return_value="plain-password"
@@ -713,7 +713,7 @@ class DataSourcesServiceTests(unittest.TestCase):
                 "port": 3306,
                 "schema": "demo",
                 "userName": "demo",
-                "passwordCiphertext": "xcodeagent-secret:v1:rsa-oaep-256:key:cipher",
+                "passwordCiphertext": "devagentstudio-secret:v1:rsa-oaep-256:key:cipher",
             },
         )
         catalog = public_catalog(self.workspace)
@@ -735,7 +735,7 @@ class DataSourcesServiceTests(unittest.TestCase):
                 "port": 3306,
                 "schema": "demo",
                 "userName": "demo",
-                "passwordCiphertext": "xcodeagent-secret:v1:rsa-oaep-256:key:cipher",
+                "passwordCiphertext": "devagentstudio-secret:v1:rsa-oaep-256:key:cipher",
             },
         )
         updated = mutate_catalog(
@@ -745,7 +745,7 @@ class DataSourcesServiceTests(unittest.TestCase):
         )
         self.assertEqual(updated.sources[0].mode, "builtin")
         persisted = json.loads(
-            (self.workspace / ".xcodeagent" / "datasource" / "databases" / f"{created.sources[0].id}.json").read_text(
+            (self.workspace / ".devagentstudio" / "datasource" / "databases" / f"{created.sources[0].id}.json").read_text(
                 encoding="utf-8"
             )
         )

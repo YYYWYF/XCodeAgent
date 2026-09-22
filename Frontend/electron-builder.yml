@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: my-app
+appId: com.devagentstudio.app
+productName: DevAgent Studio
 directories:
   buildResources: build
 files:
@@ -10,7 +10,7 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: my-app
+  executableName: devagentstudio
   extraResources:
     - from: resources/backend/win32
       to: backend

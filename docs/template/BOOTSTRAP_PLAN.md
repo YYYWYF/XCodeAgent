@@ -1,4 +1,4 @@
-# XCodeAgent Workspace Bootstrap 实施方案
+# DevAgent Studio Workspace Bootstrap 实施方案
 
 > 本文只描述**首次创建应用时的模板初始化**。  
 > 公共 TemplateState、Capability、Operation、Validation、Ownership 和 Build Binding 契约见 [`TEMPLATE_REFACTOR.md`](./TEMPLATE_REFACTOR.md)。
@@ -12,7 +12,7 @@
 
 Bootstrap 解决：
 
-> 在 Workspace 尚未初始化时，由 XCodeAgent Backend 基于已确认 TechnicalPlan 编译 RequestedConfig，先通过 `/v1/plan` 获得 Engine 的完整目标状态和 Validation Contract，再调用 `/v1/generate` 获取完整工程包，安全物化 Workspace，执行 Blocking Validation，建立独立 Git baseline，并持久化完整 `.xcodeagent/template-state.json`。
+> 在 Workspace 尚未初始化时，由 DevAgent Studio Backend 基于已确认 TechnicalPlan 编译 RequestedConfig，先通过 `/v1/plan` 获得 Engine 的完整目标状态和 Validation Contract，再调用 `/v1/generate` 获取完整工程包，安全物化 Workspace，执行 Blocking Validation，建立独立 Git baseline，并持久化完整 `.devagentstudio/template-state.json`。
 
 目标链路：
 
@@ -75,7 +75,7 @@ Bootstrap 只允许在未初始化 Workspace：
 frontend 不存在
 backend 不存在
 .git 不存在
-.xcodeagent/template-state.json 不存在
+.devagentstudio/template-state.json 不存在
 ```
 
 生命周期：
@@ -100,7 +100,7 @@ Confirmed TechnicalPlan.template_capabilities
 
 application.json 仅提供创建阶段 Initial Intent。
 
-XCodeAgent：
+DevAgent Studio：
 
 ```text
 不解析 Capability dependency
@@ -134,7 +134,7 @@ Bootstrap 不直接只调用 `/v1/generate`。
 
 `/v1/plan` 首次必须返回 `CHANGE`。
 
-XCodeAgent 保存本次执行期 Plan Snapshot：
+DevAgent Studio 保存本次执行期 Plan Snapshot：
 
 ```text
 nextTemplateState
@@ -149,7 +149,7 @@ planJcsSha256
 Bootstrap 尝试，不是第二份模板领域状态：
 
 ```text
-.xcodeagent/runtime/bootstrap/<attemptId>.json
+.devagentstudio/runtime/bootstrap/<attemptId>.json
 
 attemptId
 phase
@@ -180,7 +180,7 @@ TemplateState / capability 决策。
 template-package.zip
 ├── frontend/
 ├── backend/
-└── .xcodeagent/
+└── .devagentstudio/
     └── template-state.json
 ```
 
@@ -192,7 +192,7 @@ plan.nextTemplateState
 
 语义完全一致；不一致时拒绝 Bootstrap。
 
-XCodeAgent 必须按完整 Engine Schema 校验：
+DevAgent Studio 必须按完整 Engine Schema 校验：
 
 ```text
 templateRevision
@@ -232,7 +232,7 @@ ZIP 拒绝：
 - Unicode 规范化冲突；
 - 解压配额超限；
 - `.git/**`；
-- 非 allow-list 的 `.xcodeagent/**`。
+- 非 allow-list 的 `.devagentstudio/**`。
 
 禁止直接 `extractall(workspace)`。
 
@@ -296,13 +296,13 @@ Validation 成功后：
 
 ```text
 git init
-git config --local user.name XcodeAgent
-git config --local user.email xcodeagent@local
+git config --local user.name DevAgentStudio
+git config --local user.email devagentstudio@local
 git add frontend backend
 git commit -m "chore: initialize workspace from template"
 ```
 
-`.xcodeagent/` 不进入 baseline。
+`.devagentstudio/` 不进入 baseline。
 
 ### Metadata Commit
 
@@ -310,8 +310,8 @@ git commit -m "chore: initialize workspace from template"
 
 ```text
 Compute Engine Exclusive actual-byte baseline
-→ Stage .xcodeagent/template-state.json
-→ Stage .xcodeagent/runtime/template-runtime-state.json
+→ Stage .devagentstudio/template-state.json
+→ Stage .devagentstudio/runtime/template-runtime-state.json
    managedBaseline = computed target
    bootstrapCommit.phase = COMMITTING_METADATA
    finalization = null
@@ -335,9 +335,9 @@ Bootstrap 只有在 **尚未持久化 `bootstrapCommit.phase=COMMITTING_METADATA
 frontend/
 backend/
 .git/
-.xcodeagent/template-state.json
-.xcodeagent/runtime/template-runtime-state.json
-.xcodeagent/runtime/bootstrap/<attemptId>.json
+.devagentstudio/template-state.json
+.devagentstudio/runtime/template-runtime-state.json
+.devagentstudio/runtime/bootstrap/<attemptId>.json
 staging/
 validation 产生的 lockfile / build side effects（按 Cleanup Policy）
 ```
@@ -368,7 +368,7 @@ Workspace。Bootstrap 的业务失败仍可由用户重新发起新的 Bootstrap
 ```bash
 git rev-parse HEAD
 git status --porcelain
-git ls-files .xcodeagent
+git ls-files .devagentstudio
 ```
 
 预期：
@@ -376,7 +376,7 @@ git ls-files .xcodeagent
 ```text
 HEAD 存在
 working tree clean
-.xcodeagent 无 tracked file
+.devagentstudio 无 tracked file
 ```
 
 ---
@@ -387,7 +387,7 @@ Bootstrap 完成后按 Ownership 建立不同冲突证据：
 
 ```text
 ENGINE_EXCLUSIVE
-→ .xcodeagent/runtime/template-runtime-state.json.managedBaseline.engineExclusiveFiles
+→ .devagentstudio/runtime/template-runtime-state.json.managedBaseline.engineExclusiveFiles
 → path → sha256(actual final bytes) + mode
 
 SHARED_STRUCTURED_HOST
@@ -434,11 +434,11 @@ Platform marker host contract 成立
 Bootstrap 的最终提交仍把两个 Template JSON：
 
 ```text
-.xcodeagent/template-state.json
-.xcodeagent/runtime/template-runtime-state.json
+.devagentstudio/template-state.json
+.devagentstudio/runtime/template-runtime-state.json
 ```
 
-作为同一个 `TemplateMetadataCommit` 逻辑事务组。现有 `.xcodeagent/checkpoints/checkpoints.sqlite` 仍只由 LangGraph Checkpointer 管理，不写 Bootstrap/Reconcile 自定义状态。
+作为同一个 `TemplateMetadataCommit` 逻辑事务组。现有 `.devagentstudio/checkpoints/checkpoints.sqlite` 仍只由 LangGraph Checkpointer 管理，不写 Bootstrap/Reconcile 自定义状态。
 
 固定：
 
@@ -457,7 +457,7 @@ stage target template-state.json
 
 若 crash 发生在 metadata replace 中间，Attach Recovery 在取得统一 Mutation Lease 后，必须先复验 Target Workspace Contract，再 roll-forward target metadata pair。
 
-`resources.ts` 若属于 Platform Overlay Host，新 Bootstrap 使用的 Engine Source 必须已经包含双方约定 marker；否则该 Engine 版本不能被 XCodeAgent 标记为 Reconcile-ready。
+`resources.ts` 若属于 Platform Overlay Host，新 Bootstrap 使用的 Engine Source 必须已经包含双方约定 marker；否则该 Engine 版本不能被 DevAgent Studio 标记为 Reconcile-ready。
 
 ## 1.12 TemplateMutationCoordinator / WorkspaceMutationManager
 
@@ -578,7 +578,7 @@ cleanup 未完成则保持 GENERATING，下一次 Attach 继续收尾。
 13. frontend/backend 入口文件存在；
 14. Engine Blocking Validation 全部成功；
 15. Git HEAD 存在且 clean；
-16. `.xcodeagent` 不进入 baseline；
+16. `.devagentstudio` 不进入 baseline；
 17. 无 staging 残留；
 18. 不依赖 templateVariant/main/auth branch。
 
@@ -672,7 +672,7 @@ python3 validation/template-bootstrap/verify_step_00_engine_contract.py
 手工核对：
 
 ```bash
-unzip -p <generate.zip> .xcodeagent/template-state.json | jq '.capabilities,.managed,.migrations'
+unzip -p <generate.zip> .devagentstudio/template-state.json | jq '.capabilities,.managed,.migrations'
 ```
 
 通过标准：Generate Package State 与 Plan `nextTemplateState` JCS 语义相等；实际 Engine 不是旧四字段版本。
@@ -758,8 +758,8 @@ python3 validation/template-bootstrap/verify_step_03_git_metadata.py
 ```bash
 git -C <workspace> rev-parse HEAD
 git -C <workspace> status --porcelain
-git -C <workspace> ls-files .xcodeagent
-jq . <workspace>/.xcodeagent/template-state.json
+git -C <workspace> ls-files .devagentstudio
+jq . <workspace>/.devagentstudio/template-state.json
 ```
 
 故障注入至少覆盖：
@@ -842,24 +842,24 @@ TechnicalPlan Confirmed
 人工最终核对：
 
 ```bash
-jq '.effective,.managed.nodes' <workspace>/.xcodeagent/template-state.json
+jq '.effective,.managed.nodes' <workspace>/.devagentstudio/template-state.json
 git -C <workspace> status --porcelain
-jq '.template_context' <workspace>/.xcodeagent/build-task-plan.json
+jq '.template_context' <workspace>/.devagentstudio/build-task-plan.json
 ```
 
-预期：工作区 clean、`.xcodeagent` 未进入 Git baseline、完整 State 存在、Shared Host Engine nodes 成立、Build 使用 `template_state_jcs_sha256`。
+预期：工作区 clean、`.devagentstudio` 未进入 Git baseline、完整 State 存在、Shared Host Engine nodes 成立、Build 使用 `template_state_jcs_sha256`。
 
 ## 2.8 Definition of Done
 
 - [ ] 每一步都有独立人工验收脚本；
 - [ ] Bootstrap 先 `/plan` 后 `/generate`；
 - [ ] Generate State 与 Plan nextTemplateState JCS 等价；
-- [ ] XCodeAgent 消费完整 TemplateState；
+- [ ] DevAgent Studio 消费完整 TemplateState；
 - [ ] Blocking Validation 使用可 crash-recovery 的 process group runner；
 - [ ] Bootstrap Execution Journal 在 Materialize 前持久化 input binding，并在启动 Validation process 前持久化 process identity；
 - [ ] Mutation Lease 在 macOS/Linux 使用 `flock`、在 Windows 使用等价内核锁，并具备 epoch fencing；
 - [ ] WorkspaceMutationFS 与 WorkspaceMutationProcessRunner 覆盖全部已盘点的 Workspace 写路径；
-- [ ] Git baseline 成立且 `.xcodeagent` 不 tracked；
+- [ ] Git baseline 成立且 `.devagentstudio` 不 tracked；
 - [ ] Managed Baseline 只覆盖 Engine Exclusive；
 - [ ] `package.json` / `pom.xml` 作为 Shared Structured Host；
 - [ ] resources marker host 契约成立；

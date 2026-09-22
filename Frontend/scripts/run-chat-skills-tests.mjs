@@ -6,7 +6,7 @@ import { build } from 'vite'
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
 const entryFile = path.join(frontendRoot, 'tests', 'chatSkills.test.ts')
-const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-chat-skills-tests-'))
+const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-chat-skills-tests-'))
 const outputFile = path.join(outputDirectory, 'chatSkills.test.mjs')
 const styleConfig = JSON.parse(
   await fs.readFile(

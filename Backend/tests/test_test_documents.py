@@ -68,7 +68,7 @@ class TestDocumentsTests(unittest.TestCase):
                                 "si": 1500,
                             },
                             "report_path": (
-                                f"{workspace}/.xcodeagent/runtime/tests/"
+                                f"{workspace}/.devagentstudio/runtime/tests/"
                                 "frontend_performance/report.html"
                             ),
                             "raw_report_html": "<html>完整 Lighthouse 正文</html>",
@@ -119,11 +119,11 @@ class TestDocumentsTests(unittest.TestCase):
 
             self.assertEqual(
                 json_path,
-                Path(workspace).resolve() / ".xcodeagent/reports/test-report.json",
+                Path(workspace).resolve() / ".devagentstudio/reports/test-report.json",
             )
             self.assertEqual(
                 markdown_path,
-                Path(workspace).resolve() / ".xcodeagent/reports/test-report.md",
+                Path(workspace).resolve() / ".devagentstudio/reports/test-report.md",
             )
             self.assertEqual(load_test_report_json(json_path), report)
             self.assertTrue(markdown_path.is_file())

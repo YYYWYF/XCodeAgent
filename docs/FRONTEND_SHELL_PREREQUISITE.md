@@ -32,7 +32,7 @@ shell 不进入 `planning_unit_ids` 或模型允许的 Unit 集合。原始候�
 编译器不把该边转换成 Task 依赖，也不报告 shell 缺少 Task provider。
 历史 shell Task 及其执行状态保留，pending/failed/completed 不影响前置判断。
 
-Planning 继续沿用正式路径 `.xcodeagent/plans/build-task-plan.json`。
+Planning 继续沿用正式路径 `.devagentstudio/plans/build-task-plan.json`。
 文件缺失可开始首次规划；文件存在但不满足当前 confirmed v4 DAG 门槛，或读取失败，
 入口必须阻断生成，不能按空基线继续或回退到 checkpoint/pending sidecar。
 既有确认恢复分支不启动 Planning，仍可处理当前 pending DAG 的确认。
@@ -42,7 +42,7 @@ T2.4 收尾补丁将非法正式基线独立投影：
 ```text
 mode = confirmed_baseline_error
 code = confirmed_baseline_invalid
-artifact = .xcodeagent/plans/build-task-plan.json
+artifact = .devagentstudio/plans/build-task-plan.json
 status = requires_user_input
 issue.code = CONFIRMED_BASELINE_INVALID
 issue.level = pre_generation

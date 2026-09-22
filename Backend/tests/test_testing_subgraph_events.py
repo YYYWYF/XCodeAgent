@@ -970,8 +970,8 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                 "test_generation_input_code_changes": {
                     "files": [{"path": "frontend/src/pages/Orders/index.tsx"}]
                 },
-                "build_task_plan_path": "/workspace/.xcodeagent/plans/build-task-plan.json",
-                "technical_plan_json_path": "/workspace/.xcodeagent/plans/technical-plan.json",
+                "build_task_plan_path": "/workspace/.devagentstudio/plans/build-task-plan.json",
+                "technical_plan_json_path": "/workspace/.devagentstudio/plans/technical-plan.json",
                 "build_execution_scope": execution_scope,
                 "build_execution_slice": execution_slice,
                 "project_plan_path": "stale-project-plan.md",
@@ -988,11 +988,11 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         context = result["unit_test_generation_context"]
         self.assertEqual(
             context["build_task_plan_path"],
-            "/workspace/.xcodeagent/plans/build-task-plan.json",
+            "/workspace/.devagentstudio/plans/build-task-plan.json",
         )
         self.assertEqual(
             context["technical_plan_json_path"],
-            "/workspace/.xcodeagent/plans/technical-plan.json",
+            "/workspace/.devagentstudio/plans/technical-plan.json",
         )
         self.assertEqual(context["build_execution_scope"], execution_scope)
         self.assertEqual(context["build_execution_slice"], execution_slice)
@@ -1022,11 +1022,11 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         context = result["unit_test_generation_context"]
         self.assertEqual(
             context["technical_plan_json_path"],
-            ".xcodeagent/plans/technical-plan.json",
+            ".devagentstudio/plans/technical-plan.json",
         )
         self.assertEqual(
             context["build_task_plan_path"],
-            ".xcodeagent/plans/build-task-plan.json",
+            ".devagentstudio/plans/build-task-plan.json",
         )
 
     def test_frontend_setup_file_is_not_treated_as_a_unit_test_target(self) -> None:
@@ -1130,7 +1130,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
                 "warnings": [],
                 "validation": {"valid": True},
                 "code_change_sets": [generated_set],
-                "mapping_path": "/tmp/workspace/.xcodeagent/tests/unit-test-manifest.json",
+                "mapping_path": "/tmp/workspace/.devagentstudio/tests/unit-test-manifest.json",
             },
         ):
             generated = generate_unit_tests(

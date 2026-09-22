@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 from pathlib import Path
 import json
 from typing import Any
@@ -63,7 +65,7 @@ def template_preparation_projection_v2(workspace: str | Path) -> dict[str, Any] 
 def _validation_results(workspace: str | Path, attempt_id: str) -> list[dict[str, Any]]:
     """从本轮验收报告恢复结果，保留错误分类、命令与日志引用。"""
 
-    path = Path(workspace) / ".xcodeagent/runtime/template-reconcile/attempts" / attempt_id / "validation-results.json"
+    path = Path(workspace) / WORKSPACE_ARTIFACT_DIR / 'runtime/template-reconcile/attempts' / attempt_id / "validation-results.json"
     if not path.is_file():
         return []
     value = json.loads(path.read_text(encoding="utf-8"))

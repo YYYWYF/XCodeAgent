@@ -205,7 +205,7 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
     def test_agent_bundle_cache_and_prompt_are_scoped_to_normalized_selection(self) -> None:
         prompt_document = SimpleNamespace(
             name="alpha",
-            virtual_path="/.xcodeagent/user-skills/alpha/SKILL.md",
+            virtual_path="/.devagentstudio/user-skills/alpha/SKILL.md",
             content="complete alpha instructions",
         )
         with (

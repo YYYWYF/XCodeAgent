@@ -7,7 +7,7 @@ import { build } from 'vite'
 const frontendRoot = path.resolve(import.meta.dirname, '..')
 const entryFile = path.join(frontendRoot, 'tests', 'designConversation.test.ts')
 const outputDirectory = await fs.mkdtemp(
-  path.join(os.tmpdir(), 'xcodeagent-design-conversation-tests-')
+  path.join(os.tmpdir(), 'devagentstudio-design-conversation-tests-')
 )
 const outputFile = path.join(outputDirectory, 'designConversation.test.mjs')
 

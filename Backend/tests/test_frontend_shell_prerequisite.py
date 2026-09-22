@@ -33,10 +33,10 @@ def _state(root: Path) -> dict:
 
     plan = project_plan()
     paths = {
-        "requirement_spec": ".xcodeagent/specs/requirement-spec.json",
-        "product_plan": ".xcodeagent/plans/product-plan.json",
-        "ui_designs": ".xcodeagent/specs/ui-designs.json",
-        "technical_plan": ".xcodeagent/plans/technical-plan.json",
+        "requirement_spec": ".devagentstudio/specs/requirement-spec.json",
+        "product_plan": ".devagentstudio/plans/product-plan.json",
+        "ui_designs": ".devagentstudio/specs/ui-designs.json",
+        "technical_plan": ".devagentstudio/plans/technical-plan.json",
     }
     for key, artifact in formal_artifacts(plan).items():
         write_json(root, paths[key], artifact)

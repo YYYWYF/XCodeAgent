@@ -973,7 +973,7 @@ UnitGenerationPolicy
 新增：
 
 ```text
-XCODEAGENT_DAG_UNIT_MAX_TOKENS=4096
+DEVAGENTSTUDIO_DAG_UNIT_MAX_TOKENS=4096
 ```
 
 Settings：
@@ -1019,7 +1019,7 @@ SDK infrastructure retry = 2 (production; policy default = 0)
 第一版 Local=3、Global=2 是固定策略，不开放 Settings 构造参数或环境变量覆盖；
 `dag_unit_local_max_attempts`、`dag_global_repair_limit` 仅暴露只读固定值。
 `UnitGenerationPolicy.local_max_attempts` 同样只接受 3；Global 额度归后续 Run Controller 管理，不放入 Unit Policy。
-Unit 生成并发由平台拥有：`XCODEAGENT_DAG_UNIT_CONCURRENCY` 只配置 Worker Pool 的期望并发，Scheduler 仍硬限制最多 3 个 model worker。Unit Graph 依赖、模型输出和 Candidate 都不得声明 Unit Worker、跨 Unit 调度或最终执行批次；确定性 Unit 在模型 Worker Pool 外由平台串行提交。Task Candidate 当前仍包含单任务级 `can_run_in_parallel` / `parallel_reason` 字段，但它们不是实际调度批次；Scope 编译器还会结合依赖和文件冲突生成平台执行批次。token budget 保持 DAG 独立配置。
+Unit 生成并发由平台拥有：`DEVAGENTSTUDIO_DAG_UNIT_CONCURRENCY` 只配置 Worker Pool 的期望并发，Scheduler 仍硬限制最多 3 个 model worker。Unit Graph 依赖、模型输出和 Candidate 都不得声明 Unit Worker、跨 Unit 调度或最终执行批次；确定性 Unit 在模型 Worker Pool 外由平台串行提交。Task Candidate 当前仍包含单任务级 `can_run_in_parallel` / `parallel_reason` 字段，但它们不是实际调度批次；Scope 编译器还会结合依赖和文件冲突生成平台执行批次。token budget 保持 DAG 独立配置。
 
 以下保护参数由 production Planning adapter 显式构造，不进入业务 Context：
 
@@ -2273,7 +2273,7 @@ attempt registry
 临时文件：
 
 ```text
-.xcodeagent/plans/planning-run.json
+.devagentstudio/plans/planning-run.json
 ```
 
 只保存轻量：
@@ -2432,7 +2432,7 @@ fatal Run result
 路径：
 
 ```text
-.xcodeagent/drafts/plans/build-task-plan.pending.json
+.devagentstudio/drafts/plans/build-task-plan.pending.json
 ```
 
 身份：

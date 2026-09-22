@@ -243,12 +243,12 @@ join 成功后：
 
 ```jsonc
 {
-  "schema_version": "xcodeagent.detail-design-batch.v1", // 【新增】当前真实产物没有结构版本
+  "schema_version": "devagentstudio.detail-design-batch.v1", // 【新增】当前真实产物没有结构版本
   "draft_sha256": "<sha256>", // 【新增】绑定用户实际看到的完整批次草稿
   "endpoint_details": [
     // 【新增】当前 PageDetail 只保存 Endpoint 文件引用；推荐 Batch 聚合本轮待确认的 EndpointDetails
     {
-      "schema_version": "xcodeagent.endpoint-detail.v1", // 【新增】当前 EndpointDetail 没有结构版本
+      "schema_version": "devagentstudio.endpoint-detail.v1", // 【新增】当前 EndpointDetail 没有结构版本
       "api_contract_id": "<string>",
       "endpoint_id": "<string>",
       "implementation_strategy": {
@@ -301,7 +301,7 @@ join 成功后：
   ],
   "page_detail": {
     // 【调整】Page 模式存在；Endpoint-only 模式省略
-    "schema_version": "xcodeagent.page-detail.v1", // 【新增】当前 PageDetail 没有结构版本
+    "schema_version": "devagentstudio.page-detail.v1", // 【新增】当前 PageDetail 没有结构版本
     "pageId": "<string>",
     "implementation_strategy": {
       // 【新增】当前 PageDetail 没有显式记录 reuse/extend/create 决策
@@ -369,10 +369,10 @@ join 成功后：
 持久化边界：
 
 ```text
-确认前（草稿）：.xcodeagent/drafts/detail-design/<runId>/<interactionId>/...
-确认后：.xcodeagent/plans/pages/*
-        .xcodeagent/plans/endpoints/*
-        .xcodeagent/plans/project-plan.json refs
+确认前（草稿）：.devagentstudio/drafts/detail-design/<runId>/<interactionId>/...
+确认后：.devagentstudio/plans/pages/*
+        .devagentstudio/plans/endpoints/*
+        .devagentstudio/plans/project-plan.json refs
 ```
 
 整体提交前先完成全部临时文件；任何写入失败都保持确认前正式状态。

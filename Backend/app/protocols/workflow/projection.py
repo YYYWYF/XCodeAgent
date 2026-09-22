@@ -25,8 +25,8 @@ _CODE_REVIEW_VISIBLE_PHASES = {
     "finalize_project",
     "completed",
 }
-_CODE_REVIEW_REPORT_PATH = ".xcodeagent/reports/code-review.md"
-_TEST_REPORT_PATH = ".xcodeagent/reports/test-report.md"
+_CODE_REVIEW_REPORT_PATH = ".devagentstudio/reports/code-review.md"
+_TEST_REPORT_PATH = ".devagentstudio/reports/test-report.md"
 _PRODUCT_CONVERSATION_KINDS = {
     "chat",
     "read_only",
@@ -1308,7 +1308,7 @@ def _prepare_build_tasks_input_message(
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
         "build_prerequisite_error": "Build DAG 的正式产物或模板前置条件未满足，已返回上游流程。",
         "confirmed_baseline_error": (
-            "正式任务基线 .xcodeagent/plans/build-task-plan.json 非法或无法读取，"
+            "正式任务基线 .devagentstudio/plans/build-task-plan.json 非法或无法读取，"
             "请由平台维护者修复并验证为合法 ConfirmedPlan 后重新发起规划。"
         ),
         "build_context_error": "当前构建范围缺少已确认的实体数据源绑定或技术契约。",

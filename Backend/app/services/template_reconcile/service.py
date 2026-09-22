@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -277,7 +279,7 @@ def _assert_technical_plan_binding(root: Path, supplied_sha256: str, attempt: Re
     if attempt is not None and attempt.technical_plan_sha256 != supplied_sha256:
         raise TemplateStateError("RECOVERY_TECHNICAL_PLAN_MISMATCH：恢复请求未绑定原 Attempt 的 TechnicalPlan。")
     try:
-        actual = canonical_sha256(root / ".xcodeagent/plans/technical-plan.json")
+        actual = canonical_sha256(root / WORKSPACE_ARTIFACT_DIR / 'plans/technical-plan.json')
     except ArtifactInvalidationError as exc:
         raise TemplateStateError("RECOVERY_TECHNICAL_PLAN_MISSING：无法读取当前 TechnicalPlan。") from exc
     if actual != supplied_sha256:

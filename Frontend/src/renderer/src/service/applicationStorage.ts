@@ -16,9 +16,9 @@ import {
 } from './chatSessions';
 import { clearApplicationWorkbenchState } from '../workbenchPhase';
 
-const STORAGE_KEY = 'xcode-agent-applications';
+const STORAGE_KEY = 'devagentstudio-applications';
 const LOCAL_FILE_API = '/api/local-applications';
-export const APPLICATIONS_CHANGED_EVENT = 'xcode-agent-applications-changed';
+export const APPLICATIONS_CHANGED_EVENT = 'devagentstudio-applications-changed';
 
 // 判断创建规划是否已经完成；工作台内部运行状态不得影响该结果。
 export function isApplicationCreationComplete(lifecycle?: ApplicationLifecycle): boolean {
@@ -124,7 +124,7 @@ export function loadCachedApplications(): ApplicationIndex[] {
 
 /** 读取索引并从每个工作区重新加载 application.json，避免使用缓存配置。 */
 export async function loadStoredApplications(): Promise<ApplicationConfig[]> {
-  const electronApplications = window.xcodeAgent?.applications;
+  const electronApplications = window.devAgentStudio?.applications;
 
   if (electronApplications) {
     try {
@@ -166,7 +166,7 @@ export async function loadStoredApplications(): Promise<ApplicationConfig[]> {
 export async function saveStoredApplications(applications: ApplicationIndex[]): Promise<void> {
   cacheApplications(applications);
 
-  const electronApplications = window.xcodeAgent?.applications;
+  const electronApplications = window.devAgentStudio?.applications;
 
   if (electronApplications) {
     try {
@@ -202,9 +202,9 @@ export async function removeStoredApplication(applicationId: string): Promise<vo
   );
 }
 
-// 请求桌面主进程先完成后端停机门禁，再删除受 XCodeAgent 管理的真实项目目录。
+// 请求桌面主进程先完成后端停机门禁，再删除受 DevAgent Studio 管理的真实项目目录。
 export async function deleteStoredProject(applicationId: string, workspaceRoot: string): Promise<void> {
-  const electronApplications = window.xcodeAgent?.applications;
+  const electronApplications = window.devAgentStudio?.applications;
   if (!electronApplications?.deleteProject) {
     throw new Error('当前环境不支持删除本地项目目录');
   }
@@ -249,21 +249,21 @@ export async function clearDeletedApplicationClientState(application: Applicatio
     if (
       key &&
       [...threadIds].some((threadId) =>
-        key.startsWith(`xcodeagent:clarification-draft:${threadId}:`)
+        key.startsWith(`devagentstudio:clarification-draft:${threadId}:`)
       )
     ) {
       window.localStorage.removeItem(key)
     }
   }
   changeSetIds.forEach((changeSetId) => {
-    window.sessionStorage.removeItem(`xcodeagent:version-control:deferred:${changeSetId}`)
+    window.sessionStorage.removeItem(`devagentstudio:version-control:deferred:${changeSetId}`)
   })
 }
 
 export async function loadWorkspaceApplicationConfig(
   workspaceRoot: string
 ): Promise<ApplicationSchemaConfig> {
-  const workspaceApi = window.xcodeAgent?.workspace;
+  const workspaceApi = window.devAgentStudio?.workspace;
   if (!workspaceApi?.readApplication) {
     throw new Error('当前环境不支持读取工作区 application.json');
   }
@@ -280,7 +280,7 @@ export async function saveWorkspaceApplicationConfig(
   workspaceRoot: string,
   application: ApplicationSchemaConfig
 ): Promise<ApplicationSchemaConfig> {
-  const workspaceApi = window.xcodeAgent?.workspace
+  const workspaceApi = window.devAgentStudio?.workspace
   if (!workspaceApi?.writeApplication) {
     throw new Error('当前环境不支持保存工作区 application.json')
   }
@@ -304,7 +304,7 @@ export async function inspectWorkspacePlanningArtifacts(
   apiContracts: DevelopmentPlanningApiContract[];
   entities: DevelopmentPlanningEntityOption[];
 }> {
-  const workspaceApi = window.xcodeAgent?.workspace;
+  const workspaceApi = window.devAgentStudio?.workspace;
   if (!workspaceApi?.inspectPlanningArtifacts) {
     throw new Error('当前环境不支持检查工作区规划产物');
   }

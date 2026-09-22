@@ -39,7 +39,7 @@ class TemplateReconcileV2E2ETests(unittest.TestCase):
             (root / "src").mkdir()
             routes = root / "src/routes.tsx"
             routes.write_text("const routes = [\n  // routes\n];\n", encoding="utf-8")
-            plan_path = root / ".xcodeagent/plans/technical-plan.json"
+            plan_path = root / ".devagentstudio/plans/technical-plan.json"
             plan_path.parent.mkdir(parents=True)
             plan_path.write_text('{"artifact_type":"technical-plan"}\n', encoding="utf-8")
             plan_sha256 = hashlib.sha256(plan_path.read_bytes()).hexdigest()
@@ -69,7 +69,7 @@ class TemplateReconcileV2E2ETests(unittest.TestCase):
                 self.assertEqual("CHANGED", result)
                 result = asyncio.run(service.reconcile(root, change_id="c2", requested_config={"capabilities": {"login": {"enabled": True, "config": {}}, "authorization": {"enabled": True, "config": {}}}}, technical_plan_sha256=plan_sha256, mode="RECONCILE"))
                 self.assertEqual("CHANGED", result)
-            self.assertEqual(1, routes.read_text(encoding="utf-8").count("xcodeagent:authorization-route"))
+            self.assertEqual(1, routes.read_text(encoding="utf-8").count("devagentstudio:authorization-route"))
             self.assertEqual({"login", "authorization"}, set(load_template_state_v2(root).effective))
 
     def test_finalize_only_marks_attempt_succeeded_without_rewriting_state(self) -> None:
@@ -79,10 +79,10 @@ class TemplateReconcileV2E2ETests(unittest.TestCase):
             root = Path(directory)
             (root / "src").mkdir()
             (root / "src/routes.tsx").write_text(
-                "const routes = [\n  // routes\n  // xcodeagent:authorization-route\n  { path: '/authorization' },\n];\n",
+                "const routes = [\n  // routes\n  // devagentstudio:authorization-route\n  { path: '/authorization' },\n];\n",
                 encoding="utf-8",
             )
-            plan_path = root / ".xcodeagent/plans/technical-plan.json"
+            plan_path = root / ".devagentstudio/plans/technical-plan.json"
             plan_path.parent.mkdir(parents=True)
             plan_path.write_text('{"artifact_type":"technical-plan"}\n', encoding="utf-8")
             plan_sha256 = hashlib.sha256(plan_path.read_bytes()).hexdigest()
@@ -117,7 +117,7 @@ class TemplateReconcileV2E2ETests(unittest.TestCase):
             root = Path(directory)
             current = load_template_state_v2_from(_state(["login"]))
             write_template_state_v2(root, current)
-            plan_path = root / ".xcodeagent/plans/technical-plan.json"
+            plan_path = root / ".devagentstudio/plans/technical-plan.json"
             plan_path.parent.mkdir(parents=True)
             plan_path.write_text('{"artifact_type":"technical-plan"}\n', encoding="utf-8")
             plan_sha256 = hashlib.sha256(plan_path.read_bytes()).hexdigest()
@@ -163,10 +163,10 @@ def _package_zip(root: Path, current: dict[str, object], next_state: dict[str, o
     next_digest = _state_digest(load_template_state_v2_from(next_state))
     if mode == "RECONCILE":
         next_digest = current_digest
-    payload = "  // xcodeagent:authorization-route\n  { path: '/authorization' },\n"
+    payload = "  // devagentstudio:authorization-route\n  { path: '/authorization' },\n"
     descriptor = {"size": len(payload.encode()), "sha256": "sha256:" + hashlib.sha256(payload.encode()).hexdigest()}
     effective = list((next_state["effective"] if isinstance(next_state["effective"], dict) else {}).keys())
-    package = {"protocolVersion": "2", "packageId": f"pkg-{mode}", "mode": mode, "sourceRevision": "r1", "currentStateDigest": current_digest, "nextStateDigest": next_digest, "strategies": [{"strategyId": "authorization-route", "index": 0, "schemaVersion": 1, "type": "ENSURE_ROUTE", "target": "src/routes.tsx", "precondition": {}, "parameters": {"astSelector": {"nodeType": "array", "position": "beforeEnd"}, "managedMarker": "xcodeagent:authorization-route", "content": payload}, "payloadRef": None}], "validationPlan": [{"validationId": f"{capability}-post", "index": index, "type": "CAPABILITY_POSTCONDITION", "capabilityId": capability, "workingDirectory": ".", "checks": [{"type": "STRUCTURE_CHECK", "path": "src/routes.tsx", "containsAll": ["xcodeagent:authorization-route"]}], "blocking": True, "timeoutSeconds": 10, "executionMode": "REAL_WORKSPACE"} for index, capability in enumerate(effective)], "payloadManifest": {}, "nextTemplateState": next_state, "diagnostics": []}
+    package = {"protocolVersion": "2", "packageId": f"pkg-{mode}", "mode": mode, "sourceRevision": "r1", "currentStateDigest": current_digest, "nextStateDigest": next_digest, "strategies": [{"strategyId": "authorization-route", "index": 0, "schemaVersion": 1, "type": "ENSURE_ROUTE", "target": "src/routes.tsx", "precondition": {}, "parameters": {"astSelector": {"nodeType": "array", "position": "beforeEnd"}, "managedMarker": "devagentstudio:authorization-route", "content": payload}, "payloadRef": None}], "validationPlan": [{"validationId": f"{capability}-post", "index": index, "type": "CAPABILITY_POSTCONDITION", "capabilityId": capability, "workingDirectory": ".", "checks": [{"type": "STRUCTURE_CHECK", "path": "src/routes.tsx", "containsAll": ["devagentstudio:authorization-route"]}], "blocking": True, "timeoutSeconds": 10, "executionMode": "REAL_WORKSPACE"} for index, capability in enumerate(effective)], "payloadManifest": {}, "nextTemplateState": next_state, "diagnostics": []}
     path = root / f"{mode}.zip"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("strategy-update-package.json", json.dumps(package))

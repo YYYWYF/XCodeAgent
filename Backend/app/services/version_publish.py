@@ -64,13 +64,13 @@ def publish_version(
     repository_root = _resolve_repository_root(workspace_root)
     branch = _read_branch(repository_root)
 
-    # 1. 打包：校验工作区是 Git 仓库、读取基线、解除 .xcodeagent 排除。
+    # 1. 打包：校验工作区是 Git 仓库、读取基线、解除 .devagentstudio 排除。
     report("package", "正在打包工作区变更…", 10)
     head = _read_head(repository_root)
     if head == "UNBORN":
         raise VersionPublishError("当前仓库还没有基线提交，不能直接发布版本。")
-    # 移除 .git/info/exclude 中对 .xcodeagent 的排除，确保规划产物随版本提交。
-    _ensure_xcodeagent_tracked(repository_root)
+    # 移除 .git/info/exclude 中对 .devagentstudio 的排除，确保规划产物随版本提交。
+    _ensure_devagentstudio_tracked(repository_root)
 
     # 2. 提交：git add -A + git commit。
     report("commit", "正在提交变更到本地仓库…", 30)
@@ -108,7 +108,7 @@ def publish_version(
     )
 
     remote_url = _build_remote_url(request.repo_url)
-    remote_name = "xcodeagent-publish"
+    remote_name = "devagentstudio-publish"
     _ensure_remote(repository_root, remote_name, remote_url)
 
     pushed = False
@@ -156,9 +156,9 @@ def publish_version(
 
 
 _RUNTIME_ARTIFACT_PATHS = (
-    ".xcodeagent/runtime",
-    ".xcodeagent/cache",
-    ".xcodeagent/checkpoints",
+    ".devagentstudio/runtime",
+    ".devagentstudio/cache",
+    ".devagentstudio/checkpoints",
 )
 
 
@@ -176,11 +176,11 @@ def _unstage_runtime_artifacts(repository_root: Path) -> None:
         )
 
 
-def _ensure_xcodeagent_tracked(repository_root: Path) -> None:
-    """移除 .git/info/exclude 中对 .xcodeagent 的排除，确保规划产物随版本提交。
+def _ensure_devagentstudio_tracked(repository_root: Path) -> None:
+    """移除 .git/info/exclude 中对 .devagentstudio 的排除，确保规划产物随版本提交。
 
-    旧工作区在 baseline 初始化时写过 `.xcodeagent/` 到 info/exclude；
-    新工作区不再写。这里统一清理，保证发布时 git add -A 能包含 .xcodeagent。
+    旧工作区在 baseline 初始化时写过 `.devagentstudio/` 到 info/exclude；
+    新工作区不再写。这里统一清理，保证发布时 git add -A 能包含 .devagentstudio。
     """
 
     exclude = repository_root / ".git" / "info" / "exclude"
@@ -190,7 +190,7 @@ def _ensure_xcodeagent_tracked(repository_root: Path) -> None:
         lines = exclude.read_text(encoding="utf-8").splitlines()
     except OSError:
         return
-    filtered = [line for line in lines if line.strip() not in {".xcodeagent/", ".xcodeagent"}]
+    filtered = [line for line in lines if line.strip() not in {".devagentstudio/", ".devagentstudio"}]
     if len(filtered) == len(lines):
         return
     try:
@@ -262,11 +262,11 @@ def _ensure_remote(repository_root: Path, name: str, url: str) -> None:
 def _build_remote_url(repo_url: str) -> str:
     """把 repo_url 注入环境变量中的 git 凭证，拼成可 push 的认证 URL。"""
 
-    username = os.getenv("XCODEAGENT_GIT_USERNAME", "").strip()
-    token = os.getenv("XCODEAGENT_GIT_TOKEN", "").strip()
+    username = os.getenv("DEVAGENTSTUDIO_GIT_USERNAME", "").strip()
+    token = os.getenv("DEVAGENTSTUDIO_GIT_TOKEN", "").strip()
     if not username or not token:
         raise VersionPublishError(
-            "未配置 Git 凭证，请在 .env 设置 XCODEAGENT_GIT_USERNAME 与 XCODEAGENT_GIT_TOKEN。"
+            "未配置 Git 凭证，请在 .env 设置 DEVAGENTSTUDIO_GIT_USERNAME 与 DEVAGENTSTUDIO_GIT_TOKEN。"
         )
 
     parsed = urlparse(repo_url)

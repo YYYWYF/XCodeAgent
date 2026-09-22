@@ -371,8 +371,8 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         )
 
         expected_skills = [
-            "/.xcodeagent/builtin-skills/springboot-backend-generate/SKILL.md",
-            "/.xcodeagent/builtin-skills/"
+            "/.devagentstudio/builtin-skills/springboot-backend-generate/SKILL.md",
+            "/.devagentstudio/builtin-skills/"
             "springboot-template-modification-boundary/SKILL.md",
         ]
         self.assertEqual(task_required_skill_paths(database), expected_skills)
@@ -385,29 +385,29 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertEqual(external_paths[:2], expected_skills)
         self.assertEqual(mixed_paths[:2], expected_skills)
         error_handling_path = (
-            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "/.devagentstudio/builtin-skills/springboot-backend-generate/"
             "references/error-handling.md"
         )
         self.assertIn(error_handling_path, database_paths)
         self.assertIn(error_handling_path, external_paths)
         self.assertIn(error_handling_path, mixed_paths)
         self.assertIn(
-            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "/.devagentstudio/builtin-skills/springboot-backend-generate/"
             "references/database/layer-implementation.md",
             database_paths,
         )
         self.assertIn(
-            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "/.devagentstudio/builtin-skills/springboot-backend-generate/"
             "references/external-api/layer-implementation.md",
             external_paths,
         )
         self.assertIn(
-            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "/.devagentstudio/builtin-skills/springboot-backend-generate/"
             "references/database/layer-implementation.md",
             mixed_paths,
         )
         self.assertIn(
-            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "/.devagentstudio/builtin-skills/springboot-backend-generate/"
             "references/external-api/layer-implementation.md",
             mixed_paths,
         )
@@ -416,12 +416,12 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         mixed_bootstrap["unit_id"] = "backend:bootstrap"
         bootstrap_paths = task_required_instruction_paths(mixed_bootstrap)
         self.assertIn(
-            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "/.devagentstudio/builtin-skills/springboot-backend-generate/"
             "references/database/bootstrap.md",
             bootstrap_paths,
         )
         self.assertIn(
-            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "/.devagentstudio/builtin-skills/springboot-backend-generate/"
             "references/external-api/bootstrap.md",
             bootstrap_paths,
         )
@@ -710,7 +710,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertEqual(packet["kind"], "bootstrap")
         self.assertEqual(packet["stage"], "bootstrap")
         self.assertIn(
-            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "/.devagentstudio/builtin-skills/springboot-backend-generate/"
             "references/database/bootstrap.md",
             packet["instruction_paths"],
         )
@@ -735,7 +735,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         packet = execution_task_packet(_project_plan(), task)
 
         self.assertIn(
-            "/.xcodeagent/builtin-skills/springboot-backend-generate/"
+            "/.devagentstudio/builtin-skills/springboot-backend-generate/"
             "references/external-api/bootstrap.md",
             packet["instruction_paths"],
         )

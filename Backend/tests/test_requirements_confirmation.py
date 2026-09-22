@@ -26,7 +26,7 @@ from app.workspace.spec_documents import (
 def _write_application_config(workspace: str, datasource_type: str = "database") -> None:
     """为需求节点单测创建最小的 application.json 权威数据源配置。"""
 
-    application_dir = Path(workspace) / ".xcodeagent"
+    application_dir = Path(workspace) / ".devagentstudio"
     application_dir.mkdir(parents=True, exist_ok=True)
     (application_dir / "application.json").write_text(
         json.dumps(
@@ -400,7 +400,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 validate_authorization_requirements(result["requirement_spec"]),
             )
             self.assertFalse(
-                (Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.md").exists()
+                (Path(workspace) / ".devagentstudio/drafts/specs/requirement-spec.md").exists()
             )
 
     def test_initial_admin_and_default_grants_are_collected_by_stable_questions(self) -> None:
@@ -673,7 +673,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                 any("数据范围" in question["question"] for question in result["clarification"]["questions"])
             )
             self.assertFalse(
-                (Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.md").exists()
+                (Path(workspace) / ".devagentstudio/drafts/specs/requirement-spec.md").exists()
             )
 
     def test_historical_authorization_switch_does_not_override_current_business_candidates(self) -> None:
@@ -775,7 +775,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
                     )
                 )
 
-    def test_default_acceptance_criteria_exclude_xcodeagent_workflow(self) -> None:
+    def test_default_acceptance_criteria_exclude_devagentstudio_workflow(self) -> None:
         """默认产品验收只能描述应用结果，不能泄漏生成器交付门禁。"""
 
         spec = create_requirement_spec("创建一个库存管理系统")
@@ -982,8 +982,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
                         "timeline": [],
                     }
                 )
-                markdown_path = Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.md"
-                formal_path = Path(workspace) / ".xcodeagent/specs/requirement-spec.md"
+                markdown_path = Path(workspace) / ".devagentstudio/drafts/specs/requirement-spec.md"
+                formal_path = Path(workspace) / ".devagentstudio/specs/requirement-spec.md"
                 draft_markdown_exists = markdown_path.exists()
                 draft_json_exists = Path(result["requirement_spec_json_path"]).is_file()
                 formal_exists = formal_path.exists()
@@ -1090,8 +1090,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
                         "timeline": [],
                     }
                 )
-            draft_markdown = Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.md"
-            draft_json = Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.json"
+            draft_markdown = Path(workspace) / ".devagentstudio/drafts/specs/requirement-spec.md"
+            draft_json = Path(workspace) / ".devagentstudio/drafts/specs/requirement-spec.json"
 
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["mode"], "ask_user_question")
@@ -1489,7 +1489,7 @@ class RequirementsConfirmationTests(unittest.TestCase):
             )
             markdown = Path(saved["artifact"]["path"]).read_text(encoding="utf-8")
             internal_json = json.loads(
-                (Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.json").read_text(
+                (Path(workspace) / ".devagentstudio/drafts/specs/requirement-spec.json").read_text(
                     encoding="utf-8"
                 )
             )

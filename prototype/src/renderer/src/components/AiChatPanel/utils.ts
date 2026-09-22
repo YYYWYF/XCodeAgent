@@ -172,7 +172,7 @@ export function isInternalWorkspaceChangePath(path: string): boolean {
     .replaceAll('\\', '/')
     .split('/')
     .filter((segment) => Boolean(segment) && segment !== '.')
-  return segments.includes('.aistudio')
+  return segments.includes('.devagentstudio')
 }
 
 /** 过滤内部状态文件，并按路径合并同一次运行中的多段文件变更。 */

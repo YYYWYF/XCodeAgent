@@ -36,7 +36,7 @@ class UiDesignStreamCancelled(RuntimeError):
 UI_DESIGN_SKILL_NAME = "antd-ui-design"
 
 # 设计稿 .tsx 落盘的相对路径（方案 B：不再 clone 模板工程，.tsx 直接落到工作区
-# .xcodeagent/ui-design/pages/<PageKey>/index.tsx，由前端 DesignRenderer 编译渲染）。
+# .devagentstudio/ui-design/pages/<PageKey>/index.tsx，由前端 DesignRenderer 编译渲染）。
 PAGES_RELATIVE_DIR = "pages"
 
 _FALLBACK_SKILL_NOTE = (

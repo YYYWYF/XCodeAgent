@@ -1,6 +1,6 @@
 import { contextBridge,ipcRenderer} from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-const AGENT_ARG_PREFIX = '--xcode-agent-base-url=';
+const AGENT_ARG_PREFIX = '--devagentstudio-base-url=';
 const agentBaseUrl =
   process.argv.find((argument) => argument.startsWith(AGENT_ARG_PREFIX))?.slice(AGENT_ARG_PREFIX.length) ||
   'http://127.0.0.1:8000';
@@ -12,7 +12,7 @@ type ProjectPreviewWorkspacePayload = {
 // Custom APIs for renderer
 const api = {}
 
-const xcodeAgentApi = {
+const devAgentStudioApi = {
   isElectron: true,
   agentBaseUrl,
   platform: process.platform,
@@ -96,7 +96,7 @@ if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
-    contextBridge.exposeInMainWorld('xcodeAgent', xcodeAgentApi);
+    contextBridge.exposeInMainWorld('devAgentStudio', devAgentStudioApi);
     
   } catch (error) {
     console.error(error)
@@ -107,5 +107,5 @@ if (process.contextIsolated) {
   // @ts-ignore (define in dts)
   window.api = api
   // @ts-ignore (define in dts)
-  window.xcodeAgent = xcodeAgentApi
+  window.devAgentStudio = devAgentStudioApi
 }

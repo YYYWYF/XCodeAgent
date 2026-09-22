@@ -24,13 +24,13 @@ _FRONTEND_ROOT = "frontend"
 _BACKEND_ROOT = "backend/src/main/java"
 _CODE_ROOTS = (_FRONTEND_ROOT, _BACKEND_ROOT)
 _SKILL_FILES = {
-    ".xcodeagent/builtin-skills/frontend-code-scan/SKILL.md",
-    ".xcodeagent/builtin-skills/backend-code-scan/SKILL.md",
-    ".xcodeagent/builtin-skills/backend-code-scan/references/rules-reference.md",
+    ".devagentstudio/builtin-skills/frontend-code-scan/SKILL.md",
+    ".devagentstudio/builtin-skills/backend-code-scan/SKILL.md",
+    ".devagentstudio/builtin-skills/backend-code-scan/references/rules-reference.md",
 }
 _SKILL_LIST_ROOTS = {
-    ".xcodeagent/builtin-skills/frontend-code-scan",
-    ".xcodeagent/builtin-skills/backend-code-scan",
+    ".devagentstudio/builtin-skills/frontend-code-scan",
+    ".devagentstudio/builtin-skills/backend-code-scan",
 }
 
 

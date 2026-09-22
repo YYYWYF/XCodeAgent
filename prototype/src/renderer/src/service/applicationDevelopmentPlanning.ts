@@ -24,7 +24,7 @@ const DEVELOPMENT_PLANNING_KEY = 'developmentPlanning'
 
 // 读取桌面端后端地址，并为浏览器开发环境保留代理地址。
 function getDevelopmentPlanningUrl(): string {
-  const baseUrl = window.aiStudio?.agentBaseUrl?.replace(/\/$/, '') || '/api/agent'
+  const baseUrl = window.devAgentStudio?.agentBaseUrl?.replace(/\/$/, '') || '/api/agent'
   return `${baseUrl}/application-development-planning/run`
 }
 

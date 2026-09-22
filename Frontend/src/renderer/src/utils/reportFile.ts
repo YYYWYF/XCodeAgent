@@ -4,8 +4,8 @@ export async function openLocalReportFile(reportPath: string): Promise<void> {
   if (!trimmedPath) {
     throw new Error('报告路径为空')
   }
-  if (window.xcodeAgent?.browser?.openReportFile) {
-    const result = await window.xcodeAgent.browser.openReportFile(trimmedPath)
+  if (window.devAgentStudio?.browser?.openReportFile) {
+    const result = await window.devAgentStudio.browser.openReportFile(trimmedPath)
     if (result?.ok !== true) {
       throw new Error('打开本地报告失败')
     }
@@ -19,7 +19,7 @@ export async function openLocalReportFile(reportPath: string): Promise<void> {
     normalizedPath.startsWith('/') ? `file://${normalizedPath}` : `file:///${normalizedPath}`
   ).href
   const openedWindow = window.open(fileUrl, '_blank', 'noopener,noreferrer')
-  if (!openedWindow && !window.xcodeAgent?.isElectron) {
+  if (!openedWindow && !window.devAgentStudio?.isElectron) {
     throw new Error('当前应用未加载报告打开能力，请重启应用后重试')
   }
 }

@@ -46,7 +46,7 @@ class ApplicationDeletionProtocolTests(unittest.IsolatedAsyncioTestCase):
 
         with TemporaryDirectory() as directory:
             workspace = Path(directory) / "managed-app"
-            marker = workspace / ".xcodeagent" / "application.json"
+            marker = workspace / ".devagentstudio" / "application.json"
             marker.parent.mkdir(parents=True)
             marker.write_text("{}\n", encoding="utf-8")
             stream = build_application_deletion_ag_ui_stream(
@@ -89,7 +89,7 @@ class ApplicationDeletionProtocolTests(unittest.IsolatedAsyncioTestCase):
 
         with TemporaryDirectory() as directory:
             workspace = Path(directory) / "managed-app"
-            marker = workspace / ".xcodeagent" / "application.json"
+            marker = workspace / ".devagentstudio" / "application.json"
             marker.parent.mkdir(parents=True)
             marker.write_text("{}\n", encoding="utf-8")
             request = ApplicationDeletionRequest(
@@ -130,7 +130,7 @@ class ApplicationDeletionProtocolTests(unittest.IsolatedAsyncioTestCase):
 
         with TemporaryDirectory() as directory:
             workspace = Path(directory) / "managed-app"
-            marker = workspace / ".xcodeagent" / "application.json"
+            marker = workspace / ".devagentstudio" / "application.json"
             marker.parent.mkdir(parents=True)
             marker.write_text("{}\n", encoding="utf-8")
             application_id = "application-recreated-path"
@@ -196,7 +196,7 @@ class ApplicationDeletionProtocolTests(unittest.IsolatedAsyncioTestCase):
 
         with TemporaryDirectory() as directory:
             workspace = Path(directory) / "managed-app"
-            marker = workspace / ".xcodeagent" / "application.json"
+            marker = workspace / ".devagentstudio" / "application.json"
             marker.parent.mkdir(parents=True)
             marker.write_text("{}\n", encoding="utf-8")
             application_id = "application-still-present"

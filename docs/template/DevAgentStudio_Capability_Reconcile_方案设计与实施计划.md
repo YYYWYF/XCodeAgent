@@ -1,11 +1,11 @@
-# XCodeAgent Template Capability Reconcile 方案设计与实施计划
+# DevAgent Studio Template Capability Reconcile 方案设计与实施计划
 
-> 适用对象：XCodeAgent `template_refactor` 目标架构
+> 适用对象：DevAgent Studio `template_refactor` 目标架构
 >
-> 基准文档：`XCodeAgent_Capability_Reconcile_方案设计与实施计划_简化事务版.md`
+> 基准文档：`DevAgentStudio_Capability_Reconcile_方案设计与实施计划_简化事务版.md`
 >
 > 核心职责：消费 Template Service 返回的可执行 Modification Strategy，在当前 Workspace 上完成幂等增量修改、Capability 后置条件验收、可恢复执行和 TemplateState 最终提交。
-> 明确边界：XCodeAgent 是 **Workspace Runtime 与唯一代码事实执行方**；Template Service 是 **Capability / Strategy / Candidate State 的权威规划方**。
+> 明确边界：DevAgent Studio 是 **Workspace Runtime 与唯一代码事实执行方**；Template Service 是 **Capability / Strategy / Candidate State 的权威规划方**。
 
 ---
 
@@ -26,7 +26,7 @@ Template Preparation 独立节点展示执行
         ↓
 Template Service 计算 Capability 目标与 Modification Strategy
         ↓
-XCodeAgent 在当前 Workspace 上执行 Strategy
+DevAgent Studio 在当前 Workspace 上执行 Strategy
         ↓
 Validation Plan
         ↓
@@ -51,7 +51,7 @@ TemplateState Atomic Commit
 
 本方案明确以以下产品级约束为前提：
 
-> **模板下载 / 更新执行期间，禁止任何外部、人工或其他 XCodeAgent 任务写入真实 Workspace。**
+> **模板下载 / 更新执行期间，禁止任何外部、人工或其他 DevAgent Studio 任务写入真实 Workspace。**
 
 包括：
 
@@ -97,7 +97,7 @@ Journal Context
 
 ```text
 1. Current Workspace First：当前 Workspace 是代码事实源。
-2. Service Plans, XCodeAgent Executes：Service 负责 Capability / Strategy 规划，XCodeAgent 负责在当前 Workspace 上执行。
+2. Service Plans, DevAgent Studio Executes：Service 负责 Capability / Strategy 规划，DevAgent Studio 负责在当前 Workspace 上执行。
 3. /v1/update 采用单次最小协议，只传 currentTemplateState / requestedConfig / mode。
 4. mode 只冻结 APPLY | RECONCILE，不再引入 NORMAL / HEALTH_RECONCILE 等并行语义。
 5. Service 返回 Strategy Package，不返回 Workspace ChangeSet，也不读取 Workspace Snapshot。
@@ -119,7 +119,7 @@ Journal Context
 
 ### 2.1 不再保留 Workspace Snapshot 协议
 
-本方案正式冻结：**Workspace 当前代码只在 XCodeAgent 本地读取和执行，不上传 Template Service。**
+本方案正式冻结：**Workspace 当前代码只在 DevAgent Studio 本地读取和执行，不上传 Template Service。**
 
 因此 V2 双端协议不再建设：
 
@@ -179,9 +179,9 @@ Template Service 不负责：
 生成最终 UPDATE_FILE ChangeSet
 ```
 
-### 2.3 XCodeAgent 职责
+### 2.3 DevAgent Studio 职责
 
-XCodeAgent 负责：
+DevAgent Studio 负责：
 
 ```text
 Template Preparation 节点承载
@@ -203,7 +203,7 @@ AG-UI 进度 / 日志投影
 Retry
 ```
 
-XCodeAgent 不负责重新实现 Service 中的 Capability Planner，也不把 Workspace 内容上传给 Service。
+DevAgent Studio 不负责重新实现 Service 中的 Capability Planner，也不把 Workspace 内容上传给 Service。
 
 ---
 
@@ -323,7 +323,7 @@ Development Gate 必须保持关闭
 
 ## 4. `/v1/update` 双端最小协议（唯一冻结协议）
 
-> **双端文档最终直接固定成下面这个最小协议。** 该协议是 Template Service 与 XCodeAgent 之间唯一的 V2 wire contract；其他文档不得重新定义 mode、Workspace Snapshot、428 二阶段请求或最终 ChangeSet 协议。
+> **双端文档最终直接固定成下面这个最小协议。** 该协议是 Template Service 与 DevAgent Studio 之间唯一的 V2 wire contract；其他文档不得重新定义 mode、Workspace Snapshot、428 二阶段请求或最终 ChangeSet 协议。
 
 ### 4.1 请求
 
@@ -454,7 +454,7 @@ RECONCILE + 204
 204 = Workspace 一定健康
 ```
 
-Capability 是否完整落在当前 Workspace，只能由 XCodeAgent 实际执行幂等 Strategy 后的 Validation Plan 得出。
+Capability 是否完整落在当前 Workspace，只能由 DevAgent Studio 实际执行幂等 Strategy 后的 Validation Plan 得出。
 
 ### 4.4 `200 Strategy Update Package`
 
@@ -482,7 +482,7 @@ Service 返回的是 **Strategy Package**，不是最终 Workspace ChangeSet。
 
 ```text
 Service：State → Capability → Strategy
-XCodeAgent：Strategy + Current Workspace → Code
+DevAgent Studio：Strategy + Current Workspace → Code
 ```
 
 Service 不返回：
@@ -518,7 +518,7 @@ Template Service
         ↓
 Modification Strategy
 
-XCodeAgent
+DevAgent Studio
 负责“在当前代码上把它真正做出来”
         ↓
 Current Workspace + Strategy Executor
@@ -722,7 +722,7 @@ Attempt 不保存每个文件的 before-image，因此不是 File Journal。
 ### 7.2 建议持久化目录
 
 ```text
-.xcodeagent/runtime/template-reconcile/
+.devagentstudio/runtime/template-reconcile/
 ├── current.json
 └── attempts/
     └── {attemptId}/
@@ -1200,7 +1200,7 @@ Strategy Package
         ├─ validationPlan[]
         └─ nextTemplateState
         ↓
-XCodeAgent
+DevAgent Studio
 ```
 
 三者职责固定为：
@@ -1252,7 +1252,7 @@ currentTemplateState.effective
 Strategy Package
 ```
 
-XCodeAgent：
+DevAgent Studio：
 
 ```text
 Strategy Package
@@ -1469,7 +1469,7 @@ AG-UI CustomEvent + StateSnapshot
 持久化事实源：
 
 ```text
-.xcodeagent/runtime/...
+.devagentstudio/runtime/...
 ```
 
 AG-UI Event 不是恢复权威。
@@ -1606,7 +1606,7 @@ Service Strategy
 +
 Current Workspace
         ↓
-XCodeAgent Strategy Executor
+DevAgent Studio Strategy Executor
         ↓
 WorkingCopyStore
         ↓
@@ -1770,7 +1770,7 @@ nextTemplateState.requested / effective 必须分别与 currentTemplateState 相
 2. mode 只允许 APPLY | RECONCILE。
 3. Contract Test 明确拒绝 Workspace Snapshot / Context / 428 相关字段与响应。
 4. Service Contract 只返回 Strategy Package，不返回最终 Workspace ChangeSet。
-5. Contract Fixture 可由 Service 和 XCodeAgent 双端共同验证。
+5. Contract Fixture 可由 Service 和 DevAgent Studio 双端共同验证。
 ```
 
 ---
@@ -1864,7 +1864,7 @@ PayloadManifest DTO
 ```text
 Service Package 不包含最终 UPDATE_FILE ChangeSet
 Service Package 不包含 Workspace-derived final content
-所有 Strategy 均由 XCodeAgent 在 Current Workspace 上执行
+所有 Strategy 均由 DevAgent Studio 在 Current Workspace 上执行
 ```
 
 ### 验收
@@ -1873,7 +1873,7 @@ Service Package 不包含 Workspace-derived final content
 协议 Fixture 能证明：
 - Package 只描述 Strategy 与 Validation
 - Workspace 内容不会进入请求
-- 同一 Package 可被 XCodeAgent 本地 Executor 独立执行
+- 同一 Package 可被 DevAgent Studio 本地 Executor 独立执行
 ```
 
 ---
@@ -2523,7 +2523,7 @@ Attempt finalize 前 crash
 
 ## XC-22：最终架构门禁
 
-### XCodeAgent 生产代码必须保留
+### DevAgent Studio 生产代码必须保留
 
 ```text
 StrategyReconcileExecutorV2
@@ -2590,7 +2590,7 @@ XC-4
 
 阶段目标：
 
-> Service 与 XCodeAgent 的当前 V2 Contract 唯一；旧协议、旧运行态与旧 Workspace 明确不受支持。
+> Service 与 DevAgent Studio 的当前 V2 Contract 唯一；旧协议、旧运行态与旧 Workspace 明确不受支持。
 
 ## 阶段二：建立 V2 可恢复执行内核
 
@@ -2842,6 +2842,6 @@ Validation：
 
 架构：
 - V2 不依赖 Git clean / Git rollback / Persistent File Journal / Transaction Snapshot
-- XCodeAgent 仍是 Workspace 唯一代码执行事实源
+- DevAgent Studio 仍是 Workspace 唯一代码执行事实源
 - Template Service 仍是 Capability / Strategy 规划权威
 ```

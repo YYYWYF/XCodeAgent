@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { readWorkspaceFile } from '../service/workspaceTools'
 
-const BUILD_TASK_PLAN_PATH = '.xcodeagent/plans/build-task-plan.json'
+const BUILD_TASK_PLAN_PATH = '.devagentstudio/plans/build-task-plan.json'
 
 /** 一个已完成、可供提前提交的模块（候选提交点）。 */
 export type ModuleCandidate = {
@@ -20,7 +20,7 @@ export type ModuleCandidate = {
  *
  * 为什么从计划文件而不是从对话消息里取：消息按 `workspaceRoot + editorMode + sessionId`
  * 分桶，**不含版本**，同一个工作区各版本的会话混在一起，按消息聚合会把 v1.0 的模块算到
- * v1.1 头上。计划文件天然按迭代隔离（新建迭代会清空 `.xcodeagent/plans`）。
+ * v1.1 头上。计划文件天然按迭代隔离（新建迭代会清空 `.devagentstudio/plans`）。
  *
  * 计划不可用时返回空数组 —— 调用方据此不显示角标，而不是报错。
  */

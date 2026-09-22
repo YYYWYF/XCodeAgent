@@ -31,7 +31,7 @@ type SkillCatalogAgUiPayload = {
 
 function getSkillCatalogUrl(): string {
   /** 根据桌面运行时配置解析技能 AG-UI 地址。 */
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl ? `${agentBaseUrl.replace(/\/$/, '')}/skills/run` : '/api/agent/skills/run'
 }
 

@@ -47,7 +47,7 @@ class VersionControlSnapshot(BaseModel):
     files: list[VersionControlFile]
     requested_paths: list[str] = Field(alias="requestedPaths")
     eligible_paths: list[str] = Field(alias="eligiblePaths")
-    # eligible_paths 里排除 .xcodeagent 平台产物后的业务代码变更。
+    # eligible_paths 里排除 .devagentstudio 平台产物后的业务代码变更。
     # 提交提醒（角标、返回首页确认、各档提醒）按这个口径计数，避免平台自身的
     # 状态流转被当成"用户改了代码"。提交弹窗与提交校验仍用 eligible_paths，
     # 所以产物照常可见、可勾选、可提交。
@@ -216,7 +216,7 @@ def commit_version_control(
 
     # 只对业务代码做空白预检。`diff --check -- <无路径>` 会退化成检查全量，
     # 所以没有业务代码时必须整个跳过，否则"只提交产物"的场景仍会被产物自己挡住
-    # （设计版本提醒提交的就是清一色 .xcodeagent 文件）。
+    # （设计版本提醒提交的就是清一色 .devagentstudio 文件）。
     checked_paths = _business_paths(selected_paths)
     if checked_paths:
         _run_git_checked(
@@ -328,24 +328,24 @@ def _normalize_requested_paths(workspace_root: Path, values: list[str]) -> list[
 
 
 _RUNTIME_ARTIFACT_PREFIXES = (
-    ".xcodeagent/runtime/",
-    ".xcodeagent/cache/",
-    ".xcodeagent/checkpoints/",
+    ".devagentstudio/runtime/",
+    ".devagentstudio/cache/",
+    ".devagentstudio/checkpoints/",
 )
 
 
 def _is_runtime_artifact_path(path: str) -> bool:
-    """判断 git status 路径是否属于 .xcodeagent 运行时产物。"""
+    """判断 git status 路径是否属于 .devagentstudio 运行时产物。"""
 
     normalized = path.replace("\\", "/").lstrip("/")
     return any(normalized.startswith(prefix) for prefix in _RUNTIME_ARTIFACT_PREFIXES)
 
 
-_PLATFORM_ARTIFACT_PREFIX = ".xcodeagent/"
+_PLATFORM_ARTIFACT_PREFIX = ".devagentstudio/"
 
 
 def _is_platform_artifact_path(path: str) -> bool:
-    """判断路径是否属于 .xcodeagent 平台产物（规划文档、状态快照、报告）。
+    """判断路径是否属于 .devagentstudio 平台产物（规划文档、状态快照、报告）。
 
     与 `_is_runtime_artifact_path` 的区别：运行时产物（日志/缓存/checkpoint）**根本不进**
     提交候选；平台产物要进版本、要能被追溯，只是**不计入"用户改了代码"的提醒口径**。
@@ -361,10 +361,10 @@ def _business_code_paths(eligible_paths: list[str]) -> list[str]:
 
 
 def _business_paths(paths: list[str]) -> list[str]:
-    """筛出参与提交前空白检查的路径：排除 `.xcodeagent` 平台产物。
+    """筛出参与提交前空白检查的路径：排除 `.devagentstudio` 平台产物。
 
     空白检查是为了在提交前拦住手写代码里的疏忽（文档 §5.2 的确定性预检）。但
-    `.xcodeagent` 下的规划文档、状态快照与 AGENTS.md 都是**平台自己生成**的，
+    `.devagentstudio` 下的规划文档、状态快照与 AGENTS.md 都是**平台自己生成**的，
     用户改不了也不该为它们负责 —— 平台生成的内容触发平台自己的门禁、反过来挡住
     用户提交，是纯粹的误伤（AGENTS.md 曾因 `', '.join` 产出悬空逗号而触发过）。
 
@@ -411,7 +411,7 @@ def _read_status(repository_root: Path) -> tuple[bytes, list[VersionControlFile]
             continue
         status_code = record[:2].decode("ascii", errors="replace")
         path = record[3:].decode("utf-8", errors="replace")
-        # 跳过 .xcodeagent 下的运行时产物，避免日志、缓存和 checkpoint
+        # 跳过 .devagentstudio 下的运行时产物，避免日志、缓存和 checkpoint
         # 污染提交候选列表与提交前空白检查。
         if _is_runtime_artifact_path(path):
             if status_code[0] in {"R", "C"} and index < len(records):

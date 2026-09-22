@@ -1,8 +1,8 @@
 """UI确认节点：为需求 spec 中每个页面生成 React 设计稿代码并等待用户逐页确认。
 
 节点位于 requirements 与 project_planning 之间。首次进入时准备设计稿落盘目录
-（工作区 .xcodeagent/ui-design/），再为每个页面调用 antd-ui-design 技能生成
-真实视觉的 React + antd5 设计稿 .tsx，写入 .xcodeagent/ui-design/pages/<PageKey>/
+（工作区 .devagentstudio/ui-design/），再为每个页面调用 antd-ui-design 技能生成
+真实视觉的 React + antd5 设计稿 .tsx，写入 .devagentstudio/ui-design/pages/<PageKey>/
 index.tsx，并把源码内联到 ui_designs.pages[].code 供前端 DesignRenderer 编译渲染；
 随后返回 ui_design_confirmation 待确认交互，用户逐页确认全部通过后才放行进入
 项目规划。
@@ -12,6 +12,8 @@ index.tsx，并把源码内联到 ui_designs.pages[].code 供前端 DesignRender
 """
 
 from __future__ import annotations
+
+from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import asyncio
 import hashlib
@@ -222,7 +224,7 @@ def _verified_ui_designs_for_confirmation(
         existing = existing_pages.get(page_id, {})
         page_key = str(existing.get("page_key") or derive_page_key(product_page)).strip()
         code = load_page_code(
-            str(workspace_root(state) / ".xcodeagent" / "ui-design"),
+            str(workspace_root(state) / WORKSPACE_ARTIFACT_DIR / "ui-design"),
             page_key,
         ) or str(existing.get("code") or "")
         status = str(existing.get("status") or "pending")
@@ -549,7 +551,7 @@ async def _latest_ui_designs(
     # 才偶然回填。这里从 .tsx 文件读回 code，让 no-op resume 也能正确反映终态。
     pages = manifest.get("pages") if isinstance(manifest, dict) else None
     if isinstance(pages, list) and pages:
-        ui_design_root = str(workspace_root(state) / ".xcodeagent" / "ui-design")
+        ui_design_root = str(workspace_root(state) / WORKSPACE_ARTIFACT_DIR / "ui-design")
         for page in pages:
             if not isinstance(page, dict):
                 continue

@@ -537,7 +537,7 @@ function WorkbenchPage({
   ])
 
   // 确认发起新迭代：基于当前版本派生下一版本（minor+1），回到需求分析阶段。
-  // 调后端清空 .xcodeagent 规划产物（保留 AGENTS.md），重置 lifecycle 为 collecting_requirement。
+  // 调后端清空 .devagentstudio 规划产物（保留 AGENTS.md），重置 lifecycle 为 collecting_requirement。
   const handleConfirmIteration = useCallback(async (): Promise<void> => {
     if (!viewedVersion || !applicationLifecycle) return
     const parentVersionId = viewedVersion.id
@@ -550,7 +550,7 @@ function WorkbenchPage({
       return
     }
     try {
-      // 1. 调后端清空 .xcodeagent 规划产物（保留 AGENTS.md + application.json）。
+      // 1. 调后端清空 .devagentstudio 规划产物（保留 AGENTS.md + application.json）。
       await startIteration({
         workspaceRoot: workspaceApplication.workspaceRoot,
         versionLabel,
@@ -558,7 +558,7 @@ function WorkbenchPage({
       })
       // 1.5 清空环境数据目录中该工作区的全部会话历史，
       // 避免上一版本的对话卡片串入新迭代。
-      await window.xcodeAgent?.sessions?.clearWorkspace({
+      await window.devAgentStudio?.sessions?.clearWorkspace({
         workspaceRoot: workspaceApplication.workspaceRoot
       })
       // 2. 创建全新的 lifecycle（collecting_requirement），revision 从 1 重新开始。

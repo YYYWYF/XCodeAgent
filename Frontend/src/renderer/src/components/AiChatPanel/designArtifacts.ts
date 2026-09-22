@@ -1,4 +1,7 @@
 import type { PlanningArtifactRecoveryKey } from './planningArtifactRecovery'
+import { WORKSPACE_ARTIFACT_DIR_NAME } from '../../constants/branding'
+
+const ARTIFACT_ROOT = WORKSPACE_ARTIFACT_DIR_NAME
 
 /**
  * 规划产物的唯一路径表。
@@ -25,26 +28,26 @@ export const LOCAL_DESIGN_ARTIFACTS: readonly DesignArtifactEntry[] = [
     key: 'requirement-spec',
     label: '需求文档',
     markdownPaths: [
-      '.xcodeagent/drafts/specs/requirement-spec.md',
-      '.xcodeagent/specs/requirement-spec.md'
+      `${ARTIFACT_ROOT}/drafts/specs/requirement-spec.md`,
+      `${ARTIFACT_ROOT}/specs/requirement-spec.md`
     ]
   },
   {
     key: 'product-plan',
     label: '产品规划',
-    markdownPaths: ['.xcodeagent/drafts/plans/product-plan.md', '.xcodeagent/plans/product-plan.md']
+    markdownPaths: [`${ARTIFACT_ROOT}/drafts/plans/product-plan.md`, `${ARTIFACT_ROOT}/plans/product-plan.md`]
   },
   {
     key: 'ui-design',
     label: 'UI 设计',
     // UI 设计稿以 JSON 承载（逐页设计），没有 Markdown 形态。
     markdownPaths: [],
-    contentPaths: ['.xcodeagent/specs/ui-designs.json']
+    contentPaths: [`${ARTIFACT_ROOT}/specs/ui-designs.json`]
   },
   {
     key: 'technical-plan',
     label: '技术规划',
-    markdownPaths: ['.xcodeagent/plans/technical-plan.md']
+    markdownPaths: [`${ARTIFACT_ROOT}/plans/technical-plan.md`]
   }
 ]
 

@@ -62,10 +62,10 @@
 
 | 正式产物 | 路径 | 在模板阶段的职责 |
 | --- | --- | --- |
-| RequirementSpec | `.xcodeagent/specs/requirement-spec.json` | 完成门禁确认 |
-| ProductPlan | `.xcodeagent/plans/product-plan.json` | 页面身份、名称、正式路由和菜单输入 |
-| UiDesign Manifest | `.xcodeagent/specs/ui-designs.json` | 完成门禁确认；有设计稿时校验已落盘 PageKey 映射 |
-| TechnicalPlan | `.xcodeagent/plans/technical-plan.json` | 完成门禁确认，不参与页面、菜单或 API 文件生成 |
+| RequirementSpec | `.devagentstudio/specs/requirement-spec.json` | 完成门禁确认 |
+| ProductPlan | `.devagentstudio/plans/product-plan.json` | 页面身份、名称、正式路由和菜单输入 |
+| UiDesign Manifest | `.devagentstudio/specs/ui-designs.json` | 完成门禁确认；有设计稿时校验已落盘 PageKey 映射 |
+| TechnicalPlan | `.devagentstudio/plans/technical-plan.json` | 完成门禁确认，不参与页面、菜单或 API 文件生成 |
 
 ProductPlan 的 `pages` 是页面产品事实的唯一权威来源。TechnicalPlan 的 `pages` 只保存 endpoint 依赖和 action 实现引用，不能用于生成页面名称、正式路由或菜单。
 
@@ -129,8 +129,8 @@ generating_application_template_files
 模板初始化不再依赖 Renderer workflow 快照。初始化编排器一次读取并校验：
 
 ~~~text
-.xcodeagent/plans/product-plan.json
-.xcodeagent/specs/ui-designs.json
+.devagentstudio/plans/product-plan.json
+.devagentstudio/specs/ui-designs.json
 ~~~
 
 随后生成本轮不可变输入：
@@ -246,7 +246,7 @@ flowchart TD
 建议路径：
 
 ~~~text
-.xcodeagent/template-generation-manifest.json
+.devagentstudio/template-generation-manifest.json
 ~~~
 
 建议最小结构：
@@ -256,8 +256,8 @@ flowchart TD
   "generationId": "generation-...",
   "workspaceRoot": "...",
   "planningArtifacts": {
-    "productPlanJsonPath": ".xcodeagent/plans/product-plan.json",
-    "uiDesignsJsonPath": ".xcodeagent/specs/ui-designs.json"
+    "productPlanJsonPath": ".devagentstudio/plans/product-plan.json",
+    "uiDesignsJsonPath": ".devagentstudio/specs/ui-designs.json"
   },
   "steps": {
     "download": {

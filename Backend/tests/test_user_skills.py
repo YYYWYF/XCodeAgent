@@ -21,7 +21,7 @@ class UserSkillsServiceTests(unittest.TestCase):
 
             catalog = user_skills.list_user_skills(root)
 
-        self.assertEqual(catalog.root, "~/.xcodeagent_dev/skills")
+        self.assertEqual(catalog.root, "~/.devagentstudio_dev/skills")
         self.assertEqual(catalog.skills, [])
         self.assertEqual(catalog.skipped_count, 0)
 
@@ -98,10 +98,10 @@ class UserSkillsServiceTests(unittest.TestCase):
 
     def test_environment_selects_the_matching_user_skill_directory(self) -> None:
         for working_dir in (
-            ".xcodeagent_dev",
-            ".xcodeagent_st",
-            ".xcodeagent_uat",
-            ".xcodeagent",
+            ".devagentstudio_dev",
+            ".devagentstudio_st",
+            ".devagentstudio_uat",
+            ".devagentstudio",
         ):
             with self.subTest(working_dir=working_dir), patch.dict(
                 os.environ,
@@ -153,7 +153,7 @@ class UserSkillsAgUiTests(unittest.TestCase):
 
     def test_stream_emits_catalog_lifecycle_and_result(self) -> None:
         catalog = user_skills.UserSkillCatalog(
-            root="~/.xcodeagent_dev/skills",
+            root="~/.devagentstudio_dev/skills",
             skills=[
                 user_skills.UserSkillSummary(
                     name="sample",
@@ -426,7 +426,7 @@ class UserSkillsAgUiTests(unittest.TestCase):
 
     def test_stream_supports_import_action(self) -> None:
         imported = user_skill_imports.ImportedUserSkill(
-            root="~/.xcodeagent_dev/skills",
+            root="~/.devagentstudio_dev/skills",
             imported=user_skills.UserSkillSummary(
                 name="sample-import",
                 description="Imported skill",
@@ -465,7 +465,7 @@ class UserSkillsAgUiTests(unittest.TestCase):
         self.assertIn('"action":"import"', payload)
         self.assertIn('"imported"', payload)
         self.assertIn('"name":"sample-import"', payload)
-        self.assertIn('"root":"~/.xcodeagent_dev/skills"', payload)
+        self.assertIn('"root":"~/.devagentstudio_dev/skills"', payload)
         self.assertIn('"status":"completed"', payload)
         self.assertIn("skill-catalog", payload)
         self.assertIn("STATE_SNAPSHOT", payload)

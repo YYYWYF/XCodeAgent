@@ -60,9 +60,9 @@ _DIRECT_IGNORED_PATH_PARTS = frozenset(
     {".next", ".turbo", ".venv", "build", "coverage", "dist", "node_modules", "target"}
 )
 _FRONTEND_REQUIRED_SKILLS = (
-    "/.xcodeagent/builtin-skills/frontend-template-modification-boundary/SKILL.md",
-    "/.xcodeagent/builtin-skills/code-block-template/SKILL.md",
-    "/.xcodeagent/builtin-skills/react-develop-specification/SKILL.md",
+    "/.devagentstudio/builtin-skills/frontend-template-modification-boundary/SKILL.md",
+    "/.devagentstudio/builtin-skills/code-block-template/SKILL.md",
+    "/.devagentstudio/builtin-skills/react-develop-specification/SKILL.md",
 )
 _DIRECT_VERIFICATION_REPAIR_INSTRUCTIONS = (
     "## Internal verification and self-repair\n"
@@ -204,7 +204,7 @@ def _direct_modification_classifier_prompt(
         "For a localized frontend/backend change, put every exact existing file required by the user's outcome "
         "but located outside the normal source roots in targetPaths. This is not limited to known config-file "
         "types. Never propose a directory, broad glob, lockfile, secret file, installed dependency, generated "
-        "output, migration, schema, or .xcodeagent artifact. targetPaths are only candidates; backend policy "
+        "output, migration, schema, or .devagentstudio artifact. targetPaths are only candidates; backend policy "
         "decides whether they are added to this run's file scope.\n\n"
         "For formal_revision, keep clarificationQuestion and questions empty: the next step is the formal "
         "revision confirmation, not a request for detailed design. For implementation_fix, do not ask for "
@@ -511,7 +511,7 @@ def _safe_target_paths(value: Any) -> list[str]:
             not parts
             or ".." in parts
             or any(part == ".env" or part.startswith(".env.") for part in parts)
-            or ".xcodeagent/" in lowered
+            or ".devagentstudio/" in lowered
         ):
             continue
         if path not in result:
@@ -529,7 +529,7 @@ def answer_casual_conversation(
         [
             SystemMessage(
                 content=(
-                    "You are AIStudio, an AI application-development assistant inside a desktop "
+                    "You are DevAgent Studio, an AI application-development assistant inside a desktop "
                     "workbench. Answer normal conversation and general questions naturally. You do not "
                     "have workspace evidence in this mode, so never claim that you inspected or changed "
                     "files. Reply in the user's language and keep the answer concise unless detail is requested."
@@ -672,7 +672,7 @@ def _workspace_direct_modification_prompt(
         "allowed paths in the task packet. This mode may update ordinary documentation, tests, "
         "scripts, or repository configuration, but must not modify application frontend/backend "
         "code, .env files, database migrations, RequirementSpec, ProjectPlan, API contracts, or "
-        "other .xcodeagent workflow artifacts. Do not use task, write_todos, or subagents. Inspect "
+        "other .devagentstudio workflow artifacts. Do not use task, write_todos, or subagents. Inspect "
         "only relevant context, make the smallest change, and use proportionate existing checks. "
         "For documentation-only work, state why no command is necessary. Return exactly one JSON "
         "object using the SmallTask result contract.\n\n"

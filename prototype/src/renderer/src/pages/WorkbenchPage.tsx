@@ -281,8 +281,8 @@ function WorkbenchPage({
       setBackgroundTasksDrawer(null)
       setAuxiliaryDrawerMode(kind === 'external' ? 'external-apis' : 'data-sources')
     }
-    window.addEventListener('aistudio:prototype:open-data-sources', open)
-    return () => window.removeEventListener('aistudio:prototype:open-data-sources', open)
+    window.addEventListener('devagentstudio:prototype:open-data-sources', open)
+    return () => window.removeEventListener('devagentstudio:prototype:open-data-sources', open)
   }, [])
   /** 打开指定任务系统的队列抽屉，并互斥关闭任务管理抽屉。 */
   const openBackgroundTasksDrawer = (system: BackgroundTaskSystem): void => {
@@ -889,7 +889,7 @@ function WorkbenchPage({
               <span />
               <span />
             </div>
-            <div className={cx('workbench-entry-kicker')}>AISTUDIO WORKSPACE</div>
+            <div className={cx('workbench-entry-kicker')}>DEVAGENT STUDIO WORKSPACE</div>
             <h1>正在进入工作台</h1>
             <p>正在同步项目配置与页面设计状态</p>
             <div className={cx('workbench-entry-progress')} aria-hidden="true">

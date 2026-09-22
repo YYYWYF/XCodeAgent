@@ -1,6 +1,6 @@
-# XCodeAgent Workspace Bootstrap 实施方案
+# DevAgent Studio Workspace Bootstrap 实施方案
 
-> 目标：TechnicalPlan 确认后，由 XCodeAgent Backend 调用 Template Engine 获取完整模板 ZIP，安全物化到当前 Workspace，建立 Git 基线，并以 `.xcodeagent/template-state.json` 作为模板领域唯一持久化元数据。
+> 目标：TechnicalPlan 确认后，由 DevAgent Studio Backend 调用 Template Engine 获取完整模板 ZIP，安全物化到当前 Workspace，建立 Git 基线，并以 `.devagentstudio/template-state.json` 作为模板领域唯一持久化元数据。
 >
 > 本文分为两部分：
 >
@@ -43,7 +43,7 @@ ready_for_workbench
 2. Electron 承担模板 clone、分支选择和初始化，职责过重；
 3. 模板初始化、业务页面骨架、菜单/路由补丁混在同一阶段；
 4. `templateVariant=main|auth` 已成为 Readiness、BuildContext、BuildTaskPlanner、权限门禁和模板 Skill 的旧事实源；
-5. Template Engine 已引入 `TemplateState`，但 Engine Package、OpenAPI、Core 状态协议与 XCodeAgent 消费边界必须先冻结，才能切换运行路径。
+5. Template Engine 已引入 `TemplateState`，但 Engine Package、OpenAPI、Core 状态协议与 DevAgent Studio 消费边界必须先冻结，才能切换运行路径。
 
 目标架构：
 
@@ -51,7 +51,7 @@ ready_for_workbench
 Template Engine
     = 根据 RequestedConfig 生成完整模板工程 + TemplateState
 
-XCodeAgent Backend
+DevAgent Studio Backend
     = 请求模板、下载、校验、安全物化、Git baseline、生命周期和后续 Build 编排
 
 Electron
@@ -71,8 +71,8 @@ Agent
 6. ZIP 只进入 Backend，不经过 AG-UI / Electron；
 7. Backend 对 ZIP 做安全校验，并先解压到 staging；
 8. Bootstrap 只负责模板工程落地，不生成业务页面、菜单或业务路由；
-9. 模板领域只持久化 `.xcodeagent/template-state.json` 一个元数据文件；
-10. XCodeAgent 不修改 TemplateState 内容，仅负责校验、落盘、读取和后续 `/update` 回传；
+9. 模板领域只持久化 `.devagentstudio/template-state.json` 一个元数据文件；
+10. DevAgent Studio 不修改 TemplateState 内容，仅负责校验、落盘、读取和后续 `/update` 回传；
 11. Workspace 初始化为独立 Git Repository 并创建模板 baseline commit；
 12. Readiness、Build、权限投影、模板 Skill 全部从 TemplateState Capability 读取模板事实；
 13. Bootstrap 与应用删除具备完整异步取消、提交临界区、失败回滚和 Workspace Attach 中断收尾。
@@ -150,16 +150,16 @@ Bootstrap 不承担业务代码生成职责。
 
 正式原则：
 
-> `.xcodeagent/template-state.json` 是 Workspace 中唯一持久化的模板领域元数据文件。
+> `.devagentstudio/template-state.json` 是 Workspace 中唯一持久化的模板领域元数据文件。
 
 所有权：
 
 ```text
 Template Engine Owns Schema + Content
-XCodeAgent Owns Persistence + Consumption
+DevAgent Studio Owns Persistence + Consumption
 ```
 
-XCodeAgent 可以：
+DevAgent Studio 可以：
 
 - 校验 Schema；
 - 原子持久化；
@@ -168,23 +168,23 @@ XCodeAgent 可以：
 - 读取 managed / migrations；
 - 在后续 `/update` 时原样回传 current TemplateState。
 
-XCodeAgent 不可以：
+DevAgent Studio 不可以：
 
 - 自行新增字段；
 - 修改 requested / effective；
 - 修改 managed 状态；
 - 自行推进 `templateRevision`；
 - 自行声明 migration；
-- 加入 `gitBaselineCommit` 等 XCodeAgent 私有字段。
+- 加入 `gitBaselineCommit` 等 DevAgent Studio 私有字段。
 
 不再保留 `template-generation-manifest.json`。
 
 | 事实 | 唯一来源 |
 |---|---|
-| 模板 revision | `.xcodeagent/template-state.json` |
-| Requested / Effective Capability | `.xcodeagent/template-state.json` |
-| 模板 managed / migrations | `.xcodeagent/template-state.json` |
-| 初始化是否成功 | `.xcodeagent/application-lifecycle.json` |
+| 模板 revision | `.devagentstudio/template-state.json` |
+| Requested / Effective Capability | `.devagentstudio/template-state.json` |
+| 模板 managed / migrations | `.devagentstudio/template-state.json` |
+| 初始化是否成功 | `.devagentstudio/application-lifecycle.json` |
 | Git 是否初始化 | `.git` / Git 命令 |
 | Workspace 是否物化 | Workspace filesystem |
 | Bootstrap 实时进度 | AG-UI |
@@ -202,13 +202,13 @@ V1 `/v1/generate` ZIP 固定为：
 template-package.zip
 ├── frontend/
 ├── backend/
-└── .xcodeagent/
+└── .devagentstudio/
     └── template-state.json
 ```
 
 `frontend/` 与 `backend/` 是 V1 的最小必需根，但 ZIP 可携带未来模板新增的其它安全文件或目录。
 
-XCodeAgent Materializer 不维护模板文件 allow-list；它对已通过 ZIP 安全校验的条目执行通用完整物化：
+DevAgent Studio Materializer 不维护模板文件 allow-list；它对已通过 ZIP 安全校验的条目执行通用完整物化：
 
 ```python
 for entry in safe_zip_entries_except_template_state:
@@ -216,17 +216,17 @@ for entry in safe_zip_entries_except_template_state:
 verify_every_file_by_relative_path_and_sha256()
 ```
 
-因此未来新增 `infra/`、根级说明文件或 `.xcodeagent/template-contracts/**` 不需要修改 XCodeAgent 的模板内容 allow-list。`frontend/`、`backend/` 仍由 Package 校验保证存在；平台保留 `.git/**`、`.xcodeagent/bootstrap-staging/**`，且 `.xcodeagent/template-state.json` 继续只由 XCodeAgent 写回。
+因此未来新增 `infra/`、根级说明文件或 `.devagentstudio/template-contracts/**` 不需要修改 DevAgent Studio 的模板内容 allow-list。`frontend/`、`backend/` 仍由 Package 校验保证存在；平台保留 `.git/**`、`.devagentstudio/bootstrap-staging/**`，且 `.devagentstudio/template-state.json` 继续只由 DevAgent Studio 写回。
 
-### 1.5.2 `.xcodeagent` 平台保留路径
+### 1.5.2 `.devagentstudio` 平台保留路径
 
-`.xcodeagent/template-state.json` 不从 ZIP 直接提交，而由 XCodeAgent 原子写入唯一 State：
+`.devagentstudio/template-state.json` 不从 ZIP 直接提交，而由 DevAgent Studio 原子写入唯一 State：
 
 ```text
-.xcodeagent/template-state.json
+.devagentstudio/template-state.json
 ```
 
-其它 `.xcodeagent/**` 文件（例如模板契约）与普通 ZIP 文件一样完整物化；若其目标已存在则整个事务失败并回滚。禁止 `.git/**` 与 `.xcodeagent/bootstrap-staging/**`，防止模板覆盖平台事务元数据。
+其它 `.devagentstudio/**` 文件（例如模板契约）与普通 ZIP 文件一样完整物化；若其目标已存在则整个事务失败并回滚。禁止 `.git/**` 与 `.devagentstudio/bootstrap-staging/**`，防止模板覆盖平台事务元数据。
 
 ### 1.5.3 Engine 契约一致性
 
@@ -252,16 +252,16 @@ Engine OpenAPI TemplateState Schema
         ↓
 Core PlanResult.nextTemplateState
         ↓
-PackageBuilder 写入 .xcodeagent/template-state.json
+PackageBuilder 写入 .devagentstudio/template-state.json
         ↓
 Stage2 / Stage3 Contract Tests
         ↓
-XCodeAgent 稳定消费
+DevAgent Studio 稳定消费
 ```
 
 最终 Schema 以 Engine OpenAPI 为唯一协议。
 
-XCodeAgent 公共读取层：
+DevAgent Studio 公共读取层：
 
 ```text
 Backend/app/services/template_state.py
@@ -273,7 +273,7 @@ Backend/app/services/template_state.py
 
 ## 1.7 RequestedConfig 编译规则
 
-XCodeAgent 只表达 Application Requested Intent，不做 Capability 依赖解析。
+DevAgent Studio 只表达 Application Requested Intent，不做 Capability 依赖解析。
 
 | Application | RequestedConfig |
 |---|---|
@@ -315,7 +315,7 @@ template_variant
 所有模板能力统一读取：
 
 ```text
-.xcodeagent/template-state.json
+.devagentstudio/template-state.json
         ↓
 TemplateState.effective.capabilities
 ```
@@ -428,7 +428,7 @@ ZIP 安全必须拒绝：
 frontend 不存在
 backend 不存在
 .git 不存在
-.xcodeagent/template-state.json 不存在
+.devagentstudio/template-state.json 不存在
 ```
 
 ### Preparation
@@ -463,8 +463,8 @@ readiness
 
 ```text
 git init
-git config --local user.name XcodeAgent
-git config --local user.email xcodeagent@local
+git config --local user.name DevAgentStudio
+git config --local user.email devagentstudio@local
 写 .git/info/exclude
 git add
 git commit
@@ -476,7 +476,7 @@ Baseline commit：
 chore: initialize workspace from template
 ```
 
-`.xcodeagent/` 不进入 baseline。
+`.devagentstudio/` 不进入 baseline。
 
 ---
 
@@ -521,7 +521,7 @@ Backend 不在启动时扫描 Workspace，也不恢复 Bootstrap。应用打开�
 cleanup frontend/
 cleanup backend/
 cleanup .git/
-cleanup .xcodeagent/template-state.json
+cleanup .devagentstudio/template-state.json
 cleanup staging
         ↓
 verify clean
@@ -592,7 +592,7 @@ main/auth branch selection logic
 | 阶段 | 目标 | 是否改变正式路径 |
 |---|---|---|
 | 1 | 冻结 Engine Package + TemplateState | 否 |
-| 2 | 建 XCodeAgent 契约基础层 | 否 |
+| 2 | 建 DevAgent Studio 契约基础层 | 否 |
 | 3 | 建 Workspace 事务 / Git / Recovery | 否 |
 | 4 | 准备 Consumer 与平台投影 | 否 |
 | 5 | 完成 Backend Bootstrap 集成 | 默认否 |
@@ -620,7 +620,7 @@ Contract Tests
 
 ### 自动化验收
 
-- ZIP 只含 `frontend/`、`backend/`、`.xcodeagent/template-state.json`；
+- ZIP 只含 `frontend/`、`backend/`、`.devagentstudio/template-state.json`；
 - TemplateState Core/OpenAPI/ZIP 一致；
 - 缺字段/非法字段拒绝；
 - Stage2/Stage3 同 Schema。
@@ -641,7 +641,7 @@ C. login=false, authorization=true
 unzip -l template-package.zip
 ```
 
-C 场景检查 Requested 不被 XCodeAgent/调用方提前补 login，但 Effective 可由 Engine 自动补齐。
+C 场景检查 Requested 不被 DevAgent Studio/调用方提前补 login，但 Effective 可由 Engine 自动补齐。
 
 ### 退出标准
 
@@ -652,7 +652,7 @@ C 场景检查 Requested 不被 XCodeAgent/调用方提前补 login，但 Effect
 
 ---
 
-## 2.3 阶段 2：建设 XCodeAgent 契约基础层
+## 2.3 阶段 2：建设 DevAgent Studio 契约基础层
 
 ### 改动项
 
@@ -683,14 +683,14 @@ Backend/app/config.py
 - TechnicalPlan / application 冲突；
 - valid/invalid TemplateState；
 - 非法顶层 root；
-- 非法 `.xcodeagent/**`；
+- 非法 `.devagentstudio/**`；
 - `.git/**`；
 - 路径穿越、symlink、重复、大小写冲突、配额；
 - streaming timeout / oversized download。
 
 ### 人工验收
 
-正常 ZIP、`scripts/`、`.xcodeagent/foo.json`、`.git/config`、`../escape` 分别跑 Validator。
+正常 ZIP、`scripts/`、`.devagentstudio/foo.json`、`.git/config`、`../escape` 分别跑 Validator。
 
 ### 退出标准
 
@@ -1056,11 +1056,11 @@ First Build E2E
 
 ### Engine
 
-- [ ] ZIP 顶层只允许 `frontend/`、`backend/`、`.xcodeagent/`；
-- [ ] `.xcodeagent` 只允许 `template-state.json`；
+- [ ] ZIP 顶层只允许 `frontend/`、`backend/`、`.devagentstudio/`；
+- [ ] `.devagentstudio` 只允许 `template-state.json`；
 - [ ] TemplateState Core/OpenAPI/Package 一致。
 
-### XCodeAgent
+### DevAgent Studio
 
 - [ ] 唯一模板元数据为 TemplateState；
 - [ ] 无 generation manifest / persistent journal；
@@ -1079,7 +1079,7 @@ First Build E2E
 
 - [ ] 独立 Git repo；
 - [ ] baseline clean；
-- [ ] `.xcodeagent` 不入 baseline；
+- [ ] `.devagentstudio` 不入 baseline；
 - [ ] Frontend 不直接连接 Template Service；
 - [ ] Electron 无模板 clone。
 
@@ -1093,7 +1093,7 @@ First Build E2E
 
 # 第三章 本地回检后的 Runtime 收口实施方案
 
-> 本章记录 2026-09-07 对 XCodeAgent 本地实现的回检结果，并把第二章尚未完成的
+> 本章记录 2026-09-07 对 DevAgent Studio 本地实现的回检结果，并把第二章尚未完成的
 > Runtime Cutover 拆成可独立开发、可独立验收的步骤。本章不改变第一章的目标架构；
 > 若第二章的通用阶段描述与本章的本地实施顺序冲突，以本章为当前仓库的执行顺序。
 
@@ -1104,13 +1104,13 @@ First Build E2E
 当前仓库已经具备以下新链路基础：
 
 - `WorkspaceBootstrapService` 已能调用 Template Engine、下载 ZIP、校验 Package、物化 Workspace 并建立 Git baseline；
-- `.xcodeagent/template-state.json` 的基础读取层已经存在；
+- `.devagentstudio/template-state.json` 的基础读取层已经存在；
 - `TemplateMutationCoordinator` 已覆盖 Bootstrap、删除和 Workspace Attach 的进程内协调；
 - Renderer 的正式模板生成入口已经改为触发 `bootstrap_template_generation`。
 
 但正式 Runtime 尚未完成 Cutover：
 
-- Build 仍从 `.xcodeagent/template-generation-manifest.json` 读取 `templateVariant`；
+- Build 仍从 `.devagentstudio/template-generation-manifest.json` 读取 `templateVariant`；
 - BuildContext、BuildTaskPlan、Planner、Frontend Agent Prompt 和权限投影仍使用 `template_variant=main|auth`；
 - Electron 仍保留 `workspace:clone-template`、模板仓库 URL、Git clone 子进程管理和 main/auth 分支选择；
 - Lifecycle AG-UI 仍接受 `prepare_template_generation` 和 `complete_template_generation`；
@@ -1166,7 +1166,7 @@ Build DAG 当前契约同步升级为 `build-dag.v4`，不兼容读取或回填 
 ```json
 {
   "template_context": {
-    "state_path": ".xcodeagent/template-state.json",
+    "state_path": ".devagentstudio/template-state.json",
     "template_revision": "engine-owned-revision",
     "effective_capabilities": {
       "login": { "enabled": true },
@@ -1222,7 +1222,7 @@ AuthConstants 三部分；按 current-contract-only 规则不保留旧字段别�
 ### 退出标准
 
 - [ ] 后续模块只需依赖统一 TemplateState 读取层；
-- [ ] XCodeAgent 没有与 Engine OpenAPI 冲突的第二套 Schema；
+- [ ] DevAgent Studio 没有与 Engine OpenAPI 冲突的第二套 Schema；
 - [ ] TemplateState Consumer 测试全部通过。
 
 ## 3.4 步骤 2：补齐事务内 Bootstrap Readiness
@@ -1253,7 +1253,7 @@ Readiness 必须检查：
 8. `.git` 为当前 Workspace 的独立仓库；
 9. `git rev-parse HEAD` 成功；
 10. `git status --porcelain` 为空；
-11. `.xcodeagent` 未进入 baseline；
+11. `.devagentstudio` 未进入 baseline；
 12. `bootstrap-staging` 无残留。
 
 Readiness 失败必须在 Materializer 事务中抛出，使本次 frontend、backend、`.git`、
@@ -1278,10 +1278,10 @@ Bootstrap 只允许 lifecycle 处于 `GENERATING_APPLICATION_TEMPLATE_FILES` 时
 ```bash
 git -C <workspace> rev-parse HEAD
 git -C <workspace> status --porcelain
-git -C <workspace> ls-files .xcodeagent
+git -C <workspace> ls-files .devagentstudio
 ```
 
-预期分别为：存在 HEAD、无 dirty 输出、`.xcodeagent` 无 tracked 文件。
+预期分别为：存在 HEAD、无 dirty 输出、`.devagentstudio` 无 tracked 文件。
 
 ### 退出标准
 
@@ -1334,7 +1334,7 @@ git -C <workspace> ls-files .xcodeagent
 6. Build DAG 切换为 `build-dag.v4` 并持久化 `template_context`；
 7. Build Run 重读 TemplateState，要求 revision 和 effective capabilities 与确认 DAG 完全一致；
 8. Frontend Agent Prompt 根据 authorization effective capability 决定是否提供 Permission/RESOURCES 指令；
-9. 前后端模板 Skills 改读 `/.xcodeagent/template-state.json`，删除远程 clone、旧 manifest、
+9. 前后端模板 Skills 改读 `/.devagentstudio/template-state.json`，删除远程 clone、旧 manifest、
    main/auth 隔离和预建 placeholder/BIZ_MENUS 描述；
 10. 保留 auth 领域模块的真实保护边界，不能把“删除模板分支”扩大为允许 Agent 修改权限基础设施。
 
@@ -1503,7 +1503,7 @@ Application deletion 只使用 Backend `TemplateMutationCoordinator` 和当前�
 docs/CODEBASE_INDEX.md
 docs/WORKFLOW.md
 docs/AUTH.md
-docs/XCODEAGENT_COMPLETE_WORKFLOW.md
+docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md
 docs/DAG_TASK_GENERATION_AND_VALIDATION_MININAL_CHANGE_PLAN.md
 docs/DAG_TASK_GENERATION_UNIT_CANDIDATE_PLAN.md
 docs/APPLICATION_TEMPLATE_GENERATION_STATUS_AND_PLAN.md
@@ -1552,7 +1552,7 @@ Java `src/main`、Git 默认分支、数据源 ID，以及 `auth` 认证/权限�
 ### 2026-09-08 文档清理记录
 
 - 已同步 WORKFLOW、AUTH、两份 DAG 方案与 CODEBASE_INDEX 的模板能力、Readiness、投影时序和 Attach 边界。
-- XCODEAGENT_COMPLETE_WORKFLOW 与 APPLICATION_TEMPLATE_GENERATION_STATUS_AND_PLAN 保留为明确标记的历史快照；不作为当前实现依据。
+- DEVAGENTSTUDIO_COMPLETE_WORKFLOW 与 APPLICATION_TEMPLATE_GENERATION_STATUS_AND_PLAN 保留为明确标记的历史快照；不作为当前实现依据。
 - 当前契约文档中，上述八个旧标识符已无命中；本重构计划的删除清单和两份历史资料作为背景保留。
 - 源码审计仍发现 `graph/subgraphs/build.py` 显式拒绝旧模板字段，生命周期测试仍断言旧 manifest 文件不存在。这不是兼容读取，但尚不满足本节“正式源码零命中”的字面标准；本轮只清理文档，未改动相关代码，退出项暂不勾选。
 - 本轮只做文档静态检查；步骤 9 的三类应用 E2E 与人工启动验收仍须独立完成。

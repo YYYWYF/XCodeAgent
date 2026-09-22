@@ -1,6 +1,6 @@
 // 演示应用的项目目录（对齐真实工程：每个应用一个独立项目目录，文档与代码同树）。
 // 目录名与 mock 应用 workspaceRoot 末级一致；用户可见的正式文档统一收在 docs/
-// （与 frontend/backend 平级），不放进 .aistudio 内部工件目录。
+// （与 frontend/backend 平级），不放进 .devagentstudio 内部工件目录。
 
 export type WorkspaceSourceFile = {
   path: string
@@ -69,7 +69,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
 const routerTsx = `import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
-// 路由表：应用页面由 AIStudio 按产物生成，新增应用页面自动追加到此处。
+// 路由表：应用页面由 DevAgent Studio 按产物生成，新增应用页面自动追加到此处。
 const RecheckIntroduction = lazy(() => import('./pages/recheck-introduction'))
 const MyRechecks = lazy(() => import('./pages/my-rechecks'))
 
@@ -100,7 +100,7 @@ export async function fetchMyRechecks(params: { status?: string; page: number; s
 const backendPom = `<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.aistudio</groupId>
+  <groupId>com.devagentstudio</groupId>
   <artifactId>wh-branch-pms</artifactId>
   <version>1.0.0</version>
   <parent>

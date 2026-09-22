@@ -105,13 +105,13 @@ type SharedTaskStoreState = {
 // v3：预置版本用例基线统一由 preloadPresetTestCaseTasks 播种，换键弃掉旧口径的
 // localStorage 流水，保证演示基线与 lifecycle 状态一致。
 const STORAGE_KEYS: Record<BackgroundTaskSystem, string> = {
-  async: 'aistudio:prototype:async-tasks:v3',
-  tide: 'aistudio:prototype:tide-tasks:v3'
+  async: 'devagentstudio:prototype:async-tasks:v3',
+  tide: 'devagentstudio:prototype:tide-tasks:v3'
 }
 
 const WINDOW_SLOT: Record<BackgroundTaskSystem, string> = {
-  async: '__aiStudioAsyncTaskStore__',
-  tide: '__aiStudioTideTaskStore__'
+  async: '__devAgentStudioAsyncTaskStore__',
+  tide: '__devAgentStudioTideTaskStore__'
 }
 
 /** 读取某套系统的存储单例；首次访问时惰性创建。 */

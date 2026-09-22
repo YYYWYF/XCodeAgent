@@ -354,7 +354,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 "lockfileVersion: '9.0'",
                 encoding="utf-8",
             )
-            application_dir = Path(workspace) / ".xcodeagent"
+            application_dir = Path(workspace) / ".devagentstudio"
             application_dir.mkdir()
             (application_dir / "application.json").write_text(
                 '{"datasource":{"type":"static"}}',
@@ -520,7 +520,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
             backend = root / "Backend"
-            application_dir = root / ".xcodeagent"
+            application_dir = root / ".devagentstudio"
             backend.mkdir()
             application_dir.mkdir()
             (application_dir / "application.json").write_text(
@@ -554,7 +554,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
             backend = root / "backend"
-            application_dir = root / ".xcodeagent"
+            application_dir = root / ".devagentstudio"
             backend.mkdir()
             application_dir.mkdir()
             (application_dir / "application.json").write_text(
@@ -600,7 +600,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             root = Path(workspace)
             backend = root / "Backend"
             tests = backend / "src" / "test" / "java" / "example"
-            application_dir = root / ".xcodeagent"
+            application_dir = root / ".devagentstudio"
             tests.mkdir(parents=True)
             application_dir.mkdir()
             (application_dir / "application.json").write_text(
@@ -652,7 +652,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             root = Path(workspace)
             backend = root / "backend"
             tests = backend / "src" / "test" / "java" / "example"
-            application_dir = root / ".xcodeagent"
+            application_dir = root / ".devagentstudio"
             tests.mkdir(parents=True)
             application_dir.mkdir()
             (application_dir / "application.json").write_text(
@@ -707,7 +707,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             root = Path(workspace)
             backend = root / "backend"
             tests = backend / "src" / "test" / "java" / "example"
-            application_dir = root / ".xcodeagent"
+            application_dir = root / ".devagentstudio"
             tests.mkdir(parents=True)
             application_dir.mkdir()
             (application_dir / "application.json").write_text(
@@ -787,8 +787,8 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 stderr_log.read_text(encoding="utf-8"),
                 "network timeout",
             )
-            self.assertTrue(install["execution"]["stdout_log_virtual"].startswith("/.xcodeagent/"))
-            self.assertTrue(install["execution"]["stderr_log_virtual"].startswith("/.xcodeagent/"))
+            self.assertTrue(install["execution"]["stdout_log_virtual"].startswith("/.devagentstudio/"))
+            self.assertTrue(install["execution"]["stderr_log_virtual"].startswith("/.devagentstudio/"))
             self.assertEqual(install["execution"]["stdout_tail"], "安装中")
             self.assertEqual(install["execution"]["stderr_tail"], "network timeout")
 

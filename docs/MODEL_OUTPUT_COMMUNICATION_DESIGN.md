@@ -225,8 +225,8 @@ type ModelOutput = {
 | 最终用户文本/Markdown | `TEXT_MESSAGE_START/CONTENT/END` | 无 | `text` block，Markdown renderer | transcript |
 | 普通模型中间文本，需向用户展示 | 独立 `TEXT_MESSAGE_*`，按 messageId | 可关联 activity id | 流式 text block | transcript |
 | 可见 reasoning 摘要 | `REASONING_START` + `REASONING_MESSAGE_*` + `REASONING_END` | 无 | 默认折叠 reasoning block | transcript/process |
-| 任意 JSON object/array | `ACTIVITY_SNAPSHOT`，`activityType=xcodeagent.model-output.json.v1` | 业务字段用 `STATE_DELTA` | JSON tree + pretty/raw | transcript + artifact when large |
-| RequirementSpec/ProjectPlan/TestReport 等领域产物 | `ACTIVITY_SNAPSHOT`，`activityType=xcodeagent.artifact.v1` | `STATE_DELTA` 只写 artifact ref | artifact card + preview | artifact store |
+| 任意 JSON object/array | `ACTIVITY_SNAPSHOT`，`activityType=devagentstudio.model-output.json.v1` | 业务字段用 `STATE_DELTA` | JSON tree + pretty/raw | transcript + artifact when large |
+| RequirementSpec/ProjectPlan/TestReport 等领域产物 | `ACTIVITY_SNAPSHOT`，`activityType=devagentstudio.artifact.v1` | `STATE_DELTA` 只写 artifact ref | artifact card + preview | artifact store |
 | Agent/SubAgent 长寿命进度 | `ACTIVITY_SNAPSHOT/DELTA` | phase 用 `STEP_*` | hierarchy/timeline | process projection |
 | 工具调用参数 | `TOOL_CALL_START/ARGS/END` | 无 | tool card args | transcript/process |
 | 工具结果 text | `TOOL_CALL_RESULT` | activity 状态完成 | tool result text | transcript/process |
@@ -238,7 +238,7 @@ type ModelOutput = {
 | 成功完成 | `RUN_FINISHED` success outcome | 可选 terminal state snapshot | final status | checkpoint |
 | 断线/重连 | `MESSAGES_SNAPSHOT` + `STATE_SNAPSHOT` | 后续 delta | 恢复现有 blocks | client projection |
 | 图片/文件等未来多模态 | typed activity/artifact event | capability 声明 MIME | media/file block | artifact store |
-| 未知事件/内容 | `RAW` 或 versioned `CUSTOM xcodeagent.content.v1` | 无 | UnknownBlock | diagnostic ledger |
+| 未知事件/内容 | `RAW` 或 versioned `CUSTOM devagentstudio.content.v1` | 无 | UnknownBlock | diagnostic ledger |
 
 ### 6.1 为什么 JSON 不直接使用文本事件
 
@@ -260,7 +260,7 @@ State 是机器同步协议，不是消息协议。前端收到 state 不代表 
 
 ```json
 {
-  "name": "xcodeagent.content.v1",
+  "name": "devagentstudio.content.v1",
   "value": {
     "schemaVersion": 1,
     "eventId": "evt-...",

@@ -13,7 +13,7 @@
 | 职责 | 文件 | 代码生成节点是否常规修改 |
 |---|---|---|
 | 页面资源键契约 | `src/constants/resources.ts` | 是，但仅添加 manifest 已明确绑定的资源键 |
-| 页面组件导入与页面配置 | `src/constants/routes.tsx` | 是，仅在 XCODEAGENT 插槽内 |
+| 页面组件导入与页面配置 | `src/constants/routes.tsx` | 是，仅在 DEVAGENTSTUDIO 插槽内 |
 | 页面配置类型 | `src/typings/routes.ts` | 否，除非调整配置协议 |
 | 路由守卫与菜单派生 | `src/utils/route.tsx` | 否 |
 | 权限菜单状态与首页落点 | `src/hooks/usePageMenus.ts` | 否 |
@@ -27,21 +27,21 @@
 先在 `src/pages/` 创建页面组件，然后只在 `src/constants/routes.tsx` 的两个插槽中追加导入和配置：
 
 ```tsx
-// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START
+// DEVAGENTSTUDIO_BUSINESS_ROUTE_IMPORTS_START
 import AssetListPage from '@/pages/AssetListPage';
-// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END
+// DEVAGENTSTUDIO_BUSINESS_ROUTE_IMPORTS_END
 ```
 
 ### 未声明权限绑定的普通页面
 
 ```tsx
-// XCODEAGENT_BUSINESS_ROUTES_START
+// DEVAGENTSTUDIO_BUSINESS_ROUTES_START
 {
   path: '/page/assets',
   menu: { key: 'assets', label: '资产管理' },
   element: <AssetListPage />,
 },
-// XCODEAGENT_BUSINESS_ROUTES_END
+// DEVAGENTSTUDIO_BUSINESS_ROUTES_END
 ```
 
 该页面会注册路由并显示菜单，但不会被 `RouteGuard` 包裹，也不会因权限加载或资源集合缺失而隐藏。

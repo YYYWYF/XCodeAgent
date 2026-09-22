@@ -514,9 +514,9 @@ def collect_unit_test_targets(state: ProjectState) -> dict[str, Any]:
         "build_execution_scope": state.get("build_execution_scope", {}),
         "build_execution_slice": state.get("build_execution_slice", {}),
         "build_task_plan_path": state.get("build_task_plan_path")
-        or ".xcodeagent/plans/build-task-plan.json",
+        or ".devagentstudio/plans/build-task-plan.json",
         "technical_plan_json_path": state.get("technical_plan_json_path")
-        or ".xcodeagent/plans/technical-plan.json",
+        or ".devagentstudio/plans/technical-plan.json",
     }
     return {
         "unit_test_generation_context": context,

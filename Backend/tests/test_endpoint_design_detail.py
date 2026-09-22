@@ -35,7 +35,7 @@ class EndpointDesignDetailTests(unittest.TestCase):
             )
             self.assertEqual(detail["status"], "pending")
             self.assertIsNone(detail["design"])
-            self.assertFalse((Path(workspace) / ".xcodeagent").exists())
+            self.assertFalse((Path(workspace) / ".devagentstudio").exists())
 
     def test_stale_design_remains_readable(self) -> None:
         """上游指纹变化时保留旧设计供只读查看，并返回 stale 原因。"""
@@ -115,7 +115,7 @@ class EndpointDesignDetailTests(unittest.TestCase):
         """保存独立 API 映射时不得改写工作区唯一的 Formal DAG 计划。"""
 
         with tempfile.TemporaryDirectory() as workspace:
-            plan_path = Path(workspace) / ".xcodeagent" / "plans" / "build-task-plan.json"
+            plan_path = Path(workspace) / ".devagentstudio" / "plans" / "build-task-plan.json"
             plan_path.parent.mkdir(parents=True)
             formal_plan = {
                 "status": "ready",

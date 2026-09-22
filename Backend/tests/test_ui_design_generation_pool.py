@@ -61,7 +61,7 @@ class GeneratePageEntryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = TemporaryDirectory()
         self.workspace = self.tmp.name
-        self.project_dir = str(Path(self.workspace) / ".xcodeagent" / "ui-design")
+        self.project_dir = str(Path(self.workspace) / ".devagentstudio" / "ui-design")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -123,7 +123,7 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = TemporaryDirectory()
         self.workspace = self.tmp.name
-        self.project_dir = str(Path(self.workspace) / ".xcodeagent" / "ui-design")
+        self.project_dir = str(Path(self.workspace) / ".devagentstudio" / "ui-design")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()

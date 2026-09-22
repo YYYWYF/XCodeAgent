@@ -104,7 +104,7 @@ export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX
   }
 
   const projectDirectoryCanBeDeleted = Boolean(
-    applicationToDelete?.workspaceRoot && window.aiStudio?.applications.deleteProject
+    applicationToDelete?.workspaceRoot && window.devAgentStudio?.applications.deleteProject
   )
 
   return (
@@ -200,7 +200,7 @@ export default function WelcomeRecentProjects({ onOpenApplication }: Props): JSX
         </Radio.Group>
         {!projectDirectoryCanBeDeleted ? (
           <p className={cx('welcome-project-delete-hint')}>
-            仅 AIStudio 创建且带有项目标识的本地目录可以在此删除。
+            仅 DevAgent Studio 创建且带有项目标识的本地目录可以在此删除。
           </p>
         ) : null}
       </Modal>

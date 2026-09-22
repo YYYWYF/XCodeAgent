@@ -84,7 +84,7 @@ class CodeReviewPnpmToolTests(unittest.TestCase):
             frontend = root / "frontend"
             frontend.mkdir()
             (frontend / "package.json").write_text("{}", encoding="utf-8")
-            (root / ".xcodeagent").symlink_to(Path(outside), target_is_directory=True)
+            (root / ".devagentstudio").symlink_to(Path(outside), target_is_directory=True)
             tool = create_code_review_pnpm_install_tool(workspace)
 
             with patch(

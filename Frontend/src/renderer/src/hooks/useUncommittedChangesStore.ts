@@ -72,7 +72,7 @@ export function useUncommittedChangesStore(
 
   return {
     snapshot,
-    // 计数只算业务代码：`.xcodeagent` 下的规划产物与状态快照会随每个设计步骤变化，
+    // 计数只算业务代码：`.devagentstudio` 下的规划产物与状态快照会随每个设计步骤变化，
     // 把它们算进来会让角标在用户一行业务代码都没写时就亮起、并一直涨。
     count: snapshot?.codePaths.length ?? 0,
     refresh,

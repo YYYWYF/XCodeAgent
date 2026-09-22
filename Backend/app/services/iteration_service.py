@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import shutil
 from datetime import datetime, timezone
@@ -37,7 +39,7 @@ class StartIterationResult(BaseModel):
     cleared: bool
 
 
-# 发起新迭代时清空的 .xcodeagent 子目录（如果存在）。
+# 发起新迭代时清空的 .devagentstudio 子目录（如果存在）。
 # 只登记**平台自己产生**的规划/运行态目录；未列名的一律保留。
 _CLEARABLE_DIRS = {
     "specs",
@@ -53,7 +55,7 @@ _CLEARABLE_DIRS = {
     "bootstrap-staging",
 }
 
-# 发起新迭代时清空的 .xcodeagent 顶层文件（除保留项外）。
+# 发起新迭代时清空的 .devagentstudio 顶层文件（除保留项外）。
 _CLEARABLE_FILES = {
     "application-lifecycle.json",
     "application-lifecycle.json.bak",
@@ -61,7 +63,7 @@ _CLEARABLE_FILES = {
 
 
 def start_iteration(request: StartIterationRequest) -> StartIterationResult:
-    """清空 .xcodeagent 规划产物，保留应用工程本体与迭代上下文。
+    """清空 .devagentstudio 规划产物，保留应用工程本体与迭代上下文。
 
     **不重建工程**：新迭代是在已有代码上继续加功能，因此 frontend/backend/.git 与
     template-state.json 一律保留——那份代码（模板 + 历次迭代累积的业务代码）就是产品本身。
@@ -76,9 +78,9 @@ def start_iteration(request: StartIterationRequest) -> StartIterationResult:
     """
 
     workspace_root = _resolve_workspace_root(request.workspace_root)
-    xcodeagent_dir = workspace_root / ".xcodeagent"
-    if not xcodeagent_dir.is_dir():
-        raise IterationError("工作区缺少 .xcodeagent 目录，无法发起新迭代。")
+    devagentstudio_dir = workspace_root / WORKSPACE_ARTIFACT_DIR
+    if not devagentstudio_dir.is_dir():
+        raise IterationError("工作区缺少 .devagentstudio 目录，无法发起新迭代。")
 
     # 先结束上一轮遗留的工作台 execution 并取消在途 run，
     # 避免旧 workflow 持续推送 lifecycle 事件把界面拉回验收阶段。
@@ -87,7 +89,7 @@ def start_iteration(request: StartIterationRequest) -> StartIterationResult:
     # 再停预览，且必须早于任何文件清理（见 _stop_workspace_preview 的说明）。
     _stop_workspace_preview(workspace_root)
 
-    cleared = _clear_iteration_artifacts(xcodeagent_dir)
+    cleared = _clear_iteration_artifacts(devagentstudio_dir)
 
     return StartIterationResult(
         workspaceRoot=str(workspace_root),
@@ -99,7 +101,7 @@ def _stop_workspace_preview(workspace_root: Path) -> None:
     """停止工作区预览进程；必须早于本次迭代的任何文件清理。
 
     预览前端以 `<workspace>/frontend` 为工作目录运行，PID 记录在
-    `.xcodeagent/runtime/launch/frontend.pid`。清空 `.xcodeagent` 会连这个 PID 文件一起删掉，
+    `.devagentstudio/runtime/launch/frontend.pid`。清空 `.devagentstudio` 会连这个 PID 文件一起删掉，
     之后再想停就找不到进程；而仍在运行的 Vite 会用 `mkdir(recursive)` 重建
     `frontend/.vite/deps`，让下一次 Bootstrap 的前置校验误判成"已存在受管产物：frontend"
     而拒绝生成模板——用户看到的就是"确认保存"后报错、规划会话终止。
@@ -139,18 +141,18 @@ def generate_agents_context(
     version_label: str,
     description: str,
 ) -> None:
-    """发布版本时生成/追加 .xcodeagent/AGENTS.md 迭代上下文总结。
+    """发布版本时生成/追加 .devagentstudio/AGENTS.md 迭代上下文总结。
 
     读取当前 specs/plans 产物，提取摘要追加到 AGENTS.md。
     如果文件已存在（之前迭代生成过），追加新段落；否则新建。
     """
 
     root = Path(workspace_root).expanduser().resolve()
-    xcodeagent = root / ".xcodeagent"
-    agents_md = xcodeagent / "AGENTS.md"
+    devagentstudio = root / WORKSPACE_ARTIFACT_DIR
+    agents_md = devagentstudio / "AGENTS.md"
 
     section = _build_iteration_section(
-        xcodeagent, version_label=version_label, description=description
+        devagentstudio, version_label=version_label, description=description
     )
 
     if agents_md.exists():
@@ -161,12 +163,12 @@ def generate_agents_context(
         agents_md.write_text(header + section, encoding="utf-8")
 
 
-def _clear_iteration_artifacts(xcodeagent_dir: Path) -> bool:
+def _clear_iteration_artifacts(devagentstudio_dir: Path) -> bool:
     """删除本轮的规划与运行态产物，**未列名的一律保留**。
 
-    这里刻意不做"未知条目一律删除"的兜底：`.xcodeagent` 同时承载平台数据与**模板契约**
-    （见 `materializer._materialization_targets`，模板 ZIP 可交付任意 `.xcodeagent/<子项>`，
-    例如 `.xcodeagent/template-contracts/route-projector.json`）。新迭代沿用已有工程、
+    这里刻意不做"未知条目一律删除"的兜底：`.devagentstudio` 同时承载平台数据与**模板契约**
+    （见 `materializer._materialization_targets`，模板 ZIP 可交付任意 `.devagentstudio/<子项>`，
+    例如 `.devagentstudio/template-contracts/route-projector.json`）。新迭代沿用已有工程、
     不再重新物化，被删掉的模板契约就没有任何东西能把它补回来——构建期会以
     "模板缺少 Route Projector Descriptor" 这类难以定位的错误暴露出来。
 
@@ -175,7 +177,7 @@ def _clear_iteration_artifacts(xcodeagent_dir: Path) -> bool:
     """
 
     cleared_any = False
-    for entry in xcodeagent_dir.iterdir():
+    for entry in devagentstudio_dir.iterdir():
         name = entry.name
         if entry.is_dir() and name in _CLEARABLE_DIRS:
             shutil.rmtree(entry, ignore_errors=True)
@@ -187,7 +189,7 @@ def _clear_iteration_artifacts(xcodeagent_dir: Path) -> bool:
 
 
 def _build_iteration_section(
-    xcodeagent: Path,
+    devagentstudio: Path,
     *,
     version_label: str,
     description: str,
@@ -202,7 +204,7 @@ def _build_iteration_section(
         lines.append("")
 
     # —— 应用配置（application.json）——
-    app_config = _load_json(xcodeagent / "application.json")
+    app_config = _load_json(devagentstudio / "application.json")
     if app_config:
         lines.append("### 应用现状")
         lines.append("")
@@ -254,7 +256,7 @@ def _build_iteration_section(
         lines.append("")
 
     # —— 需求规格 ——
-    spec = _load_json(xcodeagent / "specs" / "requirement-spec.json")
+    spec = _load_json(devagentstudio / "specs" / "requirement-spec.json")
     if spec:
         lines.append("### 需求规格")
         lines.append("")
@@ -282,7 +284,7 @@ def _build_iteration_section(
             lines.append("")
 
     # —— 产品计划（页面详情）——
-    product_plan = _load_json(xcodeagent / "plans" / "product-plan.json")
+    product_plan = _load_json(devagentstudio / "plans" / "product-plan.json")
     if product_plan:
         lines.append("### 产品计划")
         lines.append("")
@@ -331,7 +333,7 @@ def _build_iteration_section(
             lines.append("")
 
     # —— UI 设计稿摘要 ——
-    ui_designs = _load_json(xcodeagent / "specs" / "ui-designs.json")
+    ui_designs = _load_json(devagentstudio / "specs" / "ui-designs.json")
     if ui_designs:
         designs = ui_designs.get("designs") or ui_designs.get("pages") or []
         if isinstance(designs, list) and designs:
@@ -345,7 +347,7 @@ def _build_iteration_section(
             lines.append("")
 
     # —— 技术计划（架构 + 实体字段）——
-    tech_plan = _load_json(xcodeagent / "plans" / "technical-plan.json")
+    tech_plan = _load_json(devagentstudio / "plans" / "technical-plan.json")
     if tech_plan:
         lines.append("### 技术计划")
         lines.append("")
@@ -384,7 +386,7 @@ def _build_iteration_section(
             lines.append("")
 
     # —— 接口设计（请求/响应摘要）——
-    endpoints_dir = xcodeagent / "plans" / "endpoints"
+    endpoints_dir = devagentstudio / "plans" / "endpoints"
     if endpoints_dir.is_dir():
         endpoint_files = sorted(endpoints_dir.glob("*.json"))
         if endpoint_files:
@@ -405,7 +407,7 @@ def _build_iteration_section(
             lines.append("")
 
     # —— 数据源配置 ——
-    datasource = _load_json(xcodeagent / "datasource" / "index.json")
+    datasource = _load_json(devagentstudio / "datasource" / "index.json")
     if datasource:
         sources = datasource.get("sources") or []
         if isinstance(sources, list) and sources:

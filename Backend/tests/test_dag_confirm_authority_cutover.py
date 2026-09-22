@@ -43,10 +43,10 @@ from tests.test_build_task_reuse_workspace import _ready_template
 
 
 ARTIFACT_PATHS = {
-    "requirement_spec": ".xcodeagent/specs/requirement-spec.json",
-    "product_plan": ".xcodeagent/plans/product-plan.json",
-    "ui_designs": ".xcodeagent/specs/ui-designs.json",
-    "technical_plan": ".xcodeagent/plans/technical-plan.json",
+    "requirement_spec": ".devagentstudio/specs/requirement-spec.json",
+    "product_plan": ".devagentstudio/plans/product-plan.json",
+    "ui_designs": ".devagentstudio/specs/ui-designs.json",
+    "technical_plan": ".devagentstudio/plans/technical-plan.json",
 }
 
 
@@ -65,7 +65,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
         write_confirmed_endpoint_designs(self.workspace, self.plan)
         self.snapshot_path = write_json(
             self.workspace,
-            ".xcodeagent/cache/workspace-snapshot.json",
+            ".devagentstudio/cache/workspace-snapshot.json",
             workspace_snapshot(),
         )
         self.readiness = _ready_template(self.workspace)

@@ -2,7 +2,7 @@
 
 ## Scope
 
-Workbench 读取 `.xcodeagent/plans/technical-plan.json`，以 ProductPlan `pages` 作为页面事实，并按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲从 `api_contracts` 投射 Endpoint。Endpoint 只有在当前版 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md` 均存在、JSON 已确认且其中的 TechnicalPlan 契约指纹与当前文件一致时才标记“已设计”。仅有 TechnicalPlan 声明或单个 Markdown 文件都不能放行。实体大纲只展示 TechnicalPlan 顶层 `entities`；实体没有全局数据源绑定状态。
+Workbench 读取 `.devagentstudio/plans/technical-plan.json`，以 ProductPlan `pages` 作为页面事实，并按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲从 `api_contracts` 投射 Endpoint。Endpoint 只有在当前版 `.devagentstudio/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md` 均存在、JSON 已确认且其中的 TechnicalPlan 契约指纹与当前文件一致时才标记“已设计”。仅有 TechnicalPlan 声明或单个 Markdown 文件都不能放行。实体大纲只展示 TechnicalPlan 顶层 `entities`；实体没有全局数据源绑定状态。
 
 点击大纲只选择本次目标。Endpoint 的“设计 API/重新设计”动作打开独立的 `ApiDesignConfigModal`，通过 `/endpoint-designs/run` 的 AG-UI `prepare/save` 动作保存正式映射，不进入主工作流；页面或 API 开发先进入 `api_design_readiness_gate`，门禁缺失时暂停并展示缺失清单，用户点击具体条目后才打开同一弹窗，保存后仍需在原会话确认继续开发。会话不归属于页面、接口或实体，已有 Workflow 消息及用户显式打开的历史会话继续展示运行结果。
 
@@ -24,7 +24,7 @@ Source Field 节点可实时读取直属 MySQL 表列，也可读取数据源目
 
 开发确认成功后，门禁立即把页面或接口对应的完整映射集合随原工作流消息保存；该快照只代表当次确认结果，后续开发停止、失败或重新配置都不会覆盖历史卡片。切回会话时优先读取消息中的确认快照。独立 `/endpoint-designs/run` 按 `workspaceRoot + apiContractId + endpointId` 提供 `get/prepare/save`，右侧“开发产物”与门禁确认卡片共用只读投影；缺失结果显示 pending，TechnicalPlan 指纹变化或双文件异常显示 stale。任务规划继续读取当前正式磁盘映射，不消费门禁快照，也不增加基于 lifecycle 或开发状态的映射锁定。
 
-Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。它把已确认 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效 Endpoint API Design 和权限切片冻结到 PlanningRun；EntitySourceBinding 不进入该输入。Unit Candidate 由平台 FIFO Worker Pool 有界并行生成并执行 Unit Local Retry，完整 Scope Assembly 和 Global Validation/Repair 通过后只写 `.xcodeagent/drafts/plans/build-task-plan.pending.json`。已有正式 `.xcodeagent/plans/build-task-plan.json` 保持不变。
+Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。它把已确认 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效 Endpoint API Design 和权限切片冻结到 PlanningRun；EntitySourceBinding 不进入该输入。Unit Candidate 由平台 FIFO Worker Pool 有界并行生成并执行 Unit Local Retry，完整 Scope Assembly 和 Global Validation/Repair 通过后只写 `.devagentstudio/drafts/plans/build-task-plan.pending.json`。已有正式 `.devagentstudio/plans/build-task-plan.json` 保持不变。
 
 确认卡是只读 Planning-result 门禁：`confirm` 精确验证 `planning_run_id + draft_digest` 后提升当前 Pending 并进入 Build；`abandon` 删除当前 Pending、结束对应 Workflow execution，但保留聊天会话和已有正式计划；结构化 `regenerate` 先删除旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun，后续失败不恢复旧 Pending。同一应用的所有页面和 Scope 共用一个 DAG Planning/待确认互斥域。活跃生成只允许取消整个 Workflow/PlanningRun，当前权威运行卡显示“取消运行”；待确认阶段改用确认卡上的放弃/重新生成/确认，不提供 Unit 级取消。刷新只恢复服务端权威状态投影，不保证原请求继续执行或事件补发；唯一 Pending 和精确 DraftIdentity 是确认权威，没有 Pending 时不得从聊天历史、旧卡片或旧 execution 恢复待确认状态。
 
@@ -32,7 +32,7 @@ Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。
 
 页面和 Endpoint 必须分别作为显式开发目标走完一次初次流程，全部完成后才能进入测试阶段。页面开发顺带实现依赖 Endpoint 不替接口标记完成。实体也单独计数，只有用户显式确认且正式 EntitySourceBinding 成功写盘后才完成；选表、生成设计和等待确认均不算完成。三类产物全部完成后才能进入测试阶段。
 
-`.xcodeagent/application-lifecycle.json.developmentArtifacts` 保存 `pages[pageId]` 与 `endpoints[apiContractId][endpointId]` 的 `initialDevelopmentStatus`：`pending`、`in_progress`、`completed`。绿色完成记录同时保存首次 `completedAt`、`completedRunId`、`completedThreadId`，二次修改、测试失败、重复或迟到事件均不能覆盖。未完成运行在等待用户操作时保持紫色；失败、停止或放弃且无同目标其他初次执行时回到灰色。叶子点击只浏览，不更新开发状态。
+`.devagentstudio/application-lifecycle.json.developmentArtifacts` 保存 `pages[pageId]` 与 `endpoints[apiContractId][endpointId]` 的 `initialDevelopmentStatus`：`pending`、`in_progress`、`completed`。绿色完成记录同时保存首次 `completedAt`、`completedRunId`、`completedThreadId`，二次修改、测试失败、重复或迟到事件均不能覆盖。未完成运行在等待用户操作时保持紫色；失败、停止或放弃且无同目标其他初次执行时回到灰色。叶子点击只浏览，不更新开发状态。
 
 实体状态保存于 `developmentArtifacts.entities[entityId].initialDevelopmentStatus`，直接使用当前正式 EntitySourceBinding 的确认状态，不伪造页面/API 的 Build 完成时间和 run/thread。未确认实体有活动中的同目标 `data_source` execution 时为 `in_progress`，其余为 `pending`；缺失或损坏的绑定不能计完成。新会话卡片右下角使用绿色“已初次完成”、紫色“开发中”、灰色“未开发”，右侧实体组同步显示计数和圆点。
 
@@ -48,7 +48,7 @@ Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。
 
 ## Context Budget
 
-The backend reads the fixed `<workspaceRoot>/.xcodeagent/application.json` and sends only application identity, scenario, terminal, layout, the datasource type without connection mode or credentials, auth, menus, APIs, and at most five short clarification answers. It never sends source files, repository trees, workflow history, tool logs, chat history, or secrets. The output is bounded by existing menu count, twenty tasks per menu, two to six acceptance criteria per generated task, and short field limits. This remains far below the 128k model context budget.
+The backend reads the fixed `<workspaceRoot>/.devagentstudio/application.json` and sends only application identity, scenario, terminal, layout, the datasource type without connection mode or credentials, auth, menus, APIs, and at most five short clarification answers. It never sends source files, repository trees, workflow history, tool logs, chat history, or secrets. The output is bounded by existing menu count, twenty tasks per menu, two to six acceptance criteria per generated task, and short field limits. This remains far below the 128k model context budget.
 
 ## Task and Persistence Contract
 

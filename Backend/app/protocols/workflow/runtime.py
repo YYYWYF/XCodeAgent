@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import asyncio
 import inspect
 from typing import Any, AsyncIterator
@@ -648,9 +650,9 @@ def build_workflow_ag_ui_stream(
 
             config = {
                 "configurable": {"thread_id": thread_id},
-                "run_name": "xcodeagent-main-workflow",
+                "run_name": "devagentstudio-main-workflow",
                 "tags": [
-                    "xcodeagent",
+                    "devagentstudio",
                     "workflow",
                     *(["langsmith"] if observability["langsmith"]["enabled"] else []),
                 ],
@@ -663,7 +665,7 @@ def build_workflow_ag_ui_stream(
                     "selected_skills_revision": selected_skill_validation.revision,
                     "editor_mode": editor_mode,
                     "workflow_scope": workflow_scope,
-                    "workflow": "xcodeagent-main",
+                    "workflow": "devagentstudio-main",
                     "langsmith_enabled": observability["langsmith"]["enabled"],
                 },
             }
@@ -2052,13 +2054,13 @@ def _workflow_observability(
 
 
 def _augment_request_with_iteration_context(request: str, workspace: str | None) -> str:
-    """新迭代时把 .xcodeagent/AGENTS.md 的内容拼到用户需求前面，让大模型了解应用现状。"""
+    """新迭代时把 .devagentstudio/AGENTS.md 的内容拼到用户需求前面，让大模型了解应用现状。"""
 
     if not workspace:
         return request
     from pathlib import Path
 
-    agents_md = Path(workspace).expanduser() / ".xcodeagent" / "AGENTS.md"
+    agents_md = Path(workspace).expanduser() / WORKSPACE_ARTIFACT_DIR / "AGENTS.md"
     if not agents_md.is_file():
         return request
     try:

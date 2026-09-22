@@ -3,7 +3,7 @@ import { createHttpError, reportAuthenticationFailure } from './authentication'
 /** 通过 Electron 主进程内存中的 access_token 调用云端 Java JSON 接口。 */
 export async function requestCloudJson<T>(url: string, init: RequestInit = {}): Promise<T> {
   const requestUrl = normalizeCloudUrl(url)
-  const authApi = window.xcodeAgent?.auth
+  const authApi = window.devAgentStudio?.auth
   if (!authApi?.getAccessToken) {
     const error = createHttpError(401, { detail: '当前环境无法读取 access_token。' })
     reportAuthenticationFailure(error)

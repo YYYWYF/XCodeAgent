@@ -5,7 +5,8 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import icon from '../../resources/icon.png?asset'
-import { XCODE_AGENT_ENV } from './env'
+import { PRODUCT_DISPLAY_NAME, WORKSPACE_ARTIFACT_DIR_NAME } from './branding'
+import { DEVAGENTSTUDIO_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './designRuntimeProtocol'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
@@ -23,9 +24,9 @@ import {
 } from './stageSessions'
 import {
   clearAuthState,
-  ensureXcodeAgentDataDir,
+  ensureDevAgentStudioDataDir,
   getAccessToken,
-  getXcodeAgentDataDir,
+  getDevAgentStudioDataDir,
   hasValidAuthToken,
   loginWithCmbDeviceFlow
 } from './auth'
@@ -53,7 +54,7 @@ function getApplicationsFile(): string {
 
 /** 返回工作区元数据目录中的应用配置文件路径。 */
 function getWorkspaceApplicationFile(workspaceRoot: string): string {
-  return path.join(workspaceRoot, '.xcodeagent', 'application.json')
+  return path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'application.json')
 }
 
 /** 校验新应用目标目录未被已有应用或其他文件占用，避免创建失败后污染工作区。 */
@@ -65,7 +66,7 @@ async function assertNewProjectDirectory(projectPath: string): Promise<void> {
   }
 
   const applicationFile = getWorkspaceApplicationFile(projectPath)
-  const lifecycleFile = path.join(projectPath, '.xcodeagent', 'application-lifecycle.json')
+  const lifecycleFile = path.join(projectPath, WORKSPACE_ARTIFACT_DIR_NAME, 'application-lifecycle.json')
   if ((await lstatIfPresent(applicationFile)) || (await lstatIfPresent(lifecycleFile))) {
     throw new Error('当前工作区已属于另一个应用，请为新应用选择独立的项目目录。')
   }
@@ -203,7 +204,7 @@ async function readEntitySourceBinding(
 ): Promise<Record<string, unknown> | undefined> {
   const detailPath = path.join(
     workspaceRoot,
-    '.xcodeagent',
+    WORKSPACE_ARTIFACT_DIR_NAME,
     'plans',
     'entities',
     `${detailFileStem(entityId, 'entity--')}.json`
@@ -481,7 +482,7 @@ async function readBuildTaskPlan(
 ): Promise<Record<string, unknown> | undefined> {
   try {
     const content = await fs.readFile(
-      path.join(workspaceRoot, '.xcodeagent', 'plans', 'build-task-plan.json'),
+      path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'plans', 'build-task-plan.json'),
       'utf8'
     )
     const value = JSON.parse(content)
@@ -575,7 +576,7 @@ async function mergeWorkbenchApiStatus(
 async function hasPersistedDetailDesigns(workspaceRoot: string): Promise<boolean> {
   for (const directory of ['pages', 'endpoints', 'entities']) {
     try {
-      const entries = await fs.readdir(path.join(workspaceRoot, '.xcodeagent', 'plans', directory))
+      const entries = await fs.readdir(path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'plans', directory))
       if (entries.length > 0) return true
     } catch (error: unknown) {
       const errnoException = error as NodeJS.ErrnoException
@@ -597,7 +598,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   apiContracts: WorkbenchApiContract[]
   entities: WorkbenchEntityOption[]
 }> {
-  const artifactRoot = path.join(workspaceRoot, '.xcodeagent')
+  const artifactRoot = path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME)
   const artifacts = [
     { relativePath: 'specs/requirement-spec.md', format: 'markdown' },
     { relativePath: 'specs/requirement-spec.json', format: 'json' },
@@ -849,7 +850,7 @@ async function trashProjectDirectory(workspaceRoot: unknown): Promise<void> {
       path.parse(projectRoot).root,
       path.resolve(app.getPath('home')),
       path.resolve(app.getPath('userData')),
-      path.resolve(getXcodeAgentDataDir())
+      path.resolve(getDevAgentStudioDataDir())
     ].map(pathComparisonKey)
   )
   if (protectedRoots.has(pathComparisonKey(projectRoot))) {
@@ -1043,7 +1044,7 @@ function setupBrowserIpc(): void {
     const resolvedPath = path.resolve(reportPath)
     const normalizedPath = resolvedPath.replaceAll('\\', '/').toLowerCase()
     if (
-      !normalizedPath.includes('/.xcodeagent/runtime/tests/frontend_performance/') ||
+      !normalizedPath.includes(`/${WORKSPACE_ARTIFACT_DIR_NAME}/runtime/tests/frontend_performance/`) ||
       !normalizedPath.endsWith('.html')
     ) {
       throw new Error('Only frontend performance HTML reports can be opened')
@@ -1154,12 +1155,12 @@ function getWorkspaceSessionKey(workspaceRoot: unknown): string {
 
 /** 返回指定工作区在环境数据目录中的会话根目录。 */
 function getWorkspaceSessionRoot(workspaceRoot: unknown): string {
-  return path.join(getXcodeAgentDataDir(), 'sessions', getWorkspaceSessionKey(workspaceRoot))
+  return path.join(getDevAgentStudioDataDir(), 'sessions', getWorkspaceSessionKey(workspaceRoot))
 }
 
 /** 返回当前环境全部会话工作区的存储根目录。 */
 function getSessionStorageRoot(): string {
-  return path.join(getXcodeAgentDataDir(), 'sessions')
+  return path.join(getDevAgentStudioDataDir(), 'sessions')
 }
 
 /** 返回指定工作区和编辑器模式对应的会话目录。 */
@@ -1515,7 +1516,7 @@ function setupWorkspaceIpc(): void {
   // 绕过 Graph run（同 thread 不能并发），避免 no-op resume 被 checkpoint 约束吞掉。
   ipcMain.handle('workspace:read-ui-designs', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
-    const uiDesignsPath = path.join(workspaceRoot, '.xcodeagent', 'specs', 'ui-designs.json')
+    const uiDesignsPath = path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'specs', 'ui-designs.json')
     try {
       const content = await fs.readFile(uiDesignsPath, 'utf8')
       const parsed = JSON.parse(content)
@@ -1727,7 +1728,7 @@ function createMainWindow(): void {
     height: 920,
     minWidth: 720,
     minHeight: 600,
-    title: 'DevAgent Studio',
+    title: PRODUCT_DISPLAY_NAME,
     backgroundColor: '#f5f7fb',
     show: false,
     autoHideMenuBar: true,
@@ -1737,7 +1738,7 @@ function createMainWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--xcode-agent-base-url=${getBackendBaseUrl()}`]
+      additionalArguments: [`--devagentstudio-base-url=${getBackendBaseUrl()}`]
     }
   })
 
@@ -1775,7 +1776,7 @@ function createLoginWindow(): void {
     height: 620,
     minWidth: 840,
     minHeight: 580,
-    title: 'DevAgent Studio 登录',
+    title: `${PRODUCT_DISPLAY_NAME} 登录`,
     backgroundColor: '#2f1d49',
     frame: false,
     hasShadow: false,
@@ -1790,7 +1791,7 @@ function createLoginWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--xcode-agent-base-url=${getBackendBaseUrl()}`]
+      additionalArguments: [`--devagentstudio-base-url=${getBackendBaseUrl()}`]
     }
   })
 
@@ -1843,7 +1844,7 @@ function setupTray(): void {
     trayIcon.setTemplateImage(true)
   }
   tray = new Tray(trayIcon)
-  tray.setToolTip('DevAgent Studio')
+  tray.setToolTip(PRODUCT_DISPLAY_NAME)
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
@@ -1869,11 +1870,11 @@ function setupTray(): void {
 /** 在冷启动阶段清除残留认证；失败时提示用户并阻止应用继续初始化。 */
 async function clearAuthStateBeforeStartup(): Promise<boolean> {
   try {
-    await ensureXcodeAgentDataDir()
+    await ensureDevAgentStudioDataDir()
     await clearAuthState()
     return true
   } catch (error) {
-    const authFile = path.join(getXcodeAgentDataDir(), 'auth.json')
+    const authFile = path.join(getDevAgentStudioDataDir(), 'auth.json')
     console.error('Failed to clear auth token during startup', error)
     dialog.showErrorBox(
       '认证状态清理失败',
@@ -1896,7 +1897,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   if (!(await clearAuthStateBeforeStartup())) return false
 
   // 仅非生产环境开放跨平台开发者工具快捷键。
-  if (XCODE_AGENT_ENV.WORKING_DIR !== '.xcodeagent') {
+  if (DEVAGENTSTUDIO_ENV.WORKING_DIR !== WORKSPACE_ARTIFACT_DIR_NAME) {
     app.on('browser-window-created', (_, window) => {
       window.webContents.on('before-input-event', (_event, input) => {
         const isDevToolsShortcut =

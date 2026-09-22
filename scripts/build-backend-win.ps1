@@ -39,10 +39,10 @@ if ([string]::IsNullOrWhiteSpace($FrontendRoot)) {
 $BackendRoot = (Resolve-Path $BackendRoot).Path
 $FrontendRoot = (Resolve-Path $FrontendRoot).Path
 $EnvFile = Join-Path $BackendRoot ".env"
-$SpecFile = Join-Path $BackendRoot "packaging\xcodeagent-backend.spec"
-$DistDir = Join-Path $BackendRoot "dist\xcodeagent-backend"
+$SpecFile = Join-Path $BackendRoot "packaging\devagentstudio-backend.spec"
+$DistDir = Join-Path $BackendRoot "dist\devagentstudio-backend"
 $TargetDir = Join-Path $FrontendRoot "resources\backend\win32"
-$TargetExe = Join-Path $TargetDir "xcodeagent-backend.exe"
+$TargetExe = Join-Path $TargetDir "devagentstudio-backend.exe"
 
 if (-not [Environment]::Is64BitOperatingSystem) {
   throw "Windows 64-bit is required to build the packaged backend."
@@ -77,7 +77,7 @@ try {
 
   & $PythonCommand @PythonCommandArgs -m PyInstaller --noconfirm --clean $SpecFile
   if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller failed to build xcodeagent-backend.exe."
+    throw "PyInstaller failed to build devagentstudio-backend.exe."
   }
 }
 finally {

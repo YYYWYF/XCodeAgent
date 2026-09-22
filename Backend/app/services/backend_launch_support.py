@@ -1,6 +1,8 @@
 """验收预览和测试启动检测共享的 JAR、补打包及数据库环境能力。"""
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import os
 import subprocess
 import zipfile
@@ -141,7 +143,7 @@ def _backend_runtime_environment(root: Path) -> tuple[dict[str, str], str | None
     for key in _BACKEND_DATABASE_ENV_KEYS:
         environment.pop(key, None)
 
-    application_file = root / ".xcodeagent" / "application.json"
+    application_file = root / WORKSPACE_ARTIFACT_DIR / "application.json"
     if not application_file.is_file():
         return environment, None
     try:

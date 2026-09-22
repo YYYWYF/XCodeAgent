@@ -14,7 +14,7 @@ from PyInstaller.utils.hooks import (
 
 
 backend_root = Path(SPECPATH).parent.resolve()
-grammar_profile = os.environ.get("XCODEAGENT_BACKEND_GRAMMARS", "full")
+grammar_profile = os.environ.get("DEVAGENTSTUDIO_BACKEND_GRAMMARS", "full")
 if grammar_profile not in {"full", "builtin"}:
     raise ValueError(f"Unsupported backend grammar profile: {grammar_profile}")
 
@@ -131,7 +131,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="xcodeagent-backend",
+    name="devagentstudio-backend",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -150,5 +150,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="xcodeagent-backend",
+    name="devagentstudio-backend",
 )

@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: XCodeAgent Authorization Management API
+  title: DevAgent Studio Authorization Management API
   version: authorization-api.v2
   description: 基于角色、资源、角色资源和角色成员四表的内置 RBAC 接口；所有接口使用 ResponseEntity，业务结果通过 returnCode 表达。
 servers:

@@ -3,14 +3,14 @@ import { createAppApis, withConfirmedBindings, withLiveSourceNames, type AppApi 
 import { readDataSources } from '../DataSources/catalog'
 import { presetCompletedVersionIds } from '../../mock/fixtures'
 
-const CHANGE_EVENT = 'aistudio:prototype:app-apis-changed'
+const CHANGE_EVENT = 'devagentstudio:prototype:app-apis-changed'
 
 // 缓存键前缀集中定义：结构升级即换版本号弃旧缓存，回退/迭代的清理也引用同一前缀。
 // v2：模型扁平化（接口即产物，AppApi 不再有 operations 分组），换键弃掉旧结构缓存。
 // v3：契约补入参 request，绑定按来源分流为增删查改模板 / 外部参数适配，换键弃掉旧结构缓存。
 // v4：外部绑定新增入参对齐 requestParamMap，换键弃掉旧结构缓存。
 // v5：入参对齐反转为显式连接 requestFeeders（外部入参 → 契约入参，空串=固定值），换键弃掉旧缓存。
-const STORAGE_PREFIX = 'aistudio:prototype:app-apis:v5'
+const STORAGE_PREFIX = 'devagentstudio:prototype:app-apis:v5'
 
 /**
  * 根据应用名、应用API集合和版本生成稳定的演示缓存键。

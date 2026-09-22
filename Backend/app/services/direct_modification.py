@@ -45,7 +45,7 @@ _DYNAMIC_PATH_ACTION_MARKERS = (
 )
 _DYNAMIC_PATH_DENIED_PARTS = {
     ".git",
-    ".xcodeagent",
+    ".devagentstudio",
     ".next",
     ".nuxt",
     ".pnpm",
@@ -310,7 +310,7 @@ def direct_path_matches_owner(path: str, owner: str) -> bool:
         lowered = "/".join(parts)
         return bool(parts) and not (
             any(part == ".env" or part.startswith(".env.") for part in parts)
-            or ".xcodeagent/" in lowered
+            or ".devagentstudio/" in lowered
             or "frontend" in parts
             or "backend" in parts
         )

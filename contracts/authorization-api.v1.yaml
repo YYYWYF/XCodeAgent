@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: XCodeAgent Authorization Management API
+  title: DevAgent Studio Authorization Management API
   version: authorization-api.v1
   description: 运行态权限管理的前后端共享契约；仅由 auth 模板分支实现。
 servers:

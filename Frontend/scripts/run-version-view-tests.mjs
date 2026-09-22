@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { build } from 'vite'
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
-const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-version-view-'))
+const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-version-view-'))
 const outputFile = path.join(outputDirectory, 'applicationVersionView.test.mjs')
 
 try {

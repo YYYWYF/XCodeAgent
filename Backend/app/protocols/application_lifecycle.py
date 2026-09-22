@@ -75,7 +75,7 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
         "name": "application-lifecycle",
         "endpoint": "/application-lifecycle/run",
         "transport": "ag-ui-sse",
-        "stateFile": ".xcodeagent/application-lifecycle.json",
+        "stateFile": ".devagentstudio/application-lifecycle.json",
         "actionField": "forwardedProps.applicationLifecycle",
         "actions": [
             "create",

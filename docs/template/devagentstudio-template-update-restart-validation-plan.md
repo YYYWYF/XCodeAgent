@@ -1,5 +1,5 @@
-# XCodeAgent 模板增量更新启动验收重构方案
- 
+# DevAgent Studio 模板增量更新启动验收重构方案
+
 > 目标：将模板增量更新后的验证机制，从独立 Sandbox / Maven / npm Runtime 验证，收敛为复用现有项目启动能力，对当前真实 Workspace 执行一次完整重启，以项目能够重新构建并启动到 Ready 作为模板更新的基础运行态验收。
 
 ---
@@ -23,16 +23,16 @@
 
 这套机制存在几个问题：
 
-1. **与现有项目启动能力重复。**  
-   XCodeAgent 已经存在统一的 `launch_project` / `launch_project_preview()`，真实项目启动本身就会经历构建、进程启动和 Ready 检测。
+1. **与现有项目启动能力重复。**
+   DevAgent Studio 已经存在统一的 `launch_project` / `launch_project_preview()`，真实项目启动本身就会经历构建、进程启动和 Ready 检测。
 
-2. **额外引入 Runtime 环境耦合。**  
-   Template Reconcile 中独立执行 `mvn test` / `npm build`，容易继承 XCodeAgent Backend 自身环境，例如错误继承 JDK 版本。
+2. **额外引入 Runtime 环境耦合。**
+   Template Reconcile 中独立执行 `mvn test` / `npm build`，容易继承 DevAgent Studio Backend 自身环境，例如错误继承 JDK 版本。
 
-3. **验证目标与真实开发环境不一致。**  
+3. **验证目标与真实开发环境不一致。**
    Sandbox 中能够通过并不等于当前真实 Workspace 能够正常运行；反过来，真实工程本身已经能够启动时，再维护一套独立 Runtime 验证价值有限。
 
-4. **实现复杂度高。**  
+4. **实现复杂度高。**
    Sandbox、临时目录、Workspace copy、命令执行、超时、日志、环境解析等能力与模板更新本身职责并不匹配。
 
 因此，本次改造将模板增量更新后的基础运行态验收统一收敛为：
@@ -630,7 +630,7 @@ SANDBOX
 ```text
 Template Engine 暂时仍可返回旧字段
         ↓
-XCodeAgent Parser 继续接受
+DevAgent Studio Parser 继续接受
         ↓
 Template Reconcile 忽略 command validation
         ↓
@@ -926,7 +926,7 @@ TemplatePreparingCard.tsx
 
 本阶段完成后应能够单独证明：
 
-> XCodeAgent 可以在当前真实 Workspace 上执行一次可靠的完整重启，而不需要任何 Sandbox Runtime。
+> DevAgent Studio 可以在当前真实 Workspace 上执行一次可靠的完整重启，而不需要任何 Sandbox Runtime。
 
 ### 改动一：Frontend Launcher 增加 `force_restart`
 
@@ -1595,7 +1595,7 @@ TemplatePreparingCard.tsx
 
 ### 改动六：推动 Template Engine 停止生成 Command Validation
 
-等 XCodeAgent 已稳定忽略旧 command validation 后，再修改 Template Engine 停止输出：
+等 DevAgent Studio 已稳定忽略旧 command validation 后，再修改 Template Engine 停止输出：
 
 ```text
 NPM_BUILD
@@ -1769,4 +1769,4 @@ SandboxExecutor
 Validation Sandbox
 ```
 
-这既复用了 XCodeAgent 现有项目启动能力，也保留了 `template_refactor` 分支现有 Reconcile V2 中最有价值的 WorkingCopy、Attempt、Recovery 和 Roll-forward 机制。
+这既复用了 DevAgent Studio 现有项目启动能力，也保留了 `template_refactor` 分支现有 Reconcile V2 中最有价值的 WorkingCopy、Attempt、Recovery 和 Roll-forward 机制。

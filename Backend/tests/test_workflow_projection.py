@@ -24,7 +24,7 @@ class WorkflowProjectionTests(unittest.TestCase):
             _workflow_code_review_scan(
                 {
                     "status": "running",
-                    "current_file": "/.xcodeagent/builtin-skills/frontend-code-scan/SKILL.md",
+                    "current_file": "/.devagentstudio/builtin-skills/frontend-code-scan/SKILL.md",
                 }
             ),
             {},
@@ -202,7 +202,7 @@ class WorkflowProjectionTests(unittest.TestCase):
                         }
                     ],
                 },
-                "code_review_report_path": "/private/workspace/.xcodeagent/reports/code-review.md",
+                "code_review_report_path": "/private/workspace/.devagentstudio/reports/code-review.md",
             },
             [],
         )
@@ -211,7 +211,7 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertEqual(review["issueCount"], 1)
         self.assertEqual(review["targets"][0]["scannedFileCount"], 3)
         self.assertEqual(review["issues"][0]["ruleId"], "FE001")
-        self.assertEqual(review["reportPath"], ".xcodeagent/reports/code-review.md")
+        self.assertEqual(review["reportPath"], ".devagentstudio/reports/code-review.md")
         self.assertNotIn("repairActions", review["issues"][0])
         self.assertNotIn("code_review_report_path", summary)
 
@@ -292,8 +292,8 @@ class WorkflowProjectionTests(unittest.TestCase):
         result = {
             "phase": "review_phase_confirmation",
             "status": "requires_user_input",
-            "test_report_path": "/private/workspace/.xcodeagent/reports/test-report.md",
-            "test_report_json_path": "/private/workspace/.xcodeagent/reports/test-report.json",
+            "test_report_path": "/private/workspace/.devagentstudio/reports/test-report.md",
+            "test_report_json_path": "/private/workspace/.devagentstudio/reports/test-report.json",
         }
         summary = _workflow_summary(result, [])
         public_state = _public_workflow_state(result)
@@ -305,7 +305,7 @@ class WorkflowProjectionTests(unittest.TestCase):
             result=result,
         )
 
-        expected = {"reportPath": ".xcodeagent/reports/test-report.md"}
+        expected = {"reportPath": ".devagentstudio/reports/test-report.md"}
         self.assertEqual(summary["testReportResult"], expected)
         self.assertEqual(
             summary["artifacts"]["test_report_path"], expected["reportPath"]

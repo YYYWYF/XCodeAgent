@@ -29,7 +29,7 @@ class CodeGraphManagerTests(unittest.TestCase):
             self.assertGreaterEqual(len(first.relations_by_kind), 1)
             self.assertLessEqual(len(first.sample_symbols), 8)
             self.assertTrue(all(not str(item["path"]).startswith("/") for item in first.sample_symbols))
-            graph_dir = root / ".xcodeagent" / "cache" / "code-graph" / "v1"
+            graph_dir = root / ".devagentstudio" / "cache" / "code-graph" / "v1"
             self.assertTrue((graph_dir / "graph.sqlite3").is_file())
             self.assertTrue((graph_dir / "index.json").is_file())
             index = json.loads((graph_dir / "index.json").read_text(encoding="utf-8"))

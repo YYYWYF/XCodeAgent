@@ -33,7 +33,7 @@ from app.workspace.run_lease import (
     workspace_run_leases,
 )
 
-WORKFLOW_EVENT_PROTOCOL = "xcodeagent.workflow.event.v1"
+WORKFLOW_EVENT_PROTOCOL = "devagentstudio.workflow.event.v1"
 PROCESS_EVENT_NAME = "agent-process"
 PROCESS_DETAIL_LIMIT = 24_000
 
@@ -1583,8 +1583,8 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "\\", "/"
         )
         report_result = (
-            {"reportPath": ".xcodeagent/reports/test-report.md"}
-            if normalized_report_path.endswith(".xcodeagent/reports/test-report.md")
+            {"reportPath": ".devagentstudio/reports/test-report.md"}
+            if normalized_report_path.endswith(".devagentstudio/reports/test-report.md")
             else {}
         )
         report_suffix = "，测试报告已生成" if report_result else ""

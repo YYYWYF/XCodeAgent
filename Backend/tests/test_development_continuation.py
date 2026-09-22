@@ -67,7 +67,7 @@ def _technical_plan() -> dict:
 def _write_technical_plan(workspace: Path, plan: dict) -> None:
     """把测试计划写入 continuation 服务读取的当前正式路径。"""
 
-    path = workspace / ".xcodeagent" / "plans" / "technical-plan.json"
+    path = workspace / ".devagentstudio" / "plans" / "technical-plan.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
 

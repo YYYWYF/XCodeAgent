@@ -23,7 +23,7 @@ IGNORED_DIRS = {
     ".git",
     ".hg",
     ".svn",
-    ".xcodeagent",
+    ".devagentstudio",
     ".venv",
     "__pycache__",
     ".pytest_cache",
@@ -75,11 +75,11 @@ CODE_GRAPH_SUFFIXES = {
 }
 SOURCE_SUFFIXES.update(CODE_GRAPH_SUFFIXES)
 
-# Matches frontend source roots for both the XcodeAgent's own Electron frontend
+# Matches frontend source roots for both the DevAgentStudio's own Electron frontend
 # (Frontend/src/) and user applications scaffolded under frontend/src/.
 # Exposing user-app frontend files in the WorkspaceSnapshot lets the build-task
 # planner and Frontend Agent see the real place frontend code must live, instead
-# of only the XcodeAgent development workspace.
+# of only the DevAgentStudio development workspace.
 FRONTEND_SRC_RE = re.compile(r"^(?:Frontend/src/|frontend/src/)")
 
 
@@ -399,7 +399,7 @@ def _project_roots(files: Iterable[str]) -> list[dict[str, str]]:
             roots.append({"path": prefix.rstrip("/"), "kind": kind, "description": description})
     # Dynamically recognise user-application frontend roots (frontend/src/)
     # so the build-task planner and Frontend Agent see the real directory where
-    # generated frontend code must live, not just the XcodeAgent dev workspace.
+    # generated frontend code must live, not just the DevAgentStudio dev workspace.
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/
     if any(path.startswith("frontend/src/") for path in files):
         roots.append({

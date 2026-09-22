@@ -24,7 +24,7 @@ export function getCachedApplicationTheme(): ApplicationTheme {
 /** 从 Electron 用户设置中读取一次应用主题，并复用并发请求。 */
 export function loadApplicationTheme(): Promise<ApplicationTheme> {
   if (loadPromise) return loadPromise
-  const settingsApi = window.xcodeAgent?.settings
+  const settingsApi = window.devAgentStudio?.settings
   if (!settingsApi) return Promise.resolve(cachedTheme)
   loadPromise = settingsApi
     .load()
@@ -42,7 +42,7 @@ export function loadApplicationTheme(): Promise<ApplicationTheme> {
 /** 将主题写入 Electron 用户设置；浏览器调试环境仅更新当前进程缓存。 */
 export async function saveApplicationTheme(theme: ApplicationTheme): Promise<void> {
   cachedTheme = theme
-  const settingsApi = window.xcodeAgent?.settings
+  const settingsApi = window.devAgentStudio?.settings
   if (!settingsApi) return
   await settingsApi.saveTheme({ theme })
 }
@@ -51,7 +51,7 @@ export async function saveApplicationTheme(theme: ApplicationTheme): Promise<voi
 export function subscribeApplicationTheme(
   listener: (theme: ApplicationTheme) => void
 ): () => void {
-  const settingsApi = window.xcodeAgent?.settings
+  const settingsApi = window.devAgentStudio?.settings
   if (!settingsApi) return () => undefined
   return settingsApi.onThemeChanged((payload) => {
     cachedTheme = normalizeTheme(payload.theme)

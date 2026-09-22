@@ -16,9 +16,9 @@ def main() -> None:
 
     import uvicorn
 
-    host = os.getenv("XCODEAGENT_BACKEND_HOST", DEFAULT_HOST)
-    port = parse_port(os.getenv("XCODEAGENT_BACKEND_PORT"))
-    log_level = os.getenv("XCODEAGENT_BACKEND_LOG_LEVEL", "info")
+    host = os.getenv("DEVAGENTSTUDIO_BACKEND_HOST", DEFAULT_HOST)
+    port = parse_port(os.getenv("DEVAGENTSTUDIO_BACKEND_PORT"))
+    log_level = os.getenv("DEVAGENTSTUDIO_BACKEND_LOG_LEVEL", "info")
 
     uvicorn.run("app.main:app", host=host, port=port, log_level=log_level)
 
@@ -38,7 +38,7 @@ def load_backend_env() -> None:
 
 
 def resolve_env_file() -> Path | None:
-    configured_path = os.getenv("XCODEAGENT_BACKEND_ENV_FILE")
+    configured_path = os.getenv("DEVAGENTSTUDIO_BACKEND_ENV_FILE")
     if configured_path:
         return Path(configured_path).expanduser().resolve()
 
@@ -58,9 +58,9 @@ def parse_port(value: str | None) -> int:
     try:
         port = int(value)
     except ValueError as exc:
-        raise RuntimeError(f"Invalid XCODEAGENT_BACKEND_PORT: {value}") from exc
+        raise RuntimeError(f"Invalid DEVAGENTSTUDIO_BACKEND_PORT: {value}") from exc
     if port < 1 or port > 65535:
-        raise RuntimeError(f"XCODEAGENT_BACKEND_PORT out of range: {port}")
+        raise RuntimeError(f"DEVAGENTSTUDIO_BACKEND_PORT out of range: {port}")
     return port
 
 

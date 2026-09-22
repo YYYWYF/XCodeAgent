@@ -78,7 +78,7 @@ class SmallTaskScopeTests(unittest.TestCase):
         formal = small_task_preflight(
             {
                 "owner": "frontend",
-                "allowed_paths": [".xcodeagent/project-plan.json"],
+                "allowed_paths": [".devagentstudio/project-plan.json"],
             }
         )
         command_only = small_task_preflight(

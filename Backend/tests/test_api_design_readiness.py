@@ -75,7 +75,7 @@ class ApiDesignReadinessTests(unittest.TestCase):
             _write_plan(workspace, plan)
             for endpoint_id in ("orders.list", "orders.create"):
                 write_endpoint_design(workspace, _empty_design(workspace, endpoint_id))
-            source_path = Path(workspace) / ".xcodeagent" / "data-sources.json"
+            source_path = Path(workspace) / ".devagentstudio" / "data-sources.json"
             source_path.parent.mkdir(parents=True, exist_ok=True)
             source_path.write_text('{"sources":[]}\n', encoding="utf-8")
             readiness = api_design_readiness(workspace, plan, target_type="page", target_id="orders")
@@ -139,7 +139,7 @@ def _plan() -> dict:
 def _write_plan(workspace: str, plan: dict) -> None:
     """写入用于计算 API 设计上游指纹的规范文件。"""
 
-    path = Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+    path = Path(workspace) / ".devagentstudio" / "plans" / "technical-plan.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
 

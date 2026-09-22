@@ -1,4 +1,4 @@
-# XCodeAgent 与模板工程 Route Projection v2 改造实施方案
+# DevAgent Studio 与模板工程 Route Projection v2 改造实施方案
 
 ## 一、方案设计与契约
 
@@ -12,7 +12,7 @@
 
 整体职责收敛为：
 
-- **XCodeAgent**：提供已确认的页面设计事实，负责 Build 编排，并观测 Projector 对真实 Workspace 造成的文件变化。
+- **DevAgent Studio**：提供已确认的页面设计事实，负责 Build 编排，并观测 Projector 对真实 Workspace 造成的文件变化。
 - **模板工程**：根据设计页面和当前 Workspace 中实际存在的页面，确定最终业务路由并原子写入。
 - **Route Projection**：无历史状态、可重复执行、全量 reconcile。
 - **Workspace**：生成代码与 Route Projection 的唯一运行事实源。
@@ -41,7 +41,7 @@ Workspace 中实际存在的合法页面入口
 
 #### 原则一：双方只实现 Route Projector v2
 
-模板工程与 XCodeAgent 只支持：
+模板工程与 DevAgent Studio 只支持：
 
 ```text
 route-projector-contract.v2
@@ -71,7 +71,7 @@ frontend/src/pages/<PageDirectory>/index.tsx
 不存在 → skippedPageIds
 ```
 
-XCodeAgent 不再结合 Page Unit、Task 类型或历史 Build 状态二次解释 `skippedPageIds`。
+DevAgent Studio 不再结合 Page Unit、Task 类型或历史 Build 状态二次解释 `skippedPageIds`。
 
 ---
 
@@ -79,7 +79,7 @@ XCodeAgent 不再结合 Page Unit、Task 类型或历史 Build 状态二次解�
 
 Base 页面、Capability 页面以及其他模板平台保留的 `pageId`，全部由模板内部管理和校验。
 
-XCodeAgent：
+DevAgent Studio：
 
 - 不维护 `welcome` 等保留 ID；
 - 不解析 Base / Capability 路由实现；
@@ -106,9 +106,9 @@ Route Projector v2 必须定义正式 Input / Output JSON Schema。
 
 其中：
 
-- XCodeAgent 在调用 Projector 前执行输入 Schema 校验；
+- DevAgent Studio 在调用 Projector 前执行输入 Schema 校验；
 - 模板在执行 Projector 时再次校验；
-- 模板内部专属的 reserved pageId 冲突不进入 XCodeAgent Schema。
+- 模板内部专属的 reserved pageId 冲突不进入 DevAgent Studio Schema。
 
 ---
 
@@ -122,7 +122,7 @@ changed
 
 Projector 只返回业务投影结果。
 
-XCodeAgent 使用：
+DevAgent Studio 使用：
 
 ```text
 capture_workspace_changes()
@@ -155,7 +155,7 @@ Projector 必须遵循：
 
 ### 1.3 双方职责边界
 
-#### XCodeAgent 负责
+#### DevAgent Studio 负责
 
 - 从 `ProductPlan.pages` 获取业务页面设计事实。
 - 从 `authorization_manifest` 获取页面权限绑定。
@@ -167,7 +167,7 @@ Projector 必须遵循：
 - 使用 Workspace Change Capture 捕获真实文件变化。
 - 将 Route Projection 结果和真实 `code_change_set` 纳入本次 Build Summary / Evidence。
 
-#### XCodeAgent 不负责
+#### DevAgent Studio 不负责
 
 - 判断页面目录结构。
 - 判断页面入口文件位置。
@@ -225,7 +225,7 @@ Descriptor：
   "outputSchema": "route-projector-output.schema.json",
   "command": [
     "node",
-    "frontend/scripts/xcodeagent/route-projector.mjs",
+    "frontend/scripts/devagentstudio/route-projector.mjs",
     "apply"
   ]
 }
@@ -234,13 +234,13 @@ Descriptor：
 Template Engine 将三份契约一并投影到生成 Workspace：
 
 ```text
-.xcodeagent/template-contracts/
+.devagentstudio/template-contracts/
 ├── route-projector.json
 ├── route-projector-input.schema.json
 └── route-projector-output.schema.json
 ```
 
-XCodeAgent 只通过该目录读取模板公开契约，不硬编码模板源码路径。
+DevAgent Studio 只通过该目录读取模板公开契约，不硬编码模板源码路径。
 
 ---
 
@@ -321,9 +321,9 @@ pages
 
 ---
 
-### 1.7 XCodeAgent 输出校验
+### 1.7 DevAgent Studio 输出校验
 
-XCodeAgent Adapter 必须 fail-closed 校验：
+DevAgent Studio Adapter 必须 fail-closed 校验：
 
 ```text
 status == "applied"
@@ -389,7 +389,7 @@ template reserved pageId
 
 冲突时 Projector 失败。
 
-reserved pageId 只属于模板内部知识，不进入 XCodeAgent 的业务逻辑。
+reserved pageId 只属于模板内部知识，不进入 DevAgent Studio 的业务逻辑。
 
 ---
 
@@ -476,11 +476,11 @@ appliedPages
 只覆盖业务受管区域：
 
 ```text
-// XCODEAGENT_BUSINESS_ROUTES_START
+// DEVAGENTSTUDIO_BUSINESS_ROUTES_START
 
 当前 appliedPages
 
-// XCODEAGENT_BUSINESS_ROUTES_END
+// DEVAGENTSTUDIO_BUSINESS_ROUTES_END
 ```
 
 禁止增量 append。
@@ -631,15 +631,15 @@ template-source/base/contracts/
 Template Engine 必须保证三份文件一起进入：
 
 ```text
-.xcodeagent/template-contracts/
+.devagentstudio/template-contracts/
 ```
 
 最终生成应用中至少包含：
 
 ```text
-.xcodeagent/template-contracts/route-projector.json
-.xcodeagent/template-contracts/route-projector-input.schema.json
-.xcodeagent/template-contracts/route-projector-output.schema.json
+.devagentstudio/template-contracts/route-projector.json
+.devagentstudio/template-contracts/route-projector-input.schema.json
+.devagentstudio/template-contracts/route-projector-output.schema.json
 ```
 
 模板源码契约和最终 Workspace 契约必须字节或语义一致。
@@ -651,7 +651,7 @@ Template Engine 必须保证三份文件一起进入：
 修改：
 
 ```text
-template-source/base/frontend/scripts/xcodeagent/route-projector.mjs
+template-source/base/frontend/scripts/devagentstudio/route-projector.mjs
 ```
 
 将：
@@ -698,7 +698,7 @@ for business pageId:
         fail
 ```
 
-XCodeAgent 不消费 reserved ID 集合。
+DevAgent Studio 不消费 reserved ID 集合。
 
 冲突时：
 
@@ -810,8 +810,8 @@ B
 继续使用：
 
 ```text
-XCODEAGENT_BUSINESS_ROUTES_START
-XCODEAGENT_BUSINESS_ROUTES_END
+DEVAGENTSTUDIO_BUSINESS_ROUTES_START
+DEVAGENTSTUDIO_BUSINESS_ROUTES_END
 ```
 
 每次以当前 `appliedPages` 完整生成受管区域。
@@ -1134,12 +1134,12 @@ mvn -f template-engine/pom.xml verify
 
 ---
 
-## 三、XCodeAgent 改造实施计划
+## 三、DevAgent Studio 改造实施计划
 
 目标仓库：
 
 ```text
-XCodeAgent
+DevAgent Studio
 branch: dev_agent
 ```
 
@@ -1187,7 +1187,7 @@ command       为非空字符串数组
 Schema 路径必须解析在：
 
 ```text
-.xcodeagent/template-contracts/
+.devagentstudio/template-contracts/
 ```
 
 内部，不允许路径逃逸。
@@ -1213,7 +1213,7 @@ authorization_manifest.bindings.pages
 }
 ```
 
-XCodeAgent 只生成业务 DTO，不包含：
+DevAgent Studio 只生成业务 DTO，不包含：
 
 ```text
 pageDirectory
@@ -1229,7 +1229,7 @@ template capability pageIds
 
 Projector 调用前按 v2 Input Schema 校验。
 
-XCodeAgent 校验通用协议规则，例如：
+DevAgent Studio 校验通用协议规则，例如：
 
 - protocol；
 - pages 类型；
@@ -1238,7 +1238,7 @@ XCodeAgent 校验通用协议规则，例如：
 - name；
 - resourceKey。
 
-XCodeAgent 不校验：
+DevAgent Studio 不校验：
 
 ```text
 welcome 是否 reserved
@@ -1571,7 +1571,7 @@ applied ∪ skipped = requested
 
 和顺序约束。
 
-XCodeAgent 不根据 Page Unit 再判断某个 `skippedPageId` 是否“应该”存在。
+DevAgent Studio 不根据 Page Unit 再判断某个 `skippedPageId` 是否“应该”存在。
 
 真实 Workspace 即最终判断依据。
 
@@ -1678,7 +1678,7 @@ Finalization failed
 
 ---
 
-### 3.22 XCodeAgent 回归测试
+### 3.22 DevAgent Studio 回归测试
 
 至少覆盖：
 
@@ -1695,7 +1695,7 @@ Finalization failed
 | Input Schema 不匹配 | 调用模板前失败 |
 | Output Schema 不匹配 | Projector 结果 fail-closed |
 | 部分页面不存在 | 接受模板返回 skipped |
-| reserved ID 冲突 | 模板失败，XCodeAgent 不维护具体 ID |
+| reserved ID 冲突 | 模板失败，DevAgent Studio 不维护具体 ID |
 | Route 有实际文件变化 | code_change_set 包含 routes.tsx |
 | Route 无文件变化 | Route code_change_set 为空 |
 | Finalization 重入 | 第二次执行保持幂等 |
@@ -1714,7 +1714,7 @@ Route Task Acceptance
 
 ---
 
-### 3.23 XCodeAgent Done Definition
+### 3.23 DevAgent Studio Done Definition
 
 ```text
 1. 只支持 route-projector.v2。
@@ -1723,8 +1723,8 @@ Route Task Acceptance
 4. DAG 成功路径与空 DAG 进入统一 Finalization。
 5. DAG 失败、等待确认、等待修复时不执行 Route Projection。
 6. Route Input 按模板公开 v2 Schema 校验。
-7. XCodeAgent 不维护 reserved pageId。
-8. XCodeAgent 不对 skippedPageIds 做 Page Unit 二次判断。
+7. DevAgent Studio 不维护 reserved pageId。
+8. DevAgent Studio 不对 skippedPageIds 做 Page Unit 二次判断。
 9. v2 Output 严格校验集合和顺序。
 10. Workspace Change Capture 是 Route 文件变化唯一事实源。
 11. Projector Output 不包含 changed。
@@ -1824,7 +1824,7 @@ routeProjectionExecuted
 changed = true / false
 ```
 
-则会与 XCodeAgent 的实际 Workspace 观测形成两个事实源。
+则会与 DevAgent Studio 的实际 Workspace 观测形成两个事实源。
 
 #### 解决方案
 
@@ -1852,7 +1852,7 @@ Build Summary、changedFiles、审计全部来自真实 Workspace 差异。
 
 双方定义正式 v2 Output Schema。
 
-XCodeAgent 进一步验证：
+DevAgent Studio 进一步验证：
 
 ```text
 requested == input pages
@@ -1879,7 +1879,7 @@ applied ∪ skipped == requested
 
 #### 流程约束
 
-XCodeAgent Build 生命周期中：
+DevAgent Studio Build 生命周期中：
 
 ```text
 前序正式设计确认
@@ -1900,7 +1900,7 @@ Route Projection 只使用当前 Build execution context 已绑定的正式设�
 
 实施时双方必须逐项确认。
 
-| 契约项 | 模板工程 | XCodeAgent |
+| 契约项 | 模板工程 | DevAgent Studio |
 | --- | --- | --- |
 | Protocol | `route-projector.v2` | 只接受 / 生成 v2 |
 | Descriptor | `route-projector-contract.v2` | 严格校验 v2 |
@@ -1983,7 +1983,7 @@ ProductPlan / Authorization Manifest
             │
             │ 设计事实
             ▼
-        XCodeAgent
+        DevAgent Studio
             │
             │ route-projector.v2
             ▼
@@ -2006,6 +2006,6 @@ ProductPlan / Authorization Manifest
 
 > **设计意图来自正式规划，运行事实来自真实 Workspace。**
 
-> **模板负责解释 Workspace 中哪些页面可路由；XCodeAgent 负责观测 Projector 对 Workspace 实际改了什么。**
+> **模板负责解释 Workspace 中哪些页面可路由；DevAgent Studio 负责观测 Projector 对 Workspace 实际改了什么。**
 
-> **双方不重复声明同一事实，不维护 Route 历史状态，不让 XCodeAgent 理解模板内部结构。**
+> **双方不重复声明同一事实，不维护 Route 历史状态，不让 DevAgent Studio 理解模板内部结构。**

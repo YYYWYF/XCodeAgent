@@ -6,8 +6,8 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 
 
-DIRECT_MODIFICATION_MODE_MARKER = "<xcodeagent-direct-modification-mode>"
-SMALL_TASK_MODE_MARKER = "<xcodeagent-small-task-mode>"
+DIRECT_MODIFICATION_MODE_MARKER = "<devagentstudio-direct-modification-mode>"
+SMALL_TASK_MODE_MARKER = "<devagentstudio-small-task-mode>"
 
 _DIRECT_DISABLED_TOOLS = {"task", "write_todos"}
 

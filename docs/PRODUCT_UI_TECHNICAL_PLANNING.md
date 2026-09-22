@@ -30,7 +30,7 @@ Workbench
 
 ### RequirementSpec
 
-草稿路径：`.xcodeagent/drafts/specs/requirement-spec.md|json`；确认后正式路径：`.xcodeagent/specs/requirement-spec.md|json`
+草稿路径：`.devagentstudio/drafts/specs/requirement-spec.md|json`；确认后正式路径：`.devagentstudio/specs/requirement-spec.md|json`
 
 负责人：产品。
 
@@ -38,7 +38,7 @@ Workbench
 
 ### ProductPlan
 
-草稿路径：`.xcodeagent/drafts/plans/product-plan.md|json`；确认后正式路径：`.xcodeagent/plans/product-plan.md|json`
+草稿路径：`.devagentstudio/drafts/plans/product-plan.md|json`；确认后正式路径：`.devagentstudio/plans/product-plan.md|json`
 
 负责人：产品。
 
@@ -53,7 +53,7 @@ Workbench
 
 ProductPlan 使用 `business`、`navigation`、`interface`、`external`、`sequence` 表达产品可见行为。`business` 只说明查询、提交、变更、导出等业务结果，不选择 endpoint；`interface` 只说明需要本地界面变化，具体控件效果由 UiDesign 实现；组合行为以稳定 `stepId` 和产品结果表达。ProductPlan 不包含 HTTP method、endpointId、API Schema、数据库操作或代码文件。
 
-ProductPlan 中面向产品角色展示的验收标准，只描述生成应用的目标用户能够观察或完成的产品结果。XCodeAgent 自身的本地预览、代码生成、编译、构建、lint、typecheck、自动化/集成测试、质量门禁、工作流节点和“何时进入用户验收”等交付条件属于独立工程运行状态，不得写入应用产品验收标准；确定性归一化会剔除这类越界文案。
+ProductPlan 中面向产品角色展示的验收标准，只描述生成应用的目标用户能够观察或完成的产品结果。DevAgent Studio 自身的本地预览、代码生成、编译、构建、lint、typecheck、自动化/集成测试、质量门禁、工作流节点和“何时进入用户验收”等交付条件属于独立工程运行状态，不得写入应用产品验收标准；确定性归一化会剔除这类越界文案。
 
 正式 JSON 使用 `product-plan.v5`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。ProductPlan 不保存运行态角色、角色关系、`allowed_roles`、资源键、策略键或固定 `/roles` 页面。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
 
@@ -109,8 +109,8 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 路径：
 
-- `.xcodeagent/ui-design/pages/<PageKey>/index.tsx`
-- `.xcodeagent/specs/ui-designs.json`
+- `.devagentstudio/ui-design/pages/<PageKey>/index.tsx`
+- `.devagentstudio/specs/ui-designs.json`
 
 负责人：产品。
 
@@ -128,7 +128,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
       "pageId": "orders",
       "page_key": "Orders",
       "preview_path": "/page/orders",
-      "code_path": ".../.xcodeagent/ui-design/pages/Orders/index.tsx",
+      "code_path": ".../.devagentstudio/ui-design/pages/Orders/index.tsx",
       "code_sha256": "...",
       "status": "confirmed",
       "bindings": {
@@ -151,7 +151,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 }
 ```
 
-`preview_path` 只用于隔离设计稿预览，不是产品正式路由。正式路由始终来自 ProductPlan。Graph 运行态可以临时携带 `code` 供 `DesignRenderer` 渲染，落盘时必须剔除；恢复会话时只允许从同一工作区 `.xcodeagent/ui-design/` 受控目录按 `code_path` 恢复源码。
+`preview_path` 只用于隔离设计稿预览，不是产品正式路由。正式路由始终来自 ProductPlan。Graph 运行态可以临时携带 `code` 供 `DesignRenderer` 渲染，落盘时必须剔除；恢复会话时只允许从同一工作区 `.devagentstudio/ui-design/` 受控目录按 `code_path` 恢复源码。
 
 UI 生成只能消费已确认 ProductPlan，不能发明 ProductPlan 中不存在的页面、业务字段或操作；跳过 UI 时同样不改变 ProductPlan。
 
@@ -161,11 +161,11 @@ RequirementSpec、ProductPlan 和 UiDesign 的产品确认均不得要求产品�
 
 ### TechnicalPlan
 
-正式路径：`.xcodeagent/plans/technical-plan.md|json`
+正式路径：`.devagentstudio/plans/technical-plan.md|json`
 
 负责人：开发。
 
-TechnicalPlan 只写入 `.xcodeagent/plans/technical-plan.md|json`，`technical_plan` 是唯一语义来源。
+TechnicalPlan 只写入 `.devagentstudio/plans/technical-plan.md|json`，`technical_plan` 是唯一语义来源。
 
 TechnicalPlan 包含：
 
@@ -273,7 +273,7 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 {
   "pageId": "order-list",
   "uiDesignRef": {
-    "path": ".xcodeagent/ui-design/pages/OrderList/index.tsx",
+    "path": ".devagentstudio/ui-design/pages/OrderList/index.tsx",
     "sha256": "..."
   },
   "requiredEndpointIds": ["orders.list", "orders.delete"],
@@ -331,7 +331,7 @@ Endpoint 设计和页面/API开发流程固定为：
 
 纯静态且没有 Endpoint 的页面可直接通过门禁。API 设计以 Request/Response 两侧的 `fieldMappings` 表达 `source_mapping` 或 `business_description`；草稿允许 `unconfigured`，但确认时包括可选字段在内必须全部完成配置。`source_mapping` 内嵌 `sourceFields`，通过 `processingType` 区分直接映射、单字段业务处理和多字段业务处理；每条说明支持多行并原样传递给下游。数据流方向由 Request/Response 侧确定，不保存节点、边或随机映射 ID；TechnicalPlan 顶层实体语义与 Endpoint↔Source 映射分离。数据字段可来自直属 MySQL 实时表列或数据源目录中已保存的外部 Operation Schema；Builtin/DBID 不提供伪造元数据，外部 API 设计时不发起网络请求。
 
-每次确认写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用当前 `endpoint-field-mapping.v3`：`source_mapping` 记录完整 `sourceFields`，并用 `processingType` 区分直接映射、单字段业务处理和多字段业务处理；无物理来源的控制字段使用 `business_description`。产物保存当前 TechnicalPlan 契约指纹、自包含 `fieldMappings`、脱敏来源快照和随机十六进制 `artifactRevision`；Markdown 写入同一修订标记并作为用户可见正式产物。双文件替换失败回滚上一版，读取时必须同时验证双文件、当前 Schema、确认状态、TechnicalPlan 指纹和修订号一致；历史结构不读取、不迁移并直接视为 stale。TechnicalPlan 契约改变会使 Endpoint 变为“需重新设计”，确认后的数据源目录变化不主动使其失效；Build 使用快照并在运行时按 `sourceId` 安全解析凭据。
+每次确认写入 `.devagentstudio/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用当前 `endpoint-field-mapping.v3`：`source_mapping` 记录完整 `sourceFields`，并用 `processingType` 区分直接映射、单字段业务处理和多字段业务处理；无物理来源的控制字段使用 `business_description`。产物保存当前 TechnicalPlan 契约指纹、自包含 `fieldMappings`、脱敏来源快照和随机十六进制 `artifactRevision`；Markdown 写入同一修订标记并作为用户可见正式产物。双文件替换失败回滚上一版，读取时必须同时验证双文件、当前 Schema、确认状态、TechnicalPlan 指纹和修订号一致；历史结构不读取、不迁移并直接视为 stale。TechnicalPlan 契约改变会使 Endpoint 变为“需重新设计”，确认后的数据源目录变化不主动使其失效；Build 使用快照并在运行时按 `sourceId` 安全解析凭据。
 
 用户确认开发门禁时，工作流消息保存当次聚合 `apiDesignResult` 快照，右侧开发产物通过独立 `/endpoint-designs/run` AG-UI 读取当前正式产物。该接口按当前工作区、API Contract 与 Endpoint 标识提供 `get/prepare/save`，返回 pending、confirmed 或 stale 状态以及结构化设计和 Markdown；保存只更新映射，不启动主工作流。右侧详情与工作流卡片共用请求/返回字段映射投影，弹窗保存后刷新原门禁，仍由用户确认是否继续开发。
 

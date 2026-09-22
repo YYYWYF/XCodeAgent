@@ -92,8 +92,8 @@ class ModelProviderConversionTests(unittest.TestCase):
                 "MODEL_BASE_URL": "https://example.com/v1",
                 "MODEL_API_KEY": "test-key",
                 "MODEL_NAME": "test-model",
-                "XCODEAGENT_UI_DESIGN_MAX_TOKENS": "12288",
-                "XCODEAGENT_UI_DESIGN_MAX_RETRIES": "3",
+                "DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS": "12288",
+                "DEVAGENTSTUDIO_UI_DESIGN_MAX_RETRIES": "3",
             },
             clear=True,
         ):
@@ -127,7 +127,7 @@ class ModelProviderConversionTests(unittest.TestCase):
                 "MODEL_BASE_URL": "https://example.com/v1",
                 "MODEL_API_KEY": "test-key",
                 "MODEL_NAME": "test-model",
-                "XCODEAGENT_DAG_BUSINESS_SELF_CHECK_ENABLED": "true",
+                "DEVAGENTSTUDIO_DAG_BUSINESS_SELF_CHECK_ENABLED": "true",
             },
             clear=True,
         ):

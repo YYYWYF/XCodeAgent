@@ -1,3 +1,5 @@
+
+from app.branding import WORKSPACE_ARTIFACT_DIR
 """统一预览启动事实、分端日志及当前进程健康投影。"""
 
 import json
@@ -68,7 +70,7 @@ def _service_port(root: Path, layer: str, part: dict[str, Any]) -> int | None:
 
 def runtime_root(workspace: str | Path) -> Path:
     """返回平台管理的标准预览目录。"""
-    return Path(workspace).expanduser().resolve() / ".xcodeagent" / "runtime" / "launch"
+    return Path(workspace).expanduser().resolve() / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
 
 
 def redact(text: str) -> str:

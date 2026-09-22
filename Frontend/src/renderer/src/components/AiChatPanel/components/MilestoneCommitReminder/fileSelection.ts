@@ -34,7 +34,7 @@ export function toggleSelectAll(input: {
  * requested，用户勾上就会被拒"所选文件已不属于当前可提交变更"。
  *
  * 曾经的 bug：`requestedPaths` 被直接别名成提醒口径（默认只含业务代码），而弹窗列出
- * 的是全部变更 —— 于是点"全选"必然失败，只有不勾 .xcodeagent 才能提交。
+ * 的是全部变更 —— 于是点"全选"必然失败，只有不勾 .devagentstudio 才能提交。
  * 这个断言把"提醒口径 ≠ 可提交范围"钉住。
  */
 export function isSelectionScopeValid(input: {

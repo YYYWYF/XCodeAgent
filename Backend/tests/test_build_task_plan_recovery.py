@@ -189,7 +189,7 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
         build_context = {
             "target": {"type": "page", "id": "dashboard", "page_key": "Dashboard"},
             "required_unit_ids": ["page:dashboard"],
-            "template_context": {"state_path": ".xcodeagent/template-state.json", "template_revision": "r1", "effective_capabilities": {"authorization": {"enabled": True}}},
+            "template_context": {"state_path": ".devagentstudio/template-state.json", "template_revision": "r1", "effective_capabilities": {"authorization": {"enabled": True}}},
         }
         prepared_plan = create_build_task_plan(
             {"version": "1.0.0"},
@@ -320,7 +320,7 @@ class BuildTaskPlanRecoveryTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as workspace:
-            plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            plan_path = Path(workspace) / ".devagentstudio/plans/build-task-plan.json"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(json.dumps(valid_plan), encoding="utf-8")
             resolved = _existing_build_task_plan(

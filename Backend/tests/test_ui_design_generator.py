@@ -40,9 +40,9 @@ class UiDesignSettingsTests(unittest.TestCase):
             "MODEL_BASE_URL": "https://example.test/v1",
             "MODEL_API_KEY": "test-key",
             "MODEL_NAME": "test-model",
-            "XCODEAGENT_UI_DESIGN_MAX_TOKENS": "12288",
-            "XCODEAGENT_UI_DESIGN_MAX_RETRIES": "3",
-            "XCODEAGENT_UI_DESIGN_CONCURRENCY": "5",
+            "DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS": "12288",
+            "DEVAGENTSTUDIO_UI_DESIGN_MAX_RETRIES": "3",
+            "DEVAGENTSTUDIO_UI_DESIGN_CONCURRENCY": "5",
         }
         with patch.dict(os.environ, environment, clear=True):
             settings = Settings.from_env()

@@ -409,14 +409,14 @@ type LocalDesignWorkspaceSnapshot = {
 // 同一 renderer 内每个应用只执行一次冷恢复；缓存 Promise 同时合并 React StrictMode 重放。
 const localDesignRecoveryCache = new Map<string, Promise<LocalDesignWorkspaceSnapshot>>()
 
-const TECHNICAL_PLAN_JSON_PATH = '.xcodeagent/plans/technical-plan.json'
+const TECHNICAL_PLAN_JSON_PATH = '.devagentstudio/plans/technical-plan.json'
 const PRODUCT_PLAN_JSON_PATHS = [
-  '.xcodeagent/drafts/plans/product-plan.json',
-  '.xcodeagent/plans/product-plan.json'
+  '.devagentstudio/drafts/plans/product-plan.json',
+  '.devagentstudio/plans/product-plan.json'
 ] as const
 const REQUIREMENT_SPEC_JSON_PATHS = [
-  '.xcodeagent/drafts/specs/requirement-spec.json',
-  '.xcodeagent/specs/requirement-spec.json'
+  '.devagentstudio/drafts/specs/requirement-spec.json',
+  '.devagentstudio/specs/requirement-spec.json'
 ] as const
 
 const DESIGN_ARTIFACT_PATH_FIELDS: Record<DesignDocArtifactKey, readonly string[]> = {
@@ -3571,7 +3571,7 @@ export default function AiChatPanel({
   const acceptancePreviewFocus =
     activeWorkbenchPhase === 'acceptance' && showRightPanel && rightPanel?.type === 'preview'
   // 「检查遗漏变更」：未提交文件里没被任何模块任务认领的部分。
-  // 用 codePaths 而不是 eligiblePaths —— `.xcodeagent` 平台产物永远不在构建计划的
+  // 用 codePaths 而不是 eligiblePaths —— `.devagentstudio` 平台产物永远不在构建计划的
   // 模块归属里，算进来会把每个产物文件都误报成"未关联到任何模块"。
   const { snapshot: uncommittedSnapshot } = useUncommittedChanges()
   // 与 VersionActions 同一刷新信号：构建推进或文件落盘时重读构建计划，
@@ -4678,7 +4678,7 @@ export default function AiChatPanel({
                   与代码提交入口分开用不同文案，且只在用户点击时打开弹窗、不自动弹。
 
                   唯一传 includePlatformArtifacts 的提醒：设计阶段唯一的变更就是
-                  `.xcodeagent` 规划产物，按业务代码口径算永远是 0，提醒会彻底消失。
+                  `.devagentstudio` 规划产物，按业务代码口径算永远是 0，提醒会彻底消失。
                   文档 §4.3 正是把它定位成与"代码提交入口分开"的第二条通道。 */}
               {hasConfirmedDesignDocument(applicationLifecycle?.initialization?.stage) ? (
                 <MilestoneCommitReminder

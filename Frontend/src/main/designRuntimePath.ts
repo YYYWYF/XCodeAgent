@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 
-export const DESIGN_RUNTIME_SCHEME = 'xcodeagent-design'
+export const DESIGN_RUNTIME_SCHEME = 'devagentstudio-design'
 
 const DESIGN_RUNTIME_FILES: Readonly<Record<string, string>> = {
   '/design-frame.html': 'design-frame.html',

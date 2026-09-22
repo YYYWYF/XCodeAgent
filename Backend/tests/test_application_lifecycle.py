@@ -266,8 +266,8 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            specs = workspace / ".xcodeagent/specs"
-            plans = workspace / ".xcodeagent/plans"
+            specs = workspace / ".devagentstudio/specs"
+            plans = workspace / ".devagentstudio/plans"
             specs.mkdir(parents=True)
             plans.mkdir(parents=True)
             for path, payload in (
@@ -279,7 +279,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 path.write_text(json.dumps(payload), encoding="utf-8")
             for relative in ("frontend", "backend", ".git"):
                 (workspace / relative).mkdir()
-            state_path = workspace / ".xcodeagent/template-state.json"
+            state_path = workspace / ".devagentstudio/template-state.json"
             state_path.write_text(
                 json.dumps({
                     "schemaVersion": 2,
@@ -314,7 +314,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
 
             self.assertEqual(ready.initialization.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
-            self.assertFalse((workspace / ".xcodeagent/template-generation-manifest.json").exists())
+            self.assertFalse((workspace / ".devagentstudio/template-generation-manifest.json").exists())
 
     def test_failed_workspace_bootstrap_can_enter_a_new_generation_attempt(self) -> None:
         """模板失败后只能由显式重试动作清除错误并回到生成阶段。"""
@@ -414,7 +414,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            plan_path = workspace / ".xcodeagent/plans/technical-plan.json"
+            plan_path = workspace / ".devagentstudio/plans/technical-plan.json"
             plan_path.parent.mkdir(parents=True)
             plan_path.write_text(
                 json.dumps({"artifact_type": "technical-plan", "pages": [{"pageId": "dashboard"}]}),

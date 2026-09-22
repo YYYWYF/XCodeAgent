@@ -182,7 +182,7 @@ def planning_inputs(*, plan=None, baseline=None, required=None, scope=None, cont
             "pages": [{"pageId": key, "name": key.upper(), "path": f"/{key}"} for key in ("a", "b", "c", "history")],
             "page_implementation_contracts": [{
                 "schema_version": "page-implementation-contract.v1", "pageId": key,
-                "uiDesignRef": {"path": f".xcodeagent/ui-design/pages/{key.title()}/index.tsx"},
+                "uiDesignRef": {"path": f".devagentstudio/ui-design/pages/{key.title()}/index.tsx"},
                 "requiredEndpointIds": [],
             } for key in ("a", "b", "c", "history")],
         }
@@ -190,7 +190,7 @@ def planning_inputs(*, plan=None, baseline=None, required=None, scope=None, cont
     context = context or {
         "scope": scope,
         "template_context": {
-            "state_path": ".xcodeagent/template-state.json",
+            "state_path": ".devagentstudio/template-state.json",
             "template_revision": "fixture-template-r1",
             "effective_capabilities": {},
         },
@@ -206,7 +206,7 @@ def planning_inputs(*, plan=None, baseline=None, required=None, scope=None, cont
                                build_context=context, workspace_snapshot=snapshot, formal_plan=plan)
     facts = facts.model_copy(update={"external_capabilities": (ExternalCapability(
         unit_id="frontend:shell", capability_id="frontend.shell.ready", source="template_state",
-        workspace_revision=snapshot["workspace_revision"], source_refs={"manifest_path": ".xcodeagent/template-generation-manifest.json"},
+        workspace_revision=snapshot["workspace_revision"], source_refs={"manifest_path": ".devagentstudio/template-generation-manifest.json"},
     ),)})
     try:
         requirements = resolve_generation_requirements(

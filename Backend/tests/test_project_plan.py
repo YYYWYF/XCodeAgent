@@ -81,8 +81,8 @@ class ProjectPlanTests(unittest.TestCase):
             ["库存管理系统核心流程通过端到端验收。"],
         )
 
-    def test_project_acceptance_excludes_xcodeagent_workflow_gates(self) -> None:
-        """ProjectPlan 产品验收不得混入 XCodeAgent 测试和流程门禁。"""
+    def test_project_acceptance_excludes_devagentstudio_workflow_gates(self) -> None:
+        """ProjectPlan 产品验收不得混入 DevAgent Studio 测试和流程门禁。"""
 
         spec = create_requirement_spec("创建一个库存管理系统")
         plan = create_project_plan(

@@ -17,7 +17,7 @@ export type DatabaseTable = {
   columns: DatabaseTableColumn[]
 }
 /** 数据库接入模式：模拟数据库免配置（开发环境的本地模拟库）；DBID 凭实例标识接入；本地直连接入本机自装的数据库软件。 */
-// 注意概念边界：AIStudio 的产物是代码与脚本，生产部署由用户使用行内资源完成，
+// 注意概念边界：DevAgent Studio 的产物是代码与脚本，生产部署由用户使用行内资源完成，
 // 平台只承担开发任务——因此这里是“模拟数据库”，不是低代码平台自带运行时的“内置数据库”。
 export type DatabaseSourceMode = 'builtin' | 'dbid' | 'direct'
 
@@ -105,8 +105,8 @@ export type DataSource = DatabaseDataSource | ExternalApiSource | ExternalApiDom
 
 // 结构升级即换缓存键：旧目录数据直接丢弃，不做兼容迁移。
 // v14：模拟库连接名改「回检系统库」（贴近真实场景，避免与“模拟数据库”模式语义重复）。
-const STORAGE_KEY = 'aistudio:prototype:data-sources:v16'
-const CHANGE_EVENT = 'aistudio:prototype:data-sources-changed'
+const STORAGE_KEY = 'devagentstudio:prototype:data-sources:v16'
+const CHANGE_EVENT = 'devagentstudio:prototype:data-sources-changed'
 
 export const DATABASE_MODE_LABEL: Record<DatabaseSourceMode, string> = {
   builtin: '模拟数据库',

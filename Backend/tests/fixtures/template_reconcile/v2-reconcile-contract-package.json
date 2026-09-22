@@ -18,8 +18,8 @@
           "nodeType": "array",
           "position": "beforeEnd"
         },
-        "managedMarker": "xcodeagent:login-route",
-        "content": "// xcodeagent:login-route\n{ path: '/login' },\n"
+        "managedMarker": "devagentstudio:login-route",
+        "content": "// devagentstudio:login-route\n{ path: '/login' },\n"
       },
       "payloadRef": null
     }

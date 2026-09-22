@@ -64,7 +64,7 @@
 //         <Text type="secondary">
 //           {confirmed
 //             ? `Run: ${orchestration.runId || run?.runId || '未写入运行产物'}`
-//             : '确认后才会创建 .xcodeagent 运行产物并进入执行调度。'}
+//             : '确认后才会创建 .devagentstudio 运行产物并进入执行调度。'}
 //         </Text>
 //         {!confirmed && onConfirm && (
 //           <Button

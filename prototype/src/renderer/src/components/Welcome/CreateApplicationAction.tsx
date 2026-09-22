@@ -38,7 +38,7 @@ export default function CreateApplicationAction({
 
   // 打开应用基础配置弹窗，并异步预填一个全新的合法项目目录：
   // 演示旅程要求“新建应用”开箱即走，用户不应手输目录，更不应撞上已有应用目录
-  // 而被“已有 AIStudio 应用目录不能复用”拦截。
+  // 而被“已有 DevAgent Studio 应用目录不能复用”拦截。
   const openModal = (): void => {
     setModalOpen(true)
     void prefillProjectDirectory()
@@ -47,7 +47,7 @@ export default function CreateApplicationAction({
   /** 预填新项目目录；仅在用户尚未填写时写入，不覆盖手动输入，失败时仍可手动选择。 */
   const prefillProjectDirectory = async (): Promise<void> => {
     try {
-      const workspaceApi = window.aiStudio?.workspace
+      const workspaceApi = window.devAgentStudio?.workspace
       if (!workspaceApi?.selectDirectory) return
       const result = await workspaceApi.selectDirectory({ title: '选择新应用的创建位置' })
       const currentPath = String(form.getFieldValue('projectPath') || '').trim()
@@ -63,7 +63,7 @@ export default function CreateApplicationAction({
   const handleSelectProjectParent = async (): Promise<void> => {
     setSelectingParent(true)
     try {
-      const workspaceApi = window.aiStudio?.workspace
+      const workspaceApi = window.devAgentStudio?.workspace
       if (!workspaceApi?.selectDirectory) {
         message.warning('当前环境不能打开系统目录选择器，请在桌面客户端中使用。')
         return
@@ -90,7 +90,7 @@ export default function CreateApplicationAction({
         ...initialApplicationDraft,
         ...(await form.validateFields())
       }
-      const workspaceApi = window.aiStudio?.workspace
+      const workspaceApi = window.devAgentStudio?.workspace
       if (!workspaceApi?.createProjectDirectory) {
         throw new Error('当前环境不能创建本地项目目录，请在桌面客户端中使用。')
       }

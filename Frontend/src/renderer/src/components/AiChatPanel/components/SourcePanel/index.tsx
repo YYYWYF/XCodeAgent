@@ -229,7 +229,7 @@ export default function SourcePanel({
   const [docPaths, setDocPaths] = useState<Record<string, string>>({})
   const [docsProbed, setDocsProbed] = useState(false)
 
-  // 加载工作区工程目录树（frontend + backend 等），后端自动过滤 .xcodeagent/node_modules
+  // 加载工作区工程目录树（frontend + backend 等），后端自动过滤 .devagentstudio/node_modules
   useEffect(() => {
     if (!workspaceRoot) {
       setTree(undefined)
@@ -266,7 +266,7 @@ export default function SourcePanel({
     }
   }, [workspaceRoot, revision])
 
-  // 规划文档位于 .xcodeagent 下，不出现在工程目录树里（树默认不列隐藏目录），
+  // 规划文档位于 .devagentstudio 下，不出现在工程目录树里（树默认不列隐藏目录），
   // 因此单独探测一遍：每个文档取第一个存在的路径，都不存在则标记为缺失。
   useEffect(() => {
     if (!workspaceRoot) {
@@ -448,7 +448,7 @@ export default function SourcePanel({
           </header>
 
           <div className={cx('source-panel-tree-body')}>
-            {/* 规划文档分组：位于 .xcodeagent 下，不在工程目录树里，单独列在最上面。 */}
+            {/* 规划文档分组：位于 .devagentstudio 下，不在工程目录树里，单独列在最上面。 */}
             <ul className={cx('source-tree', 'source-doc-tree')}>
               {BROWSABLE_DESIGN_DOCS.map((doc) => {
                 const path = docPaths[doc.key]

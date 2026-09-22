@@ -17,7 +17,7 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 /frontend/
 ```
 
-直接平铺在工作区根目录下，与 `.xcodeagent` 同级。
+直接平铺在工作区根目录下，与 `.devagentstudio` 同级。
 
 因此本技能里写的每一条 `src/...` 路径，在调用文件系统工具时都要加上前缀 `/frontend/`：
 
@@ -33,7 +33,7 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 | `src/constants/resources.ts` | `/frontend/src/constants/resources.ts`（authorization effective 时由平台投影） |
 | `src/constants/routes.tsx` | `/frontend/src/constants/routes.tsx`（所有应用由平台 Route Projection 管理） |
 
-**生成代码前，读取 `/.xcodeagent/template-state.json` 的 `effective` 与当前任务允许路径。** 平台拥有共享路由；authorization effective 时平台额外拥有资源目录与权限 decoration。不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
+**生成代码前，读取 `/.devagentstudio/template-state.json` 的 `effective` 与当前任务允许路径。** 平台拥有共享路由；authorization effective 时平台额外拥有资源目录与权限 decoration。不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
 
 ## 🔴 前端工程根目录禁止创建文件
 
@@ -59,11 +59,11 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 | `src/components/<Module>/` | 可复用组件 `index.tsx` |
 | `src/apis/` | 业务接口 `<biz>Api.ts` |
 
-> 在 XCodeAgent 的 Frontend task 中，类型检查、构建、安装、lint 和测试由外层 integration-test 阶段统一执行，Frontend Agent 不调用这些项目级命令。独立人工流程且用户明确要求验证时，仍然禁止创建临时脚本。
+> 在 DevAgent Studio 的 Frontend task 中，类型检查、构建、安装、lint 和测试由外层 integration-test 阶段统一执行，Frontend Agent 不调用这些项目级命令。独立人工流程且用户明确要求验证时，仍然禁止创建临时脚本。
 
 ## 🔴 验证边界：由外层质量门禁统一执行
 
-在 XCodeAgent 的 Frontend task 中，写完代码后不要运行依赖安装、TypeScript 类型检查、lint、build、unit test 或 dev-server 命令。外层 integration-test 阶段会在所有 owner task 完成后统一执行仓库级检查；如果发现依赖或命令缺失，应在最终 JSON 中报告，不能通过安装依赖或临时脚本绕过边界。
+在 DevAgent Studio 的 Frontend task 中，写完代码后不要运行依赖安装、TypeScript 类型检查、lint、build、unit test 或 dev-server 命令。外层 integration-test 阶段会在所有 owner task 完成后统一执行仓库级检查；如果发现依赖或命令缺失，应在最终 JSON 中报告，不能通过安装依赖或临时脚本绕过边界。
 
 ### 外层质量门禁负责的检查
 
@@ -83,7 +83,7 @@ Frontend Agent 只负责实现 task 声明的代码变更和读取真实源码�
 
 ### 独立人工流程读取命令输出
 
-只有在脱离 XCodeAgent task 的独立人工流程中，用户明确要求执行命令时，才读取 `execute` 返回的 `{ exit_code, stdout, stderr }`；不要用 `echo "EXIT_CODE=$?"` 包装命令，也不要为此创建脚本。
+只有在脱离 DevAgent Studio task 的独立人工流程中，用户明确要求执行命令时，才读取 `execute` 返回的 `{ exit_code, stdout, stderr }`；不要用 `echo "EXIT_CODE=$?"` 包装命令，也不要为此创建脚本。
 
 ## 核心原则
 

@@ -199,7 +199,7 @@ export default function SkillsPage({
               <Title level={4}>技能</Title>
               <Tag>{categorySkills.length} 个{category === 'user' ? '用户' : '内置'}</Tag>
             </div>
-            <Text>{categoryRoot || (category === 'user' ? '~/.aistudio_dev/skills' : '/.aistudio/builtin-skills')}</Text>
+            <Text>{categoryRoot || (category === 'user' ? '~/.devagentstudio_dev/skills' : '/.devagentstudio/builtin-skills')}</Text>
           </div>
         </div>
         <div className={cx('skills-actions')}>

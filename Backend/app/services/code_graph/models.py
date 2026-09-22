@@ -140,7 +140,7 @@ class CodeGraphQueryResult:
         """把查询结果转换为模型可消费的 bounded JSON。"""
 
         payload: dict[str, Any] = {
-            "schemaVersion": "xcodeagent.code_graph_context.v1",
+            "schemaVersion": "devagentstudio.code_graph_context.v1",
             "status": self.status,
             "workspaceRevision": self.workspace_revision,
             "operation": self.operation,

@@ -31,7 +31,7 @@ def _five_page_inputs():
             "schema_version": "page-implementation-contract.v1",
             "pageId": page_id,
             "uiDesignRef": {
-                "path": f".xcodeagent/ui-design/pages/{page_id.upper()}/index.tsx",
+                "path": f".devagentstudio/ui-design/pages/{page_id.upper()}/index.tsx",
             },
             "requiredEndpointIds": [],
         })

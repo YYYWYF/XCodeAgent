@@ -17,7 +17,7 @@ from app.services.backend_project_launcher import (
 def _write_application(workspace: Path, *, use_builtin: bool = False) -> None:
     """写入启动器测试所需的应用数据库配置。"""
 
-    application_file = workspace / ".xcodeagent" / "application.json"
+    application_file = workspace / ".devagentstudio" / "application.json"
     application_file.parent.mkdir(parents=True)
     application_file.write_text(
         json.dumps(

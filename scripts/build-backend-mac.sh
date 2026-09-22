@@ -38,10 +38,10 @@ case "$PYTHON_VERSION" in
 esac
 
 ENV_FILE="$BACKEND_ROOT/.env"
-SPEC_FILE="$BACKEND_ROOT/packaging/xcodeagent-backend.spec"
-DIST_DIR="$BACKEND_ROOT/dist/xcodeagent-backend"
+SPEC_FILE="$BACKEND_ROOT/packaging/devagentstudio-backend.spec"
+DIST_DIR="$BACKEND_ROOT/dist/devagentstudio-backend"
 TARGET_DIR="$FRONTEND_ROOT/resources/backend/darwin-$BUILD_ARCH"
-TARGET_EXECUTABLE="$TARGET_DIR/xcodeagent-backend"
+TARGET_EXECUTABLE="$TARGET_DIR/devagentstudio-backend"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing Backend/.env. Create it before building the packaged backend." >&2

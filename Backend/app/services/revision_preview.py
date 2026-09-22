@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import hashlib
 import re
 import shutil
@@ -37,9 +39,9 @@ from app.services.version_control import _run_git
 
 ProgressCallback = Callable[[str, str, int], None]
 
-# 物化目录放在工作区运行时目录下：`.xcodeagent/runtime/` 已被 .gitignore 排除，
+# 物化目录放在工作区运行时目录下：`.devagentstudio/runtime/` 已被 .gitignore 排除，
 # 不会污染 `git status`，且随工作区一起被清理。
-REVISION_PREVIEW_ROOT = ".xcodeagent/runtime/revision-preview"
+REVISION_PREVIEW_ROOT = ".devagentstudio/runtime/revision-preview"
 REVISION_PREVIEW_RUNTIME_SUBDIR_PREFIX = "launch-revision-"
 
 # 等该版本的 dev server 真正就绪的上限。比常规预览宽松：历史版本的首次启动要现编译
@@ -224,7 +226,7 @@ def start_revision_preview(
         report("install", "正在安装该版本的依赖…", 45)
 
     report("launch", "正在启动该版本的前端服务…", 70)
-    runtime_root = root / ".xcodeagent" / "runtime" / revision_preview_runtime_subdir(revision)
+    runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / revision_preview_runtime_subdir(revision)
     # 清掉上一次启动的 stdout 日志再启动：下面的地址解析是从日志里找 `Local:` 行，
     # 留着旧内容就可能解析出上一次那个已经失效的端口。
     (runtime_root / "frontend.stdout.log").unlink(missing_ok=True)
@@ -345,7 +347,7 @@ def revision_preview_state(workspace_root: str | Path, revision: str) -> dict[st
     if not revision:
         return {"status": "idle", "revision": revision}
 
-    runtime_root = root / ".xcodeagent" / "runtime" / revision_preview_runtime_subdir(revision)
+    runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / revision_preview_runtime_subdir(revision)
     target = revision_preview_dir(root, revision)
 
     pid = 0

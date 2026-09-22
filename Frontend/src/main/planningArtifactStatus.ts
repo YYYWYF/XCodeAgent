@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
+import { WORKSPACE_ARTIFACT_DIR_NAME } from './branding'
 
 export const PRODUCT_PLAN_SCHEMA_VERSION = 'product-plan.v5'
 export const ENDPOINT_API_DESIGN_SCHEMA_VERSION = 'endpoint-field-mapping.v3'
@@ -21,7 +22,7 @@ export function endpointDesignDocumentPath(
 ): string {
   return path.join(
     workspaceRoot,
-    '.xcodeagent',
+    WORKSPACE_ARTIFACT_DIR_NAME,
     'plans',
     'endpoints',
     `${endpointDocumentStem(apiContractId, endpointId)}.md`
@@ -36,7 +37,7 @@ export function endpointDesignJsonPath(
 ): string {
   return path.join(
     workspaceRoot,
-    '.xcodeagent',
+    WORKSPACE_ARTIFACT_DIR_NAME,
     'plans',
     'endpoints',
     `${endpointDocumentStem(apiContractId, endpointId)}.json`
@@ -147,12 +148,12 @@ export async function endpointDesignDocumentStatus(
     const [markdown, jsonText, technicalPlan] = await Promise.all([
       fs.readFile(markdownPath, 'utf8'),
       fs.readFile(jsonPath, 'utf8'),
-      fs.readFile(path.join(workspaceRoot, '.xcodeagent', 'plans', 'technical-plan.json'))
+      fs.readFile(path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'plans', 'technical-plan.json'))
     ])
     if (!markdown.trim()) {
       return { designed: false, status: 'stale', reason: 'API 设计 Markdown 为空。' }
     }
-    const markdownRevision = markdown.match(/xcodeagent-artifact-revision:\s*([0-9a-f]{32})/)?.[1] || ''
+    const markdownRevision = markdown.match(/devagentstudio-artifact-revision:\s*([0-9a-f]{32})/)?.[1] || ''
     const design = JSON.parse(jsonText) as Record<string, unknown>
     const basedOn = Array.isArray(design.basedOn)
       ? design.basedOn.filter((item): item is Record<string, unknown> =>

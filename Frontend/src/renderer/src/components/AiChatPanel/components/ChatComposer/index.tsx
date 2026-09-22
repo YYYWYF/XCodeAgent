@@ -225,7 +225,7 @@ export default function ChatComposer({
                     ))}
                   </Select>
                   <Text className={cx('workflow-debug-auto-paths')} title={workspaceRoot}>
-                    自动读取当前工作目录下的 .xcodeagent 产物
+                    自动读取当前工作目录下的 .devagentstudio 产物
                   </Text>
                   {resumeFrom === 'prepare_build_tasks' && (
                     <div className={cx('workflow-debug-build-scope')}>

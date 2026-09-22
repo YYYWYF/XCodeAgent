@@ -28,7 +28,7 @@ type Props = {
    */
   description?: string
   /**
-   * 是否把 `.xcodeagent` 平台产物也算作可提交（默认否，见 `useMilestoneCommit`）。
+   * 是否把 `.devagentstudio` 平台产物也算作可提交（默认否，见 `useMilestoneCommit`）。
    *
    * 只有设计阶段的「设计文档已确认，可保存为设计版本」传 true。
    */

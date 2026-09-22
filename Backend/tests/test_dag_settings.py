@@ -17,8 +17,8 @@ _MODEL_ENV = {
     "MODEL_NAME": "test-model",
 }
 _DAG_FIELDS = {
-    "XCODEAGENT_DAG_UNIT_MAX_TOKENS": ("dag_unit_max_tokens", 4096),
-    "XCODEAGENT_DAG_UNIT_CONCURRENCY": ("dag_unit_generation_concurrency", 3),
+    "DEVAGENTSTUDIO_DAG_UNIT_MAX_TOKENS": ("dag_unit_max_tokens", 4096),
+    "DEVAGENTSTUDIO_DAG_UNIT_CONCURRENCY": ("dag_unit_generation_concurrency", 3),
 }
 
 
@@ -58,7 +58,7 @@ class DagSettingsTests(unittest.TestCase):
         globals_env = {
             "AGENT_MAX_TOKENS": "8192", "MODEL_MAX_RETRIES": "5",
             "MODEL_TIMEOUT_SECONDS": "90", "BUILD_TASK_PLAN_MAX_RETRIES": "4",
-            "XCODEAGENT_UI_DESIGN_MAX_TOKENS": "12000", "XCODEAGENT_UI_DESIGN_CONCURRENCY": "2",
+            "DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS": "12000", "DEVAGENTSTUDIO_UI_DESIGN_CONCURRENCY": "2",
         }
         expected = asdict(_settings(**globals_env))
         overrides = dict(zip(_DAG_FIELDS, ("6000", "1")))
@@ -100,7 +100,7 @@ class DagSettingsTests(unittest.TestCase):
         """允许并发为 1，固定重试策略不受影响。"""
 
         settings = _settings(
-            XCODEAGENT_DAG_UNIT_MAX_TOKENS="1", XCODEAGENT_DAG_UNIT_CONCURRENCY="1",
+            DEVAGENTSTUDIO_DAG_UNIT_MAX_TOKENS="1", DEVAGENTSTUDIO_DAG_UNIT_CONCURRENCY="1",
         )
         self.assertEqual([getattr(settings, field) for field, _ in _DAG_FIELDS.values()], [1, 1])
 
@@ -115,11 +115,11 @@ class DagSettingsTests(unittest.TestCase):
         """Local/Global 不再是环境或构造入口；所有可构造配置都保持 3/2。"""
 
         for value in ("1", "4", "0", "invalid"):
-            settings = _settings(XCODEAGENT_DAG_UNIT_LOCAL_MAX_ATTEMPTS=value, XCODEAGENT_DAG_GLOBAL_REPAIR_LIMIT=value)
+            settings = _settings(DEVAGENTSTUDIO_DAG_UNIT_LOCAL_MAX_ATTEMPTS=value, DEVAGENTSTUDIO_DAG_GLOBAL_REPAIR_LIMIT=value)
             self.assertEqual((settings.dag_unit_local_max_attempts, settings.dag_global_repair_limit), (3, 2))
         for field in ("dag_unit_local_max_attempts", "dag_global_repair_limit"):
             with self.assertRaises(TypeError):
                 Settings(model_base_url="test", model_api_key="test", model_name="test", **{field: 1})
         example = dotenv_values(Path(__file__).resolve().parents[1] / ".env.example", interpolate=False)
-        self.assertNotIn("XCODEAGENT_DAG_UNIT_LOCAL_MAX_ATTEMPTS", example)
-        self.assertNotIn("XCODEAGENT_DAG_GLOBAL_REPAIR_LIMIT", example)
+        self.assertNotIn("DEVAGENTSTUDIO_DAG_UNIT_LOCAL_MAX_ATTEMPTS", example)
+        self.assertNotIn("DEVAGENTSTUDIO_DAG_GLOBAL_REPAIR_LIMIT", example)

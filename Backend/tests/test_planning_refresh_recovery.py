@@ -124,14 +124,14 @@ def _write_formal_confirmation_context(workspace: Path) -> None:
     technical_plan, requirement_spec, product_plan, ui_designs = (
         _formal_confirmation_context()
     )
-    _write_json(workspace, ".xcodeagent/plans/technical-plan.json", technical_plan)
+    _write_json(workspace, ".devagentstudio/plans/technical-plan.json", technical_plan)
     _write_json(
         workspace,
-        ".xcodeagent/specs/requirement-spec.json",
+        ".devagentstudio/specs/requirement-spec.json",
         requirement_spec,
     )
-    _write_json(workspace, ".xcodeagent/plans/product-plan.json", product_plan)
-    _write_json(workspace, ".xcodeagent/specs/ui-designs.json", ui_designs)
+    _write_json(workspace, ".devagentstudio/plans/product-plan.json", product_plan)
+    _write_json(workspace, ".devagentstudio/specs/ui-designs.json", ui_designs)
     contract = technical_plan["api_contracts"][0]
     endpoint = contract["endpoints"][0]
     field_mappings = []
@@ -409,7 +409,7 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
 
         _write_json(
             Path(self.workspace),
-            ".xcodeagent/plans/technical-plan.json",
+            ".devagentstudio/plans/technical-plan.json",
             {
                 "artifact_type": "technical-plan",
                 "confirmation_status": "confirmed",

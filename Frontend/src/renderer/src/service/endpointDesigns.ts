@@ -12,7 +12,7 @@ import { createAgUiHttpAgent } from './authentication'
 
 /** 返回 Endpoint 设计独立 AG-UI 路由地址。 */
 function endpointDesignsUrl(): string {
-  const baseUrl = window.xcodeAgent?.agentBaseUrl
+  const baseUrl = window.devAgentStudio?.agentBaseUrl
   return baseUrl
     ? `${baseUrl.replace(/\/$/, '')}/endpoint-designs/run`
     : '/api/agent/endpoint-designs/run'

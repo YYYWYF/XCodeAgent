@@ -2,7 +2,7 @@ import { app } from 'electron'
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { XCODE_AGENT_ENV } from './env'
+import { DEVAGENTSTUDIO_ENV } from './env'
 
 export type AuthRecord = {
   access_token: string
@@ -12,14 +12,14 @@ const MOCK_LOGIN_DELAY_MS = 2000
 
 let accessToken: string | null = null
 
-/** 获取当前运行环境对应的 XCodeAgent 数据目录。 */
-export function getXcodeAgentDataDir(): string {
-  return path.join(app.getPath('home'), XCODE_AGENT_ENV.WORKING_DIR)
+/** 获取当前运行环境对应的 DevAgent Studio 数据目录。 */
+export function getDevAgentStudioDataDir(): string {
+  return path.join(app.getPath('home'), DEVAGENTSTUDIO_ENV.WORKING_DIR)
 }
 
 /** 确保当前运行环境对应的数据目录已经创建。 */
-export async function ensureXcodeAgentDataDir(): Promise<string> {
-  const dataDir = getXcodeAgentDataDir()
+export async function ensureDevAgentStudioDataDir(): Promise<string> {
+  const dataDir = getDevAgentStudioDataDir()
   await fs.mkdir(dataDir, { recursive: true })
   return dataDir
 }
@@ -33,12 +33,12 @@ function delay(ms: number): Promise<void> {
 
 /** 返回当前环境的认证记录文件路径。 */
 function getAuthFile(): string {
-  return path.join(getXcodeAgentDataDir(), 'auth.json')
+  return path.join(getDevAgentStudioDataDir(), 'auth.json')
 }
 
 /** 将认证记录写入当前环境的 auth.json。 */
 async function writeAuthRecord(authRecord: AuthRecord): Promise<void> {
-  await ensureXcodeAgentDataDir()
+  await ensureDevAgentStudioDataDir()
   await fs.writeFile(getAuthFile(), `${JSON.stringify(authRecord, null, 2)}\n`, {
     encoding: 'utf8',
     mode: 0o600

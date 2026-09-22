@@ -136,7 +136,7 @@ def _plan() -> dict:
 def _write_plan(workspace: str, plan: dict) -> None:
     """写入规范 TechnicalPlan 以供指纹计算。"""
 
-    path = Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+    path = Path(workspace) / ".devagentstudio" / "plans" / "technical-plan.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
 

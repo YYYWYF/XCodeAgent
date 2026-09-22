@@ -69,7 +69,7 @@ export function useAcceptanceAutoCommit(
       const result = await commitVersionControl({
         workspaceRoot,
         // 自动保存的语义是"把当前状态存下来"，所以范围与选择都是全部变更
-        // （含 .xcodeagent 产物，版本要能追溯设计）。与模板 baseline 一致。
+        // （含 .devagentstudio 产物，版本要能追溯设计）。与模板 baseline 一致。
         requestedPaths: inspected.eligiblePaths,
         selectedPaths: inspected.eligiblePaths,
         expectedFingerprint: inspected.fingerprint,

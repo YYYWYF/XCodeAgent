@@ -38,7 +38,7 @@ type RevisionPreviewAgUiPayload = {
 
 /** 返回独立历史版本预览动作地址。 */
 function getRevisionPreviewUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/revision-preview/run`
     : '/api/agent/revision-preview/run'

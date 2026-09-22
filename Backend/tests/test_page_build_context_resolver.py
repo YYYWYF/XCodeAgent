@@ -25,7 +25,7 @@ def _write_json(path: Path, payload: dict) -> None:
 def _project_plan(workspace: Path) -> tuple[dict, Path]:
     """构造带页面实现契约、TechnicalPlan Endpoint 与 API 设计的计划。"""
 
-    plan_path = workspace / ".xcodeagent/plans/technical-plan.json"
+    plan_path = workspace / ".devagentstudio/plans/technical-plan.json"
     plan = {
         "frontend_pages": [
             {
@@ -41,13 +41,13 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
             {
                 "schema_version": "page-implementation-contract.v1",
                 "pageId": "orders",
-                "uiDesignRef": {"path": ".xcodeagent/ui-design/pages/Orders/index.tsx"},
+                "uiDesignRef": {"path": ".devagentstudio/ui-design/pages/Orders/index.tsx"},
                 "requiredEndpointIds": ["orders.list"],
             },
             {
                 "schema_version": "page-implementation-contract.v1",
                 "pageId": "customers",
-                "uiDesignRef": {"path": ".xcodeagent/ui-design/pages/Customers/index.tsx"},
+                "uiDesignRef": {"path": ".devagentstudio/ui-design/pages/Customers/index.tsx"},
                 "requiredEndpointIds": ["customers.list"],
             },
         ],
@@ -429,7 +429,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             workspace_path = Path(workspace)
             plan, plan_path = _project_plan(workspace_path)
-            for design_path in (workspace_path / ".xcodeagent/plans/endpoints").glob("*"):
+            for design_path in (workspace_path / ".devagentstudio/plans/endpoints").glob("*"):
                 design_path.unlink()
 
             with self.assertRaisesRegex(ValueError, "缺少当前版已确认动态映射"):

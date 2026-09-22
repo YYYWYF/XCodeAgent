@@ -29,7 +29,7 @@ class RequestedConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write(root, login=True, authorization=True)
-            application_file = root / ".xcodeagent" / "application.json"
+            application_file = root / ".devagentstudio" / "application.json"
             application = json.loads(application_file.read_text(encoding="utf-8"))
             application["configRevision"] = 2
             application["authorization"]["enabled"] = False
@@ -41,13 +41,13 @@ class RequestedConfigTests(unittest.TestCase):
     def _write(self, root: Path, *, login: bool, authorization: bool) -> None:
         """写入最小且正式的 Application 与 confirmed TechnicalPlan fixture。"""
 
-        xcodeagent = root / ".xcodeagent"
-        (xcodeagent / "plans").mkdir(parents=True, exist_ok=True)
-        (xcodeagent / "application.json").write_text(
+        devagentstudio = root / ".devagentstudio"
+        (devagentstudio / "plans").mkdir(parents=True, exist_ok=True)
+        (devagentstudio / "application.json").write_text(
             json.dumps({"schemaVersion": 6, "configRevision": 1, "datasource": {"type": "database"}, "auth": {"enable": login}, "authorization": {"enabled": authorization, "initialAdministratorSubjects": ["ops@example.com"] if authorization else []}}),
             encoding="utf-8",
         )
-        (xcodeagent / "plans/technical-plan.json").write_text(
+        (devagentstudio / "plans/technical-plan.json").write_text(
             json.dumps({"artifact_type": "technical-plan", "confirmation_status": "confirmed", "sourceConfigRevision": 1, "authorization_manifest": {}}),
             encoding="utf-8",
         )

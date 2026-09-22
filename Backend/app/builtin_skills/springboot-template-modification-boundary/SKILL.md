@@ -17,7 +17,7 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 /backend/
 ```
 
-直接平铺在工作区根目录下，与 `.xcodeagent`、`/frontend/` 同级。
+直接平铺在工作区根目录下，与 `.devagentstudio`、`/frontend/` 同级。
 
 因此本技能里写的每一条 `src/...` 路径，在调用文件系统工具时都要加上前缀 `/backend/`：
 
@@ -35,7 +35,7 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 | `src/main/java/com/cmbchina/backend/<module>/application/assembler/<Entity>Assembler.java` | `/backend/src/main/java/com/cmbchina/backend/<module>/application/assembler/<Entity>Assembler.java` |
 | `src/main/java/com/cmbchina/backend/<module>/adapter/web/<Entity>Controller.java` | `/backend/src/main/java/com/cmbchina/backend/<module>/adapter/web/<Entity>Controller.java` |
 
-**生成代码前，读取 `/.xcodeagent/template-state.json` 的 `effective` 与当前任务允许路径。** 不要把文件写到工作区根下的裸 `src/` 或 `Backend/src/`，那会写到错误位置。
+**生成代码前，读取 `/.devagentstudio/template-state.json` 的 `effective` 与当前任务允许路径。** 不要把文件写到工作区根下的裸 `src/` 或 `Backend/src/`，那会写到错误位置。
 
 ## 🔴 后端工程根目录禁止创建文件
 
@@ -51,7 +51,7 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 
 ## 🔴 验证边界：由外层质量门禁统一执行
 
-在 AIStudio 的 Backend task 中，写完代码后不要运行 Maven 构建、编译、单元测试或启动命令。外层 integration-test 阶段会在所有 owner task 完成后统一执行仓库级检查；如果发现依赖或命令缺失，应在最终 JSON 中报告，不能通过安装依赖或临时脚本绕过边界。
+在 DevAgent Studio 的 Backend task 中，写完代码后不要运行 Maven 构建、编译、单元测试或启动命令。外层 integration-test 阶段会在所有 owner task 完成后统一执行仓库级检查；如果发现依赖或命令缺失，应在最终 JSON 中报告，不能通过安装依赖或临时脚本绕过边界。
 
 ### ❌ Backend Agent 禁止行为
 

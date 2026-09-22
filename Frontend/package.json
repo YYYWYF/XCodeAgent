@@ -1,5 +1,5 @@
 {
-  "name": "LT54.06_XCODE_AGENT_FRONTEND_APP",
+  "name": "devagentstudio-frontend-app",
   "version": "1.0.0",
   "description": "DevAgent Studio(生成低开应用)",
   "main": "./out/main/index.js",

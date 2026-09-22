@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.branding import WORKSPACE_ARTIFACT_DIR_NAME
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapError
 from app.services.workspace_process_registry import workspace_process_registry
 
@@ -14,33 +15,33 @@ class BootstrapGitError(WorkspaceBootstrapError):
     code = "WORKSPACE_BOOTSTRAP_GIT_FAILED"
 
 
-# .xcodeagent 下的运行时产物目录，不应进入版本控制。
+# .devagentstudio 下的运行时产物目录，不应进入版本控制。
 _RUNTIME_ARTIFACT_DIRS = ("runtime", "cache", "checkpoints")
 
 _GITIGNORE_CONTENT = "\n".join(
-    f".xcodeagent/{name}/"
+    f"{WORKSPACE_ARTIFACT_DIR_NAME}/{name}/"
     for name in _RUNTIME_ARTIFACT_DIRS
 ) + "\n"
 
 
 class BootstrapGitManager:
-    """为新工作区创建模板 baseline（含 .xcodeagent 规划产物）。"""
+    """为新工作区创建模板 baseline（含 .devagentstudio 规划产物）。"""
 
     def initialize_baseline(self, workspace: str | Path) -> str:
-        """初始化独立仓库、固定本地身份并提交 frontend/backend/.xcodeagent 规划产物。"""
+        """初始化独立仓库、固定本地身份并提交 frontend/backend/.devagentstudio 规划产物。"""
 
         root = Path(workspace).expanduser().resolve()
         self._run(root, ["git", "init"])
-        self._run(root, ["git", "config", "--local", "user.name", "XcodeAgent"])
-        self._run(root, ["git", "config", "--local", "user.email", "xcodeagent@local"])
+        self._run(root, ["git", "config", "--local", "user.name", "DevAgentStudio"])
+        self._run(root, ["git", "config", "--local", "user.email", "devagentstudio@local"])
         # 排除运行时产物，避免日志、缓存和 checkpoint 污染后续提交检查。
         gitignore = root / ".gitignore"
         if not gitignore.exists():
             gitignore.write_text(_GITIGNORE_CONTENT, encoding="utf-8")
-        # 提交 frontend/backend 和 .xcodeagent 规划产物（运行时目录已被 gitignore 排除）。
+        # 提交 frontend/backend 和 .devagentstudio 规划产物（运行时目录已被 gitignore 排除）。
         add_paths = ["frontend", "backend", ".gitignore"]
-        if (root / ".xcodeagent").is_dir():
-            add_paths.append(".xcodeagent")
+        if (root / WORKSPACE_ARTIFACT_DIR_NAME).is_dir():
+            add_paths.append(WORKSPACE_ARTIFACT_DIR_NAME)
         self._run(root, ["git", "add", "--", *add_paths])
         self._run(root, ["git", "commit", "-m", "chore: 模板初始化"])
         return self._run(root, ["git", "rev-parse", "HEAD"]).strip()

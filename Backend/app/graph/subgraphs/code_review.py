@@ -33,7 +33,7 @@ _CODE_REVIEW_CAPTURE_IGNORED_DIRS = {
     ".git",
     ".hg",
     ".svn",
-    ".xcodeagent",
+    ".devagentstudio",
     "node_modules",
 }
 _CODE_REVIEW_CAPTURE_ROOTS = ("frontend", "backend/src/main/java")

@@ -160,7 +160,7 @@ class RevisionRoutingTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            config_directory = workspace / ".xcodeagent"
+            config_directory = workspace / ".devagentstudio"
             config_directory.mkdir()
             application_file = config_directory / "application.json"
             application_file.write_text(
@@ -247,7 +247,7 @@ class RevisionRoutingTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            config_directory = workspace / ".xcodeagent"
+            config_directory = workspace / ".devagentstudio"
             config_directory.mkdir()
             application_file = config_directory / "application.json"
             application_file.write_text(
@@ -685,7 +685,7 @@ class RevisionDraftTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            plans = workspace / ".xcodeagent" / "plans"
+            plans = workspace / ".devagentstudio" / "plans"
             plans.mkdir(parents=True)
             canonical_md = plans / "technical-plan.md"
             canonical_json = plans / "technical-plan.json"
@@ -1578,7 +1578,7 @@ class RevisionLifecycleTests(unittest.TestCase):
                 decision="approved",
             )
             assert active is not None
-            plans = workspace / ".xcodeagent" / "plans"
+            plans = workspace / ".devagentstudio" / "plans"
             plans.mkdir(parents=True)
             canonical = plans / "technical-plan.json"
             upstream = plans / "product-plan.json"

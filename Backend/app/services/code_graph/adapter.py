@@ -54,7 +54,7 @@ class CodeReviewGraphAdapter:
         *,
         callback: ProgressCallback | None = None,
     ) -> CodeGraphIndexResult:
-        """按照 XCodeAgent 提供的文件清单执行一次全量解析。"""
+        """按照 DevAgent Studio 提供的文件清单执行一次全量解析。"""
 
         started = time.perf_counter()
         self._emit(
@@ -388,7 +388,7 @@ class CodeReviewGraphAdapter:
 
         GraphStore, _, _ = self._load_imports()
         with GraphStore(db_path) as store:
-            # 固定 cache 布局为 <workspace>/.xcodeagent/cache/code-graph/v1；
+            # 固定 cache 布局为 <workspace>/.devagentstudio/cache/code-graph/v1；
             # 这里只用于把样例节点转换为 workspace-relative path。
             workspace_root = db_path.parents[4] if len(db_path.parents) > 4 else db_path.parent
             return self._graph_summary(store, workspace_root)

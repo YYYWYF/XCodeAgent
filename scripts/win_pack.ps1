@@ -12,13 +12,13 @@ $FrontendRoot = Join-Path $RepoRoot "Frontend"
 
 Get-Command pnpm -ErrorAction Stop | Out-Null
 
-$PreviousGrammarProfile = [Environment]::GetEnvironmentVariable("XCODEAGENT_BACKEND_GRAMMARS", "Process")
+$PreviousGrammarProfile = [Environment]::GetEnvironmentVariable("DEVAGENTSTUDIO_BACKEND_GRAMMARS", "Process")
 try {
   if ($Slim) {
-    $env:XCODEAGENT_BACKEND_GRAMMARS = "builtin"
+    $env:DEVAGENTSTUDIO_BACKEND_GRAMMARS = "builtin"
   }
   else {
-    $env:XCODEAGENT_BACKEND_GRAMMARS = "full"
+    $env:DEVAGENTSTUDIO_BACKEND_GRAMMARS = "full"
   }
 
   & $BackendScript -Python $Python
@@ -28,10 +28,10 @@ try {
 }
 finally {
   if ($null -eq $PreviousGrammarProfile) {
-    Remove-Item Env:XCODEAGENT_BACKEND_GRAMMARS -ErrorAction SilentlyContinue
+    Remove-Item Env:DEVAGENTSTUDIO_BACKEND_GRAMMARS -ErrorAction SilentlyContinue
   }
   else {
-    $env:XCODEAGENT_BACKEND_GRAMMARS = $PreviousGrammarProfile
+    $env:DEVAGENTSTUDIO_BACKEND_GRAMMARS = $PreviousGrammarProfile
   }
 }
 

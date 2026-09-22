@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -20,11 +22,11 @@ def read_application_datasource_type(workspace_root: str | Path) -> DatasourceTy
     """从工作区 application.json 读取唯一权威的数据源类型。"""
 
     application_path = (
-        Path(workspace_root).expanduser() / ".xcodeagent" / "application.json"
+        Path(workspace_root).expanduser() / WORKSPACE_ARTIFACT_DIR / "application.json"
     )
     if not application_path.is_file():
         raise DataSourcePolicyError(
-            "当前工作区缺少 .xcodeagent/application.json，无法确定数据源类型。"
+            "当前工作区缺少 .devagentstudio/application.json，无法确定数据源类型。"
         )
 
     try:
@@ -45,7 +47,7 @@ def application_has_database_config(workspace_root: str | Path) -> bool:
     """判断创建应用时是否填写了可用的数据库连接信息。"""
 
     application_path = (
-        Path(workspace_root).expanduser() / ".xcodeagent" / "application.json"
+        Path(workspace_root).expanduser() / WORKSPACE_ARTIFACT_DIR / "application.json"
     )
     if not application_path.is_file():
         return False

@@ -101,20 +101,20 @@ class PendingBuildTaskPlanDocumentTests(unittest.TestCase):
         plan = _validated_plan()
         workspace_root = self.workspace.resolve()
         legacy_pending_path = (
-            workspace_root / ".xcodeagent" / "plans" / "build-task-plan.pending.json"
+            workspace_root / ".devagentstudio" / "plans" / "build-task-plan.pending.json"
         )
 
         self.assertEqual(
             self.pending_path,
             workspace_root
-            / ".xcodeagent"
+            / ".devagentstudio"
             / "drafts"
             / "plans"
             / "build-task-plan.pending.json",
         )
         self.assertEqual(
             self.formal_path,
-            workspace_root / ".xcodeagent" / "plans" / "build-task-plan.json",
+            workspace_root / ".devagentstudio" / "plans" / "build-task-plan.json",
         )
 
         written_path = self._write_pending(plan)

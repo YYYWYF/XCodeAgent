@@ -28,7 +28,7 @@ class VersionControlTests(unittest.TestCase):
     """验证提交前复核、并发保护和精确文件提交。"""
 
     def test_code_paths_exclude_platform_artifacts_but_keep_them_eligible(self) -> None:
-        """验证业务代码口径排除 .xcodeagent 产物，但产物仍可提交。
+        """验证业务代码口径排除 .devagentstudio 产物，但产物仍可提交。
 
         平台产物（规划文档、状态快照）要进版本、要能被追溯，所以必须在 eligible_paths 里；
         但它们不该让"用户改了代码"的提醒亮起来，所以要从 code_paths 里排除。
@@ -36,11 +36,11 @@ class VersionControlTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             root = self._init_repository(Path(workspace))
-            (root / ".xcodeagent" / "plans").mkdir(parents=True)
-            (root / ".xcodeagent" / "plans" / "product-plan.json").write_text(
+            (root / ".devagentstudio" / "plans").mkdir(parents=True)
+            (root / ".devagentstudio" / "plans" / "product-plan.json").write_text(
                 "{}\n", encoding="utf-8"
             )
-            (root / ".xcodeagent" / "application-lifecycle.json").write_text(
+            (root / ".devagentstudio" / "application-lifecycle.json").write_text(
                 '{"revision": 2}\n', encoding="utf-8"
             )
             (root / "src").mkdir()
@@ -51,8 +51,8 @@ class VersionControlTests(unittest.TestCase):
             )
 
             self.assertIn("src/App.tsx", snapshot.eligible_paths)
-            self.assertIn(".xcodeagent/plans/product-plan.json", snapshot.eligible_paths)
-            self.assertIn(".xcodeagent/application-lifecycle.json", snapshot.eligible_paths)
+            self.assertIn(".devagentstudio/plans/product-plan.json", snapshot.eligible_paths)
+            self.assertIn(".devagentstudio/application-lifecycle.json", snapshot.eligible_paths)
             # 产物仍可提交（追溯能力不变），但不算业务代码。
             self.assertEqual(snapshot.code_paths, ["src/App.tsx"])
 
@@ -86,8 +86,8 @@ class VersionControlTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             root = self._init_repository(Path(workspace))
-            (root / ".xcodeagent").mkdir()
-            (root / ".xcodeagent" / "application-lifecycle.json").write_text(
+            (root / ".devagentstudio").mkdir()
+            (root / ".devagentstudio" / "application-lifecycle.json").write_text(
                 '{"revision": 2}\n', encoding="utf-8"
             )
 
@@ -101,7 +101,7 @@ class VersionControlTests(unittest.TestCase):
     def test_commit_allows_platform_artifacts_with_trailing_whitespace(self) -> None:
         """验证平台产物里的行尾空格不会挡住提交。
 
-        回归：设计版本提醒提交的是清一色 `.xcodeagent` 文件，而 AGENTS.md 由平台生成、
+        回归：设计版本提醒提交的是清一色 `.devagentstudio` 文件，而 AGENTS.md 由平台生成、
         曾因 `', '.join` 产出悬空逗号带出行尾空格，被提交前的 `git diff --check` 判为
         空白错误 —— 平台生成的内容触发平台自己的门禁、反过来挡住用户提交。
         业务代码仍照常做空白预检（见下一个用例）。
@@ -109,12 +109,12 @@ class VersionControlTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             root = self._init_repository(Path(workspace))
-            (root / ".xcodeagent").mkdir()
+            (root / ".devagentstudio").mkdir()
             # 模拟平台生成物：行尾带空格。
-            (root / ".xcodeagent" / "AGENTS.md").write_text(
+            (root / ".devagentstudio" / "AGENTS.md").write_text(
                 "# 迭代上下文\n\n  - 信息项：, \n", encoding="utf-8"
             )
-            paths = [".xcodeagent/AGENTS.md"]
+            paths = [".devagentstudio/AGENTS.md"]
             snapshot = self._inspect(root, paths)
 
             result = commit_version_control(

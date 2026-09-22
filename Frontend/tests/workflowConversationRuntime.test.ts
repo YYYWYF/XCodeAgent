@@ -24,7 +24,7 @@ import type {
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
 
-const WORKSPACE_ROOT = '/tmp/xcodeagent-workflow-runtime-test'
+const WORKSPACE_ROOT = '/tmp/devagentstudio-workflow-runtime-test'
 const APPLICATION_ID = 'application-workflow-runtime-test'
 const OWNER_SESSION_ID = 'session-owner'
 const OWNER_THREAD_ID = 'thread-owner'
@@ -246,7 +246,7 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
 
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+    value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }
   })
   globalThis.fetch = async (input, init) => {
     const url = String(input)

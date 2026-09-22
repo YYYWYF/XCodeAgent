@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import asyncio
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal, cast
@@ -346,9 +348,9 @@ def _validated_managed_workspace(workspace_root: str, *, application_id: str) ->
         raise ValueError("应用工作区不存在，且没有可恢复的删除事务。")
     if not workspace.is_dir() or workspace.is_symlink():
         raise ValueError("只能删除真实存在且不是符号链接的应用工作区。")
-    marker = workspace / ".xcodeagent" / "application.json"
+    marker = workspace / WORKSPACE_ARTIFACT_DIR / "application.json"
     if not marker.is_file() or marker.is_symlink():
-        raise ValueError("该目录不是由 AIStudio 管理的项目，不能执行应用删除。")
+        raise ValueError("该目录不是由 DevAgent Studio 管理的项目，不能执行应用删除。")
     lifecycle = load_application_lifecycle(workspace)
     if lifecycle is not None and lifecycle.application.id != application_id:
         raise ValueError("应用标识与工作区生命周期不匹配，已拒绝删除。")

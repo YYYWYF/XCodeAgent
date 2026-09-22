@@ -8,8 +8,8 @@ from uuid import uuid4
 from app.observability.agent_events import make_event
 
 
-RUNS_DIR = ".xcodeagent/runs"
-CONTRACTS_DIR = ".xcodeagent/contracts"
+RUNS_DIR = ".devagentstudio/runs"
+CONTRACTS_DIR = ".devagentstudio/contracts"
 
 
 def create_run_artifacts(
@@ -128,7 +128,7 @@ def _summary_markdown(contract: Dict[str, Any], task_graph: Dict[str, Any], veri
     commands = verification.get("commands") if isinstance(verification.get("commands"), list) else []
     return "\n".join(
         [
-            f"# {contract.get('title') or 'AIStudio Run'}",
+            f"# {contract.get('title') or 'DevAgent Studio Run'}",
             "",
             str(contract.get("summary") or ""),
             "",

@@ -2250,7 +2250,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                         "cls": 0.02,
                         "si": 1500,
                     },
-                    "report_path": "/tmp/.xcodeagent/runtime/tests/frontend_performance/report.html",
+                    "report_path": "/tmp/.devagentstudio/runtime/tests/frontend_performance/report.html",
                 }
             ]
         )
@@ -2621,7 +2621,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             requirement_path = (
                 Path(workspace)
-                / ".xcodeagent"
+                / ".devagentstudio"
                 / "drafts"
                 / "specs"
                 / "requirement-spec.md"

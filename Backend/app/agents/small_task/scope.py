@@ -21,10 +21,10 @@ from deepagents.backends.protocol import (
 
 
 _CURRENT_SMALL_TASK_PATHS: ContextVar[tuple[str, ...]] = ContextVar(
-    "xcodeagent_small_task_paths",
+    "devagentstudio_small_task_paths",
     default=(),
 )
-_FORMAL_PATH_MARKERS = (".xcodeagent/", "requirement-spec", "project-plan", "build-task")
+_FORMAL_PATH_MARKERS = (".devagentstudio/", "requirement-spec", "project-plan", "build-task")
 _IGNORED_CODE_CONTEXT_DIRS = frozenset(
     {
         ".git",

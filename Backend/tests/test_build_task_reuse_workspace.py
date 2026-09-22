@@ -14,7 +14,7 @@ from tests.test_build_task_reuse import _inputs
 def _template_state_context(workspace: Path) -> dict:
     """写入并读取真实 V2 TemplateState，生成 Build 允许冻结的唯一模板证据。"""
 
-    state_path = workspace / ".xcodeagent/template-state.json"
+    state_path = workspace / ".devagentstudio/template-state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
         '{"schemaVersion":2,"templateRevision":"template-r1","requested":{},"effective":{},"appliedAdditions":{}}',
@@ -27,7 +27,7 @@ def _ready_template(workspace: Path) -> dict:
     """提供 Adapter 测试所需的原始 V2 State，调用方必须自行冻结为 BuildContext。"""
 
     _template_state_context(workspace)
-    (workspace / ".xcodeagent/application.json").write_text(
+    (workspace / ".devagentstudio/application.json").write_text(
         '{"schemaVersion":6,"configRevision":1,"auth":{"enable":false},"authorization":{"enabled":false,"initialAdministratorSubjects":[]}}',
         encoding="utf-8",
     )
@@ -57,7 +57,7 @@ class BuildTaskReuseWorkspaceTests(unittest.TestCase):
             self.assertEqual((capability.unit_id, capability.capability_id), ("frontend:shell", "frontend.shell.ready"))
             self.assertEqual(capability.workspace_revision, "snapshot-1")
             self.assertEqual(capability.source, "template_state")
-            self.assertEqual(capability.source_refs["state_path"], ".xcodeagent/template-state.json")
+            self.assertEqual(capability.source_refs["state_path"], ".devagentstudio/template-state.json")
             self.assertEqual(len(capability.source_refs["template_state_sha256"]), 64)
             self.assertEqual(resolve_reuse_facts(**freeze_json(inputs)), facts)
             self.assertEqual(inputs, before_inputs)

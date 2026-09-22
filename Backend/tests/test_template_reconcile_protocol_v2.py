@@ -187,7 +187,7 @@ class TemplateReconcileProtocolV2Tests(unittest.TestCase):
         """确认 V2 Reader 不为旧 State 提供迁移或兼容分支。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            state_path = Path(directory) / ".xcodeagent" / "template-state.json"
+            state_path = Path(directory) / ".devagentstudio" / "template-state.json"
             state_path.parent.mkdir()
             state_path.write_text(
                 json.dumps(

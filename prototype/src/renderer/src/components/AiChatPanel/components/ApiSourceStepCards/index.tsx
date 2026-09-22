@@ -174,7 +174,7 @@ export function ApiSourceMissingCard({
   /** 打开左侧对应抽屉：由工作台页面监听事件后按缺失类型展开数据源或外部API抽屉。 */
   const openDataSources = (): void => {
     window.dispatchEvent(
-      new CustomEvent('aistudio:prototype:open-data-sources', {
+      new CustomEvent('devagentstudio:prototype:open-data-sources', {
         detail: { kind: isDatabase ? 'database' : 'external' }
       })
     )

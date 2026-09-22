@@ -30,11 +30,11 @@ export default function GlobalConfigPanel() {
           <div className={cx('config-field-row')}>
             <label>
               <Text>应用名称</Text>
-              <Input defaultValue="AIStudio" />
+              <Input defaultValue="DevAgent Studio" />
             </label>
             <label>
               <Text>应用标识</Text>
-              <Input defaultValue="aistudio" />
+              <Input defaultValue="devagentstudio" />
             </label>
           </div>
         </Card>

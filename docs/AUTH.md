@@ -1,6 +1,6 @@
 # 内置 RBAC 权限体系分阶段实施计划
 
-> **当前合同（2026-09-15）**：下文任何与本节冲突的 V2 角色种子设计均已废止。应用能力唯一来自 `.xcodeagent/application.json`：`authorization.enabled` 和 `authorization.initialAdministratorSubjects` 不得写入 RequirementSpec。RequirementSpec 仅保存业务 `user_roles`（`id`、`name`、`description`）和显式业务资源规则。平台确定性创建 `SYSTEM_ADMIN`（`system_admin`），只授予 `system_authorization_management`，并在 bootstrap 时将已配置的初始 Subject 绑定至该角色。`authorization-manifest.v3` 通过 `systemAuthorization.{adminRoleSeedKey,managementResourceKey}` 与业务 `defaultRoleAuthorization` 分离表达；不再包含 `isSystemRole`、`isInitialAdminRole` 或 `initialAdminRoleSeedKey`。新增业务资源不得隐式授予 `SYSTEM_ADMIN`。
+> **当前合同（2026-09-15）**：下文任何与本节冲突的 V2 角色种子设计均已废止。应用能力唯一来自 `.devagentstudio/application.json`：`authorization.enabled` 和 `authorization.initialAdministratorSubjects` 不得写入 RequirementSpec。RequirementSpec 仅保存业务 `user_roles`（`id`、`name`、`description`）和显式业务资源规则。平台确定性创建 `SYSTEM_ADMIN`（`system_admin`），只授予 `system_authorization_management`，并在 bootstrap 时将已配置的初始 Subject 绑定至该角色。`authorization-manifest.v3` 通过 `systemAuthorization.{adminRoleSeedKey,managementResourceKey}` 与业务 `defaultRoleAuthorization` 分离表达；不再包含 `isSystemRole`、`isInitialAdminRole` 或 `initialAdminRoleSeedKey`。新增业务资源不得隐式授予 `SYSTEM_ADMIN`。
 
 ## 前置设计
 
@@ -104,7 +104,7 @@ system_authorization_management  system，targetResourceRef=authorization-api.v1
 
 ## 文档地位与当前状态
 
-本文是 XCodeAgent 权限体系改造的唯一实施依据。后续模型实施权限相关工作时，必须先读取本文，再读取对应阶段及步骤列出的代码入口；对话中的历史方案、旧测试假设和未写入本文的临时结论都不能覆盖本文。
+本文是 DevAgent Studio 权限体系改造的唯一实施依据。后续模型实施权限相关工作时，必须先读取本文，再读取对应阶段及步骤列出的代码入口；对话中的历史方案、旧测试假设和未写入本文的临时结论都不能覆盖本文。
 
 最新确认优先级固定为：
 
@@ -300,7 +300,7 @@ allowOperation(endpoint, member) =
 6. 运行当前步骤要求的后端测试、前端构建和启动验收；失败必须在进入下一步骤前解决。
 7. 搜索新增代码中的自然语言权限关键词表、角色名分支、默认权限规则、无来源资源、资源写接口和授权 provider 分支；发现即停止验收。
 8. 更新本文步骤状态和必要的 `docs/CODEBASE_INDEX.md`，再申请进入下一步骤。
-9. 每个步骤完成后必须实际启动受影响的 XCodeAgent、模板工程或生成应用，向用户提交修改文件、启动命令、测试结果、人工验收入口和遗留问题；只有用户明确确认达到预期后才能开始下一步骤，模型不得把多个未验收步骤合并执行。
+9. 每个步骤完成后必须实际启动受影响的 DevAgent Studio、模板工程或生成应用，向用户提交修改文件、启动命令、测试结果、人工验收入口和遗留问题；只有用户明确确认达到预期后才能开始下一步骤，模型不得把多个未验收步骤合并执行。
 10. 第一阶段步骤 5 使用 Backend Workspace Bootstrap；模板能力、就绪门禁与启动验收以 BOOTSTRAP_PLAN.md 为准。
 11. 本计划不授权模型推送远端、创建 PR 或提交到模板仓库；这些外部写操作必须另行取得用户授权。
 
@@ -590,7 +590,7 @@ type AuthorizationManifestV2 = {
 
 ### 生成应用运行态 OpenAPI 契约
 
-本仓库的 [`contracts/authorization-api.v1.yaml`](../contracts/authorization-api.v1.yaml) 是前后端共享的权限管理接口唯一事实源，契约版本固定为 `authorization-api.v1`。后端 `auth` 分支提交与该文件字节一致的 `src/main/resources/openapi/authorization-api.v1.yaml` 副本；前端从该本地契约确定性生成 TypeScript 类型，但所有 HTTP 请求必须复用模板现有 `src/apis/service.ts` 的 axios 实例，不生成或引入第二个 HTTP 客户端。XCodeAgent 必须校验两个 YAML 文件的 SHA-256 一致，并验证前端生成类型无漂移。
+本仓库的 [`contracts/authorization-api.v1.yaml`](../contracts/authorization-api.v1.yaml) 是前后端共享的权限管理接口唯一事实源，契约版本固定为 `authorization-api.v1`。后端 `auth` 分支提交与该文件字节一致的 `src/main/resources/openapi/authorization-api.v1.yaml` 副本；前端从该本地契约确定性生成 TypeScript 类型，但所有 HTTP 请求必须复用模板现有 `src/apis/service.ts` 的 axios 实例，不生成或引入第二个 HTTP 客户端。DevAgent Studio 必须校验两个 YAML 文件的 SHA-256 一致，并验证前端生成类型无漂移。
 
 固定接口：
 
@@ -646,7 +646,7 @@ GET  /api/authorization/audit
 
 ### 运行态数据与服务契约
 
-内置权限运行时复用后端 `auth` 模板已经提供的权限表、数据访问和初始化扩展点。XCodeAgent 不为权限引入 Flyway、MyBatis、DDL、Mapper、数据源配置或 Maven 依赖；模板内部采用何种既有持久化实现不构成 XCodeAgent 的额外技术契约。
+内置权限运行时复用后端 `auth` 模板已经提供的权限表、数据访问和初始化扩展点。DevAgent Studio 不为权限引入 Flyway、MyBatis、DDL、Mapper、数据源配置或 Maven 依赖；模板内部采用何种既有持久化实现不构成 DevAgent Studio 的额外技术契约。
 
 运行态至少包含：
 
@@ -775,7 +775,7 @@ deleteSubjectAuthorization
 
 启动验收：
 
-- 启动 XCodeAgent 前后端和 Electron 桌面应用，分别创建权限关闭、权限开启但无业务权限、仅页面权限、仅操作权限四类需求，RequirementSpec 草稿、Markdown、结构化编辑器和确认摘要保持一致。
+- 启动 DevAgent Studio 前后端和 Electron 桌面应用，分别创建权限关闭、权限开启但无业务权限、仅页面权限、仅操作权限四类需求，RequirementSpec 草稿、Markdown、结构化编辑器和确认摘要保持一致。
 - 页面/操作规则新增、编辑、删除后，隐藏 `ruleId`、`sourceRefs` 和 `defaultGrantedRoleIds` 正确保留或重新生成；每条受控页面的 `targetPageId` 必须始终指向当前页面清单，未知、重复或被篡改的隐藏标记阻止确认。
 - 未明确默认授权角色时只产生对应权限候选的稳定澄清问题；回答后重新生成草稿，并且用户可以在桌面端完成 RequirementSpec/ProductPlan 联合确认。
 - 明确数据授权需求稳定显示 `DATA_AUTHORIZATION_NOT_SUPPORTED` 并阻止联合确认；普通固定“我的数据”业务查询可以继续，语义不明确时只询问“业务查询还是授权边界”。
@@ -807,7 +807,7 @@ deleteSubjectAuthorization
 - `authorizationTargets.operationRules` 必须完整保存 `{ruleId,pageId,actionId}`；sequence 的 `stepId` 不进入任何权限目标或资源候选。
 - 相同 `actionId` 位于不同页面时保持不同操作目标；页面、`<pageId>_<actionId>` 与系统资源候选发生碰撞时阻止联合确认。
 - `ui-designs.json` 中永远没有 `system_authorization_management`。
-- 启动 XCodeAgent 前后端和 Electron 桌面应用，实际完成 RequirementSpec/ProductPlan 联合确认以及 UiDesign 生成或 skip；模型提交产物路径和操作入口后暂停，由用户确认步骤 3 达到预期。
+- 启动 DevAgent Studio 前后端和 Electron 桌面应用，实际完成 RequirementSpec/ProductPlan 联合确认以及 UiDesign 生成或 skip；模型提交产物路径和操作入口后暂停，由用户确认步骤 3 达到预期。
 
 #### 步骤 4：TechnicalPlan 确定性编译权限资源与 Endpoint 授权逻辑
 
@@ -890,7 +890,7 @@ deleteSubjectAuthorization
 - 生成并确认至少四组 TechnicalPlan：无业务权限、仅页面、仅操作、页面+操作并合并/拆分系统管理员。
 - 额外验证至少三组数据权限描述稳定被 `DATA_AUTHORIZATION_NOT_SUPPORTED` 阻断，且没有产生 TechnicalPlan。
 - TechnicalPlan JSON、Markdown、PageImplementationContract 和 API Contract 对同一资源/目标的引用一致，不存在旧 `business.*`、`system.authorization.*`、PageKey、step 权限、data policy 或第二份权限详设残留。
-- 启动 XCodeAgent 前后端和 Electron 桌面应用，实际生成并确认至少一组包含页面、操作和系统管理员的 TechnicalPlan；模型提交 manifest、Markdown 和确认入口后暂停，由用户确认步骤 4 达到预期。
+- 启动 DevAgent Studio 前后端和 Electron 桌面应用，实际生成并确认至少一组包含页面、操作和系统管理员的 TechnicalPlan；模型提交 manifest、Markdown 和确认入口后暂停，由用户确认步骤 4 达到预期。
 
 ##### 步骤 4E：权限语义与可交付性最终门禁
 
@@ -1051,7 +1051,7 @@ deleteSubjectAuthorization
 - Repair 仅用于修复当前实现与既有权限约束之间的偏差，不得扩大资源集合、修改 ANY-OF 语义、改变 Action/Endpoint 与资源的绑定、触碰步骤 7A 共享投影或模板权限核心。若问题来源于 DAG 任务或权限引用投射错误，则返回步骤 6 重新规划；若需要修改 TechnicalPlan 中的权限资源或绑定事实，则返回步骤 4 通过正式变更流程修订。
 - 权限验收始终启用，不受普通业务自检开关影响。前端确定性验证受控 Action、稳定 `action_id`、`Permission`、平台给定权限常量及 `hidden/disabled` 模式；后端确定性验证 Controller Method 身份、唯一 `@RequireAnyResource`、权限常量集合及 ANY-OF 语义。能够明确归属于 Page/API Task 实现偏差的失败进入现有 Scheduler/Repair 闭环；共享投影、模板契约或上游权限事实错误不得下放给叶子 Repair Task。
 - 所有 Build Task 完成后执行一次纯只读权限 EDD。EDD 只读取最终源码和 Build 证据，不得再次调用权限投影、Bootstrap 或其他写入函数修正结果。验收至少覆盖：步骤 7A 共享路由权限投影和 `AuthConstants` 与绑定计划一致；未新增第二套应用级 `AuthProvider` 或权限状态源；所有受控 Action 均存在且仅存在正确的 `Permission` 接入；所有受控 Controller Endpoint 均存在且仅存在匹配 Contract 的权限注解；空绑定对象未由本次 Build 新增资源权限守卫；Service、Repository、Entity 和外部 API Client 未新增资源操作权限判断。
-- 资源、角色、角色资源关系、初始管理员成员、成员角色关系以及 Bootstrap 数据状态仍完全由模板 Bootstrap 负责；XCodeAgent 只负责脚本编排、成功标记和 AG-UI 投影。步骤 7 不生成初始化 SQL、seed 文件或第二套初始化器，也不得通过 Repair 或 EDD 修改 Bootstrap 数据。
+- 资源、角色、角色资源关系、初始管理员成员、成员角色关系以及 Bootstrap 数据状态仍完全由模板 Bootstrap 负责；DevAgent Studio 只负责脚本编排、成功标记和 AG-UI 投影。步骤 7 不生成初始化 SQL、seed 文件或第二套初始化器，也不得通过 Repair 或 EDD 修改 Bootstrap 数据。
 
 
 步骤 7 启动验收：

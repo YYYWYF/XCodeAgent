@@ -52,7 +52,7 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
 
     仿照 _page_template_instruction 的"read_file 读参考代码再生成"模式。设计稿是
     UI确认阶段生成并经用户确认的纯视觉 React+antd+pro-components mockup，落盘在
-    /.xcodeagent/ui-design/pages/<page_key>/index.tsx；若 UI 阶段被明确跳过，则返回
+    /.devagentstudio/ui-design/pages/<page_key>/index.tsx；若 UI 阶段被明确跳过，则返回
     基于 ProductPlan、TechnicalPlan 和模板技能的无设计稿实现指令。前端 agent 处理某个
     page task 时（unit_id = page:<pageId>），按映射 read_file 对应设计稿，高保真
     还原其视觉结构，再把静态数据/无交互换成真实 API/数据层。
@@ -83,7 +83,7 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
         entries.append(
             {
                 "pageId": page_id,
-                "designPath": f"/.xcodeagent/ui-design/pages/{page_key}/index.tsx",
+                "designPath": f"/.devagentstudio/ui-design/pages/{page_key}/index.tsx",
                 "name": str(page.get("name") or page_id),
             }
         )
@@ -183,7 +183,7 @@ def _frontend_generation_prompt(
         else ""
     )
     static_skill_requirement = (
-        "3. `/.xcodeagent/builtin-skills/frontend-static-data-generate/SKILL.md` — "
+        "3. `/.devagentstudio/builtin-skills/frontend-static-data-generate/SKILL.md` — "
         "static frontend:data tasks: module-level in-memory records, async contract "
         "functions, exact fields/operations, and the prohibition on backend APIs or page-local "
         "business arrays. READ THIS before writing a static data module.\n"
@@ -267,13 +267,13 @@ def _frontend_generation_prompt(
         "Before generating or modifying any frontend code, you MUST read the following "
         "the required built-in skills with read_file(limit=400) and follow their instructions. "
         "These are mandatory constraints:\n"
-        "1. `/.xcodeagent/builtin-skills/frontend-template-modification-boundary/SKILL.md` — "
+        "1. `/.devagentstudio/builtin-skills/frontend-template-modification-boundary/SKILL.md` — "
         "file modification boundary: which files you MUST NOT modify (framework skeleton, "
         "package.json, tailwind.config.js, vite.config.ts, etc.), which are append-only "
         "(template-variant-specific shared registration files, src/apis, src/typings, src/constants, src/hooks, "
         "src/utils, src/components), and where to place page types/constants/hooks/utils/"
         "components. Violating this destroys the template scaffold. READ THIS FIRST.\n"
-        "2. `/.xcodeagent/builtin-skills/code-block-template/SKILL.md` — the AUTHORITATIVE "
+        "2. `/.devagentstudio/builtin-skills/code-block-template/SKILL.md` — the AUTHORITATIVE "
         "spec for component selection and page assembly. HARD RULE: every page MUST be "
         "built with `@ant-design/pro-components` (ProTable, ProForm, ProFormText, "
         "ProFormSelect, ProList, ProCard, ModalForm, DrawerForm, StepsForm). It is "

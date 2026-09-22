@@ -8,8 +8,8 @@ from typing import Any
 from app.workspace.spec_documents import workspace_root
 
 
-TEST_REPORT_RELATIVE_PATH = ".xcodeagent/reports/test-report.md"
-TEST_REPORT_JSON_RELATIVE_PATH = ".xcodeagent/reports/test-report.json"
+TEST_REPORT_RELATIVE_PATH = ".devagentstudio/reports/test-report.md"
+TEST_REPORT_JSON_RELATIVE_PATH = ".devagentstudio/reports/test-report.json"
 
 
 def test_report_json_path(state: dict[str, Any]) -> Path:

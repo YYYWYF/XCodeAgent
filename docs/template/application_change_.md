@@ -1,4 +1,4 @@
-# XCodeAgent Application Config 单一事实源重构方案
+# DevAgent Studio Application Config 单一事实源重构方案
 
 ## 一、目标与原则
 
@@ -6,7 +6,7 @@
 
 核心规则：
 
-> **所有“应用级配置”必须且只能存在 `.xcodeagent/application.json`；所有“规划产物”不得反过来成为应用配置。**
+> **所有“应用级配置”必须且只能存在 `.devagentstudio/application.json`；所有“规划产物”不得反过来成为应用配置。**
 
 由此形成四条强约束：
 
@@ -124,7 +124,7 @@ plans/* = Planning Artifacts
      ApplicationConfigService
               │
               ▼
- .xcodeagent/application.json
+ .devagentstudio/application.json
         configRevision + 1
               │
       ┌───────┼─────────┐
@@ -577,7 +577,7 @@ applications.json
       ↓
 获得 workspaceRoot
       ↓
-读取 .xcodeagent/application.json
+读取 .devagentstudio/application.json
       ↓
 生成当前 Application View
 ```
@@ -593,7 +593,7 @@ enableAuth = application.auth.enable
 设置页面保存时也必须修改：
 
 ```text
-workspace/.xcodeagent/application.json
+workspace/.devagentstudio/application.json
 ```
 
 而不是只修改 Electron 的 `applications.json`。

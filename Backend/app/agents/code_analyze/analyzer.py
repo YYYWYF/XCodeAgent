@@ -19,12 +19,12 @@ logger = logging.getLogger(__name__)
 MAX_REVIEW_ISSUES = 100
 ALLOWED_REPAIR_ACTIONS = {"pnpm_install"}
 REQUIRED_SKILLS = {
-    "/.xcodeagent/builtin-skills/frontend-code-scan/SKILL.md": "frontend-code-scan",
-    "/.xcodeagent/builtin-skills/backend-code-scan/SKILL.md": "backend-code-scan",
+    "/.devagentstudio/builtin-skills/frontend-code-scan/SKILL.md": "frontend-code-scan",
+    "/.devagentstudio/builtin-skills/backend-code-scan/SKILL.md": "backend-code-scan",
 }
 REQUIRED_SKILL_PATHS = {
     *REQUIRED_SKILLS,
-    "/.xcodeagent/builtin-skills/backend-code-scan/references/rules-reference.md",
+    "/.devagentstudio/builtin-skills/backend-code-scan/references/rules-reference.md",
 }
 
 
@@ -422,7 +422,7 @@ def _skill_name_from_declaration(value: str) -> str | bool | None:
     """解析模型声明的内置 Skill 相对路径；False 表示越权，None 表示授权规则引用。"""
 
     path = value.strip().replace("\\", "/").lstrip("/")
-    builtin_prefix = ".xcodeagent/builtin-skills/"
+    builtin_prefix = ".devagentstudio/builtin-skills/"
     if path.startswith(builtin_prefix):
         path = path[len(builtin_prefix) :]
     declarations: dict[str, str | None] = {
@@ -445,7 +445,7 @@ def _is_authorized_rules_reference_alias(value: str) -> bool:
         "references/rules-reference.md",
         "backend-code-scan/rules-reference",
         "backend-code-scan/references/rules-reference.md",
-        ".xcodeagent/builtin-skills/backend-code-scan/references/rules-reference.md",
+        ".devagentstudio/builtin-skills/backend-code-scan/references/rules-reference.md",
     }
 
 

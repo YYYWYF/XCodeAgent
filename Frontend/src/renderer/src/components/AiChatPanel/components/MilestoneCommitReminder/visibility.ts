@@ -30,11 +30,11 @@ export function shouldRenderCommitReminder(input: {
 /**
  * 提醒按哪份文件清单计数与默认勾选。
  *
- * 默认走 `codePaths`（业务代码）：`.xcodeagent` 下的规划产物与状态快照会随每个设计
+ * 默认走 `codePaths`（业务代码）：`.devagentstudio` 下的规划产物与状态快照会随每个设计
  * 步骤变化，算进来会让角标在用户一行业务代码都没写时就亮起并持续增长。
  *
  * `includePlatformArtifacts` 只有设计阶段的「设计文档已确认，可保存为设计版本」会传 ——
- * 那时唯一的变更就是 `.xcodeagent`，按业务代码算永远是 0，提醒会彻底消失。
+ * 那时唯一的变更就是 `.devagentstudio`，按业务代码算永远是 0，提醒会彻底消失。
  * 文档 §4.3 正是把它定位成与"代码提交入口分开"的第二条通道。
  */
 export function resolveCommitScope(input: {

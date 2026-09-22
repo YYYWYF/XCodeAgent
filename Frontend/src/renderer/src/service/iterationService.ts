@@ -28,7 +28,7 @@ type IterationServiceAgUiPayload = {
 
 /** 返回发起新迭代 AG-UI 动作地址。 */
 function getIterationServiceUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/iteration-service/run`
     : '/api/agent/iteration-service/run'

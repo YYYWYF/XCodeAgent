@@ -72,7 +72,7 @@ function AppEntryContent(): JSX.Element {
       if (result.status === 'failed') {
         console.warn('停止上一个应用预览失败。', result)
       } else {
-        void window.xcodeAgent?.projectPreview?.unregisterWorkspace({
+        void window.devAgentStudio?.projectPreview?.unregisterWorkspace({
           workspaceRoot: previousWorkspace
         })
       }
@@ -232,7 +232,7 @@ function AppEntryContent(): JSX.Element {
     }
     let pending = 0
     try {
-      // 只算业务代码：`.xcodeagent` 平台产物（规划文档、状态快照）不算"用户改了代码"，
+      // 只算业务代码：`.devagentstudio` 平台产物（规划文档、状态快照）不算"用户改了代码"，
       // 否则新建迭代清空产物后，一进工作台就会因为这个弹窗被拦一次。
       pending = (await inspectAllVersionControl(workspace)).codePaths.length
     } catch {

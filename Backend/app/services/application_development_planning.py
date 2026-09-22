@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import hashlib
 import json
 import re
@@ -296,7 +298,7 @@ async def generate_application_development_plan(
     """基于 application.json 一次生成澄清问题或完整页面级开发计划。"""
 
     workspace_root = Path(request.workspace_root).expanduser().resolve()
-    target = workspace_root / ".xcodeagent" / "application.json"
+    target = workspace_root / WORKSPACE_ARTIFACT_DIR / "application.json"
     if not workspace_root.is_dir() or not target.is_file():
         raise ValueError(f"应用配置不存在：{target}")
     application = json.loads(target.read_text(encoding="utf-8"))
@@ -412,7 +414,7 @@ def confirm_application_development_plan(
     """在用户明确确认后把任务和公共模块原子写回 application.json。"""
 
     workspace_root = Path(request.workspace_root).expanduser().resolve()
-    target = workspace_root / ".xcodeagent" / "application.json"
+    target = workspace_root / WORKSPACE_ARTIFACT_DIR / "application.json"
     if not workspace_root.is_dir() or not target.is_file():
         raise ValueError(f"应用配置不存在：{target}")
     existing = json.loads(target.read_text(encoding="utf-8"))

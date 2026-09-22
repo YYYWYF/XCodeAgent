@@ -56,7 +56,7 @@ export default function WelcomePage({
           <section className={cx('welcome-primary')}>
             <WelcomeHero />
 
-            <section className={cx('welcome-actions')} aria-label="开始使用 AIStudio">
+            <section className={cx('welcome-actions')} aria-label="开始使用 DevAgent Studio">
               <CreateApplicationAction
                 onOpenWorkbenchAfterCreate={onOpenWorkbenchAfterCreate}
               />

@@ -1,3 +1,5 @@
+
+from app.branding import WORKSPACE_ARTIFACT_DIR
 """预览维护与应用任务共享的原子互斥栅栏。"""
 
 import json
@@ -20,7 +22,7 @@ def maintenance_owner(workspace: str | Path) -> dict[str, Any] | None:
     """读取当前维护占用的公开身份。"""
     with maintenance_lock:
         key = workspace_key(workspace)
-        path = Path(key) / ".xcodeagent/runtime/preview-maintenance.json"
+        path = Path(key) / WORKSPACE_ARTIFACT_DIR / 'runtime/preview-maintenance.json'
         owner = _owners.get(key)
         if owner is None and path.is_file():
             owner = json.loads(path.read_text(encoding="utf-8")) or None
@@ -39,7 +41,7 @@ def claim_maintenance(workspace: str, thread_id: str, action: str) -> None:
         if owner and owner["threadId"] != thread_id:
             raise RuntimeError("当前应用已有预览维护任务，请完成或停止后再操作。")
         _owners[workspace_key(workspace)] = {"threadId": thread_id, "action": action}
-        path = Path(workspace_key(workspace)) / ".xcodeagent/runtime/preview-maintenance.json"
+        path = Path(workspace_key(workspace)) / WORKSPACE_ARTIFACT_DIR / 'runtime/preview-maintenance.json'
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(_owners[workspace_key(workspace)]), encoding="utf-8")
@@ -52,7 +54,7 @@ def release_maintenance(workspace: str, thread_id: str) -> None:
         owner = maintenance_owner(workspace)
         if owner and owner["threadId"] == thread_id:
             _owners.pop(workspace_key(workspace), None)
-            path = Path(workspace_key(workspace)) / ".xcodeagent/runtime/preview-maintenance.json"
+            path = Path(workspace_key(workspace)) / WORKSPACE_ARTIFACT_DIR / 'runtime/preview-maintenance.json'
             temporary = path.with_suffix(".tmp")
             temporary.write_text("{}", encoding="utf-8")
             temporary.replace(path)

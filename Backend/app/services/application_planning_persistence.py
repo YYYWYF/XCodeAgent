@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import hashlib
 import json
 import re
@@ -473,30 +475,30 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
     requirement_markdown = Path(str(state.get("requirement_spec_path") or ""))
     product_plan_markdown = Path(str(state.get("product_plan_path") or ""))
     technical_plan_markdown = Path(str(state.get("technical_plan_path") or ""))
-    ui_design_json = workspace / ".xcodeagent" / "specs" / "ui-designs.json"
+    ui_design_json = workspace / WORKSPACE_ARTIFACT_DIR / "specs" / "ui-designs.json"
     return {
         "requirementSpec": {
             "markdown": _document_descriptor(
-                workspace, requirement_markdown, "需求文档", "markdown", ".xcodeagent/specs"
+                workspace, requirement_markdown, "需求文档", "markdown", ".devagentstudio/specs"
             ),
             "json": _document_descriptor(
                 workspace,
                 state.get("requirement_spec_json_path") or requirement_markdown.with_suffix(".json"),
                 "需求文档内部数据",
                 "json",
-                ".xcodeagent/specs",
+                ".devagentstudio/specs",
             ),
         },
         "productPlan": {
             "markdown": _document_descriptor(
-                workspace, product_plan_markdown, "产品规划", "markdown", ".xcodeagent/plans"
+                workspace, product_plan_markdown, "产品规划", "markdown", ".devagentstudio/plans"
             ),
             "json": _document_descriptor(
                 workspace,
                 state.get("product_plan_json_path") or product_plan_markdown.with_suffix(".json"),
                 "产品规划内部数据",
                 "json",
-                ".xcodeagent/plans",
+                ".devagentstudio/plans",
             ),
         },
         "uiDesigns": {
@@ -505,20 +507,20 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
                 ui_design_json,
                 "UI 设计索引",
                 "json",
-                ".xcodeagent/specs",
+                ".devagentstudio/specs",
                 accepted_confirmation_statuses=("confirmed", "skipped"),
             ),
         },
         "technicalPlan": {
             "markdown": _document_descriptor(
-                workspace, technical_plan_markdown, "技术规划", "markdown", ".xcodeagent/plans"
+                workspace, technical_plan_markdown, "技术规划", "markdown", ".devagentstudio/plans"
             ),
             "json": _document_descriptor(
                 workspace,
                 state.get("technical_plan_json_path") or technical_plan_markdown.with_suffix(".json"),
                 "技术规划内部数据",
                 "json",
-                ".xcodeagent/plans",
+                ".devagentstudio/plans",
             ),
         },
     }
@@ -534,8 +536,8 @@ def confirm_application_planning_artifacts(state: dict[str, Any]) -> dict[str, A
     return {
         "confirmedAt": confirmed_at,
         "directories": {
-            "specs": ".xcodeagent/specs",
-            "plans": ".xcodeagent/plans",
+            "specs": ".devagentstudio/specs",
+            "plans": ".devagentstudio/plans",
         },
         "artifacts": _confirmed_artifacts(state, workspace),
     }

@@ -25,7 +25,7 @@ export type RevertedCodeChanges = {
 
 /** 返回代码变更 AG-UI 操作地址。 */
 function getCodeChangesUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/code-changes/run`
     : '/api/agent/code-changes/run'

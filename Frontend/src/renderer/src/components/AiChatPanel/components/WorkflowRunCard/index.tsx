@@ -2252,8 +2252,8 @@ function historicalClarificationAnswerValue(
 
 // 澄清表单草稿本地持久化：恢复（从历史"查看计划"回到待确认阶段）时回填用户已填的答案。
 // 后端 clarification 只存问题+选项不存答案，刷新/恢复后 useState({}) 会丢，用 localStorage 兜底。
-// key = xcodeagent:clarification-draft:{threadId}:{本轮问题指纹}，指纹随问题变化，新一轮自然读不到旧答案。
-const CLARIFICATION_DRAFT_PREFIX = 'xcodeagent:clarification-draft'
+// key = devagentstudio:clarification-draft:{threadId}:{本轮问题指纹}，指纹随问题变化，新一轮自然读不到旧答案。
+const CLARIFICATION_DRAFT_PREFIX = 'devagentstudio:clarification-draft'
 
 function clarificationDraftKey(
   threadId: string,

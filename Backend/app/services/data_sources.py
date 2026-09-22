@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import re
 import socket
@@ -205,7 +207,7 @@ def _ensure_catalog_initialized(workspace_root: str | Path) -> None:
         return
 
     root = Path(workspace_root).expanduser().resolve()
-    application_file = root / ".xcodeagent" / "application.json"
+    application_file = root / WORKSPACE_ARTIFACT_DIR / "application.json"
     if application_file.is_symlink():
         raise DataSourceError("应用配置文件不允许使用符号链接。")
     if application_file.is_file():

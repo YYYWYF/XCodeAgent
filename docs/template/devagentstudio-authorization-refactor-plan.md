@@ -1,6 +1,6 @@
-# XCodeAgent Authorization 配置与角色模型收敛修复方案
+# DevAgent Studio Authorization 配置与角色模型收敛修复方案
 
-> 目标：同时修复首次 Application Planning 中 `authorization.enabled` 未正确写入 `application.json`，以及 `SYSTEM_ADMIN`、业务管理员角色、初始管理员 Subject 被 RequirementSpec 混用的问题。  
+> 目标：同时修复首次 Application Planning 中 `authorization.enabled` 未正确写入 `application.json`，以及 `SYSTEM_ADMIN`、业务管理员角色、初始管理员 Subject 被 RequirementSpec 混用的问题。
 > 原则：**应用能力归 ApplicationConfig，业务授权归 RequirementSpec，系统权限初始化归平台确定性规则。**
 
 ---
@@ -74,7 +74,7 @@ Initial Admin Subject   首次启动时真实管理员用户
 唯一事实源仍为：
 
 ```text
-.xcodeagent/application.json
+.devagentstudio/application.json
 ```
 
 权限相关核心字段保持：

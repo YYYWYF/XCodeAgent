@@ -26,7 +26,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
             tempfile.TemporaryDirectory() as temporary_root,
             tempfile.TemporaryDirectory() as workspace,
         ):
-            root = Path(temporary_root) / ".xcodeagent"
+            root = Path(temporary_root) / ".devagentstudio"
             snapshot = agent_memory_runtime.create_agent_memory_runtime_snapshot(root=root)
             backend = create_workspace_backend(
                 workspace,
@@ -50,7 +50,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
             tempfile.TemporaryDirectory() as temporary_root,
             tempfile.TemporaryDirectory() as workspace,
         ):
-            root = Path(temporary_root) / ".xcodeagent"
+            root = Path(temporary_root) / ".devagentstudio"
             source = root / "AGENTS.md"
             root.mkdir()
             source.write_text("# Original\n", encoding="utf-8")
@@ -77,7 +77,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
 
     def test_stale_revision_and_source_changes_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root) / ".xcodeagent"
+            root = Path(temporary_root) / ".devagentstudio"
             original_revision = agent_memory_runtime.get_agent_memory_runtime_revision(root)
             (root / "AGENTS.md").write_text("# Changed\n", encoding="utf-8")
 
@@ -89,7 +89,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
 
     def test_source_change_during_snapshot_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root) / ".xcodeagent"
+            root = Path(temporary_root) / ".devagentstudio"
             agent_memory_runtime.get_agent_memory_runtime_revision(root)
             original_revision = agent_memory_runtime.get_agent_memory_runtime_revision
 
@@ -111,7 +111,7 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
     def test_symbolic_link_source_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
             parent = Path(temporary_root)
-            root = parent / ".xcodeagent"
+            root = parent / ".devagentstudio"
             root.mkdir()
             target = parent / "outside.md"
             target.write_text("# Outside\n", encoding="utf-8")

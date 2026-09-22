@@ -204,7 +204,7 @@ class WorkspaceScopeTests(unittest.TestCase):
                 _check_fs_permission(
                     permissions,
                     "read",
-                    "/.xcodeagent/plans/technical-plan.json",
+                    "/.devagentstudio/plans/technical-plan.json",
                 ),
                 "deny",
             )
@@ -236,8 +236,8 @@ class WorkspaceScopeTests(unittest.TestCase):
             "/frontend/src/App.tsx",
             "/.git/config",
             "/unrelated/.cache/state.json",
-            "/.xcodeagent/application.json",
-            "/.xcodeAgent/plans/technical-plan.json",
+            "/.devagentstudio/application.json",
+            "/.devAgentStudio/plans/technical-plan.json",
             "/backend/.idea/workspace.xml",
             "/Backend/.gradle/caches/state.bin",
         ):
@@ -309,7 +309,7 @@ class WorkspaceScopeTests(unittest.TestCase):
             )
 
             self.assertEqual(
-                _check_fs_permission(permissions, "read", "/.xcodeagent/builtin-skills/backend-code-scan/SKILL.md"),
+                _check_fs_permission(permissions, "read", "/.devagentstudio/builtin-skills/backend-code-scan/SKILL.md"),
                 "allow",
             )
             self.assertEqual(

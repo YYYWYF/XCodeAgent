@@ -2878,7 +2878,7 @@ class BuildTaskPlannerTests(unittest.TestCase):
             "source_refs": {
                 "page_implementation_contract": {
                     "id": "orders",
-                    "ui_design_path": ".xcodeagent/ui-design/pages/Orders/index.tsx",
+                    "ui_design_path": ".devagentstudio/ui-design/pages/Orders/index.tsx",
                     "ui_design_sha256": "p1",
                 },
                 "technical_plan_endpoints": [

@@ -1,10 +1,10 @@
 # Design QA
 
 - Source visual truth: `/Users/yifei/.codex/generated_images/019f4f17-b718-7a02-ab14-27dd86bdd16a/exec-97abde63-1a1d-4fc3-8dcc-6805748911de.png`, with the file-change treatment from `/Users/yifei/.codex/generated_images/019f4f17-b718-7a02-ab14-27dd86bdd16a/exec-be7e7c91-2ab0-4d16-a3ca-29186944ac52.png`
-- Running implementation screenshot: `/private/tmp/xcodeagent-running-qa.png`
-- Completed implementation screenshot: `/private/tmp/xcodeagent-completed-qa-v3.png`
-- Dark-theme implementation screenshot: `/private/tmp/xcodeagent-completed-dark-qa.png`
-- Side-by-side comparison: `/private/tmp/xcodeagent-design-comparison.jpg`
+- Running implementation screenshot: `/private/tmp/devagentstudio-running-qa.png`
+- Completed implementation screenshot: `/private/tmp/devagentstudio-completed-qa-v3.png`
+- Dark-theme implementation screenshot: `/private/tmp/devagentstudio-completed-dark-qa.png`
+- Side-by-side comparison: `/private/tmp/devagentstudio-design-comparison.jpg`
 - Viewport: desktop workbench at 1440 × 1024 target viewport
 - States: running workflow, completed workflow, completed workflow in dark theme
 
@@ -16,7 +16,7 @@
 
 **Required fidelity surfaces**
 
-- Fonts and typography: passed. Native product fonts, weights, and hierarchy match the existing XCodeAgent system and the selected design direction.
+- Fonts and typography: passed. Native product fonts, weights, and hierarchy match the existing DevAgent Studio system and the selected design direction.
 - Spacing and layout rhythm: passed. Sidebar, header, goal strip, result content, file summary, and composer use the approved desktop proportions and whitespace.
 - Colors and visual tokens: passed. Light and dark captures confirm readable theme-scoped accent, success, diff, border, and surface colors.
 - Image quality and asset fidelity: passed. No new raster asset is required; Ant Design icons are used for UI actions and status marks.

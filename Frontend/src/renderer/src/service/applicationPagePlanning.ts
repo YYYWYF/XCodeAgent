@@ -36,7 +36,7 @@ type RequirementSpecDraftPayload = {
 
 // 读取包含设计、显式规划入口和 TechnicalPlan 的创建规划 Graph 地址。
 export function getApplicationPlanningUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/application-page-planning/run`
     : '/api/agent/application-page-planning/run'

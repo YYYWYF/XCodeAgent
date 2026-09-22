@@ -66,7 +66,7 @@ def data_sources_capabilities() -> dict[str, Any]:
         },
         "customEventName": DATA_SOURCES_EVENT_NAME,
         "stateSnapshotKey": "dataSources",
-        "stateDirectory": ".xcodeagent/datasource",
+        "stateDirectory": ".devagentstudio/datasource",
         "workflowIndependent": True,
         "databaseLimit": 1,
         "externalApiAuthentication": "disabled",

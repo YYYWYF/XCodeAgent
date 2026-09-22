@@ -9,7 +9,7 @@ from typing import Any
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
 
-CODE_REVIEW_REPORT_RELATIVE_PATH = ".xcodeagent/reports/code-review.md"
+CODE_REVIEW_REPORT_RELATIVE_PATH = ".devagentstudio/reports/code-review.md"
 
 
 def _safe_text(value: Any, *, workspace: Path) -> str:

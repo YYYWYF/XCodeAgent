@@ -36,7 +36,7 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
     """为调度器测试落盘一份已确认的当前 JSON DAG，匹配真实 Build 门禁。"""
 
     plan = dict(state.get("build_task_plan") or {})
-    template_state_path = os.path.join(workspace, ".xcodeagent", "template-state.json")
+    template_state_path = os.path.join(workspace, ".devagentstudio", "template-state.json")
     if not os.path.exists(template_state_path):
         os.makedirs(os.path.dirname(template_state_path), exist_ok=True)
         with open(template_state_path, "w", encoding="utf-8") as handle:
@@ -52,10 +52,10 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
             )
     # v4 计划必须绑定与工作区一致的 TemplateState，夹具不能绕过真实门禁。
     plan.setdefault("template_context", template_context(load_template_state(workspace)))
-    contracts = os.path.join(workspace, ".xcodeagent", "template-contracts")
+    contracts = os.path.join(workspace, ".devagentstudio", "template-contracts")
     os.makedirs(contracts, exist_ok=True)
     with open(os.path.join(contracts, "route-projector.json"), "w", encoding="utf-8") as handle:
-        json.dump({"schemaVersion": "route-projector-contract.v2", "protocol": "route-projector.v2", "inputSchema": "route-projector-input.schema.json", "outputSchema": "route-projector-output.schema.json", "command": ["node", ".xcodeagent/template-contracts/route-projector-test.mjs"]}, handle)
+        json.dump({"schemaVersion": "route-projector-contract.v2", "protocol": "route-projector.v2", "inputSchema": "route-projector-input.schema.json", "outputSchema": "route-projector-output.schema.json", "command": ["node", ".devagentstudio/template-contracts/route-projector-test.mjs"]}, handle)
     schema = {"type": "object", "required": ["protocol", "pages"], "properties": {"protocol": {"const": "route-projector.v2"}, "pages": {"type": "array"}}}
     with open(os.path.join(contracts, "route-projector-input.schema.json"), "w", encoding="utf-8") as handle:
         json.dump(schema, handle)
@@ -73,7 +73,7 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
     # 调度器测试把任务计划视为已经通过前置 DAG 编译；图结构本身由规划器测试覆盖。
     graph["validation"] = {"is_valid": True, "errors": []}
     plan["task_graph"] = graph
-    path = os.path.join(workspace, ".xcodeagent", "plans", "build-task-plan.json")
+    path = os.path.join(workspace, ".devagentstudio", "plans", "build-task-plan.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(plan, handle, ensure_ascii=False)
@@ -100,7 +100,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             "task_graph": {"nodes": [], "validation": {"is_valid": True, "errors": []}},
         }
         with tempfile.TemporaryDirectory() as workspace:
-            template_path = os.path.join(workspace, ".xcodeagent", "template-state.json")
+            template_path = os.path.join(workspace, ".devagentstudio", "template-state.json")
             os.makedirs(os.path.dirname(template_path), exist_ok=True)
             with open(template_path, "w", encoding="utf-8") as handle:
                 json.dump({
@@ -109,7 +109,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     "requested": {}, "effective": {}, "appliedAdditions": {},
                 }, handle)
             plan["template_context"] = template_context(load_template_state(workspace))
-            plan_path = os.path.join(workspace, ".xcodeagent", "plans", "build-task-plan.json")
+            plan_path = os.path.join(workspace, ".devagentstudio", "plans", "build-task-plan.json")
             os.makedirs(os.path.dirname(plan_path), exist_ok=True)
             with open(plan_path, "w", encoding="utf-8") as handle:
                 json.dump(plan, handle)
@@ -348,7 +348,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 )
 
             plan_path = os.path.join(
-                workspace, ".xcodeagent", "plans", "build-task-plan.json"
+                workspace, ".devagentstudio", "plans", "build-task-plan.json"
             )
             with open(plan_path, encoding="utf-8") as handle:
                 persisted = json.load(handle)
@@ -472,18 +472,18 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             "effective": {},
             "appliedAdditions": {},
         }
-        _write_workspace_file(workspace, ".xcodeagent/template-state.json")
-        with open(os.path.join(workspace, ".xcodeagent/template-state.json"), "w", encoding="utf-8") as handle:
+        _write_workspace_file(workspace, ".devagentstudio/template-state.json")
+        with open(os.path.join(workspace, ".devagentstudio/template-state.json"), "w", encoding="utf-8") as handle:
             json.dump(state, handle)
         routes = os.path.join(workspace, "frontend/src/constants/routes.tsx")
         os.makedirs(os.path.dirname(routes), exist_ok=True)
         with open(routes, "w", encoding="utf-8") as handle:
             handle.write(
-                "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_START\n"
-                "// XCODEAGENT_BUSINESS_ROUTE_IMPORTS_END\n"
+                "// DEVAGENTSTUDIO_BUSINESS_ROUTE_IMPORTS_START\n"
+                "// DEVAGENTSTUDIO_BUSINESS_ROUTE_IMPORTS_END\n"
                 "export const PAGE_ROUTES = [\n"
-                "// XCODEAGENT_BUSINESS_ROUTES_START\n"
-                "// XCODEAGENT_BUSINESS_ROUTES_END\n];\n"
+                "// DEVAGENTSTUDIO_BUSINESS_ROUTES_START\n"
+                "// DEVAGENTSTUDIO_BUSINESS_ROUTES_END\n];\n"
             )
         task = {
             "id": "page-orders",
@@ -878,7 +878,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             with (
                 patch.dict(
                     os.environ,
-                    {"XCODEAGENT_DAG_BUSINESS_SELF_CHECK_ENABLED": "true"},
+                    {"DEVAGENTSTUDIO_DAG_BUSINESS_SELF_CHECK_ENABLED": "true"},
                 ),
                 patch(
                     "app.graph.subgraphs.build.generate_frontend_with_deep_agent",

@@ -1,6 +1,6 @@
-# XCodeAgent 模板重构总体方案
+# DevAgent Studio 模板重构总体方案
 
-> 本文定义 XCodeAgent 模板体系重构后的**总体架构与公共契约**。  
+> 本文定义 DevAgent Studio 模板体系重构后的**总体架构与公共契约**。
 > 首次模板初始化的详细实施见 [`BOOTSTRAP_PLAN.md`](./BOOTSTRAP_PLAN.md)；  
 > 后续 TechnicalPlan Revision 中模板能力收敛的详细实施见 [`TEMPLATE_RECONCILE_PLAN.md`](./TEMPLATE_RECONCILE_PLAN.md)。
 
@@ -10,19 +10,19 @@
 
 ## 1.1 背景与目标
 
-旧模板体系以 frontend/backend 模板仓库和 `main/auth` Git 分支表达模板差异，Electron 负责 clone 和分支选择，XCodeAgent Backend 再通过后处理补页面、菜单、路由等内容。随着登录、权限、审计、追踪、缓存、文件存储等固定技术能力增加，这种模式会产生以下问题：
+旧模板体系以 frontend/backend 模板仓库和 `main/auth` Git 分支表达模板差异，Electron 负责 clone 和分支选择，DevAgent Studio Backend 再通过后处理补页面、菜单、路由等内容。随着登录、权限、审计、追踪、缓存、文件存储等固定技术能力增加，这种模式会产生以下问题：
 
 1. Git 分支无法自然表达多个 Capability 的组合关系；
 2. Electron 承担模板下载与初始化职责，边界过重；
 3. 模板固定能力、业务骨架、业务实现和平台投影混在同一流程；
 4. `templateVariant=main|auth` 成为多个模块的隐式事实源；
 5. 首次模板生成和后续模板能力变化缺少统一状态协议；
-6. Template Engine 与 XCodeAgent 对 TemplateState、Operation、Validation 的理解容易发生漂移；
+6. Template Engine 与 DevAgent Studio 对 TemplateState、Operation、Validation 的理解容易发生漂移；
 7. 模板文件、结构化依赖、Agent 修改、用户修改和 Platform Projection 的所有权边界不清晰。
 
 重构后的核心目标是：
 
-> Template Engine 负责描述并计算“模板应该是什么”；XCodeAgent 负责把 Engine 输出的目标状态与操作协议安全协调到真实 Workspace，并在其上继续业务开发。
+> Template Engine 负责描述并计算“模板应该是什么”；DevAgent Studio 负责把 Engine 输出的目标状态与操作协议安全协调到真实 Workspace，并在其上继续业务开发。
 
 总体架构：
 
@@ -38,7 +38,7 @@ Template Engine Core
 Template Engine Service
     = Stateless HTTP Adapter + Package Builder
 
-XCodeAgent
+DevAgent Studio
     = Actual Workspace Reconciler
     = Desired Capability 编译、Workspace Lock、Preflight、事务 Apply、Validation、恢复、Build 编排
 
@@ -65,9 +65,9 @@ ValidationPlan Schema
 Contract / Acceptance Tests
 ```
 
-XCodeAgent 不得维护比 Engine 更窄的“兼容模型”。
+DevAgent Studio 不得维护比 Engine 更窄的“兼容模型”。
 
-新增或调整以下内容时，必须先升级 Engine 契约，再同步 XCodeAgent：
+新增或调整以下内容时，必须先升级 Engine 契约，再同步 DevAgent Studio：
 
 ```text
 Capability
@@ -79,13 +79,13 @@ ValidationPlan
 错误码
 ```
 
-XCodeAgent 的模型应是 Engine 协议的消费模型，而不是第二套独立定义。
+DevAgent Studio 的模型应是 Engine 协议的消费模型，而不是第二套独立定义。
 
 ---
 
 ## 1.3 总体职责边界
 
-| 能力 | Template Source / Engine | XCodeAgent |
+| 能力 | Template Source / Engine | DevAgent Studio |
 | --- | --- | --- |
 | Capability 定义 | 负责 | 不负责 |
 | Capability 依赖解析 | 负责 | 不负责 |
@@ -111,7 +111,7 @@ XCodeAgent 的模型应是 Engine 协议的消费模型，而不是第二套独�
 
 ```text
 Template Engine = Desired State Planner
-XCodeAgent      = Actual Workspace Reconciler
+DevAgent Studio      = Actual Workspace Reconciler
 ```
 
 ---
@@ -152,10 +152,10 @@ login
 调用方只表达 Desired Capability，依赖解析完全归 Engine：
 
 ```text
-XCodeAgent 不得实现 authorization → login 的第二套依赖逻辑。
+DevAgent Studio 不得实现 authorization → login 的第二套依赖逻辑。
 ```
 
-Engine V1 中 login / authorization 的 Config Schema 为空对象，因此 XCodeAgent V1 不开放通用 Capability Config Change；只有 Engine 契约正式支持 Config Binding 后才能启用。
+Engine V1 中 login / authorization 的 Config Schema 为空对象，因此 DevAgent Studio V1 不开放通用 Capability Config Change；只有 Engine 契约正式支持 Config Binding 后才能启用。
 
 ---
 
@@ -164,25 +164,25 @@ Engine V1 中 login / authorization 的 Config Schema 为空对象，因此 XCod
 Workspace 中模板领域唯一持久化元数据固定为：
 
 ```text
-.xcodeagent/template-state.json
+.devagentstudio/template-state.json
 ```
 
-这里的“唯一”指 **Template Engine 领域事实**。XCodeAgent 仍可维护独立的：
+这里的“唯一”指 **Template Engine 领域事实**。DevAgent Studio 仍可维护独立的：
 
 ```text
-.xcodeagent/runtime/template-runtime-state.json
+.devagentstudio/runtime/template-runtime-state.json
 ```
 
-用于 managed baseline、Bootstrap commit intent 与 Revision Finalization/WAL；该文件属于 XCodeAgent Runtime，不属于 Engine TemplateState，永远不作为 `currentTemplateState` 发送给 Engine。
+用于 managed baseline、Bootstrap commit intent 与 Revision Finalization/WAL；该文件属于 DevAgent Studio Runtime，不属于 Engine TemplateState，永远不作为 `currentTemplateState` 发送给 Engine。
 
 所有权：
 
 ```text
 Template Engine Owns Schema + Content
-XCodeAgent Owns Persistence + Consumption
+DevAgent Studio Owns Persistence + Consumption
 ```
 
-XCodeAgent 必须消费 Engine 完整 TemplateState，不得简化成四字段模型。
+DevAgent Studio 必须消费 Engine 完整 TemplateState，不得简化成四字段模型。
 
 目标字段至少包括：
 
@@ -209,7 +209,7 @@ migrations
 = Engine 已物化到 Workspace 的模板 Migration 记录
 ```
 
-XCodeAgent 可以：
+DevAgent Studio 可以：
 
 - 按 Engine OpenAPI / Schema 完整校验；
 - 原子持久化；
@@ -217,7 +217,7 @@ XCodeAgent 可以：
 - 读取 effective capability 作为 Build/Projection capability gate；
 - 计算完整 TemplateState 的 canonical digest 绑定 Build Run。
 
-XCodeAgent 不可以：
+DevAgent Studio 不可以：
 
 - 自行新增/删除字段；
 - 修改 Engine 返回的 requested/effective/capabilities/managed/migrations；
@@ -263,7 +263,7 @@ Effective
 
 ### Requested
 
-XCodeAgent 从已确认 TechnicalPlan 确定性编译为 Engine RequestedConfig：
+DevAgent Studio 从已确认 TechnicalPlan 确定性编译为 Engine RequestedConfig：
 
 ```json
 {
@@ -410,7 +410,7 @@ Bootstrap ≠ Reconcile
 /v1/update = authoritative reconcile result
 ```
 
-如果未来要求 Preview 与 Apply 强绑定，应由 Engine 增加 `planToken/sourceRevision`，不能由 XCodeAgent 自己用 digest 模拟服务端会话状态。
+如果未来要求 Preview 与 Apply 强绑定，应由 Engine 增加 `planToken/sourceRevision`，不能由 DevAgent Studio 自己用 digest 模拟服务端会话状态。
 
 ## 1.9 Capability Reconcile 与 Template Refresh
 
@@ -424,7 +424,7 @@ current.templateRevision != source.templateRevision
 → Template Refresh
 ```
 
-XCodeAgent V1 暂不开放 Template Refresh / Revision Upgrade。
+DevAgent Studio V1 暂不开放 Template Refresh / Revision Upgrade。
 
 Reconcile 不再依赖 `/v1/plan` 预判，而是在 `/v1/update` 返回 200 Update Package 后、首个 Workspace Apply 前检查：
 
@@ -444,14 +444,14 @@ TEMPLATE_REVISION_UPGRADE_NOT_SUPPORTED
 
 ```text
 Engine 可以计算 Refresh
-XCodeAgent V1 可以拒绝执行 Refresh
+DevAgent Studio V1 可以拒绝执行 Refresh
 ```
 
-收到 ZIP 不等于已 Apply；XCodeAgent 必须完成 Update Policy Gate 后才能触碰 Workspace。
+收到 ZIP 不等于已 Apply；DevAgent Studio 必须完成 Update Policy Gate 后才能触碰 Workspace。
 
 ## 1.10 ChangeSet 与 Operation 协议
 
-XCodeAgent 必须支持 Engine V1 完整操作集：
+DevAgent Studio 必须支持 Engine V1 完整操作集：
 
 ```text
 ADD_FILE
@@ -465,7 +465,7 @@ UPSERT_MAVEN_DEPENDENCY
 DELETE_MAVEN_DEPENDENCY
 ```
 
-Operation 由 Engine 排序，XCodeAgent 必须：
+Operation 由 Engine 排序，DevAgent Studio 必须：
 
 ```text
 严格按 change-set.json operations 原顺序执行
@@ -512,7 +512,7 @@ risks
 
 以及 Core diagnostics 都属于跨仓库协议。
 
-XCodeAgent 不得只消费 operations。
+DevAgent Studio 不得只消费 operations。
 
 ### validationPlan
 
@@ -531,7 +531,7 @@ Apply Operations
 
 - diagnostics 用于阻断性或可诊断错误展示；
 - risks 必须进入 Reconcile 执行记录和用户可观测状态；
-- XCodeAgent 不修改 Engine 返回内容。
+- DevAgent Studio 不修改 Engine 返回内容。
 
 ---
 
@@ -550,10 +550,10 @@ BUSINESS_AGENT
 
 Engine 对整个文件拥有唯一写权；Agent/Platform 不得修改。
 
-XCodeAgent 为这类文件维护运行时冲突证据：
+DevAgent Studio 为这类文件维护运行时冲突证据：
 
 ```text
-.xcodeagent/runtime/template-runtime-state.json
+.devagentstudio/runtime/template-runtime-state.json
   .managedBaseline.engineExclusiveFiles
 ```
 
@@ -595,7 +595,7 @@ V1 固定 Registry 至少包含：
 3. Preflight 只验证 Engine-owned Node 当前值仍等于 Current TemplateState；
 4. 业务/Agent 对**未被 Engine 声明管理的节点**做合法增删改，不构成模板冲突；
 5. Agent/业务若修改与 Engine Managed Node 相同的 JSON Pointer 或 Maven stable key，则报 `TEMPLATE_MANAGED_NODE_CONFLICT`；
-6. 同 Template Revision 的 Capability Reconcile 对已有 Shared Host 只允许结构化 Node Operation；若 Engine 返回 `UPDATE_FILE` / `DELETE_FILE` 覆盖整个 Shared Host，则 XCodeAgent V1 报 `SHARED_HOST_WHOLE_FILE_OPERATION_UNSUPPORTED`；
+6. 同 Template Revision 的 Capability Reconcile 对已有 Shared Host 只允许结构化 Node Operation；若 Engine 返回 `UPDATE_FILE` / `DELETE_FILE` 覆盖整个 Shared Host，则 DevAgent Studio V1 报 `SHARED_HOST_WHOLE_FILE_OPERATION_UNSUPPORTED`；
 7. `ADD_FILE` 创建 Shared Host 只允许发生在首次 Bootstrap；
 8. Template Refresh 当前禁止，因此 V1 不解决 Shared Host 的跨 Revision whole-file merge。未来 Refresh 必须新增 Base Node/Region Ownership 或 3-way merge 协议后才能开放。
 
@@ -616,8 +616,8 @@ SHARED_STRUCTURED_HOST
 V1 Template 子系统只保留两个权威 JSON：
 
 ```text
-.xcodeagent/template-state.json
-.xcodeagent/runtime/template-runtime-state.json
+.devagentstudio/template-state.json
+.devagentstudio/runtime/template-runtime-state.json
 ```
 
 其中：
@@ -627,7 +627,7 @@ template-state.json
 = 完整 Engine TemplateState
 
 template-runtime-state.json
-= XCodeAgent 私有运行状态
+= DevAgent Studio 私有运行状态
   ├─ managedBaseline.engineExclusiveFiles
   └─ finalization | null
 ```
@@ -649,18 +649,18 @@ stage target template-runtime-state.json
 
 如果 crash 发生在两个 metadata 文件切换之间，Recovery 复验 Workspace 后只安全 roll-forward 或阻断；不能看到一个文件已更新就认为事务完成。
 
-TemplateState 仍是模板领域唯一 applied truth；runtime managedBaseline 只是 XCodeAgent 的冲突证据。
+TemplateState 仍是模板领域唯一 applied truth；runtime managedBaseline 只是 DevAgent Studio 的冲突证据。
 
-现有 `.xcodeagent/checkpoints/checkpoints.sqlite` 继续只服务 LangGraph Checkpoint，不承载 Reconcile/WAL/Lease 自定义表。
+现有 `.devagentstudio/checkpoints/checkpoints.sqlite` 继续只服务 LangGraph Checkpoint，不承载 Reconcile/WAL/Lease 自定义表。
 
 ### PLATFORM_OVERLAY
 
-Engine 提供 Host/Scaffold，XCodeAgent Platform Projection 只拥有 marker region。V1 固定使用 `MARKER_REPLAY`。
+Engine 提供 Host/Scaffold，DevAgent Studio Platform Projection 只拥有 marker region。V1 固定使用 `MARKER_REPLAY`。
 
 | Host | V1 Ownership | Reconcile 策略 |
 |---|---|---|
 | `frontend/src/constants/routes.tsx` | Engine Host + Platform Marker Region | 提取 Region → Engine Operation → Marker Replay |
-| `frontend/src/constants/resources.ts` | Engine Host + Platform Marker Region | **跨仓库契约门禁：Template Source 先提供稳定 marker host；XCodeAgent 再把 whole-file projection 改成 marker projection** |
+| `frontend/src/constants/resources.ts` | Engine Host + Platform Marker Region | **跨仓库契约门禁：Template Source 先提供稳定 marker host；DevAgent Studio 再把 whole-file projection 改成 marker projection** |
 | `backend/.../AuthConstants.java` | Engine Host + Platform Marker Region | 提取 Region → Engine Operation → Marker Replay |
 
 `resources.ts` 不允许只改单侧。正式启用 Reconcile 前必须同时满足：
@@ -671,7 +671,7 @@ Template Source / Engine Package
 
 AND
 
-XCodeAgent authorization_frontend_projection
+DevAgent Studio authorization_frontend_projection
   only writes marker region
 ```
 
@@ -711,8 +711,8 @@ WorkspaceOwnershipPolicy
 同一 Workspace 的 server-owned 写入要求运行在支持 POSIX `flock` 的共享文件系统语义下。外部 runtime registry 保存：
 
 ```text
-<XCODEAGENT_RUNTIME>/workspace-mutation/<workspaceId>.lock
-<XCODEAGENT_RUNTIME>/workspace-mutation/<workspaceId>.json
+<DEVAGENTSTUDIO_RUNTIME>/workspace-mutation/<workspaceId>.lock
+<DEVAGENTSTUDIO_RUNTIME>/workspace-mutation/<workspaceId>.json
 ```
 
 Acquire 固定：
@@ -759,8 +759,8 @@ V1 不新建 Runtime SQLite，也不复用 LangGraph `checkpoints.sqlite` 作为
 固定两个 Template 持久化 JSON：
 
 ```text
-.xcodeagent/template-state.json
-.xcodeagent/runtime/template-runtime-state.json
+.devagentstudio/template-state.json
+.devagentstudio/runtime/template-runtime-state.json
 ```
 
 `template-runtime-state.json` 最小结构：
@@ -802,8 +802,8 @@ runtime/history journal archive
 大 payload / backup 仍可放：
 
 ```text
-.xcodeagent/runtime/template-finalization/staging/<changeId>/...
-.xcodeagent/runtime/template-finalization/backup/<changeId>/...
+.devagentstudio/runtime/template-finalization/staging/<changeId>/...
+.devagentstudio/runtime/template-finalization/backup/<changeId>/...
 ```
 
 这些只是 recovery artifact，不是状态真相源。
@@ -881,7 +881,7 @@ AND
 operations == []
 ```
 
-时成立，因此 `/v1/update → 204` 不需要推进 TemplateState。它只说明模板目标状态没有变化，XCodeAgent 仍必须检查真实 Workspace：
+时成立，因此 `/v1/update → 204` 不需要推进 TemplateState。它只说明模板目标状态没有变化，DevAgent Studio 仍必须检查真实 Workspace：
 
 ```text
 managed.files 宿主存在且为普通文件
@@ -921,7 +921,7 @@ allowed persistent side effect before image
 exact excluded runtime paths for current changeId/leaseId
 ```
 
-允许：声明的 ephemeral output、`pnpm-lock.yaml` 等公共 policy 中明确的 side effect；其他源码/配置或非当前事务 `.xcodeagent/**` 变化均报 `VALIDATION_SIDE_EFFECT_CONFLICT`。
+允许：声明的 ephemeral output、`pnpm-lock.yaml` 等公共 policy 中明确的 side effect；其他源码/配置或非当前事务 `.devagentstudio/**` 变化均报 `VALIDATION_SIDE_EFFECT_CONFLICT`。
 
 ## 1.17 Build Binding 与 Managed Workspace Health
 
@@ -930,7 +930,7 @@ BuildContext 固定使用语义明确字段：
 ```json
 {
   "template_context": {
-    "state_path": ".xcodeagent/template-state.json",
+    "state_path": ".devagentstudio/template-state.json",
     "template_state_jcs_sha256": "...",
     "template_revision": "...",
     "effective_capabilities": {}
@@ -1019,7 +1019,7 @@ Platform resource 常量
 历史运行态配置
 ```
 
-因此 XCodeAgent V1 初始发布建议：
+因此 DevAgent Studio V1 初始发布建议：
 
 ```text
 支持 Capability Add
@@ -1094,7 +1094,7 @@ LEGACY_TEMPLATE_STATE_UNSUPPORTED
 | Step | 目标 | 人工可见证据 | 未通过时 |
 |---|---|---|---|
 | 00 | 实际 Engine/OpenAPI/Package 达到目标契约 | `/plan`、`/update`、7 Operation、完整 State、resources marker | Feature Flag 关闭 |
-| 01 | XCodeAgent 完整 Model + JCS digest | Java/Python golden vector 一致 | 不进入 Planning 改造 |
+| 01 | DevAgent Studio 完整 Model + JCS digest | Java/Python golden vector 一致 | 不进入 Planning 改造 |
 | 02 | TechnicalPlan `template_capabilities` + Markdown round-trip | JSON→Markdown→JSON 等价 | 不确认 Capability Revision |
 | 03 | Ownership Registry + Agent/Workspace Write Guard | Agent 改 Engine Exclusive 被拒；Shared Host 业务 node 可改 | 不进入 Build 接入 |
 | 04 | Mutation Lease + `flock` + epoch fencing | 两 worker 互斥、kill 后 epoch+1、旧 context fenced | 不进入事务 Apply |
@@ -1141,6 +1141,6 @@ V1 正式支持：Capability Add、Same Capability NO_CHANGE、7 类 Operation�
 - [ ] Skeleton 有逐项可恢复进度；
 - [ ] Lifecycle/Journal 权威关系闭合；
 - [ ] Build 使用 `template_state_jcs_sha256` + Managed Workspace Health；
-- [ ] `resources.ts` Engine marker host 与 XCodeAgent marker writer 同步发布；
+- [ ] `resources.ts` Engine marker host 与 DevAgent Studio marker writer 同步发布；
 - [ ] 每个实施 Step 都存在人工可执行验收入口；
 - [ ] Reconcile 整体案例和 fault-injection 变体通过。

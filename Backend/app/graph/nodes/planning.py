@@ -1,3 +1,5 @@
+
+from app.branding import WORKSPACE_ARTIFACT_DIR
 import json
 import logging
 
@@ -209,7 +211,7 @@ def _technical_planning_requirement_spec(
         for key, value in requirement_spec.items()
         if key != "entities"
     }
-    application_file = Path(workspace_from_state(state)) / ".xcodeagent" / "application.json"
+    application_file = Path(workspace_from_state(state)) / WORKSPACE_ARTIFACT_DIR / "application.json"
     try:
         application_config = json.loads(application_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:

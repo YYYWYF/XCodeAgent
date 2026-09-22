@@ -1,6 +1,6 @@
 import type { InspectedElementContext } from '../../typings'
 
-export const ELEMENT_INSPECTOR_CHANNEL = 'xcode-agent:element-inspector' as const
+export const ELEMENT_INSPECTOR_CHANNEL = 'devagentstudio:element-inspector' as const
 export const ELEMENT_INSPECTOR_VERSION = 1 as const
 
 export type ElementSourceLocation = {

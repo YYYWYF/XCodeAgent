@@ -266,14 +266,14 @@ class WorkflowRequestTests(unittest.TestCase):
             {
                 "state": {
                     "testReportResult": {
-                        "reportPath": ".xcodeagent/reports/test-report.md"
+                        "reportPath": ".devagentstudio/reports/test-report.md"
                     }
                 }
             }
         )
 
         self.assertEqual(
-            values["test_report_path"], ".xcodeagent/reports/test-report.md"
+            values["test_report_path"], ".devagentstudio/reports/test-report.md"
         )
         self.assertNotIn("test_report_json_path", values)
 
@@ -1134,7 +1134,7 @@ class WorkflowRequestTests(unittest.TestCase):
                         },
                         "codeReviewResult": {
                             "status": "completed",
-                            "reportPath": ".xcodeagent/reports/code-review.md",
+                            "reportPath": ".devagentstudio/reports/code-review.md",
                             "issues": [{"id": "CKR6002-1"}],
                         },
                     },
@@ -1150,7 +1150,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_values"]["code_review_result"]["issues"][0]["id"], "CKR6002-1")
         self.assertEqual(
             inputs["resume_values"]["code_review_report_path"],
-            ".xcodeagent/reports/code-review.md",
+            ".devagentstudio/reports/code-review.md",
         )
 
     def test_code_review_repair_confirmation_rejects_unknown_action_or_missing_answer(self) -> None:
@@ -1672,8 +1672,8 @@ class WorkflowRequestTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            plans_dir = workspace / ".xcodeagent" / "plans"
-            specs_dir = workspace / ".xcodeagent" / "specs"
+            plans_dir = workspace / ".devagentstudio" / "plans"
+            specs_dir = workspace / ".devagentstudio" / "specs"
             plans_dir.mkdir(parents=True)
             specs_dir.mkdir(parents=True)
             technical_plan = {
@@ -1728,7 +1728,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 "pages": [
                     {
                         "pageId": "inventory_page",
-                        "code_path": ".xcodeagent/ui-design/pages/Inventory/index.tsx",
+                        "code_path": ".devagentstudio/ui-design/pages/Inventory/index.tsx",
                         "code_sha256": "a" * 64,
                     }
                 ],
@@ -1764,8 +1764,8 @@ class WorkflowRequestTests(unittest.TestCase):
     def test_selected_requirement_page_does_not_bypass_technical_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            plans_dir = workspace / ".xcodeagent" / "plans"
-            specs_dir = workspace / ".xcodeagent" / "specs"
+            plans_dir = workspace / ".devagentstudio" / "plans"
+            specs_dir = workspace / ".devagentstudio" / "specs"
             plans_dir.mkdir(parents=True)
             specs_dir.mkdir(parents=True)
             (plans_dir / "project-plan.json").write_text(
@@ -2270,7 +2270,7 @@ class WorkflowRequestTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            plans_dir = workspace / ".xcodeagent" / "plans"
+            plans_dir = workspace / ".devagentstudio" / "plans"
             plans_dir.mkdir(parents=True)
             (plans_dir / "project-plan.json").write_text(
                 json.dumps(
@@ -2430,9 +2430,9 @@ class WorkflowRequestTests(unittest.TestCase):
     def test_workflow_debug_auto_loads_fixed_workspace_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
-            specs_dir = workspace / ".xcodeagent" / "specs"
-            plans_dir = workspace / ".xcodeagent" / "plans"
-            snapshots_dir = workspace / ".xcodeagent" / "cache" / "workspace-snapshots"
+            specs_dir = workspace / ".devagentstudio" / "specs"
+            plans_dir = workspace / ".devagentstudio" / "plans"
+            snapshots_dir = workspace / ".devagentstudio" / "cache" / "workspace-snapshots"
             specs_dir.mkdir(parents=True)
             plans_dir.mkdir(parents=True)
             snapshots_dir.mkdir(parents=True)
@@ -2652,7 +2652,7 @@ class WorkflowRequestTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
-            plans_dir = workspace / ".xcodeagent" / "plans"
+            plans_dir = workspace / ".devagentstudio" / "plans"
             plans_dir.mkdir(parents=True)
             repair_plan = {
                 "status": "ready",
@@ -2685,7 +2685,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_values"]["repair_task_plan"], repair_plan)
         self.assertEqual(
             inputs["resume_values"]["repair_task_plan_path"],
-            str(workspace / ".xcodeagent" / "plans" / "repair-task-plan.json"),
+            str(workspace / ".devagentstudio" / "plans" / "repair-task-plan.json"),
         )
         self.assertEqual(inputs["resume_values"]["repair_tasks"], repair_plan["tasks"])
 

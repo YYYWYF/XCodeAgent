@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -105,9 +107,9 @@ def _materialize_page_confirmation_plan(
 ) -> dict[str, Any]:
     """按当前正式上游物化 PageImplementationContract，不读取 Pending 副本。"""
 
-    requirement_path = workspace_root / ".xcodeagent/specs/requirement-spec.json"
-    product_path = workspace_root / ".xcodeagent/plans/product-plan.json"
-    ui_path = workspace_root / ".xcodeagent/specs/ui-designs.json"
+    requirement_path = workspace_root / WORKSPACE_ARTIFACT_DIR / 'specs/requirement-spec.json'
+    product_path = workspace_root / WORKSPACE_ARTIFACT_DIR / 'plans/product-plan.json'
+    ui_path = workspace_root / WORKSPACE_ARTIFACT_DIR / 'specs/ui-designs.json'
     try:
         requirement_spec = load_requirement_spec_json(requirement_path)
         product_plan = load_project_plan_json(

@@ -98,7 +98,7 @@ class CodeReviewSubgraphTests(unittest.TestCase):
             _reviewed_source_file(
                 {
                     "tool": "read_file",
-                    "path": "/.xcodeagent/builtin-skills/backend-code-scan/SKILL.md",
+                    "path": "/.devagentstudio/builtin-skills/backend-code-scan/SKILL.md",
                 }
             ),
             "",
@@ -129,7 +129,7 @@ class CodeReviewSubgraphTests(unittest.TestCase):
                 {
                     "tool": "read_file",
                     "status": "running",
-                    "path": "/.xcodeagent/builtin-skills/backend-code-scan/SKILL.md",
+                    "path": "/.devagentstudio/builtin-skills/backend-code-scan/SKILL.md",
                 },
                 {"tool": "grep", "status": "running", "path": "/frontend/src"},
                 {
@@ -193,7 +193,7 @@ class CodeReviewSubgraphTests(unittest.TestCase):
             self.assertTrue(report_path.is_file())
             self.assertEqual(
                 report_path.resolve().relative_to(Path(workspace).resolve()).as_posix(),
-                ".xcodeagent/reports/code-review.md",
+                ".devagentstudio/reports/code-review.md",
             )
 
         self.assertEqual(result["status"], "requires_user_input")
@@ -420,8 +420,8 @@ class CodeReviewSubgraphTests(unittest.TestCase):
             "timed_out": False,
             "command": ["pnpm", "install"],
             "cwd": "frontend",
-            "stdout_log": ".xcodeagent/runtime/code-review/pnpm-install/install-1/stdout.log",
-            "stderr_log": ".xcodeagent/runtime/code-review/pnpm-install/install-1/stderr.log",
+            "stdout_log": ".devagentstudio/runtime/code-review/pnpm-install/install-1/stdout.log",
+            "stderr_log": ".devagentstudio/runtime/code-review/pnpm-install/install-1/stderr.log",
             "stdout_tail": "done",
             "stderr_tail": "",
         }
@@ -679,8 +679,8 @@ class CodeReviewSubgraphTests(unittest.TestCase):
             "exit_code": 0,
             "command": ["pnpm", "install"],
             "cwd": "frontend",
-            "stdout_log": ".xcodeagent/runtime/code-review/pnpm-install/run/stdout.log",
-            "stderr_log": ".xcodeagent/runtime/code-review/pnpm-install/run/stderr.log",
+            "stdout_log": ".devagentstudio/runtime/code-review/pnpm-install/run/stdout.log",
+            "stderr_log": ".devagentstudio/runtime/code-review/pnpm-install/run/stderr.log",
             "stdout_tail": "done",
             "stderr_tail": "",
         }

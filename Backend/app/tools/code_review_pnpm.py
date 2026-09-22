@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import shutil
 import subprocess
@@ -25,7 +27,7 @@ def pnpm_install_evidence_path(workspace_root: str | Path) -> Path:
 
     return (
         Path(workspace_root).expanduser().resolve()
-        / ".xcodeagent/runtime/code-review/pnpm-install/latest.json"
+        / WORKSPACE_ARTIFACT_DIR / 'runtime/code-review/pnpm-install/latest.json'
     )
 
 
@@ -148,7 +150,7 @@ def _prepare_runtime_root(root: Path) -> Path:
     """逐级创建并校验运行目录，拒绝任何可逃逸工作区的符号链接。"""
 
     current = root
-    for part in (".xcodeagent", "runtime", "code-review", "pnpm-install"):
+    for part in (".devagentstudio", "runtime", "code-review", "pnpm-install"):
         candidate = current / part
         if candidate.is_symlink():
             raise ToolException("代码审查运行日志目录不能包含符号链接。")

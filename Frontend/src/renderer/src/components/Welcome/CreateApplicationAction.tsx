@@ -39,7 +39,7 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
   const handleSelectProjectParent = async (): Promise<void> => {
     setSelectingParent(true)
     try {
-      const workspaceApi = window.xcodeAgent?.workspace
+      const workspaceApi = window.devAgentStudio?.workspace
       if (!workspaceApi?.selectDirectory) {
         message.warning('当前环境不能打开系统目录选择器，请在桌面客户端中使用。')
         return
@@ -61,7 +61,7 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
     setCreating(true)
     try {
       const values = await form.validateFields()
-      const workspaceApi = window.xcodeAgent?.workspace
+      const workspaceApi = window.devAgentStudio?.workspace
       if (!workspaceApi?.createProjectDirectory) {
         throw new Error('当前环境不能创建本地项目目录，请在桌面客户端中使用。')
       }

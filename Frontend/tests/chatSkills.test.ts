@@ -343,8 +343,8 @@ test('design TechnicalPlan 完成后只读取完整的一次性 continuation 合
 })
 
 const skillCatalog: UserSkillCatalog = {
-  root: '~/.xcodeagent_dev/skills',
-  builtinRoot: '/.xcodeagent/builtin-skills',
+  root: '~/.devagentstudio_dev/skills',
+  builtinRoot: '/.devagentstudio/builtin-skills',
   skills: [
     {
       name: 'alpha',

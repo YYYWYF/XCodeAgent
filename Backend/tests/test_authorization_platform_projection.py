@@ -56,7 +56,7 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
     def _write_template(self, workspace: Path) -> None:
         """创建带固定业务路由托管区的最小 auth 模板。"""
 
-        self._write(workspace / ".xcodeagent/template-state.json", json.dumps({
+        self._write(workspace / ".devagentstudio/template-state.json", json.dumps({
             "schemaVersion": 2,
             "templateRevision": "r1",
             "requested": {"authorization": {"enabled": True, "config": {}}},
@@ -64,7 +64,7 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
             "appliedAdditions": {},
         }))
         self._write(workspace / "frontend/src/constants/resources.ts", "export const RESOURCES = {} as const;\n")
-        self._write(workspace / "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java", "// XCODEAGENT_AUTH_CONSTANTS_START\n// XCODEAGENT_AUTH_CONSTANTS_END\n")
+        self._write(workspace / "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java", "// DEVAGENTSTUDIO_AUTH_CONSTANTS_START\n// DEVAGENTSTUDIO_AUTH_CONSTANTS_END\n")
 
     def _write(self, path: Path, content: str) -> None:
         """创建测试用 UTF-8 文件。"""

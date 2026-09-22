@@ -18,7 +18,7 @@ type AgentFilesAgUiPayload = {
 }
 
 function getAgentFilesUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/agent-files/run`
     : '/api/agent/agent-files/run'

@@ -40,7 +40,7 @@ def entity_source_binding_payload(
     return {
         "mode": "entity_source_binding",
         "status": "requires_user_input",
-        "question_schema": "xcodeagent.entity_source_binding.v1",
+        "question_schema": "devagentstudio.entity_source_binding.v1",
         "questions": [],
         "message": (
             f"实体 `{selected_entity_id}` 尚未开始数据源绑定，请先选择数据库、外部 API 或静态数据。"

@@ -33,8 +33,8 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.workspace = self.temp.name
         root = Path(self.workspace)
-        (root / ".xcodeagent").mkdir()
-        (root / ".xcodeagent/application.json").write_text("{}")
+        (root / ".devagentstudio").mkdir()
+        (root / ".devagentstudio/application.json").write_text("{}")
         (root / "frontend").mkdir()
         (root / "frontend/main.ts").write_text("broken")
         self.thread = "preview-test"
@@ -491,7 +491,7 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         """服务读取和失败诊断不写入开发完成计数或测试阶段报告。"""
         await self.request("get")
         await self.request("diagnose", attemptId="invalid")
-        root = Path(self.workspace) / ".xcodeagent"
+        root = Path(self.workspace) / ".devagentstudio"
         self.assertFalse((root / "application-lifecycle.json").exists())
         self.assertFalse((root / "test-report.json").exists())
 

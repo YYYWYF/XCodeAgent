@@ -327,18 +327,18 @@ class CodeAnalyzeTests(unittest.TestCase):
                     "loaded_skills": [
                         {
                             "name": "frontend-code-scan",
-                            "path": "/.xcodeagent/builtin-skills/frontend-code-scan/SKILL.md",
+                            "path": "/.devagentstudio/builtin-skills/frontend-code-scan/SKILL.md",
                             "rules_loaded": 0,
                         },
                         {
                             "name": "backend-code-scan",
-                            "path": "/.xcodeagent/builtin-skills/backend-code-scan/SKILL.md",
+                            "path": "/.devagentstudio/builtin-skills/backend-code-scan/SKILL.md",
                             "rules_loaded": 8,
-                            "references": "/.xcodeagent/builtin-skills/backend-code-scan/references/rules-reference.md",
+                            "references": "/.devagentstudio/builtin-skills/backend-code-scan/references/rules-reference.md",
                         },
                         {
                             "name": "backend-code-scan/rules-reference",
-                            "path": "/.xcodeagent/builtin-skills/backend-code-scan/references/rules-reference.md",
+                            "path": "/.devagentstudio/builtin-skills/backend-code-scan/references/rules-reference.md",
                         },
                     ],
                     "targets": {

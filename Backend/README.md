@@ -44,7 +44,7 @@ curl -N -X POST http://127.0.0.1:8000/workflow/run \
   -d '{"threadId":"demo-thread","messages":[{"role":"user","content":"创建一个库存管理应用"}],"forwardedProps":{"selectedSkillNames":["inventory-domain"]}}'
 ```
 
-`selectedSkillNames` 为可选字符串数组。非空时，Backend 会验证并只挂载这些已开启的用户 Skill，完整读取每个 `SKILL.md` 后强制注入 Frontend、Data Source、Test、RepairPlanner 四个 Deep Agent；空数组或字段缺失时，只有已开启用户 Skill 可按需发现，正文不强制注入。用户技能默认开启，关闭项按环境持久化在 `~/.xcodeagent[_dev|_st|_uat]/skill-settings.json`；关闭的技能不能被显式选择，并从下一次 Agent bundle 创建或后续运行开始失效。所选正文总量上限为 64 KiB，恢复中的 Workflow 不允许替换最初的技能集合。
+`selectedSkillNames` 为可选字符串数组。非空时，Backend 会验证并只挂载这些已开启的用户 Skill，完整读取每个 `SKILL.md` 后强制注入 Frontend、Data Source、Test、RepairPlanner 四个 Deep Agent；空数组或字段缺失时，只有已开启用户 Skill 可按需发现，正文不强制注入。用户技能默认开启，关闭项按环境持久化在 `~/.devagentstudio[_dev|_st|_uat]/skill-settings.json`；关闭的技能不能被显式选择，并从下一次 Agent bundle 创建或后续运行开始失效。所选正文总量上限为 64 KiB，恢复中的 Workflow 不允许替换最初的技能集合。
 
 后续请求复用同一个 `threadId`，服务会用 LangGraph checkpointer 延续该主工作流。
 
@@ -86,7 +86,7 @@ AG-UI 使用时传：
 
 ## 本地工作区工具
 
-Electron 前端选择一个目录后，把绝对路径作为 `workspace_root` 传给工具接口。若请求里不传，则使用环境变量 `XCODEAGENT_WORKSPACE_ROOT`，再退回到后端当前工作目录。
+Electron 前端选择一个目录后，把绝对路径作为 `workspace_root` 传给工具接口。若请求里不传，则使用环境变量 `DEVAGENTSTUDIO_WORKSPACE_ROOT`，再退回到后端当前工作目录。
 
 当前工具：
 
@@ -107,7 +107,7 @@ Electron 前端选择一个目录后，把绝对路径作为 `workspace_root` �
 ```bash
 curl -X POST http://127.0.0.1:8000/tools/file/read \
   -H 'Content-Type: application/json' \
-  -d '{"workspace_root":"/Users/yifei/Documents/XCodeAgentBack","path":"app/main.py","max_lines":80}'
+  -d '{"workspace_root":"/Users/yifei/Documents/DevAgentStudioBack","path":"app/main.py","max_lines":80}'
 ```
 
 精确 patch 示例，建议 agent 优先用这个而不是整文件覆盖：
@@ -115,7 +115,7 @@ curl -X POST http://127.0.0.1:8000/tools/file/read \
 ```bash
 curl -X POST http://127.0.0.1:8000/tools/file/patch \
   -H 'Content-Type: application/json' \
-  -d '{"workspace_root":"/Users/yifei/Documents/XCodeAgentBack","path":"README.md","dry_run":true,"edits":[{"old_text":"Local LangGraph Agent","new_text":"Local XCodeAgent Backend"}]}'
+  -d '{"workspace_root":"/Users/yifei/Documents/DevAgentStudioBack","path":"README.md","dry_run":true,"edits":[{"old_text":"Local LangGraph Agent","new_text":"Local DevAgent Studio Backend"}]}'
 ```
 
 执行命令示例：
@@ -123,7 +123,7 @@ curl -X POST http://127.0.0.1:8000/tools/file/patch \
 ```bash
 curl -X POST http://127.0.0.1:8000/tools/terminal/exec \
   -H 'Content-Type: application/json' \
-  -d '{"workspace_root":"/Users/yifei/Documents/XCodeAgentBack","argv":["python3","--version"]}'
+  -d '{"workspace_root":"/Users/yifei/Documents/DevAgentStudioBack","argv":["python3","--version"]}'
 ```
 
 `terminal.exec` 不走 shell，只接收 `argv` 或用 `shlex` 拆分 `command`。`rm`、`sudo`、`git reset`、`git clean`、包管理安装等中高风险命令会先返回 `requires_approval: true` 和审批 id；前端确认后调用 `/tools/approvals/{id}/approve` 取得一次性 token，再把 token 放到 `approval` 字段重试。
@@ -153,17 +153,17 @@ UI_DESIGN_MAX_TOKENS=4096
 UI_DESIGN_MAX_RETRIES=2
 MODEL_TRUST_ENV=false
 MODEL_OUTPUT_LOG_ENABLED=false
-XCODEAGENT_WORKSPACE_ROOT=/Users/yifei/Documents/example-workspace
-XCODEAGENT_CHECKPOINT_RETENTION_DAYS=30
+DEVAGENTSTUDIO_WORKSPACE_ROOT=/Users/yifei/Documents/example-workspace
+DEVAGENTSTUDIO_CHECKPOINT_RETENTION_DAYS=30
 LANGSMITH_TRACING=false
 LANGSMITH_API_KEY=replace-with-your-langsmith-key
-LANGSMITH_PROJECT=xcodeagent-workflow
+LANGSMITH_PROJECT=devagentstudio-workflow
 ```
 
 `UI_DESIGN_MAX_TOKENS` 控制单个 UI 设计稿模型调用的最大输出 token 数；`UI_DESIGN_MAX_RETRIES` 控制设计稿代码校验失败后的最大自动修复次数。
 
 `MODEL_OUTPUT_LOG_ENABLED=true` 会在模型生成时把文本输出流式打印到后端控制台，并在调用结束后打印工具调用概要，便于调试。
 
-workflow checkpoint 默认写入当前工作区的 `.xcodeagent/checkpoints/checkpoints.sqlite`，用于持久化主 workflow 的 `ProjectState`，支持后端重启后的状态恢复。`XCODEAGENT_CHECKPOINT_DB` 可选用于强制覆盖 SQLite checkpoint 数据库位置；设置后所有 workflow 会共享该数据库。`XCODEAGENT_CHECKPOINT_RETENTION_DAYS` 控制旧 checkpoint 的默认保留天数，默认 30 天，每个 thread 至少保留最新 checkpoint，等待用户输入的 thread 不会被自动清理。
+workflow checkpoint 默认写入当前工作区的 `.devagentstudio/checkpoints/checkpoints.sqlite`，用于持久化主 workflow 的 `ProjectState`，支持后端重启后的状态恢复。`DEVAGENTSTUDIO_CHECKPOINT_DB` 可选用于强制覆盖 SQLite checkpoint 数据库位置；设置后所有 workflow 会共享该数据库。`DEVAGENTSTUDIO_CHECKPOINT_RETENTION_DAYS` 控制旧 checkpoint 的默认保留天数，默认 30 天，每个 thread 至少保留最新 checkpoint，等待用户输入的 thread 不会被自动清理。
 
 `LANGSMITH_TRACING` 未配置或为空时默认关闭，不会影响后端启动；只有显式设置为 `true`、`1`、`yes` 或 `on` 时才会启用 LangSmith tracing。主 workflow 会向 LangGraph runnable config 注入 `run_id`、`thread_id`、`project_id`、`workspace` 等 metadata，并在桌面端 Workflow Run 卡片中显示 LangSmith 状态和跳转入口。非 US 区域账号还需要按 LangSmith 要求配置 `LANGSMITH_ENDPOINT`。

@@ -5,7 +5,7 @@
  * 报告状态"，正是最容易被写错的地方 —— 组件本身挂了 Git 状态机，不适合直接单测。
  *
  * 背景：模板由 bootstrap 在建仓时自动提交（`git_manager.initialize_baseline` 会
- * `git add frontend backend .xcodeagent` 并 commit），所以这张卡出现时通常**已经
+ * `git add frontend backend .devagentstudio` 并 commit），所以这张卡出现时通常**已经
  * 没有初始化代码可提交**。早先这里固定显示"建议创建初始化提交 / 当前 0 个文件可提交"
  * 加一个灰按钮，等于建议一个做不到的动作。
  */

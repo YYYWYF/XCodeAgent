@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import os
 import re
@@ -226,7 +228,7 @@ def _unit_test_affected_layers(state: dict[str, Any]) -> set[str] | None:
 def _configured_datasource_type(root: Path) -> str | None:
     """仅在合法应用配置存在时读取权威类型，普通快速修改工作区继续自动发现工程。"""
 
-    application_path = root / ".xcodeagent" / "application.json"
+    application_path = root / WORKSPACE_ARTIFACT_DIR / "application.json"
     if not application_path.is_file():
         return None
     return read_application_datasource_type(root)

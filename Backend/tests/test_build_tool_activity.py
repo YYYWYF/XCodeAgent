@@ -324,7 +324,7 @@ class BuildToolActivityTests(unittest.TestCase):
             tasks,
         )
         fallback = task_ids_for_tool_activity(
-            {"path": "/.xcodeagent/builtin-skills/react/SKILL.md"},
+            {"path": "/.devagentstudio/builtin-skills/react/SKILL.md"},
             tasks,
         )
 

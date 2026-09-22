@@ -537,7 +537,7 @@ async function promiseWithTimeout<T>(
 
 /** 解析桌面端注入的 Backend 地址，并为独立开发页面提供本地默认地址。 */
 function getAgentBaseUrl(): string {
-  return (window.xcodeAgent?.agentBaseUrl || DEFAULT_AGENT_BASE_URL).replace(/\/$/, '')
+  return (window.devAgentStudio?.agentBaseUrl || DEFAULT_AGENT_BASE_URL).replace(/\/$/, '')
 }
 
 /** 返回主工作流的 AG-UI 地址。 */

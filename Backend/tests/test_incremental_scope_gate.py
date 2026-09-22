@@ -32,7 +32,7 @@ from app.services.development_artifacts import (
 from app.services.development_artifacts import test_entry_gate as evaluate_test_entry_gate
 from app.domain.development_artifacts import DevelopmentArtifactTarget
 
-_PLAN_RELATIVE = Path(".xcodeagent/plans/build-task-plan.json")
+_PLAN_RELATIVE = Path(".devagentstudio/plans/build-task-plan.json")
 
 
 def _page_unit(page_id: str, *, in_scope: bool) -> dict[str, object]:
@@ -49,7 +49,7 @@ class IncrementalScopeGateTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.workspace = Path(temporary.name)
-        plans = self.workspace / ".xcodeagent/plans"
+        plans = self.workspace / ".devagentstudio/plans"
         plans.mkdir(parents=True)
         (plans / "product-plan.json").write_text(
             json.dumps(

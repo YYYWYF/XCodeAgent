@@ -188,10 +188,10 @@ class RevisionPreviewTests(unittest.TestCase):
             self.assertFalse(_can_reuse_dependencies(root, materialized))
 
     def test_revision_preview_dir_stays_inside_runtime(self) -> None:
-        """物化目录必须落在 .xcodeagent/runtime 下（该路径已被 gitignore）。"""
+        """物化目录必须落在 .devagentstudio/runtime 下（该路径已被 gitignore）。"""
 
         directory = revision_preview_dir("/tmp/ws", "v1.0")
-        self.assertIn(".xcodeagent/runtime/revision-preview", str(directory))
+        self.assertIn(".devagentstudio/runtime/revision-preview", str(directory))
 
     def _init_repository(self, root: Path) -> Path:
         """创建具有基线提交的最小仓库。"""

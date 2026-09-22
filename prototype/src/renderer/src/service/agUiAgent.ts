@@ -253,7 +253,7 @@ export type ProcessStepRecord = {
 
 /** 返回主工作流的 AG-UI 地址。 */
 export function getWorkflowUrl(): string {
-  const agentBaseUrl = window.aiStudio?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/workflow/run`
     : '/api/agent/workflow/run'
@@ -261,7 +261,7 @@ export function getWorkflowUrl(): string {
 
 /** 返回独立快速修改 Graph 的 AG-UI 地址。 */
 export function getDirectModificationUrl(): string {
-  const agentBaseUrl = window.aiStudio?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/direct-modification/run`
     : '/api/agent/direct-modification/run'
@@ -306,7 +306,7 @@ export class AgUiChatSession {
   /** 使用请求级 HttpAgent 发送当前消息，避免把本地会话历史和旧状态重复传输。 */
   async sendMessage(message: string, options: SendWorkflowMessageOptions): Promise<AgUiChatResult> {
     // 浏览器 mock 环境（无 Electron）直接回放剧本，不经真实后端。
-    if (!window.aiStudio?.isElectron) {
+    if (!window.devAgentStudio?.isElectron) {
       const controller = new AbortController()
       const runId = randomUUID()
       this.activeRunId = runId

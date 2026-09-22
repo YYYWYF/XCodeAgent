@@ -1,4 +1,4 @@
-# 历史资料：XCodeAgent 旧版完整 Workflow 与数据流说明
+# 历史资料：DevAgent Studio 旧版完整 Workflow 与数据流说明
 
 > 已被 [BOOTSTRAP_PLAN.md](BOOTSTRAP_PLAN.md) 取代，不是当前运行契约。
 > 本文保留为重构前的设计与问题追踪记录；下文的“当前”“已实施”和验收结论仅适用于记录当时，不能作为现有代码的实施依据。
@@ -175,31 +175,31 @@ flowchart TD
 
 - **类型**：初始化 Graph 之前的确定性生命周期创建动作；无 LLM 提示词。
 - **输入**：`workspaceRoot`、`application.id`、`application.appName`、初始化 `threadId/runId`。
-- **输出**：`.xcodeagent/application-lifecycle.json`，初始状态为 `collecting_requirement/pending`，并保存应用身份与初始化线程引用。
+- **输出**：`.devagentstudio/application-lifecycle.json`，初始状态为 `collecting_requirement/pending`，并保存应用身份与初始化线程引用。
 - **校验规则**：Pydantic 拒绝额外字段和空应用身份；已有同一工作区状态时幂等读取/补齐；文件使用锁、临时文件、fsync 和原子替换；未知或损坏 schema 显式失败。
-- **依赖文件**：`protocols/application_lifecycle.py`、`services/application_lifecycle.py`、`domain/application_lifecycle.py`、`.xcodeagent/application-lifecycle.json`。
+- **依赖文件**：`protocols/application_lifecycle.py`、`services/application_lifecycle.py`、`domain/application_lifecycle.py`、`.devagentstudio/application-lifecycle.json`。
 - **依赖节点**：无业务上游；下游 `requirements`。
 
 ### 3.1 `requirements / 需求分析与需求文档确认`
 
 - **类型**：直接 ChatModel + 确定性文档同步/确认门禁。
-- **当前提示词**：`Backend/app/agents/main/requirements_analyzer.py::_requirements_prompt`。核心要求是只做需求分析；仅允许 `ask_user`；一次集中询问 1–4 个会实质改变设计的问题；覆盖应用信息、角色、模块、页面、数据源、业务流程和验收标准；所有对象使用稳定 ID；只允许一个 `/` 首页；数据源类型必须服从 `.xcodeagent/application.json` 的权威类型；返回完整 JSON 而不是 patch。
-- **输入**：`request`、已有 `requirement_spec`、`.xcodeagent/application.json` 中的数据源类型、菜单 `rootPath`/`enable`、本轮澄清答案或文档修改意见。
+- **当前提示词**：`Backend/app/agents/main/requirements_analyzer.py::_requirements_prompt`。核心要求是只做需求分析；仅允许 `ask_user`；一次集中询问 1–4 个会实质改变设计的问题；覆盖应用信息、角色、模块、页面、数据源、业务流程和验收标准；所有对象使用稳定 ID；只允许一个 `/` 首页；数据源类型必须服从 `.devagentstudio/application.json` 的权威类型；返回完整 JSON 而不是 patch。
+- **输入**：`request`、已有 `requirement_spec`、`.devagentstudio/application.json` 中的数据源类型、菜单 `rootPath`/`enable`、本轮澄清答案或文档修改意见。
 - **输出**：`requirement_spec`、`requirement_spec_path`、`requirement_spec_json_path`、`clarification`、`status`、`timeline`。
 - **校验规则**：需求缺口进入 `pending_user_input`；澄清答案不能视作需求文档确认；确认必须是本轮显式交互；Markdown 编辑需同步回 JSON；页面路由去重并应用菜单根路径；数据源类型强制覆盖为权威类型。
-- **依赖文件**：`graph/nodes/requirements.py`、`agents/main/requirements_analyzer.py`、`services/requirement_spec.py`、`services/data_source_policy.py`、`workspace/spec_documents.py`、`.xcodeagent/application.json`、`.xcodeagent/specs/requirement-spec.md|json`。
+- **依赖文件**：`graph/nodes/requirements.py`、`agents/main/requirements_analyzer.py`、`services/requirement_spec.py`、`services/data_source_policy.py`、`workspace/spec_documents.py`、`.devagentstudio/application.json`、`.devagentstudio/specs/requirement-spec.md|json`。
 - **依赖节点**：上游 `create_lifecycle`；下游 `ui_confirmation`；未确认时本轮结束。
 
 ### 3.2 `ui_confirmation / UI 设计稿生成与确认`
 
 - **类型**：每页 ChatModel 生成 TSX（经进程级 worker 池解耦并发）+ 确定性代码校验 + 用户确认门禁。
 - **当前提示词**：`Backend/app/services/ui_design_generator.py::_build_ui_design_prompt`；失败时使用 `_build_repair_prompt`。提示词要求生成纯视觉 React + antd5 + `@ant-design/pro-components` 页面，使用静态 Mock 数据，不调用 API，不改变需求；输出单个完整 TSX 文件；组件名必须与 `page_key` 一致。
-- **输入**：已确认 ProductPlan 的单页切片（稳定 `pageId`、产品目标、正式路径、业务信息项、业务操作、状态要求、角色、跳转和验收标准）、内置 `antd-ui-design` 技能全文、工作区 `.xcodeagent/ui-design` 落盘目录、通过当前事实校验后才可复用的已有页面设计代码。
-- **输出**：`.xcodeagent/ui-design/pages/<PageKey>/index.tsx`、运行态临时内联源码 `ui_designs.pages[].code`、`ui-manifest.v3` 的 `pageId/page_key/preview_path/code_path/code_sha256/bindings/verification/status`、`.xcodeagent/specs/ui-designs.json` 和确认状态；`bindings.actions[].uiEffect` 保存已确认的本地界面效果，正式 JSON 不保存源码或重复 ProductPlan 文案/路由/角色/状态事实，`preview_path` 不是产品正式路由。
-- **生成预算**：每次单页生成或修复调用先执行 `ChatOpenAI.bind(max_tokens=settings.ui_design_max_tokens)`；`XCODEAGENT_UI_DESIGN_MAX_TOKENS` 默认 `8192`。校验失败最多执行 `XCODEAGENT_UI_DESIGN_MAX_RETRIES` 次定向修复，默认 `1`，即“首次生成 + 最多 1 次修复”共 2 次模型调用（内层 API 重试另计，最坏 4 次 LLM 调用）。它与底层请求重试 `MODEL_MAX_RETRIES` 是两个不同预算。
-- **校验规则**：代码必须非空、包含默认导出、没有未定义 JSX 组件、import 只能来自白名单，并通过从主 `Frontend/node_modules/.pnpm` 定位的 esbuild 做 TSX 语法校验；同时 ProductPlan 的全部 `actionId/informationItemId` 必须与 TSX 静态 `data-*` 标记精确闭合，未知 ID、缺失映射、无归属交互或业务展示组件会失败，仅评审控件必须标记 `data-preview-only="true"`。esbuild 缺失时只跳过语法校验，产品事实校验仍强制执行；其他校验失败按上述独立预算自动修复，耗尽后该页记录 `generation_failed`，不会把未通过校验的代码落成可用设计稿。页面设计稿由 `ui_design_generation_pool` worker 池并发生成，并发度 `XCODEAGENT_UI_DESIGN_CONCURRENCY` 默认 `3`：入队为 `queued`、worker 领取为 `generating`、完成落盘为 `confirmed`/`generation_failed`，前端通过无操作 AG-UI resume 轮询 `ui-designs.json` 获得进度；最终确认会以当前 ProductPlan 和磁盘 TSX 再校验一次，全部通过后才能继续。
+- **输入**：已确认 ProductPlan 的单页切片（稳定 `pageId`、产品目标、正式路径、业务信息项、业务操作、状态要求、角色、跳转和验收标准）、内置 `antd-ui-design` 技能全文、工作区 `.devagentstudio/ui-design` 落盘目录、通过当前事实校验后才可复用的已有页面设计代码。
+- **输出**：`.devagentstudio/ui-design/pages/<PageKey>/index.tsx`、运行态临时内联源码 `ui_designs.pages[].code`、`ui-manifest.v3` 的 `pageId/page_key/preview_path/code_path/code_sha256/bindings/verification/status`、`.devagentstudio/specs/ui-designs.json` 和确认状态；`bindings.actions[].uiEffect` 保存已确认的本地界面效果，正式 JSON 不保存源码或重复 ProductPlan 文案/路由/角色/状态事实，`preview_path` 不是产品正式路由。
+- **生成预算**：每次单页生成或修复调用先执行 `ChatOpenAI.bind(max_tokens=settings.ui_design_max_tokens)`；`DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS` 默认 `8192`。校验失败最多执行 `DEVAGENTSTUDIO_UI_DESIGN_MAX_RETRIES` 次定向修复，默认 `1`，即“首次生成 + 最多 1 次修复”共 2 次模型调用（内层 API 重试另计，最坏 4 次 LLM 调用）。它与底层请求重试 `MODEL_MAX_RETRIES` 是两个不同预算。
+- **校验规则**：代码必须非空、包含默认导出、没有未定义 JSX 组件、import 只能来自白名单，并通过从主 `Frontend/node_modules/.pnpm` 定位的 esbuild 做 TSX 语法校验；同时 ProductPlan 的全部 `actionId/informationItemId` 必须与 TSX 静态 `data-*` 标记精确闭合，未知 ID、缺失映射、无归属交互或业务展示组件会失败，仅评审控件必须标记 `data-preview-only="true"`。esbuild 缺失时只跳过语法校验，产品事实校验仍强制执行；其他校验失败按上述独立预算自动修复，耗尽后该页记录 `generation_failed`，不会把未通过校验的代码落成可用设计稿。页面设计稿由 `ui_design_generation_pool` worker 池并发生成，并发度 `DEVAGENTSTUDIO_UI_DESIGN_CONCURRENCY` 默认 `3`：入队为 `queued`、worker 领取为 `generating`、完成落盘为 `confirmed`/`generation_failed`，前端通过无操作 AG-UI resume 轮询 `ui-designs.json` 获得进度；最终确认会以当前 ProductPlan 和磁盘 TSX 再校验一次，全部通过后才能继续。
 - **渲染事实**：不再 clone UI 模板、执行 `pnpm install`、启动独立 Vite server 或注册 `BIZ_MENUS`。前端 `DesignRenderer` 用 Sucrase 把内联 TSX 转为 CJS，重写白名单模块引用，再把产物通过 `postMessage` 交给同源 `design-frame.html` iframe；iframe 使用随应用发布的 antd5/React/Pro Components IIFE runtime 挂载组件。生成中页面和最终确认页面复用同一渲染器，并支持全屏预览。
-- **依赖文件**：`Backend/app/config.py`、`Backend/.env.example`、`graph/nodes/ui_confirmation.py`、`services/ui_design_generator.py`、`services/ui_design_project_setup.py`、`services/ui_design_generation_pool.py`、`Frontend/src/renderer/src/components/DesignRenderer/*`、`Frontend/src/renderer/src/components/Welcome/UiDesignStreamingPreview.tsx`、`UiDesignConfirmationPanel.tsx`、`Frontend/src/renderer/public/design-runtime/*`、`Frontend/scripts/build-design-runtime.mjs`、`.xcodeagent/specs/ui-designs.json`。
+- **依赖文件**：`Backend/app/config.py`、`Backend/.env.example`、`graph/nodes/ui_confirmation.py`、`services/ui_design_generator.py`、`services/ui_design_project_setup.py`、`services/ui_design_generation_pool.py`、`Frontend/src/renderer/src/components/DesignRenderer/*`、`Frontend/src/renderer/src/components/Welcome/UiDesignStreamingPreview.tsx`、`UiDesignConfirmationPanel.tsx`、`Frontend/src/renderer/public/design-runtime/*`、`Frontend/scripts/build-design-runtime.mjs`、`.devagentstudio/specs/ui-designs.json`。
 - **依赖节点**：上游 `requirements`；下游 `project_planning`；生成或确认失败时停在本节点。
 
 ### 3.3 `project_planning / 项目计划生成与确认`
@@ -209,7 +209,7 @@ flowchart TD
 - **输入**：已确认 `RequirementSpec`、已有 ProjectPlan（修订时）、权威数据源类型、用户计划反馈、菜单路由策略。
 - **输出**：`project_plan`、`frontend_pages`、`project_plan_path`、`project_plan_json_path`、`clarification`、`application_planning_confirmation`。
 - **校验规则**：应用数据源策略、页面依赖、API contract、schema 引用、页面和菜单路径、确认状态；用户修改 Markdown 时同步回 JSON；未确认不得进入模板生成或 Build。
-- **依赖文件**：`graph/nodes/planning.py`、`agents/main/planner.py`、`agents/main/document_sync.py`、`services/project_plan.py`、`services/api_contract_validation.py`、`services/page_dependencies.py`、`workspace/plan_documents.py`、`.xcodeagent/plans/project-plan.md|json`。
+- **依赖文件**：`graph/nodes/planning.py`、`agents/main/planner.py`、`agents/main/document_sync.py`、`services/project_plan.py`、`services/api_contract_validation.py`、`services/page_dependencies.py`、`workspace/plan_documents.py`、`.devagentstudio/plans/project-plan.md|json`。
 - **依赖节点**：初始化 Graph 中依赖 `ui_confirmation`；主 Graph 中作为验收调整或 SmallTask 升级后的计划修订入口。TechnicalPlan 改变后，受影响 Endpoint 的 API 设计通过契约指纹自动变为“需重新设计”。
 
 ## 4. 阶段二：模板物化与工作台门禁
@@ -257,9 +257,9 @@ flowchart LR
 
 - **类型**：后端确定性生命周期动作；无 LLM 提示词。
 - **输入**：`workspaceRoot`、`succeeded`、可选 `errorMessage`、当前 lifecycle。
-- **输出**：`.xcodeagent/application-lifecycle.json` 的 `ready_for_workbench/completed` 或 `application_template_generation_failed/failed`。
+- **输出**：`.devagentstudio/application-lifecycle.json` 的 `ready_for_workbench/completed` 或 `application_template_generation_failed/failed`。
 - **校验规则**：要求当前阶段允许完成模板；成功时复核 RequirementSpec 和 ProjectPlan JSON 的 `confirmation_status=confirmed`；当前不复核模板目录和实际写入文件。
-- **依赖文件**：`services/application_lifecycle.py`、`domain/application_lifecycle.py`、`.xcodeagent/application-lifecycle.json`、RequirementSpec JSON、ProjectPlan JSON。
+- **依赖文件**：`services/application_lifecycle.py`、`domain/application_lifecycle.py`、`.devagentstudio/application-lifecycle.json`、RequirementSpec JSON、ProjectPlan JSON。
 - **依赖节点**：上游 `generate_application_template_files`；成功进入工作台，失败停留在可重试失败态，只有显式 `begin_template_generation` 才能重新进入模板阶段。
 
 ## 5. 已实现但当前前端未挂载的应用开发任务规划动作
@@ -272,7 +272,7 @@ flowchart TD
     G["generate_application_development_plan / 生成页面开发任务计划"]
     Q(["await_clarification / 等待澄清"])
     C["confirm_application_development_plan / 确认并持久化开发计划"]
-    A[(".xcodeagent/application.json")]
+    A[(".devagentstudio/application.json")]
 
     S -->|"selectedPageKey"| G
     G -->|"blocking questions"| Q
@@ -285,10 +285,10 @@ flowchart TD
 
 - **类型**：一次直接 ChatModel；必要时第二次携带澄清答案。
 - **当前提示词**：`services/application_development_planning.py::_SYSTEM_PROMPT` 与 `generate_application_development_plan` 内动态 Human Prompt。要求只生成所选页面业务任务；不重建路由、请求层、导航和布局；`sharedModules=[]`；每个任务有 2–6 条可观察验收标准；输出唯一 JSON。
-- **输入**：`.xcodeagent/application.json` 的应用、菜单、API、数据源和认证摘要；`selectedPageKey`；最多 5 个回答。
+- **输入**：`.devagentstudio/application.json` 的应用、菜单、API、数据源和认证摘要；`selectedPageKey`；最多 5 个回答。
 - **输出**：`questions` 或 `ApplicationDevelopmentPlan`，包括 `menuPlans/tasks/dependsOn/executionOrder`。
 - **校验规则**：Pydantic 字段限制；只能返回问题或计划之一；页面必须存在；每个菜单最多 20 个任务；任务 ID 唯一；依赖必须存在且无环；`blocks` 由后端根据 `dependsOn` 反向推导；执行顺序必须覆盖全部任务并满足拓扑；功能必须被任务覆盖；每项含 2–6 条可观察验收标准；任务初始状态为 `todo`，持久化 schema 后续允许 `in_progress/completed`；禁止 shared task/module。
-- **依赖文件**：`services/application_development_planning.py`、`protocols/application_development_planning.py`、`.xcodeagent/application.json`、ProjectPlan 投影。
+- **依赖文件**：`services/application_development_planning.py`、`protocols/application_development_planning.py`、`.devagentstudio/application.json`、ProjectPlan 投影。
 - **依赖节点**：当前无可达前端上游；若未来挂载，则从独立 `selectedPageKey` 页面选择进入，下游为 `confirm_application_development_plan`。不要与主 Workflow 的 `selectedPageId` 混用。
 
 ### 5.2 `confirm_application_development_plan / 确认并持久化开发计划`
@@ -297,7 +297,7 @@ flowchart TD
 - **输入**：用户确认的 `ApplicationDevelopmentPlan`、`selectedPageKey`、当前 `application.json`。
 - **输出**：菜单项 `developmentTasks`、`menus.developmentPlan.executionOrder`、SHA-256、确认时间。
 - **校验规则**：重新读取当前文件；重新执行任务覆盖、唯一性、依赖和拓扑校验；保留其他页面计划；临时文件替换实现原子写入。
-- **依赖文件**：`services/application_development_planning.py`、`.xcodeagent/application.json`。
+- **依赖文件**：`services/application_development_planning.py`、`.devagentstudio/application.json`。
 - **依赖节点**：上游 `generate_application_development_plan`；当前没有被 `prepare_build_tasks` 直接消费。
 
 ## 6. 阶段三至七：主开发 Graph
@@ -370,7 +370,7 @@ flowchart TD
 - **类型**：独立 AG-UI 配置流负责确定性字段枚举、结构化草稿校验和双文件原子持久化；主 Workflow 的确定性门禁负责页面／接口全量检测与 revision 确认，二者都不调用设计模型。
 - **交互**：弹窗通过 `/endpoint-designs/run` 的 `prepare/save` 动作编辑正式映射。直属 MySQL 表列、Builtin/DBID 能力提示和外部 API Operation Schema 通过独立数据源 AG-UI 接口读取，不进入 `/workflow/run` 的响应状态。保存后刷新原门禁，但不会自动确认或继续开发。
 - **输入**：独立配置使用已确认 TechnicalPlan、`apiContractId + endpointId` 和有界草稿；页面开发门禁使用 `requiredEndpointIds`，接口开发门禁只使用自身复合标识。实体字段只作为当前 Endpoint 内的业务语义引用，不存在全局实体数据源绑定。
-- **输出**：配置流写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用 `endpoint-field-mapping.v3`；`source_mapping` 通过 `sourceFields` 和 `processingType` 表示直接映射、单字段业务处理或多字段业务处理，无物理来源的字段使用 `business_description`。门禁回显全部关联 Endpoint 的完整映射与 revisions；确认时重新读取并逐项比较，通过后才进入 `inspect_workspace`。Markdown 是用户可见正式产物。
+- **输出**：配置流写入 `.devagentstudio/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用 `endpoint-field-mapping.v3`；`source_mapping` 通过 `sourceFields` 和 `processingType` 表示直接映射、单字段业务处理或多字段业务处理，无物理来源的字段使用 `business_description`。门禁回显全部关联 Endpoint 的完整映射与 revisions；确认时重新读取并逐项比较，通过后才进入 `inspect_workspace`。Markdown 是用户可见正式产物。
 - **校验规则**：Path、Query、Header、请求体叶子和响应业务叶子均可进入映射图；容器与纯包装节点跳过。`direct` 要求方向和类型兼容；不属于实体或数据源的字段使用 `business_description` 填写一句自然语言说明，不产生额外节点或边。节点不得修改 TechnicalPlan method、path、参数或 Schema。
 - **依赖文件**：`domain/api_design.py`、`services/api_design.py`、`services/endpoint_design_detail.py`、`protocols/endpoint_designs.py`、`routes/endpoint_designs.py`、`workspace/endpoint_design_documents.py`、`graph/nodes/api_design.py`。
 - **依赖节点**：页面/API 开发固定从 `api_design_readiness_gate` 进入；缺失或失效时返回完整列表并结束当前 run，全部有效时等待用户确认，确认的 revisions 仍一致后进入 `inspect_workspace`。
@@ -381,7 +381,7 @@ flowchart TD
 - **输入**：`workspace`、ProjectPlan、工作区文件树和缓存 revision。
 - **输出**：`workspace_snapshot_summary`、`workspace_snapshot_path`、`workspace_snapshot_hash`、`workspace_revision`、代码图摘要。
 - **校验规则**：工作区路径限制；按 workspace revision 使用缓存；代码图失败可降级；主流程首次进入还会尝试执行前端 scaffold，异常只记录日志。
-- **依赖文件**：`graph/nodes/workspace_inspection.py`、`services/workspace_inspector.py`、`services/code_graph/*`、`services/frontend_scaffold.py`、`.xcodeagent/cache/`、真实工作区源码。
+- **依赖文件**：`graph/nodes/workspace_inspection.py`、`services/workspace_inspector.py`、`services/code_graph/*`、`services/frontend_scaffold.py`、`.devagentstudio/cache/`、真实工作区源码。
 - **依赖节点**：上游 `api_design_readiness_gate`；下游固定为 `prepare_build_tasks`。
 
 ### 6.3 `prepare_build_tasks / 生成并编译 Build DAG`
@@ -389,7 +389,7 @@ flowchart TD
 - **类型**：async Planning adapter + PlanningRun/Unit Scheduler + 多阶段确定性编译与 Global Validation。
 - **生成方式**：后端创建新的 PlanningRun。平台把 model Unit 放入 FIFO Worker Pool，最多并发三个 Worker，Local Retry 重新排到队尾；deterministic Unit 在模型池外串行提交。模型只生成当前 Unit 的 `tasks`，不决定 Unit Worker 数量、跨 Unit 调度或最终执行批次；Task Candidate 的单任务并行提示仍需由 Scope 编译器结合依赖和文件冲突形成平台批次。所有 Unit 到达完整 Barrier 后组装累计 Scope DAG，再执行 Global Validation 和受影响 Unit 的有界修复。内部 Local/Global Retry 不是用户动作。
 - **输入**：已确认 ProductPlan、TechnicalPlan、当前目标范围、PageImplementationContract、TechnicalPlan API Contract、当前有效 Endpoint API Design、权限切片、WorkspaceSnapshot、已有 ConfirmedPlan 和可复用 Unit。正式输入在 PlanningRun 创建前冻结到 Frozen Store；EntitySourceBinding 不参与正常 DAG Planning。
-- **输出**：`build-dag.v3`、`build_units`、`unit_graph`、`task_registry`、`task_graph`、`tasks`、`build_context`、PlanningRun 投影和 `.xcodeagent/drafts/plans/build-task-plan.pending.json`。生成阶段不得改写正式 `.xcodeagent/plans/build-task-plan.json`，也不再生成 `BUILD_TASK_DAG.md`。
+- **输出**：`build-dag.v3`、`build_units`、`unit_graph`、`task_registry`、`task_graph`、`tasks`、`build_context`、PlanningRun 投影和 `.devagentstudio/drafts/plans/build-task-plan.pending.json`。生成阶段不得改写正式 `.devagentstudio/plans/build-task-plan.json`，也不再生成 `BUILD_TASK_DAG.md`。
 - **校验规则**：正式前置产物必须 confirmed；Unit skeleton 合法；目标实现契约和相关 Endpoint API Design 必须存在、未过期且 revision 完整；模型任务不能越过 required Unit；正常 Build 禁止 database Unit/owner；任务 ID、依赖、DAG、路径和 owner 必须合法；工程 acceptance checks 确定性编译；无效计划在 PlanningRun 内自动重试，耗尽后失败且不得写 Pending。
 - **确认动作**：`confirm` 精确验证 `planning_run_id + draft_digest`，提升 Pending 为 Formal 并进入 Build；`abandon` 删除精确 Pending 并结束当前 Workflow execution，但保留聊天记录和既有 Formal；结构化 `regenerate` 先丢弃旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun，成功写新 Pending，失败不恢复旧 Pending。
 - **并发、取消与刷新**：同一应用不允许不同页面或 Scope 同时处于 DAG generating 或 awaiting confirmation。活跃生成时仅当前权威运行卡显示“取消运行”，取消粒度是 Workflow/PlanningRun，不提供 Unit 级取消；刷新恢复且没有本地 SSE 句柄时通过 `cancelRunId` 走服务端控制路径。Pending 阶段不显示 active-run Cancel，使用确认卡上的 `abandon`、`regenerate` 或 `confirm`。`planningRefresh` 是 GET 时计算且不推进持久化 lifecycle revision 的弱投影；唯一 Pending、权威 Abandon 标记、终态与 DraftIdentity 校验优先于 active-planning 快照，没有 Pending 时不得从聊天历史、旧卡片或旧 execution 恢复确认。刷新不保证原请求继续执行；后台脱离执行、事件重放和 Candidate 断点续跑延期。
@@ -475,7 +475,7 @@ flowchart TD
 ### 7.4 `frontend_agent / 前端代码生成 Agent`
 
 - **类型**：Frontend Deep Agent，拥有前端文件和受限命令工具。
-- **当前提示词**：System Prompt 位于 `agents/frontend/agent.py`；执行 Prompt 位于 `agents/frontend/generator.py::_frontend_generation_prompt`。要求只执行批准任务；API 字段只能来自 contract；先读取模板修改边界和 code-block-template 技能；页面通过 `ui_designs.pages[].page_key` 读取用户确认的 `/.xcodeagent/ui-design/pages/<PageKey>/index.tsx` 作为视觉结构参考，再把静态 Mock/空交互替换为正式 API 或数据层；Static 数据源使用前端内存 API 模块；禁止在本阶段运行项目级构建/测试。
+- **当前提示词**：System Prompt 位于 `agents/frontend/agent.py`；执行 Prompt 位于 `agents/frontend/generator.py::_frontend_generation_prompt`。要求只执行批准任务；API 字段只能来自 contract；先读取模板修改边界和 code-block-template 技能；页面通过 `ui_designs.pages[].page_key` 读取用户确认的 `/.devagentstudio/ui-design/pages/<PageKey>/index.tsx` 作为视觉结构参考，再把静态 Mock/空交互替换为正式 API 或数据层；Static 数据源使用前端内存 API 模块；禁止在本阶段运行项目级构建/测试。
 - **输入**：frontend owner tasks、BuildTaskPlan、ProjectPlan、PageTemplate、`ui_designs` 映射、工作区和选定技能。
 - **输出**：结构化任务结果、页面/API 代码、菜单变更、真实 diff。
 - **校验规则**：结果必须覆盖全部任务；只允许 authorized paths；模板骨架大部分只读；菜单修改受限；独立 acceptance verifier 检查 diff、页面文件、菜单注册和契约绑定。
@@ -542,17 +542,17 @@ flowchart TD
 ### 8.2 `actual_project_checks / 真实工程检查`
 
 - **类型**：确定性命令执行；无 LLM 提示词。
-- **输入**：工作区、`.xcodeagent/application.json` 数据源类型、前端 package 和后端 Maven 项目结构。
+- **输入**：工作区、`.devagentstudio/application.json` 数据源类型、前端 package 和后端 Maven 项目结构。
 - **输出**：逐项 `test_results`、stdout/stderr 日志和 command evidence。
 - **校验规则**：前端执行包管理器 `install`、可选 `tsc` script、必需 `build`；非 Static 应用执行后端检查；Maven 当前运行 `clean install`；每个命令 180 秒超时；required 缺失视为失败。
-- **依赖文件**：`services/integration_test_runner.py`、项目 `package.json`/lockfile、`pom.xml`/Maven wrapper、`.xcodeagent/runtime/tests/`。
+- **依赖文件**：`services/integration_test_runner.py`、项目 `package.json`/lockfile、`pom.xml`/Maven wrapper、`.devagentstudio/runtime/tests/`。
 - **依赖节点**：上游 `integration_test`；下游 `main_quality_gate`。
 
 ### 8.3 `main_quality_gate / 主质量门禁`
 
 - **类型**：确定性 gate；无 LLM 提示词。
 - **输入**：全部确定性 test results。
-- **输出**：`.xcodeagent/reports/test-report.json`、`quality_gate_passed`、`needs_revision`、`revision_requests`。
+- **输出**：`.devagentstudio/reports/test-report.json`、`quality_gate_passed`、`needs_revision`、`revision_requests`。
 - **校验规则**：当前实现使用 `all(result["passed"] for result in test_results)`；所有失败 check 编译为 revision request；required check ID 仅记录在报告中，没有反向校验是否完整出现。
 - **依赖文件**：`services/test_validation.py`、`workspace/test_documents.py`。
 - **依赖节点**：上游 `actual_project_checks`；下游 `repair_planning`。
@@ -686,14 +686,14 @@ flowchart TD
 - **当前提示词**：System Prompt 和 `agents/direct_modification.py::_direct_modification_classifier_prompt`。要求基于前置扫描事实按结果分类 `casual_chat/workspace_question/clarification/implementation_fix/formal_revision`，识别 owner，并为正式修改输出 branch、revision type、最早产物和影响范围；已存在页面/组件且不改变正式语义的明确局部修改必须分类为 `implementation_fix`。局部修改需要默认源码根之外的任意现有文件时仍保留对应 owner，并输出精确文件路径作为本次授权候选，置信度不足时才保守澄清。
 - **输入**：当前消息、最多 4000 字符会话摘要、最多 16000 字符的页面/组件/入口/高价值配置/API 路由/共享契约/代码图扫描上下文、已有 handoff 决策。
 - **输出**：intent、owner、scope、confidence、reason、target paths、可选 casual response 或 clarification。
-- **校验规则**：低置信度或 unknown owner 转澄清；workspace owner 必须有窄且可验证的相对路径范围；前后端额外文件候选只在路径属于 owner、位于 workspace 内且真实存在时动态并入本次 `approvedPaths`；拒绝宽目录范围、lockfile、`.env`/凭据文件、依赖/生成目录、schema/migration、`.xcodeagent` 和 `..`。正式修改先登记 lifecycle 绑定的只读 impact，不直接 handoff 内部节点；classifier 若已为 `casual_chat` 返回自然语言 `response`，分类节点直接完成，只有缺少 response 时才调用兜底节点。
+- **校验规则**：低置信度或 unknown owner 转澄清；workspace owner 必须有窄且可验证的相对路径范围；前后端额外文件候选只在路径属于 owner、位于 workspace 内且真实存在时动态并入本次 `approvedPaths`；拒绝宽目录范围、lockfile、`.env`/凭据文件、依赖/生成目录、schema/migration、`.devagentstudio` 和 `..`。正式修改先登记 lifecycle 绑定的只读 impact，不直接 handoff 内部节点；classifier 若已为 `casual_chat` 返回自然语言 `response`，分类节点直接完成，只有缺少 response 时才调用兜底节点。
 - **依赖文件**：`agents/direct_modification.py`、`graph/nodes/direct_modification.py`、`services/direct_modification.py`。
 - **依赖节点**：上游 `scan_workspace_code`；下游对话、问答、frontend/backend/workspace 修改或 finalize。
 
 ### 10.2 `respond_conversation / 常规对话回复`
 
 - **类型**：无工具直接 ChatModel。
-- **当前提示词**：`answer_casual_conversation` 内 System/Human messages。要求以 XCodeAgent 身份自然回复，不声称读取或修改工作区。
+- **当前提示词**：`answer_casual_conversation` 内 System/Human messages。要求以 DevAgent Studio 身份自然回复，不声称读取或修改工作区。
 - **输入**：用户消息和有界摘要。
 - **输出**：`conversation_response`。
 - **校验规则**：非空回复为 completed，否则 failed。
@@ -742,7 +742,7 @@ flowchart TD
 ### 10.7 `execute_workspace / 执行普通工作区修改`
 
 - **类型**：共享 SmallTask Agent，精确路径限定。
-- **当前提示词**：SmallTask Prompt + `_workspace_direct_modification_prompt`。只允许普通文档、测试、脚本和配置；禁止产品代码、`.env`、迁移和正式 `.xcodeagent` 工件。
+- **当前提示词**：SmallTask Prompt + `_workspace_direct_modification_prompt`。只允许普通文档、测试、脚本和配置；禁止产品代码、`.env`、迁移和正式 `.devagentstudio` 工件。
 - **输入**：分类器给出的精确 target paths、用户请求、摘要。
 - **输出**：workspace stage result 和 diff。
 - **校验规则**：无精确路径不执行；path guard；结果和 diff 校验。
@@ -834,22 +834,22 @@ flowchart LR
 
 | 数据                              | 当前权威来源                                                                                                                             | 主要消费者                             |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| 初始化和工作台 execution 生命周期 | `.xcodeagent/application-lifecycle.json`                                                                                                 | 首页、工作台运行状态、恢复校验         |
-| 需求正文                          | `.xcodeagent/specs/requirement-spec.md`；JSON 为内部结构状态                                                                             | ProjectPlan 生成、创建规划恢复         |
-| UI 视觉参考                       | `.xcodeagent/specs/ui-designs.json` + `.xcodeagent/ui-design/pages/<PageKey>/index.tsx`；确认/生成 UI 直接消费 `ui_designs.pages[].code` | `DesignRenderer`、Frontend Agent       |
-| 产品语义                          | `.xcodeagent/plans/product-plan.md` + `.json`                                                                                            | UI Design、TechnicalPlan、Build、Testing |
-| 技术架构和 API contract           | `.xcodeagent/plans/technical-plan.md` + `.json`                                                                                          | API Design、Build、Testing              |
-| Endpoint API 字段设计             | `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.md` + `.json`；必须已确认且契约指纹匹配                                | 用户确认、Planning input、Build Context |
-| 工作区事实                        | `.xcodeagent/cache/` 下 WorkspaceSnapshot/代码图缓存 + 真实源码                                                                          | Unit Planner、Agent 导航               |
+| 初始化和工作台 execution 生命周期 | `.devagentstudio/application-lifecycle.json`                                                                                                 | 首页、工作台运行状态、恢复校验         |
+| 需求正文                          | `.devagentstudio/specs/requirement-spec.md`；JSON 为内部结构状态                                                                             | ProjectPlan 生成、创建规划恢复         |
+| UI 视觉参考                       | `.devagentstudio/specs/ui-designs.json` + `.devagentstudio/ui-design/pages/<PageKey>/index.tsx`；确认/生成 UI 直接消费 `ui_designs.pages[].code` | `DesignRenderer`、Frontend Agent       |
+| 产品语义                          | `.devagentstudio/plans/product-plan.md` + `.json`                                                                                            | UI Design、TechnicalPlan、Build、Testing |
+| 技术架构和 API contract           | `.devagentstudio/plans/technical-plan.md` + `.json`                                                                                          | API Design、Build、Testing              |
+| Endpoint API 字段设计             | `.devagentstudio/plans/endpoints/endpoint--<contractId>--<endpointId>.md` + `.json`；必须已确认且契约指纹匹配                                | 用户确认、Planning input、Build Context |
+| 工作区事实                        | `.devagentstudio/cache/` 下 WorkspaceSnapshot/代码图缓存 + 真实源码                                                                          | Unit Planner、Agent 导航               |
 | 数据来源事实                      | Endpoint JSON 中的脱敏来源快照；直属 MySQL 候选在 API 设计时实时读取，运行凭据按 `sourceId` 安全解析                                     | Unit Planner、Data Source Agent        |
-| 待确认构建 DAG                    | `.xcodeagent/drafts/plans/build-task-plan.pending.json`，绑定 `planning_run_id + draft_digest`                                                  | DAG 确认卡、Planning-result lifecycle  |
-| 已确认构建 DAG                    | `.xcodeagent/plans/build-task-plan.json`                                                                                                  | BuildScheduler、RepairPlanner          |
-| 构建和测试结果                    | Build results、`.xcodeagent/reports/test-report.json`、runtime logs                                                                      | Quality Gate、RepairPlanner、UI        |
-| 技术恢复状态                      | `.xcodeagent/checkpoints/checkpoints.sqlite`                                                                                             | LangGraph resume                       |
+| 待确认构建 DAG                    | `.devagentstudio/drafts/plans/build-task-plan.pending.json`，绑定 `planning_run_id + draft_digest`                                                  | DAG 确认卡、Planning-result lifecycle  |
+| 已确认构建 DAG                    | `.devagentstudio/plans/build-task-plan.json`                                                                                                  | BuildScheduler、RepairPlanner          |
+| 构建和测试结果                    | Build results、`.devagentstudio/reports/test-report.json`、runtime logs                                                                      | Quality Gate、RepairPlanner、UI        |
+| 技术恢复状态                      | `.devagentstudio/checkpoints/checkpoints.sqlite`                                                                                             | LangGraph resume                       |
 
 ### 11.1 生命周期、确认与恢复边界
 
-- `.xcodeagent/application-lifecycle.json` 不保存 schema 版本字段，每次写入单调增加 `revision`。`initialization` 与 `activeExecutions` 是两套并列状态：前者描述新建应用，后者按 runId 描述工作台执行，不能互相覆盖；测试质量门禁通过后先进入审查确认与只读代码审查，再在审查阶段启动预览和完成验收。
+- `.devagentstudio/application-lifecycle.json` 不保存 schema 版本字段，每次写入单调增加 `revision`。`initialization` 与 `activeExecutions` 是两套并列状态：前者描述新建应用，后者按 runId 描述工作台执行，不能互相覆盖；测试质量门禁通过后先进入审查确认与只读代码审查，再在审查阶段启动预览和完成验收。
 - `initialization.threadId` 只用于定位初始化 checkpoint；应用进入 `ready_for_workbench` 后清空。前端应用索引不保存阶段准入标记，应用从创建开始就在统一列表中并可进入工作台；生命周期只负责恢复当前阶段以及判断模板、开发和预览是否就绪。
 - 需要用户处理的工作台交互写入 `pendingInteraction={id,type,basedOnRevision,...}`。提交时协议层校验 interaction id 和 lifecycle revision，避免旧确认覆盖新状态。
 - 一般 `resourceLocks` 与 execution `resourceKeys` 仍是可观测资源声明，不执行跨 run 互斥。DAG Planning 的当前产品入口通过 renderer/session lock 只允许一个 active PlanningRun 或一个 awaiting-confirmation PendingPlan，并以唯一 Pending 路径和 DraftIdentity 拒绝旧结果；它还不是独立的原子 server pre-start mutex，外部或多窗口绕过入口仍需后续补强。单次 Build 内部的文件调度约束不能替代该应用级门禁。

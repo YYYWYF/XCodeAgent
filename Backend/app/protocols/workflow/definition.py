@@ -6,7 +6,7 @@ from typing import Any
 
 from app.services.unit_test_repair_budget import UNIT_TEST_REPAIRS_PER_CHECK
 
-WORKFLOW_EVENT_PROTOCOL = "xcodeagent.workflow.event.v1"
+WORKFLOW_EVENT_PROTOCOL = "devagentstudio.workflow.event.v1"
 PROCESS_EVENT_NAME = "agent-process"
 PROCESS_DETAIL_LIMIT = 24_000
 
@@ -220,7 +220,7 @@ def workflow_capabilities() -> dict[str, Any]:
             },
             "confirmed_baseline_error": {
                 "code": "confirmed_baseline_invalid",
-                "artifact": ".xcodeagent/plans/build-task-plan.json",
+                "artifact": ".devagentstudio/plans/build-task-plan.json",
                 "issueCode": "CONFIRMED_BASELINE_INVALID",
                 "level": "pre_generation",
                 "category": "platform",

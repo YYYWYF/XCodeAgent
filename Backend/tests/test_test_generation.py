@@ -72,8 +72,8 @@ class TestGenerationTests(unittest.TestCase):
                     ]
                 },
                 "existing_test_files": ["frontend/tests/page-orders.test.tsx"],
-                "build_task_plan_path": ".xcodeagent/plans/build-task-plan.json",
-                "technical_plan_json_path": ".xcodeagent/plans/technical-plan.json",
+                "build_task_plan_path": ".devagentstudio/plans/build-task-plan.json",
+                "technical_plan_json_path": ".devagentstudio/plans/technical-plan.json",
                 "build_execution_scope": {"type": "page", "targetId": "orders"},
                 "build_execution_slice": {"task_ids": ["task:orders"]},
                 "project_plan_json_path": "stale-project-plan.json",
@@ -84,8 +84,8 @@ class TestGenerationTests(unittest.TestCase):
         )
 
         self.assertIn("frozen Build code diff", prompt)
-        self.assertIn(".xcodeagent/plans/build-task-plan.json", prompt)
-        self.assertIn(".xcodeagent/plans/technical-plan.json", prompt)
+        self.assertIn(".devagentstudio/plans/build-task-plan.json", prompt)
+        self.assertIn(".devagentstudio/plans/technical-plan.json", prompt)
         self.assertIn("+export const Orders", prompt)
         for removed_key in (
             "project_plan_path",
@@ -116,7 +116,7 @@ class TestGenerationTests(unittest.TestCase):
 
         delegate = Mock()
         delegate.ls.return_value = LsResult(
-            entries=[{"path": "/.xcodeagent/user-skills", "is_dir": True}]
+            entries=[{"path": "/.devagentstudio/user-skills", "is_dir": True}]
         )
         delegate.read.return_value = ReadResult(
             file_data={
@@ -132,7 +132,7 @@ class TestGenerationTests(unittest.TestCase):
         )
         backend = ScopedTestGenerationBackend(delegate)
 
-        self.assertEqual(backend.ls("/.xcodeagent/user-skills").entries[0]["is_dir"], True)
+        self.assertEqual(backend.ls("/.devagentstudio/user-skills").entries[0]["is_dir"], True)
         self.assertEqual(
             backend.read("/frontend/src/App.tsx").file_data["content"],
             "/frontend/src/App.tsx:0:2000",
@@ -195,7 +195,7 @@ class TestGenerationTests(unittest.TestCase):
             self.assertEqual(generated["test_files"], ["frontend/tests/page-orders.test.ts"])
             self.assertIn("@testing-library/react", received_prompts[0])
             self.assertNotIn("@testing-library/user-event", received_prompts[0])
-            self.assertTrue((root / ".xcodeagent/cache/unit-test-mappings.json").is_file())
+            self.assertTrue((root / ".devagentstudio/cache/unit-test-mappings.json").is_file())
             with patch("app.agents.create_agent_bundle", side_effect=AssertionError()):
                 cached = generate_or_update_unit_tests_with_agent(state, workspace)
             self.assertEqual(cached["validation"]["mapping_cache"], "hit")
@@ -320,7 +320,7 @@ class TestGenerationTests(unittest.TestCase):
                 """模拟 Agent 同时写入运行时 checkpoint 和合法测试文件。"""
 
                 received_prompts.append(_payload["messages"][0]["content"])
-                checkpoint_dir = root / ".xcodeagent/checkpoints"
+                checkpoint_dir = root / ".devagentstudio/checkpoints"
                 checkpoint_dir.mkdir(parents=True)
                 for name in (
                     "checkpoints.sqlite",
@@ -439,14 +439,14 @@ class TestGenerationTests(unittest.TestCase):
         )
 
     def test_formal_internal_artifact_write_remains_a_security_failure(self) -> None:
-        """忽略 checkpoint 后仍必须阻断对正式 `.xcodeagent` 计划工件的修改。"""
+        """忽略 checkpoint 后仍必须阻断对正式 `.devagentstudio` 计划工件的修改。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
             source = root / "frontend/src/apis/leaveTypesApi.ts"
             source.parent.mkdir(parents=True)
             source.write_text("export const getLeaveTypes = () => [];\n", encoding="utf-8")
-            plan = root / ".xcodeagent/plans/technical-plan.json"
+            plan = root / ".devagentstudio/plans/technical-plan.json"
             plan.parent.mkdir(parents=True)
             plan.write_text('{"status":"confirmed"}\n', encoding="utf-8")
 
@@ -473,7 +473,7 @@ class TestGenerationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "failed")
         self.assertIn(
-            ".xcodeagent/plans/technical-plan.json",
+            ".devagentstudio/plans/technical-plan.json",
             result["validation"]["unauthorized_paths"],
         )
 

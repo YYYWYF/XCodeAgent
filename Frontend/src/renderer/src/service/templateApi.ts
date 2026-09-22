@@ -39,7 +39,7 @@ export function isTemplateReconcileRetryable(
 /** 将工作区转换成当前桌面平台可稳定去重的任务键。 */
 function templateReadinessKey(workspaceRoot: string): string {
   const value = workspaceRoot.trim().replace(/[\\/]+$/, '')
-  return window.xcodeAgent?.platform === 'win32' ? value.toLowerCase() : value
+  return window.devAgentStudio?.platform === 'win32' ? value.toLowerCase() : value
 }
 
 /** 通过单次 AG-UI 动作触发 Server-owned Bootstrap，前端不再下载或克隆模板。 */

@@ -840,7 +840,7 @@ def git_diff(request: GitDiffRequest) -> Dict[str, Any]:
 
 
 def _workspace_root(value: Optional[str]) -> Path:
-    configured = value or os.getenv("XCODEAGENT_WORKSPACE_ROOT") or os.getcwd()
+    configured = value or os.getenv("DEVAGENTSTUDIO_WORKSPACE_ROOT") or os.getcwd()
     root = Path(configured).expanduser().resolve()
     if not root.exists():
         _fail(404, f"Workspace root does not exist: {root}")

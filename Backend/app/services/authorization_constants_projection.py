@@ -15,8 +15,8 @@ from app.services.template_state import has_capability, load_template_state
 AUTH_CONSTANTS_RELATIVE_PATH = Path(
     "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java"
 )
-AUTH_CONSTANTS_START = "// XCODEAGENT_AUTH_CONSTANTS_START"
-AUTH_CONSTANTS_END = "// XCODEAGENT_AUTH_CONSTANTS_END"
+AUTH_CONSTANTS_START = "// DEVAGENTSTUDIO_AUTH_CONSTANTS_START"
+AUTH_CONSTANTS_END = "// DEVAGENTSTUDIO_AUTH_CONSTANTS_END"
 
 
 class AuthorizationConstantsProjectionError(ValueError):

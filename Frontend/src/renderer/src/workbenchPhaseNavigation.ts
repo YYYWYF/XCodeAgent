@@ -8,7 +8,7 @@ export const WORKBENCH_PHASE_ORDER: readonly WorkbenchPhase[] = [
   'review',
   'acceptance'
 ]
-const REACHED_PHASE_PREFIX = 'xcodeagent:workbench-reached-phase:'
+const REACHED_PHASE_PREFIX = 'devagentstudio:workbench-reached-phase:'
 
 /** 合并应用已到达阶段；浏览上游页面或运行结束都不会降低可回访范围。 */
 export function furthestWorkbenchPhase(...phases: WorkbenchPhase[]): WorkbenchPhase {

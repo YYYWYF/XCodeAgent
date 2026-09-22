@@ -53,7 +53,7 @@ class DataSourceFieldTypeTests(unittest.TestCase):
         self.assertEqual(operation.query_parameters[0].type, "string")
         self.assertEqual(operation.request_structure.properties["count"].type, "number")
         self.assertEqual(operation.response_structure.properties["count"].type, "string")
-        root = self.workspace / ".xcodeagent" / "datasource"
+        root = self.workspace / ".devagentstudio" / "datasource"
         persisted = json.loads((root / "external-apis" / source.id / "operations" / "operation-typed.json").read_text("utf-8"))
         self.assertEqual(persisted["requestStructure"], self.source()["directories"][0]["operations"][0]["requestStructure"])
         for field in ("requestFieldTypes", "responseFieldTypes", "requestFieldDescriptions", "responseFieldDescriptions"):
@@ -155,7 +155,7 @@ class DataSourceFieldTypeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     build_json_structure(None, structure)
         created = mutate_catalog(self.workspace, action="create", source=self.source())
-        operation_path = self.workspace / ".xcodeagent" / "datasource" / "external-apis" / created.sources[0].id / "operations" / "operation-typed.json"
+        operation_path = self.workspace / ".devagentstudio" / "datasource" / "external-apis" / created.sources[0].id / "operations" / "operation-typed.json"
         before = operation_path.read_bytes()
         with self.assertRaises(ValueError):
             mutate_catalog(self.workspace, action="update", source=self.source(requestStructure={"type": "invalid"}))

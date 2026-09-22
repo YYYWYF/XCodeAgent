@@ -82,7 +82,7 @@ import { createMockHttpAgent } from '../mock/mockHttpAgent'
 /** 创建自动订阅 HTTP 401/403 认证失败事件的 AG-UI HttpAgent。 */
 export function createAgUiHttpAgent(config: HttpAgentConfig): HttpAgent {
   // 浏览器 mock 环境（无 Electron）直接返回假 agent，绕过真实后端。
-  if (!window.aiStudio?.isElectron) {
+  if (!window.devAgentStudio?.isElectron) {
     return createMockHttpAgent(config) as unknown as HttpAgent
   }
   const agent = new HttpAgent(config)

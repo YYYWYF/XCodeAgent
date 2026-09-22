@@ -10,7 +10,7 @@ from app.agents.tool_activity_stream import ToolActivityCallback, invoke_agent_w
 from app.agents.messages import NO_AGENT_TEXT
 
 
-SMALL_TASK_MODE_MARKER = "<xcodeagent-small-task-mode>"
+SMALL_TASK_MODE_MARKER = "<devagentstudio-small-task-mode>"
 _MAX_PACKET_CHARS = 28_000
 _VALID_STATUSES = {
     "completed",

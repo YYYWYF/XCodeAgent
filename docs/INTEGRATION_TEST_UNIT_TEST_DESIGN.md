@@ -3,9 +3,9 @@
 ## 1. 文档状态
 
 - 方案状态：已实现（零测试文件放行版本）。
-- 适用范围：XCodeAgent Backend 的 Testing Subgraph，重点为 `integration_test` 节点。
+- 适用范围：DevAgent Studio Backend 的 Testing Subgraph，重点为 `integration_test` 节点。
 - 目标项目示例：`~/Documents/xc10/frontend` 与 `~/Documents/xc10/backend`。
-- 核心目标：根据本次代码修改、当前源码、既有测试和 `.xcodeagent` 项目产物，生成或同步前后端单元测试，并在 `actual_project_checks` 阶段执行真实测试；失败时进入 SmallTaskAgent 修复闭环。
+- 核心目标：根据本次代码修改、当前源码、既有测试和 `.devagentstudio` 项目产物，生成或同步前后端单元测试，并在 `actual_project_checks` 阶段执行真实测试；失败时进入 SmallTaskAgent 修复闭环。
 
 ## 2. 目标与边界
 
@@ -145,7 +145,7 @@ TestGenerationAgent 仅负责：
 Agent 不负责执行安装、构建或测试命令，也不允许修改：
 
 - 前后端生产源码。
-- `.xcodeagent` 下的正式项目文档和契约。
+- `.devagentstudio` 下的正式项目文档和契约。
 - `package.json`、锁文件、Jest 配置或 `pom.xml`。
 - 与本次功能无关的测试文件。
 
@@ -190,8 +190,8 @@ TestGenerationAgent 不提供命令执行工具。
 不新增以下运行时计划和清单文件：
 
 ```text
-.xcodeagent/plans/test-generation-plan.json
-.xcodeagent/reports/test-generation-manifest.json
+.devagentstudio/plans/test-generation-plan.json
+.devagentstudio/reports/test-generation-manifest.json
 ```
 
 原因是测试生成任务属于单次执行状态，直接保存在 Graph State 即可；新增计划和清单会与现有 BuildTask、代码变更记录和测试报告形成重复事实源。
@@ -199,7 +199,7 @@ TestGenerationAgent 不提供命令执行工具。
 仅新增可重建缓存：
 
 ```text
-.xcodeagent/cache/unit-test-mappings.json
+.devagentstudio/cache/unit-test-mappings.json
 ```
 
 它只保存源码与测试的稳定映射，不保存源码或测试正文。建议字段：
@@ -323,7 +323,7 @@ class OrderServiceTest {
 - 测试文件是否包含至少一个有效测试用例。
 - import、被测符号和源码映射是否有效。
 - 是否出现样式断言、skip、空测试或重复文件。
-- 是否意外修改生产代码、构建配置或 `.xcodeagent` 正式产物。
+- 是否意外修改生产代码、构建配置或 `.devagentstudio` 正式产物。
 
 建议为校验结果增加检查项：
 
@@ -395,9 +395,9 @@ mvn -DskipTests=false -Dmaven.test.skip=false test
 建议保存到：
 
 ```text
-.xcodeagent/runtime/tests/frontend_unit_tests/
-.xcodeagent/runtime/tests/backend_build/
-.xcodeagent/runtime/tests/backend_unit_tests/
+.devagentstudio/runtime/tests/frontend_unit_tests/
+.devagentstudio/runtime/tests/backend_build/
+.devagentstudio/runtime/tests/backend_unit_tests/
 ```
 
 Maven Surefire 原始报告仍位于用户后端项目的：
@@ -422,7 +422,7 @@ backend/target/surefire-reports/
 2. 失败的测试文件。
 3. 测试映射中与失败测试关联的源码文件。
 
-不得授权 SmallTaskAgent 修改 `.xcodeagent` 正式产物。后端检查的归属统一规范为 `backend`，不要沿用可能误导修复路由的 `data_source`。
+不得授权 SmallTaskAgent 修改 `.devagentstudio` 正式产物。后端检查的归属统一规范为 `backend`，不要沿用可能误导修复路由的 `data_source`。
 
 SmallTaskAgent 的判断原则：
 

@@ -12,16 +12,16 @@ from app.services import agent_file_documents
 
 
 class AgentFileDocumentTests(unittest.TestCase):
-    def test_environment_mapping_uses_current_xcodeagent_directory(self) -> None:
+    def test_environment_mapping_uses_current_devagentstudio_directory(self) -> None:
         for working_dir in (
-            ".xcodeagent_dev",
-            ".xcodeagent_st",
-            ".xcodeagent_uat",
-            ".xcodeagent",
+            ".devagentstudio_dev",
+            ".devagentstudio_st",
+            ".devagentstudio_uat",
+            ".devagentstudio",
         ):
             with self.subTest(working_dir=working_dir), patch.dict(
                 os.environ,
-                {"XCODEAGENT_WORKING_DIR": working_dir},
+                {"DEVAGENTSTUDIO_WORKING_DIR": working_dir},
             ):
                 self.assertEqual(
                     agent_file_documents.resolve_agent_files_root(),
@@ -31,7 +31,7 @@ class AgentFileDocumentTests(unittest.TestCase):
 
     def test_missing_document_is_seeded_with_default_content(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root) / ".xcodeagent_dev"
+            root = Path(temporary_root) / ".devagentstudio_dev"
 
             document = agent_file_documents.ensure_agents_document(root=root)
 
@@ -44,7 +44,7 @@ class AgentFileDocumentTests(unittest.TestCase):
 
     def test_existing_document_is_never_overwritten_by_initialization(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root) / ".xcodeagent"
+            root = Path(temporary_root) / ".devagentstudio"
             root.mkdir()
             agents_file = root / "AGENTS.md"
             agents_file.write_text("# Existing instructions\n", encoding="utf-8")
@@ -56,7 +56,7 @@ class AgentFileDocumentTests(unittest.TestCase):
 
     def test_save_preserves_mode_and_updates_revision(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root) / ".xcodeagent"
+            root = Path(temporary_root) / ".devagentstudio"
             original = agent_file_documents.ensure_agents_document(root=root)
             agents_file = root / "AGENTS.md"
             agents_file.chmod(0o640)
@@ -79,7 +79,7 @@ class AgentFileDocumentTests(unittest.TestCase):
 
     def test_revision_conflict_keeps_external_content(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root) / ".xcodeagent"
+            root = Path(temporary_root) / ".devagentstudio"
             original = agent_file_documents.ensure_agents_document(root=root)
             agents_file = root / "AGENTS.md"
             agents_file.write_text("# External update\n", encoding="utf-8")
@@ -95,7 +95,7 @@ class AgentFileDocumentTests(unittest.TestCase):
 
     def test_invalid_utf8_and_oversized_content_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root) / ".xcodeagent"
+            root = Path(temporary_root) / ".devagentstudio"
             original = agent_file_documents.ensure_agents_document(root=root)
             agents_file = root / "AGENTS.md"
 
@@ -112,7 +112,7 @@ class AgentFileDocumentTests(unittest.TestCase):
 
     def test_symbolic_link_is_rejected_without_following_it(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root) / ".xcodeagent"
+            root = Path(temporary_root) / ".devagentstudio"
             root.mkdir()
             target = Path(temporary_root) / "outside.md"
             target.write_text("# Outside\n", encoding="utf-8")

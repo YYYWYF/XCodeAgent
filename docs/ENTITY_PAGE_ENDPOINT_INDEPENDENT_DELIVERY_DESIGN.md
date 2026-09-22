@@ -264,7 +264,7 @@ EntityDesign 是 Entity 数据来源和物理落地的唯一正式权威，支�
 
 ```jsonc
 {
-  "schema_version": "xcodeagent.entity-design.v1",
+  "schema_version": "devagentstudio.entity-design.v1",
   "artifact_id": "entity-design:order",
   "entity_id": "order",
   "based_on": {
@@ -394,7 +394,7 @@ EndpointDecision 不得：
 
 ```jsonc
 {
-  "schema_version": "xcodeagent.endpoint-detail.v1",
+  "schema_version": "devagentstudio.endpoint-detail.v1",
   "artifact_id": "endpoint-detail:orders-api:orders.get",
   "api_contract_id": "orders-api",
   "endpoint_id": "orders.get",
@@ -482,7 +482,7 @@ EndpointDetail 只会因以下事实变化而失效：
 
 ```jsonc
 {
-  "schema_version": "xcodeagent.page-delivery-manifest.v1",
+  "schema_version": "devagentstudio.page-delivery-manifest.v1",
   "page_id": "orders",
   "page_detail_ref": {
     "artifact_id": "page-detail:orders",
@@ -591,7 +591,7 @@ EndpointDetail 确认后可以独立执行：
 ### 11.1 文件布局
 
 ```text
-.xcodeagent/
+.devagentstudio/
 ├── drafts/detail-design/<threadId>/<interactionId>/
 ├── transactions/<transactionId>/
 └── plans/

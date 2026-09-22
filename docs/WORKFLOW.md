@@ -6,13 +6,13 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 
 ## 核心架构原则
 
-测试入口另有应用级初次开发门禁：`.xcodeagent/application-lifecycle.json.developmentArtifacts` 保存每个页面和 Endpoint 的初次开发状态。只有每个目标分别完成 Build 及开发阶段单元测试门禁后，投影 `testEntryGate.allowed=true`，顶部才允许浏览测试阶段；实体继续作为开发前置条件，不计入此门禁。`test_phase_confirmation` 先记录当前目标完成再计算全量门禁，二次修改不覆盖首次完成事实。实际确认、跨 thread 测试接替和集成测试节点均在服务端复检，阻断以 `development_artifacts_incomplete` 及完整 AG-UI 生命周期返回。详细状态及目录同步规则见 `docs/APPLICATION_DEVELOPMENT_PLANNING.md` 的 Initial Development Completion and Test Entry。
+测试入口另有应用级初次开发门禁：`.devagentstudio/application-lifecycle.json.developmentArtifacts` 保存每个页面和 Endpoint 的初次开发状态。只有每个目标分别完成 Build 及开发阶段单元测试门禁后，投影 `testEntryGate.allowed=true`，顶部才允许浏览测试阶段；实体继续作为开发前置条件，不计入此门禁。`test_phase_confirmation` 先记录当前目标完成再计算全量门禁，二次修改不覆盖首次完成事实。实际确认、跨 thread 测试接替和集成测试节点均在服务端复检，阻断以 `development_artifacts_incomplete` 及完整 AG-UI 生命周期返回。详细状态及目录同步规则见 `docs/APPLICATION_DEVELOPMENT_PLANNING.md` 的 Initial Development Completion and Test Entry。
 
 1. 外层 LangGraph 管理确定性的项目生命周期。
 2. Deep Agents 负责需要自主推理、工具调用、文件操作和多步执行的任务。
 3. Agent 不得自行决定或绕过项目阶段、用户确认、任务依赖和质量门禁。
 4. Graph State 保存小型结构化状态和文件引用，不保存完整代码、大型日志或全部 Agent 消息。
-5. 项目文件、Spec、计划和测试报告是跨节点共享的事实来源；工作流元数据统一写入项目工作区的 `.xcodeagent/`，业务代码仍写入正常工程目录。
+5. 项目文件、Spec、计划和测试报告是跨节点共享的事实来源；工作流元数据统一写入项目工作区的 `.devagentstudio/`，业务代码仍写入正常工程目录。
 6. Deep Agent 的消息和工具结果属于任务级临时上下文，不直接合并进整体 Graph State。
 7. 所有 Agent 结果必须结构化，并经过确定性校验后才能更新业务状态。
 8. 测试是否通过由确定性的质量门禁判断，不能只相信 Agent 的自然语言结论。
@@ -81,7 +81,7 @@ SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `sta
 
 后端启动检查由测试阶段显式启用 `include_backend_startup=True`，稳定 ID 为 `backend_startup`，适用时 `required=true`、`blocking=true` 且不可由用户跳过；开发单测和普通快速修改默认不启用。复用当前 Maven 工程及数据源识别：Static、纯前端和无 Maven 工程跳过；前置构建失败记录未执行，不再产生重复启动修复请求。`backend_startup_check.py` 复用 `backend_launch_support.py` 的应用数据库环境、JAR 识别和必要的 repackage，但不调用完整验收启动器。它从本轮产物启动独立 Java 进程，追加 `--server.address=127.0.0.1 --server.port=0`，在 60 秒内同时验证 `Started …` 初始化完成日志、实际 HTTP 端口可连接，并稳定存活 3 秒。横幅、提前退出、初始化异常或无法回收都不能通过。进程登记到工作区并绑定当前 run，停止仅终止本次检测，退出先等待 5 秒，必要时强制终止并确认回收；现有预览不被接管。
 
-每次启动尝试保留 `.xcodeagent/runtime/tests/backend_startup/<attemptId>/` 日志。检查的 `execution` 包含启动命令、相对工作目录、开始结束时间、退出码、超时、回收结果、脱敏输出尾部、根因及日志虚拟路径。质量门禁将失败证据交给 backend 修复任务，并提供实际目录的 `pom.xml`、启动类和应用配置提示；SmallTask 额外接收独立 `backendStartupFailure`，避免整体报告裁剪后丢失 `Caused by`、类缺失或日志路径。修复必须解决初始化原因，不得禁用检查、伪造成功或跳过初始化。失败时前端性能步骤沿用阻塞规则跳过，使用现有默认 3 轮测试修复预算；每轮修复后重新构建并重新启动。仅等待性能确认且后端源码、构建配置及应用数据源配置的 `source_fingerprint` 未变化时，才复用本轮检查。
+每次启动尝试保留 `.devagentstudio/runtime/tests/backend_startup/<attemptId>/` 日志。检查的 `execution` 包含启动命令、相对工作目录、开始结束时间、退出码、超时、回收结果、脱敏输出尾部、根因及日志虚拟路径。质量门禁将失败证据交给 backend 修复任务，并提供实际目录的 `pom.xml`、启动类和应用配置提示；SmallTask 额外接收独立 `backendStartupFailure`，避免整体报告裁剪后丢失 `Caused by`、类缺失或日志路径。修复必须解决初始化原因，不得禁用检查、伪造成功或跳过初始化。失败时前端性能步骤沿用阻塞规则跳过，使用现有默认 3 轮测试修复预算；每轮修复后重新构建并重新启动。仅等待性能确认且后端源码、构建配置及应用数据源配置的 `source_fingerprint` 未变化时，才复用本轮检查。
 
 该检查复用 `integration_test.checks` 增量和恢复快照、现有清单样式与测试报告 Markdown；不增加卡片、用户交互或产品接口。`/health` 的工作流元数据通过 `backendStartupCheck` 声明检查顺序、必需性、超时、稳定窗口和修复归属。
 
@@ -93,7 +93,7 @@ SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `sta
 
 `unit_test`、`unit_test_repair`、`test_phase_confirmation`、`review_phase_confirmation`、`code_review`、`acceptance_phase_confirmation` 和 `acceptance` 都是主 `/workflow/run` 的公开 Workflow 节点和 `WORKFLOW_NODE_LABELS` 成员；`launch_project` 与 `acceptance_review` 是验收子图内部节点，启动进度仍以 `nodeName=launch_project` 输出。`unit_test_confirmation`、`frontend_performance_confirmation`、`code_review_repair_confirmation` 和 `acceptance_phase_confirmation` 是生命周期待交互类型，分别使用对应的 `run/skip`、`confirm`、`repair_all` 或 `confirm` 结构化答案恢复原节点；恢复必须携带原执行的 `resumeExecutionRunId`，其中性能测试确认只允许同一测试 thread 接管，验收阶段确认允许从审查 thread 原子转交到新的验收 thread。各阶段确认门、代码修复门和验收等待的 AG-UI 快照分别投影固定文案；恢复都校验原执行的 scope/target。审查确认提交后生命周期立即投影 `code_review`，验收阶段确认提交后立即投影 `acceptance`，使顶部阶段在新会话首帧前同步高亮。生命周期快照不再包含 schema 版本字段。
 
-需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 读取 `.xcodeagent/plans/technical-plan.json`；页面选择按 PageImplementationContract 确定全部 Endpoint，API 选择直接读取 TechnicalPlan Endpoint。Endpoint 的“设计 API/重新设计”打开独立 `/endpoint-designs/run` 配置弹窗。页面/API 开发统一先进入 `api_design_readiness_gate`：页面一次检查并返回全部关联 Endpoint，API 只检查当前 Endpoint；保存配置只更新当前门禁的本地已配置状态，允许继续编辑其他 Endpoint，用户点击“确认”后才统一检测，全部有效时仍需用户确认当前 revision 集合后才能继续开发。
+需求、产品、UI 和技术规划由首页独立 `application_planning_workflow` 完成。主 `/workflow/run` 读取 `.devagentstudio/plans/technical-plan.json`；页面选择按 PageImplementationContract 确定全部 Endpoint，API 选择直接读取 TechnicalPlan Endpoint。Endpoint 的“设计 API/重新设计”打开独立 `/endpoint-designs/run` 配置弹窗。页面/API 开发统一先进入 `api_design_readiness_gate`：页面一次检查并返回全部关联 Endpoint，API 只检查当前 Endpoint；保存配置只更新当前门禁的本地已配置状态，允许继续编辑其他 Endpoint，用户点击“确认”后才统一检测，全部有效时仍需用户确认当前 revision 集合后才能继续开发。
 
 ### 主 Graph 起点的参考架构映射与上下文预算
 
@@ -109,17 +109,17 @@ SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `sta
 - 独立入口仍为 `/application-page-planning/run`，统一使用 AG-UI Workflow 事件、状态快照和 `applicationPlanningInteraction`；确认卡携带服务端生成的 `gateId`、`artifactRevision` 与显式动作，沿同一 thread/checkpoint 原生恢复 Graph。前端按实际按钮或表单意图提交 `answer/confirm/revise/ui_action/enter_planning/design_change`，后端节点不再从中文文案猜动作；同一 thread 的版本校验与恢复全程串行，重复提交至多一个进入下游节点。
 - RequirementSpec、ProductPlan 和 TechnicalPlan 使用 Markdown 确认入口；React UI 稿及 `ui-designs.json` 使用 UI 确认界面。`ui_design_action.action = skip` 只写入 skipped Manifest 并进入 `awaiting_planning_stage_entry`，不得直接生成 TechnicalPlan。澄清回答不能替代产物确认。
 - TechnicalPlan 确认后校验四类正式产物；UI Manifest 的 `confirmation_status` 可以是 `confirmed` 或用户明确提交跳过后的 `skipped`，再推进 lifecycle 到 `generating_application_template_files`。Backend WorkspaceBootstrapService 在事务内完成物化、Readiness 和 Git baseline 后才写入 `ready_for_workbench`。
-- 创建界面按“设计阶段 → 规划阶段 → 开发阶段”推进；设计阶段包含需求、产品和 UI，规划阶段包含 TechnicalPlan。RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，XCodeAgent 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用 `product-plan.v4` 保存产品可见行为；UI 使用 `ui-manifest.v3`，跳过时保存空 `pages` 与 `confirmation_status: skipped`；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
+- 创建界面按“设计阶段 → 规划阶段 → 开发阶段”推进；设计阶段包含需求、产品和 UI，规划阶段包含 TechnicalPlan。RequirementSpec 与 ProductPlan 不保存模型生成的产品假设或产品风险，不确定的产品事实通过需求澄清解决；产品验收只描述生成应用的用户可见结果，DevAgent Studio 的预览、构建、测试、质量门禁和工作流推进条件由确定性过滤器剔除；ProductPlan 使用 `product-plan.v4` 保存产品可见行为；UI 使用 `ui-manifest.v3`，跳过时保存空 `pages` 与 `confirmation_status: skipped`；TechnicalPlan 使用 `artifact_type: technical-plan`，只持久化技术架构、工程设计、API Contract 和 `pages[].references`，不重复需求、产品或 UI 事实。
 - 主 Workflow 运行时从 RequirementSpec、ProductPlan、UiManifest 和 TechnicalPlan 按需编译 PageImplementationContract；编译结果不写回 TechnicalPlan。
 - 创建规划不执行构建后的集成测试质量门，也不生成 `quality_gate_passed`；AG-UI 摘要只在主 Workflow 明确产生布尔质量门结果时展示“通过/未通过”，不得把缺失值误报为未通过。
 
 该澄清边界映射到参考架构时，沿用 learn-coding-agent 的 AskUserQuestion 工具循环与可恢复会话记录、OpenCode 的 session/tool-call 问答关联，以及 Deep Agents 的外层确定性门禁：需求模型只生成结构化问题，Graph 在 `requirements` 后通过原生 `interrupt` 暂停，AG-UI 持久化公开状态与回答，恢复轮次将答案合并回 RequirementSpec。澄清回答只补足需求，不能替代后续 RequirementSpec 的显式确认。每轮仅携带当前请求、紧凑 RequirementSpec 和结构化回答，不加载仓库或完整会话历史，继续满足 128k 上下文预算。
 
-需求澄清期间只在 checkpoint 中保留未完成的结构化事实和问题，`ask_user` 返回后不得生成页面、实体或模块兜底，也不得写入本地需求文档草稿；只有模型判断没有重要缺口后，才将完整 RequirementSpec 写入 `.xcodeagent/drafts/specs/requirement-spec.md|json` 并展示在右侧。用户在左侧确认后，才将同一版本提升到 `.xcodeagent/specs/requirement-spec.md|json`，确认前不覆盖正式文档。
+需求澄清期间只在 checkpoint 中保留未完成的结构化事实和问题，`ask_user` 返回后不得生成页面、实体或模块兜底，也不得写入本地需求文档草稿；只有模型判断没有重要缺口后，才将完整 RequirementSpec 写入 `.devagentstudio/drafts/specs/requirement-spec.md|json` 并展示在右侧。用户在左侧确认后，才将同一版本提升到 `.devagentstudio/specs/requirement-spec.md|json`，确认前不覆盖正式文档。
 
 ### 工作区应用生命周期
 
-`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台 execution 和资源锁的持久化权威来源，结构与完整状态机见 `docs/APPLICATION_LIFECYCLE.md`。初始化期间由 `initialization.threadId` 定位同一 checkpoint，成功进入工作台时清空；初始化交互正文和确认令牌不在根节点重复保存。它使用严格 Pydantic 结构、单调 revision、同目录临时文件 + fsync + 原子替换，损坏或不符合当前结构的文件不会被当作缺失静默忽略。当前对话的 Graph 运行状态以实时 AG-UI 流和同一 `threadId` 的 LangGraph checkpoint 为准，不会在每个节点运行前从状态文件重建。
+`.devagentstudio/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台 execution 和资源锁的持久化权威来源，结构与完整状态机见 `docs/APPLICATION_LIFECYCLE.md`。初始化期间由 `initialization.threadId` 定位同一 checkpoint，成功进入工作台时清空；初始化交互正文和确认令牌不在根节点重复保存。它使用严格 Pydantic 结构、单调 revision、同目录临时文件 + fsync + 原子替换，损坏或不符合当前结构的文件不会被当作缺失静默忽略。当前对话的 Graph 运行状态以实时 AG-UI 流和同一 `threadId` 的 LangGraph checkpoint 为准，不会在每个节点运行前从状态文件重建。
 
 应用冷启动恢复到 `awaiting_user` 时，前端通过 `/application-page-planning/run` 的 `applicationPlanningRecovery.get` AG-UI 动作只读获取同一 `threadId` 的 checkpoint，并重新投影右侧需求草稿与确认卡；未确认的 RequirementSpec 只能作为草稿展示，不能冒充正式文档。该动作不得调用 Graph 节点、改变 lifecycle 或伪造用户消息；真正的确认/补充必须提交带版本令牌的 `applicationPlanningInteraction`。运行中阶段仍可按原线程恢复执行，失败或取消阶段只展示显式重试入口。
 
@@ -139,7 +139,7 @@ SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `sta
 
 首页只展示一个由应用索引驱动的统一项目列表，不按设计、计划或开发阶段分区，也不限制未完成应用数量。点击任意应用都进入工作台，再由 lifecycle 恢复其当前阶段；每个未完成计划仍按 application id 和独立 `threadId` 隔离 Workflow 快照、AG-UI 会话、停止句柄与模板生成任务。后台计划完成时只更新自己的应用索引和 lifecycle，不得抢占其他应用的工作台。
 
-参考架构映射保持克制：learn-coding-agent 当前公开提交只能核验 README 中的 JSONL 会话恢复、HITL、关键消息同步写和上下文压缩，不能声称存在未发布的 `src/*` 原子状态实现；OpenCode 采用稳定 session/message/question/permission ID 与事件投影，并把读取待处理问题和提交回答分成不同动作；Deep Agents/LangGraph 要求同一 thread/checkpointer 保存暂停状态，并只用显式 decision 恢复。XCodeAgent 因而把冷启动 checkpoint 读取与用户确认提交分离，同时继续由业务 lifecycle 协调首页和跨会话阶段。状态文件不复制文档、DAG、日志或会话历史，读取时按引用渐进加载，继续满足 128k 上下文预算。
+参考架构映射保持克制：learn-coding-agent 当前公开提交只能核验 README 中的 JSONL 会话恢复、HITL、关键消息同步写和上下文压缩，不能声称存在未发布的 `src/*` 原子状态实现；OpenCode 采用稳定 session/message/question/permission ID 与事件投影，并把读取待处理问题和提交回答分成不同动作；Deep Agents/LangGraph 要求同一 thread/checkpointer 保存暂停状态，并只用显式 decision 恢复。DevAgent Studio 因而把冷启动 checkpoint 读取与用户确认提交分离，同时继续由业务 lifecycle 协调首页和跨会话阶段。状态文件不复制文档、DAG、日志或会话历史，读取时按引用渐进加载，继续满足 128k 上下文预算。
 
 当前节点逻辑允许使用占位实现，但节点名称和职责边界应保持稳定。
 
@@ -208,7 +208,7 @@ TechnicalPlan 继续保存 Endpoint HTTP 契约与 Schema 字段，并由 Contra
 
 无论初始需求是否需要澄清，只要分析得到当前版本，就先生成 RequirementSpec 与 ProductPlan 两份草稿，再进入唯一的 `requirement_document_confirmation`。澄清答案只用于补充信息，不能等同确认；ProductPlan 可以在同一节点消费已校验的 RequirementSpec 草稿，但 UiDesign 与后续节点只能消费联合确认后的正式 pair。确认时服务端先在内存完成 Markdown 同步、完整性校验和 `requirement_spec_sha256` 绑定，再原子写入两份 Markdown/JSON；任一写入或回读校验失败都会回滚，不会留下半确认产物。修改意见使整个需求文档回到分析并重新确认。
 
-等待 `requirement_document_confirmation` 时，AG-UI workflow payload 返回一个 `requirement_document` 确认产物；右侧以 RequirementSpec 的业务事实和 ProductPlan 的页面、操作共同可视化。内部仍分别保存 `.xcodeagent/drafts/specs/requirement-spec.{md,json}` 与 `.xcodeagent/drafts/plans/product-plan.{md,json}`，确认后提升到对应正式目录；不生成需求文档 manifest。JSON 只作为内部工作流状态，Markdown 是用户可读、可编辑的正式文档。
+等待 `requirement_document_confirmation` 时，AG-UI workflow payload 返回一个 `requirement_document` 确认产物；右侧以 RequirementSpec 的业务事实和 ProductPlan 的页面、操作共同可视化。内部仍分别保存 `.devagentstudio/drafts/specs/requirement-spec.{md,json}` 与 `.devagentstudio/drafts/plans/product-plan.{md,json}`，确认后提升到对应正式目录；不生成需求文档 manifest。JSON 只作为内部工作流状态，Markdown 是用户可读、可编辑的正式文档。
 
 确认后以 Markdown 作为用户可读正式文档，JSON 只作为内部工作流状态。右侧需求文档页和本地文件探测应优先读取草稿路径；未确认时必须标记“需求文档（草稿）”，不能把草稿路径或旧正式文件冒充为正式需求文档。
 
@@ -276,7 +276,7 @@ API 契约在此阶段作为前后端共享事实生成。每个 Endpoint 保存
 
 字段映射编辑使用独立 `/endpoint-designs/run` AG-UI `prepare/save`，不进入主 LangGraph。数据源目录、数据库表列和外部 Operation Schema 通过独立的 `/data-sources/*` AG-UI 动作按需查询。Request 映射方向为 Endpoint → 真实来源，Response 映射方向为真实来源 → Endpoint；`source_mapping` 使用 `sourceFields` 和 `processingType` 表示直接映射、单字段业务处理或多字段业务处理，纯业务控制字段使用 `business_description`。
 
-保存后原子写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`，但不自动启动开发。JSON 保存 TechnicalPlan 契约指纹、自包含字段映射、处理描述和脱敏来源快照；正式字段映射只能是 `source_mapping` 或 `business_description`。TechnicalPlan 改变导致指纹不匹配时状态为“需重新设计”。
+保存后原子写入 `.devagentstudio/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`，但不自动启动开发。JSON 保存 TechnicalPlan 契约指纹、自包含字段映射、处理描述和脱敏来源快照；正式字段映射只能是 `source_mapping` 或 `business_description`。TechnicalPlan 改变导致指纹不匹配时状态为“需重新设计”。
 
 页面/API开发入口先进入确定性的 `api_design_readiness_gate`。页面从 `PageImplementationContract.requiredEndpointIds` 收集全部 Endpoint，一次性返回所有缺少或过期设计；API 只检查所选 Endpoint。进入门禁时默认只展示缺失清单，不自动打开映射弹窗；用户点击具体条目的“配置映射”后才打开独立弹窗，保存后在当前会话内标记为“已配置，待检测”，可继续配置其他 Endpoint。用户点击门禁“确认”后统一检测；全部有效后回显完整映射集合，仍需用户点击“确认并继续开发”，确认时再次核对全部 revision，一致后才进入 `inspect_workspace`。无 Endpoint 依赖的页面直接通过。
 
@@ -291,10 +291,10 @@ SQLite checkpointer 保存各 execution thread 的主 Graph 状态；恢复只�
 确定性、可缓存的工作区检查节点，负责在任务拆分前生成 `WorkspaceSnapshot`，并为后续执行 Agent 准备工作区级代码图索引：
 
 - 解析当前 workspace revision，包含 Git HEAD、暂存区 diff、未暂存 diff、未跟踪文件清单、关键 lock/config 文件和 inspector schema 版本；
-- 命中 `.xcodeagent/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json` 时直接复用；
+- 命中 `.devagentstudio/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json` 时直接复用；
 - 未命中时用轻量扫描识别项目根、技术栈、入口文件、构建/测试命令、FastAPI 路由、Pydantic 模型、Workflow 节点、React 组件、API client、Electron IPC、AG-UI 使用点和共享契约候选；
-- 将完整 snapshot 写入 `.xcodeagent/cache/workspace-snapshots/`，Graph State 只保存 `workspace_snapshot_summary`、`workspace_snapshot_path`、`workspace_snapshot_hash` 和 `workspace_revision`；
-- 只对显式用户 `workspaceRoot` 的安全源码清单内嵌调用 `code-review-graph`，在 `.xcodeagent/cache/code-graph/v1/` 维护 `graph.sqlite3` 与 `index.json`；按 revision 执行 cache hit、增量更新或全量构建，超时或失败时继续使用文件搜索。
+- 将完整 snapshot 写入 `.devagentstudio/cache/workspace-snapshots/`，Graph State 只保存 `workspace_snapshot_summary`、`workspace_snapshot_path`、`workspace_snapshot_hash` 和 `workspace_revision`；
+- 只对显式用户 `workspaceRoot` 的安全源码清单内嵌调用 `code-review-graph`，在 `.devagentstudio/cache/code-graph/v1/` 维护 `graph.sqlite3` 与 `index.json`；按 revision 执行 cache hit、增量更新或全量构建，超时或失败时继续使用文件搜索。
 - `snapshot.code_graph` 只保存有界的文件、节点、关系、语言、代表性符号和脱敏 warning 统计，供 AG-UI 工作区扫描卡片展示；扫描节点不针对当前请求查询符号，也不保存 request-scoped 导航上下文。
 
 该节点不生成任务、不修改业务代码，也不把快照写入 `ProjectPlan`。它只回答“当前工作区事实是什么”并准备可查询索引，供后续模型规划、确定性调度和执行 Agent 导航使用。
@@ -365,8 +365,8 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 
 节点成功后只写入待确认任务 DAG，不修改已有正式计划：
 
-- `.xcodeagent/drafts/plans/build-task-plan.pending.json`：当前唯一 PendingPlan，携带后端签发的 `planning_run_id + draft_digest`，不得被 BuildScheduler 消费；
-- `.xcodeagent/plans/build-task-plan.json`：仅保存 ConfirmedPlan，是 BuildScheduler、调试续跑和后续节点的唯一规划权威；
+- `.devagentstudio/drafts/plans/build-task-plan.pending.json`：当前唯一 PendingPlan，携带后端签发的 `planning_run_id + draft_digest`，不得被 BuildScheduler 消费；
+- `.devagentstudio/plans/build-task-plan.json`：仅保存 ConfirmedPlan，是 BuildScheduler、调试续跑和后续节点的唯一规划权威；
 - v3 task registry 使用 snake_case 单一字段，不再写入或读取旧 DAG 同义字段；不再生成或读取 `BUILD_TASK_DAG.md`。
 
 AG-UI `build_task_plan_confirmation` 是只读确认界面，结构化动作合同为：
@@ -386,23 +386,23 @@ active 生成阶段的取消粒度为整个 Workflow/PlanningRun，不提供 Uni
 该节点的结构化产物必须落盘，供后续恢复执行和单节点验证使用：
 
 ```text
-{workspace}/.xcodeagent/specs/requirement-spec.{md,json}
-{workspace}/.xcodeagent/plans/technical-plan.{md,json}
-{workspace}/.xcodeagent/checkpoints/checkpoints.sqlite
-{workspace}/.xcodeagent/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json
-{workspace}/.xcodeagent/drafts/plans/build-task-plan.pending.json
-{workspace}/.xcodeagent/plans/build-task-plan.json
-{workspace}/.xcodeagent/plans/repair-task-plan.json
-{workspace}/.xcodeagent/reports/test-report.json
+{workspace}/.devagentstudio/specs/requirement-spec.{md,json}
+{workspace}/.devagentstudio/plans/technical-plan.{md,json}
+{workspace}/.devagentstudio/checkpoints/checkpoints.sqlite
+{workspace}/.devagentstudio/cache/workspace-snapshots/{workspace_revision}.{schema_version}.json
+{workspace}/.devagentstudio/drafts/plans/build-task-plan.pending.json
+{workspace}/.devagentstudio/plans/build-task-plan.json
+{workspace}/.devagentstudio/plans/repair-task-plan.json
+{workspace}/.devagentstudio/reports/test-report.json
 ```
 
 `technical-plan.md` 和 `requirement-spec.md` 面向人类阅读；节点恢复执行必须优先使用同目录下的 JSON 文件。若要跳过前序节点单独验证任务 DAG 生成，可执行：
 
 ```bash
-app-demo-prepare-build-tasks var/workspaces/demo-project/.xcodeagent/plans/technical-plan.json
+app-demo-prepare-build-tasks var/workspaces/demo-project/.devagentstudio/plans/technical-plan.json
 ```
 
-本地调试某个节点时，使用前端 Chat Composer 的“Workflow 调试”面板选择开始节点，并填写已落盘 JSON 产物路径，避免每次从头生成需求文档。调试面板通过 AG-UI `forwardedProps.workflowDebug` 传入 `resumeFrom`、`requirementSpecPath`、`projectPlanPath`、`workspaceSnapshotPath` 和 `buildTaskPlanPath`；当 `resumeFrom=prepare_build_tasks` 且范围为 endpoint 时，必须同时提供 `targetId` 与 `apiContractId`，前端会复用当前快照中的 API Contract ID，后端在缺失但 ProjectPlan 中存在唯一归属时自动补齐，存在多个归属时明确报错。显式 `resumeFrom=build` 会清除同一 thread 的旧 Build Run 绑定并从工作区权威 DAG 启动新 Run，但保留当前 DAG 中所有 `completed`/`already_satisfied` 任务的终态，因此包括 `backend:bootstrap` 与显式 `*.verify` 在内的已完成任务都不会再次派发。只有重新执行 `prepare_build_tasks` 生成了新的任务，新的 bootstrap/verify 才会按 pending 状态执行。工作台的失败任务恢复则使用独立的 `forwardedProps.workflowAction = retry_failed_tasks`，优先重试瞬时失败任务；若当前已有无需额外确认的 RepairPlanner 计划，则执行该修复任务集。恢复快照缺少计划时，协议适配器会从当前 workspace 的 `.xcodeagent/plans/build-task-plan.json` 与 `.xcodeagent/plans/repair-task-plan.json` 补回内部状态，不依赖自然语言或调试节点选择。
+本地调试某个节点时，使用前端 Chat Composer 的“Workflow 调试”面板选择开始节点，并填写已落盘 JSON 产物路径，避免每次从头生成需求文档。调试面板通过 AG-UI `forwardedProps.workflowDebug` 传入 `resumeFrom`、`requirementSpecPath`、`projectPlanPath`、`workspaceSnapshotPath` 和 `buildTaskPlanPath`；当 `resumeFrom=prepare_build_tasks` 且范围为 endpoint 时，必须同时提供 `targetId` 与 `apiContractId`，前端会复用当前快照中的 API Contract ID，后端在缺失但 ProjectPlan 中存在唯一归属时自动补齐，存在多个归属时明确报错。显式 `resumeFrom=build` 会清除同一 thread 的旧 Build Run 绑定并从工作区权威 DAG 启动新 Run，但保留当前 DAG 中所有 `completed`/`already_satisfied` 任务的终态，因此包括 `backend:bootstrap` 与显式 `*.verify` 在内的已完成任务都不会再次派发。只有重新执行 `prepare_build_tasks` 生成了新的任务，新的 bootstrap/verify 才会按 pending 状态执行。工作台的失败任务恢复则使用独立的 `forwardedProps.workflowAction = retry_failed_tasks`，优先重试瞬时失败任务；若当前已有无需额外确认的 RepairPlanner 计划，则执行该修复任务集。恢复快照缺少计划时，协议适配器会从当前 workspace 的 `.devagentstudio/plans/build-task-plan.json` 与 `.devagentstudio/plans/repair-task-plan.json` 补回内部状态，不依赖自然语言或调试节点选择。
 
 调试后续节点可从 `api_design_readiness_gate`、保留的独立 `entity_source_binding`、`inspect_workspace` 或 `prepare_build_tasks` 开始；调试续跑仍遵守正式产物、Endpoint API 设计和 DAG 确认闸口。
 
@@ -464,19 +464,19 @@ Build Repair Planner 是独立的只读 RepairPlanner DeepAgent 节点，不是 
 
 当前一等 Deep Agent 是 Frontend Generation、Data Source Generation、Database Change、Test、RepairPlanner、SmallTask。requirements、project_planning 和 prepare_build_tasks 等 direct ChatModel 节点不加载 Skill；`api_design_readiness_gate` 是纯确定性节点，独立配置流的字段候选加载、保存校验和门禁 revision 复核同样由确定性服务完成。
 
-内置 skill 的宿主目录在源码模式为 `Backend/app/builtin_skills/`，在 PyInstaller onedir 模式为后端资源目录 `_internal/app/builtin_skills/`。Agent 不接触宿主绝对路径，而是通过只读 CompositeBackend 路由 `/.xcodeagent/builtin-skills/` 发现和读取 skill；文件权限与 `delete_file` 都拒绝写入或删除该命名空间。Backend Python 是必需 skill 名称和文件的唯一事实来源：PyInstaller staging 和 Backend 启动执行完整性校验并在缺失时 fail fast；Electron 打包前和启动前只检查通用 `builtin_skills` 资源目录，不复制具体 skill 清单。
+内置 skill 的宿主目录在源码模式为 `Backend/app/builtin_skills/`，在 PyInstaller onedir 模式为后端资源目录 `_internal/app/builtin_skills/`。Agent 不接触宿主绝对路径，而是通过只读 CompositeBackend 路由 `/.devagentstudio/builtin-skills/` 发现和读取 skill；文件权限与 `delete_file` 都拒绝写入或删除该命名空间。Backend Python 是必需 skill 名称和文件的唯一事实来源：PyInstaller staging 和 Backend 启动执行完整性校验并在缺失时 fail fast；Electron 打包前和启动前只检查通用 `builtin_skills` 资源目录，不复制具体 skill 清单。
 
-用户 Skill 来自当前环境的 `~/.xcodeagent[_dev|_st|_uat]/skills`。技能目录按“用户 / 内置”分类展示：用户技能可以创建、编辑、删除、导入和启停，内置技能只读。用户技能默认开启，关闭项以相对 `SKILL.md` 路径写入同一环境的 `skill-settings.json`；状态文件采用版本化结构、进程锁和原子替换，损坏或不可读时按 fail-closed 处理，不把用户技能加载进新运行。创建和 ZIP 导入默认开启，删除同步清理残留状态。
+用户 Skill 来自当前环境的 `~/.devagentstudio[_dev|_st|_uat]/skills`。技能目录按“用户 / 内置”分类展示：用户技能可以创建、编辑、删除、导入和启停，内置技能只读。用户技能默认开启，关闭项以相对 `SKILL.md` 路径写入同一环境的 `skill-settings.json`；状态文件采用版本化结构、进程锁和原子替换，损坏或不可读时按 fail-closed 处理，不把用户技能加载进新运行。创建和 ZIP 导入默认开启，删除同步清理残留状态。
 
 Chat Composer 通过既有 `/skills/run` AG-UI 目录接口提供搜索和多选，只展示已开启用户技能，并在 `/workflow/run` 的 `forwardedProps.selectedSkillNames` 中发送稳定、去重的名称数组。该数组写入 `ProjectState.selected_skill_names`，在 RequirementSpec、ProjectPlan 确认以及 Build/Testing Subgraph 恢复时保持不变；恢复请求试图替换集合会返回 `selected_skill_conflict`。用户消息同时保存技能名称/描述快照，因此历史会话只展示当次发送的标签，不依赖当前目录是否仍存在。
 
-当 `selectedSkillNames` 非空时，Backend 会精确验证所有名称，只把已开启的所选技能完整目录复制到 `/.xcodeagent/user-skills/` 不可变只读快照；关闭或未选技能不可发现且虚拟路径不可读，显式选择关闭技能返回 `selected_skill_unavailable`。所选 `SKILL.md` 会由 Backend 在模型调用前完整读取，并以明确的 `<selected-skill>` 边界强制拼入 Frontend、Data Source、Database、RepairPlanner、SmallTask、Workspace Assistant 六个 Deep Agent 的 system prompt；references、scripts、assets 仍只从筛选后的快照按需读取。无工具 ChatModel 节点仍不加载技能。空数组或字段缺失时，全部已开启用户技能只通过 SkillsMiddleware 按需发现，不强制注入正文。启停集合参与用户技能 revision，因此切换状态会产生新的 Agent bundle；进行中的单次模型调用不被强制中断。
+当 `selectedSkillNames` 非空时，Backend 会精确验证所有名称，只把已开启的所选技能完整目录复制到 `/.devagentstudio/user-skills/` 不可变只读快照；关闭或未选技能不可发现且虚拟路径不可读，显式选择关闭技能返回 `selected_skill_unavailable`。所选 `SKILL.md` 会由 Backend 在模型调用前完整读取，并以明确的 `<selected-skill>` 边界强制拼入 Frontend、Data Source、Database、RepairPlanner、SmallTask、Workspace Assistant 六个 Deep Agent 的 system prompt；references、scripts、assets 仍只从筛选后的快照按需读取。无工具 ChatModel 节点仍不加载技能。空数组或字段缺失时，全部已开启用户技能只通过 SkillsMiddleware 按需发现，不强制注入正文。启停集合参与用户技能 revision，因此切换状态会产生新的 Agent bundle；进行中的单次模型调用不被强制中断。
 
 显式选择的 `SKILL.md` 正文按 UTF-8 总字节设置独立 64 KiB 上限，整体超限返回 `selected_skills_context_too_large`，不会截断指令；无效格式、不可用技能和恢复冲突分别返回 `invalid_selected_skills`、`selected_skill_unavailable`、`selected_skill_conflict`。技能指令不能扩大 filesystem permissions、任务 `allowed_paths`、已确认需求、API 契约、确认门禁或 Agent 角色边界。bundle 缓存键包含规范化技能集合、工作区、用户技能 revision 和 AGENTS.md revision；顺序不同但集合相同会复用，集合不同绝不复用。任务执行元数据记录 `requiredSkillsLoaded`，Workflow 开始事件记录选择名称和 snapshot revision。
 
 该设计映射到参考架构：learn-coding-agent 的紧凑“收集上下文—行动—验证”循环只读取当前任务需要的规范；OpenCode 风格把用户 Skill 作为显式可选、错误隔离的 Agent 能力；Deep Agents 继续使用原生 SkillsMiddleware、FilesystemBackend 和 CompositeBackend。为遵守 128k 上下文预算，默认模式只常驻技能元数据；只有用户显式选择的有限正文进入 system prompt，辅助资源和未选技能正文都不固定进入上下文。
 
-环境级 `~/.xcodeagent[_dev|_st|_uat]/AGENTS.md` 是六个顶层 DeepAgent 的共享指令源。保存后的内容上限为 32 KiB；每个 bundle 创建时，它被复制为不可变只读快照并挂载到 `/.xcodeagent/agent-memory/AGENTS.md`，通过 `create_deep_agent(memory=[...])` 由原生 MemoryMiddleware 注入系统上下文。AGENTS.md revision 也属于 bundle 缓存键，因此下一次调用加载新快照，运行中的 Agent 保持其启动版本；Deep Agents 自动创建的通用子 Agent 不继承该 memory。本设计沿用 learn-coding-agent 的小而可验证的上下文收集循环，采用 OpenCode 的环境级 AGENTS 指令边界，并复用 Deep Agents 的 memory/CompositeBackend 权限模型；32 KiB 上限为 128k 窗口保留任务、工具结果与模型输出空间，且不会授予 Agent 宿主机文件访问权限。
+环境级 `~/.devagentstudio[_dev|_st|_uat]/AGENTS.md` 是六个顶层 DeepAgent 的共享指令源。保存后的内容上限为 32 KiB；每个 bundle 创建时，它被复制为不可变只读快照并挂载到 `/.devagentstudio/agent-memory/AGENTS.md`，通过 `create_deep_agent(memory=[...])` 由原生 MemoryMiddleware 注入系统上下文。AGENTS.md revision 也属于 bundle 缓存键，因此下一次调用加载新快照，运行中的 Agent 保持其启动版本；Deep Agents 自动创建的通用子 Agent 不继承该 memory。本设计沿用 learn-coding-agent 的小而可验证的上下文收集循环，采用 OpenCode 的环境级 AGENTS 指令边界，并复用 Deep Agents 的 memory/CompositeBackend 权限模型；32 KiB 上限为 128k 窗口保留任务、工具结果与模型输出空间，且不会授予 Agent 宿主机文件访问权限。
 
 外层主 Graph 不关心单个生成任务的执行细节，只根据 Build Subgraph 的确定性终态路由；构建完整成功才进入 `unit_test`，单测门禁完成后才允许测试阶段运行。
 
@@ -502,7 +502,7 @@ unit_testing.START
 
 `integration_test` 在外层主 Graph 中表现为一个节点，但内部只负责测试阶段的构建检查、性能测试、集成质量门禁和测试阶段修复规划。
 
-测试生成快照会忽略 Maven `target/` 以及前端 `build/`、`dist/` 等可重建产物；生产源码、配置和正式 `.xcodeagent` 工件仍按越权写入处理。单测生成使用首次 Build 的 `code_changes/code_change_sets` 快照，后续生成文件和修复文件只追加到开发阶段 Diff，不覆盖 `unit_test_generation_context.code_diff`。
+测试生成快照会忽略 Maven `target/` 以及前端 `build/`、`dist/` 等可重建产物；生产源码、配置和正式 `.devagentstudio` 工件仍按越权写入处理。单测生成使用首次 Build 的 `code_changes/code_change_sets` 快照，后续生成文件和修复文件只追加到开发阶段 Diff，不覆盖 `unit_test_generation_context.code_diff`。
 
 后端测试目标默认排除 MapStruct 或纯映射层（`*Assembler`、`*Converter`、`*Mapper`）、DTO、Entity、配置类和简单 getter/setter；优先覆盖 Service，只有路由或校验契约变化时才生成 Controller 测试。
 
@@ -590,7 +590,7 @@ acceptance.START
 - 后端 Java 构建。
 - `frontend_performance` 作为 advisory 检查纳入报告展示，但不参与门禁阻断与返修。
 
-单元测试生成是开发阶段的尽力而为门禁：Unit Testing Subgraph 从首次 Build 代码变更集合中提取目标业务源码及有界真实 diff；选择跳过时，单测结果记录为 `passed=true, skipped=true` 并直接放行确认门，选择继续时才调用 TestGenerationAgent，再执行前后端单元测试。本轮没有对应源码、生成 Agent 无输出或 Agent 初始化失败时按无须执行策略放行；已有或已生成的测试文件必须执行，编译、用例或业务代码失败进入独立 `unit_test_repair` 闭环。测试阶段的 `integration_test` 不再调用 TestGenerationAgent 或执行单元测试，只执行依赖、Build、前端性能和集成检查。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.xcodeagent/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。`unit_test.checks` 与 `integration_test.checks` 分别更新开发、测试阶段矩阵，后者不展示单元测试行。
+单元测试生成是开发阶段的尽力而为门禁：Unit Testing Subgraph 从首次 Build 代码变更集合中提取目标业务源码及有界真实 diff；选择跳过时，单测结果记录为 `passed=true, skipped=true` 并直接放行确认门，选择继续时才调用 TestGenerationAgent，再执行前后端单元测试。本轮没有对应源码、生成 Agent 无输出或 Agent 初始化失败时按无须执行策略放行；已有或已生成的测试文件必须执行，编译、用例或业务代码失败进入独立 `unit_test_repair` 闭环。测试阶段的 `integration_test` 不再调用 TestGenerationAgent 或执行单元测试，只执行依赖、Build、前端性能和集成检查。前端测试平铺在 `frontend/tests/<module>-<feature>.test.ts(x)`，后端测试镜像 Java package 到 `backend/src/test/java/**/*Test.java`，前后端合计最多五个测试文件。源码、测试映射缓存保存于工作区 `.devagentstudio/cache/unit-test-mappings.json`，用于源码摘要未变化时复用映射。`unit_test.checks` 与 `integration_test.checks` 分别更新开发、测试阶段矩阵，后者不展示单元测试行。
 
 集成测试修复授权使用用户 workspace 下的项目目录级范围：frontend 侧失败授权 `frontend/`，backend 侧失败授权 `backend/`，同时把具体失败文件（如 `backend/pom.xml`、`frontend/package.json`、对应测试与业务源码）保留为 `target_files`/`change_scope` 提示。RepairPlanner 返回 `requires_user_confirmation` 或 `terminal_failure` 时，只要确定性候选任务携带真实授权路径，就自动升级为 `ready/repair` 并直接派发 SmallTask；仅无真实路径、安全失败或修复预算耗尽时才等待扩权确认或进入 `handle_failure`。
 
@@ -631,7 +631,7 @@ acceptance.START
 
 该边界继续对应 learn-coding-agent 的“收集实时事实—执行—立即验证”循环；对应 OpenCode 的稳定任务 ID、显式任务状态和权限受限执行；对应 Deep Agents 的根/子图消息分流与结构化 subagent 结果。任务状态、文件归属和验收仍由外层确定性调度器裁决，Agent 输出视为不可信输入；Graph State 只保存紧凑报告和证据引用，不复制完整消息流或工具日志，保持在 128k 上下文预算内。
 
-每个真实命令都会写入 `.xcodeagent/runtime/tests/<check_id>/stdout.log` 和 `stderr.log`。`test_results.execution` 同时提供宿主日志引用、Agent 可读取的虚拟工作区日志路径以及有长度上限的 `stdout_tail/stderr_tail`，另保存命令、cwd、returncode、timeout 和失败分类。Test/RepairPlanner 必须以这些证据为依据；摘要和日志都不可读时只能报告证据不足，不得猜测根因。
+每个真实命令都会写入 `.devagentstudio/runtime/tests/<check_id>/stdout.log` 和 `stderr.log`。`test_results.execution` 同时提供宿主日志引用、Agent 可读取的虚拟工作区日志路径以及有长度上限的 `stdout_tail/stderr_tail`，另保存命令、cwd、returncode、timeout 和失败分类。Test/RepairPlanner 必须以这些证据为依据；摘要和日志都不可读时只能报告证据不足，不得猜测根因。
 
 Graph 不应把 npm/maven/lint/typecheck/unit test 全部暴露成一等节点，避免主流程过碎；但 `test_results` 里必须保留每个具体检查项的结构化证据。
 
@@ -680,24 +680,24 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 
 当前启动策略：
 
-- 两个公共 launcher 仅接收 `str | Path` 工作目录，自行从 `<workspace>/.xcodeagent/runtime/launch/` 推导日志与 PID 目录，因此可被 LangGraph 之外的调用方直接复用；
+- 两个公共 launcher 仅接收 `str | Path` 工作目录，自行从 `<workspace>/.devagentstudio/runtime/launch/` 推导日志与 PID 目录，因此可被 LangGraph 之外的调用方直接复用；
 - 后端探测器枚举工作区直属目录并识别 `backend/pom.xml` 或 `Backend/pom.xml`，保留磁盘上的真实目录大小写；缺少 `pom.xml` 表示工作流没有可启动的 Maven 后端，节点跳过后端，但直接调用后端 launcher 仍返回 `backend_validation`；
 - 识别到 Maven 后端后，通过 `shutil.which` 解析 `mvn`、`java` 的完整可执行路径；Windows 上直接使用解析到的 `mvn.cmd` 和 `java.exe`，不依赖 `cwd` 再次搜索 PATH；
 - 后端 Java 进程按规范化工作区路径保存在内存注册表中；同一工作区的停止、构建、启动和登记由可重入锁串行化，不同工作区互不阻塞；
-- 每次 Maven 构建前优先停止内存登记的进程；Backend 服务重启导致内存记录丢失时，从 `.xcodeagent/runtime/launch/backend.pid` 恢复 PID，通过完整进程命令行确认 `java`、`-jar` 和当前 `backend/target` JAR 绝对路径均匹配后才终止，拒绝按 Java 进程名批量清理；
+- 每次 Maven 构建前优先停止内存登记的进程；Backend 服务重启导致内存记录丢失时，从 `.devagentstudio/runtime/launch/backend.pid` 恢复 PID，通过完整进程命令行确认 `java`、`-jar` 和当前 `backend/target` JAR 绝对路径均匹配后才终止，拒绝按 Java 进程名批量清理；
 - 进程先温和终止并等待 5 秒，超时后强制结束；只有确认退出才删除 PID 和内存登记。无法读取 PID、无法确认身份或强杀后仍存活时返回 `failed_stage=backend_cleanup`，不执行 Maven；`prebuild_cleanup` 保存来源、PID、身份校验、强杀和错误摘要；
-- 在 `backend/` 执行 `mvn clean install`，构建输出写入 `.xcodeagent/runtime/launch/backend-build.stdout.log` 和 `backend-build.stderr.log`；
+- 在 `backend/` 执行 `mvn clean install`，构建输出写入 `.devagentstudio/runtime/launch/backend-build.stdout.log` 和 `backend-build.stderr.log`；
 - 在 `backend/target/` 查找唯一的 `*-SNAPSHOT.jar` 主包，排除 `original-*`、sources、javadoc 和 tests/test 等附属包；无主包或存在多个主包均启动失败；
 - 如果唯一主包是普通 Maven JAR 且清单缺少 `Main-Class`，启动器会追加执行 `mvn -B package spring-boot:repackage`，并将结果写入 `backend-repackage.stdout.log` 和 `backend-repackage.stderr.log`；补打包失败或仍未得到可执行 JAR 时以结构化启动失败返回；
-- 在启动 Java 子进程前，从当前工作区 `.xcodeagent/application.json` 的 `datasource.db.plantMode` 解析应用数据库配置，清除继承环境中的 `MYSQL_*` 和 `SPRING_DATASOURCE_*`，再注入当前应用对应的数据库变量；配置存在但非法时以 `failed_stage=backend_database_config` 在 Maven 前失败，缺少配置文件时也不回退到 Backend 服务 `.env`；
-- 在 `backend/target/` 以 `java -jar <JAR绝对路径>` 启动后台进程，将 pid 和 stdout/stderr 写入 `.xcodeagent/runtime/launch/backend.pid`、`backend.stdout.log` 和 `backend.stderr.log`；
+- 在启动 Java 子进程前，从当前工作区 `.devagentstudio/application.json` 的 `datasource.db.plantMode` 解析应用数据库配置，清除继承环境中的 `MYSQL_*` 和 `SPRING_DATASOURCE_*`，再注入当前应用对应的数据库变量；配置存在但非法时以 `failed_stage=backend_database_config` 在 Maven 前失败，缺少配置文件时也不回退到 Backend 服务 `.env`；
+- 在 `backend/target/` 以 `java -jar <JAR绝对路径>` 启动后台进程，将 pid 和 stdout/stderr 写入 `.devagentstudio/runtime/launch/backend.pid`、`backend.stdout.log` 和 `backend.stderr.log`；
 - Java 就绪检查只读取本次启动后追加的 stdout/stderr；进程存活且日志包含精确标志 `Spring Boot Version` 或 `ZA21 Version` 才继续启动前端，普通 `Started ...` 日志不构成就绪证据；
 - 在工作区内优先读取 `Frontend/package.json`，其次尝试 `frontend/package.json`、`app/frontend/package.json` 和根 `package.json`；
 - 根据 lockfile 选择包管理器：`pnpm-lock.yaml → pnpm`，`yarn.lock → yarn`，否则使用 `npm`；执行安装和开发服务器时使用 `shutil.which` 返回的完整路径，兼容 Windows 的 `npm.cmd`、`pnpm.cmd` 和 `yarn.cmd`；
 - 执行 `<package-manager> install` 安装依赖；
 - 优先执行 `dev` script，其次执行 `start` script；
 - 启动时设置 `BROWSER=none`；对于 `react-scripts` 不强制注入 `HOST=127.0.0.1`，避免带代理配置的 CRA 项目生成非法 `allowedHosts`；其它启动脚本继续使用本地 loopback host；
-- 将前端 dev server 作为后台进程启动，pid、stdout/stderr 日志和安装日志写入 `.xcodeagent/runtime/launch/`；
+- 将前端 dev server 作为后台进程启动，pid、stdout/stderr 日志和安装日志写入 `.devagentstudio/runtime/launch/`；
 - 调试续跑时，如果 pid 文件对应的预览地址已经可访问，则复用现有服务，不重复启动并争抢同一端口；
 - 根据 script 推断预览地址：若脚本声明 `--port`、`--port=` 或 `PORT=` 则使用声明端口，否则统一使用 `http://127.0.0.1:80`；
 - 健康检查在配置的启动窗口内持续监督启动进程：优先通过 urllib 接收 2xx–4xx HTTP 响应；如果运行沙箱禁止 Python 主动连接本地端口，则只读取本次启动后追加的 stdout，通过 CRA/Vite/Webpack 的 `Compiled successfully`、`ready in`、`Local:` 等标志确认就绪。日志读取记录启动前偏移量，不会被历史成功日志误导；
@@ -770,7 +770,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 实现 API、校验和权限；
 - 编写后端测试；
 - 遵守已经确认的 API 契约。
-- 数据源生成时使用绑定当前工作区的 `get_mysql_config` 读取 `.xcodeagent/application.json` 中的 `datasource.db.plantMode`，不读取 Backend 服务 `.env`；未绑定工作区的兼容入口直接失败。
+- 数据源生成时使用绑定当前工作区的 `get_mysql_config` 读取 `.devagentstudio/application.json` 中的 `datasource.db.plantMode`，不读取 Backend 服务 `.env`；未绑定工作区的兼容入口直接失败。
 
 如果契约不可实现，应返回变更申请，不得静默修改契约。
 
@@ -825,17 +825,17 @@ observability/  日志、Tracing、Metrics 和 Agent 运行诊断
 
 `POST /conversation/run` 是独立于 `/workflow/run` 的 AG-UI LangGraph，不保留旧 `/direct-modification/run` 协议。工作台普通自然语言输入统一使用该端点，由 Coordinator 自动分类为闲聊、工作区问答、澄清、实现修复或正式修改；正式计划的结构化确认与开发调试仍显式发送到 `/workflow/run`。设计阶段专用的“设计变更输入”继续进入原 application planning Graph，不经过普通对话路由。请求发送标准 AG-UI user message 和 `forwardedProps.conversation.workspaceRoot/selectedSkillNames`，并携带当前页面/API 目标上下文供 Coordinator 判断。公开事件名、状态快照键和 checkpoint thread 前缀均为 `conversation`。
 
-新请求入口顺序固定为 `scan_workspace_code -> classify_intent`。扫描节点先生成可缓存的只读 WorkspaceSnapshot 和代码图摘要；分类器只接收有界事实。`classify_intent` 输出当前五类路由：`casual_chat`、`workspace_question`、`clarification`、`implementation_fix`、`formal_revision`。分类器按语义判断正式修改，`RevisionRoutingService` 只做正式产物安全校验、字段合同校验和 branch 对齐；执行任何 formal branch 前先持久化只读 impact confirmation。批准 design branch 后服务端恢复原 planning thread，批准 workbench branch 后主 Workflow 只创建一个隔离草稿。`implementation_fix` 继续走有界 SmallTask、测试与预览，不得写 `.xcodeagent` 正式产物或改变正式语义。`implementation_fix_confirmation` 或 `small_task_scope_confirmation` 的批准动作不是新请求：服务端必须从同一 conversation thread 的待确认 checkpoint 恢复原始 intent/owner，跳过 `scan_workspace_code` 和 `classify_intent`，并在需要时从 `scan_change_impact_code` 继续；找不到匹配 checkpoint 时安全失败，不能降级为重新分类。
+新请求入口顺序固定为 `scan_workspace_code -> classify_intent`。扫描节点先生成可缓存的只读 WorkspaceSnapshot 和代码图摘要；分类器只接收有界事实。`classify_intent` 输出当前五类路由：`casual_chat`、`workspace_question`、`clarification`、`implementation_fix`、`formal_revision`。分类器按语义判断正式修改，`RevisionRoutingService` 只做正式产物安全校验、字段合同校验和 branch 对齐；执行任何 formal branch 前先持久化只读 impact confirmation。批准 design branch 后服务端恢复原 planning thread，批准 workbench branch 后主 Workflow 只创建一个隔离草稿。`implementation_fix` 继续走有界 SmallTask、测试与预览，不得写 `.devagentstudio` 正式产物或改变正式语义。`implementation_fix_confirmation` 或 `small_task_scope_confirmation` 的批准动作不是新请求：服务端必须从同一 conversation thread 的待确认 checkpoint 恢复原始 intent/owner，跳过 `scan_workspace_code` 和 `classify_intent`，并在需要时从 `scan_change_impact_code` 继续；找不到匹配 checkpoint 时安全失败，不能降级为重新分类。
 
-`implementation_fix` 继续区分 `frontend | backend | fullstack | workspace` owner。前后端代码复用共享 SmallTask Agent，但必须先由 AG-UI `implementation_fix_confirmation` 获得用户确认；`fullstack` 固定后端优先并以结构化 `backend_handoff` 交接给前端，随后复用独立集成测试和预览启动。快速修改流程显式关闭 `unit_test_generation_enabled`，不生成或执行本轮新增单元测试；正式 Workflow 才启用测试收集与生成。`workspace` owner 只处理分类器明确返回的精确相对路径或窄 glob，用于普通文档、测试、脚本和仓库配置；它禁止 Frontend/Backend 产品代码、`.env`、数据库迁移和 `.xcodeagent` 正式工件，完成 Agent 内相称验证后直接收口，不强制启动应用预览。任何写分支最终文件清单仍以工作区前后快照为准，模型声明不能替代真实 diff。
+`implementation_fix` 继续区分 `frontend | backend | fullstack | workspace` owner。前后端代码复用共享 SmallTask Agent，但必须先由 AG-UI `implementation_fix_confirmation` 获得用户确认；`fullstack` 固定后端优先并以结构化 `backend_handoff` 交接给前端，随后复用独立集成测试和预览启动。快速修改流程显式关闭 `unit_test_generation_enabled`，不生成或执行本轮新增单元测试；正式 Workflow 才启用测试收集与生成。`workspace` owner 只处理分类器明确返回的精确相对路径或窄 glob，用于普通文档、测试、脚本和仓库配置；它禁止 Frontend/Backend 产品代码、`.env`、数据库迁移和 `.devagentstudio` 正式工件，完成 Agent 内相称验证后直接收口，不强制启动应用预览。任何写分支最终文件清单仍以工作区前后快照为准，模型声明不能替代真实 diff。
 
 前端、后端或 `fullstack` 的独立集成测试失败时，路由进入 `direct_modification_repair`：只读 RepairPlanner 接收测试报告、失败证据和本轮真实变更路径，生成受限 SmallTask，再回到 `integration_test` 复核。自由对话最多执行 3 轮真实局部修复；预算耗尽、证据不足、路径越权、数据库/正式工件/契约变更或需要扩大范围时停止，并保留失败证据或发出确认卡。该节点不直接回到 `build`，也不修改确认过的产品语义。
 
 权限在路由后收紧：所有消息只先经过确定性只读扫描；`casual_chat` 仅额外获得扫描摘要，不创建 Deep Agent、不加载可写 workspace backend、不获得工具；`workspace_question` 使用独立 Workspace Assistant，只允许渐进读取工作区和已选 Skill/AGENTS 记忆，显式拒绝写入、命令、task、todo 和 subagent；只有 `workspace_change` 才获取 workspace run lease 并调用具备受限写权限的 SmallTask Agent。工具活动和文本增量通过 `conversation` 自定义事件、AG-UI `TEXT_MESSAGE_CONTENT` 与快照传输；自由对话界面实时展示助手正文、当前节点和工具活动，避免在整个运行期间只显示笼统的“正在思考”。常规回复和只读回答仍跳过集成测试、项目启动和 diff 生成。
 
-前端代码修改仍必须完整读取 `/.xcodeagent/builtin-skills/code-block-template/SKILL.md` 和 `/.xcodeagent/builtin-skills/react-develop-specification/SKILL.md`；后端当前没有必读内置 Skill。扫描快照中的页面、组件、API client、后端路由、模型和高价值工程配置路径作为分类/执行候选；读取顺序固定为本轮动态加入的精确文件、扫描命中的候选源码、最窄 `src` 源码根、必要的 package/build 元数据。SmallTask 文件后端拒绝读取或写入 `node_modules`、`dist`、`build`、`target`、`.next`、`.turbo`、缓存和虚拟环境目录；无路径 grep/glob 从当前任务的源码授权根开始，而不是遍历整个工作区。自由对话前端写入范围默认收紧为 `Frontend/src/**` 或 `frontend/src/**`，后端默认收紧为 `Backend|backend` 下的 `app/src/tests` 源码根。只要局部修改需要源码根之外的现有工作区文件，分类器就必须返回精确文件路径；后端不再按配置文件类型做白名单判断，而是在路径属于当前 owner、文件真实存在且未落入敏感/依赖/生成/迁移目录时，把任意文件类型动态并入本次运行的 `approvedPaths` 和优先读取候选。该授权不持久化、不接受目录或 glob，`.env`、凭据文件、lockfile、数据库 schema/migration 和 `.xcodeagent` 工件仍不可动态加入。快速执行禁用 `task`、`write_todos` 和默认通用子 Agent，继承共用 Provider 的正常超时/重试配置；写任务执行“读取相关上下文—修改—验证—修复—复查”循环，不得以管道截断或强制成功掩盖检查退出码。Agent 异常后仍执行 after-snapshot，保留异常前已落盘差异供审核和撤销。
+前端代码修改仍必须完整读取 `/.devagentstudio/builtin-skills/code-block-template/SKILL.md` 和 `/.devagentstudio/builtin-skills/react-develop-specification/SKILL.md`；后端当前没有必读内置 Skill。扫描快照中的页面、组件、API client、后端路由、模型和高价值工程配置路径作为分类/执行候选；读取顺序固定为本轮动态加入的精确文件、扫描命中的候选源码、最窄 `src` 源码根、必要的 package/build 元数据。SmallTask 文件后端拒绝读取或写入 `node_modules`、`dist`、`build`、`target`、`.next`、`.turbo`、缓存和虚拟环境目录；无路径 grep/glob 从当前任务的源码授权根开始，而不是遍历整个工作区。自由对话前端写入范围默认收紧为 `Frontend/src/**` 或 `frontend/src/**`，后端默认收紧为 `Backend|backend` 下的 `app/src/tests` 源码根。只要局部修改需要源码根之外的现有工作区文件，分类器就必须返回精确文件路径；后端不再按配置文件类型做白名单判断，而是在路径属于当前 owner、文件真实存在且未落入敏感/依赖/生成/迁移目录时，把任意文件类型动态并入本次运行的 `approvedPaths` 和优先读取候选。该授权不持久化、不接受目录或 glob，`.env`、凭据文件、lockfile、数据库 schema/migration 和 `.devagentstudio` 工件仍不可动态加入。快速执行禁用 `task`、`write_todos` 和默认通用子 Agent，继承共用 Provider 的正常超时/重试配置；写任务执行“读取相关上下文—修改—验证—修复—复查”循环，不得以管道截断或强制成功掩盖检查退出码。Agent 异常后仍执行 after-snapshot，保留异常前已落盘差异供审核和撤销。
 
-参考架构映射在实现前已明确：learn-coding-agent 的“收集相关上下文—行动—验证”最小循环对应先生成只读工作区事实，再决定是否行动；OpenCode 在 session prompt 中显式绑定 worktree/path、角色和权限，对应 XCodeAgent 的扫描上下文、无工具 ChatModel、只读 Workspace Assistant 和受限 SmallTask 分层；Deep Agents 提供只读 workspace backend、Skill/AGENTS 记忆、权限和 checkpoint。XCodeAgent 的有意差异是使用确定性 conversation Graph 在模型分类前统一生成有界 WorkspaceSnapshot，而不是让主 Agent先自由调用探索工具；这样分类可以识别已有页面和组件，同时普通聊天仍不会获得 workspace lease 或写工具。Graph State 只保留不超过 4000 字符的滚动摘要、扫描引用、意图、结构化交接、diff 元数据和日志引用；分类 Prompt 中的扫描事实上限为 16000 字符，不保存全量历史、源码或工具输出，符合 128k 上下文预算。
+参考架构映射在实现前已明确：learn-coding-agent 的“收集相关上下文—行动—验证”最小循环对应先生成只读工作区事实，再决定是否行动；OpenCode 在 session prompt 中显式绑定 worktree/path、角色和权限，对应 DevAgent Studio 的扫描上下文、无工具 ChatModel、只读 Workspace Assistant 和受限 SmallTask 分层；Deep Agents 提供只读 workspace backend、Skill/AGENTS 记忆、权限和 checkpoint。DevAgent Studio 的有意差异是使用确定性 conversation Graph 在模型分类前统一生成有界 WorkspaceSnapshot，而不是让主 Agent先自由调用探索工具；这样分类可以识别已有页面和组件，同时普通聊天仍不会获得 workspace lease 或写工具。Graph State 只保留不超过 4000 字符的滚动摘要、扫描引用、意图、结构化交接、diff 元数据和日志引用；分类 Prompt 中的扫描事实上限为 16000 字符，不保存全量历史、源码或工具输出，符合 128k 上下文预算。
 
 ## 上下文管理
 

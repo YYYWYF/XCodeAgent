@@ -53,7 +53,7 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             target = self._write_auth_template_contract(workspace)
-            state = workspace / ".xcodeagent/template-state.json"
+            state = workspace / ".devagentstudio/template-state.json"
             state.write_text(
                 '{"schemaVersion":2,"templateRevision":"r1","requested":{},"effective":{},"appliedAdditions":{}}',
                 encoding="utf-8",
@@ -68,7 +68,7 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
     def _write_auth_template_contract(self, workspace: Path) -> Path:
         """构造 authorization effective State 和固定 Java 常量托管文件。"""
 
-        state = workspace / ".xcodeagent/template-state.json"
+        state = workspace / ".devagentstudio/template-state.json"
         state.parent.mkdir(parents=True)
         state.write_text(
             '{"schemaVersion":2,"templateRevision":"r1","requested":{"authorization":{"enabled":true,"config":{}}},'
@@ -81,8 +81,8 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
         )
         target.parent.mkdir(parents=True)
         target.write_text(
-            "template-owned prefix\n// XCODEAGENT_AUTH_CONSTANTS_START\nold\n"
-            "// XCODEAGENT_AUTH_CONSTANTS_END\ntemplate-owned suffix\n",
+            "template-owned prefix\n// DEVAGENTSTUDIO_AUTH_CONSTANTS_START\nold\n"
+            "// DEVAGENTSTUDIO_AUTH_CONSTANTS_END\ntemplate-owned suffix\n",
             encoding="utf-8",
         )
         return target

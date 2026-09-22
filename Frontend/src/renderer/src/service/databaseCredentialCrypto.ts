@@ -1,6 +1,7 @@
 import type { ApplicationConfig, ApplicationSchemaConfig } from '../typings'
+import { PRODUCT_ID } from '../constants/branding'
 
-const SECRET_PREFIX = 'xcodeagent-secret'
+const SECRET_PREFIX = `${PRODUCT_ID}-secret`
 const SECRET_VERSION = 'v1'
 const SECRET_ALGORITHM = 'rsa-oaep-256'
 const PUBLIC_ALGORITHM = 'RSA-OAEP-256'
@@ -18,7 +19,7 @@ type BackendHealth = {
 
 /** 获取当前 Python Backend 的数据库加密公钥元数据。 */
 export async function getBackendDatabasePublicKey(): Promise<DatabaseEncryptionMetadata> {
-  const baseUrl = window.xcodeAgent?.agentBaseUrl?.replace(/\/$/, '') || '/api/agent'
+  const baseUrl = window.devAgentStudio?.agentBaseUrl?.replace(/\/$/, '') || '/api/agent'
   let response: Response
   try {
     response = await fetch(`${baseUrl}/health`, { method: 'GET', cache: 'no-store' })

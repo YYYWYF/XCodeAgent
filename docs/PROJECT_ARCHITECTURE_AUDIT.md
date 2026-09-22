@@ -1,4 +1,4 @@
-# XCodeAgent 项目架构审计与优化方案
+# DevAgent Studio 项目架构审计与优化方案
 
 > 审计日期：2026-07-11  
 > 审计对象：当前工作区源码（包含审计时尚未提交的在途改动）  
@@ -6,7 +6,7 @@
 
 ## 1. 结论摘要
 
-XCodeAgent 已经形成了合理的桌面端编码 Agent 骨架：Electron 负责本地应用生命周期和持久化，React 负责工作台，FastAPI 暴露 AG-UI 与受控工作区工具，LangGraph 负责确定性阶段流转，Deep Agents 负责需要文件与工具的自主执行。需求、计划、API 契约、页面细化、任务拆分、构建和测试也已经有明确的领域边界。
+DevAgent Studio 已经形成了合理的桌面端编码 Agent 骨架：Electron 负责本地应用生命周期和持久化，React 负责工作台，FastAPI 暴露 AG-UI 与受控工作区工具，LangGraph 负责确定性阶段流转，Deep Agents 负责需要文件与工具的自主执行。需求、计划、API 契约、页面细化、任务拆分、构建和测试也已经有明确的领域边界。
 
 当前最需要优化的不是继续增加 Agent 或新抽象，而是把已有链路闭环。优先级最高的五项是：
 
@@ -16,7 +16,7 @@ XCodeAgent 已经形成了合理的桌面端编码 Agent 骨架：Electron 负�
 4. 将 Graph State 缩减为小型状态和产物引用，接入持久 checkpointer 与 append-only run event store。
 5. 让 Build Subgraph 真正循环执行任务 DAG，并只在失败时进入修复规划。
 
-如果按本文路线实施，XCodeAgent 会从“功能边界已经成形的本地原型”演进为“可恢复、可审计、传输稳定、执行结果可信的桌面编码 Agent”。
+如果按本文路线实施，DevAgent Studio 会从“功能边界已经成形的本地原型”演进为“可恢复、可审计、传输稳定、执行结果可信的桌面编码 Agent”。
 
 ## 2. 审计范围与方法
 
@@ -57,7 +57,7 @@ flowchart LR
     Graph --> DeepAgents["Deep Agents\nMain / Frontend / Data Source / Test"]
     DeepAgents --> Tools["workspace / file / search / terminal / git"]
     Tools --> Project["用户项目工作区"]
-    Graph --> Artifacts[".xcodeagent 业务产物"]
+    Graph --> Artifacts[".devagentstudio 业务产物"]
     Main --> SessionStore["应用目录外的本地会话 JSON"]
 ```
 
@@ -70,7 +70,7 @@ Electron main 当前承担：
 - application、workspace、session、auth、browser IPC；
 - 应用配置和会话 JSON 的本地文件读写。
 
-preload 通过 `window.xcodeAgent` 暴露最小 IPC API，并把本地后端地址注入 renderer。renderer 的 AG-UI 请求不经过 IPC，而是直接使用 `HttpAgent` 访问 FastAPI；这减少了一层手写流式代理，是合理选择。
+preload 通过 `window.devAgentStudio` 暴露最小 IPC API，并把本地后端地址注入 renderer。renderer 的 AG-UI 请求不经过 IPC，而是直接使用 `HttpAgent` 访问 FastAPI；这减少了一层手写流式代理，是合理选择。
 
 ### 3.2 前端应用层
 
@@ -161,7 +161,7 @@ flowchart TD
 
 ### 4.5 业务产物已经文件化
 
-RequirementSpec、ProjectPlan、BuildTaskPlan、TestReport 等写入 `.xcodeagent/`，Graph State 不必成为唯一事实源。这为后续恢复、审计和 context compression 提供了基础。
+RequirementSpec、ProjectPlan、BuildTaskPlan、TestReport 等写入 `.devagentstudio/`，Graph State 不必成为唯一事实源。这为后续恢复、审计和 context compression 提供了基础。
 
 ### 4.6 AG-UI 基础能力覆盖较全
 
@@ -185,7 +185,7 @@ RequirementSpec、ProjectPlan、BuildTaskPlan、TestReport 等写入 `.xcodeagen
 
 ### 5.2 P0：质量门禁和验收存在假阳性
 
-`graph/subgraphs/testing.py::_check` 并未执行它记录的 install/build/lint/typecheck/unit/integration/E2E 命令，而是用 `build_summary` 中没有 failed/pending 推断所有检查通过。当前固定命令还假定前端用 npm、后端用 Java/Maven，与 XCodeAgent 自身约定及生成目标的真实技术栈都可能不符。
+`graph/subgraphs/testing.py::_check` 并未执行它记录的 install/build/lint/typecheck/unit/integration/E2E 命令，而是用 `build_summary` 中没有 failed/pending 推断所有检查通过。当前固定命令还假定前端用 npm、后端用 Java/Maven，与 DevAgent Studio 自身约定及生成目标的真实技术栈都可能不符。
 
 同时：
 
@@ -449,19 +449,19 @@ Graph State 推荐保留：
 
 达到软上限时先压缩旧工具结果和已完成步骤，再按 artifact ref 重新读取需要的事实；不要压缩用户约束、已接受计划、未解决风险和变更文件清单。
 
-Deep Agents 官方 context engineering 采用“接近窗口阈值时摘要”和“大型工具结果自动落 filesystem、在消息中保留 preview + path”的方式。XCodeAgent 应吸收这个原则，但阈值应由实际模型窗口、中文 token 密度和 telemetry 配置，不要把某个依赖版本的默认值硬编码成产品契约。可从约 70% 开始主动减载，80%-85% 强制 offload/summary，并始终为输出和工具回传保留空间。
+Deep Agents 官方 context engineering 采用“接近窗口阈值时摘要”和“大型工具结果自动落 filesystem、在消息中保留 preview + path”的方式。DevAgent Studio 应吸收这个原则，但阈值应由实际模型窗口、中文 token 密度和 telemetry 配置，不要把某个依赖版本的默认值硬编码成产品契约。可从约 70% 开始主动减载，80%-85% 强制 offload/summary，并始终为输出和工具回传保留空间。
 
 ## 7. 参考架构映射
 
 ### 7.1 learn-coding-agent
 
-该仓库当前主要是基于公开资料整理的 Claude Code 研究文档和机制清单，不是可运行的 coding-agent 实现，因此适合校验概念与最小闭环，不应被描述为已验证的源码实现依据。可借鉴的核心是 `messages -> model stream -> tool_use -> permission -> execute -> tool_result -> messages`：侦察相关文件、执行最小改动、运行真实验证、根据证据继续。XCodeAgent 的改进重点是让 Build/Testing 真正执行这个循环，而不是仅记录应执行的命令。
+该仓库当前主要是基于公开资料整理的 Claude Code 研究文档和机制清单，不是可运行的 coding-agent 实现，因此适合校验概念与最小闭环，不应被描述为已验证的源码实现依据。可借鉴的核心是 `messages -> model stream -> tool_use -> permission -> execute -> tool_result -> messages`：侦察相关文件、执行最小改动、运行真实验证、根据证据继续。DevAgent Studio 的改进重点是让 Build/Testing 真正执行这个循环，而不是仅记录应执行的命令。
 
 参考：[YYYWYF/learn-coding-agent README](https://github.com/YYYWYF/learn-coding-agent/blob/main/README.md)
 
 ### 7.2 OpenCode
 
-应借鉴：稳定 session/message/part/tool id、append-oriented event、显式 tool state、权限在工具层、可检查的会话和 provider abstraction。不要照搬其全部 TUI/server/provider 复杂度；XCodeAgent 是单机 Electron 产品，应保持单一 AG-UI transport 和更小的部署面。
+应借鉴：稳定 session/message/part/tool id、append-oriented event、显式 tool state、权限在工具层、可检查的会话和 provider abstraction。不要照搬其全部 TUI/server/provider 复杂度；DevAgent Studio 是单机 Electron 产品，应保持单一 AG-UI transport 和更小的部署面。
 
 参考：[anomalyco/opencode](https://github.com/anomalyco/opencode)
 
@@ -471,7 +471,7 @@ Deep Agents 官方 context engineering 采用“接近窗口阈值时摘要”�
 
 参考：[Deep Agents overview](https://docs.langchain.com/oss/python/deepagents/overview)、[Deep Agents context engineering](https://docs.langchain.com/oss/python/deepagents/context-engineering)、[LangGraph streaming](https://docs.langchain.com/oss/python/langgraph/streaming)
 
-### 7.4 XCodeAgent 的有意差异
+### 7.4 DevAgent Studio 的有意差异
 
 - 继续使用 LangGraph 管项目生命周期，不让 Deep Agent 自己决定确认闸口；
 - 继续将页面规划作为独立 AG-UI flow，避免所有业务都塞入主 Graph；

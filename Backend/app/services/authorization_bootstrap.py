@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import os
 import subprocess
@@ -81,7 +83,7 @@ def run_authorization_bootstrap(
     with lock:
         runtime_root = (
             root
-            / ".xcodeagent"
+            / WORKSPACE_ARTIFACT_DIR
             / "runtime"
             / "authorization-bootstrap"
             / _fingerprint_key(fingerprint)

@@ -17,7 +17,7 @@ from app.services.requirement_spec import create_requirement_spec
 def _write_current_config(workspace: str, datasource_type: str = "database") -> Path:
     """为测试工作区写入最小 schema v6 应用配置。"""
 
-    target = Path(workspace) / ".xcodeagent" / "application.json"
+    target = Path(workspace) / ".devagentstudio" / "application.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(

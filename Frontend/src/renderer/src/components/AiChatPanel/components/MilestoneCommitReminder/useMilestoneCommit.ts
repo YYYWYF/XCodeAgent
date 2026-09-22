@@ -5,7 +5,7 @@ import type { VersionControlCommitResult, VersionControlSnapshot } from '../../.
 import { useUncommittedChanges } from '../../../../context'
 import { resolveCommitScope } from './visibility'
 
-const DEFERRED_STORAGE_PREFIX = 'xcodeagent:version-control:milestone-deferred:'
+const DEFERRED_STORAGE_PREFIX = 'devagentstudio:version-control:milestone-deferred:'
 
 export type UseMilestoneCommitReturn = {
   snapshot: VersionControlSnapshot | undefined
@@ -36,13 +36,13 @@ export function useMilestoneCommit(
   milestoneId: string,
   defaultCommitMessage: string,
   /**
-   * 是否把 `.xcodeagent` 平台产物也纳入"可提交"口径。
+   * 是否把 `.devagentstudio` 平台产物也纳入"可提交"口径。
    *
    * 默认 false：代码提交提醒只该由业务代码变更触发，平台自身的状态流转
    * （lifecycle 每次 +1、规划文档、报告）不算"用户改了代码"。
    *
    * 设计阶段的「设计文档已确认，可保存为设计版本」弱提醒要传 true ——
-   * 那时唯一的变更就是 `.xcodeagent`，按业务代码算永远是 0，提醒会彻底消失。
+   * 那时唯一的变更就是 `.devagentstudio`，按业务代码算永远是 0，提醒会彻底消失。
    * 这与文档 §4.3 把它和"代码提交入口分开"的定位一致：两条通道，两种口径。
    */
   includePlatformArtifacts = false
@@ -68,7 +68,7 @@ export function useMilestoneCommit(
     () => resolveCommitScope({ snapshot, includePlatformArtifacts }),
     [snapshot, includePlatformArtifacts]
   )
-  // 「可提交范围」：全部变更，**含 .xcodeagent 产物**。后端用它做合法性校验
+  // 「可提交范围」：全部变更，**含 .devagentstudio 产物**。后端用它做合法性校验
   // （selected ⊆ requested），所以不能跟着提醒口径一起收窄 —— 否则用户在弹窗里
   // 勾上产物（它们确实列在那里、也确实该能随版本追溯）就会被拒"所选文件已不属于
   // 当前可提交变更"。两者是两个概念，别合并。

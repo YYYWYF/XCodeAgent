@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import hashlib
 import json
 import re
@@ -31,7 +33,7 @@ def endpoint_design_paths(
 ) -> tuple[Path, Path]:
     """返回当前 Endpoint 设计 JSON 与 Markdown 的规范路径。"""
 
-    directory = Path(workspace_root).expanduser().resolve() / ".xcodeagent" / "plans" / "endpoints"
+    directory = Path(workspace_root).expanduser().resolve() / WORKSPACE_ARTIFACT_DIR / "plans" / "endpoints"
     stem = endpoint_design_stem(api_contract_id, endpoint_id)
     return directory / f"{stem}.json", directory / f"{stem}.md"
 
@@ -39,7 +41,7 @@ def endpoint_design_paths(
 def technical_plan_path(workspace_root: str | Path) -> Path:
     """返回当前工作区 TechnicalPlan JSON 的规范路径。"""
 
-    return Path(workspace_root).expanduser().resolve() / ".xcodeagent" / "plans" / "technical-plan.json"
+    return Path(workspace_root).expanduser().resolve() / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
 
 
 def technical_plan_sha256(workspace_root: str | Path) -> str:
@@ -183,7 +185,7 @@ def render_endpoint_design_markdown(design: dict[str, Any]) -> str:
         f"- API Contract：`{design.get('apiContractId') or ''}`",
         f"- Endpoint：`{design.get('endpointId') or ''}`",
         f"- 状态：已确认",
-        f"<!-- xcodeagent-artifact-revision: {design.get('artifactRevision') or ''} -->",
+        f"<!-- devagentstudio-artifact-revision: {design.get('artifactRevision') or ''} -->",
         "",
         "## API 实现描述",
         "",
@@ -369,7 +371,7 @@ def _restore_file(path: Path, content: bytes | None) -> None:
 def _markdown_artifact_revision(markdown: str) -> str:
     """读取 Markdown 中的内部产物修订标记。"""
 
-    match = re.search(r"xcodeagent-artifact-revision:\s*([0-9a-f]{32})", markdown)
+    match = re.search(r"devagentstudio-artifact-revision:\s*([0-9a-f]{32})", markdown)
     return match.group(1) if match else ""
 
 

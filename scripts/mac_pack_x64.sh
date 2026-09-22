@@ -20,7 +20,7 @@ if [ "${1:-}" = "--slim" ]; then
   GRAMMAR_PROFILE="builtin"
 fi
 
-XCODEAGENT_BACKEND_GRAMMARS="$GRAMMAR_PROFILE" bash "$SCRIPT_DIR/build-backend-mac.sh" x64
+DEVAGENTSTUDIO_BACKEND_GRAMMARS="$GRAMMAR_PROFILE" bash "$SCRIPT_DIR/build-backend-mac.sh" x64
 cd "$REPO_ROOT/Frontend"
 pnpm build:mac:x64:dev
 

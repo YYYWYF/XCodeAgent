@@ -24,7 +24,7 @@ class DevelopmentCompletionResumeTests(unittest.TestCase):
     def run_completion(self, scope: dict[str, str], previous_scope: str = "application", passed: bool = True, formal: bool = False) -> None:
         """模拟调试面板发送应用范围，但同一 thread 的已执行 Build 明确绑定产物。"""
         with tempfile.TemporaryDirectory() as workspace:
-            plans = Path(workspace) / ".xcodeagent/plans"
+            plans = Path(workspace) / ".devagentstudio/plans"
             plans.mkdir(parents=True)
             (plans / "product-plan.json").write_text(json.dumps({"confirmation_status": "confirmed", "pages": [{"pageId": "one"}]}))
             (plans / "technical-plan.json").write_text(json.dumps({"confirmation_status": "confirmed", "api_contracts": [{"id": "api", "endpoints": [{"id": "get"}]}]}))

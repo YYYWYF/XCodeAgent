@@ -32,7 +32,7 @@ def _fixture(name: str) -> dict[str, object]:
 
 
 class TemplateStateTests(unittest.TestCase):
-    """验证 XCodeAgent 不宽松解释 Engine State。"""
+    """验证 DevAgent Studio 不宽松解释 Engine State。"""
 
     def test_accepts_frozen_capability_fixtures(self) -> None:
         """确认无能力、仅登录和权限依赖补全三类 Engine State 均可消费。"""
@@ -138,7 +138,7 @@ class TemplateStateTests(unittest.TestCase):
 
         context = template_context(_fixture("login-only"))
         for invalid in (
-            {**context, "state_path": ".xcodeagent/other.json"},
+            {**context, "state_path": ".devagentstudio/other.json"},
             {**context, "legacy_variant": "auth"},
             {**context, "effective_capabilities": {"login": {"enabled": False}}},
         ):
@@ -152,7 +152,7 @@ class TemplateStateTests(unittest.TestCase):
             root = Path(directory)
             external = root / "external.json"
             external.write_text(json.dumps(_fixture("none")), encoding="utf-8")
-            state_path = root / ".xcodeagent/template-state.json"
+            state_path = root / ".devagentstudio/template-state.json"
             state_path.parent.mkdir()
             state_path.symlink_to(external)
             with self.assertRaises(TemplateStateError):
