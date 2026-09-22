@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import threading
 import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from app.services.workspace_process_registry import WorkspaceProcessRegistry
+from app.services.workspace_process_registry import (
+    WorkspaceProcessRegistry,
+    _is_git_command,
+)
 
 
 class WorkspaceProcessRegistryTests(unittest.TestCase):
@@ -168,3 +173,67 @@ class ManagedProcessRegistrationTests(unittest.TestCase):
                     "_processes 必须按 list 存，否则 .add 会炸",
                 )
                 self.assertEqual(len(registry._processes[key]), 1)
+
+    def test_git_text_pipes_are_pinned_to_utf8(self) -> None:
+        """Git 的文本管道必须固定 UTF-8，不能跟着本机代码页走。
+
+        这是本次乱码问题的关键断言，也是唯一能在非 Windows 机器上守住它的方式：
+        macOS/Linux 的本机编码本来就是 UTF-8，功能测试在这里无论修没修都会通过，
+        所以必须直接检查交给 Popen 的参数。Windows 上不固定就会按 ANSI 代码页解码
+        Git 的 UTF-8 输出，中文提交信息显示成乱码。
+        """
+
+        registry = WorkspaceProcessRegistry()
+        captured = self._capture_popen_kwargs(registry, ["git", "--version"])
+
+        self.assertEqual(captured.get("encoding"), "utf-8")
+        # 容错解码要保留：Git 输出里出现异常字节时不该让读取线程炸掉。
+        self.assertEqual(captured.get("errors"), "replace")
+
+    def test_non_git_text_pipes_keep_the_locale_encoding(self) -> None:
+        """只固定 Git：其它工具在 Windows 上可能真的输出本机代码页的文本。
+
+        Maven、Node 之类的输出跟着一起改成 UTF-8 会把原本正常的内容解错，
+        所以这里必须保持默认（encoding 不传）。
+        """
+
+        registry = WorkspaceProcessRegistry()
+        captured = self._capture_popen_kwargs(registry, [sys.executable, "-c", "pass"])
+
+        self.assertIsNone(captured.get("encoding"))
+        self.assertEqual(captured.get("errors"), "replace")
+
+    def test_git_program_name_detection_covers_windows_and_absolute_paths(self) -> None:
+        """按可执行文件名识别 Git：兼容绝对路径、Windows 的 .exe 与大小写。"""
+
+        for argv in (
+            ["git", "log"],
+            ["/usr/bin/git", "log"],
+            [r"C:\Program Files\Git\cmd\git.exe", "log"],
+            ["GIT", "log"],
+        ):
+            self.assertTrue(_is_git_command(argv), f"未识别为 Git：{argv}")
+        for argv in (["node", "-e", "x"], ["pnpm", "install"], ["git-lfs", "x"], []):
+            self.assertFalse(_is_git_command(argv), f"误判为 Git：{argv}")
+
+    def _capture_popen_kwargs(
+        self, registry: WorkspaceProcessRegistry, argv: list[str]
+    ) -> dict:
+        """跑一次真实命令，并记录登记层最终交给 Popen 的参数。"""
+
+        captured: dict = {}
+        real_popen = subprocess.Popen
+
+        def observing_popen(*args, **kwargs):
+            captured.update(kwargs)
+            return real_popen(*args, **kwargs)
+
+        with (
+            TemporaryDirectory() as workspace,
+            patch(
+                "app.services.workspace_process_registry.subprocess.Popen",
+                observing_popen,
+            ),
+        ):
+            registry.run(argv, workspace=workspace, text=True, capture_output=True, timeout=15)
+        return captured

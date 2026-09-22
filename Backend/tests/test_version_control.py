@@ -17,6 +17,7 @@ from app.services.version_control import (
     InspectAllVersionControlRequest,
     InspectVersionControlRequest,
     VersionControlError,
+    _read_head_message,
     commit_version_control,
     inspect_all_version_control,
     inspect_version_control,
@@ -287,6 +288,37 @@ class VersionControlTests(unittest.TestCase):
 
         stream = build_version_control_ag_ui_stream(payload=payload)
         return [chunk async for chunk in stream]
+
+    def test_chinese_head_message_round_trips_through_the_git_runner(self) -> None:
+        """中文提交信息经 Git 往返后必须原样返回。
+
+        这条守的是编码：Windows 上 `text=True` 默认按本机 ANSI 代码页解码，而 Git 输出
+        的是 UTF-8，于是「chore: 模板初始化」在界面上显示成乱码。修复是让经工作区进程
+        登记执行的 Git 固定按 UTF-8 解码（见 `workspace_process_registry`）。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._init_repository(Path(directory))
+            message = "chore: 模板初始化"
+            self._git(root, "commit", "--allow-empty", "-m", message)
+
+            self.assertEqual(_read_head_message(root), message)
+
+    def test_chinese_paths_round_trip_through_the_git_runner(self) -> None:
+        """中文文件路径同样不能被按本机代码页解错。
+
+        `git status --porcelain` 与 `rev-parse --show-toplevel` 的输出都含路径，
+        工作区路径带中文时是同一类问题。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._init_repository(Path(directory))
+            (root / "中文目录").mkdir()
+            (root / "中文目录" / "说明.md").write_text("内容\n", encoding="utf-8")
+
+            snapshot = self._inspect(root, ["中文目录/说明.md"])
+
+            self.assertIn("中文目录/说明.md", snapshot.files[0].path)
 
     def _init_repository(self, root: Path) -> Path:
         """创建具有基线提交的最小独立 Git 仓库。"""

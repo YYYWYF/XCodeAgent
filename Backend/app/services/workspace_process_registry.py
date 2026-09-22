@@ -115,7 +115,7 @@ class WorkspaceProcessRegistry:
                 )
             kwargs["stdout"] = subprocess.PIPE
             kwargs["stderr"] = subprocess.PIPE
-        _configure_text_decoding(kwargs)
+        _configure_text_decoding(kwargs, popenargs[0] if popenargs else None)
         _configure_process_group(kwargs)
         with self.managed_process(*popenargs, workspace=workspace, run_id=run_id, **kwargs) as process:
             try:
@@ -279,11 +279,46 @@ def _configure_process_group(kwargs: dict[str, Any]) -> None:
         kwargs.setdefault("start_new_session", True)
 
 
-def _configure_text_decoding(kwargs: dict[str, Any]) -> None:
-    """为文本管道启用容错解码，避免子线程因非法本地编码字节退出。"""
+def _configure_text_decoding(kwargs: dict[str, Any], argv: Any) -> None:
+    """为文本管道启用容错解码，并把 Git 固定成 UTF-8。
 
-    if kwargs.get("text") or kwargs.get("universal_newlines"):
-        kwargs.setdefault("errors", "replace")
+    Windows 上 `text=True` 默认按本机 ANSI 代码页编解码，而 Git 的输入与输出都是 UTF-8
+    （提交信息、文件路径、补丁内容）。不固定编码会出两类问题：
+
+    - **读**：`git log --format=%s` 的中文提交信息被按 ANSI 解码，界面上显示成乱码
+      （实测：同事的 Windows 上「chore: 模板初始化」在模板就绪卡里是乱码）；
+    - **写**：经 stdin 送进去的中文补丁被按 ANSI 编码，Git 收到的是错误字节。
+
+    只对 Git 固定：其它工具（Maven、Node 等）在 Windows 上确实可能输出本机代码页的
+    文本，跟着一起改反而会把原本正常的内容解错。
+    """
+
+    if not (kwargs.get("text") or kwargs.get("universal_newlines")):
+        return
+    kwargs.setdefault("errors", "replace")
+    if _is_git_command(argv):
+        kwargs.setdefault("encoding", "utf-8")
+
+
+def _is_git_command(argv: Any) -> bool:
+    """判断本次调用是不是 Git；兼容绝对路径与 Windows 的 .exe 后缀。
+
+    两种路径分隔符都认：Windows 路径在 POSIX 上跑测试时也要能识别（`Path` 只按当前
+    平台的分隔符切分，直接用 stem 会把整条 Windows 路径当成文件名）。
+    """
+
+    if isinstance(argv, (str, bytes)):
+        argv = [argv]
+    try:
+        program = argv[0]
+    except (TypeError, IndexError, KeyError):
+        return False
+    if isinstance(program, bytes):
+        program = program.decode("utf-8", errors="replace")
+    if not isinstance(program, str):
+        return False
+    name = program.replace("\\", "/").rsplit("/", 1)[-1]
+    return name.lower().removesuffix(".exe") == "git"
 
 
 def _terminate_process_group(process: subprocess.Popen[Any], *, force: bool) -> None:
