@@ -14,6 +14,7 @@ import {
 import { Button, Collapse, Empty, Input, Modal, Progress, Tag } from 'antd'
 import type { CSSProperties, ReactElement } from 'react'
 import { useEffect, useState } from 'react'
+import type { ApplicationConfig } from '../../../../typings'
 import type { TestCasePreparationSnapshot } from '../../../../testCasePreparation'
 import { testCasePreparationLabel } from '../../../../testCasePreparation'
 import { cx } from '../../../../utils'
@@ -24,6 +25,9 @@ import DataSourcesPage from '../../../DataSources/DataSourcesPage'
 import ExternalApisPage from '../../../DataSources/ExternalApisPage'
 import ExternalApiDetailPage from '../../../DataSources/ExternalApiDetailPage'
 import DatabaseTableDetailPage from '../../../DataSources/DatabaseTableDetailPage'
+import AgentFilesPage from '../../../AgentFilesPage/AgentFilesPage'
+import SkillsPage from '../../../SkillsPage/SkillsPage'
+import SettingsPage from '../../../SettingsPage/SettingsPage'
 import { externalApiSignature, importedTables, useDataSources, type ExternalApiSource } from '../../../DataSources/catalog'
 import './AuxiliaryDrawer.less'
 
@@ -36,6 +40,24 @@ export type AuxiliaryDrawerMode =
   | 'test-preparation'
   | 'data-sources'
   | 'external-apis'
+  | 'files'
+  | 'skills'
+  | 'settings'
+
+/** 功能页抽屉：页面自带头部（徽标+标题+动作+关闭），壳不再叠加自己的头部。 */
+type FunctionalDrawerMode = 'files' | 'skills' | 'settings'
+
+/** 判断当前模式是否为功能页抽屉模式。 */
+function isFunctionalDrawerMode(mode: AuxiliaryDrawerMode): mode is FunctionalDrawerMode {
+  return mode === 'files' || mode === 'skills' || mode === 'settings'
+}
+
+/** 功能页抽屉的无障碍标题（壳头部不再渲染时，由抽屉节点自身提供可读名称）。 */
+const FUNCTIONAL_DRAWER_LABELS: Record<FunctionalDrawerMode, string> = {
+  files: '文件',
+  skills: '技能',
+  settings: '应用设置'
+}
 
 /** 数据来源详情层的定位：接口维护（含新增，外部API抽屉）或数据表详情（数据源抽屉）。 */
 export type DataSourcesDetailTarget =
@@ -99,6 +121,11 @@ type Props = {
   onOpenTemporaryConversation: () => void
   /** 从临时任务返回统一任务列表。 */
   onOpenConversationManagement: () => void
+  /** 应用设置抽屉的配置对象与保存回调；与聊天面板收到的 application/onApplicationUpdate 同源。 */
+  application: ApplicationConfig
+  onApplicationSaved: (application: ApplicationConfig) => void
+  /** 技能抽屉里停用技能：经工作台转交聊天面板，始终命中当前草稿的技能选择。 */
+  onSkillDisabled?: (skillName: string) => void
 }
 
 type TemporaryMessage = { id: number; role: 'assistant' | 'user'; content: string }
@@ -429,8 +456,8 @@ function TestPreparation({
   )
 }
 
-/** 抽屉头文案按模式切换，保持同一槽位各视图的结构一致。 */
-const DRAWER_HEADERS: Record<AuxiliaryDrawerMode, { title: string; description: string }> = {
+/** 抽屉头文案按模式切换，保持同一槽位各视图的结构一致；功能页抽屉的头部由页面自持，不在此配置。 */
+const DRAWER_HEADERS: Record<Exclude<AuxiliaryDrawerMode, FunctionalDrawerMode>, { title: string; description: string }> = {
   'conversation-management': {
     title: '任务管理',
     description: '按需拆分上下文，当前阶段仅一条任务可继续推进'
@@ -442,7 +469,7 @@ const DRAWER_HEADERS: Record<AuxiliaryDrawerMode, { title: string; description: 
 }
 
 /** 抽屉徽标图标按模式选择：所有模式统一走 mask 实底图标槽位，保证头部视觉规则一致。 */
-const DRAWER_BADGE_ICONS: Record<AuxiliaryDrawerMode, string> = {
+const DRAWER_BADGE_ICONS: Record<Exclude<AuxiliaryDrawerMode, FunctionalDrawerMode>, string> = {
   'conversation-management': freeChatIcon,
   'temporary-conversation': freeChatIcon,
   'test-preparation': freeChatIcon,
@@ -504,13 +531,16 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
   ) ||
     // 占位记录仅在临时列表为空时兜底：此时不应停留在临时问答视图。
     { id: '', title: '临时问答', messages: [] as TemporaryMessage[] }
-  const header = displayMode
-    ? displayMode === 'temporary-conversation'
+  // 壳头部只服务非功能页模式；功能页抽屉（文件/技能/设置）的头部由页面自持。
+  const shellMode: Exclude<AuxiliaryDrawerMode, FunctionalDrawerMode> | null =
+    displayMode && !isFunctionalDrawerMode(displayMode) ? displayMode : null
+  const header = shellMode
+    ? shellMode === 'temporary-conversation'
       ? {
           title: activeTemporaryConversation.title,
           description: '查阅与 Chat 类事务，不触发 Workflow 或写入工作区'
         }
-      : DRAWER_HEADERS[displayMode]
+      : DRAWER_HEADERS[shellMode]
     : null
 
   /** 新建并进入一条功能受限的临时任务。 */
@@ -549,10 +579,14 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
           抽屉体保持不动，仅详情层向右收回，中间不会出现被腾空的区域。 */}
       <section
         aria-hidden={!open}
-        aria-label={header?.title || '辅助抽屉'}
+        aria-label={
+          displayMode && isFunctionalDrawerMode(displayMode)
+            ? FUNCTIONAL_DRAWER_LABELS[displayMode]
+            : header?.title || '辅助抽屉'
+        }
         className={cx('auxiliary-drawer', displayMode, open && 'open')}
       >
-      {header && displayMode ? (
+      {header && shellMode ? (
       <>
       <header>
         <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
@@ -561,7 +595,7 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
             className={cx('auxiliary-drawer-badge-icon')}
             style={
               {
-                '--auxiliary-drawer-badge-source': `url("${DRAWER_BADGE_ICONS[displayMode]}")`
+                '--auxiliary-drawer-badge-source': `url("${DRAWER_BADGE_ICONS[shellMode]}")`
               } as CSSProperties
             }
           />
@@ -570,7 +604,7 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
           <strong>{header.title}</strong>
           <small>{header.description}</small>
         </div>
-        {displayMode === 'temporary-conversation' ? (
+        {shellMode === 'temporary-conversation' ? (
           <button
             aria-label="返回任务管理"
             onClick={props.onOpenConversationManagement}
@@ -585,11 +619,11 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
         </button>
       </header>
       <div className={cx('auxiliary-drawer-body')}>
-        {displayMode === 'data-sources' ? (
+        {shellMode === 'data-sources' ? (
           <DataSourcesPage onOpenDetail={setDataSourcesDetail} />
-        ) : displayMode === 'external-apis' ? (
+        ) : shellMode === 'external-apis' ? (
           <ExternalApisPage onOpenDetail={setDataSourcesDetail} />
-        ) : displayMode === 'conversation-management' && props.conversationManagement ? (
+        ) : shellMode === 'conversation-management' && props.conversationManagement ? (
           <ConversationManagement
             content={props.conversationManagement}
             onCreateTemporaryConversation={createTemporaryConversation}
@@ -600,9 +634,9 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
             }}
             temporaryConversations={temporaryConversations}
           />
-        ) : displayMode === 'conversation-management' ? (
+        ) : shellMode === 'conversation-management' ? (
           <Empty description="任务信息加载中" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : displayMode === 'temporary-conversation' ? (
+        ) : shellMode === 'temporary-conversation' ? (
           <TemporaryConversation
             messages={activeTemporaryConversation.messages}
             onSend={(content) => {
@@ -633,6 +667,22 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
         )}
       </div>
       </>
+      ) : null}
+      {/* 功能页抽屉：头部由页面自持（徽标+标题+动作+关闭，与壳头部同一套语言），壳只提供容器。 */}
+      {displayMode && isFunctionalDrawerMode(displayMode) ? (
+        <div className={cx('auxiliary-drawer-body')}>
+          {displayMode === 'files' ? (
+            <AgentFilesPage onClose={props.onClose} />
+          ) : displayMode === 'skills' ? (
+            <SkillsPage onClose={props.onClose} onSkillDisabled={props.onSkillDisabled} />
+          ) : (
+            <SettingsPage
+              application={props.application}
+              onClose={props.onClose}
+              onSaved={props.onApplicationSaved}
+            />
+          )}
+        </div>
       ) : null}
       </section>
       {/* 数据来源详情层：衔接在列表抽屉右侧的第二个抽屉，承载接口/表的维护页。

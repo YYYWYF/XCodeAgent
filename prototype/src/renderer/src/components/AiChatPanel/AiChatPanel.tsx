@@ -69,22 +69,25 @@ import {
 import PageContextHeader from './components/PageContextHeader'
 import { workflowClarification, type ClarificationAnswers } from './components/WorkflowRunCard'
 import FieldMappingPanel, { type FieldMappingContext, type MappingFieldOption } from './components/FieldMappingPanel'
+import { buildFieldMappingSourceTree } from './components/FieldMappingPanel/sourceTree'
 import type { ProcessStepRecord } from '../../service/agUiAgent'
 import type { ComposerArtifactTarget } from './artifactMention'
 import {
   appApiArtifactId,
   bindingDraftFrom,
   confirmedBindingView,
+  contractRequestParams,
+  emptyBindingDraft,
+  withAppliedBindingDraft,
   withSavedBindingDraft,
+  withSelectedSource,
   type BindingDraft
 } from '../AppApis/model'
 import { readAppApisSnapshot } from '../AppApis/store'
-import { readDataSources } from '../DataSources/catalog'
+import { flattenTargets, readDataSources, useDataSourceIndex } from '../DataSources/catalog'
+import { buildAppApiAdapterSource } from '../../workbenchArtifacts'
 import { useAppApis } from '../AppApis/store'
 import type { ConversationManagementContent } from './components/AuxiliaryDrawer'
-import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
-import SettingsPage from '../SettingsPage/SettingsPage'
-import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
@@ -149,7 +152,6 @@ type Props = {
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   editorMode: EditorMode
-  onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onPlanningArtifactsRefresh: () => void
   previewBaseUrl: string
@@ -199,14 +201,29 @@ type Props = {
   onOpenExternalApis?: () => void
   /** 外部API抽屉是否展开。 */
   externalApisDrawerOpen?: boolean
+  /** 打开文件抽屉（工作台页统一处理互斥）。 */
+  onOpenFiles?: () => void
+  /** 文件抽屉是否展开。 */
+  filesDrawerOpen?: boolean
+  /** 打开技能抽屉。 */
+  onOpenSkills?: () => void
+  /** 技能抽屉是否展开。 */
+  skillsDrawerOpen?: boolean
+  /** 打开应用设置抽屉。 */
+  onOpenSettings?: () => void
+  /** 应用设置抽屉是否展开。 */
+  settingsDrawerOpen?: boolean
   /** 聊天面板向工作台页注册任务管理内容查询函数。 */
   onConversationManagementReady?: (query: () => ConversationManagementContent) => void
+  /** 聊天面板向工作台页注册技能停用回调（技能抽屉经此转交，始终命中当前草稿）。 */
+  onSkillDisabledReady?: (handler: (skillName: string) => void) => void
+  /** 只关闭文件/技能/设置功能抽屉（工作台页统一处理互斥）。 */
+  onCloseFunctionalDrawer?: () => void
   /** 关闭辅助抽屉（工作台页统一处理互斥）。 */
   onCloseAuxiliaryDrawer?: () => void
   /** 项目计划确认时同步所选的测试用例生成任务类型。 */
   onTestCaseGenerationTaskTypeChange?: (taskType: TestCaseGenerationTaskType) => void
 }
-type ActiveView = 'chat' | 'skills' | 'files' | 'settings'
 
 type ActiveApiEndpointTarget = {
   apiContractId: string
@@ -248,7 +265,6 @@ export default function AiChatPanel({
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
   editorMode,
-  onApplicationUpdate,
   onApplicationLifecycleChange,
   onPlanningArtifactsRefresh,
   previewBaseUrl,
@@ -278,11 +294,18 @@ export default function AiChatPanel({
   dataSourcesDrawerOpen,
   onOpenExternalApis,
   externalApisDrawerOpen,
+  onOpenFiles,
+  filesDrawerOpen,
+  onOpenSkills,
+  skillsDrawerOpen,
+  onOpenSettings,
+  settingsDrawerOpen,
   onConversationManagementReady,
+  onSkillDisabledReady,
+  onCloseFunctionalDrawer,
   onCloseAuxiliaryDrawer,
   onTestCaseGenerationTaskTypeChange
 }: Props): ReactElement {
-  const [activeView, setActiveView] = useState<ActiveView>('chat')
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
   const [developmentCompleteModalOpen, setDevelopmentCompleteModalOpen] = useState(false)
   const [testingTransitionRequested, setTestingTransitionRequested] = useState(false)
@@ -428,7 +451,6 @@ export default function AiChatPanel({
   } = useAssistantPreviewLayout()
   useEffect(() => {
     if (testPreparationOpenRequest > 0) {
-      setActiveView('chat')
       // 测试阶段的用例明细属于右侧工作台，不再打开与主内容重叠的辅助抽屉。
       onCloseAuxiliaryDrawer?.()
       setRightPanel({ type: 'test-cases' })
@@ -1807,19 +1829,42 @@ export default function AiChatPanel({
     return undefined
   }, [messages])
   // 面板编辑中的草稿正本：null 表示没有进行中的字段映射会话；目录选中态也由面板层持有，
-  // 这样「打开字段映射」能把目录定位到当前绑定的那个应用API。
+  // 这样「打开字段映射」能把目录定位到当前绑定的那个应用API。草稿正本始终属于
+  // fieldMappingSelectedId 指向的对象（切换目录/入口时按存储草稿重建底稿），不跨对象携带。
   const [fieldMappingDraft, setFieldMappingDraft] = useState<BindingDraft | null>(null)
   const [fieldMappingSelectedId, setFieldMappingSelectedId] = useState('')
   const [fieldMappingSubmitting, setFieldMappingSubmitting] = useState(false)
-  /** 面板初始草稿：优先应用API状态里的已存草稿（保存过/来源选定推导过），缺位退回澄清载荷。 */
-  const initialBindingDraft = (): BindingDraft | null => {
-    const storedObject = appApis.find((item) => item.id === activeBindingObjectId)
+  // 草稿自动保存：编辑防抖落盘（600ms），异常退出或重开对话后可从存储草稿继续。
+  const fieldMappingAutosaveTimer = useRef<number>()
+  const fieldMappingAutosave = useRef<{ objectId: string; draft: BindingDraft } | null>(null)
+  useEffect(
+    () => () => {
+      if (fieldMappingAutosaveTimer.current) window.clearTimeout(fieldMappingAutosaveTimer.current)
+    },
+    []
+  )
+  /** 目标对象的初始草稿：优先存储实现里的已存草稿（含自动保存结果），活动绑定退回澄清载荷。 */
+  const initialBindingDraftFor = (objectId: string): BindingDraft => {
+    const storedObject = readAppApisSnapshot(
+      initializationPlanning.artifacts.requirementSpec,
+      versionViewKey || application.currentVersionId || 'current',
+      initializationPlanning.artifacts.technicalPlan
+    ).find((item) => item.id === objectId)
     if (storedObject) return bindingDraftFrom(storedObject)
-    const clarification = activeBindingWorkflow ? workflowClarification(activeBindingWorkflow) : null
+    const clarification =
+      objectId === activeBindingObjectId && activeBindingWorkflow
+        ? workflowClarification(activeBindingWorkflow)
+        : null
     if (clarification?.draft && typeof clarification.draft === 'object') {
       return clarification.draft as BindingDraft
     }
-    return null
+    return emptyBindingDraft()
+  }
+  /** 让面板草稿归属目标对象：已是该对象的草稿保留（保护未落盘编辑），否则按存储重建底稿。 */
+  const claimFieldMappingDraftFor = (objectId: string): void => {
+    if (fieldMappingDraft && fieldMappingSelectedId === objectId) return
+    setFieldMappingDraft(initialBindingDraftFor(objectId))
+    setFieldMappingSelectedId(objectId)
   }
   // 绑定工作流当前推进到的对象 id：面板目录据此定位并默认选中。
   const activeBindingObjectId = String(
@@ -1828,7 +1873,8 @@ export default function AiChatPanel({
   /**
    * 字段映射视图：随选中目录项的状态流转——
    * 活动绑定 → 可编辑草稿（澄清载荷）；已确认绑定 → 只读常驻（从实现提取，不随工作流结束消失）；
-   * 未开始 → 空视图。面板据此切换编辑/只读形态。
+   * 直连绑定 → 未确认但已选定来源（或尚未选定来源）的API也可从侧面板直接进入编辑；
+   * 未开始且无来源目录 → 空视图。面板据此切换编辑/只读形态。
    */
   const fieldMappingView = useMemo(() => {
     const selectedId = fieldMappingSelectedId || activeBindingObjectId
@@ -1870,58 +1916,91 @@ export default function AiChatPanel({
         }
       }
     }
-    if (object.implementation.confirmed) {
-      const view = confirmedBindingView(object, readDataSources())
-      if (view) {
-        // 已确认绑定可继续调整：面板内编辑过的草稿优先（按选中对象限定范围），
-        // 没有编辑时展示实现里的已存配置。
-        const localDraft =
-          fieldMappingDraft && fieldMappingSelectedId === selectedId ? fieldMappingDraft : view.draft
-        return {
-          readOnly: true,
-          context: {
-            kind: view.kind,
-            objectName: object.name,
-            appMethod: object.method,
-            appPath: object.path,
-            sourceName: view.sourceName,
-            targetName: view.targetName,
-            op: view.op,
-            columns: view.columns,
-            requestParams: view.requestParams,
-            inputParams: view.inputParams,
-            outputs: view.outputs
-          } as FieldMappingContext,
-          draft: localDraft
-        }
+    // 常驻/直连视图：已确认（只读可调整）与未确认但已选定来源（直连编辑，草稿可恢复）
+    // 共用同一派生——结构上与「配置映射绑定」澄清载荷同形，草稿从实现提取。
+    const bound = confirmedBindingView(object, readDataSources())
+    if (bound) {
+      return {
+        readOnly: object.implementation.confirmed,
+        context: {
+          kind: bound.kind,
+          objectName: object.name,
+          appMethod: object.method,
+          appPath: object.path,
+          sourceName: bound.sourceName,
+          targetName: bound.targetName,
+          op: bound.op,
+          columns: bound.columns,
+          requestParams: bound.requestParams,
+          inputParams: bound.inputParams,
+          outputs: bound.outputs
+        } as FieldMappingContext,
+        draft: fieldMappingDraft
+      }
+    }
+    // 直连起点：未确认且尚未选定来源（含本地实现意向）——内容区呈现来源选择卡。
+    if (!object.implementation.confirmed) {
+      return {
+        readOnly: false,
+        context: {
+          kind: object.implementation.kind === '外部服务' ? '外部服务' : '数据库',
+          objectName: object.name,
+          appMethod: object.method,
+          appPath: object.path,
+          sourceName: '',
+          targetName: '',
+          op: '',
+          columns: [],
+          requestParams: [],
+          inputParams: contractRequestParams(object),
+          outputs: object.response
+        } as FieldMappingContext,
+        draft: fieldMappingDraft
       }
     }
     return null
   }, [fieldMappingSelectedId, activeBindingObjectId, activeBindingWorkflow, fieldMappingDraft, appApis])
 
-  // 绑定步骤出现即自动打开右侧「字段映射」面板并初始化草稿；草稿就绪后本 effect 不再执行，
-  // 用户切走 Tab 不会被拽回，重进面板走节点卡上的「打开字段映射」。
+  // 绑定步骤出现即自动打开右侧「字段映射」面板并定位到绑定对象。按工作流实例（runId）闩：
+  // 同一工作流内用户切走 Tab 或浏览目录不被拽回，重进面板走节点卡上的「打开字段映射」；
+  // 新的绑定工作流到来时再次接管——即使面板草稿已因直连入口等路径存在（草稿正属于当前
+  // 绑定对象时原样保留编辑现场，否则按存储重建底稿）。面板被收起时恢复分栏保证可见。
+  const fieldMappingAutoOpenRunRef = useRef('')
   useEffect(() => {
-    if (!activeBindingWorkflow || fieldMappingDraft) return
-    setFieldMappingDraft(
-      initialBindingDraft() || {
-        op: '',
-        conditions: [],
-        setters: [],
-        orderBy: '',
-        mappings: [],
-        expressions: {},
-        requestFeeders: {}
-      }
-    )
-    setFieldMappingSelectedId(activeBindingObjectId)
+    if (!activeBindingWorkflow) return
+    const runId = String(activeBindingWorkflow.runId || '')
+    if (!runId || fieldMappingAutoOpenRunRef.current === runId) return
+    fieldMappingAutoOpenRunRef.current = runId
+    if (!(fieldMappingDraft && fieldMappingSelectedId === activeBindingObjectId)) {
+      // 草稿不是当前绑定对象的编辑现场：初始化为该对象的底稿（优先存储草稿，缺位退回澄清载荷）。
+      setFieldMappingDraft(initialBindingDraftFor(activeBindingObjectId))
+      setFieldMappingSelectedId(activeBindingObjectId)
+    }
     setRightPanel({ type: 'field-mapping' })
+    if (rightPanelLayout === 'hidden') setRightPanelLayout('split')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBindingWorkflow, fieldMappingDraft])
-  /** 字段映射目录：应用全部API名称（方法与来源在右侧内容区呈现）。 */
+  }, [activeBindingWorkflow, fieldMappingDraft, fieldMappingSelectedId, rightPanelLayout])
+  /** 字段映射目录：应用全部API（名称 + 绑定进度点：已确认/绑定中/未开始）。 */
   const fieldMappingApis = useMemo(
-    () => appApis.map((object) => ({ id: object.id, name: object.name })),
+    () =>
+      appApis.map((object) => ({
+        id: object.id,
+        name: object.name,
+        state: object.implementation.confirmed
+          ? ('confirmed' as const)
+          : object.implementation.bindings.length
+            ? ('binding' as const)
+            : ('pending' as const)
+      })),
     [appApis]
+  )
+  /** 直连绑定三级来源树：类型（数据表/外部接口）→ 连接/域 → 表/接口，叶子 value 为绑定目标键。
+      层级与数据来源抽屉、工作流「选类型 → 选来源」保持同一套结构；构建逻辑在
+      FieldMappingPanel/sourceTree 的纯函数中，此处仅按目录索引组装。 */
+  const dataSourceIndex = useDataSourceIndex()
+  const fieldMappingSourceTree = useMemo(
+    () => buildFieldMappingSourceTree(dataSourceIndex),
+    [dataSourceIndex]
   )
   const designPlanningTabs: WorkspaceTab[] = displayIsDesignPhase
     ? activeWorkbenchPhase === 'analysis'
@@ -2041,7 +2120,10 @@ export default function AiChatPanel({
     } else if (key === 'development-artifacts') {
       setRightPanel({ type: 'development-artifacts' })
     } else if (key === 'field-mapping') {
-      // 字段映射工作台随时可进入：无进行中的绑定时目录仍可浏览（内容区给出只读说明）。
+      // 字段映射工作台随时可进入：无活动绑定且未选中目录时定位到第一个API（直连绑定入口）。
+      if (!fieldMappingSelectedId && !activeBindingObjectId && appApis.length) {
+        claimFieldMappingDraftFor(appApis[0].id)
+      }
       setRightPanel({ type: 'field-mapping' })
     } else if (key === 'test-cases') {
       setRightPanel({ type: 'test-cases' })
@@ -2149,7 +2231,7 @@ export default function AiChatPanel({
       )
       if (item) handleSelectDevelopmentArtifact(item)
       openWorkspaceTab('development-artifacts')
-      setActiveView('chat')
+      onCloseFunctionalDrawer?.()
       setViewingTaskPhase('development')
       const target = task.execTarget
       await handleSend(`验收：${task.title}`, {
@@ -2261,24 +2343,6 @@ export default function AiChatPanel({
     }
   }, [activeSessionId, developmentPlanningPages, sessions])
 
-  const handleShowSkills = (): void => {
-    setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('skills')
-  }
-
-  const handleShowFiles = (): void => {
-    setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('files')
-  }
-
-  const handleShowSettings = (): void => {
-    setPreviewError('')
-    // 应用配置只是覆盖中间工作区的临时抽屉，不改变用户对右侧产物面板的开关选择。
-    setActiveView('settings')
-  }
-
   /**
    * 判断产物当前是否允许再次发起新的实施 Workflow：完成、进行中、已被后台任务接管均不可发起，
    * 仅未开始与失败（可重试）产物开放实施；返回占用状态与对应的禁用原因。
@@ -2366,6 +2430,11 @@ export default function AiChatPanel({
       const artifactId = appApiArtifactId(object.id)
       const occupancy = resolveArtifactOccupancy(artifactId)
       const delivered = object.implementation.confirmed
+      // 绑定进行中（已选来源、尚未确认）的接口允许重新发起工作流：剧本会对既有配置做检查，
+      // 类型/来源节点只展示提示，映射卡预填已保存的配置——与侧面板直连的检查语义对齐；
+      // 已确认完成仍禁止重复发起。
+      const bindingInProgress =
+        !delivered && object.implementation.bindings.some((binding) => binding.sourceId !== 'local')
       return {
         artifactId,
         kind: 'app-api' as const,
@@ -2373,7 +2442,7 @@ export default function AiChatPanel({
         hint: `${object.method} ${object.path}`,
         appApiId: object.id,
         state: resolveArtifactState(artifactId, delivered),
-        disabled: delivered || occupancy.blocked,
+        disabled: delivered || (occupancy.blocked && !bindingInProgress),
         disabledReason: delivered ? '该应用API已完成全部数据绑定' : occupancy.reason
       }
     })
@@ -2608,7 +2677,7 @@ export default function AiChatPanel({
   const startArtifactWorkflow = async (target: DevelopmentTemplateTarget): Promise<void> => {
     const identity = activeSession
     if (!identity) return
-    setActiveView('chat')
+    onCloseFunctionalDrawer?.()
     setViewingTaskPhase('development')
     setGeneratingDetailTargetKey('')
     if (target.kind === 'app-api') {
@@ -2854,7 +2923,7 @@ export default function AiChatPanel({
   /** 点击不通过后切回验收对话，由产品 Agent 提示用户输入验收意见。 */
   const handleSubmitAcceptanceFeedback = (): void => {
     if (versionReadOnly) return
-    setActiveView('chat')
+    onCloseFunctionalDrawer?.()
     setRightPanelLayout('split')
     // 先确保验收默认会话已经成为当前会话，再发起一次不带用户正文的 Agent 提示。
     void createAcceptanceSession()
@@ -3054,7 +3123,8 @@ export default function AiChatPanel({
   }
 
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
-    setActiveView('chat')
+    // 打开会话时只收起文件/技能/设置功能抽屉，让主对话区回到可见状态。
+    onCloseFunctionalDrawer?.()
     // 对话切换只改变消息上下文；右侧产物、文件、预览和未提交弹框都保持用户当前选择。
     await handleOpenSession(sessionId)
   }
@@ -3136,52 +3206,112 @@ export default function AiChatPanel({
     return submitted
   }
 
-  /** 节点卡「打开字段映射」：初始化草稿、把目录定位到当前绑定的API并打开面板（含布局兜底）。 */
-  const openFieldMapping = (): void => {
-    if (!activeBindingWorkflow) return
-    if (!fieldMappingDraft) {
-      setFieldMappingDraft(
-        initialBindingDraft() || {
-          op: '',
-          conditions: [],
-          setters: [],
-          orderBy: '',
-          mappings: [],
-          expressions: {},
-          requestFeeders: {}
-        }
+  /** 草稿自动保存（防抖 600ms）：未确认对象的编辑落盘到应用API存储，异常退出或重开对话后可从草稿继续。 */
+  const scheduleFieldMappingAutosave = (objectId: string, draft: BindingDraft): void => {
+    if (versionReadOnly) return
+    fieldMappingAutosave.current = { objectId, draft }
+    if (fieldMappingAutosaveTimer.current) window.clearTimeout(fieldMappingAutosaveTimer.current)
+    fieldMappingAutosaveTimer.current = window.setTimeout(() => {
+      fieldMappingAutosaveTimer.current = undefined
+      const pending = fieldMappingAutosave.current
+      if (!pending) return
+      // 以存储快照为写入基底：避免用渲染闭包里的旧数组覆盖其它面板刚写入的绑定事实。
+      const objects = readAppApisSnapshot(
+        initializationPlanning.artifacts.requirementSpec,
+        versionViewKey || application.currentVersionId || 'current',
+        initializationPlanning.artifacts.technicalPlan
       )
-    }
-    setFieldMappingSelectedId(activeBindingObjectId)
+      const object = objects.find((item) => item.id === pending.objectId)
+      // 已确认绑定不自动落盘：调整中的配置只有显式「保存更新」才覆盖已确认实现。
+      if (!object || object.implementation.confirmed) return
+      saveAppApisList(
+        objects.map((item) =>
+          item.id === object.id ? withSavedBindingDraft(item, pending.draft) : item
+        )
+      )
+    }, 600)
+  }
+  /** 打开字段映射工作台并定位到目标API：目录选中与草稿底稿一并切换（含布局兜底）。 */
+  const openFieldMappingForObject = (objectId: string): void => {
+    claimFieldMappingDraftFor(objectId)
     setRightPanel({ type: 'field-mapping' })
     // 面板被收起时恢复分栏；已分栏/全宽则保持用户当前布局。
     if (rightPanelLayout === 'hidden') setRightPanelLayout('split')
   }
+  /** 节点卡「打开字段映射」：定位到当前绑定工作流的API。 */
+  const openFieldMapping = (): void => {
+    if (!activeBindingWorkflow) return
+    openFieldMappingForObject(activeBindingObjectId)
+  }
   /** 目录手动切换选中：只影响面板查看对象，不改变当前绑定工作流的目标。 */
-  const handleFieldMappingSelectApi = (id: string): void => setFieldMappingSelectedId(id)
-  /** 面板内草稿编辑回写：草稿正本在面板层持有，切 Tab 不丢。 */
-  const handleFieldMappingChange = (draft: BindingDraft): void => setFieldMappingDraft(draft)
+  const handleFieldMappingSelectApi = (id: string): void => {
+    claimFieldMappingDraftFor(id)
+  }
+  /** 面板内草稿编辑回写：草稿正本在面板层持有，切 Tab 不丢；未确认对象防抖自动落盘。 */
+  const handleFieldMappingChange = (draft: BindingDraft): void => {
+    setFieldMappingDraft(draft)
+    scheduleFieldMappingAutosave(fieldMappingSelectedId || activeBindingObjectId, draft)
+  }
   /** 面板「保存」：把当前草稿写回应用API状态但不提交确认；已确认绑定保存即更新配置。 */
   const handleFieldMappingSave = (draft: BindingDraft): void => {
     const targetId = fieldMappingSelectedId || activeBindingObjectId
     const storedObject = appApis.find((item) => item.id === targetId)
     if (!storedObject) return
+    // 显式保存与自动保存内容一致：取消挂起的定时器，避免落盘两次。
+    if (fieldMappingAutosaveTimer.current) {
+      window.clearTimeout(fieldMappingAutosaveTimer.current)
+      fieldMappingAutosaveTimer.current = undefined
+    }
     saveAppApisList(
       appApis.map((item) => (item.id === storedObject.id ? withSavedBindingDraft(item, draft) : item))
     )
   }
-  /** 面板确认：整份草稿随 api_binding 答案提交，成功后收口回开发产物视图。 */
+  /** 直连选定数据来源：与工作流「选来源」同一落位（模板槽位 + AI 初步映射 + 推荐表达式），选定后进入映射编辑。 */
+  const handleFieldMappingSelectSource = (targetKey: string): void => {
+    const targetId = fieldMappingSelectedId || activeBindingObjectId
+    const object = appApis.find((item) => item.id === targetId)
+    if (!object || object.implementation.confirmed || versionReadOnly) return
+    const target = flattenTargets(readDataSources()).find((item) => item.key === targetKey)
+    if (!target) return
+    const boundObject = withSelectedSource(object, target, readDataSources())
+    saveAppApisList(appApis.map((item) => (item.id === boundObject.id ? boundObject : item)))
+    setFieldMappingDraft(bindingDraftFrom(boundObject))
+  }
+  /** 面板确认：工作流内整份草稿随 api_binding 答案提交；直连路径按「确认绑定」直接定稿。 */
   const handleFieldMappingConfirm = (draft: BindingDraft): void => {
-    if (!activeBindingWorkflow || fieldMappingSubmitting) return
-    setFieldMappingSubmitting(true)
-    void handleSubmitWorkflowClarification(activeBindingWorkflow, { api_binding: draft })
-      .then((submitted) => {
-        setFieldMappingDraft(null)
-        if (submitted && rightPanel?.type === 'field-mapping') {
-          setRightPanel({ type: 'development-artifacts' })
-        }
+    if (fieldMappingSubmitting) return
+    const targetId = fieldMappingSelectedId || activeBindingObjectId
+    if (activeBindingWorkflow && targetId === activeBindingObjectId) {
+      setFieldMappingSubmitting(true)
+      void handleSubmitWorkflowClarification(activeBindingWorkflow, { api_binding: draft })
+        .then((submitted) => {
+          setFieldMappingDraft(null)
+          if (submitted && rightPanel?.type === 'field-mapping') {
+            setRightPanel({ type: 'development-artifacts' })
+          }
+        })
+        .finally(() => setFieldMappingSubmitting(false))
+      return
+    }
+    // 直连确认：无待推进工作流，按工作流确认的同一权威路径定稿实现（必填门禁已在面板拦截）。
+    const object = appApis.find((item) => item.id === targetId)
+    if (!object || object.implementation.confirmed || versionReadOnly) return
+    const confirmedObject = withAppliedBindingDraft(object, draft, readDataSources())
+    saveAppApisList(appApis.map((item) => (item.id === confirmedObject.id ? confirmedObject : item)))
+    // 与工作流确认对齐：适配代码作为交付文件直接落库，产物目录状态随 confirmed 就绪。
+    const adapterSource = buildAppApiAdapterSource(confirmedObject)
+    if (activeSession) {
+      void recordAcceptedFile(activeSession.sessionId, {
+        path: appPath(adapterSource.filePath),
+        content: adapterSource.content
       })
-      .finally(() => setFieldMappingSubmitting(false))
+    }
+    setFieldMappingDraft(null)
+    if (rightPanel?.type === 'field-mapping') {
+      // 回到开发产物并定位到刚确认的接口，直接呈现调试验收视图。
+      setActiveDetailTarget({ type: 'app-api', objectId: targetId })
+      setRightPanel({ type: 'development-artifacts' })
+    }
   }
   // 节点卡的字段映射控制：ready = 面板草稿就绪；confirm 以面板当前草稿提交（确认动作在节点卡上）。
   const fieldMappingControl = {
@@ -3359,8 +3489,18 @@ export default function AiChatPanel({
     }
   }
 
+  // 技能抽屉在聊天面板之外渲染（由工作台页承载），停用技能需转交回这里：
+  // 注册一个稳定的中转回调，内部经 ref 始终指向最新一轮渲染的停用实现，避免闭包过期。
+  const skillDisabledHandlerRef = useRef(handleSkillDisabled)
+  useEffect(() => {
+    skillDisabledHandlerRef.current = handleSkillDisabled
+  })
+  useEffect(() => {
+    onSkillDisabledReady?.((skillName) => skillDisabledHandlerRef.current(skillName))
+  }, [onSkillDisabledReady])
+
   const showRightPanel =
-    activeView === 'chat' && rightPanelLayout !== 'hidden' && Boolean(rightPanel)
+    rightPanelLayout !== 'hidden' && Boolean(rightPanel)
   // 左侧设计文档只允许选中已生成的产物；右侧旧面板若指向未来文档，自动回到当前阶段文档。
   const selectableDesignDocKeys = new Set(
     designDocs.filter((doc) => doc.available).map((doc) => doc.key)
@@ -3514,38 +3654,25 @@ export default function AiChatPanel({
         testCaseTotal={TEST_CASE_ESTIMATE_GROUPS.reduce((total, group) => total + group.total, 0)}
       />
       <PhaseNavigation
-        activeView={activeView}
         backgroundTasksDrawer={backgroundTasksDrawer}
         backgroundTasksRunning={backgroundTasksRunning}
         conversationDrawerOpen={conversationDrawerOpen}
         dataSourcesDrawerOpen={dataSourcesDrawerOpen}
         externalApisDrawerOpen={externalApisDrawerOpen}
-        onOpenConversationManagement={() => {
-          setActiveView('chat')
-          onOpenConversationManagement?.()
-        }}
+        filesDrawerOpen={filesDrawerOpen}
+        settingsDrawerOpen={settingsDrawerOpen}
+        skillsDrawerOpen={skillsDrawerOpen}
+        onOpenConversationManagement={onOpenConversationManagement}
         onOpenBackgroundTasks={(system) => onOpenBackgroundTasks?.(system)}
-        onShowFiles={handleShowFiles}
+        onShowFiles={() => onOpenFiles?.()}
         onShowDataSources={() => onOpenDataSources?.()}
         onShowExternalApis={() => onOpenExternalApis?.()}
-        onShowSettings={handleShowSettings}
-        onShowSkills={handleShowSkills}
+        onShowSettings={() => onOpenSettings?.()}
+        onShowSkills={() => onOpenSkills?.()}
       />
       <div className={cx('ai-chat-assistant')}>
-        {activeView === 'skills' ? (
-          <SkillsPage onSkillDisabled={handleSkillDisabled} />
-        ) : activeView === 'files' ? (
-          <AgentFilesPage />
-        ) : activeView === 'settings' ? (
-          <SettingsPage
-            application={application}
-            onClose={() => setActiveView('chat')}
-            onSaved={onApplicationUpdate}
-          />
-        ) : (
-          <div className={cx('ai-chat-main')}>
-            {activeView === 'chat' ? (
-              <PageContextHeader
+        <div className={cx('ai-chat-main')}>
+            <PageContextHeader
                 conversationTitle={
                   (designSessionSwitching
                     ? renderedTaskPhase === 'planning'
@@ -3572,8 +3699,7 @@ export default function AiChatPanel({
                       }
                 }
               />
-            ) : null}
-            {viewingHistoricalStage && activeView === 'chat' ? (
+            {viewingHistoricalStage ? (
               <div className={cx('historical-task-notice')} role="status">
                 <span>
                   正在查看历史阶段任务，顶部仍处于
@@ -3585,7 +3711,7 @@ export default function AiChatPanel({
                 </button>
               </div>
             ) : null}
-            {showReadOnlyConversationPrompt && activeView === 'chat' ? (
+            {showReadOnlyConversationPrompt ? (
               <div className={cx('conversation-view-notice')} role="status">
                 <span>
                   当前由“{editingConversationTitle}”推进任务；你正在查看“
@@ -3731,7 +3857,6 @@ export default function AiChatPanel({
               />
             </div>
           </div>
-        )}
         {elementInspectionActive && (
           <div aria-hidden="true" className={cx('element-inspection-interaction-mask')} />
         )}
@@ -3752,16 +3877,15 @@ export default function AiChatPanel({
         />
       )}
 
-      {activeView === 'chat' &&
-        (!showRightPanel ||
-          rightPanel?.type === 'preview' ||
-          rightPanel?.type === 'doc' ||
-          rightPanel?.type === 'process' ||
-          rightPanel?.type === 'source' ||
-          rightPanel?.type === 'planning-artifact' ||
-          rightPanel?.type === 'development-artifacts' ||
-          rightPanel?.type === 'field-mapping' ||
-          rightPanel?.type === 'test-cases') &&
+      {(!showRightPanel ||
+        rightPanel?.type === 'preview' ||
+        rightPanel?.type === 'doc' ||
+        rightPanel?.type === 'process' ||
+        rightPanel?.type === 'source' ||
+        rightPanel?.type === 'planning-artifact' ||
+        rightPanel?.type === 'development-artifacts' ||
+        rightPanel?.type === 'field-mapping' ||
+        rightPanel?.type === 'test-cases') &&
         (rightPanelLayout === 'hidden' || Boolean(rightPanel)) && (
           <WorkbenchRightPanel
             tabs={workspaceTabs}
@@ -3824,6 +3948,8 @@ export default function AiChatPanel({
                 pages={developmentPlanningPages}
                 onSelect={handleSelectDevelopmentArtifact}
                 appApiGenerating={appApiGenerating}
+                // 只读版本回看不提供直连绑定入口。
+                onOpenFieldMapping={versionReadOnly ? undefined : openFieldMappingForObject}
               />
             )}
             {rightPanel?.type === 'field-mapping' && (
@@ -3836,6 +3962,15 @@ export default function AiChatPanel({
                 draft={fieldMappingView?.draft ?? null}
                 readOnly={fieldMappingView ? fieldMappingView.readOnly : true}
                 submitting={fieldMappingSubmitting}
+                // 确认按钮跟随路径：活动绑定为「保存并确认」（推进工作流），直连为「确认绑定」（直接定稿）。
+                confirmLabel={
+                  activeBindingWorkflow &&
+                  (fieldMappingSelectedId || activeBindingObjectId) === activeBindingObjectId
+                    ? '保存并确认'
+                    : '确认绑定'
+                }
+                sourceTree={fieldMappingSourceTree}
+                onSelectSource={handleFieldMappingSelectSource}
                 onChange={handleFieldMappingChange}
                 onSave={handleFieldMappingSave}
                 onConfirm={handleFieldMappingConfirm}

@@ -10,53 +10,20 @@
   color: var(--wb-text);
   background:
     radial-gradient(circle at 80% 8%, var(--wb-accent-soft), transparent 28%), var(--wb-canvas);
-  animation: devagentstudio-settings-drawer-enter 0.2s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@keyframes devagentstudio-settings-drawer-enter {
-  from {
-    opacity: 0.96;
-    transform: translateX(22px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
+// 页面头部即功能抽屉的抽屉头：与任务管理等抽屉头部同一套高度、内边距与分隔线。
 .@{class-prefix}-settings-page-header {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
-  padding: 16px 30px;
+  gap: 12px;
+  min-height: 62px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--wb-border);
-}
 
-.@{class-prefix}-settings-page-title-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-
-  h4.ant-typography {
-    margin: 0;
-    color: var(--wb-text);
-    font-size: 18px;
-    font-weight: 700;
-  }
-}
-
-.@{class-prefix}-settings-page-title-icon {
-  font-size: 20px;
-  color: var(--wb-accent, #8b5cf6);
-}
-
-.@{class-prefix}-settings-page-header-right {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-
-  .ant-typography-secondary {
-    font-size: 13px;
+  .@{class-prefix}-settings-save-btn {
+    flex: 0 0 auto;
   }
 }
 
@@ -84,28 +51,6 @@
     background: var(--wb-accent-hover, #7e50f4) !important;
     border-color: var(--wb-accent-hover, #7e50f4) !important;
     color: #fff !important;
-  }
-}
-
-.@{class-prefix}-settings-close-btn.ant-btn {
-  display: inline-flex;
-  width: 32px;
-  height: 32px;
-  align-items: center;
-  justify-content: center;
-  color: var(--wb-text-secondary);
-  border-radius: 8px;
-
-  &:hover,
-  &:focus-visible {
-    color: var(--wb-text);
-    background: var(--wb-surface-hover);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .@{class-prefix}-settings-page {
-    animation: none;
   }
 }
 

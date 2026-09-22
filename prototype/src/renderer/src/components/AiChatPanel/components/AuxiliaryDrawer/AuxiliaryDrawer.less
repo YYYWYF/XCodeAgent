@@ -81,6 +81,23 @@
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-conversation-tabbar,
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-external-apis .@{class-prefix}-conversation-tabbar { margin: -14px -14px 0; }
 
+// 文件/技能/设置是功能页抽屉：与任务管理等抽屉同槽位、同开合动画与互斥规则，
+// 只是铺满整个工作区宽度（面积大一号）；页面自带内边距与滚动，抽屉体不再叠加。
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-files,
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-skills,
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-settings {
+  width: 100%;
+  border-right: 0;
+  box-shadow: none;
+}
+
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-files .@{class-prefix}-auxiliary-drawer-body,
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-skills .@{class-prefix}-auxiliary-drawer-body,
+.@{class-prefix}-auxiliary-drawer.@{class-prefix}-settings .@{class-prefix}-auxiliary-drawer-body {
+  padding: 0;
+  overflow: hidden;
+}
+
 .@{class-prefix}-auxiliary-drawer > header {
   display: flex;
   flex: 0 0 auto;
@@ -132,6 +149,51 @@
 .@{class-prefix}-auxiliary-drawer > header button:hover {
   background: var(--wb-surface-hover);
   color: var(--wb-text);
+}
+
+// 功能页抽屉（文件/技能/设置）：页面自带头部即抽屉头，复用壳头部的排版语言——
+// 徽标（xa-auxiliary-drawer-badge）+ 标题簇 + 右侧动作与关闭按钮，避免上下叠两层。
+.@{class-prefix}-functional-drawer-heading {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.@{class-prefix}-functional-drawer-heading strong {
+  color: var(--wb-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.@{class-prefix}-functional-drawer-heading small {
+  overflow: hidden;
+  color: var(--wb-text-tertiary);
+  font-size: 11px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-drawer-close-btn {
+  display: inline-flex;
+  flex: 0 0 30px;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-text-secondary);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+    color: var(--wb-text);
+  }
 }
 
 /* 头部图标徽标：与后台任务抽屉同款的主题紫软底方块。 */

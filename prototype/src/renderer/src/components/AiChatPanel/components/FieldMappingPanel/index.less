@@ -74,6 +74,24 @@
     white-space: nowrap;
   }
 
+  // 绑定进度点：灰=未开始，紫=绑定中（草稿可续），绿=已确认。
+  .@{class-prefix}-field-mapping-api-state {
+    flex: 0 0 auto;
+    width: 6px;
+    height: 6px;
+    margin-left: auto;
+    border-radius: 50%;
+    background: var(--wb-border-strong);
+
+    &.@{class-prefix}-is-binding {
+      background: var(--wb-accent);
+    }
+
+    &.@{class-prefix}-is-confirmed {
+      background: var(--wb-success);
+    }
+  }
+
   &:hover {
     background: var(--wb-surface-hover);
   }
@@ -224,6 +242,136 @@
   color: var(--wb-text-secondary);
   font-size: 12px;
   font-weight: 600;
+}
+
+// 直连绑定起点：来源选择卡。选项拉通面板宽度，说明文案用次级色平铺。
+.@{class-prefix}-field-mapping-card.@{class-prefix}-source-pick {
+  max-width: 560px;
+}
+
+.@{class-prefix}-field-mapping-source-select {
+  width: 100%;
+}
+
+.@{class-prefix}-field-mapping-source-hint {
+  margin: 0;
+  color: var(--wb-text-tertiary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+// 直连来源树下拉浮层：Select 浮层经 Portal 挂在 body 下，--wb-* 主题变量由
+// global.less 的 body:has 桥接解析，深浅色自动跟随。三级排印分层：
+// 类型分组（图标+加重次级色）→ 连接/域（中等字重）→ 叶子（名称加重 + 说明弱色）。
+// 统一套 .ant-select-dropdown 提升优先级，压过 antd 默认的行样式。
+.ant-select-dropdown {
+  .ant-select-tree {
+    padding: 4px 2px;
+  }
+
+  .ant-select-tree-indent-unit {
+    width: 14px;
+  }
+
+  .ant-select-tree-treenode {
+    padding: 2px 4px 2px 0;
+    border-radius: 7px;
+    transition: background 120ms ease;
+  }
+
+  .ant-select-tree-node-content-wrapper {
+    min-height: 24px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    line-height: 20px;
+    transition: background 120ms ease;
+  }
+
+  .ant-select-tree-node-content-wrapper:hover {
+    background: var(--wb-surface-hover);
+  }
+
+  .ant-select-tree-node-content-wrapper.ant-select-tree-node-selected {
+    background: var(--wb-accent-soft);
+    color: var(--wb-accent);
+  }
+
+  .ant-select-tree-switcher,
+  .ant-select-tree-switcher .ant-tree-switcher-icon {
+    color: var(--wb-text-tertiary);
+  }
+
+  // 列表滚动条默认完全隐形，悬停列表时才浮现 6px 细条：下拉是临时浮层，
+  // 常驻滚动条太抢视线；需要对齐 MessageList 的滚动条弱化约定，只是更收敛一档。
+  .ant-select-tree-list-holder {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+
+    &:hover {
+      scrollbar-color: var(--wb-control-hover) transparent;
+    }
+
+    &::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      border-radius: 3px;
+      background: transparent;
+    }
+
+    &:hover::-webkit-scrollbar-thumb {
+      background: var(--wb-control-hover);
+    }
+  }
+}
+
+.@{class-prefix}-source-tree-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+
+  > .anticon {
+    color: var(--wb-accent);
+  }
+}
+
+// 分组行不可选中：不给悬停底色、保持默认光标。
+.ant-select-dropdown
+  .ant-select-tree-node-content-wrapper:has(.@{class-prefix}-source-tree-group):hover {
+  background: transparent;
+  cursor: default;
+}
+
+.@{class-prefix}-source-tree-conn {
+  color: var(--wb-text);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.@{class-prefix}-source-tree-leaf {
+  strong {
+    color: var(--wb-text);
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+
+  em {
+    margin-left: 2px;
+    overflow: hidden;
+    color: var(--wb-text-tertiary);
+    font-size: 11.5px;
+    font-style: normal;
+    text-overflow: ellipsis;
+  }
 }
 
 .@{class-prefix}-field-mapping-row {

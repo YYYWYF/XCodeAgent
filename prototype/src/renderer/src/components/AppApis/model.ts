@@ -15,7 +15,34 @@ import {
  * 外部 API 只做出入参参数适配（语义不一致处用函数表达式做简单加工）。
  * 计划阶段只记录“实现意向”（来源级选择）；开发阶段完成“绑定映射”（表/接口粒度 +
  * 模板槽位 / 适配行 + 字段映射 + 确认），两段状态共用同一 Implementation 结构。
+ *
+ * 本文件持有类型定义、字段匹配与草稿/确认生命周期；纯推导已按职责拆分并由本文件
+ * 统一再导出（引用方仍从 './model' 导入，无需感知拆分）：
+ * - templates.ts：契约入参全集、注释相似度列评分、增删查改模板；
+ * - adaptation.ts：外部服务适配行、表达式存储键与推荐。
  */
+import {
+  buildTableTemplate,
+  contractRequestParams,
+  scoreFieldToColumn
+} from './templates'
+import { recommendAdaptationExpressions } from './adaptation'
+
+export {
+  buildTableTemplate,
+  contractPathParams,
+  contractRequestParams,
+  deriveTableOp,
+  scoreFieldToColumn
+} from './templates'
+export type { TableTemplate } from './templates'
+export {
+  adaptationExpressionKey,
+  externalAdaptations,
+  mappingSourceName,
+  recommendAdaptationExpressions
+} from './adaptation'
+export type { AdaptationRow } from './adaptation'
 
 export type ImplementationKind = '数据库' | '外部服务' | '本地实现' | '多来源组合'
 
@@ -322,15 +349,6 @@ export type ObjectFieldMatch = {
   matched: boolean
 }
 
-/** 返回字段与表列的相似度评分：注释与字段名同义自动确认，前后缀关系视为疑似。 */
-function scoreFieldToColumn(field: string, column: { name: string; comment: string }): number {
-  if (!column.comment) return 0
-  if (column.comment === field) return 100
-  if (column.comment.includes(field) || field.includes(column.comment)) return 70
-  if (field.length >= 2 && column.comment.startsWith(field)) return 60
-  return 0
-}
-
 /** 把契约返回字段映射到绑定表的列：最高分列作为对应列，低于疑似阈值的保持待确认。 */
 export function matchObjectFields(
   fields: Array<{ name: string }>,
@@ -598,6 +616,19 @@ export type BindingDraft = {
   requestFeeders: Record<string, string>
 }
 
+/** 空白映射绑定草稿：直连绑定（来源未选定或存储无草稿）时的初始底稿。 */
+export function emptyBindingDraft(): BindingDraft {
+  return {
+    op: '',
+    conditions: [],
+    setters: [],
+    orderBy: '',
+    mappings: [],
+    expressions: {},
+    requestFeeders: {}
+  }
+}
+
 /** 从当前实现提取映射绑定草稿：对话卡初始值与历史回放预置应答共用同一来源。 */
 export function bindingDraftFrom(object: AppApi): BindingDraft {
   const implementation = object.implementation
@@ -770,210 +801,7 @@ export function withConfirmedBindings(object: AppApi, sources: DataSource[]): Ap
 }
 
 /* ------------------------------ 模板与参数适配推导 ------------------------------ */
-
-/** 提取契约路径中的占位参数：`/api/rechecks/{id}/reviewer` → ['id']。 */
-export function contractPathParams(path: string): string[] {
-  const params: string[] = []
-  const pattern = /\{([^}]+)\}/g
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(path))) params.push(match[1].trim())
-  return params.filter(Boolean)
-}
-
-/** 契约入参全集：需求文档登记的入参 + 路径占位参数（未登记时按路径合成）。 */
-export function contractRequestParams(object: AppApi): ContractParam[] {
-  const registered = new Set(object.request.map((param) => param.name))
-  const synthesized = contractPathParams(object.path)
-    .filter((name) => !registered.has(name))
-    .map((name) => ({ code: name, name, required: true, summary: `路径参数 {${name}}` }))
-  return [...object.request, ...synthesized]
-}
-
-/**
- * 按接口功能自动判定数据库绑定套用的增删查改模板：
- * HTTP 方法是强信号，名称/用途中的动词做补充；查询类措辞优先于“提交”等背景词。
- */
-export function deriveTableOp(object: AppApi): TableOpKind {
-  const text = `${object.name}${object.description}`
-  if (object.method === 'DELETE' || /删除|移除/.test(text)) return '删除'
-  if (object.method === 'PUT' || object.method === 'PATCH' || /修改|更新|变更/.test(text)) {
-    return '修改'
-  }
-  if (object.method === 'POST' && !/查询|查看|列表|搜索/.test(text)) return '新增'
-  if (/新增|创建|提交|登记/.test(text) && !/查询|查看|列表/.test(text)) return '新增'
-  return '查询'
-}
-
-/** 按业务术语挑列：复用注释相似度评分，返回得分最高的列。 */
-function columnForTerm(
-  term: string,
-  columns: Array<{ name: string; comment: string }>
-): { column: string; columnComment: string } | undefined {
-  const ranked = columns
-    .map((column) => ({ column, value: scoreFieldToColumn(term, column) }))
-    .sort((left, right) => right.value - left.value)
-  const best = ranked[0]
-  return best && best.value > 0
-    ? { column: best.column.name, columnComment: best.column.comment }
-    : undefined
-}
-
-/** 「我的/本人/自己」类契约语义 → 登录态固定条件的触发词。 */
-const LOGIN_SCOPE_PATTERN = /我的|本人|自己/
-
-/** 表绑定模板推导结果：操作类型 + 槽位行 + 自动排序。 */
-export type TableTemplate = {
-  op: TableOpKind
-  conditions: TemplateConditionRow[]
-  setters: TemplateSetterRow[]
-  orderBy: string
-}
-
-/**
- * 数据库绑定的固定增删查改模板：把契约出入参按语义填进模板槽位——
- * 条件/写入行由列注释匹配自动生成，「我的」类接口追加登录态固定条件，
- * 查询模板再按出参中的时间列建议倒序排序。槽位填好后人工只需逐项确认。
- */
-export function buildTableTemplate(object: AppApi, sources: DataSource[]): TableTemplate {
-  const op = deriveTableOp(object)
-  const empty: TableTemplate = { op, conditions: [], setters: [], orderBy: '' }
-  const binding = object.implementation.bindings[0]
-  if (!binding || binding.sourceId === 'local') return empty
-  const target = flattenTargets(sources).find(
-    (item) => item.sourceId === binding.sourceId && item.targetName === binding.targetName
-  )
-  if (!target) return empty
-  if (op === '查询' || op === '删除') {
-    const conditions: TemplateConditionRow[] = []
-    // 「我的回检」这类接口：数据范围由登录态圈定，模板追加一条当前用户固定条件。
-    if (op === '查询' && LOGIN_SCOPE_PATTERN.test(`${object.name}${object.description}`)) {
-      const scope = columnForTerm('申请人', target.fields) || columnForTerm('创建', target.fields)
-      if (scope) {
-        conditions.push({ param: '当前登录用户', fixed: true, ...scope, operator: '等于' })
-      }
-    }
-    contractRequestParams(object).forEach((param) => {
-      // 未匹配到列的契约入参也进模板（落列留空待人工选择），保证出入参映射完整可配。
-      const matched = columnForTerm(param.name, target.fields)
-      conditions.push({
-        param: param.name,
-        fixed: false,
-        column: matched?.column || '',
-        columnComment: matched?.columnComment || '',
-        operator: '等于'
-      })
-    })
-    return {
-      op,
-      conditions,
-      setters: [],
-      orderBy: op === '查询' ? suggestOrderBy(object, target.fields) : ''
-    }
-  }
-  // 新增/修改模板：契约入参逐个落到写入列，未匹配到列的留空待人工选择。
-  const setters = object.request.map((param) => {
-    const matched = columnForTerm(param.name, target.fields)
-    return {
-      param: param.name,
-      column: matched?.column || '',
-      columnComment: matched?.columnComment || '',
-      required: param.required
-    }
-  })
-  return { op, conditions: [], setters, orderBy: '' }
-}
-
-/** 查询模板的自动排序：契约出参对应列中的时间列倒序，让最新记录排在最前。 */
-function suggestOrderBy(
-  object: AppApi,
-  columns: Array<{ name: string; comment: string }>
-): string {
-  const timeColumn = object.response
-    .map((output) => columnForTerm(output.name, columns))
-    .find((item) => item && /时间/.test(item.columnComment))
-  return timeColumn ? `${timeColumn.column} DESC` : ''
-}
-
-/** 一条参数适配行：外部侧一行一条，描述它的取值来源；未连接行 matched=false。 */
-export type AdaptationRow = {
-  direction: '入参适配' | '出参适配'
-  /** 契约侧供值入参名；未连接行为空。 */
-  param: string
-  /** 契约侧业务含义（仅入参适配且来自契约入参时提供）。 */
-  paramSummary: string
-  required: boolean
-  /** 外部侧名称；出参适配未匹配时为空字符串。 */
-  external: string
-  externalComment: string
-  /** 入参适配的外部请求部位：路径参数/查询参数/请求体；出参适配为空。 */
-  location: ExternalApiParamLocation | ''
-  /** 该行是否已连接取值来源；入参适配随连接登记，出参适配随字段映射状态。 */
-  matched: boolean
-}
-
-/** 适配行的表达式存储键：入参/出参分开前缀，避免同名互相覆盖。 */
-export function adaptationExpressionKey(row: AdaptationRow): string {
-  return `${row.direction === '入参适配' ? 'in' : 'out'}:${row.param}`
-}
-
-/** 从字段映射标签还原来源字段名：兼容「来源 · name（说明）」与对话卡草稿的简写「name（说明）」。 */
-function externalNameFromMapping(sourceLabel: string): string {
-  const prefixed = sourceLabel.match(/· (.+?)（/)
-  if (prefixed) return prefixed[1]
-  const short = sourceLabel.match(/^(.+?)（/)
-  return short ? short[1] : ''
-}
-
-/**
- * 外部服务绑定的参数适配视图：外部入参一行一条，取值来源以 requestFeeders 的
- * 显式连接登记为准（契约入参名），没有登记即未连接——不再按名称隐式推导，也不做
- * 固定值补位：应用侧没有对应入参就连线都不显示；出参适配直接读取字段映射的确认
- * 结果，保证与「确认绑定」状态和生成的适配代码一致。
- */
-export function externalAdaptations(object: AppApi, sources: DataSource[]): AdaptationRow[] {
-  if (object.implementation.kind !== '外部服务') return []
-  const target = flattenTargets(sources).find(
-    (item) =>
-      item.sourceKind === 'external_service' &&
-      object.implementation.bindings.some(
-        (binding) => binding.sourceId === item.sourceId && binding.targetName === item.targetName
-      )
-  )
-  if (!target) return []
-  const feeders = object.implementation.requestFeeders || {}
-  const contractParams = contractRequestParams(object)
-  const requestRows: AdaptationRow[] = target.requestParams.map((param) => {
-    const feederName = feeders[param.name] || ''
-    const contractParam = contractParams.find((item) => item.name === feederName)
-    return {
-      direction: '入参适配',
-      param: contractParam?.name || '',
-      paramSummary: contractParam?.summary || '',
-      required: Boolean(param.required),
-      external: param.name,
-      externalComment: param.comment,
-      location: param.location,
-      matched: Boolean(contractParam)
-    }
-  })
-  const responseRows: AdaptationRow[] = object.response.map((output) => {
-    const mapping = object.implementation.mappings.find((item) => item.field === output.name)
-    const externalField = mapping?.matched
-      ? target.fields.find((item) => item.name === externalNameFromMapping(mapping.sourceLabel))
-      : undefined
-    return {
-      direction: '出参适配',
-      param: output.name,
-      paramSummary: '',
-      required: false,
-      external: externalField?.name || '',
-      externalComment: externalField?.comment || '',
-      location: '',
-      matched: Boolean(externalField)
-    }
-  })
-  return [...requestRows, ...responseRows]
-}
+/* 契约/模板推导已拆分至 templates.ts，外部适配推导见 adaptation.ts（本文件统一再导出）。 */
 
 /**
  * 外部必填入参中尚未连接取值来源的名单：映射画布的警示条与「保存并确认」门禁共用，
@@ -987,50 +815,6 @@ export function missingRequiredFeeders(
   return requestParams
     .filter((param) => param.required && !feeders[param.name])
     .map((param) => param.name)
-}
-
-/** 判断两段业务含义是否指同一件事：去掉“路径参数”等套话后看有无二字片段重合。 */
-function termsOverlap(left: string, right: string): boolean {
-  const clean = (text: string): string =>
-    text.replace(/路径参数|请求参数|入参|出参|参数|必填|可选|[，,。·()（）\s]/g, '')
-  const source = clean(left)
-  const target = clean(right)
-  if (!source || !target) return true
-  for (let index = 0; index + 2 <= source.length; index += 1) {
-    if (target.includes(source.slice(index, index + 2))) return true
-  }
-  return false
-}
-
-/**
- * 语义不一致的适配由 AI 推荐一条函数表达式做简单加工。演示启发两类：
- * 入参「回检单号 → 员工工号」这类跨域取数——按回检单号在审核轨迹表定位审核人工号；
- * 出参「申请人」拿到的是工号——按工号回查员工表译成姓名。已有人工表达式时不覆盖。
- */
-export function recommendAdaptationExpressions(
-  object: AppApi,
-  sources: DataSource[]
-): Record<string, string> {
-  const seeded: Record<string, string> = { ...object.implementation.expressions }
-  externalAdaptations(object, sources).forEach((row) => {
-    const key = adaptationExpressionKey(row)
-    if (seeded[key]) return
-    if (row.direction === '入参适配') {
-      // 未连接行没有契约入参语义，不做跨域取数推荐。
-      if (!row.param) return
-      if (termsOverlap(row.paramSummary, row.externalComment)) return
-      if (/回检/.test(row.paramSummary) && /工号|员工/.test(row.externalComment)) {
-        seeded[key] = 'LOOKUP(recheck_audit, recheck_id, reviewer_id)'
-      }
-      return
-    }
-    // 出参适配：来源是工号而契约要姓名/申请人时，回查员工表翻译。
-    if (!row.matched) return
-    if (/申请人|姓名/.test(row.param) && /工号/.test(row.externalComment)) {
-      seeded[key] = 'LOOKUP(user, id, name)'
-    }
-  })
-  return seeded
 }
 
 /** 按绑定结果补齐结构化细节：数据库填增删查改模板槽位，外部服务由渲染期适配推导。 */

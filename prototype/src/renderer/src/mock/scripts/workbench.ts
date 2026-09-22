@@ -23,10 +23,11 @@ import {
   withAppliedBindingDraft,
   withConfirmedBindings,
   withSelectedSource,
+  type AppApi,
   type BindingDraft,
   type ImplementationKind
 } from '../../components/AppApis/model'
-import { flattenTargets, readDataSources } from '../../components/DataSources/catalog'
+import { flattenTargets, readDataSources, type BindableTarget } from '../../components/DataSources/catalog'
 import {
   BACKGROUND_TASK_SYSTEM_LABEL,
   acceptArtifactTask,
@@ -1170,6 +1171,39 @@ async function replayAppApiWorkbench(
     createdAt: new Date().toISOString()
   })
 
+  /**
+   * 「配置映射绑定」澄清载荷：结构对齐映射卡所需的应用契约与目标侧字段，
+   * 草稿从存储实现提取（bindingDraftFrom）——来源选定续跑与已配置检查两条路径共用，
+   * 保证预填行为一致：来源选定时模板槽位、AI 初步映射与已保存的连线/表达式都随卡带入。
+   */
+  const bindingClarificationFor = (
+    sourceObject: AppApi,
+    target: BindableTarget | undefined,
+    message: string
+  ): Record<string, unknown> => ({
+    mode: 'api_binding',
+    status: 'requires_user_input',
+    message,
+    objectName: sourceObject.name,
+    kind: sourceObject.implementation.kind,
+    appMethod: sourceObject.method,
+    appPath: sourceObject.path,
+    sourceName: sourceObject.implementation.bindings[0]?.sourceName || '',
+    targetName: sourceObject.implementation.bindings[0]?.targetName || '',
+    method: target?.method || '',
+    op: sourceObject.implementation.tableOp || '',
+    columns: target ? target.fields : [],
+    requestParams: target ? target.requestParams : [],
+    inputParams: contractRequestParams(sourceObject).map((param) => ({
+      code: param.code,
+      name: param.name,
+      summary: param.summary,
+      required: param.required
+    })),
+    outputs: sourceObject.response,
+    draft: bindingDraftFrom(sourceObject)
+  })
+
   // 节点链固定次序：读取契约 → 选类型 → 选来源 → 配置映射绑定 → 生成适配 → 确认代码。
   // 各续跑分支按“已回答到哪一步”重组轨迹状态，答案逐轮提交、互不合并。
 
@@ -1285,30 +1319,11 @@ async function replayAppApiWorkbench(
         stepTotal
       )
     )
-    const binding = boundObject.implementation.bindings[0]
-    const clarification = {
-      mode: 'api_binding',
-      status: 'requires_user_input',
-      message: `请在下方完成「${object.name}」的映射绑定并确认，确认后生成数据适配逻辑。`,
-      objectName: object.name,
-      kind: boundObject.implementation.kind,
-      appMethod: object.method,
-      appPath: object.path,
-      sourceName: binding?.sourceName || '',
-      targetName: binding?.targetName || '',
-      method: target?.method || '',
-      op: boundObject.implementation.tableOp || '',
-      columns: target ? target.fields : [],
-      requestParams: target ? target.requestParams : [],
-      inputParams: contractRequestParams(boundObject).map((param) => ({
-        code: param.code,
-        name: param.name,
-        summary: param.summary,
-        required: param.required
-      })),
-      outputs: boundObject.response,
-      draft: bindingDraftFrom(boundObject)
-    }
+    const clarification = bindingClarificationFor(
+      boundObject,
+      target,
+      `请在下方完成「${object.name}」的映射绑定并确认，确认后生成数据适配逻辑。`
+    )
     return emit(
       'detail_confirmation',
       'requires_user_input',
@@ -1440,6 +1455,76 @@ async function replayAppApiWorkbench(
           phase: 'detail_confirmation',
           status: 'requires_user_input',
           message: '等待配置数据来源'
+        }
+      }
+    )
+  }
+
+  // 4.5 已有绑定配置检查（新对话重新执行同一条链路时）：侧面板直连或此前运行已选过
+  // 类型与来源（bindings 已落存储）时，类型/来源节点不再重新发问，只按已配置事实展示
+  // 提示，轨迹直接落到「配置映射绑定」——卡片草稿从存储预填（模板槽位、AI 初步映射、
+  // 已保存的连线与表达式都在），用户可直接确认或调整后再确认；已确认完成的接口整链
+  // 直接给完成态，不重复发问也不重复交付适配文件。
+  const configuredBinding = object.implementation.bindings.find(
+    (binding) => binding.sourceId !== 'local'
+  )
+  if (configuredBinding) {
+    const kindLabel = object.implementation.kind === '外部服务' ? '外部API' : '数据表'
+    if (object.implementation.confirmed) {
+      onProcessSteps?.(
+        withProcessStepTotal(
+          [
+            step(structureNode, 'completed', 1),
+            step(typeNode, 'completed', 2, `已配置数据来源类型：${kindLabel}。`),
+            step(sourceNode, 'completed', 3, `已选定数据来源：${configuredBinding.sourceName} · ${configuredBinding.targetName}。`),
+            step(bindingNode, 'completed', 4, '映射绑定此前已确认，配置保持不变。'),
+            step(adapterNode, 'completed', 5, '适配代码此前已生成交付。')
+          ],
+          stepTotal
+        )
+      )
+      return emit(
+        'build',
+        'completed',
+        emitLifecycle(execApi('build', 'completed')),
+        {},
+        { summary: { phase: 'build', status: 'completed', message: '应用API开发已完成（沿用既有绑定配置）' } }
+      )
+    }
+    const checkSources = readDataSources()
+    const configuredTarget = flattenTargets(checkSources).find(
+      (item) =>
+        item.sourceId === configuredBinding.sourceId &&
+        item.targetName === configuredBinding.targetName
+    )
+    const clarification = bindingClarificationFor(
+      object,
+      configuredTarget,
+      `检测到「${object.name}」此前已配置绑定（${kindLabel} · ${configuredBinding.sourceName} · ${configuredBinding.targetName}），已预填到下方；可直接确认，或调整后再确认。`
+    )
+    onProcessSteps?.(
+      withProcessStepTotal(
+        [
+          step(structureNode, 'completed', 1),
+          step(typeNode, 'completed', 2, `检测到已配置数据来源类型：${kindLabel}。`),
+          step(sourceNode, 'completed', 3, `检测到已选定数据来源：${configuredBinding.sourceName} · ${configuredBinding.targetName}。`),
+          step(bindingNode, 'requires_user_input', 4)
+        ],
+        stepTotal
+      )
+    )
+    return emit(
+      'detail_confirmation',
+      'requires_user_input',
+      emitLifecycle(
+        execApi('detail_confirmation', 'awaiting_user', apiBindingInteraction(clarification))
+      ),
+      { clarification },
+      {
+        summary: {
+          phase: 'detail_confirmation',
+          status: 'requires_user_input',
+          message: '等待确认已预填的映射绑定'
         }
       }
     )

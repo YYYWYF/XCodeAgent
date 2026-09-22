@@ -29,7 +29,6 @@ type Props = {
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   editorMode: EditorMode
-  onApplicationUpdate: (application: ApplicationConfig) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onPlanningArtifactsRefresh: () => void
   previewBaseUrl: string
@@ -79,8 +78,24 @@ type Props = {
   onOpenExternalApis?: () => void
   /** 外部API抽屉是否展开。 */
   externalApisDrawerOpen?: boolean
+  /** 左侧菜单打开文件抽屉。 */
+  onOpenFiles?: () => void
+  /** 文件抽屉是否展开。 */
+  filesDrawerOpen?: boolean
+  /** 左侧菜单打开技能抽屉。 */
+  onOpenSkills?: () => void
+  /** 技能抽屉是否展开。 */
+  skillsDrawerOpen?: boolean
+  /** 左侧菜单打开应用设置抽屉。 */
+  onOpenSettings?: () => void
+  /** 应用设置抽屉是否展开。 */
+  settingsDrawerOpen?: boolean
   /** 聊天面板注册任务管理内容查询函数（透传给工作台页）。 */
   onConversationManagementReady?: (query: () => ConversationManagementContent) => void
+  /** 聊天面板注册技能停用回调（技能抽屉在聊天面板之外渲染，经工作台转交）。 */
+  onSkillDisabledReady?: (handler: (skillName: string) => void) => void
+  /** 只关闭文件/技能/设置功能抽屉（透传给聊天面板）。 */
+  onCloseFunctionalDrawer?: () => void
   /** 关闭辅助抽屉（透传给聊天面板）。 */
   onCloseAuxiliaryDrawer?: () => void
   /** 项目计划确认时同步所选的测试用例生成任务类型。 */
@@ -96,7 +111,6 @@ export default function LeftPanel({
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
   editorMode,
-  onApplicationUpdate,
   onApplicationLifecycleChange,
   onPlanningArtifactsRefresh,
   previewBaseUrl,
@@ -126,7 +140,15 @@ export default function LeftPanel({
   dataSourcesDrawerOpen,
   onOpenExternalApis,
   externalApisDrawerOpen,
+  onOpenFiles,
+  filesDrawerOpen,
+  onOpenSkills,
+  skillsDrawerOpen,
+  onOpenSettings,
+  settingsDrawerOpen,
   onConversationManagementReady,
+  onSkillDisabledReady,
+  onCloseFunctionalDrawer,
   onCloseAuxiliaryDrawer,
   onTestCaseGenerationTaskTypeChange
 }: Props): ReactElement {
@@ -143,7 +165,6 @@ export default function LeftPanel({
             developmentPlanningPageTree={developmentPlanningPageTree}
             developmentPlanningApiContracts={developmentPlanningApiContracts}
             editorMode={editorMode}
-            onApplicationUpdate={onApplicationUpdate}
             onApplicationLifecycleChange={onApplicationLifecycleChange}
             onPlanningArtifactsRefresh={onPlanningArtifactsRefresh}
             previewBaseUrl={previewBaseUrl}
@@ -173,7 +194,15 @@ export default function LeftPanel({
             dataSourcesDrawerOpen={dataSourcesDrawerOpen}
             onOpenExternalApis={onOpenExternalApis}
             externalApisDrawerOpen={externalApisDrawerOpen}
+            onOpenFiles={onOpenFiles}
+            filesDrawerOpen={filesDrawerOpen}
+            onOpenSkills={onOpenSkills}
+            skillsDrawerOpen={skillsDrawerOpen}
+            onOpenSettings={onOpenSettings}
+            settingsDrawerOpen={settingsDrawerOpen}
             onConversationManagementReady={onConversationManagementReady}
+            onSkillDisabledReady={onSkillDisabledReady}
+            onCloseFunctionalDrawer={onCloseFunctionalDrawer}
             onCloseAuxiliaryDrawer={onCloseAuxiliaryDrawer}
             onTestCaseGenerationTaskTypeChange={onTestCaseGenerationTaskTypeChange}
           />

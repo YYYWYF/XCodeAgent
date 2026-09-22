@@ -37,6 +37,8 @@ type Props = {
   pageTree: DevelopmentPlanningPageTreeNode[]
   /** 当前选中的应用API适配生成进行中（来自开发工作流状态）。 */
   appApiGenerating?: boolean
+  /** 直连绑定入口：从产物详情直接进入字段映射工作台；只读版本不提供。 */
+  onOpenFieldMapping?: (objectId: string) => void
 }
 
 /** 直接嵌入原型随 Vite 启动的 5190 预览应用，避免浏览器工作台的工具栏和加载遮罩。 */
@@ -78,6 +80,7 @@ function pagePreviewReady(status: WorkbenchArtifactStatus): boolean {
 function DevelopmentArtifactContent({
   activeItem,
   appApiGenerating = false,
+  onOpenFieldMapping,
   pagePreviewUrl,
   requirementSpec,
   technicalPlan,
@@ -86,6 +89,8 @@ function DevelopmentArtifactContent({
   activeItem?: DevelopmentArtifactItem
   /** 当前选中的是应用API且其适配生成进行中。 */
   appApiGenerating?: boolean
+  /** 直连绑定入口：未确认绑定的应用API可直接进入字段映射工作台。 */
+  onOpenFieldMapping?: (objectId: string) => void
   pagePreviewUrl: string
   requirementSpec: Record<string, unknown>
   technicalPlan: Record<string, unknown>
@@ -99,6 +104,7 @@ function DevelopmentArtifactContent({
         versionKey={versionKey}
         technicalPlan={technicalPlan}
         generating={appApiGenerating}
+        onOpenFieldMapping={onOpenFieldMapping}
       />
     )
   }
@@ -147,6 +153,7 @@ export default function DevelopmentArtifactsPanel({
   technicalPlan,
   items,
   onSelect,
+  onOpenFieldMapping,
   pagePreviewUrl,
   pages,
   pageTree,
@@ -204,6 +211,7 @@ export default function DevelopmentArtifactsPanel({
           <DevelopmentArtifactContent
             activeItem={activeItem}
             appApiGenerating={appApiGenerating}
+            onOpenFieldMapping={onOpenFieldMapping}
             pagePreviewUrl={pagePreviewUrl}
             requirementSpec={requirementSpec}
             technicalPlan={technicalPlan}

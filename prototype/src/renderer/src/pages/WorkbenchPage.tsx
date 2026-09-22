@@ -263,6 +263,27 @@ function WorkbenchPage({
     setBackgroundTasksDrawer(null)
     setAuxiliaryDrawerMode((current) => (current === 'external-apis' ? null : 'external-apis'))
   }
+  /** 左侧文件入口与其它抽屉互斥；重复点击同一入口时收起。 */
+  const toggleFilesDrawer = (): void => {
+    setBackgroundTasksDrawer(null)
+    setAuxiliaryDrawerMode((current) => (current === 'files' ? null : 'files'))
+  }
+  /** 左侧技能入口与其它抽屉互斥；重复点击同一入口时收起。 */
+  const toggleSkillsDrawer = (): void => {
+    setBackgroundTasksDrawer(null)
+    setAuxiliaryDrawerMode((current) => (current === 'skills' ? null : 'skills'))
+  }
+  /** 左侧应用设置入口与其它抽屉互斥；重复点击同一入口时收起。 */
+  const toggleSettingsDrawer = (): void => {
+    setBackgroundTasksDrawer(null)
+    setAuxiliaryDrawerMode((current) => (current === 'settings' ? null : 'settings'))
+  }
+  /** 只关闭文件/技能/设置三个功能抽屉；任务管理与数据源抽屉的开合不受影响。 */
+  const closeFunctionalDrawers = (): void => {
+    setAuxiliaryDrawerMode((current) =>
+      current === 'files' || current === 'skills' || current === 'settings' ? null : current
+    )
+  }
   // 抽屉打开期间轮询快照；切走或关闭时停止。
   useEffect(() => {
     if (auxiliaryDrawerMode !== 'conversation-management') return
@@ -315,6 +336,12 @@ function WorkbenchPage({
     },
     []
   )
+  // 技能抽屉的「停用技能」回调同样由聊天面板注册：抽屉在聊天面板之外渲染，
+  // 经 ref 转接后才能始终命中聊天面板当前草稿的技能选择。
+  const skillDisabledHandlerRef = useRef<((skillName: string) => void) | undefined>()
+  const handleSkillDisabledReady = useCallback((handler: (skillName: string) => void) => {
+    skillDisabledHandlerRef.current = handler
+  }, [])
   // 用例生成队列动态绑定：顶部芯片打开用例任务实际所在的任务系统抽屉。
   const testCaseQueueSystem: BackgroundTaskSystem =
     testCaseGenerationTaskType === 'tide' ? 'tide' : 'async'
@@ -774,7 +801,6 @@ function WorkbenchPage({
                 developmentPlanningPageTree={developmentPlanningPageTree}
                 developmentPlanningApiContracts={developmentPlanningApiContracts}
                 editorMode={editorMode}
-                onApplicationUpdate={handleApplicationUpdate}
                 onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
                 previewBaseUrl={previewBaseUrl}
                 previewLaunchError={previewLaunchError}
@@ -802,7 +828,15 @@ function WorkbenchPage({
                 dataSourcesDrawerOpen={auxiliaryDrawerMode === 'data-sources'}
                 onOpenExternalApis={toggleExternalApisDrawer}
                 externalApisDrawerOpen={auxiliaryDrawerMode === 'external-apis'}
+                onOpenFiles={toggleFilesDrawer}
+                filesDrawerOpen={auxiliaryDrawerMode === 'files'}
+                onOpenSkills={toggleSkillsDrawer}
+                skillsDrawerOpen={auxiliaryDrawerMode === 'skills'}
+                onOpenSettings={toggleSettingsDrawer}
+                settingsDrawerOpen={auxiliaryDrawerMode === 'settings'}
                 onConversationManagementReady={handleConversationManagementReady}
+                onSkillDisabledReady={handleSkillDisabledReady}
+                onCloseFunctionalDrawer={closeFunctionalDrawers}
                 onCloseAuxiliaryDrawer={() => setAuxiliaryDrawerMode(null)}
                 backgroundTaskAcceptRequest={backgroundTaskAcceptRequest}
                 onRequestBackgroundTaskContinuation={handleAcceptBackgroundTask}
@@ -835,11 +869,15 @@ function WorkbenchPage({
                     title={BACKGROUND_TASK_SYSTEM_LABEL[system]}
                   />
                 ))}
-                {/* 抽屉常挂载：mode 为 null 即收起态，靠过渡滑出；展开/收起/切换模式动画统一。 */}
+                {/* 抽屉常挂载：mode 为 null 即收起态，靠过渡滑出；展开/收起/切换模式动画统一。
+                    文件/技能/设置三个功能页抽屉共用同一槽位，application 与保存回调、
+                    技能停用回调都取工作台既有事实源，与聊天面板同源同回调。 */}
                 <AuxiliaryDrawer
+                  application={viewedApplication}
                   conversationManagement={conversationManagementContent}
                   mode={auxiliaryDrawerMode}
                   onClose={() => setAuxiliaryDrawerMode(null)}
+                  onApplicationSaved={handleApplicationUpdate}
                   onOpenConversationManagement={() =>
                     setAuxiliaryDrawerMode('conversation-management')
                   }
@@ -847,6 +885,7 @@ function WorkbenchPage({
                     setAuxiliaryDrawerMode('temporary-conversation')
                   }
                   onRetryTestCases={testCasePreparation.retry}
+                  onSkillDisabled={(skillName) => skillDisabledHandlerRef.current?.(skillName)}
                   testPreparation={testCasePreparation.snapshot}
                 />
               </div>

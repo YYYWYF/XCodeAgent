@@ -17,7 +17,7 @@ import './PhaseNavigation.less'
 
 type Props = {
   /** 打开任务管理抽屉：统一管理当前阶段任务与临时问答。 */
-  onOpenConversationManagement: () => void
+  onOpenConversationManagement?: () => void
   /** 任务管理抽屉是否展开；用于菜单激活态。 */
   conversationDrawerOpen?: boolean
   /** 打开指定任务系统的队列抽屉；两套任务系统各有独立入口。 */
@@ -26,8 +26,10 @@ type Props = {
   backgroundTasksDrawer?: BackgroundTaskSystem | null
   /** 各系统是否有任务正在执行；为真时对应入口显示运行特效引导用户点开查看。 */
   backgroundTasksRunning?: Record<BackgroundTaskSystem, boolean>
-  /** 打开应用文件工作区。 */
+  /** 打开应用文件抽屉；重复点击收起。 */
   onShowFiles: () => void
+  /** 文件抽屉是否展开。 */
+  filesDrawerOpen?: boolean
   /** 打开数据源抽屉；这里只管理数据库连接接入，不承担应用API的数据绑定。 */
   onShowDataSources: () => void
   /** 数据源抽屉是否展开。 */
@@ -36,12 +38,14 @@ type Props = {
   onShowExternalApis: () => void
   /** 外部API抽屉是否展开。 */
   externalApisDrawerOpen?: boolean
-  /** 打开应用配置页。 */
+  /** 打开应用设置抽屉；重复点击收起。 */
   onShowSettings: () => void
-  /** 打开技能页。 */
+  /** 应用设置抽屉是否展开。 */
+  settingsDrawerOpen?: boolean
+  /** 打开技能抽屉；重复点击收起。 */
   onShowSkills: () => void
-  /** 当前中间工作区视图，用于标记已打开的功能。 */
-  activeView?: 'chat' | 'files' | 'settings' | 'skills'
+  /** 技能抽屉是否展开。 */
+  skillsDrawerOpen?: boolean
 }
 
 /** 渲染窄侧栏功能按钮，使用浏览器原生 title 提供普通悬浮提示；indicator 为真时叠加运行呼吸点。 */
@@ -87,12 +91,14 @@ function SidebarAssetIcon({ source }: { source: string }): ReactElement {
 
 /** 渲染固定窄侧栏：顶部为抽屉类入口，用户功能入口与头像沉底分组，中间以弹性空白隔开。 */
 export default function PhaseNavigation({
-  activeView = 'chat',
   backgroundTasksDrawer,
   backgroundTasksRunning = { async: false, tide: false },
   conversationDrawerOpen = false,
   dataSourcesDrawerOpen = false,
   externalApisDrawerOpen = false,
+  filesDrawerOpen = false,
+  settingsDrawerOpen = false,
+  skillsDrawerOpen = false,
   onOpenConversationManagement,
   onOpenBackgroundTasks,
   onShowDataSources,
@@ -108,7 +114,7 @@ export default function PhaseNavigation({
         <RailButton
           active={conversationDrawerOpen}
           ariaLabel="任务管理"
-          onClick={onOpenConversationManagement}
+          onClick={() => onOpenConversationManagement?.()}
           title="任务管理"
         >
           <SidebarAssetIcon source={freeChatIcon} />
@@ -156,7 +162,7 @@ export default function PhaseNavigation({
       <div className={cx('phase-navigation-spacer')} />
       <nav aria-label="用户功能" className={cx('phase-navigation-user-tools')}>
         <RailButton
-          active={activeView === 'files'}
+          active={filesDrawerOpen}
           ariaLabel="文件"
           onClick={onShowFiles}
           title="文件"
@@ -164,7 +170,7 @@ export default function PhaseNavigation({
           <FolderOutlined />
         </RailButton>
         <RailButton
-          active={activeView === 'skills'}
+          active={skillsDrawerOpen}
           ariaLabel="技能"
           onClick={onShowSkills}
           title="技能"
@@ -172,7 +178,7 @@ export default function PhaseNavigation({
           <ThunderboltOutlined />
         </RailButton>
         <RailButton
-          active={activeView === 'settings'}
+          active={settingsDrawerOpen}
           ariaLabel="设置"
           onClick={onShowSettings}
           title="设置"

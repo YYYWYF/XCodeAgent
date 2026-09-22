@@ -25,14 +25,16 @@ function sampleValue(field: string, index: number): string {
  * 应用API产物预览（POSTMAN 语义）：第 1 块是「接口调试」——填参发送验证请求，是产物验收的
  * 主操作；第 2 块是「接口定义」——已实现的基本信息（请求、用途、调用页面、出入参、数据来源），
  * 定义行平铺不套灰底盒。头部徽标配套工作流状态（已完成 / 生成中 / 绑定进行中）；
- * 适配生成期间整页给富加载。
+ * 适配生成期间整页给富加载。未确认的绑定可直接在这里发起：进入字段映射工作台
+ * 完成来源选定与连线配置，草稿自动保存，不依赖对话区工作流节点。
  */
 export default function AppApiDevelopmentPanel({
   objectId,
   requirementSpec,
   versionKey,
   technicalPlan,
-  generating = false
+  generating = false,
+  onOpenFieldMapping
 }: {
   objectId: string
   requirementSpec: Record<string, unknown>
@@ -42,6 +44,8 @@ export default function AppApiDevelopmentPanel({
   technicalPlan?: Record<string, unknown>
   /** 该接口的适配生成进行中（来自当前工作流状态）。 */
   generating?: boolean
+  /** 直连绑定入口：进入字段映射工作台继续/发起该接口的绑定；只读版本不提供。 */
+  onOpenFieldMapping?: (objectId: string) => void
 }): ReactElement {
   const [objects] = useAppApis(requirementSpec, versionKey, technicalPlan)
   const catalog = useDataSourceIndex()
@@ -116,10 +120,19 @@ export default function AppApiDevelopmentPanel({
             </div>
           ) : (
             <div className={cx('api-terminal-placeholder')}>
-              <strong>数据绑定进行中</strong>
+              <strong>数据绑定待完成</strong>
               <span>
-                该应用API正在对话区工作流内完成数据绑定；绑定确认后，这里会提供接口调用与验收视图。
+                可以直接在这里发起绑定：进入字段映射工作台完成来源选定、连线与表达式配置，草稿自动保存，中断后随时可继续。
               </span>
+              {/* 直连入口：已选定来源为「继续」，未选定为先选来源；来源已从目录移除时只保留警示。 */}
+              {missing.length === 0 && onOpenFieldMapping && (
+                <Button
+                  type="primary"
+                  onClick={() => onOpenFieldMapping(object.id)}
+                >
+                  {implementation.bindings.length ? '继续字段映射' : '绑定数据来源'}
+                </Button>
+              )}
             </div>
           )}
         </div>

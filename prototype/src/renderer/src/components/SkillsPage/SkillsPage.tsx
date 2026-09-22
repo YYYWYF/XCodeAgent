@@ -1,13 +1,13 @@
 import {
+  CloseOutlined,
   CloudUploadOutlined,
   ImportOutlined,
   PlusOutlined,
   ReloadOutlined,
-  ThunderboltOutlined,
   ToolOutlined
 } from '@ant-design/icons'
 import { Alert, Button, Empty, Modal, Spin, Tag, Tooltip, Typography, message } from 'antd'
-import type { ReactElement, ReactNode } from 'react'
+import type { CSSProperties, ReactElement, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isAuthenticationFailure } from '../../service/authentication'
 import {
@@ -17,6 +17,7 @@ import {
 } from '../../service/userSkills'
 import type { UserSkill, UserSkillCatalog } from '../../typings'
 import { cx } from '../../utils'
+import thunderboltFilledIcon from '../../assets/icons/thunderbolt-filled.svg'
 import SkillEditorDrawer from './SkillEditorDrawer'
 import SkillZipImportModal from './SkillZipImportModal'
 import SkillCatalogCard from './SkillCatalogCard'
@@ -29,10 +30,12 @@ import {
 import './SkillDelete.less'
 import './SkillsPage.less'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 
 type Props = {
   onSkillDisabled?: (skillName: string) => void
+  /** 关闭承载本页的抽屉；页面头部右侧的关闭按钮直接复用抽屉的收起动作。 */
+  onClose?: () => void
 }
 
 type PendingAction = {
@@ -45,9 +48,10 @@ const pendingActions: PendingAction[] = [
   { label: '批量操作', icon: <ToolOutlined /> }
 ]
 
-/** 渲染支持来源分类、启停、刷新和用户技能维护的技能页面。 */
+/** 渲染支持来源分类、启停、刷新和用户技能维护的技能页面；页面头部即抽屉头。 */
 export default function SkillsPage({
-  onSkillDisabled
+  onSkillDisabled,
+  onClose
 }: Props): ReactElement {
   const [catalog, setCatalog] = useState<UserSkillCatalog>()
   const [error, setError] = useState('')
@@ -190,17 +194,21 @@ export default function SkillsPage({
   return (
     <section className={cx('skills-page')} aria-label="技能">
       <header className={cx('skills-header')}>
-        <div className={cx('skills-title')}>
-          <span className={cx('skills-title-icon')} aria-hidden="true">
-            <ThunderboltOutlined />
-          </span>
-          <div>
-            <div className={cx('skills-title-line')}>
-              <Title level={4}>技能</Title>
-              <Tag>{categorySkills.length} 个{category === 'user' ? '用户' : '内置'}</Tag>
-            </div>
-            <Text>{categoryRoot || (category === 'user' ? '~/.devagentstudio_dev/skills' : '/.devagentstudio/builtin-skills')}</Text>
+        <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
+          <span
+            aria-hidden="true"
+            className={cx('auxiliary-drawer-badge-icon')}
+            style={
+              { '--auxiliary-drawer-badge-source': `url("${thunderboltFilledIcon}")` } as CSSProperties
+            }
+          />
+        </span>
+        <div className={cx('functional-drawer-heading')}>
+          <div className={cx('skills-title-line')}>
+            <strong>技能</strong>
+            <Tag>{categorySkills.length} 个{category === 'user' ? '用户' : '内置'}</Tag>
           </div>
+          <small>{categoryRoot || (category === 'user' ? '~/.devagentstudio_dev/skills' : '/.devagentstudio/builtin-skills')}</small>
         </div>
         <div className={cx('skills-actions')}>
           <Button
@@ -243,6 +251,17 @@ export default function SkillsPage({
             </>
           )}
         </div>
+        {onClose ? (
+          <button
+            aria-label="关闭辅助抽屉"
+            className={cx('drawer-close-btn')}
+            onClick={onClose}
+            title="关闭辅助抽屉"
+            type="button"
+          >
+            <CloseOutlined />
+          </button>
+        ) : null}
       </header>
 
       <SkillCatalogToolbar
