@@ -87,6 +87,7 @@ import {
 import {
   planningMessageActionsDisabled,
   planningMessageHostsSyncError,
+  planningInteractionIsCurrent,
   planningSyncErrorHostMessageIndex,
   resolvePlanningMessageWorkflow
 } from '../src/renderer/src/components/AiChatPanel/components/MessageList/planningMessageWorkflow'
@@ -209,6 +210,10 @@ assert.equal(planningMessageHostsSyncError('状态未同步', 2), true)
 assert.equal(planningMessageHostsSyncError('状态未同步', -1), false)
 assert.equal(planningMessageActionsDisabled(true, true), true)
 assert.equal(planningMessageActionsDisabled(false, true), false)
+// 新 gate/revision 暂时复用旧消息宿主时，当前宿主仍应保持可交互；真正历史卡才失效。
+assert.equal(planningInteractionIsCurrent(false, true), true)
+assert.equal(planningInteractionIsCurrent(true, false), true)
+assert.equal(planningInteractionIsCurrent(false, false), false)
 // 当前审阅门仍由消息 0 承载时，即使同 thread 的最新 Assistant 消息位于 2，也只选择原确认卡。
 const splitPlanningSyncErrorHost = planningSyncErrorHostMessageIndex(
   'technical-plan:gate-g:revision-g',

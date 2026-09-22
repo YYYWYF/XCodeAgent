@@ -90,6 +90,7 @@ import {
 import {
   planningMessageActionsDisabled,
   planningMessageHostsSyncError,
+  planningInteractionIsCurrent,
   planningSyncErrorHostMessageIndex,
   resolvePlanningMessageWorkflow
 } from './planningMessageWorkflow'
@@ -720,6 +721,10 @@ export default function MessageList({
                   planningWorkflow &&
                   (isCurrentPlanningReview || messageIndex === currentPlanningMessageIndex)
               )
+              const currentPlanningInteraction = planningInteractionIsCurrent(
+                isCurrentPlanningReview,
+                isCurrentPlanningMessage
+              )
               const currentPlanningSyncError =
                 messageIndex === syncErrorHostMessageIndex ? planningSyncError : ''
               const planningCardWorkflow = resolvePlanningMessageWorkflow(
@@ -829,7 +834,7 @@ export default function MessageList({
                 planningCardWorkflow && requiresClarification
                   ? browsingDesignHistory
                     ? 'stale'
-                    : messageIndex < messages.length - 1 && !isCurrentPlanningReview
+                    : messageIndex < messages.length - 1 && !currentPlanningInteraction
                       ? 'stale'
                       : conversation || designPhasePlanning
                         ? 'active'
@@ -873,7 +878,7 @@ export default function MessageList({
               const planningArtifactAnswered =
                 Boolean(isPlanningArtifactConfirmationCard) &&
                 messageIndex < messages.length - 1 &&
-                !isCurrentPlanningReview
+                !currentPlanningInteraction
               const isPlanningStageRunningCard =
                 planningCardWorkflow &&
                 isStructuredPlanningWorkflow(planningCardWorkflow) &&
