@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.protocols.revision_preview import build_revision_preview_ag_ui_stream
 from app.services.frontend_project_launcher import _dependency_check_bypass_argv
 from app.services.revision_preview import (
     RevisionPreviewError,
+    _await_revision_preview_url,
     _can_reuse_dependencies,
     materialize_revision,
     revision_preview_dir,
@@ -73,6 +76,28 @@ class RevisionPreviewTests(unittest.TestCase):
 
             self.assertEqual(first, second)
             self.assertTrue(marker.exists(), "重复物化不应重建目录")
+
+    def test_materialize_recovers_missing_registered_worktree(self) -> None:
+        """物理目录丢失但 Git 仍有注册时，应清理失效记录后重新物化。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = self._init_repository(Path(workspace))
+            self._git(root, "tag", "v1.0")
+            materialized = materialize_revision(root, "v1.0")
+
+            # 模拟应用退出或外部清理只删掉目录、没有执行 git worktree remove 的中断状态。
+            shutil.rmtree(materialized)
+            listed = self._git(root, "worktree", "list", "--porcelain")
+            self.assertIn(str(materialized), listed, "测试前置必须保留一条失效注册")
+
+            recovered = materialize_revision(root, "v1.0")
+
+            self.assertEqual(recovered, materialized)
+            self.assertTrue(recovered.is_dir(), "失效注册清理后应重新创建版本工作区")
+            self.assertEqual(
+                self._git(recovered, "rev-parse", "HEAD"),
+                self._git(root, "rev-parse", "v1.0^{commit}"),
+            )
 
     def test_unknown_revision_reports_clear_error(self) -> None:
         """不存在的版本报明确错误，而不是抛底层 Git 失败。"""
@@ -219,6 +244,58 @@ class RevisionPreviewLaunchTests(unittest.TestCase):
 
         self.assertEqual(_dependency_check_bypass_argv("npm", True), [])
         self.assertEqual(_dependency_check_bypass_argv("yarn", True), [])
+
+    def test_ready_log_is_accepted_when_desktop_http_probe_is_unavailable(self) -> None:
+        """HTTP 探测受桌面环境限制时，存活进程的 Vite 就绪日志仍应结束等待。"""
+
+        with tempfile.TemporaryDirectory() as runtime:
+            runtime_root = Path(runtime)
+            (runtime_root / "frontend.pid").write_text("12345", encoding="utf-8")
+            (runtime_root / "frontend.stdout.log").write_text(
+                '\n'.join(
+                    (
+                        'WARN Unsupported engine: wanted: {"node":">=20.19 <23"}',
+                        'VITE v6.4.3 ready in 280 ms',
+                        'Local: http://localhost:3000/',
+                    )
+                ),
+                encoding="utf-8",
+            )
+            (runtime_root / "frontend.stderr.log").write_text("", encoding="utf-8")
+
+            with (
+                patch("app.services.revision_preview._preview_is_ready", return_value=False),
+                patch("app.services.revision_preview._running_pids", return_value=[12345]),
+            ):
+                self.assertEqual(
+                    _await_revision_preview_url(runtime_root),
+                    "http://localhost:3000",
+                )
+
+    def test_ready_log_does_not_hide_fatal_stderr(self) -> None:
+        """即使 stdout 已打印 Local 地址，致命编译错误仍必须阻止就绪。"""
+
+        with tempfile.TemporaryDirectory() as runtime:
+            runtime_root = Path(runtime)
+            (runtime_root / "frontend.pid").write_text("12345", encoding="utf-8")
+            (runtime_root / "frontend.stdout.log").write_text(
+                "VITE ready in 280 ms\nLocal: http://localhost:3000/\n",
+                encoding="utf-8",
+            )
+            (runtime_root / "frontend.stderr.log").write_text(
+                "Cannot find module 'missing-package'\n",
+                encoding="utf-8",
+            )
+
+            with (
+                patch("app.services.revision_preview._preview_is_ready", return_value=False),
+                patch(
+                    "app.services.revision_preview._running_pids",
+                    side_effect=([12345], []),
+                ),
+                patch("app.services.revision_preview.time.sleep", return_value=None),
+            ):
+                self.assertEqual(_await_revision_preview_url(runtime_root), "")
 
 
 class RevisionPreviewProtocolTests(unittest.TestCase):

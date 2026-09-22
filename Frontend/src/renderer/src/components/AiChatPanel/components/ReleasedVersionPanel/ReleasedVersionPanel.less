@@ -122,6 +122,14 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+
+  // BrowserPreviewPanel 在常规工作台中位于纵向容器，会自动横向拉伸；历史版本这里是
+  // 横向 flex 容器，必须显式占满剩余宽度，否则只保留工具栏的内容宽度并在右侧留白。
+  > .@{class-prefix}-browser-preview-panel {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+  }
 }
 
 /* 历史版本预览的加载/错误态：占满内容区并居中，与预览面板本身等宽等高，

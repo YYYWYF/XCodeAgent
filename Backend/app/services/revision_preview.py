@@ -25,6 +25,8 @@ from typing import Any, Callable
 
 from app.services.frontend_project_launcher import (
     SERVER_READY_INTERVAL_SECONDS,
+    _dev_server_log_is_ready,
+    _dev_server_stderr_is_fatal,
     _preview_is_ready,
     _resolve_actual_preview_url,
     _running_pids,
@@ -92,12 +94,28 @@ def materialize_revision(workspace_root: str | Path, revision: str) -> Path:
         return target
 
     # 目录存在但指向别的 commit（或不是合法 worktree）：先摘掉再重建。
-    if target.exists():
+    target_was_missing = not target.exists()
+    if not target_was_missing:
         _remove_worktree(root, target)
+    else:
+        # 应用或系统在 worktree remove 完成前退出时，目录可能已经消失，但 Git 仍保留
+        # 一条 prunable 注册。此时 worktree add 会报 missing but already registered；先让
+        # Git 只清理它已确认失效的注册，再创建本轮物化目录。
+        pruned = _run_git(root, ["worktree", "prune", "--expire", "now"])
+        if pruned.returncode != 0:
+            detail = pruned.stderr.strip() or pruned.stdout.strip() or "未知错误"
+            raise RevisionPreviewError(f"无法清理失效的版本预览工作区：{detail}")
 
     target.parent.mkdir(parents=True, exist_ok=True)
+    add_arguments = ["worktree", "add"]
+    if target_was_missing:
+        # prune 在文件权限受限或 Git 认为记录尚未过期时可能无法删掉注册，而且部分 Git
+        # 版本即使清理失败也返回 0。这里只在目标物理目录明确不存在时加一次 force；它能
+        # 覆盖普通 missing registration，但仍不会覆盖 locked worktree（后者需要两次 force）。
+        add_arguments.append("--force")
+    add_arguments.extend(["--detach", str(target), expected_commit])
     completed = _run_git(
-        root, ["worktree", "add", "--detach", str(target), expected_commit], timeout=120
+        root, add_arguments, timeout=120
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip() or "未知错误"
@@ -249,18 +267,29 @@ def start_revision_preview(
 
 
 def _await_revision_preview_url(runtime_root: Path) -> str:
-    """轮询该版本自己的启动日志，返回实际监听且可访问的地址；超时返回空串。"""
+    """轮询该版本自己的启动日志，返回已就绪进程的实际监听地址；超时返回空串。"""
 
     stdout_log = runtime_root / "frontend.stdout.log"
+    stderr_log = runtime_root / "frontend.stderr.log"
     deadline = time.monotonic() + REVISION_PREVIEW_READY_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         preview_url = _resolve_actual_preview_url(
             stdout_log=stdout_log, stdout_offset=0, fallback_url=""
         )
-        if preview_url and _preview_is_ready(preview_url):
+        running_pids = _running_pids(_runtime_pid(runtime_root))
+        # 桌面后端在部分环境中无法主动访问 Renderer 启动的 loopback 端口；通用前端
+        # 启动器已经使用同一受限降级：仅当本轮 PID 存活、stdout 有标准就绪标志且
+        # stderr 没有致命编译错误时，才允许用日志代替 HTTP 探测。
+        log_ready = bool(
+            preview_url
+            and running_pids
+            and _dev_server_log_is_ready(stdout_log, 0)
+            and not _dev_server_stderr_is_fatal(stderr_log)
+        )
+        if preview_url and running_pids and (_preview_is_ready(preview_url) or log_ready):
             return preview_url
         # 进程已退出就不必再等：日志不会再长出新的监听地址。
-        if not _running_pids(_runtime_pid(runtime_root)):
+        if not running_pids:
             return ""
         time.sleep(SERVER_READY_INTERVAL_SECONDS)
     return ""

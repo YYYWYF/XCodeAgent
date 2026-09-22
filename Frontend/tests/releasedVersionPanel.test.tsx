@@ -119,10 +119,7 @@ test('当前版本停服后清空旧地址并展示启动服务空态', () => {
   )
 
   assert.ok(html.includes('value="about:blank"'), '停服后地址栏应显示 about:blank')
-  assert.ok(
-    html.includes('请点击服务状态内的启动服务按钮进行预览'),
-    '停服后应展示启动服务引导'
-  )
+  assert.ok(html.includes('请点击服务状态内的启动服务按钮进行预览'), '停服后应展示启动服务引导')
   assert.ok(html.includes('browser-preview-service-empty__icon'), '停服空态应展示服务图标')
   assert.ok(!html.includes('<iframe'), '停服后不应继续渲染旧预览 iframe')
 })
@@ -282,6 +279,19 @@ test('历史版本预览未就绪时只给加载态，不落到空白 iframe', (
   })
 })
 
+test('历史版本预览面板横向铺满剩余空间', () => {
+  const styles = readFileSync(
+    `${__FRONTEND_ROOT__}/src/renderer/src/components/AiChatPanel/components/ReleasedVersionPanel/ReleasedVersionPanel.less`,
+    'utf-8'
+  )
+
+  assert.match(
+    styles,
+    />\s*\.@\{class-prefix\}-browser-preview-panel\s*\{[^}]*flex:\s*1 1 auto;[^}]*width:\s*100%;[^}]*min-width:\s*0;/s,
+    '历史版本中的 BrowserPreviewPanel 必须占满横向 flex 容器'
+  )
+})
+
 test('历史版本预览只在预览 tab 激活时启动（懒启动）', () => {
   const decide = (over: Partial<Parameters<typeof shouldRunRevisionPreview>[0]> = {}): boolean =>
     shouldRunRevisionPreview({
@@ -431,7 +441,9 @@ test('RightPanelTabs：不传 onClose 时不渲染关闭按钮', () => {
 })
 
 test('等用户输入新迭代需求时不注入 loading 占位', () => {
-  const decide = (over: Partial<Parameters<typeof shouldInjectPlanningPlaceholder>[0]> = {}) =>
+  const decide = (
+    over: Partial<Parameters<typeof shouldInjectPlanningPlaceholder>[0]> = {}
+  ): boolean =>
     shouldInjectPlanningPlaceholder({
       messageCount: 0,
       stage: 'ready_for_workbench',
