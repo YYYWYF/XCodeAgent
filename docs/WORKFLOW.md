@@ -34,9 +34,9 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 ```text
 START
   └─ 页面/API开发 → api_design_readiness_gate
-      ├─ 缺少或过期 → 返回完整 missing_api_designs，独立弹窗逐项保存，全部完成后统一检测
-      ├─ 全部有效 → 回显完整映射集合并等待用户确认
-      └─ revision 全部一致且确认 → inspect_workspace
+      ├─ 存在 Endpoint → 返回完整 apiDesigns，逐项查看/配置，等待统一检测
+      ├─ 缺少或过期 → missing_api_designs 标记阻断项
+      └─ refresh 且 revision 全部一致 → inspect_workspace
   → inspect_workspace //确定性工作区快照
   → prepare_build_tasks //二次复检 Endpoint 设计并生成静态 Build DAG
   → await_user_input //用户确认 Build DAG
@@ -278,7 +278,7 @@ API 契约在此阶段作为前后端共享事实生成。每个 Endpoint 保存
 
 保存后原子写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`，但不自动启动开发。JSON 保存 TechnicalPlan 契约指纹、自包含字段映射、处理描述和脱敏来源快照；正式字段映射只能是 `source_mapping` 或 `business_description`。TechnicalPlan 改变导致指纹不匹配时状态为“需重新设计”。
 
-页面/API开发入口先进入确定性的 `api_design_readiness_gate`。页面从 `PageImplementationContract.requiredEndpointIds` 收集全部 Endpoint，一次性返回所有缺少或过期设计；API 只检查所选 Endpoint。进入门禁时默认只展示缺失清单，不自动打开映射弹窗；用户点击具体条目的“配置映射”后才打开独立弹窗，保存后在当前会话内标记为“已配置，待检测”，可继续配置其他 Endpoint。用户点击门禁“确认”后统一检测；全部有效后回显完整映射集合，仍需用户点击“确认并继续开发”，确认时再次核对全部 revision，一致后才进入 `inspect_workspace`。无 Endpoint 依赖的页面直接通过。
+页面/API开发入口先进入确定性的 `api_design_readiness_gate`。页面从 `PageImplementationContract.requiredEndpointIds` 收集全部 Endpoint，一次性返回目标范围内的完整状态；只要存在 Endpoint，首次进入就展示已完成、待配置和已失效项，API 只检查并展示所选 Endpoint。进入门禁时不自动打开字段映射工作台；用户点击具体条目后才定位右侧工作台，保存后在当前会话内标记为“已配置，待检测”，可继续配置其他 Endpoint。用户点击门禁“确认并检测”后统一复检；全部有效便直接进入 `inspect_workspace`，不再生成 `api_design_confirmation` 或聚合映射确认卡片。无 Endpoint 依赖的页面直接通过。
 
 SQLite checkpointer 保存各 execution thread 的主 Graph 状态；恢复只携带阻断节点需要的小型结构化状态。开发就绪门缺少动态映射时不在原 thread 写入实体目标；API 设计使用独立 thread，避免 `selected_entity_id` 污染原页面/API checkpoint。API 动态设计确认后仍沿用同一 Endpoint execution 的构建范围，由后端复检当前 Endpoint 设计和 TechnicalPlan 哈希后继续完整开发。
 

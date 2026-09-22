@@ -368,58 +368,6 @@ function workflowClarificationMode(workflow: WorkflowRunPayload): string {
   return String(workflowClarification(workflow)?.mode || '')
 }
 
-/** 读取门禁已确认版本的稳定键，避免同一确认事件重复触发即时会话保存。 */
-function confirmedApiDesignVersion(workflow: WorkflowRunPayload): string | undefined {
-  const candidates: unknown[] = [
-    workflow.summary?.apiDesignResult,
-    workflow.summary?.api_design_result,
-    workflow.state?.apiDesignResult,
-    workflow.state?.api_design_result,
-    workflow.result?.apiDesignResult,
-    workflow.result?.api_design_result,
-    (workflow.summary?.clarification as { apiDesignResult?: unknown } | undefined)?.apiDesignResult,
-    (workflow.state?.clarification as { apiDesignResult?: unknown } | undefined)?.apiDesignResult,
-    (workflow.result?.clarification as { apiDesignResult?: unknown } | undefined)?.apiDesignResult
-  ]
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
-    const value = candidate as Record<string, unknown>
-    if (
-      value.confirmedForDevelopment !== true ||
-      value.status !== 'confirmed' ||
-      !Array.isArray(value.designs)
-    ) continue
-    const targetType = value.targetType === 'page' ? 'page' : value.targetType === 'endpoint' ? 'endpoint' : ''
-    const targetId = String(value.targetId || '').trim()
-    const versions = value.designs
-      .map((item) => {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) return ''
-        const design = item as Record<string, unknown>
-        const snapshot = design.design
-        if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return ''
-        const snapshotValue = snapshot as Record<string, unknown>
-        const apiContractId = String(design.apiContractId || '').trim()
-        const endpointId = String(design.endpointId || '').trim()
-        const revision = String(design.artifactRevision || '').trim()
-        return apiContractId &&
-          endpointId &&
-          revision &&
-          snapshotValue.status === 'confirmed' &&
-          String(snapshotValue.apiContractId || '') === apiContractId &&
-          String(snapshotValue.endpointId || '') === endpointId &&
-          String(snapshotValue.artifactRevision || '') === revision
-          ? `${apiContractId}:${endpointId}:${revision}`
-          : ''
-      })
-      .filter(Boolean)
-      .sort()
-    if (targetType && targetId && versions.length === value.designs.length) {
-      return `${targetType}:${targetId}:${versions.join('|')}`
-    }
-  }
-  return undefined
-}
-
 /** 将用户在调试面板明确选择的构建范围投影为请求字段，优先于会话默认目标。 */
 function workflowFieldsFromBuildScope(scope?: WorkflowBuildExecutionScope): {
   selectedPageId?: string
@@ -1000,9 +948,6 @@ export function useWorkflowConversation({
     let streamedToolCalls: ToolCallRecord[] = []
     let streamedProcessSteps: ProcessStepRecord[] = []
     let latestMessages = nextMessages
-    let apiConfirmationSnapshotKey = ''
-    let apiConfirmationPersistFailed = false
-    let apiConfirmationPersistPromise: Promise<void> = Promise.resolve()
     let executionStartedNotified = false
     let executionFinalized = false
     /** 收口本地运行态；不修改 Backend Pending，避免以 UI 状态猜测生命周期。 */
@@ -1054,32 +999,6 @@ export function useWorkflowConversation({
       streamedWorkflow = nextWorkflow
       setLiveWorkflows((current) => ({ ...current, [identity.key]: nextWorkflow }))
       updateAssistantMessage(streamedContent, nextWorkflow, streamedToolCalls)
-      const confirmedVersion = confirmedApiDesignVersion(nextWorkflow)
-      if (confirmedVersion && confirmedVersion !== apiConfirmationSnapshotKey) {
-        apiConfirmationSnapshotKey = confirmedVersion
-        // 深拷贝当前消息后串行写入，后续 Build 状态更新不会覆盖本次确认快照。
-        const snapshotMessages = JSON.parse(JSON.stringify(latestMessages)) as AgentChatMessage[]
-        apiConfirmationPersistPromise = apiConfirmationPersistPromise
-          .catch(() => undefined)
-          .then(() =>
-            persistSession({
-              editorMode: identity.editorMode,
-              messages: snapshotMessages,
-              sessionId: identity.sessionId,
-              threadId: identity.threadId,
-              titleFrom: options?.titleFrom || trimmedMessage
-            })
-          )
-          .catch((error: unknown) => {
-            apiConfirmationPersistFailed = true
-            setErrors((current) => ({
-              ...current,
-              [identity.key]: error instanceof Error
-                ? `API 映射确认已收到，历史快照保存失败，将在流程结束时重试：${error.message}`
-                : 'API 映射确认已收到，历史快照保存失败，将在流程结束时重试。'
-            }))
-          })
-      }
 
       if (editorMode !== 'frontend') return
       const previewTarget = workflowPreviewTarget(nextWorkflow, true)
@@ -1206,7 +1125,6 @@ export function useWorkflowConversation({
         }))
       }
 
-      await apiConfirmationPersistPromise
       await persistSession({
         editorMode: identity.editorMode,
         messages: completedMessages,
@@ -1226,9 +1144,6 @@ export function useWorkflowConversation({
         // 首次普通 DAG 生成完成后才读取 GET-time planningRefresh；Confirm/Abandon/Regenerate 由既有 action 收口负责。
         () => refreshPendingPlanLifecycle(identity.key)
       )
-      if (apiConfirmationPersistFailed) {
-        setErrors((current) => ({ ...current, [identity.key]: undefined }))
-      }
       if (options?.workflowAction === 'submit_revision_interaction') {
         const continuationHandoff = revisionContinuationHandoffFromWorkflow(finalWorkflow)
         if (continuationHandoff) await onRevisionContinuation(continuationHandoff)
@@ -1237,21 +1152,6 @@ export function useWorkflowConversation({
       return true
     } catch (caughtError) {
       if (isAuthenticationFailure(caughtError)) {
-        if (apiConfirmationSnapshotKey) {
-          // 确认结果已经收到时，认证失败不能回滚到确认前的未绑定消息。
-          await apiConfirmationPersistPromise
-          await persistSession({
-            editorMode: identity.editorMode,
-            messages: latestMessages,
-            sessionId: identity.sessionId,
-            threadId: identity.threadId
-          })
-          setErrors((current) => ({
-            ...current,
-            [identity.key]: '当前登录状态已失效，请重新登录后重试。'
-          }))
-          return false
-        }
         setSessionMessages(identity.key, previousMessages)
         if (options?.clearDraft) setDraftByKey(identity.key, trimmedMessage)
         if (options?.clearDraft) {
@@ -1285,7 +1185,6 @@ export function useWorkflowConversation({
             [identity.key]: stoppedWorkflow
           }))
         }
-        await apiConfirmationPersistPromise
         await persistSession({
           editorMode: identity.editorMode,
           messages: completedMessages,
@@ -1318,7 +1217,6 @@ export function useWorkflowConversation({
           [identity.key]: failedWorkflow
         }))
       }
-      await apiConfirmationPersistPromise
       await persistSession({
         editorMode: identity.editorMode,
         messages: failedMessages,
@@ -1786,13 +1684,11 @@ export function useWorkflowConversation({
     }
     if (
       !conversation &&
-      (clarificationMode === 'api_design_required' || clarificationMode === 'api_design_confirmation') &&
+      clarificationMode === 'api_design_required' &&
       answers.api_design_gate
     ) {
       const action = answers.api_design_gate
-      const actionMessage = action.action === 'confirm'
-        ? '确认当前 API 映射并继续开发。'
-        : '确认当前 API 映射并开始检测。'
+      const actionMessage = '确认当前 API 映射并开始检测。'
       if (loading || workspaceBusy) return false
       return sendWorkflowMessage(actionMessage, {
         clarificationAnswers: answers,

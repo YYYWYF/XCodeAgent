@@ -320,10 +320,10 @@ Endpoint 设计和页面/API开发流程固定为：
 待设计 Endpoint -> 独立映射弹窗 -> 保存 Endpoint JSON/Markdown -> 返回原界面
 页面或 API 开发
   -> api_design_readiness_gate
-  -> 缺少/过期：一次性返回关联 Endpoint 列表 -> END
-  -> 用户逐项补齐后自动或手动重新检测
-  -> 全部就绪：回显完整映射并等待确认
-  -> 确认的 revisions 仍一致：inspect_workspace
+  -> 目标包含 Endpoint：一次性返回全部关联 Endpoint 列表并等待统一检测
+  -> 缺少/过期：列表标识 pending/stale，用户逐项补齐或修改
+  -> 全部就绪：仍可查看或修改完整映射集合
+  -> refresh 且确认的 revisions 仍一致：inspect_workspace
   -> prepare_build_tasks（二次复检 Endpoint 设计）
   -> Build DAG 用户确认
   -> Build / Test / Acceptance
@@ -333,7 +333,7 @@ Endpoint 设计和页面/API开发流程固定为：
 
 每次确认写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用当前 `endpoint-field-mapping.v3`：`source_mapping` 记录完整 `sourceFields`，并用 `processingType` 区分直接映射、单字段业务处理和多字段业务处理；无物理来源的控制字段使用 `business_description`。产物保存当前 TechnicalPlan 契约指纹、自包含 `fieldMappings`、脱敏来源快照和随机十六进制 `artifactRevision`；Markdown 写入同一修订标记并作为用户可见正式产物。双文件替换失败回滚上一版，读取时必须同时验证双文件、当前 Schema、确认状态、TechnicalPlan 指纹和修订号一致；历史结构不读取、不迁移并直接视为 stale。TechnicalPlan 契约改变会使 Endpoint 变为“需重新设计”，确认后的数据源目录变化不主动使其失效；Build 使用快照并在运行时按 `sourceId` 安全解析凭据。
 
-用户确认开发门禁时，工作流消息保存当次聚合 `apiDesignResult` 快照，右侧开发产物通过独立 `/endpoint-designs/run` AG-UI 读取当前正式产物。该接口按当前工作区、API Contract 与 Endpoint 标识提供 `get/prepare/save`，返回 pending、confirmed 或 stale 状态以及结构化设计和 Markdown；保存只更新映射，不启动主工作流。右侧详情与工作流卡片共用请求/返回字段映射投影，弹窗保存后刷新原门禁，仍由用户确认是否继续开发。
+开发门禁只投影目标范围内的 Endpoint 状态，不保存聚合 `apiDesignResult` 快照。右侧开发产物通过独立 `/endpoint-designs/run` AG-UI 读取当前正式产物；该接口按当前工作区、API Contract 与 Endpoint 标识提供 `get/prepare/save`，返回 pending、confirmed 或 stale 状态以及结构化设计和 Markdown。只要目标包含 Endpoint，门禁首次进入就展示完整状态集合；保存只更新映射，不启动主工作流，用户可从已完成条目的“查看映射”进入右侧工作台修改。用户回到门禁点击“确认并检测”后统一复检，全部有效便直接继续开发，不再展示 API 映射确认卡片；无 Endpoint 的纯静态页面直接通过。
 
 旧 EntitySourceBinding 代码、设计页面和独立入口保留，但不再处于正常旅程，不影响 API 设计状态、开发门禁或 Build 上下文。
 

@@ -48,6 +48,23 @@ class ApiDesignReadinessTests(unittest.TestCase):
                 ["orders.list"],
             )
 
+    def test_page_reports_completed_and_missing_designs(self) -> None:
+        """页面门禁同时返回已完成状态与仍需处理的缺失子集。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = _plan()
+            _write_plan(workspace, plan)
+            write_endpoint_design(workspace, _empty_design(workspace, "orders.list"))
+            readiness = api_design_readiness(workspace, plan, target_type="page", target_id="orders")
+            self.assertEqual(
+                [(item["endpoint_id"], item["status"], item["designed"]) for item in readiness["api_designs"]],
+                [("orders.list", "confirmed", True), ("orders.create", "pending", False)],
+            )
+            self.assertEqual(
+                [item["endpoint_id"] for item in readiness["missing_api_designs"]],
+                ["orders.create"],
+            )
+
     def test_page_without_endpoint_dependencies_is_ready(self) -> None:
         """不依赖 Endpoint 的页面应直接通过字段映射检测。"""
 

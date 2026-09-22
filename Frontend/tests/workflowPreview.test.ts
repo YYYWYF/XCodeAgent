@@ -1505,37 +1505,50 @@ test('不在资源集合中的页面仍可自由输入', () => {
   assert.equal(context.dependencyLocked, false)
 })
 
-/** 验证映射门禁结果保留到单测节点时，当前确认按钮仍可见且可操作。 */
-test('已确认 API 映射不遮蔽构建后的单元测试选择', (context) => {
-  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: { localStorage: { getItem: () => null } }
-  })
-  // 恢复全局环境，避免影响同文件其他工作流组件测试。
-  context.after(() => {
-    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
-    else Reflect.deleteProperty(globalThis, 'window')
-  })
+/** 验证 API 设计门禁同时展示已完成、待配置和需重新配置的 Endpoint。 */
+test('API 设计门禁展示目标范围内的完整 Endpoint 状态', () => {
   const workflow: WorkflowRunPayload = {
-    runId: 'unit-run',
-    threadId: 'build-thread',
+    runId: 'api-gate-run',
+    threadId: 'api-gate-thread',
     events: [],
     summary: {
-      phase: 'unit_test',
+      phase: 'api_design_readiness_gate',
       status: 'requires_user_input',
-      clarification: { mode: 'unit_test_confirmation', status: 'requires_user_input' },
-      apiDesignResult: {
-        status: 'confirmed',
-        targetType: 'page',
-        targetId: 'orders',
-        targetLabel: '订单页',
-        confirmedForDevelopment: true,
-        designs: []
+      clarification: {
+        mode: 'api_design_required',
+        status: 'requires_user_input',
+        developmentTarget: { type: 'page', id: 'orders', label: '订单页' },
+        apiDesigns: [
+          {
+            api_contract_id: 'orders-api',
+            endpoint_id: 'orders.list',
+            method: 'GET',
+            path: '/orders',
+            status: 'confirmed',
+            designed: true
+          },
+          {
+            api_contract_id: 'orders-api',
+            endpoint_id: 'orders.create',
+            method: 'POST',
+            path: '/orders',
+            status: 'pending',
+            designed: false,
+            reason: '缺少当前版 API 设计产物。'
+          },
+          {
+            api_contract_id: 'orders-api',
+            endpoint_id: 'orders.archive',
+            method: 'DELETE',
+            path: '/orders/:id',
+            status: 'stale',
+            designed: false,
+            reason: 'TechnicalPlan 已变化。'
+          }
+        ]
       }
     }
   }
-  // 只提供卡片依赖的工作台上下文，阶段导航持久化由独立测试覆盖。
   const phaseContext = {
     phase: 'development' as const,
     derivedPhase: 'development' as const,
@@ -1556,32 +1569,76 @@ test('已确认 API 映射不遮蔽构建后的单元测试选择', (context) =>
       })
     )
   )
-  assert.match(markup, /是，跳过单元测试/)
-  assert.match(markup, /否，继续执行/)
-  assert.doesNotMatch(markup, /API 映射已确认/)
-  assert.doesNotMatch(markup, /<button[^>]*disabled/)
+  assert.match(markup, /已完成/)
+  assert.match(markup, /查看映射/)
+  assert.match(markup, /相关接口/)
+  assert.match(markup, /3个接口/)
+  assert.match(markup, /待配置/)
+  assert.match(markup, /需重新配置/)
+  assert.match(markup, /配置映射/)
+  assert.match(markup, /确认并检测/)
+})
 
-  // 原始映射门禁的已确认快照仍展示正式映射结果。
-  const historicalMarkup = renderToStaticMarkup(
+/** 验证全部 Endpoint 已完成时，门禁仍提供查看映射和统一检测入口。 */
+test('API 设计门禁在全部完成时仍展示字段映射概览', () => {
+  const workflow: WorkflowRunPayload = {
+    runId: 'api-gate-ready-run',
+    threadId: 'api-gate-ready-thread',
+    events: [],
+    summary: {
+      phase: 'api_design_readiness_gate',
+      status: 'requires_user_input',
+      clarification: {
+        mode: 'api_design_required',
+        status: 'requires_user_input',
+        developmentTarget: { type: 'page', id: 'orders', label: '订单页' },
+        apiDesigns: [
+          {
+            api_contract_id: 'orders-api',
+            endpoint_id: 'orders.list',
+            method: 'GET',
+            path: '/orders',
+            status: 'confirmed',
+            designed: true
+          },
+          {
+            api_contract_id: 'orders-api',
+            endpoint_id: 'orders.create',
+            method: 'POST',
+            path: '/orders',
+            status: 'confirmed',
+            designed: true
+          }
+        ],
+        missingApiDesigns: []
+      }
+    }
+  }
+  const phaseContext = {
+    phase: 'development' as const,
+    derivedPhase: 'development' as const,
+    reachedPhase: 'development' as const,
+    manualOverride: null,
+    agent: WORKBENCH_PHASE_AGENTS.development,
+    recordReachedPhase: () => {},
+    switchPhase: () => {},
+    canEdit: () => false
+  }
+  const markup = renderToStaticMarkup(
     createElement(
       WorkbenchPhaseContext.Provider,
       { value: phaseContext },
       createElement(WorkflowRunCard, {
-        workflow: {
-          ...workflow,
-          summary: {
-            ...workflow.summary,
-            phase: 'api_design_readiness_gate',
-            status: 'completed',
-            clarification: undefined
-          }
-        },
-        interactionAvailability: 'stale'
+        workflow,
+        interactionAvailability: 'active'
       })
     )
   )
-  assert.match(historicalMarkup, /API 映射已确认/)
-  assert.doesNotMatch(historicalMarkup, /是，跳过单元测试/)
+  assert.match(markup, /当前目标的字段映射已准备/)
+  assert.match(markup, /已完成/)
+  assert.equal((markup.match(/查看映射/g) || []).length, 2)
+  assert.match(markup, /确认并检测/)
+  assert.match(markup, /ant-alert-success/)
 })
 
 test('构建卡片将已满足要求的任务展示为完成，并与其他状态保持一致排序', () => {

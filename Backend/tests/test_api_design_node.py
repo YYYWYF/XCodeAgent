@@ -10,11 +10,12 @@ from pathlib import Path
 
 from app.domain.api_design import EndpointApiDesign
 from app.graph.nodes.api_design import api_design_readiness_gate
+from app.services.api_design import ApiDesignError
 from app.workspace.endpoint_design_documents import technical_plan_sha256, write_endpoint_design
 
 
 class ApiDesignNodeTests(unittest.TestCase):
-    """验证页面与接口开发映射门禁的等待、刷新和版本确认语义。"""
+    """验证页面与接口开发映射门禁的等待、刷新和直接放行语义。"""
 
     def test_readiness_node_blocks_without_design(self) -> None:
         """开发前置缺失时返回结构化列表且不会自动进入 API 设计。"""
@@ -33,20 +34,98 @@ class ApiDesignNodeTests(unittest.TestCase):
             self.assertEqual(result["status"], "requires_user_input")
             self.assertEqual(result["clarification"]["mode"], "api_design_required")
 
-    def test_endpoint_ready_waits_for_version_confirmation(self) -> None:
-        """接口自身映射有效后仍需用户确认当前版本。"""
+    def test_required_gate_projects_all_endpoint_states(self) -> None:
+        """部分 Endpoint 已完成时，门禁澄清仍投影目标范围内的完整状态列表。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan = _plan()
             _write_plan(workspace, plan)
             write_endpoint_design(workspace, _empty_design(workspace, "orders.list"))
-            result = api_design_readiness_gate(_endpoint_state(workspace, plan))
+            result = api_design_readiness_gate(
+                {
+                    "workspace": workspace,
+                    "project_plan": plan,
+                    "selectedPageId": "orders",
+                }
+            )
             self.assertEqual(result["status"], "requires_user_input")
-            self.assertEqual(result["clarification"]["mode"], "api_design_confirmation")
-            self.assertEqual(len(result["api_design_result"]["designs"]), 1)
+            self.assertEqual(
+                [(item["endpoint_id"], item["status"]) for item in result["api_design_readiness"]["api_designs"]],
+                [("orders.list", "confirmed"), ("orders.create", "pending")],
+            )
+            self.assertEqual(
+                [item["endpoint_id"] for item in result["clarification"]["apiDesigns"]],
+                ["orders.list", "orders.create"],
+            )
 
-    def test_page_confirmation_binds_all_endpoint_versions(self) -> None:
-        """页面门禁必须回显并确认其全部关联 Endpoint 版本。"""
+    def test_endpoint_ready_shows_gate_before_refresh(self) -> None:
+        """接口自身映射有效时首次仍展示门禁，用户刷新检测后才继续。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = _plan()
+            _write_plan(workspace, plan)
+            write_endpoint_design(workspace, _empty_design(workspace, "orders.list"))
+            waiting = api_design_readiness_gate(_endpoint_state(workspace, plan))
+            self.assertEqual(waiting["status"], "requires_user_input")
+            self.assertEqual(waiting["clarification"]["mode"], "api_design_required")
+            self.assertEqual(waiting["clarification"]["missingApiDesigns"], [])
+            self.assertEqual(waiting["clarification"]["apiDesigns"][0]["status"], "confirmed")
+            completed = api_design_readiness_gate(
+                {
+                    **_endpoint_state(workspace, plan),
+                    "api_design_gate_action": {
+                        "action": "refresh",
+                        "targetType": "endpoint",
+                        "targetId": "orders.list",
+                        "apiContractId": "orders-api",
+                    },
+                }
+            )
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["clarification"], {})
+            self.assertNotIn("api_design_result", completed)
+
+    def test_page_ready_shows_all_endpoint_states_before_refresh(self) -> None:
+        """页面全部接口已完成时仍展示完整列表，便于查看或修改。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = _plan()
+            _write_plan(workspace, plan)
+            for endpoint_id in ("orders.list", "orders.create"):
+                write_endpoint_design(workspace, _empty_design(workspace, endpoint_id))
+            result = api_design_readiness_gate(
+                {
+                    "workspace": workspace,
+                    "project_plan": plan,
+                    "selectedPageId": "orders",
+                }
+            )
+            self.assertEqual(result["status"], "requires_user_input")
+            self.assertEqual(result["clarification"]["missingApiDesigns"], [])
+            self.assertEqual(
+                [item["endpoint_id"] for item in result["clarification"]["apiDesigns"]],
+                ["orders.list", "orders.create"],
+            )
+
+    def test_page_without_endpoints_continues_without_gate(self) -> None:
+        """没有关联 Endpoint 的纯静态页面不展示无内容的门禁卡。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = _plan()
+            plan["page_implementation_contracts"][0]["requiredEndpointIds"] = []
+            _write_plan(workspace, plan)
+            result = api_design_readiness_gate(
+                {
+                    "workspace": workspace,
+                    "project_plan": plan,
+                    "selectedPageId": "orders",
+                }
+            )
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["clarification"], {})
+
+    def test_page_refresh_continues_after_all_endpoints_are_ready(self) -> None:
+        """页面门禁重新检测全部关联 Endpoint 有效后直接继续。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan = _plan()
@@ -58,55 +137,39 @@ class ApiDesignNodeTests(unittest.TestCase):
                 "project_plan": plan,
                 "selectedPageId": "orders",
             }
-            waiting = api_design_readiness_gate(state)
-            designs = waiting["api_design_result"]["designs"]
-            self.assertEqual(len(designs), 2)
-            confirmed = api_design_readiness_gate(
+            completed = api_design_readiness_gate(
                 {
                     **state,
                     "api_design_gate_action": {
-                        "action": "confirm",
+                        "action": "refresh",
                         "targetType": "page",
                         "targetId": "orders",
-                        "versions": [
-                            {
-                                "apiContractId": item["apiContractId"],
-                                "endpointId": item["endpointId"],
-                                "artifactRevision": item["artifactRevision"],
-                            }
-                            for item in designs
-                        ],
                     },
                 }
             )
-            self.assertEqual(confirmed["status"], "completed")
-            self.assertTrue(confirmed["api_design_result"]["confirmedForDevelopment"])
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["clarification"], {})
+            self.assertEqual(len(completed["api_design_readiness"]["api_designs"]), 2)
 
-    def test_changed_revision_returns_to_confirmation(self) -> None:
-        """确认时任一映射版本变化都必须回到当前结果确认态。"""
+    def test_removed_confirmation_action_is_rejected(self) -> None:
+        """旧 confirm 动作不再属于当前门禁合同。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan = _plan()
             _write_plan(workspace, plan)
             write_endpoint_design(workspace, _empty_design(workspace, "orders.list"))
-            result = api_design_readiness_gate(
-                {
-                    **_endpoint_state(workspace, plan),
-                    "api_design_gate_action": {
-                        "action": "confirm",
-                        "targetType": "endpoint",
-                        "targetId": "orders.list",
-                        "apiContractId": "orders-api",
-                        "versions": [{
+            with self.assertRaisesRegex(ApiDesignError, "仅支持重新检测"):
+                api_design_readiness_gate(
+                    {
+                        **_endpoint_state(workspace, plan),
+                        "api_design_gate_action": {
+                            "action": "confirm",
+                            "targetType": "endpoint",
+                            "targetId": "orders.list",
                             "apiContractId": "orders-api",
-                            "endpointId": "orders.list",
-                            "artifactRevision": "f" * 32,
-                        }],
+                        },
                     },
-                }
-            )
-            self.assertEqual(result["status"], "requires_user_input")
-            self.assertEqual(result["clarification"]["mode"], "api_design_confirmation")
+                )
 
 
 def _plan() -> dict:

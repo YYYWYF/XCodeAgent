@@ -13,18 +13,16 @@ import { apiEndpointDisplayPath } from '../../utils'
 import ExternalMapping from './ExternalMapping'
 import { mappingCandidates, selectionKey, setDirectMapping, sourceFieldKey, tableIsSelected } from './model'
 import { useBindingWorkspace } from './useBindingWorkspace'
-import type { BindingControl } from './useBindingWorkspace'
 import './index.less'
 
 type Props = {
   workspaceRoot: string; target?: ApiDesignConfigTarget; contracts: DevelopmentPlanningApiContract[]
   onSelect: (target: ApiDesignConfigTarget) => void; onOpenSources: () => void; onOpenExternalSources: () => void
   onSaved: (target: ApiDesignConfigTarget, result: EndpointDesignSaveResult) => void | Promise<void>
-  onControl: (control?: BindingControl) => void
 }
 
 /** 在常驻页签内编辑直接映射，复杂映射仍交给原有编辑器。 */
-export default function FieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onOpenSources, onOpenExternalSources, onSaved, onControl }: Props): ReactElement {
+export default function FieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onOpenSources, onOpenExternalSources, onSaved }: Props): ReactElement {
   const state = useBindingWorkspace(workspaceRoot, target, onSaved)
   const { entry, catalog, tables, metadata, busy, loading, error, metadataLoading } = state
   const [kind, setKind] = useState<'database' | 'external_api'>()
@@ -45,16 +43,8 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   const editable = Boolean(entry && !entry.readOnly && !entry.complex && !entry.conflict)
   const withoutSource = fields.length === 0 && !selection && entry?.value.draft.fieldMappings.length === 0
   const canConfirm = editable && !Object.keys(errors).length && (withoutSource || fields.length > 0 && Boolean(selection && metadata) && !metadataLoading && !unavailableTable && !missingFields && !missingRequiredExternal)
-  const step = !entry ? 0 : withoutSource ? 3 : !kind ? 1 : !selection ? 2 : 3
-
   useEffect(() => { setKind(undefined); setAdvanced(false) }, [state.key])
   useEffect(() => { if (selection) setKind(selection.sourceType) }, [state.key, selection?.sourceType])
-  useEffect(() => {
-    onControl(target && entry && !entry.readOnly && !entry.complex ? {
-      key: state.key, target, step, busy, canConfirm, confirm: () => { void state.save(true) }
-    } : undefined)
-  }, [state.key, entry, busy, step, canConfirm, metadata, target, onControl])
-  useEffect(() => () => onControl(undefined), [onControl])
 
   const candidates: Array<{ value: string; label: string; selection: BindingSelection }> = kind === 'database'
     ? tables.map((table) => ({ value: selectionKey({ ...table, sourceType: 'database' }),

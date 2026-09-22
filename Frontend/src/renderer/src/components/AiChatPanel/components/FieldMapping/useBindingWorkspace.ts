@@ -12,7 +12,6 @@ import { inferSelection, selectionKey, tableIsSelected } from './model'
 export type BindingEntry = {
   preparation: EndpointDesignPreparation; value: BindingDraft; readOnly: boolean; complex: boolean; conflict: boolean; dirty: boolean
 }
-export type BindingControl = { key: string; target: ApiDesignConfigTarget; step: number; busy: boolean; canConfirm: boolean; confirm: () => void }
 
 /** 为工作台缓存每个接口的编辑状态，切页签与异步返回均不覆盖其他接口。 */
 export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConfigTarget | undefined,

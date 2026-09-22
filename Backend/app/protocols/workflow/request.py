@@ -353,7 +353,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         request = f"从 {resume_from} 节点继续执行 workflow 调试。"
     entity_source_binding_submission = _entity_source_binding_submission(clarification_answers)
     entity_design_action = _entity_design_action(clarification_answers)
-    # API 设计编辑与元数据读取属于独立 AG-UI 端点，主工作流只接受门禁刷新/确认动作。
+    # API 设计编辑与元数据读取属于独立 AG-UI 端点，主工作流只接受门禁重新检测动作。
     if isinstance(clarification_answers, dict) and isinstance(
         clarification_answers.get("api_design"), dict
     ):
@@ -1535,7 +1535,6 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "detail_plans",
         "entity_source_binding_submission",
         "api_design_gate_action",
-        "api_design_result",
         "api_design_readiness",
         "workspace_snapshot_summary",
         "workspace_snapshot_path",
@@ -2442,7 +2441,7 @@ def _entity_design_action(value: Any) -> dict[str, Any] | None:
 
 
 def _api_design_gate_action(value: Any) -> dict[str, Any] | None:
-    """从开发门禁确认答案中提取独立 API 映射版本动作。"""
+    """从开发门禁答案中提取独立 API 映射重新检测动作。"""
 
     if not isinstance(value, dict):
         return None

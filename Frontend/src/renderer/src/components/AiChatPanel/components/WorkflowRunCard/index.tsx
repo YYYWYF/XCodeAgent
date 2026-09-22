@@ -56,10 +56,8 @@ import RevisionImpactReview from '../ApplicationRevisionCard/RevisionImpactRevie
 import RevisionDraftReview from '../ApplicationRevisionCard/RevisionDraftReview'
 import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
 import DetailReview from './DetailReview'
-import ApiDesignConfirmedCard from './ApiDesignConfirmedCard'
 import ApiDesignReadinessGateCard from './ApiDesignReadinessGateCard'
 import type { ApiDesignConfigTarget } from './ApiDesignConfigModal'
-import { readApiDesignResult } from './apiDesignResult'
 import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
@@ -195,9 +193,8 @@ export default function WorkflowRunCard({
     ? []
     : clarification?.questions || []
   const entityDesignGate = clarification?.mode === 'entity_source_binding_required'
-  const apiDesignResult = readApiDesignResult(workflow)
-  const apiDesignConfirmation = clarification?.mode === 'api_design_confirmation'
   const apiDesignRequired = clarification?.mode === 'api_design_required'
+  const apiDesignReadinessGate = apiDesignRequired
   const gateQuestion = clarification?.questions?.[0]
   const entityGateEntities = (clarification?.missing_entities || []).filter((item) =>
     Boolean(
@@ -320,62 +317,11 @@ export default function WorkflowRunCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow.threadId, clarificationFingerprint])
 
-  const awaitingApiDesignConfirmation = apiDesignResult?.status === 'ready' && apiDesignConfirmation
-  // 映射结果会保留在后续节点快照中，仅映射门禁自身可以独占卡片，避免遮蔽单元测试等确认入口。
-  const showingApiDesignGate =
-    apiDesignConfirmation || workflow.summary.phase === 'api_design_readiness_gate'
-  if (
-    apiDesignResult &&
-    showingApiDesignGate &&
-    (apiDesignResult.status === 'confirmed' || awaitingApiDesignConfirmation)
-  ) {
-    const gateAction = {
-      action: 'confirm' as const,
-      targetType: apiDesignResult.targetType,
-      targetId: apiDesignResult.targetId,
-      apiContractId:
-        apiDesignResult.targetType === 'endpoint'
-          ? apiDesignResult.designs[0]?.apiContractId
-          : undefined,
-      versions: apiDesignResult.designs.map((item) => ({
-        apiContractId: item.apiContractId,
-        endpointId: item.endpointId,
-        artifactRevision: item.artifactRevision
-      }))
-    }
-    return (
-      <ApiDesignConfirmedCard
-        awaitingConfirmation={awaitingApiDesignConfirmation}
-        result={apiDesignResult}
-        disabled={disabled || interactionAvailability !== 'active'}
-        onConfirm={
-          awaitingApiDesignConfirmation
-            ? () => onSubmitClarification?.(workflow, { api_design_gate: gateAction })
-            : undefined
-        }
-        onEdit={
-          awaitingApiDesignConfirmation
-            ? (item) => {
-                const endpoint = item.design.endpointContract as Record<string, unknown> | undefined
-                onOpenApiDesignConfig?.(
-                  {
-                    apiContractId: item.apiContractId,
-                    endpointId: item.endpointId,
-                    label: `${String(endpoint?.method || 'API')} ${String(endpoint?.path || item.endpointId)}`
-                  },
-                  workflow
-                )
-              }
-            : undefined
-        }
-      />
-    )
-  }
-
   return (
     <div
       className={cx(
         'workflow-run-card',
+        apiDesignReadinessGate && 'workflow-run-card-api-design-readiness',
         requiresConfirmation && 'workflow-run-card-pending',
         revisionImpact && requiresConfirmation && 'workflow-run-card-revision-impact'
       )}
@@ -383,17 +329,16 @@ export default function WorkflowRunCard({
       <div className={cx('workflow-run-header')}>
         <div className={cx('workflow-run-title')}>
           <span className={cx('workflow-run-signal')} aria-hidden="true" />
-          <div>
-            <Text className={cx('workflow-run-name')} strong>
-              工作流执行
-            </Text>
-          </div>
+          <Text className={cx('workflow-run-name')} strong>
+            工作流执行
+          </Text>
         </div>
         <Tag className={cx('workflow-run-status')} color={workflowStatusColor(status)}>
           {workflowStatusText(status)}
         </Tag>
       </div>
       {workflow.summary.message &&
+        !apiDesignReadinessGate &&
         !revisionImpact &&
         !entityDesignReview &&
         !uiDesignConfirmation &&
@@ -467,8 +412,8 @@ export default function WorkflowRunCard({
         testPhaseConfirmation ||
         reviewPhaseConfirmation ||
         acceptancePhaseConfirmation) && (
-        <div className={cx('workflow-clarification')}>
-          {!revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
+        <div className={cx('workflow-clarification', apiDesignReadinessGate && 'workflow-clarification-api-design-readiness')}>
+          {!apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
             <div className={cx('workflow-clarification-header')}>
               <div>
                 <Text strong>待确认事项</Text>
@@ -621,8 +566,8 @@ export default function WorkflowRunCard({
           ) : apiDesignRequired ? (
             <ApiDesignReadinessGateCard
               disabled={disabled || interactionAvailability !== 'active'}
+              designs={clarification?.apiDesigns || []}
               message={clarification?.message}
-              missing={clarification?.missingApiDesigns || []}
               savedMappingKeys={apiDesignSavedMappingKeys}
               scopeKey={`${workflow.threadId}:${workflow.runId}`}
               onConfigure={(target) => onOpenApiDesignConfig?.(target, workflow)}

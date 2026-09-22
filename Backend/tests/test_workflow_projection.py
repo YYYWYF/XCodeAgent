@@ -6,6 +6,7 @@ from app.protocols.workflow.projection import (
     _public_workflow_state,
     _workflow_code_review_scan,
     _workflow_next_nodes,
+    _workflow_node_detail,
     _workflow_summary,
     _workflow_visual_payload,
 )
@@ -37,7 +38,7 @@ class WorkflowProjectionTests(unittest.TestCase):
         )
 
     def test_api_design_gate_projects_waiting_and_completed_routes(self) -> None:
-        """字段映射门禁等待时停图，确认完成后投影工作区检查。"""
+        """字段映射门禁等待时停图，检测完成后投影工作区检查。"""
 
         self.assertEqual(
             _workflow_next_nodes(
@@ -48,6 +49,20 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertEqual(
             _workflow_next_nodes("api_design_readiness_gate", {"status": "completed"}),
             ["inspect_workspace"],
+        )
+        detail = _workflow_node_detail(
+            "api_design_readiness_gate",
+            {
+                "status": "requires_user_input",
+                "clarification": {
+                    "mode": "api_design_required",
+                    "message": "当前目标的字段映射已准备，请确认检测后继续开发。",
+                },
+            },
+        )
+        self.assertEqual(
+            detail["message"],
+            "当前目标的字段映射已准备，请确认检测后继续开发。",
         )
 
     def test_non_mutating_product_result_projects_as_visible_assistant_reply(self) -> None:

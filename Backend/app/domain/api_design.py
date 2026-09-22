@@ -187,18 +187,10 @@ class ApiDesignAction(ApiDesignModel):
         return self
 
 
-class ApiDesignGateVersion(ApiDesignModel):
-    """描述开发门禁确认时用户看到的一项 Endpoint 映射版本。"""
-
-    api_contract_id: str = Field(alias="apiContractId", min_length=1, max_length=256)
-    endpoint_id: str = Field(alias="endpointId", min_length=1, max_length=256)
-    artifact_revision: str = Field(alias="artifactRevision", pattern=r"^[0-9a-f]{32}$")
-
-
 class ApiDesignGateAction(ApiDesignModel):
-    """描述 API 开发门禁的刷新或版本确认动作。"""
+    """描述 API 开发门禁的重新检测动作。"""
 
-    action: Literal["refresh", "confirm"]
+    action: Literal["refresh"]
     target_type: Literal["page", "endpoint"] = Field(alias="targetType")
     target_id: str = Field(alias="targetId", min_length=1, max_length=256)
     api_contract_id: str | None = Field(
@@ -207,39 +199,14 @@ class ApiDesignGateAction(ApiDesignModel):
         min_length=1,
         max_length=256,
     )
-    versions: list[ApiDesignGateVersion] = Field(default_factory=list, max_length=1000)
 
     @model_validator(mode="after")
     def validate_gate_arguments(self) -> "ApiDesignGateAction":
-        """按目标和动作校验门禁参数，保证刷新与确认都绑定完整开发目标。"""
+        """校验重新检测动作绑定了完整开发目标。"""
 
         if self.target_type == "endpoint" and not self.api_contract_id:
             raise ValueError("Endpoint 开发门禁必须携带 API Contract 标识。")
-        if self.action == "confirm" and not self.versions:
-            raise ValueError("确认 API 映射必须携带当前全部版本。")
-        if self.action == "refresh" and self.versions:
-            raise ValueError("重新检测 API 映射不能携带确认版本。")
         return self
-
-
-class ApiDesignGateDesign(ApiDesignModel):
-    """描述开发门禁回显的一项完整 Endpoint 映射。"""
-
-    api_contract_id: str = Field(alias="apiContractId", min_length=1, max_length=256)
-    endpoint_id: str = Field(alias="endpointId", min_length=1, max_length=256)
-    artifact_revision: str = Field(alias="artifactRevision", pattern=r"^[0-9a-f]{32}$")
-    design: EndpointFieldMappingDesign
-
-
-class ApiDesignGateResult(ApiDesignModel):
-    """描述页面或接口开发门禁的聚合映射结果。"""
-
-    status: Literal["ready", "confirmed"]
-    target_type: Literal["page", "endpoint"] = Field(alias="targetType")
-    target_id: str = Field(alias="targetId", min_length=1, max_length=256)
-    target_label: str = Field(alias="targetLabel", min_length=1, max_length=512)
-    designs: list[ApiDesignGateDesign] = Field(max_length=1000)
-    confirmed_for_development: bool = Field(default=False, alias="confirmedForDevelopment")
 
 
 EndpointApiDesign = EndpointFieldMappingDesign

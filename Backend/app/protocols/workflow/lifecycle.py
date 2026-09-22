@@ -570,7 +570,6 @@ def _pending_interaction(
         "page_acceptance": PendingInteractionType.PAGE_ACCEPTANCE,
         "entity_source_binding": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "entity_source_binding_required": PendingInteractionType.ENTITY_SOURCE_BINDING,
-        "api_design_confirmation": PendingInteractionType.API_DESIGN,
         "api_design_required": PendingInteractionType.API_DESIGN,
         "agent_approval": PendingInteractionType.AGENT_APPROVAL,
         "revision_draft_confirmation": PendingInteractionType.REVISION_DRAFT_CONFIRMATION,

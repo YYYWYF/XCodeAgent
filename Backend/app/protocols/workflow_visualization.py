@@ -137,15 +137,10 @@ def workflow_capabilities() -> dict[str, Any]:
             },
         },
         "clarificationModes": {
-            "api_design_confirmation": {
-                "answerField": "clarificationAnswers.api_design_gate",
-                "actions": ["confirm", "refresh"],
-                "semantics": "confirm-the-currently-displayed-endpoint-design-version-before-development",
-            },
             "api_design_required": {
                 "answerField": "clarificationAnswers.api_design_gate",
                 "actions": ["refresh"],
-                "semantics": "pause-development-until-independent-endpoint-design-config-is-saved",
+                "semantics": "pause-development-until-independent-endpoint-design-config-is-saved; continue-immediately-on-success",
             },
             "unit_test_confirmation": {
                 "answerField": "clarificationAnswers.unit_test_confirmation",
@@ -1482,12 +1477,9 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
     if node_name == "api_design_readiness_gate":
         clarification = update.get("clarification")
         waiting = update.get("status") == "requires_user_input"
-        mode = str(clarification.get("mode") or "") if isinstance(clarification, dict) else ""
         return {
             "message": (
-                "字段映射检测已通过，请确认本次开发使用的版本。"
-                if mode == "api_design_confirmation"
-                else "存在未完成的 API 字段映射。"
+                "存在未完成的 API 字段映射。"
                 if waiting
                 else "API 字段映射门禁已通过。"
             ),
@@ -1495,7 +1487,6 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "clarification": clarification,
                 "requiresUserInput": waiting,
                 "apiDesignReadiness": update.get("api_design_readiness"),
-                "apiDesignResult": update.get("api_design_result"),
             },
         }
     if node_name == "entity_source_binding":

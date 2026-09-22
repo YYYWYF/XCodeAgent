@@ -110,8 +110,8 @@ class ExecutionResourceLockTests(unittest.TestCase):
         self.assertEqual(refresh["source"], "none")
         self.assertEqual(refresh["status"], "idle")
 
-    def test_api_design_confirmation_keeps_execution_running(self) -> None:
-        """API 设计确认后生命周期应投影就绪检查，而不是提前完成 execution。"""
+    def test_api_design_completion_keeps_execution_running(self) -> None:
+        """API 设计完成后生命周期应进入就绪检查，而不是提前完成 execution。"""
 
         with tempfile.TemporaryDirectory() as directory:
             _write_ready_lifecycle(directory)

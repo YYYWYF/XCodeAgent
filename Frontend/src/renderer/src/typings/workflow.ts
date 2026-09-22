@@ -49,7 +49,6 @@ export type WorkflowSummary = {
   testReportResult?: WorkflowTestReportResult
   codeReviewResult?: WorkflowCodeReviewResult
   codeReviewScan?: WorkflowCodeReviewScan
-  apiDesignResult?: Record<string, unknown>
   codeReviewRepair?: WorkflowCodeReviewRepair
   codeReviewRetry?: WorkflowCodeReviewRetry
   unitTestQualityGatePassed?: boolean
@@ -787,38 +786,15 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   implementation_fix_confirmation?: 'approved' | 'rejected'
   /** 正式草稿交互必须携带服务端绑定的 change、revision 与 hash。 */
   revision_draft_interaction?: WorkflowRevisionDraftInteraction
-  /** API 开发门禁的映射版本刷新或确认动作。 */
+  /** API 开发门禁的映射重新检测动作。 */
   api_design_gate?: WorkflowApiDesignGateAction
 }
 
 export type WorkflowApiDesignGateAction = {
-  action: 'refresh' | 'confirm'
+  action: 'refresh'
   targetType: 'page' | 'endpoint'
   targetId: string
   apiContractId?: string
-  versions?: WorkflowApiDesignGateVersion[]
-}
-
-/** 开发门禁确认时绑定的一项 Endpoint 映射版本。 */
-export type WorkflowApiDesignGateVersion = {
-  apiContractId: string
-  endpointId: string
-  artifactRevision: string
-}
-
-/** 开发门禁回显的一项完整 Endpoint 映射。 */
-export type WorkflowApiDesignGateDesign = WorkflowApiDesignGateVersion & {
-  design: Record<string, unknown>
-}
-
-/** 页面或接口开发门禁的聚合映射结果。 */
-export type WorkflowApiDesignGateResult = {
-  status: 'ready' | 'confirmed'
-  targetType: 'page' | 'endpoint'
-  targetId: string
-  targetLabel: string
-  designs: WorkflowApiDesignGateDesign[]
-  confirmedForDevelopment: boolean
 }
 
 /** 开发完成后恢复测试阶段确认节点的协议答案。 */
@@ -871,6 +847,17 @@ export type WorkflowClarificationSelectionGroup = {
   }>
 }
 
+/** API 设计门禁返回的目标 Endpoint 全量状态。 */
+export type WorkflowApiDesignReadinessItem = {
+  api_contract_id?: string
+  endpoint_id?: string
+  method?: string
+  path?: string
+  status?: 'confirmed' | 'pending' | 'stale' | string
+  designed?: boolean
+  reason?: string
+}
+
 export type WorkflowClarification = {
   mode?: string
   status?: string
@@ -905,6 +892,7 @@ export type WorkflowClarification = {
   actionValues?: string[]
   errors?: string[]
   apiDesign?: WorkflowApiDesignPayload
+  apiDesigns?: WorkflowApiDesignReadinessItem[]
   missingApiDesigns?: Array<Record<string, unknown>>
   developmentTarget?: Record<string, unknown>
   [key: string]: unknown

@@ -1,5 +1,5 @@
 import { HolderOutlined } from '@ant-design/icons'
-import { Alert, Button, message } from 'antd'
+import { Alert, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useUncommittedChanges, useWorkbench, useWorkbenchPhase } from '../../context'
@@ -94,7 +94,6 @@ import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import MilestoneCommitReminder from './components/MilestoneCommitReminder'
 import FieldMappingWorkspace from './components/FieldMapping'
-import type { BindingControl } from './components/FieldMapping/useBindingWorkspace'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
 import {
   appendPlanningLoadingPlaceholder,
@@ -217,36 +216,6 @@ function planningUserMessageText(answers: WorkflowClarificationAnswers): string 
     lines.push(`${label}：${text}`)
   }
   return lines.join('\n')
-}
-
-/** 汇总工作流门禁中的全部 Endpoint 映射版本，驱动右侧正式产物在聚合结果变化时刷新。 */
-function workflowApiDesignRevisionKey(workflow?: WorkflowRunPayload): string {
-  if (!workflow) return ''
-  const candidates = [
-    workflow.summary?.apiDesignResult,
-    workflow.summary?.api_design_result,
-    workflow.state?.apiDesignResult,
-    workflow.state?.api_design_result,
-    workflow.result?.apiDesignResult,
-    workflow.result?.api_design_result
-  ]
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
-    const designs = (candidate as Record<string, unknown>).designs
-    if (!Array.isArray(designs)) continue
-    return designs
-      .map((item) => {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) return ''
-        const value = item as Record<string, unknown>
-        return `${String(value.apiContractId || '')}:${String(value.endpointId || '')}:${String(
-          value.artifactRevision || ''
-        )}`
-      })
-      .filter(Boolean)
-      .sort()
-      .join('|')
-  }
-  return ''
 }
 
 const PLANNING_ANSWER_LABELS: Record<string, string> = {
@@ -878,7 +847,6 @@ export default function AiChatPanel({
   }
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
   const [apiDesignConfigTarget, setApiDesignConfigTarget] = useState<ApiDesignConfigTarget>()
-  const [bindingControl, setBindingControl] = useState<BindingControl>()
   const [apiDesignConfigGateWorkflow, setApiDesignConfigGateWorkflow] =
     useState<WorkflowRunPayload>()
   const [apiDesignSavedMappingKeys, setApiDesignSavedMappingKeys] = useState<Set<string>>(
@@ -890,7 +858,6 @@ export default function AiChatPanel({
     setApiDesignConfigTarget(undefined)
     setApiDesignConfigGateWorkflow(undefined)
     setApiDesignSavedMappingKeys(new Set())
-    setBindingControl(undefined)
   }, [application.workspaceRoot])
   // 临时对话仅控制覆盖层可见性，不切换当前工作流会话或持久化上下文。
   const [temporaryChatOpen, setTemporaryChatOpen] = useState(false)
@@ -4697,45 +4664,6 @@ export default function AiChatPanel({
                 planningState={planningState}
               />
 
-              {bindingControl && !otherSessionExecutionLocked ? (
-                <section className="binding-guide" aria-label="字段映射配置步骤">
-                  <ol>
-                    {['读取 API 契约', '选择数据来源类型', '选择数据来源', '配置映射绑定'].map(
-                      (label, index) => (
-                        <li
-                          key={label}
-                          className={bindingControl.step === index ? 'current' : ''}
-                        >
-                          {label}
-                        </li>
-                      )
-                    )}
-                  </ol>
-                  <p>
-                    请在右侧完成「{bindingControl.target.label || bindingControl.target.endpointId}」
-                    的字段映射。确认后仍需通过开发门禁。
-                  </p>
-                  <Button
-                    disabled={bindingControl.busy}
-                    onClick={() => {
-                      setApiDesignConfigTarget(bindingControl.target)
-                      setRightPanel({ type: 'field-mapping' })
-                      onRightPanelOpenChange(true)
-                    }}
-                  >
-                    打开字段映射
-                  </Button>{' '}
-                  <Button
-                    type="primary"
-                    loading={bindingControl.busy}
-                    disabled={!bindingControl.canConfirm}
-                    onClick={bindingControl.confirm}
-                  >
-                    保存并确认
-                  </Button>
-                </section>
-              ) : null}
-
               {milestoneCommitReminderProps && (
                 <MilestoneCommitReminder
                   {...milestoneCommitReminderProps}
@@ -4908,7 +4836,7 @@ export default function AiChatPanel({
       {!isApplicationPlanningPhase && workspaceRoot ? <div className={cx('embedded-preview-pane', 'workspace-pane')} style={{ display: showRightPanel && rightPanel?.type === 'field-mapping' ? undefined : 'none' }}>
         <RightPanelTabs tabs={displayedWorkspaceTabs} active="field-mapping" onChange={openDisplayedWorkspaceTab} onClose={() => { setRightPanel(undefined); onRightPanelOpenChange(false) }} />
         <div className={cx('workspace-content')}><FieldMappingWorkspace key={workspaceRoot} workspaceRoot={workspaceRoot} target={apiDesignConfigTarget}
-          contracts={developmentPlanningApiContracts} onSelect={setApiDesignConfigTarget} onOpenSources={handleShowDataSources} onOpenExternalSources={handleShowExternalApis} onSaved={handleApiDesignConfigSaved} onControl={setBindingControl} /></div>
+          contracts={developmentPlanningApiContracts} onSelect={setApiDesignConfigTarget} onOpenSources={handleShowDataSources} onOpenExternalSources={handleShowExternalApis} onSaved={handleApiDesignConfigSaved} /></div>
       </div> : null}
 
       {showRightPanel && rightPanel?.type === 'outline' && (
@@ -4930,9 +4858,7 @@ export default function AiChatPanel({
               entities={developmentPlanningEntities}
               detailLabel={artifactDetailLabel}
               apiTarget={apiTarget}
-              apiDesignRefreshKey={`${apiDesignRefreshKey}:${workflowApiDesignRevisionKey(
-                latestWorkflowForDisplay
-              )}`}
+              apiDesignRefreshKey={apiDesignRefreshKey}
               workspaceRoot={workspaceRoot}
               outlineLocked={false}
               pages={displayedPlanningPages}

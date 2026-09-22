@@ -15,7 +15,6 @@ from pydantic import TypeAdapter
 from app.domain.api_design import (
     API_DESIGN_SCHEMA_VERSION,
     ApiDesignAction,
-    ApiDesignGateResult,
     ApiDesignGateAction,
     BusinessDescriptionFieldMapping,
     DatabaseSourceField,
@@ -74,7 +73,7 @@ def normalize_api_design_action(value: Any) -> dict[str, Any] | None:
 
 
 def normalize_api_design_gate_action(value: Any) -> dict[str, Any] | None:
-    """把开发门禁提交的版本刷新或确认动作归一化为当前合同。"""
+    """把开发门禁提交的重新检测动作归一化为当前合同。"""
 
     if not isinstance(value, dict):
         return None
@@ -379,6 +378,7 @@ def api_design_readiness(
         target_id=target_id,
         api_contract_id=api_contract_id,
     )
+    designs: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     for contract, endpoint in targets:
         contract_id = str(contract.get("id") or "")
@@ -396,72 +396,27 @@ def api_design_readiness(
                     "designed": False,
                     "reason": str(exc),
                 }
+        item = {
+            "api_contract_id": contract_id,
+            "endpoint_id": endpoint_id,
+            "method": str(endpoint.get("method") or "API"),
+            "path": str(endpoint.get("path") or endpoint_id),
+            "status": status["status"],
+            "designed": bool(status["designed"]),
+            "reason": status["reason"],
+        }
+        designs.append(item)
         if not status["designed"]:
-            missing.append(
-                {
-                    "api_contract_id": contract_id,
-                    "endpoint_id": endpoint_id,
-                    "method": str(endpoint.get("method") or "API"),
-                    "path": str(endpoint.get("path") or endpoint_id),
-                    "status": status["status"],
-                    "reason": status["reason"],
-                }
-            )
+            missing.append(item)
     return {
         "ready": not missing,
         "target_type": target_type,
         "target_id": target_id,
         "api_contract_id": api_contract_id,
         "endpoint_ids": [str(endpoint.get("id") or "") for _, endpoint in targets],
+        "api_designs": designs,
         "missing_api_designs": missing,
     }
-
-
-def api_design_gate_result(
-    workspace_root: str | Path,
-    project_plan: dict[str, Any],
-    *,
-    target_type: str,
-    target_id: str,
-    target_label: str,
-    api_contract_id: str | None = None,
-    confirmed_for_development: bool = False,
-) -> dict[str, Any]:
-    """读取门禁目标的全部当前映射，并生成可确认、可持久化的完整结果。"""
-
-    targets = _target_endpoints(
-        project_plan,
-        target_type=target_type,
-        target_id=target_id,
-        api_contract_id=api_contract_id,
-    )
-    designs: list[dict[str, Any]] = []
-    for contract, endpoint in targets:
-        contract_id = str(contract.get("id") or "")
-        endpoint_id = str(endpoint.get("id") or "")
-        design = read_endpoint_design(workspace_root, contract_id, endpoint_id)
-        if design is None:
-            raise ApiDesignError(f"Endpoint {contract_id}/{endpoint_id} 缺少当前版已确认动态映射。")
-        _validate_persisted_design(project_plan, contract, endpoint, design)
-        designs.append(
-            {
-                "apiContractId": contract_id,
-                "endpointId": endpoint_id,
-                "artifactRevision": str(design.get("artifactRevision") or ""),
-                "design": design,
-            }
-        )
-    result = ApiDesignGateResult.model_validate(
-        {
-            "status": "confirmed" if confirmed_for_development else "ready",
-            "targetType": target_type,
-            "targetId": target_id,
-            "targetLabel": target_label,
-            "designs": designs,
-            "confirmedForDevelopment": confirmed_for_development,
-        }
-    )
-    return result.model_dump(mode="json", by_alias=True)
 
 
 def load_confirmed_endpoint_designs(

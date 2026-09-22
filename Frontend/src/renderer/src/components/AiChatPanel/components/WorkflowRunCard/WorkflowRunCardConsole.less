@@ -29,6 +29,49 @@
   border-color: var(--wb-accent-border);
 }
 
+// API 设计门禁采用独立的流程卡布局，并按聊天工作区尺度突出确认层级。
+.@{class-prefix}-workflow-run-card-api-design-readiness {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border-color: var(--wb-accent-border);
+  border-radius: 14px;
+  box-shadow: 0 18px 42px color-mix(in srgb, var(--wb-accent) 9%, transparent);
+
+  &::before {
+    height: 3px;
+    background: linear-gradient(90deg, var(--wb-accent-active), var(--wb-accent-hover), transparent 86%);
+  }
+
+  .@{class-prefix}-workflow-run-header {
+    padding: 16px 20px 14px;
+    background: transparent;
+    border-bottom: 1px solid var(--wb-border-soft);
+  }
+
+  .@{class-prefix}-workflow-clarification-api-design-readiness {
+    gap: 0;
+    padding: 16px 20px 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+}
+
+@media (max-width: 520px) {
+  .@{class-prefix}-workflow-run-card-api-design-readiness {
+    border-radius: 16px;
+
+    .@{class-prefix}-workflow-run-header {
+      padding: 14px 12px;
+    }
+
+    .@{class-prefix}-workflow-clarification-api-design-readiness {
+      padding: 12px 10px 0;
+    }
+  }
+}
+
 .@{class-prefix}-workflow-run-card-revision-impact {
   gap: 12px;
   padding: 14px;

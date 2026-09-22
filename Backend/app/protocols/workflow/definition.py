@@ -202,15 +202,10 @@ def workflow_capabilities() -> dict[str, Any]:
             "abandonSemantics": "删除精确匹配的 PendingPlan，结束对应 Workflow execution；不取消 active Scheduler。",
         },
         "clarificationModes": {
-            "api_design_confirmation": {
-                "answerField": "clarificationAnswers.api_design_gate",
-                "actions": ["confirm", "refresh"],
-                "semantics": "confirm-all-currently-displayed-target-endpoint-design-versions-before-development",
-            },
             "api_design_required": {
                 "answerField": "clarificationAnswers.api_design_gate",
                 "actions": ["refresh"],
-                "semantics": "pause-page-or-endpoint-development-until-all-required-independent-mappings-pass-recheck",
+                "semantics": "show-target-endpoint-mappings-on-first-entry-for-view-or-edit; refresh-rechecks-all-required-independent-mappings-and-continues-immediately-on-success",
             },
             "build_task_plan_confirmation": {
                 "answerField": "clarificationAnswers.build_task_plan_confirmation",

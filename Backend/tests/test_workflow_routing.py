@@ -44,7 +44,7 @@ class WorkflowRoutingTests(unittest.TestCase):
             self.addCleanup(mocked.stop)
 
     def test_api_design_gate_waits_then_continues_to_workspace_inspection(self) -> None:
-        """字段映射门禁等待配置或确认，通过后才进入工作区检查。"""
+        """字段映射门禁等待配置，通过检测后进入工作区检查。"""
 
         self.assertEqual(
             route_api_design_readiness({"status": "requires_user_input"}),
