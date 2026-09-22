@@ -89,6 +89,7 @@ class Settings:
         "https://github.com/Bettetman/agent-runtime-template.git"
     )
     template_git_agent_runtime_branch: str = "master"
+    template_git_agent_runtime_direct_branch: str = "agent-runtime-direct"
     template_git_clone_timeout_seconds: float = 120.0
     template_engine_connect_timeout_seconds: float = 10.0
     template_engine_read_timeout_seconds: float = 120.0
@@ -250,6 +251,13 @@ class Settings:
                     "XCODEAGENT_TEMPLATE_GIT_AGENT_RUNTIME_BRANCH", "master"
                 ).strip()
                 or "master"
+            ),
+            template_git_agent_runtime_direct_branch=(
+                os.getenv(
+                    "XCODEAGENT_TEMPLATE_GIT_AGENT_RUNTIME_DIRECT_BRANCH",
+                    "agent-runtime-direct",
+                ).strip()
+                or "agent-runtime-direct"
             ),
             template_git_clone_timeout_seconds=float(
                 os.getenv("XCODEAGENT_TEMPLATE_GIT_CLONE_TIMEOUT_SECONDS", "120")

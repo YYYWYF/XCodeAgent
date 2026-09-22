@@ -15,6 +15,7 @@ from app.services.project_plan import (
     validate_technical_plan_agent_contracts,
 )
 from app.services.template_state import load_template_state
+from app.topologies import AGENT_RUNTIME_SERVICE_ID, serves_agent_runtime_public_edge
 from app.workspace.plan_documents import load_project_plan_json
 
 
@@ -271,6 +272,22 @@ def _append_page_binding_blockers(
     """检查产品入口操作仍由页面实现合同指向当前 Agent 网关。"""
 
     invocation = contract.get("invocation") if isinstance(contract.get("invocation"), dict) else {}
+    if serves_agent_runtime_public_edge(technical_plan):
+        # 公开入口由 Runtime 自身承担，页面入口必须指向已确认的 Public Edge 调用合同。
+        if (
+            invocation.get("serviceId") != AGENT_RUNTIME_SERVICE_ID
+            or invocation.get("exposure") != "public"
+            or not str(invocation.get("path") or "").strip()
+        ):
+            blockers.append(
+                _blocker(
+                    "agent_invocation",
+                    str(contract.get("agentId") or ""),
+                    "智能体缺少已确认的 Runtime Public Edge 调用合同。",
+                    "revise_technical_plan",
+                )
+            )
+        return
     gateway_id = str(invocation.get("gatewayEndpointId") or "").strip()
     page_contracts = {
         str(item.get("pageId") or "").strip(): item

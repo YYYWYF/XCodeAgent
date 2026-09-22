@@ -221,6 +221,10 @@ def _frontend_generation_prompt(
     template_context = validate_template_context(context_value) if context_value else {}
     authorization_effective = "authorization" in template_context.get("effective_capabilities", {})
     agent_ui_contracts = _task_agent_ui_contracts(tasks)
+    direct_agent_ui = any(
+        isinstance(contract, dict) and contract.get("mode") == "direct"
+        for contract in agent_ui_contracts
+    )
     data_source_instruction = (
         "## CRITICAL: Data source is STATIC with effective_source=frontend_mock\n"
         "The data source for this page's entities declares type=static. Implement the approved "
@@ -268,10 +272,19 @@ def _frontend_generation_prompt(
         "fixed generated-application Agent UI composition, exact ProductPlan identifiers, "
         "default Mock Adapter use, and the prohibition on real network or duplicate chat core. "
         "READ THIS before editing any task listed in AgentUiMockContracts.\n"
-        if agent_ui_contracts
+        if agent_ui_contracts and not direct_agent_ui
         else ""
     )
     gateway_instruction = (
+        "For page tasks listed in AgentUiMockContracts, mode=direct is the confirmed production "
+        "contract. Use @ag-ui/client and @ag-ui/core through one shared frontend adapter, call only "
+        "the declared publicPath, and consume the launch-injected Agent Runtime Public Edge URL. "
+        "Forward the application login credential through the standard Authorization boundary when "
+        "Auth is enabled; otherwise enable browser credentials for the HttpOnly anonymous session. "
+        "Never send X-Agent-User-Id, X-Agent-Tenant-Id, role, scope, model secrets, or a hand-written "
+        "SSE parser. Do not create a Java Backend/Gateway proxy.\n"
+        if direct_agent_ui
+        else
         "For page tasks listed in AgentUiMockContracts, the future Gateway Endpoint is a stable "
         "reference only: you must not call the future Gateway Endpoint or create an AG-UI client "
         "in this Mock delivery. Other frontend tasks keep their existing endpoint contract.\n"

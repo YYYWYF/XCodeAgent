@@ -13,6 +13,7 @@ from app.services.agent_runtime_template_policy import (
 from app.services.template_state import effective_capabilities, load_template_state, requested_capabilities
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapReadinessError
+from app.topologies import TopologyType, read_confirmed_technical_plan, topology_type_from_plan
 
 _STAGING_RELATIVE_PATH = Path(".xcodeagent/bootstrap-staging")
 
@@ -40,9 +41,20 @@ def validate_workspace_bootstrap_readiness(
     _validate_template_roots(root, managed_roots)
     state = load_template_state(root)
     _validate_requested_capabilities(state, requested_config)
-    _validate_entrypoints(root, managed_roots)
+    _validate_entrypoints(
+        root,
+        managed_roots,
+        expected_topology_type=_expected_topology_type(root),
+    )
     _validate_staging_absent(root)
     (git_manager or BootstrapGitManager()).verify_baseline(root)
+
+
+def _expected_topology_type(workspace: Path) -> TopologyType | None:
+    """读取本轮期望的应用拓扑；尚未迁移到拓扑框架的计划返回 None。"""
+
+    plan = read_confirmed_technical_plan(workspace)
+    return topology_type_from_plan(plan) if plan is not None else None
 
 
 def _validate_formal_artifacts(workspace: Path) -> None:
@@ -113,21 +125,30 @@ def _enabled_requested_capabilities(requested_config: dict[str, Any]) -> dict[st
 
 
 def _validate_entrypoints(
-    workspace: Path, managed_roots: tuple[str, ...]
+    workspace: Path,
+    managed_roots: tuple[str, ...],
+    *,
+    expected_topology_type: TopologyType | None,
 ) -> None:
     """验证本轮三端最小真实入口，避免空目录或占位文件成为 READY。"""
 
     package_json = workspace / "frontend/package.json"
-    pom = workspace / "backend/pom.xml"
-    java_root = workspace / "backend/src/main/java"
-    if not package_json.is_file() or package_json.is_symlink():
-        raise WorkspaceBootstrapReadinessError("Bootstrap 缺少 frontend/package.json。")
-    if not pom.is_file() or pom.is_symlink():
-        raise WorkspaceBootstrapReadinessError("Bootstrap 缺少 backend/pom.xml。")
-    if not java_root.is_dir() or java_root.is_symlink() or not any(
-        path.is_file() and not path.is_symlink() for path in java_root.rglob("*Application.java")
+    if "frontend" in managed_roots and (
+        not package_json.is_file() or package_json.is_symlink()
     ):
-        raise WorkspaceBootstrapReadinessError("Bootstrap 缺少 backend Spring Boot Application 入口。")
+        raise WorkspaceBootstrapReadinessError("Bootstrap 缺少 frontend/package.json。")
+    if "backend" in managed_roots:
+        pom = workspace / "backend/pom.xml"
+        java_root = workspace / "backend/src/main/java"
+        if not pom.is_file() or pom.is_symlink():
+            raise WorkspaceBootstrapReadinessError("Bootstrap 缺少 backend/pom.xml。")
+        if not java_root.is_dir() or java_root.is_symlink() or not any(
+            path.is_file() and not path.is_symlink()
+            for path in java_root.rglob("*Application.java")
+        ):
+            raise WorkspaceBootstrapReadinessError(
+                "Bootstrap 缺少 backend Spring Boot Application 入口。"
+            )
     if "agent-runtime" in managed_roots:
         try:
             load_agent_runtime_template_policy(workspace / "agent-runtime")
@@ -135,6 +156,49 @@ def _validate_entrypoints(
             raise WorkspaceBootstrapReadinessError(
                 f"Bootstrap Agent Runtime 模板无效：{exc}"
             ) from exc
+        _validate_agent_runtime_capability_manifest(workspace, expected_topology_type)
+
+
+def _validate_agent_runtime_capability_manifest(
+    workspace: Path,
+    expected_topology_type: TopologyType | None,
+) -> None:
+    """验证 Runtime 模板以真实入口和 contract test 声明当前能力。"""
+
+    manifest_path = workspace / "agent-runtime/template-capabilities.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorkspaceBootstrapReadinessError(
+            "Bootstrap Agent Runtime 缺少 capability manifest。"
+        ) from exc
+    capabilities = manifest.get("capabilities") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(manifest, dict)
+        or expected_topology_type is None
+        or manifest.get("topology") != expected_topology_type.value
+        or not isinstance(capabilities, dict)
+    ):
+        raise WorkspaceBootstrapReadinessError(
+            "Bootstrap Agent Runtime capability manifest 无效。"
+        )
+    state = load_template_state(workspace)
+    required = {
+        capability_id
+        for capability_id in effective_capabilities(state)
+        if capability_id.startswith("agent_runtime_")
+    }
+    for capability_id in sorted(required):
+        evidence = capabilities.get(capability_id)
+        if (
+            not isinstance(evidence, dict)
+            or not str(evidence.get("entrypoint") or "").strip()
+            or not isinstance(evidence.get("contractTests"), list)
+            or not evidence["contractTests"]
+        ):
+            raise WorkspaceBootstrapReadinessError(
+                f"Bootstrap Agent Runtime capability 缺少有效证据：{capability_id}。"
+            )
 
 
 def _validate_staging_absent(workspace: Path) -> None:

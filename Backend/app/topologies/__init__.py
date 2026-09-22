@@ -13,8 +13,20 @@ from app.topologies.model import (
     TopologyContext,
     TopologyType,
 )
+from app.topologies.queries import (
+    AGENT_RUNTIME_SERVICE_ID,
+    BACKEND_SERVICE_ID,
+    confirmed_authentication_termination,
+    confirmed_public_edge_service_id,
+    confirmed_service_ids,
+    includes_backend_service,
+    read_confirmed_technical_plan,
+    serves_agent_runtime_public_edge,
+)
 
 __all__ = [
+    "AGENT_RUNTIME_SERVICE_ID",
+    "BACKEND_SERVICE_ID",
     "DevelopmentTopologyPlan",
     "DesignTopologyPlan",
     "PlanningTopologyPlan",
@@ -22,6 +34,12 @@ __all__ = [
     "TopologyContext",
     "TopologyType",
     "compile_registered_topology",
+    "confirmed_authentication_termination",
+    "confirmed_public_edge_service_id",
+    "confirmed_service_ids",
+    "includes_backend_service",
+    "read_confirmed_technical_plan",
     "resolve_registered_topology",
+    "serves_agent_runtime_public_edge",
     "topology_type_from_plan",
 ]

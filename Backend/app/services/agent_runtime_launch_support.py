@@ -37,6 +37,14 @@ _INHERITED_MODEL_ENVIRONMENT_NAMES = (
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",
     "OPENAI_MODEL",
+    "AGENT_RUNTIME_PROFILE",
+    "AGENT_RUNTIME_AUTH_ENABLED",
+    "AGENT_RUNTIME_AUTH_MODE",
+    "AGENT_RUNTIME_ANONYMOUS_SESSION_SECRET",
+    "AGENT_RUNTIME_ALLOWED_ORIGINS",
+    "AGENT_RUNTIME_DEBUG_TOKEN",
+    # Direct 拓扑下本轮不注入网关凭据，必须同时清掉宿主残留，避免旧凭据随环境继承。
+    "AGENT_RUNTIME_GATEWAY_TOKEN",
 )
 
 
@@ -45,8 +53,16 @@ def agent_runtime_environment(
     *,
     port: int,
     gateway_token: str,
+    direct_auth_enabled: bool | None = None,
+    include_debug_access: bool = False,
 ) -> dict[str, str]:
-    """注入受管监听、内部认证和仅供模板兜底的模型白名单配置。"""
+    """注入受管监听、内部认证和仅供模板兜底的模型白名单配置。
+
+    direct_auth_enabled 为 None 表示由网关托管认证：Runtime 只接受共享内部凭据。
+    为布尔值则表示 Direct 拓扑下 Runtime 自己就是公开入口、自行终止认证，此时按
+    该开关注入本地认证配置，并把本轮共享随机串复用为匿名会话密钥，不再注入网关凭据；
+    include_debug_access 为 True 时额外下发调试令牌。
+    """
 
     environment = dict(os.environ)
     for name in _INHERITED_MODEL_ENVIRONMENT_NAMES:
@@ -54,26 +70,41 @@ def agent_runtime_environment(
     model_name = settings.model_api_name
     if ":" not in model_name:
         model_name = f"{settings.model_provider}:{model_name}"
-    environment.update(
-        {
-            "AGENT_RUNTIME_HOST": "127.0.0.1",
-            "AGENT_RUNTIME_PORT": str(port),
-            "AGENT_RUNTIME_GATEWAY_TOKEN": gateway_token,
-            "XCODEAGENT_FALLBACK_MODEL_BASE_URL": settings.model_base_url,
-            "XCODEAGENT_FALLBACK_MODEL_API_KEY": settings.model_api_key,
-            "XCODEAGENT_FALLBACK_MODEL_NAME": model_name,
-            "XCODEAGENT_FALLBACK_MODEL_TIMEOUT_SECONDS": str(
-                settings.model_timeout_seconds
-            ),
-            "XCODEAGENT_FALLBACK_MODEL_MAX_RETRIES": str(settings.model_max_retries),
-            "XCODEAGENT_FALLBACK_AGENT_TEMPERATURE": str(
-                settings.default_temperature
-            ),
-            "XCODEAGENT_FALLBACK_AGENT_MAX_TOKENS": str(
-                settings.default_max_tokens
-            ),
-        }
-    )
+    runtime_environment = {
+        "AGENT_RUNTIME_HOST": "127.0.0.1",
+        "AGENT_RUNTIME_PORT": str(port),
+        "XCODEAGENT_FALLBACK_MODEL_BASE_URL": settings.model_base_url,
+        "XCODEAGENT_FALLBACK_MODEL_API_KEY": settings.model_api_key,
+        "XCODEAGENT_FALLBACK_MODEL_NAME": model_name,
+        "XCODEAGENT_FALLBACK_MODEL_TIMEOUT_SECONDS": str(
+            settings.model_timeout_seconds
+        ),
+        "XCODEAGENT_FALLBACK_MODEL_MAX_RETRIES": str(settings.model_max_retries),
+        "XCODEAGENT_FALLBACK_AGENT_TEMPERATURE": str(
+            settings.default_temperature
+        ),
+        "XCODEAGENT_FALLBACK_AGENT_MAX_TOKENS": str(
+            settings.default_max_tokens
+        ),
+    }
+    if direct_auth_enabled is None:
+        runtime_environment["AGENT_RUNTIME_GATEWAY_TOKEN"] = gateway_token
+    else:
+        runtime_environment.update(
+            {
+                "AGENT_RUNTIME_PROFILE": "local",
+                "AGENT_RUNTIME_AUTH_ENABLED": str(direct_auth_enabled).lower(),
+                "AGENT_RUNTIME_AUTH_MODE": "local",
+                "AGENT_RUNTIME_ANONYMOUS_SESSION_SECRET": gateway_token,
+                "AGENT_RUNTIME_ALLOWED_ORIGINS": (
+                    "http://127.0.0.1,http://localhost,"
+                    "http://127.0.0.1:5173,http://localhost:5173"
+                ),
+            }
+        )
+        if include_debug_access:
+            runtime_environment["AGENT_RUNTIME_DEBUG_TOKEN"] = gateway_token
+    environment.update(runtime_environment)
     return environment
 
 

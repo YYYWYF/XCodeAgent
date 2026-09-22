@@ -10,11 +10,28 @@ import json
 from typing import Any
 
 from app.services.frontend_page_tree import project_plan_page_records
+from app.topologies import (
+    AGENT_RUNTIME_SERVICE_ID,
+    confirmed_authentication_termination,
+    includes_backend_service,
+)
 
 
 def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
     """返回 Endpoint API 设计旅程固定需要的公共 Unit。"""
 
+    if _omits_backend_units(project_plan):
+        return (
+            "frontend:shell",
+            "frontend:api-client",
+            *(
+                ("frontend:auth-guard",)
+                if confirmed_authentication_termination(project_plan)
+                == AGENT_RUNTIME_SERVICE_ID
+                else ()
+            ),
+            "app:integration",
+        )
     return (
         "frontend:shell",
         "frontend:api-client",
@@ -148,6 +165,7 @@ def _unit_graph(
     nodes = list(build_units)
     edges: list[dict[str, str]] = []
     errors: list[str] = []
+    direct = _omits_backend_units(project_plan)
     public_unit_ids = _public_unit_ids(project_plan)
     for public_unit_id in public_unit_ids:
         if public_unit_id != "app:integration":
@@ -214,7 +232,7 @@ def _unit_graph(
             else {}
         )
         tools = settings.get("tools") if isinstance(settings.get("tools"), dict) else {}
-        for binding in _dict_items(tools.get("bindings")):
+        for binding in ([] if direct else _dict_items(tools.get("bindings"))):
             endpoint = (
                 binding.get("endpoint")
                 if isinstance(binding.get("endpoint"), dict)
@@ -235,9 +253,12 @@ def _unit_graph(
             if isinstance(contract.get("invocation"), dict)
             else {}
         )
-        gateway_endpoint_id = str(
-            invocation.get("gatewayEndpointId") or ""
-        ).strip()
+        if direct:
+            edges.append(
+                {"from": agent_unit_id, "to": "app:integration", "type": "depends_on"}
+            )
+            continue
+        gateway_endpoint_id = str(invocation.get("gatewayEndpointId") or "").strip()
         gateway_unit_id = endpoint_units_by_id.get(gateway_endpoint_id, "")
         if gateway_unit_id not in build_units:
             errors.append(
@@ -259,7 +280,7 @@ def _unit_graph(
             "frontend:api-client",
         ):
             edges.append({"from": public_unit_id, "to": page_unit_id, "type": "depends_on"})
-        if _page_requires_auth(page):
+        if _page_requires_auth(page) and "frontend:auth-guard" in build_units:
             edges.append(
                 {"from": "frontend:auth-guard", "to": page_unit_id, "type": "depends_on"}
             )
@@ -281,6 +302,12 @@ def _unit_graph(
         "edges": _unique_edges(edges),
         "validation": {"is_valid": not errors, "errors": errors},
     }
+
+
+def _omits_backend_units(project_plan: dict[str, Any]) -> bool:
+    """按已确认拓扑的服务边界识别不含 Java Backend 的 Unit 蓝图。"""
+
+    return not includes_backend_service(project_plan)
 
 
 def _page_dependency_source(

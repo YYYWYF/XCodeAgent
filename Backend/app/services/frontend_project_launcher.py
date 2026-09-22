@@ -35,6 +35,7 @@ def launch_frontend_project(
     runtime_subdir: str = "launch",
     skip_install: bool = False,
     force_restart: bool = False,
+    environment_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
 
@@ -46,6 +47,8 @@ def launch_frontend_project(
     install；性能测试节点在集成测试完成安装后使用该模式。
     force_restart 为 True 时不复用健康服务，而是停止 standard preview 后
     重新安装、启动并执行 Ready 检查，供模板更新后的真实工程验收使用。
+    environment_overrides 只透传 VITE_ 前缀的构建期变量，供 Direct 拓扑把
+    Agent Runtime Public Edge 地址注入前端，不覆盖其余宿主环境。
     """
 
     root = Path(workspace_path).expanduser().resolve()
@@ -158,6 +161,7 @@ def launch_frontend_project(
         cwd=package_path.parent,
         runtime_root=runtime_root,
         preview_url=preview_url,
+        environment_overrides=environment_overrides,
     )
     if process is not None:
         _register_frontend_process(root, process, runtime_subdir=runtime_subdir)
@@ -412,6 +416,7 @@ def _start_dev_server(
     cwd: Path,
     runtime_root: Path,
     preview_url: str,
+    environment_overrides: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """以后台进程启动开发服务器，并保留进程对象供健康检查监督。"""
     argv = [package_manager_command, "run", script_name]
@@ -420,7 +425,7 @@ def _start_dev_server(
     stdout = stdout_path.open("ab")
     stderr = stderr_path.open("ab")
     stdout_offset = stdout.tell()
-    env = _launch_environment(script_command)
+    env = _launch_environment(script_command, environment_overrides)
     try:
         process = subprocess.Popen(
             argv,
@@ -466,7 +471,10 @@ def _start_dev_server(
     )
 
 
-def _launch_environment(script_command: str) -> dict[str, str]:
+def _launch_environment(
+    script_command: str,
+    overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
     """构造无终端颜色的启动环境，并避免 CRA 收到非法 loopback HOST。"""
 
     env = {**os.environ, "BROWSER": "none", "NO_COLOR": "1"}
@@ -476,6 +484,10 @@ def _launch_environment(script_command: str) -> dict[str, str]:
         env.pop("HOST", None)
     else:
         env["HOST"] = "localhost"
+    # 只接受 VITE_ 前缀且非空的覆盖值，避免调用方间接改写宿主进程环境。
+    for name, value in (overrides or {}).items():
+        if name.startswith("VITE_") and isinstance(value, str) and value:
+            env[name] = value
     return env
 
 

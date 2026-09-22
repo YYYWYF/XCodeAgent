@@ -22,6 +22,7 @@ from app.services.frontend_project_launcher import (
     launch_frontend_project,
     stop_frontend_project,
 )
+from app.topologies import read_confirmed_technical_plan, serves_agent_runtime_public_edge
 
 
 LaunchProgressCallback = Callable[[str, str, str], None]
@@ -79,6 +80,11 @@ def _launch_project_preview(
             on_progress(stage, status, message)
 
     root = Path(workspace_path).expanduser().resolve()
+    technical_plan = read_confirmed_technical_plan(root)
+    # 公开入口由 Runtime 自身承担时，前端需要用本轮真实 Runtime 地址构建。
+    runtime_public_edge = (
+        technical_plan is not None and serves_agent_runtime_public_edge(technical_plan)
+    )
     report("structure", "running", "正在识别工程结构…")
     backend_project_root = find_backend_project_root(root)
     try:
@@ -139,6 +145,7 @@ def _launch_project_preview(
         )
 
     agent_runtime_process = None
+    public_edge_url: str | None = None
     if not agent_runtime_required:
         agent_runtime = {
             "status": "skipped",
@@ -151,6 +158,7 @@ def _launch_project_preview(
         report("agent_runtime", "running", "正在启动 Agent Runtime 并等待健康检查…")
         agent_runtime = launch_agent_runtime_project(root)
         agent_runtime_process = agent_runtime.pop("_process", None)
+        public_edge_url = agent_runtime.pop("_public_edge_url", None)
         if agent_runtime.get("status") == "failed":
             if backend_process is not None:
                 stop_backend_project(backend, backend_process)
@@ -183,10 +191,21 @@ def _launch_project_preview(
         )
 
     report("frontend", "running", "正在启动前端服务并等待健康检查就绪…")
+    # 公开入口由 Runtime 自身承担时，把本轮真实地址注入前端构建期变量。
+    frontend_environment = (
+        {"VITE_AGENT_RUNTIME_BASE_URL": str(public_edge_url)}
+        if agent_runtime_required and runtime_public_edge and public_edge_url
+        else None
+    )
+    frontend_launch_kwargs = (
+        {"environment_overrides": frontend_environment}
+        if frontend_environment is not None
+        else {}
+    )
     frontend = (
-        launch_frontend_project(root, force_restart=True)
+        launch_frontend_project(root, force_restart=True, **frontend_launch_kwargs)
         if force_restart
-        else launch_frontend_project(root)
+        else launch_frontend_project(root, **frontend_launch_kwargs)
     )
     if frontend.get("status") == "failed":
         if agent_runtime_process is not None:

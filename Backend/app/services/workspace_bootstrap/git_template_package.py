@@ -232,24 +232,34 @@ class GitTemplatePackageBuilder:
         frontend_backend_branch = (
             "auth" if "authorization" in capabilities else "main"
         )
-        repositories = [
-            (
-                "frontend",
-                self._settings.template_git_frontend_repository_url,
-                frontend_backend_branch,
-            ),
-            (
-                "backend",
-                self._settings.template_git_backend_repository_url,
-                frontend_backend_branch,
-            ),
-        ]
+        repositories: list[tuple[str, str, str]] = []
+        if "frontend" in managed_roots:
+            repositories.append(
+                (
+                    "frontend",
+                    self._settings.template_git_frontend_repository_url,
+                    frontend_backend_branch,
+                )
+            )
+        if "backend" in managed_roots:
+            repositories.append(
+                (
+                    "backend",
+                    self._settings.template_git_backend_repository_url,
+                    frontend_backend_branch,
+                )
+            )
         if "agent-runtime" in managed_roots:
+            runtime_branch = (
+                self._settings.template_git_agent_runtime_direct_branch
+                if "agent_runtime_public_edge" in capabilities
+                else self._settings.template_git_agent_runtime_branch
+            )
             repositories.append(
                 (
                     "agent-runtime",
                     self._settings.template_git_agent_runtime_repository_url,
-                    self._settings.template_git_agent_runtime_branch,
+                    runtime_branch,
                 )
             )
         for target, repository_url, branch in repositories:

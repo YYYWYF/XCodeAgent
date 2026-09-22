@@ -42,6 +42,7 @@ from app.services.product_plan import project_active_agent_product_plan
 from app.services.page_dependencies import normalize_page_dependencies
 from app.services.requirement_spec import product_acceptance_criteria
 from app.services.authorization_manifest import compile_authorization_manifest
+from app.topologies import includes_backend_service, resolve_registered_topology
 
 
 BACKEND_TECH_STACK = {
@@ -68,6 +69,11 @@ _AGENT_MODEL_CONTRACT_KEYS = {
     "capabilityBindings",
     "agentSettings",
 }
+_AGENT_DIRECT_MODEL_CONTRACT_KEYS = {
+    "agentId",
+    "capabilityBindings",
+    "agentSettings",
+}
 _AGENT_SETTINGS_KEYS = {
     "prompt", "model", "memory", "tools", "skills", "knowledge", "context"
 }
@@ -85,6 +91,20 @@ _AGENT_GENERATION_KEYS = {"temperature"}
 _AGENT_CAPABILITY_BINDING_KEYS = {"capabilityId", "toolIds"}
 _AGENT_TOOLS_KEYS = {"enabled", "bindings"}
 _AGENT_TOOL_BINDING_KEYS = {"toolId", "name", "description", "endpointId", "accessMode"}
+_AGENT_DIRECT_TOOL_BINDING_KEYS = {
+    "toolId",
+    "name",
+    "description",
+    "source",
+    "accessMode",
+    "requiresConfirmation",
+}
+_AGENT_DIRECT_TOOL_SOURCE_TYPES = {
+    "runtime_builtin",
+    "external_http",
+    "mcp",
+    "knowledge",
+}
 _AGENT_ACCESS_MODES = {"read", "write"}
 AGENT_RUNTIME_CONTRACT = {
     "language": "Python",
@@ -94,6 +114,22 @@ AGENT_RUNTIME_CONTRACT = {
     "modelFactory": "init_chat_model",
     "deployment": "sidecar",
     "serviceName": "agent-runtime",
+}
+AGENT_RUNTIME_DIRECT_CONTRACT = {
+    "language": "python",
+    "version": "3.12",
+    "framework": "deepagents",
+    "serviceId": "agent-runtime",
+    "publicProtocol": "ag-ui-sse",
+    "stateOwner": "agent-runtime",
+}
+AGENT_RUNTIME_DIRECT_SECURITY_CONTRACT = {
+    "principalSource": "runtime_authentication",
+    "resourceIsolation": "principal_owner",
+    "acceptsClientIdentityHeaders": False,
+    "rbacEnabled": False,
+    "toolAuthorization": "contract_allowlist",
+    "writeToolConfirmationRequired": True,
 }
 AGENT_SECURITY_CONTRACT = {
     "directClientAccess": False,
@@ -1993,6 +2029,8 @@ def _technical_agent_contract_model_errors(
     product_plan: dict[str, Any],
     api_contracts: list[dict[str, Any]],
     pages: list[dict[str, Any]],
+    *,
+    direct: bool = False,
 ) -> list[str]:
     """校验规划模型返回的 AgentSettings 候选和技术绑定。"""
 
@@ -2022,7 +2060,13 @@ def _technical_agent_contract_model_errors(
         location = f"TechnicalPlan 模型输出 agent_contracts[{index}]"
         errors.extend(
             _agent_object_key_errors(
-                contract, location, _AGENT_MODEL_CONTRACT_KEYS
+                contract,
+                location,
+                (
+                    _AGENT_DIRECT_MODEL_CONTRACT_KEYS
+                    if direct
+                    else _AGENT_MODEL_CONTRACT_KEYS
+                ),
             )
         )
         agent_id = str(contract.get("agentId") or "").strip()
@@ -2030,12 +2074,12 @@ def _technical_agent_contract_model_errors(
         if product_agent is None:
             continue
         gateway_endpoint_id = str(contract.get("gatewayEndpointId") or "").strip()
-        if gateway_endpoint_id not in endpoint_records:
+        if not direct and gateway_endpoint_id not in endpoint_records:
             errors.append(
                 f"{location}.gatewayEndpointId 引用了不存在的 Endpoint "
                 f"{gateway_endpoint_id or '空'}。"
             )
-        for page_binding in _dict_items(product_agent.get("pageActionBindings")):
+        for page_binding in ([] if direct else _dict_items(product_agent.get("pageActionBindings"))):
             surface = (
                 page_binding.get("surface")
                 if isinstance(page_binding.get("surface"), dict)
@@ -2129,35 +2173,58 @@ def _technical_agent_contract_model_errors(
             binding_location = f"{location}.agentSettings.tools.bindings[{tool_index}]"
             errors.extend(
                 _agent_object_key_errors(
-                    binding, binding_location, _AGENT_TOOL_BINDING_KEYS
+                    binding,
+                    binding_location,
+                    (
+                        _AGENT_DIRECT_TOOL_BINDING_KEYS
+                        if direct
+                        else _AGENT_TOOL_BINDING_KEYS
+                    ),
                 )
             )
             tool_id = str(binding.get("toolId") or "").strip()
-            endpoint_id = str(binding.get("endpointId") or "").strip()
             tool_ids.append(tool_id)
-            tool_endpoint_ids.add(endpoint_id)
             for key in ("name", "description"):
                 if not str(binding.get(key) or "").strip():
                     errors.append(f"{binding_location}.{key} 必须是非空字符串。")
+            if binding.get("accessMode") not in _AGENT_ACCESS_MODES:
+                errors.append(f"{binding_location}.accessMode 必须是 read 或 write。")
+            if direct:
+                source = binding.get("source")
+                source = source if isinstance(source, dict) else {}
+                if source.get("type") not in _AGENT_DIRECT_TOOL_SOURCE_TYPES:
+                    errors.append(
+                        f"{binding_location}.source.type 必须是 Runtime 允许的来源类型。"
+                    )
+                if (
+                    binding.get("accessMode") == "write"
+                    and binding.get("requiresConfirmation") is not True
+                ):
+                    errors.append(f"{binding_location} 的写操作必须要求用户确认。")
+                if binding.get("accessMode") == "read" and type(
+                    binding.get("requiresConfirmation")
+                ) is not bool:
+                    errors.append(
+                        f"{binding_location}.requiresConfirmation 必须是布尔值。"
+                    )
+                continue
+            endpoint_id = str(binding.get("endpointId") or "").strip()
+            tool_endpoint_ids.add(endpoint_id)
             if endpoint_id not in endpoint_records:
                 errors.append(
                     f"{binding_location} 引用了不存在的 Endpoint "
                     f"{endpoint_id or '空'}。"
                 )
-            if binding.get("accessMode") not in _AGENT_ACCESS_MODES:
-                errors.append(f"{binding_location}.accessMode 必须是 read 或 write。")
             endpoint = endpoint_records.get(endpoint_id, ("", {}))[1]
             method = str(endpoint.get("method") or "").upper()
-            expected_access_mode = (
-                "read" if method in {"GET", "HEAD", "OPTIONS"} else "write"
-            )
+            expected_access_mode = "read" if method in {"GET", "HEAD", "OPTIONS"} else "write"
             if method and binding.get("accessMode") != expected_access_mode:
                 errors.append(
                     f"{binding_location}.accessMode 必须与 Endpoint {method} 语义一致。"
                 )
         if len(tool_ids) != len(set(tool_ids)) or any(not item for item in tool_ids):
             errors.append(f"{location}.agentSettings.tools.toolId 必须非空且唯一。")
-        if gateway_endpoint_id and gateway_endpoint_id in tool_endpoint_ids:
+        if not direct and gateway_endpoint_id and gateway_endpoint_id in tool_endpoint_ids:
             errors.append(f"{location} 的 Agent 网关 Endpoint 不能同时作为工具 Endpoint。")
 
         raw_capability_bindings = contract.get("capabilityBindings")
@@ -2396,6 +2463,9 @@ def _technical_agent_contracts(
     product_plan: dict[str, Any],
     agent_plan: dict[str, Any] | None,
     api_contracts: list[dict[str, Any]],
+    *,
+    direct: bool = False,
+    auth_enabled: bool = True,
 ) -> list[dict[str, Any]]:
     """把候选设置与上游事实编译为完整 Agent Contract。"""
 
@@ -2409,7 +2479,10 @@ def _technical_agent_contracts(
         agent_id = str(raw.get("agentId") or "").strip()
         product_agent = product_by_id.get(agent_id, {})
         settings = deepcopy(raw.get("agentSettings"))
-        settings["tools"] = _resolved_agent_tools(settings, api_contracts)
+        if direct:
+            settings["tools"] = deepcopy(settings.get("tools"))
+        else:
+            settings["tools"] = _resolved_agent_tools(settings, api_contracts)
         capability_tools = {
             str(item.get("capabilityId") or "").strip(): deepcopy(item.get("toolIds"))
             for item in _dict_items(raw.get("capabilityBindings"))
@@ -2426,6 +2499,36 @@ def _technical_agent_contracts(
             "maxRounds": 3 if supports_multi_turn else 0,
         }
         artifacts = _technical_agent_artifacts()
+        invocation = (
+            {
+                "protocol": "ag-ui",
+                "transport": "sse",
+                "serviceId": "agent-runtime",
+                "endpointId": f"agent.{agent_id}.run",
+                "method": "POST",
+                "path": f"/agents/{agent_id}/run",
+                "exposure": "public",
+                "authMode": "application",
+            }
+            if direct
+            else {
+                "transport": "ag-ui-sse",
+                "gatewayEndpointId": str(raw.get("gatewayEndpointId") or "").strip(),
+                "internalPath": f"/internal/agents/{agent_id}/run",
+            }
+        )
+        security = (
+            {
+                **deepcopy(AGENT_RUNTIME_DIRECT_SECURITY_CONTRACT),
+                "principalSource": (
+                    "runtime_authentication"
+                    if auth_enabled
+                    else "runtime_anonymous_session"
+                ),
+            }
+            if direct
+            else deepcopy(AGENT_SECURITY_CONTRACT)
+        )
         contracts.append(
             {
                 "agentId": agent_id,
@@ -2451,15 +2554,11 @@ def _technical_agent_contracts(
                 ],
                 "interaction": interaction,
                 "agentSettings": settings,
-                "invocation": {
-                    "transport": "ag-ui-sse",
-                    "gatewayEndpointId": str(
-                        raw.get("gatewayEndpointId") or ""
-                    ).strip(),
-                    "internalPath": f"/internal/agents/{agent_id}/run",
-                },
-                "runtime": deepcopy(AGENT_RUNTIME_CONTRACT),
-                "security": deepcopy(AGENT_SECURITY_CONTRACT),
+                "invocation": invocation,
+                "runtime": deepcopy(
+                    AGENT_RUNTIME_DIRECT_CONTRACT if direct else AGENT_RUNTIME_CONTRACT
+                ),
+                "security": security,
                 "artifacts": artifacts,
                 "requiredChecks": [
                     "uv run --project agent-runtime pytest -q",
@@ -2468,11 +2567,19 @@ def _technical_agent_contracts(
                     "productAcceptanceCriteria": deepcopy(
                         product_agent.get("acceptanceCriteria") or []
                     ),
-                    "engineeringCriteria": [
-                        "所有 Tool 均解析到已确认 Endpoint",
-                        "Renderer 只能通过 Java Gateway 调用 Agent Runtime",
-                        "写操作未经平台批准不得执行",
-                    ],
+                    "engineeringCriteria": (
+                        [
+                            "所有 Tool 均来自 Runtime Contract allowlist",
+                            "Frontend 只能调用已确认的公开 AG-UI path",
+                            "写操作未经用户确认不得执行",
+                        ]
+                        if direct
+                        else [
+                            "所有 Tool 均解析到已确认 Endpoint",
+                            "Renderer 只能通过 Java Gateway 调用 Agent Runtime",
+                            "写操作未经平台批准不得执行",
+                        ]
+                    ),
                 },
             }
         )
@@ -2495,8 +2602,12 @@ def technical_agent_contract_model_input(value: Any) -> list[dict[str, Any]]:
             else {}
         )
         tools = settings.get("tools") if isinstance(settings.get("tools"), dict) else {}
+        direct = invocation.get("serviceId") == "agent-runtime" and invocation.get("exposure") == "public"
         raw_bindings: list[dict[str, Any]] = []
         for binding in _dict_items(tools.get("bindings")):
+            if direct:
+                raw_bindings.append(deepcopy(binding))
+                continue
             endpoint = (
                 binding.get("endpoint")
                 if isinstance(binding.get("endpoint"), dict)
@@ -2518,7 +2629,11 @@ def technical_agent_contract_model_input(value: Any) -> list[dict[str, Any]]:
         result.append(
             {
                 "agentId": deepcopy(contract.get("agentId")),
-                "gatewayEndpointId": deepcopy(invocation.get("gatewayEndpointId")),
+                **(
+                    {}
+                    if direct
+                    else {"gatewayEndpointId": deepcopy(invocation.get("gatewayEndpointId"))}
+                ),
                 "capabilityBindings": [
                     {
                         "capabilityId": deepcopy(item.get("capabilityId")),
@@ -2545,6 +2660,8 @@ def validate_technical_plan_agent_contracts(
     if len(contracts) != len(raw_contracts):
         return ["TechnicalPlan.agent_contracts 的每一项都必须是 JSON 对象。"]
     active_product_plan = project_active_agent_product_plan(product_plan)
+    # 已确认拓扑未声明 Java Backend 服务边界时，Agent Contract 采用 Runtime Public Edge 形状。
+    direct = not includes_backend_service(plan)
     candidates = technical_agent_contract_model_input(contracts)
     candidate_plan = {"agent_contracts": candidates}
     api_contracts = _dict_items(plan.get("api_contracts"))
@@ -2554,6 +2671,7 @@ def validate_technical_plan_agent_contracts(
         active_product_plan,
         api_contracts,
         pages,
+        direct=direct,
     )
     if errors:
         return errors
@@ -2561,6 +2679,13 @@ def validate_technical_plan_agent_contracts(
         active_product_plan,
         candidate_plan,
         api_contracts,
+        direct=direct,
+        auth_enabled=(
+            _dict_items(contracts)[0].get("security", {}).get("principalSource")
+            == "runtime_authentication"
+            if contracts and isinstance(contracts[0].get("security"), dict)
+            else True
+        ),
     )
     if contracts != expected:
         errors.append(
@@ -2613,11 +2738,14 @@ def recompile_technical_plan_agent_settings(
     api_contracts = _dict_items(technical_plan.get("api_contracts"))
     pages = _dict_items(technical_plan.get("pages"))
     candidate_plan = {"agent_contracts": candidates}
+    # 与校验路径共用同一服务边界判据，避免两处按拓扑名称各自推断。
+    direct = not includes_backend_service(technical_plan)
     errors = _technical_agent_contract_model_errors(
         candidate_plan,
         product_plan,
         api_contracts,
         pages,
+        direct=direct,
     )
     if errors:
         raise ValueError("；".join(errors))
@@ -2626,6 +2754,19 @@ def recompile_technical_plan_agent_settings(
         product_plan,
         candidate_plan,
         api_contracts,
+        direct=direct,
+        auth_enabled=(
+            _dict_items(technical_plan.get("agent_contracts"))[0]
+            .get("security", {})
+            .get("principalSource")
+            == "runtime_authentication"
+            if _dict_items(technical_plan.get("agent_contracts"))
+            and isinstance(
+                _dict_items(technical_plan.get("agent_contracts"))[0].get("security"),
+                dict,
+            )
+            else True
+        ),
     )
     validation_errors = validate_technical_plan_agent_contracts(next_plan, product_plan)
     if validation_errors:
@@ -2707,12 +2848,24 @@ def create_technical_plan(
         else product_plan
     )
     product_agents = _dict_items(active_product_plan.get("agents"))
+    direct_candidate = _agent_runtime_direct_candidate(
+        application_config=application_config,
+        product_agents=product_agents,
+        entities=entities,
+        api_contracts=api_contracts,
+        pages=pages,
+    )
     raw_agent_contracts = _agent_section(agent_plan, "agent_contracts")
     if (
         isinstance(agent_plan, dict)
         and len(product_agents) == 1
         and isinstance(raw_agent_contracts, dict)
-        and set(raw_agent_contracts) == _AGENT_MODEL_CONTRACT_KEYS
+        and set(raw_agent_contracts)
+        == (
+            _AGENT_DIRECT_MODEL_CONTRACT_KEYS
+            if direct_candidate
+            else _AGENT_MODEL_CONTRACT_KEYS
+        )
         and raw_agent_contracts.get("agentId") == product_agents[0].get("agentId")
     ):
         # 单智能体完整对象可无损包装；缺失字段、映射对象和多智能体仍交由严格校验拒绝。
@@ -2723,6 +2876,7 @@ def create_technical_plan(
         active_product_plan,
         api_contracts,
         pages,
+        direct=direct_candidate,
     )
     if agent_errors:
         raise ValueError("；".join(agent_errors))
@@ -2730,6 +2884,8 @@ def create_technical_plan(
         active_product_plan,
         agent_plan,
         api_contracts,
+        direct=direct_candidate,
+        auth_enabled=application_config.get("auth", {}).get("enable") is True,
     )
     if agent_contracts:
         architecture["agent_runtime"] = AGENT_RUNTIME_ARCHITECTURE
@@ -2751,8 +2907,46 @@ def create_technical_plan(
         # 仅记录本产物消费的配置版本，不复制任何应用级开关。
         "sourceConfigRevision": int(application_config.get("configRevision") or 1),
     }
+    topology = resolve_registered_topology(plan, application_config)
+    if topology is not None:
+        plan["topology"] = topology.technical_plan_projection()
+        plan["architecture"] = deepcopy(topology.design.architecture)
     repaired, _ = repair_cross_contract_schema_refs(plan)
     return repaired
+
+
+def _agent_runtime_direct_candidate(
+    *,
+    application_config: dict[str, Any],
+    product_agents: list[dict[str, Any]],
+    entities: list[dict[str, Any]],
+    api_contracts: list[dict[str, Any]],
+    pages: list[dict[str, Any]],
+) -> bool:
+    """在完整 Contract 编译前识别纯 Agent Direct 的充分必要结构事实。"""
+
+    authorization = application_config.get("authorization")
+    auth = application_config.get("auth")
+    if (
+        not product_agents
+        or entities
+        or api_contracts
+        or not isinstance(authorization, dict)
+        or authorization.get("enabled") is not False
+        or not isinstance(auth, dict)
+        or type(auth.get("enable")) is not bool
+    ):
+        return False
+    return all(
+        not _dict_items(
+            (
+                page.get("references")
+                if isinstance(page.get("references"), dict)
+                else {}
+            ).get("endpoint_dependencies")
+        )
+        for page in pages
+    )
 
 
 def create_project_plan(

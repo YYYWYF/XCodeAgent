@@ -972,6 +972,20 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
         if agent_contracts
         else ""
     )
+    topology = plan.get("topology") if isinstance(plan.get("topology"), dict) else {}
+    topology_section = (
+        "\n## 应用拓扑\n\n"
+        f"- 类型：`{topology.get('type', '')}`\n"
+        f"- 公开入口：`{topology.get('publicEdgeServiceId', '')}`\n"
+        f"- 认证终止点：`{topology.get('authenticationTermination', '')}`\n"
+        if topology
+        else ""
+    )
+    backend_architecture = (
+        f"- 后端：{architecture.get('backend')}\n"
+        if architecture.get("backend")
+        else ""
+    )
     return f"""# 技术规划
 
 - 状态：{_status_label(plan.get('confirmation_status', 'draft'))}
@@ -980,8 +994,8 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
 ## 技术架构
 
 - 前端：{architecture.get('frontend', '待补充')}
-- 后端：{architecture.get('backend', '待补充')}
-- 数据：{architecture.get('data', '待补充')}{agent_architecture}
+{backend_architecture}- 数据：{architecture.get('data', '待补充')}{agent_architecture}
+{topology_section}
 
 ## 业务实体
 

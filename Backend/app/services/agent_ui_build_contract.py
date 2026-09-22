@@ -8,6 +8,7 @@ from typing import Any
 
 from app.services.ui_design_agent_surfaces import project_ui_design_pages
 from app.services.ui_design_agent_template import build_agent_ui_template_config
+from app.topologies import serves_agent_runtime_public_edge
 
 
 AGENT_UI_BUILD_CONTRACT_VERSION = "agent-ui-build.v1"
@@ -69,7 +70,14 @@ def project_agent_ui_build_contracts(
 ) -> dict[str, dict[str, Any]]:
     """从已确认 ProductPlan 与 TechnicalPlan 投影逐页 Mock 组合合同。"""
 
+    # 公开入口由 Agent Runtime 自身承担时，前端直连 Public Edge，不再走 Gateway Mock。
+    direct = serves_agent_runtime_public_edge(technical_plan)
     gateway_by_agent = _gateway_endpoint_by_agent(technical_plan)
+    invocation_by_agent = {
+        _text(contract.get("agentId")): dict(contract.get("invocation"))
+        for contract in _dict_items(technical_plan.get("agent_contracts"))
+        if _text(contract.get("agentId")) and isinstance(contract.get("invocation"), dict)
+    }
     result: dict[str, dict[str, Any]] = {}
     for page in project_ui_design_pages(product_plan):
         page_id = _text(page.get("pageId"))
@@ -79,7 +87,11 @@ def project_agent_ui_build_contracts(
         config = build_agent_ui_template_config(page)
         agent_id = _text(config.get("agentId"))
         gateway_endpoint_id = gateway_by_agent.get(agent_id, "")
-        if not gateway_endpoint_id:
+        invocation = invocation_by_agent.get(agent_id, {})
+        public_path = _text(invocation.get("path"))
+        if direct and not public_path:
+            raise ValueError(f"Agent {agent_id} 缺少 Runtime Public Edge path。")
+        if not direct and not gateway_endpoint_id:
             raise ValueError(f"Agent {agent_id} 缺少 TechnicalPlan Gateway Endpoint。")
         surface = _text(config.get("surface"))
         component = _COMPONENTS.get(surface)
@@ -87,7 +99,7 @@ def project_agent_ui_build_contracts(
             raise ValueError(f"Agent UI Surface 类型无效：{surface}。")
         payload = {
             "version": AGENT_UI_BUILD_CONTRACT_VERSION,
-            "mode": "mock",
+            "mode": "direct" if direct else "mock",
             "pageId": page_id,
             "agentId": agent_id,
             "surface": surface,
@@ -98,7 +110,9 @@ def project_agent_ui_build_contracts(
             "mockAdapterPath": AGENT_UI_MOCK_ADAPTER_PATH,
             "skillPath": AGENT_UI_SKILL_PATH,
             "gatewayEndpointId": gateway_endpoint_id,
-            "mockExemptEndpointIds": [gateway_endpoint_id],
+            "publicPath": public_path or None,
+            "serviceId": _text(invocation.get("serviceId")) or None,
+            "mockExemptEndpointIds": [] if direct else [gateway_endpoint_id],
             "config": config,
         }
         result[page_id] = {**payload, "sha256": _stable_hash(payload)}

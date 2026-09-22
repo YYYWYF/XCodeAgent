@@ -9,6 +9,7 @@ from typing import Any
 from app.services.workspace_bootstrap.models import TemplateConfigError
 from app.services.application_config import read_application_config
 from app.services.template_reconcile.desired import TemplateCapabilityError, requested_config_from_application_config
+from app.topologies import compile_registered_topology, topology_type_from_plan
 
 
 def compile_template_requested_config(workspace_root: str | Path) -> dict[str, Any]:
@@ -26,7 +27,19 @@ def compile_template_requested_config(workspace_root: str | Path) -> dict[str, A
             raise TemplateConfigError(
                 "TechnicalPlan 基于过期 application.json 配置生成，必须先重新规划。"
             )
-        return requested_config_from_application_config(application_config)
+        requested = requested_config_from_application_config(application_config)
+        topology_type = topology_type_from_plan(technical_plan)
+        if topology_type is None:
+            return requested
+        topology = compile_registered_topology(
+            topology_type,
+            technical_plan,
+            application_config,
+        )
+        capabilities = dict(requested.get("capabilities") or {})
+        for capability_id in topology.planning.required_template_capabilities:
+            capabilities[capability_id] = {"enabled": True, "config": {}}
+        return {"capabilities": capabilities}
     except TemplateCapabilityError as exc:
         raise TemplateConfigError(str(exc)) from exc
 
@@ -39,6 +52,15 @@ def bootstrap_managed_roots(workspace_root: str | Path) -> tuple[str, ...]:
         root / ".xcodeagent/plans/technical-plan.json", "technical-plan.json"
     )
     _validate_technical_plan(technical_plan)
+    topology_type = topology_type_from_plan(technical_plan)
+    if topology_type is not None:
+        application_config = read_application_config(root)
+        topology = compile_registered_topology(
+            topology_type,
+            technical_plan,
+            application_config,
+        )
+        return topology.planning.managed_roots
     agent_contracts = technical_plan.get("agent_contracts")
     if not isinstance(agent_contracts, list):
         raise TemplateConfigError("TechnicalPlan.agent_contracts 必须是 JSON 数组。")

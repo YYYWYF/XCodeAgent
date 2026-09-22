@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+from app.services.application_config import read_application_config
 from app.services.agent_runtime_debug_state import (
     discard_legacy_agent_runtime_pid_file,
     failed_stage_for_status,
@@ -40,6 +41,11 @@ from app.services.agent_runtime_process_registry import (
 from app.services.agent_runtime_uv import install_uv_with_official_script, resolve_uv_command
 from app.services.workspace_bootstrap.git_template_package import GitTemplatePackageBuilder
 from app.services.workspace_bootstrap.models import GitTemplateError
+from app.topologies import (
+    AGENT_RUNTIME_SERVICE_ID,
+    confirmed_service_ids,
+    serves_agent_runtime_public_edge,
+)
 
 
 class AgentRuntimeLaunchError(ValueError):
@@ -64,6 +70,10 @@ def agent_runtime_launch_required(workspace_path: str | Path) -> bool:
         or technical_plan.get("confirmation_status") != "confirmed"
     ):
         raise AgentRuntimeLaunchError("必须使用已确认的当前 TechnicalPlan 判断 Agent Runtime。")
+    service_ids = confirmed_service_ids(technical_plan)
+    if service_ids:
+        # 已迁移拓扑：是否启动 Runtime 完全由已确认的服务边界决定，不再按 Agent 数量猜测。
+        return AGENT_RUNTIME_SERVICE_ID in service_ids
     contracts = technical_plan.get("agent_contracts")
     if not isinstance(contracts, list):
         raise AgentRuntimeLaunchError("TechnicalPlan.agent_contracts 必须是数组。")
@@ -208,10 +218,13 @@ def _launch_agent_runtime_project_locked(
     port = _allocate_loopback_port(preferred_port=preferred_port)
     runtime_url = f"http://127.0.0.1:{port}"
     gateway_token = secrets.token_urlsafe(32)
+    direct_auth_enabled = _direct_runtime_auth_enabled(root)
     environment = _agent_runtime_environment(
         settings,
         port=port,
         gateway_token=gateway_token,
+        direct_auth_enabled=direct_auth_enabled,
+        include_debug_access=include_debug_access,
     )
     server_result, process = _start_agent_runtime_server(
         uv_command=uv_command,
@@ -355,7 +368,34 @@ def _launch_agent_runtime_project_locked(
             "runtime_url": runtime_url,
             "gateway_token": gateway_token,
         }
+    if direct_auth_enabled is not None:
+        # Direct 拓扑下 Runtime 自己就是公开入口，需要把地址回传给预览编排层注入前端。
+        result["_public_edge_url"] = runtime_url
     return result
+
+
+def _direct_runtime_auth_enabled(root: Path) -> bool | None:
+    """从已确认拓扑与 canonical application.json 读取 Runtime 托管认证开关。
+
+    返回 None 表示应用公开入口不由 Runtime 承担，认证仍由网关托管；
+    返回布尔值表示公开入口就是 Runtime 自身，并给出它是否开启登录认证。
+    """
+
+    technical_plan_path = root / ".xcodeagent/plans/technical-plan.json"
+    if not technical_plan_path.is_file() or technical_plan_path.is_symlink():
+        # 尚未完成技术规划：认证仍由网关托管，此处不报错。
+        return None
+    try:
+        technical_plan = json.loads(technical_plan_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise AgentRuntimeLaunchError("TechnicalPlan 损坏或无法读取。") from exc
+    if not isinstance(technical_plan, dict) or not serves_agent_runtime_public_edge(technical_plan):
+        return None
+    application_config = read_application_config(root)
+    auth = application_config.get("auth")
+    if not isinstance(auth, dict) or type(auth.get("enable")) is not bool:
+        raise AgentRuntimeLaunchError("application.json.auth.enable 必须是布尔值。")
+    return auth["enable"]
 
 
 def stop_agent_runtime_project(
