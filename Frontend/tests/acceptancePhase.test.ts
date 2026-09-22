@@ -7,6 +7,7 @@ import {
   type PlanExecutionMode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
+  shouldShowAcceptanceDecisionDock,
   workflowPreviewTarget,
   workflowShouldShowCodeReview,
   workflowShouldShowProjectLaunch
@@ -113,6 +114,27 @@ test('验收等待态自动生成预览目标且不展示代码审查结果', ()
     key: 'acceptance-thread:acceptance-run:http://127.0.0.1:3000',
     url: 'http://127.0.0.1:3000'
   })
+})
+
+test('验收通过后不再展示底部验收操作', () => {
+  const decide = (acceptancePassed: boolean): boolean =>
+    shouldShowAcceptanceDecisionDock({
+      activePhase: 'acceptance',
+      planExecutionMode: 'awaiting_acceptance',
+      acceptancePassed
+    })
+
+  assert.equal(decide(false), true, '等待验收且尚未通过时应展示两个验收按钮')
+  assert.equal(decide(true), false, '生命周期已验收通过时必须移除底部验收按钮')
+  assert.equal(
+    shouldShowAcceptanceDecisionDock({
+      activePhase: 'review',
+      planExecutionMode: 'awaiting_acceptance',
+      acceptancePassed: false
+    }),
+    false,
+    '非验收阶段不得展示验收底栏'
+  )
 })
 
 test('验收启动中无需等待 launchResult 即展示项目启动步骤', () => {

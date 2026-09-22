@@ -42,6 +42,19 @@ export type WorkspacePathParts = {
   fileName: string
 }
 
+/** 仅在当前验收仍等待用户决策且尚未通过时展示底部验收操作。 */
+export function shouldShowAcceptanceDecisionDock(input: {
+  activePhase: WorkbenchPhase
+  planExecutionMode: string
+  acceptancePassed: boolean
+}): boolean {
+  return (
+    input.activePhase === 'acceptance' &&
+    input.planExecutionMode === 'awaiting_acceptance' &&
+    !input.acceptancePassed
+  )
+}
+
 /** 生成页面详情目标键，供临时运行状态按页面隔离。 */
 export function pageDetailTargetKey(pageId: string): string {
   return pageId ? `page:${pageId}` : ''

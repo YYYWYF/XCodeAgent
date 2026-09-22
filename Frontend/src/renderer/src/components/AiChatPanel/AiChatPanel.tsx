@@ -166,6 +166,7 @@ import {
   hasConfirmedDesignDocument,
   pageDetailTargetKey,
   shouldInjectPlanningPlaceholder,
+  shouldShowAcceptanceDecisionDock,
   shouldShowRightWorkspace,
   workflowShouldShowCodeChanges,
   workflowDetailTargetKey,
@@ -3562,8 +3563,11 @@ export default function AiChatPanel({
     ]
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
-  const acceptanceAwaiting =
-    activeWorkbenchPhase === 'acceptance' && displayedPlanExecutionMode === 'awaiting_acceptance'
+  const acceptanceAwaiting = shouldShowAcceptanceDecisionDock({
+    activePhase: activeWorkbenchPhase,
+    planExecutionMode: displayedPlanExecutionMode,
+    acceptancePassed
+  })
   const acceptancePreviewFocus =
     activeWorkbenchPhase === 'acceptance' && showRightPanel && rightPanel?.type === 'preview'
   // 「检查遗漏变更」：未提交文件里没被任何模块任务认领的部分。
