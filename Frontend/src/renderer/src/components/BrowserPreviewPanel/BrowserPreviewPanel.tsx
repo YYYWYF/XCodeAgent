@@ -31,7 +31,11 @@ import { useElementInspector } from './useElementInspector'
 import ServiceStatusDrawer from './ServiceStatusDrawer'
 import type { ServiceStatusControl } from './ServiceStatusDrawer'
 import type { PreviewServiceState } from './serviceStatusPolicy'
-import { previewServiceBadge, previewServiceState } from './serviceStatusPolicy'
+import {
+  previewServiceBadge,
+  previewServiceState,
+  shouldShowPreviewServiceEmptyState
+} from './serviceStatusPolicy'
 
 const { Text } = Typography
 
@@ -92,11 +96,19 @@ export default function BrowserPreviewPanel({
     if (menuPages.length > 0) return menuPages
     return application.pages.map((page) => ({ label: page, value: '/' }))
   }, [application.menus.items, application.pages, pages])
+  const serviceRuntime = serviceControl?.snapshot?.runtime
+  const runtimeServiceState = previewServiceState(serviceRuntime)
+  const showServiceEmptyState = shouldShowPreviewServiceEmptyState({
+    hasSnapshot: Boolean(serviceControl?.snapshot),
+    status: runtimeServiceState,
+    externalStatus: externalServiceStatus
+  })
   const initialPagePath = selectedPagePath || pageOptions[0]?.value || '/'
   const initialUrl =
-    normalizePreviewUrl(requestedUrl || '') ||
-    composePreviewUrl(previewBaseUrl, initialPagePath) ||
-    'about:blank'
+    (showServiceEmptyState
+      ? 'about:blank'
+      : normalizePreviewUrl(requestedUrl || '') ||
+        composePreviewUrl(previewBaseUrl, initialPagePath)) || 'about:blank'
   const [navigation, setNavigation] = useState(() => ({ history: [initialUrl], index: 0 }))
   const [draftUrl, setDraftUrl] = useState(initialUrl)
   const [selectedPage, setSelectedPage] = useState(initialPagePath)
@@ -112,10 +124,9 @@ export default function BrowserPreviewPanel({
     onInspectingChange,
     previewUrl
   })
-  const serviceRuntime = serviceControl?.snapshot?.runtime
   const serviceBadge = previewServiceBadge({
     hasServiceControl: Boolean(serviceControl),
-    runtimeStatus: previewServiceState(serviceRuntime),
+    runtimeStatus: runtimeServiceState,
     externalStatus: externalServiceStatus
   })
 
@@ -128,20 +139,38 @@ export default function BrowserPreviewPanel({
 
   useEffect(() => {
     if (requestKey) setRefreshKey((key) => key + 1)
-    if (!requestedUrl) return
+    if (!requestedUrl || showServiceEmptyState) return
     // 从外部收到新的 preview 地址（如 launch 成功返回），清除此前可能的启动错误
     setLaunchError('')
     setNavigation((current) => navigatePreviewHistory(current, requestedUrl))
-  }, [requestKey, requestedUrl])
+  }, [requestKey, requestedUrl, showServiceEmptyState])
 
   useEffect(() => {
-    if (!previewBaseUrl) return
-    // 预览面板可能在项目启动完成前以 about:blank 挂载；启动地址到达后自动进入当前页面。
+    if (showServiceEmptyState) {
+      // 服务退出后必须丢弃旧 localhost 历史，避免地址栏和 iframe 假装仍可访问。
+      setNavigation({ history: ['about:blank'], index: 0 })
+      setOpenError('')
+      setLaunchError('')
+      return
+    }
+    const readyUrl =
+      serviceRuntime?.status === 'running'
+        ? serviceRuntime.previewUrl || serviceRuntime.frontend.url || previewBaseUrl
+        : previewBaseUrl
+    if (!readyUrl) return
+    // 运行状态也参与依赖：停服后即使仍使用相同端口，重新启动也必须恢复当前页面。
     setLaunchError('')
     setNavigation((current) =>
-      navigatePreviewToStartedProject(current, previewBaseUrl, selectedPage)
+      navigatePreviewToStartedProject(current, readyUrl, selectedPage)
     )
-  }, [previewBaseUrl, selectedPage])
+  }, [
+    previewBaseUrl,
+    selectedPage,
+    serviceRuntime?.frontend.url,
+    serviceRuntime?.previewUrl,
+    serviceRuntime?.status,
+    showServiceEmptyState
+  ])
 
   useEffect(() => {
     setLaunchError(externalError || '')
@@ -154,6 +183,10 @@ export default function BrowserPreviewPanel({
 
   /** 将手动输入的地址加入预览导航历史。 */
   const navigateTo = (rawUrl: string): void => {
+    if (showServiceEmptyState) {
+      setDraftUrl('about:blank')
+      return
+    }
     const nextUrl = normalizePreviewUrl(rawUrl)
     if (!nextUrl || nextUrl === previewUrl) {
       setDraftUrl(previewUrl)
@@ -254,6 +287,7 @@ export default function BrowserPreviewPanel({
           <Input.Search
             aria-label="预览地址"
             className={cx('browser-address-input')}
+            disabled={showServiceEmptyState}
             enterButton="访问"
             onChange={(event) => setDraftUrl(event.target.value)}
             onSearch={navigateTo}
@@ -313,14 +347,23 @@ export default function BrowserPreviewPanel({
 
       <div className={cx('browser-preview-stage')}>
         <div className={cx('browser-preview-viewport', viewport)}>
-          <iframe
-            key={frameKey}
-            ref={elementInspector.iframeRef}
-            className={cx('browser-preview-frame')}
-            src={previewUrl}
-            title={`${application.name} 网页预览`}
-            sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
-          />
+          {showServiceEmptyState ? (
+            <div className={cx('browser-preview-service-empty')} role="status">
+              <span className={cx('browser-preview-service-empty__icon')} aria-hidden="true">
+                <CloudServerOutlined />
+              </span>
+              <p>请点击服务状态内的启动服务按钮进行预览</p>
+            </div>
+          ) : (
+            <iframe
+              key={frameKey}
+              ref={elementInspector.iframeRef}
+              className={cx('browser-preview-frame')}
+              src={previewUrl}
+              title={`${application.name} 网页预览`}
+              sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+            />
+          )}
         </div>
       </div>
 

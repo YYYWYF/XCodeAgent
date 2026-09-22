@@ -20,6 +20,7 @@ import {
   shouldAutoStartPreviewService
 } from '../src/renderer/src/components/BrowserPreviewPanel/serviceStatusPolicy'
 import type { ApplicationConfig } from '../src/renderer/src/typings'
+import type { ServiceStatusControl } from '../src/renderer/src/components/BrowserPreviewPanel/ServiceStatusDrawer'
 
 /** 最小可用应用配置：只提供该面板实际读取的字段。 */
 function application(): ApplicationConfig {
@@ -39,6 +40,34 @@ function previewApplication(): ApplicationConfig {
     menus: { items: [] },
     pages: []
   } as unknown as ApplicationConfig
+}
+
+/** 构造当前工作区预览的最小真实运行快照。 */
+function previewServiceControl(
+  status: 'starting' | 'running' | 'failed' | 'stopped'
+): ServiceStatusControl {
+  return {
+    open: false,
+    setOpen: () => undefined,
+    snapshot: {
+      status: 'completed',
+      runtime: {
+        attemptId: 'attempt-1',
+        status,
+        previewUrl: status === 'running' ? 'http://localhost:3000' : undefined,
+        frontend: {
+          status,
+          url: status === 'running' ? 'http://localhost:3000' : undefined
+        },
+        backend: { status }
+      }
+    },
+    busy: false,
+    error: '',
+    blockedReason: '',
+    onRestart: () => undefined,
+    onDiagnose: () => undefined
+  }
 }
 
 test('历史版本预览：工具栏角标报运行中且不可点开抽屉', () => {
@@ -76,6 +105,41 @@ test('当前版本预览：不传外部状态时角标行为不变', () => {
   // 没有运行时句柄也没有外部状态时照旧报待启动 —— 这条老行为不能被改动抹掉。
   assert.ok(badge.includes('待启动'), '无外部状态时应照旧报待启动')
   assert.ok(badge.includes('is-idle'), '角标样式应保持 idle')
+})
+
+test('当前版本停服后清空旧地址并展示启动服务空态', () => {
+  const html = renderToStaticMarkup(
+    <BrowserPreviewPanel
+      application={previewApplication()}
+      serviceControl={previewServiceControl('stopped')}
+      previewBaseUrl="http://localhost:3000"
+      requestedUrl="http://localhost:3000/welcome"
+      selectedPagePath="/welcome"
+    />
+  )
+
+  assert.ok(html.includes('value="about:blank"'), '停服后地址栏应显示 about:blank')
+  assert.ok(
+    html.includes('请点击服务状态内的启动服务按钮进行预览'),
+    '停服后应展示启动服务引导'
+  )
+  assert.ok(html.includes('browser-preview-service-empty__icon'), '停服空态应展示服务图标')
+  assert.ok(!html.includes('<iframe'), '停服后不应继续渲染旧预览 iframe')
+})
+
+test('当前版本运行中仍渲染真实预览', () => {
+  const html = renderToStaticMarkup(
+    <BrowserPreviewPanel
+      application={previewApplication()}
+      serviceControl={previewServiceControl('running')}
+      previewBaseUrl="http://localhost:3000"
+      selectedPagePath="/welcome"
+    />
+  )
+
+  assert.ok(html.includes('<iframe'), '运行中应继续渲染预览 iframe')
+  assert.ok(html.includes('http://localhost:3000/welcome'), '运行中应展示当前页面地址')
+  assert.ok(!html.includes('browser-preview-service-empty'), '运行中不应展示停服空态')
 })
 
 test('已生成版本面板默认渲染应用文件，且不出现会话相关结构', () => {

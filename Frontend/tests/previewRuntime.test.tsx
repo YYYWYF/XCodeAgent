@@ -6,8 +6,10 @@ import PreviewRepairControls from '../src/renderer/src/components/BrowserPreview
 import {
   previewServiceActionAvailability,
   previewServiceState,
-  shouldAutoStartPreviewService
+  shouldAutoStartPreviewService,
+  shouldShowPreviewServiceEmptyState
 } from '../src/renderer/src/components/BrowserPreviewPanel/serviceStatusPolicy'
+import { navigatePreviewToStartedProject } from '../src/renderer/src/utils/previewUrl'
 
 const originalFetch = globalThis.fetch
 Object.assign(globalThis, { window: { xcodeAgent: { agentBaseUrl: 'http://127.0.0.1:8000' } } })
@@ -128,6 +130,35 @@ try {
   assert.equal(autoStart({ status: 'starting' }), false, '正在启动不应重复拉起')
   assert.equal(autoStart({ status: 'failed' }), false, '失败交给用户诊断，不自动重启')
   assert.equal(autoStart({ busy: false, alreadyRequested: true }), false, '同一次进入只启动一次')
+
+  assert.equal(
+    shouldShowPreviewServiceEmptyState({ hasSnapshot: true, status: 'idle' }),
+    true,
+    '服务停止后应显示预览空态'
+  )
+  assert.equal(
+    shouldShowPreviewServiceEmptyState({ hasSnapshot: false, status: 'idle' }),
+    false,
+    '快照未到达时不能把未知状态误判为停服'
+  )
+  assert.equal(
+    shouldShowPreviewServiceEmptyState({
+      hasSnapshot: true,
+      status: 'idle',
+      externalStatus: 'running'
+    }),
+    false,
+    '历史版本的外部预览不应落入工作区停服空态'
+  )
+  assert.deepEqual(
+    navigatePreviewToStartedProject(
+      { history: ['about:blank'], index: 0 },
+      'http://localhost:3000',
+      '/welcome'
+    ),
+    { history: ['about:blank', 'http://localhost:3000/welcome'], index: 1 },
+    '停服后即使恢复到相同端口，也应从 about:blank 重新进入当前页面'
+  )
 
   const awaiting = renderToStaticMarkup(
     createElement(PreviewRepairControls, {

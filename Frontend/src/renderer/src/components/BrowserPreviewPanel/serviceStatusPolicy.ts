@@ -39,6 +39,15 @@ export function previewServiceState(runtime?: ServiceRuntime): PreviewServiceSta
   return 'idle'
 }
 
+/** 仅在受管理服务已有真实快照且尚未运行时展示预览空态。 */
+export function shouldShowPreviewServiceEmptyState(input: {
+  hasSnapshot: boolean
+  status: PreviewServiceState
+  externalStatus?: PreviewServiceState
+}): boolean {
+  return input.externalStatus === undefined && input.hasSnapshot && input.status !== 'running'
+}
+
 /** 允许服务重启与应用任务并行，仅让诊断修复继续遵守任务占用。 */
 export function previewServiceActionAvailability(input: {
   busy: boolean
