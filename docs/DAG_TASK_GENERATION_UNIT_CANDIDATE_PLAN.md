@@ -1383,9 +1383,13 @@ candidate
 本 Run 不恢复；后续 Retry 若采用 Recovery Candidate，必须创建新 Run 并保留 source provenance
 ```
 
-当前任务只提供 `origin=recovered` 的领域合同能力，尚未接入 Recovery Snapshot、跨 Run
-Candidate 读取、Retry wiring 或 Candidate 自动注入。任何 Candidate 在进入 Scope Assembly
-和 Global Validation 前都不能进入 PendingPlan/FormalPlan。
+Task 1 已提供 `origin=recovered` 的领域合同能力；Task 2 新增独立的
+`PlanningRecoverySnapshot` 与 `.devagentstudio/runtime/planning-recovery/<source_workflow_run_id>.json`。
+Task 2 只在最终 failed PlanningRun 的 `UNIT_GENERATION_INFRASTRUCTURE_FAILURE` 收口后写入当前
+`candidate_ready` Candidate 正文，仍不读取 Recovery、不创建新 Run 的 recovered Candidate，也不做
+Retry 注入。Task 3 才通过明确的 `resumeExecutionRunId` 消费它；禁止按 workspace/session/scope
+猜测最近结果。任何 Candidate 在进入 Scope Assembly 和 Global Validation 前都不能进入
+PendingPlan/FormalPlan。
 
 用户点击：
 
@@ -1541,7 +1545,7 @@ generation_attempt
 | Local 额度 | 每个 Unit 每轮最多 3 次完整内容生成尝试，包含首次生成；JSON／内容校验失败进入本轮下一次尝试。首次通过即停止，不为用满额度而继续生成。 |
 | Global 额度 | 每个 PlanningRun 最多 2 轮修复；初次检查不占额度。一次检查中的问题先聚合，同一批选定 Unit 合计消耗一轮；各 Unit 获得新的完整 Local 额度。两轮之后仍做最后一次 Global 检查，通过可保存草稿，仍有阻断问题则失败。 |
 | 局部耗尽 | 只返回该 Unit 本轮无有效 Candidate 的失败结果和原因，其他 Unit 继续。本轮收尾后由 Global 判断缺项并在剩余额度内补生成；其他有效 Candidate 与历史 Tasks 保持不变。 |
-| 基础设施调用失败 | DAG 规划链路不增加外层基础设施 retry；production Unit policy 将 SDK max_retries 设置为 2（DTO 默认仍为 0）。SDK 支持范围内的基础设施重试仍无法完成调用后立即结束当前 PlanningRun 并上报上层，不消耗 Global 额度尝试恢复。用户重新生成时创建新 Run，不恢复旧 Run。 |
+| 基础设施调用失败 | DAG 规划链路不增加外层基础设施 retry；production Unit policy 将 SDK max_retries 设置为 2（DTO 默认仍为 0）。SDK 支持范围内的基础设施重试仍无法完成调用后立即结束当前 PlanningRun 并上报上层，不消耗 Global 额度尝试恢复。失败收口后，Task 2 仅按 source Workflow execution ID 写独立 Recovery Snapshot；用户重新生成时仍创建新 Run，且 Regenerate 不读取 Recovery。 |
 | 重试反馈 | 冻结输入之外显式分区：Global 反馈是本 Unit 对本轮全局问题必须达成的修复目标，在整轮 Local 尝试中持续保留；最新 Local 错误是最近一次生成暴露的具体问题，按尝试更新。两类不能混成无来源的错误列表，最终须同时满足。输出始终是该 Unit 完整本轮 Candidate，其他 Unit 的 Candidate 正文不进入输入。 |
 | 最终失败或用户取消 | 停止派发、停止自动重试，尝试取消进行中调用，拒收迟到结果；不组装或提交失败 Candidate，不覆盖正式 DAG。通过现有 AG-UI 向上层输出已结束的状态及原因，不保留 PlanningRun 内人工暂停／继续。 |
 
@@ -1575,14 +1579,14 @@ generation_attempt
 
 错误发生后将当前 PlanningRun 标记为 failed，停止新调用与自动重试，按失败收尾规则处理正在进行的调用及迟到结果。通过现有 AG-UI 失败流程向上层报告故障 Unit、原因及是否需要先处理配置，明确结束当前生成进度；不交给 Global 作为内容缺项自动修复，也不在 PlanningRun 内保留等待用户决定的运行状态。
 
-- **用户选择重新生成任务：** 上层重新进入 `prepare_build_tasks` 的任务准备入口及必要输入准备，创建新的 `planning_run_id`；重新读取已确认正式合同和 confirmed DAG，建立本轮工作区快照、复用事实与生成范围。新 Run 不读取失败 Run 的 Candidate，也不能把 checkpoint 中上次候选计划当作 confirmed 基线；Local／Global 预算从新 Run 开始计数。这不是从需求、UI 或技术规划阶段重新生成上游产物。
+- **用户选择重新生成任务：** 上层重新进入 `prepare_build_tasks` 的任务准备入口及必要输入准备，创建新的 `planning_run_id`；重新读取已确认正式合同和 confirmed DAG，建立本轮工作区快照、复用事实与生成范围。Regenerate 不读取 Recovery；Task 3 未来只有带明确 `resumeExecutionRunId` 的 Retry 才能尝试读取对应 Snapshot。新 Run 不能把 checkpoint 中上次候选计划当作 confirmed 基线；Local／Global 预算从新 Run 开始计数。这不是从需求、UI 或技术规划阶段重新生成上游产物。
 - **用户选择取消／稍后处理：** 失败 PlanningRun 已经结束，无需再让它等待；上层关闭本次失败处理或等待用户稍后主动发起。正式 DAG 始终不变；用户在调用尚未失败时主动取消，则按取消分支结束运行。
 - **上层等待与内部 Run 分离：** 可以由工作流／界面等待用户选择，但这不表示失败 PlanningRun 仍活跃。AG-UI 工作流执行身份与 `planning_run_id` 分属不同层，不要求更换整个应用、会话或重新执行所有上游节点。用户操作的身份绑定在第 9、10 项衔接。
 - **错误契约：** 使用平台结构化失败结果和明确的新 Run 发起动作，不仅抛一个未处理异常后让界面停留在“生成中”。基础设施错误的 `ValidationIssue.retryable=false` 表示不能在该 PlanningRun 内通过 Candidate 重生成修复，不禁止用户在上层主动开启新 Run。
 
 现有 `Backend/app/graph/workflow.py` 已支持 `resume_from=prepare_build_tasks`，`route_prepare_build_tasks` 可将失败结果交给统一失败处理；`Backend/app/graph/nodes/tasks.py::_build_task_plan_generation_failed_result` 已提供节点失败出口，可以复用这些入口。当前 `_existing_build_task_plan` 仍优先接受 checkpoint 中通过图校验的计划，不能直接等同于新方案只从正式 confirmed DAG 建立基线；重新读取基线和隔离新 Run 候选是本方案实施要求。
 
-该方向取消上一版“同一 PlanningRun 暂停后手动重试失败 Unit”的建议。代价是失败 Run 中已成功 Candidate 也不跨 Run 复用；收益是不需要为基础设施故障增加 PlanningRun 的人工暂停／继续契约，与既定的新 Run 基线规则一致。实际模型恢复率尚无数据，不能保证立刻新建 Run 就能解决同一基础设施问题。
+该方向取消上一版“同一 PlanningRun 暂停后手动重试失败 Unit”的建议。失败 Run 仍是终态；Task 2 保存的 Recovery Snapshot 只是 retry optimization state，不是 PlanningRun、PendingPlan 或 FormalPlan，也不改变锁、Pending lifecycle 或正式 DAG。Task 3 未来可在新 Run 中按显式 `resumeExecutionRunId` 重新验证并复用 Candidate。实际模型恢复率尚无数据，不能保证立刻新建 Run 就能解决同一基础设施问题。
 
 `Backend/app/protocols/workflow/runtime.py` 已通过现有 AG-UI 入口处理 `cancel_run_id`，可复用取消入口；当前 `_invoke_live_main_agent` 仍使用同步 `invoke`，不能把已有取消入口等同于可立即中断底层模型请求。实施需让取消能独立被处理：停止派发并拒收取消后的迟到结果，底层请求支持中断时再中断。具体调用与收尾时限在第 10 项确定，不新增自定义传输接口。
 
@@ -2328,6 +2332,24 @@ runtime missing
 
 不恢复 Scheduler。
 
+Task 2 另外保存失败时的 retry optimization state：
+
+```text
+.devagentstudio/runtime/planning-recovery/<source_workflow_run_id>.json
+```
+
+该文件是独立的 `planning-recovery.v1` 合同，包含 source Workflow/PlanningRun 身份、输入指纹、
+confirmed baseline digest、Build scope、原始 infrastructure `ValidationIssue` 以及按
+`UnitRunState.latest_candidate_id` 精确提取的完整 `CandidateAttempt` 正文。它只接受
+`UNIT_GENERATION_INFRASTRUCTURE_FAILURE`，使用排除 `snapshot_digest` 自身后的 canonical JSON
+SHA-256 做完整性校验；损坏或摘要不匹配必须报 invalid。没有当前 `candidate_ready` Candidate
+时不创建空文件。路径只能按显式 source workflow execution ID 定位，不能查找 latest，也不按
+workspace/session/scope 回退。
+
+Task 2 只写 Snapshot；Task 3 才消费它并创建属于新 Run、保留 source provenance 的 recovered
+Candidate。Recovery 写入失败不能覆盖原始 PlanningRun failure；Regenerate 仍只启动 fresh
+PlanningRun，Scheduler 保持 recovery-unaware，Task 4 才处理 cleanup/GC。
+
 ---
 
 # 33. 单写者
@@ -2715,7 +2737,7 @@ checkpoint candidate
 
 ```text
 Task-level generation / retry
-Cross-run Candidate cache
+Recovery Snapshot consumption / cross-run Candidate injection（Task 3）
 Task input hash
 自动失效传播
 Confirmed Task replacement

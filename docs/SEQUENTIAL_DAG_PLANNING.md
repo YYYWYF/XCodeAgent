@@ -74,6 +74,13 @@ best-effort 取消其他 active worker。已取消 sibling 若仍返回结果，
 拒绝其 Candidate 提交，Scheduler 保留并传播最初的 fatal，不让晚到拒绝异常覆盖根因。
 fatal 不进入 Local requeue，也不会到达 Barrier、Global repair 或 Pending persistence。
 
+基础设施 fatal 收口后，外层 `build_task_planning_service.run_mainline_planning`（以及 fresh
+Regenerate facade）捕获携带最终 failed snapshot 的 `DagPlanningError`，只对
+`UNIT_GENERATION_INFRASTRUCTURE_FAILURE` 调用 Recovery Snapshot builder。builder 按每个
+`UnitRunState.latest_candidate_id` 提取当前 `candidate_ready` Candidate 正文并原子写入
+`.devagentstudio/runtime/planning-recovery/<source_workflow_run_id>.json`；写入失败只记录告警，
+原始 `DagPlanningError` 继续向上传播。Worker、Scheduler、Controller 不写 Recovery。
+
 Workflow registry 对活动任务发出 `task.cancel()` 后，Scheduler 先冻结派发并丢弃
 所有 queued Job，再经 Controller 原子持久化 `PlanningRun.cancelled`，最后 best-effort
 取消 active worker。吞掉 cancellation 的 provider 若返回晚到结果，T9.4 Attempt gate
@@ -109,6 +116,9 @@ deterministic 策略、授权资源 executor、完整指纹 Task ID/capability �
 Workflow Cancel 与 Pending Abandon 仍是两条独立路径：前者取消整个活动 Workflow/PlanningRun，
 后者精确删除待确认 PendingPlan、记录 abandoned 终态并结束对应 Workflow execution。两者都不提供 Unit 级用户取消。
 
+只有基础设施失败会触发第一版 Recovery writer；Local retry exhausted、Global validation/repair、
+Frozen Contract platform fatal、cancel 和普通内容错误都不会创建 Recovery。
+
 ## 与现有 LangGraph 入口的关系
 
 生产 `task_planning_adapter.py::prepare_build_tasks` 已通过异步
@@ -119,10 +129,10 @@ writer 写入并回读自校验 DraftIdentity。规划失败或取消不会调�
 ConfirmedPlan 保持不变。Confirm/Abandon 已由独立 lifecycle 接入；任何调用方都不得自行创建 Controller 或 Scheduler，
 也不得跳过 Pending 确认直接进入 Build。
 
-`plan_dag_sequential` 自身唯一允许的文件写入是 Controller 的
+`plan_dag_sequential` 自身唯一允许的 Planning 状态文件写入是 Controller 的
 `.devagentstudio/plans/planning-run.json`；它不写 Pending、ConfirmedPlan、TechnicalPlan
-或其他正式产物。只有外层 mainline facade 在该调用成功返回后写 Pending，二者均不接
-Frontend。
+或 Recovery。只有外层 mainline/Regenerate facade 在该调用成功返回后写 Pending，失败时才
+按上面的 infrastructure gate 写独立 Recovery；二者均不接 Frontend。
 FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Attempt 拒收与 Scheduler cancellation correctness，
 不修改前端 Cancel UI。
 
@@ -139,9 +149,9 @@ FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Atte
 - `regenerate` 是新增的 AG-UI 结构化动作：先不可回滚地删除旧 Pending，再回到 `prepare_build_tasks`，由服务端分配新 PlanningRun ID 并完整执行本 orchestrator。成功写新 Pending；失败保留失败事实且不恢复旧 Pending。
 
 页面刷新只从服务端投影恢复 PlanningRun/Pending/Formal 状态，不承诺原 DAG 请求继续执行。
-后台脱离执行、SSE 事件重放/重新订阅和 Candidate 断点恢复不属于当前合同。Candidate 的
-跨 Run Recovery 也不在本任务接入范围内；Recovery 只能由后续明确的 `resumeExecutionRunId`
-流程定位，不能从 workspace/session/scope 猜测最近结果。
+后台脱离执行、SSE 事件重放/重新订阅和 Candidate 断点恢复不属于当前合同。Task 2 只写
+Recovery Snapshot，不在 Retry 时加载、不注入 Candidate；Task 3 才能由明确的
+`resumeExecutionRunId` 精确定位对应文件，不能从 workspace/session/scope 猜测最近结果。
 
 ## Frozen Contract Catalog
 

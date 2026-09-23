@@ -16,8 +16,9 @@ from app.services.build_task_plan_lifecycle import (
     abandon_pending_build_task_plan,
 )
 from app.services.dag_planning_inputs import SequentialPlanningInputs
-from app.services.dag_planning_orchestrator import plan_dag_sequential
+from app.services.dag_planning_orchestrator import DagPlanningError, plan_dag_sequential
 from app.services.planning_frozen import plain_json
+from app.services.build_task_planning_service import persist_planning_recovery_if_applicable
 from app.services.planning_run_controller import SnapshotPublisher
 from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
@@ -97,17 +98,25 @@ async def regenerate_pending_build_task_plan(
     if plain_json(inputs.base_confirmed_plan) != fresh_formal:
         raise ValueError("Regenerate 正式输入没有使用刚重载的当前 ConfirmedPlan。")
 
-    planned = await plan_dag_sequential(
-        inputs,
-        workspace_state=state,
-        planning_run_id=validated_id,
-        workflow_run_id=workflow_run_id,
-        thread_id=thread_id,
-        policy=policy,
-        settings=settings,
-        generate_once=generate_once,
-        publish=publish,
-    )
+    try:
+        planned = await plan_dag_sequential(
+            inputs,
+            workspace_state=state,
+            planning_run_id=validated_id,
+            workflow_run_id=workflow_run_id,
+            thread_id=thread_id,
+            policy=policy,
+            settings=settings,
+            generate_once=generate_once,
+            publish=publish,
+        )
+    except DagPlanningError as exc:
+        persist_planning_recovery_if_applicable(
+            state,
+            exc,
+            owner_session_id=owner_session_id,
+        )
+        raise
     run = planned.planning_run
     assembled_plan = plain_json(planned.assembly.assembled_plan)
     planning_provenance = build_planning_provenance(

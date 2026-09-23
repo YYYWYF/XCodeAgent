@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
+import logging
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -13,9 +14,11 @@ from app.config import Settings
 from app.services.build_task_plan_lifecycle import DraftIdentity
 from app.services.dag_planning_inputs import MainlinePlanningInputs
 from app.services.dag_planning_orchestrator import (
+    DagPlanningError,
     ValidatedAssembledPlan,
     plan_dag_sequential,
 )
+from app.services.planning_recovery_contracts import build_planning_recovery_snapshot
 from app.services.planning_frozen import (
     FrozenJsonObject,
     FrozenPlanningModel,
@@ -34,7 +37,11 @@ from app.workspace.task_documents import (
     write_pending_build_task_plan_atomic,
 )
 from app.workspace.planning_run_documents import load_planning_run
+from app.workspace.planning_recovery_documents import write_planning_recovery_atomic
 from app.workspace.spec_documents import workspace_root
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class PendingPlanPersistenceResult(FrozenPlanningModel):
@@ -75,6 +82,43 @@ def _new_planning_run_id() -> str:
     """为一次 mainline service 调用分配后端拥有的 PlanningRun ID。"""
 
     return f"planning-{uuid4().hex}"
+
+
+def persist_planning_recovery_if_applicable(
+    state: Mapping[str, Any],
+    error: DagPlanningError,
+    *,
+    owner_session_id: str,
+) -> None:
+    """尽力保存支持的 failed Run Snapshot，但绝不覆盖原始 Planning failure。"""
+
+    snapshot = error.snapshot
+    if snapshot is None:
+        return
+    failure = snapshot.failure
+    if (
+        failure is None
+        or failure.code != "UNIT_GENERATION_INFRASTRUCTURE_FAILURE"
+        or failure.level != "system"
+        or failure.category != "infrastructure"
+        or failure.retryable
+    ):
+        return
+    try:
+        recovery = build_planning_recovery_snapshot(
+            snapshot,
+            owner_session_id=owner_session_id,
+        )
+        if recovery is not None:
+            write_planning_recovery_atomic(dict(state), recovery)
+    except Exception:
+        # Recovery 只是 retry optimization state；写入、序列化或路径失败不能改写
+        # 已经由 PlanningRun/Controller 确定的原始 UNIT_GENERATION failure。
+        _LOGGER.warning(
+            "Failed to persist Planning Recovery Snapshot for workflow_run_id=%s",
+            snapshot.workflow_run_id,
+            exc_info=True,
+        )
 
 
 def _persist_validated_pending_plan(
@@ -157,17 +201,25 @@ async def run_mainline_planning(
 
     frozen = MainlinePlanningInputs.model_validate(inputs)
     planning_run_id = _new_planning_run_id()
-    planned = await plan_dag_sequential(
-        frozen.sequential_inputs(),
-        workspace_state=workspace_state,
-        planning_run_id=planning_run_id,
-        workflow_run_id=frozen.workflow_run_id,
-        thread_id=frozen.thread_id,
-        policy=policy,
-        settings=settings,
-        generate_once=generate_once,
-        publish=publish,
-    )
+    try:
+        planned = await plan_dag_sequential(
+            frozen.sequential_inputs(),
+            workspace_state=workspace_state,
+            planning_run_id=planning_run_id,
+            workflow_run_id=frozen.workflow_run_id,
+            thread_id=frozen.thread_id,
+            policy=policy,
+            settings=settings,
+            generate_once=generate_once,
+            publish=publish,
+        )
+    except DagPlanningError as exc:
+        persist_planning_recovery_if_applicable(
+            workspace_state,
+            exc,
+            owner_session_id=frozen.owner_session_id,
+        )
+        raise
     persisted = _persist_validated_pending_plan(
         dict(workspace_state),
         planned,
