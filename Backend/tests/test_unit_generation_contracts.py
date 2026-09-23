@@ -212,7 +212,7 @@ class UnitGenerationContractTests(unittest.TestCase):
             policy.frozen_contract_read_limits["max_reads"] = 20
 
     def test_policy_defaults_and_invalid_budgets(self) -> None:
-        """策略默认 Local=3、SDK max_retries=0、tokens=4096，拒绝越界预算与错误类型。"""
+        """DTO 默认 Local=3、SDK max_retries=0、tokens=4096，production policy 另显式配置 2。"""
 
         policy = UnitGenerationPolicy(**_policy_payload())
         self.assertEqual((policy.local_max_attempts, policy.model_max_retries, policy.model_max_tokens), (3, 0, 4096))
@@ -232,7 +232,7 @@ class UnitGenerationContractTests(unittest.TestCase):
                 UnitGenerationPolicy(**{**_policy_payload(), **change})
 
     def test_policy_accepts_sdk_retry_boundaries(self) -> None:
-        """SDK max_retries 允许保持默认 0 或由 production 显式配置为 2。"""
+        """DTO 可保持默认 0 或接收 production policy 显式配置的 2。"""
 
         for retries in (0, 2):
             with self.subTest(retries=retries):
@@ -241,6 +241,28 @@ class UnitGenerationContractTests(unittest.TestCase):
                     "model_max_retries": retries,
                 })
                 self.assertEqual(policy.model_max_retries, retries)
+
+    def test_from_generated_attempt_allocates_only_for_none_and_fails_closed(self) -> None:
+        """Candidate ID 只有 None 才自动分配，显式合法值保留，非法值拒绝。"""
+
+        attempt = AttemptIdentity(**_identity_payload())
+        common = {
+            "attempt": attempt,
+            "input_fingerprint": "input-digest",
+            "status": "valid",
+            "tasks": _candidate_payload()["tasks"],
+        }
+
+        allocated = CandidateAttempt.from_generated_attempt(**common, candidate_id=None)
+        self.assertRegex(allocated.candidate_id, r"^candidate-[0-9a-f]{32}$")
+
+        explicit_id = "candidate-" + "c" * 32
+        explicit = CandidateAttempt.from_generated_attempt(**common, candidate_id=explicit_id)
+        self.assertEqual(explicit.candidate_id, explicit_id)
+
+        for invalid_id in ("", "candidate-not-a-valid-id"):
+            with self.subTest(candidate_id=invalid_id), self.assertRaises(ValidationError):
+                CandidateAttempt.from_generated_attempt(**common, candidate_id=invalid_id)
 
     def test_candidate_accepts_only_explicit_valid_invalid_superseded_status(self) -> None:
         """候选状态严格使用三种显式值，DTO 不执行状态推导或转移。"""

@@ -73,8 +73,9 @@ class UnitGenerationContext(_GenerationModel):
 class UnitGenerationPolicy(_GenerationModel):
     """独立运行策略，时间单位为秒；保护参数由调用方显式提供，不读取 Settings。
 
-    Local=3、SDK max_retries 默认=0（允许显式配置 0-2）、token budget=4096 遵循设计基线。
-    session timeout、turn limit、read limits 的生产默认值留待实现和压测确定。
+    本 DTO 的 Local=3、SDK max_retries 默认=0（允许显式配置 0-2）、token budget=4096
+    遵循设计基线；production_unit_generation_policy() 会另外显式配置 SDK max_retries=2。
+    session timeout、turn limit、read limits 由 production policy 显式提供。
     read limits 仅容纳具名正整数预算，不承载合同正文。
     """
 
@@ -184,8 +185,9 @@ def _new_candidate_id() -> str:
 class CandidateAttempt(_GenerationModel):
     """平台封装的候选记录，拆分当前身份与产生来源，status 由调用方明确指定。
 
-    candidate_id 默认由平台生成；反序列化可恢复原 ID。后续模型响应适配器只能
-    提交 tasks，不得把模型输出直接展开为本 DTO 的平台元数据。
+    candidate_id 默认由平台生成；反序列化可恢复原 ID。from_generated_attempt() 仅在
+    candidate_id 为 None 时分配新 ID，显式值必须通过自身字段校验。后续模型响应适配器
+    只能提交 tasks，不得把模型输出直接展开为本 DTO 的平台元数据。
     tasks 保留原始任务正文，包括非法或缺失 Task ID，供后续 Validator 报错。
     validation_issues 复用 T1.1 契约，不在此实现归因或状态转换。Candidate 当前
     identity 只表达当前 Run/Unit/round；generated_from 或 recovered_from 才表达来源。
@@ -232,11 +234,11 @@ class CandidateAttempt(_GenerationModel):
         generation_metadata: Mapping[str, Any] | None = None,
         candidate_id: str | None = None,
     ) -> "CandidateAttempt":
-        """用一次真实 Attempt 创建 generated Candidate，统一派生当前 Candidate 身份。"""
+        """用一次真实 Attempt 创建 generated Candidate；仅对 None candidate_id 自动分配。"""
 
         attempt = AttemptIdentity.model_validate(attempt)
         return cls(
-            candidate_id=candidate_id or _new_candidate_id(),
+            candidate_id=_new_candidate_id() if candidate_id is None else candidate_id,
             identity=CandidateIdentity.from_attempt(attempt),
             origin="generated",
             generated_from=attempt,

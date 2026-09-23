@@ -59,7 +59,9 @@ deterministic Candidate 同样保留平台分配的 generated Attempt provenance
 attempt budget；但当前 latest 的 `model + generated` Candidate 必须有正数的当前轮 model
 attempt，且 `generated_from.attempt_in_round` 必须等于 Unit 的 `attempt_in_round`。未来 recovered Candidate 使用 `origin=recovered` 和 `recovered_from`，可以在
 新 Run 中以 `candidate_ready + attempt_in_round=0 + total_attempts=0` 存在，不伪造当前 Run
-Attempt；当前文档范围不接入 Recovery Snapshot 或跨 Run Candidate 注入。
+Attempt；当前文档范围不接入 Recovery Snapshot 或跨 Run Candidate 注入。这里的
+`UnitGenerationPolicy.model_max_retries=0` 只是 DTO 默认值；production DAG policy 会显式
+设置模型 SDK infrastructure retry 为 2。
 
 每个 Local Attempt 创建独立 FrozenContractReader，只绑定 `read_frozen_contract_fragment`。
 模型可在一个 Attempt 内执行受 turn/read-count/read-byte 预算限制的多轮 Model → Reader，

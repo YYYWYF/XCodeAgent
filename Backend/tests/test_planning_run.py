@@ -170,6 +170,7 @@ class PlanningRunTests(unittest.TestCase):
         })
         state = sm.PlanningRun(
             planning_run_id="run-2", workflow_run_id="workflow-2", thread_id="thread-2",
+            phase="generating_units",
             build_execution_scope={"type": "page", "targetId": "orders"},
             input_fingerprint="frozen-input", base_confirmed_plan_digest="confirmed-digest",
             required_unit_ids=(UNIT,), planning_unit_ids=(UNIT,),
