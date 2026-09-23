@@ -17,24 +17,22 @@ import {
 import './WorkbenchTopBar.less'
 
 type Props = {
-  application: Pick<ApplicationConfig, 'id' | 'name' | 'versions' | 'currentVersionId'>
+  application: Pick<ApplicationConfig, 'id' | 'name' | 'branches' | 'branchName'>
   workspaceRoot: string
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
   developmentTotals?: { completed: number; total: number }
   rightPanelOpen: boolean
   onToggleRightPanel: () => void
-  /** 生成新版本：打开生成版本弹框。 */
-  onPublishVersion?: () => void
-  /** 基于历史版本迭代：打开回退弹框。 */
-  onRollbackVersion?: (versionId: string) => void
+  /** 提交并推送：打开提交弹框。 */
+  onPublishBranch?: () => void
   /** 发起新迭代：打开迭代弹框。 */
   onStartIteration?: () => void
-  /** 切换查看版本。 */
-  onVersionSelect?: (versionId: string) => void
-  /** 当前查看的版本 id。 */
-  viewingVersionId?: string
-  /** 正在回看历史版本：右侧的 Agent 身份、跟随开关与预览开关都不适用，整组隐藏。 */
+  /** 切换查看分支。 */
+  onBranchSelect?: (branchName: string) => void
+  /** 当前查看的分支名。 */
+  viewingBranchName?: string
+  /** 正在回看历史分支：右侧的 Agent 身份、跟随开关与预览开关都不适用，整组隐藏。 */
   versionReadOnly?: boolean
 }
 
@@ -50,11 +48,10 @@ export default function WorkbenchTopBar({
   onReturnWelcome,
   rightPanelOpen,
   onToggleRightPanel,
-  onPublishVersion,
-  onRollbackVersion,
+  onPublishBranch,
   onStartIteration,
-  onVersionSelect,
-  viewingVersionId,
+  onBranchSelect,
+  viewingBranchName,
   versionReadOnly = false
 }: Props): JSX.Element {
   const {
@@ -94,12 +91,12 @@ export default function WorkbenchTopBar({
       return
     }
     // 用户主动切到开发阶段时，标记已确认进入开发（与对话区"进入开发"按钮一致），
-    // 避免重挂载后自动阶段推导再次回到 product。作用域为当前迭代版本。
+    // 避免重挂载后自动阶段推导再次回到 product。作用域为当前分支。
     if (phaseKey === 'development') {
       markApplicationEnteredDevelopment(
         application.id,
-        application.currentVersionId || application.id,
-        // 与 AiChatPanel 同一作用域口径：版本 id 可复用，需再带 lifecycle threadId。
+        application.branchName || application.id,
+        // 与 AiChatPanel 同一作用域口径：同一条分支上会有多轮迭代，需再带 lifecycle threadId。
         String(lifecycle?.initialization?.threadId || '')
       )
     }
@@ -126,15 +123,14 @@ export default function WorkbenchTopBar({
         <span className={cx('workbench-topbar-app-name')}>{application.name}</span>
       </button>
 
-      {application.versions && application.versions.length > 0 ? (
+      {application.branches && application.branches.length > 0 ? (
         <VersionActions
           application={application as ApplicationConfig}
           lifecycle={lifecycle}
-          viewingVersionId={viewingVersionId}
-          onPublish={onPublishVersion || (() => {})}
-          onRollback={onRollbackVersion || (() => {})}
+          viewingBranchName={viewingBranchName}
+          onPublish={onPublishBranch || (() => {})}
           onStartIteration={onStartIteration || (() => {})}
-          onVersionSelect={onVersionSelect || (() => {})}
+          onBranchSelect={onBranchSelect || (() => {})}
           part="selector"
         />
       ) : null}
@@ -142,8 +138,8 @@ export default function WorkbenchTopBar({
       <div className={cx('workbench-topbar-phase', locked && 'locked')}>
         <div className={cx('workbench-topbar-stepper')} role="tablist" aria-label="阶段">
           {PHASE_ORDER.map((phaseKey, idx) => {
-            // 已生成版本（locked）也要高亮当前阶段：它只读、不可点，但仍要指明这个版本
-            // 停在哪个阶段（历史版本冻结在验收），否则阶段条上没有任何位置提示。
+            // 只读分支也要高亮当前阶段：它只读、不可点，但仍要指明这条分支
+            // 停在哪个阶段（历史分支冻结在验收），否则阶段条上没有任何位置提示。
             const isActive = phase === phaseKey
             // 回访资格使用独立的到达记录，不能随当前视图回退或 execution 收口而降低。
             const reached = PHASE_ORDER.indexOf(reachedPhase) >= idx
@@ -168,7 +164,7 @@ export default function WorkbenchTopBar({
                   }
                   title={
                     locked
-                      ? '该版本已生成，阶段和 Agent 调度均已锁定'
+                      ? '该分支为只读历史，阶段和 Agent 调度均已锁定'
                       : phaseKey === 'test'
                         ? testEntryGateReason(testEntryGate)
                         : undefined
@@ -189,7 +185,7 @@ export default function WorkbenchTopBar({
         </div>
       </div>
 
-      {application.versions && application.versions.length > 0 ? (
+      {application.branches && application.branches.length > 0 ? (
         <>
           <span
             aria-hidden="true"
@@ -200,17 +196,16 @@ export default function WorkbenchTopBar({
           <VersionActions
             application={application as ApplicationConfig}
             lifecycle={lifecycle}
-            viewingVersionId={viewingVersionId}
-            onPublish={onPublishVersion || (() => {})}
-            onRollback={onRollbackVersion || (() => {})}
+            viewingBranchName={viewingBranchName}
+            onPublish={onPublishBranch || (() => {})}
             onStartIteration={onStartIteration || (() => {})}
-            onVersionSelect={onVersionSelect || (() => {})}
+            onBranchSelect={onBranchSelect || (() => {})}
             part="terminal"
           />
         </>
       ) : null}
 
-      {/* 历史版本只读回看：Agent 身份、跟随开关与预览开关都指向"当前迭代的推进"，
+      {/* 历史分支只读回看：Agent 身份、跟随开关与预览开关都指向"当前迭代的推进"，
           在这里既无意义也无处可去，整组隐藏。 */}
       {!versionReadOnly ? (
         <>

@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { Button, Dropdown } from 'antd'
 import { DownOutlined, HistoryOutlined, LockOutlined } from '@ant-design/icons'
-import type { ApplicationConfig, ApplicationLifecycle, ApplicationVersion } from '../typings'
+import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import {
-  currentVersion,
-  findVersion,
-  isVersionEditable,
-  isVersionReleasable
-} from '../service/applicationVersions'
+  currentBranch,
+  findBranch,
+  isBranchPublishable,
+  isViewingHistoricalBranch
+} from '../service/applicationBranches'
 import { useUncommittedChanges } from '../context'
 import { actionableCandidates, useModuleCandidates } from '../hooks/useModuleCandidates'
 import { cx } from '../utils'
@@ -15,47 +15,43 @@ import './VersionActions.less'
 
 type Props = {
   application: ApplicationConfig
-  /** 合并后的实时 lifecycle：生成版本判定用实时验收态，而非版本快照。 */
+  /** 合并后的实时 lifecycle：提交推送判定用实时验收态，而非分支快照。 */
   lifecycle?: ApplicationLifecycle
-  activeVersionId?: string
-  /** 当前查看的版本 id；未传时取 currentVersion（活跃版本）。 */
-  viewingVersionId?: string
+  /** 当前查看的分支名；未传时取 currentBranch（当前分支）。 */
+  viewingBranchName?: string
   onPublish: () => void
-  onRollback: (versionId: string) => void
   onStartIteration: () => void
-  onVersionSelect: (versionId: string) => void
-  /** 顶栏布局需要把版本选择和审查后的终态动作拆到阶段条两侧。 */
+  onBranchSelect: (branchName: string) => void
+  /** 顶栏布局需要把分支选择和审查后的终态动作拆到阶段条两侧。 */
   part?: 'all' | 'selector' | 'terminal'
 }
 
-function statusLabelFor(version: ApplicationVersion, isActive: boolean): string {
-  if (isActive) return version.status === 'released' ? '最新版本' : '当前迭代'
-  return version.status === 'released' ? '已生成版本' : '已保存'
+/** 分支状态标签：当前分支可编辑，其余只读。 */
+function statusLabelFor(isActive: boolean): string {
+  return isActive ? '当前分支' : '只读分支'
 }
 
-/** 根据当前生命周期返回生成版本按钮的阻塞原因，避免在验收阶段仍显示审查文案。 */
+/** 根据当前生命周期返回「提交并推送」按钮的阻塞原因，避免在验收阶段仍显示审查文案。 */
 function releaseBlockedTitle(lifecycle?: ApplicationLifecycle): string {
   const extensions = (lifecycle?.extensions || {}) as Record<string, unknown>
   if (String(extensions.testExecutionStatus || '') !== 'passed')
-    return '全部测试用例通过后可生成新版本'
-  if (String(extensions.reviewStatus || '') !== 'passed') return '审查通过后可生成新版本'
-  if (String(extensions.acceptanceStatus || '') !== 'passed') return '验收通过后可生成新版本'
-  return '完成当前版本前置流程后可生成新版本'
+    return '全部测试用例通过后可提交'
+  if (String(extensions.reviewStatus || '') !== 'passed') return '审查通过后可提交'
+  if (String(extensions.acceptanceStatus || '') !== 'passed') return '验收通过后可提交'
+  return '完成当前分支前置流程后可提交'
 }
 
 /**
- * 工作台版本选择与生成版本操作区；查看历史版本不会改变当前单向版本头。
- * 下拉面板单列：每个版本直显完整日志，选中即切换，无额外 hover 面板。
+ * 工作台分支选择与提交推送操作区；查看历史分支不会改变当前分支。
+ * 下拉面板单列：每条分支直显完整日志，选中即切换，无额外 hover 面板。
  */
 export default function VersionActions({
   application,
   lifecycle,
-  activeVersionId,
-  viewingVersionId,
+  viewingBranchName,
   onPublish,
-  onRollback,
   onStartIteration,
-  onVersionSelect,
+  onBranchSelect,
   part = 'all'
 }: Props): JSX.Element | null {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -74,24 +70,30 @@ export default function VersionActions({
     candidates: completedModules,
     uncommittedPaths: uncommittedSnapshot?.eligiblePaths ?? []
   })
-  const viewedVersion =
-    findVersion(application, viewingVersionId || '') || currentVersion(application)
-  if (!viewedVersion) return null
+  const allBranches = application.branches || []
+  const viewedBranch =
+    findBranch(application, viewingBranchName) ||
+    currentBranch(application) ||
+    allBranches.at(-1)
+  if (!viewedBranch) return null
 
-  const allVersions = application.versions || []
-  const activeVersion = findVersion(application, activeVersionId || '') || allVersions.at(-1)
-  const isViewingActiveVersion = viewedVersion.id === activeVersion?.id
-  const editable = isViewingActiveVersion && isVersionEditable(viewedVersion)
-  // 生成版本判定用实时 lifecycle（合并后），避免版本快照冻结验收态。
-  const releasable = isVersionReleasable({
-    ...viewedVersion,
-    lifecycle: lifecycle || viewedVersion.lifecycle
-  })
+  const currentBranchName = application.branchName || allBranches.at(-1)?.name
+  const isViewingCurrentBranch = !isViewingHistoricalBranch(
+    currentBranchName || '',
+    viewedBranch.name
+  )
+  const editable = isViewingCurrentBranch
+  // 本轮是否已经提交推送过。分支不锁定，所以"提交过没有"不能靠状态判断，用提交事实
+  // （gitRef）当标记：发起新迭代时会重置它，于是同一分支上的每一轮都是独立的一轮。
+  const roundCommitted = Boolean(viewedBranch.gitRef)
+  // 提交推送判定用实时 lifecycle（合并后），避免分支快照冻结验收态。
+  const releasable =
+    isViewingCurrentBranch && isBranchPublishable(lifecycle || viewedBranch.lifecycle)
 
-  const versionPanel = (
+  const branchPanel = (
     <div className={cx('version-dropdown')}>
       {/* 候选提交点：模块做完但整体执行未结束时，可按模块查看它们写了哪些文件。
-          放在版本列表上方 —— 它是"当前这次构建里可以先提交的东西"，比历史版本更即时。 */}
+          放在分支列表上方 —— 它是"当前这次构建里可以先提交的东西"，比历史分支更即时。 */}
       {candidates.length > 0 ? (
         <div className={cx('version-dropdown-candidates')}>
           <span className={cx('version-dropdown-candidates-head')}>
@@ -116,33 +118,31 @@ export default function VersionActions({
           ))}
         </div>
       ) : null}
-      {[...allVersions].reverse().map((version) => {
-        // 高亮跟随当前查看版本(viewedVersion);状态标签跟随当前工作版本(activeVersion)。
-        const isViewing = version.id === viewedVersion.id
-        const isWorking = version.id === activeVersion?.id
+      {[...allBranches].reverse().map((branch) => {
+        // 高亮跟随当前查看分支；状态标签跟随当前正在开发的分支。
+        const isViewing = branch.name === viewedBranch.name
+        const isWorking = branch.name === currentBranchName
         return (
           <button
-            key={version.id}
+            key={branch.name}
             type="button"
             className={cx(
               'version-dropdown-item',
               isViewing && 'is-active',
-              version.status === 'released' && 'is-released'
+              !isWorking && 'is-released'
             )}
             onClick={() => {
               setMenuOpen(false)
-              onVersionSelect(version.id)
+              onBranchSelect(branch.name)
             }}
           >
             <span className={cx('version-dropdown-item-head')}>
-              {version.status === 'released' ? <LockOutlined /> : null}
-              <span className={cx('version-menu-label')}>{version.versionLabel}</span>
-              <span className={cx('version-menu-status')}>
-                {statusLabelFor(version, isWorking)}
-              </span>
+              {!isWorking ? <LockOutlined /> : null}
+              <span className={cx('version-menu-label')}>{branch.name}</span>
+              <span className={cx('version-menu-status')}>{statusLabelFor(isWorking)}</span>
             </span>
-            {version.description ? (
-              <span className={cx('version-dropdown-item-log')}>{version.description}</span>
+            {branch.description ? (
+              <span className={cx('version-dropdown-item-log')}>{branch.description}</span>
             ) : null}
           </button>
         )
@@ -150,27 +150,24 @@ export default function VersionActions({
     </div>
   )
 
-  const versionSelector = (
+  const branchSelector = (
     <Dropdown
       visible={menuOpen}
       onVisibleChange={setMenuOpen}
-      overlay={versionPanel}
+      overlay={branchPanel}
       placement="bottomLeft"
       trigger={['click']}
     >
       <button
-        aria-label={`切换版本，当前 ${viewedVersion.versionLabel}${
+        aria-label={`切换分支，当前 ${viewedBranch.name}${
           uncommittedCount > 0 ? `，${uncommittedCount} 个文件未提交` : ''
         }`}
-        className={cx(
-          'workbench-version-badge',
-          viewedVersion.status === 'released' && 'is-released'
-        )}
+        className={cx('workbench-version-badge', !isViewingCurrentBranch && 'is-released')}
         type="button"
       >
-        {viewedVersion.status === 'released' ? <LockOutlined /> : null}
-        <span className={cx('workbench-version-label')}>{viewedVersion.versionLabel}</span>
-        {/* 弱提醒：未提交变更数挂在版本入口，切页面/切应用/从托盘回来都能一眼看到。 */}
+        {!isViewingCurrentBranch ? <LockOutlined /> : null}
+        <span className={cx('workbench-version-label')}>{viewedBranch.name}</span>
+        {/* 弱提醒：未提交变更数挂在分支入口，切页面/切应用/从托盘回来都能一眼看到。 */}
         {uncommittedCount > 0 ? (
           <span
             className={cx('workbench-version-uncommitted')}
@@ -184,7 +181,7 @@ export default function VersionActions({
         {candidates.length > 0 ? (
           <span
             className={cx('workbench-version-candidate')}
-            title={`${candidates.length} 个模块已完成，可在版本面板查看`}
+            title={`${candidates.length} 个模块已完成，可在分支面板查看`}
           >
             {candidates.length}
           </span>
@@ -196,18 +193,22 @@ export default function VersionActions({
 
   const terminalAction = (
     <>
-      {!isViewingActiveVersion ? (
+      {!isViewingCurrentBranch ? (
         <Button
           className={cx('workbench-rollback-button')}
           icon={<HistoryOutlined />}
-          onClick={() => onRollback(viewedVersion.id)}
+          onClick={() => onBranchSelect(currentBranchName || '')}
           size="small"
         >
-          基于此版本迭代
+          回到当前分支
         </Button>
       ) : null}
 
-      {editable ? (
+      {/* 两个动作互斥，一轮迭代只出现一个：
+          本轮还没提交 → 只给「提交并推送」；提交过 → 换成「发起新迭代」。
+          发起新迭代会重置本轮提交标记（见 WorkbenchPage 的 handleConfirmIteration），
+          所以在当前分支上继续迭代后，「提交并推送」会重新出现。 */}
+      {editable && !roundCommitted ? (
         <Button
           className={cx(
             'workbench-terminal-action-button',
@@ -219,14 +220,16 @@ export default function VersionActions({
           disabled={!releasable}
           onClick={onPublish}
           title={
-            releasable ? '生成新版本' : releaseBlockedTitle(lifecycle || viewedVersion.lifecycle)
+            releasable
+              ? '提交并推送'
+              : releaseBlockedTitle(lifecycle || viewedBranch.lifecycle)
           }
         >
-          生成新版本
+          提交并推送
         </Button>
       ) : null}
 
-      {isViewingActiveVersion && !editable && viewedVersion.status === 'released' ? (
+      {editable && roundCommitted ? (
         <Button
           className={cx('workbench-terminal-action-button', 'workbench-iteration-button')}
           size="small"
@@ -241,7 +244,7 @@ export default function VersionActions({
 
   return (
     <div className={cx('workbench-version-actions')}>
-      {part === 'all' || part === 'selector' ? versionSelector : null}
+      {part === 'all' || part === 'selector' ? branchSelector : null}
       {part === 'all' || part === 'terminal' ? terminalAction : null}
     </div>
   )

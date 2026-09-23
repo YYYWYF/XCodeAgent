@@ -21,7 +21,7 @@
     "test:workbench-phase": "node scripts/run-workbench-phase-tests.mjs",
     "test:released-version": "node scripts/run-released-version-tests.mjs",
     "test:uncommitted-changes": "node scripts/run-uncommitted-changes-tests.mjs",
-    "test:version-view": "node scripts/run-version-view-tests.mjs",
+    "test:branch-view": "node scripts/run-branch-view-tests.mjs",
     "test:application-authorization": "node scripts/run-application-authorization-tests.mjs",
     "test:planning-artifact-status": "node scripts/run-planning-artifact-status-tests.mjs",
     "test:api-design": "node scripts/run-api-design-tests.mjs",

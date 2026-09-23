@@ -3,6 +3,7 @@ import { randomUUID } from '@ag-ui/client'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { LeftPanel, WorkbenchTopBar } from '../components'
 import WorkbenchVersionModals from '../components/WorkbenchVersionModals'
+import type { IterationBranchChoice } from '../components/WorkbenchVersionModals'
 import { UncommittedChangesProvider, WorkbenchPhaseProvider } from '../context'
 import {
   inspectWorkspacePlanningArtifacts,
@@ -15,28 +16,28 @@ import {
   getApplicationLifecycle
 } from '../service/applicationLifecycle'
 import {
-  currentVersion,
-  createInitialVersion,
-  createIterationVersion,
-  createRollbackVersion,
-  findVersion,
-  isVersionReleasable,
-  isViewingHistoricalVersion,
-  mergeVersionChain,
-  releaseVersion,
-  resolveVersionChain
-} from '../service/applicationVersions'
+  branchIterationScope,
+  createBranchRecord,
+  createInitialBranch,
+  currentBranch,
+  findBranch,
+  isBranchPublishable,
+  isViewingHistoricalBranch,
+  mergeBranches,
+  resolveBranchChain
+} from '../service/applicationBranches'
 import { publishVersion } from '../service/versionPublish'
 import { startIteration } from '../service/iterationService'
+import { createRepositoryBranch } from '../service/repositoryBranch'
 import type {
   RequirementSpecDraftSaveResult,
   WorkflowRevisionContinuationHandoff
 } from '../service/applicationPagePlanning'
 import type { ApplicationPlanningCurrentState } from '../service/activeApplicationPlanning'
 import type {
+  ApplicationBranch,
   ApplicationConfig,
   ApplicationLifecycle,
-  ApplicationVersion,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
@@ -147,22 +148,22 @@ function WorkbenchPage({
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
-  // —— 应用版本（生成新版本/发起新迭代/基于此版本迭代）状态 ——
-  // 当前查看的版本 id；为空时取版本链头（currentVersionId）。
-  const [viewingVersionId, setViewingVersionId] = useState<string>('')
-  // 生成版本弹框：发布中三步进度（打包/提交码云/打Tag），null 表示未在生成。
+  // —— 应用分支（提交并推送/发起新迭代/切换分支）状态 ——
+  // 当前查看的分支名；为空时取当前分支（branchName）。
+  const [viewingBranchName, setViewingBranchName] = useState<string>('')
+  // 提交推送弹框：推送中三步进度（打包/提交/推送分支），null 表示未在提交。
   const [versionGenerating, setVersionGenerating] = useState<{ stepIndex: number } | null>(null)
-  // 生成版本弹框：版本说明草稿。
+  // 提交推送弹框：变更说明草稿。
   const [publishDescription, setPublishDescription] = useState('')
-  // 生成版本弹框是否开启。
+  // 提交推送弹框是否开启。
   const [publishModalOpen, setPublishModalOpen] = useState(false)
   // 发起新迭代弹框是否开启。
   const [iterationModalOpen, setIterationModalOpen] = useState(false)
-  // 基于此版本迭代（回退）弹框的目标版本 id。
-  const [rollbackTargetVersionId, setRollbackTargetVersionId] = useState<string | undefined>(
-    undefined
-  )
-  // 版本切换全屏加载的目标标签；为空时不显示。
+  // 发起新迭代：用户对分支的选择（当前分支继续 / 新建分支）。
+  const [iterationChoice, setIterationChoice] = useState<IterationBranchChoice>({
+    mode: 'current'
+  })
+  // 分支切换全屏加载的目标名；为空时不显示。
   const [switchingTargetLabel, setSwitchingTargetLabel] = useState<string | undefined>(undefined)
   const entryStartedAtRef = useRef(Date.now())
   const entryStageRef = useRef<WorkbenchEntryStage>('loading')
@@ -209,13 +210,13 @@ function WorkbenchPage({
         setWorkspaceApplication((prev) => ({
           ...application,
           ...applicationConfig,
-          // 磁盘是版本链的权威来源；只在磁盘没有版本链时才回退到内存那份。
-          // 详见 resolveVersionChain 的说明（此前无条件取内存，会把已发布的多版本链冲成单个 v1.0）。
-          ...resolveVersionChain({
-            diskVersions: applicationConfig.versions,
-            diskCurrentVersionId: applicationConfig.currentVersionId,
-            memoryVersions: prev.versions,
-            memoryCurrentVersionId: prev.currentVersionId
+          // 磁盘是分支表的权威来源；只在磁盘没有分支表时才回退到内存那份。
+          // 详见 resolveBranchChain 的说明（此前无条件取内存，会把磁盘上的多分支冲成单条）。
+          ...resolveBranchChain({
+            diskBranches: applicationConfig.branches,
+            diskBranchName: applicationConfig.branchName,
+            memoryBranches: prev.branches,
+            memoryBranchName: prev.branchName
           })
         }))
       } catch (error) {
@@ -259,7 +260,7 @@ function WorkbenchPage({
     }
 
     // 首次进入由初始状态承载加载门禁；后续刷新保留当前内容，避免工作台反复清空闪烁。
-    // 仅当应用 id 变化时才用 prop 覆盖，避免发起新迭代后 lifecycle 变化触发 effect 回退版本。
+    // 仅当应用 id 变化时才用 prop 覆盖，避免发起新迭代后 lifecycle 变化触发 effect 回退分支。
     setWorkspaceApplication((prev) => (prev.id === application.id ? prev : application))
     void syncWorkspaceFiles()
     window.addEventListener('focus', syncWorkspaceFiles)
@@ -289,20 +290,15 @@ function WorkbenchPage({
     }
   }, [application.id, application.workspaceRoot, failWorkbenchEntry, onApplicationLifecycleChange])
 
-  // 应用首次进入工作台时初始化首个版本（iterating），标签取自表单 versionNo。
-  // 已有 versions 的应用（如发起新迭代后重新进入）跳过，保留版本链。
+  // 应用首次进入工作台时初始化首条分支记录，分支名取自新建表单。
+  // 已有 branches 的应用（如发起新迭代后重新进入）跳过，保留分支表。
   useEffect(() => {
     if (!applicationLifecycle) return
     setWorkspaceApplication((prev) => {
-      if (prev.versions && prev.versions.length > 0) return prev
-      const versionNo = prev.versionNo || 'v1.0'
-      const initialVersion = createInitialVersion(
-        prev.id,
-        versionNo,
-        applicationLifecycle,
-        Date.now()
-      )
-      return { ...prev, versions: [initialVersion], currentVersionId: initialVersion.id }
+      if (prev.branches && prev.branches.length > 0) return prev
+      const branchName = prev.branchName || 'dev'
+      const initialBranch = createInitialBranch(branchName, applicationLifecycle, Date.now())
+      return { ...prev, branches: [initialBranch], branchName: initialBranch.name }
     })
   }, [applicationLifecycle])
 
@@ -346,20 +342,29 @@ function WorkbenchPage({
     setPlanningRefreshRevision((current) => current + 1)
   }
 
-  // —— 应用版本操作回调 ——
-  // 当前查看版本（viewingVersionId 为空时取版本链头）。
-  const activeVersionId = workspaceApplication.currentVersionId || ''
-  const viewedVersion =
-    findVersion(workspaceApplication, viewingVersionId) || currentVersion(workspaceApplication)
-  const isViewingActiveVersion = viewedVersion?.id === activeVersionId
-  // 已发布版本或查看非活跃版本时锁定阶段切换，只能回看。
-  const versionLocked = !isViewingActiveVersion || viewedVersion?.status === 'released'
-  // 是否在回看历史版本（非活跃版本）。顶部栏与内容区共用这一个口径：
-  // 不能复用 versionLocked —— 它把"当前版本已发布"也算作锁定，那是阶段不可点的语义。
-  const viewingHistoricalVersion = isViewingHistoricalVersion(activeVersionId, viewedVersion?.id)
-  // 活跃版本顶部计数必须跟随当前正式规划目录；新迭代清空目录后应立即显示 0/0，
-  // 不能把 lifecycle 内为增量门禁保留的上一版本完成事实展示成当前版本产物。
-  const topBarLifecycle = isViewingActiveVersion ? applicationLifecycle : viewedVersion?.lifecycle
+  // —— 应用分支操作回调 ——
+  // 当前查看分支（viewingBranchName 为空时取当前分支）。
+  const activeBranchName = workspaceApplication.branchName || ''
+  const viewedBranch =
+    findBranch(workspaceApplication, viewingBranchName) || currentBranch(workspaceApplication)
+  const isViewingActiveVersion = viewedBranch?.name === activeBranchName
+  // 查看非当前分支时锁定阶段切换，只能回看。
+  const versionLocked = !isViewingActiveVersion
+  // 是否在回看历史分支（非当前分支）。顶部栏与内容区共用这一个口径。
+  const viewingHistoricalVersion = isViewingHistoricalBranch(
+    activeBranchName,
+    viewedBranch?.name
+  )
+  // 当前分支顶部计数必须跟随当前正式规划目录；新迭代清空目录后应立即显示 0/0，
+  // 不能把 lifecycle 内为增量门禁保留的上一轮完成事实展示成当前分支产物。
+  const topBarLifecycle = isViewingActiveVersion ? applicationLifecycle : viewedBranch?.lifecycle
+  // 阶段 Provider 的重挂载键：分支名 + 迭代令牌。同一条分支上继续迭代时分支名不变，
+  // 必须靠迭代令牌让 Provider 重挂载，否则它会沿用上一轮的手动阶段覆盖、界面停在
+  // 上一轮阶段（详见 branchIterationScope 的说明）。
+  const phaseProviderKey = branchIterationScope(
+    viewedBranch?.name || workspaceApplication.id,
+    topBarLifecycle
+  )
   const activeDevelopmentRecords = [
     ...developmentPlanningPages.map(
       (page) => applicationLifecycle?.developmentArtifacts?.pages[page.pageId]
@@ -368,7 +373,7 @@ function WorkbenchPage({
       contract.endpoints.map(
         (endpoint) =>
           applicationLifecycle?.developmentArtifacts?.endpoints[
-            endpoint.apiContractId || contract.id
+          endpoint.apiContractId || contract.id
           ]?.[endpoint.id]
       )
     ),
@@ -378,38 +383,33 @@ function WorkbenchPage({
   ]
   const topBarDevelopmentTotals = isViewingActiveVersion
     ? {
-        completed: developmentCompletedCount(activeDevelopmentRecords),
-        total: activeDevelopmentRecords.length
-      }
+      completed: developmentCompletedCount(activeDevelopmentRecords),
+      total: activeDevelopmentRecords.length
+    }
     : topBarLifecycle?.developmentArtifacts
       ? developmentArtifactTotals(topBarLifecycle.developmentArtifacts)
       : undefined
-  // 当前活跃迭代版本是否可发布（验收通过等条件齐全）。
-  const releaseVersionTarget = isViewingActiveVersion ? viewedVersion : undefined
-  const versionReleasable = Boolean(
-    releaseVersionTarget &&
-      isVersionReleasable({
-        ...releaseVersionTarget,
-        lifecycle: applicationLifecycle || releaseVersionTarget.lifecycle
-      })
-  )
+  // 当前分支是否可提交推送（验收通过等条件齐全）。
+  const versionReleasable =
+    isViewingActiveVersion &&
+    isBranchPublishable(applicationLifecycle || viewedBranch?.lifecycle)
   /**
-   * 把内存里的应用配置写回 application.json，**先与磁盘合并版本链**。
+   * 把内存里的应用配置写回 application.json，**先与磁盘合并分支表**。
    *
-   * 直接写内存那份会静默抹掉磁盘上的版本：内存状态可能陈旧于磁盘（发起迭代/发布/
-   * 回退都是先改内存再写盘，期间若有别的写入或状态未及时同步）。线上出现过 v1.1
-   * 已写盘、随后一次写回把 application.json 退回成只有 v1.0，界面顶部只剩 v1.0。
-   * 见 mergeVersionChain 的说明。
+   * 直接写内存那份会静默抹掉磁盘上的分支：内存状态可能陈旧于磁盘（发起迭代/提交推送
+   * 都是先改内存再写盘，期间若有别的写入或状态未及时同步）。线上出现过新分支已写盘、
+   * 随后一次写回把 application.json 退回成只有旧分支，界面顶部只剩一条。
+   * 见 mergeBranches 的说明。
    */
   const persistApplicationConfig = useCallback(async (next: ApplicationConfig): Promise<void> => {
     let merged = next
     try {
       const disk = await loadWorkspaceApplicationConfig(next.workspaceRoot)
-      const chain = mergeVersionChain({
-        memoryVersions: next.versions,
-        diskVersions: disk.versions,
-        memoryCurrentVersionId: next.currentVersionId,
-        diskCurrentVersionId: disk.currentVersionId
+      const chain = mergeBranches({
+        memoryBranches: next.branches,
+        diskBranches: disk.branches,
+        memoryBranchName: next.branchName,
+        diskBranchName: disk.branchName
       })
       merged = { ...next, ...chain }
     } catch (error) {
@@ -420,14 +420,14 @@ function WorkbenchPage({
     // 内存也采纳合并结果，避免界面与磁盘再次脱节。
     setWorkspaceApplication((prev) =>
       prev.id === merged.id
-        ? { ...merged, versions: merged.versions, currentVersionId: merged.currentVersionId }
+        ? { ...merged, branches: merged.branches, branchName: merged.branchName }
         : prev
     )
   }, [])
 
   const autoPublishShownRef = useRef(false)
 
-  // 打开生成版本弹框。
+  // 打开提交并推送弹框。
   const handleOpenPublish = useCallback((): void => {
     setPublishDescription('')
     setVersionGenerating(null)
@@ -452,12 +452,11 @@ function WorkbenchPage({
     }
   }, [versionReleasable])
 
-  // 确认生成版本：调后端真实 git 提交/打Tag/推送，三步进度实时推进，完成后版本转 released 并锁定。
-  // 发布时冻结当前 lifecycle、页面资产快照进版本，并持久化到 application.json。
+  // 确认提交并推送：调后端真实 git 提交并推送到当前分支，三步进度实时推进。
+  // 分支不锁定；提交时冻结当前 lifecycle、资产快照与提交事实，并持久化到 application.json。
   const handleGenerateVersion = useCallback(async (): Promise<void> => {
-    if (!viewedVersion) return
-    const targetVersionId = viewedVersion.id
-    const versionLabel = viewedVersion.versionLabel
+    if (!viewedBranch) return
+    const branchName = viewedBranch.name
     const description = publishDescription.trim()
     setVersionGenerating({ stepIndex: 0 })
     try {
@@ -465,7 +464,7 @@ function WorkbenchPage({
         {
           workspaceRoot: workspaceApplication.workspaceRoot,
           repoUrl: workspaceApplication.repoUrl,
-          versionLabel,
+          branchName,
           description
         },
         {
@@ -480,93 +479,102 @@ function WorkbenchPage({
       )
       const now = Date.now()
       const frozenLifecycle = applicationLifecycle
-      const target = findVersion(workspaceApplication, targetVersionId)
+      const target = findBranch(workspaceApplication, branchName)
       if (!target) {
         setVersionGenerating(null)
         return
       }
-      const released = releaseVersion(target, description, now, {
-        commitSha: result.commitSha!,
-        tag: result.tag!,
-        committedAt: now
-      })
-      // 冻结发布时刻的 lifecycle 与资产快照，回看历史版本时停在发布时刻。
-      const frozen: ApplicationVersion = {
-        ...released,
+      // 冻结提交时刻的 lifecycle、资产快照与提交事实，回看该分支时停在那一刻。
+      // 分支不锁定：它仍是当前分支，可以继续改、继续提交。
+      const frozen: ApplicationBranch = {
+        ...target,
+        description,
         ...(frozenLifecycle ? { lifecycle: frozenLifecycle } : {}),
         artifactSummary: {
           pageIds: workspaceApplication.pages,
-          deployableScript: `deploy-${versionLabel}.sh`
+          deployableScript: `deploy-${branchName}.sh`
         },
-        snapshot: { pageIds: workspaceApplication.pages }
+        snapshot: { pageIds: workspaceApplication.pages },
+        gitRef: { commitSha: result.commitSha || '', committedAt: now }
       }
       const nextApplication: ApplicationConfig = {
         ...workspaceApplication,
-        versions: (workspaceApplication.versions || []).map((v) =>
-          v.id === frozen.id ? frozen : v
+        branches: (workspaceApplication.branches || []).map((branch) =>
+          branch.name === frozen.name ? frozen : branch
         )
       }
       setWorkspaceApplication(nextApplication)
-      // 持久化到 application.json，刷新后版本状态不丢失。
+      // 持久化到 application.json，刷新后分支状态不丢失。
       try {
         await persistApplicationConfig(nextApplication)
       } catch (saveError) {
-        console.warn('保存 application.json 失败，版本状态仅保留在内存。', saveError)
+        console.warn('保存 application.json 失败，分支状态仅保留在内存。', saveError)
       }
       setVersionGenerating(null)
       setPublishModalOpen(false)
       const repoUrl = String(workspaceApplication.repoUrl || '').trim()
       notification.success({
-        message: '版本已生成',
+        message: '已提交并推送',
         description: repoUrl
-          ? `${versionLabel} 已提交至 ${repoUrl} 并打 Tag，锁定为只读版本，可发起新迭代继续开发。`
-          : `${versionLabel} 已打包提交并打 Tag，锁定为只读版本，可发起新迭代继续开发。`,
+          ? `本次改动已提交至 ${repoUrl} 的分支 ${branchName}，可以继续在该分支上开发。`
+          : `本次改动已提交到分支 ${branchName}，可以继续在该分支上开发。`,
         placement: 'bottomRight',
         duration: 4
       })
     } catch (error) {
       setVersionGenerating(null)
-      message.error(error instanceof Error ? error.message : '生成版本失败')
+      message.error(error instanceof Error ? error.message : '提交并推送失败')
     }
   }, [
     applicationLifecycle,
     persistApplicationConfig,
     publishDescription,
-    viewedVersion,
+    viewedBranch,
     workspaceApplication
   ])
 
-  // 确认发起新迭代：基于当前版本派生下一版本（minor+1），回到需求分析阶段。
+  // 确认发起新迭代：回到需求分析阶段。用户可选择在当前分支继续，或新建一条分支。
   // 调后端清空 .devagentstudio 规划产物（保留 AGENTS.md），重置 lifecycle 为 collecting_requirement。
   const handleConfirmIteration = useCallback(async (): Promise<void> => {
-    if (!viewedVersion || !applicationLifecycle) return
-    const parentVersionId = viewedVersion.id
-    const versionLabel = viewedVersion.versionLabel
+    if (!viewedBranch || !applicationLifecycle) return
+    const baseBranchName = viewedBranch.name
+    const targetBranchName =
+      iterationChoice.mode === 'new' ? iterationChoice.branchName.trim() : baseBranchName
     setIterationModalOpen(false)
-    setSwitchingTargetLabel(versionLabel)
-    const parent = findVersion(workspaceApplication, parentVersionId)
-    if (!parent) {
-      setSwitchingTargetLabel(undefined)
-      return
-    }
+    setSwitchingTargetLabel(targetBranchName)
     try {
-      // 1. 调后端清空 .devagentstudio 规划产物（保留 AGENTS.md + application.json）。
+      // 1. 新建分支时必须**先**建分支再清空产物 —— 新分支要指向当前这次已提交的代码，
+      //    晚于清空就会把新分支建在残缺的树上。后端会切到新分支并推送到远端。
+      let branchCreationFailed = false
+      if (iterationChoice.mode === 'new') {
+        const created = await createRepositoryBranch({
+          workspaceRoot: workspaceApplication.workspaceRoot,
+          branchName: targetBranchName
+        })
+        if (created.status !== 'pushed') {
+          branchCreationFailed = true
+          message.warning(
+            `分支 ${targetBranchName} 未推送到远端：${created.message || '原因未知'}。已切换到该分支，稍后可重试推送。`
+          )
+        }
+      }
+      // 2. 调后端清空 .devagentstudio 规划产物（保留 AGENTS.md + application.json）。
       await startIteration({
         workspaceRoot: workspaceApplication.workspaceRoot,
-        versionLabel,
-        description: viewedVersion.description || ''
+        branchName: targetBranchName,
+        description: viewedBranch.description || ''
       })
-      // 1.5 清空环境数据目录中该工作区的全部会话历史，
-      // 避免上一版本的对话卡片串入新迭代。
+      // 2.5 清空环境数据目录中该工作区的全部会话历史，
+      // 避免上一轮的对话卡片串入新迭代。
       await window.devAgentStudio?.sessions?.clearWorkspace({
         workspaceRoot: workspaceApplication.workspaceRoot
       })
-      // 2. 创建全新的 lifecycle（collecting_requirement），revision 从 1 重新开始。
-      //    继承上一版本**已完成**的产物进度：新迭代保留已有工程代码，那些产物仍然存在，
+      // 3. 创建全新的 lifecycle（collecting_requirement），revision 从 1 重新开始。
+      //    继承上一轮**已完成**的产物进度：新迭代保留已有工程代码，那些产物仍然存在，
       //    不该重新变回"未开发"——否则"全部产物完成"的测试门禁在增量迭代里永远满足不了
       //    （本轮构建范围只覆盖改动的产物，不会再去开发其余已完成的产物）。
       const inheritedArtifacts =
-        parent.lifecycle?.developmentArtifacts ?? applicationLifecycle.developmentArtifacts
+        viewedBranch.lifecycle?.developmentArtifacts ?? applicationLifecycle.developmentArtifacts
       const newLifecycle = await createApplicationLifecycle(
         workspaceApplication,
         randomUUID(),
@@ -578,91 +586,74 @@ function WorkbenchPage({
         initialization: { ...newLifecycle.initialization, status: 'awaiting_user' }
       }
       onApplicationLifecycleReset(awaitingLifecycle)
-      // 2.5 登记 planning state（restoreArtifactsFromDisk=false 避免 reconcile 触发自动分析），
+      // 3.5 登记 planning state（restoreArtifactsFromDisk=false 避免 reconcile 触发自动分析），
       // 让用户输入需求后能触发 planning workflow。
       const newThreadId = awaitingLifecycle.initialization?.threadId
       if (newThreadId) {
         onIterationStarted(workspaceApplication, newThreadId, awaitingLifecycle)
       }
-      // 3. 派生新版本，lifecycle 用全新的 collecting_requirement。
-      // 3. 派生新版本，lifecycle 用全新的 collecting_requirement。
-      const next = createIterationVersion(
-        workspaceApplication.id,
-        parent,
-        awaitingLifecycle,
-        Date.now()
-      )
+      // 4. 更新分支表：在当前分支继续时刷新该分支的 lifecycle 并**清掉本轮提交事实**；
+      //    新建分支时追加一条记录并把当前分支指针移过去。
+      //    清 gitRef 是必须的：它同时是"本轮已提交"的标记（顶部按钮据此在
+      //    「提交并推送」与「发起新迭代」之间切换），不清的话新一轮一进来就直接
+      //    显示「发起新迭代」，用户没法提交这一轮的改动。
+      const existingBranches = workspaceApplication.branches || []
+      const nextBranches =
+        iterationChoice.mode === 'new'
+          ? [...existingBranches, createBranchRecord(targetBranchName, awaitingLifecycle, Date.now())]
+          : existingBranches.map((branch) =>
+            branch.name === targetBranchName
+              ? { ...branch, lifecycle: awaitingLifecycle, gitRef: undefined }
+              : branch
+          )
       const nextApp: ApplicationConfig = {
         ...workspaceApplication,
-        versions: [...(workspaceApplication.versions || []), next],
-        currentVersionId: next.id
+        branches: nextBranches,
+        branchName: targetBranchName
       }
       setWorkspaceApplication(nextApp)
-      // 4. 持久化 application.json（版本链更新，写回前与磁盘合并）。
+      // 5. 持久化 application.json（分支表更新，写回前与磁盘合并）。
       await persistApplicationConfig(nextApp)
-      // 5. 阶段覆盖与浏览进度均按版本作用域持久化，新版本天然从生命周期重新推导，
-      //    无需再手动清除上一迭代遗留的覆盖。
-      // 6. 重置前端规划状态，新迭代从空白开始。
+      // 6. 阶段覆盖与浏览进度按「分支 + 迭代令牌」作用域持久化，本轮是新的作用域，
+      //    旧的覆盖读不到。**但光靠作用域不够**：阶段 Provider 必须真的重挂载才会
+      //    重新读取，所以它的 key 带上了迭代令牌（见 phaseProviderKey）。
+      //    少了这一步，界面会沿用上一轮的手动阶段覆盖，发起新迭代后仍停在上一轮阶段。
+      // 7. 重置前端规划状态，新迭代从空白开始。
       setDevelopmentPlanningPages([])
       setDevelopmentPlanningPageTree([])
       setDevelopmentPlanningApiContracts([])
       setDevelopmentPlanningEntities([])
-      setViewingVersionId('')
+      setViewingBranchName('')
       autoPublishShownRef.current = false
       setSwitchingTargetLabel(undefined)
-      message.success('已发起新迭代，已回到需求分析阶段。')
+      setIterationChoice({ mode: 'current' })
+      message.success(
+        branchCreationFailed
+          ? `已发起新迭代（分支 ${targetBranchName}），但分支未推送到远端。`
+          : `已发起新迭代（分支 ${targetBranchName}），开启新的旅程。`
+      )
     } catch (error) {
       setSwitchingTargetLabel(undefined)
       message.error(error instanceof Error ? error.message : '发起新迭代失败')
     }
   }, [
     applicationLifecycle,
+    iterationChoice,
     persistApplicationConfig,
-    viewedVersion,
+    viewedBranch,
     workspaceApplication,
     onApplicationLifecycleReset,
     onIterationStarted
   ])
 
-  // 确认基于历史版本迭代（回退）：以历史版本内容派生新的顺序版本。
-  // 重置规划产物状态，让新迭代从需求收集重新开始。
-  const handleConfirmRollback = useCallback((): void => {
-    if (!rollbackTargetVersionId) return
-    const targetId = rollbackTargetVersionId
-    const headId = activeVersionId
-    setRollbackTargetVersionId(undefined)
-    setSwitchingTargetLabel(undefined)
-    const head = findVersion(workspaceApplication, headId)
-    const restored = findVersion(workspaceApplication, targetId)
-    if (!head || !restored) return
-    const next = createRollbackVersion(workspaceApplication.id, head, restored, Date.now())
-    const nextApp: ApplicationConfig = {
-      ...workspaceApplication,
-      versions: [...(workspaceApplication.versions || []), next],
-      currentVersionId: next.id
-    }
-    setWorkspaceApplication(nextApp)
-    // 重置规划状态，新迭代从需求收集重新开始。
-    setDevelopmentPlanningPages([])
-    setDevelopmentPlanningPageTree([])
-    setDevelopmentPlanningApiContracts([])
-    setDevelopmentPlanningEntities([])
-    setViewingVersionId('')
-    autoPublishShownRef.current = false
-    void persistApplicationConfig(nextApp).catch((saveError) => {
-      console.warn('保存 application.json 失败。', saveError)
-    })
-    message.success('已基于历史版本生成新迭代版本。')
-  }, [activeVersionId, persistApplicationConfig, rollbackTargetVersionId, workspaceApplication])
-
-  // 切换查看版本：展示切换加载层后切到目标版本。
-  const handleVersionSelect = useCallback(
-    (versionId: string): void => {
-      const target = findVersion(workspaceApplication, versionId)
+  // 切换查看分支：展示切换加载层后切到目标分支（只读回看）。
+  const handleBranchSelect = useCallback(
+    (branchName: string): void => {
+      const target = findBranch(workspaceApplication, branchName)
       if (!target) return
-      setSwitchingTargetLabel(target.versionLabel)
+      setSwitchingTargetLabel(target.name)
       window.setTimeout(() => {
-        setViewingVersionId(versionId)
+        setViewingBranchName(branchName)
         setSwitchingTargetLabel(undefined)
       }, 600)
     },
@@ -673,10 +664,10 @@ function WorkbenchPage({
     <Layout className={cx('workbench-shell')} data-theme={theme}>
       {developmentPlanningPagesLoaded ? (
         <WorkbenchPhaseProvider
-          key={viewedVersion?.id || workspaceApplication.id}
+          key={phaseProviderKey}
           applicationId={workspaceApplication.id}
-          versionId={viewedVersion?.id || workspaceApplication.id}
-          lifecycle={isViewingActiveVersion ? applicationLifecycle : viewedVersion?.lifecycle}
+          versionId={viewedBranch?.name || workspaceApplication.id}
+          lifecycle={topBarLifecycle}
           locked={versionLocked}
         >
           <UncommittedChangesProvider
@@ -698,11 +689,14 @@ function WorkbenchPage({
                 developmentTotals={topBarDevelopmentTotals}
                 rightPanelOpen={rightPanelOpen}
                 onToggleRightPanel={() => setRightPanelOpen((open) => !open)}
-                onPublishVersion={handleOpenPublish}
-                onRollbackVersion={(versionId) => setRollbackTargetVersionId(versionId)}
-                onStartIteration={() => setIterationModalOpen(true)}
-                onVersionSelect={handleVersionSelect}
-                viewingVersionId={viewingVersionId}
+                onPublishBranch={handleOpenPublish}
+                onStartIteration={() => {
+                  // 每次打开都从「在当前分支继续」开始，避免沿用上一次的选择。
+                  setIterationChoice({ mode: 'current' })
+                  setIterationModalOpen(true)
+                }}
+                onBranchSelect={handleBranchSelect}
+                viewingBranchName={viewingBranchName}
                 versionReadOnly={viewingHistoricalVersion}
               />
               <div className={cx('workbench-shell-body')}>
@@ -740,19 +734,17 @@ function WorkbenchPage({
                   theme={theme}
                   rightPanelOpen={rightPanelOpen}
                   onRightPanelOpenChange={setRightPanelOpen}
-                  // 只读双 tab 只针对回看历史版本。不能复用 versionLocked：它把 released
-                  // 也算作锁定（阶段不可点），而当前版本发布后正是 released，会误把活跃
-                  // 版本也换成只读视图，用户就看不到当前应用的执行情况了。
+                  // 只读双 tab 只针对回看历史分支（非当前分支）。
                   versionReadOnly={viewingHistoricalVersion}
-                  // 该版本的发布 tag：历史版本的应用文件按它读取当时的内容。
-                  viewedVersionTag={viewedVersion?.gitRef?.tag}
+                  // 该分支名：历史分支的应用文件与预览都按它读取当时的内容。
+                  viewedBranchName={viewedBranch?.name}
                 />
               </div>
             </div>
             <WorkbenchVersionModals
               application={workspaceApplication}
-              publishVersionLabel={
-                publishModalOpen && viewedVersion ? viewedVersion.versionLabel : undefined
+              publishBranchName={
+                publishModalOpen && viewedBranch ? viewedBranch.name : undefined
               }
               publishRepoUrl={
                 publishModalOpen
@@ -767,13 +759,11 @@ function WorkbenchPage({
                 setPublishModalOpen(false)
               }}
               onGenerate={handleGenerateVersion}
-              iterationBaseVersionId={iterationModalOpen ? activeVersionId : undefined}
+              iterationModalOpen={iterationModalOpen}
+              iterationChoice={iterationChoice}
+              onIterationChoiceChange={setIterationChoice}
               onCancelIteration={() => setIterationModalOpen(false)}
               onConfirmIteration={handleConfirmIteration}
-              rollbackTargetVersionId={rollbackTargetVersionId}
-              activeVersionId={activeVersionId}
-              onCancelRollback={() => setRollbackTargetVersionId(undefined)}
-              onConfirmRollback={handleConfirmRollback}
               switchingTargetLabel={switchingTargetLabel}
             />
           </UncommittedChangesProvider>

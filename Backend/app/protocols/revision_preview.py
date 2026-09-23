@@ -1,8 +1,8 @@
-"""历史版本预览的独立 AG-UI 动作协议。
+"""历史分支预览的独立 AG-UI 动作协议。
 
 刻意**不复用** `preview-runtime/run`：那条流挂着维护锁、修复确认与 revise 状态机，
-而历史版本预览是只读的，不需要修复/确认语义；把 revision 维度塞进去会牵连那些状态。
-这里只做"物化该版本并启动 / 停止"这一件事。
+而历史分支预览是只读的，不需要修复/确认语义；把 revision 维度塞进去会牵连那些状态。
+这里只做"物化该分支并启动 / 停止"这一件事。
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ REVISION_PREVIEW_EVENT_NAME = "revision-preview"
 
 
 def revision_preview_capabilities() -> dict[str, Any]:
-    """发布历史版本预览动作的公开协议能力。"""
+    """发布历史分支预览动作的公开协议能力。"""
 
     return {
         "name": "revision-preview",
@@ -42,7 +42,7 @@ def revision_preview_capabilities() -> dict[str, Any]:
 def build_revision_preview_ag_ui_stream(
     *, payload: dict[str, Any], accept: str | None = None
 ) -> AsyncIterator[str]:
-    """按动作物化/启动/停止历史版本的预览，并发送完整 AG-UI 生命周期。"""
+    """按动作物化/启动/停止历史分支的预览，并发送完整 AG-UI 生命周期。"""
 
     inputs = _revision_preview_input(payload)
     action = str(inputs.get("action") or "")
@@ -59,13 +59,13 @@ def build_revision_preview_ag_ui_stream(
         if action == "get":
             state = revision_preview_state(workspace, revision)
             return AgUiActionResult(
-                data=_action_data(action, state), message="已读取历史版本预览状态。"
+                data=_action_data(action, state), message="已读取历史分支预览状态。"
             )
 
         if action == "stop":
             result = stop_revision_preview(workspace, revision)
             return AgUiActionResult(
-                data=_action_data(action, result), message="历史版本预览已停止。"
+                data=_action_data(action, result), message="历史分支预览已停止。"
             )
 
         if action != "start":
@@ -103,7 +103,7 @@ def build_revision_preview_ag_ui_stream(
 
         return AgUiActionResult(
             data=_action_data(action, result),
-            message=f"版本 {revision} 的预览已启动。",
+            message=f"分支 {revision} 的预览已启动。",
         )
 
     return build_ag_ui_action_stream(
@@ -112,7 +112,7 @@ def build_revision_preview_ag_ui_stream(
         state_key="revisionPreview",
         run_id_prefix="revision-preview",
         progress_operation=operation,
-        error_message_prefix="历史版本预览失败",
+        error_message_prefix="历史分支预览失败",
         error_data=lambda _exc: {"action": action, "revision": revision},
         accept=accept,
         workspace_root=workspace or None,
@@ -135,7 +135,7 @@ def _action_data(action: str, result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _revision_preview_input(payload: dict[str, Any]) -> dict[str, Any]:
-    """从 AG-UI forwardedProps 中提取历史版本预览的业务输入。"""
+    """从 AG-UI forwardedProps 中提取历史分支预览的业务输入。"""
 
     forwarded_props = payload.get("forwardedProps")
     if not isinstance(forwarded_props, dict):

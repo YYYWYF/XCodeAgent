@@ -21,7 +21,7 @@ try {
       emptyOutDir: true,
       minify: false,
       outDir: outputDirectory,
-      ssr: path.join(frontendRoot, 'tests/applicationVersionView.test.ts'),
+      ssr: path.join(frontendRoot, 'tests/applicationBranchView.test.ts'),
       rollupOptions: { output: { entryFileNames: path.basename(outputFile) } }
     }
   })

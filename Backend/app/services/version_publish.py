@@ -11,6 +11,7 @@ from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.git_branch import validate_branch_name
 from app.services.workspace_process_registry import workspace_process_registry
 
 
@@ -19,19 +20,20 @@ class VersionPublishError(ValueError):
 
 
 class VersionPublishRequest(BaseModel):
-    """校验一次版本发布请求。"""
+    """校验一次「提交并推送」请求。"""
 
     model_config = ConfigDict(populate_by_name=True)
 
     action: Literal["publish"]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1)
     repo_url: str = Field(alias="repoUrl", min_length=1)
-    version_label: str = Field(alias="versionLabel", min_length=1, max_length=64)
+    # 应用在远端仓库中的分支名；推送目标就是它，不再打 Tag。
+    branch_name: str = Field(alias="branchName", min_length=1, max_length=255)
     description: str = Field(default="", max_length=2000)
 
 
 class VersionPublishResult(BaseModel):
-    """返回成功发布后的仓库事实与 Git 引用。"""
+    """返回成功提交后的仓库事实与 Git 引用。"""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -40,7 +42,6 @@ class VersionPublishResult(BaseModel):
     repository_root: str = Field(alias="repositoryRoot")
     branch: str
     commit_sha: str = Field(alias="commitSha", min_length=7)
-    tag: str
 
 
 ProgressCallback = Callable[[str, str, int], None]
@@ -51,8 +52,9 @@ def publish_version(
     *,
     report_progress: ProgressCallback | None = None,
 ) -> VersionPublishResult:
-    """在工作区执行 git add -A + commit + tag + push，并报告三步进度。
+    """在工作区执行 git add -A + commit + push，并报告三步进度。
 
+    推送到 `request.branch_name` 指定的应用分支；不再打 Tag。
     report_progress 为可选的同步回调，接收 (stage, message, percent)。
     """
 
@@ -62,7 +64,7 @@ def publish_version(
 
     workspace_root = _resolve_workspace_root(request.workspace_root)
     repository_root = _resolve_repository_root(workspace_root)
-    branch = _read_branch(repository_root)
+    branch = validate_branch_name(request.branch_name)
 
     # 1. 打包：校验工作区是 Git 仓库、读取基线、解除 .devagentstudio 排除。
     report("package", "正在打包工作区变更…", 10)
@@ -98,16 +100,12 @@ def publish_version(
         "无法读取提交结果",
     ).strip()
 
-    # 3. 打 Tag + 推送。
-    report("push", "正在打 Tag 并推送到远程仓库…", 60)
-    tag = request.version_label
-    _run_git_checked(
-        repository_root,
-        ["tag", "-f", tag],
-        "无法创建版本 Tag",
-    )
+    # 3. 推送到应用自己的分支。
+    #    推送目标是**请求里带来的应用分支**（已在上面校验过），不是本地当前分支 ——
+    #    过去所有应用都推本地 main，导致共用一个远端仓库时互相覆盖。
+    report("push", "正在推送到应用分支…", 60)
 
-    remote_url = _build_remote_url(request.repo_url)
+    remote_url = build_authenticated_remote_url(request.repo_url)
     remote_name = "devagentstudio-publish"
     _ensure_remote(repository_root, remote_name, remote_url)
 
@@ -119,16 +117,10 @@ def publish_version(
             "推送提交到远程仓库失败",
             timeout=120,
         )
-        _run_git_checked(
-            repository_root,
-            ["push", remote_name, "tag", tag, "--force"],
-            "推送 Tag 到远程仓库失败",
-            timeout=120,
-        )
         pushed = True
     finally:
         if not pushed:
-            # 推送失败时保留本地 Tag 便于用户手动重推，仅清理临时 remote。
+            # 推送失败时仅清理临时 remote，本地提交保留便于用户手动重推。
             _run_git(repository_root, ["remote", "remove", remote_name])
 
     # 4. 生成迭代上下文总结（AGENTS.md），供下一轮迭代的大模型作为起点。
@@ -137,21 +129,20 @@ def publish_version(
 
         generate_agents_context(
             workspace_root,
-            version_label=tag,
+            branch_name=branch,
             description=request.description,
         )
     except Exception:
         # AGENTS.md 生成失败不影响发布结果。
         pass
 
-    report("done", "版本发布完成。", 100)
+    report("done", "提交并推送完成。", 100)
 
     return VersionPublishResult(
         workspaceRoot=str(workspace_root),
         repositoryRoot=str(repository_root),
         branch=branch,
         commitSha=commit_sha,
-        tag=tag,
     )
 
 
@@ -259,8 +250,12 @@ def _ensure_remote(repository_root: Path, name: str, url: str) -> None:
         )
 
 
-def _build_remote_url(repo_url: str) -> str:
-    """把 repo_url 注入环境变量中的 git 凭证，拼成可 push 的认证 URL。"""
+def build_authenticated_remote_url(repo_url: str) -> str:
+    """把 repo_url 注入环境变量中的 git 凭证，拼成可 push 的认证 URL。
+
+    远端分支动作（services/repository_branch.py）与版本发布共用这一处凭证拼装，
+    避免两份实现各自处理 token。
+    """
 
     username = os.getenv("DEVAGENTSTUDIO_GIT_USERNAME", "").strip()
     token = os.getenv("DEVAGENTSTUDIO_GIT_TOKEN", "").strip()

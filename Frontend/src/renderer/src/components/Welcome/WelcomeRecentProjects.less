@@ -218,6 +218,25 @@
   }
 }
 
+// 远端已有同名分支时的覆盖确认：沿用删除确认的排版，但用告警色强调"会被覆盖"。
+.@{class-prefix}-welcome-branch-overwrite-confirmation {
+  color: var(--modal-text);
+
+  p {
+    margin: 0 0 12px;
+
+    &:last-child {
+      margin: 12px 0 0;
+      color: var(--modal-text-secondary);
+    }
+  }
+
+  strong {
+    color: var(--modal-text);
+    font-weight: 600;
+  }
+}
+
 .@{class-prefix}-welcome-project-icon {
   display: inline-flex;
   width: 42px;

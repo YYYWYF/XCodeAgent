@@ -11,7 +11,8 @@ export type StartIterationPayload = {
 
 export type StartIterationInput = {
   workspaceRoot: string
-  versionLabel: string
+  /** 新迭代所在的分支名，仅用于写 AGENTS.md 的迭代标题。 */
+  branchName: string
   description: string
 }
 
@@ -60,7 +61,7 @@ export async function startIteration(
   const message: Message = {
     id: randomUUID(),
     role: 'user',
-    content: `发起新迭代 ${input.versionLabel}，清空规划产物。`
+    content: `发起新迭代（分支 ${input.branchName}），清空规划产物。`
   }
   agent.addMessage(message)
 

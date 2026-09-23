@@ -345,10 +345,10 @@ type Props = {
   planningState?: ApplicationPlanningCurrentState
   theme: 'light' | 'dark'
   rightPanelOpen: boolean
-  /** 正在查看已生成版本：对话区替换为只读的应用文件/应用预览双 tab。 */
+  /** 正在查看历史分支：对话区替换为只读的应用文件/应用预览双 tab。 */
   versionReadOnly?: boolean
-  /** 所查看历史版本的 Git tag：应用文件按它读取该版本当时的文档与源码。 */
-  viewedVersionTag?: string
+  /** 所查看历史分支的分支名：应用文件与预览按它读取该分支当时的内容。 */
+  viewedBranchName?: string
   onRightPanelOpenChange: (open: boolean) => void
 }
 
@@ -860,7 +860,7 @@ export default function AiChatPanel({
   rightPanelOpen,
   onRightPanelOpenChange,
   versionReadOnly = false,
-  viewedVersionTag
+  viewedBranchName
 }: Props): ReactElement {
   const planningThreadId = planningState?.threadId
   const currentPlanningWorkflow = planningState?.workflow
@@ -1085,31 +1085,31 @@ export default function AiChatPanel({
   // 仅凭 derivedPhase 会误触发拦截，导致后续真正完成时 ref 已置位、gate 不再出现。
   const lifecycleReadyForWorkbench =
     applicationLifecycle?.initialization?.stage === 'ready_for_workbench'
-  // 进入开发门禁按「应用 + 当前迭代版本」隔离：每次迭代都要重新走一遍设计/计划并进入开发，
+  // 进入开发门禁按「应用 + 当前分支」隔离：每次迭代都要重新走一遍设计/计划并进入开发，
   // 若按应用存，上一轮迭代进入过开发就会永久压制本轮的就绪卡与"进入开发阶段"入口。
-  const iterationScopeId = application.currentVersionId || application.id
-  // 版本 id 是确定性的（`${applicationId}-v${major}-${minor}`），重建同名版本会复用；
-  // 再带上 lifecycle threadId（每次迭代都是新 randomUUID）才能区分"同名但不同轮"，
-  // 否则新迭代会继承同名旧版本的"已进入开发"标记。
+  const iterationScopeId = application.branchName || application.id
+  // 分支名会跨多轮迭代复用（同一条分支上可以继续迭代多次），
+  // 再带上 lifecycle threadId（每次迭代都是新 randomUUID）才能区分"同一分支的不同轮"，
+  // 否则新迭代会继承上一轮的"已进入开发"标记。
   const iterationToken = String(applicationLifecycle?.initialization?.threadId || '')
   const [enterDevConfirmed, setEnterDevConfirmed] = useState(() =>
     hasApplicationEnteredDevelopment(application.id, iterationScopeId, iterationToken)
   )
   // “进入开发”可能来自模板卡或顶部阶段切换；本轮迭代确认后即关闭本轮的模板卡。
   useEffect(() => {
-    const scopeId = application.currentVersionId || application.id
+    const scopeId = application.branchName || application.id
     setEnterDevConfirmed(hasApplicationEnteredDevelopment(application.id, scopeId, iterationToken))
     return subscribeApplicationDevelopmentEntry(application.id, scopeId, () => {
       setEnterDevConfirmed(true)
     })
-  }, [application.id, application.currentVersionId, iterationToken])
+  }, [application.id, application.branchName, iterationToken])
   const applicationTemplatePreparationEligible = isApplicationTemplatePreparationEligible(
     application.source,
     enterDevConfirmed
   )
-  // 已有历史版本即处于迭代：模板请求只由 application.json 派生，各迭代一致，
+  // 已有多条分支即处于迭代：模板请求只由 application.json 派生，各迭代一致，
   // 因此本轮沿用已有工程、不重新拉取模板，就绪卡文案需要说明这一点。
-  const reusingExistingTemplate = (application.versions?.length ?? 0) > 1
+  const reusingExistingTemplate = (application.branches?.length ?? 0) > 1
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
   const templateGenerationOrphaned = isTemplateGenerationOrphaned(
@@ -1175,7 +1175,7 @@ export default function AiChatPanel({
   )
   // 右侧面板实际展示：外部开关 + 面板有内容。开关由 WorkbenchPage 顶栏控制，
   // 面板内容（preview/doc/diff）由本组件按目标类型设置。
-  // 历史版本下整块不展示，理由见 shouldShowRightWorkspace。
+  // 历史分支下整块不展示，理由见 shouldShowRightWorkspace。
   const showRightPanel = shouldShowRightWorkspace({
     versionReadOnly,
     rightPanelOpen,
@@ -3054,7 +3054,7 @@ export default function AiChatPanel({
         //
         // 判据用 stage 而不是 status：后端写盘的 lifecycle 是 pending，只有前端
         // handleConfirmIteration 在内存里把它标成 awaiting_user。重新打开应用或
-        // 切换版本后 planning state 带着的是磁盘那份，按 status 判会漏掉这一情形。
+        // 切换分支后 planning state 带着的是磁盘那份，按 status 判会漏掉这一情形。
         const planningState = planningCurrentStateRef.current
         const currentMsgs = getSessionMessagesRef.current(identity.key)
         if (
@@ -3756,7 +3756,7 @@ export default function AiChatPanel({
     }
   }, [createDevelopmentConversation, switchPhase])
 
-  /** 验收通过：将验收状态标记为 passed，解锁后续"生成新版本"节点。 */
+  /** 验收通过：将验收状态标记为 passed，解锁后续"提交并推送"节点。 */
   const handleAcceptanceApprove = useCallback((): void => {
     if (!applicationLifecycle) return
     const nextLifecycle: ApplicationLifecycle = {
@@ -3766,14 +3766,14 @@ export default function AiChatPanel({
       extensions: {
         ...applicationLifecycle.extensions,
         // 能进入验收阶段说明测试与审查均已通过；一并补齐状态，
-        // 让 isVersionReleasable 的三项前置条件同时满足。
+        // 让 isBranchPublishable 的三项前置条件同时满足。
         testExecutionStatus: 'passed',
         reviewStatus: 'passed',
         acceptanceStatus: 'passed'
       }
     }
     onApplicationLifecycleChange(nextLifecycle)
-    message.success('验收已通过，可以生成新版本')
+    message.success('验收已通过，可以提交并推送')
   }, [applicationLifecycle, onApplicationLifecycleChange])
 
   /** 使用当前前端端口和所选页面路由打开独立全屏预览窗口。 */
@@ -4500,13 +4500,13 @@ export default function AiChatPanel({
       style={panelStyle}
     >
       {versionReadOnly ? (
-        // 已生成版本：不保留历史会话，只提供应用文件与应用预览两个只读入口。
+        // 历史分支：不保留历史会话，只提供应用文件与应用预览两个只读入口。
         <ReleasedVersionPanel
           application={application}
           pages={displayedPlanningPages}
           previewBaseUrl={runtimePreviewBaseUrl}
           previewErrorMessage={runtimePreviewLaunchError}
-          revision={viewedVersionTag}
+          revision={viewedBranchName}
           serviceControl={previewRuntime.control}
           workspaceRoot={workspaceRoot}
         />
@@ -4612,6 +4612,7 @@ export default function AiChatPanel({
                 entityDesignSession={entityDesignChatActive}
                 designPhasePlanning={isApplicationPlanningPhase}
                 reusedExistingTemplate={reusingExistingTemplate}
+                branchName={application.branchName}
                 emptyContent={
                   !isApplicationPlanningPhase ? (
                     <QuickTaskGuide
@@ -5023,7 +5024,7 @@ export default function AiChatPanel({
                       title={`有 ${orphanChangePaths.length} 个文件未关联到任何模块，请确认归属`}
                       description={`未归属模块：${summarizePaths(orphanChangePaths)}`}
                       defaultCommitMessage="chore: 提交遗漏变更"
-                      milestoneId={`${application.id}:quality-gate-${application.currentVersionId || ''}`}
+                      milestoneId={`${application.id}:quality-gate-${application.branchName || ''}`}
                       disabled={loading || workspaceBusy}
                       hideWhenUnavailable
                     />
@@ -5032,7 +5033,7 @@ export default function AiChatPanel({
                       workspaceRoot={application.workspaceRoot || ''}
                       title="代码已通过自动检查，可先创建版本"
                       defaultCommitMessage="chore: 保存当前模块代码"
-                      milestoneId={`${application.id}:quality-gate-${application.currentVersionId || ''}`}
+                      milestoneId={`${application.id}:quality-gate-${application.branchName || ''}`}
                       disabled={loading || workspaceBusy}
                       hideWhenUnavailable
                     />

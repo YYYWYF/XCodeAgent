@@ -1,7 +1,7 @@
-"""按 Git 版本（tag）物化代码并启动历史版本预览。
+"""按 Git 分支物化代码并启动历史分支预览。
 
-历史版本回看时，源码面板按 tag 只读读取（见 `revision_workspace.py`），但**预览需要一个
-真正跑起来的应用** —— 只读读取给不出 dev server。这里把该版本的树物化到一个独立目录，
+回看历史分支时，源码面板按分支只读读取（见 `revision_workspace.py`），但**预览需要一个
+真正跑起来的应用** —— 只读读取给不出 dev server。这里把该分支的树物化到一个独立目录，
 再用既有的前端启动器把它跑起来。
 
 两个关键设计：
@@ -44,20 +44,20 @@ ProgressCallback = Callable[[str, str, int], None]
 REVISION_PREVIEW_ROOT = ".devagentstudio/runtime/revision-preview"
 REVISION_PREVIEW_RUNTIME_SUBDIR_PREFIX = "launch-revision-"
 
-# 等该版本的 dev server 真正就绪的上限。比常规预览宽松：历史版本的首次启动要现编译
-# 该版本的树，比"服务已经在跑"的常规场景慢。
+# 等该分支的 dev server 真正就绪的上限。比常规预览宽松：历史分支的首次启动要现编译
+# 该分支的树，比"服务已经在跑"的常规场景慢。
 REVISION_PREVIEW_READY_TIMEOUT_SECONDS = 120
 
-# 目录名只保留安全字符；tag 可以含 `/`（如 release/v1.0），不能直接当目录名。
+# 目录名只保留安全字符；分支名可以含 `/`（如 feature/login），不能直接当目录名。
 _UNSAFE_DIR_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class RevisionPreviewError(ValueError):
-    """表示历史版本预览无法安全启动。"""
+    """表示历史分支预览无法安全启动。"""
 
 
 def revision_preview_runtime_subdir(revision: str) -> str:
-    """该版本的独立运行时目录名，用于进程登记与 PID 文件隔离。"""
+    """该分支的独立运行时目录名，用于进程登记与 PID 文件隔离。"""
 
     return f"{REVISION_PREVIEW_RUNTIME_SUBDIR_PREFIX}{_revision_slug(revision)}"
 
@@ -72,14 +72,14 @@ def _revision_slug(revision: str) -> str:
 
 
 def revision_preview_dir(workspace_root: str | Path, revision: str) -> Path:
-    """该版本的物化目录。"""
+    """该分支的物化目录。"""
 
     root = Path(workspace_root).expanduser().resolve()
     return root / REVISION_PREVIEW_ROOT / _revision_slug(revision)
 
 
 def materialize_revision(workspace_root: str | Path, revision: str) -> Path:
-    """把指定版本物化到独立目录，返回该目录。
+    """把指定分支物化到独立目录，返回该目录。
 
     已物化且指向同一 commit 时直接复用，避免每次点预览都重建树。
     """
@@ -87,7 +87,7 @@ def materialize_revision(workspace_root: str | Path, revision: str) -> Path:
     root = Path(workspace_root).expanduser().resolve()
     revision = str(revision or "").strip()
     if not revision:
-        raise RevisionPreviewError("缺少要预览的版本标识。")
+        raise RevisionPreviewError("缺少要预览的分支标识。")
 
     target = revision_preview_dir(root, revision)
     expected_commit = _resolve_revision_commit(root, revision)
@@ -106,13 +106,13 @@ def materialize_revision(workspace_root: str | Path, revision: str) -> Path:
         pruned = _run_git(root, ["worktree", "prune", "--expire", "now"])
         if pruned.returncode != 0:
             detail = pruned.stderr.strip() or pruned.stdout.strip() or "未知错误"
-            raise RevisionPreviewError(f"无法清理失效的版本预览工作区：{detail}")
+            raise RevisionPreviewError(f"无法清理失效的分支预览工作区：{detail}")
 
     target.parent.mkdir(parents=True, exist_ok=True)
     add_arguments = ["worktree", "add"]
     if target_was_missing:
         # prune 在文件权限受限或 Git 认为记录尚未过期时可能无法删掉注册，而且部分 Git
-        # 版本即使清理失败也返回 0。这里只在目标物理目录明确不存在时加一次 force；它能
+        # 分支即使清理失败也返回 0。这里只在目标物理目录明确不存在时加一次 force；它能
         # 覆盖普通 missing registration，但仍不会覆盖 locked worktree（后者需要两次 force）。
         add_arguments.append("--force")
     add_arguments.extend(["--detach", str(target), expected_commit])
@@ -121,7 +121,7 @@ def materialize_revision(workspace_root: str | Path, revision: str) -> Path:
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip() or "未知错误"
-        raise RevisionPreviewError(f"无法物化版本 {revision} 的代码：{detail}")
+        raise RevisionPreviewError(f"无法物化分支 {revision} 的代码：{detail}")
     return target
 
 
@@ -131,7 +131,7 @@ def _resolve_revision_commit(root: Path, revision: str) -> str:
     completed = _run_git(root, ["rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}"])
     commit = completed.stdout.strip() if completed.returncode == 0 else ""
     if not commit:
-        raise RevisionPreviewError(f"版本 {revision} 在仓库中不存在，无法预览。")
+        raise RevisionPreviewError(f"分支 {revision} 在仓库中不存在，无法预览。")
     return commit
 
 
@@ -166,7 +166,7 @@ def _unlink_reused_dependencies(target: Path) -> None:
 
 
 def _can_reuse_dependencies(workspace_root: Path, revision_dir: Path) -> bool:
-    """工作区已装依赖且与目标版本的依赖声明一致时，可以复用。
+    """工作区已装依赖且与目标分支的依赖声明一致时，可以复用。
 
     按 `package.json` 判定而不是锁文件：锁文件可能因为安全 override 修复而不同
     （线上 v1.0 就是这样），但声明的依赖一致就足以支撑渲染。历史预览的目的是看当时
@@ -205,7 +205,7 @@ def start_revision_preview(
     *,
     report_progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """物化该版本并启动独立的前端预览，返回预览地址。"""
+    """物化该分支并启动独立的前端预览，返回预览地址。"""
 
     def report(stage: str, message: str, percent: int) -> None:
         if report_progress is not None:
@@ -214,7 +214,7 @@ def start_revision_preview(
     root = Path(workspace_root).expanduser().resolve()
     revision = str(revision or "").strip()
 
-    report("materialize", f"正在准备版本 {revision} 的代码…", 20)
+    report("materialize", f"正在准备分支 {revision} 的代码…", 20)
     revision_dir = materialize_revision(root, revision)
 
     reused = _can_reuse_dependencies(root, revision_dir) and _link_reused_dependencies(
@@ -223,9 +223,9 @@ def start_revision_preview(
     if reused:
         report("install", "依赖与当前工作区一致，复用已安装的依赖。", 45)
     else:
-        report("install", "正在安装该版本的依赖…", 45)
+        report("install", "正在安装该分支的依赖…", 45)
 
-    report("launch", "正在启动该版本的前端服务…", 70)
+    report("launch", "正在启动该分支的前端服务…", 70)
     runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / revision_preview_runtime_subdir(revision)
     # 清掉上一次启动的 stdout 日志再启动：下面的地址解析是从日志里找 `Local:` 行，
     # 留着旧内容就可能解析出上一次那个已经失效的端口。
@@ -234,30 +234,30 @@ def start_revision_preview(
         root,
         project_dir=revision_dir / "frontend",
         runtime_subdir=revision_preview_runtime_subdir(revision),
-        # 复用依赖时跳过安装；否则让启动器正常安装该版本的依赖。
+        # 复用依赖时跳过安装；否则让启动器正常安装该分支的依赖。
         skip_install=reused,
         # 复用的方式是把工作区的 node_modules 软链进来，要一并告诉包管理器别去"纠正"它。
         linked_dependencies=reused,
         # 必须绕开"服务已在运行就直接复用"这条捷径。它按运行时目录里的 PID 文件判断，
         # 再探测脚本里写死的端口（本模板是 3000）—— 而那个端口是工作区预览在占着，于是
-        # 只要上次留下过一个 PID 文件，这里就会把**工作区的应用**当成该版本的预览返回，
-        # 界面上就又看到了最新版本。历史版本预览要的是自己那个 dev server，宁可重启。
+        # 只要上次留下过一个 PID 文件，这里就会把**工作区的应用**当成该分支的预览返回，
+        # 界面上就又看到了当前分支。历史分支预览要的是自己那个 dev server，宁可重启。
         force_restart=True,
     )
     if str(launch.get("status") or "failed") != "running":
         raise RevisionPreviewError(
-            str(launch.get("message") or "历史版本前端服务启动失败。")
+            str(launch.get("message") or "历史分支前端服务启动失败。")
         )
 
     # 不信启动器返回的地址。它按脚本里写死的端口（3000）做健康检查，而那个端口正是
     # 工作区预览在监听，于是检查会立刻通过、返回的还是工作区那个地址 —— 预览就又会显示
-    # 最新版本。这里只认该版本自己日志里的实际监听地址（vite 在端口被占用时会递增）。
+    # 当前分支。这里只认该分支自己日志里的实际监听地址（vite 在端口被占用时会递增）。
     preview_url = _await_revision_preview_url(runtime_root)
     if not preview_url:
         detail = _launch_failure_detail(runtime_root)
-        raise RevisionPreviewError(f"版本 {revision} 的前端服务未就绪。{detail}")
+        raise RevisionPreviewError(f"分支 {revision} 的前端服务未就绪。{detail}")
 
-    report("ready", "该版本的预览已就绪。", 100)
+    report("ready", "该分支的预览已就绪。", 100)
     return {
         "status": "running",
         "revision": revision,
@@ -269,7 +269,7 @@ def start_revision_preview(
 
 
 def _await_revision_preview_url(runtime_root: Path) -> str:
-    """轮询该版本自己的启动日志，返回已就绪进程的实际监听地址；超时返回空串。"""
+    """轮询该分支自己的启动日志，返回已就绪进程的实际监听地址；超时返回空串。"""
 
     stdout_log = runtime_root / "frontend.stdout.log"
     stderr_log = runtime_root / "frontend.stderr.log"
@@ -298,7 +298,7 @@ def _await_revision_preview_url(runtime_root: Path) -> str:
 
 
 def _runtime_pid(runtime_root: Path) -> list[int]:
-    """读取该版本运行时目录里登记的 PID；缺失或非法时返回空列表。"""
+    """读取该分支运行时目录里登记的 PID；缺失或非法时返回空列表。"""
 
     try:
         return [int((runtime_root / "frontend.pid").read_text(encoding="utf-8").strip())]
@@ -320,7 +320,7 @@ def _launch_failure_detail(runtime_root: Path) -> str:
 
 
 def stop_revision_preview(workspace_root: str | Path, revision: str) -> dict[str, Any]:
-    """停止该版本的前端服务并摘除物化目录。"""
+    """停止该分支的前端服务并摘除物化目录。"""
 
     root = Path(workspace_root).expanduser().resolve()
     revision = str(revision or "").strip()
@@ -335,7 +335,7 @@ def stop_revision_preview(workspace_root: str | Path, revision: str) -> dict[str
 
 
 def revision_preview_state(workspace_root: str | Path, revision: str) -> dict[str, Any]:
-    """查询该版本预览的当前状态，供前端决定是否需要重新启动。
+    """查询该分支预览的当前状态，供前端决定是否需要重新启动。
 
     地址来源与启动器一致：从本次启动的 stdout 日志里解析 dev server 实际监听地址
     （vite 在端口被占用时会自动递增，推算值不可靠）。不用 `preview-runtime.json` ——

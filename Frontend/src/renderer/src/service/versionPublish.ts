@@ -7,7 +7,6 @@ export type VersionPublishPayload = {
   status: 'in_progress' | 'completed' | 'failed'
   progress?: { stage: string; message: string; detail?: string; percent: number }
   commitSha?: string
-  tag?: string
   branch?: string
   workspaceRoot?: string
   repositoryRoot?: string
@@ -17,7 +16,8 @@ export type VersionPublishPayload = {
 export type VersionPublishInput = {
   workspaceRoot: string
   repoUrl: string
-  versionLabel: string
+  /** 提交推送的目标分支：应用当前正在开发的那条。 */
+  branchName: string
   description: string
 }
 
@@ -32,11 +32,10 @@ type VersionPublishAgUiPayload = {
   repositoryRoot?: string
   branch?: string
   commitSha?: string
-  tag?: string
   error?: { type?: string; message?: string }
 }
 
-/** 返回版本发布 AG-UI 动作地址。 */
+/** 返回提交推送 AG-UI 动作地址。 */
 function getVersionPublishUrl(): string {
   const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
@@ -64,7 +63,6 @@ function acceptPayload(
     status: incoming.status as VersionPublishPayload['status'],
     progress: incoming.progress,
     commitSha: incoming.commitSha,
-    tag: incoming.tag,
     branch: incoming.branch,
     workspaceRoot: incoming.workspaceRoot,
     repositoryRoot: incoming.repositoryRoot,
@@ -73,7 +71,7 @@ function acceptPayload(
   return merged
 }
 
-/** 通过标准 AG-UI 客户端执行版本发布，并持续发布进度与终态。 */
+/** 通过标准 AG-UI 客户端执行提交推送，并持续发布进度与终态。 */
 export async function publishVersion(
   input: VersionPublishInput,
   options: {
@@ -89,7 +87,7 @@ export async function publishVersion(
   const message: Message = {
     id: randomUUID(),
     role: 'user',
-    content: `发布版本 ${input.versionLabel}：提交、打 Tag 并推送到远程仓库。`
+    content: `提交并推送：把本次改动推送到分支 ${input.branchName}。`
   }
   agent.addMessage(message)
 
@@ -111,7 +109,7 @@ export async function publishVersion(
   const abort = (): void => agent.abortRun()
   options.signal?.addEventListener('abort', abort, { once: true })
   try {
-    if (options.signal?.aborted) throw new Error('发布已取消')
+    if (options.signal?.aborted) throw new Error('提交已取消')
     const result = await agent.runAgent(
       { forwardedProps: { versionPublish: { action: 'publish', ...input } } },
       subscriber
@@ -120,12 +118,12 @@ export async function publishVersion(
       latest,
       (result.result as { versionPublish?: unknown } | undefined)?.versionPublish
     )
-    if (!latest) throw new Error('版本发布接口没有返回有效状态。')
+    if (!latest) throw new Error('提交接口没有返回有效状态。')
     if (latest.status === 'failed') {
-      throw new Error(latest.error?.message || '版本发布操作失败。')
+      throw new Error(latest.error?.message || '提交并推送失败。')
     }
-    if (!latest.commitSha || !latest.tag) {
-      throw new Error('版本发布接口没有返回完整的提交结果。')
+    if (!latest.commitSha) {
+      throw new Error('提交接口没有返回完整的提交结果。')
     }
     return latest
   } finally {

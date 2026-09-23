@@ -1,34 +1,38 @@
 import {
   CheckCircleFilled,
   CloudUploadOutlined,
-  HistoryOutlined,
   LoadingOutlined,
   PlusOutlined
 } from '@ant-design/icons'
-import { Input, Modal, Progress, Steps } from 'antd'
+import { Input, Modal, Progress, Radio, Steps } from 'antd'
 import RichLoading from './AiChatPanel/components/DesignProgress/RichLoading'
-import { findVersion } from '../service/applicationVersions'
+import { validateBranchName } from '../service/repositoryBranch'
 import type { ApplicationConfig } from '../typings'
 import { cx } from '../utils'
 
 type VersionGenerateState = { stepIndex: number } | null
 
+/** 发起新迭代时用户对分支的选择。 */
+export type IterationBranchChoice =
+  | { mode: 'current' }
+  | { mode: 'new'; branchName: string }
+
 type PublishModalProps = {
-  /** 待发布版本的展示标签（如 v1.0）。 */
-  versionLabel: string
-  /** 版本说明草稿。 */
+  /** 当前正在开发的分支名：提交与推送的落点。 */
+  branchName: string
+  /** 变更说明草稿。 */
   description: string
   onDescriptionChange: (value: string) => void
-  /** 仓库地址：提交与 Tag 的远程落点，弹框内回显。 */
+  /** 仓库地址：提交与推送的远程落点，弹框内回显。 */
   repoUrl?: string
   generating: VersionGenerateState
   onCancel: () => void
   onGenerate: () => void
 }
 
-/** 生成版本弹框：先确认版本说明，确认后以三步进度（打包/提交码云/打Tag）模拟发布。 */
-function PublishVersionModal({
-  versionLabel,
+/** 提交推送弹框：先确认变更说明，确认后以三步进度（打包/提交/推送分支）推进。 */
+function PublishBranchModal({
+  branchName,
   description,
   onDescriptionChange,
   repoUrl,
@@ -55,8 +59,8 @@ function PublishVersionModal({
             <CloudUploadOutlined />
           </span>
           <span className={cx('workbench-publish-modal-title')}>
-            <strong>生成版本 {versionLabel}</strong>
-            <small>打包应用资产 · 提交码云 · 打 Tag</small>
+            <strong>提交并推送</strong>
+            <small>提交本次改动 · 推送到分支 {branchName}</small>
           </span>
         </header>
         <div className={cx('workbench-publish-modal-body')}>
@@ -74,29 +78,30 @@ function PublishVersionModal({
                 strokeColor={{ from: '#6b3cf0', to: '#3f6cf5' }}
               />
               <Steps current={generating.stepIndex} direction="vertical" size="small">
-                <Steps.Step title="打包应用资产" description="页面 / 接口 / 数据源 / 配置" />
-                <Steps.Step title="提交码云" description="创建提交记录" />
-                <Steps.Step title={`打 Tag ${versionLabel}`} description="标记版本里程碑" />
+                <Steps.Step title="打包本次改动" description="页面 / 接口 / 数据源 / 配置" />
+                <Steps.Step title="创建提交" description="写入本地仓库" />
+                <Steps.Step
+                  title={`推送到分支 ${branchName}`}
+                  description="同步到远端仓库"
+                />
               </Steps>
             </div>
           ) : (
             <>
               <div className={cx('workbench-generate-reminder')}>
-                <p className={cx('workbench-generate-reminder-title')}>生成版本将执行以下操作:</p>
+                <p className={cx('workbench-generate-reminder-title')}>提交并推送将执行以下操作:</p>
                 <ul>
-                  <li>打包本版本全部应用资产(页面 / 接口 / 数据源 / 配置)</li>
+                  <li>打包本次全部改动(页面 / 接口 / 数据源 / 配置)</li>
                   <li>
-                    提交到码云仓库并打上版本 Tag <strong>{versionLabel}</strong>
+                    提交到本地仓库并推送到分支 <strong>{branchName}</strong>
                   </li>
-                  <li>
-                    生成后该版本<strong>锁定为只读</strong>,后续改动需「发起新迭代」
-                  </li>
+                  <li>推送后分支仍可继续开发，再次提交</li>
                 </ul>
               </div>
               <div className={cx('workbench-generate-field')}>
                 <label className={cx('workbench-generate-field-label')}>
                   <span className={cx('workbench-generate-required')}>*</span>
-                  版本说明
+                  变更说明
                 </label>
                 <Input.TextArea
                   value={description}
@@ -104,7 +109,7 @@ function PublishVersionModal({
                   rows={3}
                   maxLength={200}
                   showCount
-                  placeholder="请简要描述本版本的主要变更内容，例如：新增问卷填报与提交功能"
+                  placeholder="请简要描述本次的主要变更内容，例如：新增问卷填报与提交功能"
                 />
               </div>
             </>
@@ -127,11 +132,11 @@ function PublishVersionModal({
           >
             {generating ? (
               <>
-                <LoadingOutlined aria-hidden="true" /> 生成中…
+                <LoadingOutlined aria-hidden="true" /> 提交中…
               </>
             ) : (
               <>
-                <CloudUploadOutlined aria-hidden="true" /> 确认生成
+                <CloudUploadOutlined aria-hidden="true" /> 确认提交
               </>
             )}
           </button>
@@ -142,24 +147,37 @@ function PublishVersionModal({
 }
 
 type IterationModalProps = {
-  /** 发起新迭代所基于的当前版本标签。 */
-  versionLabel: string
-  /** 当前版本 major 号，弹窗据此展示下一版本号。 */
-  major: number
-  /** 当前版本 minor 号。 */
-  minor: number
-  onCancel: () => void
-  onConfirm: () => void
-}
+  /** 当前正在开发的分支名，作为「在当前分支继续」的落点。 */
+  currentBranchName: string;
+  /** 应用已有的分支名，用于即时提示"这个名字已经有了"。 */
+  existingBranchNames: string[];
+  choice: IterationBranchChoice;
+  onChoiceChange: (choice: IterationBranchChoice) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+};
 
-/** 发起新迭代确认弹框：基于当前版本派生下一个小版本并回到需求分析阶段。 */
+/**
+ * 发起新迭代确认弹框：让用户选择在**当前分支继续**，还是**新建一条分支**。
+ *
+ * 新建分支时立刻推送到远端，因此这里只做本地即时校验（格式 + 是否与应用已有分支重名）；
+ * 远端是否已有同名分支由推送结果反馈（远端可能被同事建过，本地看不到）。
+ */
 function StartIterationModal({
-  versionLabel,
-  major,
-  minor,
+  currentBranchName,
+  existingBranchNames,
+  choice,
+  onChoiceChange,
   onCancel,
   onConfirm
 }: IterationModalProps): JSX.Element {
+  const newBranchName = choice.mode === 'new' ? choice.branchName : ''
+  const invalidReason =
+    choice.mode === 'new' ? validateBranchName(newBranchName) : undefined
+  const duplicated =
+    choice.mode === 'new' && existingBranchNames.includes(newBranchName.trim())
+  const canConfirm = choice.mode === 'current' || (!invalidReason && !duplicated)
+
   return (
     <Modal
       centered
@@ -168,7 +186,7 @@ function StartIterationModal({
       footer={null}
       onCancel={onCancel}
       open
-      width={420}
+      width={460}
     >
       <div className={cx('workbench-publish-modal-inner')}>
         <header className={cx('workbench-publish-modal-header')}>
@@ -177,16 +195,49 @@ function StartIterationModal({
           </span>
           <span className={cx('workbench-publish-modal-title')}>
             <strong>发起新迭代</strong>
-            <small>创建新版本并重新进入需求分析阶段</small>
+            <small>回到需求分析阶段，重新走一遍设计与计划</small>
           </span>
         </header>
         <div className={cx('workbench-publish-modal-body')}>
           <p className={cx('workbench-publish-modal-lead')}>
-            将基于 <strong className={cx('workbench-publish-modal-version')}>{versionLabel}</strong>{' '}
-            创建 v{major}.{minor + 1} 。新版本会从需求分析阶段开始，使用全新的对话记录。
+            新迭代会从需求分析阶段开始，并使用全新的对话记录。请选择这次迭代在哪儿进行：
           </p>
+          <Radio.Group
+            className={cx('workbench-iteration-branch-choice')}
+            onChange={(e) => {
+              const mode = e.target.value as 'current' | 'new'
+              onChoiceChange(
+                mode === 'current' ? { mode: 'current' } : { mode: 'new', branchName: '' }
+              )
+            }}
+            value={choice.mode}
+          >
+            <Radio value="current">
+              在当前分支 <strong>{currentBranchName}</strong> 上继续
+            </Radio>
+            <Radio value="new">新建一条分支</Radio>
+          </Radio.Group>
+          {choice.mode === 'new' ? (
+            <div className={cx('workbench-generate-field')}>
+              <Input
+                value={newBranchName}
+                onChange={(e) =>
+                  onChoiceChange({ mode: 'new', branchName: e.target.value })
+                }
+                placeholder="例如 feature-login"
+                status={invalidReason || duplicated ? 'error' : undefined}
+              />
+              <div className={cx('workbench-iteration-branch-hint')}>
+                {invalidReason
+                  ? invalidReason
+                  : duplicated
+                    ? '这个分支名应用里已经用过了，换一个吧。'
+                    : '新分支会立刻创建并推送到远端仓库。'}
+              </div>
+            </div>
+          ) : null}
           <div className={cx('workbench-publish-modal-meta')}>
-            <CheckCircleFilled aria-hidden="true" /> 已生成版本保持锁定，可随时切换查看
+            <CheckCircleFilled aria-hidden="true" /> 其他分支保持只读，可随时切换查看
           </div>
         </div>
         <footer className={cx('workbench-publish-modal-footer')}>
@@ -196,6 +247,7 @@ function StartIterationModal({
           <button
             className={cx('workbench-publish-modal-confirm')}
             type="button"
+            disabled={!canConfirm}
             onClick={onConfirm}
           >
             <PlusOutlined aria-hidden="true" /> 确认发起
@@ -206,130 +258,52 @@ function StartIterationModal({
   )
 }
 
-type RollbackModalProps = {
-  /** 回退目标版本标签（内容来源）。 */
-  restoredVersionLabel: string
-  /** 回退后生成的新迭代版本标签。 */
-  nextVersionLabel: string
-  onCancel: () => void
-  onConfirm: () => void
-}
-
-/** 基于历史版本迭代（回退）确认弹框：以历史版本内容派生新的顺序版本。 */
-function RollbackVersionModal({
-  restoredVersionLabel,
-  nextVersionLabel,
-  onCancel,
-  onConfirm
-}: RollbackModalProps): JSX.Element {
-  return (
-    <Modal
-      centered
-      className={cx('workbench-publish-modal')}
-      closable
-      footer={null}
-      onCancel={onCancel}
-      open
-      width={420}
-    >
-      <div className={cx('workbench-publish-modal-inner')}>
-        <header className={cx('workbench-publish-modal-header')}>
-          <span className={cx('workbench-publish-modal-icon', 'is-rollback')} aria-hidden="true">
-            <HistoryOutlined />
-          </span>
-          <span className={cx('workbench-publish-modal-title')}>
-            <strong>基于此版本迭代</strong>
-            <small>以历史版本为基础生成新迭代版本</small>
-          </span>
-        </header>
-        <div className={cx('workbench-publish-modal-body')}>
-          <p className={cx('workbench-publish-modal-lead')}>
-            将基于{' '}
-            <strong className={cx('workbench-publish-modal-version')}>
-              {restoredVersionLabel}
-            </strong>{' '}
-            的内容生成新迭代版本{' '}
-            <strong className={cx('workbench-publish-modal-version')}>{nextVersionLabel}</strong>
-            ，以该历史版本为基础继续开发。原有版本保持只读、可随时切换查看，不会被覆盖。
-          </p>
-          <div className={cx('workbench-publish-modal-meta')}>
-            <CheckCircleFilled aria-hidden="true" /> 历史版本保持只读，可随时切换查看
-          </div>
-        </div>
-        <footer className={cx('workbench-publish-modal-footer')}>
-          <button className={cx('workbench-publish-modal-cancel')} type="button" onClick={onCancel}>
-            取消
-          </button>
-          <button
-            className={cx('workbench-publish-modal-confirm')}
-            type="button"
-            onClick={onConfirm}
-          >
-            <HistoryOutlined aria-hidden="true" /> 确认迭代
-          </button>
-        </footer>
-      </div>
-    </Modal>
-  )
-}
-
 type WorkbenchVersionModalsProps = {
   application: ApplicationConfig
-  /** 发布弹框：待发布版本标签（仅在可发布且弹框开启时传入）。 */
-  publishVersionLabel?: string
-  /** 发布弹框：仓库地址（提交与 Tag 的远程落点）。 */
+  /** 提交推送弹框：当前分支名（仅在可提交且弹框开启时传入）。 */
+  publishBranchName?: string
+  /** 提交推送弹框：仓库地址（提交与推送的远程落点）。 */
   publishRepoUrl?: string
   publishDescription: string
   onDescriptionChange: (value: string) => void
   generating: VersionGenerateState
   onCancelPublish: () => void
   onGenerate: () => void
-  /** 迭代弹框：作为派生基础的当前版本标签。 */
-  iterationBaseVersionId?: string
+  /** 迭代弹框：是否开启（开启时用当前分支名与已有分支名渲染选择项）。 */
+  iterationModalOpen: boolean
+  iterationChoice: IterationBranchChoice
+  onIterationChoiceChange: (choice: IterationBranchChoice) => void
   onCancelIteration: () => void
   onConfirmIteration: () => void
-  /** 回退弹框：目标历史版本 id。 */
-  rollbackTargetVersionId?: string
-  /** 回退弹框：当前版本链头 id，用于计算新版本号。 */
-  activeVersionId: string
-  onCancelRollback: () => void
-  onConfirmRollback: () => void
-  /** 版本切换全屏加载的目标标签；为空时不显示。 */
+  /** 分支切换全屏加载的目标名；为空时不显示。 */
   switchingTargetLabel?: string
 }
 
-/** 工作台三个版本弹框（生成版本/发起新迭代/基于此版本迭代）与切换加载层的组合渲染。 */
+/** 工作台两个弹框（提交并推送 / 发起新迭代）与切换加载层的组合渲染。 */
 export default function WorkbenchVersionModals({
   application,
-  publishVersionLabel,
+  publishBranchName,
   publishRepoUrl,
   publishDescription,
   onDescriptionChange,
   generating,
   onCancelPublish,
   onGenerate,
-  iterationBaseVersionId,
+  iterationModalOpen,
+  iterationChoice,
+  onIterationChoiceChange,
   onCancelIteration,
   onConfirmIteration,
-  rollbackTargetVersionId,
-  activeVersionId,
-  onCancelRollback,
-  onConfirmRollback,
   switchingTargetLabel
 }: WorkbenchVersionModalsProps): JSX.Element {
-  const iterationBase = iterationBaseVersionId
-    ? findVersion(application, iterationBaseVersionId)
-    : undefined
-  const rollbackTarget = rollbackTargetVersionId
-    ? findVersion(application, rollbackTargetVersionId)
-    : undefined
-  const activeHead = findVersion(application, activeVersionId)
+  const allBranches = application.branches || []
+  const currentBranchName = application.branchName || allBranches.at(-1)?.name || ''
 
   return (
     <>
-      {publishVersionLabel ? (
-        <PublishVersionModal
-          versionLabel={publishVersionLabel}
+      {publishBranchName ? (
+        <PublishBranchModal
+          branchName={publishBranchName}
           description={publishDescription}
           onDescriptionChange={onDescriptionChange}
           repoUrl={publishRepoUrl}
@@ -339,29 +313,21 @@ export default function WorkbenchVersionModals({
         />
       ) : null}
 
-      {iterationBase ? (
+      {iterationModalOpen ? (
         <StartIterationModal
-          versionLabel={iterationBase.versionLabel}
-          major={iterationBase.major}
-          minor={iterationBase.minor}
+          choice={iterationChoice}
+          currentBranchName={currentBranchName}
+          existingBranchNames={allBranches.map((branch) => branch.name)}
           onCancel={onCancelIteration}
+          onChoiceChange={onIterationChoiceChange}
           onConfirm={onConfirmIteration}
-        />
-      ) : null}
-
-      {rollbackTarget ? (
-        <RollbackVersionModal
-          restoredVersionLabel={rollbackTarget.versionLabel}
-          nextVersionLabel={activeHead ? `v${activeHead.major}.${activeHead.minor + 1}` : '新版本'}
-          onCancel={onCancelRollback}
-          onConfirm={onConfirmRollback}
         />
       ) : null}
 
       {switchingTargetLabel ? (
         <div className={cx('workbench-version-switching-mask')} role="status" aria-live="polite">
           <div className={cx('workbench-version-switching-card')}>
-            <RichLoading bare title={`正在加载 ${switchingTargetLabel} 版本应用资产…`} />
+            <RichLoading bare title={`正在加载分支 ${switchingTargetLabel} 的应用资产…`} />
           </div>
         </div>
       ) : null}

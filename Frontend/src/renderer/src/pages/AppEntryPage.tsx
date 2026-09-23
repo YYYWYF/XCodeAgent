@@ -277,13 +277,13 @@ function AppEntryContent(): JSX.Element {
       try {
         const lifecycle = await getApplicationLifecycle(application)
         const readyForWorkbench = lifecycle?.initialization?.stage === 'ready_for_workbench'
-        // 进入开发门禁按「应用 + 当前迭代版本」隔离：新迭代已就绪但本轮还没进过开发时，
+        // 进入开发门禁按「应用 + 当前分支」隔离：新迭代已就绪但本轮还没进过开发时，
         // 不能跳过规划状态恢复，否则就绪卡与"进入开发阶段"入口都不会出现。
         if (
           readyForWorkbench &&
           hasApplicationEnteredDevelopment(
             application.id,
-            application.currentVersionId || application.id
+            application.branchName || application.id
           )
         ) {
           planningController.dismissPlanning(application.id)

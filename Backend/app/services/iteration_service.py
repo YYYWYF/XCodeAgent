@@ -25,7 +25,8 @@ class StartIterationRequest(BaseModel):
 
     action: Literal["start_iteration"]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1)
-    version_label: str = Field(alias="versionLabel", min_length=1)
+    # 发起新迭代所基于的分支名，仅用于写 AGENTS.md 的迭代标题。
+    branch_name: str = Field(alias="branchName", min_length=1, max_length=255)
     description: str = Field(default="")
 
 
@@ -74,7 +75,7 @@ def start_iteration(request: StartIterationRequest) -> StartIterationResult:
     保留 AGENTS.md / application.json / template-state.json；清空 specs/plans/drafts/
     checkpoints/ui-design 与 lifecycle 快照。
 
-    调用方负责在前端重置 lifecycle 为 collecting_requirement 并更新版本链。
+    调用方负责在前端重置 lifecycle 为 collecting_requirement 并更新分支记录。
     """
 
     workspace_root = _resolve_workspace_root(request.workspace_root)
@@ -138,10 +139,10 @@ def _stop_active_workbench_executions(workspace_root: Path) -> None:
 def generate_agents_context(
     workspace_root: str | Path,
     *,
-    version_label: str,
+    branch_name: str,
     description: str,
 ) -> None:
-    """发布版本时生成/追加 .devagentstudio/AGENTS.md 迭代上下文总结。
+    """提交推送时生成/追加 .devagentstudio/AGENTS.md 迭代上下文总结。
 
     读取当前 specs/plans 产物，提取摘要追加到 AGENTS.md。
     如果文件已存在（之前迭代生成过），追加新段落；否则新建。
@@ -152,14 +153,14 @@ def generate_agents_context(
     agents_md = devagentstudio / "AGENTS.md"
 
     section = _build_iteration_section(
-        devagentstudio, version_label=version_label, description=description
+        devagentstudio, branch_name=branch_name, description=description
     )
 
     if agents_md.exists():
         existing = agents_md.read_text(encoding="utf-8")
         agents_md.write_text(existing.rstrip() + "\n\n" + section, encoding="utf-8")
     else:
-        header = "# 迭代上下文\n\n> 本文件记录每个已发布版本的设计与计划产物摘要，供下一轮迭代的大模型作为起点。\n\n"
+        header = "# 迭代上下文\n\n> 本文件记录每轮迭代的设计与计划产物摘要，供下一轮迭代的大模型作为起点。\n\n"
         agents_md.write_text(header + section, encoding="utf-8")
 
 
@@ -191,16 +192,16 @@ def _clear_iteration_artifacts(devagentstudio_dir: Path) -> bool:
 def _build_iteration_section(
     devagentstudio: Path,
     *,
-    version_label: str,
+    branch_name: str,
     description: str,
 ) -> str:
-    """从 application.json + specs/plans/endpoints/datasource/ui-designs 构建完整的版本摘要。"""
+    """从 application.json + specs/plans/endpoints/datasource/ui-designs 构建完整的迭代摘要。"""
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    lines: list[str] = [f"## {version_label}（{now}）", ""]
+    lines: list[str] = [f"## 分支 {branch_name}（{now}）", ""]
 
     if description.strip():
-        lines.append(f"**版本说明**：{description.strip()}")
+        lines.append(f"**变更说明**：{description.strip()}")
         lines.append("")
 
     # —— 应用配置（application.json）——

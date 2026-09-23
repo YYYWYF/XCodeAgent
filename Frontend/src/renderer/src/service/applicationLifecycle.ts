@@ -2,6 +2,7 @@ import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
+import type { RepositoryBranchOutcome } from './repositoryBranch'
 
 type ApplicationLifecyclePayload = {
   schemaVersion: 1
@@ -17,14 +18,26 @@ type ApplicationLifecyclePayload = {
     | 'release_session_pending'
   lifecycle?: ApplicationLifecycle
   sessionPendingReleased?: boolean
+  /** 仅 Bootstrap 动作返回：模板基线推成远端分支的结果（失败不影响 Bootstrap 成功）。 */
+  repositoryBranch?: RepositoryBranchOutcome
   error?: { type?: string; message?: string }
 }
 
 /** 工作区尚未建立生命周期状态：后端以 ApplicationLifecycleMissingError 单独标识，可幂等补建。 */
 const MISSING_LIFECYCLE_ERROR_TYPE = 'ApplicationLifecycleMissingError'
 
-/** 携带后端错误类型的生命周期动作失败，供调用方按类型决定是否补建状态。 */
-class ApplicationLifecycleActionError extends Error {
+/** Bootstrap 动作的结果：权威 lifecycle + 非致命的远端分支推送结果。 */
+export type ApplicationTemplateBootstrapResult = {
+  lifecycle: ApplicationLifecycle
+  repositoryBranch?: RepositoryBranchOutcome
+}
+
+/** 已确认带 lifecycle 的响应载荷：runApplicationLifecycleRequest 已校验过。 */
+type ResolvedApplicationLifecyclePayload = ApplicationLifecyclePayload & {
+  lifecycle: ApplicationLifecycle
+}
+
+/** 携带后端错误类型的生命周期动作失败，供调用方按类型决定是否补建状态。 */class ApplicationLifecycleActionError extends Error {
   readonly errorType: string | undefined
 
   constructor(errorType: string | undefined, message: string) {
@@ -92,11 +105,11 @@ function readApplicationLifecycleState(value: unknown): ApplicationLifecyclePayl
   )
 }
 
-// 通过独立 AG-UI 端点创建、读取或更新应用生命周期。
-async function runApplicationLifecycleAction(
+// 通过独立 AG-UI 端点创建、读取或更新应用生命周期，并返回完整响应载荷。
+async function runApplicationLifecycleRequest(
   threadId: string,
   action: Record<string, unknown>
-): Promise<ApplicationLifecycle> {
+): Promise<ResolvedApplicationLifecyclePayload> {
   const agent = createAgUiHttpAgent({ url: getApplicationLifecycleUrl(), threadId })
   agent.addMessage({ id: randomUUID(), role: 'user', content: '同步应用生命周期状态。' })
   let payload: ApplicationLifecyclePayload | undefined
@@ -121,6 +134,17 @@ async function runApplicationLifecycleAction(
       payload.error?.message || '生命周期操作失败。'
     )
   }
+  if (!payload.lifecycle) throw new Error('生命周期接口没有返回 lifecycle。')
+  // 显式带上已校验的 lifecycle：属性收窄不会改变 payload 本身的类型。
+  return { ...payload, lifecycle: payload.lifecycle }
+}
+
+// 只取 lifecycle 的便捷包装：不需要其它响应载荷的调用方用它。
+async function runApplicationLifecycleAction(
+  threadId: string,
+  action: Record<string, unknown>
+): Promise<ApplicationLifecycle> {
+  const payload = await runApplicationLifecycleRequest(threadId, action)
   if (!payload.lifecycle) throw new Error('生命周期接口没有返回 lifecycle。')
   return payload.lifecycle
 }
@@ -231,25 +255,28 @@ export async function attachApplicationWorkspace(
 }
 
 // 由 Backend 持有真实任务，Renderer 只通过 AG-UI 触发并等待最终 lifecycle。
+// 同时带回远端分支结果：推送失败不影响 Bootstrap 成功，只作为提示反馈给用户。
 export async function bootstrapApplicationTemplateGeneration(
   application: ApplicationConfig,
   threadId: string
-): Promise<ApplicationLifecycle> {
+): Promise<ApplicationTemplateBootstrapResult> {
   if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  return runApplicationLifecycleAction(threadId, {
+  const payload = await runApplicationLifecycleRequest(threadId, {
     action: 'bootstrap_template_generation',
     workspaceRoot: application.workspaceRoot
   })
+  return { lifecycle: payload.lifecycle, repositoryBranch: payload.repositoryBranch }
 }
 
 // 仅在后端已标记模板生成失败时，显式开启一轮新的 Bootstrap。
 export async function retryApplicationTemplateGeneration(
   application: ApplicationConfig,
   threadId: string
-): Promise<ApplicationLifecycle> {
+): Promise<ApplicationTemplateBootstrapResult> {
   if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  return runApplicationLifecycleAction(threadId, {
+  const payload = await runApplicationLifecycleRequest(threadId, {
     action: 'retry_bootstrap_template_generation',
     workspaceRoot: application.workspaceRoot
   })
+  return { lifecycle: payload.lifecycle, repositoryBranch: payload.repositoryBranch }
 }

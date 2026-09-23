@@ -12,6 +12,27 @@ import {
   retryApplicationTemplateReadiness
 } from '../service/templateApi'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
+import type { RepositoryBranchOutcome } from '../service/repositoryBranch'
+
+/**
+ * 反馈模板基线推成远端分支的结果。
+ *
+ * 推送成功是默认预期，不再弹提示打扰；未推送或失败时必须说明，避免用户误以为代码
+ * 已经在远端仓库里。这些情况都不影响应用本身可用。
+ */
+function notifyRepositoryBranch(outcome?: RepositoryBranchOutcome): void {
+  if (!outcome || outcome.status === 'pushed') return
+  const branch = outcome.branchName || '所选分支'
+  if (outcome.status === 'skipped') {
+    message.warning(
+      outcome.message || `远端分支 ${branch} 已存在，本次没有覆盖它。`
+    )
+    return
+  }
+  message.warning(
+    `远端分支 ${branch} 未创建成功：${outcome.message || '原因未知'}。应用本身可以正常使用，稍后可重试。`
+  )
+}
 
 type UseApplicationTemplateGenerationOptions = {
   dispatchPlanningEvent: (event: ApplicationPlanningCurrentEvent) => void
@@ -66,9 +87,10 @@ export function useApplicationTemplateGeneration({
           threadId: planning.threadId
         })
         try {
-          const lifecycle = retry
+          const bootstrap = retry
             ? await retryApplicationTemplateReadiness(planning.application, planning.threadId)
             : await ensureApplicationTemplateReadiness(planning.application, planning.threadId)
+          const lifecycle = bootstrap.lifecycle
           const confirmedApplication = {
             ...planning.application,
             planningThreadId: planning.threadId
@@ -94,6 +116,9 @@ export function useApplicationTemplateGeneration({
               ? '应用模板初始化完成，正在进入工作台'
               : `「${planning.application.appName}」初始化完成，可从最近项目打开`
           )
+          // 远端分支推送是 Bootstrap 的非致命收尾：成功不打扰，没推上去要说清楚，
+          // 否则用户会以为代码已经在远端了。
+          notifyRepositoryBranch(bootstrap.repositoryBranch)
           return true
         } catch (reason) {
           console.error('[应用模板初始化失败]', reason)

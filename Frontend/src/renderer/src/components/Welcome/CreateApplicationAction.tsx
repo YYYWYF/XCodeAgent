@@ -3,6 +3,7 @@ import { Form, message, Modal } from 'antd'
 import { useState } from 'react'
 import { createApplicationLifecycle } from '../../service/applicationLifecycle'
 import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
+import { checkRemoteBranch } from '../../service/repositoryBranch'
 import { encryptSensitiveDatasourceFields } from '../../service/databaseCredentialCrypto'
 import type { ApplicationConfig, ApplicationDraft, ApplicationLifecycle } from '../../typings'
 import { cx } from '../../utils'
@@ -21,6 +22,51 @@ type Props = {
     lifecycle: ApplicationLifecycle
   ) => void
   theme: 'dark' | 'light'
+}
+
+/**
+ * 提交前处理"远端已有同名分支"：检查存在性，需要时弹窗让用户确认覆盖。
+ *
+ * 返回 proceed=false 表示用户选择返回修改，调用方应中止创建。
+ * **检查本身失败（断网、令牌失效、仓库不可达）不阻断创建** —— 按"未知"处理继续，
+ * 真正的推送发生在模板基线阶段，那里失败会以提示的形式反馈，不影响应用创建与规划。
+ */
+async function resolveBranchOverwrite(
+  repoUrl: string,
+  branchName: string,
+  theme: 'dark' | 'light'
+): Promise<{ proceed: boolean; overwriteConfirmed: boolean }> {
+  if (!repoUrl || !branchName) return { proceed: true, overwriteConfirmed: false }
+
+  let exists = false
+  try {
+    exists = (await checkRemoteBranch({ repoUrl, branchName })).exists
+  } catch (error) {
+    console.warn('[远端分支检查失败，按未知处理并继续创建]', error)
+    return { proceed: true, overwriteConfirmed: false }
+  }
+  if (!exists) return { proceed: true, overwriteConfirmed: false }
+
+  return new Promise((resolve) => {
+    Modal.confirm({
+      cancelText: '返回修改',
+      centered: true,
+      content: (
+        <div className={cx('welcome-branch-overwrite-confirmation')}>
+          <p>
+            远端仓库里已经有一个叫 <strong>{branchName}</strong> 的分支。
+          </p>
+          <p>继续创建会把它的代码覆盖掉，原来的内容找不回来。</p>
+        </div>
+      ),
+      okButtonProps: { danger: true },
+      okText: '继续并覆盖',
+      onCancel: () => resolve({ proceed: false, overwriteConfirmed: false }),
+      onOk: () => resolve({ proceed: true, overwriteConfirmed: true }),
+      title: `分支 ${branchName} 已存在，确定要覆盖吗？`,
+      wrapClassName: cx('welcome-modal', `theme-${theme}`)
+    })
+  })
 }
 
 // 创建应用基础配置，并把新应用交给独立的全屏规划页。
@@ -67,7 +113,17 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
       }
 
       const projectPath = values.projectPath.trim()
-      const schema = buildApplicationSchema(values)
+      // 远端已存在同名分支时先让用户确认覆盖，确认结果随应用配置一起落盘。
+      const branchDecision = await resolveBranchOverwrite(
+        values.repoUrl.trim(),
+        values.branchName.trim(),
+        theme
+      )
+      if (!branchDecision.proceed) return
+
+      const schema = buildApplicationSchema(values, {
+        branchOverwriteConfirmed: branchDecision.overwriteConfirmed
+      })
       const persistedSchema = await encryptSensitiveDatasourceFields(schema)
       const planningThreadId = createPagePlanningThreadId()
       const projectDirectory = await workspaceApi.createProjectDirectory({

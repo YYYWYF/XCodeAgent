@@ -220,7 +220,7 @@ export default function BrowserPreviewPanel({
 
       {applicationMode && acceptanceEnabled ? (
         <footer className={cx('browser-preview-acceptance-bar')} aria-label="应用验收确认">
-          <div className={cx('browser-preview-acceptance-title')}>版本验收</div>
+          <div className={cx('browser-preview-acceptance-title')}>迭代验收</div>
           <div className={cx('browser-preview-acceptance-prompt')}>
             {acceptanceAccepted
               ? '已依据需求文档基线验收通过。'
