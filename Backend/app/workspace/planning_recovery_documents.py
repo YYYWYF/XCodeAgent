@@ -68,14 +68,18 @@ def load_planning_recovery(
 ) -> PlanningRecoverySnapshot | None:
     """只按调用方提供的精确 Workflow ID 读取并验证 Recovery Snapshot。"""
 
-    path = planning_recovery_path(state, source_workflow_run_id)
+    source_id = _validate_workflow_run_id(source_workflow_run_id)
+    path = planning_recovery_path(state, source_id)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
     if not isinstance(payload, dict):
         raise ValueError("Recovery Snapshot 必须是 JSON object。")
-    return PlanningRecoverySnapshot.model_validate(payload)
+    snapshot = PlanningRecoverySnapshot.model_validate(payload)
+    if snapshot.source_workflow_run_id != source_id:
+        raise ValueError("Recovery Snapshot source_workflow_run_id 与请求的 Workflow execution 不匹配。")
+    return snapshot
 
 
 def delete_planning_recovery(

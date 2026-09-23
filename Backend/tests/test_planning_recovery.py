@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
-import asyncio
 
 from app.services import planning_run as transitions
 from app.services.build_task_planning_service import persist_planning_recovery_if_applicable
 from app.services.build_task_planning_service import run_mainline_planning
 from app.services.dag_planning_inputs import MainlinePlanningInputs
-from app.services.dag_planning_orchestrator import DagPlanningError
+from app.services.dag_planning_regeneration import regenerate_pending_build_task_plan
+from app.services.dag_planning_orchestrator import DagPlanningError, plan_dag_sequential
+from app.services.planning_frozen import plain_json
 from app.services.planning_recovery_contracts import (
     PlanningRecoverySnapshot,
     build_planning_recovery_snapshot,
@@ -29,6 +31,11 @@ from app.workspace.planning_recovery_documents import (
 )
 from app.workspace.planning_run_documents import planning_run_json_path, write_planning_run_atomic
 from app.workspace.planning_run_documents import load_planning_run
+from app.workspace.task_documents import (
+    build_planning_provenance,
+    load_pending_build_task_plan,
+    write_pending_build_task_plan_atomic,
+)
 from tests.planning_run_fixtures import AT, ready, run, unit
 from tests.dag_planning_orchestrator_fixtures import model_tasks, planning_inputs
 from tests.test_unit_generation_contracts import _policy_payload
@@ -218,6 +225,24 @@ class PlanningRecoveryDocumentTests(unittest.TestCase):
                 ["run-B.json", "workflow-1.json"],
             )
 
+    def test_load_rejects_filename_and_internal_source_id_mismatch(self) -> None:
+        """完整合法的 A Snapshot 被复制到 B 文件时，loader 仍必须拒绝串 Run。"""
+
+        snapshot = self._snapshot()
+        payload = snapshot.model_dump(mode="json")
+        payload["source_workflow_run_id"] = "run-A"
+        payload["snapshot_digest"] = planning_recovery_snapshot_digest(payload)
+        snapshot_a = PlanningRecoverySnapshot.model_validate(payload)
+
+        with TemporaryDirectory() as directory:
+            state = {"workspace": directory}
+            target = planning_recovery_path(state, "run-B")
+            target.parent.mkdir(parents=True)
+            target.write_text(snapshot_a.model_dump_json(), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "source_workflow_run_id"):
+                load_planning_recovery(state, "run-B")
+
     def test_path_traversal_is_rejected(self) -> None:
         """文件名组件拒绝点路径、正反斜杠和目录逃逸。"""
 
@@ -380,6 +405,151 @@ class PlanningRecoveryProductionHookTests(unittest.IsolatedAsyncioTestCase):
             '"candidates":',
             planning_run_json_path(self.state).read_text(encoding="utf-8"),
         )
+
+
+class PlanningRecoveryRegenerateHookTests(unittest.IsolatedAsyncioTestCase):
+    """验证 fresh Regenerate 只写自身失败 Run 的 Recovery，不读取旧 Snapshot。"""
+
+    def setUp(self) -> None:
+        """创建隔离工作区及固定 Unit generation policy。"""
+
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state = {"workspace": directory.name}
+        self.policy = UnitGenerationPolicy(**_policy_payload())
+
+    async def _generate_valid(self, job, **_: object) -> UnitGenerationAttemptResult:
+        """为旧 Pending 生成完整合法的 Candidate。"""
+
+        tasks = model_tasks(job)
+        return UnitGenerationAttemptResult(
+            identity=job.identity,
+            input_fingerprint=job.context.input_fingerprint,
+            raw_response=json.dumps({"tasks": tasks}),
+            tasks=tasks,
+        )
+
+    def _write_old_recovery(self) -> PlanningRecoverySnapshot:
+        """预置一个可验证的旧 Workflow Recovery，确保 Regenerate 不会读取它。"""
+
+        generating = transitions.begin_generation(run(unit("page:a")), at=AT)
+        failed = transitions.fail(
+            ready(generating, "page:a"),
+            _infrastructure_issue(),
+            at=AT,
+        )
+        snapshot = build_planning_recovery_snapshot(failed, owner_session_id="old-session")
+        assert snapshot is not None
+        payload = snapshot.model_dump(mode="json")
+        payload["source_workflow_run_id"] = "workflow-old"
+        payload["snapshot_digest"] = planning_recovery_snapshot_digest(payload)
+        old_snapshot = PlanningRecoverySnapshot.model_validate(payload)
+        write_planning_recovery_atomic(self.state, old_snapshot)
+        return old_snapshot
+
+    async def _write_old_pending(self) -> dict:
+        """创建旧 Pending，供真实 Regenerate facade 精确消费。"""
+
+        inputs = planning_inputs(required=["page:a", "page:b"])
+        old = await plan_dag_sequential(
+            inputs,
+            workspace_state=self.state,
+            planning_run_id="planning-old",
+            workflow_run_id="workflow-old",
+            thread_id="thread-old",
+            policy=self.policy,
+            generate_once=self._generate_valid,
+        )
+        assembled_plan = plain_json(old.assembly.assembled_plan)
+        write_pending_build_task_plan_atomic(
+            self.state,
+            assembled_plan,
+            owner_session_id="session-regenerate",
+            planning_run_id=old.planning_run.planning_run_id,
+            workflow_run_id=old.planning_run.workflow_run_id,
+            base_confirmed_plan_digest=old.planning_run.base_confirmed_plan_digest,
+            input_fingerprint=old.planning_run.input_fingerprint,
+            build_execution_scope=plain_json(old.planning_run.build_execution_scope),
+            created_at=old.planning_run.updated_at,
+            planning_provenance=build_planning_provenance(
+                assembled_plan,
+                old.assembly.retained_task_ids,
+                old.assembly.review_task_ids,
+                old.assembly.reused_task_ids,
+                old.assembly.platform_task_ids,
+            ),
+        )
+        pending = load_pending_build_task_plan(self.state)
+        assert pending is not None
+        return pending["draft_identity"]
+
+    async def test_regenerate_writes_new_snapshot_without_reading_old_recovery(self) -> None:
+        """旧 Recovery 存在时，A/B 仍 fresh 生成，失败只保存 workflow-new 的 A。"""
+
+        old_snapshot = self._write_old_recovery()
+        identity = await self._write_old_pending()
+        generated_units: list[str] = []
+        first_returned = asyncio.Event()
+
+        async def generate(job, **_: object) -> UnitGenerationAttemptResult:
+            """让 A 先成功并让 B 在其后确定性触发基础设施失败。"""
+
+            generated_units.append(job.identity.unit_id)
+            if job.identity.unit_id == "page:b":
+                await first_returned.wait()
+                while True:
+                    persisted = load_planning_run(self.state)
+                    if (
+                        persisted is not None
+                        and persisted["unit_states"]["page:a"]["generation_status"]
+                        == "candidate_ready"
+                    ):
+                        break
+                    await asyncio.sleep(0)
+                raise UnitGenerationInfrastructureError(
+                    identity=job.identity,
+                    stage="model_invoke",
+                    cause=RuntimeError("provider unavailable"),
+                )
+            tasks = model_tasks(job)
+            first_returned.set()
+            return UnitGenerationAttemptResult(
+                identity=job.identity,
+                input_fingerprint=job.context.input_fingerprint,
+                raw_response=json.dumps({"tasks": tasks}),
+                tasks=tasks,
+            )
+
+        def current_inputs(formal: dict | None):
+            """Regenerate 重新构造当前正式输入，不读取旧 Recovery。"""
+
+            self.assertIsNone(formal)
+            return planning_inputs(required=["page:a", "page:b"], baseline=formal)
+
+        with self.assertRaises(DagPlanningError):
+            await regenerate_pending_build_task_plan(
+                self.state,
+                planning_run_id=identity["planning_run_id"],
+                draft_digest=identity["draft_digest"],
+                workflow_run_id="workflow-new",
+                thread_id="thread-new",
+                current_inputs_factory=current_inputs,
+                policy=self.policy,
+                generate_once=generate,
+                planning_run_id_factory=lambda: "planning-new",
+            )
+
+        self.assertEqual(set(generated_units), {"page:a", "page:b"})
+        self.assertEqual(load_planning_recovery(self.state, "workflow-old"), old_snapshot)
+        new_snapshot = load_planning_recovery(self.state, "workflow-new")
+        self.assertIsNotNone(new_snapshot)
+        assert new_snapshot is not None
+        self.assertEqual(set(new_snapshot.candidates_by_unit), {"page:a"})
+        self.assertEqual(
+            new_snapshot.candidates_by_unit["page:a"].identity.planning_run_id,
+            "planning-new",
+        )
+        self.assertIsNone(load_pending_build_task_plan(self.state))
 
 
 if __name__ == "__main__":
