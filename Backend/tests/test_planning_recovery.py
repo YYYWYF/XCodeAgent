@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -24,6 +25,7 @@ from app.services.planning_run_contracts import PlanningRun
 from app.services.unit_generation_contracts import CandidateAttempt
 from app.workspace.planning_recovery_documents import (
     delete_planning_recovery,
+    garbage_collect_stale_planning_recovery,
     load_planning_recovery,
     planning_recovery_directory,
     planning_recovery_path,
@@ -323,6 +325,355 @@ class PlanningRecoveryFailureBoundaryTests(unittest.TestCase):
 
         self.assertIs(original.snapshot, failed)
         self.assertEqual(original.issues[0].code, "UNIT_GENERATION_INFRASTRUCTURE_FAILURE")
+
+    def test_persistence_helper_returns_true_only_after_atomic_writer_returns(self) -> None:
+        """bool 只有在合法 Snapshot writer 正常返回后才为 True。"""
+
+        generating = transitions.begin_generation(run(), at=AT)
+        failed = transitions.fail(ready(generating), _infrastructure_issue(), at=AT)
+        original = DagPlanningError((failed.failure,), failed)
+
+        with TemporaryDirectory() as directory:
+            self.assertTrue(
+                persist_planning_recovery_if_applicable(
+                    {"workspace": directory},
+                    original,
+                    owner_session_id="session-1",
+                )
+            )
+
+        with patch(
+            "app.services.build_task_planning_service.write_planning_recovery_atomic",
+            side_effect=OSError("disk full"),
+        ):
+            with TemporaryDirectory() as directory:
+                self.assertFalse(
+                    persist_planning_recovery_if_applicable(
+                        {"workspace": directory},
+                        original,
+                        owner_session_id="session-1",
+                    )
+                )
+
+        failed_without_candidate = transitions.fail(generating, _infrastructure_issue(), at=AT)
+        with TemporaryDirectory() as directory:
+            self.assertFalse(
+                persist_planning_recovery_if_applicable(
+                    {"workspace": directory},
+                    DagPlanningError(
+                        (failed_without_candidate.failure,),
+                        failed_without_candidate,
+                    ),
+                    owner_session_id="session-1",
+                )
+            )
+
+
+class PlanningRecoveryMainlineCleanupTests(unittest.IsolatedAsyncioTestCase):
+    """验证 Retry source Recovery 只在两条允许的完成路径后清理。"""
+
+    def setUp(self) -> None:
+        """创建隔离工作区和固定 Unit generation policy。"""
+
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state = {"workspace": directory.name}
+        self.policy = UnitGenerationPolicy(**_policy_payload())
+
+    def _inputs(self, required: list[str], workflow_run_id: str) -> MainlinePlanningInputs:
+        """为测试请求绑定新的 Workflow execution 身份。"""
+
+        sequential = planning_inputs(required=required)
+        return MainlinePlanningInputs.model_validate({
+            **sequential.model_dump(mode="python"),
+            "owner_session_id": "session-cleanup",
+            "workflow_run_id": workflow_run_id,
+            "thread_id": f"thread-{workflow_run_id}",
+        })
+
+    async def _generate(self, job, **_: object) -> UnitGenerationAttemptResult:
+        """为每个 Unit 返回合法 Candidate。"""
+
+        tasks = model_tasks(job)
+        return UnitGenerationAttemptResult(
+            identity=job.identity,
+            input_fingerprint=job.context.input_fingerprint,
+            raw_response=json.dumps({"tasks": tasks}),
+            tasks=tasks,
+        )
+
+    def _write_source_recovery(self, workflow_run_id: str = "workflow-r1") -> None:
+        """写入一个只用于验证 cleanup 的合法 source Recovery。"""
+
+        generating = transitions.begin_generation(run(), at=AT)
+        failed = transitions.fail(ready(generating), _infrastructure_issue(), at=AT)
+        snapshot = build_planning_recovery_snapshot(failed, owner_session_id="session-cleanup")
+        assert snapshot is not None
+        payload = snapshot.model_dump(mode="json")
+        payload["source_workflow_run_id"] = workflow_run_id
+        payload["snapshot_digest"] = planning_recovery_snapshot_digest(payload)
+        write_planning_recovery_atomic(
+            self.state,
+            PlanningRecoverySnapshot.model_validate(payload),
+        )
+
+    async def test_pending_persistence_failure_keeps_source_recovery(self) -> None:
+        """Pending writer 失败时，R1 不能被提前清理。"""
+
+        self._write_source_recovery()
+        with patch(
+            "app.services.build_task_planning_service._persist_validated_pending_plan",
+            side_effect=RuntimeError("pending write failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "pending write failed"):
+                await run_mainline_planning(
+                    self._inputs(["page:a"], "workflow-r2"),
+                    workspace_state=self.state,
+                    policy=self.policy,
+                    generate_once=self._generate,
+                    recovery_source_workflow_run_id="workflow-r1",
+                )
+        self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r1"))
+
+    async def test_result_construction_failure_keeps_source_recovery(self) -> None:
+        """Pending 已落盘但结果 DTO 构造失败时，R1 仍必须保留。"""
+
+        self._write_source_recovery()
+        with patch(
+            "app.services.build_task_planning_service.MainlinePlanningResult",
+            side_effect=ValueError("result construction failed"),
+        ):
+            with self.assertRaisesRegex(ValueError, "result construction failed"):
+                await run_mainline_planning(
+                    self._inputs(["page:a"], "workflow-r2"),
+                    workspace_state=self.state,
+                    policy=self.policy,
+                    generate_once=self._generate,
+                    recovery_source_workflow_run_id="workflow-r1",
+                )
+        self.assertIsNotNone(load_pending_build_task_plan(self.state))
+        self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r1"))
+
+    async def test_source_delete_failure_does_not_change_success(self) -> None:
+        """R1 删除失败只留下残留，不改变已构造的成功结果。"""
+
+        self._write_source_recovery()
+        with patch(
+            "app.services.build_task_planning_service.delete_planning_recovery",
+            side_effect=OSError("source delete failed"),
+        ):
+            result = await run_mainline_planning(
+                self._inputs(["page:a"], "workflow-r2"),
+                workspace_state=self.state,
+                policy=self.policy,
+                generate_once=self._generate,
+                recovery_source_workflow_run_id="workflow-r1",
+            )
+        self.assertEqual(result.terminal_status, "pending_confirmation")
+        self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r1"))
+
+    async def _run_retry_infrastructure_failure(self) -> DagPlanningError:
+        """让 R2 产生一个 ready sibling 后确定性进入 infrastructure failure。"""
+
+        ready_event = asyncio.Event()
+
+        async def generate(job, **_: object) -> UnitGenerationAttemptResult:
+            """让 page:b 等待 page:a 提交 Candidate 后再制造 fatal。"""
+
+            if job.identity.unit_id == "page:b":
+                await ready_event.wait()
+                while True:
+                    persisted = load_planning_run(self.state)
+                    if (
+                        persisted is not None
+                        and persisted["unit_states"]["page:a"]["generation_status"]
+                        == "candidate_ready"
+                    ):
+                        break
+                    await asyncio.sleep(0)
+                raise UnitGenerationInfrastructureError(
+                    identity=job.identity,
+                    stage="model_invoke",
+                    cause=RuntimeError("retry provider unavailable"),
+                )
+            tasks = model_tasks(job)
+            ready_event.set()
+            return UnitGenerationAttemptResult(
+                identity=job.identity,
+                input_fingerprint=job.context.input_fingerprint,
+                raw_response=json.dumps({"tasks": tasks}),
+                tasks=tasks,
+            )
+
+        with patch(
+            "app.services.build_task_planning_service._new_planning_run_id",
+            return_value="planning-r2",
+        ):
+            try:
+                await run_mainline_planning(
+                    self._inputs(["page:a", "page:b"], "workflow-r2"),
+                    workspace_state=self.state,
+                    policy=self.policy,
+                    generate_once=generate,
+                    recovery_source_workflow_run_id="workflow-r1",
+                )
+            except DagPlanningError as exc:
+                return exc
+        raise AssertionError("Retry infrastructure failure test unexpectedly succeeded")
+
+    async def test_retry_infrastructure_failure_cleans_source_after_new_snapshot(self) -> None:
+        """R2 Snapshot 写成功后才删除 R1，并继续抛出原始 DagPlanningError。"""
+
+        self._write_source_recovery()
+        error = await self._run_retry_infrastructure_failure()
+
+        self.assertEqual(error.issues[0].code, "UNIT_GENERATION_INFRASTRUCTURE_FAILURE")
+        self.assertIsNone(load_planning_recovery(self.state, "workflow-r1"))
+        self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r2"))
+
+    async def test_retry_recovery_persistence_failure_keeps_source(self) -> None:
+        """R2 Snapshot 写入失败时必须保留 R1 且原始错误不被覆盖。"""
+
+        self._write_source_recovery()
+        with patch(
+            "app.services.build_task_planning_service.write_planning_recovery_atomic",
+            side_effect=OSError("recovery disk full"),
+        ):
+            error = await self._run_retry_infrastructure_failure()
+
+        self.assertEqual(error.issues[0].code, "UNIT_GENERATION_INFRASTRUCTURE_FAILURE")
+        self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r1"))
+        self.assertIsNone(load_planning_recovery(self.state, "workflow-r2"))
+
+    async def test_retry_new_snapshot_survives_source_delete_failure(self) -> None:
+        """R2 写入成功但 R1 删除失败时，两者均保留且原始错误不变。"""
+
+        self._write_source_recovery()
+        with patch(
+            "app.services.build_task_planning_service.delete_planning_recovery",
+            side_effect=OSError("source delete failed"),
+        ):
+            error = await self._run_retry_infrastructure_failure()
+
+        self.assertEqual(error.issues[0].code, "UNIT_GENERATION_INFRASTRUCTURE_FAILURE")
+        self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r1"))
+        self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r2"))
+
+
+class PlanningRecoveryGcTests(unittest.TestCase):
+    """验证 Recovery GC 的年龄、lifecycle 和 exact ID 三重保守门禁。"""
+
+    def _write_snapshot(self, state: dict, workflow_run_id: str) -> None:
+        """写入指定 Workflow ID 的合法 Snapshot。"""
+
+        generating = transitions.begin_generation(run(), at=AT)
+        failed = transitions.fail(ready(generating), _infrastructure_issue(), at=AT)
+        snapshot = build_planning_recovery_snapshot(
+            failed,
+            owner_session_id="session-gc",
+            created_at="2026-09-20T00:00:00Z",
+        )
+        assert snapshot is not None
+        payload = snapshot.model_dump(mode="json")
+        payload["source_workflow_run_id"] = workflow_run_id
+        payload["snapshot_digest"] = planning_recovery_snapshot_digest(payload)
+        write_planning_recovery_atomic(
+            state,
+            PlanningRecoverySnapshot.model_validate(payload),
+        )
+
+    def test_gc_deletes_only_old_snapshots_without_active_execution(self) -> None:
+        """过期且 lifecycle 已不再登记 source execution 的文件才可删除。"""
+
+        from app.domain.application_lifecycle import (
+            ApplicationLifecycleStage,
+            ApplicationLifecycleStatus,
+        )
+        from app.services.application_lifecycle import (
+            create_application_lifecycle,
+            write_application_lifecycle,
+        )
+
+        with TemporaryDirectory() as directory:
+            state = {"workspace": directory}
+            self._write_snapshot(state, "run-gc-old")
+            self._write_snapshot(state, "run-gc-active")
+            lifecycle = create_application_lifecycle(
+                application_id="app-gc",
+                application_name="GC",
+            )
+            lifecycle = lifecycle.model_copy(update={
+                "initialization": lifecycle.initialization.model_copy(update={
+                    "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    "status": ApplicationLifecycleStatus.COMPLETED,
+                }),
+                "active_executions": {},
+            })
+            write_application_lifecycle(directory, lifecycle)
+
+            result = garbage_collect_stale_planning_recovery(
+                state,
+                max_age_seconds=60,
+                now=datetime(2026, 9, 23, tzinfo=UTC),
+            )
+
+            self.assertEqual(result.deleted, ("run-gc-active", "run-gc-old"))
+            self.assertEqual(result.retained, ())
+
+    def test_gc_retains_snapshot_when_source_execution_still_exists(self) -> None:
+        """只要 lifecycle 仍保留 source execution，GC 就不能猜测 Retry 已失效。"""
+
+        from app.domain.application_lifecycle import (
+            ApplicationLifecycleStage,
+            ApplicationLifecycleStatus,
+            WorkbenchExecutionStatus,
+        )
+        from app.services.application_lifecycle import (
+            create_application_lifecycle,
+            start_workbench_execution,
+            update_workbench_execution,
+            write_application_lifecycle,
+        )
+
+        with TemporaryDirectory() as directory:
+            state = {"workspace": directory}
+            self._write_snapshot(state, "run-gc-active")
+            lifecycle = create_application_lifecycle(
+                application_id="app-gc",
+                application_name="GC",
+            )
+            lifecycle = lifecycle.model_copy(update={
+                "initialization": lifecycle.initialization.model_copy(update={
+                    "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    "status": ApplicationLifecycleStatus.COMPLETED,
+                }),
+            })
+            write_application_lifecycle(directory, lifecycle)
+            start_workbench_execution(
+                directory,
+                scope="application",
+                target_id="application",
+                page_id=None,
+                thread_id="thread-gc",
+                run_id="run-gc-active",
+                phase="prepare_build_tasks",
+            )
+            update_workbench_execution(
+                directory,
+                run_id="run-gc-active",
+                phase="prepare_build_tasks",
+                status=WorkbenchExecutionStatus.FAILED,
+            )
+
+            result = garbage_collect_stale_planning_recovery(
+                state,
+                max_age_seconds=60,
+                now=datetime(2026, 9, 23, tzinfo=UTC),
+            )
+
+            self.assertEqual(result.deleted, ())
+            self.assertEqual(result.retained, ("run-gc-active",))
+            self.assertIsNotNone(load_planning_recovery(state, "run-gc-active"))
 
 
 class PlanningRecoveryProductionHookTests(unittest.IsolatedAsyncioTestCase):
@@ -682,7 +1033,8 @@ class PlanningRecoveryRetryConsumptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(current.unit_states["page:b"].total_attempts, 0)
         self.assertEqual(load_planning_run(self.state)["status"], "active")
         self.assertEqual(load_planning_run(self.state)["planning_run_id"], "planning-r2")
-        self.assertEqual(load_planning_recovery(self.state, "workflow-r1"), source_snapshot)
+        # R2 已完成 Pending 持久化、自校验和结果 DTO 构造后，R1 source Recovery 必须收口。
+        self.assertIsNone(load_planning_recovery(self.state, "workflow-r1"))
 
     async def test_corrupt_or_absent_recovery_is_fail_open_and_no_source_skips_loader(self) -> None:
         """损坏 Snapshot 只导致全量生成；普通调用没有 source ID 时根本不读 loader。"""

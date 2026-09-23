@@ -41,6 +41,7 @@ from app.workspace.task_documents import (
 )
 from app.workspace.planning_run_documents import load_planning_run
 from app.workspace.planning_recovery_documents import (
+    delete_planning_recovery,
     load_planning_recovery,
     write_planning_recovery_atomic,
 )
@@ -116,12 +117,16 @@ def persist_planning_recovery_if_applicable(
     error: DagPlanningError,
     *,
     owner_session_id: str,
-) -> None:
-    """尽力保存支持的 failed Run Snapshot，但绝不覆盖原始 Planning failure。"""
+) -> bool:
+    """尽力保存支持的 failed Run Snapshot，但绝不覆盖原始 Planning failure。
+
+    返回 True 仅表示 Snapshot writer 正常返回；不适用、没有可恢复 Candidate
+    或写入失败均返回 False，调用方不得据此改变原始 Planning failure。
+    """
 
     snapshot = error.snapshot
     if snapshot is None:
-        return
+        return False
     failure = snapshot.failure
     if (
         failure is None
@@ -130,14 +135,16 @@ def persist_planning_recovery_if_applicable(
         or failure.category != "infrastructure"
         or failure.retryable
     ):
-        return
+        return False
     try:
         recovery = build_planning_recovery_snapshot(
             snapshot,
             owner_session_id=owner_session_id,
         )
-        if recovery is not None:
-            write_planning_recovery_atomic(dict(state), recovery)
+        if recovery is None:
+            return False
+        write_planning_recovery_atomic(dict(state), recovery)
+        return True
     except Exception:
         # Recovery 只是 retry optimization state；写入、序列化或路径失败不能改写
         # 已经由 PlanningRun/Controller 确定的原始 UNIT_GENERATION failure。
@@ -146,6 +153,30 @@ def persist_planning_recovery_if_applicable(
             snapshot.workflow_run_id,
             exc_info=True,
         )
+        return False
+
+
+def _best_effort_delete_source_recovery(
+    state: Mapping[str, Any],
+    source_workflow_run_id: str | None,
+    *,
+    current_workflow_run_id: str,
+) -> bool:
+    """按 exact source ID 删除 Retry 来源，删除失败只留下可后续清理的残留。"""
+
+    source_id = str(source_workflow_run_id or "").strip()
+    # 防止错误调用把当前 R2 的 Recovery 写入路径误当成 R1 再删除。
+    if not source_id or source_id == current_workflow_run_id:
+        return False
+    try:
+        return delete_planning_recovery(dict(state), source_id)
+    except Exception:
+        _LOGGER.warning(
+            "Failed to delete source Planning Recovery Snapshot for workflow_run_id=%s",
+            source_id,
+            exc_info=True,
+        )
+        return False
 
 
 def _persist_validated_pending_plan(
@@ -247,21 +278,34 @@ async def run_mainline_planning(
             recovery_snapshot=recovery_snapshot,
         )
     except DagPlanningError as exc:
-        persist_planning_recovery_if_applicable(
+        recovery_persisted = persist_planning_recovery_if_applicable(
             workspace_state,
             exc,
             owner_session_id=frozen.owner_session_id,
         )
+        if recovery_persisted:
+            _best_effort_delete_source_recovery(
+                workspace_state,
+                recovery_source_workflow_run_id,
+                current_workflow_run_id=frozen.workflow_run_id,
+            )
         raise
     persisted = _persist_validated_pending_plan(
         dict(workspace_state),
         planned,
         owner_session_id=frozen.owner_session_id,
     )
-    return MainlinePlanningResult(
+    result = MainlinePlanningResult(
         planning_run_id=planning_run_id,
         pending_plan_path=persisted.pending_plan_path,
         pending_plan=persisted.pending_plan,
         draft_identity=persisted.draft_identity,
         validated_assembled_plan=planned,
     )
+    # Pending writer、回读校验和结果 DTO 构造全部成功后，才允许清理 R1。
+    _best_effort_delete_source_recovery(
+        workspace_state,
+        recovery_source_workflow_run_id,
+        current_workflow_run_id=frozen.workflow_run_id,
+    )
+    return result

@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal, cast
 
@@ -44,9 +45,11 @@ from app.services.workspace_process_registry import workspace_process_registry
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.workspace.run_lease import workspace_run_leases
 from app.workspace.task_documents import build_task_plan_lifecycle_lock
+from app.workspace.planning_recovery_documents import clear_planning_recovery_directory
 
 
 APPLICATION_DELETION_EVENT_NAME = "application-deletion"
+_LOGGER = logging.getLogger(__name__)
 
 
 class ApplicationDeletionRequest(BaseModel):
@@ -223,6 +226,16 @@ async def prepare_application_deletion(
                 percent=65,
             )
         )
+    if workspace_exists:
+        try:
+            # Application 删除已经封锁新运行并进入不可逆 Stage B；Recovery 不应在
+            # 工作区移入回收站后作为独立运行态残留，清理失败也不能阻断删除准备。
+            clear_planning_recovery_directory({"workspace": workspace_text})
+        except Exception:
+            _LOGGER.warning(
+                "Failed to clear Planning Recovery files during application deletion",
+                exc_info=True,
+            )
     checkpoint_path = workflow_checkpoint_db_path(
         workspace=workspace_text,
         project_id=request.application_id,

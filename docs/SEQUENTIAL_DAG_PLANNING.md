@@ -155,6 +155,26 @@ Recovery Snapshot；只有 `workflow_action=retry_failed_tasks` 且存在明确�
 Recovery 缺失、损坏、摘要／输入／scope 不匹配或当前 Local Validator 不通过时，只禁用复用并回退 fresh
 generation；不能从 workspace/session/scope 猜测最近结果。Regenerate 永远不读取 Recovery，清理留给 Task 4。
 
+### Planning Recovery cleanup
+
+Retry source Recovery 只有在以下两种情况之一成立后才能删除：
+
+1. 当前 Retry 已成功写入 PendingPlan，并完成 `load_pending_build_task_plan()`、
+   `validate_pending_self_digest()` 以及 `MainlinePlanningResult` 构造；
+2. 当前 Retry 再次发生 `UNIT_GENERATION_INFRASTRUCTURE_FAILURE`，并且新的
+   `PlanningRecoverySnapshot` 已通过 `write_planning_recovery_atomic()` 成功写入。
+
+两条路径都由 `run_mainline_planning()` 按明确的 `source_workflow_run_id` exact-delete；
+删除失败只记录 warning，不改变 Planning success 或原始 `DagPlanningError`。`persist_planning_recovery_if_applicable()`
+返回 `True` 仅表示 Recovery Snapshot writer 正常返回，`False` 表示不适用、没有 Candidate
+或写入失败；只有 `True` 才能触发第二条路径的 source cleanup。Retry 仍只读取
+`resumeExecutionRunId` 指定的文件，不存在 latest、recursive fallback 或 active pointer。
+
+明确 End Plan、Session 删除和 Application 删除分别按 exact Workflow execution、Session
+owner 与现有 workspace artifact cleanup 收口；Recovery cleanup 失败不改变原 lifecycle 操作结果。
+保守 GC 只接受可注入的年龄阈值，并且只有在当前 lifecycle 可读且不再登记该 exact failed
+execution 时才删除；无法确认是否还能 Retry 的 Recovery 保留。
+
 ## Frozen Contract Catalog
 
 PlanningRun 只冻结一次正式 Store。每个 Unit 在 dispatch 前由当前 Scope、generation

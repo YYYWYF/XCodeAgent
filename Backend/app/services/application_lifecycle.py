@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -40,6 +41,7 @@ from app.domain.application_lifecycle import (
 APPLICATION_LIFECYCLE_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "application-lifecycle.json"
 _STATE_LOCKS: dict[str, threading.RLock] = {}
 _STATE_LOCKS_GUARD = threading.Lock()
+_LOGGER = logging.getLogger(__name__)
 
 
 class ApplicationLifecyclePersistenceError(ValueError):
@@ -832,7 +834,7 @@ def end_workbench_execution(
         ending_execution = current.active_executions[run_id]
         remaining = dict(current.active_executions)
         remaining.pop(run_id, None)
-        return _persist_workbench_execution_removal(
+        ended = _persist_workbench_execution_removal(
             workspace,
             current=current,
             executions=remaining,
@@ -842,6 +844,11 @@ def end_workbench_execution(
                 ending_execution,
             ),
         )
+        if ending_execution.status == WorkbenchExecutionStatus.FAILED:
+            # execution 被明确结束后不再满足 lifecycle 的 exact resume 条件，旧
+            # Planning Recovery 只能按该 execution ID 尽力收口，不能阻断 End Plan。
+            best_effort_delete_planning_recovery(workspace, run_id)
+        return ended
 
 
 def stop_workbench_execution(workspace: str | Path, *, run_id: str) -> ApplicationLifecycle:
@@ -857,6 +864,60 @@ def stop_workbench_execution(workspace: str | Path, *, run_id: str) -> Applicati
         phase=active.phase,
         status=WorkbenchExecutionStatus.STOPPED,
     )
+
+
+def best_effort_delete_planning_recovery(
+    workspace: str | Path,
+    workflow_run_id: str,
+) -> bool:
+    """按明确 Workflow execution ID 删除 Recovery，失败只记录告警。"""
+
+    source_id = str(workflow_run_id or "").strip()
+    if not source_id:
+        return False
+    try:
+        from app.workspace.planning_recovery_documents import delete_planning_recovery
+
+        return delete_planning_recovery({"workspace": str(workspace)}, source_id)
+    except Exception:
+        _LOGGER.warning(
+            "Failed to clean Planning Recovery Snapshot for workflow_run_id=%s",
+            source_id,
+            exc_info=True,
+        )
+        return False
+
+
+def cleanup_failed_planning_recovery_for_session(
+    workspace: str | Path,
+    owner_session_id: str,
+) -> tuple[str, ...]:
+    """Session 真正删除时只清理其 failed execution 的 exact Recovery 文件。"""
+
+    normalized_owner = str(owner_session_id or "").strip()
+    if not normalized_owner:
+        return ()
+    try:
+        lifecycle = load_application_lifecycle(workspace)
+    except Exception:
+        # Session 删除本身不能被 Recovery 或 lifecycle 的附带清理故障阻断。
+        _LOGGER.warning(
+            "Cannot inspect lifecycle while cleaning session Planning Recovery",
+            exc_info=True,
+        )
+        return ()
+    if lifecycle is None:
+        return ()
+    deleted: list[str] = []
+    for run_id, execution in lifecycle.active_executions.items():
+        if (
+            execution.status != WorkbenchExecutionStatus.FAILED
+            or execution.owner_session_id != normalized_owner
+        ):
+            continue
+        if best_effort_delete_planning_recovery(workspace, run_id):
+            deleted.append(run_id)
+    return tuple(deleted)
 
 
 def persist_workbench_interaction_submission(

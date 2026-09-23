@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import UTC, datetime
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 from app.services.planning_recovery_contracts import PlanningRecoverySnapshot
 from app.workspace.json_documents import write_json_atomic
 from app.workspace.spec_documents import workflow_artifact_root
+
+
+@dataclass(frozen=True)
+class PlanningRecoveryGcResult:
+    """记录一次保守 Recovery GC 的精确删除与保留结果。"""
+
+    deleted: tuple[str, ...] = ()
+    retained: tuple[str, ...] = ()
 
 
 def planning_recovery_directory(state: dict[str, Any]) -> Path:
@@ -93,3 +104,113 @@ def delete_planning_recovery(
     except FileNotFoundError:
         return False
     return True
+
+
+def clear_planning_recovery_directory(state: dict[str, Any]) -> int:
+    """在明确的 Application 删除路径中清理当前工作区的 Recovery 文件。"""
+
+    directory = planning_recovery_directory(state)
+    if not directory.is_dir():
+        return 0
+    deleted = 0
+    for path in sorted(directory.iterdir(), key=lambda item: item.name):
+        # Recovery 合同只写平铺 JSON；未知子目录不递归删除，避免扩大清理范围。
+        if not (path.is_file() or path.is_symlink()):
+            continue
+        path.unlink()
+        deleted += 1
+    try:
+        directory.rmdir()
+    except OSError:
+        # 目录非空或并发消失都不改变已经完成的逐文件清理结果。
+        pass
+    return deleted
+
+
+def garbage_collect_stale_planning_recovery(
+    state: dict[str, Any],
+    *,
+    max_age_seconds: float,
+    now: datetime | None = None,
+) -> PlanningRecoveryGcResult:
+    """只清理已无法通过当前 lifecycle 精确 Retry 的过期 Recovery。"""
+
+    if (
+        isinstance(max_age_seconds, bool)
+        or not isinstance(max_age_seconds, (int, float))
+        or not math.isfinite(max_age_seconds)
+        or max_age_seconds <= 0
+    ):
+        raise ValueError("Recovery GC 的 max_age_seconds 必须是正数。")
+    current_time = now or datetime.now(UTC)
+    if current_time.tzinfo is None:
+        raise ValueError("Recovery GC 的 now 必须携带时区。")
+
+    directory = planning_recovery_directory(state)
+    if not directory.is_dir():
+        return PlanningRecoveryGcResult()
+
+    # lifecycle 不可读或缺失时无法证明 exact resumeExecutionRunId 已失效，全部保留。
+    try:
+        from app.services.application_lifecycle import load_application_lifecycle
+
+        lifecycle = load_application_lifecycle(str(state.get("workspace") or ""))
+    except Exception:
+        lifecycle = None
+        lifecycle_readable = False
+    else:
+        lifecycle_readable = lifecycle is not None
+
+    deleted: list[str] = []
+    retained: list[str] = []
+    for path in sorted(directory.glob("*.json"), key=lambda item: item.name):
+        source_id = path.stem
+        try:
+            snapshot = load_planning_recovery(state, source_id)
+        except Exception:
+            # 损坏 Snapshot 的身份和年龄都不可信，GC 不能借机扩大删除范围。
+            retained.append(source_id)
+            continue
+        if snapshot is None:
+            retained.append(source_id)
+            continue
+        try:
+            created_at = _recovery_timestamp(snapshot.created_at)
+        except (TypeError, ValueError):
+            retained.append(source_id)
+            continue
+        age_seconds = (current_time - created_at).total_seconds()
+        if age_seconds < max_age_seconds or age_seconds < 0:
+            retained.append(source_id)
+            continue
+        if not lifecycle_readable:
+            retained.append(source_id)
+            continue
+        active_executions = getattr(lifecycle, "active_executions", {})
+        if source_id in active_executions:
+            # 只要 lifecycle 仍保留该 execution，就不能断言 exact Retry 已失效。
+            retained.append(source_id)
+            continue
+        try:
+            if delete_planning_recovery(state, source_id):
+                deleted.append(source_id)
+            else:
+                retained.append(source_id)
+        except OSError:
+            retained.append(source_id)
+    return PlanningRecoveryGcResult(
+        deleted=tuple(deleted),
+        retained=tuple(retained),
+    )
+
+
+def _recovery_timestamp(value: str) -> datetime:
+    """解析当前 Recovery 合同中的 UTC 时间，无法解析时让 GC 保守保留。"""
+
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        raise ValueError("Recovery timestamp 缺少时区。")
+    return parsed

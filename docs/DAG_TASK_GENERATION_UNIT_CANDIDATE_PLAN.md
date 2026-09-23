@@ -2355,7 +2355,15 @@ workspace/session/scope 回退。
 
 Task 2 只写 Snapshot；Task 3 才消费它并创建属于新 Run、保留 source provenance 的 recovered
 Candidate。Recovery 写入失败不能覆盖原始 PlanningRun failure；Regenerate 仍只启动 fresh
-PlanningRun，Scheduler 保持 recovery-unaware，Task 4 才处理 cleanup/GC。
+PlanningRun，Scheduler 保持 recovery-unaware。Task 4 的 cleanup 只由具体 lifecycle 入口触发：
+Retry source Recovery 只有在当前 Retry 已完成 PendingPlan 写入、自校验和
+`MainlinePlanningResult` 构造，或当前 Retry 再次发生
+`UNIT_GENERATION_INFRASTRUCTURE_FAILURE` 且新的 Snapshot 已经通过
+`write_planning_recovery_atomic()` 写入后，才按 exact `source_workflow_run_id` 删除。
+`persist_planning_recovery_if_applicable()` 的 bool 返回值只表示 Snapshot writer 是否成功；
+cleanup/delete 失败不覆盖原 Planning success 或 `DagPlanningError`。明确 End Plan、Session
+删除和 Application 删除使用现有 lifecycle/workspace cleanup 入口；GC 需要可注入年龄阈值，
+且无法证明 exact failed execution 已不能通过 `resumeExecutionRunId` Retry 时保留文件。
 
 ---
 
