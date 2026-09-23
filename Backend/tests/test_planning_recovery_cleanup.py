@@ -14,8 +14,10 @@ from app.domain.application_lifecycle import (
 from app.protocols.workflow.lifecycle import begin_workflow_lifecycle, fail_workflow_lifecycle
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
+    cleanup_session_failed_executions,
     create_application_lifecycle,
     end_workbench_execution,
+    load_application_lifecycle,
     start_workbench_execution,
     update_workbench_execution,
     write_application_lifecycle,
@@ -46,7 +48,11 @@ def _ready_lifecycle() -> object:
     })
 
 
-def _write_recovery(workspace: str, workflow_run_id: str) -> None:
+def _write_recovery(
+    workspace: str,
+    workflow_run_id: str,
+    owner_session_id: str = "session-owner",
+) -> None:
     """写入与指定 Workflow execution 精确绑定的合法 Recovery。"""
 
     # 复用状态转换 fixture，确保 Snapshot 仍来自真实 candidate_ready Unit。
@@ -58,7 +64,10 @@ def _write_recovery(workspace: str, workflow_run_id: str) -> None:
         _infrastructure_issue(),
         at=AT,
     )
-    snapshot = build_planning_recovery_snapshot(failed, owner_session_id="session-owner")
+    snapshot = build_planning_recovery_snapshot(
+        failed,
+        owner_session_id=owner_session_id,
+    )
     assert snapshot is not None
     payload = snapshot.model_dump(mode="json")
     payload["source_workflow_run_id"] = workflow_run_id
@@ -67,6 +76,33 @@ def _write_recovery(workspace: str, workflow_run_id: str) -> None:
         {"workspace": workspace},
         PlanningRecoverySnapshot.model_validate(payload),
     )
+
+
+def _write_failed_execution(
+    workspace: str,
+    workflow_run_id: str,
+    owner_session_id: str,
+    target_id: str,
+) -> None:
+    """写入带页面资源锁的 failed execution，供 Session cleanup 测试使用。"""
+
+    start_workbench_execution(
+        workspace,
+        scope="page",
+        target_id=target_id,
+        page_id=target_id,
+        thread_id=f"thread-{workflow_run_id}",
+        run_id=workflow_run_id,
+        phase="prepare_build_tasks",
+        owner_session_id=owner_session_id,
+    )
+    update_workbench_execution(
+        workspace,
+        run_id=workflow_run_id,
+        phase="prepare_build_tasks",
+        status=WorkbenchExecutionStatus.FAILED,
+    )
+    _write_recovery(workspace, workflow_run_id, owner_session_id)
 
 
 class PlanningRecoveryLifecycleCleanupTests(unittest.TestCase):
@@ -128,29 +164,12 @@ class PlanningRecoveryLifecycleCleanupTests(unittest.TestCase):
 
             self.assertEqual(ended.active_executions, {})
 
-    def test_session_cleanup_only_deletes_failed_recovery_owned_by_session(self) -> None:
-        """Session 删除不能扫描并删除其它 Session 的 Recovery。"""
+    def test_release_session_pending_does_not_cleanup_recovery(self) -> None:
+        """Session 尚未真正删除时，Pending 收口不得删除 Recovery 或 failed execution。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             write_application_lifecycle(workspace, _ready_lifecycle())
-            for run_id, owner in (("run-owner", "session-owner"), ("run-other", "session-other")):
-                start_workbench_execution(
-                    workspace,
-                    scope="application",
-                    target_id="application",
-                    page_id=None,
-                    thread_id=f"thread-{run_id}",
-                    run_id=run_id,
-                    phase="prepare_build_tasks",
-                    owner_session_id=owner,
-                )
-                update_workbench_execution(
-                    workspace,
-                    run_id=run_id,
-                    phase="prepare_build_tasks",
-                    status=WorkbenchExecutionStatus.FAILED,
-                )
-                _write_recovery(workspace, run_id)
+            _write_failed_execution(workspace, "run-owner", "session-owner", "orders")
 
             released = release_session_owned_pending_build_task_plan(
                 {"workspace": workspace},
@@ -158,8 +177,65 @@ class PlanningRecoveryLifecycleCleanupTests(unittest.TestCase):
             )
 
             self.assertFalse(released)
+            lifecycle = load_application_lifecycle(workspace)
+            self.assertIsNotNone(lifecycle)
+            assert lifecycle is not None
+            self.assertIn("run-owner", lifecycle.active_executions)
+            self.assertIsNotNone(load_planning_recovery({"workspace": workspace}, "run-owner"))
+
+    def test_session_cleanup_removes_owner_execution_locks_and_recovery(self) -> None:
+        """本地 Session 删除成功后，只收口该 owner 的 failed execution。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            write_application_lifecycle(workspace, _ready_lifecycle())
+            _write_failed_execution(workspace, "run-owner", "session-owner", "orders")
+            _write_failed_execution(workspace, "run-other", "session-other", "customers")
+
+            cleaned = cleanup_session_failed_executions(workspace, "session-owner")
+
+            self.assertNotIn("run-owner", cleaned.active_executions)
+            self.assertIn("run-other", cleaned.active_executions)
+            self.assertNotIn("orders", cleaned.resource_locks.pages)
+            self.assertIn("customers", cleaned.resource_locks.pages)
             self.assertIsNone(load_planning_recovery({"workspace": workspace}, "run-owner"))
             self.assertIsNotNone(load_planning_recovery({"workspace": workspace}, "run-other"))
+
+    def test_session_cleanup_write_failure_keeps_execution_and_recovery(self) -> None:
+        """lifecycle 持久化失败时不能先删除 Recovery。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            write_application_lifecycle(workspace, _ready_lifecycle())
+            _write_failed_execution(workspace, "run-owner", "session-owner", "orders")
+
+            with patch(
+                "app.services.application_lifecycle.write_application_lifecycle",
+                side_effect=OSError("lifecycle write failed"),
+            ):
+                with self.assertRaisesRegex(OSError, "lifecycle write failed"):
+                    cleanup_session_failed_executions(workspace, "session-owner")
+
+            lifecycle = load_application_lifecycle(workspace)
+            self.assertIsNotNone(lifecycle)
+            assert lifecycle is not None
+            self.assertIn("run-owner", lifecycle.active_executions)
+            self.assertIsNotNone(load_planning_recovery({"workspace": workspace}, "run-owner"))
+
+    def test_session_cleanup_recovery_delete_failure_keeps_lifecycle_closed(self) -> None:
+        """Recovery 删除失败时 lifecycle 保持已收口，残留可交给 GC。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            write_application_lifecycle(workspace, _ready_lifecycle())
+            _write_failed_execution(workspace, "run-owner", "session-owner", "orders")
+
+            with patch(
+                "app.workspace.planning_recovery_documents.delete_planning_recovery",
+                side_effect=OSError("recovery delete failed"),
+            ):
+                cleaned = cleanup_session_failed_executions(workspace, "session-owner")
+
+            self.assertNotIn("run-owner", cleaned.active_executions)
+            self.assertNotIn("orders", cleaned.resource_locks.pages)
+            self.assertIsNotNone(load_planning_recovery({"workspace": workspace}, "run-owner"))
 
     def test_duplicate_retry_is_rejected_by_existing_execution_replacement(self) -> None:
         """R1 被 R2 接管后，第二次仍以 R1 resume 必须 fail closed。"""

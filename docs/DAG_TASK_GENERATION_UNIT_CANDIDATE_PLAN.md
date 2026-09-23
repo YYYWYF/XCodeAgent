@@ -2361,9 +2361,14 @@ Retry source Recovery 只有在当前 Retry 已完成 PendingPlan 写入、自�
 `UNIT_GENERATION_INFRASTRUCTURE_FAILURE` 且新的 Snapshot 已经通过
 `write_planning_recovery_atomic()` 写入后，才按 exact `source_workflow_run_id` 删除。
 `persist_planning_recovery_if_applicable()` 的 bool 返回值只表示 Snapshot writer 是否成功；
-cleanup/delete 失败不覆盖原 Planning success 或 `DagPlanningError`。明确 End Plan、Session
-删除和 Application 删除使用现有 lifecycle/workspace cleanup 入口；GC 需要可注入年龄阈值，
-且无法证明 exact failed execution 已不能通过 `resumeExecutionRunId` Retry 时保留文件。
+cleanup/delete 失败不覆盖原 Planning success 或 `DagPlanningError`。End Plan 仍按 exact
+Workflow execution 收口。Session 删除前的 `release_session_pending` 只负责 PendingPlan /
+PlanningRun 收口；只有本地 Session 删除成功后，`cleanup_session_failed_executions` 才按
+`owner_session_id` 从 `active_executions` 移除 failed Workflow executions、释放对应
+resource locks，并 best-effort exact-delete 对应 Recovery。必须先成功持久化 lifecycle，再
+删除 Recovery；Recovery 删除失败不回滚 lifecycle，后续由 stale Recovery GC 处理。
+Application 删除使用现有 workspace cleanup 入口；GC 需要可注入年龄阈值，且无法证明 exact
+failed execution 已不能通过 `resumeExecutionRunId` Retry 时保留文件。
 
 ---
 

@@ -177,21 +177,13 @@ def release_session_owned_pending_build_task_plan(
 
     workspace = workspace_root(state)
     with build_task_plan_lifecycle_lock(workspace):
-        from app.services.application_lifecycle import (
-            cleanup_failed_planning_recovery_for_session,
-        )
-
         pending = load_pending_build_task_plan(state)
         if pending is None:
-            # Session 删除没有 Pending 时仍要收口该 Session 已经失败且不再可恢复的
-            # Planning execution；Recovery cleanup 失败不得阻断本地 Session 删除。
-            cleanup_failed_planning_recovery_for_session(workspace, owner_session_id)
             return False
 
         # 先验证完整 DraftIdentity 和自摘要；损坏的 Pending 不能被当作无主数据跳过。
         identity = validate_pending_self_digest(pending)
         if identity.owner_session_id != owner_session_id:
-            cleanup_failed_planning_recovery_for_session(workspace, owner_session_id)
             return False
 
         result = abandon_pending_build_task_plan(
@@ -215,7 +207,6 @@ def release_session_owned_pending_build_task_plan(
             and planning_run.get("planning_run_id") == identity.planning_run_id
         ):
             raise OSError("Abandon 后匹配的 PlanningRun 仍然存在，已拒绝删除 Session。")
-        cleanup_failed_planning_recovery_for_session(workspace, owner_session_id)
         return True
 
 

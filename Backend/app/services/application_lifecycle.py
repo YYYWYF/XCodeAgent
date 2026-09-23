@@ -888,36 +888,54 @@ def best_effort_delete_planning_recovery(
         return False
 
 
-def cleanup_failed_planning_recovery_for_session(
+def cleanup_session_failed_executions(
     workspace: str | Path,
     owner_session_id: str,
-) -> tuple[str, ...]:
-    """Session 真正删除时只清理其 failed execution 的 exact Recovery 文件。"""
+) -> ApplicationLifecycle:
+    """Session 已成功删除后收口其 failed execution，再清理对应 Recovery。"""
 
     normalized_owner = str(owner_session_id or "").strip()
     if not normalized_owner:
-        return ()
-    try:
-        lifecycle = load_application_lifecycle(workspace)
-    except Exception:
-        # Session 删除本身不能被 Recovery 或 lifecycle 的附带清理故障阻断。
-        _LOGGER.warning(
-            "Cannot inspect lifecycle while cleaning session Planning Recovery",
-            exc_info=True,
+        raise ValueError("Session cleanup 必须提供合法非空的 owner_session_id。")
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        if current is None:
+            raise ApplicationLifecycleMissingError("生命周期状态尚未初始化。")
+        failed_run_ids = tuple(
+            run_id
+            for run_id, execution in current.active_executions.items()
+            if (
+                execution.status == WorkbenchExecutionStatus.FAILED
+                and execution.owner_session_id == normalized_owner
+            )
         )
-        return ()
-    if lifecycle is None:
-        return ()
-    deleted: list[str] = []
-    for run_id, execution in lifecycle.active_executions.items():
-        if (
-            execution.status != WorkbenchExecutionStatus.FAILED
-            or execution.owner_session_id != normalized_owner
-        ):
-            continue
-        if best_effort_delete_planning_recovery(workspace, run_id):
-            deleted.append(run_id)
-    return tuple(deleted)
+        if not failed_run_ids:
+            return current
+
+        executions = dict(current.active_executions)
+        resource_locks = current.resource_locks
+        clear_active_formal_revision = False
+        for run_id in failed_run_ids:
+            execution = executions.pop(run_id)
+            resource_locks = _resource_locks_without_run(resource_locks, run_id)
+            clear_active_formal_revision = (
+                clear_active_formal_revision
+                or execution_belongs_to_active_revision(current, execution)
+            )
+        cleaned = _persist_workbench_execution_removal(
+            workspace,
+            current=current,
+            executions=executions,
+            resource_locks=resource_locks,
+            clear_active_formal_revision=clear_active_formal_revision,
+        )
+
+    # lifecycle 成功落盘后再删 Recovery；删除失败只留下可由 GC 处理的残留。
+    for run_id in failed_run_ids:
+        best_effort_delete_planning_recovery(workspace, run_id)
+    return cleaned
 
 
 def persist_workbench_interaction_submission(

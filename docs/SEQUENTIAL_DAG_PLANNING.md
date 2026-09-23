@@ -170,8 +170,14 @@ Retry source Recovery 只有在以下两种情况之一成立后才能删除：
 或写入失败；只有 `True` 才能触发第二条路径的 source cleanup。Retry 仍只读取
 `resumeExecutionRunId` 指定的文件，不存在 latest、recursive fallback 或 active pointer。
 
-明确 End Plan、Session 删除和 Application 删除分别按 exact Workflow execution、Session
-owner 与现有 workspace artifact cleanup 收口；Recovery cleanup 失败不改变原 lifecycle 操作结果。
+End Plan 仍按 exact Workflow execution 收口。Session 删除前的
+`release_session_pending` 只负责该 Session 的 PendingPlan / PlanningRun 收口，不删除
+Recovery 或 failed execution；只有本地 Session 删除成功后，才通过
+`cleanup_session_failed_executions` 按 `owner_session_id` 从 `active_executions` 移除
+failed Workflow executions、释放对应 resource locks，并 best-effort exact-delete 对应
+Recovery。必须先成功持久化 lifecycle，再删除 Recovery；Recovery 删除失败不回滚 lifecycle，
+后续由 stale Recovery GC 处理。Application 删除仍通过现有 workspace artifact cleanup
+清理 `planning-recovery`；这些 cleanup 失败不改变原 lifecycle 操作结果。
 保守 GC 只接受可注入的年龄阈值，并且只有在当前 lifecycle 可读且不再登记该 exact failed
 execution 时才删除；无法确认是否还能 Retry 的 Recovery 保留。
 

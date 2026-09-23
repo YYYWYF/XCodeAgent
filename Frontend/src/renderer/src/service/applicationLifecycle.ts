@@ -15,6 +15,7 @@ type ApplicationLifecyclePayload = {
     | 'retry_bootstrap_template_generation'
     | 'workspace_attach'
     | 'release_session_pending'
+    | 'cleanup_session_failed_executions'
   lifecycle?: ApplicationLifecycle
   sessionPendingReleased?: boolean
   error?: { type?: string; message?: string }
@@ -199,6 +200,21 @@ export async function releaseSessionPendingPlan(
   if (!normalizedSessionId) throw new Error('收口 PendingPlan 前需要合法的 sessionId。')
   return runApplicationLifecycleAction(randomUUID(), {
     action: 'release_session_pending',
+    workspaceRoot,
+    sessionId: normalizedSessionId
+  })
+}
+
+// 仅在本地 Session 已成功删除后，收口其 failed Workflow execution 及资源锁。
+export async function cleanupSessionFailedExecutions(
+  workspaceRoot: string,
+  sessionId: string
+): Promise<ApplicationLifecycle> {
+  if (!workspaceRoot.trim()) throw new Error('收口失败 execution 前需要工作目录。')
+  const normalizedSessionId = sessionId.trim()
+  if (!normalizedSessionId) throw new Error('收口失败 execution 前需要合法的 sessionId。')
+  return runApplicationLifecycleAction(randomUUID(), {
+    action: 'cleanup_session_failed_executions',
     workspaceRoot,
     sessionId: normalizedSessionId
   })
