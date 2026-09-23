@@ -89,6 +89,7 @@ class UnitRunState(FrozenPlanningModel):
             raise ValueError("生成 Unit 不能跳过本轮 Candidate。")
         if self.generation_strategy != "model" and (self.attempt_in_round or self.total_attempts):
             raise ValueError("非模型 Unit 不消耗模型 attempt budget。")
+        # model Unit 的 recovered Candidate 可以在 candidate_ready 时保持 0/0；这不代表伪造过 Attempt。
         if self.total_attempts != sum(item.attempt_in_round for item in self.round_history) + self.attempt_in_round:
             raise ValueError("累计模型次数必须等于历史轮次加当前轮次。")
         if tuple(item.generation_round for item in self.round_history) != tuple(range(1, self.generation_round)):
@@ -202,7 +203,7 @@ class PlanningRun(PlanningRunProjection):
 
     @model_validator(mode="after")
     def validate_snapshot(self) -> PlanningRun:
-        """在轻量结构校验之外，严格核对内存 Candidate 正文、当前指针和唯一 Attempt。"""
+        """在轻量结构校验之外，严格核对 Candidate 正文、当前指针和真实 Attempt 唯一性。"""
 
         planning = set(self.planning_unit_ids)
         attempt_ids = [unit.expected_identity.attempt_id for unit in self.unit_states.values() if unit.expected_identity]
@@ -224,7 +225,10 @@ class PlanningRun(PlanningRunProjection):
                 raise ValueError("Candidate 必须绑定冻结输入指纹。")
             if candidate.status == "valid" and key not in current_ids:
                 raise ValueError("旧有效 Candidate 必须 supersede，不能作为隐藏回退。")
-            attempt_ids.append(candidate.identity.attempt_id)
+            # recovered Candidate 没有当前 Run 的 Attempt；只有 generated_from 才进入
+            # Attempt registry，避免为跨 Run 来源凭空制造 attempt_id。
+            if candidate.generated_from is not None:
+                attempt_ids.append(candidate.generated_from.attempt_id)
         if len(set(attempt_ids)) != len(attempt_ids):
             raise ValueError("每次 Attempt 身份只能被分配或记录一次。")
         return self

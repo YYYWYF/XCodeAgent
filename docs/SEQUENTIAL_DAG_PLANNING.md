@@ -44,13 +44,21 @@ Assembly、Global 编译门禁和归因始终使用真实服务。`publish` 是�
 一个调用创建一个 Controller，首个模型调用前冻结所有 Unit Context。Context 只包含当前
 Unit 的正式合同 catalog 元数据、平台工作区快照、相关 Endpoint owner 和同 Unit retained 摘要；
 合同正文只存在于 PlanningRun 内存 Frozen Store，不含任何当前 Candidate 正文。Global repair
-复用这些冻结 Context 与 Store，仅更新轮次/Attempt 和反馈。
+复用这些冻结 Context 与 Store，仅更新轮次/Attempt 和反馈；Global Validation/Repair 不按
+Candidate origin 分支，recovered Candidate 被归因时仍沿用普通 `begin_global_repair()`。
 
 模型 Unit 以 `UnitAttemptJob` 进入 FIFO Queue，最多三个 worker 并发执行；一次内容失败只把
 当前 Unit 的下一 Attempt 追加到队尾，三次内容失败才耗尽当前轮。Unit Graph dependency
 不作为生成顺序或入队门禁。
 确定性 `frontend:auth-guard` 由既有 builder 生成，再经 Controller Candidate 事件接纳，
 不进入模型 Session/Local retry，模型计数为零。shell/structural/reuse Unit 不生成。
+
+`CandidateAttempt.identity` 是独立的 `CandidateIdentity`，只表达当前
+`planning_run_id/unit_id/generation_round`；真实生成来源保存在 `generated_from`。
+deterministic Candidate 同样保留平台分配的 generated Attempt provenance，但不会增加 model
+attempt budget。未来 recovered Candidate 使用 `origin=recovered` 和 `recovered_from`，可以在
+新 Run 中以 `candidate_ready + attempt_in_round=0 + total_attempts=0` 存在，不伪造当前 Run
+Attempt；当前文档范围不接入 Recovery Snapshot 或跨 Run Candidate 注入。
 
 每个 Local Attempt 创建独立 FrozenContractReader，只绑定 `read_frozen_contract_fragment`。
 模型可在一个 Attempt 内执行受 turn/read-count/read-byte 预算限制的多轮 Model → Reader，
@@ -128,7 +136,9 @@ FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Atte
 - `regenerate` 是新增的 AG-UI 结构化动作：先不可回滚地删除旧 Pending，再回到 `prepare_build_tasks`，由服务端分配新 PlanningRun ID 并完整执行本 orchestrator。成功写新 Pending；失败保留失败事实且不恢复旧 Pending。
 
 页面刷新只从服务端投影恢复 PlanningRun/Pending/Formal 状态，不承诺原 DAG 请求继续执行。
-后台脱离执行、SSE 事件重放/重新订阅和 Candidate 断点恢复不属于当前合同。
+后台脱离执行、SSE 事件重放/重新订阅和 Candidate 断点恢复不属于当前合同。Candidate 的
+跨 Run Recovery 也不在本任务接入范围内；Recovery 只能由后续明确的 `resumeExecutionRunId`
+流程定位，不能从 workspace/session/scope 猜测最近结果。
 
 ## Frozen Contract Catalog
 

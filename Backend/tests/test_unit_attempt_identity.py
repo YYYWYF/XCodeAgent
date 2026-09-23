@@ -80,8 +80,14 @@ class UnitAttemptIdentityTests(unittest.TestCase):
             restored = UnitGenerationAttemptResult.model_validate_json(result.model_dump_json())
             self.assertEqual(restored.identity, job.identity)
             self.assertEqual(restored.input_fingerprint, context.input_fingerprint)
-            candidate = CandidateAttempt(**{**_candidate_payload(), "identity": restored.identity})
-            self.assertEqual(candidate.identity, identity)
+            candidate = CandidateAttempt.from_generated_attempt(
+                attempt=restored.identity, input_fingerprint=context.input_fingerprint,
+                status="valid", tasks=_candidate_payload()["tasks"],
+            )
+            self.assertEqual(candidate.generated_from, identity)
+            self.assertEqual(candidate.identity.planning_run_id, identity.planning_run_id)
+            self.assertEqual(candidate.identity.unit_id, identity.unit_id)
+            self.assertEqual(candidate.identity.generation_round, identity.generation_round)
             self.assertNotEqual(candidate.candidate_id, identity.attempt_id)
             self.assertEqual(candidate.tasks[0]["id"], "model-task-orders")
             results.append(restored)

@@ -5,6 +5,7 @@ import unittest
 from pydantic import ValidationError
 
 from app.services import planning_run as sm
+from app.services.unit_generation_contracts import AttemptIdentity, CandidateAttempt, CandidateIdentity, CandidateRecoverySource
 from tests.planning_run_fixtures import (
     repair_decision,
     AT, UNIT, candidate, exhausted, identity, invalid, issue, phases, ready, run, start, unit,
@@ -12,6 +13,22 @@ from tests.planning_run_fixtures import (
 
 
 class PlanningRunTests(unittest.TestCase):
+    def _recovered_candidate(self, *, run_id: str = "run-2", candidate_id: str = "candidate-" + "b" * 32) -> CandidateAttempt:
+        """构造属于新 Run、但不携带新 Run Attempt 的 recovered Candidate。"""
+
+        return CandidateAttempt(
+            candidate_id=candidate_id,
+            identity=CandidateIdentity(planning_run_id=run_id, unit_id=UNIT, generation_round=1),
+            origin="recovered",
+            generated_from=None,
+            recovered_from=CandidateRecoverySource(
+                source_planning_run_id="run-1", source_candidate_id="candidate-" + "a" * 32,
+            ),
+            input_fingerprint="frozen-input",
+            status="valid",
+            tasks=({"id": "task:recovered", "unit_id": UNIT},),
+        )
+
     def test_normal_lifecycle_remains_active_without_confirmation_status(self):
         """正常全链路只推进 phase，时间由调用方传入，无 succeeded 或确认状态。"""
 
@@ -136,11 +153,77 @@ class PlanningRunTests(unittest.TestCase):
             state = ready(state, target)
             current = state.unit_states[target]
             self.assertEqual((current.generation_round, current.attempt_in_round, current.total_attempts), (round_number, 0, 0))
-            self.assertEqual(state.candidates[current.latest_candidate_id].identity.attempt_in_round, 1)
+            self.assertEqual(state.candidates[current.latest_candidate_id].generated_from.attempt_in_round, 1)
             state = sm.begin_global_check(state, at=AT)
             if round_number < 3:
                 state = sm.begin_global_repair(state, repair_decision(issue(target, level="global")), at=AT)
         self.assertEqual(sum(item.status == "superseded" for item in state.candidates.values()), 2)
+
+    def test_recovered_candidate_snapshot_is_ready_without_current_attempt_budget(self):
+        """recovered Candidate 可作为新 Run 当前候选通过快照校验，且模型预算仍为零。"""
+
+        recovered = self._recovered_candidate()
+        recovered_unit = unit().model_copy(update={
+            "generation_status": "candidate_ready",
+            "latest_candidate_id": recovered.candidate_id,
+            "candidate_task_count": len(recovered.tasks),
+        })
+        state = sm.PlanningRun(
+            planning_run_id="run-2", workflow_run_id="workflow-2", thread_id="thread-2",
+            build_execution_scope={"type": "page", "targetId": "orders"},
+            input_fingerprint="frozen-input", base_confirmed_plan_digest="confirmed-digest",
+            required_unit_ids=(UNIT,), planning_unit_ids=(UNIT,),
+            unit_states={UNIT: recovered_unit}, candidates={recovered.candidate_id: recovered},
+            started_at=AT, updated_at=AT,
+        )
+        self.assertEqual(sm.PlanningRun.model_validate_json(state.model_dump_json()), state)
+        self.assertEqual(
+            (state.unit_states[UNIT].generation_status, state.unit_states[UNIT].attempt_in_round, state.unit_states[UNIT].total_attempts),
+            ("candidate_ready", 0, 0),
+        )
+
+    def test_global_repair_supersedes_recovered_candidate_without_special_branch(self):
+        """Global Repair 对 recovered 与 generated 使用同一 supersede/reopen 语义。"""
+
+        other = "page:customers"
+        recovered = self._recovered_candidate()
+        generated_attempt = AttemptIdentity(
+            planning_run_id="run-2", unit_id=other, generation_round=1,
+            attempt_in_round=1, attempt_id="attempt-" + "c" * 32,
+        )
+        generated = CandidateAttempt.from_generated_attempt(
+            attempt=generated_attempt, input_fingerprint="frozen-input", status="valid",
+            tasks=({"id": "task:generated", "unit_id": other},),
+        )
+        recovered_unit = unit().model_copy(update={
+            "generation_status": "candidate_ready", "latest_candidate_id": recovered.candidate_id,
+            "candidate_task_count": len(recovered.tasks),
+        })
+        generated_unit = unit(other).model_copy(update={
+            "generation_status": "candidate_ready", "latest_candidate_id": generated.candidate_id,
+            "candidate_task_count": len(generated.tasks),
+        })
+        state = sm.PlanningRun(
+            planning_run_id="run-2", workflow_run_id="workflow-2", thread_id="thread-2",
+            phase="global_check", build_execution_scope={"type": "page", "targetId": "orders"},
+            input_fingerprint="frozen-input", base_confirmed_plan_digest="confirmed-digest",
+            required_unit_ids=(UNIT, other), planning_unit_ids=(UNIT, other),
+            unit_states={UNIT: recovered_unit, other: generated_unit},
+            candidates={recovered.candidate_id: recovered, generated.candidate_id: generated},
+            started_at=AT, updated_at=AT,
+        )
+        reopened = sm.begin_global_repair(state, repair_decision(issue(UNIT, level="global")), at=AT)
+        reopened_unit = reopened.unit_states[UNIT]
+        self.assertEqual(reopened.candidates[recovered.candidate_id].status, "superseded")
+        self.assertEqual(reopened.candidates[generated.candidate_id], generated)
+        self.assertEqual(
+            (reopened_unit.generation_status, reopened_unit.generation_round, reopened_unit.attempt_in_round,
+             reopened_unit.total_attempts, reopened_unit.latest_candidate_id, reopened_unit.candidate_task_count),
+            ("pending", 2, 0, 0, None, 0),
+        )
+        regenerated, attempt = start(reopened, UNIT)
+        self.assertEqual((attempt.generation_round, attempt.attempt_in_round), (2, 1))
+        self.assertEqual(regenerated.unit_states[UNIT].total_attempts, 1)
 
     def test_no_generation_participants_pass_without_tasks_or_model_attempts(self):
         """shell/structural/reuse-only 无 Candidate 也可过完整阶段链，且不能调度或重开。"""

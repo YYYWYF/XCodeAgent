@@ -238,8 +238,8 @@ class GlobalIssueAttributionTests(unittest.TestCase):
     def test_candidate_projection_and_repeated_calls_have_no_side_effects(self) -> None:
         """从真实 Candidate 只读投影，并验证归因不改正文、状态、身份、轮次或所有输入。"""
 
-        candidate = CandidateAttempt(
-            identity=AttemptIdentity.allocate(planning_run_id="run", unit_id="page:a",
+        candidate = CandidateAttempt.from_generated_attempt(
+            attempt=AttemptIdentity.allocate(planning_run_id="run", unit_id="page:a",
                                               generation_round=2, attempt_in_round=3),
             status="valid", input_fingerprint="fingerprint", tasks=[{"id": "a", "unit_id": "forged"}],
         )

@@ -297,7 +297,10 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
             if candidate.identity.unit_id == "page:a"
         ]
         self.assertEqual(len(a_candidates), 1)
-        self.assertEqual(a_candidates[0].identity, a_job.identity)
+        self.assertEqual(a_candidates[0].generated_from, a_job.identity)
+        self.assertEqual(a_candidates[0].identity.planning_run_id, a_job.identity.planning_run_id)
+        self.assertEqual(a_candidates[0].identity.unit_id, a_job.identity.unit_id)
+        self.assertEqual(a_candidates[0].identity.generation_round, a_job.identity.generation_round)
         self.assertEqual(plain_json(a_candidates[0].tasks), model_tasks(a_job))
         self.assertEqual(a_candidates[0].status, "valid")
 

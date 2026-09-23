@@ -10,7 +10,7 @@ from types import MappingProxyType
 from app.services.global_issue_attribution import GlobalRepairDecision
 from app.services.planning_issues import ValidationIssue, dedupe_issues, group_issues_by_retry_unit
 from app.services.planning_run_contracts import PlanningRun, UnitRoundHistory, UnitRunState
-from app.services.unit_generation_contracts import AttemptIdentity, CandidateAttempt
+from app.services.unit_generation_contracts import AttemptIdentity, CandidateAttempt, CandidateIdentity
 
 
 class IllegalPlanningTransition(ValueError):
@@ -92,7 +92,11 @@ def mark_unit_generating(run: PlanningRun, identity: AttemptIdentity, *, at: str
     _require((identity.planning_run_id, identity.generation_round, identity.attempt_in_round) == (
         run.planning_run_id, unit.generation_round, expected_attempt,
     ), "Attempt 身份与当前 Run/round/attempt 不一致。")
-    used_ids = {item.identity.attempt_id for item in run.candidates.values()}
+    used_ids = {
+        item.generated_from.attempt_id
+        for item in run.candidates.values()
+        if item.generated_from is not None
+    }
     used_ids.update(item.expected_identity.attempt_id for item in run.unit_states.values() if item.expected_identity)
     _require(identity.attempt_id not in used_ids, "不能复用已经分配的 attempt_id。")
     unit = unit.model_copy(update={
@@ -123,7 +127,10 @@ def _record_candidate(run: PlanningRun, candidate: CandidateAttempt, *, valid: b
     """在身份和结论一致后记录原始 Candidate，绝不修补任务正文。"""
 
     candidate = CandidateAttempt.model_validate(candidate)
-    unit = _expected(run, candidate.identity, *(('validating',) if valid else ('generating', 'validating')))
+    _require(candidate.origin == "generated", "当前 Attempt 结果只能记录 generated Candidate。")
+    _require(candidate.generated_from is not None, "generated Candidate 必须保留来源 Attempt。")
+    unit = _expected(run, candidate.generated_from, *(('validating',) if valid else ('generating', 'validating')))
+    _require(candidate.identity == CandidateIdentity.from_attempt(candidate.generated_from), "Candidate 当前身份必须由来源 Attempt 派生。")
     _require(candidate.input_fingerprint == run.input_fingerprint, "Candidate 输入指纹与 Run 不一致。")
     _require(candidate.candidate_id not in run.candidates, "Candidate ID 已存在，不能覆盖或恢复 superseded Candidate。")
     _require(candidate.status == ("valid" if valid else "invalid"), "Candidate status 与转换不匹配。")

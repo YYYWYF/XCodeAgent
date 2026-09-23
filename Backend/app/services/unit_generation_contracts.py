@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Annotated, Literal
+from collections.abc import Mapping, Sequence
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import AfterValidator, BeforeValidator, Field, PlainSerializer, StringConstraints, model_validator
@@ -131,6 +131,32 @@ class AttemptIdentity(_GenerationModel):
         )
 
 
+class CandidateIdentity(_GenerationModel):
+    """Candidate 当前归属身份；不包含任何当前 Run 的 Attempt 计数或 ID。"""
+
+    planning_run_id: _Identifier
+    unit_id: _Identifier
+    generation_round: _PositiveInt
+
+    @classmethod
+    def from_attempt(cls, attempt: AttemptIdentity) -> "CandidateIdentity":
+        """从已分配 Attempt 确定性派生 Candidate 当前身份，避免双重传入不一致。"""
+
+        attempt = AttemptIdentity.model_validate(attempt)
+        return cls(
+            planning_run_id=attempt.planning_run_id,
+            unit_id=attempt.unit_id,
+            generation_round=attempt.generation_round,
+        )
+
+
+class CandidateRecoverySource(_GenerationModel):
+    """记录 recovered Candidate 的来源引用，不承载 Workflow 或会话所有权。"""
+
+    source_planning_run_id: _Identifier
+    source_candidate_id: _Identifier
+
+
 class UnitAttemptJob(_GenerationModel):
     """Worker 输入的冻结封装；仅校验身份一致性，不执行调度或过期结果判断。"""
 
@@ -156,21 +182,71 @@ def _new_candidate_id() -> str:
 
 
 class CandidateAttempt(_GenerationModel):
-    """平台封装的候选记录，status 必须由调用方明确指定，不自动判定 valid。
+    """平台封装的候选记录，拆分当前身份与产生来源，status 由调用方明确指定。
 
     candidate_id 默认由平台生成；反序列化可恢复原 ID。后续模型响应适配器只能
     提交 tasks，不得把模型输出直接展开为本 DTO 的平台元数据。
     tasks 保留原始任务正文，包括非法或缺失 Task ID，供后续 Validator 报错。
-    validation_issues 复用 T1.1 契约，不在此实现归因或状态转换。
+    validation_issues 复用 T1.1 契约，不在此实现归因或状态转换。Candidate 当前
+    identity 只表达当前 Run/Unit/round；generated_from 或 recovered_from 才表达来源。
     """
 
     candidate_id: Annotated[str, StringConstraints(pattern=r"^candidate-[0-9a-f]{32}$")] = Field(default_factory=_new_candidate_id)
-    identity: AttemptIdentity
+    identity: CandidateIdentity
+    origin: Literal["generated", "recovered"]
+    generated_from: AttemptIdentity | None
+    recovered_from: CandidateRecoverySource | None
     input_fingerprint: _Identifier
     status: Literal["valid", "invalid", "superseded"]
     tasks: Annotated[tuple[_FrozenJsonObject, ...], BeforeValidator(_tuple_input)]
     validation_issues: Annotated[tuple[ValidationIssue, ...], BeforeValidator(_tuple_input)] = ()
     generation_metadata: _FrozenJsonObject = Field(default_factory=dict, validate_default=True)
+
+    @model_validator(mode="after")
+    def validate_origin_provenance(self) -> "CandidateAttempt":
+        """强制 generated/recovered 互斥，并拒绝伪造当前 Run Attempt 或自引用来源。"""
+
+        if self.origin == "generated":
+            if self.generated_from is None or self.recovered_from is not None:
+                raise ValueError("generated Candidate 必须且只能携带 generated_from。")
+            if CandidateIdentity.from_attempt(self.generated_from) != self.identity:
+                raise ValueError("generated_from 必须与 Candidate 当前身份的 Run/Unit/round 一致。")
+        else:
+            if self.generated_from is not None or self.recovered_from is None:
+                raise ValueError("recovered Candidate 必须且只能携带 recovered_from。")
+            if self.recovered_from.source_planning_run_id == self.identity.planning_run_id:
+                raise ValueError("recovered Candidate 的 source PlanningRun 不能等于当前 Run。")
+            if self.recovered_from.source_candidate_id == self.candidate_id:
+                raise ValueError("recovered Candidate 不能引用自身 Candidate ID。")
+        return self
+
+    @classmethod
+    def from_generated_attempt(
+        cls,
+        *,
+        attempt: AttemptIdentity,
+        input_fingerprint: str,
+        status: Literal["valid", "invalid", "superseded"],
+        tasks: Sequence[Mapping[str, Any]],
+        validation_issues: Sequence[ValidationIssue] = (),
+        generation_metadata: Mapping[str, Any] | None = None,
+        candidate_id: str | None = None,
+    ) -> "CandidateAttempt":
+        """用一次真实 Attempt 创建 generated Candidate，统一派生当前 Candidate 身份。"""
+
+        attempt = AttemptIdentity.model_validate(attempt)
+        return cls(
+            candidate_id=candidate_id or _new_candidate_id(),
+            identity=CandidateIdentity.from_attempt(attempt),
+            origin="generated",
+            generated_from=attempt,
+            recovered_from=None,
+            input_fingerprint=input_fingerprint,
+            status=status,
+            tasks=tasks,
+            validation_issues=validation_issues,
+            generation_metadata={} if generation_metadata is None else generation_metadata,
+        )
 
 
 class UnitGenerationAttemptResult(_GenerationModel):

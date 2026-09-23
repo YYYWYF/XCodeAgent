@@ -1113,7 +1113,15 @@ task-order-api
 ```text
 CandidateAttempt
 ├── candidate_id
-├── identity: AttemptIdentity
+├── identity: CandidateIdentity
+│   ├── planning_run_id
+│   ├── unit_id
+│   └── generation_round
+├── origin
+│   ├── generated
+│   └── recovered
+├── generated_from: AttemptIdentity | null
+├── recovered_from: CandidateRecoverySource | null
 ├── input_fingerprint
 ├── status
 │   ├── valid
@@ -1126,7 +1134,18 @@ CandidateAttempt
 
 `UnitCandidate.tasks[]` 只表达该 Unit 在当前 PlanningRun 中的新增或替换任务。模型不得回传上一份 confirmed DAG 中已经复用的历史任务；历史任务由平台在 Scope Assembly 时合并。
 
-`unit_id`、`planning_run_id`、`input_fingerprint`、`generation_attempt`、状态、校验问题和生成元信息均由平台维护。输入指纹绑定本轮冻结输入，不承担跨 Run 缓存或失效判断；生成元信息记录生成方式和调用诊断。状态枚举与持久化细节在状态与存储议题确定。
+Candidate 当前身份与其生产来源是两个独立概念：`identity` 只表示 Candidate 当前属于哪个
+PlanningRun、Unit 和 generation round；`generated_from` 才记录产生它的真实 Attempt。
+`origin=generated` 时两者必须一致，且 `recovered_from` 必须为空。`origin=recovered` 时
+Candidate 属于当前新 Run，但不携带当前 Run 的 Attempt；`recovered_from` 只保存来源 Run 和
+来源 Candidate 的 provenance，不保存 ownerSessionId 或 workflowRunId。
+
+正常模型生成和 deterministic 生成都分配 `generated_from`；deterministic 仍不消耗 model
+attempt budget。领域模型允许 recovered model Unit 以 `candidate_ready`、`attempt_in_round=0`、
+`total_attempts=0` 表示当前 Run 尚未调用模型。Global Validation/Repair 只消费 Candidate
+的当前身份、Task 和校验状态，不按 `generated`/`recovered` 分支。输入指纹绑定本轮冻结输入，
+不承担跨 Run 缓存或失效判断；生成元信息记录生成方式和调用诊断。状态枚举与持久化细节在
+状态与存储议题确定。
 
 ## 已确认：模型 Task 字段与平台补充字段
 
@@ -1358,8 +1377,12 @@ candidate
     ↓
 随 Run 结束
     ↓
-不跨 Run 复用
+本 Run 不恢复；后续 Retry 若采用 Recovery Candidate，必须创建新 Run 并保留 source provenance
 ```
+
+当前任务只提供 `origin=recovered` 的领域合同能力，尚未接入 Recovery Snapshot、跨 Run
+Candidate 读取、Retry wiring 或 Candidate 自动注入。任何 Candidate 在进入 Scope Assembly
+和 Global Validation 前都不能进入 PendingPlan/FormalPlan。
 
 用户点击：
 
@@ -2395,8 +2418,10 @@ UnitGenerationAttemptResult
 平台在 dispatch 前通过 `AttemptIdentity.allocate()` 分配独立 `attempt-<uuid>`；
 Worker 必须回传原身份，反序列化缺少 `attempt_id` 时拒绝输入，不补发 ID。
 `candidate_id` 使用独立的 `candidate-<uuid>`，Task ID 仍由模型提供，三者不可互相代替。
-Job 构造时必须校验 identity 与 Context 的 Run/Unit 一致；Candidate 与 Result 只保存嵌套 identity，
-不保留第二套可冲突的平铺身份字段。
+Job 构造时必须校验 identity 与 Context 的 Run/Unit 一致；Candidate 的 `identity` 保存
+`CandidateIdentity`，其生成来源单独保存为 `generated_from: AttemptIdentity`，recovered 来源
+则保存 `recovered_from`，不再把 Attempt 计数和 ID 混入 Candidate 当前身份。两者都不保留
+第二套可冲突的平铺身份字段。
 
 Context、Job、Result、Candidate 及其 `ValidationIssue` 为不可变快照；Issue 的 ID 序列为 tuple，
 details 递归只读。JSON 导出仍使用数组和对象，导出副本可编辑但不改变原快照；复制更新重新验证契约。
@@ -2705,4 +2730,4 @@ Unit 级用户取消
 
 # 43. 最终架构原则
 
-> 每个 PlanningRun 以上一份 confirmed DAG 为唯一只读历史基线。平台根据 Scope、Unit Skeleton、正式输入及确定性 ReuseFacts 计算本轮 Unit generation requirements。`frontend:shell` 仅作为模板前置能力存在，不生成 Task；`frontend:auth-guard` 根据当前 authorization resource fingerprint 判断 reuse、workspace satisfied 或 deterministic Candidate，并通过确定性 executor 物化 `resources.ts`。其他需生成 Unit 只依赖冻结的 UnitGenerationContext 独立产生 Candidate。Unit 是 Local generation / validation / retry 边界；Local 每轮最多 3 次，Global 最多 2 轮，只重新打开明确归因的 Unit。有效 Candidate 与所有 confirmed Tasks 通过 append-only Scope Assembly 组成累计 DAG。完整 DAG 通过 Global Validation 后只写 PendingPlan，用户确认精确 DraftIdentity 后才原子提升为正式 DAG。模型 infrastructure retry 为 0；并发、取消和 supersede 通过 PlanningRun 状态与 AttemptIdentity 保证结果隔离。Build 永远只消费 confirmed DAG。
+> 每个 PlanningRun 以上一份 confirmed DAG 为唯一只读历史基线。平台根据 Scope、Unit Skeleton、正式输入及确定性 ReuseFacts 计算本轮 Unit generation requirements。`frontend:shell` 仅作为模板前置能力存在，不生成 Task；`frontend:auth-guard` 根据当前 authorization resource fingerprint 判断 reuse、workspace satisfied 或 deterministic Candidate，并通过确定性 executor 物化 `resources.ts`。其他需生成 Unit 只依赖冻结的 UnitGenerationContext 独立产生 Candidate。Candidate 的当前 `CandidateIdentity` 与 `generated_from`/`recovered_from` provenance 分离；Global Validation/Repair 不区分两种 origin。Unit 是 Local generation / validation / retry 边界；Local 每轮最多 3 次，Global 最多 2 轮，只重新打开明确归因的 Unit。有效 Candidate 与所有 confirmed Tasks 通过 append-only Scope Assembly 组成累计 DAG。完整 DAG 通过 Global Validation 后只写 PendingPlan，用户确认精确 DraftIdentity 后才原子提升为正式 DAG。模型 infrastructure retry 为 0；并发、取消和 supersede 通过 PlanningRun 状态与 AttemptIdentity 保证结果隔离。Build 永远只消费 confirmed DAG。

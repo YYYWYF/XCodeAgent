@@ -233,8 +233,8 @@ async def plan_dag_sequential(
                 retryable=False, unit_ids=(current.unit_id,), message="确定性生成 Unit 没有返回所需 Candidate。",
             ),))
         await controller.apply(UnitValidationStarted(identity=identity, at=now()))
-        await controller.apply(CandidateReady(candidate=CandidateAttempt(
-            identity=identity, input_fingerprint=initial.input_fingerprint, status="valid", tasks=payload["tasks"],
+        await controller.apply(CandidateReady(candidate=CandidateAttempt.from_generated_attempt(
+            attempt=identity, input_fingerprint=initial.input_fingerprint, status="valid", tasks=payload["tasks"],
         ), at=now()))
 
     async def regenerate_round(units: tuple[UnitRunState, ...]) -> None:

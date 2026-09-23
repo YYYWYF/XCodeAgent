@@ -44,7 +44,8 @@ def _result_identity(event: PlanningRunEvent) -> AttemptIdentity | None:
     if isinstance(event, UnitValidationStarted):
         return event.identity
     if isinstance(event, (CandidateInvalid, CandidateReady)):
-        return event.candidate.identity
+        # Candidate 当前身份不再携带 Attempt；只有 generated provenance 才能参与晚到结果 gate。
+        return event.candidate.generated_from
     return None
 
 
