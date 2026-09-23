@@ -56,7 +56,8 @@ Candidate origin 分支，recovered Candidate 被归因时仍沿用普通 `begin
 `CandidateAttempt.identity` 是独立的 `CandidateIdentity`，只表达当前
 `planning_run_id/unit_id/generation_round`；真实生成来源保存在 `generated_from`。
 deterministic Candidate 同样保留平台分配的 generated Attempt provenance，但不会增加 model
-attempt budget。未来 recovered Candidate 使用 `origin=recovered` 和 `recovered_from`，可以在
+attempt budget；但当前 latest 的 `model + generated` Candidate 必须有正数的当前轮 model
+attempt，且 `generated_from.attempt_in_round` 必须等于 Unit 的 `attempt_in_round`。未来 recovered Candidate 使用 `origin=recovered` 和 `recovered_from`，可以在
 新 Run 中以 `candidate_ready + attempt_in_round=0 + total_attempts=0` 存在，不伪造当前 Run
 Attempt；当前文档范围不接入 Recovery Snapshot 或跨 Run Candidate 注入。
 

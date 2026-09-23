@@ -1141,7 +1141,10 @@ Candidate 属于当前新 Run，但不携带当前 Run 的 Attempt；`recovered_
 来源 Candidate 的 provenance，不保存 ownerSessionId 或 workflowRunId。
 
 正常模型生成和 deterministic 生成都分配 `generated_from`；deterministic 仍不消耗 model
-attempt budget。领域模型允许 recovered model Unit 以 `candidate_ready`、`attempt_in_round=0`、
+attempt budget。对于当前 latest Candidate，`model + origin=generated` 必须绑定当前轮真实
+发生过的 model Attempt：`attempt_in_round > 0` 且
+`generated_from.attempt_in_round == Unit.attempt_in_round`；这条约束不适用于 deterministic。
+领域模型允许 recovered model Unit 以 `candidate_ready`、`attempt_in_round=0`、
 `total_attempts=0` 表示当前 Run 尚未调用模型。Global Validation/Repair 只消费 Candidate
 的当前身份、Task 和校验状态，不按 `generated`/`recovered` 分支。输入指纹绑定本轮冻结输入，
 不承担跨 Run 缓存或失效判断；生成元信息记录生成方式和调用诊断。状态枚举与持久化细节在

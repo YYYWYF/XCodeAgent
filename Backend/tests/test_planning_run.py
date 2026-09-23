@@ -182,6 +182,35 @@ class PlanningRunTests(unittest.TestCase):
             ("candidate_ready", 0, 0),
         )
 
+    def test_model_generated_candidate_requires_current_attempt_budget(self):
+        """model 的 generated Candidate 不能伪装成零预算 ready，也不能绑定旧的本轮 Attempt。"""
+
+        for unit_attempt, total_attempts, source_attempt in ((0, 0, 1), (2, 2, 1)):
+            with self.subTest(unit_attempt=unit_attempt, source_attempt=source_attempt):
+                generated_attempt = AttemptIdentity(
+                    planning_run_id="run-2", unit_id=UNIT, generation_round=1,
+                    attempt_in_round=source_attempt, attempt_id="attempt-" + f"{source_attempt}" + "d" * 31,
+                )
+                generated = CandidateAttempt.from_generated_attempt(
+                    attempt=generated_attempt, candidate_id="candidate-" + f"{source_attempt}" + "e" * 31,
+                    input_fingerprint="frozen-input", status="valid",
+                    tasks=({"id": "task:generated", "unit_id": UNIT},),
+                )
+                generated_unit = unit().model_copy(update={
+                    "generation_status": "candidate_ready", "attempt_in_round": unit_attempt,
+                    "total_attempts": total_attempts, "latest_candidate_id": generated.candidate_id,
+                    "candidate_task_count": len(generated.tasks),
+                })
+                with self.assertRaises(ValidationError):
+                    sm.PlanningRun(
+                        planning_run_id="run-2", workflow_run_id="workflow-2", thread_id="thread-2",
+                        build_execution_scope={"type": "page", "targetId": "orders"},
+                        input_fingerprint="frozen-input", base_confirmed_plan_digest="confirmed-digest",
+                        required_unit_ids=(UNIT,), planning_unit_ids=(UNIT,),
+                        unit_states={UNIT: generated_unit}, candidates={generated.candidate_id: generated},
+                        started_at=AT, updated_at=AT,
+                    )
+
     def test_global_repair_supersedes_recovered_candidate_without_special_branch(self):
         """Global Repair 对 recovered 与 generated 使用同一 supersede/reopen 语义。"""
 
@@ -200,7 +229,8 @@ class PlanningRunTests(unittest.TestCase):
             "candidate_task_count": len(recovered.tasks),
         })
         generated_unit = unit(other).model_copy(update={
-            "generation_status": "candidate_ready", "latest_candidate_id": generated.candidate_id,
+            "generation_status": "candidate_ready", "attempt_in_round": 1, "total_attempts": 1,
+            "latest_candidate_id": generated.candidate_id,
             "candidate_task_count": len(generated.tasks),
         })
         state = sm.PlanningRun(

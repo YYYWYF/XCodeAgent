@@ -217,6 +217,15 @@ class PlanningRun(PlanningRunProjection):
                     key, unit.generation_round, unit.candidate_task_count,
                 ):
                     raise ValueError("当前 Candidate 必须匹配 Unit、轮次和任务数。")
+                # 只有 model/generated Candidate 消费当前 Run 的 model attempt；deterministic 的平台 Attempt 不占模型预算，recovered 也不伪造当前 Attempt。
+                if unit.generation_strategy == "model" and candidate.origin == "generated":
+                    generated_from = candidate.generated_from
+                    if (
+                        generated_from is None
+                        or unit.attempt_in_round <= 0
+                        or generated_from.attempt_in_round != unit.attempt_in_round
+                    ):
+                        raise ValueError("model Unit 的 generated Candidate 必须绑定当前轮真实发生的 model Attempt。")
                 current_ids.add(candidate.candidate_id)
         for key, candidate in self.candidates.items():
             if key != candidate.candidate_id or candidate.identity.planning_run_id != self.planning_run_id or candidate.identity.unit_id not in planning:
