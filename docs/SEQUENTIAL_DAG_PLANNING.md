@@ -153,7 +153,7 @@ FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Atte
 Recovery Snapshot；只有 `workflow_action=retry_failed_tasks` 且存在明确的
 `resumeExecutionRunId` 时，Task 3 才按该 source ID 精确加载并在新 PlanningRun 中尝试注入 Candidate。
 Recovery 缺失、损坏、摘要／输入／scope 不匹配或当前 Local Validator 不通过时，只禁用复用并回退 fresh
-generation；不能从 workspace/session/scope 猜测最近结果。Regenerate 永远不读取 Recovery，清理留给 Task 4。
+generation；不能从 workspace/session/scope 猜测最近结果。Regenerate 永远不读取 Recovery；Retry、End Plan、Session 删除和 Application 删除按下述 lifecycle 边界清理。
 
 ### Planning Recovery cleanup
 
@@ -176,7 +176,7 @@ Recovery 或 failed execution；只有本地 Session 删除成功后，才通过
 `cleanup_session_failed_executions` 按 `owner_session_id` 从 `active_executions` 移除
 failed Workflow executions、释放对应 resource locks，并 best-effort exact-delete 对应
 Recovery。必须先成功持久化 lifecycle，再删除 Recovery；Recovery 删除失败不回滚 lifecycle，
-后续由 stale Recovery GC 处理。Application 删除仍通过现有 workspace artifact cleanup
+残留可由保守 stale Recovery GC 维护工具处理，当前没有 production trigger。Application 删除仍通过现有 workspace artifact cleanup
 清理 `planning-recovery`；这些 cleanup 失败不改变原 lifecycle 操作结果。
 保守 GC 只接受可注入的年龄阈值，并且只有在当前 lifecycle 可读且不再登记该 exact failed
 execution 时才删除；无法确认是否还能 Retry 的 Recovery 保留。

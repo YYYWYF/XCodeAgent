@@ -11,6 +11,7 @@ from unittest.mock import patch
 from app.services import planning_run as transitions
 from app.services.build_task_planning_service import persist_planning_recovery_if_applicable
 from app.services.build_task_planning_service import run_mainline_planning
+from app.services.build_task_plan_lifecycle import confirm_pending_build_task_plan
 from app.services.dag_planning_inputs import MainlinePlanningInputs
 from app.services.dag_planning_regeneration import regenerate_pending_build_task_plan
 from app.services.dag_planning_orchestrator import DagPlanningError, plan_dag_sequential
@@ -559,6 +560,59 @@ class PlanningRecoveryMainlineCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r1"))
         self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r2"))
 
+    async def test_retry_chain_reads_only_direct_r2_source_even_if_r1_remains(self) -> None:
+        """R1 清理失败留下残留时，R3 仍只恢复 R2 的当前 Candidate。"""
+
+        self._write_source_recovery()
+        with patch(
+            "app.services.build_task_planning_service.delete_planning_recovery",
+            side_effect=OSError("source delete failed"),
+        ):
+            await self._run_retry_infrastructure_failure()
+        r2_snapshot = load_planning_recovery(self.state, "workflow-r2")
+        self.assertIsNotNone(r2_snapshot)
+        assert r2_snapshot is not None
+        self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r1"))
+
+        generated_units: list[str] = []
+
+        async def generate(job, **_: object) -> UnitGenerationAttemptResult:
+            """记录 R3 真正调用模型的 Unit，并返回有效 Candidate。"""
+
+            generated_units.append(job.identity.unit_id)
+            return await self._generate(job)
+
+        with patch(
+            "app.services.build_task_planning_service._new_planning_run_id",
+            return_value="planning-r3",
+        ), patch(
+            "app.services.build_task_planning_service.load_planning_recovery",
+            wraps=load_planning_recovery,
+        ) as loader:
+            result = await run_mainline_planning(
+                self._inputs(["page:a", "page:b"], "workflow-r3"),
+                workspace_state=self.state,
+                policy=self.policy,
+                generate_once=generate,
+                recovery_source_workflow_run_id="workflow-r2",
+            )
+        loader.assert_called_once_with(self.state, "workflow-r2")
+
+        current = result.validated_assembled_plan.planning_run
+        candidate = current.candidates[current.unit_states["page:a"].latest_candidate_id]
+        self.assertEqual(generated_units, ["page:b"])
+        self.assertEqual(candidate.origin, "recovered")
+        self.assertEqual(candidate.identity.planning_run_id, "planning-r3")
+        self.assertEqual(candidate.recovered_from.source_planning_run_id, "planning-r2")
+        self.assertEqual(
+            candidate.recovered_from.source_candidate_id,
+            r2_snapshot.candidates_by_unit["page:a"].candidate_id,
+        )
+        self.assertEqual((current.unit_states["page:a"].attempt_in_round, current.unit_states["page:a"].total_attempts), (0, 0))
+        self.assertIsNone(load_planning_recovery(self.state, "workflow-r2"))
+        self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r1"))
+        self.assertIsNotNone(load_pending_build_task_plan(self.state))
+
 
 class PlanningRecoveryGcTests(unittest.TestCase):
     """验证 Recovery GC 的年龄、lifecycle 和 exact ID 三重保守门禁。"""
@@ -1035,6 +1089,14 @@ class PlanningRecoveryRetryConsumptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(load_planning_run(self.state)["planning_run_id"], "planning-r2")
         # R2 已完成 Pending 持久化、自校验和结果 DTO 构造后，R1 source Recovery 必须收口。
         self.assertIsNone(load_planning_recovery(self.state, "workflow-r1"))
+        confirmed = confirm_pending_build_task_plan(
+            self.state,
+            planning_run_id=retry_result.draft_identity.planning_run_id,
+            draft_digest=retry_result.draft_identity.draft_digest,
+            current_inputs=retry_inputs.sequential_inputs(),
+        )
+        self.assertEqual(confirmed.status, "confirmed")
+        self.assertIsNone(load_pending_build_task_plan(self.state))
 
     async def test_corrupt_or_absent_recovery_is_fail_open_and_no_source_skips_loader(self) -> None:
         """损坏 Snapshot 只导致全量生成；普通调用没有 source ID 时根本不读 loader。"""

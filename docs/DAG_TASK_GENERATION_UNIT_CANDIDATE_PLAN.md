@@ -1389,7 +1389,7 @@ Task 2 只在最终 failed PlanningRun 的 `UNIT_GENERATION_INFRASTRUCTURE_FAILU
 `candidate_ready` Candidate 正文。Task 3 已实现：只有 `workflow_action=retry_failed_tasks` 且带明确
 `resumeExecutionRunId` 时才消费对应 Snapshot，并创建属于新 Run、保留直接 source provenance 的 recovered
 Candidate；禁止按 workspace/session/scope 猜测最近结果。Recovery 写入或读取失败不能覆盖原始 PlanningRun
-failure；Regenerate 仍只启动 fresh PlanningRun，Scheduler 保持 recovery-unaware，Task 4 仍负责 cleanup/GC。
+failure；Regenerate 仍只启动 fresh PlanningRun，Scheduler 保持 recovery-unaware。Retry、End Plan、Session 删除和 Application 删除的 cleanup 已由各自 lifecycle 入口实现；保守 GC 当前仅作为维护工具使用。
 Task 3 先创建新的 PlanningRun，再用当前正式输入、当前 baseline digest、当前 Build scope 和当前
 `UnitGenerationContext` 做 Snapshot/Unit gate；每个 source Candidate 必须重新通过当前 Local Validator。
 通过者通过独立的 `RecoveredCandidateAccepted` transition 进入当前 Run，得到新 `candidate_id`，不创建当前
@@ -2366,7 +2366,7 @@ Workflow execution 收口。Session 删除前的 `release_session_pending` 只�
 PlanningRun 收口；只有本地 Session 删除成功后，`cleanup_session_failed_executions` 才按
 `owner_session_id` 从 `active_executions` 移除 failed Workflow executions、释放对应
 resource locks，并 best-effort exact-delete 对应 Recovery。必须先成功持久化 lifecycle，再
-删除 Recovery；Recovery 删除失败不回滚 lifecycle，后续由 stale Recovery GC 处理。
+删除 Recovery；Recovery 删除失败不回滚 lifecycle，残留可由保守 stale Recovery GC 维护工具处理，当前没有 production trigger。
 Application 删除使用现有 workspace cleanup 入口；GC 需要可注入年龄阈值，且无法证明 exact
 failed execution 已不能通过 `resumeExecutionRunId` Retry 时保留文件。
 
