@@ -9,8 +9,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.agents.tool_activity_stream import ToolActivityCallback, invoke_agent_with_tool_activity
-from app.agents.code_analyze.scope import is_code_analyze_read_path
+from app.agents.code_analyze.scope import is_code_analyze_read_path, normalize_virtual_path
 from app.services.builtin_skills import FRONTEND_CODE_SCAN_SKILL_NAME, resolve_builtin_skills_root
+from app.services.development_review_files import current_review_file, reviewable_file_path
 from app.utils.model_output import extract_json_object
 
 
@@ -33,6 +34,8 @@ def analyze_workspace_code(
     workspace: str | None,
     *,
     on_tool_activity: ToolActivityCallback | None = None,
+    review_mode: str = "full",
+    review_files: list[str] | None = None,
 ) -> dict[str, Any]:
     """调用 CodeAnalyze Agent 并返回可投影的安全审查结果。"""
 
@@ -40,12 +43,39 @@ def analyze_workspace_code(
         raise ValueError("代码审查需要显式用户 workspaceRoot。")
     from app.agents import create_agent_bundle
 
-    prompt = _build_prompt(state)
+    selected_files = sorted(set(review_files or [])) if review_mode == "diff" else []
+    if review_mode == "diff" and not selected_files:
+        raise ValueError("Diff 审查没有可读取的开发阶段变动文件。")
+    if review_mode == "diff" and any(
+        reviewable_file_path(path) != path or not current_review_file(workspace, path)
+        for path in selected_files
+    ):
+        raise ValueError("Diff 审查文件清单包含不可读取的路径。")
+    prompt = _build_prompt(state, review_mode=review_mode, review_files=selected_files)
+    if review_mode == "diff":
+        from app.agents.code_analyze.agent import create_code_analyze_agent
+        from app.agents.model_factory import create_chat_model
+        from app.config import Settings
+
+        readable_files = set(selected_files)
+        if readable_files.intersection({"frontend/package.json", "frontend/pnpm-lock.yaml"}):
+            for companion in ("frontend/package.json", "frontend/pnpm-lock.yaml"):
+                if current_review_file(workspace, companion):
+                    readable_files.add(companion)
+        agent = create_code_analyze_agent(
+            create_chat_model(Settings.from_env()),
+            workspace_root=workspace,
+            allowed_files=frozenset(readable_files),
+        )
+    else:
+        agent = create_agent_bundle(workspace).code_analyze
     last_error: Exception | None = None
     raw: Any = None
     observed_skill_reads: set[str] = set()
+    observed_source_reads: set[str] = set()
     for attempt in range(2):
         current_skill_reads: set[str] = set()
+        current_source_reads: set[str] = set()
 
         def observe(activity: dict[str, Any]) -> None:
             """记录本次尝试的必需 Skill 读取，并转发非敏感工具活动。"""
@@ -53,20 +83,24 @@ def analyze_workspace_code(
             if (
                 activity.get("tool") == "read_file"
                 and activity.get("status") == "completed"
-                and str(activity.get("path") or "") in REQUIRED_SKILL_PATHS
             ):
-                current_skill_reads.add(str(activity["path"]))
+                path = str(activity.get("path") or "")
+                if path in REQUIRED_SKILL_PATHS:
+                    current_skill_reads.add(path)
+                if review_mode == "diff":
+                    current_source_reads.add(normalize_virtual_path(path))
             if on_tool_activity:
                 on_tool_activity(activity)
 
         try:
             raw = invoke_agent_with_tool_activity(
-                create_agent_bundle(workspace).code_analyze,
+                agent,
                 {"messages": [{"role": "user", "content": prompt}]},
                 workspace=workspace,
                 on_tool_activity=observe,
             )
             observed_skill_reads = current_skill_reads
+            observed_source_reads = current_source_reads
             break
         except Exception as exc:  # noqa: BLE001 - 仅 Agent 执行异常允许一次受控重试
             last_error = exc
@@ -77,16 +111,36 @@ def analyze_workspace_code(
     try:
         if not REQUIRED_SKILL_PATHS <= observed_skill_reads:
             raise ValueError("CodeAnalyze Agent 未读取完整的前后端扫描 Skill 和规则引用。")
+        if review_mode == "diff" and not set(selected_files) <= observed_source_reads:
+            raise ValueError("CodeAnalyze Agent 未读取全部开发阶段变动文件。")
         payload = extract_json_object(raw if isinstance(raw, str) else "")
         if not isinstance(payload, dict):
             raise ValueError("CodeAnalyze Agent 返回的审查结果不是合法 JSON。")
-        return normalize_code_review_result(payload, workspace=workspace)
+        result = normalize_code_review_result(
+            payload,
+            workspace=workspace,
+            allowed_issue_paths=set(selected_files) if review_mode == "diff" else None,
+        )
+        if review_mode == "diff":
+            result["review_mode"] = "diff"
+            result["review_file_count"] = len(selected_files)
+            result["summary"] = f"Diff 审查完成，读取 {len(selected_files)} 个变动文件，发现 {result['issue_count']} 个问题。"
+            for target in result["targets"]:
+                side = target["side"]
+                target["scanned_file_count"] = sum(
+                    path.startswith("frontend/" if side == "frontend" else "backend/src/main/java/")
+                    for path in selected_files
+                )
+        else:
+            result["review_mode"] = "full"
+        return result
     except Exception as exc:  # noqa: BLE001 - 节点统一投影安全错误摘要
         raise ValueError(f"CodeAnalyze Agent 审查失败：{exc}") from exc
 
 
 def normalize_code_review_result(
-    payload: dict[str, Any], *, workspace: str | None = None
+    payload: dict[str, Any], *, workspace: str | None = None,
+    allowed_issue_paths: set[str] | None = None,
 ) -> dict[str, Any]:
     """校验 Agent 输出、裁剪敏感字段并限制问题数量。"""
 
@@ -119,6 +173,7 @@ def normalize_code_review_result(
             side not in {"frontend", "backend"}
             or not file_path.startswith(expected_prefix)
             or not is_code_analyze_read_path(file_path)
+            or (allowed_issue_paths is not None and file_path not in allowed_issue_paths)
         ):
             continue
         severity = str(raw.get("severity") or "medium").strip().lower()
@@ -210,12 +265,14 @@ def normalize_code_review_result(
     }
 
 
-def _build_prompt(state: dict[str, Any]) -> str:
+def _build_prompt(
+    state: dict[str, Any], *, review_mode: str = "full", review_files: list[str] | None = None
+) -> str:
     """构造只包含目标和当前工作区边界的审查提示。"""
 
     target = state.get("build_execution_scope")
     target = target if isinstance(target, dict) else {}
-    return (
+    base = (
         "开始审查前后端代码。严格先读取两个扫描 Skill 和后端规则引用。\n"
         "允许的最大范围为 frontend/**（必须排除所有 node_modules 和敏感文件）与 "
         "backend/src/main/java/**；其他用户目录禁止读取。\n"
@@ -229,6 +286,16 @@ def _build_prompt(state: dict[str, Any]) -> str:
         "不得把 status 写成 failed、issues_found 或 non_compliant。\n"
         "targets 必须为数组，每项使用 side、root、status、scanned_file_count 和可选 warning。\n"
         "只返回约定 JSON，不修改任何文件。"
+    )
+    if review_mode != "diff":
+        return base
+    return (
+        base
+        + "\n本次是 Diff 文件审查。仍须先读取相同的前后端 Skill 和后端规则引用。"
+        "只读取并审查下列变动文件的当前完整内容，不限制到具体 Diff 行；"
+        "如果依赖文件只变动一个，可额外读取另一个作为判断依据，但问题位置仅限变动文件。"
+        "不要列举或搜索其他源码文件。必须逐个读取全部变动文件：\n"
+        + "\n".join(f"- /{path}" for path in review_files or [])
     )
 
 
@@ -375,7 +442,7 @@ def _normalize_loaded_skills(value: Any) -> list[str]:
             raise ValueError("审查结果包含未授权的扫描 Skill。")
 
         name_from_path = _skill_name_from_declaration(declared_path) if declared_path else None
-        if declared_name in {"backend-code-scan/rules-reference", "rules-reference"}:
+        if declared_name and _is_authorized_rules_reference_alias(declared_name):
             if not declared_path or name_from_path is not None:
                 raise ValueError("审查结果包含未授权的扫描 Skill。")
             continue

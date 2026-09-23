@@ -534,7 +534,7 @@ testing.START
 
 ### `code_review` / Code Review Subgraph
 
-测试质量门禁通过后，主 Graph 先停在 `review_phase_confirmation`；确认后进入审查阶段。
+测试质量门禁通过后，主 Graph 先停在 `review_phase_confirmation`；确认卡并排提供全量审查和 Diff 审查，提交 `reviewMode=full|diff`。开发结束的 `test_phase_confirmation` 从最终 `code_changes` 固定可读变动文件清单；测试阶段修复不追加到该清单，跨阶段只从服务端 checkpoint 传递。全量审查沿用原扫描逻辑；Diff 审查读取清单中文件的当前完整内容，不限于变动行。依赖文件只变动一个时可读取另一文件辅助判断，但只报告变动文件的问题。两种模式都必须实际读取相同的前后端 Skill 和后端规则引用；无可审查文件时禁用 Diff 入口，不自动转全量。报告标明模式、实际扫描数与跳过数。
 `code_review` 对外仍是一个节点，对内运行以下受控子图：
 
 ```text

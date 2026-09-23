@@ -1018,7 +1018,7 @@ class WorkflowRequestTests(unittest.TestCase):
             {
                 "request": "开始审查前后端代码",
                 "clarificationAnswers": {
-                    "review_phase_confirmation": {"action": "confirm"}
+                    "review_phase_confirmation": {"action": "confirm", "reviewMode": "diff"}
                 },
                 "resumeState": {
                     "summary": {
@@ -1032,7 +1032,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_from"], "review_phase_confirmation")
         self.assertEqual(
             inputs["resume_values"]["review_phase_confirmation"],
-            {"mode": "review_phase_confirmation", "action": "confirm"},
+            {"mode": "review_phase_confirmation", "action": "confirm", "reviewMode": "diff"},
         )
 
     def test_review_phase_confirmation_rejects_non_confirm_action(self) -> None:
@@ -1047,6 +1047,30 @@ class WorkflowRequestTests(unittest.TestCase):
                     },
                 }
             )
+
+    def test_review_phase_confirmation_requires_supported_mode(self) -> None:
+        """审查模式必须由按钮明确提交，不能由请求文本猜测。"""
+
+        for mode in (None, "other"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "reviewMode"):
+                workflow_run_inputs({
+                    "request": "开始审查",
+                    "clarificationAnswers": {
+                        "review_phase_confirmation": {"action": "confirm", "reviewMode": mode}
+                    },
+                })
+
+    def test_review_phase_confirmation_accepts_full_mode(self) -> None:
+        """全量按钮沿用原确认节点，只增加显式模式。"""
+
+        inputs = workflow_run_inputs({
+            "request": "开始全量审查",
+            "clarificationAnswers": {
+                "review_phase_confirmation": {"action": "confirm", "reviewMode": "full"}
+            },
+        })
+        self.assertEqual(inputs["resume_from"], "review_phase_confirmation")
+        self.assertEqual(inputs["resume_values"]["review_phase_confirmation"]["reviewMode"], "full")
 
     def test_acceptance_phase_confirmation_is_forwarded_as_structured_resume(self) -> None:
         """进入验收按钮必须恢复验收确认节点并保留 confirm 动作。"""

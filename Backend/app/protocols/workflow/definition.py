@@ -133,7 +133,7 @@ def workflow_capabilities() -> dict[str, Any]:
                     "确认后恢复 test_phase_confirmation 并进入 integration_test。"
                 ),
                 "review_phase_confirmation": (
-                    "通过 clarificationAnswers.review_phase_confirmation 提交结构化 confirm 动作；"
+                    "通过 clarificationAnswers.review_phase_confirmation 提交 confirm 与 full/diff 审查模式；"
                     "确认后恢复 review_phase_confirmation 并进入 code_review。"
                 ),
                 "code_review_repair_confirmation": (
@@ -255,7 +255,7 @@ def workflow_capabilities() -> dict[str, Any]:
             },
             "review_phase_confirmation": {
                 "answerField": "clarificationAnswers.review_phase_confirmation",
-                "answer": {"action": "confirm"},
+                "answer": {"action": "confirm", "reviewMode": "full|diff"},
                 "lifecycleInteraction": "review_phase_confirmation",
             },
             "code_review_repair_confirmation": {

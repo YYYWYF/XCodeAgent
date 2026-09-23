@@ -1669,8 +1669,13 @@ export function useWorkflowConversation({
         answer && typeof answer === 'object' && !Array.isArray(answer)
           ? String((answer as Record<string, unknown>).action || '')
           : ''
+      const reviewMode =
+        answer && typeof answer === 'object' && !Array.isArray(answer)
+          ? String((answer as Record<string, unknown>).reviewMode || '')
+          : ''
       if (
         action !== 'confirm' ||
+        !['full', 'diff'].includes(reviewMode) ||
         loading ||
         workspaceBusy ||
         reviewPhaseTransitionRunIdsRef.current.has(workflow.runId)
@@ -1697,16 +1702,19 @@ export function useWorkflowConversation({
       }
       // 会话创建成功后立即切换顶部阶段，避免等待审查 Agent 首帧造成视觉滞后。
       onEnterReviewPhase()
-      const started = await sendWorkflowMessage('开始审查前后端代码', {
-        clarificationAnswers: answers,
-        originalRequest,
-        resumeState: workflow,
-        buildExecutionScope: workflowBuildScope,
-        resumeExecutionRunId: workflow.runId,
-        sessionIdentity: reviewSession,
-        titleFrom: '进入审查阶段',
-        conversation: false
-      })
+      const started = await sendWorkflowMessage(
+        reviewMode === 'diff' ? '开始 Diff 审查' : '开始全量审查',
+        {
+          clarificationAnswers: answers,
+          originalRequest,
+          resumeState: workflow,
+          buildExecutionScope: workflowBuildScope,
+          resumeExecutionRunId: workflow.runId,
+          sessionIdentity: reviewSession,
+          titleFrom: '进入审查阶段',
+          conversation: false
+        }
+      )
       if (!started) reviewPhaseTransitionRunIdsRef.current.delete(workflow.runId)
       return started
     }

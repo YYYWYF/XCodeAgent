@@ -45,6 +45,8 @@ For small local edits that do not change structure or ownership, leave the index
 
 ## Backend
 
+- 审查模式：`services/development_review_files.py` 在开发结束时生成安全的 Diff 文件清单；`graph/nodes/lifecycle.py` 将其固定在 checkpoint，`protocols/workflow/runtime.py` 在阶段会话交接时从上一会话 checkpoint 传递。`agents/code_analyze/{agent,scope,analyzer}.py` 在 Diff 模式下限制只读工具到这些文件与三个必需 Skill 文件；全量模式沿用原路径。入口与报告分别见 `Frontend/src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ReviewPhaseConfirmationCard.tsx` 和 `workspace/code_review_documents.py`。
+
 ### Initial development completion and test entry
 
 - Initial development registration and continuation phases use the current `api_design_readiness_gate` entry. A retained confirmed API mapping may occupy `WorkflowRunCard` only at that gate; downstream unit-test confirmation must render its skip/run actions. Build completion alone never increments the lifecycle completion count: `test_phase_confirmation` requires the unit-test gate to pass or be explicitly skipped first.

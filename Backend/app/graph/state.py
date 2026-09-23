@@ -153,6 +153,8 @@ class ProjectState(TypedDict, total=False):
     test_target: dict[str, Any]
     test_phase_confirmation: dict[str, Any]
     review_phase_confirmation: dict[str, Any]
+    development_review_files: list[str]
+    code_review_mode: str
     code_review_result: dict[str, Any]
     code_review_retry: dict[str, Any]
     code_review_report_path: str

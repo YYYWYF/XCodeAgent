@@ -6,6 +6,7 @@ from app.graph.state import ProjectState
 from app.graph.subgraphs.acceptance import run_acceptance_subgraph
 from app.services.build_scheduler import summarize_build_runtime
 from app.services.development_artifacts import complete_initial_development, test_entry_gate
+from app.services.development_review_files import development_review_files
 from app.services.project_launcher import launch_project_preview
 from app.workspace.spec_documents import workspace_root
 
@@ -306,11 +307,15 @@ def test_phase_confirmation(state: ProjectState) -> dict:
         workspace_root(state), run_id=str(state.get("active_run_id") or ""),
     )
     gate = test_entry_gate(lifecycle)
+    review_files = state.get("development_review_files")
+    if not isinstance(review_files, list):
+        review_files = development_review_files(state.get("code_changes"), workspace_root(state))
     submission = state.get("test_phase_confirmation")
     confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
     if confirmed and gate.allowed:
         return {
             "test_phase_confirmation": {},
+            "development_review_files": review_files,
             "phase": "test_phase_confirmation",
             "status": "completed",
             "build_summary": build_summary,
@@ -326,6 +331,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
         }
     return {
         "phase": "test_phase_confirmation",
+        "development_review_files": review_files,
         "status": "requires_user_input",
         "test_phase_confirmation": {},
         "build_summary": build_summary,

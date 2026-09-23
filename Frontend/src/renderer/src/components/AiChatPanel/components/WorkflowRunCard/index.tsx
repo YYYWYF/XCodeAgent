@@ -565,10 +565,12 @@ export default function WorkflowRunCard({
           ) : reviewPhaseConfirmation && requiresConfirmation ? (
             <ReviewPhaseConfirmationCard
               disabled={disabled || interactionAvailability !== 'active'}
-              onSubmit={() =>
+              diffFileCount={Number(clarification?.diffReviewFileCount || 0)}
+              onSubmit={(reviewMode) =>
                 onSubmitClarification?.(workflow, {
                   review_phase_confirmation: {
-                    action: 'confirm'
+                    action: 'confirm',
+                    reviewMode
                   }
                 })
               }

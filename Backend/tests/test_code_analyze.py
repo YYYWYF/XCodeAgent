@@ -44,6 +44,26 @@ class CodeAnalyzeTests(unittest.TestCase):
         )
         self.assertEqual(scoped.write("frontend/src/App.tsx", "x").error, "code_analyze_write_denied")
 
+    def test_diff_scope_reads_only_changed_files_and_skills(self) -> None:
+        """Diff 模式的工具边界拒绝未变动文件与目录搜索。"""
+
+        delegate = SimpleNamespace(
+            read=lambda *_args: ReadResult(error=None),
+            ls=lambda *_args: LsResult(entries=[]),
+            glob=lambda *_args: GlobResult(matches=[]),
+        )
+        scoped = CodeAnalyzeScopedBackend(
+            delegate,
+            allowed_files=frozenset({"backend/src/main/java/App.java"}),
+        )
+        self.assertIsNone(scoped.read("backend/src/main/java/App.java").error)
+        self.assertIsNone(
+            scoped.read("/.devagentstudio/builtin-skills/backend-code-scan/SKILL.md").error
+        )
+        self.assertIn("denied", scoped.read("backend/src/main/java/Other.java").error or "")
+        self.assertIn("denied", scoped.ls("backend/src/main/java").error or "")
+        self.assertIn("denied", scoped.glob("backend/src/main/java/**/*.java").error or "")
+
     def test_scope_filters_recursive_frontend_list_results(self) -> None:
         """委托文件后端递归返回的依赖目录和敏感文件也不能暴露给扫描 Agent。"""
 
@@ -361,6 +381,57 @@ class CodeAnalyzeTests(unittest.TestCase):
         self.assertEqual(result["targets"][1]["scanned_file_count"], 17)
         self.assertEqual(result["issues"], [])
 
+    def test_normalizer_accepts_canonical_rules_reference_name_from_checkpoint(self) -> None:
+        """规则文件以完整相对路径作为名称时仍属于授权的后端 Skill 引用。"""
+
+        result = normalize_code_review_result(
+            {
+                "status": "completed",
+                "loaded_skills": [
+                    {
+                        "name": "frontend-code-scan",
+                        "path": "/.devagentstudio/builtin-skills/frontend-code-scan/SKILL.md",
+                        "status": "loaded",
+                    },
+                    {
+                        "name": "backend-code-scan",
+                        "path": "/.devagentstudio/builtin-skills/backend-code-scan/SKILL.md",
+                        "status": "loaded",
+                    },
+                    {
+                        "name": "backend-code-scan/references/rules-reference.md",
+                        "path": "/.devagentstudio/builtin-skills/backend-code-scan/references/rules-reference.md",
+                        "status": "loaded",
+                    },
+                ],
+                "issues": [],
+            }
+        )
+
+        self.assertEqual(
+            result["loaded_skills"],
+            ["backend-code-scan", "frontend-code-scan"],
+        )
+
+    def test_normalizer_rejects_rules_reference_name_with_other_path(self) -> None:
+        """授权规则名称不能为其他文件路径背书。"""
+
+        with self.assertRaisesRegex(ValueError, "未授权的扫描 Skill"):
+            normalize_code_review_result(
+                {
+                    "status": "completed",
+                    "loaded_skills": [
+                        "frontend-code-scan",
+                        "backend-code-scan",
+                        {
+                            "name": "backend-code-scan/references/rules-reference.md",
+                            "path": "/.devagentstudio/builtin-skills/backend-code-scan/references/other.md",
+                        },
+                    ],
+                    "issues": [],
+                }
+            )
+
     def test_normalizer_rejects_unapproved_nested_skill_reference(self) -> None:
         """Skill 对象中的嵌套规则引用仍须通过精确文件白名单。"""
 
@@ -515,6 +586,121 @@ class CodeAnalyzeTests(unittest.TestCase):
             analyze_workspace_code({}, "/tmp/workspace")
 
         self.assertEqual(invoke_mock.call_count, 1)
+
+    def test_diff_scan_reads_same_skills_and_filters_companion_issue(self) -> None:
+        """依赖配对文件只提供判断上下文，未变动文件上的问题不能进入结果。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            frontend = Path(workspace) / "frontend"
+            frontend.mkdir()
+            (frontend / "package.json").write_text("{}", encoding="utf-8")
+            (frontend / "pnpm-lock.yaml").write_text("lockfileVersion: 9", encoding="utf-8")
+            activities = [
+                {"tool": "read_file", "status": "completed", "path": path}
+                for path in REQUIRED_SKILL_PATHS
+            ] + [
+                {"tool": "read_file", "status": "completed", "path": "/frontend/package.json"}
+            ]
+
+            def invoke_once(*_args, on_tool_activity=None, **_kwargs):
+                """模拟完整 Skill 与变动文件读取后的两个前端问题。"""
+
+                for activity in activities:
+                    on_tool_activity(activity)
+                return json.dumps({
+                    "status": "completed",
+                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                    "targets": [{"side": "frontend", "root": "frontend"}],
+                    "issues": [
+                        {"side": "frontend", "file": "frontend/package.json", "title": "变动依赖风险"},
+                        {"side": "frontend", "file": "frontend/pnpm-lock.yaml", "title": "旧锁文件风险"},
+                    ],
+                })
+
+            with patch(
+                "app.agents.code_analyze.agent.create_code_analyze_agent",
+                return_value=object(),
+            ) as create_agent, patch(
+                "app.agents.model_factory.create_chat_model",
+                return_value=object(),
+            ), patch(
+                "app.agents.code_analyze.analyzer.invoke_agent_with_tool_activity",
+                side_effect=invoke_once,
+            ):
+                result = analyze_workspace_code(
+                    {}, workspace, review_mode="diff", review_files=["frontend/package.json"]
+                )
+
+            self.assertEqual(result["review_mode"], "diff")
+            self.assertEqual(result["issue_count"], 1)
+            self.assertEqual(result["issues"][0]["file"], "frontend/package.json")
+            self.assertEqual(
+                create_agent.call_args.kwargs["allowed_files"],
+                frozenset({"frontend/package.json", "frontend/pnpm-lock.yaml"}),
+            )
+
+    def test_diff_scan_requires_each_source_read(self) -> None:
+        """模型声明完成却没读取变动文件时审查不得通过。"""
+
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.agents.code_analyze.agent.create_code_analyze_agent",
+            return_value=object(),
+        ), patch(
+            "app.agents.model_factory.create_chat_model",
+            return_value=object(),
+        ), patch(
+            "app.agents.code_analyze.analyzer.invoke_agent_with_tool_activity",
+        ) as invoke_mock:
+            source = Path(workspace) / "backend/src/main/java/App.java"
+            source.parent.mkdir(parents=True)
+            source.write_text("class App {}", encoding="utf-8")
+
+            def invoke_once(*_args, on_tool_activity=None, **_kwargs):
+                """只读取 Skill，不读取要求审查的源码。"""
+
+                for path in REQUIRED_SKILL_PATHS:
+                    on_tool_activity({"tool": "read_file", "status": "completed", "path": path})
+                return json.dumps({"status": "completed", "loaded_skills": ["frontend-code-scan", "backend-code-scan"], "targets": [], "issues": []})
+
+            invoke_mock.side_effect = invoke_once
+            with self.assertRaisesRegex(ValueError, "未读取全部开发阶段变动文件"):
+                analyze_workspace_code(
+                    {}, workspace, review_mode="diff", review_files=["backend/src/main/java/App.java"]
+                )
+
+    def test_diff_scan_requires_same_skill_reads_as_full(self) -> None:
+        """只读取前后端 Skill 标题而漏掉后端规则引用不能通过审查。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            source = Path(workspace) / "backend/src/main/java/App.java"
+            source.parent.mkdir(parents=True)
+            source.write_text("class App {}", encoding="utf-8")
+
+            def invoke_once(*_args, on_tool_activity=None, **_kwargs):
+                """故意省略三个必需文件中的后端规则引用。"""
+
+                for path in [
+                    "/.devagentstudio/builtin-skills/frontend-code-scan/SKILL.md",
+                    "/.devagentstudio/builtin-skills/backend-code-scan/SKILL.md",
+                    "/backend/src/main/java/App.java",
+                ]:
+                    on_tool_activity({"tool": "read_file", "status": "completed", "path": path})
+                return json.dumps({"status": "completed", "loaded_skills": ["frontend-code-scan", "backend-code-scan"], "targets": [], "issues": []})
+
+            with patch(
+                "app.agents.code_analyze.agent.create_code_analyze_agent",
+                return_value=object(),
+            ), patch(
+                "app.agents.model_factory.create_chat_model",
+                return_value=object(),
+            ), patch(
+                "app.agents.code_analyze.analyzer.invoke_agent_with_tool_activity",
+                side_effect=invoke_once,
+            ):
+                with self.assertRaisesRegex(ValueError, "未读取完整的前后端扫描 Skill"):
+                    analyze_workspace_code(
+                        {}, workspace, review_mode="diff", review_files=["backend/src/main/java/App.java"]
+                    )
 
     def test_normalizer_accepts_safe_workspace_path_variants(self) -> None:
         """虚拟根路径、点前缀和真实工作区内绝对路径应统一为安全相对路径。"""

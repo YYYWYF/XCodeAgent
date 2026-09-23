@@ -2242,7 +2242,7 @@ def _test_phase_confirmation_submission(value: Any) -> dict[str, str]:
 
 
 def _review_phase_confirmation_submission(value: Any) -> dict[str, str]:
-    """提取审查阶段进入确认动作，拒绝自然语言或未知动作。"""
+    """提取审查阶段确认及扫描模式，拒绝未知模式。"""
 
     if not isinstance(value, dict):
         return {}
@@ -2254,7 +2254,10 @@ def _review_phase_confirmation_submission(value: Any) -> dict[str, str]:
     action = _optional_text(answer.get("action")).lower()
     if action != "confirm":
         raise ValueError("review_phase_confirmation.action 只支持 confirm。")
-    return {"mode": "review_phase_confirmation", "action": "confirm"}
+    review_mode = _optional_text(answer.get("reviewMode")).lower()
+    if review_mode not in {"full", "diff"}:
+        raise ValueError("review_phase_confirmation.reviewMode 只支持 full 或 diff。")
+    return {"mode": "review_phase_confirmation", "action": "confirm", "reviewMode": review_mode}
 
 
 def _acceptance_phase_confirmation_submission(value: Any) -> dict[str, str]:

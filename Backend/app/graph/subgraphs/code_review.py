@@ -14,6 +14,7 @@ from app.agents.code_review_repair import (
     normalize_code_review_repair_result,
 )
 from app.agents.code_analyze.scope import is_code_review_change_path
+from app.services.development_review_files import current_review_file
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.services.project_launcher import run_project_restart_validation
@@ -213,6 +214,25 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
     """调用只读审查 Agent，并在发现问题时暂停等待一键修复。"""
 
     workspace = workspace_from_state(state)
+    review_mode = state.get("code_review_mode") or "full"
+    source_files = state.get("development_review_files")
+    source_files = sorted({path for path in source_files if isinstance(path, str)}) if isinstance(source_files, list) else []
+    review_files = (
+        sorted({path for path in source_files if current_review_file(workspace or "", path)})
+        if review_mode == "diff" else []
+    )
+    skipped_paths = [path for path in source_files if path not in review_files] if review_mode == "diff" else []
+    skipped_files = len(skipped_paths)
+    if review_mode == "diff" and not review_files:
+        return {
+            "phase": "code_review",
+            "status": "failed",
+            "message": "开发阶段变动文件已不存在或不可读取，无法进行 Diff 审查。",
+            "error": "请返回审查入口选择全量审查。",
+            "code_review_retry": {},
+            "code_review_next_action": "handle_failure",
+            "timeline": ["code_review", "code_scan"],
+        }
     writer = _writer()
     writer({"type": "code_review.scan", "status": "running"})
     last_current_file = ""
@@ -239,7 +259,18 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
             state,
             workspace,
             on_tool_activity=report_tool_activity,
+            **({"review_mode": "diff", "review_files": review_files} if review_mode == "diff" else {}),
         )
+        if review_mode == "diff" and skipped_files:
+            result["skipped_file_count"] = skipped_files
+            for target in result.get("targets", []):
+                if isinstance(target, dict):
+                    prefix = "frontend/" if target.get("side") == "frontend" else "backend/src/main/java/"
+                    side_skipped = sum(path.startswith(prefix) for path in skipped_paths)
+                    if side_skipped:
+                        target["warning"] = (
+                            f"开发 Diff 中有 {side_skipped} 个文件已删除、缺失或不可读取，已跳过。"
+                        )
     except Exception as exc:  # noqa: BLE001 - 子图边界统一转换为失败状态
         return {
             "phase": "code_review",

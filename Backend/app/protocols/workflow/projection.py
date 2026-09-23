@@ -150,6 +150,9 @@ def _workflow_code_review_result(
             issues.append(issue)
     result = {
         "status": value.get("status", "completed"),
+        "reviewMode": value.get("review_mode", "full"),
+        "reviewFileCount": value.get("review_file_count", 0),
+        "skippedFileCount": value.get("skipped_file_count", 0),
         "summary": value.get("summary", ""),
         "issueCount": value.get("issue_count", value.get("issueCount", len(issues))),
         "truncated": bool(value.get("truncated")),
@@ -613,6 +616,7 @@ def _public_workflow_state(
             "code_review_max_repair_iterations",
             "code_review_next_action",
             "code_review_report_path",
+            "development_review_files",
             "test_report_path",
             "test_report_json_path",
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。

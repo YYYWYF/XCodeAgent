@@ -37,37 +37,62 @@ _SKILL_LIST_ROOTS = {
 class CodeAnalyzeScopedBackend(BackendProtocol):
     """在默认文件后端外增加代码审查的精确读边界。"""
 
-    def __init__(self, delegate: BackendProtocol):
+    def __init__(self, delegate: BackendProtocol, allowed_files: frozenset[str] | None = None):
         """保存默认后端，并在每个文件工具入口执行审查范围校验。"""
 
         self._delegate = delegate
+        self._allowed_files = allowed_files
+
+    def _read_allowed(self, path: str) -> bool:
+        """Diff 模式将原有只读边界进一步收窄到变动文件和必需 Skill。"""
+
+        normalized = normalize_virtual_path(path)
+        return _is_read_path(path) and (
+            self._allowed_files is None
+            or normalized in self._allowed_files
+            or normalized in _SKILL_FILES
+        )
+
+    def _list_allowed(self, path: str) -> bool:
+        """Diff 模式只允许列出 Skill 目录，文件路径由服务端清单给出。"""
+
+        return _is_list_path(path) and (
+            self._allowed_files is None or normalize_virtual_path(path) in _SKILL_LIST_ROOTS
+        )
+
+    def _search_allowed(self, path: str | None) -> bool:
+        """Diff 模式仅允许对清单中的单个文件执行搜索。"""
+
+        return _is_code_path(path) and (
+            self._allowed_files is None or normalize_virtual_path(path) in self._allowed_files
+        )
 
     def ls(self, path: str) -> LsResult:
         """仅允许浏览源码目录及内置 Skill 目录。"""
 
-        return _filter_ls_result(self._delegate.ls(path)) if _is_list_path(path) else LsResult(error=_denied(path))
+        return _filter_ls_result(self._delegate.ls(path)) if self._list_allowed(path) else LsResult(error=_denied(path))
 
     async def als(self, path: str) -> LsResult:
         """异步仅允许浏览源码目录及内置 Skill 目录。"""
 
-        return _filter_ls_result(await self._delegate.als(path)) if _is_list_path(path) else LsResult(error=_denied(path))
+        return _filter_ls_result(await self._delegate.als(path)) if self._list_allowed(path) else LsResult(error=_denied(path))
 
     def ls_info(self, path: str) -> list[FileInfo]:
         """仅允许读取源码和内置 Skill 目录的元数据。"""
 
-        return _filter_file_infos(self._delegate.ls_info(path)) if _is_list_path(path) else []
+        return _filter_file_infos(self._delegate.ls_info(path)) if self._list_allowed(path) else []
 
     async def als_info(self, path: str) -> list[FileInfo]:
         """异步仅允许读取源码和内置 Skill 目录的元数据。"""
 
-        return _filter_file_infos(await self._delegate.als_info(path)) if _is_list_path(path) else []
+        return _filter_file_infos(await self._delegate.als_info(path)) if self._list_allowed(path) else []
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2_000) -> ReadResult:
         """仅允许读取两端源码和三个必需 Skill 文件。"""
 
         return (
             self._delegate.read(file_path, offset, limit)
-            if _is_read_path(file_path)
+            if self._read_allowed(file_path)
             else ReadResult(error=_denied(file_path))
         )
 
@@ -76,7 +101,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
 
         return (
             await self._delegate.aread(file_path, offset, limit)
-            if _is_read_path(file_path)
+            if self._read_allowed(file_path)
             else ReadResult(error=_denied(file_path))
         )
 
@@ -90,7 +115,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
 
         return (
             _filter_grep_result(self._delegate.grep(pattern, path, glob))
-            if _is_code_path(path)
+            if self._search_allowed(path)
             else GrepResult(error=_denied(path or "workspace"))
         )
 
@@ -104,7 +129,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
 
         return (
             _filter_grep_result(await self._delegate.agrep(pattern, path, glob))
-            if _is_code_path(path)
+            if self._search_allowed(path)
             else GrepResult(error=_denied(path or "workspace"))
         )
 
@@ -116,7 +141,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
     ) -> list[Any] | str:
         """禁止无路径原始搜索，只允许在两个源码根目录内搜索。"""
 
-        return _filter_raw_matches(self._delegate.grep_raw(pattern, path, glob)) if _is_code_path(path) else _denied(path)
+        return _filter_raw_matches(self._delegate.grep_raw(pattern, path, glob)) if self._search_allowed(path) else _denied(path)
 
     async def agrep_raw(
         self,
@@ -128,7 +153,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
 
         return (
             _filter_raw_matches(await self._delegate.agrep_raw(pattern, path, glob))
-            if _is_code_path(path)
+            if self._search_allowed(path)
             else _denied(path)
         )
 
@@ -137,7 +162,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
 
         return (
             _filter_glob_result(self._delegate.glob(pattern, path))
-            if _is_code_path(path) or (path is None and _is_code_pattern(pattern))
+            if self._allowed_files is None and (_is_code_path(path) or (path is None and _is_code_pattern(pattern)))
             else GlobResult(error=_denied(path or "workspace"))
         )
 
@@ -146,7 +171,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
 
         return (
             _filter_glob_result(await self._delegate.aglob(pattern, path))
-            if _is_code_path(path) or (path is None and _is_code_pattern(pattern))
+            if self._allowed_files is None and (_is_code_path(path) or (path is None and _is_code_pattern(pattern)))
             else GlobResult(error=_denied(path or "workspace"))
         )
 
@@ -155,7 +180,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
 
         return (
             _filter_file_infos(self._delegate.glob_info(pattern, path))
-            if _is_code_path(path) or (path == "/" and _is_code_pattern(pattern))
+            if self._allowed_files is None and (_is_code_path(path) or (path == "/" and _is_code_pattern(pattern)))
             else []
         )
 
@@ -164,7 +189,7 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
 
         return (
             _filter_file_infos(await self._delegate.aglob_info(pattern, path))
-            if _is_code_path(path) or (path == "/" and _is_code_pattern(pattern))
+            if self._allowed_files is None and (_is_code_path(path) or (path == "/" and _is_code_pattern(pattern)))
             else []
         )
 
@@ -213,11 +238,11 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """仅允许批量读取两个源码目录或必需 Skill 文件。"""
 
-        if any(not _is_read_path(path) for path in paths):
+        if any(not self._read_allowed(path) for path in paths):
             return [
                 FileDownloadResponse(
                     path=path,
-                    error=None if _is_read_path(path) else _denied(path),
+                    error=None if self._read_allowed(path) else _denied(path),
                 )
                 for path in paths
             ]
@@ -226,11 +251,11 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """异步仅允许批量读取两个源码目录或必需 Skill 文件。"""
 
-        if any(not _is_read_path(path) for path in paths):
+        if any(not self._read_allowed(path) for path in paths):
             return [
                 FileDownloadResponse(
                     path=path,
-                    error=None if _is_read_path(path) else _denied(path),
+                    error=None if self._read_allowed(path) else _denied(path),
                 )
                 for path in paths
             ]

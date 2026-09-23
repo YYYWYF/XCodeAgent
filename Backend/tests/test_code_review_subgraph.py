@@ -162,6 +162,46 @@ class CodeReviewSubgraphTests(unittest.TestCase):
             ["frontend/src/App.tsx", "backend/src/main/java/example/App.java"],
         )
 
+    def test_diff_scan_uses_only_frozen_development_files(self) -> None:
+        """审查节点只把开发清单中仍存在的文件交给扫描 Agent。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            changed = Path(workspace) / "backend/src/main/java/Changed.java"
+            changed.parent.mkdir(parents=True)
+            changed.write_text("class Changed {}", encoding="utf-8")
+            with patch(
+                "app.graph.subgraphs.code_review.analyze_workspace_code",
+                return_value=_scan_result(),
+            ) as analyze:
+                result = code_scan({
+                    "workspace": workspace,
+                    "code_review_mode": "diff",
+                    "development_review_files": [
+                        "backend/src/main/java/Changed.java",
+                        "backend/src/main/java/Missing.java",
+                    ],
+                })
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(
+            analyze.call_args.kwargs["review_files"],
+            ["backend/src/main/java/Changed.java"],
+        )
+        self.assertEqual(result["code_review_result"]["skipped_file_count"], 1)
+
+    def test_diff_scan_without_readable_files_fails_without_retry(self) -> None:
+        """文件清单失效不能被报告成零问题通过。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            result = code_scan({
+                "workspace": workspace,
+                "code_review_mode": "diff",
+                "development_review_files": ["backend/src/main/java/Missing.java"],
+            })
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["code_review_retry"], {})
+
     def test_scan_model_failure_exposes_scan_retry(self) -> None:
         """扫描 Agent 的网络或业务异常必须标记为可重试扫描。"""
 

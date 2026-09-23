@@ -82,6 +82,27 @@ from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
 
+async def _source_development_review_files(
+    graph: Any, workspace: str, source_run_id: str
+) -> list[str]:
+    """从阶段交接前一执行的服务端 checkpoint 读取开发文件清单。"""
+
+    if not source_run_id or not hasattr(graph, "aget_state"):
+        return []
+    lifecycle = load_application_lifecycle(workspace)
+    execution = (
+        lifecycle.active_executions.get(source_run_id)
+        if lifecycle is not None else None
+    )
+    if execution is None:
+        return []
+    snapshot = await graph.aget_state(
+        {"configurable": {"thread_id": execution.thread_id}}
+    )
+    files = snapshot.values.get("development_review_files") if snapshot else None
+    return files if isinstance(files, list) else []
+
+
 def _graph_stream_supports_subgraphs(graph: Any) -> bool:
     """判断 Graph 流是否支持子图命名空间参数，并兼容测试中的轻量假 Graph。"""
 
@@ -452,6 +473,16 @@ def build_workflow_ag_ui_stream(
                     run_id=run_id,
                 )
             resume_from = workflow_inputs.get("resume_from") or None
+            phase_review_files: list[str] | None = (
+                [] if resume_from in {"test_phase_confirmation", "review_phase_confirmation"} else None
+            )
+            if phase_review_files is not None and workspace:
+                source_run_id = str(
+                    (workflow_inputs.get("resume_values") or {}).get("resume_execution_run_id") or ""
+                )
+                phase_review_files = await _source_development_review_files(
+                    active_graph, workspace, source_run_id
+                )
             checkpoint_values: dict[str, Any] = {}
             execution_checkpoint_state: dict[str, Any] = {}
             checkpoint_snapshot: Any | None = None
@@ -572,6 +603,9 @@ def build_workflow_ag_ui_stream(
                 "active_run_id": run_id,
             }
             initial_state.update(workflow_inputs.get("resume_values") or {})
+            if phase_review_files is not None:
+                # 阶段交接只接受上一会话服务端 checkpoint 的开发文件清单。
+                initial_state["development_review_files"] = phase_review_files
             if (
                 isinstance(application_planning_interaction, dict)
                 and application_planning_interaction.get("action") == "revise"

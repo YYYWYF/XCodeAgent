@@ -258,6 +258,9 @@ export type WorkflowAcceptanceRequest = {
 /** 前后端代码审查节点返回的只读扫描结果。 */
 export type WorkflowCodeReviewResult = {
   status?: 'completed' | string
+  reviewMode?: 'full' | 'diff'
+  reviewFileCount?: number
+  skippedFileCount?: number
   summary?: string
   reportPath?: string
   issueCount?: number
@@ -829,6 +832,7 @@ export type WorkflowTestPhaseConfirmation = {
 /** 集成测试通过后恢复审查阶段确认节点的协议答案。 */
 export type WorkflowReviewPhaseConfirmation = {
   action: 'confirm'
+  reviewMode: 'full' | 'diff'
 }
 
 /** 代码审查完成后恢复验收阶段确认节点的协议答案。 */
@@ -873,6 +877,7 @@ export type WorkflowClarificationSelectionGroup = {
 
 export type WorkflowClarification = {
   mode?: string
+  diffReviewFileCount?: number
   status?: string
   question_schema?: string
   message?: string

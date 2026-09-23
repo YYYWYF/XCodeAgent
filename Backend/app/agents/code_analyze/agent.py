@@ -40,7 +40,9 @@ class CodeAnalyzeMiddleware(AgentMiddleware):
         return await handler(request.override(tools=_without_disabled_tools(request.tools)))
 
 
-def create_code_analyze_agent(model, workspace_root: str | None = None):
+def create_code_analyze_agent(
+    model, workspace_root: str | None = None, *, allowed_files: frozenset[str] | None = None
+):
     """创建只扫描授权前端项目和后端源码目录的 CodeAnalyze Agent。"""
 
     system_prompt = (
@@ -72,7 +74,8 @@ def create_code_analyze_agent(model, workspace_root: str | None = None):
         f" {VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}"
     )
     backend = CodeAnalyzeScopedBackend(
-        create_workspace_backend(workspace_root, include_builtin_skills=True)
+        create_workspace_backend(workspace_root, include_builtin_skills=True),
+        allowed_files=allowed_files,
     )
     return create_deep_agent(
         name="code-analyze-agent",
