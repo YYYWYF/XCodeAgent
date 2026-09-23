@@ -28,7 +28,7 @@ Gateway 是 `gateway_composed` 拓扑中的统一公开边界，模块名固定�
 
 `gateway_composed` 是 Gateway 的唯一正式拓扑，服务组成固定为 Frontend + Gateway + Backend + Agent Runtime。Frontend 只访问 `GatewayApplication`：公开 Agent Endpoint 路由到 Agent Runtime，公开业务 Endpoint 路由到 Backend；Agent Runtime 仅可按已确认合同调用 Backend 内部 RPC；外部服务只能由 Backend Adapter 调用。
 
-Gateway 是拓扑结果，不是独立应用开关。纯 Agent 应用选择 `agent_runtime_direct`，纯 Backend 应用选择 `backend_direct`；两者都不生成 Gateway 模块、Gateway 配置或 Gateway 进程。本文档不定义 Frontend + Gateway + Backend 或 Frontend + Gateway + Agent Runtime 的半组合形态。
+Gateway 是用户在计划阶段选择 `gateway_composed` 后的确定性编译结果，不是独立应用开关。选择其他拓扑时不生成 Gateway 模块、配置或进程。本文档不定义 Frontend + Gateway + Backend 或 Frontend + Gateway + Agent Runtime 的半组合形态。
 
 Gateway 是公开入口和流量治理层，不承载领域逻辑、数据访问、业务幂等事实或 Agent 推理。
 
@@ -49,10 +49,10 @@ Gateway 是公开入口和流量治理层，不承载领域逻辑、数据访问
 - Gateway 是 `TechnicalPlan.topology.type=gateway_composed` 的确定性结果，`.xcodeagent/application.json` 不再保存 `gateway.enabled`；
 - `gateway_composed` 必须同时包含且仅包含一个公开 Gateway、至少一个 `business_backend` 和至少一个 `agent_runtime`；Frontend 唯一 Public Origin 必须指向 Gateway；
 - Frontend + Gateway + Backend 与 Frontend + Gateway + Agent Runtime 不是可注册拓扑，不允许用 optional service 或空壳模块伪装；
-- 纯 Agent 需求匹配 `agent_runtime_direct`；纯 Backend 需求匹配 `backend_direct`；拓扑切换必须走 Formal Revision 并重新确认 TechnicalPlan；
+- 拓扑由用户显式选择；平台不得根据 Agent、Entity 或 API 数量自动匹配，也不得在校验失败时改选其他拓扑；拓扑切换必须走 Formal Revision 并重新确认 TechnicalPlan；
 - `auth.enable` 和 `authorization.enabled` 仍由 Application Config 持有，但不决定 Gateway 模块是否存在；
 - `gateway_composed` 中 `authorization.enabled=true` 必须同时满足 `auth.enable=true`，用于生成 Gateway Agent RBAC；
-- `agent_runtime_direct` 允许 `auth.enable=true` 的多用户认证，但强制 `authorization.enabled=false`；
+- 其他拓扑的 Auth/Authorization 能力由各自 Definition 验证，不能作为平台自动切换拓扑的依据；
 - `backend_direct` 的领域权限和数据权限归 Backend 所有，不得因普通业务 RBAC 自动插入 Gateway；
 - 拓扑 Definition 必须同时在设计、Planning、Build 和 Launch 边界验证上述不变量，任一不满足都 fail-closed。
 
@@ -104,16 +104,16 @@ Agent 的 `allowedRpcOperationIds` 是根据正式 Tool/RPC binding 生成的调
 
 `gateway_composed` 必须通过统一拓扑注册表实现，不得在 Bootstrap、Build 或 Launcher 内分别硬编码一套 Gateway 选择逻辑。
 
-`matches` 必须同时满足：
+`is_available` 必须验证独立 Gateway 模板、编译器、Build Unit、启动图和验收链路均已实现。`validate_selection` 必须同时满足：
 
 - 产品事实需要 Frontend；
 - 存在至少一个公开业务 Endpoint 或 Backend 业务能力，因而必须生成 `business_backend`；
 - 存在至少一个已确认 Agent Contract，因而必须生成 `agent_runtime`；
 - Backend 和 Agent Runtime 均有公开 Endpoint 或存在已确认 Tool/RPC binding，需要统一 Public Edge 和跨服务身份委托；
 - `authorization.enabled=true` 时 `auth.enable=true`；
-- 不存在“纯 Agent、无 Java Backend/Gateway”或“纯 Backend”的已确认约束。
+- 用户提交的精确选择为 `gateway_composed`。
 
-缺少 Backend 或 Agent Runtime 时 `matches=false`；不得因为单独开启认证、业务 RBAC、路径改写或限流就生成半组合 Gateway 拓扑。若多个已注册 Definition 同时匹配，平台必须拒绝静默选择并回到设计澄清。
+缺少 Backend 或 Agent Runtime 时选择校验失败；平台必须要求用户修改选择或计划，不能自动切换到直连拓扑。不得因为单独开启认证、业务 RBAC、路径改写或限流就生成半组合 Gateway。
 
 `compile_design` 固定输出：
 
@@ -209,9 +209,11 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[Application Config<br/>auth / authorization] --> P[TechnicalPlan]
+    A[TechnicalPlan Core + Application Config] --> S{用户选择 gateway_composed}
+    S --> V[validate_selection / capability readiness]
+    V --> P[编译最终 TechnicalPlan + Gateway topology projection]
     P --> C{用户确认正式架构与 Decision}
-    C -->|未确认| P
+    C -->|未确认| A
     C -->|确认| E[Per-Endpoint Design]
     E --> R[API Design Readiness Gate]
     R -->|缺失或 stale| E
@@ -282,7 +284,7 @@ Build 在当前 Workspace 执行。失败只记录本轮失败，不标记 Accep
 
 | ID | 确定方案 | 适用规则 |
 | --- | --- | --- |
-| `GW-CORE-01` | Gateway 只存在于完整组合拓扑 | `TechnicalPlan.topology.type=gateway_composed` 时必须同时生成 Frontend、Gateway、Backend 和 Agent Runtime；缺少任一服务都不允许编译 GatewayPlan；直连应用选择其他拓扑，不生成 Gateway 空壳 |
+| `GW-CORE-01` | Gateway 只存在于完整组合拓扑 | 用户选择并确认 `TechnicalPlan.topology.type=gateway_composed` 时必须同时生成 Frontend、Gateway、Backend 和 Agent Runtime；缺少任一服务都不允许编译 GatewayPlan，且不得自动改选 |
 | `GW-CORE-02` | 固定使用行内统一认证和签名 `Xcode-User-Info` | Gateway 用企业模板适配器本地验证统一认证 JWT 并检查登出状态，再为普通请求或 Agent run 签发同一 `XcodeUserInfoToken`；Backend/Runtime 验签，Runtime 只能原样转发；不转发公开 JWT，不引入第二份用户 Session 或自建登录体系 |
 | `GW-CORE-03` | 按部署拓扑切换限流存储 | 单实例本地预览使用进程内限流；多实例或生产部署必须使用 Redis 等共享存储，部署画像不得允许多实例选择内存模式 |
 | `GW-CORE-04` | 固定执行器 + 生成只读路由配置 | Gateway 的普通 HTTP、SSE、WebSocket 路由不生成业务代码；协议转换、字段转换、外部适配或聚合代码只能生成在 Backend Adapter/BFF 中 |
@@ -292,7 +294,7 @@ Build 在当前 Workspace 执行。失败只记录本轮失败，不标记 Accep
 
 `GW-CORE-01`～`05` 和 `GW-CORE-07` 是平台和企业模板固定不变量，包括统一认证、条件式 Agent RBAC、`Xcode-User-Info`、Endpoint owner 和外部服务访问边界，不要求低代码用户逐项选择，也不写入 `gateway.decisions`。只有 `GW-CORE-06` 在 Backend 页面服务和独立 Backend BFF 都可满足需求时，才把实际选择写入已确认 TechnicalPlan `gateway.decisions`。GatewayPlan 只做确定性投影，不能成为新的事实源。
 
-`ProductPlan.agents` 非空不再单独推导 Gateway。只有同时需要公开 Backend 和 Agent Runtime 能力时才匹配 `gateway_composed`；纯 Agent 应用必须匹配 `agent_runtime_direct`。ProductPlan、TechnicalPlan、GatewayPlan、Build Planning 和 Project Launch 任一边界发现拓扑与服务图不一致，都必须 fail-closed。
+`ProductPlan.agents`、Entity、API 或能力开关都不能推导 Gateway。只有用户选择 `gateway_composed`，且 TechnicalPlan Core 能编译出完整 Backend 与 Agent Runtime 服务图时才允许确认。TechnicalPlan、GatewayPlan、Build Planning 和 Project Launch 任一边界发现选择与服务图不一致，都必须 fail-closed。
 
 ### 9.1 Agent 应用架构
 

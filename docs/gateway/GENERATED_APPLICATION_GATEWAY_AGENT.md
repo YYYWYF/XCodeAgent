@@ -11,12 +11,12 @@
 Gateway 将 Agent Runtime 视为特殊 upstream。它复用公开 Origin、认证、限流、Trace、健康和部署治理，但不承担 Prompt、模型、Memory、Knowledge、Skill 或推理逻辑。
 
 - 前端不能发现或访问 Agent Runtime 内部地址；
-- ProductPlan 只包含业务 Agent 时应选择 `agent_runtime_direct`，不生成 Gateway；只有业务 Backend 和 Agent Runtime 同时存在时才能选择 `gateway_composed`；
+- ProductPlan 不决定拓扑；用户选择 `gateway_composed` 后，TechnicalPlan Core 必须能够编译出完整 Business Backend 与 Agent Runtime 服务图；
 - TechnicalPlan 服务图选择 `gateway_composed` 时必须同时确认 Backend 和 Agent Runtime；切换拓扑必须重新确认正式技术计划；
 - 可信 user/tenant 等身份字段只能由 Gateway 对行内统一认证 JWT 验签、登出校验和 Claim Mapping 后产生；仅当 `auth.enable=true && authorization.enabled=true` 时，Gateway 使用 Agent Authorization Manifest 切片执行固定 Agent RBAC；
 - Agent Runtime 不得绕过 `allowedRpcOperationIds`、Backend 数据范围或业务规则；
 - Agent 故障不能无条件拖垮普通业务 API；
-- 缺少 Agent 时 `gateway_composed` 候选整体无效；系统必须切换到 `backend_direct`，不得只删除 Agent route 后保留 Gateway；
+- 缺少 Agent 时 `gateway_composed` 选择无效；系统必须返回校验错误，不得自动切换到 `backend_direct`，也不得只删除 Agent route 后保留 Gateway；
 - 模型不能提供目标 URL，也不能直接访问数据库；
 - Backend Agent Facade 不属于支持的架构，任何模板、合同或生成任务都不得创建该组件；
 - Backend 不能调用 Agent Runtime，Agent Runtime 只在执行中按需调用 Backend 内部 RPC。

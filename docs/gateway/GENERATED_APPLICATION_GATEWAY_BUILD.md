@@ -44,7 +44,7 @@ backend/
 
 ## 2. TemplateState Gateway capability
 
-Gateway 子模块只在 `gateway_composed` 的 Backend 模板组合中交付。RequestedConfig 由 PlanningTopologyPolicy 根据已确认拓扑要求 Gateway capability；其他拓扑不请求、不物化该模块。
+Gateway 子模块只在用户选择并确认 `gateway_composed` 后的 Backend 模板组合中交付。RequestedConfig 由 PlanningTopologyPolicy 根据已确认拓扑要求 Gateway capability；其他拓扑不请求、不物化该模块。
 
 Template Engine 必须在唯一 OpenAPI/Core/Package Schema 中扩展：
 
@@ -113,7 +113,7 @@ readiness 检查：
 
 ```mermaid
 flowchart TD
-    A[已确认正式产物] --> B[确定性编译 GatewayPlan]
+    A[已确认 TechnicalPlan<br/>topology=gateway_composed] --> B[确定性编译 GatewayPlan]
     T[TemplateState] --> B
     B --> C[按当前 Scope 投影 GatewayExecutionSlice]
     C --> D[构造 Unit Skeleton]
@@ -132,7 +132,7 @@ flowchart TD
 
 GatewayPlan 编译和 GatewayExecutionSlice 投影发生在 PlanningRun 之前，不是可执行 Build Task，也不调用模型。
 
-PlanningRun 创建前再次校验已确认拓扑、服务图和 TemplateState capability 一致。该校验失败属于正式产物不一致，不能生成删减 Route 或空壳服务的 Pending Build DAG。
+PlanningRun 创建前再次校验用户已确认的拓扑、服务图和 TemplateState capability 一致。该校验失败属于正式产物不一致，不能自动切换拓扑，也不能生成删减 Route 或空壳服务的 Pending Build DAG。
 
 ## 5. 模式化生成结果
 

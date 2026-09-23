@@ -15,7 +15,12 @@ UiDesign（可选的真实 React 页面稿 + UiManifest）
   -> 产品确认或明确跳过
 等待进入计划阶段
   -> 用户显式确认 enter_planning
-TechnicalPlan
+TechnicalPlan Core
+  -> 生成完整 Entity / API / Page Binding / Agent 业务事实
+拓扑选择
+  -> 用户显式选择 topologyType
+最终 TechnicalPlan
+  -> 平台按所选拓扑编译 architecture / owner / runtime contract
   -> 开发确认
 Workbench
   -> api_design（按 Endpoint 设计字段来源，确认后独立结束）
@@ -24,7 +29,7 @@ Workbench
   -> Build / Test / Acceptance
 ```
 
-产品确认“做什么、有哪些页面、用户如何操作、页面长什么样”；开发确认“API、数据、权限和工程如何实现”。同一页面不再经过第二次视觉详设确认。
+产品确认“做什么、有哪些页面、用户如何操作、页面长什么样”；TechnicalPlan Core 确认完整业务技术事实；拓扑选择决定这些事实由 Python Runtime、Java Backend 或 Gateway 组合中的哪个服务实现。拓扑不得反向改变业务逻辑。同一页面不再经过第二次视觉详设确认。
 
 ## 正式产物
 
@@ -236,15 +241,18 @@ RequirementSpec、ProductPlan 和 UiDesign 的产品确认均不得要求产品�
 
 负责人：开发。
 
-TechnicalPlan 只写入 `.xcodeagent/plans/technical-plan.md|json`，`technical_plan` 是唯一语义来源。
+TechnicalPlan 生成分为两个内部步骤：先产生拓扑无关的 TechnicalPlan Core，再进入 `topology_selection` 用户门禁。Core 不是第五种正式产物，不单独对用户暴露 JSON；用户选择后平台确定性编译最终 TechnicalPlan。最终文档只写入 `.xcodeagent/plans/technical-plan.md|json`，`technical_plan` 是唯一正式语义来源。
+
+后端不得遍历 Registry 自动匹配拓扑，不得在选择无效时切换拓扑或回退旧流程。前端可以展示尚未实现的拓扑，但必须禁用；只有通过 `is_available` 与 `validate_selection` 的精确选择才能生成最终 TechnicalPlan。
 
 TechnicalPlan 包含：
 
-- `architecture` 默认包含前端、Java 后端和数据三段；存在业务智能体时额外包含平台确定性生成的 `agent_runtime`，固定为独立 Python 3.12 + DeepAgents sidecar；
+- `architecture`、服务图和实现 owner 由用户选择的 TopologyDefinition 编译，模型不得默认插入 Java Backend、Gateway 或 Python Runtime；
 - `entities` 由技术规划模型根据已确认 ProductPlan 的页面、信息项、业务操作与业务流程独立生成，是实体与 API 的唯一字段事实源；技术规划不读取 RequirementSpec 的 `entities`；
 - API Contract 通过 `entity_ids` 关联实体；Schema 字段可使用 `entity_field_ref` 表示实体来源，计算、聚合和传输字段可以不做实体映射；
 - ProductPlan 中 `business` action/step 到 endpoint 的 `action_implementations`；
-- 根级 `agent_contracts`：与 ProductPlan `agents[]` 按 `agentId` 一一对应，是包含产品派生快照、七段 `agentSettings`、Gateway、Runtime、安全、产物、检查和 Evaluation 的完整执行契约；普通应用固定为 `[]`；
+- 根级 `agent_contracts`：与 ProductPlan `agents[]` 按 `agentId` 一一对应；Core 保存产品派生快照、七段 `agentSettings` 和 Tool 业务需求，拓扑编译再补齐 invocation、实现 binding、runtime、security、artifacts、required checks 与 evaluation；普通应用固定为 `[]`；
+- `topology`：用户显式选择后由平台编译的稳定身份、服务、Public Edge、认证终止点和实现 owner；
 - ProductPlan 与 UiManifest 的上游内容哈希。
 
 正式 JSON 使用 `artifact_type: "technical-plan"`，只持久化本阶段新增的开发事实：
@@ -256,9 +264,19 @@ TechnicalPlan 包含：
   "product_plan_sha256": "...",
   "ui_designs_sha256": "...",
   "architecture": {
-    "frontend": "PC 管理端采用 React 单页应用，通过 REST JSON API 访问后端。",
-    "backend": "后端采用 Java8 和 Springboot 提供业务 REST API。",
-    "data": "MySQL8 负责持久化，Redis 负责缓存和热点查询。"
+    "frontend": "React 单页应用，通过正式 REST 与 AG-UI 合同访问 Public Edge。",
+    "application_runtime": "由用户选择的拓扑编译实际服务和代码归属。",
+    "data": "业务持久化与 Agent 运行状态按拓扑合同隔离。"
+  },
+  "topology": {
+    "type": "agent_runtime_direct",
+    "publicEdgeServiceId": "agent-runtime",
+    "serviceIds": ["agent-runtime"],
+    "implementationOwners": {
+      "businessApi": "agent-runtime",
+      "businessData": "agent-runtime",
+      "agent": "agent-runtime"
+    }
   },
   "entities": [
     {
@@ -298,7 +316,7 @@ TechnicalPlan 包含：
 }
 ```
 
-包含业务智能体时，正式 `agent_contracts[]` 使用 [Agent Contract 重设计](./AGENT_CONTRACT_REDESIGN.md) 定义的当前完整契约。模型先返回 `agentId`、`gatewayEndpointId`、`capabilityBindings` 和七段 `agentSettings` 候选；平台再从已确认 ProductPlan 投影 identity、capabilities、interaction、boundaries 和产品验收标准，展开 API Endpoint，并补齐 invocation、Python 3.12 + DeepAgents runtime、security、artifacts、required checks 与 evaluation。
+包含业务智能体时，正式 `agent_contracts[]` 使用 [Agent Contract 重设计](./AGENT_CONTRACT_REDESIGN.md) 定义的当前完整契约。模型先返回 `agentId`、`capabilityBindings`、Tool 业务需求和七段 `agentSettings` 候选；不得在 Core 阶段生成 `gatewayEndpointId`、Java/Python owner 或服务路径。平台从已确认 ProductPlan 投影 identity、capabilities、interaction、boundaries 和产品验收标准，再由用户选择的 TopologyDefinition 补齐 invocation、Tool binding、runtime、security、artifacts、required checks 与 evaluation。
 每个正式 Contract 固定包含：
 
 ```text
@@ -327,7 +345,7 @@ evaluation
 
 正式 Contract 是绑定 ProductPlan Hash 的完整执行快照，不是第二份产品事实。ProductPlan、Gateway/Tool Endpoint、Model/Memory/Skill/Knowledge/Context 或 Runtime 模板变化后必须使 Contract 以及下游 Build、测试、启动和验收证据失效。规划模型不能改写产品投影、平台安全规则、Runtime、物理凭据或确定性产物路径。
 
-TechnicalPlan 确认摘要和右侧阅读面板必须在 `agent_contracts` 非空时按需展示“智能体契约”，覆盖 Agent Runtime、Java 网关、能力→工具、工具→API Endpoint、会话/模型/安全、代码产物和 required checks；阅读面板默认打开该章节。普通应用 `agent_contracts=[]` 时不得出现该章节、Python 运行时或智能体指标。
+TechnicalPlan 确认摘要和右侧阅读面板必须在 `agent_contracts` 非空时按需展示“智能体契约”，覆盖所选拓扑的 invocation、实现 binding、能力→工具、Tool→Application Service/RPC、会话/模型/安全、代码产物和 required checks；阅读面板默认打开该章节。`agent_contracts=[]` 时不得出现智能体章节或指标，但所选 `agent_runtime_direct` 仍可因承载 Python 业务 API 而展示 Python Application Runtime 架构。
 
 TechnicalPlan 不再持久化 `app`、`requirements_overview`、`project_acceptance_criteria`、
 `business_flows`、`acceptance_criteria`、`risks`、`data_sources`、`permission_model`、
@@ -440,8 +458,9 @@ Endpoint 设计和页面/API开发流程固定为：
 正式依赖顺序为：
 
 ```text
-RequirementSpec -> ProductPlan -> UiDesign（可选） -> 等待进入规划阶段 -> TechnicalPlan
-TechnicalPlan -> independent Endpoint mapping -> api_design_readiness_gate confirmation -> Build DAG
+RequirementSpec -> ProductPlan -> UiDesign（可选） -> 等待进入规划阶段
+-> TechnicalPlan Core -> topology_selection -> 最终 TechnicalPlan 确认
+-> independent Endpoint mapping -> api_design_readiness_gate confirmation -> Build DAG
 ```
 
 ProductPlan 或 UiDesign 变化时重新确认受影响 TechnicalPlan/运行时页面契约；TechnicalPlan API 或 Schema 变化时使相关 Endpoint 设计和 Build DAG 失效。纯代码实现错误进入 SmallTask 修复，不回到规划阶段。

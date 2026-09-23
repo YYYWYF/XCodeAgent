@@ -1,49 +1,55 @@
 # 拓扑设计与实现模板
 
-每套新拓扑使用同一交付顺序，设计审核和代码注册之间设硬边界。
+每套拓扑必须按同一顺序交付，设计确认与代码注册之间设硬边界。
 
-## 1. 设计文档
+## 1. 设计合同
 
-新建独立文档并明确：
+独立设计必须明确：
 
-- 拓扑目标与不适用范围；
-- 自动匹配的充分必要条件；
-- 与其他拓扑同时匹配时的冲突处理；
-- Public Edge、服务边界、认证终止点与可信身份传播；
-- Auth、Authorization、DataSource 等正交能力约束；
-- 本地调试与生产运行边界；
-- 当前正式产物需要新增或替换的字段；
-- 模板 capability、失败关闭条件及安全不变量。
+- 固定服务组成与不支持范围；
+- Public Edge、认证终止点和内部信任边界；
+- Entity、API、Agent、数据持久化的实现 owner；
+- managed roots 与目录结构；
+- Endpoint API Design 如何映射到该拓扑的实现；
+- Build Unit、Generator、启动图和验收检查；
+- Application Config 能力约束；
+- 与其他拓扑切换时的失效范围。
 
-设计未确认时只允许预留 `TopologyType`，不得注册实现或修改下游结构。
+拓扑不得修改选择前的业务事实，只能编译实现归属和工程蓝图。
 
-## 2. 三阶段 Definition
+## 2. Definition 合同
 
-审核通过后，在 `Backend/app/topologies/definitions/` 新增一个 Definition，实现：
+Definition 必须实现：
 
-- `matches(context)`：只读取正式候选事实和 canonical application config；
-- `compile_design(context)`：返回 Public Edge、service ids、认证终止点和架构摘要；
-- `compile_planning(context)`：返回 managed roots、Unit ids、模板能力和 required checks；
-- `compile_development(context)`：返回 Generator owners、启动阶段和验收检查。
+- `is_available(context)`：模板、生成器和运行闭环是否已经可用；
+- `validate_selection(context)`：用户选择能否完整承载当前业务事实与配置；
+- `compile_design(context)`：服务图、Public Edge、认证和 owner；
+- `compile_planning(context)`：模板、managed roots、Unit/Edge Blueprint；
+- `compile_development(context)`：Generator、测试、启动和验收边界。
 
-Definition 只编译差异蓝图，不直接读写工作区、生成代码、启动进程或修改 DAG 状态。
+验证失败只能返回结构化错误，不得自动改选其他拓扑或进入旧路径。
 
-## 3. 注册与主流程接入
+## 3. 注册与选择门禁
 
-1. 在唯一 Registry 中绑定枚举和 Definition；
-2. 为唯一匹配、无匹配、多匹配和未注册编译补测试；
-3. 让 TechnicalPlan 保存最小稳定拓扑投影；
-4. Bootstrap 只消费 Planning 蓝图；
-5. 通用 Build DAG 将 Planning 蓝图展开为 Unit/Edge；
-6. Generator 和 Launcher 只消费 Development 蓝图；
-7. 删除该拓扑在旧路径中的重复结构推断；
-8. 更新 `docs/CODEBASE_INDEX.md` 和实现状态。
+固定实施顺序：
+
+1. 完成独立设计并由用户确认；
+2. 准备模板、capability manifest 和路径策略；
+3. 实现 Definition 与确定性编译器；
+4. 实现 Build Unit、Generator、Testing、Launch 和 Acceptance；
+5. 为可用、未实现、配置冲突和事实不完整补充测试；
+6. 注册 Definition；
+7. 在前端选择门禁解除禁用状态；
+8. 删除该拓扑在旧流程中的重复推断和兼容回退。
+
+UI 展示不代表已实现；只有 Registry、模板和完整运行证据同时存在时才允许选择。
 
 ## 4. 完成标准
 
-- 用户已确认该拓扑的独立设计；
-- Registry 是唯一可执行入口；
-- 下游不根据目录存在、Agent 数量或某个开关重复猜测拓扑；
-- 正交能力没有膨胀为组合枚举；
-- 模板能力缺失时 fail-closed；
-- 设计、计划、开发和端到端验收证据完整。
+- 用户选择通过 AG-UI 门禁提交并绑定准确 revision；
+- 最终 TechnicalPlan 保存唯一 `topology.type` 和稳定投影；
+- Endpoint API Design 保持拓扑无关；
+- Build Context 能把同一 Contract 绑定到正确实现 owner；
+- Generator 写范围不跨拓扑 roots；
+- Testing、Launch 和 Acceptance 证明实际服务图与计划一致；
+- 不存在自动匹配、静默回退、历史 schema 读取或双写。

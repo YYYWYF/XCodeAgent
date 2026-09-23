@@ -1,25 +1,21 @@
 # 生成应用拓扑设计目录
 
-本目录是生成应用拓扑重构的唯一设计入口。拓扑只描述服务组成、公开入口、模板 roots、Build Unit 差异和运行服务图；认证、授权、数据源等正交能力继续由应用配置和正式业务产物决定。
-
-当前拓扑设计只允许三种目标形态：`agent_runtime_direct`、`backend_direct` 和 `gateway_composed`。候选拓扑必须先形成独立设计并由用户审核确认，之后才允许加入注册表和主流程。Gateway 不提供带单一 upstream 的半组合拓扑。
+本目录是生成应用拓扑的唯一设计入口。当前合同采用“拓扑无关业务规划 → 用户显式选择 → 拓扑确定性编译”，不再由后端自动匹配拓扑。
 
 ## 当前拓扑状态
 
-| 拓扑 | 状态 | 设计文档 |
-| --- | --- | --- |
-| `agent_runtime_direct` | 首套直连拓扑；设计与迁移实现独立管理 | [整体设计](./agent-runtime-direct/AGENT_RUNTIME_DIRECT_DESIGN.md) |
-| `backend_direct` | 目标形态已确定，尚未迁移 | 后续独立设计 |
-| `gateway_composed` | 四模块组合设计已固定，尚未迁入统一注册表 | [Gateway 设计](../gateway/GENERATED_APPLICATION_GATEWAY_DESIGN.md) |
+| 拓扑 | 目标代码归属 | 新合同实施状态 | 设计文档 |
+| --- | --- | --- | --- |
+| `agent_runtime_direct` | Frontend + Python Application Runtime；业务 Entity/API 与 Agent 均生成到 Python | 设计重构完成，模板与生成器待重建；现有注册实现不满足新合同 | [设计目录](./agent-runtime-direct/AGENT_RUNTIME_DIRECT_DESIGN.md) |
+| `backend_direct` | Frontend + Java Backend | 尚未形成独立 Definition | 统一合同中的目标边界 |
+| `gateway_composed` | Frontend + Gateway + Java Backend + Python Agent Runtime | 规范设计保留，Registry、独立 Gateway 模板和运行闭环尚未完成 | [设计目录](../gateway/README.md) |
 
 ## 文档导航
 
-- [统一拓扑架构](./APPLICATION_TOPOLOGY_DESIGN.md)：枚举、注册表、三阶段策略、选择与迁移规则。
-- [拓扑实现模板](./TOPOLOGY_IMPLEMENTATION_TEMPLATE.md)：后续每套拓扑从设计审核到注册实现的固定结构。
-- [Agent Runtime Direct 整体设计](./agent-runtime-direct/AGENT_RUNTIME_DIRECT_DESIGN.md)：Frontend + Runtime 直连拓扑、自动选型和阶段边界。
-- [Agent Runtime Direct 正式合同](./agent-runtime-direct/AGENT_RUNTIME_DIRECT_CONTRACTS.md)：TechnicalPlan、Agent Contract、TemplateState 和失效规则。
-- [Agent Runtime Direct 构建运行](./agent-runtime-direct/AGENT_RUNTIME_DIRECT_BUILD_RUNTIME.md)：Bootstrap、Build DAG、Generator、Testing、Launch 和 Acceptance。
-- [Agent Runtime Direct 安全调试](./agent-runtime-direct/AGENT_RUNTIME_DIRECT_SECURITY_DEBUG.md)：Auth、多用户 ownership、匿名会话和本地调试。
-- [Gateway 设计目录](../gateway/)：Gateway 的设计、合同、构建、运行时和 Agent 附录；继续保持原有文档归属。
+- [统一拓扑架构](./APPLICATION_TOPOLOGY_DESIGN.md)：选择门禁、三种拓扑、正式事实和阶段边界。
+- [拓扑实现模板](./TOPOLOGY_IMPLEMENTATION_TEMPLATE.md)：每套拓扑从设计到注册的固定交付顺序。
+- [拓扑重构决策记录](./TOPOLOGY_REFACTOR_REVIEW.md)：本轮已确认结论、废弃结论和实施顺序。
+- [Agent Runtime Direct](./agent-runtime-direct/AGENT_RUNTIME_DIRECT_DESIGN.md)：Python Application Runtime 的完整设计。
+- [Gateway Composed](../gateway/README.md)：Gateway 组合拓扑的规范文档索引。
 
-以后新增拓扑必须先在本目录形成独立设计并完成审核，再在 `Backend/app/topologies/` 注册；不得在 Bootstrap、Build 或 Launcher 中单独增加一套未注册的拓扑判断。
+新增或迁移拓扑时必须先完成独立设计和用户审核，再接入选择门禁与 Registry。不得在 Bootstrap、Build、Generator 或 Launcher 中增加未注册的拓扑判断，也不得恢复自动匹配或旧流程回退。

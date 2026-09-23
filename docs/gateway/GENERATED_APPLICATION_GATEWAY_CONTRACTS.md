@@ -9,6 +9,7 @@
 ## 1. 合同原则
 
 - `.xcodeagent/application.json` 是应用级能力开关的唯一事实源；
+- topology selection gate 是用户拓扑选择的唯一入口；
 - TechnicalPlan 是服务归属、公开 API、Gateway 架构选择和 Decision Record 的唯一事实源；
 - Endpoint Design 是单个 Endpoint 字段映射、外部 Operation snapshot 和实现说明的唯一事实源；
 - TemplateState 是 Backend 模板能力、Gateway 模块入口、行内统一认证 Profile、Claim Mapping 和策略目录的唯一模板事实源；
@@ -20,7 +21,7 @@ Gateway V1 不消费页面、动作或普通业务 Endpoint 的 Authorization Ma
 
 ## 2. Application Config 与拓扑事实
 
-`.xcodeagent/application.json` 不增加 `gateway.enabled`。Gateway 是拓扑的组成服务，是否生成由已确认 `TechnicalPlan.topology.type` 唯一决定。
+`.xcodeagent/application.json` 不增加 `gateway.enabled`。Gateway 是拓扑的组成服务：用户在计划阶段显式选择，平台验证并编译后，由已确认 `TechnicalPlan.topology.type` 持久化结果。平台不得从 Application Config 或业务事实自动推导。
 
 规则：
 
@@ -31,7 +32,7 @@ Gateway V1 不消费页面、动作或普通业务 Endpoint 的 Authorization Ma
 - `auth.enable=true` 时认证提供方固定由 TemplateState 的行内统一认证 Profile 决定；`auth.enable=false` 时只允许正式声明的匿名 Endpoint；
 - `authorization.enabled=true` 必须同时满足 `auth.enable=true`；不满足时正式产物确认、GatewayPlan 编译、Build 和 Launch 全部失败；
 - Agent RBAC 仅在两个开关同时为 `true` 时存在；任一开关为 `false` 时不得生成 Agent 资源键、权限 Filter、策略客户端或授权缓存；
-- 纯 Agent 需求进入 `agent_runtime_direct`，纯 Backend 需求进入 `backend_direct`；两者都不生成 GatewayPlan；
+- 选择其他拓扑时不生成 GatewayPlan；平台不得因为 Agent、Entity、API 或开关组合自动改选 `gateway_composed`；
 - 从 `gateway_composed` 移除 Backend 或 Agent Runtime 必须通过 Formal Revision 切换拓扑，并重新确认 TechnicalPlan；
 - Application Config 不保存路由、模块路径、Application 类名、upstream、策略参数、Origin 或 Secret；
 - 创建、修订、确认、删除、前后端类型和校验器必须同批支持当前合同，不增加旧字段别名。
@@ -166,7 +167,7 @@ TechnicalPlan 必须显式描述服务、Endpoint owner、内部路径、Route �
 - `upstream_path` 必须显式存在，不允许从公开路径隐式补全；
 - Gateway 允许正式 Route Contract 声明的路径改写，Frontend Public Origin 只能指向 Gateway；
 - `route_kind`、`policy_profile`、`anonymous`、`criticality` 全部进入 TechnicalPlan 确认门禁；
-- 缺少 Backend 或 Agent Runtime 的候选无效；平台必须改用匹配的直连拓扑，不得删减路由后继续编译 GatewayPlan；
+- 缺少 Backend 或 Agent Runtime 时当前选择无效；平台必须返回结构化校验错误，不得自动改用直连拓扑，也不得删减路由后继续编译 GatewayPlan；
 - Schema、Markdown 渲染与同步、模型输出、确定性校验、前后端类型和 Build Context 必须同批更新。
 
 ## 4. Decision Record

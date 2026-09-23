@@ -6,6 +6,8 @@
 > 适用范围：请求处理、认证、内部身份、授权、协议、外部代理、韧性、错误、观测、配置、健康和测试  
 > 主文档：[`GENERATED_APPLICATION_GATEWAY_DESIGN.md`](./GENERATED_APPLICATION_GATEWAY_DESIGN.md)
 
+本运行时只消费用户已选择并确认的 `TechnicalPlan.topology.type=gateway_composed`。运行阶段不得根据实际进程、路由数量或服务健康状态重新判断或切换拓扑。
+
 ## 1. 运行拓扑
 
 `gateway_composed` 固定运行拓扑：

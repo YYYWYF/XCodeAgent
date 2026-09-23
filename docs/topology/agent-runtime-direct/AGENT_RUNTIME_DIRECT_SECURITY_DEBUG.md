@@ -1,7 +1,7 @@
 # Agent Runtime Direct 安全与本地调试设计
 
-> 状态：待用户审核  
-> 核心边界：可以认证和支持多用户，但不启用 RBAC
+> 状态：随 Python Application Runtime 目标合同重构，代码待实现  
+> 核心边界：业务 API、Agent 与运行状态共享可信 Principal；Authorization 只有在 Python 模板提供正式 capability 时才允许开启
 
 ## 1. 安全模型
 
@@ -11,10 +11,10 @@
 | --- | --- | --- |
 | Authentication | 可选 | 证明当前请求对应哪个 subject |
 | Multi-user ownership | 必需 | 每个 Runtime 资源属于唯一可信 Principal |
-| RBAC Authorization | 禁止 | 不生成角色、资源目录、策略和授权管理 |
+| RBAC Authorization | 条件支持 | 仅在 Python Authorization capability、资源编译器和管理 API 完整实现时启用 |
 | Tool confirmation | 按风险必需 | 用户确认一次具体写操作，不是角色授权 |
 
-`authorization.enabled=false` 只关闭 RBAC，不能关闭认证、ownership、Tool allowlist、写操作确认、速率限制或审计。
+`authorization.enabled=false` 只关闭 RBAC，不能关闭认证、ownership、Tool allowlist、写操作确认、速率限制或审计。`authorization.enabled=true` 且模板能力缺失时，拓扑选择必须 fail-closed，禁止静默关闭权限。
 
 ## 2. Auth 开启模式
 
@@ -25,7 +25,7 @@
 - Runtime 模板提供与 login capability 对齐的认证 Adapter；
 - Token、Cookie 或外部 IdP assertion 只能由认证中间件验证；
 - 验证成功后建立不可由请求体覆盖的 `TrustedPrincipal`；
-- AG-UI、thread、run、memory 和 Tool 都消费同一个 Principal；
+- REST API、AG-UI、业务事务、thread、run、memory 和 Tool 都消费同一个 Principal；
 - 登出、过期、撤销后不能恢复旧 checkpoint。
 
 拓扑不重新定义第二套登录产品协议。具体登录方式由 `login` capability 当前合同决定；Runtime 负责提供等价的 Python 实现或标准 Provider Adapter。模板无法提供时 Bootstrap fail-closed。
@@ -66,7 +66,7 @@ Runtime 内部 Principal 最小结构：
 
 ## 5. Ownership Key
 
-所有 Runtime 资源必须以以下逻辑 owner key 隔离：
+所有 Runtime 状态和需要用户归属的业务资源必须以可信 Principal 建立隔离条件：
 
 ```text
 applicationId
@@ -88,6 +88,8 @@ applicationId
 - uploaded file；
 - generated artifact；
 - Tool execution record。
+- ProductPlan/TechnicalPlan 声明为 owner-scoped 的业务 Entity；
+- 业务上传文件、导出结果和长任务。
 
 Repository 查询必须把 owner key 放入查询条件，不能先按 `threadId` 读取后在业务层比较。不存在和不属于当前 Principal 的资源统一返回不泄露存在性的结果。
 
@@ -101,9 +103,9 @@ Repository 查询必须把 owner key 放入查询条件，不能先按 `threadId
 - 旧 interaction、其他用户 interaction 和已完成 interaction 必须拒绝；
 - Runtime 重启后仍执行相同 ownership 校验。
 
-## 7. RBAC 禁止项
+## 7. Authorization 边界
 
-本拓扑不得生成或启用：
+Authorization 关闭时不得生成或启用：
 
 - role / permission 表；
 - resource key；
@@ -114,7 +116,7 @@ Repository 查询必须把 owner key 放入查询条件，不能先按 `threadId
 - Agent route RBAC；
 - 基于用户可控 scope 的 Tool 授权。
 
-如果产品出现“管理员可查看所有用户会话”“不同角色可使用不同 Agent/Tool”等需求，已属于 Authorization，必须退出本拓扑或重新设计一个支持 Authorization 的拓扑。
+Authorization 开启时，页面、操作、业务 Endpoint、Agent 和 Tool 资源必须由当前 Authorization Manifest 确定性编译为 Python 中间件与策略绑定。模型、Frontend 和用户请求不能新增 resource key、role、scope 或 policy。Python capability 尚未完成前，包含这些需求的应用不能选择本拓扑。
 
 ## 8. Tool 安全
 
@@ -123,6 +125,7 @@ Tool 执行同时满足：
 ```text
 Agent Contract 声明
   ∩ Runtime capability allowlist
+  ∩ Application Service authorization / data scope
   ∩ 部署环境凭据
   ∩ 当前交互确认状态
 ```
@@ -134,7 +137,8 @@ Agent Contract 声明
 - 外部 HTTP 只允许配置域名、协议和操作；
 - 阻断 loopback、link-local、metadata endpoint 和任意重定向逃逸；
 - 响应大小、超时、重试和日志裁剪由平台固定；
-- 写操作默认需要 confirmation；
+- 写操作默认需要 confirmation，并通过 Application Service 执行业务事务；
+- Tool 不得直接访问数据库 session，也不得通过 loopback HTTP 调用同一 Runtime 的 REST API；
 - secret 只在 Tool Adapter 执行边界注入。
 
 ## 9. Public Edge
@@ -143,6 +147,7 @@ Agent Contract 声明
 
 ```text
 GET  /health
+业务 REST Endpoint                 # 来自已确认 api_contracts
 POST /agents/{agentId}/run        # AG-UI SSE
 认证 capability 当前要求的入口   # auth on
 匿名会话建立入口                  # auth off
@@ -156,6 +161,7 @@ POST /agents/{agentId}/run        # AG-UI SSE
 - 任意 threadId 的通用读取接口；
 - Debug token 管理接口；
 - 允许客户端设置 Principal 的 Header。
+- 未进入正式 API Contract 的数据库或 Repository 通用接口。
 
 CORS 只允许当前 Frontend origin。生产环境不允许 `*`、任意凭据 Origin 或根据请求回显 Origin。
 
@@ -282,6 +288,16 @@ POSIX 权限固定 `0600`。停止后 credential 必须清空。正式源码、T
 - 写 Tool 无 confirmation 拒绝；
 - SSRF、重定向逃逸和超限响应拒绝；
 - secret 不进入事件、日志和 checkpoint。
+- Tool 与 REST Endpoint 对同一 Application Service 执行一致的授权、事务和数据范围规则；
+- loopback HTTP 自调用和业务 SQL 直连被拒绝。
+
+### Business API
+
+- REST Endpoint 不能绕过 TrustedPrincipal；
+- owner-scoped Entity 查询在 Repository 层带入 owner key；
+- 页面 API 与 Agent Tool 不能跨用户读取或修改业务数据；
+- 业务 migration 与 Runtime checkpoint migration 互不覆盖；
+- 未确认 Endpoint 和通用 Repository 接口不能暴露为公开路由。
 
 ### Debug
 
