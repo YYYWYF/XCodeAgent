@@ -523,7 +523,7 @@ class DataSourcesServiceTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(persisted_operation["description"], "查询商品分类")
-        index = json.loads((self.workspace / ".xcodeagent" / "datasource" / "index.json").read_text(encoding="utf-8"))
+        index = json.loads((self.workspace / ".devagentstudio" / "datasource" / "index.json").read_text(encoding="utf-8"))
         self.assertEqual(index["sources"][0]["directories"][1]["operations"][0]["description"], "查询商品分类")
         self.assertEqual(persisted_operation["requestStructure"]["properties"]["items"]["items"]["properties"]["sku"]["description"], "商品编码")
 
@@ -775,7 +775,7 @@ class DataSourcesServiceTests(unittest.TestCase):
                 "port": 3306,
                 "schema": "orders",
                 "userName": "app",
-                "passwordCiphertext": "xcodeagent-secret:v1:key:cipher",
+                "passwordCiphertext": "devagentstudio-secret:v1:rsa-oaep-256:key:cipher",
             },
         )
         source_id = source.sources[0].id
@@ -785,7 +785,7 @@ class DataSourcesServiceTests(unittest.TestCase):
         ):
             selected = change_selected_tables(self.workspace, source_id, ["orders"], False)
         self.assertEqual(selected[0]["table"], "orders")
-        stored_path = self.workspace / ".xcodeagent" / "datasource" / "databases" / f"{source_id}.json"
+        stored_path = self.workspace / ".devagentstudio" / "datasource" / "databases" / f"{source_id}.json"
         stored = json.loads(stored_path.read_text(encoding="utf-8"))
         self.assertEqual(stored["managedTables"], [{"table": "orders", "description": "订单"}])
         self.assertNotIn("columns", stored)

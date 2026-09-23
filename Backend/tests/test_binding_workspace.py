@@ -30,7 +30,7 @@ class BindingWorkspaceTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.plan = self.root / ".xcodeagent/plans/technical-plan.json"
+        self.plan = self.root / ".devagentstudio/plans/technical-plan.json"
         self.plan.parent.mkdir(parents=True)
         self.plan.write_text(json.dumps({"api_contracts": [{"id": "orders", "endpoints": [
             {"id": "list", "method": "GET", "path": "/orders", "parameters": [{"name": "id", "in": "query", "schema": {"type": "integer"}}]},
@@ -49,7 +49,7 @@ class BindingWorkspaceTests(unittest.TestCase):
         saved = save_binding_draft(self.request())
         self.assertEqual(read_binding_draft(self.root, "orders", "list"), saved)
         self.assertIsNone(read_binding_draft(self.root, "orders", "other"))
-        self.assertFalse((self.root / ".xcodeagent/plans/endpoints").exists())
+        self.assertFalse((self.root / ".devagentstudio/plans/endpoints").exists())
         restored = prepare_endpoint_design(EndpointDesignPrepareRequest(workspaceRoot=str(self.root), apiContractId="orders", endpointId="list"))
         self.assertEqual(restored["bindingDraft"], saved)
         self.assertEqual(restored["payload"]["existingStatus"]["status"], "pending")
@@ -74,7 +74,7 @@ class BindingWorkspaceTests(unittest.TestCase):
 
     def test_table_add_remove_and_catalog_rewrite(self):
         """已管理清单写回数据库对象，去重和移除均不改变真实数据库。"""
-        source = {"id": "db", "type": "database", "mode": "direct", "name": "DB", "schema": "app", "domain": "localhost", "port": 3306, "userName": "user", "passwordCiphertext": "xcodeagent-secret:v1:rsa-oaep-256:test:cipher"}
+        source = {"id": "db", "type": "database", "mode": "direct", "name": "DB", "schema": "app", "domain": "localhost", "port": 3306, "userName": "user", "passwordCiphertext": "devagentstudio-secret:v1:rsa-oaep-256:test:cipher"}
         write_sources(self.root, [source])
         with patch("app.services.api_design.load_database_tables", return_value={"schema": "app", "tables": [{"name": "orders"}, {"name": "users"}]}):
             change_selected_tables(self.root, "db", ["orders", "orders"], False)
@@ -82,7 +82,7 @@ class BindingWorkspaceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "不存在"):
                 change_selected_tables(self.root, "db", ["missing"], False)
             self.assertEqual(len(selected_tables(self.root)), 1)
-            path = self.root / ".xcodeagent/datasource/databases/db.json"
+            path = self.root / ".devagentstudio/datasource/databases/db.json"
             stored = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(stored["managedTables"], [{"table": "orders", "description": ""}])
             self.assertNotIn("columns", stored)
@@ -100,7 +100,7 @@ class BindingWorkspaceTests(unittest.TestCase):
 
     def test_selected_tables_reads_schema_from_real_detail_not_index(self):
         """连接名称更新保留清单，Schema 更新清空清单。"""
-        source = {"id": "db", "type": "database", "mode": "direct", "name": "DB", "schema": "app", "domain": "localhost", "port": 3306, "userName": "user", "passwordCiphertext": "xcodeagent-secret:v1:rsa-oaep-256:test:cipher"}
+        source = {"id": "db", "type": "database", "mode": "direct", "name": "DB", "schema": "app", "domain": "localhost", "port": 3306, "userName": "user", "passwordCiphertext": "devagentstudio-secret:v1:rsa-oaep-256:test:cipher"}
         write_sources(self.root, [source])
         with patch("app.services.api_design.load_database_tables", return_value={"schema": "app", "tables": [{"name": "orders"}]}):
             change_selected_tables(self.root, "db", ["orders"], False)
@@ -128,7 +128,7 @@ class BindingWorkspaceTests(unittest.TestCase):
                     save_endpoint_design(EndpointDesignSaveRequest(workspaceRoot=str(self.root), apiContractId="orders", endpointId="other",
                                          draft=request.draft, bindingSelection=selection, technicalPlanHash=self.hash))
                 self.assertEqual(read_binding_draft(self.root, "orders", "other"), saved)
-                self.assertFalse((self.root / ".xcodeagent/plans/endpoints").exists())
+                self.assertFalse((self.root / ".devagentstudio/plans/endpoints").exists())
 
     def test_failed_confirmation_keeps_draft(self):
         """未完成草稿不能正式确认，失败后仍可恢复。"""
@@ -158,13 +158,13 @@ class BindingWorkspaceTests(unittest.TestCase):
         self.assertEqual(result["design"]["sourceSnapshots"], [])
         self.assertIsNone(read_binding_draft(self.root, "orders", "other"))
         self.assertTrue(api_design_readiness(self.root, plan, target_type="endpoint", target_id="other", api_contract_id="orders")["ready"])
-        self.assertFalse((self.root / ".xcodeagent/application-lifecycle.json").exists())
+        self.assertFalse((self.root / ".devagentstudio/application-lifecycle.json").exists())
 
     def test_database_journey_confirm_then_remove_keeps_formal_mapping(self):
         """从添加表、保存草稿到正式确认，移除表仅影响候选清单。"""
         write_sources(self.root, [{"id": "db", "type": "database", "mode": "direct", "name": "DB", "schema": "app",
                                   "domain": "localhost", "port": 3306, "userName": "user",
-                                  "passwordCiphertext": "xcodeagent-secret:v1:rsa-oaep-256:test:cipher"}])
+                                  "passwordCiphertext": "devagentstudio-secret:v1:rsa-oaep-256:test:cipher"}])
         selection = BindingTarget(sourceType="database", sourceId="db", schema="app", table="orders")
         request = self.request()
         request.selection = selection

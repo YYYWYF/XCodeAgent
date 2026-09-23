@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.domain.api_design import DatabaseCondition, DraftFieldMapping
 from app.persistence.data_sources import data_sources_directory
 from app.services.data_sources import change_selected_tables, selected_tables
@@ -192,7 +193,7 @@ def source_references(workspace: str | Path, source_id: str, table: str | None =
                       directory_id: str | None = None, operation_id: str | None = None) -> list[str]:
     """读取正式映射引用，仅供删除前提示，不修改产物。"""
     result = []
-    for path in (Path(workspace) / ".xcodeagent/plans/endpoints").glob("*.json"):
+    for path in (Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans" / "endpoints").glob("*.json"):
         design = _read(path)
         fields = [source for mapping in design.get("fieldMappings", []) for source in mapping.get("sourceFields", [])]
         fields.extend(design.get("databaseConditions", []))
