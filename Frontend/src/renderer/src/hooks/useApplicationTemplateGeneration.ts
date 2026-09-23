@@ -12,6 +12,7 @@ import {
   retryApplicationTemplateReadiness
 } from '../service/templateApi'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
+import { asMessageClause } from '../service/repositoryBranch'
 import type { RepositoryBranchOutcome } from '../service/repositoryBranch'
 
 /**
@@ -22,15 +23,16 @@ import type { RepositoryBranchOutcome } from '../service/repositoryBranch'
  */
 function notifyRepositoryBranch(outcome?: RepositoryBranchOutcome): void {
   if (!outcome || outcome.status === 'pushed') return
-  const branch = outcome.branchName || '所选分支'
+  const branch = outcome.branchName || '所选版本'
   if (outcome.status === 'skipped') {
     message.warning(
-      outcome.message || `远端分支 ${branch} 已存在，本次没有覆盖它。`
+      outcome.message || `远端已存在版本 ${branch}，本次没有覆盖它。`
     )
     return
   }
+  // 后端消息是完整句子（自带句号），嵌进本句前先去掉句末标点，否则会出现「。。」。
   message.warning(
-    `远端分支 ${branch} 未创建成功：${outcome.message || '原因未知'}。应用本身可以正常使用，稍后可重试。`
+    `版本 ${branch} 未提交到远端：${asMessageClause(outcome.message, '原因未知')}。应用本身可以正常使用，稍后可重试。`
   )
 }
 
@@ -93,7 +95,17 @@ export function useApplicationTemplateGeneration({
           const lifecycle = bootstrap.lifecycle
           const confirmedApplication = {
             ...planning.application,
-            planningThreadId: planning.threadId
+            planningThreadId: planning.threadId,
+            // 把远端推送结果一并落盘：工作台的「应用模板已就绪」卡据此如实说明代码
+            // 有没有真的到远端（早先只读本地 git 事实，推送失败时仍显示"已自动提交"）。
+            ...(bootstrap.repositoryBranch
+              ? {
+                  repositoryBranch: {
+                    ...bootstrap.repositoryBranch,
+                    updatedAt: Date.now()
+                  }
+                }
+              : {})
           }
           const persistedApplication = await saveApplication(confirmedApplication)
           const shouldOpenWorkbench = getVisiblePlanningId() === applicationId

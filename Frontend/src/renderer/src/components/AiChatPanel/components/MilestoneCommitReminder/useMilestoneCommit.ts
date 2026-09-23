@@ -62,8 +62,9 @@ export function useMilestoneCommit(
   const [modalVisible, setModalVisible] = useState(false)
   const [dismissed, setDismissed] = useState(false)
 
-  // 「提醒口径」：角标计数与默认勾选用它，按 includePlatformArtifacts 分流，
+  // 「提醒口径」：角标计数与提醒是否出现用它，按 includePlatformArtifacts 分流，
   // 默认只算业务代码 —— 平台产物的状态流转不该让"用户改了代码"的提醒亮起来。
+  // **它不再决定弹窗的默认勾选**（见下面 setSelectedPaths 处的说明）。
   const eligiblePaths = useMemo(
     () => resolveCommitScope({ snapshot, includePlatformArtifacts }),
     [snapshot, includePlatformArtifacts]
@@ -72,6 +73,11 @@ export function useMilestoneCommit(
   // （selected ⊆ requested），所以不能跟着提醒口径一起收窄 —— 否则用户在弹窗里
   // 勾上产物（它们确实列在那里、也确实该能随版本追溯）就会被拒"所选文件已不属于
   // 当前可提交变更"。两者是两个概念，别合并。
+  //
+  // 它同时也是弹窗的**默认勾选**：弹窗列出的就是这批文件（后端 `files` 直接由
+  // `eligible_paths` 构造），默认全勾选等于"看到什么就默认提交什么"，
+  // 用户想排除哪几个再自己取消。早先默认勾的是提醒口径（只有业务代码），
+  // 于是弹窗里列出的产物全是不勾状态，与"全选"按钮的语义也不一致。
   const requestedPaths = useMemo(() => snapshot?.eligiblePaths ?? [], [snapshot])
 
   const loadSnapshot = async (): Promise<VersionControlSnapshot | undefined> => {
@@ -80,7 +86,7 @@ export function useMilestoneCommit(
     try {
       const nextSnapshot = await inspectAllVersionControl(workspaceRoot)
       setSnapshot(nextSnapshot)
-      setSelectedPaths(resolveCommitScope({ snapshot: nextSnapshot, includePlatformArtifacts }))
+      setSelectedPaths(nextSnapshot.eligiblePaths)
       const deferredFingerprint = readDeferredFingerprint(milestoneId)
       setDismissed(deferredFingerprint === nextSnapshot.fingerprint)
       return nextSnapshot
@@ -101,7 +107,7 @@ export function useMilestoneCommit(
       .then((nextSnapshot) => {
         if (!active) return
         setSnapshot(nextSnapshot)
-        setSelectedPaths(resolveCommitScope({ snapshot: nextSnapshot, includePlatformArtifacts }))
+        setSelectedPaths(nextSnapshot.eligiblePaths)
         const deferredFingerprint = readDeferredFingerprint(milestoneId)
         setDismissed(deferredFingerprint === nextSnapshot.fingerprint)
       })

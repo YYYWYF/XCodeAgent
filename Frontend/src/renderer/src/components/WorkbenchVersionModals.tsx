@@ -60,7 +60,7 @@ function PublishBranchModal({
           </span>
           <span className={cx('workbench-publish-modal-title')}>
             <strong>提交并推送</strong>
-            <small>提交本次改动 · 推送到分支 {branchName}</small>
+            <small>提交本次改动 · 推送到版本 {branchName}</small>
           </span>
         </header>
         <div className={cx('workbench-publish-modal-body')}>
@@ -81,7 +81,7 @@ function PublishBranchModal({
                 <Steps.Step title="打包本次改动" description="页面 / 接口 / 数据源 / 配置" />
                 <Steps.Step title="创建提交" description="写入本地仓库" />
                 <Steps.Step
-                  title={`推送到分支 ${branchName}`}
+                  title={`推送到版本 ${branchName}`}
                   description="同步到远端仓库"
                 />
               </Steps>
@@ -93,9 +93,9 @@ function PublishBranchModal({
                 <ul>
                   <li>打包本次全部改动(页面 / 接口 / 数据源 / 配置)</li>
                   <li>
-                    提交到本地仓库并推送到分支 <strong>{branchName}</strong>
+                    提交到本地仓库并推送到版本 <strong>{branchName}</strong>
                   </li>
-                  <li>推送后分支仍可继续开发，再次提交</li>
+                  <li>推送后该版本仍可继续开发，再次提交</li>
                 </ul>
               </div>
               <div className={cx('workbench-generate-field')}>
@@ -213,9 +213,9 @@ function StartIterationModal({
             value={choice.mode}
           >
             <Radio value="current">
-              在当前分支 <strong>{currentBranchName}</strong> 上继续
+              在当前版本 <strong>{currentBranchName}</strong> 上继续
             </Radio>
-            <Radio value="new">新建一条分支</Radio>
+            <Radio value="new">新建一个版本</Radio>
           </Radio.Group>
           {choice.mode === 'new' ? (
             <div className={cx('workbench-generate-field')}>
@@ -224,20 +224,20 @@ function StartIterationModal({
                 onChange={(e) =>
                   onChoiceChange({ mode: 'new', branchName: e.target.value })
                 }
-                placeholder="例如 feature-login"
+                placeholder="例如 v1.2"
                 status={invalidReason || duplicated ? 'error' : undefined}
               />
               <div className={cx('workbench-iteration-branch-hint')}>
                 {invalidReason
                   ? invalidReason
                   : duplicated
-                    ? '这个分支名应用里已经用过了，换一个吧。'
-                    : '新分支会立刻创建并推送到远端仓库。'}
+                    ? '这个版本号应用里已经用过了，换一个吧。'
+                    : '新版本会立刻创建并推送到远端仓库。'}
               </div>
             </div>
           ) : null}
           <div className={cx('workbench-publish-modal-meta')}>
-            <CheckCircleFilled aria-hidden="true" /> 其他分支保持只读，可随时切换查看
+            <CheckCircleFilled aria-hidden="true" /> 其他版本保持只读，可随时切换查看
           </div>
         </div>
         <footer className={cx('workbench-publish-modal-footer')}>
@@ -327,7 +327,7 @@ export default function WorkbenchVersionModals({
       {switchingTargetLabel ? (
         <div className={cx('workbench-version-switching-mask')} role="status" aria-live="polite">
           <div className={cx('workbench-version-switching-card')}>
-            <RichLoading bare title={`正在加载分支 ${switchingTargetLabel} 的应用资产…`} />
+            <RichLoading bare title={`正在加载版本 ${switchingTargetLabel} 的应用资产…`} />
           </div>
         </div>
       ) : null}

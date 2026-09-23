@@ -10,6 +10,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -25,6 +26,9 @@ APPLICATION_CONFIG_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "application.json"
 # 分支推送发生在 Bootstrap 请求路径上，前端在等结果，超时要比版本发布（120s）短。
 _BRANCH_PUSH_TIMEOUT_SECONDS = 30
 _BRANCH_CHECK_TIMEOUT_SECONDS = 20
+# 网络类失败的重试次数与间隔（见 push_baseline_to_branch 的说明）。
+_PUSH_NETWORK_RETRIES = 2
+_PUSH_RETRY_DELAY_SECONDS = 1.5
 
 
 def read_workspace_repository_target(workspace_root: str | Path) -> tuple[str, str, bool]:
@@ -67,7 +71,7 @@ def check_remote_branch(repo_url: str, branch_name: str) -> bool:
         )
     if completed.returncode != 0:
         detail = _failure_detail(completed)
-        raise GitBranchError(f"无法读取远端分支列表：{detail}")
+        raise GitBranchError(f"无法读取远端版本列表：{detail}")
     return bool(completed.stdout.strip())
 
 
@@ -111,7 +115,19 @@ def push_baseline_to_branch(
     arguments = ["push", remote_url, f"HEAD:refs/heads/{branch}"]
     if allow_overwrite:
         arguments.append("--force")
+
+    # 网络类失败自动重试。用户环境里 github.com 走 VPN/代理的 fake-IP，TLS 握手
+    # （实测约 0.6s）偶发被重置，报 SSL_ERROR_SYSCALL —— 同一秒重试往往就成功。
+    # 只重试网络类失败：真正的冲突（non-fast-forward）重试没有意义，直接返回结果。
     completed = _run_git(root, arguments, timeout=_BRANCH_PUSH_TIMEOUT_SECONDS)
+    for _ in range(_PUSH_NETWORK_RETRIES):
+        if completed.returncode == 0:
+            break
+        if not _is_transient_push_failure(_failure_detail(completed)):
+            break
+        time.sleep(_PUSH_RETRY_DELAY_SECONDS)
+        completed = _run_git(root, arguments, timeout=_BRANCH_PUSH_TIMEOUT_SECONDS)
+
     if completed.returncode == 0:
         return _branch_result(branch, "pushed", commit_sha, "")
 
@@ -121,7 +137,7 @@ def push_baseline_to_branch(
             branch,
             "skipped",
             commit_sha,
-            f"远端分支 {branch} 已存在，未覆盖其中的代码。",
+            f"远端已存在版本 {branch}，未覆盖其中的代码。",
         )
     return _branch_result(branch, "failed", commit_sha, detail)
 
@@ -150,7 +166,7 @@ def create_local_branch(
     commit_sha = _read_head(root)
     if not commit_sha:
         return _branch_result(
-            branch, "failed", "", "当前工作区还没有基线提交，不能创建分支。"
+            branch, "failed", "", "当前工作区还没有基线提交，不能创建版本。"
         )
 
     # 已存在同名本地分支时切过去（不重建），否则从当前 HEAD 建出并切过去。
@@ -167,7 +183,7 @@ def create_local_branch(
     repo_url, _, _ = read_workspace_repository_target(root)
     if not repo_url:
         return _branch_result(
-            branch, "created", commit_sha, "分支已在本地创建，但当前应用未配置仓库地址。"
+            branch, "created", commit_sha, "版本已在本地创建，但当前应用未配置仓库地址。"
         )
 
     pushed = push_baseline_to_branch(
@@ -196,7 +212,7 @@ def _ensure_local_branch(root: Path, branch: str) -> str:
         return ""
     created = _run_git(root, ["checkout", "-b", branch], timeout=60)
     if created.returncode != 0:
-        return f"无法在本地创建分支 {branch}：{_failure_detail(created)}"
+        return f"无法在本地创建版本 {branch}：{_failure_detail(created)}"
     return ""
 
 
@@ -234,6 +250,36 @@ def delete_remote_branch(repo_url: str, branch_name: str) -> dict[str, Any]:
     return _branch_result(branch, "failed", "", _failure_detail(completed))
 
 
+def push_workspace_branch(workspace_root: str | Path) -> dict[str, Any]:
+    """把工作区当前 HEAD 推到应用配置里那条分支；**永不抛异常**。
+
+    分支名与仓库地址都从工作区自己的 `application.json` 读（`read_workspace_repository_target`），
+    所以调用方不需要重复解析配置。未配置分支名的工作区（如「添加本地文件夹」接入的目录）
+    直接返回 skipped。
+
+    两处调用方共用它：
+    - Bootstrap 收尾（`workspace_bootstrap/service.py`）—— 基线提交后建出远端分支；
+    - 工作台的「重试推送」动作（`protocols/repository_branch.py`）—— 上次因网络失败后重试。
+    两边都要求非致命，所以异常在这里收敛成 `status: "failed"`。
+    """
+
+    root = Path(workspace_root).expanduser().resolve()
+    try:
+        repo_url, branch_name, overwrite_confirmed = read_workspace_repository_target(root)
+        if not branch_name:
+            return _branch_result("", "skipped", "", "当前应用未配置版本号，跳过远端分支推送。")
+        if not repo_url:
+            return _branch_result(branch_name, "skipped", "", "当前应用未配置仓库地址。")
+        return push_baseline_to_branch(
+            root,
+            repo_url,
+            branch_name,
+            allow_overwrite=overwrite_confirmed,
+        )
+    except Exception as exc:  # noqa: BLE001 - 调用方都要求非致命
+        return _branch_result("", "failed", "", f"远端版本推送失败：{exc}")
+
+
 def _branch_result(
     branch_name: str, status: str, commit_sha: str, message: str
 ) -> dict[str, Any]:
@@ -245,6 +291,31 @@ def _branch_result(
         "commitSha": commit_sha,
         "message": message,
     }
+
+
+def _is_transient_push_failure(detail: str) -> bool:
+    """判断推送失败是否属于"重试就可能成功"的网络类故障。
+
+    只认明确的网络/传输特征；**不**把 non-fast-forward 这类真实冲突算进来 ——
+    那种重试多少次都一样，应该直接把结果告诉用户。
+    """
+
+    lowered = detail.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "ssl_error",
+            "ssl_connect",
+            "unable to access",
+            "could not resolve",
+            "connection reset",
+            "connection timed out",
+            "operation timed out",
+            "rpc failed",
+            "early eof",
+            "the remote end hung up",
+        )
+    )
 
 
 def _is_rejected_push(detail: str) -> bool:
@@ -277,7 +348,7 @@ def _run_git(
     """以固定参数和超时执行无 shell 的 Git 子命令。"""
 
     if shutil.which("git") is None:
-        raise GitBranchError("未检测到 Git，无法执行远端分支操作。")
+        raise GitBranchError("未检测到 Git，无法执行远端版本操作。")
     return workspace_process_registry.run(
         ["git", *arguments],
         workspace=cwd,

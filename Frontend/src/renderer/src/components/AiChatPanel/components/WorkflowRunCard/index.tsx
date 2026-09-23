@@ -561,6 +561,7 @@ export default function WorkflowRunCard({
                 })
               }
               target={testTarget}
+              workspaceRoot={workspaceRoot}
             />
           ) : reviewPhaseConfirmation && requiresConfirmation ? (
             <ReviewPhaseConfirmationCard
@@ -574,6 +575,7 @@ export default function WorkflowRunCard({
                   }
                 })
               }
+              workspaceRoot={workspaceRoot}
             />
           ) : acceptancePhaseConfirmation && requiresConfirmation ? (
             <AcceptancePhaseConfirmationCard
@@ -585,6 +587,7 @@ export default function WorkflowRunCard({
                   }
                 })
               }
+              workspaceRoot={workspaceRoot}
             />
           ) : dagConfirmation && requiresConfirmation ? (
             <BuildTaskPlanConfirmation

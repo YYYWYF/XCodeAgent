@@ -41,6 +41,13 @@ type Props = {
    * 不成立，报错只会制造噪声。弱提醒一律静默，符合"不打断"的定位。
    */
   hideWhenUnavailable?: boolean
+  /**
+   * 嵌在别的卡片里（如阶段转换确认卡），而不是挂在对话面板底部的 dock。
+   *
+   * dock 变体的宽度取的是消息列内容带、水平居中（见 VersionCommitReminder.less）；
+   * 放进卡片后那个宽度会明显窄于卡片，所以内联时要改成满宽。
+   */
+  inline?: boolean
 }
 
 /** 里程碑代码提交提醒：在验收通过等节点展示，引导用户提交代码。
@@ -53,7 +60,8 @@ export default function MilestoneCommitReminder({
   disabled,
   description,
   includePlatformArtifacts = false,
-  hideWhenUnavailable = false
+  hideWhenUnavailable = false,
+  inline = false
 }: Props): ReactElement | null {
   const commit = useMilestoneCommit(
     workspaceRoot,
@@ -89,7 +97,9 @@ export default function MilestoneCommitReminder({
 
   return (
     <>
-      <section className={cx('version-commit-reminder', inspectError && 'warning')}>
+      <section
+        className={cx('version-commit-reminder', inline && 'is-inline', inspectError && 'warning')}
+      >
         <span className={cx('version-commit-icon')}>
           {inspecting ? (
             <Spin size="small" />

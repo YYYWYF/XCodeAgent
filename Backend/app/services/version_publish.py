@@ -87,7 +87,10 @@ def publish_version(
     # 工作区干净时跳过提交（基于当前 HEAD 打 Tag）。
     has_changes = _has_staged_changes(repository_root)
     if has_changes:
-        commit_message = request.description.strip() or request.version_label
+        # 说明为空时回退到分支名。这里原先是 request.version_label —— 版本号模型
+        # 去掉后该字段已不存在，说明为空时会抛 AttributeError（前端禁用了空说明提交，
+        # 所以没暴露出来，但直接调接口就会中招）。
+        commit_message = request.description.strip() or branch
         _run_git_checked(
             repository_root,
             ["commit", "-m", commit_message],
@@ -113,7 +116,10 @@ def publish_version(
     try:
         _run_git_checked(
             repository_root,
-            ["push", remote_name, f"HEAD:{branch}", "--force"],
+            # 必须用全限定 refspec：仓库里可能同时存在同名的分支与**标签**
+            # （旧版本号体系给每个版本打过 tag，如 v1.0），`HEAD:v1.0` 会被 git
+            # 判成"匹配到多个"直接拒绝（dst refspec v1.0 matches more than one）。
+            ["push", remote_name, f"HEAD:refs/heads/{branch}", "--force"],
             "推送提交到远程仓库失败",
             timeout=120,
         )

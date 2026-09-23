@@ -189,7 +189,7 @@ export default function ApplicationForm({
           />
         </Form.Item>
         <Form.Item
-          label="分支名"
+          label="版本号（对应码云仓库中的分支名）"
           name="branchName"
           rules={[
             { required: true, whitespace: true, message: '请输入分支名' },
@@ -204,7 +204,7 @@ export default function ApplicationForm({
           ]}
           extra="应用代码会推送到远端的这个分支。如果远端已经有同名分支，它上面的代码会被覆盖。"
         >
-          <Input placeholder="dev" />
+          <Input placeholder="v1.0" />
         </Form.Item>
       </section>
 

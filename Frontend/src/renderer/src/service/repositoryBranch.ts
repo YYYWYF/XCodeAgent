@@ -30,6 +30,22 @@ export type RepositoryBranchOutcome = {
   message: string
 }
 
+/** 句末标点。后端消息是完整句子（以 。结尾），嵌进前端文案前要去掉。 */
+const TRAILING_SENTENCE_PUNCTUATION = /[。．.；;！!？?]+$/
+
+/**
+ * 把后端返回的完整句子当成前端文案里的一个**从句**使用。
+ *
+ * 后端消息本身是完整句子，前端模板会在它后面接着写"应用本身可以正常使用，稍后可重试。"，
+ * 直接拼会出现「…TOKEN。。应用本身…」这种两个句号。这里去掉句末标点后再交给调用方拼接。
+ *
+ * 消息为空时用 `fallback`（fallback 自带完整标点，由调用方决定）。
+ */
+export function asMessageClause(message: string | undefined, fallback: string): string {
+  const text = (message ?? '').trim().replace(TRAILING_SENTENCE_PUNCTUATION, '')
+  return text || fallback
+}
+
 type RepositoryBranchAgUiPayload = {
   schemaVersion: 1
   runId: string
@@ -151,14 +167,69 @@ export async function createRepositoryBranch(input: {
       (result.result as { repositoryBranch?: unknown } | undefined)?.repositoryBranch
     ) ?? payload
 
-  if (!payload) throw new Error('远端分支接口没有返回有效状态。')
+  if (!payload) throw new Error('远端版本接口没有返回有效状态。')
   if (payload.status === 'failed') {
-    throw new Error(payload.error?.message || '创建分支失败。')
+    throw new Error(payload.error?.message || '创建版本失败。')
   }
   return {
     branchName: payload.branchName || input.branchName,
     // created=已推到远端；created_local_only=只在本地建出，远端没推上去。
     status: payload.branchStatus === 'created' ? 'pushed' : 'skipped',
+    commitSha: payload.commitSha || '',
+    message: payload.message || ''
+  }
+}
+
+/**
+ * 重试把工作区当前分支推送到远端（上次因网络等原因失败时用）。
+ *
+ * 分支名与仓库地址由后端从工作区 `application.json` 读取，所以这里只传工作区。
+ */
+export async function pushRepositoryBranch(input: {
+  workspaceRoot: string
+  threadId?: string
+}): Promise<RepositoryBranchOutcome> {
+  const agent = createAgUiHttpAgent({
+    url: getRepositoryBranchUrl(),
+    threadId: input.threadId || randomUUID()
+  })
+  agent.addMessage({
+    id: randomUUID(),
+    role: 'user',
+    content: '重试把当前版本推送到远端仓库。'
+  })
+
+  let payload: RepositoryBranchAgUiPayload | undefined
+  const subscriber: AgentSubscriber = {
+    onCustomEvent: ({ event }) => {
+      if (event.name !== 'repository-branch') return
+      payload = readRepositoryBranchPayload(event.value) ?? payload
+    },
+    onStateSnapshotEvent: ({ event }) => {
+      payload =
+        readRepositoryBranchPayload(
+          (event.snapshot as { repositoryBranch?: unknown }).repositoryBranch
+        ) ?? payload
+    }
+  }
+
+  const result = await agent.runAgent(
+    { forwardedProps: { repositoryBranch: { action: 'push', workspaceRoot: input.workspaceRoot } } },
+    subscriber
+  )
+  payload =
+    readRepositoryBranchPayload(
+      (result.result as { repositoryBranch?: unknown } | undefined)?.repositoryBranch
+    ) ?? payload
+
+  if (!payload) throw new Error('远端版本接口没有返回有效状态。')
+  if (payload.status === 'failed') {
+    throw new Error(payload.error?.message || '推送失败。')
+  }
+  const pushed = payload.branchStatus === 'pushed'
+  return {
+    branchName: payload.branchName || '',
+    status: pushed ? 'pushed' : payload.branchStatus === 'skipped' ? 'skipped' : 'failed',
     commitSha: payload.commitSha || '',
     message: payload.message || ''
   }
@@ -212,12 +283,12 @@ export async function checkRemoteBranch(input: {
       (result.result as { repositoryBranch?: unknown } | undefined)?.repositoryBranch
     ) ?? payload
 
-  if (!payload) throw new Error('远端分支接口没有返回有效状态。')
+  if (!payload) throw new Error('远端版本接口没有返回有效状态。')
   if (payload.status === 'failed') {
-    throw new Error(payload.error?.message || '远端分支检查失败。')
+    throw new Error(payload.error?.message || '远端版本检查失败。')
   }
   if (typeof payload.exists !== 'boolean') {
-    throw new Error('远端分支接口没有返回存在性结果。')
+    throw new Error('远端版本接口没有返回存在性结果。')
   }
   return {
     action: 'check',

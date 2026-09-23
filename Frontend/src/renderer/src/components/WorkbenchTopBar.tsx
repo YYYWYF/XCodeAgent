@@ -164,8 +164,8 @@ export default function WorkbenchTopBar({
                   disabled={locked || blockedByTestGate || (phaseKey !== 'test' && !reached)}
                   title={
                     locked
-                      ? '该分支为只读历史，阶段和 Agent 调度均已锁定'
-                      : idx >= PHASE_ORDER.indexOf('test')
+                      ? '该版本为只读历史，阶段和 Agent 调度均已锁定'
+                      : phaseKey === 'test'
                         ? testEntryGateReason(testEntryGate)
                         : undefined
                   }

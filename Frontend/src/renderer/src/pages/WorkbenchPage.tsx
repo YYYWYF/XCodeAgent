@@ -28,7 +28,7 @@ import {
 } from '../service/applicationBranches'
 import { publishVersion } from '../service/versionPublish'
 import { startIteration } from '../service/iterationService'
-import { createRepositoryBranch } from '../service/repositoryBranch'
+import { asMessageClause, createRepositoryBranch } from '../service/repositoryBranch'
 import type {
   RequirementSpecDraftSaveResult,
   WorkflowRevisionContinuationHandoff
@@ -296,7 +296,7 @@ function WorkbenchPage({
     if (!applicationLifecycle) return
     setWorkspaceApplication((prev) => {
       if (prev.branches && prev.branches.length > 0) return prev
-      const branchName = prev.branchName || 'dev'
+      const branchName = prev.branchName || 'v1.0'
       const initialBranch = createInitialBranch(branchName, applicationLifecycle, Date.now())
       return { ...prev, branches: [initialBranch], branchName: initialBranch.name }
     })
@@ -516,8 +516,8 @@ function WorkbenchPage({
       notification.success({
         message: '已提交并推送',
         description: repoUrl
-          ? `本次改动已提交至 ${repoUrl} 的分支 ${branchName}，可以继续在该分支上开发。`
-          : `本次改动已提交到分支 ${branchName}，可以继续在该分支上开发。`,
+          ? `本次改动已提交至 ${repoUrl} 的版本 ${branchName}，可以继续在该版本上开发。`
+          : `本次改动已提交到版本 ${branchName}，可以继续在该版本上开发。`,
         placement: 'bottomRight',
         duration: 4
       })
@@ -553,8 +553,9 @@ function WorkbenchPage({
         })
         if (created.status !== 'pushed') {
           branchCreationFailed = true
+          // 后端消息是完整句子（自带句号），嵌进本句前先去掉句末标点，否则会出现「。。」。
           message.warning(
-            `分支 ${targetBranchName} 未推送到远端：${created.message || '原因未知'}。已切换到该分支，稍后可重试推送。`
+            `版本 ${targetBranchName} 未提交到远端：${asMessageClause(created.message, '原因未知')}。已切换到该版本，稍后可重试提交。`
           )
         }
       }
@@ -629,8 +630,8 @@ function WorkbenchPage({
       setIterationChoice({ mode: 'current' })
       message.success(
         branchCreationFailed
-          ? `已发起新迭代（分支 ${targetBranchName}），但分支未推送到远端。`
-          : `已发起新迭代（分支 ${targetBranchName}），开启新的旅程。`
+          ? `已发起新迭代（版本 ${targetBranchName}），但未提交到远端。`
+          : `已发起新迭代（版本 ${targetBranchName}），开启新的旅程。`
       )
     } catch (error) {
       setSwitchingTargetLabel(undefined)
@@ -710,6 +711,7 @@ function WorkbenchPage({
                   developmentPlanningEntities={developmentPlanningEntities}
                   editorMode={editorMode}
                   onApplicationUpdate={handleApplicationUpdate}
+                  onPersistApplication={persistApplicationConfig}
                   onPlanningArtifactsRefresh={handlePlanningArtifactsRefresh}
                   previewBaseUrl=""
                   previewLaunchError=""

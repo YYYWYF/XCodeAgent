@@ -93,6 +93,7 @@ import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import MilestoneCommitReminder from './components/MilestoneCommitReminder'
+import { asMessageClause, pushRepositoryBranch } from '../../service/repositoryBranch'
 import ApiDesignConfigModal from './components/WorkflowRunCard/ApiDesignConfigModal'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
 import {
@@ -308,6 +309,13 @@ type Props = {
   developmentPlanningEntities: DevelopmentPlanningEntityOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
+  /**
+   * 把应用配置写回 application.json。
+   *
+   * 与 onApplicationUpdate（只改内存）分开：重试提交后要把新的结果落盘，
+   * 否则刷新后卡片又会显示成"已自动提交到版本 X"。
+   */
+  onPersistApplication?: (application: ApplicationConfig) => Promise<void> | void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onPlanningArtifactsRefresh: () => void
   previewBaseUrl: string
@@ -837,6 +845,7 @@ export default function AiChatPanel({
   developmentPlanningEntities,
   editorMode,
   onApplicationUpdate,
+  onPersistApplication,
   onApplicationLifecycleChange,
   onPlanningArtifactsRefresh,
   previewBaseUrl,
@@ -1110,6 +1119,39 @@ export default function AiChatPanel({
   // 已有多条分支即处于迭代：模板请求只由 application.json 派生，各迭代一致，
   // 因此本轮沿用已有工程、不重新拉取模板，就绪卡文案需要说明这一点。
   const reusingExistingTemplate = (application.branches?.length ?? 0) > 1
+  const [retryingRepositoryBranch, setRetryingRepositoryBranch] = useState(false)
+  // 重试把当前分支推到远端（上次因网络等原因失败）。结果要落盘：卡片文案由它驱动，
+  // 不落盘的话刷新后又变回"已自动提交到版本 X"。
+  const handleRetryRepositoryBranch = useCallback(async (): Promise<void> => {
+    const workspaceRoot = application.workspaceRoot || ''
+    if (!workspaceRoot || retryingRepositoryBranch) return
+    setRetryingRepositoryBranch(true)
+    try {
+      const outcome = await pushRepositoryBranch({ workspaceRoot })
+      const nextApplication: ApplicationConfig = {
+        ...application,
+        repositoryBranch: { ...outcome, updatedAt: Date.now() }
+      }
+      onApplicationUpdate(nextApplication)
+      await onPersistApplication?.(nextApplication)
+      if (outcome.status === 'pushed') {
+        message.success(`已提交到版本 ${outcome.branchName}。`)
+      } else {
+        message.warning(
+          `版本 ${outcome.branchName || ''} 仍未提交到远端：${asMessageClause(outcome.message, '原因未知')}。`
+        )
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '推送失败')
+    } finally {
+      setRetryingRepositoryBranch(false)
+    }
+  }, [
+    application,
+    onApplicationUpdate,
+    onPersistApplication,
+    retryingRepositoryBranch
+  ])
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
   const templateGenerationOrphaned = isTemplateGenerationOrphaned(
@@ -4613,6 +4655,9 @@ export default function AiChatPanel({
                 designPhasePlanning={isApplicationPlanningPhase}
                 reusedExistingTemplate={reusingExistingTemplate}
                 branchName={application.branchName}
+                repositoryBranch={application.repositoryBranch}
+                onRetryRepositoryBranch={handleRetryRepositoryBranch}
+                retryingRepositoryBranch={retryingRepositoryBranch}
                 emptyContent={
                   !isApplicationPlanningPhase ? (
                     <QuickTaskGuide

@@ -25,6 +25,7 @@ import {
   planningWorkflowRequiresUserInput
 } from '../../../Welcome/planningWorkflowState'
 import type {
+  ApplicationConfig,
   ApplicationLifecycle,
   WorkflowRunPayload,
   WorkspaceCodeChangeSet
@@ -336,6 +337,10 @@ type MessageListProps = {
   reusedExistingTemplate?: boolean
   /** 当前分支名：模板卡里说明自动提交去了哪个分支。 */
   branchName?: string
+  /** 模板基线的远端推送结果：模板卡据此如实说明"推送成功"还是"没推上去"。 */
+  repositoryBranch?: ApplicationConfig['repositoryBranch']
+  onRetryRepositoryBranch?: () => void
+  retryingRepositoryBranch?: boolean
   /** UI 设计稿确认：当前选中页 id（与右侧预览面板联动）。 */
   uiDesignActivePageId?: string
   /** UI 设计稿确认：选中页变化时通知外部（联动右侧预览）。 */
@@ -405,6 +410,9 @@ export default function MessageList({
   designPhasePlanning = false,
   reusedExistingTemplate = false,
   branchName,
+  repositoryBranch,
+  onRetryRepositoryBranch,
+  retryingRepositoryBranch = false,
   error,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
@@ -1203,6 +1211,9 @@ export default function MessageList({
                   retrying={generatingTemplate}
                   reusedExistingTemplate={reusedExistingTemplate}
                   branchName={branchName}
+                  repositoryBranch={repositoryBranch}
+                  onRetryRepositoryBranch={onRetryRepositoryBranch}
+                  retryingRepositoryBranch={retryingRepositoryBranch}
                   workspaceRoot={workspaceRoot}
                   commitDisabled={commitDisabled}
                 />

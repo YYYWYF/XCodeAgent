@@ -28,7 +28,10 @@ export function shouldRenderCommitReminder(input: {
 }
 
 /**
- * 提醒按哪份文件清单计数与默认勾选。
+ * 提醒按哪份文件清单计数（决定角标数字与提醒是否出现）。
+ *
+ * **它不决定弹窗的默认勾选**：弹窗默认全勾选它列出的文件，见 `useMilestoneCommit`
+ * 里 `setSelectedPaths` 处的说明。
  *
  * 默认走 `codePaths`（业务代码）：`.devagentstudio` 下的规划产物与状态快照会随每个设计
  * 步骤变化，算进来会让角标在用户一行业务代码都没写时就亮起并持续增长。

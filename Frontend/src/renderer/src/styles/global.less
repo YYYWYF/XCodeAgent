@@ -57,6 +57,14 @@ textarea[disabled],
   pointer-events: none;
 }
 
+// antd message 默认按内容撑宽：一行长文案（例如推送失败时带出来的 git/SSL 报错）
+// 会横贯整个窗口，既难读也挡住界面。给内容区设上限让它换行；
+// overflow-wrap 兜住 URL、错误码这类没有空格的超长串。
+.ant-message-notice-content {
+  max-width: min(560px, calc(100vw - 48px));
+  overflow-wrap: anywhere;
+}
+
 .@{class-prefix}-workbench-shell {
   // 对话消息列的几何：消息列宽 + 左右内边距。
   // 消息列与它的兄弟节点（各种提醒 dock）必须对齐到同一个内容带，共用这两个值，

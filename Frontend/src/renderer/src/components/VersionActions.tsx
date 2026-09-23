@@ -26,9 +26,9 @@ type Props = {
   part?: 'all' | 'selector' | 'terminal'
 }
 
-/** 分支状态标签：当前分支可编辑，其余只读。 */
+/** 版本状态标签：当前版本可编辑，其余只读。 */
 function statusLabelFor(isActive: boolean): string {
-  return isActive ? '当前分支' : '只读分支'
+  return isActive ? '当前版本' : '只读版本'
 }
 
 /** 根据当前生命周期返回「提交并推送」按钮的阻塞原因，避免在验收阶段仍显示审查文案。 */
@@ -38,7 +38,7 @@ function releaseBlockedTitle(lifecycle?: ApplicationLifecycle): string {
     return '全部测试用例通过后可提交'
   if (String(extensions.reviewStatus || '') !== 'passed') return '审查通过后可提交'
   if (String(extensions.acceptanceStatus || '') !== 'passed') return '验收通过后可提交'
-  return '完成当前分支前置流程后可提交'
+  return '完成当前版本前置流程后可提交'
 }
 
 /**
@@ -159,7 +159,7 @@ export default function VersionActions({
       trigger={['click']}
     >
       <button
-        aria-label={`切换分支，当前 ${viewedBranch.name}${
+        aria-label={`切换版本，当前 ${viewedBranch.name}${
           uncommittedCount > 0 ? `，${uncommittedCount} 个文件未提交` : ''
         }`}
         className={cx('workbench-version-badge', !isViewingCurrentBranch && 'is-released')}
@@ -181,7 +181,7 @@ export default function VersionActions({
         {candidates.length > 0 ? (
           <span
             className={cx('workbench-version-candidate')}
-            title={`${candidates.length} 个模块已完成，可在分支面板查看`}
+            title={`${candidates.length} 个模块已完成，可在版本面板查看`}
           >
             {candidates.length}
           </span>
@@ -200,7 +200,7 @@ export default function VersionActions({
           onClick={() => onBranchSelect(currentBranchName || '')}
           size="small"
         >
-          回到当前分支
+          回到当前版本
         </Button>
       ) : null}
 

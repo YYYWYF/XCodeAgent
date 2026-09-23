@@ -83,7 +83,7 @@ def build_version_publish_ag_ui_stream(
             await drain_task
 
         data = result.model_dump(by_alias=True)
-        message = f"已提交并推送到分支 {result.branch}。"
+        message = f"已提交并推送到版本 {result.branch}。"
         return AgUiActionResult(data=data, message=message)
 
     return build_ag_ui_action_stream(
