@@ -134,7 +134,7 @@ def _write_endpoint_designs(workspace: Path, plan: dict, *, source_type: str) ->
                 workspace,
                 EndpointApiDesign.model_validate(
                     {
-                        "schemaVersion": "endpoint-field-mapping.v3",
+                        "schemaVersion": "endpoint-field-mapping.v4",
                         "artifactType": "endpoint-field-mapping",
                         "status": "confirmed",
                         "confirmationStatus": "confirmed",
@@ -142,6 +142,7 @@ def _write_endpoint_designs(workspace: Path, plan: dict, *, source_type: str) ->
                         "endpointId": endpoint_id,
                         "artifactRevision": "0123456789abcdef0123456789abcdef",
                         "endpointContract": endpoint,
+                        "databaseOperation": "read" if source_type == "database" else None,
                         "fieldMappings": [{
                             "endpointField": endpoint_field,
                             "mappingType": "source_mapping",

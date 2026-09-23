@@ -210,7 +210,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                         },
                         "endpoint_ids": ["weather.get"],
                         "endpoint_designs": [{
-                            "schemaVersion": "endpoint-field-mapping.v3",
+                            "schemaVersion": "endpoint-field-mapping.v4",
                             "artifactType": "endpoint-field-mapping",
                             "status": "confirmed",
                             "confirmationStatus": "confirmed",

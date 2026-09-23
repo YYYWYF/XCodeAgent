@@ -182,6 +182,7 @@ def render_endpoint_design_markdown(design: dict[str, Any]) -> str:
         "",
         f"- API Contract：`{design.get('apiContractId') or ''}`",
         f"- Endpoint：`{design.get('endpointId') or ''}`",
+        f"- 数据库操作：`{design.get('databaseOperation') or '无数据库映射'}`",
         f"- 状态：已确认",
         f"<!-- xcodeagent-artifact-revision: {design.get('artifactRevision') or ''} -->",
         "",
@@ -193,6 +194,8 @@ def render_endpoint_design_markdown(design: dict[str, Any]) -> str:
     lines.extend(_mapping_lines(design, side="request") or ["- 无 Request 映射。"])
     lines.extend(["", "## Response 映射", ""])
     lines.extend(_mapping_lines(design, side="response") or ["- 无 Response 映射。"])
+    lines.extend(["", "## 固定数据库条件", ""])
+    lines.extend(_condition_lines(design) or ["- 无固定数据库条件。"])
     lines.extend(["", "## 业务说明", ""])
     lines.extend(_business_description_lines(design) or ["- 无补充业务说明。"])
     lines.extend(["", "## 确认时数据来源", ""])
@@ -229,12 +232,24 @@ def _mapping_lines(design: dict[str, Any], *, side: str) -> list[str]:
             )
             continue
         middle = [" + ".join(_source_field_label(item) for item in mapping.get("sourceFields", []))]
+        operators = [str(item.get("filterOperator") or "") for item in mapping.get("sourceFields", []) if isinstance(item, dict) and item.get("filterOperator")]
+        if operators:
+            middle.append("运算符：" + ", ".join(operators))
         middle.append({"direct": "直接映射", "single_field_description": "单字段业务处理", "multi_field_description": "多字段业务处理"}.get(mapping.get("processingType"), ""))
         middle = [label for label in middle if label]
         labels = [endpoint_label, *middle] if side == "request" else [*reversed(middle), endpoint_label]
         if len(labels) > 1:
             lines.append(f"- {_escape_markdown(' → '.join(labels))}")
     return lines
+
+
+def _condition_lines(design: dict[str, Any]) -> list[str]:
+    """把类型感知的固定数据库条件渲染为用户可读的 Markdown 列表。"""
+
+    return [
+        f"- {_escape_markdown(str(item.get('sourceId') or ''))}.{_escape_markdown(str(item.get('table') or ''))}.{_escape_markdown(str(item.get('column') or ''))}：{_escape_markdown(str(item.get('operator') or ''))}{'' if item.get('value') is None else ' ' + _escape_markdown(str(item.get('value')))}"
+        for item in _dict_items(design.get("databaseConditions"))
+    ]
 
 
 def _business_description_lines(design: dict[str, Any]) -> list[str]:

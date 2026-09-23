@@ -370,7 +370,7 @@ flowchart TD
 - **类型**：独立 AG-UI 配置流负责确定性字段枚举、结构化草稿校验和双文件原子持久化；主 Workflow 的确定性门禁负责页面／接口全量检测与 revision 确认，二者都不调用设计模型。
 - **交互**：弹窗通过 `/endpoint-designs/run` 的 `prepare/save` 动作编辑正式映射。直属 MySQL 表列、Builtin/DBID 能力提示和外部 API Operation Schema 通过独立数据源 AG-UI 接口读取，不进入 `/workflow/run` 的响应状态。保存后刷新原门禁，但不会自动确认或继续开发。
 - **输入**：独立配置使用已确认 TechnicalPlan、`apiContractId + endpointId` 和有界草稿；页面开发门禁使用 `requiredEndpointIds`，接口开发门禁只使用自身复合标识。实体字段只作为当前 Endpoint 内的业务语义引用，不存在全局实体数据源绑定。
-- **输出**：配置流写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用 `endpoint-field-mapping.v3`；`source_mapping` 通过 `sourceFields` 和 `processingType` 表示直接映射、单字段业务处理或多字段业务处理，无物理来源的字段使用 `business_description`。门禁回显全部关联 Endpoint 的完整映射与 revisions；确认时重新读取并逐项比较，通过后才进入 `inspect_workspace`。Markdown 是用户可见正式产物。
+- **输出**：配置流写入 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 使用 `endpoint-field-mapping.v4`；数据库表映射声明单一 CRUD 操作，按请求参数位置自动填入查询条件/写入字段并允许在 update 中调整，查询字段保存类型感知运算符，固定条件按列类型保存运算符及可选固定值；`source_mapping` 仍通过 `sourceFields` 和 `processingType` 表示直接映射、单字段业务处理或多字段业务处理，无物理来源的字段使用 `business_description`。门禁回显全部关联 Endpoint 的完整映射与 revisions；确认时重新读取并逐项比较，通过后才进入 `inspect_workspace`。Markdown 是用户可见正式产物。
 - **校验规则**：Path、Query、Header、请求体叶子和响应业务叶子均可进入映射图；容器与纯包装节点跳过。`direct` 要求方向和类型兼容；不属于实体或数据源的字段使用 `business_description` 填写一句自然语言说明，不产生额外节点或边。节点不得修改 TechnicalPlan method、path、参数或 Schema。
 - **依赖文件**：`domain/api_design.py`、`services/api_design.py`、`services/endpoint_design_detail.py`、`protocols/endpoint_designs.py`、`routes/endpoint_designs.py`、`workspace/endpoint_design_documents.py`、`graph/nodes/api_design.py`。
 - **依赖节点**：页面/API 开发固定从 `api_design_readiness_gate` 进入；缺失或失效时返回完整列表并结束当前 run，全部有效时等待用户确认，确认的 revisions 仍一致后进入 `inspect_workspace`。

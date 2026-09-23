@@ -13,6 +13,19 @@ type Props = {
   historyLayout?: boolean
 }
 
+const FIXED_CONDITION_LABELS: Record<string, string> = {
+  eq: '等于', ne: '不等于', gt: '大于', gte: '大于等于', lt: '小于', lte: '小于等于',
+  contains: '包含', not_contains: '不包含', starts_with: '前缀匹配', ends_with: '后缀匹配',
+  in: '属于', not_in: '不属于', between: '介于', not_between: '不介于', is_null: '为空', is_not_null: '不为空'
+}
+
+/** 将固定条件运算符和值转换为只读结果文本。 */
+function fixedConditionText(item: Record<string, unknown>): string {
+  const label = FIXED_CONDITION_LABELS[String(item.operator || '')] || String(item.operator || '')
+  if (!Object.prototype.hasOwnProperty.call(item, 'value')) return label
+  return `${label} ${Array.isArray(item.value) ? item.value.join('，') : String(item.value)}`
+}
+
 /** 渲染 API 设计正式产物的共享只读视图。 */
 export default function EndpointDesignResult({ detail, compact = false, historyLayout = false }: Props): ReactElement {
   if (!detail) return <Empty description="尚未读取接口 API 映射结果" />
@@ -29,7 +42,8 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
     { title: '映射模式', dataIndex: 'mapping', key: 'mapping', width: 140 },
     { title: '业务说明', dataIndex: 'description', key: 'description', width: 200, render: (value: string) => value || '—' },
     { title: '数据源', dataIndex: 'dataSource', key: 'dataSource', width: 140, render: (value: string) => value || '—' },
-    { title: '映射字段', dataIndex: 'mappingField', key: 'mappingField', width: 180, render: (value: string) => value || '—' }
+    { title: '映射字段', dataIndex: 'mappingField', key: 'mappingField', width: 180, render: (value: string) => value || '—' },
+    { title: '查询运算符', dataIndex: 'filterOperator', key: 'filterOperator', width: 125, render: (value: string) => value || '—' }
   ]
   const renderRows = (side: 'request' | 'response'): ReactElement => {
     const groups = groupEndpointDesignRows(projectEndpointDesignRows(detail, side))
@@ -48,6 +62,11 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
   if (historyLayout) {
     return (
       <div className={cx('endpoint-design-result', 'endpoint-design-history')}>
+        <section><strong>数据库操作</strong><p>{String(design.databaseOperation || '无数据库映射')}</p></section>
+        {Array.isArray(design.databaseConditions) && design.databaseConditions.length ? <section><strong>固定数据库条件</strong>{design.databaseConditions.map((condition, index) => {
+          const item = condition && typeof condition === 'object' ? condition as Record<string, unknown> : {}
+          return <p key={`${String(item.column || '')}-${index}`}>{String(item.schema || '')}.{String(item.table || '')}.{String(item.column || '')} · {fixedConditionText(item)}</p>
+        })}</section> : null}
         {design.implementationDescription ? <section><strong>API 实现描述</strong><p>{String(design.implementationDescription)}</p></section> : null}
         {(['request', 'response'] as const).map((side) => (
           <section key={side}>
@@ -75,8 +94,16 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
         <Descriptions.Item label="接口">{endpointName || detail.endpointId}</Descriptions.Item>
         <Descriptions.Item label="接口 ID">{detail.endpointId}</Descriptions.Item>
         <Descriptions.Item label="实现描述">{String(design.implementationDescription || '未填写')}</Descriptions.Item>
+        <Descriptions.Item label="数据库操作">{String(design.databaseOperation || '无数据库映射')}</Descriptions.Item>
         <Descriptions.Item label="映射数量">请求 {summary.requestCount} 项，返回 {summary.responseCount} 项</Descriptions.Item>
       </Descriptions>
+      {Array.isArray(design.databaseConditions) && design.databaseConditions.length ? <section className="endpoint-design-fixed-conditions">
+        <Text strong>固定数据库条件</Text>
+        {design.databaseConditions.map((condition, index) => {
+          const item = condition && typeof condition === 'object' ? condition as Record<string, unknown> : {}
+          return <div key={`${String(item.column || '')}-${index}`}><Tag>固定</Tag><code>{String(item.schema || '')}.{String(item.table || '')}.{String(item.column || '')}</code><span>{fixedConditionText(item)}</span></div>
+        })}
+      </section> : null}
       {!compact ? (
         <Collapse defaultActiveKey={['request', 'response']}>
           {(['request', 'response'] as const).map((side) => (

@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-API_DESIGN_SCHEMA_VERSION = "endpoint-field-mapping.v3"
+API_DESIGN_SCHEMA_VERSION = "endpoint-field-mapping.v4"
 API_DESIGN_ARTIFACT_TYPE = "endpoint-field-mapping"
 
 
@@ -52,7 +52,97 @@ class DatabaseSourceField(ApiDesignModel):
     column: str = Field(min_length=1, max_length=256)
     type: str = Field(default="unknown", min_length=1, max_length=128)
     usage: Literal["read", "filter", "write"] = "read"
+    filter_operator: Literal[
+        "eq", "ne", "gt", "gte", "lt", "lte",
+        "contains", "not_contains", "starts_with", "ends_with",
+        "in", "not_in", "between", "not_between",
+    ] | None = Field(default=None, alias="filterOperator")
     description: str = Field(default="", max_length=2048)
+
+    @model_validator(mode="after")
+    def validate_filter_operator(self) -> "DatabaseSourceField":
+        """确保查询运算符只附着在 filter 来源字段上。"""
+
+        if self.usage == "filter" and not self.filter_operator:
+            raise ValueError("filter 数据库字段必须包含 filterOperator。")
+        if self.usage != "filter" and self.filter_operator:
+            raise ValueError("read/write 数据库字段不能包含 filterOperator。")
+        return self
+
+
+DatabaseConditionOperator = Literal[
+    "eq", "ne", "gt", "gte", "lt", "lte",
+    "contains", "not_contains", "starts_with", "ends_with",
+    "in", "not_in", "between", "not_between",
+    "is_null", "is_not_null",
+]
+
+
+class DatabaseCondition(ApiDesignModel):
+    """描述没有 API 右值、始终生效且可携带固定值的数据库条件。"""
+
+    source_type: Literal["database"] = Field(default="database", alias="sourceType")
+    source_id: str = Field(alias="sourceId", min_length=1, max_length=128)
+    schema_name: str = Field(alias="schema", min_length=1, max_length=256)
+    table: str = Field(min_length=1, max_length=256)
+    column: str = Field(min_length=1, max_length=256)
+    type: str = Field(default="unknown", min_length=1, max_length=128)
+    operator: DatabaseConditionOperator
+    value: Any | None = None
+    description: str = Field(default="", max_length=2048)
+
+    @model_validator(mode="after")
+    def validate_value_shape(self) -> "DatabaseCondition":
+        """约束固定条件的列类型、值类型、集合长度及区间顺序。"""
+
+        if self.operator in {"is_null", "is_not_null"}:
+            if "value" in self.model_fields_set:
+                raise ValueError("空值固定条件不能携带 value。")
+            return self
+        if self.value is None:
+            raise ValueError("固定条件运算符必须携带 value。")
+        if self.operator in {"in", "not_in"} and (not isinstance(self.value, list) or not self.value):
+            raise ValueError("IN/NOT IN 固定条件必须携带非空数组 value。")
+        if self.operator in {"between", "not_between"} and (not isinstance(self.value, list) or len(self.value) != 2):
+            raise ValueError("BETWEEN/NOT BETWEEN 固定条件必须携带两个元素的数组 value。")
+        if self.operator not in {"in", "not_in", "between", "not_between"} and isinstance(self.value, list):
+            raise ValueError("标量固定条件不能携带数组 value。")
+        normalized = self.type.strip().lower().split("(", 1)[0]
+        if any(token in normalized for token in ("int", "decimal", "numeric", "float", "double", "number")):
+            family = "number"
+        elif any(token in normalized for token in ("bool", "bit")):
+            family = "boolean"
+        elif any(token in normalized for token in ("timestamp", "datetime", "date", "time")):
+            family = "temporal"
+        elif any(token in normalized for token in ("char", "text", "string", "uuid", "enum")):
+            family = "string"
+        else:
+            family = "unknown"
+        allowed = {"eq", "ne"}
+        if family in {"number", "temporal"}:
+            allowed.update({"gt", "gte", "lt", "lte", "between", "not_between", "in", "not_in"})
+        if family == "string":
+            allowed.update({"contains", "not_contains", "starts_with", "ends_with", "in", "not_in"})
+        if self.operator not in allowed:
+            raise ValueError(f"列类型 {self.type} 不支持固定条件运算符 {self.operator}。")
+
+        def scalar_valid(item: Any) -> bool:
+            """判断固定标量是否与数据库列类型族一致。"""
+
+            if family == "number":
+                return isinstance(item, (int, float)) and not isinstance(item, bool)
+            if family == "boolean":
+                return isinstance(item, bool)
+            if family in {"string", "temporal"}:
+                return isinstance(item, str) and bool(item.strip())
+            return item is not None and not isinstance(item, (list, dict))
+
+        values = self.value if isinstance(self.value, list) else [self.value]
+        if not all(scalar_valid(item) for item in values):
+            raise ValueError(f"固定条件值与列类型 {self.type} 不兼容。")
+        if self.operator in {"between", "not_between"} and values[0] > values[1]:
+            raise ValueError("固定条件区间上下界倒置。")
+        return self
 
 
 class ExternalSourceField(ApiDesignModel):
@@ -155,7 +245,7 @@ class ArtifactLineageReference(ApiDesignModel):
 class EndpointFieldMappingDesign(ApiDesignModel):
     """描述已确认的 Endpoint 自包含字段映射正式产物。"""
 
-    schema_version: Literal["endpoint-field-mapping.v3"] = Field(default=API_DESIGN_SCHEMA_VERSION, alias="schemaVersion")
+    schema_version: Literal["endpoint-field-mapping.v4"] = Field(default=API_DESIGN_SCHEMA_VERSION, alias="schemaVersion")
     artifact_type: Literal["endpoint-field-mapping"] = Field(default=API_DESIGN_ARTIFACT_TYPE, alias="artifactType")
     status: Literal["confirmed"] = "confirmed"
     confirmation_status: Literal["confirmed"] = Field(default="confirmed", alias="confirmationStatus")
@@ -164,10 +254,32 @@ class EndpointFieldMappingDesign(ApiDesignModel):
     endpoint_id: str = Field(alias="endpointId", min_length=1, max_length=256)
     endpoint_contract: dict[str, Any] = Field(alias="endpointContract")
     implementation_description: str | None = Field(default=None, alias="implementationDescription", max_length=4000)
+    database_operation: Literal["create", "read", "update", "delete"] | None = Field(default=None, alias="databaseOperation")
     field_mappings: list[ConfirmedFieldMapping] = Field(alias="fieldMappings", max_length=3000)
+    database_conditions: list[DatabaseCondition] = Field(default_factory=list, alias="databaseConditions", max_length=300)
     source_snapshots: list[SourceSnapshot] = Field(default_factory=list, alias="sourceSnapshots", max_length=100)
     based_on: list[ArtifactLineageReference] = Field(alias="basedOn", min_length=1)
     confirmed_at: datetime = Field(alias="confirmedAt")
+
+    @model_validator(mode="after")
+    def validate_database_operation_shape(self) -> "EndpointFieldMappingDesign":
+        """保证正式产物中的数据库来源与单一 CRUD 操作成对出现。"""
+
+        has_database_source = any(
+            isinstance(source, DatabaseSourceField)
+            for mapping in self.field_mappings
+            if isinstance(mapping, SourceMapping)
+            for source in mapping.source_fields
+        )
+        has_conditions = bool(self.database_conditions)
+        if has_database_source or has_conditions:
+            if self.database_operation is None:
+                raise ValueError("数据库正式映射必须包含 databaseOperation。")
+            if self.database_operation == "create" and has_conditions:
+                raise ValueError("新增正式映射不能包含 databaseConditions。")
+        elif self.database_operation is not None:
+            raise ValueError("纯外部 API 正式映射不能包含 databaseOperation。")
+        return self
 
 
 class ApiDesignAction(ApiDesignModel):

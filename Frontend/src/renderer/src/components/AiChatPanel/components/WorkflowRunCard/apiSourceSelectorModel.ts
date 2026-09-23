@@ -1,10 +1,12 @@
 import type {
   WorkflowApiDatabaseFieldNode,
+  WorkflowApiDatabaseOperation,
+  WorkflowApiFilterOperator,
   WorkflowApiExternalFieldNode,
   WorkflowApiField,
   WorkflowApiDesignPayload
 } from '../../../../typings'
-import { defaultDatabaseUsage, resolveDatabaseUsage } from './apiDesignSerialization'
+import { defaultDatabaseUsageForOperation, resolveDatabaseUsageForOperation } from './apiDesignSerialization'
 
 /** API 设计面板使用的独立数据源元数据动作，统一由此处维护避免组件写错协议名称。 */
 export const API_SOURCE_METADATA_ACTIONS = {
@@ -56,6 +58,7 @@ export type ApiSourceSelectorState = {
   operationId: string
   externalFieldKey: string
   usage: WorkflowApiDatabaseFieldNode['usage']
+  filterOperator?: WorkflowApiFilterOperator
 }
 
 /** 外部 Operation 字段的轻量元数据，避免把投影对象直接绑定到组件状态。 */
@@ -83,7 +86,8 @@ const sectionLabels: Record<string, string> = {
 /** 根据已保存的 Source Field 初始化编辑器，元数据流式更新不会触发此函数。 */
 export function createApiSourceSelectorState(
   endpoint: WorkflowApiField,
-  selectedSourceNode?: WorkflowApiDatabaseFieldNode | WorkflowApiExternalFieldNode
+  selectedSourceNode?: WorkflowApiDatabaseFieldNode | WorkflowApiExternalFieldNode,
+  operation?: WorkflowApiDatabaseOperation
 ): ApiSourceSelectorState {
   const initial: ApiSourceSelectorState = {
     sourceId: '',
@@ -92,7 +96,7 @@ export function createApiSourceSelectorState(
     directoryId: '',
     operationId: '',
     externalFieldKey: '',
-    usage: defaultDatabaseUsage(endpoint)
+    usage: defaultDatabaseUsageForOperation(endpoint, operation)
   }
   if (!selectedSourceNode) return initial
   if (selectedSourceNode.sourceType === 'database') {
@@ -101,7 +105,8 @@ export function createApiSourceSelectorState(
       sourceId: selectedSourceNode.sourceId,
       table: selectedSourceNode.table,
       column: selectedSourceNode.column,
-      usage: resolveDatabaseUsage(endpoint, selectedSourceNode.usage)
+      usage: resolveDatabaseUsageForOperation(endpoint, selectedSourceNode.usage, operation),
+      filterOperator: selectedSourceNode.filterOperator
     }
   }
   return {
@@ -117,7 +122,8 @@ export function createApiSourceSelectorState(
 export function resetApiSourceForSource(
   state: ApiSourceSelectorState,
   sourceId: string,
-  endpoint: WorkflowApiField
+  endpoint: WorkflowApiField,
+  operation?: WorkflowApiDatabaseOperation
 ): ApiSourceSelectorState {
   return {
     ...state,
@@ -127,7 +133,8 @@ export function resetApiSourceForSource(
     directoryId: '',
     operationId: '',
     externalFieldKey: '',
-    usage: defaultDatabaseUsage(endpoint)
+    usage: defaultDatabaseUsageForOperation(endpoint, operation),
+    filterOperator: undefined
   }
 }
 

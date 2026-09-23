@@ -33,7 +33,7 @@ def _formal_inputs() -> dict:
         }],
         "endpoint_api_designs": [{
             "content": {
-                "schemaVersion": "endpoint-field-mapping.v3",
+                "schemaVersion": "endpoint-field-mapping.v4",
                 "artifactType": "endpoint-field-mapping",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",

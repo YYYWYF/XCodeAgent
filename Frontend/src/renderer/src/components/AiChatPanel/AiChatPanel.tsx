@@ -4836,7 +4836,7 @@ export default function AiChatPanel({
       {!isApplicationPlanningPhase && workspaceRoot ? <div className={cx('embedded-preview-pane', 'workspace-pane')} style={{ display: showRightPanel && rightPanel?.type === 'field-mapping' ? undefined : 'none' }}>
         <RightPanelTabs tabs={displayedWorkspaceTabs} active="field-mapping" onChange={openDisplayedWorkspaceTab} onClose={() => { setRightPanel(undefined); onRightPanelOpenChange(false) }} />
         <div className={cx('workspace-content')}><FieldMappingWorkspace key={workspaceRoot} workspaceRoot={workspaceRoot} target={apiDesignConfigTarget}
-          contracts={developmentPlanningApiContracts} onSelect={setApiDesignConfigTarget} onOpenSources={handleShowDataSources} onOpenExternalSources={handleShowExternalApis} onSaved={handleApiDesignConfigSaved} /></div>
+          contracts={developmentPlanningApiContracts} onSelect={setApiDesignConfigTarget} onSaved={handleApiDesignConfigSaved} /></div>
       </div> : null}
 
       {showRightPanel && rightPanel?.type === 'outline' && (

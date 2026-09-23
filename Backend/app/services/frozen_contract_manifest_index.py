@@ -130,6 +130,15 @@ def endpoint_api_design_source_types(
                         "Endpoint API Design.fieldMappings.sourceFields.sourceType",
                     )
                 )
+    for condition in manifest_sequence(
+        contract.content.get("databaseConditions", []),
+        "Endpoint API Design.databaseConditions",
+    ):
+        if not isinstance(condition, Mapping) or condition.get("sourceType") != "database":
+            raise ContractCatalogBindingError(
+                "Endpoint API Design.databaseConditions 项必须是 database 条件对象。"
+            )
+        source_types.add("database")
     return source_types
 
 

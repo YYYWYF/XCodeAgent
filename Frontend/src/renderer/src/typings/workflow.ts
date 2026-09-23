@@ -505,6 +505,33 @@ export type WorkflowApiField = {
   description?: string
 }
 
+/** 数据库查询运算符；文本运算符由下游转换为参数化 LIKE。 */
+export type WorkflowApiFilterOperator =
+  | 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte'
+  | 'contains' | 'not_contains' | 'starts_with' | 'ends_with'
+  | 'in' | 'not_in' | 'between' | 'not_between'
+
+/** 固定数据库条件运算符；除空值判断外的运算符必须携带固定值。 */
+export type WorkflowApiDatabaseConditionOperator =
+  | WorkflowApiFilterOperator
+  | 'is_null' | 'is_not_null'
+
+/** Endpoint 绑定数据库时的单一 CRUD 操作。 */
+export type WorkflowApiDatabaseOperation = 'create' | 'read' | 'update' | 'delete'
+
+/** 无 API 右值、每次请求都生效的固定数据库条件。 */
+export type WorkflowApiDatabaseCondition = {
+  sourceType: 'database'
+  sourceId: string
+  schema: string
+  table: string
+  column: string
+  type: string
+  operator: WorkflowApiDatabaseConditionOperator
+  value?: unknown
+  description?: string
+}
+
 /** API 设计中的直属 MySQL Source Field 节点。 */
 export type WorkflowApiDatabaseFieldNode = {
   nodeType?: 'source_field'
@@ -516,6 +543,7 @@ export type WorkflowApiDatabaseFieldNode = {
   column: string
   type: string
   usage?: 'read' | 'filter' | 'write'
+  filterOperator?: WorkflowApiFilterOperator
   description?: string
 }
 
@@ -562,6 +590,8 @@ export type WorkflowApiDesignDraft = {
   endpointId: string
   /** Endpoint 级可选实现指导，不参与字段映射完整性判断。 */
   implementationDescription?: string
+  databaseOperation?: WorkflowApiDatabaseOperation
+  databaseConditions?: WorkflowApiDatabaseCondition[]
   fieldMappings: WorkflowApiFieldMapping[]
 }
 

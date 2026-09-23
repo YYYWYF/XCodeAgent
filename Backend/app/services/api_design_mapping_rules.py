@@ -21,7 +21,7 @@ def mapping_processing_type(mapping: dict[str, Any]) -> str:
 
 def source_identity(source: dict[str, Any]) -> tuple[str, ...]:
     """生成包含用途或 Operation 区段的稳定来源身份。"""
-    keys = ("sourceType", "sourceId", "schema", "table", "column", "usage") if source.get("sourceType") == "database" else ("sourceType", "sourceId", "directoryId", "operationId", "section", "path")
+    keys = ("sourceType", "sourceId", "schema", "table", "column", "usage", "filterOperator") if source.get("sourceType") == "database" else ("sourceType", "sourceId", "directoryId", "operationId", "section", "path")
     return tuple(str(source.get(key) or "") for key in keys)
 
 

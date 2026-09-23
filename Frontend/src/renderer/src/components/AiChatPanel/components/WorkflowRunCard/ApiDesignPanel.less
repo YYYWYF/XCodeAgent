@@ -537,11 +537,31 @@
 }
 
 .api-design-source-usage {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 12px;
+}
+
+.api-design-database-operation-select {
+  min-width: 128px;
+  margin-left: auto;
 }
 
 .api-design-source-usage-select {
   max-width: 240px;
+}
+
+// 完整编辑器中的运算符与用途选择沿用工作台明暗主题边框和焦点颜色。
+.api-design-source-usage .api-design-source-usage-select {
+  flex: 1 1 180px;
+  min-width: 150px;
+}
+.api-design-source-usage .ant-select-focused .ant-select-selector,
+.api-design-source-usage .ant-select:hover .ant-select-selector {
+  border-color: var(--wb-accent) !important;
+  box-shadow: 0 0 0 2px var(--wb-accent-soft);
 }
 
 .api-design-source-status {

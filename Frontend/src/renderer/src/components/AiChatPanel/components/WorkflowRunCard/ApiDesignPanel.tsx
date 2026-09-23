@@ -1,4 +1,4 @@
-import { Alert, Button, Input, message, Popover, Spin, Tabs, Tag, Typography } from 'antd'
+import { Alert, Button, Input, message, Popover, Select, Spin, Tabs, Tag, Typography } from 'antd'
 import {
   AimOutlined,
   ApiOutlined,
@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
+  WorkflowApiDatabaseOperation,
   WorkflowApiDesignAction,
   WorkflowApiDesignPayload
 } from '../../../../typings'
@@ -22,7 +23,9 @@ import {
   requestApiDesignExternalOperation,
   requestDataSources
 } from '../../../../service/dataSources'
-import { apiDesignFieldKey, createApiDesignAction } from './apiDesignSerialization'
+import { apiDesignFieldKey, createApiDesignAction, defaultDatabaseOperation } from './apiDesignSerialization'
+import { confirmWorkspaceAction } from '../../../workspaceDialogs'
+import { resetDraftForDatabaseOperation } from '../FieldMapping/model'
 import { useApiDesignDraft } from './useApiDesignDraft'
 import ApiFieldMappingTable from './ApiFieldMappingTable'
 import { API_SOURCE_METADATA_ACTIONS } from './apiSourceSelectorModel'
@@ -113,6 +116,8 @@ export default function ApiDesignPanel({
   ].filter(Boolean).join('；')
   const endpointMethod = String(payload.endpoint?.method || 'API').toUpperCase()
   const endpointPath = String(payload.endpoint?.path || draft.endpointId)
+  const hasDatabaseMapping = draft.fieldMappings.some((mapping) => mapping.mappingType === 'source_mapping' && mapping.sourceFields.some((source) => source.sourceType === 'database')) || Boolean(draft.databaseConditions?.length)
+  const databaseOperationLabels: Record<WorkflowApiDatabaseOperation, string> = { create: '新增', read: '查询', update: '修改', delete: '删除' }
 
   /** 将当前 Endpoint 路径复制到系统剪贴板，并短暂反馈复制结果。 */
   const handleCopyEndpoint = async (): Promise<void> => {
@@ -222,6 +227,19 @@ export default function ApiDesignPanel({
       <Tag className="api-design-independent-tag">
         {payload.existingStatus?.status === 'stale' ? '需重新设计' : 'Endpoint 独立设计'}
       </Tag>
+      {hasDatabaseMapping ? <Select
+        className="api-design-database-operation-select"
+        disabled={disabled}
+        options={Object.entries(databaseOperationLabels).map(([value, label]) => ({ value, label }))}
+        placeholder="选择数据库操作"
+        value={draft.databaseOperation || defaultDatabaseOperation(endpointMethod)}
+        onChange={(value: WorkflowApiDatabaseOperation) => confirmWorkspaceAction({
+          title: '切换数据库操作？',
+          content: '请求字段将按新操作重新分区，已选数据库列保留；新增会清除固定条件。',
+          okText: '切换并重排', cancelText: '取消',
+          onOk: () => setDraft(resetDraftForDatabaseOperation(draft, value))
+        })}
+      /> : null}
     </div>
 
     <Alert
@@ -277,6 +295,7 @@ export default function ApiDesignPanel({
       onDraftChange={setDraft}
       onLoadSource={handleLoadSource}
       metadataRequest={metadataRequest}
+      operation={draft.databaseOperation || defaultDatabaseOperation(endpointMethod)}
       payload={viewPayload}
     />
 

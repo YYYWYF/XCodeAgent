@@ -130,7 +130,7 @@ export default function DataSourceOperationModal({ directories, editing, initial
     {error ? <Alert className={cx('data-source-editor-error')} message={error} showIcon type="error" /> : null}
     <div className={cx('data-source-editor-form')}>
       {directories.length === 0 ? <Alert message="当前接口域缺少默认目录，请重新创建接口域。" type="warning" showIcon action={onCreateDirectory ? <Button type="link" onClick={onCreateDirectory}>创建目录</Button> : undefined} /> : hideDirectory ? null : <label><span>所属目录</span><Select disabled={saving} onChange={setDirectoryId} options={directories.map((directory) => ({ label: directory.name, value: directory.id }))} value={directoryId || undefined} /></label>}
-      <fieldset disabled={saving} style={{ border: 0, padding: 0, minWidth: 0 }}><OperationFields initiallyCollapsed={Boolean(editing)} onChange={setOperation} onSectionsChange={setSections} operation={operation} phase={phase} sections={sections} theme={theme} /></fieldset>
+      <fieldset disabled={saving} style={{ border: 0, padding: 0, minWidth: 0 }}><OperationFields initiallyCollapsed={false} onChange={setOperation} onSectionsChange={setSections} operation={operation} phase={phase} sections={sections} theme={theme} /></fieldset>
     </div>
   </>
   const actions = <div className={cx('data-source-modal-footer')}>

@@ -5,7 +5,8 @@ import type { ReactElement } from 'react'
 import type {
   WorkflowApiDesignDraft,
   WorkflowApiDesignPayload,
-  WorkflowApiField
+  WorkflowApiField,
+  WorkflowApiDatabaseOperation
 } from '../../../../typings'
 import {
   projectApiFieldMappingRows,
@@ -32,11 +33,12 @@ type Props = {
     action: ApiSourceMetadataAction,
     context: ApiSourceMetadataContext
   ) => Promise<void>
+  operation?: WorkflowApiDatabaseOperation
 }
 
 /** 渲染 Request/Response 字段映射表，并把所有字段映射编辑收敛到抽屉。 */
 export default function ApiFieldMappingTable({
-  activeSide, disabled, payload, draft, errors, metadataRequest, onDraftChange, onLoadSource
+  activeSide, disabled, payload, draft, errors, metadataRequest, onDraftChange, onLoadSource, operation
 }: Props): ReactElement {
   const [editingFieldId, setEditingFieldId] = useState('')
   const [mappingEndpoint, setMappingEndpoint] = useState<WorkflowApiField | undefined>()
@@ -147,6 +149,7 @@ export default function ApiFieldMappingTable({
         })()}
         payload={payload}
         draft={draft}
+        operation={operation}
         disabled={disabled}
         metadataRequest={metadataRequest}
         onCancel={closeMappingEditor}

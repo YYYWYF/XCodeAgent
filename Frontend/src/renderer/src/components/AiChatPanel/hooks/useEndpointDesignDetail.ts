@@ -8,7 +8,7 @@ type Target = { apiContractId: string; endpointId: string }
 export function useEndpointDesignDetail(
   workspaceRoot: string | undefined,
   target: Target | undefined,
-  refreshKey?: string
+  refreshKey?: number
 ): {
   detail?: EndpointDesignDetail
   loading: boolean

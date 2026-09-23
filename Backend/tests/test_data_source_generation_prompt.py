@@ -101,7 +101,7 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
                 }],
             })
     return {
-        "schemaVersion": "endpoint-field-mapping.v3",
+        "schemaVersion": "endpoint-field-mapping.v4",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
@@ -530,7 +530,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             {"CategoryInput", "CategoryValue"},
         )
         design = context["api_design"]
-        self.assertEqual(design["schemaVersion"], "endpoint-field-mapping.v3")
+        self.assertEqual(design["schemaVersion"], "endpoint-field-mapping.v4")
         self.assertNotIn("sceneEntities", design)
         self.assertEqual(design["fieldMappings"][0]["mappingType"], "source_mapping")
         self.assertEqual(

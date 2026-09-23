@@ -146,7 +146,11 @@ export function applySourceMapping(
   usage?: WorkflowApiDatabaseFieldNode['usage']
 ): WorkflowApiDesignDraft {
   const normalized = source.sourceType === 'database'
-    ? { ...source, usage: resolveDatabaseUsage(endpoint, usage || source.usage) }
+    ? (() => {
+      // 数据库查询来源缺省时统一落到 eq，避免完整编辑器生成缺失运算符的 v4 映射。
+      const resolvedUsage = resolveDatabaseUsage(endpoint, usage || source.usage)
+      return { ...source, usage: resolvedUsage, filterOperator: resolvedUsage === 'filter' ? (source.filterOperator || 'eq') : undefined }
+    })()
     : source
   return replaceFieldMapping(draft, {
     endpointField: endpointFieldSnapshot(endpoint),

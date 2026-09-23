@@ -13,7 +13,7 @@ test('Endpoint 设计结果投影保留请求和返回映射', () => {
     design: {
       sourceSnapshots: [{ sourceType: 'database', sourceId: 'db', name: '业务数据库', details: {} }],
       fieldMappings: [
-        { endpointField: { side: 'request', location: 'query', path: 'page', type: 'integer' }, mappingType: 'source_mapping', processingType: 'direct', sourceFields: [{ sourceType: 'database', sourceId: 'db', schema: 'app', table: 'orders', column: 'page' }] },
+        { endpointField: { side: 'request', location: 'query', path: 'page', type: 'integer' }, mappingType: 'source_mapping', processingType: 'direct', sourceFields: [{ sourceType: 'database', sourceId: 'db', schema: 'app', table: 'orders', column: 'page', usage: 'filter', filterOperator: 'gte' }] },
         { endpointField: { side: 'response', location: 'response_body', path: 'items[].id', type: 'integer' }, mappingType: 'source_mapping', processingType: 'direct', sourceFields: [{ sourceType: 'external_api', sourceId: 'upstream', directoryId: 'catalog', operationId: 'list', section: 'response_body', path: 'data.id' }] },
         { endpointField: { side: 'request', location: 'query', path: 'sort', type: 'string' }, mappingType: 'business_description', businessDescription: '控制排序字段' }
       ]
@@ -26,6 +26,7 @@ test('Endpoint 设计结果投影保留请求和返回映射', () => {
   assert.equal(projectEndpointDesignRows(detail, 'request')[0].dataSourceType, '数据库')
   assert.equal(projectEndpointDesignRows(detail, 'request')[0].dataSource, '业务数据库')
   assert.equal(projectEndpointDesignRows(detail, 'request')[0].mappingField, 'app.orders.page')
+  assert.equal(projectEndpointDesignRows(detail, 'request')[0].filterOperator, 'gte')
   assert.equal(projectEndpointDesignRows(detail, 'response')[0].dataSourceType, '外部 API')
   assert.equal(projectEndpointDesignRows(detail, 'response')[0].dataSource, 'upstream')
   assert.equal(projectEndpointDesignRows(detail, 'response')[0].mappingField, 'catalog / list / response_body / data.id')

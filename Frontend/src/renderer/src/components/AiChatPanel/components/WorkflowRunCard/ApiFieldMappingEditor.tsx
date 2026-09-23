@@ -6,13 +6,14 @@ import type {
   WorkflowApiDesignPayload,
   WorkflowApiField,
   WorkflowApiSourceField,
-  WorkflowApiFieldMapping
+  WorkflowApiFieldMapping,
+  WorkflowApiDatabaseOperation
 } from '../../../../typings'
 import type { ApiFieldMappingMode } from './apiDesignTableModel'
 import {
   apiDesignFieldKey, endpointFieldSnapshot, validateApiDesignDraft,
   createBusinessDescriptionMapping, findFieldMapping, replaceFieldMapping,
-  sourceFieldSnapshot
+  sourceFieldSnapshot, defaultDatabaseOperation
 } from './apiDesignSerialization'
 import ApiSourceFieldSelector from './ApiSourceFieldSelector'
 import ApiMappingSourceList from './ApiMappingSourceList'
@@ -42,6 +43,7 @@ type Props = {
     action: ApiSourceMetadataAction,
     context: ApiSourceMetadataContext
   ) => Promise<void>
+  operation?: WorkflowApiDatabaseOperation
 }
 
 /** 在抽屉内编辑一条直属来源或业务说明映射，保存前不修改外层草稿。 */
@@ -55,7 +57,8 @@ export default function ApiFieldMappingEditor({
   onClear,
   onSave,
   onLoadSource,
-  metadataRequest
+  metadataRequest,
+  operation
 }: Props): ReactElement {
   const initialMapping = findFieldMapping(draft, endpoint)
   const [mode, setMode] = useState<EditorMode>(initialMapping?.mappingType === 'source_mapping'
@@ -90,7 +93,11 @@ export default function ApiFieldMappingEditor({
       : mode === 'direct'
         ? { endpointField: endpointSnapshot, mappingType: 'source_mapping' as const, processingType: mode, sourceFields: sources }
         : { endpointField: endpointSnapshot, mappingType: 'source_mapping' as const, processingType: mode, sourceFields: sources, businessDescription: description.trim() }
-    const next = replaceFieldMapping(draft, mapping)
+    const withMapping = replaceFieldMapping(draft, mapping)
+    const hasDatabase = withMapping.fieldMappings.some((item) => item.mappingType === 'source_mapping' && item.sourceFields.some((source) => source.sourceType === 'database')) || Boolean(withMapping.databaseConditions?.length)
+    const next = hasDatabase
+      ? { ...withMapping, databaseOperation: withMapping.databaseOperation || defaultDatabaseOperation(String(payload.endpoint.method || '')), databaseConditions: withMapping.databaseConditions || [] }
+      : { ...withMapping, databaseOperation: undefined, databaseConditions: [] }
     const issue = validateApiDesignDraft(next)[apiDesignFieldKey(endpoint)]
     if (issue) { setError(issue); return }
     onSave(next)
@@ -137,6 +144,7 @@ export default function ApiFieldMappingEditor({
           {mode === 'multi_field_description'
             ? <ApiMappingSourceList
               endpoint={endpoint} payload={payload} draft={draft} disabled={disabled}
+              operation={operation}
               sources={sources} onChange={(next) => { setSources(next); setError('') }}
               metadataRequest={metadataRequest}
               onLoad={(action, context) => onLoadSource(draft, action, context)}
@@ -145,6 +153,7 @@ export default function ApiFieldMappingEditor({
               endpoint={endpoint}
               payload={payload}
               draft={draft}
+              operation={operation}
               disabled={disabled}
               metadataRequest={metadataRequest}
               selectedSourceNode={sources.length === 1 ? sourceSnapshotToNode(sources[0]) : undefined}

@@ -160,6 +160,13 @@ def endpoint_source_types(
                         f"Endpoint {key[0]}/{key[1]} 含不受支持的 sourceType：{source_type!r}。",
                     )
                 source_types.add(source_type)
+        for condition in (design.get("databaseConditions", []) if isinstance(design.get("databaseConditions", []), (list, tuple)) else []):
+            if not isinstance(condition, Mapping) or condition.get("sourceType") != "database":
+                fail_requirement_input(
+                    "FORMAL_GENERATION_INPUT_INVALID",
+                    f"Endpoint {key[0]}/{key[1]} 的 databaseConditions 项无效。",
+                )
+            source_types.add("database")
         result[key] = frozenset(source_types)
     return result
 

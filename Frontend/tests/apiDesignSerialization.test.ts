@@ -6,11 +6,15 @@ import type {
   WorkflowApiExternalFieldNode
 } from '../src/renderer/src/typings/workflow'
 import {
+  allowedDatabaseConditionOperators,
+  allowedFilterOperators,
   apiDesignFieldKey,
+  apiDesignTypesCompatible,
   apiDesignMappingPreview,
   createApiDesignAction,
   createBusinessDescriptionMapping,
   createUnconfiguredFieldMapping,
+  databaseConditionValueValid,
   findFieldMapping,
   normalizeApiDesignDraft,
   replaceFieldMapping,
@@ -124,6 +128,52 @@ test('confirmation action serializes current contract only', () => {
   assert.equal(action.draft.fieldMappings.length, 2)
   assert.equal('nodes' in action.draft, false)
   assert.equal('mappings' in action.draft, false)
+})
+
+/** 固定条件按数据库列类型开放运算符，并校验集合及区间固定值。 */
+test('fixed database conditions use type-aware operators and values', () => {
+  assert.ok(allowedDatabaseConditionOperators('varchar(100)').includes('contains'))
+  assert.ok(!allowedDatabaseConditionOperators('varchar(100)').includes('between'))
+  assert.ok(allowedDatabaseConditionOperators('decimal(10,2)').includes('between'))
+  assert.equal(databaseConditionValueValid({
+    sourceType: 'database', sourceId: 'orders-db', schema: 'app', table: 'orders',
+    column: 'amount', type: 'decimal(10,2)', operator: 'between', value: [1, 10]
+  }), true)
+  assert.equal(databaseConditionValueValid({
+    sourceType: 'database', sourceId: 'orders-db', schema: 'app', table: 'orders',
+    column: 'amount', type: 'decimal(10,2)', operator: 'between', value: [10, 1]
+  }), false)
+})
+
+/** JSON 字符串可承载数据库日期时间，其他跨族映射及外部来源仍需严格校验。 */
+test('database temporal fields match JSON strings without weakening other source types', () => {
+  for (const columnType of ['date', 'time', 'datetime', 'timestamp']) {
+    assert.equal(apiDesignTypesCompatible('string', columnType, true), true)
+    assert.equal(apiDesignTypesCompatible('string', columnType), false)
+    assert.equal(apiDesignTypesCompatible('array<string>', columnType, true), false)
+  }
+  assert.equal(apiDesignTypesCompatible('number', 'timestamp', true), false)
+  assert.equal(apiDesignTypesCompatible('string', 'decimal(10,2)', true), false)
+  assert.equal(apiDesignTypesCompatible('number', 'bigint', true), true)
+  assert.equal(apiDesignTypesCompatible('boolean', 'boolean', true), true)
+  assert.equal(apiDesignTypesCompatible('object', 'json', true), true)
+  assert.ok(allowedFilterOperators('string', 'timestamp').includes('gte'))
+  assert.ok(!allowedFilterOperators('string', 'timestamp').includes('contains'))
+  assert.ok(allowedFilterOperators('array<string>', 'timestamp').includes('between'))
+  const data = payload()
+  const response = { ...data.endpointFields[1], path: 'createdAt', type: 'string' }
+  const source = {
+    sourceType: 'database' as const, sourceId: 'orders-db', schema: 'app', table: 'orders',
+    column: 'created_at', type: 'timestamp', usage: 'read' as const
+  }
+  const draft = {
+    ...data.draft, databaseOperation: 'read' as const,
+    fieldMappings: [createBusinessDescriptionMapping(data.endpointFields[0], '分页页码'), {
+      endpointField: response, mappingType: 'source_mapping' as const,
+      processingType: 'direct' as const, sourceFields: [source]
+    }]
+  }
+  assert.deepEqual(validateApiDesignDraft(draft), {})
 })
 
 /** 旧图字段即使存在也不会被归一化读取。 */

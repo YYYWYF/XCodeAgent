@@ -11,7 +11,7 @@ type Props = ApplicationOutlineProps & {
   detailLabel?: string
   apiTarget?: { apiContractId: string; endpointId: string }
   workspaceRoot?: string
-  apiDesignRefreshKey?: string
+  apiDesignRefreshKey?: number
   onConfigureApi?: (target: { apiContractId: string; endpointId: string; label?: string }) => void
 }
 

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from app.domain.api_design import (
     BusinessDescriptionFieldMapping,
+    DatabaseCondition,
     DatabaseSourceField,
     EndpointFieldMappingDesign,
     ExternalSourceField,
@@ -18,6 +19,11 @@ from app.domain.api_design import (
 )
 from app.services.api_design import (
     _safe_external_operation,
+    _allowed_filter_operators,
+    _default_database_operation,
+    _parse_database_conditions,
+    _source_types_compatible,
+    _types_compatible,
     _validate_field_mappings,
     _validated_source_snapshots,
     api_design_business_descriptions,
@@ -47,6 +53,82 @@ class ApiDesignTests(unittest.TestCase):
             result = load_database_columns("unused", "db", "products")
         self.assertEqual(result["tables"], [{"name": "products", "description": "商品"}])
         self.assertEqual(result["columns"][0]["name"], "id")
+
+    def test_database_crud_defaults_and_filter_operator_contract(self) -> None:
+        """HTTP 方法默认 CRUD 与类型感知运算符保持当前 v4 语义。"""
+
+        self.assertEqual(_default_database_operation("POST"), "create")
+        self.assertEqual(_default_database_operation("HEAD"), "read")
+        self.assertEqual(_default_database_operation("PATCH"), "update")
+        self.assertIsNone(_default_database_operation("OPTIONS"))
+        self.assertIn("contains", _allowed_filter_operators("string", "varchar(100)"))
+        self.assertIn("between", _allowed_filter_operators("array<number>", "decimal"))
+        self.assertNotIn("contains", _allowed_filter_operators("integer", "bigint"))
+        with self.assertRaises(ValueError):
+            DatabaseSourceField.model_validate({
+                "sourceType": "database", "sourceId": "db", "schema": "app",
+                "table": "orders", "column": "id", "type": "integer", "usage": "filter",
+            })
+        with self.assertRaises(ValueError):
+            DatabaseSourceField.model_validate({
+                "sourceType": "database", "sourceId": "db", "schema": "app",
+                "table": "orders", "column": "id", "type": "integer", "usage": "write",
+                "filterOperator": "eq",
+            })
+
+    def test_json_string_maps_to_database_temporal_types(self) -> None:
+        """数据库时间列可按 JSON 字符串映射，其他跨族及元数据漂移仍被拒绝。"""
+
+        for column_type in ("date", "time", "datetime", "timestamp"):
+            source = DatabaseSourceField.model_validate({
+                "sourceType": "database", "sourceId": "db", "schema": "app",
+                "table": "orders", "column": "created_at", "type": column_type, "usage": "read",
+            })
+            self.assertTrue(_source_types_compatible("string", source))
+            self.assertFalse(_source_types_compatible("number", source))
+            self.assertFalse(_types_compatible("varchar(255)", column_type))
+        filter_source = source.model_copy(update={"usage": "filter", "filter_operator": "between"})
+        self.assertTrue(_source_types_compatible("array<string>", filter_source))
+        self.assertIn("between", _allowed_filter_operators("array<string>", "timestamp"))
+        self.assertNotIn("contains", _allowed_filter_operators("string", "timestamp"))
+        self.assertFalse(_source_types_compatible("array<number>", filter_source))
+        external = ExternalSourceField.model_validate({
+            "sourceType": "external_api", "sourceId": "upstream", "directoryId": "directory",
+            "operationId": "operation", "section": "response_body", "path": "createdAt", "type": "timestamp",
+        })
+        self.assertFalse(_source_types_compatible("string", external))
+        endpoint = {
+            "side": "response", "location": "response_body", "path": "createdAt",
+            "type": "string", "required": False, "description": "",
+        }
+        mapping = SourceMapping.model_validate({
+            "endpointField": endpoint, "mappingType": "source_mapping",
+            "processingType": "direct", "sourceFields": [{
+                "sourceType": "database", "sourceId": "db", "schema": "app",
+                "table": "orders", "column": "created_at", "type": "timestamp", "usage": "read",
+            }],
+        })
+        _validate_field_mappings([mapping], [endpoint], "read")
+
+    def test_fixed_database_conditions_are_unique(self) -> None:
+        """固定条件按列去重，并校验类型感知运算符、集合及区间。"""
+
+        condition = {
+            "sourceType": "database", "sourceId": "db", "schema": "app",
+            "table": "orders", "column": "deleted_at", "type": "datetime", "operator": "is_null",
+        }
+        parsed = _parse_database_conditions([condition])
+        self.assertIsInstance(parsed[0], DatabaseCondition)
+        with self.assertRaisesRegex(ValueError, "最多配置一个"):
+            _parse_database_conditions([condition, condition.copy()])
+        self.assertEqual(_parse_database_conditions([{**condition, "operator": "gte", "value": "2026-01-01"}])[0].value, "2026-01-01")
+        self.assertEqual(_parse_database_conditions([{**condition, "column": "amount", "type": "decimal", "operator": "between", "value": [1, 10]}])[0].value, [1, 10])
+        with self.assertRaisesRegex(ValueError, "上下界倒置"):
+            _parse_database_conditions([{**condition, "column": "amount", "type": "decimal", "operator": "between", "value": [10, 1]}])
+        with self.assertRaisesRegex(ValueError, "不支持固定条件运算符"):
+            _parse_database_conditions([{**condition, "column": "amount", "type": "decimal", "operator": "contains", "value": "1"}])
+        with self.assertRaisesRegex(ValueError, "非空数组"):
+            _parse_database_conditions([{**condition, "column": "name", "type": "varchar(100)", "operator": "in", "value": []}])
 
     def test_all_of_merges_fields_and_required_constraints(self) -> None:
         """组合分支及同名嵌套字段共同定义结构，必填约束不能丢失。"""

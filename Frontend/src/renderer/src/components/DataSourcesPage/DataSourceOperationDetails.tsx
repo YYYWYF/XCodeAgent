@@ -13,7 +13,7 @@ type DetailCardProps = { children: ReactNode; collapsible?: boolean; icon: React
 
 /** 渲染详情卡片，并为请求参数、请求体和响应体提供独立折叠状态。 */
 function DetailCard({ children, collapsible = true, icon, title, tone }: DetailCardProps): ReactElement {
-  const [expanded, setExpanded] = useState(!collapsible)
+  const [expanded, setExpanded] = useState(true)
   const heading = <span className={cx('data-source-operation-detail-card-heading')}><span className={cx('data-source-operation-detail-card-icon', `tone-${tone}`)}>{icon}</span><strong>{title}</strong></span>
   return (
     <section className={cx('data-source-operation-detail-card', `tone-${tone}`, !expanded && 'is-collapsed')}>

@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from app.domain.api_design import DraftFieldMapping
+from app.domain.api_design import DatabaseCondition, DraftFieldMapping
 from app.persistence.data_sources import data_sources_directory
 from app.services.data_sources import change_selected_tables, selected_tables
 
@@ -106,17 +106,20 @@ def save_binding_draft(request: BindingDraftRequest) -> dict[str, Any]:
         if revision != request.base_revision or technical_plan_sha256(request.workspace_root) != request.technical_plan_hash:
             raise ValueError("契约或正式映射已变化，请重新加载；当前输入仍保留。")
         draft = request.draft
-        if set(draft) - {"apiContractId", "endpointId", "implementationDescription", "fieldMappings"}:
+        if set(draft) - {"apiContractId", "endpointId", "implementationDescription", "databaseOperation", "databaseConditions", "fieldMappings"}:
             raise ValueError("草稿包含未支持字段。")
         if draft.get("apiContractId") != request.api_contract_id or draft.get("endpointId") != request.endpoint_id:
             raise ValueError("草稿接口身份与请求不一致。")
         mappings = TypeAdapter(list[DraftFieldMapping]).validate_python(draft.get("fieldMappings", []))
+        conditions = TypeAdapter(list[DatabaseCondition]).validate_python(draft.get("databaseConditions", []))
         if len(mappings) > 3000:
             raise ValueError("草稿字段数量超出限制。")
         clean = {
             "apiContractId": request.api_contract_id,
             "endpointId": request.endpoint_id,
             "implementationDescription": str(draft.get("implementationDescription") or "")[:4000],
+            "databaseOperation": draft.get("databaseOperation"),
+            "databaseConditions": [item.model_dump(by_alias=True, exclude_none=True) for item in conditions],
             "fieldMappings": [item.model_dump(by_alias=True, exclude_none=True) for item in mappings],
         }
         value = {"draft": clean, "selection": request.selection.model_dump(by_alias=True, exclude_none=True) if request.selection else None,
@@ -131,7 +134,7 @@ def validate_binding_selection(workspace: str | Path, selection: BindingTarget, 
     from app.services.api_design import load_database_columns, load_external_operation
 
     # 正式产物通过字段映射保存来源；空映射无法表达绑定，不能返回虚假的确认成功。
-    if not draft.get("fieldMappings"):
+    if not draft.get("fieldMappings") and not draft.get("databaseConditions"):
         raise ValueError("当前接口没有可映射字段，无法确认数据来源绑定；草稿已保留。")
     expected = selection.model_dump(by_alias=True, exclude_none=True)
     if selection.source_type == "database":
@@ -150,13 +153,19 @@ def validate_binding_selection(workspace: str | Path, selection: BindingTarget, 
         keys = ("sourceType", "sourceId", "directoryId", "operationId")
         operation_metadata = load_external_operation(workspace, selection.source_id, selection.directory_id, selection.operation_id)
     used_source_fields: set[tuple[str, str]] = set()
+    for condition in draft.get("databaseConditions", []):
+        if selection.source_type != "database" or any(condition.get(key) != expected.get(key) for key in keys):
+            raise ValueError("固定数据库条件必须来自当前选定数据表。")
+        if not condition.get("column"):
+            raise ValueError("固定数据库条件缺少数据库列。")
     for mapping in draft.get("fieldMappings", []):
         sources = mapping.get("sourceFields", [])
         if mapping.get("mappingType") != "source_mapping" or mapping.get("processingType") != "direct" or len(sources) != 1:
             raise ValueError("当前绑定旅程只支持直接映射。")
         if any(sources[0].get(key) != expected.get(key) for key in keys):
             raise ValueError("所有字段必须来自当前选定对象。")
-        if selection.source_type == "external_api":
+        # 外部响应字段可供多个应用出参复用，只有入参继续保持一对一绑定。
+        if selection.source_type == "external_api" and sources[0].get("section") != "response_body":
             source_key = (str(sources[0].get("section") or ""), str(sources[0].get("path") or ""))
             if source_key in used_source_fields:
                 raise ValueError("同一个外部字段不能绑定多个应用字段。")
@@ -186,6 +195,7 @@ def source_references(workspace: str | Path, source_id: str, table: str | None =
     for path in (Path(workspace) / ".xcodeagent/plans/endpoints").glob("*.json"):
         design = _read(path)
         fields = [source for mapping in design.get("fieldMappings", []) for source in mapping.get("sourceFields", [])]
+        fields.extend(design.get("databaseConditions", []))
         if any(source.get("sourceId") == source_id
                and (not table or source.get("table") == table)
                and (not directory_id or source.get("directoryId") == directory_id)

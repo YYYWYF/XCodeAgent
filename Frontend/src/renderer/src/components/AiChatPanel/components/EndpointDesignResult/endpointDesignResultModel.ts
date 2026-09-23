@@ -11,6 +11,7 @@ export type EndpointDesignResultRow = {
   dataSourceType: string
   dataSource: string
   mappingField: string
+  filterOperator: string
   description: string
 }
 
@@ -140,6 +141,10 @@ export function projectEndpointDesignRows(
       const sources = Array.isArray(mapping.sourceFields) ? mapping.sourceFields : []
       const dataSource = sources.map((item) => sourceDataSourceLabel(item, detail?.design)).filter(Boolean).join('\n')
       const mappingField = sources.map(sourceMappingFieldLabel).filter(Boolean).join('\n')
+      const filterOperator = sources
+        .map((item) => item && typeof item === 'object' ? String((item as Record<string, unknown>).filterOperator || '') : '')
+        .filter(Boolean)
+        .join('\n')
       const sourceType = [...new Set(sources.map(sourceTypeLabel))].join(' / ')
       const description = String(mapping.businessDescription || '')
       return {
@@ -157,6 +162,7 @@ export function projectEndpointDesignRows(
         dataSourceType: sourceType,
         dataSource,
         mappingField,
+        filterOperator,
         description
       }
     })

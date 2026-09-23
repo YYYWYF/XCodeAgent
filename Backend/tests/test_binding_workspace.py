@@ -151,7 +151,7 @@ class BindingWorkspaceTests(unittest.TestCase):
         self.assertIsNotNone(read_binding_draft(self.root, "orders", "other"))
         confirmation.technical_plan_hash = self.hash
         result = save_endpoint_design(confirmation)
-        self.assertEqual(result["design"]["schemaVersion"], "endpoint-field-mapping.v3")
+        self.assertEqual(result["design"]["schemaVersion"], "endpoint-field-mapping.v4")
         self.assertEqual(result["design"]["confirmationStatus"], "confirmed")
         self.assertNotIn("selection", result["design"])
         self.assertEqual(result["design"]["fieldMappings"], [])
@@ -170,7 +170,8 @@ class BindingWorkspaceTests(unittest.TestCase):
         request.selection = selection
         field = request.draft["fieldMappings"][0]["endpointField"]
         request.draft["fieldMappings"] = [{"endpointField": field, "mappingType": "source_mapping", "processingType": "direct",
-                                           "sourceFields": [{**selection.model_dump(by_alias=True, exclude_none=True), "column": "id", "type": "integer", "usage": "filter"}]}]
+                                           "sourceFields": [{**selection.model_dump(by_alias=True, exclude_none=True), "column": "id", "type": "integer", "usage": "filter", "filterOperator": "eq"}]}]
+        request.draft["databaseOperation"] = "read"
         metadata = {"schema": "app", "tables": [{"name": "orders"}], "columns": [{"name": "id", "type": "integer"}]}
         with patch("app.services.api_design.load_database_tables", return_value=metadata), patch("app.services.api_design.load_database_columns", return_value=metadata):
             change_selected_tables(self.root, "db", ["orders"], False)

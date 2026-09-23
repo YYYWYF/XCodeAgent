@@ -177,7 +177,7 @@ def _endpoint_api_design() -> dict:
     api_id = {"side": "response", "location": "response_body", "path": "items[].id", "type": "string", "required": True, "description": ""}
     api_status = {"side": "response", "location": "response_body", "path": "items[].status", "type": "string", "required": True, "description": ""}
     return {
-        "schemaVersion": "endpoint-field-mapping.v3",
+        "schemaVersion": "endpoint-field-mapping.v4",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
@@ -189,6 +189,7 @@ def _endpoint_api_design() -> dict:
             "path": "/orders",
             "successStatusCode": 200,
         },
+        "databaseOperation": "read",
         "fieldMappings": [
             {"endpointField": api_id, "mappingType": "source_mapping", "processingType": "direct", "sourceFields": [{"sourceType": "database", "sourceId": "orders-db", "schema": "app", "table": "orders", "column": "order_id", "type": "string", "usage": "read", "description": ""}]},
             {"endpointField": api_status, "mappingType": "source_mapping", "processingType": "direct", "sourceFields": [{"sourceType": "external_api", "sourceId": "orders-upstream", "directoryId": "orders-directory", "operationId": "order-list", "section": "response_body", "path": "data.state.value", "type": "string", "description": ""}]},

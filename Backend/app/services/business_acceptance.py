@@ -764,12 +764,11 @@ def _operation_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
             and "[]" in _text(_dict_value(mapping.get("endpointField")).get("path"))
             for mapping in field_mappings
         )
-        operation_kind = {
-            "POST": "create",
-            "PUT": "update",
-            "PATCH": "update",
-            "DELETE": "delete",
-        }.get(method, "list" if response_is_collection else "read")
+        declared_operation = _text(design.get("databaseOperation"))
+        operation_kind = declared_operation or ("list" if response_is_collection else "read")
+        # read 的列表/详情差异仍由响应集合形态投影给下游生成器。
+        if operation_kind == "read" and response_is_collection:
+            operation_kind = "list"
         source_fields = [
             source
             for mapping in field_mappings
@@ -779,6 +778,7 @@ def _operation_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
             field for field in source_fields if field.get("sourceType") == "database"
         ]
         selector_fields = [field for field in database_fields if field.get("usage") == "filter"]
+        fixed_conditions = _dict_items(design.get("databaseConditions"))
         result.append(
             {
                 "api_contract_id": _text(design.get("apiContractId")),
@@ -788,15 +788,27 @@ def _operation_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
                 "selector": {
                     "source": "endpoint_api_design",
                     "fields": _dedupe_strings([field.get("column") for field in selector_fields]),
+                    "filters": [
+                        {"column": _text(field.get("column")), "operator": _text(field.get("filterOperator") or "eq")}
+                        for field in selector_fields
+                    ],
+                    "conditions": [
+                        {
+                            "column": _text(item.get("column")),
+                            "operator": _text(item.get("operator")),
+                            **({"value": item.get("value")} if "value" in item else {}),
+                        }
+                        for item in fixed_conditions
+                    ],
                 },
-                "transaction_required": any(field.get("usage") == "write" for field in database_fields)
-                and method not in {"GET", "HEAD"},
+                "transaction_required": operation_kind in {"create", "update", "delete"}
+                and any(field.get("usage") == "write" for field in database_fields),
                 "zero_match_behavior": "confirmed_processing_logic",
                 "multiple_match_behavior": "confirmed_processing_logic",
                 "success_status_code": endpoint.get("successStatusCode"),
-                "side_effect": "write" if method not in {"GET", "HEAD"} else "none",
+                "side_effect": "write" if operation_kind in {"create", "update", "delete"} else "none",
                 "processing_logic": _mapping_descriptions(design),
-                "requires_repository": bool(database_fields),
+                "requires_repository": bool(database_fields or fixed_conditions),
             }
         )
     return result[:_MAX_ITEMS]

@@ -28,6 +28,18 @@
 // 多来源及用户多行说明保留换行，颜色沿用当前主题。
 .endpoint-design-result .ant-table-cell { white-space: pre-wrap; overflow-wrap: anywhere; }
 
+.endpoint-design-fixed-conditions {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface-subtle);
+  color: var(--wb-text);
+  > div { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  code { color: var(--wb-text); }
+}
+
 .@{class-prefix}-endpoint-design-history {
   gap: 0;
   padding: 0 16px;

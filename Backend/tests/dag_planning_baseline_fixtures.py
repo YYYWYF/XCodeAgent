@@ -165,7 +165,7 @@ def write_confirmed_endpoint_designs(
                     "usage": "read",
                 }
             design = EndpointApiDesign.model_validate({
-                "schemaVersion": "endpoint-field-mapping.v3",
+                "schemaVersion": "endpoint-field-mapping.v4",
                 "artifactType": "endpoint-field-mapping",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",
@@ -173,6 +173,7 @@ def write_confirmed_endpoint_designs(
                 "apiContractId": contract_id,
                 "endpointId": endpoint_id,
                 "endpointContract": endpoint,
+                "databaseOperation": "read" if source_type == "database" else None,
                 "fieldMappings": [{
                     "endpointField": {
                         "side": "response",

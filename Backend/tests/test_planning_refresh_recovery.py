@@ -148,6 +148,7 @@ def _write_formal_confirmation_context(workspace: Path) -> None:
             "column": field["path"].replace(".", "_").replace("[]", "_items"),
             "type": field["type"],
             "usage": "filter" if field["side"] == "request" else "read",
+            "filterOperator": "eq" if field["side"] == "request" else None,
         }
         field_mappings.append(
             {
@@ -161,7 +162,7 @@ def _write_formal_confirmation_context(workspace: Path) -> None:
         workspace,
         EndpointApiDesign.model_validate(
             {
-                "schemaVersion": "endpoint-field-mapping.v3",
+                "schemaVersion": "endpoint-field-mapping.v4",
                 "artifactType": "endpoint-field-mapping",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",
@@ -169,6 +170,7 @@ def _write_formal_confirmation_context(workspace: Path) -> None:
                 "apiContractId": contract["id"],
                 "endpointId": endpoint["id"],
                 "endpointContract": endpoint,
+                "databaseOperation": "read",
                 "fieldMappings": field_mappings,
                 "sourceSnapshots": [],
                 "basedOn": [
