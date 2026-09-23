@@ -1371,6 +1371,7 @@ class WorkflowRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+        self.assertFalse(inputs["resume_values"]["retry_failed_tasks"])
 
     def test_debug_resume_exposes_flag_for_plan_adjustment_takeover(self) -> None:
         """节点调试请求应向生命周期层声明这是用户明确选择的恢复动作。"""
@@ -1451,6 +1452,7 @@ class WorkflowRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+        self.assertFalse(inputs["resume_values"]["retry_failed_tasks"])
         self.assertNotIn("retiredProductField", inputs["resume_values"])
         self.assertEqual(
             inputs["resume_values"]["build_execution_scope"],
@@ -1903,6 +1905,11 @@ class WorkflowRequestTests(unittest.TestCase):
             )
 
         self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+        self.assertEqual(
+            inputs["resume_values"]["resume_execution_run_id"],
+            "old-prepare-run",
+        )
+        self.assertFalse(inputs["resume_values"]["retry_failed_tasks"])
 
     def test_genuine_build_failure_uses_authoritative_build_phase(self) -> None:
         """没有门禁覆盖时，服务端记录的真实 Build 失败仍恢复 Build。"""

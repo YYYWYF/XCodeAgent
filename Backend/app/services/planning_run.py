@@ -163,6 +163,59 @@ def record_candidate_ready(run: PlanningRun, candidate: CandidateAttempt, *, at:
     return _record_candidate(run, candidate, valid=True, at=at)
 
 
+def accept_recovered_candidate(
+    run: PlanningRun, candidate: CandidateAttempt, *, at: str
+) -> PlanningRun:
+    """在新 Run 初始生成轮接纳已重新校验的 Candidate，不创建或消耗 Attempt。"""
+
+    _active(run, "generating_units")
+    candidate = CandidateAttempt.model_validate(candidate)
+    _require(candidate.origin == "recovered", "Recovery seed 只能接纳 recovered Candidate。")
+    _require(candidate.generated_from is None, "recovered Candidate 不能携带当前 Run Attempt。")
+    _require(candidate.recovered_from is not None, "recovered Candidate 必须保留 source provenance。")
+    unit = _unit(run, candidate.identity.unit_id)
+    _require(
+        unit.generation_strategy in {"model", "deterministic"},
+        "只有当前仍需要 Candidate 的 model/deterministic Unit 可以 Recovery seed。",
+    )
+    _require(unit.generation_status == "pending", "Recovery 只能 seed pending Unit。")
+    _require(unit.expected_identity is None, "Recovery seed 不能覆盖在途 Attempt。")
+    _require(
+        unit.generation_round == 1
+        and not unit.round_history
+        and unit.attempt_in_round == 0
+        and unit.total_attempts == 0,
+        "Recovery 只能发生在新 Run 的初始 generation round，且不能预占 Attempt。",
+    )
+    _require(unit.latest_candidate_id is None and unit.candidate_task_count == 0, "Recovery seed 的 Unit 不能已有当前 Candidate。")
+    _require(not unit.current_issues, "Recovery seed 不能覆盖当前 Unit 的局部问题。")
+    _require(
+        candidate.identity
+        == CandidateIdentity(
+            planning_run_id=run.planning_run_id,
+            unit_id=unit.unit_id,
+            generation_round=unit.generation_round,
+        ),
+        "recovered Candidate 当前身份必须属于新 Run 的初始 Unit round。",
+    )
+    _require(candidate.input_fingerprint == run.input_fingerprint, "recovered Candidate 输入指纹与当前 Run 不一致。")
+    _require(candidate.status == "valid" and bool(candidate.tasks) and not candidate.validation_issues, "recovered Candidate 必须 valid、非空且无 Issue。")
+    _require(candidate.candidate_id not in run.candidates, "recovered Candidate ID 已存在，不能覆盖当前 Run 记录。")
+    next_unit = unit.model_copy(update={
+        "generation_status": "candidate_ready",
+        "latest_candidate_id": candidate.candidate_id,
+        "candidate_task_count": len(candidate.tasks),
+        "current_issues": (),
+        "expected_identity": None,
+    })
+    return _apply(
+        run,
+        at=at,
+        unit=next_unit,
+        candidates={**run.candidates, candidate.candidate_id: candidate},
+    )
+
+
 def mark_round_exhausted(run: PlanningRun, unit_id: str, *, at: str) -> PlanningRun:
     """三次无效模型 Candidate 后关闭本轮，保持 Run active，Unit 没有 failed 状态。"""
 

@@ -57,9 +57,9 @@ Candidate origin 分支，recovered Candidate 被归因时仍沿用普通 `begin
 `planning_run_id/unit_id/generation_round`；真实生成来源保存在 `generated_from`。
 deterministic Candidate 同样保留平台分配的 generated Attempt provenance，但不会增加 model
 attempt budget；但当前 latest 的 `model + generated` Candidate 必须有正数的当前轮 model
-attempt，且 `generated_from.attempt_in_round` 必须等于 Unit 的 `attempt_in_round`。未来 recovered Candidate 使用 `origin=recovered` 和 `recovered_from`，可以在
-新 Run 中以 `candidate_ready + attempt_in_round=0 + total_attempts=0` 存在，不伪造当前 Run
-Attempt；当前文档范围不接入 Recovery Snapshot 或跨 Run Candidate 注入。这里的
+attempt，且 `generated_from.attempt_in_round` 必须等于 Unit 的 `attempt_in_round`。Retry 消费 Recovery 时，recovered Candidate 使用
+`origin=recovered` 和 `recovered_from`，可以在新 Run 中以 `candidate_ready + attempt_in_round=0 + total_attempts=0`
+存在，不伪造当前 Run Attempt；它必须用当前 Run 的 `UnitGenerationContext` 和 Local Validator 重新校验。这里的
 `UnitGenerationPolicy.model_max_retries=0` 只是 DTO 默认值；production DAG policy 会显式
 设置模型 SDK infrastructure retry 为 2。
 
@@ -149,9 +149,11 @@ FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Atte
 - `regenerate` 是新增的 AG-UI 结构化动作：先不可回滚地删除旧 Pending，再回到 `prepare_build_tasks`，由服务端分配新 PlanningRun ID 并完整执行本 orchestrator。成功写新 Pending；失败保留失败事实且不恢复旧 Pending。
 
 页面刷新只从服务端投影恢复 PlanningRun/Pending/Formal 状态，不承诺原 DAG 请求继续执行。
-后台脱离执行、SSE 事件重放/重新订阅和 Candidate 断点恢复不属于当前合同。Task 2 只写
-Recovery Snapshot，不在 Retry 时加载、不注入 Candidate；Task 3 才能由明确的
-`resumeExecutionRunId` 精确定位对应文件，不能从 workspace/session/scope 猜测最近结果。
+后台脱离执行、SSE 事件重放/重新订阅和旧 PlanningRun 断点恢复不属于当前合同。Task 2 只写
+Recovery Snapshot；只有 `workflow_action=retry_failed_tasks` 且存在明确的
+`resumeExecutionRunId` 时，Task 3 才按该 source ID 精确加载并在新 PlanningRun 中尝试注入 Candidate。
+Recovery 缺失、损坏、摘要／输入／scope 不匹配或当前 Local Validator 不通过时，只禁用复用并回退 fresh
+generation；不能从 workspace/session/scope 猜测最近结果。Regenerate 永远不读取 Recovery，清理留给 Task 4。
 
 ## Frozen Contract Catalog
 

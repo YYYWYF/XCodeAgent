@@ -183,6 +183,56 @@ class PlanningRunTests(unittest.TestCase):
             ("candidate_ready", 0, 0),
         )
 
+    def test_accept_recovered_candidate_requires_initial_pending_unit_and_keeps_zero_budget(self):
+        """Recovery transition 只允许新 Run 初始 pending Unit，并保持无 Attempt 预算。"""
+
+        initial = sm.begin_generation(run(), at=AT)
+        source = CandidateAttempt.from_generated_attempt(
+            attempt=AttemptIdentity(
+                planning_run_id="run-1",
+                unit_id=UNIT,
+                generation_round=1,
+                attempt_in_round=1,
+                attempt_id="attempt-" + "a" * 32,
+            ),
+            input_fingerprint=initial.input_fingerprint,
+            status="valid",
+            tasks=({"id": "task:source", "unit_id": UNIT},),
+            generation_metadata={"source": "generated"},
+        )
+        recovered = CandidateAttempt.from_recovered_candidate(
+            source_candidate=source,
+            planning_run_id="run-2",
+            unit_id=UNIT,
+            generation_round=1,
+            input_fingerprint=initial.input_fingerprint,
+        )
+        accepted = sm.accept_recovered_candidate(
+            sm.PlanningRun(
+                planning_run_id="run-2",
+                workflow_run_id="workflow-2",
+                thread_id="thread-2",
+                phase="generating_units",
+                build_execution_scope=initial.build_execution_scope,
+                input_fingerprint=initial.input_fingerprint,
+                base_confirmed_plan_digest=initial.base_confirmed_plan_digest,
+                required_unit_ids=(UNIT,),
+                planning_unit_ids=(UNIT,),
+                unit_states={UNIT: unit()},
+                started_at=AT,
+                updated_at=AT,
+            ),
+            recovered,
+            at=AT,
+        )
+        current = accepted.unit_states[UNIT]
+        self.assertEqual(current.generation_status, "candidate_ready")
+        self.assertEqual((current.attempt_in_round, current.total_attempts), (0, 0))
+        self.assertEqual(accepted.candidates[recovered.candidate_id], recovered)
+
+        with self.assertRaises(sm.IllegalPlanningTransition):
+            sm.accept_recovered_candidate(accepted, recovered, at=AT)
+
     def test_model_generated_candidate_requires_current_attempt_budget(self):
         """model 的 generated Candidate 不能伪装成零预算 ready，也不能绑定旧的本轮 Attempt。"""
 

@@ -250,6 +250,40 @@ class CandidateAttempt(_GenerationModel):
             generation_metadata={} if generation_metadata is None else generation_metadata,
         )
 
+    @classmethod
+    def from_recovered_candidate(
+        cls,
+        *,
+        source_candidate: "CandidateAttempt",
+        planning_run_id: str,
+        unit_id: str,
+        generation_round: int,
+        input_fingerprint: str,
+        candidate_id: str | None = None,
+    ) -> "CandidateAttempt":
+        """用当前 Run 的新身份接纳已重新校验的 source Candidate，不伪造当前 Attempt。"""
+
+        source = cls.model_validate(source_candidate)
+        return cls(
+            candidate_id=_new_candidate_id() if candidate_id is None else candidate_id,
+            identity=CandidateIdentity(
+                planning_run_id=planning_run_id,
+                unit_id=unit_id,
+                generation_round=generation_round,
+            ),
+            origin="recovered",
+            generated_from=None,
+            recovered_from=CandidateRecoverySource(
+                source_planning_run_id=source.identity.planning_run_id,
+                source_candidate_id=source.candidate_id,
+            ),
+            input_fingerprint=input_fingerprint,
+            status="valid",
+            tasks=source.tasks,
+            validation_issues=(),
+            generation_metadata=source.generation_metadata,
+        )
+
 
 class UnitGenerationAttemptResult(_GenerationModel):
     """单次生成的未判定结果，不携带 Candidate status，也不自动生成 Candidate ID。

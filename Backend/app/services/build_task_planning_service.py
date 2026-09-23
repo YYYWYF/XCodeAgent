@@ -18,7 +18,10 @@ from app.services.dag_planning_orchestrator import (
     ValidatedAssembledPlan,
     plan_dag_sequential,
 )
-from app.services.planning_recovery_contracts import build_planning_recovery_snapshot
+from app.services.planning_recovery_contracts import (
+    PlanningRecoverySnapshot,
+    build_planning_recovery_snapshot,
+)
 from app.services.planning_frozen import (
     FrozenJsonObject,
     FrozenPlanningModel,
@@ -37,7 +40,10 @@ from app.workspace.task_documents import (
     write_pending_build_task_plan_atomic,
 )
 from app.workspace.planning_run_documents import load_planning_run
-from app.workspace.planning_recovery_documents import write_planning_recovery_atomic
+from app.workspace.planning_recovery_documents import (
+    load_planning_recovery,
+    write_planning_recovery_atomic,
+)
 from app.workspace.spec_documents import workspace_root
 
 
@@ -82,6 +88,27 @@ def _new_planning_run_id() -> str:
     """为一次 mainline service 调用分配后端拥有的 PlanningRun ID。"""
 
     return f"planning-{uuid4().hex}"
+
+
+def _load_recovery_for_retry(
+    workspace_state: Mapping[str, Any],
+    source_workflow_run_id: str | None,
+) -> PlanningRecoverySnapshot | None:
+    """按明确 source Workflow ID 尝试读取 Recovery，存储异常只降级为 fresh generation。"""
+
+    source_id = str(source_workflow_run_id or "").strip()
+    if not source_id:
+        return None
+    try:
+        return load_planning_recovery(dict(workspace_state), source_id)
+    except Exception:
+        # Recovery 是优化状态；损坏、摘要错误、IO 异常和 schema 失效都不能覆盖新 Run。
+        _LOGGER.warning(
+            "Ignoring invalid Planning Recovery Snapshot for source_workflow_run_id=%s",
+            source_id,
+            exc_info=True,
+        )
+        return None
 
 
 def persist_planning_recovery_if_applicable(
@@ -191,6 +218,7 @@ async def run_mainline_planning(
         ..., Awaitable[UnitGenerationAttemptResult]
     ] | None = None,
     publish: SnapshotPublisher | None = None,
+    recovery_source_workflow_run_id: str | None = None,
 ) -> MainlinePlanningResult:
     """执行完整 PlanningRun，并仅在全局验证成功后原子写入 PendingPlan。
 
@@ -201,6 +229,10 @@ async def run_mainline_planning(
 
     frozen = MainlinePlanningInputs.model_validate(inputs)
     planning_run_id = _new_planning_run_id()
+    recovery_snapshot = _load_recovery_for_retry(
+        workspace_state,
+        recovery_source_workflow_run_id,
+    )
     try:
         planned = await plan_dag_sequential(
             frozen.sequential_inputs(),
@@ -212,6 +244,7 @@ async def run_mainline_planning(
             settings=settings,
             generate_once=generate_once,
             publish=publish,
+            recovery_snapshot=recovery_snapshot,
         )
     except DagPlanningError as exc:
         persist_planning_recovery_if_applicable(

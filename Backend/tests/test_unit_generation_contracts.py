@@ -317,6 +317,27 @@ class UnitGenerationContractTests(unittest.TestCase):
         self.assertEqual(candidate.recovered_from.source_planning_run_id, "planning-run-1")
         self.assertEqual(candidate.recovered_from.source_candidate_id, "candidate-" + "a" * 32)
 
+    def test_from_recovered_candidate_allocates_new_identity_and_preserves_source_metadata(self) -> None:
+        """Recovery 转换创建新 Candidate ID/当前身份，只复制任务和生成元数据。"""
+
+        source = CandidateAttempt(**_recovered_candidate_payload())
+        recovered = CandidateAttempt.from_recovered_candidate(
+            source_candidate=source,
+            planning_run_id="planning-run-3",
+            unit_id="page:orders",
+            generation_round=1,
+            input_fingerprint="input-digest-current",
+        )
+
+        self.assertNotEqual(recovered.candidate_id, source.candidate_id)
+        self.assertEqual(recovered.identity.planning_run_id, "planning-run-3")
+        self.assertEqual(recovered.identity.unit_id, source.identity.unit_id)
+        self.assertEqual(recovered.input_fingerprint, "input-digest-current")
+        self.assertIsNone(recovered.generated_from)
+        self.assertEqual(recovered.recovered_from.source_planning_run_id, "planning-run-2")
+        self.assertEqual(recovered.recovered_from.source_candidate_id, source.candidate_id)
+        self.assertEqual(recovered.generation_metadata, source.generation_metadata)
+
     def test_candidate_origin_provenance_is_exclusive_and_non_self_referential(self) -> None:
         """两类来源不可混用，recovered 来源不得指向当前 Run 或自身 Candidate。"""
 

@@ -552,5 +552,193 @@ class PlanningRecoveryRegenerateHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(load_pending_build_task_plan(self.state))
 
 
+class PlanningRecoveryRetryConsumptionTests(unittest.IsolatedAsyncioTestCase):
+    """验证明确 Retry 在新 PlanningRun 中按当前输入重新校验并选择性恢复 Candidate。"""
+
+    def setUp(self) -> None:
+        """创建隔离工作区和固定 Unit 生成策略。"""
+
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state = {"workspace": directory.name}
+        self.policy = UnitGenerationPolicy(**_policy_payload())
+
+    def _mainline_inputs(self, sequential, *, workflow_run_id: str) -> MainlinePlanningInputs:
+        """为同一正式输入绑定不同 Workflow execution 身份。"""
+
+        return MainlinePlanningInputs.model_validate({
+            **sequential.model_dump(mode="python"),
+            "owner_session_id": "session-retry",
+            "workflow_run_id": workflow_run_id,
+            "thread_id": f"thread-{workflow_run_id}",
+        })
+
+    async def test_retry_creates_new_run_and_recovers_only_ready_siblings(self) -> None:
+        """R1 失败后 R2 只复用当前仍有效的 A，并为失败 B 新建真实 Attempt。"""
+
+        sequential = planning_inputs(required=["page:a", "page:b"])
+        source_inputs = self._mainline_inputs(
+            sequential,
+            workflow_run_id="workflow-r1",
+        )
+        page_a_ready = asyncio.Event()
+
+        async def source_generate(job, **_: object) -> UnitGenerationAttemptResult:
+            """让 A 先提交 Candidate，再让 B 触发基础设施终止。"""
+
+            if job.identity.unit_id == "page:b":
+                await page_a_ready.wait()
+                while True:
+                    persisted = load_planning_run(self.state)
+                    if (
+                        persisted is not None
+                        and persisted["unit_states"]["page:a"]["generation_status"]
+                        == "candidate_ready"
+                    ):
+                        break
+                    await asyncio.sleep(0)
+                raise UnitGenerationInfrastructureError(
+                    identity=job.identity,
+                    stage="model_invoke",
+                    cause=RuntimeError("source provider unavailable"),
+                )
+            tasks = model_tasks(job)
+            page_a_ready.set()
+            return UnitGenerationAttemptResult(
+                identity=job.identity,
+                input_fingerprint=job.context.input_fingerprint,
+                raw_response=json.dumps({"tasks": tasks}),
+                tasks=tasks,
+            )
+
+        with patch(
+            "app.services.build_task_planning_service._new_planning_run_id",
+            return_value="planning-r1",
+        ):
+            with self.assertRaises(DagPlanningError):
+                await run_mainline_planning(
+                    source_inputs,
+                    workspace_state=self.state,
+                    policy=self.policy,
+                    generate_once=source_generate,
+                )
+
+        source_snapshot = load_planning_recovery(self.state, "workflow-r1")
+        self.assertIsNotNone(source_snapshot)
+        assert source_snapshot is not None
+        source_candidate = source_snapshot.candidates_by_unit["page:a"]
+
+        retry_calls: list[str] = []
+
+        async def retry_generate(job, **_: object) -> UnitGenerationAttemptResult:
+            """R2 的模型替身只允许失败 sibling 进入当前 Scheduler。"""
+
+            retry_calls.append(job.identity.unit_id)
+            tasks = model_tasks(job)
+            return UnitGenerationAttemptResult(
+                identity=job.identity,
+                input_fingerprint=job.context.input_fingerprint,
+                raw_response=json.dumps({"tasks": tasks}),
+                tasks=tasks,
+            )
+
+        retry_inputs = self._mainline_inputs(
+            sequential,
+            workflow_run_id="workflow-r2",
+        )
+        with patch(
+            "app.services.build_task_planning_service._new_planning_run_id",
+            return_value="planning-r2",
+        ):
+            retry_result = await run_mainline_planning(
+                retry_inputs,
+                workspace_state=self.state,
+                policy=self.policy,
+                generate_once=retry_generate,
+                recovery_source_workflow_run_id="workflow-r1",
+            )
+
+        current = retry_result.validated_assembled_plan.planning_run
+        recovered = current.candidates[current.unit_states["page:a"].latest_candidate_id]
+        regenerated = current.candidates[current.unit_states["page:b"].latest_candidate_id]
+        self.assertEqual(retry_calls, ["page:b"])
+        self.assertEqual(current.planning_run_id, "planning-r2")
+        self.assertEqual(current.status, "active")
+        self.assertEqual(current.input_fingerprint, source_snapshot.input_fingerprint)
+        self.assertEqual(current.input_fingerprint, retry_inputs.sequential_inputs().input_fingerprint())
+        self.assertEqual(recovered.origin, "recovered")
+        self.assertIsNone(recovered.generated_from)
+        self.assertEqual(recovered.identity.planning_run_id, "planning-r2")
+        self.assertEqual(recovered.identity.generation_round, 1)
+        self.assertEqual(recovered.recovered_from.source_planning_run_id, "planning-r1")
+        self.assertEqual(recovered.recovered_from.source_candidate_id, source_candidate.candidate_id)
+        self.assertNotEqual(recovered.candidate_id, source_candidate.candidate_id)
+        self.assertEqual(
+            (current.unit_states["page:a"].attempt_in_round, current.unit_states["page:a"].total_attempts),
+            (0, 0),
+        )
+        self.assertEqual(regenerated.origin, "generated")
+        self.assertIsNotNone(regenerated.generated_from)
+        self.assertGreater(current.unit_states["page:b"].total_attempts, 0)
+        self.assertEqual(load_planning_run(self.state)["status"], "active")
+        self.assertEqual(load_planning_run(self.state)["planning_run_id"], "planning-r2")
+        self.assertEqual(load_planning_recovery(self.state, "workflow-r1"), source_snapshot)
+
+    async def test_corrupt_or_absent_recovery_is_fail_open_and_no_source_skips_loader(self) -> None:
+        """损坏 Snapshot 只导致全量生成；普通调用没有 source ID 时根本不读 loader。"""
+
+        inputs = self._mainline_inputs(
+            planning_inputs(required=["page:a"]),
+            workflow_run_id="workflow-fresh",
+        )
+        generated: list[str] = []
+
+        async def generate(job, **_: object) -> UnitGenerationAttemptResult:
+            """返回当前 Unit 的合法 fresh Candidate。"""
+
+            generated.append(job.identity.unit_id)
+            tasks = model_tasks(job)
+            return UnitGenerationAttemptResult(
+                identity=job.identity,
+                input_fingerprint=job.context.input_fingerprint,
+                raw_response=json.dumps({"tasks": tasks}),
+                tasks=tasks,
+            )
+
+        with patch(
+            "app.services.build_task_planning_service.load_planning_recovery",
+            side_effect=ValueError("corrupt snapshot"),
+        ) as loader:
+            with patch(
+                "app.services.build_task_planning_service._new_planning_run_id",
+                return_value="planning-fresh",
+            ):
+                await run_mainline_planning(
+                    inputs,
+                    workspace_state=self.state,
+                    policy=self.policy,
+                    generate_once=generate,
+                    recovery_source_workflow_run_id="workflow-corrupt",
+                )
+            loader.assert_called_once()
+
+        generated.clear()
+        with patch(
+            "app.services.build_task_planning_service.load_planning_recovery",
+        ) as loader:
+            with patch(
+                "app.services.build_task_planning_service._new_planning_run_id",
+                return_value="planning-without-source",
+            ):
+                await run_mainline_planning(
+                    inputs,
+                    workspace_state=self.state,
+                    policy=self.policy,
+                    generate_once=generate,
+                )
+            loader.assert_not_called()
+        self.assertEqual(generated, ["page:a"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -21,6 +21,7 @@ class ProjectState(TypedDict, total=False):
     selected_skill_names: list[str]
     phase: str
     resume_from: str
+    resume_execution_run_id: str
     workflow_action: str
     request_complexity: str
     complexity_reason: str
