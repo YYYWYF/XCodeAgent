@@ -27,7 +27,10 @@ import type {
   EditorMode,
   WorkflowRevisionContinuation
 } from '../../../typings'
-import { releaseSessionPendingPlan } from '../../../service/applicationLifecycle'
+import {
+  cleanupSessionFailedExecutions,
+  releaseSessionPendingPlan
+} from '../../../service/applicationLifecycle'
 import type { WorkbenchPhase } from '../../../workbenchPhase'
 import type { AgentChatMessage } from '../types'
 import {
@@ -745,7 +748,17 @@ export function useChatSessions({
         () => runningSessionsRef.current.has(key),
         () => releaseSessionPendingPlan(application.workspaceRoot, sessionId),
         onApplicationLifecycleChange,
-        () => deleteChatSession(application.workspaceRoot, editorMode, sessionId)
+        () => deleteChatSession(application.workspaceRoot, editorMode, sessionId),
+        async () => {
+          const lifecycle = await cleanupSessionFailedExecutions(
+            application.workspaceRoot,
+            sessionId
+          )
+          onApplicationLifecycleChange(lifecycle)
+        },
+        () => {
+          antdMessage.warning('会话已删除，但服务端失败 execution 尚未完全收口。')
+        }
       )
       if (!releaseSucceeded) return
       setSessionSummaries((current) => ({

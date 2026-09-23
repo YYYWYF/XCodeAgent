@@ -46,9 +46,9 @@ SHARED_UNIT = "frontend:api-client"
 def _candidate(unit_id: str, tasks: list[dict], marker: str = "a") -> CandidateAttempt:
     """构造一个已有平台身份且通过 Local Validation 的当前 Candidate。"""
 
-    return CandidateAttempt(
+    return CandidateAttempt.from_generated_attempt(
         candidate_id=f"candidate-{marker * 32}",
-        identity=AttemptIdentity(
+        attempt=AttemptIdentity(
             planning_run_id="planning-run-scope-assembly",
             unit_id=unit_id,
             generation_round=1,

@@ -362,9 +362,9 @@ class AuthDeterministicExecutionIntegrationTests(unittest.TestCase):
     ) -> CandidateAttempt:
         """为已由对应生成器产生的 Task 包装有效 CandidateAttempt 身份。"""
 
-        return CandidateAttempt(
+        return CandidateAttempt.from_generated_attempt(
             candidate_id=f"candidate-{marker * 32}",
-            identity=AttemptIdentity(
+            attempt=AttemptIdentity(
                 planning_run_id="planning-run-auth-integration",
                 unit_id=unit_id,
                 generation_round=1,

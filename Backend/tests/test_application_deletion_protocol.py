@@ -22,6 +22,7 @@ from app.services.workspace_process_registry import (
     workspace_process_registry,
 )
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
+from app.workspace.planning_recovery_documents import planning_recovery_directory
 
 
 class ApplicationDeletionProtocolTests(unittest.IsolatedAsyncioTestCase):
@@ -49,6 +50,9 @@ class ApplicationDeletionProtocolTests(unittest.IsolatedAsyncioTestCase):
             marker = workspace / ".devagentstudio" / "application.json"
             marker.parent.mkdir(parents=True)
             marker.write_text("{}\n", encoding="utf-8")
+            recovery_file = planning_recovery_directory({"workspace": str(workspace)}) / "run-delete.json"
+            recovery_file.parent.mkdir(parents=True, exist_ok=True)
+            recovery_file.write_text("{}\n", encoding="utf-8")
             stream = build_application_deletion_ag_ui_stream(
                 payload={
                     "threadId": "deletion-thread",
@@ -70,6 +74,7 @@ class ApplicationDeletionProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('"readyForTrash":true', frames)
                 self.assertIn('"localConnectionClosed":true', frames)
                 self.assertIn("RUN_FINISHED", frames)
+                self.assertFalse(recovery_file.exists())
                 workspace_text = str(workspace.resolve(strict=False))
                 self.assertTrue(workflow_run_registry.is_workspace_deleting(workspace_text))
                 self.assertIn(str(workspace.resolve(strict=False)), template_mutation_coordinator._deleting)
@@ -170,8 +175,8 @@ class ApplicationDeletionProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result["deletionCompleted"])
             self.assertFalse(workflow_run_registry.is_workspace_deleting(workspace_text))
             self.assertNotIn(
-                application_template_generation._template_workspace_key(workspace),
-                application_template_generation._DELETING_TEMPLATE_WORKSPACES,
+                str(workspace.resolve(strict=False)),
+                template_mutation_coordinator._deleting,
             )
             self.assertNotIn(
                 process_workspace_key(workspace),

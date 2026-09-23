@@ -43,6 +43,12 @@ class CandidateReady(_Event):
     candidate: CandidateAttempt
 
 
+class RecoveredCandidateAccepted(_Event):
+    """提交已经通过当前输入和 Local Validation 的跨 Run recovered Candidate。"""
+
+    candidate: CandidateAttempt
+
+
 class RoundExhausted(_Event):
     """标记指定 Unit 本轮模型尝试耗尽。"""
 
@@ -83,6 +89,6 @@ class RunCancelled(_Event):
 
 PlanningRunEvent: TypeAlias = (
     GenerationStarted | UnitAttemptStarted | UnitValidationStarted | CandidateInvalid
-    | CandidateReady | RoundExhausted | GlobalCheckStarted | GlobalRepairStarted
+    | CandidateReady | RecoveredCandidateAccepted | RoundExhausted | GlobalCheckStarted | GlobalRepairStarted
     | AssemblyStarted | GlobalValidationStarted | PendingPersistenceStarted | RunFailed | RunCancelled
 )

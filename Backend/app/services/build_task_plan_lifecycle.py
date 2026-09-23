@@ -175,7 +175,8 @@ def release_session_owned_pending_build_task_plan(
     if not isinstance(owner_session_id, str) or not owner_session_id.strip():
         raise ValueError("PendingPlan owner session_id 不能为空。")
 
-    with build_task_plan_lifecycle_lock(workspace_root(state)):
+    workspace = workspace_root(state)
+    with build_task_plan_lifecycle_lock(workspace):
         pending = load_pending_build_task_plan(state)
         if pending is None:
             return False

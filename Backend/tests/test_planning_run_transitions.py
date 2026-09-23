@@ -132,7 +132,7 @@ class PlanningRunTransitionTests(unittest.TestCase):
         """模型序号即使匹配，平台 ID 也不能重用于另一 attempt 或另一 Unit。"""
 
         state = invalid(sm.begin_generation(run(unit(), unit("page:other")), at=AT))
-        used = next(iter(state.candidates.values())).identity.attempt_id
+        used = next(iter(state.candidates.values())).generated_from.attempt_id
         reused = identity(state).model_copy(update={"attempt_id": used})
         self.assert_transition(state, sm.mark_unit_generating, (reused,), False)
         state, active = start(state)

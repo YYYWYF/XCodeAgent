@@ -44,13 +44,24 @@ Assembly、Global 编译门禁和归因始终使用真实服务。`publish` 是�
 一个调用创建一个 Controller，首个模型调用前冻结所有 Unit Context。Context 只包含当前
 Unit 的正式合同 catalog 元数据、平台工作区快照、相关 Endpoint owner 和同 Unit retained 摘要；
 合同正文只存在于 PlanningRun 内存 Frozen Store，不含任何当前 Candidate 正文。Global repair
-复用这些冻结 Context 与 Store，仅更新轮次/Attempt 和反馈。
+复用这些冻结 Context 与 Store，仅更新轮次/Attempt 和反馈；Global Validation/Repair 不按
+Candidate origin 分支，recovered Candidate 被归因时仍沿用普通 `begin_global_repair()`。
 
 模型 Unit 以 `UnitAttemptJob` 进入 FIFO Queue，最多三个 worker 并发执行；一次内容失败只把
 当前 Unit 的下一 Attempt 追加到队尾，三次内容失败才耗尽当前轮。Unit Graph dependency
 不作为生成顺序或入队门禁。
 确定性 `frontend:auth-guard` 由既有 builder 生成，再经 Controller Candidate 事件接纳，
 不进入模型 Session/Local retry，模型计数为零。shell/structural/reuse Unit 不生成。
+
+`CandidateAttempt.identity` 是独立的 `CandidateIdentity`，只表达当前
+`planning_run_id/unit_id/generation_round`；真实生成来源保存在 `generated_from`。
+deterministic Candidate 同样保留平台分配的 generated Attempt provenance，但不会增加 model
+attempt budget；但当前 latest 的 `model + generated` Candidate 必须有正数的当前轮 model
+attempt，且 `generated_from.attempt_in_round` 必须等于 Unit 的 `attempt_in_round`。Retry 消费 Recovery 时，recovered Candidate 使用
+`origin=recovered` 和 `recovered_from`，可以在新 Run 中以 `candidate_ready + attempt_in_round=0 + total_attempts=0`
+存在，不伪造当前 Run Attempt；它必须用当前 Run 的 `UnitGenerationContext` 和 Local Validator 重新校验。这里的
+`UnitGenerationPolicy.model_max_retries=0` 只是 DTO 默认值；production DAG policy 会显式
+设置模型 SDK infrastructure retry 为 2。
 
 每个 Local Attempt 创建独立 FrozenContractReader，只绑定 `read_frozen_contract_fragment`。
 模型可在一个 Attempt 内执行受 turn/read-count/read-byte 预算限制的多轮 Model → Reader，
@@ -62,6 +73,13 @@ Unit 置为 `aborted`；Scheduler 随即停止新 dispatch、丢弃队列中尚�
 best-effort 取消其他 active worker。已取消 sibling 若仍返回结果，Controller 的终态门禁会
 拒绝其 Candidate 提交，Scheduler 保留并传播最初的 fatal，不让晚到拒绝异常覆盖根因。
 fatal 不进入 Local requeue，也不会到达 Barrier、Global repair 或 Pending persistence。
+
+基础设施 fatal 收口后，外层 `build_task_planning_service.run_mainline_planning`（以及 fresh
+Regenerate facade）捕获携带最终 failed snapshot 的 `DagPlanningError`，只对
+`UNIT_GENERATION_INFRASTRUCTURE_FAILURE` 调用 Recovery Snapshot builder。builder 按每个
+`UnitRunState.latest_candidate_id` 提取当前 `candidate_ready` Candidate 正文并原子写入
+`.devagentstudio/runtime/planning-recovery/<source_workflow_run_id>.json`；写入失败只记录告警，
+原始 `DagPlanningError` 继续向上传播。Worker、Scheduler、Controller 不写 Recovery。
 
 Workflow registry 对活动任务发出 `task.cancel()` 后，Scheduler 先冻结派发并丢弃
 所有 queued Job，再经 Controller 原子持久化 `PlanningRun.cancelled`，最后 best-effort
@@ -98,6 +116,9 @@ deterministic 策略、授权资源 executor、完整指纹 Task ID/capability �
 Workflow Cancel 与 Pending Abandon 仍是两条独立路径：前者取消整个活动 Workflow/PlanningRun，
 后者精确删除待确认 PendingPlan、记录 abandoned 终态并结束对应 Workflow execution。两者都不提供 Unit 级用户取消。
 
+只有基础设施失败会触发第一版 Recovery writer；Local retry exhausted、Global validation/repair、
+Frozen Contract platform fatal、cancel 和普通内容错误都不会创建 Recovery。
+
 ## 与现有 LangGraph 入口的关系
 
 生产 `task_planning_adapter.py::prepare_build_tasks` 已通过异步
@@ -108,10 +129,10 @@ writer 写入并回读自校验 DraftIdentity。规划失败或取消不会调�
 ConfirmedPlan 保持不变。Confirm/Abandon 已由独立 lifecycle 接入；任何调用方都不得自行创建 Controller 或 Scheduler，
 也不得跳过 Pending 确认直接进入 Build。
 
-`plan_dag_sequential` 自身唯一允许的文件写入是 Controller 的
+`plan_dag_sequential` 自身唯一允许的 Planning 状态文件写入是 Controller 的
 `.devagentstudio/plans/planning-run.json`；它不写 Pending、ConfirmedPlan、TechnicalPlan
-或其他正式产物。只有外层 mainline facade 在该调用成功返回后写 Pending，二者均不接
-Frontend。
+或 Recovery。只有外层 mainline/Regenerate facade 在该调用成功返回后写 Pending，失败时才
+按上面的 infrastructure gate 写独立 Recovery；二者均不接 Frontend。
 FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Attempt 拒收与 Scheduler cancellation correctness，
 不修改前端 Cancel UI。
 
@@ -128,7 +149,37 @@ FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Atte
 - `regenerate` 是新增的 AG-UI 结构化动作：先不可回滚地删除旧 Pending，再回到 `prepare_build_tasks`，由服务端分配新 PlanningRun ID 并完整执行本 orchestrator。成功写新 Pending；失败保留失败事实且不恢复旧 Pending。
 
 页面刷新只从服务端投影恢复 PlanningRun/Pending/Formal 状态，不承诺原 DAG 请求继续执行。
-后台脱离执行、SSE 事件重放/重新订阅和 Candidate 断点恢复不属于当前合同。
+后台脱离执行、SSE 事件重放/重新订阅和旧 PlanningRun 断点恢复不属于当前合同。Task 2 只写
+Recovery Snapshot；只有 `workflow_action=retry_failed_tasks` 且存在明确的
+`resumeExecutionRunId` 时，Task 3 才按该 source ID 精确加载并在新 PlanningRun 中尝试注入 Candidate。
+Recovery 缺失、损坏、摘要／输入／scope 不匹配或当前 Local Validator 不通过时，只禁用复用并回退 fresh
+generation；不能从 workspace/session/scope 猜测最近结果。Regenerate 永远不读取 Recovery；Retry、End Plan、Session 删除和 Application 删除按下述 lifecycle 边界清理。
+
+### Planning Recovery cleanup
+
+Retry source Recovery 只有在以下两种情况之一成立后才能删除：
+
+1. 当前 Retry 已成功写入 PendingPlan，并完成 `load_pending_build_task_plan()`、
+   `validate_pending_self_digest()` 以及 `MainlinePlanningResult` 构造；
+2. 当前 Retry 再次发生 `UNIT_GENERATION_INFRASTRUCTURE_FAILURE`，并且新的
+   `PlanningRecoverySnapshot` 已通过 `write_planning_recovery_atomic()` 成功写入。
+
+两条路径都由 `run_mainline_planning()` 按明确的 `source_workflow_run_id` exact-delete；
+删除失败只记录 warning，不改变 Planning success 或原始 `DagPlanningError`。`persist_planning_recovery_if_applicable()`
+返回 `True` 仅表示 Recovery Snapshot writer 正常返回，`False` 表示不适用、没有 Candidate
+或写入失败；只有 `True` 才能触发第二条路径的 source cleanup。Retry 仍只读取
+`resumeExecutionRunId` 指定的文件，不存在 latest、recursive fallback 或 active pointer。
+
+End Plan 仍按 exact Workflow execution 收口。Session 删除前的
+`release_session_pending` 只负责该 Session 的 PendingPlan / PlanningRun 收口，不删除
+Recovery 或 failed execution；只有本地 Session 删除成功后，才通过
+`cleanup_session_failed_executions` 按 `owner_session_id` 从 `active_executions` 移除
+failed Workflow executions、释放对应 resource locks，并 best-effort exact-delete 对应
+Recovery。必须先成功持久化 lifecycle，再删除 Recovery；Recovery 删除失败不回滚 lifecycle，
+残留可由保守 stale Recovery GC 维护工具处理，当前没有 production trigger。Application 删除仍通过现有 workspace artifact cleanup
+清理 `planning-recovery`；这些 cleanup 失败不改变原 lifecycle 操作结果。
+保守 GC 只接受可注入的年龄阈值，并且只有在当前 lifecycle 可读且不再登记该 exact failed
+execution 时才删除；无法确认是否还能 Retry 的 Recovery 保留。
 
 ## Frozen Contract Catalog
 

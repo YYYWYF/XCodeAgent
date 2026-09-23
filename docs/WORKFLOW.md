@@ -355,6 +355,8 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 
 `prepare_build_tasks` 的生产入口通过 async Planning adapter 创建后端签发的 PlanningRun。正式输入由服务端从已确认 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效 Endpoint API Design 和权限切片组装并冻结；EntitySourceBinding 不参与正常 DAG Planning。平台按 Unit 建立 FIFO Worker Pool，最多并发三个 model Unit，Local Retry 重新进入队尾；模型只返回当前 Unit 的 `tasks`，不得决定 Worker 数量、跨 Unit 调度或最终执行批次。Task Candidate 仍携带单任务级并行提示，但 Scope 编译器会结合依赖与文件冲突生成平台批次。所有 Unit 通过 Barrier 后才执行 Scope Assembly 和 Global Validation/Repair，只有完整校验通过才写 PendingPlan。模型未返回可解析任务、越过平台职责边界或生成无效 DAG 时，平台在 PlanningRun 内部有界重试；重试耗尽才进入失败处理，不把任务拆分规则交给用户，也不能用硬编码任务清单代替模型规划结果。
 
+DAG Planning 的基础设施失败重试只接受明确的 `resumeExecutionRunId`。失败 PlanningRun 保持终态，Retry 创建新的 PlanningRun；Recovery Snapshot 只作为可失效的优化输入，恢复 Candidate 必须重新匹配当前输入并通过当前 Local Validation，失败时退化为重新生成。恢复 Candidate 与生成 Candidate 一样继续经过 Barrier、Scope Assembly 和 Global Validation，成功前不得进入 PendingPlan 或 FormalPlan；Regenerate 不复用 Recovery。
+
 调用模型生成任务 DAG 前，节点必须只读检查已确认的 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、TemplateState 与冻结的 template_context、当前 PageImplementationContract、Endpoint 契约和 EntitySourceBinding。任一前置条件未满足时返回可定位错误，不修改上游正式产物。
 
 `build_task_plan` 至少包含：

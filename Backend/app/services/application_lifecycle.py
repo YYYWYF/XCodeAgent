@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -40,6 +41,7 @@ from app.domain.application_lifecycle import (
 APPLICATION_LIFECYCLE_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "application-lifecycle.json"
 _STATE_LOCKS: dict[str, threading.RLock] = {}
 _STATE_LOCKS_GUARD = threading.Lock()
+_LOGGER = logging.getLogger(__name__)
 
 
 class ApplicationLifecyclePersistenceError(ValueError):
@@ -832,7 +834,7 @@ def end_workbench_execution(
         ending_execution = current.active_executions[run_id]
         remaining = dict(current.active_executions)
         remaining.pop(run_id, None)
-        return _persist_workbench_execution_removal(
+        ended = _persist_workbench_execution_removal(
             workspace,
             current=current,
             executions=remaining,
@@ -842,6 +844,11 @@ def end_workbench_execution(
                 ending_execution,
             ),
         )
+        if ending_execution.status == WorkbenchExecutionStatus.FAILED:
+            # execution 被明确结束后不再满足 lifecycle 的 exact resume 条件，旧
+            # Planning Recovery 只能按该 execution ID 尽力收口，不能阻断 End Plan。
+            best_effort_delete_planning_recovery(workspace, run_id)
+        return ended
 
 
 def stop_workbench_execution(workspace: str | Path, *, run_id: str) -> ApplicationLifecycle:
@@ -857,6 +864,78 @@ def stop_workbench_execution(workspace: str | Path, *, run_id: str) -> Applicati
         phase=active.phase,
         status=WorkbenchExecutionStatus.STOPPED,
     )
+
+
+def best_effort_delete_planning_recovery(
+    workspace: str | Path,
+    workflow_run_id: str,
+) -> bool:
+    """按明确 Workflow execution ID 删除 Recovery，失败只记录告警。"""
+
+    source_id = str(workflow_run_id or "").strip()
+    if not source_id:
+        return False
+    try:
+        from app.workspace.planning_recovery_documents import delete_planning_recovery
+
+        return delete_planning_recovery({"workspace": str(workspace)}, source_id)
+    except Exception:
+        _LOGGER.warning(
+            "Failed to clean Planning Recovery Snapshot for workflow_run_id=%s",
+            source_id,
+            exc_info=True,
+        )
+        return False
+
+
+def cleanup_session_failed_executions(
+    workspace: str | Path,
+    owner_session_id: str,
+) -> ApplicationLifecycle:
+    """Session 已成功删除后收口其 failed execution，再清理对应 Recovery。"""
+
+    normalized_owner = str(owner_session_id or "").strip()
+    if not normalized_owner:
+        raise ValueError("Session cleanup 必须提供合法非空的 owner_session_id。")
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = load_application_lifecycle(workspace)
+        if current is None:
+            raise ApplicationLifecycleMissingError("生命周期状态尚未初始化。")
+        failed_run_ids = tuple(
+            run_id
+            for run_id, execution in current.active_executions.items()
+            if (
+                execution.status == WorkbenchExecutionStatus.FAILED
+                and execution.owner_session_id == normalized_owner
+            )
+        )
+        if not failed_run_ids:
+            return current
+
+        executions = dict(current.active_executions)
+        resource_locks = current.resource_locks
+        clear_active_formal_revision = False
+        for run_id in failed_run_ids:
+            execution = executions.pop(run_id)
+            resource_locks = _resource_locks_without_run(resource_locks, run_id)
+            clear_active_formal_revision = (
+                clear_active_formal_revision
+                or execution_belongs_to_active_revision(current, execution)
+            )
+        cleaned = _persist_workbench_execution_removal(
+            workspace,
+            current=current,
+            executions=executions,
+            resource_locks=resource_locks,
+            clear_active_formal_revision=clear_active_formal_revision,
+        )
+
+    # lifecycle 成功落盘后再删 Recovery；删除失败只留下可由 GC 处理的残留。
+    for run_id in failed_run_ids:
+        best_effort_delete_planning_recovery(workspace, run_id)
+    return cleaned
 
 
 def persist_workbench_interaction_submission(

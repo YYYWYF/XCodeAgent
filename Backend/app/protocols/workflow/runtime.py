@@ -602,7 +602,12 @@ def build_workflow_ag_ui_stream(
                 "active_thread_id": thread_id,
                 "active_run_id": run_id,
             }
-            initial_state.update(workflow_inputs.get("resume_values") or {})
+            initial_state.update(resume_values)
+            # Recovery source 只属于本次显式请求；不能让 checkpoint 中的旧 ID
+            # 在后续未携带 resumeExecutionRunId 的 Retry 中继续生效。
+            initial_state["resume_execution_run_id"] = str(
+                resume_values.get("resume_execution_run_id") or ""
+            ).strip()
             if phase_review_files is not None:
                 # 阶段交接只接受上一会话服务端 checkpoint 的开发文件清单。
                 initial_state["development_review_files"] = phase_review_files

@@ -8,7 +8,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.domain.application_lifecycle import ApplicationLifecycle
+from app.domain.application_lifecycle import (
+    ApplicationLifecycle,
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+    WorkbenchExecutionStatus,
+)
 from app.protocols.application_lifecycle import (
     application_lifecycle_capabilities,
     build_application_lifecycle_ag_ui_stream,
@@ -16,7 +21,9 @@ from app.protocols.application_lifecycle import (
 from app.services.application_lifecycle import (
     application_lifecycle_path,
     create_application_lifecycle,
+    start_workbench_execution,
     transition_application_lifecycle,
+    update_workbench_execution,
     write_application_lifecycle,
 )
 from app.services.preview_runtime_guard import claim_maintenance, release_maintenance
@@ -46,6 +53,7 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                 "retry_bootstrap_template_generation",
                 "workspace_attach",
                 "release_session_pending",
+                "cleanup_session_failed_executions",
             ],
         )
 
@@ -163,6 +171,65 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
         self.assertIn('"sessionPendingReleased":true', frames)
         self.assertIn('"source":"none"', frames)
         self.assertIn('"status":"completed"', frames)
+
+    def test_cleanup_session_failed_executions_removes_execution_after_explicit_action(self) -> None:
+        """Session 删除后的独立 action 应移除 failed execution 并返回最新 lifecycle。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = create_application_lifecycle(
+                application_id="app-cleanup",
+                application_name="收口测试",
+            )
+            lifecycle = lifecycle.model_copy(update={
+                "initialization": lifecycle.initialization.model_copy(update={
+                    "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    "status": ApplicationLifecycleStatus.COMPLETED,
+                })
+            })
+            write_application_lifecycle(directory, lifecycle)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="orders",
+                page_id="orders",
+                thread_id="cleanup-thread",
+                run_id="cleanup-run",
+                phase="prepare_build_tasks",
+                owner_session_id="session-cleanup",
+            )
+            update_workbench_execution(
+                directory,
+                run_id="cleanup-run",
+                phase="prepare_build_tasks",
+                status=WorkbenchExecutionStatus.FAILED,
+            )
+            stream = build_application_lifecycle_ag_ui_stream(
+                payload={
+                    "threadId": "cleanup-request-thread",
+                    "runId": "cleanup-request-run",
+                    "forwardedProps": {
+                        "applicationLifecycle": {
+                            "action": "cleanup_session_failed_executions",
+                            "workspaceRoot": directory,
+                            "sessionId": "session-cleanup",
+                        }
+                    },
+                }
+            )
+
+            async def collect() -> str:
+                """消费 Session failed execution cleanup 的完整事件流。"""
+
+                return "".join([frame async for frame in stream])
+
+            frames = asyncio.run(collect())
+            saved = json.loads(
+                application_lifecycle_path(directory).read_text(encoding="utf-8")
+            )
+
+        self.assertIn("cleanup_session_failed_executions", frames)
+        self.assertIn('"status":"completed"', frames)
+        self.assertNotIn("cleanup-run", saved["activeExecutions"])
 
     def test_create_action_emits_complete_ag_ui_lifecycle(self) -> None:
         """独立端点创建状态时应发送事件、快照和完成事件。"""

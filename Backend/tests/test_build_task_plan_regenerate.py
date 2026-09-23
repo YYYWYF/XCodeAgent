@@ -64,9 +64,9 @@ class BuildTaskPlanRegenerateTests(unittest.IsolatedAsyncioTestCase):
         """返回带轮次标记的合法 Candidate，便于证明新 Run 未复用旧正文。"""
 
         tasks = model_tasks(job)
-        for index, task in enumerate(tasks):
-            task["id"] = f"{marker}:{job.identity.unit_id}:{index}"
-            task["deliverables"][0]["id"] = f"{task['id']}:deliverable"
+        for task in tasks:
+            # frontend:api-client 的 Task ID 由 Endpoint 集合确定，标记只能放在可变正文。
+            task["title"] = f"{marker}:{task['title']}"
         return UnitGenerationAttemptResult(
             identity=job.identity,
             input_fingerprint=job.context.input_fingerprint,
@@ -196,8 +196,8 @@ class BuildTaskPlanRegenerateTests(unittest.IsolatedAsyncioTestCase):
 
         pending = load_pending_build_task_plan(self.state)
         self.assertTrue(old_candidate_ids.isdisjoint(result.planning_run.candidates))
-        self.assertFalse(any(task_id.startswith("old:") for task_id in pending["task_registry"]))
-        self.assertTrue(any(task_id.startswith("new:") for task_id in pending["task_registry"]))
+        self.assertFalse(any(task["title"].startswith("old:") for task in pending["task_registry"].values()))
+        self.assertTrue(any(task["title"].startswith("new:") for task in pending["task_registry"].values()))
         self.assertTrue(all(unit.generation_round == 1 for unit in result.planning_run.unit_states.values()))
 
     async def test_generation_failure_does_not_restore_old_pending(self) -> None:

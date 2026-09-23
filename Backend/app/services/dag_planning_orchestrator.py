@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
+import logging
 from typing import Any
 
 from pydantic import model_validator
@@ -18,12 +19,13 @@ from app.services.global_planning_validation import CandidateOwnership, TaskProv
 from app.services.global_repair_orchestrator import run_global_repair_loop
 from app.services.planning_frozen import FrozenPlanningModel, plain_json
 from app.services.planning_issues import ValidationIssue
+from app.services.planning_recovery_contracts import PlanningRecoverySnapshot
 from app.services.planning_run_contracts import PlanningRun, UnitRunState
 from app.services.planning_run_controller import PlanningRunController, SnapshotPublisher
 from app.services.planning_run_events import (
     AssemblyStarted, CandidateReady, GenerationStarted, GlobalValidationStarted,
-    PendingPersistenceStarted, RunFailed, UnitAttemptStarted,
-    UnitValidationStarted,
+    PendingPersistenceStarted, RecoveredCandidateAccepted, RunFailed,
+    UnitAttemptStarted, UnitValidationStarted,
 )
 from app.services.scope_assembly import ScopeAssemblyError, ScopeAssemblyResult, assemble_scope_build_task_plan
 from app.services.unit_generation import (
@@ -32,9 +34,13 @@ from app.services.unit_generation import (
     generate_unit_candidate_once,
 )
 from app.services.unit_generation_contracts import AttemptIdentity, CandidateAttempt, UnitGenerationAttemptResult, UnitGenerationPolicy
+from app.services.unit_candidate_validator import validate_unit_candidate
 from app.services.unit_generation_orchestrator import UnitGenerationFatalError
 from app.services.unit_generation_requirements_contracts import GenerationRequirementsError, UnitGenerationRequirements
 from app.services.unit_generation_scheduler import UnitGenerationScheduler
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class DagPlanningError(RuntimeError):
@@ -144,6 +150,7 @@ async def plan_dag_sequential(
     settings: Settings | None = None,
     generate_once: Callable[..., Awaitable[UnitGenerationAttemptResult]] | None = None,
     publish: SnapshotPublisher | None = None,
+    recovery_snapshot: PlanningRecoverySnapshot | None = None,
     now: Callable[[], str] = _now,
 ) -> ValidatedAssembledPlan:
     """执行最多三个 model session 并发的新链路，只写轻量 planning-run.json。
@@ -233,8 +240,8 @@ async def plan_dag_sequential(
                 retryable=False, unit_ids=(current.unit_id,), message="确定性生成 Unit 没有返回所需 Candidate。",
             ),))
         await controller.apply(UnitValidationStarted(identity=identity, at=now()))
-        await controller.apply(CandidateReady(candidate=CandidateAttempt(
-            identity=identity, input_fingerprint=initial.input_fingerprint, status="valid", tasks=payload["tasks"],
+        await controller.apply(CandidateReady(candidate=CandidateAttempt.from_generated_attempt(
+            attempt=identity, input_fingerprint=initial.input_fingerprint, status="valid", tasks=payload["tasks"],
         ), at=now()))
 
     async def regenerate_round(units: tuple[UnitRunState, ...]) -> None:
@@ -264,6 +271,85 @@ async def plan_dag_sequential(
             now=now,
         )
 
+    async def accept_recovered_candidates() -> None:
+        """在首轮调度前按当前 Run/Context/Local Validator 接纳可复用 Candidate。"""
+
+        if recovery_snapshot is None:
+            return
+        try:
+            recovery = PlanningRecoverySnapshot.model_validate(recovery_snapshot)
+        except Exception:
+            # Service loader 已经做过一次校验；纯领域调用传入损坏 Snapshot 时也只
+            # 放弃优化，不让 Recovery 数据把正常 Planning 变成失败。
+            _LOGGER.warning("Ignoring invalid in-memory Planning Recovery Snapshot", exc_info=True)
+            return
+        current = controller.snapshot
+        if (
+            recovery.input_fingerprint != current.input_fingerprint
+            or recovery.base_confirmed_plan_digest != current.base_confirmed_plan_digest
+            or plain_json(recovery.build_execution_scope)
+            != plain_json(current.build_execution_scope)
+        ):
+            _LOGGER.info(
+                "Planning Recovery Snapshot is stale for planning_run_id=%s; using fresh generation",
+                current.planning_run_id,
+            )
+            return
+        for unit_id, source_candidate in recovery.candidates_by_unit.items():
+            unit = current.unit_states.get(unit_id)
+            if (
+                unit is None
+                or unit_id not in current.planning_unit_ids
+                or unit.generation_strategy not in {"model", "deterministic"}
+                or unit.generation_status != "pending"
+            ):
+                continue
+            context = contexts.get(unit_id)
+            if context is None:
+                # deterministic 正常路径不需要 Context；Recovery 只有在能安全重建
+                # 当前切片时才尝试，失败后交还既有 deterministic generation。
+                try:
+                    context = frozen.unit_context(
+                        current,
+                        requirements,
+                        unit_id,
+                        frozen_contract_store=contract_store,
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "Skipping deterministic Recovery Candidate for unit_id=%s",
+                        unit_id,
+                        exc_info=True,
+                    )
+                    continue
+            try:
+                local_issues = validate_unit_candidate(
+                    context,
+                    source_candidate.tasks,
+                    frozen.reuse_facts,
+                )
+                if local_issues:
+                    continue
+                candidate = CandidateAttempt.from_recovered_candidate(
+                    source_candidate=source_candidate,
+                    planning_run_id=current.planning_run_id,
+                    unit_id=unit_id,
+                    generation_round=unit.generation_round,
+                    input_fingerprint=current.input_fingerprint,
+                )
+            except Exception:
+                # Recovery Context/Validator/DTO 异常只淘汰这个 source Candidate；
+                # Controller.apply 在 try 外，持久化失败不会被误吞。
+                _LOGGER.warning(
+                    "Skipping invalid Recovery Candidate for unit_id=%s",
+                    unit_id,
+                    exc_info=True,
+                )
+                continue
+            await controller.apply(
+                RecoveredCandidateAccepted(candidate=candidate, at=now())
+            )
+
     async def assemble_and_validate(snapshot: PlanningRun) -> GlobalRepairDecision:
         """在齐全 Barrier 后执行真实 append-only Assembly，并归因本 cycle 的完整失败。"""
 
@@ -288,9 +374,11 @@ async def plan_dag_sequential(
 
     try:
         await controller.apply(GenerationStarted(at=now()))
+        await accept_recovered_candidates()
         await regenerate_round(tuple(
             controller.snapshot.unit_states[key]
             for key in initial.planning_unit_ids
+            if controller.snapshot.unit_states[key].generation_status == "pending"
         ))
         decision = await run_global_repair_loop(
             controller, validate_global=assemble_and_validate,
