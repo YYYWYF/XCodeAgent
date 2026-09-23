@@ -1,5 +1,13 @@
 .@{class-prefix}-ai-chat-composer {
   flex: 0 0 auto;
+  // 输入框是常驻界面底部的固定区域，必须始终贴底。
+  //
+  // 消息区（.ai-message-list-shell）在**有内容**时是按内容收缩的（见 MessageList.less），
+  // 好让它下面的提醒卡片紧贴最后一张卡片。收缩之后容器里就多出空白，而输入框是它后面的
+  // 兄弟节点 —— 不给它 auto 外边距，空白会留在整列末尾，输入框被顶到内容下面悬在半空。
+  // 用 auto 把这段空白全部收到输入框**上方**：提醒卡片仍贴着内容，输入框落到底部。
+  // 内容很长（消息区撑满并滚动）时没有空白，auto 外边距归零，行为与从前一致。
+  margin-top: auto;
   padding: 14px 30px 24px;
   background: var(--wb-canvas);
 }
