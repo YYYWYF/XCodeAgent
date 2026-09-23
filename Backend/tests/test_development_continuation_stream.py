@@ -67,7 +67,7 @@ class DevelopmentContinuationStreamTests(unittest.IsolatedAsyncioTestCase):
                 def load_plan(*args, **kwargs):
                     """每轮读取真实文件，防止使用测试初始快照掩盖实体确认结果。"""
                     return {"project_plan": json.loads(
-                        (workspace / ".xcodeagent/plans/technical-plan.json").read_text()
+                        (workspace / ".devagentstudio/plans/technical-plan.json").read_text()
                     )}
 
                 builder = StateGraph(ProjectState)

@@ -138,7 +138,7 @@ class TestGenerationCapabilitiesTests(unittest.TestCase):
                 "it('renders PageAgeEntry', () => expect(userEvent).toBeDefined());\n",
                 encoding="utf-8",
             )
-            mapping_path = root / ".xcodeagent/cache/unit-test-mappings.json"
+            mapping_path = root / ".devagentstudio/cache/unit-test-mappings.json"
             mapping_path.parent.mkdir(parents=True)
             mapping_path.write_text(
                 json.dumps(

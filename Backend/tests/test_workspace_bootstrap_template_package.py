@@ -17,7 +17,7 @@ class TemplatePackageTests(unittest.TestCase):
     def test_accepts_fixed_roots_and_unique_template_state(self) -> None:
         """确认完整 frontend/backend ZIP 能通过 Package Contract。"""
 
-        package = self._archive({"frontend/package.json": "{}", "backend/pom.xml": "<project/>", ".xcodeagent/template-state.json": json.dumps(self._state())})
+        package = self._archive({"frontend/package.json": "{}", "backend/pom.xml": "<project/>", ".devagentstudio/template-state.json": json.dumps(self._state())})
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "template.zip"
             path.write_bytes(package)
@@ -25,13 +25,13 @@ class TemplatePackageTests(unittest.TestCase):
             self.assertEqual(result.template_state.templateRevision, "R1")
 
     def test_rejects_unmanaged_and_internal_paths(self) -> None:
-        """确认额外 root、额外 .xcodeagent 与路径穿越均被拒绝。"""
+        """确认额外 root、额外 .devagentstudio 与路径穿越均被拒绝。"""
 
-        cases = ("scripts/setup.sh", ".xcodeagent/application.json", "../escape")
+        cases = ("scripts/setup.sh", ".devagentstudio/application.json", "../escape")
         for entry in cases:
             with self.subTest(entry=entry), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "template.zip"
-                path.write_bytes(self._archive({"frontend/package.json": "{}", "backend/pom.xml": "<project/>", ".xcodeagent/template-state.json": json.dumps(self._state()), entry: "bad"}))
+                path.write_bytes(self._archive({"frontend/package.json": "{}", "backend/pom.xml": "<project/>", ".devagentstudio/template-state.json": json.dumps(self._state()), entry: "bad"}))
                 with self.assertRaises(TemplatePackageError):
                     validate_template_package(path, self._limits())
 

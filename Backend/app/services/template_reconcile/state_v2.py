@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.template_reconcile.protocol_v2 import (
     TemplateReconcileProtocolV2Error,
     TemplateStateV2,
@@ -13,7 +14,7 @@ from app.services.template_reconcile.protocol_v2 import (
 from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.models import TemplateStateError
 
-TEMPLATE_STATE_V2_RELATIVE_PATH = Path(".xcodeagent/template-state.json")
+TEMPLATE_STATE_V2_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "template-state.json"
 
 
 def template_state_v2_path(workspace: str | Path) -> Path:

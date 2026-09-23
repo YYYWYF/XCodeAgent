@@ -23,7 +23,7 @@ import { compileTsx } from './compileTsx'
 import './DesignRenderer.less'
 
 const { Paragraph } = Typography
-const DESIGN_FRAME_URL = 'xcodeagent-design://runtime/design-frame.html'
+const DESIGN_FRAME_URL = 'devagentstudio-design://runtime/design-frame.html'
 
 type RenderState =
   | { kind: 'idle' }

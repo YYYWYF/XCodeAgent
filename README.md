@@ -1,4 +1,4 @@
-# XCodeAgent 桌面端打包
+# DevAgent Studio 桌面端打包
 
 本项目由 Electron 前端和 Python 后端组成。下面的脚本会先用 PyInstaller 构建并暂存后端，再生成对应平台的 Electron 开发安装包。所有命令均从**项目根目录**执行；Windows 和 macOS 需要分别在对应系统上打包，Mac 的 Intel 与 Apple Silicon 也必须分别在同架构机器上打包。
 

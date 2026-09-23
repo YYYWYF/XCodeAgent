@@ -4,11 +4,11 @@ param()
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendRoot = Join-Path $RepoRoot "Backend"
-$env:XCODEAGENT_WORKING_DIR = if ($env:XCODEAGENT_WORKING_DIR) {
-  $env:XCODEAGENT_WORKING_DIR
+$env:DEVAGENTSTUDIO_WORKING_DIR = if ($env:DEVAGENTSTUDIO_WORKING_DIR) {
+  $env:DEVAGENTSTUDIO_WORKING_DIR
 }
 else {
-  ".xcodeagent_dev"
+  ".devagentstudio_dev"
 }
 
 $PythonCommand = $null

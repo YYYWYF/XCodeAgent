@@ -8,7 +8,7 @@ declare global {
   interface Window {
     electron: ElectronAPI
     api: unknown
-    xcodeAgent?: {
+    devAgentStudio?: {
       isElectron: boolean
       agentBaseUrl: string
       platform: string

@@ -133,7 +133,8 @@ type UseWorkflowConversationParams = {
   acquireSessionExecution: (
     identity: SessionIdentity,
     conversation: boolean,
-    phase?: string
+    phase?: string,
+    executionThreadId?: string
   ) => SessionExecutionEntry | undefined
   activeSession?: SessionIdentity
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
@@ -816,13 +817,17 @@ export function useWorkflowConversation({
     }
 
     const identity = options?.sessionIdentity || (await ensureActiveSession())
+    // 可见会话 threadId 用于消息归属；resumeState/显式参数的 threadId 才是本次 Graph 执行线程。
+    const executionThreadId =
+      options?.executionThreadId || options?.resumeState?.threadId || identity.threadId
     const initialExecutionPhase =
       String(options?.workflowDebug?.resumeFrom || '').trim() ||
       workflowExecutionPhase(options?.resumeState)
     const blockingExecution = acquireSessionExecution(
       identity,
       Boolean(options?.conversation),
-      initialExecutionPhase
+      initialExecutionPhase,
+      executionThreadId
     )
     if (blockingExecution) {
       const sameSession = blockingExecution.identity.key === identity.key
@@ -886,8 +891,6 @@ export function useWorkflowConversation({
       : options?.workflowScope === 'application_planning'
         ? getApplicationPlanningUrl()
         : getWorkflowUrl()
-    const executionThreadId =
-      options?.executionThreadId || options?.resumeState?.threadId || identity.threadId
     const currentAgUiSession = agUiSessionsRef.current[identity.key]
     const agUiSession =
       currentAgUiSession &&
@@ -1564,8 +1567,13 @@ export function useWorkflowConversation({
         answer && typeof answer === 'object' && !Array.isArray(answer)
           ? String((answer as Record<string, unknown>).action || '')
           : ''
+      const reviewMode =
+        answer && typeof answer === 'object' && !Array.isArray(answer)
+          ? String((answer as Record<string, unknown>).reviewMode || '')
+          : ''
       if (
         action !== 'confirm' ||
+        !['full', 'diff'].includes(reviewMode) ||
         loading ||
         workspaceBusy ||
         reviewPhaseTransitionRunIdsRef.current.has(workflow.runId)
@@ -1592,16 +1600,19 @@ export function useWorkflowConversation({
       }
       // 会话创建成功后立即切换顶部阶段，避免等待审查 Agent 首帧造成视觉滞后。
       onEnterReviewPhase()
-      const started = await sendWorkflowMessage('开始审查前后端代码', {
-        clarificationAnswers: answers,
-        originalRequest,
-        resumeState: workflow,
-        buildExecutionScope: workflowBuildScope,
-        resumeExecutionRunId: workflow.runId,
-        sessionIdentity: reviewSession,
-        titleFrom: '进入审查阶段',
-        conversation: false
-      })
+      const started = await sendWorkflowMessage(
+        reviewMode === 'diff' ? '开始 Diff 审查' : '开始全量审查',
+        {
+          clarificationAnswers: answers,
+          originalRequest,
+          resumeState: workflow,
+          buildExecutionScope: workflowBuildScope,
+          resumeExecutionRunId: workflow.runId,
+          sessionIdentity: reviewSession,
+          titleFrom: '进入审查阶段',
+          conversation: false
+        }
+      )
       if (!started) reviewPhaseTransitionRunIdsRef.current.delete(workflow.runId)
       return started
     }

@@ -1,4 +1,4 @@
-"""发起新迭代保留应用工程本体，只清空 .xcodeagent 规划产物。
+"""发起新迭代保留应用工程本体，只清空 .devagentstudio 规划产物。
 
 新迭代是在已有代码上继续加功能，因此 frontend/backend/.git 与 template-state.json
 必须原样保留——那份代码（模板 + 历次迭代累积的业务代码）就是产品本身。
@@ -29,22 +29,22 @@ _PLANNING_DIRS = ("specs", "plans", "drafts", "checkpoints", "ui-design")
 def _bootstrapped_workspace(workspace: Path) -> None:
     """构造一个已完成首次 Bootstrap 的工作区（工程本体 + 规划产物齐全）。"""
 
-    xcodeagent_dir = workspace / ".xcodeagent"
-    xcodeagent_dir.mkdir(parents=True, exist_ok=True)
-    (xcodeagent_dir / "AGENTS.md").write_text("# 迭代上下文\n", encoding="utf-8")
-    (xcodeagent_dir / "application.json").write_text(
+    devagentstudio_dir = workspace / ".devagentstudio"
+    devagentstudio_dir.mkdir(parents=True, exist_ok=True)
+    (devagentstudio_dir / "AGENTS.md").write_text("# 迭代上下文\n", encoding="utf-8")
+    (devagentstudio_dir / "application.json").write_text(
         json.dumps({"id": "app-1", "source": "new"}), encoding="utf-8"
     )
     # 上一轮迭代遗留的规划产物。
     for name in _PLANNING_DIRS:
-        (xcodeagent_dir / name).mkdir(parents=True, exist_ok=True)
-        (xcodeagent_dir / name / "artifact.json").write_text("{}", encoding="utf-8")
+        (devagentstudio_dir / name).mkdir(parents=True, exist_ok=True)
+        (devagentstudio_dir / name / "artifact.json").write_text("{}", encoding="utf-8")
     # 真实 lifecycle 快照：start_iteration 会先读它收口遗留 execution，假 JSON 会被判为损坏。
     write_application_lifecycle(
         workspace,
         create_application_lifecycle(application_id="app-1", application_name="测试应用"),
     )
-    (xcodeagent_dir / "application-lifecycle.json.bak").write_text("{}", encoding="utf-8")
+    (devagentstudio_dir / "application-lifecycle.json.bak").write_text("{}", encoding="utf-8")
     # 应用工程本体：模板受管根、基线仓库与模板状态标记。
     for name in ("frontend", "backend"):
         (workspace / name).mkdir(parents=True, exist_ok=True)
@@ -52,7 +52,7 @@ def _bootstrapped_workspace(workspace: Path) -> None:
     (workspace / ".git").mkdir(parents=True, exist_ok=True)
     (workspace / TEMPLATE_STATE_RELATIVE_PATH).write_text('{"schemaVersion": 2}', encoding="utf-8")
     # 模板随工程交付的契约（构建期 Route Projection 依赖它）。
-    contracts = xcodeagent_dir / "template-contracts"
+    contracts = devagentstudio_dir / "template-contracts"
     contracts.mkdir(parents=True, exist_ok=True)
     (contracts / "route-projector.json").write_text('{"schemaVersion": "route-projector-contract.v2"}', encoding="utf-8")
 
@@ -87,7 +87,7 @@ class StartIterationCleanupTests(unittest.TestCase):
     def test_preserves_template_contracts(self) -> None:
         """模板随工程交付的契约必须保留。
 
-        `.xcodeagent` 同时承载平台数据与模板契约；新迭代不再重新物化，被删掉的契约
+        `.devagentstudio` 同时承载平台数据与模板契约；新迭代不再重新物化，被删掉的契约
         没有任何东西能补回来，构建期会以"模板缺少 Route Projector Descriptor"暴露。
         """
 
@@ -97,7 +97,7 @@ class StartIterationCleanupTests(unittest.TestCase):
 
             start_iteration(_request(workspace))
 
-            contract = workspace / ".xcodeagent" / "template-contracts" / "route-projector.json"
+            contract = workspace / ".devagentstudio" / "template-contracts" / "route-projector.json"
             self.assertTrue(contract.is_file(), "模板契约被删除：构建期 Route Projection 会失败")
 
     def test_preserves_unlisted_entries(self) -> None:
@@ -106,7 +106,7 @@ class StartIterationCleanupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             workspace = Path(raw)
             _bootstrapped_workspace(workspace)
-            unknown = workspace / ".xcodeagent" / "some-template-delivery"
+            unknown = workspace / ".devagentstudio" / "some-template-delivery"
             unknown.mkdir()
             (unknown / "descriptor.json").write_text("{}", encoding="utf-8")
 
@@ -123,8 +123,8 @@ class StartIterationCleanupTests(unittest.TestCase):
 
             start_iteration(_request(workspace))
 
-            self.assertTrue((workspace / ".xcodeagent" / "AGENTS.md").is_file())
-            self.assertTrue((workspace / ".xcodeagent" / "application.json").is_file())
+            self.assertTrue((workspace / ".devagentstudio" / "AGENTS.md").is_file())
+            self.assertTrue((workspace / ".devagentstudio" / "application.json").is_file())
 
     def test_clears_previous_planning_artifacts(self) -> None:
         """上一轮的规划产物与 lifecycle 快照不能带进新迭代。"""
@@ -135,11 +135,11 @@ class StartIterationCleanupTests(unittest.TestCase):
 
             start_iteration(_request(workspace))
 
-            xcodeagent_dir = workspace / ".xcodeagent"
-            self.assertFalse((xcodeagent_dir / "application-lifecycle.json").exists())
-            self.assertFalse((xcodeagent_dir / "application-lifecycle.json.bak").exists())
+            devagentstudio_dir = workspace / ".devagentstudio"
+            self.assertFalse((devagentstudio_dir / "application-lifecycle.json").exists())
+            self.assertFalse((devagentstudio_dir / "application-lifecycle.json.bak").exists())
             for name in _PLANNING_DIRS:
-                self.assertFalse((xcodeagent_dir / name).exists(), f"{name} 未被清除")
+                self.assertFalse((devagentstudio_dir / name).exists(), f"{name} 未被清除")
 
 
 class PreviewShutdownOrderTests(unittest.TestCase):
@@ -147,7 +147,7 @@ class PreviewShutdownOrderTests(unittest.TestCase):
 
     def _workspace_with_preview(self, workspace: Path) -> Path:
         _bootstrapped_workspace(workspace)
-        pid_dir = workspace / ".xcodeagent" / "runtime" / "launch"
+        pid_dir = workspace / ".devagentstudio" / "runtime" / "launch"
         pid_dir.mkdir(parents=True, exist_ok=True)
         (pid_dir / "frontend.pid").write_text("12345", encoding="utf-8")
         return pid_dir
@@ -201,11 +201,11 @@ class AgentsContextGenerationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as raw:
             workspace = Path(raw)
-            xcodeagent = workspace / ".xcodeagent"
-            (xcodeagent / "plans").mkdir(parents=True)
-            (xcodeagent / "specs").mkdir(parents=True)
+            devagentstudio = workspace / ".devagentstudio"
+            (devagentstudio / "plans").mkdir(parents=True)
+            (devagentstudio / "specs").mkdir(parents=True)
             # 两个信息项名称都为空 —— 正是产出悬空逗号的输入。
-            (xcodeagent / "plans" / "product-plan.json").write_text(
+            (devagentstudio / "plans" / "product-plan.json").write_text(
                 json.dumps(
                     {
                         "pages": [
@@ -226,7 +226,7 @@ class AgentsContextGenerationTests(unittest.TestCase):
 
             generate_agents_context(workspace, version_label="v1.0", description="首个版本")
 
-            content = (xcodeagent / "AGENTS.md").read_text(encoding="utf-8")
+            content = (devagentstudio / "AGENTS.md").read_text(encoding="utf-8")
             offenders = [
                 (index, line)
                 for index, line in enumerate(content.split("\n"), start=1)
@@ -241,9 +241,9 @@ class AgentsContextGenerationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as raw:
             workspace = Path(raw)
-            xcodeagent = workspace / ".xcodeagent"
-            (xcodeagent / "plans").mkdir(parents=True)
-            (xcodeagent / "plans" / "product-plan.json").write_text(
+            devagentstudio = workspace / ".devagentstudio"
+            (devagentstudio / "plans").mkdir(parents=True)
+            (devagentstudio / "plans" / "product-plan.json").write_text(
                 json.dumps(
                     {
                         "pages": [
@@ -261,5 +261,5 @@ class AgentsContextGenerationTests(unittest.TestCase):
 
             generate_agents_context(workspace, version_label="v1.0", description="首个版本")
 
-            content = (xcodeagent / "AGENTS.md").read_text(encoding="utf-8")
+            content = (devagentstudio / "AGENTS.md").read_text(encoding="utf-8")
             self.assertIn("信息项：标题, 正文", content)

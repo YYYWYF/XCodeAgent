@@ -7,6 +7,7 @@ from typing import Any
 from app.graph.state import ProjectState
 from app.graph.subgraphs.code_review import run_code_review_subgraph
 from app.graph.nodes.common import workspace_from_state
+from app.services.development_review_files import current_review_file
 from langchain_core.runnables import RunnableConfig
 
 
@@ -23,10 +24,32 @@ def review_phase_confirmation(state: ProjectState) -> dict[str, Any]:
         }
     submission = state.get("review_phase_confirmation")
     confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
+    review_mode = submission.get("reviewMode") if isinstance(submission, dict) else None
+    review_files = state.get("development_review_files")
+    review_files = review_files if isinstance(review_files, list) else []
+    available_files = [
+        path for path in review_files
+        if current_review_file(workspace_from_state(state) or "", path)
+    ]
     if confirmed:
+        if review_mode == "diff" and not available_files:
+            return {
+                "phase": "review_phase_confirmation",
+                "status": "requires_user_input",
+                "clarification": {
+                    "mode": "review_phase_confirmation",
+                    "status": "requires_user_input",
+                    "message": "开发阶段没有可审查的变动文件，请选择全量审查。",
+                    "diffReviewFileCount": 0,
+                    "questions": [],
+                },
+                "code_review_next_action": "await_user_input",
+                "timeline": ["review_phase_confirmation"],
+            }
         return {
             "phase": "review_phase_confirmation",
             "status": "completed",
+            "code_review_mode": review_mode,
             "clarification": {},
             "code_review_next_action": "code_review",
             "timeline": ["review_phase_confirmation"],
@@ -38,6 +61,7 @@ def review_phase_confirmation(state: ProjectState) -> dict[str, Any]:
             "mode": "review_phase_confirmation",
             "status": "requires_user_input",
             "message": "测试已通过，是否进入审查阶段？",
+            "diffReviewFileCount": len(available_files),
             "questions": [],
         },
         "code_review_next_action": "await_user_input",

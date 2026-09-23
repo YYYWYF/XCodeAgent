@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { build } from 'vite'
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
-const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-version-view-'))
+const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-version-view-'))
 const outputFile = path.join(outputDirectory, 'applicationVersionView.test.mjs')
 
 try {
@@ -21,7 +21,7 @@ try {
       emptyOutDir: true,
       minify: false,
       outDir: outputDirectory,
-      ssr: path.join(frontendRoot, 'tests/applicationVersionView.test.ts'),
+      ssr: path.join(frontendRoot, 'tests/applicationBranchView.test.ts'),
       rollupOptions: { output: { entryFileNames: path.basename(outputFile) } }
     }
   })

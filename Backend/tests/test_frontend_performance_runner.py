@@ -210,7 +210,7 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
             state = self._workspace_state(workspace)
             runtime_dir = (
                 Path(workspace)
-                / ".xcodeagent"
+                / ".devagentstudio"
                 / "runtime"
                 / "tests"
                 / "frontend_performance"

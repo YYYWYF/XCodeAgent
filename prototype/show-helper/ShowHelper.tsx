@@ -12,7 +12,7 @@ const EDGE_PADDING = 8
 /** 指针位移小于该阈值视为点击（展开/收起菜单），超过则判定为拖拽。 */
 const CLICK_SLOP = 5
 /** 悬浮球位置的持久化键：随原型缓存前缀管理，“清理演示数据”后位置一并重置。 */
-const POSITION_KEY = 'aistudio:prototype:show-helper-position'
+const POSITION_KEY = 'devagentstudio:prototype:show-helper-position'
 
 /** 悬浮球在视口中的位置（fixed 定位的 left/top）。 */
 type HelperPosition = { x: number; y: number }

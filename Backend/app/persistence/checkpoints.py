@@ -59,7 +59,7 @@ async def workflow_checkpointer(
         if saver is not None and _CHECKPOINT_IDENTITIES.get(cache_key) == current_identity:
             return saver
         if saver is not None:
-            # 项目删除会把整个 .xcodeagent 移入废纸篓；旧连接仍可写旧 inode，必须主动关闭。
+            # 项目删除会把整个 .devagentstudio 移入废纸篓；旧连接仍可写旧 inode，必须主动关闭。
             await saver.conn.close()
             _CHECKPOINT_SAVERS.pop(cache_key, None)
             _CHECKPOINT_IDENTITIES.pop(cache_key, None)

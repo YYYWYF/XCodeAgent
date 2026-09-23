@@ -19,9 +19,9 @@ export default function AcceptanceDecisionDock({
   onAccept
 }: Props): ReactElement {
   return (
-    <section aria-label="版本验收" className={cx('acceptance-decision-dock')}>
+    <section aria-label="迭代验收" className={cx('acceptance-decision-dock')}>
       <div className={cx('acceptance-decision-copy')}>
-        <Text strong>版本验收</Text>
+        <Text strong>迭代验收</Text>
         <Text type="secondary">请根据需求文档基线验收当前应用。</Text>
       </div>
       <div className={cx('acceptance-decision-actions')}>

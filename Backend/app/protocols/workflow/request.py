@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 from pathlib import Path
 from typing import Any
 
@@ -520,7 +522,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             change_id=revision_continuation.change_id,
             token=revision_continuation.token,
             technical_plan_path=(
-                Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+                Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
             ),
         )
         # continuation 的 request、target 和固定开发入口全部以 lifecycle 为权威；
@@ -1699,7 +1701,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     normalized_test_report_path = str(
         resumed_values.get("test_report_path") or ""
     ).replace("\\", "/").strip()
-    if normalized_test_report_path == ".xcodeagent/reports/test-report.md":
+    if normalized_test_report_path == ".devagentstudio/reports/test-report.md":
         resumed_values["test_report_path"] = normalized_test_report_path
     else:
         resumed_values.pop("test_report_path", None)
@@ -1718,7 +1720,7 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     )
     if (
         "test_report_path" not in resumed_values
-        and test_report_path == ".xcodeagent/reports/test-report.md"
+        and test_report_path == ".devagentstudio/reports/test-report.md"
     ):
         resumed_values["test_report_path"] = test_report_path
     # 前端快照使用 camelCase；Graph State 只保留 snake_case，避免同一语义双字段流转。
@@ -1755,7 +1757,7 @@ def _project_plan_start_values(
     workspace_root = _workspace_root_path(workspace)
     if workspace_root is None:
         return {}
-    project_plan_path = workspace_root / ".xcodeagent" / "plans" / "technical-plan.json"
+    project_plan_path = workspace_root / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
     if not project_plan_path.is_file():
         return {}
     technical_plan = load_project_plan_json(
@@ -1767,13 +1769,13 @@ def _project_plan_start_values(
     if technical_plan.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE:
         raise ValueError("只接受当前 TechnicalPlan。")
     requirement_spec = load_requirement_spec_json(
-        workspace_root / ".xcodeagent" / "specs" / "requirement-spec.json"
+        workspace_root / WORKSPACE_ARTIFACT_DIR / "specs" / "requirement-spec.json"
     )
     product_plan = load_project_plan_json(
-        workspace_root / ".xcodeagent" / "plans" / "product-plan.json"
+        workspace_root / WORKSPACE_ARTIFACT_DIR / "plans" / "product-plan.json"
     )
     ui_designs = load_ui_designs_json(
-        workspace_root / ".xcodeagent" / "specs" / "ui-designs.json"
+        workspace_root / WORKSPACE_ARTIFACT_DIR / "specs" / "ui-designs.json"
     )
     if not product_plan or not ui_designs:
         raise ValueError("当前 TechnicalPlan 运行时需要已确认的 ProductPlan 和 UiManifest。")
@@ -1825,7 +1827,7 @@ def _selected_requirement_page(
     if not selected_page_id:
         return None
     for relative_path in (
-        Path(".xcodeagent/specs/requirement-spec.json"),
+        WORKSPACE_ARTIFACT_DIR / 'specs/requirement-spec.json',
         Path("specs/requirement-spec.json"),
     ):
         spec_path = workspace_root / relative_path
@@ -1873,7 +1875,7 @@ def _debug_resume_values(
         ("requirement_spec_path", "requirementSpecPath", "requirementSpecDirectory"),
         (
             "requirement-spec.json",
-            ".xcodeagent/specs/requirement-spec.json",
+            ".devagentstudio/specs/requirement-spec.json",
             "specs/requirement-spec.json",
         ),
         workspace=workspace,
@@ -1888,7 +1890,7 @@ def _debug_resume_values(
         ("project_plan_path", "projectPlanPath", "projectPlanDirectory"),
         (
             "project-plan.json",
-            ".xcodeagent/plans/project-plan.json",
+            ".devagentstudio/plans/project-plan.json",
             "plans/project-plan.json",
         ),
         workspace=workspace,
@@ -1906,7 +1908,7 @@ def _debug_resume_values(
         ("build_task_plan_path", "buildTaskPlanPath", "buildTaskPlanDirectory"),
         (
             "build-task-plan.json",
-            ".xcodeagent/plans/build-task-plan.json",
+            ".devagentstudio/plans/build-task-plan.json",
             "plans/build-task-plan.json",
         ),
         workspace=workspace,
@@ -2032,7 +2034,7 @@ def _retry_plan_path(raw_path: Any, workspace_root: Path, default_name: str) -> 
     candidate = (
         Path(str(raw_path)).expanduser()
         if raw_path
-        else Path(".xcodeagent") / "plans" / default_name
+        else WORKSPACE_ARTIFACT_DIR / "plans" / default_name
     )
     return candidate if candidate.is_absolute() else workspace_root / candidate
 
@@ -2055,7 +2057,7 @@ def _resolve_debug_workspace_snapshot_path(
         workspace_root = _workspace_root_path(workspace)
         if not workspace_root:
             return None
-        path = workspace_root / ".xcodeagent" / "cache" / "workspace-snapshots"
+        path = workspace_root / WORKSPACE_ARTIFACT_DIR / "cache" / "workspace-snapshots"
         if not path.is_dir():
             path = workspace_root / "cache" / "workspace-snapshots"
             if not path.is_dir():
@@ -2239,7 +2241,7 @@ def _test_phase_confirmation_submission(value: Any) -> dict[str, str]:
 
 
 def _review_phase_confirmation_submission(value: Any) -> dict[str, str]:
-    """提取审查阶段进入确认动作，拒绝自然语言或未知动作。"""
+    """提取审查阶段确认及扫描模式，拒绝未知模式。"""
 
     if not isinstance(value, dict):
         return {}
@@ -2251,7 +2253,10 @@ def _review_phase_confirmation_submission(value: Any) -> dict[str, str]:
     action = _optional_text(answer.get("action")).lower()
     if action != "confirm":
         raise ValueError("review_phase_confirmation.action 只支持 confirm。")
-    return {"mode": "review_phase_confirmation", "action": "confirm"}
+    review_mode = _optional_text(answer.get("reviewMode")).lower()
+    if review_mode not in {"full", "diff"}:
+        raise ValueError("review_phase_confirmation.reviewMode 只支持 full 或 diff。")
+    return {"mode": "review_phase_confirmation", "action": "confirm", "reviewMode": review_mode}
 
 
 def _acceptance_phase_confirmation_submission(value: Any) -> dict[str, str]:

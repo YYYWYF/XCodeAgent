@@ -9,7 +9,7 @@ import type {
 declare global {
   interface Window {
     electron: ElectronAPI
-    xcodeAgent?: {
+    devAgentStudio?: {
       isElectron: boolean
       agentBaseUrl: string
       platform: string

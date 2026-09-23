@@ -37,6 +37,19 @@ export type ApplicationMutationOwnership = {
 
 type OwnershipCandidate = ApplicationMutationOwner & {
   updatedAt: string
+  identitySource: OwnershipIdentitySource
+  identityConflict: boolean
+}
+
+type OwnershipIdentitySource =
+  | 'owner_session_id'
+  | 'local_execution'
+  | 'visible_session_thread'
+  | 'unresolved'
+
+type LocalExecutionIdentityEvidence = {
+  sessionId?: string
+  conflicted: boolean
 }
 
 type ApplicationOwnerSession = Pick<
@@ -50,11 +63,78 @@ type ApplicationOwnershipScope = {
 }
 
 const ACTIVE_DAG_EXECUTION_STATUSES = new Set<WorkbenchExecutionStatus>(['running', 'stopping'])
-const ACTIVE_LOCAL_DAG_EXECUTION_STATUSES = new Set<SessionExecutionEntry['status']>([
+const ACTIVE_LOCAL_EXECUTION_STATUSES = new Set<SessionExecutionEntry['status']>([
   'starting',
   'running',
   'stopping'
 ])
+
+const OWNERSHIP_IDENTITY_PRIORITY: Record<OwnershipIdentitySource, number> = {
+  owner_session_id: 4,
+  local_execution: 3,
+  visible_session_thread: 2,
+  unresolved: 1
+}
+
+/** 判断本地 execution 是否属于当前 application/workspace，避免跨应用串联身份证据。 */
+function localExecutionBelongsToScope(
+  entry: SessionExecutionEntry,
+  lifecycle: ApplicationLifecycle | undefined,
+  scope: ApplicationOwnershipScope | undefined
+): boolean {
+  const applicationId = scope?.applicationId || lifecycle?.application.id
+  return Boolean(
+    applicationId &&
+      entry.identity.workflowId === applicationId &&
+      entry.identity.workspaceRoot &&
+      (!scope?.workspaceRoot || entry.identity.workspaceRoot === scope.workspaceRoot)
+  )
+}
+
+/** 从所有 active 本地 execution 建立 executionThreadId 到 sessionId 的身份证据。 */
+function buildLocalExecutionIdentityEvidence(
+  lifecycle: ApplicationLifecycle | undefined,
+  localExecutions: readonly SessionExecutionEntry[],
+  scope: ApplicationOwnershipScope | undefined
+): Map<string, LocalExecutionIdentityEvidence> {
+  const evidence = new Map<string, LocalExecutionIdentityEvidence>()
+  localExecutions.forEach((entry) => {
+    if (
+      !ACTIVE_LOCAL_EXECUTION_STATUSES.has(entry.status) ||
+      !localExecutionBelongsToScope(entry, lifecycle, scope)
+    ) {
+      return
+    }
+    const executionThreadId = String(entry.executionThreadId || '').trim()
+    if (!executionThreadId) return
+    const previous = evidence.get(executionThreadId)
+    if (!previous) {
+      evidence.set(executionThreadId, {
+        sessionId: entry.identity.sessionId,
+        conflicted: false
+      })
+      return
+    }
+    if (previous.conflicted || previous.sessionId === entry.identity.sessionId) return
+    // 同一真实 execution thread 被两个 active session 声明时不能猜 owner。
+    evidence.set(executionThreadId, { conflicted: true })
+  })
+  return evidence
+}
+
+/** 判断当前可见 session 是否仍有 active runtime entry，供 LockDock 渲染安全兜底使用。 */
+export function hasActiveSessionExecution(
+  localExecutions: readonly SessionExecutionEntry[],
+  identity?: Pick<SessionIdentity, 'key'>
+): boolean {
+  return Boolean(
+    identity &&
+      localExecutions.some(
+        (entry) =>
+          entry.identity.key === identity.key && ACTIVE_LOCAL_EXECUTION_STATUSES.has(entry.status)
+      )
+  )
+}
 
 /** 从当前工作区会话列表中补齐 owner 的可展示身份。 */
 function sessionForOwner(
@@ -84,19 +164,41 @@ function workbenchPhaseOf(value: unknown): WorkbenchPhase | undefined {
 /** 只从 DAG Planning 生命周期 execution 构造 owner 候选，不读取资源锁推断归属。 */
 function executionCandidate(
   execution: WorkbenchExecution,
-  sessions: readonly ApplicationOwnerSession[]
+  sessions: readonly ApplicationOwnerSession[],
+  localIdentityEvidence: Map<string, LocalExecutionIdentityEvidence>
 ): OwnershipCandidate {
   const threadId = String(execution.threadId || '').trim() || undefined
-  const session = sessionForOwner(sessions, undefined, threadId)
+  const explicitOwnerSessionId = String(execution.ownerSessionId || '').trim() || undefined
+  const localEvidence = threadId ? localIdentityEvidence.get(threadId) : undefined
+  const localOwnerSessionId = localEvidence?.sessionId
+  const correlatedOwnerSessionId = explicitOwnerSessionId || localOwnerSessionId
+  // ownerSessionId 和本地 execution correlation 是稳定身份；只有两者都缺失时才允许
+  // 用可见 Chat Session 的 thread 做最后一级兼容 fallback。
+  const fallbackSession =
+    !correlatedOwnerSessionId && !localEvidence?.conflicted
+      ? sessionForOwner(sessions, undefined, threadId)
+      : undefined
+  const session = correlatedOwnerSessionId
+    ? sessionForOwner(sessions, correlatedOwnerSessionId)
+    : fallbackSession
+  const identitySource: OwnershipIdentitySource = explicitOwnerSessionId
+    ? 'owner_session_id'
+    : localOwnerSessionId
+      ? 'local_execution'
+      : fallbackSession
+        ? 'visible_session_thread'
+        : 'unresolved'
   return {
-    sessionId: session?.id,
+    sessionId: correlatedOwnerSessionId || fallbackSession?.id,
     threadId,
     title: session?.title,
     workbenchPhase: session?.workbenchPhase || workbenchPhaseOf(execution.phase),
     status: execution.status,
     runId: execution.runId,
     source: 'active_dag_execution',
-    updatedAt: execution.updatedAt || execution.startedAt || ''
+    updatedAt: execution.updatedAt || execution.startedAt || '',
+    identitySource,
+    identityConflict: Boolean(!explicitOwnerSessionId && localEvidence?.conflicted)
   }
 }
 
@@ -105,15 +207,20 @@ function localExecutionCandidate(
   entry: SessionExecutionEntry,
   sessions: readonly ApplicationOwnerSession[]
 ): OwnershipCandidate {
-  const session = sessionForOwner(sessions, entry.identity.sessionId, entry.identity.threadId)
+  const session = sessionForOwner(sessions, entry.identity.sessionId)
+  // 本地登记必须和 lifecycle 使用同一个真实 Workflow thread；缺失时保持 undefined，
+  // 让 resolver 进入 fail-closed conflicted，而不是把可见会话 thread 当成执行身份。
+  const executionThreadId = String(entry.executionThreadId || '').trim() || undefined
   return {
     sessionId: entry.identity.sessionId,
-    threadId: entry.identity.threadId,
+    threadId: executionThreadId,
     title: session?.title,
     workbenchPhase: entry.identity.workbenchPhase,
     status: entry.status,
     source: 'active_dag_execution',
-    updatedAt: ''
+    updatedAt: '',
+    identitySource: 'local_execution',
+    identityConflict: false
   }
 }
 
@@ -128,13 +235,35 @@ function mergeOwnershipCandidates(candidates: OwnershipCandidate[]): OwnershipCa
       return
     }
     const preferred = candidate.updatedAt >= previous.updatedAt ? candidate : previous
+    const preferredIdentity =
+      OWNERSHIP_IDENTITY_PRIORITY[candidate.identitySource] >
+      OWNERSHIP_IDENTITY_PRIORITY[previous.identitySource]
+        ? candidate
+        : previous
+    const topPriority = OWNERSHIP_IDENTITY_PRIORITY[preferredIdentity.identitySource]
+    const topIdentitySessionIds = new Set(
+      [previous, candidate]
+        .filter((item) => OWNERSHIP_IDENTITY_PRIORITY[item.identitySource] === topPriority)
+        .map((item) => item.sessionId)
+        .filter((sessionId): sessionId is string => Boolean(sessionId))
+    )
     merged.set(key, {
       ...preferred,
-      sessionId: preferred.sessionId || previous.sessionId || candidate.sessionId,
+      sessionId:
+        preferredIdentity.sessionId ||
+        preferred.sessionId ||
+        previous.sessionId ||
+        candidate.sessionId,
       threadId: preferred.threadId || previous.threadId || candidate.threadId,
-      title: preferred.title || previous.title || candidate.title,
+      title: preferredIdentity.title || preferred.title || previous.title || candidate.title,
       workbenchPhase:
-        preferred.workbenchPhase || previous.workbenchPhase || candidate.workbenchPhase
+        preferredIdentity.workbenchPhase ||
+        preferred.workbenchPhase ||
+        previous.workbenchPhase ||
+        candidate.workbenchPhase,
+      identitySource: preferredIdentity.identitySource,
+      identityConflict:
+        previous.identityConflict || candidate.identityConflict || topIdentitySessionIds.size > 1
     })
   })
   return [...merged.values()]
@@ -183,6 +312,11 @@ export function resolveApplicationMutationOwnership(
     }
   }
 
+  const localIdentityEvidence = buildLocalExecutionIdentityEvidence(
+    lifecycle,
+    localExecutions,
+    scope
+  )
   const candidates: OwnershipCandidate[] = []
   Object.values(lifecycle?.activeExecutions || {}).forEach((execution) => {
     // 只有 prepare_build_tasks 的 running/stopping 代表 DAG generation 或 Regenerate。
@@ -191,16 +325,14 @@ export function resolveApplicationMutationOwnership(
       isDagPlanningPhase(execution.phase) &&
       ACTIVE_DAG_EXECUTION_STATUSES.has(execution.status)
     ) {
-      candidates.push(executionCandidate(execution, sessions))
+      candidates.push(executionCandidate(execution, sessions, localIdentityEvidence))
     }
   })
   localExecutions.forEach((entry) => {
     if (
-      entry.identity.workflowId === (scope?.applicationId || lifecycle?.application.id) &&
-      entry.identity.workspaceRoot &&
-      (!scope?.workspaceRoot || entry.identity.workspaceRoot === scope.workspaceRoot) &&
+      localExecutionBelongsToScope(entry, lifecycle, scope) &&
       isDagPlanningPhase(entry.phase) &&
-      ACTIVE_LOCAL_DAG_EXECUTION_STATUSES.has(entry.status)
+      ACTIVE_LOCAL_EXECUTION_STATUSES.has(entry.status)
     ) {
       candidates.push(localExecutionCandidate(entry, sessions))
     }
@@ -209,12 +341,17 @@ export function resolveApplicationMutationOwnership(
   const owners = mergeOwnershipCandidates(candidates)
   if (owners.length === 0) return { state: 'free', actionablePending: false }
   // DAG 活动状态出现多个无法归并的 thread 时 fail closed，避免任意一个会话误获写权限。
-  if (owners.some((candidate) => !candidate.threadId) || owners.length > 1) {
+  if (
+    owners.some((candidate) => !candidate.threadId || candidate.identityConflict) ||
+    owners.length > 1
+  ) {
     return { state: 'conflicted', actionablePending: false }
   }
   const owner = owners[0]
-  const { updatedAt, ...publicOwner } = owner
+  const { updatedAt, identitySource, identityConflict, ...publicOwner } = owner
   void updatedAt
+  void identitySource
+  void identityConflict
   return { state: 'owned', owner: publicOwner, actionablePending: false }
 }
 
@@ -225,11 +362,13 @@ export function applicationMutationReadonlyForSession(
 ): boolean {
   if (ownership.state === 'conflicted') return true
   if (ownership.state !== 'owned' || !ownership.owner) return false
-  const sameSession = Boolean(
-    identity && ownership.owner.sessionId && identity.sessionId === ownership.owner.sessionId
-  )
+  // 一旦有稳定 sessionId，execution thread 只能作为诊断/展示信息，不能放宽其它会话的写权限。
+  if (ownership.owner.sessionId) {
+    return identity?.sessionId !== ownership.owner.sessionId
+  }
   const sameThread = Boolean(
     identity && ownership.owner.threadId && identity.threadId === ownership.owner.threadId
   )
-  return !sameSession && !sameThread
+  // 仅在旧 lifecycle 缺少 session identity 且没有更高优先级证据时保留 thread fallback。
+  return !sameThread
 }

@@ -9,4 +9,4 @@
 - `ADD_FILE`、`UPDATE_FILE`、`DELETE_FILE`；
 - Update Package 的 `change-set.json`、`next-template-state.json` 与 `payload/`。
 
-当前不在协议中的 `validationPlan`、risks、diagnostics、结构化节点操作、`managed.files` / `managed.nodes`、migrations 与 marker host，均不得由 XCodeAgent 自行补造。Engine 升级 OpenAPI 与 Core 后，必须先更新本目录，再实现相应消费逻辑。
+当前不在协议中的 `validationPlan`、risks、diagnostics、结构化节点操作、`managed.files` / `managed.nodes`、migrations 与 marker host，均不得由 DevAgent Studio 自行补造。Engine 升级 OpenAPI 与 Core 后，必须先更新本目录，再实现相应消费逻辑。

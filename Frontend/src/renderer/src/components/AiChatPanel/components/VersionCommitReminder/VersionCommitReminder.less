@@ -1,10 +1,18 @@
 .@{class-prefix}-version-commit-reminder {
   display: grid;
   min-width: 0;
-  width: 100%;
-  // max-width: 90%;
-  max-width: 90%;
-  margin: 11px 0 0 51px;
+  // 与上方的 Agent 消息卡片同宽、居中对齐。
+  //
+  // 这个提醒是消息列的**兄弟节点**（两者都直接挂在 .ai-chat-main 下），所以它的 100%
+  // 是「整个对话面板」的宽度，而不是消息列的宽度。消息列本身是
+  // `min(100%, 1080px)` 居中 + 左右各 38px 内边距，内容带要窄得多。
+  // 早先用 `width: 100%` + `max-width: 90%` + `margin-left: 51px`：宽窗口下会比消息卡片
+  // 左右各溢出一大截，又都够不到面板最外缘。这里直接取消息列的内容带宽度，
+  // 数值与 MessageList.less 共用同一组 token，避免两边再次走散。
+  width: calc(
+    min(100%, var(--wb-chat-column-max, 1080px)) - var(--wb-chat-column-gutter, 38px) * 2
+  );
+  margin: 11px auto 0;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;

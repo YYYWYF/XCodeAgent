@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 
 def _load_environment() -> None:
-    env_file = os.getenv("XCODEAGENT_BACKEND_ENV_FILE")
+    env_file = os.getenv("DEVAGENTSTUDIO_BACKEND_ENV_FILE")
     if env_file:
         load_dotenv(Path(env_file).expanduser(), override=False)
         return
@@ -183,58 +183,58 @@ class Settings:
                 else None
             ),
             ui_design_max_tokens=int(
-                os.getenv("XCODEAGENT_UI_DESIGN_MAX_TOKENS", "32768")
+                os.getenv("DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS", "32768")
             ),
             ui_design_max_retries=int(
-                os.getenv("XCODEAGENT_UI_DESIGN_MAX_RETRIES", "1")
+                os.getenv("DEVAGENTSTUDIO_UI_DESIGN_MAX_RETRIES", "1")
             ),
             ui_design_concurrency=int(
-                os.getenv("XCODEAGENT_UI_DESIGN_CONCURRENCY", "3")
+                os.getenv("DEVAGENTSTUDIO_UI_DESIGN_CONCURRENCY", "3")
             ),
             build_task_plan_max_retries=int(
                 os.getenv("BUILD_TASK_PLAN_MAX_RETRIES", "2")
             ),
             dag_unit_max_tokens=_env_int(
-                "XCODEAGENT_DAG_UNIT_MAX_TOKENS", default=4096, minimum=1
+                "DEVAGENTSTUDIO_DAG_UNIT_MAX_TOKENS", default=4096, minimum=1
             ),
             dag_unit_generation_concurrency=_env_int(
-                "XCODEAGENT_DAG_UNIT_CONCURRENCY", default=3, minimum=1
+                "DEVAGENTSTUDIO_DAG_UNIT_CONCURRENCY", default=3, minimum=1
             ),
             dag_business_self_check_enabled=_env_bool(
-                "XCODEAGENT_DAG_BUSINESS_SELF_CHECK_ENABLED", default=False
+                "DEVAGENTSTUDIO_DAG_BUSINESS_SELF_CHECK_ENABLED", default=False
             ),
-            checkpoint_db_path=os.getenv("XCODEAGENT_CHECKPOINT_DB", ""),
+            checkpoint_db_path=os.getenv("DEVAGENTSTUDIO_CHECKPOINT_DB", ""),
             checkpoint_retention_days=int(
-                os.getenv("XCODEAGENT_CHECKPOINT_RETENTION_DAYS", "30")
+                os.getenv("DEVAGENTSTUDIO_CHECKPOINT_RETENTION_DAYS", "30")
             ),
             langsmith_tracing_enabled=_env_bool("LANGSMITH_TRACING", default=False),
             langsmith_project=os.getenv("LANGSMITH_PROJECT", ""),
             langsmith_endpoint=os.getenv("LANGSMITH_ENDPOINT", ""),
             template_engine_base_url=os.getenv(
-                "XCODEAGENT_TEMPLATE_ENGINE_BASE_URL", ""
+                "DEVAGENTSTUDIO_TEMPLATE_ENGINE_BASE_URL", ""
             ).rstrip("/"),
             template_engine_connect_timeout_seconds=float(
-                os.getenv("XCODEAGENT_TEMPLATE_ENGINE_CONNECT_TIMEOUT_SECONDS", "10")
+                os.getenv("DEVAGENTSTUDIO_TEMPLATE_ENGINE_CONNECT_TIMEOUT_SECONDS", "10")
             ),
             template_engine_read_timeout_seconds=float(
-                os.getenv("XCODEAGENT_TEMPLATE_ENGINE_READ_TIMEOUT_SECONDS", "120")
+                os.getenv("DEVAGENTSTUDIO_TEMPLATE_ENGINE_READ_TIMEOUT_SECONDS", "120")
             ),
             template_package_max_bytes=int(
-                os.getenv("XCODEAGENT_TEMPLATE_PACKAGE_MAX_BYTES", "104857600")
+                os.getenv("DEVAGENTSTUDIO_TEMPLATE_PACKAGE_MAX_BYTES", "104857600")
             ),
             template_package_max_files=int(
-                os.getenv("XCODEAGENT_TEMPLATE_PACKAGE_MAX_FILES", "10000")
+                os.getenv("DEVAGENTSTUDIO_TEMPLATE_PACKAGE_MAX_FILES", "10000")
             ),
             template_package_max_extracted_bytes=int(
                 os.getenv(
-                    "XCODEAGENT_TEMPLATE_PACKAGE_MAX_EXTRACTED_BYTES", "524288000"
+                    "DEVAGENTSTUDIO_TEMPLATE_PACKAGE_MAX_EXTRACTED_BYTES", "524288000"
                 )
             ),
             template_reconcile_enabled=_env_bool(
-                "XCODEAGENT_TEMPLATE_RECONCILE_ENABLED", default=True
+                "DEVAGENTSTUDIO_TEMPLATE_RECONCILE_ENABLED", default=True
             ),
-            git_username=os.getenv("XCODEAGENT_GIT_USERNAME", ""),
-            git_token=os.getenv("XCODEAGENT_GIT_TOKEN", ""),
+            git_username=os.getenv("DEVAGENTSTUDIO_GIT_USERNAME", ""),
+            git_token=os.getenv("DEVAGENTSTUDIO_GIT_TOKEN", ""),
         )
 
 
@@ -301,4 +301,4 @@ def _parse_custom_headers(raw: str) -> dict[str, str]:
 def dag_business_self_check_enabled() -> bool:
     """读取 DAG 执行阶段业务自检开关，未配置时默认关闭。"""
 
-    return _env_bool("XCODEAGENT_DAG_BUSINESS_SELF_CHECK_ENABLED", default=False)
+    return _env_bool("DEVAGENTSTUDIO_DAG_BUSINESS_SELF_CHECK_ENABLED", default=False)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import os
 import re
@@ -24,15 +26,15 @@ def data_sources_directory(workspace_root: str | Path, *, create: bool = True) -
     root = Path(workspace_root).expanduser().resolve()
     if not root.is_dir():
         raise DataSourceStorageError("当前工作区不存在或不是目录。")
-    agent_root = root / ".xcodeagent"
+    agent_root = root / WORKSPACE_ARTIFACT_DIR
     if agent_root.is_symlink():
-        raise DataSourceStorageError("工作区 .xcodeagent 不允许使用符号链接。")
+        raise DataSourceStorageError("工作区 .devagentstudio 不允许使用符号链接。")
     if create:
         agent_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     elif not agent_root.exists():
         return agent_root / DATA_SOURCE_DIRECTORY_NAME
     if not agent_root.is_dir():
-        raise DataSourceStorageError("工作区 .xcodeagent 不可用。")
+        raise DataSourceStorageError("工作区 .devagentstudio 不可用。")
     directory = agent_root / DATA_SOURCE_DIRECTORY_NAME
     if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
         raise DataSourceStorageError("独立数据源目录不可用。")

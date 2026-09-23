@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import logging
 import json
 import re
@@ -559,7 +561,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             except ProductPlanOperationCoverageError as exc:
                 return _operation_coverage_update(state, exc.candidate, exc.coverage)
             return _pending_product_plan_update(state, repaired)
-        application_file = Path(str(state.get("workspace") or "")) / ".xcodeagent" / "application.json"
+        application_file = Path(str(state.get("workspace") or "")) / WORKSPACE_ARTIFACT_DIR / "application.json"
         if application_planning_scope and application_file.is_file():
             # 正式修订进入规划前已提交配置，所有规划预检只读取唯一事实源。
             effective_application_config = read_application_config(

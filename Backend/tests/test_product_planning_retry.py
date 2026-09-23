@@ -1148,7 +1148,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
             persisted = json.loads(
                 (
                     Path(directory)
-                    / ".xcodeagent"
+                    / ".devagentstudio"
                     / "specs"
                     / "ui-designs.json"
                 ).read_text(encoding="utf-8")
@@ -1407,8 +1407,8 @@ class ProductPlanningRetryTests(unittest.TestCase):
                 )
             draft_markdown = Path(pending["product_plan_path"])
             draft_json = Path(pending["product_plan_json_path"])
-            formal_markdown = Path(workspace) / ".xcodeagent/plans/product-plan.md"
-            formal_json = Path(workspace) / ".xcodeagent/plans/product-plan.json"
+            formal_markdown = Path(workspace) / ".devagentstudio/plans/product-plan.md"
+            formal_json = Path(workspace) / ".devagentstudio/plans/product-plan.json"
 
             self.assertEqual(pending["status"], "requires_user_input")
             self.assertTrue(draft_markdown.as_posix().endswith("drafts/plans/product-plan.md"))

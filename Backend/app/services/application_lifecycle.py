@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
+from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.preview_runtime_guard import maintenance_lock, require_no_maintenance
 
 from app.domain.development_artifacts import DevelopmentArtifacts
@@ -36,7 +37,7 @@ from app.domain.application_lifecycle import (
 )
 
 
-APPLICATION_LIFECYCLE_RELATIVE_PATH = Path(".xcodeagent/application-lifecycle.json")
+APPLICATION_LIFECYCLE_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "application-lifecycle.json"
 _STATE_LOCKS: dict[str, threading.RLock] = {}
 _STATE_LOCKS_GUARD = threading.Lock()
 
@@ -499,6 +500,7 @@ def start_workbench_execution(
             ]
         )
         acquired_at = utc_now()
+        normalized_owner_session_id = str(owner_session_id or "").strip() or None
         next_locks = _resource_locks_with_claims(
             resource_locks,
             claims=claims,
@@ -514,6 +516,7 @@ def start_workbench_execution(
                 targetId=target_id,
                 pageId=page_id,
                 threadId=thread_id,
+                ownerSessionId=normalized_owner_session_id,
                 runId=run_id,
                 phase=phase,
                 status=WorkbenchExecutionStatus.RUNNING,

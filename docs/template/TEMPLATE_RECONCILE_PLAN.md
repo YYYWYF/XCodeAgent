@@ -1,11 +1,11 @@
-# XCodeAgent Template Capability Reconcile 实施方案
+# DevAgent Studio Template Capability Reconcile 实施方案
 
 > 本文描述**已有 Workspace 在正式 TechnicalPlan Revision 后的模板能力收敛**。
 > 公共协议见 [`TEMPLATE_REFACTOR.md`](./TEMPLATE_REFACTOR.md)；首次初始化见 [`BOOTSTRAP_PLAN.md`](./BOOTSTRAP_PLAN.md)。
 
-本文只包含 **XCodeAgent Backend / Workspace / AG-UI** 的实施计划。Template Engine 被视为
+本文只包含 **DevAgent Studio Backend / Workspace / AG-UI** 的实施计划。Template Engine 被视为
 已经按 `TEMPLATE_REFACTOR.md` 交付的外部依赖；本文不安排、不验证、也不描述 Engine 的
-接口、模板源、marker、OpenAPI、Java 实现或发布工作。XCodeAgent 仅对已收到的响应和
+接口、模板源、marker、OpenAPI、Java 实现或发布工作。DevAgent Studio 仅对已收到的响应和
 Package 做本地安全校验。
 
 ---
@@ -99,7 +99,7 @@ Platform Projection / Final Validation
 
 核心原则：
 
-> Template Engine 通过 `/v1/update` 决定本次权威 Desired State、ChangeSet 和 Operation 顺序；XCodeAgent 只在收到结果后执行本地 Policy Gate，并以 Git 回退、最小 Attempt 与人工可验收证据安全应用到真实 Workspace。
+> Template Engine 通过 `/v1/update` 决定本次权威 Desired State、ChangeSet 和 Operation 顺序；DevAgent Studio 只在收到结果后执行本地 Policy Gate，并以 Git 回退、最小 Attempt 与人工可验收证据安全应用到真实 Workspace。
 
 ## 1.2 V1 范围
 
@@ -138,7 +138,7 @@ Reconcile 只发生在：
 
 ```text
 Workspace 已 Bootstrap
-.xcodeagent/template-state.json 存在
+.devagentstudio/template-state.json 存在
 TechnicalPlan 正式 Revision 已确认
 ```
 
@@ -189,13 +189,13 @@ template_capabilities.authorization.enabled
 
 V1 要求一致。
 
-Engine V1 login/authorization config 为空对象，XCodeAgent 拒绝非空 Config。
+Engine V1 login/authorization config 为空对象，DevAgent Studio 拒绝非空 Config。
 
 ---
 
 ## 1.5 Recovery 后读取 Current TemplateState
 
-Template Service 不读取 XCodeAgent Workspace。
+Template Service 不读取 DevAgent Studio Workspace。
 
 Finalizer 固定入口顺序：
 
@@ -205,16 +205,16 @@ resolve workspaceId/changeId
 → load lifecycle + template-runtime-state.json
 → recover/resolve finalization
 → reload lifecycle
-→ reload .xcodeagent/template-state.json
-→ reload .xcodeagent/runtime/template-runtime-state.json
+→ reload .devagentstudio/template-state.json
+→ reload .devagentstudio/runtime/template-runtime-state.json
 → validate applied state + managedBaseline + recovered phase
 → compile RequestedConfig
 ```
 
-只有完成 Recovery 后，XCodeAgent 才读取当前：
+只有完成 Recovery 后，DevAgent Studio 才读取当前：
 
 ```text
-.xcodeagent/template-state.json
+.devagentstudio/template-state.json
 ```
 
 并按完整 Engine Schema 反序列化/校验：
@@ -234,10 +234,10 @@ migrations
 同时读取：
 
 ```text
-.xcodeagent/runtime/template-runtime-state.json.managedBaseline
+.devagentstudio/runtime/template-runtime-state.json.managedBaseline
 ```
 
-用于 Engine Exclusive 文件冲突检查。该 runtime 文件是 XCodeAgent 私有状态，**绝不发送给 Template Engine**。
+用于 Engine Exclusive 文件冲突检查。该 runtime 文件是 DevAgent Studio 私有状态，**绝不发送给 Template Engine**。
 
 如果 Recovery 改写了 TemplateState 或 TemplateRuntimeState，Finalizer 必须丢弃之前的内存对象和 digest，重新计算：
 
@@ -256,7 +256,7 @@ RECOVERED_STATE_RELOAD_REQUIRED
 
 ## 1.6 `/v1/plan` 的定位：可选 Preview，不参与主流程绑定
 
-`/v1/plan` 与 `/v1/update` 是相互独立的 Stateless HTTP Adapter。对 XCodeAgent 而言，
+`/v1/plan` 与 `/v1/update` 是相互独立的 Stateless HTTP Adapter。对 DevAgent Studio 而言，
 两者请求只包含：
 
 ```text
@@ -265,7 +265,7 @@ currentTemplateState
 requestedConfig
 ```
 
-**`/v1/plan` 的结果不会传给 `/v1/update`，XCodeAgent 也不保存可供 `/v1/update`
+**`/v1/plan` 的结果不会传给 `/v1/update`，DevAgent Studio 也不保存可供 `/v1/update`
 消费的 planId / plan snapshot。**
 
 因此 V1 固定：
@@ -446,7 +446,7 @@ risks
 
 `payload/` 只对应 ADD_FILE / UPDATE_FILE；DELETE 和结构化 Node Operation 不制造伪 Payload。
 
-Update Package 是本次执行的唯一权威计划快照。XCodeAgent 必须计算并持久化：
+Update Package 是本次执行的唯一权威计划快照。DevAgent Studio 必须计算并持久化：
 
 ```text
 changeSetJcsSha256
@@ -478,11 +478,11 @@ Plan → Update 一致性比较
 ```
 
 如果业务未来要求 Preview 与 Apply 强绑定，则另行增加外部 `planToken/sourceRevision`
-契约；XCodeAgent V1 不用 digest 猜测绑定。
+契约；DevAgent Studio V1 不用 digest 猜测绑定。
 
 ## 1.11 完整 Operation 集
 
-XCodeAgent 必须支持 Engine V1：
+DevAgent Studio 必须支持 Engine V1：
 
 ```text
 ADD_FILE(path, content)
@@ -525,7 +525,7 @@ for index, operation in enumerate(change_set.operations):
 Agent 再决定顺序
 ```
 
-Engine 已决定语义顺序，XCodeAgent 不得重排。
+Engine 已决定语义顺序，DevAgent Studio 不得重排。
 
 ---
 
@@ -541,7 +541,7 @@ payload bytes == operation content
 path normalized relative POSIX
 no absolute / .. / symlink / special file
 no .git mutation
-ChangeSet 不直接写 .xcodeagent/template-state.json
+ChangeSet 不直接写 .devagentstudio/template-state.json
 operation type in Engine V1 allow-list
 next TemplateState 完整 Schema 合法
 ```
@@ -601,10 +601,10 @@ BUSINESS_AGENT
 
 ### Engine Exclusive
 
-只有 Engine 真正拥有**整个文件**的 Host 才进入 XCodeAgent 私有 runtime baseline：
+只有 Engine 真正拥有**整个文件**的 Host 才进入 DevAgent Studio 私有 runtime baseline：
 
 ```text
-.xcodeagent/runtime/template-runtime-state.json
+.devagentstudio/runtime/template-runtime-state.json
   .managedBaseline.engineExclusiveFiles[path]
     → sha256(actual final bytes) + mode
 ```
@@ -664,11 +664,11 @@ V1 Overlay Registry：
 
 | Host | Strategy | Release Gate |
 |---|---|---|
-| `frontend/src/constants/routes.tsx` | `MARKER_REPLAY` | XCodeAgent 校验收到的 Host marker 并回放 Platform Region |
-| `frontend/src/constants/resources.ts` | `MARKER_REPLAY` | XCodeAgent 校验收到的 Host marker，并将现有 whole-file projection 改为 region-only projection |
-| `backend/.../AuthConstants.java` | `MARKER_REPLAY` | XCodeAgent 校验收到的 Host marker 并回放 Platform Region |
+| `frontend/src/constants/routes.tsx` | `MARKER_REPLAY` | DevAgent Studio 校验收到的 Host marker 并回放 Platform Region |
+| `frontend/src/constants/resources.ts` | `MARKER_REPLAY` | DevAgent Studio 校验收到的 Host marker，并将现有 whole-file projection 改为 region-only projection |
+| `backend/.../AuthConstants.java` | `MARKER_REPLAY` | DevAgent Studio 校验收到的 Host marker 并回放 Platform Region |
 
-`resources.ts` marker 被视为既定输入契约。XCodeAgent 只验证收到的 Host 中 marker pair
+`resources.ts` marker 被视为既定输入契约。DevAgent Studio 只验证收到的 Host 中 marker pair
 唯一、完整，并验证自身 Projection Writer 仅修改 Platform Region；任一不满足：
 
 ```text
@@ -734,8 +734,8 @@ V1 不引入新的 SQLite Runtime DB，也不把 Template Reconcile 状态写入
 `checkpoints.sqlite`。Template 子系统只维护两个权威 JSON：
 
 ```text
-.xcodeagent/template-state.json
-.xcodeagent/runtime/template-runtime-state.json
+.devagentstudio/template-state.json
+.devagentstudio/runtime/template-runtime-state.json
 ```
 
 `template-state.json` 只保存已经成功应用的完整 TemplateState；
@@ -765,7 +765,7 @@ failureCode / failureDetails | null
 ```
 
 前置条件固定为：Git `HEAD` 存在、工作区干净，并记录 `preReconcileHead`。忽略的
-`.xcodeagent/**` 不属于 Git 回退范围，必须保持 old metadata，直到全部 Apply、Validation
+`.devagentstudio/**` 不属于 Git 回退范围，必须保持 old metadata，直到全部 Apply、Validation
 和 Post Validation 成功。
 
 `FAILED_CLEAN` 的含义是：已确认 Git HEAD 仍等于 `preReconcileHead`、工作树已 reset 到
@@ -781,7 +781,7 @@ failureCode / failureDetails | null
 ## 1.18 Apply、失败回退与 Retry
 
 `/v1/update` 返回 200 ZIP 且完成 Package Validation、Policy Gate、Git clean preflight 后进入
-Apply。XCodeAgent 按 Engine 给定顺序执行 Operation，但不做逐项持久化、逐项恢复或中断续跑。
+Apply。DevAgent Studio 按 Engine 给定顺序执行 Operation，但不做逐项持久化、逐项恢复或中断续跑。
 
 正常捕获的异常统一处理：
 
@@ -817,8 +817,8 @@ RECONCILE_RECOVERY_REQUIRED
 V1 的两个模板持久化文件是一个逻辑提交单元：
 
 ```text
-.xcodeagent/template-state.json
-.xcodeagent/runtime/template-runtime-state.json
+.devagentstudio/template-state.json
+.devagentstudio/runtime/template-runtime-state.json
 ```
 
 其中 runtime state 在 commit 后同时包含：
@@ -845,7 +845,7 @@ reconcileAttempt.phase = RECONCILED
 
 `COMMITTING_METADATA` 是最小记录仍然无法完全自动恢复的边界：若进程在两个 JSON 的替换之间崩溃，系统不猜测应该 roll-forward 还是回退，而是标记 `RECONCILE_RECOVERY_REQUIRED`，阻断 Retry，要求人工核对并修复这对元数据。V1 不保存旧/目标双份 JSON digest，也不实现自动 roll-forward。
 
-TemplateState 仍是模板领域唯一 applied truth；runtime managedBaseline 只是 XCodeAgent 的冲突证据。
+TemplateState 仍是模板领域唯一 applied truth；runtime managedBaseline 只是 DevAgent Studio 的冲突证据。
 
 ## 1.19 File 与 Structured Operation Apply 约束
 
@@ -1272,7 +1272,7 @@ JCS 固定要求：
 - NaN / Infinity 非法；
 - UTF-8，无 BOM，无额外 whitespace。
 
-XCodeAgent 使用基于 `TEMPLATE_REFACTOR.md` 的本地 JCS golden vectors 验证自身实现。
+DevAgent Studio 使用基于 `TEMPLATE_REFACTOR.md` 的本地 JCS golden vectors 验证自身实现。
 
 现有 `canonical_sha256(path)` 实际是 raw file bytes hash，保留给 artifact file binding；不得再用于 TemplateState/RequestedConfig semantic digest。
 
@@ -1283,7 +1283,7 @@ BuildContext 不再使用含义模糊的 `state_sha256`，固定字段：
 ```json
 {
   "template_context": {
-    "state_path": ".xcodeagent/template-state.json",
+    "state_path": ".devagentstudio/template-state.json",
     "template_state_jcs_sha256": "...",
     "template_revision": "...",
     "effective_capabilities": {}
@@ -1294,7 +1294,7 @@ BuildContext 不再使用含义模糊的 `state_sha256`，固定字段：
 `template_state_jcs_sha256` 固定等于：
 
 ```text
-canonical_json_sha256_v1(parse(.xcodeagent/template-state.json))
+canonical_json_sha256_v1(parse(.devagentstudio/template-state.json))
 ```
 
 不是文件 raw bytes hash。
@@ -1354,7 +1354,7 @@ Authorization capability 新增后，Engine 提供权限固定基础设施；业
 
 ## 1.32 Capability Remove 暂停开放
 
-Engine 能计算 Remove，但 XCodeAgent V1 不开放通用 Remove。
+Engine 能计算 Remove，但 DevAgent Studio V1 不开放通用 Remove。
 
 原因：
 
@@ -1441,7 +1441,7 @@ Backend/app/services/template_reconcile/
 
 ### 实施目标
 
-Step 00 以当前 Engine OpenAPI 与 Core 代码为唯一输入契约，固化为 XCodeAgent 本地 fixture，
+Step 00 以当前 Engine OpenAPI 与 Core 代码为唯一输入契约，固化为 DevAgent Studio 本地 fixture，
 供后续 DTO、Package Validator 和 Handler 测试复用。`TEMPLATE_REFACTOR.md` 中尚未落入
 当前 OpenAPI/代码的目标字段不在本步骤实现范围。
 
@@ -1460,7 +1460,7 @@ Update Package: change-set.json / next-template-state.json / payload
 ```
 
 当前 Engine 尚未提供 `resources.ts` marker host、`validationPlan`、risks、diagnostics、
-JSON/Maven Structured Operation 或完整 V1 Managed Model；这些能力不得由 XCodeAgent fixture
+JSON/Maven Structured Operation 或完整 V1 Managed Model；这些能力不得由 DevAgent Studio fixture
 自行伪造。待 Engine 先升级 OpenAPI 与代码后，再扩充 fixture 和后续 Step 的实现边界。
 
 ### 人工验收
@@ -1480,19 +1480,19 @@ NO_CHANGE / 204
 
 ### 通过标准
 
-- 后续 Step 可完全离线地使用 fixture 开发和测试 XCodeAgent 消费逻辑；
+- 后续 Step 可完全离线地使用 fixture 开发和测试 DevAgent Studio 消费逻辑；
 - 本地 fixture 覆盖当前 Engine OpenAPI/代码规定的输入边界。
 
-外部依赖不满足该既定契约不在本实施计划的处理范围内；XCodeAgent 只对收到的非法输入
+外部依赖不满足该既定契约不在本实施计划的处理范围内；DevAgent Studio 只对收到的非法输入
 fail closed。
 
 ---
 
-## 2.2 Step 01：XCodeAgent 协议模型与 Digest 冻结
+## 2.2 Step 01：DevAgent Studio 协议模型与 Digest 冻结
 
 ### 实施目标
 
-让 XCodeAgent 只消费当前 Engine 权威模型，并冻结当前可验证的文件 SHA-256 语义。
+让 DevAgent Studio 只消费当前 Engine 权威模型，并冻结当前可验证的文件 SHA-256 语义。
 
 ### 当前 Engine 下的代码落点
 
@@ -1508,8 +1508,8 @@ Backend/tests/test_template_reconcile_models.py
 - 3 类 File Operation DTO；
 - ChangeSetBody.operations 与 PlanResponse DTO；
 - `artifact_file_sha256`；
-- 当前 Engine 不定义 JCS/语义摘要，XCodeAgent 不自行宣称与 Engine 摘要兼容；
-- 当前 Engine 不输出 validationPlan、risks 或 diagnostics 的细化 Schema，XCodeAgent 仅保留 OpenAPI 允许的原始 diagnostics 数组。
+- 当前 Engine 不定义 JCS/语义摘要，DevAgent Studio 不自行宣称与 Engine 摘要兼容；
+- 当前 Engine 不输出 validationPlan、risks 或 diagnostics 的细化 Schema，DevAgent Studio 仅保留 OpenAPI 允许的原始 diagnostics 数组。
 
 ### 人工验收
 
@@ -1688,8 +1688,8 @@ Backend/app/services/template_reconcile/recovery.py
 
 ### 必须完成
 
-- `.xcodeagent/template-state.json` 只保存完整 Engine TemplateState；
-- `.xcodeagent/runtime/template-runtime-state.json` 只保存最小 `reconcileAttempt`。当前
+- `.devagentstudio/template-state.json` 只保存完整 Engine TemplateState；
+- `.devagentstudio/runtime/template-runtime-state.json` 只保存最小 `reconcileAttempt`。当前
   `TemplateState.managedFiles` 已是 Engine 给出的完整文件基线，不另存第二份
   `managedBaseline`；
 - 使用统一 `AtomicJsonStore`：tmp write → flush/fsync → atomic replace → parent dir fsync；
@@ -1708,14 +1708,14 @@ Backend/app/services/template_reconcile/recovery.py
 先人工查看两个状态文件：
 
 ```bash
-jq . <workspace>/.xcodeagent/template-state.json
-jq . <workspace>/.xcodeagent/runtime/template-runtime-state.json
+jq . <workspace>/.devagentstudio/template-state.json
+jq . <workspace>/.devagentstudio/runtime/template-runtime-state.json
 ```
 
 再查看现有 LangGraph DB：
 
 ```bash
-sqlite3 <workspace>/.xcodeagent/checkpoints/checkpoints.sqlite '.tables'
+sqlite3 <workspace>/.devagentstudio/checkpoints/checkpoints.sqlite '.tables'
 ```
 
 人工确认没有为 Template Reconcile 新建 `revision_finalization / operation_wal / workspace_lease` 等自定义表。
@@ -2010,7 +2010,7 @@ Build 能绑定正确的 TemplateState，并及时暴露模板受管内容漂移
 
 ### 通过标准
 
-Feature Flag 默认关闭；确认当前 Engine 与 XCodeAgent 的联调通过后才打开。
+Feature Flag 默认关闭；确认当前 Engine 与 DevAgent Studio 的联调通过后才打开。
 
 ---
 
@@ -2143,9 +2143,9 @@ Capability Custom Config Binding
 
 ```bash
 WORKSPACE=/path/to/workspace
-jq . "$WORKSPACE/.xcodeagent/template-state.json"
-jq '.managedBaseline,.finalization' "$WORKSPACE/.xcodeagent/runtime/template-runtime-state.json"
-sqlite3 "$WORKSPACE/.xcodeagent/checkpoints/checkpoints.sqlite" '.tables'
+jq . "$WORKSPACE/.devagentstudio/template-state.json"
+jq '.managedBaseline,.finalization' "$WORKSPACE/.devagentstudio/runtime/template-runtime-state.json"
+sqlite3 "$WORKSPACE/.devagentstudio/checkpoints/checkpoints.sqlite" '.tables'
 git -C "$WORKSPACE" status --short
 ```
 
@@ -2179,7 +2179,7 @@ TechnicalPlan 设置：
 人工记录：
 
 ```bash
-sha256sum "$WORKSPACE/.xcodeagent/plans/technical-plan.json"
+sha256sum "$WORKSPACE/.devagentstudio/plans/technical-plan.json"
 ```
 
 并确认 Markdown round-trip 后字段仍存在。
@@ -2198,7 +2198,7 @@ revision_continuation_ready
 
 ```bash
 watch -n 0.5 'jq ".reconcileAttempt.phase,.reconcileAttempt.addedPaths" \
-  "$WORKSPACE/.xcodeagent/runtime/template-runtime-state.json" 2>/dev/null || true'
+  "$WORKSPACE/.devagentstudio/runtime/template-runtime-state.json" 2>/dev/null || true'
 ```
 
 预期阶段按以下方向单调推进：
@@ -2215,7 +2215,7 @@ APPLYING
 
 ```bash
 jq '.effective,.managed.nodes,.capabilities' \
-  "$WORKSPACE/.xcodeagent/template-state.json"
+  "$WORKSPACE/.devagentstudio/template-state.json"
 
 jq '.dependencies.dayjs' "$WORKSPACE/frontend/package.json"
 ```
@@ -2231,9 +2231,9 @@ Engine-managed nodes 正确
 ### 步骤 5：核对 Platform Overlay
 
 ```bash
-grep -n 'XCODEAGENT' "$WORKSPACE/frontend/src/constants/resources.ts"
-grep -n 'XCODEAGENT' "$WORKSPACE/frontend/src/constants/routes.tsx"
-grep -n 'XCODEAGENT' "$WORKSPACE/backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java"
+grep -n 'DEVAGENTSTUDIO' "$WORKSPACE/frontend/src/constants/resources.ts"
+grep -n 'DEVAGENTSTUDIO' "$WORKSPACE/frontend/src/constants/routes.tsx"
+grep -n 'DEVAGENTSTUDIO' "$WORKSPACE/backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java"
 ```
 
 预期：marker pair 唯一；marker 外 Engine Host 保持模板内容；marker 内资源/路由/常量与 TechnicalPlan 一致。
@@ -2243,7 +2243,7 @@ grep -n 'XCODEAGENT' "$WORKSPACE/backend/src/main/java/com/cmbchina/backend/auth
 生成 Build DAG 后：
 
 ```bash
-jq '.template_context' "$WORKSPACE/.xcodeagent/build-task-plan.json"
+jq '.template_context' "$WORKSPACE/.devagentstudio/build-task-plan.json"
 ```
 
 必须看到：

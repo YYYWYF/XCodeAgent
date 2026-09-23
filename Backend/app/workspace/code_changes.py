@@ -24,7 +24,7 @@ MAX_SNAPSHOT_FILE_BYTES = 1_000_000
 # 这些目录由工作流、包管理器或构建工具生成，不属于用户代码差异。
 # Maven 的 target/ 与前端 build/dist 等产物尤其容易在 Agent 运行期间
 # 被后台编译进程刷新；把它们纳入代码变更集会造成越权写入误报。
-CODE_CHANGE_IGNORED_DIRS = {".xcodeagent", "target", "build", "dist"}
+CODE_CHANGE_IGNORED_DIRS = {".devagentstudio", "target", "build", "dist"}
 CODE_CHANGE_IGNORED_FILE_NAMES = {".ds_store"}
 DEFAULT_CODE_CHANGE_IGNORED_DIRS = DEFAULT_IGNORED_DIRS | CODE_CHANGE_IGNORED_DIRS
 T = TypeVar("T")

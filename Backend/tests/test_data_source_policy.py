@@ -22,7 +22,7 @@ class DataSourcePolicyTests(unittest.TestCase):
     def _write_application(self, workspace: str, datasource_type: str, **extra: object) -> None:
         """写入包含敏感字段的最小应用配置，验证策略只读取数据源类型。"""
 
-        application_dir = Path(workspace) / ".xcodeagent"
+        application_dir = Path(workspace) / ".devagentstudio"
         application_dir.mkdir(parents=True, exist_ok=True)
         application_dir.joinpath("application.json").write_text(
             json.dumps(
@@ -52,7 +52,7 @@ class DataSourcePolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             self._write_application(workspace, "database")
             self.assertFalse(application_has_database_config(workspace))
-            application_dir = Path(workspace) / ".xcodeagent"
+            application_dir = Path(workspace) / ".devagentstudio"
             application_dir.joinpath("application.json").write_text(
                 json.dumps(
                     {

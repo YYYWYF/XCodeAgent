@@ -79,7 +79,7 @@ export type ReadWorkspaceFileResult = {
 }
 
 function getAgentBaseUrl(): string {
-  const agentBaseUrl = window.aiStudio?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl ? agentBaseUrl.replace(/\/$/, '') : '/api/agent'
 }
 

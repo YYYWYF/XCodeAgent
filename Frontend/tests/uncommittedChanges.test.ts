@@ -350,8 +350,8 @@ test('提交提醒按业务代码计数，产物不点亮角标', () => {
   // 平台产物（规划文档、状态快照）与业务代码混在一起时的典型快照。
   const snapshot = {
     eligiblePaths: [
-      '.xcodeagent/application-lifecycle.json',
-      '.xcodeagent/plans/product-plan.json',
+      '.devagentstudio/application-lifecycle.json',
+      '.devagentstudio/plans/product-plan.json',
       'frontend/src/pages/PageWelcome/index.tsx'
     ],
     codePaths: ['frontend/src/pages/PageWelcome/index.tsx']
@@ -364,7 +364,7 @@ test('提交提醒按业务代码计数，产物不点亮角标', () => {
     '产物不该让"用户改了代码"的提醒亮起来'
   )
 
-  // 设计版本弱提醒：必须带上产物 —— 设计阶段唯一的变更就是 .xcodeagent，
+  // 设计版本弱提醒：必须带上产物 —— 设计阶段唯一的变更就是 .devagentstudio，
   // 按业务代码算永远是 0，这条提醒会彻底消失（文档 §4.3 要求它存在）。
   assert.deepEqual(
     resolveCommitScope({ snapshot, includePlatformArtifacts: true }),
@@ -378,7 +378,7 @@ test('提交提醒按业务代码计数，产物不点亮角标', () => {
 
   // 迭代刚启动、只有产物被清理的场景：业务代码口径为空 → 角标不亮。
   const iterationStart = {
-    eligiblePaths: ['.xcodeagent/plans/product-plan.json', '.xcodeagent/AGENTS.md'],
+    eligiblePaths: ['.devagentstudio/plans/product-plan.json', '.devagentstudio/AGENTS.md'],
     codePaths: []
   }
   assert.deepEqual(
@@ -398,7 +398,7 @@ test('模板卡：无待提交代码时报告基线，而不是建议一个做�
   // 唯一变更是 lifecycle 状态文件，它被排除在业务代码口径外。
   const snapshot = {
     head: 'c9b4fed6a10754fc7ddf76db631e5b2e338f3f24',
-    eligiblePaths: ['.xcodeagent/application-lifecycle.json'],
+    eligiblePaths: ['.devagentstudio/application-lifecycle.json'],
     codePaths: [] as string[]
   }
 
@@ -477,11 +477,11 @@ test('提交弹窗：全选按钮是切换，覆盖全选与清空', () => {
 })
 
 test('提交弹窗：可勾选文件必须都在可提交范围内', () => {
-  // 真实场景：工作区有业务代码 + .xcodeagent 产物。
+  // 真实场景：工作区有业务代码 + .devagentstudio 产物。
   const allChanged = [
     'frontend/src/pages/PageWelcome/index.tsx',
-    '.xcodeagent/application-lifecycle.json',
-    '.xcodeagent/plans/product-plan.json'
+    '.devagentstudio/application-lifecycle.json',
+    '.devagentstudio/plans/product-plan.json'
   ]
 
   // 正确接线：可提交范围是**全部变更**，提醒口径（默认勾选）才是收窄的业务代码。
@@ -558,7 +558,7 @@ test('敏感文件识别：覆盖后端会拒绝的那些文件名', () => {
   assert.equal(hasSensitivePath(['backend\\config\\.env']), true)
   // 正常业务代码不误报。
   assert.equal(hasSensitivePath(['frontend/src/pages/PageWelcome/index.tsx']), false)
-  assert.equal(hasSensitivePath(['.xcodeagent/application-lifecycle.json']), false)
+  assert.equal(hasSensitivePath(['.devagentstudio/application-lifecycle.json']), false)
   // 形似但不是敏感文件的不能误伤（.env.example 是模板自带的示例文件）。
   assert.equal(hasSensitivePath(['backend/.env.example']), false, '.env.example 不是敏感文件')
   assert.equal(hasSensitivePath([]), false)

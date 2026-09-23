@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import asyncio
 from pathlib import Path
 from typing import Any
@@ -519,7 +521,7 @@ def _reconcile_confirmed_revision(state: ProjectState) -> dict:
             workspace,
             change_id=active_revision.change_id,
             technical_plan_path=(
-                Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+                Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
             ),
         )
         lifecycle = load_application_lifecycle(workspace) or lifecycle
@@ -737,7 +739,7 @@ def _reconcile_revision_template_capabilities(workspace: str, change_id: str) ->
     settings = Settings.from_env()
     if not settings.template_reconcile_enabled:
         return
-    plan_path = Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+    plan_path = Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
     claim = claim_template_reconcile_finalization(
         workspace,
         change_id=change_id,

@@ -80,7 +80,7 @@ class EntityDetailPlanTests(unittest.TestCase):
                 {"workspace": str(workspace)},
                 plan_with_detail,
             )
-            plan_path = workspace / ".xcodeagent" / "plans" / "project-plan.json"
+            plan_path = workspace / ".devagentstudio" / "plans" / "project-plan.json"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(
                 json.dumps(compact, ensure_ascii=False, indent=2),
@@ -95,7 +95,7 @@ class EntityDetailPlanTests(unittest.TestCase):
             )
             self.assertTrue(entity_ref["json_path"].endswith("entity--User.json"))
             self.assertTrue(
-                (workspace / ".xcodeagent" / "plans" / "entities" / "entity--User.md").is_file()
+                (workspace / ".devagentstudio" / "plans" / "entities" / "entity--User.md").is_file()
             )
             self.assertEqual(len(hydrated["entity_detail_plans"]), 1)
             self.assertEqual(

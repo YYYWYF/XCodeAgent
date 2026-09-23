@@ -4,8 +4,8 @@ import type { InitializationPlanningRecord, InitializationPlanningSeed } from '.
 export * from './planning/model'
 export { transitionInitializationPlanning } from './planning/state'
 
-const STORAGE_PREFIX = 'aistudio:prototype:initialization-planning:'
-const CHANGE_EVENT = 'aistudio:prototype:initialization-planning-change'
+const STORAGE_PREFIX = 'devagentstudio:prototype:initialization-planning:'
+const CHANGE_EVENT = 'devagentstudio:prototype:initialization-planning-change'
 
 /** 精确按应用和版本定位当前记录，不跨版本比较 revision。 */
 function storageKey(application: Pick<ApplicationConfig, 'id' | 'currentVersionId'>): string {

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import hashlib
 import json
 import os
@@ -93,7 +95,7 @@ def generate_or_update_unit_tests_with_agent(
                     ),
                     "mapping_path": str(
                         Path(workspace).expanduser().resolve()
-                        / ".xcodeagent"
+                        / WORKSPACE_ARTIFACT_DIR
                         / "cache"
                         / "unit-test-mappings.json"
                     ),
@@ -398,7 +400,7 @@ def _persist_mapping(
 
     try:
         root = Path(workspace).expanduser().resolve()
-        path = root / ".xcodeagent" / "cache" / "unit-test-mappings.json"
+        path = root / WORKSPACE_ARTIFACT_DIR / "cache" / "unit-test-mappings.json"
         existing = _read_mapping(path)
         entries = [
             item
@@ -535,9 +537,9 @@ def _sha256(path: Path) -> str:
 
 
 def _internal_artifact_snapshot(workspace: str) -> dict[str, str]:
-    """快照 `.xcodeagent` 正式工件，并忽略 LangGraph 自有 checkpoint 写入。"""
+    """快照 `.devagentstudio` 正式工件，并忽略 LangGraph 自有 checkpoint 写入。"""
 
-    root = Path(workspace).expanduser().resolve() / ".xcodeagent"
+    root = Path(workspace).expanduser().resolve() / WORKSPACE_ARTIFACT_DIR
     snapshot: dict[str, str] = {}
     if not root.is_dir():
         return snapshot
@@ -563,7 +565,7 @@ def _workspace_security_snapshot(workspace: str) -> dict[str, str]:
     # 不应被误判为 TestGeneration Agent 写入了生产代码。
     ignored_dirs = {
         ".git",
-        ".xcodeagent",
+        ".devagentstudio",
         ".venv",
         "node_modules",
         "target",
@@ -596,7 +598,7 @@ def _cached_test_result(
     """源码摘要和缓存一致时复用已有测试映射，避免重复调用生成 Agent。"""
 
     root = Path(workspace).expanduser().resolve()
-    path = root / ".xcodeagent" / "cache" / "unit-test-mappings.json"
+    path = root / WORKSPACE_ARTIFACT_DIR / "cache" / "unit-test-mappings.json"
     mapping = _read_mapping(path)
     entries = [item for item in mapping.get("entries", []) if isinstance(item, dict)]
     if not entries:
@@ -653,7 +655,7 @@ def _existing_related_tests(
     """在生成 Agent 无输出时从映射和测试引用中恢复已有对应测试。"""
 
     root = Path(workspace).expanduser().resolve()
-    mapping_path = root / ".xcodeagent" / "cache" / "unit-test-mappings.json"
+    mapping_path = root / WORKSPACE_ARTIFACT_DIR / "cache" / "unit-test-mappings.json"
     mapping = _read_mapping(mapping_path)
     candidates = [
         str(entry.get("testPath") or "")

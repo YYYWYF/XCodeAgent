@@ -33,6 +33,8 @@ type Props = {
   commitDisabled?: boolean
   /** 当前是迭代：模板沿用已有工程，未重新拉取远端模板。 */
   reusedExistingTemplate?: boolean
+  /** 当前分支名：自动提交的落点，展示给用户看提交去了哪里。 */
+  branchName?: string
 }
 
 const TEMPLATE_STAGES = new Set([
@@ -62,7 +64,8 @@ export default function TemplatePreparingCard({
   orphaned = false,
   workspaceRoot,
   commitDisabled = false,
-  reusedExistingTemplate = false
+  reusedExistingTemplate = false,
+  branchName
 }: Props): ReactElement {
   const stage = lifecycle?.initialization?.stage
   const preparationFailed = templatePreparation?.status === 'FAILED'
@@ -131,6 +134,7 @@ export default function TemplatePreparingCard({
       <ReadyCard
         onEnterDevelopment={onEnterDevelopment}
         reusedExistingTemplate={reusedExistingTemplate}
+        branchName={branchName}
         workspaceRoot={workspaceRoot}
         commitDisabled={commitDisabled}
       />
@@ -172,11 +176,13 @@ export default function TemplatePreparingCard({
 function ReadyCard({
   onEnterDevelopment,
   reusedExistingTemplate = false,
+  branchName,
   workspaceRoot,
   commitDisabled
 }: {
   onEnterDevelopment?: () => void
   reusedExistingTemplate?: boolean
+  branchName?: string
   workspaceRoot?: string
   commitDisabled: boolean
 }): ReactElement {
@@ -275,7 +281,11 @@ function ReadyCard({
           <div className={cx('template-preparing-commit-copy')}>
             <Text strong>{reusedExistingTemplate ? '工程代码已保存' : '模板代码已保存'}</Text>
             <Text type="secondary">
-              {reusedExistingTemplate ? '沿用已有工程，无需重新提交' : '已自动提交，无需手动操作'}
+              {reusedExistingTemplate
+                ? '沿用已有工程，无需重新提交'
+                : branchName
+                  ? `已自动提交到 ${branchName} 分支，无需手动操作`
+                  : '已自动提交，无需手动操作'}
               {/* 提交信息来自 HEAD（后端 headMessage）：自动提交是平台发起的，
                   用户没参与写信息，所以要显示出来，否则这个 commit 对用户是黑盒。 */}
               {snapshot?.headMessage ? ` · ${snapshot.headMessage}` : ''}

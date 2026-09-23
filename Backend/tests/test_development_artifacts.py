@@ -37,7 +37,7 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.workspace = Path(temporary.name)
-        self.plans = self.workspace / ".xcodeagent/plans"
+        self.plans = self.workspace / ".devagentstudio/plans"
         self.plans.mkdir(parents=True)
         self.product = {"confirmation_status": "confirmed", "pages": [{"pageId": "one"}, {"pageId": "two"}]}
         self.technical = {
@@ -83,7 +83,7 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         gate = test_entry_gate(state)
         self.assertEqual((gate.total, gate.completed, gate.pending), (3, 0, 3))
         self.assertFalse(gate.allowed)
-        self.assertNotIn("testEntryGate", json.loads((self.workspace / ".xcodeagent/application-lifecycle.json").read_text()))
+        self.assertNotIn("testEntryGate", json.loads((self.workspace / ".devagentstudio/application-lifecycle.json").read_text()))
         self.assertEqual(application_lifecycle_payload(state)["testEntryGate"]["total"], 3)
 
     def test_entity_counts_and_requires_persisted_confirmation(self) -> None:

@@ -20,7 +20,7 @@ from deepagents.backends.protocol import (
 
 
 _CURRENT_TEST_PATHS: ContextVar[tuple[str, ...]] = ContextVar(
-    "xcodeagent_test_generation_paths",
+    "devagentstudio_test_generation_paths",
     default=(),
 )
 

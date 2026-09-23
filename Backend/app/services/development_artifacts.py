@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 from pathlib import Path
 from typing import Any
@@ -22,7 +24,7 @@ INITIAL_DEVELOPMENT_PHASES = frozenset({
     "test_phase_confirmation",
 })
 ACTIVE_STATUSES = frozenset({"running", "stopping", "awaiting_user"})
-_BUILD_PLAN_RELATIVE_PATH = Path(".xcodeagent/plans/build-task-plan.json")
+_BUILD_PLAN_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / 'plans/build-task-plan.json'
 
 
 def development_artifact_key(target: DevelopmentArtifactTarget) -> str:
@@ -104,7 +106,7 @@ class DevelopmentArtifactsIncompleteError(ValueError):
 def _confirmed_plan(workspace: str | Path, name: str) -> dict[str, Any]:
     """只读取正式且已确认的当前规划，不从草稿或历史文件推断。"""
 
-    path = Path(workspace) / ".xcodeagent" / "plans" / f"{name}.json"
+    path = Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans" / f"{name}.json"
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("confirmation_status") != "confirmed":
         raise ValueError(f"{name} 尚未确认。")
@@ -173,7 +175,7 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
     try:
         targets = catalog_targets(workspace)
         technical = hydrate_external_detail_designs(
-            Path(workspace) / ".xcodeagent/plans/technical-plan.json",
+            Path(workspace) / WORKSPACE_ARTIFACT_DIR / 'plans/technical-plan.json',
             _confirmed_plan(workspace, "technical-plan"),
         )
     except (OSError, UnicodeError, ValueError) as exc:

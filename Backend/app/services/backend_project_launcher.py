@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import os
 import re
 import shutil
@@ -42,7 +44,7 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
     root = Path(workspace_path).expanduser().resolve()
     backend_root = find_backend_project_root(root) or root / "backend"
     pom_path = backend_root / "pom.xml"
-    runtime_root = root / ".xcodeagent" / "runtime" / "launch"
+    runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
     if not pom_path.is_file():
         return _failed_backend_launch(
             "未找到后端 Maven 工程：backend/pom.xml。",
@@ -369,7 +371,7 @@ def stop_workspace_backend_project(workspace_path: str | Path) -> dict[str, Any]
     root = Path(workspace_path).expanduser().resolve()
     backend_root = find_backend_project_root(root) or root / "backend"
     pom_path = backend_root / "pom.xml"
-    runtime_root = root / ".xcodeagent" / "runtime" / "launch"
+    runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
     if not pom_path.is_file():
         return {
             "status": "skipped",

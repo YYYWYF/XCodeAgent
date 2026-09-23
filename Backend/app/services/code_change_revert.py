@@ -142,7 +142,7 @@ def _normalize_change_path(value: str) -> str:
     path = PurePosixPath(normalized)
     if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
         raise CodeChangeRevertError(f"变更文件路径无效：{value}")
-    if ".xcodeagent" in path.parts:
+    if ".devagentstudio" in path.parts:
         raise CodeChangeRevertError("Agent 内部状态文件不能通过历史变更撤销。")
     return path.as_posix()
 
@@ -232,7 +232,7 @@ def _build_atomic_reverse_patch(
     """在临时目录倒序演算多段变化，并生成可一次性应用的聚合补丁。"""
 
     unique_paths = list(dict.fromkeys(repository_paths))
-    with tempfile.TemporaryDirectory(prefix="xcodeagent-revert-") as temporary_directory:
+    with tempfile.TemporaryDirectory(prefix="devagentstudio-revert-") as temporary_directory:
         sandbox_root = Path(temporary_directory)
         for repository_path in unique_paths:
             source = git_root / repository_path

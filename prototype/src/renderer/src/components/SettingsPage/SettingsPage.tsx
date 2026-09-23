@@ -1,24 +1,19 @@
 import {
   AppstoreOutlined,
   BankOutlined,
-  CheckCircleFilled,
-  CloudOutlined,
   CloseOutlined,
+  CloudOutlined,
   CodeOutlined,
   DashboardOutlined,
-  DatabaseOutlined,
   DeleteOutlined,
   DesktopOutlined,
   FundOutlined,
   LayoutOutlined,
-  LinkOutlined,
   LockOutlined,
   MessageOutlined,
   PlusOutlined,
   RadarChartOutlined,
-  SafetyCertificateOutlined,
   SaveOutlined,
-  SettingOutlined,
   ShopOutlined,
   ShoppingOutlined,
   TeamOutlined,
@@ -32,20 +27,20 @@ import {
   Form,
   Input,
   Radio,
-  Select,
   Switch,
   Typography,
   message
 } from 'antd'
-import type { ReactElement, ReactNode } from 'react'
-import { useMemo, useState, useEffect } from 'react'
+import type { CSSProperties, ReactElement, ReactNode } from 'react'
+import { useMemo, useState } from 'react'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
 import { applicationIconOptions, trackMethodOptions } from '../Welcome/constants'
 import { saveApplication } from '../Welcome/applicationService'
+import settingFilledIcon from '../../assets/icons/setting-filled.svg'
 import './SettingsPage.less'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 const iconComponents: Record<string, typeof AppstoreOutlined> = {
   AppstoreOutlined,
@@ -71,13 +66,14 @@ type EnvVariable = {
 
 type Props = {
   application: ApplicationConfig
-  onClose: () => void
   onSaved: (application: ApplicationConfig) => void
+  /** 关闭承载本页的抽屉；页面头部右侧的关闭按钮直接复用抽屉的收起动作。 */
+  onClose?: () => void
 }
 
 type SettingsFormValues = Pick<
   ApplicationConfig,
-  'appName' | 'appIcon' | 'senario' | 'layout' | 'auth' | 'track' | 'apiTrack' | 'database'
+  'appName' | 'appIcon' | 'senario' | 'layout' | 'auth' | 'track' | 'apiTrack'
 > & {
   envVariables: EnvVariable[]
 }
@@ -116,7 +112,7 @@ function SettingsCard({
   )
 }
 
-/** 组织并保存应用级基础能力与环境配置。 */
+/** 组织并保存应用级基础能力与环境配置；页面头部即功能抽屉的抽屉头（徽标+标题+保存+关闭）。 */
 export default function SettingsPage({ application, onClose, onSaved }: Props): ReactElement {
   const [form] = Form.useForm<SettingsFormValues>()
   const [saving, setSaving] = useState(false)
@@ -131,10 +127,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
     Form.useWatch(['layout', 'useHeader'], form) ?? application?.layout?.useHeader ?? true
   const useFooterEnabled =
     Form.useWatch(['layout', 'useFooter'], form) ?? application?.layout?.useFooter ?? false
-  const dbConnectionMode =
-    Form.useWatch(['database', 'connectionMode'], form) ??
-    application?.database?.connectionMode ??
-    'dbid'
 
   // 环境变量 — 将 { dev:[], prod:[] } 合并为统一的 flat list
   const safeEnvVariables = useMemo<EnvVariable[]>(() => {
@@ -150,90 +142,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
   }, [application?.environment?.dev, application?.environment?.prod])
 
   const envVars: EnvVariable[] = Form.useWatch('envVariables', form) ?? safeEnvVariables
-
-  const envVarOptions = useMemo(
-    () =>
-      (envVars ?? [])
-        .filter((v) => v.key)
-        .map((v) => ({ label: `\${${v.key}}`, value: `\${${v.key}}` })),
-    [envVars]
-  )
-  const encryptedEnvVarOptions = useMemo(
-    () =>
-      (envVars ?? [])
-        .filter((v) => v.key && v.encrypted)
-        .map((v) => ({ label: `\${${v.key}}`, value: `\${${v.key}}` })),
-    [envVars]
-  )
-
-  /** 将配置区平滑定位到环境变量设置。 */
-  const scrollToEnvironment = (): void => {
-    document.getElementById('settings-environment')?.scrollIntoView({ behavior: 'smooth' })
-  }
-
-  /** 数据库表单的环境变量下拉字段：Select 与「没有找到？去环境变量」引导脚注的同构封装。 */
-  const envSelectField = (field: {
-    label: string
-    name: string
-    requiredMessage: string
-    options: Array<{ label: string; value: string }>
-    placeholder: string
-    notFoundContent: string
-    extra?: ReactNode
-  }): ReactElement => (
-    <Form.Item
-      label={field.label}
-      name={['database', field.name]}
-      rules={[{ required: true, message: field.requiredMessage }]}
-      extra={field.extra}
-    >
-      <Select
-        options={field.options}
-        placeholder={field.placeholder}
-        notFoundContent={field.notFoundContent}
-        dropdownRender={(menu) => (
-          <>
-            {menu}
-            <div
-              className={cx('settings-db-select-footer')}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={scrollToEnvironment}
-            >
-              <Text type="secondary">没有找到？去</Text>
-              <Text className={cx('settings-db-select-footer-link')}>环境变量</Text>
-              <Text type="secondary">新建或修改</Text>
-            </div>
-          </>
-        )}
-      />
-    </Form.Item>
-  )
-
-  // 环境变量名被删除时，自动清除数据库卡片中已引用但已不存在的变量
-  useEffect(() => {
-    const validValues = new Set((envVars ?? []).filter((v) => v.key).map((v) => `\${${v.key}}`))
-    const validEncrypted = new Set(
-      (envVars ?? []).filter((v) => v.key && v.encrypted).map((v) => `\${${v.key}}`)
-    )
-
-    const fieldsToClear: Array<{ name: string[]; value: undefined }> = []
-
-    ;(['host', 'port', 'username'] as const).forEach((field) => {
-      const current = form.getFieldValue(['database', field])
-      if (current && !validValues.has(current)) {
-        fieldsToClear.push({ name: ['database', field], value: undefined })
-      }
-    })
-
-    const pwdCurrent = form.getFieldValue(['database', 'password'])
-    if (pwdCurrent && !validEncrypted.has(pwdCurrent)) {
-      fieldsToClear.push({ name: ['database', 'password'], value: undefined })
-    }
-
-    if (fieldsToClear.length > 0) {
-      form.setFields(fieldsToClear)
-    }
-  }, [envVars, form])
 
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
@@ -325,44 +233,40 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
     traceBaggage: '',
     apiTrackHost: ''
   }
-  const safeDatabase = application?.database ?? {
-    connectionMode: 'dbid' as const,
-    schema: '',
-    devDbid: '',
-    prodDbid: '',
-    host: '',
-    port: '',
-    username: '',
-    password: ''
-  }
 
   return (
     <div className={cx('settings-page')}>
       <header className={cx('settings-page-header')}>
-        <div className={cx('settings-page-title-line')}>
-          <Button
-            aria-label="关闭应用配置"
-            className={cx('settings-close-btn')}
-            icon={<CloseOutlined />}
-            onClick={onClose}
-            title="关闭应用配置"
-            type="text"
+        <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
+          <span
+            aria-hidden="true"
+            className={cx('auxiliary-drawer-badge-icon')}
+            style={{ '--auxiliary-drawer-badge-source': `url("${settingFilledIcon}")` } as CSSProperties}
           />
-          <SettingOutlined className={cx('settings-page-title-icon')} />
-          <Title level={4} style={{ margin: 0 }}>
-            应用配置
-          </Title>
+        </span>
+        <div className={cx('functional-drawer-heading')}>
+          <strong>应用设置</strong>
+          <small>应用基础能力与环境配置</small>
         </div>
-        <div className={cx('settings-page-header-right')}>
-          <Button
-            className={cx('settings-save-btn')}
-            icon={<SaveOutlined />}
-            loading={saving}
-            onClick={handleSave}
+        <Button
+          className={cx('settings-save-btn')}
+          icon={<SaveOutlined />}
+          loading={saving}
+          onClick={handleSave}
+        >
+          保存设置
+        </Button>
+        {onClose ? (
+          <button
+            aria-label="关闭辅助抽屉"
+            className={cx('drawer-close-btn')}
+            onClick={onClose}
+            title="关闭辅助抽屉"
+            type="button"
           >
-            保存配置
-          </Button>
-        </div>
+            <CloseOutlined />
+          </button>
+        ) : null}
       </header>
 
       <div className={cx('settings-page-body')}>
@@ -430,15 +334,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
                 </span>
               }
             />
-            <Anchor.Link
-              href="#settings-database"
-              title={
-                <span className={cx('settings-anchor-item')}>
-                  <DatabaseOutlined />
-                  <span>数据库</span>
-                </span>
-              }
-            />
           </Anchor>
         </aside>
         <div className={cx('settings-page-scroll')}>
@@ -453,8 +348,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
               auth: safeAuth,
               track: safeTrack,
               apiTrack: safeApiTrack,
-              envVariables: safeEnvVariables,
-              database: safeDatabase
+              envVariables: safeEnvVariables
             }}
             labelCol={{ flex: '0 0 170px' }}
             wrapperCol={{ flex: 'auto' }}
@@ -818,119 +712,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
                   </>
                 )}
               </Form.List>
-            </SettingsCard>
-
-            <SettingsCard id="settings-database" icon={<DatabaseOutlined />} title="数据库">
-              <Form.Item label="数据库类型">
-                <div style={{ lineHeight: '22px' }}>
-                  <Text>TDSQL</Text>
-                  <br />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    符合我行国产化验收标准
-                  </Text>
-                </div>
-              </Form.Item>
-
-              <Form.Item
-                label="连接方式"
-                name={['database', 'connectionMode']}
-                rules={[{ required: true, message: '请选择连接方式' }]}
-              >
-                <div className={cx('settings-db-mode-cards')}>
-                  <div
-                    className={cx(
-                      'settings-db-mode-card',
-                      dbConnectionMode === 'dbid' && 'settings-db-mode-card--selected'
-                    )}
-                    onClick={() => form.setFieldValue(['database', 'connectionMode'], 'dbid')}
-                  >
-                    {dbConnectionMode === 'dbid' && (
-                      <CheckCircleFilled className={cx('settings-db-mode-check')} />
-                    )}
-                    <SafetyCertificateOutlined className={cx('settings-db-mode-icon')} />
-                    <div className={cx('settings-db-mode-body')}>
-                      <Text strong className={cx('settings-db-mode-title')}>
-                        DBID密码服务
-                      </Text>
-                      <Text type="secondary" className={cx('settings-db-mode-desc')}>
-                        安全连接方式，须通过审批流程获取
-                      </Text>
-                    </div>
-                  </div>
-                  <div
-                    className={cx(
-                      'settings-db-mode-card',
-                      dbConnectionMode === 'connectionString' && 'settings-db-mode-card--selected'
-                    )}
-                    onClick={() =>
-                      form.setFieldValue(['database', 'connectionMode'], 'connectionString')
-                    }
-                  >
-                    {dbConnectionMode === 'connectionString' && (
-                      <CheckCircleFilled className={cx('settings-db-mode-check')} />
-                    )}
-                    <LinkOutlined className={cx('settings-db-mode-icon')} />
-                    <div className={cx('settings-db-mode-body')}>
-                      <Text strong className={cx('settings-db-mode-title')}>
-                        数据库连接字符串
-                      </Text>
-                      <Text type="secondary" className={cx('settings-db-mode-desc')}>
-                        传统连接方式，通过环境变量配置
-                      </Text>
-                    </div>
-                  </div>
-                </div>
-              </Form.Item>
-
-              {dbConnectionMode === 'dbid' ? (
-                <>
-                  <Form.Item
-                    label="数据库名称(Schema名)"
-                    name={['database', 'schema']}
-                    rules={[{ required: true, message: '请输入数据库名称' }]}
-                  >
-                    <Input />
-                  </Form.Item>
-                  <Form.Item
-                    label="开发环境DBID"
-                    name={['database', 'devDbid']}
-                    rules={[{ required: true, message: '请输入开发环境DBID' }]}
-                  >
-                    <Input />
-                  </Form.Item>
-                  <Form.Item
-                    label="生产环境DBID"
-                    name={['database', 'prodDbid']}
-                    rules={[{ required: true, message: '请输入生产环境DBID' }]}
-                  >
-                    <Input />
-                  </Form.Item>
-                </>
-              ) : (
-                <>
-                                    {envSelectField({
-                    label: '数据库地址', name: 'host',
-                    requiredMessage: '请选择数据库地址',
-                    options: envVarOptions, placeholder: '选择环境变量', notFoundContent: '暂无环境变量'
-                  })}
-                  {envSelectField({
-                    label: '端口号', name: 'port',
-                    requiredMessage: '请选择端口号',
-                    options: envVarOptions, placeholder: '选择环境变量', notFoundContent: '暂无环境变量'
-                  })}
-                  {envSelectField({
-                    label: '用户名', name: 'username',
-                    requiredMessage: '请选择用户名',
-                    options: envVarOptions, placeholder: '选择环境变量', notFoundContent: '暂无环境变量'
-                  })}
-                  {envSelectField({
-                    label: '密码', name: 'password',
-                    requiredMessage: '请选择密码',
-                    options: encryptedEnvVarOptions, placeholder: '选择加密环境变量', notFoundContent: '暂无加密环境变量',
-                    extra: <Text type="secondary" style={{ fontSize: 12 }}>仅限密文类型</Text>
-                  })}
-                </>
-              )}
             </SettingsCard>
           </Form>
         </div>

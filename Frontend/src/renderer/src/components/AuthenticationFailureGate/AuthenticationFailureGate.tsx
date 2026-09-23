@@ -34,7 +34,7 @@ export function AuthenticationFailureGate({ children }: Props): JSX.Element {
 
   /** 清理已失效的登录态并打开登录窗口。 */
   const handleConfirm = async (): Promise<void> => {
-    const authApi = window.xcodeAgent?.auth
+    const authApi = window.devAgentStudio?.auth
     if (!authApi?.reauthenticate) {
       setRedirectError('当前环境不支持重新登录。')
       return

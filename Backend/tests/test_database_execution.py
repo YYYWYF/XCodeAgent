@@ -34,7 +34,7 @@ def _write_application(
 ) -> None:
     """写入测试所需的应用级数据库连接配置。"""
 
-    application_file = workspace / ".xcodeagent" / "application.json"
+    application_file = workspace / ".devagentstudio" / "application.json"
     application_file.parent.mkdir(parents=True)
     application_file.write_text(
         json.dumps(

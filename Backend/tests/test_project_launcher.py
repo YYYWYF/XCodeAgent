@@ -67,16 +67,16 @@ class NoBackendBusinessDetectionTests(unittest.TestCase):
 
     def _workspace(self, directory: str) -> Path:
         root = Path(directory)
-        (root / ".xcodeagent" / "plans").mkdir(parents=True, exist_ok=True)
+        (root / ".devagentstudio" / "plans").mkdir(parents=True, exist_ok=True)
         return root
 
     def _write_plan(self, root: Path, *, entities: object, api_contracts: object) -> None:
-        (root / ".xcodeagent" / "plans" / "technical-plan.json").write_text(
+        (root / ".devagentstudio" / "plans" / "technical-plan.json").write_text(
             json.dumps({"entities": entities, "api_contracts": api_contracts}), encoding="utf-8"
         )
 
     def _write_lifecycle(self, root: Path, *, entities: dict, endpoints: dict) -> None:
-        (root / ".xcodeagent" / "application-lifecycle.json").write_text(
+        (root / ".devagentstudio" / "application-lifecycle.json").write_text(
             json.dumps({"developmentArtifacts": {"entities": entities, "endpoints": endpoints}}),
             encoding="utf-8",
         )
@@ -105,7 +105,7 @@ class NoBackendBusinessDetectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = self._workspace(directory)
             self._write_lifecycle(root, entities={}, endpoints={})
-            self.assertFalse((root / ".xcodeagent" / "plans" / "technical-plan.json").exists())
+            self.assertFalse((root / ".devagentstudio" / "plans" / "technical-plan.json").exists())
             self.assertTrue(
                 _application_has_no_backend_business(root),
                 "计划文件缺失时误判为需要后端：纯前端应用会白拉一个后端",
@@ -122,7 +122,7 @@ class NoBackendBusinessDetectionTests(unittest.TestCase):
     def test_unreadable_plan_falls_back_to_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._workspace(directory)
-            (root / ".xcodeagent" / "plans" / "technical-plan.json").write_text("{", encoding="utf-8")
+            (root / ".devagentstudio" / "plans" / "technical-plan.json").write_text("{", encoding="utf-8")
             self._write_lifecycle(root, entities={}, endpoints={})
             self.assertTrue(_application_has_no_backend_business(root))
 
@@ -153,7 +153,7 @@ class ProjectLauncherTests(unittest.TestCase):
     def _write_application(self, workspace: str, datasource_type: str) -> None:
         """写入启动测试所需的最小应用数据源配置。"""
 
-        config_dir = Path(workspace) / ".xcodeagent"
+        config_dir = Path(workspace) / ".devagentstudio"
         config_dir.mkdir(parents=True, exist_ok=True)
         config_dir.joinpath("application.json").write_text(
             json.dumps({"datasource": {"type": datasource_type}}),
@@ -780,7 +780,7 @@ class ProjectLauncherTests(unittest.TestCase):
             root = Path(workspace)
             backend = root / "backend"
             target = backend / "target"
-            runtime = root / ".xcodeagent" / "runtime" / "launch"
+            runtime = root / ".devagentstudio" / "runtime" / "launch"
             target.mkdir(parents=True)
             runtime.mkdir(parents=True)
             jar_path = target / "app-1.0-SNAPSHOT.jar"
@@ -817,7 +817,7 @@ class ProjectLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
             backend = root / "backend"
-            runtime = root / ".xcodeagent" / "runtime" / "launch"
+            runtime = root / ".devagentstudio" / "runtime" / "launch"
             runtime.mkdir(parents=True)
             pid_file = runtime / "backend.pid"
             pid_file.write_text("not-a-pid", encoding="utf-8")
@@ -850,7 +850,7 @@ class ProjectLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
             backend = root / "backend"
-            runtime = root / ".xcodeagent" / "runtime" / "launch"
+            runtime = root / ".devagentstudio" / "runtime" / "launch"
             runtime.mkdir(parents=True)
             pid_file = runtime / "backend.pid"
             pid_file.write_text("97531", encoding="utf-8")
@@ -929,7 +929,7 @@ class ProjectLauncherTests(unittest.TestCase):
             second_cleanup = stop_previous_backend_process(
                 workspace=second_root,
                 backend_root=second_root / "backend",
-                runtime_root=second_root / ".xcodeagent" / "runtime" / "launch",
+                runtime_root=second_root / ".devagentstudio" / "runtime" / "launch",
             )
 
             entered: list[str] = []

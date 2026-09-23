@@ -44,7 +44,7 @@ class UserSkillDocumentTests(unittest.TestCase):
 
     def test_create_uses_environment_specific_resolved_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root) / ".xcodeagent_st" / "skills"
+            root = Path(temporary_root) / ".devagentstudio_st" / "skills"
             with patch.object(
                 user_skill_documents,
                 "resolve_user_skills_root",

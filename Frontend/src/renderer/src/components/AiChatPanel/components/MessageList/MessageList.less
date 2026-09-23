@@ -5,6 +5,21 @@
   min-height: 0;
   overflow: hidden;
   background: var(--wb-canvas);
+
+  // 有内容时按内容收缩，而不是撑满面板。
+  //
+  // 面板底部的各种 dock（提交提醒、验收决策栏…）是这个 shell 的**兄弟节点**，靠 shell
+  // 撑满高度才会被推到面板底部。但那样一来，对话内容比面板短时，多出来的高度就全变成
+  // "最后一张卡片与 dock 之间的空白" —— 而且随面板宽度变化：右侧栏折叠后对话区变宽、
+  // 卡片少折几行、内容更短，空白就更大（用户看到的"距离好远"）。
+  //
+  // 收缩后 dock 紧贴最后一张卡片，间距与内容撑满时一致；内容变长时 shell 仍会被
+  // flex-shrink 压回可用高度并滚动，dock 照旧停在底部。
+  //
+  // 空态不收缩：`.ai-message-empty` 靠父级高度做垂直居中，撑满才能居中。
+  &.@{class-prefix}-has-content {
+    flex: 0 1 auto;
+  }
 }
 
 .@{class-prefix}-ai-message-list {
@@ -63,11 +78,11 @@
 
 .@{class-prefix}-ai-message-column {
   display: flex;
-  width: min(100%, 1080px);
+  width: min(100%, var(--wb-chat-column-max, 1080px));
   min-height: 100%;
   flex-direction: column;
   gap: 38px;
-  padding: 42px 38px 32px;
+  padding: 42px var(--wb-chat-column-gutter, 38px) 32px;
   margin: 0 auto;
 }
 

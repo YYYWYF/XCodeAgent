@@ -19,13 +19,13 @@
 
 **证据：**
 
-- 文件、搜索、终端、Git、审批等高权限路由直接公开在 [Backend/app/main.py:247](C:/XCodeAgent/Backend/app/main.py:247)。
-- `/tools/approvals/{id}/approve` 和 `/reject` 同样由调用方直接访问，[Backend/app/main.py:304](C:/XCodeAgent/Backend/app/main.py:304)。
-- CORS 接受任意端口的 `localhost`、`127.0.0.1`、`[::1]`，以及 `null` Origin，并允许所有方法和 Header，[Backend/app/main.py:369](C:/XCodeAgent/Backend/app/main.py:369)。
+- 文件、搜索、终端、Git、审批等高权限路由直接公开在 [Backend/app/main.py:247](C:/DevAgentStudio/Backend/app/main.py:247)。
+- `/tools/approvals/{id}/approve` 和 `/reject` 同样由调用方直接访问，[Backend/app/main.py:304](C:/DevAgentStudio/Backend/app/main.py:304)。
+- CORS 接受任意端口的 `localhost`、`127.0.0.1`、`[::1]`，以及 `null` Origin，并允许所有方法和 Header，[Backend/app/main.py:369](C:/DevAgentStudio/Backend/app/main.py:369)。
 - 全局搜索没有找到保护这些路由的 Bearer、Session、API key 或认证中间件。
-- 请求能够传入 `workspace_root`，[Backend/app/workspace.py:87](C:/XCodeAgent/Backend/app/workspace.py:87)。
-- `_workspace_root()` 只检查目录是否存在，没有限制其必须处于 XCodeAgent 管理目录内，[Backend/app/workspace.py:809](C:/XCodeAgent/Backend/app/workspace.py:809)。
-- `_safe_path()` 确实限制了相对路径不能逃出所选根目录，但这个根目录本身由调用方选择，[Backend/app/workspace.py:819](C:/XCodeAgent/Backend/app/workspace.py:819)。
+- 请求能够传入 `workspace_root`，[Backend/app/workspace.py:87](C:/DevAgentStudio/Backend/app/workspace.py:87)。
+- `_workspace_root()` 只检查目录是否存在，没有限制其必须处于 DevAgent Studio 管理目录内，[Backend/app/workspace.py:809](C:/DevAgentStudio/Backend/app/workspace.py:809)。
+- `_safe_path()` 确实限制了相对路径不能逃出所选根目录，但这个根目录本身由调用方选择，[Backend/app/workspace.py:819](C:/DevAgentStudio/Backend/app/workspace.py:819)。
 
 **影响：**
 
@@ -47,10 +47,10 @@
 
 **证据：**
 
-- 创建审批后返回公开 ID，[Backend/app/approvals.py:53](C:/XCodeAgent/Backend/app/approvals.py:53)。
-- 任何拿到 ID 的调用方都能调用 `approve(id)`，并直接获得 token，[Backend/app/approvals.py:83](C:/XCodeAgent/Backend/app/approvals.py:83)。
-- operation grant 没有过期时间，[Backend/app/approvals.py:89](C:/XCodeAgent/Backend/app/approvals.py:89)。
-- `is_operation_approved()` 只按操作名检查持久 grant，[Backend/app/approvals.py:153](C:/XCodeAgent/Backend/app/approvals.py:153)。
+- 创建审批后返回公开 ID，[Backend/app/approvals.py:53](C:/DevAgentStudio/Backend/app/approvals.py:53)。
+- 任何拿到 ID 的调用方都能调用 `approve(id)`，并直接获得 token，[Backend/app/approvals.py:83](C:/DevAgentStudio/Backend/app/approvals.py:83)。
+- operation grant 没有过期时间，[Backend/app/approvals.py:89](C:/DevAgentStudio/Backend/app/approvals.py:89)。
+- `is_operation_approved()` 只按操作名检查持久 grant，[Backend/app/approvals.py:153](C:/DevAgentStudio/Backend/app/approvals.py:153)。
 
 我用临时 ApprovalStore 做了无害复现：创建 pending ID 后，同一个调用方能够批准、拿 token 并成功消费。
 
@@ -77,9 +77,9 @@
 
 **证据：**
 
-- `_classify_command()` 使用短 denylist 判断风险，[Backend/app/workspace.py:1384](C:/XCodeAgent/Backend/app/workspace.py:1384)。
-- 实际执行使用 `shell=False`，这避免了常见分号 shell 注入，但仍可执行任意可执行文件，[Backend/app/workspace.py:702](C:/XCodeAgent/Backend/app/workspace.py:702)。
-- `TerminalExecRequest.approved` 字段被定义，但没有进入最终授权决策，[Backend/app/workspace.py:172](C:/XCodeAgent/Backend/app/workspace.py:172)。
+- `_classify_command()` 使用短 denylist 判断风险，[Backend/app/workspace.py:1384](C:/DevAgentStudio/Backend/app/workspace.py:1384)。
+- 实际执行使用 `shell=False`，这避免了常见分号 shell 注入，但仍可执行任意可执行文件，[Backend/app/workspace.py:702](C:/DevAgentStudio/Backend/app/workspace.py:702)。
+- `TerminalExecRequest.approved` 字段被定义，但没有进入最终授权决策，[Backend/app/workspace.py:172](C:/DevAgentStudio/Backend/app/workspace.py:172)。
 
 实际最小复现中，这些命令都被分类为 `low`：
 
@@ -103,16 +103,16 @@
 
 **证据：**
 
-- 文件注释明确写着绕过既有执行边界，[Backend/app/tools/execute.py:1](C:/XCodeAgent/Backend/app/tools/execute.py:1)。
-- 工具接受任意 command，[Backend/app/tools/execute.py:27](C:/XCodeAgent/Backend/app/tools/execute.py:27)。
-- 使用 `subprocess.run(..., shell=True)`，没有有效总超时，且完整捕获输出，[Backend/app/tools/execute.py:45](C:/XCodeAgent/Backend/app/tools/execute.py:45)。
+- 文件注释明确写着绕过既有执行边界，[Backend/app/tools/execute.py:1](C:/DevAgentStudio/Backend/app/tools/execute.py:1)。
+- 工具接受任意 command，[Backend/app/tools/execute.py:27](C:/DevAgentStudio/Backend/app/tools/execute.py:27)。
+- 使用 `subprocess.run(..., shell=True)`，没有有效总超时，且完整捕获输出，[Backend/app/tools/execute.py:45](C:/DevAgentStudio/Backend/app/tools/execute.py:45)。
 - 该工具被直接提供给：
-  - [frontend agent](C:/XCodeAgent/Backend/app/agents/frontend/agent.py:52)
-  - [data source agent](C:/XCodeAgent/Backend/app/agents/data_source/agent.py:49)
-  - [small task agent](C:/XCodeAgent/Backend/app/agents/small_task/agent.py:58)
-- SmallTask 虽有路径范围实现，[Backend/app/agents/small_task/scope.py:72](C:/XCodeAgent/Backend/app/agents/small_task/scope.py:72)，但 `execute` 不经过该范围检查。
-- direct modification 还会重新补入这个工具，[Backend/app/agents/direct_modification.py:44](C:/XCodeAgent/Backend/app/agents/direct_modification.py:44)。
-- 当前安装的 DeepAgents 会自动添加 general-purpose subagent，并继承父 Agent 工具，[deepagents/graph.py:691](C:/XCodeAgent/Backend/.venv/Lib/site-packages/deepagents/graph.py:691)。
+  - [frontend agent](C:/DevAgentStudio/Backend/app/agents/frontend/agent.py:52)
+  - [data source agent](C:/DevAgentStudio/Backend/app/agents/data_source/agent.py:49)
+  - [small task agent](C:/DevAgentStudio/Backend/app/agents/small_task/agent.py:58)
+- SmallTask 虽有路径范围实现，[Backend/app/agents/small_task/scope.py:72](C:/DevAgentStudio/Backend/app/agents/small_task/scope.py:72)，但 `execute` 不经过该范围检查。
+- direct modification 还会重新补入这个工具，[Backend/app/agents/direct_modification.py:44](C:/DevAgentStudio/Backend/app/agents/direct_modification.py:44)。
+- 当前安装的 DeepAgents 会自动添加 general-purpose subagent，并继承父 Agent 工具，[deepagents/graph.py:691](C:/DevAgentStudio/Backend/.venv/Lib/site-packages/deepagents/graph.py:691)。
 
 **影响：**
 
@@ -133,12 +133,12 @@
 
 **证据：**
 
-- write 在授权前读取旧文件并生成 diff，且 dry-run 时不需要审批，[Backend/app/workspace.py:413](C:/XCodeAgent/Backend/app/workspace.py:413)。
-- patch 同样会先读取并返回旧内容差异，[Backend/app/workspace.py:491](C:/XCodeAgent/Backend/app/workspace.py:491)。
-- delete dry-run 会把被删除文件完整放入 diff，[Backend/app/workspace.py:588](C:/XCodeAgent/Backend/app/workspace.py:588)。
-- search 没有执行敏感文件检查，[Backend/app/workspace.py:691](C:/XCodeAgent/Backend/app/workspace.py:691)。
-- `rg` 搜索包含隐藏文件，[Backend/app/workspace.py:1201](C:/XCodeAgent/Backend/app/workspace.py:1201)。
-- 敏感文件列表是少量、区分大小写的精确文件名，[Backend/app/workspace.py:36](C:/XCodeAgent/Backend/app/workspace.py:36)。
+- write 在授权前读取旧文件并生成 diff，且 dry-run 时不需要审批，[Backend/app/workspace.py:413](C:/DevAgentStudio/Backend/app/workspace.py:413)。
+- patch 同样会先读取并返回旧内容差异，[Backend/app/workspace.py:491](C:/DevAgentStudio/Backend/app/workspace.py:491)。
+- delete dry-run 会把被删除文件完整放入 diff，[Backend/app/workspace.py:588](C:/DevAgentStudio/Backend/app/workspace.py:588)。
+- search 没有执行敏感文件检查，[Backend/app/workspace.py:691](C:/DevAgentStudio/Backend/app/workspace.py:691)。
+- `rg` 搜索包含隐藏文件，[Backend/app/workspace.py:1201](C:/DevAgentStudio/Backend/app/workspace.py:1201)。
+- 敏感文件列表是少量、区分大小写的精确文件名，[Backend/app/workspace.py:36](C:/DevAgentStudio/Backend/app/workspace.py:36)。
 
 我在临时目录放置了假 sentinel：
 
@@ -172,11 +172,11 @@
 
 **证据：**
 
-- Windows 构建脚本复制后端 `.env`，[scripts/build-backend-win.ps1:41](C:/XCodeAgent/scripts/build-backend-win.ps1:41)、[scripts/build-backend-win.ps1:102](C:/XCodeAgent/scripts/build-backend-win.ps1:102)。
-- macOS 构建脚本行为相同，[scripts/build-backend-mac.sh:35](C:/XCodeAgent/scripts/build-backend-mac.sh:35)。
-- electron-builder 将对应资源目录打包，[Frontend/electron-builder.yml:16](C:/XCodeAgent/Frontend/electron-builder.yml:16)。
-- 打包验证脚本还要求 `.env` 必须存在，[scripts/verify-packaged-backend.ps1:20](C:/XCodeAgent/scripts/verify-packaged-backend.ps1:20)。
-- 后端启动时会加载旁边的 `.env`，[Backend/packaging/backend_server.py:36](C:/XCodeAgent/Backend/packaging/backend_server.py:36)。
+- Windows 构建脚本复制后端 `.env`，[scripts/build-backend-win.ps1:41](C:/DevAgentStudio/scripts/build-backend-win.ps1:41)、[scripts/build-backend-win.ps1:102](C:/DevAgentStudio/scripts/build-backend-win.ps1:102)。
+- macOS 构建脚本行为相同，[scripts/build-backend-mac.sh:35](C:/DevAgentStudio/scripts/build-backend-mac.sh:35)。
+- electron-builder 将对应资源目录打包，[Frontend/electron-builder.yml:16](C:/DevAgentStudio/Frontend/electron-builder.yml:16)。
+- 打包验证脚本还要求 `.env` 必须存在，[scripts/verify-packaged-backend.ps1:20](C:/DevAgentStudio/scripts/verify-packaged-backend.ps1:20)。
+- 后端启动时会加载旁边的 `.env`，[Backend/packaging/backend_server.py:36](C:/DevAgentStudio/Backend/packaging/backend_server.py:36)。
 
 当前工作区实际存在被 Git 忽略的 `Frontend/resources/backend/win32/.env`，大小约 710 字节。我没有打开它，也没有判断其中是否包含真实值。
 
@@ -198,15 +198,15 @@
 
 **证据：**
 
-- 模型生成的页面代码写入 `page.code`，[Backend/app/agents/frontend/subagents/ui_design_generator.py:423](C:/XCodeAgent/Backend/app/agents/frontend/subagents/ui_design_generator.py:423)。
-- 验证器主要检查 imports、未定义符号和语法，没有阻止 `window`、`parent`、存储或其他浏览器 API，[ui_design_generator.py:826](C:/XCodeAgent/Backend/app/agents/frontend/subagents/ui_design_generator.py:826)。
-- 前端将代码传入实时预览，[Frontend/src/renderer/src/components/UiDesignStreamingPreview.tsx:110](C:/XCodeAgent/Frontend/src/renderer/src/components/UiDesignStreamingPreview.tsx:110)。
-- TSX 编译器只改写模块加载，[Frontend/src/renderer/src/utils/compileTsx.ts:42](C:/XCodeAgent/Frontend/src/renderer/src/utils/compileTsx.ts:42)。
-- Renderer iframe 使用根路径资源，[Frontend/src/renderer/src/components/design-runtime/DesignRenderer.tsx:43](C:/XCodeAgent/Frontend/src/renderer/src/components/design-runtime/DesignRenderer.tsx:43)。
-- sandbox 同时开放 `allow-same-origin`、`allow-scripts`、`allow-popups` 和表单，[DesignRenderer.tsx:195](C:/XCodeAgent/Frontend/src/renderer/src/components/design-runtime/DesignRenderer.tsx:195)。
-- frame 使用 `new Function` 执行代码，[Frontend/public/design-runtime/design-frame.html:35](C:/XCodeAgent/Frontend/public/design-runtime/design-frame.html:35)。
-- preload 给 Renderer 暴露了 Electron 和 XCodeAgent 桥，[Frontend/src/preload/index.ts:15](C:/XCodeAgent/Frontend/src/preload/index.ts:15)。
-- 主窗口还关闭了 Chromium sandbox，[Frontend/src/main/index.ts:1635](C:/XCodeAgent/Frontend/src/main/index.ts:1635)。
+- 模型生成的页面代码写入 `page.code`，[Backend/app/agents/frontend/subagents/ui_design_generator.py:423](C:/DevAgentStudio/Backend/app/agents/frontend/subagents/ui_design_generator.py:423)。
+- 验证器主要检查 imports、未定义符号和语法，没有阻止 `window`、`parent`、存储或其他浏览器 API，[ui_design_generator.py:826](C:/DevAgentStudio/Backend/app/agents/frontend/subagents/ui_design_generator.py:826)。
+- 前端将代码传入实时预览，[Frontend/src/renderer/src/components/UiDesignStreamingPreview.tsx:110](C:/DevAgentStudio/Frontend/src/renderer/src/components/UiDesignStreamingPreview.tsx:110)。
+- TSX 编译器只改写模块加载，[Frontend/src/renderer/src/utils/compileTsx.ts:42](C:/DevAgentStudio/Frontend/src/renderer/src/utils/compileTsx.ts:42)。
+- Renderer iframe 使用根路径资源，[Frontend/src/renderer/src/components/design-runtime/DesignRenderer.tsx:43](C:/DevAgentStudio/Frontend/src/renderer/src/components/design-runtime/DesignRenderer.tsx:43)。
+- sandbox 同时开放 `allow-same-origin`、`allow-scripts`、`allow-popups` 和表单，[DesignRenderer.tsx:195](C:/DevAgentStudio/Frontend/src/renderer/src/components/design-runtime/DesignRenderer.tsx:195)。
+- frame 使用 `new Function` 执行代码，[Frontend/public/design-runtime/design-frame.html:35](C:/DevAgentStudio/Frontend/public/design-runtime/design-frame.html:35)。
+- preload 给 Renderer 暴露了 Electron 和 DevAgent Studio 桥，[Frontend/src/preload/index.ts:15](C:/DevAgentStudio/Frontend/src/preload/index.ts:15)。
+- 主窗口还关闭了 Chromium sandbox，[Frontend/src/main/index.ts:1635](C:/DevAgentStudio/Frontend/src/main/index.ts:1635)。
 
 **影响：**
 
@@ -216,7 +216,7 @@
 
 原实现的生产 `file://` 模式还存在路径错误：`/design-runtime/design-frame.html` 会解析为 `file:///C:/design-runtime/design-frame.html`，而不是安装包资源路径，因此生产包先表现为预览失效。**这不是安全修复**；修路径时必须同时隔离执行环境，否则 P0 风险会在生产恢复。
 
-**2026-09-20 修复记录：** 上述根路径错误已改为仅服务两份静态资源的 `xcodeagent-design://runtime` 协议。iframe 与主窗口不再同源；编译产物在 iframe 内挂载，主窗口不再读取 iframe DOM，且移除了弹窗和表单 sandbox 权限。已在 Electron 的打包式 `file://` 页面及 asar 资源上验证渲染握手。模型生成的 JavaScript 仍会执行，这不是对任意代码执行风险的完整消除；后续仍应评估受限 DSL 或独立执行进程。
+**2026-09-20 修复记录：** 上述根路径错误已改为仅服务两份静态资源的 `devagentstudio-design://runtime` 协议。iframe 与主窗口不再同源；编译产物在 iframe 内挂载，主窗口不再读取 iframe DOM，且移除了弹窗和表单 sandbox 权限。已在 Electron 的打包式 `file://` 页面及 asar 资源上验证渲染握手。模型生成的 JavaScript 仍会执行，这不是对任意代码执行风险的完整消除；后续仍应评估受限 DSL 或独立执行进程。
 
 **建议：**
 
@@ -236,17 +236,17 @@
 
 **证据：**
 
-- 请求可直接设置 `resumeFrom`，[Backend/app/workflow/request.py:111](C:/XCodeAgent/Backend/app/workflow/request.py:111)。
+- 请求可直接设置 `resumeFrom`，[Backend/app/workflow/request.py:111](C:/DevAgentStudio/Backend/app/workflow/request.py:111)。
 - 该值不依赖 debug 真正启用；我复现了 `debug=false` 时接受 `finalize_project` 和 `launch_project`。
-- 可跳转节点包括 build、integration、launch、acceptance、finalize，[Backend/app/workflow/request.py:648](C:/XCodeAgent/Backend/app/workflow/request.py:648)。
-- 图从 START 直接按 resume 路由，[Backend/app/graph/workflow.py:22](C:/XCodeAgent/Backend/app/graph/workflow.py:22)。
-- 文档确认检查集中在 task 节点，[Backend/app/graph/nodes/tasks.py:66](C:/XCodeAgent/Backend/app/graph/nodes/tasks.py:66)，launch/finalize 没有重新验证整个确认和质量不变量，[Backend/app/graph/nodes/lifecycle.py:6](C:/XCodeAgent/Backend/app/graph/nodes/lifecycle.py:6)。
-- 请求恢复状态可以携带文件路径，[Backend/app/workflow/request.py:671](C:/XCodeAgent/Backend/app/workflow/request.py:671)。
-- 路径处理会保留绝对路径，[Backend/app/workflow/request.py:1038](C:/XCodeAgent/Backend/app/workflow/request.py:1038)。
+- 可跳转节点包括 build、integration、launch、acceptance、finalize，[Backend/app/workflow/request.py:648](C:/DevAgentStudio/Backend/app/workflow/request.py:648)。
+- 图从 START 直接按 resume 路由，[Backend/app/graph/workflow.py:22](C:/DevAgentStudio/Backend/app/graph/workflow.py:22)。
+- 文档确认检查集中在 task 节点，[Backend/app/graph/nodes/tasks.py:66](C:/DevAgentStudio/Backend/app/graph/nodes/tasks.py:66)，launch/finalize 没有重新验证整个确认和质量不变量，[Backend/app/graph/nodes/lifecycle.py:6](C:/DevAgentStudio/Backend/app/graph/nodes/lifecycle.py:6)。
+- 请求恢复状态可以携带文件路径，[Backend/app/workflow/request.py:671](C:/DevAgentStudio/Backend/app/workflow/request.py:671)。
+- 路径处理会保留绝对路径，[Backend/app/workflow/request.py:1038](C:/DevAgentStudio/Backend/app/workflow/request.py:1038)。
 - 文档写入器直接使用这些 state path：
-  - [spec_documents.py:151](C:/XCodeAgent/Backend/app/workflow/spec_documents.py:151)
-  - [plan_documents.py:655](C:/XCodeAgent/Backend/app/workflow/plan_documents.py:655)
-  - [task_documents.py:11](C:/XCodeAgent/Backend/app/workflow/task_documents.py:11)
+  - [spec_documents.py:151](C:/DevAgentStudio/Backend/app/workflow/spec_documents.py:151)
+  - [plan_documents.py:655](C:/DevAgentStudio/Backend/app/workflow/plan_documents.py:655)
+  - [task_documents.py:11](C:/DevAgentStudio/Backend/app/workflow/task_documents.py:11)
 
 我复现确认 `C:/Windows/Temp/spec.md` 和 `out.md` 会原样保留。
 
@@ -273,13 +273,13 @@
 **证据：**
 
 - 主进程没有找到 `senderFrame`、`event.sender.id` 或可信 `webContents.id` 校验。
-- 大量 handler 忽略 `_event`，[Frontend/src/main/index.ts:727](C:/XCodeAgent/Frontend/src/main/index.ts:727)。
-- `resolveWorkspaceRoot()` 只做 `path.resolve`，[Frontend/src/main/index.ts:863](C:/XCodeAgent/Frontend/src/main/index.ts:863)。
-- preload 直接发送原始路径，[Frontend/src/preload/index.ts:34](C:/XCodeAgent/Frontend/src/preload/index.ts:34)。
-- 创建工程允许在任意现有目录写入 marker，[Frontend/src/main/index.ts:1217](C:/XCodeAgent/Frontend/src/main/index.ts:1217)。
-- 删除工程主要依赖这个 marker 判断归属，[Frontend/src/main/index.ts:659](C:/XCodeAgent/Frontend/src/main/index.ts:659)。
-- clone 流程会删除已有 frontend/backend 目录，[Frontend/src/main/index.ts:1252](C:/XCodeAgent/Frontend/src/main/index.ts:1252)。
-- preload 还暴露通用 `electronAPI`，[Frontend/src/preload/index.ts:88](C:/XCodeAgent/Frontend/src/preload/index.ts:88)。
+- 大量 handler 忽略 `_event`，[Frontend/src/main/index.ts:727](C:/DevAgentStudio/Frontend/src/main/index.ts:727)。
+- `resolveWorkspaceRoot()` 只做 `path.resolve`，[Frontend/src/main/index.ts:863](C:/DevAgentStudio/Frontend/src/main/index.ts:863)。
+- preload 直接发送原始路径，[Frontend/src/preload/index.ts:34](C:/DevAgentStudio/Frontend/src/preload/index.ts:34)。
+- 创建工程允许在任意现有目录写入 marker，[Frontend/src/main/index.ts:1217](C:/DevAgentStudio/Frontend/src/main/index.ts:1217)。
+- 删除工程主要依赖这个 marker 判断归属，[Frontend/src/main/index.ts:659](C:/DevAgentStudio/Frontend/src/main/index.ts:659)。
+- clone 流程会删除已有 frontend/backend 目录，[Frontend/src/main/index.ts:1252](C:/DevAgentStudio/Frontend/src/main/index.ts:1252)。
+- preload 还暴露通用 `electronAPI`，[Frontend/src/preload/index.ts:88](C:/DevAgentStudio/Frontend/src/preload/index.ts:88)。
 
 **影响：**
 
@@ -299,12 +299,12 @@
 
 **证据：**
 
-- 主窗口和登录窗口均 `sandbox: false`，[Frontend/src/main/index.ts:1635](C:/XCodeAgent/Frontend/src/main/index.ts:1635)、[Frontend/src/main/index.ts:1683](C:/XCodeAgent/Frontend/src/main/index.ts:1683)。
+- 主窗口和登录窗口均 `sandbox: false`，[Frontend/src/main/index.ts:1635](C:/DevAgentStudio/Frontend/src/main/index.ts:1635)、[Frontend/src/main/index.ts:1683](C:/DevAgentStudio/Frontend/src/main/index.ts:1683)。
 - 两者使用带宽 IPC 的 preload。
 - 没有找到主窗口 `will-navigate`/`will-redirect` 白名单。
-- `setWindowOpenHandler` 某些路径直接传给 `shell.openExternal`，[Frontend/src/main/index.ts:1667](C:/XCodeAgent/Frontend/src/main/index.ts:1667)。
-- URL 归一化只应用在部分直接 IPC，[Frontend/src/main/index.ts:752](C:/XCodeAgent/Frontend/src/main/index.ts:752)。
-- BrowserPreview iframe 允许 popup 逃出 sandbox，[Frontend/src/renderer/src/components/BrowserPreviewPanel.tsx:269](C:/XCodeAgent/Frontend/src/renderer/src/components/BrowserPreviewPanel.tsx:269)。
+- `setWindowOpenHandler` 某些路径直接传给 `shell.openExternal`，[Frontend/src/main/index.ts:1667](C:/DevAgentStudio/Frontend/src/main/index.ts:1667)。
+- URL 归一化只应用在部分直接 IPC，[Frontend/src/main/index.ts:752](C:/DevAgentStudio/Frontend/src/main/index.ts:752)。
+- BrowserPreview iframe 允许 popup 逃出 sandbox，[Frontend/src/renderer/src/components/BrowserPreviewPanel.tsx:269](C:/DevAgentStudio/Frontend/src/renderer/src/components/BrowserPreviewPanel.tsx:269)。
 
 **建议：**
 
@@ -321,13 +321,13 @@
 
 **证据：**
 
-- Renderer 能传任意模板仓库 URL，clone 时未固定 commit/hash，[Frontend/src/main/index.ts:1252](C:/XCodeAgent/Frontend/src/main/index.ts:1252)。
+- Renderer 能传任意模板仓库 URL，clone 时未固定 commit/hash，[Frontend/src/main/index.ts:1252](C:/DevAgentStudio/Frontend/src/main/index.ts:1252)。
 - Git 使用 `execFile` argv，因此不是 shell 注入；问题是信任和供应链。
-- 前端安装依赖没有默认 `--ignore-scripts`，[Backend/app/project_launchers/frontend_project_launcher.py:326](C:/XCodeAgent/Backend/app/project_launchers/frontend_project_launcher.py:326)。
-- 随后直接运行包内脚本，[frontend_project_launcher.py:380](C:/XCodeAgent/Backend/app/project_launchers/frontend_project_launcher.py:380)。
-- 子进程继承宿主环境变量，[frontend_project_launcher.py:443](C:/XCodeAgent/Backend/app/project_launchers/frontend_project_launcher.py:443)。
-- 后端会优先执行项目自带 `mvnw`，[Backend/app/project_launchers/backend_project_launcher.py:116](C:/XCodeAgent/Backend/app/project_launchers/backend_project_launcher.py:116)。
-- Maven 构建和启动也继承环境，并注入数据库参数，[backend_project_launcher.py:560](C:/XCodeAgent/Backend/app/project_launchers/backend_project_launcher.py:560)。
+- 前端安装依赖没有默认 `--ignore-scripts`，[Backend/app/project_launchers/frontend_project_launcher.py:326](C:/DevAgentStudio/Backend/app/project_launchers/frontend_project_launcher.py:326)。
+- 随后直接运行包内脚本，[frontend_project_launcher.py:380](C:/DevAgentStudio/Backend/app/project_launchers/frontend_project_launcher.py:380)。
+- 子进程继承宿主环境变量，[frontend_project_launcher.py:443](C:/DevAgentStudio/Backend/app/project_launchers/frontend_project_launcher.py:443)。
+- 后端会优先执行项目自带 `mvnw`，[Backend/app/project_launchers/backend_project_launcher.py:116](C:/DevAgentStudio/Backend/app/project_launchers/backend_project_launcher.py:116)。
+- Maven 构建和启动也继承环境，并注入数据库参数，[backend_project_launcher.py:560](C:/DevAgentStudio/Backend/app/project_launchers/backend_project_launcher.py:560)。
 
 **影响：**
 
@@ -347,13 +347,13 @@
 
 **证据：**
 
-- RSA 私钥写入用户工作目录，使用 `NoEncryption`，[Backend/app/database_crypto.py:44](C:/XCodeAgent/Backend/app/database_crypto.py:44)、[database_crypto.py:142](C:/XCodeAgent/Backend/app/database_crypto.py:142)。
-- Windows 权限限制基本是空操作，[database_crypto.py:231](C:/XCodeAgent/Backend/app/database_crypto.py:231)。
-- 数据源配置工具会返回包含明文 password 的结构，[Backend/app/agents/data_source/mysql_info.py:289](C:/XCodeAgent/Backend/app/agents/data_source/mysql_info.py:289)。
-- 该工具被绑定给模型 Agent，[Backend/app/agents/data_source/agent.py:49](C:/XCodeAgent/Backend/app/agents/data_source/agent.py:49)。
-- Skill 还要求模型把数据库配置写入 `application.yml`，[Backend/app/builtin_skills/data_source/SKILL.md:111](C:/XCodeAgent/Backend/app/builtin_skills/data_source/SKILL.md:111)。
-- JDBC URL 使用 `useSSL=false`，[Backend/app/database_credentials.py:149](C:/XCodeAgent/Backend/app/database_credentials.py:149)。
-- PyMySQL 连接没有 TLS 配置，[Backend/app/database_execution.py:175](C:/XCodeAgent/Backend/app/database_execution.py:175)。
+- RSA 私钥写入用户工作目录，使用 `NoEncryption`，[Backend/app/database_crypto.py:44](C:/DevAgentStudio/Backend/app/database_crypto.py:44)、[database_crypto.py:142](C:/DevAgentStudio/Backend/app/database_crypto.py:142)。
+- Windows 权限限制基本是空操作，[database_crypto.py:231](C:/DevAgentStudio/Backend/app/database_crypto.py:231)。
+- 数据源配置工具会返回包含明文 password 的结构，[Backend/app/agents/data_source/mysql_info.py:289](C:/DevAgentStudio/Backend/app/agents/data_source/mysql_info.py:289)。
+- 该工具被绑定给模型 Agent，[Backend/app/agents/data_source/agent.py:49](C:/DevAgentStudio/Backend/app/agents/data_source/agent.py:49)。
+- Skill 还要求模型把数据库配置写入 `application.yml`，[Backend/app/builtin_skills/data_source/SKILL.md:111](C:/DevAgentStudio/Backend/app/builtin_skills/data_source/SKILL.md:111)。
+- JDBC URL 使用 `useSSL=false`，[Backend/app/database_credentials.py:149](C:/DevAgentStudio/Backend/app/database_credentials.py:149)。
+- PyMySQL 连接没有 TLS 配置，[Backend/app/database_execution.py:175](C:/DevAgentStudio/Backend/app/database_execution.py:175)。
 
 **影响：**
 
@@ -373,11 +373,11 @@
 
 **证据：**
 
-- Settings 页面将环境变量作为 password 输入，但保存原值，[Frontend/src/renderer/src/pages/SettingsPage.tsx:210](C:/XCodeAgent/Frontend/src/renderer/src/pages/SettingsPage.tsx:210)。
-- `databaseCredentialCrypto` 只加密 plantMode 密码，[Frontend/src/renderer/src/utils/databaseCredentialCrypto.ts:118](C:/XCodeAgent/Frontend/src/renderer/src/utils/databaseCredentialCrypto.ts:118)。
-- application 数据进入 localStorage，[Frontend/src/renderer/src/stores/applicationStorage.ts:44](C:/XCodeAgent/Frontend/src/renderer/src/stores/applicationStorage.ts:44)。
-- 主进程还会把 applications 对象写入 JSON，[Frontend/src/main/index.ts:649](C:/XCodeAgent/Frontend/src/main/index.ts:649)。
-- 现有测试明确断言 environment 不发生加密，[Frontend/scripts/run-database-credential-crypto-tests.mjs:88](C:/XCodeAgent/Frontend/scripts/run-database-credential-crypto-tests.mjs:88)。
+- Settings 页面将环境变量作为 password 输入，但保存原值，[Frontend/src/renderer/src/pages/SettingsPage.tsx:210](C:/DevAgentStudio/Frontend/src/renderer/src/pages/SettingsPage.tsx:210)。
+- `databaseCredentialCrypto` 只加密 plantMode 密码，[Frontend/src/renderer/src/utils/databaseCredentialCrypto.ts:118](C:/DevAgentStudio/Frontend/src/renderer/src/utils/databaseCredentialCrypto.ts:118)。
+- application 数据进入 localStorage，[Frontend/src/renderer/src/stores/applicationStorage.ts:44](C:/DevAgentStudio/Frontend/src/renderer/src/stores/applicationStorage.ts:44)。
+- 主进程还会把 applications 对象写入 JSON，[Frontend/src/main/index.ts:649](C:/DevAgentStudio/Frontend/src/main/index.ts:649)。
+- 现有测试明确断言 environment 不发生加密，[Frontend/scripts/run-database-credential-crypto-tests.mjs:88](C:/DevAgentStudio/Frontend/scripts/run-database-credential-crypto-tests.mjs:88)。
 
 **建议：**
 
@@ -389,13 +389,13 @@
 
 **证据：**
 
-- 客户端可提供 thread ID 和 run ID，[Backend/app/workflow/runtime.py:153](C:/XCodeAgent/Backend/app/workflow/runtime.py:153)。
-- checkpoint 主键主要使用 thread ID，[Backend/app/workflow/runtime.py:294](C:/XCodeAgent/Backend/app/workflow/runtime.py:294)。
-- 活跃运行 registry 仅按 run ID 管理，重复 ID 可覆盖，[Backend/app/run_control.py:27](C:/XCodeAgent/Backend/app/run_control.py:27)。
-- cancel 只需目标 run ID，[Backend/app/run_control.py:57](C:/XCodeAgent/Backend/app/run_control.py:57)。
-- planning recovery 接受 workspace 和 thread ID 后读取状态，[Backend/app/application_page_planning.py:103](C:/XCodeAgent/Backend/app/application_page_planning.py:103)。
-- checkpoint 默认以明文 SQLite 落盘，[Backend/app/workflow/checkpoints.py:17](C:/XCodeAgent/Backend/app/workflow/checkpoints.py:17)。
-- 等待用户输入的 checkpoint 不会及时清理，[Backend/app/workflow/checkpoints.py:81](C:/XCodeAgent/Backend/app/workflow/checkpoints.py:81)。
+- 客户端可提供 thread ID 和 run ID，[Backend/app/workflow/runtime.py:153](C:/DevAgentStudio/Backend/app/workflow/runtime.py:153)。
+- checkpoint 主键主要使用 thread ID，[Backend/app/workflow/runtime.py:294](C:/DevAgentStudio/Backend/app/workflow/runtime.py:294)。
+- 活跃运行 registry 仅按 run ID 管理，重复 ID 可覆盖，[Backend/app/run_control.py:27](C:/DevAgentStudio/Backend/app/run_control.py:27)。
+- cancel 只需目标 run ID，[Backend/app/run_control.py:57](C:/DevAgentStudio/Backend/app/run_control.py:57)。
+- planning recovery 接受 workspace 和 thread ID 后读取状态，[Backend/app/application_page_planning.py:103](C:/DevAgentStudio/Backend/app/application_page_planning.py:103)。
+- checkpoint 默认以明文 SQLite 落盘，[Backend/app/workflow/checkpoints.py:17](C:/DevAgentStudio/Backend/app/workflow/checkpoints.py:17)。
+- 等待用户输入的 checkpoint 不会及时清理，[Backend/app/workflow/checkpoints.py:81](C:/DevAgentStudio/Backend/app/workflow/checkpoints.py:81)。
 
 **影响：**
 
@@ -411,11 +411,11 @@
 
 **证据：**
 
-- run lease 注释明确说明不阻断资源交叉，[Backend/app/run_lease.py:42](C:/XCodeAgent/Backend/app/run_lease.py:42)。
-- 生命周期锁采用 latest writer wins，[Backend/app/application_lifecycle.py:658](C:/XCodeAgent/Backend/app/application_lifecycle.py:658)。
-- 前端执行模式明确忽略锁冲突，[Frontend/src/renderer/src/utils/planExecutionMode.ts:150](C:/XCodeAgent/Frontend/src/renderer/src/utils/planExecutionMode.ts:150)。
-- 测试也把并发重叠视为预期行为，[Backend/tests/test_workspace_run_lease.py:168](C:/XCodeAgent/Backend/tests/test_workspace_run_lease.py:168)。
-- 自动去重写文件使用 truncate/last-write-wins，[Backend/app/agents/auto_dedup_backend.py:67](C:/XCodeAgent/Backend/app/agents/auto_dedup_backend.py:67)。
+- run lease 注释明确说明不阻断资源交叉，[Backend/app/run_lease.py:42](C:/DevAgentStudio/Backend/app/run_lease.py:42)。
+- 生命周期锁采用 latest writer wins，[Backend/app/application_lifecycle.py:658](C:/DevAgentStudio/Backend/app/application_lifecycle.py:658)。
+- 前端执行模式明确忽略锁冲突，[Frontend/src/renderer/src/utils/planExecutionMode.ts:150](C:/DevAgentStudio/Frontend/src/renderer/src/utils/planExecutionMode.ts:150)。
+- 测试也把并发重叠视为预期行为，[Backend/tests/test_workspace_run_lease.py:168](C:/DevAgentStudio/Backend/tests/test_workspace_run_lease.py:168)。
+- 自动去重写文件使用 truncate/last-write-wins，[Backend/app/agents/auto_dedup_backend.py:67](C:/DevAgentStudio/Backend/app/agents/auto_dedup_backend.py:67)。
 
 **影响：**
 
@@ -435,10 +435,10 @@
 
 **证据：**
 
-- 前端启动时读取工作区内 PID 文件，[Backend/app/project_launchers/frontend_project_launcher.py:95](C:/XCodeAgent/Backend/app/project_launchers/frontend_project_launcher.py:95)。
-- 只要 PID 是正数且正在运行，就会尝试终止，没有验证 exe、cwd、命令行或启动时间，[frontend_project_launcher.py:606](C:/XCodeAgent/Backend/app/project_launchers/frontend_project_launcher.py:606)。
-- 终止逻辑位于 [frontend_project_launcher.py:684](C:/XCodeAgent/Backend/app/project_launchers/frontend_project_launcher.py:684)。
-- 后端进程注册表反而已经实现命令行和 workspace jar 身份校验，可作为安全对照，[Backend/app/project_launchers/backend_process_registry.py:107](C:/XCodeAgent/Backend/app/project_launchers/backend_process_registry.py:107)。
+- 前端启动时读取工作区内 PID 文件，[Backend/app/project_launchers/frontend_project_launcher.py:95](C:/DevAgentStudio/Backend/app/project_launchers/frontend_project_launcher.py:95)。
+- 只要 PID 是正数且正在运行，就会尝试终止，没有验证 exe、cwd、命令行或启动时间，[frontend_project_launcher.py:606](C:/DevAgentStudio/Backend/app/project_launchers/frontend_project_launcher.py:606)。
+- 终止逻辑位于 [frontend_project_launcher.py:684](C:/DevAgentStudio/Backend/app/project_launchers/frontend_project_launcher.py:684)。
+- 后端进程注册表反而已经实现命令行和 workspace jar 身份校验，可作为安全对照，[Backend/app/project_launchers/backend_process_registry.py:107](C:/DevAgentStudio/Backend/app/project_launchers/backend_process_registry.py:107)。
 
 **建议：**
 
@@ -450,9 +450,9 @@ PID registry 放在工作区外受保护目录，记录 PID、进程启动时间
 
 **证据：**
 
-- 风险模式定义于 [Backend/app/database_execution.py:17](C:/XCodeAgent/Backend/app/database_execution.py:17)。
-- 分类逻辑位于 [database_execution.py:76](C:/XCodeAgent/Backend/app/database_execution.py:76)。
-- 执行路径根据该分类决定是否审批，[database_execution.py:205](C:/XCodeAgent/Backend/app/database_execution.py:205)。
+- 风险模式定义于 [Backend/app/database_execution.py:17](C:/DevAgentStudio/Backend/app/database_execution.py:17)。
+- 分类逻辑位于 [database_execution.py:76](C:/DevAgentStudio/Backend/app/database_execution.py:76)。
+- 执行路径根据该分类决定是否审批，[database_execution.py:205](C:/DevAgentStudio/Backend/app/database_execution.py:205)。
 
 实际复现中以下语句全部被标为低风险：
 
@@ -472,14 +472,14 @@ PID registry 放在工作区外受保护目录，记录 PID、进程启动时间
 
 **证据：**
 
-- 默认根目录通过 `Path(__file__).parents[4] / "var" / "workspaces"` 计算，[Backend/app/workflow/spec_documents.py:8](C:/XCodeAgent/Backend/app/workflow/spec_documents.py:8)。
-- 在当前目录层级中，`parents[4]` 实际得到 `C:\`，不是 `C:\XCodeAgent`。
+- 默认根目录通过 `Path(__file__).parents[4] / "var" / "workspaces"` 计算，[Backend/app/workflow/spec_documents.py:8](C:/DevAgentStudio/Backend/app/workflow/spec_documents.py:8)。
+- 在当前目录层级中，`parents[4]` 实际得到 `C:\`，不是 `C:\DevAgentStudio`。
 - 实测：
-  - `REPOSITORY_ROOT = C:\XCodeAgent`
+  - `REPOSITORY_ROOT = C:\DevAgentStudio`
   - `WORKSPACES_BASE = C:\`
   - 默认 demo 工作区 = `C:\var\workspaces\demo`
 - 绝对 project ID 会让路径直接变成其自身，例如 `C:\Windows\Temp\audit`。
-- project ID 只按字符串处理，没有 slug/UUID 约束，[Backend/app/workflow/request.py:328](C:/XCodeAgent/Backend/app/workflow/request.py:328)。
+- project ID 只按字符串处理，没有 slug/UUID 约束，[Backend/app/workflow/request.py:328](C:/DevAgentStudio/Backend/app/workflow/request.py:328)。
 
 完整后端测试中的多项 `C:\var` PermissionError 也从另一方向验证了这一点。
 
@@ -517,7 +517,7 @@ pnpm audit --prod --registry=https://registry.npmjs.org/
 - `electron 37.2.5`
 - `electron-updater 6.3.9`
 
-位置见 [Frontend/package.json:60](C:/XCodeAgent/Frontend/package.json:60)。
+位置见 [Frontend/package.json:60](C:/DevAgentStudio/Frontend/package.json:60)。
 
 审计给出的高风险最低修复线包括：
 
@@ -544,11 +544,11 @@ Electron 37 已于 2026-01-13 EOL，可见[官方发布计划](https://releases.
 
 **证据：**
 
-- async 路由内执行同步 subprocess，最长可达 120 秒，[Backend/app/main.py:299](C:/XCodeAgent/Backend/app/main.py:299)。
-- subprocess 先完整捕获输出，再截断返回，[Backend/app/workspace.py:737](C:/XCodeAgent/Backend/app/workspace.py:737)。
-- 文件读取和搜索 fallback 可将大文件完整加载到内存，[Backend/app/workspace.py:1269](C:/XCodeAgent/Backend/app/workspace.py:1269)。
+- async 路由内执行同步 subprocess，最长可达 120 秒，[Backend/app/main.py:299](C:/DevAgentStudio/Backend/app/main.py:299)。
+- subprocess 先完整捕获输出，再截断返回，[Backend/app/workspace.py:737](C:/DevAgentStudio/Backend/app/workspace.py:737)。
+- 文件读取和搜索 fallback 可将大文件完整加载到内存，[Backend/app/workspace.py:1269](C:/DevAgentStudio/Backend/app/workspace.py:1269)。
 - Agent `execute` 无总超时和输出上限。
-- AG-UI action stream 使用无界 queue，[Backend/app/ag_ui_action_stream.py:102](C:/XCodeAgent/Backend/app/ag_ui_action_stream.py:102)。
+- AG-UI action stream 使用无界 queue，[Backend/app/ag_ui_action_stream.py:102](C:/DevAgentStudio/Backend/app/ag_ui_action_stream.py:102)。
 - 没找到统一 request body、速率、并发、JSON 深度限制。
 
 **建议：**
@@ -561,10 +561,10 @@ Electron 37 已于 2026-01-13 EOL，可见[官方发布计划](https://releases.
 
 **证据：**
 
-- 正常路径生成完整结束事件，[Backend/app/workflow/runtime.py:917](C:/XCodeAgent/Backend/app/workflow/runtime.py:917)。
-- `CancelledError` 路径直接重新抛出，[Backend/app/workflow/runtime.py:971](C:/XCodeAgent/Backend/app/workflow/runtime.py:971)。
+- 正常路径生成完整结束事件，[Backend/app/workflow/runtime.py:917](C:/DevAgentStudio/Backend/app/workflow/runtime.py:917)。
+- `CancelledError` 路径直接重新抛出，[Backend/app/workflow/runtime.py:971](C:/DevAgentStudio/Backend/app/workflow/runtime.py:971)。
 - 取消请求自己的流会结束，但被取消的原始流不一定得到 terminal event。
-- 测试目前只断言原 task 被取消，[Backend/tests/test_workflow_ag_ui.py:1167](C:/XCodeAgent/Backend/tests/test_workflow_ag_ui.py:1167)。
+- 测试目前只断言原 task 被取消，[Backend/tests/test_workflow_ag_ui.py:1167](C:/DevAgentStudio/Backend/tests/test_workflow_ag_ui.py:1167)。
 
 **影响：**
 
@@ -581,8 +581,8 @@ Electron 37 已于 2026-01-13 EOL，可见[官方发布计划](https://releases.
 **证据：**
 
 - `_safe_path()` 对单个文件 resolve 后的 containment 较好。
-- 但目录树递归使用 `is_dir()` 和 `iterdir()`，[Backend/app/workspace.py:1082](C:/XCodeAgent/Backend/app/workspace.py:1082)，可能跟随指向工作区外的目录链接。
-- 生命周期文件只根据 `workspace_root / ".xcodeagent"` 写入，没有拒绝 `.xcodeagent` 是 symlink/junction，[Backend/app/application_lifecycle.py:106](C:/XCodeAgent/Backend/app/application_lifecycle.py:106)。
+- 但目录树递归使用 `is_dir()` 和 `iterdir()`，[Backend/app/workspace.py:1082](C:/DevAgentStudio/Backend/app/workspace.py:1082)，可能跟随指向工作区外的目录链接。
+- 生命周期文件只根据 `workspace_root / ".devagentstudio"` 写入，没有拒绝 `.devagentstudio` 是 symlink/junction，[Backend/app/application_lifecycle.py:106](C:/DevAgentStudio/Backend/app/application_lifecycle.py:106)。
 
 **建议：**
 
@@ -594,10 +594,10 @@ Electron 37 已于 2026-01-13 EOL，可见[官方发布计划](https://releases.
 
 **证据：**
 
-- AG-UI action stream 会把异常字符串直接返回客户端，[Backend/app/ag_ui_action_stream.py:183](C:/XCodeAgent/Backend/app/ag_ui_action_stream.py:183)。
-- Workflow 也会把内部异常文本写入事件，[Backend/app/workflow/runtime.py:979](C:/XCodeAgent/Backend/app/workflow/runtime.py:979)。
-- 数据库异常原样返回，[Backend/app/database_execution.py:214](C:/XCodeAgent/Backend/app/database_execution.py:214)。
-- `/health` 返回模型 base URL、provider、LangSmith 等内部配置，[Backend/app/main.py:95](C:/XCodeAgent/Backend/app/main.py:95)。
+- AG-UI action stream 会把异常字符串直接返回客户端，[Backend/app/ag_ui_action_stream.py:183](C:/DevAgentStudio/Backend/app/ag_ui_action_stream.py:183)。
+- Workflow 也会把内部异常文本写入事件，[Backend/app/workflow/runtime.py:979](C:/DevAgentStudio/Backend/app/workflow/runtime.py:979)。
+- 数据库异常原样返回，[Backend/app/database_execution.py:214](C:/DevAgentStudio/Backend/app/database_execution.py:214)。
+- `/health` 返回模型 base URL、provider、LangSmith 等内部配置，[Backend/app/main.py:95](C:/DevAgentStudio/Backend/app/main.py:95)。
 
 公钥本身不属于秘密；问题是把过多运行时拓扑和错误细节暴露给未认证调用者。
 
@@ -611,16 +611,16 @@ Electron 37 已于 2026-01-13 EOL，可见[官方发布计划](https://releases.
 
 当前明显超出工程约定约 350 行边界的文件包括：
 
-- [Frontend/src/main/index.ts](C:/XCodeAgent/Frontend/src/main/index.ts) — 约 1921 行
-- [Backend/app/agents/frontend/subagents/page_detail_plan.py](C:/XCodeAgent/Backend/app/agents/frontend/subagents/page_detail_plan.py) — 约 1633 行
-- [Backend/app/workflow/workflow_visualization.py](C:/XCodeAgent/Backend/app/workflow/workflow_visualization.py) — 约 1590 行
-- [Backend/app/workspace.py](C:/XCodeAgent/Backend/app/workspace.py) — 约 1419 行
-- [Backend/app/workflow/request.py](C:/XCodeAgent/Backend/app/workflow/request.py) — 约 1338 行
-- [Frontend/src/renderer/src/services/agUiAgent.ts](C:/XCodeAgent/Frontend/src/renderer/src/services/agUiAgent.ts) — 约 1335 行
+- [Frontend/src/main/index.ts](C:/DevAgentStudio/Frontend/src/main/index.ts) — 约 1921 行
+- [Backend/app/agents/frontend/subagents/page_detail_plan.py](C:/DevAgentStudio/Backend/app/agents/frontend/subagents/page_detail_plan.py) — 约 1633 行
+- [Backend/app/workflow/workflow_visualization.py](C:/DevAgentStudio/Backend/app/workflow/workflow_visualization.py) — 约 1590 行
+- [Backend/app/workspace.py](C:/DevAgentStudio/Backend/app/workspace.py) — 约 1419 行
+- [Backend/app/workflow/request.py](C:/DevAgentStudio/Backend/app/workflow/request.py) — 约 1338 行
+- [Frontend/src/renderer/src/services/agUiAgent.ts](C:/DevAgentStudio/Frontend/src/renderer/src/services/agUiAgent.ts) — 约 1335 行
 
 特别是 `main/index.ts` 同时承载窗口、认证、文件、工程、Git、浏览器、session、token 和 IPC 权限，导致任何 Renderer 边界问题都很难被局部审计。
 
-applications/session 等数据还存在直接覆盖写入，[Frontend/src/main/index.ts:649](C:/XCodeAgent/Frontend/src/main/index.ts:649)，而 Settings 已有临时文件原子替换范例，[Frontend/src/main/applicationSettings.ts:55](C:/XCodeAgent/Frontend/src/main/applicationSettings.ts:55)，说明可统一。
+applications/session 等数据还存在直接覆盖写入，[Frontend/src/main/index.ts:649](C:/DevAgentStudio/Frontend/src/main/index.ts:649)，而 Settings 已有临时文件原子替换范例，[Frontend/src/main/applicationSettings.ts:55](C:/DevAgentStudio/Frontend/src/main/applicationSettings.ts:55)，说明可统一。
 
 **建议：**
 
@@ -632,15 +632,15 @@ applications/session 等数据还存在直接覆盖写入，[Frontend/src/main/i
 
 为了避免把普通实现写成“漏洞”，以下结论经过复查后没有纳入主要风险：
 
-- ZIP Skill 导入已经处理条目数、展开大小、绝对路径、`..`、反斜杠、symlink/特殊条目和原子替换，[Backend/app/user_skill_imports.py:171](C:/XCodeAgent/Backend/app/user_skill_imports.py:171)。
+- ZIP Skill 导入已经处理条目数、展开大小、绝对路径、`..`、反斜杠、symlink/特殊条目和原子替换，[Backend/app/user_skill_imports.py:171](C:/DevAgentStudio/Backend/app/user_skill_imports.py:171)。
 - Git clone 使用 `execFile` 参数数组，不属于 shell 拼接注入；真正风险是未固定来源和执行供应链脚本。
 - `/tools/terminal/exec` 使用 `shell=False`，所以没有把 `;` 之类直接当作 shell 注入；问题是任意解释器本身被允许。
 - CORS 正则有边界锚定，没有接受 `localhost.evil.com`；问题是任意真实 localhost/null Origin。
-- Markdown 链接做了协议过滤，React 渲染也没有发现应用源码中的直接 `dangerouslySetInnerHTML`，[Frontend/src/renderer/src/components/MarkdownContent.tsx:384](C:/XCodeAgent/Frontend/src/renderer/src/components/MarkdownContent.tsx:384)。
-- 用户 Skill YAML 使用 `safe_load`，[Backend/app/user_skills.py:248](C:/XCodeAgent/Backend/app/user_skills.py:248)。
+- Markdown 链接做了协议过滤，React 渲染也没有发现应用源码中的直接 `dangerouslySetInnerHTML`，[Frontend/src/renderer/src/components/MarkdownContent.tsx:384](C:/DevAgentStudio/Frontend/src/renderer/src/components/MarkdownContent.tsx:384)。
+- 用户 Skill YAML 使用 `safe_load`，[Backend/app/user_skills.py:248](C:/DevAgentStudio/Backend/app/user_skills.py:248)。
 - 后端 PID 恢复已有进程身份验证；PID 欺骗问题只确认存在于前端 launcher。
 - plantMode 新密码确实走 RSA 加密，没有把这部分错误归类为“完全明文”；问题是私钥存储、模型暴露和 environment 字段。
-- 模型原始输出日志默认关闭，[Backend/app/config.py:31](C:/XCodeAgent/Backend/app/config.py:31)，所以只作为潜在放大器，不单独列漏洞。
+- 模型原始输出日志默认关闭，[Backend/app/config.py:31](C:/DevAgentStudio/Backend/app/config.py:31)，所以只作为潜在放大器，不单独列漏洞。
 
 ---
 

@@ -24,6 +24,7 @@ import WorkflowRunCard, {
   BuildExecutionRunCard
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import CodeReviewCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/CodeReviewCard'
+import ReviewPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ReviewPhaseConfirmationCard'
 import {
   deriveDisplayedPlanExecutionMode,
   derivePlanExecutionMode,
@@ -291,6 +292,23 @@ test('代码审查卡动态展示当前源码相对路径并在完成后清除',
   assert.doesNotMatch(completedMarkup, /当前审查文件/)
 })
 
+test('审查入口并排展示两种模式，空开发 Diff 禁用 Diff 按钮', () => {
+  const emptyMarkup = renderToStaticMarkup(
+    createElement(ReviewPhaseConfirmationCard, { diffFileCount: 0, onSubmit: () => undefined })
+  )
+  assert.match(emptyMarkup, /全量审查/)
+  assert.match(emptyMarkup, /Diff 审查/)
+  assert.match(emptyMarkup, /workflow-review-phase-confirmation-actions/)
+  assert.match(emptyMarkup, /开发阶段没有可审查的变动文件/)
+  assert.match(emptyMarkup, /disabled=""><span>Diff 审查<\/span>/)
+
+  const diffMarkup = renderToStaticMarkup(
+    createElement(ReviewPhaseConfirmationCard, { diffFileCount: 2, onSubmit: () => undefined })
+  )
+  assert.match(diffMarkup, /读取 2 个变动文件/)
+  assert.doesNotMatch(diffMarkup, /开发阶段没有可审查的变动文件/)
+})
+
 test('审查和验收阶段所有节点均隐藏代码差异', () => {
   const workflow = (phase: string): WorkflowRunPayload =>
     previewWorkflow({ phase, status: 'requires_user_input' }, `run-${phase}`)
@@ -455,28 +473,28 @@ test('同一路径的审查报告在新的 Workflow 运行中获得新的自动�
   const first = codeReviewReportFocusKey(
     'application-1',
     'run-1',
-    '.xcodeagent/reports/code-review.md'
+    '.devagentstudio/reports/code-review.md'
   )
   const second = codeReviewReportFocusKey(
     'application-1',
     'run-2',
-    '.xcodeagent/reports/code-review.md'
+    '.devagentstudio/reports/code-review.md'
   )
 
   assert.notEqual(first, second)
-  assert.equal(first, 'application-1:run-1:.xcodeagent/reports/code-review.md')
+  assert.equal(first, 'application-1:run-1:.devagentstudio/reports/code-review.md')
 })
 
 test('同一路径的测试报告在新的 Workflow 运行中获得新的自动聚焦键', () => {
-  const first = testReportFocusKey('application-1', 'run-1', '.xcodeagent/reports/test-report.md')
-  const second = testReportFocusKey('application-1', 'run-2', '.xcodeagent/reports/test-report.md')
+  const first = testReportFocusKey('application-1', 'run-1', '.devagentstudio/reports/test-report.md')
+  const second = testReportFocusKey('application-1', 'run-2', '.devagentstudio/reports/test-report.md')
 
   assert.notEqual(first, second)
-  assert.equal(first, 'application-1:run-1:.xcodeagent/reports/test-report.md')
+  assert.equal(first, 'application-1:run-1:.devagentstudio/reports/test-report.md')
 })
 
 test('完整 Lighthouse 报告按钮只允许出现在前端性能检查行', () => {
-  const reportPath = '.xcodeagent/runtime/tests/frontend_performance/lighthouse.html'
+  const reportPath = '.devagentstudio/runtime/tests/frontend_performance/lighthouse.html'
 
   assert.equal(
     integrationTestCheckReportPath({

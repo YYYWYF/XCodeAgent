@@ -30,7 +30,7 @@ def _application(enabled: bool = False) -> dict:
 def _write_application(workspace: Path, application: dict) -> None:
     """把测试应用配置写入唯一允许 Resolver 读取的 canonical 路径。"""
 
-    config_dir = workspace / ".xcodeagent"
+    config_dir = workspace / ".devagentstudio"
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "application.json").write_text(
         json.dumps(application, ensure_ascii=False),
@@ -166,7 +166,7 @@ class ApplicationConfigChangeResolverTests(unittest.TestCase):
             with self.subTest(current=current), self.assertRaises(ApplicationConfigChangeResolutionError):
                 self._replace_current(current)
                 self._resolve("启用登录")
-        (self.workspace / ".xcodeagent" / "application.json").write_text("null", encoding="utf-8")
+        (self.workspace / ".devagentstudio" / "application.json").write_text("null", encoding="utf-8")
         with self.assertRaises(ApplicationConfigChangeResolutionError):
             self._resolve("启用登录")
 
@@ -176,7 +176,7 @@ class ApplicationConfigChangeResolverTests(unittest.TestCase):
         missing_workspace = self.workspace / "missing"
         with self.assertRaises(ApplicationConfigChangeResolutionError):
             resolve_application_config_changes("启用登录", workspace_root=missing_workspace)
-        (self.workspace / ".xcodeagent" / "application.json").write_text("{", encoding="utf-8")
+        (self.workspace / ".devagentstudio" / "application.json").write_text("{", encoding="utf-8")
         with self.assertRaises(ApplicationConfigChangeResolutionError):
             self._resolve("启用登录")
 

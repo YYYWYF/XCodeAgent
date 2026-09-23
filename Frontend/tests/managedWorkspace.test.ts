@@ -9,7 +9,7 @@ import { readManagedWorkspaceApplication } from '../src/main/managedWorkspace'
 async function withTemporaryWorkspace(
   run: (workspaceRoot: string) => Promise<void>
 ): Promise<void> {
-  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-workspace-'))
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-workspace-'))
   try {
     await run(workspaceRoot)
   } finally {
@@ -17,10 +17,10 @@ async function withTemporaryWorkspace(
   }
 }
 
-/** 验证真实 .xcodeagent 目录和有效 v6 application.json 可以被识别。 */
-test('允许添加规范的 XCodeAgent 本地项目', async () => {
+/** 验证真实 .devagentstudio 目录和有效 v6 application.json 可以被识别。 */
+test('允许添加规范的 DevAgent Studio 本地项目', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const agentDirectory = path.join(workspaceRoot, '.xcodeagent')
+    const agentDirectory = path.join(workspaceRoot, '.devagentstudio')
     await fs.mkdir(agentDirectory)
     await fs.writeFile(
       path.join(agentDirectory, 'application.json'),
@@ -45,7 +45,7 @@ test('允许添加规范的 XCodeAgent 本地项目', async () => {
 /** 验证旧结构因不是当前 schemaVersion 而不能通过。 */
 test('拒绝缺少当前权限字段的旧结构', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const agentDirectory = path.join(workspaceRoot, '.xcodeagent')
+    const agentDirectory = path.join(workspaceRoot, '.devagentstudio')
     await fs.mkdir(agentDirectory)
     await fs.writeFile(
       path.join(agentDirectory, 'application.json'),
@@ -60,7 +60,7 @@ test('拒绝缺少当前权限字段的旧结构', async () => {
 /** 验证非当前 schemaVersion 即使字段看似完整也不能作为当前工作区读取。 */
 test('拒绝非当前 schemaVersion', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const agentDirectory = path.join(workspaceRoot, '.xcodeagent')
+    const agentDirectory = path.join(workspaceRoot, '.devagentstudio')
     await fs.mkdir(agentDirectory)
     await fs.writeFile(
       path.join(agentDirectory, 'application.json'),
@@ -83,7 +83,7 @@ test('拒绝非当前 schemaVersion', async () => {
 /** 验证权限开启时必须同时提供认证和初始管理员成员。 */
 test('拒绝缺少认证或初始管理员的权限工作区', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const agentDirectory = path.join(workspaceRoot, '.xcodeagent')
+    const agentDirectory = path.join(workspaceRoot, '.devagentstudio')
     await fs.mkdir(agentDirectory)
     const applicationPath = path.join(agentDirectory, 'application.json')
     const base = {
@@ -115,7 +115,7 @@ test('拒绝缺少认证或初始管理员的权限工作区', async () => {
 /** 验证当前 v6 不接受已删除的权限 provider 或独立运行态页面字段。 */
 test('拒绝旧权限字段', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const agentDirectory = path.join(workspaceRoot, '.xcodeagent')
+    const agentDirectory = path.join(workspaceRoot, '.devagentstudio')
     await fs.mkdir(agentDirectory)
     await fs.writeFile(
       path.join(agentDirectory, 'application.json'),
@@ -141,7 +141,7 @@ test('拒绝旧权限字段', async () => {
 /** 验证关闭权限时不能残留初始管理员种子。 */
 test('拒绝关闭权限后残留初始管理员种子', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    const agentDirectory = path.join(workspaceRoot, '.xcodeagent')
+    const agentDirectory = path.join(workspaceRoot, '.devagentstudio')
     await fs.mkdir(agentDirectory)
     await fs.writeFile(
       path.join(agentDirectory, 'application.json'),
@@ -166,16 +166,16 @@ test('拒绝关闭权限后残留初始管理员种子', async () => {
 })
 
 /** 验证普通文件夹不能绕过项目标识校验进入应用索引。 */
-test('拒绝缺少 .xcodeagent 目录的普通文件夹', async () => {
+test('拒绝缺少 .devagentstudio 目录的普通文件夹', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    await assert.rejects(readManagedWorkspaceApplication(workspaceRoot), /缺少 \.xcodeagent 目录/)
+    await assert.rejects(readManagedWorkspaceApplication(workspaceRoot), /缺少 \.devagentstudio 目录/)
   })
 })
 
 /** 验证同名文件不能伪装成受管理项目目录。 */
-test('拒绝文件形式的 .xcodeagent 标识', async () => {
+test('拒绝文件形式的 .devagentstudio 标识', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    await fs.writeFile(path.join(workspaceRoot, '.xcodeagent'), 'not-a-directory', 'utf8')
+    await fs.writeFile(path.join(workspaceRoot, '.devagentstudio'), 'not-a-directory', 'utf8')
     await assert.rejects(readManagedWorkspaceApplication(workspaceRoot), /必须是真实目录/)
   })
 })
@@ -183,7 +183,7 @@ test('拒绝文件形式的 .xcodeagent 标识', async () => {
 /** 验证缺少正式应用配置的标识目录不能生成不完整索引。 */
 test('拒绝缺少 application.json 的标识目录', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    await fs.mkdir(path.join(workspaceRoot, '.xcodeagent'))
+    await fs.mkdir(path.join(workspaceRoot, '.devagentstudio'))
     await assert.rejects(readManagedWorkspaceApplication(workspaceRoot), /application\.json/)
   })
 })

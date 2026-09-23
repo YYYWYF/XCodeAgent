@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,9 +36,9 @@ def load_application_json(workspace_root: str | Path) -> dict[str, Any]:
     """只读取目标工作区的 application.json，并校验顶层对象。"""
 
     root = Path(workspace_root).expanduser().resolve()
-    application_file = root / ".xcodeagent" / "application.json"
+    application_file = root / WORKSPACE_ARTIFACT_DIR / "application.json"
     if not application_file.is_file():
-        raise DatabaseCredentialError("当前应用工作区缺少 .xcodeagent/application.json。")
+        raise DatabaseCredentialError("当前应用工作区缺少 .devagentstudio/application.json。")
     try:
         payload = json.loads(application_file.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:

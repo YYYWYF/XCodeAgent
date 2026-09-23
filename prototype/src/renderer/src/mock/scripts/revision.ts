@@ -5,7 +5,7 @@
 // 高水位持久化到 localStorage：Vite HMR 会重新求值本模块，若内存计数器回退到基线，
 // 长时间打开的页面仍持有旧的大 revision，后续所有 lifecycle 都会被拒收——症状是
 // 确认后对话正常回复、领域记录已推进，但阶段条与工作台不切换。
-const REVISION_STORAGE_KEY = 'aistudio:prototype:lifecycle-revision-hwm'
+const REVISION_STORAGE_KEY = 'devagentstudio:prototype:lifecycle-revision-hwm'
 const REVISION_BASELINE = 50000
 
 /** 读取持久化的 revision 高水位；没有存储或值不合法时回到基线。 */

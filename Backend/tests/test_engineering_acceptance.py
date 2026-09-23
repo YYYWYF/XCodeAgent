@@ -1152,7 +1152,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             ],
         }
 
-        workspace = "/tmp/xcodeagent-database-verification"
+        workspace = "/tmp/devagentstudio-database-verification"
         with patch(
             "app.agents.database.generator.inspect_mysql_schema",
             side_effect=[missing_summary, satisfied_summary],

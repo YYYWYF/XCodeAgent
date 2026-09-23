@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import hashlib
 import json
 from pathlib import Path
@@ -196,7 +198,7 @@ def _revision_continuation_ready(
 ) -> dict[str, Any]:
     """确认工作台 TechnicalPlan 后停图，并把 DAG continuation 交给开发会话。"""
 
-    technical_plan_path = workspace / ".xcodeagent" / "plans" / "technical-plan.json"
+    technical_plan_path = workspace / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
     token, active = issue_revision_continuation(
         workspace,
         change_id=change_id,
@@ -250,8 +252,8 @@ def _create_technical_plan_draft(
 ) -> dict[str, Any]:
     """复用 Technical Planner 生成完整隔离草稿，并绑定 ProductPlan/UiDesign 上游。"""
 
-    plans = workspace / ".xcodeagent" / "plans"
-    specs = workspace / ".xcodeagent" / "specs"
+    plans = workspace / WORKSPACE_ARTIFACT_DIR / "plans"
+    specs = workspace / WORKSPACE_ARTIFACT_DIR / "specs"
     canonical_json = plans / "technical-plan.json"
     existing = _load_json_object(canonical_json)
     requirement_spec = load_requirement_spec_json(specs / "requirement-spec.json")
@@ -263,7 +265,7 @@ def _create_technical_plan_draft(
         **requirement_spec,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
-        "application_config": _load_json_object(workspace / ".xcodeagent" / "application.json"),
+        "application_config": _load_json_object(workspace / WORKSPACE_ARTIFACT_DIR / "application.json"),
         "planning_adjustment_request": revision_request or active.request,
     }
     artifact = plan_project_with_chat_model(
@@ -314,8 +316,8 @@ def _await_loaded_revision_draft(
 def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> None:
     """按当前 TechnicalPlan 合同同步 Markdown、校验并原子覆盖 canonical。"""
 
-    plans = workspace / ".xcodeagent" / "plans"
-    specs = workspace / ".xcodeagent" / "specs"
+    plans = workspace / WORKSPACE_ARTIFACT_DIR / "plans"
+    specs = workspace / WORKSPACE_ARTIFACT_DIR / "specs"
     if artifact_key != "technical-plan":
         raise ValueError("当前合同只允许确认 TechnicalPlan 草稿。")
     requirement_spec = load_requirement_spec_json(specs / "requirement-spec.json")
@@ -392,8 +394,8 @@ def _validate_technical_plan(
 def _current_plan_state(workspace: Path) -> dict[str, Any]:
     """重新加载刚确认的 canonical，避免后续 Build 使用请求开始前的旧快照。"""
 
-    plans = workspace / ".xcodeagent" / "plans"
-    specs = workspace / ".xcodeagent" / "specs"
+    plans = workspace / WORKSPACE_ARTIFACT_DIR / "plans"
+    specs = workspace / WORKSPACE_ARTIFACT_DIR / "specs"
     technical_path = plans / "technical-plan.json"
     technical_plan = load_project_plan_json(technical_path)
     requirement_spec = load_requirement_spec_json(specs / "requirement-spec.json")

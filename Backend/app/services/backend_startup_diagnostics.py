@@ -14,14 +14,14 @@ LOG_READ_LIMIT = 256_000
 def startup_source_fingerprint(root: Path) -> str:
     """记录构建相关源码及应用配置，等待确认期间有修改时使启动缓存失效。"""
     files: set[Path] = set()
-    for relative in ('backend', 'Backend', 'src', '.mvn', '.xcodeagent/datasource'):
+    for relative in ('backend', 'Backend', 'src', '.mvn', '.devagentstudio/datasource'):
         directory = root / relative
         if not directory.is_dir():
             continue
         for current, directories, names in os.walk(directory):
             directories[:] = [name for name in directories if name not in {'.git', 'target', 'node_modules'}]
             files.update(Path(current) / name for name in names)
-    files.update(root / name for name in ('pom.xml', 'mvnw', 'mvnw.cmd', '.xcodeagent/application.json'))
+    files.update(root / name for name in ('pom.xml', 'mvnw', 'mvnw.cmd', '.devagentstudio/application.json'))
     digest = sha256()
     for path in sorted(files):
         if path.is_file():

@@ -49,7 +49,7 @@ export default Orders;
         manifest = build_ui_page_manifest(
             self.page,
             page_key="Orders",
-            code_path="/.xcodeagent/ui-design/pages/Orders/index.tsx",
+            code_path="/.devagentstudio/ui-design/pages/Orders/index.tsx",
             code=code,
             status="confirmed",
         )
@@ -783,7 +783,7 @@ export default Orders;
 
         with TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)
-            code_path = workspace / ".xcodeagent" / "ui-design" / "pages" / "Orders" / "index.tsx"
+            code_path = workspace / ".devagentstudio" / "ui-design" / "pages" / "Orders" / "index.tsx"
             code_path.parent.mkdir(parents=True)
             code = "export default function Orders() { return null }"
             code_path.write_text(code, encoding="utf-8")

@@ -84,7 +84,7 @@ export async function requestSourceReferences(workspaceRoot: string, sourceId: s
 /** 将内部动作名转换为独立数据源路由的短横线路径。 */
 function getDataSourcesUrl(action: DataSourceAction): string {
   const pathAction = action.replace(/_/g, '-')
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/data-sources/${pathAction}`
     : `/api/agent/data-sources/${pathAction}`

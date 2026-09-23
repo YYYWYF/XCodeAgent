@@ -33,7 +33,7 @@ function assertApplicationLifecycleOwnership(
 
 // 读取独立应用生命周期 AG-UI 地址。
 function getApplicationLifecycleUrl(): string {
-  const agentBaseUrl = window.aiStudio?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/application-lifecycle/run`
     : '/api/agent/application-lifecycle/run'

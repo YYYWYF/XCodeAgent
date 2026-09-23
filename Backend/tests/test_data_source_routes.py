@@ -68,7 +68,7 @@ class DataSourceRouteTests(unittest.TestCase):
         self.assertFalse(
             any(path.startswith("/data-sources") and method == "PATCH" for path, method in routes)
         )
-        self.assertEqual(data_sources_capabilities()["stateDirectory"], ".xcodeagent/datasource")
+        self.assertEqual(data_sources_capabilities()["stateDirectory"], ".devagentstudio/datasource")
 
     def test_api_design_metadata_uses_independent_ag_ui_actions(self) -> None:
         """表、列和外部 Operation 查询都通过独立 AG-UI 端点返回元数据。"""

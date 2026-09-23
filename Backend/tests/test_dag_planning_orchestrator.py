@@ -129,10 +129,10 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def _assert_formal_untouched(self):
         """写入可辨识的 Formal/Pending 证据，返回断言闭包以检查原始字节。"""
 
-        plans = Path(self.workspace["workspace"]) / ".xcodeagent" / "plans"
+        plans = Path(self.workspace["workspace"]) / ".devagentstudio" / "plans"
         plans.mkdir(parents=True, exist_ok=True)
         draft_plans = (
-            Path(self.workspace["workspace"]) / ".xcodeagent" / "drafts" / "plans"
+            Path(self.workspace["workspace"]) / ".devagentstudio" / "drafts" / "plans"
         )
         draft_plans.mkdir(parents=True, exist_ok=True)
         files = {}
@@ -218,7 +218,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         plan["page_implementation_contracts"].append({
             "schema_version": "page-implementation-contract.v1",
             "pageId": "history2",
-            "uiDesignRef": {"path": ".xcodeagent/ui-design/pages/History2/index.tsx"},
+            "uiDesignRef": {"path": ".devagentstudio/ui-design/pages/History2/index.tsx"},
             "requiredEndpointIds": [],
         })
         historical = await self._plan(planning_inputs(

@@ -77,7 +77,7 @@ export function usePreviewRuntime(options: Options): {
     // 清除旧启动错误并避免每轮 watch 重新加载用户正在查看的页面。
     if (readyUrl && readyUrl !== lastReadyUrlRef.current) {
       lastReadyUrlRef.current = readyUrl
-      void window.xcodeAgent?.projectPreview?.registerWorkspace({
+      void window.devAgentStudio?.projectPreview?.registerWorkspace({
         workspaceRoot: workspaceRef.current
       })
       optionsRef.current.onReady(readyUrl)
@@ -235,7 +235,7 @@ export function usePreviewRuntime(options: Options): {
     const workspace = captured.workspace
     // 手动重启一开始就登记工作区，确保 Electron 在重启进行中退出时也会停止残留进程。
     if (action === 'restart' && workspace) {
-      void window.xcodeAgent?.projectPreview?.registerWorkspace({ workspaceRoot: workspace })
+      void window.devAgentStudio?.projectPreview?.registerWorkspace({ workspaceRoot: workspace })
     }
     cancelRequestedRef.current = false
     busyRef.current = true

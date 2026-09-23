@@ -24,6 +24,7 @@ import type { FormInstance } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useMemo, useState } from 'react'
 import type { ApplicationDraft } from '../../typings'
+import { validateBranchName } from '../../service/repositoryBranch'
 import { cx } from '../../utils'
 import {
   applicationIconOptions,
@@ -177,7 +178,7 @@ export default function ApplicationForm({
           name="repoUrl"
           extra={
             <Tooltip title="当前阶段为固定地址，后续将开放自定义仓库地址。">
-              <span className={cx('application-form-hint')}>暂为固定地址，后续开放自定义</span>
+              <span className={cx('application-form-hint')}>暂为固定地址，后续开放自定义。</span>
             </Tooltip>
           }
         >
@@ -188,12 +189,22 @@ export default function ApplicationForm({
           />
         </Form.Item>
         <Form.Item
-          label="版本号"
-          name="versionNo"
-          rules={[{ required: true, whitespace: true, message: '请输入版本号' }]}
-          extra="作为应用首个版本标签，如 v1.0；发起新迭代时自动递增。"
+          label="分支名"
+          name="branchName"
+          rules={[
+            { required: true, whitespace: true, message: '请输入分支名' },
+            {
+              validator: (_rule, value: string) => {
+                const invalidReason = validateBranchName(value)
+                return invalidReason
+                  ? Promise.reject(new Error(invalidReason))
+                  : Promise.resolve()
+              }
+            }
+          ]}
+          extra="应用代码会推送到远端的这个分支。如果远端已经有同名分支，它上面的代码会被覆盖。"
         >
-          <Input placeholder="v1.0" />
+          <Input placeholder="dev" />
         </Form.Item>
       </section>
 

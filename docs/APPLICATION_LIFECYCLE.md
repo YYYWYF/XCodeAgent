@@ -6,7 +6,7 @@
 
 ## 权威边界
 
-`.xcodeagent/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台执行和资源锁的持久化权威来源。应用索引只负责统一列出和打开应用，不保存阶段准入事实；设计、计划或开发阶段均可进入工作台。`checkpoints.sqlite` 继续负责 LangGraph 技术断点；RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 各自负责正式内容与确认状态；Build DAG、ExecutionRun 和 TestReport 继续负责执行和测试事实。
+`.devagentstudio/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台执行和资源锁的持久化权威来源。应用索引只负责统一列出和打开应用，不保存阶段准入事实；设计、计划或开发阶段均可进入工作台。`checkpoints.sqlite` 继续负责 LangGraph 技术断点；RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 各自负责正式内容与确认状态；Build DAG、ExecutionRun 和 TestReport 继续负责执行和测试事实。
 
 生命周期文件只承担冷启动、断线重连和显式校准，不作为渲染进程的实时轮询源。后端每次原子写入成功后，必须先通过主 Workflow AG-UI 流发送独立的 `application-lifecycle` 自定义事件，再继续投影对应节点或控制动作。工作台顶层 application store 按应用标识与单调 `revision` 合并冷启动读取、重连校准和实时事件；页面控制栏、应用大纲及 API 大纲只消费这一个 store。较旧的文件读取结果不得覆盖更新的实时 revision。
 
@@ -46,6 +46,8 @@ UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不
 不得反向把初始化改回待确认或运行中。不符合当前结构的阶段和字段不做迁移或兼容，
 读取时直接拒绝。
 
+每个 `WorkbenchExecution` 可选持久化 `ownerSessionId`，它是该 Workflow execution 所属可见 Chat Session 的稳定业务标识；旧 lifecycle 文件缺少该字段时按 `None` 兼容读取。`threadId` 仍只表示 Workflow/Graph execution thread，不等价于 Chat Session thread。DAG Planning application-level lock 的唯一 execution source 是 `phase=prepare_build_tasks` 且 `status=running/stopping`；PendingPlan 的 `awaiting_user` 归属由 Pending/DraftIdentity 的 `ownerSessionId` 投影负责，普通 Build、authorization bootstrap、Unit Test、Review、Acceptance 不因 active execution 或 `ownerSessionId` 产生 DAG lock。Confirm 接管、phase/status 更新必须保留原 `ownerSessionId`，不得重新猜测。
+
 主 Workflow 获取范围登记时在 `activeExecutions` 中创建运行，并由后端从正式 ProjectPlan 计算资源集合。页面主目标、导航关联页、直接使用的 API 契约及其数据源，以及共享这些 API/数据源的其他页面和契约会原子写入 `resourceLocks`。当前阶段 `resourceLocks` 仅作为可观测、可持久化的资源元数据，不参与启动门禁：同工作区、同页面、共享 API/数据源或应用级范围均不会因为已有登记被拒绝；同一资源键以最近一次运行记录为准。等待授权、修复确认、验收、失败和停止仍保留登记，只有 `finalize_project` 成功或用户明确“结束计划”才清理该 run 当前拥有的登记。已停止或失败的执行继续运行时，前端只提交旧 runId 作为同一执行的恢复令牌；后端仍验证同一 thread、scope 和 target，并在一次写入中转移旧 run 当前可见的资源记录。结构化测试阶段确认与审查阶段确认是仅有可跨 thread 转交 execution 的恢复动作，分别用于进入空白测试会话和审查会话；scope 与 target 校验不放宽。该令牌不参与 Graph 状态重建。
 
 当前实现只关闭业务资源集合的互斥执法，不放宽文件、命令、敏感操作或 Agent 工具权限。`resourceLocks` 只保存稳定资源键和紧凑 owner 元数据，恢复业务互斥前应重新引入显式策略开关和冲突 UX，而不是让持久化字段隐式阻断。
@@ -60,7 +62,7 @@ Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase
 
 “删除本地项目”是独立于当前生命周期阶段的完整销毁事务，不再要求规划先自然停止。Electron 先调用 `/application-deletion/prepare`；后端按规范化 `workspaceRoot` 建立删除栅栏，拒绝新的 Workflow、独立 AG-UI 动作、模板写入、UI 设计生成和工作区命令，并取消已登记运行。同步命令使用独立进程组登记，删除时先终止、超时后强杀；前后端预览和 UI 设计预览也必须全部停止。已经进入同步模板线程或 UI 设计模型调用的工作会被等待到取消检查边界，确认不会再落盘后，接口才返回 `readyForTrash=true`。
 
-停机后，后端按工作区正文、metadata 和已知 lifecycle thread 清理共享 SQLite 中的 checkpoint 行；工作区本地 checkpointer 还要关闭连接并逐项驱逐主 Workflow、创建规划和 Conversation Graph 缓存。随后释放 workspace lease、规划恢复锁和生命周期/模板锁，但继续保留阻止同路径新写入的删除栅栏。Electron 再终止仍在下载模板的 `git clone`，将环境级会话目录和整个受管项目目录依次移入系统回收站；因此项目源码以及 `.xcodeagent` 下的 lifecycle、正式文档、草稿、运行日志、报告、cache、UI 设计稿、模板 manifest、checkpoint SQLite/WAL/SHM 都随项目一起删除。项目目录成功移走后，Electron 调用 `/application-deletion/complete`；后端仅在确认 `applicationId` 与准备阶段绑定的身份一致且原路径已经不存在时，才释放 Workflow、模板、UI 设计和工作区命令四类删除栅栏，使同一路径可以创建新应用。最后才从应用索引移除条目，并清理 Chromium 中按应用、工作区、thread 和 change-set 保存的恢复键。
+停机后，后端按工作区正文、metadata 和已知 lifecycle thread 清理共享 SQLite 中的 checkpoint 行；工作区本地 checkpointer 还要关闭连接并逐项驱逐主 Workflow、创建规划和 Conversation Graph 缓存。随后释放 workspace lease、规划恢复锁和生命周期/模板锁，但继续保留阻止同路径新写入的删除栅栏。Electron 再终止仍在下载模板的 `git clone`，将环境级会话目录和整个受管项目目录依次移入系统回收站；因此项目源码以及 `.devagentstudio` 下的 lifecycle、正式文档、草稿、运行日志、报告、cache、UI 设计稿、模板 manifest、checkpoint SQLite/WAL/SHM 都随项目一起删除。项目目录成功移走后，Electron 调用 `/application-deletion/complete`；后端仅在确认 `applicationId` 与准备阶段绑定的身份一致且原路径已经不存在时，才释放 Workflow、模板、UI 设计和工作区命令四类删除栅栏，使同一路径可以创建新应用。最后才从应用索引移除条目，并清理 Chromium 中按应用、工作区、thread 和 change-set 保存的恢复键。
 
 销毁默认不触碰平台级数据库加密私钥、用户 Skills、AGENTS.md、登录态、全局设置、外部 MySQL 数据、远程 trace 或 Git 远端。首页“仅移除索引”仍是另一项操作：它不停止运行、不删除会话，也不移动任何项目文件。
 
@@ -80,6 +82,7 @@ Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase
       "targetId": "orders",
       "pageId": "orders",
       "threadId": "thread-orders",
+      "ownerSessionId": "session-orders",
       "runId": "run-orders-7",
       "phase": "build",
       "status": "awaiting_user",
@@ -150,7 +153,7 @@ Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase
 
 RepairPlanner 若请求扩大业务资源范围，必须在确认载荷中给出 `requestedResources`，不能从文件路径猜测页面或 API。拒绝时不新增登记；批准时把新增资源与旧 run 当前记录一起写入，新资源与已有运行重叠也不阻断恢复。
 
-参考架构映射：OpenCode 把 session 的 busy/idle 状态独立投影，不覆盖项目是否可打开的稳定事实；learn-coding-agent 的关键消息持久化与独立进度边界用于分离初始化门禁和执行恢复；Deep Agents 的 HITL 门禁只暂停对应执行。XCodeAgent 因此把初始化完成事实固定在顶层 `initialization`，把产品级授权、RepairPlanner 确认和交付验收限定在 execution 投影中，以支持桌面端重启恢复；它不会把完整事件流、DAG 或工具结果复制进该文件，继续满足 128k 上下文预算。
+参考架构映射：OpenCode 把 session 的 busy/idle 状态独立投影，不覆盖项目是否可打开的稳定事实；learn-coding-agent 的关键消息持久化与独立进度边界用于分离初始化门禁和执行恢复；Deep Agents 的 HITL 门禁只暂停对应执行。DevAgent Studio 因此把初始化完成事实固定在顶层 `initialization`，把产品级授权、RepairPlanner 确认和交付验收限定在 execution 投影中，以支持桌面端重启恢复；它不会把完整事件流、DAG 或工具结果复制进该文件，继续满足 128k 上下文预算。
 
 同一初始化阶段允许更新运行状态或活动 run 引用；跨阶段只允许图中边。初始化确认和澄清由对应 thread 的 Graph checkpoint 与历史 Workflow 快照恢复，不在状态文件根节点重复保存 pending interaction。工作台 execution 的待处理交互仍使用 `id + basedOnRevision` 校验，过期提交显式冲突。
 

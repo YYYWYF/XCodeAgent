@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import hashlib
 import json
 import os
@@ -19,7 +21,7 @@ from app.services.code_graph.models import (
 from app.workspace.spec_documents import REPOSITORY_ROOT
 
 
-INDEX_SCHEMA_VERSION = "xcodeagent.code-graph.v1.1"
+INDEX_SCHEMA_VERSION = "devagentstudio.code-graph.v1.1"
 INDEX_CONFIG_VERSION = "source-inventory-v1"
 DEFAULT_INDEX_TIMEOUT_SECONDS = 30.0
 _INDEX_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="code-graph")
@@ -86,7 +88,7 @@ class CodeGraphManager:
         if not self._is_allowed_workspace_root(root):
             result = CodeGraphIndexResult(
                 status="skipped",
-                message="代码图只允许扫描显式用户 workspaceRoot，不扫描 AIStudio 工程目录。",
+                message="代码图只允许扫描显式用户 workspaceRoot，不扫描 DevAgent Studio 工程目录。",
             )
             self._emit(callback, result)
             return result
@@ -101,7 +103,7 @@ class CodeGraphManager:
         files = self._safe_source_files(root, source_files)
         fingerprint = self._manifest_fingerprint(root, files)
         provider_version = self.adapter.version()
-        index_dir = root / ".xcodeagent" / "cache" / "code-graph" / "v1"
+        index_dir = root / WORKSPACE_ARTIFACT_DIR / "cache" / "code-graph" / "v1"
         db_path = index_dir / "graph.sqlite3"
         metadata_path = index_dir / "index.json"
         metadata = self._read_metadata(metadata_path)
@@ -280,10 +282,10 @@ class CodeGraphManager:
             return CodeGraphQueryResult(
                 status="skipped",
                 operation=request.operation,
-                message="代码图不扫描 AIStudio 工程目录。",
+                message="代码图不扫描 DevAgent Studio 工程目录。",
                 fallback="workspace_search",
             )
-        metadata_path = root / ".xcodeagent" / "cache" / "code-graph" / "v1" / "index.json"
+        metadata_path = root / WORKSPACE_ARTIFACT_DIR / "cache" / "code-graph" / "v1" / "index.json"
         db_path = metadata_path.parent / "graph.sqlite3"
         metadata = self._read_metadata(metadata_path)
         if not db_path.is_file() or metadata.get("status") != "ready":
@@ -326,7 +328,7 @@ class CodeGraphManager:
         if not root.is_dir() or not self._is_allowed_workspace_root(root):
             result = CodeGraphIndexResult(
                 status="skipped",
-                message="代码图只允许扫描显式用户 workspaceRoot，不扫描 AIStudio 工程目录。",
+                message="代码图只允许扫描显式用户 workspaceRoot，不扫描 DevAgent Studio 工程目录。",
             )
             self._emit(callback, result)
             return result
@@ -353,7 +355,7 @@ class CodeGraphManager:
         explicit_changed_files: list[str] | None,
         callback: ProgressCallback | None,
     ) -> CodeGraphIndexResult:
-        """在线程池中构建索引并原子写入 AIStudio 元数据。"""
+        """在线程池中构建索引并原子写入 DevAgent Studio 元数据。"""
 
         index_dir = metadata_path.parent
         index_dir.mkdir(parents=True, exist_ok=True)
@@ -670,6 +672,6 @@ def _configured_timeout_seconds() -> float:
     """读取代码图前台等待上限，非法环境变量时回退到 30 秒。"""
 
     try:
-        return max(0.0, float(os.getenv("XCODEAGENT_CODE_GRAPH_TIMEOUT_SECONDS", "30")))
+        return max(0.0, float(os.getenv("DEVAGENTSTUDIO_CODE_GRAPH_TIMEOUT_SECONDS", "30")))
     except (TypeError, ValueError):
         return DEFAULT_INDEX_TIMEOUT_SECONDS

@@ -289,7 +289,7 @@ def _target(root: Path, raw_path: str) -> Path:
     """解析受限相对路径，禁止 Strategy 写入控制目录或越界位置。"""
 
     path = PurePosixPath(raw_path)
-    if not raw_path or "\\" in raw_path or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts) or path.parts[0] in {".git", ".xcodeagent"}:
+    if not raw_path or "\\" in raw_path or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts) or path.parts[0] in {".git", ".devagentstudio"}:
         raise StrategyExecutionV2Error("Strategy target 路径无效。")
     return root.joinpath(*path.parts)
 

@@ -6,7 +6,7 @@ import { build } from 'vite'
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
 const entryFile = path.join(frontendRoot, 'tests', 'previewRuntime.test.tsx')
-const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-preview-runtime-tests-'))
+const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-preview-runtime-tests-'))
 const outputFile = path.join(outputDirectory, 'previewRuntime.test.mjs')
 
 try {

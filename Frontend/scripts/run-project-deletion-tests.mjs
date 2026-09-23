@@ -6,7 +6,7 @@ import { build } from 'vite'
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
 const entryFile = path.join(frontendRoot, 'tests', 'projectDeletion.test.ts')
-const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-delete-tests-'))
+const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-delete-tests-'))
 const outputFile = path.join(outputDirectory, 'projectDeletion.test.mjs')
 
 try {

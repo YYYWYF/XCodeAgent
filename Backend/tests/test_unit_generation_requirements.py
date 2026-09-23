@@ -25,7 +25,7 @@ def _formal_plan(source_type: str = "database") -> dict:
         "pages": [{"pageId": page, "path": f"/{page}"} for page in ("orders", "users")],
         "page_implementation_contracts": [{
             "schema_version": "page-implementation-contract.v1", "pageId": page,
-            "uiDesignRef": {"path": f".xcodeagent/ui-design/pages/{page}/index.tsx"},
+            "uiDesignRef": {"path": f".devagentstudio/ui-design/pages/{page}/index.tsx"},
             "requiredEndpointIds": [f"{page}.list"],
         } for page in ("orders", "users")],
         "entities": [{"id": name, "name": name, "fields": []} for name in ("Order", "User")],
@@ -92,7 +92,7 @@ def _inputs(*tasks: dict, source_type: str = "database", formal_plan: dict | Non
     facts = facts.model_copy(update={"external_capabilities": [ExternalCapability(
         unit_id="frontend:shell", capability_id="frontend.shell.ready",
         source="template_state", workspace_revision="snapshot-1",
-        source_refs={"manifest_path": ".xcodeagent/template-generation-manifest.json"},
+        source_refs={"manifest_path": ".devagentstudio/template-generation-manifest.json"},
     )]})
     return {
         "required_unit_ids": context["required_unit_ids"],

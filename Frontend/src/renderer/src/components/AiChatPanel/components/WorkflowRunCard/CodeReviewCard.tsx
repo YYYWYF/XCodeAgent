@@ -136,6 +136,11 @@ export default function CodeReviewCard({
                 : '代码审查已完成'}
           </Text>
           <Text type="secondary">
+            {result?.reviewMode === 'diff' ? 'Diff 审查' : '全量审查'}
+            {result?.reviewMode === 'diff' ? ` · ${result.reviewFileCount || 0} 个文件` : ''}
+            {result?.skippedFileCount ? ` · 跳过 ${result.skippedFileCount} 个文件` : ''}
+          </Text>
+          <Text type="secondary">
             {issues.length > 0
               ? `发现 ${issueCount} 个问题，完整结果见右侧审查报告`
               : '完整结果见右侧审查报告'}

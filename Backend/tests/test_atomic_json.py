@@ -15,7 +15,7 @@ class AtomicJsonTests(unittest.TestCase):
         """Windows 写入目录内文件时不得因目录级 fsync 产生 PermissionError。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / ".xcodeagent" / "template-state.json"
+            target = Path(directory) / ".devagentstudio" / "template-state.json"
 
             atomic_write_json(target, {"schemaVersion": 2, "templateRevision": "template-r1"})
 

@@ -38,7 +38,7 @@ def project_planning(state: dict) -> dict:
         candidate = str(sources[0].get("type") or "") if sources else ""
         if candidate in {"database", "static"}:
             source_type = candidate
-    config_dir = workspace / ".xcodeagent"
+    config_dir = workspace / ".devagentstudio"
     config_dir.mkdir(parents=True, exist_ok=True)
     application_config: dict = {
         "schemaVersion": 6,

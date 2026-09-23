@@ -70,10 +70,10 @@ type Props = {
   planningState?: ApplicationPlanningCurrentState
   theme: 'light' | 'dark'
   rightPanelOpen: boolean
-  /** 正在查看已生成版本：对话区改为只读的应用文件/应用预览双 tab。 */
+  /** 正在查看历史分支：对话区改为只读的应用文件/应用预览双 tab。 */
   versionReadOnly?: boolean
-  /** 所查看历史版本的 Git tag：应用文件按它读取该版本当时的内容。 */
-  viewedVersionTag?: string
+  /** 所查看历史分支的分支名：应用文件与预览按它读取该分支当时的内容。 */
+  viewedBranchName?: string
   onRightPanelOpenChange: (open: boolean) => void
 }
 
@@ -110,7 +110,7 @@ export default function LeftPanel({
   theme,
   rightPanelOpen,
   versionReadOnly = false,
-  viewedVersionTag,
+  viewedBranchName,
   onRightPanelOpenChange
 }: Props): ReactElement {
   return (
@@ -150,7 +150,7 @@ export default function LeftPanel({
             rightPanelOpen={rightPanelOpen}
             onRightPanelOpenChange={onRightPanelOpenChange}
             versionReadOnly={versionReadOnly}
-            viewedVersionTag={viewedVersionTag}
+            viewedBranchName={viewedBranchName}
           />
         </div>
       </Sider>

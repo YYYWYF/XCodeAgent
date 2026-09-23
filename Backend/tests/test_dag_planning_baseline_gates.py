@@ -21,12 +21,12 @@ from tests.dag_planning_baseline_fixtures import (
 )
 
 
-PLAN_PATH = ".xcodeagent/plans/build-task-plan.json"
+PLAN_PATH = ".devagentstudio/plans/build-task-plan.json"
 ARTIFACT_PATHS = {
-    "requirement_spec": ".xcodeagent/specs/requirement-spec.json",
-    "product_plan": ".xcodeagent/plans/product-plan.json",
-    "ui_designs": ".xcodeagent/specs/ui-designs.json",
-    "technical_plan": ".xcodeagent/plans/technical-plan.json",
+    "requirement_spec": ".devagentstudio/specs/requirement-spec.json",
+    "product_plan": ".devagentstudio/plans/product-plan.json",
+    "ui_designs": ".devagentstudio/specs/ui-designs.json",
+    "technical_plan": ".devagentstudio/plans/technical-plan.json",
 }
 
 
@@ -86,7 +86,7 @@ class DagPlanningBaselineGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
             write_json(root, PLAN_PATH, confirmed)
-            write_json(root, ".xcodeagent/drafts/plans/build-task-plan.pending.json", pending)
+            write_json(root, ".devagentstudio/drafts/plans/build-task-plan.pending.json", pending)
             actual, errors = _latest_build_task_plan_for_build({
                 "workspace": workspace, "build_task_plan": pending,
                 "build_execution_scope": execution_scope(),
@@ -100,7 +100,7 @@ class DagPlanningBaselineGateTests(unittest.TestCase):
         confirmed = confirmed_baseline(project_plan(), execution_scope())
         with tempfile.TemporaryDirectory() as workspace:
             pending = {**confirmed, "confirmation_status": "pending"}
-            write_json(Path(workspace), ".xcodeagent/drafts/plans/build-task-plan.pending.json", pending)
+            write_json(Path(workspace), ".devagentstudio/drafts/plans/build-task-plan.pending.json", pending)
             actual, errors = _latest_build_task_plan_for_build({
                 "workspace": workspace, "build_task_plan": confirmed,
                 "build_execution_scope": execution_scope(),
@@ -154,7 +154,7 @@ class DagPlanningBaselineGateTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as workspace:
                     root = Path(workspace)
                     write_json(root, PLAN_PATH, baseline)
-                    write_json(root, ".xcodeagent/template-state.json", current_state)
+                    write_json(root, ".devagentstudio/template-state.json", current_state)
                     _, errors = _latest_build_task_plan_for_build({
                         "workspace": workspace,
                         "build_task_plan": baseline,

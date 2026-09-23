@@ -6,7 +6,7 @@ from typing import Any
 
 from app.services.unit_test_repair_budget import UNIT_TEST_REPAIRS_PER_CHECK
 
-WORKFLOW_EVENT_PROTOCOL = "xcodeagent.workflow.event.v1"
+WORKFLOW_EVENT_PROTOCOL = "devagentstudio.workflow.event.v1"
 PROCESS_EVENT_NAME = "agent-process"
 PROCESS_DETAIL_LIMIT = 24_000
 
@@ -133,7 +133,7 @@ def workflow_capabilities() -> dict[str, Any]:
                     "确认后恢复 test_phase_confirmation 并进入 integration_test。"
                 ),
                 "review_phase_confirmation": (
-                    "通过 clarificationAnswers.review_phase_confirmation 提交结构化 confirm 动作；"
+                    "通过 clarificationAnswers.review_phase_confirmation 提交 confirm 与 full/diff 审查模式；"
                     "确认后恢复 review_phase_confirmation 并进入 code_review。"
                 ),
                 "code_review_repair_confirmation": (
@@ -215,7 +215,7 @@ def workflow_capabilities() -> dict[str, Any]:
             },
             "confirmed_baseline_error": {
                 "code": "confirmed_baseline_invalid",
-                "artifact": ".xcodeagent/plans/build-task-plan.json",
+                "artifact": ".devagentstudio/plans/build-task-plan.json",
                 "issueCode": "CONFIRMED_BASELINE_INVALID",
                 "level": "pre_generation",
                 "category": "platform",
@@ -250,7 +250,7 @@ def workflow_capabilities() -> dict[str, Any]:
             },
             "review_phase_confirmation": {
                 "answerField": "clarificationAnswers.review_phase_confirmation",
-                "answer": {"action": "confirm"},
+                "answer": {"action": "confirm", "reviewMode": "full|diff"},
                 "lifecycleInteraction": "review_phase_confirmation",
             },
             "code_review_repair_confirmation": {

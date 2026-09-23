@@ -200,7 +200,7 @@ export function buildPageSource(
     `import { Button, Card, Space, Table, Tag, message } from 'antd'`,
     `import { useEffect, useState } from 'react'`,
     ``,
-    `// 由 AIStudio 生成 · ${name} · ${path}`,
+    `// 由 DevAgent Studio 生成 · ${name} · ${path}`,
     `type Row = Record<string, unknown>`,
     ``,
     `export default function ${componentName}() {`,
@@ -300,14 +300,14 @@ export function buildEndpointSource(design: Record<string, any>): {
     : '     * 按业务规则处理请求'
 
   const lines = [
-    `package com.aistudio.${packageName}.controller;`,
+    `package com.devagentstudio.${packageName}.controller;`,
     ``,
     `import org.springframework.web.bind.annotation.*;`,
-    `import com.aistudio.common.api.ApiResponse;`,
+    `import com.devagentstudio.common.api.ApiResponse;`,
     `import org.springframework.web.validation.annotation.Validated;`,
     ``,
     `/**`,
-    ` * 由 AIStudio 生成 · ${summary} · ${method} ${path}`,
+    ` * 由 DevAgent Studio 生成 · ${summary} · ${method} ${path}`,
     ` */`,
     `@RestController`,
     `@RequestMapping("/api/${packageName}")`,
@@ -901,7 +901,7 @@ export function buildAppApiAdapterSource(object: AppApi): {
   }
 
   const content = [
-    'package com.aistudio.recheck.api.adapter;',
+    'package com.devagentstudio.recheck.api.adapter;',
     '',
     'import java.util.HashMap;',
     'import java.util.List;',
@@ -911,7 +911,7 @@ export function buildAppApiAdapterSource(object: AppApi): {
     'import org.springframework.stereotype.Repository;',
     '',
     '/**',
-    ` * 由 AIStudio 生成 · 应用API「${object.name}」数据适配层`,
+    ` * 由 DevAgent Studio 生成 · 应用API「${object.name}」数据适配层`,
     ` * 契约：${object.method} ${object.path}`,
     ` * 数据绑定：${bindingSummary}`,
     ' * 字段映射在绑定确认时自动推导；页面统一通过 应用API.方法() 消费这份数据能力。',

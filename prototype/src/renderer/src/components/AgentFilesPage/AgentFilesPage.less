@@ -4,9 +4,28 @@
   width: 100%;
   min-width: 0;
   min-height: 0;
+  flex-direction: column;
   color: var(--wb-text);
   background:
     radial-gradient(circle at 86% 4%, var(--wb-accent-soft), transparent 30%), var(--wb-canvas);
+}
+
+// 页面顶栏即功能抽屉的抽屉头：与任务管理等抽屉头部同一套高度、内边距与分隔线。
+.@{class-prefix}-agent-files-topbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 62px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.@{class-prefix}-agent-files-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 .@{class-prefix}-agent-files-list {
@@ -15,29 +34,16 @@
   min-width: 248px;
   flex: 0 0 292px;
   flex-direction: column;
-  gap: 20px;
-  padding: 30px 20px;
+  gap: 12px;
+  padding: 18px 20px;
   border-right: 1px solid var(--wb-border);
   background: var(--wb-surface-subtle);
 }
 
-.@{class-prefix}-agent-files-list-heading {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-
-  h4.ant-typography {
-    margin: 0;
-    color: var(--wb-text);
-    font-size: 19px;
-    font-weight: 700;
-  }
-
-  .ant-typography {
-    color: var(--wb-text-secondary);
-    font-size: 13px;
-    line-height: 20px;
-  }
+.@{class-prefix}-agent-files-list-caption.ant-typography {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .@{class-prefix}-agent-file-item {
@@ -115,11 +121,11 @@
 
 .@{class-prefix}-agent-files-header {
   display: flex;
-  min-height: 94px;
+  min-height: 72px;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 18px 30px;
+  padding: 12px 30px;
   border-bottom: 1px solid var(--wb-border);
 }
 
@@ -134,9 +140,9 @@
   }
 
   h4.ant-typography {
-    margin: 0 0 5px;
+    margin: 0 0 4px;
     color: var(--wb-text);
-    font-size: 19px;
+    font-size: 16px;
     font-weight: 700;
   }
 
@@ -152,11 +158,11 @@
 }
 
 .@{class-prefix}-agent-files-title-icon {
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  border-radius: 10px;
-  font-size: 19px;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 9px;
+  font-size: 16px;
 }
 
 .@{class-prefix}-agent-files-save-button.ant-btn-primary:not([disabled]) {

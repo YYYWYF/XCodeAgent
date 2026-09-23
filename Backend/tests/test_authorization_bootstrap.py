@@ -59,7 +59,7 @@ class AuthorizationBootstrapTests(unittest.TestCase):
             self.assertEqual(first["status"], "executed")
             self.assertEqual(second["status"], "reused")
             self.assertEqual(run_mock.call_count, 1)
-            marker = root / ".xcodeagent/runtime/authorization-bootstrap/abc/result.json"
+            marker = root / ".devagentstudio/runtime/authorization-bootstrap/abc/result.json"
             self.assertEqual(
                 json.loads(marker.read_text(encoding="utf-8"))["status"], "executed"
             )
@@ -77,7 +77,7 @@ class AuthorizationBootstrapTests(unittest.TestCase):
                 root, _technical_plan(), application_config=_application_config()
             )
             self.assertEqual(result["status"], "failed")
-            marker = root / ".xcodeagent/runtime/authorization-bootstrap/abc/result.json"
+            marker = root / ".devagentstudio/runtime/authorization-bootstrap/abc/result.json"
             self.assertFalse(marker.exists())
 
     def test_disabled_authorization_is_skipped(self) -> None:

@@ -214,7 +214,7 @@ test('Java JSON 请求从 Electron 内存读取 token 并强制使用 Bearer 头
   let authorization: string | null = null
   Object.assign(globalThis, {
     window: {
-      xcodeAgent: {
+      devAgentStudio: {
         auth: {
           getAccessToken: async () => ({ accessToken: 'memory-token' })
         }
@@ -248,7 +248,7 @@ test('Java 401 与缺少内存 token 都发布认证失败', async () => {
   try {
     Object.assign(globalThis, {
       window: {
-        xcodeAgent: {
+        devAgentStudio: {
           auth: {
             getAccessToken: async () => ({ accessToken: 'memory-token' })
           }
@@ -262,7 +262,7 @@ test('Java 401 与缺少内存 token 都发布认证失败', async () => {
     resetAuthenticationFailure()
     Object.assign(globalThis, {
       window: {
-        xcodeAgent: {
+        devAgentStudio: {
           auth: {
             getAccessToken: async () => ({ accessToken: null })
           }

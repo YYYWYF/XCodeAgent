@@ -8,14 +8,14 @@ import type {
 
 declare global {
   interface Window {
-    // 浏览器原型环境不跑 Electron；window.aiStudio 由 mock 数据层注入，
+    // 浏览器原型环境不跑 Electron；window.devAgentStudio 由 mock 数据层注入，
     // electron 类型保留为可选，供读取真实工程的 IPC 兼容代码容错。
     electron?: {
       ipcRenderer?: {
         invoke?: (channel: string, ...args: unknown[]) => Promise<unknown>
       }
     }
-    aiStudio?: {
+    devAgentStudio?: {
       isElectron: boolean
       agentBaseUrl: string
       platform: string

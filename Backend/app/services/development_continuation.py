@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import hashlib
 import secrets
 from pathlib import Path
@@ -246,7 +248,7 @@ def _continuation_readiness(
 def _technical_plan_path(workspace: str | Path) -> Path:
     """返回当前契约唯一允许的 TechnicalPlan JSON 路径。"""
 
-    path = Path(workspace).expanduser() / ".xcodeagent" / "plans" / "technical-plan.json"
+    path = Path(workspace).expanduser() / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
     if not path.is_file():
         raise ApplicationLifecycleConflictError("缺少 TechnicalPlan，不能续接开发。")
     return path

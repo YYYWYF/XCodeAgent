@@ -77,7 +77,7 @@ export async function runPreviewRuntime(
     onUpdate?: (value: PreviewRuntimePayload) => void
   } = {}
 ): Promise<PreviewRuntimePayload> {
-  const origin = window.xcodeAgent?.agentBaseUrl?.replace(/\/$/, '')
+  const origin = window.devAgentStudio?.agentBaseUrl?.replace(/\/$/, '')
   const agent = createAgUiHttpAgent({
     url: origin ? `${origin}/preview-runtime/run` : '/api/agent/preview-runtime/run',
     threadId: options.threadId || randomUUID()

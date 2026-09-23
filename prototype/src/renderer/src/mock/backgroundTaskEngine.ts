@@ -231,8 +231,8 @@ function tick(): void {
  * 循环挂在 window 单例上，避免动态 import 产生的多模块实例重复推进同一任务。
  */
 export function ensureBackgroundTaskEngine(): void {
-  const host = window as unknown as { __aiStudioBackgroundTaskEngineRunning__?: boolean }
-  if (host.__aiStudioBackgroundTaskEngineRunning__) return
-  host.__aiStudioBackgroundTaskEngineRunning__ = true
+  const host = window as unknown as { __devAgentStudioBackgroundTaskEngineRunning__?: boolean }
+  if (host.__devAgentStudioBackgroundTaskEngineRunning__) return
+  host.__devAgentStudioBackgroundTaskEngineRunning__ = true
   window.setInterval(tick, ENGINE_TICK_MS)
 }

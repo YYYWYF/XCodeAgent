@@ -30,8 +30,8 @@ def failed_startup() -> dict:
         'execution': {
             'returncode': 1, 'timed_out': False, 'root_cause': root,
             'cwd': 'Backend/target', 'stdout_tail': root, 'stderr_tail': '',
-            'stdout_log_virtual': '/.xcodeagent/runtime/tests/backend_startup/attempt/stdout.log',
-            'stderr_log_virtual': '/.xcodeagent/runtime/tests/backend_startup/attempt/stderr.log',
+            'stdout_log_virtual': '/.devagentstudio/runtime/tests/backend_startup/attempt/stdout.log',
+            'stderr_log_virtual': '/.devagentstudio/runtime/tests/backend_startup/attempt/stderr.log',
         },
     }
 

@@ -113,7 +113,7 @@ class ApplicationDevelopmentPlanningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            target = workspace / ".xcodeagent" / "application.json"
+            target = workspace / ".devagentstudio" / "application.json"
             target.parent.mkdir()
             target.write_text(json.dumps(_planning_only_application_payload()), encoding="utf-8")
             plan = ApplicationDevelopmentPlan(
@@ -143,7 +143,7 @@ class ApplicationDevelopmentPlanningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            target = workspace / ".xcodeagent" / "application.json"
+            target = workspace / ".devagentstudio" / "application.json"
             target.parent.mkdir()
             target.write_text(json.dumps(_application_payload()), encoding="utf-8")
             plan = ApplicationDevelopmentPlan(
@@ -175,7 +175,7 @@ class ApplicationDevelopmentPlanningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            target = workspace / ".xcodeagent" / "application.json"
+            target = workspace / ".devagentstudio" / "application.json"
             target.parent.mkdir()
             target.write_text(json.dumps(_application_payload()), encoding="utf-8")
             plan = ApplicationDevelopmentPlan(
@@ -204,7 +204,7 @@ class ApplicationDevelopmentPlanningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            target = workspace / ".xcodeagent" / "application.json"
+            target = workspace / ".devagentstudio" / "application.json"
             target.parent.mkdir()
             target.write_text(json.dumps(_application_payload()), encoding="utf-8")
             plan = ApplicationDevelopmentPlan(

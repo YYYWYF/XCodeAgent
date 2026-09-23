@@ -21,7 +21,7 @@ collect_unit_test_targets
 2. 根据命令结果执行确定性质量门禁并生成返修请求；
 3. 门禁失败时调用只读 RepairPlanner，生成受限 SmallTask 修复任务。
 
-正式 Workflow 在真实差异清空前保存本轮源码和变更集，收集业务源码后尽力生成/同步单元测试。快速修改流程显式关闭该阶段。测试生成 Agent 只能写 `frontend/tests/*.test.ts(x)` 与 `backend/src/test/java/**/*.java`；生成文件总数最多 5 个，映射缓存位于工作区 `.xcodeagent/cache/unit-test-mappings.json`。
+正式 Workflow 在真实差异清空前保存本轮源码和变更集，收集业务源码后尽力生成/同步单元测试。快速修改流程显式关闭该阶段。测试生成 Agent 只能写 `frontend/tests/*.test.ts(x)` 与 `backend/src/test/java/**/*.java`；生成文件总数最多 5 个，映射缓存位于工作区 `.devagentstudio/cache/unit-test-mappings.json`。
 
 API 契约一致性由 ProjectPlan 确认和 `prepare_build_tasks` 前置门禁负责，Testing Subgraph 不重复校验。测试生成失败但没有产生测试文件时只保留 warning 并以 `passed/skipped` 放行；已经存在或已经生成的对应测试必须执行，测试编译、用例和业务代码失败仍创建 revision request。不探测 Python 工程或执行 pytest。
 
@@ -72,7 +72,7 @@ API 契约一致性由 ProjectPlan 确认和 `prepare_build_tasks` 前置门禁�
 
 ### 3.2 后端发现与检查
 
-`.xcodeagent/application.json` 的 `datasource.type == static` 时完全跳过后端检查。其他应用只按以下顺序寻找 Maven 工程：
+`.devagentstudio/application.json` 的 `datasource.type == static` 时完全跳过后端检查。其他应用只按以下顺序寻找 Maven 工程：
 
 1. 根目录 `pom.xml`
 2. `backend/pom.xml`
@@ -103,7 +103,7 @@ execution:
   stdout_tail / stderr_tail
 ```
 
-完整 stdout/stderr 写入 `.xcodeagent/runtime/tests/<check-id>/`，Graph State 只保留有界尾部和稳定日志引用。超时、非零退出码、缺失必需命令和 `OSError` 都转换为结构化失败，不用模型推断结果。
+完整 stdout/stderr 写入 `.devagentstudio/runtime/tests/<check-id>/`，Graph State 只保留有界尾部和稳定日志引用。超时、非零退出码、缺失必需命令和 `OSError` 都转换为结构化失败，不用模型推断结果。
 
 检查开始和终止状态通过 `integration_test.checks` custom stream 增量发送。事件包含稳定 ID、名称、状态、required、advisory、简短 evidence，以及 `frontend_performance` 的得分/指标/报告路径；完整日志不进入 AG-UI payload。
 
@@ -111,7 +111,7 @@ execution:
 
 测试阶段的依赖安装与前后端 Build 检查结束后进入 `frontend_performance_confirmation`，通过 AG-UI 展示“是否跳过前端性能测试”按钮；选择继续执行后才启动 Lighthouse。开发阶段的单元测试门禁在进入测试阶段前独立完成，不属于此子图。
 
-执行器 `Backend/app/services/frontend_performance_runner.py` 复用 `launch_frontend_project(root, skip_install=True)` 启动用户工程 `frontend/` 下的 `dev|start` 脚本，并解析日志拿到真实 `preview_url`；随后在 `.xcodeagent/runtime/tests/frontend_performance/` 下运行：
+执行器 `Backend/app/services/frontend_performance_runner.py` 复用 `launch_frontend_project(root, skip_install=True)` 启动用户工程 `frontend/` 下的 `dev|start` 脚本，并解析日志拿到真实 `preview_url`；随后在 `.devagentstudio/runtime/tests/frontend_performance/` 下运行：
 
 ```text
 npx --yes --package @lhci/cli@0.7.2 lhci autorun --config=<绝对路径>
@@ -140,7 +140,7 @@ needs_revision = any(not result["passed"] and result.get("blocking", True) for r
 - stdout/stderr 日志引用；
 - 建议 owner 和待处理状态。
 
-结果写入 `.xcodeagent/reports/test-report.json`。报告包含版本、生成时间、checks、summary、revision requests 和 `deterministic-quality-gate` 元数据；不包含 Test Agent 的 `agent_note` 或 `reviewed_by`。
+结果写入 `.devagentstudio/reports/test-report.json`。报告包含版本、生成时间、checks、summary、revision requests 和 `deterministic-quality-gate` 元数据；不包含 Test Agent 的 `agent_note` 或 `reviewed_by`。
 
 `main_quality_gate` 是历史节点名，不代表 Main DeepAgent，也不会调用任何模型。
 
@@ -161,7 +161,7 @@ RepairPlanner 只能选择：
 - `requires_user_confirmation`：扩大范围或产品决策需要确认；
 - `terminal_failure`：证据不足或不可自动处理。
 
-最终 RepairTask 的 `allowed_paths`、`target_files`、`change_scope` 和 `unit_id` 由确定性服务根据当前执行切片编译，不能由模型扩大。修复计划写入 `.xcodeagent` 任务产物目录。
+最终 RepairTask 的 `allowed_paths`、`target_files`、`change_scope` 和 `unit_id` 由确定性服务根据当前执行切片编译，不能由模型扩大。修复计划写入 `.devagentstudio` 任务产物目录。
 
 默认最多执行 3 轮真实修复。只有 SmallTask 实际派发并完成一轮时才增加 `repair_iteration`；测试、规划和等待确认不消耗预算。
 
@@ -225,7 +225,7 @@ RepairPlanner 只能选择：
 
 - 成功子图事件顺序包含目标收集、测试生成/校验、工程检查、质量门禁和修复规划跳过，且 RepairPlanner 不被调用；
 - 单元测试完成后必须进入前端性能确认；`run/skip/未回答` 分别路由到执行、跳过和暂停恢复，快速修改与前置条件缺失自动跳过；
-- 性能测试使用 `launch_frontend_project(skip_install=True)` 解析真实 `preview_url` 执行 LHCI，报告写入 `.xcodeagent/runtime/tests/frontend_performance/`，复用中的预览服务不会被停止；
+- 性能测试使用 `launch_frontend_project(skip_install=True)` 解析真实 `preview_url` 执行 LHCI，报告写入 `.devagentstudio/runtime/tests/frontend_performance/`，复用中的预览服务不会被停止；
 - `frontend_performance` 失败不产生 revision request、不阻断质量门禁，但 summary 仍计入；
 - API contract 服务仍在 ProjectPlan 与 `prepare_build_tasks` 测试中受到保护，但 Testing 不产生 `api_contract` check；
 - Python 项目标记不会触发任何后端命令；

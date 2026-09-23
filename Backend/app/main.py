@@ -63,6 +63,10 @@ from app.protocols.version_publish import (
     build_version_publish_ag_ui_stream,
     version_publish_capabilities,
 )
+from app.protocols.repository_branch import (
+    build_repository_branch_ag_ui_stream,
+    repository_branch_capabilities,
+)
 from app.protocols.iteration_service import (
     build_iteration_service_ag_ui_stream,
     iteration_service_capabilities,
@@ -158,6 +162,7 @@ async def health() -> dict[str, object]:
             "revision_preview": revision_preview_capabilities(),
             "version_control": version_control_capabilities(),
             "version_publish": version_publish_capabilities(),
+            "repository_branch": repository_branch_capabilities(),
             "iteration_service": iteration_service_capabilities(),
             "conversation": conversation_capabilities(),
             "workspace": workspace_tools.capabilities(),
@@ -336,6 +341,20 @@ async def run_version_publish(
 
     return StreamingResponse(
         build_version_publish_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/repository-branch/run")
+async def run_repository_branch(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 流执行远端分支动作：检查远端是否已存在该分支。"""
+
+    return StreamingResponse(
+        build_repository_branch_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

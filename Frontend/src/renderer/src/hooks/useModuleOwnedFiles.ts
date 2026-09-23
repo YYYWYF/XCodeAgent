@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { readWorkspaceFile } from '../service/workspaceTools'
 
-const BUILD_TASK_PLAN_PATH = '.xcodeagent/plans/build-task-plan.json'
+const BUILD_TASK_PLAN_PATH = '.devagentstudio/plans/build-task-plan.json'
 
 /**
  * 读取构建计划里"被某个模块任务认领"的文件集合。

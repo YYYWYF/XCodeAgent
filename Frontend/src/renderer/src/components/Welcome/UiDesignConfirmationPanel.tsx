@@ -309,7 +309,7 @@ export default function UiDesignConfirmationPanel({
   // （若后端仍在生成，下轮 override 轮询会把 queued/generating 状态带回）。
   const cancelPageGeneration = useCallback(
     async (pageId: string): Promise<void> => {
-      const baseUrl = window.xcodeAgent?.agentBaseUrl || 'http://127.0.0.1:8000'
+      const baseUrl = window.devAgentStudio?.agentBaseUrl || 'http://127.0.0.1:8000'
       try {
         await fetch(`${baseUrl.replace(/\/$/, '')}/api/ui-design/cancel`, {
           method: 'POST',
@@ -562,7 +562,7 @@ export default function UiDesignConfirmationPanel({
     const TERMINAL_STATUSES = new Set(['confirmed', 'generation_failed'])
     const poll = async (): Promise<void> => {
       try {
-        const result = await window.xcodeAgent?.workspace?.readUiDesigns({ workspaceRoot })
+        const result = await window.devAgentStudio?.workspace?.readUiDesigns({ workspaceRoot })
         if (cancelled || !result?.uiDesigns) return
         const manifestPages = (result.uiDesigns as { pages?: Array<{ pageId?: string; status?: string }> }).pages
         if (!Array.isArray(manifestPages)) return
@@ -601,7 +601,7 @@ export default function UiDesignConfirmationPanel({
   const hasActiveGeneration = actingPageIds.length > 0 || generatingPageIds.length > 0
   useEffect(() => {
     if (!hasActiveGeneration) return
-    if (window.xcodeAgent?.workspace?.readUiDesigns) return // IPC 可用时不走此分支
+    if (window.devAgentStudio?.workspace?.readUiDesigns) return // IPC 可用时不走此分支
     const timer = window.setInterval(() => {
       refreshUiDesignsRef.current()
     }, 2000)

@@ -12,13 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.template_reconcile.protocol_v2 import TemplateStateV2
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
 from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import TemplatePackageError, WorkspaceBootstrapError
 
-BOOTSTRAP_STAGING_RELATIVE_PATH = Path(".xcodeagent/bootstrap-staging")
+BOOTSTRAP_STAGING_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "bootstrap-staging"
 _ROOTS = ("frontend", "backend")
 _PLATFORM_RESERVED_PATHS = frozenset({Path(".git"), BOOTSTRAP_STAGING_RELATIVE_PATH})
 
@@ -37,7 +38,7 @@ BOOTSTRAP_MANAGED_RELATIVE_PATHS: tuple[Path, ...] = (
 def clear_bootstrap_managed_artifacts(workspace: str | Path) -> None:
     """把 Workspace 退回未 Bootstrap 状态，使下一次 Bootstrap 可以重新物化模板。
 
-    发起新迭代要以全新模板重建应用代码，必须先走这一步：只清 `.xcodeagent` 规划产物
+    发起新迭代要以全新模板重建应用代码，必须先走这一步：只清 `.devagentstudio` 规划产物
     会留下受管根目录，`_preflight` 随即以"已存在受管产物"拒绝 Bootstrap。
     """
 
@@ -185,13 +186,13 @@ def _materialization_targets(staging: Path) -> list[Path]:
     for child in sorted(staging.iterdir(), key=lambda item: item.name):
         if child.name == ".git":
             raise TemplatePackageError("模板 ZIP 不允许写入平台 Git 元数据。")
-        if child.name != ".xcodeagent":
+        if child.name != WORKSPACE_ARTIFACT_DIR.name:
             targets.append(Path(child.name))
             continue
 
-        # `.xcodeagent` 同时承载平台数据和模板契约，只逐项提交其模板子项。
+        # `.devagentstudio` 同时承载平台数据和模板契约，只逐项提交其模板子项。
         for nested_child in sorted(child.iterdir(), key=lambda item: item.name):
-            relative_path = Path(".xcodeagent") / nested_child.name
+            relative_path = WORKSPACE_ARTIFACT_DIR / nested_child.name
             if relative_path in _PLATFORM_RESERVED_PATHS:
                 raise TemplatePackageError("模板 ZIP 不允许写入 Bootstrap staging。")
             targets.append(relative_path)

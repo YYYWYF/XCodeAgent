@@ -41,7 +41,7 @@ class DataSourceStructureTests(unittest.TestCase):
         response_field = operation.response_structure.properties["id"]
         self.assertEqual((request_field.type, request_field.description), ("number", "请求编号"))
         self.assertEqual((response_field.type, response_field.description), ("string", "响应编号"))
-        directory = self.workspace / ".xcodeagent" / "datasource"
+        directory = self.workspace / ".devagentstudio" / "datasource"
         operation_file = directory / "external-apis" / "domain-structure" / "operations" / "operation-structure.json"
         persisted = json.loads(operation_file.read_text("utf-8"))
         self.assertEqual(persisted["requestStructure"], operation.request_structure.model_dump())
@@ -111,7 +111,7 @@ class DataSourceStructureTests(unittest.TestCase):
     def test_stored_structure_mismatch_is_not_silently_rebuilt(self) -> None:
         """读取时不修改磁盘结构，损坏或不一致内容明确报错。"""
         mutate_catalog(self.workspace, action="create", source=self.source())
-        operation_file = self.workspace / ".xcodeagent" / "datasource" / "external-apis" / "domain-structure" / "operations" / "operation-structure.json"
+        operation_file = self.workspace / ".devagentstudio" / "datasource" / "external-apis" / "domain-structure" / "operations" / "operation-structure.json"
         persisted = json.loads(operation_file.read_text("utf-8"))
         persisted["requestStructure"]["properties"]["id"]["type"] = "boolean"
         operation_file.write_text(json.dumps(persisted), encoding="utf-8")

@@ -19,7 +19,7 @@ def _change(path: str, before: bool, after: bool) -> ApplicationConfigChange:
 def _write_application(workspace: str, *, datasource: str = "static", subjects: list[str] | None = None) -> Path:
     """写入包含四个当前可变能力字段的 schema v6 测试配置。"""
 
-    target = Path(workspace) / ".xcodeagent" / "application.json"
+    target = Path(workspace) / ".devagentstudio" / "application.json"
     target.parent.mkdir(parents=True)
     target.write_text(json.dumps({"schemaVersion": 6, "configRevision": 1, "datasource": {"type": datasource}, "auth": {"enable": False}, "authorization": {"enabled": False, "initialAdministratorSubjects": subjects or []}, "track": {"enable": False}, "apiTrack": {"enable": False}}), encoding="utf-8")
     return target

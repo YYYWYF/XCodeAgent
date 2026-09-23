@@ -10,7 +10,7 @@ const platform = resolvePlatform()
 const architecture = resolveArchitecture(platform)
 const resourcePlatform = platform === 'darwin' ? `${platform}-${architecture}` : platform
 const backendResourceDir = path.join(frontendRoot, 'resources', 'backend', resourcePlatform)
-const executableName = platform === 'win32' ? 'xcodeagent-backend.exe' : 'xcodeagent-backend'
+const executableName = platform === 'win32' ? 'devagentstudio-backend.exe' : 'devagentstudio-backend'
 const bundledSkillsDir = path.join(
   backendResourceDir,
   '_internal',

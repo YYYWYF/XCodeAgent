@@ -7,11 +7,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.template_state import effective_capabilities, load_template_state, requested_capabilities
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapReadinessError
 
-_STAGING_RELATIVE_PATH = Path(".xcodeagent/bootstrap-staging")
+_STAGING_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "bootstrap-staging"
 _MANAGED_ROOT_NAMES = ("frontend", "backend", ".git")
 
 
@@ -43,7 +44,7 @@ def classify_workspace_template(
     """判断工作区模板是否已就绪，供 Bootstrap 决定"沿用已有工程"还是重新拉取。
 
     与 `validate_workspace_bootstrap_readiness` 的关键区别：本函数**不校验 Git 工作树是否干净**。
-    那条校验是给"即将写入并提交"的物化事务准备的；而迭代期间 `.xcodeagent` 自身的状态文件
+    那条校验是给"即将写入并提交"的物化事务准备的；而迭代期间 `.devagentstudio` 自身的状态文件
     本就是脏的（lifecycle/application.json 随规划不断改写），用严格版会把每次迭代都误判成
     "未物化"，从而重新拉取模板并覆盖用户累积的代码。`.git` 目录本身的有效性由
     `_validate_template_roots` 覆盖。
@@ -105,11 +106,11 @@ def _validate_formal_artifacts(workspace: Path) -> None:
     """要求 Bootstrap 所依赖的正式产物均已确认，UiDesign 可被明确跳过。"""
 
     statuses = {
-        "RequirementSpec": _artifact_confirmation_status(workspace / ".xcodeagent/specs/requirement-spec.json"),
-        "ProductPlan": _artifact_confirmation_status(workspace / ".xcodeagent/plans/product-plan.json"),
-        "UiDesign": _artifact_confirmation_status(workspace / ".xcodeagent/specs/ui-designs.json"),
+        "RequirementSpec": _artifact_confirmation_status(workspace / WORKSPACE_ARTIFACT_DIR / 'specs/requirement-spec.json'),
+        "ProductPlan": _artifact_confirmation_status(workspace / WORKSPACE_ARTIFACT_DIR / 'plans/product-plan.json'),
+        "UiDesign": _artifact_confirmation_status(workspace / WORKSPACE_ARTIFACT_DIR / 'specs/ui-designs.json'),
         "TechnicalPlan": _artifact_confirmation_status(
-            workspace / ".xcodeagent/plans/technical-plan.json",
+            workspace / WORKSPACE_ARTIFACT_DIR / 'plans/technical-plan.json',
             expected_artifact_type="technical-plan",
         ),
     }

@@ -18,7 +18,7 @@ import type { ApplicationLifecycle } from '../src/renderer/src/typings'
 
 /** 验证已不存在的路径可以重复执行删除而不产生错误。 */
 test('删除不存在的目录按幂等成功处理', async () => {
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-delete-'))
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-delete-'))
   const missingDirectory = path.join(temporaryRoot, 'missing-project')
 
   try {
@@ -32,7 +32,7 @@ test('删除不存在的目录按幂等成功处理', async () => {
 
 /** 验证实际存在的目录仍然由删除工具移除。 */
 test('删除存在的目录仍然执行递归删除', async () => {
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-delete-'))
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-delete-'))
   const projectDirectory = path.join(temporaryRoot, 'project')
 
   try {
@@ -47,7 +47,7 @@ test('删除存在的目录仍然执行递归删除', async () => {
 
 /** 验证项目路径通过系统回收站适配器转移，不再执行永久删除。 */
 test('存在的项目路径会移入系统回收站', async () => {
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-trash-'))
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-trash-'))
   const projectDirectory = path.join(temporaryRoot, 'project')
   const trashedPaths: string[] = []
 
@@ -64,7 +64,7 @@ test('存在的项目路径会移入系统回收站', async () => {
 
 /** 验证不存在的路径不会调用系统回收站，也不会产生错误。 */
 test('不存在的项目路径跳过系统回收站调用', async () => {
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-trash-'))
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-trash-'))
   const missingDirectory = path.join(temporaryRoot, 'missing-project')
   let trashCallCount = 0
 
@@ -233,7 +233,7 @@ test('生命周期 service 通过 AG-UI 发送 Session Pending 收口动作并�
 
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+    value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }
   })
   globalThis.fetch = async (_input, init) => {
     const body = JSON.parse(String(init?.body))

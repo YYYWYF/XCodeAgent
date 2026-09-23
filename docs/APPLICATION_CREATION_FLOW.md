@@ -62,7 +62,7 @@ flowchart TD
 
 ### 1. 需求文档：RequirementSpec
 
-产物路径：`.xcodeagent/specs/requirement-spec.md`、`.xcodeagent/specs/requirement-spec.json`
+产物路径：`.devagentstudio/specs/requirement-spec.md`、`.devagentstudio/specs/requirement-spec.json`
 
 ```json
 {
@@ -134,7 +134,7 @@ flowchart TD
 
 ### 2. 产品规划：ProductPlan
 
-草稿路径：`.xcodeagent/drafts/plans/product-plan.md`、`.xcodeagent/drafts/plans/product-plan.json`；确认后正式路径：`.xcodeagent/plans/product-plan.md`、`.xcodeagent/plans/product-plan.json`
+草稿路径：`.devagentstudio/drafts/plans/product-plan.md`、`.devagentstudio/drafts/plans/product-plan.json`；确认后正式路径：`.devagentstudio/plans/product-plan.md`、`.devagentstudio/plans/product-plan.json`
 
 ```json
 {
@@ -282,7 +282,7 @@ flowchart TD
 
 ### 3. UI 设计：UiDesign（可选）
 
-产物路径：`.xcodeagent/ui-design/pages/<PageKey>/index.tsx`、`.xcodeagent/specs/ui-designs.json`
+产物路径：`.devagentstudio/ui-design/pages/<PageKey>/index.tsx`、`.devagentstudio/specs/ui-designs.json`
 
 ```json
 {
@@ -295,7 +295,7 @@ flowchart TD
     {
       "pageId": "orders",
       "page_key": "Orders",
-      "code_path": ".xcodeagent/ui-design/pages/Orders/index.tsx",
+      "code_path": ".devagentstudio/ui-design/pages/Orders/index.tsx",
       "code_sha256": "sha256:orders-ui-example",
       "control_bindings": [
         {
@@ -315,7 +315,7 @@ flowchart TD
     {
       "pageId": "order-detail",
       "page_key": "OrderDetail",
-      "code_path": ".xcodeagent/ui-design/pages/OrderDetail/index.tsx",
+      "code_path": ".devagentstudio/ui-design/pages/OrderDetail/index.tsx",
       "code_sha256": "sha256:order-detail-ui-example",
       "control_bindings": [
         {
@@ -348,7 +348,7 @@ flowchart TD
 
 ### 4. 技术规划：TechnicalPlan
 
-产物路径：`.xcodeagent/plans/technical-plan.md`、`.xcodeagent/plans/technical-plan.json`
+产物路径：`.devagentstudio/plans/technical-plan.md`、`.devagentstudio/plans/technical-plan.json`
 
 ```json
 {

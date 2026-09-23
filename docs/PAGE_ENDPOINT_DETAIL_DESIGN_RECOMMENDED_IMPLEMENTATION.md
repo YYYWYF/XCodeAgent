@@ -61,7 +61,7 @@ Page 模式不要求 Page 模型等待 Endpoint 模型。PageDecision 与各 End
 
 ## 3. 上游引用解析规则
 
-字段都来自 `.xcodeagent/plans/project-plan.json`。“唯一解析”表示引用必须恰好匹配一个定义。
+字段都来自 `.devagentstudio/plans/project-plan.json`。“唯一解析”表示引用必须恰好匹配一个定义。
 
 ### 3.1 Endpoint dependency
 
@@ -202,7 +202,7 @@ ProjectPlan 确认前应确定性校验 policy ref/hash、Endpoint 成功码以�
 ~~~jsonc
 {
   "project_plan": {
-    "path": ".xcodeagent/plans/project-plan.json",
+    "path": ".devagentstudio/plans/project-plan.json",
     "confirmation_status": "必需：必须已确认",
 
     "target_page": {
@@ -235,14 +235,14 @@ ProjectPlan 确认前应确定性校验 policy ref/hash、Endpoint 成功码以�
   },
 
   "ui_design": {
-    "index_path": ".xcodeagent/specs/ui-designs.json",
+    "index_path": ".devagentstudio/specs/ui-designs.json",
     "required_index_fields": [
       "confirmation_status",
       "page.pageId",
       "page.status",
       "page.page_key"
     ],
-    "source_path": ".xcodeagent/ui-design/pages/<page_key>/index.tsx",
+    "source_path": ".devagentstudio/ui-design/pages/<page_key>/index.tsx",
     "source_content": "必需：UI 结构、组件、布局和视觉交互事实"
   },
 
@@ -468,10 +468,10 @@ Endpoint 检索范围：同 contract/resource 的 Controller/Service/Repository�
 
 推荐 schema：
 
-- `xcodeagent.detail-design-context.v1`
-- `xcodeagent.endpoint-detail.v1`
-- `xcodeagent.page-detail.v1`
-- `xcodeagent.detail-design-batch.v1`
+- `devagentstudio.detail-design-context.v1`
+- `devagentstudio.endpoint-detail.v1`
+- `devagentstudio.page-detail.v1`
+- `devagentstudio.detail-design-batch.v1`
 
 ### 7.1 正式输出字段
 
@@ -479,11 +479,11 @@ Endpoint 检索范围：同 contract/resource 的 Controller/Service/Repository�
 
 ~~~jsonc
 {
-  "schema_version": "xcodeagent.detail-design-batch.v1",
+  "schema_version": "devagentstudio.detail-design-batch.v1",
   "draft_sha256": "<sha256-of-batch-body>",
   "endpoint_details": [
     {
-      "schema_version": "xcodeagent.endpoint-detail.v1",
+      "schema_version": "devagentstudio.endpoint-detail.v1",
       "api_contract_id": "<string>", // 上游事实
       "endpoint_id": "<string>", // 上游事实
       "implementation_strategy": {
@@ -504,7 +504,7 @@ Endpoint 检索范围：同 contract/resource 的 Controller/Service/Repository�
     }
   ],
   "page_detail": { // Endpoint-only 模式省略
-    "schema_version": "xcodeagent.page-detail.v1",
+    "schema_version": "devagentstudio.page-detail.v1",
     "pageId": "<string>", // 上游事实
     "implementation_strategy": {},
     "response_bindings": [],
@@ -537,23 +537,23 @@ Endpoint 检索范围：同 contract/resource 的 Controller/Service/Repository�
 
 ~~~jsonc
 {
-  "schema_version": "xcodeagent.page-detail.v1"
+  "schema_version": "devagentstudio.page-detail.v1"
 }
 ~~~
 
 ~~~jsonc
 {
-  "schema_version": "xcodeagent.endpoint-detail.v1"
+  "schema_version": "devagentstudio.endpoint-detail.v1"
 }
 ~~~
 
 2. `detail_design_documents.py` 持久化时原样保留 `schema_version`；`hydrate_external_detail_designs` 读取详情后按以下规则处理：
 
    - 字段缺失：视为当前旧格式，按现有归一化逻辑加载，并在内存中补成对应 `v1`；读取动作不回写文件。
-   - 值为当前支持的 `xcodeagent.page-detail.v1` 或 `xcodeagent.endpoint-detail.v1`：按对应结构校验后加载。
+   - 值为当前支持的 `devagentstudio.page-detail.v1` 或 `devagentstudio.endpoint-detail.v1`：按对应结构校验后加载。
    - 值存在但不受支持：停止加载该详情并返回 `invalid_page_detail_artifact` 或 `invalid_endpoint_detail_artifact`，不得猜测结构。
 
-3. 当前审核载荷继续使用 `xcodeagent.detail_review.v1`。只有实现本文新增的 `action`、`draft_sha256`、`editable_paths` 或 readonly facts，导致审核载荷结构实际变化时，才把 `detail_review_payload.question_schema` 升级为 `xcodeagent.detail_review.v2`。
+3. 当前审核载荷继续使用 `devagentstudio.detail_review.v1`。只有实现本文新增的 `action`、`draft_sha256`、`editable_paths` 或 readonly facts，导致审核载荷结构实际变化时，才把 `detail_review_payload.question_schema` 升级为 `devagentstudio.detail_review.v2`。
 
 4. 升级审核载荷时，后端与前端审核组件必须在同一改动中支持 `v2`。若需要恢复仍停留在旧确认界面的运行，只保留 `v1` 的读取兼容；新生成的审核载荷统一写 `v2`。
 
@@ -569,7 +569,7 @@ Endpoint 检索范围：同 contract/resource 的 Controller/Service/Repository�
 
 ~~~jsonc
 {
-  "schema_version": "xcodeagent.detail-design-batch.v1",
+  "schema_version": "devagentstudio.detail-design-batch.v1",
   "draft_sha256": "<sha256-of-batch-body>", // 不包含本字段
   "endpoint_details": [],
   "page_detail": {} // Endpoint-only 模式省略
@@ -581,17 +581,17 @@ Endpoint 检索范围：同 contract/resource 的 Controller/Service/Repository�
 确认前写：
 
 ~~~text
-.xcodeagent/drafts/detail-design/<runId>/<interactionId>/batch.json
-.xcodeagent/drafts/detail-design/<runId>/<interactionId>/endpoints/*.json
-.xcodeagent/drafts/detail-design/<runId>/<interactionId>/pages/*.json
+.devagentstudio/drafts/detail-design/<runId>/<interactionId>/batch.json
+.devagentstudio/drafts/detail-design/<runId>/<interactionId>/endpoints/*.json
+.devagentstudio/drafts/detail-design/<runId>/<interactionId>/pages/*.json
 ~~~
 
 确认后原子提升到：
 
 ~~~text
-.xcodeagent/plans/endpoints/*
-.xcodeagent/plans/pages/*
-.xcodeagent/plans/project-plan.json refs
+.devagentstudio/plans/endpoints/*
+.devagentstudio/plans/pages/*
+.devagentstudio/plans/project-plan.json refs
 ~~~
 
 确认载荷：
@@ -691,7 +691,7 @@ confirm_detail_batch
 
 ## 9. AG-UI 与可观测证据
 
-产品流继续使用 AG-UI，推荐 review schema 为 `xcodeagent.detail_review.v2`。
+产品流继续使用 AG-UI，推荐 review schema 为 `devagentstudio.detail_review.v2`。
 
 建议事件：
 
@@ -725,7 +725,7 @@ confirm_detail_batch
 | Prompt | `Backend/app/agents/main/page_designer.py` | 只消费已验证 context；移除“待补 API”；统一 retry/failure；不再让模型决定 ZA21 已约束的成功码和对外错误码。 |
 | 数据库上下文 | `Backend/app/services/database_context.py`、`database_schema_summary.py` | 先列索引，再逐候选表完整读取。 |
 | MySQL 工具 | `Backend/app/tools/mysql_info.py` | 复用 `table_name` 定向读取；连接信息保持工具内。 |
-| 审核 | `Backend/app/services/detail_review.py` | 下发 editable schema，统一结构化修改和自然语言重生成；删除审核阶段 `_repair_missing_request_schemas` 对 API Contract 的自动修补；载荷实际改为新结构时将 `question_schema` 升级为 `xcodeagent.detail_review.v2`。 |
+| 审核 | `Backend/app/services/detail_review.py` | 下发 editable schema，统一结构化修改和自然语言重生成；删除审核阶段 `_repair_missing_request_schemas` 对 API Contract 的自动修补；载荷实际改为新结构时将 `question_schema` 升级为 `devagentstudio.detail_review.v2`。 |
 | lifecycle/AG-UI | `Backend/app/services/application_lifecycle.py`、`Backend/app/protocols/workflow/lifecycle.py`、`runtime.py` | 复用 pending interaction id/`basedOnRevision`；接入 `draft_sha256`、revise/confirm/reject 和完整 Page/review progress 事件。 |
 | 重试配置 | `Backend/app/config.py`、`Backend/app/agents/model_factory.py` | 在现有模型 timeout/retry 基础上统一 Page/Endpoint 节点级 attempts/backoff，耗尽后返回失败，不生成 fallback 草稿。 |
 | 持久化 | `Backend/app/workspace/detail_design_documents.py` | 隔离 draft/confirmed；用现有 run/interaction id 组织草稿目录，保存最小 Batch 和 `draft_sha256` 并原子提交；读取时兼容无版本旧详情、拒绝未知版本。 |

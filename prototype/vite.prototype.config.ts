@@ -10,7 +10,7 @@ import styleConfig from './src/renderer/src/config/style.json'
 const rootDir = process.cwd()
 const MOCK_APPLICATION_PORT = 5190
 
-// 在独立端口运行“被生成应用”，避免预览地址误指向 AIStudio 原型自身。
+// 在独立端口运行“被生成应用”，避免预览地址误指向 DevAgent Studio 原型自身。
 function mockPreviewAppPlugin(): Plugin {
   const previewHtmlPath = resolve(rootDir, 'mock-data/preview-app.html')
   return {

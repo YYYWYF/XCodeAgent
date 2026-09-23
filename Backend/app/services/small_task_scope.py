@@ -9,7 +9,7 @@ from typing import Any
 SMALL_TASK_DEFAULT_CONCURRENCY = 2
 SMALL_TASK_MAX_CONCURRENCY = 3
 _FORMAL_PATH_MARKERS = (
-    ".xcodeagent/",
+    ".devagentstudio/",
     "requirement-spec",
     "project-plan",
     "build-task-plan",

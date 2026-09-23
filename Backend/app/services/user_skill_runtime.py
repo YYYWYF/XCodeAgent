@@ -24,7 +24,7 @@ from app.services.user_skills import (
 )
 
 
-USER_SKILLS_VIRTUAL_ROOT = "/.xcodeagent/user-skills/"
+USER_SKILLS_VIRTUAL_ROOT = "/.devagentstudio/user-skills/"
 MAX_SKILL_RESOURCE_BYTES = 10 * 1024 * 1024
 MAX_SKILL_BUNDLE_FILES = 256
 MAX_SKILL_BUNDLE_BYTES = 32 * 1024 * 1024
@@ -175,7 +175,7 @@ def create_user_skill_runtime_snapshot(
         force_load=bool(selected_skill_names),
     )
 
-    owner = tempfile.TemporaryDirectory(prefix="xcodeagent-user-skills-")
+    owner = tempfile.TemporaryDirectory(prefix="devagentstudio-user-skills-")
     snapshot_root = Path(owner.name)
     try:
         for skill in selected_skills:

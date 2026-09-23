@@ -11,7 +11,7 @@ from deepagents.backends.protocol import EditResult, WriteResult
 from app.services.agent_file_documents import AGENTS_FILE_NAME, read_agents_document
 
 
-AGENT_MEMORY_VIRTUAL_ROOT = "/.xcodeagent/agent-memory/"
+AGENT_MEMORY_VIRTUAL_ROOT = "/.devagentstudio/agent-memory/"
 AGENT_MEMORY_VIRTUAL_PATH = f"{AGENT_MEMORY_VIRTUAL_ROOT}{AGENTS_FILE_NAME}"
 
 
@@ -85,7 +85,7 @@ def create_agent_memory_runtime_snapshot(
             "AGENTS.md 在创建运行时快照前发生了变化。"
         )
 
-    owner = tempfile.TemporaryDirectory(prefix="xcodeagent-agent-memory-")
+    owner = tempfile.TemporaryDirectory(prefix="devagentstudio-agent-memory-")
     snapshot_root = Path(owner.name)
     try:
         snapshot_file = snapshot_root / AGENTS_FILE_NAME

@@ -109,7 +109,7 @@ ConfirmedPlan 保持不变。Confirm/Abandon 已由独立 lifecycle 接入；任
 也不得跳过 Pending 确认直接进入 Build。
 
 `plan_dag_sequential` 自身唯一允许的文件写入是 Controller 的
-`.xcodeagent/plans/planning-run.json`；它不写 Pending、ConfirmedPlan、TechnicalPlan
+`.devagentstudio/plans/planning-run.json`；它不写 Pending、ConfirmedPlan、TechnicalPlan
 或其他正式产物。只有外层 mainline facade 在该调用成功返回后写 Pending，二者均不接
 Frontend。
 FrozenContractReader 只读当前内存 Store。T9.4/T9.5 只完成 Backend Attempt 拒收与 Scheduler cancellation correctness，

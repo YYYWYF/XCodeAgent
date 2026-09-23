@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR/Backend"
-export XCODEAGENT_WORKING_DIR="${XCODEAGENT_WORKING_DIR:-.xcodeagent_dev}"
+export DEVAGENTSTUDIO_WORKING_DIR="${DEVAGENTSTUDIO_WORKING_DIR:-.devagentstudio_dev}"
 
 if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python3.12" ]; then
   PYTHON_BIN="$VIRTUAL_ENV/bin/python3.12"

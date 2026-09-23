@@ -358,7 +358,7 @@ launch_project failed -> launch_project
 权威文件：
 
 ```text
-<workspace>/.xcodeagent/application.json
+<workspace>/.devagentstudio/application.json
 ```
 
 字段级依赖：
@@ -426,7 +426,7 @@ package.json
 目录：
 
 ```text
-<workspace>/.xcodeagent/runtime/launch/
+<workspace>/.devagentstudio/runtime/launch/
 ```
 
 主要文件：

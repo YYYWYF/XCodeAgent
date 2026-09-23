@@ -39,7 +39,7 @@ def _write_current_plan(workspace: str, project_plan: dict) -> str:
     """把当前 TechnicalPlan 测试夹具写入正式 JSON 路径。"""
 
     workspace_root = Path(workspace)
-    template_state_path = workspace_root / ".xcodeagent/template-state.json"
+    template_state_path = workspace_root / ".devagentstudio/template-state.json"
     if not template_state_path.exists():
         template_state_path.parent.mkdir(parents=True, exist_ok=True)
         template_state_path.write_text(
@@ -54,7 +54,7 @@ def _write_current_plan(workspace: str, project_plan: dict) -> str:
             ),
             encoding="utf-8",
         )
-    plan_path = workspace_root / ".xcodeagent/plans/project-plan.json"
+    plan_path = workspace_root / ".devagentstudio/plans/project-plan.json"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(project_plan), encoding="utf-8")
     return str(plan_path)
@@ -72,7 +72,7 @@ def _page_implementation_contract(page_id: str, endpoint_ids: list[str]) -> dict
     return {
         "schema_version": "page-implementation-contract.v1",
         "pageId": page_id,
-        "uiDesignRef": {"path": f".xcodeagent/ui-design/pages/{page_id}.tsx"},
+        "uiDesignRef": {"path": f".devagentstudio/ui-design/pages/{page_id}.tsx"},
         "requiredEndpointIds": endpoint_ids,
     }
 
@@ -107,18 +107,18 @@ def _write_formal_build_artifacts(
 
     workspace_root = Path(workspace)
     payloads = {
-        ".xcodeagent/specs/requirement-spec.json": {
+        ".devagentstudio/specs/requirement-spec.json": {
             "confirmation_status": "confirmed",
         },
-        ".xcodeagent/plans/product-plan.json": {
+        ".devagentstudio/plans/product-plan.json": {
             "confirmation_status": "confirmed",
         },
-        ".xcodeagent/specs/ui-designs.json": {
+        ".devagentstudio/specs/ui-designs.json": {
             "confirmation_status": "skipped",
         },
     }
     if include_technical_plan:
-        payloads[".xcodeagent/plans/technical-plan.json"] = {
+        payloads[".devagentstudio/plans/technical-plan.json"] = {
             "artifact_type": "technical-plan",
             "confirmation_status": technical_status,
         }
@@ -161,11 +161,11 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as workspace:
             _write_formal_build_artifacts(workspace)
-            technical_path = Path(workspace) / ".xcodeagent/plans/technical-plan.json"
+            technical_path = Path(workspace) / ".devagentstudio/plans/technical-plan.json"
             technical_path.write_text(json.dumps(technical_plan), encoding="utf-8")
             endpoint_path = (
                 Path(workspace)
-                / ".xcodeagent/plans/endpoints/endpoint--orders-api--orders-list.json"
+                / ".devagentstudio/plans/endpoints/endpoint--orders-api--orders-list.json"
             )
             endpoint_path.parent.mkdir(parents=True, exist_ok=True)
             endpoint_path.write_text(
@@ -264,9 +264,9 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as workspace:
             _write_formal_build_artifacts(workspace)
-            technical_path = Path(workspace) / ".xcodeagent/plans/technical-plan.json"
+            technical_path = Path(workspace) / ".devagentstudio/plans/technical-plan.json"
             technical_path.write_text(json.dumps(technical_plan), encoding="utf-8")
-            endpoint_dir = Path(workspace) / ".xcodeagent/plans/endpoints"
+            endpoint_dir = Path(workspace) / ".devagentstudio/plans/endpoints"
             endpoint_dir.mkdir(parents=True, exist_ok=True)
             endpoint_dir.joinpath("endpoint--orders-api--orders-list.json").write_text(
                 json.dumps(
@@ -390,7 +390,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as workspace:
-            plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            plan_path = Path(workspace) / ".devagentstudio/plans/build-task-plan.json"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(json.dumps(plan), encoding="utf-8")
             result = _handle_build_task_plan_confirmation(
@@ -676,7 +676,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as workspace:
-            plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            plan_path = Path(workspace) / ".devagentstudio/plans/build-task-plan.json"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(json.dumps(plan), encoding="utf-8")
             result = _handle_build_task_plan_confirmation(
@@ -713,7 +713,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as workspace:
-            plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            plan_path = Path(workspace) / ".devagentstudio/plans/build-task-plan.json"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(json.dumps(plan), encoding="utf-8")
             result = _handle_build_task_plan_confirmation(
@@ -753,7 +753,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as workspace:
-            plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            plan_path = Path(workspace) / ".devagentstudio/plans/build-task-plan.json"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(json.dumps(plan), encoding="utf-8")
             result = _handle_build_task_plan_confirmation(
@@ -783,7 +783,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                 "project_plan": project_plan,
             }
             write_project_plan_document(state, project_plan)
-            plan_path = Path(workspace) / ".xcodeagent/plans/project-plan.json"
+            plan_path = Path(workspace) / ".devagentstudio/plans/project-plan.json"
             state["project_plan_json_path"] = str(plan_path)
 
             compact_plan = load_project_plan_json(plan_path)
@@ -875,7 +875,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as workspace:
-            technical_path = Path(workspace) / ".xcodeagent/plans/technical-plan.json"
+            technical_path = Path(workspace) / ".devagentstudio/plans/technical-plan.json"
             technical_path.parent.mkdir(parents=True, exist_ok=True)
             technical_path.write_text(json.dumps(technical_plan), encoding="utf-8")
             latest_plan = _latest_project_plan(
@@ -1144,7 +1144,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
             return_value=agent_plan,
         ):
             project_plan_path = _write_current_plan(workspace, project_plan)
-            persisted_plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+            persisted_plan_path = Path(workspace) / ".devagentstudio/plans/build-task-plan.json"
             persisted_plan_path.parent.mkdir(parents=True, exist_ok=True)
             persisted_plan_path.write_text(
                 json.dumps(
@@ -1579,7 +1579,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
                         "timeline": [],
                     }
                 )
-                plan_path = Path(workspace) / ".xcodeagent/plans/build-task-plan.json"
+                plan_path = Path(workspace) / ".devagentstudio/plans/build-task-plan.json"
                 persisted_plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
         self.assertNotIn("code_changes", result)
@@ -1589,7 +1589,7 @@ class PrepareBuildTasksGuardTests(unittest.TestCase):
         self.assertEqual(persisted_plan["status"], "ready")
         self.assertEqual(persisted_plan["confirmation_status"], "pending")
         self.assertIsNone(persisted_plan["confirmed_at"])
-        self.assertFalse((Path(workspace) / ".xcodeagent/plans/BUILD_TASK_DAG.md").exists())
+        self.assertFalse((Path(workspace) / ".devagentstudio/plans/BUILD_TASK_DAG.md").exists())
         self.assertTrue(
             all(
                 stage["status"] == "completed"

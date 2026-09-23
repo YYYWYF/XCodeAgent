@@ -12,7 +12,7 @@ import {
 import { navigatePreviewToStartedProject } from '../src/renderer/src/utils/previewUrl'
 
 const originalFetch = globalThis.fetch
-Object.assign(globalThis, { window: { xcodeAgent: { agentBaseUrl: 'http://127.0.0.1:8000' } } })
+Object.assign(globalThis, { window: { devAgentStudio: { agentBaseUrl: 'http://127.0.0.1:8000' } } })
 let forwarded: Record<string, unknown> | undefined
 
 /** 用规范 AG-UI 生命周期验证真实 HttpAgent 的事件消费，不模拟客户端内部解析。 */

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 from pathlib import Path
 from typing import Any
@@ -16,7 +18,7 @@ def compile_template_requested_config(workspace_root: str | Path) -> dict[str, A
 
     root = Path(workspace_root).expanduser().resolve()
     technical_plan = _load_object(
-        root / ".xcodeagent/plans/technical-plan.json", "technical-plan.json"
+        root / WORKSPACE_ARTIFACT_DIR / 'plans/technical-plan.json', "technical-plan.json"
     )
     _validate_technical_plan(technical_plan)
     try:

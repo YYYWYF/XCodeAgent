@@ -4,11 +4,11 @@ import fs from 'node:fs/promises'
 import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
-import { XCODE_AGENT_ENV } from './env'
+import { DEVAGENTSTUDIO_ENV } from './env'
 
 const BACKEND_EXECUTABLE_NAMES: Partial<Record<NodeJS.Platform, string>> = {
-  darwin: 'xcodeagent-backend',
-  win32: 'xcodeagent-backend.exe'
+  darwin: 'devagentstudio-backend',
+  win32: 'devagentstudio-backend.exe'
 }
 const BACKEND_HOST = '127.0.0.1'
 const HEALTH_TIMEOUT_MS = 30000
@@ -16,7 +16,7 @@ const HEALTH_POLL_INTERVAL_MS = 500
 const SHUTDOWN_TIMEOUT_MS = 5000
 
 let backendProcess: ChildProcess | null = null
-let backendBaseUrl = XCODE_AGENT_ENV.XCODE_AGENT_BACKEND_URL
+let backendBaseUrl = DEVAGENTSTUDIO_ENV.DEVAGENTSTUDIO_BACKEND_URL
 let stoppingBackend = false
 
 type BundledBackendPaths = {
@@ -31,7 +31,7 @@ export function getBackendBaseUrl(): string {
 
 export async function startBackendService(): Promise<string> {
   if (!shouldStartBundledBackend()) {
-    backendBaseUrl = XCODE_AGENT_ENV.XCODE_AGENT_BACKEND_URL
+    backendBaseUrl = DEVAGENTSTUDIO_ENV.DEVAGENTSTUDIO_BACKEND_URL
     return backendBaseUrl
   }
 
@@ -44,10 +44,10 @@ export async function startBackendService(): Promise<string> {
   const bundledBackend = await resolveBundledBackendPaths()
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    XCODEAGENT_BACKEND_HOST: BACKEND_HOST,
-    XCODEAGENT_BACKEND_PORT: String(port),
-    XCODEAGENT_BACKEND_ENV_FILE: bundledBackend.envFilePath,
-    XCODEAGENT_WORKING_DIR: XCODE_AGENT_ENV.WORKING_DIR,
+    DEVAGENTSTUDIO_BACKEND_HOST: BACKEND_HOST,
+    DEVAGENTSTUDIO_BACKEND_PORT: String(port),
+    DEVAGENTSTUDIO_BACKEND_ENV_FILE: bundledBackend.envFilePath,
+    DEVAGENTSTUDIO_WORKING_DIR: DEVAGENTSTUDIO_ENV.WORKING_DIR,
     PYTHONUTF8: '1'
   }
 

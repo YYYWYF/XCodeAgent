@@ -1,8 +1,8 @@
 const RESETTABLE_PREFIXES = [
-  'aistudio:prototype:',
-  'aistudio-sessions:',
-  'aistudio-active-session:',
-  'aistudio-workbench:'
+  'devagentstudio:prototype:',
+  'devagentstudio-sessions:',
+  'devagentstudio-active-session:',
+  'devagentstudio-workbench:'
 ]
 
 /** 清理原型在浏览器中产生的会话、任务与初始化状态，保留静态演示应用。 */

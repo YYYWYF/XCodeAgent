@@ -53,8 +53,8 @@ class ChangeImpactAnalyzerTests(unittest.TestCase):
         """创建包含当前四类确认 JSON 的最小工作区。"""
 
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        specs = root / ".xcodeagent" / "specs"
-        plans = root / ".xcodeagent" / "plans"
+        specs = root / ".devagentstudio" / "specs"
+        plans = root / ".devagentstudio" / "plans"
         specs.mkdir(parents=True)
         plans.mkdir(parents=True)
         self._write_json(
@@ -403,7 +403,7 @@ class ChangeImpactAnalyzerTests(unittest.TestCase):
         """相关确认 JSON 缺失时，preserves 不能直接升级为实现修复。"""
 
         root = self._workspace()
-        (root / ".xcodeagent" / "specs" / "ui-designs.json").unlink()
+        (root / ".devagentstudio" / "specs" / "ui-designs.json").unlink()
         corpus = load_confirmed_contract_corpus(root)
         login = self._evidence(corpus, "requirement-spec", "点击登录按钮后完成登录")
         scanner_calls: list[dict[str, Any]] = []
@@ -451,7 +451,7 @@ class ChangeImpactAnalyzerTests(unittest.TestCase):
         """明确跳过 UI 设计时，普通按钮实现修复仍可取得代码证据。"""
 
         root = self._workspace()
-        ui_path = root / ".xcodeagent" / "specs" / "ui-designs.json"
+        ui_path = root / ".devagentstudio" / "specs" / "ui-designs.json"
         ui_payload = json.loads(ui_path.read_text(encoding="utf-8"))
         ui_payload["confirmation_status"] = "skipped"
         self._write_json(ui_path, ui_payload)
@@ -513,7 +513,7 @@ class ChangeImpactAnalyzerTests(unittest.TestCase):
         """UI 明确跳过后，视觉修改没有 UI 契约时必须保守降级。"""
 
         root = self._workspace()
-        ui_path = root / ".xcodeagent" / "specs" / "ui-designs.json"
+        ui_path = root / ".devagentstudio" / "specs" / "ui-designs.json"
         ui_payload = json.loads(ui_path.read_text(encoding="utf-8"))
         ui_payload["confirmation_status"] = "skipped"
         self._write_json(ui_path, ui_payload)

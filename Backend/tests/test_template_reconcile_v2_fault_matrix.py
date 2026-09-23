@@ -73,7 +73,7 @@ class TemplateReconcileV2FaultMatrixTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            state = root / ".xcodeagent/template-state.json"
+            state = root / ".devagentstudio/template-state.json"
             state.parent.mkdir()
             state.write_text('{"templateRevision":"legacy","managedFiles":{},"requested":{},"effective":{}}', encoding="utf-8")
             with self.assertRaises((TemplateStateError, ValueError)):

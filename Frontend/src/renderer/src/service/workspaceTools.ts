@@ -108,7 +108,7 @@ export type WorkspaceTreeResult = {
 }
 
 function getAgentBaseUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl ? agentBaseUrl.replace(/\/$/, '') : '/api/agent'
 }
 

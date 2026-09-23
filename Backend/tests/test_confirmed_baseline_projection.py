@@ -10,7 +10,7 @@ from app.protocols.workflow.projection import (
 )
 
 
-PLAN_PATH = ".xcodeagent/plans/build-task-plan.json"
+PLAN_PATH = ".devagentstudio/plans/build-task-plan.json"
 
 
 class ConfirmedBaselineProjectionTests(unittest.TestCase):

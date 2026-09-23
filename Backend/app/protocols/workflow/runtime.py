@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import asyncio
 import inspect
 from typing import Any, AsyncIterator
@@ -78,6 +80,27 @@ from app.services.template_reconcile.template_preparation import (
 )
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
+
+
+async def _source_development_review_files(
+    graph: Any, workspace: str, source_run_id: str
+) -> list[str]:
+    """从阶段交接前一执行的服务端 checkpoint 读取开发文件清单。"""
+
+    if not source_run_id or not hasattr(graph, "aget_state"):
+        return []
+    lifecycle = load_application_lifecycle(workspace)
+    execution = (
+        lifecycle.active_executions.get(source_run_id)
+        if lifecycle is not None else None
+    )
+    if execution is None:
+        return []
+    snapshot = await graph.aget_state(
+        {"configurable": {"thread_id": execution.thread_id}}
+    )
+    files = snapshot.values.get("development_review_files") if snapshot else None
+    return files if isinstance(files, list) else []
 
 
 def _graph_stream_supports_subgraphs(graph: Any) -> bool:
@@ -450,6 +473,16 @@ def build_workflow_ag_ui_stream(
                     run_id=run_id,
                 )
             resume_from = workflow_inputs.get("resume_from") or None
+            phase_review_files: list[str] | None = (
+                [] if resume_from in {"test_phase_confirmation", "review_phase_confirmation"} else None
+            )
+            if phase_review_files is not None and workspace:
+                source_run_id = str(
+                    (workflow_inputs.get("resume_values") or {}).get("resume_execution_run_id") or ""
+                )
+                phase_review_files = await _source_development_review_files(
+                    active_graph, workspace, source_run_id
+                )
             checkpoint_values: dict[str, Any] = {}
             execution_checkpoint_state: dict[str, Any] = {}
             checkpoint_snapshot: Any | None = None
@@ -570,6 +603,9 @@ def build_workflow_ag_ui_stream(
                 "active_run_id": run_id,
             }
             initial_state.update(workflow_inputs.get("resume_values") or {})
+            if phase_review_files is not None:
+                # 阶段交接只接受上一会话服务端 checkpoint 的开发文件清单。
+                initial_state["development_review_files"] = phase_review_files
             if (
                 isinstance(application_planning_interaction, dict)
                 and application_planning_interaction.get("action") == "revise"
@@ -648,9 +684,9 @@ def build_workflow_ag_ui_stream(
 
             config = {
                 "configurable": {"thread_id": thread_id},
-                "run_name": "xcodeagent-main-workflow",
+                "run_name": "devagentstudio-main-workflow",
                 "tags": [
-                    "xcodeagent",
+                    "devagentstudio",
                     "workflow",
                     *(["langsmith"] if observability["langsmith"]["enabled"] else []),
                 ],
@@ -663,7 +699,7 @@ def build_workflow_ag_ui_stream(
                     "selected_skills_revision": selected_skill_validation.revision,
                     "editor_mode": editor_mode,
                     "workflow_scope": workflow_scope,
-                    "workflow": "xcodeagent-main",
+                    "workflow": "devagentstudio-main",
                     "langsmith_enabled": observability["langsmith"]["enabled"],
                 },
             }
@@ -2052,13 +2088,13 @@ def _workflow_observability(
 
 
 def _augment_request_with_iteration_context(request: str, workspace: str | None) -> str:
-    """新迭代时把 .xcodeagent/AGENTS.md 的内容拼到用户需求前面，让大模型了解应用现状。"""
+    """新迭代时把 .devagentstudio/AGENTS.md 的内容拼到用户需求前面，让大模型了解应用现状。"""
 
     if not workspace:
         return request
     from pathlib import Path
 
-    agents_md = Path(workspace).expanduser() / ".xcodeagent" / "AGENTS.md"
+    agents_md = Path(workspace).expanduser() / WORKSPACE_ARTIFACT_DIR / "AGENTS.md"
     if not agents_md.is_file():
         return request
     try:

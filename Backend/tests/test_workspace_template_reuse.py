@@ -1,6 +1,6 @@
 """Bootstrap 在已物化工作区上必须沿用现有工程，不重新拉取模板。
 
-关键前提：迭代期间 `.xcodeagent` 状态文件本就是脏的，因此"已物化"的判据
+关键前提：迭代期间 `.devagentstudio` 状态文件本就是脏的，因此"已物化"的判据
 不能要求 Git 工作树干净——否则每次迭代都会误判为未物化并覆盖用户累积的代码。
 """
 
@@ -44,22 +44,22 @@ def _write_json(path: Path, value: object) -> None:
 def _materialized_workspace(workspace: Path, *, requested: dict[str, object] | None = None) -> None:
     """构造一个已物化且就绪条件齐备的工作区（含 Git baseline）。"""
 
-    xcodeagent_dir = workspace / ".xcodeagent"
+    devagentstudio_dir = workspace / ".devagentstudio"
     # 正式产物：就绪校验要求 RequirementSpec/ProductPlan/UiDesign/TechnicalPlan 均已确认。
     _write_json(
-        xcodeagent_dir / "specs" / "requirement-spec.json",
+        devagentstudio_dir / "specs" / "requirement-spec.json",
         {"confirmation_status": "confirmed"},
     )
     _write_json(
-        xcodeagent_dir / "plans" / "product-plan.json",
+        devagentstudio_dir / "plans" / "product-plan.json",
         {"confirmation_status": "confirmed"},
     )
     _write_json(
-        xcodeagent_dir / "specs" / "ui-designs.json",
+        devagentstudio_dir / "specs" / "ui-designs.json",
         {"confirmation_status": "confirmed"},
     )
     _write_json(
-        xcodeagent_dir / "plans" / "technical-plan.json",
+        devagentstudio_dir / "plans" / "technical-plan.json",
         {"artifact_type": "technical-plan", "confirmation_status": "confirmed"},
     )
     # 受管根与真实入口。
@@ -91,9 +91,9 @@ def _settings() -> Settings:
 
 
 def _dirty(workspace: Path) -> None:
-    """制造脏工作树：迭代期间 `.xcodeagent` 状态文件必然处于这种状态。"""
+    """制造脏工作树：迭代期间 `.devagentstudio` 状态文件必然处于这种状态。"""
 
-    target = workspace / ".xcodeagent" / "application.json"
+    target = workspace / ".devagentstudio" / "application.json"
     target.write_text('{"id": "app-1"}', encoding="utf-8")
 
 

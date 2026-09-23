@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.application_config.schema import (
     ApplicationConfigError,
     validate_application_configuration,
@@ -21,13 +22,13 @@ class ApplicationConfigRepository:
     def __init__(self, workspace_root: str | Path) -> None:
         """绑定单一工作区，避免调用方自行拼接配置文件路径。"""
 
-        self._target = Path(workspace_root).expanduser().resolve() / ".xcodeagent" / "application.json"
+        self._target = Path(workspace_root).expanduser().resolve() / WORKSPACE_ARTIFACT_DIR / "application.json"
 
     def load(self) -> dict[str, Any]:
         """读取并校验当前完整配置，不执行任何写入。"""
 
         if not self._target.is_file():
-            raise ApplicationConfigError("当前工作区缺少 .xcodeagent/application.json。")
+            raise ApplicationConfigError("当前工作区缺少 .devagentstudio/application.json。")
         try:
             application = json.loads(self._target.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:

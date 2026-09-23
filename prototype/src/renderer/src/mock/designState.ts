@@ -4,7 +4,7 @@
 //
 // Vite dev 下 workbench.ts（mock 剧本）是动态 import，与静态 import 的 preload.ts 会各自实例化
 // 本模块；模块级 Set 会分裂成两份，导致 markPageDesigned（剧本侧）与 isPageDesigned（preload 侧）
-// 读写不同状态。这里统一通过 window.__aiStudioMockDesignState__ 读写，保证单份运行时状态。
+// 读写不同状态。这里统一通过 window.__devAgentStudioMockDesignState__ 读写，保证单份运行时状态。
 
 type MockDesignState = {
   designedPages: Set<string>
@@ -12,15 +12,15 @@ type MockDesignState = {
 }
 
 function ensureState(): MockDesignState {
-  const g = window as { __aiStudioMockDesignState__?: MockDesignState }
+  const g = window as { __devAgentStudioMockDesignState__?: MockDesignState }
   const shared =
-    g.__aiStudioMockDesignState__ || { designedPages: new Set<string>(), designedEndpoints: new Set<string>() }
-  g.__aiStudioMockDesignState__ = shared
+    g.__devAgentStudioMockDesignState__ || { designedPages: new Set<string>(), designedEndpoints: new Set<string>() }
+  g.__devAgentStudioMockDesignState__ = shared
   return shared
 }
 
 function readState(): MockDesignState | undefined {
-  return (window as { __aiStudioMockDesignState__?: MockDesignState }).__aiStudioMockDesignState__
+  return (window as { __devAgentStudioMockDesignState__?: MockDesignState }).__devAgentStudioMockDesignState__
 }
 
 export function markPageDesigned(pageId: string): void {

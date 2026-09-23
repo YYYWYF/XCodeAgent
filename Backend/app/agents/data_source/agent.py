@@ -32,7 +32,7 @@ def create_data_source_agent(
         "structure and conventions, and make the smallest in-scope change. The backend "
         "directory is the only accessible project directory: use /backend/** or "
         "/Backend/** according to Backend Workspace Context. Never inspect the workspace "
-        "root, frontend, or the workspace's real .xcodeagent directory. "
+        "root, frontend, or the workspace's real .devagentstudio directory. "
         "Do not broadly list, glob, grep, or inspect the backend target directory. Read a "
         "file under target only when the current task requires checking one exact "
         "third-party dependency class or object and you already have its precise path; "

@@ -32,7 +32,7 @@ class TemplateRouteProjectorTests(unittest.TestCase):
             root = Path(directory)
             with self.assertRaises(TemplateRouteProjectorError):
                 load_route_projector_contract(root)
-            path = root / ".xcodeagent/template-contracts/route-projector.json"
+            path = root / ".devagentstudio/template-contracts/route-projector.json"
             path.parent.mkdir(parents=True)
             path.write_text(json.dumps({"schemaVersion": "route-projector-contract.v1", "protocol": "route-projector.v1", "command": ["node", "script.mjs", "apply"]}), encoding="utf-8")
             with self.assertRaises(TemplateRouteProjectorError):

@@ -562,8 +562,8 @@ def build_conversation_ag_ui_stream(
             "configurable": {
                 "thread_id": f"conversation:{thread_id}",
             },
-            "run_name": "xcodeagent-conversation",
-            "tags": ["xcodeagent", "conversation"],
+            "run_name": "devagentstudio-conversation",
+            "tags": ["devagentstudio", "conversation"],
             "metadata": {
                 "run_id": run_id,
                 "thread_id": thread_id,
@@ -1014,7 +1014,7 @@ def _safe_approved_paths(values: Any) -> list[str]:
         if (
             not path
             or ".." in parts
-            or any(part.casefold() in {".env", ".xcodeagent"} for part in parts)
+            or any(part.casefold() in {".env", ".devagentstudio"} for part in parts)
         ):
             continue
         if path not in result:

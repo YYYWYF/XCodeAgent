@@ -23,14 +23,14 @@ def mainline_formal_contract_inputs(
         product_plan={
             "content": product_plan,
             "source": {
-                "artifact": ".xcodeagent/plans/product-plan.json",
+                "artifact": ".devagentstudio/plans/product-plan.json",
                 "revision": product_plan.get("version") or "confirmed",
             },
         },
         technical_plan={
             "content": project_plan,
             "source": {
-                "artifact": ".xcodeagent/plans/technical-plan.json",
+                "artifact": ".devagentstudio/plans/technical-plan.json",
                 "revision": project_plan.get("version") or "confirmed",
             },
         },
@@ -48,7 +48,7 @@ def mainline_formal_contract_inputs(
             {
                 "content": contract,
                 "source": {
-                    "artifact": ".xcodeagent/plans/technical-plan.json",
+                    "artifact": ".devagentstudio/plans/technical-plan.json",
                     "api_contract_id": contract.get("id"),
                 },
             }

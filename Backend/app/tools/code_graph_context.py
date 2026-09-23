@@ -65,7 +65,7 @@ def create_code_graph_context_tool(workspace_root: str | Path | None):
         if root is None:
             return json.dumps(
                 {
-                    "schemaVersion": "xcodeagent.code_graph_context.v1",
+                    "schemaVersion": "devagentstudio.code_graph_context.v1",
                     "status": "skipped",
                     "reason": "no_explicit_workspace",
                     "operation": operation,
@@ -86,7 +86,7 @@ def create_code_graph_context_tool(workspace_root: str | Path | None):
             )
         except (OSError, ValueError, RuntimeError) as exc:
             result = {
-                "schemaVersion": "xcodeagent.code_graph_context.v1",
+                "schemaVersion": "devagentstudio.code_graph_context.v1",
                 "status": "unavailable",
                 "operation": operation,
                 "message": f"代码图查询不可用：{type(exc).__name__}。",

@@ -8,20 +8,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 import yaml
 
+from app.branding import DEFAULT_USER_DATA_DIRECTORY_NAME, USER_DATA_DIRECTORY_NAMES
 from app.services.user_skill_settings import (
     read_skill_settings,
     set_user_skill_enabled,
 )
 
 
-USER_SKILLS_WORKING_DIR_ENV = "XCODEAGENT_WORKING_DIR"
-DEFAULT_USER_SKILLS_WORKING_DIR = ".xcodeagent_dev"
-SUPPORTED_USER_SKILLS_WORKING_DIRS = {
-    ".xcodeagent_dev",
-    ".xcodeagent_st",
-    ".xcodeagent_uat",
-    ".xcodeagent",
-}
+USER_SKILLS_WORKING_DIR_ENV = "DEVAGENTSTUDIO_WORKING_DIR"
+DEFAULT_USER_SKILLS_WORKING_DIR = DEFAULT_USER_DATA_DIRECTORY_NAME
+SUPPORTED_USER_SKILLS_WORKING_DIRS = USER_DATA_DIRECTORY_NAMES
 MAX_SKILL_FRONTMATTER_BYTES = 64 * 1024
 
 
@@ -80,7 +76,7 @@ def resolve_user_skills_root() -> Path:
 
 
 def user_skills_working_dir() -> str:
-    """读取并校验当前 AIStudio 用户环境目录名。"""
+    """读取并校验当前 DevAgent Studio 用户环境目录名。"""
 
     working_dir = os.getenv(
         USER_SKILLS_WORKING_DIR_ENV,
@@ -88,7 +84,7 @@ def user_skills_working_dir() -> str:
     ).strip()
     if working_dir not in SUPPORTED_USER_SKILLS_WORKING_DIRS:
         raise RuntimeError(
-            f"{USER_SKILLS_WORKING_DIR_ENV} 必须是受支持的 AIStudio 用户目录。"
+            f"{USER_SKILLS_WORKING_DIR_ENV} 必须是受支持的 DevAgent Studio 用户目录。"
         )
     return working_dir
 

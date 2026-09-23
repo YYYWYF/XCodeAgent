@@ -68,9 +68,9 @@ class WorkspaceMaterializerTests(unittest.TestCase):
             self.assertTrue((workspace / "backend/pom.xml").is_file())
             self.assertTrue((workspace / ".git").is_dir())
             self.assertTrue((workspace / TEMPLATE_STATE_RELATIVE_PATH).is_file())
-            self.assertFalse((workspace / ".xcodeagent/bootstrap-staging").exists())
+            self.assertFalse((workspace / ".devagentstudio/bootstrap-staging").exists())
             exclude = (workspace / ".git/info/exclude").read_text(encoding="utf-8")
-            self.assertIn(".xcodeagent/", exclude)
+            self.assertIn(".devagentstudio/", exclude)
             self.assertTrue(BootstrapGitManager().verify_baseline(workspace))
 
     def test_materialize_commits_all_safe_zip_files_including_template_contracts(self) -> None:
@@ -81,8 +81,8 @@ class WorkspaceMaterializerTests(unittest.TestCase):
             workspace.mkdir()
             archive = Path(directory) / "template.zip"
             _write_package(archive, {
-                ".xcodeagent/template-contracts/route-projector.json": '{"schemaVersion": "route-projector-contract.v2"}\n',
-                ".xcodeagent/template-contracts/route-projector-input.schema.json": '{"type": "object"}\n',
+                ".devagentstudio/template-contracts/route-projector.json": '{"schemaVersion": "route-projector-contract.v2"}\n',
+                ".devagentstudio/template-contracts/route-projector-input.schema.json": '{"type": "object"}\n',
                 "infra/deployment.yaml": "version: v1\n",
                 "README.md": "# generated app\n",
             })
@@ -93,8 +93,8 @@ class WorkspaceMaterializerTests(unittest.TestCase):
                 template_state=_template_state(),
             )
 
-            self.assertTrue((workspace / ".xcodeagent/template-contracts/route-projector.json").is_file())
-            self.assertTrue((workspace / ".xcodeagent/template-contracts/route-projector-input.schema.json").is_file())
+            self.assertTrue((workspace / ".devagentstudio/template-contracts/route-projector.json").is_file())
+            self.assertTrue((workspace / ".devagentstudio/template-contracts/route-projector-input.schema.json").is_file())
             self.assertEqual((workspace / "infra/deployment.yaml").read_text(encoding="utf-8"), "version: v1\n")
             self.assertEqual((workspace / "README.md").read_text(encoding="utf-8"), "# generated app\n")
 
@@ -103,10 +103,10 @@ class WorkspaceMaterializerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            existing_contract = workspace / ".xcodeagent/template-contracts"
+            existing_contract = workspace / ".devagentstudio/template-contracts"
             existing_contract.mkdir(parents=True)
             archive = workspace / "template.zip"
-            _write_package(archive, {".xcodeagent/template-contracts/route-projector.json": "{}\n"})
+            _write_package(archive, {".devagentstudio/template-contracts/route-projector.json": "{}\n"})
 
             with self.assertRaisesRegex(Exception, "ZIP 物化目标"):
                 WorkspaceMaterializer().materialize(
@@ -190,7 +190,7 @@ class WorkspaceMaterializerTests(unittest.TestCase):
             def fail_readiness(callback_workspace: Path) -> None:
                 """确认 staging 已清理后注入最终失败，模拟事务末尾 Readiness 失败。"""
 
-                self.assertFalse((callback_workspace / ".xcodeagent/bootstrap-staging").exists())
+                self.assertFalse((callback_workspace / ".devagentstudio/bootstrap-staging").exists())
                 raise RuntimeError("readiness failed")
 
             with self.assertRaisesRegex(RuntimeError, "readiness failed"):

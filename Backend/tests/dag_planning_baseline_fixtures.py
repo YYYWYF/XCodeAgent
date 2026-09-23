@@ -40,7 +40,7 @@ def project_plan(*, authorization: bool = False) -> dict:
         plan["page_implementation_contracts"].append({
             "schema_version": "page-implementation-contract.v1",
             "pageId": name,
-            "uiDesignRef": {"path": f".xcodeagent/ui-design/pages/{entity}s/index.tsx"},
+            "uiDesignRef": {"path": f".devagentstudio/ui-design/pages/{entity}s/index.tsx"},
             "requiredEndpointIds": [f"{name}.list"],
             "actionBindings": [{"actionId": "list"}] if authorization else [],
         })
@@ -101,7 +101,7 @@ def build_context(plan: dict, scope: dict) -> dict:
         workspace = Path(directory)
         plan_path = write_json(
             workspace,
-            ".xcodeagent/plans/technical-plan.json",
+            ".devagentstudio/plans/technical-plan.json",
             formal_artifacts(plan)["technical_plan"],
         )
         write_confirmed_endpoint_designs(workspace, plan)
@@ -122,7 +122,7 @@ def build_context(plan: dict, scope: dict) -> dict:
         ),
         # DAG Planning 的测试输入必须显式绑定当前 V2 TemplateState 快照。
         "template_context": {
-            "state_path": ".xcodeagent/template-state.json",
+            "state_path": ".devagentstudio/template-state.json",
             "template_revision": "fixture-template-r1",
             "effective_capabilities": {},
         },

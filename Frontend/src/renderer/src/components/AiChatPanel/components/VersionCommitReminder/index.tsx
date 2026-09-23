@@ -18,7 +18,7 @@ import { cx } from '../../../../utils'
 import './VersionCommitReminder.less'
 
 const { Paragraph, Text } = Typography
-const DEFERRED_STORAGE_PREFIX = 'xcodeagent:version-control:deferred:'
+const DEFERRED_STORAGE_PREFIX = 'devagentstudio:version-control:deferred:'
 
 type Props = {
   codeChanges: WorkspaceCodeChangeSet

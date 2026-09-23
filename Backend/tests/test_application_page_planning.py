@@ -55,7 +55,7 @@ from app.workspace.spec_documents import (
 def _write_application_config(workspace: Path, datasource_type: str = "database") -> None:
     """为应用规划草稿保存测试写入最小的权威数据源配置。"""
 
-    application_dir = workspace / ".xcodeagent"
+    application_dir = workspace / ".devagentstudio"
     application_dir.mkdir(parents=True, exist_ok=True)
     (application_dir / "application.json").write_text(
         json.dumps({"schemaVersion": 2, "datasource": {"type": datasource_type}}),
@@ -66,9 +66,9 @@ def _write_application_config(workspace: Path, datasource_type: str = "database"
 def _confirmed_state(workspace: Path) -> dict[str, object]:
     """构造包含四阶段当前正式产物的最小状态。"""
 
-    requirement_path = workspace / ".xcodeagent" / "specs" / "requirement-spec.md"
-    product_plan_path = workspace / ".xcodeagent" / "plans" / "product-plan.md"
-    technical_plan_path = workspace / ".xcodeagent" / "plans" / "technical-plan.md"
+    requirement_path = workspace / ".devagentstudio" / "specs" / "requirement-spec.md"
+    product_plan_path = workspace / ".devagentstudio" / "plans" / "product-plan.md"
+    technical_plan_path = workspace / ".devagentstudio" / "plans" / "technical-plan.md"
     requirement_path.parent.mkdir(parents=True, exist_ok=True)
     product_plan_path.parent.mkdir(parents=True, exist_ok=True)
     requirement_path.write_text("# RequirementSpec\n\n任务中心需求。\n", encoding="utf-8")
@@ -102,7 +102,7 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
     product_plan_path.with_suffix(".json").write_text(
         json.dumps(state["product_plan"], ensure_ascii=False), encoding="utf-8"
     )
-    (workspace / ".xcodeagent" / "specs" / "ui-designs.json").write_text(
+    (workspace / ".devagentstudio" / "specs" / "ui-designs.json").write_text(
         json.dumps(state["ui_designs"], ensure_ascii=False), encoding="utf-8"
     )
     technical_plan_path.with_suffix(".json").write_text(
@@ -162,7 +162,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 raise AssertionError("恢复动作不应执行 Graph。")
 
         with tempfile.TemporaryDirectory() as directory:
-            artifact = Path(directory) / ".xcodeagent" / "drafts" / "specs" / "requirement-spec.md"
+            artifact = Path(directory) / ".devagentstudio" / "drafts" / "specs" / "requirement-spec.md"
             artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text("# RequirementSpec\n\n待确认需求。\n", encoding="utf-8")
             graph = RecoveryGraph()
@@ -251,7 +251,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
             frames = asyncio.run(collect())
             saved = json.loads(
-                (Path(directory) / ".xcodeagent/drafts/specs/requirement-spec.json").read_text(
+                (Path(directory) / ".devagentstudio/drafts/specs/requirement-spec.json").read_text(
                     encoding="utf-8"
                 )
             )
@@ -602,7 +602,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            target = workspace / ".xcodeagent" / "application.json"
+            target = workspace / ".devagentstudio" / "application.json"
             target.parent.mkdir()
             target.write_text(json.dumps({"appName": "任务中心", "preserved": True}), encoding="utf-8")
 
@@ -614,11 +614,11 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             self.assertTrue(saved["preserved"])
             self.assertEqual(
                 confirmation["artifacts"]["requirementSpec"]["markdown"]["path"],
-                ".xcodeagent/specs/requirement-spec.md",
+                ".devagentstudio/specs/requirement-spec.md",
             )
             self.assertEqual(
                 confirmation["artifacts"]["technicalPlan"]["json"]["path"],
-                ".xcodeagent/plans/technical-plan.json",
+                ".devagentstudio/plans/technical-plan.json",
             )
             self.assertEqual(len(confirmation["artifacts"]["technicalPlan"]["markdown"]["sha256"]), 64)
             self.assertEqual(set(confirmation), {"confirmedAt", "directories", "artifacts"})
@@ -838,7 +838,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 claim_template_reconcile_finalization(
                     root,
                     change_id=change_id,
-                    technical_plan_path=workspace / ".xcodeagent" / "plans" / "technical-plan.json",
+                    technical_plan_path=workspace / ".devagentstudio" / "plans" / "technical-plan.json",
                 )
                 raise ValueError("engine update failed")
 
@@ -856,7 +856,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 "template_reconcile_failed",
             )
             persisted = json.loads(
-                (workspace / ".xcodeagent" / "plans" / "technical-plan.json").read_text(encoding="utf-8")
+                (workspace / ".devagentstudio" / "plans" / "technical-plan.json").read_text(encoding="utf-8")
             )
             self.assertEqual(persisted["confirmation_status"], "confirmed")
             self.assertEqual(
@@ -886,7 +886,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 claim_template_reconcile_finalization(
                     root,
                     change_id=change_id,
-                    technical_plan_path=workspace / ".xcodeagent" / "plans" / "technical-plan.json",
+                    technical_plan_path=workspace / ".devagentstudio" / "plans" / "technical-plan.json",
                 )
 
             with patch(
@@ -923,7 +923,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             state = _confirmed_state(workspace)
-            plan_json = workspace / ".xcodeagent" / "plans" / "technical-plan.json"
+            plan_json = workspace / ".devagentstudio" / "plans" / "technical-plan.json"
             plan_json.write_text(json.dumps({"confirmation_status": "pending_user_confirmation"}), encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "必须是已确认的 JSON 对象"):
@@ -937,7 +937,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             state = _confirmed_state(workspace)
             skipped = {"confirmation_status": "skipped", "pages": []}
             state["ui_designs"] = skipped
-            (workspace / ".xcodeagent" / "specs" / "ui-designs.json").write_text(
+            (workspace / ".devagentstudio" / "specs" / "ui-designs.json").write_text(
                 json.dumps(skipped),
                 encoding="utf-8",
             )
@@ -946,7 +946,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
         self.assertEqual(
             confirmation["artifacts"]["uiDesigns"]["json"]["path"],
-            ".xcodeagent/specs/ui-designs.json",
+            ".devagentstudio/specs/ui-designs.json",
         )
 
     def test_capability_exposes_workflow_visualization_contract(self) -> None:
@@ -998,10 +998,10 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(
             capability["artifactDirectories"],
             [
-                ".xcodeagent/drafts/specs",
-                ".xcodeagent/drafts/plans",
-                ".xcodeagent/specs",
-                ".xcodeagent/plans",
+                ".devagentstudio/drafts/specs",
+                ".devagentstudio/drafts/plans",
+                ".devagentstudio/specs",
+                ".devagentstudio/plans",
             ],
         )
         self.assertEqual(capability["workspaceGate"], "planning-artifacts")
@@ -1011,7 +1011,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         """产品规划待确认时只允许把 drafts/plans 下的 Markdown 投影给前端。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            draft_path = Path(directory) / ".xcodeagent/drafts/plans/product-plan.md"
+            draft_path = Path(directory) / ".devagentstudio/drafts/plans/product-plan.md"
             draft_path.parent.mkdir(parents=True, exist_ok=True)
             draft_path.write_text("# 产品规划草稿\n", encoding="utf-8")
             result = {
@@ -1026,7 +1026,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
             artifact = _workflow_confirmation_artifact(result)
             result["product_plan_path"] = str(
-                Path(directory) / ".xcodeagent/plans/product-plan.md"
+                Path(directory) / ".devagentstudio/plans/product-plan.md"
             )
 
         self.assertIsNotNone(artifact)
@@ -1091,7 +1091,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         """模板更新重试只能重用 lifecycle 绑定的 Planning 身份，不能信任客户端输入。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            plan_path = Path(directory) / ".xcodeagent" / "plans" / "technical-plan.json"
+            plan_path = Path(directory) / ".devagentstudio" / "plans" / "technical-plan.json"
             plan_path.parent.mkdir(parents=True)
             plan_path.write_text(
                 json.dumps(

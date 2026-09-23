@@ -14,12 +14,14 @@
   background: var(--wb-surface-subtle);
   text-align: center;
 
-  strong {
+  // 只作用于占位卡直属的说明文字；后代选择器会把卡片内按钮的标签 span 一起染成
+  // 次级灰小字（「继续字段映射」主按钮黑字不可读即此因）。
+  > strong {
     color: var(--wb-text-secondary);
     font-size: 12.5px;
   }
 
-  span {
+  > span {
     color: var(--wb-text-muted);
     font-size: 11px;
     line-height: 1.7;

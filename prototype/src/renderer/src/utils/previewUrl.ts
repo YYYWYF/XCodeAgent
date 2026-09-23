@@ -64,8 +64,8 @@ export async function openExternalPreviewUrl(url: string): Promise<void> {
   const targetUrl = normalizePreviewUrl(url)
   if (!targetUrl) return
 
-  if (window.aiStudio?.browser?.openExternal) {
-    await window.aiStudio.browser.openExternal(targetUrl)
+  if (window.devAgentStudio?.browser?.openExternal) {
+    await window.devAgentStudio.browser.openExternal(targetUrl)
     return
   }
 
@@ -77,14 +77,14 @@ export async function openPreviewWindow(url: string): Promise<void> {
   const targetUrl = normalizePreviewUrl(url)
   if (!targetUrl) return
 
-  if (window.aiStudio?.browser?.openPreviewWindow) {
-    await window.aiStudio.browser.openPreviewWindow(targetUrl)
+  if (window.devAgentStudio?.browser?.openPreviewWindow) {
+    await window.devAgentStudio.browser.openPreviewWindow(targetUrl)
     return
   }
 
   const openedWindow = window.open(
     targetUrl,
-    `aistudio-preview-${Date.now()}`,
+    `devagentstudio-preview-${Date.now()}`,
     'popup,width=1280,height=860,left=80,top=60,noopener,noreferrer'
   )
 

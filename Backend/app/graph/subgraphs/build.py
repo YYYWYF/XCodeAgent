@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import contextvars
 import logging
 from copy import deepcopy
@@ -1021,7 +1023,7 @@ def _latest_build_task_plan_for_build(
 
     workspace = workspace_from_state(state)
     path = (
-        Path(workspace).expanduser() / ".xcodeagent" / "plans" / "build-task-plan.json"
+        Path(workspace).expanduser() / WORKSPACE_ARTIFACT_DIR / "plans" / "build-task-plan.json"
         if workspace
         else build_task_plan_json_path(state)
     )

@@ -1033,17 +1033,17 @@ assert.equal(
   false
 )
 assert.equal(
-  planningRequirementsConfirmed(undefined, '.xcodeagent/specs/requirement-spec.md'),
+  planningRequirementsConfirmed(undefined, '.devagentstudio/specs/requirement-spec.md'),
   true
 )
 assert.equal(
-  planningRequirementsConfirmed(undefined, '.xcodeagent/drafts/specs/requirement-spec.md'),
+  planningRequirementsConfirmed(undefined, '.devagentstudio/drafts/specs/requirement-spec.md'),
   false
 )
 assert.equal(
   planningRequirementsConfirmed(
     { state: { requirementsConfirmed: false } } as WorkflowRunPayload,
-    '.xcodeagent/specs/requirement-spec.md'
+    '.devagentstudio/specs/requirement-spec.md'
   ),
   false
 )

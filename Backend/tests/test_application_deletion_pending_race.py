@@ -74,7 +74,7 @@ class ApplicationDeletionPendingRaceTests(unittest.IsolatedAsyncioTestCase):
         """创建一个满足应用删除协议校验的最小受管工作区。"""
 
         workspace = Path(directory) / "managed-app"
-        marker = workspace / ".xcodeagent" / "application.json"
+        marker = workspace / ".devagentstudio" / "application.json"
         marker.parent.mkdir(parents=True)
         marker.write_text("{}\n", encoding="utf-8")
         return workspace
@@ -244,7 +244,7 @@ class ApplicationDeletionPendingRaceTests(unittest.IsolatedAsyncioTestCase):
             self._write_planning_run(workspace)
             pending_path = build_task_plan_pending_json_path({"workspace": str(workspace)})
             planning_path = planning_run_json_path({"workspace": str(workspace)})
-            lifecycle_path = workspace / ".xcodeagent" / "application-lifecycle.json"
+            lifecycle_path = workspace / ".devagentstudio" / "application-lifecycle.json"
             lifecycle_path.write_bytes(b"lifecycle-sentinel\n")
             pending_before = pending_path.read_bytes()
             planning_before = planning_path.read_bytes()
@@ -291,7 +291,7 @@ class ApplicationDeletionPendingRaceTests(unittest.IsolatedAsyncioTestCase):
             self._write_planning_run(workspace)
             pending_path = build_task_plan_pending_json_path({"workspace": str(workspace)})
             planning_path = planning_run_json_path({"workspace": str(workspace)})
-            lifecycle_path = workspace / ".xcodeagent" / "application-lifecycle.json"
+            lifecycle_path = workspace / ".devagentstudio" / "application-lifecycle.json"
             lifecycle_path.write_bytes(b"lifecycle-sentinel\n")
             pending_before = pending_path.read_bytes()
             planning_before = planning_path.read_bytes()

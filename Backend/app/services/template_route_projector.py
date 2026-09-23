@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import subprocess
 from collections.abc import Mapping
@@ -12,7 +14,7 @@ from app.services.workspace_process_registry import workspace_process_registry
 
 
 ROUTE_PROJECTOR_PROTOCOL = "route-projector.v2"
-ROUTE_PROJECTOR_CONTRACT = Path(".xcodeagent/template-contracts/route-projector.json")
+ROUTE_PROJECTOR_CONTRACT = WORKSPACE_ARTIFACT_DIR / 'template-contracts/route-projector.json'
 ROUTE_PROJECTOR_CONTRACTS_DIRECTORY = ROUTE_PROJECTOR_CONTRACT.parent
 _COMMAND_TIMEOUT_SECONDS = 30
 

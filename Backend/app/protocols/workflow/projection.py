@@ -25,8 +25,8 @@ _CODE_REVIEW_VISIBLE_PHASES = {
     "finalize_project",
     "completed",
 }
-_CODE_REVIEW_REPORT_PATH = ".xcodeagent/reports/code-review.md"
-_TEST_REPORT_PATH = ".xcodeagent/reports/test-report.md"
+_CODE_REVIEW_REPORT_PATH = ".devagentstudio/reports/code-review.md"
+_TEST_REPORT_PATH = ".devagentstudio/reports/test-report.md"
 _PRODUCT_CONVERSATION_KINDS = {
     "chat",
     "read_only",
@@ -150,6 +150,9 @@ def _workflow_code_review_result(
             issues.append(issue)
     result = {
         "status": value.get("status", "completed"),
+        "reviewMode": value.get("review_mode", "full"),
+        "reviewFileCount": value.get("review_file_count", 0),
+        "skippedFileCount": value.get("skipped_file_count", 0),
         "summary": value.get("summary", ""),
         "issueCount": value.get("issue_count", value.get("issueCount", len(issues))),
         "truncated": bool(value.get("truncated")),
@@ -613,6 +616,7 @@ def _public_workflow_state(
             "code_review_max_repair_iterations",
             "code_review_next_action",
             "code_review_report_path",
+            "development_review_files",
             "test_report_path",
             "test_report_json_path",
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。
@@ -1310,7 +1314,7 @@ def _prepare_build_tasks_input_message(
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
         "build_prerequisite_error": "Build DAG 的正式产物或模板前置条件未满足，已返回上游流程。",
         "confirmed_baseline_error": (
-            "正式任务基线 .xcodeagent/plans/build-task-plan.json 非法或无法读取，"
+            "正式任务基线 .devagentstudio/plans/build-task-plan.json 非法或无法读取，"
             "请由平台维护者修复并验证为合法 ConfirmedPlan 后重新发起规划。"
         ),
         "build_context_error": "当前构建范围缺少已确认的实体数据源绑定或技术契约。",

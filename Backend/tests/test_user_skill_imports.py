@@ -73,7 +73,7 @@ class UserSkillImportTests(unittest.TestCase):
     def test_uses_environment_specific_resolved_root(self) -> None:
         archive = self._archive({"SKILL.md": self._skill("environment-skill")})
         with tempfile.TemporaryDirectory() as temporary_root:
-            root = Path(temporary_root) / ".xcodeagent_uat" / "skills"
+            root = Path(temporary_root) / ".devagentstudio_uat" / "skills"
             with patch.object(
                 user_skill_imports, "resolve_user_skills_root", return_value=root
             ):

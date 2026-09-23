@@ -127,7 +127,7 @@ class SequentialGlobalRepairTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((state.status, state.phase, state.global_repair_round), ("active", "global_check", 0))
         self.assertEqual(state.candidates, self.initial.candidates)
         self.assertEqual(self.dispatches, [])
-        plans = Path(self.workspace["workspace"]) / ".xcodeagent" / "plans"
+        plans = Path(self.workspace["workspace"]) / ".devagentstudio" / "plans"
         self.assertEqual({path.name for path in plans.iterdir()}, {"planning-run.json"})
 
     async def test_one_affected_reopens_and_rechecks(self):

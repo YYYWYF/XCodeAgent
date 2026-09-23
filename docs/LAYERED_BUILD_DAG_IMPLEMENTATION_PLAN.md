@@ -14,7 +14,7 @@ ProjectPlan
   → scoped validation 与三层进度回写
 ```
 
-- 不兼容旧 Build Task Plan；旧 `.xcodeagent/plans/build-task-plan.json` 失效后重新生成。
+- 不兼容旧 Build Task Plan；旧 `.devagentstudio/plans/build-task-plan.json` 失效后重新生成。
 - Build DAG 是内部执行编排，不新增用户确认门禁；ProjectPlan、PageDetail、DataSourceDetail 的确认仍是代码生成前的业务门禁。
 - 全局 Unit 骨架覆盖 ProjectPlan 中全部页面与数据源；只有用户选择、且详情已确认的 Unit 才生成叶子任务。
 - 单页面生成必须加载 `WorkspaceSnapshot + ProjectPlan + PageDetail + 该页面 endpoint 直接关联的 DataSourceDetail`。
@@ -160,7 +160,7 @@ curl -sS http://127.0.0.1:8000/health
 
 ### 8. 进度聚合、实时 AG-UI 与持久化快照
 
-新增 `ProgressAggregator` 与 `.xcodeagent/runtime/development-progress.json`。按 application、page、data_source 聚合：
+新增 `ProgressAggregator` 与 `.devagentstudio/runtime/development-progress.json`。按 application、page、data_source 聚合：
 
 - application：Unit coverage、执行进度、验证进度；
 - page：实现进度、API / 数据源就绪状态、验证状态；

@@ -1196,8 +1196,8 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
         "\\", "/"
     )
     public_test_report_path = (
-        ".xcodeagent/reports/test-report.md"
-        if normalized_test_report_path.endswith(".xcodeagent/reports/test-report.md")
+        ".devagentstudio/reports/test-report.md"
+        if normalized_test_report_path.endswith(".devagentstudio/reports/test-report.md")
         else None
     )
     direct_result = {

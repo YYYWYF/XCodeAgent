@@ -1,3 +1,5 @@
+
+from app.branding import WORKSPACE_ARTIFACT_DIR
 """开发预览的独立 AG-UI 操作、日志订阅和修复确认协议。"""
 
 import asyncio
@@ -210,7 +212,7 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
         """先原子校验占用，再把持久操作与抽屉订阅生命周期分离。"""
         request = PreviewRuntimeInput.model_validate((payload.get("forwardedProps") or {}).get("previewRuntime") or {})
         root = Path(request.workspace).expanduser().resolve()
-        if not (root / ".xcodeagent" / "application.json").is_file():
+        if not (root / WORKSPACE_ARTIFACT_DIR / "application.json").is_file():
             raise ValueError("需要有效的应用工作区。")
         request.workspace = str(root)
         thread_id = str(payload.get("threadId") or "")

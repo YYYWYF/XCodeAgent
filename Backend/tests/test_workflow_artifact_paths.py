@@ -32,7 +32,7 @@ class WorkflowArtifactPathTests(unittest.TestCase):
         )
 
     def test_absolute_workspace_is_preserved(self) -> None:
-        absolute_workspace = Path("/tmp/xcodeagent-workspace")
+        absolute_workspace = Path("/tmp/devagentstudio-workspace")
 
         self.assertEqual(
             workspace_root({"workspace": str(absolute_workspace)}),

@@ -6,9 +6,9 @@ import type {
   DevelopmentPlanningPageOption
 } from '../typings';
 
-const STORAGE_KEY = 'aistudio-applications';
+const STORAGE_KEY = 'devagentstudio-applications';
 const LOCAL_FILE_API = '/api/local-applications';
-export const APPLICATIONS_CHANGED_EVENT = 'aistudio-applications-changed';
+export const APPLICATIONS_CHANGED_EVENT = 'devagentstudio-applications-changed';
 
 function normalizeApplications(value: unknown): ApplicationConfig[] {
   return Array.isArray(value) ? (value as ApplicationConfig[]) : [];
@@ -44,7 +44,7 @@ export function loadCachedApplications() {
 }
 
 export async function loadStoredApplications() {
-  const electronApplications = window.aiStudio?.applications;
+  const electronApplications = window.devAgentStudio?.applications;
 
   if (electronApplications) {
     try {
@@ -73,7 +73,7 @@ export async function loadStoredApplications() {
 export async function saveStoredApplications(applications: ApplicationConfig[]) {
   cacheApplications(applications);
 
-  const electronApplications = window.aiStudio?.applications;
+  const electronApplications = window.devAgentStudio?.applications;
 
   if (electronApplications) {
     try {
@@ -107,18 +107,18 @@ export async function removeStoredApplication(applicationId: string) {
   );
 }
 
-// 请求桌面主进程删除受 AIStudio 管理的真实项目目录。
+// 请求桌面主进程删除受 DevAgent Studio 管理的真实项目目录。
 export async function deleteStoredProject(workspaceRoot: string) {
-  const electronApplications = window.aiStudio?.applications;
+  const electronApplications = window.devAgentStudio?.applications;
   if (!electronApplications?.deleteProject) {
     throw new Error('当前环境不支持删除本地项目目录');
   }
   await electronApplications.deleteProject({ workspaceRoot });
 }
 
-// 请求桌面主进程仅删除工作区内由初始化计划生成的 .aistudio 目录。
+// 请求桌面主进程仅删除工作区内由初始化计划生成的 .devagentstudio 目录。
 export async function deleteStoredAgentDirectory(workspaceRoot: string) {
-  const electronApplications = window.aiStudio?.applications;
+  const electronApplications = window.devAgentStudio?.applications;
   if (!electronApplications?.deleteAgentDirectory) {
     throw new Error('当前环境不支持删除初始化计划目录');
   }
@@ -128,7 +128,7 @@ export async function deleteStoredAgentDirectory(workspaceRoot: string) {
 export async function loadWorkspaceApplicationConfig(
   workspaceRoot: string
 ): Promise<ApplicationSchemaConfig> {
-  const workspaceApi = window.aiStudio?.workspace;
+  const workspaceApi = window.devAgentStudio?.workspace;
   if (!workspaceApi?.readApplication) {
     throw new Error('当前环境不支持读取工作区 application.json');
   }
@@ -154,7 +154,7 @@ export async function inspectWorkspacePlanningArtifacts(
   pageTree: DevelopmentPlanningPageTreeNode[];
   apiContracts: DevelopmentPlanningApiContract[];
 }> {
-  const workspaceApi = window.aiStudio?.workspace;
+  const workspaceApi = window.devAgentStudio?.workspace;
   if (!workspaceApi?.inspectPlanningArtifacts) {
     throw new Error('当前环境不支持检查工作区规划产物');
   }

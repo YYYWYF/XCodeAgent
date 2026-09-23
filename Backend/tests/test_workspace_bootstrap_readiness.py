@@ -41,8 +41,8 @@ def _requested_config(*, login: bool = False, authorization: bool = False) -> di
 def _prepare_workspace(workspace: Path, *, requested: dict[str, object] | None = None, effective: dict[str, object] | None = None) -> None:
     """写入满足 Bootstrap Readiness 的最小正式产物和真实入口。"""
 
-    specs = workspace / ".xcodeagent/specs"
-    plans = workspace / ".xcodeagent/plans"
+    specs = workspace / ".devagentstudio/specs"
+    plans = workspace / ".devagentstudio/plans"
     specs.mkdir(parents=True)
     plans.mkdir(parents=True)
     for path, payload in (
@@ -59,7 +59,7 @@ def _prepare_workspace(workspace: Path, *, requested: dict[str, object] | None =
     application.write_text("class DemoApplication {}\n", encoding="utf-8")
     (workspace / "backend/pom.xml").write_text("<project />\n", encoding="utf-8")
     (workspace / ".git").mkdir()
-    state_path = workspace / ".xcodeagent/template-state.json"
+    state_path = workspace / ".devagentstudio/template-state.json"
     state_path.write_text(
         json.dumps(
             {
@@ -135,7 +135,7 @@ class WorkspaceBootstrapReadinessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             _prepare_workspace(workspace)
-            (workspace / ".xcodeagent/specs/requirement-spec.json").unlink()
+            (workspace / ".devagentstudio/specs/requirement-spec.json").unlink()
             with self.assertRaisesRegex(WorkspaceBootstrapReadinessError, "正式产物"):
                 validate_workspace_bootstrap_readiness(
                     workspace,
@@ -146,7 +146,7 @@ class WorkspaceBootstrapReadinessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             _prepare_workspace(workspace)
-            (workspace / ".xcodeagent/bootstrap-staging").mkdir()
+            (workspace / ".devagentstudio/bootstrap-staging").mkdir()
             with self.assertRaisesRegex(WorkspaceBootstrapReadinessError, "staging"):
                 validate_workspace_bootstrap_readiness(
                     workspace,

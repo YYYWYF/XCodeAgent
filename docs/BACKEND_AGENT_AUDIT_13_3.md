@@ -1,6 +1,6 @@
-# XCodeAgent 后端 Agent 节点审计报告（按 13.3 模板）
+# DevAgent Studio 后端 Agent 节点审计报告（按 13.3 模板）
 
-> 模板依据：`docs/XCODEAGENT_COMPLETE_WORKFLOW.md` 第 13.3 节「后续节点审计统一模板」
+> 模板依据：`docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md` 第 13.3 节「后续节点审计统一模板」
 > 审计日期：2026-08-11
 > 审计基线：2026-08-11 的历史工作区快照；其中 `task_preparer.py`、`task_preparer_prompt.py`
 > 的描述不代表当前实现。T11.6.4 cutover 后，Scope TaskPreparer 已删除，生产入口改为
@@ -66,10 +66,10 @@
 | 节点类型 | 直接 ChatModel（`bind_tools([ask_user])`，非 Deep Agent）+ 确定性文档同步/确认门禁；Graph 入口见 `graph/application_planning_workflow.py::_requirements` |
 | DRI / 审核人 / 批准人 | main agent 负责人 / node 实现人 / 用户（确认门禁） |
 | 目标与非目标 | 目标：生成/修订完整 RequirementSpec 并等待用户确认，覆盖应用信息、角色、模块、页面、数据源、业务流程、验收标准。非目标：不规划、不生成/修改代码、不调 subagent；只允许 `ask_user`，每轮 1–4 个实质性澄清问题，禁止开放式“还有没有更多页面/角色”追问 |
-| 触发条件 / 前置条件 | 创建规划 Graph 默认入口或 `resume_from=requirements`；前置：`workspaceRoot` 非空、lifecycle 可创建/读取、`.xcodeagent/application.json` 可读取数据源权威类型与菜单 `rootPath/enable` |
+| 触发条件 / 前置条件 | 创建规划 Graph 默认入口或 `resume_from=requirements`；前置：`workspaceRoot` 非空、lifecycle 可创建/读取、`.devagentstudio/application.json` 可读取数据源权威类型与菜单 `rootPath/enable` |
 | 当前提示词及源码位置 | `agents/main/requirements_analyzer.py::_requirements_prompt`；数据源类型只读注入，禁止推断或改写；修订时注入完整旧 spec 并要求保留稳定 ID |
 | 输入 | `state.request`、已有 `requirement_spec`（修订）、权威 `datasource_type`、菜单 rootPath/enable、本轮澄清答案或 `edited_requirement_spec`/编辑后 Markdown、`user_interaction_submission` |
-| 输出 | `requirement_spec`、`requirement_spec_path`（Markdown）、`requirement_spec_json_path`、`clarification`、`status`、`timeline`；写入 `.xcodeagent/specs/requirement-spec.md\|json`；推进 lifecycle（`ANALYZING_REQUIREMENT → GENERATING_REQUIREMENT_SPEC → AWAITING_REQUIREMENT_CONFIRMATION → GENERATING_UI_DESIGNS`） |
+| 输出 | `requirement_spec`、`requirement_spec_path`（Markdown）、`requirement_spec_json_path`、`clarification`、`status`、`timeline`；写入 `.devagentstudio/specs/requirement-spec.md\|json`；推进 lifecycle（`ANALYZING_REQUIREMENT → GENERATING_REQUIREMENT_SPEC → AWAITING_REQUIREMENT_CONFIRMATION → GENERATING_UI_DESIGNS`） |
 | 成功与校验规则 | 需求缺口进入 `pending_user_input`；澄清答案不能视为确认；确认必须来自本轮显式交互；Markdown 修改同步回 JSON（`sync_requirement_spec_from_markdown` / `apply_requirement_spec_editor_changes`）；页面路由去重并应用菜单根路径；数据源类型强制覆盖为权威类型；重复澄清抑制（仅放行“其他/补充/是否还有”类可选追加问题） |
 | 硬依赖 / 可选依赖 | 硬依赖：`application.json`、spec_documents、requirement_spec 服务、ask_user 工具；可选：已存在 spec（修订）、编辑后 Markdown |
 | 可并行条件 / 冲突资源 / join 条件 | 不可并行（单节点串行）；冲突资源：spec md/json 文件与 lifecycle JSON（原子写）；无 join |
@@ -78,7 +78,7 @@
 | 最大重试次数 / 退避 / 超时 | 模型层 `MODEL_MAX_RETRIES=2`、`MODEL_TIMEOUT_SECONDS=120`；无指数退避；节点本身不重试 |
 | 成功路由 / 失败路由 / 修复后回测路由 | `confirmed → ui_confirmation`；`requires_user_input → END`（await_user_input）；失败/取消 → 用户显式重跑同阶段 |
 | 用户确认载荷 / basedOnRevision | `mode=requirement_spec_confirmation`，含 `spec_summary` 与文本确认问题；无 revision/hash 字段，靠文件路径 + confirmation_status 恢复 |
-| 可观测 evidence / 日志和持久化路径 | `llm.token` 流式事件、ask_user 澄清载荷、`.xcodeagent/specs/requirement-spec.md\|json`、lifecycle JSON、SQLite checkpoint |
+| 可观测 evidence / 日志和持久化路径 | `llm.token` 流式事件、ask_user 澄清载荷、`.devagentstudio/specs/requirement-spec.md\|json`、lifecycle JSON、SQLite checkpoint |
 
 ### 3.2 `ui_confirmation`（ui_design）/ UI 设计稿生成与确认
 
@@ -90,10 +90,10 @@
 | 目标与非目标 | 目标：为每个页面生成纯视觉 React + antd5 + `@ant-design/pro-components` 设计稿（内联 Mock、无 API、无 useEffect/fetch），等待全部页面确认。非目标：不 clone 模板工程、不装依赖、不启 dev server、不改需求、不注册菜单 |
 | 触发条件 / 前置条件 | requirements 确认后；`resume_from=ui_confirmation`；前置：`requirement_spec.pages` 存在且确认。首次进入只生成骨架（pending），用户逐页“选模板 / 换一换 / 多页调整”后经 `ui_design_action` 回填 |
 | 当前提示词及源码位置 | `services/ui_design_generator.py::_build_ui_design_prompt`（内联 antd-ui-design SKILL.md 全文）；失败修复 `_build_repair_prompt`；调整 `_build_adjust_prompt` |
-| 输入 | `requirement_spec.pages`（pageId/name/path/description）、`page_key`、`ui_design_action`（select_template/regenerate/adjust_pages）、已有落盘 code（恢复时复用）、`.xcodeagent/ui-design` 目录 |
-| 输出 | `.xcodeagent/ui-design/pages/<PageKey>/index.tsx`、内联 `code`、`code_path/menu_path/route_path/status`、`ui-designs.json`（`confirmation_status`）、`ui_confirmation.progress` 流式事件 |
+| 输入 | `requirement_spec.pages`（pageId/name/path/description）、`page_key`、`ui_design_action`（select_template/regenerate/adjust_pages）、已有落盘 code（恢复时复用）、`.devagentstudio/ui-design` 目录 |
+| 输出 | `.devagentstudio/ui-design/pages/<PageKey>/index.tsx`、内联 `code`、`code_path/menu_path/route_path/status`、`ui-designs.json`（`confirmation_status`）、`ui_confirmation.progress` 流式事件 |
 | 成功与校验规则 | 非空 + `export default` + 长度 ≥30；import 仅白名单（react/react-dom/antd/pro-components/icons/cssinjs/dayjs）；无未定义 JSX 引用；esbuild TSX 语法校验（缺失时仅跳过）；失败按独立预算回喂修复，耗尽后该页 `generation_failed`，绝不把未通过代码落成可用设计稿；`regenerate` 成功即置该页 `confirmed` |
-| 硬依赖 / 可选依赖 | 硬依赖：antd-ui-design 技能全文、`.xcodeagent/ui-design` 目录；可选：esbuild、已存在设计稿 |
+| 硬依赖 / 可选依赖 | 硬依赖：antd-ui-design 技能全文、`.devagentstudio/ui-design` 目录；可选：esbuild、已存在设计稿 |
 | 可并行条件 / 冲突资源 / join 条件 | 生成并发上限 3（`_UI_DESIGN_CONCURRENCY=3`）；`page_key` 用 `used_keys` 去重防写冲突；adjust 串行防限流/写冲突 |
 | 副作用 / 授权范围 / 幂等键 / checkpoint | 写 ui-design 目录与 `ui-designs.json`，推进 lifecycle 至 `AWAITING_UI_DESIGN_CONFIRMATION`；幂等键：`page_key + code_path`；checkpoint 恢复依赖文件复用 |
 | 错误分类 | 模型输出不合格 → 自动修复；修复耗尽 → 单页 `generation_failed`（不阻断其他页）；全部确认缺失 → `requires_user_input` |
@@ -157,7 +157,7 @@
 | 触发条件 / 前置条件 | 上游 `inspect_workspace`；`resume_from=prepare_build_tasks`；前置：ProjectPlan confirmed（未确认先走确认/修订分支）、目标详情和绑定实体设计存在 |
 | 当前提示词及源码位置 | `agents/main/task_preparer_prompt.py::build_task_preparation_prompt`（规划器自有七段规则、后端真实目录树、Java 8 约束、四阶段 stage 规则；不读取或内联 Skill）；Static 复用同一 Prompt 的范围化规则 |
 | 输入 | 确认 ProjectPlan、`build_execution_scope`、PageDetail/EndpointDetail、有界实体设计摘要、WorkspaceSnapshot（裁剪到 80 项/12k 字符）、已有 DAG、可复用 Unit |
-| 输出 | `build-dag.v3`（build_units/unit_graph/task_registry/task_graph/tasks/execution batches）、`build_context`、`dag_generation_progress` 七阶段快照、`.xcodeagent/plans/build-task-plan.json`、`BUILD_TASK_DAG.md` |
+| 输出 | `build-dag.v3`（build_units/unit_graph/task_registry/task_graph/tasks/execution batches）、`build_context`、`dag_generation_progress` 七阶段快照、`.devagentstudio/plans/build-task-plan.json`、`BUILD_TASK_DAG.md` |
 | 成功与校验规则 | Unit skeleton 合法；契约校验（页面依赖、API contract scope）；模型任务归一化后强制置空验收字段，工程验收由确定性编译器按 change_scope/allowed_paths/菜单/API 契约生成；正常 Build 不含 database Unit/owner；任务 ID/依赖/拓扑/循环/批次校验；页面 PageKey 与实时唯一目录纠正、漏报菜单登记时确定性补齐 |
 | 硬依赖 / 可选依赖 | 硬依赖：确认 ProjectPlan、详情、实体摘要和快照；可选：可复用 Unit 与已有 DAG |
 | 可并行条件 / 冲突资源 / join 条件 | 编译阶段串行；冲突资源：build-task-plan.json；执行批次（`execution.batches`）决定后续 build 并行面 |

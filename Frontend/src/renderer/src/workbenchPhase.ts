@@ -4,9 +4,9 @@ import {
   removeLocalStorageKeysWithPrefix
 } from './workbenchPhaseNavigation'
 
-const DEVELOPMENT_ENTRY_STORAGE_PREFIX = 'xcodeagent:enter-dev-confirmed:'
-const DEVELOPMENT_ENTRY_EVENT = 'xcodeagent:development-entered'
-const WORKBENCH_PHASE_STORAGE_PREFIX = 'xcodeagent:workbench-phase:'
+const DEVELOPMENT_ENTRY_STORAGE_PREFIX = 'devagentstudio:enter-dev-confirmed:'
+const DEVELOPMENT_ENTRY_EVENT = 'devagentstudio:development-entered'
+const WORKBENCH_PHASE_STORAGE_PREFIX = 'devagentstudio:workbench-phase:'
 
 /**
  * 手动阶段覆盖按「应用 + 版本」隔离。覆盖表达的是"用户在当前这次迭代旅程里
@@ -63,7 +63,7 @@ function recordPhaseOverrideTrace(input: {
   stage?: string
 }): void {
   try {
-    const key = `xcodeagent:workbench-phase-trace:${input.applicationId}:${input.versionId}`
+    const key = `devagentstudio:workbench-phase-trace:${input.applicationId}:${input.versionId}`
     const entry = JSON.stringify({
       at: new Date().toISOString(),
       phase: input.phase,

@@ -6,7 +6,7 @@ import { build } from 'vite'
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
 const outputDirectory = await fs.mkdtemp(
-  path.join(os.tmpdir(), 'xcodeagent-development-artifacts-')
+  path.join(os.tmpdir(), 'devagentstudio-development-artifacts-')
 )
 const outputFile = path.join(outputDirectory, 'developmentArtifacts.test.mjs')
 

@@ -214,7 +214,7 @@ class AuthorizationFrontendResourcesExecutorTests(unittest.TestCase):
     def _context(self, workspace: Path, plan: dict | None = None) -> dict:
         """构造 executor 的显式 workspace/formal plan 上下文。"""
 
-        config_path = workspace / ".xcodeagent/application.json"
+        config_path = workspace / ".devagentstudio/application.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(
             '{"schemaVersion":6,"configRevision":1,"auth":{"enable":true},"authorization":{"enabled":true,"initialAdministratorSubjects":["admin"]}}',

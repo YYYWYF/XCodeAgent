@@ -115,20 +115,31 @@ export interface ApplicationSchemaConfig {
   appName: string
   appIcon: string
   senario: string
-  /** 应用首个版本号标签，如 v1.0；新建时由用户填写，作为版本链起点。 */
-  versionNo: string
   /**
-   * 应用所有版本里程碑，按时间正序；单线只读归档，无分叉。
+   * 应用的所有分支，按创建时间正序。当前分支可编辑，其余分支只读回看。
    *
-   * application.json 确实持久化这份版本链（`applicationSchemaOf` 不剥离它，
-   * 前端发布/迭代后经 `saveWorkspaceApplicationConfig` 写回）。此前类型漏声明，
-   * 导致读取方只能绕开它、改用内存里的副本，磁盘上的权威版本链被丢弃。
+   * application.json 确实持久化这份分支表（`applicationSchemaOf` 不剥离它，
+   * 前端提交/迭代后经 `saveWorkspaceApplicationConfig` 写回）。它同时是「哪些分支
+   * 属于本应用」的登记表 —— 同一个远端仓库里可能有多个应用的分支，不能只按远端
+   * 分支列表推断。
    */
-  versions?: ApplicationVersion[]
-  /** 当前迭代版本指针；指向 versions 中正在编辑的版本。 */
-  currentVersionId?: string
+  branches?: ApplicationBranch[]
   /** 应用代码提交目标仓库地址（码云/GitHub）；当前阶段固定写死，后续开放自定义。 */
   repoUrl: string
+  /**
+   * 当前正在开发的分支名；指向 branches 中正在编辑的那条。
+   *
+   * 它同时是工作区仓库实际 checkout 的分支名，也是提交推送的目标分支。
+   * 为空表示该应用未配置分支（如「添加本地文件夹」接入的工作区），跳过远端分支动作。
+   */
+  branchName?: string
+  /**
+   * 用户在新建应用时是否确认过"覆盖远端已存在的同名分支"。
+   *
+   * 只有确认过才允许 force 推送；否则用普通推送 —— 远端分支历史分叉时会被 Git 拒绝，
+   * 从而避免悄悄覆盖别处刚建出来的分支。
+   */
+  branchOverwriteConfirmed?: boolean
   terminal: ApplicationTerminal
   layout: {
     type: ApplicationLayoutType
@@ -420,42 +431,22 @@ export interface ApplicationConfig extends ApplicationSchemaConfig, ApplicationI
 }
 
 /**
- * 应用版本状态：iterating=当前迭代中（可改）；released=已生成版本里程碑（锁定只读）。
- * 单线里程碑模型：versions 是链式只读归档，无分叉。
+ * 应用分支。分支是代码的组织单位：一个应用可以有多条分支，当前分支可编辑，
+ * 其余分支只读回看。
+ *
+ * 每条分支自带私有 lifecycle —— 旅程按分支隔离，回看历史分支时阶段条停在
+ * 该分支冻结的那一刻。分支名同时是 Git 分支名，也是远端仓库里的分支名。
  */
-export type ApplicationVersionStatus = 'iterating' | 'released'
-
-/**
- * 应用版本。每个版本自带私有 lifecycle（旅程按版本隔离）。
- * 新建应用自动产生首个版本（iterating，标签取自表单 versionNo）；
- * 生成版本后锁定为 released；发起新迭代派生下一版本（minor 递增）。
- */
-export interface ApplicationVersion {
-  id: string
-  /** 人类可读版本号，如 v1.0 / v1.1。 */
-  versionLabel: string
-  major: number
-  minor: number
-  status: ApplicationVersionStatus
-  /** 派生自哪个版本（首个为 undefined）。单线链式。 */
-  parentVersionId?: string
-  /** 回退版本记录其内容来源，版本链仍以前一最新版本为父节点保持单向递增。 */
-  restoredFromVersionId?: string
-  /** 版本创建时间（迭代发起时刻）。 */
+export interface ApplicationBranch {
+  /** 分支名，同时是 Git 分支名（唯一标识）。 */
+  name: string
+  /** 分支创建时间（发起迭代选择新建分支的时刻，或首个分支的创建时刻）。 */
   createdAt: number
-  /** 生成版本时间（status 转 released 时写）。 */
-  releasedAt?: number
-  /** 版本开发日志（类似码云提交记录，记录本版本开发了什么；生成版本时用户输入）。 */
+  /** 分支开发日志（提交推送时用户输入的变更说明）。 */
   description?: string
-  /** 生成版本时打的码云提交与 Tag（模拟值，生成完成写）。 */
-  gitRef?: {
-    commitSha: string
-    tag: string
-    committedAt: number
-  }
-  /** 版本私有生命周期。旅程阶段由它推导。 */
+  /** 分支私有生命周期。旅程阶段由它推导。 */
   lifecycle: ApplicationLifecycle
-  /** 生成版本时冻结的资产快照（已生成版本回看用）。 */
+  /** 提交推送时冻结的资产快照（历史分支回看用）。 */
   artifactSummary?: {
     pageIds?: string[]
     endpointIds?: string[]
@@ -463,11 +454,16 @@ export interface ApplicationVersion {
     /** 生成的可部署脚本产物标识（本平台仅产出代码与脚本，不提供运行环境）。 */
     deployableScript?: string
   }
-  /** 发布时冻结的内容快照（已发布版本回看用）。 */
+  /** 提交推送时冻结的内容快照（历史分支回看用）。 */
   snapshot?: {
     pageIds?: string[]
     endpointIds?: string[]
     requirementSummary?: string
+  }
+  /** 最近一次成功推送到远端时的提交事实。 */
+  gitRef?: {
+    commitSha: string
+    committedAt: number
   }
 }
 
@@ -476,8 +472,9 @@ export interface ApplicationDraft {
   appIcon: string
   senario: string
   projectPath: string
-  versionNo: string
   repoUrl: string
+  /** 应用代码在远端仓库中的分支名；默认 dev，用户可改。 */
+  branchName: string
   terminal: ApplicationTerminal
   layout: ApplicationSchemaConfig['layout']
   theme: ApplicationSchemaConfig['theme']

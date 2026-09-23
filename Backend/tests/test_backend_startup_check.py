@@ -64,7 +64,7 @@ class BackendStartupCheckTests(unittest.TestCase):
         with patch.object(self.registry, 'managed_process', side_effect=spawn):
             result = startup.run_backend_startup_check(
                 root=self.root, backend_root=self.backend,
-                log_root=self.root / '.xcodeagent/runtime/tests',
+                log_root=self.root / '.devagentstudio/runtime/tests',
                 run_id=run_id, maven_command='mvn',
             )
         self.assertEqual(self.registry.active_process_ids(self.root), [])
@@ -126,7 +126,7 @@ class BackendStartupCheckTests(unittest.TestCase):
             self.registry.cancel_run('run')
             result = startup.run_backend_startup_check(
                 root=self.root, backend_root=self.backend,
-                log_root=self.root / '.xcodeagent/runtime/tests', run_id='run', maven_command='mvn',
+                log_root=self.root / '.devagentstudio/runtime/tests', run_id='run', maven_command='mvn',
             )
             self.assertFalse(result['passed'])
             self.assertIsNone(preview.poll())
@@ -197,7 +197,7 @@ class BackendStartupCheckTests(unittest.TestCase):
         ):
             result = startup.run_backend_startup_check(
                 root=self.root, backend_root=self.backend,
-                log_root=self.root / '.xcodeagent/runtime/tests', run_id='run', maven_command='mvn',
+                log_root=self.root / '.devagentstudio/runtime/tests', run_id='run', maven_command='mvn',
             )
         self.assertFalse(result['passed'])
         self.assertFalse(result['execution']['cleanup_succeeded'])

@@ -255,7 +255,7 @@ def _safe_repair_path(path: str) -> bool:
     """拒绝越出工作区、敏感文件和内部正式工件路径。"""
 
     parts = path.casefold().split("/")
-    return bool(path) and ".." not in parts and ".xcodeagent" not in parts and not any(
+    return bool(path) and ".." not in parts and ".devagentstudio" not in parts and not any(
         part == ".env" or part.startswith(".env.") for part in parts
     )
 

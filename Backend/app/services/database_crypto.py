@@ -14,13 +14,14 @@ from typing import Any
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
+from app.branding import PRODUCT_ID
 from app.services.user_skills import user_skills_working_dir
 
 
 logger = logging.getLogger(__name__)
 
 
-SECRET_PREFIX = "xcodeagent-secret"
+SECRET_PREFIX = f"{PRODUCT_ID}-secret"
 SECRET_VERSION = "v1"
 SECRET_ALGORITHM = "rsa-oaep-256"
 PUBLIC_ALGORITHM = "RSA-OAEP-256"
@@ -92,7 +93,7 @@ def database_encryption_metadata(*, key_file: Path | None = None) -> dict[str, A
 
 
 def is_encrypted_password(value: str) -> bool:
-    """判断字符串是否声明为 AIStudio 版本化密文。"""
+    """判断字符串是否声明为 DevAgent Studio 版本化密文。"""
 
     return value.startswith(f"{SECRET_PREFIX}:")
 
@@ -126,11 +127,11 @@ def _ensure_key_directory(key_directory: Path) -> None:
 
     environment_root = key_directory.parent
     if environment_root.is_symlink():
-        raise DatabaseCryptoError("AIStudio 用户级密钥目录不允许使用符号链接。")
+        raise DatabaseCryptoError("DevAgent Studio 用户级密钥目录不允许使用符号链接。")
     try:
         environment_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         if key_directory.is_symlink():
-            raise DatabaseCryptoError("AIStudio 用户级密钥目录不允许使用符号链接。")
+            raise DatabaseCryptoError("DevAgent Studio 用户级密钥目录不允许使用符号链接。")
         key_directory.mkdir(mode=0o700, exist_ok=True)
         _set_posix_mode(key_directory, 0o700)
     except DatabaseCryptoError:

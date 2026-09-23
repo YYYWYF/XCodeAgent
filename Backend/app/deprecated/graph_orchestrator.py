@@ -112,9 +112,9 @@
 #                 "artifacts": {},
 #                 "retention": run_store_capabilities()["retention"],
 #                 "message": (
-#                     "当前应用没有绑定 workspaceRoot，未写入 .xcodeagent 运行产物。"
+#                     "当前应用没有绑定 workspaceRoot，未写入 .devagentstudio 运行产物。"
 #                     if normalized_action == "dispatch"
-#                     else "计划尚未确认执行，暂未写入 .xcodeagent 运行产物。"
+#                     else "计划尚未确认执行，暂未写入 .devagentstudio 运行产物。"
 #                 ),
 #             }
 #         )
@@ -191,7 +191,7 @@
 #                 "runPath": "",
 #                 "artifacts": {},
 #                 "retention": run_store_capabilities()["retention"],
-#                 "message": "当前应用没有绑定 workspaceRoot，未写入 .xcodeagent 运行产物。",
+#                 "message": "当前应用没有绑定 workspaceRoot，未写入 .devagentstudio 运行产物。",
 #             }
 #         )
 #         state.update(
@@ -317,7 +317,7 @@
 #             "action": ["start", "answer", "finalize", "dispatch", "verify"],
 #             "orchestratorState": "State returned from the previous orchestrator run.",
 #             "plannerState": "Optional state returned from requirement_planner.",
-#             "application": "Optional XCodeAgent application metadata.",
+#             "application": "Optional DevAgent Studio application metadata.",
 #             "workspaceRoot": "Optional absolute workspace root selected by the desktop app.",
 #         },
 #         "output": {

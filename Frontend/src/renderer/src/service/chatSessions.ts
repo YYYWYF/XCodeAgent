@@ -151,12 +151,12 @@ const CHAT_SESSION_WORKBENCH_PHASES: WorkbenchPhase[] = [
   'review',
   'acceptance',
 ];
-const ACTIVE_SESSION_STORAGE_PREFIX = 'xcodeagent:active-session:';
+const ACTIVE_SESSION_STORAGE_PREFIX = 'devagentstudio:active-session:';
 
 type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>;
 
 function storageKey(workspaceRoot: string, editorMode: EditorMode): string {
-  return `xcode-agent-sessions:${workspaceRoot}:${editorMode}`;
+  return `devagentstudio-sessions:${workspaceRoot}:${editorMode}`;
 }
 /** 生成指定应用和编辑模式的当前会话恢复键。 */
 function activeSessionStorageKey(
@@ -707,11 +707,11 @@ export function chatSessionToSummary(session: ChatSessionRecord): ChatSessionSum
 }
 
 export function canListSessionWorkspaces(): boolean {
-  return Boolean(window.xcodeAgent?.sessions?.listWorkspaces || getElectronInvoke());
+  return Boolean(window.devAgentStudio?.sessions?.listWorkspaces || getElectronInvoke());
 }
 
 export async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
-  const sessionApi = window.xcodeAgent?.sessions;
+  const sessionApi = window.devAgentStudio?.sessions;
   const legacyInvoke = getElectronInvoke();
   if (!sessionApi?.listWorkspaces && !legacyInvoke) return [];
 
@@ -734,7 +734,7 @@ export async function listChatSessions(
   workspaceRoot: string,
   editorMode: EditorMode,
 ): Promise<ChatSessionSummary[]> {
-  const sessionApi = window.xcodeAgent?.sessions;
+  const sessionApi = window.devAgentStudio?.sessions;
   if (sessionApi) {
     try {
       const result = await sessionApi.list({ workspaceRoot, editorMode });
@@ -754,7 +754,7 @@ export async function readChatSession(
   editorMode: EditorMode,
   sessionId: string,
 ): Promise<ChatSessionRecord> {
-  const sessionApi = window.xcodeAgent?.sessions;
+  const sessionApi = window.devAgentStudio?.sessions;
   if (sessionApi) {
     try {
       const result = await sessionApi.read({ workspaceRoot, editorMode, sessionId });
@@ -773,7 +773,7 @@ export async function readChatSession(
 
 /** 通过主进程统一创建实际聊天会话，并为前三阶段分配不可变的 Thread 与 sequence。 */
 export async function createChatSession(input: CreateChatSessionInput): Promise<ChatSessionRecord> {
-  const sessionApi = window.xcodeAgent?.sessions
+  const sessionApi = window.devAgentStudio?.sessions
   if (sessionApi?.create) {
     const result = await sessionApi.create(input)
     const session = normalizeSession(result.session)
@@ -834,7 +834,7 @@ export async function createChatSession(input: CreateChatSessionInput): Promise<
 }
 
 export async function saveChatSession(session: ChatSessionRecord): Promise<ChatSessionSummary> {
-  const sessionApi = window.xcodeAgent?.sessions
+  const sessionApi = window.devAgentStudio?.sessions
   if (sessionApi) {
     const result = await sessionApi.save({
       workspaceRoot: session.workspaceRoot,
@@ -864,7 +864,7 @@ export async function deleteChatSession(
   editorMode: EditorMode,
   sessionId: string,
 ): Promise<void> {
-  const sessionApi = window.xcodeAgent?.sessions;
+  const sessionApi = window.devAgentStudio?.sessions;
   if (sessionApi) {
     await sessionApi.delete({ workspaceRoot, editorMode, sessionId });
     return;

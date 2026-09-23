@@ -1,3 +1,5 @@
+
+from app.branding import WORKSPACE_ARTIFACT_DIR
 import json
 import re
 import logging
@@ -1285,7 +1287,7 @@ def _should_suppress_repeat_clarification(
 def _apply_menus_root_path_to_pages(spec: dict, state: ProjectState) -> None:
     """从 application.json 读取 menus.rootPath 并拼接到所有页面路由前。"""
     try:
-        app_file = workspace_root(state) / ".xcodeagent" / "application.json"
+        app_file = workspace_root(state) / WORKSPACE_ARTIFACT_DIR / "application.json"
         if not app_file.is_file():
             return
         app_config = json.loads(app_file.read_text(encoding="utf-8"))

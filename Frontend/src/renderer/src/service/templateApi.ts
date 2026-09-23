@@ -7,11 +7,12 @@ import {
   bootstrapApplicationTemplateGeneration,
   retryApplicationTemplateGeneration
 } from './applicationLifecycle'
+import type { ApplicationTemplateBootstrapResult } from './applicationLifecycle'
 
 /** 控制应用模板初始化入口是否启用。 */
 export const APPLICATION_TEMPLATE_GENERATION_ENABLED = true
 
-const readinessTasks = new Map<string, Promise<ApplicationLifecycle>>()
+const readinessTasks = new Map<string, Promise<ApplicationTemplateBootstrapResult>>()
 
 /** 判断 Bootstrap 阶段只剩后端持久状态、而当前 renderer 没有对应任务。 */
 export function isTemplateGenerationOrphaned(
@@ -39,7 +40,7 @@ export function isTemplateReconcileRetryable(
 /** 将工作区转换成当前桌面平台可稳定去重的任务键。 */
 function templateReadinessKey(workspaceRoot: string): string {
   const value = workspaceRoot.trim().replace(/[\\/]+$/, '')
-  return window.xcodeAgent?.platform === 'win32' ? value.toLowerCase() : value
+  return window.devAgentStudio?.platform === 'win32' ? value.toLowerCase() : value
 }
 
 /** 通过单次 AG-UI 动作触发 Server-owned Bootstrap，前端不再下载或克隆模板。 */
@@ -47,21 +48,21 @@ async function runApplicationTemplateReadiness(
   application: ApplicationConfig,
   threadId: string,
   retry = false
-): Promise<ApplicationLifecycle> {
-  const lifecycle = retry
+): Promise<ApplicationTemplateBootstrapResult> {
+  const result = retry
     ? await retryApplicationTemplateGeneration(application, threadId)
     : await bootstrapApplicationTemplateGeneration(application, threadId)
-  if (lifecycle.initialization.stage !== 'ready_for_workbench') {
-    throw new Error(lifecycle.error?.message || '应用模板初始化未通过完成门禁。')
+  if (result.lifecycle.initialization.stage !== 'ready_for_workbench') {
+    throw new Error(result.lifecycle.error?.message || '应用模板初始化未通过完成门禁。')
   }
-  return lifecycle
+  return result
 }
 
 /** 以工作区为粒度合并同一次 TechnicalPlan 确认触发的并发 Bootstrap 请求。 */
 export function ensureApplicationTemplateReadiness(
   application: ApplicationConfig,
   threadId: string
-): Promise<ApplicationLifecycle> {
+): Promise<ApplicationTemplateBootstrapResult> {
   const workspaceRoot = application.workspaceRoot || application.projectParentPath || ''
   if (!workspaceRoot.trim()) return Promise.reject(new Error('应用缺少 workspaceRoot。'))
   const key = templateReadinessKey(workspaceRoot)
@@ -79,7 +80,7 @@ export function ensureApplicationTemplateReadiness(
 export function retryApplicationTemplateReadiness(
   application: ApplicationConfig,
   threadId: string
-): Promise<ApplicationLifecycle> {
+): Promise<ApplicationTemplateBootstrapResult> {
   const workspaceRoot = application.workspaceRoot || application.projectParentPath || ''
   if (!workspaceRoot.trim()) return Promise.reject(new Error('应用缺少 workspaceRoot。'))
   const key = templateReadinessKey(workspaceRoot)

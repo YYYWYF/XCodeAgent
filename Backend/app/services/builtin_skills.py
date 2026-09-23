@@ -9,8 +9,8 @@ from pydantic import Field
 from app.services.user_skills import ApiModel, parse_skill_frontmatter
 
 
-BUILTIN_SKILLS_DIR_ENV = "XCODEAGENT_BUILTIN_SKILLS_DIR"
-BUILTIN_SKILLS_VIRTUAL_ROOT = "/.xcodeagent/builtin-skills/"
+BUILTIN_SKILLS_DIR_ENV = "DEVAGENTSTUDIO_BUILTIN_SKILLS_DIR"
+BUILTIN_SKILLS_VIRTUAL_ROOT = "/.devagentstudio/builtin-skills/"
 REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
 CODE_BLOCK_TEMPLATE_SKILL_NAME = "code-block-template"
 SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME = "springboot-backend-generate"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import os
 from collections.abc import Callable
@@ -31,7 +33,7 @@ def _empty_list(value: Any) -> bool:
 def _plan_declares_no_backend_business(root: Path) -> bool | None:
     """从 TechnicalPlan 判定是否无后端业务；计划文件不可用时返回 None。"""
 
-    plan_path = root / ".xcodeagent" / "plans" / "technical-plan.json"
+    plan_path = root / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
     try:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -44,7 +46,7 @@ def _plan_declares_no_backend_business(root: Path) -> bool | None:
 def _lifecycle_declares_no_backend_business(root: Path) -> bool | None:
     """从 lifecycle 的已确认产物判定是否无后端业务；状态文件不可用时返回 None。"""
 
-    lifecycle_path = root / ".xcodeagent" / "application-lifecycle.json"
+    lifecycle_path = root / WORKSPACE_ARTIFACT_DIR / "application-lifecycle.json"
     try:
         lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -68,7 +70,7 @@ def _application_has_no_backend_business(root: Path) -> bool:
     与 integration_test_runner._application_has_no_backend_business 同样的判定，
     但直接读工作区状态文件，因为启动入口只有 workspace_path 而无 Graph state。
 
-    计划文件优先，缺失时回退读 lifecycle：发起新迭代会清空 `.xcodeagent/plans`，
+    计划文件优先，缺失时回退读 lifecycle：发起新迭代会清空 `.devagentstudio/plans`，
     此时"计划文件不存在"只说明还没规划，**不等于"需要后端"**——按后者处理会让纯前端
     应用白白拉起一个后端（慢、占端口，且本机没有 java 时直接启动失败、连预览都看不到）。
     两处状态都读不到时才保守认为需要后端。
@@ -291,7 +293,7 @@ def inspect_project_preview(workspace_path: str | Path) -> dict[str, Any]:
     """只读取 standard preview PID 存活状态，不启动、停止或修改工作区。"""
 
     root = Path(workspace_path).expanduser().resolve()
-    runtime_root = root / ".xcodeagent" / "runtime" / "launch"
+    runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
     backend = {"running": _pid_file_is_running(runtime_root / "backend.pid")}
     frontend = {"running": _pid_file_is_running(runtime_root / "frontend.pid")}
     return {

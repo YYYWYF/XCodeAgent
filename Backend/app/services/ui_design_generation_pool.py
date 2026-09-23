@@ -61,7 +61,7 @@ class UiDesignGenerationTask:
 
     workspace: str  # 工作区绝对路径（workspace_root(state)）
     project_id: str  # 工作区 project_id，仅用于重建 state 落盘
-    project_dir: str  # 设计稿目录（.xcodeagent/ui-design）
+    project_dir: str  # 设计稿目录（.devagentstudio/ui-design）
     page_id: str
     spec_page: dict[str, Any]  # ProductPlan 单页事实（pageId/name/actions/items）
     page_key: str

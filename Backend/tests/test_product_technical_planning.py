@@ -349,7 +349,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertIn("停用人员", prompt)
         self.assertIn("action.name 必须与该名称完全相同", prompt)
 
-    def test_product_plan_filters_xcodeagent_workflow_acceptance(self) -> None:
+    def test_product_plan_filters_devagentstudio_workflow_acceptance(self) -> None:
         """ProductPlan 页面级和产品级验收都只能描述生成应用自身。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
@@ -1443,7 +1443,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             "pages": [
                 {
                     "pageId": page["pageId"],
-                    "code_path": f".xcodeagent/ui-design/pages/{page['pageId']}/index.tsx",
+                    "code_path": f".devagentstudio/ui-design/pages/{page['pageId']}/index.tsx",
                     "code_sha256": "a" * 64,
                 }
                 for page in product_plan["pages"]
@@ -1703,7 +1703,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             "pages": [
                 {
                     "pageId": page_id,
-                    "code_path": ".xcodeagent/ui-design/pages/Inventory/index.tsx",
+                    "code_path": ".devagentstudio/ui-design/pages/Inventory/index.tsx",
                     "code_sha256": "a" * 64,
                     "controls": [
                         {

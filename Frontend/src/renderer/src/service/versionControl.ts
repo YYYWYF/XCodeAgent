@@ -24,7 +24,7 @@ type VersionControlAgUiPayload = {
 
 /** 返回独立版本控制 AG-UI 动作地址。 */
 function getVersionControlUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/version-control/run`
     : '/api/agent/version-control/run'

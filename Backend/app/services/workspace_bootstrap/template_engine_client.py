@@ -37,7 +37,7 @@ class TemplateEngineClient:
         if not self._base_url:
             raise TemplateEngineError("Template Engine 地址未配置。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
-        descriptor, name = tempfile.mkstemp(prefix="xcodeagent-template-", suffix=".zip", dir=directory)
+        descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-", suffix=".zip", dir=directory)
         temporary_path = Path(name)
         digest = hashlib.sha256()
         size = 0
@@ -87,7 +87,7 @@ class TemplateEngineClient:
         if mode not in {"APPLY", "RECONCILE"}:
             raise TemplateEngineError("Template Engine 更新 mode 必须是 APPLY 或 RECONCILE。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
-        descriptor, name = tempfile.mkstemp(prefix="xcodeagent-template-update-", suffix=".zip", dir=directory)
+        descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-update-", suffix=".zip", dir=directory)
         temporary_path = Path(name)
         digest = hashlib.sha256()
         size = 0

@@ -100,7 +100,7 @@ type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>
 
 /** 生成浏览器降级存储中的工作区会话键。 */
 function storageKey(workspaceRoot: string, editorMode: EditorMode): string {
-  return `aistudio-sessions:${workspaceRoot}:${editorMode}`
+  return `devagentstudio-sessions:${workspaceRoot}:${editorMode}`
 }
 
 function getElectronInvoke(): ElectronInvoke | undefined {
@@ -493,11 +493,11 @@ export function createChatSessionTitle(content: string): string {
 }
 
 export function canListSessionWorkspaces(): boolean {
-  return Boolean(window.aiStudio?.sessions?.listWorkspaces || getElectronInvoke())
+  return Boolean(window.devAgentStudio?.sessions?.listWorkspaces || getElectronInvoke())
 }
 
 export async function listSessionWorkspaces(): Promise<SessionWorkspaceSummary[]> {
-  const sessionApi = window.aiStudio?.sessions
+  const sessionApi = window.devAgentStudio?.sessions
   const legacyInvoke = getElectronInvoke()
   if (!sessionApi?.listWorkspaces && !legacyInvoke) return []
 
@@ -522,7 +522,7 @@ export async function listChatSessions(
   editorMode: EditorMode,
   applicationId?: string
 ): Promise<ChatSessionSummary[]> {
-  const sessionApi = window.aiStudio?.sessions
+  const sessionApi = window.devAgentStudio?.sessions
   if (sessionApi) {
     try {
       const result = await sessionApi.list({ workspaceRoot, editorMode, applicationId })
@@ -543,7 +543,7 @@ export async function readChatSession(
   editorMode: EditorMode,
   sessionId: string
 ): Promise<ChatSessionRecord> {
-  const sessionApi = window.aiStudio?.sessions
+  const sessionApi = window.devAgentStudio?.sessions
   if (sessionApi) {
     try {
       const result = await sessionApi.read({ workspaceRoot, editorMode, sessionId })
@@ -564,7 +564,7 @@ export async function readChatSession(
 
 /** 保存会话并返回用于导航展示的最新摘要。 */
 export async function saveChatSession(session: ChatSessionRecord): Promise<ChatSessionSummary> {
-  const sessionApi = window.aiStudio?.sessions
+  const sessionApi = window.devAgentStudio?.sessions
   if (sessionApi) {
     try {
       const result = await sessionApi.save({
@@ -591,7 +591,7 @@ export async function deleteChatSession(
   editorMode: EditorMode,
   sessionId: string
 ): Promise<void> {
-  const sessionApi = window.aiStudio?.sessions
+  const sessionApi = window.devAgentStudio?.sessions
   if (sessionApi) {
     await sessionApi.delete({ workspaceRoot, editorMode, sessionId })
     return

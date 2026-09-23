@@ -40,7 +40,7 @@ export function LoginApp(): JSX.Element {
 
   /** 调用 Electron 登录流程并保持按钮加载状态。 */
   const handleLogin = async (): Promise<void> => {
-    const authApi = window.xcodeAgent?.auth
+    const authApi = window.devAgentStudio?.auth
     if (!authApi?.login) {
       message.error('当前环境不支持登录。')
       return

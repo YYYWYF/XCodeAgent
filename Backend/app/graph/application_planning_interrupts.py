@@ -52,7 +52,7 @@ def application_planning_review_payload(
         clarification = {
             "mode": "planning_stage_entry_confirmation",
             "status": "requires_user_input",
-            "question_schema": "xcodeagent.planning-stage-entry.v1",
+            "question_schema": "devagentstudio.planning-stage-entry.v1",
             "questions": [],
             "assumptions": [],
             "message": (

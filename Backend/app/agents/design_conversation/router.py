@@ -85,7 +85,7 @@ def _classification_prompt(
         "ui": _ui_summary(ui_designs),
     }
     return (
-        "You are the dedicated design-conversation routing agent for XCodeAgent.\n"
+        "You are the dedicated design-conversation routing agent for DevAgent Studio.\n"
         "Your only job is to decide the earliest formal design artifact node that must be revised. "
         "Return one JSON object and no markdown.\n"
         "Allowed target values: requirements, product_planning, ui_confirmation, chat.\n"

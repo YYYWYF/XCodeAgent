@@ -1,4 +1,4 @@
-# XCodeAgent 产品设计与流程设计审阅报告
+# DevAgent Studio 产品设计与流程设计审阅报告
 
 > 审阅日期：2026-08-13
 >
@@ -6,11 +6,11 @@
 >
 > 审阅范围：产品定位、初始化旅程、工作台交互、正式产物、执行与验证、权限与信任、恢复与交付、文档治理、竞品对照
 >
-> 当前实现基线：以 `docs/XCODEAGENT_COMPLETE_WORKFLOW.md` 和源码抽查为准；工作区内未提交的 ProductPlan / TechnicalPlan 改造按“开发中”处理，不视为已稳定发布能力。
+> 当前实现基线：以 `docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md` 和源码抽查为准；工作区内未提交的 ProductPlan / TechnicalPlan 改造按“开发中”处理，不视为已稳定发布能力。
 
 ## 1. 结论摘要
 
-XCodeAgent 已经具备一个普通 Coding Chat 不具备的雏形：本地工作区、正式需求与计划、显式确认、确定性 Graph、专业 Agent、Build DAG、测试、预览、验收和恢复状态都已进入同一产品边界。这个方向有价值，也比单纯追求“多 Agent”更有差异化。
+DevAgent Studio 已经具备一个普通 Coding Chat 不具备的雏形：本地工作区、正式需求与计划、显式确认、确定性 Graph、专业 Agent、Build DAG、测试、预览、验收和恢复状态都已进入同一产品边界。这个方向有价值，也比单纯追求“多 Agent”更有差异化。
 
 当前最主要的问题不是功能少，而是：**产品尚未形成唯一、稳定、可向用户解释的交付模型。** 同一概念存在多套文档和实现；用户确认的对象、系统实际执行的对象、最终声称验证通过的对象并不总是一致；运行证据和恢复能力又不足以弥补这种信任缺口。
 
@@ -32,7 +32,7 @@ XCodeAgent 已经具备一个普通 Coding Chat 不具备的雏形：本地工�
 
 本报告采用四类证据：
 
-- 当前流程文档：`docs/XCODEAGENT_COMPLETE_WORKFLOW.md`、`docs/WORKFLOW.md`、`docs/APPLICATION_LIFECYCLE.md`、`docs/APPLICATION_DEVELOPMENT_PLANNING.md`。
+- 当前流程文档：`docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md`、`docs/WORKFLOW.md`、`docs/APPLICATION_LIFECYCLE.md`、`docs/APPLICATION_DEVELOPMENT_PLANNING.md`。
 - 目标设计和专项审计：`docs/PRODUCT_UI_TECHNICAL_PLANNING.md`、`docs/detail_confirmation_design.md`、`docs/MODEL_OUTPUT_COMMUNICATION_DESIGN.md`、`docs/PROJECT_ARCHITECTURE_AUDIT.md`、`docs/SECURITY_IMPLEMENTATION_RISK_AUDIT.md`。
 - 实现抽查：创建规划 Graph、ProductPlan 开发中改造、工作台阶段文案、计划执行 Dock、详情选择器和 AG-UI 会话链路。
 - 竞品官方资料：Cursor、Claude Code、OpenAI Codex、GitHub Copilot、Devin Desktop（原 Windsurf 文档入口）、Cline、Roo Code、OpenCode、Replit、Lovable 和 v0；检索日期为 2026-08-13。
@@ -62,7 +62,7 @@ XCodeAgent 已经具备一个普通 Coding Chat 不具备的雏形：本地工�
   -> 用户验收或回到相应调整节点
 ```
 
-对应证据见 `docs/XCODEAGENT_COMPLETE_WORKFLOW.md:L127-L148` 和 `L301-L370`。
+对应证据见 `docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md:L127-L148` 和 `L301-L370`。
 
 ### 3.2 值得保留的设计
 
@@ -120,7 +120,7 @@ XCodeAgent 已经具备一个普通 Coding Chat 不具备的雏形：本地工�
 5. 默认无网络；按域名、工具、时限授权。数据库写、push、部署、删除和迁移永远单独确认。
 6. 构建产物不得携带真实 `.env`；密钥进入 OS credential vault 或服务端代理。
 
-Claude Code 明确把权限规则与 OS 沙箱定义为互补层，[Configure permissions](https://code.claude.com/docs/en/permissions)；GitHub Copilot cloud agent 也禁止代理批准/合并自己的 PR，并让代理 PR 的 Actions 默认等待人工批准，[Risks and mitigations](https://docs.github.com/en/copilot/concepts/agents/cloud-agent/risks-and-mitigations)。XCodeAgent 应采用同样的纵深防御思路，而不是把模型风险分类当作安全边界。
+Claude Code 明确把权限规则与 OS 沙箱定义为互补层，[Configure permissions](https://code.claude.com/docs/en/permissions)；GitHub Copilot cloud agent 也禁止代理批准/合并自己的 PR，并让代理 PR 的 Actions 默认等待人工批准，[Risks and mitigations](https://docs.github.com/en/copilot/concepts/agents/cloud-agent/risks-and-mitigations)。DevAgent Studio 应采用同样的纵深防御思路，而不是把模型风险分类当作安全边界。
 
 ### 5.2 产品 Artifact 模型没有唯一答案
 
@@ -165,7 +165,7 @@ RequirementSpec
 
 ### 5.3 用户确认 A，系统可能执行 B
 
-`/application-development-planning/run` 已能生成并确认 `developmentTasks`，但当前前端没有挂载，它也不被 `prepare_build_tasks` 消费；真实执行由 Main Task Preparer 再次生成 Build DAG。现状是不可达的平行计划；一旦直接挂载，就会变成“用户确认 A、系统执行 B”。证据见 `docs/XCODEAGENT_COMPLETE_WORKFLOW.md:L263-L299`。
+`/application-development-planning/run` 已能生成并确认 `developmentTasks`，但当前前端没有挂载，它也不被 `prepare_build_tasks` 消费；真实执行由 Main Task Preparer 再次生成 Build DAG。现状是不可达的平行计划；一旦直接挂载，就会变成“用户确认 A、系统执行 B”。证据见 `docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md:L263-L299`。
 
 建议不要直接挂载现有组件。二选一：
 
@@ -188,7 +188,7 @@ requirementId
 
 ### 5.4 “Integration Test”名实不符
 
-现阶段主要验证依赖安装、TypeScript/build、Maven install 和静态 API contract，没有稳定覆盖后端启动、真实 HTTP smoke、页面加载、登录和关键业务路径。质量门又可能只对“已有检查”执行 `all(...)`，而不验证必需检查是否齐全。现有文档已经在 `docs/XCODEAGENT_COMPLETE_WORKFLOW.md:L930-L950` 明确指出该问题。
+现阶段主要验证依赖安装、TypeScript/build、Maven install 和静态 API contract，没有稳定覆盖后端启动、真实 HTTP smoke、页面加载、登录和关键业务路径。质量门又可能只对“已有检查”执行 `all(...)`，而不验证必需检查是否齐全。现有文档已经在 `docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md:L930-L950` 明确指出该问题。
 
 建议使用四级证据：
 
@@ -234,7 +234,7 @@ Lovable 已把浏览器测试的点击步骤、截图、URL、console 和 networ
 
 ### 5.6 同一工作区没有真正写隔离
 
-`resourceLocks` 目前只是显示 owner 的观察元数据；多个 Run 可以同时修改同一页面、API、菜单、报告和数据库资源，最新 writer 仅覆盖界面显示。证据见 `docs/XCODEAGENT_COMPLETE_WORKFLOW.md:L877-L884`。
+`resourceLocks` 目前只是显示 owner 的观察元数据；多个 Run 可以同时修改同一页面、API、菜单、报告和数据库资源，最新 writer 仅覆盖界面显示。证据见 `docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md:L877-L884`。
 
 代码侧风险比文档描述更深一层：`Backend/app/workspace/run_lease.py:L42-L64` 明确不按资源交集阻断跨 Run；单 Run 调度器又只做锁字符串相等比较，`frontend/src/**` 与 `frontend/src/a.tsx` 不会被视为冲突，见 `Backend/app/services/build_scheduler.py:L622-L680`。所以当前既没有跨 Run 隔离，也没有可靠的父子路径 / glob 冲突判断。
 
@@ -247,7 +247,7 @@ Codex、GitHub Copilot app、Cursor Cloud Agents 和 Devin Desktop 都把隔离�
 
 ### 5.7 模板门禁可能假成功
 
-当前 renderer 可能吞掉 clone 错误，页面写入为空也可能继续；后端完成 lifecycle 时只复核 RequirementSpec 和 ProjectPlan，而不复核真实模板目录和文件。详见 `docs/XCODEAGENT_COMPLETE_WORKFLOW.md:L236-L261` 和 `L888-L904`。
+当前 renderer 可能吞掉 clone 错误，页面写入为空也可能继续；后端完成 lifecycle 时只复核 RequirementSpec 和 ProjectPlan，而不复核真实模板目录和文件。详见 `docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md:L236-L261` 和 `L888-L904`。
 
 建议让后端成为模板完整性 verifier：
 
@@ -289,7 +289,7 @@ Ask/Plan 与 Build/Act 的分离仍应保留，但用“只分析 / 执行修改
 
 ### 6.3 计划编辑能力不对称
 
-RequirementSpec 有结构化编辑和保存草稿，ProjectPlan 主要靠自然语言反馈后整体重生成，见 `docs/XCODEAGENT_COMPLETE_WORKFLOW.md:L127-L136`。这会增加模型成本，也使稳定 ID 和用户的局部修改不可靠。
+RequirementSpec 有结构化编辑和保存草稿，ProjectPlan 主要靠自然语言反馈后整体重生成，见 `docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md:L127-L136`。这会增加模型成本，也使稳定 ID 和用户的局部修改不可靠。
 
 建议 ProductPlan / TechnicalPlan 都提供结构化编辑：
 
@@ -308,11 +308,11 @@ RequirementSpec 有结构化编辑和保存草稿，ProjectPlan 主要靠自然�
 - 桌面、平板、移动端视口与截图对比成为证据。
 - 区分“模板骨架预览”和“可验收预览”，显示各自证据等级。
 
-Devin Desktop Preview 已支持选取元素、console error 并将其作为代理上下文，[Previews](https://docs.devin.ai/desktop/previews)。XCodeAgent 可以进一步把这些反馈绑定到自己的需求、计划和验收版本，而不只是追加一条聊天消息。
+Devin Desktop Preview 已支持选取元素、console error 并将其作为代理上下文，[Previews](https://docs.devin.ai/desktop/previews)。DevAgent Studio 可以进一步把这些反馈绑定到自己的需求、计划和验收版本，而不只是追加一条聊天消息。
 
 ### 6.5 恢复仍有多个事实源
 
-正常恢复会同时涉及 lifecycle、LangGraph checkpoint、客户端 `resumeState`、磁盘 artifacts 和内部跳转。缺少 lifecycle 的旧工作区还可能绕过新门禁继续运行，见 `docs/XCODEAGENT_COMPLETE_WORKFLOW.md:L877-L884` 和 `L948-L960`。
+正常恢复会同时涉及 lifecycle、LangGraph checkpoint、客户端 `resumeState`、磁盘 artifacts 和内部跳转。缺少 lifecycle 的旧工作区还可能绕过新门禁继续运行，见 `docs/DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md:L877-L884` 和 `L948-L960`。
 
 建议：
 
@@ -343,7 +343,7 @@ ChangeSet Review
 - 不自动 push、merge、amend 或覆盖用户已有 staged changes。
 - commit message 或交付清单应能反查运行记录和确认版本。
 
-GitHub Copilot 的代理 commit 会链接 session log，便于 code review 和审计，[Managing agent sessions](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/manage-and-track-agents)。这是 XCodeAgent 本地交付也应达到的可追溯水平。
+GitHub Copilot 的代理 commit 会链接 session log，便于 code review 和审计，[Managing agent sessions](https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/manage-and-track-agents)。这是 DevAgent Studio 本地交付也应达到的可追溯水平。
 
 ### 6.7 缺少运行预算和成本反馈
 
@@ -356,7 +356,7 @@ GitHub Copilot 的代理 commit 会链接 session log，便于 code review 和�
 - 运行中显示耗时、token/成本、重试次数、当前阻塞和取消后保留内容。
 - 相同失败重复出现时建议升级模型、缩小范围或请求用户决策，而不是无限修复。
 
-Replit 已把模型档位、速度和成本放在同一运行选择中，并提供预算控制，[Agent Modes](https://docs.replit.com/replitai/assistant/)、[Managing spend](https://docs.replit.com/billing/managing-spend)。XCodeAgent 不必复制商业计费，但应让用户理解时间与资源代价。
+Replit 已把模型档位、速度和成本放在同一运行选择中，并提供预算控制，[Agent Modes](https://docs.replit.com/replitai/assistant/)、[Managing spend](https://docs.replit.com/billing/managing-spend)。DevAgent Studio 不必复制商业计费，但应让用户理解时间与资源代价。
 
 ### 6.8 开发中改造存在上下文放大和任务重复执行窗口
 
@@ -370,7 +370,7 @@ Replit 已把模型档位、速度和成本放在同一运行选择中，并提�
 
 ### 7.1 文档存在多套当前事实
 
-同一流程至少有四种描述：`WORKFLOW.md`、`XCODEAGENT_COMPLETE_WORKFLOW.md`、`APPLICATION_LIFECYCLE.md` 和开发中的 `PRODUCT_UI_TECHNICAL_PLANNING.md`。`WORKFLOW.md:L810-L823` 的“当前不实现”仍列出多项已经实现的能力；`Backend/README.md` 也保留旧 requirement planner、development orchestrator 和任意 workspace_root 调用示例，容易误导新开发者和安全评估。
+同一流程至少有四种描述：`WORKFLOW.md`、`DEVAGENTSTUDIO_COMPLETE_WORKFLOW.md`、`APPLICATION_LIFECYCLE.md` 和开发中的 `PRODUCT_UI_TECHNICAL_PLANNING.md`。`WORKFLOW.md:L810-L823` 的“当前不实现”仍列出多项已经实现的能力；`Backend/README.md` 也保留旧 requirement planner、development orchestrator 和任意 workspace_root 调用示例，容易误导新开发者和安全评估。
 
 建议建立三层文档：
 
@@ -410,9 +410,9 @@ Graph 节点、lifecycle stage、前端阶段标签、resume 节点和 capabilit
 
 ## 8. 竞品对照
 
-截至 2026-08-13，成熟产品正在收敛为五层：意图、执行环境、信任边界、验证证据和恢复。XCodeAgent 的差距和机会如下。
+截至 2026-08-13，成熟产品正在收敛为五层：意图、执行环境、信任边界、验证证据和恢复。DevAgent Studio 的差距和机会如下。
 
-| 产品 / 范式 | 已成熟机制 | XCodeAgent 应借鉴 | 不应盲抄 |
+| 产品 / 范式 | 已成熟机制 | DevAgent Studio 应借鉴 | 不应盲抄 |
 | --- | --- | --- | --- |
 | Cursor | Plan、checkpoint、消息队列/打断、Cloud Agent、独立 Review | 计划可编辑；完成页给 diff、测试、截图、日志；Preview 参与验证 | 本地默认直接落盘和云端规模不适合作为近期安全基线 |
 | Claude Code | 权限模式、OS 沙箱、hooks、代码/对话分维 rewind、受限子代理 | 沙箱与审批分层；hooks 做确定性政策；子代理最小工具面 | 专家配置过宽；普通用户不应看到 bypass 模式 |
@@ -604,7 +604,7 @@ Project
 
 ## 14. 最终判断
 
-XCodeAgent 的方向不是错，甚至比许多只做聊天和代码补全的产品更接近完整交付。但当前的复杂度主要被系统内部结构吸收得不够，转而暴露给了用户和维护者：多套计划、多套状态、多次确认、多种会话和多个恢复来源。
+DevAgent Studio 的方向不是错，甚至比许多只做聊天和代码补全的产品更接近完整交付。但当前的复杂度主要被系统内部结构吸收得不够，转而暴露给了用户和维护者：多套计划、多套状态、多次确认、多种会话和多个恢复来源。
 
 下一阶段最有价值的工作不是再增加功能，而是完成一次“产品语义收口”：
 
@@ -617,4 +617,4 @@ XCodeAgent 的方向不是错，甚至比许多只做聊天和代码补全的产
 -> 一个可恢复、可交付的变更集
 ```
 
-做到这一点后，XCodeAgent 才会从“功能很多的 Agent 工程”变成“用户敢把真实项目交给它的产品”。
+做到这一点后，DevAgent Studio 才会从“功能很多的 Agent 工程”变成“用户敢把真实项目交给它的产品”。

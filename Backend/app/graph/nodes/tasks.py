@@ -1,3 +1,5 @@
+
+from app.branding import WORKSPACE_ARTIFACT_DIR
 """Build DAG 当前 async Unit Planner 共用的正式产物与范围投影辅助函数。
 
 生产图的任务规划节点由 ``task_planning_adapter`` 提供；本模块不再提供旧的
@@ -173,10 +175,10 @@ def _formal_artifact_hash_errors(
         return []
     root = Path(workspace)
     paths = {
-        "requirement-spec": root / ".xcodeagent/specs/requirement-spec.json",
-        "product-plan": root / ".xcodeagent/plans/product-plan.json",
-        "ui-design": root / ".xcodeagent/specs/ui-designs.json",
-        "technical-plan": root / ".xcodeagent/plans/technical-plan.json",
+        "requirement-spec": root / WORKSPACE_ARTIFACT_DIR / 'specs/requirement-spec.json',
+        "product-plan": root / WORKSPACE_ARTIFACT_DIR / 'plans/product-plan.json',
+        "ui-design": root / WORKSPACE_ARTIFACT_DIR / 'specs/ui-designs.json',
+        "technical-plan": root / WORKSPACE_ARTIFACT_DIR / 'plans/technical-plan.json',
     }
     try:
         hashes = {
@@ -205,19 +207,19 @@ def _load_formal_artifacts(
     return {
         "requirement_spec": _load_formal_artifact(
             workspace,
-            ".xcodeagent/specs/requirement-spec.json",
+            ".devagentstudio/specs/requirement-spec.json",
         ),
         "product_plan": _load_formal_artifact(
             workspace,
-            ".xcodeagent/plans/product-plan.json",
+            ".devagentstudio/plans/product-plan.json",
         ),
         "ui_designs": _load_formal_artifact(
             workspace,
-            ".xcodeagent/specs/ui-designs.json",
+            ".devagentstudio/specs/ui-designs.json",
         ),
         "technical_plan": _load_formal_artifact(
             workspace,
-            ".xcodeagent/plans/technical-plan.json",
+            ".devagentstudio/plans/technical-plan.json",
         ),
     }
 
@@ -345,7 +347,7 @@ def _confirmed_baseline_blocked_result(
 ) -> dict[str, Any]:
     """将非法正式 DAG 单独投影为平台基线问题，等待人工修复后重新校验。"""
 
-    artifact = ".xcodeagent/plans/build-task-plan.json"
+    artifact = ".devagentstudio/plans/build-task-plan.json"
     recovery = (
         "请由平台维护者检查正式 Build Task Plan 的文件内容、读取权限、确认状态和 DAG 校验结果；"
         "修复并验证为合法 ConfirmedPlan 后，重新发起任务规划。"
@@ -775,7 +777,7 @@ def _api_contract_inconsistency_payload(
             "code": "api_contract_consistency_error",
             "message": "API 契约一致性校验失败，已阻止任务拆分和代码生成。",
             "target": build_execution_scope,
-            "artifact": ".xcodeagent/plans/technical-plan.json",
+            "artifact": ".devagentstudio/plans/technical-plan.json",
             "errors": errors,
             "recommended_action": "手动修订并确认 API 契约或页面字段引用后重新发起 DAG 生成。",
             "automatic_routing": False,

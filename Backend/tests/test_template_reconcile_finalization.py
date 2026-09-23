@@ -143,7 +143,7 @@ class TemplateReconcileFinalizationTests(unittest.TestCase):
                 formal_branch=FormalRevisionBranch.DESIGN_STAGE_REVISION,
                 current_artifact="product-plan",
             )
-            plan_path = root / ".xcodeagent" / "plans" / "technical-plan.json"
+            plan_path = root / ".devagentstudio" / "plans" / "technical-plan.json"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(
                 '{"artifact_type":"technical-plan","confirmation_status":"confirmed"}',

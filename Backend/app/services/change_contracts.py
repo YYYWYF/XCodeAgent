@@ -17,10 +17,10 @@ from app.domain.change_impact import ContractStage
 
 
 _ARTIFACTS: tuple[tuple[str, str, ContractStage], ...] = (
-    ("requirement-spec", ".xcodeagent/specs/requirement-spec.json", ContractStage.REQUIREMENT_DESIGN),
-    ("product-plan", ".xcodeagent/plans/product-plan.json", ContractStage.REQUIREMENT_DESIGN),
-    ("ui-design", ".xcodeagent/specs/ui-designs.json", ContractStage.REQUIREMENT_DESIGN),
-    ("technical-plan", ".xcodeagent/plans/technical-plan.json", ContractStage.PLANNING_DESIGN),
+    ("requirement-spec", ".devagentstudio/specs/requirement-spec.json", ContractStage.REQUIREMENT_DESIGN),
+    ("product-plan", ".devagentstudio/plans/product-plan.json", ContractStage.REQUIREMENT_DESIGN),
+    ("ui-design", ".devagentstudio/specs/ui-designs.json", ContractStage.REQUIREMENT_DESIGN),
+    ("technical-plan", ".devagentstudio/plans/technical-plan.json", ContractStage.PLANNING_DESIGN),
 )
 _ID_KEYS = (
     "pageId", "page_id", "actionId", "action_id", "endpointId", "endpoint_id",

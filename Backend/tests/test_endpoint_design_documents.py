@@ -169,7 +169,7 @@ class EndpointDesignDocumentsTests(unittest.TestCase):
 def _write_technical_plan(workspace: str, value: dict) -> None:
     """在隔离工作区写入规范 TechnicalPlan。"""
 
-    path = Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+    path = Path(workspace) / ".devagentstudio" / "plans" / "technical-plan.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
 

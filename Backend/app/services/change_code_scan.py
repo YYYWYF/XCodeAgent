@@ -18,7 +18,7 @@ _SOURCE_SUFFIXES = {
     ".kt", ".kts", ".vue", ".css", ".less", ".scss", ".html",
 }
 _IGNORED_PARTS = {
-    ".git", ".xcodeagent", ".venv", "node_modules", "dist", "build", "target",
+    ".git", ".devagentstudio", ".venv", "node_modules", "dist", "build", "target",
     "coverage", ".next", ".turbo", "__pycache__",
 }
 _CJK_RE = re.compile(r"[\u3400-\u9fff]{2,}")

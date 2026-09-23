@@ -6,11 +6,12 @@ import json
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.template_reconcile.protocol_v2 import TemplateStateV2
 from app.services.workspace_bootstrap.archive_security import validate_archive_entries
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageError, ValidatedTemplatePackage
 
-_STATE_PATH = ".xcodeagent/template-state.json"
+_STATE_PATH = (WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix()
 _REQUIRED_ROOTS = frozenset({"frontend", "backend"})
 
 

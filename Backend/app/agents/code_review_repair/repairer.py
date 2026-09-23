@@ -207,7 +207,7 @@ def _safe_log_path(value: Any) -> str | None:
     """只保留代码审查运行目录下的相对日志引用。"""
 
     path = str(value or "").strip().replace("\\", "/").lstrip("/")
-    prefix = ".xcodeagent/runtime/code-review/pnpm-install/"
+    prefix = ".devagentstudio/runtime/code-review/pnpm-install/"
     return path[:1_000] if path.startswith(prefix) and ".." not in path.split("/") else None
 
 

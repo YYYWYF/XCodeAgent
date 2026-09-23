@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug XCodeAgent Backend",
+      "name": "Debug DevAgent Studio Backend",
       "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import os
 import re
@@ -26,7 +28,7 @@ def revision_draft_directory(
 
     _validate_key(change_id, label="changeId")
     _validate_key(artifact_key, label="artifactKey")
-    root = Path(workspace).expanduser().resolve() / ".xcodeagent" / "drafts" / "revisions"
+    root = Path(workspace).expanduser().resolve() / WORKSPACE_ARTIFACT_DIR / "drafts" / "revisions"
     directory = (root / change_id / artifact_key).resolve()
     if root != directory and root not in directory.parents:
         raise ValueError("revision 草稿路径越出工作区。")

@@ -152,9 +152,9 @@ def public_direct_state(state: dict[str, Any]) -> dict[str, Any]:
     normalized_test_report_path = str(state.get("test_report_path") or "").replace(
         "\\", "/"
     )
-    if normalized_test_report_path.endswith(".xcodeagent/reports/test-report.md"):
+    if normalized_test_report_path.endswith(".devagentstudio/reports/test-report.md"):
         public_state["testReportResult"] = {
-            "reportPath": ".xcodeagent/reports/test-report.md"
+            "reportPath": ".devagentstudio/reports/test-report.md"
         }
     inspection = _workspace_inspection_snapshot(state)
     if inspection is not None:

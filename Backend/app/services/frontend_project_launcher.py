@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import os
 import re
@@ -40,7 +42,7 @@ def launch_frontend_project(
     """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
 
     project_dir 指定时直接定位该目录下的 package.json（跳过工作区 glob），
-    用于启动非标准位置的前端工程（如 .xcodeagent/ui-design 设计稿工程）。
+    用于启动非标准位置的前端工程（如 .devagentstudio/ui-design 设计稿工程）。
     runtime_subdir 指定运行时目录名（默认 launch），设计稿工程传
     "launch-ui-design" 以独立 PID 文件避免与正式前端预览冲突。
     skip_install 为 True 时复用调用方已经完成的依赖安装，不再重复执行
@@ -83,7 +85,7 @@ def launch_frontend_project(
         )
 
     package_manager = _select_package_manager(package_path.parent)
-    runtime_root = root / ".xcodeagent" / "runtime" / runtime_subdir
+    runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / runtime_subdir
     runtime_root.mkdir(parents=True, exist_ok=True)
     preview_url = _preview_url(scripts.get(script_name, ""))
     existing_server = None if force_restart else _reuse_ready_server(runtime_root, preview_url)
@@ -232,7 +234,7 @@ def stop_frontend_project(
     """
 
     root = Path(workspace_path).expanduser().resolve()
-    runtime_root = root / ".xcodeagent" / "runtime" / runtime_subdir
+    runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / runtime_subdir
     pid_file = runtime_root / "frontend.pid"
     cleanup = _stop_frontend_process(root, pid_file, runtime_subdir=runtime_subdir)
     return {
@@ -324,7 +326,7 @@ def _find_frontend_package_json(root: Path) -> Path | None:
         if path.is_file():
             return path
     for path in root.glob("*/package.json"):
-        if path.parent.name in {"node_modules", ".xcodeagent"}:
+        if path.parent.name in {"node_modules", ".devagentstudio"}:
             continue
         package = _read_package_json(path)
         scripts = package.get("scripts", {}) if isinstance(package, dict) else {}

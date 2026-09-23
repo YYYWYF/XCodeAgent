@@ -5,7 +5,9 @@ from pathlib import Path
 import re
 from typing import Any
 
-WORKFLOW_ARTIFACT_DIR = ".xcodeagent"
+from app.branding import WORKSPACE_ARTIFACT_DIR_NAME
+
+WORKFLOW_ARTIFACT_DIR = WORKSPACE_ARTIFACT_DIR_NAME
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 WORKSPACES_BASE = REPOSITORY_ROOT
 

@@ -1,14 +1,20 @@
-import { FileTextOutlined, SaveOutlined } from '@ant-design/icons'
+import { CloseOutlined, FileTextOutlined, SaveOutlined } from '@ant-design/icons'
 import { Alert, Button, Empty, Input, Spin, Typography, message } from 'antd'
-import type { ReactElement } from 'react'
+import type { CSSProperties, ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { requestAgentFile, saveAgentFile } from '../../service/agentFiles'
 import type { AgentFile } from '../../typings'
 import { cx } from '../../utils'
+import folderFilledIcon from '../../assets/icons/folder-filled.svg'
 import './AgentFilesPage.less'
 
 const { Text, Title } = Typography
+
+type Props = {
+  /** 关闭承载本页的抽屉；页面顶栏右侧的关闭按钮直接复用抽屉的收起动作。 */
+  onClose?: () => void
+}
 
 function formatFileSize(sizeBytes: number): string {
   if (sizeBytes < 1024) return `${sizeBytes} B`
@@ -37,7 +43,7 @@ function formatUpdatedAt(value: string): string {
   }).format(updatedAt)
 }
 
-export default function AgentFilesPage(): ReactElement {
+export default function AgentFilesPage({ onClose }: Props): ReactElement {
   const [agentFile, setAgentFile] = useState<AgentFile>()
   const [content, setContent] = useState('')
   const [error, setError] = useState('')
@@ -98,11 +104,34 @@ export default function AgentFilesPage(): ReactElement {
 
   return (
     <section className={cx('agent-files-page')} aria-label="文件">
-      <aside className={cx('agent-files-list')} aria-label="核心文件">
-        <div className={cx('agent-files-list-heading')}>
-          <Title level={4}>核心文件</Title>
-          <Text>管理 Agent 的角色与工作方式</Text>
+      {/* 页面顶栏即功能抽屉的抽屉头：徽标+标题+关闭，与任务管理等抽屉同一套语言。 */}
+      <header className={cx('agent-files-topbar')}>
+        <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
+          <span
+            aria-hidden="true"
+            className={cx('auxiliary-drawer-badge-icon')}
+            style={{ '--auxiliary-drawer-badge-source': `url("${folderFilledIcon}")` } as CSSProperties}
+          />
+        </span>
+        <div className={cx('functional-drawer-heading')}>
+          <strong>文件</strong>
+          <small>管理 Agent 的角色与工作方式</small>
         </div>
+        {onClose ? (
+          <button
+            aria-label="关闭辅助抽屉"
+            className={cx('drawer-close-btn')}
+            onClick={onClose}
+            title="关闭辅助抽屉"
+            type="button"
+          >
+            <CloseOutlined />
+          </button>
+        ) : null}
+      </header>
+      <div className={cx('agent-files-body')}>
+      <aside className={cx('agent-files-list')} aria-label="核心文件">
+        <Text className={cx('agent-files-list-caption')}>核心文件</Text>
         <button aria-current="page" className={cx('agent-file-item', 'active')} type="button">
           <span className={cx('agent-file-item-icon')} aria-hidden="true">
             <FileTextOutlined />
@@ -173,6 +202,7 @@ export default function AgentFilesPage(): ReactElement {
             </div>
           )}
         </div>
+      </div>
       </div>
     </section>
   )

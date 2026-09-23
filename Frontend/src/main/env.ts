@@ -1,8 +1,10 @@
+import { USER_DATA_DIRECTORY_NAMES } from './branding'
+
 export type AppEnv = 'dev' | 'st' | 'uat' | 'prd'
 
-export type XcodeAgentEnvConfig = {
-  XCODE_AGENT_BASE_URL: string
-  XCODE_AGENT_BACKEND_URL: string
+export type DevAgentStudioEnvConfig = {
+  DEVAGENTSTUDIO_BASE_URL: string
+  DEVAGENTSTUDIO_BACKEND_URL: string
   WORKING_DIR: string
 }
 
@@ -24,26 +26,26 @@ const resolveAppEnv = (value: string | undefined): AppEnv => {
   throw new Error(`Unsupported APP_ENV: ${value}`)
 }
 
-export const APP_ENV_CONFIG: Record<AppEnv, XcodeAgentEnvConfig> = {
+export const APP_ENV_CONFIG: Record<AppEnv, DevAgentStudioEnvConfig> = {
   dev: {
-    XCODE_AGENT_BASE_URL: DEFAULT_AGENT_URL,
-    XCODE_AGENT_BACKEND_URL: DEFAULT_AGENT_URL,
-    WORKING_DIR: '.xcodeagent_dev'
+    DEVAGENTSTUDIO_BASE_URL: DEFAULT_AGENT_URL,
+    DEVAGENTSTUDIO_BACKEND_URL: DEFAULT_AGENT_URL,
+    WORKING_DIR: USER_DATA_DIRECTORY_NAMES.dev
   },
   st: {
-    XCODE_AGENT_BASE_URL: DEFAULT_AGENT_URL,
-    XCODE_AGENT_BACKEND_URL: DEFAULT_AGENT_URL,
-    WORKING_DIR: '.xcodeagent_st'
+    DEVAGENTSTUDIO_BASE_URL: DEFAULT_AGENT_URL,
+    DEVAGENTSTUDIO_BACKEND_URL: DEFAULT_AGENT_URL,
+    WORKING_DIR: USER_DATA_DIRECTORY_NAMES.st
   },
   uat: {
-    XCODE_AGENT_BASE_URL: DEFAULT_AGENT_URL,
-    XCODE_AGENT_BACKEND_URL: DEFAULT_AGENT_URL,
-    WORKING_DIR: '.xcodeagent_uat'
+    DEVAGENTSTUDIO_BASE_URL: DEFAULT_AGENT_URL,
+    DEVAGENTSTUDIO_BACKEND_URL: DEFAULT_AGENT_URL,
+    WORKING_DIR: USER_DATA_DIRECTORY_NAMES.uat
   },
   prd: {
-    XCODE_AGENT_BASE_URL: DEFAULT_AGENT_URL,
-    XCODE_AGENT_BACKEND_URL: DEFAULT_AGENT_URL,
-    WORKING_DIR: '.xcodeagent'
+    DEVAGENTSTUDIO_BASE_URL: DEFAULT_AGENT_URL,
+    DEVAGENTSTUDIO_BACKEND_URL: DEFAULT_AGENT_URL,
+    WORKING_DIR: USER_DATA_DIRECTORY_NAMES.prd
   }
 }
 
@@ -51,9 +53,10 @@ export const APP_ENV = resolveAppEnv(process.env.APP_ENV)
 
 const selectedConfig = APP_ENV_CONFIG[APP_ENV]
 
-export const XCODE_AGENT_ENV: XcodeAgentEnvConfig = {
+export const DEVAGENTSTUDIO_ENV: DevAgentStudioEnvConfig = {
   ...selectedConfig,
-  XCODE_AGENT_BASE_URL: process.env.XCODE_AGENT_BASE_URL || selectedConfig.XCODE_AGENT_BASE_URL,
-  XCODE_AGENT_BACKEND_URL:
-    process.env.XCODE_AGENT_BACKEND_URL || selectedConfig.XCODE_AGENT_BACKEND_URL
+  DEVAGENTSTUDIO_BASE_URL:
+    process.env.DEVAGENTSTUDIO_BASE_URL || selectedConfig.DEVAGENTSTUDIO_BASE_URL,
+  DEVAGENTSTUDIO_BACKEND_URL:
+    process.env.DEVAGENTSTUDIO_BACKEND_URL || selectedConfig.DEVAGENTSTUDIO_BACKEND_URL
 }

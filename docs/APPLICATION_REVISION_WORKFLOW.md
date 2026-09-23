@@ -61,7 +61,7 @@
 
 SmallTask 禁止通过该路径：
 
-- 修改 `.xcodeagent` 正式产物；
+- 修改 `.devagentstudio` 正式产物；
 - 新增或删除页面、endpoint、角色、业务字段、业务操作或数据源；
 - 修改 API method/path/request/response/error/permission；
 - 修改 schema、DDL、migration、数据库结构、事务或副作用语义；
@@ -224,7 +224,7 @@ Coordinator 先由模型按语义分类，再由服务端执行不依赖自然�
 2. API method、path、request、response、错误码、权限、数据来源、表、列、约束、事务或副作用变化，按模型输出进入对应 formal branch。
 3. 既有页面的视觉、布局、间距、文案、响应式和交互微调属于 `implementation_fix/frontend`；只有新增页面/模块或改变业务行为、验收规则等产品语义时才进入 `formal_revision`。
 4. 目标不唯一、期望结果存在实质歧义或置信度低于 0.70 时先澄清，不能猜测代码路径。
-5. 请求或候选路径涉及 `.xcodeagent` 正式产物时，服务端禁止 `implementation_fix`。
+5. 请求或候选路径涉及 `.devagentstudio` 正式产物时，服务端禁止 `implementation_fix`。
 6. 服务端校验 route、branch、revisionType、earliestArtifact、owner 和候选范围字段；只纠正不安全或不一致的结构，不重新解释用户自然语言，也不追加模型证据分析。
 7. `implementation_fix` 的 frontend/backend/fullstack owner 必须先通过 `implementation_fix_confirmation`；workspace owner 的普通文件修改可以直接执行。
 
@@ -561,7 +561,7 @@ discard
 不新增版本 object store。沿用现有 canonical 正式产物路径，并新增当前 revision 草稿目录：
 
 ```text
-.xcodeagent/
+.devagentstudio/
 ├── specs/                         # RequirementSpec canonical Markdown/JSON
 ├── plans/                         # ProductPlan/TechnicalPlan canonical
 └── drafts/

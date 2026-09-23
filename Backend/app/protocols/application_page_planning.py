@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import inspect
 import json
 import logging
@@ -74,7 +76,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "name": "application-page-planning",
         "endpoint": "/application-page-planning/run",
         "transport": "ag-ui-sse",
-        "eventProtocol": "xcodeagent.workflow.event.v1",
+        "eventProtocol": "devagentstudio.workflow.event.v1",
         "stateSnapshotKey": "workflow",
         "customEventName": "workflow-run",
         "recoveryActionField": "forwardedProps.applicationPlanningRecovery",
@@ -165,10 +167,10 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         },
         "writesApplicationJsonAfterConfirmation": False,
         "artifactDirectories": [
-            ".xcodeagent/drafts/specs",
-            ".xcodeagent/drafts/plans",
-            ".xcodeagent/specs",
-            ".xcodeagent/plans",
+            ".devagentstudio/drafts/specs",
+            ".devagentstudio/drafts/plans",
+            ".devagentstudio/specs",
+            ".devagentstudio/plans",
         ],
         "workspaceGate": "planning-artifacts",
         "mainWorkflowIndependent": True,
@@ -570,7 +572,7 @@ def _prepare_retry_template_reconcile_payload(payload: dict[str, Any]) -> dict[s
     active = lifecycle.active_formal_revision if lifecycle is not None else None
     if active is None or active.status != "template_reconcile_failed":
         raise ValueError("当前没有可重试的 Template Reconcile 失败记录。")
-    plan_path = Path(workspace) / ".xcodeagent" / "plans" / "technical-plan.json"
+    plan_path = Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
     try:
         technical_plan = json.loads(plan_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:

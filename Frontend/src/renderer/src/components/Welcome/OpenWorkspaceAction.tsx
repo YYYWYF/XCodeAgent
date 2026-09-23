@@ -123,7 +123,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
 
   /** 选择并添加受 DevAgent Studio 管理的本地项目；已有索引时直接使用原记录。 */
   const addLocalWorkspace = async (): Promise<void> => {
-    const workspaceApi = window.xcodeAgent?.workspace
+    const workspaceApi = window.devAgentStudio?.workspace
     if (!workspaceApi?.selectDirectory) {
       message.warning('当前环境不能打开系统目录选择器，请在桌面客户端中使用。')
       return
@@ -161,7 +161,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
       <WelcomeActionCard
         buttonIcon={<FolderOpenOutlined />}
         buttonLabel="打开工作目录"
-        description="打开已保存项目，或添加带 .xcodeagent 目录的本地项目。"
+        description="打开已保存项目，或添加带 .devagentstudio 目录的本地项目。"
         icon={<FolderOpenOutlined />}
         iconVariant="folder"
         loading={loadingHistory}

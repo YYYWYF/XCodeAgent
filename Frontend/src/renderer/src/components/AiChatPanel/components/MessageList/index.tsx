@@ -334,6 +334,8 @@ type MessageListProps = {
   designPhasePlanning?: boolean
   /** 当前是迭代（已有历史版本）：模板沿用已有工程，未重新拉取。 */
   reusedExistingTemplate?: boolean
+  /** 当前分支名：模板卡里说明自动提交去了哪个分支。 */
+  branchName?: string
   /** UI 设计稿确认：当前选中页 id（与右侧预览面板联动）。 */
   uiDesignActivePageId?: string
   /** UI 设计稿确认：选中页变化时通知外部（联动右侧预览）。 */
@@ -402,6 +404,7 @@ export default function MessageList({
   emptyContent,
   designPhasePlanning = false,
   reusedExistingTemplate = false,
+  branchName,
   error,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
@@ -583,8 +586,13 @@ export default function MessageList({
     scheduleScrollUpdate()
   }, [loading, messages, scheduleScrollUpdate, visibleError])
 
+  // 是否在渲染空态（需求输入卡 / 空会话提示）。空态需要消息区占满面板高度来垂直居中，
+  // 所以它决定消息区是"撑满"还是"按内容收缩"（见下面的 has-content 修饰类）。
+  const showingEmptyState =
+    messages.every(isResiduePlanningPlaceholder) && !visibleError && !templatePreparationVisible
+
   return (
-    <div className={cx('ai-message-list-shell')}>
+    <div className={cx('ai-message-list-shell', !showingEmptyState && 'has-content')}>
       <div
         className={cx('ai-message-list')}
         aria-live="polite"
@@ -594,9 +602,7 @@ export default function MessageList({
         <div className={cx('ai-message-column')} ref={messageColumnRef}>
           {/* 全是残留占位时按"空"处理：那条占位不会再有 chunk 到达，
               却会让列表非空、把只在空态渲染的需求输入卡永久挡住。 */}
-          {messages.every(isResiduePlanningPlaceholder) &&
-          !visibleError &&
-          !templatePreparationVisible ? (
+          {showingEmptyState ? (
             // 需求输入卡只属于**设计阶段**：它让用户描述本次迭代要做的变更，是产品 Agent
             // 的职责。计划阶段做的是技术规划，在需求收集之后，不该出现这张卡
             // （原判据用 designPhasePlanning，它同时覆盖设计与计划两个阶段）。
@@ -1196,6 +1202,7 @@ export default function MessageList({
                   orphaned={templateGenerationOrphaned}
                   retrying={generatingTemplate}
                   reusedExistingTemplate={reusedExistingTemplate}
+                  branchName={branchName}
                   workspaceRoot={workspaceRoot}
                   commitDisabled={commitDisabled}
                 />

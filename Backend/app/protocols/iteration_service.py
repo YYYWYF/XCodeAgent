@@ -41,7 +41,7 @@ def build_iteration_service_ag_ui_stream(
         request = StartIterationRequest.model_validate(iteration_input)
         result = start_iteration(request)
         data = result.model_dump(by_alias=True)
-        message = f"已发起新迭代 {request.version_label}，规划产物已清空。"
+        message = f"已发起新迭代（分支 {request.branch_name}），规划产物已清空。"
         return AgUiActionResult(data=data, message=message)
 
     return build_ag_ui_action_stream(

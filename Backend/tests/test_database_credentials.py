@@ -51,13 +51,13 @@ def _secret_envelope(public_key_pem: str, password: str) -> str:
         ),
     )
     encoded = base64.urlsafe_b64encode(ciphertext).decode("ascii").rstrip("=")
-    return f"xcodeagent-secret:v1:rsa-oaep-256:{PLATFORM_KEY_ID}:{encoded}"
+    return f"devagentstudio-secret:v1:rsa-oaep-256:{PLATFORM_KEY_ID}:{encoded}"
 
 
 def _write_application(workspace: Path, password: str, *, schema: str) -> None:
     """写入只包含本测试所需 plantMode 字段的应用配置。"""
 
-    target = workspace / ".xcodeagent" / "application.json"
+    target = workspace / ".devagentstudio" / "application.json"
     target.parent.mkdir(parents=True)
     target.write_text(
         json.dumps(
@@ -152,17 +152,17 @@ class DatabasePlatformKeyTests(unittest.TestCase):
     def test_environment_working_directory_selects_stable_key_path(self) -> None:
         """开发与生产环境必须映射到各自稳定的用户级密钥目录。"""
 
-        with patch.dict("os.environ", {"XCODEAGENT_WORKING_DIR": ".xcodeagent_dev"}):
+        with patch.dict("os.environ", {"DEVAGENTSTUDIO_WORKING_DIR": ".devagentstudio_dev"}):
             development_path = database_key_file_path()
-        with patch.dict("os.environ", {"XCODEAGENT_WORKING_DIR": ".xcodeagent"}):
+        with patch.dict("os.environ", {"DEVAGENTSTUDIO_WORKING_DIR": ".devagentstudio"}):
             production_path = database_key_file_path()
         self.assertEqual(
             development_path.parts[-3:],
-            (".xcodeagent_dev", "keys", "database-platform-key.json"),
+            (".devagentstudio_dev", "keys", "database-platform-key.json"),
         )
         self.assertEqual(
             production_path.parts[-3:],
-            (".xcodeagent", "keys", "database-platform-key.json"),
+            (".devagentstudio", "keys", "database-platform-key.json"),
         )
 
     def test_missing_key_reports_old_ciphertext_recovery_error(self) -> None:
@@ -196,7 +196,7 @@ process.stdin.on('end', async () => {
     { name: 'RSA-OAEP' }, key, new TextEncoder().encode(payload.password)
   );
   const encoded = Buffer.from(ciphertext).toString('base64url');
-  process.stdout.write(`xcodeagent-secret:v1:rsa-oaep-256:platform-key-v1:${encoded}`);
+  process.stdout.write(`devagentstudio-secret:v1:rsa-oaep-256:platform-key-v1:${encoded}`);
 });
 """
             completed = subprocess.run(
@@ -222,7 +222,7 @@ process.stdin.on('end', async () => {
             for candidate in (
                 tampered,
                 encrypted.replace(PLATFORM_KEY_ID, "platform-key-v2"),
-                "xcodeagent-secret:v1:broken",
+                "devagentstudio-secret:v1:broken",
             ):
                 with self.assertRaises(DatabaseCryptoError) as raised:
                     decrypt_password(candidate, key_file=key_file)
@@ -262,7 +262,7 @@ class ApplicationDatabaseCredentialTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_root:
             workspace = Path(temporary_root) / "legacy"
             _write_application(workspace, "legacy-password", schema="legacy_schema")
-            application_file = workspace / ".xcodeagent" / "application.json"
+            application_file = workspace / ".devagentstudio" / "application.json"
             before = application_file.read_bytes()
             config = resolve_application_mysql_config(workspace)
             self.assertEqual(config.password, "legacy-password")
@@ -274,7 +274,7 @@ class ApplicationDatabaseCredentialTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_root:
             workspace = Path(temporary_root) / "invalid"
             _write_application(workspace, "secret-value", schema="invalid_schema")
-            target = workspace / ".xcodeagent" / "application.json"
+            target = workspace / ".devagentstudio" / "application.json"
             payload = json.loads(target.read_text(encoding="utf-8"))
             payload["datasource"]["db"]["plantMode"]["port"] = "bad-port"
             target.write_text(json.dumps(payload), encoding="utf-8")
@@ -307,7 +307,7 @@ class ApplicationDatabaseCredentialTests(unittest.TestCase):
                 with self.subTest(source_type=source_type):
                     workspace = root / source_type
                     _write_application(workspace, "legacy-password", schema="inventory")
-                    application_file = workspace / ".xcodeagent" / "application.json"
+                    application_file = workspace / ".devagentstudio" / "application.json"
                     payload = json.loads(application_file.read_text(encoding="utf-8"))
                     payload["datasource"]["type"] = source_type
                     application_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -319,7 +319,7 @@ class ApplicationDatabaseCredentialTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_root:
             workspace = Path(temporary_root) / "builtin"
-            target = workspace / ".xcodeagent" / "application.json"
+            target = workspace / ".devagentstudio" / "application.json"
             target.parent.mkdir(parents=True)
             target.write_text(
                 json.dumps(
@@ -341,7 +341,7 @@ class ApplicationDatabaseCredentialTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_root:
             workspace = Path(temporary_root) / "dbid"
-            target = workspace / ".xcodeagent" / "application.json"
+            target = workspace / ".devagentstudio" / "application.json"
             target.parent.mkdir(parents=True)
             target.write_text(
                 json.dumps(
@@ -372,7 +372,7 @@ class ApplicationDatabaseCredentialTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_root:
             workspace = Path(temporary_root) / "legacy-shape"
-            target = workspace / ".xcodeagent" / "application.json"
+            target = workspace / ".devagentstudio" / "application.json"
             target.parent.mkdir(parents=True)
             target.write_text(
                 json.dumps(

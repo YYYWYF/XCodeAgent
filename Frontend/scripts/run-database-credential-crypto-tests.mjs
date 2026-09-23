@@ -52,7 +52,7 @@ globalThis.window = {
   crypto: webcrypto,
   atob: (value) => Buffer.from(value, 'base64').toString('binary'),
   btoa: (value) => Buffer.from(value, 'binary').toString('base64'),
-  xcodeAgent: { agentBaseUrl: 'http://127.0.0.1:8000' }
+  devAgentStudio: { agentBaseUrl: 'http://127.0.0.1:8000' }
 }
 globalThis.fetch = async () => ({
   ok: true,
@@ -73,7 +73,7 @@ globalThis.fetch = healthyFetch
 
 const password = '数据库-密码-🔐'
 const encrypted = await cryptoModule.encryptPlantModePassword(password, metadata)
-assert.match(encrypted, /^xcodeagent-secret:v1:rsa-oaep-256:platform-key-v1:/)
+assert.match(encrypted, /^devagentstudio-secret:v1:rsa-oaep-256:platform-key-v1:/)
 assert.equal(cryptoModule.isEncryptedPassword(encrypted), true)
 
 // 使用同一 RSA-OAEP-SHA256 参数解密，验证 Unicode 与 base64url 协议。
@@ -133,7 +133,7 @@ assert.equal(JSON.stringify(persistedApplication).includes(password), false)
 
 await assert.rejects(cryptoModule.encryptPlantModePassword('', metadata), /数据库密码不能为空/)
 await assert.rejects(
-  cryptoModule.encryptPlantModePassword('xcodeagent-secret:v1:broken', metadata),
+  cryptoModule.encryptPlantModePassword('devagentstudio-secret:v1:broken', metadata),
   /密文格式无效/
 )
 await assert.rejects(

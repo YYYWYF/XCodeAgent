@@ -26,6 +26,8 @@ export type SessionRunStatus = 'starting' | 'running' | 'stopping'
 
 export type SessionExecutionEntry = {
   identity: SessionIdentity
+  /** Workflow/Graph 的真实执行线程；它不同于用户可见会话使用的 threadId。 */
+  executionThreadId?: string
   status: SessionRunStatus
   conversation: boolean
   /** 当前 Workflow 节点，用于把本地运行态收窄到 DAG Planning 锁。 */

@@ -266,8 +266,8 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            specs = workspace / ".xcodeagent/specs"
-            plans = workspace / ".xcodeagent/plans"
+            specs = workspace / ".devagentstudio/specs"
+            plans = workspace / ".devagentstudio/plans"
             specs.mkdir(parents=True)
             plans.mkdir(parents=True)
             for path, payload in (
@@ -279,7 +279,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 path.write_text(json.dumps(payload), encoding="utf-8")
             for relative in ("frontend", "backend", ".git"):
                 (workspace / relative).mkdir()
-            state_path = workspace / ".xcodeagent/template-state.json"
+            state_path = workspace / ".devagentstudio/template-state.json"
             state_path.write_text(
                 json.dumps({
                     "schemaVersion": 2,
@@ -314,7 +314,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
             )
 
             self.assertEqual(ready.initialization.stage, ApplicationLifecycleStage.READY_FOR_WORKBENCH)
-            self.assertFalse((workspace / ".xcodeagent/template-generation-manifest.json").exists())
+            self.assertFalse((workspace / ".devagentstudio/template-generation-manifest.json").exists())
 
     def test_failed_workspace_bootstrap_can_enter_a_new_generation_attempt(self) -> None:
         """模板失败后只能由显式重试动作清除错误并回到生成阶段。"""
@@ -376,6 +376,47 @@ class ApplicationLifecycleTests(unittest.TestCase):
             self.assertNotIn("project", payload)
             self.assertNotIn("delivery", payload)
 
+    def test_legacy_workbench_execution_without_owner_session_id_still_loads(self) -> None:
+        """旧生命周期文件缺少 ownerSessionId 时仍可按当前 schema 读取。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = create_application_lifecycle(
+                application_id="app-legacy-owner",
+                application_name="Legacy owner",
+            )
+            state = state.model_copy(
+                update={
+                    "initialization": state.initialization.model_copy(
+                        update={
+                            "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                            "status": ApplicationLifecycleStatus.COMPLETED,
+                        }
+                    )
+                }
+            )
+            write_application_lifecycle(directory, state)
+            started = start_workbench_execution(
+                directory,
+                scope="application",
+                target_id="application",
+                page_id=None,
+                thread_id="workflow-thread-legacy",
+                run_id="run-legacy",
+                phase="build",
+                owner_session_id="session-legacy",
+            )
+            payload = started.model_dump(mode="json", by_alias=True)
+            payload["activeExecutions"]["run-legacy"].pop("ownerSessionId", None)
+            application_lifecycle_path(directory).write_text(
+                json.dumps(payload),
+                encoding="utf-8",
+            )
+
+            loaded = load_application_lifecycle(directory)
+
+        self.assertIsNotNone(loaded)
+        self.assertIsNone(loaded.active_executions["run-legacy"].owner_session_id)
+
     def test_workbench_execution_requires_completed_creation_planning(self) -> None:
         """创建规划完成前不能登记工作台执行或改变生命周期 revision。"""
 
@@ -414,7 +455,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            plan_path = workspace / ".xcodeagent/plans/technical-plan.json"
+            plan_path = workspace / ".devagentstudio/plans/technical-plan.json"
             plan_path.parent.mkdir(parents=True)
             plan_path.write_text(
                 json.dumps({"artifact_type": "technical-plan", "pages": [{"pageId": "dashboard"}]}),

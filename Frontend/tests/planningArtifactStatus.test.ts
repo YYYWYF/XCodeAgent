@@ -21,7 +21,7 @@ test('ProductPlan 工作台校验使用 v5', () => {
 async function withTemporaryWorkspace(
   run: (workspaceRoot: string) => Promise<void>
 ): Promise<void> {
-  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-endpoint-status-'))
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-endpoint-status-'))
   try {
     await run(workspaceRoot)
   } finally {
@@ -74,7 +74,7 @@ test('endpoint JSON 与 Markdown 修订号不一致时需重新设计', async ()
   await withTemporaryWorkspace(async (workspaceRoot) => {
     await writeCurrentEndpointDesign(workspaceRoot)
     const markdownPath = endpointDesignDocumentPath(workspaceRoot, 'employee-api', 'employee.list')
-    await fs.writeFile(markdownPath, '# Employee list endpoint\n<!-- xcodeagent-artifact-revision: ffffffffffffffffffffffffffffffff -->\n', 'utf8')
+    await fs.writeFile(markdownPath, '# Employee list endpoint\n<!-- devagentstudio-artifact-revision: ffffffffffffffffffffffffffffffff -->\n', 'utf8')
     const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
     assert.equal(status.status, 'stale')
     assert.equal(status.designed, false)
@@ -87,7 +87,7 @@ test('TechnicalPlan 指纹改变后接口需重新设计', async () => {
     await writeCurrentEndpointDesign(workspaceRoot)
     const technicalPlanPath = path.join(
       workspaceRoot,
-      '.xcodeagent',
+      '.devagentstudio',
       'plans',
       'technical-plan.json'
     )
@@ -184,7 +184,7 @@ async function writeCurrentEndpointDesign(
   const jsonPath = endpointDesignJsonPath(workspaceRoot, 'employee-api', 'employee.list')
   const technicalPlanPath = path.join(
     workspaceRoot,
-    '.xcodeagent',
+    '.devagentstudio',
     'plans',
     'technical-plan.json'
   )
@@ -194,7 +194,7 @@ async function writeCurrentEndpointDesign(
   }) + '\n')
   await fs.writeFile(technicalPlanPath, technicalPlan)
   const artifactRevision = '0123456789abcdef0123456789abcdef'
-  await fs.writeFile(markdownPath, `# Employee list endpoint\n<!-- xcodeagent-artifact-revision: ${artifactRevision} -->\n`, 'utf8')
+  await fs.writeFile(markdownPath, `# Employee list endpoint\n<!-- devagentstudio-artifact-revision: ${artifactRevision} -->\n`, 'utf8')
   await fs.writeFile(
     jsonPath,
     JSON.stringify({

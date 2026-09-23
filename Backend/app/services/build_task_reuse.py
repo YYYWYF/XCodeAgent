@@ -205,7 +205,7 @@ def _external_capabilities(
     template_revision = template_state_context.get("template_revision")
     effective = template_state_context.get("effective_capabilities")
     if (
-        state_path != ".xcodeagent/template-state.json"
+        state_path != ".devagentstudio/template-state.json"
         or not _identity(template_revision)
         or not isinstance(effective, Mapping)
     ):

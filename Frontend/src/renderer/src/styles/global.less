@@ -58,6 +58,11 @@ textarea[disabled],
 }
 
 .@{class-prefix}-workbench-shell {
+  // 对话消息列的几何：消息列宽 + 左右内边距。
+  // 消息列与它的兄弟节点（各种提醒 dock）必须对齐到同一个内容带，共用这两个值，
+  // 否则宽窗口下提醒会比 Agent 卡片宽出一截（见 VersionCommitReminder.less 的说明）。
+  --wb-chat-column-max: 1080px;
+  --wb-chat-column-gutter: 38px;
   --wb-bg: #f5f5f5;
   --wb-canvas: #ffffff;
   --wb-sidebar: #f2f2f2;

@@ -149,7 +149,7 @@ export default function WelcomeRecentProjects({
   }
 
   const projectDirectoryCanBeDeleted = Boolean(
-    applicationToDelete?.workspaceRoot && window.xcodeAgent?.applications.deleteProject
+    applicationToDelete?.workspaceRoot && window.devAgentStudio?.applications.deleteProject
   )
 
   return (

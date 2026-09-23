@@ -16,8 +16,8 @@
       "parameters": {
         "anchor": "const routes = [",
         "position": "after",
-        "managedMarker": "xcodeagent:login-route",
-        "content": "// xcodeagent:login-route:begin\n{ path: '/login' },\n// xcodeagent:login-route:end\n"
+        "managedMarker": "devagentstudio:login-route",
+        "content": "// devagentstudio:login-route:begin\n{ path: '/login' },\n// devagentstudio:login-route:end\n"
       },
       "payloadRef": null
     },
@@ -34,8 +34,8 @@
           "position": "after",
           "name": "routes"
         },
-        "managedMarker": "xcodeagent:route-registration",
-        "content": "// xcodeagent:route-registration\n"
+        "managedMarker": "devagentstudio:route-registration",
+        "content": "// devagentstudio:route-registration\n"
       },
       "payloadRef": null
     }

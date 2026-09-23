@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 from pathlib import Path
 
 from app.graph.nodes.common import workspace_from_state
@@ -47,7 +49,7 @@ def _build_plan_gate_error(workspace: str, state: ProjectState) -> str:
 
     if not workspace:
         return "缺少工作区，不能执行权限数据库初始化。"
-    path = Path(workspace).expanduser() / ".xcodeagent" / "plans" / "build-task-plan.json"
+    path = Path(workspace).expanduser() / WORKSPACE_ARTIFACT_DIR / "plans" / "build-task-plan.json"
     try:
         plan = load_build_task_plan_json(path)
     except (OSError, TypeError, ValueError):

@@ -34,7 +34,7 @@ import {
 
 test('fetchDatabaseTableColumns 合并同键并发请求并在结束后清理', async () => {
   const globalWithBrowser = globalThis as typeof globalThis & {
-    window?: { xcodeAgent?: { agentBaseUrl?: string } }
+    window?: { devAgentStudio?: { agentBaseUrl?: string } }
   }
   const previousWindow = globalWithBrowser.window
   const previousFetch = globalThis.fetch
@@ -44,7 +44,7 @@ test('fetchDatabaseTableColumns 合并同键并发请求并在结束后清理', 
     releaseRequest = resolve
   })
 
-  globalWithBrowser.window = { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  globalWithBrowser.window = { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }
   globalThis.fetch = (async () => {
     requestCount += 1
     await requestReleased

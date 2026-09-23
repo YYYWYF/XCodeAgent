@@ -36,13 +36,13 @@ def _settings() -> SimpleNamespace:
 def _prepare_generating_workspace(workspace: Path) -> None:
     """准备已确认规划且已进入模板生成阶段的最小工作区。"""
 
-    specs = workspace / ".xcodeagent/specs"
-    plans = workspace / ".xcodeagent/plans"
+    specs = workspace / ".devagentstudio/specs"
+    plans = workspace / ".devagentstudio/plans"
     specs.mkdir(parents=True)
     plans.mkdir(parents=True)
     for path, payload in (
         (
-            workspace / ".xcodeagent/application.json",
+            workspace / ".devagentstudio/application.json",
             {
                 "schemaVersion": 6,
                 "configRevision": 1,
@@ -96,7 +96,7 @@ def _write_package(path: Path, *, include_application: bool) -> None:
         package.writestr("backend/pom.xml", "<project />\n")
         if include_application:
             package.writestr("backend/src/main/java/demo/DemoApplication.java", "class DemoApplication {}\n")
-        package.writestr(".xcodeagent/template-state.json", json.dumps(state))
+        package.writestr(".devagentstudio/template-state.json", json.dumps(state))
 
 
 class WorkspaceBootstrapServiceTests(unittest.TestCase):
@@ -130,10 +130,10 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
                 lifecycle.initialization.stage,
                 ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
             )
-            for relative in ("frontend", "backend", ".git", ".xcodeagent/template-state.json"):
+            for relative in ("frontend", "backend", ".git", ".devagentstudio/template-state.json"):
                 self.assertFalse((workspace / relative).exists(), relative)
-            self.assertTrue((workspace / ".xcodeagent/application.json").is_file())
-            self.assertTrue((workspace / ".xcodeagent/application-lifecycle.json").is_file())
+            self.assertTrue((workspace / ".devagentstudio/application.json").is_file())
+            self.assertTrue((workspace / ".devagentstudio/application-lifecycle.json").is_file())
 
     def test_non_generating_lifecycle_rejects_before_calling_engine(self) -> None:
         """READY 等非生成阶段必须在网络调用前被 lifecycle gate 拒绝。"""

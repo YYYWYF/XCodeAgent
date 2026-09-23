@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
 import json
 import os
 import tempfile
@@ -59,7 +61,7 @@ class ReconcileAttemptV2:
 def reconcile_v2_root(workspace: str | Path) -> Path:
     """返回 V2 尝试和不可变 Package 的私有运行目录。"""
 
-    return Path(workspace).expanduser().resolve() / ".xcodeagent/runtime/template-reconcile"
+    return Path(workspace).expanduser().resolve() / WORKSPACE_ARTIFACT_DIR / 'runtime/template-reconcile'
 
 
 @contextmanager
