@@ -141,8 +141,10 @@ export default function WorkbenchTopBar({
             // 只读分支也要高亮当前阶段：它只读、不可点，但仍要指明这条分支
             // 停在哪个阶段（历史分支冻结在验收），否则阶段条上没有任何位置提示。
             const isActive = phase === phaseKey
-            // 回访资格使用独立的到达记录，不能随当前视图回退或 execution 收口而降低。
-            const reached = PHASE_ORDER.indexOf(reachedPhase) >= idx
+            const blockedByTestGate =
+              idx >= PHASE_ORDER.indexOf('test') && testEntryGate?.allowed !== true
+            // 到达记录不会授予门禁权限；阻断的后续阶段也不显示可回访强调色。
+            const reached = PHASE_ORDER.indexOf(reachedPhase) >= idx && !blockedByTestGate
             return (
               <Fragment key={phaseKey}>
                 {idx > 0 ? (
@@ -159,13 +161,11 @@ export default function WorkbenchTopBar({
                     isActive && 'active',
                     reached && !isActive && 'reached'
                   )}
-                  disabled={
-                    locked || (phaseKey === 'test' ? testEntryGate?.allowed !== true : !reached)
-                  }
+                  disabled={locked || blockedByTestGate || (phaseKey !== 'test' && !reached)}
                   title={
                     locked
                       ? '该分支为只读历史，阶段和 Agent 调度均已锁定'
-                      : phaseKey === 'test'
+                      : idx >= PHASE_ORDER.indexOf('test')
                         ? testEntryGateReason(testEntryGate)
                         : undefined
                   }

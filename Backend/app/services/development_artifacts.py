@@ -28,7 +28,7 @@ _BUILD_PLAN_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / 'plans/build-task-plan.json
 
 
 def development_artifact_key(target: DevelopmentArtifactTarget) -> str:
-    """生成产物的稳定标识，用于标记"本轮范围之外"。"""
+    """生成产物的稳定标识，用于记录当前 Build 范围。"""
 
     if target.type == "page":
         return f"page:{target.page_id}"
@@ -48,13 +48,13 @@ def _target_unit_id(target: DevelopmentArtifactTarget) -> str | None:
 
 
 def in_scope_unit_ids(workspace: str | Path) -> set[str] | None:
-    """读取构建计划里本次迭代**在范围内**的 Unit 标识；计划不可用时返回 None。
+    """读取构建计划里当前执行范围内的 Unit 标识；计划不可用时返回 None。
 
     范围的唯一标记是 Unit 上的 `input_fingerprint`：它只对进入 `required_unit_ids`
-    的 Unit 写入（见 build_unit_compiler）。规划器据此把未变更的产物排除在本轮之外，
-    它们不会被重新开发，因此也不该参与测试门禁统计。
+    的 Unit 写入（见 build_unit_compiler）。规划器据此确定当前 Build 任务，
+    不改变应用级初次开发完成门禁的统计范围。
 
-    计划缺失或不可解析时返回 None，调用方应退回"全部产物都算"的保守口径。
+    计划缺失或不可解析时返回 None，调用方不记录范围外目标。
     """
 
     plan_path = Path(workspace).expanduser().resolve() / _BUILD_PLAN_RELATIVE_PATH
@@ -184,8 +184,7 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
             "catalog_error": f"开发产物目录不可用：{exc}",
         })})
     artifacts = DevelopmentArtifacts(catalogError=None)
-    # 迭代是增量的：未变更的产物被规划器排除在本轮构建之外，不会被重新开发，
-    # 也就拿不到本轮的完成记录。标记它们，让门禁只统计本轮真正要做的产物。
+    # Build 计划按当前开发目标裁剪；这里仅保留范围诊断，不改变应用级门禁。
     artifacts.out_of_scope = out_of_scope_keys(workspace, targets)
     for target in targets:
         if target.type == "entity":
@@ -234,15 +233,7 @@ def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
         (DevelopmentArtifactTarget(type="entity", entityId=key), progress)
         for key, progress in artifacts.entities.items()
     ]
-    # 本轮构建范围之外的产物不参与门禁：它们不需要开发，只是还没有本轮的完成记录。
-    # 不排除的话，增量迭代会卡在"未变更的产物未完成"上，永远进不了测试阶段。
-    out_of_scope = set(artifacts.out_of_scope)
-    if out_of_scope:
-        records = [
-            (target, progress)
-            for target, progress in records
-            if development_artifact_key(target) not in out_of_scope
-        ]
+    # Build 计划只描述当前目标的执行范围；不能据此跳过其他尚未初次完成的产物。
     completed = sum(progress.initial_development_status == "completed" for _, progress in records)
     in_progress = sum(progress.initial_development_status == "in_progress" for _, progress in records)
     reason = artifacts.catalog_error

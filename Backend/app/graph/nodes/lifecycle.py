@@ -307,9 +307,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
         workspace_root(state), run_id=str(state.get("active_run_id") or ""),
     )
     gate = test_entry_gate(lifecycle)
-    review_files = state.get("development_review_files")
-    if not isinstance(review_files, list):
-        review_files = development_review_files(state.get("code_changes"), workspace_root(state))
+    review_files = development_review_files(workspace_root(state))
     submission = state.get("test_phase_confirmation")
     confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
     if confirmed and gate.allowed:

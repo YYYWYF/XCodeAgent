@@ -40,7 +40,7 @@ Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。
 
 产物目录使用已确认 ProductPlan 页面和 TechnicalPlan Endpoint、实体。新增 ID 从 `pending` 开始；删除目标移出统计，迟到事件不能重建；同 ID 改名或修改需求保留初次完成。未确认草稿或损坏文件不替换既有完成事实，通过 `catalogError` 关闭测试入口。只支持当前合同，不从旧会话、Build 文件或历史 checkpoint 推断完成状态。
 
-`testEntryGate` 随 AG-UI lifecycle 投影提供 `allowed/total/completed/pending/inProgress/blockers/reason`，不重复持久化。放行要求工作台就绪、目录有效、至少一个页面、接口或实体、全部初次完成。前端顶部、历史确认卡、自动阶段与本地阶段恢复使用同一门禁。顶部点击只浏览；真实测试提交、execution 接替、直接恢复/调试测试及修复返回测试均由后端复检。拒绝返回 `development_artifacts_incomplete`，保留未消费确认；测试启动接替与凭据消费原子提交，失败后原执行可重试。
+`testEntryGate` 随 AG-UI lifecycle 投影提供 `allowed/total/completed/pending/inProgress/blockers/reason`，不重复持久化。放行要求工作台就绪、目录有效、至少一个页面、接口或实体、全部初次完成；当前 Build 计划只约束本次执行，不会缩小应用级门禁分母。前端顶部、历史确认卡、自动阶段与本地阶段恢复使用同一门禁，测试及后续阶段均受约束。顶部点击只浏览；真实测试提交、execution 接替、直接恢复/调试测试及修复返回测试均由后端复检。拒绝返回 `development_artifacts_incomplete`，保留未消费确认；测试启动接替与凭据消费原子提交，失败后原执行可重试。
 
 圆点和分组计数只表示初次开发，不反映二次修改活动。分母不受搜索、折叠及相关项过滤影响。前端仅通过已有 AG-UI lifecycle store 同步，按 revision 拒绝旧快照；无状态文件轮询、独立 REST 接口或重复完成状态。
 

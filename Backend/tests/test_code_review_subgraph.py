@@ -162,14 +162,20 @@ class CodeReviewSubgraphTests(unittest.TestCase):
             ["frontend/src/App.tsx", "backend/src/main/java/example/App.java"],
         )
 
-    def test_diff_scan_uses_only_frozen_development_files(self) -> None:
-        """审查节点只把开发清单中仍存在的文件交给扫描 Agent。"""
+    def test_diff_scan_uses_completed_modules_instead_of_stale_session_diff(self) -> None:
+        """直接重试审查时也须刷新正式 Build 计划，不能沿用旧的两文件清单。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             changed = Path(workspace) / "backend/src/main/java/Changed.java"
             changed.parent.mkdir(parents=True)
             changed.write_text("class Changed {}", encoding="utf-8")
             with patch(
+                "app.graph.subgraphs.code_review.development_review_selection",
+                return_value=(
+                    ["backend/pom.xml", "backend/src/main/java/Changed.java"],
+                    ["backend/src/main/resources/Missing.xml"],
+                ),
+            ), patch(
                 "app.graph.subgraphs.code_review.analyze_workspace_code",
                 return_value=_scan_result(),
             ) as analyze:
@@ -185,7 +191,7 @@ class CodeReviewSubgraphTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(
             analyze.call_args.kwargs["review_files"],
-            ["backend/src/main/java/Changed.java"],
+            ["backend/pom.xml", "backend/src/main/java/Changed.java"],
         )
         self.assertEqual(result["code_review_result"]["skipped_file_count"], 1)
 

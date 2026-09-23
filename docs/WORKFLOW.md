@@ -6,7 +6,7 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 
 ## 核心架构原则
 
-测试入口另有应用级初次开发门禁：`.devagentstudio/application-lifecycle.json.developmentArtifacts` 保存每个页面和 Endpoint 的初次开发状态。只有每个目标分别完成 Build 及开发阶段单元测试门禁后，投影 `testEntryGate.allowed=true`，顶部才允许浏览测试阶段；实体继续作为开发前置条件，不计入此门禁。`test_phase_confirmation` 先记录当前目标完成再计算全量门禁，二次修改不覆盖首次完成事实。实际确认、跨 thread 测试接替和集成测试节点均在服务端复检，阻断以 `development_artifacts_incomplete` 及完整 AG-UI 生命周期返回。详细状态及目录同步规则见 `docs/APPLICATION_DEVELOPMENT_PLANNING.md` 的 Initial Development Completion and Test Entry。
+测试入口另有应用级初次开发门禁：`.devagentstudio/application-lifecycle.json.developmentArtifacts` 保存每个页面、Endpoint 和实体的初次开发状态。页面和 Endpoint 必须各自完成 Build 及开发阶段单元测试门禁，实体必须完成正式绑定确认；当前 Build 计划的范围不能排除其他未完成产物。只有全部产物完成后 `testEntryGate.allowed=true`，顶部才允许浏览测试及后续阶段。`test_phase_confirmation` 先记录当前目标完成再计算全量门禁，二次修改不覆盖首次完成事实。实际确认、跨 thread 测试接替和集成测试节点均在服务端复检，阻断以 `development_artifacts_incomplete` 及完整 AG-UI 生命周期返回。详细状态及目录同步规则见 `docs/APPLICATION_DEVELOPMENT_PLANNING.md` 的 Initial Development Completion and Test Entry。
 
 1. 外层 LangGraph 管理确定性的项目生命周期。
 2. Deep Agents 负责需要自主推理、工具调用、文件操作和多步执行的任务。
@@ -534,7 +534,7 @@ testing.START
 
 ### `code_review` / Code Review Subgraph
 
-测试质量门禁通过后，主 Graph 先停在 `review_phase_confirmation`；确认卡并排提供全量审查和 Diff 审查，提交 `reviewMode=full|diff`。开发结束的 `test_phase_confirmation` 从最终 `code_changes` 固定可读变动文件清单；测试阶段修复不追加到该清单，跨阶段只从服务端 checkpoint 传递。全量审查沿用原扫描逻辑；Diff 审查读取清单中文件的当前完整内容，不限于变动行。依赖文件只变动一个时可读取另一文件辅助判断，但只报告变动文件的问题。两种模式都必须实际读取相同的前后端 Skill 和后端规则引用；无可审查文件时禁用 Diff 入口，不自动转全量。报告标明模式、实际扫描数与跳过数。
+测试质量门禁通过后，主 Graph 先停在 `review_phase_confirmation`；确认卡并排提供全量审查和 Diff 审查，提交 `reviewMode=full|diff`。Diff 文件范围与顶部分支菜单的“已完成模块”同源：服务端读取当前正式 `build-task-plan.json` 的 `build_units` 与 `task_registry`，要求模块下全部任务 `completed` 且至少一个目标文件仍在 Git `eligiblePaths`，随后纳入该模块声明的**全部** `target_files`。路径再经过工作区、安全、文本与存在性校验；不从当前对话的 `code_changes` 推断整个开发阶段范围。开发结束时将清单固定到 checkpoint，跨阶段只从服务端传递；审查入口与扫描重试从同一正式计划刷新，以修正过期的会话清单。全量审查沿用原扫描逻辑；Diff 审查读取清单中文件的当前完整内容，不限于变动行，包括后端 `pom.xml`、资源与配置文件。依赖文件只变动一个时可读取另一文件辅助判断，但只报告清单内文件的问题。两种模式都必须实际读取相同的前后端 Skill 和后端规则引用；无可审查文件时禁用 Diff 入口，不自动转全量。报告标明模式、实际扫描数与跳过数。
 `code_review` 对外仍是一个节点，对内运行以下受控子图：
 
 ```text

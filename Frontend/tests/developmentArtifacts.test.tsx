@@ -205,11 +205,13 @@ test('门禁读取中或错误时显示原因且不暴露测试入口', () => {
   assert.doesNotMatch(html, /测试目标|未完成产物|<button/)
 })
 
-test('未加载和未完成时禁止测试；完成后允许；其他阶段沿用现有规则', () => {
+test('未加载和未完成时禁止测试及后续阶段；完成后允许', () => {
   assert.equal(gateWorkbenchPhase('test'), 'development')
   assert.equal(gateWorkbenchPhase('test', blocked), 'development')
   assert.equal(gateWorkbenchPhase('test', allowed), 'test')
-  assert.equal(gateWorkbenchPhase('review', blocked), 'review')
+  assert.equal(gateWorkbenchPhase('review', blocked), 'development')
+  assert.equal(gateWorkbenchPhase('acceptance', blocked), 'development')
+  assert.equal(gateWorkbenchPhase('review', allowed), 'review')
   assert.equal(gateWorkbenchPhase('product', blocked), 'product')
   assert.equal(testEntryGateReason(blocked), blocked.reason)
   assert.match(testEntryGateReason(), /正在读取/)

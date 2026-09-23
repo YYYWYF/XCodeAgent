@@ -13,8 +13,8 @@ from app.agents.code_review_repair import (
     invoke_code_review_repair_agent,
     normalize_code_review_repair_result,
 )
-from app.agents.code_analyze.scope import is_code_review_change_path
-from app.services.development_review_files import current_review_file
+from app.agents.code_analyze.scope import is_code_review_change_path, is_code_review_diff_path
+from app.services.development_review_files import development_review_selection
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.state import ProjectState
 from app.services.project_launcher import run_project_restart_validation
@@ -192,7 +192,7 @@ def _reviewed_source_file(activity: dict[str, Any]) -> str:
         return ""
     raw_path = str(activity.get("path") or "").strip().replace("\\", "/")
     normalized = raw_path.lstrip("/")
-    if not normalized or not is_code_review_change_path(normalized):
+    if not normalized or not is_code_review_diff_path(normalized):
         return ""
     return normalized
 
@@ -215,13 +215,9 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
 
     workspace = workspace_from_state(state)
     review_mode = state.get("code_review_mode") or "full"
-    source_files = state.get("development_review_files")
-    source_files = sorted({path for path in source_files if isinstance(path, str)}) if isinstance(source_files, list) else []
-    review_files = (
-        sorted({path for path in source_files if current_review_file(workspace or "", path)})
-        if review_mode == "diff" else []
+    review_files, skipped_paths = (
+        development_review_selection(workspace or "") if review_mode == "diff" else ([], [])
     )
-    skipped_paths = [path for path in source_files if path not in review_files] if review_mode == "diff" else []
     skipped_files = len(skipped_paths)
     if review_mode == "diff" and not review_files:
         return {
@@ -261,15 +257,15 @@ def code_scan(state: ProjectState) -> dict[str, Any]:
             on_tool_activity=report_tool_activity,
             **({"review_mode": "diff", "review_files": review_files} if review_mode == "diff" else {}),
         )
-        if review_mode == "diff" and skipped_files:
+        if review_mode == "diff":
             result["skipped_file_count"] = skipped_files
             for target in result.get("targets", []):
                 if isinstance(target, dict):
-                    prefix = "frontend/" if target.get("side") == "frontend" else "backend/src/main/java/"
+                    prefix = "frontend/" if target.get("side") == "frontend" else "backend/"
                     side_skipped = sum(path.startswith(prefix) for path in skipped_paths)
                     if side_skipped:
                         target["warning"] = (
-                            f"开发 Diff 中有 {side_skipped} 个文件已删除、缺失或不可读取，已跳过。"
+                            f"已完成模块中有 {side_skipped} 个文件已删除、缺失或不可读取，已跳过。"
                         )
     except Exception as exc:  # noqa: BLE001 - 子图边界统一转换为失败状态
         return {

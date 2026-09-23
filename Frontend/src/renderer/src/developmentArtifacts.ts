@@ -1,9 +1,11 @@
 import type { DevelopmentArtifactProgress, DevelopmentArtifacts, TestEntryGate } from './typings'
 import type { WorkbenchPhase } from './workbenchPhase'
 
-/** 根据权威门禁约束测试视图，覆盖手动选择、冷启动恢复与自动阶段推导。 */
+/** 根据权威门禁约束测试及后续视图，覆盖手动选择、冷启动恢复与自动阶段推导。 */
 export function gateWorkbenchPhase(phase: WorkbenchPhase, gate?: TestEntryGate): WorkbenchPhase {
-  return phase === 'test' && gate?.allowed !== true ? 'development' : phase
+  return ['test', 'review', 'acceptance'].includes(phase) && gate?.allowed !== true
+    ? 'development'
+    : phase
 }
 
 /** 为尚未加载及被门禁阻断的测试入口提供一致说明。 */
@@ -32,7 +34,7 @@ export function developmentCompletedCount(
   return records.filter((record) => record?.initialDevelopmentStatus === 'completed').length
 }
 
-/** 统计完整开发产物目录；顶部进度不受本轮测试门禁的构建范围裁剪影响。 */
+/** 统计完整开发产物目录；顶部进度与服务端测试门禁使用同一分母。 */
 export function developmentArtifactTotals(artifacts: DevelopmentArtifacts): {
   completed: number
   total: number

@@ -17,7 +17,7 @@ from deepagents.backends.protocol import (
     ReadResult,
     WriteResult,
 )
-from app.workspace.workspace import SENSITIVE_FILE_NAMES
+from app.workspace.workspace import DEFAULT_IGNORED_DIRS, SENSITIVE_FILE_NAMES
 
 
 _FRONTEND_ROOT = "frontend"
@@ -44,13 +44,13 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
         self._allowed_files = allowed_files
 
     def _read_allowed(self, path: str) -> bool:
-        """Diff 模式将原有只读边界进一步收窄到变动文件和必需 Skill。"""
+        """Diff 模式精确放行计划文件及必需 Skill，全量模式保留原边界。"""
 
         normalized = normalize_virtual_path(path)
-        return _is_read_path(path) and (
-            self._allowed_files is None
-            or normalized in self._allowed_files
-            or normalized in _SKILL_FILES
+        if self._allowed_files is None:
+            return _is_read_path(path)
+        return normalized in _SKILL_FILES or (
+            normalized in self._allowed_files and is_code_review_diff_path(normalized)
         )
 
     def _list_allowed(self, path: str) -> bool:
@@ -63,9 +63,10 @@ class CodeAnalyzeScopedBackend(BackendProtocol):
     def _search_allowed(self, path: str | None) -> bool:
         """Diff 模式仅允许对清单中的单个文件执行搜索。"""
 
-        return _is_code_path(path) and (
-            self._allowed_files is None or normalize_virtual_path(path) in self._allowed_files
-        )
+        if self._allowed_files is None:
+            return _is_code_path(path)
+        normalized = normalize_virtual_path(path)
+        return normalized in self._allowed_files and is_code_review_diff_path(normalized)
 
     def ls(self, path: str) -> LsResult:
         """仅允许浏览源码目录及内置 Skill 目录。"""
@@ -368,6 +369,20 @@ def is_code_review_change_path(value: Any) -> bool:
 
     path = normalize_virtual_path(value)
     return _is_safe_frontend_path(path) or _is_backend_source_path(path)
+
+
+def is_code_review_diff_path(value: Any) -> bool:
+    """Diff 模式只接受清单内前后端项目文件，排除依赖、产物和敏感路径。"""
+
+    path = normalize_virtual_path(value)
+    if not path or not (path.startswith("frontend/") or path.startswith("backend/")):
+        return False
+    parts = PurePosixPath(path).parts
+    ignored = {name.casefold() for name in DEFAULT_IGNORED_DIRS} | {
+        ".devagentstudio", "target", "out", ".gradle",
+    }
+    sensitive = {name.casefold() for name in SENSITIVE_FILE_NAMES}
+    return not any(part.casefold() in ignored or part.casefold() in sensitive for part in parts)
 
 
 def _is_code_path(value: Any) -> bool:

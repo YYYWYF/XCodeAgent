@@ -32,7 +32,11 @@ export default function ReviewPhaseConfirmationCard({
         <Button disabled={disabled} onClick={() => onSubmit('full')} type="primary">
           全量审查
         </Button>
-        <Button disabled={disabled || diffFileCount < 1} onClick={() => onSubmit('diff')}>
+        <Button
+          disabled={disabled || diffFileCount < 1}
+          onClick={() => onSubmit('diff')}
+          type="primary"
+        >
           Diff 审查
         </Button>
       </div>

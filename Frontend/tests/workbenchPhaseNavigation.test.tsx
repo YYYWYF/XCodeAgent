@@ -128,7 +128,7 @@ function assertPhaseActive(html: string, label: string): void {
   assert.ok(active[0].includes(`${label}阶段`), `高亮阶段应为${label}`)
 }
 
-test('顶部开发进度统计完整产物目录，测试门禁仍按本轮范围判断', () =>
+test('顶部开发进度与测试门禁都按完整产物目录判断', () =>
   withStorage(() => {
     const lifecycle: ApplicationLifecycle = {
       application: { id: 'three-artifacts', name: 'three-artifacts' },
@@ -136,7 +136,7 @@ test('顶部开发进度统计完整产物目录，测试门禁仍按本轮范�
       revision: 1,
       initialization: { stage: 'ready_for_workbench', status: 'completed' },
       activeExecutions: {},
-      testEntryGate: allowed,
+      testEntryGate: { ...allowed, total: 3, completed: 3 },
       developmentArtifacts: {
         pages: { home: { initialDevelopmentStatus: 'completed' } },
         endpoints: { age: { save: { initialDevelopmentStatus: 'completed' } } },
@@ -160,7 +160,7 @@ test('顶部开发进度统计完整产物目录，测试门禁仍按本轮范�
       </WorkbenchPhaseProvider>
     )
     assert.match(html, /开发阶段<span>3\/3<\/span>/)
-    assert.equal(lifecycle.testEntryGate?.total, 2)
+    assert.equal(lifecycle.testEntryGate?.total, 3)
 
     const newVersionHtml = renderToStaticMarkup(
       <WorkbenchPhaseProvider applicationId="new-version" versionId="v2" lifecycle={lifecycle}>
@@ -253,9 +253,14 @@ test('保留验收回访权限不能绕过当前测试门禁', () =>
     renderNavigation('one', 'acceptance_review').context.switchPhase('development')
     const closed = renderNavigation('one', undefined, { ...allowed, allowed: false })
     assertPhaseEnabled(closed.html, '测试', false)
-    assertPhaseEnabled(closed.html, '验收', true)
+    assertPhaseEnabled(closed.html, '审查', false)
+    assertPhaseEnabled(closed.html, '验收', false)
     closed.context.switchPhase('test')
+    closed.context.switchPhase('review')
+    closed.context.switchPhase('acceptance')
     assert.equal(renderNavigation().context.phase, 'development')
+    const staleReview = renderNavigation('one', 'code_review', { ...allowed, allowed: false })
+    assertPhaseActive(staleReview.html, '开发')
   }))
 
 test('历史版本隐藏顶部右侧的 Agent 身份、跟随开关与预览开关', () =>

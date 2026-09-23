@@ -90,6 +90,53 @@ class CodeReviewDocumentsTests(unittest.TestCase):
         self.assertIn("审查通过，未发现需要处理的问题", content)
         self.assertIn("代码审查通过", content)
 
+    def test_diff_report_lists_every_reviewed_file(self) -> None:
+        """Diff 报告必须逐项展示服务端确认的全部实际审查文件。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            content = render_code_review_markdown(
+                {"workspace": workspace},
+                {
+                    "status": "completed",
+                    "review_mode": "diff",
+                    "review_file_count": 3,
+                    "review_files": [
+                        "frontend/src/apis/ageApi.ts",
+                        "backend/src/main/java/example/AgeController.java",
+                        "backend/src/main/resources/mapper/AgeRecordMapper.xml",
+                    ],
+                    "targets": [],
+                    "issues": [],
+                },
+            )
+
+        self.assertIn("## Diff 审查文件", content)
+        self.assertIn("- `frontend/src/apis/ageApi.ts`", content)
+        self.assertIn(
+            "- `backend/src/main/java/example/AgeController.java`", content
+        )
+        self.assertIn(
+            "- `backend/src/main/resources/mapper/AgeRecordMapper.xml`", content
+        )
+
+    def test_full_report_does_not_render_diff_file_list(self) -> None:
+        """全量审查保持原报告结构，不展示 Diff 文件章节。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            content = render_code_review_markdown(
+                {"workspace": workspace},
+                {
+                    "status": "completed",
+                    "review_mode": "full",
+                    "review_files": ["frontend/src/App.tsx"],
+                    "targets": [],
+                    "issues": [],
+                },
+            )
+
+        self.assertNotIn("## Diff 审查文件", content)
+        self.assertNotIn("frontend/src/App.tsx", content)
+
 
 if __name__ == "__main__":
     unittest.main()

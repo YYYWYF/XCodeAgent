@@ -43,36 +43,56 @@ class CodeAnalyzeMiddleware(AgentMiddleware):
 def create_code_analyze_agent(
     model, workspace_root: str | None = None, *, allowed_files: frozenset[str] | None = None
 ):
-    """创建只扫描授权前端项目和后端源码目录的 CodeAnalyze Agent。"""
+    """创建只读审查 Agent；Diff 模式由精确文件清单控制后端配置读取。"""
 
-    system_prompt = (
+    diff_mode = allowed_files is not None
+    scope_policy = (
+        "Scan ONLY the exact changed project files listed in the user request, including "
+        "backend configuration and resource files when listed. Never read, search, list deeply, "
+        "write, edit, delete, upload, execute, or delegate work outside those files and the "
+        "three required Skill files. Missing scan roots are skipped and reported. "
+        if diff_mode else
+        "Scan ONLY /frontend/** (excluding every node_modules subtree and sensitive file) "
+        "and /backend/src/main/java/** in the user workspace. Never read, search, list deeply, "
+        "write, edit, delete, upload, execute, or delegate work outside those paths. "
+        "Missing scan roots are skipped and reported. "
+    )
+    frontend_policy = (
+        "If the frontend Skill contains no concrete scan rules, still read every selected "
+        "frontend file, report its warning, and do not invent frontend issues. "
+        if diff_mode else
+        "If the frontend Skill contains no concrete scan rules, do NOT read frontend project "
+        "files; report its warning, a completed target with scanned_file_count 0, and NEVER "
+        "create frontend issues. "
+    )
+    issue_root = "backend/" if diff_mode else "backend/src/main/java/"
+    target_rule = (
+        "use root exactly (frontend and backend), never scan_root. "
+        if diff_mode else "use root exactly, never scan_root. "
+    )
+    system_prompt = "".join([
         "You are the CodeAnalyze Agent. You perform a read-only security and quality review. "
         "Before inspecting any source, you MUST read all required Skill documents from the "
         "virtual builtin-skills path: frontend-code-scan/SKILL.md, backend-code-scan/SKILL.md, "
         "and backend-code-scan/references/rules-reference.md. Apply both scan Skills in the "
-        "same invocation. Scan ONLY /frontend/** (excluding every node_modules subtree and "
-        "sensitive file) and /backend/src/main/java/** in the user workspace. Never read, search, "
-        "list deeply, write, edit, delete, upload, execute, or delegate work outside those paths. "
-        "Missing scan roots are skipped and reported. If the frontend Skill contains no concrete "
-        "scan rules, do NOT read frontend project "
-        "files; report its warning, a completed target with scanned_file_count 0, and NEVER "
-        "create frontend issues. "
+        "same invocation. ",
+        scope_policy,
+        frontend_policy,
         "Do not fix findings. Return exactly one JSON object without Markdown fences using keys "
         "status, summary, loaded_skills, targets, issues, and truncated. "
         "Set status to completed whenever the scan finishes, including when one or more issues "
         "are found; findings belong only in issues and never make status failed. "
-        "Each issue must use a relative workspace path prefixed with frontend/ or "
-        "backend/src/main/java/, side frontend/backend, optional rule_id, "
-        "severity critical/high/medium/low, title, summary, optional line, and repair_actions. "
+        f"Each issue must use a relative workspace path prefixed with frontend/ or {issue_root}, "
+        "side frontend/backend, optional rule_id, severity critical/high/medium/low, title, "
+        "summary, optional line, and repair_actions. "
         "Set repair_actions to [\"pnpm_install\"] only when the loaded Skill remediation explicitly "
         "requires pnpm i or pnpm install; otherwise use an empty array. Never invent other actions. "
-        "Each targets item must use side, root, status, scanned_file_count, and optional warning; "
-        "use root exactly, never scan_root. "
+        "Each targets item must use side, root, status, scanned_file_count, and optional warning; ",
+        target_rule,
         "Do not include source excerpts, absolute host paths, secrets, or model reasoning. "
-        "Limit issues to 100 and "
-        "set truncated when more exist."
-        f" {VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}"
-    )
+        "Limit issues to 100 and set truncated when more exist."
+        f" {VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}",
+    ])
     backend = CodeAnalyzeScopedBackend(
         create_workspace_backend(workspace_root, include_builtin_skills=True),
         allowed_files=allowed_files,
@@ -90,7 +110,7 @@ def create_code_analyze_agent(
         backend=backend,
         permissions=create_workspace_permissions(
             workspace_root,
-            mode="code_analyze",
+            mode="code_analyze_diff" if allowed_files is not None else "code_analyze",
             include_builtin_skills=True,
         ),
     )

@@ -21,6 +21,19 @@ from app.workspace.virtual_paths import host_workspace_virtual_alias
 
 
 class WorkspaceScopeTests(unittest.TestCase):
+    def test_diff_review_permissions_include_backend_configuration(self) -> None:
+        """Diff 模式权限允许计划列出的后端配置且禁止写入。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            diff = create_workspace_permissions(workspace, mode="code_analyze_diff")
+
+        self.assertEqual(_check_fs_permission(diff, "read", "/backend/pom.xml"), "allow")
+        self.assertEqual(
+            _check_fs_permission(diff, "read", "/backend/src/main/resources/application.yml"),
+            "allow",
+        )
+        self.assertEqual(_check_fs_permission(diff, "write", "/backend/pom.xml"), "deny")
+
     def test_resolves_existing_workspace_root(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
             self.assertEqual(resolve_workspace_root(workspace), Path(workspace).resolve())
