@@ -14,7 +14,7 @@ type Props = {
   onOpenDetail: (target: DataSourcesDetailTarget) => void
 }
 
-/** 列表条目：与任务管理抽屉的对话卡片同款设计，只标识“是什么”，详情进右侧衔接层。 */
+/** 列表条目：与对话管理抽屉的对话卡片同款设计，只标识“是什么”，详情进右侧衔接层。 */
 function ListRow({
   icon,
   label,

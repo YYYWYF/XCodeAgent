@@ -213,7 +213,7 @@ function WorkbenchPage({
   const [developmentArtifactProgress, setDevelopmentArtifactProgress] =
     useState<WorkbenchArtifactProgress>({ completed: 0, total: 0 })
   const [testPreparationOpenRequest, setTestPreparationOpenRequest] = useState(0)
-  // 两套任务系统各自的抽屉与临时任务抽屉统一由工作台页持有：同一时间只允许打开一个。
+  // 两套任务系统各自的抽屉与临时对话抽屉统一由工作台页持有：同一时间只允许打开一个。
   const [backgroundTasksDrawer, setBackgroundTasksDrawer] = useState<BackgroundTaskSystem | null>(
     null
   )
@@ -239,12 +239,12 @@ function WorkbenchPage({
   const [testCaseGenerationTaskType, setTestCaseGenerationTaskType] =
     useState<TestCaseGenerationTaskType>()
   const [auxiliaryDrawerMode, setAuxiliaryDrawerMode] = useState<AuxiliaryDrawerMode | null>(null)
-  // 任务管理抽屉的内容快照：打开抽屉时经聊天面板查询获得，抽屉打开期间定时重查保持新鲜。
+  // 对话管理抽屉的内容快照：打开抽屉时经聊天面板查询获得，抽屉打开期间定时重查保持新鲜。
   const [conversationManagementContent, setConversationManagementContent] =
     useState<ConversationManagementContent>()
   // 新建/删除/切换查看对象都是异步落地，且落地时长不定：
   // 抽屉打开期间定时重查快照，徽标、选中态与列表在动作完成后自动跟上，无需各动作各自回调。
-  /** 打开任务管理抽屉，并互斥关闭两套任务系统的抽屉。 */
+  /** 打开对话管理抽屉，并互斥关闭两套任务系统的抽屉。 */
   const openConversationManagement = (): void => {
     setBackgroundTasksDrawer(null)
     const base = getConversationManagementContentRef.current?.()
@@ -278,7 +278,7 @@ function WorkbenchPage({
     setBackgroundTasksDrawer(null)
     setAuxiliaryDrawerMode((current) => (current === 'settings' ? null : 'settings'))
   }
-  /** 只关闭文件/技能/设置三个功能抽屉；任务管理与数据源抽屉的开合不受影响。 */
+  /** 只关闭文件/技能/设置三个功能抽屉；对话管理与数据源抽屉的开合不受影响。 */
   const closeFunctionalDrawers = (): void => {
     setAuxiliaryDrawerMode((current) =>
       current === 'files' || current === 'skills' || current === 'settings' ? null : current
@@ -305,7 +305,7 @@ function WorkbenchPage({
     window.addEventListener('devagentstudio:prototype:open-data-sources', open)
     return () => window.removeEventListener('devagentstudio:prototype:open-data-sources', open)
   }, [])
-  /** 打开指定任务系统的队列抽屉，并互斥关闭任务管理抽屉。 */
+  /** 打开指定任务系统的队列抽屉，并互斥关闭对话管理抽屉。 */
   const openBackgroundTasksDrawer = (system: BackgroundTaskSystem): void => {
     setAuxiliaryDrawerMode(null)
     setBackgroundTasksDrawer(system)
@@ -326,7 +326,7 @@ function WorkbenchPage({
   const closeAuxiliaryDrawer = (): void => {
     setAuxiliaryDrawerMode(null)
   }
-  // 任务管理内容查询函数由聊天面板注册（函数在其内部创建），用 ref 转接避免抽屉打开链路依赖渲染时序。
+  // 对话管理内容查询函数由聊天面板注册（函数在其内部创建），用 ref 转接避免抽屉打开链路依赖渲染时序。
   const getConversationManagementContentRef = useRef<
     (() => ConversationManagementContent) | undefined
   >()
@@ -842,7 +842,7 @@ function WorkbenchPage({
                 onRequestBackgroundTaskContinuation={handleAcceptBackgroundTask}
                 onBackgroundTaskAcceptanceSettled={handleBackgroundTaskAcceptanceSettled}
               />
-              {/* 后台任务与临时任务抽屉：统一挂在裁剪宿主内，从左侧菜单栏右边线滑出，
+              {/* 后台任务与临时对话抽屉：统一挂在裁剪宿主内，从左侧菜单栏右边线滑出，
                   宿主裁剪保证抽屉任何时刻都不会越过菜单栏或盖到菜单栏之上。 */}
               <div className={cx('workbench-drawer-host')}>
                 {/* 抽屉不是模态图层：打开时铺一层透明遮罩拦截工作区首次点击用于快速收起，

@@ -53,7 +53,7 @@ type SessionRunEntry = {
 
 type UseWorkflowConversationParams = {
   activeSession?: SessionIdentity
-  /** 用户显式持有编辑权限的常规任务；其它常规任务只能查看历史。 */
+  /** 用户显式持有编辑权限的常规对话；其它常规对话只能查看历史。 */
   authorizedEditingSessionId?: string
   agUiSessionsRef: MutableRefObject<Record<string, AgUiChatSession>>
   application: ApplicationConfig
@@ -626,7 +626,7 @@ export function useWorkflowConversation({
     if (occupiedSession) {
       setErrors((current) => ({
         ...current,
-        [identity.key]: '另一条任务正在执行或等待确认，请先完成该工作流。'
+        [identity.key]: '另一条对话正在执行或等待确认，请先完成该工作流。'
       }))
       return false
     }
@@ -916,8 +916,8 @@ export function useWorkflowConversation({
     )
       return false
     const continuationMessage = buildClarificationContinuationMessage(workflow, answers)
-    // 阶段准入门（规划/开发）是跨会话续跑：目标会话由剧本决定，与当前推进任务无关。
-    // 推进权已交给新建任务时仍必须能确认门禁，否则弹框会变成点了没反应的静默失效。
+    // 阶段准入门（规划/开发）是跨会话续跑：目标会话由剧本决定，与当前推进对话无关。
+    // 推进权已交给新建对话时仍必须能确认门禁，否则弹框会变成点了没反应的静默失效。
     const clarificationMode = workflowClarificationMode(workflow)
     const stageEntryGate =
       clarificationMode === 'planning_stage_entry' ||
@@ -961,7 +961,7 @@ export function useWorkflowConversation({
         await persistSessionFor(persistSession, activeSession, { messages: nextMessages })
       }
       // 已提交的确认卡立即退出运行占位；后续续跑会按目标阶段/会话重新写入 running 状态。
-      // 不能让历史卡残留的 awaiting_user 把本阶段的新建任务入口永久锁住。
+      // 不能让历史卡残留的 awaiting_user 把本阶段的新建对话入口永久锁住。
       // 静默续跑（合成恢复工作流不会匹配任何消息）不清理运行占位，保持左侧现状。
       if (!options?.quietRun) {
         setRunStates((current) => omitKey(current, activeSession.key))

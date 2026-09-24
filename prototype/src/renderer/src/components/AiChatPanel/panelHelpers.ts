@@ -331,7 +331,7 @@ export function latestMessageWorkflow(
 }
 
 /**
- * 跨会话扫描指定阶段会话的待处理门禁。工作流走完后允许新建任务，查看对象随时可能
+ * 跨会话扫描指定阶段会话的待处理门禁。工作流走完后允许新建对话，查看对象随时可能
  * 切到别的会话；门禁是阶段层状态，不能因为当前会话没有轨迹就让顶部入口失联。
  */
 export function findPendingGateWorkflow(
@@ -354,7 +354,7 @@ export function findPendingGateWorkflow(
   return undefined
 }
 
-/** 判断当前推进任务是否真有未结束事项；已提交的历史确认卡不再占用新建门禁。 */
+/** 判断当前推进对话是否真有未结束事项；已提交的历史确认卡不再占用新建门禁。 */
 export function sessionRunBlocksConversationCreation(
   status: SessionRunStatus | undefined,
   workflow: WorkflowRunPayload | undefined
@@ -364,7 +364,7 @@ export function sessionRunBlocksConversationCreation(
   const clarification = workflowClarification(workflow)
   if (workflow?.summary?.status !== 'requires_user_input') return false
   // 阶段准入门（规划/开发）只等待用户切换阶段，任务自身的工作项已全部完成，
-  // 不能让它把本阶段的“新建任务”入口永久锁住。
+  // 不能让它把本阶段的“新建对话”入口永久锁住。
   if (
     clarification?.mode === 'planning_stage_entry' ||
     clarification?.mode === 'development_entry_confirmation'

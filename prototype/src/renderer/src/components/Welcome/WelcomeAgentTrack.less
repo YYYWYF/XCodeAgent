@@ -52,6 +52,8 @@
 }
 
 .@{class-prefix}-agent-stage {
+  /* 图标块高度唯一来源：箭头块与其同高，保证两者垂直中心始终一致。 */
+  --stage-icon-height: 70px;
   position: relative;
   display: grid;
   justify-items: center;
@@ -63,23 +65,29 @@
     white-space: nowrap;
   }
 
+  /* 箭头块与图标块同高并 flex 居中实现垂直居中；
+     右缘贴列边界后右移自身一半宽度，中心恰好落在相邻两块之间的中点上。 */
   i {
     position: absolute;
-    top: 27px;
-    right: -8px;
+    top: 0;
+    right: 0;
+    display: flex;
     width: 28px;
+    height: var(--stage-icon-height);
+    align-items: center;
+    justify-content: center;
     color: #c084fc;
     font-size: 23px;
     font-style: normal;
-    text-align: center;
     text-shadow: 0 0 12px rgba(192, 132, 252, 0.7);
+    transform: translateX(50%);
   }
 }
 
 .@{class-prefix}-agent-stage-icon {
   display: flex;
   width: 76px;
-  height: 70px;
+  height: var(--stage-icon-height);
   align-items: center;
   justify-content: center;
   color: #c4b5fd;
@@ -286,13 +294,12 @@ html[data-platform='windows'] {
 }
 
 @media (max-height: 780px) and (min-width: 981px) {
+  .@{class-prefix}-agent-stage {
+    --stage-icon-height: 58px;
+  }
   .@{class-prefix}-agent-stage-icon {
     width: 66px;
-    height: 58px;
     font-size: 29px;
-  }
-  .@{class-prefix}-agent-stage i {
-    top: 21px;
   }
   .@{class-prefix}-agent-editor {
     min-height: 430px;
@@ -304,10 +311,10 @@ html[data-platform='windows'] {
 
 @media (max-width: 1180px) {
   .@{class-prefix}-agent-stage {
+    --stage-icon-height: 58px;
     font-size: 13px;
 
     i {
-      right: -7px;
       width: 22px;
       font-size: 19px;
     }
@@ -315,7 +322,6 @@ html[data-platform='windows'] {
 
   .@{class-prefix}-agent-stage-icon {
     width: 62px;
-    height: 58px;
     font-size: 28px;
   }
 }

@@ -272,14 +272,14 @@ export function workflowCodeChanges(
   return undefined
 }
 
-/** 根据 Workflow 最终状态生成结果标题，避免失败运行被标记为任务完成。 */
+/** 根据 Workflow 最终状态生成结果标题，避免失败运行被标记为已完成。 */
 export function workflowFinalResultPresentation(
   workflow: WorkflowRunPayload | undefined
 ): WorkflowFinalResultPresentation {
   const failed = workflow?.summary.status === 'failed'
   return {
     failed,
-    title: failed ? '任务执行失败' : '任务已完成'
+    title: failed ? '执行失败' : '执行完成'
   }
 }
 

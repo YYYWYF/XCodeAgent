@@ -189,9 +189,9 @@ type Props = {
   onRequestBackgroundTaskContinuation?: (taskId: string) => void
   /** 验收工作流结束（无论成败）后回调；工作台页据此解除其它入口的禁用态。 */
   onBackgroundTaskAcceptanceSettled?: (taskId: string) => void
-  /** 左侧菜单打开任务管理抽屉（工作台页统一处理互斥）。 */
+  /** 左侧菜单打开对话管理抽屉（工作台页统一处理互斥）。 */
   onOpenConversationManagement?: () => void
-  /** 任务管理抽屉是否展开（工作台页持有，用于菜单激活态）。 */
+  /** 对话管理抽屉是否展开（工作台页持有，用于菜单激活态）。 */
   conversationDrawerOpen?: boolean
   /** 打开数据源抽屉。 */
   onOpenDataSources?: () => void
@@ -213,7 +213,7 @@ type Props = {
   onOpenSettings?: () => void
   /** 应用设置抽屉是否展开。 */
   settingsDrawerOpen?: boolean
-  /** 聊天面板向工作台页注册任务管理内容查询函数。 */
+  /** 聊天面板向工作台页注册对话管理内容查询函数。 */
   onConversationManagementReady?: (query: () => ConversationManagementContent) => void
   /** 聊天面板向工作台页注册技能停用回调（技能抽屉经此转交，始终命中当前草稿）。 */
   onSkillDisabledReady?: (handler: (skillName: string) => void) => void
@@ -540,7 +540,7 @@ export default function AiChatPanel({
     setSelectedSkillsByKey,
     setSessionMessages
   } = useChatSessions({ application, editorMode })
-  // 默认主任务持有推进权；空闲时新建任务直接接棒，查看已有非推进任务时才需显式确认转移。
+  // 默认主对话持有推进权；空闲时新建对话直接接棒，查看已有非推进对话时才需显式确认转移。
   const [authorizedEditingSessionId, setAuthorizedEditingSessionId] = useState<string>()
   const [pendingRegularSessionId, setPendingRegularSessionId] = useState<string>()
   // 编辑权限属于当前阶段；进入下一阶段时必须由该阶段默认对话重新取得权限。
@@ -975,7 +975,7 @@ export default function AiChatPanel({
     : undefined
 
   // 开发准入门：先看当前查看会话的最新工作流，再回退扫描计划阶段全部会话——
-  // 推进权/查看对象切到新建任务后，规划默认任务里挂起的门禁仍要可被唤起。
+  // 推进权/查看对象切到新建对话后，规划默认对话里挂起的门禁仍要可被唤起。
   const developmentEntryWorkflow =
     pendingGateWorkflow(
       latestWorkflowForDisplay as WorkflowRunPayload | undefined,
@@ -2627,8 +2627,8 @@ export default function AiChatPanel({
   // 只在当前可编辑的对话里投放：只读对话的「产物」按钮不可用，引导应等到取得权限后出现。
   const developmentGuideDroppedRef = useRef(new Set<string>())
   /**
-   * 首轮操作后的任务自动命名：仅当任务还是默认名「新任务」时生效，
-   * 用户重命名过或阶段默认命名的任务不覆盖。开发任务按所选产物命名，
+   * 首轮操作后的对话自动命名：仅当对话还是默认名「新对话」时生效，
+   * 用户重命名过或阶段默认命名的对话不覆盖。开发对话按所选产物命名，
    * 其它阶段按该阶段的产物职责命名。
    */
   const autoRenameTaskAfterFirstRound = async (
@@ -2637,7 +2637,7 @@ export default function AiChatPanel({
   ): Promise<void> => {
     if (!identity) return
     const summary = sessions.find((session) => session.id === identity.sessionId)
-    if (!summary || summary.title !== '新任务') return
+    if (!summary || summary.title !== '新对话') return
     await handleRenameSession(identity.sessionId, title)
   }
   /** 按工作流阶段返回首轮自动命名标题；无对应职责的阶段返回 undefined 跳过。 */
@@ -2713,7 +2713,7 @@ export default function AiChatPanel({
         label: target.label
       })
     }
-    // 首轮产物发起即完成自动命名：开发任务按所选产物命名（仅对默认名「新任务」生效）。
+    // 首轮产物发起即完成自动命名：开发对话按所选产物命名（仅对默认名「新对话」生效）。
     const artifactLabel = target.kind === 'page' ? target.page.label : target.label
     void autoRenameTaskAfterFirstRound(identity, `实施「${artifactLabel}」`)
     await presentDevelopmentTemplateSelector(target, { identity })
@@ -2768,7 +2768,7 @@ export default function AiChatPanel({
     await handleSend(undefined, { selectedFilePaths })
   }
 
-  // 工作台页打开任务管理抽屉时只列出当前阶段常规任务，跨阶段历史绝不混入。
+  // 工作台页打开对话管理抽屉时只列出当前阶段常规对话，跨阶段历史绝不混入。
   const getConversationManagementContent = useCallback((): ConversationManagementContent => {
     const phaseConversations = sessions
       .filter((session) => session.sessionKind === renderedTaskPhase)
@@ -2778,7 +2778,7 @@ export default function AiChatPanel({
         title: session.title,
         messageCount: session.messageCount,
         updatedAt: session.updatedAt,
-        // 阶段默认任务由系统创建（createdByUser=false），抽屉中不提供删除入口。
+        // 阶段默认对话由系统创建（createdByUser=false），抽屉中不提供删除入口。
         deletable: Boolean(session.createdByUser)
       }))
     // 阶段会话刚创建、目录尚未异步回填时，先以当前运行时会话补位，避免对话门禁短暂显示为空。
@@ -2819,7 +2819,7 @@ export default function AiChatPanel({
       ? sessionRunStates[authorizedEditingSessionId]
       : undefined
     // 收尾窗口修正：暂停卡片（requires_user_input）已随消息落地、而运行态仍短暂停留在
-    // running 的几秒内，以最新工作流载荷为准按待确认处理，避免门禁误锁“新建任务”。
+    // running 的几秒内，以最新工作流载荷为准按待确认处理，避免门禁误锁“新建对话”。
     const effectiveRunStatus =
       authorizedSessionRunStatus === 'running' &&
       authorizedSessionWorkflow?.summary?.status === 'requires_user_input'
@@ -2844,11 +2844,11 @@ export default function AiChatPanel({
         void handleOpenChatSession(sessionId)
       },
       onDeleteSession: (sessionId) => {
-        // 删除仅对用户自建任务开放（抽屉层已二次确认）；默认任务不渲染删除入口。
+        // 删除仅对用户自建对话开放（抽屉层已二次确认）；默认对话不渲染删除入口。
         void handleDeleteSession(sessionId).catch(() => undefined)
       },
       createConversationDisabledReason: creationBlocked
-        ? '请先完成当前推进任务中的事项'
+        ? '请先完成当前推进对话中的事项'
         : undefined,
       onCreateConversation:
         renderedTaskPhase === activeWorkbenchPhase && !versionReadOnly
@@ -2884,7 +2884,7 @@ export default function AiChatPanel({
   ])
 
   useEffect(() => {
-    // 每次渲染后刷新注册：工作台页持有最新闭包，打开任务管理抽屉时查询到的是当帧数据。
+    // 每次渲染后刷新注册：工作台页持有最新闭包，打开对话管理抽屉时查询到的是当帧数据。
     onConversationManagementReady?.(getConversationManagementContent)
   })
   /** 用户确认后先推进测试阶段，再由测试 Agent 创建应用级测试对话。 */
@@ -3197,7 +3197,7 @@ export default function AiChatPanel({
       onPlanningArtifactsRefresh()
       // mock 确认处理（markPageDesigned）在提交后异步执行，延迟二次刷新确保大纲/产物读到已设计。
       window.setTimeout(onPlanningArtifactsRefresh, 3000)
-      // 首轮操作完成后的自动命名：任务仍是默认名「新任务」时按阶段职责命名。
+      // 首轮操作完成后的自动命名：对话仍是默认名「新对话」时按阶段职责命名。
       const roundTitle = firstRoundTitleForPhase(String(workflow.summary?.phase || ''))
       if (roundTitle) {
         void autoRenameTaskAfterFirstRound(activeSession, roundTitle)
@@ -3571,23 +3571,23 @@ export default function AiChatPanel({
     )
     .map((task) => ({ taskId: task.id, title: task.title }))
   const editingConversationTitle = editingSessionId
-    ? sessions.find((session) => session.id === editingSessionId)?.title || '运行中的任务'
+    ? sessions.find((session) => session.id === editingSessionId)?.title || '运行中的对话'
     : ''
   const activeRegularSessionTitle = activeSessionId
-    ? sessions.find((session) => session.id === activeSessionId)?.title || '新建任务'
-    : '新建任务'
+    ? sessions.find((session) => session.id === activeSessionId)?.title || '新建对话'
+    : '新建对话'
   const editingWorkflowActive = Boolean(
     authorizedEditingSessionId && sessionRunStates[authorizedEditingSessionId]
   )
   const pendingRegularSession = pendingRegularSessionId
     ? sessions.find((session) => session.id === pendingRegularSessionId)
     : undefined
-  const pendingRegularSessionTitle = pendingRegularSession?.title || '目标任务'
+  const pendingRegularSessionTitle = pendingRegularSession?.title || '目标对话'
   const showReadOnlyConversationPrompt = Boolean(
     authorizedEditingSessionId && activeSessionId && activeSessionId !== authorizedEditingSessionId
   )
 
-  /** 用户二次确认后转移当前阶段唯一的推进权；运行中或待确认的任务继续占位。 */
+  /** 用户二次确认后转移当前阶段唯一的推进权；运行中或待确认的工作流继续占位。 */
   const confirmRegularSessionSwitch = (): void => {
     if (!pendingRegularSessionId || editingWorkflowActive) return
     setAuthorizedEditingSessionId(pendingRegularSessionId)
@@ -3614,12 +3614,12 @@ export default function AiChatPanel({
         onCancel={() => setPendingRegularSessionId(undefined)}
         onOk={confirmRegularSessionSwitch}
         open={Boolean(pendingRegularSession)}
-        title="设为当前推进任务？"
+        title="设为当前推进对话？"
       >
         {editingWorkflowActive ? (
           <p>
             “{editingConversationTitle}
-            ”还有正在运行或等待确认的任务，请先在该任务中完成，再把推进权交给“
+            ”还有正在运行或等待确认的工作流，请先在该对话中完成，再把推进权交给“
             {pendingRegularSessionTitle}”。
           </p>
         ) : (
@@ -3691,7 +3691,7 @@ export default function AiChatPanel({
                 }
                 historical={viewingHistoricalStage}
                 onRename={
-                  // 只读版本与历史阶段任务不可重命名：不传回调即隐藏编辑图标。
+                  // 只读版本与历史阶段对话不可重命名：不传回调即隐藏编辑图标。
                   versionReadOnly || viewingHistoricalStage
                     ? undefined
                     : (title) => {
@@ -3702,19 +3702,19 @@ export default function AiChatPanel({
             {viewingHistoricalStage ? (
               <div className={cx('historical-task-notice')} role="status">
                 <span>
-                  正在查看历史阶段任务，顶部仍处于
+                  正在查看历史阶段对话，顶部仍处于
                   {WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label}
                   阶段。
                 </span>
                 <button type="button" onClick={() => setViewingTaskPhase(activeWorkbenchPhase)}>
-                  返回当前任务
+                  返回当前对话
                 </button>
               </div>
             ) : null}
             {showReadOnlyConversationPrompt ? (
               <div className={cx('conversation-view-notice')} role="status">
                 <span>
-                  当前由“{editingConversationTitle}”推进任务；你正在查看“
+                  当前由“{editingConversationTitle}”推进；你正在查看“
                   {activeRegularSessionTitle}”。
                 </span>
                 <button
@@ -3724,7 +3724,7 @@ export default function AiChatPanel({
                     if (activeSessionId) setPendingRegularSessionId(activeSessionId)
                   }}
                 >
-                  {editingWorkflowActive ? '完成当前任务后可切换' : '设为当前推进任务'}
+                  {editingWorkflowActive ? '完成当前工作流后可切换' : '设为当前推进对话'}
                 </button>
               </div>
             ) : null}
@@ -3846,9 +3846,9 @@ export default function AiChatPanel({
                   stageSessionSwitching
                     ? '正在切换阶段，请稍候'
                     : workspaceBusy
-                      ? `当前由“${editingConversationTitle}”推进任务；本对话仅供查看`
+                      ? `当前由“${editingConversationTitle}”推进；本对话仅供查看`
                       : viewingHistoricalStage
-                        ? '历史阶段任务仅供查看；如需调整，请从顶部切换应用阶段'
+                        ? '历史阶段对话仅供查看；如需调整，请从顶部切换应用阶段'
                         : '已生成版本只读，请先发起新迭代或回退后继续调整'
                 }
                 stopping={stopping}

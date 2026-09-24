@@ -271,7 +271,7 @@ function MessageAgentHeader({
 }
 
 type MessageListProps = {
-  /** 当前查看任务所属阶段；查看历史任务时可与应用当前阶段不同。 */
+  /** 当前查看任务所属阶段；查看历史对话时可与应用当前阶段不同。 */
   agentPhase?: WorkbenchPhase
   /** 当前对话所属阶段；优先于全局查看阶段，保证跨阶段查看历史会话不改 Agent。 */
   conversationPhase?: WorkbenchPhase
