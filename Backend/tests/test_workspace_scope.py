@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,6 +57,42 @@ class WorkspaceScopeTests(unittest.TestCase):
                 ),
                 "export default null\n",
             )
+
+    def test_runtime_creation_is_scoped_to_runtime_executor(self) -> None:
+        """Runtime 执行器可新建项目文件，其他执行器仍拦截脚本。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            backend = create_workspace_backend(workspace, mode="agent_runtime")
+            source_root = Path(workspace) / "agent-runtime/src/app"
+            source_root.mkdir(parents=True)
+
+            source = "/agent-runtime/src/app/policy_conversation.py"
+            result = backend.write(source, "class PolicyConversation: pass\n")
+            self.assertIsNone(result.error)
+            self.assertTrue((source_root / "policy_conversation.py").is_file())
+
+            async_source = "/agent-runtime/src/app/endpoint.py"
+            async_result = asyncio.run(backend.awrite(async_source, "def get_policy(): pass\n"))
+            self.assertIsNone(async_result.error)
+            self.assertTrue((source_root / "endpoint.py").is_file())
+
+            project_script = "/agent-runtime/scripts/setup.sh"
+            script_result = backend.write(project_script, "#!/bin/sh\n")
+            self.assertIsNone(script_result.error)
+            self.assertTrue((Path(workspace) / "agent-runtime/scripts/setup.sh").is_file())
+
+            blocked_outside = backend.write("/run_check.py", "print('check')\n")
+            self.assertIn("Creating script files (.py)", blocked_outside.error or "")
+
+            default_backend = create_workspace_backend(workspace)
+            for path in (
+                "/agent-runtime/src/app/other.py",
+                "/agent-runtime/src/../run_check.py",
+                "/run_check.py",
+            ):
+                with self.subTest(path=path):
+                    blocked = default_backend.write(path, "print('check')\n")
+                    self.assertIn("Creating script files (.py)", blocked.error or "")
 
     @unittest.skipUnless(os.name == "nt", "Windows 扩展路径仅在 Windows 验证。")
     def test_workspace_backend_accepts_extended_windows_path_inside_root(self) -> None:

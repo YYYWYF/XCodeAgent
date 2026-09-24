@@ -7,6 +7,7 @@ import unittest
 
 from app.services.build_task_reuse_contracts import RetainedEndpointOwner, ReuseFacts
 from app.services.planning_issues import ValidationIssue
+from app.services.unit_candidate_platform_rules import validate_local_inputs
 from app.services.unit_candidate_validator import validate_unit_candidate
 from app.services.unit_generation_contracts import UnitGenerationContext
 
@@ -508,6 +509,23 @@ class UnitCandidateValidatorTests(unittest.TestCase):
         conflict = next(issue for issue in issues if issue.code == "CANDIDATE_RETAINED_ENDPOINT_OWNER_CONFLICT")
         self.assertEqual(conflict.task_ids, (task["id"], "task-api-retained"))
         self._assert_local_retry(issues, context.unit_id)
+
+    def test_frozen_retained_owner_constraint_is_validated(self) -> None:
+        """非空 owner 经 Context 冻结后仍可通过严格校验。"""
+
+        owner = RetainedEndpointOwner(
+            api_contract_id="orders-api", endpoint_id="orders.list",
+            owner_task_id="task-api-retained", owner_unit_id="page:history",
+        )
+        payload = _context().model_dump(mode="json")
+        payload["dependency_context"]["retained_owner_constraints"] = [owner.model_dump(mode="json")]
+        context = UnitGenerationContext(**payload)
+
+        frozen_context, owners, issues = validate_local_inputs(context, _reuse_facts(owner))
+
+        self.assertIsNotNone(frozen_context)
+        self.assertEqual(owners, (owner,))
+        self.assertEqual(issues, [])
 
     def test_multiple_invalid_rules_accumulate_without_mutation(self) -> None:
         """同一 Candidate 的多个内容错误同时返回，不能首错退出或 silent sanitize。"""

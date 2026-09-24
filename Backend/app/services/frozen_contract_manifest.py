@@ -26,6 +26,7 @@ from app.services.frozen_contract_manifest_index import (
 )
 from app.services.frozen_contract_store import FrozenContract, FrozenContractStore
 from app.services.planning_frozen import plain_json
+from app.topologies.queries import includes_backend_service
 
 
 _ENDPOINT_REQUIREMENT_KINDS = {
@@ -36,11 +37,15 @@ _ENDPOINT_REQUIREMENT_KINDS = {
     "backend.upstream",
     "backend.application_service",
     "backend.endpoint_controller",
+    "python.endpoint",
 }
 _SCOPED_REQUIREMENT_KINDS = {
     "frontend.shared_capability",
     "backend.bootstrap",
     "frontend.auth.resources",
+}
+_PYTHON_ENTITY_REQUIREMENT_KINDS = {
+    "python.entity", "python.migration", "python.repository"
 }
 _AGENT_REQUIREMENT_KIND = "agent.runtime"
 
@@ -160,6 +165,9 @@ def compile_expected_unit_formal_source_refs(
     if any(key not in endpoints for key in scoped_keys):
         raise ContractCatalogBindingError("当前 Scope 含 Frozen Store 中不存在的 Endpoint。")
     gateway_keys = _agent_gateway_endpoint_keys(technical, endpoints)
+    # Frozen Contract 内部使用只读 Mapping；拓扑查询前恢复为普通 JSON，
+    # 避免 agent_runtime_direct 被误判为包含 Backend Service。
+    direct_runtime = not includes_backend_service(plain_json(technical.content))
 
     grants: dict[tuple[str, str], tuple[FrozenContract, set[str]]] = {}
 
@@ -188,8 +196,34 @@ def compile_expected_unit_formal_source_refs(
                 },
             )
             page_id, relevant_keys = None, set()
+        elif requirement_kind in _PYTHON_ENTITY_REQUIREMENT_KINDS:
+            entity_id = exact_manifest_id(source_refs.get("entity_id"), "python.entity_id")
+            if unit_kind != "python" or unit_id != f"python:{requirement_kind.split('.', 1)[1]}:{entity_id}":
+                raise ContractCatalogBindingError(
+                    f"Python Entity 职责 {requirement_kind}/{entity_id} 与 Unit {unit_id} 不一致。"
+                )
+            entities = manifest_sequence(technical.content.get("entities"), "TechnicalPlan.entities")
+            matches = [
+                index for index, entity in enumerate(entities)
+                if isinstance(entity, Mapping) and entity.get("id") == entity_id
+            ]
+            if len(matches) != 1:
+                raise ContractCatalogBindingError(f"TechnicalPlan 无法唯一定位 Entity {entity_id}。")
+            grant(requirement_id, technical, {f"/entities/{matches[0]}", "/topology"})
+            page_id, relevant_keys = None, set()
+        elif requirement_kind == "python.application_service":
+            contract_id = exact_manifest_id(source_refs.get("api_contract_id"), "python.api_contract_id")
+            if unit_kind != "python" or unit_id != f"python:service:{contract_id}":
+                raise ContractCatalogBindingError(
+                    f"Python Service {contract_id} 与 Unit {unit_id} 不一致。"
+                )
+            relevant_keys = {key for key in scoped_keys if key[0] == contract_id}
+            if not relevant_keys:
+                raise ContractCatalogBindingError(f"Python Service {contract_id} 缺少当前 Scope 的正式 Endpoint。")
+            grant(requirement_id, technical, {"/topology"})
+            page_id = None
         else:
-            grant(requirement_id, technical, {"/architecture"})
+            grant(requirement_id, technical, {"/topology" if requirement_kind == "python.endpoint" else "/architecture"})
             page_id, relevant_keys = _endpoint_keys_for_requirement(
                 unit_id=unit_id,
                 unit_kind=unit_kind,
@@ -225,6 +259,10 @@ def compile_expected_unit_formal_source_refs(
             grant(requirement_id, contract, api_selectors(contract, endpoint_indexes))
             for key in relevant_keys:
                 if key[0] != contract.content.get("id"):
+                    continue
+                # Direct 拓扑已在设计门禁跳过 Endpoint API Design；所有 Unit
+                # 都从 TechnicalPlan API Contract 读取操作定义，不再绑定该设计产物。
+                if direct_runtime:
                     continue
                 endpoint_api_design = _endpoint_api_design_if_required(
                     endpoint_api_designs,

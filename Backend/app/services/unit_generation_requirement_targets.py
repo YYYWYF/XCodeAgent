@@ -10,6 +10,7 @@ from app.services.authorization_resource_catalog import (
 )
 from app.services.unit_generation_contracts import GenerationRequirement
 from app.services.unit_generation_requirements_contracts import fail_requirement_input
+from app.topologies import includes_backend_service
 
 
 def exact_id(value: Any, label: str) -> str:
@@ -42,7 +43,7 @@ def scoped_formal_targets(
     *,
     required_unit_ids: Sequence[str] = (),
 ) -> tuple[dict[str, dict], dict[tuple[str, str], dict]]:
-    """按当前 Scope 选择完整正式目标，Agent 只投射其 Unit 闭包内的页面和 Endpoint。"""
+    """按当前 Scope 选择完整正式目标，Agent 投射其 Unit 闭包所需的页面与 Endpoint。"""
 
     if plan.get("confirmation_status") != "confirmed":
         fail_requirement_input("FORMAL_GENERATION_INPUT_UNCONFIRMED", "生成职责必须来自已确认的正式 TechnicalPlan。")
@@ -54,6 +55,7 @@ def scoped_formal_targets(
             "当前生成职责仅支持 application/page/endpoint/agent Scope。",
         )
     pages = object_index(plan.get("page_implementation_contracts", []), "pageId", "PageImplementationContract")
+    endpoint_unit_prefix = "backend" if includes_backend_service(plan) else "python"
     contracts = object_index(plan.get("api_contracts", []), "id", "API Contract")
     endpoints = {
         (contract_id, endpoint_id): {**endpoint, "api_contract_id": contract_id}
@@ -80,10 +82,20 @@ def scoped_formal_targets(
             for page_id, page in pages.items()
             if f"page:{page_id}" in required
         }
+        # Direct Agent 通过 Application Service 调用业务能力，不把 REST Endpoint Unit
+        # 纳入 Agent 生成闭包；但 Service 的正式合同仍由所属 API Contract 的 Endpoint
+        # 定义，因此这些 Endpoint 必须作为只读正式输入进入当前 Scope。
+        required_service_contract_ids = {
+            unit_id.removeprefix("python:service:")
+            for unit_id in required
+            if endpoint_unit_prefix == "python"
+            and unit_id.startswith("python:service:")
+        }
         selected_endpoints = {
             key: endpoint
             for key, endpoint in endpoints.items()
-            if f"backend:endpoint:{key[0]}:{key[1]}" in required
+            if f"{endpoint_unit_prefix}:endpoint:{key[0]}:{key[1]}" in required
+            or key[0] in required_service_contract_ids
         }
         missing_page_units = sorted(
             unit_id
@@ -94,17 +106,24 @@ def scoped_formal_targets(
         missing_endpoint_units = sorted(
             unit_id
             for unit_id in required
-            if unit_id.startswith("backend:endpoint:")
+            if unit_id.startswith(f"{endpoint_unit_prefix}:endpoint:")
             and unit_id not in {
-                f"backend:endpoint:{key[0]}:{key[1]}"
+                f"{endpoint_unit_prefix}:endpoint:{key[0]}:{key[1]}"
                 for key in selected_endpoints
             }
         )
-        if missing_page_units or missing_endpoint_units:
+        missing_service_units = sorted(
+            f"python:service:{contract_id}"
+            for contract_id in required_service_contract_ids
+            if contract_id not in contracts
+        )
+        if missing_page_units or missing_endpoint_units or missing_service_units:
             fail_requirement_input(
                 "FORMAL_GENERATION_TARGET_MISSING",
-                "Agent Scope 的 required Unit 无法映射到正式页面或 Endpoint："
-                + "、".join([*missing_page_units, *missing_endpoint_units])
+                "Agent Scope 的 required Unit 无法映射到正式页面、Service 或 Endpoint："
+                + "、".join(
+                    [*missing_page_units, *missing_service_units, *missing_endpoint_units]
+                )
                 + "。",
             )
         return selected_pages, selected_endpoints

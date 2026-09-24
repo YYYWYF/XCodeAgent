@@ -76,6 +76,26 @@ class DagPlanningBaselineGateTests(unittest.TestCase):
                 self.assertEqual(errors, [])
                 self.assertEqual(artifacts, before)
 
+    def test_direct_endpoint_scope_does_not_require_endpoint_api_design(self) -> None:
+        """Direct Endpoint 直接消费 API Schema，不进入 Java Endpoint Design 门禁。"""
+
+        plan = project_plan()
+        plan["topology"] = {
+            "serviceIds": ["agent-runtime"],
+            "publicEdgeServiceId": "agent-runtime",
+        }
+        artifacts = formal_artifacts(plan)
+        with tempfile.TemporaryDirectory() as workspace:
+            errors = _build_prerequisite_errors(
+                {},
+                plan,
+                workspace=workspace,
+                build_execution_scope=execution_scope("endpoint"),
+                formal_artifacts=artifacts,
+            )
+
+        self.assertFalse(any("API 设计" in error for error in errors))
+
     def test_build_reads_confirmed_file_instead_of_checkpoint_or_pending_file(self) -> None:
         """Build 入口读取 confirmed 正式文件，独立 pending 文件与 checkpoint 不覆盖它。"""
 

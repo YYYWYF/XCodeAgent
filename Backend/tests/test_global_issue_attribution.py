@@ -53,6 +53,24 @@ def _facts(
 
 
 class GlobalIssueAttributionTests(unittest.TestCase):
+    def test_compiler_missing_dependency_requires_candidate_provenance(self) -> None:
+        """编译器声明的缺失依赖只在 Task 确属本轮 Candidate 时可重试。"""
+
+        candidate_issue = _issue(
+            "BUILD_TASK_DEPENDENCY_MISSING", unit_ids=["page:a"], task_ids=["a"],
+            retryable=True, retry_unit_ids=["page:a"],
+        )
+        retained_issue = _issue(
+            "BUILD_TASK_DEPENDENCY_MISSING", unit_ids=["page:retained"], task_ids=["old"],
+            retryable=True, retry_unit_ids=["page:a"],
+        )
+
+        self.assertEqual(
+            attribute_global_issues([candidate_issue], **_facts()).retry_unit_ids,
+            ("page:a",),
+        )
+        self.assertFalse(attribute_global_issues([retained_issue], **_facts()).retryable)
+
     def test_retained_owner_vs_candidate_retries_only_candidate(self) -> None:
         """正式 owner 涉及冲突但保持不动，新增 Candidate 是唯一修复目标。"""
 

@@ -64,6 +64,7 @@ def resolve_workspace_root(workspace_root: str | None) -> Path | None:
 def create_workspace_backend(
     workspace_root: str | None,
     *,
+    mode: AgentWorkspaceMode | None = None,
     include_builtin_skills: bool = False,
     user_skills_backend: BackendProtocol | None = None,
     agent_memory_backend: BackendProtocol | None = None,
@@ -72,7 +73,11 @@ def create_workspace_backend(
     default_backend = (
         StateBackend()
         if root is None
-        else AutoDedupFilesystemBackend(root_dir=root, virtual_mode=True)
+        else AutoDedupFilesystemBackend(
+            root_dir=root,
+            virtual_mode=True,
+            allow_runtime_creation=mode == "agent_runtime",
+        )
     )
     routes: dict[str, BackendProtocol] = {}
     if include_builtin_skills:

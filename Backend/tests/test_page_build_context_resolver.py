@@ -180,6 +180,74 @@ class PageBuildContextResolverTests(unittest.TestCase):
         ):
             self.assertNotIn(key, context)
 
+    def test_direct_context_uses_api_schema_without_endpoint_design(self) -> None:
+        """Direct 页面和 Endpoint 仅依赖正式 API Schema，并生成 Python 业务 Unit。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            workspace_path = Path(workspace)
+            plan_path = workspace_path / ".xcodeagent/plans/technical-plan.json"
+            plan = {
+                "topology": {
+                    "type": "agent_runtime_direct",
+                    "publicEdgeServiceId": "agent-runtime",
+                    "serviceIds": ["agent-runtime"],
+                },
+                "frontend_pages": [{"pageId": "orders", "references": {}}],
+                "page_implementation_contracts": [{
+                    "schema_version": "page-implementation-contract.v1",
+                    "pageId": "orders",
+                    "uiDesignRef": {
+                        "path": ".xcodeagent/ui-design/pages/Orders/index.tsx"
+                    },
+                    "requiredEndpointIds": ["orders.list"],
+                }],
+                "entities": [{
+                    "id": "Order",
+                    "fields": [{"name": "id", "type": "string"}],
+                }],
+                "api_contracts": [{
+                    "id": "orders-api",
+                    "entity_ids": ["Order"],
+                    "schemas": {
+                        "OrderListOutput": {
+                            "type": "object",
+                            "properties": {"items": {"type": "array"}},
+                        }
+                    },
+                    "endpoints": [{
+                        "id": "orders.list",
+                        "method": "GET",
+                        "path": "/orders",
+                        "response_schema_ref": "OrderListOutput",
+                    }],
+                }],
+            }
+            _write_json(plan_path, plan)
+
+            page_context = resolve_target_build_context(
+                plan,
+                target_type="page",
+                target_id="orders",
+                project_plan_path=plan_path,
+            )
+            endpoint_context = resolve_target_build_context(
+                plan,
+                target_type="endpoint",
+                target_id="orders.list",
+                api_contract_id="orders-api",
+                project_plan_path=plan_path,
+            )
+
+        self.assertEqual(page_context["endpoint_designs"], [])
+        self.assertEqual(endpoint_context["endpoint_designs"], [])
+        self.assertEqual(page_context["source_types"], [])
+        self.assertEqual(endpoint_context["source_types"], [])
+        self.assertIn("python:migration:Order", page_context["required_unit_ids"])
+        self.assertIn(
+            "python:endpoint:orders-api:orders.list",
+            endpoint_context["required_unit_ids"],
+        )
+
     def test_page_context_uses_implementation_contract_without_page_detail(self) -> None:
         """新版 TechnicalPlan 应直接用页面实现契约解析接口，不要求 PageDetail 文件。"""
 

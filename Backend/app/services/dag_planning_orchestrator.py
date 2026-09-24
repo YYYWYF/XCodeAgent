@@ -95,18 +95,37 @@ def _now() -> str:
 
 
 def _compiled_issues(assembly: ScopeAssemblyResult) -> tuple[ValidationIssue, ...]:
-    """消费真实累计编译结论；旧字符串只作诊断，绝不据此猜测修复 Unit。"""
+    """消费编译器直接产生的结构化问题，不从展示文本猜测重试责任。"""
 
     plan = assembly.assembled_plan
     validation = plan.get("task_graph", {}).get("validation", {})
     blocked = plan.get("execution", {}).get("blocked_batches", ())
     if plan.get("status") == "ready" and validation.get("is_valid") is True and not validation.get("errors") and not blocked:
         return ()
-    return (ValidationIssue(
-        code="GLOBAL_COMPILED_PLAN_INVALID", level="global", category="platform", retryable=False,
-        message="累计 DAG 未通过完整编译检查，缺少结构化责任证据的错误不能自动重试。",
-        details={"validation": validation, "blocked_batches": blocked},
-    ),)
+    issues: list[ValidationIssue] = []
+    raw_issues = validation.get("issues")
+    if isinstance(raw_issues, (list, tuple)):
+        try:
+            issues.extend(ValidationIssue.model_validate(plain_json(item)) for item in raw_issues)
+        except (TypeError, ValueError):
+            issues.clear()
+    if blocked:
+        issues.append(ValidationIssue(
+            code="GLOBAL_EXECUTION_BATCH_BLOCKED", level="global", category="platform",
+            retryable=False, message="累计 DAG 的执行批次被阻断，请查看批次依赖。",
+            details={"blocked_batches": plain_json(blocked)},
+        ))
+    if not issues:
+        errors = validation.get("errors")
+        messages = [str(item) for item in errors] if isinstance(errors, (list, tuple)) else []
+        issues.append(ValidationIssue(
+            code="GLOBAL_COMPILER_ISSUES_MISSING", level="global", category="platform",
+            retryable=False,
+            message=("完整 DAG 编译器未提供结构化错误：" + "；".join(messages))
+            if messages else "完整 DAG 编译器未提供结构化错误，请检查任务图状态。",
+            details={"validation": plain_json(validation), "status": plan.get("status")},
+        ))
+    return tuple(issues)
 
 
 def _attribute(

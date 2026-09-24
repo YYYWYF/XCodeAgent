@@ -37,7 +37,7 @@ class DagPlanningBaselineTests(unittest.TestCase):
                 self.assertEqual(result["status"], "ready")
                 self.assertEqual(result["schema_version"], "build-dag.v4")
                 self.assertEqual(result["build_execution_scope"], scope)
-                self.assertEqual(result["task_graph"]["validation"], {"is_valid": True, "errors": []})
+                self.assertEqual(result["task_graph"]["validation"], {"is_valid": True, "errors": [], "issues": []})
                 self.assertEqual(set(result["task_registry"]), expected_ids)
                 self.assertEqual(set(result["task_graph"]["nodes"]), expected_ids)
                 self.assertCountEqual(result["task_graph"]["topological_order"], expected_ids)
@@ -136,6 +136,7 @@ class DagPlanningBaselineTests(unittest.TestCase):
                 self.assertEqual(result["status"], "blocked")
                 self.assertFalse(result["task_graph"]["validation"]["is_valid"])
                 self.assertTrue(result["task_graph"]["validation"]["errors"])
+                self.assertTrue(result["task_graph"]["validation"]["issues"])
                 self.assertCountEqual([t["id"] for t in tasks_from_build_task_plan(result)], [t["id"] for t in candidates])
 
     def test_acceptance_compiles_exact_paths_and_formal_endpoint_sources(self) -> None:

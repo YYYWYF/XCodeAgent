@@ -216,7 +216,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
                 "retained_owner_constraints": [owner.model_dump(mode="json") for owner in self.reuse_facts.retained_endpoint_owners
                                                if (owner.api_contract_id, owner.endpoint_id) in endpoint_keys],
             },
-            constraints={"owner": "frontend" if unit.kind == "page" else unit.kind,
+            constraints={"owner": "frontend" if unit.kind == "page" else "python-business" if unit.kind == "python" else unit.kind,
                          "managed_files": [], "strong_rules": ["exact_unit_owner", "exact_file_scope",
                          "no_platform_owned_fields", "no_platform_owned_tasks", "no_repair_or_verification_tasks", "status_pending"]},
         )

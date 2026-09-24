@@ -15,6 +15,7 @@ from app.services.unit_generation_requirement_targets import (
 from app.services.unit_generation_requirements_contracts import (
     GenerationRequirementsError, UnitGenerationRequirements, fail_requirement_input,
 )
+from app.topologies.queries import includes_backend_service
 
 
 _STRUCTURAL_UNITS = {"application:root", "app:integration"}
@@ -87,6 +88,55 @@ def _unit_responsibilities(
 
     if unit_id in _STRUCTURAL_UNITS or unit_id == "frontend:shell":
         return []
+    if unit_id == "python:bootstrap":
+        return []
+    if unit_id.startswith("python:entity:"):
+        entity_id = exact_id(unit_id.removeprefix("python:entity:"), "Python Entity Unit.entityId")
+        entities = object_index(plan.get("entities", []), "id", "TechnicalPlan Entity")
+        if entity_id not in entities:
+            fail_requirement_input("GENERATION_UNIT_OUTSIDE_SCOPE", f"Python Entity {entity_id} 不在正式计划内。", unit_ids=[unit_id])
+        return [responsibility(
+            "python.entity", entity_id,
+            description=f"依据正式 Entity {entity_id} 生成 Python 领域模型与 DTO。",
+            kind="python.entity", entity_id=entity_id,
+        )]
+    if unit_id.startswith("python:repository:"):
+        entity_id = exact_id(unit_id.removeprefix("python:repository:"), "Python Repository Unit.entityId")
+        entities = object_index(plan.get("entities", []), "id", "TechnicalPlan Entity")
+        if entity_id not in entities:
+            fail_requirement_input("GENERATION_UNIT_OUTSIDE_SCOPE", f"Python Repository {entity_id} 不在正式计划内。", unit_ids=[unit_id])
+        return [responsibility(
+            "python.repository", entity_id,
+            description=f"实现 Entity {entity_id} 的独立业务存储和 owner-scoped Repository。",
+            kind="python.repository", entity_id=entity_id,
+        )]
+    if unit_id.startswith("python:migration:"):
+        entity_id = exact_id(unit_id.removeprefix("python:migration:"), "Python Migration Unit.entityId")
+        entities = object_index(plan.get("entities", []), "id", "TechnicalPlan Entity")
+        if entity_id not in entities:
+            fail_requirement_input("GENERATION_UNIT_OUTSIDE_SCOPE", f"Python Migration {entity_id} 不在正式计划内。", unit_ids=[unit_id])
+        # SQL 已在实体确认时写入生成项目；保留依赖 Unit，但不允许模型二次生成或覆盖。
+        return []
+    if unit_id.startswith("python:service:"):
+        contract_id = exact_id(unit_id.removeprefix("python:service:"), "Python Service Unit.apiContractId")
+        contracts = object_index(plan.get("api_contracts", []), "id", "API Contract")
+        if contract_id not in contracts:
+            fail_requirement_input("GENERATION_UNIT_OUTSIDE_SCOPE", f"Python Service {contract_id} 不在正式计划内。", unit_ids=[unit_id])
+        return [responsibility(
+            "python.application_service", contract_id,
+            description=f"实现 API Contract {contract_id} 的 Python Application Service。",
+            kind="python.application_service", api_contract_id=contract_id,
+        )]
+    if unit_id.startswith("python:endpoint:"):
+        matches = [key for key in endpoints if unit_id == f"python:endpoint:{key[0]}:{key[1]}"]
+        if len(matches) != 1:
+            fail_requirement_input("GENERATION_UNIT_OUTSIDE_SCOPE", f"Python Endpoint Unit {unit_id} 不在 Scope 内。", unit_ids=[unit_id])
+        contract_id, endpoint_id = matches[0]
+        return [responsibility(
+            "python.endpoint", contract_id, endpoint_id,
+            description=f"依据已确认 Direct API 契约实现 FastAPI {contract_id}/{endpoint_id}。",
+            kind="python.endpoint", api_contract_id=contract_id, endpoint_id=endpoint_id,
+        )]
     if unit_id == "agent:runtime":
         return []
     if unit_id.startswith("agent:"):
@@ -184,6 +234,7 @@ def _requires_endpoint_source_types(required_unit_ids: Sequence[str], endpoints:
         return False
     return any(
         unit_id in {"frontend:api-client", "frontend:data:static", "backend:bootstrap"}
+        or unit_id.startswith("python:endpoint:")
         or unit_id.startswith("backend:endpoint:")
         for unit_id in required_unit_ids
     )
@@ -228,7 +279,8 @@ def resolve_generation_requirements(
             endpoints,
             gateway_keys=gateway_keys,
         )
-        if _requires_endpoint_source_types(required, endpoints)
+        if includes_backend_service(plan)
+        and _requires_endpoint_source_types(required, endpoints)
         else {key: frozenset() for key in endpoints}
     )
     requirements_by_unit = {}
@@ -238,7 +290,7 @@ def resolve_generation_requirements(
         missing = [item for item in duties if not _is_satisfied(unit_id, item, facts)]
         if unit_id in _STRUCTURAL_UNITS:
             strategy = "structural_only"
-        elif unit_id in {"frontend:shell", "agent:runtime"}:
+        elif unit_id in {"frontend:shell", "agent:runtime", "python:bootstrap"}:
             strategy = "prerequisite_only"
             if unit_id == "frontend:shell" and not any(
                 item.unit_id == unit_id

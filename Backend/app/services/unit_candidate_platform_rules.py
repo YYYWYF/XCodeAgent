@@ -15,11 +15,12 @@ from app.services.business_acceptance import (
     normalize_repo_path,
 )
 from app.services.page_identity import page_id_to_page_key
+from app.services.planning_frozen import plain_json
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_generation_contracts import UnitGenerationContext
 
 
-_KIND_OWNER = {"page": "frontend", "frontend": "frontend", "backend": "backend", "database": "database"}
+_KIND_OWNER = {"page": "frontend", "frontend": "frontend", "backend": "backend", "python": "python-business", "database": "database"}
 _NON_MODEL_UNITS = {"application:root", "app:integration", "frontend:shell", "frontend:auth-guard", "frontend:route-registry"}
 _BUILTIN_STRONG_RULES = {
     "exact_unit_owner", "exact_file_scope", "no_platform_owned_fields",
@@ -269,19 +270,19 @@ def _strong_rule_contract_issues(context: UnitGenerationContext) -> list[Validat
 
 
 def _slice_owners(value: Any) -> tuple[RetainedEndpointOwner, ...]:
-    """严格解析 unit-local retained owner slice。"""
+    """将冻结的 owner 投影还原为 JSON 后严格解析 unit-local slice。"""
 
     if not isinstance(value, (list, tuple)):
         raise ValueError("retained_endpoint_owners 必须是数组")
-    return tuple(RetainedEndpointOwner.model_validate(item) for item in value)
+    return tuple(RetainedEndpointOwner.model_validate(plain_json(item)) for item in value)
 
 
 def _slice_issues(value: Any) -> tuple[ValidationIssue, ...]:
-    """严格解析 unit-local reuse slice 中的前置 Issues。"""
+    """将冻结的 Issue 投影还原为 JSON 后严格解析前置 Issues。"""
 
     if not isinstance(value, (list, tuple)):
         raise ValueError("issues 必须是数组")
-    return tuple(ValidationIssue.model_validate(item) for item in value)
+    return tuple(ValidationIssue.model_validate(plain_json(item)) for item in value)
 
 
 def _merge_retained_owners(

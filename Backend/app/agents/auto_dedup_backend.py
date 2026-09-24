@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.protocol import BackendProtocol, WriteResult
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # 禁止代码生成 agent 在工作区创建的临时脚本扩展名。
 # 这类脚本（run_tsc.sh / run_check.py / run_tsc.js 等）是 agent 为了跑 tsc/build 验证而违规创建的，
 # 项目级验证应由外层 integration-test 阶段统一执行。见 frontend-template-modification-boundary 技能。
-# 注意：agent 会换扩展名绕过（.sh 被拦就改 .js），所以这里把常见脚本扩展名一并拦掉。
+# Direct 的 agent-runtime 需要新建正式源码，由该执行器独立放行创建。
 BLOCKED_SCRIPT_EXTENSIONS = (".sh", ".bash", ".ps1", ".bat", ".py", ".js", ".mjs", ".cjs")
 
 # 这些是模板工程自带的合法配置文件（已存在），即使扩展名命中也不应被当作临时脚本拦截。
@@ -40,8 +40,8 @@ ALLOWED_CONFIG_FILENAMES = frozenset({
 })
 
 _BLOCKED_SCRIPT_MESSAGE = (
-    "Creating script files ({ext}) is forbidden in the workspace. "
-    "Do NOT create .sh/.py/.js/.mjs/.cjs/.bash scripts or run project-level build/typecheck commands "
+    "Creating script files ({ext}) outside approved product source paths is forbidden in the workspace. "
+    "Do NOT create temporary .sh/.py/.js/.mjs/.cjs/.bash scripts or run project-level build/typecheck commands "
     "from an owner task. The outer integration-test phase owns repository verification; report any "
     "missing dependency or command instead."
 )
@@ -77,8 +77,24 @@ def _has_windows_extended_prefix(value: str | Path) -> bool:
     return str(value).startswith(_WINDOWS_EXTENDED_PREFIX)
 
 
-def _blocked_script_extension(file_path: str) -> str | None:
-    """Return the matched blocked extension if *file_path* is a temp script, else None."""
+def _is_agent_runtime_path(file_path: str) -> bool:
+    """判断虚拟路径是否位于 agent-runtime 内，拒绝父目录跳转。"""
+
+    parts = PurePosixPath(file_path).parts
+    relative_parts = parts[1:] if parts and parts[0] == "/" else parts
+    return (
+        len(relative_parts) >= 2
+        and relative_parts[0] == "agent-runtime"
+        and ".." not in relative_parts
+    )
+
+
+def _blocked_script_extension(
+    file_path: str, *, allow_runtime_creation: bool = False
+) -> str | None:
+    """识别临时脚本扩展名，并仅为 Runtime 执行器放行项目目录。"""
+    if allow_runtime_creation and _is_agent_runtime_path(file_path):
+        return None
     filename = file_path.rsplit("/", 1)[-1]
     if filename in ALLOWED_CONFIG_FILENAMES:
         return None
@@ -103,10 +119,15 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
     frequently needs to re-write the same path (draft → refine, or task retry).
     Overwriting is the expected behaviour; the last write wins.
 
-    Also blocks creation of temporary script files (.sh/.py/.bash/.ps1/.bat)
-    anywhere in the workspace — repository verification belongs to the outer
-    integration-test phase rather than an owner task.
+    Also blocks temporary script files, except project files created by the
+    Agent Runtime executor under agent-runtime. Repository verification belongs
+    to the outer integration-test phase rather than an owner task.
     """
+
+    def __init__(self, *args, allow_runtime_creation: bool = False, **kwargs):
+        """配置仅供 Runtime 执行器使用的项目文件创建权限。"""
+        super().__init__(*args, **kwargs)
+        self._allow_runtime_creation = allow_runtime_creation
 
     def _resolve_path(self, file_path: str) -> Path:
         """解析虚拟路径，并兼容 Windows 对同一路径返回的扩展前缀形式。"""
@@ -148,8 +169,9 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
             return WriteResult(error=f"Error writing file '{file_path}': {e}")
 
     def write(self, file_path: str, content: str) -> WriteResult:
-        # 拦截临时脚本文件：agent 应直接用 execute 工具跑命令，而非写 .sh/.py 脚本。
-        if _blocked_script_extension(file_path):
+        """写入正式源码，按执行器权限拦截临时脚本。"""
+
+        if _blocked_script_extension(file_path, allow_runtime_creation=self._allow_runtime_creation):
             return WriteResult(error=_blocked_script_error(file_path))
 
         # Try the original path first (handles new files)
@@ -162,7 +184,9 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
         return self._overwrite(file_path, content)
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
-        if _blocked_script_extension(file_path):
+        """异步写入与同步写入共享执行器文件创建边界。"""
+
+        if _blocked_script_extension(file_path, allow_runtime_creation=self._allow_runtime_creation):
             return WriteResult(error=_blocked_script_error(file_path))
 
         result = await super().awrite(file_path, content)

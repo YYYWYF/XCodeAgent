@@ -53,6 +53,8 @@ def expected_task_type(context: UnitGenerationContext) -> str:
         return "frontend.code"
     if owner == "backend":
         return "backend.code"
+    if owner == "python-business":
+        return "python.code"
     if owner == "database":
         return "database.change"
     raise ValueError(f"模型 Unit {context.unit_id} 没有受支持的 Task owner: {owner}")
@@ -97,6 +99,8 @@ def example_task_id(context: UnitGenerationContext) -> str:
         return f"{context.unit_id}::data-module"
     if context.unit_id == "backend:bootstrap":
         return "backend:bootstrap::bootstrap"
+    if context.unit_kind == "python":
+        return f"{context.unit_id}::implementation"
     requirements = context.generation_requirements
     first = requirements[0] if requirements else None
     refs = first.source_refs if first is not None else {}
@@ -234,6 +238,34 @@ def _frontend_static_rules(context: UnitGenerationContext) -> tuple[str, ...]:
     )
 
 
+def _python_business_rules(context: UnitGenerationContext) -> tuple[str, ...]:
+    """将 Direct 的单一 Python 业务职责投射为受限任务，而不创建独立 Build 流程。"""
+
+    if len(context.generation_requirements) != 1:
+        raise ValueError(f"Python Unit {context.unit_id} 必须且只能包含一项正式业务职责。")
+    kind = _text(context.generation_requirements[0].source_refs.get("kind"))
+    path_root = {
+        "python.entity": "agent-runtime/src/app/domain/",
+        "python.migration": "agent-runtime/src/app/infrastructure/migrations/sql/",
+        "python.repository": "agent-runtime/src/app/infrastructure/repositories/",
+        "python.application_service": "agent-runtime/src/app/application/services/",
+        "python.endpoint": "agent-runtime/src/app/api/endpoints/",
+    }.get(kind)
+    if path_root is None:
+        raise ValueError(f"Python Unit {context.unit_id} 的职责 kind 不受支持：{kind}。")
+    return (
+        f"Emit exactly one Task with id `{context.unit_id}::implementation`, owner "
+        "`python-business`, task_type `python.code`, dependencies `[]`, and exactly one "
+        f"`{kind}` deliverable covering the sole requirement.",
+        f"Write only {'versioned SQLite SQL' if kind == 'python.migration' else 'Python implementation'} files under `{path_root}`. Reuse the existing "
+        "template application/domain/infrastructure/API boundaries. The Entity and Repository "
+        "layers must preserve trusted Principal ownership; the Application Service owns shared "
+        "business logic and transactions; FastAPI Endpoint delegates to that Service and never "
+        "duplicates business rules. Do not write frontend, Java backend, Agent prompt/model, "
+        "template infrastructure, formal artifacts, migration state, or Build DAG files.",
+    )
+
+
 def resolve_unit_task_rules(context: UnitGenerationContext) -> tuple[str, ...]:
     """为当前模型 Unit 自动选择完整规则，未知 Unit 不允许以空规则调用模型。"""
 
@@ -246,6 +278,8 @@ def resolve_unit_task_rules(context: UnitGenerationContext) -> tuple[str, ...]:
         specific = _frontend_static_rules(frozen)
     elif frozen.unit_kind == "backend":
         specific = resolve_backend_unit_task_rules(frozen)
+    elif frozen.unit_kind == "python":
+        specific = _python_business_rules(frozen)
     else:
         raise ValueError(
             f"模型 Unit {frozen.unit_id} 没有可用的任务规划规则投影。"

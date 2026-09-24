@@ -560,6 +560,7 @@ def assemble_scope_build_task_plan(
             else deepcopy(plain_json(build_context.get("executable_details") or {}))
         ),
         "_allow_missing_business_deliverable_task_ids": sorted(retained_id_set),
+        "_candidate_task_ids": list(candidate_task_ids),
         "_compile_auth_capability_dependencies": True,
         "external_capabilities": [
             capability.model_dump(mode="json")

@@ -5,6 +5,8 @@ from dataclasses import asdict
 
 from app.domain.models import BuildTask, BuildTaskExecutionContractError
 from app.services.build_task_planner import replace_build_task_plan_tasks
+from app.services.dag_planning_orchestrator import _compiled_issues
+from app.services.scope_assembly import ScopeAssemblyResult
 
 
 class BuildDagV3ContractTests(unittest.TestCase):
@@ -63,6 +65,37 @@ class BuildDagV3ContractTests(unittest.TestCase):
 
         errors = plan["task_graph"]["validation"]["errors"]
         self.assertTrue(any("is not allowlisted" in error for error in errors))
+        compiled_issues = plan["task_graph"]["validation"]["issues"]
+        self.assertEqual(compiled_issues[0]["code"], "BUILD_TASK_EXECUTION_CONTRACT_INVALID")
+        self.assertEqual(compiled_issues[0]["task_ids"], ["unknown-executor"])
+
+        assembly = ScopeAssemblyResult(
+            assembled_plan=plan, retained_task_ids=(), candidate_task_ids=(),
+            platform_task_ids=(), review_task_ids=(), reused_task_ids=(),
+            task_origins={}, candidate_unit_by_task_id={},
+        )
+        self.assertTrue(any("is not allowlisted" in issue.message for issue in _compiled_issues(assembly)))
+
+    def test_missing_candidate_dependency_names_only_its_unit_for_retry(self) -> None:
+        """只有来源明确的 Candidate 缺失依赖可进入 Global 定向修复。"""
+
+        task = {
+            "id": "page-task", "owner": "frontend", "unit_id": "page:orders",
+            "task_type": "frontend.code", "description": "Build orders page.",
+            "dependencies": ["missing-task"],
+            "target_files": ["frontend/src/pages/Orders/index.tsx"],
+            "allowed_paths": ["frontend/src/pages/Orders/index.tsx"],
+            "change_scope": [{"operation": "add", "path": "frontend/src/pages/Orders/index.tsx"}],
+        }
+
+        plan = replace_build_task_plan_tasks({}, [task], {"_candidate_task_ids": ["page-task"]})
+        issue = next(
+            item for item in plan["task_graph"]["validation"]["issues"]
+            if item["code"] == "BUILD_TASK_DEPENDENCY_MISSING"
+        )
+        self.assertEqual(issue["task_ids"], ["page-task"])
+        self.assertEqual(issue["retry_unit_ids"], ["page:orders"])
+        self.assertTrue(issue["retryable"])
 
     def test_execution_fields_are_serialized(self) -> None:
         """序列化必须保留明确策略和平台执行器，legacy 默认也可见。"""

@@ -8,10 +8,13 @@ from pydantic import ValidationError
 from app.services.build_task_reuse import resolve_reuse_facts
 from app.services.build_task_reuse_contracts import ExternalCapability, ReuseFacts, ReuseFacts
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
+from app.services.frozen_contract_manifest import compile_expected_unit_formal_source_refs
+from app.services.frozen_contract_store import FrozenContractStore, PlanningFormalInputs
 from app.services.planning_frozen import freeze_json
 from app.services.unit_generation_requirements import (
     GenerationRequirementsError, UnitGenerationRequirements, resolve_generation_requirements,
 )
+from app.services.unit_generation_requirement_targets import scoped_formal_targets
 from tests.entity_design_test_utils import confirm_entity_designs
 from tests.test_build_task_reuse import _owner, _plan, _task
 
@@ -103,6 +106,160 @@ def _inputs(*tasks: dict, source_type: str = "database", formal_plan: dict | Non
 
 
 class UnitGenerationRequirementsTests(unittest.TestCase):
+    def test_direct_agent_scope_projects_application_service_endpoints(self) -> None:
+        """Direct Agent 的 Service 前置 Unit 必须获得所属 Endpoint 正式输入。"""
+
+        plan = {
+            "confirmation_status": "confirmed",
+            "topology": {"serviceIds": ["agent-runtime"]},
+            "page_implementation_contracts": [],
+            "api_contracts": [
+                {
+                    "id": "leave_application_api",
+                    "endpoints": [
+                        {"id": "leave_application_api.list", "method": "GET"},
+                        {"id": "leave_application_api.create", "method": "POST"},
+                    ],
+                },
+                {
+                    "id": "policy_api",
+                    "endpoints": [{"id": "policy_api.list", "method": "GET"}],
+                },
+            ],
+            "agent_contracts": [{"agentId": "assistant"}],
+        }
+
+        pages, endpoints = scoped_formal_targets(
+            plan,
+            {"type": "agent", "targetId": "assistant"},
+            required_unit_ids=(
+                "agent:runtime",
+                "frontend:api-client",
+                "python:service:leave_application_api",
+                "agent:assistant",
+            ),
+        )
+
+        self.assertEqual(pages, {})
+        self.assertEqual(
+            set(endpoints),
+            {
+                ("leave_application_api", "leave_application_api.list"),
+                ("leave_application_api", "leave_application_api.create"),
+            },
+        )
+        result = resolve_generation_requirements(
+            required_unit_ids=(
+                "agent:runtime",
+                "frontend:api-client",
+                "python:service:leave_application_api",
+                "agent:assistant",
+            ),
+            build_execution_scope={"type": "agent", "targetId": "assistant"},
+            unit_skeleton=ensure_build_unit_skeleton(plan, {}),
+            reuse_facts=ReuseFacts(
+                retained_task_ids_by_unit={},
+                reusable_capabilities_by_unit={},
+                retained_endpoint_owners=[],
+                external_capabilities=[],
+                issues=[],
+            ),
+            formal_target=plan,
+            endpoint_designs=(),
+        )
+        self.assertEqual(
+            [
+                requirement.requirement_id
+                for requirement in result.generation_requirements_by_unit[
+                    "python:service:leave_application_api"
+                ]
+            ],
+            ["python.application_service:leave_application_api"],
+        )
+        store = FrozenContractStore.create(
+            planning_run_id="direct-agent-service-manifest",
+            formal_inputs=PlanningFormalInputs(
+                product_plan={
+                    "content": {"confirmation_status": "confirmed"},
+                    "source": {"artifact": "product-plan"},
+                },
+                technical_plan={
+                    "content": plan,
+                    "source": {"artifact": "technical-plan"},
+                },
+                page_contracts=[],
+                api_contracts=[
+                    {
+                        "content": contract,
+                        "source": {
+                            "artifact": "technical-plan",
+                            "api_contract_id": contract["id"],
+                        },
+                    }
+                    for contract in plan["api_contracts"]
+                ],
+                endpoint_api_designs=[],
+                authorization_slices=[],
+            ),
+        )
+        refs = compile_expected_unit_formal_source_refs(
+            unit_id="python:service:leave_application_api",
+            unit_kind="python",
+            generation_requirements=result.generation_requirements_by_unit[
+                "python:service:leave_application_api"
+            ],
+            scoped_endpoint_keys=tuple(endpoints),
+            frozen_contract_store=store,
+        )
+        self.assertEqual(
+            {ref.kind for ref in refs},
+            {"technical_plan", "api_contract"},
+        )
+        frontend_refs = compile_expected_unit_formal_source_refs(
+            unit_id="frontend:api-client",
+            unit_kind="frontend",
+            generation_requirements=result.generation_requirements_by_unit[
+                "frontend:api-client"
+            ],
+            scoped_endpoint_keys=tuple(endpoints),
+            frozen_contract_store=store,
+        )
+        self.assertEqual(
+            {ref.kind for ref in frontend_refs},
+            {"technical_plan", "api_contract"},
+        )
+        endpoint_result = resolve_generation_requirements(
+            required_unit_ids=("python:endpoint:leave_application_api:leave_application_api.list",),
+            build_execution_scope={
+                "type": "endpoint",
+                "targetId": "leave_application_api.list",
+                "apiContractId": "leave_application_api",
+            },
+            unit_skeleton=ensure_build_unit_skeleton(plan, {}),
+            reuse_facts=ReuseFacts(
+                retained_task_ids_by_unit={},
+                reusable_capabilities_by_unit={},
+                retained_endpoint_owners=[],
+                external_capabilities=[],
+                issues=[],
+            ),
+            formal_target=plan,
+            endpoint_designs=(),
+        )
+        endpoint_refs = compile_expected_unit_formal_source_refs(
+            unit_id="python:endpoint:leave_application_api:leave_application_api.list",
+            unit_kind="python",
+            generation_requirements=endpoint_result.generation_requirements_by_unit[
+                "python:endpoint:leave_application_api:leave_application_api.list"
+            ],
+            scoped_endpoint_keys=(("leave_application_api", "leave_application_api.list"),),
+            frozen_contract_store=store,
+        )
+        self.assertEqual(
+            {ref.kind for ref in endpoint_refs},
+            {"technical_plan", "api_contract"},
+        )
+
     def test_agent_scope_uses_prerequisite_and_deterministic_units(self) -> None:
         """Agent Scope 必须跳过 runtime 模型任务并确定性规划七个业务模块。"""
 

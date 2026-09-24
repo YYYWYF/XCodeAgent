@@ -114,9 +114,19 @@ MAX_PARALLEL_BUILD_TASKS = 3
 logger = logging.getLogger("uvicorn.error")
 
 
-def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
+def _runner_for_owner(
+    owner: str, project_plan: dict[str, Any] | None = None
+) -> tuple[str, Runner] | None:
     """根据 v3 任务 owner 选择当前可用的代码执行器。"""
 
+    from app.topologies.compiler import topology_type_from_plan
+    from app.topologies.registry import registered_topology
+
+    topology_type = topology_type_from_plan(project_plan or {})
+    if topology_type is not None:
+        topology_runner = registered_topology(topology_type).development_runner(owner)
+        if topology_runner is not None:
+            return topology_runner
     if owner == "database":
         return "database.deep_agent", generate_database_with_deep_agent
     if owner == "backend":
@@ -512,7 +522,7 @@ def _execute_owner_tasks(
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """在 agent 策略内按代码领域 owner 选择专业 Agent，并归属真实写入。"""
 
-    runner_entry = _runner_for_owner(owner)
+    runner_entry = _runner_for_owner(owner, state["project_plan"])
     if runner_entry is None:
         return (
             normalize_task_results(

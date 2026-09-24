@@ -31,6 +31,7 @@ from app.services.build_unit_compiler import (
     annotate_unit_inputs,
     apply_unit_compilation,
 )
+from app.services.planning_issues import ValidationIssue
 from app.services.task_scheduler import annotate_task_execution, build_execution_batches
 from app.services.deterministic_unit_candidates import is_deterministic_auth_resource_task
 from app.services.template_state import validate_template_context
@@ -385,7 +386,7 @@ def _normalize_agent_tasks(
         used_ids.add(task_id)
 
         owner = _text(item.get("owner"), "frontend")
-        if owner not in {"frontend", "backend", "database", "agent"}:
+        if owner not in {"frontend", "backend", "python-business", "database", "agent"}:
             owner = (
                 "database"
                 if owner in {"data_source", "data-source", "data", "db"}
@@ -402,6 +403,8 @@ def _normalize_agent_tasks(
             if owner == "agent"
             else "backend.code"
             if owner == "backend"
+            else "python.code"
+            if owner == "python-business"
             else "frontend.code"
         )
         description = _text(item.get("description"), _text(item.get("title"), task_id))
@@ -860,7 +863,7 @@ def build_task_candidate_contract_errors(
             )
         requires_deliverable = (
             task_kind != "repair"
-            and owner in {"frontend", "backend", "agent"}
+            and owner in {"frontend", "backend", "python-business", "agent"}
             and unit_id
             not in {
                 "frontend:shell",
@@ -931,16 +934,43 @@ def _annotate_parallelism(
     return annotated, batches
 
 
-def _topological_order(tasks: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
-    """对任务依赖执行拓扑排序，并返回缺失依赖或环路错误。"""
+def _compilation_issue(
+    code: str, message: str, *, task: dict[str, Any] | None = None,
+    retry_unit_id: str = "",
+) -> ValidationIssue:
+    """在编译规则命中处记录任务归属，只允许明确 Candidate Unit 的重试声明。"""
+
+    task_id = str(task.get("id") or "").strip() if task else ""
+    unit_id = str(task.get("unit_id") or "").strip() if task else ""
+    return ValidationIssue(
+        code=code, level="global",
+        category="generation" if retry_unit_id else "platform",
+        retryable=bool(retry_unit_id),
+        retry_unit_ids=(retry_unit_id,) if retry_unit_id else (),
+        task_ids=(task_id,) if task_id else (),
+        unit_ids=(unit_id,) if unit_id else (),
+        message=message,
+    )
+
+
+def _topological_order(
+    tasks: list[dict[str, Any]], candidate_task_ids: set[str],
+) -> tuple[list[str], list[ValidationIssue]]:
+    """对任务依赖执行拓扑排序，并直接记录缺失依赖或环路问题。"""
 
     by_id = {task["id"]: task for task in tasks}
     incoming = {
         task_id: set(_task_dependencies(task))
         for task_id, task in by_id.items()
     }
-    errors = [
-        f"Task {task_id} depends on missing task {dependency}."
+    issues = [
+        _compilation_issue(
+            "BUILD_TASK_DEPENDENCY_MISSING",
+            f"Task {task_id} depends on missing task {dependency}.",
+            task=by_id[task_id],
+            retry_unit_id=(str(by_id[task_id].get("unit_id") or "")
+                           if task_id in candidate_task_ids else ""),
+        )
         for task_id, dependencies in incoming.items()
         for dependency in sorted(dependencies)
         if dependency not in by_id
@@ -963,8 +993,11 @@ def _topological_order(tasks: list[dict[str, Any]]) -> tuple[list[str], list[str
 
     if len(order) != len(tasks):
         blocked = sorted(set(by_id) - set(order))
-        errors.append(f"Task dependency graph contains a cycle involving: {', '.join(blocked)}.")
-    return order, errors
+        issues.append(_compilation_issue(
+            "BUILD_TASK_DEPENDENCY_CYCLE",
+            f"Task dependency graph contains a cycle involving: {', '.join(blocked)}.",
+        ))
+    return order, issues
 
 
 def _build_task_graph(
@@ -988,16 +1021,13 @@ def _build_task_graph(
         if edge["from"] in outgoing:
             outgoing[edge["from"]] += 1
 
-    topological_order, validation_errors = _topological_order(tasks)
-    missing_dependency_errors = [
-        f"Task {edge['to']} depends on missing task {edge['from']}."
-        for edge in edges
-        if edge["from"] not in incoming
-    ]
-    semantic_errors = _task_semantic_errors(tasks, build_context or {})
-    all_errors = _dedupe_strings(
-        [*missing_dependency_errors, *validation_errors, *semantic_errors]
+    context = build_context or {}
+    topological_order, topology_issues = _topological_order(
+        tasks, set(_string_list(context.get("_candidate_task_ids"))),
     )
+    semantic_issues = _task_semantic_errors(tasks, context)
+    issues = [*topology_issues, *semantic_issues]
+    all_errors = _dedupe_strings([issue.message for issue in issues])
     return {
         "schema_version": "build-task-graph.v3",
         "nodes": task_ids,
@@ -1007,8 +1037,9 @@ def _build_task_graph(
         "topological_order": topological_order,
         "execution_layers": execution_batches,
         "validation": {
-            "is_valid": not all_errors,
+            "is_valid": not issues,
             "errors": all_errors,
+            "issues": [issue.model_dump(mode="json") for issue in issues],
         },
     }
 
@@ -1016,25 +1047,38 @@ def _build_task_graph(
 def _task_semantic_errors(
     tasks: list[dict[str, Any]],
     build_context: dict[str, Any],
-) -> list[str]:
-    """校验 DAG 拓扑之外的任务边界、owner、Unit、数据库职责和审批语义。"""
+) -> list[ValidationIssue]:
+    """在各编译检查点记录拓扑之外的任务及平台规则问题。"""
 
-    errors: list[str] = []
-    errors.extend(_authorization_coverage_errors(tasks, build_context))
+    issues = [
+        _compilation_issue("BUILD_AUTHORIZATION_COVERAGE_INVALID", message)
+        for message in _authorization_coverage_errors(tasks, build_context)
+    ]
     required_unit_ids = _string_list(build_context.get("required_unit_ids"))
     validate_task_scope = build_context.get("_validate_task_scope", True) is not False
     allow_missing_deliverable_task_ids = set(
         _string_list(build_context.get("_allow_missing_business_deliverable_task_ids"))
     )
-    errors.extend(_required_bootstrap_task_errors(tasks, build_context))
-    errors.extend(frontend_endpoint_ownership_errors(tasks))
-    errors.extend(
-        retained_frontend_endpoint_owner_conflict_errors(
-            tasks,
-            _dict_items(build_context.get("frontend_endpoint_owner_constraints")),
+    issues.extend(
+        _compilation_issue("BUILD_BOOTSTRAP_TASK_MISSING", message)
+        for message in _required_bootstrap_task_errors(tasks, build_context)
+    )
+    issues.extend(
+        _compilation_issue("BUILD_FRONTEND_ENDPOINT_OWNER_CONFLICT", message)
+        for message in frontend_endpoint_ownership_errors(tasks)
+    )
+    issues.extend(
+        _compilation_issue("BUILD_RETAINED_ENDPOINT_OWNER_CONFLICT", message)
+        for message in retained_frontend_endpoint_owner_conflict_errors(
+            tasks, _dict_items(build_context.get("frontend_endpoint_owner_constraints")),
         )
     )
     for task in tasks:
+        def add_task_issue(code: str, message: str) -> None:
+            """按当前 Task 的身份记录该检查点的完整编译错误。"""
+
+            issues.append(_compilation_issue(code, message, task=task))
+
         task_id = str(task.get("id") or "")
         owner = str(task.get("owner") or "")
         unit_id = str(task.get("unit_id") or "")
@@ -1043,47 +1087,55 @@ def _task_semantic_errors(
         try:
             resolve_build_task_execution_contract(task)
         except BuildTaskExecutionContractError as exc:
-            errors.append(str(exc))
-        errors.extend(
-            _template_boundary_errors(
-                task,
-                paths=paths,
-                allow_deterministic_auth_resources=build_context.get("_compile_auth_capability_dependencies") is True,
-            )
-        )
+            add_task_issue("BUILD_TASK_EXECUTION_CONTRACT_INVALID", str(exc))
+        for message in _template_boundary_errors(
+            task, paths=paths,
+            allow_deterministic_auth_resources=build_context.get("_compile_auth_capability_dependencies") is True,
+        ):
+            add_task_issue("BUILD_TASK_TEMPLATE_BOUNDARY_INVALID", message)
         if validate_task_scope and required_unit_ids and unit_id not in required_unit_ids:
-            errors.append(
+            add_task_issue("BUILD_TASK_SCOPE_INVALID",
                 f"Task {task_id} is outside the current Build scope: Unit {unit_id}."
             )
         if unit_id.startswith("database:") and owner != "database":
-            errors.append(f"Task {task_id} is in database Unit {unit_id} but owner is {owner}.")
+            add_task_issue("BUILD_TASK_OWNER_INVALID", f"Task {task_id} is in database Unit {unit_id} but owner is {owner}.")
         if unit_id.startswith("backend:") and owner != "backend":
-            errors.append(f"Task {task_id} is in backend Unit {unit_id} but owner is {owner}.")
+            add_task_issue("BUILD_TASK_OWNER_INVALID", f"Task {task_id} is in backend Unit {unit_id} but owner is {owner}.")
+        if unit_id.startswith("python:") and owner != "python-business":
+            add_task_issue("BUILD_TASK_OWNER_INVALID", f"Task {task_id} is in Python Unit {unit_id} but owner is {owner}.")
         if unit_id.startswith("agent:") and owner != "agent":
-            errors.append(f"Task {task_id} is in agent Unit {unit_id} but owner is {owner}.")
+            add_task_issue("BUILD_TASK_OWNER_INVALID", f"Task {task_id} is in agent Unit {unit_id} but owner is {owner}.")
         if unit_id.startswith(("page:", "frontend:")) and owner != "frontend":
-            errors.append(f"Task {task_id} is in frontend/page Unit {unit_id} but owner is {owner}.")
+            add_task_issue("BUILD_TASK_OWNER_INVALID", f"Task {task_id} is in frontend/page Unit {unit_id} but owner is {owner}.")
+        if unit_id.startswith("page:"):
+            for dependency_unit_id in _string_list(task.get("missing_unit_dependencies")):
+                if dependency_unit_id.startswith("python:endpoint:"):
+                    add_task_issue("BUILD_PAGE_ENDPOINT_DEPENDENCY_MISSING",
+                        f"Page task {task_id} requires Python Endpoint Unit {dependency_unit_id}, "
+                        "but that Unit has no implementation task."
+                    )
         if owner == "database":
             if required_unit_ids and not any(
                 candidate.startswith("database:") for candidate in required_unit_ids
             ):
-                errors.append(
+                add_task_issue("BUILD_DATABASE_SCOPE_INVALID",
                     f"Database task {task_id} is not allowed in normal Build scope; "
                     "database changes are completed during entity confirmation."
                 )
-            errors.extend(
-                _database_task_semantic_errors(
-                    task,
-                    paths=paths,
-                )
-            )
+            for message in _database_task_semantic_errors(task, paths=paths):
+                add_task_issue("BUILD_DATABASE_TASK_INVALID", message)
         elif task.get("database_scope"):
-            errors.append(f"Task {task_id} is {owner} owner but declares database_scope.")
+            add_task_issue("BUILD_DATABASE_SCOPE_INVALID", f"Task {task_id} is {owner} owner but declares database_scope.")
         if owner == "backend" and task_type.startswith("database."):
-            errors.append(f"Task {task_id} is backend owner but declares database task_type {task_type}.")
+            add_task_issue("BUILD_TASK_TYPE_INVALID", f"Task {task_id} is backend owner but declares database task_type {task_type}.")
+        if owner == "python-business":
+            if task_type != "python.code":
+                add_task_issue("BUILD_TASK_TYPE_INVALID", f"Task {task_id} is Python business owner but task_type is {task_type}.")
+            if any(not path.startswith("agent-runtime/") for path in paths):
+                add_task_issue("BUILD_TASK_PATH_INVALID", f"Task {task_id} Python business paths must stay under agent-runtime/.")
         if owner == "agent":
             if task_type != "agent.code":
-                errors.append(f"Task {task_id} is agent owner but task_type is {task_type}.")
+                add_task_issue("BUILD_TASK_TYPE_INVALID", f"Task {task_id} is agent owner but task_type is {task_type}.")
             source_refs = task.get("source_refs")
             source_refs = source_refs if isinstance(source_refs, dict) else {}
             agent_module = str(source_refs.get("agent_module") or "").strip()
@@ -1096,11 +1148,11 @@ def _task_semantic_errors(
                 "knowledge",
                 "context",
             }:
-                errors.append(
+                add_task_issue("BUILD_AGENT_MODULE_INVALID",
                     f"Agent task {task_id} does not declare a valid source_refs.agent_module."
                 )
             if unit_id == "agent:runtime":
-                errors.append(
+                add_task_issue("BUILD_AGENT_RUNTIME_OWNERSHIP_INVALID",
                     f"Task {task_id} must not target platform-owned agent:runtime; "
                     "template readiness is completed before Build planning."
                 )
@@ -1108,21 +1160,21 @@ def _task_semantic_errors(
                 path for path in paths if not path.startswith("agent-runtime/")
             ]
             if outside_agent_runtime:
-                errors.append(
+                add_task_issue("BUILD_TASK_PATH_INVALID",
                     f"Agent task {task_id} contains paths outside agent-runtime: "
                     + ", ".join(outside_agent_runtime)
                     + "."
                 )
-        errors.extend(
-            business_acceptance_contract_errors(
-                task,
-                # 只对未被本轮替换的历史基线任务放宽缺失交付物，当前模型新任务仍必须完整声明。
-                allow_missing_deliverable=task_id in allow_missing_deliverable_task_ids,
-                context=build_context,
-            )
-        )
-        errors.extend(engineering_acceptance_contract_errors(task))
-    return errors
+        for message in business_acceptance_contract_errors(
+            task,
+            # 只对未被本轮替换的历史基线任务放宽缺失交付物，当前模型新任务仍必须完整声明。
+            allow_missing_deliverable=task_id in allow_missing_deliverable_task_ids,
+            context=build_context,
+        ):
+            add_task_issue("BUILD_BUSINESS_ACCEPTANCE_CONTRACT_INVALID", message)
+        for message in engineering_acceptance_contract_errors(task):
+            add_task_issue("BUILD_ENGINEERING_ACCEPTANCE_CONTRACT_INVALID", message)
+    return issues
 
 
 def _authorization_coverage_errors(
@@ -1342,6 +1394,11 @@ def _task_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
         "total": len(tasks),
         "frontend": len([task for task in tasks if task.get("owner") == "frontend"]),
         "backend": len([task for task in tasks if task.get("owner") == "backend"]),
+        **(
+            {"python_business": len([task for task in tasks if task.get("owner") == "python-business"])}
+            if any(task.get("owner") == "python-business" for task in tasks)
+            else {}
+        ),
         "database": len([task for task in tasks if task.get("owner") == "database"]),
         **(
             {"agent": len([task for task in tasks if task.get("owner") == "agent"])}
@@ -1453,6 +1510,8 @@ def _default_task_type(owner: str) -> str:
         return "database.change"
     if owner == "backend":
         return "backend.code"
+    if owner == "python-business":
+        return "python.code"
     if owner == "agent":
         return "agent.code"
     return "frontend.code"

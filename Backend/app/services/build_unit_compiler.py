@@ -122,7 +122,7 @@ def _with_task_unit_metadata(
     else:
         source_refs.pop("agent_ui", None)
     # Endpoint 设计是平台确认的确定性来源，模型候选不得覆盖或扩展其字段映射记录。
-    if unit_id.startswith("backend:endpoint:") or unit_id == "backend:bootstrap":
+    if unit_id.startswith(("backend:endpoint:", "python:endpoint:")) or unit_id == "backend:bootstrap":
         source_refs["endpoint_designs"] = _endpoint_design_items(
             canonical_source_refs.get("endpoint_designs")
         )
@@ -175,10 +175,8 @@ def _apply_unit_task_dependencies(
     result: list[dict[str, Any]] = []
     for task in tasks:
         unit_id = str(task.get("unit_id") or "application:root")
-        # 前端页面 Unit 只继承同 frontend 域的依赖（如 frontend:api-client），
-        # 不继承 backend:endpoint:* / database:* 的任务依赖，使前端页面可与后端
-        # 接口并行生成：前端通过 api-client（已封装 service.get + 契约 schema）
-        # 调接口，无需等后端实现。前后端契约一致性由 app:integration 集成测试兜底。
+        # Direct 页面等待其 Python Endpoint 的实现任务；Java Backend 拓扑保留
+        # 页面与后端接口的并行生成规则，最终合同仍由集成测试核对。
         page_frontend_only = unit_id.startswith("page:")
         # shell 边仅表达模板架构前置；即使登记过历史任务，也不能变为执行依赖。
         inherited_dependencies: list[str] = []
@@ -186,6 +184,7 @@ def _apply_unit_task_dependencies(
             if dependency_unit_id == "frontend:shell" or not (
                 not page_frontend_only
                 or dependency_unit_id.startswith("frontend:")
+                or dependency_unit_id.startswith("python:endpoint:")
                 or (
                     bool(tasks_by_unit.get(dependency_unit_id))
                     and all(
@@ -382,7 +381,7 @@ def _unit_source_refs(
             **({"business_descriptions": descriptions} if descriptions else {}),
             **({"agent_ui": agent_ui} if agent_ui else {}),
         }
-    if unit_id.startswith("backend:endpoint:"):
+    if unit_id.startswith(("backend:endpoint:", "python:endpoint:")):
         contract_id, endpoint_id = _backend_endpoint_identity(unit_id)
         endpoint_ids = [endpoint_id]
         endpoint_refs = _matching_endpoint_refs(
@@ -409,6 +408,7 @@ def _unit_source_refs(
             ),
             "technical_plan_endpoints": endpoint_refs,
             "endpoint_ids": endpoint_ids,
+            "api_contract_ids": [contract_id],
             "entity_ids": entity_ids,
             "endpoint_designs": _scope_endpoint_designs_to_endpoint(
                 endpoint_designs,
@@ -431,6 +431,27 @@ def _unit_source_refs(
             "mapping_flows": _string_list(build_context.get("mapping_flows")),
             **({"source_types": source_types} if source_types else {}),
             **({"business_descriptions": descriptions} if descriptions else {}),
+        }
+    if unit_id.startswith(("python:entity:", "python:migration:", "python:repository:")):
+        entity_id = unit_id.split(":", 2)[2]
+        return {
+            **existing,
+            "type": "python_business_entity",
+            "target": {"type": "entity", "id": entity_id},
+            "entity_ids": [entity_id],
+        }
+    if unit_id.startswith("python:service:"):
+        contract_id = unit_id.split(":", 2)[2]
+        return {
+            **existing,
+            "type": "python_business_service",
+            "target": {"type": "api_contract", "id": contract_id},
+            "api_contract_ids": [contract_id],
+            "entity_ids": entity_ids,
+            "endpoint_designs": [
+                design for design in endpoint_designs
+                if str(design.get("apiContractId") or "") == contract_id
+            ],
         }
     if unit_id.startswith("agent:"):
         agent_id = unit_id.removeprefix("agent:")
@@ -501,10 +522,10 @@ def _unit_fingerprint_payload(
 
 
 def _backend_endpoint_identity(unit_id: str) -> tuple[str, str]:
-    """从当前 backend:endpoint Unit 标识提取稳定契约与 Endpoint 身份。"""
+    """从 Backend 或 Python Endpoint Unit 标识提取稳定契约与 Endpoint 身份。"""
 
     parts = str(unit_id or "").split(":", 3)
-    if len(parts) != 4 or parts[:2] != ["backend", "endpoint"]:
+    if len(parts) != 4 or parts[0] not in {"backend", "python"} or parts[1] != "endpoint":
         return "", ""
     return parts[2].strip(), parts[3].strip()
 

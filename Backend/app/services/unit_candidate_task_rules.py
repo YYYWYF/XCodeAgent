@@ -36,10 +36,12 @@ _FRONTEND_KINDS = {
     "frontend.page", "frontend.api_module", "frontend.static_data_module",
     "frontend.shared_capability",
 }
-_BACKEND_KINDS = set(DELIVERABLE_KINDS) - _FRONTEND_KINDS
+_PYTHON_KINDS = {"python.entity", "python.migration", "python.repository", "python.application_service", "python.endpoint"}
+_BACKEND_KINDS = set(DELIVERABLE_KINDS) - _FRONTEND_KINDS - _PYTHON_KINDS - {"agent.runtime"}
 _OWNER_TASK_TYPES = {
     "frontend": {"frontend.code"},
     "backend": {"backend.code"},
+    "python-business": {"python.code"},
     "database": {"database.change", "database.seed"},
 }
 _DRIVE_PATH = re.compile(r"^[A-Za-z]:/")
@@ -336,7 +338,12 @@ def _scope_issues(task: Mapping[str, Any], context: UnitGenerationContext) -> tu
         ))
     scope_paths = set(target_files) | set(change_paths)
     owner = _identity(task.get("owner"))
-    expected_prefix = "frontend/" if owner == "frontend" else "backend/" if owner == "backend" else None
+    expected_prefix = (
+        "frontend/" if owner == "frontend"
+        else "backend/" if owner == "backend"
+        else "agent-runtime/" if owner == "python-business"
+        else None
+    )
     wrong_layer = sorted(path for path in scope_paths if expected_prefix and not path.startswith(expected_prefix))
     if wrong_layer:
         issues.append(_issue(
@@ -405,6 +412,7 @@ def _deliverable_issues(
         if (
             kind in _FRONTEND_KINDS and owner != "frontend"
             or kind in _BACKEND_KINDS and owner != "backend"
+            or kind in _PYTHON_KINDS and owner != "python-business"
         ):
             issues.append(_issue(
                 "CANDIDATE_DELIVERABLE_OWNER_MISMATCH", "deliverable kind 与 Task owner 不匹配。",

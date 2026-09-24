@@ -26,6 +26,11 @@ BUSINESS_ACCEPTANCE_KINDS = (
     "backend.application_service_contract",
     "backend.endpoint_contract",
     "backend.upstream_contract",
+    "python.entity_contract",
+    "python.migration_contract",
+    "python.repository_contract",
+    "python.application_service_contract",
+    "python.endpoint_contract",
 )
 
 BUSINESS_VERIFIER_NAMES = {
@@ -38,6 +43,11 @@ BUSINESS_VERIFIER_NAMES = {
     "backend.application_service_contract": "backend_application_service_contract",
     "backend.endpoint_contract": "backend_endpoint_contract",
     "backend.upstream_contract": "backend_upstream_contract",
+    "python.entity_contract": "python_entity_contract",
+    "python.migration_contract": "python_migration_contract",
+    "python.repository_contract": "python_repository_contract",
+    "python.application_service_contract": "python_application_service_contract",
+    "python.endpoint_contract": "python_endpoint_contract",
 }
 
 DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND = {
@@ -51,6 +61,11 @@ DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND = {
     "backend.endpoint_controller": "endpoint_id",
     "backend.upstream": "endpoint_id",
     "backend.bootstrap": "data_source_type",
+    "python.entity": "entity_id",
+    "python.migration": "entity_id",
+    "python.repository": "entity_id",
+    "python.application_service": "api_contract_id",
+    "python.endpoint": "endpoint_id",
     "agent.runtime": "target_id",
 }
 DELIVERABLE_KINDS = tuple(DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND)
@@ -62,10 +77,14 @@ _FRONTEND_DELIVERABLE_KINDS = {
     "frontend.shared_capability",
 }
 _AGENT_DELIVERABLE_KINDS = {"agent.runtime"}
+_PYTHON_DELIVERABLE_KINDS = {
+    "python.entity", "python.migration", "python.repository", "python.application_service", "python.endpoint"
+}
 _BACKEND_DELIVERABLE_KINDS = (
     set(DELIVERABLE_KINDS)
     - _FRONTEND_DELIVERABLE_KINDS
     - _AGENT_DELIVERABLE_KINDS
+    - _PYTHON_DELIVERABLE_KINDS
 )
 _CHECK_ORDER = {kind: index for index, kind in enumerate(BUSINESS_ACCEPTANCE_KINDS)}
 _MAX_ITEMS = 100
@@ -142,7 +161,6 @@ def business_acceptance_contract_errors(
         errors.append(f"Task {task_id} must declare at least one deliverable.")
 
     deliverable_ids: set[str] = set()
-    owned_paths: set[str] = set()
     allowed_paths = _task_allowed_paths(task)
     for deliverable in deliverables:
         deliverable_id = deliverable["id"]
@@ -170,6 +188,12 @@ def business_acceptance_contract_errors(
             errors.append(
                 f"Task {task_id} agent deliverable {deliverable_id} has invalid owner or Unit."
             )
+        if kind in _PYTHON_DELIVERABLE_KINDS and (
+            owner != "python-business" or not unit_id.startswith("python:")
+        ):
+            errors.append(
+                f"Task {task_id} Python deliverable {deliverable_id} has invalid owner or Unit."
+            )
         paths = deliverable["paths"]
         if not paths and kind != "frontend.shared_capability":
             errors.append(f"Deliverable {deliverable_id} must declare paths.")
@@ -182,10 +206,10 @@ def business_acceptance_contract_errors(
                 errors.append(
                     f"Deliverable {deliverable_id} path {path} is outside the task scope."
                 )
-            normalized_key = normalized.casefold()
-            if normalized_key in owned_paths:
-                errors.append(f"Task {task_id} assigns path {path} to multiple deliverables.")
-            owned_paths.add(normalized_key)
+            # 同一 Task 内多个 deliverable 允许共享同一文件：frontend.api_module 的权威规则
+            # 要求按 requirement（Endpoint）逐个声明 deliverable，但全部落进同一份
+            # `frontend/src/apis/<biz>Api.ts`。文件级唯一所有权由 Task 级 target_files /
+            # change_scope / allowed_paths 一致性校验保证，此处不再按路径去重。
         if kind == "backend.endpoint_controller":
             errors.extend(_endpoint_deliverable_errors(task, deliverable))
     errors.extend(_page_deliverable_errors(task, deliverables, context or {}))
@@ -330,6 +354,59 @@ def _checks_for_deliverable(
     """把单个交付物映射到已实现的确定性检查类型。"""
 
     kind = deliverable["kind"]
+    if kind in _PYTHON_DELIVERABLE_KINDS:
+        entity_id = _text(deliverable.get("target_id"))
+        technical_entities = _dict_items(_dict_value(formal.get("project_plan")).get("entities"))
+        entities = [
+            entity for entity in _selected_entities(formal)
+            if _text(entity.get("entity_id")) == entity_id
+        ]
+        if not entities:
+            entities = [
+                {
+                    "entity_id": entity_id,
+                    "entity_name": _text(entity.get("name"), entity_id),
+                    "fields": _dict_items(entity.get("fields")),
+                }
+                for entity in technical_entities if _text(entity.get("id")) == entity_id
+            ]
+        endpoints = _frontend_api_endpoint_expectations(formal, deliverable)
+        if kind in {"python.entity", "python.migration", "python.repository"}:
+            if not entities:
+                return []
+            check_kind = (
+                "python.entity_contract" if kind == "python.entity"
+                else "python.migration_contract" if kind == "python.migration"
+                else "python.repository_contract"
+            )
+            return [_business_check(
+                task, deliverable, check_kind,
+                "Python 业务层必须实现正式 Entity 字段与可信 Principal 归属边界。",
+                [_source(
+                    "technical_plan_entity", entity_id, f"/entities/{entity_id}",
+                    next((item for item in technical_entities
+                          if _text(item.get("id")) == entity_id), {}),
+                )],
+                {"entities": [_entity_expectation(entity) for entity in entities]},
+            )]
+        if kind == "python.application_service":
+            contract_id = entity_id
+            endpoints = [
+                endpoint for endpoint in _endpoint_expectations(formal)
+                if _text(endpoint.get("api_contract_id")) == contract_id
+            ]
+            return [_business_check(
+                task, deliverable, "python.application_service_contract",
+                "Python Application Service 必须集中实现正式业务接口的处理入口。",
+                _api_sources(formal, endpoints),
+                {"endpoints": endpoints},
+            )] if endpoints else []
+        return [_business_check(
+            task, deliverable, "python.endpoint_contract",
+            "FastAPI Endpoint 必须暴露正式 method/path 并委托 Application Service。",
+            _api_sources(formal, endpoints) + _endpoint_detail_sources(formal),
+            {"endpoints": endpoints},
+        )] if endpoints else []
     if kind == "frontend.api_module":
         endpoints = _frontend_api_endpoint_expectations(formal, deliverable)
         return [
@@ -1191,6 +1268,11 @@ def _expected_field_errors(check_id: str, kind: str, value: Any) -> list[str]:
         "backend.application_service_contract": ("operations",),
         "backend.endpoint_contract": ("endpoints",),
         "backend.upstream_contract": ("external_apis",),
+        "python.entity_contract": ("entities",),
+        "python.migration_contract": ("entities",),
+        "python.repository_contract": ("entities",),
+        "python.application_service_contract": ("endpoints",),
+        "python.endpoint_contract": ("endpoints",),
     }.get(kind, ())
     return [
         f"Business check {check_id or '<unknown>'} expected is missing {field}."
@@ -1273,7 +1355,7 @@ def _requires_business_deliverable(task: dict[str, Any]) -> bool:
         return False
     owner = _text(task.get("owner"))
     unit_id = _text(task.get("unit_id"))
-    if owner not in {"frontend", "backend", "agent"}:
+    if owner not in {"frontend", "backend", "python-business", "agent"}:
         return False
     return unit_id not in {"frontend:shell", "frontend:api-client", "frontend:auth-guard", "backend:bootstrap"}
 

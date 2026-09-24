@@ -28,6 +28,13 @@ from app.services.business_acceptance_verifiers.frontend_static_data import (
     verify_static_data_contract_source,
 )
 from app.services.business_acceptance_verifiers.common import read_target_files, verification_result
+from app.services.business_acceptance_verifiers.python_business import (
+    verify_python_application_service_source,
+    verify_python_endpoint_source,
+    verify_python_entity_source,
+    verify_python_migration_source,
+    verify_python_repository_source,
+)
 
 
 Verifier = Callable[..., dict[str, Any]]
@@ -42,6 +49,11 @@ BUSINESS_VERIFIER_REGISTRY: dict[str, Verifier] = {
     "backend.application_service_contract": verify_application_service_source,
     "backend.endpoint_contract": verify_endpoint_source,
     "backend.upstream_contract": verify_upstream_source,
+    "python.entity_contract": verify_python_entity_source,
+    "python.migration_contract": verify_python_migration_source,
+    "python.repository_contract": verify_python_repository_source,
+    "python.application_service_contract": verify_python_application_service_source,
+    "python.endpoint_contract": verify_python_endpoint_source,
 }
 
 
@@ -303,6 +315,15 @@ def _current_source_hash(source: dict[str, Any], formal: dict[str, Any]) -> str:
             {},
         )
         return _stable_hash(design) if design else ""
+    if artifact == "technical_plan_entity":
+        entity = next(
+            (
+                item for item in _formal_items(formal, "entities")
+                if str(item.get("id") or "") == target_id
+            ),
+            {},
+        )
+        return _stable_hash(entity) if entity else ""
     if artifact == "entity_design":
         detail = next(
             (

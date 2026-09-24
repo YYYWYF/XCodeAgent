@@ -12,6 +12,7 @@ from app.services.api_design import (
     api_design_source_types,
     load_confirmed_endpoint_designs,
 )
+from app.services.direct_api_contract import project_confirmed_direct_contracts
 from app.services.agent_development_readiness import agent_contract_sha256
 from app.services.entity_definitions import (
     confirmed_entity_designs,
@@ -29,6 +30,7 @@ from app.services.page_implementation_contract import materialize_technical_plan
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
+from app.topologies import includes_backend_service
 from app.workspace.endpoint_design_documents import technical_plan_path
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
@@ -107,8 +109,10 @@ def _load_current_confirmation_plan(
     if technical_plan.get("confirmation_status") != "confirmed":
         raise ValueError("当前正式 TechnicalPlan 未确认。")
     if target_type != "page":
-        return technical_plan
-    return _materialize_page_confirmation_plan(workspace_root, technical_plan)
+        return project_confirmed_direct_contracts(workspace_root, technical_plan)
+    return project_confirmed_direct_contracts(
+        workspace_root, _materialize_page_confirmation_plan(workspace_root, technical_plan)
+    )
 
 
 def _materialize_page_confirmation_plan(
@@ -289,6 +293,8 @@ def _agent_context(
     ]
     if len(contracts) != 1 or len(product_agents) != 1:
         raise ValueError(f"ProductPlan 与 TechnicalPlan 无法唯一定位 Agent {agent_id}。")
+    if not includes_backend_service(project_plan):
+        return _direct_agent_context(project_plan, contracts[0], product_agents[0], agent_id)
     contract = contracts[0]
     product_agent = product_agents[0]
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
@@ -399,6 +405,73 @@ def _agent_context(
     }
 
 
+def _direct_agent_context(
+    project_plan: dict[str, Any],
+    contract: dict[str, Any],
+    product_agent: dict[str, Any],
+    agent_id: str,
+) -> dict[str, Any]:
+    """为 Direct Agent 投射本地 Application Service 依赖，不构造 Java Gateway。"""
+
+    contracts_by_id = {
+        str(item.get("id") or ""): item
+        for item in _dict_items(project_plan.get("api_contracts"))
+    }
+    settings = contract.get("agentSettings") if isinstance(contract.get("agentSettings"), dict) else {}
+    tools = settings.get("tools") if isinstance(settings.get("tools"), dict) else {}
+    service_ids: list[str] = []
+    for binding in _dict_items(tools.get("bindings")):
+        source = binding.get("source") if isinstance(binding.get("source"), dict) else {}
+        if source.get("type") != "application_service":
+            continue
+        service_id = str(source.get("serviceId") or "").strip()
+        if service_id not in contracts_by_id:
+            raise ValueError(f"Agent {agent_id} Tool 引用未知 Application Service {service_id}。")
+        if service_id not in service_ids:
+            service_ids.append(service_id)
+    entity_ids = list(dict.fromkeys(
+        str(entity_id)
+        for service_id in service_ids
+        for entity_id in contracts_by_id[service_id].get("entity_ids") or []
+        if str(entity_id).strip()
+    ))
+    entry_page_ids = [
+        str(page_id).strip()
+        for page_id in product_agent.get("entryPageIds") or []
+        if str(page_id).strip()
+    ]
+    return {
+        "target": {"type": "agent", "id": agent_id},
+        "agent_contracts": [contract],
+        "contract_hash": agent_contract_sha256(contract),
+        "product_agent": product_agent,
+        "page_implementation_contract": None,
+        "page_implementation_contracts": [
+            _page_implementation_contract(project_plan, page_id, None)
+            for page_id in entry_page_ids
+        ],
+        "endpoint_contract": None,
+        "direct_endpoint_contracts": [],
+        "endpoint_ids": [],
+        "required_endpoint_ids": [],
+        "entity_ids": entity_ids,
+        "deferred_entity_ids": [],
+        "entity_designs": entity_design_summaries(project_plan, entity_ids, set()),
+        "entry_pages": [
+            page
+            for page_id in entry_page_ids
+            if (page := find_frontend_page(project_plan_page_records(project_plan), page_id)) is not None
+        ],
+        "required_unit_root_ids": [f"agent:{agent_id}"],
+        "required_unit_ids": [],
+        "source_refs": {
+            "agent_contract": {"agentId": agent_id},
+            "application_services": [{"id": service_id} for service_id in service_ids],
+            "entry_pages": [{"pageId": page_id} for page_id in entry_page_ids],
+        },
+    }
+
+
 def _page_context(
     project_plan: dict[str, Any],
     product_plan: dict[str, Any],
@@ -417,6 +490,7 @@ def _page_context(
     )
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = _contract_endpoint_ids(page_contract)
+    direct = not includes_backend_service(project_plan)
     workspace_root = _workspace_root(project_plan_path)
     agent_ui = project_agent_ui_build_contracts(product_plan, project_plan).get(page_id)
     endpoint_unit_ids: list[str] = []
@@ -426,13 +500,17 @@ def _page_context(
             raise ValueError(f"Page {page_id} references unknown endpoint {endpoint_id}.")
         contract_id = str(endpoint.get("api_contract_id") or "")
         if contract_id:
-            endpoint_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id))
+            endpoint_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id, direct=direct))
 
     endpoint_contracts = [endpoint_index[endpoint_id] for endpoint_id in endpoint_ids]
-    endpoint_designs = load_confirmed_endpoint_designs(
-        workspace_root,
-        project_plan,
-        endpoint_ids,
+    endpoint_designs = (
+        []
+        if direct
+        else load_confirmed_endpoint_designs(
+            workspace_root,
+            project_plan,
+            endpoint_ids,
+        )
     )
     entity_ids = _technical_plan_entity_ids(project_plan, endpoint_ids)
     source_types = api_design_source_types(endpoint_designs)
@@ -444,9 +522,14 @@ def _page_context(
     if _page_requires_auth(page):
         required_unit_ids.append("frontend:auth-guard")
     if endpoint_ids:
+        contract_ids = list(dict.fromkeys(
+            str(endpoint_index[endpoint_id].get("api_contract_id") or "")
+            for endpoint_id in endpoint_ids
+        ))
         required_unit_ids.extend(
-            ["backend:bootstrap", *list(dict.fromkeys(endpoint_unit_ids))]
+            _business_prerequisite_unit_ids(contract_ids, entity_ids, direct=direct)
         )
+        required_unit_ids.extend(dict.fromkeys(endpoint_unit_ids))
     return {
         "target": {
             "type": "page",
@@ -514,11 +597,16 @@ def _endpoint_context(
     contract_id = str(endpoint.get("api_contract_id") or "")
     if not contract_id:
         raise ValueError(f"Endpoint {endpoint_id} does not declare an API contract.")
-    endpoint_designs = load_confirmed_endpoint_designs(
-        _workspace_root(project_plan_path),
-        project_plan,
-        [endpoint_id],
-        api_contract_id=contract_id,
+    direct = not includes_backend_service(project_plan)
+    endpoint_designs = (
+        []
+        if direct
+        else load_confirmed_endpoint_designs(
+            _workspace_root(project_plan_path),
+            project_plan,
+            [endpoint_id],
+            api_contract_id=contract_id,
+        )
     )
     source_types = api_design_source_types(endpoint_designs)
     entity_ids = _technical_plan_entity_ids(
@@ -528,7 +616,10 @@ def _endpoint_context(
     )
     mapping_flows = api_design_mapping_flows(endpoint_designs)
     business_descriptions = api_design_business_descriptions(endpoint_designs)
-    required_unit_ids = ["backend:bootstrap", _endpoint_unit_id(contract_id, endpoint_id)]
+    required_unit_ids = [
+        *_business_prerequisite_unit_ids([contract_id], entity_ids, direct=direct),
+        _endpoint_unit_id(contract_id, endpoint_id, direct=direct),
+    ]
     return {
         "target": {
             "type": "endpoint",
@@ -627,10 +718,27 @@ def _endpoint_index(value: Any) -> dict[str, dict[str, Any]]:
     return index
 
 
-def _endpoint_unit_id(api_contract_id: str, endpoint_id: str) -> str:
-    """生成 endpoint Unit 的稳定复合标识，避免不同契约下接口 ID 冲突。"""
+def _endpoint_unit_id(api_contract_id: str, endpoint_id: str, *, direct: bool = False) -> str:
+    """按拓扑服务归属生成 Endpoint Unit 的稳定复合标识。"""
 
-    return f"backend:endpoint:{api_contract_id}:{endpoint_id}"
+    owner = "python" if direct else "backend"
+    return f"{owner}:endpoint:{api_contract_id}:{endpoint_id}"
+
+
+def _business_prerequisite_unit_ids(
+    contract_ids: list[str], entity_ids: list[str], *, direct: bool
+) -> list[str]:
+    """为页面或 Endpoint 引入当前拓扑的业务实现前置 Unit。"""
+
+    if not direct:
+        return ["backend:bootstrap"]
+    return list(dict.fromkeys([
+        "python:bootstrap",
+        *(f"python:entity:{entity_id}" for entity_id in entity_ids),
+        *(f"python:migration:{entity_id}" for entity_id in entity_ids),
+        *(f"python:repository:{entity_id}" for entity_id in entity_ids),
+        *(f"python:service:{contract_id}" for contract_id in contract_ids if contract_id),
+    ]))
 
 
 def _technical_plan_entity_ids(
