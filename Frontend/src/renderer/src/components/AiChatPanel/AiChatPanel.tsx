@@ -1472,6 +1472,24 @@ export default function AiChatPanel({
   // UI 设计稿生成中：UI 确认阶段 workflow running（换一换/选模板/首次生成）。
   const uiDesignGenerating =
     isDesignPhase && planningPhaseRunning && planningPhase === 'ui_confirmation'
+  // UI 设计稿是否还有页在后台生成池里跑（queued/generating）。
+  //
+  // 判据取**磁盘上的页面状态**而不是本地 acting：生成解耦到进程级 worker pool 后，
+  // 池只写磁盘、不写 checkpoint，本地 acting 也不一定覆盖（例如重新打开工作区时
+  // 池仍在跑，但没有任何人点过按钮）。用 workflow running 也不够 —— 池是后台任务，
+  // run 早已返回。
+  //
+  // 用途：生成期间禁用「保存为设计版本」这类提交入口 —— 此刻 `.devagentstudio` 下的
+  // 设计稿文件正随输出变动，提交会捞到一个中间态快照。
+  const uiDesignPoolBusy = useMemo(
+    () =>
+      uiDesignPages.some((page) =>
+        ['queued', 'generating'].includes(String(page.status || ''))
+      ),
+    [uiDesignPages]
+  )
+  // 设计稿还在生成：提交入口一律禁用。
+  const designArtifactsSettling = uiDesignGenerating || uiDesignPoolBusy
   // acting 态的清理由 UiDesignConfirmationPanel 的 cleanup-effect（带 observedRunningRef
   // 防提前重置）全权管理；这里不再重复清理，避免与 panel 抢着清空导致下一批 acting 态
   // 在 flush 瞬间被清掉（按钮提前解禁、右侧 loading 消失）。
@@ -4758,7 +4776,7 @@ export default function AiChatPanel({
                   title="设计文档已确认，可保存为设计版本"
                   defaultCommitMessage="docs: 保存设计版本"
                   milestoneId={`${application.id}:design`}
-                  disabled={loading || workspaceBusy}
+                  disabled={loading || workspaceBusy || designArtifactsSettling}
                   includePlatformArtifacts
                   // 设计阶段仓库可能尚未建立（bootstrap 之后才有），读不到就静默。
                   hideWhenUnavailable

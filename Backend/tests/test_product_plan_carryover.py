@@ -135,13 +135,12 @@ class CarriedDefinitionTests(unittest.TestCase):
             "仅措辞变化就放弃沿用，会让设计稿继承永远失败",
         )
 
-    def test_changed_structural_field_returns_none(self) -> None:
-        """结构性字段变了 = 用户确实要改这一页 → 不沿用，交给模型重新生成。"""
+    def test_changed_identity_field_returns_none(self) -> None:
+        """身份/路由字段变了 = 用户确实要改这一页 → 不沿用，交给模型重新生成。"""
 
         for field, value in (
             ("name", "首页"),
             ("path", "/page/home-v2"),
-            ("module_id", "home_display"),
             ("pageId", "home_page"),
         ):
             with self.subTest(field=field):
@@ -150,6 +149,17 @@ class CarriedDefinitionTests(unittest.TestCase):
                     carried_definition_for_page(_carried(), _PAGE_ID, changed),
                     f"{field} 变了却没放弃沿用",
                 )
+
+    def test_rewritten_module_id_still_reuses(self) -> None:
+        """module_id 是模型每轮自由重写的模块分组标签（实测去掉 `module_` 前缀），
+        且与设计稿无关 —— 不能因此判成"用户要改这一页"。"""
+
+        rewritten = {**_REQUIREMENT_PAGE, "module_id": "home_display"}
+
+        self.assertIsNotNone(
+            carried_definition_for_page(_carried(), _PAGE_ID, rewritten),
+            "仅 module_id 被重写就放弃沿用，会让设计稿继承失败",
+        )
 
     def test_missing_record_or_definition_returns_none(self) -> None:
         self.assertIsNone(carried_definition_for_page({}, _PAGE_ID, dict(_REQUIREMENT_PAGE)))

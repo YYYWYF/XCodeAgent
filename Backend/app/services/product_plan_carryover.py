@@ -32,9 +32,16 @@ PRODUCT_PLAN_CARRYOVER_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "product-plan-ca
 
 _SCHEMA_VERSION = 2
 
-# 判断"用户改没改这一页"时比较的需求字段：决定页面身份与路由的那几个。
-# 刻意不含 `description` —— 自由散文，模型每轮重写，拿它做相等判定会让机制永不生效。
-_STRUCTURAL_REQUIREMENT_FIELDS = ("pageId", "name", "path", "module_id")
+# 判断"用户改没改这一页"时比较的需求字段：决定**页面身份与路由**的那几个。
+#
+# 刻意不含 `description` 与 `module_id` —— 两者都是模型每轮自由重写的产物，且都与
+# 设计稿无关（设计稿由 information_items / actions 驱动）：
+#   - `description` 是散文，实测同一页只把"应用首页与唯一页面"改成"应用首页"；
+#   - `module_id` 是模块分组标签，实测把 `module_welcome_display` 改写成
+#     `welcome_display`（去掉前缀）。
+# 拿它们做相等判定，本机制几乎永不生效，ID 照旧漂移、继承被拒 —— 用户看到的是
+# "第一轮设计过的页面在第二轮显示待确认"。
+_STRUCTURAL_REQUIREMENT_FIELDS = ("pageId", "name", "path")
 
 # 沿用的字段：模型在 ProductPlan 页面里补充、而 RequirementSpec 不提供的那部分。
 # 与 `product_plan._normalized_pages` 读取的 `supplement` 完全对应。
@@ -153,18 +160,20 @@ def carried_definition_for_page(
     page_id: str,
     requirement_page: Any,
 ) -> dict[str, Any] | None:
-    """若这一页的**结构性字段**与上一轮相同，返回可沿用的上一轮定义。
+    """若这一页的**身份与路由**与上一轮相同，返回可沿用的上一轮定义。
 
-    只比 `pageId` / `name` / `path` / `module_id` —— 它们决定"这是哪一页、走哪条路由"。
-    **不比 `description`**：它是自由散文，模型每轮都会顺手改写一遍（实测同一页只把
-    "应用首页与唯一页面"改成"应用首页"，因为后来确实不止一页了，语义更准确）。
-    拿它做相等判定会让本机制几乎永不生效，ID 于是照旧漂移、继承被拒。
+    只比 `pageId` / `name` / `path`。**不比 `description` 与 `module_id`** ——
+    两者都是模型每轮自由重写的产物，且都与设计稿无关（设计稿由
+    information_items / actions 驱动）：`description` 是散文（实测只改措辞），
+    `module_id` 是模块分组标签（实测把 `module_welcome_display` 改写成
+    `welcome_display`）。拿它们做相等判定会让本机制几乎永不生效，
+    ID 于是照旧漂移、继承被拒。
 
-    风险与取舍：只改措辞、不改结构的描述变更不会触发重新生成。这类变更没有视觉后果
-    （设计稿由 information_items / actions 驱动，与 description 无关），沿用旧定义是对的。
-    真正要改页面的需求会改 `name`/`path`/`module_id`，那些仍会被识别为"用户要改这一页"。
+    取舍：只改 `description`/`module_id` 的需求不会被识别为"要改这一页"，会沿用旧定义。
+    这类变更没有视觉后果 —— 用户真要改页面内容，走的是设计稿卡片上的「描述要调整的设计稿」
+    调整流程，或在迭代请求里新增页面（新 pageId，不受影响）。
 
-    缺任一前提（没记录 / 没定义 / 结构性字段变了）都返回 None。
+    缺任一前提（没记录 / 没定义 / 身份字段变了）都返回 None。
     """
 
     record = carried.get(str(page_id or "").strip())
