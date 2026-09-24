@@ -28,17 +28,12 @@ type Props = {
    */
   description?: string
   /**
-   * 是否把 `.devagentstudio` 平台产物也算作可提交（默认否，见 `useMilestoneCommit`）。
-   *
-   * 只有设计阶段的「设计文档已确认，可保存为设计版本」传 true。
-   */
-  includePlatformArtifacts?: boolean
-  /**
    * 读不到 Git 状态时是否直接不渲染（弱提醒用）。
    *
    * 强提醒（模板初始化、验收通过）在"本该有仓库"的时点出现，读取失败值得报出来；
-   * 弱提醒（设计文档已确认）可能发生在**仓库还没建立**的设计阶段 —— 那时"提交"物理上
-   * 不成立，报错只会制造噪声。弱提醒一律静默，符合"不打断"的定位。
+   * 弱提醒是验收门禁自动提交失败后的降级入口 —— 失败原因（有暂存内容、含敏感文件、
+   * 读不到状态）已由 AcceptanceCommitDock 说明，这里再报一次只是重复噪声。
+   * 弱提醒一律静默，符合"不打断"的定位。
    */
   hideWhenUnavailable?: boolean
   /**
@@ -59,16 +54,10 @@ export default function MilestoneCommitReminder({
   milestoneId,
   disabled,
   description,
-  includePlatformArtifacts = false,
   hideWhenUnavailable = false,
   inline = false
 }: Props): ReactElement | null {
-  const commit = useMilestoneCommit(
-    workspaceRoot,
-    milestoneId,
-    defaultCommitMessage,
-    includePlatformArtifacts
-  )
+  const commit = useMilestoneCommit(workspaceRoot, milestoneId, defaultCommitMessage)
   const {
     snapshot,
     commitResult,

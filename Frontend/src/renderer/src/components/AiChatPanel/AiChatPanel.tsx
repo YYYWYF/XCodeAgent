@@ -94,6 +94,12 @@ import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import MilestoneCommitReminder from './components/MilestoneCommitReminder'
+import CommitBeforeSendModal from './components/MilestoneCommitReminder/CommitBeforeSendModal'
+import MilestoneCommitModal from './components/MilestoneCommitReminder/MilestoneCommitModal'
+import {
+  isStageAdvanceDecision,
+  useCommitBeforeSend
+} from './components/MilestoneCommitReminder/useCommitBeforeSend'
 import { asMessageClause, pushRepositoryBranch } from '../../service/repositoryBranch'
 import ApiDesignConfigModal from './components/WorkflowRunCard/ApiDesignConfigModal'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
@@ -166,7 +172,6 @@ import {
 } from './stageOutputState'
 import {
   endpointDetailTargetKey,
-  hasConfirmedDesignDocument,
   pageDetailTargetKey,
   shouldInjectPlanningPlaceholder,
   shouldShowAcceptanceDecisionDock,
@@ -1490,6 +1495,19 @@ export default function AiChatPanel({
   )
   // 设计稿还在生成：提交入口一律禁用。
   const designArtifactsSettling = uiDesignGenerating || uiDesignPoolBusy
+
+  // 推进前提交门禁：把用户推向下一个阶段之前，若还有未提交变更就先拦一下。
+  // 取代了原来常驻在对话区底部的「设计文档已确认，可保存为设计版本」提醒框 ——
+  // 那条提醒挂在面板上、与"往前推进"这个动作无关，用户点了就走。
+  // 两条推进路径都要过它：输入框发送（下面 onSend）与卡片上的跳阶段确认
+  // （下面 onSubmitClarification，见 isStageAdvanceDecision）。
+  const commitBeforeSend = useCommitBeforeSend(
+    application.workspaceRoot || '',
+    `${application.id}:commit-before-send`,
+    'chore: 保存当前改动',
+    designArtifactsSettling
+  )
+
   // acting 态的清理由 UiDesignConfirmationPanel 的 cleanup-effect（带 observedRunningRef
   // 防提前重置）全权管理；这里不再重复清理，避免与 panel 抢着清空导致下一批 acting 态
   // 在 flush 瞬间被清掉（按钮提前解禁、右侧 loading 消失）。
@@ -4736,7 +4754,24 @@ export default function AiChatPanel({
                       ? onRetryTemplateReconcile
                       : undefined
                 }
-                onSubmitClarification={handleSubmitWorkflowClarification}
+                // 卡片上的「确认并返回设计阶段 / 确认并进入计划阶段」不经过输入框，
+                // 点一下就直接跳阶段；这类推进同样要在没保存时先拦一下。
+                // 其余澄清（阶段内审批、验收等）原样提交，见 isStageAdvanceDecision。
+                onSubmitClarification={async (
+                  workflow,
+                  answers,
+                  editedRequirementSpec
+                ): Promise<void> => {
+                  const submit = (): Promise<void> =>
+                    handleSubmitWorkflowClarification(workflow, answers, editedRequirementSpec)
+                  if (!isStageAdvanceDecision(answers)) {
+                    await submit()
+                    return
+                  }
+                  // 被拦下时立刻返回：这次提交要等用户选完才发，甚至可能不发，
+                  // 这里没有可等的 Promise，只能如实返回"还没提交"。
+                  commitBeforeSend.requestAdvance(submit)
+                }}
                 onStartIterationPlanning={async (request) => {
                   appendPlanningUserMessage({ design_change_request: request })
                   await onStartIterationPlanning(request)
@@ -4764,24 +4799,21 @@ export default function AiChatPanel({
                 />
               )}
 
-              {/* 弱提醒：设计文档确认后提示可保存设计版本。
-                  与代码提交入口分开用不同文案，且只在用户点击时打开弹窗、不自动弹。
-
-                  唯一传 includePlatformArtifacts 的提醒：设计阶段唯一的变更就是
-                  `.devagentstudio` 规划产物，按业务代码口径算永远是 0，提醒会彻底消失。
-                  文档 §4.3 正是把它定位成与"代码提交入口分开"的第二条通道。 */}
-              {hasConfirmedDesignDocument(applicationLifecycle?.initialization?.stage) ? (
-                <MilestoneCommitReminder
-                  workspaceRoot={application.workspaceRoot || ''}
-                  title="设计文档已确认，可保存为设计版本"
-                  defaultCommitMessage="docs: 保存设计版本"
-                  milestoneId={`${application.id}:design`}
-                  disabled={loading || workspaceBusy || designArtifactsSettling}
-                  includePlatformArtifacts
-                  // 设计阶段仓库可能尚未建立（bootstrap 之后才有），读不到就静默。
-                  hideWhenUnavailable
-                />
-              ) : null}
+              {/* 发送前提交门禁（取代原来常驻的「设计文档已确认，可保存为设计版本」提醒框）：
+                  产品对话输入框在检测到未提交变更时先弹这个轻量确认框，选完再发。
+                  提交本身复用 MilestoneCommitModal，文件清单/勾选/校验都只有一份实现。 */}
+              <CommitBeforeSendModal
+                eligibleCount={commitBeforeSend.eligibleCount}
+                onCancel={commitBeforeSend.handleGateCancel}
+                onDefer={commitBeforeSend.handleDeferAndAdvance}
+                onReview={commitBeforeSend.handleReview}
+                visible={commitBeforeSend.gateVisible}
+              />
+              <MilestoneCommitModal
+                commit={commitBeforeSend.commit}
+                disabled={loading || workspaceBusy || designArtifactsSettling}
+                title="保存当前改动为版本"
+              />
 
               {showSessionExecutionLock ? (
                 <SessionExecutionLockDock
@@ -4874,9 +4906,15 @@ export default function AiChatPanel({
                     }
                     // 产品阶段始终使用 Product Coordinator；完成态修改再进入 formal revision。
                     // 当前节点的澄清和确认只能通过上方结构化卡片提交，不能劫持普通输入语义。
+                    // 产品对话分支过一层发送门禁：有未提交变更时这次发送会被暂存，
+                    // 用户选完「稍后 / 审阅并提交」再由 hook 放行。
+                    // 开发阶段这条输入框不在这里拦 —— 它发出的请求即使被判定为跳阶段，
+                    // 也一定会先落到「正式修改确认」卡上，由上面的 onSubmitClarification 拦。
                     onSend={
                       productConversationAvailable
-                        ? handleProductConversationSend
+                        ? async () => {
+                            commitBeforeSend.requestAdvance(handleProductConversationSend)
+                          }
                         : handleConversationSend
                     }
                     onStopGenerating={handleStopCurrentGeneration}

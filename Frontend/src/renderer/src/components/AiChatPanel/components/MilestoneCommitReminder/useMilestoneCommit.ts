@@ -41,9 +41,9 @@ export function useMilestoneCommit(
    * 默认 false：代码提交提醒只该由业务代码变更触发，平台自身的状态流转
    * （lifecycle 每次 +1、规划文档、报告）不算"用户改了代码"。
    *
-   * 设计阶段的「设计文档已确认，可保存为设计版本」弱提醒要传 true ——
-   * 那时唯一的变更就是 `.devagentstudio`，按业务代码算永远是 0，提醒会彻底消失。
-   * 这与文档 §4.3 把它和"代码提交入口分开"的定位一致：两条通道，两种口径。
+   * 发送前提交门禁（`useCommitBeforeSend`）要传 true ——
+   * 设计阶段唯一的变更就是 `.devagentstudio`，按业务代码算永远是 0，门禁会彻底不出现。
+   * 这与文档 §4.4「推进前门禁」把它和"代码提交入口分开"的定位一致：两条通道，两种口径。
    */
   includePlatformArtifacts = false
 ): UseMilestoneCommitReturn {
@@ -130,7 +130,10 @@ export function useMilestoneCommit(
   }
 
   const handleOpenCommit = async (): Promise<void> => {
-    const currentSnapshot = snapshot ?? (await loadSnapshot())
+    // 总是重新读一次：弹窗自己的文案承诺了"提交前已重新读取实际 Git 状态"，
+    // 而本地快照可能停在挂载那一刻 —— 用它列文件会漏掉新变更，提交时指纹过期
+    // 还会被后端拒。读失败时退回本地快照，让弹窗照常打开并显示错误。
+    const currentSnapshot = (await loadSnapshot()) ?? snapshot
     if (!currentSnapshot) return
     setCommitError('')
     setModalVisible(true)
@@ -186,7 +189,7 @@ export function useMilestoneCommit(
 }
 
 /** 读取当前里程碑上次暂缓提醒时对应的工作区指纹。 */
-function readDeferredFingerprint(milestoneId: string): string {
+export function readDeferredFingerprint(milestoneId: string): string {
   try {
     return window.sessionStorage.getItem(`${DEFERRED_STORAGE_PREFIX}${milestoneId}`) || ''
   } catch {
@@ -195,7 +198,7 @@ function readDeferredFingerprint(milestoneId: string): string {
 }
 
 /** 保存暂缓提醒的工作区指纹，使代码变化后可以重新出现。 */
-function writeDeferredFingerprint(milestoneId: string, fingerprint: string): void {
+export function writeDeferredFingerprint(milestoneId: string, fingerprint: string): void {
   try {
     window.sessionStorage.setItem(`${DEFERRED_STORAGE_PREFIX}${milestoneId}`, fingerprint)
   } catch {

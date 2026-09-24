@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import {
-  hasConfirmedDesignDocument,
-  shouldShowIncompleteChangesHint
-} from '../src/renderer/src/components/AiChatPanel/utils'
+import { shouldShowIncompleteChangesHint } from '../src/renderer/src/components/AiChatPanel/utils'
 import {
   isCheckpointCandidate,
   isModuleCheckpointCandidate
@@ -37,32 +34,6 @@ import {
   hasSensitivePath,
   ACCEPTANCE_COMMIT_MESSAGE
 } from '../src/renderer/src/components/AiChatPanel/components/AcceptanceCommitDock/acceptanceCommit'
-
-test('设计版本弱提醒只在文档确认之后出现', () => {
-  // 需求还在澄清/生成时不能提示"已确认"。
-  for (const stage of [
-    'collecting_requirement',
-    'analyzing_requirement',
-    'awaiting_requirement_clarification',
-    'generating_requirement_document',
-    'awaiting_requirement_document_confirmation'
-  ]) {
-    assert.equal(hasConfirmedDesignDocument(stage), false, `${stage} 尚未确认，不应提示`)
-  }
-  // 需求文档确认之后的全部设计/计划阶段都应提示。
-  for (const stage of [
-    'generating_ui_designs',
-    'awaiting_ui_design_confirmation',
-    'awaiting_planning_stage_entry',
-    'generating_technical_plan',
-    'awaiting_technical_plan_confirmation'
-  ]) {
-    assert.equal(hasConfirmedDesignDocument(stage), true, `${stage} 已确认，应提示`)
-  }
-  // 模板就绪后由模板就绪卡承载提交入口，两边都提示会重复。
-  assert.equal(hasConfirmedDesignDocument('ready_for_workbench'), false)
-  assert.equal(hasConfirmedDesignDocument(undefined), false)
-})
 
 test('任务级检查点只标真正写过文件的任务', () => {
   const task = (over: Record<string, unknown> = {}): never =>
@@ -149,7 +120,7 @@ test('弱提醒在读不到 Git 状态时静默，不渲染成告警', () => {
       ...over
     })
 
-  // 弱提醒（设计文档已确认）：设计阶段仓库可能尚未建立，读不到就什么都不显示。
+  // 弱提醒（验收门禁降级成的手动提醒）：读不到就什么都不显示，原因交给门禁卡片说。
   assert.equal(
     decide({ hideWhenUnavailable: true, inspectError: '当前工作目录还不是 Git 仓库。' }),
     false,

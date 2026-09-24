@@ -461,26 +461,6 @@ export function shouldInjectPlanningPlaceholder(input: {
 }
 
 /**
- * 至少一份设计文档已确认（需求文档确认之后、模板生成之前的全部设计/计划阶段）。
- *
- * 用于「设计文档已确认，可保存为设计版本」这条弱提醒：它必须等文档**确认之后**才出现，
- * 否则在需求还在澄清时就提示"已确认"是错的。
- *
- * 刻意排除 `ready_for_workbench`：那一步由模板就绪卡承载提交入口，两边都提示会重复。
- */
-const CONFIRMED_DESIGN_STAGES = new Set([
-  'generating_ui_designs',
-  'awaiting_ui_design_confirmation',
-  'awaiting_planning_stage_entry',
-  'generating_technical_plan',
-  'awaiting_technical_plan_confirmation'
-])
-
-export function hasConfirmedDesignDocument(stage?: string): boolean {
-  return CONFIRMED_DESIGN_STAGES.has(String(stage || ''))
-}
-
-/**
  * 执行失败/被停止但留下了代码变更时，是否提示"存在未完成修改"（中等提示）。
  *
  * 主操作是**审阅**而不是提交：失败或半途停止的代码不该被包装成可提交版本。

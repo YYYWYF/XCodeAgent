@@ -36,9 +36,9 @@ export function shouldRenderCommitReminder(input: {
  * 默认走 `codePaths`（业务代码）：`.devagentstudio` 下的规划产物与状态快照会随每个设计
  * 步骤变化，算进来会让角标在用户一行业务代码都没写时就亮起并持续增长。
  *
- * `includePlatformArtifacts` 只有设计阶段的「设计文档已确认，可保存为设计版本」会传 ——
- * 那时唯一的变更就是 `.devagentstudio`，按业务代码算永远是 0，提醒会彻底消失。
- * 文档 §4.3 正是把它定位成与"代码提交入口分开"的第二条通道。
+ * `includePlatformArtifacts` 只有发送前提交门禁（`useCommitBeforeSend`）会传 true ——
+ * 那时唯一的变更就是 `.devagentstudio`，按业务代码算永远是 0，门禁会彻底不出现。
+ * 文档 §4.4「推进前门禁」正是把它定位成与"代码提交入口分开"的第二条通道。
  */
 export function resolveCommitScope(input: {
   snapshot: { eligiblePaths: string[]; codePaths: string[] } | undefined

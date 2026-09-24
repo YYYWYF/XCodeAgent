@@ -21,6 +21,7 @@
     "test:workbench-phase": "node scripts/run-workbench-phase-tests.mjs",
     "test:released-version": "node scripts/run-released-version-tests.mjs",
     "test:uncommitted-changes": "node scripts/run-uncommitted-changes-tests.mjs",
+    "test:commit-before-send": "node scripts/run-commit-before-send-tests.mjs",
     "test:branch-view": "node scripts/run-branch-view-tests.mjs",
     "test:iteration-origin": "node scripts/run-iteration-origin-tests.mjs",
     "test:application-authorization": "node scripts/run-application-authorization-tests.mjs",
