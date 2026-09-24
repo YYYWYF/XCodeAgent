@@ -25,6 +25,7 @@ import './QuickTaskStatus.less'
 const { Text, Title } = Typography
 
 type QuickTaskGuideProps = {
+  directRuntime?: boolean
   developmentArtifacts?: DevelopmentArtifacts
   apiContracts: DevelopmentPlanningApiContract[]
   agents: DevelopmentPlanningAgentOption[]
@@ -136,6 +137,7 @@ function QuickTaskSection({
 
 /** 在空白对话区展示当前规划中的开发目标快捷任务，并保留底部自由输入入口。 */
 export default function QuickTaskGuide({
+  directRuntime,
   developmentArtifacts,
   apiContracts,
   agents,
@@ -146,8 +148,8 @@ export default function QuickTaskGuide({
   pages
 }: QuickTaskGuideProps): ReactElement {
   const tasks = useMemo(
-    () => buildQuickTasks(pages, apiContracts, entities, developmentArtifacts, agents),
-    [agents, apiContracts, developmentArtifacts, entities, pages]
+    () => buildQuickTasks(pages, apiContracts, entities, developmentArtifacts, agents, directRuntime),
+    [agents, apiContracts, developmentArtifacts, directRuntime, entities, pages]
   )
   const pageTasks = tasks.filter((task) => task.kind === 'page')
   const endpointTasks = tasks.filter((task) => task.kind === 'endpoint')

@@ -112,6 +112,7 @@ function WorkbenchPage({
   const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
     DevelopmentPlanningEntityOption[]
   >([])
+  const [topologyType, setTopologyType] = useState('')
   const [developmentPlanningAgents, setDevelopmentPlanningAgents] = useState<
     DevelopmentPlanningAgentOption[]
   >([])
@@ -183,6 +184,7 @@ function WorkbenchPage({
         setDevelopmentPlanningEntities(
           Array.isArray(inspection.entities) ? inspection.entities : []
         )
+        setTopologyType(String(inspection.topologyType || ''))
         setDevelopmentPlanningAgents(Array.isArray(inspection.agents) ? inspection.agents : [])
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
@@ -304,6 +306,7 @@ function WorkbenchPage({
                 developmentPlanningPageTree={developmentPlanningPageTree}
                 developmentPlanningApiContracts={developmentPlanningApiContracts}
                 developmentPlanningEntities={developmentPlanningEntities}
+                topologyType={topologyType}
                 developmentPlanningAgents={developmentPlanningAgents}
                 editorMode={editorMode}
                 onApplicationUpdate={handleApplicationUpdate}

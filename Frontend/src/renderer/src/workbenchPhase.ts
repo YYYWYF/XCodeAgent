@@ -52,9 +52,14 @@ export function clearApplicationWorkbenchState(applicationId: string): void {
 /** 判断首次新建应用的模板准备卡是否仍有资格出现。 */
 export function isApplicationTemplatePreparationEligible(
   applicationSource: 'new' | 'existing-workspace' | undefined,
-  enteredDevelopment: boolean
+  enteredDevelopment: boolean,
+  initializationStage?: string
 ): boolean {
-  return applicationSource === 'new' && !enteredDevelopment
+  return !enteredDevelopment && (
+    applicationSource === 'new' ||
+    initializationStage === 'generating_application_template_files' ||
+    initializationStage === 'application_template_generation_failed'
+  )
 }
 
 /** 监听指定应用进入开发阶段的决定，兼顾当前窗口操作与其他窗口同步。 */

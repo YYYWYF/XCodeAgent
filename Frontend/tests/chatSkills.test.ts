@@ -2363,6 +2363,10 @@ test('技术规划确认不依赖 Markdown confirmationArtifact 也能展示结�
 
   assert.match(markup, /开发技术规划/)
   assert.match(markup, /React/)
+  assert.match(markup, /agent_runtime_direct/)
+  assert.match(markup, /backend_direct/)
+  assert.match(markup, /gateway_composed/)
+  assert.match(markup, /尚未实现/)
   assert.doesNotMatch(markup, /结构化数据暂不可用/)
 })
 
@@ -2400,7 +2404,12 @@ test('技术规划确认卡展示修改入口，其他计划确认保持原有�
 
   assert.match(technicalMarkup, /修\s*改/)
   assert.doesNotMatch(technicalMarkup, /放\s*弃/)
+  assert.match(technicalMarkup, /agent_runtime_direct/)
+  assert.match(technicalMarkup, /backend_direct/)
+  assert.match(technicalMarkup, /gateway_composed/)
+  assert.match(technicalMarkup, /尚未实现/)
   assert.match(projectMarkup, /放\s*弃/)
+  assert.doesNotMatch(projectMarkup, /agent_runtime_direct/)
 })
 
 test('技术规划修改意见映射为 revise 并保留原始请求', () => {

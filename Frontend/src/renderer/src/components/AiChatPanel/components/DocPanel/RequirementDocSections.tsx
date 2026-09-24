@@ -1,7 +1,9 @@
 import {
   ApartmentOutlined,
+  ApiOutlined,
   ArrowRightOutlined,
   BranchesOutlined,
+  DatabaseOutlined,
   FileTextOutlined,
   TeamOutlined
 } from '@ant-design/icons'
@@ -13,6 +15,7 @@ import {
   behaviorTypeLabel,
   modulePriorityLabel,
   recordItems,
+  requirementEntityRows,
   requirementFlowRows,
   requirementPageRows,
   textValue,
@@ -22,7 +25,13 @@ import {
 
 const { Text } = Typography
 
-export type RequirementSectionKey = 'overview' | 'agents' | 'pages' | 'flows'
+export type RequirementSectionKey =
+  | 'overview'
+  | 'agents'
+  | 'pages'
+  | 'entities'
+  | 'api-contracts'
+  | 'flows'
 
 type SectionProps = {
   sectionKey: RequirementSectionKey
@@ -233,6 +242,114 @@ export function RequirementPagesSection({
           pages.map((page) => <PageCard key={page.key} page={page} />)
         ) : (
           <Text type="secondary">暂无页面规划</Text>
+        )}
+      </div>
+    </section>
+  )
+}
+
+/** 渲染需求实体卡片与字段说明，字段以中文标签为主。 */
+export function RequirementEntitiesSection({
+  spec,
+  sectionKey
+}: { spec: JsonRecord } & SectionProps): ReactElement {
+  const entities = requirementEntityRows(spec)
+  return (
+    <section
+      aria-label="实体"
+      className={cx('requirement-doc-section')}
+      id={`requirement-doc-panel-${sectionKey}`}
+      role="tabpanel"
+    >
+      <div className={cx('requirement-doc-section-title', 'is-entities')}>
+        <DatabaseOutlined /> <span>核心实体</span>
+        <span className={cx('requirement-doc-section-count')}>{entities.length}</span>
+      </div>
+      <div className={cx('requirement-doc-card-list')}>
+        {entities.length ? (
+          entities.map((entity) => (
+            <article className={cx('requirement-doc-card')} key={entity.key}>
+              <div className={cx('requirement-doc-card-heading')}>
+                <strong>{entity.name}</strong>
+                <span>{entity.fields.length} 字段</span>
+              </div>
+              {entity.description ? <Text type="secondary">{entity.description}</Text> : null}
+              {entity.fields.length ? (
+                <ul className={cx('requirement-doc-field-list')}>
+                  {entity.fields.map((field) => (
+                    <li key={field.key}>
+                      <strong>{field.label}</strong>
+                      {field.description ? <span>{field.description}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </article>
+          ))
+        ) : (
+          <Text type="secondary">暂无实体定义</Text>
+        )}
+      </div>
+    </section>
+  )
+}
+
+/** 只读引用已确认技术规划的 API 契约，供设计阶段核对接口边界。 */
+export function RequirementApiContractsSection({
+  sectionKey,
+  technicalPlan
+}: { technicalPlan: JsonRecord } & SectionProps): ReactElement {
+  const contracts = recordItems(technicalPlan.api_contracts)
+  return (
+    <section
+      aria-label="API 契约"
+      className={cx('requirement-doc-section')}
+      id={`requirement-doc-panel-${sectionKey}`}
+      role="tabpanel"
+    >
+      <div className={cx('requirement-doc-section-title', 'is-api-contracts')}>
+        <ApiOutlined /> <span>API 契约</span>
+        <span className={cx('requirement-doc-section-count')}>{contracts.length}</span>
+      </div>
+      <Text type="secondary">
+        只读引用已确认的技术规划，用于设计阶段核对接口边界；此处不生成、不可编辑。
+      </Text>
+      <div className={cx('requirement-doc-card-list')}>
+        {contracts.length ? (
+          contracts.map((contract, index) => {
+            const contractId = textValue(contract.id, `contract-${index + 1}`)
+            const basePath = textValue(contract.base_path)
+            const endpoints = recordItems(contract.endpoints)
+            return (
+              <article className={cx('requirement-doc-card')} key={contractId}>
+                <div className={cx('requirement-doc-card-heading')}>
+                  <strong>{textValue(contract.resource) || contractId}</strong>
+                  <span>{basePath || `${endpoints.length} 个接口`}</span>
+                </div>
+                {endpoints.length ? (
+                  <ul className={cx('requirement-doc-field-list')}>
+                    {endpoints.map((endpoint, endpointIndex) => {
+                      const method = textValue(endpoint.method, 'GET').toUpperCase()
+                      const path = textValue(endpoint.path) || basePath || '/'
+                      const summary = textValue(endpoint.summary)
+                      return (
+                        <li
+                          key={
+                            textValue(endpoint.id) || `${contractId}-endpoint-${endpointIndex + 1}`
+                          }
+                        >
+                          <strong>{`${method} ${path}`}</strong>
+                          {summary ? <span>{summary}</span> : null}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                ) : null}
+              </article>
+            )
+          })
+        ) : (
+          <Text type="secondary">技术规划中暂无 API 契约</Text>
         )}
       </div>
     </section>

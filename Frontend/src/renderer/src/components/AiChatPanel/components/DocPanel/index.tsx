@@ -138,6 +138,7 @@ export default function DocPanel({
                 onAgentSurfaceEnabledChange={onAgentSurfaceEnabledChange}
                 productPlan={productPlan || {}}
                 spec={requirementSpec || {}}
+                technicalPlan={technicalPlan || {}}
               />
             ) : (
               <MarkdownContent content={content ?? ''} />

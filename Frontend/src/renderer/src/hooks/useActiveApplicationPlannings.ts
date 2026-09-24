@@ -240,13 +240,29 @@ export function useActiveApplicationPlannings({
 
   const onTechnicalPlanConfirmed = runTemplateGeneration
   const retryTemplateGeneration = useCallback(
-    (applicationId: string): Promise<boolean> => {
-      const planning = activePlanningsRef.current.find(
+    async (applicationId: string): Promise<boolean> => {
+      let planning = activePlanningsRef.current.find(
         (candidate) => candidate.application.id === applicationId
       )
-      return planning ? retryApplicationTemplateFiles(planning) : Promise.resolve(false)
+      if (!planning) {
+        // 工作台可能先于异步冷恢复渲染出失败卡；点击时补读当前 lifecycle，避免静默丢弃。
+        const recovered = (await loadActiveApplicationPlannings()).find(
+          (candidate) => candidate.application.id === applicationId
+        )
+        if (!recovered) throw new Error('未找到可重试的应用模板初始化状态，请重新打开应用。')
+        commitPlannings((current) =>
+          current.some((candidate) => candidate.application.id === applicationId)
+            ? current
+            : [recovered, ...current]
+        )
+        planning = activePlanningsRef.current.find(
+          (candidate) => candidate.application.id === applicationId
+        )
+      }
+      if (!planning) throw new Error('应用模板初始化状态恢复失败，请重新打开应用。')
+      return retryApplicationTemplateFiles(planning)
     },
-    [retryApplicationTemplateFiles]
+    [commitPlannings, retryApplicationTemplateFiles]
   )
 
   // 返回首页时只隐藏当前规划，所有后台 Runtime 继续运行。

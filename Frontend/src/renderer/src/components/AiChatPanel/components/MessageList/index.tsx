@@ -422,8 +422,9 @@ export default function MessageList({
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
   const templatePreparationVisible =
     designPhasePlanning &&
-    ((applicationTemplatePreparationEligible &&
-      (generatingTemplate || isTemplatePreparing(applicationLifecycle))) ||
+    (templateGenerationFailed ||
+      (applicationTemplatePreparationEligible &&
+        (generatingTemplate || isTemplatePreparing(applicationLifecycle))) ||
       templateReconcileRetryable ||
       templatePreparation?.status === 'RUNNING')
 

@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { message } from 'antd'
 import {
   SessionRuntimeProvider,
   useSessionRuntimeStore
@@ -321,7 +322,11 @@ function AppEntryContent(): JSX.Element {
                 ? () => void planningRuntimeController.reconcileCurrentState(activeApplication.id)
                 : templateGenerationRecoverable
                   ? () => {
-                      void planningController.retryTemplateGeneration(activeApplication.id)
+                      void planningController.retryTemplateGeneration(activeApplication.id).catch(
+                        (reason: unknown) => {
+                          message.error(reason instanceof Error ? reason.message : String(reason))
+                        }
+                      )
                     }
                   : () => void planningRuntimeController.retryCurrentFailure(activeApplication.id)
             }

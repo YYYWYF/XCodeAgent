@@ -1,4 +1,5 @@
 import {
+  DatabaseOutlined,
   DesktopOutlined,
   FileTextOutlined,
   FlagOutlined,
@@ -59,6 +60,60 @@ function authorizationRequirements(value: unknown): Record<string, unknown> {
   return record || {}
 }
 
+type EntityField = {
+  label: string
+  description: string
+}
+
+type SourceEntity = {
+  id: string
+  name: string
+  description: string
+  fields: EntityField[]
+}
+
+// 将实体字段对象安全收窄为需求层的展示信息（名称与说明，不含字段名和类型）。
+function entityFields(value: unknown): EntityField[] {
+  return asArray(value)
+    .map((item) => {
+      const record = asRecord(item)
+      if (!record) return undefined
+      const label = itemText(record, ['label', 'name'])
+      if (!label) return undefined
+      return {
+        label,
+        description: itemText(record, ['description'])
+      }
+    })
+    .filter((item): item is EntityField => Boolean(item))
+}
+
+// 将需求实体（对象或旧字符串）归一为带字段摘要的展示结构。
+function sourceEntities(value: unknown): SourceEntity[] {
+  return asArray(value)
+    .map((item, index) => {
+      const record = asRecord(item)
+      if (record) {
+        return {
+          id: itemText(record, ['id', 'name']) || `Entity${index + 1}`,
+          name: itemText(record, ['name', 'id']) || `Entity${index + 1}`,
+          description: itemText(record, ['description']),
+          fields: entityFields(record.fields)
+        }
+      }
+      if (typeof item === 'string' && item.trim()) {
+        return {
+          id: item.trim(),
+          name: item.trim(),
+          description: '',
+          fields: []
+        }
+      }
+      return undefined
+    })
+    .filter((item): item is SourceEntity => Boolean(item))
+}
+
 // 渲染带图标和标题的需求概览分区。
 function SummarySection({
   children,
@@ -110,11 +165,36 @@ function SummaryItem({
   )
 }
 
+// 渲染单个实体及其字段表，用于需求确认面的核心实体模块。
+function EntityCard({ entity }: { entity: SourceEntity }): ReactElement {
+  return (
+    <article className={cx('requirement-summary-entity')}>
+      <Text strong>{entity.name}</Text>
+      {entity.description ? <Paragraph type="secondary">{entity.description}</Paragraph> : null}
+      {entity.fields.length ? (
+        <div className={cx('requirement-summary-entity-fields')}>
+          <div className={cx('requirement-summary-entity-fields-head')}>
+            <Text strong>名称</Text>
+            <Text strong>说明</Text>
+          </div>
+          {entity.fields.map((field) => (
+            <div className={cx('requirement-summary-entity-field')} key={field.label}>
+              <Text strong>{field.label}</Text>
+              <Text type="secondary">{field.description || '—'}</Text>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
 // 以默认结构化视图展示 RequirementSpec 中最影响后续规划的信息。
 export default function RequirementSpecSummary({ spec }: Props): ReactElement {
   const app = asRecord(spec.app_info) || {}
   const roles = asArray(spec.user_roles)
   const pages = asArray(spec.pages)
+  const entities = sourceEntities(spec.entities)
   const flows = asArray(spec.business_flows)
   const authorization = authorizationRequirements(spec.authorization_requirements)
   const authorizationEnabled = authorization.enabled === true
@@ -263,6 +343,16 @@ export default function RequirementSpecSummary({ spec }: Props): ReactElement {
           </div>
         )}
       </SummarySection>
+
+      {entities.length ? (
+        <SummarySection icon={<DatabaseOutlined />} title="实体">
+          <div className={cx('requirement-summary-grid')}>
+            {entities.map((entity) => (
+              <EntityCard entity={entity} key={entity.id} />
+            ))}
+          </div>
+        </SummarySection>
+      ) : null}
 
       {assumptions.length ? (
         <SummarySection icon={<FlagOutlined />} title="规划假设">

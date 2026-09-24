@@ -288,7 +288,8 @@ export function reduceApplicationPlanningCurrentState(
 export async function loadActiveApplicationPlannings(): Promise<ApplicationPlanningCurrentState[]> {
   const recoveredActive: ApplicationPlanningCurrentState[] = []
   const applications = (await loadStoredApplications())
-    .filter((application) => application.source === 'new' && application.workspaceRoot)
+    // 应用索引恢复的 source 固定为 existing-workspace；是否仍在创建中只由 lifecycle 决定。
+    .filter((application) => application.workspaceRoot)
     .sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
 
   for (const application of applications) {

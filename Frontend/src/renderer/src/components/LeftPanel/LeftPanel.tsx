@@ -32,6 +32,7 @@ type Props = {
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   developmentPlanningEntities: DevelopmentPlanningEntityOption[]
+  topologyType: string
   developmentPlanningAgents: DevelopmentPlanningAgentOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
@@ -83,6 +84,7 @@ export default function LeftPanel({
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
   developmentPlanningEntities,
+  topologyType,
   developmentPlanningAgents,
   editorMode,
   onApplicationUpdate,
@@ -120,6 +122,7 @@ export default function LeftPanel({
             developmentPlanningPageTree={developmentPlanningPageTree}
             developmentPlanningApiContracts={developmentPlanningApiContracts}
             developmentPlanningEntities={developmentPlanningEntities}
+            topologyType={topologyType}
             developmentPlanningAgents={developmentPlanningAgents}
             editorMode={editorMode}
             onApplicationUpdate={onApplicationUpdate}

@@ -16,6 +16,7 @@ import RequirementSpecSummary from './RequirementSpecSummary'
 import RequirementSpecEditor from './RequirementSpecEditor'
 import UiDesignConfirmationPanel from './UiDesignConfirmationPanel'
 import TechnicalPlanSummary from './TechnicalPlanSummary'
+import TechnicalPlanTopologySelector from './TechnicalPlanTopologySelector'
 import PlanningStageEntryCard from '../AiChatPanel/components/WorkflowRunCard/PlanningStageEntryCard'
 import { projectPlanReadingSections } from './ProjectPlanReadingSections'
 import { planningWorkflowClarification } from './planningWorkflowState'
@@ -102,6 +103,7 @@ function panelTitle(mode?: string): string {
   if (mode === 'requirement_document_confirmation') return '确认需求文档'
   if (mode === 'ui_design_confirmation') return '确认UI设计稿'
   if (mode === 'technical_plan_confirmation') return '确认技术规划'
+  if (mode === 'technical_plan_topology_selection') return '选择应用拓扑'
   if (mode === 'technical_plan_generation_error') return '技术规划生成失败'
   if (mode === 'entity_source_binding') return '确认实体数据源绑定'
   return '补充规划细节'
@@ -112,6 +114,7 @@ function submitLabel(mode?: string): string {
   if (mode === 'requirement_document_confirmation') return '确认需求文档并设计 UI'
   if (mode === 'ui_design_confirmation') return '确认设计稿并继续'
   if (mode === 'technical_plan_confirmation') return '确认技术规划并进入工作区'
+  if (mode === 'technical_plan_topology_selection') return '编译所选拓扑'
   if (mode === 'technical_plan_generation_error') return '重新生成技术规划'
   if (!mode) return '重新生成当前规划'
   return '提交回答并继续'
@@ -419,6 +422,8 @@ export default function ApplicationPlanningQuestionPanel({
     clarification?.mode === 'technical_plan_confirmation'
   const isTechnicalPlanGenerationError =
     clarification?.mode === 'technical_plan_generation_error'
+  const isTopologySelection = clarification?.mode === 'technical_plan_topology_selection'
+  const [selectedTopologyType, setSelectedTopologyType] = useState<'agent_runtime_direct'>()
   const isPlanningStageEntry = clarification?.mode === 'planning_stage_entry_confirmation'
   const isDocumentConfirmation =
     isRequirementConfirmation || isProductPlanConfirmation || isTechnicalPlanConfirmation
@@ -477,6 +482,7 @@ export default function ApplicationPlanningQuestionPanel({
     'authorization_configuration_conflict',
     'requirement_document_confirmation',
     'technical_plan_confirmation',
+    'technical_plan_topology_selection',
     'technical_plan_generation_error',
     'planning_stage_entry_confirmation',
     'entity_source_binding'
@@ -546,6 +552,33 @@ export default function ApplicationPlanningQuestionPanel({
         }
         skippedUiDesign={clarification.ui_design_skipped === true}
       />
+    )
+  }
+
+  if (isTopologySelection) {
+    const selectionErrors = Array.isArray(clarification.errors)
+      ? clarification.errors.map(String).filter(Boolean)
+      : []
+    return (
+      <section className={cx('planning-question-panel')}>
+        <Paragraph>{clarification.message}</Paragraph>
+        {selectionErrors.length ? <Alert type="error" showIcon description={selectionErrors.join('；')} /> : null}
+        <TechnicalPlanTopologySelector
+          disabled={disabled}
+          onChange={setSelectedTopologyType}
+          value={selectedTopologyType}
+        />
+        <Button
+          disabled={disabled || !selectedTopologyType}
+          onClick={() => onSubmit(workflow, {
+            topologyType: selectedTopologyType || '',
+            __applicationPlanningAction: 'select_topology'
+          })}
+          type="primary"
+        >
+          编译所选拓扑
+        </Button>
+      </section>
     )
   }
 

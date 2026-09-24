@@ -166,10 +166,13 @@ export function useApplicationTemplateGeneration({
     [runApplicationTemplateFiles]
   )
 
-  /** 模板失败后只执行 Bootstrap retry，保持当前 Planning Runtime 与线程不变。 */
+  /** 失败态执行 retry；中断的 generating 态重新触发幂等 Bootstrap。 */
   const retryApplicationTemplateFiles = useCallback(
     (planning: ApplicationPlanningCurrentState): Promise<boolean> =>
-      runApplicationTemplateFiles(planning, true),
+      runApplicationTemplateFiles(
+        planning,
+        planning.lifecycle.initialization.stage === 'application_template_generation_failed'
+      ),
     [runApplicationTemplateFiles]
   )
 

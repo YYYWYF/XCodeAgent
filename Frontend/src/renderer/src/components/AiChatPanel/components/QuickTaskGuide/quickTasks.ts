@@ -55,7 +55,8 @@ export function buildQuickTasks(
   apiContracts: DevelopmentPlanningApiContract[],
   entities: DevelopmentPlanningEntityOption[],
   artifacts?: DevelopmentArtifacts,
-  agents: DevelopmentPlanningAgentOption[] = []
+  agents: DevelopmentPlanningAgentOption[] = [],
+  directRuntime = false
 ): QuickTaskItem[] {
   const pageTasks: PageQuickTaskItem[] = pages.map((page) => ({
     progress: artifacts?.pages[page.pageId],
@@ -94,13 +95,15 @@ export function buildQuickTasks(
   )
   const entityTasks: EntityQuickTaskItem[] = entities.map((entity) => ({
     progress: artifacts?.entities[entity.id],
-    description: String(entity.purpose || '从这个实体开始配置数据来源。').trim(),
+    description: directRuntime
+      ? `预览并确认 ${entity.label || entity.id} 的建表 SQL。`
+      : String(entity.purpose || '从这个实体开始配置数据来源。').trim(),
     entityId: entity.id,
     entityLabel: String(entity.label || entity.id || '未命名实体').trim(),
     hasDetailPlan: Boolean(entity.hasDetailPlan),
     id: `entity:${entity.id}`,
     kind: 'entity' as const,
-    meta: String(entity.dataSourceType || '待配置').trim(),
+    meta: directRuntime ? '建表 SQL' : String(entity.dataSourceType || '待配置').trim(),
     title: String(entity.label || entity.id || '未命名实体').trim()
   }))
   const agentTasks: AgentQuickTaskItem[] = agents.map((agent) => ({
