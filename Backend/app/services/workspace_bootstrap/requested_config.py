@@ -30,6 +30,10 @@ def compile_template_requested_config(workspace_root: str | Path) -> dict[str, A
         requested = requested_config_from_application_config(application_config)
         topology_type = topology_type_from_plan(technical_plan)
         if topology_type is None:
+            if technical_plan.get("agent_contracts"):
+                raise TemplateConfigError(
+                    "已确认 TechnicalPlan 含 Agent，但没有显式拓扑选择；请重新生成 TechnicalPlan Core、选择拓扑并确认新版计划。"
+                )
             return requested
         topology = compile_registered_topology(
             topology_type,
@@ -53,6 +57,10 @@ def bootstrap_managed_roots(workspace_root: str | Path) -> tuple[str, ...]:
     )
     _validate_technical_plan(technical_plan)
     topology_type = topology_type_from_plan(technical_plan)
+    if topology_type is None and technical_plan.get("agent_contracts"):
+        raise TemplateConfigError(
+            "已确认 TechnicalPlan 含 Agent，但没有显式拓扑选择；请重新规划并确认新版计划。"
+        )
     if topology_type is not None:
         application_config = read_application_config(root)
         topology = compile_registered_topology(

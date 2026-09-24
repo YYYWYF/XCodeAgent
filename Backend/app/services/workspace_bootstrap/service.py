@@ -27,6 +27,7 @@ from app.services.workspace_bootstrap.requested_config import (
 )
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
 from app.services.workspace_bootstrap.template_package import validate_template_package
+from app.topologies import TopologyType, read_confirmed_technical_plan, topology_type_from_plan
 
 
 class WorkspaceBootstrapService:
@@ -82,20 +83,38 @@ class WorkspaceBootstrapService:
                 bootstrap_managed_roots, workspace
             )
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
-            client = TemplateEngineClient(
-                base_url=self._settings.template_engine_base_url,
-                connect_timeout=self._settings.template_engine_connect_timeout_seconds,
-                read_timeout=self._settings.template_engine_read_timeout_seconds,
-                max_package_bytes=self._settings.template_package_max_bytes,
+            confirmed_plan = await asyncio.to_thread(
+                read_confirmed_technical_plan, workspace
             )
-            download = await client.generate(requested_config)
-            # Engine V1 ZIP 只有 frontend/backend；有业务 Agent 时从 Git 补齐第三根。
-            download = await asyncio.to_thread(
-                GitTemplatePackageBuilder(self._settings).supplement_engine_package,
-                workspace,
-                download,
-                managed_roots,
+            topology_type = (
+                topology_type_from_plan(confirmed_plan)
+                if confirmed_plan is not None
+                else None
             )
+            if topology_type is TopologyType.AGENT_RUNTIME_DIRECT:
+                # TODO(topology): Template Engine 支持 Direct 的动态 roots 和真实能力证据后，
+                # 删除此临时 Git 打包路径，统一由 Engine 提供 frontend/agent-runtime ZIP。
+                download = await asyncio.to_thread(
+                    GitTemplatePackageBuilder(self._settings).generate,
+                    workspace,
+                    requested_config,
+                    managed_roots,
+                )
+            else:
+                client = TemplateEngineClient(
+                    base_url=self._settings.template_engine_base_url,
+                    connect_timeout=self._settings.template_engine_connect_timeout_seconds,
+                    read_timeout=self._settings.template_engine_read_timeout_seconds,
+                    max_package_bytes=self._settings.template_package_max_bytes,
+                )
+                download = await client.generate(requested_config)
+                # Engine V1 ZIP 只有 frontend/backend；有业务 Agent 时从 Git 补齐第三根。
+                download = await asyncio.to_thread(
+                    GitTemplatePackageBuilder(self._settings).supplement_engine_package,
+                    workspace,
+                    download,
+                    managed_roots,
+                )
             download_path = download.temporary_path
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             package = await asyncio.to_thread(

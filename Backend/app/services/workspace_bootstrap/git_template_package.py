@@ -8,11 +8,13 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 from app.config import Settings
 from app.services.template_reconcile.protocol_v2 import TemplateStateV2
@@ -29,6 +31,7 @@ logger = logging.getLogger(__name__)
 _STATE_PATH = ".xcodeagent/template-state.json"
 _ENGINE_MANAGED_ROOTS = frozenset({"frontend", "backend"})
 _GIT_SUPPLEMENT_ROOTS = frozenset({"agent-runtime"})
+_GIT_CLONE_ATTEMPTS = 3
 
 
 class GitTemplatePackageBuilder:
@@ -230,7 +233,7 @@ class GitTemplatePackageBuilder:
         if not isinstance(capabilities, dict):
             raise GitTemplateError("Git 模板请求缺少 capabilities 对象。")
         frontend_backend_branch = (
-            "auth" if "authorization" in capabilities else "main"
+            "auth" if "login" in capabilities or "authorization" in capabilities else "main"
         )
         repositories: list[tuple[str, str, str]] = []
         if "frontend" in managed_roots:
@@ -276,66 +279,82 @@ class GitTemplatePackageBuilder:
         repository_url: str,
         branch: str,
     ) -> dict[str, str]:
-        """单次浅克隆一个模板并移除嵌套 Git 元数据。"""
+        """HTTPS 克隆失败后最多尝试三次，再以非交互 SSH 克隆同一仓库。"""
 
         target_root = source_root / target
         started_at = time.monotonic()
-        # 临时调试日志：定位现场问题后统一删除 temporary-bootstrap-debug 标记代码。
-        logger.warning(
-            "[temporary-bootstrap-debug] Git 模板开始拉取 target=%s branch=%s timeout_seconds=%s",
+        ssh_url = _github_ssh_url(repository_url)
+        clone_sources = [("https", repository_url)] * _GIT_CLONE_ATTEMPTS
+        if ssh_url is not None:
+            clone_sources.append(("ssh", ssh_url))
+        for attempt, (transport, clone_url) in enumerate(clone_sources, start=1):
+            transport_attempt = attempt if transport == "https" else 1
+            transport_attempts = _GIT_CLONE_ATTEMPTS if transport == "https" else 1
+            logger.info(
+                "Git 模板开始拉取 target=%s branch=%s transport=%s attempt=%s/%s timeout_seconds=%s",
+                target, branch, transport, transport_attempt, transport_attempts,
+                self._settings.template_git_clone_timeout_seconds,
+            )
+            try:
+                # SSH 回退不能等待私钥口令或主机确认输入；仍受同一 clone 超时约束。
+                ssh_environment = (
+                    {
+                        **os.environ,
+                        "GIT_TERMINAL_PROMPT": "0",
+                        "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=10",
+                    }
+                    if transport == "ssh"
+                    else None
+                )
+                result = workspace_process_registry.run(
+                    [
+                        "git", "clone", "--depth", "1", "--single-branch",
+                        "--branch", branch, "--", clone_url, str(target_root),
+                    ],
+                    workspace=workspace,
+                    cwd=str(source_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=self._settings.template_git_clone_timeout_seconds,
+                    check=False,
+                    **({"env": ssh_environment} if ssh_environment is not None else {}),
+                )
+            except subprocess.TimeoutExpired as exc:
+                detail = _safe_git_diagnostic(exc.stderr or exc.stdout)
+                if detail == "<empty>":
+                    detail = "Git clone 超时。"
+            except Exception as exc:
+                logger.error(
+                    "Git 模板拉取异常 target=%s branch=%s transport=%s attempt=%s/%s "
+                    "elapsed_seconds=%.3f error_type=%s detail=%s",
+                    target, branch, transport, transport_attempt, transport_attempts,
+                    time.monotonic() - started_at, type(exc).__name__,
+                    _safe_git_diagnostic(
+                        getattr(exc, "stderr", None) or getattr(exc, "stdout", None)
+                    ),
+                )
+                raise GitTemplateError(f"{target} Git 模板拉取失败。") from exc
+            else:
+                if result.returncode == 0:
+                    break
+                detail = _safe_git_diagnostic(result.stderr or result.stdout)
+            logger.warning(
+                "Git 模板拉取失败 target=%s branch=%s transport=%s attempt=%s/%s "
+                "elapsed_seconds=%.3f detail=%s",
+                target, branch, transport, transport_attempt, transport_attempts,
+                time.monotonic() - started_at, detail,
+            )
+            if attempt == len(clone_sources):
+                raise GitTemplateError(f"{target} Git 模板拉取失败：{detail}")
+            # Git 失败可能留下非空目标目录；仅清理本轮临时目录后重新拉取。
+            remove_managed_path(target_root)
+            if transport == "https" and attempt < _GIT_CLONE_ATTEMPTS:
+                time.sleep(1)
+        logger.info(
+            "Git 模板拉取完成 target=%s branch=%s transport=%s elapsed_seconds=%.3f",
             target,
             branch,
-            self._settings.template_git_clone_timeout_seconds,
-        )
-        try:
-            result = workspace_process_registry.run(
-                [
-                    "git",
-                    "clone",
-                    "--depth",
-                    "1",
-                    "--single-branch",
-                    "--branch",
-                    branch,
-                    "--",
-                    repository_url,
-                    str(target_root),
-                ],
-                workspace=workspace,
-                cwd=str(source_root),
-                capture_output=True,
-                text=True,
-                timeout=self._settings.template_git_clone_timeout_seconds,
-                check=False,
-            )
-        except Exception as exc:
-            logger.error(
-                "[temporary-bootstrap-debug] Git 模板拉取异常 target=%s branch=%s "
-                "elapsed_seconds=%.3f error_type=%s detail=%s",
-                target,
-                branch,
-                time.monotonic() - started_at,
-                type(exc).__name__,
-                _safe_git_diagnostic(
-                    getattr(exc, "stderr", None) or getattr(exc, "stdout", None)
-                ),
-            )
-            raise GitTemplateError(f"{target} Git 模板拉取失败。") from exc
-        if result.returncode != 0:
-            logger.error(
-                "[temporary-bootstrap-debug] Git 模板拉取失败 target=%s branch=%s "
-                "elapsed_seconds=%.3f returncode=%s detail=%s",
-                target,
-                branch,
-                time.monotonic() - started_at,
-                result.returncode,
-                _safe_git_diagnostic(result.stderr or result.stdout),
-            )
-            raise GitTemplateError(f"{target} Git 模板拉取失败。")
-        logger.warning(
-            "[temporary-bootstrap-debug] Git 模板拉取完成 target=%s branch=%s elapsed_seconds=%.3f",
-            target,
-            branch,
+            transport,
             time.monotonic() - started_at,
         )
         try:
@@ -379,6 +398,23 @@ def _safe_git_diagnostic(value: object) -> str:
     redacted = re.sub(r"(https?://)[^/@\s]+@", r"\1***@", text)
     compact = " ".join(redacted.split())
     return compact[:1000] or "<empty>"
+
+
+def _github_ssh_url(repository_url: str) -> str | None:
+    """只将标准 GitHub HTTPS 仓库地址转换为同一仓库的 SSH 地址。"""
+
+    parsed = urlsplit(repository_url)
+    parts = parsed.path.strip("/").split("/")
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc.lower() != "github.com"
+        or parsed.query
+        or parsed.fragment
+        or len(parts) != 2
+        or not all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in parts)
+    ):
+        return None
+    return f"git@github.com:{parts[0]}/{parts[1]}"
 
 
 def _template_state(

@@ -108,6 +108,57 @@ def _write_package(path: Path, *, include_application: bool) -> None:
 class WorkspaceBootstrapServiceTests(unittest.TestCase):
     """验证服务把 Readiness 失败限定在物化事务并投影为不可恢复失败。"""
 
+    def test_direct_topology_uses_git_without_template_engine_address(self) -> None:
+        """Direct 已确认时从 Git 打包，不能因 Engine 地址未配置而提前失败。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            _prepare_generating_workspace(workspace)
+            plan_path = workspace / ".xcodeagent/plans/technical-plan.json"
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan["topology"] = {"type": "agent_runtime_direct"}
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            package = workspace / "git-template.zip"
+            _write_package(package, include_application=False)
+            download = TemplatePackageDownload(
+                temporary_path=package,
+                sha256="ignored",
+                size=package.stat().st_size,
+                content_type="application/zip",
+            )
+            settings = _settings()
+            settings.template_engine_base_url = ""
+            service = WorkspaceBootstrapService(settings)
+            with (
+                patch(
+                    "app.services.workspace_bootstrap.service.compile_template_requested_config",
+                    return_value={"capabilities": {}},
+                ),
+                patch(
+                    "app.services.workspace_bootstrap.service.bootstrap_managed_roots",
+                    return_value=("frontend", "agent-runtime"),
+                ),
+                patch(
+                    "app.services.workspace_bootstrap.service.GitTemplatePackageBuilder.generate",
+                    return_value=download,
+                ) as generate_git,
+                patch(
+                    "app.services.workspace_bootstrap.service.TemplateEngineClient.generate",
+                    new=AsyncMock(),
+                ) as generate_engine,
+            ):
+                with self.assertRaisesRegex(
+                    WorkspaceBootstrapError, "缺少：agent-runtime"
+                ):
+                    asyncio.run(service._run(workspace))
+
+            generate_git.assert_called_once_with(
+                workspace,
+                {"capabilities": {}},
+                ("frontend", "agent-runtime"),
+            )
+            generate_engine.assert_not_awaited()
+
     def test_readiness_failure_rolls_back_roots_and_marks_lifecycle_failed(self) -> None:
         """缺少后端入口时不得留下模板半成品，且 lifecycle 必须为 FAILED。"""
 
@@ -159,8 +210,8 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
 
             generate.assert_not_awaited()
 
-    def test_engine_source_supplements_agent_runtime_for_agent_contracts(self) -> None:
-        """有业务 Agent 时 Engine 下载后必须补齐第三根，再进入统一校验。"""
+    def test_agent_contracts_without_topology_selection_fail_closed(self) -> None:
+        """含 Agent 但没有显式拓扑选择的历史计划必须失败关闭，且不进入 Engine。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -169,29 +220,15 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
             plan = json.loads(plan_file.read_text(encoding="utf-8"))
             plan["agent_contracts"] = [{"agentId": "policy_assistant"}]
             plan_file.write_text(json.dumps(plan), encoding="utf-8")
-            package = workspace / "engine.zip"
-            _write_package(package, include_application=True)
-            download = TemplatePackageDownload(
-                temporary_path=package,
-                sha256="ignored",
-                size=package.stat().st_size,
-                content_type="application/zip",
-            )
             service = WorkspaceBootstrapService(_settings())
+            generate = AsyncMock()
             with patch(
                 "app.services.workspace_bootstrap.service.TemplateEngineClient.generate",
-                new=AsyncMock(return_value=download),
-            ), patch(
-                "app.services.workspace_bootstrap.service.GitTemplatePackageBuilder.supplement_engine_package",
-                return_value=download,
-            ) as supplement:
+                new=generate,
+            ):
                 with self.assertRaisesRegex(
-                    WorkspaceBootstrapError, "必须包含本轮全部 managed roots"
+                    WorkspaceBootstrapError, "没有显式拓扑选择"
                 ):
                     asyncio.run(service._run(workspace))
 
-            supplement.assert_called_once()
-            self.assertEqual(
-                supplement.call_args.args[-1],
-                ("frontend", "backend", "agent-runtime"),
-            )
+            generate.assert_not_awaited()
