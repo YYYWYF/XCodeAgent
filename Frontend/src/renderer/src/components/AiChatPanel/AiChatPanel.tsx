@@ -1591,7 +1591,7 @@ export default function AiChatPanel({
         { key: 'preview', label: '预览', available: Boolean(application.workspaceRoot) },
         { key: 'source', label: '源码', available: Boolean(activePageOption) },
         { key: 'doc', label: '文档', available: true },
-        { key: 'stage-output', label: '阶段产物', available: true }
+        { key: 'stage-output', label: '待确认计划', available: true }
       ]
   const activeWorkspaceTab: WorkspaceTabKey = isApplicationPlanningPhase
     ? activeDesignDocKey ||
