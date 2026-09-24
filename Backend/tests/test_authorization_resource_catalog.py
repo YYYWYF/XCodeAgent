@@ -10,7 +10,7 @@ import unittest
 
 from app.services.authorization_frontend_projection import (
     AuthorizationFrontendProjectionError,
-    apply_frontend_resources_projection,
+    apply_authorization_frontend_projection,
     compile_frontend_authorization_projection,
 )
 from app.services.authorization_resource_catalog import (
@@ -157,7 +157,10 @@ class AuthorizationResourceCatalogTests(unittest.TestCase):
                 manifest = _manifest()
                 manifest["resources"].append({**manifest["resources"][index], **changes})
                 with self.assertRaisesRegex(AuthorizationFrontendProjectionError, f"RESOURCES 常量名冲突：{symbol}"):
-                    compile_frontend_authorization_projection({"authorization_manifest": manifest})
+                    compile_frontend_authorization_projection(
+                        {"authorization_manifest": manifest},
+                        application_config={"authorization": {"enabled": True}},
+                    )
 
     def test_same_constant_name_in_different_groups_remains_allowed(self) -> None:
         """既有冲突检测只在同组内生效，跨组同名不误报。"""
@@ -202,7 +205,7 @@ class AuthorizationResourceCatalogTests(unittest.TestCase):
         before = plan_fingerprint(plan)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            apply_frontend_resources_projection(root, projection)
+            apply_authorization_frontend_projection(root, projection)
             resources = root / "frontend/src/constants/resources.ts"
             source = resources.read_text(encoding="utf-8")
             resources.write_text("\n\n" + source.replace("  ", "    ") + "\n", encoding="utf-8")

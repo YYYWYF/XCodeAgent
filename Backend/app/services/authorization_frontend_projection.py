@@ -9,11 +9,12 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+# 资源目录校验与该模块共用同一个异常类型：调用方按本模块名捕获时必须能拦到目录侧抛出的错误。
+from app.services.authorization_resource_catalog import (
+    AuthorizationFrontendProjectionError,
+)
+
 RESOURCES_RELATIVE_PATH = Path("frontend/src/constants/resources.ts")
-
-
-class AuthorizationFrontendProjectionError(ValueError):
-    """表示前端资源常量或业务路由无法按确认权限事实安全生成。"""
 
 
 def compile_frontend_authorization_projection(
