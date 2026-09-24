@@ -186,7 +186,7 @@ def _validate_agent_runtime_capability_manifest(
     required = {
         capability_id
         for capability_id in effective_capabilities(state)
-        if capability_id.startswith("agent_runtime_")
+        if capability_id.startswith(("agent_runtime_", "python_"))
     }
     for capability_id in sorted(required):
         evidence = capabilities.get(capability_id)
@@ -198,6 +198,11 @@ def _validate_agent_runtime_capability_manifest(
         ):
             raise WorkspaceBootstrapReadinessError(
                 f"Bootstrap Agent Runtime capability 缺少有效证据：{capability_id}。"
+            )
+        entrypoint = workspace / "agent-runtime" / evidence["entrypoint"]
+        if not entrypoint.is_file() or entrypoint.is_symlink():
+            raise WorkspaceBootstrapReadinessError(
+                f"Bootstrap Agent Runtime capability 入口文件不存在：{capability_id}。"
             )
 
 

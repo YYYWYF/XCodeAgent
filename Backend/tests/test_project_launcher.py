@@ -1112,12 +1112,12 @@ class ProjectLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             with (
                 patch(
-                    "app.services.project_launcher.find_backend_project_root",
+                    "app.services.project_launch_stages.find_backend_project_root",
                     return_value=None,
                 ) as find_backend,
-                patch("app.services.project_launcher.launch_backend_project") as launch_backend,
+                patch("app.services.project_launch_stages.launch_backend_project") as launch_backend,
                 patch(
-                    "app.services.project_launcher.launch_frontend_project",
+                    "app.services.project_launch_stages.launch_frontend_project",
                     return_value=frontend_result,
                 ) as launch_frontend,
             ):
@@ -1135,9 +1135,9 @@ class ProjectLauncherTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             with (
-                patch("app.services.project_launcher.find_backend_project_root", return_value=None),
+                patch("app.services.project_launch_stages.find_backend_project_root", return_value=None),
                 patch(
-                    "app.services.project_launcher.launch_frontend_project",
+                    "app.services.project_launch_stages.launch_frontend_project",
                     return_value={"status": "running", "message": "前端已就绪。", "preview_url": "http://127.0.0.1:80"},
                 ) as frontend,
             ):
@@ -1173,18 +1173,18 @@ class ProjectLauncherTests(unittest.TestCase):
             root = Path(workspace).resolve()
             with (
                 patch(
-                    "app.services.project_launcher.find_backend_project_root",
+                    "app.services.project_launch_stages.find_backend_project_root",
                     return_value=root / "backend",
                 ),
                 patch(
-                    "app.services.project_launcher.launch_backend_project",
+                    "app.services.project_launch_stages.launch_backend_project",
                     side_effect=lambda _root: calls.append("backend") or {
                         "status": "running",
                         "_process": backend_process,
                     },
                 ),
                 patch(
-                    "app.services.project_launcher.launch_frontend_project",
+                    "app.services.project_launch_stages.launch_frontend_project",
                     side_effect=lambda _root: calls.append("frontend") or {
                         "status": "running",
                         "preview_url": "http://127.0.0.1:80",
@@ -1206,11 +1206,11 @@ class ProjectLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             with (
                 patch(
-                    "app.services.project_launcher.find_backend_project_root",
+                    "app.services.project_launch_stages.find_backend_project_root",
                     return_value=Path(workspace).resolve() / "backend",
                 ),
                 patch(
-                    "app.services.project_launcher.launch_backend_project",
+                    "app.services.project_launch_stages.launch_backend_project",
                     return_value={
                         "status": "running",
                         "message": "后端服务已就绪。",
@@ -1218,7 +1218,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "app.services.project_launcher.launch_frontend_project",
+                    "app.services.project_launch_stages.launch_frontend_project",
                     return_value={
                         "status": "running",
                         "message": "前端服务已就绪。",
@@ -1258,12 +1258,12 @@ class ProjectLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             with (
                 patch(
-                    "app.services.project_launcher.find_backend_project_root",
+                    "app.services.project_launch_stages.find_backend_project_root",
                     return_value=None,
                 ),
-                patch("app.services.project_launcher.launch_backend_project") as backend,
+                patch("app.services.project_launch_stages.launch_backend_project") as backend,
                 patch(
-                    "app.services.project_launcher.launch_frontend_project",
+                    "app.services.project_launch_stages.launch_frontend_project",
                     return_value=frontend_result,
                 ) as frontend,
             ):

@@ -426,26 +426,26 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
             root = Path(workspace).resolve()
             with (
                 patch(
-                    "app.services.project_launcher.find_backend_project_root",
+                    "app.services.project_launch_stages.find_backend_project_root",
                     return_value=root / "backend",
                 ),
                 patch(
-                    "app.services.project_launcher.agent_runtime_launch_required",
+                    "app.services.project_launch_stages.agent_runtime_launch_required",
                     return_value=True,
                 ),
                 patch(
-                    "app.services.project_launcher.launch_backend_project",
+                    "app.services.project_launch_stages.launch_backend_project",
                     return_value=backend,
                 ),
                 patch(
-                    "app.services.project_launcher.launch_agent_runtime_project",
+                    "app.services.project_launch_stages.launch_agent_runtime_project",
                     return_value=runtime,
                 ),
                 patch(
-                    "app.services.project_launcher.stop_backend_project"
+                    "app.services.project_launch_stages.stop_backend_project"
                 ) as stop_backend,
                 patch(
-                    "app.services.project_launcher.launch_frontend_project"
+                    "app.services.project_launch_stages.launch_frontend_project"
                 ) as launch_frontend,
             ):
                 result = launch_project_preview(root)
