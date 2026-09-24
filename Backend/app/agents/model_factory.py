@@ -30,6 +30,9 @@ def create_chat_model(
     model_kwargs 会被 SDK 解包为 create() 方法的 keyword arguments，非标准
     参数会 TypeError；extra_body 是 Anthropic 和 OpenAI SDK 都支持的标准参数，
     其内容会被合并进 HTTP 请求体，不被 SDK 方法签名校验。网关不认识时被忽略。
+    OpenAI-compatible 请求默认把输出预算作为 extra_body.max_tokens 发送，避免
+    langchain-openai 把 max_tokens 静默改名为部分兼容网关不识别的
+    max_completion_tokens；原生新模型可通过 Settings 显式选择新字段。
     """
 
     if not settings.model_api_key:
@@ -63,7 +66,7 @@ def create_chat_model(
     # 网关透传给 GLM 可关闭思考。ChatOpenAI/ChatAnthropic 都有顶层
     # extra_body 字段，直接传给构造函数；嵌在 model_kwargs 里会触发
     # UserWarning（Parameters {'extra_body'} should be specified explicitly）。
-    extra_body = dict(extra_model_kwargs) if extra_model_kwargs else None
+    extra_body = dict(extra_model_kwargs) if extra_model_kwargs else {}
 
     if settings.model_provider == "anthropic":
         # Anthropic 原生协议：走 /v1/messages，使用 x-api-key + anthropic-version 鉴权
@@ -101,12 +104,18 @@ def create_chat_model(
         )
 
     # OpenAI 兼容协议：走 /v1/chat/completions
+    token_parameter = settings.model_max_tokens_parameter
+    openai_token_kwargs: dict[str, Any] = {}
+    if token_parameter == "max_tokens":
+        # extra_body 会由 OpenAI SDK 合并到最终 JSON 请求体，从而保留旧字段名。
+        extra_body["max_tokens"] = max_tokens
+    else:
+        openai_token_kwargs["max_completion_tokens"] = max_tokens
     return ChatOpenAI(
         model=settings.model_api_name,
         base_url=settings.model_base_url,
         api_key=settings.model_api_key,
         temperature=settings.default_temperature,
-        max_tokens=max_tokens,
         timeout=timeout_seconds,
         max_retries=max_retries,
         http_client=httpx.Client(
@@ -121,5 +130,6 @@ def create_chat_model(
         callbacks=(
             [ModelOutputLogHandler()] if settings.model_output_log_enabled else None
         ),
-        extra_body=extra_body,
+        extra_body=extra_body or None,
+        **openai_token_kwargs,
     )

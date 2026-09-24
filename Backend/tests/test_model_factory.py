@@ -43,9 +43,9 @@ class ModelFactoryOverrideTests(unittest.TestCase):
         self.assertIs(result, self.model_factory.return_value)
         self.model_factory.assert_called_once_with(
             model="test-model", base_url="https://example.com/v1", api_key="test-key",
-            temperature=0.4, max_tokens=2048, timeout=120.0, max_retries=2,
+            temperature=0.4, timeout=120.0, max_retries=2,
             http_client=self.sync_factory.return_value, http_async_client=self.async_factory.return_value,
-            streaming=False, callbacks=None, model_kwargs={},
+            streaming=True, callbacks=None, extra_body={"max_tokens": 2048},
         )
         self.sync_factory.assert_called_once_with(trust_env=True, timeout=httpx.Timeout(120.0, connect=30.0))
         self.async_factory.assert_called_once_with(trust_env=True, timeout=httpx.Timeout(120.0, connect=30.0))
@@ -68,7 +68,10 @@ class ModelFactoryOverrideTests(unittest.TestCase):
         before = asdict(self.settings)
         create_chat_model(self.settings, max_tokens_override=4096)
         kwargs = self.model_factory.call_args.kwargs
-        self.assertEqual((kwargs["max_tokens"], kwargs["max_retries"], kwargs["timeout"]), (4096, 2, 120.0))
+        self.assertEqual(
+            (kwargs["extra_body"]["max_tokens"], kwargs["max_retries"], kwargs["timeout"]),
+            (4096, 2, 120.0),
+        )
         self.assertEqual(asdict(self.settings), before)
 
     def test_zero_retry_override_is_not_replaced_by_global_default(self) -> None:
@@ -77,7 +80,7 @@ class ModelFactoryOverrideTests(unittest.TestCase):
         create_chat_model(self.settings, max_retries_override=0)
         kwargs = self.model_factory.call_args.kwargs
         self.assertEqual(kwargs["max_retries"], 0)
-        self.assertEqual(kwargs["max_tokens"], 2048)
+        self.assertEqual(kwargs["extra_body"]["max_tokens"], 2048)
         self.assertEqual(kwargs["timeout"], 120.0)
         self.assertEqual(self.settings.model_max_retries, 2)
 
@@ -109,7 +112,14 @@ class ModelFactoryOverrideTests(unittest.TestCase):
         expected = [(4096, 0, 45.0), (2048, 2, 120.0), (8192, 1, 90.0)]
         for index, call in enumerate(self.model_factory.call_args_list):
             kwargs = call.kwargs
-            self.assertEqual((kwargs["max_tokens"], kwargs["max_retries"], kwargs["timeout"]), expected[index])
+            self.assertEqual(
+                (
+                    kwargs["extra_body"]["max_tokens"],
+                    kwargs["max_retries"],
+                    kwargs["timeout"],
+                ),
+                expected[index],
+            )
             self.assertIs(kwargs["http_client"], clients[index])
             self.assertIs(kwargs["http_async_client"], async_clients[index])
             for factory in (self.sync_factory, self.async_factory):
@@ -125,14 +135,34 @@ class ModelFactoryOverrideTests(unittest.TestCase):
             max_tokens_override=4096, max_retries_override=0, timeout_seconds_override=60.0,
             extra_model_kwargs=extras)
         kwargs = self.model_factory.call_args.kwargs
-        self.assertEqual(kwargs["model_kwargs"], {"extra_body": extras})
-        self.assertIsNot(kwargs["model_kwargs"]["extra_body"], extras)
+        self.assertEqual(
+            kwargs["extra_body"],
+            {**extras, "max_tokens": 4096},
+        )
+        self.assertIsNot(kwargs["extra_body"], extras)
         self.assertTrue(kwargs["streaming"])
         self.assertEqual(kwargs["callbacks"], [self.handler_factory.return_value])
         self.assertEqual(extras, before)
         create_chat_model(self.settings)
-        self.assertEqual(self.model_factory.call_args.kwargs["model_kwargs"], {})
+        self.assertEqual(
+            self.model_factory.call_args.kwargs["extra_body"],
+            {"max_tokens": 2048},
+        )
         self.assertIsNone(self.model_factory.call_args.kwargs["callbacks"])
+
+    def test_new_openai_token_parameter_is_explicitly_supported(self) -> None:
+        """原生新模型可显式使用 max_completion_tokens 且不重复发送旧字段。"""
+
+        settings = replace(
+            self.settings,
+            model_max_tokens_parameter="max_completion_tokens",
+        )
+
+        create_chat_model(settings, max_tokens_override=4096)
+
+        kwargs = self.model_factory.call_args.kwargs
+        self.assertEqual(kwargs["max_completion_tokens"], 4096)
+        self.assertIsNone(kwargs["extra_body"])
 
     def test_missing_api_key_still_fails_before_constructing_clients(self) -> None:
         """增加 override 后仍保留原有缺失凭据校验，不创建无效客户端。"""

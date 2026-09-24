@@ -32,6 +32,9 @@ class Settings:
     model_output_log_enabled: bool = False
     model_timeout_seconds: float = 120.0
     model_max_retries: int = 2
+    # OpenAI-compatible 网关常仍只识别 max_tokens；原生新模型可显式切换为
+    # max_completion_tokens，避免 SDK 静默改名后被兼容网关忽略。
+    model_max_tokens_parameter: str = "max_tokens"
     anthropic_api_version: str = "2023-06-01"
     model_custom_headers: dict[str, str] = field(default_factory=dict)
     default_system_prompt: str = (
@@ -163,6 +166,18 @@ class Settings:
             raise RuntimeError(
                 "Only MODEL_PROVIDER=openai or anthropic is supported."
             )
+        model_max_tokens_parameter = os.getenv(
+            "MODEL_MAX_TOKENS_PARAMETER",
+            "max_tokens",
+        ).strip()
+        if model_max_tokens_parameter not in {
+            "max_tokens",
+            "max_completion_tokens",
+        }:
+            raise ValueError(
+                "MODEL_MAX_TOKENS_PARAMETER 必须是 max_tokens 或 "
+                "max_completion_tokens。"
+            )
         custom_headers_raw = os.getenv("MODEL_CUSTOM_HEADERS", "")
         custom_headers = _parse_custom_headers(custom_headers_raw)
         return cls(
@@ -178,6 +193,7 @@ class Settings:
                 os.getenv("MODEL_TIMEOUT_SECONDS", "120.0")
             ),
             model_max_retries=int(os.getenv("MODEL_MAX_RETRIES", "2")),
+            model_max_tokens_parameter=model_max_tokens_parameter,
             anthropic_api_version=os.getenv(
                 "ANTHROPIC_API_VERSION", "2023-06-01"
             ),
