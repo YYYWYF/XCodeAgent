@@ -12,6 +12,7 @@ from app.services.api_design import (
 )
 from app.services.frontend_page_tree import project_plan_page_records
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
+from app.topologies.queries import serves_agent_runtime_public_edge
 
 
 def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
@@ -21,6 +22,26 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
     project_plan = state.get("project_plan")
     if not workspace or not isinstance(project_plan, dict):
         raise ApiDesignError("缺少工作区或已确认 TechnicalPlan，无法检查 API 设计。")
+    if serves_agent_runtime_public_edge(project_plan):
+        # Direct Runtime 直接按 TechnicalPlan API Contract/Schema 生成 DTO、Service 与
+        # FastAPI Endpoint，不建立数据库/外部来源字段映射，也不进入配置确认交互。
+        return {
+            "phase": "api_design_readiness_gate",
+            "status": "completed",
+            "api_design_gate_action": {},
+            "api_design_readiness": {
+                "ready": True,
+                "target_type": "direct_runtime",
+                "target_id": "agent-runtime",
+                "api_contract_id": None,
+                "endpoint_ids": [],
+                "missing_api_designs": [],
+                "bypassed_by_topology": "agent_runtime_direct",
+            },
+            "api_design_result": {},
+            "clarification": {},
+            "timeline": ["api_design_readiness_gate"],
+        }
     action = state.get("api_design_gate_action")
     action = action if isinstance(action, dict) else {}
     state_target_type = (

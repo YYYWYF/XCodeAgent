@@ -297,6 +297,7 @@ export async function inspectWorkspacePlanningArtifacts(
   workspaceRoot: string
 ): Promise<{
   ready: boolean;
+  topologyType?: string;
   hasPageDesigns: boolean;
   missing: string[];
   invalid: string[];

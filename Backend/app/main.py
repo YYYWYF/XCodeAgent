@@ -54,8 +54,10 @@ from app.protocols.code_changes import (
 )
 from app.protocols.data_sources import data_sources_capabilities
 from app.protocols.endpoint_designs import endpoint_designs_capabilities
+from app.protocols.direct_development import direct_development_capabilities
 from app.routes.data_sources import data_sources_router
 from app.routes.endpoint_designs import endpoint_designs_router
+from app.routes.direct_development import direct_development_router
 from app.protocols.version_control import (
     build_version_control_ag_ui_stream,
     version_control_capabilities,
@@ -111,6 +113,7 @@ app = FastAPI(
 )
 app.include_router(data_sources_router)
 app.include_router(endpoint_designs_router)
+app.include_router(direct_development_router)
 
 
 class ApprovalActionRequest(BaseModel):
@@ -149,6 +152,7 @@ async def health() -> dict[str, object]:
             "agent_runtime_debug": agent_runtime_debug_capabilities(),
             "data_sources": data_sources_capabilities(),
             "endpoint_designs": endpoint_designs_capabilities(),
+            "direct_development": direct_development_capabilities(),
             "code_changes": code_changes_capabilities(),
             "version_control": version_control_capabilities(),
             "conversation": conversation_capabilities(),

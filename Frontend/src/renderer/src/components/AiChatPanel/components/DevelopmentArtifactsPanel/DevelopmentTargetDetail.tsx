@@ -9,9 +9,12 @@ import './DevelopmentTargetDetail.less'
 const { Text } = Typography
 
 type Props = {
+  actionLabel?: string
   description?: string
   disabled?: boolean
   extra?: ReactNode
+  hint?: string
+  notice?: ReactNode
   kind: 'page' | 'endpoint' | 'entity'
   progress?: DevelopmentArtifactProgress
   subtitle?: string
@@ -42,9 +45,12 @@ function startActionLabel(
 
 /** 渲染开发阶段页面、接口或实体的状态详情，并提供正式开发入口。 */
 export default function DevelopmentTargetDetail({
+  actionLabel,
   description,
   disabled,
   extra,
+  hint,
+  notice,
   kind,
   progress,
   subtitle,
@@ -68,14 +74,15 @@ export default function DevelopmentTargetDetail({
         <div className={cx('development-target-hero-actions')}>
           <Tag>{developmentStatusText(progress)}</Tag>
           <Button disabled={disabled || completed} onClick={onStart} type="primary">
-            {startActionLabel(kind, progress)}
+            {actionLabel || startActionLabel(kind, progress)}
           </Button>
         </div>
       </header>
+      {notice ? <div aria-live="polite">{notice}</div> : null}
       <section className={cx('development-target-section')}>
         <h3>开发说明</h3>
         {description ? <p>{description}</p> : null}
-        <p>{developmentReadyHint(kind)}</p>
+        <p>{hint || developmentReadyHint(kind)}</p>
       </section>
       {extra}
     </div>

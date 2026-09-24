@@ -581,6 +581,7 @@ async function hasPersistedDetailDesigns(workspaceRoot: string): Promise<boolean
 /** 校验当前正式规划产物，并从 ProductPlan/TechnicalPlan 投射工作台大纲。 */
 async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise<{
   ready: boolean
+  topologyType?: string
   hasPageDesigns: boolean
   missing: string[]
   invalid: string[]
@@ -696,13 +697,16 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     buildTaskPlan
   )
   const pagesById = new Map(pages.map((page) => [page.pageId, page]))
-  apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
-  entities = await mergeWorkbenchEntityStatus(workspaceRoot, entities)
+  if (String((technicalPlan?.topology as Record<string, unknown> | undefined)?.type || '') !== 'agent_runtime_direct') {
+    apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
+    entities = await mergeWorkbenchEntityStatus(workspaceRoot, entities)
+  }
   // 首次目标选择只针对完全没有详细设计记录的工作区；UI Manifest 不会跳过该入口。
   const hasPageDesigns = await hasPersistedDetailDesigns(workspaceRoot)
 
   return {
     ready: missing.length === 0 && invalid.length === 0,
+    topologyType: String((technicalPlan?.topology as Record<string, unknown> | undefined)?.type || ''),
     hasPageDesigns,
     missing,
     invalid,

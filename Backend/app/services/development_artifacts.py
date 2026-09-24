@@ -15,6 +15,8 @@ from app.domain.development_artifacts import (
     TestEntryGate,
 )
 from app.workspace.detail_design_documents import hydrate_external_detail_designs
+from app.topologies.queries import serves_agent_runtime_public_edge
+from app.services.direct_entity_design import DirectEntityRequest, read_direct_entity_design
 
 INITIAL_DEVELOPMENT_PHASES = frozenset({
     "api_design_readiness_gate", "inspect_workspace", "prepare_build_tasks",
@@ -82,7 +84,12 @@ def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
                 endpointId=_identifier(endpoint.get("id")),
             ))
     for entity in _records(technical.get("entities", []), "TechnicalPlan.entities"):
-        targets.append(DevelopmentArtifactTarget(type="entity", entityId=_identifier(entity.get("id"))))
+        targets.append(
+            DevelopmentArtifactTarget(
+                type="entity",
+                entityId=_identifier(entity.get("id")),
+            )
+        )
     keys = [target.model_dump_json() for target in targets]
     if len(set(keys)) != len(keys):
         raise ValueError("开发产物标识重复。")
@@ -119,11 +126,20 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
     artifacts = DevelopmentArtifacts(catalogError=None)
     for target in targets:
         if target.type == "entity":
-            # 只认当前正式绑定的显式确认；选表、生成设计和等待确认都不算完成。
-            confirmed = any(
-                detail.get("entity_id") == target.entity_id and detail.get("status") == "confirmed"
-                for detail in technical.get("entity_detail_plans", [])
-            )
+            # Direct 只认经隔离 SQL 校验和用户确认的当前 Entity 产物；
+            # 其他拓扑继续按其独立 EntitySourceBinding 正式确认判定。
+            if serves_agent_runtime_public_edge(technical):
+                try:
+                    confirmed = read_direct_entity_design(DirectEntityRequest(
+                        workspaceRoot=str(workspace), entityId=target.entity_id,
+                    ))["status"] == "confirmed"
+                except (OSError, UnicodeError, ValueError):
+                    confirmed = False
+            else:
+                confirmed = any(
+                    detail.get("entity_id") == target.entity_id and detail.get("status") == "confirmed"
+                    for detail in technical.get("entity_detail_plans", [])
+                )
             active = any(
                 execution.scope == "data_source" and execution.target_id == target.entity_id
                 and execution.status in ACTIVE_STATUSES

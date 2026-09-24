@@ -300,6 +300,7 @@ type Props = {
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
   developmentPlanningEntities: DevelopmentPlanningEntityOption[]
+  topologyType: string
   developmentPlanningAgents: DevelopmentPlanningAgentOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
@@ -856,6 +857,7 @@ export default function AiChatPanel({
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
   developmentPlanningEntities,
+  topologyType,
   developmentPlanningAgents,
   editorMode,
   onApplicationUpdate,
@@ -1119,7 +1121,8 @@ export default function AiChatPanel({
   }, [application.id])
   const applicationTemplatePreparationEligible = isApplicationTemplatePreparationEligible(
     application.source,
-    enterDevConfirmed
+    enterDevConfirmed,
+    applicationLifecycle?.initialization?.stage
   )
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
@@ -1331,6 +1334,10 @@ export default function AiChatPanel({
     : undefined
   const requirementProductPlanForDoc = requirementDocViewActive
     ? selectedSurfaceProductPlan || productPlanFile
+    : undefined
+  // 设计阶段的 API 契约只读引用已确认技术规划；此处不再新增技术规划事实或生成路径。
+  const requirementDocTechnicalPlan = requirementDocViewActive
+    ? technicalPlanMemory || technicalPlanFile
     : undefined
 
   // 冷恢复或阶段切回后内存快照不完整时读本地产物；按产物集合缓存 Promise，
@@ -3941,6 +3948,11 @@ export default function AiChatPanel({
     }
     if (target.type === 'entity') {
       const entity = developmentPlanningEntities.find((item) => item.id === target.entityId)
+      if (topologyType === 'agent_runtime_direct' && entity) {
+        // Direct 实体的正式开发入口就是右侧 SQL 确认页，不创建旧数据源绑定会话。
+        artifactOutlineProps.onEntitySelect(entity)
+        return
+      }
       await handleStartEntityDesign(
         target.entityId,
         String(entity?.label || target.entityId).trim(),
@@ -3954,6 +3966,16 @@ export default function AiChatPanel({
       .trim()
       .toUpperCase()
     const path = String(endpoint?.path || '/').trim()
+    if (topologyType === 'agent_runtime_direct') {
+      // Direct 先打开独立的 API 契约确认页，再由该页启动代码生成。
+      artifactOutlineProps.onApiEndpointSelect({
+        apiContractId: target.apiContractId,
+        endpointId: target.endpointId,
+        endpointKey: `${target.apiContractId}:${target.endpointId}`,
+        label: `${method} ${path}`
+      })
+      return
+    }
     await handleStartEndpointDesign(
       target.endpointId,
       endpoint ? `${method} ${path}` : `${target.apiContractId}/${target.endpointId}`,
@@ -3962,6 +3984,29 @@ export default function AiChatPanel({
         apiContractId: target.apiContractId,
         endpointId: target.endpointId
       }
+    )
+  }
+
+  /** Direct 接口契约确认后才启动现有目标绑定的 Build 主工作流。 */
+  const handleStartDirectEndpointCode = async (
+    target: { apiContractId: string; endpointId: string }
+  ): Promise<void> => {
+    if (pendingPlanActionable) return
+    const contract = developmentPlanningApiContracts.find((item) =>
+      item.endpoints.some((endpoint) =>
+        (endpoint.apiContractId || item.id) === target.apiContractId && endpoint.id === target.endpointId
+      )
+    )
+    const endpoint = contract?.endpoints.find((item) => item.id === target.endpointId)
+    setTemporaryChatOpen(false)
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('chat')
+    await handleStartEndpointDesign(
+      target.endpointId,
+      endpoint ? `${endpoint.method} ${endpoint.path}` : `${target.apiContractId}/${target.endpointId}`,
+      true,
+      target
     )
   }
 
@@ -3977,12 +4022,26 @@ export default function AiChatPanel({
       return
     }
     if (task.kind === 'entity') {
+      if (topologyType === 'agent_runtime_direct') {
+        const entity = developmentPlanningEntities.find((item) => item.id === task.entityId)
+        if (entity) artifactOutlineProps.onEntitySelect(entity)
+        return
+      }
       await handleStartEntityDesign(task.entityId, task.entityLabel, task.hasDetailPlan)
       return
     }
     if (task.kind === 'agent') {
       const agent = developmentPlanningAgents.find((item) => item.agentId === task.agentId)
       if (agent) await handleStartAgentBuild(agent)
+      return
+    }
+    if (topologyType === 'agent_runtime_direct') {
+      artifactOutlineProps.onApiEndpointSelect({
+        apiContractId: task.apiContractId,
+        endpointId: task.endpointId,
+        endpointKey: `${task.apiContractId}:${task.endpointId}`,
+        label: task.endpointLabel
+      })
       return
     }
     await handleStartEndpointDesign(task.endpointId, task.endpointLabel, task.hasDetailPlan, {
@@ -4724,6 +4783,7 @@ export default function AiChatPanel({
               emptyContent={
                 !isApplicationPlanningPhase ? (
                   <QuickTaskGuide
+                    directRuntime={topologyType === 'agent_runtime_direct'}
                     developmentArtifacts={applicationLifecycle?.developmentArtifacts}
                     apiContracts={developmentPlanningApiContracts}
                     agents={developmentPlanningAgents}
@@ -4938,6 +4998,8 @@ export default function AiChatPanel({
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
               applicationLifecycle={applicationLifecycle}
+              developmentArtifacts={applicationLifecycle?.developmentArtifacts}
+              directRuntime={topologyType === 'agent_runtime_direct'}
               apiContracts={developmentPlanningApiContracts}
               agents={developmentPlanningAgents}
               entities={developmentPlanningEntities}
@@ -4948,6 +5010,7 @@ export default function AiChatPanel({
               )}`}
               developmentDisabled={loading || workflowInputLocked}
               onAgentSettingsApplied={onPlanningArtifactsRefresh}
+              onLifecycleChange={onApplicationLifecycleChange}
               onEndAgentExecution={async (execution) => {
                 const session = allSessions.find(
                   (item) =>
@@ -4969,6 +5032,7 @@ export default function AiChatPanel({
               }}
               onStartAgentDevelopment={(agent) => void handleStartAgentBuild(agent)}
               onStartDevelopment={handleStartRemainingDevelopment}
+              onStartDirectEndpointCode={(target) => { void handleStartDirectEndpointCode(target) }}
               outlineLocked={false}
               pages={displayedPlanningPages}
               pageTree={displayedPlanningPageTree}
@@ -5016,7 +5080,9 @@ export default function AiChatPanel({
                 }
                 onAgentSurfaceEnabledChange={handleAgentSurfaceEnabledChange}
                 requirementSpec={requirementSpecForDoc}
-                technicalPlan={technicalPlanForDoc}
+                technicalPlan={
+                  requirementDocViewActive ? requirementDocTechnicalPlan : technicalPlanForDoc
+                }
                 structuredDocument={
                   technicalPlanViewActive
                     ? 'technical-plan'

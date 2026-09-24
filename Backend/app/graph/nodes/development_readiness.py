@@ -8,7 +8,12 @@ from app.services.agent_development_readiness import (
     inspect_agent_development_readiness,
 )
 from app.services.development_readiness import development_readiness
+from app.services.direct_api_contract import (
+    direct_build_prerequisite_errors,
+    project_confirmed_direct_contracts,
+)
 from app.services.frontend_page_tree import project_plan_page_records
+from app.topologies.queries import serves_agent_runtime_public_edge
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 
 
@@ -35,12 +40,15 @@ def development_readiness_gate(state: ProjectState) -> dict:
     )
     if not target_id:
         raise ValueError("请选择要开始开发的页面、API 或智能体。")
+    direct = serves_agent_runtime_public_edge(project_plan)
     readiness = (
         inspect_agent_development_readiness(
             str(state.get("workspace") or state.get("workspace_path") or ""),
             target_id,
         )
         if target_type == "agent"
+        else {"ready": True, "missing_entities": [], "api_contract_id": str(state.get("selected_api_contract_id") or "")}
+        if direct
         else development_readiness(
             project_plan,
             target_type=target_type,
@@ -48,6 +56,25 @@ def development_readiness_gate(state: ProjectState) -> dict:
             api_contract_id=str(state.get("selected_api_contract_id") or "").strip() or None,
         )
     )
+    if direct and readiness["ready"]:
+        workspace = str(state.get("workspace") or state.get("workspace_path") or "")
+        projected = project_confirmed_direct_contracts(workspace, project_plan)
+        errors = direct_build_prerequisite_errors(workspace, projected, {
+            "type": target_type,
+            "targetId": target_id,
+            "apiContractId": str(state.get("selected_api_contract_id") or ""),
+        })
+        if errors:
+            # 当前图没有 Direct 产物确认的 Pending Interaction；失败并给出准确
+            # 修复路径，避免落到无确认按钮的通用等待卡。
+            raise ValueError("请先在「开发产物」确认 Direct 正式产物后重试：" + "；".join(errors))
+        return {
+            "phase": "development_readiness_gate",
+            "status": "completed",
+            "development_readiness": {"ready": True, "missing_entities": [], "blockers": []},
+            "clarification": {},
+            "timeline": ["development_readiness_gate"],
+        }
     blockers = readiness.get("blockers") or []
     agent_binding_bypassed = (
         target_type == "agent"

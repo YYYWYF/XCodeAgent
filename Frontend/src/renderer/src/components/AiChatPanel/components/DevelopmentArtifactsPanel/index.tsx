@@ -13,9 +13,12 @@ import type { ApplicationOutlineProps } from '../ApplicationOutline'
 import EndpointDesignResult from '../EndpointDesignResult'
 import { useEndpointDesignDetail } from '../../hooks/useEndpointDesignDetail'
 import DevelopmentTargetDetail from './DevelopmentTargetDetail'
+import DirectEntityDesignPanel from './DirectEntityDesignPanel'
+import DirectApiContractPanel from './DirectApiContractPanel'
 import './DevelopmentArtifactsPanel.less'
 
 type Props = ApplicationOutlineProps & {
+  directRuntime?: boolean
   detailLabel?: string
   apiTarget?: { apiContractId: string; endpointId: string }
   apiDesignRefreshKey?: string
@@ -26,11 +29,14 @@ type Props = ApplicationOutlineProps & {
   onAgentSettingsApplied?: () => void
   onStartAgentDevelopment?: (agent: DevelopmentPlanningAgentOption) => void
   onStartDevelopment?: (target: DevelopmentArtifactTarget) => void
+  onStartDirectEndpointCode?: (target: { apiContractId: string; endpointId: string }) => void
+  onLifecycleChange?: (lifecycle: ApplicationLifecycle) => void
   workspaceRoot?: string
 }
 
 /** 并排展示常驻菜单和当前选中产物的开发详情。 */
 export default function DevelopmentArtifactsPanel({
+  directRuntime,
   detailLabel,
   apiTarget,
   apiDesignRefreshKey,
@@ -41,6 +47,8 @@ export default function DevelopmentArtifactsPanel({
   onAgentSettingsApplied,
   onStartAgentDevelopment,
   onStartDevelopment,
+  onStartDirectEndpointCode,
+  onLifecycleChange,
   workspaceRoot,
   ...outlineProps
 }: Props): ReactElement {
@@ -66,7 +74,7 @@ export default function DevelopmentArtifactsPanel({
     : undefined
   const { detail, error, loading, reload } = useEndpointDesignDetail(
     workspaceRoot,
-    apiTarget,
+    directRuntime ? undefined : apiTarget,
     apiDesignRefreshKey
   )
   return (
@@ -88,6 +96,17 @@ export default function DevelopmentArtifactsPanel({
             onSettingsApplied={onAgentSettingsApplied || (() => undefined)}
             onStartDevelopment={onStartAgentDevelopment}
             workspaceRoot={workspaceRoot}
+          />
+        ) : apiTarget && directRuntime ? (
+          <DirectApiContractPanel
+            apiContractId={apiTarget.apiContractId}
+            disabled={developmentDisabled}
+            endpointId={apiTarget.endpointId}
+            progress={outlineProps.developmentArtifacts?.endpoints[apiTarget.apiContractId]?.[apiTarget.endpointId]}
+            summary={selectedEndpoint?.summary}
+            title={detailLabel || apiTarget.endpointId}
+            workspaceRoot={workspaceRoot}
+            onStartDevelopment={() => onStartDirectEndpointCode?.(apiTarget)}
           />
         ) : apiTarget ? (
           loading ? (
@@ -143,6 +162,14 @@ export default function DevelopmentArtifactsPanel({
             onStart={() =>
               onStartDevelopment?.({ type: 'page', pageId: selectedPage.pageId })
             }
+          />
+        ) : selectedEntity && directRuntime && onLifecycleChange ? (
+          <DirectEntityDesignPanel
+            disabled={developmentDisabled}
+            entity={selectedEntity}
+            onLifecycleChange={onLifecycleChange}
+            progress={outlineProps.developmentArtifacts?.entities[selectedEntity.id]}
+            workspaceRoot={workspaceRoot}
           />
         ) : selectedEntity ? (
           <DevelopmentTargetDetail

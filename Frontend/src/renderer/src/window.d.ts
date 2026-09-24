@@ -51,6 +51,7 @@ declare global {
         }) => Promise<{ application?: unknown }>
         inspectPlanningArtifacts: (payload: { workspaceRoot: string }) => Promise<{
           ready: boolean
+          topologyType?: string
           hasPageDesigns: boolean
           missing: string[]
           invalid: string[]

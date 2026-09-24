@@ -135,6 +135,22 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.assertEqual(state.development_artifacts.entities, {})
         self.assertEqual(test_entry_gate(state).total, 3)
 
+    def test_direct_runtime_entities_are_generated_prerequisites(self) -> None:
+        """Direct Entity 由 Python Unit 与 SQL migration 生成，不再是独立绑定目标。"""
+
+        self.technical["topology"] = {
+            "type": "agent_runtime_direct",
+            "publicEdgeServiceId": "agent-runtime",
+            "serviceIds": ["agent-runtime"],
+        }
+        self.technical["entities"] = [{"id": "entity"}]
+        self.write_plans()
+
+        state = refresh_development_artifacts(self.workspace)
+
+        self.assertEqual(state.development_artifacts.entities, {})
+        self.assertEqual(test_entry_gate(state).total, 3)
+
     def test_start_wait_fail_retry_and_complete(self) -> None:
         """状态跟随初次执行，等待确认保持紫色，失败灰色且重试可完成。"""
 

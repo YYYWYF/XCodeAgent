@@ -11,6 +11,10 @@ from typing import Any
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.direct_api_contract import (
+    direct_build_prerequisite_errors,
+    project_confirmed_direct_contracts,
+)
 from app.services.artifact_invalidation import (
     ArtifactInvalidationError,
     assert_confirmed_artifact_closure,
@@ -35,6 +39,7 @@ from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.planning_issues import ValidationIssue
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.template_state import effective_capabilities, load_template_state
+from app.topologies.queries import serves_agent_runtime_public_edge
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
     load_project_plan_json,
@@ -83,12 +88,13 @@ def _latest_project_plan(
             return latest_plan
         # 正式 TechnicalPlan 不持久化 PageImplementationContract；Build 每次都必须
         # 使用最新正式上游重新编译，不能让磁盘重载抹掉运行时派生契约。
-        return materialize_technical_plan_runtime(
+        runtime_plan = materialize_technical_plan_runtime(
             latest_plan,
             requirement_spec,
             product_plan,
             ui_designs,
         )
+        return project_confirmed_direct_contracts(path.parents[2], runtime_plan)
     return project_plan
 
 def _build_prerequisite_errors(
@@ -139,7 +145,13 @@ def _build_prerequisite_errors(
     scope = build_execution_scope if isinstance(build_execution_scope, dict) else {}
     target_type = str(scope.get("type") or "")
     target_id = str(scope.get("targetId") or "")
-    if target_type in {"page", "endpoint"} and target_id:
+    # Direct 的公开 API 由 Agent Runtime 自身实现，DTO/Service/Endpoint 直接消费
+    # TechnicalPlan API Schema，不得重新落入 Java Backend 的 Endpoint Design 门禁。
+    if (
+        target_type in {"page", "endpoint"}
+        and target_id
+        and not serves_agent_runtime_public_edge(project_plan)
+    ):
         try:
             readiness = api_design_readiness(
                 workspace or "",
@@ -159,6 +171,8 @@ def _build_prerequisite_errors(
                 errors.append(f"API 设计未完成或已失效：{missing}。")
         except ValueError as exc:
             errors.append(str(exc))
+    if workspace and serves_agent_runtime_public_edge(project_plan):
+        errors.extend(direct_build_prerequisite_errors(workspace, project_plan, scope))
     if workspace:
         try:
             application_config = read_application_config(workspace)

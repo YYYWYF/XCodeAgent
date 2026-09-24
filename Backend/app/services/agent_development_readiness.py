@@ -105,10 +105,10 @@ def inspect_agent_development_readiness(
             )
         )
 
-    missing_entities = _missing_tool_entities(
-        technical_plan,
-        contract,
-        blockers,
+    # Direct 的 Tool/Entity 依赖由独立 SQL/API 契约确认门禁检查，不进入旧数据源绑定。
+    missing_entities = (
+        [] if serves_agent_runtime_public_edge(technical_plan)
+        else _missing_tool_entities(technical_plan, contract, blockers)
     )
     runtime_plan = _materialize_agent_runtime_plan(
         requirement_spec,

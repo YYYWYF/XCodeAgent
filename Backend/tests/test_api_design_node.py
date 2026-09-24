@@ -16,6 +16,33 @@ from app.workspace.endpoint_design_documents import technical_plan_sha256, write
 class ApiDesignNodeTests(unittest.TestCase):
     """验证页面与接口开发映射门禁的等待、刷新和版本确认语义。"""
 
+    def test_direct_runtime_bypasses_endpoint_mapping_gate(self) -> None:
+        """Direct Runtime 由正式 API Schema 生成 DTO，不要求字段来源映射。"""
+
+        plan = {
+            **_plan(),
+            "topology": {
+                "type": "agent_runtime_direct",
+                "publicEdgeServiceId": "agent-runtime",
+                "serviceIds": ["agent-runtime"],
+            },
+        }
+        result = api_design_readiness_gate(
+            {
+                "workspace": "/direct-runtime-workspace",
+                "project_plan": plan,
+                "selected_api_contract_id": "orders-api",
+                "selected_endpoint_id": "orders.list",
+            }
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(
+            result["api_design_readiness"]["bypassed_by_topology"],
+            "agent_runtime_direct",
+        )
+        self.assertEqual(result["clarification"], {})
+
     def test_readiness_node_blocks_without_design(self) -> None:
         """开发前置缺失时返回结构化列表且不会自动进入 API 设计。"""
 
