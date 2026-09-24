@@ -121,6 +121,11 @@ def validate_application_planning_review_action(
             raise ValueError("需求澄清 action=answer 必须提供回答内容。")
         return
 
+    if mode == "technical_plan_topology_selection":
+        if artifact != "technical_plan" or submission.action != "select_topology":
+            raise ValueError("拓扑选择门禁只允许 action=select_topology 或设计变更。")
+        return
+
     expected_mode = CONFIRMATION_MODE_BY_ARTIFACT.get(artifact)
     if submission.action == "revise" and mode in {
         "technical_plan_generation_error",

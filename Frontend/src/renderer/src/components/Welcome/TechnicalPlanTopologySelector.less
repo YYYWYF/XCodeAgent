@@ -1,0 +1,140 @@
+.@{class-prefix}-technical-plan-topology-selector {
+  display: grid;
+  gap: 12px;
+  margin-top: 15px;
+  padding: 14px;
+  border: 1px solid var(--wb-border, rgba(107, 60, 240, 0.18));
+  border-radius: 12px;
+  background: var(--wb-surface-subtle, rgba(107, 60, 240, 0.05));
+}
+
+.@{class-prefix}-technical-plan-topology-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+
+  > div {
+    display: grid;
+    gap: 3px;
+  }
+
+  .ant-typography {
+    margin: 0;
+    color: var(--wb-text, inherit);
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary, rgba(0, 0, 0, 0.55));
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-technical-plan-topology-stage-tag.ant-tag {
+  margin: 0;
+  color: var(--wb-accent, #6b3cf0);
+  border-color: var(--wb-accent-border, rgba(107, 60, 240, 0.28));
+  background: var(--wb-accent-soft, rgba(107, 60, 240, 0.1));
+}
+
+.@{class-prefix}-technical-plan-topology-options.ant-radio-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.@{class-prefix}-technical-plan-topology-option.ant-radio-wrapper {
+  align-items: flex-start;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--wb-border, rgba(0, 0, 0, 0.1));
+  border-radius: 10px;
+  color: var(--wb-text, inherit);
+  background: var(--wb-surface, rgba(255, 255, 255, 0.72));
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+
+  &:not(.ant-radio-wrapper-disabled):hover {
+    border-color: var(--wb-accent, #6b3cf0);
+    background: var(--wb-surface-hover, rgba(107, 60, 240, 0.07));
+  }
+
+  &:has(.ant-radio-checked) {
+    border-color: var(--wb-accent, #6b3cf0);
+    background: var(--wb-accent-soft, rgba(107, 60, 240, 0.1));
+  }
+
+  &.is-unavailable {
+    opacity: 0.68;
+    background: var(--wb-surface-disabled, rgba(0, 0, 0, 0.035));
+  }
+
+  .ant-radio {
+    margin-top: 3px;
+  }
+
+  > span:last-child {
+    min-width: 0;
+    width: 100%;
+    padding-right: 0;
+  }
+}
+
+.@{class-prefix}-technical-plan-topology-option-content {
+  display: grid;
+  gap: 6px;
+}
+
+.@{class-prefix}-technical-plan-topology-option-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 7px;
+
+  strong {
+    color: var(--wb-text, inherit);
+    font-size: 13px;
+  }
+
+  code {
+    color: var(--wb-text-secondary, rgba(0, 0, 0, 0.55));
+    font-size: 11px;
+  }
+
+  .ant-tag {
+    margin: 0;
+    color: var(--wb-text-secondary, rgba(0, 0, 0, 0.55));
+    border-color: var(--wb-border, rgba(0, 0, 0, 0.1));
+    background: var(--wb-surface-subtle, rgba(0, 0, 0, 0.04));
+  }
+
+  .ant-radio-wrapper-checked & .ant-tag {
+    color: var(--wb-accent, #6b3cf0);
+    border-color: var(--wb-accent-border, rgba(107, 60, 240, 0.28));
+    background: var(--wb-accent-soft, rgba(107, 60, 240, 0.1));
+  }
+}
+
+.@{class-prefix}-technical-plan-topology-option-description {
+  color: var(--wb-text-secondary, rgba(0, 0, 0, 0.55));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.@{class-prefix}-technical-plan-topology-selector.is-compact {
+  margin-top: 0;
+  margin-bottom: 12px;
+
+  .@{class-prefix}-technical-plan-topology-options.ant-radio-group {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .@{class-prefix}-technical-plan-topology-options.ant-radio-group {
+    grid-template-columns: 1fr;
+  }
+}

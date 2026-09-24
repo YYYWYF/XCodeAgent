@@ -20,7 +20,6 @@ from app.services.project_plan import (
     apply_project_plan_feedback,
     create_project_plan,
     create_technical_plan,
-    product_agent_gateway_action_ids,
     technical_agent_contract_model_input,
 )
 from app.utils.model_output import (
@@ -69,6 +68,15 @@ def _technical_planning_prompt(
         if isinstance(requirement_spec.get("confirmed_product_plan"), dict)
         else {}
     )
+    # Core 阶段只规划业务事实与 Agent 候选，不让模型或产品事实提前决定承载拓扑。
+    architecture_rule = (
+        "1. architecture has exactly frontend, application, and data. Describe responsibilities only, "
+        "without naming Java/Python owners, public edge, Gateway, deployment, or database product.\n"
+    )
+    entity_boundary_rule = (
+        "- Derive business entities, API contracts, and page bindings exclusively from confirmed "
+        "ProductPlan facts. Do not remove business facts to fit any topology.\n\n"
+    )
     pages = [item for item in product_plan.get("pages", []) if isinstance(item, dict)]
     product_agents = [
         item for item in product_plan.get("agents", []) if isinstance(item, dict)
@@ -93,8 +101,8 @@ def _technical_planning_prompt(
     response_example = {
         "architecture": {
             "frontend": "A React single-page administration client communicates with the service through REST JSON APIs.",
-            "backend": "A Java8 and Springboot service exposes REST APIs organized by business capability.",
-            "data": "MySQL8 provides persistence and Redis provides caching for hot data.",
+            "application": "Application services expose business capabilities; the service owner is selected later.",
+            "data": "Business persistence and Agent run state have separate ownership and lifecycle.",
         },
         "entities": [
             {
@@ -195,64 +203,9 @@ def _technical_planning_prompt(
             (capabilities[0] if capabilities else {}).get("capabilityId")
             or "answer_business_question"
         )
-        gateway_endpoint_id = f"{contract_id}.agent_message"
-        response_example["api_contracts"][0]["endpoints"].append(
-            {
-                "id": gateway_endpoint_id,
-                "method": "POST",
-                "path": f"/api/agents/{example_agent_id}/messages",
-                "summary": "Invoke the business agent through the Java AG-UI gateway.",
-                "parameters": [],
-                "request_schema_ref": None,
-                "response_schema_ref": None,
-                "error_codes": ["AGENT_UNAVAILABLE"],
-                "authentication": {"required": True},
-            }
-        )
-        example_pages_by_id = {
-            str(page.get("pageId") or ""): page
-            for page in response_example["pages"]
-            if isinstance(page, dict)
-        }
-        for page_binding in (
-            item
-            for item in example_agent.get("pageActionBindings", [])
-            if isinstance(item, dict)
-            and isinstance(item.get("surface"), dict)
-            and item["surface"].get("enabled") is True
-        ):
-            binding_page_id = str(page_binding.get("pageId") or "").strip()
-            example_page = example_pages_by_id.get(binding_page_id)
-            if example_page is None:
-                continue
-            references = example_page["references"]
-            references["endpoint_dependencies"].append(
-                {
-                    "endpoint_id": gateway_endpoint_id,
-                    "usage": "write",
-                    "trigger": "User sends an Agent message",
-                    "required_for_initial_load": False,
-                }
-            )
-            references["action_implementations"].extend(
-                {
-                    "actionId": str(action_id),
-                    "endpointId": gateway_endpoint_id,
-                }
-                for action_id in product_agent_gateway_action_ids(
-                    product_plan,
-                    binding_page_id,
-                    {
-                        str(action_id)
-                        for action_id in page_binding.get("actionIds", [])
-                        if str(action_id).strip()
-                    },
-                )
-            )
         response_example["agent_contracts"] = [
             {
                 "agentId": example_agent_id,
-                "gatewayEndpointId": gateway_endpoint_id,
                 "capabilityBindings": [
                     {
                         "capabilityId": example_capability_id,
@@ -328,8 +281,9 @@ def _technical_planning_prompt(
                                 "toolId": "query_business_data",
                                 "name": "查询业务数据",
                                 "description": "需要读取当前业务数据时调用。",
-                                "endpointId": f"{contract_id}.list",
+                                "source": {"type": "application_service", "serviceId": "order_api"},
                                 "accessMode": "read",
+                                "requiresConfirmation": False,
                             }
                         ],
                     },
@@ -352,7 +306,7 @@ def _technical_planning_prompt(
                     "context": {
                         "sources": [
                             {"type": "conversation", "enabled": True, "trust": "user_input"},
-                            {"type": "trusted_user_context", "enabled": True, "trust": "gateway_verified"},
+                            {"type": "trusted_user_context", "enabled": True, "trust": "authenticated_principal"},
                             {"type": "tool_results", "enabled": True, "trust": "tool_output"},
                             {"type": "knowledge_results", "enabled": False, "trust": "retrieved_content"},
                         ],
@@ -408,8 +362,8 @@ def _technical_planning_prompt(
         "runtime_policy": {
             "language": "Python 3.12",
             "framework": "DeepAgents",
-            "deployment": "independent sidecar",
-            "client_transport": "AG-UI SSE through Java8/Springboot gateway",
+            "deployment": "selected after TechnicalPlan Core",
+            "client_transport": "AG-UI public edge selected by topology",
         },
     }
     revision_context = (
@@ -426,18 +380,7 @@ def _technical_planning_prompt(
         "You are the technical-planning model in an application-generation workflow. Return exactly one JSON object.\n"
         "The object has exactly five sections: architecture, entities, api_contracts, pages, and agent_contracts.\n\n"
         "Field definitions:\n"
-        "0. First decide whether the confirmed product facts describe a pure Agent application: at least one enabled "
-        "Agent Surface, no independent server-side business API/action/step, no business entity persistence, no Java "
-        "Endpoint Tool, and no RBAC requirement. Only when every condition holds, emit the Agent Runtime Direct "
-        "candidate: architecture has exactly frontend, agent_runtime, and data; entities and api_contracts are empty; "
-        "every page references empty endpoint_dependencies and action_implementations; every agent_contract item has "
-        "exactly agentId, capabilityBindings, and agentSettings (no gatewayEndpointId). Its tools bindings use exactly "
-        "toolId, name, description, source, accessMode, and requiresConfirmation; source.type is one of "
-        "runtime_builtin, external_http, mcp, or knowledge; every write binding requiresConfirmation=true. The Runtime "
-        "public invocation, security, ownership and topology projection are compiled by the platform. Never remove a "
-        "real backend fact merely to choose this mode. Otherwise follow the Java Backend/Gateway rules below.\n"
-        "1. architecture is a technical summary. frontend describes the client form and communication style; "
-        "backend describes the Java8/Springboot service boundary; data describes MySQL8 persistence and Redis caching.\n"
+        f"{architecture_rule}"
         "2. entities is the authoritative business-entity field specification. Generate entities "
         "from the business model implied by pages, feature modules, and business flows. Each entity "
         "has a stable id, name, description, and fields. Each field contains name, label, description, "
@@ -445,10 +388,8 @@ def _technical_planning_prompt(
         "number, decimal, date, datetime, enum, or boolean. Field names use snake_case.\n"
         "3. api_contracts is the interface contract collection. Each contract contains id, entity_ids, base_path, "
         "authentication, schemas, and endpoints. entity_ids identifies every related business entity and must be a "
-        "non-empty subset of the entities declared in this TechnicalPlan. This rule also applies to a separate Agent "
-        "gateway contract: prefer placing the gateway Endpoint in the Agent's related business contract; when a "
-        "separate gateway contract is required, bind it to the existing entities directly served by that Agent and "
-        "never emit an empty entity_ids array or invent a transport-only entity. A business "
+        "non-empty subset of the entities declared in this TechnicalPlan. Do not invent a transport-only "
+        "Agent gateway Endpoint or entity before topology selection. A business "
         "Schema properties may use interface-specific names. Add entity_field_ref=<EntityId>.<field_name> when a "
         "property is directly sourced from an entity field; computed, aggregated, and transport properties may omit "
         "the mapping. Structural properties organize the response. A paginated list response object has exactly four "
@@ -480,20 +421,21 @@ def _technical_planning_prompt(
         "Every selected endpointId exists in api_contracts and also appears in that page's endpoint_dependencies. "
         "The page set covers every upstream ProductPlan pageId.\n"
         "5. agent_contracts is empty when ProductPlan.agents is empty. Otherwise it covers ProductPlan.agents exactly "
-        "and in order. Each model item has exactly agentId, gatewayEndpointId, capabilityBindings, and agentSettings. "
+        "and in order. Each Core item has exactly agentId, capabilityBindings, and agentSettings; do not "
+        "emit gatewayEndpointId, invocation, serviceId, or deployment ownership. "
         "capabilityBindings covers every ProductPlan capabilityId in order and binds it to stable toolIds. "
         "agentSettings has exactly prompt, model, memory, tools, skills, knowledge, and context. prompt contains "
         "persona(role and tone), systemPrompt, and constraints. model uses project_default and declares streaming, "
         "toolCalling, structuredOutput, vision, and observability requirements. streaming and observability must "
         "both be true and remain read-only platform requirements. memory must follow the example: SQLite short-term "
         "checkpoint only when ProductPlan supportsMultiTurn is true; long-term and archive remain disabled. tools "
-        "contains enabled and bindings; each binding has toolId, name, description, endpointId, and accessMode(read "
-        "or write), references a real non-gateway Endpoint, and uses read only for GET/HEAD/OPTIONS; other HTTP "
-        "methods use write. skills and knowledge remain disabled until their "
+        "contains enabled and bindings; each binding has toolId, name, description, source, accessMode "
+        "(read or write), and requiresConfirmation. source.type is one of runtime_builtin, "
+        "application_service, repository_query, external_http, mcp, or knowledge. Internal business "
+        "Tools bind to Application Service capabilities, not a loopback URL; every write requires confirmation. "
+        "skills and knowledge remain disabled until their "
         "Runtime adapters exist. context uses the fixed model-window budget and no compression. The platform expands "
-        "this candidate into a complete ProductPlan-derived Contract containing identity, capabilities, interaction, "
-        "resolved Endpoint snapshots, invocation, Python 3.12 + DeepAgents runtime, security, artifact paths, checks, "
-        "and evaluation. Never replace the Java8/Springboot backend or let the client call the sidecar directly.\n"
+        "this candidate into a complete ProductPlan-derived Contract only after explicit topology selection. "
         "Do not emit authorization_manifest, resourceKey, roles, permission bindings, dataRules, policyKey, data-policy bindings, SQL, or executable authorization rules. The platform deterministically compiles all V1 page/action/system resources and Endpoint ANY-OF bindings after your output passes validation.\n\n"
         "Complete result syntax example only. Never copy its identifiers. Use only actionId values from the confirmed "
         "ProductPlan and endpointId values declared by the generated TechnicalPlan:\n"
@@ -502,9 +444,7 @@ def _technical_planning_prompt(
         "{\"stepId\":\"validate_order\",\"endpointId\":\"order_api.validate\"},"
         "{\"stepId\":\"persist_order\",\"endpointId\":\"order_api.create\"}]}. Never copy these identifiers.\n\n"
         "Dynamic context sections:\n"
-        "- Entity generation boundary: derive business entities exclusively from the confirmed ProductPlan "
-        "pages, information items, actions, and business flows. RequirementSpec entities are not provided "
-        "to or consumed by this stage.\n\n"
+        f"{entity_boundary_rule}"
         "- Product goal context: application purpose and product-level acceptance outcomes. Use it to shape the architecture and endpoint scope.\n"
         f"{json.dumps(product_goal_context, ensure_ascii=False)}\n\n"
         "- Authorization context: confirmed ProductPlan target identities. Do not generate any authorization field; the system compiles all resources and bindings.\n"
@@ -1230,7 +1170,7 @@ def _parse_technical_plan_model_output(agent_note: str) -> dict[str, Any]:
             missing_keys,
         )
         raise ValueError(
-            "TechnicalPlan 模型输出根对象不完整，缺少字段："
+            "TechnicalPlan 模型输出 JSON 根对象不完整，缺少字段："
             + "、".join(missing_keys)
         )
     invalid_sections = [
@@ -1256,7 +1196,7 @@ def _parse_technical_plan_model_output(agent_note: str) -> dict[str, Any]:
             invalid_sections,
         )
         raise ValueError(
-            "TechnicalPlan 模型输出根对象字段类型错误："
+            "TechnicalPlan 模型输出 JSON 根对象字段类型错误："
             + "、".join(invalid_sections)
         )
     return result

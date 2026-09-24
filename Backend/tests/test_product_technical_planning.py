@@ -42,7 +42,7 @@ from app.services.product_plan import (
     validate_product_plan_model_output,
 )
 from app.services.requirement_spec import create_requirement_spec
-from app.services.project_plan import create_technical_plan
+from app.services.project_plan import create_technical_plan, technical_agent_contract_model_input
 from app.workspace.spec_documents import render_requirement_spec_markdown
 from app.workspace.plan_documents import render_project_plan_markdown
 
@@ -54,6 +54,21 @@ def technical_model_entities(requirement_spec: dict) -> dict:
 
 
 class ProductTechnicalPlanningTests(unittest.TestCase):
+    def test_core_agent_candidate_keeps_local_tool_source_during_sync(self) -> None:
+        """尚未选拓扑的 Core Agent Tool 不得被反投影成空 Java Endpoint。"""
+
+        candidate = {
+            "agentId": "assistant",
+            "capabilityBindings": [],
+            "agentSettings": {
+                "tools": {
+                    "enabled": True,
+                    "bindings": [{"toolId": "query", "source": {"type": "application_service", "serviceId": "orders"}}],
+                }
+            },
+        }
+        self.assertEqual(technical_agent_contract_model_input([candidate]), [candidate])
+
     """验证 ProductPlan 与 PageImplementationContract 的核心确定性边界。"""
 
     def test_product_plan_preserves_requirement_page_set_and_actions(self) -> None:

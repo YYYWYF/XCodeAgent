@@ -58,6 +58,7 @@ from app.services.authorization_deliverability import (
     authorization_deliverability_errors,
     authorization_deliverability_report,
 )
+from app.topologies import TopologyType, compile_selected_technical_plan
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.application_config import read_application_config
 from app.services.product_plan import (
@@ -344,6 +345,20 @@ def _technical_plan_confirmation_payload(technical_plan: dict) -> dict:
     return payload
 
 
+def _technical_plan_topology_selection_payload(errors: list[str] | None = None) -> dict:
+    """在 Core 事实已形成而服务归属尚未编译时请求显式拓扑选择。"""
+
+    return {
+        "mode": "technical_plan_topology_selection",
+        "status": "requires_user_input",
+        "question_schema": "xcodeagent.technical-plan-topology-selection.v1",
+        "questions": [],
+        "assumptions": [],
+        "message": "技术规划核心业务事实已生成，请选择承载拓扑；选择后会编译服务归属，再请你确认最终技术规划。",
+        "errors": errors or [],
+    }
+
+
 def _planning_confirmed_payload(state: ProjectState, plan: dict) -> dict:
     """按业务范围返回计划已确认载荷。"""
 
@@ -358,6 +373,28 @@ def _planning_confirmed_payload(state: ProjectState, plan: dict) -> dict:
             "plan_summary": plan.get("artifact_type", "technical-plan"),
         }
     return _project_plan_confirmed_payload(plan)
+
+
+def _compile_user_selected_technical_topology(
+    state: ProjectState,
+    plan: dict,
+    interaction: dict[str, Any],
+) -> dict:
+    """仅在独立选择门提交后编译最终 TechnicalPlan 服务归属。"""
+
+    answers = interaction.get("answers")
+    selected = answers.get("topologyType") if isinstance(answers, dict) else None
+    try:
+        topology_type = TopologyType(selected)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("必须明确选择一个已实现的应用拓扑。") from exc
+    application_config = read_application_config(workspace_from_state(state))
+    product_plan = state.get("product_plan")
+    if not isinstance(product_plan, dict):
+        raise ValueError("拓扑编译缺少已确认 ProductPlan。")
+    return compile_selected_technical_plan(
+        topology_type, plan, product_plan, application_config
+    )
 
 
 def _detail_progress(message: str, **detail: object) -> None:
@@ -452,8 +489,48 @@ def project_planning(state: ProjectState) -> dict:
             "clarification": (
                 _project_plan_dependency_error_payload(pending_errors)
                 if pending_errors
-                else _planning_confirmation_payload(state, existing_plan)
+                else (
+                    _technical_plan_topology_selection_payload()
+                    if phase == "technical_planning" and not existing_plan.get("topology")
+                    else _planning_confirmation_payload(state, existing_plan)
+                )
             ),
+            "timeline": [phase],
+        }
+    if (
+        application_planning_scope
+        and phase == "technical_planning"
+        and action == "select_topology"
+    ):
+        if not isinstance(existing_plan, dict) or existing_plan.get("confirmation_status") != "pending_user_confirmation":
+            raise ValueError("拓扑选择必须基于待确认的 TechnicalPlan Core。")
+        if existing_plan.get("topology"):
+            raise ValueError("当前 TechnicalPlan 已选择拓扑；请修订后重新选择。")
+        try:
+            selected_plan = _attach_technical_plan_contracts(
+                state, _compile_user_selected_technical_topology(state, existing_plan, interaction)
+            )
+            selection_errors = _project_plan_validation_errors(selected_plan, state)
+        except ValueError as exc:
+            selection_errors = [str(exc)]
+        if selection_errors:
+            return {
+                "phase": phase,
+                "status": "requires_user_input",
+                "project_plan": existing_plan,
+                "technical_plan": existing_plan,
+                "clarification": _technical_plan_topology_selection_payload(selection_errors),
+                "timeline": [phase],
+            }
+        selected_path = write_project_plan_document(state, selected_plan)
+        return {
+            "phase": phase,
+            "status": "requires_user_input",
+            "project_plan": selected_plan,
+            "project_plan_path": selected_path,
+            "project_plan_json_path": _project_plan_json_path_for_state(state),
+            **_planning_artifact_fields(state, selected_plan, selected_path),
+            "clarification": _technical_plan_confirmation_payload(selected_plan),
             "timeline": [phase],
         }
     if existing_plan and (
@@ -469,7 +546,13 @@ def project_planning(state: ProjectState) -> dict:
         synchronized_plan = (
             sync_project_plan_from_markdown(
                 existing_plan,
-                state.get("requirement_spec", {}),
+                (
+                    _technical_planning_requirement_spec(
+                        state, state.get("requirement_spec", {})
+                    )
+                    if phase == "technical_planning"
+                    else state.get("requirement_spec", {})
+                ),
                 edited_markdown,
             )
             if edited_markdown is not None
@@ -482,6 +565,8 @@ def project_planning(state: ProjectState) -> dict:
             ),
             "confirmation_status": "confirmed",
         }
+        if phase == "technical_planning" and not project_plan.get("topology"):
+            raise ValueError("必须先通过独立拓扑选择门，再确认最终 TechnicalPlan。")
         project_plan = _attach_technical_plan_contracts(state, project_plan)
         validation_errors = _project_plan_validation_errors(
             project_plan,
@@ -587,7 +672,11 @@ def project_planning(state: ProjectState) -> dict:
     clarification = (
         _project_plan_dependency_error_payload(validation_errors)
         if validation_errors
-        else _planning_confirmation_payload(state, project_plan)
+        else (
+            _technical_plan_topology_selection_payload()
+            if phase == "technical_planning" and not project_plan.get("topology")
+            else _planning_confirmation_payload(state, project_plan)
+        )
     )
 
     return {

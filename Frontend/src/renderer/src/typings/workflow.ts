@@ -762,6 +762,7 @@ export type ApplicationPlanningAction =
   | 'revise'
   | 'ui_action'
   | 'enter_planning'
+  | 'select_topology'
   | 'design_change'
 
 export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer> & {
@@ -1095,6 +1096,7 @@ export type LifecyclePendingInteractionType =
   | 'requirement_clarification'
   | 'requirement_document_confirmation'
   | 'technical_plan_confirmation'
+  | 'technical_plan_topology_selection'
   | 'entity_source_binding'
   | 'page_design_confirmation'
   | 'task_plan_confirmation'

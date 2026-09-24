@@ -19,6 +19,7 @@ ApplicationPlanningAction = Literal[
     "revise",
     "ui_action",
     "enter_planning",
+    "select_topology",
     "design_change",
 ]
 
@@ -63,6 +64,11 @@ class ApplicationPlanningInteraction(BaseModel):
                 raise ValueError("进入计划阶段动作必须绑定已确认或已跳过的 ui_designs。")
             if self.ui_action is not None:
                 raise ValueError("进入计划阶段动作不能携带 uiAction。")
+        elif self.action == "select_topology":
+            if self.artifact != "technical_plan" or not isinstance(self.answers.get("topologyType"), str):
+                raise ValueError("拓扑选择必须绑定 TechnicalPlan 并提交 topologyType。")
+            if self.ui_action is not None:
+                raise ValueError("拓扑选择不能携带 uiAction。")
         elif self.ui_action is not None:
             raise ValueError("只有 ui_action 可以携带 uiAction。")
         return self

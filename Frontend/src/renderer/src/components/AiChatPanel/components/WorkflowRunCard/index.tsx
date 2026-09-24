@@ -55,6 +55,7 @@ import ConfirmationArtifact from './ConfirmationArtifact'
 import RevisionImpactReview from '../ApplicationRevisionCard/RevisionImpactReview'
 import RevisionDraftReview from '../ApplicationRevisionCard/RevisionDraftReview'
 import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
+import BuildPrerequisiteErrorCard from './BuildPrerequisiteErrorCard'
 import DetailReview from './DetailReview'
 import ApiDesignConfirmedCard from './ApiDesignConfirmedCard'
 import ApiDesignReadinessGateCard from './ApiDesignReadinessGateCard'
@@ -76,6 +77,7 @@ import {
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
+import TechnicalPlanTopologySelector from '../../../Welcome/TechnicalPlanTopologySelector'
 import RequirementSpecEditor from '../../../Welcome/RequirementSpecEditor'
 import './WorkflowRunCard.less'
 
@@ -173,9 +175,11 @@ export default function WorkflowRunCard({
   workspaceRoot
 }: WorkflowRunCardProps): ReactElement {
   const { phase: currentWorkbenchPhase } = useWorkbenchPhase()
+  const [selectedTopologyType, setSelectedTopologyType] = useState<'agent_runtime_direct'>()
   const status = String(workflow.summary.status || 'unknown')
   const artifacts = workflow.summary.artifacts || {}
   const clarification = workflowClarification(workflow)
+  const buildPrerequisiteError = clarification?.mode === 'build_prerequisite_error'
   // 项目启动快照可能暂时保留上一测试节点已提交的性能测试确认；启动卡不应重复展示该旧交互。
   const projectLaunch = workflowShouldShowProjectLaunch(workflow, currentWorkbenchPhase)
   const launchNode = workflow.summary.phase === 'launch_project'
@@ -189,7 +193,9 @@ export default function WorkflowRunCard({
   const staleFrontendPerformanceConfirmation =
     launchNode && clarification?.mode === 'frontend_performance_confirmation'
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification)
-  const clarificationQuestions = staleFrontendPerformanceConfirmation
+  // Build 前置错误是系统检查结果，不是自由文本问题；旧 checkpoint 即使仍带
+  // questions，也必须展示专用恢复动作，不能要求用户填写无语义的答案。
+  const clarificationQuestions = staleFrontendPerformanceConfirmation || buildPrerequisiteError
     ? []
     : clarification?.questions || []
   const entityDesignGate = clarification?.mode === 'entity_source_binding_required'
@@ -245,6 +251,7 @@ export default function WorkflowRunCard({
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
     : undefined
   const technicalPlanGenerationError = clarification?.mode === 'technical_plan_generation_error'
+  const topologySelection = clarification?.mode === 'technical_plan_topology_selection'
   const planningStageEntry = clarification?.mode === 'planning_stage_entry_confirmation'
   // UI 确认阶段：clarification.mode 或 summary.phase 判定。换一换/选模板期间流式快照
   // 可能短暂丢失 clarification.mode，用 phase=ui_confirmation 兜底，避免卡片闪烁切换。
@@ -278,13 +285,17 @@ export default function WorkflowRunCard({
     ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
     : dagConfirmation
       ? dagTaskPlan?.reviewTasks?.length || 0
+      : buildPrerequisiteError
+        ? 1
       : testPhaseConfirmation
         ? 1
         : reviewPhaseConfirmation
           ? 1
-          : acceptancePhaseConfirmation
-            ? 1
-            : uiDesignConfirmation
+      : acceptancePhaseConfirmation
+        ? 1
+        : topologySelection
+          ? 1
+        : uiDesignConfirmation
               ? (
                   (clarification as unknown as Record<string, unknown> | undefined)?.pages as
                     | unknown[]
@@ -404,6 +415,7 @@ export default function WorkflowRunCard({
         !entityDesignReview &&
         !uiDesignConfirmation &&
         !planningStageEntry &&
+        !topologySelection &&
         !artifactConfirmation &&
         !unitTestConfirmation &&
         !projectLaunch &&
@@ -464,10 +476,12 @@ export default function WorkflowRunCard({
         </div>
       )}
       {(clarificationQuestions.length > 0 ||
+        buildPrerequisiteError ||
         unitTestConfirmation ||
         detailReview ||
         technicalPlanGenerationError ||
         planningStageEntry ||
+        topologySelection ||
         dagConfirmation ||
         testPhaseConfirmation ||
         reviewPhaseConfirmation ||
@@ -522,7 +536,31 @@ export default function WorkflowRunCard({
               type="error"
             />
           )}
-          {revisionImpact && requiresConfirmation ? (
+          {buildPrerequisiteError && requiresConfirmation && (
+            <Alert
+              message={clarification?.message || 'Build 前置条件未满足。'}
+              description={
+                Array.isArray(clarification?.errors)
+                  ? clarification.errors.map(String).filter(Boolean).slice(0, 8).join('；')
+                  : undefined
+              }
+              showIcon
+              type="error"
+            />
+          )}
+          {buildPrerequisiteError && requiresConfirmation ? (
+            <BuildPrerequisiteErrorCard
+              disabled={disabled || interactionAvailability !== 'active'}
+              errors={Array.isArray(clarification?.errors) ? clarification.errors.map(String) : []}
+              message={clarification?.message}
+              recommendedAction={String(clarification?.recommended_action || '')}
+              onRetry={() =>
+                onSubmitClarification?.(workflow, {
+                  build_prerequisite_retry: { action: 'retry' }
+                })
+              }
+            />
+          ) : revisionImpact && requiresConfirmation ? (
             <RevisionImpactReview
               disabled={disabled || interactionAvailability !== 'active'}
               impact={revisionImpact}
@@ -544,6 +582,29 @@ export default function WorkflowRunCard({
                 })
               }
             />
+          ) : topologySelection && requiresConfirmation ? (
+            <section className={cx('planning-question-panel')}>
+              <Text>{clarification?.message}</Text>
+              {Array.isArray(clarification?.errors) && clarification.errors.length ? (
+                <Alert type="error" showIcon description={clarification.errors.map(String).join('；')} />
+              ) : null}
+              <TechnicalPlanTopologySelector
+                compact
+                disabled={disabled || interactionAvailability !== 'active'}
+                onChange={setSelectedTopologyType}
+                value={selectedTopologyType}
+              />
+              <Button
+                disabled={disabled || interactionAvailability !== 'active' || !selectedTopologyType}
+                onClick={() => onSubmitClarification?.(workflow, {
+                  topologyType: selectedTopologyType || '',
+                  __applicationPlanningAction: 'select_topology'
+                })}
+                type="primary"
+              >
+                编译所选拓扑
+              </Button>
+            </section>
           ) : planningStageEntry && requiresConfirmation ? (
             <PlanningStageEntryCard
               disabled={disabled || interactionAvailability !== 'active'}

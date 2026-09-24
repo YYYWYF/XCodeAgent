@@ -106,9 +106,15 @@ class TechnicalPlanResponseProtocolTests(unittest.TestCase):
         )
 
     def test_complete_json_fence_is_accepted(self) -> None:
-        """仅含一个 JSON 代码围栏的完整对象可以进入技术规划校验。"""
+        """仅含一个 JSON 代码围栏的完整五段根对象可以进入技术规划校验。"""
 
-        model_plan: dict[str, Any] = {"architecture": {}, "agent_contracts": []}
+        model_plan: dict[str, Any] = {
+            "architecture": {},
+            "entities": [],
+            "api_contracts": [],
+            "pages": [],
+            "agent_contracts": [],
+        }
         self._assert_accepted_response(
             "\n```json\n" + json.dumps(model_plan) + "\n```\n", model_plan
         )
@@ -248,6 +254,10 @@ class TechnicalPlanResponseProtocolTests(unittest.TestCase):
 
                 model_settings = create_model.call_args.args[0]
                 self.assertEqual(model_settings.default_max_tokens, budget)
+                self.assertEqual(
+                    model_settings.model_max_tokens_parameter,
+                    "max_tokens",
+                )
                 self.assertEqual(settings.default_max_tokens, 8192)
                 self.assertEqual(settings.technical_plan_max_tokens, budget)
 

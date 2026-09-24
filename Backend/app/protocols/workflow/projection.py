@@ -1498,6 +1498,7 @@ def _workflow_user_input_message(
         "requirement_document_confirmation": "需求文档草稿已生成，请确认后同时固化需求与页面操作规划。",
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
         "technical_plan_confirmation": "技术规划已生成，请确认后继续。",
+        "technical_plan_topology_selection": "技术规划核心事实已生成，请选择应用拓扑后继续。",
         "technical_plan_generation_error": "技术规划未通过校验，请重新生成。",
         "ui_design_confirmation": "UI设计稿已生成，请逐页确认后继续。",
         "batch_review": "页面与数据源设计已生成，请确认后继续。",

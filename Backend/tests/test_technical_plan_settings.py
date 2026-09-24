@@ -32,6 +32,7 @@ class TechnicalPlanSettingsTests(unittest.TestCase):
         settings = self._settings()
         self.assertEqual(settings.technical_plan_max_tokens, 32768)
         self.assertEqual(settings.default_max_tokens, 8192)
+        self.assertEqual(settings.model_max_tokens_parameter, "max_tokens")
 
     def test_budget_can_be_configured_independently(self) -> None:
         """环境变量只覆盖技术规划预算。"""
@@ -49,3 +50,21 @@ class TechnicalPlanSettingsTests(unittest.TestCase):
                     ValueError, "XCODEAGENT_TECHNICAL_PLAN_MAX_TOKENS"
                 ):
                     self._settings(XCODEAGENT_TECHNICAL_PLAN_MAX_TOKENS=value)
+
+    def test_model_token_parameter_can_select_new_openai_field(self) -> None:
+        """原生新模型可显式选择 max_completion_tokens 请求字段。"""
+
+        settings = self._settings(
+            MODEL_MAX_TOKENS_PARAMETER="max_completion_tokens"
+        )
+
+        self.assertEqual(
+            settings.model_max_tokens_parameter,
+            "max_completion_tokens",
+        )
+
+    def test_invalid_model_token_parameter_is_rejected(self) -> None:
+        """未知 token 参数必须在启动时失败，不能静默回落上游默认值。"""
+
+        with self.assertRaisesRegex(ValueError, "MODEL_MAX_TOKENS_PARAMETER"):
+            self._settings(MODEL_MAX_TOKENS_PARAMETER="completion_limit")
