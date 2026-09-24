@@ -303,6 +303,7 @@ function planningAnswerToText(value: unknown): string {
 type Props = {
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
+  developmentTotals?: { completed: number; total: number }
   developmentPlanningReady: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
@@ -839,6 +840,7 @@ function pageContextStatus(
 export default function AiChatPanel({
   application,
   applicationLifecycle,
+  developmentTotals,
   developmentPlanningReady,
   developmentPlanningPages,
   developmentPlanningPageTree,
@@ -4812,7 +4814,9 @@ export default function AiChatPanel({
                       dependencyLocked={targetExecutionContext.dependencyLocked}
                       error={scopedExecution?.error?.message || error}
                       execution={scopedExecution}
+                      developmentTotals={developmentTotals}
                       mode={displayedPlanExecutionMode}
+                      testEntryGate={applicationLifecycle?.testEntryGate}
                       onAccept={handleAcceptPreview}
                       onConfirmInteraction={handleConfirmPlanInteraction}
                       onEnd={() => void handleEndPlan(scopedExecution?.runId)}

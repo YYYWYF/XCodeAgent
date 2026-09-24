@@ -704,6 +704,7 @@ function WorkbenchPage({
                 <LeftPanel
                   application={workspaceApplication}
                   applicationLifecycle={applicationLifecycle}
+                  developmentTotals={topBarDevelopmentTotals}
                   developmentPlanningReady={developmentPlanningPagesLoaded}
                   developmentPlanningPages={developmentPlanningPages}
                   developmentPlanningPageTree={developmentPlanningPageTree}

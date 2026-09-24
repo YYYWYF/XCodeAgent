@@ -15,8 +15,10 @@ import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplica
 import DevelopmentStatusDot from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/DevelopmentStatusDot'
 import ApiOutlineGroup from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/ApiOutlineGroup'
 import TestPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/TestPhaseConfirmationCard'
+import PlanExecutionDock from '../src/renderer/src/components/AiChatPanel/components/PlanExecutionDock'
 import QuickTaskGuide from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide'
 import type { ApplicationLifecycle, TestEntryGate } from '../src/renderer/src/typings'
+import type { PlanExecutionMode } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 
 const blocked: TestEntryGate = {
   allowed: false,
@@ -203,6 +205,61 @@ test('门禁读取中或错误时显示原因且不暴露测试入口', () => {
   const html = renderConfirmation({ ...blocked, blockers: [], reason: '产物目录读取失败' })
   assert.match(html, /产物目录读取失败/)
   assert.doesNotMatch(html, /测试目标|未完成产物|<button/)
+})
+
+/** 用真实底部控制栏检查单个 execution 的待确认状态与应用门禁是否一致。 */
+function renderPhaseDock(
+  mode: Exclude<PlanExecutionMode, 'idle'>,
+  gate?: TestEntryGate,
+  developmentTotals?: { completed: number; total: number }
+): string {
+  return renderToStaticMarkup(
+    <PlanExecutionDock
+      developmentTotals={developmentTotals}
+      mode={mode}
+      testEntryGate={gate}
+      onAccept={async () => false}
+      onConfirmInteraction={() => undefined}
+      onEnd={() => undefined}
+      onOpenPreview={() => undefined}
+      onRetry={() => undefined}
+      onStop={() => undefined}
+      onViewPlan={() => undefined}
+    />
+  )
+}
+
+test('底部阶段提示遵循全应用开发门禁，2/3 不声称可以进入测试或审查', () => {
+  const partial: TestEntryGate = {
+    ...blocked,
+    completed: 2,
+    pending: 1,
+    inProgress: 0,
+    blockers: [{ type: 'entity', entityId: 'remaining' }],
+    reason: '完成全部开发产物后可进入测试，当前 2/3。'
+  }
+  for (const mode of [
+    'awaiting_test_phase_confirmation',
+    'awaiting_review_phase_confirmation',
+    'awaiting_acceptance_phase_confirmation'
+  ] as const) {
+    const html = renderPhaseDock(mode, partial)
+    assert.match(html, /继续完成开发产物/)
+    assert.match(html, /开发进度 2\/3/)
+    assert.doesNotMatch(html, /等待进入测试阶段|等待进入审查阶段|等待进入验收阶段/)
+    assert.doesNotMatch(html, /开发已完成|测试已通过|代码审查已完成/)
+  }
+  assert.match(renderPhaseDock('awaiting_test_phase_confirmation'), /正在读取开发产物状态/)
+  assert.match(renderPhaseDock('awaiting_test_phase_confirmation', allowed), /等待进入测试阶段/)
+  assert.match(renderPhaseDock('awaiting_review_phase_confirmation', allowed), /等待进入审查阶段/)
+  for (const mode of [
+    'awaiting_test_phase_confirmation',
+    'awaiting_review_phase_confirmation'
+  ] as const) {
+    const unsynced = renderPhaseDock(mode, allowed, { completed: 2, total: 3 })
+    assert.match(unsynced, /开发进度 2\/3/)
+    assert.doesNotMatch(unsynced, /等待进入测试阶段|等待进入审查阶段|开发已完成/)
+  }
 })
 
 test('未加载和未完成时禁止测试及后续阶段；完成后允许', () => {

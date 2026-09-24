@@ -9,8 +9,9 @@ import {
 import { Button, Modal, Popconfirm, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { WorkbenchExecution } from '../../../../typings'
+import type { TestEntryGate, WorkbenchExecution } from '../../../../typings'
 import { cx } from '../../../../utils'
+import { testEntryGateReason } from '../../../../developmentArtifacts'
 import type { PlanExecutionMode } from '../../planExecutionMode'
 import { planExecutionPhaseLabel } from '../../planExecutionMode'
 import './PlanExecutionDock.less'
@@ -22,8 +23,10 @@ type Props = {
   dependencyLocked?: boolean
   error?: string
   execution?: WorkbenchExecution
+  developmentTotals?: { completed: number; total: number }
   mode: Exclude<PlanExecutionMode, 'idle'>
   ownerPageId?: string
+  testEntryGate?: TestEntryGate
   onAccept: () => Promise<boolean>
   onConfirmInteraction: (decision: 'reject' | 'once' | 'always') => void
   onEnd: () => void
@@ -39,8 +42,10 @@ export default function PlanExecutionDock({
   dependencyLocked = false,
   error,
   execution,
+  developmentTotals,
   mode,
   ownerPageId,
+  testEntryGate,
   onAccept,
   onConfirmInteraction,
   onEnd,
@@ -52,6 +57,19 @@ export default function PlanExecutionDock({
   const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
   const [accepting, setAccepting] = useState(false)
   const pending = execution?.pendingInteraction
+  // 阶段确认属于当前 execution，进入测试的资格属于整个应用；两者需同时成立。
+  const developmentIncomplete =
+    developmentTotals !== undefined &&
+    (developmentTotals.total === 0 || developmentTotals.completed !== developmentTotals.total)
+  const developmentGateBlocked =
+    (mode === 'awaiting_test_phase_confirmation' ||
+      mode === 'awaiting_review_phase_confirmation' ||
+      mode === 'awaiting_acceptance_phase_confirmation') &&
+    (developmentIncomplete || testEntryGate?.allowed !== true)
+  const developmentGateReason =
+    developmentIncomplete && developmentTotals
+      ? `完成全部开发产物后可进入测试，当前 ${developmentTotals.completed}/${developmentTotals.total}。`
+      : testEntryGateReason(testEntryGate)
 
   useEffect(() => {
     setAcceptanceConfirmOpen(false)
@@ -87,17 +105,25 @@ export default function PlanExecutionDock({
           )}
         </span>
         <div className={cx('plan-execution-dock-copy')}>
-          <Text strong>{dependencyLocked ? '该页面被关联计划锁定' : planModeTitle(mode)}</Text>
+          <Text strong>
+            {dependencyLocked
+              ? '该页面被关联计划锁定'
+              : developmentGateBlocked
+                ? '继续完成开发产物'
+                : planModeTitle(mode)}
+          </Text>
           <Text type="secondary">
             {dependencyLocked
               ? dependencyLockDescription(ownerPageId, execution?.phase)
-              : planModeDescription(
-                  mode,
-                  execution?.phase,
-                  pending?.payload,
-                  error,
-                  canRetryFailedTasks
-                )}
+              : developmentGateBlocked
+                ? developmentGateReason
+                : planModeDescription(
+                    mode,
+                    execution?.phase,
+                    pending?.payload,
+                    error,
+                    canRetryFailedTasks
+                  )}
           </Text>
         </div>
         {!dependencyLocked && (
@@ -148,17 +174,25 @@ export default function PlanExecutionDock({
                 构建检查已完成，请在上方选择执行或跳过前端性能测试。
               </div>
             )}
-            {mode === 'awaiting_test_phase_confirmation' && (
+            {developmentGateBlocked ? (
+              <div className={cx('plan-execution-dock-interaction')}>
+                {developmentTotals
+                  ? `开发进度 ${developmentTotals.completed}/${developmentTotals.total}`
+                  : testEntryGate
+                    ? `开发进度 ${testEntryGate.completed}/${testEntryGate.total}`
+                    : '正在读取开发产物状态'}
+              </div>
+            ) : mode === 'awaiting_test_phase_confirmation' ? (
               <div className={cx('plan-execution-dock-interaction')}>
                 开发已完成，请在上方确认进入测试阶段。
               </div>
-            )}
-            {mode === 'awaiting_review_phase_confirmation' && (
+            ) : null}
+            {!developmentGateBlocked && mode === 'awaiting_review_phase_confirmation' && (
               <div className={cx('plan-execution-dock-interaction')}>
                 测试已通过，请在上方确认进入审查阶段。
               </div>
             )}
-            {mode === 'awaiting_acceptance_phase_confirmation' && (
+            {!developmentGateBlocked && mode === 'awaiting_acceptance_phase_confirmation' && (
               <div className={cx('plan-execution-dock-interaction')}>
                 代码审查已完成，请在上方确认进入验收阶段。
               </div>

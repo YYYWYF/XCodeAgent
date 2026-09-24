@@ -26,6 +26,7 @@ const { Sider } = Layout
 type Props = {
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
+  developmentTotals?: { completed: number; total: number }
   developmentPlanningReady: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
@@ -83,6 +84,7 @@ type Props = {
 export default function LeftPanel({
   application,
   applicationLifecycle,
+  developmentTotals,
   developmentPlanningReady,
   developmentPlanningPages,
   developmentPlanningPageTree,
@@ -123,6 +125,7 @@ export default function LeftPanel({
           <AiChatPanel
             application={application}
             applicationLifecycle={applicationLifecycle}
+            developmentTotals={developmentTotals}
             developmentPlanningReady={developmentPlanningReady}
             developmentPlanningPages={developmentPlanningPages}
             developmentPlanningPageTree={developmentPlanningPageTree}
