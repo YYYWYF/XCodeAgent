@@ -48,6 +48,11 @@ class DevelopmentArtifactProgress(DevelopmentArtifactModel):
     completed_at: datetime | None = Field(default=None, alias="completedAt")
     completed_run_id: str | None = Field(default=None, alias="completedRunId")
     completed_thread_id: str | None = Field(default=None, alias="completedThreadId")
+    # 首次完成时所在的分支名（= 用户看到的版本号，如 v1.0）。
+    # 用途：发起新迭代后，界面上要能区分"哪些产物是以前迭代做过的、哪些是本轮的"——
+    # completed 事实会被继承，只靠状态三档分不出来。归属**只增不改**：一旦在 v1.0 完成，
+    # 后续迭代继承时保留原值，不会被改写成新分支。
+    completed_branch_name: str | None = Field(default=None, alias="completedBranchName")
 
     @model_validator(mode="after")
     def validate_completion(self) -> "DevelopmentArtifactProgress":
@@ -68,6 +73,9 @@ class EntityDevelopmentProgress(DevelopmentArtifactModel):
     initial_development_status: Literal["pending", "in_progress", "completed"] = Field(
         default="pending", alias="initialDevelopmentStatus"
     )
+    # 同 DevelopmentArtifactProgress.completed_branch_name：首次完成所在的分支名。
+    # 实体完成状态每次 reconcile 都重算，所以这个标签必须显式从上一份状态继承。
+    completed_branch_name: str | None = Field(default=None, alias="completedBranchName")
 
 
 class DevelopmentArtifacts(DevelopmentArtifactModel):

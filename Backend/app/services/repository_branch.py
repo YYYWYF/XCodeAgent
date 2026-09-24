@@ -54,6 +54,18 @@ def read_workspace_repository_target(workspace_root: str | Path) -> tuple[str, s
     return repo_url, branch_name, confirmed
 
 
+def read_workspace_branch_name(workspace_root: str | Path) -> str:
+    """只读工作区的当前分支名；缺失时返回空串。
+
+    产物归属标签（`DevelopmentArtifactProgress.completed_branch_name`）用它记录
+    "这个产物是在哪一轮完成的"。读不到时返回空串，调用方按"未知归属"处理，
+    不要伪造一个值。
+    """
+
+    _, branch_name, _ = read_workspace_repository_target(workspace_root)
+    return branch_name
+
+
 def check_remote_branch(repo_url: str, branch_name: str) -> bool:
     """检查远端仓库是否已存在该分支。"""
 

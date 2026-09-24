@@ -20,6 +20,7 @@ import PlanningStageEntryCard from '../AiChatPanel/components/WorkflowRunCard/Pl
 import { projectPlanReadingSections } from './ProjectPlanReadingSections'
 import { planningWorkflowClarification } from './planningWorkflowState'
 import type {
+  UiDesignIterationOrigin,
   WorkflowClarificationAnswer,
   WorkflowClarificationAnswers,
   ApplicationPlanningAction,
@@ -470,6 +471,14 @@ export default function ApplicationPlanningQuestionPanel({
     clarification.mode === 'ui_design_confirmation' && hasUiDesignPages
       ? workflow
       : (lastValidUiWorkflowRef.current ?? workflow)
+  // 每个页面在历史迭代里的归属（后端按迭代记录的页面计划与产出事实），
+  // 驱动设计稿面板上的「v1.0 已设计过」/「v1.0 该设计未设计」标注。
+  // 读不到就传 undefined —— 面板会退化成不标注，不会误标。
+  const uiDesignIterationOrigins = useMemo(() => {
+    const raw = (clarification as unknown as Record<string, unknown>).iteration_origins
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+    return raw as Record<string, UiDesignIterationOrigin>
+  }, [clarification])
   // run 中途 mode 变未知但曾进入过
   // UI 确认阶段：用缓存的有效 UI workflow 渲染，保持布局不动，单页加载态由面板内控制。
   const knownConfirmationModes = new Set([
@@ -485,6 +494,7 @@ export default function ApplicationPlanningQuestionPanel({
     return (
       <UiDesignConfirmationPanel
         disabled={disabled}
+        iterationOrigins={uiDesignIterationOrigins}
         onSubmit={(currentWorkflow, answers) => onSubmit(currentWorkflow, answers)}
         workflow={effectiveWorkflow}
       />
@@ -667,6 +677,7 @@ export default function ApplicationPlanningQuestionPanel({
     return (
       <UiDesignConfirmationPanel
         disabled={disabled}
+        iterationOrigins={uiDesignIterationOrigins}
         onSubmit={(currentWorkflow, answers) => onSubmit(currentWorkflow, answers)}
         workflow={workflow}
       />

@@ -1176,6 +1176,13 @@ export type DevelopmentArtifactProgress = {
   completedAt?: string | null
   completedRunId?: string | null
   completedThreadId?: string | null
+  /**
+   * 首次完成时所在的分支名（= 用户看到的版本号，如 v1.0）。
+   *
+   * completed 事实会跨迭代继承，只靠三档状态分不出"哪些是以前迭代做过的、
+   * 哪些是本轮的"。这个字段就是那个被压掉的维度；一旦写下就不再改写。
+   */
+  completedBranchName?: string | null
 }
 
 export type DevelopmentArtifacts = {
@@ -1183,6 +1190,19 @@ export type DevelopmentArtifacts = {
   pages: Record<string, DevelopmentArtifactProgress>
   endpoints: Record<string, Record<string, DevelopmentArtifactProgress>>
   catalogError?: string | null
+}
+
+/**
+ * 一个页面在历史迭代里的归属事实（后端按迭代记录算出）。
+ *
+ * - `designedIn`：最近一次真的产出过设计稿的历史迭代
+ * - `plannedButUndesignedIn`：最近一次计划了却没设计的历史迭代
+ *
+ * 两样都不占的页面不出现在这份映射里（按"本轮新增"处理）。
+ */
+export type UiDesignIterationOrigin = {
+  designedIn?: string
+  plannedButUndesignedIn?: string
 }
 
 export type TestEntryGate = {

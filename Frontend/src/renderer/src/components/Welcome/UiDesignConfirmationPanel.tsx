@@ -11,11 +11,19 @@ import { Alert, Button, Input, Modal, Spin, Tag, Typography } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
+  UiDesignIterationOrigin,
   WorkflowClarification,
   WorkflowClarificationAnswers,
   WorkflowRunPayload
 } from '../../typings'
 import { cx } from '../../utils'
+import {
+  designOriginKind,
+  designOriginLabel,
+  designOriginTone,
+  uiDesignPendingLabel
+} from '../../service/iterationOrigin'
+import IterationBadge from '../IterationBadge'
 import DesignRenderer from '../DesignRenderer/DesignRenderer'
 import { getAvailableTemplates } from '../../service/templateService'
 import './UiDesignConfirmationPanel.less'
@@ -63,6 +71,8 @@ type Props = {
   /** 是否在卡片内渲染设计稿预览（DesignRenderer）。
    *  工作台 MessageList 卡片设 false，预览由右侧"UI设计稿"tab 承接。 */
   showPreview?: boolean
+  /** 每个页面在历史迭代里的归属事实，来自后端按迭代记录的页面计划与产出。 */
+  iterationOrigins?: Record<string, UiDesignIterationOrigin>
   /** 工作区根路径，用于直接读 ui-designs.json 轮询后台生成池进度（绕过 Graph run 并发约束）。 */
   workspaceRoot?: string
 }
@@ -101,6 +111,7 @@ export default function UiDesignConfirmationPanel({
   actingPageIds: controlledActingPageIds,
   onActingPageIdsChange,
   showPreview = true,
+  iterationOrigins,
   workspaceRoot
 }: Props): ReactElement | null {
   const clarification = planningClarification(workflow)
@@ -946,7 +957,18 @@ export default function UiDesignConfirmationPanel({
                     {confirmed ? <CheckOutlined /> : index + 1}
                   </span>
                   <div className={cx('ui-design-page-row-title')}>
-                    <Text className={cx('ui-design-page-row-name')} strong>{page.name || pageId}</Text>
+                    <span className={cx('ui-design-page-row-name-line')}>
+                      <Text className={cx('ui-design-page-row-name')} strong>
+                        {page.name || pageId}
+                      </Text>
+                      {/* 迭代归属：这个页面上次是哪个版本设计的 / 哪个版本该设计却没设计。
+                          数据来自后端按迭代记录的页面计划与产出事实。 */}
+                      <IterationBadge
+                        label={designOriginLabel(iterationOrigins?.[pageId])}
+                        origin={designOriginKind(iterationOrigins?.[pageId])}
+                        tone={designOriginTone(iterationOrigins?.[pageId])}
+                      />
+                    </span>
                     {page.path ? (
                       <Text className={cx('ui-design-page-row-path')} code>
                         {page.path}
@@ -969,7 +991,16 @@ export default function UiDesignConfirmationPanel({
                   ) : page.code ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-pending')}>待确认</Tag>
                   ) : (
-                    <Tag className={cx('ui-design-page-row-status', 'is-empty')}>未生成</Tag>
+                    // 本轮还没有设计稿：区分"从来没做过"和"上一轮做过、本轮待重做"。
+                    // 后者若也显示「未生成」，会与旁边的「v1.0 已设计过」徽章自相矛盾。
+                    <Tag
+                      className={cx(
+                        'ui-design-page-row-status',
+                        iterationOrigins?.[pageId]?.designedIn ? 'is-regen' : 'is-empty'
+                      )}
+                    >
+                      {uiDesignPendingLabel(iterationOrigins?.[pageId])}
+                    </Tag>
                   )}
                 </div>
                 <div className={cx('ui-design-page-row-actions')}>

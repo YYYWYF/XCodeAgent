@@ -1,0 +1,52 @@
+// 产物归属徽章：标出这个产物是「当前版本」做的还是「v1.0 已完成」。
+// 与 DevelopmentStatusDot 同一套视觉语言（小、克制、跟随主题 token），
+// 两者会并排出现在同一条产物行里。
+.@{class-prefix}-iteration-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 1;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  white-space: nowrap;
+
+  // 当前版本：用主色，视线自然落在"本轮要做的"上。
+  &.@{class-prefix}-is-current {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent-border);
+  }
+
+  // 旧迭代：中性色，存在感低一档 —— 它已经完成了，不该抢当前工作的注意力。
+  &.@{class-prefix}-is-previous {
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+  }
+
+  // 设计稿专用：这一页**确实产出过**设计稿（见 designOriginTone）。
+  // 与"已完成的开发产出"同源的绿（DevelopmentStatusDot 的 completed 档），
+  // 语义一致：都是"这件事已经做出来过"。用 color-mix 从 token 派生底色/描边，
+  // 深浅色主题自动跟随，不写死颜色。
+  &.@{class-prefix}-is-designed {
+    color: var(--wb-development-completed);
+    background: color-mix(in srgb, var(--wb-development-completed) 12%, var(--wb-surface));
+    border-color: color-mix(in srgb, var(--wb-development-completed) 40%, var(--wb-border));
+  }
+
+  // 设计稿专用：该版本计划过但没设计 —— 是**欠账**，不是好消息。
+  // 沿用旧迭代的中性档，避免把"没做"渲染得像"做过了"。
+  &.@{class-prefix}-is-undesigned {
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+  }
+
+  // 未知归属不渲染（见组件），这里只是兜底，避免万一漏出时样式崩掉。
+  &.@{class-prefix}-is-unknown {
+    display: none;
+  }
+}

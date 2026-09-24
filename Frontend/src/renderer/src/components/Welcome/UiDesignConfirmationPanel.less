@@ -916,6 +916,14 @@
   flex-wrap: nowrap;
 }
 
+// 页面名 + 归属徽章同一行：名字可省略号截断，徽章固定不被压扁。
+.@{class-prefix}-ui-design-page-row-name-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
 .@{class-prefix}-ui-design-page-row-name.ant-typography {
   min-width: 0;
   overflow: hidden;
@@ -976,6 +984,14 @@
     color: rgba(0, 0, 0, 0.45) !important;
     background: rgba(0, 0, 0, 0.04) !important;
     border-color: rgba(0, 0, 0, 0.08) !important;
+  }
+
+  // 上一轮设计过、本轮待重新生成：本轮确实还有活要干，用 warning 档提示"需要你操作"，
+  // 与中性色的「未生成」（从来没做过）区分开。走 token + color-mix，深浅色主题自动跟随。
+  &.@{class-prefix}-is-regen {
+    color: var(--wb-warning) !important;
+    background: color-mix(in srgb, var(--wb-warning) 10%, var(--wb-surface)) !important;
+    border-color: color-mix(in srgb, var(--wb-warning) 34%, var(--wb-border)) !important;
   }
 }
 

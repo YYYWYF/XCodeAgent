@@ -2061,11 +2061,12 @@ export default function AiChatPanel({
       const cached = formalRevisionSessionIdentitiesRef.current[input.impact.interactionId]
       if (cached) return cached
       // workbench branch 仍绑定原 planning thread 作为 lifecycle 权威身份，但实际草稿运行使用新会话 thread。
+      // application.planningThreadId 是创建时快照、不随迭代更新，只能排在所有实时来源之后兜底。
       const checkpointThreadId = String(
         planningThreadId ||
-          application.planningThreadId ||
           applicationLifecycle?.activeFormalRevision?.planningThreadId ||
           applicationLifecycle?.initialization?.threadId ||
+          application.planningThreadId ||
           ''
       ).trim()
       const workspaceRoot = String(application.workspaceRoot || '').trim()
@@ -2845,10 +2846,16 @@ export default function AiChatPanel({
         activeWorkbenchPhase === derivedWorkbenchPhase)
   )
   // 手动切回设计阶段浏览时，活跃规划流和 formal revision 都不在，
-  // 需用应用创建时保留的 planning thread 恢复历史设计会话，否则
+  // 需用当前分支的 planning thread 恢复历史设计会话，否则
   // ensurePlanningSession 因 lookupKey 为空不激活，对话区停留在 loading 占位。
+  //
+  // **实时 lifecycle 优先**：`application.planningThreadId` 是应用**创建时**的快照，切到
+  // 新迭代后不会跟着更新（v1.1 时它仍指向 v1.0 的 graph thread）。让它排在前面会拿错
+  // lookupKey —— 命中不到任何已有会话，ensurePlanningSession 于是新建一个空壳会话，
+  // 对话区退化成「正在准备需求确认…」的加载卡，而真正的历史会话（含 UI 设计稿确认卡）
+  // 被孤立在磁盘上。快照只作兜底：万一 lifecycle 缺 threadId，仍有东西可查。
   const restoredDesignConversationThreadId =
-    application.planningThreadId || applicationLifecycle?.initialization?.threadId
+    applicationLifecycle?.initialization?.threadId || application.planningThreadId
   const planningSessionLookupKey =
     activePlanningConversationThreadId ||
     restoredPlanningConversationThreadId ||
@@ -4474,8 +4481,8 @@ export default function AiChatPanel({
     if (!productConversationAvailable) return
     const originalPlanningThreadId = String(
       planningThreadId ||
-        application.planningThreadId ||
         applicationLifecycle?.initialization?.threadId ||
+        application.planningThreadId ||
         ''
     ).trim()
     if (!originalPlanningThreadId) {
@@ -4578,6 +4585,7 @@ export default function AiChatPanel({
             apiContracts={developmentPlanningApiContracts}
             entities={developmentPlanningEntities}
             {...artifactOutlineProps}
+            currentBranch={application.branchName}
             filesActive={activeView === 'files'}
             dataSourcesActive={activeView === 'dataSources'}
             dataSourcesEnabled={!isApplicationPlanningPhase && Boolean(application.workspaceRoot)}
@@ -4662,6 +4670,7 @@ export default function AiChatPanel({
                   !isApplicationPlanningPhase ? (
                     <QuickTaskGuide
                       developmentArtifacts={applicationLifecycle?.developmentArtifacts}
+                      currentBranch={application.branchName}
                       apiContracts={developmentPlanningApiContracts}
                       disabled={loading || workflowInputLocked}
                       entities={developmentPlanningEntities}

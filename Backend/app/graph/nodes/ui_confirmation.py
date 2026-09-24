@@ -46,6 +46,12 @@ from app.services.ui_design_manifest import (
     UI_MANIFEST_SCHEMA_VERSION,
     build_ui_page_manifest,
     present_ui_pages,
+    validate_ui_design_code,
+)
+from app.services.ui_design_carryover import read_ui_design_carryover
+from app.services.iteration_artifacts import (
+    iteration_origins_for_pages,
+    record_iteration_artifacts,
 )
 from app.services.ui_design_project_setup import (
     setup_ui_design_project,
@@ -122,7 +128,20 @@ def _ui_design_confirmation_payload(
     payload["message"] = "请逐页确认设计稿后再继续项目规划。"
     payload["pending_count"] = pending_count
     payload["pages"] = pages
+    # 每页在历史迭代里的归属（designedIn / plannedButUndesignedIn），供界面标注。
+    payload["iteration_origins"] = _with_iteration_origins(state, pages)
     return payload
+
+
+def _with_iteration_origins(state: ProjectState, pages: list[dict[str, Any]]) -> dict[str, Any]:
+    """算出这些页面在历史迭代里的归属，供前端标注"旧迭代 / 本轮新增"。
+
+    单独成函数是为了让确认中/已确认两条 payload 用同一份口径；数据读不出来时
+    返回空字典，前端退化成"本轮新增"，不会误标。
+    """
+
+    page_ids = [_page_id(page) for page in pages]
+    return iteration_origins_for_pages(workspace_root(state), [pid for pid in page_ids if pid])
 
 
 def _ui_design_confirmed_payload(
@@ -141,6 +160,9 @@ def _ui_design_confirmed_payload(
         "assumptions": [],
         "message": "所有页面设计稿已确认，可以继续项目规划。",
         "pages": present_ui_pages(ui_designs, product_plan),
+        "iteration_origins": _with_iteration_origins(
+            state, present_ui_pages(ui_designs, product_plan)
+        ),
     }
 
 
@@ -284,10 +306,11 @@ def _emit_progress(message: str, **detail: object) -> None:
 
 
 async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
-    """首次进入 UI 确认节点：只为每个页面准备骨架条目，不生成设计稿。
+    """首次进入 UI 确认节点：为每个页面准备骨架条目。
 
-    每页只带 pageId、page_key、预览路径和空验证记录。用户在前端
-    逐页"选模板"（套用模板代码）或"换一换"（调 LLM 生成）后才产生设计稿——
+    上一轮已确认、且设计稿仍与当前 ProductPlan 一致的页面**直接继承**（标记 confirmed），
+    不必让用户每轮把同样的页面重新生成一遍；其余页面只带 pageId、page_key、预览路径和空
+    验证记录，用户逐页"选模板"（套用模板代码）或"换一换"（调 LLM 生成）后才产生设计稿——
     通过 ui_design_action 单页动作路径即时回填。确认全部后放行项目规划。
     """
 
@@ -299,14 +322,28 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
     # 准备设计稿落盘目录（方案 B：仅 mkdir，无 clone/install/launch）。
     setup = await asyncio.to_thread(setup_ui_design_project, workspace)
     project_dir = str(setup.get("project_dir") or "")
+    carried = read_ui_design_carryover(workspace)
     used_keys: set[str] = {"DefaultPage"}
+    # 先占用继承页的 PageKey：本轮必须沿用同一个目录名，否则找不到那份设计稿代码。
+    used_keys.update(record["pageKey"] for record in carried.values())
     entries: list[dict[str, Any]] = []
+    inherited = 0
     for page in valid_pages:
+        carried_entry = _carried_ui_page_manifest(page, project_dir, carried)
+        if carried_entry is not None:
+            entries.append(carried_entry)
+            inherited += 1
+            continue
         page_key = derive_page_key(page, used_keys)
         entries.append(build_ui_page_manifest(page, page_key=page_key))
     _emit_progress(
-        f"已准备 {total} 个页面，请逐页选择模板或换一换生成设计稿",
-        ready=0,
+        (
+            f"已准备 {total} 个页面（其中 {inherited} 个沿用上一轮设计稿），"
+            "请逐页选择模板或换一换生成设计稿"
+        )
+        if inherited
+        else f"已准备 {total} 个页面，请逐页选择模板或换一换生成设计稿",
+        ready=inherited,
         total=total,
         pages=list(entries),
     )
@@ -316,6 +353,41 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
         "product_plan_sha256": _product_plan_hash(state),
         "pages": entries,
     }
+
+
+def _carried_ui_page_manifest(
+    page: dict[str, Any],
+    project_dir: str,
+    carried: dict[str, dict[str, str]],
+) -> dict[str, Any] | None:
+    """上一轮设计过、且仍与当前 ProductPlan 一致的页面，按已确认直接继承。
+
+    继承必须过一致性校验：新迭代可能增删了这一页的信息项/操作，旧设计稿的
+    `data-information-item-id` / `data-action-id` 标记就对不上了。那种情况退回
+    "未生成"让用户重新设计，而不是把一份对不上的设计稿带进计划阶段 —— 后者会在
+    用户点"进入计划阶段"时才以校验错误暴露，且那时已经无从判断该改哪一页。
+
+    返回 None 表示不继承，调用方按常规 pending 处理。
+    """
+
+    record = carried.get(_page_id(page))
+    if not record:
+        return None
+    page_key = record["pageKey"]
+    code = load_page_code(project_dir, page_key)
+    if not code:
+        # 目录被清掉或写入失败：没有代码可继承。
+        return None
+    if validate_ui_design_code(page, code):
+        return None
+    return build_ui_page_manifest(
+        page,
+        page_key=page_key,
+        code=code,
+        status="confirmed",
+        template_id=record["templateId"],
+        template_source_path=record["templateSourcePath"],
+    )
 
 
 async def _apply_adjust_pages(
@@ -832,3 +904,29 @@ def _persist_ui_designs(state: ProjectState, ui_designs: dict[str, Any]) -> None
         write_ui_designs_json(state, ui_designs)
     except Exception:
         logger.exception("ui_designs_persist_failed")
+    _record_iteration_ui_pages(state, ui_designs)
+
+
+def _record_iteration_ui_pages(state: ProjectState, ui_designs: dict[str, Any]) -> None:
+    """把本轮的"计划页面"与"已产出设计稿的页面"记进迭代产物记录。
+
+    这是**唯一**的 UI 设计写盘点（`_persist_ui_designs`），所以放在这里能一次覆盖
+    全部路径：首次进入、逐页换一换、确认、以及用户主动跳过。
+
+    - plannedPageIds：来自当前 ProductPlan（`_page_list`）—— 本轮计划要设计哪些页面
+    - designedPageIds：本轮真正产出设计稿的页面（有 code 的）
+
+    跳过时 designedPageIds 为空，于是后续迭代就能算出"这一轮该设计却没设计"。
+    写失败不影响设计流程（见 `record_iteration_artifacts`）。
+    """
+
+    planned = [page_id for item in _page_list(state) if (page_id := _page_id(item))]
+    # 有 code 才算真的产出了设计稿：只有页面骨架（pending/queued）不算。
+    raw_pages = ui_designs.get("pages")
+    pages = [item for item in raw_pages if isinstance(item, dict)] if isinstance(raw_pages, list) else []
+    designed = [page_id for item in pages if (page_id := _page_id(item)) and item.get("code")]
+    record_iteration_artifacts(
+        workspace_root(state),
+        planned_page_ids=planned,
+        designed_page_ids=designed,
+    )

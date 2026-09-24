@@ -84,6 +84,8 @@ type SessionSidebarProps = {
   pages: DevelopmentPlanningPageOption[]
   pageTree: DevelopmentPlanningPageTreeNode[]
   entities: DevelopmentPlanningEntityOption[]
+  /** 当前迭代的分支名（= 版本号），用于标注产物归属。 */
+  currentBranch?: string
   selectedApiEndpointKey: string
   selectedEntityId: string
   selectedPageId: string
@@ -103,6 +105,7 @@ export default function SessionSidebar({
   activeSessionId,
   apiContracts = [],
   deletingSessionId,
+  currentBranch,
   entities = [],
   temporaryChatActive,
   filesActive,
@@ -380,6 +383,7 @@ export default function SessionSidebar({
 
         {!effectiveCollapsed ? (
           <ApplicationOutline
+            currentBranch={currentBranch}
             apiContracts={apiContracts}
             entities={entities}
             onApiEndpointSelect={onApiEndpointSelect}

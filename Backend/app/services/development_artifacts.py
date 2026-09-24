@@ -16,6 +16,7 @@ from app.domain.development_artifacts import (
     EntityDevelopmentProgress,
     TestEntryGate,
 )
+from app.services.repository_branch import read_workspace_branch_name
 from app.workspace.detail_design_documents import hydrate_external_detail_designs
 
 INITIAL_DEVELOPMENT_PHASES = frozenset({
@@ -186,6 +187,8 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
     artifacts = DevelopmentArtifacts(catalogError=None)
     # Build 计划按当前开发目标裁剪；这里仅保留范围诊断，不改变应用级门禁。
     artifacts.out_of_scope = out_of_scope_keys(workspace, targets)
+    # 本次 reconcile 所在的迭代（用于给"本轮才完成"的实体打归属标签）。只读一次。
+    current_branch = read_workspace_branch_name(workspace)
     for target in targets:
         if target.type == "entity":
             # 只认当前正式绑定的显式确认；选表、生成设计和等待确认都不算完成。
@@ -198,8 +201,20 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
                 and execution.status in ACTIVE_STATUSES
                 for execution in state.active_executions.values()
             )
+            # 实体完成状态每次 reconcile 都按技术规划重算，所以归属标签必须显式继承：
+            # 已经是 completed 的实体保留它首次完成时的分支，不能每轮都被改写成当前分支。
+            previous_entity = old.entities.get(target.entity_id or "")
+            entity_completed_branch = (
+                previous_entity.completed_branch_name
+                if previous_entity is not None
+                and previous_entity.initial_development_status == "completed"
+                else None
+            )
+            if confirmed and not entity_completed_branch:
+                entity_completed_branch = current_branch or None
             artifacts.entities[target.entity_id or ""] = EntityDevelopmentProgress(
                 initialDevelopmentStatus="completed" if confirmed else "in_progress" if active else "pending",
+                completedBranchName=entity_completed_branch,
             )
             continue
         progress = artifact_progress(old, target) or DevelopmentArtifactProgress()
@@ -312,6 +327,8 @@ def complete_initial_development(workspace: str | Path, *, run_id: str) -> Appli
         progress.completed_at = utc_now()
         progress.completed_run_id = run_id
         progress.completed_thread_id = execution.thread_id
+        # 记下"在哪一轮完成"。读不到分支名就留空，不伪造。
+        progress.completed_branch_name = read_workspace_branch_name(workspace) or None
         updated = state.model_copy(update={"revision": state.revision + 1, "updated_at": utc_now()})
         return write_application_lifecycle(workspace, updated, expected_revision=state.revision)
 
