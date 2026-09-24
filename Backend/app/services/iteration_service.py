@@ -14,6 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 
 from app.services.repository_branch import read_workspace_branch_name
+from app.services.iteration_artifacts import begin_iteration_round
+from app.services.product_plan_carryover import (
+    DEFINITION_FIELDS as _DEFINITION_FIELDS,
+    write_product_plan_carryover,
+)
 from app.services.ui_design_carryover import (
     carried_page_keys,
     write_ui_design_carryover,
@@ -100,7 +105,11 @@ def start_iteration(request: StartIterationRequest) -> StartIterationResult:
     # 再停预览，且必须早于任何文件清理（见 _stop_workspace_preview 的说明）。
     _stop_workspace_preview(workspace_root)
 
-    cleared = _clear_iteration_artifacts(devagentstudio_dir, workspace_root=workspace_root)
+    cleared = _clear_iteration_artifacts(
+        devagentstudio_dir,
+        workspace_root=workspace_root,
+        branch_name=request.branch_name,
+    )
 
     return StartIterationResult(
         workspaceRoot=str(workspace_root),
@@ -174,7 +183,12 @@ def generate_agents_context(
         agents_md.write_text(header + section, encoding="utf-8")
 
 
-def _clear_iteration_artifacts(devagentstudio_dir: Path, *, workspace_root: Path) -> bool:
+def _clear_iteration_artifacts(
+    devagentstudio_dir: Path,
+    *,
+    workspace_root: Path,
+    branch_name: str,
+) -> bool:
     """删除本轮的规划与运行态产物，**未列名的一律保留**。
 
     这里刻意不做"未知条目一律删除"的兜底：`.devagentstudio` 同时承载平台数据与**模板契约**
@@ -191,8 +205,11 @@ def _clear_iteration_artifacts(devagentstudio_dir: Path, *, workspace_root: Path
     必须在删除 `specs/` 之前读 manifest，否则登记不到任何东西。
     """
 
-    # 先登记继承来源，再清空 —— 顺序不能反，manifest 在 specs/ 里。
+    # 先登记继承来源与新一轮的开始，再清空 —— 顺序不能反：manifest 与上一轮
+    # ProductPlan 都在即将被清掉的目录里。
     _register_ui_design_carryover(workspace_root, devagentstudio_dir)
+    _register_product_plan_carryover(workspace_root, devagentstudio_dir)
+    begin_iteration_round(workspace_root, branch_name)
     carried_keys = carried_page_keys(workspace_root)
 
     cleared_any = False
@@ -252,6 +269,67 @@ def _register_ui_design_carryover(workspace_root: Path, devagentstudio_dir: Path
     )
 
 
+def _register_product_plan_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
+    """登记上一轮的页面定义，供下一轮对「用户没要求改的页面」整份沿用。
+
+    新一轮会整份重新生成 ProductPlan，模型会顺手重写其余页面的信息项与操作 ——
+    语义没变但 `itemId` 全换，于是上一轮按旧 ID 产出的设计稿对不上、继承被拒，
+    用户被迫重做本可沿用的页面。
+
+    登记两样东西：
+    - `requirement`：上一轮 RequirementSpec 的该页条目 —— 下一轮用它判断"用户改没改这一页"
+    - `definition`：上一轮 ProductPlan 里模型补充的那部分 —— 未变时整份沿用
+
+    读不到任一份产物（首轮、或从未进入规划）时清掉旧记录 —— 否则会沿用更早一轮的内容。
+    """
+
+    try:
+        plan = json.loads(
+            (devagentstudio_dir / "plans" / "product-plan.json").read_text(encoding="utf-8")
+        )
+        spec = json.loads(
+            (devagentstudio_dir / "specs" / "requirement-spec.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        write_product_plan_carryover(workspace_root, source_branch="", pages={})
+        return
+
+    requirement_pages = {
+        str(page.get("pageId") or "").strip(): page
+        for page in _dict_entries(spec.get("pages") if isinstance(spec, dict) else None)
+        if str(page.get("pageId") or "").strip()
+    }
+    pages: dict[str, dict[str, Any]] = {}
+    for page in _dict_entries(plan.get("pages") if isinstance(plan, dict) else None):
+        page_id = str(page.get("pageId") or "").strip()
+        # 两半缺一不可：没有 requirement 无从判断"变没变"，没有 definition 没有可沿用的内容。
+        if not page_id or page_id not in requirement_pages:
+            continue
+        pages[page_id] = {
+            "requirement": requirement_pages[page_id],
+            "definition": {field: page.get(field) for field in _DEFINITION_FIELDS},
+        }
+
+    write_product_plan_carryover(
+        workspace_root,
+        source_branch=read_workspace_branch_name(workspace_root),
+        pages=pages,
+    )
+
+
+def _dict_entries(value: Any) -> list[dict[str, Any]]:
+    """把未知值收敛成字典条目列表。"""
+
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+    raw_pages = plan.get("pages") if isinstance(plan, dict) else None
+    pages: dict[str, dict[str, list[str]]] = {}
+    for page in raw_pages if isinstance(raw_pages, list) else []:
+        if not isinstance(page, dict):
+            continue
+        page_id = str(page.get("pageId") or "").strip()
 def _clear_ui_design_except(ui_design_dir: Path, keep_keys: set[str]) -> None:
     """清空 `ui-design/`，但保留 `pages/<keep_keys 中的 PageKey>/` 这些设计稿目录。"""
 

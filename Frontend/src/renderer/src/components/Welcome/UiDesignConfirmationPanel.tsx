@@ -17,6 +17,8 @@ import type {
   WorkflowRunPayload
 } from '../../typings'
 import { cx } from '../../utils'
+import { useUiDesignPagesWithCode } from '../../hooks/useUiDesignPagesWithCode'
+import { shouldSettleAdjust } from '../../service/uiDesignAdjustSettlement'
 import {
   designOriginKind,
   designOriginLabel,
@@ -120,14 +122,17 @@ export default function UiDesignConfirmationPanel({
   // queued/generating。直接读 ui-designs.json 拿到最新 status 覆盖快照，避免卡片
   // 一直显示「生成中」。override 只在本地 acting/generating 页存在时由轮询填充。
   const [pageStatusOverrides, setPageStatusOverrides] = useState<Record<string, string>>({})
+  // 快照里的页面没有 code（正式 manifest 只存 code_path），从磁盘补回来，
+  // 否则「查看设计稿」按钮禁用、右侧预览也渲染不出东西。
+  const pagesWithCode = useUiDesignPagesWithCode(workspaceRoot, rawPages)
+  // 本地 override 叠在磁盘数据之上：用户点「停止」时立刻显示「已停止」，不等轮询。
   const pages = useMemo(
     () =>
-      rawPages.map((page) => {
-        const pageId = page.pageId || ''
-        const override = pageId ? pageStatusOverrides[pageId] : undefined
+      pagesWithCode.map((page) => {
+        const override = page.pageId ? pageStatusOverrides[page.pageId] : undefined
         return override ? { ...page, status: override } : page
       }),
-    [rawPages, pageStatusOverrides]
+    [pagesWithCode, pageStatusOverrides]
   )
   // 最终确认被后端事实校验拒绝时，直接展示确定性错误而不是只停留在当前页面。
   const validationErrors = useMemo(() => {
@@ -181,6 +186,8 @@ export default function UiDesignConfirmationPanel({
     Array<{ pageId: string; action: 'select_template' | 'regenerate'; templateId?: string }>
   >([])
   const runInFlightRef = useRef(false)
+  // 提交 adjust 时的 runId：新一轮 run 一旦开始就会换代，用于区分"提交瞬间"与"新一轮已开始"。
+  const adjustRunIdRef = useRef('')
   // 用 ref 持有最新的 onSubmit/workflow，供 flushPendingActions 等稳定 callback 使用，
   // 避免 callback 依赖 workflow（每次轮询都变）导致引用变化触发 effect 自激循环。
   const onSubmitRef = useRef(onSubmit)
@@ -243,6 +250,34 @@ export default function UiDesignConfirmationPanel({
     }
     return null
   }, [workflow.events, actingPageIds])
+
+  // adjust 完成收口：靠 **runId 换代 + run 落回待输入态** 判定，不用 adjustProgress ——
+  // `ui_confirmation.progress` 走的是 AG-UI 的进度通道，不会进入 workflow.events，
+  // 那个字段实际恒为 null（提示文案走的是 actingSet.has('adjust') 分支，不依赖它）。
+  //
+  // 也不能只靠「先观察到 workflow 进入 running」：流式帧可能被批处理合并，错过 running
+  // 会让 acting 永久卡住 —— 用户看到「一直在生成中」，而提示让他点「刷新」，那时却连
+  // 刷新按钮都没有（按钮只在有 queued/generating 页时渲染，adjust 全程写 confirmed）。
+  //
+  // 判据拆成两条，避免把"提交瞬间"误判成"已完成"：
+  //   1. runId 已换代 → 说明新一轮 run 真的开始了（提交那一刻还是上一轮的 runId）
+  //   2. run 落回 requires_user_input → 说明这一轮结束了
+  useEffect(() => {
+    if (
+      !shouldSettleAdjust({
+        adjusting: actingSet.has('adjust'),
+        submittedRunId: adjustRunIdRef.current,
+        currentRunId: String(workflow.runId || ''),
+        workflowStatus: String(workflow.summary?.status || '')
+      })
+    ) {
+      return
+    }
+    runInFlightRef.current = false
+    observedRunningRef.current = false
+    setRefreshing(false)
+    setActingPageIds([])
+  }, [workflow.runId, workflow.summary?.status, actingSet, setActingPageIds])
 
   const confirmAll = (): void => {
     const feedbackText = feedback.trim()
@@ -387,13 +422,25 @@ export default function UiDesignConfirmationPanel({
     [pages]
   )
 
+  // UI 设计稿生成中（本地 acting 入队、后台 worker pool 处理或 run 提交进行中）：
+  // 期间跳过/进入规划等阶段动作都应禁用，与「全部生成」按钮保持一致，避免并发提交冲突。
+  const uiGenerationInProgress =
+    actingPageIds.length > 0 || generatingPageIds.length > 0 || runInFlightRef.current
+
   // 多页调整提交：解析 @页面名（可选）+ 调整指令，提交 adjust_pages 动作。
   // 无 @页面名时 pageIds 为空，后端让大模型根据 instruction 自行判断调整哪些页面。
   const submitAdjustPages = useCallback((): void => {
+    // 生成中不发新 run：同 thread 不能并发，提交会被 checkpoint 约束吞掉（点了没反应）。
+    // 按钮与 Enter 已各自拦一道，这里再兜一道，覆盖任何新增的调用入口。
+    if (uiGenerationInProgress) return
     const { pageIds, instruction } = parseMentionedPageIds(feedback)
     if (!instruction) return
-    setActingPageIds(['adjust'])
+    // 'adjust' 是全局哨兵（禁用跳过/进入规划等动作）；同时带上真实目标页 id，
+    // 右侧预览面板按 actingSet.has(pageId) 判 loading —— 只放哨兵的话预览区
+    // 不会有任何加载反馈，用户看到的是旧设计稿一直停在那里。
+    setActingPageIds([...pageIds, 'adjust'])
     runInFlightRef.current = true
+    adjustRunIdRef.current = String(workflow.runId || '')
     observedRunningRef.current = false
     onSubmit(workflow, {
       ui_design_action: {
@@ -404,7 +451,7 @@ export default function UiDesignConfirmationPanel({
       __applicationPlanningAction: 'ui_action'
     })
     setFeedback('')
-  }, [feedback, onSubmit, parseMentionedPageIds, workflow])
+  }, [feedback, onSubmit, parseMentionedPageIds, uiGenerationInProgress, workflow])
 
   // 输入框变更：检测光标前最近的 / 触发提及浮层。
   const handleFeedbackChange = useCallback(
@@ -481,10 +528,9 @@ export default function UiDesignConfirmationPanel({
     [feedback, parseMentionedPageIds]
   )
   const canAdjust = !disabled && feedback.trim().length > 0
-  // UI 设计稿生成中（本地 acting 入队、后台 worker pool 处理或 run 提交进行中）：
-  // 期间跳过/进入规划等阶段动作都应禁用，与「全部生成」按钮保持一致，避免并发提交冲突。
-  const uiGenerationInProgress =
-    actingPageIds.length > 0 || generatingPageIds.length > 0 || runInFlightRef.current
+  // 生成中禁止**发送**调整指令：同 thread 不能并发 run，此时提交会被 checkpoint 约束吞掉，
+  // 表现为"点了没反应"。输入框本身仍可编辑（用户可以先写完再等），只是发不出去。
+  const canSubmitAdjust = canAdjust && !uiGenerationInProgress
 
   // 在模板选择弹窗中确认选中某个模板。
   const confirmTemplatePick = useCallback(
@@ -559,13 +605,27 @@ export default function UiDesignConfirmationPanel({
 
   // 后台生成池完成（confirmed/generation_failed）后不会主动通知前端，workflow 快照
   // 里的 page status 仍停留在 queued/generating，导致卡片一直显示「生成中」无法恢复。
-  // 直接通过 IPC 读 ui-designs.json 拿最新 status 覆盖快照。但 isPageConfirmed 还要求
-  // page.code 非空，而 manifest 只存 code_path 不存 code——纯 IPC 覆盖 status 不够，
-  // 必须触发一次 no-op resume Graph run 让后端 _latest_ui_designs 回填 code 到快照。
-  // 因此轮询检测到任一页从非终态变为终态时，自动调 refreshUiDesigns（已有 runInFlight/
-  // refreshing 守卫避免并发）。refreshUiDesigns 用 ref 持有，避免依赖变化重建定时器。
+  // 页面数据（status/code）由 useUiDesignPagesWithCode 从磁盘补全；这里只负责检测
+  // 「任一页刚进入终态」时触发一次 no-op resume，让后端把生成结果收口到快照。
+  // refreshUiDesigns 用 ref 持有，避免依赖变化重建定时器。
   const refreshUiDesignsRef = useRef(refreshUiDesigns)
   refreshUiDesignsRef.current = refreshUiDesigns
+
+  // 手动「刷新」：用户已看到卡住时的一条确定出路。
+  // `refreshUiDesigns` 在 runInFlightRef 为真时会 early-return，而卡住的场景恰恰是
+  // runInFlightRef 没被复位 —— 直接调它等于点了没反应。这里在 workflow 已落回待输入态
+  // （run 确实结束了）时先强制复位本地进行中态，再发 no-op resume 重读磁盘。
+  // 仍在 running 时不强制复位：那说明任务真在跑，清掉 loading 反而误导，且会放开按钮
+  // 让用户提交并发 run（同 thread 的 checkpoint 冲突）。
+  const handleManualRefresh = useCallback((): void => {
+    const settled = String(workflowRef.current.summary?.status || '') !== 'running'
+    if (settled) {
+      runInFlightRef.current = false
+      observedRunningRef.current = false
+      setActingPageIds([])
+    }
+    refreshUiDesigns()
+  }, [refreshUiDesigns, setActingPageIds])
   const prevStatusRef = useRef<Record<string, string>>({})
   useEffect(() => {
     if (!workspaceRoot) return
@@ -577,21 +637,20 @@ export default function UiDesignConfirmationPanel({
         if (cancelled || !result?.uiDesigns) return
         const manifestPages = (result.uiDesigns as { pages?: Array<{ pageId?: string; status?: string }> }).pages
         if (!Array.isArray(manifestPages)) return
-        const overrides: Record<string, string> = {}
         let reachedTerminal = false
+        const statuses: Record<string, string> = {}
         for (const page of manifestPages) {
           const pageId = String(page?.pageId || '')
           const status = String(page?.status || '')
           if (!pageId || !status) continue
-          overrides[pageId] = status
+          statuses[pageId] = status
           const prev = prevStatusRef.current[pageId]
           // 检测从非终态变为终态：prev 缺失或非终态，当前是终态。
           if (TERMINAL_STATUSES.has(status) && (!prev || !TERMINAL_STATUSES.has(prev))) {
             reachedTerminal = true
           }
         }
-        prevStatusRef.current = overrides
-        if (!cancelled) setPageStatusOverrides(overrides)
+        prevStatusRef.current = statuses
         // 有页刚进入终态：自动触发 no-op resume 让后端回填 code，UI 立即反映生成结果。
         if (reachedTerminal) refreshUiDesignsRef.current()
       } catch {
@@ -619,21 +678,26 @@ export default function UiDesignConfirmationPanel({
     return () => window.clearInterval(timer)
   }, [hasActiveGeneration])
 
-  // 后台池真实终态纠正本地瞬态：override 已是 confirmed/generation_failed 的页，
+  // 后台池真实终态纠正本地瞬态：页面已是 confirmed/generation_failed/cancelled 的，
   // 若本地 actingSet 仍含它（run 流中断/状态序列未满足导致 acting 未清），从
   // actingSet 移除——否则卡片永远显示「生成中」、按钮永远禁用、用户无法重试。
   // 这是后台 worker 池架构下的事实权威：池写完终态，本地「点击后置位」的加载态
   // 必须让位。generation_failed 时还要复位 runInFlightRef（否则后续 submitPageAction
   // 永远 early-return、彻底死锁）。
+  //
+  // 终态取合并后的 pages（含磁盘 status 与本地 override），而不是只看本地 override：
+  // 页面数据现在由 useUiDesignPagesWithCode 从磁盘补全，池写下的终态在那份数据里。
   useEffect(() => {
-    const terminalIds = Object.entries(pageStatusOverrides)
-      .filter(
-        ([, status]) =>
-          status === 'confirmed' ||
-          status === 'generation_failed' ||
-          status === 'cancelled'
+    // adjust 期间页面状态全程保持 confirmed（后端只重写代码、不改状态），
+    // 终态判据会立刻把刚置上的 acting 清掉，loading 一闪就没。adjust 的收口
+    // 由上面「workflow 回到 requires_user_input」那条 effect 负责。
+    if (actingSet.has('adjust')) return
+    const terminalIds = pages
+      .filter((page) =>
+        ['confirmed', 'generation_failed', 'cancelled'].includes(String(page.status || ''))
       )
-      .map(([pageId]) => pageId)
+      .map((page) => String(page.pageId || ''))
+      .filter(Boolean)
     if (terminalIds.length === 0) return
     const stuck = terminalIds.filter((pageId) => actingSet.has(pageId))
     if (stuck.length === 0) return
@@ -647,14 +711,14 @@ export default function UiDesignConfirmationPanel({
       observedRunningRef.current = false
       setRefreshing(false)
     }
-  }, [pageStatusOverrides, actingSet, setActingPageIds])
+  }, [pages, actingSet, setActingPageIds])
 
   // runInFlight 看门狗：入队型 run（只入队 + 重读清单）几秒就该返回。置位后 90 秒
   // 仍未观察到 running → requires_user_input 完成序列，说明 SSE 流中断/后端异常，
-  // 强制复位 runInFlightRef/observedRunningRef 并清空 actingSet——否则若 override
-  // 轮询也拿不到终态（run 根本没执行到入队、ui-designs.json 无更新），actingSet
+  // 强制复位 runInFlightRef/observedRunningRef 并清空 actingSet——否则若磁盘轮询
+  // 也拿不到终态（run 根本没执行到入队、ui-designs.json 无更新），actingSet
   // 会永久卡住导致 generateAll/submitPageAction/refreshUiDesigns 全部 early-return
-  // 的全局死锁。清空后卡片回到可重试态；若后台池其实仍在生成，下一轮 override
+  // 的全局死锁。清空后卡片回到可重试态；若后台池其实仍在生成，下一轮磁盘
   // 轮询会把 queued/generating 状态带回（isPageGenerating 驱动），不会丢失真实进度。
   useEffect(() => {
     if (!runInFlightRef.current) return
@@ -707,13 +771,13 @@ export default function UiDesignConfirmationPanel({
             全部生成
           </Button>
         ) : null}
-        {generatingPageIds.length > 0 ? (
+        {actingPageIds.length > 0 || generatingPageIds.length > 0 ? (
           <Button
             className={cx('ui-design-refresh-btn')}
             disabled={disabled || refreshing}
             icon={<ReloadOutlined />}
             loading={refreshing}
-            onClick={refreshUiDesigns}
+            onClick={handleManualRefresh}
             title="刷新查看后台生成池最新进度"
           >
             刷新
@@ -1064,7 +1128,7 @@ export default function UiDesignConfirmationPanel({
               // Enter 发送，Shift+Enter 换行。
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault()
-                if (canAdjust) submitAdjustPages()
+                if (canSubmitAdjust) submitAdjustPages()
               }
             }}
             placeholder="描述要调整的设计稿，如「概览页改成卡片布局」。输入 / 可指定目标页面。Enter 发送，Shift+Enter 换行。"
@@ -1073,11 +1137,17 @@ export default function UiDesignConfirmationPanel({
           />
           <Button
             className={cx('ui-design-send-btn')}
-            disabled={!canAdjust}
+            disabled={!canSubmitAdjust}
             icon={<ArrowUpOutlined />}
             onClick={submitAdjustPages}
             shape="circle"
-            title={mentionedPageIds.length > 0 ? `调整选中页面（${mentionedPageIds.length}）` : '按描述调整'}
+            title={
+              uiGenerationInProgress
+                ? '设计稿生成中，请等待本轮完成后再提交调整'
+                : mentionedPageIds.length > 0
+                  ? `调整选中页面（${mentionedPageIds.length}）`
+                  : '按描述调整'
+            }
             type="primary"
           />
           {mentionOpen && mentionCandidates.length > 0 ? (

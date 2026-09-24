@@ -329,13 +329,9 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     inherited = 0
     for page in valid_pages:
-        carried_entry = _carried_ui_page_manifest(page, project_dir, carried)
-        if carried_entry is not None:
-            entries.append(carried_entry)
-            inherited += 1
-            continue
-        page_key = derive_page_key(page, used_keys)
-        entries.append(build_ui_page_manifest(page, page_key=page_key))
+        entry, was_inherited = _ui_page_entry(page, project_dir, carried, used_keys)
+        entries.append(entry)
+        inherited += 1 if was_inherited else 0
     _emit_progress(
         (
             f"已准备 {total} 个页面（其中 {inherited} 个沿用上一轮设计稿），"
@@ -353,6 +349,31 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
         "product_plan_sha256": _product_plan_hash(state),
         "pages": entries,
     }
+
+
+def _ui_page_entry(
+    page: dict[str, Any],
+    project_dir: str,
+    carried: dict[str, dict[str, str]],
+    used_keys: set[str],
+) -> tuple[dict[str, Any], bool]:
+    """构造这一页本轮的清单条目，返回 `(条目, 是否继承自上一轮)`。
+
+    PageKey 的取舍有一条硬约束：**只要上一轮为这一页登记过 PageKey，本轮就必须沿用**。
+    这一页还是同一页，换个 key 会让磁盘上那份保留下来准备继承的设计稿变成谁也指不到的
+    孤儿，而清单指向一个不存在的目录。
+
+    只有全新页面（交接记录里没有）才派生新 key，并靠 `used_keys` 避开碰撞。
+    """
+
+    carried_entry = _carried_ui_page_manifest(page, project_dir, carried)
+    if carried_entry is not None:
+        return carried_entry, True
+    carried_key = str((carried.get(_page_id(page)) or {}).get("pageKey") or "").strip()
+    if carried_key:
+        # 继承被拒（页面定义变了）但这一页上一轮做过：复用旧 key，等重新生成覆盖它。
+        return build_ui_page_manifest(page, page_key=carried_key), False
+    return build_ui_page_manifest(page, page_key=derive_page_key(page, used_keys)), False
 
 
 def _carried_ui_page_manifest(
@@ -748,12 +769,35 @@ async def _apply_ui_design_action(
     # 多页调整：顺序遍历 pageIds，对每页基于现有设计稿 + 调整指令重新生成。
     # adjust_pages 不落盘，需在此持久化；换一换/选模板由池落盘，这里不重复写。
     if action_type == "adjust_pages":
-        adjusted = await _apply_adjust_pages(state, pages, project_dir, action)
+        adjusted = await _apply_adjust_pages(
+            state, _adjust_base_pages(state, pages), project_dir, action
+        )
         _persist_ui_designs(state, adjusted)
         return adjusted
 
     # 单页 / multi「换一换 / 选模板」：登记到后台并发池。
     return await _enqueue_ui_design_generation(state, pages, action)
+
+
+def _adjust_base_pages(
+    state: ProjectState, checkpoint_pages: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """取多页调整的基准页面清单：优先磁盘最新 manifest，退回 checkpoint 快照。
+
+    **不能直接用 checkpoint**：后台生成池只写磁盘、不写 checkpoint，所以 checkpoint 里
+    可能还留着某页入队时的 queued/generating，而池早已把它写成 confirmed。
+    `_apply_adjust_pages` 的语义是"选中页调整、其余页原样保留"，拿过期的 checkpoint
+    当基准会把池已完成的页**回退**成 queued —— 池里没有对应任务，那一页就永远卡在
+    「生成中」，用户点刷新也救不回来（自愈重入队依赖的就是这份状态）。
+
+    磁盘读不出来（首轮、或从未落盘）时才退回 checkpoint。
+    """
+
+    latest = load_ui_designs_json(ui_designs_json_path(state))
+    latest_pages = latest.get("pages") if isinstance(latest, dict) else None
+    if isinstance(latest_pages, list) and latest_pages:
+        return [page for page in latest_pages if isinstance(page, dict)]
+    return checkpoint_pages
 
 
 async def ui_confirmation(state: ProjectState) -> dict:

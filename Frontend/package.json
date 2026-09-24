@@ -64,7 +64,10 @@
     "build:mac:x64:prd": "node scripts/verify-backend-resource.mjs --platform=darwin --arch=x64 && pnpm build:prd && electron-builder --mac --x64 -c.mac.notarize=true",
     "build:mac:arm64:dev": "node scripts/verify-backend-resource.mjs --platform=darwin --arch=arm64 && pnpm build:dev && electron-builder --mac --arm64",
     "build:mac:arm64:prd": "node scripts/verify-backend-resource.mjs --platform=darwin --arch=arm64 && pnpm build:prd && electron-builder --mac --arm64 -c.mac.notarize=true",
-    "build:linux": "pnpm build && electron-builder --linux"
+    "build:linux": "pnpm build && electron-builder --linux",
+    "test:ui-design-page-code": "node scripts/run-ui-design-page-code-tests.mjs",
+    "test:ui-design-pages-with-code": "node scripts/run-ui-design-pages-with-code-tests.mjs",
+    "test:ui-design-adjust-settlement": "node scripts/run-ui-design-adjust-settlement-tests.mjs"
   },
   "dependencies": {
     "@ag-ui/client": "0.0.57",

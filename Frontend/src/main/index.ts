@@ -6,6 +6,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import icon from '../../resources/icon.png?asset'
 import { PRODUCT_DISPLAY_NAME, WORKSPACE_ARTIFACT_DIR_NAME } from './branding'
+import { attachUiDesignPageCode } from './uiDesignPageCode'
 import { DEVAGENTSTUDIO_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './designRuntimeProtocol'
@@ -1514,13 +1515,17 @@ function setupWorkspaceIpc(): void {
 
   // 直接读取工作区 specs/ui-designs.json，供前端轮询后台生成池进度。
   // 绕过 Graph run（同 thread 不能并发），避免 no-op resume 被 checkpoint 约束吞掉。
+  //
+  // 顺带回填每页的 `code`：正式 manifest 刻意只存 `code_path` 不存源码（运行时数据），
+  // 但确认界面要靠它渲染预览、「查看设计稿」按钮也按它判可用性。不回填的话，重新打开
+  // 工作区后每一页都点不开 —— 本轮新生成的和从上一轮继承来的一视同仁。
   ipcMain.handle('workspace:read-ui-designs', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
     const uiDesignsPath = path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'specs', 'ui-designs.json')
     try {
       const content = await fs.readFile(uiDesignsPath, 'utf8')
       const parsed = JSON.parse(content)
-      return { uiDesigns: parsed }
+      return { uiDesigns: await attachUiDesignPageCode(workspaceRoot, parsed) }
     } catch {
       return { uiDesigns: null }
     }

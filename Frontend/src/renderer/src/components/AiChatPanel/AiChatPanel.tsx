@@ -8,6 +8,7 @@ import {
   summarizePaths,
   useModuleOwnedFiles
 } from '../../hooks/useModuleOwnedFiles'
+import { useUiDesignPagesWithCode } from '../../hooks/useUiDesignPagesWithCode'
 import {
   hasApplicationEnteredDevelopment,
   isApplicationTemplatePreparationEligible,
@@ -1264,27 +1265,37 @@ export default function AiChatPanel({
   const uiDesignPagesCacheRef = useRef<
     Array<{ pageId?: string; name?: string; code?: string; status?: string; template_id?: string }>
   >([])
+  const uiDesignPagesSource = useMemo(
+    () =>
+      (
+        Array.isArray(planningUiDesignPagesSource)
+          ? planningUiDesignPagesSource.filter((p) => p && typeof p === 'object')
+          : []
+      ) as Array<{
+        pageId?: string
+        name?: string
+        code?: string
+        status?: string
+        template_id?: string
+      }>,
+    [planningUiDesignPagesSource]
+  )
+  // 快照里的页面没有 code（正式 manifest 只存 code_path），从磁盘补回来，
+  // 否则右侧预览永远停在「本页尚未生成设计稿」。
+  const uiDesignPagesWithCode = useUiDesignPagesWithCode(
+    application.workspaceRoot,
+    uiDesignPagesSource
+  )
   const uiDesignPages = useMemo(() => {
-    const raw = (
-      Array.isArray(planningUiDesignPagesSource)
-        ? planningUiDesignPagesSource.filter((p) => p && typeof p === 'object')
-        : []
-    ) as Array<{
-      pageId?: string
-      name?: string
-      code?: string
-      status?: string
-      template_id?: string
-    }>
-    if (raw.some((p) => Boolean(p.code))) {
-      uiDesignPagesCacheRef.current = raw
-      return raw
+    if (uiDesignPagesWithCode.some((p) => Boolean(p.code))) {
+      uiDesignPagesCacheRef.current = uiDesignPagesWithCode
+      return uiDesignPagesWithCode
     }
     if (planningPhaseRunning && uiDesignPagesCacheRef.current.length > 0) {
       return uiDesignPagesCacheRef.current
     }
-    return raw
-  }, [planningUiDesignPagesSource, planningPhaseRunning])
+    return uiDesignPagesWithCode
+  }, [uiDesignPagesWithCode, planningPhaseRunning])
   const requirementDocContent = mergedRequirementDocContentFor(
     designDocFileContent,
     currentPlanningWorkflow

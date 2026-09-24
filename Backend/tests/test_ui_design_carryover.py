@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.graph.nodes.ui_confirmation import _carried_ui_page_manifest
+from app.graph.nodes.ui_confirmation import _carried_ui_page_manifest, _ui_page_entry
 from app.services.iteration_service import _clear_iteration_artifacts
 from app.services.ui_design_carryover import (
     carried_page_keys,
@@ -160,7 +160,7 @@ class IterationClearKeepsConfirmedDesignsTests(unittest.TestCase):
             workspace = Path(raw)
             devagentstudio = self._workspace(workspace, status="confirmed")
 
-            _clear_iteration_artifacts(devagentstudio, workspace_root=workspace)
+            _clear_iteration_artifacts(devagentstudio, workspace_root=workspace, branch_name="v1.1")
 
             kept = devagentstudio / "ui-design" / "pages" / _PAGE_KEY / "index.tsx"
             self.assertTrue(kept.is_file(), "已确认的设计稿被清掉了，新迭代无从继承")
@@ -179,7 +179,7 @@ class IterationClearKeepsConfirmedDesignsTests(unittest.TestCase):
             workspace = Path(raw)
             devagentstudio = self._workspace(workspace, status="pending")
 
-            _clear_iteration_artifacts(devagentstudio, workspace_root=workspace)
+            _clear_iteration_artifacts(devagentstudio, workspace_root=workspace, branch_name="v1.1")
 
             self.assertFalse((devagentstudio / "ui-design" / "pages" / _PAGE_KEY).exists())
             self.assertEqual(read_ui_design_carryover(workspace), {})
@@ -197,7 +197,7 @@ class IterationClearKeepsConfirmedDesignsTests(unittest.TestCase):
             devagentstudio = workspace / ".devagentstudio"
             (devagentstudio / "ui-design").mkdir(parents=True)
 
-            _clear_iteration_artifacts(devagentstudio, workspace_root=workspace)
+            _clear_iteration_artifacts(devagentstudio, workspace_root=workspace, branch_name="v1.1")
 
             self.assertEqual(read_ui_design_carryover(workspace), {})
 
@@ -257,3 +257,48 @@ class CarriedPageManifestTests(unittest.TestCase):
                     {_PAGE_ID: {"pageKey": _PAGE_KEY, "templateId": "", "templateSourcePath": ""}},
                 )
             )
+
+
+class PageKeyReuseTests(unittest.TestCase):
+    """PageKey 的取舍：上一轮登记过就必须沿用，绝不派生新后缀。
+
+    派新后缀会造出谁都不指的幽灵 key，并让磁盘上那份保留下来准备继承的设计稿
+    变成孤儿 —— 用户看到的是「v1.0 已设计过」却点不开任何东西。
+    """
+
+    def test_rejected_inheritance_reuses_carried_key(self) -> None:
+        """核心回归：继承被拒时复用旧 PageKey，不产生 WelcomeHome2。"""
+
+        with tempfile.TemporaryDirectory() as raw:
+            project_dir = Path(raw) / "ui-design"
+            (project_dir / "pages" / _PAGE_KEY).mkdir(parents=True)
+            (project_dir / "pages" / _PAGE_KEY / "index.tsx").write_text(
+                _VALID_CODE, encoding="utf-8"
+            )
+            # 页面定义变了 → 一致性校验必然拒绝继承
+            changed_page = {**_product_page(), "information_items": [{"itemId": "brand_new_item"}]}
+            carried = {
+                _PAGE_ID: {"pageKey": _PAGE_KEY, "templateId": "", "templateSourcePath": ""}
+            }
+            used_keys: set[str] = {"DefaultPage", _PAGE_KEY}
+
+            entry, inherited = _ui_page_entry(changed_page, str(project_dir), carried, used_keys)
+
+            self.assertFalse(inherited)
+            self.assertEqual(entry["page_key"], _PAGE_KEY, "不该派发新后缀")
+            self.assertEqual(entry["status"], "pending")
+
+    def test_new_page_derives_key_without_collision(self) -> None:
+        """全新页面才派生 key，并避开已被占用的名字。"""
+
+        with tempfile.TemporaryDirectory() as raw:
+            project_dir = Path(raw) / "ui-design"
+            project_dir.mkdir(parents=True)
+            new_page = {"pageId": "home", "name": "首页", "information_items": [], "actions": []}
+
+            entry, inherited = _ui_page_entry(
+                new_page, str(project_dir), {}, {"DefaultPage", "Home"}
+            )
+
+            self.assertFalse(inherited)
+            self.assertEqual(entry["page_key"], "Home2")

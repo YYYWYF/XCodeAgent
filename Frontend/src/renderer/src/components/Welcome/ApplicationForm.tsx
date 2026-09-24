@@ -192,7 +192,7 @@ export default function ApplicationForm({
           label="版本号（对应码云仓库中的分支名）"
           name="branchName"
           rules={[
-            { required: true, whitespace: true, message: '请输入分支名' },
+            { required: true, whitespace: true, message: '请输入版本号' },
             {
               validator: (_rule, value: string) => {
                 const invalidReason = validateBranchName(value)

@@ -261,8 +261,13 @@ def plan_product_with_chat_model(
     existing_plan: dict[str, Any] | None = None,
     user_feedback: str = "",
     on_token: Callable[[str], None] | None = None,
+    carried_pages: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """生成经过确定性归一化的 ProductPlan。"""
+    """生成经过确定性归一化的 ProductPlan。
+
+    `carried_pages` 透传给 `create_product_plan`：上一轮未变的页面整份沿用，
+    不让模型重写（见 `app/services/product_plan_carryover.py`）。
+    """
 
     agent_note = _invoke_product_planner(
         requirement_spec,
@@ -299,4 +304,5 @@ def plan_product_with_chat_model(
         requirement_spec,
         agent_plan=agent_plan,
         existing_plan=existing_plan,
+        carried_pages=carried_pages,
     )

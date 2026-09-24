@@ -96,7 +96,7 @@ function readRepositoryBranchPayload(
  */
 export function validateBranchName(value: string): string | undefined {
   const branchName = (value ?? '').trim()
-  if (!branchName) return '请输入分支名'
+  if (!branchName) return '请输入版本号'
   if (branchName.length > 255) return '分支名过长，请控制在 255 个字符以内'
   // Git 明确禁止的字符（见 git-check-ref-format），含空格与控制字符。
   // eslint-disable-next-line no-control-regex

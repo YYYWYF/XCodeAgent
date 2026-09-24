@@ -95,6 +95,7 @@ function PublishBranchModal({
                   <li>
                     提交到本地仓库并推送到版本 <strong>{branchName}</strong>
                   </li>
+                  <li>版本号对应远端仓库中的一个分支名，每个版本各自占一个分支</li>
                   <li>推送后该版本仍可继续开发，再次提交</li>
                 </ul>
               </div>
@@ -195,12 +196,12 @@ function StartIterationModal({
           </span>
           <span className={cx('workbench-publish-modal-title')}>
             <strong>发起新迭代</strong>
-            <small>回到需求分析阶段，重新走一遍设计与计划</small>
+            <small>回到设计阶段，重新走一遍设计与计划</small>
           </span>
         </header>
         <div className={cx('workbench-publish-modal-body')}>
           <p className={cx('workbench-publish-modal-lead')}>
-            新迭代会从需求分析阶段开始，并使用全新的对话记录。请选择这次迭代在哪儿进行：
+            新迭代会从设计阶段开始，并使用全新的对话记录。请选择这次迭代在哪儿进行：
           </p>
           <Radio.Group
             className={cx('workbench-iteration-branch-choice')}
