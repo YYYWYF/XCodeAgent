@@ -29,6 +29,7 @@ export default function TestPhaseConfirmationCard({
   workspaceRoot
 }: Props): ReactElement {
   const gate = useTestEntryGate()
+  const entityTarget = target?.type === 'data_source'
   return (
     <div className={cx('workflow-test-phase-confirmation')}>
       <div className={cx('workflow-test-phase-confirmation-title')}>
@@ -36,9 +37,13 @@ export default function TestPhaseConfirmationCard({
           <CheckCircleOutlined />
         </span>
         <div>
-          <Text strong>当前产物初次开发已完成</Text>
+          <Text strong>{entityTarget ? '全部开发产物已完成' : '当前产物初次开发已完成'}</Text>
           <Text type="secondary">
-            {gate?.allowed ? TEST_PHASE_CONFIRMATION_DESCRIPTION : testEntryGateReason(gate)}
+            {gate?.allowed
+              ? entityTarget
+                ? '实体设计已确认，确认后将进入测试阶段，执行测试与失败修复'
+                : TEST_PHASE_CONFIRMATION_DESCRIPTION
+              : testEntryGateReason(gate)}
           </Text>
         </div>
       </div>

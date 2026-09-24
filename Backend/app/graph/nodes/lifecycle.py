@@ -5,7 +5,9 @@ from langgraph.config import get_stream_writer
 from app.graph.state import ProjectState
 from app.graph.subgraphs.acceptance import run_acceptance_subgraph
 from app.services.build_scheduler import summarize_build_runtime
-from app.services.development_artifacts import complete_initial_development, test_entry_gate
+from app.services.development_artifacts import (
+    complete_initial_development, require_test_entry, test_entry_gate,
+)
 from app.services.development_review_files import development_review_files
 from app.services.project_launcher import launch_project_preview
 from app.workspace.spec_documents import workspace_root
@@ -281,9 +283,58 @@ def _completed_build_summary(state: ProjectState) -> dict[str, Any] | None:
 
 
 def test_phase_confirmation(state: ProjectState) -> dict:
-    """在 Build 与开发阶段单元测试门禁完成后暂停等待用户确认。"""
+    """校验当前开发目标的完成事实，并等待用户确认进入测试。"""
 
     target = _test_target_record(state)
+    entity_id = str(state.get("entity_test_entry_id") or "").strip()
+    if entity_id:
+        # 实体没有独立 Build Unit；只有实体确认节点写入的内部标记和全量门禁
+        # 同时成立时，才可复用测试阶段确认入口。
+        scope = state.get("build_execution_scope")
+        if (
+            entity_id != str(state.get("selected_entity_id") or "").strip()
+            or not isinstance(scope, dict)
+            or scope.get("type") != "data_source"
+            or scope.get("targetId") != entity_id
+        ):
+            return {
+                "phase": "test_phase_confirmation", "status": "failed",
+                "error": "实体测试确认目标与已确认的实体绑定不一致。",
+                "timeline": ["test_phase_confirmation"],
+            }
+        lifecycle = require_test_entry(workspace_root(state))
+        progress = lifecycle.development_artifacts.entities.get(entity_id)
+        if progress is None or progress.initial_development_status != "completed":
+            return {
+                "phase": "test_phase_confirmation", "status": "failed",
+                "error": "实体绑定尚未正式确认，不能进入测试阶段。",
+                "timeline": ["test_phase_confirmation"],
+            }
+        submission = state.get("test_phase_confirmation")
+        confirmed = (
+            isinstance(submission, dict) and submission.get("action") == "confirm"
+        )
+        return {
+            "phase": "test_phase_confirmation",
+            "status": "completed" if confirmed else "requires_user_input",
+            "test_phase_confirmation": {},
+            "test_target": target,
+            "clarification": {} if confirmed else {
+                "mode": "test_phase_confirmation",
+                "status": "requires_user_input",
+                "message": "全部开发产物已完成，确认后进入测试阶段。",
+                "testEntryGate": test_entry_gate(lifecycle).model_dump(
+                    mode="json", by_alias=True
+                ),
+                "testTarget": target,
+                "questions": [],
+            },
+            "integration_next_action": "integration_test" if confirmed else "await_user_input",
+            "repair_iteration": 0,
+            "max_repair_iterations": 3,
+            "repair_return_node": "integration_test",
+            "timeline": ["test_phase_confirmation"],
+        }
     build_summary = _completed_build_summary(state)
     if build_summary is None:
         return {

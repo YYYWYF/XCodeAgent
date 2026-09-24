@@ -179,6 +179,12 @@ def route_test_phase_confirmation(state: ProjectState) -> str:
     )
     if (
         state.get("status") == "completed"
+        and state.get("entity_test_entry_id")
+        and state.get("integration_next_action") == "integration_test"
+    ):
+        return "integration_test"
+    if (
+        state.get("status") == "completed"
         and build_completed
         and state.get("unit_test_gate_passed") is True
     ):

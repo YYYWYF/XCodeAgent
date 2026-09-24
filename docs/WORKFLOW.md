@@ -6,7 +6,7 @@ workflow根据用户需求生成可在本地运行的前后端工程，并通过
 
 ## 核心架构原则
 
-测试入口另有应用级初次开发门禁：`.devagentstudio/application-lifecycle.json.developmentArtifacts` 保存每个页面、Endpoint 和实体的初次开发状态。页面和 Endpoint 必须各自完成 Build 及开发阶段单元测试门禁，实体必须完成正式绑定确认；当前 Build 计划的范围不能排除其他未完成产物。只有全部产物完成后 `testEntryGate.allowed=true`，顶部才允许浏览测试及后续阶段。`test_phase_confirmation` 先记录当前目标完成再计算全量门禁，二次修改不覆盖首次完成事实。实际确认、跨 thread 测试接替和集成测试节点均在服务端复检，阻断以 `development_artifacts_incomplete` 及完整 AG-UI 生命周期返回。详细状态及目录同步规则见 `docs/APPLICATION_DEVELOPMENT_PLANNING.md` 的 Initial Development Completion and Test Entry。
+测试入口另有应用级初次开发门禁：`.devagentstudio/application-lifecycle.json.developmentArtifacts` 保存每个页面、Endpoint 和实体的初次开发状态。页面和 Endpoint 必须各自完成 Build 及开发阶段单元测试门禁，实体必须完成正式绑定确认；当前 Build 计划的范围不能排除其他未完成产物。只有全部产物完成后 `testEntryGate.allowed=true`，顶部才允许浏览测试及后续阶段。`test_phase_confirmation` 对页面或 Endpoint 先记录当前目标完成再计算全量门禁；若独立实体确认使全部产物完成，实体对话末尾也展示同一测试确认卡，并在跨 thread 接替时从服务端 checkpoint 验证实体确认身份。二次修改不覆盖首次完成事实。实际确认、跨 thread 测试接替和集成测试节点均在服务端复检，阻断以 `development_artifacts_incomplete` 及完整 AG-UI 生命周期返回。详细状态及目录同步规则见 `docs/APPLICATION_DEVELOPMENT_PLANNING.md` 的 Initial Development Completion and Test Entry。
 
 1. 外层 LangGraph 管理确定性的项目生命周期。
 2. Deep Agents 负责需要自主推理、工具调用、文件操作和多步执行的任务。

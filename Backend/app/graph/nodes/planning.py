@@ -29,6 +29,7 @@ from app.services.api_contract_validation import (
     validate_api_contract_consistency,
     validate_api_contract_definitions,
 )
+from app.services.development_artifacts import refresh_development_artifacts, test_entry_gate
 from app.services.entity_source_binding import (
     apply_entity_source_binding_submission,
     entity_source_binding_payload,
@@ -603,7 +604,7 @@ def entity_source_binding(state: ProjectState) -> dict:
     result = _entity_source_binding_implementation(
         {**state, "detail_target_type": "entity"}
     )
-    result["phase"] = "entity_source_binding"
+    result.setdefault("phase", "entity_source_binding")
     result["timeline"] = ["entity_source_binding"]
     result["entity_source_binding_submission"] = {}
     # 每轮设计确认只从该实体 thread 的 checkpoint 取关联，不能依赖客户端
@@ -611,7 +612,7 @@ def entity_source_binding(state: ProjectState) -> dict:
     result["development_continuation_id"] = str(state.get("development_continuation_id") or "")
     clarification = result.get("clarification")
     if isinstance(clarification, dict):
-        clarification.setdefault("workflow_phase", "entity_source_binding")
+        clarification.setdefault("workflow_phase", result["phase"])
     return result
 
 
@@ -708,17 +709,50 @@ def _entity_source_binding_implementation(state: ProjectState) -> dict:
             selected_entity_id,
         )
         project_plan_path = write_project_plan_document(state, confirmed_plan)
+        scope = state.get("build_execution_scope")
+        entity_scope = (
+            isinstance(scope, dict)
+            and scope.get("type") == "data_source"
+            and scope.get("targetId") == selected_entity_id
+        )
+        gate = (
+            test_entry_gate(refresh_development_artifacts(workspace_from_state(state)))
+            if entity_scope else None
+        )
+        enter_test = gate is not None and gate.allowed
         return {
-            "phase": "entity_source_binding",
-            "status": "completed",
+            "phase": "test_phase_confirmation" if enter_test else "entity_source_binding",
+            "status": "requires_user_input" if enter_test else "completed",
             "project_plan": confirmed_plan,
             "pending_project_plan": {},
             "project_plan_path": project_plan_path,
             "project_plan_json_path": _project_plan_json_path_for_state(state),
-            "clarification": _entity_design_confirmed_payload(
-                confirmed_plan,
-                selected_entity_id=selected_entity_id,
-                detail_target_type="entity",
+            "clarification": (
+                {
+                    "mode": "test_phase_confirmation",
+                    "status": "requires_user_input",
+                    "message": "全部开发产物已完成，确认后进入测试阶段。",
+                    "testEntryGate": gate.model_dump(mode="json", by_alias=True),
+                    "testTarget": {
+                        "type": "data_source", "id": selected_entity_id,
+                        "label": selected_entity_id,
+                    },
+                    "questions": [],
+                }
+                if enter_test else _entity_design_confirmed_payload(
+                    confirmed_plan,
+                    selected_entity_id=selected_entity_id,
+                    detail_target_type="entity",
+                )
+            ),
+            # 仅由本节点在正式绑定写盘后生成，确认节点据此区分实体路径。
+            "entity_test_entry_id": selected_entity_id if enter_test else "",
+            **(
+                {"build_execution_scope": {
+                    "type": "data_source", "targetId": selected_entity_id,
+                    "targetLabel": selected_entity_id,
+                }}
+                if enter_test else {}
             ),
             "detail_selection": {
                 "status": "completed",

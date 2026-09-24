@@ -38,6 +38,8 @@ Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。
 
 后端 execution 的 `developmentPurpose` 和 `developmentTarget` 由正式入口及原 execution 决定，不能由客户端声明。初次开发的实体续接、DAG 确认、单元测试及重试保留该身份，普通会话及正式修订不能替未开发目标补记完成。只有服务端 Build 完成且 `unit_test_gate_passed=true`（通过或显式跳过）后，`test_phase_confirmation` 才先写入当前目标完成，再计算全部产物门禁；不等待测试确认、审查或验收。
 
+独立实体确认写入正式绑定后立即重新计算全量门禁。如果该实体是最后一项，实体对话末尾展示与页面/Endpoint 共用的“进入测试阶段”确认卡。跨测试会话的确认资格从来源 execution 的服务端 checkpoint 和待确认交互读取，确认节点再次核验目标实体及全量门禁；实体没有独立 Build Unit，不生成虚假的 Build 或单元测试通过事实。
+
 产物目录使用已确认 ProductPlan 页面和 TechnicalPlan Endpoint、实体。新增 ID 从 `pending` 开始；删除目标移出统计，迟到事件不能重建；同 ID 改名或修改需求保留初次完成。未确认草稿或损坏文件不替换既有完成事实，通过 `catalogError` 关闭测试入口。只支持当前合同，不从旧会话、Build 文件或历史 checkpoint 推断完成状态。
 
 `testEntryGate` 随 AG-UI lifecycle 投影提供 `allowed/total/completed/pending/inProgress/blockers/reason`，不重复持久化。放行要求工作台就绪、目录有效、至少一个页面、接口或实体、全部初次完成；当前 Build 计划只约束本次执行，不会缩小应用级门禁分母。前端顶部、历史确认卡、自动阶段与本地阶段恢复使用同一门禁，测试及后续阶段均受约束。顶部点击只浏览；真实测试提交、execution 接替、直接恢复/调试测试及修复返回测试均由后端复检。拒绝返回 `development_artifacts_incomplete`，保留未消费确认；测试启动接替与凭据消费原子提交，失败后原执行可重试。

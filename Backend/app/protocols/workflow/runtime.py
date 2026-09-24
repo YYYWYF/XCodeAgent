@@ -65,6 +65,7 @@ from app.protocols.workflow.stream_events import (
 )
 from app.config import Settings
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
+from app.domain.application_lifecycle import PendingInteractionType
 from app.graph.application_planning_interrupts import (
     validate_application_planning_review_action,
 )
@@ -101,6 +102,30 @@ async def _source_development_review_files(
     )
     files = snapshot.values.get("development_review_files") if snapshot else None
     return files if isinstance(files, list) else []
+
+
+async def _source_entity_test_entry(
+    graph: Any, workspace: str, source_run_id: str
+) -> str:
+    """只从待测试确认的实体执行 checkpoint 继承实体入口凭据。"""
+
+    if not source_run_id or not hasattr(graph, "aget_state"):
+        return ""
+    lifecycle = load_application_lifecycle(workspace)
+    execution = lifecycle.active_executions.get(source_run_id) if lifecycle else None
+    if (
+        execution is None
+        or execution.scope != "data_source"
+        or execution.pending_interaction is None
+        or execution.pending_interaction.type != PendingInteractionType.TEST_PHASE_CONFIRMATION
+    ):
+        return ""
+    snapshot = await graph.aget_state(
+        {"configurable": {"thread_id": execution.thread_id}}
+    )
+    values = snapshot.values if snapshot else {}
+    entity_id = str(values.get("entity_test_entry_id") or "").strip()
+    return entity_id if entity_id and entity_id == execution.target_id else ""
 
 
 def _graph_stream_supports_subgraphs(graph: Any) -> bool:
@@ -476,6 +501,7 @@ def build_workflow_ag_ui_stream(
             phase_review_files: list[str] | None = (
                 [] if resume_from in {"test_phase_confirmation", "review_phase_confirmation"} else None
             )
+            entity_test_entry_id = ""
             if phase_review_files is not None and workspace:
                 source_run_id = str(
                     (workflow_inputs.get("resume_values") or {}).get("resume_execution_run_id") or ""
@@ -483,6 +509,10 @@ def build_workflow_ag_ui_stream(
                 phase_review_files = await _source_development_review_files(
                     active_graph, workspace, source_run_id
                 )
+                if resume_from == "test_phase_confirmation":
+                    entity_test_entry_id = await _source_entity_test_entry(
+                        active_graph, workspace, source_run_id
+                    )
             checkpoint_values: dict[str, Any] = {}
             execution_checkpoint_state: dict[str, Any] = {}
             checkpoint_snapshot: Any | None = None
@@ -603,6 +633,13 @@ def build_workflow_ag_ui_stream(
                 "active_run_id": run_id,
             }
             initial_state.update(resume_values)
+            if entity_test_entry_id:
+                initial_state["entity_test_entry_id"] = entity_test_entry_id
+                initial_state["selected_entity_id"] = entity_test_entry_id
+                initial_state["build_execution_scope"] = {
+                    "type": "data_source", "targetId": entity_test_entry_id,
+                    "targetLabel": entity_test_entry_id,
+                }
             # Recovery source 只属于本次显式请求；不能让 checkpoint 中的旧 ID
             # 在后续未携带 resumeExecutionRunId 的 Retry 中继续生效。
             initial_state["resume_execution_run_id"] = str(
