@@ -2,7 +2,10 @@
 
 from app.topologies.compiler import (
     compile_registered_topology,
+    compile_selected_technical_plan,
+    resolve_product_topology,
     resolve_registered_topology,
+    resolve_topology,
     topology_type_from_plan,
 )
 from app.topologies.model import (
@@ -11,12 +14,17 @@ from app.topologies.model import (
     PlanningTopologyPlan,
     TopologyBlueprint,
     TopologyContext,
+    TopologyEvaluation,
+    TopologyFacts,
+    TopologyFactSource,
+    TopologyResolution,
     TopologyType,
 )
 from app.topologies.queries import (
     AGENT_RUNTIME_SERVICE_ID,
     BACKEND_SERVICE_ID,
     confirmed_authentication_termination,
+    confirmed_launch_stages,
     confirmed_public_edge_service_id,
     confirmed_service_ids,
     includes_backend_service,
@@ -32,14 +40,22 @@ __all__ = [
     "PlanningTopologyPlan",
     "TopologyBlueprint",
     "TopologyContext",
+    "TopologyEvaluation",
+    "TopologyFacts",
+    "TopologyFactSource",
+    "TopologyResolution",
     "TopologyType",
     "compile_registered_topology",
+    "compile_selected_technical_plan",
     "confirmed_authentication_termination",
+    "confirmed_launch_stages",
     "confirmed_public_edge_service_id",
     "confirmed_service_ids",
     "includes_backend_service",
     "read_confirmed_technical_plan",
+    "resolve_product_topology",
     "resolve_registered_topology",
+    "resolve_topology",
     "serves_agent_runtime_public_edge",
     "topology_type_from_plan",
 ]

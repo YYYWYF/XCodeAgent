@@ -20,6 +20,7 @@ from app.services.requirement_spec import (
     create_requirement_spec,
     validate_authorization_requirements,
 )
+from app.topologies import compile_selected_technical_plan, topology_type_from_plan
 from app.utils.model_output import extract_json_object
 
 
@@ -255,6 +256,16 @@ def sync_project_plan_from_markdown(
             datasource_type=datasource_type,
         )
     )
+    if is_technical_plan:
+        selected_topology = topology_type_from_plan(existing_plan)
+        if selected_topology is not None:
+            product_plan = requirement_spec.get("confirmed_product_plan")
+            application_config = requirement_spec.get("application_config")
+            if not isinstance(product_plan, dict) or not isinstance(application_config, dict):
+                raise ValueError("TechnicalPlan Markdown 同步缺少已确认 ProductPlan 或应用配置。")
+            normalized = compile_selected_technical_plan(
+                selected_topology, normalized, product_plan, application_config
+            )
     if not is_technical_plan and isinstance(synced.get("app"), dict):
         normalized["app"] = synced["app"]
     errors = validate_api_contract_consistency(normalized)

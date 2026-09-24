@@ -93,3 +93,17 @@ def serves_agent_runtime_public_edge(plan: dict[str, Any]) -> bool:
     """判断应用公开入口是否由 Agent Runtime 自身承担。"""
 
     return confirmed_public_edge_service_id(plan) == AGENT_RUNTIME_SERVICE_ID
+
+
+def confirmed_launch_stages(
+    plan: dict[str, Any], application_config: dict[str, Any]
+) -> tuple[str, ...]:
+    """从已确认拓扑重新编译启动阶段，不按目录结构猜测服务顺序。"""
+
+    from app.topologies.compiler import compile_registered_topology, topology_type_from_plan
+
+    topology_type = topology_type_from_plan(plan)
+    if topology_type is None:
+        return ()
+    blueprint = compile_registered_topology(topology_type, plan, application_config)
+    return blueprint.development.launch_stages

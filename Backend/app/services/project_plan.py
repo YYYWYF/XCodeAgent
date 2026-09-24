@@ -42,7 +42,10 @@ from app.services.product_plan import project_active_agent_product_plan
 from app.services.page_dependencies import normalize_page_dependencies
 from app.services.requirement_spec import product_acceptance_criteria
 from app.services.authorization_manifest import compile_authorization_manifest
-from app.topologies import includes_backend_service, resolve_registered_topology
+from app.topologies import (
+    TopologyType,
+    includes_backend_service,
+)
 
 
 BACKEND_TECH_STACK = {
@@ -101,6 +104,8 @@ _AGENT_DIRECT_TOOL_BINDING_KEYS = {
 }
 _AGENT_DIRECT_TOOL_SOURCE_TYPES = {
     "runtime_builtin",
+    "application_service",
+    "repository_query",
     "external_http",
     "mcp",
     "knowledge",
@@ -206,37 +211,19 @@ def apply_project_plan_datasource_policy(
     project_plan: dict[str, Any],
     datasource_type: DatasourceType | None = None,
 ) -> dict[str, Any]:
-    """按已确认实体设计的数据源集合聚合架构边界。
+    """按已确认实体设计的数据源集合聚合 ProjectPlan 架构边界。
 
-    应用级不再有数据源类型；实体设计确认前数据源清单为空时，
-    架构使用通用 Java8 + Springboot 默认边界。
+    TechnicalPlan 的架构由用户选择的拓扑编译，不能再套用数据源策略。
     """
 
     projected = deepcopy(project_plan)
+    if projected.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
+        return projected
     architecture = (
         dict(projected.get("architecture"))
         if isinstance(projected.get("architecture"), dict)
         else {}
     )
-    if projected.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
-        effective_type = (
-            ensure_enabled_datasource_type(datasource_type)
-            if datasource_type is not None
-            else datasource_type_from_artifact(projected, fallback="database")
-        )
-        policy = _architecture_for_datasource_type(effective_type)
-        for key in ("backend", "data"):
-            architecture[key] = policy[key]
-        architecture.setdefault("frontend", policy["frontend"])
-        architecture = {
-            key: architecture.get(key, policy[key])
-            for key in ("frontend", "backend", "data")
-        }
-        if _dict_items(projected.get("agent_contracts")):
-            architecture["agent_runtime"] = AGENT_RUNTIME_ARCHITECTURE
-        projected["architecture"] = architecture
-        return projected
-
     data_sources = plan_data_sources(projected)
     if not data_sources:
         # 实体设计确认前保留计划生成时的架构边界，避免用默认值覆盖静态/数据库架构。
@@ -1220,22 +1207,37 @@ def validate_project_plan_datasource_policy(
     architecture_text = _business_text(architecture).lower()
     if project_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
         has_agents = bool(_dict_items(project_plan.get("agent_contracts")))
-        expected_architecture_keys = {"frontend", "backend", "data"}
-        if has_agents:
-            expected_architecture_keys.add("agent_runtime")
+        selected_topology = project_plan.get("topology")
+        selected_type = (
+            selected_topology.get("type")
+            if isinstance(selected_topology, dict)
+            else None
+        )
+        if selected_type == TopologyType.AGENT_RUNTIME_DIRECT.value:
+            expected_architecture_keys = {"frontend", "agent_runtime", "data"}
+        elif selected_type is None:
+            expected_architecture_keys = {"frontend", "application", "data"}
+        else:
+            expected_architecture_keys = {"frontend", "backend", "data"}
+            if has_agents:
+                expected_architecture_keys.add("agent_runtime")
         if set(architecture) != expected_architecture_keys:
             errors.append(
                 "TechnicalPlan architecture 必须且只能包含 "
                 + "、".join(sorted(expected_architecture_keys))
                 + "。"
             )
-        if not all(isinstance(architecture.get(key), str) and architecture[key].strip() for key in ("frontend", "backend", "data")):
-            errors.append("TechnicalPlan architecture 的 frontend、backend、data 必须是非空字符串。")
-        if "java8" not in architecture_text or "springboot" not in architecture_text:
+        if not all(isinstance(architecture.get(key), str) and architecture[key].strip() for key in expected_architecture_keys):
+            errors.append("TechnicalPlan architecture 的各阶段字段必须是非空字符串。")
+        if selected_type not in {None, TopologyType.AGENT_RUNTIME_DIRECT.value} and (
+            "java8" not in architecture_text or "springboot" not in architecture_text
+        ):
             errors.append("TechnicalPlan backend 必须体现 Java8 和 Springboot。")
-        if "mysql8" not in architecture_text or "redis" not in architecture_text:
+        if selected_type not in {None, TopologyType.AGENT_RUNTIME_DIRECT.value} and (
+            "mysql8" not in architecture_text or "redis" not in architecture_text
+        ):
             errors.append("TechnicalPlan data 必须体现 MySQL8 和 Redis。")
-        if has_agents and not all(
+        if selected_type not in {None, TopologyType.AGENT_RUNTIME_DIRECT.value} and has_agents and not all(
             token in str(architecture.get("agent_runtime") or "").lower()
             for token in ("python 3.12", "deepagents", "sidecar", "ag-ui sse")
         ):
@@ -2000,7 +2002,7 @@ def _agent_context_settings(*, knowledge_enabled: bool = False) -> dict[str, Any
             {
                 "type": "trusted_user_context",
                 "enabled": True,
-                "trust": "gateway_verified",
+                "trust": "authenticated_principal",
             },
             {"type": "tool_results", "enabled": True, "trust": "tool_output"},
             {
@@ -2591,6 +2593,11 @@ def technical_agent_contract_model_input(value: Any) -> list[dict[str, Any]]:
 
     result: list[dict[str, Any]] = []
     for contract in _dict_items(value):
+        if set(contract) == _AGENT_DIRECT_MODEL_CONTRACT_KEYS:
+            # TechnicalPlan Core 已经是候选形状；不能把尚未编译的本地 Tool
+            # 错当作 Java Endpoint Tool，导致 source/serviceId 在确认时丢失。
+            result.append(deepcopy(contract))
+            continue
         invocation = (
             contract.get("invocation")
             if isinstance(contract.get("invocation"), dict)
@@ -2660,6 +2667,15 @@ def validate_technical_plan_agent_contracts(
     if len(contracts) != len(raw_contracts):
         return ["TechnicalPlan.agent_contracts 的每一项都必须是 JSON 对象。"]
     active_product_plan = project_active_agent_product_plan(product_plan)
+    if not isinstance(plan.get("topology"), dict):
+        # Core 只保存模型可编辑的 Agent 候选，不提前编译公开入口或服务归属。
+        return _technical_agent_contract_model_errors(
+            {"agent_contracts": contracts},
+            active_product_plan,
+            _dict_items(plan.get("api_contracts")),
+            _dict_items(plan.get("pages")),
+            direct=True,
+        )
     # 已确认拓扑未声明 Java Backend 服务边界时，Agent Contract 采用 Runtime Public Edge 形状。
     direct = not includes_backend_service(plan)
     candidates = technical_agent_contract_model_input(contracts)
@@ -2692,6 +2708,34 @@ def validate_technical_plan_agent_contracts(
             "TechnicalPlan.agent_contracts 与 ProductPlan、API Contract 或平台确定性配置不一致。"
         )
     return errors
+
+
+def compile_direct_agent_contracts(
+    core_plan: dict[str, Any],
+    product_plan: dict[str, Any],
+    *,
+    auth_enabled: bool,
+) -> list[dict[str, Any]]:
+    """在用户选择 Direct 后把 Core Agent 候选编译为 Runtime 正式契约。"""
+
+    active_product_plan = project_active_agent_product_plan(product_plan)
+    candidates = _dict_items(core_plan.get("agent_contracts"))
+    errors = _technical_agent_contract_model_errors(
+        {"agent_contracts": candidates},
+        active_product_plan,
+        _dict_items(core_plan.get("api_contracts")),
+        _dict_items(core_plan.get("pages")),
+        direct=True,
+    )
+    if errors:
+        raise ValueError("；".join(errors))
+    return _technical_agent_contracts(
+        active_product_plan,
+        {"agent_contracts": candidates},
+        _dict_items(core_plan.get("api_contracts")),
+        direct=True,
+        auth_enabled=auth_enabled,
+    )
 
 
 def recompile_technical_plan_agent_settings(
@@ -2812,18 +2856,15 @@ def create_technical_plan(
     )
     policy = _architecture_for_datasource_type(effective_datasource_type)
     architecture = {
-        key: deepcopy(policy[key])
-        for key in ("frontend", "backend", "data")
+        "frontend": "客户端页面与交互；通信方式由用户选择的拓扑确定。",
+        "application": "业务 API、应用服务与 Agent 能力；实现服务归属待拓扑选择后编译。",
+        "data": "业务持久化与 Agent 运行状态分离；具体技术栈待拓扑选择后编译。",
     }
     agent_architecture = _agent_section(agent_plan, "architecture")
     if isinstance(agent_architecture, dict):
-        for key in architecture:
-            if key in agent_architecture:
+        for key in ("frontend", "application", "data"):
+            if isinstance(agent_architecture.get(key), str) and agent_architecture[key].strip():
                 architecture[key] = deepcopy(agent_architecture[key])
-    for key in ("backend", "data"):
-        architecture[key] = deepcopy(policy[key])
-    if effective_datasource_type == "static":
-        architecture["frontend"] = deepcopy(policy["frontend"])
     pages = _technical_plan_pages(spec, agent_plan, api_contracts)
     product_plan = (
         spec.get("confirmed_product_plan")
@@ -2848,24 +2889,14 @@ def create_technical_plan(
         else product_plan
     )
     product_agents = _dict_items(active_product_plan.get("agents"))
-    direct_candidate = _agent_runtime_direct_candidate(
-        application_config=application_config,
-        product_agents=product_agents,
-        entities=entities,
-        api_contracts=api_contracts,
-        pages=pages,
-    )
+    # Core 只收集业务及 Agent 配置候选，不在此阶段执行拓扑 Resolver。
     raw_agent_contracts = _agent_section(agent_plan, "agent_contracts")
     if (
         isinstance(agent_plan, dict)
         and len(product_agents) == 1
         and isinstance(raw_agent_contracts, dict)
         and set(raw_agent_contracts)
-        == (
-            _AGENT_DIRECT_MODEL_CONTRACT_KEYS
-            if direct_candidate
-            else _AGENT_MODEL_CONTRACT_KEYS
-        )
+        == _AGENT_DIRECT_MODEL_CONTRACT_KEYS
         and raw_agent_contracts.get("agentId") == product_agents[0].get("agentId")
     ):
         # 单智能体完整对象可无损包装；缺失字段、映射对象和多智能体仍交由严格校验拒绝。
@@ -2876,19 +2907,11 @@ def create_technical_plan(
         active_product_plan,
         api_contracts,
         pages,
-        direct=direct_candidate,
+        direct=True,
     )
     if agent_errors:
         raise ValueError("；".join(agent_errors))
-    agent_contracts = _technical_agent_contracts(
-        active_product_plan,
-        agent_plan,
-        api_contracts,
-        direct=direct_candidate,
-        auth_enabled=application_config.get("auth", {}).get("enable") is True,
-    )
-    if agent_contracts:
-        architecture["agent_runtime"] = AGENT_RUNTIME_ARCHITECTURE
+    agent_contracts = deepcopy(_dict_items(_agent_section(agent_plan, "agent_contracts")))
     authorization_manifest = compile_authorization_manifest(
         spec,
         active_product_plan,
@@ -2907,46 +2930,8 @@ def create_technical_plan(
         # 仅记录本产物消费的配置版本，不复制任何应用级开关。
         "sourceConfigRevision": int(application_config.get("configRevision") or 1),
     }
-    topology = resolve_registered_topology(plan, application_config)
-    if topology is not None:
-        plan["topology"] = topology.technical_plan_projection()
-        plan["architecture"] = deepcopy(topology.design.architecture)
     repaired, _ = repair_cross_contract_schema_refs(plan)
     return repaired
-
-
-def _agent_runtime_direct_candidate(
-    *,
-    application_config: dict[str, Any],
-    product_agents: list[dict[str, Any]],
-    entities: list[dict[str, Any]],
-    api_contracts: list[dict[str, Any]],
-    pages: list[dict[str, Any]],
-) -> bool:
-    """在完整 Contract 编译前识别纯 Agent Direct 的充分必要结构事实。"""
-
-    authorization = application_config.get("authorization")
-    auth = application_config.get("auth")
-    if (
-        not product_agents
-        or entities
-        or api_contracts
-        or not isinstance(authorization, dict)
-        or authorization.get("enabled") is not False
-        or not isinstance(auth, dict)
-        or type(auth.get("enable")) is not bool
-    ):
-        return False
-    return all(
-        not _dict_items(
-            (
-                page.get("references")
-                if isinstance(page.get("references"), dict)
-                else {}
-            ).get("endpoint_dependencies")
-        )
-        for page in pages
-    )
 
 
 def create_project_plan(

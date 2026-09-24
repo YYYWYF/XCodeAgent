@@ -12,7 +12,6 @@ from app.graph.application_planning_revision import (
     cleared_design_change_context,
     design_artifact_node_state,
     design_node_update,
-    earliest_available_design_target,
     formal_revision_design_target,
     is_design_change,
     prepare_ui_revision_state,
@@ -23,7 +22,11 @@ from app.protocols.application_page_planning import (
 )
 from app.protocols.workflow.projection import _workflow_next_nodes, _workflow_start_node
 from app.protocols.workflow.request import workflow_run_inputs
-from app.agents.design_conversation.router import classify_design_conversation
+from app.agents.design_conversation import (
+    DesignConversationDecision,
+    classify_design_conversation,
+    resolve_design_target,
+)
 from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
@@ -497,21 +500,35 @@ class ApplicationDesignConversationTests(unittest.TestCase):
     def test_router_cannot_skip_unconfirmed_upstream_artifacts(self) -> None:
         """意图 Agent 不能越过尚未确认的上游产物。"""
 
+        ui_change = DesignConversationDecision(
+            intent="ui_change",
+            change_level="ui",
+            reason="用户要求调整页面表现",
+        )
+
         self.assertEqual(
-            earliest_available_design_target(
-                "ui_confirmation",
+            resolve_design_target(
+                ui_change,
                 requirement_spec={"confirmation_status": "pending_user_confirmation"},
                 product_plan={"confirmation_status": "confirmed"},
             ),
             "requirements",
         )
         self.assertEqual(
-            earliest_available_design_target(
-                "ui_confirmation",
+            resolve_design_target(
+                ui_change,
                 requirement_spec={"confirmation_status": "confirmed"},
                 product_plan={"confirmation_status": "pending_user_confirmation"},
             ),
             "product_planning",
+        )
+        self.assertEqual(
+            resolve_design_target(
+                ui_change,
+                requirement_spec={"confirmation_status": "confirmed"},
+                product_plan={"confirmation_status": "confirmed"},
+            ),
+            "ui_confirmation",
         )
 
     def test_ui_revision_reuses_existing_pages_incrementally(self) -> None:

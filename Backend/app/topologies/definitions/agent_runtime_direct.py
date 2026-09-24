@@ -1,45 +1,55 @@
-"""实现纯 Frontend + Agent Runtime 直连拓扑的三阶段蓝图。"""
+"""实现 Frontend + Python Application Runtime 直连拓扑的三阶段蓝图。"""
 
 from __future__ import annotations
 
 from hashlib import sha256
 import json
-from typing import Any
+from typing import Any, Callable
 
 from app.topologies.model import (
     DevelopmentTopologyPlan,
     DesignTopologyPlan,
     PlanningTopologyPlan,
     TopologyContext,
+    TopologyFacts,
     TopologyType,
 )
 
 
 class AgentRuntimeDirectTopology:
-    """编译不包含 Java Backend、Gateway、业务数据库或 RBAC 的 Agent 应用。"""
+    """编译由 Python Runtime 承载业务 API、Agent 和数据的应用。"""
 
     type = TopologyType.AGENT_RUNTIME_DIRECT
 
-    def matches(self, context: TopologyContext) -> bool:
-        """仅在纯 Agent 正式事实和 canonical capability 同时满足时匹配。"""
+    def development_runner(self, owner: str) -> tuple[str, Callable[..., Any]] | None:
+        """把 Direct 独有的 Python business owner 绑定到 Runtime 业务生成器。"""
 
-        plan = context.technical_plan
-        config = context.application_config
-        authorization = config.get("authorization")
-        auth = config.get("auth")
-        if (
-            not isinstance(authorization, dict)
-            or authorization.get("enabled") is not False
-            or not isinstance(auth, dict)
-            or type(auth.get("enable")) is not bool
-        ):
-            return False
-        contracts = _dict_items(plan.get("agent_contracts"))
-        if not contracts or _dict_items(plan.get("entities")) or _dict_items(plan.get("api_contracts")):
-            return False
-        if any(_has_backend_tool(contract) for contract in contracts):
-            return False
-        return not _page_endpoint_dependencies(plan)
+        if owner != "python-business":
+            return None
+        from app.agents.agent_runtime.generator import generate_python_business_with_deep_agent
+
+        return "python-business.deep_agent", generate_python_business_with_deep_agent
+
+    def rejection_reasons(self, facts: TopologyFacts) -> tuple[str, ...]:
+        """以唯一归一化事实集验证 Direct 拓扑全部不变量。"""
+
+        reasons: list[str] = []
+        if facts.auth_enabled is None:
+            reasons.append("auth.enable 必须是布尔值")
+        if facts.authorization_enabled is not False:
+            reasons.append("authorization.enabled 必须为 false")
+        if not facts.agent_ids:
+            reasons.append("必须至少存在一个可用 Agent")
+        java_only_requirements = tuple(
+            item for item in facts.backend_requirement_ids
+            if item.startswith("backend_tool:")
+        )
+        if java_only_requirements:
+            reasons.append(
+                "存在只能由 Java Backend 承载的 Tool："
+                + "、".join(java_only_requirements)
+            )
+        return tuple(reasons)
 
     def compile_design(self, context: TopologyContext) -> DesignTopologyPlan:
         """声明 Runtime Public Edge、认证终止点和三段架构摘要。"""
@@ -52,12 +62,12 @@ class AgentRuntimeDirectTopology:
                 "agent-runtime" if auth_enabled else "anonymous-session"
             ),
             architecture={
-                "frontend": "React 客户端通过 AG-UI 访问 Agent Runtime Public Edge。",
+                "frontend": "React 客户端通过 REST 和 AG-UI 访问 Python Application Runtime。",
                 "agent_runtime": (
-                    "Python 3.12 + DeepAgents，承载公开 AG-UI、Agent 执行、"
-                    "统一认证适配和会话状态。"
+                    "Python 3.12 + FastAPI + DeepAgents，承载业务 API、Agent 执行、"
+                    "统一认证适配和应用服务。"
                 ),
-                "data": "只保存 Agent 运行状态，不承载通用业务实体或自建用户体系。",
+                "data": "业务 Entity/Repository 与 Agent checkpoint 独立持久化，不自建用户体系。",
             },
             source_facts_sha256=_source_facts_sha256(context),
         )
@@ -68,8 +78,17 @@ class AgentRuntimeDirectTopology:
         plan = context.technical_plan
         auth_enabled = context.application_config["auth"]["enable"] is True
         agent_ids = _ids(plan.get("agent_contracts"), "agentId")
-        page_ids = _ids(plan.get("pages"), "pageId")
+        from app.services.frontend_page_tree import project_plan_page_records
+
+        page_ids = _ids(project_plan_page_records(plan), "pageId")
+        entity_ids = _ids(plan.get("entities"), "id")
+        api_contracts = _dict_items(plan.get("api_contracts"))
         capabilities = [
+            "python_application_runtime",
+            "python_business_api",
+            "python_domain_model",
+            "python_repository",
+            "python_business_migrations",
             "agent_runtime_public_edge",
             "agent_runtime_principal_ownership",
             "agent_runtime_local_debug",
@@ -81,10 +100,26 @@ class AgentRuntimeDirectTopology:
         ]
         unit_ids = [
             "application:root",
+            "python:bootstrap",
             "frontend:shell",
             "frontend:api-client",
             *( ["frontend:auth-guard"] if auth_enabled else [] ),
-            *(f"frontend:agent-surface:{page_id}" for page_id in page_ids),
+            *(f"python:entity:{entity_id}" for entity_id in entity_ids),
+            *(f"python:migration:{entity_id}" for entity_id in entity_ids),
+            *(f"python:repository:{entity_id}" for entity_id in entity_ids),
+            *(
+                f"python:service:{contract.get('id')}"
+                for contract in api_contracts
+                if str(contract.get("id") or "").strip()
+            ),
+            *(
+                f"python:endpoint:{contract.get('id')}:{endpoint.get('id')}"
+                for contract in api_contracts
+                if str(contract.get("id") or "").strip()
+                for endpoint in _dict_items(contract.get("endpoints"))
+                if str(endpoint.get("id") or "").strip()
+            ),
+            *(f"page:{page_id}" for page_id in page_ids),
             "agent:runtime",
             *(f"agent:{agent_id}" for agent_id in agent_ids),
             "app:integration",
@@ -94,6 +129,7 @@ class AgentRuntimeDirectTopology:
             unit_ids=tuple(unit_ids),
             required_template_capabilities=tuple(capabilities),
             required_checks=(
+                "python-business-contract-tests",
                 "agent-runtime-contract-tests",
                 "agent-runtime-pytest",
                 "frontend-build",
@@ -103,11 +139,11 @@ class AgentRuntimeDirectTopology:
         )
 
     def compile_development(self, context: TopologyContext) -> DevelopmentTopologyPlan:
-        """声明现有 Frontend/Agent Generator 和 Direct 启动验收图。"""
+        """声明 Python 业务/Agent/Frontend Generator 和 Direct 启动验收图。"""
 
         del context
         return DevelopmentTopologyPlan(
-            generator_owners=("frontend", "agent"),
+            generator_owners=("frontend", "python-business", "agent"),
             launch_stages=(
                 "structure",
                 "agent_runtime",
@@ -144,32 +180,6 @@ def _ids(value: Any, key: str) -> tuple[str, ...]:
             if str(item.get(key) or "").strip()
         )
     )
-
-
-def _has_backend_tool(contract: dict[str, Any]) -> bool:
-    """识别任何 Java Endpoint Tool 或旧 Endpoint 展开形状。"""
-
-    settings = contract.get("agentSettings")
-    settings = settings if isinstance(settings, dict) else {}
-    tools = settings.get("tools")
-    tools = tools if isinstance(tools, dict) else {}
-    for binding in _dict_items(tools.get("bindings")):
-        source = binding.get("source")
-        source = source if isinstance(source, dict) else {}
-        if source.get("type") == "backend_endpoint" or isinstance(binding.get("endpoint"), dict):
-            return True
-    return False
-
-
-def _page_endpoint_dependencies(plan: dict[str, Any]) -> bool:
-    """拒绝任何页面对业务 Endpoint 的依赖。"""
-
-    for page in _dict_items(plan.get("pages")):
-        references = page.get("references")
-        references = references if isinstance(references, dict) else {}
-        if _dict_items(references.get("endpoint_dependencies")):
-            return True
-    return False
 
 
 def _source_facts_sha256(context: TopologyContext) -> str:

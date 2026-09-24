@@ -8,8 +8,8 @@ import unittest
 from pathlib import Path
 
 from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
+from app.services.build_unit_compiler import apply_unit_compilation
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
-from app.services.project_plan import _agent_runtime_direct_candidate
 from app.services.workspace_bootstrap.requested_config import bootstrap_managed_roots
 from app.topologies import (
     AGENT_RUNTIME_SERVICE_ID,
@@ -114,6 +114,26 @@ class DirectBuildUnitSkeletonTests(unittest.TestCase):
         ):
             self.assertIn(expected, unit_ids)
 
+    def test_direct_page_waits_for_python_endpoint_task(self) -> None:
+        """Direct 页面任务必须继承正式 Python Endpoint Unit 的任务依赖。"""
+
+        endpoint_unit = "python:endpoint:policy:policy.read"
+        page_unit = "page:policy"
+        plan = {
+            "build_units": {endpoint_unit: {"source_refs": {}}, page_unit: {"source_refs": {}}},
+            "unit_graph": {"edges": [
+                {"from": endpoint_unit, "to": page_unit, "type": "depends_on"},
+            ]},
+        }
+        tasks = [
+            {"id": "policy:endpoint", "owner": "python-business", "unit_id": endpoint_unit, "dependencies": []},
+            {"id": "policy:page", "owner": "frontend", "unit_id": page_unit, "dependencies": []},
+        ]
+
+        compiled = apply_unit_compilation(plan, tasks, {})
+        page_task = next(task for task in compiled if task["id"] == "policy:page")
+        self.assertEqual(page_task["dependencies"], ["policy:endpoint"])
+
     def test_direct_auth_guard_follows_authentication_termination(self) -> None:
         """认证终止在 Runtime 时需要 auth-guard，匿名会话时不得保留该 Unit。"""
 
@@ -206,61 +226,6 @@ class DirectManagedRootsTests(unittest.TestCase):
             self.assertEqual(
                 bootstrap_managed_roots(root),
                 ("frontend", "backend", "agent-runtime"),
-            )
-
-
-class DirectPlanningCandidateTests(unittest.TestCase):
-    """验证规划期候选判据只对纯 Agent 结构事实成立。"""
-
-    def _config(self, *, auth: object = True, authorization: bool = False) -> dict:
-        """构造规划期消费的应用能力快照。"""
-
-        return {
-            "configRevision": 1,
-            "auth": {"enable": auth},
-            "authorization": {"enabled": authorization},
-        }
-
-    def _facts(self) -> dict:
-        """构造纯 Agent 的最小结构事实集合。"""
-
-        return {
-            "application_config": self._config(),
-            "product_agents": [{"agentId": "assistant"}],
-            "entities": [],
-            "api_contracts": [],
-            "pages": [{"pageId": "assistant", "references": {}}],
-        }
-
-    def test_pure_agent_facts_select_direct_candidate(self) -> None:
-        """没有实体与业务 Endpoint 的纯 Agent 事实应命中 direct 候选。"""
-
-        self.assertTrue(_agent_runtime_direct_candidate(**self._facts()))
-
-    def test_backend_or_rbac_facts_reject_direct_candidate(self) -> None:
-        """实体、API 契约、RBAC、非法认证开关、页面端点依赖都必须被拒绝。"""
-
-        base = self._facts()
-        rejected = (
-            {"entities": [{"id": "Order"}]},
-            {"api_contracts": [{"id": "orders-api"}]},
-            {"application_config": self._config(authorization=True)},
-            {"application_config": self._config(auth="yes")},
-            {"product_agents": []},
-            {
-                "pages": [
-                    {
-                        "pageId": "assistant",
-                        "references": {
-                            "endpoint_dependencies": [{"endpoint_id": "orders.list"}]
-                        },
-                    }
-                ]
-            },
-        )
-        for override in rejected:
-            self.assertFalse(
-                _agent_runtime_direct_candidate(**{**base, **override}), override
             )
 
 

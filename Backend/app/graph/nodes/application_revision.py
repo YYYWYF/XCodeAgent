@@ -28,6 +28,8 @@ from app.services.project_plan import (
     validate_project_plan_datasource_policy,
     validate_technical_plan_api_contracts,
 )
+from app.services.product_plan import project_active_agent_product_plan
+from app.topologies import compile_selected_technical_plan, topology_type_from_plan
 from app.services.revision_drafts import (
     confirm_revision_draft,
     create_revision_draft,
@@ -261,8 +263,11 @@ def _create_technical_plan_draft(
         raise ValueError("TechnicalPlan revision 缺少已确认 RequirementSpec/ProductPlan/UiDesign。")
     technical_input = {
         **requirement_spec,
-        "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
+        "pages": project_active_agent_product_plan(product_plan).get(
+            "pages", requirement_spec.get("pages", [])
+        ),
         "confirmed_product_plan": product_plan,
+        "active_agent_product_plan": project_active_agent_product_plan(product_plan),
         "application_config": _load_json_object(workspace / ".xcodeagent" / "application.json"),
         "planning_adjustment_request": revision_request or active.request,
     }
@@ -270,6 +275,14 @@ def _create_technical_plan_draft(
         technical_input,
         existing_plan=existing,
     )
+    previous_topology = topology_type_from_plan(existing)
+    if previous_topology is not None:
+        artifact = compile_selected_technical_plan(
+            previous_topology,
+            artifact,
+            product_plan,
+            technical_input["application_config"],
+        )
     artifact = attach_page_implementation_contracts(artifact, product_plan, ui_designs)
     artifact["confirmation_status"] = "pending_user_confirmation"
     _validate_technical_plan(artifact, requirement_spec, product_plan, ui_designs)
@@ -333,7 +346,14 @@ def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> N
             if markdown == generated_markdown
             else sync_project_plan_from_markdown(
                 artifact,
-                requirement_spec,
+                {
+                    **requirement_spec,
+                    "confirmed_product_plan": product_plan,
+                    "active_agent_product_plan": project_active_agent_product_plan(product_plan),
+                    "application_config": _load_json_object(
+                        workspace / ".xcodeagent" / "application.json"
+                    ),
+                },
                 markdown,
             )
         )

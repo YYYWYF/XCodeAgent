@@ -1232,7 +1232,13 @@ def edited_technical_plan_markdown(
     if not path.is_file():
         return None
     content = path.read_text(encoding="utf-8")
-    return content if content != render_project_plan_markdown(plan) else None
+    # 写入时 Markdown 是从 compact JSON 渲染的；比较同一份基线才不会把外置详情
+    # 造成的投影差异误认成用户编辑，触发不必要的模型同步。
+    try:
+        baseline = load_project_plan_json(technical_plan_json_path(state))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("TechnicalPlan Markdown 对应的 JSON 基线无法读取。") from exc
+    return content if content != render_project_plan_markdown(baseline) else None
 
 
 def write_technical_plan_document(

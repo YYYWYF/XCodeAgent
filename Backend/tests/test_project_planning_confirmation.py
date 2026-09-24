@@ -17,7 +17,7 @@ from app.services.project_plan import (
     create_technical_plan,
 )
 from app.services.requirement_spec import create_requirement_spec
-from app.workspace.plan_documents import write_project_plan_document
+from app.workspace.plan_documents import write_project_plan_document, write_technical_plan_document
 from tests.entity_design_test_utils import confirm_entity_designs
 
 
@@ -79,6 +79,47 @@ def confirmed_application_planning_artifacts(spec: dict) -> tuple[dict, dict, di
 
 
 class ProjectPlanningConfirmationTests(unittest.TestCase):
+    def test_technical_markdown_sync_receives_confirmed_product_plan(self) -> None:
+        """技术规划 Markdown 同步必须携带已确认 Agent 产品事实和应用配置。"""
+
+        spec = create_requirement_spec("创建一个库存管理系统")
+        product_plan, technical_plan, ui_designs = confirmed_application_planning_artifacts(spec)
+        technical_plan["topology"] = {"type": "agent_runtime_direct"}
+        with tempfile.TemporaryDirectory() as workspace:
+            state = {
+                "workspace": workspace,
+                "workflow_scope": "application_planning",
+                "application_planning_interaction": {"action": "confirm"},
+                "requirement_spec": spec,
+                "product_plan": product_plan,
+                "technical_plan": technical_plan,
+                "ui_designs": ui_designs,
+                "timeline": [],
+            }
+            markdown_path, _ = write_technical_plan_document(state, technical_plan)
+            path = Path(markdown_path)
+            path.write_text(path.read_text(encoding="utf-8") + "\n补充说明\n", encoding="utf-8")
+            with (
+                patch(
+                    "app.graph.nodes.planning.sync_project_plan_from_markdown",
+                    return_value=technical_plan,
+                ) as synchronizer,
+                patch(
+                    "app.graph.nodes.planning._project_plan_validation_errors",
+                    return_value=[],
+                ),
+            ):
+                result = project_planning(state)
+
+        self.assertEqual(result["status"], "completed")
+        synced_input = synchronizer.call_args.args[1]
+        self.assertEqual(synced_input["confirmed_product_plan"], product_plan)
+        self.assertEqual(
+            synced_input["active_agent_product_plan"]["agents"],
+            product_plan["agents"],
+        )
+        self.assertIsInstance(synced_input["application_config"], dict)
+
     def test_project_planning_waits_for_user_confirmation_after_generation(self) -> None:
         spec = create_requirement_spec("创建一个库存管理系统")
         plan = create_project_plan(spec)
