@@ -1,7 +1,7 @@
 # Agent Runtime Direct 整体设计
 
 > 拓扑枚举：`agent_runtime_direct`  
-> 状态：目标设计已重构；现有模板、Definition 和生成器不满足本合同，待重新实现  
+> 状态：按本设计接入 TechnicalPlan 后显式选择、Direct Unit/owner/模板/启动图；代码仍需一次完整验证及实际 Workspace 端到端验收  
 > 目标工程：`frontend/ + agent-runtime/`
 
 ## 1. 设计结论
@@ -92,10 +92,14 @@ Agent Tool 不得通过 loopback HTTP 调用同一 Python 进程，也不得复�
 
 | 数据类别 | 示例 | 生命周期 |
 | --- | --- | --- |
-| 业务数据 | Order、Customer、审批记录、业务事务 | 由 Entity/API Contract、Endpoint Design 和业务迁移控制 |
+| 业务数据 | Order、Customer、审批记录、业务事务 | 由 TechnicalPlan Entity/API Schema、Repository 和版本化 SQL migration 控制 |
 | Agent 运行状态 | thread、run、checkpoint、memory、interaction | 由 Runtime 合同和 ownership 控制 |
 
 二者可以使用同一种数据库产品，但必须使用独立模型、Repository、迁移和清理规则。Runtime 状态不能伪装成业务 Entity，业务 Repository 也不能绕过 Principal 与数据范围规则。
+
+Direct 拓扑不进入 Endpoint 字段映射或 EntitySourceBinding。TechnicalPlan Entity 字段先确定性编译 SQLite 建表 SQL，在隔离内存库执行校验；用户在「开发产物 → 实体」确认后，SQL 写入生成项目的版本化迁移文件，实体初次开发即完成。此动作不连接或修改目标业务库，开发者需自行决定何时执行迁移；预览启动图不得自动运行业务迁移。已确认初始建表 SQL 不能被模型重写，后续结构变更必须另行设计增量迁移。
+
+接口契约独立于实体 SQL 的确认状态：模型依据正式 Entity 定义与 Endpoint 语义提出请求体/响应体 JSON Schema 草稿，用户可编辑并在「开发产物 → 接口」保存确认。保存时校验字段类型、本契约 Schema 引用和 Endpoint 身份；正式契约的 `basedOn.technicalPlanSha256` 绑定当前 TechnicalPlan。上游计划或实体定义变化时，界面显示“需重新确认”，Build 不消费过期契约。确认后的 API 契约是 Direct DTO、Service、Endpoint 与 Agent Tool 的 Build 输入；TechnicalPlan 初始 Schema 只作候选，不因技术计划确认而自动视为接口开发完成。接口契约确认与接口代码 Build/测试完成是两个不同状态。
 
 ## 6. TechnicalPlan 编译
 
@@ -127,15 +131,18 @@ TechnicalPlan Core 先生成完整的：
 ### Planning
 
 - 编译 Python Entity、Repository、Service、Endpoint、Agent 和 Frontend Units；
-- 绑定 Endpoint Design 到 Python Build Context；
+- 页面 Unit 继承所引用 Python Endpoint 的任务依赖；Endpoint 尚无实现任务时阻断完整 DAG 编译；
+- 将已确认 Direct API 契约和已确认 Entity SQL 绑定到 Python Build Context，二者分别以当前 TechnicalPlan 哈希判定新鲜度；
+- 跳过 Endpoint 字段映射、数据源选择和 EntitySourceBinding，不生成对应 Pending Interaction；
 - 声明模板 capabilities、路径策略和 required checks；
 - 复用统一 Pending/Formal Build DAG。
 
 ### Development
 
 - 绑定 Python business、Agent 与 Frontend Generator；
-- 执行单元测试、REST/AG-UI 集成、数据迁移和 ownership 检查；
-- 按 database → application runtime → frontend → integration probe 启动；
+- 用户先在开发产物页确认实体 SQL 和 API 契约；Build 再生成 typed DTO、领域模型、Principal-scoped Repository、Application Service 与 FastAPI Endpoint，并复用已经确认写入项目的 SQL；
+- 执行单元测试、REST/AG-UI 集成和 ownership 检查；目标业务库迁移由开发者显式执行；
+- 按 application runtime → frontend → integration probe 启动，不自动执行目标库 SQL；
 - 复用统一 Code Review、Acceptance 和 Formal Revision。
 
 ## 8. Auth 与 Authorization
@@ -149,11 +156,11 @@ TechnicalPlan Core 先生成完整的：
 
 ## 9. 实施状态与迁移边界
 
-现有实现仅生成 Agent 七模块，并要求 Entity/API 为空，因此属于废弃原型。迁移不得在旧实现上增加兼容分支，而应：
+Direct 当前实现以完整 Python Application Runtime 为目标，不保留早期“Entity/API 必须为空”原型。继续演进时不得恢复字段映射或 EntitySourceBinding 依赖，而应：
 
 1. 重建 Python Application Runtime 模板；
 2. 新增 Python 业务 Build Units 和 Generator；
-3. 让 Endpoint API Design 生成 Python Build Context；
+3. 让已确认 Direct Entity SQL/API 契约成为 Python Build Context 的唯一最终输入，TechnicalPlan 字段和初始 Schema 只提供候选；
 4. 修改 Tool Binding 复用 Application Service；
 5. 删除旧 direct candidate 和自动匹配；
 6. 完成 Build、Testing、Launch 和 Acceptance 后再把 UI 选项标记为可用。

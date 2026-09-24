@@ -1766,7 +1766,7 @@ unit_ids != retry_unit_ids
 | V14 | `build_task_planner.py::_required_bootstrap_task_errors / _authorization_coverage_errors` | planning 范围要求 bootstrap 时有其 Task；权限范围内有 Page Task；已要求实现且有权限绑定的后端 Endpoint 有 Controller 交付物。 | 当前贡献范围内能判断的缺项在 Unit Local；需要合并保留 Tasks 才能判断的完整性在 Global。仅检查适用职责，不要求每个 Unit 每轮生成任务。 |
 | V15 | `build_unit_compiler.py::_apply_unit_task_dependencies` | 当前编译跨 Unit 依赖，并记录 `missing_unit_dependencies / invalid_dependencies`；缺失 Task 引用由任务图继续检查。 | 跨 Unit／保留依赖编译及闭合性放 Assembly／Global。`missing_unit_dependencies` 当前只是记录，不能当作已有通用必需 Unit 完整性硬门禁；按已确认生成范围补齐检查，区分保留任务已满足依赖、无需 Task 的结构 Unit，不能把没有 Candidate 当作缺项。 |
 
-当前错误承载主要是 `list[str]`、`ValueError` 及 `task_graph.validation.errors`，不是已经完成归因的结构化问题。不能仅按异常类型或“发生在编译后”判断是否应该重试模型。
+当前任务图编译会在 `task_graph.validation.issues` 记录来源检查点、已知 Task/Unit 身份和原始消息，并由这些 Issue 派生 `validation.errors` 供展示。编译器不能证明修复责任的错误保持不可重试；Scope Assembly 已有明确 Candidate 来源的冲突仍可归因。其他尚使用字符串的检查点仍须逐步迁移，不能仅按异常类型或“发生在编译后”判断是否应该重试模型。
 
 ### 为已确认契约必须衔接的检查
 

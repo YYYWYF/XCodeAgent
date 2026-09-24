@@ -2,7 +2,9 @@
 
 ## Scope
 
-Workbench 读取 `.xcodeagent/plans/technical-plan.json`，以 ProductPlan `pages` 作为页面事实，并按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲从 `api_contracts` 投射 Endpoint。Endpoint 只有在当前版 `.xcodeagent/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md` 均存在、JSON 已确认且其中的 TechnicalPlan 契约指纹与当前文件一致时才标记“已设计”。仅有 TechnicalPlan 声明或单个 Markdown 文件都不能放行。实体大纲只展示 TechnicalPlan 顶层 `entities`；实体没有全局数据源绑定状态。
+Workbench 读取 `.xcodeagent/plans/technical-plan.json`，以 ProductPlan `pages` 作为页面事实，并按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲从 `api_contracts` 投射 Endpoint。含 Java Backend 的拓扑仅在当前版 Endpoint Design 双文件已确认且指纹匹配时标记“已设计”；Direct 不读该映射产物。实体大纲只展示 TechnicalPlan 顶层 `entities`；实体没有全局数据源绑定状态。
+
+`agent_runtime_direct` 的实体详情在「开发产物」页展示正式字段和确定性 SQLite 建表 SQL。服务端先在隔离内存库执行并核对列，再由用户点击确认；确认后保存 `.xcodeagent/plans/direct/entities/` 设计与 `agent-runtime/src/app/infrastructure/migrations/sql/` 迁移文件，实体初次开发完成。目标库不在此时或预览启动时自动迁移。Direct 的接口详情从正式 Entity 定义和 Endpoint 语义单次调用模型生成请求体/响应体 JSON Schema 草稿，用户可编辑并保存确认于 `.xcodeagent/plans/direct/endpoints/`。接口契约保存不依赖实体 SQL 确认，也不等于接口代码已完成。Direct Build 再校验当前哈希下的 API 契约和相关实体 SQL，通过后复用通用 DAG 生成代码；模型不得改写已确认 SQL。下文 Endpoint 字段映射和 EntitySourceBinding 规则仅适用于非 Direct 拓扑。
 
 点击大纲只选择本次目标。Endpoint 的“设计 API/重新设计”动作打开独立的 `ApiDesignConfigModal`，通过 `/endpoint-designs/run` 的 AG-UI `prepare/save` 动作保存正式映射，不进入主工作流；页面或 API 开发先进入 `api_design_readiness_gate`，门禁缺失时暂停并展示缺失清单，用户点击具体条目后才打开同一弹窗，保存后仍需在原会话确认继续开发。会话不归属于页面、接口或实体，已有 Workflow 消息及用户显式打开的历史会话继续展示运行结果。
 
@@ -30,11 +32,11 @@ Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。
 
 ## Initial Development Completion and Test Entry
 
-页面和 Endpoint 必须分别作为显式开发目标走完一次初次流程，全部完成后才能进入测试阶段。页面开发顺带实现依赖 Endpoint 不替接口标记完成。实体也单独计数，只有用户显式确认且正式 EntitySourceBinding 成功写盘后才完成；选表、生成设计和等待确认均不算完成。三类产物全部完成后才能进入测试阶段。
+页面和 Endpoint 必须分别作为显式开发目标走完一次初次流程，全部完成后才能进入测试阶段。页面开发顺带实现依赖 Endpoint 不替接口标记完成。实体也单独计数：非 Direct 以正式 EntitySourceBinding 确认为完成；Direct 以隔离校验后的 SQL 被用户确认并写盘为完成。草稿或等待确认均不算完成。三类产物全部完成后才能进入测试阶段。
 
 `.xcodeagent/application-lifecycle.json.developmentArtifacts` 保存 `pages[pageId]` 与 `endpoints[apiContractId][endpointId]` 的 `initialDevelopmentStatus`：`pending`、`in_progress`、`completed`。绿色完成记录同时保存首次 `completedAt`、`completedRunId`、`completedThreadId`，二次修改、测试失败、重复或迟到事件均不能覆盖。未完成运行在等待用户操作时保持紫色；失败、停止或放弃且无同目标其他初次执行时回到灰色。叶子点击只浏览，不更新开发状态。
 
-实体状态保存于 `developmentArtifacts.entities[entityId].initialDevelopmentStatus`，直接使用当前正式 EntitySourceBinding 的确认状态，不伪造页面/API 的 Build 完成时间和 run/thread。未确认实体有活动中的同目标 `data_source` execution 时为 `in_progress`，其余为 `pending`；缺失或损坏的绑定不能计完成。新会话卡片右下角使用绿色“已初次完成”、紫色“开发中”、灰色“未开发”，右侧实体组同步显示计数和圆点。
+实体状态保存于 `developmentArtifacts.entities[entityId].initialDevelopmentStatus`，按拓扑读取当前有效的 EntitySourceBinding 或 Direct SQL 确认事实，不伪造页面/API 的 Build 完成时间和 run/thread。非 Direct 未确认实体有活动中的同目标 `data_source` execution 时为 `in_progress`；Direct 无该绑定 execution。缺失、损坏或相对当前 TechnicalPlan 过期的正式产物不能计完成。新会话卡片右下角和右侧实体组同步显示计数与状态圆点。
 
 后端 execution 的 `developmentPurpose` 和 `developmentTarget` 由正式入口及原 execution 决定，不能由客户端声明。初次开发的实体续接、DAG 确认、单元测试及重试保留该身份，普通会话及正式修订不能替未开发目标补记完成。只有服务端 Build 完成且 `unit_test_gate_passed=true`（通过或显式跳过）后，`test_phase_confirmation` 才先写入当前目标完成，再计算全部产物门禁；不等待测试确认、审查或验收。
 
