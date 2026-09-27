@@ -26,6 +26,8 @@ import {
 import { apiDesignFieldKey, createApiDesignAction, defaultDatabaseOperation } from './apiDesignSerialization'
 import { confirmWorkspaceAction } from '../../../workspaceDialogs'
 import { resetDraftForDatabaseOperation } from '../FieldMapping/model'
+import DatabaseQueryEditor from '../FieldMapping/DatabaseQueryEditor'
+import DatabaseWriteEditor from '../FieldMapping/DatabaseWriteEditor'
 import { useApiDesignDraft } from './useApiDesignDraft'
 import ApiFieldMappingTable from './ApiFieldMappingTable'
 import { API_SOURCE_METADATA_ACTIONS } from './apiSourceSelectorModel'
@@ -52,10 +54,19 @@ export default function ApiDesignPanel({
   submitHint = '保存后将生成当前 Endpoint 的字段映射 JSON/Markdown；开发是否继续由原会话门禁确认，TechnicalPlan 契约不会被修改。',
   onAction
 }: ApiDesignPanelProps): ReactElement {
-  const { draft, errors, setDraft } = useApiDesignDraft(payload)
+  const { draft, errors, validationErrors, showValidationErrors, setDraft } = useApiDesignDraft(payload)
   const [activeSide, setActiveSide] = useState<'request' | 'response'>('request')
   const [sources, setSources] = useState<NonNullable<WorkflowApiDesignPayload['sources']>>([])
   const [databaseMetadata, setDatabaseMetadata] = useState<WorkflowApiDesignPayload['databaseMetadata']>()
+  const [queryMetadata, setQueryMetadata] = useState<WorkflowApiDesignPayload['databaseMetadata']>()
+  const [querySourceId, setQuerySourceId] = useState(() => {
+    const first = draft.databaseQuery?.items[0]
+    return first?.kind === 'condition' ? first.sourceId : first?.items[0]?.sourceId || draft.databaseWrites?.[0]?.sourceId || ''
+  })
+  const [queryTable, setQueryTable] = useState(() => {
+    const first = draft.databaseQuery?.items[0]
+    return first?.kind === 'condition' ? first.table : first?.items[0]?.table || draft.databaseWrites?.[0]?.table || ''
+  })
   const [externalOperation, setExternalOperation] = useState<WorkflowApiDesignPayload['externalOperation']>()
   const [sourceLoading, setSourceLoading] = useState(false)
   const [sourceError, setSourceError] = useState('')
@@ -91,6 +102,17 @@ export default function ApiDesignPanel({
     return () => { disposed = true }
   }, [workspaceRoot])
 
+  useEffect(() => {
+    if (!workspaceRoot || !querySourceId) return
+    let disposed = false
+    const request = queryTable ? requestApiDesignDatabaseColumns(workspaceRoot, querySourceId, queryTable)
+      : requestApiDesignDatabaseTables(workspaceRoot, querySourceId)
+    request
+      .then((value) => { if (!disposed) setQueryMetadata(value) })
+      .catch((reason: unknown) => { if (!disposed) setSourceError(reason instanceof Error ? reason.message : '读取查询表字段失败。') })
+    return () => { disposed = true }
+  }, [workspaceRoot, querySourceId, queryTable])
+
   const viewPayload = useMemo(() => ({
     ...payload,
     sources,
@@ -114,10 +136,44 @@ export default function ApiDesignPanel({
     fieldErrorCount ? `${sideHint}存在 ${fieldErrorCount} 个字段未通过校验，请选择数据来源或填写有效业务处理内容。` : '',
     ...new Set(generalErrors)
   ].filter(Boolean).join('；')
+
+  /** 首次确认时显示必填校验，修正完成后再提交正式映射。 */
+  const submitDesign = (): void => {
+    if (Object.keys(validationErrors).length) {
+      showValidationErrors()
+      return
+    }
+    onAction(createApiDesignAction(draft, 'confirm'))
+  }
+
   const endpointMethod = String(payload.endpoint?.method || 'API').toUpperCase()
   const endpointPath = String(payload.endpoint?.path || draft.endpointId)
-  const hasDatabaseMapping = draft.fieldMappings.some((mapping) => mapping.mappingType === 'source_mapping' && mapping.sourceFields.some((source) => source.sourceType === 'database')) || Boolean(draft.databaseConditions?.length)
+  const hasMappedDatabase = draft.fieldMappings.some((mapping) => mapping.mappingType === 'source_mapping' && mapping.sourceFields.some((source) => source.sourceType === 'database'))
+  const hasDatabaseMapping = hasMappedDatabase || Boolean(draft.databaseWrites?.length) || Boolean(draft.databaseQuery?.items.length) || Boolean(querySourceId)
+  const queryOperation = draft.databaseOperation || (querySourceId && defaultDatabaseOperation(endpointMethod) === 'create' ? 'read' : defaultDatabaseOperation(endpointMethod))
   const databaseOperationLabels: Record<WorkflowApiDatabaseOperation, string> = { create: '新增', read: '查询', update: '修改', delete: '删除' }
+
+  /** 更换数据库来源时明确清空原表查询和写入字段并加载新表清单。 */
+  const selectQuerySource = (sourceId: string): void => {
+    const apply = (): void => {
+      setQuerySourceId(sourceId)
+      setQueryTable('')
+      setQueryMetadata(undefined)
+      setDraft({ ...draft, databaseQuery: undefined, databaseWrites: [], databaseOperation: hasDatabaseMapping ? draft.databaseOperation : undefined })
+    }
+    if (draft.databaseQuery?.items.length || draft.databaseWrites?.length) confirmWorkspaceAction({ title: '更换数据库来源？', content: '现有写入字段和查询条件将清空。', okText: '更换并清空', cancelText: '取消', onOk: apply })
+    else apply()
+  }
+
+  /** 更换数据库表时明确清空旧表查询和写入字段并读取当前列。 */
+  const selectQueryTable = (table: string): void => {
+    const apply = (): void => {
+      setQueryTable(table)
+      setDraft({ ...draft, databaseQuery: undefined, databaseWrites: [], databaseOperation: hasDatabaseMapping ? draft.databaseOperation : undefined })
+    }
+    if (draft.databaseQuery?.items.length || draft.databaseWrites?.length) confirmWorkspaceAction({ title: '更换数据库表？', content: '现有写入字段和查询条件将清空。', okText: '更换并清空', cancelText: '取消', onOk: apply })
+    else apply()
+  }
 
   /** 将当前 Endpoint 路径复制到系统剪贴板，并短暂反馈复制结果。 */
   const handleCopyEndpoint = async (): Promise<void> => {
@@ -232,10 +288,10 @@ export default function ApiDesignPanel({
         disabled={disabled}
         options={Object.entries(databaseOperationLabels).map(([value, label]) => ({ value, label }))}
         placeholder="选择数据库操作"
-        value={draft.databaseOperation || defaultDatabaseOperation(endpointMethod)}
+        value={queryOperation}
         onChange={(value: WorkflowApiDatabaseOperation) => confirmWorkspaceAction({
           title: '切换数据库操作？',
-          content: '请求字段将按新操作重新分区，已选数据库列保留；新增会清除固定条件。',
+          content: '数据库操作会更新写入映射；切到新增时清空查询条件。',
           okText: '切换并重排', cancelText: '取消',
           onOk: () => setDraft(resetDraftForDatabaseOperation(draft, value))
         })}
@@ -246,7 +302,7 @@ export default function ApiDesignPanel({
       className="api-design-instruction"
       icon={<InfoCircleFilled />}
       message="配置说明"
-      description="请在表格中为请求或返回字段选择数据源字段映射或填写业务处理内容。每个 Endpoint 字段都要配置来源或非空业务处理内容。"
+      description="查询条件请在下方手动添加；未使用的请求参数可以不映射，返回字段仍需完整配置。"
       showIcon
       type="info"
     />
@@ -299,6 +355,33 @@ export default function ApiDesignPanel({
       payload={viewPayload}
     />
 
+    <section className="api-design-query-section" aria-label="数据库表和查询条件">
+      <Typography.Title level={5}>数据库数据表</Typography.Title>
+      <Select className="api-design-query-source" placeholder="选择数据库来源" disabled={disabled} value={querySourceId || undefined}
+        options={sources.filter((source) => source.type === 'database' && source.metadataSupported !== false).map((source) => ({ value: source.id, label: source.name || source.id }))}
+        onChange={selectQuerySource} />
+      {querySourceId ? <Select className="api-design-query-table" placeholder="选择数据表" disabled={disabled} value={queryTable || undefined}
+        options={queryMetadata?.sourceId === querySourceId ? (queryMetadata.tables || []).map((table) => ({ value: table.name, label: table.name })) : []}
+        onChange={selectQueryTable} /> : null}
+      {draft.databaseOperation === 'create' ? <Text type="secondary">新增操作不使用查询条件。</Text> : null}
+      {draft.databaseOperation !== 'create' && querySourceId && queryTable && queryMetadata?.sourceId === querySourceId && queryMetadata.table === queryTable
+        ? <DatabaseQueryEditor selection={{ sourceType: 'database', sourceId: querySourceId, schema: queryMetadata.schema || '', table: queryTable }}
+          columns={queryMetadata.columns || []} fields={payload.endpointFields} query={draft.databaseQuery}
+          editable={!disabled} readOnly={false} busy={false} error={errors.__databaseQuery}
+          onChange={(databaseQuery) => setDraft({ ...draft, databaseQuery, databaseOperation: databaseQuery ? queryOperation || 'read' : hasDatabaseMapping ? draft.databaseOperation : undefined })} />
+        : null}
+    </section>
+
+    {draft.databaseOperation === 'create' || draft.databaseOperation === 'update' ? <section className="api-design-query-section" aria-label="数据库写入字段">
+      <Typography.Title level={5}>写入字段</Typography.Title>
+      {querySourceId && queryTable && queryMetadata?.sourceId === querySourceId && queryMetadata.table === queryTable
+        ? <DatabaseWriteEditor selection={{ sourceType: 'database', sourceId: querySourceId, schema: queryMetadata.schema || '', table: queryTable }}
+          columns={queryMetadata.columns || []} fields={payload.endpointFields} writes={draft.databaseWrites || []}
+          editable={!disabled} readOnly={false} busy={false} errors={errors}
+          onChange={(databaseWrites) => setDraft({ ...draft, databaseWrites, databaseOperation: databaseWrites.length ? queryOperation || 'create' : draft.databaseOperation })} />
+        : <Text type="secondary">请先选择数据库数据表，再配置写入列和值来源。</Text>}
+    </section> : null}
+
     {Object.keys(errors).length ? (
       <Alert
         action={fieldErrorCount > 0 ? <Button icon={<AimOutlined />} onClick={handleLocateFirstError}>一键定位</Button> : undefined}
@@ -318,7 +401,7 @@ export default function ApiDesignPanel({
       </div>
       <Button
         disabled={disabled || Object.keys(errors).length > 0}
-        onClick={() => onAction(createApiDesignAction(draft, 'confirm'))}
+        onClick={submitDesign}
         type="primary"
       >
         <span>{submitLabel}</span><ArrowRightOutlined />

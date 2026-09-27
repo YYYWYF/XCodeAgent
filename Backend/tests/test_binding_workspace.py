@@ -54,6 +54,20 @@ class BindingWorkspaceTests(unittest.TestCase):
         self.assertEqual(restored["bindingDraft"], saved)
         self.assertEqual(restored["payload"]["existingStatus"]["status"], "pending")
 
+    def test_incomplete_query_draft_roundtrip_and_old_draft_ignored(self):
+        """未完成的查询行可暂存，旧格式草稿不作为当前草稿恢复。"""
+        request = self.request()
+        request.draft["databaseOperation"] = "read"
+        request.draft["databaseQuery"] = {"join": "and", "items": [{
+            "kind": "condition", "sourceType": "database", "sourceId": "db", "schema": "app",
+            "table": "orders", "column": "", "type": "", "operator": "eq",
+        }]}
+        saved = save_binding_draft(request)
+        self.assertEqual(read_binding_draft(self.root, "orders", "list")["draft"]["databaseQuery"], request.draft["databaseQuery"])
+        draft_path = next(self.root.rglob("draft-*.json"))
+        draft_path.write_text(json.dumps({**saved, "draftFormat": "endpoint-field-mapping.v4"}), encoding="utf-8")
+        self.assertIsNone(read_binding_draft(self.root, "orders", "list"))
+
     def test_draft_survives_catalog_rewrite(self):
         """独立目录不会被数据源存储的清理过程删除。"""
         saved = save_binding_draft(self.request())
@@ -151,7 +165,7 @@ class BindingWorkspaceTests(unittest.TestCase):
         self.assertIsNotNone(read_binding_draft(self.root, "orders", "other"))
         confirmation.technical_plan_hash = self.hash
         result = save_endpoint_design(confirmation)
-        self.assertEqual(result["design"]["schemaVersion"], "endpoint-field-mapping.v4")
+        self.assertEqual(result["design"]["schemaVersion"], "endpoint-field-mapping.v6")
         self.assertEqual(result["design"]["confirmationStatus"], "confirmed")
         self.assertNotIn("selection", result["design"])
         self.assertEqual(result["design"]["fieldMappings"], [])
@@ -169,8 +183,12 @@ class BindingWorkspaceTests(unittest.TestCase):
         request = self.request()
         request.selection = selection
         field = request.draft["fieldMappings"][0]["endpointField"]
-        request.draft["fieldMappings"] = [{"endpointField": field, "mappingType": "source_mapping", "processingType": "direct",
-                                           "sourceFields": [{**selection.model_dump(by_alias=True, exclude_none=True), "column": "id", "type": "integer", "usage": "filter", "filterOperator": "eq"}]}]
+        request.draft["fieldMappings"] = []
+        request.draft["databaseQuery"] = {"join": "and", "items": [{
+            "kind": "condition", **selection.model_dump(by_alias=True, exclude_none=True),
+            "column": "id", "type": "integer", "operator": "eq",
+            "right": {"kind": "endpoint", "endpointField": field},
+        }]}
         request.draft["databaseOperation"] = "read"
         metadata = {"schema": "app", "tables": [{"name": "orders"}], "columns": [{"name": "id", "type": "integer"}]}
         with patch("app.services.api_design.load_database_tables", return_value=metadata), patch("app.services.api_design.load_database_columns", return_value=metadata):
@@ -178,7 +196,7 @@ class BindingWorkspaceTests(unittest.TestCase):
             save_binding_draft(request)
             result = save_endpoint_design(EndpointDesignSaveRequest(workspaceRoot=str(self.root), apiContractId="orders", endpointId="list",
                                           draft=request.draft, bindingSelection=selection, technicalPlanHash=self.hash))
-        self.assertEqual(result["design"]["fieldMappings"][0]["sourceFields"][0]["usage"], "filter")
+        self.assertEqual(result["design"]["databaseQuery"]["items"][0]["right"]["kind"], "endpoint")
         self.assertIsNone(read_binding_draft(self.root, "orders", "list"))
         self.assertEqual(source_references(self.root, "db", table="orders"), ["orders/list"])
         change_selected_tables(self.root, "db", ["orders"], True)

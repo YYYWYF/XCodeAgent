@@ -15,9 +15,12 @@ import {
   createBusinessDescriptionMapping,
   createUnconfiguredFieldMapping,
   databaseConditionValueValid,
+  databaseQueryPreview,
+  endpointFieldSnapshot,
   findFieldMapping,
   normalizeApiDesignDraft,
   replaceFieldMapping,
+  queryParameterCompatible,
   validateApiDesignDraft
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/apiDesignSerialization'
 import {
@@ -121,28 +124,53 @@ test('table rows derive from fieldMappings', () => {
   assert.equal(rows[0].status, 'required_missing')
 })
 
-/** 当前确认动作只提交 fieldMappings，不再生成图结构。 */
+/** 当前确认动作省略尚未使用的请求字段和未配置记录。 */
 test('confirmation action serializes current contract only', () => {
-  const draft = normalizeApiDesignDraft(payload())
+  const draft = { ...normalizeApiDesignDraft(payload()), databaseOperation: 'read' as const }
   const action = createApiDesignAction(draft, 'confirm')
-  assert.equal(action.draft.fieldMappings.length, 2)
+  assert.equal(action.draft.fieldMappings.length, 1)
+  assert.equal(action.draft.fieldMappings[0].endpointField.side, 'response')
   assert.equal('nodes' in action.draft, false)
   assert.equal('mappings' in action.draft, false)
 })
 
-/** 固定条件按数据库列类型开放运算符，并校验集合及区间固定值。 */
+/** 固定右值按数据库列类型开放运算符，并校验集合及区间。 */
 test('fixed database conditions use type-aware operators and values', () => {
   assert.ok(allowedDatabaseConditionOperators('varchar(100)').includes('contains'))
   assert.ok(!allowedDatabaseConditionOperators('varchar(100)').includes('between'))
   assert.ok(allowedDatabaseConditionOperators('decimal(10,2)').includes('between'))
   assert.equal(databaseConditionValueValid({
-    sourceType: 'database', sourceId: 'orders-db', schema: 'app', table: 'orders',
-    column: 'amount', type: 'decimal(10,2)', operator: 'between', value: [1, 10]
+    kind: 'condition', sourceType: 'database', sourceId: 'orders-db', schema: 'app', table: 'orders',
+    column: 'amount', type: 'decimal(10,2)', operator: 'between', right: { kind: 'fixed', value: [1, 10] }
   }), true)
   assert.equal(databaseConditionValueValid({
-    sourceType: 'database', sourceId: 'orders-db', schema: 'app', table: 'orders',
-    column: 'amount', type: 'decimal(10,2)', operator: 'between', value: [10, 1]
+    kind: 'condition', sourceType: 'database', sourceId: 'orders-db', schema: 'app', table: 'orders',
+    column: 'amount', type: 'decimal(10,2)', operator: 'between', right: { kind: 'fixed', value: [10, 1] }
   }), false)
+})
+
+/** 查询树保留括号和重复引用，请求参数不需要单独字段映射。 */
+test('query tree keeps grouped repeated parameter while omitting unused request mapping', () => {
+  const data = payload()
+  const request = data.endpointFields[0]
+  const response = data.endpointFields[1]
+  const leaf = {
+    kind: 'condition' as const, sourceType: 'database' as const, sourceId: 'orders-db',
+    schema: 'app', table: 'orders', column: 'id', type: 'number', operator: 'eq' as const,
+    right: { kind: 'endpoint' as const, endpointField: endpointFieldSnapshot(request) }
+  }
+  const draft = replaceFieldMapping({
+    ...normalizeApiDesignDraft(data),
+    databaseOperation: 'read' as const,
+    databaseQuery: { join: 'and' as const, items: [{ kind: 'group' as const, join: 'or' as const, items: [leaf, { ...leaf, column: 'parent_id' }] }, { ...leaf, column: 'owner_id' }] }
+  }, {
+    endpointField: endpointFieldSnapshot(response), mappingType: 'source_mapping', processingType: 'direct',
+    sourceFields: [{ sourceType: 'database', sourceId: 'orders-db', schema: 'app', table: 'orders', column: 'total', type: 'number', usage: 'read' }]
+  })
+  assert.deepEqual(validateApiDesignDraft(draft), {})
+  assert.match(databaseQueryPreview(draft.databaseQuery!), /\(.* OR .*\) AND /)
+  assert.equal(createApiDesignAction(draft, 'confirm').draft.fieldMappings.length, 1)
+  assert.equal(queryParameterCompatible('string', 'integer', 'eq'), false)
 })
 
 /** JSON 字符串可承载数据库日期时间，其他跨族映射及外部来源仍需严格校验。 */

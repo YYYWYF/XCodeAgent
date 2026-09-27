@@ -2,6 +2,8 @@ import type {
   WorkflowApiDatabaseFieldNode,
   WorkflowApiDatabaseCondition,
   WorkflowApiDatabaseConditionOperator,
+  WorkflowApiDatabaseQuery,
+  WorkflowApiDatabaseWriteDraft,
   WorkflowApiDatabaseOperation,
   WorkflowApiFilterOperator,
   WorkflowApiDesignAction,
@@ -33,9 +35,12 @@ export function allowedDatabaseConditionOperators(columnType: string): WorkflowA
 
 /** 校验固定条件值与列类型、集合长度及区间顺序是否一致。 */
 export function databaseConditionValueValid(condition: WorkflowApiDatabaseCondition): boolean {
-  const { operator, value } = condition
+  const { operator, right } = condition
   if (!allowedDatabaseConditionOperators(condition.type).includes(operator)) return false
-  if (operator === 'is_null' || operator === 'is_not_null') return value === undefined
+  if (operator === 'is_null' || operator === 'is_not_null') return right === undefined
+  if (!right) return false
+  if (right.kind === 'endpoint') return queryParameterCompatible(right.endpointField.type, condition.type, operator)
+  const value = right.value
   const family = typeFamily(condition.type)
   const scalarValid = (item: unknown): boolean => {
     if (family === 'number') return typeof item === 'number' && Number.isFinite(item)
@@ -68,13 +73,13 @@ export function defaultDatabaseOperation(method?: string): WorkflowApiDatabaseOp
 
 type DatabaseSourceIdentity = Pick<
   WorkflowApiDatabaseFieldNode,
-  'sourceType' | 'sourceId' | 'schema' | 'table' | 'column' | 'type' | 'usage' | 'filterOperator'
+  'sourceType' | 'sourceId' | 'schema' | 'table' | 'column' | 'type' | 'usage'
 >
 
 /** 根据 Endpoint 字段位置给数据库来源选择默认用途。 */
 export function defaultDatabaseUsage(field: WorkflowApiField): ApiDatabaseUsage {
   if (field.side === 'response') return 'read'
-  return field.location === 'request_body' ? 'write' : 'filter'
+  return 'write'
 }
 
 /** 根据单一 CRUD 操作和字段位置计算请求字段默认用途。 */
@@ -84,8 +89,7 @@ export function defaultDatabaseUsageForOperation(
 ): ApiDatabaseUsage {
   if (field.side === 'response') return 'read'
   if (operation === 'create') return 'write'
-  if (operation === 'read' || operation === 'delete') return 'filter'
-  return field.location === 'request_body' ? 'write' : 'filter'
+  return 'write'
 }
 
 /** 返回单一 CRUD 操作允许的请求字段用途。 */
@@ -95,8 +99,8 @@ export function allowedDatabaseUsagesForOperation(
 ): ApiDatabaseUsage[] {
   if (field.side === 'response') return ['read']
   if (operation === 'create') return ['write']
-  if (operation === 'read' || operation === 'delete') return ['filter']
-  return ['filter', 'write']
+  if (operation === 'read' || operation === 'delete') return []
+  return ['write']
 }
 
 /** 将完整编辑器的数据库用途恢复到当前 CRUD 操作允许的范围。 */
@@ -130,6 +134,19 @@ export function allowedFilterOperators(endpointType: string, sourceType = ''): W
   return result
 }
 
+/** 校验接口参数作为查询右值时的元素类型和运算符。 */
+export function queryParameterCompatible(endpointType: string, columnType: string, operator: WorkflowApiDatabaseConditionOperator): boolean {
+  if (operator === 'is_null' || operator === 'is_not_null') return false
+  if (!allowedFilterOperators(endpointType, columnType).some((candidate) => candidate === operator)) return false
+  const endpointFamily = typeFamily(endpointType)
+  const valueFamily = endpointFamily === 'array' ? arrayElementFamily(endpointType) : endpointFamily
+  const columnFamily = typeFamily(columnType)
+  if (endpointFamily === 'array' && !['in', 'not_in', 'between', 'not_between'].includes(operator)) return false
+  if (['in', 'not_in', 'between', 'not_between'].includes(operator) && endpointFamily !== 'array') return false
+  return valueFamily === 'unknown' || columnFamily === 'unknown' || valueFamily === columnFamily
+    || (valueFamily === 'string' && columnFamily === 'temporal')
+}
+
 /** 从前端数组类型中提取元素类型族，供集合和区间运算符判断。 */
 function arrayElementFamily(value: string): string {
   const normalized = String(value || '').trim().toLowerCase()
@@ -152,7 +169,7 @@ export function typeFamily(value: string): string {
 
 /** 返回当前 Endpoint 方向允许选择的数据库用途。 */
 export function allowedDatabaseUsages(field: WorkflowApiField): ApiDatabaseUsage[] {
-  return field.side === 'response' ? ['read'] : ['filter', 'write']
+  return field.side === 'response' ? ['read'] : ['write']
 }
 
 /** 将已有数据库字段用途恢复为当前 Endpoint 允许的用途。 */
@@ -183,7 +200,7 @@ export function restoreSourceSelection(
 
 /** 为数据库字段生成包含用途的稳定身份键。 */
 export function databaseSourceFieldKey(source: DatabaseSourceIdentity): string {
-  return `${source.sourceType}:${source.sourceId}:${source.schema || ''}:${source.table}:${source.column}:${source.usage || 'read'}:${source.filterOperator || ''}`
+  return `${source.sourceType}:${source.sourceId}:${source.schema || ''}:${source.table}:${source.column}:${source.usage || 'read'}`
 }
 
 /** 为界面数据库候选生成本地稳定键；该字段不会写入正式产物。 */
@@ -228,7 +245,6 @@ export function sourceFieldSnapshot(
       column: source.column,
       type: source.type,
       usage,
-      filterOperator: usage === 'filter' ? (source.filterOperator || 'eq') : undefined,
       description: source.description
     }
   }
@@ -262,7 +278,9 @@ export function normalizeApiDesignDraft(
       ? payload.draft.implementationDescription
       : '',
     databaseOperation: payload.draft?.databaseOperation || undefined,
-    databaseConditions: Array.isArray(payload.draft?.databaseConditions) ? payload.draft.databaseConditions : [],
+    databaseWrites: Array.isArray(payload.draft?.databaseWrites) ? payload.draft.databaseWrites : [],
+    externalApiFixedValues: Array.isArray(payload.draft?.externalApiFixedValues) ? payload.draft.externalApiFixedValues : [],
+    databaseQuery: payload.draft?.databaseQuery || undefined,
     fieldMappings: endpointFields.map((field) => {
       const mapping = existing.get(apiDesignFieldKey(field))
       return mapping
@@ -307,6 +325,15 @@ export function createBusinessDescriptionMapping(
   }
 }
 
+/** 校验固定标量是否符合目标字段的基础类型。 */
+function fixedScalarValueValid(value: unknown, fieldType: string): boolean {
+  const family = typeFamily(fieldType)
+  if (family === 'number') return typeof value === 'number' && Number.isFinite(value)
+  if (family === 'boolean') return typeof value === 'boolean'
+  if (family === 'string' || family === 'temporal') return typeof value === 'string' && value.trim().length > 0
+  return value !== undefined && value !== null && !Array.isArray(value) && typeof value !== 'object'
+}
+
 /** 校验自包含字段映射的完整覆盖、来源方向和类型。 */
 export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesignValidationErrors {
   const errors: ApiDesignValidationErrors = {}
@@ -317,24 +344,79 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
     errors.__implementationDescription = 'API 实现描述不能超过 4000 个字符。'
   }
   const keys = new Set<string>()
-  const databaseConditions = draft.databaseConditions || []
-  const conditionKeys = databaseConditions.map((condition) => `${condition.sourceId}:${condition.schema}:${condition.table}:${condition.column}`)
-  if (new Set(conditionKeys).size !== conditionKeys.length) errors.__databaseConditions = '同一数据库列最多配置一个固定条件。'
-  else if (databaseConditions.some((condition) => !databaseConditionValueValid(condition))) errors.__databaseConditions = '固定条件的运算符或固定值与数据库列类型不兼容。'
+  const externalApiFixedValues = draft.externalApiFixedValues || []
+  const hasExternalApiReference = externalApiFixedValues.length > 0 || draft.fieldMappings.some((mapping) =>
+    mapping.mappingType === 'source_mapping' && mapping.sourceFields.some((source) => source.sourceType === 'external_api'))
+  if (externalApiFixedValues.length > 3000) errors.__externalApiFixedValues = '外部 API 固定值最多 3000 项。'
+  const externalRequestTargets = new Set(draft.fieldMappings.flatMap((mapping) => mapping.mappingType === 'source_mapping'
+    ? mapping.sourceFields.filter((source): source is Extract<WorkflowApiSourceField, { sourceType: 'external_api' }> => source.sourceType === 'external_api' && source.section !== 'response_body')
+      .map((source) => JSON.stringify([source.sourceId, source.directoryId, source.operationId, source.section, source.path]))
+    : []))
+  const fixedTargetKeys = new Set<string>()
+  externalApiFixedValues.forEach((item) => {
+    const field = item.externalField
+    const key = JSON.stringify([field.sourceId, field.directoryId, field.operationId, field.section, field.path])
+    if (field.sourceType !== 'external_api' || field.section === 'response_body' || !field.sourceId || !field.directoryId || !field.operationId || !field.path) {
+      errors.__externalApiFixedValues = '固定值必须绑定有效的外部 API 请求参数。'
+    } else if (externalRequestTargets.has(key) || fixedTargetKeys.has(key)) {
+      errors.__externalApiFixedValues = `外部 API 请求参数 ${field.path} 重复配置。`
+    } else if ((typeof item.value === 'string' && !item.value.trim()) || !fixedScalarValueValid(item.value, field.type)) {
+      errors.__externalApiFixedValues = `请为外部 API 请求参数 ${field.path} 输入与类型匹配的固定值。`
+    }
+    fixedTargetKeys.add(key)
+  })
+  const query = draft.databaseQuery
+  const conditions = query?.items.flatMap((item) => item.kind === 'group' ? item.items : [item]) || []
+  if (query && (!['and', 'or'].includes(query.join) || !query.items.length || query.items.some((item) => item.kind === 'group' && (!['and', 'or'].includes(item.join) || !item.items.length)) || conditions.length > 300)) {
+    errors.__databaseQuery = '查询条件分组不能为空，且最多只能包含 300 条条件。'
+  } else if (conditions.some((condition) => !condition.column || !databaseConditionValueValid(condition))) {
+    errors.__databaseQuery = '请为每条查询条件选择数据库列、有效运算符和右值。'
+  }
   const databaseSources = draft.fieldMappings.flatMap((mapping) => mapping.mappingType === 'source_mapping'
     ? mapping.sourceFields.filter((source): source is Extract<WorkflowApiSourceField, { sourceType: 'database' }> => source.sourceType === 'database')
     : [])
-  const hasDatabase = databaseSources.length > 0 || databaseConditions.length > 0
-  if (hasDatabase && !draft.databaseOperation) errors.__databaseOperation = '请选择数据库操作类型。'
+  const hasDatabase = databaseSources.length > 0 || conditions.length > 0
+  const databaseWrites = draft.databaseWrites || []
+  const hasDatabaseMapping = hasDatabase || databaseWrites.length > 0
+  if (hasDatabaseMapping && !draft.databaseOperation) errors.__databaseOperation = '请选择数据库操作类型。'
   // 数据库表已选定但字段尚未开始映射时，允许先选择 CRUD 操作；正式确认仍由后端校验来源与操作成对出现。
   const operation = draft.databaseOperation
-  const requestDatabase = databaseSources.filter((source) => source.usage !== 'read')
-  const filters = requestDatabase.filter((source) => source.usage === 'filter').length + databaseConditions.length
-  const writes = requestDatabase.filter((source) => source.usage === 'write').length
-  if (operation === 'create' && writes === 0) errors.__databaseOperation = '新增操作至少需要一个写入字段。'
-  if (operation === 'update' && (filters === 0 || writes === 0)) errors.__databaseOperation = '修改操作至少需要查询条件和写入字段。'
+  const filters = conditions.length
+  const validWrites = databaseWrites.filter((write) => Boolean(write.column) && Boolean(write.right)
+    && (write.right?.kind === 'fixed' ? fixedScalarValueValid(write.right.value, write.type)
+      : Boolean(write.right?.endpointField && apiDesignTypesCompatible(write.right.endpointField.type, write.type, true)))).length
+  if (operation === 'create' && validWrites === 0) errors.__databaseOperation = '新增操作至少需要一个完整的写入字段。'
+  if (operation === 'update' && (filters === 0 || validWrites === 0)) errors.__databaseOperation = '修改操作至少需要查询条件和完整的写入字段。'
   if (operation === 'delete' && filters === 0) errors.__databaseOperation = '删除操作至少需要一个查询条件。'
-  if (operation === 'create' && databaseConditions.length) errors.__databaseOperation = '新增操作不能包含固定查询条件。'
+  if (operation === 'create' && conditions.length) errors.__databaseOperation = '新增操作不能包含查询条件。'
+  if (databaseWrites.length && operation !== 'create' && operation !== 'update') errors.__databaseWrites = '只有新增和修改操作可以配置写入字段。'
+  if (databaseWrites.length > 3000) errors.__databaseWrites = '写入字段最多 3000 项。'
+  const writeColumns = new Set<string>()
+  databaseWrites.forEach((write, index) => {
+    const rowKey = `__databaseWrite:${index}`
+    if (!write.column || !write.sourceId || !write.schema || !write.table) {
+      errors[rowKey] = '请先选择当前数据表中的目标字段。'
+      return
+    }
+    const identity = JSON.stringify([write.sourceId, write.schema, write.table, write.column])
+    if (writeColumns.has(identity)) errors[rowKey] = `目标字段 ${write.table}.${write.column} 重复。`
+    writeColumns.add(identity)
+    if (!write.right) {
+      errors[rowKey] = '请选择写入值来源。'
+      return
+    }
+    if (write.right.kind === 'endpoint') {
+      const endpointField = write.right.endpointField
+      if (!endpointField || endpointField.side !== 'request' || !draft.fieldMappings.some((mapping) =>
+        mapping.endpointField.side === 'request' && apiDesignFieldKey(mapping.endpointField) === apiDesignFieldKey(endpointField))) {
+        errors[rowKey] = '请选择当前接口的请求参数。'
+      } else if (!apiDesignTypesCompatible(endpointField.type, write.type, true)) {
+        errors[rowKey] = '请求参数与目标数据库字段类型不兼容。'
+      }
+      return
+    }
+    if (!fixedScalarValueValid(write.right.value, write.type)) errors[rowKey] = '固定值与目标数据库字段类型不兼容。'
+  })
   draft.fieldMappings.forEach((mapping) => {
     const key = apiDesignFieldKey(mapping.endpointField)
     if (keys.has(key)) {
@@ -343,6 +425,7 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
     }
     keys.add(key)
     if (mapping.mappingType === 'unconfigured') {
+      if ((draft.databaseOperation || hasExternalApiReference) && mapping.endpointField.side === 'request') return
       errors[key] = 'Endpoint 字段尚未配置映射。'
       return
     }
@@ -370,11 +453,12 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
     const identities = sources.map(apiDesignSourceIdentity)
     if (new Set(identities).size !== identities.length) errors[key] = '字段映射包含重复来源。'
     for (const source of sources) {
-      const collectionFilter = source.sourceType === 'database' && source.usage === 'filter' && ['in', 'not_in', 'between', 'not_between'].includes(source.filterOperator || '')
-      if (kind === 'direct' && !collectionFilter && !apiDesignTypesCompatible(mapping.endpointField.type, source.type, source.sourceType === 'database')) errors[key] = 'Endpoint 与数据源字段类型不兼容。'
+      if (kind === 'direct' && !apiDesignTypesCompatible(mapping.endpointField.type, source.type, source.sourceType === 'database')) errors[key] = 'Endpoint 与数据源字段类型不兼容。'
       validateSourceDirection(mapping, source, errors, key, operation)
     }
   })
+  const knownRequests = new Set(draft.fieldMappings.filter((item) => item.endpointField.side === 'request').map((item) => apiDesignFieldKey(item.endpointField)))
+  if (conditions.some((condition) => condition.right?.kind === 'endpoint' && !knownRequests.has(apiDesignFieldKey(condition.right.endpointField)))) errors.__databaseQuery = '查询条件引用的接口参数不属于当前 Endpoint。'
   return errors
 }
 
@@ -396,26 +480,17 @@ function validateSourceDirection(
     return
   }
   const usage = source.usage || 'read'
+  if (endpoint.side === 'request' && source.sourceType === 'database') {
+    errors[key] = '数据库写入请在“写入字段”中选择目标列和值来源。'
+    return
+  }
   const allowed = allowedDatabaseUsagesForOperation(endpoint, operation)
   if (!allowed.includes(usage)) {
-    errors[key] = `${operation || '当前操作'}不允许字段 ${source.table}.${source.column} 使用${usage === 'filter' ? '查询条件' : '写入字段'}。`
-  } else if (usage === 'filter' && !source.filterOperator) {
-    errors[key] = `查询条件 ${source.table}.${source.column} 缺少运算符。`
-  } else if (usage !== 'filter' && source.filterOperator) {
-    errors[key] = `非查询字段 ${source.table}.${source.column} 不能携带查询运算符。`
-  } else if (endpoint.side === 'request' && !['filter', 'write'].includes(usage)) {
-    errors[key] = `请求映射中的数据库字段 ${source.table}.${source.column} 只能使用 filter 或 write。`
+    errors[key] = `${operation || '当前操作'}不允许字段 ${source.table}.${source.column} 用于${endpoint.side === 'request' ? '写入' : '读取'}。`
+  } else if (endpoint.side === 'request' && usage !== 'write') {
+    errors[key] = `请求映射中的数据库字段 ${source.table}.${source.column} 只能用于写入。`
   } else if (endpoint.side === 'response' && usage !== 'read') {
     errors[key] = `响应映射中的数据库字段 ${source.table}.${source.column} 必须使用 read。`
-  }
-  if (usage === 'filter' && source.filterOperator) {
-    const operators = allowedFilterOperators(endpoint.type, source.type)
-    if (!operators.includes(source.filterOperator)) errors[key] = `运算符与字段类型不兼容：${source.filterOperator}。`
-    if (['in', 'not_in', 'between', 'not_between'].includes(source.filterOperator)) {
-      if (typeFamily(endpoint.type) !== 'array') errors[key] = '集合或区间查询要求 API 字段为数组类型。'
-      else if ((source.filterOperator === 'between' || source.filterOperator === 'not_between') && !['number', 'temporal'].includes(arrayElementFamily(endpoint.type)) && !(arrayElementFamily(endpoint.type) === 'string' && typeFamily(source.type) === 'temporal')) errors[key] = '区间查询要求数组元素为数字或日期时间类型。'
-      else if (!apiDesignTypesCompatible(arrayElementFamily(endpoint.type), source.type, true)) errors[key] = '集合元素类型与数据库列不兼容。'
-    }
   }
 }
 
@@ -432,7 +507,8 @@ export function createApiDesignAction(
   draft: WorkflowApiDesignDraft,
   action: WorkflowApiDesignAction['action']
 ): WorkflowApiDesignAction {
-  return { action, apiContractId: draft.apiContractId, endpointId: draft.endpointId, draft }
+  const fieldMappings = draft.fieldMappings.filter((mapping) => !(draft.databaseOperation && mapping.mappingType === 'unconfigured' && mapping.endpointField.side === 'request'))
+  return { action, apiContractId: draft.apiContractId, endpointId: draft.endpointId, draft: { ...draft, fieldMappings } }
 }
 
 /** 把内嵌来源字段转换为简洁预览标签。 */
@@ -450,21 +526,39 @@ export function apiDesignMappingPreview(mapping: WorkflowApiFieldMapping): strin
   if (mapping.mappingType === 'business_description') {
     return `${endpoint} ⇒ 业务说明：${mapping.businessDescription}`
   }
-  const source = mapping.sourceFields.map((item) => {
-    const label = apiDesignSourceFieldLabel(item)
-    return item.sourceType === 'database' && item.filterOperator ? `${label}（${item.filterOperator}）` : label
-  }).join(" + ")
+  const source = mapping.sourceFields.map(apiDesignSourceFieldLabel).join(' + ')
   const middle = [source, mapping.businessDescription].filter(Boolean)
   return mapping.endpointField.side === 'request'
     ? [endpoint, ...middle].join(' → ')
     : [...middle.reverse(), endpoint].join(' → ')
 }
 
+/** 以括号保留查询条件树的组合语义。 */
+export function databaseQueryPreview(query: WorkflowApiDatabaseQuery): string {
+  return query.items.map((item) => {
+    if (item.kind === 'group') return `(${databaseQueryPreview(item)})`
+    const right = item.right?.kind === 'endpoint'
+      ? `接口参数 ${item.right.endpointField.location}.${item.right.endpointField.path}`
+      : item.right?.kind === 'fixed' ? `固定值 ${JSON.stringify(item.right.value)}` : ''
+    return `${item.table}.${item.column} ${item.operator}${right ? ` ${right}` : ''}`
+  }).join(` ${query.join.toUpperCase()} `)
+}
+
+/** 把数据库写入列和值来源转换为简短预览。 */
+export function databaseWritePreview(write: WorkflowApiDatabaseWriteDraft): string {
+  const right = write.right?.kind === 'endpoint'
+    ? write.right.endpointField ? `接口参数 ${write.right.endpointField.location}.${write.right.endpointField.path}` : '待选接口参数'
+    : write.right?.kind === 'fixed' ? `固定值 ${JSON.stringify(write.right.value ?? '')}` : '待选值来源'
+  return `${right} → ${write.schema}.${write.table}.${write.column || '待选字段'}`
+}
+
 /** 返回草稿中所有已配置字段的可读数据流。 */
 export function apiDesignMappingPreviews(draft: WorkflowApiDesignDraft): string[] {
   const operation = draft.databaseOperation ? [`数据库操作：${draft.databaseOperation}`] : []
-  const conditions = (draft.databaseConditions || []).map((item) => `固定条件：${item.table}.${item.column} ${item.operator}${item.value === undefined ? '' : ` ${Array.isArray(item.value) ? item.value.join(', ') : String(item.value)}`}`)
-  return [...operation, ...conditions, ...draft.fieldMappings
+  const query = draft.databaseQuery
+  const conditions = query ? [`查询条件：${databaseQueryPreview(query)}`] : []
+  const writes = (draft.databaseWrites || []).map((write) => `写入字段：${databaseWritePreview(write)}`)
+  return [...operation, ...conditions, ...writes, ...draft.fieldMappings
     .filter((mapping) => mapping.mappingType !== 'unconfigured')
     .map(apiDesignMappingPreview)]
 }
@@ -472,6 +566,6 @@ export function apiDesignMappingPreviews(draft: WorkflowApiDesignDraft): string[
 /** 为真实来源生成稳定身份，用于多来源去重。 */
 export function apiDesignSourceIdentity(source: WorkflowApiSourceField): string {
   return JSON.stringify(source.sourceType === 'database'
-    ? [source.sourceType, source.sourceId, source.schema, source.table, source.column, source.usage || 'read', source.filterOperator || '']
+    ? [source.sourceType, source.sourceId, source.schema, source.table, source.column, source.usage || 'read']
     : [source.sourceType, source.sourceId, source.directoryId, source.operationId, source.section, source.path])
 }

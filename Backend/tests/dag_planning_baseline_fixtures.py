@@ -165,7 +165,7 @@ def write_confirmed_endpoint_designs(
                     "usage": "read",
                 }
             design = EndpointApiDesign.model_validate({
-                "schemaVersion": "endpoint-field-mapping.v4",
+                "schemaVersion": "endpoint-field-mapping.v6",
                 "artifactType": "endpoint-field-mapping",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",
@@ -187,6 +187,7 @@ def write_confirmed_endpoint_designs(
                     "processingType": "direct",
                     "sourceFields": [source_field],
                 }],
+                "databaseWrites": [],
                 "sourceSnapshots": [{
                     "sourceType": source_field["sourceType"],
                     "sourceId": source_field["sourceId"],

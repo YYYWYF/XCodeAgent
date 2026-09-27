@@ -2,7 +2,7 @@ import { Alert, Collapse, Descriptions, Empty, Table, Tag, Typography } from 'an
 import type { ReactElement } from 'react'
 import type { EndpointDesignDetail } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { endpointDesignSummary, groupEndpointDesignRows, projectEndpointDesignRows } from './endpointDesignResultModel'
+import { endpointDesignSummary, groupEndpointDesignRows, projectDatabaseWriteRows, projectEndpointDesignRows } from './endpointDesignResultModel'
 import './EndpointDesignResult.less'
 
 const { Text } = Typography
@@ -13,23 +13,32 @@ type Props = {
   historyLayout?: boolean
 }
 
-const FIXED_CONDITION_LABELS: Record<string, string> = {
+const CONDITION_LABELS: Record<string, string> = {
   eq: '等于', ne: '不等于', gt: '大于', gte: '大于等于', lt: '小于', lte: '小于等于',
   contains: '包含', not_contains: '不包含', starts_with: '前缀匹配', ends_with: '后缀匹配',
   in: '属于', not_in: '不属于', between: '介于', not_between: '不介于', is_null: '为空', is_not_null: '不为空'
 }
 
-/** 将固定条件运算符和值转换为只读结果文本。 */
-function fixedConditionText(item: Record<string, unknown>): string {
-  const label = FIXED_CONDITION_LABELS[String(item.operator || '')] || String(item.operator || '')
-  if (!Object.prototype.hasOwnProperty.call(item, 'value')) return label
-  return `${label} ${Array.isArray(item.value) ? item.value.join('，') : String(item.value)}`
+/** 按括号保留查询树的 AND/OR 关系，并展示右值来源。 */
+function queryText(value: unknown): string {
+  if (!value || typeof value !== 'object') return ''
+  const item = value as Record<string, unknown>
+  if (item.kind === 'condition') {
+    const right = item.right && typeof item.right === 'object' ? item.right as Record<string, unknown> : undefined
+    const field = right?.endpointField && typeof right.endpointField === 'object' ? right.endpointField as Record<string, unknown> : undefined
+    const rightText = right?.kind === 'endpoint' ? `接口参数 ${String(field?.location || '')}.${String(field?.path || '')}`
+      : right?.kind === 'fixed' ? `固定值 ${Array.isArray(right.value) ? right.value.join('，') : String(right.value)}` : ''
+    return `${String(item.schema || '')}.${String(item.table || '')}.${String(item.column || '')} ${CONDITION_LABELS[String(item.operator || '')] || String(item.operator || '')} ${rightText}`.trim()
+  }
+  const parts = Array.isArray(item.items) ? item.items.map(queryText).filter(Boolean) : []
+  return parts.length ? `(${parts.join(` ${String(item.join || 'and').toUpperCase()} `)})` : ''
 }
 
 /** 渲染 API 设计正式产物的共享只读视图。 */
 export default function EndpointDesignResult({ detail, compact = false, historyLayout = false }: Props): ReactElement {
   if (!detail) return <Empty description="尚未读取接口 API 映射结果" />
   const summary = endpointDesignSummary(detail)
+  const databaseWriteRows = projectDatabaseWriteRows(detail)
   const statusLabel = detail.status === 'confirmed' ? '已确认' : detail.status === 'stale' ? '已失效' : '待设计'
   const statusColor = detail.status === 'confirmed' ? 'success' : detail.status === 'stale' ? 'warning' : 'default'
   const design = detail.design || {}
@@ -43,7 +52,12 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
     { title: '业务说明', dataIndex: 'description', key: 'description', width: 200, render: (value: string) => value || '—' },
     { title: '数据源', dataIndex: 'dataSource', key: 'dataSource', width: 140, render: (value: string) => value || '—' },
     { title: '映射字段', dataIndex: 'mappingField', key: 'mappingField', width: 180, render: (value: string) => value || '—' },
-    { title: '查询运算符', dataIndex: 'filterOperator', key: 'filterOperator', width: 125, render: (value: string) => value || '—' }
+  ]
+  const databaseWriteColumns = [
+    { title: '数据表字段', dataIndex: 'target', key: 'target', width: 240, render: (value: string) => value || '—' },
+    { title: '值来源', dataIndex: 'valueSource', key: 'valueSource', width: 110 },
+    { title: '参数或固定值', dataIndex: 'value', key: 'value', width: 240, render: (value: string) => value || '—' },
+    { title: '类型', dataIndex: 'type', key: 'type', width: 100 }
   ]
   const renderRows = (side: 'request' | 'response'): ReactElement => {
     const groups = groupEndpointDesignRows(projectEndpointDesignRows(detail, side))
@@ -63,10 +77,8 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
     return (
       <div className={cx('endpoint-design-result', 'endpoint-design-history')}>
         <section><strong>数据库操作</strong><p>{String(design.databaseOperation || '无数据库映射')}</p></section>
-        {Array.isArray(design.databaseConditions) && design.databaseConditions.length ? <section><strong>固定数据库条件</strong>{design.databaseConditions.map((condition, index) => {
-          const item = condition && typeof condition === 'object' ? condition as Record<string, unknown> : {}
-          return <p key={`${String(item.column || '')}-${index}`}>{String(item.schema || '')}.{String(item.table || '')}.{String(item.column || '')} · {fixedConditionText(item)}</p>
-        })}</section> : null}
+        {design.databaseQuery ? <section><strong>查询条件</strong><p>{queryText(design.databaseQuery)}</p></section> : null}
+        {databaseWriteRows.length ? <section><strong>数据库写入字段</strong><Table columns={databaseWriteColumns} dataSource={databaseWriteRows} pagination={false} size="small" /></section> : null}
         {design.implementationDescription ? <section><strong>API 实现描述</strong><p>{String(design.implementationDescription)}</p></section> : null}
         {(['request', 'response'] as const).map((side) => (
           <section key={side}>
@@ -97,13 +109,8 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
         <Descriptions.Item label="数据库操作">{String(design.databaseOperation || '无数据库映射')}</Descriptions.Item>
         <Descriptions.Item label="映射数量">请求 {summary.requestCount} 项，返回 {summary.responseCount} 项</Descriptions.Item>
       </Descriptions>
-      {Array.isArray(design.databaseConditions) && design.databaseConditions.length ? <section className="endpoint-design-fixed-conditions">
-        <Text strong>固定数据库条件</Text>
-        {design.databaseConditions.map((condition, index) => {
-          const item = condition && typeof condition === 'object' ? condition as Record<string, unknown> : {}
-          return <div key={`${String(item.column || '')}-${index}`}><Tag>固定</Tag><code>{String(item.schema || '')}.{String(item.table || '')}.{String(item.column || '')}</code><span>{fixedConditionText(item)}</span></div>
-        })}
-      </section> : null}
+      {design.databaseQuery ? <section className="endpoint-design-fixed-conditions"><Text strong>查询条件</Text><div>{queryText(design.databaseQuery)}</div></section> : null}
+      {databaseWriteRows.length ? <section className="endpoint-design-fixed-conditions"><Text strong>数据库写入字段</Text><Table columns={databaseWriteColumns} dataSource={databaseWriteRows} pagination={false} size="small" /></section> : null}
       {!compact ? (
         <Collapse defaultActiveKey={['request', 'response']}>
           {(['request', 'response'] as const).map((side) => (

@@ -128,7 +128,13 @@ async function runEndpointDesignAction(
 
 /** 持久化未确认草稿，既不生成正式产物也不推进主工作流。 */
 export async function saveEndpointBindingDraft(workspaceRoot: string, value: BindingDraft): Promise<BindingDraft> {
-  const { savedAt: _savedAt, ...input } = value
+  // 仅发送暂存请求声明的字段；草稿格式和保存时间属于后端返回的存储元数据。
+  const input = {
+    draft: value.draft,
+    selection: value.selection,
+    baseRevision: value.baseRevision,
+    technicalPlanHash: value.technicalPlanHash
+  }
   const result = await runEndpointDesignAction('save_draft', workspaceRoot, value.draft.apiContractId,
     value.draft.endpointId, input, '保存字段映射草稿。')
   if (!result.draft) throw new Error('接口未返回已保存草稿。')

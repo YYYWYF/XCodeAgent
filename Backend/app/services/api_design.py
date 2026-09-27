@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,12 +18,18 @@ from app.domain.api_design import (
     ApiDesignAction,
     ApiDesignGateAction,
     BusinessDescriptionFieldMapping,
-    DatabaseCondition,
+    DatabaseWriteMapping,
+    DatabaseQuery,
+    DatabaseQueryCondition,
+    DatabaseQuerySubgroup,
+    EndpointQueryRight,
+    FixedQueryRight,
     DatabaseSourceField,
     ConfirmedFieldMapping,
     DraftFieldMapping,
     EndpointFieldNode,
     EndpointFieldMappingDesign,
+    ExternalApiFixedValue,
     ExternalSourceField,
     SourceMapping,
     UnconfiguredFieldMapping,
@@ -52,7 +59,9 @@ from app.workspace.endpoint_design_documents import (
 
 _DRAFT_FIELD_MAPPING_ADAPTER = TypeAdapter(DraftFieldMapping)
 _CONFIRMED_FIELD_MAPPING_ADAPTER = TypeAdapter(ConfirmedFieldMapping)
-_DATABASE_CONDITION_ADAPTER = TypeAdapter(DatabaseCondition)
+_DATABASE_QUERY_ADAPTER = TypeAdapter(DatabaseQuery)
+_DATABASE_WRITES_ADAPTER = TypeAdapter(list[DatabaseWriteMapping])
+_EXTERNAL_API_FIXED_VALUES_ADAPTER = TypeAdapter(list[ExternalApiFixedValue])
 
 
 class ApiDesignError(ValueError):
@@ -190,13 +199,15 @@ def initial_api_design_payload(
     contract, endpoint = find_endpoint(project_plan, api_contract_id, endpoint_id)
     endpoint_nodes = endpoint_field_nodes(contract, endpoint)
     existing = read_endpoint_design(workspace_root, api_contract_id, endpoint_id, require_current=False)
-    if isinstance(existing, dict) and isinstance(existing.get("fieldMappings"), list):
+    if isinstance(existing, dict) and existing.get("schemaVersion") == API_DESIGN_SCHEMA_VERSION and isinstance(existing.get("fieldMappings"), list):
         draft = {
             "apiContractId": api_contract_id,
             "endpointId": endpoint_id,
             "implementationDescription": str(existing.get("implementationDescription") or ""),
             "databaseOperation": existing.get("databaseOperation"),
-            "databaseConditions": existing.get("databaseConditions", []),
+            "databaseWrites": existing.get("databaseWrites", []),
+            "externalApiFixedValues": existing.get("externalApiFixedValues", []),
+            "databaseQuery": existing.get("databaseQuery"),
             "fieldMappings": existing.get("fieldMappings", []),
         }
     else:
@@ -206,7 +217,9 @@ def initial_api_design_payload(
             "implementationDescription": "",
             # 尚未选择数据库来源时不写入 CRUD；选择数据库表后由工作台按 HTTP 方法初始化。
             "databaseOperation": None,
-            "databaseConditions": [],
+            "databaseWrites": [],
+            "externalApiFixedValues": [],
+            "databaseQuery": None,
             "fieldMappings": [
                 {
                     "endpointField": _endpoint_field_snapshot(field),
@@ -458,7 +471,7 @@ def load_confirmed_endpoint_designs(
 
 
 def api_design_source_types(designs: list[dict[str, Any]]) -> list[str]:
-    """从自包含字段映射中提取有序去重的数据源类型。"""
+    """从字段映射、写入、外部 API 配置和查询条件中提取有序来源类型。"""
 
     result: list[str] = []
     for design in designs:
@@ -467,26 +480,43 @@ def api_design_source_types(designs: list[dict[str, Any]]) -> list[str]:
                 source_type = str(source.get("sourceType") or "")
                 if source_type and source_type not in result:
                     result.append(source_type)
-        # 固定条件没有 Endpoint 右值，也必须参与来源类型投影。
-        for condition in _dict_items(design.get("databaseConditions")):
+        # 查询树独立于字段映射，也必须参与来源类型投影。
+        for condition in database_query_leaves(design.get("databaseQuery")):
             if condition.get("sourceType") == "database" and "database" not in result:
                 result.append("database")
+        if _dict_items(design.get("databaseWrites")) and "database" not in result:
+            result.append("database")
+        if _dict_items(design.get("externalApiFixedValues")) and "external_api" not in result:
+            result.append("external_api")
     return result
 
 
 def api_design_mapping_flows(designs: list[dict[str, Any]]) -> list[str]:
-    """把字段映射转换为可读的数据流表达式供 Prompt、日志和验收使用。"""
+    """把字段、数据库写入、外部 API 配置和查询配置转成数据流表达式。"""
 
     flows: list[str] = []
     for design in designs:
         operation = str(design.get("databaseOperation") or "")
         if operation:
             flows.append(f"数据库操作：{operation}")
-        for condition in _dict_items(design.get("databaseConditions")):
-            column = f"{condition.get('table')}.{condition.get('column')}"
-            value = condition.get("value")
-            suffix = "" if value is None else f" {value}"
-            flows.append(f"固定条件：{column} {condition.get('operator')}{suffix}")
+        query = design.get("databaseQuery")
+        if isinstance(query, dict) and query.get("items"):
+            flows.append(f"查询条件：{_database_query_flow(query)}")
+        for write in _dict_items(design.get("databaseWrites")):
+            right = write.get("right") if isinstance(write.get("right"), dict) else {}
+            if right.get("kind") == "endpoint":
+                value = f"接口参数 {_endpoint_field_label(right.get('endpointField'))}"
+            elif right.get("kind") == "fixed":
+                value = f"固定值 {right.get('value')!r}"
+            else:
+                value = ""
+            target = f"{write.get('sourceId')}.{write.get('schema')}.{write.get('table')}.{write.get('column')}"
+            if value:
+                flows.append(f"{value} → {target}")
+        for item in _dict_items(design.get("externalApiFixedValues")):
+            target = _source_field_label(item.get("externalField"))
+            if target:
+                flows.append(f"固定值 {item.get('value')!r} → {target}")
         for mapping in _dict_items(design.get("fieldMappings")):
             endpoint = _endpoint_field_label(mapping.get("endpointField"))
             mapping_type = str(mapping.get("mappingType") or "")
@@ -498,13 +528,6 @@ def api_design_mapping_flows(designs: list[dict[str, Any]]) -> list[str]:
             if mapping_type == "unconfigured" or not endpoint:
                 continue
             source = " + ".join(_source_field_label(item) for item in mapping_sources(mapping))
-            operators = [
-                str(item.get("filterOperator") or "")
-                for item in mapping_sources(mapping)
-                if isinstance(item, dict) and item.get("filterOperator")
-            ]
-            if operators:
-                source = f"{source}（运算符：{', '.join(operators)}）"
             middle = [label for label in (source,) if label]
             endpoint_field = (
                 mapping.get("endpointField")
@@ -520,6 +543,44 @@ def api_design_mapping_flows(designs: list[dict[str, Any]]) -> list[str]:
                 description = mapping_business_description(mapping)
                 flows.append(" → ".join(labels) + ("；业务说明：" + description if description else ""))
     return list(dict.fromkeys(flows))
+
+
+def database_query_leaves(query: Any) -> list[Mapping[str, Any]]:
+    """按树顺序读取查询条件叶子，不丢失重复列或参数。"""
+
+    if not isinstance(query, Mapping):
+        return []
+    leaves: list[Mapping[str, Any]] = []
+    for item in query.get("items", ()) if isinstance(query.get("items"), (list, tuple)) else ():
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("kind") == "condition":
+            leaves.append(item)
+        elif item.get("kind") == "group":
+            children = item.get("items")
+            if isinstance(children, (list, tuple)):
+                leaves.extend(child for child in children if isinstance(child, Mapping))
+    return leaves
+
+
+def _database_query_flow(query: dict[str, Any]) -> str:
+    """把查询树转换为保留括号的生成和验收说明。"""
+
+    parts: list[str] = []
+    for item in _dict_items(query.get("items")):
+        if item.get("kind") == "group":
+            parts.append(f"({_database_query_flow(item)})")
+            continue
+        right = item.get("right") if isinstance(item.get("right"), dict) else {}
+        if right.get("kind") == "endpoint":
+            endpoint = right.get("endpointField") if isinstance(right.get("endpointField"), dict) else {}
+            value = f"接口参数 {endpoint.get('location')}.{endpoint.get('path')}"
+        elif right.get("kind") == "fixed":
+            value = f"固定值 {right.get('value')!r}"
+        else:
+            value = ""
+        parts.append(f"{item.get('table')}.{item.get('column')} {item.get('operator')}{' ' + value if value else ''}")
+    return f" {str(query.get('join') or 'and').upper()} ".join(parts)
 
 
 def api_design_business_descriptions(designs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -559,21 +620,34 @@ def _validate_design(
 ) -> dict[str, Any]:
     """校验自包含字段映射、来源真实性和必填 Endpoint 字段覆盖。"""
 
-    if any(key in draft for key in ("nodes", "mappings", "fieldBindings", "sceneEntities")):
+    if any(key in draft for key in ("nodes", "mappings", "fieldBindings", "sceneEntities", "databaseConditions")):
         raise ApiDesignError("API 设计草稿必须使用当前 fieldMappings 结构。")
     field_mappings = _parse_field_mappings(draft.get("fieldMappings"))
-    conditions = _parse_database_conditions(draft.get("databaseConditions", []))
-    operation = _validate_database_contract(endpoint, field_mappings, conditions, draft.get("databaseOperation"))
-    _validate_field_mappings(field_mappings, endpoint_nodes, operation)
+    database_writes = _parse_database_writes(draft.get("databaseWrites", []))
+    external_api_fixed_values = _parse_external_api_fixed_values(draft.get("externalApiFixedValues", []))
+    query = _parse_database_query(draft.get("databaseQuery"))
+    operation = _validate_database_contract(endpoint, field_mappings, query, database_writes, draft.get("databaseOperation"))
+    has_external_api_reference = bool(external_api_fixed_values) or any(
+        isinstance(mapping, SourceMapping)
+        and any(isinstance(source, ExternalSourceField) for source in mapping.source_fields)
+        for mapping in field_mappings
+    )
+    _validate_field_mappings(field_mappings, endpoint_nodes, operation, allow_unconfigured_request=has_external_api_reference)
+    _validate_query_references(query, endpoint_nodes)
+    _validate_database_writes(database_writes, endpoint_nodes)
+    _validate_external_api_fixed_values(external_api_fixed_values, field_mappings)
     implementation_description = _normalize_implementation_description(
         draft.get("implementationDescription")
     )
-    snapshots = _validated_source_snapshots(workspace_root, field_mappings, conditions)
+    snapshots = _validated_source_snapshots(workspace_root, field_mappings, _query_conditions(query), database_writes, external_api_fixed_values)
     normalized = {
-        "fieldMappings": [item.model_dump(mode="json", by_alias=True, exclude_none=True) for item in field_mappings],
-        "databaseConditions": [item.model_dump(mode="json", by_alias=True, exclude_none=True) for item in conditions],
+        "fieldMappings": [item.model_dump(mode="json", by_alias=True, exclude_none=True) for item in field_mappings if not isinstance(item, UnconfiguredFieldMapping)],
+        "databaseWrites": [item.model_dump(mode="json", by_alias=True, exclude_none=True) for item in database_writes],
+        "externalApiFixedValues": [item.model_dump(mode="json", by_alias=True, exclude_none=True) for item in external_api_fixed_values],
         "sourceSnapshots": snapshots,
     }
+    if query is not None:
+        normalized["databaseQuery"] = query.model_dump(mode="json", by_alias=True, exclude_none=True)
     if operation is not None:
         normalized["databaseOperation"] = operation
     if implementation_description is not None:
@@ -605,25 +679,144 @@ def _parse_field_mappings(value: Any) -> list[Any]:
         raise ApiDesignError(f"字段映射结构无效：{exc}") from exc
 
 
-def _parse_database_conditions(value: Any) -> list[DatabaseCondition]:
-    """解析并严格限制当前版类型感知固定数据库条件。"""
+def _parse_database_query(value: Any) -> DatabaseQuery | None:
+    """解析仅含一层子组的当前版查询树。"""
+
+    if value is None:
+        return None
+    try:
+        query = _DATABASE_QUERY_ADAPTER.validate_python(value)
+    except ValueError as exc:
+        raise ApiDesignError(f"数据库查询条件结构无效：{exc}") from exc
+    for condition in _query_conditions(query):
+        _validate_database_condition(condition)
+    return query
+
+
+def _parse_database_writes(value: Any) -> list[DatabaseWriteMapping]:
+    """解析新增或修改操作的当前数据库写入字段列表。"""
 
     if not isinstance(value, list):
-        raise ApiDesignError("databaseConditions 必须是数组。")
+        raise ApiDesignError("databaseWrites 必须是列表。")
     try:
-        conditions = [_DATABASE_CONDITION_ADAPTER.validate_python(item) for item in value]
+        return _DATABASE_WRITES_ADAPTER.validate_python(value)
     except ValueError as exc:
-        raise ApiDesignError(f"固定数据库条件结构无效：{exc}") from exc
-    identities = [(item.source_id, item.schema_name, item.table, item.column) for item in conditions]
-    if len(set(identities)) != len(identities):
-        raise ApiDesignError("同一数据库列最多配置一个固定条件。")
-    for condition in conditions:
-        _validate_database_condition(condition)
-    return conditions
+        raise ApiDesignError(f"数据库写入字段结构无效：{exc}") from exc
 
 
-def _validate_database_condition(condition: DatabaseCondition) -> None:
-    """校验固定条件的列类型、值类型、集合元素及区间顺序。"""
+def _parse_external_api_fixed_values(value: Any) -> list[ExternalApiFixedValue]:
+    """解析外部 API 请求参数的固定值配置。"""
+
+    if not isinstance(value, list):
+        raise ApiDesignError("externalApiFixedValues 必须是列表。")
+    try:
+        return _EXTERNAL_API_FIXED_VALUES_ADAPTER.validate_python(value)
+    except ValueError as exc:
+        raise ApiDesignError(f"外部 API 固定值结构无效：{exc}") from exc
+
+
+def _query_conditions(query: DatabaseQuery | None) -> list[DatabaseQueryCondition]:
+    """按顺序展开顶层和一层子组的查询条件。"""
+
+    if query is None:
+        return []
+    return [condition for item in query.items for condition in (item.items if isinstance(item, DatabaseQuerySubgroup) else [item])]
+
+
+def _validate_query_references(query: DatabaseQuery | None, endpoint_nodes: list[dict[str, Any]]) -> None:
+    """要求每个接口参数右值精确引用当前请求字段快照。"""
+
+    expected = {_endpoint_field_key(item): _endpoint_field_snapshot(item) for item in endpoint_nodes if item.get("side") == "request"}
+    for condition in _query_conditions(query):
+        if not isinstance(condition.right, EndpointQueryRight):
+            continue
+        payload = condition.right.endpoint_field.model_dump(mode="json", by_alias=True)
+        if expected.get(_endpoint_field_key(payload)) != payload:
+            raise ApiDesignError(f"查询条件引用的接口参数不属于当前 Endpoint：{payload.get('path')}。")
+        if condition.operator not in _allowed_filter_operators(condition.right.endpoint_field.type, condition.type):
+            raise ApiDesignError(f"查询运算符与接口参数或数据库列类型不兼容：{condition.column}。")
+        source = DatabaseSourceField(sourceId=condition.source_id, schema=condition.schema_name, table=condition.table, column=condition.column, type=condition.type, usage="read")
+        if not _source_types_compatible(condition.right.endpoint_field.type, source, condition.operator):
+            raise ApiDesignError(f"查询接口参数与数据库列类型不兼容：{condition.column}。")
+
+
+def _validate_database_writes(writes: list[DatabaseWriteMapping], endpoint_nodes: list[dict[str, Any]]) -> None:
+    """校验目标列唯一性、接口参数身份及写入值类型。"""
+
+    expected = {
+        _endpoint_field_key(item): _endpoint_field_snapshot(item)
+        for item in endpoint_nodes
+        if item.get("side") == "request"
+    }
+    target_columns: set[tuple[str, str, str, str]] = set()
+    table_identities: set[tuple[str, str, str]] = set()
+    for write in writes:
+        table_identity = (write.source_id, write.schema_name, write.table)
+        table_identities.add(table_identity)
+        target = (*table_identity, write.column)
+        if target in target_columns:
+            raise ApiDesignError(f"数据库写入目标列重复：{write.table}.{write.column}。")
+        target_columns.add(target)
+        if isinstance(write.right, EndpointQueryRight):
+            parameter = write.right.endpoint_field
+            payload = parameter.model_dump(mode="json", by_alias=True)
+            if expected.get(_endpoint_field_key(payload)) != payload:
+                raise ApiDesignError(f"写入字段引用的接口参数不属于当前 Endpoint：{parameter.path}。")
+            target_column = DatabaseSourceField(
+                sourceId=write.source_id,
+                schema=write.schema_name,
+                table=write.table,
+                column=write.column,
+                type=write.type,
+                usage="write",
+            )
+            if not _mapping_types_compatible(parameter.type, target_column):
+                raise ApiDesignError(f"接口参数与数据库写入列类型不兼容：{write.table}.{write.column}。")
+        elif isinstance(write.right, FixedQueryRight):
+            if not _fixed_scalar_valid(write.right.value, write.type):
+                raise ApiDesignError(f"固定写入值与数据库字段类型不兼容：{write.table}.{write.column}。")
+    if len(table_identities) > 1:
+        raise ApiDesignError("同一数据库操作的写入字段必须来自同一张数据表。")
+
+
+def _validate_external_api_fixed_values(
+    fixed_values: list[ExternalApiFixedValue],
+    mappings: list[Any],
+) -> None:
+    """校验外部请求字段固定值的唯一性和字段类型。"""
+
+    seen = {
+        (source.source_id, source.directory_id, source.operation_id, source.section, source.path)
+        for mapping in mappings
+        if isinstance(mapping, SourceMapping)
+        for source in mapping.source_fields
+        if isinstance(source, ExternalSourceField) and source.section != "response_body"
+    }
+    for item in fixed_values:
+        field = item.external_field
+        identity = (field.source_id, field.directory_id, field.operation_id, field.section, field.path)
+        if identity in seen:
+            raise ApiDesignError(f"外部 API 请求字段重复配置：{field.section}.{field.path}。")
+        seen.add(identity)
+        if (isinstance(item.value, str) and not item.value.strip()) or not _fixed_scalar_valid(item.value, field.type):
+            raise ApiDesignError(f"固定值与外部 API 参数类型不兼容：{field.section}.{field.path}。")
+
+
+def _fixed_scalar_valid(value: Any, column_type: str) -> bool:
+    """判断固定写入值是否符合数据库列的基础类型。"""
+
+    family = _type_family(column_type)
+    if family == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if family == "boolean":
+        return isinstance(value, bool)
+    if family in {"string", "temporal"}:
+        return isinstance(value, str) and bool(value.strip())
+    return value is not None and not isinstance(value, (list, dict))
+
+
+def _validate_database_condition(condition: DatabaseQueryCondition) -> None:
+    """校验条件的列类型、运算符和固定右值。"""
 
     family = _type_family(condition.type)
     allowed = {"eq", "ne", "is_null", "is_not_null"}
@@ -632,9 +825,13 @@ def _validate_database_condition(condition: DatabaseCondition) -> None:
     if family == "string":
         allowed.update({"contains", "not_contains", "starts_with", "ends_with", "in", "not_in"})
     if condition.operator not in allowed:
-        raise ApiDesignError(f"数据库字段 {condition.table}.{condition.column} 不支持固定条件运算符 {condition.operator}。")
+        raise ApiDesignError(f"数据库字段 {condition.table}.{condition.column} 不支持查询运算符 {condition.operator}。")
     if condition.operator in {"is_null", "is_not_null"}:
         return
+    if isinstance(condition.right, EndpointQueryRight):
+        return
+    if not isinstance(condition.right, FixedQueryRight):
+        raise ApiDesignError("查询条件缺少右值。")
 
     def scalar_valid(item: Any) -> bool:
         """判断一个固定值是否属于列类型族。"""
@@ -647,7 +844,8 @@ def _validate_database_condition(condition: DatabaseCondition) -> None:
             return isinstance(item, str) and bool(item.strip())
         return item is not None and not isinstance(item, (list, dict))
 
-    values = condition.value if isinstance(condition.value, list) else [condition.value]
+    value = condition.right.value
+    values = value if isinstance(value, list) else [value]
     if not all(scalar_valid(item) for item in values):
         raise ApiDesignError(f"固定条件值与数据库字段类型不兼容：{condition.table}.{condition.column}。")
     if condition.operator in {"between", "not_between"}:
@@ -666,7 +864,8 @@ def _default_database_operation(method: Any) -> str | None:
 def _validate_database_contract(
     endpoint: dict[str, Any],
     mappings: list[Any],
-    conditions: list[DatabaseCondition],
+    query: DatabaseQuery | None,
+    database_writes: list[DatabaseWriteMapping],
     requested: Any,
 ) -> str | None:
     """校验单一 CRUD 操作、字段分区和危险的空条件写操作。"""
@@ -678,7 +877,7 @@ def _validate_database_contract(
         for source in mapping.source_fields
         if isinstance(source, DatabaseSourceField)
     ]
-    has_database = bool(database_sources or conditions)
+    has_database = bool(database_sources or query or database_writes)
     operation = str(requested or "")
     if not has_database:
         if operation:
@@ -686,16 +885,25 @@ def _validate_database_contract(
         return None
     if operation not in {"create", "read", "update", "delete"}:
         raise ApiDesignError("数据库映射必须指定 create/read/update/delete 操作。")
-    if operation == "create" and conditions:
-        raise ApiDesignError("新增操作不能包含固定查询条件。")
-    filters = sum(1 for source in database_sources if source.usage == "filter") + len(conditions)
-    writes = sum(1 for source in database_sources if source.usage == "write")
+    if operation == "create" and query:
+        raise ApiDesignError("新增操作不能包含查询条件。")
+    if operation in {"read", "delete"} and database_writes:
+        raise ApiDesignError(f"{operation} 操作不能包含 databaseWrites。")
+    if operation in {"create", "update"} and any(source.usage == "write" for source in database_sources):
+        raise ApiDesignError("数据库写入字段必须使用 databaseWrites 配置。")
+    filters = len(_query_conditions(query))
+    writes = len(database_writes)
     if operation == "create" and writes == 0:
         raise ApiDesignError("新增操作至少需要一个写入字段。")
     if operation == "update" and (filters == 0 or writes == 0):
         raise ApiDesignError("修改操作至少需要查询条件和写入字段。")
     if operation == "delete" and filters == 0:
         raise ApiDesignError("删除操作至少需要一个查询条件。")
+    if operation == "update" and database_writes:
+        targets = {(write.source_id, write.schema_name, write.table) for write in database_writes}
+        query_targets = {(condition.source_id, condition.schema_name, condition.table) for condition in _query_conditions(query)}
+        if query_targets and targets != query_targets:
+            raise ApiDesignError("修改操作的查询条件和写入字段必须来自同一张数据表。")
     return operation
 
 
@@ -711,16 +919,28 @@ def _validate_persisted_design(
     if not isinstance(persisted_endpoint, dict) or persisted_endpoint != endpoint:
         raise ApiDesignError("已确认产物中的 Endpoint 定义已被修改。")
     field_mappings = _parse_confirmed_field_mappings(design.get("fieldMappings"))
-    conditions = _parse_database_conditions(design.get("databaseConditions", []))
-    operation = _validate_database_contract(endpoint, field_mappings, conditions, design.get("databaseOperation"))
+    database_writes = _parse_database_writes(design.get("databaseWrites"))
+    external_api_fixed_values = _parse_external_api_fixed_values(design.get("externalApiFixedValues", []))
+    query = _parse_database_query(design.get("databaseQuery"))
+    operation = _validate_database_contract(endpoint, field_mappings, query, database_writes, design.get("databaseOperation"))
     current_endpoint_nodes = endpoint_field_nodes(contract, endpoint)
-    _validate_field_mappings(field_mappings, current_endpoint_nodes, operation)
+    has_external_api_reference = bool(external_api_fixed_values) or any(
+        isinstance(mapping, SourceMapping)
+        and any(isinstance(source, ExternalSourceField) for source in mapping.source_fields)
+        for mapping in field_mappings
+    )
+    _validate_field_mappings(field_mappings, current_endpoint_nodes, operation, allow_unconfigured_request=has_external_api_reference)
+    _validate_query_references(query, current_endpoint_nodes)
+    _validate_database_writes(database_writes, current_endpoint_nodes)
+    _validate_external_api_fixed_values(external_api_fixed_values, field_mappings)
 
 
 def _validate_field_mappings(
     mappings: list[Any],
     endpoint_nodes: list[dict[str, Any]],
     operation: str | None = None,
+    *,
+    allow_unconfigured_request: bool = False,
 ) -> None:
     """校验字段唯一性、Endpoint 快照、来源方向和类型兼容性。"""
 
@@ -742,6 +962,8 @@ def _validate_field_mappings(
             raise ApiDesignError(f"Endpoint 字段定义被草稿修改：{key}。")
         actual[key] = mapping
         if isinstance(mapping, UnconfiguredFieldMapping):
+            if (operation is not None or allow_unconfigured_request) and endpoint.side == "request":
+                continue
             raise ApiDesignError(f"Endpoint 字段尚未配置映射：{endpoint.path}。")
         if isinstance(mapping, BusinessDescriptionFieldMapping):
             continue
@@ -756,8 +978,9 @@ def _validate_field_mappings(
                 _validate_source_for_endpoint(endpoint, source_field, operation)
 
     expected_keys = set(expected)
-    if set(actual) != expected_keys:
-        missing = sorted(expected_keys - set(actual))
+    required_keys = {key for key, value in expected.items() if (operation is None and not allow_unconfigured_request) or value.get("side") == "response"}
+    if not required_keys.issubset(actual) or set(actual) - expected_keys:
+        missing = sorted(required_keys - set(actual))
         extra = sorted(set(actual) - expected_keys)
         raise ApiDesignError(f"Endpoint 字段集合与当前契约不一致，缺少 {missing}，多出 {extra}。")
 
@@ -784,24 +1007,12 @@ def _validate_source_for_endpoint(endpoint: Any, source_field: Any, operation: s
         return
     if not isinstance(source_field, DatabaseSourceField):
         return
-    if endpoint.side == "request" and operation in {"create", "read", "update", "delete"}:
-        allowed = {"create": {"write"}, "read": {"filter"}, "update": {"filter", "write"}, "delete": {"filter"}}[operation]
-        if source_field.usage not in allowed:
-            raise ApiDesignError(f"{operation} 操作不允许请求数据库字段使用 {source_field.usage}。")
-    if endpoint.side == "request" and source_field.usage not in {"filter", "write"}:
-        raise ApiDesignError(
-            f"请求映射中的数据库字段 {source_field.table}.{source_field.column} 只能使用 filter 或 write。"
-        )
+    if endpoint.side == "request":
+        raise ApiDesignError("请求参数写入数据库时必须通过 databaseWrites 选择目标列和值来源。")
     if endpoint.side == "response" and source_field.usage != "read":
         raise ApiDesignError(
             f"响应映射中的数据库字段 {source_field.table}.{source_field.column} 必须使用 read。"
         )
-    if source_field.usage == "filter":
-        allowed = _allowed_filter_operators(endpoint.type, source_field.type)
-        if source_field.filter_operator not in allowed:
-            raise ApiDesignError(
-                f"数据库字段 {source_field.table}.{source_field.column} 不支持运算符 {source_field.filter_operator}。"
-            )
 
 
 def _allowed_filter_operators(endpoint_type: str, source_type: str) -> set[str]:
@@ -839,10 +1050,10 @@ def _array_element_family(value: str) -> str:
     return "unknown"
 
 
-def _source_types_compatible(endpoint_type: str, source_field: Any) -> bool:
+def _source_types_compatible(endpoint_type: str, source_field: Any, operator: str | None = None) -> bool:
     """兼容普通直接映射与数组查询条件的元素类型校验。"""
 
-    if isinstance(source_field, DatabaseSourceField) and source_field.usage == "filter" and source_field.filter_operator in {
+    if isinstance(source_field, DatabaseSourceField) and operator in {
         "in", "not_in", "between", "not_between"
     }:
         if _type_family(endpoint_type) != "array":
@@ -866,9 +1077,11 @@ def _mapping_types_compatible(endpoint_type: str, source_field: Any) -> bool:
 def _validated_source_snapshots(
     workspace_root: str | Path,
     mappings: list[Any],
-    conditions: list[DatabaseCondition] | None = None,
+    conditions: list[DatabaseQueryCondition] | None = None,
+    database_writes: list[DatabaseWriteMapping] | None = None,
+    external_api_fixed_values: list[ExternalApiFixedValue] | None = None,
 ) -> list[dict[str, Any]]:
-    """重新读取字段映射内嵌的来源字段并形成无凭据确认快照。"""
+    """重新读取字段、写入、外部 API 固定值和查询引用并形成无凭据快照。"""
 
     source_fields = [
         source_field
@@ -876,7 +1089,7 @@ def _validated_source_snapshots(
         if isinstance(mapping, SourceMapping)
         for source_field in mapping.source_fields
     ]
-    database_refs: defaultdict[tuple[str, str], list[DatabaseSourceField | DatabaseCondition]] = defaultdict(list)
+    database_refs: defaultdict[tuple[str, str], list[DatabaseSourceField | DatabaseQueryCondition]] = defaultdict(list)
     external_refs: defaultdict[tuple[str, str, str], list[ExternalSourceField]] = defaultdict(list)
     for source_field in source_fields:
         if isinstance(source_field, DatabaseSourceField):
@@ -885,8 +1098,23 @@ def _validated_source_snapshots(
             external_refs[
                 (source_field.source_id, source_field.directory_id, source_field.operation_id)
             ].append(source_field)
+    for item in external_api_fixed_values or []:
+        field = item.external_field
+        external_refs[(field.source_id, field.directory_id, field.operation_id)].append(field)
     for condition in conditions or []:
         database_refs[(condition.source_id, condition.table)].append(condition)
+    for write in database_writes or []:
+        database_refs[(write.source_id, write.table)].append(
+            DatabaseSourceField(
+                sourceId=write.source_id,
+                schema=write.schema_name,
+                table=write.table,
+                column=write.column,
+                type=write.type,
+                usage="write",
+                description=write.description,
+            )
+        )
     snapshots: list[dict[str, Any]] = []
     for (source_id, table), refs in sorted(database_refs.items()):
         metadata = load_database_columns(workspace_root, source_id, table)
@@ -957,7 +1185,7 @@ def _database_source_display_name(workspace_root: str | Path, source_id: str) ->
 
 def _project_database_snapshot(
     metadata: dict[str, Any],
-    refs: list[DatabaseSourceField | DatabaseCondition],
+    refs: list[DatabaseSourceField | DatabaseQueryCondition],
 ) -> dict[str, Any]:
     """仅保留实际参与映射的数据库列，同时保留表和 Schema 身份元数据。"""
 

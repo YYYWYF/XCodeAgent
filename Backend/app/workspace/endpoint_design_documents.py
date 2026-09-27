@@ -160,6 +160,12 @@ def endpoint_design_status(
         return {"status": "pending", "designed": False, "reason": "缺少当前版 API 设计产物。"}
     if not json_path.is_file() or not markdown_path.is_file():
         return {"status": "stale", "designed": False, "reason": "Endpoint API 设计双文件不完整。"}
+    try:
+        raw = json.loads(json_path.read_text(encoding="utf-8"))
+        if raw.get("schemaVersion") != API_DESIGN_SCHEMA_VERSION:
+            return {"status": "stale", "designed": False, "reason": "API 设计需重新配置。"}
+    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
+        return {"status": "stale", "designed": False, "reason": "API 设计产物无法读取。"}
     current = read_endpoint_design(
         workspace_root,
         api_contract_id,
@@ -176,7 +182,7 @@ def endpoint_design_status(
 
 
 def render_endpoint_design_markdown(design: dict[str, Any]) -> str:
-    """把自包含字段映射渲染为用户可读 Markdown 正式产物。"""
+    """把字段映射、数据库写入、外部 API 固定值和查询配置渲染为 Markdown 正式产物。"""
 
     endpoint = design.get("endpointContract") if isinstance(design.get("endpointContract"), dict) else {}
     lines = [
@@ -194,10 +200,14 @@ def render_endpoint_design_markdown(design: dict[str, Any]) -> str:
     lines.extend(_implementation_description_lines(design) or ["- 未补充 API 实现描述。"])
     lines.extend(["", "## Request 映射", ""])
     lines.extend(_mapping_lines(design, side="request") or ["- 无 Request 映射。"])
+    lines.extend(["", "## 外部 API 固定参数", ""])
+    lines.extend(_external_api_fixed_value_lines(design) or ["- 无外部 API 固定参数。"])
+    lines.extend(["", "## 数据库写入字段", ""])
+    lines.extend(_database_write_lines(design) or ["- 无数据库写入字段。"])
     lines.extend(["", "## Response 映射", ""])
     lines.extend(_mapping_lines(design, side="response") or ["- 无 Response 映射。"])
-    lines.extend(["", "## 固定数据库条件", ""])
-    lines.extend(_condition_lines(design) or ["- 无固定数据库条件。"])
+    lines.extend(["", "## 数据库查询条件", ""])
+    lines.extend(_condition_lines(design) or ["- 无数据库查询条件。"])
     lines.extend(["", "## 业务说明", ""])
     lines.extend(_business_description_lines(design) or ["- 无补充业务说明。"])
     lines.extend(["", "## 确认时数据来源", ""])
@@ -234,9 +244,6 @@ def _mapping_lines(design: dict[str, Any], *, side: str) -> list[str]:
             )
             continue
         middle = [" + ".join(_source_field_label(item) for item in mapping.get("sourceFields", []))]
-        operators = [str(item.get("filterOperator") or "") for item in mapping.get("sourceFields", []) if isinstance(item, dict) and item.get("filterOperator")]
-        if operators:
-            middle.append("运算符：" + ", ".join(operators))
         middle.append({"direct": "直接映射", "single_field_description": "单字段业务处理", "multi_field_description": "多字段业务处理"}.get(mapping.get("processingType"), ""))
         middle = [label for label in middle if label]
         labels = [endpoint_label, *middle] if side == "request" else [*reversed(middle), endpoint_label]
@@ -246,12 +253,48 @@ def _mapping_lines(design: dict[str, Any], *, side: str) -> list[str]:
 
 
 def _condition_lines(design: dict[str, Any]) -> list[str]:
-    """把类型感知的固定数据库条件渲染为用户可读的 Markdown 列表。"""
+    """按顶层和子组的 AND/OR 关系渲染当前查询树。"""
 
-    return [
-        f"- {_escape_markdown(str(item.get('sourceId') or ''))}.{_escape_markdown(str(item.get('table') or ''))}.{_escape_markdown(str(item.get('column') or ''))}：{_escape_markdown(str(item.get('operator') or ''))}{'' if item.get('value') is None else ' ' + _escape_markdown(str(item.get('value')))}"
-        for item in _dict_items(design.get("databaseConditions"))
-    ]
+    query = design.get("databaseQuery")
+    if not isinstance(query, dict) or not query.get("items"):
+        return []
+    from app.services.api_design import _database_query_flow
+    return [f"- {_escape_markdown(_database_query_flow(query))}"]
+
+
+def _database_write_lines(design: dict[str, Any]) -> list[str]:
+    """按目标列展示已确认的数据库写入来源和值。"""
+
+    lines: list[str] = []
+    for write in _dict_items(design.get("databaseWrites")):
+        right = write.get("right") if isinstance(write.get("right"), dict) else {}
+        target = ".".join(
+            str(write.get(key) or "")
+            for key in ("schema", "table", "column")
+            if str(write.get(key) or "")
+        )
+        if right.get("kind") == "endpoint":
+            endpoint_field = right.get("endpointField") if isinstance(right.get("endpointField"), dict) else {}
+            value = f"接口参数 {_endpoint_field_label(endpoint_field)}"
+        elif right.get("kind") == "fixed":
+            value = f"固定值 {right.get('value')!r}"
+        else:
+            value = "未配置值来源"
+        if target:
+            lines.append(f"- {_escape_markdown(target)} ← {_escape_markdown(value)}")
+    return lines
+
+
+def _external_api_fixed_value_lines(design: dict[str, Any]) -> list[str]:
+    """展示已确认的外部 API 请求参数固定值。"""
+
+    lines: list[str] = []
+    for item in _dict_items(design.get("externalApiFixedValues")):
+        external_field = item.get("externalField") if isinstance(item.get("externalField"), dict) else {}
+        target = _source_field_label(external_field)
+        if target:
+            lines.append(f"- {_escape_markdown(target)} ← 固定值 {_escape_markdown(repr(item.get('value')))}")
+    return lines
 
 
 def _business_description_lines(design: dict[str, Any]) -> list[str]:

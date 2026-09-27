@@ -33,7 +33,7 @@ def _formal_inputs() -> dict:
         }],
         "endpoint_api_designs": [{
             "content": {
-                "schemaVersion": "endpoint-field-mapping.v4",
+                "schemaVersion": "endpoint-field-mapping.v6",
                 "artifactType": "endpoint-field-mapping",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",
@@ -43,6 +43,7 @@ def _formal_inputs() -> dict:
                 "endpointContract": {"id": "orders.list"},
                 "implementationDescription": "读取订单列表",
                 "fieldMappings": [],
+                "databaseWrites": [],
                 "sourceSnapshots": [],
                 "basedOn": [{
                     "artifactKey": "technical-plan",

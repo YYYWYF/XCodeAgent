@@ -11,7 +11,7 @@ def _endpoint_design() -> dict:
     """构造包含当前 API 设计全部正式字段的最小夹具。"""
 
     return {
-        "schemaVersion": "endpoint-field-mapping.v4",
+                "schemaVersion": "endpoint-field-mapping.v6",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
@@ -42,6 +42,7 @@ def _endpoint_design() -> dict:
                 "description": "数据库订单 ID",
             }],
         }],
+        "databaseWrites": [],
         "sourceSnapshots": [{
             "sourceType": "database",
             "sourceId": "orders-db",

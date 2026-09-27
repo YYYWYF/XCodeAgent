@@ -8,15 +8,20 @@ import {
   validateApiDesignDraft
 } from './apiDesignSerialization'
 
-/** 管理仅属于当前 Endpoint 交互的 API 设计草稿与即时校验。 */
+const EMPTY_VALIDATION_ERRORS: ReturnType<typeof validateApiDesignDraft> = {}
+
+/** 管理当前 Endpoint 的 API 设计草稿，并在提交尝试后显示校验错误。 */
 export function useApiDesignDraft(payload: WorkflowApiDesignPayload): {
   draft: WorkflowApiDesignDraft
   errors: ReturnType<typeof validateApiDesignDraft>
+  validationErrors: ReturnType<typeof validateApiDesignDraft>
+  showValidationErrors: () => void
   setDraft: (draft: WorkflowApiDesignDraft) => void
 } {
   const [draft, setDraft] = useState<WorkflowApiDesignDraft>(() =>
     normalizeApiDesignDraft(payload)
   )
+  const [validationVisible, setValidationVisible] = useState(false)
   const payloadSignature = JSON.stringify({
     apiContractId: payload.draft.apiContractId,
     endpointId: payload.draft.endpointId,
@@ -29,12 +34,20 @@ export function useApiDesignDraft(payload: WorkflowApiDesignPayload): {
     if (lastPayloadSignature.current === payloadSignature) return
     lastPayloadSignature.current = payloadSignature
     setDraft(normalizeApiDesignDraft(payload))
+    setValidationVisible(false)
   }, [payload, payloadSignature])
 
-  const errors = useMemo(
+  const validationErrors = useMemo(
     () => validateApiDesignDraft(draft),
     [draft]
   )
+  const errors = validationVisible ? validationErrors : EMPTY_VALIDATION_ERRORS
 
-  return { draft, errors, setDraft }
+  return {
+    draft,
+    errors,
+    validationErrors,
+    showValidationErrors: () => setValidationVisible(true),
+    setDraft
+  }
 }

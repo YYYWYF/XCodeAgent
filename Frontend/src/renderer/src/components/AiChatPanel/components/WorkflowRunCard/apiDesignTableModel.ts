@@ -147,9 +147,8 @@ export function applySourceMapping(
 ): WorkflowApiDesignDraft {
   const normalized = source.sourceType === 'database'
     ? (() => {
-      // 数据库查询来源缺省时统一落到 eq，避免完整编辑器生成缺失运算符的 v4 映射。
       const resolvedUsage = resolveDatabaseUsage(endpoint, usage || source.usage)
-      return { ...source, usage: resolvedUsage, filterOperator: resolvedUsage === 'filter' ? (source.filterOperator || 'eq') : undefined }
+      return { ...source, usage: resolvedUsage }
     })()
     : source
   return replaceFieldMapping(draft, {

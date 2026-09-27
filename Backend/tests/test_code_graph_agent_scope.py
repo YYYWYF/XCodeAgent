@@ -210,7 +210,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                         },
                         "endpoint_ids": ["weather.get"],
                         "endpoint_designs": [{
-                            "schemaVersion": "endpoint-field-mapping.v4",
+                "schemaVersion": "endpoint-field-mapping.v6",
                             "artifactType": "endpoint-field-mapping",
                             "status": "confirmed",
                             "confirmationStatus": "confirmed",
@@ -223,6 +223,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
                                 "path": "/weather",
                             },
                             "fieldMappings": [],
+                            "databaseWrites": [],
                             "sourceSnapshots": [{
                                 "sourceType": "external_api",
                                 "sourceId": "weather-upstream",

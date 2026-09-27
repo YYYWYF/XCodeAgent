@@ -94,10 +94,10 @@ export default function ApiFieldMappingEditor({
         ? { endpointField: endpointSnapshot, mappingType: 'source_mapping' as const, processingType: mode, sourceFields: sources }
         : { endpointField: endpointSnapshot, mappingType: 'source_mapping' as const, processingType: mode, sourceFields: sources, businessDescription: description.trim() }
     const withMapping = replaceFieldMapping(draft, mapping)
-    const hasDatabase = withMapping.fieldMappings.some((item) => item.mappingType === 'source_mapping' && item.sourceFields.some((source) => source.sourceType === 'database')) || Boolean(withMapping.databaseConditions?.length)
+    const hasDatabase = withMapping.fieldMappings.some((item) => item.mappingType === 'source_mapping' && item.sourceFields.some((source) => source.sourceType === 'database')) || Boolean(withMapping.databaseQuery?.items.length) || Boolean(withMapping.databaseWrites?.length)
     const next = hasDatabase
-      ? { ...withMapping, databaseOperation: withMapping.databaseOperation || defaultDatabaseOperation(String(payload.endpoint.method || '')), databaseConditions: withMapping.databaseConditions || [] }
-      : { ...withMapping, databaseOperation: undefined, databaseConditions: [] }
+      ? { ...withMapping, databaseOperation: withMapping.databaseOperation || defaultDatabaseOperation(String(payload.endpoint.method || '')) }
+      : { ...withMapping, databaseOperation: undefined, databaseQuery: undefined }
     const issue = validateApiDesignDraft(next)[apiDesignFieldKey(endpoint)]
     if (issue) { setError(issue); return }
     onSave(next)

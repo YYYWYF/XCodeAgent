@@ -14,6 +14,7 @@ from app.services.business_acceptance import (
     _technical_plan_entity_details,
     _external_designs,
     _external_operations_from_field_mappings,
+    _operation_expectations,
 )
 from app.services.engineering_acceptance import compile_engineering_acceptance
 from app.services.engineering_acceptance_verifier import verify_engineering_acceptance
@@ -177,7 +178,7 @@ def _endpoint_api_design() -> dict:
     api_id = {"side": "response", "location": "response_body", "path": "items[].id", "type": "string", "required": True, "description": ""}
     api_status = {"side": "response", "location": "response_body", "path": "items[].status", "type": "string", "required": True, "description": ""}
     return {
-        "schemaVersion": "endpoint-field-mapping.v4",
+        "schemaVersion": "endpoint-field-mapping.v6",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
@@ -190,6 +191,7 @@ def _endpoint_api_design() -> dict:
             "successStatusCode": 200,
         },
         "databaseOperation": "read",
+        "databaseWrites": [],
         "fieldMappings": [
             {"endpointField": api_id, "mappingType": "source_mapping", "processingType": "direct", "sourceFields": [{"sourceType": "database", "sourceId": "orders-db", "schema": "app", "table": "orders", "column": "order_id", "type": "string", "usage": "read", "description": ""}]},
             {"endpointField": api_status, "mappingType": "source_mapping", "processingType": "direct", "sourceFields": [{"sourceType": "external_api", "sourceId": "orders-upstream", "directoryId": "orders-directory", "operationId": "order-list", "section": "response_body", "path": "data.state.value", "type": "string", "description": ""}]},
@@ -286,7 +288,7 @@ def _task(kind: str, *, path: str, owner: str, unit_id: str, target_id: str = ""
 
 
 class BusinessAcceptanceCompilationTests(unittest.TestCase):
-    """验证业务验收从 fieldMappings 派生，不再依赖图节点或边。"""
+    """验证业务验收从 Endpoint 当前映射与写入配置派生，不依赖图节点或边。"""
 
     def test_technical_plan_entities_are_projected_without_endpoint_sources(self) -> None:
         """TechnicalPlan 实体语义投影不再从 Endpoint 物理映射反推来源。"""
@@ -322,6 +324,18 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
         self.assertEqual(entities[0]["entity_id"], "Order")
         formal = {"endpoint_designs": [design], "entity_details": entities}
         self.assertIn("分页页码", str(formal["endpoint_designs"][0]["fieldMappings"]))
+
+    def test_query_tree_is_projected_without_flattening(self) -> None:
+        """验收选择器保留完整的括号条件树。"""
+
+        leaf = {"kind": "condition", "sourceType": "database", "sourceId": "db", "schema": "app",
+                "table": "orders", "column": "id", "type": "integer", "operator": "is_null"}
+        query = {"join": "and", "items": [{"kind": "group", "join": "or", "items": [leaf, {**leaf, "column": "parent_id"}]}, leaf]}
+        design = _endpoint_api_design()
+        design["databaseQuery"] = query
+        expected = _operation_expectations({"endpoint_designs": [design]})[0]
+        self.assertEqual(expected["selector"]["query"], query)
+        self.assertTrue(expected["requires_repository"])
 
     def test_old_graph_shape_is_not_read(self) -> None:
         """旧 nodes/mappings 结构不会被业务验收逻辑静默转换。"""

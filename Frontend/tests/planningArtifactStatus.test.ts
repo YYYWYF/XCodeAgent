@@ -69,6 +69,16 @@ test('当前版 endpoint 双文件和指纹有效时接口标记为已设计', a
   })
 })
 
+/** 验证旧正式产物明确要求重新配置。 */
+test('v4 endpoint 产物需重新配置', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    await writeCurrentEndpointDesign(workspaceRoot, { schemaVersion: 'endpoint-field-mapping.v4' })
+    const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
+    assert.equal(status.status, 'stale')
+    assert.match(status.reason, /重新配置/)
+  })
+})
+
 /** 验证 JSON 与 Markdown 修订号不一致时不会误判为已设计。 */
 test('endpoint JSON 与 Markdown 修订号不一致时需重新设计', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
@@ -140,7 +150,7 @@ test('正式 Endpoint 产物含未配置字段时需重新设计', async () => {
 /** 验证确认产物不能缺少 Endpoint 字段映射集合。 */
 test('正式 Endpoint 产物缺少字段映射时需重新设计', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
-    await writeCurrentEndpointDesign(workspaceRoot)
+    await writeCurrentEndpointDesign(workspaceRoot, { omitFieldMappings: true })
     const status = await endpointDesignDocumentStatus(workspaceRoot, 'employee-api', 'employee.list')
     assert.equal(status.status, 'stale')
     assert.equal(status.designed, false)
@@ -174,6 +184,8 @@ async function writeCurrentEndpointDesign(
     technicalPlan?: Record<string, unknown>
     fieldMappings?: unknown[]
     implementationDescription?: unknown
+    schemaVersion?: string
+    omitFieldMappings?: boolean
   } = {}
 ): Promise<void> {
   const markdownPath = endpointDesignDocumentPath(
@@ -198,7 +210,7 @@ async function writeCurrentEndpointDesign(
   await fs.writeFile(
     jsonPath,
     JSON.stringify({
-      schemaVersion: 'endpoint-field-mapping.v4',
+      schemaVersion: options.schemaVersion || 'endpoint-field-mapping.v6',
       artifactType: 'endpoint-field-mapping',
       status: 'confirmed',
       confirmationStatus: 'confirmed',
@@ -206,13 +218,14 @@ async function writeCurrentEndpointDesign(
       apiContractId: 'employee-api',
       endpointId: 'employee.list',
       confirmedAt: new Date().toISOString(),
-      fieldMappings: options.fieldMappings || [{
+      ...(!options.omitFieldMappings ? { fieldMappings: options.fieldMappings || [{
         endpointField: {
           side: 'response', location: 'response_body', path: 'id', type: 'string', required: false
         },
         mappingType: 'business_description',
         businessDescription: '返回员工标识'
-      }],
+      }] } : {}),
+      databaseWrites: [],
       ...(options.implementationDescription !== undefined
         ? { implementationDescription: options.implementationDescription }
         : {}),

@@ -26,7 +26,7 @@ def _fixture_endpoint_designs(plan: dict) -> list[dict]:
         for endpoint in contract.get("endpoints", []):
             endpoint_id = str(endpoint.get("id") or "")
             result.append({
-                "schemaVersion": "endpoint-field-mapping.v4",
+                "schemaVersion": "endpoint-field-mapping.v6",
                 "artifactType": "endpoint-field-mapping",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",
@@ -56,6 +56,7 @@ def _fixture_endpoint_designs(plan: dict) -> list[dict]:
                         "usage": "read",
                     }],
                 }],
+                "databaseWrites": [],
                 "sourceSnapshots": [{
                     "sourceType": source_type,
                     "sourceId": f"fixture-{source_type}",

@@ -59,7 +59,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
       const inferred = inferSelection(draft)
       // 数据库来源首次进入工作台时按 HTTP 方法初始化 CRUD；外部 API 不携带数据库操作。
       if (inferred.selection?.sourceType === 'database' && !draft.databaseOperation) {
-        draft = { ...draft, databaseOperation: defaultDatabaseOperation(String(preparation.payload.endpoint?.method || '')), databaseConditions: draft.databaseConditions || [] }
+        draft = { ...draft, databaseOperation: defaultDatabaseOperation(String(preparation.payload.endpoint?.method || '')) }
       }
       const saved = preparation.bindingDraft
       const conflict = Boolean(saved && (saved.baseRevision !== (preparation.artifactRevision || null) || saved.technicalPlanHash !== preparation.technicalPlanHash))

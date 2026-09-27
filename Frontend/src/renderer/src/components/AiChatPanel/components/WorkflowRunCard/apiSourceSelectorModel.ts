@@ -1,7 +1,6 @@
 import type {
   WorkflowApiDatabaseFieldNode,
   WorkflowApiDatabaseOperation,
-  WorkflowApiFilterOperator,
   WorkflowApiExternalFieldNode,
   WorkflowApiField,
   WorkflowApiDesignPayload
@@ -58,7 +57,6 @@ export type ApiSourceSelectorState = {
   operationId: string
   externalFieldKey: string
   usage: WorkflowApiDatabaseFieldNode['usage']
-  filterOperator?: WorkflowApiFilterOperator
 }
 
 /** 外部 Operation 字段的轻量元数据，避免把投影对象直接绑定到组件状态。 */
@@ -105,8 +103,7 @@ export function createApiSourceSelectorState(
       sourceId: selectedSourceNode.sourceId,
       table: selectedSourceNode.table,
       column: selectedSourceNode.column,
-      usage: resolveDatabaseUsageForOperation(endpoint, selectedSourceNode.usage, operation),
-      filterOperator: selectedSourceNode.filterOperator
+      usage: resolveDatabaseUsageForOperation(endpoint, selectedSourceNode.usage, operation)
     }
   }
   return {
@@ -133,8 +130,7 @@ export function resetApiSourceForSource(
     directoryId: '',
     operationId: '',
     externalFieldKey: '',
-    usage: defaultDatabaseUsageForOperation(endpoint, operation),
-    filterOperator: undefined
+    usage: defaultDatabaseUsageForOperation(endpoint, operation)
   }
 }
 

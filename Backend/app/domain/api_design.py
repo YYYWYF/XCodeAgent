@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-API_DESIGN_SCHEMA_VERSION = "endpoint-field-mapping.v4"
+API_DESIGN_SCHEMA_VERSION = "endpoint-field-mapping.v6"
 API_DESIGN_ARTIFACT_TYPE = "endpoint-field-mapping"
 
 
@@ -51,23 +51,8 @@ class DatabaseSourceField(ApiDesignModel):
     table: str = Field(min_length=1, max_length=256)
     column: str = Field(min_length=1, max_length=256)
     type: str = Field(default="unknown", min_length=1, max_length=128)
-    usage: Literal["read", "filter", "write"] = "read"
-    filter_operator: Literal[
-        "eq", "ne", "gt", "gte", "lt", "lte",
-        "contains", "not_contains", "starts_with", "ends_with",
-        "in", "not_in", "between", "not_between",
-    ] | None = Field(default=None, alias="filterOperator")
+    usage: Literal["read", "write"] = "read"
     description: str = Field(default="", max_length=2048)
-
-    @model_validator(mode="after")
-    def validate_filter_operator(self) -> "DatabaseSourceField":
-        """确保查询运算符只附着在 filter 来源字段上。"""
-
-        if self.usage == "filter" and not self.filter_operator:
-            raise ValueError("filter 数据库字段必须包含 filterOperator。")
-        if self.usage != "filter" and self.filter_operator:
-            raise ValueError("read/write 数据库字段不能包含 filterOperator。")
-        return self
 
 
 DatabaseConditionOperator = Literal[
@@ -78,8 +63,33 @@ DatabaseConditionOperator = Literal[
 ]
 
 
-class DatabaseCondition(ApiDesignModel):
-    """描述没有 API 右值、始终生效且可携带固定值的数据库条件。"""
+class EndpointQueryRight(ApiDesignModel):
+    """引用当前 Endpoint 的请求参数作为查询右值。"""
+
+    kind: Literal["endpoint"] = "endpoint"
+    endpoint_field: EndpointField = Field(alias="endpointField")
+
+    @model_validator(mode="after")
+    def validate_request_side(self) -> "EndpointQueryRight":
+        """拒绝把响应字段用作查询参数。"""
+
+        if self.endpoint_field.side != "request":
+            raise ValueError("数据库右值只能引用当前 Endpoint 的请求参数。")
+        return self
+
+
+class FixedQueryRight(ApiDesignModel):
+    """保存查询条件的参数化固定值。"""
+
+    kind: Literal["fixed"] = "fixed"
+    value: Any
+
+
+QueryRight = Annotated[EndpointQueryRight | FixedQueryRight, Field(discriminator="kind")]
+
+
+class DatabaseWriteMapping(ApiDesignModel):
+    """描述一个目标数据库列及其运行时写入值来源。"""
 
     source_type: Literal["database"] = Field(default="database", alias="sourceType")
     source_id: str = Field(alias="sourceId", min_length=1, max_length=128)
@@ -87,25 +97,52 @@ class DatabaseCondition(ApiDesignModel):
     table: str = Field(min_length=1, max_length=256)
     column: str = Field(min_length=1, max_length=256)
     type: str = Field(default="unknown", min_length=1, max_length=128)
-    operator: DatabaseConditionOperator
-    value: Any | None = None
+    right: QueryRight
     description: str = Field(default="", max_length=2048)
 
     @model_validator(mode="after")
-    def validate_value_shape(self) -> "DatabaseCondition":
-        """约束固定条件的列类型、值类型、集合长度及区间顺序。"""
+    def validate_value(self) -> "DatabaseWriteMapping":
+        """确保写入字段已选择非空固定值或请求参数。"""
+
+        if isinstance(self.right, FixedQueryRight) and self.right.value is None:
+            raise ValueError("固定写入值不能为空。")
+        return self
+
+
+class DatabaseQueryCondition(ApiDesignModel):
+    """描述用户手动添加的一条数据库查询条件。"""
+
+    kind: Literal["condition"] = "condition"
+    source_type: Literal["database"] = Field(default="database", alias="sourceType")
+    source_id: str = Field(alias="sourceId", min_length=1, max_length=128)
+    schema_name: str = Field(alias="schema", min_length=1, max_length=256)
+    table: str = Field(min_length=1, max_length=256)
+    column: str = Field(min_length=1, max_length=256)
+    type: str = Field(default="unknown", min_length=1, max_length=128)
+    operator: DatabaseConditionOperator
+    right: QueryRight | None = None
+    description: str = Field(default="", max_length=2048)
+
+    @model_validator(mode="after")
+    def validate_value_shape(self) -> "DatabaseQueryCondition":
+        """约束运算符、右值来源以及固定值的形态和类型。"""
 
         if self.operator in {"is_null", "is_not_null"}:
-            if "value" in self.model_fields_set:
-                raise ValueError("空值固定条件不能携带 value。")
+            if self.right is not None:
+                raise ValueError("空值查询条件不能携带右值。")
             return self
-        if self.value is None:
-            raise ValueError("固定条件运算符必须携带 value。")
-        if self.operator in {"in", "not_in"} and (not isinstance(self.value, list) or not self.value):
+        if self.right is None:
+            raise ValueError("查询条件必须选择接口参数或固定值。")
+        if isinstance(self.right, EndpointQueryRight):
+            return self
+        value = self.right.value
+        if value is None:
+            raise ValueError("固定查询条件必须携带 value。")
+        if self.operator in {"in", "not_in"} and (not isinstance(value, list) or not value):
             raise ValueError("IN/NOT IN 固定条件必须携带非空数组 value。")
-        if self.operator in {"between", "not_between"} and (not isinstance(self.value, list) or len(self.value) != 2):
+        if self.operator in {"between", "not_between"} and (not isinstance(value, list) or len(value) != 2):
             raise ValueError("BETWEEN/NOT BETWEEN 固定条件必须携带两个元素的数组 value。")
-        if self.operator not in {"in", "not_in", "between", "not_between"} and isinstance(self.value, list):
+        if self.operator not in {"in", "not_in", "between", "not_between"} and isinstance(value, list):
             raise ValueError("标量固定条件不能携带数组 value。")
         normalized = self.type.strip().lower().split("(", 1)[0]
         if any(token in normalized for token in ("int", "decimal", "numeric", "float", "double", "number")):
@@ -137,11 +174,41 @@ class DatabaseCondition(ApiDesignModel):
                 return isinstance(item, str) and bool(item.strip())
             return item is not None and not isinstance(item, (list, dict))
 
-        values = self.value if isinstance(self.value, list) else [self.value]
+        values = value if isinstance(value, list) else [value]
         if not all(scalar_valid(item) for item in values):
             raise ValueError(f"固定条件值与列类型 {self.type} 不兼容。")
         if self.operator in {"between", "not_between"} and values[0] > values[1]:
             raise ValueError("固定条件区间上下界倒置。")
+        return self
+
+
+class DatabaseQuerySubgroup(ApiDesignModel):
+    """表达顶层查询中的一层括号分组。"""
+
+    kind: Literal["group"] = "group"
+    join: Literal["and", "or"] = "and"
+    items: list[DatabaseQueryCondition] = Field(min_length=1, max_length=300)
+
+
+DatabaseQueryItem = Annotated[
+    DatabaseQueryCondition | DatabaseQuerySubgroup,
+    Field(discriminator="kind"),
+]
+
+
+class DatabaseQuery(ApiDesignModel):
+    """表达顶层 AND/OR 及最多一层子组的查询树。"""
+
+    join: Literal["and", "or"] = "and"
+    items: list[DatabaseQueryItem] = Field(min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def validate_size(self) -> "DatabaseQuery":
+        """限制整棵查询树的叶子总数。"""
+
+        count = sum(len(item.items) if isinstance(item, DatabaseQuerySubgroup) else 1 for item in self.items)
+        if count > 300:
+            raise ValueError("查询条件最多 300 条。")
         return self
 
 
@@ -156,6 +223,40 @@ class ExternalSourceField(ApiDesignModel):
     path: str = Field(min_length=1, max_length=1024)
     type: str = Field(default="unknown", min_length=1, max_length=128)
     description: str = Field(default="", max_length=2048)
+
+
+class ExternalApiFixedValueDraft(ApiDesignModel):
+    """保存外部 API 请求字段的固定值草稿，包括尚未填写的编辑态。"""
+
+    external_field: ExternalSourceField = Field(alias="externalField")
+    value: Any = None
+
+    @model_validator(mode="after")
+    def validate_request_target(self) -> "ExternalApiFixedValueDraft":
+        """固定值只能写入外部 Operation 的请求字段。"""
+
+        if self.external_field.section == "response_body":
+            raise ValueError("外部 API 固定值目标必须是请求字段。")
+        return self
+
+
+class ExternalApiFixedValue(ApiDesignModel):
+    """描述外部 API 请求参数使用的已确认固定值。"""
+
+    external_field: ExternalSourceField = Field(alias="externalField")
+    value: Any
+
+    @model_validator(mode="after")
+    def validate_request_value(self) -> "ExternalApiFixedValue":
+        """拒绝响应字段目标和空白固定值。"""
+
+        if self.external_field.section == "response_body":
+            raise ValueError("外部 API 固定值目标必须是请求字段。")
+        if self.value is None:
+            raise ValueError("外部 API 固定值不能为空。")
+        if isinstance(self.value, str) and not self.value.strip():
+            raise ValueError("外部 API 固定值不能为空白。")
+        return self
 
 
 SourceField = Annotated[
@@ -245,7 +346,7 @@ class ArtifactLineageReference(ApiDesignModel):
 class EndpointFieldMappingDesign(ApiDesignModel):
     """描述已确认的 Endpoint 自包含字段映射正式产物。"""
 
-    schema_version: Literal["endpoint-field-mapping.v4"] = Field(default=API_DESIGN_SCHEMA_VERSION, alias="schemaVersion")
+    schema_version: Literal["endpoint-field-mapping.v6"] = Field(default=API_DESIGN_SCHEMA_VERSION, alias="schemaVersion")
     artifact_type: Literal["endpoint-field-mapping"] = Field(default=API_DESIGN_ARTIFACT_TYPE, alias="artifactType")
     status: Literal["confirmed"] = "confirmed"
     confirmation_status: Literal["confirmed"] = Field(default="confirmed", alias="confirmationStatus")
@@ -256,7 +357,9 @@ class EndpointFieldMappingDesign(ApiDesignModel):
     implementation_description: str | None = Field(default=None, alias="implementationDescription", max_length=4000)
     database_operation: Literal["create", "read", "update", "delete"] | None = Field(default=None, alias="databaseOperation")
     field_mappings: list[ConfirmedFieldMapping] = Field(alias="fieldMappings", max_length=3000)
-    database_conditions: list[DatabaseCondition] = Field(default_factory=list, alias="databaseConditions", max_length=300)
+    database_writes: list[DatabaseWriteMapping] = Field(default_factory=list, alias="databaseWrites", max_length=3000)
+    external_api_fixed_values: list[ExternalApiFixedValue] = Field(default_factory=list, alias="externalApiFixedValues", max_length=3000)
+    database_query: DatabaseQuery | None = Field(default=None, alias="databaseQuery")
     source_snapshots: list[SourceSnapshot] = Field(default_factory=list, alias="sourceSnapshots", max_length=100)
     based_on: list[ArtifactLineageReference] = Field(alias="basedOn", min_length=1)
     confirmed_at: datetime = Field(alias="confirmedAt")
@@ -271,12 +374,19 @@ class EndpointFieldMappingDesign(ApiDesignModel):
             if isinstance(mapping, SourceMapping)
             for source in mapping.source_fields
         )
-        has_conditions = bool(self.database_conditions)
-        if has_database_source or has_conditions:
+        has_conditions = self.database_query is not None
+        has_writes = bool(self.database_writes)
+        if has_database_source or has_conditions or has_writes:
             if self.database_operation is None:
                 raise ValueError("数据库正式映射必须包含 databaseOperation。")
             if self.database_operation == "create" and has_conditions:
-                raise ValueError("新增正式映射不能包含 databaseConditions。")
+                raise ValueError("新增正式映射不能包含 databaseQuery。")
+            if self.database_operation in {"create", "update"} and not has_writes:
+                raise ValueError("新增和修改正式映射必须包含 databaseWrites。")
+            if self.database_operation == "update" and not has_conditions:
+                raise ValueError("修改正式映射必须包含 databaseQuery。")
+            if self.database_operation in {"read", "delete"} and has_writes:
+                raise ValueError("查询和删除正式映射不能包含 databaseWrites。")
         elif self.database_operation is not None:
             raise ValueError("纯外部 API 正式映射不能包含 databaseOperation。")
         return self

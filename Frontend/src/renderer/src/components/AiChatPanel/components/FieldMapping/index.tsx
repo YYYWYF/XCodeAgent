@@ -31,26 +31,40 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   const [pendingSelection, setPendingSelection] = useState<BindingSelection | null>(null)
   const [advanced, setAdvanced] = useState(false)
   const [sourceCollapsed, setSourceCollapsed] = useState(false)
+  const [validationVisible, setValidationVisible] = useState(false)
   const selection = entry?.value.selection
   const fields = entry?.preparation.payload.endpointFields || []
-  const errors = entry ? validateApiDesignDraft(entry.value.draft) : {}
+  const validationErrors = entry ? validateApiDesignDraft(entry.value.draft) : {}
+  const errors = validationVisible ? validationErrors : {}
   const unavailableTable = Boolean(selection && !tableIsSelected(selection, tables))
   const missingFields = Boolean(entry && selection && metadata && fields.some((field) => {
     const mapping = entry.value.draft.fieldMappings.find((item) => apiDesignFieldKey(item.endpointField) === apiDesignFieldKey(field))
     if (mapping?.mappingType !== 'source_mapping') return false
     const source = mapping.sourceFields[0]
-    return source.sourceType === 'database' && !mappingCandidates(field, selection, metadata).some((candidate) => candidate.sourceType === 'database' && candidate.column === source.column)
+    return source.sourceType === 'database' && !mappingCandidates(field, selection, metadata).some((candidate) =>
+      candidate.sourceType === 'database' && candidate.sourceId === source.sourceId && candidate.schema === source.schema
+      && candidate.table === source.table && candidate.column === source.column && candidate.type === source.type)
   }))
+  const missingQueryColumns = Boolean(selection?.sourceType === 'database' && metadata && 'columns' in metadata && entry?.value.draft.databaseQuery?.items.some((item) =>
+    (item.kind === 'group' ? item.items : [item]).some((condition) => {
+      // 空列表示刚添加的未完成条件行，不应当作失效的历史列提示。
+      if (!condition.column) return false
+      return condition.sourceId !== selection.sourceId || condition.schema !== selection.schema || condition.table !== selection.table
+        || !(metadata.columns || []).some((column) => column.name === condition.column && column.type === condition.type)
+    })))
   const missingRequiredExternal = Boolean(entry && selection?.sourceType === 'external_api' && metadata && (metadata as { fields?: Array<{ section: string; path: string; required?: boolean }> }).fields?.some((field) => {
     if (!field.required || field.section === 'response_body') return false
-    return !entry.value.draft.fieldMappings.some((mapping) => mapping.mappingType === 'source_mapping' && mapping.sourceFields.length === 1 && mapping.sourceFields[0].sourceType === 'external_api' && mapping.sourceFields[0].section === field.section && mapping.sourceFields[0].path === field.path)
+    const parameterMapped = entry.value.draft.fieldMappings.some((mapping) => mapping.mappingType === 'source_mapping' && mapping.sourceFields.length === 1 && mapping.sourceFields[0].sourceType === 'external_api' && mapping.sourceFields[0].section === field.section && mapping.sourceFields[0].path === field.path)
+    const fixedValue = entry.value.draft.externalApiFixedValues?.find((item) => item.externalField.section === field.section && item.externalField.path === field.path)?.value
+    return !parameterMapped && (fixedValue === undefined || fixedValue === null || fixedValue === '')
   }))
   const editable = Boolean(entry && !entry.readOnly && !entry.complex && !entry.conflict)
-  const withoutSource = fields.length === 0 && !selection && entry?.value.draft.fieldMappings.length === 0
-  const canConfirm = editable && !Object.keys(errors).length && (withoutSource || fields.length > 0 && Boolean(selection && metadata) && !metadataLoading && !unavailableTable && !missingFields && !missingRequiredExternal)
+    const withoutSource = fields.length === 0 && !selection && entry?.value.draft.fieldMappings.length === 0 && !entry?.value.draft.externalApiFixedValues?.length
+  const canConfirm = editable && (!validationVisible || !Object.keys(validationErrors).length)
+    && (withoutSource || fields.length > 0 && Boolean(selection && metadata) && !metadataLoading && !unavailableTable && !missingFields && !missingQueryColumns && !missingRequiredExternal)
   const databaseSelection = selection?.sourceType === 'database' ? selection : undefined
 
-  useEffect(() => { setKind(undefined); setSourceChanging(false); setPendingSelection(null); setAdvanced(false); setSourceCollapsed(false) }, [state.key])
+  useEffect(() => { setKind(undefined); setSourceChanging(false); setPendingSelection(null); setAdvanced(false); setSourceCollapsed(false); setValidationVisible(false) }, [state.key])
   useEffect(() => { if (selection) setKind(selection.sourceType) }, [state.key, selection?.sourceType])
 
   const candidates: Array<{ value: string; label: string; selection: BindingSelection }> = kind === 'database'
@@ -73,9 +87,10 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
       setKind(nextKind)
       setSourceChanging(false)
       setPendingSelection(null)
-      state.edit({ ...entry.value.draft, databaseOperation: next?.sourceType === 'database' ? defaultDatabaseOperation(String(entry.preparation.payload.endpoint.method || '')) : undefined, databaseConditions: [], fieldMappings: fields.map(createUnconfiguredFieldMapping) }, next)
+      setValidationVisible(false)
+      state.edit({ ...entry.value.draft, databaseOperation: next?.sourceType === 'database' ? defaultDatabaseOperation(String(entry.preparation.payload.endpoint.method || '')) : undefined, databaseQuery: undefined, databaseWrites: [], externalApiFixedValues: [], fieldMappings: fields.map(createUnconfiguredFieldMapping) }, next)
     }
-    if (entry.value.draft.fieldMappings.some((item) => item.mappingType !== 'unconfigured') || Boolean(entry.value.draft.databaseConditions?.length)) confirmWorkspaceAction({ title: '更换数据来源？', content: '当前字段映射和固定数据库条件将清空，已保存的正式映射在重新确认前不变。', okText: '更换并清空', cancelText: '取消', onOk: apply })
+    if (entry.value.draft.fieldMappings.some((item) => item.mappingType !== 'unconfigured') || Boolean(entry.value.draft.databaseQuery?.items.length) || Boolean(entry.value.draft.databaseWrites?.length) || Boolean(entry.value.draft.externalApiFixedValues?.length)) confirmWorkspaceAction({ title: '更换数据来源？', content: '当前字段映射、写入字段、外部接口固定值和数据库查询条件将清空，已保存的正式映射在重新确认前不变。', okText: '更换并清空', cancelText: '取消', onOk: apply })
     else apply()
   }
 
@@ -91,6 +106,13 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
     setPendingSelection(null)
     setKind(selection?.sourceType)
     setSourceChanging(false)
+  }
+
+  /** 只在用户尝试确认时显示未完成字段的错误，并阻止无效提交。 */
+  const confirmMapping = (): void => {
+    setValidationVisible(true)
+    if (Object.keys(validationErrors).length) return
+    void state.save(true)
   }
 
   /** 暂存新的来源类型，等待用户选择具体来源并确认。 */
@@ -129,7 +151,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
       {!target ? <Empty description="请选择应用 API" /> : loading && !entry ? <Spin tip="正在读取 API 契约…" /> : null}
       {error ? <Alert type="error" showIcon message={error} action={<Space><Button onClick={state.refreshSources}>重试</Button>{entry && <Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃草稿并重新加载？', content: '未确认的修改将被清除，正式映射不变。', okText: '放弃并加载', cancelText: '继续编辑', onOk: state.discard })}>重新加载</Button>}</Space>} /> : null}
       {entry && <>
-        <header className="binding-heading"><div className="binding-heading-copy"><span className="binding-heading-contract">{activeContractName}</span><strong className="binding-heading-name">{activeEndpointName}</strong><div className="binding-heading-endpoint"><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{activeEndpointPath}</code></div></div><Space className="binding-heading-actions">{entry.readOnly ? <Button className="binding-edit-button" icon={<EditOutlined />} onClick={() => state.update({ ...entry, readOnly: false })}>修改映射</Button> : !entry.complex ? <><Button className="binding-stash-button" loading={busy} disabled={entry.conflict} onClick={() => void state.save(false)}>暂存</Button><Button className="binding-confirm-button" type="primary" loading={busy} disabled={!canConfirm} onClick={() => void state.save(true)}>保存并确认</Button></> : null}</Space></header>
+        <header className="binding-heading"><div className="binding-heading-copy"><span className="binding-heading-contract">{activeContractName}</span><strong className="binding-heading-name">{activeEndpointName}</strong><div className="binding-heading-endpoint"><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{activeEndpointPath}</code></div></div><Space className="binding-heading-actions">{entry.readOnly ? <Button className="binding-edit-button" icon={<EditOutlined />} onClick={() => state.update({ ...entry, readOnly: false })}>修改映射</Button> : !entry.complex ? <><Button className="binding-stash-button" loading={busy} disabled={entry.conflict} onClick={() => void state.save(false)}>暂存</Button><Button className="binding-confirm-button" type="primary" loading={busy} disabled={!canConfirm} onClick={confirmMapping}>保存并确认</Button></> : null}</Space></header>
         {entry.conflict ? <Alert type="warning" message="草稿基于的契约或正式映射已变化，当前草稿已保留。" description="请核对当前内容后，明确放弃旧草稿并重新加载。" action={<Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃旧草稿并重新加载？', okText: '放弃并加载', cancelText: '保留草稿', onOk: state.discard })}>重新加载</Button>} /> : null}
         {entry.complex ? <Alert type="info" message="当前接口包含复杂映射，继续使用原有编辑能力。" action={<Button onClick={() => setAdvanced(true)}>打开完整编辑器</Button>} /> : <>
           {entry.readOnly && selection && <section className="binding-section database-source-section">
@@ -146,7 +168,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
             {!sourceCollapsed ? <div className={`database-section-content${kind === 'external_api' ? ' is-external-api-source' : ''}`}>
               {selection && !sourceChanging ? <div className="database-source-summary">
                 <div><Tag>{selection.sourceType === 'database' ? '数据表' : '外部 API'}</Tag><strong>{sourceLabel}</strong></div>
-                <Button disabled={busy || entry.conflict} onClick={beginSourceChange}>更换{selection.sourceType === 'database' ? '数据表' : '外部 API'}</Button>
+                <Button disabled={busy || entry.conflict} onClick={beginSourceChange}>更换数据源</Button>
               </div> : <>
                 <Radio.Group disabled={busy || entry.conflict} value={kind} onChange={(event) => stageSourceKind(event.target.value)}>
                   <Radio.Button value="database">数据表</Radio.Button>
@@ -157,9 +179,10 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
                 {kind && !candidates.length ? <p>暂无可绑定来源，请先配置{kind === 'database' ? '连接并添加数据表' : '外部 API 接口'}。</p> : null}
               </>}
               {unavailableTable ? <Alert type="warning" message="所选表不在已添加清单中，请先添加后再确认。" /> : null}
+              {missingQueryColumns ? <Alert type="warning" message="查询条件中的数据库列已失效，请重新选择当前数据表中的列。" /> : null}
             </div> : null}
           </section>}
-          {selection && <Spin spinning={metadataLoading}>{selection.sourceType === 'external_api' && metadata && 'fields' in metadata ? <ExternalMapping busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} onChange={(draft) => state.edit(draft)} selection={selection} /> : databaseSelection && metadata && 'columns' in metadata ? <DatabaseMapping busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} operation={entry.value.draft.databaseOperation} selection={databaseSelection} onChange={(draft) => state.edit(draft)} onOperationChange={(operation) => confirmWorkspaceAction({ title: '切换数据库操作？', content: '请求字段将按新的 CRUD 操作重新分区，已选数据库列会保留。', okText: '切换并重排', cancelText: '取消', onOk: () => state.edit(resetDraftForDatabaseOperation(entry.value.draft, operation)) })} /> : null}</Spin>}
+          {selection && <Spin spinning={metadataLoading}>{selection.sourceType === 'external_api' && metadata && 'fields' in metadata ? <ExternalMapping busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} onChange={(draft) => state.edit(draft)} selection={selection} /> : databaseSelection && metadata && 'columns' in metadata ? <DatabaseMapping busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} operation={entry.value.draft.databaseOperation} selection={databaseSelection} onChange={(draft) => state.edit(draft)} onOperationChange={(operation) => confirmWorkspaceAction({ title: '切换数据库操作？', content: '切到新增会清空查询条件；切到查询或删除会清除写入映射。', okText: '切换并更新', cancelText: '取消', onOk: () => state.edit(resetDraftForDatabaseOperation(entry.value.draft, operation)) })} /> : null}</Spin>}
           {entry.readOnly && <p className="binding-readonly"><NodeIndexOutlined /> 映射已确认</p>}
         </>}
       </>}

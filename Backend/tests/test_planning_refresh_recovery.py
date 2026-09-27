@@ -135,11 +135,20 @@ def _write_formal_confirmation_context(workspace: Path) -> None:
     contract = technical_plan["api_contracts"][0]
     endpoint = contract["endpoints"][0]
     field_mappings = []
+    query_items = []
     for field in endpoint_field_nodes(contract, endpoint):
         endpoint_field = {
             key: field[key]
             for key in ("side", "location", "path", "type", "required", "description")
         }
+        if field["side"] == "request":
+            query_items.append({
+                "kind": "condition", "sourceType": "database", "sourceId": "orders-database",
+                "schema": "app", "table": "orders", "column": field["path"].replace(".", "_").replace("[]", "_items"),
+                "type": field["type"], "operator": "eq",
+                "right": {"kind": "endpoint", "endpointField": endpoint_field},
+            })
+            continue
         source_field = {
             "sourceType": "database",
             "sourceId": "orders-database",
@@ -147,8 +156,7 @@ def _write_formal_confirmation_context(workspace: Path) -> None:
             "table": "orders",
             "column": field["path"].replace(".", "_").replace("[]", "_items"),
             "type": field["type"],
-            "usage": "filter" if field["side"] == "request" else "read",
-            "filterOperator": "eq" if field["side"] == "request" else None,
+            "usage": "read",
         }
         field_mappings.append(
             {
@@ -162,7 +170,7 @@ def _write_formal_confirmation_context(workspace: Path) -> None:
         workspace,
         EndpointApiDesign.model_validate(
             {
-                "schemaVersion": "endpoint-field-mapping.v4",
+                "schemaVersion": "endpoint-field-mapping.v6",
                 "artifactType": "endpoint-field-mapping",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",
@@ -171,7 +179,9 @@ def _write_formal_confirmation_context(workspace: Path) -> None:
                 "endpointId": endpoint["id"],
                 "endpointContract": endpoint,
                 "databaseOperation": "read",
+                "databaseQuery": {"join": "and", "items": query_items} if query_items else None,
                 "fieldMappings": field_mappings,
+                "databaseWrites": [],
                 "sourceSnapshots": [],
                 "basedOn": [
                     {

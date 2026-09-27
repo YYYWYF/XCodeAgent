@@ -266,7 +266,7 @@ def _repository_rules() -> tuple[str, ...]:
 
     return (
         "When the manifest contains repository, implement only the database access branch "
-        "required by fieldMappings: Mapper/repository queries, persistence records, and "
+        "required by databaseWrites and databaseQuery, and by read-side database fieldMappings: Mapper/repository queries, persistence records, and "
         "typed database results. Do not create a repository for an Endpoint whose physical "
         "source set excludes database, and do not perform endpoint response composition in "
         "this Task.",
@@ -301,11 +301,11 @@ def _service_rules() -> tuple[str, ...]:
     """定义统一 service 对字段映射、组合和业务说明的职责边界。"""
 
     return (
-        "The service Task is the sole owner of Endpoint fieldMappings, multi-source "
-        "composition, businessDescriptions, request binding, business processing, and final "
+        "The service Task is the sole owner of Endpoint fieldMappings, databaseWrites, and externalApiFixedValues, multi-source "
+        "composition, businessDescriptions, request binding, database write-value binding, business processing, and final "
         "endpoint response transformation. It may coordinate the repository and upstream "
         "branches present in the manifest, but must not create a separate mapping Task, "
-        "expose upstream transport types through the internal API, or implement Controller "
+        "bind confirmed externalApiFixedValues into upstream request fields as parameters, expose upstream transport types through the internal API, or implement Controller "
         "routing.",
         "Whenever implementation of a confirmed business failure branch requires "
         "`throw new BizException(...)`, also plan the concrete module-level "

@@ -33,7 +33,7 @@ def _plan() -> dict:
 
 
 def _design(*source_types: str) -> dict:
-    """构造当前 Endpoint API Design 的 fieldMappings 来源快照。"""
+    """构造当前 Endpoint API Design 的来源配置快照。"""
 
     mappings = []
     for index, source_type in enumerate(source_types):
@@ -53,7 +53,7 @@ def _design(*source_types: str) -> dict:
             "businessDescription": "由当前 Endpoint 业务规则生成。",
         })
     return {
-        "schemaVersion": "endpoint-field-mapping.v4",
+        "schemaVersion": "endpoint-field-mapping.v6",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
@@ -62,6 +62,7 @@ def _design(*source_types: str) -> dict:
         "artifactRevision": "a" * 32,
         "endpointContract": {"id": "orders.list"},
         "fieldMappings": mappings,
+        "databaseWrites": [],
         "sourceSnapshots": [{"sourceType": source_type} for source_type in source_types],
         "basedOn": [{"artifactKey": "technical-plan", "sha256": "b" * 64}],
     }
@@ -110,7 +111,7 @@ class UnitGenerationRequirementTargetTests(unittest.TestCase):
         }
 
     def test_source_types_are_derived_from_endpoint_field_mappings(self) -> None:
-        """来源集合只来自当前 Endpoint Design 的 sourceFields，不读取实体绑定。"""
+        """来源集合来自当前 Endpoint Design 的映射和操作配置，不读取实体绑定。"""
 
         endpoints = {("orders-api", "orders.list"): {"id": "orders.list"}}
         design = _design("external_api")
@@ -119,6 +120,20 @@ class UnitGenerationRequirementTargetTests(unittest.TestCase):
             endpoint_source_types([design], endpoints),
             {("orders-api", "orders.list"): frozenset({"external_api"})},
         )
+
+    def test_query_only_design_declares_database_dependency(self) -> None:
+        """即使请求参数不在字段映射中，查询树仍声明数据库职责。"""
+
+        design = _design()
+        design["databaseOperation"] = "read"
+        design["databaseQuery"] = {"join": "and", "items": [{
+            "kind": "condition", "sourceType": "database", "sourceId": "db", "schema": "app",
+            "table": "orders", "column": "deleted_at", "type": "datetime", "operator": "is_null",
+        }]}
+        endpoints = {("orders-api", "orders.list"): {"id": "orders.list"}}
+        self.assertEqual(endpoint_source_types([design], endpoints)[("orders-api", "orders.list")], frozenset({"database"}))
+        contract = FrozenContract(ref_id="query-only", kind="endpoint_api_design", content=design, source={"artifact": "confirmed-endpoint-api-design"})
+        self.assertEqual(endpoint_api_design_source_types(contract), {"database"})
 
     def test_frozen_manifest_uses_the_same_field_mapping_authority(self) -> None:
         """Frozen Manifest 也不能从 sourceSnapshots 偷换物理来源集合。"""

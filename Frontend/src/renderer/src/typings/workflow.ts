@@ -514,7 +514,7 @@ export type WorkflowApiFilterOperator =
   | 'contains' | 'not_contains' | 'starts_with' | 'ends_with'
   | 'in' | 'not_in' | 'between' | 'not_between'
 
-/** 固定数据库条件运算符；除空值判断外的运算符必须携带固定值。 */
+/** 数据库查询运算符；空值判断不需要右值。 */
 export type WorkflowApiDatabaseConditionOperator =
   | WorkflowApiFilterOperator
   | 'is_null' | 'is_not_null'
@@ -522,8 +522,9 @@ export type WorkflowApiDatabaseConditionOperator =
 /** Endpoint 绑定数据库时的单一 CRUD 操作。 */
 export type WorkflowApiDatabaseOperation = 'create' | 'read' | 'update' | 'delete'
 
-/** 无 API 右值、每次请求都生效的固定数据库条件。 */
+/** 手动添加的数据库查询条件，可复用接口参数。 */
 export type WorkflowApiDatabaseCondition = {
+  kind: 'condition'
   sourceType: 'database'
   sourceId: string
   schema: string
@@ -531,8 +532,31 @@ export type WorkflowApiDatabaseCondition = {
   column: string
   type: string
   operator: WorkflowApiDatabaseConditionOperator
-  value?: unknown
+  right?: { kind: 'endpoint'; endpointField: WorkflowApiEndpointFieldSnapshot } | { kind: 'fixed'; value: unknown }
   description?: string
+}
+
+export type WorkflowApiDatabaseQuery = {
+  join: 'and' | 'or'
+  items: Array<WorkflowApiDatabaseCondition | { kind: 'group'; join: 'and' | 'or'; items: WorkflowApiDatabaseCondition[] }>
+}
+
+/** 数据库新增和修改时的目标列和值来源草稿。 */
+export type WorkflowApiDatabaseWriteDraft = {
+  sourceType: 'database'
+  sourceId: string
+  schema: string
+  table: string
+  column: string
+  type: string
+  description?: string
+  right?: { kind: 'endpoint'; endpointField?: WorkflowApiEndpointFieldSnapshot } | { kind: 'fixed'; value?: unknown }
+}
+
+/** 已确认的数据库写入列及其请求参数或固定值。 */
+export type WorkflowApiDatabaseWrite = Omit<WorkflowApiDatabaseWriteDraft, 'right'> & {
+  column: string
+  right: { kind: 'endpoint'; endpointField: WorkflowApiEndpointFieldSnapshot } | { kind: 'fixed'; value: unknown }
 }
 
 /** API 设计中的直属 MySQL Source Field 节点。 */
@@ -545,8 +569,7 @@ export type WorkflowApiDatabaseFieldNode = {
   table: string
   column: string
   type: string
-  usage?: 'read' | 'filter' | 'write'
-  filterOperator?: WorkflowApiFilterOperator
+  usage?: 'read' | 'write'
   description?: string
 }
 
@@ -564,6 +587,13 @@ export type WorkflowApiExternalFieldNode = {
   description?: string
 }
 
+/** 外部 API 请求参数使用的固定值草稿。 */
+export type WorkflowApiExternalApiFixedValueDraft = {
+  externalField: Omit<WorkflowApiExternalFieldNode, 'id' | 'nodeType'>
+  value?: unknown
+}
+
+/** 外部 API 请求参数中被用户删除的非必填字段。 */
 export type WorkflowApiSourceField =
   | Omit<WorkflowApiDatabaseFieldNode, 'id' | 'nodeType'>
   | Omit<WorkflowApiExternalFieldNode, 'id' | 'nodeType'>
@@ -594,7 +624,9 @@ export type WorkflowApiDesignDraft = {
   /** Endpoint 级可选实现指导，不参与字段映射完整性判断。 */
   implementationDescription?: string
   databaseOperation?: WorkflowApiDatabaseOperation
-  databaseConditions?: WorkflowApiDatabaseCondition[]
+  databaseWrites?: WorkflowApiDatabaseWriteDraft[]
+  externalApiFixedValues?: WorkflowApiExternalApiFixedValueDraft[]
+  databaseQuery?: WorkflowApiDatabaseQuery
   fieldMappings: WorkflowApiFieldMapping[]
 }
 

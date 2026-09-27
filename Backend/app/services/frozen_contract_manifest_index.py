@@ -100,7 +100,7 @@ def endpoint_api_design_index(
 def endpoint_api_design_source_types(
     contract: FrozenContract,
 ) -> set[str]:
-    """从冻结 Endpoint API Design 的 fieldMappings 派生物理数据源类型。"""
+    """从冻结 Endpoint API Design 的映射、写入和查询派生物理数据源类型。"""
 
     source_types: set[str] = set()
     for mapping in manifest_sequence(
@@ -130,14 +130,48 @@ def endpoint_api_design_source_types(
                         "Endpoint API Design.fieldMappings.sourceFields.sourceType",
                     )
                 )
-    for condition in manifest_sequence(
-        contract.content.get("databaseConditions", []),
-        "Endpoint API Design.databaseConditions",
+    for write in manifest_sequence(
+        contract.content.get("databaseWrites"),
+        "Endpoint API Design.databaseWrites",
     ):
-        if not isinstance(condition, Mapping) or condition.get("sourceType") != "database":
+        if not isinstance(write, Mapping):
             raise ContractCatalogBindingError(
-                "Endpoint API Design.databaseConditions 项必须是 database 条件对象。"
+                "Endpoint API Design.databaseWrites 项必须为对象。"
             )
+        source_type = write.get("sourceType")
+        if source_type is not None:
+            source_types.add(
+                exact_manifest_id(source_type, "Endpoint API Design.databaseWrites.sourceType")
+            )
+    for item in manifest_sequence(
+        contract.content.get("externalApiFixedValues", []),
+        "Endpoint API Design.externalApiFixedValues",
+    ):
+        if not isinstance(item, Mapping):
+            raise ContractCatalogBindingError(
+                "Endpoint API Design.externalApiFixedValues 项必须为对象。"
+            )
+        external_field = item.get("externalField")
+        if not isinstance(external_field, Mapping):
+            raise ContractCatalogBindingError(
+                "Endpoint API Design.externalApiFixedValues.externalField 必须为对象。"
+            )
+        source_type = external_field.get("sourceType")
+        if source_type is not None:
+            source_types.add(
+                exact_manifest_id(
+                    source_type,
+                    "Endpoint API Design.externalApiFixedValues.externalField.sourceType",
+                )
+            )
+    query = contract.content.get("databaseQuery")
+    if query is not None:
+        from app.services.api_design import _parse_database_query
+        from app.services.planning_frozen import plain_json
+        try:
+            _parse_database_query(plain_json(query))
+        except ValueError as exc:
+            raise ContractCatalogBindingError("Endpoint API Design.databaseQuery 条件树无效。") from exc
         source_types.add("database")
     return source_types
 

@@ -774,11 +774,18 @@ def _operation_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
             for mapping in field_mappings
             for source in mapping_sources(mapping)
         ]
+        database_writes = _database_write_expectations(design)
+        external_api_fixed_values = [
+            {
+                "field": _dict_value(item.get("externalField")),
+                "value": item.get("value"),
+            }
+            for item in _dict_items(design.get("externalApiFixedValues"))
+        ]
         database_fields = [
             field for field in source_fields if field.get("sourceType") == "database"
         ]
-        selector_fields = [field for field in database_fields if field.get("usage") == "filter"]
-        fixed_conditions = _dict_items(design.get("databaseConditions"))
+        query = design.get("databaseQuery") if isinstance(design.get("databaseQuery"), dict) else None
         result.append(
             {
                 "api_contract_id": _text(design.get("apiContractId")),
@@ -787,28 +794,18 @@ def _operation_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
                 "target_cardinality": "collection" if response_is_collection else "object",
                 "selector": {
                     "source": "endpoint_api_design",
-                    "fields": _dedupe_strings([field.get("column") for field in selector_fields]),
-                    "filters": [
-                        {"column": _text(field.get("column")), "operator": _text(field.get("filterOperator") or "eq")}
-                        for field in selector_fields
-                    ],
-                    "conditions": [
-                        {
-                            "column": _text(item.get("column")),
-                            "operator": _text(item.get("operator")),
-                            **({"value": item.get("value")} if "value" in item else {}),
-                        }
-                        for item in fixed_conditions
-                    ],
+                    "query": query,
                 },
                 "transaction_required": operation_kind in {"create", "update", "delete"}
-                and any(field.get("usage") == "write" for field in database_fields),
+                and bool(database_writes),
+                "database_writes": database_writes,
+                "external_api_fixed_values": external_api_fixed_values,
                 "zero_match_behavior": "confirmed_processing_logic",
                 "multiple_match_behavior": "confirmed_processing_logic",
                 "success_status_code": endpoint.get("successStatusCode"),
                 "side_effect": "write" if operation_kind in {"create", "update", "delete"} else "none",
                 "processing_logic": _mapping_descriptions(design),
-                "requires_repository": bool(database_fields or fixed_conditions),
+                "requires_repository": bool(database_fields or database_writes or query),
             }
         )
     return result[:_MAX_ITEMS]
@@ -904,6 +901,37 @@ def _mapping_descriptions(design: dict[str, Any]) -> list[str]:
     )
 
 
+def _database_write_expectations(design: dict[str, Any]) -> list[dict[str, Any]]:
+    """把确认的数据库目标列和值来源投影给下游验收与生成任务。"""
+
+    result: list[dict[str, Any]] = []
+    for write in _dict_items(design.get("databaseWrites")):
+        right = _dict_value(write.get("right"))
+        endpoint_field = _dict_value(right.get("endpointField"))
+        result.append(
+            {
+                "source_id": _text(write.get("sourceId")),
+                "schema": _text(write.get("schema")),
+                "table": _text(write.get("table")),
+                "column": _text(write.get("column")),
+                "type": _text(write.get("type"), "unknown"),
+                "value_source": _text(right.get("kind")),
+                "endpoint_parameter": (
+                    {
+                        "side": _text(endpoint_field.get("side")),
+                        "location": _text(endpoint_field.get("location")),
+                        "path": _text(endpoint_field.get("path")),
+                        "type": _text(endpoint_field.get("type"), "unknown"),
+                    }
+                    if right.get("kind") == "endpoint"
+                    else None
+                ),
+                "fixed_value": right.get("value") if right.get("kind") == "fixed" else None,
+            }
+        )
+    return result[:_MAX_ITEMS]
+
+
 def _external_operations_from_field_mappings(
     design: dict[str, Any],
     mappings: list[dict[str, Any]],
@@ -934,9 +962,18 @@ def _external_operations_from_field_mappings(
                 continue
             key = (_text(source_field.get("sourceId")), _text(source_field.get("directoryId")), _text(source_field.get("operationId")))
             groups.setdefault(key, []).append({**mapping, "selected_source": source_field})
+    fixed_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for item in _dict_items(design.get("externalApiFixedValues")):
+        source_field = _dict_value(item.get("externalField"))
+        key = (_text(source_field.get("sourceId")), _text(source_field.get("directoryId")), _text(source_field.get("operationId")))
+        if all(key):
+            fixed_groups.setdefault(key, []).append({"selected_source": source_field, "value": item.get("value")})
+    for key, items in fixed_groups.items():
+        groups.setdefault(key, [])
     result: list[dict[str, Any]] = []
     for (source_id, directory_id, operation_id), grouped_mappings in groups.items():
         snapshot = _dict_value(snapshots.get((source_id, directory_id, operation_id)))
+        fixed_items = fixed_groups.get((source_id, directory_id, operation_id), [])
         details = _dict_value(snapshot.get("details"))
         operation = _dict_value(details.get("operation"))
         connection = _dict_value(details.get("connection"))
@@ -984,8 +1021,17 @@ def _external_operations_from_field_mappings(
                     }
                     for mapping in grouped_mappings
                 ],
+                "request_fixed_values": [
+                    {
+                        "section": _text(_dict_value(item.get("selected_source")).get("section")),
+                        "field": _text(_dict_value(item.get("selected_source")).get("path")),
+                        "type": _text(_dict_value(item.get("selected_source")).get("type"), "unknown"),
+                        "value": item.get("value"),
+                    }
+                    for item in fixed_items
+                ],
                 "business_descriptions": [mapping_business_description(mapping) for mapping in grouped_mappings if mapping_business_description(mapping)],
-                "source_dependencies": [mapping["selected_source"] for mapping in grouped_mappings],
+                "source_dependencies": [mapping["selected_source"] for mapping in grouped_mappings] + [item["selected_source"] for item in fixed_items],
             }
         )
     return result
@@ -1019,7 +1065,8 @@ def _external_designs(formal: dict[str, Any]) -> list[dict[str, Any]]:
             if mapping.get("mappingType") == "source_mapping"
             and any(source.get("sourceType") == "external_api" for source in mapping_sources(mapping))
         ]
-        if not direct_mappings:
+        fixed_values = _dict_items(design.get("externalApiFixedValues"))
+        if not direct_mappings and not fixed_values:
             continue
         contract_id = _text(design.get("apiContractId"))
         endpoint_id = _text(design.get("endpointId"))

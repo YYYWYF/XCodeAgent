@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from app.domain.api_design import (
     BusinessDescriptionFieldMapping,
-    DatabaseCondition,
+    DatabaseQuery,
     DatabaseSourceField,
     EndpointFieldMappingDesign,
     ExternalSourceField,
@@ -21,7 +21,9 @@ from app.services.api_design import (
     _safe_external_operation,
     _allowed_filter_operators,
     _default_database_operation,
-    _parse_database_conditions,
+    _parse_database_query,
+    _validate_database_contract,
+    _validate_query_references,
     _source_types_compatible,
     _types_compatible,
     _validate_field_mappings,
@@ -55,7 +57,7 @@ class ApiDesignTests(unittest.TestCase):
         self.assertEqual(result["columns"][0]["name"], "id")
 
     def test_database_crud_defaults_and_filter_operator_contract(self) -> None:
-        """HTTP 方法默认 CRUD 与类型感知运算符保持当前 v4 语义。"""
+        """HTTP 方法默认 CRUD 与类型感知运算符保持当前 v5 语义。"""
 
         self.assertEqual(_default_database_operation("POST"), "create")
         self.assertEqual(_default_database_operation("HEAD"), "read")
@@ -87,11 +89,10 @@ class ApiDesignTests(unittest.TestCase):
             self.assertTrue(_source_types_compatible("string", source))
             self.assertFalse(_source_types_compatible("number", source))
             self.assertFalse(_types_compatible("varchar(255)", column_type))
-        filter_source = source.model_copy(update={"usage": "filter", "filter_operator": "between"})
-        self.assertTrue(_source_types_compatible("array<string>", filter_source))
+        self.assertTrue(_source_types_compatible("array<string>", source, "between"))
         self.assertIn("between", _allowed_filter_operators("array<string>", "timestamp"))
         self.assertNotIn("contains", _allowed_filter_operators("string", "timestamp"))
-        self.assertFalse(_source_types_compatible("array<number>", filter_source))
+        self.assertFalse(_source_types_compatible("array<number>", source, "between"))
         external = ExternalSourceField.model_validate({
             "sourceType": "external_api", "sourceId": "upstream", "directoryId": "directory",
             "operationId": "operation", "section": "response_body", "path": "createdAt", "type": "timestamp",
@@ -110,25 +111,52 @@ class ApiDesignTests(unittest.TestCase):
         })
         _validate_field_mappings([mapping], [endpoint], "read")
 
-    def test_fixed_database_conditions_are_unique(self) -> None:
-        """固定条件按列去重，并校验类型感知运算符、集合及区间。"""
+    def test_query_tree_allows_duplicate_columns_and_checks_fixed_values(self) -> None:
+        """条件树允许重复列和混合 AND/OR，并校验固定值类型。"""
 
         condition = {
-            "sourceType": "database", "sourceId": "db", "schema": "app",
+            "kind": "condition", "sourceType": "database", "sourceId": "db", "schema": "app",
             "table": "orders", "column": "deleted_at", "type": "datetime", "operator": "is_null",
         }
-        parsed = _parse_database_conditions([condition])
-        self.assertIsInstance(parsed[0], DatabaseCondition)
-        with self.assertRaisesRegex(ValueError, "最多配置一个"):
-            _parse_database_conditions([condition, condition.copy()])
-        self.assertEqual(_parse_database_conditions([{**condition, "operator": "gte", "value": "2026-01-01"}])[0].value, "2026-01-01")
-        self.assertEqual(_parse_database_conditions([{**condition, "column": "amount", "type": "decimal", "operator": "between", "value": [1, 10]}])[0].value, [1, 10])
+        parsed = _parse_database_query({"join": "and", "items": [
+            {"kind": "group", "join": "or", "items": [condition, condition.copy()]},
+            {**condition, "operator": "gte", "right": {"kind": "fixed", "value": "2026-01-01"}},
+        ]})
+        self.assertIsInstance(parsed, DatabaseQuery)
+        self.assertEqual(len(parsed.items[0].items), 2)
+        flow = api_design_mapping_flows([{"databaseOperation": "read", "databaseQuery": parsed.model_dump(mode="json", by_alias=True, exclude_none=True), "fieldMappings": []}])
+        self.assertIn("(orders.deleted_at is_null OR orders.deleted_at is_null)", flow[1])
+        self.assertEqual(_parse_database_query({"join": "and", "items": [{**condition, "column": "amount", "type": "decimal", "operator": "between", "right": {"kind": "fixed", "value": [1, 10]}}]}).items[0].right.value, [1, 10])
         with self.assertRaisesRegex(ValueError, "上下界倒置"):
-            _parse_database_conditions([{**condition, "column": "amount", "type": "decimal", "operator": "between", "value": [10, 1]}])
-        with self.assertRaisesRegex(ValueError, "不支持固定条件运算符"):
-            _parse_database_conditions([{**condition, "column": "amount", "type": "decimal", "operator": "contains", "value": "1"}])
+            _parse_database_query({"join": "and", "items": [{**condition, "column": "amount", "type": "decimal", "operator": "between", "right": {"kind": "fixed", "value": [10, 1]}}]})
+        with self.assertRaisesRegex(ValueError, "不支持"):
+            _parse_database_query({"join": "and", "items": [{**condition, "column": "amount", "type": "decimal", "operator": "contains", "right": {"kind": "fixed", "value": "1"}}]})
         with self.assertRaisesRegex(ValueError, "非空数组"):
-            _parse_database_conditions([{**condition, "column": "name", "type": "varchar(100)", "operator": "in", "value": []}])
+            _parse_database_query({"join": "and", "items": [{**condition, "column": "name", "type": "varchar(100)", "operator": "in", "right": {"kind": "fixed", "value": []}}]})
+
+    def test_query_tree_reuses_parameter_and_enforces_crud(self) -> None:
+        """同一接口参数可被多条条件引用，读可无条件而修改和删除必须有条件。"""
+
+        field = {"side": "request", "location": "query", "path": "id", "type": "integer", "required": True, "description": ""}
+        condition = {"kind": "condition", "sourceType": "database", "sourceId": "db", "schema": "app",
+                     "table": "orders", "column": "id", "type": "integer", "operator": "eq",
+                     "right": {"kind": "endpoint", "endpointField": field}}
+        query = _parse_database_query({"join": "and", "items": [
+            {"kind": "group", "join": "or", "items": [condition, {**condition, "column": "parent_id"}]},
+            {**condition, "column": "id"},
+        ]})
+        _validate_query_references(query, [field])
+        self.assertEqual(_validate_database_contract({}, [], query, "read"), "read")
+        self.assertEqual(_validate_database_contract({}, [], None, None), None)
+        with self.assertRaisesRegex(ValueError, "新增操作不能包含"):
+            _validate_database_contract({}, [], query, "create")
+        with self.assertRaisesRegex(ValueError, "没有数据库映射"):
+            _validate_database_contract({}, [], None, "delete")
+        _validate_field_mappings([], [field], "read")
+        with self.assertRaisesRegex(ValueError, "缺少"):
+            _validate_field_mappings([], [{"side": "response", "location": "response_body", "path": "id", "type": "integer", "required": True, "description": ""}], "read")
+        with self.assertRaises(ValueError):
+            _parse_database_query({"join": "and", "items": [{"kind": "group", "join": "or", "items": []}]})
 
     def test_all_of_merges_fields_and_required_constraints(self) -> None:
         """组合分支及同名嵌套字段共同定义结构，必填约束不能丢失。"""
@@ -245,7 +273,7 @@ class ApiDesignTests(unittest.TestCase):
             })
 
     def test_formal_design_rejects_draft_and_removed_mapping_shapes(self) -> None:
-        """正式 v3 产物只接受当前来源映射或业务说明，不接受草稿态和旧中转字段。"""
+        """正式 v6 产物只接受当前来源映射或业务说明，不接受草稿态和旧中转字段。"""
 
         base = {
             "apiContractId": "orders-api",

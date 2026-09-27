@@ -5,24 +5,37 @@
   min-width: 0;
   padding: 18px;
   color: var(--wb-text);
+  background: var(--wb-canvas);
 
   .endpoint-design-result-heading {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--wb-border);
   }
 
   .ant-typography { color: var(--wb-text); }
-  .ant-descriptions-view, .ant-collapse { border-color: var(--wb-border); }
+  .ant-descriptions-view, .ant-collapse { border-color: var(--wb-border); background: var(--wb-canvas); }
+  .ant-descriptions-item-label, .ant-collapse-header, .ant-table-thead > tr > th { background: var(--wb-surface-subtle); color: var(--wb-text-secondary); }
+  .ant-descriptions-item-content, .ant-collapse-content { background: var(--wb-canvas); color: var(--wb-text); }
+  .ant-descriptions-item-label, .ant-descriptions-item-content, .ant-collapse-content { border-color: var(--wb-border); }
+  .ant-collapse-content-box { background: var(--wb-canvas); }
+  .ant-collapse-item { border-color: var(--wb-border); }
+  .ant-collapse-header:hover { background: var(--wb-surface-hover); }
+  .ant-collapse-item-active > .ant-collapse-header { color: var(--wb-text); }
   .ant-table { background: var(--wb-canvas); color: var(--wb-text); }
   // 详情表沿用设计表的列结构，长来源和多行说明允许完整换行。
   .ant-table-thead > tr > th, .ant-table-tbody > tr > td {
-    background: var(--wb-canvas);
     border-color: var(--wb-border);
     color: var(--wb-text);
     overflow-wrap: anywhere;
   }
+  .ant-table-thead > tr > th { background: var(--wb-surface-subtle); }
+  .ant-table-tbody > tr > td { background: var(--wb-canvas); }
+  .ant-table-tbody > tr:hover > td { background: var(--wb-surface-hover); }
+  .ant-empty-description { color: var(--wb-text-secondary); }
 }
 
 // 多来源及用户多行说明保留换行，颜色沿用当前主题。
@@ -34,9 +47,9 @@
   padding: 12px;
   border: 1px solid var(--wb-border);
   border-radius: 8px;
-  background: var(--wb-surface-subtle);
+  background: var(--wb-canvas);
   color: var(--wb-text);
-  > div { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  > div { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; white-space: pre-wrap; }
   code { color: var(--wb-text); }
 }
 
@@ -44,12 +57,12 @@
   gap: 0;
   padding: 0 16px;
   border: 1px solid var(--wb-border);
-  border-radius: 14px;
+  border-radius: 10px;
   overflow: hidden;
 
   > section { min-width: 0; padding: 18px 0; }
   > section + section { border-top: 1px solid var(--wb-border); }
   section > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
   section > p { margin: 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--wb-text-secondary); }
-  .ant-tag { margin: 0; border-radius: 14px; border-color: var(--wb-border); background: var(--wb-surface-subtle); color: var(--wb-text-secondary); }
+  .ant-tag { margin: 0; border-radius: 6px; border-color: var(--wb-border); background: var(--wb-surface-subtle); color: var(--wb-text-secondary); }
 }

@@ -4,16 +4,12 @@ import type { ReactElement } from 'react'
 import type {
   WorkflowApiDatabaseFieldNode,
   WorkflowApiDatabaseOperation,
-  WorkflowApiFilterOperator,
   WorkflowApiDesignDraft,
   WorkflowApiDesignPayload,
   WorkflowApiExternalFieldNode,
   WorkflowApiField
 } from '../../../../typings'
 import {
-  allowedDatabaseUsages,
-  allowedDatabaseUsagesForOperation,
-  allowedFilterOperators,
   databaseSourceFieldId,
   resolveDatabaseUsageForOperation
 } from './apiDesignSerialization'
@@ -61,7 +57,7 @@ export default function ApiSourceFieldSelector({
   const resolvedSelectedSourceNode = selectedSourceNode
   const [state, setState] = useState(() => createApiSourceSelectorState(endpoint, resolvedSelectedSourceNode, operation))
   const initialMetadataLoadRequested = useRef(false)
-  const { sourceId, table, column, directoryId, operationId, externalFieldKey, usage, filterOperator } = state
+  const { sourceId, table, column, directoryId, operationId, externalFieldKey, usage } = state
 
   const sources = Array.isArray(payload.sources) ? payload.sources : []
   const source = sources.find((item) => String(item.id || '') === sourceId)
@@ -119,9 +115,6 @@ export default function ApiSourceFieldSelector({
     }
   }, [onLoad, payload.databaseMetadata, resolvedSelectedSourceNode, sourceId, sources, table])
 
-  /** 返回当前选择器允许的数据库用途。 */
-  const selectorUsages = operation ? allowedDatabaseUsagesForOperation(endpoint, operation) : allowedDatabaseUsages(endpoint)
-
   /** 选择来源后重置旧级联状态，并按来源类型自动加载第一层元数据。 */
   const handleSourceChange = (nextSourceId: string | undefined): void => {
     const next = nextSourceId || ''
@@ -157,43 +150,7 @@ export default function ApiSourceFieldSelector({
       }),
       sourceId, schema: String(database?.schema || ''), table, column: nextColumn,
       type: metadata.type, usage: nextUsage,
-      filterOperator: nextUsage === 'filter' ? (filterOperator || 'eq') : undefined,
       description: metadata.description
-    })
-  }
-
-  /** 修改数据库用途后重新提交同一列，保证用途属于节点身份。 */
-  const handleUsageChange = (nextUsage: WorkflowApiDatabaseFieldNode['usage']): void => {
-    setState((current) => ({ ...current, usage: nextUsage }))
-    if (!column) return
-    const metadata = columns.find((item) => item.name === column)
-    if (!metadata || !sourceId || !table) return
-    onSelect({
-      nodeType: 'source_field', sourceType: 'database',
-      id: databaseSourceFieldId({
-        sourceType: 'database', sourceId,
-        schema: String(database?.schema || ''), table, column,
-        type: metadata.type, usage: nextUsage
-      }),
-      sourceId, schema: String(database?.schema || ''), table, column,
-      type: metadata.type, usage: nextUsage,
-      filterOperator: nextUsage === 'filter' ? (filterOperator || 'eq') : undefined,
-      description: metadata.description
-    })
-  }
-
-  /** 修改完整编辑器中的查询运算符，并保持数据库来源身份可追踪。 */
-  const handleFilterOperatorChange = (nextOperator: WorkflowApiFilterOperator): void => {
-    setState((current) => ({ ...current, filterOperator: nextOperator }))
-    if (!column || !sourceId || !table || usage !== 'filter') return
-    const metadata = columns.find((item) => item.name === column)
-    if (!metadata) return
-    onSelect({
-      nodeType: 'source_field', sourceType: 'database', id: databaseSourceFieldId({
-        sourceType: 'database', sourceId, schema: String(database?.schema || ''), table, column,
-        type: metadata.type, usage, filterOperator: nextOperator
-      }), sourceId, schema: String(database?.schema || ''), table, column, type: metadata.type,
-      usage, filterOperator: nextOperator, description: metadata.description
     })
   }
 
@@ -222,10 +179,10 @@ export default function ApiSourceFieldSelector({
     })
   }
 
-  const sourceOptions = useMemo(() => sources.map((item) => {
+  const sourceOptions = useMemo(() => sources.filter((item) => item.type !== 'database' || endpoint.side === 'response').map((item) => {
     const label = `${String(item.name || item.id || '')}${item.type === 'database' ? ` · ${item.mode || 'database'}` : ' · external API'}`
     return { value: String(item.id || ''), label, title: label }
-  }), [sources])
+  }), [sources, endpoint.side, operation])
 
   const sourceSelectProps = {
     allowClear: true,
@@ -312,25 +269,6 @@ export default function ApiSourceFieldSelector({
           />
         </div>
       </div>
-      {column ? <div className="api-design-source-field api-design-source-usage">
-        {renderSourceFieldLabel('数据库用途')}
-        <Select
-          className="api-design-source-select api-design-source-usage-select"
-          disabled={disabled}
-          onChange={handleUsageChange}
-          options={selectorUsages.map((item) => ({ value: item, label: `用途：${item}`, title: `用途：${item}` }))}
-          optionFilterProp="label"
-          showSearch
-          value={usage}
-        />
-        {usage === 'filter' ? <Select
-          className="api-design-source-select api-design-source-usage-select"
-          disabled={disabled}
-          onChange={handleFilterOperatorChange}
-          options={allowedFilterOperators(endpoint.type, columns.find((item) => item.name === column)?.type || '').map((item) => ({ value: item, label: `运算符：${item}` }))}
-          value={filterOperator || 'eq'}
-        /> : null}
-      </div> : null}
       <div className="api-design-source-status">
         {metadataError ? <Alert banner message={metadataError} type="error" /> : null}
         {tablesLoading ? <Tag>正在加载数据表</Tag> : null}

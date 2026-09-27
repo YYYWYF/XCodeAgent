@@ -14,10 +14,11 @@ from app.services.build_unit_compiler import apply_unit_compilation
 
 
 def _endpoint_design(source_specs: list[dict]) -> dict:
-    """把测试所需来源规整为自包含字段映射产物。"""
+    """把测试所需来源规整为当前字段映射和数据库写入产物。"""
 
     snapshots: list[dict] = []
     field_mappings: list[dict] = []
+    database_writes: list[dict] = []
     for index, source in enumerate(source_specs):
         source_type = str(source.get("data_source_type") or "database")
         entity_id = str(source.get("entity_id") or f"Entity{index}")
@@ -38,18 +39,14 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
             })
             for row in rows:
                 entity_field = str(row.get("entity_field") or "name")
-                field_mappings.append({
-                    "endpointField": {
+                database_writes.append({
+                    "sourceType": "database", "sourceId": source_id, "schema": "app",
+                    "table": table, "column": str(row.get("table_column") or entity_field),
+                    "type": "string", "right": {"kind": "endpoint", "endpointField": {
                         "side": "request", "location": "request_body",
                         "path": f"{entity_id}.{entity_field}", "type": "string", "required": True,
                         "description": "",
-                    },
-                    "mappingType": "source_mapping",
-                    "processingType": "direct", "sourceFields": [{
-                        "sourceType": "database", "sourceId": source_id, "schema": "app",
-                        "table": table, "column": str(row.get("table_column") or entity_field),
-                        "type": "string", "usage": "write",
-                    }],
+                    }},
                 })
             continue
 
@@ -101,7 +98,7 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
                 }],
             })
     return {
-        "schemaVersion": "endpoint-field-mapping.v4",
+        "schemaVersion": "endpoint-field-mapping.v6",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
@@ -111,6 +108,8 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
             "id": "category.create", "method": "POST", "path": "/api/categories",
         },
         "fieldMappings": field_mappings,
+        "databaseWrites": database_writes,
+        **({"databaseOperation": "create"} if database_writes else {}),
         "sourceSnapshots": snapshots,
         "basedOn": [{"artifactKey": "technical-plan", "sha256": "a" * 64}],
         "confirmedAt": "2026-09-04T00:00:00Z",
@@ -461,6 +460,8 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertIn("CategoryInput", prompt)
         self.assertIn("CategoryValue", prompt)
         self.assertIn('"table": "category"', prompt)
+        self.assertIn("nested AND/OR parentheses", prompt)
+        self.assertIn("bind interface and fixed", prompt)
         for sentinel in (
             "UNRELATED_PAGE_SENTINEL",
             "UNRELATED_SCHEMA_SENTINEL",
@@ -478,6 +479,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertNotIn("Code graph navigation contract", prompt)
         self.assertIn("outer_integration_test_only", prompt)
         self.assertIn('"fieldMappings"', prompt)
+        self.assertIn('"databaseWrites"', prompt)
         self.assertIn('"mappingType": "source_mapping"', prompt)
         self.assertIn("Backend Workspace Context:", prompt)
         self.assertIn('"backend_working_directory": "/backend"', prompt)
@@ -530,15 +532,11 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             {"CategoryInput", "CategoryValue"},
         )
         design = context["api_design"]
-        self.assertEqual(design["schemaVersion"], "endpoint-field-mapping.v4")
+        self.assertEqual(design["schemaVersion"], "endpoint-field-mapping.v6")
         self.assertNotIn("sceneEntities", design)
-        self.assertEqual(design["fieldMappings"][0]["mappingType"], "source_mapping")
+        self.assertEqual(design["databaseWrites"][0]["right"]["kind"], "endpoint")
         self.assertEqual(
-            next(
-                mapping["sourceFields"][0]
-                for mapping in design["fieldMappings"]
-                if any(source.get("sourceType") == "database" for source in mapping.get("sourceFields", []))
-            )["table"],
+            design["databaseWrites"][0]["table"],
             "category",
         )
         self.assertNotIn("entity_designs", context)

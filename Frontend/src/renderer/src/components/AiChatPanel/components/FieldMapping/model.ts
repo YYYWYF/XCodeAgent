@@ -1,7 +1,7 @@
 import type { BindingSelection } from '../../../../typings/endpointDesign'
-import type { WorkflowApiDatabaseCondition, WorkflowApiDatabaseConditionOperator, WorkflowApiDatabaseOperation, WorkflowApiDesignDraft, WorkflowApiField, WorkflowApiSourceField } from '../../../../typings'
+import type { WorkflowApiDatabaseOperation, WorkflowApiDesignDraft, WorkflowApiField, WorkflowApiSourceField } from '../../../../typings'
 import type { ApiDesignDatabaseMetadata, ApiDesignExternalOperationMetadata, SelectedDataTable } from '../../../../service/dataSources'
-import { apiDesignFieldKey, allowedDatabaseUsagesForOperation, defaultDatabaseUsageForOperation, defaultDatabaseOperation, endpointFieldSnapshot } from '../WorkflowRunCard/apiDesignSerialization'
+import { apiDesignFieldKey, defaultDatabaseUsageForOperation, defaultDatabaseOperation, endpointFieldSnapshot } from '../WorkflowRunCard/apiDesignSerialization'
 
 export const DATABASE_OPERATION_LABELS: Record<WorkflowApiDatabaseOperation, string> = {
   create: '新增', read: '查询', update: '修改', delete: '删除'
@@ -12,7 +12,7 @@ export function operationForEndpoint(method?: string): WorkflowApiDatabaseOperat
   return defaultDatabaseOperation(method)
 }
 
-/** 改变 CRUD 操作后保留来源列并重排请求字段，避免跨操作残留用途。 */
+/** 改变 CRUD 操作后只保留适用的查询树和写入列配置。 */
 export function resetDraftForDatabaseOperation(
   draft: WorkflowApiDesignDraft,
   operation: WorkflowApiDatabaseOperation
@@ -20,38 +20,20 @@ export function resetDraftForDatabaseOperation(
   return {
     ...draft,
     databaseOperation: operation,
-    databaseConditions: operation === 'create' ? [] : (draft.databaseConditions || []),
+    databaseQuery: operation === 'create' ? undefined : draft.databaseQuery,
+    databaseWrites: operation === 'create' || operation === 'update' ? draft.databaseWrites || [] : [],
     fieldMappings: draft.fieldMappings.map((mapping) => {
       if (mapping.mappingType !== 'source_mapping') return mapping
       const endpoint = mapping.endpointField
       if (endpoint.side !== 'request') return mapping
-      const sourceFields = mapping.sourceFields.map((source) => {
-        if (source.sourceType !== 'database') return source
-        const usage = defaultDatabaseUsageForOperation(endpoint, operation)
-        return { ...source, usage, filterOperator: usage === 'filter' ? 'eq' as const : undefined }
-      })
+      const sourceFields: WorkflowApiSourceField[] = mapping.sourceFields.filter((source) => source.sourceType !== 'database')
       return {
         ...mapping,
         sourceFields
       }
-    })
-  }
-}
-
-/** 返回当前操作允许的用途选项，供紧凑行编辑器使用。 */
-export function operationUsages(field: WorkflowApiField, operation?: WorkflowApiDatabaseOperation): Array<{ value: 'filter' | 'write'; label: string }> {
-  return allowedDatabaseUsagesForOperation(field, operation)
-    .filter((value): value is 'filter' | 'write' => value === 'filter' || value === 'write')
-    .map((value) => ({ value, label: value === 'filter' ? '查询条件' : '写入字段' }))
-}
-
-/** 创建当前数据库表下的固定条件，空值运算符不保存无意义的固定值。 */
-export function createDatabaseCondition(selection: BindingSelection, column: { name: string; type: string; description?: string }, operator: WorkflowApiDatabaseConditionOperator, value?: unknown): WorkflowApiDatabaseCondition {
-  if (selection.sourceType !== 'database') throw new Error('固定数据库条件必须使用数据库表。')
-  return {
-    sourceType: 'database', sourceId: selection.sourceId, schema: selection.schema, table: selection.table,
-    column: column.name, type: column.type, description: column.description, operator,
-    value: operator === 'is_null' || operator === 'is_not_null' ? undefined : value
+    }).map((mapping) => mapping.mappingType === 'source_mapping' && !mapping.sourceFields.length
+      ? { endpointField: mapping.endpointField, mappingType: 'unconfigured' as const }
+      : mapping)
   }
 }
 
@@ -76,12 +58,25 @@ export function inferSelection(draft: WorkflowApiDesignDraft): { selection: Bind
       selections.set(selectionKey(target), target)
     }
   }
-  // 仅有固定条件时也要恢复数据库表选择，避免重新打开工作台时丢失来源。
-  for (const condition of draft.databaseConditions || []) {
+  // 仅有查询条件时也要恢复数据库表选择。
+  for (const condition of draft.databaseQuery?.items.flatMap((item) => item.kind === 'group' ? item.items : [item]) || []) {
     if (condition.sourceType !== 'database') continue
     const target: BindingSelection = {
       sourceType: 'database', sourceId: condition.sourceId, schema: condition.schema, table: condition.table
     }
+    selections.set(selectionKey(target), target)
+  }
+  for (const write of draft.databaseWrites || []) {
+    if (write.sourceType !== 'database' || !write.sourceId || !write.schema || !write.table) continue
+    const target: BindingSelection = {
+      sourceType: 'database', sourceId: write.sourceId, schema: write.schema, table: write.table
+    }
+    selections.set(selectionKey(target), target)
+  }
+  for (const item of draft.externalApiFixedValues || []) {
+    const field = item.externalField
+    if (field.sourceType !== 'external_api' || !field.sourceId || !field.directoryId || !field.operationId) continue
+    const target: BindingSelection = { sourceType: 'external_api', sourceId: field.sourceId, directoryId: field.directoryId, operationId: field.operationId }
     selections.set(selectionKey(target), target)
   }
   return { selection: selections.size === 1 ? [...selections.values()][0] : null, complex: complex || selections.size > 1 }
@@ -96,7 +91,7 @@ export function tableIsSelected(selection: BindingSelection, tables: SelectedDat
 export function mappingCandidates(field: WorkflowApiField, selection: BindingSelection,
   metadata: ApiDesignDatabaseMetadata | ApiDesignExternalOperationMetadata): WorkflowApiSourceField[] {
   if (selection.sourceType === 'database') return ((metadata as ApiDesignDatabaseMetadata).columns || []).map((column) => ({
-    ...selection, column: column.name, type: column.type, description: column.description, usage: defaultDatabaseUsageForOperation(field), filterOperator: field.side === 'request' && field.location !== 'request_body' ? 'eq' : undefined
+    ...selection, column: column.name, type: column.type, description: column.description, usage: defaultDatabaseUsageForOperation(field)
   }))
   return ((metadata as ApiDesignExternalOperationMetadata).fields || [])
     .filter((item) => field.side === 'response' ? item.section === 'response_body' : item.section !== 'response_body')

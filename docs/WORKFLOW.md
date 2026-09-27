@@ -276,11 +276,11 @@ API 契约在此阶段作为前后端共享事实生成。每个 Endpoint 保存
 
 ### 独立字段映射与 `api_design_readiness_gate`
 
-当前数据库表映射使用 `endpoint-field-mapping.v4` 的单一 CRUD 操作：HTTP 方法只用于首次默认值，用户可在确认前调整；请求字段按操作进入查询条件或写入字段，update 可切换用途，响应字段始终作为读取字段。查询字段携带类型感知 `filterOperator`；固定 `databaseConditions` 表示无 API 右值且始终生效的条件，按数据库列类型保存运算符及可选固定 `value`。v3 或缺少这些数据库契约字段的正式映射直接标记为 stale，不迁移、不兼容读取。
+当前数据库表映射使用 `endpoint-field-mapping.v6`：新增和修改时先从当前数据表选择写入目标列，再选择接口参数或固定值；接口参数必须是当前 Endpoint 请求字段且类型兼容。写入值保存在 `databaseWrites`。外部 API 请求参数同样按“值来源 / 参数”配置，提供接口参数、固定值和禁用的内置参数；接口参数选择当前 Endpoint 请求参数，固定值保存到 `externalApiFixedValues` 并在调用外部 API 时传入请求。非必填外部请求参数可在当前编辑界面临时删除；删除项本身不写入草稿或正式产物，关联的字段映射和固定值会清除。响应与外部来源映射保存在 `fieldMappings`。用户手动新增查询条件，先选实时数据库列，再选运算符、右值来源及接口参数或固定值；内置参数为禁用占位。查询树 `databaseQuery: { join, items }` 允许顶层和一层子组分别选择 AND/OR，重复使用列和接口参数，生成时保持括号语义并参数化。`is_null/is_not_null` 不保存右值。read 可无条件，update/delete 要求有效条件，create 不允许条件。未使用请求参数保留在 Endpoint 契约，响应字段必须完整配置。旧正式产物显示“需重新配置”，旧草稿不加载。
 
-字段映射编辑使用独立 `/endpoint-designs/run` AG-UI `prepare/save`，不进入主 LangGraph。数据源目录、数据库表列和外部 Operation Schema 通过独立的 `/data-sources/*` AG-UI 动作按需查询。Request 映射方向为 Endpoint → 真实来源，Response 映射方向为真实来源 → Endpoint；`source_mapping` 使用 `sourceFields` 和 `processingType` 表示直接映射、单字段业务处理或多字段业务处理，纯业务控制字段使用 `business_description`。
+字段映射编辑使用独立 `/endpoint-designs/run` AG-UI `prepare/save`，不进入主 LangGraph。数据源目录、数据库表列和外部 Operation Schema 通过独立的 `/data-sources/*` AG-UI 动作按需查询。外部 Request 映射方向为 Endpoint → 真实来源；外部请求字段也可选择固定值，保存在 `externalApiFixedValues`，内置参数暂为禁用占位。Response 映射方向为真实来源 → Endpoint；新增与修改的数据库请求写入单独使用 `databaseWrites`，先选数据表目标列，再选接口参数或固定值。`fieldMappings` 中的 `source_mapping` 使用 `sourceFields` 和 `processingType` 表示直接映射、单字段业务处理或多字段业务处理，纯业务控制字段使用 `business_description`。
 
-保存后原子写入 `.devagentstudio/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`，但不自动启动开发。JSON 保存 TechnicalPlan 契约指纹、自包含字段映射、CRUD/运算符/固定条件、处理描述和脱敏来源快照；正式字段映射只能是 `source_mapping` 或 `business_description`。v3 产物或缺少当前数据库契约字段的映射直接标记为 stale，不做迁移或兼容读取。TechnicalPlan 改变导致指纹不匹配时状态为“需重新设计”。
+保存后原子写入 `.devagentstudio/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`，但不自动启动开发。正式 JSON 使用 `endpoint-field-mapping.v6` 保存 TechnicalPlan 指纹、`fieldMappings`、`databaseWrites`、`externalApiFixedValues`、可选 `databaseQuery` 条件树、处理描述和脱敏来源快照；Markdown 展示数据库写入列、外部 API 固定参数及其值来源，以及 AND/OR 括号关系。仅接受 v6；用户重新配置后可覆盖旧产物，不迁移、回填或双写。
 
 页面/API开发入口先进入确定性的 `api_design_readiness_gate`。页面从 `PageImplementationContract.requiredEndpointIds` 收集全部 Endpoint，一次性返回目标范围内的完整状态；只要存在 Endpoint，首次进入就展示已完成、待配置和已失效项，API 只检查并展示所选 Endpoint。进入门禁时不自动打开字段映射工作台；用户点击具体条目后才定位右侧工作台，保存后在当前会话内标记为“已配置，待检测”，可继续配置其他 Endpoint。用户点击门禁“确认并检测”后统一复检；全部有效便直接进入 `inspect_workspace`，不再生成 `api_design_confirmation` 或聚合映射确认卡片。无 Endpoint 依赖的页面直接通过。
 

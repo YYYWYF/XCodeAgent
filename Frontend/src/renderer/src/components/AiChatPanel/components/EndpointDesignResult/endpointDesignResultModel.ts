@@ -11,7 +11,6 @@ export type EndpointDesignResultRow = {
   dataSourceType: string
   dataSource: string
   mappingField: string
-  filterOperator: string
   description: string
 }
 
@@ -19,6 +18,14 @@ export type EndpointDesignResultGroup = {
   location: string
   label: string
   rows: EndpointDesignResultRow[]
+}
+
+export type EndpointDatabaseWriteRow = {
+  key: string
+  target: string
+  valueSource: string
+  value: string
+  type: string
 }
 
 /** 将来源字段转换为用户可读的具体定位标签。 */
@@ -141,10 +148,6 @@ export function projectEndpointDesignRows(
       const sources = Array.isArray(mapping.sourceFields) ? mapping.sourceFields : []
       const dataSource = sources.map((item) => sourceDataSourceLabel(item, detail?.design)).filter(Boolean).join('\n')
       const mappingField = sources.map(sourceMappingFieldLabel).filter(Boolean).join('\n')
-      const filterOperator = sources
-        .map((item) => item && typeof item === 'object' ? String((item as Record<string, unknown>).filterOperator || '') : '')
-        .filter(Boolean)
-        .join('\n')
       const sourceType = [...new Set(sources.map(sourceTypeLabel))].join(' / ')
       const description = String(mapping.businessDescription || '')
       return {
@@ -162,7 +165,6 @@ export function projectEndpointDesignRows(
         dataSourceType: sourceType,
         dataSource,
         mappingField,
-        filterOperator,
         description
       }
     })
@@ -188,4 +190,33 @@ export function endpointDesignSummary(detail: EndpointDesignDetail | undefined):
   const requestCount = projectEndpointDesignRows(detail, 'request').length
   const responseCount = projectEndpointDesignRows(detail, 'response').length
   return { requestCount, responseCount, totalCount: requestCount + responseCount }
+}
+
+/** 将独立数据库写入配置转换成结果视图中的目标列和值来源。 */
+export function projectDatabaseWriteRows(detail: EndpointDesignDetail | undefined): EndpointDatabaseWriteRow[] {
+  const writes = detail?.design?.databaseWrites
+  if (!Array.isArray(writes)) return []
+  return writes
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+    .map((write, index) => {
+      const right = write.right && typeof write.right === 'object' ? write.right as Record<string, unknown> : {}
+      const field = right.endpointField && typeof right.endpointField === 'object' ? right.endpointField as Record<string, unknown> : {}
+      const valueSource = right.kind === 'endpoint'
+        ? '接口参数'
+        : right.kind === 'fixed'
+          ? '固定值'
+          : '未配置'
+      const value = right.kind === 'endpoint'
+        ? `${endpointLocationDisplayLabel(field.location)} · ${String(field.path || '')}`
+        : right.kind === 'fixed'
+          ? Array.isArray(right.value) ? right.value.join('，') : String(right.value ?? '')
+          : ''
+      return {
+        key: `database-write-${index}-${String(write.table || '')}-${String(write.column || '')}`,
+        target: [write.schema, write.table, write.column].filter(Boolean).join('.'),
+        valueSource,
+        value,
+        type: String(write.type || 'unknown')
+      }
+    })
 }

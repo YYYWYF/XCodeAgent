@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { WORKSPACE_ARTIFACT_DIR_NAME } from './branding'
 
 export const PRODUCT_PLAN_SCHEMA_VERSION = 'product-plan.v5'
-export const ENDPOINT_API_DESIGN_SCHEMA_VERSION = 'endpoint-field-mapping.v4'
+export const ENDPOINT_API_DESIGN_SCHEMA_VERSION = 'endpoint-field-mapping.v6'
 
 /** 把 endpoint 业务标识转换为与规划产物约定一致的安全文件名。 */
 function endpointDocumentStem(apiContractId: string, endpointId: string): string {
@@ -61,7 +61,7 @@ function statusTypeFamily(value: unknown): string {
   return normalized || 'unknown'
 }
 
-/** 严格判断固定数据库条件的运算符和值是否符合当前列类型。 */
+/** 严格判断查询条件右值是否符合当前列类型。 */
 function statusDatabaseConditionCompatible(item: Record<string, unknown>): boolean {
   const operator = String(item.operator || '')
   const family = statusTypeFamily(item.type)
@@ -69,24 +69,31 @@ function statusDatabaseConditionCompatible(item: Record<string, unknown>): boole
   if (family === 'number' || family === 'temporal') ['gt', 'gte', 'lt', 'lte', 'between', 'not_between', 'in', 'not_in'].forEach((value) => allowed.add(value))
   if (family === 'string') ['contains', 'not_contains', 'starts_with', 'ends_with', 'in', 'not_in'].forEach((value) => allowed.add(value))
   if (!allowed.has(operator)) return false
-  const hasValue = Object.prototype.hasOwnProperty.call(item, 'value')
-  if (operator === 'is_null' || operator === 'is_not_null') return !hasValue
-  if (!hasValue || item.value === null || item.value === undefined) return false
+  const right = item.right && typeof item.right === 'object' && !Array.isArray(item.right) ? item.right as Record<string, unknown> : null
+  if (operator === 'is_null' || operator === 'is_not_null') return !right
+  if (!right) return false
+  if (right.kind === 'endpoint') {
+    const field = right.endpointField && typeof right.endpointField === 'object' ? right.endpointField as Record<string, unknown> : null
+    return Boolean(field?.path && field.side === 'request' && statusOperatorCompatible(operator, field.type, item.type))
+  }
+  if (right.kind !== 'fixed') return false
+  const value = right.value
+  if (value === null || value === undefined) return false
   const scalarValid = (value: unknown): boolean => {
     if (family === 'number') return typeof value === 'number' && Number.isFinite(value)
     if (family === 'boolean') return typeof value === 'boolean'
     if (family === 'string' || family === 'temporal') return typeof value === 'string' && value.trim().length > 0
     return !Array.isArray(value) && typeof value !== 'object'
   }
-  if (operator === 'in' || operator === 'not_in') return Array.isArray(item.value) && item.value.length > 0 && item.value.every(scalarValid)
+  if (operator === 'in' || operator === 'not_in') return Array.isArray(value) && value.length > 0 && value.every(scalarValid)
   if (operator === 'between' || operator === 'not_between') {
-    if (!Array.isArray(item.value) || item.value.length !== 2 || !item.value.every(scalarValid)) return false
-    return family === 'number' ? Number(item.value[0]) <= Number(item.value[1]) : String(item.value[0]) <= String(item.value[1])
+    if (!Array.isArray(value) || value.length !== 2 || !value.every(scalarValid)) return false
+    return family === 'number' ? Number(value[0]) <= Number(value[1]) : String(value[0]) <= String(value[1])
   }
-  return scalarValid(item.value)
+  return scalarValid(value)
 }
 
-/** 严格判断 v4 查询运算符与 Endpoint/数据库列类型是否匹配。 */
+/** 判断接口参数与数据库查询运算符是否匹配。 */
 function statusOperatorCompatible(operator: string, endpointType: unknown, sourceType: unknown): boolean {
   const endpointFamily = statusTypeFamily(endpointType)
   const sourceFamily = statusTypeFamily(sourceType)
@@ -109,19 +116,57 @@ function endpointFieldMappingsMatchCurrentContract(design: Record<string, unknow
       : null
 
   const mappings = Array.isArray(design.fieldMappings) ? design.fieldMappings : []
-  if (mappings.length === 0) return false
+  const writes = Array.isArray(design.databaseWrites) ? design.databaseWrites : null
+  if (!writes) return false
+  if ('databaseConditions' in design) return false
   const operation = String(design.databaseOperation || '')
-  const conditions = Array.isArray(design.databaseConditions) ? design.databaseConditions : []
-  const databaseColumns = new Set<string>()
+  const query = record(design.databaseQuery)
+  const queryItems = query?.items
+  if (design.databaseQuery !== undefined && (!query || !['and', 'or'].includes(String(query.join)) || !Array.isArray(queryItems) || !queryItems.length)) return false
+  const conditions: Record<string, unknown>[] = []
+  if (Array.isArray(queryItems)) for (const rawItem of queryItems) {
+    const item = record(rawItem)
+    if (!item) return false
+    if (item.kind === 'condition') conditions.push(item)
+    else if (item.kind === 'group' && ['and', 'or'].includes(String(item.join)) && Array.isArray(item.items) && item.items.length) {
+      for (const rawChild of item.items) {
+        const child = record(rawChild)
+        if (!child || child.kind !== 'condition') return false
+        conditions.push(child)
+      }
+    } else return false
+  }
   let hasDatabaseSource = false
-  let filterCount = 0
-  let writeCount = 0
+  const writeTargets = new Set<string>()
+  const writeTables = new Set<string>()
+  for (const rawWrite of writes) {
+    const write = record(rawWrite)
+    const right = record(write?.right)
+    if (!write || write.sourceType !== 'database' || !write.sourceId || !write.schema || !write.table || !write.column || !write.type || !right) return false
+    const target = JSON.stringify([write.sourceId, write.schema, write.table, write.column])
+    if (writeTargets.has(target)) return false
+    writeTargets.add(target)
+    writeTables.add(JSON.stringify([write.sourceId, write.schema, write.table]))
+    if (right.kind === 'endpoint') {
+      const field = record(right.endpointField)
+      if (!field || field.side !== 'request' || !field.location || !field.path || !field.type ||
+        !['path', 'query', 'header', 'request_body'].includes(String(field.location))) return false
+      const endpointType = statusTypeFamily(field.type)
+      const columnType = statusTypeFamily(write.type)
+      if (endpointType !== 'unknown' && columnType !== 'unknown' && endpointType !== columnType && !(endpointType === 'string' && columnType === 'temporal')) return false
+    } else if (right.kind === 'fixed') {
+      const value = right.value
+      if (value === null || value === undefined || Array.isArray(value) || typeof value === 'object') return false
+      const family = statusTypeFamily(write.type)
+      if (family === 'number' && (typeof value !== 'number' || !Number.isFinite(value))) return false
+      if (family === 'boolean' && typeof value !== 'boolean') return false
+      if ((family === 'string' || family === 'temporal') && (typeof value !== 'string' || !value.trim())) return false
+    } else return false
+  }
+  if (writeTables.size > 1) return false
   for (const condition of conditions) {
     const item = record(condition)
-    if (!item || item.sourceType !== 'database' || !item.sourceId || !item.schema || !item.table || !item.column || !statusDatabaseConditionCompatible(item)) return false
-    const key = `${item.sourceId}:${item.schema}:${item.table}:${item.column}`
-    if (databaseColumns.has(key)) return false
-    databaseColumns.add(key)
+    if (item.sourceType !== 'database' || !item.sourceId || !item.schema || !item.table || !item.column || !statusDatabaseConditionCompatible(item)) return false
   }
   const keys = new Set<string>()
   for (const item of mappings) {
@@ -156,24 +201,16 @@ function endpointFieldMappingsMatchCurrentContract(design: Record<string, unknow
     for (const rawSource of sources) {
       const sourceField = record(rawSource)
       if (!sourceField || !['database', 'external_api'].includes(String(sourceField.sourceType || ''))) return false
-      const fields = sourceField.sourceType === 'database' ? ['sourceType', 'sourceId', 'schema', 'table', 'column', 'usage', 'filterOperator'] : ['sourceType', 'sourceId', 'directoryId', 'operationId', 'section', 'path']
+      const fields = sourceField.sourceType === 'database' ? ['sourceType', 'sourceId', 'schema', 'table', 'column', 'usage'] : ['sourceType', 'sourceId', 'directoryId', 'operationId', 'section', 'path']
       const sourceKey = JSON.stringify(fields.map((field) => sourceField[field]))
       if (sourceKeys.has(sourceKey)) return false
       sourceKeys.add(sourceKey)
       if (sourceField.sourceType === 'database') {
+        if ('filterOperator' in sourceField) return false
         if (!String(sourceField.sourceId || '') || !String(sourceField.schema || '') ||
           !String(sourceField.table || '') || !String(sourceField.column || '')) return false
         const usage = String(sourceField.usage || '')
-        const filterOperator = sourceField.filterOperator
-        if (endpoint.side === 'request' && operation === 'create' && usage !== 'write') return false
-        if (endpoint.side === 'request' && (operation === 'read' || operation === 'delete') && usage !== 'filter') return false
-        if (endpoint.side === 'request' && operation === 'update' && !['filter', 'write'].includes(usage)) return false
-        if (usage === 'filter' && !['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'not_contains', 'starts_with', 'ends_with', 'in', 'not_in', 'between', 'not_between'].includes(String(filterOperator))) return false
-        if (usage === 'filter' && !statusOperatorCompatible(String(filterOperator), endpoint.type, sourceField.type)) return false
-        if (usage !== 'filter' && filterOperator !== undefined) return false
-        if (endpoint.side === 'request' && !['filter', 'write'].includes(usage)) return false
-        if (usage === 'filter') filterCount += 1
-        if (usage === 'write') writeCount += 1
+        if (endpoint.side === 'request') return false
         if (endpoint.side === 'response' && usage !== 'read') return false
         hasDatabaseSource = true
       } else {
@@ -185,12 +222,17 @@ function endpointFieldMappingsMatchCurrentContract(design: Record<string, unknow
       }
     }
   }
-  if ((databaseColumns.size > 0 || hasDatabaseSource) && !['create', 'read', 'update', 'delete'].includes(operation)) return false
+  if (writes.length && !['create', 'update'].includes(operation)) return false
+  if ((operation === 'create' || operation === 'update') && writes.length === 0) return false
+  if (operation === 'update' && writeTables.size && conditions.length) {
+    const queryTables = new Set(conditions.map((item) => JSON.stringify([item.sourceId, item.schema, item.table])))
+    if (queryTables.size !== 1 || !queryTables.has([...writeTables][0])) return false
+  }
+  if ((conditions.length > 0 || hasDatabaseSource) && !['create', 'read', 'update', 'delete'].includes(operation)) return false
   if (operation === 'create' && conditions.length > 0) return false
-  if (operation === 'create' && writeCount === 0) return false
-  if (operation === 'update' && (filterCount + conditions.length === 0 || writeCount === 0)) return false
-  if (operation === 'delete' && filterCount + conditions.length === 0) return false
-  if (!databaseColumns.size && !hasDatabaseSource && operation) return false
+  if (operation === 'update' && (conditions.length === 0 || writes.length === 0)) return false
+  if (operation === 'delete' && conditions.length === 0) return false
+  if (!conditions.length && !hasDatabaseSource && !writes.length && operation) return false
   return true
 }
 
@@ -234,6 +276,9 @@ export async function endpointDesignDocumentStatus(
     }
     const markdownRevision = markdown.match(/devagentstudio-artifact-revision:\s*([0-9a-f]{32})/)?.[1] || ''
     const design = JSON.parse(jsonText) as Record<string, unknown>
+    if (design.schemaVersion !== ENDPOINT_API_DESIGN_SCHEMA_VERSION) {
+      return { designed: false, status: 'stale', reason: 'API 设计需重新配置。' }
+    }
     const basedOn = Array.isArray(design.basedOn)
       ? design.basedOn.filter((item): item is Record<string, unknown> =>
           Boolean(item && typeof item === 'object')

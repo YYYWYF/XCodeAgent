@@ -83,7 +83,7 @@ def endpoint_source_types(
     endpoint_designs: Any,
     endpoints: Mapping,
 ) -> dict[tuple[str, str], frozenset[str]]:
-    """从完整 Endpoint API Design 的 fieldMappings 派生每个 Endpoint 的物理来源集合。"""
+    """从完整 Endpoint API Design 的映射、写入和查询派生每个 Endpoint 的物理来源集合。"""
 
     designs: dict[tuple[str, str], Mapping[str, Any]] = {}
     if not isinstance(endpoint_designs, (list, tuple)):
@@ -160,11 +160,54 @@ def endpoint_source_types(
                         f"Endpoint {key[0]}/{key[1]} 含不受支持的 sourceType：{source_type!r}。",
                     )
                 source_types.add(source_type)
-        for condition in (design.get("databaseConditions", []) if isinstance(design.get("databaseConditions", []), (list, tuple)) else []):
-            if not isinstance(condition, Mapping) or condition.get("sourceType") != "database":
+        database_writes = design.get("databaseWrites")
+        if not isinstance(database_writes, (list, tuple)):
+            fail_requirement_input(
+                "FORMAL_GENERATION_INPUT_INVALID",
+                f"Endpoint {key[0]}/{key[1]} 的 databaseWrites 必须为数组。",
+            )
+        for write in database_writes:
+            if not isinstance(write, Mapping):
                 fail_requirement_input(
                     "FORMAL_GENERATION_INPUT_INVALID",
-                    f"Endpoint {key[0]}/{key[1]} 的 databaseConditions 项无效。",
+                    f"Endpoint {key[0]}/{key[1]} 的 databaseWrites 项必须为对象。",
+                )
+            source_type = write.get("sourceType")
+            if not isinstance(source_type, str) or source_type != "database":
+                fail_requirement_input(
+                    "GENERATION_ENDPOINT_SOURCE_TYPE_INVALID",
+                    f"Endpoint {key[0]}/{key[1]} 含不受支持的 databaseWrites.sourceType：{source_type!r}。",
+                )
+            source_types.add(source_type)
+        external_fixed_values = design.get("externalApiFixedValues", [])
+        if not isinstance(external_fixed_values, (list, tuple)):
+            fail_requirement_input(
+                "FORMAL_GENERATION_INPUT_INVALID",
+                f"Endpoint {key[0]}/{key[1]} 的 externalApiFixedValues 必须为数组。",
+            )
+        for item in external_fixed_values:
+            if not isinstance(item, Mapping):
+                fail_requirement_input(
+                    "FORMAL_GENERATION_INPUT_INVALID",
+                    f"Endpoint {key[0]}/{key[1]} 的 externalApiFixedValues 项必须为对象。",
+                )
+            external_field = item.get("externalField")
+            if not isinstance(external_field, Mapping) or external_field.get("sourceType") != "external_api":
+                fail_requirement_input(
+                    "GENERATION_ENDPOINT_SOURCE_TYPE_INVALID",
+                    f"Endpoint {key[0]}/{key[1]} 的外部 API 固定值缺少 external_api 字段来源。",
+                )
+            source_types.add("external_api")
+        query = design.get("databaseQuery")
+        if query is not None:
+            from app.services.api_design import _parse_database_query
+            from app.services.planning_frozen import plain_json
+            try:
+                _parse_database_query(plain_json(query))
+            except ValueError:
+                fail_requirement_input(
+                    "FORMAL_GENERATION_INPUT_INVALID",
+                    f"Endpoint {key[0]}/{key[1]} 的 databaseQuery 条件树无效。",
                 )
             source_types.add("database")
         result[key] = frozenset(source_types)

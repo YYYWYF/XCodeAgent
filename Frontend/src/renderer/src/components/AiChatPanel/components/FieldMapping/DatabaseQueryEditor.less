@@ -1,0 +1,89 @@
+.database-query-editor {
+  --database-query-columns: minmax(120px, 1.08fr) 120px 120px minmax(150px, .95fr) 34px;
+  --database-query-rail: var(--wb-accent);
+  --database-query-root-fill: color-mix(in srgb, var(--wb-accent) 2%, var(--wb-canvas));
+  --database-query-group-fill: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-canvas));
+  min-width: 0;
+  container: database-query-editor / inline-size;
+  color: var(--wb-text);
+
+  .database-query-toolbar, .database-query-group-toolbar {
+    display: flex; min-width: 0; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px;
+  }
+  .database-query-satisfy, .database-query-actions { display: inline-flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .database-query-satisfy { color: var(--wb-text-secondary); font-size: 12px; white-space: nowrap;
+    strong { color: var(--wb-text); font-weight: 600; }
+  }
+  .database-query-actions { justify-content: flex-end;
+    .ant-btn { min-height: 32px; padding-inline: 11px; border-color: var(--wb-border-strong); border-radius: 6px; background: var(--wb-canvas); color: var(--wb-accent); box-shadow: none; }
+    .ant-btn:not(:disabled):hover, .ant-btn:not(:disabled):focus-visible { border-color: var(--wb-accent-border); background: var(--wb-surface-hover); color: var(--wb-accent-hover); }
+  }
+  .database-query-join { width: 158px; }
+  .database-query-scope { min-width: 0; padding: 10px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--database-query-root-fill); }
+  .database-query-empty { display: flex; min-height: 62px; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 10px 12px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--wb-canvas); }
+  .database-query-list, .database-query-group-list { width: 100%; min-width: 0; overflow: auto hidden; border: 0; border-radius: 8px; background: transparent; }
+  .database-query-head, .database-query-row { display: grid; grid-template-columns: var(--database-query-columns); gap: 9px; align-items: center; min-width: 780px; margin-inline: 8px; padding: 8px 10px; }
+  .database-query-head { min-height: 34px; background: transparent; color: var(--wb-text-secondary); font-size: 11px; font-weight: 600;
+    > span { min-width: 0; }
+  }
+  .database-query-row { min-height: 58px; border: 1px solid var(--wb-border); border-radius: 0; background: var(--wb-canvas); transition: background-color .15s ease;
+    > .ant-select, > .ant-input { width: 100%; min-width: 0; }
+    > .ant-btn { justify-self: center; }
+    &:hover { background: color-mix(in srgb, var(--wb-surface-hover) 45%, var(--wb-canvas)); }
+  }
+  // 同一层的条件行共用边线，圆角只留在连续行的外侧。
+  .database-query-row + .database-query-row { border-top: 0; }
+  .database-query-head + .database-query-row { border-radius: 7px 7px 0 0; }
+  .database-query-row:not(:has(+ .database-query-row)) { border-radius: 0 0 7px 7px; }
+  .database-query-head + .database-query-row:not(:has(+ .database-query-row)) { border-radius: 7px; }
+  .database-query-column-cell, .database-query-parameter-cell { display: grid; min-width: 0; gap: 3px;
+    > .ant-select, > .ant-input { width: 100%; min-width: 0; }
+  }
+  .database-query-readonly-field { display: block; min-width: 0;
+    > span { display: block; overflow: hidden; color: var(--wb-text); font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+  }
+  .database-query-source-cell { min-width: 0; }
+  .database-query-source-select { width: 100%; min-width: 0; }
+  .database-query-source-label { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border)); border-radius: 999px; background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-canvas)); color: var(--wb-accent); font-size: 11px; font-weight: 600; line-height: 1; }
+  .database-query-parameter-cell > span { min-width: 0; overflow: hidden; color: var(--wb-text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+  .database-query-parameter-summary { display: flex; align-items: center; gap: 6px; }
+  .database-query-parameter-location { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--wb-border); border-radius: 4px; background: var(--wb-surface-hover); color: var(--wb-text-secondary); font-size: 10px; font-weight: 600; line-height: 1.2; }
+  .database-query-parameter-value { min-width: 0; overflow: hidden; color: var(--wb-text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+  .database-query-no-value { grid-column: 3 / 5; color: var(--wb-text-tertiary); font-size: 12px; }
+
+  // 首个条件组及其后的顶层条件卡片共用主干，第一条普通条件保持独立。
+  .database-query-connected-item { position: relative; min-width: 780px; margin: 0 10px 0 18px; padding: 10px 0 10px 14px;
+    &::before { position: absolute; top: 0; bottom: 0; left: 0; border-left: 2px solid var(--database-query-rail); content: ''; }
+    &::after { position: absolute; top: 35px; left: 0; width: 15px; border-top: 2px solid var(--database-query-rail); content: ''; }
+    &.is-first-node::before { top: 10px; }
+    &.is-last-node::before { bottom: calc(100% - 37px); }
+  }
+  .database-query-group-card { min-width: 0; padding: 10px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--database-query-group-fill); }
+  .database-query-condition-card > .database-query-group-list > .database-query-row { border-radius: 7px; }
+  .database-query-group-toolbar { margin-bottom: 8px; }
+  .database-query-group-list { background: transparent; }
+  .database-query-group-empty { padding: 13px 10px; border: 1px dashed var(--wb-border-strong); border-radius: 7px; background: var(--wb-canvas); color: var(--wb-text-tertiary); font-size: 12px; text-align: center; }
+  .database-query-delete-group.ant-btn { display: inline-flex; width: 34px; min-width: 34px; height: 34px; min-height: 34px; align-items: center; justify-content: center; padding: 0; border-color: transparent; background: transparent; color: var(--wb-code-delete-text); font-size: 18px;
+    .anticon { font-size: 18px; }
+    &:not(:disabled):hover, &:not(:disabled):focus-visible { border-color: transparent; background: color-mix(in srgb, var(--wb-code-delete-text) 8%, var(--wb-canvas)); color: var(--wb-code-delete-text); }
+  }
+  .database-mapping-error { display: block; margin-top: 8px; color: var(--wb-code-delete-text); }
+  .ant-select-selector, .ant-radio-button-wrapper, .ant-input { border-color: var(--wb-border-strong); background: var(--wb-canvas); color: var(--wb-text); }
+  .ant-select:not(.ant-select-disabled):hover .ant-select-selector, .ant-select-focused:not(.ant-select-disabled) .ant-select-selector, .ant-input:not(:disabled):hover, .ant-input:focus { border-color: var(--wb-accent-border); }
+}
+
+@container database-query-editor (max-width: 700px) {
+  .database-query-editor .database-query-list, .database-query-editor .database-query-group-list { overflow: hidden; }
+  .database-query-editor .database-query-head { display: none; }
+  .database-query-editor .database-query-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 30px; min-width: 0; gap: 8px; padding: 9px;
+    > .database-query-column-cell { grid-column: 1; }
+    > .ant-select { grid-column: 2; }
+    > .database-query-source-cell { grid-column: 1; }
+    > .database-query-parameter-cell { grid-column: 2; }
+    > .database-query-no-value { grid-column: 1 / 3; }
+    > .ant-btn { grid-column: 3; grid-row: 1; }
+  }
+  .database-query-editor .database-query-connected-item { min-width: 0; margin-left: 10px; padding-left: 10px;
+    &::after { width: 11px; }
+  }
+}

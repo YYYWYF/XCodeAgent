@@ -68,6 +68,37 @@ class EndpointDesignDocumentsTests(unittest.TestCase):
             self.assertIsNone(read_endpoint_design(workspace, "orders-api", "orders.list"))
             self.assertEqual(endpoint_design_status(workspace, "orders-api", "orders.list")["status"], "stale")
 
+    def test_v4_artifact_requires_reconfiguration(self) -> None:
+        """旧正式版本只报告需重新配置，不能被当前读取器接受。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_technical_plan(workspace, {"artifact_type": "technical-plan"})
+            paths = write_endpoint_design(workspace, _design(workspace))
+            json_path = Path(paths["json_path"])
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+            payload["schemaVersion"] = "endpoint-field-mapping.v4"
+            json_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            self.assertIsNone(read_endpoint_design(workspace, "orders-api", "orders.list"))
+            self.assertEqual(endpoint_design_status(workspace, "orders-api", "orders.list")["reason"], "API 设计需重新配置。")
+
+    def test_query_markdown_preserves_group_parentheses(self) -> None:
+        """正式 Markdown 展示混合 AND/OR 分组及接口参数与固定右值。"""
+
+        field = {"side": "request", "location": "query", "path": "id", "type": "integer", "required": True, "description": ""}
+        leaf = {"kind": "condition", "sourceType": "database", "sourceId": "db", "schema": "app",
+                "table": "orders", "column": "id", "type": "integer", "operator": "eq",
+                "right": {"kind": "endpoint", "endpointField": field}}
+        query = {"join": "and", "items": [
+            {"kind": "group", "join": "or", "items": [leaf, {**leaf, "column": "parent_id"}]},
+            {**leaf, "column": "deleted_at", "operator": "is_null", "right": None},
+        ]}
+        markdown = render_endpoint_design_markdown({"apiContractId": "orders-api", "endpointId": "orders.list",
+                                                    "databaseOperation": "read", "databaseQuery": query})
+        self.assertIn("OR", markdown)
+        self.assertIn("AND", markdown)
+        self.assertIn("接口参数", markdown)
+        self.assertIn("deleted_at", markdown)
+
     def test_removed_scene_entity_shape_is_not_current_design(self) -> None:
         """已移除的场景实体字段不能被当前 Pydantic 产物模型读取。"""
 
