@@ -1,7 +1,7 @@
 import { confirmWorkspaceAction } from '../../../workspaceDialogs'
 import { ApiOutlined, CaretDownOutlined, DownOutlined, EditOutlined, FolderOpenOutlined, NodeIndexOutlined, UpOutlined } from '@ant-design/icons'
 import { Alert, Button, Empty, Radio, Select, Space, Spin, Tag, Tooltip } from 'antd'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { DevelopmentPlanningApiContract, EndpointDesignSaveResult } from '../../../../typings'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
@@ -14,6 +14,7 @@ import ExternalMapping from './ExternalMapping'
 import DatabaseMapping from './DatabaseMapping'
 import { mappingCandidates, resetDraftForDatabaseOperation, selectionKey, tableIsSelected } from './model'
 import { useBindingWorkspace } from './useBindingWorkspace'
+import { RuleEditingContext } from './RuleEditor'
 import './index.less'
 
 type Props = {
@@ -26,6 +27,9 @@ type Props = {
 export default function FieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onSaved }: Props): ReactElement {
   const state = useBindingWorkspace(workspaceRoot, target, onSaved)
   const { entry, catalog, tables, metadata, busy, loading, error, metadataLoading } = state
+  const [editingRules, setEditingRules] = useState(0)
+  /** 汇总尚未应用的规则编辑器，防止确认旧值。 */
+  const trackRuleEditing = useCallback((delta: number) => setEditingRules((count) => count + delta), [])
   const [kind, setKind] = useState<'database' | 'external_api'>()
   const [sourceChanging, setSourceChanging] = useState(false)
   const [pendingSelection, setPendingSelection] = useState<BindingSelection | null>(null)
@@ -40,10 +44,9 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   const missingFields = Boolean(entry && selection && metadata && fields.some((field) => {
     const mapping = entry.value.draft.fieldMappings.find((item) => apiDesignFieldKey(item.endpointField) === apiDesignFieldKey(field))
     if (mapping?.mappingType !== 'source_mapping') return false
-    const source = mapping.sourceFields[0]
-    return source.sourceType === 'database' && !mappingCandidates(field, selection, metadata).some((candidate) =>
+    return mapping.sourceFields.some((source) => source.sourceType === 'database' && !mappingCandidates(field, selection, metadata).some((candidate) =>
       candidate.sourceType === 'database' && candidate.sourceId === source.sourceId && candidate.schema === source.schema
-      && candidate.table === source.table && candidate.column === source.column && candidate.type === source.type)
+      && candidate.table === source.table && candidate.column === source.column && candidate.type === source.type))
   }))
   const missingQueryColumns = Boolean(selection?.sourceType === 'database' && metadata && 'columns' in metadata && entry?.value.draft.databaseQuery?.items.some((item) =>
     (item.kind === 'group' ? item.items : [item]).some((condition) => {
@@ -54,13 +57,11 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
     })))
   const missingRequiredExternal = Boolean(entry && selection?.sourceType === 'external_api' && metadata && (metadata as { fields?: Array<{ section: string; path: string; required?: boolean }> }).fields?.some((field) => {
     if (!field.required || field.section === 'response_body') return false
-    const parameterMapped = entry.value.draft.fieldMappings.some((mapping) => mapping.mappingType === 'source_mapping' && mapping.sourceFields.length === 1 && mapping.sourceFields[0].sourceType === 'external_api' && mapping.sourceFields[0].section === field.section && mapping.sourceFields[0].path === field.path)
-    const fixedValue = entry.value.draft.externalApiFixedValues?.find((item) => item.externalField.section === field.section && item.externalField.path === field.path)?.value
-    return !parameterMapped && (fixedValue === undefined || fixedValue === null || fixedValue === '')
+    return !entry.value.draft.externalApiBindings?.some((item) => item.externalField.section === field.section && item.externalField.path === field.path && item.right)
   }))
   const editable = Boolean(entry && !entry.readOnly && !entry.complex && !entry.conflict)
-    const withoutSource = fields.length === 0 && !selection && entry?.value.draft.fieldMappings.length === 0 && !entry?.value.draft.externalApiFixedValues?.length
-  const canConfirm = editable && (!validationVisible || !Object.keys(validationErrors).length)
+    const withoutSource = fields.length === 0 && !selection && entry?.value.draft.fieldMappings.length === 0 && !entry?.value.draft.externalApiBindings?.length
+  const canConfirm = editable && editingRules === 0 && (!validationVisible || !Object.keys(validationErrors).length)
     && (withoutSource || fields.length > 0 && Boolean(selection && metadata) && !metadataLoading && !unavailableTable && !missingFields && !missingQueryColumns && !missingRequiredExternal)
   const databaseSelection = selection?.sourceType === 'database' ? selection : undefined
 
@@ -88,9 +89,9 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
       setSourceChanging(false)
       setPendingSelection(null)
       setValidationVisible(false)
-      state.edit({ ...entry.value.draft, databaseOperation: next?.sourceType === 'database' ? defaultDatabaseOperation(String(entry.preparation.payload.endpoint.method || '')) : undefined, databaseQuery: undefined, databaseWrites: [], externalApiFixedValues: [], fieldMappings: fields.map(createUnconfiguredFieldMapping) }, next)
+      state.edit({ ...entry.value.draft, sourceBinding: next || undefined, databaseOperation: next?.sourceType === 'database' ? defaultDatabaseOperation(String(entry.preparation.payload.endpoint.method || '')) : undefined, databaseQuery: undefined, databaseWrites: [], externalApiBindings: [], fieldMappings: fields.map(createUnconfiguredFieldMapping) }, next)
     }
-    if (entry.value.draft.fieldMappings.some((item) => item.mappingType !== 'unconfigured') || Boolean(entry.value.draft.databaseQuery?.items.length) || Boolean(entry.value.draft.databaseWrites?.length) || Boolean(entry.value.draft.externalApiFixedValues?.length)) confirmWorkspaceAction({ title: '更换数据来源？', content: '当前字段映射、写入字段、外部接口固定值和数据库查询条件将清空，已保存的正式映射在重新确认前不变。', okText: '更换并清空', cancelText: '取消', onOk: apply })
+    if (entry.value.draft.fieldMappings.some((item) => item.mappingType !== 'unconfigured') || Boolean(entry.value.draft.databaseQuery?.items.length) || Boolean(entry.value.draft.databaseWrites?.length) || Boolean(entry.value.draft.externalApiBindings?.length)) confirmWorkspaceAction({ title: '更换数据来源？', content: '当前字段映射、写入字段、外部接口取值规则和数据库查询条件将清空，已保存的正式映射在重新确认前不变。', okText: '更换并清空', cancelText: '取消', onOk: apply })
     else apply()
   }
 
@@ -139,7 +140,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   const pendingSelectionChanged = Boolean(sourceChanging && pendingSelection && selectionKey(pendingSelection) !== selectionKey(selection))
   const displayedSelection = sourceChanging ? pendingSelection : selection
 
-  return <div className="binding-workspace">
+  return <RuleEditingContext.Provider value={trackRuleEditing}><div className="binding-workspace">
     <nav className="binding-directory" aria-label="应用 API"><h4>应用 API</h4>{contracts.map((contract) => <section className="binding-contract" key={contract.id}>
       <div className="binding-contract-heading"><CaretDownOutlined /><FolderOpenOutlined /><strong>{contract.name || '未命名接口分组'}</strong></div>
       <div className="binding-endpoint-list">{contract.endpoints.map((endpoint) => {
@@ -151,7 +152,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
       {!target ? <Empty description="请选择应用 API" /> : loading && !entry ? <Spin tip="正在读取 API 契约…" /> : null}
       {error ? <Alert type="error" showIcon message={error} action={<Space><Button onClick={state.refreshSources}>重试</Button>{entry && <Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃草稿并重新加载？', content: '未确认的修改将被清除，正式映射不变。', okText: '放弃并加载', cancelText: '继续编辑', onOk: state.discard })}>重新加载</Button>}</Space>} /> : null}
       {entry && <>
-        <header className="binding-heading"><div className="binding-heading-copy"><span className="binding-heading-contract">{activeContractName}</span><strong className="binding-heading-name">{activeEndpointName}</strong><div className="binding-heading-endpoint"><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{activeEndpointPath}</code></div></div><Space className="binding-heading-actions">{entry.readOnly ? <Button className="binding-edit-button" icon={<EditOutlined />} onClick={() => state.update({ ...entry, readOnly: false })}>修改映射</Button> : !entry.complex ? <><Button className="binding-stash-button" loading={busy} disabled={entry.conflict} onClick={() => void state.save(false)}>暂存</Button><Button className="binding-confirm-button" type="primary" loading={busy} disabled={!canConfirm} onClick={confirmMapping}>保存并确认</Button></> : null}</Space></header>
+        <header className="binding-heading"><div className="binding-heading-copy"><span className="binding-heading-contract">{activeContractName}</span><strong className="binding-heading-name">{activeEndpointName}</strong><div className="binding-heading-endpoint"><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{activeEndpointPath}</code></div></div><Space className="binding-heading-actions">{entry.readOnly ? <Button className="binding-edit-button" icon={<EditOutlined />} onClick={() => state.update({ ...entry, readOnly: false })}>修改映射</Button> : !entry.complex ? <><Button className="binding-stash-button" loading={busy} disabled={entry.conflict || editingRules > 0} onClick={() => void state.save(false)}>暂存</Button><Button className="binding-confirm-button" type="primary" loading={busy} disabled={!canConfirm} onClick={confirmMapping}>保存并确认</Button></> : null}</Space></header>
         {entry.conflict ? <Alert type="warning" message="草稿基于的契约或正式映射已变化，当前草稿已保留。" description="请核对当前内容后，明确放弃旧草稿并重新加载。" action={<Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃旧草稿并重新加载？', okText: '放弃并加载', cancelText: '保留草稿', onOk: state.discard })}>重新加载</Button>} /> : null}
         {entry.complex ? <Alert type="info" message="当前接口包含复杂映射，继续使用原有编辑能力。" action={<Button onClick={() => setAdvanced(true)}>打开完整编辑器</Button>} /> : <>
           {entry.readOnly && selection && <section className="binding-section database-source-section">
@@ -160,12 +161,12 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
               <div><Tag>{selection.sourceType === 'database' ? '数据表' : '外部 API'}</Tag><strong>{sourceLabel}</strong></div>
             </div></div>
           </section>}
-          {!entry.readOnly && <section className={`binding-section database-source-section${sourceCollapsed ? ' is-collapsed' : ''}${kind === 'external_api' ? ' is-external-api-source' : ''}`}>
+          {!entry.readOnly && <section className={`binding-section database-source-section${sourceCollapsed ? ' is-collapsed' : ''}`}>
             <div className="database-section-heading">
               <div className="database-section-title is-card"><h4>数据来源</h4></div>
               <Button className="database-section-toggle" type="text" aria-expanded={!sourceCollapsed} aria-label={`${sourceCollapsed ? '展开' : '收起'}数据来源`} icon={sourceCollapsed ? <DownOutlined /> : <UpOutlined />} onClick={() => setSourceCollapsed((collapsed) => !collapsed)} />
             </div>
-            {!sourceCollapsed ? <div className={`database-section-content${kind === 'external_api' ? ' is-external-api-source' : ''}`}>
+            {!sourceCollapsed ? <div className="database-section-content">
               {selection && !sourceChanging ? <div className="database-source-summary">
                 <div><Tag>{selection.sourceType === 'database' ? '数据表' : '外部 API'}</Tag><strong>{sourceLabel}</strong></div>
                 <Button disabled={busy || entry.conflict} onClick={beginSourceChange}>更换数据源</Button>
@@ -182,11 +183,11 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
               {missingQueryColumns ? <Alert type="warning" message="查询条件中的数据库列已失效，请重新选择当前数据表中的列。" /> : null}
             </div> : null}
           </section>}
-          {selection && <Spin spinning={metadataLoading}>{selection.sourceType === 'external_api' && metadata && 'fields' in metadata ? <ExternalMapping busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} onChange={(draft) => state.edit(draft)} selection={selection} /> : databaseSelection && metadata && 'columns' in metadata ? <DatabaseMapping busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} operation={entry.value.draft.databaseOperation} selection={databaseSelection} onChange={(draft) => state.edit(draft)} onOperationChange={(operation) => confirmWorkspaceAction({ title: '切换数据库操作？', content: '切到新增会清空查询条件；切到查询或删除会清除写入映射。', okText: '切换并更新', cancelText: '取消', onOk: () => state.edit(resetDraftForDatabaseOperation(entry.value.draft, operation)) })} /> : null}</Spin>}
+          {selection && <Spin spinning={metadataLoading}>{selection.sourceType === 'external_api' && metadata && 'fields' in metadata ? <ExternalMapping key={`${state.key}:${selectionKey(selection)}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} onChange={(draft) => state.edit(draft)} selection={selection} /> : databaseSelection && metadata && 'columns' in metadata ? <DatabaseMapping key={`${state.key}:${selectionKey(selection)}:${entry.value.draft.databaseOperation}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} operation={entry.value.draft.databaseOperation} selection={databaseSelection} onChange={(draft) => state.edit(draft)} onOperationChange={(operation) => confirmWorkspaceAction({ title: '切换数据库操作？', content: '切到新增会清空查询条件；切到查询或删除会清除写入映射。', okText: '切换并更新', cancelText: '取消', onOk: () => state.edit(resetDraftForDatabaseOperation(entry.value.draft, operation)) })} /> : null}</Spin>}
           {entry.readOnly && <p className="binding-readonly"><NodeIndexOutlined /> 映射已确认</p>}
         </>}
       </>}
     </main>
     <ApiDesignConfigModal open={advanced} target={target} workspaceRoot={workspaceRoot} onClose={() => setAdvanced(false)} onSaved={async (current, result) => { await onSaved(current, result); state.reload() }} />
-  </div>
+  </div></RuleEditingContext.Provider>
 }

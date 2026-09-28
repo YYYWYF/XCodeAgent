@@ -532,7 +532,7 @@ export type WorkflowApiDatabaseCondition = {
   column: string
   type: string
   operator: WorkflowApiDatabaseConditionOperator
-  right?: { kind: 'endpoint'; endpointField: WorkflowApiEndpointFieldSnapshot } | { kind: 'fixed'; value: unknown }
+  right?: WorkflowApiValueRight
   description?: string
 }
 
@@ -550,13 +550,13 @@ export type WorkflowApiDatabaseWriteDraft = {
   column: string
   type: string
   description?: string
-  right?: { kind: 'endpoint'; endpointField?: WorkflowApiEndpointFieldSnapshot } | { kind: 'fixed'; value?: unknown }
+  right?: WorkflowApiValueRight
 }
 
 /** 已确认的数据库写入列及其请求参数或固定值。 */
 export type WorkflowApiDatabaseWrite = Omit<WorkflowApiDatabaseWriteDraft, 'right'> & {
   column: string
-  right: { kind: 'endpoint'; endpointField: WorkflowApiEndpointFieldSnapshot } | { kind: 'fixed'; value: unknown }
+  right: WorkflowApiValueRight
 }
 
 /** API 设计中的直属 MySQL Source Field 节点。 */
@@ -588,10 +588,28 @@ export type WorkflowApiExternalFieldNode = {
 }
 
 /** 外部 API 请求参数使用的固定值草稿。 */
-export type WorkflowApiExternalApiFixedValueDraft = {
+export type WorkflowApiExternalApiBindingDraft = {
   externalField: Omit<WorkflowApiExternalFieldNode, 'id' | 'nodeType'>
-  value?: unknown
+  right?: WorkflowApiValueRight
 }
+
+/** 调用前可用的内置上下文，不包含尚未返回的数据源响应。 */
+export type WorkflowApiBuiltinField = 'current_user_id' | 'current_time'
+
+/** 用户确认后交给代码生成实现的结构化依赖和自然语言规则。 */
+export type WorkflowApiBusinessValue = {
+  kind: 'business'
+  origin: 'endpoint' | 'builtin' | 'business'
+  endpointFields: WorkflowApiEndpointFieldSnapshot[]
+  builtinFields: WorkflowApiBuiltinField[]
+  businessDescription: string
+  missingBehavior: 'error' | 'omit' | 'default'
+  defaultValue?: unknown
+}
+
+/** 查询、写入、外部入参与业务返回值共用的取值契约。 */
+export type WorkflowApiValueRight = { kind: 'endpoint'; endpointField?: WorkflowApiEndpointFieldSnapshot }
+  | { kind: 'fixed'; value?: unknown } | WorkflowApiBusinessValue
 
 /** 外部 API 请求参数中被用户删除的非必填字段。 */
 export type WorkflowApiSourceField =
@@ -610,8 +628,16 @@ export type WorkflowApiFieldMapping = {
   businessDescription: string
 } | {
   endpointField: WorkflowApiEndpointFieldSnapshot
+  mappingType: 'value_mapping'
+  right: WorkflowApiValueRight
+} | {
+  endpointField: WorkflowApiEndpointFieldSnapshot
   mappingType: 'source_mapping'
   sourceFields: WorkflowApiSourceField[]
+  endpointFields?: WorkflowApiEndpointFieldSnapshot[]
+  builtinFields?: WorkflowApiBuiltinField[]
+  missingBehavior?: 'error' | 'omit' | 'default'
+  defaultValue?: unknown
 } & ({ processingType: 'direct'; businessDescription?: never } | {
   processingType: 'single_field_description' | 'multi_field_description'
   businessDescription: string
@@ -625,7 +651,8 @@ export type WorkflowApiDesignDraft = {
   implementationDescription?: string
   databaseOperation?: WorkflowApiDatabaseOperation
   databaseWrites?: WorkflowApiDatabaseWriteDraft[]
-  externalApiFixedValues?: WorkflowApiExternalApiFixedValueDraft[]
+  sourceBinding?: import('./endpointDesign').BindingSelection
+  externalApiBindings?: WorkflowApiExternalApiBindingDraft[]
   databaseQuery?: WorkflowApiDatabaseQuery
   fieldMappings: WorkflowApiFieldMapping[]
 }

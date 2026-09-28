@@ -775,12 +775,12 @@ def _operation_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
             for source in mapping_sources(mapping)
         ]
         database_writes = _database_write_expectations(design)
-        external_api_fixed_values = [
+        external_api_bindings = [
             {
                 "field": _dict_value(item.get("externalField")),
-                "value": item.get("value"),
+                "right": item.get("right"),
             }
-            for item in _dict_items(design.get("externalApiFixedValues"))
+            for item in _dict_items(design.get("externalApiBindings"))
         ]
         database_fields = [
             field for field in source_fields if field.get("sourceType") == "database"
@@ -799,7 +799,7 @@ def _operation_expectations(formal: dict[str, Any]) -> list[dict[str, Any]]:
                 "transaction_required": operation_kind in {"create", "update", "delete"}
                 and bool(database_writes),
                 "database_writes": database_writes,
-                "external_api_fixed_values": external_api_fixed_values,
+                "external_api_bindings": external_api_bindings,
                 "zero_match_behavior": "confirmed_processing_logic",
                 "multiple_match_behavior": "confirmed_processing_logic",
                 "success_status_code": endpoint.get("successStatusCode"),
@@ -916,6 +916,7 @@ def _database_write_expectations(design: dict[str, Any]) -> list[dict[str, Any]]
                 "column": _text(write.get("column")),
                 "type": _text(write.get("type"), "unknown"),
                 "value_source": _text(right.get("kind")),
+                "value_rule": right,
                 "endpoint_parameter": (
                     {
                         "side": _text(endpoint_field.get("side")),
@@ -956,24 +957,30 @@ def _external_operations_from_field_mappings(
         if item.get("sourceType") == "external_api"
     }
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    # 无入参且返回值由业务生成时，显式绑定仍代表需要验收的上游操作。
+    binding = _dict_value(design.get("sourceBinding"))
+    if binding.get("sourceType") == "external_api":
+        key = (_text(binding.get("sourceId")), _text(binding.get("directoryId")), _text(binding.get("operationId")))
+        if all(key):
+            groups.setdefault(key, [])
     for mapping in mappings:
         for source_field in mapping_sources(mapping):
             if source_field.get("sourceType") != "external_api":
                 continue
             key = (_text(source_field.get("sourceId")), _text(source_field.get("directoryId")), _text(source_field.get("operationId")))
             groups.setdefault(key, []).append({**mapping, "selected_source": source_field})
-    fixed_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
-    for item in _dict_items(design.get("externalApiFixedValues")):
+    binding_groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for item in _dict_items(design.get("externalApiBindings")):
         source_field = _dict_value(item.get("externalField"))
         key = (_text(source_field.get("sourceId")), _text(source_field.get("directoryId")), _text(source_field.get("operationId")))
         if all(key):
-            fixed_groups.setdefault(key, []).append({"selected_source": source_field, "value": item.get("value")})
-    for key, items in fixed_groups.items():
+            binding_groups.setdefault(key, []).append({"selected_source": source_field, "right": item.get("right")})
+    for key, items in binding_groups.items():
         groups.setdefault(key, [])
     result: list[dict[str, Any]] = []
     for (source_id, directory_id, operation_id), grouped_mappings in groups.items():
         snapshot = _dict_value(snapshots.get((source_id, directory_id, operation_id)))
-        fixed_items = fixed_groups.get((source_id, directory_id, operation_id), [])
+        binding_items = binding_groups.get((source_id, directory_id, operation_id), [])
         details = _dict_value(snapshot.get("details"))
         operation = _dict_value(details.get("operation"))
         connection = _dict_value(details.get("connection"))
@@ -1021,17 +1028,17 @@ def _external_operations_from_field_mappings(
                     }
                     for mapping in grouped_mappings
                 ],
-                "request_fixed_values": [
+                "request_value_bindings": [
                     {
                         "section": _text(_dict_value(item.get("selected_source")).get("section")),
                         "field": _text(_dict_value(item.get("selected_source")).get("path")),
                         "type": _text(_dict_value(item.get("selected_source")).get("type"), "unknown"),
-                        "value": item.get("value"),
+                        "right": item.get("right"),
                     }
-                    for item in fixed_items
+                    for item in binding_items
                 ],
                 "business_descriptions": [mapping_business_description(mapping) for mapping in grouped_mappings if mapping_business_description(mapping)],
-                "source_dependencies": [mapping["selected_source"] for mapping in grouped_mappings] + [item["selected_source"] for item in fixed_items],
+                "source_dependencies": [mapping["selected_source"] for mapping in grouped_mappings] + [item["selected_source"] for item in binding_items],
             }
         )
     return result
@@ -1065,8 +1072,9 @@ def _external_designs(formal: dict[str, Any]) -> list[dict[str, Any]]:
             if mapping.get("mappingType") == "source_mapping"
             and any(source.get("sourceType") == "external_api" for source in mapping_sources(mapping))
         ]
-        fixed_values = _dict_items(design.get("externalApiFixedValues"))
-        if not direct_mappings and not fixed_values:
+        value_bindings = _dict_items(design.get("externalApiBindings"))
+        binding = _dict_value(design.get("sourceBinding"))
+        if not direct_mappings and not value_bindings and binding.get("sourceType") != "external_api":
             continue
         contract_id = _text(design.get("apiContractId"))
         endpoint_id = _text(design.get("endpointId"))

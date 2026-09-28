@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.services.unit_generation_contracts import UnitGenerationContext
+from app.agents.field_value_prompt_rules import FIELD_VALUE_PLANNING_RULES
 
 
 _ENDPOINT_STAGE_BY_KIND = {
@@ -301,12 +302,12 @@ def _service_rules() -> tuple[str, ...]:
     """定义统一 service 对字段映射、组合和业务说明的职责边界。"""
 
     return (
-        "The service Task is the sole owner of Endpoint fieldMappings, databaseWrites, and externalApiFixedValues, multi-source "
-        "composition, businessDescriptions, request binding, database write-value binding, business processing, and final "
-        "endpoint response transformation. It may coordinate the repository and upstream "
-        "branches present in the manifest, but must not create a separate mapping Task, "
-        "bind confirmed externalApiFixedValues into upstream request fields as parameters, expose upstream transport types through the internal API, or implement Controller "
-        "routing.",
+        "The service Task is the sole owner of Endpoint fieldMappings, databaseQuery value rules, "
+        "databaseWrites, externalApiBindings, business processing, and final response composition. "
+        "Coordinate only repository/upstream branches present in the manifest and pass confirmed "
+        "externalApiBindings values to external request targets. Follow field-value planning rules for "
+        "typed boundaries and execution phases. Do not add a standalone mapping Task, expose upstream "
+        "transport types through the internal API, or implement Controller routing.",
         "Whenever implementation of a confirmed business failure branch requires "
         "`throw new BizException(...)`, also plan the concrete module-level "
         "`domain/exception/<Module>ErrorCode.java` enum implementing `IBizErrorCode`. "
@@ -355,6 +356,7 @@ def resolve_backend_unit_task_rules(
         raise ValueError(f"Backend Endpoint Unit {context.unit_id} 的 upstream 缺少 external_api 来源。")
     rules = [
         *_backend_common_rules(),
+        *FIELD_VALUE_PLANNING_RULES,
         *_endpoint_topology_rules(context, manifest),
     ]
     if "objects" in stages:

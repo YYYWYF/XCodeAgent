@@ -103,6 +103,9 @@ def endpoint_api_design_source_types(
     """从冻结 Endpoint API Design 的映射、写入和查询派生物理数据源类型。"""
 
     source_types: set[str] = set()
+    binding = contract.content.get("sourceBinding")
+    if isinstance(binding, Mapping) and binding.get("sourceType") in {"database", "external_api"}:
+        source_types.add(binding["sourceType"])
     for mapping in manifest_sequence(
         contract.content.get("fieldMappings"),
         "Endpoint API Design.fieldMappings",
@@ -144,24 +147,24 @@ def endpoint_api_design_source_types(
                 exact_manifest_id(source_type, "Endpoint API Design.databaseWrites.sourceType")
             )
     for item in manifest_sequence(
-        contract.content.get("externalApiFixedValues", []),
-        "Endpoint API Design.externalApiFixedValues",
+        contract.content.get("externalApiBindings", []),
+        "Endpoint API Design.externalApiBindings",
     ):
         if not isinstance(item, Mapping):
             raise ContractCatalogBindingError(
-                "Endpoint API Design.externalApiFixedValues 项必须为对象。"
+                "Endpoint API Design.externalApiBindings 项必须为对象。"
             )
         external_field = item.get("externalField")
         if not isinstance(external_field, Mapping):
             raise ContractCatalogBindingError(
-                "Endpoint API Design.externalApiFixedValues.externalField 必须为对象。"
+                "Endpoint API Design.externalApiBindings.externalField 必须为对象。"
             )
         source_type = external_field.get("sourceType")
         if source_type is not None:
             source_types.add(
                 exact_manifest_id(
                     source_type,
-                    "Endpoint API Design.externalApiFixedValues.externalField.sourceType",
+                    "Endpoint API Design.externalApiBindings.externalField.sourceType",
                 )
             )
     query = contract.content.get("databaseQuery")

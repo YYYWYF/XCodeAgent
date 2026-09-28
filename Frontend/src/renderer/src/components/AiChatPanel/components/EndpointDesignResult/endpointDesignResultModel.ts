@@ -1,3 +1,5 @@
+import { valueSummary } from '../FieldMapping/valueRules'
+import type { WorkflowApiValueRight } from '../../../../typings'
 import type { EndpointDesignDetail } from '../../../../typings'
 
 export type EndpointDesignResultRow = {
@@ -149,7 +151,7 @@ export function projectEndpointDesignRows(
       const dataSource = sources.map((item) => sourceDataSourceLabel(item, detail?.design)).filter(Boolean).join('\n')
       const mappingField = sources.map(sourceMappingFieldLabel).filter(Boolean).join('\n')
       const sourceType = [...new Set(sources.map(sourceTypeLabel))].join(' / ')
-      const description = String(mapping.businessDescription || '')
+      const description = mappingType === 'value_mapping' ? valueSummary(mapping.right as WorkflowApiValueRight) : String(mapping.businessDescription || '')
       return {
         key: `${side}-${index}-${endpointLabel(endpoint)}`,
         endpoint: endpointLabel(endpoint),
@@ -157,7 +159,7 @@ export function projectEndpointDesignRows(
         locationLabel: endpointLocationDisplayLabel(endpoint.location),
         locationGroupLabel: endpointLocationLabel(endpoint.location),
         type: String(endpoint.type || 'unknown'),
-        mapping: mappingType === 'business_description'
+        mapping: mappingType === 'value_mapping' ? '业务取值' : mappingType === 'business_description'
           ? '业务说明'
           : mappingType === 'source_mapping'
             ? ({ direct: '直接映射', single_field_description: '单字段业务处理', multi_field_description: '多字段业务处理' } as Record<string, string>)[String(mapping.processingType)]
@@ -205,12 +207,12 @@ export function projectDatabaseWriteRows(detail: EndpointDesignDetail | undefine
         ? '接口参数'
         : right.kind === 'fixed'
           ? '固定值'
-          : '未配置'
+          : right.kind === 'business' ? '业务处理' : '未配置'
       const value = right.kind === 'endpoint'
         ? `${endpointLocationDisplayLabel(field.location)} · ${String(field.path || '')}`
         : right.kind === 'fixed'
           ? Array.isArray(right.value) ? right.value.join('，') : String(right.value ?? '')
-          : ''
+          : right.kind === 'business' ? valueSummary(right as WorkflowApiValueRight) : ''
       return {
         key: `database-write-${index}-${String(write.table || '')}-${String(write.column || '')}`,
         target: [write.schema, write.table, write.column].filter(Boolean).join('.'),
@@ -219,4 +221,12 @@ export function projectDatabaseWriteRows(detail: EndpointDesignDetail | undefine
         type: String(write.type || 'unknown')
       }
     })
+}
+
+/** 将外部请求目标的取值规则投影为独立结果行。 */
+export function projectExternalBindingRows(detail: EndpointDesignDetail | undefined): EndpointDatabaseWriteRow[] {
+  const bindings = detail?.design?.externalApiBindings
+  if (!Array.isArray(bindings)) return []
+  return bindings.map((item, index) => ({ key: `external-${index}`, target: sourceLabel(item.externalField, detail?.design), type: item.externalField.type,
+    valueSource: item.right?.kind === 'business' ? '业务处理' : item.right?.kind === 'fixed' ? '固定值' : '接口参数', value: valueSummary(item.right) }))
 }

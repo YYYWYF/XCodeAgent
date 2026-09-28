@@ -165,7 +165,7 @@ def write_confirmed_endpoint_designs(
                     "usage": "read",
                 }
             design = EndpointApiDesign.model_validate({
-                "schemaVersion": "endpoint-field-mapping.v6",
+                "schemaVersion": "endpoint-field-mapping.v7",
                 "artifactType": "endpoint-field-mapping",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",

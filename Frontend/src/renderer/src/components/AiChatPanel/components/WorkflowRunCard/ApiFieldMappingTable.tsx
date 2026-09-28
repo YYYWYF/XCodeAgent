@@ -1,3 +1,5 @@
+import { valueSummary } from '../FieldMapping/valueRules'
+import ValueRuleEditor from '../FieldMapping/ValueRuleEditor'
 import { Button, Drawer, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useMemo, useState } from 'react'
@@ -14,7 +16,7 @@ import {
 } from './apiDesignTableModel'
 import ApiFieldMappingEditor from './ApiFieldMappingEditor'
 import { apiFieldLocationLabel } from './apiDesignTableModel'
-import { createUnconfiguredFieldMapping, findFieldMapping, replaceFieldMapping } from './apiDesignSerialization'
+import { endpointFieldSnapshot, createUnconfiguredFieldMapping, findFieldMapping, replaceFieldMapping } from './apiDesignSerialization'
 import './ApiDesignPanel.less'
 import type { ApiSourceMetadataAction, ApiSourceMetadataContext, ApiSourceMetadataRequestState } from './apiSourceSelectorModel'
 
@@ -71,6 +73,8 @@ export default function ApiFieldMappingTable({
           ? [source.schema, source.table, source.column].filter(Boolean).join('.')
           : [source.directoryId, source.operationId, source.section, source.path].join(' / ')
       }).join('\n')
+    } else if (mapping?.mappingType === 'value_mapping') {
+      value = column === 'description' ? valueSummary(mapping.right) : ''
     } else if (mapping?.mappingType === 'business_description' && column === 'description') {
       value = mapping.businessDescription
     }
@@ -81,7 +85,7 @@ export default function ApiFieldMappingTable({
 
   /** 按已保存的映射类型展示模式名称，编辑入口统一放在右侧操作列。 */
   const renderModeCell = (row: ApiFieldMappingRow): ReactElement => {
-    const labels = { unconfigured: '未配置', source_mapping: '数据源字段映射', business_description: '业务说明' }
+    const labels = { unconfigured: '未配置', source_mapping: '数据源字段映射', business_description: '业务说明', value_mapping: '业务取值' }
     const mapping = findFieldMapping(draft, row.field)
     const label = mapping?.mappingType === 'source_mapping' ? ({ direct: '直接映射', single_field_description: '单字段业务处理', multi_field_description: '多字段业务处理' })[mapping.processingType] : labels[row.mode]
     return <Text type={row.mode === 'unconfigured' ? 'secondary' : undefined}>{label}</Text>
@@ -141,7 +145,11 @@ export default function ApiFieldMappingTable({
       destroyOnClose onClose={closeMappingEditor} open={Boolean(mappingEndpoint)}
       title={mappingEndpoint ? `配置 ${mappingEndpoint.path} 的字段映射` : '配置字段映射'} width={680}
     >
-      {mappingEndpoint ? <ApiFieldMappingEditor
+      {mappingEndpoint && findFieldMapping(draft, mappingEndpoint)?.mappingType === 'value_mapping' ? <ValueRuleEditor
+        title={mappingEndpoint.path} fields={payload.endpointFields} type={mappingEndpoint.type} readOnly={false} disabled={Boolean(disabled)}
+        right={(() => { const mapping = findFieldMapping(draft, mappingEndpoint); return mapping?.mappingType === 'value_mapping' ? mapping.right : undefined })()}
+        onChange={(right) => { if (right) onDraftChange(replaceFieldMapping(draft, { endpointField: endpointFieldSnapshot(mappingEndpoint), mappingType: 'value_mapping', right })) }}
+      /> : mappingEndpoint ? <ApiFieldMappingEditor
         endpoint={mappingEndpoint}
         initialMode={(() => {
           const mode = rows.find((row) => row.field.id === mappingEndpoint.id)?.mode

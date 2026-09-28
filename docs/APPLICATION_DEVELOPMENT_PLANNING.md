@@ -8,7 +8,7 @@ Workbench 读取 `.devagentstudio/plans/technical-plan.json`，以 ProductPlan `
 
 页面视觉、组件、交互入口和状态呈现以已确认 React UI 稿为权威；UI 阶段被跳过时依据 ProductPlan、TechnicalPlan 和模板技能实现。`PageImplementationContract` 仍由 ProductPlan、UiManifest 和 TechnicalPlan 在运行时确定性编译，不写入独立页面详设。
 
-独立 API 映射配置只补充某个 Endpoint 的自包含字段映射，不修改 TechnicalPlan 的方法、路径、参数或 Schema。当前正式契约为 `endpoint-field-mapping.v6`：响应字段和外部来源映射保存在 `fieldMappings`；新增与修改的数据库写入字段单独保存在 `databaseWrites`，先从当前数据库表选择目标列，再选择接口参数或固定值，接口参数必须来自当前 Endpoint 的请求字段且类型兼容。新增与修改都使用同一写入配置；未使用参数仍保留在 Endpoint 契约。外部 API 请求参数也按“值来源 / 参数”配置，值来源包含接口参数、固定值和禁用的内置参数；固定值保存在 `externalApiFixedValues`，进入外部请求前按参数传递。非必填外部请求行可在当前编辑界面临时删除，删除项本身不作为草稿或正式字段保存，关联映射和值会清除。数据库操作使用 `databaseOperation`；查询由用户手动添加，先选择数据库列，再选择运算符及接口参数或固定值作为右值，`is_null/is_not_null` 无右值，内置参数暂为禁用占位。`databaseQuery: { join, items }` 保存顶层 AND/OR 及最多一层子组，允许重复列和参数，按括号语义生成参数化查询。无条件时省略该字段；read 可无条件，update/delete 必须有条件，create 不允许条件。`source_mapping` 继续内嵌 `sourceFields` 并使用 `processingType`；无真实来源字段可用 `business_description`。
+当前正式契约为 `endpoint-field-mapping.v7`，详见 [单数据源字段取值规则](FIELD_VALUE_RULES.md)。工作台沿用原有数据来源选择和更换入口，不新增数据表 / 外部 API 场景 Tab。`sourceBinding` 保存单表或单 Operation 身份；`databaseWrites`、`databaseQuery` 和 `externalApiBindings` 按目标保存统一 `right` 取值规则，支持接口参数、固定值、内置上下文和业务生成。业务加工显式保存依赖、自然语言规则、缺值策略和默认值；同一请求参数可以复用。响应的多字段加工保留 `source_mapping`，无数据源字段的返回取值使用 `value_mapping`，纯业务入参用途使用 `business_description`。规则在行内应用，正式保存仍须显式确认；草稿不推进开发。查询树保留顶层及一层子组 AND/OR，空值运算符不带右值，update/delete 不允许无条件执行。
 
 Endpoint 还可以填写可选的 `implementationDescription`，用于描述整个接口的实现思路，例如查询步骤、事务、缓存、异常处理或外部 API 编排。该描述会写入 Endpoint JSON/Markdown 并传给任务规划与后端代码生成，但不参与字段映射完整性判断，也不能改变 TechnicalPlan 契约或成为独立验收硬门禁。
 
@@ -35,7 +35,7 @@ Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。
 - 右侧“应用文件”之后提供常驻“字段映射”页签。目录按现有 API Contract/Endpoint 投影；读取契约→选择类型→选择对象→配置映射是前端交互步骤，不是新增 Workflow 节点。单个 Endpoint 选择一张表或一个外部接口，每字段只允许直接映射；数据库沿用行式选择，外部 API 的入参和出参分别用一个大箭头说明方向，再按目标字段逐行下拉选择来源，支持搜索和“仅看未配置”，不展示逐字段连线。不引入登录用户条件、表达式、常量、SQL 编辑或模拟调试；外部 Path/Query 的实时必填字段未配置时只能保存草稿，不能正式确认。无可映射字段的 Endpoint 可保存来源选择草稿，但不能确认来源绑定，避免正式产物丢失选择；未选择来源时，工作台可确认空字段映射；已选择来源的草稿需用户明确清除选择后才能确认无来源映射，不能提交时静默丢弃。该路径仍校验 TechnicalPlan 指纹与 baseRevision，后续沿用开发门禁。
 - “保存”只写中间草稿，允许未配置字段；“保存并确认”校验来源清单、单对象一致性、TechnicalPlan 指纹与正式 baseRevision，再调用原有确认服务。成功后清空草稿并展示常驻只读结果。两处确认按钮共用提交锁。编辑、保存和正式确认均不会自动推进开发或修改开发完成计数。
 - 对应数据库 JSON 的 `managedTables` 保存 source 所属的已添加表名和说明；表字段结构在数据源详情、绑定选择和正式确认时实时读取，不写入数据源。`.xcodeagent/binding-workspace` 仅保存 `draft-<复合身份 SHA256>.json` 草稿、selection、baseRevision、technicalPlanHash、savedAt；无凭据副本，不改变正式 Endpoint JSON/Markdown。连接设置更新保留最新表清单，模式、地址、端口、Schema 或 DBID 变化会清空清单；确认冲突保留输入，用户可明确放弃草稿重新加载。
-- 数据源与 Endpoint 的独立 AG-UI 动作继续负责元数据、暂存和确认。正式产物只接受 `endpoint-field-mapping.v6`；旧正式产物显示“需重新配置”，旧草稿不加载。用户从当前 Endpoint 契约重新配置后可覆盖旧产物，不做迁移、回填或双写。
+- 数据源与 Endpoint 的独立 AG-UI 动作继续负责元数据、暂存和确认。正式产物只接受 `endpoint-field-mapping.v7`；旧正式产物显示“需重新配置”，旧草稿不加载。用户从当前 Endpoint 契约重新配置后可覆盖旧产物，不做迁移、回填或双写。
 - 定向回归：`tests.test_binding_workspace`、Endpoint 详情/协议、数据源路由、API Design/readiness，覆盖外部必填字段缺失和重复来源。UI 静态检查使用 `pnpm typecheck:web`；本次按用户要求不执行前端测试、pnpm build、/health 或 Electron 验证，视觉与运行时验收未执行。
 
 ## Initial Development Completion and Test Entry

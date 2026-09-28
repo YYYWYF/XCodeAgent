@@ -144,7 +144,7 @@ def _save_endpoint_design_locked(request: EndpointDesignSaveRequest) -> dict[str
             "action": "confirm",
             "apiContractId": request.api_contract_id,
             "endpointId": request.endpoint_id,
-            "draft": request.draft,
+            "draft": {**request.draft, **({"sourceBinding": request.binding_selection.model_dump(by_alias=True, exclude_none=True)} if request.binding_selection is not None else {})},
         },
     )
     clear_binding_draft(workspace, request.api_contract_id, request.endpoint_id)

@@ -165,7 +165,7 @@ class BindingWorkspaceTests(unittest.TestCase):
         self.assertIsNotNone(read_binding_draft(self.root, "orders", "other"))
         confirmation.technical_plan_hash = self.hash
         result = save_endpoint_design(confirmation)
-        self.assertEqual(result["design"]["schemaVersion"], "endpoint-field-mapping.v6")
+        self.assertEqual(result["design"]["schemaVersion"], "endpoint-field-mapping.v7")
         self.assertEqual(result["design"]["confirmationStatus"], "confirmed")
         self.assertNotIn("selection", result["design"])
         self.assertEqual(result["design"]["fieldMappings"], [])
@@ -222,9 +222,11 @@ class BindingWorkspaceTests(unittest.TestCase):
         self.assertEqual(read_binding_draft(self.root, "orders", "list"), saved)
 
         source_field["section"] = "query"
+        request.draft["fieldMappings"] = []
+        request.draft["externalApiBindings"] = [{"externalField": source_field, "right": {"kind": "endpoint", "endpointField": field}}]
         confirmation.draft = request.draft
         result = save_endpoint_design(confirmation)
-        self.assertEqual(result["design"]["fieldMappings"][0]["sourceFields"][0]["section"], "query")
+        self.assertEqual(result["design"]["externalApiBindings"][0]["externalField"]["section"], "query")
         self.assertIsNone(read_binding_draft(self.root, "orders", "list"))
         self.assertEqual(source_references(self.root, "external", directory_id="directory", operation_id="operation"), ["orders/list"])
         request.base_revision = result["artifactRevision"]
@@ -240,13 +242,13 @@ class BindingWorkspaceTests(unittest.TestCase):
         selection = BindingTarget(sourceType="external_api", sourceId="external", directoryId="directory", operationId="operation")
         endpoint = {"side": "request", "location": "query", "path": "id", "type": "integer", "required": True}
         source = {**selection.model_dump(by_alias=True, exclude_none=True), "section": "query", "path": "other", "type": "integer"}
-        draft = {"fieldMappings": [{"endpointField": endpoint, "mappingType": "source_mapping", "processingType": "direct", "sourceFields": [source]}]}
-        with patch("app.services.api_design.load_external_operation", return_value={"fields": [{"section": "query", "path": "id", "required": True}, {"section": "query", "path": "other", "required": False}]}):
+        draft = {"fieldMappings": [], "externalApiBindings": [{"externalField": source, "right": {"kind": "endpoint", "endpointField": endpoint}}]}
+        with patch("app.services.api_design.load_external_operation", return_value={"fields": [{"section": "query", "path": "id", "type": "integer", "required": True}, {"section": "query", "path": "other", "type": "integer", "required": False}]}):
             with self.assertRaisesRegex(ValueError, "必填字段"):
                 validate_binding_selection(self.root, selection, draft)
             source["path"] = "id"
-            draft["fieldMappings"].append({"endpointField": {**endpoint, "path": "other"}, "mappingType": "source_mapping", "processingType": "direct", "sourceFields": [source]})
-            with self.assertRaisesRegex(ValueError, "不能绑定多个"):
+            draft["externalApiBindings"].append({"externalField": source, "right": {"kind": "endpoint", "endpointField": endpoint}})
+            with self.assertRaisesRegex(ValueError, "不能重复配置"):
                 validate_binding_selection(self.root, selection, draft)
 
     def test_new_actions_emit_complete_lifecycles(self):
@@ -267,6 +269,34 @@ class BindingWorkspaceTests(unittest.TestCase):
             for event in ["RUN_STARTED", "TEXT_MESSAGE_START", "TEXT_MESSAGE_END", "CUSTOM", "STATE_SNAPSHOT", "RUN_FINISHED"]:
                 self.assertIn(event, response.text)
             self.assertIn(f'"status":"{status}"', response.text)
+
+    def test_business_rule_confirm_reload_and_reconfirm(self):
+        """规则草稿不推进门禁，正式确认后可完整恢复并再次修订确认。"""
+        from app.services.api_design import initial_api_design_payload
+        write_sources(self.root, [{"id": "external", "type": "external_api", "name": "订单服务", "baseUrl": "https://example.com",
+            "directories": [{"id": "directory", "name": "订单", "operations": [{"id": "operation", "name": "查询订单", "method": "GET", "path": "/orders",
+            "queryParameters": [{"name": "offset", "type": "integer", "required": True}, {"name": "cursor", "type": "integer", "required": False}]}]}]}])
+        request = self.request()
+        request.selection = BindingTarget(sourceType="external_api", sourceId="external", directoryId="directory", operationId="operation")
+        field = request.draft["fieldMappings"][0]["endpointField"]
+        right = {"kind": "business", "origin": "endpoint", "endpointFields": [field], "builtinFields": [], "businessDescription": "将 id 减一作为偏移量。", "missingBehavior": "default", "defaultValue": 0}
+        request.draft["externalApiBindings"] = [{"externalField": {**request.selection.model_dump(by_alias=True, exclude_none=True), "section": "query", "path": path, "type": "integer"}, "right": right} for path in ("offset", "cursor")]
+        saved = save_binding_draft(request)
+        self.assertEqual(saved["draft"]["externalApiBindings"][0]["right"]["defaultValue"], 0)
+        plan = json.loads(self.plan.read_text(encoding="utf-8"))
+        self.assertFalse(api_design_readiness(self.root, plan, target_type="endpoint", target_id="list", api_contract_id="orders")["ready"])
+        confirmation = EndpointDesignSaveRequest(workspaceRoot=str(self.root), apiContractId="orders", endpointId="list", draft=request.draft, bindingSelection=request.selection, technicalPlanHash=self.hash)
+        first = save_endpoint_design(confirmation)
+        restored = initial_api_design_payload(self.root, plan, "orders", "list")["draft"]
+        self.assertEqual(restored["sourceBinding"], request.selection.model_dump(by_alias=True, exclude_none=True))
+        self.assertEqual(restored["externalApiBindings"][0]["right"]["businessDescription"], right["businessDescription"])
+        self.assertTrue(api_design_readiness(self.root, plan, target_type="endpoint", target_id="list", api_contract_id="orders")["ready"])
+        restored["externalApiBindings"][0]["right"]["businessDescription"] = "将 id 乘以 20 作为偏移量。"
+        confirmation.draft = restored
+        confirmation.base_revision = first["artifactRevision"]
+        second = save_endpoint_design(confirmation)
+        self.assertNotEqual(first["artifactRevision"], second["artifactRevision"])
+        self.assertIn("乘以 20", second["detail"]["markdown"])
 
 
 if __name__ == "__main__":

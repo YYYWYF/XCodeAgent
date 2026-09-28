@@ -178,7 +178,7 @@ def _endpoint_api_design() -> dict:
     api_id = {"side": "response", "location": "response_body", "path": "items[].id", "type": "string", "required": True, "description": ""}
     api_status = {"side": "response", "location": "response_body", "path": "items[].status", "type": "string", "required": True, "description": ""}
     return {
-        "schemaVersion": "endpoint-field-mapping.v6",
+        "schemaVersion": "endpoint-field-mapping.v7",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
@@ -306,6 +306,33 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
         operations = _external_operations_from_field_mappings(design, mappings, "orders-api", "orders.list", entity_payload=False)
         self.assertEqual([item["operation_id"] for item in operations], ["order-list"])
         self.assertEqual(operations[0]["field_mappings"][0]["endpoint_field"], "items[].status")
+
+    def test_external_source_binding_projects_operation_without_field_bindings(self) -> None:
+        """显式外部来源无入参映射时仍保留操作和连接，且与字段引用合并去重。"""
+        design = _endpoint_api_design()
+        design["sourceBinding"] = {"sourceType": "external_api", "sourceId": "orders-upstream", "directoryId": "orders-directory", "operationId": "order-list"}
+        design["externalApiBindings"] = []
+        physical_mappings = design["fieldMappings"]
+        design["fieldMappings"] = [{
+            "endpointField": {"side": "response", "location": "response_body", "path": "accepted", "type": "boolean", "required": True, "description": ""},
+            "mappingType": "value_mapping", "right": {"kind": "fixed", "value": True},
+        }]
+        operation = design["sourceSnapshots"][1]["details"]["operation"]
+        operation["queryParameters"] = []
+        projected = _external_designs({"endpoint_designs": [design]})
+        self.assertEqual(len(projected), 1)
+        operations = projected[0]["external_api_design"]["operations"]
+        self.assertEqual([item["operation_id"] for item in operations], ["order-list"])
+        self.assertEqual(operations[0]["api_info"]["path"], "/upstream/orders")
+        self.assertEqual(operations[0]["effective_connection"]["base_url"], "https://api.example.com")
+        self.assertEqual(operations[0]["request_value_bindings"], [])
+        self.assertEqual(operations[0]["field_mappings"], [])
+        self.assertEqual(operations[0]["endpoint_refs"], [{"api_contract_id": design["apiContractId"], "endpoint_id": design["endpointId"]}])
+        design["fieldMappings"] = physical_mappings
+        self.assertEqual(len(_external_designs({"endpoint_designs": [design]})[0]["external_api_design"]["operations"]), 1)
+        design["fieldMappings"] = []
+        design["sourceBinding"] = {"sourceType": "database", "sourceId": "db", "schema": "app", "table": "orders"}
+        self.assertEqual(_external_designs({"endpoint_designs": [design]}), [])
 
     def test_business_description_is_projected(self) -> None:
         """业务说明映射进入独立验收期望。"""

@@ -53,7 +53,7 @@ def _design(*source_types: str) -> dict:
             "businessDescription": "由当前 Endpoint 业务规则生成。",
         })
     return {
-        "schemaVersion": "endpoint-field-mapping.v6",
+        "schemaVersion": "endpoint-field-mapping.v7",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",

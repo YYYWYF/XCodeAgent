@@ -47,10 +47,11 @@ export function selectionKey(value?: BindingSelection | null): string {
 /** 从现有正式字段映射恢复单一来源，复杂映射由既有编辑器承担。 */
 export function inferSelection(draft: WorkflowApiDesignDraft): { selection: BindingSelection | null; complex: boolean } {
   const selections = new Map<string, BindingSelection>()
-  let complex = false
+  const complex = false
+  if (draft.sourceBinding) selections.set(selectionKey(draft.sourceBinding), draft.sourceBinding)
   for (const mapping of draft.fieldMappings) {
     if (mapping.mappingType === 'unconfigured') continue
-    if (mapping.mappingType !== 'source_mapping' || mapping.processingType !== 'direct' || mapping.sourceFields.length !== 1) { complex = true; continue }
+    if (mapping.mappingType !== 'source_mapping') continue
     for (const field of mapping.sourceFields) {
       const target: BindingSelection = field.sourceType === 'database'
         ? { sourceType: 'database', sourceId: field.sourceId, schema: field.schema || '', table: field.table }
@@ -73,7 +74,7 @@ export function inferSelection(draft: WorkflowApiDesignDraft): { selection: Bind
     }
     selections.set(selectionKey(target), target)
   }
-  for (const item of draft.externalApiFixedValues || []) {
+  for (const item of draft.externalApiBindings || []) {
     const field = item.externalField
     if (field.sourceType !== 'external_api' || !field.sourceId || !field.directoryId || !field.operationId) continue
     const target: BindingSelection = { sourceType: 'external_api', sourceId: field.sourceId, directoryId: field.directoryId, operationId: field.operationId }

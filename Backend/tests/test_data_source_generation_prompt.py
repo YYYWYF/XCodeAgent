@@ -98,7 +98,7 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
                 }],
             })
     return {
-        "schemaVersion": "endpoint-field-mapping.v6",
+        "schemaVersion": "endpoint-field-mapping.v7",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",
@@ -351,6 +351,45 @@ def _workspace_snapshot() -> dict:
 
 
 class DataSourceGenerationPromptTests(unittest.TestCase):
+    def test_value_rule_execution_prompt_preserves_source_binding_and_rule(self) -> None:
+        """实际任务包保留来源身份和规则数据，并载入调用前后及缺值处理约束。"""
+        design = _endpoint_design([_external_product_design()])
+        design["implementationDescription"] = "先校验操作权限，再调用当前外部接口，成功后返回确认结果。"
+        snapshot = design["sourceSnapshots"][0]
+        operation = snapshot["details"]["operation"]
+        operation["queryParameters"] = []
+        operation["requestStructure"] = {}
+        design["sourceBinding"] = {"sourceType": "external_api", "sourceId": snapshot["sourceId"], "directoryId": "products", "operationId": operation["operationId"]}
+        design["externalApiBindings"] = []
+        design["fieldMappings"] = [{
+            "endpointField": {"side": "response", "location": "response_body", "path": "accepted", "type": "boolean", "required": True, "description": ""},
+            "mappingType": "value_mapping", "right": {"kind": "business", "origin": "business", "endpointFields": [], "builtinFields": [], "businessDescription": "上游操作成功后返回 true。", "missingBehavior": "error"},
+        }]
+        task = _task(designs=[design])
+        task["id"] = "backend:endpoint:category_api:category.create::service"
+        packet = execution_task_packet(_project_plan(), task)
+        self.assertEqual(packet["implementation_contract"]["api_design"]["sourceBinding"], design["sourceBinding"])
+        self.assertEqual(packet["implementation_contract"]["api_design"]["implementationDescription"], design["implementationDescription"])
+        self.assertEqual(packet["implementation_contract"]["api_design"]["fieldMappings"], design["fieldMappings"])
+        prompt = _data_source_generation_prompt(project_plan=_project_plan(), workspace_snapshot=_workspace_snapshot(), tasks=[task])
+        for expected in (
+            "sourceBinding identifies the selected table or external Operation",
+            "Apply only the current stage's responsibilities",
+            "explicitly distinguish absence from a target whose value is null",
+            "Reject update/delete when no effective predicate remains",
+            "Preserve array item correspondence", "never as eval, a script engine",
+            "databaseQuery governs predicate targets and values",
+            "上游操作成功后返回 true。",
+            "do not short-circuit every null dependency into an error",
+            "failure_category=plan_mismatch",
+            "never replace them with always-true predicates",
+        ):
+            self.assertIn(expected, prompt)
+        self.assertEqual(prompt.count("[Field-value contract]"), 1)
+        self.assertNotIn("【字段取值契约】", prompt)
+        self.assertNotIn("【接口边界】", prompt)
+        self.assertNotIn("Implement each right.kind=business", prompt)
+
     """验证 DataSource 执行提示词的任务级 Skill 路由与最小上下文。"""
 
     def test_task_skill_paths_follow_exact_api_source_types(self) -> None:
@@ -460,8 +499,8 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertIn("CategoryInput", prompt)
         self.assertIn("CategoryValue", prompt)
         self.assertIn('"table": "category"', prompt)
-        self.assertIn("nested AND/OR parentheses", prompt)
-        self.assertIn("bind interface and fixed", prompt)
+        self.assertIn("preserves AND/OR parentheses, repeated columns, and reused parameters", prompt)
+        self.assertIn("Parameterize every value", prompt)
         for sentinel in (
             "UNRELATED_PAGE_SENTINEL",
             "UNRELATED_SCHEMA_SENTINEL",
@@ -480,7 +519,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertIn("outer_integration_test_only", prompt)
         self.assertIn('"fieldMappings"', prompt)
         self.assertIn('"databaseWrites"', prompt)
-        self.assertIn('"mappingType": "source_mapping"', prompt)
+        self.assertIn('"databaseWrites": [', prompt)
         self.assertIn("Backend Workspace Context:", prompt)
         self.assertIn('"backend_working_directory": "/backend"', prompt)
         self.assertIn('"backend_directory_structure"', prompt)
@@ -532,7 +571,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             {"CategoryInput", "CategoryValue"},
         )
         design = context["api_design"]
-        self.assertEqual(design["schemaVersion"], "endpoint-field-mapping.v6")
+        self.assertEqual(design["schemaVersion"], "endpoint-field-mapping.v7")
         self.assertNotIn("sceneEntities", design)
         self.assertEqual(design["databaseWrites"][0]["right"]["kind"], "endpoint")
         self.assertEqual(

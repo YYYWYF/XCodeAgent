@@ -11,7 +11,7 @@ def _endpoint_design() -> dict:
     """构造包含当前 API 设计全部正式字段的最小夹具。"""
 
     return {
-                "schemaVersion": "endpoint-field-mapping.v6",
+                "schemaVersion": "endpoint-field-mapping.v7",
         "artifactType": "endpoint-field-mapping",
         "status": "confirmed",
         "confirmationStatus": "confirmed",

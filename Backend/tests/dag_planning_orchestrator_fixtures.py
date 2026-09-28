@@ -26,7 +26,7 @@ def _fixture_endpoint_designs(plan: dict) -> list[dict]:
         for endpoint in contract.get("endpoints", []):
             endpoint_id = str(endpoint.get("id") or "")
             result.append({
-                "schemaVersion": "endpoint-field-mapping.v6",
+                "schemaVersion": "endpoint-field-mapping.v7",
                 "artifactType": "endpoint-field-mapping",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",

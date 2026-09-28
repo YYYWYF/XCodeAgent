@@ -1,3 +1,4 @@
+import { RuleEditingContext } from '../FieldMapping/RuleEditor'
 import { Alert, Button, Input, message, Popover, Select, Spin, Tabs, Tag, Typography } from 'antd'
 import {
   AimOutlined,
@@ -10,7 +11,7 @@ import {
   FileTextOutlined,
   InfoCircleFilled
 } from '@ant-design/icons'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
   WorkflowApiDatabaseOperation,
@@ -54,6 +55,9 @@ export default function ApiDesignPanel({
   submitHint = '保存后将生成当前 Endpoint 的字段映射 JSON/Markdown；开发是否继续由原会话门禁确认，TechnicalPlan 契约不会被修改。',
   onAction
 }: ApiDesignPanelProps): ReactElement {
+  const [editingRules, setEditingRules] = useState(0)
+  /** 完整编辑器与简化工作台共用未应用规则的提交保护。 */
+  const trackRuleEditing = useCallback((delta: number) => setEditingRules((count) => count + delta), [])
   const { draft, errors, validationErrors, showValidationErrors, setDraft } = useApiDesignDraft(payload)
   const [activeSide, setActiveSide] = useState<'request' | 'response'>('request')
   const [sources, setSources] = useState<NonNullable<WorkflowApiDesignPayload['sources']>>([])
@@ -242,7 +246,7 @@ export default function ApiDesignPanel({
     })
   }
 
-  return <div className="api-design-panel" ref={panelRef}>
+  return <RuleEditingContext.Provider value={trackRuleEditing}><div className="api-design-panel" ref={panelRef}>
     <header className="api-design-hero">
       <div className="api-design-hero-icon" aria-hidden="true">
         <ApiOutlined />
@@ -307,16 +311,16 @@ export default function ApiDesignPanel({
       type="info"
     />
 
-    <section className="api-design-implementation-description" aria-label="API 实现描述">
+    <section className="api-design-implementation-description" aria-label="接口映射说明">
       <div className="api-design-description-icon" aria-hidden="true">
         <FileTextOutlined />
       </div>
       <div className="api-design-description-content">
         <div className="api-design-implementation-description-heading">
           <div>
-            <Text strong>API 实现描述</Text>
+            <Text strong>接口映射说明</Text>
           </div>
-          <Text type="secondary">描述该接口整体如何实现，例如查询步骤、事务、缓存、异常处理或外部 API 编排。</Text>
+          <Text type="secondary">可选，用自然语言描述接口整体业务逻辑，例如参数校验、执行顺序、业务分支和返回结果处理。</Text>
         </div>
         <Input.TextArea
           autoSize={{ minRows: 3, maxRows: 8 }}
@@ -400,12 +404,12 @@ export default function ApiDesignPanel({
         <Text type="secondary">{submitHint}</Text>
       </div>
       <Button
-        disabled={disabled || Object.keys(errors).length > 0}
+        disabled={disabled || editingRules > 0 || Object.keys(errors).length > 0}
         onClick={submitDesign}
         type="primary"
       >
         <span>{submitLabel}</span><ArrowRightOutlined />
       </Button>
     </footer>
-  </div>
+  </div></RuleEditingContext.Provider>
 }

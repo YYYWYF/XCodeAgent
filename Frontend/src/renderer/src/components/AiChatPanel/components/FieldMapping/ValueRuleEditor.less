@@ -1,0 +1,164 @@
+.field-value-control {
+  min-width: 0;
+  .field-value-inputs { display: grid; grid-template-columns: minmax(100px, .7fr) minmax(130px, 1.3fr); gap: 8px; align-items: start; }
+  .field-value-inputs.is-readonly { grid-template-columns: minmax(0, 1fr); }
+  .ant-select, .ant-input { width: 100%; min-width: 0; }
+  .field-value-dependencies { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 32px; color: var(--wb-text-secondary); .ant-tag { margin: 0; background: var(--wb-surface-subtle); border-color: var(--wb-border); color: var(--wb-text); } }
+}
+.field-rule-link.ant-btn { height: auto; padding: 5px 0; color: var(--wb-accent); font-size: 12px; }
+.field-business-entry.ant-btn {
+  display: flex; width: 100%; min-width: 0; height: 32px; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 10px; border-color: var(--wb-border); background: var(--wb-canvas); color: var(--wb-accent); text-align: left;
+  &:hover, &:focus-visible { border-color: var(--wb-accent); background: var(--wb-accent-soft); color: var(--wb-accent); }
+  .field-business-entry-label { display: inline-flex; min-width: 0; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .field-business-entry-count { flex: 0 0 auto; padding: 1px 6px; border-radius: 4px; background: var(--wb-accent-soft); font-size: 11px; line-height: 18px; color: var(--wb-accent); }
+}
+.field-business-inline-link.ant-btn-link {
+  height: auto; min-height: 24px; padding: 0; border: 0; box-shadow: none; color: var(--wb-accent); font-size: 13px;
+  &:hover, &:focus-visible { color: var(--wb-accent-hover); }
+}
+.field-detail-source {
+  display: inline-flex; min-width: 0; align-items: center; gap: 7px; overflow: hidden; color: var(--wb-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap;
+  .anticon { flex: 0 0 auto; color: var(--wb-text-secondary); font-size: 14px; }
+}
+.field-detail-content { display: flex; min-width: 0; align-items: center; gap: 10px; overflow: hidden; }
+.field-detail-value { display: inline-flex; min-width: 0; align-items: center; gap: 3px; overflow: hidden; color: var(--wb-text); text-overflow: ellipsis; white-space: nowrap;
+  code { flex: 0 1 auto; min-width: 0; overflow: hidden; color: inherit; text-overflow: ellipsis; white-space: nowrap; }
+}
+.field-detail-meaning { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--wb-text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.field-detail-location { flex: 0 0 auto; margin-left: 5px; padding: 1px 5px; border: 1px solid var(--wb-border); border-radius: 4px; background: var(--wb-surface-subtle); color: var(--wb-text-secondary); font-size: 11px; line-height: 18px; }
+.field-detail-empty { color: var(--wb-text-tertiary); }
+.field-detail-type { flex: 0 0 auto; color: var(--wb-text-secondary); font-size: 12px; }
+.field-business-viewer {
+  .field-business-viewer-title { display: flex; align-items: center; gap: 12px; padding-right: 24px; color: var(--wb-text); font-size: 20px; overflow-wrap: anywhere; .anticon { color: var(--wb-text-secondary); } }
+  .field-business-viewer-section + .field-business-viewer-section { margin-top: 32px; }
+  h3 { display: flex; align-items: center; gap: 12px; margin: 0 0 18px; color: var(--wb-text); font-size: 16px; font-weight: 600; span { color: var(--wb-text-secondary); font-size: 13px; font-weight: normal; } }
+  .field-business-viewer-table-wrap { overflow-x: auto; border: 1px solid var(--wb-border); border-radius: 8px; }
+  .field-business-viewer-table { width: 100%; min-width: 720px; border-collapse: collapse; table-layout: fixed; color: var(--wb-text); font-size: 13px;
+    th { padding: 13px 16px; background: var(--wb-surface-subtle); color: var(--wb-text-secondary); text-align: left; font-weight: 500; }
+    td { padding: 18px 16px; border-top: 1px solid var(--wb-border); vertical-align: middle; overflow-wrap: anywhere; }
+    th + th, td + td { border-left: 1px solid var(--wb-border); }
+    th:nth-child(1) { width: 20%; } th:nth-child(2) { width: 26%; } th:nth-child(3) { width: 16%; } th:nth-child(4) { width: 23%; } th:nth-child(5) { width: 15%; }
+    code { color: var(--wb-text); font-size: 13px; }
+  }
+  .field-business-viewer-source { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; .anticon { color: var(--wb-text-secondary); font-size: 16px; } }
+  .field-business-viewer-description { margin-left: 10px; color: var(--wb-text-secondary); font-size: 12px; }
+  .field-business-viewer-logic { margin: 0; padding: 20px 24px; border-radius: 8px; background: var(--wb-surface-subtle); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--wb-text); line-height: 1.9; }
+  .field-business-viewer-empty { padding: 20px; border-radius: 8px; background: var(--wb-surface-subtle); color: var(--wb-text-secondary); }
+  .ant-modal-body { max-height: 65vh; overflow-y: auto; }
+  .ant-modal-footer .ant-btn-primary { background: var(--wb-accent); border-color: var(--wb-accent); &:hover, &:focus-visible { background: var(--wb-accent-hover); border-color: var(--wb-accent-hover); } }
+}
+.field-parameter-anchor { min-width: 0; }
+.field-parameter-option {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  .field-parameter-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .ant-tag { flex-shrink: 0; margin: 0; font-size: 11px; font-weight: normal; line-height: 18px; background: var(--wb-surface-subtle); border-color: var(--wb-border); color: var(--wb-text-secondary); }
+}
+.field-parameter-tree {
+  background: var(--wb-canvas); color: var(--wb-text);
+  .ant-select-tree { background: var(--wb-canvas); color: var(--wb-text); }
+  .ant-select-tree-switcher { color: var(--wb-text-secondary); }
+  .ant-select-tree-node-content-wrapper:hover,
+  .ant-select-tree-node-content-wrapper.ant-select-tree-node-selected { background: var(--wb-surface-subtle); color: var(--wb-accent); }
+}
+.field-value-summary { color: var(--wb-text-secondary); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.field-rule-editor {
+  color: var(--wb-text);
+  label { display: block; color: var(--wb-text); font-size: 14px; font-weight: 500; > .ant-input { display: block; width: 100%; margin-top: 12px; padding: 12px; font-weight: normal; line-height: 1.8; color: var(--wb-text); } }
+  .ant-input, .ant-select-selector { background: var(--wb-canvas); border-color: var(--wb-border); color: var(--wb-text); }
+}
+.field-rule-modal {
+  .ant-modal-content, .ant-modal-header { background: var(--wb-canvas); color: var(--wb-text); border-radius: 12px; }
+  .ant-modal-header { padding: 24px 32px 20px; border-bottom: 1px solid var(--wb-border); border-radius: 12px 12px 0 0; }
+  .ant-modal-body { padding: 28px 32px 32px; }
+  .ant-modal-footer { padding: 18px 32px; border-top: 1px solid var(--wb-border); background: var(--wb-surface-subtle); border-radius: 0 0 12px 12px; }
+  .ant-modal-close { color: var(--wb-text-secondary); }
+  .ant-select-disabled .ant-select-selector { background: var(--wb-surface-subtle); color: var(--wb-text-secondary); }
+}
+.field-rule-dialog-heading { padding-right: 24px; strong { font-size: 20px; color: var(--wb-text); } > div { margin-top: 6px; font-size: 13px; font-weight: normal; color: var(--wb-text-secondary); overflow-wrap: anywhere; } }
+.field-rule-dialog-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px; .field-rule-error { margin-right: auto; text-align: left; } .ant-btn + .ant-btn { margin-left: 0; } }
+.field-rule-input-section { margin: 0 0 32px; }
+.field-rule-input-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; small { margin-left: 8px; font-size: 12px; font-weight: normal; color: var(--wb-text-secondary); } }
+.field-rule-input-grid { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(200px, 2fr) 32px; gap: 16px; align-items: center; }
+.field-rule-input-head { padding-bottom: 8px; font-size: 12px; color: var(--wb-text-secondary); }
+.field-rule-input-row { margin-bottom: 12px; .ant-select { min-width: 0; width: 100%; } }
+.field-rule-empty { font-size: 12px; color: var(--wb-text-secondary); }
+.field-rule-empty { display: block; margin-top: 4px; }
+.field-rule-input-remove.ant-btn { width: 28px; padding: 0; color: var(--wb-text-secondary); }
+@media (max-width: 540px) {
+  .field-rule-modal { .ant-modal-header, .ant-modal-body, .ant-modal-footer { padding: 20px; } }
+  .field-rule-input-grid { grid-template-columns: minmax(0, 1fr) 28px; gap: 10px; }
+  .field-rule-input-head { display: none; }
+  .field-rule-input-field { grid-column: 1; grid-row: 2; }
+  .field-rule-input-remove { grid-column: 2; grid-row: 1; }
+}
+.field-rule-error { display: block; color: var(--wb-code-delete-text); }
+.database-query-row > .field-value-control { grid-column: span 2; }
+.database-write-row > .field-value-control { grid-column: span 2; }
+.field-response-row { display: grid; grid-template-columns: minmax(120px, 1fr) 28px minmax(200px, 1.25fr); gap: 12px; align-items: start; padding: 12px; border-bottom: 1px solid var(--wb-border); &:last-child { border-bottom: 0; } }
+.field-response-target { display: flex; gap: 8px; justify-content: space-between; flex-wrap: wrap; padding: 8px 12px; border-radius: 5px; background: var(--wb-surface-subtle); color: var(--wb-text); code { font-weight: 600; } span { color: var(--wb-text-secondary); } }
+.field-response-arrow { text-align: center; padding-top: 8px; color: var(--wb-text-secondary); }
+.field-response-edit-head { color: var(--wb-text-secondary); font-size: 12px; padding-block: 10px; }
+// 编辑态字段块与取值控件保持同高，避免选中长字段后换行造成行内错位。
+.field-response-row:not(.is-readonly):not(.field-response-edit-head) {
+  align-items: center;
+  > .field-response-target { min-width: 0; height: 32px; box-sizing: border-box; padding: 4px 12px; align-items: center; flex-wrap: nowrap;
+    code { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    > span { flex: 0 0 auto; white-space: nowrap; }
+  }
+  > .field-response-arrow { padding-top: 0; }
+  .field-value-inputs { align-items: center; > * { min-width: 0; } }
+}
+.field-response-row > .field-rule-error { grid-column: 1 / -1; }
+.database-return-table.is-readonly, .external-mapping.is-readonly .external-mapping-group { container-type: inline-size; }
+.database-return-table.is-readonly { --field-detail-columns: minmax(150px, 1.2fr) minmax(100px, .75fr) minmax(160px, 1.2fr); }
+.field-detail-row-head { display: grid; grid-template-columns: var(--field-detail-columns, minmax(150px, 1.2fr) minmax(100px, .75fr) minmax(160px, 1.2fr)); gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--wb-border); color: var(--wb-text-secondary); font-size: 12px;
+  > span { min-width: 0; }
+}
+.field-response-row.is-readonly { grid-template-columns: var(--field-detail-columns, minmax(150px, 1.2fr) minmax(100px, .75fr) minmax(160px, 1.2fr)); gap: 16px; align-items: center; min-height: 60px; padding: 12px 16px;
+  .field-response-target { display: flex; min-width: 0; align-items: center; justify-content: flex-start; flex-wrap: nowrap; gap: 10px; padding: 0; background: transparent; white-space: nowrap;
+    code { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .field-detail-meaning { color: var(--wb-text-secondary); }
+    .field-response-type { flex: 0 0 auto; margin-left: 0; color: var(--wb-text-secondary); font-size: 12px; }
+  }
+}
+@media (max-width: 700px) { .field-response-row { grid-template-columns: 1fr; } .field-response-arrow { display: none; } .field-value-control .field-value-inputs { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .field-response-row.is-readonly { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px;
+  .field-response-target { grid-column: 1 / -1; }
+} }
+@media (max-width: 700px) { .field-detail-row-head, .field-response-edit-head { display: none; } }
+@container (max-width: 600px) {
+  .database-return-table.is-readonly .field-detail-row-head, .external-mapping.is-readonly .external-mapping-group .field-detail-row-head { display: none; }
+  .database-return-table.is-readonly .field-response-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px;
+    .field-response-target { grid-column: 1 / -1; }
+  }
+  .external-mapping.is-readonly .external-mapping-group .field-external-request-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px;
+    .field-response-target { grid-column: 1 / -1; }
+  }
+}
+
+.field-response-mode { margin-bottom: 8px; }
+.field-external-request-row { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(220px, 1.7fr) 28px; align-items: start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--wb-border); > .field-rule-error { grid-column: 1 / -1; } }
+.external-mapping.is-readonly .field-external-request-row { grid-template-columns: minmax(150px, 1.2fr) minmax(100px, .75fr) minmax(160px, 1.2fr); align-items: center; gap: 16px; min-height: 60px; }
+.external-mapping.is-readonly .field-external-request-row .field-response-target { min-width: 0; align-items: center; justify-content: flex-start; flex-wrap: nowrap; gap: 5px; padding: 0; background: transparent; white-space: nowrap;
+  code { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .field-response-type { margin-left: auto; color: var(--wb-text-secondary); font-size: 12px; }
+}
+@media (max-width: 700px) { .field-external-request-row { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .external-mapping.is-readonly .field-external-request-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px;
+  .field-response-target { grid-column: 1 / -1; }
+} }
+
+
+.database-query-editor .database-query-row, .database-write-editor .database-write-row { align-items: start; }
+.field-response-target code { overflow-wrap: anywhere; min-width: 0; }
+
+.field-mapping-description {
+  .field-mapping-description-optional { color: var(--wb-text-secondary); font-size: 12px; font-weight: normal; }
+  p { margin: 0 0 16px; color: var(--wb-text-secondary); }
+  .field-mapping-description-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 0; }
+  .ant-input { background: var(--wb-canvas); color: var(--wb-text); border-color: var(--wb-border); }
+  .ant-input:focus, .ant-input:hover { border-color: var(--wb-accent); }
+  .ant-input-textarea-show-count::after { color: var(--wb-text-secondary); }
+  &:not(.is-collapsed) { padding-bottom: 30px; }
+}

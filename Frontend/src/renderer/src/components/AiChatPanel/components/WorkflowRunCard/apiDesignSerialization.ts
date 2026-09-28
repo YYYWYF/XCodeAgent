@@ -13,8 +13,11 @@ import type {
   WorkflowApiExternalFieldNode,
   WorkflowApiField,
   WorkflowApiFieldMapping,
-  WorkflowApiSourceField
+  WorkflowApiSourceField,
+  WorkflowApiValueRight
 } from '../../../../typings'
+
+import { valueSummary } from '../FieldMapping/valueRules'
 
 export type ApiDesignValidationErrors = Record<string, string>
 export type ApiDatabaseUsage = NonNullable<WorkflowApiDatabaseFieldNode['usage']>
@@ -39,7 +42,8 @@ export function databaseConditionValueValid(condition: WorkflowApiDatabaseCondit
   if (!allowedDatabaseConditionOperators(condition.type).includes(operator)) return false
   if (operator === 'is_null' || operator === 'is_not_null') return right === undefined
   if (!right) return false
-  if (right.kind === 'endpoint') return queryParameterCompatible(right.endpointField.type, condition.type, operator)
+  if (right.kind === 'business') return valueRightValid(right, condition.type, true, operator)
+  if (right.kind === 'endpoint') return Boolean(right.endpointField && queryParameterCompatible(right.endpointField.type, condition.type, operator))
   const value = right.value
   const family = typeFamily(condition.type)
   const scalarValid = (item: unknown): boolean => {
@@ -279,7 +283,8 @@ export function normalizeApiDesignDraft(
       : '',
     databaseOperation: payload.draft?.databaseOperation || undefined,
     databaseWrites: Array.isArray(payload.draft?.databaseWrites) ? payload.draft.databaseWrites : [],
-    externalApiFixedValues: Array.isArray(payload.draft?.externalApiFixedValues) ? payload.draft.externalApiFixedValues : [],
+    sourceBinding: payload.draft?.sourceBinding,
+    externalApiBindings: Array.isArray(payload.draft?.externalApiBindings) ? payload.draft.externalApiBindings : [],
     databaseQuery: payload.draft?.databaseQuery || undefined,
     fieldMappings: endpointFields.map((field) => {
       const mapping = existing.get(apiDesignFieldKey(field))
@@ -331,7 +336,25 @@ function fixedScalarValueValid(value: unknown, fieldType: string): boolean {
   if (family === 'number') return typeof value === 'number' && Number.isFinite(value)
   if (family === 'boolean') return typeof value === 'boolean'
   if (family === 'string' || family === 'temporal') return typeof value === 'string' && value.trim().length > 0
+  if (family === 'array') return Array.isArray(value) && (arrayElementFamily(fieldType) === 'unknown' || value.every((item) => fixedScalarValueValid(item, arrayElementFamily(fieldType))))
+  if (family === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value)
   return value !== undefined && value !== null && !Array.isArray(value) && typeof value !== 'object'
+}
+
+/** 统一校验直接取值与业务规则，转换依赖的类型可不同于目标类型。 */
+export function valueRightValid(right: WorkflowApiValueRight | undefined, type: string, database = false, operator?: WorkflowApiDatabaseConditionOperator): boolean {
+  if (!right) return false
+  if (right.kind === 'endpoint') return Boolean(right.endpointField?.side === 'request' && apiDesignTypesCompatible(right.endpointField.type, type, database))
+  if (right.kind === 'fixed') return fixedScalarValueValid(right.value, type)
+  if (!right.businessDescription.trim() || right.businessDescription.length > 2000) return false
+  if (right.origin === 'endpoint' && !right.endpointFields.length || right.origin === 'builtin' && !right.builtinFields.length) return false
+  if (right.endpointFields.some((field) => field.side !== 'request')) return false
+  if (new Set(right.endpointFields.map(apiDesignFieldKey)).size !== right.endpointFields.length || new Set(right.builtinFields).size !== right.builtinFields.length) return false
+  if (right.missingBehavior === 'default') {
+    if (operator) return databaseConditionValueValid({ kind: 'condition', sourceType: 'database', sourceId: '', schema: '', table: '', column: '', type, operator, right: { kind: 'fixed', value: right.defaultValue } })
+    return fixedScalarValueValid(right.defaultValue, type)
+  }
+  return right.defaultValue === undefined
 }
 
 /** 校验自包含字段映射的完整覆盖、来源方向和类型。 */
@@ -344,26 +367,19 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
     errors.__implementationDescription = 'API 实现描述不能超过 4000 个字符。'
   }
   const keys = new Set<string>()
-  const externalApiFixedValues = draft.externalApiFixedValues || []
-  const hasExternalApiReference = externalApiFixedValues.length > 0 || draft.fieldMappings.some((mapping) =>
+  const externalApiBindings = draft.externalApiBindings || []
+  const hasExternalApiReference = draft.sourceBinding?.sourceType === 'external_api' || externalApiBindings.length > 0 || draft.fieldMappings.some((mapping) =>
     mapping.mappingType === 'source_mapping' && mapping.sourceFields.some((source) => source.sourceType === 'external_api'))
-  if (externalApiFixedValues.length > 3000) errors.__externalApiFixedValues = '外部 API 固定值最多 3000 项。'
-  const externalRequestTargets = new Set(draft.fieldMappings.flatMap((mapping) => mapping.mappingType === 'source_mapping'
-    ? mapping.sourceFields.filter((source): source is Extract<WorkflowApiSourceField, { sourceType: 'external_api' }> => source.sourceType === 'external_api' && source.section !== 'response_body')
-      .map((source) => JSON.stringify([source.sourceId, source.directoryId, source.operationId, source.section, source.path]))
-    : []))
-  const fixedTargetKeys = new Set<string>()
-  externalApiFixedValues.forEach((item) => {
+  if (externalApiBindings.length > 3000) errors.__externalApiBindings = '外部 API 入参取值最多 3000 项。'
+  const bindingTargets = new Set<string>()
+  externalApiBindings.forEach((item) => {
     const field = item.externalField
-    const key = JSON.stringify([field.sourceId, field.directoryId, field.operationId, field.section, field.path])
-    if (field.sourceType !== 'external_api' || field.section === 'response_body' || !field.sourceId || !field.directoryId || !field.operationId || !field.path) {
-      errors.__externalApiFixedValues = '固定值必须绑定有效的外部 API 请求参数。'
-    } else if (externalRequestTargets.has(key) || fixedTargetKeys.has(key)) {
-      errors.__externalApiFixedValues = `外部 API 请求参数 ${field.path} 重复配置。`
-    } else if ((typeof item.value === 'string' && !item.value.trim()) || !fixedScalarValueValid(item.value, field.type)) {
-      errors.__externalApiFixedValues = `请为外部 API 请求参数 ${field.path} 输入与类型匹配的固定值。`
-    }
-    fixedTargetKeys.add(key)
+    const identity = JSON.stringify([field.sourceId, field.directoryId, field.operationId, field.section, field.path])
+    const key = `__externalApiBinding:${field.section}:${field.path}`
+    if (field.section === 'response_body' || !field.sourceId || !field.directoryId || !field.operationId || !field.path) errors[key] = '请选择有效的外部请求目标。'
+    else if (bindingTargets.has(identity)) errors[key] = '同一外部请求目标不能重复配置。'
+    else if (!valueRightValid(item.right, field.type)) errors[key] = '请完成取值配置，或添加明确的业务转换规则。'
+    bindingTargets.add(identity)
   })
   const query = draft.databaseQuery
   const conditions = query?.items.flatMap((item) => item.kind === 'group' ? item.items : [item]) || []
@@ -382,9 +398,7 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
   // 数据库表已选定但字段尚未开始映射时，允许先选择 CRUD 操作；正式确认仍由后端校验来源与操作成对出现。
   const operation = draft.databaseOperation
   const filters = conditions.length
-  const validWrites = databaseWrites.filter((write) => Boolean(write.column) && Boolean(write.right)
-    && (write.right?.kind === 'fixed' ? fixedScalarValueValid(write.right.value, write.type)
-      : Boolean(write.right?.endpointField && apiDesignTypesCompatible(write.right.endpointField.type, write.type, true)))).length
+  const validWrites = databaseWrites.filter((write) => Boolean(write.column) && valueRightValid(write.right, write.type, true)).length
   if (operation === 'create' && validWrites === 0) errors.__databaseOperation = '新增操作至少需要一个完整的写入字段。'
   if (operation === 'update' && (filters === 0 || validWrites === 0)) errors.__databaseOperation = '修改操作至少需要查询条件和完整的写入字段。'
   if (operation === 'delete' && filters === 0) errors.__databaseOperation = '删除操作至少需要一个查询条件。'
@@ -403,6 +417,10 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
     writeColumns.add(identity)
     if (!write.right) {
       errors[rowKey] = '请选择写入值来源。'
+      return
+    }
+    if (write.right.kind === 'business') {
+      if (!valueRightValid(write.right, write.type, true)) errors[rowKey] = '请完成业务取值规则。'
       return
     }
     if (write.right.kind === 'endpoint') {
@@ -429,6 +447,11 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
       errors[key] = 'Endpoint 字段尚未配置映射。'
       return
     }
+    if (mapping.mappingType === 'value_mapping') {
+      if (mapping.endpointField.side === 'response' && mapping.endpointField.required && mapping.right.kind === 'business' && mapping.right.missingBehavior === 'omit') errors[key] = '必填返回字段不能省略。'
+      if (!valueRightValid(mapping.right, mapping.endpointField.type)) errors[key] = '请完成业务取值规则。'
+      return
+    }
     if (mapping.mappingType === 'business_description') {
       if ('sourceFields' in mapping || 'processingType' in mapping) {
         errors[key] = '纯业务说明不能携带真实来源或处理类型。'
@@ -438,6 +461,9 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
       return
     }
     const sources = mapping.sourceFields
+    if (mapping.endpointField.side === 'response' && mapping.endpointField.required && mapping.missingBehavior === 'omit') errors[key] = '必填返回字段不能省略。'
+    if (mapping.processingType !== 'direct' && !valueRightValid({ kind: 'business', origin: 'business', endpointFields: mapping.endpointFields || [], builtinFields: mapping.builtinFields || [], businessDescription: mapping.businessDescription || '', missingBehavior: mapping.missingBehavior || 'error', ...(mapping.defaultValue !== undefined ? { defaultValue: mapping.defaultValue } : {}) }, mapping.endpointField.type)) errors[key] = '请检查处理依赖、业务说明和缺值策略。'
+    if (mapping.missingBehavior === 'default' && !fixedScalarValueValid(mapping.defaultValue, mapping.endpointField.type)) errors[key] = '默认值与返回字段类型不兼容。'
     const kind = mapping.processingType
     if (!['direct', 'single_field_description', 'multi_field_description'].includes(kind)) {
       errors[key] = '请选择处理类型。'
@@ -458,7 +484,12 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
     }
   })
   const knownRequests = new Set(draft.fieldMappings.filter((item) => item.endpointField.side === 'request').map((item) => apiDesignFieldKey(item.endpointField)))
-  if (conditions.some((condition) => condition.right?.kind === 'endpoint' && !knownRequests.has(apiDesignFieldKey(condition.right.endpointField)))) errors.__databaseQuery = '查询条件引用的接口参数不属于当前 Endpoint。'
+  if (conditions.some((condition) => condition.right?.kind === 'endpoint' && (!condition.right.endpointField || !knownRequests.has(apiDesignFieldKey(condition.right.endpointField))))) errors.__databaseQuery = '查询条件引用的接口参数不属于当前 Endpoint。'
+  const values = [...conditions.map((item) => item.right), ...databaseWrites.map((item) => item.right), ...externalApiBindings.map((item) => item.right), ...draft.fieldMappings.flatMap((item) => item.mappingType === 'value_mapping' ? [item.right] : item.mappingType === 'source_mapping' ? (item.endpointFields || []).map((endpointField) => ({ kind: 'endpoint' as const, endpointField })) : [])]
+  for (const value of values) {
+    const dependencies = value?.kind === 'business' ? value.endpointFields : value?.kind === 'endpoint' && value.endpointField ? [value.endpointField] : []
+    if (dependencies.some((field) => field.side !== 'request' || !knownRequests.has(apiDesignFieldKey(field)))) errors.__valueRules = '取值规则含有失效的接口参数依赖。'
+  }
   return errors
 }
 
@@ -523,6 +554,7 @@ export function apiDesignSourceFieldLabel(source?: WorkflowApiSourceField): stri
 export function apiDesignMappingPreview(mapping: WorkflowApiFieldMapping): string {
   const endpoint = `${mapping.endpointField.side}.${mapping.endpointField.location}.${mapping.endpointField.path}`
   if (mapping.mappingType === 'unconfigured') return `${endpoint}（未配置）`
+  if (mapping.mappingType === 'value_mapping') return `${valueSummary(mapping.right)} → ${endpoint}`
   if (mapping.mappingType === 'business_description') {
     return `${endpoint} ⇒ 业务说明：${mapping.businessDescription}`
   }
@@ -537,18 +569,14 @@ export function apiDesignMappingPreview(mapping: WorkflowApiFieldMapping): strin
 export function databaseQueryPreview(query: WorkflowApiDatabaseQuery): string {
   return query.items.map((item) => {
     if (item.kind === 'group') return `(${databaseQueryPreview(item)})`
-    const right = item.right?.kind === 'endpoint'
-      ? `接口参数 ${item.right.endpointField.location}.${item.right.endpointField.path}`
-      : item.right?.kind === 'fixed' ? `固定值 ${JSON.stringify(item.right.value)}` : ''
+    const right = item.right ? valueSummary(item.right) : ''
     return `${item.table}.${item.column} ${item.operator}${right ? ` ${right}` : ''}`
   }).join(` ${query.join.toUpperCase()} `)
 }
 
 /** 把数据库写入列和值来源转换为简短预览。 */
 export function databaseWritePreview(write: WorkflowApiDatabaseWriteDraft): string {
-  const right = write.right?.kind === 'endpoint'
-    ? write.right.endpointField ? `接口参数 ${write.right.endpointField.location}.${write.right.endpointField.path}` : '待选接口参数'
-    : write.right?.kind === 'fixed' ? `固定值 ${JSON.stringify(write.right.value ?? '')}` : '待选值来源'
+  const right = valueSummary(write.right)
   return `${right} → ${write.schema}.${write.table}.${write.column || '待选字段'}`
 }
 

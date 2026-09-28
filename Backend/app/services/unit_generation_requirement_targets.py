@@ -122,6 +122,9 @@ def endpoint_source_types(
                 f"Endpoint {key[0]}/{key[1]} 的 fieldMappings 必须为数组。",
             )
         source_types: set[str] = set()
+        binding = design.get("sourceBinding")
+        if isinstance(binding, Mapping) and binding.get("sourceType") in ENDPOINT_PHYSICAL_SOURCE_TYPES:
+            source_types.add(binding["sourceType"])
         for mapping in field_mappings:
             if not isinstance(mapping, Mapping):
                 fail_requirement_input(
@@ -179,23 +182,23 @@ def endpoint_source_types(
                     f"Endpoint {key[0]}/{key[1]} 含不受支持的 databaseWrites.sourceType：{source_type!r}。",
                 )
             source_types.add(source_type)
-        external_fixed_values = design.get("externalApiFixedValues", [])
-        if not isinstance(external_fixed_values, (list, tuple)):
+        external_value_bindings = design.get("externalApiBindings", [])
+        if not isinstance(external_value_bindings, (list, tuple)):
             fail_requirement_input(
                 "FORMAL_GENERATION_INPUT_INVALID",
-                f"Endpoint {key[0]}/{key[1]} 的 externalApiFixedValues 必须为数组。",
+                f"Endpoint {key[0]}/{key[1]} 的 externalApiBindings 必须为数组。",
             )
-        for item in external_fixed_values:
+        for item in external_value_bindings:
             if not isinstance(item, Mapping):
                 fail_requirement_input(
                     "FORMAL_GENERATION_INPUT_INVALID",
-                    f"Endpoint {key[0]}/{key[1]} 的 externalApiFixedValues 项必须为对象。",
+                    f"Endpoint {key[0]}/{key[1]} 的 externalApiBindings 项必须为对象。",
                 )
             external_field = item.get("externalField")
             if not isinstance(external_field, Mapping) or external_field.get("sourceType") != "external_api":
                 fail_requirement_input(
                     "GENERATION_ENDPOINT_SOURCE_TYPE_INVALID",
-                    f"Endpoint {key[0]}/{key[1]} 的外部 API 固定值缺少 external_api 字段来源。",
+                    f"Endpoint {key[0]}/{key[1]} 的外部 API 取值规则缺少 external_api 字段来源。",
                 )
             source_types.add("external_api")
         query = design.get("databaseQuery")

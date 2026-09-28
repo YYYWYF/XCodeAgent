@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from app.domain.api_design import API_DESIGN_SCHEMA_VERSION, EndpointApiDesign
 from app.services.artifact_invalidation import canonical_sha256
+from app.services.api_design_mapping_rules import mapping_business_description
 
 
 def endpoint_design_stem(api_contract_id: str, endpoint_id: str) -> str:
@@ -194,14 +195,14 @@ def render_endpoint_design_markdown(design: dict[str, Any]) -> str:
         f"- 状态：已确认",
         f"<!-- devagentstudio-artifact-revision: {design.get('artifactRevision') or ''} -->",
         "",
-        "## API 实现描述",
+        "## 接口映射说明",
         "",
     ]
-    lines.extend(_implementation_description_lines(design) or ["- 未补充 API 实现描述。"])
+    lines.extend(_implementation_description_lines(design) or ["- 未补充 接口映射说明。"])
     lines.extend(["", "## Request 映射", ""])
     lines.extend(_mapping_lines(design, side="request") or ["- 无 Request 映射。"])
     lines.extend(["", "## 外部 API 固定参数", ""])
-    lines.extend(_external_api_fixed_value_lines(design) or ["- 无外部 API 固定参数。"])
+    lines.extend(_external_api_binding_lines(design) or ["- 无外部 API 固定参数。"])
     lines.extend(["", "## 数据库写入字段", ""])
     lines.extend(_database_write_lines(design) or ["- 无数据库写入字段。"])
     lines.extend(["", "## Response 映射", ""])
@@ -237,6 +238,10 @@ def _mapping_lines(design: dict[str, Any], *, side: str) -> list[str]:
         if endpoint.get("side") != side or mapping.get("mappingType") == "unconfigured":
             continue
         endpoint_label = _endpoint_field_label(endpoint)
+        if mapping.get("mappingType") == "value_mapping":
+            from app.services.api_design_values import value_rule_summary
+            lines.append(f"- {_escape_markdown(endpoint_label)} ← {_escape_markdown(value_rule_summary(mapping.get('right')))}")
+            continue
         if mapping.get("mappingType") == "business_description":
             lines.append(
                 f"- {_escape_markdown(endpoint_label)}："
@@ -279,21 +284,23 @@ def _database_write_lines(design: dict[str, Any]) -> list[str]:
         elif right.get("kind") == "fixed":
             value = f"固定值 {right.get('value')!r}"
         else:
-            value = "未配置值来源"
+            from app.services.api_design_values import value_rule_summary
+            value = value_rule_summary(right)
         if target:
             lines.append(f"- {_escape_markdown(target)} ← {_escape_markdown(value)}")
     return lines
 
 
-def _external_api_fixed_value_lines(design: dict[str, Any]) -> list[str]:
+def _external_api_binding_lines(design: dict[str, Any]) -> list[str]:
     """展示已确认的外部 API 请求参数固定值。"""
 
     lines: list[str] = []
-    for item in _dict_items(design.get("externalApiFixedValues")):
+    for item in _dict_items(design.get("externalApiBindings")):
         external_field = item.get("externalField") if isinstance(item.get("externalField"), dict) else {}
         target = _source_field_label(external_field)
         if target:
-            lines.append(f"- {_escape_markdown(target)} ← 固定值 {_escape_markdown(repr(item.get('value')))}")
+            from app.services.api_design_values import value_rule_summary
+            lines.append(f"- {_escape_markdown(target)} ← {_escape_markdown(value_rule_summary(item.get('right')))}")
     return lines
 
 
@@ -308,7 +315,7 @@ def _business_description_lines(design: dict[str, Any]) -> list[str]:
         lines.extend(
             [
                 f"### {_escape_markdown(_endpoint_field_label(endpoint))}",
-                f"- 业务说明：{_escape_markdown(str(mapping.get('businessDescription') or ''))}",
+                f"- 业务说明：{_escape_markdown(mapping_business_description(mapping))}",
             ]
         )
     return lines

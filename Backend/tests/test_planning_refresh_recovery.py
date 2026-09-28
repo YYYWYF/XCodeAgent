@@ -170,7 +170,7 @@ def _write_formal_confirmation_context(workspace: Path) -> None:
         workspace,
         EndpointApiDesign.model_validate(
             {
-                "schemaVersion": "endpoint-field-mapping.v6",
+                "schemaVersion": "endpoint-field-mapping.v7",
                 "artifactType": "endpoint-field-mapping",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",

@@ -70,9 +70,24 @@
   .database-mapping-error { display: block; margin-top: 8px; color: var(--wb-code-delete-text); }
   .ant-select-selector, .ant-radio-button-wrapper, .ant-input { border-color: var(--wb-border-strong); background: var(--wb-canvas); color: var(--wb-text); }
   .ant-select:not(.ant-select-disabled):hover .ant-select-selector, .ant-select-focused:not(.ant-select-disabled) .ant-select-selector, .ant-input:not(:disabled):hover, .ant-input:focus { border-color: var(--wb-accent-border); }
+  &.is-readonly {
+    --database-query-columns: minmax(150px, 1.2fr) 90px minmax(100px, .75fr) minmax(160px, 1.2fr);
+    .database-query-head, .database-query-row { min-width: 0; gap: 16px; }
+    .database-query-row { border-left: 0; border-right: 0; border-radius: 0; min-height: 60px; }
+    .database-query-readonly-field { display: flex; min-width: 0; align-items: center; gap: 5px; white-space: nowrap;
+      code { min-width: 0; overflow: hidden; color: var(--wb-text); text-overflow: ellipsis; white-space: nowrap; }
+      .field-detail-type { flex: 0 0 auto; margin-left: 5px; color: var(--wb-text-secondary); font-size: 12px; }
+    }
+    .database-static-operator { color: var(--wb-text-secondary); font-size: 13px; white-space: nowrap; }
+  }
 }
 
 @container database-query-editor (max-width: 700px) {
+  .database-query-editor.is-readonly .database-query-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .database-query-editor.is-readonly .database-query-row > .database-query-column-cell { grid-column: 1; }
+  .database-query-editor.is-readonly .database-query-row > .database-static-operator { grid-column: 2; text-align: right; }
+  .database-query-editor.is-readonly .database-query-row > .field-detail-source { grid-column: 1; }
+  .database-query-editor.is-readonly .database-query-row > .field-detail-content { grid-column: 2; }
   .database-query-editor .database-query-list, .database-query-editor .database-query-group-list { overflow: hidden; }
   .database-query-editor .database-query-head { display: none; }
   .database-query-editor .database-query-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 30px; min-width: 0; gap: 8px; padding: 9px;

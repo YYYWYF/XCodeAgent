@@ -1,0 +1,35 @@
+.external-mapping .external-request-count { color: var(--wb-text-secondary); font-size: 12px; font-weight: normal; }
+.external-request-editor {
+  container-type: inline-size;
+  container-name: external-request-editor;
+  .external-request-grid { display: grid; grid-template-columns: 76px minmax(100px, 1fr) minmax(280px, 2fr) 28px; gap: 16px; align-items: center; padding: 18px 12px; }
+  .external-request-head { padding-block: 12px; border-radius: 6px 6px 0 0; background: var(--wb-surface-subtle); color: var(--wb-text-secondary); font-size: 12px; }
+  .external-request-row { border-bottom: 1px solid var(--wb-border); &:last-child { border-bottom: 0; } &:hover { background: var(--wb-surface-subtle); } }
+  .field-value-control .field-value-inputs { grid-template-columns: minmax(110px, .8fr) minmax(150px, 1.2fr); align-items: center; gap: 12px; > * { min-width: 0; } }
+  .external-request-location { justify-self: start; padding: 1px 7px; border: 1px solid var(--wb-border); border-radius: 4px; background: var(--wb-surface-subtle); color: var(--wb-text-secondary); font-size: 12px; white-space: nowrap; }
+  .external-request-field { display: flex; min-width: 0; align-items: center; gap: 8px; white-space: nowrap;
+    code { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: var(--wb-text); }
+    .field-response-type { flex: 0 0 auto; font-size: 12px; color: var(--wb-text-secondary); }
+  }
+  .external-request-required { color: var(--wb-accent); }
+  .external-request-remove.ant-btn { width: 28px; padding: 0; color: var(--wb-text-secondary); &:hover:not(:disabled) { color: var(--wb-code-delete-text); } &:disabled { color: var(--wb-text-tertiary); } }
+  .field-business-entry-count { background: transparent; color: var(--wb-text-secondary); padding: 0; }
+  .field-rule-error { grid-column: 1 / -1; }
+  // 详情行与表头共享四列，取值组件的两个只读节点分别占据来源和内容列。
+  &.is-readonly .external-request-grid { grid-template-columns: 76px minmax(140px, 1.2fr) minmax(100px, .8fr) minmax(140px, 1.2fr); }
+}
+// 根据卡片实际宽度换行，窄侧栏中保持字段、值来源和取值控件可读。
+@container external-request-editor (max-width: 620px) {
+  .external-request-editor .external-request-head { display: none; }
+  .external-request-editor .external-request-row { grid-template-columns: 76px minmax(0, 1fr) 28px; gap: 12px;
+    > .field-value-control { grid-column: 1 / 3; grid-row: 2; }
+    > .external-request-remove { grid-column: 3; grid-row: 1; }
+  }
+  .external-request-editor.is-readonly .external-request-row { grid-template-columns: 76px minmax(0, 1fr);
+    > .field-detail-source { grid-column: 1 / -1; }
+    > .field-detail-content { grid-column: 1 / -1; }
+  }
+}
+@container external-request-editor (max-width: 400px) {
+  .external-request-editor .field-value-control .field-value-inputs { grid-template-columns: minmax(0, 1fr); }
+}

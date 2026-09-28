@@ -146,12 +146,12 @@ class ApiDesignTests(unittest.TestCase):
             {**condition, "column": "id"},
         ]})
         _validate_query_references(query, [field])
-        self.assertEqual(_validate_database_contract({}, [], query, "read"), "read")
-        self.assertEqual(_validate_database_contract({}, [], None, None), None)
+        self.assertEqual(_validate_database_contract({}, [], query, [], "read"), "read")
+        self.assertEqual(_validate_database_contract({}, [], None, [], None), None)
         with self.assertRaisesRegex(ValueError, "新增操作不能包含"):
-            _validate_database_contract({}, [], query, "create")
+            _validate_database_contract({}, [], query, [], "create")
         with self.assertRaisesRegex(ValueError, "没有数据库映射"):
-            _validate_database_contract({}, [], None, "delete")
+            _validate_database_contract({}, [], None, [], "delete")
         _validate_field_mappings([], [field], "read")
         with self.assertRaisesRegex(ValueError, "缺少"):
             _validate_field_mappings([], [{"side": "response", "location": "response_body", "path": "id", "type": "integer", "required": True, "description": ""}], "read")
@@ -343,6 +343,7 @@ class ApiDesignTests(unittest.TestCase):
             with patch(
                 "app.services.api_design.read_endpoint_design",
                 return_value={
+                    "schemaVersion": "endpoint-field-mapping.v7",
                     "implementationDescription": "先校验条件，再执行分页查询。",
                     "fieldMappings": mappings,
                 },

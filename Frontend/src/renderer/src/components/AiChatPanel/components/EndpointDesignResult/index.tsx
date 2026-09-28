@@ -1,8 +1,10 @@
+import { valueSummary } from '../FieldMapping/valueRules'
+import type { WorkflowApiValueRight } from '../../../../typings'
 import { Alert, Collapse, Descriptions, Empty, Table, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { EndpointDesignDetail } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { endpointDesignSummary, groupEndpointDesignRows, projectDatabaseWriteRows, projectEndpointDesignRows } from './endpointDesignResultModel'
+import { endpointDesignSummary, groupEndpointDesignRows, projectDatabaseWriteRows, projectExternalBindingRows, projectEndpointDesignRows } from './endpointDesignResultModel'
 import './EndpointDesignResult.less'
 
 const { Text } = Typography
@@ -27,7 +29,7 @@ function queryText(value: unknown): string {
     const right = item.right && typeof item.right === 'object' ? item.right as Record<string, unknown> : undefined
     const field = right?.endpointField && typeof right.endpointField === 'object' ? right.endpointField as Record<string, unknown> : undefined
     const rightText = right?.kind === 'endpoint' ? `接口参数 ${String(field?.location || '')}.${String(field?.path || '')}`
-      : right?.kind === 'fixed' ? `固定值 ${Array.isArray(right.value) ? right.value.join('，') : String(right.value)}` : ''
+      : right?.kind === 'fixed' ? `固定值 ${Array.isArray(right.value) ? right.value.join('，') : String(right.value)}` : right?.kind === 'business' ? valueSummary(right as WorkflowApiValueRight) : ''
     return `${String(item.schema || '')}.${String(item.table || '')}.${String(item.column || '')} ${CONDITION_LABELS[String(item.operator || '')] || String(item.operator || '')} ${rightText}`.trim()
   }
   const parts = Array.isArray(item.items) ? item.items.map(queryText).filter(Boolean) : []
@@ -38,6 +40,7 @@ function queryText(value: unknown): string {
 export default function EndpointDesignResult({ detail, compact = false, historyLayout = false }: Props): ReactElement {
   if (!detail) return <Empty description="尚未读取接口 API 映射结果" />
   const summary = endpointDesignSummary(detail)
+  const externalRows = projectExternalBindingRows(detail)
   const databaseWriteRows = projectDatabaseWriteRows(detail)
   const statusLabel = detail.status === 'confirmed' ? '已确认' : detail.status === 'stale' ? '已失效' : '待设计'
   const statusColor = detail.status === 'confirmed' ? 'success' : detail.status === 'stale' ? 'warning' : 'default'
@@ -54,9 +57,9 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
     { title: '映射字段', dataIndex: 'mappingField', key: 'mappingField', width: 180, render: (value: string) => value || '—' },
   ]
   const databaseWriteColumns = [
-    { title: '数据表字段', dataIndex: 'target', key: 'target', width: 240, render: (value: string) => value || '—' },
+    { title: '目标字段', dataIndex: 'target', key: 'target', width: 240, render: (value: string) => value || '—' },
     { title: '值来源', dataIndex: 'valueSource', key: 'valueSource', width: 110 },
-    { title: '参数或固定值', dataIndex: 'value', key: 'value', width: 240, render: (value: string) => value || '—' },
+    { title: '取值规则', dataIndex: 'value', key: 'value', width: 240, render: (value: string) => value || '—' },
     { title: '类型', dataIndex: 'type', key: 'type', width: 100 }
   ]
   const renderRows = (side: 'request' | 'response'): ReactElement => {
@@ -79,7 +82,8 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
         <section><strong>数据库操作</strong><p>{String(design.databaseOperation || '无数据库映射')}</p></section>
         {design.databaseQuery ? <section><strong>查询条件</strong><p>{queryText(design.databaseQuery)}</p></section> : null}
         {databaseWriteRows.length ? <section><strong>数据库写入字段</strong><Table columns={databaseWriteColumns} dataSource={databaseWriteRows} pagination={false} size="small" /></section> : null}
-        {design.implementationDescription ? <section><strong>API 实现描述</strong><p>{String(design.implementationDescription)}</p></section> : null}
+        {externalRows.length ? <section><strong>外部 API 入参取值</strong><Table columns={databaseWriteColumns} dataSource={externalRows} pagination={false} size="small" /></section> : null}
+        {design.implementationDescription ? <section><strong>接口映射说明</strong><p>{String(design.implementationDescription)}</p></section> : null}
         {(['request', 'response'] as const).map((side) => (
           <section key={side}>
             <header><strong>{side === 'request' ? '请求映射' : '返回映射'}</strong><Tag>{side === 'request' ? summary.requestCount : summary.responseCount} 项</Tag></header>
@@ -105,12 +109,13 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
         <Descriptions.Item label="API Contract">{detail.apiContractId}</Descriptions.Item>
         <Descriptions.Item label="接口">{endpointName || detail.endpointId}</Descriptions.Item>
         <Descriptions.Item label="接口 ID">{detail.endpointId}</Descriptions.Item>
-        <Descriptions.Item label="实现描述">{String(design.implementationDescription || '未填写')}</Descriptions.Item>
+        <Descriptions.Item label="接口映射说明">{String(design.implementationDescription || '未填写')}</Descriptions.Item>
         <Descriptions.Item label="数据库操作">{String(design.databaseOperation || '无数据库映射')}</Descriptions.Item>
         <Descriptions.Item label="映射数量">请求 {summary.requestCount} 项，返回 {summary.responseCount} 项</Descriptions.Item>
       </Descriptions>
       {design.databaseQuery ? <section className="endpoint-design-fixed-conditions"><Text strong>查询条件</Text><div>{queryText(design.databaseQuery)}</div></section> : null}
       {databaseWriteRows.length ? <section className="endpoint-design-fixed-conditions"><Text strong>数据库写入字段</Text><Table columns={databaseWriteColumns} dataSource={databaseWriteRows} pagination={false} size="small" /></section> : null}
+      {externalRows.length ? <section className="endpoint-design-fixed-conditions"><Text strong>外部 API 入参取值</Text><Table columns={databaseWriteColumns} dataSource={externalRows} pagination={false} size="small" /></section> : null}
       {!compact ? (
         <Collapse defaultActiveKey={['request', 'response']}>
           {(['request', 'response'] as const).map((side) => (

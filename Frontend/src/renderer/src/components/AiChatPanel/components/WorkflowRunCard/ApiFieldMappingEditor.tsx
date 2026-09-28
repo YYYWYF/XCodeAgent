@@ -61,7 +61,7 @@ export default function ApiFieldMappingEditor({
   operation
 }: Props): ReactElement {
   const initialMapping = findFieldMapping(draft, endpoint)
-  const [mode, setMode] = useState<EditorMode>(initialMapping?.mappingType === 'source_mapping'
+  const [mode, setMode] = useState<EditorMode>(endpoint.side === 'request' ? 'business_description' : initialMapping?.mappingType === 'source_mapping'
     ? initialMapping.processingType : initialMode === 'business_description' ? 'business_description' : 'direct')
   const [sources, setSources] = useState<WorkflowApiSourceField[]>(initialMapping?.mappingType === 'source_mapping' ? initialMapping.sourceFields : [])
   const [error, setError] = useState('')
@@ -129,7 +129,7 @@ export default function ApiFieldMappingEditor({
               { value: 'single_field_description', label: '单字段业务处理' },
               { value: 'multi_field_description', label: '多字段业务处理' },
               { value: 'business_description', label: '纯业务说明' }
-            ]}
+            ].filter((item) => endpoint.side !== 'request' || item.value === 'business_description')}
             value={mode}
           />
         </Form.Item>

@@ -29,9 +29,21 @@
   }
   .ant-select-selector, .ant-input { border-color: var(--wb-border-strong); background: var(--wb-canvas); color: var(--wb-text); }
   .ant-select:not(.ant-select-disabled):hover .ant-select-selector, .ant-select-focused:not(.ant-select-disabled) .ant-select-selector, .ant-input:not(:disabled):hover, .ant-input:focus { border-color: var(--wb-accent-border); }
+  &.is-readonly {
+    --database-write-columns: minmax(150px, 1.2fr) minmax(100px, .75fr) minmax(160px, 1.2fr);
+    .database-write-head, .database-write-row { min-width: 0; gap: 16px; }
+    .database-write-row { border-left: 0; border-right: 0; border-radius: 0; margin-top: 0; min-height: 60px; }
+    .database-write-static-field { display: flex; align-items: center; gap: 5px; white-space: nowrap;
+      code { min-width: 0; overflow: hidden; color: var(--wb-text); text-overflow: ellipsis; white-space: nowrap; }
+    }
+  }
 }
 
 @container database-write-editor (max-width: 650px) {
+  .database-write-editor.is-readonly .database-write-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .database-write-editor.is-readonly .database-write-row > .database-write-column-cell { grid-column: 1 / -1; }
+  .database-write-editor.is-readonly .database-write-row > .field-detail-source { grid-column: 1; }
+  .database-write-editor.is-readonly .database-write-row > .field-detail-content { grid-column: 2; }
   .database-write-editor .database-write-list { overflow: visible; }
   .database-write-editor .database-write-head { display: none; }
   .database-write-editor .database-write-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px; min-width: 0; gap: 8px; margin-inline: 0; padding: 9px;

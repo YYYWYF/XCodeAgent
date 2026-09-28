@@ -329,9 +329,9 @@ Endpoint 设计和页面/API开发流程固定为：
   -> Build / Test / Acceptance
 ```
 
-纯静态且没有 Endpoint 的页面可直接通过门禁。API 设计正式产物使用 `endpoint-field-mapping.v6`。数据库写入字段使用独立 `databaseWrites`：新增和修改时先选当前数据表的目标列，再选接口参数或固定值；接口参数必须引用当前 Endpoint 的请求字段并通过类型校验。外部 API 请求字段按相同的“值来源 / 参数”方式配置，来源为接口参数、固定值或禁用的内置参数；固定值保存在 `externalApiFixedValues` 并传入外部请求。非必填外部请求字段可在当前编辑界面临时删除，删除状态不单独写入草稿或正式产物，关联映射和值会清除。响应字段和外部来源仍进入 `fieldMappings`；未使用请求参数保留在 Endpoint 契约。数据库查询条件由用户手动新增，选择实时数据库列、运算符、右值来源和接口参数或固定值；内置参数显示为禁用占位。`databaseQuery` 以顶层 AND/OR 和最多一层子组表达括号关系，允许重复列及参数；空值运算符无右值。read 可无条件，update/delete 必须有条件，create 不允许条件。完整编辑器与简化工作台共用查询和值来源逻辑。
+当前正式契约为 `endpoint-field-mapping.v7`，详见 [单数据源字段取值规则](FIELD_VALUE_RULES.md)。工作台沿用原有数据来源选择和更换入口，不新增数据表 / 外部 API 场景 Tab。`sourceBinding` 保存单表或单 Operation 身份；`databaseWrites`、`databaseQuery` 和 `externalApiBindings` 按目标保存统一 `right` 取值规则，支持接口参数、固定值、内置上下文和业务生成。业务加工显式保存依赖、自然语言规则、缺值策略和默认值；同一请求参数可以复用。响应的多字段加工保留 `source_mapping`，无数据源字段的返回取值使用 `value_mapping`，纯业务入参用途使用 `business_description`。规则在行内应用，正式保存仍须显式确认；草稿不推进开发。查询树保留顶层及一层子组 AND/OR，空值运算符不带右值，update/delete 不允许无条件执行。
 
-每次确认写入 `.devagentstudio/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 当前版为 `endpoint-field-mapping.v6`，保存 `databaseOperation`、`databaseWrites`、`externalApiFixedValues`、可选 `databaseQuery: { join, items }`、正式 `fieldMappings`、TechnicalPlan 指纹、脱敏来源快照及修订号；Markdown 展示写入字段、外部 API 固定参数、值来源、条件分组和括号语义。生成与验收消费结构化写入值、外部请求固定参数和完整查询树，并使用参数化值。双文件、版本、确认状态、指纹和修订号均须通过校验；旧正式产物需重新配置，旧草稿不加载，不迁移或双写。
+每次确认写入 `.devagentstudio/plans/endpoints/endpoint--<contractId>--<endpointId>.json/.md`。JSON 当前版为 `endpoint-field-mapping.v7`，保存 `databaseOperation`、`databaseWrites`、`externalApiBindings`、可选 `databaseQuery: { join, items }`、正式 `fieldMappings`、TechnicalPlan 指纹、脱敏来源快照及修订号；Markdown 展示写入字段、外部 API 请求取值规则、值来源、条件分组和括号语义。生成与验收消费结构化写入值、外部请求取值规则和完整查询树，并使用参数化值。双文件、版本、确认状态、指纹和修订号均须通过校验；旧正式产物需重新配置，旧草稿不加载，不迁移或双写。
 
 开发门禁只投影目标范围内的 Endpoint 状态，不保存聚合 `apiDesignResult` 快照。右侧开发产物通过独立 `/endpoint-designs/run` AG-UI 读取当前正式产物；该接口按当前工作区、API Contract 与 Endpoint 标识提供 `get/prepare/save`，返回 pending、confirmed 或 stale 状态以及结构化设计和 Markdown。只要目标包含 Endpoint，门禁首次进入就展示完整状态集合；保存只更新映射，不启动主工作流，用户可从已完成条目的“查看映射”进入右侧工作台修改。用户回到门禁点击“确认并检测”后统一复检，全部有效便直接继续开发，不再展示 API 映射确认卡片；无 Endpoint 的纯静态页面直接通过。
 

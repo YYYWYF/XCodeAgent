@@ -10,6 +10,12 @@ def mapping_sources(mapping: dict[str, Any]) -> list[dict[str, Any]]:
 
 def mapping_business_description(mapping: dict[str, Any]) -> str:
     """读取来源处理或纯业务说明，统一空值与首尾空白处理。"""
+    if mapping.get("mappingType") == "value_mapping":
+        from app.services.api_design_values import value_rule_summary
+        return value_rule_summary(mapping.get("right"))
+    if mapping.get("mappingType") == "source_mapping" and mapping.get("processingType") != "direct":
+        from app.services.api_design_values import value_rule_summary
+        return value_rule_summary({"kind": "business", **mapping})
     value = mapping.get("businessDescription")
     return value.strip() if isinstance(value, str) else ""
 

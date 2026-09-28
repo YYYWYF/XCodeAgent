@@ -26,3 +26,19 @@ class BackendUnitPromptMergeTests(unittest.TestCase):
         prompt = build_unit_generation_prompt(_backend_endpoint_context("external_api"))
         self.assertIn("<Module>ErrorCode.java", prompt)
         self.assertNotIn("BaseMapper<PO>", prompt)
+
+    def test_value_rules_reach_both_endpoint_planning_prompts(self) -> None:
+        """两种单来源规划均保留取值阶段和缺值语义，外部入参绑定不再被禁止。"""
+        for source in ("database", "external_api"):
+            with self.subTest(source=source):
+                prompt = build_unit_generation_prompt(_backend_endpoint_context(source))
+                for expected in (
+                    "sourceBinding identifies the selected table or external Operation",
+                    "origin is an editor category, not a runtime algorithm",
+                    "databaseQuery right values", "pre-call or post-call phase",
+                    "no per-field Task", "require rejecting update/delete when omit removes all effective predicates",
+                    "externalApiBindings values to external request targets",
+                ):
+                    self.assertIn(expected, prompt)
+                self.assertNotIn("must not create a separate mapping Task, bind confirmed externalApiBindings", prompt)
+                self.assertNotIn("【字段取值契约】", prompt)

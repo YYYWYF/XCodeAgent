@@ -14,7 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
-from app.domain.api_design import DraftFieldMapping, EndpointField, ExternalApiFixedValueDraft
+from app.domain.api_design import DraftFieldMapping, EndpointField, ExternalApiBindingDraft, QueryRight
 from app.services.data_sources import change_selected_tables, selected_tables
 
 
@@ -108,7 +108,7 @@ def read_binding_draft(workspace: str | Path, contract: str, endpoint: str) -> d
     """读取指定接口草稿，保持与正式状态分离。"""
     with BINDING_STATE_LOCK:
         value = _read(_draft_path(workspace, _draft_name(contract, endpoint)))
-        return value if value.get("draftFormat") == "endpoint-field-mapping.v6" else None
+        return value if value.get("draftFormat") == "endpoint-field-mapping.v7" else None
 
 
 def _draft_database_query(value: Any) -> dict[str, Any] | None:
@@ -164,39 +164,51 @@ def _draft_database_writes(value: Any) -> list[dict[str, Any]]:
         }
         right = item.get("right")
         if right is not None:
-            if not isinstance(right, dict) or right.get("kind") not in {"endpoint", "fixed"}:
-                raise ValueError("数据库写入值来源无效。")
-            if right["kind"] == "endpoint":
-                if set(right) - {"kind", "endpointField"}:
-                    raise ValueError("数据库写入接口参数结构无效。")
-                endpoint = right.get("endpointField")
-                if endpoint is None:
-                    row["right"] = {"kind": "endpoint"}
-                else:
-                    parsed = EndpointField.model_validate(endpoint)
-                    if parsed.side != "request":
-                        raise ValueError("数据库写入值只能引用接口请求参数。")
-                    row["right"] = {"kind": "endpoint", "endpointField": parsed.model_dump(by_alias=True)}
-            else:
-                if set(right) - {"kind", "value"}:
-                    raise ValueError("数据库写入固定值结构无效。")
-                row["right"] = {"kind": "fixed", **({"value": right["value"]} if "value" in right else {})}
+            row["right"] = _draft_value_rule(right)
         writes.append(row)
     return writes
 
 
-def _draft_external_api_fixed_values(value: Any) -> list[dict[str, Any]]:
-    """保留外部 API 固定值的未完成编辑态，并校验请求字段结构。"""
+def _draft_value_rule(value: Any) -> dict[str, Any]:
+    """保留参数和固定值的未完成选择，业务规则必须显式应用后才可暂存。"""
+    if value == {"kind": "endpoint"} or value == {"kind": "fixed"}:
+        return value
+    return TypeAdapter(QueryRight).validate_python(value).model_dump(by_alias=True, exclude_none=True)
+
+
+def _draft_field_mappings(value: Any) -> list[dict[str, Any]]:
+    """保存未选完参数的业务返回值草稿，正式确认仍使用严格取值模型。"""
+    if not isinstance(value, list) or len(value) > 3000:
+        raise ValueError("草稿字段必须是最多 3000 项的列表。")
+    result = []
+    for item in value:
+        if isinstance(item, dict) and item.get("mappingType") == "value_mapping":
+            if set(item) != {"mappingType", "endpointField", "right"}:
+                raise ValueError("业务字段草稿结构无效。")
+            result.append({"mappingType": "value_mapping", "endpointField": EndpointField.model_validate(item["endpointField"]).model_dump(by_alias=True), "right": _draft_value_rule(item["right"])})
+        else:
+            result.append(TypeAdapter(DraftFieldMapping).validate_python(item).model_dump(by_alias=True, exclude_none=True))
+    return result
+
+
+def _draft_external_api_bindings(value: Any) -> list[dict[str, Any]]:
+    """保留外部 API 取值规则的未完成编辑态，并校验请求字段结构。"""
 
     if value is None:
         return []
     if not isinstance(value, list) or len(value) > 3000:
-        raise ValueError("外部 API 固定值必须是最多 3000 项的列表。")
+        raise ValueError("外部 API 取值规则必须是最多 3000 项的列表。")
     try:
-        entries = TypeAdapter(list[ExternalApiFixedValueDraft]).validate_python(value)
+        entries = TypeAdapter(list[ExternalApiBindingDraft]).validate_python(value)
     except ValueError as exc:
-        raise ValueError(f"外部 API 固定值草稿结构无效：{exc}") from exc
-    return [item.model_dump(by_alias=True, exclude_none=True) for item in entries]
+        raise ValueError(f"外部 API 取值规则草稿结构无效：{exc}") from exc
+    result = []
+    for item in entries:
+        payload = item.model_dump(by_alias=True, exclude_none=True)
+        if item.right is not None:
+            payload["right"] = _draft_value_rule(item.right)
+        result.append(payload)
+    return result
 
 
 def save_binding_draft(request: BindingDraftRequest) -> dict[str, Any]:
@@ -212,13 +224,13 @@ def save_binding_draft(request: BindingDraftRequest) -> dict[str, Any]:
         if revision != request.base_revision or technical_plan_sha256(request.workspace_root) != request.technical_plan_hash:
             raise ValueError("契约或正式映射已变化，请重新加载；当前输入仍保留。")
         draft = request.draft
-        if set(draft) - {"apiContractId", "endpointId", "implementationDescription", "databaseOperation", "databaseWrites", "externalApiFixedValues", "databaseQuery", "fieldMappings"}:
+        if set(draft) - {"apiContractId", "endpointId", "implementationDescription", "databaseOperation", "databaseWrites", "externalApiBindings", "sourceBinding", "databaseQuery", "fieldMappings"}:
             raise ValueError("草稿包含未支持字段。")
         if draft.get("apiContractId") != request.api_contract_id or draft.get("endpointId") != request.endpoint_id:
             raise ValueError("草稿接口身份与请求不一致。")
-        mappings = TypeAdapter(list[DraftFieldMapping]).validate_python(draft.get("fieldMappings", []))
+        mappings = _draft_field_mappings(draft.get("fieldMappings", []))
         writes = _draft_database_writes(draft.get("databaseWrites", []))
-        external_fixed_values = _draft_external_api_fixed_values(draft.get("externalApiFixedValues", []))
+        external_fixed_values = _draft_external_api_bindings(draft.get("externalApiBindings", []))
         query = _draft_database_query(draft.get("databaseQuery"))
         if len(mappings) > 3000:
             raise ValueError("草稿字段数量超出限制。")
@@ -228,11 +240,12 @@ def save_binding_draft(request: BindingDraftRequest) -> dict[str, Any]:
             "implementationDescription": str(draft.get("implementationDescription") or "")[:4000],
             "databaseOperation": draft.get("databaseOperation"),
             "databaseWrites": writes,
-            "externalApiFixedValues": external_fixed_values,
+            **({"sourceBinding": request.selection.model_dump(by_alias=True, exclude_none=True)} if request.selection else {}),
+            "externalApiBindings": external_fixed_values,
             "databaseQuery": query,
-            "fieldMappings": [item.model_dump(by_alias=True, exclude_none=True) for item in mappings],
+            "fieldMappings": mappings,
         }
-        value = {"draftFormat": "endpoint-field-mapping.v6", "draft": clean, "selection": request.selection.model_dump(by_alias=True, exclude_none=True) if request.selection else None,
+        value = {"draftFormat": "endpoint-field-mapping.v7", "draft": clean, "selection": request.selection.model_dump(by_alias=True, exclude_none=True) if request.selection else None,
                  "baseRevision": request.base_revision, "technicalPlanHash": request.technical_plan_hash,
                  "savedAt": datetime.now(UTC).isoformat()}
         _write(_draft_path(request.workspace_root, _draft_name(request.api_contract_id, request.endpoint_id)), value)
@@ -244,13 +257,13 @@ def validate_binding_selection(workspace: str | Path, selection: BindingTarget, 
     from app.services.api_design import load_database_columns, load_external_operation
 
     # 正式产物通过字段映射保存来源；空映射无法表达绑定，不能返回虚假的确认成功。
-    if not draft.get("fieldMappings") and not draft.get("databaseQuery") and not draft.get("databaseWrites") and not draft.get("externalApiFixedValues"):
+    if not draft.get("fieldMappings") and not draft.get("databaseQuery") and not draft.get("databaseWrites") and not draft.get("externalApiBindings"):
         raise ValueError("当前接口没有可映射字段，无法确认数据来源绑定；草稿已保留。")
     expected = selection.model_dump(by_alias=True, exclude_none=True)
     if selection.source_type != "database" and draft.get("databaseWrites"):
         raise ValueError("数据库写入字段只能绑定数据库数据表。")
-    if selection.source_type != "external_api" and draft.get("externalApiFixedValues"):
-        raise ValueError("外部 API 固定值只能绑定外部接口。")
+    if selection.source_type != "external_api" and draft.get("externalApiBindings"):
+        raise ValueError("外部 API 取值规则只能绑定外部接口。")
     if selection.source_type == "database":
         if not selection.table or not selection.schema_name or not any(
             item["sourceId"] == selection.source_id and item["schema"] == selection.schema_name and item["table"] == selection.table
@@ -277,16 +290,16 @@ def validate_binding_selection(workspace: str | Path, selection: BindingTarget, 
             (str(field.get("section") or ""), str(field.get("path") or "")): field
             for field in operation_metadata.get("fields", []) if isinstance(field, dict)
         }
-        for item in draft.get("externalApiFixedValues", []):
+        for item in draft.get("externalApiBindings", []):
             field = item.get("externalField") if isinstance(item, dict) else None
             if not isinstance(field, dict) or any(field.get(key) != expected.get(key) for key in keys):
-                raise ValueError("外部 API 固定值必须来自当前选定接口。")
+                raise ValueError("外部 API 取值规则必须来自当前选定接口。")
             field_key = (str(field.get("section") or ""), str(field.get("path") or ""))
             actual = available_fields.get(field_key)
             if actual is None or actual.get("section") == "response_body":
-                raise ValueError("外部 API 固定值目标已失效或不是请求参数。")
+                raise ValueError("外部 API 取值规则目标已失效或不是请求参数。")
             if str(field.get("type") or "unknown") != str(actual.get("type") or "unknown"):
-                raise ValueError(f"外部 API 固定值字段类型已变化：{field_key[1]}。")
+                raise ValueError(f"外部 API 取值规则字段类型已变化：{field_key[1]}。")
     used_source_fields: set[tuple[str, str]] = set()
     from app.services.api_design import database_query_leaves
     for condition in database_query_leaves(draft.get("databaseQuery")):
@@ -298,23 +311,21 @@ def validate_binding_selection(workspace: str | Path, selection: BindingTarget, 
         if mapping.get("mappingType") == "unconfigured" and mapping.get("endpointField", {}).get("side") == "request":
             continue
         sources = mapping.get("sourceFields", [])
-        if mapping.get("mappingType") != "source_mapping" or mapping.get("processingType") != "direct" or len(sources) != 1:
-            raise ValueError("当前绑定旅程只支持直接映射。")
-        if any(sources[0].get(key) != expected.get(key) for key in keys):
+        if mapping.get("mappingType") in {"business_description", "value_mapping"}:
+            continue
+        if mapping.get("mappingType") != "source_mapping" or not sources:
+            raise ValueError("请完成字段取值配置。")
+        if any(any(source.get(key) != expected.get(key) for key in keys) for source in sources):
             raise ValueError("所有字段必须来自当前选定对象。")
-        # 外部响应字段可供多个应用出参复用，只有入参继续保持一对一绑定。
-        if selection.source_type == "external_api" and sources[0].get("section") != "response_body":
-            source_key = (str(sources[0].get("section") or ""), str(sources[0].get("path") or ""))
-            if source_key in used_source_fields:
-                raise ValueError("同一个外部字段不能绑定多个应用字段。")
-            used_source_fields.add(source_key)
-    for item in draft.get("externalApiFixedValues", []):
+        if any(source.get("sourceType") == "external_api" and source.get("section") != "response_body" for source in sources):
+            raise ValueError("外部请求参数必须通过目标字段取值规则配置。")
+    for item in draft.get("externalApiBindings", []):
         field = item.get("externalField") if isinstance(item, dict) else None
         if not isinstance(field, dict):
             continue
         source_key = (str(field.get("section") or ""), str(field.get("path") or ""))
         if source_key in used_source_fields:
-            raise ValueError("外部请求参数不能同时绑定接口参数和固定值。")
+            raise ValueError("外部请求参数不能重复配置。")
         used_source_fields.add(source_key)
     if selection.source_type == "external_api":
         mapped = {(str(source.get("section") or ""), str(source.get("path") or ""))
@@ -322,9 +333,9 @@ def validate_binding_selection(workspace: str | Path, selection: BindingTarget, 
                   for source in mapping.get("sourceFields", [])}
         mapped.update(
             (str((item.get("externalField") or {}).get("section") or ""), str((item.get("externalField") or {}).get("path") or ""))
-            for item in draft.get("externalApiFixedValues", [])
+            for item in draft.get("externalApiBindings", [])
             if isinstance(item, dict) and isinstance(item.get("externalField"), dict)
-            and item.get("value") is not None and (not isinstance(item.get("value"), str) or item.get("value").strip())
+            and item.get("right") is not None
         )
         required = {(str(field.get("section") or ""), str(field.get("path") or ""))
                     for field in operation_metadata.get("fields", [])
@@ -350,11 +361,13 @@ def source_references(workspace: str | Path, source_id: str, table: str | None =
     result = []
     for path in (Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans" / "endpoints").glob("*.json"):
         design = _read(path)
-        if design.get("schemaVersion") != "endpoint-field-mapping.v6":
+        if design.get("schemaVersion") != "endpoint-field-mapping.v7":
             continue
         fields = [source for mapping in design.get("fieldMappings", []) for source in mapping.get("sourceFields", [])]
-        fields.extend(item.get("externalField", {}) for item in design.get("externalApiFixedValues", []) if isinstance(item, dict))
+        fields.extend(item.get("externalField", {}) for item in design.get("externalApiBindings", []) if isinstance(item, dict))
         fields.extend(design.get("databaseWrites", []))
+        if isinstance(design.get("sourceBinding"), dict):
+            fields.append(design["sourceBinding"])
         from app.services.api_design import database_query_leaves
         fields.extend(database_query_leaves(design.get("databaseQuery")))
         if any(source.get("sourceId") == source_id

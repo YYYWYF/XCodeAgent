@@ -210,7 +210,7 @@ async function writeCurrentEndpointDesign(
   await fs.writeFile(
     jsonPath,
     JSON.stringify({
-      schemaVersion: options.schemaVersion || 'endpoint-field-mapping.v6',
+      schemaVersion: options.schemaVersion || 'endpoint-field-mapping.v7',
       artifactType: 'endpoint-field-mapping',
       status: 'confirmed',
       confirmationStatus: 'confirmed',
