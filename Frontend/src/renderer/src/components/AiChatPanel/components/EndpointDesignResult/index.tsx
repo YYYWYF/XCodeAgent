@@ -79,6 +79,7 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
   if (historyLayout) {
     return (
       <div className={cx('endpoint-design-result', 'endpoint-design-history')}>
+        {design.staticData !== undefined && <section><strong>静态数据</strong><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(design.staticData, null, 2)}</pre></section>}
         <section><strong>数据库操作</strong><p>{String(design.databaseOperation || '无数据库映射')}</p></section>
         {design.databaseQuery ? <section><strong>查询条件</strong><p>{queryText(design.databaseQuery)}</p></section> : null}
         {databaseWriteRows.length ? <section><strong>数据库写入字段</strong><Table columns={databaseWriteColumns} dataSource={databaseWriteRows} pagination={false} size="small" /></section> : null}
@@ -105,6 +106,7 @@ export default function EndpointDesignResult({ detail, compact = false, historyL
         <Tag color={statusColor}>{statusLabel}</Tag>
       </div>
       {detail.reason ? <Alert message={detail.reason} showIcon type={detail.status === 'stale' ? 'warning' : 'info'} /> : null}
+      {design.staticData !== undefined && <section><strong>静态数据</strong><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(design.staticData, null, 2)}</pre></section>}
       <Descriptions bordered column={1} size="small">
         <Descriptions.Item label="API Contract">{detail.apiContractId}</Descriptions.Item>
         <Descriptions.Item label="接口">{endpointName || detail.endpointId}</Descriptions.Item>

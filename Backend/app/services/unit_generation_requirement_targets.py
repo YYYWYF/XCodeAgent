@@ -123,7 +123,7 @@ def endpoint_source_types(
             )
         source_types: set[str] = set()
         binding = design.get("sourceBinding")
-        if isinstance(binding, Mapping) and binding.get("sourceType") in ENDPOINT_PHYSICAL_SOURCE_TYPES:
+        if isinstance(binding, Mapping) and binding.get("sourceType") in ENDPOINT_PHYSICAL_SOURCE_TYPES | {"static"}:
             source_types.add(binding["sourceType"])
         for mapping in field_mappings:
             if not isinstance(mapping, Mapping):
@@ -157,7 +157,7 @@ def endpoint_source_types(
                         f"Endpoint {key[0]}/{key[1]} 的 sourceFields 项必须为对象。",
                     )
                 source_type = source.get("sourceType")
-                if not isinstance(source_type, str) or source_type not in ENDPOINT_PHYSICAL_SOURCE_TYPES:
+                if not isinstance(source_type, str) or source_type not in ENDPOINT_PHYSICAL_SOURCE_TYPES | {"static"}:
                     fail_requirement_input(
                         "GENERATION_ENDPOINT_SOURCE_TYPE_INVALID",
                         f"Endpoint {key[0]}/{key[1]} 含不受支持的 sourceType：{source_type!r}。",

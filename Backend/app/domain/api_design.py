@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, model_validator
 from app.domain.api_design_fields import ApiDesignModel, EndpointField
+from app.domain.api_design_static import StaticBinding, StaticSourceField, validate_static_design
 from app.domain.api_design_values import BusinessQueryRight, EndpointQueryRight, FixedQueryRight, QueryRight
 from app.domain.api_design_database import DatabaseSourceField, DatabaseConditionOperator, DatabaseWriteMapping, DatabaseQueryCondition, DatabaseQuerySubgroup, DatabaseQuery
 
@@ -72,7 +73,7 @@ class ExternalApiBinding(ApiDesignModel):
 
 
 SourceField = Annotated[
-    DatabaseSourceField | ExternalSourceField,
+    DatabaseSourceField | ExternalSourceField | StaticSourceField,
     Field(discriminator="source_type"),
 ]
 
@@ -186,7 +187,7 @@ class ExternalBinding(ApiDesignModel):
     operation_id: str = Field(alias="operationId", min_length=1, max_length=128)
 
 
-SourceBinding = Annotated[DatabaseBinding | ExternalBinding, Field(discriminator="source_type")]
+SourceBinding = Annotated[DatabaseBinding | ExternalBinding | StaticBinding, Field(discriminator="source_type")]
 
 
 class ArtifactLineageReference(ApiDesignModel):
@@ -210,6 +211,7 @@ class EndpointFieldMappingDesign(ApiDesignModel):
     implementation_description: str | None = Field(default=None, alias="implementationDescription", max_length=4000)
     database_operation: Literal["create", "read", "update", "delete"] | None = Field(default=None, alias="databaseOperation")
     source_binding: SourceBinding | None = Field(default=None, alias="sourceBinding")
+    static_data: dict[str, Any] | list[dict[str, Any]] | None = Field(default=None, alias="staticData")
     field_mappings: list[ConfirmedFieldMapping] = Field(alias="fieldMappings", max_length=3000)
     database_writes: list[DatabaseWriteMapping] = Field(default_factory=list, alias="databaseWrites", max_length=3000)
     external_api_bindings: list[ExternalApiBinding] = Field(default_factory=list, alias="externalApiBindings", max_length=3000)
@@ -222,6 +224,7 @@ class EndpointFieldMappingDesign(ApiDesignModel):
     def validate_database_operation_shape(self) -> "EndpointFieldMappingDesign":
         """保证正式产物中的数据库来源与单一 CRUD 操作成对出现。"""
 
+        validate_static_design(self.model_dump(by_alias=True, exclude_none=True))
         has_database_source = any(
             isinstance(source, DatabaseSourceField)
             for mapping in self.field_mappings

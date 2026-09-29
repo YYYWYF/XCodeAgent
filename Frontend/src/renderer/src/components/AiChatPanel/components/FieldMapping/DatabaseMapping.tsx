@@ -37,6 +37,16 @@ export default function DatabaseMapping({ fields, selection, metadata, draft, op
   const columns = metadata.columns || []
   const responseFields = fields.filter((field) => field.side === 'response')
 
+  // 仅在收到一次提交校验结果时展开错误区，用户随后仍可手动收起。
+  useEffect(() => {
+    if (readOnly || !Object.keys(errors).length) return
+    setCollapsed((current) => ({
+      query: errors.__databaseQuery ? false : current.query,
+      write: Object.keys(errors).some((key) => key === '__databaseWrites' || key.startsWith('__databaseWrite:')) ? false : current.write,
+      return: fields.some((field) => field.side === 'response' && errors[apiDesignFieldKey(field)]) ? false : current.return
+    }))
+  }, [errors, readOnly, fields])
+
   /** 返回字段复用单数据源规则编辑器，不改变来源选择旅程。 */
   const renderField = (field: WorkflowApiField): ReactElement => <ResponseFieldMapping key={apiDesignFieldKey(field)} field={field} fields={fields}
     sources={mappingCandidates(field, selection, metadata)} draft={draft} readOnly={readOnly} disabled={!editable || busy}

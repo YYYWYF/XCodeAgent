@@ -68,6 +68,7 @@ export default function ApiFieldMappingTable({
     let value = ''
     if (mapping?.mappingType === 'source_mapping') {
       value = column === 'description' ? mapping.businessDescription || '' : mapping.sourceFields.map((source) => {
+        if (source.sourceType === 'static') return column === 'source' ? '静态数据' : source.path
         if (column === 'source') return String(payload.sources?.find((item) => item.id === source.sourceId)?.name || source.sourceId)
         return source.sourceType === 'database'
           ? [source.schema, source.table, source.column].filter(Boolean).join('.')

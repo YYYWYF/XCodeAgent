@@ -39,7 +39,7 @@ export function resetDraftForDatabaseOperation(
 
 /** 为来源对象生成稳定身份，显示名称变化不影响选中项。 */
 export function selectionKey(value?: BindingSelection | null): string {
-  return !value ? '' : value.sourceType === 'database'
+  return !value ? '' : value.sourceType === 'static' ? 'static' : value.sourceType === 'database'
     ? JSON.stringify([value.sourceType, value.sourceId, value.schema, value.table])
     : JSON.stringify([value.sourceType, value.sourceId, value.directoryId, value.operationId])
 }
@@ -53,7 +53,7 @@ export function inferSelection(draft: WorkflowApiDesignDraft): { selection: Bind
     if (mapping.mappingType === 'unconfigured') continue
     if (mapping.mappingType !== 'source_mapping') continue
     for (const field of mapping.sourceFields) {
-      const target: BindingSelection = field.sourceType === 'database'
+      const target: BindingSelection = field.sourceType === 'static' ? { sourceType: 'static' } : field.sourceType === 'database'
         ? { sourceType: 'database', sourceId: field.sourceId, schema: field.schema || '', table: field.table }
         : { sourceType: 'external_api', sourceId: field.sourceId, directoryId: field.directoryId, operationId: field.operationId }
       selections.set(selectionKey(target), target)
@@ -91,6 +91,7 @@ export function tableIsSelected(selection: BindingSelection, tables: SelectedDat
 /** 根据字段方向生成单一来源的字段候选，不推测转换逻辑。 */
 export function mappingCandidates(field: WorkflowApiField, selection: BindingSelection,
   metadata: ApiDesignDatabaseMetadata | ApiDesignExternalOperationMetadata): WorkflowApiSourceField[] {
+  if (selection.sourceType === 'static') return []
   if (selection.sourceType === 'database') return ((metadata as ApiDesignDatabaseMetadata).columns || []).map((column) => ({
     ...selection, column: column.name, type: column.type, description: column.description, usage: defaultDatabaseUsageForOperation(field)
   }))
@@ -101,7 +102,7 @@ export function mappingCandidates(field: WorkflowApiField, selection: BindingSel
 
 /** 字段身份不使用类型和说明，避免元数据展示变化导致选中项丢失。 */
 export function sourceFieldKey(field: WorkflowApiSourceField): string {
-  return field.sourceType === 'database' ? field.column : `${field.section}:${field.path}`
+  return field.sourceType === 'database' ? field.column : field.sourceType === 'static' ? field.path : `${field.section}:${field.path}`
 }
 
 /** 替换一条直接映射，保留其他字段和现有实现说明。 */

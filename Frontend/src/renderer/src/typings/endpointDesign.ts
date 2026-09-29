@@ -2,7 +2,7 @@ import type { WorkflowApiDesignPayload, WorkflowApiDesignDraft } from './workflo
 
 /** 工作台单一绑定对象，仅用于中间状态。 */
 export type BindingSelection = { sourceType: 'database'; sourceId: string; schema: string; table: string } |
-  { sourceType: 'external_api'; sourceId: string; directoryId: string; operationId: string }
+  { sourceType: 'external_api'; sourceId: string; directoryId: string; operationId: string } | { sourceType: 'static' }
 
 /** 与正式映射分离的可恢复草稿。 */
 export type BindingDraft = {

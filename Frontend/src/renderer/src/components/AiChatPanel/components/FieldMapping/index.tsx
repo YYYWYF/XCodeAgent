@@ -3,7 +3,7 @@ import { ApiOutlined, CaretDownOutlined, DownOutlined, EditOutlined, FolderOpenO
 import { Alert, Button, Empty, Radio, Select, Space, Spin, Tag, Tooltip } from 'antd'
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { DevelopmentPlanningApiContract, EndpointDesignSaveResult } from '../../../../typings'
+import type { DevelopmentPlanningApiContract, EndpointDesignSaveResult, WorkflowApiDesignDraft } from '../../../../typings'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
 import { cx } from '../../../../utils'
 import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
@@ -12,6 +12,7 @@ import { apiDesignFieldKey, createUnconfiguredFieldMapping, defaultDatabaseOpera
 import { apiEndpointDisplayPath } from '../../utils'
 import ExternalMapping from './ExternalMapping'
 import DatabaseMapping from './DatabaseMapping'
+import StaticMapping, { StaticDataCard } from './StaticMapping'
 import { mappingCandidates, resetDraftForDatabaseOperation, selectionKey, tableIsSelected } from './model'
 import { useBindingWorkspace } from './useBindingWorkspace'
 import { RuleEditingContext } from './RuleEditor'
@@ -30,16 +31,17 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   const [editingRules, setEditingRules] = useState(0)
   /** 汇总尚未应用的规则编辑器，防止确认旧值。 */
   const trackRuleEditing = useCallback((delta: number) => setEditingRules((count) => count + delta), [])
-  const [kind, setKind] = useState<'database' | 'external_api'>()
+  const [kind, setKind] = useState<BindingSelection['sourceType']>()
   const [sourceChanging, setSourceChanging] = useState(false)
   const [pendingSelection, setPendingSelection] = useState<BindingSelection | null>(null)
   const [advanced, setAdvanced] = useState(false)
   const [sourceCollapsed, setSourceCollapsed] = useState(false)
-  const [validationVisible, setValidationVisible] = useState(false)
+  const [validation, setValidation] = useState<{ draft: WorkflowApiDesignDraft; errors: Record<string, string> }>()
   const selection = entry?.value.selection
   const fields = entry?.preparation.payload.endpointFields || []
   const validationErrors = entry ? validateApiDesignDraft(entry.value.draft) : {}
-  const errors = validationVisible ? validationErrors : {}
+  // 校验仅属于本次提交的草稿；清空、切换或继续编辑后不沿用旧提示。
+  const errors = !entry?.readOnly && validation?.draft === entry?.value.draft ? validation?.errors || {} : {}
   const unavailableTable = Boolean(selection && !tableIsSelected(selection, tables))
   const missingFields = Boolean(entry && selection && metadata && fields.some((field) => {
     const mapping = entry.value.draft.fieldMappings.find((item) => apiDesignFieldKey(item.endpointField) === apiDesignFieldKey(field))
@@ -61,11 +63,11 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   }))
   const editable = Boolean(entry && !entry.readOnly && !entry.complex && !entry.conflict)
     const withoutSource = fields.length === 0 && !selection && entry?.value.draft.fieldMappings.length === 0 && !entry?.value.draft.externalApiBindings?.length
-  const canConfirm = editable && editingRules === 0 && (!validationVisible || !Object.keys(validationErrors).length)
-    && (withoutSource || fields.length > 0 && Boolean(selection && metadata) && !metadataLoading && !unavailableTable && !missingFields && !missingQueryColumns && !missingRequiredExternal)
+  const canConfirm = editable && editingRules === 0
+    && (withoutSource || fields.length > 0 && Boolean(selection && (selection.sourceType === 'static' || metadata)) && !metadataLoading && !unavailableTable && !missingFields && !missingQueryColumns && !missingRequiredExternal)
   const databaseSelection = selection?.sourceType === 'database' ? selection : undefined
 
-  useEffect(() => { setKind(undefined); setSourceChanging(false); setPendingSelection(null); setAdvanced(false); setSourceCollapsed(false); setValidationVisible(false) }, [state.key])
+  useEffect(() => { setKind(undefined); setSourceChanging(false); setPendingSelection(null); setAdvanced(false); setSourceCollapsed(false); setValidation(undefined) }, [state.key, entry?.readOnly])
   useEffect(() => { if (selection) setKind(selection.sourceType) }, [state.key, selection?.sourceType])
 
   const candidates: Array<{ value: string; label: string; selection: BindingSelection }> = kind === 'database'
@@ -74,7 +76,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
       const next: BindingSelection = { sourceType: 'external_api', sourceId: source.id, directoryId: directory.id, operationId: operation.id }
       return { value: selectionKey(next), label: `${source.name} / ${directory.name} / ${operation.name} · ${operation.method} ${operation.path}`, selection: next }
     })) : [])
-  const sourceLabel = candidates.find((item) => item.value === selectionKey(selection))?.label || (selection?.sourceType === 'database' ? selection.table : selection?.operationId) || '尚未选择'
+  const sourceLabel = selection?.sourceType === 'static' ? '自定义静态数据' : candidates.find((item) => item.value === selectionKey(selection))?.label || (selection?.sourceType === 'database' ? selection.table : selection?.operationId) || '尚未选择'
   const activeContract = target ? contracts.find((contract) => contract.id === target.apiContractId || contract.endpoints.some((endpoint) => endpoint.id === target.endpointId && (endpoint.apiContractId || contract.id) === target.apiContractId)) : undefined
   const activeEndpoint = activeContract?.endpoints.find((endpoint) => endpoint.id === target?.endpointId)
   const activeContractName = activeContract?.name || '未命名接口分组'
@@ -88,8 +90,8 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
       setKind(nextKind)
       setSourceChanging(false)
       setPendingSelection(null)
-      setValidationVisible(false)
-      state.edit({ ...entry.value.draft, sourceBinding: next || undefined, databaseOperation: next?.sourceType === 'database' ? defaultDatabaseOperation(String(entry.preparation.payload.endpoint.method || '')) : undefined, databaseQuery: undefined, databaseWrites: [], externalApiBindings: [], fieldMappings: fields.map(createUnconfiguredFieldMapping) }, next)
+      setValidation(undefined)
+      state.edit({ ...entry.value.draft, sourceBinding: next || undefined, staticData: undefined, implementationDescription: next?.sourceType === 'static' ? '' : entry.value.draft.implementationDescription, databaseOperation: next?.sourceType === 'database' ? defaultDatabaseOperation(String(entry.preparation.payload.endpoint.method || '')) : undefined, databaseQuery: undefined, databaseWrites: [], externalApiBindings: [], fieldMappings: fields.map(createUnconfiguredFieldMapping) }, next)
     }
     if (entry.value.draft.fieldMappings.some((item) => item.mappingType !== 'unconfigured') || Boolean(entry.value.draft.databaseQuery?.items.length) || Boolean(entry.value.draft.databaseWrites?.length) || Boolean(entry.value.draft.externalApiBindings?.length)) confirmWorkspaceAction({ title: '更换数据来源？', content: '当前字段映射、写入字段、外部接口取值规则和数据库查询条件将清空，已保存的正式映射在重新确认前不变。', okText: '更换并清空', cancelText: '取消', onOk: apply })
     else apply()
@@ -111,19 +113,21 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
 
   /** 只在用户尝试确认时显示未完成字段的错误，并阻止无效提交。 */
   const confirmMapping = (): void => {
-    setValidationVisible(true)
+    if (!entry) return
+    // 每次提交生成独立校验结果，手动收起后再次提交仍能定位错误。
+    setValidation({ draft: entry.value.draft, errors: validationErrors })
     if (Object.keys(validationErrors).length) return
     void state.save(true)
   }
 
   /** 暂存新的来源类型，等待用户选择具体来源并确认。 */
-  const stageSourceKind = (nextKind: 'database' | 'external_api'): void => {
+  const stageSourceKind = (nextKind: BindingSelection['sourceType']): void => {
     if (!selection && !sourceChanging) {
-      changeSelection(null, nextKind)
+      changeSelection(nextKind === 'static' ? { sourceType: 'static' } : null, nextKind)
       return
     }
     setKind(nextKind)
-    setPendingSelection(selection?.sourceType === nextKind ? selection : null)
+    setPendingSelection(nextKind === 'static' ? { sourceType: 'static' } : selection?.sourceType === nextKind ? selection : null)
     setSourceChanging(true)
   }
 
@@ -158,7 +162,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
           {entry.readOnly && selection && <section className="binding-section database-source-section">
             <div className="database-section-heading"><div className="database-section-title is-card"><h4>数据来源</h4></div></div>
             <div className="database-section-content"><div className="database-source-summary">
-              <div><Tag>{selection.sourceType === 'database' ? '数据表' : '外部 API'}</Tag><strong>{sourceLabel}</strong></div>
+              <div><Tag>{selection.sourceType === 'database' ? '数据表' : selection.sourceType === 'static' ? '静态数据' : '外部 API'}</Tag><strong>{sourceLabel}</strong></div>
             </div></div>
           </section>}
           {!entry.readOnly && <section className={`binding-section database-source-section${sourceCollapsed ? ' is-collapsed' : ''}`}>
@@ -168,21 +172,24 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
             </div>
             {!sourceCollapsed ? <div className="database-section-content">
               {selection && !sourceChanging ? <div className="database-source-summary">
-                <div><Tag>{selection.sourceType === 'database' ? '数据表' : '外部 API'}</Tag><strong>{sourceLabel}</strong></div>
-                <Button disabled={busy || entry.conflict} onClick={beginSourceChange}>更换数据源</Button>
+                <div><Tag>{selection.sourceType === 'database' ? '数据表' : selection.sourceType === 'static' ? '静态数据' : '外部 API'}</Tag><strong>{sourceLabel}</strong></div>
+                <Button disabled={busy || entry.conflict || editingRules > 0} onClick={beginSourceChange}>更换数据源</Button>
               </div> : <>
                 <Radio.Group disabled={busy || entry.conflict} value={kind} onChange={(event) => stageSourceKind(event.target.value)}>
                   <Radio.Button value="database">数据表</Radio.Button>
                   <Radio.Button value="external_api">外部 API</Radio.Button>
+                  <Radio.Button value="static">静态数据</Radio.Button>
                 </Radio.Group>
-                {kind && <Select className="binding-target" showSearch optionFilterProp="label" placeholder={kind === 'database' ? '选择已添加的数据表' : '选择域名 / 目录 / 接口'} disabled={busy || entry.conflict} value={displayedSelection?.sourceType === kind ? selectionKey(displayedSelection) : undefined} options={candidates} onChange={(value) => stageSourceSelection(candidates.find((item) => item.value === value)?.selection || null)} />}
+                {kind && kind !== 'static' && <Select className="binding-target" showSearch optionFilterProp="label" placeholder={kind === 'database' ? '选择已添加的数据表' : '选择域名 / 目录 / 接口'} disabled={busy || entry.conflict} value={displayedSelection?.sourceType === kind ? selectionKey(displayedSelection) : undefined} options={candidates} onChange={(value) => stageSourceSelection(candidates.find((item) => item.value === value)?.selection || null)} />}
                 {sourceChanging ? <div className="database-source-toolbar"><Space><Button disabled={busy} onClick={cancelSourceChange}>取消</Button><Button type="primary" disabled={busy || entry.conflict || !pendingSelectionChanged} onClick={() => changeSelection(pendingSelection, kind)}>确认更换</Button></Space></div> : null}
-                {kind && !candidates.length ? <p>暂无可绑定来源，请先配置{kind === 'database' ? '连接并添加数据表' : '外部 API 接口'}。</p> : null}
+                {kind && kind !== 'static' && !candidates.length ? <p>暂无可绑定来源，请先配置{kind === 'database' ? '连接并添加数据表' : '外部 API 接口'}。</p> : null}
               </>}
               {unavailableTable ? <Alert type="warning" message="所选表不在已添加清单中，请先添加后再确认。" /> : null}
               {missingQueryColumns ? <Alert type="warning" message="查询条件中的数据库列已失效，请重新选择当前数据表中的列。" /> : null}
             </div> : null}
           </section>}
+          {selection?.sourceType === 'static' && <StaticDataCard key={`data:${state.key}`} draft={entry.value.draft} readOnly={entry.readOnly} disabled={!editable || busy || sourceChanging} errors={errors} onChange={state.edit} />}
+          {selection?.sourceType === 'static' && <StaticMapping key={state.key} draft={entry.value.draft} fields={fields} readOnly={entry.readOnly} disabled={!editable || busy} previewDisabled={editingRules > 0} errors={errors} onChange={state.edit} />}
           {selection && <Spin spinning={metadataLoading}>{selection.sourceType === 'external_api' && metadata && 'fields' in metadata ? <ExternalMapping key={`${state.key}:${selectionKey(selection)}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} onChange={(draft) => state.edit(draft)} selection={selection} /> : databaseSelection && metadata && 'columns' in metadata ? <DatabaseMapping key={`${state.key}:${selectionKey(selection)}:${entry.value.draft.databaseOperation}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} operation={entry.value.draft.databaseOperation} selection={databaseSelection} onChange={(draft) => state.edit(draft)} onOperationChange={(operation) => confirmWorkspaceAction({ title: '切换数据库操作？', content: '切到新增会清空查询条件；切到查询或删除会清除写入映射。', okText: '切换并更新', cancelText: '取消', onOk: () => state.edit(resetDraftForDatabaseOperation(entry.value.draft, operation)) })} /> : null}</Spin>}
           {entry.readOnly && <p className="binding-readonly"><NodeIndexOutlined /> 映射已确认</p>}
         </>}

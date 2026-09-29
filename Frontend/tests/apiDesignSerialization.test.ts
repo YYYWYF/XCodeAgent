@@ -46,6 +46,38 @@ function payload(): WorkflowApiDesignPayload {
   }
 }
 
+/** 清空参数和引用失效分别提示，未选择查询字段优先提示补全。 */
+test('validation distinguishes cleared query parameters from stale references', () => {
+  const draft = normalizeApiDesignDraft(payload())
+  draft.databaseOperation = 'read'
+  const condition = {
+    kind: 'condition' as const, sourceType: 'database' as const, sourceId: 'db', schema: 'public',
+    table: 'product', column: 'id', type: 'int', operator: 'eq' as const,
+    right: { kind: 'endpoint' as const }
+  }
+  draft.databaseQuery = { join: 'and', items: [condition] }
+  assert.equal(validateApiDesignDraft(draft).__databaseQuery, '请为查询字段「id」选择接口参数。')
+  draft.databaseQuery.items = [{ ...condition, right: { kind: 'endpoint', endpointField: {
+    side: 'request', location: 'query', path: 'productId', type: 'integer', required: false, description: ''
+  } } }]
+  assert.equal(validateApiDesignDraft(draft).__databaseQuery, '查询字段「id」使用的接口参数「productId」已不存在，请重新选择。')
+  draft.databaseQuery.items = [{ ...condition, column: '' }]
+  assert.equal(validateApiDesignDraft(draft).__databaseQuery, '请选择查询字段。')
+})
+
+/** 返回字段的未配置和固定值错误应包含字段名，且零值有效。 */
+test('validation gives actionable response value messages and preserves zero', () => {
+  const draft = normalizeApiDesignDraft(payload())
+  draft.databaseOperation = 'read'
+  const field = draft.fieldMappings[1].endpointField
+  const key = apiDesignFieldKey(field)
+  assert.equal(validateApiDesignDraft(draft)[key], '请配置返回字段「total」的取值内容。')
+  draft.fieldMappings[1] = { endpointField: field, mappingType: 'value_mapping', right: { kind: 'fixed', value: undefined } }
+  assert.equal(validateApiDesignDraft(draft)[key], '请为字段「total」填写固定值。')
+  draft.fieldMappings[1] = { endpointField: field, mappingType: 'value_mapping', right: { kind: 'fixed', value: 0 } }
+  assert.equal(validateApiDesignDraft(draft)[key], undefined)
+})
+
 /** 必填字段初始只产生一条未配置记录，且不生成节点或边。 */
 test('normalize creates one self-contained row per endpoint field', () => {
   const draft = normalizeApiDesignDraft(payload())

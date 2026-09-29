@@ -67,6 +67,8 @@ def _endpoint_designs(plan: dict, source_type: str) -> list[dict]:
                 "apiContractId": contract["id"],
                 "endpointId": endpoint["id"],
                 "fieldMappings": field_mappings,
+                "databaseWrites": [],
+                "externalApiBindings": [],
             })
     return designs
 

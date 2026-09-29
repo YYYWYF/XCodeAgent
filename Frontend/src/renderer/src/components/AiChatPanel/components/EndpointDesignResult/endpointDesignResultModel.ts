@@ -63,6 +63,7 @@ export function sourceLabel(value: unknown, design?: Record<string, unknown>): s
 export function sourceDataSourceLabel(value: unknown, design?: Record<string, unknown>): string {
   if (!value || typeof value !== 'object') return ''
   const source = value as Record<string, unknown>
+  if (source.sourceType === 'static') return '静态数据'
   const snapshots = Array.isArray(design?.sourceSnapshots)
     ? design.sourceSnapshots.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
     : []
@@ -86,7 +87,8 @@ export function sourceTypeLabel(value: unknown): string {
   const sourceType = String((value as Record<string, unknown>).sourceType || '')
   return ({
     database: '数据库',
-    external_api: '外部 API'
+    external_api: '外部 API',
+    static: '静态数据'
   } as Record<string, string>)[sourceType] || sourceType
 }
 

@@ -23,6 +23,7 @@ export function ResponseFieldMappingHeader({ readOnly }: { readOnly: boolean }):
 /** 按目标返回字段展示直接来源、多字段加工或无来源业务生成。 */
 export default function ResponseFieldMapping({ field, fields, sources, draft, readOnly, disabled, error, onChange }: Props): ReactElement {
   const [editing, setEditing] = useState(false)
+  const sourceLabel = draft.sourceBinding?.sourceType === 'static' ? '静态数据字段' : '数据源字段'
   const mapping = draft.fieldMappings.find((item) => apiDesignFieldKey(item.endpointField) === apiDesignFieldKey(field))
   const mapped = mapping?.mappingType === 'source_mapping' ? mapping : undefined
   const valueMapping = mapping?.mappingType === 'value_mapping' ? mapping : undefined
@@ -69,7 +70,7 @@ export default function ResponseFieldMapping({ field, fields, sources, draft, re
     <div className="field-value-control">
       {sourceMode ? <>
         <div className={`field-value-inputs${readOnly ? ' is-readonly' : ''}`}>
-        {!readOnly ? <Select disabled={disabled} aria-label={`${field.path}值来源`} value={editing || processed ? 'business' : 'source'} options={[{ value: 'source', label: '数据源字段' }, ...VALUE_SOURCE_OPTIONS]} onChange={(kind) => {
+        {!readOnly ? <Select disabled={disabled} aria-label={`${field.path}值来源`} value={editing || processed ? 'business' : 'source'} options={[{ value: 'source', label: sourceLabel }, ...VALUE_SOURCE_OPTIONS]} onChange={(kind) => {
           if (kind === 'builtin') return
           if (kind === 'business') { setEditing(true); return }
           if (kind === 'source') { direct(); return }

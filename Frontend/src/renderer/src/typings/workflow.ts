@@ -615,6 +615,7 @@ export type WorkflowApiValueRight = { kind: 'endpoint'; endpointField?: Workflow
 export type WorkflowApiSourceField =
   | Omit<WorkflowApiDatabaseFieldNode, 'id' | 'nodeType'>
   | Omit<WorkflowApiExternalFieldNode, 'id' | 'nodeType'>
+  | { sourceType: 'static'; path: string; type: string; description?: string }
 
 export type WorkflowApiEndpointFieldSnapshot = Omit<WorkflowApiField, 'id' | 'nodeType'>
 
@@ -652,6 +653,7 @@ export type WorkflowApiDesignDraft = {
   databaseOperation?: WorkflowApiDatabaseOperation
   databaseWrites?: WorkflowApiDatabaseWriteDraft[]
   sourceBinding?: import('./endpointDesign').BindingSelection
+  staticData?: Record<string, unknown> | Record<string, unknown>[]
   externalApiBindings?: WorkflowApiExternalApiBindingDraft[]
   databaseQuery?: WorkflowApiDatabaseQuery
   fieldMappings: WorkflowApiFieldMapping[]

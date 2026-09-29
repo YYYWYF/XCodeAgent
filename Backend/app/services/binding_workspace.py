@@ -11,7 +11,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from app.domain.api_design_static import static_fields, validate_static_design
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.domain.api_design import DraftFieldMapping, EndpointField, ExternalApiBindingDraft, QueryRight
@@ -25,12 +26,22 @@ class BindingTarget(BaseModel):
     """校验单一表或接口的工作台选择，不写入正式产物。"""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
-    source_type: Literal["database", "external_api"] = Field(alias="sourceType")
-    source_id: str = Field(alias="sourceId", min_length=1, max_length=128)
+    source_type: Literal["database", "external_api", "static"] = Field(alias="sourceType")
+    source_id: str | None = Field(default=None, alias="sourceId", min_length=1, max_length=128)
     schema_name: str | None = Field(default=None, alias="schema", max_length=256)
     table: str | None = Field(default=None, max_length=256)
     directory_id: str | None = Field(default=None, alias="directoryId", max_length=128)
     operation_id: str | None = Field(default=None, alias="operationId", max_length=128)
+
+    @model_validator(mode="after")
+    def validate_identity(self):
+        """静态来源不携带连接身份，其他来源必须提供来源标识。"""
+        if self.source_type == "static":
+            if any((self.source_id, self.schema_name, self.table, self.directory_id, self.operation_id)):
+                raise ValueError("静态数据不携带外部来源身份。")
+        elif not self.source_id:
+            raise ValueError("请选择数据来源。")
+        return self
 
 
 class BindingDraftRequest(BaseModel):
@@ -224,7 +235,7 @@ def save_binding_draft(request: BindingDraftRequest) -> dict[str, Any]:
         if revision != request.base_revision or technical_plan_sha256(request.workspace_root) != request.technical_plan_hash:
             raise ValueError("契约或正式映射已变化，请重新加载；当前输入仍保留。")
         draft = request.draft
-        if set(draft) - {"apiContractId", "endpointId", "implementationDescription", "databaseOperation", "databaseWrites", "externalApiBindings", "sourceBinding", "databaseQuery", "fieldMappings"}:
+        if set(draft) - {"apiContractId", "endpointId", "implementationDescription", "databaseOperation", "databaseWrites", "externalApiBindings", "sourceBinding", "staticData", "databaseQuery", "fieldMappings"}:
             raise ValueError("草稿包含未支持字段。")
         if draft.get("apiContractId") != request.api_contract_id or draft.get("endpointId") != request.endpoint_id:
             raise ValueError("草稿接口身份与请求不一致。")
@@ -245,6 +256,13 @@ def save_binding_draft(request: BindingDraftRequest) -> dict[str, Any]:
             "databaseQuery": query,
             "fieldMappings": mappings,
         }
+        if request.selection and request.selection.source_type == "static":
+            if draft.get("staticData") is not None:
+                static_fields(draft["staticData"])
+                clean["staticData"] = draft["staticData"]
+            clean["implementationDescription"] = ""
+        elif draft.get("staticData") is not None:
+            raise ValueError("静态内容必须绑定静态数据来源。")
         value = {"draftFormat": "endpoint-field-mapping.v7", "draft": clean, "selection": request.selection.model_dump(by_alias=True, exclude_none=True) if request.selection else None,
                  "baseRevision": request.base_revision, "technicalPlanHash": request.technical_plan_hash,
                  "savedAt": datetime.now(UTC).isoformat()}
@@ -255,6 +273,11 @@ def save_binding_draft(request: BindingDraftRequest) -> dict[str, Any]:
 def validate_binding_selection(workspace: str | Path, selection: BindingTarget, draft: dict[str, Any]) -> None:
     """简化旅程确认时验证所有字段只来自选定的已添加表或接口。"""
     from app.services.api_design import load_database_columns, load_external_operation
+
+    validate_static_design(draft)
+    if selection.source_type == "static":
+        validate_static_design({**draft, "sourceBinding": {"sourceType": "static"}})
+        return
 
     # 正式产物通过字段映射保存来源；空映射无法表达绑定，不能返回虚假的确认成功。
     if not draft.get("fieldMappings") and not draft.get("databaseQuery") and not draft.get("databaseWrites") and not draft.get("externalApiBindings"):

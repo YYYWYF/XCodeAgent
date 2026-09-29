@@ -42,9 +42,10 @@ export function apiFieldLocationLabel(location: WorkflowApiField['location']): s
 
 /** 按来源目录名称解析 Source Field 的用户可读标签。 */
 export function sourceFieldLabel(
-  node: WorkflowApiDatabaseFieldNode | WorkflowApiExternalFieldNode,
+  node: WorkflowApiDatabaseFieldNode | WorkflowApiExternalFieldNode | undefined,
   payload: WorkflowApiDesignPayload
 ): string {
+  if (!node) return ''
   const source = (Array.isArray(payload.sources) ? payload.sources : []).find(
     (item) => String(item.id || '') === node.sourceId
   )
@@ -90,7 +91,7 @@ export function resolveSourceMappingLabels(
   payload: WorkflowApiDesignPayload
 ): string[] {
   if (mapping?.mappingType !== 'source_mapping') return []
-  return mapping.sourceFields.map((source) => sourceFieldLabel(sourceSnapshotToNode(source), payload))
+  return mapping.sourceFields.map((source) => source.sourceType === 'static' ? `静态数据.${source.path}` : sourceFieldLabel(sourceSnapshotToNode(source), payload))
 }
 
 /** 判断一个 Endpoint 字段当前使用的映射模式。 */
@@ -170,7 +171,8 @@ export function findSelectedSourceNode(
 /** 把正式来源快照补充为只供选择器使用的候选节点。 */
 export function sourceSnapshotToNode(
   source: WorkflowApiSourceField
-): WorkflowApiDatabaseFieldNode | WorkflowApiExternalFieldNode {
+): WorkflowApiDatabaseFieldNode | WorkflowApiExternalFieldNode | undefined {
+  if (source.sourceType === 'static') return undefined
   if (source.sourceType === 'database') {
     return {
       ...source,

@@ -26,7 +26,7 @@ export default function ReadOnlyValue({ title, right, sourceFields = [], busines
   const ruleInputs: BusinessRuleInput[] = [
     ...sourceFields.map((source): BusinessRuleInput => ({ source: source.sourceType, name: source.sourceType === 'database' ? source.column : source.path,
       description: source.description, type: source.type,
-      dataSource: source.sourceType === 'database' ? [source.schema, source.table].filter(Boolean).join('.') : source.operationId,
+      dataSource: source.sourceType === 'database' ? [source.schema, source.table].filter(Boolean).join('.') : source.sourceType === 'static' ? '静态数据' : source.operationId,
       parameterLocation: source.sourceType === 'external_api' ? PARAMETER_LOCATION_LABELS[source.section] : undefined })),
     ...inputEndpoints.map((field): BusinessRuleInput => ({ source: 'endpoint', name: field.path, type: field.type, parameterLocation: PARAMETER_LOCATION_LABELS[field.location] })),
     ...inputBuiltins.map((key): BusinessRuleInput => ({ source: 'builtin', name: BUILTIN_OPTIONS.find((item) => item.value === key)?.label || key }))
@@ -35,7 +35,7 @@ export default function ReadOnlyValue({ title, right, sourceFields = [], busines
     <span className="field-detail-source">
       {business ? <FunctionOutlined aria-hidden="true" /> : fixed ? <Icon aria-hidden="true"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.6"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M7 9h10M7 15h10" /></svg></Icon>
         : endpoint || externalSource ? <ApiOutlined aria-hidden="true" /> : sources.length ? <DatabaseOutlined aria-hidden="true" /> : <LinkOutlined aria-hidden="true" />}
-      {business ? '业务处理' : fixed ? '固定值' : endpoint ? '接口参数' : sources.length ? '数据源字段' : '未配置'}
+      {business ? '业务处理' : fixed ? '固定值' : endpoint ? '接口参数' : sources.length ? sourceFields[0]?.sourceType === 'static' ? '静态数据字段' : '数据源字段' : '未配置'}
     </span>
     <div className="field-detail-content">
       {business ? <BusinessRuleEntry title={title} configured={Boolean(businessDescription || (right?.kind === 'business' && right.businessDescription))}

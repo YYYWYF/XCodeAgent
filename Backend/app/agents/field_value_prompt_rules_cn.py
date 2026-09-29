@@ -1,10 +1,15 @@
 """字段取值提示词中文对照，仅供查阅，不参与运行时注入。修改英文规则时同步维护本文件。"""
 
 FIELD_VALUE_SEMANTICS = (
+    "sourceBinding.sourceType=static 表示接口自身持有的 staticData（JSON 对象或同构对象列表）。"
+    "完整读取已确认 staticData，保留值类型、顺序和数组元素对应关系。静态 sourceFields 的路径指向该内容，"
+    "[] 表示逐个数组元素。在 service 阶段实现静态返回映射及业务转换，不访问数据库或外部 API，"
+    "不生成种子表或额外持久化。列表内固定值应用到每一项，不能复制列表或静默取首条。"
+    "静态模式不含 implementationDescription。这是用户配置的正式数据，不能当作待替换或待生成的 mock 数据。\n"
     "implementationDescription 是可选的接口级映射说明。按已确认说明在相应任务阶段实现业务校验、执行顺序、分支和返回处理；"
     "未填写或为空不增加要求。说明不授权新增数据源，也不能覆盖 API 契约、结构化映射或来源快照；冲突应报告 contract_mismatch。\n"
     "【字段取值契约】\n"
-    "sourceBinding 标识已选定的数据表或外部 Operation；即使 externalApiBindings 为空、所有返回字段均为 "
+    "非静态模式的 sourceBinding 标识已选定的数据表或外部 Operation；即使 externalApiBindings 为空、所有返回字段均为 "
     "value_mapping，也不能丢弃该来源或跳过已确认的上游调用。同一来源的多字段依赖不授权新增数据源、JOIN 或其他调用。"
     "物理元数据以已确认 sourceSnapshots 为准，禁止仅凭同名字段推断映射。\n"
     "完整读取 databaseQuery.items 条件树、databaseWrites、externalApiBindings 和 fieldMappings。"

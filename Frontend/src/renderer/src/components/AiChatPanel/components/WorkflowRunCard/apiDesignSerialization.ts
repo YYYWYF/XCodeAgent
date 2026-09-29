@@ -18,6 +18,8 @@ import type {
 } from '../../../../typings'
 
 import { valueSummary } from '../FieldMapping/valueRules'
+import { staticDraftErrors } from '../FieldMapping/staticData'
+import { valueConfigurationError } from './apiDesignValidationMessages'
 
 export type ApiDesignValidationErrors = Record<string, string>
 export type ApiDatabaseUsage = NonNullable<WorkflowApiDatabaseFieldNode['usage']>
@@ -284,6 +286,7 @@ export function normalizeApiDesignDraft(
     databaseOperation: payload.draft?.databaseOperation || undefined,
     databaseWrites: Array.isArray(payload.draft?.databaseWrites) ? payload.draft.databaseWrites : [],
     sourceBinding: payload.draft?.sourceBinding,
+    staticData: payload.draft?.staticData,
     externalApiBindings: Array.isArray(payload.draft?.externalApiBindings) ? payload.draft.externalApiBindings : [],
     databaseQuery: payload.draft?.databaseQuery || undefined,
     fieldMappings: endpointFields.map((field) => {
@@ -360,6 +363,9 @@ export function valueRightValid(right: WorkflowApiValueRight | undefined, type: 
 /** 校验自包含字段映射的完整覆盖、来源方向和类型。 */
 export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesignValidationErrors {
   const errors: ApiDesignValidationErrors = {}
+  if (draft.sourceBinding?.sourceType === 'static') {
+    Object.assign(errors, staticDraftErrors(draft))
+  }
   const implementationDescription = draft.implementationDescription
   if (implementationDescription !== undefined && typeof implementationDescription !== 'string') {
     errors.__implementationDescription = 'API 实现描述必须是文本。'
@@ -368,7 +374,7 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
   }
   const keys = new Set<string>()
   const externalApiBindings = draft.externalApiBindings || []
-  const hasExternalApiReference = draft.sourceBinding?.sourceType === 'external_api' || externalApiBindings.length > 0 || draft.fieldMappings.some((mapping) =>
+  const hasExternalApiReference = draft.sourceBinding?.sourceType === 'static' || draft.sourceBinding?.sourceType === 'external_api' || externalApiBindings.length > 0 || draft.fieldMappings.some((mapping) =>
     mapping.mappingType === 'source_mapping' && mapping.sourceFields.some((source) => source.sourceType === 'external_api'))
   if (externalApiBindings.length > 3000) errors.__externalApiBindings = '外部 API 入参取值最多 3000 项。'
   const bindingTargets = new Set<string>()
@@ -378,15 +384,19 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
     const key = `__externalApiBinding:${field.section}:${field.path}`
     if (field.section === 'response_body' || !field.sourceId || !field.directoryId || !field.operationId || !field.path) errors[key] = '请选择有效的外部请求目标。'
     else if (bindingTargets.has(identity)) errors[key] = '同一外部请求目标不能重复配置。'
-    else if (!valueRightValid(item.right, field.type)) errors[key] = '请完成取值配置，或添加明确的业务转换规则。'
+    else if (!valueRightValid(item.right, field.type)) errors[key] = valueConfigurationError(item.right, field.path)
     bindingTargets.add(identity)
   })
   const query = draft.databaseQuery
   const conditions = query?.items.flatMap((item) => item.kind === 'group' ? item.items : [item]) || []
   if (query && (!['and', 'or'].includes(query.join) || !query.items.length || query.items.some((item) => item.kind === 'group' && (!['and', 'or'].includes(item.join) || !item.items.length)) || conditions.length > 300)) {
     errors.__databaseQuery = '查询条件分组不能为空，且最多只能包含 300 条条件。'
-  } else if (conditions.some((condition) => !condition.column || !databaseConditionValueValid(condition))) {
-    errors.__databaseQuery = '请为每条查询条件选择数据库列、有效运算符和右值。'
+  } else {
+    const incomplete = conditions.find((condition) => !condition.column || !databaseConditionValueValid(condition))
+    if (incomplete) errors.__databaseQuery = !incomplete.column ? '请选择查询字段。'
+      : !allowedDatabaseConditionOperators(incomplete.type).includes(incomplete.operator)
+        ? `请为查询字段「${incomplete.column}」选择有效的条件。`
+        : valueConfigurationError(incomplete.right, incomplete.column, true)
   }
   const databaseSources = draft.fieldMappings.flatMap((mapping) => mapping.mappingType === 'source_mapping'
     ? mapping.sourceFields.filter((source): source is Extract<WorkflowApiSourceField, { sourceType: 'database' }> => source.sourceType === 'database')
@@ -420,20 +430,20 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
       return
     }
     if (write.right.kind === 'business') {
-      if (!valueRightValid(write.right, write.type, true)) errors[rowKey] = '请完成业务取值规则。'
+      if (!valueRightValid(write.right, write.type, true)) errors[rowKey] = valueConfigurationError(write.right, write.column)
       return
     }
     if (write.right.kind === 'endpoint') {
       const endpointField = write.right.endpointField
       if (!endpointField || endpointField.side !== 'request' || !draft.fieldMappings.some((mapping) =>
         mapping.endpointField.side === 'request' && apiDesignFieldKey(mapping.endpointField) === apiDesignFieldKey(endpointField))) {
-        errors[rowKey] = '请选择当前接口的请求参数。'
+        errors[rowKey] = endpointField ? `字段「${write.column}」使用的接口参数「${endpointField.path}」已不存在，请重新选择。` : `请为字段「${write.column}」选择接口参数。`
       } else if (!apiDesignTypesCompatible(endpointField.type, write.type, true)) {
         errors[rowKey] = '请求参数与目标数据库字段类型不兼容。'
       }
       return
     }
-    if (!fixedScalarValueValid(write.right.value, write.type)) errors[rowKey] = '固定值与目标数据库字段类型不兼容。'
+    if (!fixedScalarValueValid(write.right.value, write.type)) errors[rowKey] = valueConfigurationError(write.right, write.column)
   })
   draft.fieldMappings.forEach((mapping) => {
     const key = apiDesignFieldKey(mapping.endpointField)
@@ -444,12 +454,12 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
     keys.add(key)
     if (mapping.mappingType === 'unconfigured') {
       if ((draft.databaseOperation || hasExternalApiReference) && mapping.endpointField.side === 'request') return
-      errors[key] = 'Endpoint 字段尚未配置映射。'
+      errors[key] = `请配置${mapping.endpointField.side === 'response' ? '返回字段' : '接口参数'}「${mapping.endpointField.path}」的取值内容。`
       return
     }
     if (mapping.mappingType === 'value_mapping') {
       if (mapping.endpointField.side === 'response' && mapping.endpointField.required && mapping.right.kind === 'business' && mapping.right.missingBehavior === 'omit') errors[key] = '必填返回字段不能省略。'
-      if (!valueRightValid(mapping.right, mapping.endpointField.type)) errors[key] = '请完成业务取值规则。'
+      if (!valueRightValid(mapping.right, mapping.endpointField.type)) errors[key] = valueConfigurationError(mapping.right, mapping.endpointField.path)
       return
     }
     if (mapping.mappingType === 'business_description') {
@@ -462,7 +472,7 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
     }
     const sources = mapping.sourceFields
     if (mapping.endpointField.side === 'response' && mapping.endpointField.required && mapping.missingBehavior === 'omit') errors[key] = '必填返回字段不能省略。'
-    if (mapping.processingType !== 'direct' && !valueRightValid({ kind: 'business', origin: 'business', endpointFields: mapping.endpointFields || [], builtinFields: mapping.builtinFields || [], businessDescription: mapping.businessDescription || '', missingBehavior: mapping.missingBehavior || 'error', ...(mapping.defaultValue !== undefined ? { defaultValue: mapping.defaultValue } : {}) }, mapping.endpointField.type)) errors[key] = '请检查处理依赖、业务说明和缺值策略。'
+    if (mapping.processingType !== 'direct' && !valueRightValid({ kind: 'business', origin: 'business', endpointFields: mapping.endpointFields || [], builtinFields: mapping.builtinFields || [], businessDescription: mapping.businessDescription || '', missingBehavior: mapping.missingBehavior || 'error', ...(mapping.defaultValue !== undefined ? { defaultValue: mapping.defaultValue } : {}) }, mapping.endpointField.type)) errors[key] = `请完善字段「${mapping.endpointField.path}」的业务规则。`
     if (mapping.missingBehavior === 'default' && !fixedScalarValueValid(mapping.defaultValue, mapping.endpointField.type)) errors[key] = '默认值与返回字段类型不兼容。'
     const kind = mapping.processingType
     if (!['direct', 'single_field_description', 'multi_field_description'].includes(kind)) {
@@ -470,11 +480,11 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
       return
     }
     if (!Array.isArray(sources) || sources.length > 100 || (kind === 'multi_field_description' ? sources.length < 2 : sources.length !== 1)) {
-      errors[key] = kind === 'multi_field_description' ? '请选择 2 至 100 个不同来源。' : '请选择一个来源；请明确删除不保留的来源。'
+      errors[key] = kind === 'multi_field_description' ? `请为字段「${mapping.endpointField.path}」选择 2 至 100 个不同的处理输入。` : `请为字段「${mapping.endpointField.path}」选择一个数据源字段。`
       return
     }
     if (kind === 'direct' ? 'businessDescription' in mapping : !mapping.businessDescription?.trim() || mapping.businessDescription.length > 2000) {
-      errors[key] = kind === 'direct' ? '直接映射不能携带业务处理内容。' : '请输入不超过 2000 字符的业务处理内容。'
+      errors[key] = kind === 'direct' ? '直接映射不能携带业务处理内容。' : `请完善字段「${mapping.endpointField.path}」的业务规则。`
     }
     const identities = sources.map(apiDesignSourceIdentity)
     if (new Set(identities).size !== identities.length) errors[key] = '字段映射包含重复来源。'
@@ -484,7 +494,11 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
     }
   })
   const knownRequests = new Set(draft.fieldMappings.filter((item) => item.endpointField.side === 'request').map((item) => apiDesignFieldKey(item.endpointField)))
-  if (conditions.some((condition) => condition.right?.kind === 'endpoint' && (!condition.right.endpointField || !knownRequests.has(apiDesignFieldKey(condition.right.endpointField))))) errors.__databaseQuery = '查询条件引用的接口参数不属于当前 Endpoint。'
+  // 未选择参数由上方未完成校验提示；只有真实引用失效才提示重新选择。
+  if (!errors.__databaseQuery) {
+    const stale = conditions.find((condition) => condition.right?.kind === 'endpoint' && condition.right.endpointField && !knownRequests.has(apiDesignFieldKey(condition.right.endpointField)))
+    if (stale?.right?.kind === 'endpoint') errors.__databaseQuery = `查询字段「${stale.column}」使用的接口参数「${stale.right.endpointField?.path}」已不存在，请重新选择。`
+  }
   const values = [...conditions.map((item) => item.right), ...databaseWrites.map((item) => item.right), ...externalApiBindings.map((item) => item.right), ...draft.fieldMappings.flatMap((item) => item.mappingType === 'value_mapping' ? [item.right] : item.mappingType === 'source_mapping' ? (item.endpointFields || []).map((endpointField) => ({ kind: 'endpoint' as const, endpointField })) : [])]
   for (const value of values) {
     const dependencies = value?.kind === 'business' ? value.endpointFields : value?.kind === 'endpoint' && value.endpointField ? [value.endpointField] : []
@@ -502,6 +516,10 @@ function validateSourceDirection(
   operation?: WorkflowApiDatabaseOperation
 ): void {
   const endpoint = mapping.endpointField
+  if (source.sourceType === 'static') {
+    if (endpoint.side !== 'response') errors[key] = '静态数据字段只能用于返回字段。'
+    return
+  }
   if (source.sourceType === 'external_api') {
     if (endpoint.side === 'request' && source.section === 'response_body') {
       errors[key] = 'Request 字段不能映射外部 API 响应字段。'
@@ -545,6 +563,7 @@ export function createApiDesignAction(
 /** 把内嵌来源字段转换为简洁预览标签。 */
 export function apiDesignSourceFieldLabel(source?: WorkflowApiSourceField): string {
   if (!source) return ''
+  if (source.sourceType === 'static') return `静态数据.${source.path}`
   return source.sourceType === 'database'
     ? `${source.sourceId}.${source.table}.${source.column}`
     : `${source.sourceId}.${source.operationId}.${source.section}.${source.path}`
@@ -593,6 +612,7 @@ export function apiDesignMappingPreviews(draft: WorkflowApiDesignDraft): string[
 
 /** 为真实来源生成稳定身份，用于多来源去重。 */
 export function apiDesignSourceIdentity(source: WorkflowApiSourceField): string {
+  if (source.sourceType === 'static') return JSON.stringify(['static', source.path])
   return JSON.stringify(source.sourceType === 'database'
     ? [source.sourceType, source.sourceId, source.schema, source.table, source.column, source.usage || 'read']
     : [source.sourceType, source.sourceId, source.directoryId, source.operationId, source.section, source.path])

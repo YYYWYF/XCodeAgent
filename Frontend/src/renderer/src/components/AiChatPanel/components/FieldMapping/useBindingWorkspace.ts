@@ -74,7 +74,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   useEffect(() => {
     const selection = entry?.value.selection
     setMetadata(undefined)
-    if (!selection) { setMetadataLoading(false); return }
+    if (!selection || selection.sourceType === 'static') { setMetadataLoading(false); return }
     let disposed = false
     setMetadataLoading(true); setError('')
     const request = selection.sourceType === 'database'
@@ -107,7 +107,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
           if (selection.sourceType === 'database' && !tableIsSelected(selection, await requestSelectedTables(workspaceRoot))) throw new Error('请先在数据来源中添加所选数据表。')
         }
         const errors = validateApiDesignDraft(entry.value.draft)
-        if (Object.keys(errors).length) throw new Error('请完成全部字段映射后再确认。')
+        if (Object.keys(errors).length) throw new Error('配置尚未完成，请检查标红的项目。')
         const fresh = await requestEndpointDesignPreparation(workspaceRoot, target.apiContractId, target.endpointId)
         if (fresh.technicalPlanHash !== entry.value.technicalPlanHash || (fresh.artifactRevision || null) !== entry.value.baseRevision) throw new Error('契约或正式映射已变化，请重新加载；当前输入仍保留。')
         const result = await saveEndpointDesign(workspaceRoot, { action: 'confirm', apiContractId: target.apiContractId, endpointId: target.endpointId, draft: entry.value.draft }, entry.value.baseRevision,

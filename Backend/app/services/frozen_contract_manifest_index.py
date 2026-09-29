@@ -104,7 +104,7 @@ def endpoint_api_design_source_types(
 
     source_types: set[str] = set()
     binding = contract.content.get("sourceBinding")
-    if isinstance(binding, Mapping) and binding.get("sourceType") in {"database", "external_api"}:
+    if isinstance(binding, Mapping) and binding.get("sourceType") in {"database", "external_api", "static"}:
         source_types.add(binding["sourceType"])
     for mapping in manifest_sequence(
         contract.content.get("fieldMappings"),

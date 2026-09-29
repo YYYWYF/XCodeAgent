@@ -1,12 +1,13 @@
 import MappingDescription from './MappingDescription'
-import { DeleteOutlined, DownOutlined, UpOutlined } from '@ant-design/icons'
-import { Alert, Button, Typography } from 'antd'
+import { DeleteOutlined, DownOutlined, UndoOutlined, UpOutlined } from '@ant-design/icons'
+import { Alert, Button, Dropdown, Typography } from 'antd'
 import { useEffect, useState, type ReactElement } from 'react'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
 import type { WorkflowApiDesignDraft, WorkflowApiField, WorkflowApiSourceField, WorkflowApiValueRight } from '../../../../typings'
 import type { ApiDesignExternalOperationMetadata } from '../../../../service/dataSources'
 import { apiDesignFieldKey } from '../WorkflowRunCard/apiDesignSerialization'
 import { mappingCandidates } from './model'
+import { externalTargetEnabled } from './externalRequestTargets'
 import ValueRuleEditor from './ValueRuleEditor'
 import ResponseFieldMapping, { ResponseFieldMappingHeader } from './ResponseFieldMapping'
 import './ExternalMapping.less'
@@ -34,13 +35,20 @@ export default function ExternalMapping({ fields, metadata, selection, draft, ed
   const [collapsed, setCollapsed] = useState({ request: !readOnly, response: !readOnly })
   // 编辑态收起、详情态展开，仅在模式变化时恢复默认状态。
   useEffect(() => { setCollapsed({ request: !readOnly, response: !readOnly }) }, [readOnly])
-  const [hidden, setHidden] = useState<{ operation: string; keys: string[] }>({ operation: '', keys: [] })
-  const operation = JSON.stringify(selection)
   const targets = (metadata.fields || []).filter((field) => field.section !== 'response_body')
   const bindings = draft.externalApiBindings || []
   const responseFields = fields.filter((field) => field.side === 'response')
+  // 保存校验失败时只展开包含错误的映射卡片。
+  useEffect(() => {
+    if (readOnly || !Object.keys(errors).length) return
+    setCollapsed((current) => ({
+      request: Object.keys(errors).some((key) => key === '__externalApiBindings' || key.startsWith('__externalApiBinding:')) ? false : current.request,
+      response: fields.some((field) => field.side === 'response' && errors[apiDesignFieldKey(field)]) ? false : current.response
+    }))
+  }, [errors, readOnly, fields])
   const disabled = !editable || busy
-  const visibleTargets = REQUEST_SECTIONS.flatMap((section) => targets.filter((field) => field.section === section && !(hidden.operation === operation && hidden.keys.includes(fieldKey(field)))))
+  const removedTargets = REQUEST_SECTIONS.flatMap((section) => targets.filter((field) => field.section === section && !externalTargetEnabled(field, selection, bindings)))
+  const visibleTargets = REQUEST_SECTIONS.flatMap((section) => targets.filter((field) => field.section === section && !removedTargets.includes(field)))
   /** 验证绑定属于当前选定接口，失效字段保留可清理入口。 */
   const matches = (field: Extract<WorkflowApiSourceField, { sourceType: 'external_api' }>): boolean =>
     selection.sourceType === 'external_api' && field.sourceId === selection.sourceId && field.directoryId === selection.directoryId && field.operationId === selection.operationId
@@ -51,16 +59,34 @@ export default function ExternalMapping({ fields, metadata, selection, draft, ed
     onChange({ ...draft, externalApiBindings: [...bindings.filter((item) => !matches(item.externalField) || fieldKey(item.externalField) !== fieldKey(target)),
       { externalField: { ...selection, section: target.section as WorkflowApiField['location'], path: target.path, type: target.type, description: target.description }, ...(right ? { right } : {}) }] })
   }
-  /** 删除可选目标在本次编辑中的配置，重新打开时仍可再次配置。 */
+  /** 移除可选目标绑定，列表和恢复入口均从草稿派生，切换接口后仍保持一致。 */
   const remove = (target: ExternalField): void => {
-    setHidden({ operation, keys: [...(hidden.operation === operation ? hidden.keys : []), fieldKey(target)] })
+    if (disabled || readOnly || target.required) return
     onChange({ ...draft, externalApiBindings: bindings.filter((item) => !matches(item.externalField) || fieldKey(item.externalField) !== fieldKey(target)) })
+  }
+  /** 恢复已移除参数的配置行，取值需重新填写，不猜测已删除的绑定。 */
+  const restore = (key: string): void => {
+    const target = removedTargets.find((target) => fieldKey(target) === key)
+    if (disabled || readOnly || !target) return
+    update(target)
+    setCollapsed((current) => ({ ...current, request: false }))
   }
   /** 统一映射卡片的标题与右侧折叠操作。 */
   const heading = (section: 'request' | 'response', title: string): ReactElement => <div className="database-section-heading">
     <div className="database-section-title is-card"><h4>{title}</h4>{section === 'request' && !readOnly ? <span className="external-request-count">{visibleTargets.length} 个参数</span> : null}</div>
+    <div className="external-heading-actions">
+    {section === 'request' && !readOnly && removedTargets.length > 0 ? <Dropdown overlayClassName="external-restore-menu" placement="bottomRight" trigger={['click']} disabled={disabled} menu={{
+      items: REQUEST_SECTIONS.filter((group) => removedTargets.some((target) => target.section === group)).map((group) => ({
+        type: 'group' as const, key: group, label: SECTION_LABELS[group],
+        children: removedTargets.filter((target) => target.section === group).map((target) => ({
+          key: fieldKey(target), label: <span className="external-restore-option"><code title={target.path}>{target.path}</code><span>{target.type}</span></span>
+        }))
+      })),
+      onClick: ({ key }) => restore(key)
+    }}><Button className="external-restore-trigger" type="link" disabled={disabled} icon={<UndoOutlined />}>恢复参数 <span className="external-restore-count">{removedTargets.length}</span><DownOutlined /></Button></Dropdown> : null}
     <Button className="database-section-toggle" type="text" aria-expanded={!collapsed[section]} aria-label={`${collapsed[section] ? '展开' : '收起'}${title}`}
       icon={collapsed[section] ? <DownOutlined /> : <UpOutlined />} onClick={() => setCollapsed((current) => ({ ...current, [section]: !current[section] }))} />
+    </div>
   </div>
   return <div className={`external-mapping${readOnly ? ' is-readonly' : ''}`}>
     <MappingDescription draft={draft} disabled={disabled} readOnly={readOnly} onChange={onChange} />

@@ -40,6 +40,7 @@ from app.domain.api_design import (
     UnconfiguredFieldMapping,
 )
 from app.services.api_schema_refs import normalize_local_schema_ref
+from app.domain.api_design_static import StaticBinding, StaticSourceField, validate_static_design
 from app.services.api_design_values import validate_value_references, value_rule_summary
 from app.services.api_design_mapping_rules import (
     mapping_business_description,
@@ -213,6 +214,7 @@ def initial_api_design_payload(
             "databaseOperation": existing.get("databaseOperation"),
             "databaseWrites": existing.get("databaseWrites", []),
             "sourceBinding": existing.get("sourceBinding"),
+            "staticData": existing.get("staticData"),
             "externalApiBindings": existing.get("externalApiBindings", []),
             "databaseQuery": existing.get("databaseQuery"),
             "fieldMappings": existing.get("fieldMappings", []),
@@ -633,8 +635,9 @@ def _validate_design(
 ) -> dict[str, Any]:
     """校验自包含字段映射、来源真实性和必填 Endpoint 字段覆盖。"""
 
-    if set(draft) - {"apiContractId", "endpointId", "implementationDescription", "databaseOperation", "databaseWrites", "externalApiBindings", "sourceBinding", "databaseQuery", "fieldMappings"}:
+    if set(draft) - {"apiContractId", "endpointId", "implementationDescription", "databaseOperation", "databaseWrites", "externalApiBindings", "sourceBinding", "staticData", "databaseQuery", "fieldMappings"}:
         raise ApiDesignError("API 设计草稿必须使用当前 fieldMappings 结构。")
+    validate_static_design(draft)
     field_mappings = _parse_field_mappings(draft.get("fieldMappings"))
     database_writes = _parse_database_writes(draft.get("databaseWrites", []))
     external_api_bindings = _parse_external_api_bindings(draft.get("externalApiBindings", []))
@@ -665,6 +668,8 @@ def _validate_design(
     }
     if binding is not None:
         normalized["sourceBinding"] = binding.model_dump(by_alias=True)
+    if isinstance(binding, StaticBinding):
+        normalized["staticData"] = draft["staticData"]
     if query is not None:
         normalized["databaseQuery"] = query.model_dump(mode="json", by_alias=True, exclude_none=True)
     if operation is not None:
@@ -954,6 +959,7 @@ def _validate_persisted_design(
 ) -> None:
     """重新校验已确认产物的当前字段映射，防止手工残缺产物进入 Build。"""
 
+    validate_static_design(design)
     persisted_endpoint = design.get("endpointContract")
     if not isinstance(persisted_endpoint, dict) or persisted_endpoint != endpoint:
         raise ApiDesignError("已确认产物中的 Endpoint 定义已被修改。")
@@ -1150,12 +1156,12 @@ def _validated_source_snapshots(
     external_refs: defaultdict[tuple[str, str, str], list[ExternalSourceField]] = defaultdict(list)
     if isinstance(binding, DatabaseBinding):
         database_refs[(binding.source_id, binding.table)] = []
-    elif binding is not None:
+    elif binding is not None and not isinstance(binding, StaticBinding):
         external_refs[(binding.source_id, binding.directory_id, binding.operation_id)] = []
     for source_field in source_fields:
         if isinstance(source_field, DatabaseSourceField):
             database_refs[(source_field.source_id, source_field.table)].append(source_field)
-        else:
+        elif isinstance(source_field, ExternalSourceField):
             external_refs[
                 (source_field.source_id, source_field.directory_id, source_field.operation_id)
             ].append(source_field)
@@ -1647,6 +1653,10 @@ def _endpoint_field_label(value: Any) -> str:
 def _source_field_label(value: Any) -> str:
     """把内嵌数据源字段转换为可读标签。"""
 
+    if isinstance(value, StaticSourceField):
+        return f"静态数据.{value.path}"
+    if isinstance(value, dict) and value.get("sourceType") == "static":
+        return f"静态数据.{value.get('path')}"
     if isinstance(value, DatabaseSourceField):
         return f"{value.source_id}.{value.table}.{value.column}"
     if isinstance(value, ExternalSourceField):

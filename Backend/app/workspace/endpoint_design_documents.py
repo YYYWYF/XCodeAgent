@@ -195,10 +195,13 @@ def render_endpoint_design_markdown(design: dict[str, Any]) -> str:
         f"- 状态：已确认",
         f"<!-- devagentstudio-artifact-revision: {design.get('artifactRevision') or ''} -->",
         "",
-        "## 接口映射说明",
-        "",
     ]
-    lines.extend(_implementation_description_lines(design) or ["- 未补充 接口映射说明。"])
+    if (design.get("sourceBinding") or {}).get("sourceType") == "static":
+        # 静态模式不展示映射说明，完整内容是正式配置而非示例。
+        lines.extend(["## 静态数据", "", "```json", json.dumps(design.get("staticData"), ensure_ascii=False, indent=2), "```", ""])
+    else:
+        lines.extend(["## 接口映射说明", ""])
+        lines.extend(_implementation_description_lines(design) or ["- 未补充 接口映射说明。"])
     lines.extend(["", "## Request 映射", ""])
     lines.extend(_mapping_lines(design, side="request") or ["- 无 Request 映射。"])
     lines.extend(["", "## 外部 API 固定参数", ""])
@@ -380,6 +383,8 @@ def _source_field_label(value: Any) -> str:
 
     if not isinstance(value, dict):
         return ""
+    if value.get("sourceType") == "static":
+        return f"静态数据.{value.get('path')}"
     if value.get("sourceType") == "database":
         return f"{value.get('sourceId')}.{value.get('table')}.{value.get('column')}"
     return f"{value.get('sourceId')}.{value.get('operationId')}.{value.get('section')}.{value.get('path')}"

@@ -3,7 +3,7 @@ import { Button, Modal } from 'antd'
 import { useState } from 'react'
 import type { ReactElement } from 'react'
 
-export type BusinessRuleInput = { source: 'database' | 'external_api' | 'endpoint' | 'builtin'; name: string; description?: string; type?: string; dataSource?: string; parameterLocation?: string }
+export type BusinessRuleInput = { source: 'database' | 'external_api' | 'static' | 'endpoint' | 'builtin'; name: string; description?: string; type?: string; dataSource?: string; parameterLocation?: string }
 type Props = { title: string; configured: boolean; inputCount: number; disabled: boolean; inline?: boolean; onClick?: () => void; description?: string; inputs?: BusinessRuleInput[] }
 
 /** 以单个紧凑入口承载规则状态，详细输入和处理逻辑留在规则弹窗中。 */

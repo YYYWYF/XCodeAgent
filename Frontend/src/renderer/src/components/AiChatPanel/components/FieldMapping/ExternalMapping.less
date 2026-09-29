@@ -33,3 +33,26 @@
 @container external-request-editor (max-width: 400px) {
   .external-request-editor .field-value-control .field-value-inputs { grid-template-columns: minmax(0, 1fr); }
 }
+.external-heading-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px; }
+.external-mapping .external-heading-actions .external-restore-trigger.ant-btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--wb-accent);
+  > span + span { margin-left: 0; }
+  &:hover:not(:disabled), &:focus-visible { background: var(--wb-surface-subtle); color: var(--wb-accent-hover); }
+  &:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
+  &:active:not(:disabled) { background: var(--wb-surface-selected); }
+  &:disabled { color: var(--wb-text-tertiary); }
+  .external-restore-count { min-width: 20px; padding: 0 5px; border-radius: 4px; background: var(--wb-surface-subtle); color: var(--wb-text-secondary); font-size: 12px; line-height: 20px; }
+  .anticon-down { font-size: 10px; }
+}
+// 下拉层挂载于页面根节点，单独作用域确保明暗主题及分组样式一致。
+.external-restore-menu {
+  width: 280px; max-width: calc(100vw - 32px);
+  .ant-dropdown-menu { padding: 6px; max-height: 340px; overflow-y: auto; background: var(--wb-canvas); border: 1px solid var(--wb-border); border-radius: 8px; box-shadow: var(--wb-shadow); }
+  .ant-dropdown-menu-item-group-title { padding: 8px 10px 4px; color: var(--wb-text-secondary); font-size: 12px; }
+  .ant-dropdown-menu-item-group-list { margin: 0; }
+  .ant-dropdown-menu-item { padding: 9px 10px; color: var(--wb-text); border-radius: 5px; }
+  .ant-dropdown-menu-item:hover, .ant-dropdown-menu-item-active { background: var(--wb-surface-subtle); color: var(--wb-accent); }
+  .external-restore-option { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+  .external-restore-option code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .external-restore-option > span { flex-shrink: 0; color: var(--wb-text-secondary); font-size: 12px; }
+}
