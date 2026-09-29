@@ -29,6 +29,10 @@ from app.services.product_plan import (
     requirement_spec_sha256,
     validate_product_plan,
 )
+from app.services.product_plan_carryover import (
+    read_product_plan_carryover,
+    reconcile_product_plan_ids,
+)
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.product_plan_documents import (
     confirmed_product_plan_json_path,
@@ -170,6 +174,7 @@ def _generate_valid_product_plan(
     *,
     existing_plan: dict[str, Any] | None,
     user_feedback: str,
+    carried_pages: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行生成、校验、反馈修复的有界循环，只向下游返回合格计划。"""
 
@@ -186,6 +191,7 @@ def _generate_valid_product_plan(
                     existing_plan=retry_base,
                     user_feedback=retry_feedback,
                     on_token=_product_planning_token,
+                    carried_pages=carried_pages,
                 ),
                 operation_name="产品规划模型调用",
             )
@@ -652,9 +658,14 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             requirement_spec,
             existing_plan=existing if isinstance(existing, dict) else None,
             user_feedback=feedback,
+            carried_pages=read_product_plan_carryover(str(state.get("workspace") or "")),
         )
     except ProductPlanOperationCoverageError as exc:
         return _operation_coverage_update(state, exc.candidate, exc.coverage)
+    # 还原上一轮的稳定 ID：模型重新生成整份计划时可能把 itemId 一起改名，
+    # 那会让上一轮按旧 ID 产出的设计稿对不上、继承被拒（见 product_plan_carryover）。
+    # 未变的页面已在 _normalized_pages 里整份沿用，这里只兜"需求确实变了"的残余情况。
+    reconcile_product_plan_ids(plan, read_product_plan_carryover(str(state.get("workspace") or "")))
     markdown_path, json_path = write_product_plan_documents(state, plan)
     return {
         "phase": "product_planning",

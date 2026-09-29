@@ -104,7 +104,7 @@ export default function AgentFilesPage({ onClose }: Props): ReactElement {
 
   return (
     <section className={cx('agent-files-page')} aria-label="文件">
-      {/* 页面顶栏即功能抽屉的抽屉头：徽标+标题+关闭，与任务管理等抽屉同一套语言。 */}
+      {/* 页面顶栏即功能抽屉的抽屉头：徽标+标题+关闭，与对话管理等抽屉同一套语言。 */}
       <header className={cx('agent-files-topbar')}>
         <span aria-hidden="true" className={cx('auxiliary-drawer-badge')}>
           <span

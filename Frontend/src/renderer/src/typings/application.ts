@@ -134,6 +134,20 @@ export interface ApplicationSchemaConfig {
    */
   branchName?: string
   /**
+   * 最近一次模板基线的**远端推送**结果。
+   *
+   * 必须持久化：工作台的「应用模板已就绪」卡要如实说明代码有没有真的到远端。
+   * 早先卡片只读本地 git 事实（headMessage/head），推送失败时仍显示"已自动提交到版本 X，
+   * 无需手动操作"，用户会以为远端已经有了。
+   */
+  repositoryBranch?: {
+    branchName: string
+    status: 'pushed' | 'skipped' | 'failed'
+    commitSha: string
+    message: string
+    updatedAt: number
+  }
+  /**
    * 用户在新建应用时是否确认过"覆盖远端已存在的同名分支"。
    *
    * 只有确认过才允许 force 推送；否则用普通推送 —— 远端分支历史分叉时会被 Git 拒绝，
@@ -473,7 +487,7 @@ export interface ApplicationDraft {
   senario: string
   projectPath: string
   repoUrl: string
-  /** 应用代码在远端仓库中的分支名；默认 dev，用户可改。 */
+  /** 应用代码在远端仓库中的分支名；默认 v1.0（表单标签为「版本号」），用户可改。 */
   branchName: string
   terminal: ApplicationTerminal
   layout: ApplicationSchemaConfig['layout']

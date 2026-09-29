@@ -330,8 +330,8 @@ async def run_unit_generation_attempt(
         if local_issues is None:
             await _fail_validation(controller, issues, now=now)
             raise UnitGenerationFatalError(issues)
-        candidate = CandidateAttempt(
-            identity=identity,
+        candidate = CandidateAttempt.from_generated_attempt(
+            attempt=identity,
             input_fingerprint=result.input_fingerprint,
             status="invalid",
             tasks=result.tasks,
@@ -344,8 +344,8 @@ async def run_unit_generation_attempt(
             await controller.apply(RoundExhausted(unit_id=unit.unit_id, at=now()))
         return controller.snapshot.unit_states[unit.unit_id]
 
-    candidate = CandidateAttempt(
-        identity=identity,
+    candidate = CandidateAttempt.from_generated_attempt(
+        attempt=identity,
         input_fingerprint=result.input_fingerprint,
         status="valid",
         tasks=result.tasks,

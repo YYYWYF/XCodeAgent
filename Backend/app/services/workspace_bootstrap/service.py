@@ -11,10 +11,7 @@ from app.services.application_lifecycle import (
     begin_application_template_generation,
     complete_workspace_bootstrap,
 )
-from app.services.repository_branch import (
-    push_baseline_to_branch,
-    read_workspace_repository_target,
-)
+from app.services.repository_branch import push_workspace_branch
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 from app.services.workspace_bootstrap.models import ArchiveLimits, WorkspaceBootstrapError
@@ -94,7 +91,7 @@ class WorkspaceBootstrapService:
                 # 时因故没写进 application.json），或者远端分支被删过。这里同样是非致命
                 # 收尾，失败只报告不影响 Bootstrap 结果。
                 repository_branch = await asyncio.to_thread(
-                    _push_baseline_branch, workspace
+                    push_workspace_branch, workspace
                 )
                 return {
                     "workspaceRoot": str(workspace),
@@ -156,7 +153,7 @@ class WorkspaceBootstrapService:
             # 基线已提交，此时才存在可推送的分支内容。必须在 materialize 事务**之外**执行：
             # 事务内异常会触发 journal.rollback() 撤销整个模板物化，网络推送绝不能进去。
             repository_branch = await asyncio.to_thread(
-                _push_baseline_branch, workspace
+                push_workspace_branch, workspace
             )
             return {
                 "workspaceRoot": str(workspace),
@@ -184,40 +181,3 @@ def workspace_bootstrap_service(settings: Settings) -> WorkspaceBootstrapService
     """为 FastAPI 进程创建唯一的 Bootstrap 服务实例。"""
 
     return WorkspaceBootstrapService(settings)
-
-
-def _push_baseline_branch(workspace: Path) -> dict[str, Any]:
-    """把刚提交的模板基线推成应用在远端仓库的分支。
-
-    这是 Bootstrap 的**非致命**收尾：远端不可达、令牌失效或分支冲突都只报告结果，
-    绝不抛出 —— 抛出会被 _run 的 except 捕获并把已成功的 Bootstrap 误标为失败。
-    未配置分支名的工作区（如「添加本地文件夹」接入的目录）直接跳过。
-    """
-
-    try:
-        repo_url, branch_name, overwrite_confirmed = read_workspace_repository_target(workspace)
-        if not branch_name:
-            return _branch_result("", "skipped", "", "当前应用未配置分支名，跳过远端分支创建。")
-        if not repo_url:
-            return _branch_result(branch_name, "skipped", "", "当前应用未配置仓库地址。")
-        return push_baseline_to_branch(
-            workspace,
-            repo_url,
-            branch_name,
-            allow_overwrite=overwrite_confirmed,
-        )
-    except Exception as exc:  # noqa: BLE001 - 任何异常都不能影响 Bootstrap 结果
-        return _branch_result("", "failed", "", f"远端分支创建失败：{exc}")
-
-
-def _branch_result(
-    branch_name: str, status: str, commit_sha: str, message: str
-) -> dict[str, Any]:
-    """构造 Bootstrap 收尾使用的远端分支结果。"""
-
-    return {
-        "branchName": branch_name,
-        "status": status,
-        "commitSha": commit_sha,
-        "message": message,
-    }

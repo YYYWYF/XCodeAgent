@@ -48,6 +48,11 @@ class DevelopmentArtifactProgress(DevelopmentArtifactModel):
     completed_at: datetime | None = Field(default=None, alias="completedAt")
     completed_run_id: str | None = Field(default=None, alias="completedRunId")
     completed_thread_id: str | None = Field(default=None, alias="completedThreadId")
+    # 首次完成时所在的分支名（= 用户看到的版本号，如 v1.0）。
+    # 用途：发起新迭代后，界面上要能区分"哪些产物是以前迭代做过的、哪些是本轮的"——
+    # completed 事实会被继承，只靠状态三档分不出来。归属**只增不改**：一旦在 v1.0 完成，
+    # 后续迭代继承时保留原值，不会被改写成新分支。
+    completed_branch_name: str | None = Field(default=None, alias="completedBranchName")
 
     @model_validator(mode="after")
     def validate_completion(self) -> "DevelopmentArtifactProgress":
@@ -68,6 +73,9 @@ class EntityDevelopmentProgress(DevelopmentArtifactModel):
     initial_development_status: Literal["pending", "in_progress", "completed"] = Field(
         default="pending", alias="initialDevelopmentStatus"
     )
+    # 同 DevelopmentArtifactProgress.completed_branch_name：首次完成所在的分支名。
+    # 实体完成状态每次 reconcile 都重算，所以这个标签必须显式从上一份状态继承。
+    completed_branch_name: str | None = Field(default=None, alias="completedBranchName")
 
 
 class DevelopmentArtifacts(DevelopmentArtifactModel):
@@ -77,9 +85,7 @@ class DevelopmentArtifacts(DevelopmentArtifactModel):
     entities: dict[str, EntityDevelopmentProgress] = Field(default_factory=dict)
     endpoints: dict[str, dict[str, DevelopmentArtifactProgress]] = Field(default_factory=dict)
     catalog_error: str | None = Field(default="开发产物目录尚未就绪。", alias="catalogError")
-    # 本次迭代构建范围之外的产物键（见 development_artifact_key）。
-    # 迭代是增量的：未变更的产物不会被重新开发，也就拿不到本轮的完成记录，
-    # 但它们并不需要开发，因此不参与测试门禁统计，否则门禁永远无法满足。
+    # 记录当前 Build 计划范围外的产物，仅作执行范围诊断；测试门禁仍检查完整目录。
     out_of_scope: list[str] = Field(default_factory=list, alias="outOfScope")
 
 

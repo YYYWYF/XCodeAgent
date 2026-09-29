@@ -56,8 +56,12 @@ provider 使用现有 `provides_capabilities` / `deliverables[].provides` 契约
 ## 接入边界
 
 返回的是标准 `tasks` 候选正文，不是已经判定 valid 的 `CandidateAttempt`。
-现有 `CandidateAttempt` 强制携带 AttemptIdentity；本 builder 不为确定性生成虚构模型 Attempt。
-候选记录的生命周期、持久化、Local/Global validation 和 Scope Assembly 由后续任务接入。
+现有 `CandidateAttempt` 将当前 `CandidateIdentity` 与 `generated_from` 分开保存；本 builder
+仍只返回候选正文，不直接创建 Candidate。正式 deterministic 接入由 DAG orchestrator 分配
+平台 Attempt provenance，但不会增加 model attempt budget，也不把 Candidate 当前身份伪装成
+AttemptIdentity。
+Candidate 记录由 DAG orchestrator 以 `generated_from` 包装并交给现有 Controller；其
+生命周期、Local/Global validation 和 Scope Assembly 仍复用普通 Candidate 路径。
 
 `build_task_planner` 现会保留并校验 `execution_strategy` / `platform_executor`，旧 Task
 缺少策略时默认使用 `agent`。Build dispatch 先按策略分流，未知 deterministic executor

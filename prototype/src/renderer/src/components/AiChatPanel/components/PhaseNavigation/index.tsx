@@ -16,9 +16,9 @@ import { cx } from '../../../../utils'
 import './PhaseNavigation.less'
 
 type Props = {
-  /** 打开任务管理抽屉：统一管理当前阶段任务与临时问答。 */
+  /** 打开对话管理抽屉：统一管理当前阶段对话与临时问答。 */
   onOpenConversationManagement?: () => void
-  /** 任务管理抽屉是否展开；用于菜单激活态。 */
+  /** 对话管理抽屉是否展开；用于菜单激活态。 */
   conversationDrawerOpen?: boolean
   /** 打开指定任务系统的队列抽屉；两套任务系统各有独立入口。 */
   onOpenBackgroundTasks: (system: BackgroundTaskSystem) => void
@@ -110,12 +110,12 @@ export default function PhaseNavigation({
   return (
     <aside aria-label="工作台功能导航" className={cx('phase-navigation')}>
       <nav aria-label="快捷功能" className={cx('phase-navigation-tools')}>
-        {/* 任务管理是第一入口：统一承载阶段任务切换、新建与临时问答。 */}
+        {/* 对话管理是第一入口：统一承载阶段对话切换、新建与临时问答。 */}
         <RailButton
           active={conversationDrawerOpen}
-          ariaLabel="任务管理"
+          ariaLabel="对话管理"
           onClick={() => onOpenConversationManagement?.()}
-          title="任务管理"
+          title="对话管理"
         >
           <SidebarAssetIcon source={freeChatIcon} />
         </RailButton>

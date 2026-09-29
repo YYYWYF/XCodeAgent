@@ -7,10 +7,13 @@ import { apiEndpointDisplayPath } from '../../utils'
 import type { ApplicationOutlineProps } from './index'
 import { apiEndpointSelectionKey } from './outlineUtils'
 import DevelopmentStatusDot from './DevelopmentStatusDot'
+import IterationBadge from '../../../../components/IterationBadge'
 
 type Props = {
   contract: DevelopmentPlanningApiContract
   allEndpoints: DevelopmentPlanningApiContract['endpoints']
+  /** 当前迭代的分支名，用于标注接口归属。 */
+  currentBranch?: string
   developmentArtifacts?: DevelopmentArtifacts
   expanded: boolean
   onToggle: () => void
@@ -22,6 +25,7 @@ type Props = {
 export default function ApiOutlineGroup({
   contract,
   allEndpoints,
+  currentBranch,
   developmentArtifacts,
   expanded,
   onToggle,
@@ -95,6 +99,13 @@ export default function ApiOutlineGroup({
                       </span>
                       <DevelopmentStatusDot
                         progress={developmentArtifacts?.endpoints[apiContractId]?.[endpointId]}
+                      />
+                      <IterationBadge
+                        artifactBranch={
+                          developmentArtifacts?.endpoints[apiContractId]?.[endpointId]
+                            ?.completedBranchName
+                        }
+                        currentBranch={currentBranch}
                       />
                     </button>
                   </span>

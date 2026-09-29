@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_generation_contracts import (
-    AttemptIdentity, UnitAttemptJob, CandidateAttempt, GenerationRequirement, UnitGenerationAttemptResult,
+    AttemptIdentity, CandidateIdentity, UnitAttemptJob, CandidateAttempt, GenerationRequirement, UnitGenerationAttemptResult,
     UnitGenerationContext, UnitGenerationPolicy,
 )
 
@@ -56,12 +56,35 @@ def _identity_payload() -> dict:
 
 
 def _candidate_payload(status: str = "valid") -> dict:
-    """构造平台候选元数据，任务正文只使用模型原始 ID。"""
+    """构造 generated Candidate 元数据，当前身份与来源 Attempt 分开保存。"""
 
     return {
-        "identity": _identity_payload(), "input_fingerprint": "input-digest",
+        "identity": {
+            "planning_run_id": "planning-run-1", "unit_id": "page:orders", "generation_round": 1,
+        },
+        "origin": "generated", "generated_from": _identity_payload(), "recovered_from": None,
+        "input_fingerprint": "input-digest",
         "status": status, "tasks": [{"id": "model-task-orders", "dependencies": []}],
         "validation_issues": [], "generation_metadata": {"model": "test-model", "tokens": 10},
+    }
+
+
+def _recovered_candidate_payload() -> dict:
+    """构造不消费当前 Run Attempt 的 recovered Candidate。"""
+
+    return {
+        "candidate_id": "candidate-" + "b" * 32,
+        "identity": {
+            "planning_run_id": "planning-run-2", "unit_id": "page:orders", "generation_round": 1,
+        },
+        "origin": "recovered", "generated_from": None,
+        "recovered_from": {
+            "source_planning_run_id": "planning-run-1",
+            "source_candidate_id": "candidate-" + "a" * 32,
+        },
+        "input_fingerprint": "input-digest",
+        "status": "valid", "tasks": [{"id": "model-task-orders", "dependencies": []}],
+        "validation_issues": [], "generation_metadata": {"source": "recovery-test"},
     }
 
 
@@ -105,7 +128,9 @@ class UnitGenerationContractTests(unittest.TestCase):
             (GenerationRequirement, _context_payload()["generation_requirements"][0], ("requirement_id", "description")),
             (UnitGenerationContext, _context_payload(), tuple(_context_payload())),
             (UnitGenerationPolicy, _policy_payload(), tuple(_policy_payload())),
-            (CandidateAttempt, _candidate_payload(), ("identity", "input_fingerprint", "status", "tasks")),
+            (CandidateAttempt, _candidate_payload(), (
+                "identity", "origin", "generated_from", "recovered_from", "input_fingerprint", "status", "tasks",
+            )),
             (UnitGenerationAttemptResult, _result_payload(), ("identity", "input_fingerprint", "raw_response", "tasks")),
         )
         for model, payload, required in cases:
@@ -187,7 +212,7 @@ class UnitGenerationContractTests(unittest.TestCase):
             policy.frozen_contract_read_limits["max_reads"] = 20
 
     def test_policy_defaults_and_invalid_budgets(self) -> None:
-        """策略默认 Local=3、SDK max_retries=0、tokens=4096，拒绝越界预算与错误类型。"""
+        """DTO 默认 Local=3、SDK max_retries=0、tokens=4096，production policy 另显式配置 2。"""
 
         policy = UnitGenerationPolicy(**_policy_payload())
         self.assertEqual((policy.local_max_attempts, policy.model_max_retries, policy.model_max_tokens), (3, 0, 4096))
@@ -207,7 +232,7 @@ class UnitGenerationContractTests(unittest.TestCase):
                 UnitGenerationPolicy(**{**_policy_payload(), **change})
 
     def test_policy_accepts_sdk_retry_boundaries(self) -> None:
-        """SDK max_retries 允许保持默认 0 或由 production 显式配置为 2。"""
+        """DTO 可保持默认 0 或接收 production policy 显式配置的 2。"""
 
         for retries in (0, 2):
             with self.subTest(retries=retries):
@@ -216,6 +241,28 @@ class UnitGenerationContractTests(unittest.TestCase):
                     "model_max_retries": retries,
                 })
                 self.assertEqual(policy.model_max_retries, retries)
+
+    def test_from_generated_attempt_allocates_only_for_none_and_fails_closed(self) -> None:
+        """Candidate ID 只有 None 才自动分配，显式合法值保留，非法值拒绝。"""
+
+        attempt = AttemptIdentity(**_identity_payload())
+        common = {
+            "attempt": attempt,
+            "input_fingerprint": "input-digest",
+            "status": "valid",
+            "tasks": _candidate_payload()["tasks"],
+        }
+
+        allocated = CandidateAttempt.from_generated_attempt(**common, candidate_id=None)
+        self.assertRegex(allocated.candidate_id, r"^candidate-[0-9a-f]{32}$")
+
+        explicit_id = "candidate-" + "c" * 32
+        explicit = CandidateAttempt.from_generated_attempt(**common, candidate_id=explicit_id)
+        self.assertEqual(explicit.candidate_id, explicit_id)
+
+        for invalid_id in ("", "candidate-not-a-valid-id"):
+            with self.subTest(candidate_id=invalid_id), self.assertRaises(ValidationError):
+                CandidateAttempt.from_generated_attempt(**common, candidate_id=invalid_id)
 
     def test_candidate_accepts_only_explicit_valid_invalid_superseded_status(self) -> None:
         """候选状态严格使用三种显式值，DTO 不执行状态推导或转移。"""
@@ -227,6 +274,88 @@ class UnitGenerationContractTests(unittest.TestCase):
         for status in ("pending", "confirmed", "failed", "", None):
             with self.subTest(status=status), self.assertRaises(ValidationError):
                 CandidateAttempt(**_candidate_payload(status))
+
+    def test_candidate_identity_is_independent_from_generation_attempt(self) -> None:
+        """Candidate 当前身份只保留 Run/Unit/round，真实 Attempt 只存在于 generated_from。"""
+
+        candidate = CandidateAttempt.from_generated_attempt(
+            attempt=AttemptIdentity(**_identity_payload()), input_fingerprint="input-digest",
+            status="valid", tasks=_candidate_payload()["tasks"],
+        )
+        self.assertEqual(candidate.identity.model_dump(mode="json"), {
+            "planning_run_id": "planning-run-1", "unit_id": "page:orders", "generation_round": 1,
+        })
+        self.assertEqual(candidate.generated_from.attempt_id, _identity_payload()["attempt_id"])
+        self.assertIsNone(candidate.recovered_from)
+        with self.assertRaises(ValidationError):
+            CandidateIdentity(**{
+                "planning_run_id": "planning-run-1", "unit_id": "page:orders", "generation_round": 1,
+                "attempt_in_round": 1, "attempt_id": _identity_payload()["attempt_id"],
+            })
+
+    def test_generated_candidate_requires_matching_attempt_provenance(self) -> None:
+        """generated Candidate 的来源 Run、Unit 和 round 不一致时必须 fail closed。"""
+
+        for change in (
+            {"planning_run_id": "planning-run-2"},
+            {"unit_id": "page:customers"},
+            {"generation_round": 2},
+        ):
+            with self.subTest(change=change), self.assertRaises(ValidationError):
+                CandidateAttempt(**{
+                    **_candidate_payload(),
+                    "generated_from": {**_identity_payload(), **change},
+                })
+
+    def test_recovered_candidate_has_only_cross_run_source_provenance(self) -> None:
+        """recovered Candidate 属于当前 Run，但不携带当前 Run 的生成 Attempt。"""
+
+        candidate = CandidateAttempt(**_recovered_candidate_payload())
+        self.assertEqual(candidate.origin, "recovered")
+        self.assertEqual(candidate.identity.planning_run_id, "planning-run-2")
+        self.assertIsNone(candidate.generated_from)
+        self.assertEqual(candidate.recovered_from.source_planning_run_id, "planning-run-1")
+        self.assertEqual(candidate.recovered_from.source_candidate_id, "candidate-" + "a" * 32)
+
+    def test_from_recovered_candidate_allocates_new_identity_and_preserves_source_metadata(self) -> None:
+        """Recovery 转换创建新 Candidate ID/当前身份，只复制任务和生成元数据。"""
+
+        source = CandidateAttempt(**_recovered_candidate_payload())
+        recovered = CandidateAttempt.from_recovered_candidate(
+            source_candidate=source,
+            planning_run_id="planning-run-3",
+            unit_id="page:orders",
+            generation_round=1,
+            input_fingerprint="input-digest-current",
+        )
+
+        self.assertNotEqual(recovered.candidate_id, source.candidate_id)
+        self.assertEqual(recovered.identity.planning_run_id, "planning-run-3")
+        self.assertEqual(recovered.identity.unit_id, source.identity.unit_id)
+        self.assertEqual(recovered.input_fingerprint, "input-digest-current")
+        self.assertIsNone(recovered.generated_from)
+        self.assertEqual(recovered.recovered_from.source_planning_run_id, "planning-run-2")
+        self.assertEqual(recovered.recovered_from.source_candidate_id, source.candidate_id)
+        self.assertEqual(recovered.generation_metadata, source.generation_metadata)
+
+    def test_candidate_origin_provenance_is_exclusive_and_non_self_referential(self) -> None:
+        """两类来源不可混用，recovered 来源不得指向当前 Run 或自身 Candidate。"""
+
+        for change in (
+            {"origin": "recovered", "recovered_from": None},
+            {"origin": "recovered", "generated_from": _identity_payload()},
+            {"origin": "generated", "recovered_from": _recovered_candidate_payload()["recovered_from"]},
+            {"origin": "generated", "generated_from": None},
+            {"origin": "recovered", "recovered_from": {
+                "source_planning_run_id": "planning-run-2", "source_candidate_id": "candidate-" + "a" * 32,
+            }},
+            {"origin": "recovered", "candidate_id": "candidate-" + "b" * 32, "recovered_from": {
+                "source_planning_run_id": "planning-run-1", "source_candidate_id": "candidate-" + "b" * 32,
+            }},
+        ):
+            payload = _recovered_candidate_payload() if change["origin"] == "recovered" else _candidate_payload()
+            with self.subTest(change=change), self.assertRaises(ValidationError):
+                CandidateAttempt(**{**payload, **change})
 
     def test_platform_candidate_id_is_independent_of_model_task_ids(self) -> None:
         """相同模型任务产生不同平台 Candidate ID，序列化恢复时保持原 Candidate ID。"""

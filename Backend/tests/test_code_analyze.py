@@ -54,15 +54,41 @@ class CodeAnalyzeTests(unittest.TestCase):
         )
         scoped = CodeAnalyzeScopedBackend(
             delegate,
-            allowed_files=frozenset({"backend/src/main/java/App.java"}),
+            allowed_files=frozenset({
+                "backend/pom.xml", "backend/src/main/resources/application.yml",
+                "backend/src/main/java/App.java",
+            }),
         )
         self.assertIsNone(scoped.read("backend/src/main/java/App.java").error)
+        self.assertIsNone(scoped.read("backend/pom.xml").error)
+        self.assertIsNone(scoped.read("backend/src/main/resources/application.yml").error)
         self.assertIsNone(
             scoped.read("/.devagentstudio/builtin-skills/backend-code-scan/SKILL.md").error
         )
         self.assertIn("denied", scoped.read("backend/src/main/java/Other.java").error or "")
+        self.assertIn("denied", scoped.read("backend/src/main/resources/other.yml").error or "")
         self.assertIn("denied", scoped.ls("backend/src/main/java").error or "")
         self.assertIn("denied", scoped.glob("backend/src/main/java/**/*.java").error or "")
+
+    def test_diff_result_reports_issues_in_selected_backend_resources(self) -> None:
+        """Diff 文件级白名单允许 pom 和资源文件的问题，但拒绝清单外路径。"""
+
+        result = normalize_code_review_result(
+            {
+                "status": "completed",
+                "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                "targets": [{"side": "backend", "root": "backend", "scanned_file_count": 2}],
+                "issues": [
+                    {"side": "backend", "file": "backend/pom.xml", "title": "依赖问题"},
+                    {"side": "backend", "file": "backend/src/main/resources/application.yml", "title": "配置问题"},
+                    {"side": "backend", "file": "backend/src/main/resources/other.yml", "title": "越界问题"},
+                ],
+            },
+            allowed_issue_paths={"backend/pom.xml", "backend/src/main/resources/application.yml"},
+        )
+
+        self.assertEqual(result["issue_count"], 2)
+        self.assertEqual(result["targets"][1]["root"], "backend")
 
     def test_scope_filters_recursive_frontend_list_results(self) -> None:
         """委托文件后端递归返回的依赖目录和敏感文件也不能暴露给扫描 Agent。"""
@@ -632,12 +658,54 @@ class CodeAnalyzeTests(unittest.TestCase):
                 )
 
             self.assertEqual(result["review_mode"], "diff")
+            self.assertEqual(result["review_files"], ["frontend/package.json"])
             self.assertEqual(result["issue_count"], 1)
             self.assertEqual(result["issues"][0]["file"], "frontend/package.json")
             self.assertEqual(
                 create_agent.call_args.kwargs["allowed_files"],
                 frozenset({"frontend/package.json", "frontend/pnpm-lock.yaml"}),
             )
+
+    def test_diff_scan_counts_backend_configuration_and_resource_files(self) -> None:
+        """Diff 审查实际文件数包含 pom 和资源文件，不只统计 Java 源码。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            paths = ["backend/pom.xml", "backend/src/main/resources/application.yml"]
+            for path in paths:
+                source = root / path
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("content", encoding="utf-8")
+
+            def invoke_once(*_args, on_tool_activity=None, **_kwargs):
+                """模拟两个 Skill、规则引用和后端配置文件均已读取。"""
+
+                for path in [*REQUIRED_SKILL_PATHS, *(f"/{path}" for path in paths)]:
+                    on_tool_activity({"tool": "read_file", "status": "completed", "path": path})
+                return json.dumps({
+                    "status": "completed",
+                    "loaded_skills": ["frontend-code-scan", "backend-code-scan"],
+                    "targets": [{"side": "backend", "root": "backend", "status": "completed"}],
+                    "issues": [],
+                })
+
+            with patch(
+                "app.agents.code_analyze.agent.create_code_analyze_agent",
+                return_value=object(),
+            ), patch(
+                "app.agents.model_factory.create_chat_model",
+                return_value=object(),
+            ), patch(
+                "app.agents.code_analyze.analyzer.invoke_agent_with_tool_activity",
+                side_effect=invoke_once,
+            ):
+                result = analyze_workspace_code(
+                    {}, workspace, review_mode="diff", review_files=paths,
+                )
+
+        self.assertEqual(result["review_file_count"], 2)
+        self.assertEqual(result["targets"][1]["root"], "backend")
+        self.assertEqual(result["targets"][1]["scanned_file_count"], 2)
 
     def test_diff_scan_requires_each_source_read(self) -> None:
         """模型声明完成却没读取变动文件时审查不得通过。"""

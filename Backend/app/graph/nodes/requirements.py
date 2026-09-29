@@ -1285,7 +1285,13 @@ def _should_suppress_repeat_clarification(
 
 
 def _apply_menus_root_path_to_pages(spec: dict, state: ProjectState) -> None:
-    """从 application.json 读取 menus.rootPath 并拼接到所有页面路由前。"""
+    """从 application.json 读取 menus.rootPath 并拼接到所有页面路由前。
+
+    必须**幂等**：模型会看到上一轮的 RequirementSpec，于是常把已带前缀的路径
+    （`/page/welcome-home`）原样吐回来；无条件再拼一次就成了 `/page/page/welcome-home`，
+    且每轮多叠一层。判据用 `root_path + "/"` 而不是 `startswith(root_path)` ——
+    否则 rootPath=`/page` 会把合法路径 `/page-something` 误判成已带前缀。
+    """
     try:
         app_file = workspace_root(state) / WORKSPACE_ARTIFACT_DIR / "application.json"
         if not app_file.is_file():
@@ -1311,6 +1317,9 @@ def _apply_menus_root_path_to_pages(spec: dict, state: ProjectState) -> None:
             page_path = str(page["path"]).strip()
             if menus_enabled and page_path == "/":
                 page["path"] = root_path + _menu_home_leaf_path(page)
+            elif page_path == root_path or page_path.startswith(root_path + "/"):
+                # 已经带前缀：原样保留，避免每轮重复叠加。
+                page["path"] = page_path
             elif page_path.startswith("/"):
                 page["path"] = root_path + page_path
             else:

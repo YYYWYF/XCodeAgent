@@ -6,7 +6,7 @@ import type { WorkflowApiDesignDraft } from '../../../../typings'
 type Props = { draft: WorkflowApiDesignDraft; disabled: boolean; readOnly: boolean; onChange: (draft: WorkflowApiDesignDraft) => void }
 
 /** 编辑可选的接口级业务逻辑说明，与当前映射一同暂存和确认。 */
-export default function MappingDescription({ draft, disabled, readOnly, onChange }: Props): ReactElement {
+export default function MappingDescription({ draft, disabled, readOnly, onChange }: Props): ReactElement | null {
   const [collapsed, setCollapsed] = useState(!readOnly)
   // 详情默认展示说明，返回编辑模式时默认收起。
   useEffect(() => { setCollapsed(!readOnly) }, [readOnly])

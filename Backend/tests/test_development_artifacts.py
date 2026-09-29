@@ -161,6 +161,30 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.finish("get")
         self.assertTrue(test_entry_gate(require_test_entry(self.workspace)).allowed)
 
+    def test_endpoint_build_scope_cannot_unlock_test_at_two_of_three(self) -> None:
+        """接口 Build 只覆盖自身时，另一个未完成页面仍阻止确认与测试启动。"""
+
+        for target in ("one", "get"):
+            self.finish(target)
+        build_plan = self.plans / "build-task-plan.json"
+        build_plan.write_text(json.dumps({"build_units": {
+            "backend:endpoint:api:get": {"input_fingerprint": "current-endpoint"},
+            "page:one": {}, "page:two": {},
+        }}), encoding="utf-8")
+        gate = test_entry_gate(refresh_development_artifacts(self.workspace))
+        self.assertEqual((gate.completed, gate.total), (2, 3))
+        self.assertFalse(gate.allowed)
+        self.assertEqual([target.page_id for target in gate.blockers], ["two"])
+        with self.assertRaises(DevelopmentArtifactsIncompleteError):
+            require_test_entry(self.workspace)
+        state = {"workspace": str(self.workspace), "active_run_id": "run-get",
+                 "build_execution_scope": {"type": "endpoint", "targetId": "get",
+                                           "apiContractId": "api"},
+                 "build_summary": {"status": "completed"}, "unit_test_gate_passed": True}
+        confirmation = test_phase_confirmation(state)
+        self.assertEqual(confirmation["status"], "requires_user_input")
+        self.assertFalse(confirmation["clarification"]["testEntryGate"]["allowed"])
+
     def test_debug_restart_and_retry_project_active_target_without_granting_completion(self) -> None:
         """调试重启及失败重试均投影紫色，但不改变修订执行的首次完成资格。"""
 

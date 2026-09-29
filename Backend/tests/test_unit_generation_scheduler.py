@@ -284,8 +284,8 @@ class UnitGenerationSchedulerTests(unittest.IsolatedAsyncioTestCase):
             )
             await controller.apply(UnitAttemptStarted(identity=identity, at=AT))
             await controller.apply(UnitValidationStarted(identity=identity, at=AT))
-            await controller.apply(CandidateReady(candidate=CandidateAttempt(
-                identity=identity,
+            await controller.apply(CandidateReady(candidate=CandidateAttempt.from_generated_attempt(
+                attempt=identity,
                 input_fingerprint=controller.snapshot.input_fingerprint,
                 status="valid",
                 tasks=({"id": "task-auth", "unit_id": state.unit_id},),

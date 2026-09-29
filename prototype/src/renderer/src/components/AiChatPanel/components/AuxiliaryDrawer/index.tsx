@@ -87,7 +87,7 @@ function describeDataSourcesDetail(
     : { title: target.name, subtitle: '该数据表已不在来源清单中' }
 }
 
-/** 任务管理抽屉的内容快照：由工作台在打开抽屉时向聊天面板查询获得。 */
+/** 对话管理抽屉的内容快照：由工作台在打开抽屉时向聊天面板查询获得。 */
 export type ConversationManagementContent = {
   activeSessionId?: string
   editingSessionId?: string
@@ -98,13 +98,13 @@ export type ConversationManagementContent = {
     updatedAt: number
     active: boolean
     runStatus?: 'running' | 'stopping' | 'awaiting_user'
-    /** 是否允许删除；阶段默认任务是唯一推进入口，不提供删除。 */
+    /** 是否允许删除；阶段默认对话是唯一推进入口，不提供删除。 */
     deletable?: boolean
   }>
   onSelectSession: (sessionId: string) => void
-  /** 删除一条用户自建任务；抽屉层负责二次确认，这里只接收确认后的结果。 */
+  /** 删除一条用户自建对话；抽屉层负责二次确认，这里只接收确认后的结果。 */
   onDeleteSession?: (sessionId: string) => void
-  /** 当前推进任务存在未结束事项时说明为什么不能新建。 */
+  /** 当前推进对话存在未结束事项时说明为什么不能新建。 */
   createConversationDisabledReason?: string
   onCreateConversation?: () => void
 }
@@ -115,11 +115,11 @@ type Props = {
   onClose: () => void
   onRetryTestCases: () => void
   testPreparation: TestCasePreparationSnapshot
-  /** 任务管理模式的内容快照与切换动作；仅在 conversation-management 模式使用。 */
+  /** 对话管理模式的内容快照与切换动作；仅在 conversation-management 模式使用。 */
   conversationManagement?: ConversationManagementContent
-  /** 从任务管理切换到临时问答视图。 */
+  /** 从对话管理切换到临时问答视图。 */
   onOpenTemporaryConversation: () => void
-  /** 从临时任务返回统一任务列表。 */
+  /** 从临时对话返回统一对话列表。 */
   onOpenConversationManagement: () => void
   /** 应用设置抽屉的配置对象与保存回调；与聊天面板收到的 application/onApplicationUpdate 同源。 */
   application: ApplicationConfig
@@ -189,10 +189,10 @@ function TemporaryConversation({
   )
 }
 
-/** 任务过滤标签键：常规 / 临时；默认展示常规任务。 */
+/** 对话过滤标签键：常规 / 临时；默认展示常规对话。 */
 type ConversationFilter = 'regular' | 'temporary'
 
-/** 渲染任务管理视图：过滤标签 + 单一列表，条目内以类型标签区分并提供删除入口；切换/新建等管理动作不关闭抽屉。 */
+/** 渲染对话管理视图：过滤标签 + 单一列表，条目内以类型标签区分并提供删除入口；切换/新建等管理动作不关闭抽屉。 */
 function ConversationManagement({
   content,
   onCreateTemporaryConversation,
@@ -206,43 +206,43 @@ function ConversationManagement({
   onOpenTemporaryConversation: (conversationId: string) => void
   temporaryConversations: TemporaryConversationRecord[]
 }): ReactElement {
-  // 默认落在常规任务：临时任务按需创建，不在初始列表中预置。
+  // 默认落在常规对话：临时对话按需创建，不在初始列表中预置。
   const [filter, setFilter] = useState<ConversationFilter>('regular')
   const regularCount = content.conversations.length
   const temporaryCount = temporaryConversations.length
-  // 新建动作跟随过滤标签：临时视图直接新建临时任务，常规视图新建常规任务。
+  // 新建动作跟随过滤标签：临时视图直接新建临时对话，常规视图新建常规对话。
   const creatingTemporary = filter === 'temporary'
   const filters: Array<{ key: ConversationFilter; label: string; count: number }> = [
-    { count: regularCount, key: 'regular', label: '常规任务' },
-    { count: temporaryCount, key: 'temporary', label: '临时任务' }
+    { count: regularCount, key: 'regular', label: '常规对话' },
+    { count: temporaryCount, key: 'temporary', label: '临时对话' }
   ]
-  // 空态：常规任务为空显示空态插图；临时任务为空时列表留白，能力说明已常显在列表上方。
+  // 空态：常规对话为空显示空态插图；临时对话为空时列表留白，能力说明已常显在列表上方。
   let emptyNode: ReactElement | null = null
   if (filter === 'regular' && regularCount === 0) {
-    emptyNode = <Empty description="当前阶段暂无常规任务" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+    emptyNode = <Empty description="当前阶段暂无常规对话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
   }
 
-  /** 常规任务删除的二次确认；确认后交给快照回调执行，抽屉保持打开并等待列表刷新。 */
+  /** 常规对话删除的二次确认；确认后交给快照回调执行，抽屉保持打开并等待列表刷新。 */
   const confirmDeleteSession = (conversationId: string, title: string): void => {
     Modal.confirm({
       cancelText: '取消',
-      content: '删除后该任务的聊天记录将一并清除，不可恢复。',
+      content: '删除后该对话的聊天记录将一并清除，不可恢复。',
       okButtonProps: { danger: true },
       okText: '删除',
       onOk: () => content.onDeleteSession?.(conversationId),
-      title: `删除任务「${title}」？`
+      title: `删除对话「${title}」？`
     })
   }
 
-  /** 临时任务删除的二次确认；临时任务只存在于抽屉本地状态中。 */
+  /** 临时对话删除的二次确认；临时对话只存在于抽屉本地状态中。 */
   const confirmDeleteTemporary = (conversationId: string, title: string): void => {
     Modal.confirm({
       cancelText: '取消',
-      content: '删除后该临时任务的聊天记录将一并清除，不可恢复。',
+      content: '删除后该临时对话的聊天记录将一并清除，不可恢复。',
       okButtonProps: { danger: true },
       okText: '删除',
       onOk: () => onDeleteTemporaryConversation(conversationId),
-      title: `删除临时任务「${title}」？`
+      title: `删除临时对话「${title}」？`
     })
   }
 
@@ -252,7 +252,7 @@ function ConversationManagement({
     <div className={cx('conversation-management-view')}>
       {/* 固定 Tab 分栏与异步/潮汐任务抽屉同款交互：下划线选中态 + 数量角标，右侧挂新建按钮。 */}
       <div className={cx('conversation-tabbar')}>
-        <nav aria-label="任务分段" className={cx('conversation-tabs')}>
+        <nav aria-label="对话分段" className={cx('conversation-tabs')}>
           {filters.map((tab) => (
             <button
               aria-pressed={filter === tab.key}
@@ -268,32 +268,32 @@ function ConversationManagement({
         </nav>
         {creatingTemporary ? (
           <button
-            aria-label="新建临时任务"
+            aria-label="新建临时对话"
             className={cx('conversation-create-btn')}
             onClick={onCreateTemporaryConversation}
             type="button"
           >
             <PlusOutlined />
-            <span>新建任务</span>
+            <span>新建对话</span>
           </button>
         ) : content.onCreateConversation ? (
           <button
             aria-label={
               content.createConversationDisabledReason
-                ? `新建任务（${content.createConversationDisabledReason}）`
-                : '新建任务'
+                ? `新建对话（${content.createConversationDisabledReason}）`
+                : '新建对话'
             }
             className={cx('conversation-create-btn')}
             disabled={Boolean(content.createConversationDisabledReason)}
             onClick={() => {
               content.onCreateConversation?.()
-              // 新建是管理动作：抽屉保持打开，用户可直接看到新任务接住「当前推进」并继续管理。
+              // 新建是管理动作：抽屉保持打开，用户可直接看到新对话接住「当前推进」并继续管理。
             }}
             title={content.createConversationDisabledReason}
             type="button"
           >
             <PlusOutlined />
-            <span>新建任务</span>
+            <span>新建对话</span>
           </button>
         ) : null}
       </div>
@@ -301,24 +301,24 @@ function ConversationManagement({
       {filter === 'regular' ? (
         <p className={cx('conversation-hint')}>
           <InfoCircleOutlined aria-hidden="true" />
-          仅「当前推进」的任务可执行工作流，其余任务仅供查看。
+          仅「当前推进」的对话可执行工作流，其余对话仅供查看。
         </p>
       ) : null}
       {filter === 'temporary' ? (
         <p className={cx('conversation-hint')}>
           <InfoCircleOutlined aria-hidden="true" />
-          临时任务可用于讨论问答，无法执行工作流。
+          临时对话可用于讨论问答，无法执行工作流。
         </p>
       ) : null}
       <div className={cx('conversation-list')}>
         {filter === 'regular' &&
           content.conversations.map((conversation) => {
-            // 阶段默认任务不渲染删除入口；自建任务常显删除按钮，但当前推进中的任务
+            // 阶段默认对话不渲染删除入口；自建对话常显删除按钮，但当前推进中的对话
             // 在推进权转移前业务上不允许删除——按钮保留并置灰提示，而不是直接隐藏。
             const showDelete = Boolean(content.onDeleteSession) && Boolean(conversation.deletable)
             const deleteDisabled = showDelete && conversation.id === content.editingSessionId
             return (
-              // 删除按钮绝对定位收进任务条块右缘：所有条块同宽，不再出现行宽不一致。
+              // 删除按钮绝对定位收进对话条块右缘：所有条块同宽，不再出现行宽不一致。
               <div
                 className={cx('conversation-row', showDelete && 'has-delete')}
                 key={conversation.id}
@@ -345,7 +345,7 @@ function ConversationManagement({
                   ) : conversation.id === content.editingSessionId ? (
                     <Tag className={cx('conversation-item-state')}>当前推进</Tag>
                   ) : content.editingSessionId ? (
-                    // 非推进任务默认即展示“仅查看”，不依赖选中切换才可见。
+                    // 非推进对话默认即展示“仅查看”，不依赖选中切换才可见。
                     <span className={cx('conversation-item-view-only')}>
                       <EyeOutlined />
                       仅查看
@@ -355,13 +355,13 @@ function ConversationManagement({
                 {showDelete ? (
                   <button
                     aria-disabled={deleteDisabled || undefined}
-                    aria-label={`删除任务 ${conversation.title}`}
+                    aria-label={`删除对话 ${conversation.title}`}
                     className={cx('conversation-item-delete', deleteDisabled && 'disabled')}
                     onClick={() => {
                       if (deleteDisabled) return
                       confirmDeleteSession(conversation.id, conversation.title)
                     }}
-                    title={deleteDisabled ? '当前推进中的任务不可删除，请先转移推进权' : '删除任务'}
+                    title={deleteDisabled ? '当前推进中的对话不可删除，请先转移推进权' : '删除对话'}
                     type="button"
                   >
                     <DeleteOutlined />
@@ -387,10 +387,10 @@ function ConversationManagement({
                 </span>
               </button>
               <button
-                aria-label={`删除临时任务 ${conversation.title}`}
+                aria-label={`删除临时对话 ${conversation.title}`}
                 className={cx('conversation-item-delete')}
                 onClick={() => confirmDeleteTemporary(conversation.id, conversation.title)}
-                title="删除临时任务"
+                title="删除临时对话"
                 type="button"
               >
                 <DeleteOutlined />
@@ -459,8 +459,8 @@ function TestPreparation({
 /** 抽屉头文案按模式切换，保持同一槽位各视图的结构一致；功能页抽屉的头部由页面自持，不在此配置。 */
 const DRAWER_HEADERS: Record<Exclude<AuxiliaryDrawerMode, FunctionalDrawerMode>, { title: string; description: string }> = {
   'conversation-management': {
-    title: '任务管理',
-    description: '按需拆分上下文，当前阶段仅一条任务可继续推进'
+    title: '对话管理',
+    description: '按需拆分上下文，当前阶段仅一条对话可继续推进'
   },
   'temporary-conversation': { title: '临时问答', description: '只读问答，不触发工作流' },
   'test-preparation': { title: '测试准备', description: '后台异步生成业务测试用例' },
@@ -477,7 +477,7 @@ const DRAWER_BADGE_ICONS: Record<Exclude<AuxiliaryDrawerMode, FunctionalDrawerMo
   'external-apis': apiFilledIcon
 }
 
-/** 在同一辅助槽位中承载任务管理、临时问答和测试准备、数据源与外部API，禁止抽屉叠加。 */
+/** 在同一辅助槽位中承载对话管理、临时问答和测试准备、数据源与外部API，禁止抽屉叠加。 */
 export default function AuxiliaryDrawer(props: Props): ReactElement {
   // 数据来源模式：右侧衔接的详情维护层定位；其它模式恒为空。
   const [dataSourcesDetail, setDataSourcesDetail] = useState<DataSourcesDetailTarget | null>(null)
@@ -521,7 +521,7 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
   // 详情层只在其列表抽屉家族展开时滑出；列表抽屉收起时跟随收起。
   const familyOpen = open && (displayMode === 'data-sources' || displayMode === 'external-apis')
   const detailOpen = Boolean(familyOpen && dataSourcesDetail && detailVisible)
-  // 临时任务按需创建、初始为空，可多开，但永远不具备 Workflow 与工作区写入能力。
+  // 临时对话按需创建、初始为空，可多开，但永远不具备 Workflow 与工作区写入能力。
   const [temporaryConversations, setTemporaryConversations] = useState<
     TemporaryConversationRecord[]
   >([])
@@ -543,17 +543,17 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
       : DRAWER_HEADERS[shellMode]
     : null
 
-  /** 新建并进入一条功能受限的临时任务。 */
+  /** 新建并进入一条功能受限的临时对话。 */
   const createTemporaryConversation = (): void => {
     const sequence = temporaryConversations.length + 1
     const conversation: TemporaryConversationRecord = {
       id: `temporary-${Date.now()}`,
-      title: `临时任务 ${sequence}`,
+      title: `临时对话 ${sequence}`,
       messages: [
         {
           id: Date.now(),
           role: 'assistant',
-          content: '这是一个新的临时任务。你可以查阅、分析和讨论，但不能从这里发起正式工作流。'
+          content: '这是一个新的临时对话。你可以查阅、分析和讨论，但不能从这里发起正式工作流。'
         }
       ]
     }
@@ -562,7 +562,7 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
     props.onOpenTemporaryConversation()
   }
 
-  /** 删除一条临时任务；若删除的是当前查看的临时任务，则回退到剩余的第一条。 */
+  /** 删除一条临时对话；若删除的是当前查看的临时对话，则回退到剩余的第一条。 */
   const deleteTemporaryConversation = (conversationId: string): void => {
     setTemporaryConversations((current) => {
       const next = current.filter((conversation) => conversation.id !== conversationId)
@@ -606,9 +606,9 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
         </div>
         {shellMode === 'temporary-conversation' ? (
           <button
-            aria-label="返回任务管理"
+            aria-label="返回对话管理"
             onClick={props.onOpenConversationManagement}
-            title="返回任务管理"
+            title="返回对话管理"
             type="button"
           >
             <ArrowLeftOutlined />
@@ -635,7 +635,7 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
             temporaryConversations={temporaryConversations}
           />
         ) : shellMode === 'conversation-management' ? (
-          <Empty description="任务信息加载中" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description="对话信息加载中" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : shellMode === 'temporary-conversation' ? (
           <TemporaryConversation
             messages={activeTemporaryConversation.messages}
@@ -653,7 +653,7 @@ export default function AuxiliaryDrawer(props: Props): ReactElement {
                             id: now + 1,
                             role: 'assistant',
                             content:
-                              '我会在只读范围内分析这个问题；如需真正修改，请切换到拥有编辑权限的常规任务。'
+                              '我会在只读范围内分析这个问题；如需真正修改，请切换到拥有编辑权限的常规对话。'
                           }
                         ]
                       }

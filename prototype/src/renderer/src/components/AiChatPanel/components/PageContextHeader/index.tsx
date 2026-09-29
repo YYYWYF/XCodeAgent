@@ -15,7 +15,7 @@ type PageContextHeaderProps = {
   onRename?: (title: string) => void
 }
 
-/** 任务顶部呈现会话身份；编辑图标常显，点击即重命名，历史任务只读。 */
+/** 对话顶部呈现会话身份；编辑图标常显，点击即重命名，历史对话只读。 */
 export default function PageContextHeader({
   conversationTitle,
   historical = false,
@@ -66,10 +66,10 @@ export default function PageContextHeader({
             <MessageTitle title={conversationTitle} />
             {editable ? (
               <button
-                aria-label="重命名任务"
+                aria-label="重命名对话"
                 className={cx('conversation-title-edit')}
                 onClick={startEditing}
-                title="重命名任务"
+                title="重命名对话"
                 type="button"
               >
                 <EditOutlined aria-hidden="true" />
@@ -78,7 +78,7 @@ export default function PageContextHeader({
           </>
         )}
       </div>
-      {historical ? <span className={cx('conversation-history-label')}>历史任务</span> : null}
+      {historical ? <span className={cx('conversation-history-label')}>历史对话</span> : null}
     </section>
   )
 }

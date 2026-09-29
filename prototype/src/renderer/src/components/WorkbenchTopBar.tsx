@@ -315,7 +315,7 @@ export default function WorkbenchTopBar({
         lead={
           <>
             当前应用在<strong>{confirmFromAgent.label}</strong>阶段。确认后将进入
-            <strong>{confirmToAgent.label}</strong>阶段；查看其它阶段的历史任务请使用左侧任务目录。
+            <strong>{confirmToAgent.label}</strong>阶段；查看其它阶段的历史对话请使用左侧对话目录。
           </>
         }
         onCancel={() => setConfirmPhase(null)}

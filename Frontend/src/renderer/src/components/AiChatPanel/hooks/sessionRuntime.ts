@@ -167,12 +167,14 @@ export function sessionIdentityFromSummary(
   })
 }
 
-/** 在删除前收口服务端 Pending；运行中、收口失败或删除失败都不伪造本地成功。 */
+/** 在删除前收口 Pending，并只在本地删除成功后执行可选的 Session lifecycle cleanup。 */
 export async function releasePendingBeforeSessionDelete(
   isRunning: () => boolean,
   releasePending: () => Promise<ApplicationLifecycle>,
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void,
-  deleteSession: () => Promise<void>
+  deleteSession: () => Promise<void>,
+  afterSessionDeleted?: () => Promise<void>,
+  onPostDeleteCleanupError?: (error: unknown) => void
 ): Promise<boolean> {
   if (isRunning()) return false
   const lifecycle = await releasePending()
@@ -182,5 +184,13 @@ export async function releasePendingBeforeSessionDelete(
   if (isRunning()) return false
 
   await deleteSession()
+  if (afterSessionDeleted) {
+    try {
+      await afterSessionDeleted()
+    } catch (error) {
+      // 本地 Session 已经删除，Backend cleanup 失败只能告警，不能伪造回滚。
+      onPostDeleteCleanupError?.(error)
+    }
+  }
   return true
 }

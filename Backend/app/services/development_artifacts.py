@@ -16,6 +16,7 @@ from app.domain.development_artifacts import (
     EntityDevelopmentProgress,
     TestEntryGate,
 )
+from app.services.repository_branch import read_workspace_branch_name
 from app.workspace.detail_design_documents import hydrate_external_detail_designs
 
 INITIAL_DEVELOPMENT_PHASES = frozenset({
@@ -28,7 +29,7 @@ _BUILD_PLAN_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / 'plans/build-task-plan.json
 
 
 def development_artifact_key(target: DevelopmentArtifactTarget) -> str:
-    """生成产物的稳定标识，用于标记"本轮范围之外"。"""
+    """生成产物的稳定标识，用于记录当前 Build 范围。"""
 
     if target.type == "page":
         return f"page:{target.page_id}"
@@ -48,13 +49,13 @@ def _target_unit_id(target: DevelopmentArtifactTarget) -> str | None:
 
 
 def in_scope_unit_ids(workspace: str | Path) -> set[str] | None:
-    """读取构建计划里本次迭代**在范围内**的 Unit 标识；计划不可用时返回 None。
+    """读取构建计划里当前执行范围内的 Unit 标识；计划不可用时返回 None。
 
     范围的唯一标记是 Unit 上的 `input_fingerprint`：它只对进入 `required_unit_ids`
-    的 Unit 写入（见 build_unit_compiler）。规划器据此把未变更的产物排除在本轮之外，
-    它们不会被重新开发，因此也不该参与测试门禁统计。
+    的 Unit 写入（见 build_unit_compiler）。规划器据此确定当前 Build 任务，
+    不改变应用级初次开发完成门禁的统计范围。
 
-    计划缺失或不可解析时返回 None，调用方应退回"全部产物都算"的保守口径。
+    计划缺失或不可解析时返回 None，调用方不记录范围外目标。
     """
 
     plan_path = Path(workspace).expanduser().resolve() / _BUILD_PLAN_RELATIVE_PATH
@@ -184,9 +185,10 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
             "catalog_error": f"开发产物目录不可用：{exc}",
         })})
     artifacts = DevelopmentArtifacts(catalogError=None)
-    # 迭代是增量的：未变更的产物被规划器排除在本轮构建之外，不会被重新开发，
-    # 也就拿不到本轮的完成记录。标记它们，让门禁只统计本轮真正要做的产物。
+    # Build 计划按当前开发目标裁剪；这里仅保留范围诊断，不改变应用级门禁。
     artifacts.out_of_scope = out_of_scope_keys(workspace, targets)
+    # 本次 reconcile 所在的迭代（用于给"本轮才完成"的实体打归属标签）。只读一次。
+    current_branch = read_workspace_branch_name(workspace)
     for target in targets:
         if target.type == "entity":
             # 只认当前正式绑定的显式确认；选表、生成设计和等待确认都不算完成。
@@ -199,8 +201,20 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
                 and execution.status in ACTIVE_STATUSES
                 for execution in state.active_executions.values()
             )
+            # 实体完成状态每次 reconcile 都按技术规划重算，所以归属标签必须显式继承：
+            # 已经是 completed 的实体保留它首次完成时的分支，不能每轮都被改写成当前分支。
+            previous_entity = old.entities.get(target.entity_id or "")
+            entity_completed_branch = (
+                previous_entity.completed_branch_name
+                if previous_entity is not None
+                and previous_entity.initial_development_status == "completed"
+                else None
+            )
+            if confirmed and not entity_completed_branch:
+                entity_completed_branch = current_branch or None
             artifacts.entities[target.entity_id or ""] = EntityDevelopmentProgress(
                 initialDevelopmentStatus="completed" if confirmed else "in_progress" if active else "pending",
+                completedBranchName=entity_completed_branch,
             )
             continue
         progress = artifact_progress(old, target) or DevelopmentArtifactProgress()
@@ -234,15 +248,7 @@ def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
         (DevelopmentArtifactTarget(type="entity", entityId=key), progress)
         for key, progress in artifacts.entities.items()
     ]
-    # 本轮构建范围之外的产物不参与门禁：它们不需要开发，只是还没有本轮的完成记录。
-    # 不排除的话，增量迭代会卡在"未变更的产物未完成"上，永远进不了测试阶段。
-    out_of_scope = set(artifacts.out_of_scope)
-    if out_of_scope:
-        records = [
-            (target, progress)
-            for target, progress in records
-            if development_artifact_key(target) not in out_of_scope
-        ]
+    # Build 计划只描述当前目标的执行范围；不能据此跳过其他尚未初次完成的产物。
     completed = sum(progress.initial_development_status == "completed" for _, progress in records)
     in_progress = sum(progress.initial_development_status == "in_progress" for _, progress in records)
     reason = artifacts.catalog_error
@@ -321,6 +327,8 @@ def complete_initial_development(workspace: str | Path, *, run_id: str) -> Appli
         progress.completed_at = utc_now()
         progress.completed_run_id = run_id
         progress.completed_thread_id = execution.thread_id
+        # 记下"在哪一轮完成"。读不到分支名就留空，不伪造。
+        progress.completed_branch_name = read_workspace_branch_name(workspace) or None
         updated = state.model_copy(update={"revision": state.revision + 1, "updated_at": utc_now()})
         return write_application_lifecycle(workspace, updated, expected_revision=state.revision)
 

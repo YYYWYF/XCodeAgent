@@ -73,7 +73,7 @@ def _severity_label(value: Any) -> str:
 def render_code_review_markdown(
     state: dict[str, Any], review_result: dict[str, Any]
 ) -> str:
-    """把归一化审查结果渲染为不含扫描文件清单和内部动作的 Markdown。"""
+    """把归一化审查结果渲染为安全的 Markdown 审查报告。"""
 
     workspace = workspace_root(state)
     targets = [
@@ -102,12 +102,29 @@ def render_code_review_markdown(
         f"- 审查模式：{'Diff 审查' if review_result.get('review_mode') == 'diff' else '全量审查'}",
         f"- 实际审查文件数：{int(review_result.get('review_file_count', total_files) or 0)}",
         f"- 跳过文件数：{int(review_result.get('skipped_file_count', 0) or 0)}",
-        "",
-        "## 扫描汇总",
-        "",
-        "| 范围 | 扫描根目录 | 状态 | 文件总数 |",
-        "| --- | --- | --- | ---: |",
     ]
+    if review_result.get("review_mode") == "diff":
+        review_files: list[str] = []
+        seen_review_files: set[str] = set()
+        raw_review_files = review_result.get("review_files")
+        if isinstance(raw_review_files, list):
+            for raw_path in raw_review_files:
+                path = _safe_relative_path(raw_path)
+                if path == "未提供" or path in seen_review_files:
+                    continue
+                seen_review_files.add(path)
+                review_files.append(path)
+        lines.extend(["", "## Diff 审查文件", ""])
+        lines.extend([f"- `{path}`" for path in review_files] or ["- 无"])
+    lines.extend(
+        [
+            "",
+            "## 扫描汇总",
+            "",
+            "| 范围 | 扫描根目录 | 状态 | 文件总数 |",
+            "| --- | --- | --- | ---: |",
+        ]
+    )
     for target in targets:
         side = "前端" if target.get("side") == "frontend" else "后端"
         lines.append(

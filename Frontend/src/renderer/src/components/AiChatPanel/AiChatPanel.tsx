@@ -8,6 +8,7 @@ import {
   summarizePaths,
   useModuleOwnedFiles
 } from '../../hooks/useModuleOwnedFiles'
+import { useUiDesignPagesWithCode } from '../../hooks/useUiDesignPagesWithCode'
 import {
   hasApplicationEnteredDevelopment,
   isApplicationTemplatePreparationEligible,
@@ -94,6 +95,13 @@ import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import MilestoneCommitReminder from './components/MilestoneCommitReminder'
 import FieldMappingWorkspace from './components/FieldMapping'
+import CommitBeforeSendModal from './components/MilestoneCommitReminder/CommitBeforeSendModal'
+import MilestoneCommitModal from './components/MilestoneCommitReminder/MilestoneCommitModal'
+import {
+  isStageAdvanceDecision,
+  useCommitBeforeSend
+} from './components/MilestoneCommitReminder/useCommitBeforeSend'
+import { asMessageClause, pushRepositoryBranch } from '../../service/repositoryBranch'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
 import {
   appendPlanningLoadingPlaceholder,
@@ -164,7 +172,6 @@ import {
 } from './stageOutputState'
 import {
   endpointDetailTargetKey,
-  hasConfirmedDesignDocument,
   pageDetailTargetKey,
   shouldInjectPlanningPlaceholder,
   shouldShowAcceptanceDecisionDock,
@@ -271,6 +278,7 @@ function planningAnswerToText(value: unknown): string {
 type Props = {
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
+  developmentTotals?: { completed: number; total: number }
   developmentPlanningReady: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
@@ -278,6 +286,13 @@ type Props = {
   developmentPlanningEntities: DevelopmentPlanningEntityOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
+  /**
+   * 把应用配置写回 application.json。
+   *
+   * 与 onApplicationUpdate（只改内存）分开：重试提交后要把新的结果落盘，
+   * 否则刷新后卡片又会显示成"已自动提交到版本 X"。
+   */
+  onPersistApplication?: (application: ApplicationConfig) => Promise<void> | void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onPlanningArtifactsRefresh: () => void
   previewBaseUrl: string
@@ -800,6 +815,7 @@ function pageContextStatus(
 export default function AiChatPanel({
   application,
   applicationLifecycle,
+  developmentTotals,
   developmentPlanningReady,
   developmentPlanningPages,
   developmentPlanningPageTree,
@@ -807,6 +823,7 @@ export default function AiChatPanel({
   developmentPlanningEntities,
   editorMode,
   onApplicationUpdate,
+  onPersistApplication,
   onApplicationLifecycleChange,
   onPlanningArtifactsRefresh,
   previewBaseUrl,
@@ -1095,6 +1112,39 @@ export default function AiChatPanel({
   // 已有多条分支即处于迭代：模板请求只由 application.json 派生，各迭代一致，
   // 因此本轮沿用已有工程、不重新拉取模板，就绪卡文案需要说明这一点。
   const reusingExistingTemplate = (application.branches?.length ?? 0) > 1
+  const [retryingRepositoryBranch, setRetryingRepositoryBranch] = useState(false)
+  // 重试把当前分支推到远端（上次因网络等原因失败）。结果要落盘：卡片文案由它驱动，
+  // 不落盘的话刷新后又变回"已自动提交到版本 X"。
+  const handleRetryRepositoryBranch = useCallback(async (): Promise<void> => {
+    const workspaceRoot = application.workspaceRoot || ''
+    if (!workspaceRoot || retryingRepositoryBranch) return
+    setRetryingRepositoryBranch(true)
+    try {
+      const outcome = await pushRepositoryBranch({ workspaceRoot })
+      const nextApplication: ApplicationConfig = {
+        ...application,
+        repositoryBranch: { ...outcome, updatedAt: Date.now() }
+      }
+      onApplicationUpdate(nextApplication)
+      await onPersistApplication?.(nextApplication)
+      if (outcome.status === 'pushed') {
+        message.success(`已提交到版本 ${outcome.branchName}。`)
+      } else {
+        message.warning(
+          `版本 ${outcome.branchName || ''} 仍未提交到远端：${asMessageClause(outcome.message, '原因未知')}。`
+        )
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '推送失败')
+    } finally {
+      setRetryingRepositoryBranch(false)
+    }
+  }, [
+    application,
+    onApplicationUpdate,
+    onPersistApplication,
+    retryingRepositoryBranch
+  ])
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
   const templateGenerationOrphaned = isTemplateGenerationOrphaned(
@@ -1207,27 +1257,37 @@ export default function AiChatPanel({
   const uiDesignPagesCacheRef = useRef<
     Array<{ pageId?: string; name?: string; code?: string; status?: string; template_id?: string }>
   >([])
+  const uiDesignPagesSource = useMemo(
+    () =>
+      (
+        Array.isArray(planningUiDesignPagesSource)
+          ? planningUiDesignPagesSource.filter((p) => p && typeof p === 'object')
+          : []
+      ) as Array<{
+        pageId?: string
+        name?: string
+        code?: string
+        status?: string
+        template_id?: string
+      }>,
+    [planningUiDesignPagesSource]
+  )
+  // 快照里的页面没有 code（正式 manifest 只存 code_path），从磁盘补回来，
+  // 否则右侧预览永远停在「本页尚未生成设计稿」。
+  const uiDesignPagesWithCode = useUiDesignPagesWithCode(
+    application.workspaceRoot,
+    uiDesignPagesSource
+  )
   const uiDesignPages = useMemo(() => {
-    const raw = (
-      Array.isArray(planningUiDesignPagesSource)
-        ? planningUiDesignPagesSource.filter((p) => p && typeof p === 'object')
-        : []
-    ) as Array<{
-      pageId?: string
-      name?: string
-      code?: string
-      status?: string
-      template_id?: string
-    }>
-    if (raw.some((p) => Boolean(p.code))) {
-      uiDesignPagesCacheRef.current = raw
-      return raw
+    if (uiDesignPagesWithCode.some((p) => Boolean(p.code))) {
+      uiDesignPagesCacheRef.current = uiDesignPagesWithCode
+      return uiDesignPagesWithCode
     }
     if (planningPhaseRunning && uiDesignPagesCacheRef.current.length > 0) {
       return uiDesignPagesCacheRef.current
     }
-    return raw
-  }, [planningUiDesignPagesSource, planningPhaseRunning])
+    return uiDesignPagesWithCode
+  }, [uiDesignPagesWithCode, planningPhaseRunning])
   const requirementDocContent = mergedRequirementDocContentFor(
     designDocFileContent,
     currentPlanningWorkflow
@@ -1402,6 +1462,37 @@ export default function AiChatPanel({
   // UI 设计稿生成中：UI 确认阶段 workflow running（换一换/选模板/首次生成）。
   const uiDesignGenerating =
     isDesignPhase && planningPhaseRunning && planningPhase === 'ui_confirmation'
+  // UI 设计稿是否还有页在后台生成池里跑（queued/generating）。
+  //
+  // 判据取**磁盘上的页面状态**而不是本地 acting：生成解耦到进程级 worker pool 后，
+  // 池只写磁盘、不写 checkpoint，本地 acting 也不一定覆盖（例如重新打开工作区时
+  // 池仍在跑，但没有任何人点过按钮）。用 workflow running 也不够 —— 池是后台任务，
+  // run 早已返回。
+  //
+  // 用途：生成期间禁用「保存为设计版本」这类提交入口 —— 此刻 `.devagentstudio` 下的
+  // 设计稿文件正随输出变动，提交会捞到一个中间态快照。
+  const uiDesignPoolBusy = useMemo(
+    () =>
+      uiDesignPages.some((page) =>
+        ['queued', 'generating'].includes(String(page.status || ''))
+      ),
+    [uiDesignPages]
+  )
+  // 设计稿还在生成：提交入口一律禁用。
+  const designArtifactsSettling = uiDesignGenerating || uiDesignPoolBusy
+
+  // 推进前提交门禁：把用户推向下一个阶段之前，若还有未提交变更就先拦一下。
+  // 取代了原来常驻在对话区底部的「设计文档已确认，可保存为设计版本」提醒框 ——
+  // 那条提醒挂在面板上、与"往前推进"这个动作无关，用户点了就走。
+  // 两条推进路径都要过它：输入框发送（下面 onSend）与卡片上的跳阶段确认
+  // （下面 onSubmitClarification，见 isStageAdvanceDecision）。
+  const commitBeforeSend = useCommitBeforeSend(
+    application.workspaceRoot || '',
+    `${application.id}:commit-before-send`,
+    'chore: 保存当前改动',
+    designArtifactsSettling
+  )
+
   // acting 态的清理由 UiDesignConfirmationPanel 的 cleanup-effect（带 observedRunningRef
   // 防提前重置）全权管理；这里不再重复清理，避免与 panel 抢着清空导致下一批 acting 态
   // 在 flush 瞬间被清掉（按钮提前解禁、右侧 loading 消失）。
@@ -1535,7 +1626,7 @@ export default function AiChatPanel({
         { key: 'source', label: '应用文件', available: Boolean(application.workspaceRoot) },
         { key: 'field-mapping', label: '字段映射', available: Boolean(application.workspaceRoot) },
         { key: 'doc', label: '文档', available: true },
-        { key: 'stage-output', label: '阶段产物', available: true }
+        { key: 'stage-output', label: '待确认计划', available: true }
       ]
   const activeWorkspaceTab: WorkspaceTabKey = isApplicationPlanningPhase
     ? activeDesignDocKey ||
@@ -2007,11 +2098,12 @@ export default function AiChatPanel({
       const cached = formalRevisionSessionIdentitiesRef.current[input.impact.interactionId]
       if (cached) return cached
       // workbench branch 仍绑定原 planning thread 作为 lifecycle 权威身份，但实际草稿运行使用新会话 thread。
+      // application.planningThreadId 是创建时快照、不随迭代更新，只能排在所有实时来源之后兜底。
       const checkpointThreadId = String(
         planningThreadId ||
-          application.planningThreadId ||
           applicationLifecycle?.activeFormalRevision?.planningThreadId ||
           applicationLifecycle?.initialization?.threadId ||
+          application.planningThreadId ||
           ''
       ).trim()
       const workspaceRoot = String(application.workspaceRoot || '').trim()
@@ -2791,10 +2883,16 @@ export default function AiChatPanel({
         activeWorkbenchPhase === derivedWorkbenchPhase)
   )
   // 手动切回设计阶段浏览时，活跃规划流和 formal revision 都不在，
-  // 需用应用创建时保留的 planning thread 恢复历史设计会话，否则
+  // 需用当前分支的 planning thread 恢复历史设计会话，否则
   // ensurePlanningSession 因 lookupKey 为空不激活，对话区停留在 loading 占位。
+  //
+  // **实时 lifecycle 优先**：`application.planningThreadId` 是应用**创建时**的快照，切到
+  // 新迭代后不会跟着更新（v1.1 时它仍指向 v1.0 的 graph thread）。让它排在前面会拿错
+  // lookupKey —— 命中不到任何已有会话，ensurePlanningSession 于是新建一个空壳会话，
+  // 对话区退化成「正在准备需求确认…」的加载卡，而真正的历史会话（含 UI 设计稿确认卡）
+  // 被孤立在磁盘上。快照只作兜底：万一 lifecycle 缺 threadId，仍有东西可查。
   const restoredDesignConversationThreadId =
-    application.planningThreadId || applicationLifecycle?.initialization?.threadId
+    applicationLifecycle?.initialization?.threadId || application.planningThreadId
   const planningSessionLookupKey =
     activePlanningConversationThreadId ||
     restoredPlanningConversationThreadId ||
@@ -4428,8 +4526,8 @@ export default function AiChatPanel({
     if (!productConversationAvailable) return
     const originalPlanningThreadId = String(
       planningThreadId ||
-        application.planningThreadId ||
         applicationLifecycle?.initialization?.threadId ||
+        application.planningThreadId ||
         ''
     ).trim()
     if (!originalPlanningThreadId) {
@@ -4534,6 +4632,7 @@ export default function AiChatPanel({
             apiContracts={developmentPlanningApiContracts}
             entities={developmentPlanningEntities}
             {...artifactOutlineProps}
+            currentBranch={application.branchName}
             filesActive={activeView === 'files'}
             dataSourcesActive={activeView === 'dataSources'}
             externalApisActive={activeView === 'externalApis'}
@@ -4610,10 +4709,14 @@ export default function AiChatPanel({
                 designPhasePlanning={isApplicationPlanningPhase}
                 reusedExistingTemplate={reusingExistingTemplate}
                 branchName={application.branchName}
+                repositoryBranch={application.repositoryBranch}
+                onRetryRepositoryBranch={handleRetryRepositoryBranch}
+                retryingRepositoryBranch={retryingRepositoryBranch}
                 emptyContent={
                   !isApplicationPlanningPhase ? (
                     <QuickTaskGuide
                       developmentArtifacts={applicationLifecycle?.developmentArtifacts}
+                      currentBranch={application.branchName}
                       apiContracts={developmentPlanningApiContracts}
                       disabled={loading || workflowInputLocked}
                       entities={developmentPlanningEntities}
@@ -4648,7 +4751,24 @@ export default function AiChatPanel({
                       ? onRetryTemplateReconcile
                       : undefined
                 }
-                onSubmitClarification={handleSubmitWorkflowClarification}
+                // 卡片上的「确认并返回设计阶段 / 确认并进入计划阶段」不经过输入框，
+                // 点一下就直接跳阶段；这类推进同样要在没保存时先拦一下。
+                // 其余澄清（阶段内审批、验收等）原样提交，见 isStageAdvanceDecision。
+                onSubmitClarification={async (
+                  workflow,
+                  answers,
+                  editedRequirementSpec
+                ): Promise<void> => {
+                  const submit = (): Promise<void> =>
+                    handleSubmitWorkflowClarification(workflow, answers, editedRequirementSpec)
+                  if (!isStageAdvanceDecision(answers)) {
+                    await submit()
+                    return
+                  }
+                  // 被拦下时立刻返回：这次提交要等用户选完才发，甚至可能不发，
+                  // 这里没有可等的 Promise，只能如实返回"还没提交"。
+                  commitBeforeSend.requestAdvance(submit)
+                }}
                 onStartIterationPlanning={async (request) => {
                   appendPlanningUserMessage({ design_change_request: request })
                   await onStartIterationPlanning(request)
@@ -4676,24 +4796,21 @@ export default function AiChatPanel({
                 />
               )}
 
-              {/* 弱提醒：设计文档确认后提示可保存设计版本。
-                  与代码提交入口分开用不同文案，且只在用户点击时打开弹窗、不自动弹。
-
-                  唯一传 includePlatformArtifacts 的提醒：设计阶段唯一的变更就是
-                  `.devagentstudio` 规划产物，按业务代码口径算永远是 0，提醒会彻底消失。
-                  文档 §4.3 正是把它定位成与"代码提交入口分开"的第二条通道。 */}
-              {hasConfirmedDesignDocument(applicationLifecycle?.initialization?.stage) ? (
-                <MilestoneCommitReminder
-                  workspaceRoot={application.workspaceRoot || ''}
-                  title="设计文档已确认，可保存为设计版本"
-                  defaultCommitMessage="docs: 保存设计版本"
-                  milestoneId={`${application.id}:design`}
-                  disabled={loading || workspaceBusy}
-                  includePlatformArtifacts
-                  // 设计阶段仓库可能尚未建立（bootstrap 之后才有），读不到就静默。
-                  hideWhenUnavailable
-                />
-              ) : null}
+              {/* 发送前提交门禁（取代原来常驻的「设计文档已确认，可保存为设计版本」提醒框）：
+                  产品对话输入框在检测到未提交变更时先弹这个轻量确认框，选完再发。
+                  提交本身复用 MilestoneCommitModal，文件清单/勾选/校验都只有一份实现。 */}
+              <CommitBeforeSendModal
+                eligibleCount={commitBeforeSend.eligibleCount}
+                onCancel={commitBeforeSend.handleGateCancel}
+                onDefer={commitBeforeSend.handleDeferAndAdvance}
+                onReview={commitBeforeSend.handleReview}
+                visible={commitBeforeSend.gateVisible}
+              />
+              <MilestoneCommitModal
+                commit={commitBeforeSend.commit}
+                disabled={loading || workspaceBusy || designArtifactsSettling}
+                title="保存当前改动为版本"
+              />
 
               {showSessionExecutionLock ? (
                 <SessionExecutionLockDock
@@ -4744,7 +4861,9 @@ export default function AiChatPanel({
                       dependencyLocked={targetExecutionContext.dependencyLocked}
                       error={scopedExecution?.error?.message || error}
                       execution={scopedExecution}
+                      developmentTotals={developmentTotals}
                       mode={displayedPlanExecutionMode}
+                      testEntryGate={applicationLifecycle?.testEntryGate}
                       onAccept={handleAcceptPreview}
                       onConfirmInteraction={handleConfirmPlanInteraction}
                       onEnd={() => void handleEndPlan(scopedExecution?.runId)}
@@ -4784,9 +4903,15 @@ export default function AiChatPanel({
                     }
                     // 产品阶段始终使用 Product Coordinator；完成态修改再进入 formal revision。
                     // 当前节点的澄清和确认只能通过上方结构化卡片提交，不能劫持普通输入语义。
+                    // 产品对话分支过一层发送门禁：有未提交变更时这次发送会被暂存，
+                    // 用户选完「稍后 / 审阅并提交」再由 hook 放行。
+                    // 开发阶段这条输入框不在这里拦 —— 它发出的请求即使被判定为跳阶段，
+                    // 也一定会先落到「正式修改确认」卡上，由上面的 onSubmitClarification 拦。
                     onSend={
                       productConversationAvailable
-                        ? handleProductConversationSend
+                        ? async () => {
+                            commitBeforeSend.requestAdvance(handleProductConversationSend)
+                          }
                         : handleConversationSend
                     }
                     onStopGenerating={handleStopCurrentGeneration}

@@ -13,7 +13,7 @@ from app.services.planning_run_events import (
     AssemblyStarted, CandidateInvalid, CandidateReady, GenerationStarted,
     GlobalCheckStarted, GlobalRepairStarted, GlobalValidationStarted,
     PendingPersistenceStarted, PlanningRunEvent, RoundExhausted, RunCancelled,
-    RunFailed, UnitAttemptStarted, UnitValidationStarted,
+    RecoveredCandidateAccepted, RunFailed, UnitAttemptStarted, UnitValidationStarted,
 )
 from app.services.unit_generation_contracts import AttemptIdentity
 from app.workspace.planning_run_documents import project_planning_run, write_planning_run_atomic
@@ -27,6 +27,7 @@ _TRANSITIONS = {
     UnitValidationStarted: (transitions.mark_unit_validating, "identity"),
     CandidateInvalid: (transitions.record_candidate_invalid, "candidate"),
     CandidateReady: (transitions.record_candidate_ready, "candidate"),
+    RecoveredCandidateAccepted: (transitions.accept_recovered_candidate, "candidate"),
     RoundExhausted: (transitions.mark_round_exhausted, "unit_id"),
     GlobalCheckStarted: (transitions.begin_global_check, None),
     GlobalRepairStarted: (transitions.begin_global_repair, "decision"),
@@ -44,7 +45,8 @@ def _result_identity(event: PlanningRunEvent) -> AttemptIdentity | None:
     if isinstance(event, UnitValidationStarted):
         return event.identity
     if isinstance(event, (CandidateInvalid, CandidateReady)):
-        return event.candidate.identity
+        # Candidate 当前身份不再携带 Attempt；只有 generated provenance 才能参与晚到结果 gate。
+        return event.candidate.generated_from
     return None
 
 

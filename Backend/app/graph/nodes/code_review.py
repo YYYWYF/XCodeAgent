@@ -7,7 +7,7 @@ from typing import Any
 from app.graph.state import ProjectState
 from app.graph.subgraphs.code_review import run_code_review_subgraph
 from app.graph.nodes.common import workspace_from_state
-from app.services.development_review_files import current_review_file
+from app.services.development_review_files import development_review_files
 from langchain_core.runnables import RunnableConfig
 
 
@@ -25,12 +25,8 @@ def review_phase_confirmation(state: ProjectState) -> dict[str, Any]:
     submission = state.get("review_phase_confirmation")
     confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
     review_mode = submission.get("reviewMode") if isinstance(submission, dict) else None
-    review_files = state.get("development_review_files")
-    review_files = review_files if isinstance(review_files, list) else []
-    available_files = [
-        path for path in review_files
-        if current_review_file(workspace_from_state(state) or "", path)
-    ]
+    # 从服务端正式 Build 计划刷新范围，也修正此前 checkpoint 中只含当前会话 Diff 的清单。
+    available_files = development_review_files(workspace_from_state(state) or "")
     if confirmed:
         if review_mode == "diff" and not available_files:
             return {
@@ -44,12 +40,14 @@ def review_phase_confirmation(state: ProjectState) -> dict[str, Any]:
                     "questions": [],
                 },
                 "code_review_next_action": "await_user_input",
+                "development_review_files": available_files,
                 "timeline": ["review_phase_confirmation"],
             }
         return {
             "phase": "review_phase_confirmation",
             "status": "completed",
             "code_review_mode": review_mode,
+            "development_review_files": available_files,
             "clarification": {},
             "code_review_next_action": "code_review",
             "timeline": ["review_phase_confirmation"],
@@ -65,6 +63,7 @@ def review_phase_confirmation(state: ProjectState) -> dict[str, Any]:
             "questions": [],
         },
         "code_review_next_action": "await_user_input",
+        "development_review_files": available_files,
         "timeline": ["review_phase_confirmation"],
     }
 

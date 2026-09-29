@@ -5,6 +5,7 @@ import type { WorkflowTestTarget } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { useTestEntryGate } from '../../../../context'
 import { testEntryGateReason } from '../../../../developmentArtifacts'
+import MilestoneCommitReminder from '../MilestoneCommitReminder'
 import './TestPhaseConfirmationCard.less'
 
 const { Text } = Typography
@@ -13,6 +14,8 @@ type Props = {
   disabled?: boolean
   target?: WorkflowTestTarget
   onSubmit: () => void
+  /** 工作区根目录：驱动卡内的提交提醒。 */
+  workspaceRoot?: string
 }
 
 const TEST_PHASE_CONFIRMATION_DESCRIPTION =
@@ -22,9 +25,11 @@ const TEST_PHASE_CONFIRMATION_DESCRIPTION =
 export default function TestPhaseConfirmationCard({
   disabled,
   target,
-  onSubmit
+  onSubmit,
+  workspaceRoot
 }: Props): ReactElement {
   const gate = useTestEntryGate()
+  const entityTarget = target?.type === 'data_source'
   return (
     <div className={cx('workflow-test-phase-confirmation')}>
       <div className={cx('workflow-test-phase-confirmation-title')}>
@@ -32,9 +37,13 @@ export default function TestPhaseConfirmationCard({
           <CheckCircleOutlined />
         </span>
         <div>
-          <Text strong>当前产物初次开发已完成</Text>
+          <Text strong>{entityTarget ? '全部开发产物已完成' : '当前产物初次开发已完成'}</Text>
           <Text type="secondary">
-            {gate?.allowed ? TEST_PHASE_CONFIRMATION_DESCRIPTION : testEntryGateReason(gate)}
+            {gate?.allowed
+              ? entityTarget
+                ? '实体设计已确认，确认后将进入测试阶段，执行测试与失败修复'
+                : TEST_PHASE_CONFIRMATION_DESCRIPTION
+              : testEntryGateReason(gate)}
           </Text>
         </div>
       </div>
@@ -70,6 +79,18 @@ export default function TestPhaseConfirmationCard({
             ))}
           </ul>
         </section>
+      ) : null}
+      {/* 转换前的最后一步：提醒用户先把本轮开发提交掉。
+          无 workspaceRoot、或没有可提交变更时组件自己不渲染（见 shouldRenderCommitReminder）。 */}
+      {gate?.allowed && workspaceRoot ? (
+        <MilestoneCommitReminder
+          defaultCommitMessage="feat: 完成开发阶段代码"
+          disabled={Boolean(disabled)}
+          inline
+          milestoneId={`${workspaceRoot}:test-gate`}
+          title="开发已完成，建议提交本次开发代码"
+          workspaceRoot={workspaceRoot}
+        />
       ) : null}
       {gate?.allowed ? (
         <Button

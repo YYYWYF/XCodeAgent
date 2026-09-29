@@ -17,9 +17,12 @@ from app.services.api_design import (
     api_design_mapping_flows,
     api_design_source_types,
 )
+from app.services import planning_run as planning_run_transitions
 from app.services.business_acceptance import frontend_api_task_id
 from app.services.dag_planning_orchestrator import DagPlanningError, ValidatedAssembledPlan, plan_dag_sequential
 from app.services.planning_frozen import plain_json
+from app.services.planning_issues import ValidationIssue
+from app.services.planning_recovery_contracts import build_planning_recovery_snapshot, planning_recovery_snapshot_digest, PlanningRecoverySnapshot
 from app.services.unit_generation import generate_unit_candidate_once
 from app.services.unit_generation_contracts import UnitGenerationPolicy
 from app.workspace.planning_run_documents import load_planning_run
@@ -100,7 +103,7 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         model.ainvoke.assert_awaited_once()
         return result
 
-    async def _plan(self, inputs, *, generate_once=None, **kwargs):
+    async def _plan(self, inputs, *, generate_once=None, planning_run_id="sequential-run", **kwargs):
         """调用正式有限并发 API；唯一替身是单次模型工厂返回的固定传输响应。"""
 
         async def publish(projection):
@@ -109,11 +112,37 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.phases.append((projection["phase"], projection["global_repair_round"]))
 
         return await plan_dag_sequential(
-            inputs, workspace_state=self.workspace, planning_run_id="sequential-run", workflow_run_id="workflow",
+            inputs, workspace_state=self.workspace, planning_run_id=planning_run_id, workflow_run_id="workflow",
             thread_id="thread", policy=self.policy, settings=_settings(),
             generate_once=generate_once or self._generate,
             publish=publish, now=lambda: AT, **kwargs,
         )
+
+    def _infrastructure_failure(self) -> ValidationIssue:
+        """构造测试用的终态基础设施失败事实。"""
+
+        return ValidationIssue(
+            code="UNIT_GENERATION_INFRASTRUCTURE_FAILURE",
+            level="system",
+            category="infrastructure",
+            retryable=False,
+            message="source run infrastructure failure",
+        )
+
+    def _recovery_snapshot_from_success(self, result: ValidatedAssembledPlan) -> PlanningRecoverySnapshot:
+        """把已拥有完整 Candidate 的测试 Run 转成合法 Recovery Snapshot。"""
+
+        failed = planning_run_transitions.fail(
+            result.planning_run,
+            self._infrastructure_failure(),
+            at=AT,
+        )
+        snapshot = build_planning_recovery_snapshot(
+            failed,
+            owner_session_id="session-recovery",
+        )
+        assert snapshot is not None
+        return snapshot
 
     def _assert_retained_contract(self, current, original):
         """保留历史合同并验证依赖不丢失；仅累计图派生的三项字段允许重算。"""
@@ -186,6 +215,179 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 if other != job.identity.unit_id:
                     self.assertNotIn(f"{other}-r1", job.context.model_dump_json())
         verify()
+
+    async def test_all_recovered_candidates_skip_model_but_keep_barrier_assembly_and_global(self):
+        """全部 Candidate Recovery 成功时模型调用为零，但仍完整执行后续阶段。"""
+
+        inputs = planning_inputs()
+        source = await self._plan(inputs)
+        snapshot = self._recovery_snapshot_from_success(source)
+        self.calls.clear()
+        self.phases.clear()
+
+        result = await self._plan(
+            inputs,
+            planning_run_id="recovery-run",
+            recovery_snapshot=snapshot,
+        )
+
+        self.assertEqual(self.calls, [])
+        self.assertTrue(result.assembly.assembled_plan["task_graph"]["validation"]["is_valid"])
+        self.assertEqual(result.planning_run.phase, "persisting_pending")
+        self.assertTrue(all(
+            result.planning_run.candidates[result.planning_run.unit_states[unit_id].latest_candidate_id].origin
+            == "recovered"
+            for unit_id in result.planning_run.planning_unit_ids
+        ))
+        self.assertIn(("global_check", 0), self.phases)
+        self.assertIn(("assembling", 0), self.phases)
+
+    async def test_snapshot_baseline_and_scope_mismatch_fall_back_to_full_generation(self):
+        """baseline digest 或 Build scope 任一失配都不得接纳任何 source Candidate。"""
+
+        inputs = planning_inputs()
+        source = await self._plan(inputs)
+        base_snapshot = self._recovery_snapshot_from_success(source)
+
+        for field, value in (
+            ("base_confirmed_plan_digest", "stale-baseline"),
+            ("build_execution_scope", {"type": "application", "targetId": "different"}),
+        ):
+            with self.subTest(field=field):
+                payload = base_snapshot.model_dump(mode="json")
+                payload[field] = value
+                payload["snapshot_digest"] = planning_recovery_snapshot_digest(payload)
+                stale = PlanningRecoverySnapshot.model_validate(payload)
+                self.calls.clear()
+                result = await self._plan(
+                    inputs,
+                    planning_run_id=f"fresh-{field}",
+                    recovery_snapshot=stale,
+                )
+                self.assertGreater(len(self.calls), 0)
+                self.assertTrue(all(
+                    result.planning_run.candidates[result.planning_run.unit_states[unit_id].latest_candidate_id].origin
+                    == "generated"
+                    for unit_id in result.planning_run.planning_unit_ids
+                ))
+
+    async def test_snapshot_input_fingerprint_mismatch_falls_back_to_full_generation(self):
+        """独立 input fingerprint gate 失配时，即使摘要合法也不复用 Candidate。"""
+
+        inputs = planning_inputs()
+        source = await self._plan(inputs)
+        snapshot = self._recovery_snapshot_from_success(source)
+        payload = snapshot.model_dump(mode="json")
+        payload["input_fingerprint"] = "stale-input-fingerprint"
+        for candidate in payload["candidates_by_unit"].values():
+            candidate["input_fingerprint"] = "stale-input-fingerprint"
+        payload["snapshot_digest"] = planning_recovery_snapshot_digest(payload)
+        stale = PlanningRecoverySnapshot.model_validate(payload)
+        self.calls.clear()
+
+        result = await self._plan(
+            inputs,
+            planning_run_id="fresh-input-fingerprint",
+            recovery_snapshot=stale,
+        )
+
+        self.assertGreater(len(self.calls), 0)
+        self.assertTrue(all(
+            result.planning_run.candidates[result.planning_run.unit_states[unit_id].latest_candidate_id].origin
+            == "generated"
+            for unit_id in result.planning_run.planning_unit_ids
+        ))
+
+    async def test_recovery_local_validation_failure_only_regenerates_that_unit_without_budget_charge(self):
+        """当前 Local Validator 拒绝 A 时只跳过 A，B 仍以 0/0 recovered。"""
+
+        inputs = planning_inputs(required=["page:a", "page:b"])
+        source = await self._plan(inputs)
+        snapshot = self._recovery_snapshot_from_success(source)
+        self.calls.clear()
+
+        def current_validator(context, tasks, reuse_facts):
+            """模拟当前正式 Validator 只拒绝 A 的恢复正文。"""
+
+            if context.unit_id == "page:a":
+                return [ValidationIssue(
+                    code="CURRENT_LOCAL_VALIDATION_REJECTED",
+                    level="unit",
+                    category="generation",
+                    unit_ids=(context.unit_id,),
+                    retry_unit_ids=(context.unit_id,),
+                    retryable=True,
+                    message="当前输入下 Candidate A 已失效。",
+                )]
+            return []
+
+        with patch(
+            "app.services.dag_planning_orchestrator.validate_unit_candidate",
+            side_effect=current_validator,
+        ):
+            result = await self._plan(
+                inputs,
+                planning_run_id="local-recovery-fallback-run",
+                recovery_snapshot=snapshot,
+            )
+
+        self.assertEqual([job.identity.unit_id for job, _ in self.calls], ["page:a"])
+        page_a = result.planning_run.unit_states["page:a"]
+        page_b = result.planning_run.unit_states["page:b"]
+        self.assertEqual((page_a.attempt_in_round, page_a.total_attempts), (1, 1))
+        self.assertEqual((page_b.attempt_in_round, page_b.total_attempts), (0, 0))
+        self.assertEqual(page_a.current_issues, ())
+        recovered_b = result.planning_run.candidates[page_b.latest_candidate_id]
+        self.assertEqual(recovered_b.origin, "recovered")
+
+    async def test_global_repair_treats_recovered_candidate_like_generated_candidate(self):
+        """Global Collision 只重生归因 Unit，不增加 recovered-specific 分支。"""
+
+        historical = await self._plan(planning_inputs(required=["page:history"]))
+        baseline = plain_json(historical.assembly.assembled_plan)
+        baseline.update(confirmation_status="confirmed", confirmed_at=AT)
+        inputs = planning_inputs(baseline=baseline)
+        source = await self._plan(inputs)
+        source_run = source.planning_run
+        page_a_id = source_run.unit_states["page:a"].latest_candidate_id
+        page_b_id = source_run.unit_states["page:b"].latest_candidate_id
+        assert page_a_id is not None and page_b_id is not None
+        collision_id = next(iter(baseline["task_registry"]))
+        page_b = source_run.candidates[page_b_id]
+        collided_tasks = tuple(
+            {**task, "id": collision_id} if index == 0 else task
+            for index, task in enumerate(page_b.tasks)
+        )
+        failed = planning_run_transitions.fail(
+            source_run.model_copy(update={
+                "candidates": {
+                    **source_run.candidates,
+                    page_b_id: page_b.model_copy(update={"tasks": collided_tasks}),
+                },
+            }),
+            self._infrastructure_failure(),
+            at=AT,
+        )
+        snapshot = build_planning_recovery_snapshot(failed, owner_session_id="session-recovery")
+        assert snapshot is not None
+        self.calls.clear()
+        self.collision_id = None
+
+        result = await self._plan(
+            inputs,
+            planning_run_id="global-repair-recovery-run",
+            recovery_snapshot=snapshot,
+        )
+
+        self.assertEqual([job.identity.unit_id for job, _ in self.calls], ["page:b"])
+        self.assertEqual(result.planning_run.global_repair_round, 1)
+        self.assertEqual(
+            result.planning_run.candidates[result.planning_run.unit_states["page:a"].latest_candidate_id].origin,
+            "recovered",
+        )
+        current_b = result.planning_run.candidates[result.planning_run.unit_states["page:b"].latest_candidate_id]
+        self.assertEqual(current_b.origin, "generated")
+        self.assertEqual(current_b.identity.generation_round, 2)
 
     async def test_global_real_collision_repairs_only_b(self):
         """真实 retained/Candidate ID 冲突经过 Assembly/T4.1 后只重生 B。"""
@@ -297,7 +499,10 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
             if candidate.identity.unit_id == "page:a"
         ]
         self.assertEqual(len(a_candidates), 1)
-        self.assertEqual(a_candidates[0].identity, a_job.identity)
+        self.assertEqual(a_candidates[0].generated_from, a_job.identity)
+        self.assertEqual(a_candidates[0].identity.planning_run_id, a_job.identity.planning_run_id)
+        self.assertEqual(a_candidates[0].identity.unit_id, a_job.identity.unit_id)
+        self.assertEqual(a_candidates[0].identity.generation_round, a_job.identity.generation_round)
         self.assertEqual(plain_json(a_candidates[0].tasks), model_tasks(a_job))
         self.assertEqual(a_candidates[0].status, "valid")
 

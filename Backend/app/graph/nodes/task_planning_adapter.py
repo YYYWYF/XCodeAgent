@@ -187,6 +187,17 @@ async def _run_async_workflow_planning_adapter(
     context = _assemble_planning_context(state)
     if isinstance(context, dict):
         return context
+    planning_kwargs: dict[str, Any] = {}
+    if state.get("workflow_action") == "retry_failed_tasks":
+        # DAG generation Retry 的身份是明确 source execution；不能使用
+        # retry_failed_tasks 布尔值，因为它只表示 resume_from=build 的 Build 重试。
+        recovery_source_workflow_run_id = str(
+            state.get("resume_execution_run_id") or ""
+        ).strip()
+        if recovery_source_workflow_run_id:
+            planning_kwargs["recovery_source_workflow_run_id"] = (
+                recovery_source_workflow_run_id
+            )
     result = await planning_service(
         context.inputs,
         workspace_state=state,
@@ -194,6 +205,7 @@ async def _run_async_workflow_planning_adapter(
         settings=settings,
         generate_once=generate_once,
         publish=create_planning_run_progress_publisher(),
+        **planning_kwargs,
     )
     return _project_planning_result(result, context=context)
 

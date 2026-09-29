@@ -49,7 +49,7 @@ export type ChatSessionSavedFile = {
 }
 
 export type ChatSessionRecord = {
-  /** 是否由用户通过任务管理主动创建；系统默认主任务为 false。 */
+  /** 是否由用户通过对话管理主动创建；系统默认主对话为 false。 */
   createdByUser?: boolean
   savedFiles?: ChatSessionSavedFile[]
   id: string
@@ -257,7 +257,7 @@ function normalizeSession(value: unknown): ChatSessionRecord | null {
     createdByUser: Boolean(session.createdByUser),
     savedFiles: normalizeSavedFiles(session.savedFiles),
     id: String(session.id),
-    title: String(session.title || '新任务'),
+    title: String(session.title || '新对话'),
     editorMode: session.editorMode,
     threadId: String(session.threadId),
     apiContractId: isDevelopmentMainSession
@@ -314,7 +314,7 @@ function normalizeSummaries(value: unknown): ChatSessionSummary[] {
       createdByUser: Boolean(item.createdByUser),
       savedFiles: normalizeSavedFiles(item.savedFiles),
       id: String(item.id || ''),
-      title: String(item.title || '新任务'),
+      title: String(item.title || '新对话'),
       editorMode: item.editorMode || 'frontend',
       threadId: String(item.threadId || item.id || ''),
       apiContractId: normalizeEndpointField(item.apiContractId),
@@ -448,7 +448,7 @@ function normalizeSessionWorkspaces(value: unknown): SessionWorkspaceSummary[] {
       frontendCount: Number(item.frontendCount || 0),
       backendCount: Number(item.backendCount || 0),
       latestUpdatedAt: Number(item.latestUpdatedAt || 0),
-      latestTitle: String(item.latestTitle || '新任务')
+      latestTitle: String(item.latestTitle || '新对话')
     }))
     .filter((item) => item.workspaceRoot && item.sessionCount > 0)
     .sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt)
@@ -488,7 +488,7 @@ export function createChatSessionId(): string {
 /** 从首条用户输入生成紧凑的会话标题。 */
 export function createChatSessionTitle(content: string): string {
   const title = content.trim().replace(/\s+/g, ' ')
-  if (!title) return '新任务'
+  if (!title) return '新对话'
   return title.length > 28 ? `${title.slice(0, 28)}...` : title
 }
 

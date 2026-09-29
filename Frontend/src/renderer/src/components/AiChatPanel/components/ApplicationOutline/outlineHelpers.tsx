@@ -9,9 +9,12 @@ import { useState } from 'react'
 import type { ApplicationMenuItem, DevelopmentArtifactProgress } from '../../../../typings'
 import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import DevelopmentStatusDot from './DevelopmentStatusDot'
+import IterationBadge from '../../../../components/IterationBadge'
 import { cx } from '../../../../utils'
 
 type OutlineRowProps = {
+  /** 当前迭代的分支名，用于标注页面归属。 */
+  currentBranch?: string
   progressByPage?: Record<string, DevelopmentArtifactProgress>
   disabled?: boolean
   item: ApplicationMenuItem
@@ -29,6 +32,7 @@ function outlineLeafKeys(item: ApplicationMenuItem): string[] {
 
 /** 渲染单个页面目录节点，展示名称、路径和目录页面数量。 */
 export function OutlineRow({
+  currentBranch,
   progressByPage,
   disabled = false,
   item,
@@ -71,7 +75,13 @@ export function OutlineRow({
               <span className={cx('development-count')}>
                 {completed}/{pageKeys.length}
               </span>
-            ) : null}
+            ) : (
+              /* 归属标注：这个页面是以前迭代做的还是本轮的（未知则不渲染）。 */
+              <IterationBadge
+                artifactBranch={progressByPage?.[item.pageKey || item.key]?.completedBranchName}
+                currentBranch={currentBranch}
+              />
+            )}
           </span>
           {item.path ? <span className={cx('outline-meta')}>{item.path}</span> : null}
         </span>
@@ -83,6 +93,7 @@ export function OutlineRow({
         <div className={cx('outline-children')}>
           {children.map((child) => (
             <OutlineRow
+              currentBranch={currentBranch}
               progressByPage={progressByPage}
               disabled={disabled}
               item={child}

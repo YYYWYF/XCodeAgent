@@ -1,13 +1,19 @@
 import {
   CheckCircleOutlined,
+  ExclamationCircleFilled,
   ExclamationCircleOutlined,
   GitlabOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
 import { Button, Progress, Typography } from 'antd'
 import type { ReactElement } from 'react'
-import type { ApplicationLifecycle, WorkflowTemplatePreparation } from '../../../../typings'
+import type {
+  ApplicationConfig,
+  ApplicationLifecycle,
+  WorkflowTemplatePreparation
+} from '../../../../typings'
 import { cx } from '../../../../utils'
+import { asMessageClause } from '../../../../service/repositoryBranch'
 import MilestoneCommitModal from '../MilestoneCommitReminder/MilestoneCommitModal'
 import { useMilestoneCommit } from '../MilestoneCommitReminder/useMilestoneCommit'
 import { resolveTemplateCommitRow } from './templateCommitRow'
@@ -35,6 +41,12 @@ type Props = {
   reusedExistingTemplate?: boolean
   /** 当前分支名：自动提交的落点，展示给用户看提交去了哪里。 */
   branchName?: string
+  /** 最近一次模板基线的远端推送结果（来自 application.json）。 */
+  repositoryBranch?: ApplicationConfig['repositoryBranch']
+  /** 重试把当前分支提交到远端。 */
+  onRetryRepositoryBranch?: () => void
+  /** 重试提交进行中。 */
+  retryingRepositoryBranch?: boolean
 }
 
 const TEMPLATE_STAGES = new Set([
@@ -65,7 +77,10 @@ export default function TemplatePreparingCard({
   workspaceRoot,
   commitDisabled = false,
   reusedExistingTemplate = false,
-  branchName
+  branchName,
+  repositoryBranch,
+  onRetryRepositoryBranch,
+  retryingRepositoryBranch = false
 }: Props): ReactElement {
   const stage = lifecycle?.initialization?.stage
   const preparationFailed = templatePreparation?.status === 'FAILED'
@@ -135,6 +150,9 @@ export default function TemplatePreparingCard({
         onEnterDevelopment={onEnterDevelopment}
         reusedExistingTemplate={reusedExistingTemplate}
         branchName={branchName}
+        repositoryBranch={repositoryBranch}
+        onRetryRepositoryBranch={onRetryRepositoryBranch}
+        retryingRepositoryBranch={retryingRepositoryBranch}
         workspaceRoot={workspaceRoot}
         commitDisabled={commitDisabled}
       />
@@ -177,12 +195,20 @@ function ReadyCard({
   onEnterDevelopment,
   reusedExistingTemplate = false,
   branchName,
+  repositoryBranch,
+  onRetryRepositoryBranch,
+  retryingRepositoryBranch = false,
   workspaceRoot,
   commitDisabled
 }: {
   onEnterDevelopment?: () => void
   reusedExistingTemplate?: boolean
   branchName?: string
+  /** 最近一次模板基线的远端推送结果；决定下面那行文案说的是"已推送"还是"没推上去"。 */
+  repositoryBranch?: ApplicationConfig['repositoryBranch']
+  /** 重试把当前分支提交到远端；为空时不显示重试按钮。 */
+  onRetryRepositoryBranch?: () => void
+  retryingRepositoryBranch?: boolean
   workspaceRoot?: string
   commitDisabled: boolean
 }): ReactElement {
@@ -199,6 +225,10 @@ function ReadyCard({
     handleOpenCommit,
     loadSnapshot
   } = commit
+
+  // 远端推送是否失败。分支名优先用后端返回的（重试后可能与配置里的旧值不同）。
+  const pushedBranchName = repositoryBranch?.branchName || branchName
+  const pushFailed = repositoryBranch?.status === 'failed'
 
   // 提交区该显示哪一行：见 templateCommitRow 的说明（这里最容易写出"建议一个做不到的动作"）。
   const commitRow = resolveTemplateCommitRow({
@@ -276,21 +306,47 @@ function ReadyCard({
       {commitRow === 'baseline' ? (
         <div className={cx('template-preparing-commit-row')}>
           <span className={cx('template-preparing-commit-icon')}>
-            <CheckCircleOutlined />
+            {pushFailed ? (
+              <ExclamationCircleFilled className={cx('template-preparing-push-warning')} />
+            ) : (
+              <CheckCircleOutlined />
+            )}
           </span>
           <div className={cx('template-preparing-commit-copy')}>
-            <Text strong>{reusedExistingTemplate ? '工程代码已保存' : '模板代码已保存'}</Text>
+            <Text strong>
+              {pushFailed
+                ? `版本 ${pushedBranchName} 未提交到远端`
+                : reusedExistingTemplate
+                  ? '工程代码已保存'
+                  : '模板代码已保存'}
+            </Text>
             <Text type="secondary">
-              {reusedExistingTemplate
-                ? '沿用已有工程，无需重新提交'
-                : branchName
-                  ? `已自动提交到 ${branchName} 分支，无需手动操作`
-                  : '已自动提交，无需手动操作'}
+              {pushFailed
+                ? `${asMessageClause(repositoryBranch?.message, '原因未知')}。代码已提交到本地，应用可以正常使用。`
+                : reusedExistingTemplate
+                  ? '沿用已有工程，无需重新提交'
+                  : pushedBranchName
+                    ? `已自动提交到版本 ${pushedBranchName}，无需手动操作`
+                    : '已自动提交，无需手动操作'}
               {/* 提交信息来自 HEAD（后端 headMessage）：自动提交是平台发起的，
                   用户没参与写信息，所以要显示出来，否则这个 commit 对用户是黑盒。 */}
               {snapshot?.headMessage ? ` · ${snapshot.headMessage}` : ''}
               {` · ${snapshot?.head.slice(0, 8) || '—'}`}
             </Text>
+            {/* 推送失败时给一个可点的重试入口：这条推送只在 Bootstrap 时自动跑一次，
+                没有重试按钮的话用户只能等下次发起新迭代。 */}
+            {pushFailed && onRetryRepositoryBranch ? (
+              <Button
+                className={cx('template-preparing-push-retry')}
+                disabled={retryingRepositoryBranch}
+                icon={<ReloadOutlined />}
+                loading={retryingRepositoryBranch}
+                onClick={onRetryRepositoryBranch}
+                size="small"
+              >
+                重试提交
+              </Button>
+            ) : null}
           </div>
         </div>
       ) : null}

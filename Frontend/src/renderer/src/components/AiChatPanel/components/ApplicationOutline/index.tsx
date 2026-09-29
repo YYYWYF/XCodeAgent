@@ -21,6 +21,7 @@ import './ApplicationOutline.less'
 import { OutlineRow } from './outlineHelpers'
 import ApiOutlineGroup from './ApiOutlineGroup'
 import DevelopmentStatusDot from './DevelopmentStatusDot'
+import IterationBadge from '../../../../components/IterationBadge'
 import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import {
   collectRelatedKeys,
@@ -33,6 +34,8 @@ const { Text } = Typography
 
 export type ApplicationOutlineProps = {
   developmentArtifacts?: DevelopmentArtifacts
+  /** 当前迭代的分支名（= 版本号），用于标注产物归属。 */
+  currentBranch?: string
   apiContracts: DevelopmentPlanningApiContract[]
   entities: DevelopmentPlanningEntityOption[]
   onApiEndpointSelect: (target: {
@@ -54,6 +57,7 @@ export type ApplicationOutlineProps = {
 /** 渲染开发产物列表，提供搜索、筛选、分组展开与产物浏览入口。 */
 export default function ApplicationOutline({
   developmentArtifacts,
+  currentBranch,
   apiContracts = [],
   entities = [],
   onApiEndpointSelect,
@@ -195,6 +199,7 @@ export default function ApplicationOutline({
                     .filter((item) => visibleKeys.has(item.key))
                     .map((item) => (
                       <OutlineRow
+                        currentBranch={currentBranch}
                         progressByPage={developmentArtifacts?.pages}
                         disabled={outlineLocked}
                         item={item}
@@ -247,6 +252,7 @@ export default function ApplicationOutline({
                       allEndpoints={
                         apiContracts.find((item) => item.id === contract.id)?.endpoints || []
                       }
+                      currentBranch={currentBranch}
                       developmentArtifacts={developmentArtifacts}
                       expanded={!collapsedApiContractIds.has(contract.id)}
                       onToggle={() => handleApiContractToggle(contract.id)}
@@ -299,6 +305,12 @@ export default function ApplicationOutline({
                               <span className={cx('outline-label')}>{entity.label}</span>
                               <DevelopmentStatusDot
                                 progress={developmentArtifacts?.entities[entity.id]}
+                              />
+                              <IterationBadge
+                                artifactBranch={
+                                  developmentArtifacts?.entities[entity.id]?.completedBranchName
+                                }
+                                currentBranch={currentBranch}
                               />
                             </span>
                             <span className={cx('entity-meta')}>{entity.id}</span>

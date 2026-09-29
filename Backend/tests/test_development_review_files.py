@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,52 +12,74 @@ from unittest.mock import patch
 from app.graph.nodes.code_review import review_phase_confirmation
 from app.graph.nodes.lifecycle import test_phase_confirmation
 from app.protocols.workflow.runtime import _source_development_review_files
-from app.services.development_review_files import development_review_files
+from app.services.development_review_files import development_review_files, development_review_selection
 
 
 class DevelopmentReviewFilesTests(unittest.TestCase):
-    """确保审查文件清单只来自开发 Diff 的可读文件。"""
+    """确保审查清单与顶部已完成模块使用同一份正式 Build 计划。"""
 
-    def test_deduplicates_and_excludes_deleted_binary_and_unsafe_files(self) -> None:
-        """同一路径采用最终变更状态，危险路径不能进入审查。"""
+    def _write_plan(self, root: Path, units: dict, tasks: dict) -> None:
+        """在临时工作区写入正式 Build 任务计划。"""
+
+        plan = root / ".devagentstudio/plans/build-task-plan.json"
+        plan.parent.mkdir(parents=True)
+        plan.write_text(json.dumps({"build_units": units, "task_registry": tasks}), encoding="utf-8")
+
+    def test_uses_all_completed_module_files_and_excludes_unsafe_files(self) -> None:
+        """一个文件未提交时纳入模块的全部目标文件，含后端配置和资源。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
             java = root / "backend/src/main/java/demo/App.java"
             manifest = root / "frontend/package.json"
+            pom = root / "backend/pom.xml"
+            config = root / "backend/src/main/resources/application.yml"
+            binary = root / "backend/src/main/resources/logo.bin"
             java.parent.mkdir(parents=True)
             manifest.parent.mkdir(parents=True)
+            config.parent.mkdir(parents=True)
             java.write_text("class App {}", encoding="utf-8")
             manifest.write_text("{}", encoding="utf-8")
-            changes = {
-                "workspaceRoot": str(root.resolve()),
-                "files": [
-                    {"path": "backend/src/main/java/demo/App.java", "changeType": "modified"},
-                    {"path": "backend/src/main/java/demo/App.java", "changeType": "modified"},
-                    {"path": "frontend/package.json", "changeType": "added"},
-                    {"path": "frontend/src/Old.tsx", "changeType": "deleted"},
-                    {"path": "backend/src/main/java/demo/Other.java", "binary": True},
-                    {"path": "frontend/.env", "changeType": "modified"},
-                    {"path": "../private.java", "changeType": "modified"},
-                ],
-            }
+            pom.write_text("<project/>", encoding="utf-8")
+            config.write_text("app: ready", encoding="utf-8")
+            binary.write_bytes(b"\x00\x01")
+            self._write_plan(root, {"backend:bootstrap": {"task_ids": ["t1"]}}, {
+                "t1": {"status": "completed", "target_files": [
+                    "backend/pom.xml", "backend/src/main/resources/application.yml",
+                    "backend/src/main/java/demo/App.java", "backend/pom.xml",
+                    "frontend/package.json", "frontend/.env", "../private.java",
+                    "backend/src/main/resources/missing.xml",
+                    "backend/src/main/resources/logo.bin",
+                ]},
+            })
+            snapshot = SimpleNamespace(eligible_paths=["backend/pom.xml"])
+            with patch("app.services.development_review_files.inspect_all_version_control", return_value=snapshot):
+                self.assertEqual(development_review_files(root), [
+                    "backend/pom.xml", "backend/src/main/java/demo/App.java",
+                    "backend/src/main/resources/application.yml", "frontend/package.json",
+                ])
+                self.assertEqual(development_review_selection(root)[1], [
+                    "backend/src/main/resources/logo.bin",
+                    "backend/src/main/resources/missing.xml",
+                ])
 
-            self.assertEqual(
-                development_review_files(changes, root),
-                ["backend/src/main/java/demo/App.java", "frontend/package.json"],
-            )
-
-    def test_rejects_another_workspace(self) -> None:
-        """客户端或其他应用的变更集合不能成为当前工作区扫描依据。"""
+    def test_unfinished_or_committed_module_is_not_in_dropdown_scope(self) -> None:
+        """任务未全部完成或没有未提交目标文件时不进入 Diff 清单。"""
 
         with tempfile.TemporaryDirectory() as workspace:
-            self.assertEqual(
-                development_review_files(
-                    {"workspaceRoot": "/another", "files": [{"path": "frontend/package.json"}]},
-                    workspace,
-                ),
-                [],
-            )
+            root = Path(workspace)
+            for name in ("one.ts", "two.ts"):
+                source = root / "frontend/src" / name
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("export {}", encoding="utf-8")
+            self._write_plan(root, {
+                "one": {"task_ids": ["t1"]}, "two": {"task_ids": ["t2"]},
+            }, {
+                "t1": {"status": "completed", "target_files": ["frontend/src/one.ts"]},
+                "t2": {"status": "pending", "target_files": ["frontend/src/two.ts"]},
+            })
+            with patch("app.services.development_review_files.inspect_all_version_control", return_value=SimpleNamespace(eligible_paths=["frontend/src/two.ts"])):
+                self.assertEqual(development_review_files(root), [])
 
     def test_review_gate_exposes_file_count_and_persists_mode(self) -> None:
         """审查入口按真实可读文件展示 Diff 可用性并保存选择。"""
@@ -68,32 +91,48 @@ class DevelopmentReviewFilesTests(unittest.TestCase):
             state = {
                 "workspace": workspace,
                 "quality_gate_passed": True,
-                "development_review_files": ["frontend/package.json"],
+                "development_review_files": ["frontend/src/Old.tsx"],
             }
-            waiting = review_phase_confirmation(state)
-            confirmed = review_phase_confirmation({
-                **state,
-                "review_phase_confirmation": {"action": "confirm", "reviewMode": "diff"},
+            self._write_plan(Path(workspace), {"frontend": {"task_ids": ["t1"]}}, {
+                "t1": {"status": "completed", "target_files": ["frontend/package.json"]},
             })
+            with patch("app.services.development_review_files.inspect_all_version_control", return_value=SimpleNamespace(eligible_paths=["frontend/package.json"])):
+                waiting = review_phase_confirmation(state)
+                confirmed = review_phase_confirmation({
+                    **state,
+                    "review_phase_confirmation": {"action": "confirm", "reviewMode": "diff"},
+                })
 
         self.assertEqual(waiting["clarification"]["diffReviewFileCount"], 1)
         self.assertEqual(confirmed["code_review_mode"], "diff")
+        self.assertEqual(confirmed["development_review_files"], ["frontend/package.json"])
 
-    def test_development_gate_freezes_final_code_change_paths(self) -> None:
-        """进入测试前固定开发最终 Diff 的路径，后续阶段无需重新计算。"""
+    def test_development_gate_freezes_completed_module_paths(self) -> None:
+        """进入测试前固定全部已完成模块路径，而非当前会话的 CodeChanges。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
             source = root / "backend/src/main/java/App.java"
+            pom = root / "backend/pom.xml"
             source.parent.mkdir(parents=True)
             source.write_text("class App {}", encoding="utf-8")
+            pom.write_text("<project/>", encoding="utf-8")
+            self._write_plan(root, {"backend": {"task_ids": ["t1"]}}, {
+                "t1": {"status": "completed", "target_files": [
+                    "backend/src/main/java/App.java", "backend/pom.xml",
+                ]},
+            })
             gate = SimpleNamespace(allowed=True, reason="", model_dump=lambda **_kwargs: {})
             with patch("app.graph.nodes.lifecycle._completed_build_summary", return_value={"status": "completed"}), patch(
                 "app.graph.nodes.lifecycle.complete_initial_development", return_value={}
-            ), patch("app.graph.nodes.lifecycle.test_entry_gate", return_value=gate):
+            ), patch("app.graph.nodes.lifecycle.test_entry_gate", return_value=gate), patch(
+                "app.services.development_review_files.inspect_all_version_control",
+                return_value=SimpleNamespace(eligible_paths=["backend/src/main/java/App.java"]),
+            ):
                 result = test_phase_confirmation({
                     "workspace": workspace,
                     "unit_test_gate_passed": True,
+                    "development_review_files": [],
                     "code_changes": {
                         "workspaceRoot": str(root.resolve()),
                         "files": [{"path": "backend/src/main/java/App.java", "changeType": "modified"}],
@@ -101,7 +140,9 @@ class DevelopmentReviewFilesTests(unittest.TestCase):
                 })
 
         self.assertEqual(result["status"], "requires_user_input")
-        self.assertEqual(result["development_review_files"], ["backend/src/main/java/App.java"])
+        self.assertEqual(result["development_review_files"], [
+            "backend/pom.xml", "backend/src/main/java/App.java",
+        ])
 
 
 class DevelopmentReviewTransferTests(unittest.IsolatedAsyncioTestCase):

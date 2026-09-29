@@ -1,6 +1,6 @@
-/* 临时任务等辅助抽屉：与后台任务抽屉同款同位，定位在裁剪宿主内从菜单栏右边线滑出。
+/* 临时对话等辅助抽屉：与后台任务抽屉同款同位，定位在裁剪宿主内从菜单栏右边线滑出。
    抽屉常挂载：滑入/滑出都走同一条 transform 过渡；visibility 延迟到滑出结束再隐藏，
-   保证收起动画可见。已展开时切换模式（如数据源↔外部API↔任务管理）不做整抽屉动画，
+   保证收起动画可见。已展开时切换模式（如数据源↔外部API↔对话管理）不做整抽屉动画，
    原地替换内容——二级抽屉开着时切换一级，中间不会出现被腾空的区域。 */
 .@{class-prefix}-auxiliary-drawer {
   position: absolute;
@@ -73,7 +73,7 @@
   }
 }
 // 列表型抽屉（数据源 / 外部API）body 内边距统一 14px，Tab 条通栏负边距按 14px 抵消，
-// 与任务管理（16px + 视图 2px 留白）的贴头位置在视觉上完全一致。
+// 与对话管理（16px + 视图 2px 留白）的贴头位置在视觉上完全一致。
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-auxiliary-drawer-body,
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-external-apis .@{class-prefix}-auxiliary-drawer-body { padding: 14px; overflow: hidden; }
 // 详情层与列表抽屉同款内边距，维护页的通栏头尾按 14px 负边距抵消。
@@ -81,7 +81,7 @@
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-data-sources .@{class-prefix}-conversation-tabbar,
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-external-apis .@{class-prefix}-conversation-tabbar { margin: -14px -14px 0; }
 
-// 文件/技能/设置是功能页抽屉：与任务管理等抽屉同槽位、同开合动画与互斥规则，
+// 文件/技能/设置是功能页抽屉：与对话管理等抽屉同槽位、同开合动画与互斥规则，
 // 只是铺满整个工作区宽度（面积大一号）；页面自带内边距与滚动，抽屉体不再叠加。
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-files,
 .@{class-prefix}-auxiliary-drawer.@{class-prefix}-skills,
@@ -372,7 +372,7 @@
 }
 
 
-// 任务管理视图：顶部过滤标签 + 单一扁平列表，常规 / 临时任务混排并以类型标签区分。
+// 对话管理视图：顶部过滤标签 + 单一扁平列表，常规 / 临时对话混排并以类型标签区分。
 // 类名带 -view 后缀：抽屉根节点会携带同名模式类，视图类若与之同名，这组样式会误命中抽屉根节点。
 .@{class-prefix}-conversation-management-view {
   display: flex;
@@ -587,7 +587,7 @@
 }
 
 // 条块右缘删除按钮：绝对定位在槽位内，常显静态图标，悬停转危险色；
-// 阶段默认任务不渲染；推进中的自建任务带 disabled 态——只灰化不响应，保留悬浮提示说明原因。
+// 阶段默认对话不渲染；推进中的自建对话带 disabled 态——只灰化不响应，保留悬浮提示说明原因。
 .@{class-prefix}-conversation-item-delete {
   position: absolute;
   top: 50%;

@@ -166,7 +166,7 @@ function endpointFieldMappingsMatchCurrentContract(design: Record<string, unknow
   if (writeTables.size > 1) return false
   for (const condition of conditions) {
     const item = record(condition)
-    if (item.sourceType !== 'database' || !item.sourceId || !item.schema || !item.table || !item.column || !statusDatabaseConditionCompatible(item)) return false
+    if (!item || item.sourceType !== 'database' || !item.sourceId || !item.schema || !item.table || !item.column || !statusDatabaseConditionCompatible(item)) return false
   }
   const keys = new Set<string>()
   for (const item of mappings) {

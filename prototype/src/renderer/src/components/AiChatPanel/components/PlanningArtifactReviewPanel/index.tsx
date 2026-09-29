@@ -238,7 +238,7 @@ export default function PlanningArtifactReviewPanel({
         message.success('需求规格说明书草稿已保存')
         onRequirementEditorClose?.()
       } else {
-        message.error('保存未完成，请查看当前任务的错误提示后重试。', 5)
+        message.error('保存未完成，请查看当前对话的错误提示后重试。', 5)
       }
     } catch (reason) {
       message.error(reason instanceof Error ? reason.message : '保存失败', 5)

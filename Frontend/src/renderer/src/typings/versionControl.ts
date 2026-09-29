@@ -25,8 +25,8 @@ export type VersionControlSnapshot = {
    * 与规划产物不该被当成"用户改了代码"。提交弹窗与提交校验仍用 `eligiblePaths`，
    * 所以产物照常可见、可勾选、可提交。
    *
-   * 例外：设计阶段的「设计文档已确认，可保存为设计版本」弱提醒要看 `eligiblePaths` ——
-   * 那时唯一的变更就是 `.devagentstudio`，按 `codePaths` 算永远是 0，提醒会消失。
+   * 例外：设计阶段的发送前提交门禁要看 `eligiblePaths` ——
+   * 那时唯一的变更就是 `.devagentstudio`，按 `codePaths` 算永远是 0，门禁会消失。
    */
   codePaths: string[]
   /**

@@ -1673,6 +1673,56 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
   min-width: 0;
 }
 
+// 提交失败时的告警图标。
+// 给它一个柔和的底色徽章，而不是裸图标 —— 细描边图标单独摆在卡片里显得又空又扎眼，
+// 和旁边圆角卡片、渐变按钮的视觉语言也不搭。底色用 color-mix 从告警色派生，
+// 明暗主题都跟着 token 走。
+.@{class-prefix}-template-preparing-push-warning {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-warning);
+  background: color-mix(in srgb, var(--wb-warning) 14%, transparent);
+  border-radius: 50%;
+  font-size: 13px;
+}
+
+// 重试按钮沿用工作台主按钮的视觉语言（紫色→蓝色渐变、圆角、柔光投影），
+// 而不是 antd 默认的描边小按钮 —— 后者在这张卡片里显得很突兀。
+.@{class-prefix}-template-preparing-push-retry.ant-btn {
+  align-self: flex-start;
+  height: 28px;
+  margin-top: 8px;
+  padding: 0 14px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #6b3cf0 0%, #3f6cf5 100%);
+  border: 0;
+  border-radius: 14px;
+  box-shadow: 0 2px 10px rgba(107, 60, 240, 0.35);
+  transition:
+    box-shadow 120ms ease,
+    filter 120ms ease;
+
+  &:hover:not([disabled]),
+  &:focus:not([disabled]) {
+    color: #fff;
+    background: linear-gradient(135deg, #6b3cf0 0%, #3f6cf5 100%);
+    box-shadow: 0 4px 16px rgba(107, 60, 240, 0.5);
+    filter: brightness(1.08);
+  }
+
+  &[disabled] {
+    color: rgba(255, 255, 255, 0.8);
+    background: linear-gradient(135deg, #6b3cf0 0%, #3f6cf5 100%);
+    box-shadow: none;
+    opacity: 0.5;
+  }
+}
+
 .@{class-prefix}-template-preparing-commit-actions {
   display: flex;
   flex-shrink: 0;

@@ -1,9 +1,4 @@
-"""增量迭代的门禁口径：只统计本轮构建范围内的产物。
-
-迭代保留已有代码，规划器会把**未变更**的产物排除在本轮构建之外，它们不会被重新开发、
-也就拿不到本轮的完成记录。若门禁仍要求全部产物完成，迭代会永远卡在
-"完成全部开发产物后可进入测试，当前 1/2"上——开发做完了却没有任何入口。
-"""
+"""Build 执行范围不改变应用级初次开发完成门禁。"""
 
 from __future__ import annotations
 
@@ -102,8 +97,8 @@ class IncrementalScopeGateTests(unittest.TestCase):
         self.assertEqual(out_of_scope_keys(self.workspace, targets), ["page:home_welcome"])
         self.assertEqual(development_artifact_key(targets[0]), "page:home_welcome")
 
-    def test_gate_ignores_unchanged_page_after_increment_build(self) -> None:
-        """核心回归：未变更页面不阻塞门禁，开发完成后必须能进测试。"""
+    def test_gate_keeps_unfinished_page_outside_current_build_scope(self) -> None:
+        """当前 Build 仅包含一个页面时，另一个未完成页面仍阻止进入测试。"""
 
         self.write_plan(
             {
@@ -128,12 +123,12 @@ class IncrementalScopeGateTests(unittest.TestCase):
         complete_initial_development(self.workspace, run_id="run-hello")
 
         gate = evaluate_test_entry_gate(refresh_development_artifacts(self.workspace))
-        self.assertTrue(gate.allowed, f"门禁仍被阻塞：{gate.reason}")
-        self.assertEqual((gate.total, gate.completed), (1, 1))
-        self.assertEqual(gate.blockers, [])
+        self.assertFalse(gate.allowed)
+        self.assertEqual((gate.total, gate.completed), (2, 1))
+        self.assertEqual([b.page_id for b in gate.blockers], ["home_welcome"])
 
     def test_gate_still_blocks_when_in_scope_work_unfinished(self) -> None:
-        """范围内的产物没做完仍然必须阻塞，不能因为放宽口径而放行。"""
+        """当前目标与范围外目标都没完成时，两个目标都必须阻塞。"""
 
         self.write_plan(
             {
@@ -143,8 +138,8 @@ class IncrementalScopeGateTests(unittest.TestCase):
         )
         gate = evaluate_test_entry_gate(refresh_development_artifacts(self.workspace))
         self.assertFalse(gate.allowed)
-        self.assertEqual(gate.total, 1)
-        self.assertEqual([b.page_id for b in gate.blockers], ["hello_agent"])
+        self.assertEqual(gate.total, 2)
+        self.assertEqual([b.page_id for b in gate.blockers], ["home_welcome", "hello_agent"])
 
     def test_without_plan_all_targets_still_count(self) -> None:
         """没有构建计划时不能放宽：全部产物都要完成（首次构建即如此）。"""

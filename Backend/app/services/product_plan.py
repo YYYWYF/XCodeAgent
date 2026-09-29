@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from app.services.requirement_spec import product_acceptance_criteria
+from app.services.product_plan_carryover import carried_definition_for_page
 
 PRODUCT_PLAN_SCHEMA_VERSION = "product-plan.v5"
 _STATE_REQUIREMENT_KEYS = ("loading", "empty", "error", "success", "validation")
@@ -372,8 +373,14 @@ def _normalized_actions(page: dict[str, Any], value: Any) -> list[dict[str, Any]
 def _normalized_pages(
     requirement_spec: dict[str, Any],
     agent_plan: dict[str, Any] | None,
+    carried_pages: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """保持 RequirementSpec 页面集合不变，仅合并产品级补充字段。"""
+    """保持 RequirementSpec 页面集合不变，仅合并产品级补充字段。
+
+    `carried_pages` 是上一轮的页面定义交接记录。需求条目与上一轮逐字段相同的页面
+    **整份沿用**上一轮定义，忽略模型这一轮给的内容 —— 模型每轮重写未变的页面会让
+    itemId 漂移，进而使上一轮的设计稿继承失败（见 `product_plan_carryover`）。
+    """
 
     agent_pages = {
         str(item.get("pageId") or item.get("id") or "").strip(): item
@@ -390,6 +397,12 @@ def _normalized_pages(
         if not page_id:
             continue
         supplement = agent_pages.get(page_id, {})
+        if carried_pages:
+            # 需求没变 → 用上一轮定义覆盖模型输出。放在这里而不是生成后替换，是因为
+            # create_product_plan 紧接着会用最终 pages 推导 authorizationTargets。
+            carried_definition = carried_definition_for_page(carried_pages, page_id, source)
+            if carried_definition is not None:
+                supplement = carried_definition
         information = _normalized_information_items(source, supplement.get("information_items"))
         if not information:
             information = _normalized_information_items(source, source.get("information_items"))
@@ -600,12 +613,16 @@ def create_product_plan(
     *,
     agent_plan: dict[str, Any] | None = None,
     existing_plan: dict[str, Any] | None = None,
+    carried_pages: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """从已确认 RequirementSpec 构造产品确认用 ProductPlan。"""
+    """从已确认 RequirementSpec 构造产品确认用 ProductPlan。
+
+    `carried_pages` 见 `_normalized_pages`：上一轮未变的页面整份沿用，避免模型重写。
+    """
 
     app_info = requirement_spec.get("app_info")
     app_info = app_info if isinstance(app_info, dict) else {}
-    pages = _normalized_pages(requirement_spec, agent_plan)
+    pages = _normalized_pages(requirement_spec, agent_plan, carried_pages)
     plan = {
         "schema_version": PRODUCT_PLAN_SCHEMA_VERSION,
         "version": str((existing_plan or {}).get("version") or "0.1.0"),

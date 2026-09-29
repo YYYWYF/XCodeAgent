@@ -78,12 +78,20 @@ export function WorkbenchPhaseProvider({
     recordReachedPhase(reachedPhase)
   }, [reachedPhase, recordReachedPhase])
   useEffect(() => {
-    // 确认门禁关闭后清除旧测试选择，避免最后一个产物完成时自动跳回测试视图。
-    if (testEntryGate && !testEntryGate.allowed && manualOverride === 'test') {
-      setPersistedWorkbenchPhase(applicationId, versionId, 'development', { source: 'test-gate', iterationToken })
+    // 门禁关闭后清除旧的测试及后续阶段选择，避免完成产物后自动跳回。
+    if (
+      testEntryGate &&
+      !testEntryGate.allowed &&
+      manualOverride &&
+      ['test', 'review', 'acceptance'].includes(manualOverride)
+    ) {
+      setPersistedWorkbenchPhase(applicationId, versionId, 'development', {
+        source: 'test-gate',
+        iterationToken
+      })
       setOverrides((current) => ({ ...current, [applicationId]: 'development' }))
     }
-  }, [applicationId, versionId, manualOverride, testEntryGate])
+  }, [applicationId, versionId, iterationToken, manualOverride, testEntryGate])
 
   const value = useMemo<WorkbenchPhaseContextValue>(() => {
     // 已发布版本只能回看其权威旅程位置，不能沿用迭代期间的手动查看阶段。
@@ -97,7 +105,12 @@ export function WorkbenchPhaseProvider({
       manualOverride,
       switchPhase: (next, source = 'user') => {
         if (locked) return
-        if (next === 'test' && testEntryGate?.allowed !== true) return
+        if (
+          next &&
+          ['test', 'review', 'acceptance'].includes(next) &&
+          testEntryGate?.allowed !== true
+        )
+          return
         // 先保留当前最远阶段，再切换视图，避免运行刚结束或快速回退时丢失到达事实。
         recordReachedPhase(furthestWorkbenchPhase(reachedPhase, next ?? phase))
         // 只持久化用户明确的界面覆盖；传 null 表示恢复生命周期自动阶段。
@@ -116,6 +129,7 @@ export function WorkbenchPhaseProvider({
   }, [
     applicationId,
     versionId,
+    iterationToken,
     lifecycle,
     manualOverride,
     derivedPhase,

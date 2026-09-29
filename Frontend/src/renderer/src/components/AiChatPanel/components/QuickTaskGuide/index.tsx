@@ -16,6 +16,7 @@ import type {
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { developmentStatusText } from '../../../../developmentArtifacts'
+import IterationBadge from '../../../IterationBadge'
 import { buildQuickTasks, type QuickTaskItem } from './quickTasks'
 import './QuickTaskGuide.less'
 import './QuickTaskStatus.less'
@@ -24,6 +25,8 @@ const { Text, Title } = Typography
 
 type QuickTaskGuideProps = {
   developmentArtifacts?: DevelopmentArtifacts
+  /** 当前迭代的分支名（= 版本号），用于标注产物归属。 */
+  currentBranch?: string
   apiContracts: DevelopmentPlanningApiContract[]
   disabled: boolean
   entities: DevelopmentPlanningEntityOption[]
@@ -33,6 +36,7 @@ type QuickTaskGuideProps = {
 }
 
 type QuickTaskSectionProps = {
+  currentBranch?: string
   disabled: boolean
   emptyText: string
   items: QuickTaskItem[]
@@ -43,6 +47,7 @@ type QuickTaskSectionProps = {
 
 /** 渲染一组会在通用历史会话中启动正式工作流的快捷任务。 */
 function QuickTaskSection({
+  currentBranch,
   disabled,
   emptyText,
   items,
@@ -110,11 +115,19 @@ function QuickTaskSection({
                     <Text className={cx('quick-task-item-description')} type="secondary">
                       {item.description}
                     </Text>
-                    <span
-                      className={cx('quick-task-item-status')}
-                      data-status={item.progress?.initialDevelopmentStatus || 'pending'}
-                    >
-                      {developmentStatusText(item.progress)}
+                    <span className={cx('quick-task-item-status-row')}>
+                      <span
+                        className={cx('quick-task-item-status')}
+                        data-status={item.progress?.initialDevelopmentStatus || 'pending'}
+                      >
+                        {developmentStatusText(item.progress)}
+                      </span>
+                      {/* 归属标注：这个产物是以前迭代做的还是本轮的。
+                          归属未知时不渲染（组件自己处理）。 */}
+                      <IterationBadge
+                        artifactBranch={item.progress?.completedBranchName}
+                        currentBranch={currentBranch}
+                      />
                     </span>
                   </span>
                   <RightOutlined className={cx('quick-task-item-arrow')} />
@@ -135,6 +148,7 @@ function QuickTaskSection({
 /** 在空白对话区并排展示页面、接口与实体快捷任务，并保留底部自由输入入口。 */
 export default function QuickTaskGuide({
   developmentArtifacts,
+  currentBranch,
   apiContracts,
   disabled,
   entities,
@@ -171,6 +185,7 @@ export default function QuickTaskGuide({
       ) : (
         <div className={cx('quick-task-grid')}>
           <QuickTaskSection
+            currentBranch={currentBranch}
             disabled={disabled}
             emptyText="项目计划中暂无页面。"
             items={pageTasks}
@@ -179,6 +194,7 @@ export default function QuickTaskGuide({
             type="page"
           />
           <QuickTaskSection
+            currentBranch={currentBranch}
             disabled={disabled}
             emptyText="项目计划中暂无接口。"
             items={endpointTasks}
@@ -187,6 +203,7 @@ export default function QuickTaskGuide({
             type="endpoint"
           />
           <QuickTaskSection
+            currentBranch={currentBranch}
             disabled={disabled}
             emptyText="项目计划中暂无实体。"
             items={entityTasks}

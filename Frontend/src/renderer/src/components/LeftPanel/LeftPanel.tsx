@@ -26,6 +26,7 @@ const { Sider } = Layout
 type Props = {
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
+  developmentTotals?: { completed: number; total: number }
   developmentPlanningReady: boolean
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
@@ -33,6 +34,8 @@ type Props = {
   developmentPlanningEntities: DevelopmentPlanningEntityOption[]
   editorMode: EditorMode
   onApplicationUpdate: (application: ApplicationConfig) => void
+  /** 把应用配置写回 application.json（见 AiChatPanel 的 onPersistApplication）。 */
+  onPersistApplication?: (application: ApplicationConfig) => Promise<void> | void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onPlanningArtifactsRefresh: () => void
   previewBaseUrl: string
@@ -81,6 +84,7 @@ type Props = {
 export default function LeftPanel({
   application,
   applicationLifecycle,
+  developmentTotals,
   developmentPlanningReady,
   developmentPlanningPages,
   developmentPlanningPageTree,
@@ -88,6 +92,7 @@ export default function LeftPanel({
   developmentPlanningEntities,
   editorMode,
   onApplicationUpdate,
+  onPersistApplication,
   onApplicationLifecycleChange,
   onPlanningArtifactsRefresh,
   previewBaseUrl,
@@ -120,6 +125,7 @@ export default function LeftPanel({
           <AiChatPanel
             application={application}
             applicationLifecycle={applicationLifecycle}
+            developmentTotals={developmentTotals}
             developmentPlanningReady={developmentPlanningReady}
             developmentPlanningPages={developmentPlanningPages}
             developmentPlanningPageTree={developmentPlanningPageTree}
@@ -127,6 +133,7 @@ export default function LeftPanel({
             developmentPlanningEntities={developmentPlanningEntities}
             editorMode={editorMode}
             onApplicationUpdate={onApplicationUpdate}
+            onPersistApplication={onPersistApplication}
             onApplicationLifecycleChange={onApplicationLifecycleChange}
             onPlanningArtifactsRefresh={onPlanningArtifactsRefresh}
             previewBaseUrl={previewBaseUrl}

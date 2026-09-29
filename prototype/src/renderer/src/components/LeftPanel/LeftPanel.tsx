@@ -66,9 +66,9 @@ type Props = {
   onRequestBackgroundTaskContinuation?: (taskId: string) => void
   /** 验收工作流结束（无论成败）后回调；工作台页据此解除其它入口的禁用态。 */
   onBackgroundTaskAcceptanceSettled?: (taskId: string) => void
-  /** 左侧菜单打开任务管理抽屉（工作台页统一处理互斥）。 */
+  /** 左侧菜单打开对话管理抽屉（工作台页统一处理互斥）。 */
   onOpenConversationManagement?: () => void
-  /** 任务管理抽屉是否展开（透传给聊天面板菜单激活态）。 */
+  /** 对话管理抽屉是否展开（透传给聊天面板菜单激活态）。 */
   conversationDrawerOpen?: boolean
   /** 左侧菜单打开数据源抽屉。 */
   onOpenDataSources?: () => void
@@ -90,7 +90,7 @@ type Props = {
   onOpenSettings?: () => void
   /** 应用设置抽屉是否展开。 */
   settingsDrawerOpen?: boolean
-  /** 聊天面板注册任务管理内容查询函数（透传给工作台页）。 */
+  /** 聊天面板注册对话管理内容查询函数（透传给工作台页）。 */
   onConversationManagementReady?: (query: () => ConversationManagementContent) => void
   /** 聊天面板注册技能停用回调（技能抽屉在聊天面板之外渲染，经工作台转交）。 */
   onSkillDisabledReady?: (handler: (skillName: string) => void) => void

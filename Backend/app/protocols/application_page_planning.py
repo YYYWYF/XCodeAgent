@@ -26,8 +26,14 @@ from app.protocols.application_planning_run_lock import application_planning_run
 from app.protocols.application_lifecycle import application_lifecycle_input
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_summary, _workflow_visual_payload
+from app.services.ui_design_generator import load_page_code
 from app.services.ui_design_manifest import present_ui_pages
-from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_path
+from app.services.ui_design_project_setup import ui_design_project_dir
+from app.workspace.spec_documents import (
+    load_ui_designs_json,
+    ui_designs_json_path,
+    workspace_root,
+)
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
@@ -318,7 +324,10 @@ def _build_application_planning_recovery_ag_ui_stream(
                     ui_designs_json_path(dict(snapshot.values))
                 )
                 if isinstance(manifest, dict) and manifest.get("pages"):
-                    result["ui_designs"] = manifest
+                    # 正式 manifest 刻意剥离了 code（源码是运行时数据，不入库）。但确认界面
+                    # 要靠它渲染预览、「查看设计稿」按钮也按它判可用性 —— 不回填的话，
+                    # 重新打开工作区后每一页（本轮新生成的和继承来的都一样）都点不开。
+                    result["ui_designs"] = _with_page_code(manifest, dict(snapshot.values))
                     clarification = result.get("clarification")
                     if isinstance(clarification, dict):
                         product_plan = result.get("product_plan")
@@ -326,7 +335,7 @@ def _build_application_planning_recovery_ag_ui_stream(
                             product_plan if isinstance(product_plan, dict) else {}
                         )
                         clarification["pages"] = present_ui_pages(
-                            manifest, product_plan
+                            result["ui_designs"], product_plan
                         )
             lifecycle = load_application_lifecycle(request.workspaceRoot)
         if lifecycle is not None:
@@ -361,6 +370,32 @@ def _build_application_planning_recovery_ag_ui_stream(
         },
         accept=accept,
     )
+
+
+def _with_page_code(manifest: dict[str, Any], state_values: dict[str, Any]) -> dict[str, Any]:
+    """给正式 manifest 的每页补回 `code`，供确认界面渲染预览。
+
+    `persisted_ui_manifest` 落盘时刻意剥离了 `code`（源码是运行时数据，不入库），
+    但确认界面要靠它渲染预览、「查看设计稿」按钮也按它判可用性。重新打开工作区时
+    只读 checkpoint + 磁盘 manifest，不回填的话每一页都点不开 —— 本轮新生成的
+    和从上一轮继承来的一视同仁。
+
+    读不到某个页面的源码就原样留空：按钮禁用总好过报错。
+    """
+
+    pages = manifest.get("pages")
+    if not isinstance(pages, list):
+        return manifest
+    project_dir = str(ui_design_project_dir(workspace_root(state_values)))
+    enriched: list[dict[str, Any]] = []
+    for page in pages:
+        if not isinstance(page, dict) or page.get("code"):
+            enriched.append(page)
+            continue
+        page_key = str(page.get("page_key") or "").strip()
+        code = load_page_code(project_dir, page_key) if page_key else None
+        enriched.append({**page, "code": code} if code else page)
+    return {**manifest, "pages": enriched}
 
 
 def _build_requirement_spec_draft_ag_ui_stream(

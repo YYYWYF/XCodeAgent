@@ -9,7 +9,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.agents.tool_activity_stream import ToolActivityCallback, invoke_agent_with_tool_activity
-from app.agents.code_analyze.scope import is_code_analyze_read_path, normalize_virtual_path
+from app.agents.code_analyze.scope import (
+    is_code_analyze_read_path,
+    is_code_review_diff_path,
+    normalize_virtual_path,
+)
 from app.services.builtin_skills import FRONTEND_CODE_SCAN_SKILL_NAME, resolve_builtin_skills_root
 from app.services.development_review_files import current_review_file, reviewable_file_path
 from app.utils.model_output import extract_json_object
@@ -123,12 +127,13 @@ def analyze_workspace_code(
         )
         if review_mode == "diff":
             result["review_mode"] = "diff"
+            result["review_files"] = selected_files
             result["review_file_count"] = len(selected_files)
             result["summary"] = f"Diff 审查完成，读取 {len(selected_files)} 个变动文件，发现 {result['issue_count']} 个问题。"
             for target in result["targets"]:
                 side = target["side"]
                 target["scanned_file_count"] = sum(
-                    path.startswith("frontend/" if side == "frontend" else "backend/src/main/java/")
+                    path.startswith("frontend/" if side == "frontend" else "backend/")
                     for path in selected_files
                 )
         else:
@@ -165,14 +170,20 @@ def normalize_code_review_result(
             raw.get("file", raw.get("filePath", raw.get("path"))),
             side=side,
             workspace=workspace,
+            backend_root="backend" if allowed_issue_paths is not None else "backend/src/main/java",
         )
-        expected_prefix = "frontend/" if side == "frontend" else "backend/src/main/java/"
+        expected_prefix = "frontend/" if side == "frontend" else (
+            "backend/" if allowed_issue_paths is not None else "backend/src/main/java/"
+        )
         # 模型可能在结果中声明工作区外、依赖目录或跨端文件；这些声明不再让
         # 整次扫描失败，只从公开问题中丢弃。真实文件读取仍受只读 Backend 限制。
         if (
             side not in {"frontend", "backend"}
             or not file_path.startswith(expected_prefix)
-            or not is_code_analyze_read_path(file_path)
+            or not (
+                is_code_review_diff_path(file_path)
+                if allowed_issue_paths is not None else is_code_analyze_read_path(file_path)
+            )
             or (allowed_issue_paths is not None and file_path not in allowed_issue_paths)
         ):
             continue
@@ -237,6 +248,7 @@ def normalize_code_review_result(
         payload.get("targets", payload.get("scanTargets")),
         workspace=workspace,
         frontend_scan_warning=frontend_scan_warning,
+        backend_root="backend" if allowed_issue_paths is not None else "backend/src/main/java",
     )
     loaded = _normalize_loaded_skills(
         payload.get("loaded_skills", payload.get("loadedSkills"))
@@ -272,6 +284,22 @@ def _build_prompt(
 
     target = state.get("build_execution_scope")
     target = target if isinstance(target, dict) else {}
+    if review_mode == "diff":
+        return (
+            "开始审查前后端代码。严格先读取两个扫描 Skill 和后端规则引用。\n"
+            "本次仅允许读取下列开发阶段已完成模块的目标文件，以及三个必需 Skill 文件。"
+            "必须逐个读取每个目标文件的当前完整内容，文件超过单次读取限制时继续分段读取直到结尾；"
+            "包括清单中的后端 pom.xml、资源和配置文件。不得读取或搜索其他项目文件。\n"
+            "前端 Skill 没有适用规则时仍须读取清单中的前端文件，但不得编造前端规则问题。"
+            "按两个 Skill 的适用规则审查；问题位置仅限清单中的文件。"
+            "如果 package.json 或 pnpm-lock.yaml 只变动一个，可以读取另一文件辅助判断，"
+            "但不得报告未列入清单的文件问题。\n"
+            f"当前构建目标：{json.dumps(target, ensure_ascii=False)}\n"
+            "status 必须为 completed；发现问题只写入 issues。targets 使用 side、root、status、"
+            "scanned_file_count 和可选 warning，前端 root 为 frontend，后端 root 为 backend。"
+            "只返回约定 JSON，不修改任何文件。\n"
+            + "\n".join(f"- /{path}" for path in review_files or [])
+        )
     base = (
         "开始审查前后端代码。严格先读取两个扫描 Skill 和后端规则引用。\n"
         "允许的最大范围为 frontend/**（必须排除所有 node_modules 和敏感文件）与 "
@@ -287,16 +315,7 @@ def _build_prompt(
         "targets 必须为数组，每项使用 side、root、status、scanned_file_count 和可选 warning。\n"
         "只返回约定 JSON，不修改任何文件。"
     )
-    if review_mode != "diff":
-        return base
-    return (
-        base
-        + "\n本次是 Diff 文件审查。仍须先读取相同的前后端 Skill 和后端规则引用。"
-        "只读取并审查下列变动文件的当前完整内容，不限制到具体 Diff 行；"
-        "如果依赖文件只变动一个，可额外读取另一个作为判断依据，但问题位置仅限变动文件。"
-        "不要列举或搜索其他源码文件。必须逐个读取全部变动文件：\n"
-        + "\n".join(f"- /{path}" for path in review_files or [])
-    )
+    return base
 
 
 def _normalize_targets(
@@ -304,6 +323,7 @@ def _normalize_targets(
     *,
     workspace: str | None = None,
     frontend_scan_warning: str | None = None,
+    backend_root: str = "backend/src/main/java",
 ) -> list[dict[str, Any]]:
     """归一化前后端扫描目标并拒绝第三方目录。"""
 
@@ -316,7 +336,7 @@ def _normalize_targets(
             side = str(raw.get("side") or "").strip().lower()
             expected = {
                 "frontend": "frontend",
-                "backend": "backend/src/main/java",
+                "backend": backend_root,
             }.get(side)
             root = _normalize_target_root(raw, expected=expected, workspace=workspace)
             if not expected or root != expected:
@@ -350,7 +370,7 @@ def _normalize_targets(
 
     workspace_path = Path(workspace).resolve() if workspace else None
     targets: list[dict[str, Any]] = []
-    for side, root in (("frontend", "frontend"), ("backend", "backend/src/main/java")):
+    for side, root in (("frontend", "frontend"), ("backend", backend_root)):
         target = raw_targets.get(
             side,
             {
@@ -553,6 +573,7 @@ def _normalize_issue_path(
     *,
     side: str,
     workspace: str | None,
+    backend_root: str = "backend/src/main/java",
 ) -> str:
     """将扫描根相对的问题路径补全为安全的工作区相对路径。"""
 
@@ -563,7 +584,7 @@ def _normalize_issue_path(
     # 已声明任一固定工作区根时保持原路径，交由端类型校验拒绝跨端问题。
     if any(
         normalized == root or normalized.startswith(f"{root}/")
-        for root in ("frontend", "backend/src/main/java")
+        for root in ("frontend", "backend")
     ):
         return normalized
     # 绝对路径只允许由 _normalize_review_path 证明位于真实工作区内；不能把
@@ -575,7 +596,7 @@ def _normalize_issue_path(
         return ""
     root = {
         "frontend": "frontend",
-        "backend": "backend/src/main/java",
+        "backend": backend_root,
     }.get(side)
     return f"{root}/{normalized}" if root else normalized
 

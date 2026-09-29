@@ -21,6 +21,7 @@ class ProjectState(TypedDict, total=False):
     selected_skill_names: list[str]
     phase: str
     resume_from: str
+    resume_execution_run_id: str
     workflow_action: str
     request_complexity: str
     complexity_reason: str
@@ -94,6 +95,7 @@ class ProjectState(TypedDict, total=False):
     selected_api_contract_id: str
     selected_endpoint_id: str
     selected_entity_id: str
+    entity_test_entry_id: str
     detail_target_type: str
     page_template: dict[str, Any]
     data_source_spec_draft: dict[str, Any]

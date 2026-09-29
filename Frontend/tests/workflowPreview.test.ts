@@ -301,12 +301,14 @@ test('审查入口并排展示两种模式，空开发 Diff 禁用 Diff 按钮',
   assert.match(emptyMarkup, /workflow-review-phase-confirmation-actions/)
   assert.match(emptyMarkup, /开发阶段没有可审查的变动文件/)
   assert.match(emptyMarkup, /disabled=""><span>Diff 审查<\/span>/)
+  assert.equal(emptyMarkup.match(/ant-btn-primary/g)?.length, 2)
 
   const diffMarkup = renderToStaticMarkup(
     createElement(ReviewPhaseConfirmationCard, { diffFileCount: 2, onSubmit: () => undefined })
   )
   assert.match(diffMarkup, /读取 2 个变动文件/)
   assert.doesNotMatch(diffMarkup, /开发阶段没有可审查的变动文件/)
+  assert.equal(diffMarkup.match(/ant-btn-primary/g)?.length, 2)
 })
 
 test('审查和验收阶段所有节点均隐藏代码差异', () => {

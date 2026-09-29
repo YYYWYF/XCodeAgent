@@ -230,7 +230,7 @@ export function useChatSessions({
       setSessionSummaries((current) => ({ ...current, [mode]: nextSessions }))
       // 会话列表只负责恢复目录，绝不擅自打开“最近一条”会话；当前会话由阶段入口或用户选择决定。
       // 目录为空不等于没有当前会话：运行期已打开的会话（含尚未物化的草稿）不能被一次
-      // 空目录重载踢下线，否则阶段入口会锁死在“正在切换阶段”，任务管理也显示为空。
+      // 空目录重载踢下线，否则阶段入口会锁死在“正在切换阶段”，对话管理也显示为空。
       if (nextSessions.length === 0 && !activeSessionIdsRef.current[mode]) {
         activeSessionIdsRef.current = { ...activeSessionIdsRef.current, [mode]: undefined }
         setActiveSessionIds((current) => ({ ...current, [mode]: undefined }))
@@ -710,9 +710,9 @@ export function useChatSessions({
     sessionKind: WorkbenchSessionKind = 'general'
   ): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) throw new Error('创建会话前需要选择工作目录。')
-    // 新任务默认命名「新任务」；首轮操作完成后由 AI 按产物/阶段自动命名，
+    // 新对话默认命名「新对话」；首轮操作完成后由 AI 按产物/阶段自动命名，
     // 用户也可在对话区顶部标题重命名——不再用「类型 + 序号」的机械命名。
-    return createNewSession(undefined, undefined, undefined, '新任务', true, sessionKind, true)
+    return createNewSession(undefined, undefined, undefined, '新对话', true, sessionKind, true)
   }
 
   /**

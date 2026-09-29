@@ -8,7 +8,10 @@ import {
   movePathToTrashIfPresent,
   removeDirectoryIfPresent
 } from '../src/main/filesystem'
-import { releaseSessionPendingPlan } from '../src/renderer/src/service/applicationLifecycle'
+import {
+  cleanupSessionFailedExecutions,
+  releaseSessionPendingPlan
+} from '../src/renderer/src/service/applicationLifecycle'
 import {
   releasePendingBeforeSessionDelete,
   sessionRuntimeKey,
@@ -140,6 +143,7 @@ test('Pending 收口期间会话重新运行时不会删除会话', async () => 
   const runningObservations: boolean[] = []
   let mergeCalls = 0
   let deleteCalls = 0
+  let postDeleteCleanupCalls = 0
   const deleted = await releasePendingBeforeSessionDelete(
     () => {
       runningObservations.push(running)
@@ -154,6 +158,9 @@ test('Pending 收口期间会话重新运行时不会删除会话', async () => 
     },
     async () => {
       deleteCalls += 1
+    },
+    async () => {
+      postDeleteCleanupCalls += 1
     }
   )
 
@@ -161,6 +168,7 @@ test('Pending 收口期间会话重新运行时不会删除会话', async () => 
   assert.equal(mergeCalls, 1)
   assert.equal(deleted, false)
   assert.equal(deleteCalls, 0)
+  assert.equal(postDeleteCleanupCalls, 0)
 })
 
 test('Backend 报告没有 owned Pending 时仍正常删除会话', async () => {
@@ -201,6 +209,46 @@ test('Pending 收口失败时不会继续删除会话', async () => {
   )
 
   assert.equal(deleteCalls, 0)
+})
+
+test('本地会话删除失败时不会触发删除后的 lifecycle cleanup', async () => {
+  let cleanupCalls = 0
+
+  await assert.rejects(
+    releasePendingBeforeSessionDelete(
+      () => false,
+      async () => ({}) as ApplicationLifecycle,
+      () => undefined,
+      async () => {
+        throw new Error('local session delete failed')
+      },
+      async () => {
+        cleanupCalls += 1
+      }
+    ),
+    /local session delete failed/
+  )
+
+  assert.equal(cleanupCalls, 0)
+})
+
+test('删除后的 Backend cleanup 失败不会伪造本地删除失败', async () => {
+  let warningCalls = 0
+  const deleted = await releasePendingBeforeSessionDelete(
+    () => false,
+    async () => ({}) as ApplicationLifecycle,
+    () => undefined,
+    async () => undefined,
+    async () => {
+      throw new Error('backend cleanup failed')
+    },
+    () => {
+      warningCalls += 1
+    }
+  )
+
+  assert.equal(deleted, true)
+  assert.equal(warningCalls, 1)
 })
 
 test('生命周期 service 通过 AG-UI 发送 Session Pending 收口动作并接收最新投影', async () => {
@@ -264,6 +312,60 @@ test('生命周期 service 通过 AG-UI 发送 Session Pending 收口动作并�
       sessionId: 'session-a'
     })
     assert.equal(received.extensions.planningRefresh?.source, 'none')
+  } finally {
+    globalThis.fetch = originalFetch
+    if (originalWindow === undefined) Reflect.deleteProperty(globalThis, 'window')
+    else Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+  }
+})
+
+test('生命周期 service 通过 AG-UI 发送 Session failed execution 收口动作', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window
+  let forwarded: Record<string, unknown> | undefined
+  const lifecycle = {
+    application: { id: 'app-1', name: '测试应用' },
+    updatedAt: '2026-09-16T00:00:00Z',
+    revision: 3,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: {},
+    extensions: {}
+  } as ApplicationLifecycle
+  const value = {
+    schemaVersion: 1,
+    runId: 'cleanup-run',
+    threadId: 'cleanup-thread',
+    status: 'completed',
+    action: 'cleanup_session_failed_executions',
+    lifecycle
+  }
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body))
+    forwarded = body.forwardedProps.applicationLifecycle
+    const events = [
+      { type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+      { type: 'CUSTOM', name: 'application-lifecycle', value },
+      { type: 'STATE_SNAPSHOT', snapshot: { applicationLifecycle: value } },
+      { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId, result: value }
+    ]
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'Content-Type': 'text/event-stream' }
+    })
+  }
+
+  try {
+    const received = await cleanupSessionFailedExecutions('/workspace', 'session-a')
+    assert.deepEqual(forwarded, {
+      action: 'cleanup_session_failed_executions',
+      workspaceRoot: '/workspace',
+      sessionId: 'session-a'
+    })
+    assert.deepEqual(received, lifecycle)
   } finally {
     globalThis.fetch = originalFetch
     if (originalWindow === undefined) Reflect.deleteProperty(globalThis, 'window')

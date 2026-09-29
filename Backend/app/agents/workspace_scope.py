@@ -23,6 +23,7 @@ AgentWorkspaceMode = Literal[
     "data_source",
     "database",
     "code_analyze",
+    "code_analyze_diff",
     "code_review_repair",
     "repair_planner",
     "small_task",
@@ -200,8 +201,13 @@ def create_workspace_permissions(
         )
         return permissions
 
-    if mode == "code_analyze":
-        # 代码审查允许读取前端项目文件和后端业务源码，但永不暴露依赖目录。
+    if mode in {"code_analyze", "code_analyze_diff"}:
+        # Diff 模式还需读取 Build 计划明确列出的后端配置与资源文件。
+        backend_read_paths = (
+            ["/backend", "/backend/**"]
+            if mode == "code_analyze_diff"
+            else ["/backend/src/main/java", "/backend/src/main/java/**"]
+        )
         permissions.extend(
             [
                 FilesystemPermission(
@@ -217,8 +223,7 @@ def create_workspace_permissions(
                     paths=[
                         "/frontend",
                         "/frontend/**",
-                        "/backend/src/main/java",
-                        "/backend/src/main/java/**",
+                        *backend_read_paths,
                     ],
                     mode="allow",
                 ),

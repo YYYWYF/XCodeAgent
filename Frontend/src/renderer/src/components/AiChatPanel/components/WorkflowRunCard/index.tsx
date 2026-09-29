@@ -19,8 +19,9 @@ import {
   Typography
 } from 'antd'
 import type { ReactElement } from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type {
+  UiDesignIterationOrigin,
   WorkflowBuildExecutionSlice,
   WorkflowBuildExecutionTask,
   WorkflowClarification,
@@ -244,6 +245,14 @@ export default function WorkflowRunCard({
     clarification?.mode === 'ui_design_confirmation' ||
     workflow.summary?.phase === 'ui_confirmation'
   const effectiveUiDesignWorkflow = workflow
+  // 每个页面在历史迭代里的归属（后端按迭代记录的页面计划与产出事实），
+  // 驱动设计稿卡片的「v1.0 已设计过」/「v1.0 该设计未设计」标注。
+  // 读不到就传 undefined —— 面板退化成不标注，不会误标。
+  const uiDesignIterationOrigins = useMemo(() => {
+    const raw = (clarification as unknown as Record<string, unknown>)?.iteration_origins
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+    return raw as Record<string, UiDesignIterationOrigin>
+  }, [clarification])
   // 创建规划各阶段生成中都要保留卡片，避免运行期间没有任何可见反馈。
   const planningPhase = workflow.summary?.phase
   const planningRunning =
@@ -506,6 +515,7 @@ export default function WorkflowRunCard({
                 })
               }
               target={testTarget}
+              workspaceRoot={workspaceRoot}
             />
           ) : reviewPhaseConfirmation && requiresConfirmation ? (
             <ReviewPhaseConfirmationCard
@@ -519,6 +529,7 @@ export default function WorkflowRunCard({
                   }
                 })
               }
+              workspaceRoot={workspaceRoot}
             />
           ) : acceptancePhaseConfirmation && requiresConfirmation ? (
             <AcceptancePhaseConfirmationCard
@@ -530,6 +541,7 @@ export default function WorkflowRunCard({
                   }
                 })
               }
+              workspaceRoot={workspaceRoot}
             />
           ) : dagConfirmation && requiresConfirmation ? (
             <BuildTaskPlanConfirmation
@@ -660,6 +672,7 @@ export default function WorkflowRunCard({
                 onSubmitClarification?.(currentWorkflow, answers)
               }
               showPreview={false}
+              iterationOrigins={uiDesignIterationOrigins}
               activePageId={uiDesignActivePageId}
               onActivePageChange={onUiDesignActivePageChange}
               actingPageIds={uiDesignActingPageIds}

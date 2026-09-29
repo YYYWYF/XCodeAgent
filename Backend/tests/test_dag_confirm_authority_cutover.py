@@ -187,6 +187,8 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
             confirmed = await graph.ainvoke(
                 {
                     **state,
+                    # Confirm 必须沿用生成轮 inspect_workspace 写入的当前 Snapshot。
+                    "workspace_snapshot_path": generated["workspace_snapshot_path"],
                     "build_task_plan_confirmation": {
                         "mode": "build_task_plan_confirmation",
                         "action": "confirm",
@@ -251,6 +253,7 @@ class DagConfirmAuthorityCutoverTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(build_task_plan_json_path(self._state()).exists())
 
             confirm_state = self._state(
+                workspace_snapshot_path=generated["workspace_snapshot_path"],
                 build_task_plan_confirmation={
                     "mode": "build_task_plan_confirmation",
                     "action": "confirm",

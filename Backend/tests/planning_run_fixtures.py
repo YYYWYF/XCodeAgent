@@ -74,8 +74,8 @@ def candidate(state, *, valid=True, unit_id=UNIT, attempt=None) -> CandidateAtte
     """用平台预期身份包装候选，不自动修改任务 ID 或归属。"""
 
     attempt = attempt or state.unit_states[unit_id].expected_identity
-    return CandidateAttempt(
-        candidate_id=f"candidate-{next(_ids):032x}", identity=attempt,
+    return CandidateAttempt.from_generated_attempt(
+        candidate_id=f"candidate-{next(_ids):032x}", attempt=attempt,
         input_fingerprint=state.input_fingerprint, status="valid" if valid else "invalid",
         tasks=({"id": f"task:{unit_id}", "unit_id": unit_id, "details": {"items": [1]}},),
         validation_issues=() if valid else (issue(unit_id),),

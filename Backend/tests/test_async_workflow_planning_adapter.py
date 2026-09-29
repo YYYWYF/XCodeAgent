@@ -16,6 +16,7 @@ from app.graph.nodes.task_planning_adapter import (
     create_async_workflow_planning_adapter,
     production_unit_generation_policy,
 )
+from app.services.build_task_planning_service import run_mainline_planning
 from app.graph.workflow import build_graph
 from app.services.planning_frozen import plain_json
 from app.services.unit_generation_contracts import (
@@ -147,6 +148,39 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             raw_response=json.dumps({"tasks": tasks}),
             tasks=tasks,
         )
+
+    async def test_prepare_retry_forwards_explicit_source_id_even_when_build_retry_flag_is_false(self) -> None:
+        """DAG Prepare Retry 只传 source execution ID，不依赖 Build 专用布尔值。"""
+
+        state = {
+            **self._state(execution_scope()),
+            "workflow_action": "retry_failed_tasks",
+            "resume_execution_run_id": "workflow-source-r1",
+        }
+        captured: dict[str, object] = {}
+
+        async def capture_planning(inputs, **kwargs):
+            """记录 adapter 的独立 Recovery 参数并继续真实 mainline。"""
+
+            captured.update(kwargs)
+            return await run_mainline_planning(inputs, **kwargs)
+
+        adapter = create_async_workflow_planning_adapter(
+            policy=self.policy,
+            generate_once=self._generate,
+            planning_service=capture_planning,
+        )
+        with patch(
+            "app.graph.nodes.task_planning_adapter.load_template_state",
+            return_value=_ready_template(self.workspace),
+        ):
+            result = await adapter(state)
+
+        self.assertEqual(
+            captured["recovery_source_workflow_run_id"],
+            "workflow-source-r1",
+        )
+        self.assertEqual(result["status"], "requires_user_input")
 
     async def test_default_graph_binds_async_adapter_after_cutover(self) -> None:
         """未显式注入节点时，默认 Graph 必须绑定 async Planning/Confirm adapter。"""
