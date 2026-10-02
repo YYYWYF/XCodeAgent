@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.change_impact_analyzer import ChangeImpactAnalyzer
 from app.config import Settings
@@ -128,8 +128,6 @@ def _requirement_model_payload(request: str) -> dict[str, Any]:
                 "id": "operator",
                 "name": "运营人员",
                 "description": "维护并查看业务信息。",
-                "isSystemRole": False,
-                "isInitialAdminRole": False,
             }
         ],
         "feature_modules": [
@@ -152,8 +150,9 @@ def _requirement_model_payload(request: str) -> dict[str, Any]:
                 "steps": ["打开首页", "查看核心信息"],
             }
         ],
+        "authentication_requirements": {"enabled": False, "sourceRefs": []},
         "authorization_requirements": {
-            "enabled": False,
+            "sourceRefs": [],
             "restrictedPages": [],
             "restrictedOperations": [],
         },
@@ -243,6 +242,8 @@ class _ProductionModelBoundary:
     def _kind(self, prompt: str) -> str:
         """按生产 prompt 所属的最低模型边界标记调用，不改变业务路由。"""
 
+        if "Classify whether this application requirement explicitly describes authorization" in prompt:
+            return "authorization_evidence"
         if "extract explicit authorization business facts" in prompt:
             return "authorization"
         if "product-planning model" in prompt:
@@ -256,6 +257,8 @@ class _ProductionModelBoundary:
             return json.dumps(
                 _requirement_model_payload(self.request), ensure_ascii=False
             )
+        if kind == "authorization_evidence":
+            return json.dumps({"hasAuthorizationRequirement": False, "evidence": []})
         if kind == "authorization":
             return json.dumps(_authorization_fact_payload(), ensure_ascii=False)
         return json.dumps(
@@ -280,7 +283,7 @@ class _ProductionModelBoundary:
     def stream(self, prompt: str):
         """模拟 production 节点消费的流式模型调用。"""
 
-        yield self._invoke(prompt)
+        yield AIMessageChunk(content=self._invoke(prompt).content)
 
 
 class _BlockingProductionModelBoundary(_ProductionModelBoundary):
@@ -781,7 +784,7 @@ async def _seed_native_planning_interrupt_checkpoint(
             "phase": "requirements",
             "status": "requires_user_input",
             "requirement_spec": {
-                "confirmation_status": "pending_user_confirmation",
+                "confirmation_status": "pending_user_input",
                 "app_info": {"name": "生产旅程应用", "summary": "需要补充角色信息。"},
             },
             "clarification": {
@@ -1103,7 +1106,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
             workspace = Path(raw_workspace)
             plan = project_plan()
             _write_real_workbench_formal_artifacts(workspace, plan)
-            template_ready = _ready_template(workspace)
+            _ready_template(workspace)
             _write_planning_lifecycle(
                 workspace,
                 thread_id=thread_id,
@@ -1114,14 +1117,6 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
             )
             try:
                 with (
-                    patch(
-                        "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
-                        return_value=template_ready,
-                    ),
-                    patch(
-                        "app.graph.nodes.tasks.inspect_template_generation_readiness",
-                        return_value=template_ready,
-                    ),
                     patch(
                         "app.services.dag_planning_orchestrator.generate_unit_candidate_once",
                         new=generate_once,
@@ -1879,6 +1874,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
             stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
             status=ApplicationLifecycleStatus.COMPLETED,
         )
+        _ready_template(workspace)
         generation_calls: list[str] = []
         inspection_calls: list[str] = []
 
@@ -1906,10 +1902,6 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
 
         try:
             with (
-                patch(
-                    "app.graph.nodes.task_planning_adapter.inspect_template_generation_readiness",
-                    return_value=_ready_template(workspace),
-                ),
                 patch(
                     "app.services.dag_planning_orchestrator.generate_unit_candidate_once",
                     new=generate_once,
