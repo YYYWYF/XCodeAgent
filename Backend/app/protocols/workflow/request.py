@@ -376,6 +376,19 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if acceptance_decision:
         resume_from = "acceptance"
+    workspace = (
+        _optional_text(payload.get("workspace"))
+        or _optional_text(payload.get("workspaceRoot"))
+        or _optional_text(forwarded_props.get("workspaceRoot"))
+        or _optional_text(application.get("workspaceRoot"))
+    )
+    technical_revision_values = _validated_technical_revision_intent(
+        forwarded_props,
+        workflow_scope=workflow_scope,
+        resume_from=resume_from,
+        workspace=workspace,
+        request=request,
+    )
     selectedPageId = (
         _optional_text(payload.get("selectedPageId"))
         or _optional_text(payload.get("selected_page_id"))
@@ -726,6 +739,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         "retry_failed_tasks": (
             workflow_action == "retry_failed_tasks" and resume_from == "build"
         ),
+        **technical_revision_values,
         **({"change_id": continuation_change_id} if continuation_change_id else {}),
         **(
             {
@@ -1477,6 +1491,11 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "product_planning",
             "ui_confirmation",
             "technical_planning",
+            "technical_planning_begin",
+            "technical_planning_generate",
+            "technical_planning_commit",
+            "technical_planning_confirm",
+            "technical_planning_review",
         }
     else:
         if node_name == "inspect_database_context":
@@ -1745,6 +1764,76 @@ def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
     if detail_target_type:
         resumed_values["detail_target_type"] = detail_target_type
     return resumed_values
+
+
+def _validated_technical_revision_intent(
+    forwarded_props: dict[str, Any],
+    *,
+    workflow_scope: str | None,
+    resume_from: str,
+    workspace: str,
+    request: str,
+) -> dict[str, Any]:
+    """校验 TechnicalPlan revision admission credential，并构造服务端事务输入。"""
+
+    marker = forwarded_props.get("_technicalRevisionIntent")
+    if marker is None:
+        return {}
+    if workflow_scope != "application_planning" or resume_from != "technical_planning_begin":
+        raise ValueError(
+            "TechnicalPlan revision intent 只能进入 application_planning technical_planning_begin。"
+        )
+    marker = _optional_dict(marker)
+    if marker is None or set(marker) != {"changeId", "interactionId"}:
+        raise ValueError("TechnicalPlan revision intent 结构无效。")
+    change_id = _optional_text(marker.get("changeId"))
+    interaction_id = _optional_text(marker.get("interactionId"))
+    if not change_id or not interaction_id or not workspace or not request.strip():
+        raise ValueError("TechnicalPlan revision intent 缺少有效 changeId、interactionId、workspace 或 request。")
+    lifecycle = load_application_lifecycle(workspace)
+    pending = lifecycle.pending_revision_impact if lifecycle is not None else None
+    if pending is None:
+        raise ValueError("TechnicalPlan revision intent 缺少当前 pending revision impact。")
+    if (
+        pending.change_id != change_id
+        or pending.interaction_id != interaction_id
+        or pending.request != request.strip()
+        or pending.based_on_lifecycle_revision != lifecycle.revision
+        or pending.target is None
+        or pending.impact.formal_branch is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
+    ):
+        raise ValueError("TechnicalPlan revision intent 与当前 pending revision impact 不匹配。")
+    baseline_path = (
+        Path(workspace).expanduser().resolve()
+        / WORKSPACE_ARTIFACT_DIR
+        / "plans"
+        / "technical-plan.json"
+    )
+    baseline = load_project_plan_json(
+        baseline_path,
+        hydrate_detail_designs=True,
+    )
+    if (
+        not isinstance(baseline, dict)
+        or not baseline
+        or baseline.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE
+    ):
+        raise ValueError("当前 TechnicalPlan baseline 不存在或不是有效的正式产物。")
+    boundary = application_planning_boundary_payload(
+        operation_id=f"technical-plan-revision:{pending.change_id}",
+        operation=ApplicationPlanningOperation.REVISE,
+        boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
+        request=pending.request,
+        gate_id=pending.interaction_id,
+        baseline=baseline,
+    )
+    return {
+        "change_id": pending.change_id,
+        "change_target": pending.target.model_dump(mode="python", by_alias=False),
+        "revision_impact": pending.impact.model_dump(mode="python", by_alias=False),
+        "technical_plan": baseline,
+        "application_planning_recovery_boundary": boundary,
+    }
 
 
 def _project_plan_start_values(

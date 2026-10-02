@@ -1,5 +1,5 @@
 from operator import add
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 
 class ProjectState(TypedDict, total=False):
@@ -13,6 +13,7 @@ class ProjectState(TypedDict, total=False):
     active_thread_id: str
     active_run_id: str
     owner_session_id: str
+    observability: dict[str, Any]
     change_id: str
     change_target: dict[str, Any]
     element_context: dict[str, Any]
@@ -81,6 +82,9 @@ class ProjectState(TypedDict, total=False):
     technical_plan: dict[str, Any]
     technical_plan_path: str
     technical_plan_json_path: str
+    application_planning_recovery_boundary: dict[str, Any]
+    technical_plan_candidate: dict[str, Any]
+    technical_plan_candidate_sha256: str
     technical_plan_repair_candidate: dict[str, Any]
     technical_plan_repair_errors: list[str]
     project_plan: dict[str, Any]

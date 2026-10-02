@@ -1,5 +1,9 @@
 import type { WorkspaceCodeChangeSet } from './codeChanges'
 import type { ToolApproval } from '../service/workspaceTools'
+import type {
+  RecoveryActionPlan,
+  RecoveryFailureDiagnostic
+} from '../service/recoveryActionPlan'
 
 export type WorkflowEvent = {
   type: string
@@ -1236,6 +1240,35 @@ export type PlanningRefreshState = {
   message: string
 }
 
+export type ExecutionRecoveryAvailability =
+  | 'ready'
+  | 'requires_handler'
+  | 'blocked'
+  | 'awaiting_user'
+
+export type ExecutionRecoveryCandidate = {
+  sourceRunId: string
+  ownerSessionId: string
+  threadId: string
+  executionKind: 'application_planning' | 'workbench'
+  workflowScope?: string
+  executionStatus: 'interrupted' | 'failed'
+  currentNode?: string
+  availability: ExecutionRecoveryAvailability
+  canContinue: boolean
+  reasonCode: string
+  message: string
+  failureDiagnostic?: RecoveryFailureDiagnostic | null
+  recoveryActionPlan: RecoveryActionPlan
+  updatedAt: string
+}
+
+export type ExecutionRecoveryProjection = {
+  schemaVersion: 'execution-recovery.v1'
+  generatedAt: string
+  candidates: ExecutionRecoveryCandidate[]
+}
+
 export type ExecutionResourceLock = {
   runId: string
   ownerPageId?: string
@@ -1346,7 +1379,10 @@ export type ApplicationLifecycle = {
     [key: string]: unknown
   }
   recovery?: Record<string, unknown>
-  extensions: Record<string, unknown> & { planningRefresh?: PlanningRefreshState }
+  extensions: Record<string, unknown> & {
+    planningRefresh?: PlanningRefreshState
+    executionRecovery?: ExecutionRecoveryProjection
+  }
 }
 
 export type WorkflowRunPayload = {

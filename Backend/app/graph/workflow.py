@@ -15,6 +15,7 @@ from app.persistence.checkpoints import (
     workflow_checkpoint_db_path,
     workflow_checkpointer,
 )
+from app.services.workflow_reentry import workflow_entry
 
 
 def _route_prepare_build_tasks_resume(state: ProjectState) -> str:
@@ -304,6 +305,7 @@ def build_graph(
         prepare_build_tasks_node = create_async_workflow_planning_adapter()
 
     builder = StateGraph(ProjectState)
+    builder.add_node("workflow_entry", workflow_entry)
 
     builder.add_node("development_readiness_gate", nodes.development_readiness_gate)
     builder.add_node("api_design_readiness_gate", nodes.api_design_readiness_gate)
@@ -334,8 +336,9 @@ def build_graph(
     builder.add_node("finalize_project", nodes.finalize_project)
     builder.add_node("handle_failure", nodes.handle_failure)
 
+    builder.add_edge(START, "workflow_entry")
     builder.add_conditional_edges(
-        START,
+        "workflow_entry",
         route_workflow_start,
         {
             "api_design_readiness_gate": "api_design_readiness_gate",

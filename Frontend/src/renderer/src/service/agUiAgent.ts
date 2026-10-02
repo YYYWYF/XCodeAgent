@@ -54,6 +54,12 @@ export type SendWorkflowMessageOptions = {
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   workflowScope?: string
+  executionRecovery?:
+    {
+      action: 'execute'
+      incidentId: string
+      actionId: string
+    }
   onContent?: (content: string) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
@@ -130,6 +136,7 @@ export function buildWorkflowForwardedProps(
       (options.workflowDebug?.enabled ? options.workflowDebug.buildExecutionScope : undefined),
     resumeState: options.resumeState,
     workflowScope: options.workflowScope,
+    executionRecovery: options.executionRecovery,
     planControlAction: options.planControlAction,
     planControlRunId: options.planControlRunId,
     planningRunId: options.planningRunId,
@@ -550,6 +557,11 @@ export function getConversationUrl(): string {
   return `${getAgentBaseUrl()}/conversation/run`
 }
 
+/** 返回 Planning Current Incident 使用的 Backend-authoritative action 地址。 */
+export function getExecutionRecoveryActionUrl(): string {
+  return `${getAgentBaseUrl()}/execution-recovery/execute`
+}
+
 export class AgUiChatSession {
   readonly threadId: string
 
@@ -672,7 +684,18 @@ export class AgUiChatSession {
         if (event.name === 'llm.token') {
           // 规划模型 token 是内部 JSON 生成过程，只由 Workflow 事件驱动进度 UI，禁止写入聊天正文。
           const node = (event.value as { node?: string } | null)?.node || ''
-          if (['product_planning', 'project_planning', 'technical_planning'].includes(node)) {
+          if (
+            [
+              'product_planning',
+              'project_planning',
+              'technical_planning',
+              'technical_planning_begin',
+              'technical_planning_generate',
+              'technical_planning_commit',
+              'technical_planning_confirm',
+              'technical_planning_review'
+            ].includes(node)
+          ) {
             return
           }
         }

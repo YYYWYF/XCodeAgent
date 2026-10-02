@@ -118,7 +118,7 @@ export function useApplicationPlanningRuntimes(
     const handleOnline = (): void => {
       for (const runtime of runtimesRef.current.values()) {
         const current = optionsRef.current.getPlanningState(runtime.applicationId)
-        if (current?.threadId !== runtime.threadId || current.transportState !== 'uncertain') continue
+        if (current?.threadId !== runtime.threadId || current.connection.status !== 'unavailable') continue
         void runtime.reconcileCurrentState().catch((reason: unknown) => {
           console.error('[planning-runtime] online reconcile failed', reason)
         })

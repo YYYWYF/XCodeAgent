@@ -749,13 +749,14 @@ export default function MessageList({
               const currentPresentationWorkflow = isCurrentPlanningMessage
                 ? planningCardWorkflow
                 : message.workflow
-              const messageError = currentPlanningSyncError
-                ? currentPlanningSyncError
-                : isCurrentPlanningMessage
-                  ? canonicalPlanningStateError || workflowFailureMessage(planningCardWorkflow)
-                  : message.error || workflowFailureMessage(message.workflow)
+              // 历史消息只读取自身错误和自身 Workflow，绝不从当前 Planning State 注入错误。
+              const messageError = historicalFailureText(
+                message.error?.trim() || workflowFailureMessage(message.workflow)
+              )
+              const legacyRecoveryGuidance = LEGACY_RECOVERY_GUIDANCE.has(message.error?.trim() || '')
               const isCurrentErrorMessage = Boolean(
                 messageError &&
+                  !legacyRecoveryGuidance &&
                   message.role === 'assistant' &&
                   (isCurrentPlanningMessage || message.id === latestAssistantMessageId)
               )
@@ -971,6 +972,7 @@ export default function MessageList({
                         {messageError && !templatePreparationFailed ? (
                           <AgentErrorCard
                             error={messageError}
+                            historical={legacyRecoveryGuidance}
                             onRetry={isCurrentErrorMessage ? onRetryError : undefined}
                             retryLabel={currentPlanningSyncError ? '重新同步状态' : undefined}
                             title={currentPlanningSyncError ? '规划状态尚未同步' : undefined}
@@ -1187,14 +1189,6 @@ export default function MessageList({
                 <AgentErrorCard
                   error={visibleError}
                   onRetry={onRetryError}
-                  retryLabel={planningSyncError ? '重新同步状态' : undefined}
-                  title={
-                    planningSyncError
-                      ? '规划状态尚未同步'
-                      : /确认卡|中断|过期|版本/.test(visibleError)
-                        ? '规划确认未完成'
-                        : undefined
-                  }
                 />
               </div>
             </article>
@@ -1283,6 +1277,17 @@ function findCurrentPlanningMessageIndex(
 function workflowFailureMessage(workflow?: WorkflowRunPayload): string | undefined {
   if (workflow?.summary.status !== 'failed') return undefined
   return workflow.summary.message?.trim() || '本次模型调用未完成。'
+}
+
+const LEGACY_RECOVERY_GUIDANCE = new Set([
+  '已找到可验证的恢复入口，可以继续执行。'
+])
+
+/** 精确清理历史错误中已持久化的旧恢复提示，不根据关键词猜测真实错误含义。 */
+function historicalFailureText(error?: string): string | undefined {
+  const value = error?.trim()
+  if (!value) return undefined
+  return LEGACY_RECOVERY_GUIDANCE.has(value) ? '此次任务执行未能完成。' : value
 }
 
 /** 只为最新一轮快速修改显示版本提醒，避免历史消息重复读取 Git 状态。 */

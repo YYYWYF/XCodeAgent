@@ -3,15 +3,15 @@ import { useRef } from 'react'
 import type { WorkflowClarificationAnswers, WorkflowRunPayload } from '../../typings'
 import type { RequirementSpecDraftSaveResult } from '../../service/applicationPagePlanning'
 import {
-  applicationPlanningDisplayStatus,
   planningTransportBusy,
   type ApplicationPlanningCurrentState
 } from '../../service/activeApplicationPlanning'
-import { workflowConfirmation } from '../../service/applicationPlanningRuntimeHelpers'
+import { applicationPlanningRecoveryIncident } from '../../service/applicationPlanningRecoveryIncident'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { cx } from '../../utils'
 import { formatError } from './utils'
-import AgentErrorCard from '../AgentErrorCard'
+import ApplicationPlanningRecoveryIncidentCard from '../ApplicationPlanningRecoveryIncidentCard'
+import ConnectionStatusBanner from '../ConnectionStatusBanner'
 import ApplicationPlanningProgress from './ApplicationPlanningProgress'
 import ApplicationPlanningQuestionPanel from './ApplicationPlanningQuestionPanel'
 import UiDesignStreamingPreview from './UiDesignStreamingPreview'
@@ -77,11 +77,7 @@ export default function ApplicationPagePlanningModal({
   const enteredUiConfirmationRef = useRef(false)
   const workflow = planning.workflow
   const running = planningTransportBusy(planning)
-  const displayStatus = applicationPlanningDisplayStatus(planning)
-  const error =
-    planning.syncError ||
-    planning.error ||
-    (displayStatus === 'error' ? '上次规划流程中断，请重试或检查当前规划内容。' : '')
+  const recoveryIncident = applicationPlanningRecoveryIncident(planning)
   const progressCopy = workflowProgressCopy(workflow)
   const awaitingUserInput = planningWorkflowRequiresUserInput(workflow)
   // 检测是否已进入 UI 确认阶段：一旦命中即锁定，避免 run 期间流式快照丢失导致回切进度页。
@@ -109,11 +105,13 @@ export default function ApplicationPagePlanningModal({
     generatingTemplate || !workflow || (running && !awaitingUserInput && !inUiConfirmationStage)
   // run 中途流式快照可能短暂丢失 clarification，此时确认面板会返回 null 导致白屏。
   // 有 workflow 但无 clarification 时显示加载态兜底，避免空白。
-  const hasClarification = Boolean(
-    workflow?.summary?.clarification ||
-      workflow?.state?.clarification ||
-      workflow?.result?.clarification
-  )
+  const hasClarification =
+    awaitingUserInput &&
+    Boolean(
+      workflow?.summary?.clarification ||
+        workflow?.state?.clarification ||
+        workflow?.result?.clarification
+    )
   // UI确认节点生成期间，流式展示已就绪的设计稿，避免干等到最后一次性出现。
   // 排除 ui_confirmation 已完成（用户确认或跳过后同 run 流转到规划入口，
   // 但入口 started 帧到达前可能短暂停留在 ui_confirmation completed 帧），
@@ -177,13 +175,12 @@ export default function ApplicationPagePlanningModal({
 
       <div className={cx('page-planning-screen-body')}>
         <div className={cx('page-planning-screen-content')}>
-          {error ? (
-            <AgentErrorCard
-              error={error}
-              onRetry={planning.syncError || !workflowConfirmation(workflow) ? onRetry : undefined}
-              retryLabel={planning.syncError ? '重新同步状态' : undefined}
+          <ConnectionStatusBanner connection={planning.connection} onReconnect={onRetry} />
+          {recoveryIncident ? (
+            <ApplicationPlanningRecoveryIncidentCard
+              onAction={onRetry}
+              planning={planning}
               retrying={running}
-              title={planning.syncError ? '规划状态尚未同步' : undefined}
             />
           ) : (
             <section className={cx('page-planning-review')}>

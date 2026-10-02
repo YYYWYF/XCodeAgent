@@ -58,6 +58,7 @@ import type {
   WorkflowRevisionContinuationHandoff
 } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
+import { ApplicationPlanningSubmissionNotCommittedError } from '../../service/applicationPlanningRuntime'
 import { formatError } from '../Welcome/utils'
 import {
   planningWorkflowActivity,
@@ -170,6 +171,10 @@ import {
   pendingDagOwnerSessionId,
   stageOutputPhase
 } from './stageOutputState'
+import { executionRecoveryForSession } from './executionRecoveryState'
+import ConnectionStatusBanner from '../ConnectionStatusBanner'
+import RecoverySurface from './recoverySurface'
+import { runPlanningStageEntryTransaction } from './planningStageEntry'
 import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
@@ -194,9 +199,9 @@ import {
   planExecutionContextForRun,
   resolveWorkflowForDisplay,
   shouldRenderPlanExecutionDock,
+  workflowInteractionAvailability,
   workflowCanRetryFailedTasks,
   workflowCodeReviewRetry,
-  workflowInteractionAvailability,
   workflowResumeNode,
   type PlanExecutionMode
 } from './planExecutionMode'
@@ -851,7 +856,7 @@ export default function AiChatPanel({
 }: Props): ReactElement {
   const planningThreadId = planningState?.threadId
   const currentPlanningWorkflow = planningState?.workflow
-  const planningError = planningState?.syncError || planningState?.error
+  const planningError = planningState?.error
   const restorePlanningArtifactsFromDisk = planningState?.restoreArtifactsFromDisk === true
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const sourceNavigationGuard = useRef<((action: () => void) => void)>()
@@ -2318,15 +2323,17 @@ export default function AiChatPanel({
   const {
     activeWorkflow,
     conversationRunning,
+    connectionState,
     error,
     handleAcceptPreview,
     handleContinueDevelopment: continueDevelopmentExecution,
+    handleExecuteRecoveryAction,
+    handleRetryCodeReview,
+    handleRetryPlan,
     handleContinueRevisionBuild,
     handleEndPlan,
     handleProductStageConversation,
     handleResumePlan,
-    handleRetryCodeReview,
-    handleRetryPlan,
     handleStopPlan,
     handleSend,
     handleStartEndpointDevelopment,
@@ -2340,7 +2347,10 @@ export default function AiChatPanel({
     sessionExecutionLocked,
     sessionRunStates,
     stopping,
-    workspaceBusy
+    workspaceBusy,
+    recoveryError,
+    recoveryRunning,
+    refreshConnection
   } = useWorkflowConversation({
     acquireSessionExecution,
     activeSession,
@@ -3653,6 +3663,12 @@ export default function AiChatPanel({
     ]
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
+  const activeExecutionRecovery = useMemo(
+    () => executionRecoveryForSession(applicationLifecycle, activeSession?.sessionId),
+    [applicationLifecycle, activeSession?.sessionId]
+  )
+  const activeConnectionState =
+    isApplicationPlanningPhase && planningState ? planningState.connection : connectionState
   const acceptanceAwaiting = shouldShowAcceptanceDecisionDock({
     activePhase: activeWorkbenchPhase,
     planExecutionMode: displayedPlanExecutionMode,
@@ -4308,98 +4324,114 @@ export default function AiChatPanel({
           let sourceMessagesWithReceipt: AgentChatMessage[] = []
           let sourceReceiptAdded = false
           let sourceReceiptPersisted = false
-          try {
-            // 首次创建和二次修改都先新建独立 PLAN StageSession/conversation thread，
-            // 再切阶段并恢复原 Graph checkpoint，两个 thread 身份不得混用。
-            planningIdentity = await ensurePlanningSession(
-              stageEntryKey,
-              'planning',
-              revisionContext,
-              sourceIdentity
-            )
-            if (revisionContext?.changeId && sourceIdentity) {
-              sourceMessages = getSessionMessages(sourceIdentity.key)
-              const receiptExists = sourceMessages.some(
-                (item) =>
-                  item.revisionHandoff?.kind === 'revision_planning' &&
-                  item.revisionHandoff.changeId === revisionContext.changeId &&
-                  item.revisionHandoff.targetSessionId === planningIdentity?.sessionId
+          const stageEntryOutcome = await runPlanningStageEntryTransaction({
+            prepare: async () => {
+              // 首次创建和二次修改都先新建独立 PLAN StageSession/conversation thread，
+              // 再切阶段并恢复原 Graph checkpoint，两个 thread 身份不得混用。
+              planningIdentity = await ensurePlanningSession(
+                stageEntryKey,
+                'planning',
+                revisionContext,
+                sourceIdentity
               )
-              if (!receiptExists) {
-                sourceReceiptAdded = true
-                const receiptId = Date.now() * 1000
-                const nextSourceMessages: AgentChatMessage[] = [
-                  ...sourceMessages,
-                  {
-                    id: receiptId,
-                    role: 'assistant',
-                    content: '',
-                    revisionHandoff: {
-                      kind: 'revision_planning',
-                      formalBranch: revisionContext.formalBranch,
-                      targetSessionId: planningIdentity.sessionId,
-                      targetConversationThreadId: planningIdentity.threadId,
-                      impactInteractionId: revisionContext.impactInteractionId,
-                      changeId: revisionContext.changeId,
-                      request: String(
-                        activeFormalRevision?.request ||
-                          '需求设计已确认，进入本次二次修改的技术计划阶段。'
-                      )
-                    },
-                    createdAt: receiptId
-                  }
-                ]
-                sourceMessagesWithReceipt = nextSourceMessages
-                setSessionMessages(sourceIdentity.key, nextSourceMessages)
-                await persistSession({
-                  editorMode: sourceIdentity.editorMode,
-                  messages: nextSourceMessages,
-                  sessionId: sourceIdentity.sessionId,
-                  threadId: sourceIdentity.threadId,
-                  revisionContext
-                })
-                sourceReceiptPersisted = true
-              }
-            }
-            planningSessionKeyRef.current = planningIdentity.key
-            setLocalPlanningConversationThreadId(planningIdentity.threadId)
-            appendPlanningUserMessage(planningAnswers)
-            switchPhase('planning')
-            await onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec)
-          } catch (error) {
-            if (planningStageTransitionRef.current === stageEntryKey) {
-              planningStageTransitionRef.current = ''
-            }
-            let sourceReceiptRolledBack = true
-            if (sourceIdentity && sourceReceiptAdded) {
-              setSessionMessages(sourceIdentity.key, sourceMessages)
-              if (sourceReceiptPersisted) {
-                try {
+              if (revisionContext?.changeId && sourceIdentity) {
+                sourceMessages = getSessionMessages(sourceIdentity.key)
+                const receiptExists = sourceMessages.some(
+                  (item) =>
+                    item.revisionHandoff?.kind === 'revision_planning' &&
+                    item.revisionHandoff.changeId === revisionContext.changeId &&
+                    item.revisionHandoff.targetSessionId === planningIdentity?.sessionId
+                )
+                if (!receiptExists) {
+                  sourceReceiptAdded = true
+                  const receiptId = Date.now() * 1000
+                  const nextSourceMessages: AgentChatMessage[] = [
+                    ...sourceMessages,
+                    {
+                      id: receiptId,
+                      role: 'assistant',
+                      content: '',
+                      revisionHandoff: {
+                        kind: 'revision_planning',
+                        formalBranch: revisionContext.formalBranch,
+                        targetSessionId: planningIdentity.sessionId,
+                        targetConversationThreadId: planningIdentity.threadId,
+                        impactInteractionId: revisionContext.impactInteractionId,
+                        changeId: revisionContext.changeId,
+                        request: String(
+                          activeFormalRevision?.request ||
+                            '需求设计已确认，进入本次二次修改的技术计划阶段。'
+                        )
+                      },
+                      createdAt: receiptId
+                    }
+                  ]
+                  sourceMessagesWithReceipt = nextSourceMessages
+                  setSessionMessages(sourceIdentity.key, nextSourceMessages)
                   await persistSession({
                     editorMode: sourceIdentity.editorMode,
-                    messages: sourceMessages,
+                    messages: nextSourceMessages,
                     sessionId: sourceIdentity.sessionId,
                     threadId: sourceIdentity.threadId,
                     revisionContext
                   })
-                } catch (rollbackError) {
-                  sourceReceiptRolledBack = false
-                  // 磁盘仍保留回执时，内存也恢复为同一状态，并保留目标会话维持可跳转关系。
-                  setSessionMessages(sourceIdentity.key, sourceMessagesWithReceipt)
-                  message.warning(formatError(rollbackError, '计划阶段交接回执回滚失败'))
+                  sourceReceiptPersisted = true
                 }
               }
-            }
-            if (planningIdentity && sourceReceiptRolledBack) {
-              try {
-                await discardPreparedSession(planningIdentity)
-              } catch (rollbackError) {
-                message.warning(formatError(rollbackError, '预创建规划会话清理失败'))
+              planningSessionKeyRef.current = planningIdentity.key
+              setLocalPlanningConversationThreadId(planningIdentity.threadId)
+              planningSubmission = appendPlanningUserMessage(planningAnswers)
+              switchPhase('planning')
+              return planningIdentity
+            },
+            execute: async () => {
+              await onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec)
+            },
+            rollback: async () => {
+              if (planningStageTransitionRef.current === stageEntryKey) {
+                planningStageTransitionRef.current = ''
               }
+              let sourceReceiptRolledBack = true
+              if (sourceIdentity && sourceReceiptAdded) {
+                setSessionMessages(sourceIdentity.key, sourceMessages)
+                if (sourceReceiptPersisted) {
+                  try {
+                    await persistSession({
+                      editorMode: sourceIdentity.editorMode,
+                      messages: sourceMessages,
+                      sessionId: sourceIdentity.sessionId,
+                      threadId: sourceIdentity.threadId,
+                      revisionContext
+                    })
+                  } catch (rollbackError) {
+                    sourceReceiptRolledBack = false
+                    // 磁盘仍保留回执时，内存也恢复为同一状态，并保留目标会话维持可跳转关系。
+                    setSessionMessages(sourceIdentity.key, sourceMessagesWithReceipt)
+                    message.warning(formatError(rollbackError, '计划阶段交接回执回滚失败'))
+                  }
+                }
+              }
+              if (planningIdentity && sourceReceiptRolledBack) {
+                try {
+                  await discardPreparedSession(planningIdentity)
+                } catch (rollbackError) {
+                  message.warning(formatError(rollbackError, '预创建规划会话清理失败'))
+                }
+              }
+              planningSessionKeyRef.current = ''
+              setLocalPlanningConversationThreadId('')
+              switchPhase('product')
             }
-            setLocalPlanningConversationThreadId('')
-            switchPhase('product')
-            message.error(formatError(error, '进入计划阶段失败'))
+          })
+          if (stageEntryOutcome.status === 'frontend_handoff_failed') {
+            message.error(formatError(stageEntryOutcome.error, '进入计划阶段失败'))
+          } else if (
+            stageEntryOutcome.status === 'backend_failed' &&
+            stageEntryOutcome.error instanceof ApplicationPlanningSubmissionNotCommittedError
+          ) {
+            planningNewRoundRef.current = false
+            rollbackPlanningSubmission(planningSubmission)
+            message.error(stageEntryOutcome.error.message)
           }
           return
         } else {
@@ -4415,6 +4447,12 @@ export default function AiChatPanel({
       }
       void onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec).catch(
         (reason) => {
+          if (reason instanceof ApplicationPlanningSubmissionNotCommittedError) {
+            planningNewRoundRef.current = false
+            rollbackPlanningSubmission(planningSubmission)
+            message.error(reason.message)
+            return
+          }
           if (revisionTechnicalPlanConfirmed) {
             suppressRevisionTechnicalPlanTransitionRef.current = false
             planningNewRoundRef.current = false
@@ -4787,6 +4825,28 @@ export default function AiChatPanel({
                 templateGenerationOrphaned={templateGenerationOrphaned}
                 templateReconcileRetryable={templateReconcileRetryable}
                 planningState={planningState}
+              />
+
+              <ConnectionStatusBanner
+                connection={activeConnectionState}
+                onReconnect={
+                  isApplicationPlanningPhase
+                    ? onRetryPlanning
+                    : () => { void refreshConnection() }
+                }
+              />
+              <RecoverySurface
+                actionDisabled={
+                  activeConnectionState.status !== 'healthy' ||
+                  (isApplicationPlanningPhase && planningMutationBlocked(planningState))
+                }
+                activeExecutionRecovery={activeExecutionRecovery}
+                isApplicationPlanningPhase={isApplicationPlanningPhase}
+                onExecuteRecoveryAction={(recovery) => { void handleExecuteRecoveryAction(recovery) }}
+                onRetryPlanning={onRetryPlanning}
+                planningState={planningState}
+                recoveryError={recoveryError}
+                recoveryRunning={recoveryRunning}
               />
 
               {milestoneCommitReminderProps && (

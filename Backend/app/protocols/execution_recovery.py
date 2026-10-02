@@ -1,0 +1,658 @@
+"""独立 `/execution-recovery/run` AG-UI 协议与请求边界。"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, AsyncIterator
+from uuid import uuid4
+
+from ag_ui.core import (
+    CustomEvent,
+    RunErrorEvent,
+    RunFinishedEvent,
+    RunStartedEvent,
+    StateSnapshotEvent,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+)
+from ag_ui.encoder import EventEncoder
+from app.domain.execution_recovery import (
+    DurableExecutionRecord,
+    DurableExecutionStatus,
+    RecoveryActionKind,
+    RecoveryExecutionError,
+)
+from app.graph.application_planning_workflow import application_planning_graph_for_request
+from app.graph.workflow import workflow_graph_for_request
+from app.persistence.execution_recovery import (
+    get_execution,
+    list_recovery_projection_candidates,
+    list_recovery_attempts_from_source,
+)
+from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
+from app.services.execution_recovery_executor import (
+    NativeRecoveryRuntimeContext,
+    WorkflowReentryExecutor,
+)
+from app.services.execution_recovery_lineage import reconcile_recovery_attempt
+from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
+from app.services.execution_recovery_lineage import RecoveryLineageState
+from app.services.execution_recovery_action_planner import (
+    plan_failed_node_reentry_action,
+    plan_interrupted_continue_action,
+)
+from app.services.execution_recovery_reconciliation import (
+    reconcile_interrupted_execution_state,
+)
+from app.services.execution_recovery_source_admission import assess_recovery_source
+from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
+
+
+_FORBIDDEN_RECOVERY_FIELDS = {
+    "node",
+    "phase",
+    "checkpointId",
+    "checkpoint_id",
+    "checkpointNs",
+    "checkpoint_ns",
+    "resumeFrom",
+    "resume_from",
+    "threadId",
+    "thread_id",
+    "newRunId",
+    "new_run_id",
+    "strategy",
+    "replaySafe",
+    "replay_safe",
+    "handler",
+    "workflowAction",
+    "workflow_action",
+}
+
+
+def execution_recovery_capabilities() -> dict[str, Any]:
+    """描述独立 Native Recovery AG-UI 入口的当前请求与错误合同。"""
+
+    return {
+        "name": "execution-recovery",
+        "endpoint": "/execution-recovery/execute",
+        "transport": "ag-ui-sse",
+        "request": {
+            "forwardedProps": {
+                "workspaceRoot": "workspace used to locate the Recovery Store",
+                "executionRecovery": {
+                    "action": "execute | continue | retry_current_failure",
+                    "incidentId": "backend-issued current recovery incident",
+                    "actionId": "backend-issued recovery action",
+                    "sourceRunId": "current projection hint used by continue/retry_current_failure",
+                },
+            },
+            "clientSelectedFields": ["incidentId", "actionId", "sourceRunId"],
+            "backendOwnedFields": sorted(_FORBIDDEN_RECOVERY_FIELDS),
+        },
+    }
+
+
+def build_execution_recovery_ag_ui_stream(
+    *,
+    payload: dict[str, Any],
+    accept: str | None = None,
+) -> AsyncIterator[str]:
+    """校验恢复请求并把已准备的 Native context 交给现有 Runtime stream。"""
+
+    encoder = EventEncoder(accept or "text/event-stream")
+
+    async def stream() -> AsyncIterator[str]:
+        """准备恢复上下文并输出标准 AG-UI 运行生命周期。"""
+
+        message_id = str(uuid4())
+        fallback_thread_id = str(uuid4())
+        request_run_id = f"recovery-request-{uuid4().hex[:12]}"
+        source_run_id = ""
+        workspace = ""
+        try:
+            workspace, action, source_run_id, incident_id, action_id = _parse_request(payload)
+            if action == "execute":
+                source_run_id = await _resolve_action_source_run(
+                    workspace=workspace,
+                    incident_id=incident_id,
+                    action_id=action_id,
+                )
+            reconciled_context = await _reconcile_prepared_lineage(
+                workspace,
+                source_run_id,
+            )
+            if reconciled_context is not None:
+                source = reconciled_context.source_execution
+                fallback_thread_id = source.thread_id
+                if _workspace_identity(source.workspace) != _workspace_identity(workspace):
+                    raise RecoveryExecutionError(
+                        "INVALID_EXECUTION_RECOVERY_REQUEST",
+                        "workspaceRoot 与 source execution 的 workspace 不一致。",
+                    )
+                async for frame in build_workflow_ag_ui_stream(
+                    graph=reconciled_context.graph,
+                    payload={},
+                    accept=accept,
+                    native_recovery_context=reconciled_context,
+                ):
+                    yield frame
+                return
+            source = await _load_requested_recovery_source(
+                workspace=workspace,
+                requested_source_run_id=source_run_id,
+            )
+            fallback_thread_id = source.thread_id
+            if _workspace_identity(source.workspace) != _workspace_identity(workspace):
+                raise RecoveryExecutionError(
+                    "INVALID_EXECUTION_RECOVERY_REQUEST",
+                    "workspaceRoot 与 source execution 的 workspace 不一致。",
+                )
+            if source.status not in {
+                DurableExecutionStatus.FAILED,
+                DurableExecutionStatus.INTERRUPTED,
+            }:
+                raise RecoveryExecutionError(
+                    "RECOVERY_SOURCE_NOT_ACTIONABLE",
+                    "当前 source 不是 FAILED 或 INTERRUPTED，不能进入 Generic Recovery。",
+                )
+            graph_factory = (
+                application_planning_graph_for_request
+                if source.execution_kind == "application_planning"
+                else workflow_graph_for_request
+            )
+            graph = await graph_factory(
+                workspace=workspace,
+                project_id=source.project_id,
+            )
+            source = await _resolve_current_recovery_source(
+                workspace=workspace,
+                requested=source,
+                graph=graph,
+            )
+            reentry_plan = None
+            if source.status is DurableExecutionStatus.FAILED:
+                admission = assess_recovery_source(source)
+                if not admission.admissible:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=workspace,
+                        source=source,
+                        error=RecoveryExecutionError(
+                            admission.reason_code,
+                            "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
+                        ),
+                    )
+                else:
+                    try:
+                        reentry_plan = await FailureTargetResolver().resolve(
+                            workspace=workspace,
+                            source=source,
+                            graph=graph,
+                        )
+                    except RecoveryExecutionError as exc:
+                        action_plan = plan_failed_node_reentry_action(
+                            workspace=workspace,
+                            source=source,
+                            error=exc,
+                        )
+                    else:
+                        action_plan = plan_failed_node_reentry_action(
+                            workspace=workspace,
+                            source=source,
+                            reentry_plan=reentry_plan,
+                        )
+            elif source.status is DurableExecutionStatus.INTERRUPTED:
+                resolution = await InterruptedTargetResolver().resolve(
+                    workspace=workspace,
+                    source=source,
+                    graph=graph,
+                )
+                if resolution.kind in {"terminal", "awaiting_user"}:
+                    target_status = resolution.terminal_status or (
+                        DurableExecutionStatus.AWAITING_USER
+                        if resolution.kind == "awaiting_user"
+                        else DurableExecutionStatus.COMPLETED
+                    )
+                    reconciled = await reconcile_interrupted_execution_state(
+                        workspace=workspace,
+                        source=source,
+                        status=target_status,
+                        snapshot=resolution.snapshot,
+                    )
+                    if reconciled is None:
+                        raise RecoveryExecutionError(
+                            "RECOVERY_SOURCE_CHANGED",
+                            "INTERRUPTED source 在对账前已经发生变化，请刷新后继续。",
+                        )
+                    reconciliation = target_status.value
+                    message = {
+                        DurableExecutionStatus.COMPLETED: "当前执行已经完成。",
+                        DurableExecutionStatus.AWAITING_USER: "当前执行正在等待已提交的用户确认。",
+                        DurableExecutionStatus.FAILED: "当前执行已失败。",
+                        DurableExecutionStatus.CANCELLED: "当前执行已取消。",
+                        DurableExecutionStatus.STOPPED: "当前执行已停止。",
+                    }[target_status]
+                    for frame in _reconciled_recovery_frames(
+                        encoder=encoder,
+                        message_id=message_id,
+                        thread_id=source.thread_id,
+                        run_id=request_run_id,
+                        source_run_id=source.run_id,
+                        reconciliation=reconciliation,
+                        message=message,
+                    ):
+                        yield frame
+                    return
+                if resolution.kind == "continue" and resolution.reentry_plan is not None:
+                    reentry_plan = resolution.reentry_plan
+                    action_plan = plan_interrupted_continue_action(
+                        workspace=workspace,
+                        source=source,
+                        reentry_plan=reentry_plan,
+                    )
+                else:
+                    action_plan = plan_interrupted_continue_action(
+                        workspace=workspace,
+                        source=source,
+                        error=RecoveryExecutionError(
+                            resolution.reason_code,
+                            resolution.reason,
+                        ),
+                    )
+            if action == "execute" and (
+                action_plan.incident_id != incident_id
+                or action_plan.primary_action is None
+                or action_plan.primary_action.action_id != action_id
+            ):
+                raise RecoveryExecutionError(
+                    "STALE_RECOVERY_ACTION",
+                    "恢复动作已经过期，请刷新当前 Recovery Incident。",
+                )
+            if action_plan.primary_action is None:
+                raise RecoveryExecutionError(action_plan.reason_code, action_plan.message)
+            kind = action_plan.primary_action.kind
+            if kind is RecoveryActionKind.RETRY_FAILED_NODE:
+                if reentry_plan is None:
+                    raise RecoveryExecutionError(
+                        "WORKFLOW_REENTRY_PLAN_INVALID",
+                        "FAILED action 缺少 Workflow Re-entry 计划。",
+                    )
+                context = await WorkflowReentryExecutor().prepare_failure_retry(
+                    workspace=workspace,
+                    source_run_id=source.run_id,
+                    graph=graph,
+                    reentry_plan=reentry_plan,
+                )
+            elif kind is RecoveryActionKind.CONTINUE_CHECKPOINT:
+                if reentry_plan is not None:
+                    context = await WorkflowReentryExecutor().prepare_interrupted_continue(
+                        workspace=workspace,
+                        source_run_id=source.run_id,
+                        graph=graph,
+                        reentry_plan=reentry_plan,
+                    )
+                else:
+                    raise RecoveryExecutionError(
+                        "WORKFLOW_REENTRY_PLAN_INVALID",
+                        "CONTINUE_CHECKPOINT action 缺少 Workflow Re-entry 计划。",
+                    )
+            else:
+                raise RecoveryExecutionError(
+                    "RECOVERY_ACTION_NOT_EXECUTABLE",
+                    "当前 RecoveryActionPlan 没有可执行的 Workbench action。",
+                )
+            async for frame in build_workflow_ag_ui_stream(
+                graph=context.graph,
+                payload={},
+                accept=accept,
+                native_recovery_context=context,
+            ):
+                yield frame
+            return
+        except Exception as exc:
+            error_code = str(
+                getattr(exc, "code", None) or "EXECUTION_RECOVERY_FAILED"
+            )
+            message = str(exc) or "Execution Recovery failed."
+            yield encoder.encode(
+                RunStartedEvent(threadId=fallback_thread_id, runId=request_run_id)
+            )
+            yield encoder.encode(
+                TextMessageStartEvent(messageId=message_id, role="assistant")
+            )
+            yield encoder.encode(
+                CustomEvent(
+                    name="execution-recovery",
+                    value={
+                        "status": "failed",
+                        "sourceRunId": source_run_id,
+                        "errorCode": error_code,
+                        "message": message,
+                        **(
+                            getattr(exc, "details", {})
+                            if isinstance(getattr(exc, "details", {}), dict)
+                            else {}
+                        ),
+                    },
+                )
+            )
+            yield encoder.encode(
+                TextMessageContentEvent(messageId=message_id, delta=message)
+            )
+            yield encoder.encode(TextMessageEndEvent(messageId=message_id))
+            yield encoder.encode(
+                RunErrorEvent(message=message, code=error_code)
+            )
+
+    return stream()
+
+
+def _reconciled_recovery_frames(
+    *,
+    encoder: EventEncoder,
+    message_id: str,
+    thread_id: str,
+    run_id: str,
+    source_run_id: str,
+    reconciliation: str,
+    message: str,
+) -> list[str]:
+    """生成 terminal 或 native interrupt 对账成功时的完整 AG-UI 生命周期。"""
+
+    result = {
+        "status": "reconciled",
+        "sourceRunId": source_run_id,
+        "reconciliation": reconciliation,
+    }
+    return [
+        encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id)),
+        encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant")),
+        encoder.encode(CustomEvent(name="execution-recovery", value=result)),
+        encoder.encode(StateSnapshotEvent(snapshot={"executionRecovery": result})),
+        encoder.encode(TextMessageContentEvent(messageId=message_id, delta=message)),
+        encoder.encode(TextMessageEndEvent(messageId=message_id)),
+        encoder.encode(RunFinishedEvent(threadId=thread_id, runId=run_id, result=result)),
+    ]
+
+
+async def _resolve_current_recovery_source(
+    *,
+    workspace: str,
+    requested: DurableExecutionRecord,
+    graph: Any,
+) -> DurableExecutionRecord:
+    """以最新 checkpoint execution identity 校验请求仍指向当前 lineage head。"""
+
+    state_reader = getattr(graph, "aget_state", None)
+    if not callable(state_reader):
+        raise RecoveryExecutionError(
+            "RECOVERY_CHECKPOINT_RUN_INVALID",
+            "当前 production Graph 无法读取最新 root checkpoint execution identity。",
+        )
+    try:
+        snapshot = await state_reader(
+            {
+                "configurable": {
+                    "thread_id": requested.thread_id,
+                    "checkpoint_ns": "",
+                }
+            }
+        )
+    except Exception as exc:
+        raise RecoveryExecutionError(
+            "RECOVERY_CHECKPOINT_RUN_INVALID",
+            "最新 root checkpoint execution identity 无法读取。",
+        ) from exc
+    values = getattr(snapshot, "values", {})
+    values = values if isinstance(values, dict) else {}
+    checkpoint_run_id = str(values.get("active_run_id") or "").strip()
+    resolution = await resolve_recovery_lineage_head(
+        workspace,
+        thread_id=requested.thread_id,
+        execution_kind=requested.execution_kind,
+        authoritative_run_id=checkpoint_run_id,
+    )
+    if resolution.state is RecoveryLineageState.AMBIGUOUS:
+        raise RecoveryExecutionError(
+            resolution.reason_code,
+            "Recovery lineage 存在多个无法安全解释的当前 head。",
+        )
+    if resolution.head is None:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_NOT_CURRENT",
+            "当前没有可用的 recovery source。",
+        )
+    if resolution.head.run_id != requested.run_id:
+        raise RecoveryExecutionError(
+            "RECOVERY_SOURCE_SUPERSEDED",
+            "当前 recovery source 已被新的 child execution 替代，请刷新后继续。",
+            details={"currentSourceRunId": resolution.head.run_id},
+        )
+    return requested
+
+
+async def _load_requested_recovery_source(
+    *,
+    workspace: str,
+    requested_source_run_id: str,
+) -> DurableExecutionRecord:
+    """只加载客户端或 Backend action 定位的 source，当前性稍后由 checkpoint 校验。"""
+
+    requested = await get_execution(workspace, requested_source_run_id)
+    if requested is None:
+        raise RecoveryExecutionError(
+            "SOURCE_EXECUTION_NOT_FOUND",
+            "source execution 不存在。",
+        )
+    if _workspace_identity(requested.workspace) != _workspace_identity(workspace):
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "workspaceRoot 与 source execution 的 workspace 不一致。",
+        )
+    return requested
+
+
+def _parse_request(payload: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """在协议边界拒绝客户端伪造的恢复定位与执行 authority。"""
+
+    forwarded = payload.get("forwardedProps")
+    if not isinstance(forwarded, dict):
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "请求必须通过 forwardedProps 提交 executionRecovery。",
+        )
+    workspace = str(forwarded.get("workspaceRoot") or "").strip()
+    recovery = forwarded.get("executionRecovery")
+    if not workspace or not isinstance(recovery, dict):
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "executionRecovery 必须包含 workspaceRoot 和对象值。",
+        )
+    unexpected = sorted(
+        set(recovery) - {"action", "sourceRunId", "incidentId", "actionId"}
+    )
+    if unexpected:
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "executionRecovery 只允许 action、incidentId、actionId 和 sourceRunId。",
+        )
+    forbidden = sorted(_FORBIDDEN_RECOVERY_FIELDS.intersection(recovery))
+    if forbidden:
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "executionRecovery 不允许客户端提交：" + ", ".join(forbidden),
+        )
+    action = str(recovery.get("action") or "")
+    if action not in {"execute", "continue", "retry_current_failure"}:
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "executionRecovery.action 只支持 execute、continue 或 retry_current_failure。",
+        )
+    source_run_id = str(recovery.get("sourceRunId") or "").strip()
+    incident_id = str(recovery.get("incidentId") or "").strip()
+    action_id = str(recovery.get("actionId") or "").strip()
+    if action == "execute" and (not incident_id or not action_id):
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "execute 必须提供 Backend 签发的 incidentId 和 actionId。",
+        )
+    if action != "execute" and not source_run_id:
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "executionRecovery.sourceRunId 不能为空。",
+        )
+    if action == "execute" and source_run_id:
+        raise RecoveryExecutionError(
+            "INVALID_EXECUTION_RECOVERY_REQUEST",
+            "execute 不允许客户端提交 sourceRunId。",
+        )
+    return workspace, action, source_run_id, incident_id, action_id
+
+
+async def _resolve_action_source_run(
+    *,
+    workspace: str,
+    incident_id: str,
+    action_id: str,
+) -> str:
+    """按 Backend 生成的 incident/action 身份寻找当前 source，不接受客户端定位。"""
+
+    records = await list_recovery_projection_candidates(workspace, limit=128)
+    for record in records:
+        # persistence candidate query 只返回 FAILED/INTERRUPTED；异常记录不进入旧
+        # Generic Recovery planner，避免查询边界漂移重新打开 fallback。
+        if record.status not in {
+            DurableExecutionStatus.FAILED,
+            DurableExecutionStatus.INTERRUPTED,
+        }:
+            continue
+        graph_factory = (
+            application_planning_graph_for_request
+            if record.execution_kind == "application_planning"
+            else workflow_graph_for_request
+        )
+        graph = await graph_factory(workspace=workspace, project_id=record.project_id)
+        reentry_plan = None
+        if record.status is DurableExecutionStatus.FAILED:
+            admission = assess_recovery_source(record)
+            if not admission.admissible:
+                action_plan = plan_failed_node_reentry_action(
+                    workspace=workspace,
+                    source=record,
+                    error=RecoveryExecutionError(
+                        admission.reason_code,
+                        "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
+                    ),
+                )
+            else:
+                try:
+                    reentry_plan = await FailureTargetResolver().resolve(
+                        workspace=workspace,
+                        source=record,
+                        graph=graph,
+                    )
+                except RecoveryExecutionError as exc:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=workspace,
+                        source=record,
+                        error=exc,
+                    )
+                else:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=workspace,
+                        source=record,
+                        reentry_plan=reentry_plan,
+                    )
+        elif record.status is DurableExecutionStatus.INTERRUPTED:
+            resolution = await InterruptedTargetResolver().resolve(
+                workspace=workspace,
+                source=record,
+                graph=graph,
+            )
+            if resolution.kind in {"terminal", "awaiting_user"}:
+                await reconcile_interrupted_execution_state(
+                    workspace=workspace,
+                    source=record,
+                    status=resolution.terminal_status or (
+                        DurableExecutionStatus.AWAITING_USER
+                        if resolution.kind == "awaiting_user"
+                        else DurableExecutionStatus.COMPLETED
+                    ),
+                    snapshot=resolution.snapshot,
+                )
+                continue
+            if resolution.kind == "continue" and resolution.reentry_plan is not None:
+                reentry_plan = resolution.reentry_plan
+                action_plan = plan_interrupted_continue_action(
+                    workspace=workspace,
+                    source=record,
+                    reentry_plan=reentry_plan,
+                )
+            else:
+                action_plan = plan_interrupted_continue_action(
+                    workspace=workspace,
+                    source=record,
+                    error=RecoveryExecutionError(
+                        resolution.reason_code,
+                        resolution.reason,
+                    ),
+                )
+        if (
+            action_plan.incident_id == incident_id
+            and action_plan.primary_action is not None
+            and action_plan.primary_action.action_id == action_id
+        ):
+            return record.run_id
+    raise RecoveryExecutionError(
+        "STALE_RECOVERY_ACTION",
+        "恢复动作已经过期，请刷新当前 Recovery Incident。",
+    )
+
+
+async def _reconcile_prepared_lineage(
+    workspace: str,
+    source_run_id: str,
+) -> NativeRecoveryRuntimeContext | None:
+    """在解析 canonical head 前收敛同一 source 链上的 pre-runtime child。"""
+
+    attempts = [
+        attempt
+        for attempt in await list_recovery_attempts_from_source(workspace, source_run_id)
+        if attempt.status.value in {"preparing", "handed_off", "finalizing"}
+    ]
+    if len(attempts) > 1:
+        raise RecoveryExecutionError(
+            "RECOVERY_LINEAGE_AMBIGUOUS",
+            "Recovery source 存在多个未收敛的 child execution。",
+        )
+    for attempt in attempts:
+        child = await get_execution(workspace, attempt.new_run_id)
+        if child is None:
+            continue
+        graph_factory = (
+            application_planning_graph_for_request
+            if child.execution_kind == "application_planning"
+            else workflow_graph_for_request
+        )
+        graph = await graph_factory(workspace=workspace, project_id=child.project_id)
+        reconciled = await reconcile_recovery_attempt(
+            workspace=workspace,
+            new_run_id=attempt.new_run_id,
+            graph=graph,
+        )
+        if isinstance(reconciled, NativeRecoveryRuntimeContext):
+            return reconciled
+    return None
+
+
+def _workspace_identity(value: str) -> str:
+    """把请求和持久记录中的 workspaceRoot 规范化为同一安全比较键。"""
+
+    return str(Path(value).expanduser().resolve(strict=False))
+
+
+__all__ = [
+    "build_execution_recovery_ag_ui_stream",
+    "execution_recovery_capabilities",
+]

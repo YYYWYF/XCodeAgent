@@ -18,8 +18,12 @@ from app.domain.application_revision import (
 )
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
+    _application_lifecycle_lock,
+    application_lifecycle_path,
     execution_belongs_to_active_revision,
     load_application_lifecycle,
+    persist_application_lifecycle_transition,
+    restart_application_planning_lifecycle,
     write_application_lifecycle,
 )
 from app.services.artifact_invalidation import canonical_sha256
@@ -34,6 +38,7 @@ from app.services.application_config import (
 )
 from app.domain.application_lifecycle import (
     ApplicationInitialization,
+    ApplicationLifecycle,
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
     utc_now,
@@ -50,7 +55,7 @@ def register_revision_impact(
     target: RevisionTarget,
     impact: RevisionImpact,
 ) -> PendingRevisionImpact:
-    """只登记待确认影响范围，不创建 changeId、draft 或 formal planning lease。"""
+    """登记待确认影响范围并分配跨 admission/replay 稳定的 changeId。"""
 
     current = _required_lifecycle(workspace)
     active = current.active_formal_revision
@@ -66,6 +71,7 @@ def register_revision_impact(
         raise ApplicationLifecycleConflictError("当前 application 已有 formal revision 正在进行。")
     pending_config_changes = _resolve_pending_application_config_changes(workspace, request)
     pending = PendingRevisionImpact(
+        changeId=f"chg_{uuid4().hex}",
         interactionId=interaction_id,
         sourceThreadId=source_thread_id,
         sourceRunId=source_run_id,
@@ -152,6 +158,321 @@ def submit_revision_impact(
             change_id=active.change_id,
         )
     return active
+
+
+def ensure_revision_impact_approved(
+    workspace: str | Path,
+    *,
+    change_id: str,
+    interaction_id: str,
+    request: str,
+    expected_branch: FormalRevisionBranch,
+    target: RevisionTarget | None = None,
+) -> ActiveFormalRevision:
+    """幂等批准同一 FormalRevision transaction，并拒绝任何事实漂移。"""
+
+    normalized_branch = FormalRevisionBranch(expected_branch)
+    current = _required_lifecycle(workspace)
+    active = current.active_formal_revision
+    if active is not None:
+        if (
+            active.change_id != change_id
+            or active.impact_interaction_id != interaction_id
+            or active.request != request
+            or active.formal_branch is not normalized_branch
+            or (target is not None and active.target != target)
+        ):
+            raise ApplicationLifecycleConflictError(
+                "active formal revision 与当前 TechnicalPlan revision intent 不匹配。"
+            )
+        return active
+
+    pending = current.pending_revision_impact
+    if (
+        pending is None
+        or pending.change_id != change_id
+        or pending.interaction_id != interaction_id
+        or pending.request != request
+        or pending.impact.formal_branch is not normalized_branch
+        or (target is not None and pending.target != target)
+    ):
+        raise ApplicationLifecycleConflictError(
+            "pending revision impact 与当前 TechnicalPlan revision intent 不匹配。"
+        )
+    approved = submit_revision_impact(
+        workspace,
+        interaction_id=interaction_id,
+        decision="approved",
+    )
+    if approved is None:
+        raise ApplicationLifecycleConflictError("revision impact 未批准。")
+    return approved
+
+
+def begin_technical_plan_revision_generation(
+    workspace: str | Path,
+    *,
+    change_id: str,
+    interaction_id: str,
+    request: str,
+    target: RevisionTarget,
+    thread_id: str,
+    active_run_id: str,
+) -> ApplicationLifecycle:
+    """在一次 lifecycle 锁和 CAS 写入中批准并启动 TechnicalPlan Formal Revision。"""
+
+    path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = _required_lifecycle(workspace)
+        expected_run_id = str(active_run_id or "").strip()
+        expected_thread_id = str(thread_id or "").strip()
+        if not expected_run_id or not expected_thread_id:
+            raise ApplicationLifecycleConflictError(
+                "TechnicalPlan formal revision 缺少 threadId 或 activeRunId。"
+            )
+        if current.initialization.thread_id != expected_thread_id:
+            raise ApplicationLifecycleConflictError(
+                "TechnicalPlan formal revision threadId 与 lifecycle 不匹配。"
+            )
+
+        active = current.active_formal_revision
+        if active is not None:
+            if current.pending_revision_impact is not None:
+                raise ApplicationLifecycleConflictError(
+                    "active formal revision 不能与 pending revision impact 同时存在。"
+                )
+            _assert_technical_plan_revision_identity(
+                active=active,
+                change_id=change_id,
+                interaction_id=interaction_id,
+                request=request,
+                target=target,
+            )
+            if (
+                current.initialization.stage
+                is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
+                and current.initialization.status is ApplicationLifecycleStatus.RUNNING
+                and current.active_run_id == expected_run_id
+            ):
+                return current
+            if current.initialization.stage not in {
+                ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+            }:
+                raise ApplicationLifecycleConflictError(
+                    "TechnicalPlan formal revision 当前阶段不允许进入 generation。"
+                )
+            if (
+                current.initialization.stage is ApplicationLifecycleStage.READY_FOR_WORKBENCH
+                and current.initialization.status is not ApplicationLifecycleStatus.COMPLETED
+            ) or (
+                current.initialization.stage
+                is ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION
+                and current.initialization.status is not ApplicationLifecycleStatus.AWAITING_USER
+            ):
+                raise ApplicationLifecycleConflictError(
+                    "TechnicalPlan formal revision predecessor 状态不匹配。"
+                )
+            next_active = active
+        else:
+            pending = current.pending_revision_impact
+            if pending is None:
+                raise ApplicationLifecycleConflictError(
+                    "TechnicalPlan formal revision 缺少 pending revision impact。"
+                )
+            if pending.based_on_lifecycle_revision not in {
+                current.revision,
+                current.revision - 1,
+            }:
+                raise ApplicationLifecycleConflictError(
+                    "TechnicalPlan formal revision 基于过期 lifecycle revision。"
+                )
+            if (
+                pending.based_on_lifecycle_revision == current.revision - 1
+                and current.active_run_id != expected_run_id
+            ):
+                raise ApplicationLifecycleConflictError(
+                    "TechnicalPlan formal revision ownership claim 与当前 run 不匹配。"
+                )
+            if (
+                pending.change_id != change_id
+                or pending.interaction_id != interaction_id
+                or pending.request != request
+                or pending.target != target
+                or pending.impact.formal_branch
+                is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
+            ):
+                raise ApplicationLifecycleConflictError(
+                    "pending revision impact 与当前 TechnicalPlan revision intent 不匹配。"
+                )
+            if (
+                current.initialization.stage is not ApplicationLifecycleStage.READY_FOR_WORKBENCH
+                or current.initialization.status is not ApplicationLifecycleStatus.COMPLETED
+            ):
+                raise ApplicationLifecycleConflictError(
+                    "TechnicalPlan formal revision 当前阶段不允许进入 generation。"
+                )
+            next_active = _build_active_formal_revision(current, pending)
+
+        updated = current.model_copy(
+            update={
+                "updated_at": utc_now(),
+                "revision": current.revision + 1,
+                "initialization": ApplicationInitialization(
+                    stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                    status=ApplicationLifecycleStatus.RUNNING,
+                    threadId=expected_thread_id,
+                ),
+                "active_run_id": expected_run_id,
+                "pending_revision_impact": None,
+                "active_formal_revision": next_active,
+                "error": None,
+            }
+        )
+        return write_application_lifecycle(
+            workspace,
+            updated,
+            expected_revision=current.revision,
+        )
+
+
+def _build_active_formal_revision(
+    current: ApplicationLifecycle,
+    pending: PendingRevisionImpact,
+) -> ActiveFormalRevision:
+    """把已验证的 pending impact 转为唯一 active formal revision。"""
+
+    planning_thread = str(current.initialization.thread_id or "").strip()
+    if not planning_thread:
+        raise ApplicationLifecycleConflictError(
+            "formal revision 缺少原 application planning thread。"
+        )
+    current_artifact = pending.impact.earliest_artifact.value
+    remaining_artifacts = [
+        artifact
+        for artifact in dict.fromkeys(pending.impact.affected_artifacts)
+        if artifact in {item.value for item in EarliestRevisionArtifact}
+        and artifact != current_artifact
+    ]
+    return ActiveFormalRevision(
+        changeId=pending.change_id,
+        formalBranch=pending.impact.formal_branch,
+        sourceThreadId=pending.source_thread_id,
+        sourceRunId=pending.source_run_id,
+        request=pending.request,
+        target=pending.target,
+        impactInteractionId=pending.interaction_id,
+        planningThreadId=planning_thread,
+        status=(
+            "design_planning"
+            if pending.impact.formal_branch is FormalRevisionBranch.DESIGN_STAGE_REVISION
+            else "drafting"
+        ),
+        # currentArtifact 是已确认影响范围选出的唯一设计/草稿起点；
+        # remainingArtifacts 只作生命周期展示，不允许客户端反向改写起点。
+        currentArtifact=current_artifact,
+        remainingArtifacts=remaining_artifacts,
+    )
+
+
+def _assert_technical_plan_revision_identity(
+    *,
+    active: ActiveFormalRevision,
+    change_id: str,
+    interaction_id: str,
+    request: str,
+    target: RevisionTarget,
+) -> None:
+    """验证已批准 Formal Revision 与 TechnicalPlan begin 输入完全一致。"""
+
+    if (
+        active.change_id != change_id
+        or active.impact_interaction_id != interaction_id
+        or active.request != request
+        or active.formal_branch is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
+        or active.target != target
+    ):
+        raise ApplicationLifecycleConflictError(
+            "active formal revision 与当前 TechnicalPlan revision intent 不匹配。"
+        )
+
+
+def ensure_technical_plan_generation_lifecycle(
+    workspace: str | Path,
+    *,
+    active_run_id: str | None,
+    thread_id: str | None = None,
+    change_id: str | None = None,
+) -> ApplicationLifecycle:
+    """幂等推进 TechnicalPlan generation lifecycle，并验证 thread/run 所有权。"""
+
+    current = _required_lifecycle(workspace)
+    expected_run_id = str(active_run_id or "").strip()
+    expected_thread_id = str(thread_id or "").strip()
+    if not expected_run_id:
+        raise ApplicationLifecycleConflictError("TechnicalPlan generation 缺少 active runId。")
+    if expected_thread_id and current.initialization.thread_id != expected_thread_id:
+        raise ApplicationLifecycleConflictError(
+            "TechnicalPlan generation threadId 与 lifecycle 不匹配。"
+        )
+
+    initialization = current.initialization
+    if (
+        initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
+        and initialization.status is ApplicationLifecycleStatus.RUNNING
+    ):
+        if current.active_run_id != expected_run_id:
+            raise ApplicationLifecycleConflictError(
+                "TechnicalPlan generation activeRunId 与当前 transaction 不匹配。"
+            )
+        if change_id:
+            active = current.active_formal_revision
+            if active is None or active.change_id != change_id:
+                raise ApplicationLifecycleConflictError(
+                    "TechnicalPlan generation 缺少匹配的 active formal revision。"
+                )
+        return current
+
+    if change_id:
+        active = current.active_formal_revision
+        if (
+            active is None
+            or active.change_id != change_id
+            or active.formal_branch is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
+        ):
+            raise ApplicationLifecycleConflictError(
+                "TechnicalPlan formal revision 不在允许的 lifecycle predecessor。"
+            )
+        if initialization.stage not in {
+            ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        }:
+            raise ApplicationLifecycleConflictError(
+                "TechnicalPlan formal revision 当前阶段不允许回到 generation。"
+            )
+        return restart_application_planning_lifecycle(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            active_run_id=expected_run_id,
+        )
+
+    if (
+        initialization.stage is ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY
+        and initialization.status is ApplicationLifecycleStatus.AWAITING_USER
+    ) or (
+        initialization.stage
+        is ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION
+        and initialization.status is ApplicationLifecycleStatus.AWAITING_USER
+    ):
+        return persist_application_lifecycle_transition(
+            workspace,
+            stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            status=ApplicationLifecycleStatus.RUNNING,
+            active_run_id=expected_run_id,
+        )
+    raise ApplicationLifecycleConflictError(
+        "TechnicalPlan generation lifecycle 不在允许的 predecessor。"
+    )
 
 
 def issue_revision_continuation(

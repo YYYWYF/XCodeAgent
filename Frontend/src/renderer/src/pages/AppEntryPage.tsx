@@ -339,7 +339,7 @@ function AppEntryContent(): JSX.Element {
             planningRuntimeController.saveRequirementSpec(visiblePlanning.application.id, spec)
           }
           onRetry={() =>
-            void (visiblePlanning.syncError
+            void (visiblePlanning.connection.status !== 'healthy'
               ? planningRuntimeController.reconcileCurrentState(visiblePlanning.application.id)
               : planningRuntimeController.retryCurrentFailure(visiblePlanning.application.id))
           }
@@ -384,7 +384,7 @@ function AppEntryContent(): JSX.Element {
             }
             onStopPlanning={() => planningRuntimeController.stop(activeApplication.id)}
             onRetryPlanning={
-              activePlanning?.syncError
+              activePlanning && activePlanning.connection.status !== 'healthy'
                 ? () => void planningRuntimeController.reconcileCurrentState(activeApplication.id)
                 : templateGenerationRecoverable
                   ? () => {

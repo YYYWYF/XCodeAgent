@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import asyncio
+import logging
 
 from typing import Any, AsyncIterator, Literal
 
@@ -28,6 +29,7 @@ from app.services.workspace_bootstrap.coordinator import template_mutation_coord
 from app.services.workspace_bootstrap.service import WorkspaceBootstrapService
 
 APPLICATION_LIFECYCLE_EVENT_NAME = "application-lifecycle"
+logger = logging.getLogger("uvicorn.error")
 
 
 class ApplicationLifecycleApplication(BaseModel):
@@ -154,6 +156,9 @@ def build_application_lifecycle_ag_ui_stream(
         elif request.action == "get":
             from app.services.development_artifacts import refresh_development_artifacts
 
+            # 重新打开已知 workspace 时惰性识别旧 Backend 留下的中断执行；扫描器自身
+            # fail-open，不能把恢复基础设施故障升级为 lifecycle get 失败。
+            await reconcile_workspace_recovery(request.workspace_root)
             state = refresh_development_artifacts(request.workspace_root)
             message = "已读取应用生命周期。"
         elif request.action in {

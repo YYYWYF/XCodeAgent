@@ -7,22 +7,35 @@ import type {
 import { retainApplicationPlanningInterrupt } from './applicationPlanningWorkflowState'
 import { isApplicationCreationComplete, loadStoredApplications } from './applicationStorage'
 import { getApplicationLifecycle } from './applicationLifecycle'
+import type { ApplicationPlanningRecoveryProjection } from './applicationPlanningRecovery'
+import {
+  beginConnectionRequest,
+  completeConnectionRequest,
+  connectionAllowsMutation,
+  failConnectionRequest,
+  initialConnectionState,
+  type ConnectionState
+} from './connectionState'
 
 export type ActivePlanningStatus = 'error' | 'ready' | 'running'
-export type PlanningTransportState = 'idle' | 'running' | 'reconciling' | 'uncertain'
+export type PlanningTransportState = 'idle' | 'running' | 'reconciling'
 
 export type ApplicationPlanningCurrentState = {
   application: ApplicationConfig
   lifecycle: ApplicationLifecycle
   threadId: string
   transportState: PlanningTransportState
+  /** Renderer 到 Backend 的通信状态；不包含任何 Workflow Recovery 事实。 */
+  connection: ConnectionState
   /** 当前 renderer 是否由持久化状态恢复该规划，用于只执行一次本地产物冷恢复。 */
   restoreArtifactsFromDisk?: boolean
   /** 当前规划会话最近一次模型/Workflow 错误，仅用于前端实时展示。 */
   error?: string
-  /** Renderer 暂时无法确认后端权威状态时的同步错误。 */
+  /** 当前规划状态只读同步失败时的界面提示。 */
   syncError?: string
   workflow?: WorkflowRunPayload
+  /** Backend 根据 Durable Execution、checkpoint 与 Native Interrupt 生成的唯一恢复解释。 */
+  recovery?: ApplicationPlanningRecoveryProjection
 }
 
 export type ApplicationPlanningCurrentEvent =
@@ -47,19 +60,27 @@ export type ApplicationPlanningCurrentEvent =
       error: string
       workflow?: WorkflowRunPayload
     }
-  | { type: 'reconcile_started'; applicationId: string; threadId: string }
+  | {
+      type: 'reconcile_started'
+      applicationId: string
+      threadId: string
+      requestGeneration: number
+    }
   | {
       type: 'reconcile_received'
       applicationId: string
       threadId: string
       lifecycle: ApplicationLifecycle
       workflow: WorkflowRunPayload
+      recovery: ApplicationPlanningRecoveryProjection
+      requestGeneration: number
     }
   | {
       type: 'reconcile_failed'
       applicationId: string
       threadId: string
       error: string
+      requestGeneration: number
     }
   | { type: 'clear_error'; applicationId: string; threadId: string }
   | {
@@ -137,6 +158,38 @@ function mergePlanningRefresh(
   return { ...base, extensions }
 }
 
+/** 按持久 lifecycle revision 合并 GET-time recovery projection，避免旧帧覆盖新状态。 */
+function mergeExecutionRecovery(
+  base: ApplicationLifecycle,
+  current: ApplicationLifecycle,
+  incoming: ApplicationLifecycle
+): ApplicationLifecycle {
+  const currentProjection = current.extensions?.executionRecovery
+  const incomingProjection = incoming.extensions?.executionRecovery
+  let projection: typeof currentProjection
+
+  if (incoming.revision < current.revision) {
+    // 旧持久 revision 的 GET 不能覆盖更新状态。
+    projection = currentProjection
+  } else if (incomingProjection) {
+    // 同 revision / 新 revision 的 GET projection 都是最新 runtime authority。
+    projection = incomingProjection
+  } else {
+    // 普通 Workflow lifecycle 帧没有 GET-time projection，不能因此清掉已有 projection。
+    projection = currentProjection
+  }
+
+  if (projection === base.extensions?.executionRecovery) return base
+
+  const extensions = { ...base.extensions }
+  if (projection) extensions.executionRecovery = projection
+  else delete extensions.executionRecovery
+  return {
+    ...base,
+    extensions
+  }
+}
+
 /**
  * 按应用标识和单调 revision 合并持久化 lifecycle。
  * planningRefresh 是 Backend GET 时临时计算的恢复投影，不参与持久化 revision；
@@ -148,7 +201,11 @@ export function latestApplicationLifecycle(
 ): ApplicationLifecycle {
   if (!current || current.application.id !== incoming.application.id) return incoming
   const base = incoming.revision > current.revision ? incoming : current
-  return mergePlanningRefresh(base, current, incoming)
+  return mergeExecutionRecovery(
+    mergePlanningRefresh(base, current, incoming),
+    current,
+    incoming
+  )
 }
 
 // 直接根据权威 lifecycle 状态计算首页展示状态。
@@ -168,7 +225,7 @@ export function applicationPlanningDisplayStatus(
   state: ApplicationPlanningCurrentState
 ): ActivePlanningStatus {
   if (planningTransportBusy(state)) return 'running'
-  if (state.transportState === 'uncertain' || state.syncError || state.error) return 'error'
+  if (state.error) return 'error'
   return activePlanningStatus(state.lifecycle)
 }
 
@@ -183,7 +240,40 @@ export function planningTransportBusy(
 export function planningMutationBlocked(
   state?: ApplicationPlanningCurrentState
 ): boolean {
-  return Boolean(state && state.transportState !== 'idle')
+  return Boolean(
+    state &&
+      (state.transportState !== 'idle' || !connectionAllowsMutation(state.connection))
+  )
+}
+
+/** 从恢复投影、Workflow、lifecycle 与当前运行态中恢复真实失败原因，绝不使用恢复说明覆盖错误。 */
+function recoverablePlanningFailureMessage(
+  current: ApplicationPlanningCurrentState,
+  workflow: WorkflowRunPayload,
+  lifecycle: ApplicationLifecycle,
+  recovery: ApplicationPlanningRecoveryProjection
+): string {
+  const diagnosticMessage = recovery.failureDiagnostic?.message?.trim()
+  if (diagnosticMessage) return diagnosticMessage
+
+  const workflowFailure =
+    workflow.summary.status === 'failed' ? workflow.summary.message?.trim() : ''
+  if (workflowFailure) return workflowFailure
+
+  const lifecycleFailure =
+    lifecycle.initialization.status === 'failed' ? lifecycle.error?.message?.trim() : ''
+  if (lifecycleFailure) return lifecycleFailure
+
+  const currentError = current.error?.trim()
+  if (currentError && currentError !== recovery.message.trim()) return currentError
+
+  if (recovery.failureDiagnostic?.httpStatus) {
+    return `HTTP ${recovery.failureDiagnostic.httpStatus}`
+  }
+
+  if (recovery.failureDiagnostic?.code) return recovery.failureDiagnostic.code
+
+  return '上一次计划执行失败。'
 }
 
 /** 合并 Workflow 及其 lifecycle，并保留同一运行中的原生中断投影。 */
@@ -200,6 +290,10 @@ function reducePlanningWorkflow(
   if (mergedWorkflow === current.workflow && lifecycle === current.lifecycle) return current
   return {
     ...current,
+    connection: completeConnectionRequest(
+      current.connection,
+      current.connection.requestGeneration
+    ),
     lifecycle,
     workflow: mergedWorkflow
   }
@@ -215,7 +309,11 @@ export function reduceApplicationPlanningCurrentState(
   }
 
   if (event.type === 'run_started') {
-    return { ...current, error: undefined, syncError: undefined, transportState: 'running' }
+    return {
+      ...current,
+      error: undefined,
+      transportState: 'running'
+    }
   }
   if (event.type === 'run_settled') {
     return { ...current, transportState: 'idle' }
@@ -224,16 +322,26 @@ export function reduceApplicationPlanningCurrentState(
     return current.error ? { ...current, error: undefined } : current
   }
   if (event.type === 'reconcile_started') {
-    return { ...current, syncError: undefined, transportState: 'reconciling' }
-  }
-  if (event.type === 'reconcile_failed') {
     return {
       ...current,
-      syncError: event.error.trim() || '当前规划状态尚未确认，请重新同步状态。',
-      transportState: 'uncertain'
+      connection: beginConnectionRequest(current.connection, event.requestGeneration),
+      transportState: 'reconciling'
+    }
+  }
+  if (event.type === 'reconcile_failed') {
+    if (event.requestGeneration < current.connection.requestGeneration) return current
+    return {
+      ...current,
+      connection: failConnectionRequest(
+        current.connection,
+        event.requestGeneration,
+        event.error
+      ),
+      transportState: 'idle'
     }
   }
   if (event.type === 'reconcile_received') {
+    if (event.requestGeneration < current.connection.requestGeneration) return current
     if (
       event.lifecycle.application.id !== current.application.id ||
       event.workflow.threadId !== current.threadId
@@ -249,7 +357,20 @@ export function reduceApplicationPlanningCurrentState(
         : event.lifecycle
     )
     let error = current.error
-    if (event.workflow.summary.status === 'failed') {
+    if (event.recovery.classification === 'ready_to_continue') {
+      error = recoverablePlanningFailureMessage(
+        current,
+        event.workflow,
+        lifecycle,
+        event.recovery
+      )
+    } else if (
+      ['failed', 'blocked', 'conflict', 'legacy_unverified'].includes(
+        event.recovery.classification
+      )
+    ) {
+      error = event.recovery.message
+    } else if (event.workflow.summary.status === 'failed') {
       error = event.workflow.summary.message || current.error || '规划运行失败。'
     } else if (lifecycle.initialization.status === 'failed') {
       error = lifecycle.error?.message || current.error || '规划运行失败。'
@@ -260,8 +381,9 @@ export function reduceApplicationPlanningCurrentState(
       ...current,
       workflow: event.workflow,
       lifecycle,
+      recovery: event.recovery,
       error,
-      syncError: undefined,
+      connection: completeConnectionRequest(current.connection, event.requestGeneration),
       transportState: 'idle'
     }
   }
@@ -273,7 +395,14 @@ export function reduceApplicationPlanningCurrentState(
   if (event.type === 'lifecycle_received') {
     if (event.lifecycle.application.id !== current.application.id) return current
     const lifecycle = latestApplicationLifecycle(current.lifecycle, event.lifecycle)
-    return lifecycle === current.lifecycle ? current : { ...current, lifecycle }
+    return {
+      ...current,
+      connection: completeConnectionRequest(
+        current.connection,
+        current.connection.requestGeneration
+      ),
+      lifecycle
+    }
   }
   if (event.type === 'workflow_received') {
     return reducePlanningWorkflow(current, event.workflow)
@@ -281,7 +410,15 @@ export function reduceApplicationPlanningCurrentState(
 
   const next = event.workflow ? reducePlanningWorkflow(current, event.workflow) : current
   const error = event.error.trim() || '规划运行失败。'
-  return { ...next, error, transportState: 'idle' }
+  return {
+    ...next,
+    connection: completeConnectionRequest(
+      next.connection,
+      next.connection.requestGeneration
+    ),
+    error,
+    transportState: 'idle'
+  }
 }
 
 // 从应用目录逐一读取生命周期，并返回全部未完成创建流程。
@@ -304,6 +441,7 @@ export async function loadActiveApplicationPlannings(): Promise<ApplicationPlann
         lifecycle,
         restoreArtifactsFromDisk: true,
         threadId,
+        connection: initialConnectionState(true),
         transportState: 'idle'
       })
     } catch (error) {
