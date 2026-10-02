@@ -207,18 +207,23 @@ function WorkbenchPage({
       try {
         const applicationConfig = await loadWorkspaceApplicationConfig(application.workspaceRoot)
         if (!active) return
-        setWorkspaceApplication((prev) => ({
-          ...application,
-          ...applicationConfig,
-          // 磁盘是分支表的权威来源；只在磁盘没有分支表时才回退到内存那份。
-          // 详见 resolveBranchChain 的说明（此前无条件取内存，会把磁盘上的多分支冲成单条）。
-          ...resolveBranchChain({
-            diskBranches: applicationConfig.branches,
-            diskBranchName: applicationConfig.branchName,
-            memoryBranches: prev.branches,
-            memoryBranchName: prev.branchName
-          })
-        }))
+        // application.json 只保存工作区配置，不拥有首页索引中的页面元数据；合并时保留索引字段，避免进入工作台后把 pages/defaultPage 覆盖成 undefined。
+        setWorkspaceApplication((prev) => {
+          const pages = Array.isArray(prev.pages) && prev.pages.length > 0 ? prev.pages : ['页面']
+          return {
+            ...prev,
+            ...applicationConfig,
+            pages,
+            defaultPage: prev.defaultPage || pages[0],
+            // 磁盘是分支表的权威来源；只在磁盘没有分支表时才回退到内存那份。
+            ...resolveBranchChain({
+              diskBranches: applicationConfig.branches,
+              diskBranchName: applicationConfig.branchName,
+              memoryBranches: prev.branches,
+              memoryBranchName: prev.branchName
+            })
+          }
+        })
       } catch (error) {
         console.warn('读取工作区 application.json 失败，终止本次工作台加载。', error)
         failWorkbenchEntry(formatWorkbenchEntryError(error, '读取工作区 application.json 失败。'))

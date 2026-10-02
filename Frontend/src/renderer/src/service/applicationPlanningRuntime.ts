@@ -447,9 +447,10 @@ export class ApplicationPlanningRuntime {
       if (reason instanceof ApplicationPlanningCheckpointNotFoundError) {
         if (this.isFreshInitialState(current)) {
           this.dispatch({
-            type: 'run_settled',
+            type: 'reconcile_checkpoint_missing',
             applicationId: this.applicationId,
-            threadId: this.threadId
+            threadId: this.threadId,
+            requestGeneration: token
           })
         } else {
           this.dispatch({

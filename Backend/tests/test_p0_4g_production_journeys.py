@@ -571,18 +571,18 @@ def _write_real_workbench_formal_artifacts(
     }
     write_json(
         workspace,
-        ".xcodeagent/specs/requirement-spec.json",
+        ".devagentstudio/specs/requirement-spec.json",
         requirement_spec,
     )
-    write_json(workspace, ".xcodeagent/plans/product-plan.json", product_plan)
+    write_json(workspace, ".devagentstudio/plans/product-plan.json", product_plan)
     write_json(
         workspace,
-        ".xcodeagent/specs/ui-designs.json",
+        ".devagentstudio/specs/ui-designs.json",
         {"confirmation_status": "skipped", "pages": []},
     )
     write_json(
         workspace,
-        ".xcodeagent/plans/technical-plan.json",
+        ".devagentstudio/plans/technical-plan.json",
         technical_plan,
     )
     write_confirmed_endpoint_designs(workspace, plan)
@@ -624,7 +624,23 @@ def _write_planning_lifecycle(
     stage: ApplicationLifecycleStage,
     status: ApplicationLifecycleStatus,
 ) -> None:
-    """写入生产 Graph 所需的当前 application lifecycle ownership。"""
+    """写入生产 Graph 所需的当前应用配置与 lifecycle ownership。"""
+
+    write_json(
+        workspace,
+        ".devagentstudio/application.json",
+        {
+            "schemaVersion": 6,
+            "configRevision": 1,
+            "appName": "生产旅程应用",
+            "datasource": {"type": "database"},
+            "auth": {"enable": False},
+            "authorization": {
+                "enabled": False,
+                "initialAdministratorSubjects": [],
+            },
+        },
+    )
 
     lifecycle = create_application_lifecycle(
         application_id=project_id,
@@ -685,7 +701,7 @@ async def _seed_planning_checkpoint(
     write_ui_designs_json(state, ui_designs)
     write_json(
         workspace,
-        ".xcodeagent/plans/technical-plan.json",
+        ".devagentstudio/plans/technical-plan.json",
         {
             "confirmation_status": "confirmed",
             "version": "baseline",
@@ -797,10 +813,10 @@ async def _seed_workbench_middle_crash_checkpoint(
         write_json(
             workspace,
             {
-                "requirement_spec": ".xcodeagent/specs/requirement-spec.json",
-                "product_plan": ".xcodeagent/plans/product-plan.json",
-                "ui_designs": ".xcodeagent/specs/ui-designs.json",
-                "technical_plan": ".xcodeagent/plans/technical-plan.json",
+                "requirement_spec": ".devagentstudio/specs/requirement-spec.json",
+                "product_plan": ".devagentstudio/plans/product-plan.json",
+                "ui_designs": ".devagentstudio/specs/ui-designs.json",
+                "technical_plan": ".devagentstudio/plans/technical-plan.json",
             }[key],
             payload,
         )
@@ -1847,10 +1863,10 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
             write_json(
                 workspace,
                 {
-                    "requirement_spec": ".xcodeagent/specs/requirement-spec.json",
-                    "product_plan": ".xcodeagent/plans/product-plan.json",
-                    "ui_designs": ".xcodeagent/specs/ui-designs.json",
-                    "technical_plan": ".xcodeagent/plans/technical-plan.json",
+                    "requirement_spec": ".devagentstudio/specs/requirement-spec.json",
+                    "product_plan": ".devagentstudio/plans/product-plan.json",
+                    "ui_designs": ".devagentstudio/specs/ui-designs.json",
+                    "technical_plan": ".devagentstudio/plans/technical-plan.json",
                 }[key],
                 payload,
             )
@@ -2015,7 +2031,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
             dependency_release.wait(timeout=30)
             dependency_finished.set()
             return {
-                "project_dir": str(Path(workspace_root) / ".xcodeagent" / "ui-design")
+                "project_dir": str(Path(workspace_root) / ".devagentstudio" / "ui-design")
             }
 
         with tempfile.TemporaryDirectory() as raw_workspace:

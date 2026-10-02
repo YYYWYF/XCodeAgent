@@ -9,11 +9,13 @@ from unittest.mock import patch
 
 from app.agents.test_generation.generator import _build_prompt
 from app.domain.application_lifecycle import (
+    ApplicationInitialization,
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
     PendingInteractionType,
     WorkbenchExecutionStatus,
 )
+from app.domain.application_revision import RevisionImpact, RevisionTarget
 from app.graph.subgraphs.testing import collect_unit_test_targets
 from app.services.api_design import ApiDesignError
 from app.services.application_lifecycle import (
@@ -22,6 +24,7 @@ from app.services.application_lifecycle import (
     update_workbench_execution,
     write_application_lifecycle,
 )
+from app.services.application_revision_lifecycle import register_revision_impact
 from app.protocols.workflow.request import (
     _build_execution_scope,
     _resume_values,
@@ -1411,7 +1414,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 "confirmation_status": "confirmed",
                 "app": {"name": "任务中心"},
             }
-            plan_path = workspace / ".xcodeagent" / "plans" / "technical-plan.json"
+            plan_path = workspace / ".devagentstudio" / "plans" / "technical-plan.json"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(json.dumps(baseline), encoding="utf-8")
 

@@ -86,6 +86,7 @@ import {
   planExecutionForPage,
   withWorkflowExecutionStatus,
   workflowCodeReviewRetry,
+  workflowEndedPlanControl,
   workflowInteractionAvailability
 } from '../planExecutionMode'
 import { maybeRefreshPendingPlanLifecycleAfterGeneration } from '../pendingPlanLifecycleRefresh'
@@ -735,13 +736,16 @@ export function useWorkflowConversation({
   const loading = Boolean(activeRun)
   const stopping = activeRun?.status === 'stopping'
   const conversationRunning = Boolean(activeRun?.conversation)
-  const planEnded = Boolean(endedPlanSessionKeys[activeRuntimeKey || draftKey])
   const error = activeRuntimeKey ? errors[activeRuntimeKey] : undefined
   const activeWorkflow = activeRuntimeKey
     ? activeRun
       ? liveWorkflows[activeRuntimeKey]
       : (liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey)))
     : undefined
+  // 结束控制的成功回执属于当前会话消息，即使本地生命周期快照晚到也必须立即恢复输入。
+  const planEnded = Boolean(
+    endedPlanSessionKeys[activeRuntimeKey || draftKey] || workflowEndedPlanControl(activeWorkflow)
+  )
   activePlanControlContextRef.current = {
     identity: activeSession,
     targetRunId: planControlTargetFromWorkflow(activeWorkflow, selectedPageId)

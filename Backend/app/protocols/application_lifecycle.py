@@ -25,6 +25,7 @@ from app.services.build_task_plan_lifecycle import (
     release_session_owned_pending_build_task_plan,
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
+from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.service import WorkspaceBootstrapService
 

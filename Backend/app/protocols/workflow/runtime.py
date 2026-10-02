@@ -81,6 +81,22 @@ from app.services.application_lifecycle import (
     load_application_lifecycle,
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
+from app.services.execution_recovery import (
+    assert_run_id_available,
+    best_effort_recovery_observation,
+    durable_execution_status,
+    observe_execution_cancelled,
+    observe_execution_failed,
+    observe_execution_finished,
+    observe_execution_started,
+    observe_node_started,
+)
+from app.services.execution_failure_classifier import sanitize_failure_diagnostic
+from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext, WorkflowReentryExecutor
+from app.services.execution_lease_heartbeat import maintain_execution_heartbeat, stop_execution_heartbeat
+from app.services.execution_recovery_scanner import reconcile_workspace_recovery
+from app.services.backend_instance import current_backend_instance
+from app.services.workspace_process_registry import workspace_process_registry
 from app.services.template_reconcile.template_preparation import (
     template_preparation_projection_v2,
 )
@@ -468,6 +484,27 @@ def build_workflow_ag_ui_stream(
         application_planning_run_lock_instance: asyncio.Lock | None = None
         application_planning_run_lock_acquired = False
         planning_refresh_generation_projection_sent = False
+        active_graph: Any | None = (
+            native_recovery_context.graph if native_recovery_context is not None else None
+        )
+        config: dict[str, Any] | None = (
+            native_recovery_context.fork_config if native_recovery_context is not None else None
+        )
+        recovery_observation_config: dict[str, Any] | None = (
+            native_recovery_context.observation_config
+            if native_recovery_context is not None
+            else None
+        )
+        heartbeat_task: asyncio.Task[None] | None = (
+            native_recovery_context.heartbeat_task if native_recovery_context is not None else None
+        )
+        backend_identity = current_backend_instance()
+        durable_execution_started = native_recovery_context is not None
+        workflow_lifecycle_owned = bool(
+            native_recovery_context is not None
+            and native_recovery_context.source_execution.execution_kind == "workbench"
+            and native_recovery_context.lifecycle_payload is not None
+        )
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Workflow stream must run inside an asyncio task.")

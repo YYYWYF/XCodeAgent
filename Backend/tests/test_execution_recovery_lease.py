@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from app.branding import WORKSPACE_ARTIFACT_DIR
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
@@ -639,7 +640,7 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
             owner_backend_instance_id="backend-old",
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
         )
-        lifecycle_before = self.workspace / ".xcodeagent" / "application-lifecycle.json"
+        lifecycle_before = self.workspace / WORKSPACE_ARTIFACT_DIR / "application-lifecycle.json"
         before_text = lifecycle_before.read_text(encoding="utf-8")
 
         frames = [

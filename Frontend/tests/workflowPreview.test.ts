@@ -37,6 +37,7 @@ import {
   withWorkflowExecutionStatus,
   workflowCanRetryFailedTasks,
   workflowCodeReviewRetry,
+  workflowEndedPlanControl,
   workflowInteractionAvailability,
   workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
@@ -1217,6 +1218,18 @@ test('权威生命周期已移除 execution 时忽略历史取消快照并恢复
     deriveDisplayedPlanExecutionMode(undefined, 'requires_user_input', false, true),
     'idle'
   )
+})
+
+test('结束计划的成功控制回执覆盖迟到的旧执行快照并恢复输入框', () => {
+  const workflow = previewWorkflow({ status: 'completed', phase: 'plan_control' })
+  workflow.summary.planControl = {
+    action: 'end',
+    status: 'ended',
+    targetRunId: 'run-orders',
+    message: '计划已结束，工作区已恢复自由输入。'
+  }
+
+  assert.equal(workflowEndedPlanControl(workflow), true)
 })
 
 test('当前请求仍在运行时即使生命周期暂为空也保持输入锁', () => {

@@ -68,6 +68,7 @@ import {
   planningRequirementsConfirmed,
   ensureApplicationPlanningAction,
   planningWorkflowRequiresUserInput,
+  workflowCardRequiresUserInput,
   planningWorkflowSettlesLoading,
   planningWorkflowUiDesignSkipped,
   retainApplicationPlanningInterrupt,
@@ -2760,7 +2761,9 @@ export default function AiChatPanel({
         // 例外：计划阶段 running 期间创建卡片显示生成加载态，
         // 让用户看到规划进度，而非长时间无反馈。
         const hasContent = Boolean(chunk.content?.trim())
-        const requiresInput = planningWorkflowRequiresUserInput(incomingWorkflow)
+        const requiresInput = isApplicationPlanningPhase
+          ? planningWorkflowRequiresUserInput(incomingWorkflow)
+          : workflowCardRequiresUserInput(incomingWorkflow)
         const chunkActivity = planningWorkflowActivity(incomingWorkflow)
         const isPlanningRunning =
           incomingWorkflow.summary?.status === 'running' &&
@@ -3301,7 +3304,7 @@ export default function AiChatPanel({
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
   const activePageTitle =
-    activePageOption?.label || application.defaultPage || application.pages[0] || '页面'
+    activePageOption?.label || application.defaultPage || application.pages?.[0] || '页面'
   const activePage = useMemo(
     () => findPageMenuItem(application.menus?.items || [], activePageTitle),
     [activePageTitle, application.menus?.items]

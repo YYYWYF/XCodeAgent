@@ -38,6 +38,25 @@ export function resolveWorkflowForDisplay(
   return undefined
 }
 
+/** 判断当前 Workflow 是否已经收到 Backend 确认结束计划的控制回执。 */
+export function workflowEndedPlanControl(workflow?: WorkflowRunPayload): boolean {
+  if (!workflow) return false
+  const candidates = [
+    workflow.summary.planControl,
+    workflow.state?.planControl,
+    workflow.result?.planControl
+  ]
+  return candidates.some((candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false
+    const control = candidate as Record<string, unknown>
+    return (
+      control.action === 'end' &&
+      (control.status === 'ended' || control.status === 'already_ended')
+    )
+  })
+}
+
+
 /** 判断 Workflow 是否承载 Build DAG 确认，统一兼容当前 AG-UI 投影位置。 */
 function isDagConfirmationWorkflow(workflow: WorkflowRunPayload): boolean {
   return workflowClarification(workflow)?.mode === 'build_task_plan_confirmation'

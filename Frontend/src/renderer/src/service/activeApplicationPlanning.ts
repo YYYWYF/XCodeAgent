@@ -82,6 +82,12 @@ export type ApplicationPlanningCurrentEvent =
       error: string
       requestGeneration: number
     }
+  | {
+      type: 'reconcile_checkpoint_missing'
+      applicationId: string
+      threadId: string
+      requestGeneration: number
+    }
   | { type: 'clear_error'; applicationId: string; threadId: string }
   | {
       type: 'application_received'
@@ -337,6 +343,14 @@ export function reduceApplicationPlanningCurrentState(
         event.requestGeneration,
         event.error
       ),
+      transportState: 'idle'
+    }
+  }
+  if (event.type === 'reconcile_checkpoint_missing') {
+    if (event.requestGeneration < current.connection.requestGeneration) return current
+    return {
+      ...current,
+      connection: completeConnectionRequest(current.connection, event.requestGeneration),
       transportState: 'idle'
     }
   }

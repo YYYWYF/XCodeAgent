@@ -20,6 +20,7 @@ from ag_ui.core import (
 )
 from ag_ui.encoder import EventEncoder
 
+from app.persistence.execution_recovery import get_execution
 from app.services.preview_runtime_guard import maintenance_lock, require_no_maintenance
 
 from app.services.application_lifecycle import (
@@ -440,15 +441,13 @@ def _raise_plan_control_error(
     raise PlanControlError(status=status, code=code, message=message)
 
 
-def _assert_durable_control_owner(
+def _assert_durable_control_target(
     *,
     workspace: str,
     target_run_id: str,
-    thread_id: str,
-    owner_session_id: str | None,
     durable_execution: Any,
 ) -> None:
-    """校验 Durable Execution 的工作区、线程和会话归属。"""
+    """校验 Durable Execution 的工作区、类型和精确 runId 身份。"""
 
     if str(getattr(durable_execution, "execution_kind", "")).strip() != "workbench":
         _raise_plan_control_error(
@@ -457,16 +456,45 @@ def _assert_durable_control_owner(
             message="目标运行不属于当前工作台计划，不能执行该控制动作。",
         )
     durable_workspace = str(getattr(durable_execution, "workspace", "")).strip()
-    durable_thread_id = str(getattr(durable_execution, "thread_id", "")).strip()
     if (
         not durable_workspace
         or _workspace_key(durable_workspace) != _workspace_key(workspace)
-        or durable_thread_id != thread_id
     ):
         _raise_plan_control_error(
             status="ownership_conflict",
             code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
-            message="目标运行不属于当前工作区或会话，不能执行该控制动作。",
+            message="目标运行不属于当前工作区，不能执行该控制动作。",
+        )
+    durable_run_id = str(getattr(durable_execution, "run_id", "")).strip()
+    if durable_run_id != target_run_id:
+        _raise_plan_control_error(
+            status="ownership_conflict",
+            code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
+            message="目标运行身份校验失败，不能执行该控制动作。",
+        )
+
+
+def _assert_durable_control_owner(
+    *,
+    workspace: str,
+    target_run_id: str,
+    thread_id: str,
+    owner_session_id: str | None,
+    durable_execution: Any,
+) -> None:
+    """校验 Stop 所需的 Durable Execution 工作区、线程和会话归属。"""
+
+    _assert_durable_control_target(
+        workspace=workspace,
+        target_run_id=target_run_id,
+        durable_execution=durable_execution,
+    )
+    durable_thread_id = str(getattr(durable_execution, "thread_id", "")).strip()
+    if durable_thread_id != thread_id:
+        _raise_plan_control_error(
+            status="ownership_conflict",
+            code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
+            message="目标运行由其他 thread 持有，不能执行该控制动作。",
         )
     durable_owner_session_id = str(
         getattr(durable_execution, "owner_session_id", "") or ""
@@ -481,13 +509,6 @@ def _assert_durable_control_owner(
             code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
             message="目标运行由其他会话持有，不能执行该控制动作。",
         )
-    durable_run_id = str(getattr(durable_execution, "run_id", "")).strip()
-    if durable_run_id != target_run_id:
-        _raise_plan_control_error(
-            status="ownership_conflict",
-            code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
-            message="目标运行身份校验失败，不能执行该控制动作。",
-        )
 
 
 async def _resolve_plan_control_target(
@@ -496,8 +517,13 @@ async def _resolve_plan_control_target(
     target_run_id: str,
     thread_id: str,
     owner_session_id: str | None,
+    enforce_ownership: bool = True,
 ) -> tuple[PlanControlTargetStatus, Any | None, Any | None]:
-    """依据当前 lifecycle 和 Durable Execution 解析计划控制目标。"""
+    """依据当前 lifecycle 和 Durable Execution 解析计划控制目标。
+
+    Stop 必须保持原始 thread/session 的恢复权；End 是终止性清理，只按当前
+    workspace 与精确 target runId 收口，因此由调用方显式关闭 ownership 校验。
+    """
 
     if not str(workspace or "").strip():
         _raise_plan_control_error(
@@ -541,14 +567,33 @@ async def _resolve_plan_control_target(
         else None
     )
     if active_execution is not None:
-        active_thread_id = str(getattr(active_execution, "thread_id", "")).strip()
-        if active_thread_id != thread_id:
-            _raise_plan_control_error(
-                status="ownership_conflict",
-                code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
-                message="目标运行由其他 thread 持有，不能执行该控制动作。",
-            )
         if durable_execution is not None:
+            if enforce_ownership:
+                _assert_durable_control_owner(
+                    workspace=workspace,
+                    target_run_id=target_run_id,
+                    thread_id=thread_id,
+                    owner_session_id=owner_session_id,
+                    durable_execution=durable_execution,
+                )
+            else:
+                _assert_durable_control_target(
+                    workspace=workspace,
+                    target_run_id=target_run_id,
+                    durable_execution=durable_execution,
+                )
+        if enforce_ownership:
+            active_thread_id = str(getattr(active_execution, "thread_id", "")).strip()
+            if active_thread_id != thread_id:
+                _raise_plan_control_error(
+                    status="ownership_conflict",
+                    code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
+                    message="目标运行由其他 thread 持有，不能执行该控制动作。",
+                )
+        return "active", lifecycle, active_execution
+
+    if durable_execution is not None:
+        if enforce_ownership:
             _assert_durable_control_owner(
                 workspace=workspace,
                 target_run_id=target_run_id,
@@ -556,16 +601,12 @@ async def _resolve_plan_control_target(
                 owner_session_id=owner_session_id,
                 durable_execution=durable_execution,
             )
-        return "active", lifecycle, active_execution
-
-    if durable_execution is not None:
-        _assert_durable_control_owner(
-            workspace=workspace,
-            target_run_id=target_run_id,
-            thread_id=thread_id,
-            owner_session_id=owner_session_id,
-            durable_execution=durable_execution,
-        )
+        else:
+            _assert_durable_control_target(
+                workspace=workspace,
+                target_run_id=target_run_id,
+                durable_execution=durable_execution,
+            )
         # lifecycle 已没有该 execution，Durable Execution 用来证明这是同一合法目标。
         return "already_ended", lifecycle, None
 
@@ -618,6 +659,7 @@ async def _execute_workbench_plan_control(
         target_run_id=target_run_id,
         thread_id=thread_id,
         owner_session_id=owner_session_id,
+        enforce_ownership=action != "end",
     )
     if action == "end":
         if target_status == "already_ended":
@@ -632,12 +674,13 @@ async def _execute_workbench_plan_control(
                 run_id=target_run_id,
             )
         except ApplicationLifecycleConflictError as exc:
-            # 另一个合法 End 可能刚刚完成；重新解析只接受同一 thread/session 的幂等重试。
+            # 另一个 End 可能刚刚完成；重新解析仍只接受同一 workspace/runId。
             retry_status, retry_lifecycle, _ = await _resolve_plan_control_target(
                 workspace=workspace,
                 target_run_id=target_run_id,
                 thread_id=thread_id,
                 owner_session_id=owner_session_id,
+                enforce_ownership=False,
             )
             if retry_status == "already_ended":
                 return (
@@ -869,73 +912,82 @@ def build_workflow_plan_control_ag_ui_stream(
     message_id = f"plan-control:{run_id}"
 
     async def stream() -> AsyncIterator[str]:
-        if action not in {"stop", "end", "abandon"}:
-            raise ValueError(f"不支持的计划控制动作：{action}")
-        if not target_run_id:
-            raise ValueError("计划控制动作缺少目标 runId。")
-        if action == "abandon":
-            # deleting 检查必须与 Abandon 写入共用同一把锁，避免检查后再加锁的 TOCTOU。
-            with build_task_plan_lifecycle_lock(workspace):
-                if workflow_run_registry.is_workspace_deleting(workspace):
-                    raise ApplicationLifecycleConflictError(
-                        "当前应用正在删除，不能放弃 Pending Build DAG。"
-                    )
-                _assert_pending_control_owner(workspace, target_run_id, owner_session_id)
-                result = abandon_pending_build_task_plan(
-                    {"workspace": workspace},
-                    planning_run_id=planning_run_id,
-                    draft_digest=draft_digest,
+        yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
+        yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
+        try:
+            if action not in {"stop", "end", "abandon"}:
+                _raise_plan_control_error(
+                    status="invalid_request",
+                    code="PLAN_CONTROL_INVALID_ACTION",
+                    message=f"不支持的计划控制动作：{action}",
                 )
-                lifecycle = _planning_lifecycle_payload(workspace)
-            for frame in _build_abandon_frames(
+            if action == "abandon":
+                if not target_run_id:
+                    _raise_plan_control_error(
+                        status="invalid_request",
+                        code="PLAN_CONTROL_TARGET_MISSING",
+                        message="计划控制动作缺少目标 runId。",
+                    )
+                with build_task_plan_lifecycle_lock(workspace):
+                    if workflow_run_registry.is_workspace_deleting(workspace):
+                        raise ApplicationLifecycleConflictError(
+                            "当前应用正在删除，不能放弃 Pending Build DAG。"
+                        )
+                    _assert_pending_control_owner(workspace, target_run_id, owner_session_id)
+                    result = abandon_pending_build_task_plan(
+                        {"workspace": workspace},
+                        planning_run_id=planning_run_id,
+                        draft_digest=draft_digest,
+                    )
+                    lifecycle = _planning_lifecycle_payload(workspace)
+                for frame in _build_abandon_frames(
+                    encoder=encoder,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    message_id=message_id,
+                    result=result,
+                    lifecycle=lifecycle,
+                ):
+                    yield frame
+                return
+            status, lifecycle, message = await _execute_workbench_plan_control(
+                action=action,
+                workspace=workspace,
+                target_run_id=target_run_id,
+                thread_id=thread_id,
+                owner_session_id=owner_session_id,
+            )
+            workflow = _build_plan_control_workflow(
+                action=action,
+                status=status,
+                target_run_id=target_run_id,
+                thread_id=thread_id,
+                run_id=run_id,
+                message=message,
+                lifecycle=lifecycle,
+            )
+            for frame in _build_plan_control_success_frames(
                 encoder=encoder,
                 thread_id=thread_id,
                 run_id=run_id,
                 message_id=message_id,
-                result=result,
+                workflow=workflow,
+                message=message,
                 lifecycle=lifecycle,
             ):
                 yield frame
-            return
-        _assert_execution_control_owner(workspace, target_run_id, thread_id)
-        lifecycle = application_lifecycle_payload(
-            end_workbench_execution(workspace, run_id=target_run_id)
-            if action == "end"
-            else stop_workbench_execution(workspace, run_id=target_run_id)
-        )
-        message = (
-            "计划已结束，工作区已恢复自由输入。"
-            if action == "end"
-            else "计划执行已暂停，可继续执行、调整计划或结束。"
-        )
-        workflow = {
-            "runId": run_id,
-            "threadId": thread_id,
-            "summary": {
-                "status": "cancelled",
-                "phase": "plan_control",
-                "message": message,
-                "lifecycle": lifecycle,
-            },
-            "events": [],
-            "state": {"status": "cancelled", "phase": "plan_control", "lifecycle": lifecycle},
-            "result": {"status": "cancelled", "phase": "plan_control", "lifecycle": lifecycle},
-        }
-        yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
-        yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
-        # 控制动作写入成功后立即广播生命周期，所有工作台区域共享同一 revision。
-        yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle))
-        yield encoder.encode(CustomEvent(name="workflow-run", value=workflow))
-        yield encoder.encode(StateSnapshotEvent(snapshot={"workflow": workflow}))
-        yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=message))
-        yield encoder.encode(TextMessageEndEvent(messageId=message_id))
-        yield encoder.encode(
-            RunFinishedEvent(
-                threadId=thread_id,
-                runId=run_id,
-                result={"workflow": workflow},
-            )
-        )
+        except Exception as error:
+            for frame in _build_plan_control_error_frames(
+                encoder=encoder,
+                action=action,
+                workspace=workspace,
+                target_run_id=target_run_id,
+                thread_id=thread_id,
+                run_id=run_id,
+                message_id=message_id,
+                error=error,
+            ):
+                yield frame
 
     return stream()
 

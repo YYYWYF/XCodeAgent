@@ -94,6 +94,7 @@ from app.services.database_crypto import (
     database_encryption_metadata,
     ensure_database_platform_key,
 )
+from app.services.backend_instance import current_backend_instance, initialize_backend_instance
 from app.services.ui_design_generation_pool import get_ui_design_generation_pool
 from app.services.workspace_bootstrap.service import workspace_bootstrap_service
 from app.tools import database_tools

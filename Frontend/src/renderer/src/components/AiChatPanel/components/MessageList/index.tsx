@@ -22,7 +22,8 @@ import {
   planningWorkflowActivity,
   planningWorkflowNeedsChatLoading,
   planningWorkflowPhase,
-  planningWorkflowRequiresUserInput
+  planningWorkflowRequiresUserInput,
+  workflowCardRequiresUserInput
 } from '../../../Welcome/planningWorkflowState'
 import type {
   ApplicationConfig,
@@ -762,7 +763,10 @@ export default function MessageList({
               )
               const finalResult = workflowFinalResultPresentation(currentPresentationWorkflow)
               const requiresClarification = Boolean(
-                planningCardWorkflow && planningWorkflowRequiresUserInput(planningCardWorkflow)
+                planningCardWorkflow &&
+                  (designPhasePlanning
+                    ? planningWorkflowRequiresUserInput(planningCardWorkflow)
+                    : workflowCardRequiresUserInput(planningCardWorkflow))
               )
               // 早期版本可能已把非修改回复挂回错误的审阅节点。若该回复本身就是
               // 当前 checkpoint 的唯一卡片宿主，允许它承载一次可恢复确认；正常同门禁回复仍去重到原卡。

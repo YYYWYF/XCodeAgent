@@ -216,6 +216,27 @@ export function planningWorkflowRequiresUserInput(workflow?: WorkflowRunPayload)
   return Boolean(applicationPlanningInterrupt(workflow))
 }
 
+// 判断通用消息卡片是否需要展示待用户处理状态；开发阶段的 API 映射等门禁不要求规划中断。
+export function workflowCardRequiresUserInput(workflow?: WorkflowRunPayload): boolean {
+  if (!workflow) return false
+  const clarificationCandidates = [
+    workflow.summary.clarification,
+    workflow.result?.clarification,
+    workflow.state?.clarification
+  ]
+  if (workflow.summary.status === 'requires_user_input') {
+    const hasProjectedClarification = clarificationCandidates.some(
+      (value) => value && typeof value === 'object'
+    )
+    if (!hasProjectedClarification) return true
+  }
+  return clarificationCandidates.some((value) => {
+    const clarification =
+      value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined
+    return clarification?.status === 'requires_user_input'
+  })
+}
+
 // 判断规划运行是否仍在实际生成；已投影待确认交互时即使 summary 暂留 running 也必须解锁输入。
 export function planningWorkflowIsActivelyRunning(workflow?: WorkflowRunPayload): boolean {
   return (

@@ -200,6 +200,8 @@ def workflow_capabilities() -> dict[str, Any]:
             "actions": ["stop", "end", "abandon"],
             "abandonIdentityFields": ["planningRunId", "draftDigest"],
             "abandonSemantics": "删除精确匹配的 PendingPlan，结束对应 Workflow execution；不取消 active Scheduler。",
+            "endSemantics": "按当前 workspace、Workbench 类型和精确 target runId 终止并清理目标 execution；不要求原始 thread/session 持有。",
+            "stopSemantics": "保留当前 execution 的 thread/session 持有校验，只暂停并保留恢复所需的 lifecycle 记录。",
         },
         "clarificationModes": {
             "api_design_required": {

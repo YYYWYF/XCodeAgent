@@ -4,7 +4,18 @@ import asyncio
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+from app.domain.application_lifecycle import (
+    ApplicationLifecycleStage,
+    ApplicationLifecycleStatus,
+)
+from app.services.application_lifecycle import (
+    create_application_lifecycle,
+    load_application_lifecycle,
+    start_workbench_execution,
+    write_application_lifecycle,
+)
 
 from app.protocols.workflow.run_control import (
     build_workflow_cancellation_ag_ui_stream,
@@ -12,6 +23,26 @@ from app.protocols.workflow.run_control import (
     WorkflowRunAlreadyActiveError,
     WorkflowRunRegistry,
 )
+
+
+def _write_ready_workbench_lifecycle(workspace: str) -> None:
+    """写入可启动工作台 execution 的最小生命周期快照。"""
+
+    state = create_application_lifecycle(
+        application_id="app-control-tests",
+        application_name="计划控制测试",
+    )
+    state = state.model_copy(
+        update={
+            "initialization": state.initialization.model_copy(
+                update={
+                    "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    "status": ApplicationLifecycleStatus.COMPLETED,
+                }
+            )
+        }
+    )
+    write_application_lifecycle(workspace, state)
 
 
 class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
@@ -80,6 +111,16 @@ class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
         """结束 execution 只更新 lifecycle，不再隐式改写或删除 Build plan。"""
 
         with tempfile.TemporaryDirectory() as directory:
+            _write_ready_workbench_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="dag",
+                page_id="dag",
+                thread_id="thread-control",
+                run_id="run-dag",
+                phase="build",
+            )
             lifecycle = {"revision": 2, "activeExecutions": {}}
             stream = build_workflow_plan_control_ag_ui_stream(
                 action="end", workspace=directory, target_run_id="run-dag",
@@ -105,6 +146,16 @@ class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
         """暂停 execution 与 Pending Abandon 保持独立。"""
 
         with tempfile.TemporaryDirectory() as directory:
+            _write_ready_workbench_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="active",
+                page_id="active",
+                thread_id="thread-control",
+                run_id="run-active",
+                phase="build",
+            )
             lifecycle = SimpleNamespace(model_dump=lambda **_kwargs: {})
             stream = build_workflow_plan_control_ag_ui_stream(
                 action="stop", workspace=directory, target_run_id="run-active",
@@ -126,6 +177,142 @@ class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
             abandon.assert_not_called()
             self.assertTrue(frames)
 
+    async def test_end_execution_ignores_origin_thread_and_releases_only_target_run(self) -> None:
+        """结束只按 workspace/runId 收口，不能误删同工作区的其他 execution。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_workbench_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="target-page",
+                page_id="target-page",
+                thread_id="owner-thread",
+                run_id="run-target",
+                phase="build",
+            )
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="survivor-page",
+                page_id="survivor-page",
+                thread_id="survivor-thread",
+                run_id="run-survivor",
+                phase="build",
+            )
+            durable_execution = SimpleNamespace(
+                execution_kind="workbench",
+                workspace=directory,
+                thread_id="owner-thread",
+                owner_session_id="owner-session",
+                run_id="run-target",
+            )
+            stream = build_workflow_plan_control_ag_ui_stream(
+                action="end",
+                workspace=directory,
+                target_run_id="run-target",
+                thread_id="different-thread",
+                run_id="request-control",
+                owner_session_id="different-session",
+            )
+
+            with patch(
+                "app.protocols.workflow.run_control.get_execution",
+                new=AsyncMock(return_value=durable_execution),
+            ), patch(
+                "app.protocols.workflow.run_control.workflow_run_registry.cancel"
+            ) as cancel:
+                frames = "".join([frame async for frame in stream])
+
+            persisted = load_application_lifecycle(directory)
+            self.assertIsNotNone(persisted)
+            assert persisted is not None
+            self.assertNotIn("run-target", persisted.active_executions)
+            self.assertIn("run-survivor", persisted.active_executions)
+            self.assertNotIn("target-page", persisted.resource_locks.pages)
+            self.assertIn("survivor-page", persisted.resource_locks.pages)
+            cancel.assert_not_called()
+            self.assertIn('"status":"ended"', frames)
+            self.assertNotIn("PLAN_CONTROL_OWNERSHIP_CONFLICT", frames)
+
+    async def test_stop_execution_rejects_different_origin_thread(self) -> None:
+        """暂停仍必须由原 execution thread 执行，不能借结束语义放宽恢复权。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_workbench_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="active-page",
+                page_id="active-page",
+                thread_id="owner-thread",
+                run_id="run-active",
+                phase="build",
+            )
+            stream = build_workflow_plan_control_ag_ui_stream(
+                action="stop",
+                workspace=directory,
+                target_run_id="run-active",
+                thread_id="different-thread",
+                run_id="request-control",
+            )
+
+            with patch(
+                "app.protocols.workflow.run_control.stop_workbench_execution"
+            ) as stop:
+                frames = "".join([frame async for frame in stream])
+
+            stop.assert_not_called()
+            self.assertIn("目标运行由其他 thread 持有", frames)
+            self.assertIn("PLAN_CONTROL_OWNERSHIP_CONFLICT", frames)
+
+    async def test_end_execution_is_idempotent_after_lifecycle_cleanup(self) -> None:
+        """生命周期已清理后，仍可凭同一目标记录幂等结束且不受 thread 变化影响。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_workbench_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="target-page",
+                page_id="target-page",
+                thread_id="owner-thread",
+                run_id="run-target",
+                phase="build",
+            )
+            durable_execution = SimpleNamespace(
+                execution_kind="workbench",
+                workspace=directory,
+                thread_id="owner-thread",
+                owner_session_id="owner-session",
+                run_id="run-target",
+            )
+
+            with patch(
+                "app.protocols.workflow.run_control.get_execution",
+                new=AsyncMock(return_value=durable_execution),
+            ):
+                first = build_workflow_plan_control_ag_ui_stream(
+                    action="end",
+                    workspace=directory,
+                    target_run_id="run-target",
+                    thread_id="owner-thread",
+                    run_id="request-first",
+                )
+                first_frames = "".join([frame async for frame in first])
+                second = build_workflow_plan_control_ag_ui_stream(
+                    action="end",
+                    workspace=directory,
+                    target_run_id="run-target",
+                    thread_id="different-thread",
+                    run_id="request-second",
+                    owner_session_id="different-session",
+                )
+                second_frames = "".join([frame async for frame in second])
+
+            self.assertIn('"status":"ended"', first_frames)
+            self.assertIn('"status":"already_ended"', second_frames)
+
     async def test_workflow_cancel_does_not_call_pending_abandon(self) -> None:
         """Workflow task cancellation 只取消活动运行，不删除 PendingPlan。"""
 
@@ -135,16 +322,16 @@ class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
             target_run_id="run-active",
         )
         with patch(
-            "app.protocols.workflow.run_control.workflow_run_registry.cancel",
-            return_value=True,
+            "app.protocols.workflow.run_control.workflow_run_registry.cancel_and_wait",
+            new=AsyncMock(return_value="cancelled"),
         ) as cancel, patch(
             "app.protocols.workflow.run_control.abandon_pending_build_task_plan",
         ) as abandon:
             frames = [frame async for frame in stream]
 
-        cancel.assert_called_once_with("run-active")
+        cancel.assert_awaited_once_with("run-active")
         abandon.assert_not_called()
-        self.assertIn("cancel_requested", "".join(frames))
+        self.assertIn('"status":"cancelled"', "".join(frames))
 
 
 if __name__ == "__main__":

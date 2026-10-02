@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from app.branding import WORKSPACE_ARTIFACT_DIR
 
 from app.domain.application_lifecycle import (
     ApplicationInitialization,
@@ -58,7 +59,7 @@ from app.services.application_revision_lifecycle import register_revision_impact
 from app.services.execution_recovery_executor import prepare_native_recovery
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 from app.services.execution_lease_heartbeat import stop_execution_heartbeat
-from app.services.workflow_reentry import InterruptedTargetResolver
+from app.services.workflow_reentry import InterruptedTargetResolver, workflow_entry
 from tests.helpers.native_recovery_contract import assert_native_recovery_fork_stable
 
 
@@ -108,13 +109,15 @@ def _build_graph(
         return {}
 
     builder = StateGraph(ProjectState)
+    builder.add_node("workflow_entry", workflow_entry)
     builder.add_node("technical_planning_begin", technical_planning_begin)
     builder.add_node("technical_planning_generate", technical_planning_generate)
     builder.add_node("technical_planning_commit", technical_planning_commit)
     builder.add_node("technical_planning_review", technical_planning_review)
     builder.add_node("technical_planning_confirm", technical_planning_confirm)
     builder.add_node("design_intent_analysis", terminal_node)
-    builder.add_edge(START, "technical_planning_begin")
+    builder.add_edge(START, "workflow_entry")
+    builder.add_edge("workflow_entry", "technical_planning_begin")
     builder.add_edge("technical_planning_begin", "technical_planning_generate")
     builder.add_conditional_edges(
         "technical_planning_generate",
@@ -258,6 +261,18 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         raw_workspace = tempfile.TemporaryDirectory()
         workspace = Path(raw_workspace.name)
+        application_file = workspace / WORKSPACE_ARTIFACT_DIR / "application.json"
+        application_file.parent.mkdir(parents=True, exist_ok=True)
+        application_file.write_text(
+            json.dumps({
+                "schemaVersion": 6,
+                "configRevision": 1,
+                "appName": "Native Recovery",
+                "auth": {"enable": False},
+                "authorization": {"enabled": False, "initialAdministratorSubjects": []},
+            }),
+            encoding="utf-8",
+        )
         # 将 TemporaryDirectory 的清理责任挂到测试实例，避免 scenario helper 提前删除现场。
         self.addAsyncCleanup(self._cleanup_workspace, raw_workspace)
         thread_id = f"technical-native-{pause_before}"
@@ -612,8 +627,8 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         await self._run_child(scenario, second_context)
-        json_path = scenario.workspace / ".xcodeagent" / "plans" / "technical-plan.json"
-        markdown_path = scenario.workspace / ".xcodeagent" / "plans" / "technical-plan.md"
+        json_path = scenario.workspace / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
+        markdown_path = scenario.workspace / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.md"
         self.assertTrue(json_path.is_file())
         self.assertTrue(markdown_path.is_file())
         self.assertEqual(
@@ -685,6 +700,8 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     succeeds=succeeds,
                 )
                 source = await scenario.runtime_graph.aget_state(scenario.source_config)
+                _plan, context = await self._prepare(scenario)
+                await stop_execution_heartbeat(context.heartbeat_task)
                 await assert_native_recovery_fork_stable(
                     testcase=self,
                     graph=scenario.runtime_graph,
@@ -696,8 +713,6 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
                         "observability": {"run_id": "fork-stability-child"},
                     },
                 )
-                _plan, context = await self._prepare(scenario)
-                await stop_execution_heartbeat(context.heartbeat_task)
 
     async def test_recovery_child_crash_continues_from_child_lineage(self) -> None:
         """source child 在 commit 前再次崩溃时，下一次 recovery 必须沿 child lineage 继续。"""

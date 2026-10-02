@@ -24,15 +24,28 @@ const projectIcons = [AppstoreOutlined, CodeOutlined, GlobalOutlined]
 
 type DeleteMode = 'index' | 'project'
 
+/** 将应用索引中的时间值校验为可安全交给 Date 使用的毫秒时间戳。 */
+function validRecentTimestamp(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? value : undefined
+}
+
+/** 将最近项目时间格式化为相对时间或本地日期，异常数据只显示未知时间。 */
 function formatRecentTime(value: number): string {
-  const elapsed = Math.max(0, Date.now() - value)
+  const timestamp = validRecentTimestamp(value)
+  if (timestamp === undefined) return '时间未知'
+
+  const elapsed = Math.max(0, Date.now() - timestamp)
   const minutes = Math.floor(elapsed / 60_000)
   if (minutes < 1) return '刚刚'
   if (minutes < 60) return `${minutes} 分钟前`
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${hours} 小时前`
   const days = Math.floor(hours / 24)
-  return days < 30 ? `${days} 天前` : new Intl.DateTimeFormat('zh-CN').format(value)
+  return days < 30
+    ? `${days} 天前`
+    : new Intl.DateTimeFormat('zh-CN').format(timestamp)
 }
 
 export default function WelcomeRecentProjects({
@@ -166,6 +179,7 @@ export default function WelcomeRecentProjects({
         ) : applications.length > 0 ? (
           applications.map((application, index) => {
             const ProjectIcon = projectIcons[index % projectIcons.length]
+            const recentTimestamp = validRecentTimestamp(application.lastOpenedAt)
             return (
               <div className={cx('welcome-project-row')} key={application.id}>
                 <button
@@ -190,8 +204,14 @@ export default function WelcomeRecentProjects({
                   >
                     {application.senario || '继续上一次开发会话'}
                   </span>
-                  <time dateTime={new Date(application.lastOpenedAt).toISOString()}>
-                    {formatRecentTime(application.lastOpenedAt)}
+                  <time
+                    dateTime={
+                      recentTimestamp === undefined
+                        ? undefined
+                        : new Date(recentTimestamp).toISOString()
+                    }
+                  >
+                    {recentTimestamp === undefined ? '最近打开' : formatRecentTime(recentTimestamp)}
                   </time>
                 </button>
                 <Button

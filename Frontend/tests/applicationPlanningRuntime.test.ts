@@ -249,13 +249,13 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.transportState, 'idle')
 }
 
-// D：Runtime 创建后更新生命周期，重试必须使用调用瞬间的恢复节点。
+// D：生命周期失败但没有 Backend 签发的恢复动作时，不能猜测节点并启动重试。
 {
   const h = harness()
   const current = h.current()!
   h.setCurrent({ ...current, lifecycle: { ...current.lifecycle, initialization: { ...current.lifecycle.initialization, stage: 'generating_technical_plan', status: 'failed' } } })
   await h.runtime.retryCurrentFailure()
-  assert.equal(h.calls[0].options.workflowDebug?.resumeFrom, 'technical_planning')
+  assert.equal(h.calls.length, 0)
 }
 
 // E：两个应用各自持有会话、事件和流式订阅。
@@ -825,6 +825,7 @@ async function waitForCondition<T>(
     runId: 'run-B',
     summary: { status: 'running', phase: 'requirements', message: '继续生成需求' }
   } as WorkflowRunPayload
+  let authoritativeReads = 0
   const h = harness(current, {
     createRecoverySession: (threadId) => {
       recoveryThreadId = threadId
@@ -837,7 +838,16 @@ async function waitForCondition<T>(
       }
     }
   })
-  h.onRead(async () => ({
+  h.onRead(async () => {
+    authoritativeReads += 1
+    if (authoritativeReads > 1) {
+      return {
+        workflow: childWorkflow,
+        lifecycle: authoritativeLifecycle(current, { status: 'running' }),
+        recovery: recoveryProjection('thread-A', { classification: 'running', recoveryActionPlan: null })
+      }
+    }
+    return {
     workflow: {
       ...workflowWithoutInterrupt(),
       summary: { status: 'failed', phase: 'requirements', message: '回答已保存，可以继续。' }
@@ -869,7 +879,8 @@ async function waitForCondition<T>(
         alternateActions: []
       }
     })
-  }))
+  }
+  })
 
   await h.runtime.retryCurrentFailure()
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { test } from 'node:test'
 
 import { AgUiRunError, buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
 import {
@@ -26,7 +27,8 @@ import {
   planningWorkflowUiDesignSkipped,
   retainApplicationPlanningInterrupt,
   shouldBackfillPlanningWorkflow,
-  shouldSuppressConfirmedTechnicalPlanTransitionChunk
+  shouldSuppressConfirmedTechnicalPlanTransitionChunk,
+  workflowCardRequiresUserInput
 } from '../src/renderer/src/components/Welcome/planningWorkflowState'
 import type {
   ApplicationConfig,
@@ -343,7 +345,7 @@ assert.equal(
       true
     )
   ),
-  true
+  false
 )
 assert.equal(
   (
@@ -1162,6 +1164,29 @@ const summaryOnlyQuestionsWorkflow = {
 } as WorkflowRunPayload
 
 assert.equal(planningWorkflowRequiresUserInput(summaryOnlyQuestionsWorkflow), false)
+const apiDesignRequiredWorkflow = {
+  runId: 'run-api-design',
+  threadId: 'thread-api-design',
+  summary: {
+    status: 'requires_user_input',
+    phase: 'api_design_readiness_gate',
+    clarification: {
+      mode: 'api_design_required',
+      status: 'requires_user_input',
+      missingApiDesigns: [
+        {
+          api_contract_id: 'cat_image_api',
+          endpoint_id: 'cat_image_api.list'
+        }
+      ]
+    }
+  },
+  events: [],
+  state: {},
+  result: {}
+} as WorkflowRunPayload
+assert.equal(planningWorkflowRequiresUserInput(apiDesignRequiredWorkflow), false)
+assert.equal(workflowCardRequiresUserInput(apiDesignRequiredWorkflow), true)
 assert.equal(planningWorkflowCanPublishDuringRun(summaryOnlyQuestionsWorkflow), true)
 assert.equal(
   planningWorkflowCanPublishDuringRun({

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -102,6 +103,25 @@ class TechnicalPlanningRecoveryJourneyHarness:
         self.model_name = "DeepSeek"
         self.called_models: list[str] = []
         self.graph: Any | None = None
+        application_file = self.workspace / ".devagentstudio" / "application.json"
+        application_file.parent.mkdir(parents=True, exist_ok=True)
+        application_file.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 6,
+                    "configRevision": 1,
+                    "appName": "天气预报应用",
+                    "datasource": {"type": "database"},
+                    "auth": {"enable": False},
+                    "authorization": {
+                        "enabled": False,
+                        "initialAdministratorSubjects": [],
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
         self._seed_formal_artifacts()
         self._seed_lifecycle()
 

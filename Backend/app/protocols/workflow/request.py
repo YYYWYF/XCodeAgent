@@ -19,6 +19,11 @@ from app.domain.development_continuation import (
 from app.services.entity_design import normalize_entity_design_action
 from app.services.api_design import ApiDesignError, normalize_api_design_gate_action
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
+from app.domain.application_planning_recovery import (
+    ApplicationPlanningOperation,
+    ApplicationPlanningRecoveryBoundary,
+    application_planning_boundary_payload,
+)
 from app.domain.application_lifecycle import WorkbenchExecutionStatus
 from app.services.execution_resource_scope import resolve_execution_resource_claims
 from app.services.frontend_page_tree import project_plan_page_records
