@@ -96,6 +96,8 @@ async def regenerate_pending_build_task_plan(
     publish: SnapshotPublisher | None = None,
     planning_run_id_factory: Callable[[], str] | None = None,
     recovery_source_workflow_run_id: str | None = None,
+    reuse_recovery_candidate: bool = True,
+    recovery_lineage_run_ids: tuple[str, ...] = (),
 ) -> RegeneratePendingResult:
     """消费精确旧 Pending，并从刚重载的 Formal 输入启动全新有限并发 PlanningRun。
 
@@ -138,7 +140,9 @@ async def regenerate_pending_build_task_plan(
                 or fact.get("draft_digest") != draft_digest
                 or fact.get("thread_id") != thread_id
                 or not recovery_source_workflow_run_id
-                or fact.get("current_workflow_run_id") != recovery_source_workflow_run_id
+                or fact.get("current_workflow_run_id") not in (
+                    recovery_lineage_run_ids or (recovery_source_workflow_run_id,)
+                )
             ):
                 return RegeneratePendingResult(status="stale_draft")
             identity = DraftIdentity.model_validate(fact.get("draft_identity"))
@@ -212,7 +216,10 @@ async def regenerate_pending_build_task_plan(
             settings=settings,
             generate_once=generate_once,
             publish=publish,
-            recovery_snapshot=_load_recovery_for_retry(state, recovery_source_workflow_run_id),
+            recovery_snapshot=(
+                _load_recovery_for_retry(state, recovery_source_workflow_run_id)
+                if reuse_recovery_candidate else None
+            ),
         )
     except DagPlanningError as exc:
         persist_planning_recovery_if_applicable(

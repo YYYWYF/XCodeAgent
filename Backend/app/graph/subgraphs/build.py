@@ -1492,15 +1492,49 @@ def run_build_scheduler(
     """按 build_execution_scope 裁剪任务图，并持续调度到当前切片完成或阻塞。"""
 
     recovery = current_node_recovery_context()
+    recover_from_persisted_plan = False
     if recovery is not None and recovery.reentry_reason in {
         WorkflowReentryReason.BUSINESS_RETRY,
         WorkflowReentryReason.FAILURE_RETRY,
     }:
-        state = _restore_build_runtime(state, recovery.source_run_id, recovery.source_state)
+        if recovery.entry_state.get("build_execution_scope") != state.get("build_execution_scope"):
+            raise RecoveryExecutionError("BUILD_RETRY_SCOPE_DRIFT", "Build 恢复范围已偏离原节点入口。")
+        if recovery.internal_progress is not None:
+            state = _restore_build_runtime(state, recovery.source_run_id, recovery.internal_progress)
+        else:
+            recover_from_persisted_plan = True
 
     build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)
     if gate_errors:
         return _build_gate_result(state, build_task_plan, gate_errors)
+    if recover_from_persisted_plan and state.get("build_run_id") == build_run_binding.get("build_run_id"):
+        # Formal 的任务运行字段由同一计划摘要保护；入口未持有进度时仍保留已写回的完成事实。
+        persisted_plan, persisted_errors = _latest_build_task_plan_for_build(state)
+        if persisted_errors:
+            return _build_gate_result(state, build_task_plan, persisted_errors)
+        persisted_update = persisted_plan.get("last_update")
+        persisted_owner = (
+            str(persisted_update.get("build_run_id") or "")
+            if isinstance(persisted_update, dict) else ""
+        )
+        persisted_tasks = (
+            tasks_from_build_task_plan(persisted_plan)
+            if persisted_owner == str(state.get("build_run_id") or "") else []
+        )
+        entry_tasks = state.get("tasks")
+        if isinstance(entry_tasks, list) and persisted_tasks:
+            entry_by_id = {
+                str(task.get("id")): task for task in entry_tasks
+                if isinstance(task, dict) and task.get("id")
+            }
+            merged_tasks = [
+                {**entry_by_id.get(str(task["id"]), task), **{
+                    key: deepcopy(value) for key, value in task.items()
+                    if key in _TASK_RUNTIME_FIELDS
+                }}
+                for task in persisted_tasks
+            ]
+            state = {**state, "tasks": merged_tasks}
     # 后续调度会把任务运行态写回派生计划；平台投影必须始终读取不可变的确认快照。
     confirmed_build_task_plan = deepcopy(build_task_plan)
     # 当前契约直接使用最新计划，不对历史 DAG 做运行时迁移或字段回填。

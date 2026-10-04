@@ -457,6 +457,7 @@ def write_build_task_plan_execution_state(
         persisted["last_update"] = {
             "stage": "build_scheduler",
             "updated_by": "build-scheduler",
+            "build_run_id": str(state["build_run_id"]),
             "updated_at": datetime.now(UTC).isoformat(),
         }
         write_json_atomic(path, persisted)

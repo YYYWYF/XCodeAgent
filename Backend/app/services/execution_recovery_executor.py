@@ -102,7 +102,9 @@ class NativeRecoveryRuntimeContext:
     workspace_lease: WorkspaceRunLease | None
     observability: dict[str, Any]
     heartbeat_task: asyncio.Task[None] | None
-    source_state: dict[str, Any] | None = None
+    entry_state: dict[str, Any] | None = None
+    internal_progress: dict[str, Any] | None = None
+    source_lineage_run_ids: tuple[str, ...] = ()
 
     def node_recovery_context(self) -> NodeRecoveryContext:
         """从已验证的 source、child 和 checkpoint 生成一次性节点侧视图。"""
@@ -121,10 +123,10 @@ class NativeRecoveryRuntimeContext:
                 if source.status is DurableExecutionStatus.FAILED
                 else WorkflowReentryReason.INTERRUPTED_CONTINUE
             ),
-            build_execution_scope=dict(
-                (self.source_state or {}).get("build_execution_scope") or {}
-            ),
-            source_state=dict(self.source_state or {}),
+            build_execution_scope=dict((self.entry_state or {}).get("build_execution_scope") or {}),
+            entry_state=dict(self.entry_state or {}),
+            internal_progress=(dict(self.internal_progress) if self.internal_progress is not None else None),
+            source_lineage_run_ids=self.source_lineage_run_ids,
         )
 
     def workflow_inputs(self) -> dict[str, Any]:
@@ -802,7 +804,11 @@ async def _fork_and_start(
             "RECOVERY_SOURCE_CHECKPOINT_INVALID",
             "source Node Entry checkpoint 不属于当前 source run。",
         )
-    source_state = await _failed_source_state(graph, source)
+    internal_progress = await _failed_source_state(
+        graph, source, entry_state=source_values, target_node=plan.target_node,
+        entry_checkpoint_id=plan.checkpoint_id,
+    )
+    source_lineage_run_ids = await _source_lineage_run_ids(workspace, source)
     observability = _recovery_observability(
         run_id=new_run_id,
         thread_id=source.thread_id,
@@ -909,14 +915,39 @@ async def _fork_and_start(
         workspace_lease=workspace_lease,
         observability=observability,
         heartbeat_task=heartbeat_task,
-        source_state=source_state,
+        entry_state=dict(source_values),
+        internal_progress=internal_progress,
+        source_lineage_run_ids=source_lineage_run_ids,
     )
 
 
+async def _source_lineage_run_ids(
+    workspace: str, source: DurableExecutionRecord
+) -> tuple[str, ...]:
+    """只沿同线程已登记的 RecoveryAttempt 父链追溯操作接管来源。"""
+
+    lineage: list[str] = []
+    seen: set[str] = set()
+    current = source.run_id
+    while current and current not in seen:
+        lineage.append(current)
+        seen.add(current)
+        attempt = await get_recovery_attempt(workspace, current)
+        if attempt is None:
+            return tuple(lineage)
+        if attempt.thread_id != source.thread_id:
+            raise RecoveryExecutionError(
+                "RECOVERY_LINEAGE_DRIFT", "恢复父链与当前 source 线程不一致。"
+            )
+        current = attempt.source_run_id
+    raise RecoveryExecutionError("RECOVERY_LINEAGE_DRIFT", "恢复父链存在循环。")
+
+
 async def _failed_source_state(
-    graph: Any, source: DurableExecutionRecord
+    graph: Any, source: DurableExecutionRecord, *,
+    entry_state: dict[str, Any], target_node: str, entry_checkpoint_id: str,
 ) -> dict[str, Any] | None:
-    """从服务端 checkpoint history 读取原失败状态，供目标节点按需复用。"""
+    """仅返回与已验证节点入口同一调用、范围及计划绑定的失败进度。"""
 
     if source.status is not DurableExecutionStatus.FAILED:
         return None
@@ -927,12 +958,39 @@ async def _failed_source_state(
         async for snapshot in history_reader(
             {"configurable": {"thread_id": source.thread_id, "checkpoint_ns": ""}}
         ):
+            config = getattr(snapshot, "config", {}) or {}
+            checkpoint = config.get("configurable") if isinstance(config, dict) else None
+            if isinstance(checkpoint, dict) and checkpoint.get("checkpoint_id") == entry_checkpoint_id:
+                break
             values = getattr(snapshot, "values", {})
             if (
                 isinstance(values, dict)
                 and str(values.get("active_run_id") or "") == source.run_id
                 and values.get("status") == "failed"
             ):
+                # Graph 的失败快照可能属于同一 Run 的后续节点；只接受目标节点的写入。
+                metadata = getattr(snapshot, "metadata", {}) or {}
+                writes = metadata.get("writes") if isinstance(metadata, dict) else None
+                if not isinstance(writes, dict) or target_node not in writes:
+                    continue
+                if values.get("build_execution_scope") != entry_state.get("build_execution_scope"):
+                    raise RecoveryExecutionError(
+                        "RECOVERY_INTERNAL_PROGRESS_DRIFT", "内部进度与节点入口的执行范围不一致。"
+                    )
+                if target_node == "prepare_build_tasks" and (
+                    values.get("build_task_plan_confirmation")
+                    != entry_state.get("build_task_plan_confirmation")
+                ):
+                    raise RecoveryExecutionError(
+                        "RECOVERY_INTERNAL_PROGRESS_DRIFT", "内部进度与节点入口的操作身份不一致。"
+                    )
+                if target_node == "build" and any(
+                    entry_state.get(key) and values.get(key) != entry_state.get(key)
+                    for key in ("build_run_id", "build_run_plan_path", "build_run_plan_sha256")
+                ):
+                    raise RecoveryExecutionError(
+                        "RECOVERY_INTERNAL_PROGRESS_DRIFT", "内部进度与节点入口的计划绑定不一致。"
+                    )
                 return dict(values)
     except (OSError, TypeError, ValueError):
         # 节点内部复用数据不可读时仍可从已验证的节点入口正常执行。

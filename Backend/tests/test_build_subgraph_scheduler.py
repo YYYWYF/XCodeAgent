@@ -90,6 +90,49 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_native_build_without_internal_progress_executes_original_node(self) -> None:
+        """可信入口没有业务失败快照时，Build 仍派发原计划任务。"""
+
+        scope = {"type": "application", "targetId": "application"}
+        task = {"id": "A", "owner": "backend", "status": "pending", "dependencies": [],
+                "change_scope": [{"operation": "add", "path": "Backend/app/A.py"}]}
+        calls: list[list[str]] = []
+
+        def runner(**kwargs):
+            """记录实际调度并生成授权文件。"""
+
+            ids = [item["id"] for item in kwargs["tasks"]]
+            calls.append(ids)
+            for item in kwargs["tasks"]:
+                _write_workspace_file(kwargs.get("workspace"), item["change_scope"][0]["path"])
+            return [{"task_id": item_id, "owner": "backend", "status": "completed"} for item_id in ids]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            entry = _ready_build_state(workspace, {
+                "workspace": workspace, "project_plan": {"version": "1.0.0"},
+                "build_execution_scope": scope,
+                "build_task_plan": replace_build_task_plan_tasks({
+                    "schema_version": "build-dag.v4",
+                    "build_units": {"application:root": {"id": "application:root", "kind": "application", "task_ids": ["A"]}},
+                    "unit_graph": {"nodes": ["application:root"], "edges": []},
+                }, [task]),
+                "tasks": [task], "active_run_id": "run-child", "active_thread_id": "thread-build",
+            })
+            context = NodeRecoveryContext(
+                source_run_id="run-source", execution_run_id="run-child",
+                thread_id="thread-build", target_node="build", checkpoint_id="entry-build",
+                reentry_reason=WorkflowReentryReason.FAILURE_RETRY,
+                entry_state={**entry, "active_run_id": "run-source"},
+            )
+            with (
+                bind_recovery_runtime(context), bind_node_recovery(entry, "build"),
+                patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner),
+                patch("app.graph.subgraphs.build._finalize_build", return_value=({}, {}, None, [], None)),
+            ):
+                result = run_build_scheduler(entry)
+            self.assertEqual(calls, [["A"]])
+            self.assertEqual(result["build_summary"]["status"], "completed")
+
     def test_native_build_recovery_keeps_completed_task_and_retries_network_failure(self) -> None:
         """节点入口旧任务为 pending 时，可信 source 运行态仍阻止 A 重跑并派发 B。"""
 
@@ -134,7 +177,9 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             context = NodeRecoveryContext(
                 source_run_id="run-source", execution_run_id="run-child",
                 thread_id="thread-build", target_node="build", checkpoint_id="entry-build",
-                reentry_reason=WorkflowReentryReason.FAILURE_RETRY, source_state=source,
+                reentry_reason=WorkflowReentryReason.FAILURE_RETRY,
+                entry_state={**entry, "active_run_id": "run-source"},
+                internal_progress=source,
             )
             with (
                 bind_recovery_runtime(context), bind_node_recovery(entry, "build"),

@@ -21,7 +21,9 @@ class NodeRecoveryContext:
     checkpoint_id: str
     reentry_reason: WorkflowReentryReason
     build_execution_scope: dict[str, Any] = field(default_factory=dict)
-    source_state: dict[str, Any] = field(default_factory=dict)
+    entry_state: dict[str, Any] = field(default_factory=dict)
+    internal_progress: dict[str, Any] | None = None
+    source_lineage_run_ids: tuple[str, ...] = ()
     claimed: bool = False
 
 

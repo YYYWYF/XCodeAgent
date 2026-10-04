@@ -247,16 +247,20 @@ async def _run_regenerate_branch(
     refreshed_context: list[_PlanningContext] = []
     recovery = current_node_recovery_context()
     recovery_source: str | None = None
-    if recovery is not None and recovery.reentry_reason in {
-        WorkflowReentryReason.FAILURE_RETRY, WorkflowReentryReason.BUSINESS_RETRY,
-    }:
-        source_action = recovery.source_state.get("build_task_plan_confirmation")
+    reuse_recovery_candidate = True
+    if recovery is not None:
+        source_action = recovery.entry_state.get("build_task_plan_confirmation")
         if not isinstance(source_action, dict) or any(
             source_action.get(key) != action_payload.get(key)
             for key in ("action", "planning_run_id", "draft_digest")
         ):
             return _reject_unsupported_planning_action(state, {"action": "stale_regenerate"})
+        if recovery.entry_state.get("build_execution_scope") != state.get("build_execution_scope"):
+            return _reject_unsupported_planning_action(state, {"action": "stale_regenerate"})
         recovery_source = recovery.source_run_id
+        reuse_recovery_candidate = recovery.reentry_reason in {
+            WorkflowReentryReason.FAILURE_RETRY, WorkflowReentryReason.BUSINESS_RETRY,
+        }
 
     def current_inputs_factory(
         fresh_formal: dict[str, Any] | None,
@@ -289,6 +293,10 @@ async def _run_regenerate_branch(
         generate_once=generate_once,
         publish=create_planning_run_progress_publisher(),
         recovery_source_workflow_run_id=recovery_source,
+        reuse_recovery_candidate=reuse_recovery_candidate,
+        recovery_lineage_run_ids=(
+            recovery.source_lineage_run_ids if recovery is not None else ()
+        ),
     )
     if result.status != "regenerated":
         context = _assemble_planning_context(state)
