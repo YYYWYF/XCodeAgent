@@ -24,6 +24,7 @@ export type RecoveryIncidentPresentation =
       failureMessage?: string
       recoveryMessage: string
       reasonCode: string
+      technicalMessage?: string
     }
 
 /** 从当前 Planning State 提取真实失败摘要，不把恢复说明误当成原始错误。 */
@@ -109,6 +110,17 @@ export function workbenchRecoveryIncident(
     }
   }
   if (actionPlan.status === 'needs_attention') {
+    // 精确处理当前断点已失效的情况；恢复限制不应盖过上方真正的任务失败。
+    if (actionPlan.reasonCode === 'RECOVERY_SOURCE_NOT_CURRENT') {
+      return {
+        kind: 'needs_attention',
+        title: '当前任务无法从断点继续',
+        failureMessage: '请先处理上方的任务错误，再尝试重试。',
+        recoveryMessage: '如果仍无法继续，请打开错误详情查看原因。',
+        reasonCode: actionPlan.reasonCode,
+        technicalMessage: actionPlan.message
+      }
+    }
     return {
       kind: 'needs_attention',
       title: '工作台执行需要处理',

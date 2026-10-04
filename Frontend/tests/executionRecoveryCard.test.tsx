@@ -252,6 +252,20 @@ test('Workbench needs_attention retains a retry entry for Backend re-resolution'
   }
 })
 
+test('stale checkpoint guidance stays separate from the task failure', () => {
+  const candidate = recovery('blocked')
+  candidate.recoveryActionPlan.reasonCode = 'RECOVERY_SOURCE_NOT_CURRENT'
+  candidate.recoveryActionPlan.message =
+    '中断现场缺少唯一、最新且可验证的 checkpoint，已阻止降级恢复。'
+  const incident = workbenchRecoveryIncident(candidate)
+  if (!incident) throw new Error('测试候选未生成 Workbench Incident。')
+  const markup = renderToStaticMarkup(createElement(RecoveryIncidentCard, { incident }))
+  assert.match(markup, /请先处理上方的任务错误，再尝试重试。/)
+  assert.doesNotMatch(markup.split('<details')[0], /checkpoint|RECOVERY_SOURCE_NOT_CURRENT/)
+  assert.match(markup, /RECOVERY_SOURCE_NOT_CURRENT/)
+  assert.match(markup, /中断现场缺少唯一/)
+})
+
 test('planning Recovery Incident shows safe failure summary and Backend action', () => {
   const markup = renderToStaticMarkup(
     createElement(ApplicationPlanningRecoveryIncidentCard, {
@@ -330,6 +344,25 @@ test('ordinary AgentErrorCard remains a history-only error card', () => {
   assert.match(markup, /普通 Network Error/)
   assert.match(markup, /重试/)
   assert.doesNotMatch(markup, /重新执行技术规划/)
+})
+
+test('DAG model infrastructure failure uses a readable message and keeps technical detail collapsed', () => {
+  const error =
+    'Workflow failed：DagPlanningError: Unit Candidate 生成发生模型基础设施错误，PlanningRun 已终止。'
+  for (const [failureText, errorCode] of [
+    [error, undefined],
+    ['本次模型请求失败。', 'UNIT_GENERATION_INFRASTRUCTURE_FAILURE']
+  ] as const) {
+    const markup = renderToStaticMarkup(
+      createElement(AgentErrorCard, { error: failureText, errorCode })
+    )
+    assert.match(markup, /模型服务异常/)
+    assert.match(markup, /生成执行计划时无法调用模型。/)
+    assert.match(markup, /请检查模型名称和服务地址等配置，保存后重试。/)
+    assert.doesNotMatch(markup.split('<details')[0], /DagPlanningError|Unit Candidate|PlanningRun/)
+    assert.match(markup, /<summary>错误详情<\/summary>/)
+    assert.match(markup, new RegExp(failureText))
+  }
 })
 
 test('historical AgentErrorCard omits recovery guidance and retry action', () => {

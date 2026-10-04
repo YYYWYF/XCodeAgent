@@ -3084,8 +3084,11 @@ export default function AiChatPanel({
   const phaseExecutionLabel = applicationOwnership.owner?.workbenchPhase
     ? WORKBENCH_PHASE_AGENTS[applicationOwnership.owner.workbenchPhase].label
     : WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label
+  // 规划 transport 只约束设计/技术规划输入；开发阶段不能被保留的旧规划状态误锁。
   const workflowInputLocked =
-    workspaceBusy || pendingPlanActionable || planningMutationBlocked(planningState)
+    workspaceBusy ||
+    pendingPlanActionable ||
+    (isApplicationPlanningPhase && planningMutationBlocked(planningState))
   const displayedSessionRunStates =
     planningSessionRunActive && existingPlanningSession
       ? { ...sessionRunStates, [existingPlanningSession.id]: 'running' as const }

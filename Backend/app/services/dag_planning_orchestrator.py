@@ -51,6 +51,7 @@ class DagPlanningError(RuntimeError):
 
         self.issues = tuple(ValidationIssue.model_validate(issue) for issue in issues)
         self.snapshot = snapshot
+        self.code = self.issues[0].code if len(self.issues) == 1 else None
         super().__init__("；".join(issue.message for issue in self.issues))
 
 

@@ -699,7 +699,7 @@ export function useWorkflowConversation({
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
   const [recoveringSourceRunId, setRecoveringSourceRunId] = useState<string>()
   const recoveryRetryRequestRef = useRef(false)
-  const [recoveryError, setRecoveryError] = useState<string>()
+  const [recoveryErrors, setRecoveryErrors] = useState<Record<string, string | undefined>>({})
   const [connectionState, setConnectionState] = useState<ConnectionState>(() =>
     initialConnectionState(Boolean(applicationLifecycle))
   )
@@ -738,10 +738,15 @@ export function useWorkflowConversation({
         : undefined)
     : undefined
   const activeRuntimeKey = activeRun?.identity.key || matchingActiveSession?.key
+  const recoveryError = activeSession ? recoveryErrors[activeSession.key] : undefined
   const loading = Boolean(activeRun)
   const stopping = activeRun?.status === 'stopping'
   const conversationRunning = Boolean(activeRun?.conversation)
   const error = activeRuntimeKey ? errors[activeRuntimeKey] : undefined
+  /** 恢复请求的临时错误只归属发起请求的会话，迟到结果不能污染当前会话。 */
+  const setRecoveryErrorForSession = (sessionKey: string, message?: string): void => {
+    setRecoveryErrors((current) => ({ ...current, [sessionKey]: message }))
+  }
   const activeWorkflow = activeRuntimeKey
     ? activeRun
       ? liveWorkflows[activeRuntimeKey]
@@ -779,7 +784,9 @@ export function useWorkflowConversation({
       latestRecovery.recoveryActionPlan.incidentId !== recovery.recoveryActionPlan.incidentId ||
       latestActionId !== requestedActionId
     ) {
-      setRecoveryError('当前恢复操作已更新，请使用最新的恢复状态。')
+      if (activeSession) {
+        setRecoveryErrorForSession(activeSession.key, '当前恢复操作已更新，请使用最新的恢复状态。')
+      }
       return false
     }
     recovery = latestRecovery
@@ -799,7 +806,7 @@ export function useWorkflowConversation({
     }
     const sessionIdentity = activeSession
     setRecoveringSourceRunId(recovery.sourceRunId)
-    setRecoveryError(undefined)
+    setRecoveryErrorForSession(sessionIdentity.key)
     try {
       return await sendWorkflowMessage(primaryAction?.label || '重试', {
         executionRecovery: {
@@ -962,7 +969,8 @@ export function useWorkflowConversation({
     }
     recoveryRetryRequestRef.current = true
     setRecoveringSourceRunId('refreshing')
-    setRecoveryError(undefined)
+    const recoverySessionKey = activeSession?.key
+    if (recoverySessionKey) setRecoveryErrorForSession(recoverySessionKey)
     try {
       if (!(await refreshExecutionRecoveryLifecycle())) return false
       const recovery = executionRecoveryForSession(
@@ -970,11 +978,11 @@ export function useWorkflowConversation({
         activeSession?.sessionId
       )
       if (!recovery || !activeSession || activeSession.sessionId !== recovery.ownerSessionId) {
-        setRecoveryError(NO_RECOVERY_ENTRY_ERROR)
+        if (recoverySessionKey) setRecoveryErrorForSession(recoverySessionKey, NO_RECOVERY_ENTRY_ERROR)
         return false
       }
       if (recoveryMutationReadonly(applicationLifecycleRef.current)) {
-        setRecoveryError('已同步后端状态，但当前应用由其他会话持有，无法执行恢复。')
+        setRecoveryErrorForSession(activeSession.key, '已同步后端状态，但当前应用由其他会话持有，无法执行恢复。')
         return false
       }
       if (recovery.recoveryActionPlan.status === 'recoverable') {
@@ -1571,13 +1579,13 @@ export function useWorkflowConversation({
       if (options?.executionRecovery) {
         // Recovery endpoint 的内部错误码不写入历史错误卡，避免 stale action 形成第二控制面。
         if (staleRecoveryAction) {
-          setRecoveryError('当前恢复操作已过期。')
+          setRecoveryErrorForSession(identity.key, '当前恢复操作已过期。')
           const refreshed = await refreshExecutionRecoveryLifecycle()
           if (refreshed) {
-            setRecoveryError(undefined)
+            setRecoveryErrorForSession(identity.key)
           }
         } else {
-          setRecoveryError('无法安全执行当前恢复操作，请查看最新状态。')
+          setRecoveryErrorForSession(identity.key, '无法安全执行当前恢复操作，请查看最新状态。')
         }
       }
       if (runError && !options?.executionRecovery && !options?.planControlAction) {

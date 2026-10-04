@@ -993,6 +993,11 @@ export default function MessageList({
                         {messageError && !templatePreparationFailed && !currentGlobalError ? (
                           <AgentErrorCard
                             error={messageError}
+                            errorCode={
+                              typeof message.workflow?.summary.errorCode === 'string'
+                                ? message.workflow.summary.errorCode
+                                : undefined
+                            }
                             historical={legacyRecoveryGuidance}
                             onRetry={isCurrentErrorMessage ? onRetryError : undefined}
                           />

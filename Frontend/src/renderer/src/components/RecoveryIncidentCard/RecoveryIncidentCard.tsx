@@ -100,15 +100,13 @@ export default function RecoveryIncidentCard({
               {error}
             </Text>
           ) : null}
-          {incident.kind === 'needs_attention' ? (
-            <Text className={cx('application-planning-recovery-incident-reason')} type="secondary">
-              原因代码：{incident.reasonCode}
-            </Text>
-          ) : null}
           {incident.failureDiagnostic || incident.kind === 'needs_attention' ? (
             <DiagnosticDetails
               diagnostic={incident.failureDiagnostic}
               reasonCode={incident.kind === 'needs_attention' ? incident.reasonCode : undefined}
+              technicalMessage={
+                incident.kind === 'needs_attention' ? incident.technicalMessage : undefined
+              }
             />
           ) : null}
         </>
@@ -158,16 +156,19 @@ function FailureSummary({
 /** 展示 Backend 允许公开的结构化详情，隐藏时不影响失败摘要和恢复动作。 */
 function DiagnosticDetails({
   diagnostic,
-  reasonCode
+  reasonCode,
+  technicalMessage
 }: {
   diagnostic?: RecoveryFailureDiagnostic | null
   reasonCode?: string
+  technicalMessage?: string
 }): ReactElement {
   return (
     <details className={cx('application-planning-recovery-incident-details')}>
       <summary>错误详情</summary>
       <dl>
         {reasonCode ? <DiagnosticRow label="原因代码" value={reasonCode} /> : null}
+        {technicalMessage ? <DiagnosticRow label="恢复详情" value={technicalMessage} /> : null}
         {diagnostic ? (
           <>
             <DiagnosticRow label="错误代码" value={diagnostic.code} />

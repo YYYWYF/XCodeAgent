@@ -8,6 +8,7 @@ const { Text } = Typography
 
 type AgentErrorCardProps = {
   error?: string
+  errorCode?: string
   historical?: boolean
   onRetry?: () => void
   retrying?: boolean
@@ -18,13 +19,14 @@ type AgentErrorCardProps = {
 /** 按真实错误类型区分模型连接异常和普通任务失败，避免把所有失败误报为模型问题。 */
 export default function AgentErrorCard({
   error,
+  errorCode,
   historical = false,
   onRetry,
   retrying,
   retryLabel = '重试',
   title
 }: AgentErrorCardProps): ReactElement {
-  const copy = readableAgentError(error)
+  const copy = readableAgentError(error, errorCode)
   const resolvedTitle = title || (copy?.modelServiceError ? '模型服务异常' : '任务执行异常')
 
   return (
@@ -48,9 +50,12 @@ export default function AgentErrorCard({
           </Text>
         ) : null}
         {copy?.detail ? (
-          <Text className={cx('agent-error-card-detail')} type="secondary">
-            错误详情：{copy.detail}
-          </Text>
+          <details className={cx('agent-error-card-details')}>
+            <summary>错误详情</summary>
+            <Text className={cx('agent-error-card-detail')} type="secondary">
+              {copy.detail}
+            </Text>
+          </details>
         ) : null}
         {!historical && onRetry ? (
           <Button
@@ -69,13 +74,28 @@ export default function AgentErrorCard({
 }
 
 /** 将连接异常和普通运行异常分别翻译成可操作提示，并保留原始详情。 */
-function readableAgentError(error?: string): {
+function readableAgentError(
+  error?: string,
+  errorCode?: string
+): {
   message: string
   hint: string
   modelServiceError: boolean
   detail?: string
 } {
   const normalized = error?.trim() || ''
+  // 旧会话尚未持久化结构化错误码，只对这一条已知文案做精确兼容。
+  const legacyModelInfrastructureFailure =
+    normalized ===
+    'Workflow failed：DagPlanningError: Unit Candidate 生成发生模型基础设施错误，PlanningRun 已终止。'
+  if (errorCode === 'UNIT_GENERATION_INFRASTRUCTURE_FAILURE' || legacyModelInfrastructureFailure) {
+    return {
+      message: '生成执行计划时无法调用模型。',
+      hint: '请检查模型名称和服务地址等配置，保存后重试。',
+      modelServiceError: true,
+      detail: normalized || errorCode
+    }
+  }
   const isConnectionError =
     /failed to fetch|networkerror|load failed|fetch failed|econnrefused|econnreset|etimedout|网络请求失败|无法连接/i.test(
       normalized

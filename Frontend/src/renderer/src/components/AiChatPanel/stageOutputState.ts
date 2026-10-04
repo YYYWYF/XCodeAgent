@@ -398,8 +398,8 @@ export function dagGenerationStrategyLabel(unit: DagGenerationUnitRecord): strin
 
 /** 返回 Run 级摘要；round_exhausted 只描述局部轮次，不提升为 Run 失败。 */
 export function dagGenerationSummaryCopy(snapshot: DagGenerationSnapshot): string {
-  if (snapshot.status === 'failed') return 'PlanningRun failed'
-  if (snapshot.status === 'cancelled') return 'PlanningRun cancelled'
+  if (snapshot.status === 'failed') return '执行计划生成失败'
+  if (snapshot.status === 'cancelled') return '执行计划生成已取消'
   if (snapshot.summary.roundExhaustedUnitCount > 0) return '本轮已耗尽，等待修复决策'
   if (snapshot.phase === 'global_check') return '正在执行 Global validation'
   if (snapshot.globalRepairRound > 0) {

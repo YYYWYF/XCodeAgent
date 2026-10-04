@@ -61,15 +61,15 @@ export default function DagGenerationProgress({ snapshot }: Props): ReactElement
           <NodeIndexOutlined />
         </span>
         <span className={cx('dag-generation-summary-copy')}>
-          <Text strong>任务 DAG Unit 进度</Text>
+          <Text strong>执行计划进度</Text>
           <Text type="secondary">{dagGenerationSummaryCopy(snapshot)}</Text>
         </span>
         <span className={cx('dag-generation-summary-metrics')}>
           <i>
-            {snapshot.summary.readyUnitCount}/{snapshot.summary.unitCount} ready
+            {snapshot.summary.readyUnitCount}/{snapshot.summary.unitCount} 项就绪
           </i>
-          <i>{snapshot.summary.retainedTaskCount} retained</i>
-          <i>{snapshot.summary.candidateTaskCount} candidate</i>
+          <i>{snapshot.summary.retainedTaskCount} 项复用</i>
+          <i>{snapshot.summary.candidateTaskCount} 项新建</i>
         </span>
       </summary>
 
@@ -83,7 +83,7 @@ export default function DagGenerationProgress({ snapshot }: Props): ReactElement
             </code>
           ) : null}
         </div>
-        <ol className={cx('dag-generation-units')} aria-label="任务 DAG Unit 进度">
+        <ol className={cx('dag-generation-units')} aria-label="执行计划进度">
           {snapshot.units.map((unit) => (
             <DagGenerationUnit key={unit.id} unit={unit} />
           ))}

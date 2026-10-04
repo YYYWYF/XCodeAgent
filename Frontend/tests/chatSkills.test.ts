@@ -1631,7 +1631,7 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
   )
 
   assert.ok(snapshot)
-  assert.match(markup, /任务 DAG Unit 进度/)
+  assert.match(markup, /执行计划进度/)
   assert.match(markup, /page:home/)
   assert.match(markup, /retained 0 \/ candidate 1/)
   assert.doesNotMatch(
