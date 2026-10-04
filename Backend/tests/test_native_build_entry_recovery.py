@@ -55,6 +55,129 @@ class NativeBuildEntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         await self._exercise_escaped_build_entry(interrupted=True)
 
+    async def test_ordinary_interrupt_does_not_retry_unrelated_failure(self) -> None:
+        """普通中断继续执行 pending C，但不会把独立失败的 B 变为已授权重试。"""
+
+        with tempfile.TemporaryDirectory() as raw_workspace:
+            workspace = Path(raw_workspace)
+            thread_id = "build-ordinary-interrupt-thread"
+            source_run_id = "build-ordinary-interrupt-source"
+            lifecycle = create_application_lifecycle(
+                application_id="build-ordinary-interrupt-app", application_name="Build ordinary interrupt",
+            )
+            write_application_lifecycle(workspace, lifecycle.model_copy(update={
+                "initialization": lifecycle.initialization.model_copy(update={
+                    "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    "status": ApplicationLifecycleStatus.COMPLETED,
+                }),
+            }))
+            start_workbench_execution(
+                workspace, scope="application", target_id="application", page_id=None,
+                thread_id=thread_id, run_id=source_run_id, phase="build",
+            )
+            tasks = [
+                {"id": name, "owner": "backend", "status": "pending",
+                 "dependencies": ["A"] if name == "C" else [],
+                 "change_scope": [{"operation": "add", "path": f"Backend/app/{name}.py"}]}
+                for name in ("A", "B", "C")
+            ]
+            state = _ready_build_state(raw_workspace, {
+                "workspace": raw_workspace, "project_plan": {"version": "1.0.0"},
+                "build_execution_scope": {"type": "application", "targetId": "application"},
+                "build_task_plan": replace_build_task_plan_tasks({
+                    "schema_version": "build-dag.v4",
+                    "build_units": {"application:root": {
+                        "id": "application:root", "kind": "application", "task_ids": ["A", "B", "C"],
+                    }},
+                    "unit_graph": {"nodes": ["application:root"], "edges": []},
+                }, tasks),
+                "tasks": tasks, "active_run_id": source_run_id, "active_thread_id": thread_id,
+            })
+            calls: Counter[str] = Counter()
+            calls_lock = Lock()
+
+            def build_node(current: ProjectState) -> dict:
+                """保持真实节点领取流程。"""
+
+                with bind_node_recovery(current, "build"):
+                    return run_build_scheduler(current)
+
+            def runner(**kwargs):
+                """首次批次让 B 失败，其他任务写入授权文件。"""
+
+                results = []
+                for task in kwargs["tasks"]:
+                    with calls_lock:
+                        calls[task["id"]] += 1
+                    if task["id"] == "B":
+                        results.append({"task_id": "B", "owner": "backend", "status": "failed",
+                                        "failure_category": "network_error"})
+                    else:
+                        _write_workspace_file(kwargs.get("workspace"), task["change_scope"][0]["path"])
+                        results.append({"task_id": task["id"], "owner": "backend", "status": "completed"})
+                return results
+
+            builder = StateGraph(ProjectState)
+            builder.add_node("workflow_entry", workflow_entry)
+            builder.add_node("build", build_node)
+            builder.add_edge(START, "workflow_entry")
+            builder.add_edge("workflow_entry", "build")
+            builder.add_edge("build", END)
+            graph = builder.compile(checkpointer=await workflow_checkpointer(workspace=raw_workspace))
+            await observe_execution_started(
+                workspace=raw_workspace, project_id=None, thread_id=thread_id,
+                run_id=source_run_id, workflow_scope="application", first_node="build",
+            )
+            await observe_node_started(
+                workspace=raw_workspace, run_id=source_run_id, thread_id=thread_id,
+                workflow_scope="application", node_name="build",
+            )
+            build_module = importlib.import_module("app.graph.subgraphs.build")
+            original_apply = build_module._apply_scheduler_results
+
+            def persist_then_stop(*args, **kwargs):
+                """在批次进度落盘后模拟进程中断，保留真实 checkpoint 入口。"""
+
+                original_apply(*args, **kwargs)
+                raise RuntimeError("backend stopped")
+
+            with (
+                self.assertRaisesRegex(RuntimeError, "backend stopped"),
+                patch.object(build_module, "_apply_scheduler_results", side_effect=persist_then_stop),
+                patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner),
+            ):
+                await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
+            source_record = load_build_execution_record(state, source_run_id)
+            assert source_record is not None
+            self.assertEqual(
+                {task["id"]: task["status"] for task in source_record["progress"]["tasks"]},
+                {"A": "completed", "B": "failed", "C": "pending"},
+            )
+            await mark_execution_interrupted(
+                workspace=workspace, run_id=source_run_id,
+                interrupted_at=datetime.now(timezone.utc),
+            )
+            source = await get_execution(raw_workspace, source_run_id)
+            assert source is not None
+            resolution = await InterruptedTargetResolver().resolve(
+                workspace=raw_workspace, source=source, graph=graph,
+            )
+            self.assertEqual(resolution.kind, "continue")
+            assert resolution.reentry_plan is not None
+            self.assertEqual(resolution.reentry_plan.reason, WorkflowReentryReason.INTERRUPTED_CONTINUE)
+            with (
+                patch("app.protocols.execution_recovery.workflow_graph_for_request", return_value=graph),
+                patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner),
+            ):
+                frames = [frame async for frame in build_execution_recovery_ag_ui_stream(
+                    payload={"forwardedProps": {
+                        "workspaceRoot": raw_workspace,
+                        "executionRecovery": {"action": "continue", "sourceRunId": source_run_id},
+                    }},
+                )]
+            self.assertFalse(any('"type":"RUN_ERROR"' in frame for frame in frames), "".join(frames))
+            self.assertEqual(calls, Counter({"A": 1, "B": 1, "C": 1}))
+
     async def _exercise_escaped_build_entry(self, *, interrupted: bool) -> None:
         """在首次批次持久化后模拟退出，再从真实节点入口重建执行。"""
 
@@ -392,12 +515,24 @@ class NativeBuildEntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         await self._exercise_consecutive_recovery(exit_before_record=False)
 
+    async def test_started_retry_interrupted_after_prepare(self) -> None:
+        """R2 已提交 B 的重试准备后中断，R3 继续同一轮而不重复计数。"""
+
+        await self._exercise_consecutive_recovery(exit_before_record=False, interrupt_r2=True)
+
+    async def test_started_retry_interrupted_before_record(self) -> None:
+        """R2 在建记录前中断，R3 依据同一 Build fork 的 RecoveryAttempt 重做准备。"""
+
+        await self._exercise_consecutive_recovery(exit_before_record=True, interrupt_r2=True)
+
     async def test_consecutive_recovery_inherits_progress_before_child_record(self) -> None:
         """R2 在 Build 创建记录前退出，R3 沿父链找到同一调用的 R1 进度。"""
 
         await self._exercise_consecutive_recovery(exit_before_record=True)
 
-    async def _exercise_consecutive_recovery(self, *, exit_before_record: bool) -> None:
+    async def _exercise_consecutive_recovery(
+        self, *, exit_before_record: bool, interrupt_r2: bool = False,
+    ) -> None:
         """分别模拟 child 领取进度前后退出，再走真实 Native Recovery。"""
 
         with tempfile.TemporaryDirectory() as raw_workspace:
@@ -501,7 +636,11 @@ class NativeBuildEntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertRaisesRegex(RuntimeError, "R2 escaped") as raised,
                     bind_recovery_runtime(r2.node_recovery_context()),
                     patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner),
-                    patch.object(build_module, "_apply_scheduler_results", side_effect=RuntimeError("R2 escaped")),
+                    patch.object(
+                        build_module,
+                        "_execute_ready_tasks" if interrupt_r2 else "_apply_scheduler_results",
+                        side_effect=RuntimeError("R2 escaped"),
+                    ),
                 ):
                     await graph.ainvoke(None, config=r2.fork_config)
             finally:
@@ -512,19 +651,44 @@ class NativeBuildEntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
             else:
                 assert r2_record is not None
                 self.assertEqual(r2_record["execution_run_id"], r2.new_run_id)
-                self.assertEqual(r2_record["progress_source_run_id"], "chain-R1")
+                self.assertEqual(r2_record["progress_source_run_id"], r2.new_run_id)
                 self.assertEqual(r2_record["build_run_id"], r1_record["build_run_id"])
-            fail_workflow_lifecycle(raw_workspace, run_id=r2.new_run_id, phase="build", error=raised.exception)
-            await observe_execution_failed(
-                workspace=raw_workspace, run_id=r2.new_run_id, thread_id=thread_id,
-                workflow_scope="application", exception=raised.exception, authoritative_node="build",
-            )
+                self.assertEqual(r2_record["execution_stage"], "prepared")
+                prepared_tasks = {task["id"]: task for task in r2_record["progress"]["tasks"]}
+                self.assertEqual(prepared_tasks["A"]["status"], "completed")
+                self.assertEqual(prepared_tasks["B"]["status"], "pending")
+                self.assertEqual(prepared_tasks["B"]["retry_count"], 1)
+                self.assertEqual(
+                    next(result for result in r2_record["progress"]["build_results"]
+                         if result["task_id"] == "B")["status"], "failed",
+                )
+            if interrupt_r2:
+                await mark_execution_interrupted(
+                    workspace=workspace, run_id=r2.new_run_id,
+                    interrupted_at=datetime.now(timezone.utc),
+                )
+            else:
+                fail_workflow_lifecycle(raw_workspace, run_id=r2.new_run_id, phase="build", error=raised.exception)
+                await observe_execution_failed(
+                    workspace=raw_workspace, run_id=r2.new_run_id, thread_id=thread_id,
+                    workflow_scope="application", exception=raised.exception, authoritative_node="build",
+                )
             r2_source = await get_execution(raw_workspace, r2.new_run_id)
             assert r2_source is not None
-            r3_plan = await FailureTargetResolver().resolve(
-                workspace=raw_workspace, source=r2_source, graph=graph,
-            )
-            if exit_before_record:
+            if interrupt_r2:
+                self.assertEqual(r2_source.status, DurableExecutionStatus.INTERRUPTED)
+                resolution = await InterruptedTargetResolver().resolve(
+                    workspace=raw_workspace, source=r2_source, graph=graph,
+                )
+                self.assertEqual(resolution.kind, "continue")
+                r3_plan = resolution.reentry_plan
+                assert r3_plan is not None
+                self.assertEqual(r3_plan.reason, WorkflowReentryReason.INTERRUPTED_CONTINUE)
+            else:
+                r3_plan = await FailureTargetResolver().resolve(
+                    workspace=raw_workspace, source=r2_source, graph=graph,
+                )
+            if exit_before_record or interrupt_r2:
                 with (
                     patch("app.protocols.execution_recovery.workflow_graph_for_request", return_value=graph),
                     patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner),
@@ -534,7 +698,8 @@ class NativeBuildEntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
                         payload={"forwardedProps": {
                             "workspaceRoot": raw_workspace,
                             "executionRecovery": {
-                                "action": "retry_current_failure", "sourceRunId": r2.new_run_id,
+                                "action": "continue" if interrupt_r2 else "retry_current_failure",
+                                "sourceRunId": r2.new_run_id,
                             },
                         }},
                     )]
@@ -562,15 +727,19 @@ class NativeBuildEntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(recovered["build_summary"]["status"], "completed")
                 recovered_build_run_id = recovered["build_run_id"]
             self.assertEqual(recovered_build_run_id, r1_record["build_run_id"])
-            self.assertEqual(calls, Counter({"A": 1, "B": 2 if exit_before_record else 3}))
+            self.assertEqual(calls, Counter({"A": 1, "B": 2 if (exit_before_record or interrupt_r2) else 3}))
             if os.environ.get("BUILD_RECOVERY_EVIDENCE"):
                 print(json.dumps({
-                    "scenario": "before_record" if exit_before_record else "before_batch_commit",
+                    "scenario": (
+                        "interrupt_before_record" if exit_before_record else "interrupt_after_prepare"
+                    ) if interrupt_r2 else ("before_record" if exit_before_record else "before_batch_commit"),
                     "source": "chain-R1", "r2": r2.new_run_id,
-                    "r3": attempts[0].new_run_id if exit_before_record else r3.new_run_id,
+                    "r3": attempts[0].new_run_id if (exit_before_record or interrupt_r2) else r3.new_run_id,
                     "r2_entry_checkpoint": r2_plan.context_authority.checkpoint_id,
                     "r3_entry_checkpoint": r3_plan.context_authority.checkpoint_id,
                     "build_run": r1_record["build_run_id"],
                     "r2_progress_source": r2_record["progress_source_run_id"] if r2_record else None,
+                    "r2_execution_stage": r2_record["execution_stage"] if r2_record else None,
+                    "r3_reason": r3_plan.reason.value,
                     "calls": dict(calls),
                 }, ensure_ascii=False))

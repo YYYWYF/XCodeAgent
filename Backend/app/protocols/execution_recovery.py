@@ -171,6 +171,7 @@ def build_execution_recovery_ag_ui_stream(
                 workspace=workspace,
                 requested=source,
                 graph=graph,
+                allow_current_failed_head=action == "retry_current_failure",
             )
             reentry_plan = None
             if source.status is DurableExecutionStatus.FAILED:
@@ -368,8 +369,9 @@ async def _resolve_current_recovery_source(
     workspace: str,
     requested: DurableExecutionRecord,
     graph: Any,
+    allow_current_failed_head: bool = False,
 ) -> DurableExecutionRecord:
-    """以最新 checkpoint execution identity 校验请求仍指向当前 lineage head。"""
+    """以当前 lineage 选择恢复来源；通用重试可从旧提示转向同会话的当前失败。"""
 
     state_reader = getattr(graph, "aget_state", None)
     if not callable(state_reader):
@@ -411,6 +413,14 @@ async def _resolve_current_recovery_source(
             "当前没有可用的 recovery source。",
         )
     if resolution.head.run_id != requested.run_id:
+        if (
+            allow_current_failed_head
+            and resolution.head.status is DurableExecutionStatus.FAILED
+            and requested.owner_session_id
+            and resolution.head.owner_session_id == requested.owner_session_id
+            and resolution.head.workflow_scope == requested.workflow_scope
+        ):
+            return resolution.head
         raise RecoveryExecutionError(
             "RECOVERY_SOURCE_SUPERSEDED",
             "当前 recovery source 已被新的 child execution 替代，请刷新后继续。",

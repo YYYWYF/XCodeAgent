@@ -276,15 +276,17 @@ def _workspace_revision(workspace_root: Path, files: list[str]) -> str:
     git_head = _run(["git", "rev-parse", "HEAD"], cwd=workspace_root)
     if git_head and git_head.returncode == 0:
         parts.append(f"head:{git_head.stdout.strip()}")
+        # 平台状态会在同一次 Workflow 中持续写入，不能据此判定用户工作区源码漂移。
+        source_pathspec = ["--", ".", ":(exclude).devagentstudio"]
         for args, label in (
-            (["git", "diff", "--cached", "--binary"], "staged"),
-            (["git", "diff", "--binary"], "unstaged"),
+            (["git", "diff", "--cached", "--binary", *source_pathspec], "staged"),
+            (["git", "diff", "--binary", *source_pathspec], "unstaged"),
         ):
             result = _run(args, cwd=workspace_root, timeout=20)
             if result is not None:
                 parts.append(f"{label}:{_hash_text(result.stdout)}")
         untracked = _run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
+            ["git", "ls-files", "--others", "--exclude-standard", *source_pathspec],
             cwd=workspace_root,
             timeout=20,
         )

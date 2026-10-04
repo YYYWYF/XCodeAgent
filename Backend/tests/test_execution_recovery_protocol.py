@@ -20,6 +20,7 @@ from app.persistence.execution_recovery import (
 )
 from app.protocols.execution_recovery import (
     _parse_request,
+    _resolve_current_recovery_source,
     build_execution_recovery_ag_ui_stream,
 )
 
@@ -68,6 +69,44 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
         """释放测试工作区。"""
 
         self._temporary_workspace.cleanup()
+
+    async def test_generic_retry_uses_current_failed_head_from_same_session(self) -> None:
+        """旧提示只在同会话当前 head 已失败时交给统一重试入口。"""
+
+        now = datetime.now(timezone.utc)
+        common = dict(
+            thread_id="retry-thread", workspace=str(self.workspace), project_id="project",
+            execution_kind="workbench", workflow_scope="application",
+            first_node="prepare_build_tasks", current_node="prepare_build_tasks",
+            started_at=now, updated_at=now, ended_at=now,
+            owner_session_id="session-A",
+        )
+        stale = DurableExecutionRecord(
+            run_id="old-run", status=DurableExecutionStatus.INTERRUPTED, **common
+        )
+        current = DurableExecutionRecord(
+            run_id="current-run", status=DurableExecutionStatus.FAILED, **common
+        )
+        graph = SimpleNamespace(
+            aget_state=AsyncMock(return_value=SimpleNamespace(values={"active_run_id": current.run_id}))
+        )
+        with patch(
+            "app.protocols.execution_recovery.resolve_recovery_lineage_head",
+            new=AsyncMock(return_value=SimpleNamespace(
+                state=SimpleNamespace(value="RECOVERABLE_HEAD"), head=current,
+            )),
+        ):
+            resolved = await _resolve_current_recovery_source(
+                workspace=str(self.workspace), requested=stale, graph=graph,
+                allow_current_failed_head=True,
+            )
+            with self.assertRaisesRegex(Exception, "已被新的 child execution 替代"):
+                await _resolve_current_recovery_source(
+                    workspace=str(self.workspace),
+                    requested=stale.model_copy(update={"owner_session_id": "session-B"}),
+                    graph=graph, allow_current_failed_head=True,
+                )
+        self.assertEqual(resolved.run_id, current.run_id)
 
     def test_client_cannot_supply_recovery_authority(self) -> None:
         """checkpoint、node、thread 和策略等执行 authority 必须由 Backend 决定。"""
@@ -192,9 +231,12 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
                 },
             }
         }
+        graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(
+            values={"active_run_id": source.run_id}
+        )))
         with patch(
             "app.protocols.execution_recovery.application_planning_graph_for_request",
-            new=AsyncMock(return_value=SimpleNamespace()),
+            new=AsyncMock(return_value=graph),
         ):
             outputs = [
                 "".join(
@@ -209,7 +251,7 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
             ]
 
         for output in outputs:
-            self.assertIn("FAILED_NODE_PREDECESSOR_NOT_FOUND", output)
+            self.assertIn("NODE_ENTRY_AUTHORITY_MISSING", output)
             self.assertIn('"type":"RUN_ERROR"', output)
         self.assertEqual(
             await list_recovery_attempts_from_source(self.workspace, source.run_id),
@@ -236,6 +278,7 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
         )
         await insert_execution(source)
         snapshot = _RecoverySnapshot(source.thread_id, "source-checkpoint")
+        snapshot.values["active_run_id"] = source.run_id
 
         async def aget_state(_config: dict[str, object]) -> _RecoverySnapshot:
             """保留 direct state reader，但不提供 committed history reader。"""

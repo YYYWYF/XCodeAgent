@@ -374,6 +374,7 @@ class RecoveryAction(ExecutionRecoveryModel):
 
     action_id: str = Field(alias="actionId", min_length=1, max_length=512)
     kind: RecoveryActionKind
+    target_node: str | None = Field(default=None, alias="targetNode", max_length=256)
     label: str = Field(min_length=1, max_length=128)
     description: str = Field(min_length=1, max_length=2048)
     requires_confirmation: bool = Field(alias="requiresConfirmation", default=False)

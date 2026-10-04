@@ -109,11 +109,11 @@ test('J1/J4 transport state and durable Recovery render independently', () => {
   const disconnected = failConnectionRequest(initialConnectionState(true), 1, 'SSE disconnected')
   const disconnectedOnly = renderSurfaces(disconnected)
   assert.match(disconnectedOnly, /Backend 暂时不可用/)
-  assert.doesNotMatch(disconnectedOnly, /工作台执行需要恢复/)
+  assert.doesNotMatch(disconnectedOnly, /当前执行失败/)
 
   const healthyRecovery = renderSurfaces(initialConnectionState(true), recoveryCandidate())
   assert.doesNotMatch(healthyRecovery, /connection-status-banner/)
-  assert.match(healthyRecovery, /工作台执行需要恢复/)
+  assert.match(healthyRecovery, /当前执行失败/)
 })
 
 test('J5/J7 disconnect and failed refresh preserve last-known-good Incident', () => {
@@ -124,7 +124,7 @@ test('J5/J7 disconnect and failed refresh preserve last-known-good Incident', ()
     durable.extensions.executionRecovery?.candidates[0]
   )
   assert.match(markup, /Backend 暂时不可用/)
-  assert.match(markup, /工作台执行需要恢复/)
+  assert.match(markup, /当前执行失败/)
   assert.match(markup, /disabled=""/)
   assert.equal(
     durable.extensions.executionRecovery?.candidates[0]?.recoveryActionPlan.incidentId,

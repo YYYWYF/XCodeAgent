@@ -20,7 +20,6 @@ const { Text } = Typography
 
 type Props = {
   dependencyLocked?: boolean
-  error?: string
   execution?: WorkbenchExecution
   developmentTotals?: { completed: number; total: number }
   mode: Exclude<PlanExecutionMode, 'idle'>
@@ -37,7 +36,6 @@ type Props = {
 /** 仅替换工作区最底部输入区，承载计划锁定说明和必要控制动作。 */
 export default function PlanExecutionDock({
   dependencyLocked = false,
-  error,
   execution,
   developmentTotals,
   mode,
@@ -116,8 +114,7 @@ export default function PlanExecutionDock({
                 : planModeDescription(
                     mode,
                     execution?.phase,
-                    pending?.payload,
-                    error
+                    pending?.payload
                   )}
           </Text>
         </div>
@@ -315,14 +312,10 @@ function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
 function planModeDescription(
   mode: Exclude<PlanExecutionMode, 'idle'>,
   phase?: string,
-  payload?: Record<string, unknown>,
-  error?: string
+  payload?: Record<string, unknown>
 ): string {
   if (mode === 'failed') {
-    return (
-      error ||
-      '可在上方恢复卡片查看当前可执行的失败恢复操作。'
-    )
+    return '可以在上方重试，或结束当前计划。'
   }
   if (mode === 'awaiting_repair_confirmation') {
     return String(payload?.reason || payload?.message || '修复范围发生变化，确认后继续。')

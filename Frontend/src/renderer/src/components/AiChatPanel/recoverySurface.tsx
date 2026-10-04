@@ -40,7 +40,11 @@ export default function RecoverySurface({
     <RecoveryIncidentCard
       incident={incident}
       disabled={actionDisabled}
-      error={recoveryError}
+      error={
+        isApplicationPlanningPhase || !recoveryError
+          ? recoveryError
+          : '重试未成功，请再试一次或结束当前执行。'
+      }
       onAction={
         isApplicationPlanningPhase
           ? onRetryPlanning

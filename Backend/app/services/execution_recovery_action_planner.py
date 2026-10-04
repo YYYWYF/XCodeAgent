@@ -64,6 +64,7 @@ def plan_failed_node_reentry_action(
     action = _action(
         incident_id=incident_id,
         kind=RecoveryActionKind.RETRY_FAILED_NODE,
+        target_node=reentry_plan.target_node,
         label=_failed_node_retry_label(reentry_plan.target_node),
         description="恢复失败 Node 开始前的精确语义 State，并使用当前运行配置重新执行。",
     )
@@ -116,6 +117,7 @@ def plan_business_node_reentry_action(
     action = _action(
         incident_id=incident_id,
         kind=RecoveryActionKind.RETRY_BUSINESS_NODE,
+        target_node=reentry_plan.target_node,
         label=label,
         description=(
             "重新执行计划生成，并尝试复用仍然有效的已完成结果。"
@@ -212,6 +214,7 @@ def _action(
     *,
     incident_id: str,
     kind: RecoveryActionKind,
+    target_node: str | None = None,
     label: str,
     description: str,
 ) -> RecoveryAction:
@@ -221,6 +224,7 @@ def _action(
     return RecoveryAction(
         actionId=f"recovery-action-{action_id[:32]}",
         kind=kind,
+        targetNode=target_node,
         label=label,
         description=description,
     )

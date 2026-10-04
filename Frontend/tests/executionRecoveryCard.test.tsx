@@ -210,24 +210,30 @@ test('Workbench Recovery Incident exposes the Backend primary action', () => {
   assert.match(markup, /继续执行/)
 })
 
-test('failed node retry shows the target in plain language and keeps one details arrow', () => {
+test('failed node retry shows the entry node without exposing internal diagnostics', () => {
   const candidate = recovery('ready')
   candidate.executionStatus = 'failed'
   candidate.currentNode = 'prepare_build_tasks'
   candidate.recoveryActionPlan.primaryAction = {
     actionId: 'retry-run-A',
     kind: 'retry_failed_node',
+    targetNode: 'prepare_build_tasks',
     label: '重新执行失败步骤',
     description: '从失败节点重新执行。',
     requiresConfirmation: false
   }
   const incident = workbenchRecoveryIncident(candidate)
   if (!incident) throw new Error('测试候选未生成 Workbench Incident。')
-  const markup = renderToStaticMarkup(createElement(RecoveryIncidentCard, { incident }))
+  const markup = renderToStaticMarkup(createElement(RecoveryIncidentCard, {
+    incident,
+    onAction: () => undefined
+  }))
   assert.match(markup, /当前执行失败/)
-  assert.match(markup, /可尝试从 prepare_build_tasks 节点重新执行。/)
-  assert.match(markup, /<summary>错误详情<\/summary>/)
-  assert.doesNotMatch(markup.split('<details')[0], /Workbench diagnostic visible|恢复目标：/)
+  assert.match(markup, /将从「生成执行计划」节点重试。/)
+  assert.match(markup, />重试</)
+  assert.doesNotMatch(markup, /<summary>错误详情<\/summary>/)
+  assert.doesNotMatch(markup, /Workbench diagnostic visible|PlanningRun|DagPlanningError/)
+  assert.doesNotMatch(markup.split('<details')[0], /恢复目标：/)
 })
 
 test('Workbench needs_attention retains a retry entry for Backend re-resolution', () => {
@@ -243,8 +249,8 @@ test('Workbench needs_attention retains a retry entry for Backend re-resolution'
         }
       })
     )
-    assert.match(markup, /RECOVERY_TEST/)
-    assert.match(markup, /Workbench diagnostic visible/)
+    assert.doesNotMatch(markup, /RECOVERY_TEST/)
+    assert.doesNotMatch(markup, /Workbench diagnostic visible/)
     assert.match(markup, /<button/)
     assert.match(markup, /重试/)
     assert.doesNotMatch(markup, /继续执行/)
@@ -252,7 +258,7 @@ test('Workbench needs_attention retains a retry entry for Backend re-resolution'
   }
 })
 
-test('stale checkpoint guidance stays separate from the task failure', () => {
+test('stale recovery details stay internal while the existing retry remains available', () => {
   const candidate = recovery('blocked')
   candidate.recoveryActionPlan.reasonCode = 'RECOVERY_SOURCE_NOT_CURRENT'
   candidate.recoveryActionPlan.message =
@@ -260,10 +266,9 @@ test('stale checkpoint guidance stays separate from the task failure', () => {
   const incident = workbenchRecoveryIncident(candidate)
   if (!incident) throw new Error('测试候选未生成 Workbench Incident。')
   const markup = renderToStaticMarkup(createElement(RecoveryIncidentCard, { incident }))
-  assert.match(markup, /请先处理上方的任务错误，再尝试重试。/)
-  assert.doesNotMatch(markup.split('<details')[0], /checkpoint|RECOVERY_SOURCE_NOT_CURRENT/)
-  assert.match(markup, /RECOVERY_SOURCE_NOT_CURRENT/)
-  assert.match(markup, /中断现场缺少唯一/)
+  assert.match(markup, /执行未完成/)
+  assert.match(markup, /请重试；系统会重新确认执行起点。/)
+  assert.doesNotMatch(markup, /checkpoint|RECOVERY_SOURCE_NOT_CURRENT|请先处理上方的任务错误/)
 })
 
 test('planning Recovery Incident shows safe failure summary and Backend action', () => {
@@ -502,7 +507,7 @@ test('Planning needs_attention retains a retry entry for Backend re-resolution',
       }
     })
   )
-  assert.match(markup, /RECOVERY_BLOCKED/)
+  assert.doesNotMatch(markup, /RECOVERY_BLOCKED/)
   assert.match(markup, /Planning diagnostic visible/)
   assert.match(markup, /<button/)
   assert.match(markup, /重试/)
@@ -572,7 +577,7 @@ test('caller projects needs_attention as the only actionable current Incident', 
     countOccurrences(markup, 'data-testid="application-planning-recovery-incident"'),
     1
   )
-  assert.match(markup, /NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED/)
+  assert.doesNotMatch(markup, /NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED/)
   assert.match(markup, /当前现场没有可证明安全的自动恢复入口，需要人工处理/)
   assert.match(markup, /<button/)
   assert.match(markup, /重试/)

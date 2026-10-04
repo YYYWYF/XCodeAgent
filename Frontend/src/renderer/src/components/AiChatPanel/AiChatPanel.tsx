@@ -3282,6 +3282,10 @@ export default function AiChatPanel({
     runId: activeWorkflow?.runId,
     threadId: activeWorkflow?.threadId || activeSession?.threadId
   }
+  const activeExecutionRecovery = useMemo(
+    () => executionRecoveryForSession(applicationLifecycle, activeSession?.sessionId),
+    [applicationLifecycle, activeSession?.sessionId]
+  )
   // 实体数据源绑定以聊天样式呈现，并作为独立流程结束。
   const entityDesignChatActive = Boolean(
     activeDetailTarget.type === 'entity' &&
@@ -3313,9 +3317,15 @@ export default function AiChatPanel({
   // 新建对话的空白草稿不归属于任何历史 Run；应用级 execution 不能重新锁住输入区。
   const detachedConversationDraft =
     !isApplicationPlanningPhase && !activeSession && activeDetailTarget.type === 'none'
+  // Durable 失败或不可继续的中断已证明当前 Run 不在执行；旧 lifecycle 的 running 不能再显示暂停。
   const displayedPlanExecutionMode =
     detachedConversationDraft || planEnded
       ? 'idle'
+      : (activeExecutionRecovery?.executionStatus === 'failed' ||
+          (activeExecutionRecovery?.executionStatus === 'interrupted' &&
+            activeExecutionRecovery.recoveryActionPlan.status === 'needs_attention')) &&
+          scopedExecution?.runId === activeExecutionRecovery.sourceRunId
+        ? 'failed'
       : deriveDisplayedPlanExecutionMode(
           scopedExecution,
           stopping ? 'stopping' : activeWorkflow?.summary.status,
@@ -3687,10 +3697,6 @@ export default function AiChatPanel({
     ]
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
-  const activeExecutionRecovery = useMemo(
-    () => executionRecoveryForSession(applicationLifecycle, activeSession?.sessionId),
-    [applicationLifecycle, activeSession?.sessionId]
-  )
   const activeConnectionState =
     isApplicationPlanningPhase && planningState ? planningState.connection : connectionState
   const currentRecoveryIncident = isApplicationPlanningPhase
@@ -4969,7 +4975,6 @@ export default function AiChatPanel({
                   rightContent={
                     <PlanExecutionDock
                       dependencyLocked={targetExecutionContext.dependencyLocked}
-                      error={scopedExecution?.error?.message || error}
                       execution={scopedExecution}
                       developmentTotals={developmentTotals}
                       mode={displayedPlanExecutionMode}

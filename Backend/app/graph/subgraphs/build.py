@@ -902,21 +902,10 @@ def _apply_scheduler_results(
         binding = {key: str(state.get(key) or "") for key in (
             "build_run_id", "build_run_plan_path", "build_run_plan_sha256",
         )}
-        progress = {
-            **binding,
-            "active_run_id": state["active_run_id"],
-            "build_execution_scope": deepcopy(state.get("build_execution_scope")),
-            "tasks": deepcopy(updated["tasks"]),
-            "build_results": deepcopy(updated.get("build_results", [])),
-            "build_summary": deepcopy(updated.get("build_summary", {})),
-            "repair_task_plan": deepcopy(state.get("repair_task_plan", {})),
-            "repair_task_plan_path": state.get("repair_task_plan_path"),
-            "repair_tasks": deepcopy(state.get("repair_tasks", [])),
-            "database_change_plan": deepcopy(state.get("database_change_plan", {})),
-            "database_approval_requests": deepcopy(state.get("database_approval_requests", [])),
-        }
+        progress = _build_runtime_progress({**state, **binding, **updated})
         write_build_execution_record(state, _build_execution_record(
             state, binding, progress, progress_source_run_id=str(state["active_run_id"]),
+            execution_stage="batch_committed",
         ))
     write_build_task_plan_execution_state(state, updated["build_task_plan"])
     return updated
@@ -1513,7 +1502,7 @@ def _restore_build_runtime(
 
 def _build_execution_record(
     state: ProjectState, binding: dict[str, str], progress: dict[str, Any] | None = None,
-    *, progress_source_run_id: str | None = None,
+    *, progress_source_run_id: str | None = None, execution_stage: str = "bound",
 ) -> dict[str, Any]:
     """将 Workflow 调用、正式计划和范围固定在同一 Build Run 记录。"""
 
@@ -1524,6 +1513,27 @@ def _build_execution_record(
         **binding,
         "progress": progress,
         "progress_source_run_id": progress_source_run_id if progress is not None else None,
+        "execution_stage": execution_stage,
+    }
+
+
+def _build_runtime_progress(state: ProjectState) -> dict[str, Any]:
+    """把已提交的 Build 任务状态与原结果保存在同一内部恢复快照。"""
+
+    return {
+        **{key: str(state.get(key) or "") for key in (
+            "build_run_id", "build_run_plan_path", "build_run_plan_sha256",
+        )},
+        "active_run_id": str(state.get("active_run_id") or ""),
+        "build_execution_scope": deepcopy(state.get("build_execution_scope")),
+        "tasks": deepcopy(state.get("tasks", [])),
+        "build_results": deepcopy(state.get("build_results", [])),
+        "build_summary": deepcopy(state.get("build_summary", {})),
+        "repair_task_plan": deepcopy(state.get("repair_task_plan", {})),
+        "repair_task_plan_path": state.get("repair_task_plan_path"),
+        "repair_tasks": deepcopy(state.get("repair_tasks", [])),
+        "database_change_plan": deepcopy(state.get("database_change_plan", {})),
+        "database_approval_requests": deepcopy(state.get("database_approval_requests", [])),
     }
 
 
@@ -1560,6 +1570,11 @@ def _source_build_record(state: ProjectState, recovery: Any) -> tuple[dict[str, 
         if errors:
             raise RecoveryExecutionError("BUILD_RETRY_PLAN_DRIFT", "；".join(errors))
         progress = record.get("progress")
+        stage = record.get("execution_stage")
+        if stage not in {"bound", "inherited", "prepared", "batch_committed"}:
+            raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "Build 内部执行阶段无效。")
+        if (stage == "bound" and progress is not None) or (stage != "bound" and progress is None):
+            raise RecoveryExecutionError("BUILD_RETRY_RESULT_DRIFT", "Build 内部执行阶段与进度不一致。")
         if progress is not None:
             if not isinstance(progress, dict):
                 raise RecoveryExecutionError("BUILD_RETRY_RESULT_DRIFT", "原 Build Run 进度格式无效。")
@@ -1568,6 +1583,8 @@ def _source_build_record(state: ProjectState, recovery: Any) -> tuple[dict[str, 
                 raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "继承的 Build 进度来源或绑定不一致。")
             if str(progress.get("active_run_id") or "") != owner:
                 raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "继承的 Build 进度执行身份不一致。")
+            if stage in {"prepared", "batch_committed"} and owner != run_id:
+                raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "已提交执行阶段必须拥有当前调用进度。")
             if progress_record is None:
                 progress_record = (record, owner)
         if progress_record is not None and run_id == progress_record[1]:
@@ -1601,6 +1618,17 @@ def run_build_scheduler(
         retry_failed_tasks = recovery.reentry_reason in {
             WorkflowReentryReason.BUSINESS_RETRY, WorkflowReentryReason.FAILURE_RETRY,
         }
+        if (
+            recovery.reentry_reason is WorkflowReentryReason.INTERRUPTED_CONTINUE
+            and recovery.started_build_retry
+            and (
+                source_record is None
+                or source_record.get("execution_run_id") != recovery.source_run_id
+                or source_record.get("execution_stage") in {"bound", "inherited"}
+            )
+        ):
+            # 父 RecoveryAttempt 已签发失败重试，但本 child 尚未提交准备结果。
+            retry_failed_tasks = True
         if recovery.internal_progress is not None:
             if source_record is not None and any(
                 recovery.internal_progress.get(key) != source_record.get(key)
@@ -1633,6 +1661,7 @@ def run_build_scheduler(
             write_build_execution_record(state, _build_execution_record(
                 state, build_run_binding, inherited_progress,
                 progress_source_run_id=progress_source_run_id,
+                execution_stage="inherited" if inherited_progress is not None else "bound",
             ))
     # 后续调度会把任务运行态写回派生计划；平台投影必须始终读取不可变的确认快照。
     confirmed_build_task_plan = deepcopy(build_task_plan)
@@ -1794,6 +1823,15 @@ def run_build_scheduler(
         "build_task_plan": replace_build_task_plan_tasks(build_task_plan, tasks),
         "build_results": list(state.get("build_results", [])),
     }
+    if retry_requested and (retry_task_ids or recovery_task_ids) and current_state.get("active_run_id"):
+        # 重试选择与 pending/retry_count 必须先于 Runner 原子落盘；继续执行直接领取
+        # 准备后的任务状态，不重新计数或把旧 failed 结果覆盖回 pending 任务。
+        prepared_progress = _build_runtime_progress(current_state)
+        write_build_execution_record(current_state, _build_execution_record(
+            current_state, build_run_binding, prepared_progress,
+            progress_source_run_id=str(current_state["active_run_id"]),
+            execution_stage="prepared",
+        ))
     build_execution_scope = state.get("build_execution_scope")
     execution_slice = resolve_execution_slice(
         build_task_plan=current_state["build_task_plan"],

@@ -127,10 +127,14 @@ class FailedNodeReentryArchitectureTests(unittest.IsolatedAsyncioTestCase):
         assert candidate is not None
         assert candidate.recovery_action_plan is not None
         self.assertEqual(candidate.availability, "ready")
-        self.assertEqual(candidate.recovery_action_plan["reasonCode"], "FAILED_NODE_REENTRY_READY")
+        self.assertEqual(candidate.recovery_action_plan.reason_code, "FAILED_NODE_REENTRY_READY")
         self.assertEqual(
-            candidate.recovery_action_plan["primaryAction"]["kind"],
-            RecoveryActionKind.RETRY_FAILED_NODE.value,
+            candidate.recovery_action_plan.primary_action.kind,
+            RecoveryActionKind.RETRY_FAILED_NODE,
+        )
+        self.assertEqual(
+            candidate.recovery_action_plan.primary_action.target_node,
+            self.reentry_plan.target_node,
         )
 
     async def test_missing_exact_node_entry_is_projected_as_needs_attention(self) -> None:
@@ -158,10 +162,10 @@ class FailedNodeReentryArchitectureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(candidate.availability, "blocked")
         self.assertFalse(candidate.can_continue)
         self.assertEqual(
-            candidate.recovery_action_plan["status"],
-            RecoveryIncidentStatus.NEEDS_ATTENTION.value,
+            candidate.recovery_action_plan.status,
+            RecoveryIncidentStatus.NEEDS_ATTENTION,
         )
-        self.assertIsNone(candidate.recovery_action_plan["primaryAction"])
+        self.assertIsNone(candidate.recovery_action_plan.primary_action)
 
     async def test_diagnostics_do_not_change_failed_node_eligibility(self) -> None:
         """不同 failure diagnostics 不能把 exact Node Entry 变成另一种恢复策略。"""

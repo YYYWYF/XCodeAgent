@@ -151,5 +151,5 @@ test('真实 Backend failureDiagnostic 使用公开字段后仍能生成当前 I
   )
 
   assert.equal(projected?.failureDiagnostic?.httpStatus, 404)
-  assert.equal(workbenchRecoveryIncident(projected)?.failureMessage, 'model not found')
+  assert.equal(workbenchRecoveryIncident(projected)?.failureMessage, undefined)
 })

@@ -240,6 +240,7 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             write_build_execution_record(entry, {
                 "execution_run_id": "run-source", "thread_id": "thread-build",
                 "build_execution_scope": scope, **binding, "progress": progress,
+                "progress_source_run_id": "run-source", "execution_stage": "batch_committed",
             })
             context = NodeRecoveryContext(
                 source_run_id="run-source", execution_run_id="run-child",

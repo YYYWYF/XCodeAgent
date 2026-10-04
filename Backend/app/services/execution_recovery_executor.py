@@ -105,6 +105,7 @@ class NativeRecoveryRuntimeContext:
     entry_state: dict[str, Any] | None = None
     internal_progress: dict[str, Any] | None = None
     source_lineage_run_ids: tuple[str, ...] = ()
+    started_build_retry: bool = False
 
     def node_recovery_context(self) -> NodeRecoveryContext:
         """从已验证的 source、child 和 checkpoint 生成一次性节点侧视图。"""
@@ -127,6 +128,7 @@ class NativeRecoveryRuntimeContext:
             entry_state=dict(self.entry_state or {}),
             internal_progress=(dict(self.internal_progress) if self.internal_progress is not None else None),
             source_lineage_run_ids=self.source_lineage_run_ids,
+            started_build_retry=self.started_build_retry,
         )
 
     def workflow_inputs(self) -> dict[str, Any]:
@@ -809,6 +811,10 @@ async def _fork_and_start(
         entry_checkpoint_id=plan.checkpoint_id,
     )
     source_lineage_run_ids = await _source_lineage_run_ids(workspace, source)
+    started_build_retry = await _started_build_retry_from_attempt(
+        workspace=workspace, source=source, snapshot=source_snapshot,
+        target_node=plan.target_node,
+    )
     observability = _recovery_observability(
         run_id=new_run_id,
         thread_id=source.thread_id,
@@ -918,6 +924,7 @@ async def _fork_and_start(
         entry_state=dict(source_values),
         internal_progress=internal_progress,
         source_lineage_run_ids=source_lineage_run_ids,
+        started_build_retry=started_build_retry,
     )
 
 
@@ -941,6 +948,30 @@ async def _source_lineage_run_ids(
             )
         current = attempt.source_run_id
     raise RecoveryExecutionError("RECOVERY_LINEAGE_DRIFT", "恢复父链存在循环。")
+
+
+async def _started_build_retry_from_attempt(
+    *, workspace: str, source: DurableExecutionRecord, snapshot: Any, target_node: str,
+) -> bool:
+    """仅在同一 Build fork 入口证明来源 child 曾由失败重试启动。"""
+
+    if source.status is not DurableExecutionStatus.INTERRUPTED or target_node != "build":
+        return False
+    attempt = await get_recovery_attempt(workspace, source.run_id)
+    if attempt is None or attempt.status is not RecoveryAttemptStatus.STARTED:
+        return False
+    parent = getattr(snapshot, "parent_config", {}) or {}
+    parent_identity = parent.get("configurable") if isinstance(parent, dict) else None
+    return bool(
+        attempt.new_run_id == source.run_id
+        and attempt.thread_id == source.thread_id
+        and attempt.source_status is DurableExecutionStatus.FAILED
+        and source.first_node == "build"
+        and isinstance(parent_identity, dict)
+        and parent_identity.get("thread_id") == source.thread_id
+        and (parent_identity.get("checkpoint_ns") or "") == ""
+        and parent_identity.get("checkpoint_id") == attempt.source_checkpoint_id
+    )
 
 
 async def _failed_source_state(

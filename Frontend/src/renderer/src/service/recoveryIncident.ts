@@ -96,39 +96,40 @@ export function workbenchRecoveryIncident(
   }
   const actionPlan = candidate.recoveryActionPlan
   if (actionPlan.status === 'recoverable' && actionPlan.primaryAction) {
+    const retryingNode = ['retry_failed_node', 'retry_business_node'].includes(
+      actionPlan.primaryAction.kind
+    )
+    const targetNode = actionPlan.primaryAction.targetNode
+    const nodeLabel = targetNode ? WORKBENCH_RETRY_NODE_LABELS[targetNode] : undefined
     return {
       kind: 'recoverable',
-      title: ['retry_failed_node', 'retry_business_node'].includes(actionPlan.primaryAction.kind)
+      title: retryingNode
         ? '当前执行失败'
         : '工作台执行需要恢复',
-      failureDiagnostic: candidate.failureDiagnostic,
-      failureMessage: candidate.failureDiagnostic?.message || candidate.message,
-      recoveryMessage: actionPlan.message,
-      action: actionPlan.primaryAction,
-      retryNode: candidate.currentNode,
+      recoveryMessage: retryingNode
+        ? nodeLabel ? `将从「${nodeLabel}」节点重试。` : '重试时将重新确认执行起点。'
+        : '可以继续当前执行。',
+      action: retryingNode
+        ? { ...actionPlan.primaryAction, label: '重试' }
+        : actionPlan.primaryAction,
       incidentId: actionPlan.incidentId
     }
   }
   if (actionPlan.status === 'needs_attention') {
-    // 精确处理当前断点已失效的情况；恢复限制不应盖过上方真正的任务失败。
-    if (actionPlan.reasonCode === 'RECOVERY_SOURCE_NOT_CURRENT') {
-      return {
-        kind: 'needs_attention',
-        title: '当前任务无法从断点继续',
-        failureMessage: '请先处理上方的任务错误，再尝试重试。',
-        recoveryMessage: '如果仍无法继续，请打开错误详情查看原因。',
-        reasonCode: actionPlan.reasonCode,
-        technicalMessage: actionPlan.message
-      }
-    }
     return {
       kind: 'needs_attention',
-      title: '工作台执行需要处理',
-      failureDiagnostic: candidate.failureDiagnostic,
-      failureMessage: candidate.failureDiagnostic?.message || candidate.message,
-      recoveryMessage: actionPlan.message,
+      title: candidate.executionStatus === 'failed' ? '当前执行失败' : '执行未完成',
+      recoveryMessage: '请重试；系统会重新确认执行起点。',
       reasonCode: actionPlan.reasonCode
     }
   }
   return undefined
+}
+
+/** 将后端确认的工作台重试节点转换为用户可读名称。 */
+const WORKBENCH_RETRY_NODE_LABELS: Record<string, string> = {
+  prepare_build_tasks: '生成执行计划',
+  build: '开发实现',
+  code_review: '前后端代码审查',
+  technical_planning: '生成技术规划'
 }

@@ -24,6 +24,7 @@ class NodeRecoveryContext:
     entry_state: dict[str, Any] = field(default_factory=dict)
     internal_progress: dict[str, Any] | None = None
     source_lineage_run_ids: tuple[str, ...] = ()
+    started_build_retry: bool = False
     claimed: bool = False
 
 
