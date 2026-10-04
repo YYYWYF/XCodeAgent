@@ -4,6 +4,11 @@ import { createElement, Fragment } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ConnectionStatusBanner from '../src/renderer/src/components/ConnectionStatusBanner'
 import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recoverySurface'
+import AgentErrorCard from '../src/renderer/src/components/AgentErrorCard'
+import {
+  globalFallbackState,
+  NO_RECOVERY_ENTRY_ERROR
+} from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
 import {
   beginConnectionRequest,
   completeConnectionRequest,
@@ -177,4 +182,19 @@ test('connection request generation rejects a late failure from an older request
   const succeededB = completeConnectionRequest(requestB, 2, 200)
   const lateFailureA = failConnectionRequest(succeededB, 1, 'late failure', 300)
   assert.deepEqual(lateFailureA, succeededB)
+})
+
+test('healthy GET without Recovery candidate shows the Recovery error card', () => {
+  const fallback = globalFallbackState({
+    connectionStatus: 'healthy',
+    hasRecoveryIncident: false,
+    recoveryError: NO_RECOVERY_ENTRY_ERROR
+  })
+  const html = fallback.visible && fallback.error
+    ? renderToStaticMarkup(createElement(AgentErrorCard, { error: fallback.error }))
+    : ''
+
+  assert.equal(fallback.visible, true)
+  assert.match(html, /role="alert"/)
+  assert.match(html, /已同步后端状态，但当前会话没有可验证的恢复入口。/)
 })

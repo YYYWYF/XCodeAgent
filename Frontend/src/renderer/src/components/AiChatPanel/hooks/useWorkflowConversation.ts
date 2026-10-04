@@ -3,6 +3,7 @@ import type { MutableRefObject, SetStateAction } from 'react'
 import { randomUUID } from '@ag-ui/client'
 import { workflowDebugResumeSource } from '../workflowDebugResume'
 import { executionRecoveryForSession } from '../executionRecoveryState'
+import { NO_RECOVERY_ENTRY_ERROR } from '../globalFallbackState'
 import {
   AgUiChatSession,
   AgUiRunError,
@@ -227,6 +228,8 @@ type UseWorkflowConversationParams = {
   applicationLifecycle?: ApplicationLifecycle
   /** 当前会话是否因另一会话持有 DAG Planning mutation ownership 而只读。 */
   applicationMutationReadonly?: boolean
+  /** Recovery GET 后按最新 lifecycle 重算当前会话的 mutation 权限。 */
+  recoveryMutationReadonlyForLifecycle?: (lifecycle: ApplicationLifecycle) => boolean
   draft: string
   draftKey: string
   selectedSkills: ChatMessageSkill[]
@@ -641,6 +644,7 @@ export function useWorkflowConversation({
   application,
   applicationLifecycle,
   applicationMutationReadonly = false,
+  recoveryMutationReadonlyForLifecycle,
   draft,
   draftKey,
   selectedSkills,
@@ -756,6 +760,10 @@ export function useWorkflowConversation({
   const sessionExecutionLocked = applicationMutationReadonly
   const workspaceBusy = sessionExecutionLocked
 
+  /** Recovery mutation 仅用最新 lifecycle 重算权限，缺少快照时保持只读。 */
+  const recoveryMutationReadonly = (lifecycle?: ApplicationLifecycle): boolean =>
+    !lifecycle || (recoveryMutationReadonlyForLifecycle?.(lifecycle) ?? workspaceBusy)
+
   /** 只提交 Backend 签发的当前恢复动作，缺少 action identity 时保持 fail closed。 */
   const handleExecuteRecoveryAction = async (
     recovery: ExecutionRecoveryCandidate
@@ -782,7 +790,7 @@ export function useWorkflowConversation({
       activeSession.sessionId !== recovery.ownerSessionId ||
       connectionStateRef.current.status !== 'healthy' ||
       loading ||
-      workspaceBusy ||
+      recoveryMutationReadonly(applicationLifecycleRef.current) ||
       recoveringSourceRunId === recovery.sourceRunId ||
       actionPlan.status !== 'recoverable' ||
       !primaryAction
@@ -949,7 +957,7 @@ export function useWorkflowConversation({
 
   /** 单次点击先刷新 durable truth，再执行 Backend 当前允许的恢复或重新判断失败。 */
   const retryCurrentRecovery = async (): Promise<boolean> => {
-    if (recoveryRetryRequestRef.current || loading || workspaceBusy || recoveringSourceRunId) {
+    if (recoveryRetryRequestRef.current || loading || recoveringSourceRunId) {
       return false
     }
     recoveryRetryRequestRef.current = true
@@ -962,7 +970,11 @@ export function useWorkflowConversation({
         activeSession?.sessionId
       )
       if (!recovery || !activeSession || activeSession.sessionId !== recovery.ownerSessionId) {
-        setRecoveryError('已同步后端状态，但当前会话没有可验证的恢复入口。')
+        setRecoveryError(NO_RECOVERY_ENTRY_ERROR)
+        return false
+      }
+      if (recoveryMutationReadonly(applicationLifecycleRef.current)) {
+        setRecoveryError('已同步后端状态，但当前应用由其他会话持有，无法执行恢复。')
         return false
       }
       if (recovery.recoveryActionPlan.status === 'recoverable') {
@@ -1057,7 +1069,10 @@ export function useWorkflowConversation({
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
     if (!trimmedMessage) return false
-    if (applicationMutationReadonly) {
+    if (
+      applicationMutationReadonly &&
+      !(options?.executionRecovery && !recoveryMutationReadonly(applicationLifecycleRef.current))
+    ) {
       // 只读会话在 ensureActiveSession 前失败，避免 B 会话因直接调用创建新的 mutation thread。
       setErrors((current) => ({
         ...current,

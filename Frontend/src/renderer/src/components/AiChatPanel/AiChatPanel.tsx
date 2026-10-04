@@ -175,6 +175,7 @@ import {
   stageOutputPhase
 } from './stageOutputState'
 import { executionRecoveryForSession } from './executionRecoveryState'
+import { globalFallbackState } from './globalFallbackState'
 import ConnectionStatusBanner from '../ConnectionStatusBanner'
 import RecoverySurface from './recoverySurface'
 import {
@@ -2365,6 +2366,14 @@ export default function AiChatPanel({
     application,
     applicationLifecycle,
     applicationMutationReadonly,
+    recoveryMutationReadonlyForLifecycle: (lifecycle) =>
+      applicationMutationReadonlyForSession(
+        resolveApplicationMutationOwnership(lifecycle, allSessions, sessionExecutions, {
+          applicationId: application.id,
+          workspaceRoot: application.workspaceRoot
+        }),
+        activeSession
+      ),
     draft,
     draftKey,
     editorMode,
@@ -3691,9 +3700,13 @@ export default function AiChatPanel({
     !workflowCodeReviewRetry(activeWorkflow)
       ? (isApplicationPlanningPhase ? planningState?.syncError || planningError : error)
       : undefined
-  const showGlobalFallback =
-    activeConnectionState.status !== 'healthy' ||
-    Boolean(currentRecoveryIncident || globalFallbackError)
+  const globalFallback = globalFallbackState({
+    connectionStatus: activeConnectionState.status,
+    hasRecoveryIncident: Boolean(currentRecoveryIncident),
+    recoveryError,
+    globalFallbackError
+  })
+  const showGlobalFallback = globalFallback.visible
   const acceptanceAwaiting = shouldShowAcceptanceDecisionDock({
     activePhase: activeWorkbenchPhase,
     planExecutionMode: displayedPlanExecutionMode,
@@ -4897,9 +4910,9 @@ export default function AiChatPanel({
                       }
                       recoveryRunning={recoveryRunning}
                     />
-                  ) : globalFallbackError ? (
+                  ) : globalFallback.error ? (
                     <AgentErrorCard
-                      error={recoveryError || globalFallbackError}
+                      error={globalFallback.error}
                       onRetry={isApplicationPlanningPhase
                         ? onRetryPlanning
                         : () => { void retryCurrentRecovery() }}

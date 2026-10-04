@@ -9,7 +9,10 @@ import {
   pendingDagConfirmationWorkflow,
   pendingDagOwnerSessionId
 } from '../src/renderer/src/components/AiChatPanel/stageOutputState'
-import { resolveApplicationMutationOwnership } from '../src/renderer/src/components/AiChatPanel/applicationOwnership'
+import {
+  applicationMutationReadonlyForSession,
+  resolveApplicationMutationOwnership
+} from '../src/renderer/src/components/AiChatPanel/applicationOwnership'
 import {
   createSessionIdentity,
   type SessionExecutionEntry,
@@ -713,6 +716,163 @@ test('J14 one Retry refreshes then sends only Backend incidentId and actionId', 
     assert.equal('targetNode' in (recoveryRequest || {}), false)
     assert.equal('currentNode' in (recoveryRequest || {}), false)
     assert.equal('phase' in (recoveryRequest || {}), false)
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow
+    })
+  }
+})
+
+test('Recovery Retry refreshes an empty projection without sending a mutation', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  const activeSession = buildSessionIdentity()
+  const application = {
+    id: APPLICATION_ID,
+    appName: 'Recovery empty projection application',
+    workspaceRoot: WORKSPACE_ROOT,
+    source: 'existing-workspace'
+  } as unknown as ApplicationConfig
+  const lifecycle = buildIdleLifecycle()
+  lifecycle.extensions = {
+    ...lifecycle.extensions,
+    executionRecovery: {
+      schemaVersion: 'execution-recovery.v1',
+      generatedAt: '2026-09-11T00:00:03.000Z',
+      candidates: []
+    }
+  }
+  let lifecycleReads = 0
+  let mutationRequests = 0
+  let captured: ReturnType<typeof useWorkflowConversation> | undefined
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body)) as { threadId: string; runId: string }
+    if (String(input).endsWith('/application-lifecycle/run')) {
+      lifecycleReads += 1
+      return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+    }
+    mutationRequests += 1
+    return sseErrorResponse(request.threadId, request.runId)
+  }
+
+  const params = buildRuntimeParams({
+    activeSession,
+    application,
+    applicationLifecycle: buildRecoveryLifecycle('incident-A', 'action-A'),
+    agUiSessionsRef: { current: {} as Record<string, AgUiChatSession> },
+    acquireSessionExecution: () => undefined,
+    releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined
+  })
+
+  /** 捕获真实 Hook 的只读刷新入口。 */
+  function Probe(): ReactElement {
+    captured = useWorkflowConversation(params)
+    return createElement('div')
+  }
+
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.ok(captured)
+    assert.equal(await captured.retryCurrentRecovery(), false)
+    assert.ok(lifecycleReads >= 1)
+    assert.equal(mutationRequests, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow
+    })
+  }
+})
+
+test('stale workspace ownership allows Recovery GET but blocks mutation after refresh', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  const activeSession = buildSessionIdentity()
+  const application = {
+    id: APPLICATION_ID,
+    appName: 'Recovery stale ownership application',
+    workspaceRoot: WORKSPACE_ROOT,
+    source: 'existing-workspace'
+  } as unknown as ApplicationConfig
+  const lifecycle = buildRecoveryLifecycle('incident-A', 'action-A')
+  lifecycle.activeExecutions = {
+    'run-other-owner': {
+      scope: 'page',
+      targetId: 'page-other',
+      threadId: 'thread-other',
+      runId: 'run-other-owner',
+      ownerSessionId: 'session-other',
+      phase: 'prepare_build_tasks',
+      status: 'running',
+      startedAt: '2026-09-11T00:00:00.000Z',
+      updatedAt: '2026-09-11T00:00:03.000Z'
+    }
+  } as ApplicationLifecycle['activeExecutions']
+  let lifecycleReads = 0
+  let mutationRequests = 0
+  let ownershipChecks = 0
+  let captured: ReturnType<typeof useWorkflowConversation> | undefined
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body)) as { threadId: string; runId: string }
+    if (String(input).endsWith('/application-lifecycle/run')) {
+      lifecycleReads += 1
+      return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+    }
+    mutationRequests += 1
+    return sseErrorResponse(request.threadId, request.runId)
+  }
+
+  const params = {
+    ...buildRuntimeParams({
+      activeSession,
+      application,
+      applicationLifecycle: lifecycle,
+      agUiSessionsRef: { current: {} as Record<string, AgUiChatSession> },
+      acquireSessionExecution: () => undefined,
+      releaseSessionExecution: () => undefined,
+      onApplicationLifecycleChange: () => undefined
+    }),
+    applicationMutationReadonly: true,
+    recoveryMutationReadonlyForLifecycle: (fresh: ApplicationLifecycle): boolean => {
+      ownershipChecks += 1
+      assert.equal(fresh.extensions?.executionRecovery?.candidates?.[0]?.sourceRunId, 'run-A')
+      return applicationMutationReadonlyForSession(
+        resolveApplicationMutationOwnership(fresh, [], [], {
+          applicationId: APPLICATION_ID,
+          workspaceRoot: WORKSPACE_ROOT
+        }),
+        activeSession
+      )
+    }
+  }
+
+  /** 捕获带 stale owner 的真实 Hook 重试入口。 */
+  function Probe(): ReactElement {
+    captured = useWorkflowConversation(params)
+    return createElement('div')
+  }
+
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.ok(captured)
+    assert.equal(await captured.retryCurrentRecovery(), false)
+    assert.ok(lifecycleReads >= 1)
+    assert.equal(ownershipChecks, 1)
+    assert.equal(mutationRequests, 0)
   } finally {
     globalThis.fetch = originalFetch
     Object.defineProperty(globalThis, 'window', {
