@@ -19,7 +19,7 @@ from app.graph.subgraphs.build import (
 )
 from app.domain.execution_recovery import WorkflowReentryReason
 from app.services.node_recovery_context import NodeRecoveryContext, bind_node_recovery, bind_recovery_runtime
-from app.services.build_task_planner import replace_build_task_plan_tasks
+from app.services.build_task_planner import replace_build_task_plan_tasks, tasks_from_build_task_plan
 from app.services.build_scheduler import attribute_task_file_changes
 from app.services.template_state import load_template_state, template_context
 from app.workspace.task_documents import write_build_execution_record
@@ -167,9 +167,10 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             })
             _, binding, errors = _bound_build_task_plan_for_build(entry)
             self.assertEqual(errors, [])
+            formal_tasks = tasks_from_build_task_plan(entry["build_task_plan"])
             source = {
                 **entry, **binding, "active_run_id": "run-source",
-                "tasks": [{**tasks[0], "status": "completed"}, {**tasks[1], "status": "failed", "failure_category": "network_error"}],
+                "tasks": [{**formal_tasks[0], "status": "completed"}, {**formal_tasks[1], "status": "failed"}],
                 "build_results": [
                     {"task_id": "A", "owner": "backend", "status": "completed"},
                     {"task_id": "B", "owner": "backend", "status": "failed", "failure_category": "network_error"},
@@ -226,10 +227,11 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             })
             _, binding, errors = _bound_build_task_plan_for_build(entry)
             self.assertEqual(errors, [])
+            formal_tasks = tasks_from_build_task_plan(entry["build_task_plan"])
             progress = {
                 **binding, "active_run_id": "run-source", "build_execution_scope": scope,
-                "tasks": [{**tasks[0], "status": "completed"},
-                          {**tasks[1], "status": "failed", "failure_category": "network_error"}],
+                "tasks": [{**formal_tasks[0], "status": "completed"},
+                          {**formal_tasks[1], "status": "failed"}],
                 "build_results": [
                     {"task_id": "A", "owner": "backend", "status": "completed"},
                     {"task_id": "B", "owner": "backend", "status": "failed", "failure_category": "network_error"},

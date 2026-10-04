@@ -915,7 +915,9 @@ def _apply_scheduler_results(
             "database_change_plan": deepcopy(state.get("database_change_plan", {})),
             "database_approval_requests": deepcopy(state.get("database_approval_requests", [])),
         }
-        write_build_execution_record(state, _build_execution_record(state, binding, progress))
+        write_build_execution_record(state, _build_execution_record(
+            state, binding, progress, progress_source_run_id=str(state["active_run_id"]),
+        ))
     write_build_task_plan_execution_state(state, updated["build_task_plan"])
     return updated
 
@@ -1431,8 +1433,10 @@ def _finalize_build(
     return route_evidence, platform_evidence, route_change_set, [*finalization_events, "scheduler:platform_projection_applied", "scheduler:authorization_edd_passed"], None
 
 
-def _restore_build_runtime(state: ProjectState, source_run_id: str, source: dict[str, Any]) -> ProjectState:
-    """核对失败 Run 的正式计划身份后，仅恢复 Build 调度器拥有的运行字段。"""
+def _restore_build_runtime(
+    state: ProjectState, source_run_id: str, source: dict[str, Any], *, retry_failed_tasks: bool,
+) -> ProjectState:
+    """核对来源 Run 的正式计划身份后，按恢复原因还原 Build 运行态。"""
 
     if str(source.get("active_run_id") or "") != source_run_id:
         raise RecoveryExecutionError("BUILD_RETRY_SOURCE_DRIFT", "Build 失败来源的 Run 身份不一致。")
@@ -1499,14 +1503,18 @@ def _restore_build_runtime(state: ProjectState, source_run_id: str, source: dict
         if task.get("status") == "pending" and isinstance(result, dict) and not task.get("retry_count"):
             if result.get("status") in {"completed", "already_satisfied", "failed"}:
                 task["status"] = result["status"]
-    restored = {**state, **dict(zip(binding_keys, source_binding)), "tasks": restored_tasks, "retry_failed_tasks": True, "request": ""}
+    restored = {**state, **dict(zip(binding_keys, source_binding)), "tasks": restored_tasks,
+                "retry_failed_tasks": retry_failed_tasks, "request": ""}
     for key in ("build_results", "build_summary", "repair_task_plan", "repair_task_plan_path", "repair_tasks", "database_change_plan", "database_approval_requests"):
         if key in source:
             restored[key] = deepcopy(source[key])
     return restored
 
 
-def _build_execution_record(state: ProjectState, binding: dict[str, str], progress: dict[str, Any] | None = None) -> dict[str, Any]:
+def _build_execution_record(
+    state: ProjectState, binding: dict[str, str], progress: dict[str, Any] | None = None,
+    *, progress_source_run_id: str | None = None,
+) -> dict[str, Any]:
     """将 Workflow 调用、正式计划和范围固定在同一 Build Run 记录。"""
 
     return {
@@ -1515,37 +1523,58 @@ def _build_execution_record(state: ProjectState, binding: dict[str, str], progre
         "build_execution_scope": deepcopy(state.get("build_execution_scope")),
         **binding,
         "progress": progress,
+        "progress_source_run_id": progress_source_run_id if progress is not None else None,
     }
 
 
-def _source_build_record(state: ProjectState, recovery: Any) -> dict[str, Any] | None:
-    """只领取可信恢复来源对应的原调用记录，并校验入口身份与计划。"""
+def _source_build_record(state: ProjectState, recovery: Any) -> tuple[dict[str, Any], str] | None:
+    """仅沿已验证的 RecoveryAttempt 父链寻找同一 Build 调用的最近进度。"""
 
-    try:
-        record = load_build_execution_record(state, recovery.source_run_id)
-    except (OSError, ValueError, TypeError) as exc:
-        raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "原 Build Run 绑定记录不可读取。") from exc
-    if record is None:
-        return None
     entry = recovery.entry_state
-    if (
-        record.get("execution_run_id") != recovery.source_run_id
-        or record.get("thread_id") != recovery.thread_id
-        or record.get("build_execution_scope") != entry.get("build_execution_scope")
-    ):
-        raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "原 Build Run 绑定记录与可信来源不一致。")
-    binding = {key: str(record.get(key) or "") for key in (
-        "build_run_id", "build_run_plan_path", "build_run_plan_sha256",
-    )}
-    if not all(binding.values()):
-        raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "原 Build Run 绑定记录不完整。")
-    entry_binding = {key: str(entry.get(key) or "") for key in binding}
-    if any(entry_binding.values()) and entry_binding != binding:
-        raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "原 Build Run 绑定与节点入口不一致。")
-    _, _, errors = _bound_build_task_plan_for_build({**state, **binding})
-    if errors:
-        raise RecoveryExecutionError("BUILD_RETRY_PLAN_DRIFT", "；".join(errors))
-    return record
+    lineage = recovery.source_lineage_run_ids or (recovery.source_run_id,)
+    if lineage[0] != recovery.source_run_id or len(set(lineage)) != len(lineage):
+        raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "Build 恢复父链身份无效。")
+    expected_binding: dict[str, str] | None = None
+    progress_record: tuple[dict[str, Any], str] | None = None
+    for run_id in lineage:
+        try:
+            record = load_build_execution_record(state, run_id)
+        except (OSError, ValueError, TypeError) as exc:
+            raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "原 Build Run 绑定记录不可读取。") from exc
+        if record is None:
+            continue
+        if (record.get("execution_run_id") != run_id
+                or record.get("thread_id") != recovery.thread_id
+                or record.get("build_execution_scope") != entry.get("build_execution_scope")):
+            raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "原 Build Run 绑定记录与可信来源不一致。")
+        binding = {key: str(record.get(key) or "") for key in (
+            "build_run_id", "build_run_plan_path", "build_run_plan_sha256",
+        )}
+        if not all(binding.values()) or (expected_binding is not None and binding != expected_binding):
+            raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "恢复父链的 Build Run 绑定不一致。")
+        expected_binding = binding
+        entry_binding = {key: str(entry.get(key) or "") for key in binding}
+        if any(entry_binding.values()) and entry_binding != binding:
+            raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "原 Build Run 绑定与节点入口不一致。")
+        _, _, errors = _bound_build_task_plan_for_build({**state, **binding})
+        if errors:
+            raise RecoveryExecutionError("BUILD_RETRY_PLAN_DRIFT", "；".join(errors))
+        progress = record.get("progress")
+        if progress is not None:
+            if not isinstance(progress, dict):
+                raise RecoveryExecutionError("BUILD_RETRY_RESULT_DRIFT", "原 Build Run 进度格式无效。")
+            owner = str(record.get("progress_source_run_id") or run_id)
+            if owner not in lineage or any(progress.get(key) != value for key, value in binding.items()):
+                raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "继承的 Build 进度来源或绑定不一致。")
+            if str(progress.get("active_run_id") or "") != owner:
+                raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "继承的 Build 进度执行身份不一致。")
+            if progress_record is None:
+                progress_record = (record, owner)
+        if progress_record is not None and run_id == progress_record[1]:
+            break
+    if progress_record is not None and progress_record[1] != run_id:
+        raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "继承的 Build 进度来源记录不存在。")
+    return progress_record or (({**expected_binding, "progress": None}, recovery.source_run_id) if expected_binding else None)
 
 
 def run_build_scheduler(
@@ -1557,29 +1586,40 @@ def run_build_scheduler(
 
     recovery = current_node_recovery_context()
     source_record = None
+    inherited_progress = None
+    progress_source_run_id = None
     if recovery is not None and recovery.reentry_reason in {
         WorkflowReentryReason.BUSINESS_RETRY,
         WorkflowReentryReason.FAILURE_RETRY,
+        WorkflowReentryReason.INTERRUPTED_CONTINUE,
     }:
         if recovery.entry_state.get("build_execution_scope") != state.get("build_execution_scope"):
             raise RecoveryExecutionError("BUILD_RETRY_SCOPE_DRIFT", "Build 恢复范围已偏离原节点入口。")
-        source_record = _source_build_record(state, recovery)
+        source_match = _source_build_record(state, recovery)
+        source_record = source_match[0] if source_match is not None else None
+        progress_source_run_id = source_match[1] if source_match is not None else None
+        retry_failed_tasks = recovery.reentry_reason in {
+            WorkflowReentryReason.BUSINESS_RETRY, WorkflowReentryReason.FAILURE_RETRY,
+        }
         if recovery.internal_progress is not None:
             if source_record is not None and any(
                 recovery.internal_progress.get(key) != source_record.get(key)
                 for key in ("build_run_id", "build_run_plan_path", "build_run_plan_sha256")
             ):
                 raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "checkpoint 进度与原 Build Run 绑定不一致。")
-            state = _restore_build_runtime(state, recovery.source_run_id, recovery.internal_progress)
+            inherited_progress = recovery.internal_progress
+            progress_source_run_id = recovery.source_run_id
+            state = _restore_build_runtime(state, progress_source_run_id, inherited_progress,
+                                           retry_failed_tasks=retry_failed_tasks)
         elif source_record is not None:
             source_progress = source_record.get("progress")
             state = {**state, **{key: source_record[key] for key in (
                 "build_run_id", "build_run_plan_path", "build_run_plan_sha256",
             )}}
             if source_progress is not None:
-                if not isinstance(source_progress, dict):
-                    raise RecoveryExecutionError("BUILD_RETRY_RESULT_DRIFT", "原 Build Run 进度格式无效。")
-                state = _restore_build_runtime(state, recovery.source_run_id, source_progress)
+                inherited_progress = source_progress
+                state = _restore_build_runtime(state, progress_source_run_id, source_progress,
+                                               retry_failed_tasks=retry_failed_tasks)
 
     build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)
     if gate_errors:
@@ -1590,7 +1630,10 @@ def run_build_scheduler(
         if existing is not None and any(existing.get(key) != build_run_binding.get(key) for key in build_run_binding):
             raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "当前 Workflow 调用已有不同 Build Run 绑定。")
         if existing is None:
-            write_build_execution_record(state, _build_execution_record(state, build_run_binding))
+            write_build_execution_record(state, _build_execution_record(
+                state, build_run_binding, inherited_progress,
+                progress_source_run_id=progress_source_run_id,
+            ))
     # 后续调度会把任务运行态写回派生计划；平台投影必须始终读取不可变的确认快照。
     confirmed_build_task_plan = deepcopy(build_task_plan)
     # 当前契约直接使用最新计划，不对历史 DAG 做运行时迁移或字段回填。
