@@ -664,7 +664,102 @@ class ExecutionRecoveryLeaseTests(unittest.IsolatedAsyncioTestCase):
         assert loaded is not None
         self.assertEqual(loaded.status, DurableExecutionStatus.INTERRUPTED)
         self.assertEqual(lifecycle_before.read_text(encoding="utf-8"), before_text)
+        self.assertTrue(any('"executionRecovery":' in frame for frame in frames))
+        self.assertTrue(any('"schemaVersion":"execution-recovery.v1"' in frame for frame in frames))
         self.assertTrue(any('"type":"RUN_FINISHED"' in frame for frame in frames))
+
+    async def test_application_lifecycle_get_projects_recovery_after_orphan_scan(self) -> None:
+        """GET 应先收敛旧执行，再把 Recovery 服务签发的候选附加到响应。"""
+
+        ensure_application_lifecycle(
+            self.workspace,
+            application_id="app-001",
+            application_name="测试应用",
+        )
+        await self._insert_running(
+            "run-lifecycle-candidate",
+            owner_backend_instance_id="backend-old",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+        async def project_after_scan(_workspace: str) -> SimpleNamespace:
+            """模拟 Backend 投影器，并验证候选解析前旧执行已经中断。"""
+
+            record = await get_execution(self.workspace, "run-lifecycle-candidate")
+            self.assertIsNotNone(record)
+            assert record is not None
+            self.assertEqual(record.status, DurableExecutionStatus.INTERRUPTED)
+            return SimpleNamespace(model_dump=lambda **_kwargs: {
+                "schemaVersion": "execution-recovery.v1",
+                "generatedAt": datetime.now(timezone.utc).isoformat(),
+                "candidates": [{
+                    "sourceRunId": record.run_id,
+                    "executionStatus": "interrupted",
+                    "recoveryActionPlan": {
+                        "status": "recoverable",
+                        "primaryAction": {"kind": "continue_checkpoint"},
+                    },
+                }],
+            })
+
+        with patch(
+            "app.protocols.application_lifecycle.resolve_execution_recovery_projection",
+            side_effect=project_after_scan,
+        ):
+            frames = [
+                frame
+                async for frame in build_application_lifecycle_ag_ui_stream(
+                    payload={
+                        "threadId": "thread-lifecycle-candidate",
+                        "runId": "run-lifecycle-candidate-get",
+                        "forwardedProps": {
+                            "applicationLifecycle": {
+                                "action": "get",
+                                "workspaceRoot": str(self.workspace),
+                            }
+                        },
+                    }
+                )
+            ]
+
+        self.assertTrue(any('"sourceRunId":"run-lifecycle-candidate"' in frame for frame in frames))
+        self.assertTrue(any('"kind":"continue_checkpoint"' in frame for frame in frames))
+        self.assertTrue(any('"type":"RUN_FINISHED"' in frame for frame in frames))
+
+    async def test_application_lifecycle_get_returns_empty_recovery_when_projection_fails(self) -> None:
+        """Recovery 投影异常时 GET 应完成并显式返回空候选，不写入 lifecycle 文件。"""
+
+        ensure_application_lifecycle(
+            self.workspace,
+            application_id="app-001",
+            application_name="测试应用",
+        )
+        lifecycle_path = self.workspace / WORKSPACE_ARTIFACT_DIR / "application-lifecycle.json"
+        before_text = lifecycle_path.read_text(encoding="utf-8")
+        with patch(
+            "app.protocols.application_lifecycle.resolve_execution_recovery_projection",
+            AsyncMock(side_effect=OSError("projection unavailable")),
+        ):
+            frames = [
+                frame
+                async for frame in build_application_lifecycle_ag_ui_stream(
+                    payload={
+                        "threadId": "thread-lifecycle-projection-failure",
+                        "runId": "run-lifecycle-projection-failure",
+                        "forwardedProps": {
+                            "applicationLifecycle": {
+                                "action": "get",
+                                "workspaceRoot": str(self.workspace),
+                            }
+                        },
+                    }
+                )
+            ]
+
+        self.assertEqual(lifecycle_path.read_text(encoding="utf-8"), before_text)
+        self.assertTrue(any('"candidates":[]' in frame for frame in frames))
+        self.assertTrue(any('"type":"RUN_FINISHED"' in frame for frame in frames))
+        self.assertFalse(any('"type":"RUN_ERROR"' in frame for frame in frames))
 
     async def test_application_lifecycle_get_stays_fail_open_when_scanner_storage_fails(self) -> None:
         """scanner 底层故障不应把独立 lifecycle get 变成失败响应。"""

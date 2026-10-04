@@ -171,6 +171,7 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
         self.assertIn('"sessionPendingReleased":true', frames)
         self.assertIn('"source":"none"', frames)
         self.assertIn('"status":"completed"', frames)
+        self.assertNotIn('"executionRecovery":', frames)
 
     def test_cleanup_session_failed_executions_removes_execution_after_explicit_action(self) -> None:
         """Session 删除后的独立 action 应移除 failed execution 并返回最新 lifecycle。"""

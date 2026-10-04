@@ -3,6 +3,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from typing import Any, AsyncIterator, Literal
 
@@ -26,6 +27,7 @@ from app.services.build_task_plan_lifecycle import (
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
+from app.services.execution_recovery_projection import resolve_execution_recovery_projection
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.service import WorkspaceBootstrapService
 
@@ -232,6 +234,30 @@ def build_application_lifecycle_ag_ui_stream(
                 **dict(data["lifecycle"].get("extensions") or {}),
                 "planningRefresh": resolve_planning_refresh_state(request.workspace_root),
             }
+        if request.action == "get":
+            # Recovery 仅在读取时投射到响应；扫描后的异常执行不写回 lifecycle 文件。
+            try:
+                recovery_projection = await resolve_execution_recovery_projection(
+                    request.workspace_root
+                )
+            except Exception as exc:
+                # 投影失败不能阻断基础 lifecycle GET，但必须明确返回空候选列表。
+                logger.warning(
+                    "recovery.projection.failed workspace=%s error=%s",
+                    request.workspace_root,
+                    exc,
+                    exc_info=True,
+                )
+                recovery_projection = None
+            data["lifecycle"]["extensions"]["executionRecovery"] = (
+                recovery_projection.model_dump(mode="json", by_alias=True)
+                if recovery_projection is not None
+                else {
+                    "schemaVersion": "execution-recovery.v1",
+                    "generatedAt": datetime.now(timezone.utc).isoformat(),
+                    "candidates": [],
+                }
+            )
         if request.action == "release_session_pending":
             data["sessionPendingReleased"] = released
         return AgUiActionResult(data=data, message=message)
