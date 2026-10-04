@@ -237,6 +237,7 @@ def _failed_node_retry_label(node: str | None) -> str:
     if normalized.startswith("technical_planning"):
         return "重新执行技术规划"
     return {
+        "prepare_build_tasks": "重新生成执行计划",
         "build": "重新执行代码生成",
         "code_review": "重新执行代码审查",
     }.get(normalized, "重新执行失败步骤")

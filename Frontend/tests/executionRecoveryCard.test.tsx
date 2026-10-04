@@ -236,6 +236,17 @@ test('failed node retry shows the entry node without exposing internal diagnosti
   assert.doesNotMatch(markup.split('<details')[0], /恢复目标：/)
 })
 
+test('Workbench retry card does not repeat the last retry error', () => {
+  const markup = renderToStaticMarkup(createElement(RecoverySurface, {
+    activeExecutionRecovery: recovery('ready'),
+    isApplicationPlanningPhase: false,
+    onExecuteRecoveryAction: () => undefined,
+    recoveryError: '上次重试没成功',
+    recoveryRunning: false
+  }))
+  assert.doesNotMatch(markup, /上次重试没成功|重试未成功/)
+})
+
 test('Workbench needs_attention retains a retry entry for Backend re-resolution', () => {
   for (const availability of ['blocked', 'requires_handler'] as const) {
     const incident = workbenchRecoveryIncident(recovery(availability))

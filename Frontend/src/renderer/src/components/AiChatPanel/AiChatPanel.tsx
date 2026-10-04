@@ -175,7 +175,7 @@ import {
   stageOutputPhase
 } from './stageOutputState'
 import { executionRecoveryForSession } from './executionRecoveryState'
-import { globalFallbackState } from './globalFallbackState'
+import { globalFallbackState, workbenchRecoveryCoveredByExecution } from './globalFallbackState'
 import ConnectionStatusBanner from '../ConnectionStatusBanner'
 import RecoverySurface from './recoverySurface'
 import {
@@ -3699,10 +3699,20 @@ export default function AiChatPanel({
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
   const activeConnectionState =
     isApplicationPlanningPhase && planningState ? planningState.connection : connectionState
-  const currentRecoveryIncident = isApplicationPlanningPhase
-    ? applicationPlanningRecoveryIncident(planningState)
-    : workbenchRecoveryIncident(activeExecutionRecovery)
+  // 新一轮工作台执行已经开始时，旧失败投影只能留在历史记录，不能继续占用当前控制面。
+  const workbenchExecutionInProgress = workbenchRecoveryCoveredByExecution({
+    isApplicationPlanningPhase,
+    recoveryRunning,
+    loading,
+    planExecutionMode: displayedPlanExecutionMode
+  })
+  const currentRecoveryIncident = workbenchExecutionInProgress
+    ? undefined
+    : isApplicationPlanningPhase
+      ? applicationPlanningRecoveryIncident(planningState)
+      : workbenchRecoveryIncident(activeExecutionRecovery)
   const globalFallbackError =
+    !workbenchExecutionInProgress &&
     !templateGenerationRecoverable && !templateReconcileRetryable &&
     !workflowCodeReviewRetry(activeWorkflow)
       ? (isApplicationPlanningPhase ? planningState?.syncError || planningError : error)
@@ -3710,7 +3720,7 @@ export default function AiChatPanel({
   const globalFallback = globalFallbackState({
     connectionStatus: activeConnectionState.status,
     hasRecoveryIncident: Boolean(currentRecoveryIncident),
-    recoveryError,
+    recoveryError: workbenchExecutionInProgress ? undefined : recoveryError,
     globalFallbackError
   })
   const showGlobalFallback = globalFallback.visible

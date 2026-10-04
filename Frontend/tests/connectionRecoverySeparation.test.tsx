@@ -7,7 +7,8 @@ import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recovery
 import AgentErrorCard from '../src/renderer/src/components/AgentErrorCard'
 import {
   globalFallbackState,
-  NO_RECOVERY_ENTRY_ERROR
+  NO_RECOVERY_ENTRY_ERROR,
+  workbenchRecoveryCoveredByExecution
 } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
 import {
   beginConnectionRequest,
@@ -197,4 +198,18 @@ test('healthy GET without Recovery candidate shows the Recovery error card', () 
   assert.equal(fallback.visible, true)
   assert.match(html, /role="alert"/)
   assert.match(html, /已同步后端状态，但当前会话没有可验证的恢复入口。/)
+})
+
+test('active retry hides the previous workbench failure until the new execution settles', () => {
+  const base = {
+    isApplicationPlanningPhase: false,
+    recoveryRunning: false,
+    loading: false,
+    planExecutionMode: 'failed' as const
+  }
+  assert.equal(workbenchRecoveryCoveredByExecution(base), false)
+  assert.equal(workbenchRecoveryCoveredByExecution({ ...base, recoveryRunning: true }), true)
+  assert.equal(workbenchRecoveryCoveredByExecution({ ...base, planExecutionMode: 'running' }), true)
+  assert.equal(workbenchRecoveryCoveredByExecution({ ...base, loading: true }), true)
+  assert.equal(workbenchRecoveryCoveredByExecution({ ...base, isApplicationPlanningPhase: true }), false)
 })

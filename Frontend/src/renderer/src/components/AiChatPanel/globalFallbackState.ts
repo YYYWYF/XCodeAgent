@@ -1,3 +1,18 @@
+import type { PlanExecutionMode } from './planExecutionMode'
+
+/** 当前工作台执行或恢复请求正在运行时隐藏旧失败入口。 */
+export function workbenchRecoveryCoveredByExecution(input: {
+  isApplicationPlanningPhase: boolean
+  recoveryRunning: boolean
+  loading: boolean
+  planExecutionMode: PlanExecutionMode
+}): boolean {
+  return !input.isApplicationPlanningPhase && (
+    input.recoveryRunning || input.loading ||
+    input.planExecutionMode === 'running' || input.planExecutionMode === 'stopping'
+  )
+}
+
 /** 统一决定底部全局兜底是否可见，并保留 Recovery 错误的展示优先级。 */
 export function globalFallbackState(input: {
   connectionStatus: string
