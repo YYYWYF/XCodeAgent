@@ -1552,7 +1552,7 @@ generation_attempt
 | Local 额度 | 每个 Unit 每轮最多 3 次完整内容生成尝试，包含首次生成；JSON／内容校验失败进入本轮下一次尝试。首次通过即停止，不为用满额度而继续生成。 |
 | Global 额度 | 每个 PlanningRun 最多 2 轮修复；初次检查不占额度。一次检查中的问题先聚合，同一批选定 Unit 合计消耗一轮；各 Unit 获得新的完整 Local 额度。两轮之后仍做最后一次 Global 检查，通过可保存草稿，仍有阻断问题则失败。 |
 | 局部耗尽 | 只返回该 Unit 本轮无有效 Candidate 的失败结果和原因，其他 Unit 继续。本轮收尾后由 Global 判断缺项并在剩余额度内补生成；其他有效 Candidate 与历史 Tasks 保持不变。 |
-| 基础设施调用失败 | DAG 规划链路不增加外层基础设施 retry；production Unit policy 将 SDK max_retries 设置为 2（DTO 默认仍为 0）。SDK 支持范围内的基础设施重试仍无法完成调用后立即结束当前 PlanningRun 并上报上层，不消耗 Global 额度尝试恢复。失败收口后，Task 2 仅按 source Workflow execution ID 写独立 Recovery Snapshot；用户重新生成时仍创建新 Run，且 Regenerate 不读取 Recovery。 |
+| 基础设施调用失败 | DAG 规划链路不增加外层基础设施 retry；production Unit policy 将 SDK max_retries 设置为 2（DTO 默认仍为 0）。SDK 支持范围内的基础设施重试仍无法完成调用后立即结束当前 PlanningRun 并上报上层，不消耗 Global 额度尝试恢复。失败收口后，Task 2 仅按 source Workflow execution ID 写独立 Recovery Snapshot；普通用户 Regenerate 创建新 Run 并全新生成，已消费旧 Pending 的 Native Recovery 可按可信 source 尝试复用 Candidate。 |
 | 重试反馈 | 冻结输入之外显式分区：Global 反馈是本 Unit 对本轮全局问题必须达成的修复目标，在整轮 Local 尝试中持续保留；最新 Local 错误是最近一次生成暴露的具体问题，按尝试更新。两类不能混成无来源的错误列表，最终须同时满足。输出始终是该 Unit 完整本轮 Candidate，其他 Unit 的 Candidate 正文不进入输入。 |
 | 最终失败或用户取消 | 停止派发、停止自动重试，尝试取消进行中调用，拒收迟到结果；不组装或提交失败 Candidate，不覆盖正式 DAG。通过现有 AG-UI 向上层输出已结束的状态及原因，不保留 PlanningRun 内人工暂停／继续。 |
 
@@ -1586,7 +1586,7 @@ generation_attempt
 
 错误发生后将当前 PlanningRun 标记为 failed，停止新调用与自动重试，按失败收尾规则处理正在进行的调用及迟到结果。通过现有 AG-UI 失败流程向上层报告故障 Unit、原因及是否需要先处理配置，明确结束当前生成进度；不交给 Global 作为内容缺项自动修复，也不在 PlanningRun 内保留等待用户决定的运行状态。
 
-- **用户选择重新生成任务：** 上层重新进入 `prepare_build_tasks` 的任务准备入口及必要输入准备，创建新的 `planning_run_id`；重新读取已确认正式合同和 confirmed DAG，建立本轮工作区快照、复用事实与生成范围。Regenerate 永远不读取 Recovery；只有带明确 `resumeExecutionRunId` 的 DAG Retry 才能尝试读取对应 Snapshot。新 Run 不能把 checkpoint 中上次候选计划当作 confirmed 基线；Local／Global 预算从新 Run 开始计数。这不是从需求、UI 或技术规划阶段重新生成上游产物。
+- **用户选择重新生成任务：** 上层重新进入 `prepare_build_tasks` 的任务准备入口及必要输入准备，创建新的 `planning_run_id`；重新读取已确认正式合同和 confirmed DAG，建立本轮工作区快照、复用事实与生成范围。初次 Regenerate 全新生成；如果其旧 Pending 已消费而生成失败，Native Recovery 依据持久化操作事实和可信 source 尝试读取对应 Snapshot。新 Run 不能把 checkpoint 中上次候选计划当作 confirmed 基线；Local／Global 预算从新 Run 开始计数。这不是从需求、UI 或技术规划阶段重新生成上游产物。
 - **用户选择取消／稍后处理：** 失败 PlanningRun 已经结束，无需再让它等待；上层关闭本次失败处理或等待用户稍后主动发起。正式 DAG 始终不变；用户在调用尚未失败时主动取消，则按取消分支结束运行。
 - **上层等待与内部 Run 分离：** 可以由工作流／界面等待用户选择，但这不表示失败 PlanningRun 仍活跃。AG-UI 工作流执行身份与 `planning_run_id` 分属不同层，不要求更换整个应用、会话或重新执行所有上游节点。用户操作的身份绑定在第 9、10 项衔接。
 - **错误契约：** 使用平台结构化失败结果和明确的新 Run 发起动作，不仅抛一个未处理异常后让界面停留在“生成中”。基础设施错误的 `ValidationIssue.retryable=false` 表示不能在该 PlanningRun 内通过 Candidate 重生成修复，不禁止用户在上层主动开启新 Run。
@@ -2354,8 +2354,8 @@ SHA-256 做完整性校验；损坏或摘要不匹配必须报 invalid。没有�
 workspace/session/scope 回退。
 
 Task 2 只写 Snapshot；Task 3 才消费它并创建属于新 Run、保留 source provenance 的 recovered
-Candidate。Recovery 写入失败不能覆盖原始 PlanningRun failure；Regenerate 仍只启动 fresh
-PlanningRun，Scheduler 保持 recovery-unaware。Task 4 的 cleanup 只由具体 lifecycle 入口触发：
+Candidate。Recovery 写入失败不能覆盖原始 PlanningRun failure；普通 Regenerate 启动 fresh
+PlanningRun，失败后的 Native Recovery 可重用经验证的 Candidate，Scheduler 保持 recovery-unaware。Task 4 的 cleanup 只由具体 lifecycle 入口触发：
 Retry source Recovery 只有在当前 Retry 已完成 PendingPlan 写入、自校验和
 `MainlinePlanningResult` 构造，或当前 Retry 再次发生
 `UNIT_GENERATION_INFRASTRUCTURE_FAILURE` 且新的 Snapshot 已经通过

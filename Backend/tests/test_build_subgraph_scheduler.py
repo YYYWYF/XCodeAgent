@@ -17,6 +17,8 @@ from app.graph.subgraphs.build import (
     build,
     run_build_scheduler,
 )
+from app.domain.execution_recovery import WorkflowReentryReason
+from app.services.node_recovery_context import NodeRecoveryContext, bind_node_recovery, bind_recovery_runtime
 from app.services.build_task_planner import replace_build_task_plan_tasks
 from app.services.build_scheduler import attribute_task_file_changes
 from app.services.template_state import load_template_state, template_context
@@ -88,6 +90,62 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_native_build_recovery_keeps_completed_task_and_retries_network_failure(self) -> None:
+        """节点入口旧任务为 pending 时，可信 source 运行态仍阻止 A 重跑并派发 B。"""
+
+        scope = {"type": "application", "targetId": "application"}
+        tasks = [
+            {"id": task_id, "owner": "backend", "status": "pending", "dependencies": [],
+             "change_scope": [{"operation": "add", "path": f"Backend/app/{task_id}.py"}]}
+            for task_id in ("A", "B")
+        ]
+        calls: list[list[str]] = []
+
+        def runner(**kwargs):
+            """记录执行器任务并为本轮成功写入实际工作区文件。"""
+
+            ids = [task["id"] for task in kwargs["tasks"]]
+            calls.append(ids)
+            for task in kwargs["tasks"]:
+                _write_workspace_file(kwargs.get("workspace"), task["change_scope"][0]["path"])
+            return [{"task_id": task_id, "owner": "backend", "status": "completed"} for task_id in ids]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            entry = _ready_build_state(workspace, {
+                "workspace": workspace, "project_plan": {"version": "1.0.0"},
+                "build_execution_scope": scope,
+                "build_task_plan": replace_build_task_plan_tasks({
+                    "schema_version": "build-dag.v4",
+                    "build_units": {"application:root": {"id": "application:root", "kind": "application", "task_ids": ["A", "B"]}},
+                    "unit_graph": {"nodes": ["application:root"], "edges": []},
+                }, tasks),
+                "tasks": tasks, "active_run_id": "run-child", "active_thread_id": "thread-build",
+            })
+            _, binding, errors = _bound_build_task_plan_for_build(entry)
+            self.assertEqual(errors, [])
+            source = {
+                **entry, **binding, "active_run_id": "run-source",
+                "tasks": [{**tasks[0], "status": "completed"}, {**tasks[1], "status": "failed", "failure_category": "network_error"}],
+                "build_results": [
+                    {"task_id": "A", "owner": "backend", "status": "completed"},
+                    {"task_id": "B", "owner": "backend", "status": "failed", "failure_category": "network_error"},
+                ],
+            }
+            context = NodeRecoveryContext(
+                source_run_id="run-source", execution_run_id="run-child",
+                thread_id="thread-build", target_node="build", checkpoint_id="entry-build",
+                reentry_reason=WorkflowReentryReason.FAILURE_RETRY, source_state=source,
+            )
+            with (
+                bind_recovery_runtime(context), bind_node_recovery(entry, "build"),
+                patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner),
+                patch("app.graph.subgraphs.build._finalize_build", return_value=({}, {}, None, [], None)),
+            ):
+                result = run_build_scheduler(entry)
+            self.assertEqual(calls, [["B"]])
+            self.assertEqual(result["build_summary"]["status"], "completed")
+            self.assertEqual(result["build_summary"]["retry_task_ids"], ["B"])
+
     def test_empty_dag_enters_post_dag_finalization(self) -> None:
         """没有业务任务的确认 DAG 仍必须进入 Post-DAG Finalization。"""
 

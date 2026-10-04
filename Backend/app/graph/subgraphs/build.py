@@ -93,6 +93,7 @@ from app.workspace.task_documents import (
     load_build_task_plan_json,
     write_build_run_task_plan_json,
     write_build_task_plan_execution_state,
+    _TASK_RUNTIME_FIELDS,
 )
 from app.workspace.task_documents import write_repair_task_plan_json
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
@@ -1408,6 +1409,81 @@ def _finalize_build(
     return route_evidence, platform_evidence, route_change_set, [*finalization_events, "scheduler:platform_projection_applied", "scheduler:authorization_edd_passed"], None
 
 
+def _restore_build_runtime(state: ProjectState, source_run_id: str, source: dict[str, Any]) -> ProjectState:
+    """核对失败 Run 的正式计划身份后，仅恢复 Build 调度器拥有的运行字段。"""
+
+    if str(source.get("active_run_id") or "") != source_run_id:
+        raise RecoveryExecutionError("BUILD_RETRY_SOURCE_DRIFT", "Build 失败来源的 Run 身份不一致。")
+    if source.get("build_execution_scope") != state.get("build_execution_scope"):
+        raise RecoveryExecutionError("BUILD_RETRY_SCOPE_DRIFT", "Build 恢复范围已偏离原失败执行。")
+    binding_keys = ("build_run_id", "build_run_plan_path", "build_run_plan_sha256")
+    source_binding = tuple(str(source.get(key) or "") for key in binding_keys)
+    entry_binding = tuple(str(state.get(key) or "") for key in binding_keys)
+    if source.get("build_results") and not all(source_binding):
+        raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "Build 失败结果缺少原 Run 的完整计划绑定。")
+    if any(source_binding) and (not all(source_binding) or (any(entry_binding) and entry_binding != source_binding)):
+        raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "Build Run 绑定与节点入口不一致。")
+    plan_state = {**state, **dict(zip(binding_keys, source_binding))}
+    plan, _, errors = _bound_build_task_plan_for_build(plan_state)
+    if errors:
+        raise RecoveryExecutionError("BUILD_RETRY_PLAN_DRIFT", "；".join(errors))
+    formal_tasks = tasks_from_build_task_plan(plan)
+    source_tasks = source.get("tasks")
+    if not isinstance(source.get("build_results", []), list):
+        raise RecoveryExecutionError("BUILD_RETRY_RESULT_DRIFT", "Build 失败结果格式无效。")
+    if not isinstance(source_tasks, list):
+        if source.get("build_results"):
+            raise RecoveryExecutionError("BUILD_RETRY_TASK_DRIFT", "Build 失败结果缺少任务运行状态。")
+        return state
+    formal_by_id = {str(task["id"]): task for task in formal_tasks}
+    source_by_id = {str(task.get("id")): task for task in source_tasks if isinstance(task, dict) and task.get("id")}
+    if len(source_by_id) != len(source_tasks) or not set(formal_by_id) <= set(source_by_id):
+        raise RecoveryExecutionError("BUILD_RETRY_TASK_DRIFT", "Build 失败任务身份与正式计划不一致。")
+    runtime_keys = _TASK_RUNTIME_FIELDS | {
+        "retry_count", "completed_by_repair", "repair_closed_at",
+        "approved_database_change_plan",
+    }
+    def immutable(task: dict[str, Any]) -> dict[str, Any]:
+        """剔除调度器运行字段，只比较已批准的任务合同。"""
+
+        return {key: value for key, value in task.items() if key not in runtime_keys}
+
+    for task_id, formal in formal_by_id.items():
+        actual = source_by_id[task_id]
+        if immutable(actual) != immutable(formal):
+            raise RecoveryExecutionError("BUILD_RETRY_TASK_DRIFT", f"Build 任务 {task_id} 的正式合同已变化。")
+    repair_plan = source.get("repair_task_plan")
+    repair_ids = {
+        str(task.get("id")) for task in (repair_plan.get("tasks") or [])
+        if isinstance(task, dict) and task.get("id")
+    } if isinstance(repair_plan, dict) and repair_plan.get("source") in {"build_scheduler", "integration_test"} else set()
+    if set(source_by_id) - set(formal_by_id) - repair_ids:
+        raise RecoveryExecutionError("BUILD_RETRY_TASK_DRIFT", "Build 来源包含未授权的修复任务。")
+    repair_by_id = {
+        str(task["id"]): task for task in (repair_plan.get("tasks") or [])
+        if isinstance(task, dict) and task.get("id")
+    } if repair_ids else {}
+    for task_id in set(source_by_id) - set(formal_by_id):
+        if immutable(source_by_id[task_id]) != immutable(repair_by_id[task_id]):
+            raise RecoveryExecutionError("BUILD_RETRY_TASK_DRIFT", f"Build 修复任务 {task_id} 的合同已变化。")
+    # source 中的 scheduler、failure_detail 和修复深度属于运行态；正式计划仍由上方绑定校验。
+    restored_tasks = deepcopy(source_tasks)
+    latest_results = {
+        str(result.get("task_id")): result for result in source.get("build_results", [])
+        if isinstance(result, dict) and result.get("task_id")
+    }
+    for task in restored_tasks:
+        result = latest_results.get(str(task["id"]))
+        if task.get("status") == "pending" and isinstance(result, dict) and not task.get("retry_count"):
+            if result.get("status") in {"completed", "already_satisfied", "failed"}:
+                task["status"] = result["status"]
+    restored = {**state, **dict(zip(binding_keys, source_binding)), "tasks": restored_tasks, "retry_failed_tasks": True, "request": ""}
+    for key in ("build_results", "build_summary", "repair_task_plan", "repair_task_plan_path", "repair_tasks", "database_change_plan", "database_approval_requests"):
+        if key in source:
+            restored[key] = deepcopy(source[key])
+    return restored
+
+
 def run_build_scheduler(
     state: ProjectState,
     *,
@@ -1420,21 +1496,7 @@ def run_build_scheduler(
         WorkflowReentryReason.BUSINESS_RETRY,
         WorkflowReentryReason.FAILURE_RETRY,
     }:
-        source_scope = recovery.source_state.get("build_execution_scope")
-        if source_scope and source_scope != state.get("build_execution_scope"):
-            raise RecoveryExecutionError(
-                "BUILD_RETRY_SCOPE_DRIFT", "Build 恢复范围已偏离原失败执行。"
-            )
-        # 只恢复 Build 自己的业务结果；节点入口的正式合同和执行范围仍由 checkpoint 持有。
-        state = {
-            **state,
-            **{
-                key: recovery.source_state[key]
-                for key in ("build_results", "build_summary", "repair_task_plan", "repair_tasks")
-                if key in recovery.source_state
-            },
-            "retry_failed_tasks": True,
-        }
+        state = _restore_build_runtime(state, recovery.source_run_id, recovery.source_state)
 
     build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)
     if gate_errors:

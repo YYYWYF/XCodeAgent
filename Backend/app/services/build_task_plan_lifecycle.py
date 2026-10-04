@@ -15,7 +15,7 @@ from app.services.planning_frozen import (
     FrozenPlanningModel,
     plain_json,
 )
-from app.services.planning_run_contracts import PlanningRun
+from app.services.planning_run_contracts import PlanningRun, PlanningRunProjection
 from app.services.template_state import validate_template_context
 from app.workspace.spec_documents import workspace_root
 
@@ -77,7 +77,7 @@ class RegeneratePendingResult(FrozenPlanningModel):
     """返回 Regenerate 的新 Run 与新 Pending identity，或明确拒绝旧草稿请求。"""
 
     status: Literal["regenerated", "stale_draft"]
-    planning_run: PlanningRun | None = None
+    planning_run: PlanningRun | PlanningRunProjection | None = None
     draft_identity: DraftIdentity | None = None
     errors: tuple[str, ...] = ()
 

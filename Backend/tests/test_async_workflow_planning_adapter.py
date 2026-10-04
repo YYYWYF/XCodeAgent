@@ -22,6 +22,7 @@ from app.services.node_recovery_context import (
     NodeRecoveryContext,
     bind_node_recovery,
     bind_recovery_runtime,
+    current_node_recovery_context,
 )
 from app.graph.workflow import build_graph
 from app.services.planning_frozen import plain_json
@@ -142,6 +143,47 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             "active_run_id": "workflow-async-adapter",
             "active_thread_id": "thread-async-adapter",
         }
+
+    async def test_prepare_wrapper_sync_async_and_exception_context(self) -> None:
+        """真实 Graph 对四种注入返回路径均只调用一次并在退出后撤销上下文。"""
+
+        for asynchronous in (False, True):
+            for failing in (False, True):
+                with self.subTest(asynchronous=asynchronous, failing=failing):
+                    state = {**self._state(execution_scope()), "workspace_revision": "ready"}
+                    seen: list[str] = []
+                    context = NodeRecoveryContext(
+                        source_run_id="source", execution_run_id=state["active_run_id"],
+                        thread_id=state["active_thread_id"], target_node="prepare_build_tasks",
+                        checkpoint_id="entry", reentry_reason=WorkflowReentryReason.FAILURE_RETRY,
+                    )
+
+                    def node(_: dict) -> dict:
+                        """同步注入节点读取一次作用域，按测试用例返回或抛错。"""
+
+                        seen.append(current_node_recovery_context().source_run_id)
+                        if failing:
+                            raise RuntimeError("injected")
+                        return {"phase": "prepare_build_tasks", "status": "requires_user_input"}
+
+                    async def async_node(value: dict) -> dict:
+                        """异步注入节点跨 await 后仍读取同一个可信上下文。"""
+
+                        await asyncio.sleep(0)
+                        return node(value)
+
+                    graph = build_graph(
+                        checkpointer=InMemorySaver(),
+                        prepare_build_tasks_node=async_node if asynchronous else node,
+                    )
+                    with bind_recovery_runtime(context):
+                        if failing:
+                            with self.assertRaisesRegex(RuntimeError, "injected"):
+                                await graph.ainvoke(state, config={"configurable": {"thread_id": f"wrapper-{asynchronous}-{failing}"}})
+                        else:
+                            await graph.ainvoke(state, config={"configurable": {"thread_id": f"wrapper-{asynchronous}-{failing}"}})
+                        self.assertIsNone(current_node_recovery_context())
+                    self.assertEqual(seen, ["source"])
 
     async def _generate(self, job, **_: object) -> UnitGenerationAttemptResult:
         """让真实 Scheduler/Assembly/Global 链消费合法的逐 Unit Candidate。"""

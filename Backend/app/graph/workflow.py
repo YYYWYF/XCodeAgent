@@ -1,4 +1,5 @@
 from collections.abc import Awaitable, Callable
+from inspect import isawaitable
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -321,7 +322,8 @@ def build_graph(
         """只在本次 Prepare 节点调用中绑定经验证的内部恢复来源。"""
 
         with bind_node_recovery(state, "prepare_build_tasks"):
-            return await prepare_build_tasks_node(state)
+            result = prepare_build_tasks_node(state)
+            return await result if isawaitable(result) else result
 
     def build_with_recovery(state: ProjectState) -> dict[str, Any]:
         """只在本次 Build 节点调用中绑定经验证的任务恢复来源。"""

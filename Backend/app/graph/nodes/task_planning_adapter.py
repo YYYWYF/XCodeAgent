@@ -47,7 +47,7 @@ from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.dag_planning_inputs import assemble_mainline_planning_inputs
 from app.services.dag_planning_regeneration import regenerate_pending_build_task_plan
 from app.services.planning_frozen import plain_json
-from app.services.planning_run_contracts import PlanningRun
+from app.services.planning_run_contracts import PlanningRun, PlanningRunProjection
 from app.services.planning_run_progress import project_planning_run_progress
 from app.services.node_recovery_context import current_node_recovery_context
 from app.services.template_state import load_template_state, template_context
@@ -245,6 +245,18 @@ async def _run_regenerate_branch(
 
     workflow_run_id, thread_id = _workflow_identity(state)
     refreshed_context: list[_PlanningContext] = []
+    recovery = current_node_recovery_context()
+    recovery_source: str | None = None
+    if recovery is not None and recovery.reentry_reason in {
+        WorkflowReentryReason.FAILURE_RETRY, WorkflowReentryReason.BUSINESS_RETRY,
+    }:
+        source_action = recovery.source_state.get("build_task_plan_confirmation")
+        if not isinstance(source_action, dict) or any(
+            source_action.get(key) != action_payload.get(key)
+            for key in ("action", "planning_run_id", "draft_digest")
+        ):
+            return _reject_unsupported_planning_action(state, {"action": "stale_regenerate"})
+        recovery_source = recovery.source_run_id
 
     def current_inputs_factory(
         fresh_formal: dict[str, Any] | None,
@@ -276,6 +288,7 @@ async def _run_regenerate_branch(
         settings=settings,
         generate_once=generate_once,
         publish=create_planning_run_progress_publisher(),
+        recovery_source_workflow_run_id=recovery_source,
     )
     if result.status != "regenerated":
         context = _assemble_planning_context(state)
@@ -289,7 +302,12 @@ async def _run_regenerate_branch(
             state=state,
             context=context,
         )
-    if not refreshed_context or result.planning_run is None or result.draft_identity is None:
+    if not refreshed_context:
+        from app.workspace.task_documents import load_confirmed_build_task_plan
+        from app.workspace.spec_documents import workspace_root
+
+        current_inputs_factory(load_confirmed_build_task_plan(workspace_root(state)))
+    if result.planning_run is None or result.draft_identity is None:
         raise RuntimeError("Regenerate 成功结果缺少新 PlanningRun 或 DraftIdentity。")
     pending = load_pending_build_task_plan(state)
     if pending is None:
@@ -503,7 +521,7 @@ def _project_pending_result(
     pending_plan_path: str,
     planning_run_id: str,
     draft_digest: str,
-    planning_run: PlanningRun,
+    planning_run: PlanningRunProjection,
     context: _PlanningContext,
 ) -> dict[str, Any]:
     """统一投影首次生成或 Regenerate 产生的新 PendingPlan。

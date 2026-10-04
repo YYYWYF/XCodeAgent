@@ -956,6 +956,34 @@ class PlanningRecoveryRegenerateHookTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(load_pending_build_task_plan(self.state))
 
+        retry_units: list[str] = []
+
+        async def retry_generate(job, **_: object) -> UnitGenerationAttemptResult:
+            """R2 只执行未被有效 Candidate 覆盖的 Unit。"""
+
+            retry_units.append(job.identity.unit_id)
+            return await self._generate_valid(job)
+
+        recovered = await regenerate_pending_build_task_plan(
+            self.state,
+            planning_run_id=identity["planning_run_id"],
+            draft_digest=identity["draft_digest"],
+            workflow_run_id="workflow-r2",
+            thread_id="thread-new",
+            current_inputs_factory=current_inputs,
+            policy=self.policy,
+            generate_once=retry_generate,
+            recovery_source_workflow_run_id="workflow-new",
+            planning_run_id_factory=lambda: "planning-r2",
+        )
+        self.assertEqual(recovered.status, "regenerated")
+        self.assertEqual(retry_units, ["page:b"])
+        run_r2 = recovered.planning_run
+        candidate_a = run_r2.candidates[run_r2.unit_states["page:a"].latest_candidate_id]
+        self.assertEqual(candidate_a.origin, "recovered")
+        self.assertEqual(candidate_a.recovered_from.source_planning_run_id, "planning-new")
+        self.assertIsNotNone(load_pending_build_task_plan(self.state))
+
 
 class PlanningRecoveryRetryConsumptionTests(unittest.IsolatedAsyncioTestCase):
     """验证明确 Retry 在新 PlanningRun 中按当前输入重新校验并选择性恢复 Candidate。"""
