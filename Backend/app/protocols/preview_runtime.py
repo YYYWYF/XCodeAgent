@@ -160,7 +160,7 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
 
     try:
         if task is not None:
-            workflow_run_registry.register(run_id, task, workspace=workspace, maintenance_thread_id=thread_id)
+            workflow_run_registry.register(run_id, task, workspace=workspace, maintenance_thread_id=thread_id, thread_id=thread_id)
         if request.action in {"restart", "stop"}:
             progress("restart", "正在停止旧服务并启动预览…" if request.action == "restart" else "正在更新预览服务…")
             if request.action == "stop":

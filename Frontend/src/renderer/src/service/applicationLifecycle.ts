@@ -17,6 +17,7 @@ type ApplicationLifecyclePayload = {
     | 'workspace_attach'
     | 'release_session_pending'
     | 'cleanup_session_failed_executions'
+    | 'prepare_session_deletion'
   lifecycle?: ApplicationLifecycle
   sessionPendingReleased?: boolean
   /** 仅 Bootstrap 动作返回：模板基线推成远端分支的结果（失败不影响 Bootstrap 成功）。 */
@@ -241,6 +242,23 @@ export async function cleanupSessionFailedExecutions(
     action: 'cleanup_session_failed_executions',
     workspaceRoot,
     sessionId: normalizedSessionId
+  })
+}
+
+/** 删除本地会话前由 Backend 停止其运行并清理独占的 checkpoint。 */
+export async function prepareSessionDeletion(
+  workspaceRoot: string,
+  sessionId: string,
+  sessionThreadId: string
+): Promise<ApplicationLifecycle> {
+  if (!workspaceRoot.trim() || !sessionId.trim() || !sessionThreadId.trim()) {
+    throw new Error('删除会话需要完整的工作区和会话身份。')
+  }
+  return runApplicationLifecycleAction(randomUUID(), {
+    action: 'prepare_session_deletion',
+    workspaceRoot,
+    sessionId,
+    sessionThreadId
   })
 }
 

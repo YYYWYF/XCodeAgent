@@ -98,6 +98,8 @@ class WorkflowRunRegistry:
     def __init__(self) -> None:
         self._lock = Lock()
         self._tasks: dict[str, tuple[str, asyncio.Task[Any]]] = {}
+        self._run_threads: dict[str, str] = {}
+        self._deleting_threads: set[tuple[str, str]] = set()
         self._deleting_workspaces: set[str] = set()
         self._deleting_application_ids: dict[str, str] = {}
 
@@ -108,6 +110,7 @@ class WorkflowRunRegistry:
         *,
         workspace: str | None = None,
         maintenance_thread_id: str = "",
+        thread_id: str = "",
     ) -> None:
         """按规范工作区登记运行，并拒绝删除栅栏之后启动的新任务。"""
 
@@ -117,6 +120,8 @@ class WorkflowRunRegistry:
                 require_no_maintenance(workspace_key, maintenance_thread_id)
             if workspace_key and workspace_key in self._deleting_workspaces:
                 raise RuntimeError("当前应用正在删除，不能启动新的运行。")
+            if (workspace_key, thread_id) in self._deleting_threads:
+                raise RuntimeError("当前会话正在删除，不能启动新的运行。")
             existing = self._tasks.get(run_id)
             if existing is not None:
                 _existing_workspace, existing_task = existing
@@ -125,6 +130,7 @@ class WorkflowRunRegistry:
                 # 已结束但尚未进入 finally 清理的登记只属于内存垃圾，允许替换。
                 self._tasks.pop(run_id, None)
             self._tasks[run_id] = (workspace_key, task)
+            self._run_threads[run_id] = thread_id
             workspace_process_registry.allow_run(run_id)
 
     def workspace_active_runs(self, workspace: str) -> list[str]:
@@ -140,6 +146,52 @@ class WorkflowRunRegistry:
             current = self._tasks.get(run_id)
             if current is not None and (task is None or current[1] is task):
                 self._tasks.pop(run_id, None)
+                self._run_threads.pop(run_id, None)
+
+    def begin_thread_deletion(self, workspace: str, thread_id: str) -> None:
+        """阻止目标会话线程再启动运行，直到删除完成或失败回滚。"""
+
+        with self._lock:
+            self._deleting_threads.add((_workspace_key(workspace), thread_id))
+
+    def end_thread_deletion(self, workspace: str, thread_id: str) -> None:
+        """删除准备失败时解除目标会话线程的运行栅栏。"""
+
+        with self._lock:
+            self._deleting_threads.discard((_workspace_key(workspace), thread_id))
+
+    async def cancel_thread(self, workspace: str, thread_id: str) -> dict[str, Any]:
+        """取消目标会话的运行并等待终态，不影响同工作区其它会话。"""
+
+        workspace_key = _workspace_key(workspace)
+        current_task = asyncio.current_task()
+        with self._lock:
+            entries = [
+                (run_id, task)
+                for run_id, (root, task) in self._tasks.items()
+                if root == workspace_key
+                and self._run_threads.get(run_id) == thread_id
+                and task is not current_task
+            ]
+        for run_id, task in entries:
+            workspace_process_registry.cancel_run(run_id)
+            if not task.done():
+                task.cancel()
+        if entries:
+            active_tasks = [task for _, task in entries if not task.done()]
+            if active_tasks:
+                await asyncio.wait(active_tasks, timeout=30.0)
+        remaining = [run_id for run_id, task in entries if not task.done()]
+        remaining_processes = []
+        for run_id, _task in entries:
+            remaining_processes.extend(
+                await asyncio.to_thread(workspace_process_registry.wait_run_processes, run_id)
+            )
+        return {
+            "requestedRunIds": [run_id for run_id, _ in entries],
+            "remainingRunIds": remaining,
+            "remainingProcessIds": remaining_processes,
+        }
 
     def cancel(self, run_id: str) -> bool:
         """向指定运行发出 asyncio 取消请求。"""

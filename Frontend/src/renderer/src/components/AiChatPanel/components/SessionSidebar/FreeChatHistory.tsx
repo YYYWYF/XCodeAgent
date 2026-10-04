@@ -130,16 +130,16 @@ export default function FreeChatHistory({
                   </button>
                   <Popconfirm
                     cancelText="取消"
-                    disabled={Boolean(runStatus)}
+                    disabled={deletingSessionId === session.id}
                     okButtonProps={{ danger: true }}
                     okText="删除"
                     onConfirm={() => onDeleteSession(session.id)}
-                    title="删除这个自由对话？"
+                    title={runStatus ? '删除会停止该会话的运行并清理 checkpoint，确定删除？' : '删除这个自由对话及其 checkpoint？'}
                   >
                     <Button
                       aria-label={`删除会话 ${session.title}`}
                       danger
-                      disabled={loadingSessions || Boolean(runStatus)}
+                      disabled={loadingSessions || deletingSessionId === session.id}
                       icon={<DeleteOutlined />}
                       loading={deletingSessionId === session.id}
                       size="small"

@@ -18,10 +18,14 @@ from app.services.application_lifecycle import (
     application_lifecycle_payload,
     completed_development_artifacts,
     cleanup_session_failed_executions,
+    best_effort_delete_planning_recovery,
+    end_workbench_execution,
     ensure_application_lifecycle,
     load_application_lifecycle,
     retry_application_template_generation,
 )
+from app.persistence.checkpoints import delete_workflow_checkpoints_for_threads
+from app.protocols.workflow.run_control import workflow_run_registry
 from app.services.build_task_plan_lifecycle import (
     release_session_owned_pending_build_task_plan,
 )
@@ -57,10 +61,12 @@ class ApplicationLifecycleAction(BaseModel):
         "workspace_attach",
         "release_session_pending",
         "cleanup_session_failed_executions",
+        "prepare_session_deletion",
     ]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     application: ApplicationLifecycleApplication | None = None
     session_id: str | None = Field(default=None, alias="sessionId", max_length=256)
+    session_thread_id: str | None = Field(default=None, alias="sessionThreadId", max_length=256)
     # 发起新迭代时由调用方带入上一版本的产物进度，服务端只继承其中的 completed 事实。
     inherited_development_artifacts: dict[str, Any] | None = Field(
         default=None, alias="inheritedDevelopmentArtifacts"
@@ -70,9 +76,11 @@ class ApplicationLifecycleAction(BaseModel):
     def validate_release_session_id(self) -> "ApplicationLifecycleAction":
         """要求 Session Pending 收口动作携带合法的非空 sessionId。"""
 
-        if self.action in {"release_session_pending", "cleanup_session_failed_executions"}:
+        if self.action in {"release_session_pending", "cleanup_session_failed_executions", "prepare_session_deletion"}:
             if not str(self.session_id or "").strip():
                 raise ValueError(f"{self.action} 必须提供合法非空的 sessionId。")
+        if self.action == "prepare_session_deletion" and not str(self.session_thread_id or "").strip():
+            raise ValueError("prepare_session_deletion 必须提供 sessionThreadId。")
         return self
 
 
@@ -93,6 +101,7 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "workspace_attach",
             "release_session_pending",
             "cleanup_session_failed_executions",
+            "prepare_session_deletion",
         ],
         "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
         "stateSnapshotKey": "applicationLifecycle",
@@ -115,6 +124,56 @@ def application_lifecycle_input(payload: dict[str, Any]) -> dict[str, Any] | Non
         return None
     value = forwarded_props.get("applicationLifecycle")
     return value if isinstance(value, dict) else None
+
+
+async def _prepare_session_deletion(request: ApplicationLifecycleAction) -> Any:
+    """停掉目标会话运行，收口其生命周期，再删除独占的 Graph checkpoint。"""
+
+    workspace = request.workspace_root
+    session_id = request.session_id or ""
+    state = load_application_lifecycle(workspace)
+    if state is None:
+        raise ApplicationLifecycleMissingError("application-lifecycle.json 不存在。")
+    owned = {
+        run_id: execution
+        for run_id, execution in state.active_executions.items()
+        if execution.owner_session_id == session_id
+    }
+    thread_ids = {request.session_thread_id or ""} | {
+        execution.thread_id for execution in owned.values()
+    }
+    for execution in state.active_executions.values():
+        if execution.owner_session_id != session_id and execution.thread_id in thread_ids:
+            raise RuntimeError("该 Graph 线程仍由其它会话使用，不能删除 checkpoint。")
+    for thread_id in thread_ids:
+        workflow_run_registry.begin_thread_deletion(workspace, thread_id)
+    try:
+        for thread_id in thread_ids:
+            result = await workflow_run_registry.cancel_thread(workspace, thread_id)
+            if result["remainingRunIds"] or result["remainingProcessIds"]:
+                raise RuntimeError(f"会话运行或子进程仍未退出：{result}")
+        await asyncio.to_thread(
+            release_session_owned_pending_build_task_plan,
+            {"workspace": workspace},
+            owner_session_id=session_id,
+        )
+        for run_id in owned:
+            await asyncio.to_thread(
+                end_workbench_execution, workspace, run_id=run_id, missing_ok=True
+            )
+            await asyncio.to_thread(best_effort_delete_planning_recovery, workspace, run_id)
+        # run 已退出且 Pending/lifecycle 已收口，此后不再允许其 checkpoint 被写回。
+        await delete_workflow_checkpoints_for_threads(
+            workspace=workspace, thread_ids=thread_ids
+        )
+        refreshed = load_application_lifecycle(workspace)
+        if refreshed is None:
+            raise ApplicationLifecycleMissingError("会话删除后缺少 lifecycle。")
+        return refreshed
+    except BaseException:
+        for thread_id in thread_ids:
+            workflow_run_registry.end_thread_deletion(workspace, thread_id)
+        raise
 
 
 def build_application_lifecycle_ag_ui_stream(
@@ -214,6 +273,9 @@ def build_application_lifecycle_ag_ui_stream(
                 request.session_id or "",
             )
             message = "已收口当前 Session 已删除后遗留的失败 Workflow execution。"
+        elif request.action == "prepare_session_deletion":
+            state = await _prepare_session_deletion(request)
+            message = "会话运行和 checkpoint 已清理，可以删除本地记录。"
         data = {
             "action": request.action,
             "lifecycle": application_lifecycle_payload(state),
@@ -228,6 +290,7 @@ def build_application_lifecycle_ag_ui_stream(
             "get",
             "release_session_pending",
             "cleanup_session_failed_executions",
+            "prepare_session_deletion",
         }:
             # 恢复或收口后的投影仅附加到当前响应，不能伪装成可跨重启持久化的生命周期事实。
             data["lifecycle"]["extensions"] = {
@@ -263,10 +326,10 @@ def build_application_lifecycle_ag_ui_stream(
         return AgUiActionResult(data=data, message=message)
 
     action = str(resolved_input.get("action") or "")
-    # 工作台进入所需的读取和 Attach 不参与预览维护互斥，避免隐藏页面的维护状态阻塞导航。
+    # 删除准备必须能停止目标会话的预览维护运行，不能先被维护互斥挡住。
     guarded_workspace = (
         None
-        if action in {"get", "workspace_attach"}
+        if action in {"get", "workspace_attach", "prepare_session_deletion"}
         else str(resolved_input.get("workspaceRoot") or "") or None
     )
     return build_ag_ui_action_stream(
@@ -279,5 +342,5 @@ def build_application_lifecycle_ag_ui_stream(
         error_data=lambda _exc: {"action": resolved_input.get("action")},
         accept=accept,
         workspace_root=guarded_workspace,
-        register_workspace_run=action not in {"get", "workspace_attach"},
+        register_workspace_run=action not in {"get", "workspace_attach", "prepare_session_deletion"},
     )

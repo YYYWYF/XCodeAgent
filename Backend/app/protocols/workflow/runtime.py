@@ -727,6 +727,7 @@ def build_workflow_ag_ui_stream(
                 run_id,
                 task,
                 workspace=workspace,
+                thread_id=thread_id,
             )
             if (
                 workflow_scope != "application_planning"

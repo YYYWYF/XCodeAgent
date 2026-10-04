@@ -10,10 +10,10 @@ import {
 } from '../src/main/filesystem'
 import {
   cleanupSessionFailedExecutions,
+  prepareSessionDeletion,
   releaseSessionPendingPlan
 } from '../src/renderer/src/service/applicationLifecycle'
 import {
-  releasePendingBeforeSessionDelete,
   sessionRuntimeKey,
   sessionRuntimeKeyBelongsToWorkspace
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
@@ -94,161 +94,6 @@ test('会话运行态按完整工作区路径隔离清理', () => {
   assert.equal(sessionRuntimeKeyBelongsToWorkspace(targetKey, targetWorkspace), true)
   assert.equal(sessionRuntimeKeyBelongsToWorkspace(sameNameElsewhereKey, targetWorkspace), false)
   assert.equal(sessionRuntimeKeyBelongsToWorkspace('malformed-key', targetWorkspace), false)
-})
-
-test('运行中的会话不会触发 Pending 收口或会话删除', async () => {
-  let releaseCalls = 0
-  let deleteCalls = 0
-  const deleted = await releasePendingBeforeSessionDelete(
-    () => true,
-    async () => {
-      releaseCalls += 1
-      return {} as ApplicationLifecycle
-    },
-    () => undefined,
-    async () => {
-      deleteCalls += 1
-    }
-  )
-
-  assert.equal(deleted, false)
-  assert.equal(releaseCalls, 0)
-  assert.equal(deleteCalls, 0)
-})
-
-test('会话删除严格按 Pending 收口、lifecycle 回灌、会话删除顺序执行', async () => {
-  const lifecycle = {} as ApplicationLifecycle
-  const events: string[] = []
-  const deleted = await releasePendingBeforeSessionDelete(
-    () => false,
-    async () => {
-      events.push('release')
-      return lifecycle
-    },
-    (incoming) => {
-      assert.equal(incoming, lifecycle)
-      events.push('merge')
-    },
-    async () => {
-      events.push('delete')
-    }
-  )
-
-  assert.equal(deleted, true)
-  assert.deepEqual(events, ['release', 'merge', 'delete'])
-})
-
-test('Pending 收口期间会话重新运行时不会删除会话', async () => {
-  let running = false
-  const runningObservations: boolean[] = []
-  let mergeCalls = 0
-  let deleteCalls = 0
-  let postDeleteCleanupCalls = 0
-  const deleted = await releasePendingBeforeSessionDelete(
-    () => {
-      runningObservations.push(running)
-      return running
-    },
-    async () => {
-      running = true
-      return {} as ApplicationLifecycle
-    },
-    () => {
-      mergeCalls += 1
-    },
-    async () => {
-      deleteCalls += 1
-    },
-    async () => {
-      postDeleteCleanupCalls += 1
-    }
-  )
-
-  assert.deepEqual(runningObservations, [false, true])
-  assert.equal(mergeCalls, 1)
-  assert.equal(deleted, false)
-  assert.equal(deleteCalls, 0)
-  assert.equal(postDeleteCleanupCalls, 0)
-})
-
-test('Backend 报告没有 owned Pending 时仍正常删除会话', async () => {
-  let deleteCalls = 0
-  const deleted = await releasePendingBeforeSessionDelete(
-    () => false,
-    async () =>
-      ({
-        extensions: {
-          planningRefresh: { source: 'none', status: 'idle' }
-        }
-      }) as ApplicationLifecycle,
-    () => undefined,
-    async () => {
-      deleteCalls += 1
-    }
-  )
-
-  assert.equal(deleted, true)
-  assert.equal(deleteCalls, 1)
-})
-
-test('Pending 收口失败时不会继续删除会话', async () => {
-  let deleteCalls = 0
-
-  await assert.rejects(
-    releasePendingBeforeSessionDelete(
-      () => false,
-      async () => {
-        throw new Error('Pending cleanup failed')
-      },
-      () => undefined,
-      async () => {
-        deleteCalls += 1
-      }
-    ),
-    /Pending cleanup failed/
-  )
-
-  assert.equal(deleteCalls, 0)
-})
-
-test('本地会话删除失败时不会触发删除后的 lifecycle cleanup', async () => {
-  let cleanupCalls = 0
-
-  await assert.rejects(
-    releasePendingBeforeSessionDelete(
-      () => false,
-      async () => ({}) as ApplicationLifecycle,
-      () => undefined,
-      async () => {
-        throw new Error('local session delete failed')
-      },
-      async () => {
-        cleanupCalls += 1
-      }
-    ),
-    /local session delete failed/
-  )
-
-  assert.equal(cleanupCalls, 0)
-})
-
-test('删除后的 Backend cleanup 失败不会伪造本地删除失败', async () => {
-  let warningCalls = 0
-  const deleted = await releasePendingBeforeSessionDelete(
-    () => false,
-    async () => ({}) as ApplicationLifecycle,
-    () => undefined,
-    async () => undefined,
-    async () => {
-      throw new Error('backend cleanup failed')
-    },
-    () => {
-      warningCalls += 1
-    }
-  )
-
-  assert.equal(deleted, true)
-  assert.equal(warningCalls, 1)
 })
 
 test('生命周期 service 通过 AG-UI 发送 Session Pending 收口动作并接收最新投影', async () => {
@@ -364,6 +209,59 @@ test('生命周期 service 通过 AG-UI 发送 Session failed execution 收口�
       action: 'cleanup_session_failed_executions',
       workspaceRoot: '/workspace',
       sessionId: 'session-a'
+    })
+    assert.deepEqual(received, lifecycle)
+  } finally {
+    globalThis.fetch = originalFetch
+    if (originalWindow === undefined) Reflect.deleteProperty(globalThis, 'window')
+    else Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+  }
+})
+
+/** 删除准备必须把本地 Session 和 Graph thread 身份一并发送给服务端。 */
+test('生命周期 service 通过 AG-UI 请求停止会话并清理 checkpoint', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window
+  let forwarded: Record<string, unknown> | undefined
+  const lifecycle = {
+    application: { id: 'app-1', name: '测试应用' },
+    revision: 4,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: {},
+    extensions: {}
+  } as ApplicationLifecycle
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body))
+    forwarded = body.forwardedProps.applicationLifecycle
+    const value = {
+      schemaVersion: 1,
+      runId: 'prepare-run',
+      threadId: body.threadId,
+      status: 'completed',
+      action: 'prepare_session_deletion',
+      lifecycle
+    }
+    const events = [
+      { type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+      { type: 'CUSTOM', name: 'application-lifecycle', value },
+      { type: 'STATE_SNAPSHOT', snapshot: { applicationLifecycle: value } },
+      { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId, result: value }
+    ]
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'Content-Type': 'text/event-stream' }
+    })
+  }
+  try {
+    const received = await prepareSessionDeletion('/workspace', 'session-a', 'graph-thread-a')
+    assert.deepEqual(forwarded, {
+      action: 'prepare_session_deletion',
+      workspaceRoot: '/workspace',
+      sessionId: 'session-a',
+      sessionThreadId: 'graph-thread-a'
     })
     assert.deepEqual(received, lifecycle)
   } finally {

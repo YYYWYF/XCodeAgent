@@ -124,6 +124,7 @@ def build_ag_ui_action_stream(
                     run_id,
                     current_task,
                     workspace=workspace_root,
+                    thread_id=thread_id,
                 )
             if progress_operation or streaming_operation:
                 event_queue: asyncio.Queue[
