@@ -5,6 +5,7 @@ import type {
   RecoveryActionPlan,
   RecoveryFailureDiagnostic
 } from './recoveryActionPlan'
+import { parseRecoveryFailureDiagnostic } from './recoveryActionPlan'
 
 export type RecoveryIncidentPresentation =
   | {
@@ -28,27 +29,39 @@ export type RecoveryIncidentPresentation =
     }
 
 const MODEL_PLANNING_FAILURE_CODE = 'UNIT_GENERATION_INFRASTRUCTURE_FAILURE'
+const MODEL_PLANNING_FAILURE_PREFIX = 'UNIT_GENERATION_MODEL_'
 
 /** 仅识别已定义的执行计划模型基础设施错误，不用关键词归因其他异常。 */
 export function isWorkbenchModelPlanningFailure(
   errorCode?: string | null
 ): boolean {
-  return errorCode === MODEL_PLANNING_FAILURE_CODE
+  return errorCode === MODEL_PLANNING_FAILURE_CODE ||
+    Boolean(errorCode?.startsWith(MODEL_PLANNING_FAILURE_PREFIX))
 }
 
-/** 仅用与当前 durable source 同 Run 的结构化错误码生成工作台失败摘要。 */
-function currentWorkbenchFailureMessage(
+/** 从实时 Workflow 或恢复投影读取同一失败 Run 的安全模型诊断。 */
+function currentWorkbenchFailureDiagnostic(
   candidate: ExecutionRecoveryCandidate,
   workflow?: WorkflowRunPayload
-): string | undefined {
+): RecoveryFailureDiagnostic | undefined {
+  if (candidate.executionStatus !== 'failed') return undefined
+  const persisted = candidate.failureDiagnostic
   if (
-    candidate.executionStatus !== 'failed' ||
+    persisted?.sourceRunId === candidate.sourceRunId &&
+    isWorkbenchModelPlanningFailure(persisted.code)
+  ) return persisted
+  if (
     workflow?.runId !== candidate.sourceRunId ||
+    workflow.threadId !== candidate.threadId ||
     workflow.summary.status !== 'failed'
   ) return undefined
-  return workflow.summary.errorCode === MODEL_PLANNING_FAILURE_CODE
-    ? '生成执行计划时，模型准备或调用失败。'
-    : undefined
+  const live = parseRecoveryFailureDiagnostic(workflow.summary.failureDiagnostic)
+  if (
+    live && live.sourceRunId === candidate.sourceRunId &&
+    isWorkbenchModelPlanningFailure(live.code) &&
+    typeof live.message === 'string' && live.message.trim()
+  ) return live
+  return undefined
 }
 
 /** 从当前 Planning State 提取真实失败摘要，不把恢复说明误当成原始错误。 */
@@ -120,7 +133,15 @@ export function workbenchRecoveryIncident(
     return undefined
   }
   const actionPlan = candidate.recoveryActionPlan
-  const failureMessage = currentWorkbenchFailureMessage(candidate, workflow)
+  const failureDiagnostic = currentWorkbenchFailureDiagnostic(candidate, workflow)
+  const failureMessage = failureDiagnostic?.message?.trim() || (
+    workflow?.runId === candidate.sourceRunId &&
+    workflow.threadId === candidate.threadId &&
+    workflow.summary.status === 'failed' &&
+    workflow.summary.errorCode === MODEL_PLANNING_FAILURE_CODE
+      ? '生成执行计划时，模型准备或调用失败。'
+      : undefined
+  )
   if (actionPlan.status === 'recoverable' && actionPlan.primaryAction) {
     const retryingNode = ['retry_failed_node', 'retry_business_node'].includes(
       actionPlan.primaryAction.kind
@@ -132,6 +153,7 @@ export function workbenchRecoveryIncident(
       title: retryingNode
         ? '当前执行失败'
         : '工作台执行需要恢复',
+      failureDiagnostic,
       failureMessage,
       recoveryMessage: retryingNode
         ? nodeLabel ? `将从「${nodeLabel}」节点重试。` : '重试时将重新确认执行起点。'
@@ -146,6 +168,7 @@ export function workbenchRecoveryIncident(
     return {
       kind: 'needs_attention',
       title: candidate.executionStatus === 'failed' ? '当前执行失败' : '执行未完成',
+      failureDiagnostic,
       failureMessage,
       recoveryMessage: '请重试；系统会重新确认执行起点。',
       reasonCode: actionPlan.reasonCode

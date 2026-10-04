@@ -5,9 +5,9 @@ import type {
   ExecutionRecoveryProjection
 } from '../../typings'
 import {
+  parseRecoveryFailureDiagnostic,
   parseRecoveryActionPlan,
-  type RecoveryExecutionKind,
-  type RecoveryFailureDiagnostic
+  type RecoveryExecutionKind
 } from '../../service/recoveryActionPlan'
 
 const EXECUTION_RECOVERY_AVAILABILITIES: ReadonlySet<string> = new Set([
@@ -29,43 +29,6 @@ function requiredText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const normalized = value.trim()
   return normalized || undefined
-}
-
-/** 解析失败诊断的安全公开字段，避免把任意后端对象直接展示到 Workbench。 */
-function parseFailureDiagnostic(value: unknown): RecoveryFailureDiagnostic | null | undefined {
-  if (value === null) return null
-  const candidate = recordValue(value)
-  if (!candidate) return undefined
-  const sourceRunId = requiredText(candidate.sourceRunId)
-  const origin = requiredText(candidate.origin)
-  const code = requiredText(candidate.code)
-  if (!sourceRunId || !origin || !code) return undefined
-  const optionalText = (field: unknown): string | null | undefined => {
-    if (field === null) return null
-    return field === undefined ? undefined : requiredText(field) ?? null
-  }
-  const httpStatus =
-    candidate.httpStatus === null
-      ? null
-      : typeof candidate.httpStatus === 'number' &&
-          Number.isInteger(candidate.httpStatus) &&
-          candidate.httpStatus >= 100 &&
-          candidate.httpStatus <= 599
-        ? candidate.httpStatus
-        : candidate.httpStatus === undefined
-          ? undefined
-          : null
-  return {
-    sourceRunId,
-    origin,
-    code,
-    operation: optionalText(candidate.operation),
-    dependency: optionalText(candidate.dependency),
-    provider: optionalText(candidate.provider),
-    model: optionalText(candidate.model),
-    ...(httpStatus !== undefined ? { httpStatus } : {}),
-    message: optionalText(candidate.message)
-  }
 }
 
 /** 校验单条 Workbench Recovery 候选，并强制要求 Backend-authoritative ActionPlan。 */
@@ -104,7 +67,7 @@ function parseExecutionRecoveryCandidate(value: unknown): ExecutionRecoveryCandi
     executionKind: executionKind as RecoveryExecutionKind
   })
   if (!recoveryActionPlan) return undefined
-  const failureDiagnostic = parseFailureDiagnostic(candidate.failureDiagnostic)
+  const failureDiagnostic = parseRecoveryFailureDiagnostic(candidate.failureDiagnostic)
   if (
     failureDiagnostic === undefined &&
     Object.prototype.hasOwnProperty.call(candidate, 'failureDiagnostic')

@@ -68,6 +68,9 @@ from app.config import Settings
 from app.domain.execution_recovery import (
     DurableExecutionRunConflictError,
 )
+from app.services.dag_planning_orchestrator import DagPlanningError
+from app.services.execution_failure_classifier import public_failure_diagnostic
+from app.services.unit_model_failure import failure_evidence_from_issue
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
 from app.domain.application_lifecycle import PendingInteractionType
 from app.graph.application_planning_interrupts import (
@@ -2305,8 +2308,28 @@ def build_workflow_ag_ui_stream(
         except Exception as exc:
             from app.services.development_artifacts import DevelopmentArtifactsIncompleteError
 
+            # 仅从同一 Workflow Run 的 Controller 主 failure 读取模型证据；聚合问题不冒充单一根因。
+            model_failure = None
+            stale_planning_failure = (
+                isinstance(exc, DagPlanningError)
+                and exc.snapshot is not None
+                and exc.snapshot.workflow_run_id != run_id
+            )
+            if (
+                isinstance(exc, DagPlanningError)
+                and exc.snapshot is not None
+                and exc.snapshot.workflow_run_id == run_id
+                and len(exc.issues) == 1
+                and exc.snapshot.failure == exc.issues[0]
+            ):
+                model_failure = failure_evidence_from_issue(exc.snapshot.failure)
             # AG-UI 失败帧可能先于权威对账到达，先脱敏再向任何 UI 文本/事件暴露。
-            safe_error_message = sanitize_failure_diagnostic(exc) or type(exc).__name__
+            if stale_planning_failure:
+                safe_error_message = "执行计划生成失败，未能确认本次错误。"
+            elif model_failure is not None:
+                safe_error_message = model_failure.diagnostic_message or "模型调用失败，未能确定具体原因。"
+            else:
+                safe_error_message = sanitize_failure_diagnostic(exc) or type(exc).__name__
             authoritative_node = None
             gate_blocked = isinstance(exc, DevelopmentArtifactsIncompleteError)
             run_id_conflict = isinstance(
@@ -2352,7 +2375,11 @@ def build_workflow_ag_ui_stream(
                     workspace,
                     lifecycle_payload,
                 )
-            error_code = getattr(exc, "code", None)
+            error_code = (
+                None if stale_planning_failure
+                else model_failure.code if model_failure is not None
+                else getattr(exc, "code", None)
+            )
             result = {
                 "status": "requires_user_input" if gate_blocked else "failed",
                 "phase": "test_phase_confirmation" if gate_blocked else "failed",
@@ -2374,11 +2401,15 @@ def build_workflow_ag_ui_stream(
             summary = _workflow_summary(result, events)
             summary["message"] = (
                 safe_error_message
-                if gate_blocked
+                if gate_blocked or model_failure is not None
                 else f"Workflow failed：{type(exc).__name__}: {safe_error_message}"
             )
             if error_code:
                 summary["errorCode"] = error_code
+            if model_failure is not None:
+                summary["failureDiagnostic"] = public_failure_diagnostic(
+                    model_failure, source_run_id=run_id,
+                )
             if durable_execution_started and active_graph is not None and config is not None:
                 async def resolve_failure_node_entry() -> str | None:
                     """直接从 committed history 解析失败 Node 的精确 Entry Boundary。"""
@@ -2434,6 +2465,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             workflow_scope=workflow_scope,
                             exception=exc,
+                            failure=model_failure,
                             authoritative_node=authoritative_node,
                         ),
                     )

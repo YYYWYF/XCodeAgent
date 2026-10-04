@@ -270,6 +270,63 @@ test('Workbench current recovery shows a model failure only for the matching str
   assert.equal(unknownCode?.failureMessage, undefined)
 })
 
+test('Workbench uses the current source diagnostic after refresh and ignores an older run', () => {
+  const candidate = recovery('ready')
+  candidate.executionStatus = 'failed'
+  candidate.recoveryActionPlan.primaryAction = {
+    actionId: 'retry-run-R2', kind: 'retry_failed_node', targetNode: 'prepare_build_tasks',
+    label: '重试', description: '从已验证入口重试。', requiresConfirmation: false
+  }
+  candidate.sourceRunId = 'run-R2'
+  candidate.recoveryActionPlan.sourceRunId = 'run-R2'
+  candidate.failureDiagnostic = {
+    sourceRunId: 'run-R2', origin: 'model_call', code: 'UNIT_GENERATION_MODEL_HTTP_ERROR',
+    httpStatus: 429, message: '模型服务返回 HTTP 429。'
+  }
+  const oldWorkflow = {
+    runId: 'run-R1', threadId: candidate.threadId,
+    summary: {
+      status: 'failed', errorCode: 'UNIT_GENERATION_MODEL_CALL_FAILED',
+      failureDiagnostic: {
+        sourceRunId: 'run-R1', origin: 'model_call', code: 'UNIT_GENERATION_MODEL_CALL_FAILED',
+        message: '模型调用失败，未能确定具体原因。'
+      }
+    }, events: []
+  } as WorkflowRunPayload
+  const incident = workbenchRecoveryIncident(candidate, oldWorkflow)
+  assert.equal(incident?.failureDiagnostic?.sourceRunId, 'run-R2')
+  assert.equal(incident?.failureMessage, '模型服务返回 HTTP 429。')
+  const markup = renderToStaticMarkup(createElement(RecoveryIncidentCard, {
+    incident: incident!, onAction: () => undefined
+  }))
+  assert.match(markup, /模型服务返回 HTTP 429。/)
+  assert.doesNotMatch(markup, /模型调用失败，未能确定具体原因。/)
+})
+
+test('Workbench live diagnostic survives an older generic persisted failure', () => {
+  const candidate = recovery('ready')
+  candidate.executionStatus = 'failed'
+  candidate.failureDiagnostic = {
+    sourceRunId: candidate.sourceRunId, origin: 'unknown', code: 'dagplanningerror',
+    message: 'generic terminal'
+  }
+  const workflow = {
+    runId: candidate.sourceRunId, threadId: candidate.threadId,
+    summary: {
+      status: 'failed', errorCode: 'UNIT_GENERATION_MODEL_RESPONSE_INVALID',
+      failureDiagnostic: {
+        sourceRunId: candidate.sourceRunId, origin: 'model_call',
+        code: 'UNIT_GENERATION_MODEL_RESPONSE_INVALID', httpStatus: 200,
+        message: '模型服务返回的响应无法读取。'
+      }
+    }, events: []
+  } as WorkflowRunPayload
+  const incident = workbenchRecoveryIncident(candidate, workflow)
+  assert.equal(incident?.failureMessage, '模型服务返回的响应无法读取。')
+  assert.equal(incident?.failureDiagnostic?.httpStatus, 200)
+  assert.notEqual(incident?.failureMessage, 'generic terminal')
+})
+
 test('Workbench model planning failure omits the upper history error card', () => {
   const workflow = {
     runId: 'run-A',

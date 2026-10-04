@@ -155,4 +155,28 @@ def _model_from_exception(exc: BaseException) -> str | None:
     return model.strip()[:256] if isinstance(model, str) and model.strip() else None
 
 
-__all__ = ["classify_execution_failure", "sanitize_failure_diagnostic"]
+def public_failure_diagnostic(
+    failure: ExecutionFailureEvidence,
+    *,
+    source_run_id: str,
+) -> dict[str, object]:
+    """将可信证据按允许字段投影给实时事件与恢复查询。"""
+
+    return {
+        "sourceRunId": source_run_id,
+        "origin": failure.origin.value,
+        "code": failure.code,
+        "operation": failure.operation,
+        "dependency": failure.dependency,
+        "provider": failure.provider,
+        "model": failure.model,
+        "httpStatus": failure.http_status,
+        **({"providerErrorCode": failure.provider_error_code} if failure.provider_error_code else {}),
+        "message": failure.diagnostic_message,
+    }
+
+
+__all__ = [
+    "classify_execution_failure", "sanitize_failure_diagnostic",
+    "public_failure_diagnostic",
+]

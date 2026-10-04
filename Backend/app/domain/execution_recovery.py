@@ -77,6 +77,9 @@ class ExecutionFailureEvidence(ExecutionRecoveryModel):
     provider: str | None = Field(default=None, max_length=128)
     model: str | None = Field(default=None, max_length=256)
     http_status: int | None = Field(default=None, ge=100, le=599)
+    provider_error_code: str | None = Field(
+        default=None, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$",
+    )
     replay_compatible: bool = False
     diagnostic_message: str | None = Field(default=None, max_length=2048)
 

@@ -32,6 +32,7 @@ from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
     UnitGenerationPolicy,
 )
+from app.services.unit_model_failure import is_unit_model_failure_issue
 from app.workspace.task_documents import (
     build_planning_provenance,
     build_task_plan_lifecycle_lock,
@@ -128,13 +129,7 @@ def persist_planning_recovery_if_applicable(
     if snapshot is None:
         return False
     failure = snapshot.failure
-    if (
-        failure is None
-        or failure.code != "UNIT_GENERATION_INFRASTRUCTURE_FAILURE"
-        or failure.level != "system"
-        or failure.category != "infrastructure"
-        or failure.retryable
-    ):
+    if failure is None or not is_unit_model_failure_issue(failure):
         return False
     try:
         recovery = build_planning_recovery_snapshot(

@@ -22,6 +22,7 @@ from app.services.execution_recovery_action_planner import (
     plan_failed_node_reentry_action,
     plan_interrupted_continue_action,
 )
+from app.services.execution_failure_classifier import public_failure_diagnostic
 from app.services.execution_recovery_reconciliation import (
     reconcile_interrupted_execution_state,
 )
@@ -37,20 +38,10 @@ def recovery_failure_diagnostic(
 ) -> dict[str, object] | None:
     """把内部失败证据映射为稳定的 Recovery 公共诊断 DTO。"""
 
-    failure = record.failure
-    if failure is None:
-        return None
-    return {
-        "sourceRunId": record.run_id,
-        "origin": failure.origin.value,
-        "code": failure.code,
-        "operation": failure.operation,
-        "dependency": failure.dependency,
-        "provider": failure.provider,
-        "model": failure.model,
-        "httpStatus": failure.http_status,
-        "message": failure.diagnostic_message,
-    }
+    return (
+        public_failure_diagnostic(record.failure, source_run_id=record.run_id)
+        if record.failure is not None else None
+    )
 
 
 async def resolve_execution_recovery_projection(

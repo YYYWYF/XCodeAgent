@@ -119,18 +119,20 @@ def _infrastructure_issue(error: UnitGenerationInfrastructureError) -> Validatio
     """把单次模型基础设施异常转换为可持久化的 PlanningRun fatal Issue。"""
 
     return ValidationIssue(
-        code="UNIT_GENERATION_INFRASTRUCTURE_FAILURE",
+        code=error.failure.code,
         level="system",
         category="infrastructure",
         unit_ids=(error.identity.unit_id,),
         task_ids=(),
         retry_unit_ids=(),
         retryable=False,
-        message="Unit Candidate 生成发生模型基础设施错误，PlanningRun 已终止。",
+        message=error.failure.message,
         details={
             "attempt_id": error.identity.attempt_id,
             "stage": error.stage,
             "cause_type": error.cause_type,
+            **({"http_status": error.failure.http_status} if error.failure.http_status is not None else {}),
+            **({"provider_error_code": error.failure.provider_error_code} if error.failure.provider_error_code else {}),
         },
     )
 

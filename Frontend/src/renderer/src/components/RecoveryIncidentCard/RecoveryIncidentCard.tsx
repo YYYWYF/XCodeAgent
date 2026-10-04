@@ -146,6 +146,7 @@ function DiagnosticDetails({
           <>
             <DiagnosticRow label="错误代码" value={diagnostic.code} />
             <DiagnosticRow label="HTTP Status" value={diagnostic.httpStatus} />
+            <DiagnosticRow label="Provider Error Code" value={diagnostic.providerErrorCode} />
             <DiagnosticRow label="来源" value={diagnostic.origin} />
             <DiagnosticRow label="Provider" value={diagnostic.provider} />
             <DiagnosticRow label="Model" value={diagnostic.model} />
@@ -160,11 +161,11 @@ function DiagnosticDetails({
   )
 }
 
-/** 根据状态码、模型和错误码拼装用户最先需要看到的失败摘要。 */
+/** 仅用已确认的状态码和模型显示简短标题，不把内部错误码放在首层。 */
 function failureDiagnosticHeadline(diagnostic: RecoveryFailureDiagnostic): string {
   const status = diagnostic.httpStatus ? String(diagnostic.httpStatus) : ''
   const model = diagnostic.model?.trim() || ''
-  return [status, model].filter(Boolean).join(' · ') || [diagnostic.code, model].filter(Boolean).join(' · ')
+  return [status, model].filter(Boolean).join(' · ')
 }
 
 /** 在详情表中统一显示可选字段，避免空白值造成难以阅读的表格行。 */

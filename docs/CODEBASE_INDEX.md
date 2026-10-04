@@ -50,6 +50,8 @@ For small local edits that do not change structure or ownership, leave the index
 
 ## Backend
 
+- Unit Candidate 模型调用失败由 `services/unit_model_failure.py` 在 SDK 调用边界分类。六个当前错误码与旧 `UNIT_GENERATION_INFRASTRUCTURE_FAILURE` 共用受限 Planning Recovery 门禁；Snapshot 保留原码及摘要。`services/unit_generation_orchestrator.py` 将分类写入 Controller 主 `PlanningRun.failure`，`protocols/workflow/runtime.py` 仅从同一 Run 的主失败投影到 Workflow summary、AG-UI custom/snapshot、RUN_ERROR 和显式 Durable `ExecutionFailureEvidence`。`services/execution_failure_classifier.py::public_failure_diagnostic` 为实时与刷新提供同一公开字段白名单，包括可选 `providerErrorCode`；恢复节点仍由 `RecoveryActionPlan` 决定。前端 `service/agUiAgent.ts` 合并同 Run 的晚到通用终帧，`service/recoveryIncident.ts` 只在当前 source Run 的卡片显示可信模型诊断。
+
 - 审查模式：`services/development_review_files.py` 从正式 Build 计划中已完成且仍有未提交目标文件的模块汇总全部 `target_files`，与顶部分支菜单的“已完成模块”同源；`graph/nodes/lifecycle.py` 将清单固定在 checkpoint，`protocols/workflow/runtime.py` 跨阶段传递，审查入口和扫描重试从服务端计划刷新。`agents/code_analyze/{agent,scope,analyzer}.py` 在 Diff 模式下仅允许读取清单内前后端文件（含后端配置与资源）及三个必需 Skill 文件；全量模式沿用原路径。入口与报告分别见 `Frontend/src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ReviewPhaseConfirmationCard.tsx` 和 `workspace/code_review_documents.py`。
 
 ### Initial development completion and test entry

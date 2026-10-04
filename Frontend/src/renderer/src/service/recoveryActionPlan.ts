@@ -21,6 +21,7 @@ export type RecoveryFailureDiagnostic = {
   provider?: string | null
   model?: string | null
   httpStatus?: number | null
+  providerErrorCode?: string | null
   message?: string | null
 }
 
@@ -71,6 +72,47 @@ function requiredRecoveryText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const normalized = value.trim()
   return normalized || undefined
+}
+
+/** 按公开字段解析实时和持久化的失败证据，并拒绝不合规来源身份。 */
+export function parseRecoveryFailureDiagnostic(value: unknown): RecoveryFailureDiagnostic | null | undefined {
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const candidate = value as Record<string, unknown>
+  const sourceRunId = requiredRecoveryText(candidate.sourceRunId)
+  const origin = requiredRecoveryText(candidate.origin)
+  const code = requiredRecoveryText(candidate.code)
+  if (!sourceRunId || !origin || !code) return undefined
+  const optionalText = (field: unknown): string | null | undefined => {
+    if (field === null) return null
+    return field === undefined ? undefined : requiredRecoveryText(field) ?? null
+  }
+  const httpStatus =
+    candidate.httpStatus === null
+      ? null
+      : typeof candidate.httpStatus === 'number' &&
+          Number.isInteger(candidate.httpStatus) &&
+          candidate.httpStatus >= 100 &&
+          candidate.httpStatus <= 599
+        ? candidate.httpStatus
+        : candidate.httpStatus === undefined
+          ? undefined
+          : null
+  const providerErrorCode = optionalText(candidate.providerErrorCode)
+  return {
+    sourceRunId,
+    origin,
+    code,
+    operation: optionalText(candidate.operation),
+    dependency: optionalText(candidate.dependency),
+    provider: optionalText(candidate.provider),
+    model: optionalText(candidate.model),
+    ...(httpStatus !== undefined ? { httpStatus } : {}),
+    providerErrorCode: typeof providerErrorCode === 'string' &&
+      /^[A-Za-z0-9_.-]{1,64}$/.test(providerErrorCode)
+      ? providerErrorCode : null,
+    message: optionalText(candidate.message)
+  }
 }
 
 /** 严格解析一个 Backend-authoritative 恢复动作。 */

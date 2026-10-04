@@ -27,9 +27,14 @@ from app.services.unit_generation_tool_session import (
     UnitGenerationPlatformError,
     model_turn_limit_issue,
 )
+from app.services.unit_model_failure import (
+    UnitModelFailure,
+    classify_unit_model_failure,
+    unit_session_timeout_failure,
+)
 
 
-InfrastructureStage = Literal["model_setup", "model_invoke"]
+InfrastructureStage = Literal["model_setup", "model_invoke", "unit_session"]
 
 
 class UnitGenerationInfrastructureError(RuntimeError):
@@ -41,6 +46,7 @@ class UnitGenerationInfrastructureError(RuntimeError):
         identity: AttemptIdentity,
         stage: InfrastructureStage,
         cause: Exception,
+        failure: UnitModelFailure | None = None,
     ) -> None:
         """保留 Attempt 和失败阶段，同时通过异常链保留原始基础设施异常。"""
 
@@ -48,6 +54,11 @@ class UnitGenerationInfrastructureError(RuntimeError):
         self.identity = identity
         self.stage = stage
         self.cause_type = type(cause).__name__
+        self.failure = failure or (
+            unit_session_timeout_failure()
+            if stage == "unit_session"
+            else classify_unit_model_failure(cause, stage=stage)
+        )
         super().__init__(
             f"Unit generation infrastructure failure at {stage}: "
             f"attempt_id={identity.attempt_id}, cause={self.cause_type}"
@@ -158,7 +169,7 @@ async def generate_unit_candidate_once(
     raw_response = ""
     session_issue: ValidationIssue | None = None
     try:
-        async with asyncio.timeout(frozen_job.policy.unit_session_timeout):
+        async with asyncio.timeout(frozen_job.policy.unit_session_timeout) as session_deadline:
             while model_turns < frozen_job.policy.model_turn_limit:
                 model_input = tool_session.messages if tool_session is not None else prompt
                 try:
@@ -198,9 +209,11 @@ async def generate_unit_candidate_once(
     except UnitGenerationInfrastructureError:
         raise
     except TimeoutError as exc:
+        if not session_deadline.expired():
+            raise
         raise UnitGenerationInfrastructureError(
             identity=frozen_job.identity,
-            stage="model_invoke",
+            stage="unit_session",
             cause=exc,
         ) from exc
 

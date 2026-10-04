@@ -22,7 +22,10 @@ def _context_payload() -> dict:
         "input_fingerprint": "input-digest", "base_confirmed_plan_digest": None,
         "generation_requirements": [{
             "requirement_id": "orders-page", "description": "实现订单查询页面",
-            "source_refs": {"artifact": "technical-plan", "pointers": ["/pages/orders"]},
+            "source_refs": {
+                "artifact": "technical-plan", "pointers": ["/pages/orders"],
+                "kind": "frontend.page", "page_id": "orders",
+            },
         }],
         "contract_catalog": [{
             "ref_id": "frozen-contract-orders",

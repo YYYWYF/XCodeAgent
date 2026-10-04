@@ -25,6 +25,7 @@ export type WorkflowEvent = {
 export type WorkflowSummary = {
   status?: string
   message?: string
+  failureDiagnostic?: RecoveryFailureDiagnostic
   phase?: string
   previewUrl?: string
   launchResult?: WorkflowLaunchResult

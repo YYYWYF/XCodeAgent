@@ -14,6 +14,7 @@ from app.services.planning_frozen import FrozenJsonObject, FrozenPlanningModel, 
 from app.services.planning_issues import ValidationIssue
 from app.services.planning_run_contracts import PlanningRun
 from app.services.unit_generation_contracts import CandidateAttempt
+from app.services.unit_model_failure import is_unit_model_failure_issue
 
 
 _Identifier = Annotated[str, StringConstraints(min_length=1, pattern=r"^\S(?:.*\S)?$")]
@@ -74,14 +75,9 @@ class PlanningRecoverySnapshot(FrozenPlanningModel):
     def validate_recovery_boundary(self) -> "PlanningRecoverySnapshot":
         """只允许基础设施失败及 source Run 当前有效 Candidate 进入 Snapshot。"""
 
-        if (
-            self.failure.code != "UNIT_GENERATION_INFRASTRUCTURE_FAILURE"
-            or self.failure.level != "system"
-            or self.failure.category != "infrastructure"
-            or self.failure.retryable
-        ):
+        if not is_unit_model_failure_issue(self.failure):
             raise ValueError(
-                "planning-recovery.v1 只接受不可重试的 UNIT_GENERATION_INFRASTRUCTURE_FAILURE。"
+                "planning-recovery.v1 只接受已定义的不可重试 Unit 模型调用失败。"
             )
         if not self.candidates_by_unit:
             raise ValueError("Recovery Snapshot 至少必须包含一个当前 candidate_ready Candidate。")
@@ -113,15 +109,9 @@ def build_planning_recovery_snapshot(
     run = PlanningRun.model_validate(failed_run)
     if run.status != "failed":
         raise ValueError("Recovery Snapshot 只能从 failed PlanningRun 构造。")
-    if (
-        run.failure is None
-        or run.failure.code != "UNIT_GENERATION_INFRASTRUCTURE_FAILURE"
-        or run.failure.level != "system"
-        or run.failure.category != "infrastructure"
-        or run.failure.retryable
-    ):
+    if run.failure is None or not is_unit_model_failure_issue(run.failure):
         raise ValueError(
-            "当前 failed PlanningRun 不是支持 Recovery 的 UNIT_GENERATION_INFRASTRUCTURE_FAILURE。"
+            "当前 failed PlanningRun 不是支持 Recovery 的 Unit 模型调用失败。"
         )
 
     candidates: dict[str, CandidateAttempt] = {}

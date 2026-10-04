@@ -104,7 +104,10 @@ class ExecutionFailureClassifierTests(unittest.TestCase):
         self.assertEqual(
             execution_failure_sha256(base),
             execution_failure_sha256(
-                base.model_copy(update={"diagnostic_message": "model unavailable"})
+                base.model_copy(update={
+                    "diagnostic_message": "model unavailable",
+                    "provider_error_code": "rate_limit",
+                })
             ),
         )
 

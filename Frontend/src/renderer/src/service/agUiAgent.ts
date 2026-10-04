@@ -2,6 +2,7 @@ import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
+import { parseRecoveryFailureDiagnostic } from './recoveryActionPlan'
 import type {
   ApplicationConfig,
   ApplicationPlanningInteraction,
@@ -663,14 +664,14 @@ export class AgUiChatSession {
           }
         }
         if (event.name === 'workflow-run') {
-          workflow = readWorkflowPayload(event.value) ?? workflow
+          workflow = reconcileWorkflowFailurePayload(workflow, readWorkflowPayload(event.value))
           if (workflow) {
             emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
             options.onWorkflow?.(workflow)
           }
         }
         if (event.name === 'conversation') {
-          workflow = readWorkflowPayload(event.value) ?? workflow
+          workflow = reconcileWorkflowFailurePayload(workflow, readWorkflowPayload(event.value))
           const step = readProcessStep(objectValue(event.value).processStep)
           if (step) {
             processSteps = mergeProcessStep(processSteps, step)
@@ -698,7 +699,7 @@ export class AgUiChatSession {
         }
       },
       onStateSnapshotEvent: ({ event }) => {
-        workflow = readWorkflowFromState(event.snapshot) ?? workflow
+        workflow = reconcileWorkflowFailurePayload(workflow, readWorkflowFromState(event.snapshot))
         if (workflow) {
           emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
           options.onWorkflow?.(workflow)
@@ -758,7 +759,7 @@ export class AgUiChatSession {
     const assistantMessage = result.newMessages.find(
       (newMessage) => newMessage.role === 'assistant'
     )
-    workflow = readResultWorkflow(result.result) ?? workflow
+    workflow = reconcileWorkflowFailurePayload(workflow, readResultWorkflow(result.result))
     if (workflow) emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
     const answer =
       messageContentToText(assistantMessage?.content).trim() ||
@@ -1365,6 +1366,35 @@ function readResultWorkflow(result: unknown): WorkflowRunPayload | undefined {
   if (!result || typeof result !== 'object') return undefined
   const value = result as { workflow?: unknown; conversation?: unknown }
   return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.conversation)
+}
+
+/** 同一失败 Run 的通用终帧不得覆盖先到达的具体模型失败证据。 */
+export function reconcileWorkflowFailurePayload(
+  previous?: WorkflowRunPayload,
+  incoming?: WorkflowRunPayload
+): WorkflowRunPayload | undefined {
+  if (!incoming) return previous
+  if (
+    !previous || previous.runId !== incoming.runId ||
+    previous.threadId !== incoming.threadId ||
+    previous.summary.status !== 'failed' || incoming.summary.status !== 'failed'
+  ) return incoming
+  const earlier = parseRecoveryFailureDiagnostic(previous.summary.failureDiagnostic)
+  const later = parseRecoveryFailureDiagnostic(incoming.summary.failureDiagnostic)
+  const isSpecific = (diagnostic: typeof earlier): boolean => Boolean(
+    diagnostic && diagnostic.sourceRunId === incoming.runId &&
+    diagnostic.code.startsWith('UNIT_GENERATION_MODEL_')
+  )
+  if (!isSpecific(earlier) || isSpecific(later)) return incoming
+  return {
+    ...incoming,
+    summary: {
+      ...incoming.summary,
+      errorCode: earlier!.code,
+      message: earlier!.message || previous.summary.message,
+      failureDiagnostic: earlier!
+    }
+  }
 }
 
 export function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {

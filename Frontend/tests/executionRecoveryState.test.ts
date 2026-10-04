@@ -5,7 +5,35 @@ import {
   executionRecoveryProjection
 } from '../src/renderer/src/components/AiChatPanel/executionRecoveryState'
 import { workbenchRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
-import type { ApplicationLifecycle, ExecutionRecoveryCandidate } from '../src/renderer/src/typings'
+import { reconcileWorkflowFailurePayload } from '../src/renderer/src/service/agUiAgent'
+import type { ApplicationLifecycle, ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
+
+test('同 Run 的通用终态保留具体诊断，新 Run 不继承旧失败', () => {
+  const specific = {
+    runId: 'run-R1', threadId: 'thread-A', events: [],
+    summary: {
+      status: 'failed', errorCode: 'UNIT_GENERATION_MODEL_HTTP_ERROR',
+      message: '模型服务返回 HTTP 429。',
+      failureDiagnostic: {
+        sourceRunId: 'run-R1', origin: 'model_call',
+        code: 'UNIT_GENERATION_MODEL_HTTP_ERROR', httpStatus: 429,
+        message: '模型服务返回 HTTP 429。'
+      }
+    }
+  } as WorkflowRunPayload
+  const generic = {
+    ...specific,
+    summary: { status: 'failed', errorCode: 'WORKFLOW_RUN_FAILED', message: '通用终态' }
+  } as WorkflowRunPayload
+  const merged = reconcileWorkflowFailurePayload(specific, generic)
+  assert.equal(merged?.summary.errorCode, 'UNIT_GENERATION_MODEL_HTTP_ERROR')
+  assert.equal(merged?.summary.failureDiagnostic?.httpStatus, 429)
+  assert.equal(merged?.summary.message, '模型服务返回 HTTP 429。')
+  const nextRun = reconcileWorkflowFailurePayload(specific, {
+    ...generic, runId: 'run-R2', summary: { status: 'failed', message: 'R2 失败' }
+  })
+  assert.equal(nextRun?.summary.failureDiagnostic, undefined)
+})
 
 /** 构造只包含当前恢复投影扩展的 lifecycle 测试快照。 */
 function lifecycleWithCandidates(candidates: unknown[]): ApplicationLifecycle {
