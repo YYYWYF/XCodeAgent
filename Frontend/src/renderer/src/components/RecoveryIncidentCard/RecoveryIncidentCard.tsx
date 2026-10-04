@@ -150,6 +150,7 @@ function DiagnosticDetails({
             <DiagnosticRow label="来源" value={diagnostic.origin} />
             <DiagnosticRow label="Provider" value={diagnostic.provider} />
             <DiagnosticRow label="Model" value={diagnostic.model} />
+            <DiagnosticRow label="失败阶段" value={diagnostic.stage} />
             <DiagnosticRow label="失败步骤 / Operation" value={diagnostic.operation} />
             <DiagnosticRow label="Dependency" value={diagnostic.dependency} />
             <DiagnosticRow label="Source Run ID" value={diagnostic.sourceRunId} />

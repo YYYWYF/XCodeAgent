@@ -44,6 +44,10 @@ from tests.dag_planning_orchestrator_fixtures import model_tasks, planning_input
 from tests.test_unit_generation_contracts import _policy_payload
 from app.services.unit_generation import UnitGenerationInfrastructureError
 from app.services.unit_generation_contracts import UnitGenerationAttemptResult, UnitGenerationPolicy
+from app.services.unit_model_failure import (
+    LEGACY_INFRASTRUCTURE_FAILURE,
+    failure_evidence_from_issue,
+)
 
 
 def _infrastructure_issue() -> ValidationIssue:
@@ -109,6 +113,36 @@ class PlanningRecoveryContractTests(unittest.TestCase):
         payload["candidates_by_unit"]["page:orders"]["generation_metadata"] = {"changed": True}
         with self.assertRaises(ValueError):
             PlanningRecoverySnapshot.model_validate(payload)
+
+    def test_old_snapshot_without_stage_keeps_digest_and_failure_summary(self) -> None:
+        """历史 Snapshot 缺少 stage 时仍可读取，原摘要和摘要校验值保持不变。"""
+
+        old_issue = ValidationIssue(
+            code=LEGACY_INFRASTRUCTURE_FAILURE,
+            level="system",
+            category="infrastructure",
+            unit_ids=("page:failed",),
+            retryable=False,
+            message="生成执行计划的本次处理已超时。",
+            details={"attempt_id": "attempt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        )
+        initial = transitions.begin_generation(run(unit("page:ready")), at=AT)
+        failed = transitions.fail(
+            ready(initial, "page:ready"), old_issue, at=AT,
+        )
+        snapshot = build_planning_recovery_snapshot(failed, owner_session_id="session-1")
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        old_digest = snapshot.snapshot_digest
+
+        restored = PlanningRecoverySnapshot.model_validate_json(snapshot.model_dump_json())
+        self.assertEqual(restored.snapshot_digest, old_digest)
+        self.assertEqual(restored.failure.message, "生成执行计划的本次处理已超时。")
+        self.assertNotIn("stage", restored.failure.details)
+        evidence = failure_evidence_from_issue(restored.failure)
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertIsNone(evidence.stage)
 
     def test_new_model_code_keeps_recovery_candidate_and_rejects_other_infrastructure(self) -> None:
         """新增模型码与旧 Snapshot 共享精确门禁，其他 system/infrastructure 不获复用。"""

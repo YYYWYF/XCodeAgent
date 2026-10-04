@@ -22,10 +22,12 @@ from app.services.execution_recovery_projection import recovery_failure_diagnost
 from app.services.planning_recovery_contracts import build_planning_recovery_snapshot
 from app.services.unit_generation import UnitGenerationInfrastructureError, generate_unit_candidate_once
 from app.services.unit_generation_orchestrator import _infrastructure_issue
+from app.services.planning_issues import ValidationIssue
 from app.services.unit_model_failure import (
-    MODEL_CALL_FAILED, MODEL_CONNECTION_FAILED, MODEL_HTTP_ERROR,
-    MODEL_REQUEST_TIMEOUT, MODEL_RESPONSE_INVALID, MODEL_SETUP_FAILED,
-    classify_unit_model_failure, failure_evidence_from_issue,
+    LEGACY_INFRASTRUCTURE_FAILURE, MODEL_CALL_FAILED, MODEL_CONNECTION_FAILED,
+    MODEL_HTTP_ERROR, MODEL_REQUEST_TIMEOUT, MODEL_RESPONSE_INVALID,
+    MODEL_SETUP_FAILED, classify_unit_model_failure,
+    failure_evidence_from_issue, unit_session_timeout_failure,
 )
 from tests.planning_run_fixtures import AT, ready, run
 from tests.test_unit_generation import _job, _settings
@@ -35,11 +37,12 @@ class UnitModelFailureTests(unittest.IsolatedAsyncioTestCase):
     """覆盖真实 SDK 类型、明确边界和同一失败的公开投影。"""
 
     def test_sdk_types_produce_only_supported_facts(self) -> None:
-        """超时优先于连接，HTTP 响应与协议错误保留已证实状态。"""
+        """超时优先于连接，HTTP 状态和响应协议错误只保留 SDK 证据。"""
 
         request = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
         failed_response = httpx.Response(429, request=request)
         valid_response = httpx.Response(200, request=request)
+        missing_response = openai.APIConnectionError(request=request)
         cases = (
             (openai.APITimeoutError(request=request), MODEL_REQUEST_TIMEOUT, None),
             (openai.APIConnectionError(request=request), MODEL_CONNECTION_FAILED, None),
@@ -47,6 +50,7 @@ class UnitModelFailureTests(unittest.IsolatedAsyncioTestCase):
             (openai.APIResponseValidationError(valid_response, body={"secret": "secret-token"}), MODEL_RESPONSE_INVALID, 200),
             (anthropic.APITimeoutError(request=request), MODEL_REQUEST_TIMEOUT, None),
             (httpx.ConnectTimeout("late"), MODEL_REQUEST_TIMEOUT, None),
+            (missing_response, MODEL_CONNECTION_FAILED, None),
             (RuntimeError("secret-token"), MODEL_CALL_FAILED, None),
         )
         for error, code, status in cases:
@@ -65,6 +69,99 @@ class UnitModelFailureTests(unittest.IsolatedAsyncioTestCase):
             classify_unit_model_failure(spoofed, stage="model_invoke").code,
             MODEL_CALL_FAILED,
         )
+        self.assertIsNone(classify_unit_model_failure(spoofed, stage="model_invoke").http_status)
+
+    def test_http_200_sdk_stream_errors_are_call_failures(self) -> None:
+        """用项目安装的 OpenAI 与 Anthropic SDK 验证 HTTP 200 流内错误形状。"""
+
+        request = httpx.Request("POST", "https://example.invalid/v1/messages")
+        anthropic_client = anthropic.Anthropic(api_key="test-token")
+        anthropic_response = httpx.Response(
+            200,
+            request=request,
+            content=(
+                b'event: error\ndata: '
+                b'{"type":"error","error":{"type":"api_error",'
+                b'"message":"private-stream-body"}}\n\n'
+            ),
+        )
+        anthropic_stream = anthropic.Stream(
+            cast_to=dict, response=anthropic_response, client=anthropic_client,
+        )
+        try:
+            with self.assertRaises(anthropic.APIStatusError) as anthropic_error:
+                next(anthropic_stream)
+        finally:
+            anthropic_client.close()
+
+        anthropic_fact = classify_unit_model_failure(
+            anthropic_error.exception, stage="model_invoke",
+        )
+        self.assertEqual(anthropic_fact.code, MODEL_CALL_FAILED)
+        self.assertEqual(anthropic_fact.http_status, 200)
+        self.assertEqual(anthropic_fact.provider_error_code, "api_error")
+        self.assertNotIn("HTTP 200", anthropic_fact.message)
+        self.assertNotIn("private-stream-body", anthropic_fact.message)
+
+        openai_client = openai.OpenAI(api_key="test-token")
+        openai_response = httpx.Response(
+            200,
+            request=request,
+            content=(
+                b'data: {"error":{"code":"stream_error",'
+                b'"message":"private-openai-stream-body"}}\n\n'
+            ),
+        )
+        openai_stream = openai.Stream(
+            cast_to=dict, response=openai_response, client=openai_client,
+        )
+        try:
+            with self.assertRaises(openai.APIError) as openai_error:
+                next(openai_stream)
+        finally:
+            openai_client.close()
+
+        openai_fact = classify_unit_model_failure(
+            openai_error.exception, stage="model_invoke",
+        )
+        self.assertNotIsInstance(openai_error.exception, openai.APIStatusError)
+        self.assertEqual(openai_fact.code, MODEL_CALL_FAILED)
+        self.assertIsNone(openai_fact.http_status)
+        self.assertEqual(openai_fact.provider_error_code, "stream_error")
+        self.assertNotIn("HTTP 200", openai_fact.message)
+        self.assertNotIn("private-openai-stream-body", openai_fact.message)
+
+    def test_legacy_infrastructure_code_is_not_always_a_timeout(self) -> None:
+        """旧通用码只在可信 Unit Session deadline 阶段显示超时。"""
+
+        for stage in ("model_setup", "model_invoke"):
+            issue = ValidationIssue(
+                code=LEGACY_INFRASTRUCTURE_FAILURE,
+                level="system",
+                category="infrastructure",
+                retryable=False,
+                message="旧记录曾使用的摘要",
+                details={"stage": stage},
+            )
+            evidence = failure_evidence_from_issue(issue)
+            self.assertIsNotNone(evidence)
+            assert evidence is not None
+            self.assertEqual(evidence.stage, stage)
+            self.assertNotIn("超时", evidence.diagnostic_message or "")
+
+        no_stage_issue = ValidationIssue(
+            code=LEGACY_INFRASTRUCTURE_FAILURE,
+            level="system",
+            category="infrastructure",
+            retryable=False,
+            message="旧记录原摘要",
+        )
+        old_evidence = failure_evidence_from_issue(no_stage_issue)
+        self.assertIsNotNone(old_evidence)
+        assert old_evidence is not None
+        self.assertIsNone(old_evidence.stage)
+        self.assertNotIn("超时", old_evidence.diagnostic_message or "")
+        self.assertIn("超时", unit_session_timeout_failure().message)
 
     async def test_session_deadline_is_not_request_timeout(self) -> None:
         """整个 Unit 到期沿用基础设施码，不虚构 SDK 请求超时。"""
@@ -81,6 +178,13 @@ class UnitModelFailureTests(unittest.IsolatedAsyncioTestCase):
                 await generate_unit_candidate_once(job, settings=_settings())
         self.assertEqual(caught.exception.stage, "unit_session")
         self.assertEqual(caught.exception.failure.code, "UNIT_GENERATION_INFRASTRUCTURE_FAILURE")
+        self.assertIn("超时", caught.exception.failure.message)
+        session_issue = _infrastructure_issue(caught.exception)
+        session_evidence = failure_evidence_from_issue(session_issue)
+        self.assertIsNotNone(session_evidence)
+        assert session_evidence is not None
+        self.assertEqual(session_evidence.stage, "unit_session")
+        self.assertIn("超时", session_evidence.diagnostic_message or "")
 
     async def _never_return(self, _prompt: str) -> None:
         """让测试中的 Unit Session 自身截止。"""
@@ -88,14 +192,29 @@ class UnitModelFailureTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.Event().wait()
 
     async def test_sdk_boundary_reaches_ag_ui_and_durable_with_one_code(self) -> None:
-        """实际 SDK 响应异常经 Unit、Issue、Dag、Runtime 和持久化保持同码。"""
+        """实际 Anthropic HTTP 200 流内错误穿过 Issue、AG-UI 与持久化保持同一事实。"""
 
-        request = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
-        response = httpx.Response(429, request=request)
-        sdk_error = openai.APIStatusError(
-            "Authorization: Bearer secret-token", response=response,
-            body={"code": "rate_limit"},
+        request = httpx.Request("POST", "https://example.invalid/v1/messages")
+        sdk_client = anthropic.Anthropic(api_key="test-token")
+        sdk_response = httpx.Response(
+            200,
+            request=request,
+            content=(
+                b'event: error\ndata: '
+                b'{"type":"error","error":{"type":"api_error",'
+                b'"message":"private-provider-body"}}\n\n'
+            ),
         )
+        sdk_stream = anthropic.Stream(
+            cast_to=dict, response=sdk_response, client=sdk_client,
+        )
+        try:
+            with self.assertRaises(anthropic.APIStatusError) as raised:
+                next(sdk_stream)
+        finally:
+            sdk_client.close()
+        sdk_error = raised.exception
+
         model = SimpleNamespace(ainvoke=AsyncMock(side_effect=sdk_error))
         with patch("app.services.unit_generation.build_unit_generation_prompt", return_value="test"), patch(
             "app.services.unit_generation.create_chat_model", return_value=model,
@@ -108,10 +227,12 @@ class UnitModelFailureTests(unittest.IsolatedAsyncioTestCase):
         evidence = failure_evidence_from_issue(failed.failure)
         self.assertIsNotNone(evidence)
         assert evidence is not None
-        self.assertEqual(planning_error.code, MODEL_HTTP_ERROR)
-        self.assertEqual(evidence.code, MODEL_HTTP_ERROR)
-        self.assertEqual(evidence.http_status, 429)
-        self.assertEqual(evidence.provider_error_code, "rate_limit")
+        self.assertEqual(planning_error.code, MODEL_CALL_FAILED)
+        self.assertEqual(evidence.code, MODEL_CALL_FAILED)
+        self.assertEqual(evidence.stage, "model_invoke")
+        self.assertEqual(evidence.http_status, 200)
+        self.assertEqual(evidence.provider_error_code, "api_error")
+        self.assertEqual(evidence.diagnostic_message, "模型调用失败，未能确定具体原因。")
 
         class FailingGraph:
             """将已确认的规划主失败交给真实 Workflow AG-UI Runtime。"""
@@ -142,9 +263,11 @@ class UnitModelFailureTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('"type":"RUN_ERROR"', public_frames)
             self.assertIn('"type":"STATE_SNAPSHOT"', public_frames)
             self.assertIn('"name":"workflow-run"', public_frames)
-            self.assertIn(MODEL_HTTP_ERROR, public_frames)
-            self.assertIn('"httpStatus":429', public_frames)
-            self.assertNotIn("secret-token", public_frames)
+            self.assertIn(MODEL_CALL_FAILED, public_frames)
+            self.assertIn('"httpStatus":200', public_frames)
+            self.assertIn('"stage":"model_invoke"', public_frames)
+            self.assertNotIn("HTTP 200", public_frames)
+            self.assertNotIn("private-provider-body", public_frames)
             emitted = [
                 json.loads(line.removeprefix("data: "))
                 for frame in frames for line in frame.splitlines()
@@ -153,10 +276,16 @@ class UnitModelFailureTests(unittest.IsolatedAsyncioTestCase):
             custom = next(item for item in reversed(emitted) if item.get("type") == "CUSTOM" and item.get("name") == "workflow-run")
             snapshot = next(item for item in reversed(emitted) if item.get("type") == "STATE_SNAPSHOT")
             run_error = next(item for item in emitted if item.get("type") == "RUN_ERROR")
-            self.assertEqual(custom["value"]["summary"]["errorCode"], MODEL_HTTP_ERROR)
-            self.assertEqual(snapshot["snapshot"]["workflow"]["summary"]["errorCode"], MODEL_HTTP_ERROR)
-            self.assertEqual(run_error["code"], MODEL_HTTP_ERROR)
-            self.assertEqual(run_error["message"], "模型服务返回 HTTP 429。")
+            custom_diagnostic = custom["value"]["summary"]["failureDiagnostic"]
+            snapshot_diagnostic = snapshot["snapshot"]["workflow"]["summary"]["failureDiagnostic"]
+            self.assertEqual(custom["value"]["summary"]["errorCode"], MODEL_CALL_FAILED)
+            self.assertEqual(snapshot["snapshot"]["workflow"]["summary"]["errorCode"], MODEL_CALL_FAILED)
+            self.assertEqual(custom_diagnostic, snapshot_diagnostic)
+            self.assertEqual(custom_diagnostic["stage"], "model_invoke")
+            self.assertEqual(custom_diagnostic["httpStatus"], 200)
+            self.assertEqual(custom_diagnostic["message"], "模型调用失败，未能确定具体原因。")
+            self.assertEqual(run_error["code"], MODEL_CALL_FAILED)
+            self.assertEqual(run_error["message"], "模型调用失败，未能确定具体原因。")
             record = await get_execution(directory, failed.workflow_run_id)
             self.assertIsNotNone(record)
             assert record is not None
@@ -164,8 +293,12 @@ class UnitModelFailureTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(projected, public_failure_diagnostic(
                 record.failure, source_run_id=failed.workflow_run_id,
             ))
-            self.assertEqual(projected["code"], MODEL_HTTP_ERROR)
-            self.assertNotIn("secret-token", json.dumps(projected))
+            self.assertEqual(projected["code"], MODEL_CALL_FAILED)
+            self.assertEqual(projected["stage"], "model_invoke")
+            self.assertEqual(projected["httpStatus"], 200)
+            for field in ("code", "stage", "httpStatus", "providerErrorCode", "message"):
+                self.assertEqual(projected[field], custom_diagnostic[field], field)
+            self.assertNotIn("private-provider-body", json.dumps(projected))
 
     async def test_new_run_does_not_publish_previous_planning_failure(self) -> None:
         """R2 的异常若错误携带 R1 Snapshot，也不能发布 R1 的模型码。"""

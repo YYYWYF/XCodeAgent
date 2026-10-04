@@ -170,6 +170,7 @@ def public_failure_diagnostic(
         "dependency": failure.dependency,
         "provider": failure.provider,
         "model": failure.model,
+        **({"stage": failure.stage} if failure.stage else {}),
         "httpStatus": failure.http_status,
         **({"providerErrorCode": failure.provider_error_code} if failure.provider_error_code else {}),
         "message": failure.diagnostic_message,

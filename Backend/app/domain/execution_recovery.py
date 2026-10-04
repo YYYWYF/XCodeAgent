@@ -76,6 +76,7 @@ class ExecutionFailureEvidence(ExecutionRecoveryModel):
     dependency: str | None = Field(default=None, max_length=128)
     provider: str | None = Field(default=None, max_length=128)
     model: str | None = Field(default=None, max_length=256)
+    stage: Literal["model_setup", "model_invoke", "unit_session"] | None = None
     http_status: int | None = Field(default=None, ge=100, le=599)
     provider_error_code: str | None = Field(
         default=None, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$",

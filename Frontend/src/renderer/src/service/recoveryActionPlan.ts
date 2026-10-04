@@ -20,6 +20,7 @@ export type RecoveryFailureDiagnostic = {
   dependency?: string | null
   provider?: string | null
   model?: string | null
+  stage?: 'model_setup' | 'model_invoke' | 'unit_session' | null
   httpStatus?: number | null
   providerErrorCode?: string | null
   message?: string | null
@@ -99,6 +100,14 @@ export function parseRecoveryFailureDiagnostic(value: unknown): RecoveryFailureD
           ? undefined
           : null
   const providerErrorCode = optionalText(candidate.providerErrorCode)
+  const stage =
+    candidate.stage === null
+      ? null
+      : candidate.stage === 'model_setup' ||
+          candidate.stage === 'model_invoke' ||
+          candidate.stage === 'unit_session'
+        ? candidate.stage
+        : undefined
   return {
     sourceRunId,
     origin,
@@ -107,6 +116,7 @@ export function parseRecoveryFailureDiagnostic(value: unknown): RecoveryFailureD
     dependency: optionalText(candidate.dependency),
     provider: optionalText(candidate.provider),
     model: optionalText(candidate.model),
+    ...(stage !== undefined ? { stage } : {}),
     ...(httpStatus !== undefined ? { httpStatus } : {}),
     providerErrorCode: typeof providerErrorCode === 'string' &&
       /^[A-Za-z0-9_.-]{1,64}$/.test(providerErrorCode)

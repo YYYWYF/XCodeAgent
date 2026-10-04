@@ -6,6 +6,7 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/executionRecoveryState'
 import { workbenchRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
 import { reconcileWorkflowFailurePayload } from '../src/renderer/src/service/agUiAgent'
+import { parseRecoveryFailureDiagnostic } from '../src/renderer/src/service/recoveryActionPlan'
 import type { ApplicationLifecycle, ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
 
 test('同 Run 的通用终态保留具体诊断，新 Run 不继承旧失败', () => {
@@ -17,6 +18,7 @@ test('同 Run 的通用终态保留具体诊断，新 Run 不继承旧失败', (
       failureDiagnostic: {
         sourceRunId: 'run-R1', origin: 'model_call',
         code: 'UNIT_GENERATION_MODEL_HTTP_ERROR', httpStatus: 429,
+        stage: 'model_invoke',
         message: '模型服务返回 HTTP 429。'
       }
     }
@@ -28,11 +30,29 @@ test('同 Run 的通用终态保留具体诊断，新 Run 不继承旧失败', (
   const merged = reconcileWorkflowFailurePayload(specific, generic)
   assert.equal(merged?.summary.errorCode, 'UNIT_GENERATION_MODEL_HTTP_ERROR')
   assert.equal(merged?.summary.failureDiagnostic?.httpStatus, 429)
+  assert.equal(merged?.summary.failureDiagnostic?.stage, 'model_invoke')
   assert.equal(merged?.summary.message, '模型服务返回 HTTP 429。')
   const nextRun = reconcileWorkflowFailurePayload(specific, {
     ...generic, runId: 'run-R2', summary: { status: 'failed', message: 'R2 失败' }
   })
   assert.equal(nextRun?.summary.failureDiagnostic, undefined)
+})
+
+test('失败诊断保留后端 stage，历史记录缺少 stage 时不做推断', () => {
+  const current = parseRecoveryFailureDiagnostic({
+    sourceRunId: 'run-current', origin: 'model_call', code: 'MODEL_CALL_FAILED',
+    stage: 'model_setup'
+  })
+  const historical = parseRecoveryFailureDiagnostic({
+    sourceRunId: 'run-old', origin: 'model_call', code: 'UNIT_GENERATION_INFRASTRUCTURE_FAILURE'
+  })
+  const unknown = parseRecoveryFailureDiagnostic({
+    sourceRunId: 'run-unknown-stage', origin: 'model_call', code: 'MODEL_CALL_FAILED',
+    stage: 'new_stage'
+  })
+  assert.equal(current?.stage, 'model_setup')
+  assert.equal(historical?.stage, undefined)
+  assert.equal(unknown?.stage, undefined)
 })
 
 /** 构造只包含当前恢复投影扩展的 lifecycle 测试快照。 */

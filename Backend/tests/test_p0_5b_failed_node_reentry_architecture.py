@@ -168,14 +168,22 @@ class FailedNodeReentryArchitectureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(candidate.recovery_action_plan.primary_action)
 
     async def test_diagnostics_do_not_change_failed_node_eligibility(self) -> None:
-        """不同 failure diagnostics 不能把 exact Node Entry 变成另一种恢复策略。"""
+        """不同错误码和 HTTP 状态不改变失败节点的恢复资格或目标。"""
 
-        for failure_code in ("MODEL_NOT_FOUND", "UPSTREAM_404", "UNKNOWN_FAILURE"):
+        for failure_code, http_status in (
+            ("MODEL_NOT_FOUND", 404),
+            ("UNIT_GENERATION_MODEL_CALL_FAILED", 200),
+            ("UNIT_GENERATION_MODEL_CONNECTION_FAILED", None),
+        ):
             source = self._source(
                 run_id=f"failed-{failure_code}",
                 current_node="build",
                 failure_code=failure_code,
             )
+            assert source.failure is not None
+            source = source.model_copy(update={
+                "failure": source.failure.model_copy(update={"http_status": http_status}),
+            })
             action_plan = plan_failed_node_reentry_action(
                 workspace=str(self.workspace),
                 source=source,
@@ -187,6 +195,7 @@ class FailedNodeReentryArchitectureTests(unittest.IsolatedAsyncioTestCase):
                 action_plan.primary_action.kind,
                 RecoveryActionKind.RETRY_FAILED_NODE,
             )
+            self.assertEqual(action_plan.primary_action.target_node, "build")
 
     async def test_failed_execute_source_lookup_does_not_reenter_legacy_planner(self) -> None:
         """execute 的 Backend action lookup 对 FAILED 也必须复用 Node Re-entry。"""

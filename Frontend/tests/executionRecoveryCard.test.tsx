@@ -281,7 +281,7 @@ test('Workbench uses the current source diagnostic after refresh and ignores an 
   candidate.recoveryActionPlan.sourceRunId = 'run-R2'
   candidate.failureDiagnostic = {
     sourceRunId: 'run-R2', origin: 'model_call', code: 'UNIT_GENERATION_MODEL_HTTP_ERROR',
-    httpStatus: 429, message: '模型服务返回 HTTP 429。'
+    httpStatus: 429, stage: 'model_invoke', message: '模型服务返回 HTTP 429。'
   }
   const oldWorkflow = {
     runId: 'run-R1', threadId: candidate.threadId,
@@ -295,11 +295,14 @@ test('Workbench uses the current source diagnostic after refresh and ignores an 
   } as WorkflowRunPayload
   const incident = workbenchRecoveryIncident(candidate, oldWorkflow)
   assert.equal(incident?.failureDiagnostic?.sourceRunId, 'run-R2')
+  assert.equal(incident?.failureDiagnostic?.stage, 'model_invoke')
   assert.equal(incident?.failureMessage, '模型服务返回 HTTP 429。')
   const markup = renderToStaticMarkup(createElement(RecoveryIncidentCard, {
     incident: incident!, onAction: () => undefined
   }))
   assert.match(markup, /模型服务返回 HTTP 429。/)
+  assert.match(markup, /失败阶段/)
+  assert.match(markup, /model_invoke/)
   assert.doesNotMatch(markup, /模型调用失败，未能确定具体原因。/)
 })
 

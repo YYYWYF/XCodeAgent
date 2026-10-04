@@ -9,6 +9,7 @@ from app.domain.execution_recovery import (
 )
 from app.services.execution_failure_classifier import (
     classify_execution_failure,
+    public_failure_diagnostic,
     sanitize_failure_diagnostic,
 )
 
@@ -107,9 +108,26 @@ class ExecutionFailureClassifierTests(unittest.TestCase):
                 base.model_copy(update={
                     "diagnostic_message": "model unavailable",
                     "provider_error_code": "rate_limit",
+                    "stage": "model_invoke",
                 })
             ),
         )
+
+    def test_old_durable_failure_without_stage_remains_unmodified(self) -> None:
+        """历史 Durable Evidence 缺少可选 stage 时继续可读且不推断阶段。"""
+
+        failure = ExecutionFailureEvidence.model_validate({
+            "origin": "model_call",
+            "code": "UNIT_GENERATION_INFRASTRUCTURE_FAILURE",
+            "dependency": "model",
+            "http_status": None,
+            "diagnostic_message": "历史摘要",
+        })
+
+        projected = public_failure_diagnostic(failure, source_run_id="run-old")
+        self.assertIsNone(failure.stage)
+        self.assertNotIn("stage", projected)
+        self.assertEqual(projected["message"], "历史摘要")
 
 
 __all__ = ["ExecutionFailureClassifierTests"]
