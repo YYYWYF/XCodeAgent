@@ -103,6 +103,83 @@ class FailureTargetResolver:
         )
 
 
+class BusinessTargetResolver:
+    """用服务端失败阶段和真实 Node Entry checkpoint 解析业务失败重入。"""
+
+    async def resolve(
+        self,
+        *,
+        workspace: str,
+        source: DurableExecutionRecord,
+        graph: Any,
+        require_source_lifecycle: bool = True,
+    ) -> WorkflowReentryPlan:
+        """只为原计划栏允许的失败阶段签发独立 BUSINESS_RETRY authority。"""
+
+        if (
+            source.execution_kind != "workbench"
+            or source.status is not DurableExecutionStatus.FAILED
+            or source.failure is not None
+        ):
+            raise RecoveryExecutionError(
+                "BUSINESS_RETRY_SOURCE_INVALID", "当前 source 不是可重试的业务失败。"
+            )
+        lifecycle = load_application_lifecycle(workspace)
+        execution = (
+            lifecycle.active_executions.get(source.run_id)
+            if lifecycle is not None
+            else None
+        )
+        target_node = str(source.current_node or "").strip()
+        if (
+            target_node not in {
+                "development_readiness_gate", "inspect_workspace",
+                "prepare_build_tasks", "build",
+            }
+            or (
+                require_source_lifecycle
+                and (
+                    execution is None
+                    or execution.status.value != "failed"
+                    or execution.thread_id != source.thread_id
+                    or execution.phase != target_node
+                    or execution.error is None
+                    or not execution.error.recoverable
+                )
+            )
+        ):
+            raise RecoveryExecutionError(
+                "BUSINESS_RETRY_SOURCE_INVALID",
+                "服务端无法证明该业务失败的原节点和重试资格。",
+            )
+        boundary = await resolve_node_entry_boundary(
+            workspace=workspace,
+            source=source,
+            target_node=target_node,
+            graph=graph,
+        )
+        return WorkflowReentryPlan(
+            reason=WorkflowReentryReason.BUSINESS_RETRY,
+            execution_kind=source.execution_kind,
+            target_node=target_node,
+            thread_id=source.thread_id,
+            source_run_id=source.run_id,
+            context_authority=WorkflowReentryContextAuthority(
+                kind=WorkflowReentryContextAuthorityKind.CHECKPOINT,
+                source_run_id=boundary.source_run_id,
+                thread_id=boundary.thread_id,
+                target_node=boundary.target_node,
+                checkpoint_id=boundary.checkpoint_id,
+                checkpoint_ns=boundary.checkpoint_ns,
+            ),
+            lifecycle_authority=WorkflowReentryLifecycleAuthority(
+                owner_run_id=source.run_id,
+                revision=lifecycle.revision if lifecycle is not None else None,
+            ),
+            lineage_parent_run_id=source.run_id,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class InterruptedTargetResolution:
     """保存最新 INTERRUPTED checkpoint 的唯一解释结果。"""
@@ -461,6 +538,7 @@ def recovery_plan_from_reentry(plan: WorkflowReentryPlan) -> RecoveryPlan:
         plan.reason
         not in {
             WorkflowReentryReason.FAILURE_RETRY,
+            WorkflowReentryReason.BUSINESS_RETRY,
             WorkflowReentryReason.INTERRUPTED_CONTINUE,
         }
         or authority.kind is not WorkflowReentryContextAuthorityKind.CHECKPOINT
@@ -478,6 +556,7 @@ def recovery_plan_from_reentry(plan: WorkflowReentryPlan) -> RecoveryPlan:
         target_node=plan.target_node,
         checkpoint_id=authority.checkpoint_id,
         checkpoint_ns=authority.checkpoint_ns,
+        reentry_reason=plan.reason,
         lifecycle_ownership_mode=RecoveryLifecycleOwnershipMode.SOURCE_OWNED,
         lifecycle_revision=plan.lifecycle_authority.revision,
     )

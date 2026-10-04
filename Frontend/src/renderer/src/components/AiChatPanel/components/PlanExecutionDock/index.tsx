@@ -19,7 +19,6 @@ import './PlanExecutionDock.less'
 const { Text } = Typography
 
 type Props = {
-  canRetryFailedTasks?: boolean
   dependencyLocked?: boolean
   error?: string
   execution?: WorkbenchExecution
@@ -37,7 +36,6 @@ type Props = {
 
 /** 仅替换工作区最底部输入区，承载计划锁定说明和必要控制动作。 */
 export default function PlanExecutionDock({
-  canRetryFailedTasks = false,
   dependencyLocked = false,
   error,
   execution,
@@ -119,8 +117,7 @@ export default function PlanExecutionDock({
                     mode,
                     execution?.phase,
                     pending?.payload,
-                    error,
-                    canRetryFailedTasks
+                    error
                   )}
           </Text>
         </div>
@@ -221,9 +218,9 @@ export default function PlanExecutionDock({
             )}
             {(mode === 'failed' || mode === 'stopped') && (
               <>
-                {(mode === 'stopped' || (mode === 'failed' && canRetryFailedTasks)) && (
+                {mode === 'stopped' && (
                   <Button icon={<RedoOutlined />} onClick={onRetry} type="primary">
-                    {mode === 'failed' ? '重试失败任务' : '继续执行'}
+                    继续执行
                   </Button>
                 )}
                 <Popconfirm
@@ -319,15 +316,12 @@ function planModeDescription(
   mode: Exclude<PlanExecutionMode, 'idle'>,
   phase?: string,
   payload?: Record<string, unknown>,
-  error?: string,
-  canRetryFailedTasks = false
+  error?: string
 ): string {
   if (mode === 'failed') {
     return (
       error ||
-      (canRetryFailedTasks
-        ? '存在可恢复的失败任务或待执行修复任务。'
-        : '当前失败需要调整计划、确认修复范围或结束。')
+      '可在上方恢复卡片查看当前可执行的失败恢复操作。'
     )
   }
   if (mode === 'awaiting_repair_confirmation') {

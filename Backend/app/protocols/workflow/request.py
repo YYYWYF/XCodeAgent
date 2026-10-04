@@ -24,7 +24,6 @@ from app.domain.application_planning_recovery import (
     ApplicationPlanningRecoveryBoundary,
     application_planning_boundary_payload,
 )
-from app.domain.application_lifecycle import WorkbenchExecutionStatus
 from app.services.execution_resource_scope import resolve_execution_resource_claims
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
@@ -32,10 +31,7 @@ from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
-from app.workspace.task_documents import (
-    load_build_task_plan_json,
-    load_repair_task_plan_json,
-)
+from app.workspace.task_documents import load_build_task_plan_json
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 from app.services.build_task_planner import tasks_from_build_task_plan
 from app.services.application_revision_lifecycle import (
@@ -98,7 +94,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("workspaceRoot"))
         or _optional_text(application.get("workspaceRoot"))
     )
-    # 先提取客户端明确指定的失败 execution；Retry 只能用它查询服务端事实，不能按最近运行猜测。
+    # 显式 source identity 只供当前仍支持的继续和修订动作使用。
     explicit_resume_execution_run_id = (
         _optional_text(payload.get("resumeExecutionRunId"))
         or _optional_text(payload.get("resume_execution_run_id"))
@@ -248,23 +244,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
                 "创建规划 UI 动作必须通过 applicationPlanningInteraction 提交。"
             )
     if workflow_action == "retry_failed_tasks":
-        if workflow_scope in APPLICATION_PLANNING_SCOPES:
-            raise ValueError("retry_failed_tasks 只适用于主工作流的 Build 阶段。")
-        authoritative_failed_phase = _authoritative_failed_execution_phase(
-            workspace,
-            explicit_resume_execution_run_id,
-        )
-        resume_from = _retry_failed_execution_node(
-            resume_state,
-            resume_values_from_state,
-            authoritative_failed_phase=authoritative_failed_phase,
-        )
-        # Retry 开启新 execution 时显式覆盖旧 checkpoint 的瞬时失败信息，避免历史错误污染本轮失败投影。
-        resume_values_from_state.update(
-            {
-                "message": "",
-                "error": "",
-            }
+        raise ValueError(
+            "retry_failed_tasks 入口已更新，请刷新当前恢复状态并使用上方恢复卡片。"
         )
     elif workflow_action == "retry_code_review":
         if workflow_scope in APPLICATION_PLANNING_SCOPES:
@@ -618,15 +599,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             selected_api_contract_id = str(active_revision.target.api_contract_id or "")
             selected_endpoint_id = str(active_revision.target.endpoint_id or "")
             detail_target_type = "endpoint"
-    if workflow_action == "retry_failed_tasks" and resume_from == "build":
-        # 失败运行的公开快照可能只保留摘要；重试必须从工作区落盘计划补回真实修复候选。
-        resume_values_from_state = {
-            **resume_values_from_state,
-            **_persisted_retry_values(
-                workspace,
-                resume_values_from_state,
-            ),
-        }
     editor_mode = _supported_editor_mode(
         _optional_text(payload.get("editor_mode"))
         or _optional_text(payload.get("editorMode"))
@@ -669,41 +641,6 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             selected_endpoint_id=selected_endpoint_id,
             project_plan=project_plan_start_values.get("project_plan"),
         )
-    retry_scope = (
-        _optional_dict(resume_values_from_state.get("build_execution_scope"))
-        if workflow_action == "retry_failed_tasks"
-        else None
-    )
-    if retry_scope:
-        # 失败 execution 只能在自己已登记的范围上恢复；公开快照中的
-        # scope 会在 lifecycle 层与 resumeExecutionRunId 复验，当前 UI 选择不得改写它。
-        build_execution_scope = _build_execution_scope(
-            {},
-            forwarded_props={},
-            resume_values={"build_execution_scope": retry_scope},
-            selected_page_id="",
-            selected_api_contract_id="",
-            selected_endpoint_id="",
-            project_plan=project_plan_start_values.get("project_plan"),
-        )
-        retry_scope_type = str(build_execution_scope.get("type") or "")
-        selectedPageId = ""
-        selected_api_contract_id = ""
-        selected_endpoint_id = ""
-        selected_entity_id = ""
-        detail_target_type = ""
-        if retry_scope_type == "page":
-            selectedPageId = str(build_execution_scope.get("targetId") or "")
-            detail_target_type = "page"
-        elif retry_scope_type == "endpoint":
-            selected_api_contract_id = str(
-                build_execution_scope.get("apiContractId") or ""
-            )
-            selected_endpoint_id = str(build_execution_scope.get("targetId") or "")
-            detail_target_type = "endpoint"
-        elif retry_scope_type == "data_source":
-            selected_entity_id = str(build_execution_scope.get("targetId") or "")
-            detail_target_type = "entity"
     # 续接的目标和作用域只由后端登记决定，不能被客户端旧实体 scope 覆盖。
     if workflow_action == "continue_after_entity_binding":
         build_execution_scope = (
@@ -1388,104 +1325,6 @@ def _resume_from_state(
     return ""
 
 
-def _retry_failed_execution_node(
-    resume_state: dict[str, Any] | None,
-    resume_values: dict[str, Any],
-    *,
-    authoritative_failed_phase: str = "",
-) -> str:
-    """按覆盖规则、服务端失败事实和旧事件确定失败 execution 的恢复节点。"""
-
-    current_scope = resume_values.get("build_execution_scope")
-    build_task_plan = resume_values.get("build_task_plan")
-    planned_scope = (
-        build_task_plan.get("build_execution_scope")
-        if isinstance(build_task_plan, dict)
-        else None
-    )
-    if (
-        isinstance(current_scope, dict)
-        and current_scope
-        and isinstance(planned_scope, dict)
-        and planned_scope
-        and planned_scope != current_scope
-    ):
-        return "prepare_build_tasks"
-
-    build_summary = resume_values.get("build_summary")
-    gate_errors = (
-        build_summary.get("gate_errors")
-        if isinstance(build_summary, dict)
-        else []
-    )
-    if isinstance(gate_errors, list) and any(str(error).strip() for error in gate_errors):
-        return "prepare_build_tasks"
-
-    # 生命周期只提供原失败阶段；development readiness 的实际入口仍需按当前 scope 映射。
-    authoritative_node = _retry_failed_phase_node(
-        authoritative_failed_phase,
-        current_scope,
-    )
-    if authoritative_node:
-        return authoritative_node
-
-    events = resume_state.get("events") if isinstance(resume_state, dict) else None
-    if isinstance(events, list):
-        for event in reversed(events):
-            if not isinstance(event, dict) or event.get("status") != "failed":
-                continue
-            node_name = _optional_text(event.get("nodeName"))
-            node = _optional_dict(event.get("node"))
-            node_name = node_name or (_optional_text(node.get("id")) if node else "")
-            legacy_node = _retry_failed_phase_node(node_name, current_scope)
-            if legacy_node:
-                return legacy_node
-    raise ValueError("retry_failed_tasks 无法确认原失败阶段，请刷新后重试。")
-
-
-def _authoritative_failed_execution_phase(
-    workspace: str,
-    resume_execution_run_id: str,
-) -> str:
-    """从服务端生命周期读取指定 runId 的失败阶段，拒绝客户端投影和非失败 execution。"""
-
-    if not workspace or not resume_execution_run_id:
-        return ""
-    try:
-        lifecycle = load_application_lifecycle(workspace)
-    except (OSError, TypeError, ValueError):
-        # 生命周期不可读时不猜测恢复节点，后续仍可使用明确的旧事件兼容路径。
-        return ""
-    if lifecycle is None:
-        return ""
-    execution = lifecycle.active_executions.get(resume_execution_run_id)
-    if execution is None or execution.status != WorkbenchExecutionStatus.FAILED:
-        return ""
-    return _optional_text(execution.phase)
-
-
-def _retry_failed_phase_node(
-    failed_phase: str,
-    current_scope: Any,
-) -> str:
-    """把受支持的失败阶段映射为本次 Retry 的实际恢复节点。"""
-
-    if failed_phase == "development_readiness_gate":
-        scope_type = (
-            str(current_scope.get("type") or "")
-            if isinstance(current_scope, dict)
-            else ""
-        )
-        return "inspect_workspace" if scope_type == "application" else failed_phase
-    if failed_phase in {
-        "inspect_workspace",
-        "prepare_build_tasks",
-        "build",
-    }:
-        return failed_phase
-    return ""
-
-
 def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
     """限制独立规划 Graph 与主 Graph 各自可恢复的节点集合。"""
 
@@ -2041,96 +1880,6 @@ def _debug_resume_values(
         )
 
     return values
-
-
-def _persisted_retry_values(
-    workspace: str,
-    resume_values: dict[str, Any],
-) -> dict[str, Any]:
-    """在重试快照不完整时恢复工作区中的 Build 与 Repair 计划。"""
-
-    workspace_root = Path(workspace).expanduser() if workspace else None
-    if workspace_root is None or not workspace_root.is_dir():
-        return {}
-
-    values: dict[str, Any] = {}
-    build_plan = _load_retry_plan(
-        resume_values,
-        workspace_root,
-        "build_task_plan",
-        "build_task_plan_path",
-        "build-task-plan.json",
-        load_build_task_plan_json,
-    )
-    if build_plan:
-        values["build_task_plan"] = build_plan
-        values["build_task_plan_path"] = str(
-            _retry_plan_path(
-                resume_values.get("build_task_plan_path"),
-                workspace_root,
-                "build-task-plan.json",
-            )
-        )
-        values["tasks"] = tasks_from_build_task_plan(build_plan)
-
-    repair_plan = _load_retry_plan(
-        resume_values,
-        workspace_root,
-        "repair_task_plan",
-        "repair_task_plan_path",
-        "repair-task-plan.json",
-        load_repair_task_plan_json,
-    )
-    if repair_plan:
-        values["repair_task_plan"] = repair_plan
-        values["repair_task_plan_path"] = str(
-            _retry_plan_path(
-                resume_values.get("repair_task_plan_path"),
-                workspace_root,
-                "repair-task-plan.json",
-            )
-        )
-        values["repair_tasks"] = list(repair_plan.get("tasks") or [])
-    return values
-
-
-def _load_retry_plan(
-    resume_values: dict[str, Any],
-    workspace_root: Path,
-    plan_key: str,
-    path_key: str,
-    default_name: str,
-    loader: Any,
-) -> dict[str, Any]:
-    """只在恢复态没有有效计划时读取对应的工作区 JSON 计划。"""
-
-    existing_plan = resume_values.get(plan_key)
-    if isinstance(existing_plan, dict) and existing_plan:
-        existing_tasks = existing_plan.get("tasks") or existing_plan.get("repair_tasks")
-        # repair 决策没有任务列表时仍是不完整快照，允许用落盘计划补齐；确认/终止计划不能被覆盖。
-        if plan_key != "repair_task_plan" or (
-            existing_plan.get("decision") != "repair" or existing_tasks
-        ):
-            return {}
-    path = _retry_plan_path(resume_values.get(path_key), workspace_root, default_name)
-    if not path.is_file():
-        return {}
-    try:
-        loaded = loader(path)
-    except (OSError, TypeError, ValueError):
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
-
-
-def _retry_plan_path(raw_path: Any, workspace_root: Path, default_name: str) -> Path:
-    """把快照中的计划路径解析为当前工作区内的绝对路径。"""
-
-    candidate = (
-        Path(str(raw_path)).expanduser()
-        if raw_path
-        else WORKSPACE_ARTIFACT_DIR / "plans" / default_name
-    )
-    return candidate if candidate.is_absolute() else workspace_root / candidate
 
 
 def _resolve_debug_workspace_snapshot_path(

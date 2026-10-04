@@ -72,11 +72,13 @@ from app.services.execution_lease_heartbeat import (
 )
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 from app.services.workflow_reentry import (
+    BusinessTargetResolver,
     FailureTargetResolver,
     InterruptedTargetResolver,
     recovery_plan_from_reentry,
     semantic_context_sha256,
 )
+from app.services.node_recovery_context import NodeRecoveryContext
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
 
@@ -100,6 +102,30 @@ class NativeRecoveryRuntimeContext:
     workspace_lease: WorkspaceRunLease | None
     observability: dict[str, Any]
     heartbeat_task: asyncio.Task[None] | None
+    source_state: dict[str, Any] | None = None
+
+    def node_recovery_context(self) -> NodeRecoveryContext:
+        """从已验证的 source、child 和 checkpoint 生成一次性节点侧视图。"""
+
+        source = self.source_execution
+        return NodeRecoveryContext(
+            source_run_id=source.run_id,
+            execution_run_id=self.new_run_id,
+            thread_id=self.thread_id,
+            target_node=self.recovery_plan.target_node,
+            checkpoint_id=self.recovery_plan.checkpoint_id,
+            reentry_reason=(
+                WorkflowReentryReason.BUSINESS_RETRY
+                if source.status is DurableExecutionStatus.FAILED and source.failure is None
+                else WorkflowReentryReason.FAILURE_RETRY
+                if source.status is DurableExecutionStatus.FAILED
+                else WorkflowReentryReason.INTERRUPTED_CONTINUE
+            ),
+            build_execution_scope=dict(
+                (self.source_state or {}).get("build_execution_scope") or {}
+            ),
+            source_state=dict(self.source_state or {}),
+        )
 
     def workflow_inputs(self) -> dict[str, Any]:
         """生成 Runtime 内部使用的最小字段集合，不重新解析外部 workflow request。"""
@@ -152,6 +178,27 @@ class WorkflowReentryExecutor:
                 workspace=workspace,
                 source=source,
                 graph=graph,
+            )
+        return await prepare_native_recovery(
+            workspace=workspace,
+            source_run_id=source_run_id,
+            graph=graph,
+            reentry_plan=reentry_plan,
+        )
+
+    async def prepare_business_retry(
+        self,
+        *,
+        workspace: str,
+        source_run_id: str,
+        graph: Any,
+        reentry_plan: WorkflowReentryPlan,
+    ) -> NativeRecoveryRuntimeContext:
+        """以独立业务失败 authority 复用同一 claim、handoff 和 checkpoint fork。"""
+
+        if reentry_plan.reason is not WorkflowReentryReason.BUSINESS_RETRY:
+            raise RecoveryExecutionError(
+                "BUSINESS_REENTRY_PLAN_INVALID", "业务重试缺少 BUSINESS_RETRY 计划。"
             )
         return await prepare_native_recovery(
             workspace=workspace,
@@ -305,16 +352,26 @@ async def prepare_native_recovery(
             "WorkflowReentryPlan 与当前 source execution identity 不一致。",
         )
     if source.status is DurableExecutionStatus.FAILED:
-        if reentry_plan.reason is not WorkflowReentryReason.FAILURE_RETRY:
+        if source.failure is None:
+            if reentry_plan.reason is not WorkflowReentryReason.BUSINESS_RETRY:
+                raise RecoveryExecutionError(
+                    "WORKFLOW_REENTRY_PLAN_INVALID",
+                    "业务 FAILED 只能使用 BUSINESS_RETRY authority。",
+                )
+            fresh_reentry_plan = await BusinessTargetResolver().resolve(
+                workspace=workspace, source=source, graph=graph
+            )
+        elif reentry_plan.reason is WorkflowReentryReason.FAILURE_RETRY:
+            fresh_reentry_plan = await FailureTargetResolver().resolve(
+                workspace=workspace,
+                source=source,
+                graph=graph,
+            )
+        else:
             raise RecoveryExecutionError(
                 "WORKFLOW_REENTRY_PLAN_INVALID",
-                "FAILED source 只能使用 FAILURE_RETRY authority。",
+                "异常 FAILED 只能使用 FAILURE_RETRY authority。",
             )
-        fresh_reentry_plan = await FailureTargetResolver().resolve(
-            workspace=workspace,
-            source=source,
-            graph=graph,
-        )
     else:
         if reentry_plan.reason is not WorkflowReentryReason.INTERRUPTED_CONTINUE:
             raise RecoveryExecutionError(
@@ -639,6 +696,13 @@ async def finalize_handed_off_recovery_attempt(
             target_node=child_execution.first_node,
             checkpoint_id=attempt.source_checkpoint_id,
             checkpoint_ns=attempt.source_checkpoint_ns,
+            reentry_reason=(
+                WorkflowReentryReason.BUSINESS_RETRY
+                if source.status is DurableExecutionStatus.FAILED and source.failure is None
+                else WorkflowReentryReason.FAILURE_RETRY
+                if source.status is DurableExecutionStatus.FAILED
+                else WorkflowReentryReason.INTERRUPTED_CONTINUE
+            ),
             lifecycle_ownership_mode=attempt.lifecycle_ownership_mode,
             lifecycle_revision=attempt.source_lifecycle_revision,
         )
@@ -738,6 +802,7 @@ async def _fork_and_start(
             "RECOVERY_SOURCE_CHECKPOINT_INVALID",
             "source Node Entry checkpoint 不属于当前 source run。",
         )
+    source_state = await _failed_source_state(graph, source)
     observability = _recovery_observability(
         run_id=new_run_id,
         thread_id=source.thread_id,
@@ -844,7 +909,35 @@ async def _fork_and_start(
         workspace_lease=workspace_lease,
         observability=observability,
         heartbeat_task=heartbeat_task,
+        source_state=source_state,
     )
+
+
+async def _failed_source_state(
+    graph: Any, source: DurableExecutionRecord
+) -> dict[str, Any] | None:
+    """从服务端 checkpoint history 读取原失败状态，供目标节点按需复用。"""
+
+    if source.status is not DurableExecutionStatus.FAILED:
+        return None
+    history_reader = getattr(graph, "aget_state_history", None)
+    if not callable(history_reader):
+        return None
+    try:
+        async for snapshot in history_reader(
+            {"configurable": {"thread_id": source.thread_id, "checkpoint_ns": ""}}
+        ):
+            values = getattr(snapshot, "values", {})
+            if (
+                isinstance(values, dict)
+                and str(values.get("active_run_id") or "") == source.run_id
+                and values.get("status") == "failed"
+            ):
+                return dict(values)
+    except (OSError, TypeError, ValueError):
+        # 节点内部复用数据不可读时仍可从已验证的节点入口正常执行。
+        return None
+    return None
 
 
 async def _persist_child_boundary_index(
@@ -886,7 +979,12 @@ async def _revalidate_finalizing_recovery(
     """在唯一 finalizer 持有 fork 权后重新证明 checkpoint、磁盘和 ownership。"""
 
     admission = assess_recovery_source(source)
-    if not admission.admissible:
+    if not admission.admissible and not (
+        source.status is DurableExecutionStatus.FAILED
+        and source.failure is None
+        and source.execution_kind == "workbench"
+        and attempt.source_failure_sha256 is None
+    ):
         raise RecoveryExecutionError(
             "RECOVERY_STATE_DRIFT",
             "source execution 不再满足 recovery source admission，不能继续 finalization。",
@@ -976,10 +1074,19 @@ async def _revalidate_finalizing_recovery(
         )
 
     if source.status is DurableExecutionStatus.FAILED:
-        fresh_plan = await FailureTargetResolver().resolve(
-            workspace=workspace,
-            source=source,
-            graph=graph,
+        fresh_plan = await (
+            BusinessTargetResolver().resolve(
+                workspace=workspace,
+                source=source,
+                graph=graph,
+                require_source_lifecycle=False,
+            )
+            if source.failure is None
+            else FailureTargetResolver().resolve(
+                workspace=workspace,
+                source=source,
+                graph=graph,
+            )
         )
         fresh_authority = fresh_plan.context_authority
         if (

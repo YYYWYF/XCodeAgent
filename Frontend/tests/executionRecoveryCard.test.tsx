@@ -210,6 +210,26 @@ test('Workbench Recovery Incident exposes the Backend primary action', () => {
   assert.match(markup, /继续执行/)
 })
 
+test('failed node retry shows the target in plain language and keeps one details arrow', () => {
+  const candidate = recovery('ready')
+  candidate.executionStatus = 'failed'
+  candidate.currentNode = 'prepare_build_tasks'
+  candidate.recoveryActionPlan.primaryAction = {
+    actionId: 'retry-run-A',
+    kind: 'retry_failed_node',
+    label: '重新执行失败步骤',
+    description: '从失败节点重新执行。',
+    requiresConfirmation: false
+  }
+  const incident = workbenchRecoveryIncident(candidate)
+  if (!incident) throw new Error('测试候选未生成 Workbench Incident。')
+  const markup = renderToStaticMarkup(createElement(RecoveryIncidentCard, { incident }))
+  assert.match(markup, /当前执行失败/)
+  assert.match(markup, /可尝试从 prepare_build_tasks 节点重新执行。/)
+  assert.match(markup, /<summary>错误详情<\/summary>/)
+  assert.doesNotMatch(markup.split('<details')[0], /Workbench diagnostic visible|恢复目标：/)
+})
+
 test('Workbench needs_attention retains a retry entry for Backend re-resolution', () => {
   for (const availability of ['blocked', 'requires_handler'] as const) {
     const incident = workbenchRecoveryIncident(recovery(availability))

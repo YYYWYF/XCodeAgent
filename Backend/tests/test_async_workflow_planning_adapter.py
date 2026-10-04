@@ -12,11 +12,17 @@ from unittest.mock import patch
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.config import Settings
+from app.domain.execution_recovery import WorkflowReentryReason
 from app.graph.nodes.task_planning_adapter import (
     create_async_workflow_planning_adapter,
     production_unit_generation_policy,
 )
 from app.services.build_task_planning_service import run_mainline_planning
+from app.services.node_recovery_context import (
+    NodeRecoveryContext,
+    bind_node_recovery,
+    bind_recovery_runtime,
+)
 from app.graph.workflow import build_graph
 from app.services.planning_frozen import plain_json
 from app.services.unit_generation_contracts import (
@@ -149,14 +155,18 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             tasks=tasks,
         )
 
-    async def test_prepare_retry_forwards_explicit_source_id_even_when_build_retry_flag_is_false(self) -> None:
-        """DAG Prepare Retry 只传 source execution ID，不依赖 Build 专用布尔值。"""
+    async def test_prepare_retry_uses_bound_native_recovery_source(self) -> None:
+        """DAG Prepare 只在目标节点的本次 Native Recovery 调用读取可信 source。"""
 
-        state = {
-            **self._state(execution_scope()),
-            "workflow_action": "retry_failed_tasks",
-            "resume_execution_run_id": "workflow-source-r1",
-        }
+        state = self._state(execution_scope())
+        context = NodeRecoveryContext(
+            source_run_id="workflow-source-r1",
+            execution_run_id=str(state["active_run_id"]),
+            thread_id=str(state["active_thread_id"]),
+            target_node="prepare_build_tasks",
+            checkpoint_id="source-entry",
+            reentry_reason=WorkflowReentryReason.FAILURE_RETRY,
+        )
         captured: dict[str, object] = {}
 
         async def capture_planning(inputs, **kwargs):
@@ -170,9 +180,13 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             generate_once=self._generate,
             planning_service=capture_planning,
         )
-        with patch(
-            "app.graph.nodes.task_planning_adapter.load_template_state",
-            return_value=_ready_template(self.workspace),
+        with (
+            patch(
+                "app.graph.nodes.task_planning_adapter.load_template_state",
+                return_value=_ready_template(self.workspace),
+            ),
+            bind_recovery_runtime(context),
+            bind_node_recovery(state, "prepare_build_tasks"),
         ):
             result = await adapter(state)
 

@@ -14,6 +14,7 @@ export type RecoveryIncidentPresentation =
       failureMessage?: string
       recoveryMessage: string
       action: RecoveryAction
+      retryNode?: string
       incidentId: string
     }
   | {
@@ -96,11 +97,14 @@ export function workbenchRecoveryIncident(
   if (actionPlan.status === 'recoverable' && actionPlan.primaryAction) {
     return {
       kind: 'recoverable',
-      title: '工作台执行需要恢复',
+      title: ['retry_failed_node', 'retry_business_node'].includes(actionPlan.primaryAction.kind)
+        ? '当前执行失败'
+        : '工作台执行需要恢复',
       failureDiagnostic: candidate.failureDiagnostic,
       failureMessage: candidate.failureDiagnostic?.message || candidate.message,
       recoveryMessage: actionPlan.message,
       action: actionPlan.primaryAction,
+      retryNode: candidate.currentNode,
       incidentId: actionPlan.incidentId
     }
   }

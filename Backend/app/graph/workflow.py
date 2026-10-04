@@ -16,6 +16,7 @@ from app.persistence.checkpoints import (
     workflow_checkpointer,
 )
 from app.services.workflow_reentry import workflow_entry
+from app.services.node_recovery_context import bind_node_recovery
 
 
 def _route_prepare_build_tasks_resume(state: ProjectState) -> str:
@@ -316,12 +317,21 @@ def build_graph(
     builder.add_node("entity_source_binding", nodes.entity_source_binding)
     builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
-    builder.add_node(
-        "prepare_build_tasks",
-        prepare_build_tasks_node,
-    )
+    async def prepare_build_tasks_with_recovery(state: ProjectState) -> dict[str, Any]:
+        """只在本次 Prepare 节点调用中绑定经验证的内部恢复来源。"""
+
+        with bind_node_recovery(state, "prepare_build_tasks"):
+            return await prepare_build_tasks_node(state)
+
+    def build_with_recovery(state: ProjectState) -> dict[str, Any]:
+        """只在本次 Build 节点调用中绑定经验证的任务恢复来源。"""
+
+        with bind_node_recovery(state, "build"):
+            return nodes.build(state)
+
+    builder.add_node("prepare_build_tasks", prepare_build_tasks_with_recovery)
     builder.add_node("authorization_bootstrap", nodes.authorization_bootstrap)
-    builder.add_node("build", nodes.build)
+    builder.add_node("build", build_with_recovery)
     builder.add_node("unit_test", nodes.unit_test)
     builder.add_node("unit_test_repair", nodes.unit_test_repair)
     builder.add_node("test_phase_confirmation", nodes.test_phase_confirmation)

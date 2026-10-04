@@ -31,6 +31,8 @@ from app.graph.nodes.common import (
     workspace_from_state,
 )
 from app.graph.state import ProjectState
+from app.domain.execution_recovery import RecoveryExecutionError, WorkflowReentryReason
+from app.services.node_recovery_context import current_node_recovery_context
 from app.services.build_repair_planner import (
     approve_repair_scope_confirmation,
     append_repair_tasks_to_build_plan,
@@ -1412,6 +1414,27 @@ def run_build_scheduler(
     progress_writer: ProgressWriter | None = None,
 ) -> dict[str, Any]:
     """按 build_execution_scope 裁剪任务图，并持续调度到当前切片完成或阻塞。"""
+
+    recovery = current_node_recovery_context()
+    if recovery is not None and recovery.reentry_reason in {
+        WorkflowReentryReason.BUSINESS_RETRY,
+        WorkflowReentryReason.FAILURE_RETRY,
+    }:
+        source_scope = recovery.source_state.get("build_execution_scope")
+        if source_scope and source_scope != state.get("build_execution_scope"):
+            raise RecoveryExecutionError(
+                "BUILD_RETRY_SCOPE_DRIFT", "Build 恢复范围已偏离原失败执行。"
+            )
+        # 只恢复 Build 自己的业务结果；节点入口的正式合同和执行范围仍由 checkpoint 持有。
+        state = {
+            **state,
+            **{
+                key: recovery.source_state[key]
+                for key in ("build_results", "build_summary", "repair_task_plan", "repair_tasks")
+                if key in recovery.source_state
+            },
+            "retry_failed_tasks": True,
+        }
 
     build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)
     if gate_errors:

@@ -404,6 +404,11 @@ def project_workflow_lifecycle_boundary(
                 "planningRefresh": resolve_planning_refresh_state(workspace or ""),
             }
         return payload
+    if node_name == "handle_failure":
+        # 收尾节点不是原失败位置；保留首次业务失败的服务端 phase 与诊断。
+        previous = lifecycle.active_executions.get(run_id)
+        if previous is not None and previous.status == WorkbenchExecutionStatus.FAILED:
+            return application_lifecycle_payload(lifecycle)
     if status == "failed" or node_name == "handle_failure":
         message = str(update.get("error") or update.get("message") or "计划执行失败。")
         state = update_workbench_execution(

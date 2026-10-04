@@ -39,6 +39,7 @@ from app.services.execution_recovery_lineage import reconcile_recovery_attempt
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
 from app.services.execution_recovery_lineage import RecoveryLineageState
 from app.services.execution_recovery_action_planner import (
+    plan_business_node_reentry_action,
     plan_failed_node_reentry_action,
     plan_interrupted_continue_action,
 )
@@ -46,7 +47,7 @@ from app.services.execution_recovery_reconciliation import (
     reconcile_interrupted_execution_state,
 )
 from app.services.execution_recovery_source_admission import assess_recovery_source
-from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
+from app.services.workflow_reentry import BusinessTargetResolver, FailureTargetResolver, InterruptedTargetResolver
 
 
 _FORBIDDEN_RECOVERY_FIELDS = {
@@ -173,35 +174,9 @@ def build_execution_recovery_ag_ui_stream(
             )
             reentry_plan = None
             if source.status is DurableExecutionStatus.FAILED:
-                admission = assess_recovery_source(source)
-                if not admission.admissible:
-                    action_plan = plan_failed_node_reentry_action(
-                        workspace=workspace,
-                        source=source,
-                        error=RecoveryExecutionError(
-                            admission.reason_code,
-                            "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
-                        ),
-                    )
-                else:
-                    try:
-                        reentry_plan = await FailureTargetResolver().resolve(
-                            workspace=workspace,
-                            source=source,
-                            graph=graph,
-                        )
-                    except RecoveryExecutionError as exc:
-                        action_plan = plan_failed_node_reentry_action(
-                            workspace=workspace,
-                            source=source,
-                            error=exc,
-                        )
-                    else:
-                        action_plan = plan_failed_node_reentry_action(
-                            workspace=workspace,
-                            source=source,
-                            reentry_plan=reentry_plan,
-                        )
+                action_plan, reentry_plan = await _resolve_failed_action(
+                    workspace=workspace, source=source, graph=graph
+                )
             elif source.status is DurableExecutionStatus.INTERRUPTED:
                 resolution = await InterruptedTargetResolver().resolve(
                     workspace=workspace,
@@ -279,6 +254,18 @@ def build_execution_recovery_ag_ui_stream(
                         "FAILED action 缺少 Workflow Re-entry 计划。",
                     )
                 context = await WorkflowReentryExecutor().prepare_failure_retry(
+                    workspace=workspace,
+                    source_run_id=source.run_id,
+                    graph=graph,
+                    reentry_plan=reentry_plan,
+                )
+            elif kind is RecoveryActionKind.RETRY_BUSINESS_NODE:
+                if reentry_plan is None:
+                    raise RecoveryExecutionError(
+                        "BUSINESS_REENTRY_PLAN_INVALID",
+                        "业务失败缺少可验证的 Workflow Re-entry 计划。",
+                    )
+                context = await WorkflowReentryExecutor().prepare_business_retry(
                     workspace=workspace,
                     source_run_id=source.run_id,
                     graph=graph,
@@ -453,6 +440,46 @@ async def _load_requested_recovery_source(
     return requested
 
 
+async def _resolve_failed_action(
+    *, workspace: str, source: DurableExecutionRecord, graph: Any
+) -> tuple[Any, Any]:
+    """统一在投影和执行前区分异常重入与合法业务失败重入。"""
+
+    if source.failure is None and source.execution_kind == "workbench":
+        try:
+            plan = await BusinessTargetResolver().resolve(
+                workspace=workspace, source=source, graph=graph
+            )
+        except RecoveryExecutionError as exc:
+            return plan_business_node_reentry_action(
+                workspace=workspace, source=source, error=exc
+            ), None
+        return plan_business_node_reentry_action(
+            workspace=workspace, source=source, reentry_plan=plan
+        ), plan
+    admission = assess_recovery_source(source)
+    if not admission.admissible:
+        return plan_failed_node_reentry_action(
+            workspace=workspace,
+            source=source,
+            error=RecoveryExecutionError(
+                admission.reason_code,
+                "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
+            ),
+        ), None
+    try:
+        plan = await FailureTargetResolver().resolve(
+            workspace=workspace, source=source, graph=graph
+        )
+    except RecoveryExecutionError as exc:
+        return plan_failed_node_reentry_action(
+            workspace=workspace, source=source, error=exc
+        ), None
+    return plan_failed_node_reentry_action(
+        workspace=workspace, source=source, reentry_plan=plan
+    ), plan
+
+
 def _parse_request(payload: dict[str, Any]) -> tuple[str, str, str, str, str]:
     """在协议边界拒绝客户端伪造的恢复定位与执行 authority。"""
 
@@ -535,35 +562,9 @@ async def _resolve_action_source_run(
         graph = await graph_factory(workspace=workspace, project_id=record.project_id)
         reentry_plan = None
         if record.status is DurableExecutionStatus.FAILED:
-            admission = assess_recovery_source(record)
-            if not admission.admissible:
-                action_plan = plan_failed_node_reentry_action(
-                    workspace=workspace,
-                    source=record,
-                    error=RecoveryExecutionError(
-                        admission.reason_code,
-                        "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
-                    ),
-                )
-            else:
-                try:
-                    reentry_plan = await FailureTargetResolver().resolve(
-                        workspace=workspace,
-                        source=record,
-                        graph=graph,
-                    )
-                except RecoveryExecutionError as exc:
-                    action_plan = plan_failed_node_reentry_action(
-                        workspace=workspace,
-                        source=record,
-                        error=exc,
-                    )
-                else:
-                    action_plan = plan_failed_node_reentry_action(
-                        workspace=workspace,
-                        source=record,
-                        reentry_plan=reentry_plan,
-                    )
+            action_plan, reentry_plan = await _resolve_failed_action(
+                workspace=workspace, source=record, graph=graph
+            )
         elif record.status is DurableExecutionStatus.INTERRUPTED:
             resolution = await InterruptedTargetResolver().resolve(
                 workspace=workspace,

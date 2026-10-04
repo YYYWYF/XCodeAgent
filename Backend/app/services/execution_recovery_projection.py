@@ -18,6 +18,7 @@ from app.persistence.execution_recovery import (
     list_recovery_projection_candidates,
 )
 from app.services.execution_recovery_action_planner import (
+    plan_business_node_reentry_action,
     plan_failed_node_reentry_action,
     plan_interrupted_continue_action,
 )
@@ -25,7 +26,7 @@ from app.services.execution_recovery_reconciliation import (
     reconcile_interrupted_execution_state,
 )
 from app.services.execution_recovery_source_admission import assess_recovery_source
-from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
+from app.services.workflow_reentry import BusinessTargetResolver, FailureTargetResolver, InterruptedTargetResolver
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -114,36 +115,51 @@ async def _resolve_candidate(
     )
     authority_plan = None
     if record.status is DurableExecutionStatus.FAILED:
-        admission = assess_recovery_source(record)
-        if not admission.admissible:
-            action_plan = plan_failed_node_reentry_action(
-                workspace=record.workspace,
-                source=record,
-                error=RecoveryExecutionError(
-                    admission.reason_code,
-                    "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
-                ),
-            )
-        else:
+        if record.failure is None and record.execution_kind == "workbench":
             try:
-                reentry_plan = await FailureTargetResolver().resolve(
-                    workspace=record.workspace,
-                    source=record,
-                    graph=graph,
+                reentry_plan = await BusinessTargetResolver().resolve(
+                    workspace=record.workspace, source=record, graph=graph
                 )
             except RecoveryExecutionError as exc:
-                action_plan = plan_failed_node_reentry_action(
-                    workspace=record.workspace,
-                    source=record,
-                    error=exc,
+                action_plan = plan_business_node_reentry_action(
+                    workspace=record.workspace, source=record, error=exc
                 )
             else:
+                action_plan = plan_business_node_reentry_action(
+                    workspace=record.workspace, source=record, reentry_plan=reentry_plan
+                )
+                authority_plan = reentry_plan
+        else:
+            admission = assess_recovery_source(record)
+            if not admission.admissible:
                 action_plan = plan_failed_node_reentry_action(
                     workspace=record.workspace,
                     source=record,
-                    reentry_plan=reentry_plan,
+                    error=RecoveryExecutionError(
+                        admission.reason_code,
+                        "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
+                    ),
                 )
-                authority_plan = reentry_plan
+            else:
+                try:
+                    reentry_plan = await FailureTargetResolver().resolve(
+                        workspace=record.workspace,
+                        source=record,
+                        graph=graph,
+                    )
+                except RecoveryExecutionError as exc:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=record.workspace,
+                        source=record,
+                        error=exc,
+                    )
+                else:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=record.workspace,
+                        source=record,
+                        reentry_plan=reentry_plan,
+                    )
+                    authority_plan = reentry_plan
     elif record.status is DurableExecutionStatus.INTERRUPTED:
         resolution = await InterruptedTargetResolver().resolve(
             workspace=record.workspace,

@@ -298,7 +298,7 @@ type UseWorkflowConversationResult = {
   ) => Promise<boolean>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleRetryCodeReview: () => Promise<void>
-  handleRetryPlan: (workflow?: WorkflowRunPayload) => Promise<void>
+  handleContinueStoppedPlan: (workflow?: WorkflowRunPayload) => Promise<void>
   handleStopPlan: (runId?: string) => Promise<void>
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleStartDetailConfirmation: (
@@ -2224,22 +2224,20 @@ export function useWorkflowConversation({
     return handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
   }
 
-  /** 从实时或终态消息快照的可恢复节点重新执行失败或已停止的计划切片。 */
-  const handleRetryPlan = async (workflow?: WorkflowRunPayload): Promise<void> => {
+  /** 仅为主动停止的计划沿用原有继续执行动作。 */
+  const handleContinueStoppedPlan = async (workflow?: WorkflowRunPayload): Promise<void> => {
     const retryWorkflow = workflow || activeWorkflow
     if (!retryWorkflow || loading || workspaceBusy) return
     const execution = planExecutionForPage(retryWorkflow.summary.lifecycle, selectedPageId, {
       runId: retryWorkflow.runId,
       threadId: retryWorkflow.threadId
     })
-    const isStopped =
-      execution?.status === 'stopped' || retryWorkflow.summary.status === 'stopped'
-    await sendWorkflowMessage('重试当前计划任务。', {
+    if (execution?.status !== 'stopped' && retryWorkflow.summary.status !== 'stopped') return
+    await sendWorkflowMessage('继续当前计划任务。', {
       resumeState: retryWorkflow,
       resumeExecutionRunId: execution?.runId || retryWorkflow.runId,
       selectedPageId: workflowSelectedPageId(retryWorkflow) || selectedPageId,
-      titleFrom: '重试计划任务',
-      ...(!isStopped ? { workflowAction: 'retry_failed_tasks' as const } : {})
+      titleFrom: '继续计划任务'
     })
   }
 
@@ -2369,7 +2367,7 @@ export function useWorkflowConversation({
     handleContinueDevelopment,
     handleExecuteRecoveryAction,
     handleRetryCodeReview,
-    handleRetryPlan,
+    handleContinueStoppedPlan,
     handleEndPlan,
     handleProductStageConversation,
     handleResumePlan,

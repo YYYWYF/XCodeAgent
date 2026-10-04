@@ -93,6 +93,7 @@ from app.services.execution_recovery import (
 )
 from app.services.execution_failure_classifier import sanitize_failure_diagnostic
 from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext, WorkflowReentryExecutor
+from app.services.node_recovery_context import bind_recovery_runtime
 from app.services.execution_lease_heartbeat import maintain_execution_heartbeat, stop_execution_heartbeat
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.backend_instance import current_backend_instance
@@ -1146,8 +1147,14 @@ def build_workflow_ag_ui_stream(
                     """后台消费 Graph stream，避免 Runtime 的 AG-UI 投影暂停 Graph。"""
 
                     try:
-                        async for item in active_graph.astream(graph_input, **stream_kwargs):
-                            await queue.put(("item", item))
+                        # ContextVar 只进入本次 producer；节点 wrapper 再限定首次目标调用。
+                        with bind_recovery_runtime(
+                            native_recovery_context.node_recovery_context()
+                            if native_recovery_context is not None
+                            else None
+                        ):
+                            async for item in active_graph.astream(graph_input, **stream_kwargs):
+                                await queue.put(("item", item))
                     except BaseException as exc:
                         await queue.put(("error", exc))
                     finally:
@@ -2156,20 +2163,22 @@ def build_workflow_ag_ui_stream(
                             attempt=next_attempt,
                             iteration_kind=next_iteration_kind,
                         )
-                        await best_effort_recovery_observation(
-                            operation="node.started",
-                            workspace=workspace,
-                            run_id=run_id,
-                            thread_id=thread_id,
-                            workflow_scope=workflow_scope,
-                            callback=lambda: observe_node_started(
+                        if not (next_node == "handle_failure" and update.get("status") == "failed"):
+                            # handle_failure 是收尾节点，不得覆盖原业务失败的 durable current_node。
+                            await best_effort_recovery_observation(
+                                operation="node.started",
                                 workspace=workspace,
                                 run_id=run_id,
                                 thread_id=thread_id,
                                 workflow_scope=workflow_scope,
-                                node_name=next_node,
-                            ),
-                        )
+                                callback=lambda: observe_node_started(
+                                    workspace=workspace,
+                                    run_id=run_id,
+                                    thread_id=thread_id,
+                                    workflow_scope=workflow_scope,
+                                    node_name=next_node,
+                                ),
+                            )
                         for frame in _workflow_ag_ui_frames(
                             encoder,
                             run_id=run_id,

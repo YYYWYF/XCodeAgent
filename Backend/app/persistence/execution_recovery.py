@@ -26,6 +26,7 @@ from app.domain.execution_recovery import (
     RecoveryExecutionError,
     RecoveryLifecycleOwnershipMode,
     RecoveryPlan,
+    WorkflowReentryReason,
 )
 
 
@@ -500,12 +501,37 @@ async def _claim_recovery_attempt(
             "WORKFLOW_REENTRY_PLAN_INVALID",
             "RecoveryPlan 缺少合法的 root checkpoint transaction authority。",
         )
-    admission = assess_recovery_source(source)
-    if not admission.admissible:
-        raise RecoveryExecutionError(
-            "RECOVERY_SOURCE_NOT_ADMISSIBLE",
-            admission.reason_code,
+    if plan.reentry_reason is WorkflowReentryReason.BUSINESS_RETRY:
+        from app.services.application_lifecycle import load_application_lifecycle
+
+        lifecycle = load_application_lifecycle(source.workspace)
+        execution = (
+            lifecycle.active_executions.get(source.run_id)
+            if lifecycle is not None
+            else None
         )
+        if (
+            source.execution_kind != "workbench"
+            or source.status is not DurableExecutionStatus.FAILED
+            or source.failure is not None
+            or execution is None
+            or execution.status.value != "failed"
+            or execution.thread_id != source.thread_id
+            or execution.phase != source.current_node
+            or execution.error is None
+            or not execution.error.recoverable
+        ):
+            raise RecoveryExecutionError(
+                "RECOVERY_SOURCE_NOT_ADMISSIBLE",
+                "业务 FAILED 来源已失效，请刷新当前恢复状态。",
+            )
+    else:
+        admission = assess_recovery_source(source)
+        if not admission.admissible:
+            raise RecoveryExecutionError(
+                "RECOVERY_SOURCE_NOT_ADMISSIBLE",
+                admission.reason_code,
+            )
     now = created_at or datetime.now(timezone.utc)
     lease = ExecutionLease(
         run_id=new_run_id,
@@ -558,12 +584,24 @@ async def _claim_recovery_attempt(
                 "source execution 在 claim 前已经发生状态变化。",
             )
         persisted_source = _execution_from_row(source_row)
-        persisted_admission = assess_recovery_source(persisted_source)
-        if not persisted_admission.admissible:
-            raise RecoveryExecutionError(
-                "RECOVERY_SOURCE_NOT_ADMISSIBLE",
-                persisted_admission.reason_code,
-            )
+        if plan.reentry_reason is WorkflowReentryReason.BUSINESS_RETRY:
+            if (
+                persisted_source.execution_kind != "workbench"
+                or persisted_source.status is not DurableExecutionStatus.FAILED
+                or persisted_source.failure is not None
+                or persisted_source.current_node != plan.target_node
+            ):
+                raise RecoveryExecutionError(
+                    "RECOVERY_SOURCE_NOT_ADMISSIBLE",
+                    "业务失败的持久化来源在 claim 前已变化。",
+                )
+        else:
+            persisted_admission = assess_recovery_source(persisted_source)
+            if not persisted_admission.admissible:
+                raise RecoveryExecutionError(
+                    "RECOVERY_SOURCE_NOT_ADMISSIBLE",
+                    persisted_admission.reason_code,
+                )
         if execution_failure_sha256(persisted_source.failure) != execution_failure_sha256(
             source.failure
         ):

@@ -33,6 +33,10 @@ export default function RecoveryIncidentCard({
   const action = incident.kind === 'recoverable' ? incident.action : undefined
   const hasAction = incident.kind === 'recoverable' && Boolean(action)
   const canRetry = incident.kind === 'needs_attention'
+  const retryNode = incident.kind === 'recoverable'
+    ? action?.targetNode || incident.retryNode
+    : undefined
+  const failedNodeRetry = action?.kind === 'retry_failed_node' && Boolean(retryNode)
 
   /** 遵循 Backend requiresConfirmation，确认策略不由前端猜测。 */
   const handleAction = (): void => {
@@ -68,21 +72,29 @@ export default function RecoveryIncidentCard({
           {incident.title}
         </Text>
         <>
-          <FailureSummary
-            diagnostic={incident.failureDiagnostic}
-            message={incident.failureMessage}
-          />
-          <Text
-            className={cx('application-planning-recovery-incident-recovery-message')}
-            type="secondary"
-          >
-            {incident.recoveryMessage}
-          </Text>
-          {incident.kind === 'recoverable' && incident.action.targetNode ? (
-            <Text className={cx('application-planning-recovery-incident-reason')} type="secondary">
-              恢复目标：{incident.action.targetNode}
+          {failedNodeRetry ? (
+            <Text className={cx('application-planning-recovery-incident-recovery-message')} type="secondary">
+              可尝试从 {retryNode} 节点重新执行。
             </Text>
-          ) : null}
+          ) : (
+            <>
+              <FailureSummary
+                diagnostic={incident.failureDiagnostic}
+                message={incident.failureMessage}
+              />
+              <Text
+                className={cx('application-planning-recovery-incident-recovery-message')}
+                type="secondary"
+              >
+                {incident.recoveryMessage}
+              </Text>
+              {incident.kind === 'recoverable' && incident.action.targetNode ? (
+                <Text className={cx('application-planning-recovery-incident-reason')} type="secondary">
+                  恢复目标：{incident.action.targetNode}
+                </Text>
+              ) : null}
+            </>
+          )}
           {error ? (
             <Text className={cx('application-planning-recovery-incident-message')} type="danger">
               {error}
@@ -153,7 +165,7 @@ function DiagnosticDetails({
 }): ReactElement {
   return (
     <details className={cx('application-planning-recovery-incident-details')}>
-      <summary>错误详情 ▾</summary>
+      <summary>错误详情</summary>
       <dl>
         {reasonCode ? <DiagnosticRow label="原因代码" value={reasonCode} /> : null}
         {diagnostic ? (

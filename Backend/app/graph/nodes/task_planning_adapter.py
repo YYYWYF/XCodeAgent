@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config import Settings
+from app.domain.execution_recovery import WorkflowReentryReason
 from app.graph.nodes.common import workspace_from_state
 from app.graph.nodes.task_planning_inputs import mainline_formal_contract_inputs
 from app.graph.nodes.tasks import (
@@ -48,6 +49,7 @@ from app.services.dag_planning_regeneration import regenerate_pending_build_task
 from app.services.planning_frozen import plain_json
 from app.services.planning_run_contracts import PlanningRun
 from app.services.planning_run_progress import project_planning_run_progress
+from app.services.node_recovery_context import current_node_recovery_context
 from app.services.template_state import load_template_state, template_context
 from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
@@ -188,16 +190,16 @@ async def _run_async_workflow_planning_adapter(
     if isinstance(context, dict):
         return context
     planning_kwargs: dict[str, Any] = {}
-    if state.get("workflow_action") == "retry_failed_tasks":
-        # DAG generation Retry 的身份是明确 source execution；不能使用
-        # retry_failed_tasks 布尔值，因为它只表示 resume_from=build 的 Build 重试。
-        recovery_source_workflow_run_id = str(
-            state.get("resume_execution_run_id") or ""
-        ).strip()
-        if recovery_source_workflow_run_id:
-            planning_kwargs["recovery_source_workflow_run_id"] = (
-                recovery_source_workflow_run_id
-            )
+    recovery_context = current_node_recovery_context()
+    if (
+        recovery_context is not None
+        and recovery_context.reentry_reason
+        in {WorkflowReentryReason.FAILURE_RETRY, WorkflowReentryReason.BUSINESS_RETRY}
+    ):
+        # 来源由 Native Recovery 的首次目标节点调用绑定，不读取客户端旧动作。
+        planning_kwargs["recovery_source_workflow_run_id"] = (
+            recovery_context.source_run_id
+        )
     result = await planning_service(
         context.inputs,
         workspace_state=state,

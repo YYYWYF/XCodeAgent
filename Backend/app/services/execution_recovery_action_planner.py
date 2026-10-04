@@ -77,6 +77,62 @@ def plan_failed_node_reentry_action(
     )
 
 
+def plan_business_node_reentry_action(
+    *,
+    workspace: str,
+    source: DurableExecutionRecord,
+    reentry_plan: WorkflowReentryPlan | None = None,
+    error: RecoveryExecutionError | None = None,
+) -> RecoveryActionPlan:
+    """独立投影经服务端确认的业务失败重试，不伪造异常失败证据。"""
+
+    if source.failure is not None or source.status is not DurableExecutionStatus.FAILED:
+        error = RecoveryExecutionError(
+            "BUSINESS_RETRY_SOURCE_INVALID", "当前 source 不是业务 FAILED。"
+        )
+    incident_id = _incident_id(
+        source=source,
+        lifecycle=load_application_lifecycle(workspace),
+        reentry_plan=reentry_plan,
+        reentry_error_code=error.code if error is not None else None,
+    )
+    if error is not None or reentry_plan is None:
+        return _action_plan(
+            source=source,
+            incident_id=incident_id,
+            status=RecoveryIncidentStatus.NEEDS_ATTENTION,
+            reason_code=error.code if error is not None else "BUSINESS_REENTRY_PLAN_INVALID",
+            message=str(error) if error is not None else "业务失败缺少可验证的节点入口。",
+        )
+    if reentry_plan.reason is not WorkflowReentryReason.BUSINESS_RETRY:
+        raise ValueError("业务重试只能使用 BUSINESS_RETRY 计划。")
+    label = (
+        "重新生成构建计划"
+        if reentry_plan.target_node == "prepare_build_tasks"
+        else "重试失败任务"
+        if reentry_plan.target_node == "build"
+        else "重新执行失败步骤"
+    )
+    action = _action(
+        incident_id=incident_id,
+        kind=RecoveryActionKind.RETRY_BUSINESS_NODE,
+        label=label,
+        description=(
+            "重新执行计划生成，并尝试复用仍然有效的已完成结果。"
+            if reentry_plan.target_node == "prepare_build_tasks"
+            else "从已验证的节点入口重新执行，节点内保留合法的任务重试与确认规则。"
+        ),
+    )
+    return _action_plan(
+        source=source,
+        incident_id=incident_id,
+        status=RecoveryIncidentStatus.RECOVERABLE,
+        reason_code="BUSINESS_NODE_REENTRY_READY",
+        message=action.description,
+        primary_action=action,
+    )
+
+
 def plan_interrupted_continue_action(
     *,
     workspace: str,
@@ -216,6 +272,7 @@ def _digest(value: dict[str, Any]) -> str:
 
 
 __all__ = [
+    "plan_business_node_reentry_action",
     "plan_failed_node_reentry_action",
     "plan_interrupted_continue_action",
 ]

@@ -117,9 +117,10 @@ class ExecutionLeaseStatus(StrEnum):
 
 
 class WorkflowReentryReason(StrEnum):
-    """区分失败重试、中断继续与正式修订三种 Workflow Node 重入来源。"""
+    """区分异常重试、业务失败重试、中断继续与正式修订。"""
 
     FAILURE_RETRY = "failure_retry"
+    BUSINESS_RETRY = "business_retry"
     INTERRUPTED_CONTINUE = "interrupted_continue"
     REVISION = "revision"
 
@@ -209,6 +210,7 @@ class WorkflowReentryPlan(ExecutionRecoveryModel):
 
         if self.reason in {
             WorkflowReentryReason.FAILURE_RETRY,
+            WorkflowReentryReason.BUSINESS_RETRY,
             WorkflowReentryReason.INTERRUPTED_CONTINUE,
         }:
             if (
@@ -331,6 +333,7 @@ class RecoveryPlan(ExecutionRecoveryModel):
     target_node: str = Field(min_length=1, max_length=256)
     checkpoint_id: str = Field(min_length=1, max_length=512)
     checkpoint_ns: str = Field(default="", max_length=512)
+    reentry_reason: WorkflowReentryReason | None = None
     lifecycle_ownership_mode: RecoveryLifecycleOwnershipMode = (
         RecoveryLifecycleOwnershipMode.SOURCE_OWNED
     )
@@ -350,6 +353,7 @@ class RecoveryActionKind(StrEnum):
 
     CONTINUE_CHECKPOINT = "continue_checkpoint"
     RETRY_FAILED_NODE = "retry_failed_node"
+    RETRY_BUSINESS_NODE = "retry_business_node"
     RECONCILE_STATE = "reconcile_state"
     AWAIT_USER = "await_user"
     NEEDS_ATTENTION = "needs_attention"

@@ -208,7 +208,6 @@ import {
   resolveWorkflowForDisplay,
   shouldRenderPlanExecutionDock,
   workflowInteractionAvailability,
-  workflowCanRetryFailedTasks,
   workflowCodeReviewRetry,
   workflowResumeNode,
   type PlanExecutionMode
@@ -2337,7 +2336,7 @@ export default function AiChatPanel({
     handleContinueDevelopment: continueDevelopmentExecution,
     handleExecuteRecoveryAction,
     handleRetryCodeReview,
-    handleRetryPlan,
+    handleContinueStoppedPlan,
     handleContinueRevisionBuild,
     handleEndPlan,
     handleProductStageConversation,
@@ -3320,7 +3319,6 @@ export default function AiChatPanel({
           loading,
           Boolean(applicationLifecycle)
         )
-  const canRetryFailedTasks = workflowCanRetryFailedTasks(latestWorkflowForDisplay, scopedExecution)
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
   const activePageTitle =
@@ -4967,7 +4965,6 @@ export default function AiChatPanel({
                   onStopGenerating={handleStopCurrentGeneration}
                   rightContent={
                     <PlanExecutionDock
-                      canRetryFailedTasks={canRetryFailedTasks}
                       dependencyLocked={targetExecutionContext.dependencyLocked}
                       error={scopedExecution?.error?.message || error}
                       execution={scopedExecution}
@@ -4978,7 +4975,7 @@ export default function AiChatPanel({
                       onConfirmInteraction={handleConfirmPlanInteraction}
                       onEnd={() => void handleEndPlan(scopedExecution?.runId)}
                       onOpenPreview={() => void handleOpenFullscreenPreview()}
-                      onRetry={() => void handleRetryPlan(latestWorkflowForDisplay)}
+                      onRetry={() => void handleContinueStoppedPlan(latestWorkflowForDisplay)}
                       onStop={
                         currentGenerationLoading
                           ? handleStopCurrentGeneration
