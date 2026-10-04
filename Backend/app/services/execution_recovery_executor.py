@@ -955,6 +955,8 @@ async def _failed_source_state(
     if not callable(history_reader):
         return None
     try:
+        owned_result = None
+        unrelated_failed = False
         async for snapshot in history_reader(
             {"configurable": {"thread_id": source.thread_id, "checkpoint_ns": ""}}
         ):
@@ -963,16 +965,31 @@ async def _failed_source_state(
             if isinstance(checkpoint, dict) and checkpoint.get("checkpoint_id") == entry_checkpoint_id:
                 break
             values = getattr(snapshot, "values", {})
-            if (
-                isinstance(values, dict)
-                and str(values.get("active_run_id") or "") == source.run_id
-                and values.get("status") == "failed"
-            ):
-                # Graph 的失败快照可能属于同一 Run 的后续节点；只接受目标节点的写入。
-                metadata = getattr(snapshot, "metadata", {}) or {}
-                writes = metadata.get("writes") if isinstance(metadata, dict) else None
-                if not isinstance(writes, dict) or target_node not in writes:
-                    continue
+            if not isinstance(values, dict):
+                continue
+            parent = getattr(snapshot, "parent_config", {}) or {}
+            parent_identity = parent.get("configurable") if isinstance(parent, dict) else None
+            direct_child = (
+                isinstance(parent_identity, dict)
+                and parent_identity.get("thread_id") == source.thread_id
+                and (parent_identity.get("checkpoint_ns") or "") == ""
+                and parent_identity.get("checkpoint_id") == entry_checkpoint_id
+                and isinstance(checkpoint, dict)
+                and (checkpoint.get("checkpoint_ns") or "") == ""
+            )
+            # 普通 loop checkpoint 可以没有 writes；入口仅调度目标节点，直接子快照
+            # 的持久 parent_config 才是此次节点调用的归属证明。
+            if direct_child:
+                if str(values.get("active_run_id") or "") != source.run_id:
+                    raise RecoveryExecutionError(
+                        "RECOVERY_INTERNAL_PROGRESS_DRIFT", "入口子 checkpoint 的 source run 不一致。"
+                    )
+                owned_result = snapshot
+            elif values.get("status") == "failed" and str(values.get("active_run_id") or "") == source.run_id:
+                unrelated_failed = True
+        if owned_result is not None:
+            values = getattr(owned_result, "values", {})
+            if isinstance(values, dict) and values.get("status") == "failed":
                 if values.get("build_execution_scope") != entry_state.get("build_execution_scope"):
                     raise RecoveryExecutionError(
                         "RECOVERY_INTERNAL_PROGRESS_DRIFT", "内部进度与节点入口的执行范围不一致。"
@@ -992,6 +1009,10 @@ async def _failed_source_state(
                         "RECOVERY_INTERNAL_PROGRESS_DRIFT", "内部进度与节点入口的计划绑定不一致。"
                     )
                 return dict(values)
+        if unrelated_failed:
+            raise RecoveryExecutionError(
+                "RECOVERY_INTERNAL_PROGRESS_DRIFT", "发现失败进度，但不能证明它来自目标节点入口。"
+            )
     except (OSError, TypeError, ValueError):
         # 节点内部复用数据不可读时仍可从已验证的节点入口正常执行。
         return None
