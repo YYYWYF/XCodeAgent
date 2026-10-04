@@ -236,6 +236,100 @@ test('failed node retry shows the entry node without exposing internal diagnosti
   assert.doesNotMatch(markup.split('<details')[0], /恢复目标：/)
 })
 
+test('Workbench current recovery shows a model failure only for the matching structured run', () => {
+  const candidate = recovery('ready')
+  candidate.executionStatus = 'failed'
+  candidate.recoveryActionPlan.primaryAction = {
+    actionId: 'retry-run-A',
+    kind: 'retry_failed_node',
+    targetNode: 'prepare_build_tasks',
+    label: '重试',
+    description: '从已验证入口重试。',
+    requiresConfirmation: false
+  }
+  const workflow = {
+    runId: candidate.sourceRunId,
+    threadId: candidate.threadId,
+    summary: {
+      status: 'failed',
+      phase: 'prepare_build_tasks',
+      errorCode: 'UNIT_GENERATION_INFRASTRUCTURE_FAILURE'
+    },
+    events: []
+  } as WorkflowRunPayload
+  const matching = workbenchRecoveryIncident(candidate, workflow)
+  const otherRun = workbenchRecoveryIncident(candidate, { ...workflow, runId: 'other-run' })
+  const unknownCode = workbenchRecoveryIncident(candidate, {
+    ...workflow,
+    summary: { ...workflow.summary, errorCode: 'OTHER_FAILURE' }
+  })
+  assert.match(renderToStaticMarkup(createElement(RecoveryIncidentCard, {
+    incident: matching!, onAction: () => undefined
+  })), /生成执行计划时，模型准备或调用失败。/)
+  assert.equal(otherRun?.failureMessage, undefined)
+  assert.equal(unknownCode?.failureMessage, undefined)
+})
+
+test('Workbench model planning failure omits the upper history error card', () => {
+  const workflow = {
+    runId: 'run-A',
+    threadId: 'thread-A',
+    summary: {
+      status: 'failed',
+      phase: 'prepare_build_tasks',
+      errorCode: 'UNIT_GENERATION_INFRASTRUCTURE_FAILURE'
+    },
+    events: []
+  } as WorkflowRunPayload
+  const markup = renderToStaticMarkup(createElement(
+    WorkbenchPhaseContext.Provider,
+    {
+      value: {
+        phase: 'development',
+        derivedPhase: 'development',
+        reachedPhase: 'development',
+        recordReachedPhase: () => undefined,
+        manualOverride: null,
+        switchPhase: () => undefined,
+        agent: WORKBENCH_PHASE_AGENTS.development,
+        canEdit: () => true
+      }
+    },
+    createElement(MessageList, {
+      applicationTemplatePreparationEligible: false,
+      codeChangeActionsDisabled: false,
+      conversationRunning: false,
+      loading: false,
+      messages: [{
+        id: 1,
+        role: 'assistant',
+        content: '',
+        error: 'Workflow failed：DagPlanningError: Unit Candidate 生成发生模型基础设施错误，PlanningRun 已终止。',
+        createdAt: 1,
+        workflow
+      }, {
+        id: 2,
+        role: 'assistant',
+        content: '',
+        error: '普通任务失败',
+        createdAt: 2,
+        workflow: {
+          ...workflow,
+          runId: 'run-B',
+          summary: { ...workflow.summary, errorCode: 'OTHER_FAILURE' }
+        }
+      }],
+      onOpenCodeChangeFile: () => undefined,
+      onRevertCodeChanges: () => undefined,
+      onSubmitClarification: async () => undefined,
+      revertingCodeChangeIds: new Set()
+    })
+  ))
+  assert.doesNotMatch(markup, /模型服务异常|请检查模型名称和服务地址/)
+  assert.match(markup, /普通任务失败/)
+  assert.equal(countOccurrences(markup, 'agent-error-card-title'), 1)
+})
+
 test('Workbench retry card does not repeat the last retry error', () => {
   const markup = renderToStaticMarkup(createElement(RecoverySurface, {
     activeExecutionRecovery: recovery('ready'),

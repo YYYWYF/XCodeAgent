@@ -1,5 +1,5 @@
 import type { ApplicationPlanningCurrentState } from './activeApplicationPlanning'
-import type { ExecutionRecoveryCandidate } from '../typings'
+import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../typings'
 import type {
   RecoveryAction,
   RecoveryActionPlan,
@@ -26,6 +26,30 @@ export type RecoveryIncidentPresentation =
       reasonCode: string
       technicalMessage?: string
     }
+
+const MODEL_PLANNING_FAILURE_CODE = 'UNIT_GENERATION_INFRASTRUCTURE_FAILURE'
+
+/** 仅识别已定义的执行计划模型基础设施错误，不用关键词归因其他异常。 */
+export function isWorkbenchModelPlanningFailure(
+  errorCode?: string | null
+): boolean {
+  return errorCode === MODEL_PLANNING_FAILURE_CODE
+}
+
+/** 仅用与当前 durable source 同 Run 的结构化错误码生成工作台失败摘要。 */
+function currentWorkbenchFailureMessage(
+  candidate: ExecutionRecoveryCandidate,
+  workflow?: WorkflowRunPayload
+): string | undefined {
+  if (
+    candidate.executionStatus !== 'failed' ||
+    workflow?.runId !== candidate.sourceRunId ||
+    workflow.summary.status !== 'failed'
+  ) return undefined
+  return workflow.summary.errorCode === MODEL_PLANNING_FAILURE_CODE
+    ? '生成执行计划时，模型准备或调用失败。'
+    : undefined
+}
 
 /** 从当前 Planning State 提取真实失败摘要，不把恢复说明误当成原始错误。 */
 function currentPlanningFailureMessage(
@@ -85,7 +109,8 @@ export function applicationPlanningRecoveryIncident(
 
 /** 只从 Workbench ActionPlan 生成当前 Incident，禁止回退到 availability/canContinue 猜动作。 */
 export function workbenchRecoveryIncident(
-  candidate?: ExecutionRecoveryCandidate
+  candidate?: ExecutionRecoveryCandidate,
+  workflow?: WorkflowRunPayload
 ): RecoveryIncidentPresentation | undefined {
   if (
     !candidate ||
@@ -95,6 +120,7 @@ export function workbenchRecoveryIncident(
     return undefined
   }
   const actionPlan = candidate.recoveryActionPlan
+  const failureMessage = currentWorkbenchFailureMessage(candidate, workflow)
   if (actionPlan.status === 'recoverable' && actionPlan.primaryAction) {
     const retryingNode = ['retry_failed_node', 'retry_business_node'].includes(
       actionPlan.primaryAction.kind
@@ -106,6 +132,7 @@ export function workbenchRecoveryIncident(
       title: retryingNode
         ? '当前执行失败'
         : '工作台执行需要恢复',
+      failureMessage,
       recoveryMessage: retryingNode
         ? nodeLabel ? `将从「${nodeLabel}」节点重试。` : '重试时将重新确认执行起点。'
         : '可以继续当前执行。',
@@ -119,6 +146,7 @@ export function workbenchRecoveryIncident(
     return {
       kind: 'needs_attention',
       title: candidate.executionStatus === 'failed' ? '当前执行失败' : '执行未完成',
+      failureMessage,
       recoveryMessage: '请重试；系统会重新确认执行起点。',
       reasonCode: actionPlan.reasonCode
     }

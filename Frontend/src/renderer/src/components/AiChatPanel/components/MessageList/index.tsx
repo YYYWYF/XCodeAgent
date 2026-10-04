@@ -36,6 +36,7 @@ import {
   type ApplicationPlanningCurrentState
 } from '../../../../service/activeApplicationPlanning'
 import { cx } from '../../../../utils'
+import { isWorkbenchModelPlanningFailure } from '../../../../service/recoveryIncident'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import AgentErrorCard from '../../../AgentErrorCard'
 import CodeChangeCard from '../CodeChangeCard'
@@ -728,6 +729,13 @@ export default function MessageList({
               const messageError = historicalFailureText(
                 message.error?.trim() || workflowFailureMessage(message.workflow)
               )
+              // 工作台执行计划的已识别模型失败由底部当前 Recovery Incident 统一说明。
+              const modelPlanningFailureInRecovery = !designPhasePlanning &&
+                isWorkbenchModelPlanningFailure(
+                  typeof message.workflow?.summary.errorCode === 'string'
+                    ? message.workflow.summary.errorCode
+                    : undefined
+                )
               const legacyRecoveryGuidance = LEGACY_RECOVERY_GUIDANCE.has(message.error?.trim() || '')
               const isCurrentErrorMessage = Boolean(
                 messageError &&
@@ -937,7 +945,8 @@ export default function MessageList({
               const hasVisibleAssistantBody = Boolean(
                 message.revisionHandoff ||
                   message.developmentContinuation ||
-                  (messageError && !templatePreparationFailed && !currentGlobalError) ||
+                  (messageError && !templatePreparationFailed && !currentGlobalError &&
+                    !modelPlanningFailureInRecovery) ||
                   showPlanningLoading ||
                   (!messageError && planningActivity && planningCardWorkflow) ||
                   (!hideEntityWorkflowChrome &&
@@ -990,7 +999,8 @@ export default function MessageList({
                           />
                         ) : null}
                         {/* 模板失败由下方唯一的模板卡片展示后端详情，避免历史通用错误卡重复。 */}
-                        {messageError && !templatePreparationFailed && !currentGlobalError ? (
+                        {messageError && !templatePreparationFailed && !currentGlobalError &&
+                        !modelPlanningFailureInRecovery ? (
                           <AgentErrorCard
                             error={messageError}
                             errorCode={

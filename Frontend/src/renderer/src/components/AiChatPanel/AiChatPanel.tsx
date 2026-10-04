@@ -3710,7 +3710,7 @@ export default function AiChatPanel({
     ? undefined
     : isApplicationPlanningPhase
       ? applicationPlanningRecoveryIncident(planningState)
-      : workbenchRecoveryIncident(activeExecutionRecovery)
+      : workbenchRecoveryIncident(activeExecutionRecovery, latestWorkflowForDisplay)
   const globalFallbackError =
     !workbenchExecutionInProgress &&
     !templateGenerationRecoverable && !templateReconcileRetryable &&
@@ -4915,6 +4915,7 @@ export default function AiChatPanel({
                           planningState?.transportState === 'reconciling')
                       }
                       activeExecutionRecovery={activeExecutionRecovery}
+                      currentWorkflow={latestWorkflowForDisplay}
                       isApplicationPlanningPhase={isApplicationPlanningPhase}
                       onExecuteRecoveryAction={(recovery) => { void handleExecuteRecoveryAction(recovery) }}
                       onRetryCurrentRecovery={() => { void retryCurrentRecovery() }}

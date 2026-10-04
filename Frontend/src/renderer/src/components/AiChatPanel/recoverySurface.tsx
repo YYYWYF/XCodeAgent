@@ -4,7 +4,7 @@ import {
   applicationPlanningRecoveryIncident,
   workbenchRecoveryIncident
 } from '../../service/recoveryIncident'
-import type { ExecutionRecoveryCandidate } from '../../typings'
+import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../../typings'
 import RecoveryIncidentCard from '../RecoveryIncidentCard/RecoveryIncidentCard'
 
 export type RecoverySurfaceProps = {
@@ -12,6 +12,7 @@ export type RecoverySurfaceProps = {
   planningState?: ApplicationPlanningCurrentState
   onRetryPlanning?: () => void
   activeExecutionRecovery?: ExecutionRecoveryCandidate
+  currentWorkflow?: WorkflowRunPayload
   recoveryError?: string
   recoveryRunning: boolean
   actionDisabled?: boolean
@@ -25,6 +26,7 @@ export default function RecoverySurface({
   planningState,
   onRetryPlanning,
   activeExecutionRecovery,
+  currentWorkflow,
   recoveryError,
   recoveryRunning,
   actionDisabled = false,
@@ -33,7 +35,7 @@ export default function RecoverySurface({
 }: RecoverySurfaceProps): ReactElement | null {
   const incident = isApplicationPlanningPhase
     ? applicationPlanningRecoveryIncident(planningState)
-    : workbenchRecoveryIncident(activeExecutionRecovery)
+    : workbenchRecoveryIncident(activeExecutionRecovery, currentWorkflow)
   if (!incident) return null
 
   return (
