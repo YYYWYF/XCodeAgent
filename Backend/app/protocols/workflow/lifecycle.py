@@ -134,8 +134,9 @@ def begin_workflow_lifecycle(
             thread_id=thread_id,
             scope="application" if application_resume else scope_type,
             target_id=previous.target_id if application_resume else target_id,
-            allow_plan_adjustment_debug=bool(
+            allow_debug_reentry=bool(
                 workflow_inputs.get("workflow_debug_enabled")
+                and workflow_inputs.get("resume_from")
             ),
             allow_entity_binding_continuation=(
                 workflow_inputs.get("workflow_action")
@@ -224,7 +225,7 @@ def _validate_resumable_execution(
     thread_id: str,
     scope: str,
     target_id: str,
-    allow_plan_adjustment_debug: bool = False,
+    allow_debug_reentry: bool = False,
     allow_entity_binding_continuation: bool = False,
 ) -> None:
     """只允许安全恢复同一目标上的旧执行，阶段确认可切换到新对话。"""
@@ -236,16 +237,13 @@ def _validate_resumable_execution(
         WorkbenchExecutionStatus.STOPPED,
         WorkbenchExecutionStatus.FAILED,
     }
-    # DAG 生成失败会把运行置为 awaiting_user/plan_adjustment；调试面板已经是
-    # 用户明确选择的重新起点，此时应允许它原子接管旧执行，但不能绕过其他确认类型。
-    debug_plan_adjustment = (
-        allow_plan_adjustment_debug
+    # 明确选择节点的调试请求可接管未运行的等待态，跳过当前待确认交互；
+    # running/stopping 仍不能被调试接管，普通请求也不能借此跳过确认。
+    debug_waiting = (
+        allow_debug_reentry
         and execution.status == WorkbenchExecutionStatus.AWAITING_USER
-        and execution.pending_interaction is not None
-        and execution.pending_interaction.type == PendingInteractionType.PLAN_ADJUSTMENT
     )
-    # DAG、单元测试、修复范围和测试阶段确认都是明确的人工门；其余待交互仍必须遵守
-    # stopped/failed 或显式调试恢复规则，避免绕过人工门禁。
+    # 普通结构化确认继续沿用原有交互边界。
     task_plan_confirmation = (
         execution.status == WorkbenchExecutionStatus.AWAITING_USER
         and execution.pending_interaction is not None
@@ -300,7 +298,7 @@ def _validate_resumable_execution(
     )
     if (
         not resumable_status
-        and not debug_plan_adjustment
+        and not debug_waiting
         and not task_plan_confirmation
         and not unit_test_confirmation
         and not frontend_performance_confirmation

@@ -50,6 +50,7 @@ class ProjectState(TypedDict, total=False):
     design_interaction_origin: str
     product_stage_conversation: bool
     application_planning_interaction: dict[str, Any]
+    application_planning_review_route: str
     requirement_revision_id: str
     authorization_config_conflict: dict[str, Any]
     pending_application_config_target: dict[str, Any]

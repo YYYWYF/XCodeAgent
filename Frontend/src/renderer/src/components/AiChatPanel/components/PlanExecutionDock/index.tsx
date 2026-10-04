@@ -33,7 +33,6 @@ type Props = {
   onOpenPreview: () => void
   onRetry: () => void
   onStop: () => void
-  onViewPlan: () => void
 }
 
 /** 仅替换工作区最底部输入区，承载计划锁定说明和必要控制动作。 */
@@ -51,8 +50,7 @@ export default function PlanExecutionDock({
   onEnd,
   onOpenPreview,
   onRetry,
-  onStop,
-  onViewPlan
+  onStop
 }: Props): ReactElement {
   const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -130,7 +128,6 @@ export default function PlanExecutionDock({
           <div className={cx('plan-execution-dock-actions')}>
             {(mode === 'running' || mode === 'stopping') && (
               <>
-                <Button onClick={onViewPlan}>查看计划</Button>
                 <Button
                   danger
                   icon={<PauseCircleOutlined />}

@@ -16,6 +16,7 @@ export type RecoverySurfaceProps = {
   recoveryRunning: boolean
   actionDisabled?: boolean
   onExecuteRecoveryAction: (candidate: ExecutionRecoveryCandidate) => void
+  onRetryCurrentRecovery?: () => void
 }
 
 /** 统一渲染当前 Recovery Incident，Planning 与 Workbench 不再并列暴露旧恢复卡。 */
@@ -27,7 +28,8 @@ export default function RecoverySurface({
   recoveryError,
   recoveryRunning,
   actionDisabled = false,
-  onExecuteRecoveryAction
+  onExecuteRecoveryAction,
+  onRetryCurrentRecovery
 }: RecoverySurfaceProps): ReactElement | null {
   const incident = isApplicationPlanningPhase
     ? applicationPlanningRecoveryIncident(planningState)
@@ -43,7 +45,7 @@ export default function RecoverySurface({
         isApplicationPlanningPhase
           ? onRetryPlanning
           : activeExecutionRecovery
-            ? () => onExecuteRecoveryAction(activeExecutionRecovery)
+            ? onRetryCurrentRecovery ?? (() => onExecuteRecoveryAction(activeExecutionRecovery))
             : undefined
       }
       retrying={recoveryRunning}

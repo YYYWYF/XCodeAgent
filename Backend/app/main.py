@@ -201,6 +201,23 @@ async def run_application_page_planning(
     )
 
 
+@app.post("/execution-recovery/execute")
+async def execute_execution_recovery(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 端点执行后端签发的当前恢复动作。"""
+
+    return StreamingResponse(
+        build_execution_recovery_ag_ui_stream(
+            payload=input_data,
+            accept=accept,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/application-lifecycle/run")
 async def run_application_lifecycle(
         input_data: dict[str, Any] = Body(...),

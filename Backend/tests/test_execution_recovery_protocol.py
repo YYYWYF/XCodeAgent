@@ -45,6 +45,19 @@ class _RecoverySnapshot:
 class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
     """覆盖 Native Recovery 请求 authority 与 REQUIRES_HANDLER 零副作用。"""
 
+    def test_recovery_action_endpoint_is_registered(self) -> None:
+        """恢复协议必须通过前端实际调用的 AG-UI 路径暴露，防止再次返回 404。"""
+
+        from app.main import app
+
+        self.assertTrue(
+            any(
+                getattr(route, "path", None) == "/execution-recovery/execute"
+                and "POST" in getattr(route, "methods", set())
+                for route in app.app.routes
+            )
+        )
+
     def setUp(self) -> None:
         """为每个协议测试准备隔离工作区。"""
 

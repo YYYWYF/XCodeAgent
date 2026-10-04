@@ -350,11 +350,13 @@ export function planningWorkflowPhase(workflow?: WorkflowRunPayload): string {
   if (lifecyclePhase) return lifecyclePhase
   const events = workflow?.events || []
   const lastEvent = events.length ? events[events.length - 1] : undefined
-  if (lastEvent?.type === 'workflow.node.started') {
-    const startedPhase = lastEvent.nodeName || lastEvent.node?.id
-    if (startedPhase) return String(startedPhase)
-  }
-  return String(workflow?.summary?.phase || '')
+  const startedPhase =
+    lastEvent?.type === 'workflow.node.started'
+      ? lastEvent.nodeName || lastEvent.node?.id
+      : undefined
+  const phase = String(startedPhase || workflow?.summary?.phase || '')
+  // TechnicalPlan 的事务子节点都属于同一个可见规划阶段；首帧尚无 lifecycle 时也要显示生成进度。
+  return phase.startsWith('technical_planning_') ? 'technical_planning' : phase
 }
 
 /** 判断当前 UI Manifest 是否已由用户明确跳过，避免继续展示旧 UI 设计稿。 */

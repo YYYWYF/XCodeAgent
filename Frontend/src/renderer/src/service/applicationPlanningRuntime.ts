@@ -142,6 +142,18 @@ export class ApplicationPlanningRuntime {
     this.dependencies.dispatchCurrentEvent(event)
   }
 
+  /** 将显式恢复动作的失败留在当前 Incident 上，避免对账成功后吞掉请求错误。 */
+  private reportRecoveryActionFailure(reason: unknown, fallback: string): void {
+    const current = this.dependencies.getCurrentState()
+    if (this.disposed || current?.application.id !== this.applicationId || current.threadId !== this.threadId) return
+    this.dispatch({
+      type: 'recovery_action_failed',
+      applicationId: this.applicationId,
+      threadId: this.threadId,
+      error: planningRuntimeError(reason, fallback)
+    })
+  }
+
   /** 阻止未同步状态继续发起可能重复消费用户动作的 Graph 写请求。 */
   private assertMutationAllowed(): void {
     if (planningMutationBlocked(this.requireCurrentState())) {
@@ -200,6 +212,9 @@ export class ApplicationPlanningRuntime {
         await this.runPlanning(buildApplicationPlanningRequest(current.application))
         return
       }
+      // 已有 durable 执行的恢复入口由 Backend ActionPlan 决定；冷启动只展示该动作。
+      // lifecycle 仍标记 running 不能成为擅自重发普通 Planning 请求的依据。
+      if (current.recovery?.recoveryActionPlan) return
       if (planningWorkflowRequiresUserInput(current.workflow)) return
     }
     if (
@@ -236,16 +251,32 @@ export class ApplicationPlanningRuntime {
 
   /** 先对账，再提交 Backend 签发的恢复动作；缺少 action identity 时保持 fail closed。 */
   async retryCurrentFailure(): Promise<void> {
-    this.assertMutationAllowed()
-    const outcome = await this.reconcileCurrentState()
-    if (outcome.status !== 'recovered') return
-    const current = this.requireCurrentState()
-    const recovery = current.recovery
-    const plan = recovery?.recoveryActionPlan
-    if (!plan || plan.status !== 'recoverable' || !plan.primaryAction) {
-      return
+    this.dispatch({
+      type: 'recovery_action_started',
+      applicationId: this.applicationId,
+      threadId: this.threadId
+    })
+    try {
+      const currentState = this.requireCurrentState()
+      if (currentState.transportState === 'running' || currentState.transportState === 'reconciling') {
+        this.assertMutationAllowed()
+      }
+      const outcome = await this.reconcileCurrentState()
+      if (outcome.status !== 'recovered') return
+      const current = this.requireCurrentState()
+      const recovery = current.recovery
+      const plan = recovery?.recoveryActionPlan
+      if (!plan) return
+      this.assertMutationAllowed()
+      if (plan.status === 'needs_attention') {
+        await this.executeRecoveryRetry(plan)
+        return
+      }
+      if (plan.status !== 'recoverable' || !plan.primaryAction) return
+      await this.executeRecoveryAction(plan)
+    } catch (reason) {
+      this.reportRecoveryActionFailure(reason, '继续执行中断的规划失败')
     }
-    await this.executeRecoveryAction(plan)
   }
 
   /** 新迭代发起后用户输入需求，用用户输入的消息启动 planning workflow。 */
@@ -410,6 +441,9 @@ export class ApplicationPlanningRuntime {
   private async performReconcile(): Promise<PlanningReconcileOutcome> {
     const current = this.requireCurrentState()
     if (this.runActive) throw new Error('当前 Planning write transport 尚未结束。')
+    // Runtime 重建后本地 token 从零开始，但 Canonical State 保留上一实例的连接代次。
+    // 新对账必须越过该代次，否则 reducer 会丢弃权威结果并一直停在 reconciling。
+    this.runToken = Math.max(this.runToken, current.connection.requestGeneration)
     const token = ++this.runToken
     this.dispatch({
       type: 'reconcile_started',
@@ -479,6 +513,7 @@ export class ApplicationPlanningRuntime {
   private async reconcileAfterTransportFailure(
     _reason: unknown
   ): Promise<PlanningExecutionFailure> {
+    void _reason
     const outcome = await this.reconcileCurrentState()
     if (outcome.status === 'recovered') return 'recovered'
     if (outcome.status === 'checkpoint_missing') {
@@ -528,11 +563,57 @@ export class ApplicationPlanningRuntime {
       // Recovery action 成功只代表请求完成；继续读取 durable truth 后才允许替换旧 Incident。
       await this.reconcileCurrentState()
     } catch (reason) {
-      if (recoveryToken === undefined || !this.isCurrentRun(recoveryToken)) return
-      await this.handleExecutionFailure(
-        reason,
-        planningRuntimeError(reason, '继续执行中断的规划失败')
+      if (recoveryToken !== undefined && !this.isCurrentRun(recoveryToken)) return
+      try {
+        if (recoveryToken !== undefined) {
+          await this.handleExecutionFailure(
+            reason,
+            planningRuntimeError(reason, '继续执行中断的规划失败')
+          )
+        }
+      } finally {
+        this.reportRecoveryActionFailure(reason, '继续执行中断的规划失败')
+      }
+    }
+  }
+
+  /** 对无法直接恢复的当前失败提交 source hint，由 Backend 重新判断安全入口。 */
+  private async executeRecoveryRetry(plan: ApplicationPlanningRecoveryActionPlan): Promise<void> {
+    let recoveryToken: number | undefined
+    try {
+      await this.withExclusiveTransport(
+        async (token) => {
+          const current = this.requireCurrentState()
+          const session = this.dependencies.createRecoverySession
+            ? this.dependencies.createRecoverySession(plan.threadId)
+            : new AgUiChatSession(plan.threadId, getExecutionRecoveryActionUrl())
+          const merged = await this.sendMessageWithinTransport(
+            token,
+            '重试',
+            {
+              editorMode: 'frontend',
+              workspaceRoot: current.application.workspaceRoot,
+              executionRecovery: {
+                action: 'retry_current_failure',
+                sourceRunId: plan.sourceRunId
+              }
+            },
+            session
+          )
+          await this.handlePlanningResult(token, merged)
+        },
+        { onToken: (token) => { recoveryToken = token } }
       )
+      await this.reconcileCurrentState()
+    } catch (reason) {
+      if (recoveryToken !== undefined && !this.isCurrentRun(recoveryToken)) return
+      try {
+        if (recoveryToken !== undefined) {
+          await this.handleExecutionFailure(reason, planningRuntimeError(reason, '重新检查当前失败时出错'))
+        }
+      } finally {
+        this.reportRecoveryActionFailure(reason, '重新检查当前失败时出错')
+      }
     }
   }
 

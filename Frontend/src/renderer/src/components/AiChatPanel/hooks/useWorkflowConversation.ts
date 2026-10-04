@@ -335,7 +335,7 @@ type UseWorkflowConversationResult = {
   workspaceBusy: boolean
   recoveryRunning: boolean
   recoveryError?: string
-  refreshConnection: () => Promise<boolean>
+  retryCurrentRecovery: () => Promise<boolean>
 }
 
 /** 从 Workflow 快照中读取最近一次页面选择，作为确认继续时的兜底上下文。 */
@@ -694,6 +694,7 @@ export function useWorkflowConversation({
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
   const [recoveringSourceRunId, setRecoveringSourceRunId] = useState<string>()
+  const recoveryRetryRequestRef = useRef(false)
   const [recoveryError, setRecoveryError] = useState<string>()
   const [connectionState, setConnectionState] = useState<ConnectionState>(() =>
     initialConnectionState(Boolean(applicationLifecycle))
@@ -926,7 +927,12 @@ export function useWorkflowConversation({
     setConnectionState((current) => beginConnectionRequest(current, requestGeneration))
     try {
       const lifecycle = await getApplicationLifecycle(application)
+      applicationLifecycleRef.current = lifecycle
       onApplicationLifecycleChange(lifecycle)
+      connectionStateRef.current = completeConnectionRequest(
+        connectionStateRef.current,
+        requestGeneration
+      )
       setConnectionState((current) => completeConnectionRequest(current, requestGeneration))
       return true
     } catch (error) {
@@ -938,6 +944,49 @@ export function useWorkflowConversation({
         )
       )
       return false
+    }
+  }
+
+  /** 单次点击先刷新 durable truth，再执行 Backend 当前允许的恢复或重新判断失败。 */
+  const retryCurrentRecovery = async (): Promise<boolean> => {
+    if (recoveryRetryRequestRef.current || loading || workspaceBusy || recoveringSourceRunId) {
+      return false
+    }
+    recoveryRetryRequestRef.current = true
+    setRecoveringSourceRunId('refreshing')
+    setRecoveryError(undefined)
+    try {
+      if (!(await refreshExecutionRecoveryLifecycle())) return false
+      const recovery = executionRecoveryForSession(
+        applicationLifecycleRef.current,
+        activeSession?.sessionId
+      )
+      if (!recovery || !activeSession || activeSession.sessionId !== recovery.ownerSessionId) {
+        setRecoveryError('已同步后端状态，但当前会话没有可验证的恢复入口。')
+        return false
+      }
+      if (recovery.recoveryActionPlan.status === 'recoverable') {
+        return handleExecuteRecoveryAction(recovery)
+      }
+      if (recovery.recoveryActionPlan.status !== 'needs_attention') return false
+      setRecoveringSourceRunId(recovery.sourceRunId)
+      try {
+        return await sendWorkflowMessage('重试', {
+          executionRecovery: {
+            action: 'retry_current_failure',
+            sourceRunId: recovery.sourceRunId
+          },
+          executionThreadId: recovery.threadId,
+          sessionIdentity: activeSession,
+          titleFrom: '重试',
+          conversation: false
+        })
+      } finally {
+        await refreshExecutionRecoveryLifecycle()
+      }
+    } finally {
+      recoveryRetryRequestRef.current = false
+      setRecoveringSourceRunId(undefined)
     }
   }
 
@@ -1002,11 +1051,8 @@ export function useWorkflowConversation({
       revisionInteraction?: WorkflowRevisionDraftInteraction
       workflowScope?: string
       executionRecovery?:
-        {
-          action: 'execute'
-          incidentId: string
-          actionId: string
-        }
+        | { action: 'execute'; incidentId: string; actionId: string }
+        | { action: 'retry_current_failure'; sourceRunId: string }
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
@@ -2328,7 +2374,7 @@ export function useWorkflowConversation({
     workspaceBusy,
     recoveryRunning: Boolean(recoveringSourceRunId),
     recoveryError,
-    refreshConnection: refreshExecutionRecoveryLifecycle
+    retryCurrentRecovery
   }
 }
 

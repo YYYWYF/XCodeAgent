@@ -260,14 +260,9 @@ function AppEntryContent(): JSX.Element {
     setActiveApplication(null)
   }, [])
 
-  // 所有应用都直接进入工作台；新建应用同时恢复其当前设计或规划会话。
+  // 所有应用都直接进入工作台；已保存但尚未完成创建规划的应用也恢复原会话。
   const handleOpenApplication = useCallback(
     async (application: ApplicationConfig): Promise<void> => {
-      if (application.source !== 'new') {
-        await openWorkbench(application)
-        return
-      }
-
       const existingPlanning = planningController.getPlanningState(application.id)
       if (existingPlanning) {
         await openWorkbench(existingPlanning.application, existingPlanning.lifecycle)
@@ -339,9 +334,7 @@ function AppEntryContent(): JSX.Element {
             planningRuntimeController.saveRequirementSpec(visiblePlanning.application.id, spec)
           }
           onRetry={() =>
-            void (visiblePlanning.connection.status !== 'healthy'
-              ? planningRuntimeController.reconcileCurrentState(visiblePlanning.application.id)
-              : planningRuntimeController.retryCurrentFailure(visiblePlanning.application.id))
+            void planningRuntimeController.retryCurrentFailure(visiblePlanning.application.id)
           }
           onReturnHome={planningController.returnHome}
           theme={theme}
@@ -384,13 +377,11 @@ function AppEntryContent(): JSX.Element {
             }
             onStopPlanning={() => planningRuntimeController.stop(activeApplication.id)}
             onRetryPlanning={
-              activePlanning && activePlanning.connection.status !== 'healthy'
-                ? () => void planningRuntimeController.reconcileCurrentState(activeApplication.id)
-                : templateGenerationRecoverable
-                  ? () => {
-                      void planningController.retryTemplateGeneration(activeApplication.id)
-                    }
-                  : () => void planningRuntimeController.retryCurrentFailure(activeApplication.id)
+              templateGenerationRecoverable
+                ? () => {
+                    void planningController.retryTemplateGeneration(activeApplication.id)
+                  }
+                : () => void planningRuntimeController.retryCurrentFailure(activeApplication.id)
             }
             onRetryTemplateReconcile={() =>
               void planningRuntimeController.retryTemplateReconcile(activeApplication.id)

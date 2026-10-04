@@ -224,7 +224,6 @@ function renderPhaseDock(
       onOpenPreview={() => undefined}
       onRetry={() => undefined}
       onStop={() => undefined}
-      onViewPlan={() => undefined}
     />
   )
 }

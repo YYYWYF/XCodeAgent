@@ -210,7 +210,7 @@ test('Workbench Recovery Incident exposes the Backend primary action', () => {
   assert.match(markup, /继续执行/)
 })
 
-test('Workbench needs_attention is display-only and cannot reach onAction', () => {
+test('Workbench needs_attention retains a retry entry for Backend re-resolution', () => {
   for (const availability of ['blocked', 'requires_handler'] as const) {
     const incident = workbenchRecoveryIncident(recovery(availability))
     if (!incident) throw new Error('测试候选未生成 Workbench Incident。')
@@ -225,8 +225,8 @@ test('Workbench needs_attention is display-only and cannot reach onAction', () =
     )
     assert.match(markup, /RECOVERY_TEST/)
     assert.match(markup, /Workbench diagnostic visible/)
-    assert.doesNotMatch(markup, /<button/)
-    assert.doesNotMatch(markup, /重试/)
+    assert.match(markup, /<button/)
+    assert.match(markup, /重试/)
     assert.doesNotMatch(markup, /继续执行/)
     assert.equal(actionCalls, 0)
   }
@@ -378,7 +378,7 @@ test('MessageList renders legacy recovery guidance as history while keeping Curr
   assert.doesNotMatch(markup, /请查看错误详情和相关执行记录后重试/)
 })
 
-test('connection error stays outside Recovery and offers only resync', () => {
+test('connection error shows one Retry entry without inventing a Recovery action', () => {
   const connection = {
     ...initialConnectionState(true),
     status: 'unavailable' as const,
@@ -389,13 +389,13 @@ test('connection error stays outside Recovery and offers only resync', () => {
   )
   assert.match(markup, /Backend 暂时不可用/)
   assert.match(markup, /与后端连接中断，当前规划状态尚未确认/)
-  assert.match(markup, /重新同步状态/)
+  assert.match(markup, /重试/)
   assert.doesNotMatch(markup, /recovery-incident/)
   assert.doesNotMatch(markup, /错误详情/)
   assert.doesNotMatch(markup, /重新执行技术规划/)
 })
 
-test('Planning needs_attention is display-only and cannot reach onAction', () => {
+test('Planning needs_attention retains a retry entry for Backend re-resolution', () => {
   let actionCalls = 0
   const markup = renderToStaticMarkup(
     createElement(ApplicationPlanningRecoveryIncidentCard, {
@@ -451,8 +451,8 @@ test('Planning needs_attention is display-only and cannot reach onAction', () =>
   )
   assert.match(markup, /RECOVERY_BLOCKED/)
   assert.match(markup, /Planning diagnostic visible/)
-  assert.doesNotMatch(markup, /<button/)
-  assert.doesNotMatch(markup, /重试/)
+  assert.match(markup, /<button/)
+  assert.match(markup, /重试/)
   assert.equal(actionCalls, 0)
 })
 
@@ -504,7 +504,7 @@ test('caller updates only the current Incident when the canonical source moves f
   )
 })
 
-test('caller projects needs_attention as the only display-only current Incident', () => {
+test('caller projects needs_attention as the only actionable current Incident', () => {
   const markup = renderPlanningRecoverySurface(
     ['404 model-A', '404 model-B'],
     planningStateFromRecovery({
@@ -521,8 +521,8 @@ test('caller projects needs_attention as the only display-only current Incident'
   )
   assert.match(markup, /NATIVE_SUBGRAPH_REPLAY_UNSUPPORTED/)
   assert.match(markup, /当前现场没有可证明安全的自动恢复入口，需要人工处理/)
-  assert.doesNotMatch(markup, /<button/)
-  assert.doesNotMatch(markup, /重试/)
+  assert.match(markup, /<button/)
+  assert.match(markup, /重试/)
   assert.doesNotMatch(markup, /重新执行技术规划/)
 })
 

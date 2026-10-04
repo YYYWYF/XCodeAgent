@@ -362,6 +362,7 @@ class ExecutionResourceLockTests(unittest.TestCase):
                 {
                     "workspace": directory,
                     "workflow_debug_enabled": True,
+                    "resume_from": "prepare_build_tasks",
                     "resume_values": {
                         "selectedPageId": "orders",
                         "build_execution_scope": {
@@ -382,6 +383,78 @@ class ExecutionResourceLockTests(unittest.TestCase):
                 payload["activeExecutions"]["run-new"]["status"],
                 "running",
             )
+
+    def test_selected_debug_node_replaces_api_design_wait_without_ordinary_bypass(self) -> None:
+        """所选节点调试可接管 API 设计等待态，普通恢复及运行中接管仍被拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory,
+                scope="page",
+                target_id="orders",
+                page_id="orders",
+                thread_id="thread-orders",
+                run_id="run-old",
+                phase="api_design_readiness_gate",
+            )
+            resume_values = {
+                "selectedPageId": "orders",
+                "build_execution_scope": {"type": "page", "targetId": "orders"},
+                "resume_execution_run_id": "run-old",
+            }
+            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "只有已停止或失败"):
+                begin_workflow_lifecycle(
+                    {
+                        "workspace": directory,
+                        "workflow_debug_enabled": True,
+                        "resume_from": "development_readiness_gate",
+                        "resume_values": resume_values,
+                    },
+                    thread_id="thread-orders",
+                    run_id="run-while-running",
+                    phase="development_readiness_gate",
+                )
+            update_workbench_execution(
+                directory,
+                run_id="run-old",
+                phase="api_design_readiness_gate",
+                status=WorkbenchExecutionStatus.AWAITING_USER,
+                pending_type=PendingInteractionType.API_DESIGN,
+                pending_payload={"mode": "api_design_required"},
+            )
+            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "只有已停止或失败"):
+                begin_workflow_lifecycle(
+                    {"workspace": directory, "resume_values": resume_values},
+                    thread_id="thread-orders",
+                    run_id="run-ordinary",
+                    phase="development_readiness_gate",
+                )
+            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "只有已停止或失败"):
+                begin_workflow_lifecycle(
+                    {
+                        "workspace": directory,
+                        "workflow_debug_enabled": True,
+                        "resume_values": resume_values,
+                    },
+                    thread_id="thread-orders",
+                    run_id="run-no-selected-node",
+                    phase="development_readiness_gate",
+                )
+            payload = begin_workflow_lifecycle(
+                {
+                    "workspace": directory,
+                    "workflow_debug_enabled": True,
+                    "resume_from": "development_readiness_gate",
+                    "resume_values": resume_values,
+                },
+                thread_id="thread-orders",
+                run_id="run-debug",
+                phase="development_readiness_gate",
+            )
+            assert payload is not None
+            self.assertNotIn("run-old", payload["activeExecutions"])
+            self.assertEqual(payload["activeExecutions"]["run-debug"]["status"], "running")
 
     def test_task_plan_action_replaces_awaiting_execution_in_same_thread(self) -> None:
         """Confirm 或 Regenerate 应原子接管原 DAG 待确认 execution。"""

@@ -26,7 +26,7 @@ export default function ConnectionStatusBanner({
         ? '正在重新连接 Backend'
         : 'Backend 暂时不可用'
   const message = pending
-    ? '连接恢复后会重新同步最新状态，不会自动重试或继续 Workflow。'
+    ? '正在同步最新状态和可用的恢复入口。'
     : connection.lastError || '连接已中断，暂时无法同步最新状态。'
 
   return (
@@ -53,7 +53,7 @@ export default function ConnectionStatusBanner({
           onClick={onReconnect}
           type="default"
         >
-          重新同步状态
+          重试
         </Button>
       ) : null}
     </section>

@@ -567,7 +567,7 @@ test('STALE_RECOVERY_ACTION 会读取并替换最新 Incident，且不写入历�
   }
 })
 
-test('J13 needs_attention without primaryAction sends no Recovery execute request', async () => {
+test('J13 needs_attention rejects direct execute but Retry re-resolves current failure', async () => {
   const originalFetch = globalThis.fetch
   const originalWindow = globalThis.window
   const ownerIdentity = buildSessionIdentity()
@@ -636,6 +636,11 @@ test('J13 needs_attention without primaryAction sends no Recovery execute reques
     const result = await captured.handleExecuteRecoveryAction(candidate)
     assert.equal(result, false)
     assert.equal(recoveryRequest, undefined)
+    await captured.retryCurrentRecovery()
+    assert.deepEqual(recoveryRequest, {
+      action: 'retry_current_failure',
+      sourceRunId: candidate.sourceRunId
+    })
   } finally {
     globalThis.fetch = originalFetch
     Object.defineProperty(globalThis, 'window', {
@@ -645,7 +650,7 @@ test('J13 needs_attention without primaryAction sends no Recovery execute reques
   }
 })
 
-test('J14 recoverable Backend primaryAction sends only incidentId and actionId', async () => {
+test('J14 one Retry refreshes then sends only Backend incidentId and actionId', async () => {
   const originalFetch = globalThis.fetch
   const originalWindow = globalThis.window
   const ownerIdentity = buildSessionIdentity()
@@ -656,9 +661,8 @@ test('J14 recoverable Backend primaryAction sends only incidentId and actionId',
     source: 'existing-workspace'
   } as unknown as ApplicationConfig
   const lifecycle = buildRecoveryLifecycle('incident-J14', 'action-J14')
-  const candidate = lifecycle.extensions.executionRecovery
-    ?.candidates[0] as ExecutionRecoveryCandidate
   let recoveryRequest: Record<string, unknown> | undefined
+  let lifecycleReads = 0
   let captured: ReturnType<typeof useWorkflowConversation> | undefined
 
   Object.defineProperty(globalThis, 'window', {
@@ -672,6 +676,7 @@ test('J14 recoverable Backend primaryAction sends only incidentId and actionId',
       forwardedProps?: { executionRecovery?: Record<string, unknown> }
     }
     if (String(input).endsWith('/application-lifecycle/run')) {
+      lifecycleReads += 1
       return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
     }
     recoveryRequest = request.forwardedProps?.executionRecovery
@@ -697,7 +702,8 @@ test('J14 recoverable Backend primaryAction sends only incidentId and actionId',
   try {
     renderToStaticMarkup(createElement(Probe))
     assert.ok(captured)
-    await captured.handleExecuteRecoveryAction(candidate)
+    await captured.retryCurrentRecovery()
+    assert.ok(lifecycleReads >= 1)
     assert.deepEqual(recoveryRequest, {
       action: 'execute',
       incidentId: 'incident-J14',

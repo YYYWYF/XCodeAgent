@@ -11,6 +11,9 @@ from langgraph.types import Command
 from app.graph.application_planning_interrupts import (
     planning_stage_entry,
     requirement_document_review,
+    requirements_review,
+    route_planning_stage_entry,
+    route_requirements_review,
 )
 from app.graph.state import ProjectState
 from app.protocols.application_planning_interrupt import (
@@ -147,10 +150,18 @@ def _planning_stage_entry_test_graph():
 
     builder = StateGraph(ProjectState)
     builder.add_node("planning_stage_entry", planning_stage_entry)
-    builder.add_node("technical_planning", technical_planning_fixture)
+    builder.add_node("technical_planning_begin", technical_planning_fixture)
     builder.add_node("design_intent_analysis", _design_intent_fixture)
     builder.add_edge(START, "planning_stage_entry")
-    builder.add_edge("technical_planning", END)
+    builder.add_conditional_edges(
+        "planning_stage_entry",
+        route_planning_stage_entry,
+        {
+            "technical_planning_begin": "technical_planning_begin",
+            "design_intent_analysis": "design_intent_analysis",
+        },
+    )
+    builder.add_edge("technical_planning_begin", END)
     return builder.compile(checkpointer=InMemorySaver())
 
 
@@ -187,6 +198,64 @@ def _resume_payload(
 
 class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
     """验证创建规划原生中断、恢复和过期提交保护。"""
+
+    async def test_requirement_answer_persists_review_route(self) -> None:
+        """需求回答恢复后必须把服务端后继写入真实 Graph State。"""
+
+        def completed_requirements(state: ProjectState) -> dict:
+            """记录需求节点已收到恢复后的交互。"""
+
+            return {"status": "completed"}
+
+        builder = StateGraph(ProjectState)
+        builder.add_node("requirements_review", requirements_review)
+        builder.add_node("requirements", completed_requirements)
+        builder.add_edge(START, "requirements_review")
+        builder.add_conditional_edges(
+            "requirements_review",
+            route_requirements_review,
+            {"requirements": "requirements"},
+        )
+        graph = builder.compile(checkpointer=InMemorySaver())
+        config = {"configurable": {"thread_id": "requirement-answer-route"}}
+        _ = [
+            chunk
+            async for chunk in graph.astream(
+                {
+                    "requirement_spec": {"confirmation_status": "pending_user_input"},
+                    "clarification": {
+                        "mode": "ask_user_question",
+                        "status": "requires_user_input",
+                        "questions": [{"id": "target_users"}],
+                    },
+                },
+                config=config,
+                stream_mode="updates",
+            )
+        ]
+        pending = (await graph.aget_state(config)).tasks[0].interrupts[0].value
+
+        _ = [
+            chunk
+            async for chunk in graph.astream(
+                Command(
+                    resume={
+                        "gate_id": pending["gateId"],
+                        "artifact": pending["artifact"],
+                        "artifact_revision": pending["artifactRevision"],
+                        "action": "answer",
+                        "answers": {"target_users": "内部员工"},
+                    }
+                ),
+                config=config,
+                stream_mode="updates",
+            )
+        ]
+
+        completed = await graph.aget_state(config)
+        self.assertEqual(completed.values["application_planning_review_route"], "requirements")
+        self.assertEqual(completed.values["status"], "completed")
+        self.assertFalse(completed.tasks)
 
     async def test_confirm_resumes_exact_pending_review(self) -> None:
         """正确 gateId 和产物摘要应恢复原任务并完成确认。"""

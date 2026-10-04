@@ -404,7 +404,8 @@ async function waitForCondition<T>(
   })
   const submitting = h.runtime.submitClarification(current.workflow, { __applicationPlanningAction: 'confirm' })
   assert.equal(h.current()?.transportState, 'reconciling')
-  await assert.rejects(h.runtime.retryCurrentFailure(), /请先重新同步状态/)
+  await h.runtime.retryCurrentFailure()
+  assert.match(h.current()?.recoveryActionError || '', /请先重新同步状态/)
   assert.equal(h.calls.length, 0)
   finishRecovery({
     workflow: confirmationWorkflow(),
@@ -587,6 +588,24 @@ async function waitForCondition<T>(
   await h.runtime.ensureStarted()
   assert.equal(h.calls.length, 0)
   assert.equal(h.current()?.workflow?.summary.clarification?.mode, 'technical_plan_confirmation')
+}
+
+// T2：冷启动读到可恢复 ActionPlan 时必须停下等用户点击，不能按旧 running lifecycle 自动重发。
+{
+  const initial = planningState()
+  initial.restoreArtifactsFromDisk = true
+  const h = harness(initial)
+  h.onRead(async () => ({
+    workflow: workflowWithoutInterrupt(),
+    lifecycle: authoritativeLifecycle(initial, { status: 'running' }),
+    recovery: recoveryProjection('thread-A', { classification: 'ready_to_continue' })
+  }))
+
+  await h.runtime.ensureStarted()
+
+  assert.equal(h.calls.length, 0)
+  assert.equal(h.current()?.recovery?.recoveryActionPlan?.status, 'recoverable')
+  assert.equal(h.current()?.transportState, 'idle')
 }
 
 // U：只有 collecting_requirement/pending 且 checkpoint 缺失时允许首次启动 Graph。
@@ -813,9 +832,10 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.transportState, 'idle')
 }
 
-// AA：Continue 先读取 Backend 分类，再用 transient Recovery session 只提交 sourceRunId。
+// AA：断连时一次 Retry 先恢复连接并读取权威分类，再提交 Backend action identity。
 {
   const current = planningState()
+  current.connection = { ...current.connection, status: 'unavailable', lastError: 'Failed to fetch' }
   current.workflow = workflowWithoutInterrupt()
   current.error = '计划执行中断'
   let recoveryOptions: SendWorkflowMessageOptions | undefined
@@ -900,6 +920,59 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.workflow?.runId, 'run-B')
 }
 
+// AA1：恢复端点拒绝请求后，即使权威对账成功，当前卡片也必须保留动作错误。
+{
+  const current = planningState()
+  const h = harness(current, {
+    createRecoverySession: () => ({
+      sendMessage: async () => { throw new Error('HTTP 404: Not Found') }
+    })
+  })
+  h.onRead(async () => ({
+    workflow: workflowWithoutInterrupt(),
+    lifecycle: authoritativeLifecycle(current),
+    recovery: recoveryProjection('thread-A', {
+      classification: 'ready_to_continue',
+      reasonCode: 'INTERRUPTED_CONTINUE_READY',
+      message: '已验证中断执行的最新 checkpoint，可以继续执行。'
+    })
+  }))
+
+  await h.runtime.retryCurrentFailure()
+
+  assert.match(h.current()?.recoveryActionError || '', /HTTP 404/)
+  assert.equal(h.current()?.connection.status, 'healthy')
+  assert.equal(h.current()?.recovery?.recoveryActionPlan?.status, 'recoverable')
+}
+
+// AA2：Runtime 重建后沿用较高连接代次时，一次点击仍须完成对账并提交恢复动作。
+{
+  const initial = planningState()
+  initial.connection = { ...initial.connection, requestGeneration: 10 }
+  let recoveryCalls = 0
+  const h = harness(initial, {
+    createRecoverySession: () => ({
+      sendMessage: async () => {
+        recoveryCalls += 1
+        return result()
+      }
+    })
+  })
+  h.onRead(async () => ({
+    workflow: workflowWithoutInterrupt(),
+    lifecycle: authoritativeLifecycle(initial),
+    recovery: recoveryProjection('thread-A', { classification: 'ready_to_continue' })
+  }))
+
+  await h.runtime.retryCurrentFailure()
+
+  assert.equal(recoveryCalls, 1)
+  assert.equal(h.current()?.transportState, 'idle')
+  assert.equal(h.current()?.connection.status, 'healthy')
+  assert.ok(h.current()!.connection.requestGeneration > 10)
+  assert.equal(h.current()?.recoveryActionError, undefined)
+}
+
 // AB：回答已被 checkpoint 消费时 transport 失败不回滚、不重发原答案。
 {
   const current = planningState()
@@ -932,7 +1005,7 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.recovery?.inputCommitted, true)
 }
 
-// AC：needs_attention 缺少 Backend action identity 时保持 fail closed，不创建 Recovery 请求。
+// AC：needs_attention 保留 Retry Entry，只发送当前 source hint 供 Backend 重新判断。
 {
   const current = planningState()
   let recoveryOptions: SendWorkflowMessageOptions | undefined
@@ -970,7 +1043,10 @@ async function waitForCondition<T>(
 
   await h.runtime.retryCurrentFailure()
 
-  assert.equal(recoveryOptions, undefined)
+  assert.deepEqual(recoveryOptions?.executionRecovery, {
+    action: 'retry_current_failure',
+    sourceRunId: 'run-needs-attention'
+  })
 }
 
 console.log('application planning runtime tests passed')

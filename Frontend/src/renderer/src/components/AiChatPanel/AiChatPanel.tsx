@@ -39,7 +39,7 @@ import type {
   WorkflowTemplatePreparation,
   WorkspaceCodeChangeSet
 } from '../../typings'
-import { CLASS_PREFIX, composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../utils'
+import { composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../utils'
 import { readWorkspaceFile } from '../../service/workspaceTools'
 import type {
   ChatSessionDevelopmentContinuation,
@@ -59,6 +59,7 @@ import type {
 } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { ApplicationPlanningSubmissionNotCommittedError } from '../../service/applicationPlanningRuntime'
+import { isWorkflowCompletionStatusMessage } from '../../service/processStepHistory'
 import { formatError } from '../Welcome/utils'
 import {
   planningWorkflowActivity,
@@ -95,6 +96,7 @@ import StageOutputPanel from './components/StageOutputPanel'
 import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
+import AgentErrorCard from '../AgentErrorCard'
 import MilestoneCommitReminder from './components/MilestoneCommitReminder'
 import FieldMappingWorkspace from './components/FieldMapping'
 import CommitBeforeSendModal from './components/MilestoneCommitReminder/CommitBeforeSendModal'
@@ -175,6 +177,10 @@ import {
 import { executionRecoveryForSession } from './executionRecoveryState'
 import ConnectionStatusBanner from '../ConnectionStatusBanner'
 import RecoverySurface from './recoverySurface'
+import {
+  applicationPlanningRecoveryIncident,
+  workbenchRecoveryIncident
+} from '../../service/recoveryIncident'
 import { runPlanningStageEntryTransaction } from './planningStageEntry'
 import {
   endpointDetailTargetKey,
@@ -2351,7 +2357,7 @@ export default function AiChatPanel({
     workspaceBusy,
     recoveryError,
     recoveryRunning,
-    refreshConnection
+    retryCurrentRecovery
   } = useWorkflowConversation({
     acquireSessionExecution,
     activeSession,
@@ -2652,8 +2658,13 @@ export default function AiChatPanel({
   // 新一轮（用户提交确认后，或 runId 变化）新增消息卡片，保留历史对话。
   const injectPlanningChunk = (
     sessionKey: string,
-    chunk: { content?: string; workflow?: WorkflowRunPayload }
+    incomingChunk: { content?: string; workflow?: WorkflowRunPayload }
   ): void => {
+    // 计划确认后的节点计数只是平台状态，不作为规划 Agent 的新一轮回复落盘。
+    const chunk =
+      isTechnicalPlanningPhase && isWorkflowCompletionStatusMessage(incomingChunk.content)
+        ? { ...incomingChunk, content: undefined }
+        : incomingChunk
     if (
       shouldSuppressConfirmedTechnicalPlanTransitionChunk(
         chunk.workflow,
@@ -3672,6 +3683,17 @@ export default function AiChatPanel({
   )
   const activeConnectionState =
     isApplicationPlanningPhase && planningState ? planningState.connection : connectionState
+  const currentRecoveryIncident = isApplicationPlanningPhase
+    ? applicationPlanningRecoveryIncident(planningState)
+    : workbenchRecoveryIncident(activeExecutionRecovery)
+  const globalFallbackError =
+    !templateGenerationRecoverable && !templateReconcileRetryable &&
+    !workflowCodeReviewRetry(activeWorkflow)
+      ? (isApplicationPlanningPhase ? planningState?.syncError || planningError : error)
+      : undefined
+  const showGlobalFallback =
+    activeConnectionState.status !== 'healthy' ||
+    Boolean(currentRecoveryIncident || globalFallbackError)
   const acceptanceAwaiting = shouldShowAcceptanceDecisionDock({
     activePhase: activeWorkbenchPhase,
     planExecutionMode: displayedPlanExecutionMode,
@@ -4254,11 +4276,13 @@ export default function AiChatPanel({
               (planningAnswers.revision_draft_interaction as { action?: unknown }).action || ''
             )
           : ''
+      const technicalPlanConfirmed =
+        planningAnswers.__applicationPlanningAction === 'confirm' &&
+        planningWorkflowPhase(workflow) === 'technical_planning'
       const revisionTechnicalPlanConfirmed =
         Boolean(activeFormalRevision) &&
         (revisionDraftAction === 'confirm' ||
-          (planningWorkflowPhase(workflow) === 'technical_planning' &&
-            planningAnswers.__applicationPlanningAction === 'confirm'))
+          technicalPlanConfirmed)
       // UI 设计稿的单页动作（换一换/选模板/调整）是同一轮内的更新，不新增消息卡片，
       // 只更新现有卡片；跳过与确认全部等推进到下一阶段的操作才新增卡片并留痕。
       const isUiDesignPageAction =
@@ -4438,13 +4462,13 @@ export default function AiChatPanel({
           }
           return
         } else {
-          // 其它确认/放弃/填表操作继续保留用户消息与即时加载占位。
+          // 确认/放弃/填表保留用户消息；TechnicalPlan 确认不预置没有模型回复的 Agent 加载消息。
           // TechnicalPlan 二次修改确认后继续停留在当前规划会话；只有服务端
           // continuation 被开发 Workflow 成功接管后，才激活 DEVELOPMENT StageSession。
           suppressRevisionTechnicalPlanTransitionRef.current = revisionTechnicalPlanConfirmed
           planningSubmission = appendPlanningUserMessage(
             planningAnswers,
-            !revisionTechnicalPlanConfirmed
+            !revisionTechnicalPlanConfirmed && !technicalPlanConfirmed
           )
         }
       }
@@ -4579,14 +4603,6 @@ export default function AiChatPanel({
     await handleProductStageConversation(draft, originalPlanningThreadId)
   }
 
-  /** 滚动到现有 Workflow 进度区域，不改变消息列表和中央内容结构。 */
-  const handleViewPlan = (): void => {
-    document.querySelector(`.${CLASS_PREFIX}-process-steps`)?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center'
-    })
-  }
-
   /** 用户点击"进入开发阶段"：放开 planning 锁并进入带快捷任务的空白对话。 */
   const handleEnterDevelopment = useCallback((): void => {
     markApplicationEnteredDevelopment(application.id, iterationScopeId, iterationToken)
@@ -4703,7 +4719,7 @@ export default function AiChatPanel({
               />
             </div>
           ) : (
-            <div className={cx('ai-chat-main')}>
+            <div className={cx('ai-chat-main', showGlobalFallback && 'has-global-fallback')}>
               {activeDetailTarget.type !== 'none' ? (
                 <PageContextHeader
                   description={activeHeaderTarget.description}
@@ -4768,6 +4784,7 @@ export default function AiChatPanel({
                   ) : undefined
                 }
                 error={planningError || error}
+                nodeErrorRetry={Boolean(workflowCodeReviewRetry(activeWorkflow))}
                 key={activeSession?.key || draftKey}
                 loading={loading || otherSessionExecutionLocked}
                 messages={messages}
@@ -4779,11 +4796,9 @@ export default function AiChatPanel({
                 onOpenRevisionSession={handleOpenRevisionSession}
                 onRevertCodeChanges={requestCodeChangeRevert}
                 onRetryError={
-                  planningError
-                    ? onRetryPlanning
-                    : workflowCodeReviewRetry(activeWorkflow)
-                      ? () => void handleRetryCodeReview()
-                      : undefined
+                  workflowCodeReviewRetry(activeWorkflow)
+                    ? () => void handleRetryCodeReview()
+                    : undefined
                 }
                 onRetryTemplateGeneration={
                   templateGenerationRecoverable
@@ -4830,28 +4845,6 @@ export default function AiChatPanel({
                 planningState={planningState}
               />
 
-              <ConnectionStatusBanner
-                connection={activeConnectionState}
-                onReconnect={
-                  isApplicationPlanningPhase
-                    ? onRetryPlanning
-                    : () => { void refreshConnection() }
-                }
-              />
-              <RecoverySurface
-                actionDisabled={
-                  activeConnectionState.status !== 'healthy' ||
-                  (isApplicationPlanningPhase && planningMutationBlocked(planningState))
-                }
-                activeExecutionRecovery={activeExecutionRecovery}
-                isApplicationPlanningPhase={isApplicationPlanningPhase}
-                onExecuteRecoveryAction={(recovery) => { void handleExecuteRecoveryAction(recovery) }}
-                onRetryPlanning={onRetryPlanning}
-                planningState={planningState}
-                recoveryError={recoveryError}
-                recoveryRunning={recoveryRunning}
-              />
-
               {milestoneCommitReminderProps && (
                 <MilestoneCommitReminder
                   {...milestoneCommitReminderProps}
@@ -4874,6 +4867,47 @@ export default function AiChatPanel({
                 disabled={loading || workspaceBusy || designArtifactsSettling}
                 title="保存当前改动为版本"
               />
+
+              {showGlobalFallback ? (
+                <div className={cx('ai-chat-global-fallback')}>
+                  {activeConnectionState.status !== 'healthy' ? (
+                    <ConnectionStatusBanner
+                      connection={activeConnectionState}
+                      onReconnect={isApplicationPlanningPhase
+                        ? onRetryPlanning
+                        : () => { void retryCurrentRecovery() }}
+                    />
+                  ) : currentRecoveryIncident ? (
+                    <RecoverySurface
+                      actionDisabled={
+                        isApplicationPlanningPhase &&
+                        (planningState?.transportState === 'running' ||
+                          planningState?.transportState === 'reconciling')
+                      }
+                      activeExecutionRecovery={activeExecutionRecovery}
+                      isApplicationPlanningPhase={isApplicationPlanningPhase}
+                      onExecuteRecoveryAction={(recovery) => { void handleExecuteRecoveryAction(recovery) }}
+                      onRetryCurrentRecovery={() => { void retryCurrentRecovery() }}
+                      onRetryPlanning={onRetryPlanning}
+                      planningState={planningState}
+                      recoveryError={
+                        isApplicationPlanningPhase
+                          ? planningState?.recoveryActionError
+                          : recoveryError
+                      }
+                      recoveryRunning={recoveryRunning}
+                    />
+                  ) : globalFallbackError ? (
+                    <AgentErrorCard
+                      error={recoveryError || globalFallbackError}
+                      onRetry={isApplicationPlanningPhase
+                        ? onRetryPlanning
+                        : () => { void retryCurrentRecovery() }}
+                      retrying={recoveryRunning}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
 
               {showSessionExecutionLock ? (
                 <SessionExecutionLockDock
@@ -4911,7 +4945,7 @@ export default function AiChatPanel({
                   activeWorkflow={activeWorkflow}
                   copy={copy}
                   initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
-                  loading={currentGenerationLoading}
+                  loading={loading}
                   onSend={
                     planExecutionShowsDebugResume(displayedPlanExecutionMode) && activeWorkflow
                       ? handleResumePlan
@@ -4937,7 +4971,6 @@ export default function AiChatPanel({
                           ? handleStopCurrentGeneration
                           : () => void handleStopPlan(scopedExecution?.runId)
                       }
-                      onViewPlan={handleViewPlan}
                     />
                   }
                   stopping={stopping}

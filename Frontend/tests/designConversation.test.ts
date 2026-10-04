@@ -1630,6 +1630,29 @@ assert.equal(
   planningWorkflowNeedsChatLoading(technicalPlanningWithStaleEntry, true, false, false, '', true),
   true
 )
+// 进入计划阶段后的事务子节点首帧可能尚未携带 lifecycle，仍须显示现有技术规划进度卡。
+const technicalPlanningGenerateFirstFrame = {
+  ...summaryOnlyQuestionsWorkflow,
+  summary: { status: 'running', phase: 'technical_planning_generate' },
+  events: [
+    {
+      type: 'workflow.node.started',
+      nodeName: 'technical_planning_generate',
+      status: 'running'
+    }
+  ],
+  state: {},
+  result: {}
+} as WorkflowRunPayload
+assert.equal(planningWorkflowPhase(technicalPlanningGenerateFirstFrame), 'technical_planning')
+assert.equal(planningWorkflowActivity(technicalPlanningGenerateFirstFrame)?.title, '正在生成技术规划')
+assert.equal(
+  planningWorkflowNeedsChatLoading(technicalPlanningGenerateFirstFrame, true, false, false, ''),
+  true
+)
+// 阶段交接已有末条空助手消息但 workflow 尚未投递时，仍应沿用原加载卡。
+assert.equal(planningWorkflowNeedsChatLoading(undefined, true, false, false, '', true), true)
+assert.equal(planningWorkflowNeedsChatLoading(undefined, true, false, false, '', false), false)
 
 const latePlanningEntryFrame = {
   ...technicalPlanningWithStaleEntry,

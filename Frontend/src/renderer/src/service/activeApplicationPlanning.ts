@@ -33,6 +33,8 @@ export type ApplicationPlanningCurrentState = {
   error?: string
   /** 当前规划状态只读同步失败时的界面提示。 */
   syncError?: string
+  /** 当前一次显式恢复动作的失败原因，不覆盖后端签发的 Recovery ActionPlan。 */
+  recoveryActionError?: string
   workflow?: WorkflowRunPayload
   /** Backend 根据 Durable Execution、checkpoint 与 Native Interrupt 生成的唯一恢复解释。 */
   recovery?: ApplicationPlanningRecoveryProjection
@@ -41,6 +43,8 @@ export type ApplicationPlanningCurrentState = {
 export type ApplicationPlanningCurrentEvent =
   | { type: 'run_started'; applicationId: string; threadId: string }
   | { type: 'run_settled'; applicationId: string; threadId: string }
+  | { type: 'recovery_action_started'; applicationId: string; threadId: string }
+  | { type: 'recovery_action_failed'; applicationId: string; threadId: string; error: string }
   | {
       type: 'workflow_received'
       applicationId: string
@@ -324,6 +328,12 @@ export function reduceApplicationPlanningCurrentState(
   if (event.type === 'run_settled') {
     return { ...current, transportState: 'idle' }
   }
+  if (event.type === 'recovery_action_started') {
+    return { ...current, recoveryActionError: undefined }
+  }
+  if (event.type === 'recovery_action_failed') {
+    return { ...current, recoveryActionError: event.error }
+  }
   if (event.type === 'clear_error') {
     return current.error ? { ...current, error: undefined } : current
   }
@@ -397,6 +407,7 @@ export function reduceApplicationPlanningCurrentState(
       lifecycle,
       recovery: event.recovery,
       error,
+      recoveryActionError: undefined,
       connection: completeConnectionRequest(current.connection, event.requestGeneration),
       transportState: 'idle'
     }
@@ -439,7 +450,8 @@ export function reduceApplicationPlanningCurrentState(
 export async function loadActiveApplicationPlannings(): Promise<ApplicationPlanningCurrentState[]> {
   const recoveredActive: ApplicationPlanningCurrentState[] = []
   const applications = (await loadStoredApplications())
-    .filter((application) => application.source === 'new' && application.workspaceRoot)
+    // 重启后首页索引会把已创建应用重新组装为 existing-workspace，不能据此丢掉未完成规划。
+    .filter((application) => application.workspaceRoot)
     .sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
 
   for (const application of applications) {

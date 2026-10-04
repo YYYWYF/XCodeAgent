@@ -32,10 +32,11 @@ export default function RecoveryIncidentCard({
 }: RecoveryIncidentCardProps): ReactElement {
   const action = incident.kind === 'recoverable' ? incident.action : undefined
   const hasAction = incident.kind === 'recoverable' && Boolean(action)
+  const canRetry = incident.kind === 'needs_attention'
 
   /** 遵循 Backend requiresConfirmation，确认策略不由前端猜测。 */
   const handleAction = (): void => {
-    if (!onAction || retrying || disabled || !hasAction) return
+    if (!onAction || retrying || disabled || (!hasAction && !canRetry)) return
     if (action?.requiresConfirmation) {
       Modal.confirm({
         title: '确定执行此恢复操作？',
@@ -100,7 +101,7 @@ export default function RecoveryIncidentCard({
           ) : null}
         </>
       </div>
-      {hasAction && onAction ? (
+      {(hasAction || canRetry) && onAction ? (
         <Button
           className={cx('application-planning-recovery-incident-action')}
           disabled={retrying || disabled}
@@ -109,7 +110,7 @@ export default function RecoveryIncidentCard({
           onClick={handleAction}
           type="primary"
         >
-          {action?.label}
+          {action?.label || '重试'}
         </Button>
       ) : null}
     </section>
