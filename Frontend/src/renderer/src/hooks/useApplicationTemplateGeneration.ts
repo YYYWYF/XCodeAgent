@@ -134,12 +134,7 @@ export function useApplicationTemplateGeneration({
           return true
         } catch (reason) {
           console.error('[应用模板初始化失败]', reason)
-          dispatchPlanningEvent({
-            type: 'run_failed',
-            applicationId,
-            threadId: planning.threadId,
-            error: reason instanceof Error ? reason.message : String(reason)
-          })
+          let connectionError: string | undefined
           try {
             const lifecycle = await getApplicationLifecycle(planning.application)
             dispatchPlanningEvent({
@@ -151,7 +146,12 @@ export function useApplicationTemplateGeneration({
             onApplicationLifecycleChange?.(lifecycle)
           } catch (lifecycleError) {
             console.warn('[模板初始化失败后读取生命周期失败]', lifecycleError)
+            connectionError = lifecycleError instanceof Error ? lifecycleError.message : 'Backend 暂时不可用，无法同步模板状态。'
           }
+          dispatchPlanningEvent({
+            type: 'template_generation_failed', applicationId, threadId: planning.threadId,
+            error: reason instanceof Error ? reason.message : String(reason), connectionError
+          })
           message.error(reason instanceof Error ? reason.message : String(reason))
           return false
         }
@@ -202,9 +202,24 @@ export function useApplicationTemplateGeneration({
 
   /** 模板失败后只执行 Bootstrap retry，保持当前 Planning Runtime 与线程不变。 */
   const retryApplicationTemplateFiles = useCallback(
-    (planning: ApplicationPlanningCurrentState): Promise<boolean> =>
-      runApplicationTemplateFiles(planning, true),
-    [runApplicationTemplateFiles]
+    async (planning: ApplicationPlanningCurrentState): Promise<boolean> => {
+      // 先读取后端现场并校准孤儿 Bootstrap；真实运行、成功或未知状态不能重发生成动作。
+      let lifecycle: ApplicationLifecycle
+      try {
+        lifecycle = await getApplicationLifecycle(planning.application)
+      } catch (reason) {
+        const error = reason instanceof Error ? reason.message : '无法同步模板初始化状态。'
+        dispatchPlanningEvent({ type: 'template_generation_failed', applicationId: planning.application.id,
+          threadId: planning.threadId, error, connectionError: error })
+        return false
+      }
+      dispatchPlanningEvent({ type: 'lifecycle_received', applicationId: planning.application.id,
+        threadId: planning.threadId, lifecycle })
+      onApplicationLifecycleChange?.(lifecycle)
+      if (lifecycle.initialization.stage !== 'application_template_generation_failed') return false
+      return runApplicationTemplateFiles({ ...planning, lifecycle }, true)
+    },
+    [runApplicationTemplateFiles, dispatchPlanningEvent, onApplicationLifecycleChange]
   )
 
   return { generateApplicationTemplateFiles, generatingAppIds, retryApplicationTemplateFiles }

@@ -10,6 +10,7 @@ import type {
 } from '../typings'
 import type { BindingDraft, BindingSelection } from '../typings/endpointDesign'
 import { createAgUiHttpAgent } from './authentication'
+import { AgUiBusinessError } from './agUiBusinessError'
 
 /** 返回 Endpoint 设计独立 AG-UI 路由地址。 */
 function endpointDesignsUrl(): string {
@@ -122,7 +123,7 @@ async function runEndpointDesignAction(
   }, subscriber)
   payload = readState(result.result) ?? readPayload((result.result as { endpointDesigns?: unknown })?.endpointDesigns) ?? payload
   if (!payload) throw new Error('Endpoint 设计接口没有返回有效状态。')
-  if (payload.status === 'failed') throw new Error(payload.error?.message || 'Endpoint 设计接口操作失败。')
+  if (payload.status === 'failed') throw new AgUiBusinessError(payload.error?.message || 'Endpoint 设计接口操作失败。')
   return payload
 }
 

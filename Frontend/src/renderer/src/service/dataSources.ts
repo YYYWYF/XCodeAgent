@@ -8,6 +8,7 @@ import type {
   ExternalApiDataSourceInput
 } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
+import { AgUiBusinessError } from './agUiBusinessError'
 
 type DataSourceAction =
   | 'list'
@@ -143,7 +144,7 @@ async function runDataSourceAction(
   dataSources = readDataSourcesFromResult(result.result) ?? dataSources
   if (!dataSources) throw new Error('数据源接口没有返回有效的 AG-UI 状态。')
   if (dataSources.status === 'failed') {
-    throw new Error(dataSources.error?.message || '数据源操作失败。')
+    throw new AgUiBusinessError(dataSources.error?.message || '数据源操作失败。')
   }
   return dataSources
 }

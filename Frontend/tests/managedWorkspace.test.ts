@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { readManagedWorkspaceApplication } from '../src/main/managedWorkspace'
+import { readManagedWorkspaceApplication, resolveApplicationTemplateBranch } from '../src/main/managedWorkspace'
 
 /** 创建隔离的临时工作区并在测试结束后清理。 */
 async function withTemporaryWorkspace(
@@ -42,6 +42,27 @@ test('允许添加规范的 DevAgent Studio 本地项目', async () => {
   })
 })
 
+/** 验证模板分支只由已持久化的权限开关确定，调用方不能自行选择。 */
+test('根据已持久化权限开关确定唯一模板分支', () => {
+  const base = {
+    schemaVersion: 6,
+    configRevision: 1,
+    appName: '模板分支项目',
+    auth: { enable: false },
+    authorization: { enabled: false, initialAdministratorSubjects: [] }
+  }
+
+  assert.equal(resolveApplicationTemplateBranch(base), 'main')
+  assert.equal(
+    resolveApplicationTemplateBranch({
+      ...base,
+      auth: { enable: true },
+      authorization: { enabled: true, initialAdministratorSubjects: ['ops@example.com'] }
+    }),
+    'auth'
+  )
+})
+
 /** 验证旧结构因不是当前 schemaVersion 而不能通过。 */
 test('拒绝缺少当前权限字段的旧结构', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
@@ -57,8 +78,8 @@ test('拒绝缺少当前权限字段的旧结构', async () => {
   })
 })
 
-/** 验证非当前 schemaVersion 即使字段看似完整也不能作为当前工作区读取。 */
-test('拒绝非当前 schemaVersion', async () => {
+/** 验证旧 schemaVersion 即使权限字段完整也必须拒绝。 */
+test('旧 schemaVersion 不得进入当前工作区', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
     const agentDirectory = path.join(workspaceRoot, '.devagentstudio')
     await fs.mkdir(agentDirectory)

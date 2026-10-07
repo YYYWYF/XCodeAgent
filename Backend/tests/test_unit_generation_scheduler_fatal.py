@@ -166,6 +166,7 @@ class UnitGenerationSchedulerFatalTests(unittest.IsolatedAsyncioTestCase):
 
         snapshot = self.controller.snapshot
         self.assertIs(caught.exception, fatal)
+        self.assertEqual(snapshot.failure.code, fatal.failure.code)
         self.assertTrue(late_result_returned.is_set())
         self.assertEqual(snapshot.status, "failed")
         self.assertEqual(snapshot.candidates, {})

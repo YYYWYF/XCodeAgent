@@ -1,0 +1,201 @@
+import {
+  LoadingOutlined,
+  RedoOutlined,
+  WarningOutlined
+} from '@ant-design/icons'
+import { Button, Modal, Typography } from 'antd'
+import type { ReactElement } from 'react'
+import type { RecoveryFailureDiagnostic } from '../../service/recoveryActionPlan'
+import type { RecoveryIncidentPresentation } from '../../service/recoveryIncident'
+import { recoveryFailureMessage } from '../../service/recoveryFailureMessage'
+import { cx } from '../../utils'
+import '../ApplicationPlanningRecoveryIncidentCard/ApplicationPlanningRecoveryIncidentCard.less'
+
+const { Text } = Typography
+
+export type RecoveryIncidentCardProps = {
+  incident: RecoveryIncidentPresentation
+  onAction?: () => void
+  retrying?: boolean
+  disabled?: boolean
+  error?: string
+  testId?: string
+}
+
+/** 渲染 Planning 与 Workbench 共用的当前 Recovery Incident，动作仍由 Backend ActionPlan 决定。 */
+export default function RecoveryIncidentCard({
+  incident,
+  onAction,
+  retrying = false,
+  disabled = false,
+  error,
+  testId = 'recovery-incident'
+}: RecoveryIncidentCardProps): ReactElement {
+  const action = incident.kind === 'recoverable' ? incident.action : undefined
+  const hasAction = incident.kind === 'recoverable' && Boolean(action)
+  const canRetry = incident.kind === 'needs_attention'
+
+  /** 遵循 Backend requiresConfirmation，确认策略不由前端猜测。 */
+  const handleAction = (): void => {
+    if (!onAction || retrying || disabled || (!hasAction && !canRetry)) return
+    if (action?.requiresConfirmation) {
+      Modal.confirm({
+        title: '确定执行此恢复操作？',
+        content: action.description,
+        cancelText: '取消',
+        okText: '继续',
+        onOk: onAction
+      })
+      return
+    }
+    onAction()
+  }
+
+  const icon = retrying ? <LoadingOutlined spin /> : <WarningOutlined />
+
+  return (
+    <section
+      aria-label={incident.title}
+      aria-live="polite"
+      className={cx('application-planning-recovery-incident')}
+      data-testid={testId}
+      role="status"
+    >
+      <span aria-hidden="true" className={cx('application-planning-recovery-incident-icon')}>
+        {icon}
+      </span>
+      <div className={cx('application-planning-recovery-incident-copy')}>
+        <Text className={cx('application-planning-recovery-incident-title')} strong>
+          {incident.title}
+        </Text>
+        <>
+          <FailureSummary
+            diagnostic={incident.failureDiagnostic}
+            message={incident.failureMessage}
+          />
+          <Text
+            className={cx('application-planning-recovery-incident-recovery-message')}
+            type="secondary"
+          >
+            {incident.recoveryMessage}
+          </Text>
+          {error ? (
+            <Text className={cx('application-planning-recovery-incident-message')} type="danger">
+              {error}
+            </Text>
+          ) : null}
+          {incident.failureDiagnostic ? (
+            <DiagnosticDetails
+              diagnostic={incident.failureDiagnostic}
+            />
+          ) : null}
+        </>
+      </div>
+      {(hasAction || canRetry) && onAction ? (
+        <Button
+          className={cx('application-planning-recovery-incident-action')}
+          disabled={retrying || disabled}
+          icon={retrying ? <LoadingOutlined spin /> : <RedoOutlined />}
+          loading={retrying}
+          onClick={handleAction}
+          type="primary"
+        >
+          {action?.label || '重试'}
+        </Button>
+      ) : null}
+    </section>
+  )
+}
+
+/** 在 Incident 默认区域直接展示失败诊断摘要，确保用户无需展开详情即可判断问题。 */
+function FailureSummary({
+  diagnostic,
+  message
+}: {
+  diagnostic?: RecoveryFailureDiagnostic | null
+  message?: string
+}): ReactElement {
+  const httpStatus = diagnostic?.httpStatus
+  const model = diagnostic?.model?.trim()
+  const diagnosticMessage = recoveryFailureMessage(diagnostic) || diagnostic?.message?.trim() || message?.trim()
+  return (
+    <div className={cx('application-planning-recovery-incident-failure')}>
+      {httpStatus !== null && httpStatus !== undefined ? (
+        <div className={cx('application-planning-recovery-incident-failure-fact')}>
+          <Text className={cx('application-planning-recovery-incident-failure-label')}>
+            HTTP 状态码
+          </Text>
+          <Text className={cx('application-planning-recovery-incident-headline')} strong>
+            {httpStatus}
+          </Text>
+        </div>
+      ) : null}
+      {model ? (
+        <div className={cx('application-planning-recovery-incident-failure-fact')}>
+          <Text className={cx('application-planning-recovery-incident-failure-label')}>
+            模型
+          </Text>
+          <Text className={cx('application-planning-recovery-incident-headline')} strong>
+            {model}
+          </Text>
+        </div>
+      ) : null}
+      {diagnosticMessage ? (
+        <div className={cx('application-planning-recovery-incident-failure-fact')}>
+          <Text className={cx('application-planning-recovery-incident-failure-label')}>
+            错误说明
+          </Text>
+          <Text className={cx('application-planning-recovery-incident-message')}>
+            {diagnosticMessage}
+          </Text>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** 展示 Backend 允许公开的结构化详情，隐藏时不影响失败摘要和恢复动作。 */
+function DiagnosticDetails({
+  diagnostic
+}: {
+  diagnostic?: RecoveryFailureDiagnostic | null
+}): ReactElement {
+  return (
+    <details className={cx('application-planning-recovery-incident-details')}>
+      <summary>错误详情</summary>
+      <dl>
+        {diagnostic ? (
+          <>
+            <DiagnosticRow label="错误代码" value={diagnostic.code} />
+            <DiagnosticRow label="HTTP Status" value={diagnostic.httpStatus} />
+            <DiagnosticRow label="Provider Error Code" value={diagnostic.providerErrorCode} />
+            <DiagnosticRow label="来源" value={diagnostic.origin} />
+            <DiagnosticRow label="Provider" value={diagnostic.provider} />
+            <DiagnosticRow label="Model" value={diagnostic.model} />
+            <DiagnosticRow label="失败阶段" value={diagnostic.stage} />
+            <DiagnosticRow label="失败步骤 / Operation" value={diagnostic.operation} />
+            <DiagnosticRow label="Dependency" value={diagnostic.dependency} />
+            <DiagnosticRow label="Source Run ID" value={diagnostic.sourceRunId} />
+            <DiagnosticRow label="错误信息" value={diagnostic.message} />
+          </>
+        ) : null}
+      </dl>
+    </details>
+  )
+}
+
+/** 在详情表中统一显示可选字段，避免空白值造成难以阅读的表格行。 */
+function DiagnosticRow({
+  label,
+  value
+}: {
+  label: string
+  value?: number | string | null
+}): ReactElement {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd>{value === null || value === undefined || value === '' ? '—' : String(value)}</dd>
+    </>
+  )
+}

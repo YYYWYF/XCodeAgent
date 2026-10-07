@@ -5,6 +5,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
 
 from app.config import Settings
+from app.agents.model_request_headers import OpenCodeGoChatAnthropic, OpenCodeGoChatOpenAI
 from app.services.model_output_logger import ModelOutputLogHandler
 
 
@@ -77,7 +78,12 @@ def create_chat_model(
             anthropic_extra["thinking"] = extra_model_kwargs["thinking"]
         headers = {"anthropic-version": settings.anthropic_api_version}
         headers.update(settings.model_custom_headers)
-        return ChatAnthropic(
+        model_class = (
+            OpenCodeGoChatAnthropic
+            if settings.model_opencode_go_headers_enabled
+            else ChatAnthropic
+        )
+        return model_class(
             model=settings.model_api_name,
             anthropic_api_url=settings.model_base_url,
             anthropic_api_key=settings.model_api_key,
@@ -101,7 +107,12 @@ def create_chat_model(
         )
 
     # OpenAI 兼容协议：走 /v1/chat/completions
-    return ChatOpenAI(
+    model_class = (
+        OpenCodeGoChatOpenAI
+        if settings.model_opencode_go_headers_enabled
+        else ChatOpenAI
+    )
+    return model_class(
         model=settings.model_api_name,
         base_url=settings.model_base_url,
         api_key=settings.model_api_key,

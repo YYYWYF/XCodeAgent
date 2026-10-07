@@ -2,6 +2,7 @@ import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
+import { parseRecoveryFailureDiagnostic } from './recoveryActionPlan'
 import type {
   ApplicationConfig,
   ApplicationPlanningInteraction,
@@ -54,6 +55,9 @@ export type SendWorkflowMessageOptions = {
   workflowDebug?: WorkflowDebugOptions
   resumeState?: WorkflowRunPayload
   workflowScope?: string
+  executionRecovery?:
+    | { action: 'execute'; incidentId: string; actionId: string }
+    | { action: 'retry_current_failure'; sourceRunId: string }
   onContent?: (content: string) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
@@ -130,6 +134,7 @@ export function buildWorkflowForwardedProps(
       (options.workflowDebug?.enabled ? options.workflowDebug.buildExecutionScope : undefined),
     resumeState: options.resumeState,
     workflowScope: options.workflowScope,
+    executionRecovery: options.executionRecovery,
     planControlAction: options.planControlAction,
     planControlRunId: options.planControlRunId,
     planningRunId: options.planningRunId,
@@ -550,6 +555,11 @@ export function getConversationUrl(): string {
   return `${getAgentBaseUrl()}/conversation/run`
 }
 
+/** 返回 Planning Current Incident 使用的 Backend-authoritative action 地址。 */
+export function getExecutionRecoveryActionUrl(): string {
+  return `${getAgentBaseUrl()}/execution-recovery/execute`
+}
+
 export class AgUiChatSession {
   readonly threadId: string
 
@@ -654,14 +664,14 @@ export class AgUiChatSession {
           }
         }
         if (event.name === 'workflow-run') {
-          workflow = readWorkflowPayload(event.value) ?? workflow
+          workflow = reconcileWorkflowFailurePayload(workflow, readWorkflowPayload(event.value))
           if (workflow) {
             emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
             options.onWorkflow?.(workflow)
           }
         }
         if (event.name === 'conversation') {
-          workflow = readWorkflowPayload(event.value) ?? workflow
+          workflow = reconcileWorkflowFailurePayload(workflow, readWorkflowPayload(event.value))
           const step = readProcessStep(objectValue(event.value).processStep)
           if (step) {
             processSteps = mergeProcessStep(processSteps, step)
@@ -672,13 +682,24 @@ export class AgUiChatSession {
         if (event.name === 'llm.token') {
           // 规划模型 token 是内部 JSON 生成过程，只由 Workflow 事件驱动进度 UI，禁止写入聊天正文。
           const node = (event.value as { node?: string } | null)?.node || ''
-          if (['product_planning', 'project_planning', 'technical_planning'].includes(node)) {
+          if (
+            [
+              'product_planning',
+              'project_planning',
+              'technical_planning',
+              'technical_planning_begin',
+              'technical_planning_generate',
+              'technical_planning_commit',
+              'technical_planning_confirm',
+              'technical_planning_review'
+            ].includes(node)
+          ) {
             return
           }
         }
       },
       onStateSnapshotEvent: ({ event }) => {
-        workflow = readWorkflowFromState(event.snapshot) ?? workflow
+        workflow = reconcileWorkflowFailurePayload(workflow, readWorkflowFromState(event.snapshot))
         if (workflow) {
           emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
           options.onWorkflow?.(workflow)
@@ -738,7 +759,7 @@ export class AgUiChatSession {
     const assistantMessage = result.newMessages.find(
       (newMessage) => newMessage.role === 'assistant'
     )
-    workflow = readResultWorkflow(result.result) ?? workflow
+    workflow = reconcileWorkflowFailurePayload(workflow, readResultWorkflow(result.result))
     if (workflow) emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
     const answer =
       messageContentToText(assistantMessage?.content).trim() ||
@@ -1345,6 +1366,35 @@ function readResultWorkflow(result: unknown): WorkflowRunPayload | undefined {
   if (!result || typeof result !== 'object') return undefined
   const value = result as { workflow?: unknown; conversation?: unknown }
   return readWorkflowPayload(value.workflow) ?? readWorkflowPayload(value.conversation)
+}
+
+/** 同一失败 Run 的通用终帧不得覆盖先到达的具体模型失败证据。 */
+export function reconcileWorkflowFailurePayload(
+  previous?: WorkflowRunPayload,
+  incoming?: WorkflowRunPayload
+): WorkflowRunPayload | undefined {
+  if (!incoming) return previous
+  if (
+    !previous || previous.runId !== incoming.runId ||
+    previous.threadId !== incoming.threadId ||
+    previous.summary.status !== 'failed' || incoming.summary.status !== 'failed'
+  ) return incoming
+  const earlier = parseRecoveryFailureDiagnostic(previous.summary.failureDiagnostic)
+  const later = parseRecoveryFailureDiagnostic(incoming.summary.failureDiagnostic)
+  const isSpecific = (diagnostic: typeof earlier): boolean => Boolean(
+    diagnostic && diagnostic.sourceRunId === incoming.runId &&
+    (diagnostic.code.startsWith('UNIT_GENERATION_MODEL_') || diagnostic.userMessage?.trim())
+  )
+  if (!isSpecific(earlier) || isSpecific(later)) return incoming
+  return {
+    ...incoming,
+    summary: {
+      ...incoming.summary,
+      errorCode: earlier!.code,
+      message: earlier!.message || previous.summary.message,
+      failureDiagnostic: earlier!
+    }
+  }
 }
 
 export function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefined {

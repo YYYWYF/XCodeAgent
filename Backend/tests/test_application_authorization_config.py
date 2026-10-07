@@ -56,6 +56,21 @@ class ApplicationAuthorizationConfigTests(unittest.TestCase):
             )
             self.assertEqual(json.loads(target.read_text(encoding="utf-8")), persisted)
 
+    def test_persist_rejects_unsupported_application_schema_version(self) -> None:
+        """权限配置写回必须遵守当前 schemaVersion 6 契约。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            target = _write_current_config(workspace)
+            content = json.loads(target.read_text(encoding="utf-8"))
+            content["schemaVersion"] = 2
+            target.write_text(json.dumps(content, ensure_ascii=False), encoding="utf-8")
+
+            with self.assertRaisesRegex(ApplicationAuthorizationConfigError, "schemaVersion 6"):
+                persist_authorization_configuration(
+                    workspace,
+                    initial_administrator_subjects=["ops@example.com"],
+                )
+
     def test_persist_rejects_static_datasource_and_magic_subject(self) -> None:
         """非数据库数据源和 current-user 都不能进入权限初始化配置。"""
 

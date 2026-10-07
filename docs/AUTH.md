@@ -336,6 +336,8 @@ allowOperation(endpoint, member) =
 
 应用配置升级为当前 `schemaVersion: 5`：
 
+新建应用当前仍会写出该字段，但打开工作区和权限配置写回不再根据 `schemaVersion` 值做版本门禁；仍会校验 JSON 对象、认证字段和权限字段的结构及一致性。
+
 ```ts
 type ApplicationAuthorizationSeed = {
   enabled: boolean;
@@ -351,7 +353,7 @@ type ApplicationAuthorizationSeed = {
 - 不预填、不识别也不持久化 `current-user` 等魔法占位符；初始管理员成员标识按普通字符串精确匹配认证系统返回的 subject。
 - 关闭权限时清空初始管理员种子。
 - 删除权限 provider 和运行态页面选项；启用权限即确定性接入内置权限服务与 `/roles`。
-- 打开工作区时只接受当前 v5 权限字段，不为旧结构增加探测、转换或回退。
+- 打开工作区和权限配置写回不按 `schemaVersion` 值拒绝配置；仍要求当前权限字段和认证/权限一致性满足契约，不增加版本探测、转换或回退。
 
 应用创建后，表单值写入 `application.json.authorization` 和首次规划请求。若新建时关闭权限、业务描述又明确要求权限控制，前置澄清必须：
 

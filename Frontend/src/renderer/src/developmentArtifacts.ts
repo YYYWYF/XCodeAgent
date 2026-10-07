@@ -15,6 +15,7 @@ export function testEntryGateReason(gate?: TestEntryGate): string {
 
 /** 为圆点提供可访问的状态说明，未登记产物一律不视为完成。 */
 export function developmentStatusLabel(progress?: DevelopmentArtifactProgress): string {
+  if (progress?.initialDevelopmentStatus === 'skipped') return '已按用户决定跳过实体开发'
   if (progress?.initialDevelopmentStatus === 'completed') return '初次开发已完成'
   if (progress?.initialDevelopmentStatus === 'in_progress') return '初次开发中（可能正在等待确认）'
   return '初次开发未完成'
@@ -22,6 +23,7 @@ export function developmentStatusLabel(progress?: DevelopmentArtifactProgress): 
 
 /** 为新会话产物卡片提供简短且统一的开发状态文案。 */
 export function developmentStatusText(progress?: DevelopmentArtifactProgress): string {
+  if (progress?.initialDevelopmentStatus === 'skipped') return '已跳过'
   if (progress?.initialDevelopmentStatus === 'completed') return '已初次完成'
   if (progress?.initialDevelopmentStatus === 'in_progress') return '开发中'
   return '未开发'
@@ -44,5 +46,6 @@ export function developmentArtifactTotals(artifacts: DevelopmentArtifacts): {
     ...Object.values(artifacts.entities),
     ...Object.values(artifacts.endpoints).flatMap((endpoints) => Object.values(endpoints))
   ]
-  return { completed: developmentCompletedCount(records), total: records.length }
+  const required = records.filter((record) => record.initialDevelopmentStatus !== 'skipped')
+  return { completed: developmentCompletedCount(required), total: required.length }
 }

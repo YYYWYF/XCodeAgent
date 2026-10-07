@@ -126,7 +126,7 @@ SmallTask 的空响应、无效 JSON、工具调用文本以及缺少有效 `sta
 职责边界固定如下：
 
 - `application-lifecycle.json`：顶层 `initialization.stage/status/threadId` 只保存进入工作台前的初始化门禁和 checkpoint 定位，完成后固定为 `ready_for_workbench/completed` 并清空 thread；工作台阶段另由按 run 隔离的 `activeExecutions`、页面/API 契约/数据源 `resourceLocks`、execution 交互门禁、活动 run 和恢复审计表示；
-- 已停止或失败的执行继续运行时，客户端显式提交旧 `runId` 作为恢复令牌；服务端只允许同一 `threadId`、scope 和 target 接替，并原子地把该 run 当前可见的资源登记转给新 `runId`，不使用 lifecycle 快照覆盖当前 Graph 状态。唯一例外是结构化 `test_phase_confirmation`、`review_phase_confirmation` 与 `acceptance_phase_confirmation`：它们允许 execution 从上一阶段 thread 转交给空白阶段 thread，scope 和 target 仍必须完全一致；
+- 明确“结束计划”属于终止性清理，服务端只按当前 workspace、Workbench 类型和精确 `runId` 移除目标 execution 及其资源登记，不以原始 `threadId` 或 session 作为拒绝条件；已停止或失败的执行继续运行时，客户端显式提交旧 `runId` 作为恢复令牌，暂停动作仍只允许同一 `threadId`、scope 和 target 接替，并原子地把该 run 当前可见的资源登记转给新 `runId`，不使用 lifecycle 快照覆盖当前 Graph 状态。唯一例外是结构化 `test_phase_confirmation`、`review_phase_confirmation` 与 `acceptance_phase_confirmation`：它们允许 execution 从上一阶段 thread 转交给空白阶段 thread，scope 和 target 仍必须完全一致；
 - `checkpoints.sqlite`：LangGraph 技术执行断点和节点状态，继续保留；
 - RequirementSpec / ProjectPlan Markdown + JSON：正式文档内容和 `confirmation_status`，继续保留；
 - Build DAG / ExecutionRun / TestReport：任务、执行和测试事实，继续由各自产物负责。
@@ -215,6 +215,14 @@ TechnicalPlan 继续保存 Endpoint HTTP 契约与 Schema 字段，并由 Contra
 确认后以 Markdown 作为用户可读正式文档，JSON 只作为内部工作流状态。右侧需求文档页和本地文件探测应优先读取草稿路径；未确认时必须标记“需求文档（草稿）”，不能把草稿路径或旧正式文件冒充为正式需求文档。
 
 当前等待/续跑机制使用 LangGraph 原生 `interrupt` 与 `Command(resume=...)`。主 Graph 通过 SQLite checkpointer 持久化 ProjectState；前端只提交服务端中断返回的版本令牌、用户回答或确认动作，不回传状态重建上下文，也不硬编码后端阶段名。
+
+## Workflow Node Re-entry
+
+所有未处理异常形成的 `DurableExecution=FAILED` 统一使用 `WorkflowReentryPlan(reason=failure_retry)`。目标由 source run 最新合法的 Node Entry checkpoint 确定，并同步回 `source.current_node`；语义上下文 authority 恒为 `snapshot.next == [targetNode]`、root namespace 且 `snapshot.values.active_run_id == source.run_id` 的真实 committed checkpoint。两个 production Graph 都通过无业务副作用的 `workflow_entry` 节点先提交首业务 Node 的入口 State，因此 Requirements 等首 Node 第一行失败时也存在真实可 fork checkpoint。Runtime 不再通过 `pending_recovery_node`、后续 update 时序或无 checkpoint 的 ENTRY metadata 决定恢复能力。
+
+Failure Retry 创建新 child lineage，完成 lifecycle handoff 后从上述 checkpoint fork 完整 Semantic Context，只覆盖 `active_run_id`、`active_thread_id`、observability 和一次性调度元数据。模型、Provider、API key、MCP 和外部依赖仍由重入后的 Node 从当前 canonical Settings/runtime 重新解析。重复失败继续从当前 child 自己的 NodeEntryBoundary 产生下一代 child；缺失或损坏 authority 时以 `NODE_ENTRY_AUTHORITY_MISSING`、`NODE_ENTRY_AUTHORITY_INVALID` 或 `SEMANTIC_CONTEXT_AUTHORITY_MISSING` fail closed，绝不搜索更老 checkpoint、重建 initial state 或自动降级 Stage Restart。
+
+Formal Revision 保留 ChangeImpactAnalyzer 与 Revision Coordinator 对 target、thread policy 和新 Revision Context 的所有权。Coordinator 已决定的 target/context 被转换为 `WorkflowReentryPlan(reason=revision, contextAuthority=REVISION_CONTEXT)`，随后由同一 `WorkflowReentryExecutor` 校验语义摘要并只覆盖新 execution identity；Executor 不重新分析用户意图或变更影响。`CONTINUE_CHECKPOINT` 仅属于 INTERRUPTED/awaiting continuation；`retry_failed_tasks` 与 `retry_code_review` 继续作为正常 `/workflow` 业务动作处理，不进入 Generic Recovery。当前 RecoveryAttempt 只是 source→checkpoint→child 的 durable transaction edge，不再保存 strategy；v8 的 Stage Restart 等不兼容 active row 只在 v9 schema migration 中 fail closed。前端执行当前 Incident 时仍只提交 Backend 签发的 `incidentId/actionId`。
 
 所有选项型 `ask_user` 问题（单选、多选、是/否）都自动包含“其他”选项。用户选中“其他”后必须填写补充内容；前端提交结构化答案 `{ selected, other }`，后端将其归并为“已选：…；其他补充：…”，与原始需求和既有选项一起输入给后续模型。文本题本身就是自由输入，不额外显示“其他”。
 
@@ -357,7 +365,7 @@ Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_fi
 
 `prepare_build_tasks` 的生产入口通过 async Planning adapter 创建后端签发的 PlanningRun。正式输入由服务端从已确认 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效 Endpoint API Design 和权限切片组装并冻结；EntitySourceBinding 不参与正常 DAG Planning。平台按 Unit 建立 FIFO Worker Pool，最多并发三个 model Unit，Local Retry 重新进入队尾；模型只返回当前 Unit 的 `tasks`，不得决定 Worker 数量、跨 Unit 调度或最终执行批次。Task Candidate 仍携带单任务级并行提示，但 Scope 编译器会结合依赖与文件冲突生成平台批次。所有 Unit 通过 Barrier 后才执行 Scope Assembly 和 Global Validation/Repair，只有完整校验通过才写 PendingPlan。模型未返回可解析任务、越过平台职责边界或生成无效 DAG 时，平台在 PlanningRun 内部有界重试；重试耗尽才进入失败处理，不把任务拆分规则交给用户，也不能用硬编码任务清单代替模型规划结果。
 
-DAG Planning 的基础设施失败重试只接受明确的 `resumeExecutionRunId`。失败 PlanningRun 保持终态，Retry 创建新的 PlanningRun；Recovery Snapshot 只作为可失效的优化输入，恢复 Candidate 必须重新匹配当前输入并通过当前 Local Validation，失败时退化为重新生成。恢复 Candidate 与生成 Candidate 一样继续经过 Barrier、Scope Assembly 和 Global Validation，成功前不得进入 PendingPlan 或 FormalPlan；Regenerate 不复用 Recovery。
+DAG Planning 的基础设施失败恢复只接受 Native Recovery 验证的 source Workflow Run。失败 PlanningRun 保持终态，新尝试创建新的 PlanningRun；Recovery Snapshot 只作为可失效的优化输入，恢复 Candidate 必须重新匹配当前输入并通过当前 Local Validation，失败时退化为重新生成。恢复 Candidate 与生成 Candidate 一样继续经过 Barrier、Scope Assembly 和 Global Validation，成功前不得进入 PendingPlan 或 FormalPlan。Regenerate 正常操作消费精确旧 Pending 并全新生成；其失败恢复在同一个 `prepare_build_tasks` 节点内读取持久化操作事实，确认旧 Pending 已消费后可复用该失败 Run 的有效 Candidate，且不会重复消费或自动确认新 Pending。
 
 调用模型生成任务 DAG 前，节点必须只读检查已确认的 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、TemplateState 与冻结的 template_context、当前 PageImplementationContract、Endpoint 契约和 EntitySourceBinding。任一前置条件未满足时返回可定位错误，不修改上游正式产物。
 

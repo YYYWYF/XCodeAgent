@@ -17,16 +17,18 @@ import { mappingCandidates, resetDraftForDatabaseOperation, selectionKey, tableI
 import { useBindingWorkspace } from './useBindingWorkspace'
 import { RuleEditingContext } from './RuleEditor'
 import './index.less'
+import type { EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
 
 type Props = {
+  onEndpointRecovery?: EndpointRecoveryReporter
   workspaceRoot: string; target?: ApiDesignConfigTarget; contracts: DevelopmentPlanningApiContract[]
   onSelect: (target: ApiDesignConfigTarget) => void
   onSaved: (target: ApiDesignConfigTarget, result: EndpointDesignSaveResult) => void | Promise<void>
 }
 
 /** 在常驻页签内编辑直接映射，复杂映射仍交给原有编辑器。 */
-export default function FieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onSaved }: Props): ReactElement {
-  const state = useBindingWorkspace(workspaceRoot, target, onSaved)
+export default function FieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onSaved, onEndpointRecovery }: Props): ReactElement {
+  const state = useBindingWorkspace(workspaceRoot, target, onSaved, onEndpointRecovery)
   const { entry, catalog, tables, metadata, busy, loading, error, metadataLoading } = state
   const [editingRules, setEditingRules] = useState(0)
   /** 汇总尚未应用的规则编辑器，防止确认旧值。 */
@@ -154,7 +156,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
     </section>)}</nav>
     <main className="binding-editor">
       {!target ? <Empty description="请选择应用 API" /> : loading && !entry ? <Spin tip="正在读取 API 契约…" /> : null}
-      {error ? <Alert type="error" showIcon message={error} action={<Space><Button onClick={state.refreshSources}>重试</Button>{entry && <Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃草稿并重新加载？', content: '未确认的修改将被清除，正式映射不变。', okText: '放弃并加载', cancelText: '继续编辑', onOk: state.discard })}>重新加载</Button>}</Space>} /> : null}
+      {error && !(onEndpointRecovery && state.reportedError) ? <Alert type="error" showIcon message={error} action={<Space><Button onClick={state.refreshSources}>重试</Button>{entry && <Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃草稿并重新加载？', content: '未确认的修改将被清除，正式映射不变。', okText: '放弃并加载', cancelText: '继续编辑', onOk: state.discard })}>重新加载</Button>}</Space>} /> : null}
       {entry && <>
         <header className="binding-heading"><div className="binding-heading-copy"><span className="binding-heading-contract">{activeContractName}</span><strong className="binding-heading-name">{activeEndpointName}</strong><div className="binding-heading-endpoint"><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{activeEndpointPath}</code></div></div><Space className="binding-heading-actions">{entry.readOnly ? <Button className="binding-edit-button" icon={<EditOutlined />} onClick={() => state.update({ ...entry, readOnly: false })}>修改映射</Button> : !entry.complex ? <><Button className="binding-stash-button" loading={busy} disabled={entry.conflict || editingRules > 0} onClick={() => void state.save(false)}>暂存</Button><Button className="binding-confirm-button" type="primary" loading={busy} disabled={!canConfirm} onClick={confirmMapping}>保存并确认</Button></> : null}</Space></header>
         {entry.conflict ? <Alert type="warning" message="草稿基于的契约或正式映射已变化，当前草稿已保留。" description="请核对当前内容后，明确放弃旧草稿并重新加载。" action={<Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃旧草稿并重新加载？', okText: '放弃并加载', cancelText: '保留草稿', onOk: state.discard })}>重新加载</Button>} /> : null}
@@ -195,6 +197,6 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
         </>}
       </>}
     </main>
-    <ApiDesignConfigModal open={advanced} target={target} workspaceRoot={workspaceRoot} onClose={() => setAdvanced(false)} onSaved={async (current, result) => { await onSaved(current, result); state.reload() }} />
+    <ApiDesignConfigModal open={advanced} target={target} workspaceRoot={workspaceRoot} onEndpointRecovery={onEndpointRecovery} onClose={() => setAdvanced(false)} onSaved={async (current, result) => { await onSaved(current, result); state.reload() }} />
   </div></RuleEditingContext.Provider>
 }

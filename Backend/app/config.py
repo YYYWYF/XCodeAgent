@@ -34,6 +34,8 @@ class Settings:
     model_max_retries: int = 2
     anthropic_api_version: str = "2023-06-01"
     model_custom_headers: dict[str, str] = field(default_factory=dict)
+    # OpenCode Go 请求元数据默认关闭；开启后按当前会话发送 session 和客户端身份。
+    model_opencode_go_headers_enabled: bool = False
     default_system_prompt: str = (
         "You are a helpful local agent. Answer clearly and concisely."
     )
@@ -73,6 +75,8 @@ class Settings:
     dag_business_self_check_enabled: bool = False
     checkpoint_db_path: str = ""  # populated in from_env
     checkpoint_retention_days: int = 30
+    execution_recovery_heartbeat_seconds: float = 10.0
+    execution_recovery_lease_ttl_seconds: float = 45.0
     langsmith_tracing_enabled: bool = False
     langsmith_project: str = ""
     langsmith_endpoint: str = ""
@@ -162,6 +166,9 @@ class Settings:
                 "ANTHROPIC_API_VERSION", "2023-06-01"
             ),
             model_custom_headers=custom_headers,
+            model_opencode_go_headers_enabled=_env_bool(
+                "MODEL_OPENCODE_GO_HEADERS_ENABLED", default=False
+            ),
             default_system_prompt=os.getenv(
                 "AGENT_SYSTEM_PROMPT",
                 "You are a helpful local agent. Answer clearly and concisely.",
@@ -207,6 +214,8 @@ class Settings:
             checkpoint_retention_days=int(
                 os.getenv("DEVAGENTSTUDIO_CHECKPOINT_RETENTION_DAYS", "30")
             ),
+            execution_recovery_heartbeat_seconds=execution_recovery_heartbeat_seconds(),
+            execution_recovery_lease_ttl_seconds=execution_recovery_lease_ttl_seconds(),
             langsmith_tracing_enabled=_env_bool("LANGSMITH_TRACING", default=False),
             langsmith_project=os.getenv("LANGSMITH_PROJECT", ""),
             langsmith_endpoint=os.getenv("LANGSMITH_ENDPOINT", ""),
@@ -266,6 +275,48 @@ def _env_int(name: str, *, default: int, minimum: int) -> int:
     if value < minimum:
         raise ValueError(f"{name} must be an integer >= {minimum}.")
     return value
+
+
+def _env_float(name: str, *, default: float, minimum: float) -> float:
+    """严格读取有下界的浮点配置，非法值报告变量名。"""
+
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number >= {minimum}.") from exc
+    if value < minimum:
+        raise ValueError(f"{name} must be a number >= {minimum}.")
+    return value
+
+
+def execution_recovery_heartbeat_seconds() -> float:
+    """读取 Durable Execution lease 的心跳间隔。"""
+
+    return _env_float(
+        "XCODEAGENT_EXECUTION_RECOVERY_HEARTBEAT_SECONDS",
+        default=10.0,
+        minimum=0.001,
+    )
+
+
+def execution_recovery_lease_ttl_seconds() -> float:
+    """读取 lease TTL，并确保至少覆盖三个心跳周期。"""
+
+    heartbeat_seconds = execution_recovery_heartbeat_seconds()
+    ttl_seconds = _env_float(
+        "XCODEAGENT_EXECUTION_RECOVERY_LEASE_TTL_SECONDS",
+        default=45.0,
+        minimum=0.001,
+    )
+    if ttl_seconds < heartbeat_seconds * 3:
+        raise ValueError(
+            "XCODEAGENT_EXECUTION_RECOVERY_LEASE_TTL_SECONDS must be at least "
+            "three heartbeat intervals."
+        )
+    return ttl_seconds
 
 
 def _env_bool(name: str, *, default: bool) -> bool:

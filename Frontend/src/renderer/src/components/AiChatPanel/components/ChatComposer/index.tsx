@@ -141,7 +141,7 @@ export default function ChatComposer({
 
   /** 校验当前状态并提交对话内容。 */
   const handleSend = (): void => {
-    if (!hasDebugNode || workspaceBusy || sendDisabled) return
+    if (!hasDebugNode || workspaceBusy || sendDisabled || (debugOnly && loading)) return
     onSend(currentDebugOptions())
   }
 
@@ -327,7 +327,7 @@ export default function ChatComposer({
                 </Tooltip>
               </div>
             )}
-            {workspaceBusy && (
+            {workspaceBusy && !(debugOnly && loading) && (
               <Text className={cx('workspace-busy-label')} type="warning">
                 其他会话正在执行
               </Text>
@@ -337,7 +337,12 @@ export default function ChatComposer({
                 {sendDisabledHint}
               </Text>
             )}
-            {loading ? (
+            {debugOnly && loading && (
+              <Text className={cx('workflow-debug-running-hint')}>
+                {stopping ? 'Agent 正在暂停，请稍候' : 'Agent 正在运行，暂停或等待结束后可调试'}
+              </Text>
+            )}
+            {loading && !debugOnly ? (
               <Button
                 aria-label={stopping ? '正在停止' : '停止生成'}
                 className={cx('composer-send-button')}
@@ -352,7 +357,7 @@ export default function ChatComposer({
               <Button
                 aria-label={debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
                 className={cx('composer-send-button')}
-                disabled={!canSend || workspaceBusy || sendDisabled}
+                disabled={!canSend || workspaceBusy || sendDisabled || (debugOnly && loading)}
                 icon={<SendOutlined />}
                 onClick={handleSend}
                 shape="circle"

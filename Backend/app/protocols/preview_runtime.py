@@ -97,18 +97,40 @@ def blocking_task(workspace: str, thread_id: str = "") -> dict[str, Any] | None:
 
 
 def _recover_orphaned_maintenance(workspace: str) -> None:
-    """清理服务进程重启后失去内存任务的启动维护占用。"""
+    """收口进程重启后失去执行者的维护任务，保留有效的计划确认暂停。"""
 
     with maintenance_lock:
         owner = maintenance_owner(workspace)
         if not owner:
             return
         action = str(owner.get("action") or "")
-        if action not in {"restart", "stop"}:
+        if action not in {"restart", "stop", "diagnose", "confirm", "revise"}:
             return
         key = (str(Path(workspace).expanduser().resolve()), str(owner.get("threadId") or ""))
         job = _jobs.get(key)
         if job is not None and not job.done():
+            return
+
+        thread_id = str(owner.get("threadId") or "")
+        if action in {"diagnose", "confirm", "revise"}:
+            repair = load_repair(workspace, thread_id)
+            # 待确认是持久暂停，正常情况下没有内存任务；不能把它当成孤儿释放。
+            if repair.get("status") == "awaiting_confirmation":
+                return
+            record = read_record(workspace)
+            starting_layer = next((layer for layer in ("frontend", "backend") if (record.get(layer) or {}).get("status") == "starting"), "")
+            # 修复末尾可能已进入启动器，必须同时收口半启动进程，不能留下永久 starting。
+            if starting_layer:
+                stop_project_preview(workspace)
+                mark_interrupted_attempt(workspace, layer=starting_layer)
+            if repair.get("status") not in {"completed", "failed", "stopped", "requires_revision"}:
+                save_repair(workspace, thread_id, {
+                    **repair,
+                    "status": "stopped",
+                    "interrupted": True,
+                    "message": "Backend 服务中断，预览诊断修复已停止；已有修改和修复轮次保留，请重新诊断并确认计划。",
+                })
+            release_maintenance(workspace, thread_id)
             return
 
         # 启动器可能已经拉起一部分子进程；先按标准停止流程清理，再释放孤儿占用。
@@ -160,7 +182,7 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
 
     try:
         if task is not None:
-            workflow_run_registry.register(run_id, task, workspace=workspace, maintenance_thread_id=thread_id)
+            workflow_run_registry.register(run_id, task, workspace=workspace, maintenance_thread_id=thread_id, thread_id=thread_id)
         if request.action in {"restart", "stop"}:
             progress("restart", "正在停止旧服务并启动预览…" if request.action == "restart" else "正在更新预览服务…")
             if request.action == "stop":
@@ -303,7 +325,8 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
                     raise ValueError("本会话已有诊断记录，请使用继续操作。")
             if request.action in {"confirm", "revise"}:
                 pending = load_repair(request.workspace, thread_id)
-                if pending.get("status") != "awaiting_confirmation":
+                interrupted_revision = request.action == "revise" and pending.get("status") == "stopped" and pending.get("interrupted") is True
+                if pending.get("status") != "awaiting_confirmation" and not interrupted_revision:
                     raise ValueError("当前会话没有待确认的修复计划。")
                 if request.action == "confirm":
                     if pending.get("planId") != request.planId:

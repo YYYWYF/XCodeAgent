@@ -6,11 +6,12 @@ import asyncio
 import os
 from pathlib import Path
 from threading import Lock
-from typing import Any, AsyncIterator, Iterator, Literal
+from typing import Any, AsyncIterator, Iterator, Literal, NoReturn
 
 from ag_ui.core import (
     CustomEvent,
     RunFinishedEvent,
+    RunErrorEvent,
     RunStartedEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
@@ -19,6 +20,7 @@ from ag_ui.core import (
 )
 from ag_ui.encoder import EventEncoder
 
+from app.persistence.execution_recovery import get_execution
 from app.services.preview_runtime_guard import maintenance_lock, require_no_maintenance
 
 from app.services.application_lifecycle import (
@@ -42,6 +44,48 @@ WorkflowCancellationStatus = Literal[
     "not_running",
     "cancel_timeout",
 ]
+PlanControlTargetStatus = Literal[
+    "active",
+    "already_ended",
+    "stale_target",
+    "ownership_conflict",
+    "unresolved",
+]
+PlanControlErrorStatus = Literal[
+    "invalid_request",
+    "stale_target",
+    "ownership_conflict",
+    "failed",
+]
+
+
+class PlanControlError(RuntimeError):
+    """表示计划控制请求在 Backend 权威边界上被拒绝。"""
+
+    def __init__(
+        self,
+        *,
+        status: PlanControlErrorStatus,
+        code: str,
+        message: str,
+    ) -> None:
+        """保存稳定错误码和可安全展示的业务信息。"""
+
+        self.status = status
+        self.code = code
+        super().__init__(message)
+
+
+class WorkflowRunAlreadyActiveError(RuntimeError):
+    """表示同一 Backend 进程内已有相同 runId 的活跃 owner。"""
+
+    code = "WORKFLOW_RUN_ALREADY_ACTIVE"
+
+    def __init__(self, run_id: str) -> None:
+        """记录冲突 runId，并生成稳定的诊断信息。"""
+
+        self.run_id = run_id
+        super().__init__(f"Workflow run is already active: runId={run_id}")
 
 
 class WorkflowRunRegistry:
@@ -54,6 +98,8 @@ class WorkflowRunRegistry:
     def __init__(self) -> None:
         self._lock = Lock()
         self._tasks: dict[str, tuple[str, asyncio.Task[Any]]] = {}
+        self._run_threads: dict[str, str] = {}
+        self._deleting_threads: set[tuple[str, str]] = set()
         self._deleting_workspaces: set[str] = set()
         self._deleting_application_ids: dict[str, str] = {}
 
@@ -64,6 +110,7 @@ class WorkflowRunRegistry:
         *,
         workspace: str | None = None,
         maintenance_thread_id: str = "",
+        thread_id: str = "",
     ) -> None:
         """按规范工作区登记运行，并拒绝删除栅栏之后启动的新任务。"""
 
@@ -73,7 +120,17 @@ class WorkflowRunRegistry:
                 require_no_maintenance(workspace_key, maintenance_thread_id)
             if workspace_key and workspace_key in self._deleting_workspaces:
                 raise RuntimeError("当前应用正在删除，不能启动新的运行。")
+            if (workspace_key, thread_id) in self._deleting_threads:
+                raise RuntimeError("当前会话正在删除，不能启动新的运行。")
+            existing = self._tasks.get(run_id)
+            if existing is not None:
+                _existing_workspace, existing_task = existing
+                if not existing_task.done():
+                    raise WorkflowRunAlreadyActiveError(run_id)
+                # 已结束但尚未进入 finally 清理的登记只属于内存垃圾，允许替换。
+                self._tasks.pop(run_id, None)
             self._tasks[run_id] = (workspace_key, task)
+            self._run_threads[run_id] = thread_id
             workspace_process_registry.allow_run(run_id)
 
     def workspace_active_runs(self, workspace: str) -> list[str]:
@@ -89,6 +146,52 @@ class WorkflowRunRegistry:
             current = self._tasks.get(run_id)
             if current is not None and (task is None or current[1] is task):
                 self._tasks.pop(run_id, None)
+                self._run_threads.pop(run_id, None)
+
+    def begin_thread_deletion(self, workspace: str, thread_id: str) -> None:
+        """阻止目标会话线程再启动运行，直到删除完成或失败回滚。"""
+
+        with self._lock:
+            self._deleting_threads.add((_workspace_key(workspace), thread_id))
+
+    def end_thread_deletion(self, workspace: str, thread_id: str) -> None:
+        """删除准备失败时解除目标会话线程的运行栅栏。"""
+
+        with self._lock:
+            self._deleting_threads.discard((_workspace_key(workspace), thread_id))
+
+    async def cancel_thread(self, workspace: str, thread_id: str) -> dict[str, Any]:
+        """取消目标会话的运行并等待终态，不影响同工作区其它会话。"""
+
+        workspace_key = _workspace_key(workspace)
+        current_task = asyncio.current_task()
+        with self._lock:
+            entries = [
+                (run_id, task)
+                for run_id, (root, task) in self._tasks.items()
+                if root == workspace_key
+                and self._run_threads.get(run_id) == thread_id
+                and task is not current_task
+            ]
+        for run_id, task in entries:
+            workspace_process_registry.cancel_run(run_id)
+            if not task.done():
+                task.cancel()
+        if entries:
+            active_tasks = [task for _, task in entries if not task.done()]
+            if active_tasks:
+                await asyncio.wait(active_tasks, timeout=30.0)
+        remaining = [run_id for run_id, task in entries if not task.done()]
+        remaining_processes = []
+        for run_id, _task in entries:
+            remaining_processes.extend(
+                await asyncio.to_thread(workspace_process_registry.wait_run_processes, run_id)
+            )
+        return {
+            "requestedRunIds": [run_id for run_id, _ in entries],
+            "remainingRunIds": remaining,
+            "remainingProcessIds": remaining_processes,
+        }
 
     def cancel(self, run_id: str) -> bool:
         """向指定运行发出 asyncio 取消请求。"""
@@ -147,6 +250,18 @@ class WorkflowRunRegistry:
         if entry is None or entry[1].done():
             return False
         return not workspace_key or entry[0] == workspace_key
+
+    def active_run_ids(self, workspace: str | None = None) -> set[str]:
+        """返回当前进程仍活跃且属于目标 workspace 的 Workflow runId。"""
+
+        workspace_key = _workspace_key(workspace)
+        with self._lock:
+            entries = list(self._tasks.items())
+        return {
+            run_id
+            for run_id, (entry_workspace, task) in entries
+            if not task.done() and (not workspace_key or entry_workspace == workspace_key)
+        }
 
     def begin_workspace_deletion(
         self,
@@ -367,6 +482,470 @@ def build_workflow_cancellation_ag_ui_stream(
     return stream()
 
 
+def _raise_plan_control_error(
+    *,
+    status: PlanControlErrorStatus,
+    code: str,
+    message: str,
+) -> NoReturn:
+    """用稳定的业务错误码终止当前计划控制执行。"""
+
+    raise PlanControlError(status=status, code=code, message=message)
+
+
+def _assert_durable_control_target(
+    *,
+    workspace: str,
+    target_run_id: str,
+    durable_execution: Any,
+) -> None:
+    """校验 Durable Execution 的工作区、类型和精确 runId 身份。"""
+
+    if str(getattr(durable_execution, "execution_kind", "")).strip() != "workbench":
+        _raise_plan_control_error(
+            status="ownership_conflict",
+            code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
+            message="目标运行不属于当前工作台计划，不能执行该控制动作。",
+        )
+    durable_workspace = str(getattr(durable_execution, "workspace", "")).strip()
+    if (
+        not durable_workspace
+        or _workspace_key(durable_workspace) != _workspace_key(workspace)
+    ):
+        _raise_plan_control_error(
+            status="ownership_conflict",
+            code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
+            message="目标运行不属于当前工作区，不能执行该控制动作。",
+        )
+    durable_run_id = str(getattr(durable_execution, "run_id", "")).strip()
+    if durable_run_id != target_run_id:
+        _raise_plan_control_error(
+            status="ownership_conflict",
+            code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
+            message="目标运行身份校验失败，不能执行该控制动作。",
+        )
+
+
+def _assert_durable_control_owner(
+    *,
+    workspace: str,
+    target_run_id: str,
+    thread_id: str,
+    owner_session_id: str | None,
+    durable_execution: Any,
+) -> None:
+    """校验 Stop 所需的 Durable Execution 工作区、线程和会话归属。"""
+
+    _assert_durable_control_target(
+        workspace=workspace,
+        target_run_id=target_run_id,
+        durable_execution=durable_execution,
+    )
+    durable_thread_id = str(getattr(durable_execution, "thread_id", "")).strip()
+    if durable_thread_id != thread_id:
+        _raise_plan_control_error(
+            status="ownership_conflict",
+            code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
+            message="目标运行由其他 thread 持有，不能执行该控制动作。",
+        )
+    durable_owner_session_id = str(
+        getattr(durable_execution, "owner_session_id", "") or ""
+    ).strip()
+    if (
+        owner_session_id
+        and durable_owner_session_id
+        and owner_session_id != durable_owner_session_id
+    ):
+        _raise_plan_control_error(
+            status="ownership_conflict",
+            code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
+            message="目标运行由其他会话持有，不能执行该控制动作。",
+        )
+
+
+async def _resolve_plan_control_target(
+    *,
+    workspace: str,
+    target_run_id: str,
+    thread_id: str,
+    owner_session_id: str | None,
+    enforce_ownership: bool = True,
+) -> tuple[PlanControlTargetStatus, Any | None, Any | None]:
+    """依据当前 lifecycle 和 Durable Execution 解析计划控制目标。
+
+    Stop 必须保持原始 thread/session 的恢复权；End 是终止性清理，只按当前
+    workspace 与精确 target runId 收口，因此由调用方显式关闭 ownership 校验。
+    """
+
+    if not str(workspace or "").strip():
+        _raise_plan_control_error(
+            status="invalid_request",
+            code="PLAN_CONTROL_WORKSPACE_MISSING",
+            message="计划控制动作缺少工作区身份。",
+        )
+    if not str(target_run_id or "").strip():
+        _raise_plan_control_error(
+            status="invalid_request",
+            code="PLAN_CONTROL_TARGET_MISSING",
+            message="计划控制动作缺少目标 runId。",
+        )
+    if not str(thread_id or "").strip():
+        _raise_plan_control_error(
+            status="invalid_request",
+            code="PLAN_CONTROL_THREAD_MISSING",
+            message="计划控制动作缺少当前 AG-UI threadId。",
+        )
+
+    try:
+        lifecycle = load_application_lifecycle(workspace)
+    except Exception as exc:
+        raise PlanControlError(
+            status="failed",
+            code="PLAN_CONTROL_LIFECYCLE_UNAVAILABLE",
+            message="无法读取当前计划生命周期，请刷新后重试。",
+        ) from exc
+    try:
+        durable_execution = await get_execution(workspace, target_run_id)
+    except Exception as exc:
+        raise PlanControlError(
+            status="failed",
+            code="PLAN_CONTROL_IDENTITY_UNAVAILABLE",
+            message="无法验证目标计划的持有关系，请刷新后重试。",
+        ) from exc
+
+    active_execution = (
+        lifecycle.active_executions.get(target_run_id)
+        if lifecycle is not None
+        else None
+    )
+    if active_execution is not None:
+        if durable_execution is not None:
+            if enforce_ownership:
+                _assert_durable_control_owner(
+                    workspace=workspace,
+                    target_run_id=target_run_id,
+                    thread_id=thread_id,
+                    owner_session_id=owner_session_id,
+                    durable_execution=durable_execution,
+                )
+            else:
+                _assert_durable_control_target(
+                    workspace=workspace,
+                    target_run_id=target_run_id,
+                    durable_execution=durable_execution,
+                )
+        if enforce_ownership:
+            active_thread_id = str(getattr(active_execution, "thread_id", "")).strip()
+            if active_thread_id != thread_id:
+                _raise_plan_control_error(
+                    status="ownership_conflict",
+                    code="PLAN_CONTROL_OWNERSHIP_CONFLICT",
+                    message="目标运行由其他 thread 持有，不能执行该控制动作。",
+                )
+        return "active", lifecycle, active_execution
+
+    if durable_execution is not None:
+        if enforce_ownership:
+            _assert_durable_control_owner(
+                workspace=workspace,
+                target_run_id=target_run_id,
+                thread_id=thread_id,
+                owner_session_id=owner_session_id,
+                durable_execution=durable_execution,
+            )
+        else:
+            _assert_durable_control_target(
+                workspace=workspace,
+                target_run_id=target_run_id,
+                durable_execution=durable_execution,
+            )
+        # lifecycle 已没有该 execution，Durable Execution 用来证明这是同一合法目标。
+        return "already_ended", lifecycle, None
+
+    if lifecycle is None:
+        # 当前投影缺失时不能自行宣布目标已结束；End 仍交给原子 service 做最终写入校验，
+        # Stop 则在无法验证时由控制层直接 fail closed。
+        return "unresolved", None, None
+    _raise_plan_control_error(
+        status="stale_target",
+        code="PLAN_CONTROL_STALE_TARGET",
+        message="目标计划已变化或已结束，请刷新后重试。",
+    )
+
+
+def _safe_plan_control_lifecycle_payload(workspace: str) -> dict[str, Any] | None:
+    """尽力读取失败响应中的当前生命周期，不让诊断再次打断 AG-UI 流。"""
+
+    if not str(workspace or "").strip():
+        return None
+    try:
+        return _planning_lifecycle_payload(workspace)
+    except Exception:
+        return None
+
+
+def _plan_control_message(action: str, status: str) -> str:
+    """根据计划控制结果生成稳定的用户提示。"""
+
+    if action == "end" and status == "ended":
+        return "计划已结束，工作区已恢复自由输入。"
+    if action == "end" and status == "already_ended":
+        return "计划已经结束，当前工作区已处于自由输入状态。"
+    if action == "stop" and status == "already_stopped":
+        return "计划执行已经暂停，可继续执行、调整计划或结束。"
+    return "计划执行已暂停，可继续执行、调整计划或结束。"
+
+
+async def _execute_workbench_plan_control(
+    *,
+    action: str,
+    workspace: str,
+    target_run_id: str,
+    thread_id: str,
+    owner_session_id: str | None,
+) -> tuple[str, dict[str, Any] | None, str]:
+    """完成一次经过身份校验的 Workbench stop 或 end 原子控制。"""
+
+    target_status, lifecycle, execution = await _resolve_plan_control_target(
+        workspace=workspace,
+        target_run_id=target_run_id,
+        thread_id=thread_id,
+        owner_session_id=owner_session_id,
+        enforce_ownership=action != "end",
+    )
+    if action == "end":
+        if target_status == "already_ended":
+            return (
+                "already_ended",
+                application_lifecycle_payload(lifecycle) if lifecycle is not None else None,
+                _plan_control_message(action, "already_ended"),
+            )
+        try:
+            updated_lifecycle = end_workbench_execution(
+                workspace,
+                run_id=target_run_id,
+            )
+        except ApplicationLifecycleConflictError as exc:
+            # 另一个 End 可能刚刚完成；重新解析仍只接受同一 workspace/runId。
+            retry_status, retry_lifecycle, _ = await _resolve_plan_control_target(
+                workspace=workspace,
+                target_run_id=target_run_id,
+                thread_id=thread_id,
+                owner_session_id=owner_session_id,
+                enforce_ownership=False,
+            )
+            if retry_status == "already_ended":
+                return (
+                    "already_ended",
+                    application_lifecycle_payload(retry_lifecycle)
+                    if retry_lifecycle is not None
+                    else None,
+                    _plan_control_message(action, "already_ended"),
+                )
+            if retry_status in {"stale_target", "unresolved"}:
+                raise PlanControlError(
+                    status="stale_target",
+                    code="PLAN_CONTROL_STALE_TARGET",
+                    message="目标计划已变化或已结束，请刷新后重试。",
+                ) from exc
+            raise
+        return (
+            "ended",
+            application_lifecycle_payload(updated_lifecycle),
+            _plan_control_message(action, "ended"),
+        )
+
+    if target_status == "already_ended":
+        raise PlanControlError(
+            status="stale_target",
+            code="PLAN_CONTROL_STALE_TARGET",
+            message="目标计划已结束，不能再暂停。",
+        )
+    if target_status == "unresolved":
+        raise PlanControlError(
+            status="stale_target",
+            code="PLAN_CONTROL_STALE_TARGET",
+            message="目标计划无法在当前生命周期中确认，请刷新后重试。",
+        )
+    if str(getattr(execution, "status", "")) == "stopped":
+        return (
+            "already_stopped",
+            application_lifecycle_payload(lifecycle) if lifecycle is not None else None,
+            _plan_control_message(action, "already_stopped"),
+        )
+    try:
+        updated_lifecycle = stop_workbench_execution(
+            workspace,
+            run_id=target_run_id,
+        )
+    except ApplicationLifecycleConflictError as exc:
+        retry_status, _, _ = await _resolve_plan_control_target(
+            workspace=workspace,
+            target_run_id=target_run_id,
+            thread_id=thread_id,
+            owner_session_id=owner_session_id,
+        )
+        if retry_status in {"stale_target", "already_ended", "unresolved"}:
+            raise PlanControlError(
+                status="stale_target",
+                code="PLAN_CONTROL_STALE_TARGET",
+                message="目标计划已变化或已结束，请刷新后重试。",
+            ) from exc
+        raise
+    return (
+        "stopped",
+        application_lifecycle_payload(updated_lifecycle),
+        _plan_control_message(action, "stopped"),
+    )
+
+
+def _build_plan_control_workflow(
+    *,
+    action: str,
+    status: str,
+    target_run_id: str,
+    thread_id: str,
+    run_id: str,
+    message: str,
+    lifecycle: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """构造成功计划控制的统一 workflow、state 和 result 投影。"""
+
+    control_result = {
+        "action": action,
+        "status": status,
+        "targetRunId": target_run_id,
+        "message": message,
+    }
+    return {
+        "runId": run_id,
+        "threadId": thread_id,
+        "summary": {
+            "status": "completed",
+            "phase": "plan_control",
+            "message": message,
+            "planControl": control_result,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}),
+        },
+        "events": [],
+        "state": {
+            "status": "completed",
+            "phase": "plan_control",
+            "planControl": control_result,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}),
+        },
+        "result": {
+            "status": status,
+            "phase": "plan_control",
+            "planControl": control_result,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}),
+        },
+    }
+
+
+def _build_plan_control_success_frames(
+    *,
+    encoder: EventEncoder,
+    thread_id: str,
+    run_id: str,
+    message_id: str,
+    workflow: dict[str, Any],
+    message: str,
+    lifecycle: dict[str, Any] | None,
+) -> Iterator[str]:
+    """编码成功控制的生命周期事件，调用方已先发送 RUN_STARTED。"""
+
+    if lifecycle is not None:
+        # 控制动作写入成功后广播权威 lifecycle，所有工作台区域共享同一 revision。
+        yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle))
+    yield encoder.encode(CustomEvent(name="workflow-run", value=workflow))
+    yield encoder.encode(StateSnapshotEvent(snapshot={"workflow": workflow}))
+    yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=message))
+    yield encoder.encode(TextMessageEndEvent(messageId=message_id))
+    yield encoder.encode(
+        RunFinishedEvent(
+            threadId=thread_id,
+            runId=run_id,
+            result={"workflow": workflow},
+        )
+    )
+
+
+def _build_plan_control_error_frames(
+    *,
+    encoder: EventEncoder,
+    action: str,
+    workspace: str,
+    target_run_id: str,
+    thread_id: str,
+    run_id: str,
+    message_id: str,
+    error: Exception,
+) -> Iterator[str]:
+    """把计划控制业务错误编码为完整的 AG-UI failed lifecycle。"""
+
+    if isinstance(error, PlanControlError):
+        status = error.status
+        code = error.code
+        message = str(error)
+    elif isinstance(error, ApplicationLifecycleConflictError):
+        status = "failed"
+        code = "PLAN_CONTROL_LIFECYCLE_CONFLICT"
+        message = "当前计划状态已变化，请刷新后重试。"
+    else:
+        status = "failed"
+        code = "PLAN_CONTROL_FAILED"
+        message = "计划控制未能完成，请刷新当前计划后重试。"
+    lifecycle = _safe_plan_control_lifecycle_payload(workspace)
+    control_error = {
+        "action": action,
+        "status": status,
+        "targetRunId": target_run_id,
+        "code": code,
+        "message": message,
+    }
+    error_payload = {
+        "type": type(error).__name__,
+        "code": code,
+        "message": message,
+    }
+    workflow = {
+        "runId": run_id,
+        "threadId": thread_id,
+        "summary": {
+            "status": "failed",
+            "phase": "plan_control",
+            "message": message,
+            "error": error_payload,
+            "planControl": control_error,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}),
+        },
+        "events": [],
+        "state": {
+            "status": "failed",
+            "phase": "plan_control",
+            "error": error_payload,
+            "planControl": control_error,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}),
+        },
+        "result": {
+            "status": status,
+            "phase": "plan_control",
+            "error": error_payload,
+            "planControl": control_error,
+            **({"lifecycle": lifecycle} if lifecycle is not None else {}),
+        },
+    }
+    if lifecycle is not None:
+        # 失败也广播当前权威快照，前端不能根据点击顺序猜测是否仍在执行。
+        yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle))
+    yield encoder.encode(CustomEvent(name="workflow-run", value=workflow))
+    yield encoder.encode(StateSnapshotEvent(snapshot={"workflow": workflow}))
+    yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=message))
+    yield encoder.encode(TextMessageEndEvent(messageId=message_id))
+    yield encoder.encode(RunErrorEvent(message=message, code=code))
+
+
 def build_workflow_plan_control_ag_ui_stream(
     *,
     action: str,
@@ -385,73 +964,82 @@ def build_workflow_plan_control_ag_ui_stream(
     message_id = f"plan-control:{run_id}"
 
     async def stream() -> AsyncIterator[str]:
-        if action not in {"stop", "end", "abandon"}:
-            raise ValueError(f"不支持的计划控制动作：{action}")
-        if not target_run_id:
-            raise ValueError("计划控制动作缺少目标 runId。")
-        if action == "abandon":
-            # deleting 检查必须与 Abandon 写入共用同一把锁，避免检查后再加锁的 TOCTOU。
-            with build_task_plan_lifecycle_lock(workspace):
-                if workflow_run_registry.is_workspace_deleting(workspace):
-                    raise ApplicationLifecycleConflictError(
-                        "当前应用正在删除，不能放弃 Pending Build DAG。"
-                    )
-                _assert_pending_control_owner(workspace, target_run_id, owner_session_id)
-                result = abandon_pending_build_task_plan(
-                    {"workspace": workspace},
-                    planning_run_id=planning_run_id,
-                    draft_digest=draft_digest,
+        yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
+        yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
+        try:
+            if action not in {"stop", "end", "abandon"}:
+                _raise_plan_control_error(
+                    status="invalid_request",
+                    code="PLAN_CONTROL_INVALID_ACTION",
+                    message=f"不支持的计划控制动作：{action}",
                 )
-                lifecycle = _planning_lifecycle_payload(workspace)
-            for frame in _build_abandon_frames(
+            if action == "abandon":
+                if not target_run_id:
+                    _raise_plan_control_error(
+                        status="invalid_request",
+                        code="PLAN_CONTROL_TARGET_MISSING",
+                        message="计划控制动作缺少目标 runId。",
+                    )
+                with build_task_plan_lifecycle_lock(workspace):
+                    if workflow_run_registry.is_workspace_deleting(workspace):
+                        raise ApplicationLifecycleConflictError(
+                            "当前应用正在删除，不能放弃 Pending Build DAG。"
+                        )
+                    _assert_pending_control_owner(workspace, target_run_id, owner_session_id)
+                    result = abandon_pending_build_task_plan(
+                        {"workspace": workspace},
+                        planning_run_id=planning_run_id,
+                        draft_digest=draft_digest,
+                    )
+                    lifecycle = _planning_lifecycle_payload(workspace)
+                for frame in _build_abandon_frames(
+                    encoder=encoder,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    message_id=message_id,
+                    result=result,
+                    lifecycle=lifecycle,
+                ):
+                    yield frame
+                return
+            status, lifecycle, message = await _execute_workbench_plan_control(
+                action=action,
+                workspace=workspace,
+                target_run_id=target_run_id,
+                thread_id=thread_id,
+                owner_session_id=owner_session_id,
+            )
+            workflow = _build_plan_control_workflow(
+                action=action,
+                status=status,
+                target_run_id=target_run_id,
+                thread_id=thread_id,
+                run_id=run_id,
+                message=message,
+                lifecycle=lifecycle,
+            )
+            for frame in _build_plan_control_success_frames(
                 encoder=encoder,
                 thread_id=thread_id,
                 run_id=run_id,
                 message_id=message_id,
-                result=result,
+                workflow=workflow,
+                message=message,
                 lifecycle=lifecycle,
             ):
                 yield frame
-            return
-        _assert_execution_control_owner(workspace, target_run_id, thread_id)
-        lifecycle = application_lifecycle_payload(
-            end_workbench_execution(workspace, run_id=target_run_id)
-            if action == "end"
-            else stop_workbench_execution(workspace, run_id=target_run_id)
-        )
-        message = (
-            "计划已结束，工作区已恢复自由输入。"
-            if action == "end"
-            else "计划执行已暂停，可继续执行、调整计划或结束。"
-        )
-        workflow = {
-            "runId": run_id,
-            "threadId": thread_id,
-            "summary": {
-                "status": "cancelled",
-                "phase": "plan_control",
-                "message": message,
-                "lifecycle": lifecycle,
-            },
-            "events": [],
-            "state": {"status": "cancelled", "phase": "plan_control", "lifecycle": lifecycle},
-            "result": {"status": "cancelled", "phase": "plan_control", "lifecycle": lifecycle},
-        }
-        yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
-        yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
-        # 控制动作写入成功后立即广播生命周期，所有工作台区域共享同一 revision。
-        yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle))
-        yield encoder.encode(CustomEvent(name="workflow-run", value=workflow))
-        yield encoder.encode(StateSnapshotEvent(snapshot={"workflow": workflow}))
-        yield encoder.encode(TextMessageContentEvent(messageId=message_id, delta=message))
-        yield encoder.encode(TextMessageEndEvent(messageId=message_id))
-        yield encoder.encode(
-            RunFinishedEvent(
-                threadId=thread_id,
-                runId=run_id,
-                result={"workflow": workflow},
-            )
-        )
+        except Exception as error:
+            for frame in _build_plan_control_error_frames(
+                encoder=encoder,
+                action=action,
+                workspace=workspace,
+                target_run_id=target_run_id,
+                thread_id=thread_id,
+                run_id=run_id,
+                message_id=message_id,
+                error=error,
+            ):
+                yield frame
 
     return stream()
 
@@ -481,7 +1069,7 @@ def _build_abandon_frames(
     result: AbandonPendingResult,
     lifecycle: dict[str, Any] | None,
 ) -> Iterator[str]:
-    """把 Pending Abandon 结果编码成完整 AG-UI 生命周期，不触发 Graph 或取消。"""
+    """把 Pending Abandon 结果编码成 AG-UI 生命周期，不触发 Graph 或取消。"""
 
     messages = {
         "abandoned": "当前 Pending Build DAG 已安全放弃。",
@@ -532,8 +1120,6 @@ def _build_abandon_frames(
             **({"lifecycle": lifecycle} if lifecycle is not None else {}),
         },
     }
-    yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
-    yield encoder.encode(TextMessageStartEvent(messageId=message_id, role="assistant"))
     if lifecycle is not None:
         # Abandon 成功或拒绝后都先广播 Backend 当前事实，前端不能按点击顺序猜测状态。
         yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle))

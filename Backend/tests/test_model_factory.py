@@ -45,7 +45,7 @@ class ModelFactoryOverrideTests(unittest.TestCase):
             model="test-model", base_url="https://example.com/v1", api_key="test-key",
             temperature=0.4, max_tokens=2048, timeout=120.0, max_retries=2,
             http_client=self.sync_factory.return_value, http_async_client=self.async_factory.return_value,
-            streaming=False, callbacks=None, model_kwargs={},
+            streaming=True, callbacks=None, extra_body=None,
         )
         self.sync_factory.assert_called_once_with(trust_env=True, timeout=httpx.Timeout(120.0, connect=30.0))
         self.async_factory.assert_called_once_with(trust_env=True, timeout=httpx.Timeout(120.0, connect=30.0))
@@ -125,13 +125,13 @@ class ModelFactoryOverrideTests(unittest.TestCase):
             max_tokens_override=4096, max_retries_override=0, timeout_seconds_override=60.0,
             extra_model_kwargs=extras)
         kwargs = self.model_factory.call_args.kwargs
-        self.assertEqual(kwargs["model_kwargs"], {"extra_body": extras})
-        self.assertIsNot(kwargs["model_kwargs"]["extra_body"], extras)
+        self.assertEqual(kwargs["extra_body"], extras)
+        self.assertIsNot(kwargs["extra_body"], extras)
         self.assertTrue(kwargs["streaming"])
         self.assertEqual(kwargs["callbacks"], [self.handler_factory.return_value])
         self.assertEqual(extras, before)
         create_chat_model(self.settings)
-        self.assertEqual(self.model_factory.call_args.kwargs["model_kwargs"], {})
+        self.assertIsNone(self.model_factory.call_args.kwargs["extra_body"])
         self.assertIsNone(self.model_factory.call_args.kwargs["callbacks"])
 
     def test_missing_api_key_still_fails_before_constructing_clients(self) -> None:

@@ -63,6 +63,8 @@ def launch_project(state: ProjectState) -> dict:
         **review_context,
         "phase": "launch_project",
         "status": "requires_user_input",
+        "message": "项目已启动，请预览页面并完成最终验收。",
+        "error": "",
         "preview_url": preview_url,
         "launch_result": launch,
         "acceptance_request": {
@@ -410,6 +412,8 @@ def _failed_project_launch(launch: dict) -> dict:
     return {
         "phase": "launch_project",
         "status": "failed",
+        "message": f"项目启动失败：{failure_reason}",
+        "error": failure_reason,
         "preview_url": failure_reason,
         "launch_result": launch,
         "acceptance_request": {
@@ -437,12 +441,19 @@ def finalize_project(state: ProjectState) -> dict:
     }
 
 def handle_failure(state: ProjectState) -> dict:
-    """保留上游失败原因并统一结束失败工作流。"""
+    """保留真实失败原因，避免把已完成节点的成功摘要当作错误。"""
+
+    # message 是各节点共用的结果摘要；只有上游明确失败时才可作为失败原因。
+    from app.services.workflow_failure_message import workflow_failure_message
+
+    message = workflow_failure_message(state) or (
+        state.get("message") if state.get("status") == "failed" else None
+    ) or "Workflow 执行失败，未提供具体错误原因，请查看执行记录。"
 
     return {
         "phase": "failed",
         "status": "failed",
-        "message": state.get("message") or "Workflow 执行失败。",
-        "error": state.get("error"),
+        "message": message,
+        "error": message,
         "timeline": ["handle_failure"],
     }

@@ -38,6 +38,25 @@ export function resolveWorkflowForDisplay(
   return undefined
 }
 
+/** 判断当前 Workflow 是否已经收到 Backend 确认结束计划的控制回执。 */
+export function workflowEndedPlanControl(workflow?: WorkflowRunPayload): boolean {
+  if (!workflow) return false
+  const candidates = [
+    workflow.summary.planControl,
+    workflow.state?.planControl,
+    workflow.result?.planControl
+  ]
+  return candidates.some((candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false
+    const control = candidate as Record<string, unknown>
+    return (
+      control.action === 'end' &&
+      (control.status === 'ended' || control.status === 'already_ended')
+    )
+  })
+}
+
+
 /** 判断 Workflow 是否承载 Build DAG 确认，统一兼容当前 AG-UI 投影位置。 */
 function isDagConfirmationWorkflow(workflow: WorkflowRunPayload): boolean {
   return workflowClarification(workflow)?.mode === 'build_task_plan_confirmation'
@@ -503,55 +522,6 @@ export function workflowResumeNode(
   return executionPhase && supported.has(executionPhase) ? executionPhase : 'build'
 }
 
-/** 判断当前 Workflow 或生命周期 execution 是否存在可由显式动作恢复的 Build 失败。 */
-export function workflowCanRetryFailedTasks(
-  workflow?: WorkflowRunPayload,
-  execution?: WorkbenchExecution
-): boolean {
-  // 失败时生命周期是后端权威来源；即使历史 Workflow 快照尚未带回修复计划，也不能隐藏恢复入口。
-  if (execution?.status === 'failed' && execution.error?.recoverable === true) return true
-
-  const candidates: unknown[] = [
-    workflow?.summary?.buildSummary,
-    workflow?.summary?.build_summary,
-    workflow?.state?.buildSummary,
-    workflow?.state?.build_summary,
-    workflow?.result?.build_summary,
-    workflow?.result?.buildSummary
-  ]
-  const summary = candidates.find((candidate): candidate is Record<string, unknown> => {
-    if (!candidate || typeof candidate !== 'object') return false
-    return [
-      'recovery_available',
-      'recoveryAvailable',
-      'retry_available',
-      'retryAvailable',
-      'retryable_failures',
-      'retryableFailures'
-    ].some((key) => key in candidate)
-  })
-  if (!summary) return workflowHasReadyRepairPlan(workflow)
-  if (typeof summary.recovery_available === 'boolean') {
-    return summary.recovery_available || workflowHasReadyRepairPlan(workflow)
-  }
-  if (typeof summary.recoveryAvailable === 'boolean') {
-    return summary.recoveryAvailable || workflowHasReadyRepairPlan(workflow)
-  }
-  if (typeof summary.retry_available === 'boolean') {
-    return summary.retry_available || workflowHasReadyRepairPlan(workflow)
-  }
-  if (typeof summary.retryAvailable === 'boolean') {
-    return summary.retryAvailable || workflowHasReadyRepairPlan(workflow)
-  }
-  const retryable = Number(summary.retryable_failures ?? summary.retryableFailures ?? 0)
-  const repairable = Number(summary.repairable_failures ?? summary.repairableFailures ?? 0)
-  const confirmation = Number(summary.requires_confirmation ?? summary.requiresConfirmation ?? 0)
-  return (
-    workflowHasReadyRepairPlan(workflow) ||
-    (retryable > 0 && repairable === 0 && confirmation === 0)
-  )
-}
-
 /** 从 Workflow 的 summary/state/result 中读取后端签发的审查模型重试能力。 */
 export function workflowCodeReviewRetry(
   workflow?: WorkflowRunPayload
@@ -572,30 +542,4 @@ export function workflowCodeReviewRetry(
     }
   }
   return undefined
-}
-
-/** 从 Workflow 快照识别已生成且仍有待执行任务的 RepairPlanner 计划。 */
-function workflowHasReadyRepairPlan(workflow?: WorkflowRunPayload): boolean {
-  const candidates: unknown[] = [
-    workflow?.summary?.repairTaskPlan,
-    workflow?.summary?.repair_task_plan,
-    workflow?.state?.repairTaskPlan,
-    workflow?.state?.repair_task_plan,
-    workflow?.result?.repairTaskPlan,
-    workflow?.result?.repair_task_plan
-  ]
-  return candidates.some((candidate) => {
-    if (!candidate || typeof candidate !== 'object') return false
-    const plan = candidate as Record<string, unknown>
-    if (plan.decision && plan.decision !== 'repair') return false
-    if (plan.status && !['ready', 'pending', 'in_progress'].includes(String(plan.status))) {
-      return false
-    }
-    const tasks = Array.isArray(plan.tasks) ? plan.tasks : []
-    return tasks.some((task) => {
-      if (!task || typeof task !== 'object') return false
-      const status = String((task as Record<string, unknown>).status || 'pending')
-      return !['completed', 'already_satisfied'].includes(status)
-    })
-  })
 }

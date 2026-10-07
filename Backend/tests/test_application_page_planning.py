@@ -4,6 +4,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -24,6 +25,8 @@ from app.domain.application_lifecycle import (
     ApplicationLifecycleStatus,
 )
 from app.domain.application_revision import RevisionImpact, RevisionTarget
+from app.domain.execution_recovery import DurableExecutionRecord, DurableExecutionStatus
+from app.persistence.execution_recovery import insert_execution
 from app.protocols.application_page_planning import (
     _prepare_retry_template_reconcile_payload,
     application_page_planning_capabilities,
@@ -154,7 +157,30 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 """返回同一 thread 的待确认需求状态。"""
 
                 self.config = config
-                return type("Snapshot", (), {"values": self.values})()
+                return type(
+                    "Snapshot",
+                    (),
+                    {
+                        "values": self.values,
+                        "tasks": (
+                            SimpleNamespace(
+                                interrupts=(
+                                    SimpleNamespace(
+                                        id="requirement-review",
+                                        value={
+                                            "type": "application_planning_review",
+                                            "gateId": "requirement_document:test",
+                                            "artifact": "requirement_document",
+                                            "artifactRevision": "test",
+                                            "phase": "requirements",
+                                            "clarification": self.values["clarification"],
+                                        },
+                                    ),
+                                )
+                            ),
+                        ),
+                    },
+                )()
 
             async def astream(self, *_args, **_kwargs):
                 """禁止恢复动作执行 Graph。"""
@@ -165,6 +191,24 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             artifact = Path(directory) / ".devagentstudio" / "drafts" / "specs" / "requirement-spec.md"
             artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text("# RequirementSpec\n\n待确认需求。\n", encoding="utf-8")
+            now = datetime.now(timezone.utc)
+            asyncio.run(
+                insert_execution(
+                    DurableExecutionRecord(
+                        run_id="original-run",
+                        thread_id="planning-thread",
+                        workspace=directory,
+                        project_id="app-1",
+                        execution_kind="application_planning",
+                        workflow_scope="application_planning",
+                        first_node="requirements",
+                        current_node="requirements",
+                        status=DurableExecutionStatus.AWAITING_USER,
+                        started_at=now,
+                        updated_at=now,
+                    )
+                )
+            )
             graph = RecoveryGraph()
             graph.values = {
                 "active_run_id": "original-run",
@@ -208,7 +252,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
         self.assertEqual(
             graph.config,
-            {"configurable": {"thread_id": "planning-thread"}},
+            {"configurable": {"thread_id": "planning-thread", "checkpoint_ns": ""}},
         )
         self.assertIn("workflow-run", frames)
         self.assertIn("requirement_document_confirmation", frames)

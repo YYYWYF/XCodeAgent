@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config import Settings
+from app.domain.execution_recovery import WorkflowReentryReason
 from app.graph.nodes.common import workspace_from_state
 from app.graph.nodes.task_planning_inputs import mainline_formal_contract_inputs
 from app.graph.nodes.tasks import (
@@ -46,8 +47,9 @@ from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.dag_planning_inputs import assemble_mainline_planning_inputs
 from app.services.dag_planning_regeneration import regenerate_pending_build_task_plan
 from app.services.planning_frozen import plain_json
-from app.services.planning_run_contracts import PlanningRun
+from app.services.planning_run_contracts import PlanningRun, PlanningRunProjection
 from app.services.planning_run_progress import project_planning_run_progress
+from app.services.node_recovery_context import current_node_recovery_context
 from app.services.template_state import load_template_state, template_context
 from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
@@ -188,16 +190,19 @@ async def _run_async_workflow_planning_adapter(
     if isinstance(context, dict):
         return context
     planning_kwargs: dict[str, Any] = {}
-    if state.get("workflow_action") == "retry_failed_tasks":
-        # DAG generation Retry 的身份是明确 source execution；不能使用
-        # retry_failed_tasks 布尔值，因为它只表示 resume_from=build 的 Build 重试。
-        recovery_source_workflow_run_id = str(
-            state.get("resume_execution_run_id") or ""
-        ).strip()
-        if recovery_source_workflow_run_id:
-            planning_kwargs["recovery_source_workflow_run_id"] = (
-                recovery_source_workflow_run_id
-            )
+    recovery_context = current_node_recovery_context()
+    if (
+        recovery_context is not None
+        and recovery_context.reentry_reason
+        in {WorkflowReentryReason.FAILURE_RETRY, WorkflowReentryReason.BUSINESS_RETRY,
+            WorkflowReentryReason.INTERRUPTED_CONTINUE}
+    ):
+        # 来源由 Native Recovery 的首次目标节点调用绑定，不读取客户端旧动作。
+        planning_kwargs["recovery_source_workflow_run_id"] = (
+            recovery_context.source_run_id
+        )
+        if recovery_context.reentry_reason is WorkflowReentryReason.INTERRUPTED_CONTINUE:
+            planning_kwargs["recovery_interrupted"] = True
     result = await planning_service(
         context.inputs,
         workspace_state=state,
@@ -243,6 +248,23 @@ async def _run_regenerate_branch(
 
     workflow_run_id, thread_id = _workflow_identity(state)
     refreshed_context: list[_PlanningContext] = []
+    recovery = current_node_recovery_context()
+    recovery_source: str | None = None
+    reuse_recovery_candidate = True
+    if recovery is not None:
+        source_action = recovery.entry_state.get("build_task_plan_confirmation")
+        if not isinstance(source_action, dict) or any(
+            source_action.get(key) != action_payload.get(key)
+            for key in ("action", "planning_run_id", "draft_digest")
+        ):
+            return _reject_unsupported_planning_action(state, {"action": "stale_regenerate"})
+        if recovery.entry_state.get("build_execution_scope") != state.get("build_execution_scope"):
+            return _reject_unsupported_planning_action(state, {"action": "stale_regenerate"})
+        recovery_source = recovery.source_run_id
+        reuse_recovery_candidate = recovery.reentry_reason in {
+            WorkflowReentryReason.FAILURE_RETRY, WorkflowReentryReason.BUSINESS_RETRY,
+            WorkflowReentryReason.INTERRUPTED_CONTINUE,
+        }
 
     def current_inputs_factory(
         fresh_formal: dict[str, Any] | None,
@@ -274,6 +296,15 @@ async def _run_regenerate_branch(
         settings=settings,
         generate_once=generate_once,
         publish=create_planning_run_progress_publisher(),
+        recovery_source_workflow_run_id=recovery_source,
+        reuse_recovery_candidate=reuse_recovery_candidate,
+        recovery_interrupted=(
+            recovery is not None
+            and recovery.reentry_reason is WorkflowReentryReason.INTERRUPTED_CONTINUE
+        ),
+        recovery_lineage_run_ids=(
+            recovery.source_lineage_run_ids if recovery is not None else ()
+        ),
     )
     if result.status != "regenerated":
         context = _assemble_planning_context(state)
@@ -287,7 +318,12 @@ async def _run_regenerate_branch(
             state=state,
             context=context,
         )
-    if not refreshed_context or result.planning_run is None or result.draft_identity is None:
+    if not refreshed_context:
+        from app.workspace.task_documents import load_confirmed_build_task_plan
+        from app.workspace.spec_documents import workspace_root
+
+        current_inputs_factory(load_confirmed_build_task_plan(workspace_root(state)))
+    if result.planning_run is None or result.draft_identity is None:
         raise RuntimeError("Regenerate 成功结果缺少新 PlanningRun 或 DraftIdentity。")
     pending = load_pending_build_task_plan(state)
     if pending is None:
@@ -501,7 +537,7 @@ def _project_pending_result(
     pending_plan_path: str,
     planning_run_id: str,
     draft_digest: str,
-    planning_run: PlanningRun,
+    planning_run: PlanningRunProjection,
     context: _PlanningContext,
 ) -> dict[str, Any]:
     """统一投影首次生成或 Regenerate 产生的新 PendingPlan。

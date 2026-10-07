@@ -211,32 +211,30 @@ export function ensureApplicationPlanningAction(
 // 判断当前应用规划是否已经进入可展示的用户交互阶段，避免被仍在收尾的传输状态遮挡。
 export function planningWorkflowRequiresUserInput(workflow?: WorkflowRunPayload): boolean {
   if (!workflow) return false
+  // Application Planning 的当前交互能力只能来自 Backend 投影的真实 Native Interrupt；
+  // summary、clarification 与 Lifecycle 都可能是已消费 checkpoint 的历史数据。
+  return Boolean(applicationPlanningInterrupt(workflow))
+}
+
+// 判断通用消息卡片是否需要展示待用户处理状态；开发阶段的 API 映射等门禁不要求规划中断。
+export function workflowCardRequiresUserInput(workflow?: WorkflowRunPayload): boolean {
+  if (!workflow) return false
   const clarificationCandidates = [
     workflow.summary.clarification,
     workflow.result?.clarification,
     workflow.state?.clarification
   ]
   if (workflow.summary.status === 'requires_user_input') {
-    const clarification = planningWorkflowClarification(workflow)
     const hasProjectedClarification = clarificationCandidates.some(
       (value) => value && typeof value === 'object'
     )
-    return Boolean(clarification) || !hasProjectedClarification
+    if (!hasProjectedClarification) return true
   }
-  for (const value of clarificationCandidates) {
+  return clarificationCandidates.some((value) => {
     const clarification =
       value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined
-    if (
-      clarification?.status === 'requires_user_input' &&
-      applicationPlanningClarificationMatchesPhase(
-        workflow,
-        clarification as WorkflowClarification
-      )
-    ) {
-      return true
-    }
-  }
-  return false
+    return clarification?.status === 'requires_user_input'
+  })
 }
 
 // 判断规划运行是否仍在实际生成；已投影待确认交互时即使 summary 暂留 running 也必须解锁输入。
@@ -352,11 +350,13 @@ export function planningWorkflowPhase(workflow?: WorkflowRunPayload): string {
   if (lifecyclePhase) return lifecyclePhase
   const events = workflow?.events || []
   const lastEvent = events.length ? events[events.length - 1] : undefined
-  if (lastEvent?.type === 'workflow.node.started') {
-    const startedPhase = lastEvent.nodeName || lastEvent.node?.id
-    if (startedPhase) return String(startedPhase)
-  }
-  return String(workflow?.summary?.phase || '')
+  const startedPhase =
+    lastEvent?.type === 'workflow.node.started'
+      ? lastEvent.nodeName || lastEvent.node?.id
+      : undefined
+  const phase = String(startedPhase || workflow?.summary?.phase || '')
+  // TechnicalPlan 的事务子节点都属于同一个可见规划阶段；首帧尚无 lifecycle 时也要显示生成进度。
+  return phase.startsWith('technical_planning_') ? 'technical_planning' : phase
 }
 
 /** 判断当前 UI Manifest 是否已由用户明确跳过，避免继续展示旧 UI 设计稿。 */

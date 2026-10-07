@@ -70,9 +70,22 @@ class DevelopmentArtifactProgress(DevelopmentArtifactModel):
 class EntityDevelopmentProgress(DevelopmentArtifactModel):
     """实体完成以当前正式绑定的确认状态为证据，不伪造 Build 执行记录。"""
 
-    initial_development_status: Literal["pending", "in_progress", "completed"] = Field(
+    initial_development_status: Literal["pending", "in_progress", "completed", "skipped"] = Field(
         default="pending", alias="initialDevelopmentStatus"
     )
+    skipped_at: datetime | None = Field(default=None, alias="skippedAt")
+    skip_reason: str | None = Field(default=None, alias="skipReason", min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_skip(self) -> "EntityDevelopmentProgress":
+        """跳过实体必须保存明确理由和时间，不能伪装成正式绑定完成。"""
+
+        if self.initial_development_status == "skipped":
+            if self.skipped_at is None or self.skip_reason is None:
+                raise ValueError("跳过实体必须提供 skippedAt 和 skipReason。")
+        elif self.skipped_at is not None or self.skip_reason is not None:
+            raise ValueError("未跳过的实体不能携带跳过证据。")
+        return self
     # 同 DevelopmentArtifactProgress.completed_branch_name：首次完成所在的分支名。
     # 实体完成状态每次 reconcile 都重算，所以这个标签必须显式从上一份状态继承。
     completed_branch_name: str | None = Field(default=None, alias="completedBranchName")

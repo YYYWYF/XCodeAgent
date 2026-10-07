@@ -116,9 +116,8 @@ def workflow_capabilities() -> dict[str, Any]:
             "requestField": "forwardedProps.workflowAction",
             "values": {
                 "retry_failed_tasks": (
-                    "恢复当前 execution 中的失败阶段：前置检查、工作区扫描或 DAG 失败"
-                    "回到对应节点；Build 阶段优先重试 retry 分类的瞬时失败；"
-                    "没有瞬时候选时，执行已生成且无需额外确认的 RepairPlanner 修复任务。"
+                    "旧失败恢复入口已停用；请刷新当前 Recovery Incident，"
+                    "执行服务端签发的恢复动作。"
                 ),
                 "retry_code_review": (
                     "仅在 codeReviewRetry.available=true 时恢复失败的审查扫描或修复模型请求；"
@@ -200,6 +199,8 @@ def workflow_capabilities() -> dict[str, Any]:
             "actions": ["stop", "end", "abandon"],
             "abandonIdentityFields": ["planningRunId", "draftDigest"],
             "abandonSemantics": "删除精确匹配的 PendingPlan，结束对应 Workflow execution；不取消 active Scheduler。",
+            "endSemantics": "按当前 workspace、Workbench 类型和精确 target runId 终止并清理目标 execution；不要求原始 thread/session 持有。",
+            "stopSemantics": "保留当前 execution 的 thread/session 持有校验，只暂停并保留恢复所需的 lifecycle 记录。",
         },
         "clarificationModes": {
             "api_design_required": {

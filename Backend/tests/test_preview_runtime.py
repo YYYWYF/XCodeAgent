@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from app.protocols.preview_runtime import build_preview_runtime_stream, blocking_task
 from app.agents.repair_planner.planner import _build_failure_repair_prompt
-from app.services.preview_runtime_guard import claim_maintenance, maintenance_owner, release_maintenance, require_no_maintenance
+from app.services.preview_runtime_guard import _owners, claim_maintenance, maintenance_owner, release_maintenance, require_no_maintenance
 from app.services.preview_runtime_repair import execute_repair, load_repair, prepare_repair, save_repair, source_digest, safe_file
 from app.services.preview_runtime_state import (
     begin_attempt,
@@ -198,6 +198,72 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(value["runtime"]["repairAvailable"])
         self.assertIsNone(value["blockedBy"])
         self.assertIsNone(maintenance_owner(self.workspace))
+
+    async def test_orphaned_repair_preserves_rounds_and_requires_new_confirmation(self) -> None:
+        """真实 AG-UI 读取收口孤儿，修订沿用预算而不能直接重放旧确认。"""
+        attempt = self.fail_launch()
+        for action in ("diagnose", "confirm", "revise"):
+            with self.subTest(action=action):
+                original = {"status": "running", "planId": "old", "attemptId": attempt,
+                            "iteration": 2, "markdown": "# 原计划", "tasks": [{"id": "preserved"}],
+                            "codeChangeSets": [{"id": "committed-change"}]}
+                save_repair(self.workspace, self.thread, original)
+                claim_maintenance(self.workspace, self.thread, action)
+                # 模拟 Backend 重启丢失内存所有者，读取当前持久格式。
+                _owners.pop(self.workspace, None)
+                with patch("app.protocols.preview_runtime.stop_project_preview") as stop:
+                    value = self.result(await self.request("get"))
+                self.assertEqual(value["repair"]["status"], "stopped")
+                self.assertTrue(value["repair"]["interrupted"])
+                self.assertEqual(load_repair(self.workspace, self.thread)["tasks"], original["tasks"])
+                self.assertEqual(value["repair"]["iteration"], 2)
+                self.assertEqual(value["repair"]["codeChangeSets"], original["codeChangeSets"])
+                self.assertIsNone(maintenance_owner(self.workspace))
+                stop.assert_not_called()
+                self.assertEqual(self.result(await self.request("confirm", planId="old"))["status"], "failed")
+                renewed = {**original, "status": "awaiting_confirmation", "planId": "new", "interrupted": False}
+                with patch("app.protocols.preview_runtime.prepare_repair", return_value=renewed) as prepare, patch("app.protocols.preview_runtime.execute_repair") as execute:
+                    value = self.result(await self.request("revise"))
+                self.assertEqual(prepare.call_args.args[2]["iteration"], 2)
+                execute.assert_not_called()
+                self.assertEqual(value["repair"]["status"], "awaiting_confirmation")
+                release_maintenance(self.workspace, self.thread)
+
+    async def test_orphaned_repair_launch_cleans_partial_services(self) -> None:
+        """修复末尾启动服务时中断，也必须清理进程并开放纯启动重试。"""
+        begin_attempt(self.workspace)
+        save_repair(self.workspace, self.thread, {"status": "running", "iteration": 2})
+        claim_maintenance(self.workspace, self.thread, "confirm")
+        with patch("app.protocols.preview_runtime.stop_project_preview") as stop:
+            value = self.result(await self.request("get"))
+        stop.assert_called_once()
+        self.assertEqual(value["runtime"]["failedStage"], "launch_interrupted")
+        self.assertEqual(value["repair"]["iteration"], 2)
+        self.assertIsNone(maintenance_owner(self.workspace))
+
+    async def test_waiting_plan_and_live_worker_are_not_orphans(self) -> None:
+        """确认暂停与真实执行者都不能被读请求当作中断收口。"""
+        repair = {"status": "awaiting_confirmation", "planId": "p", "iteration": 1}
+        save_repair(self.workspace, self.thread, repair)
+        claim_maintenance(self.workspace, self.thread, "confirm")
+        self.assertEqual(self.result(await self.request("get"))["repair"]["status"], "awaiting_confirmation")
+        self.assertIsNotNone(maintenance_owner(self.workspace))
+        save_repair(self.workspace, self.thread, {**repair, "status": "running"})
+        job = asyncio.create_task(asyncio.Event().wait())
+        try:
+            with patch("app.protocols.preview_runtime._jobs", {(str(Path(self.workspace).resolve()), self.thread): job}):
+                self.assertEqual(self.result(await self.request("get"))["repair"]["status"], "running")
+                self.assertIsNotNone(maintenance_owner(self.workspace))
+        finally:
+            job.cancel()
+            await asyncio.gather(job, return_exceptions=True)
+
+    async def test_ordinary_stopped_repair_cannot_use_interruption_retry(self) -> None:
+        """显式停止的修复不能借断线重试改变原有操作规则。"""
+        save_repair(self.workspace, self.thread, {"status": "stopped", "iteration": 2})
+        with patch("app.protocols.preview_runtime.prepare_repair") as prepare:
+            self.assertEqual(self.result(await self.request("revise"))["status"], "failed")
+        prepare.assert_not_called()
 
     async def test_changed_source_rejects_confirmation(self) -> None:
         """待确认文件被修改后不能继续执行原计划。"""

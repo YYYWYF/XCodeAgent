@@ -17,9 +17,12 @@ from app.graph.subgraphs.build import (
     build,
     run_build_scheduler,
 )
-from app.services.build_task_planner import replace_build_task_plan_tasks
+from app.domain.execution_recovery import WorkflowReentryReason
+from app.services.node_recovery_context import NodeRecoveryContext, bind_node_recovery, bind_recovery_runtime
+from app.services.build_task_planner import replace_build_task_plan_tasks, tasks_from_build_task_plan
 from app.services.build_scheduler import attribute_task_file_changes
 from app.services.template_state import load_template_state, template_context
+from app.workspace.task_documents import write_build_execution_record
 
 
 def _write_workspace_file(workspace: str | None, rel_path: str) -> None:
@@ -88,6 +91,172 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_native_build_without_internal_progress_executes_original_node(self) -> None:
+        """可信入口没有业务失败快照时，Build 仍派发原计划任务。"""
+
+        scope = {"type": "application", "targetId": "application"}
+        task = {"id": "A", "owner": "backend", "status": "pending", "dependencies": [],
+                "change_scope": [{"operation": "add", "path": "Backend/app/A.py"}]}
+        calls: list[list[str]] = []
+
+        def runner(**kwargs):
+            """记录实际调度并生成授权文件。"""
+
+            ids = [item["id"] for item in kwargs["tasks"]]
+            calls.append(ids)
+            for item in kwargs["tasks"]:
+                _write_workspace_file(kwargs.get("workspace"), item["change_scope"][0]["path"])
+            return [{"task_id": item_id, "owner": "backend", "status": "completed"} for item_id in ids]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            entry = _ready_build_state(workspace, {
+                "workspace": workspace, "project_plan": {"version": "1.0.0"},
+                "build_execution_scope": scope,
+                "build_task_plan": replace_build_task_plan_tasks({
+                    "schema_version": "build-dag.v4",
+                    "build_units": {"application:root": {"id": "application:root", "kind": "application", "task_ids": ["A"]}},
+                    "unit_graph": {"nodes": ["application:root"], "edges": []},
+                }, [task]),
+                "tasks": [task], "active_run_id": "run-child", "active_thread_id": "thread-build",
+            })
+            context = NodeRecoveryContext(
+                source_run_id="run-source", execution_run_id="run-child",
+                thread_id="thread-build", target_node="build", checkpoint_id="entry-build",
+                reentry_reason=WorkflowReentryReason.FAILURE_RETRY,
+                entry_state={**entry, "active_run_id": "run-source"},
+            )
+            with (
+                bind_recovery_runtime(context), bind_node_recovery(entry, "build"),
+                patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner),
+                patch("app.graph.subgraphs.build._finalize_build", return_value=({}, {}, None, [], None)),
+            ):
+                result = run_build_scheduler(entry)
+            self.assertEqual(calls, [["A"]])
+            self.assertEqual(result["build_summary"]["status"], "completed")
+
+    def test_native_build_recovery_keeps_completed_task_and_retries_network_failure(self) -> None:
+        """节点入口旧任务为 pending 时，可信 source 运行态仍阻止 A 重跑并派发 B。"""
+
+        scope = {"type": "application", "targetId": "application"}
+        tasks = [
+            {"id": task_id, "owner": "backend", "status": "pending", "dependencies": [],
+             "change_scope": [{"operation": "add", "path": f"Backend/app/{task_id}.py"}]}
+            for task_id in ("A", "B")
+        ]
+        calls: list[list[str]] = []
+
+        def runner(**kwargs):
+            """记录执行器任务并为本轮成功写入实际工作区文件。"""
+
+            ids = [task["id"] for task in kwargs["tasks"]]
+            calls.append(ids)
+            for task in kwargs["tasks"]:
+                _write_workspace_file(kwargs.get("workspace"), task["change_scope"][0]["path"])
+            return [{"task_id": task_id, "owner": "backend", "status": "completed"} for task_id in ids]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            entry = _ready_build_state(workspace, {
+                "workspace": workspace, "project_plan": {"version": "1.0.0"},
+                "build_execution_scope": scope,
+                "build_task_plan": replace_build_task_plan_tasks({
+                    "schema_version": "build-dag.v4",
+                    "build_units": {"application:root": {"id": "application:root", "kind": "application", "task_ids": ["A", "B"]}},
+                    "unit_graph": {"nodes": ["application:root"], "edges": []},
+                }, tasks),
+                "tasks": tasks, "active_run_id": "run-child", "active_thread_id": "thread-build",
+            })
+            _, binding, errors = _bound_build_task_plan_for_build(entry)
+            self.assertEqual(errors, [])
+            formal_tasks = tasks_from_build_task_plan(entry["build_task_plan"])
+            source = {
+                **entry, **binding, "active_run_id": "run-source",
+                "tasks": [{**formal_tasks[0], "status": "completed"}, {**formal_tasks[1], "status": "failed"}],
+                "build_results": [
+                    {"task_id": "A", "owner": "backend", "status": "completed"},
+                    {"task_id": "B", "owner": "backend", "status": "failed", "failure_category": "network_error"},
+                ],
+            }
+            context = NodeRecoveryContext(
+                source_run_id="run-source", execution_run_id="run-child",
+                thread_id="thread-build", target_node="build", checkpoint_id="entry-build",
+                reentry_reason=WorkflowReentryReason.FAILURE_RETRY,
+                entry_state={**entry, "active_run_id": "run-source"},
+                internal_progress=source,
+            )
+            with (
+                bind_recovery_runtime(context), bind_node_recovery(entry, "build"),
+                patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner),
+                patch("app.graph.subgraphs.build._finalize_build", return_value=({}, {}, None, [], None)),
+            ):
+                result = run_build_scheduler(entry)
+            self.assertEqual(calls, [["B"]])
+            self.assertEqual(result["build_summary"]["status"], "completed")
+            self.assertEqual(result["build_summary"]["retry_task_ids"], ["B"])
+
+    def test_disk_progress_activates_failure_retry_without_entry_flag(self) -> None:
+        """磁盘来源经原节点恢复后应派发可重试的 B，入口 retry 标志无关。"""
+
+        scope = {"type": "application", "targetId": "application"}
+        tasks = [
+            {"id": name, "owner": "backend", "status": "pending", "dependencies": [],
+             "change_scope": [{"operation": "add", "path": f"Backend/app/{name}.py"}]}
+            for name in ("A", "B")
+        ]
+        calls: list[list[str]] = []
+
+        def runner(**kwargs):
+            """记录恢复后实际派发，并生成任务授权的文件。"""
+
+            ids = [task["id"] for task in kwargs["tasks"]]
+            calls.append(ids)
+            for task in kwargs["tasks"]:
+                _write_workspace_file(kwargs.get("workspace"), task["change_scope"][0]["path"])
+            return [{"task_id": name, "owner": "backend", "status": "completed"} for name in ids]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            entry = _ready_build_state(workspace, {
+                "workspace": workspace, "project_plan": {"version": "1.0.0"},
+                "build_execution_scope": scope,
+                "build_task_plan": replace_build_task_plan_tasks({
+                    "schema_version": "build-dag.v4",
+                    "build_units": {"application:root": {"id": "application:root", "kind": "application", "task_ids": ["A", "B"]}},
+                    "unit_graph": {"nodes": ["application:root"], "edges": []},
+                }, tasks),
+                "tasks": tasks, "active_run_id": "run-child", "active_thread_id": "thread-build",
+                "retry_failed_tasks": False,
+            })
+            _, binding, errors = _bound_build_task_plan_for_build(entry)
+            self.assertEqual(errors, [])
+            formal_tasks = tasks_from_build_task_plan(entry["build_task_plan"])
+            progress = {
+                **binding, "active_run_id": "run-source", "build_execution_scope": scope,
+                "tasks": [{**formal_tasks[0], "status": "completed"},
+                          {**formal_tasks[1], "status": "failed"}],
+                "build_results": [
+                    {"task_id": "A", "owner": "backend", "status": "completed"},
+                    {"task_id": "B", "owner": "backend", "status": "failed", "failure_category": "network_error"},
+                ],
+            }
+            write_build_execution_record(entry, {
+                "execution_run_id": "run-source", "thread_id": "thread-build",
+                "build_execution_scope": scope, **binding, "progress": progress,
+                "progress_source_run_id": "run-source", "execution_stage": "batch_committed",
+            })
+            context = NodeRecoveryContext(
+                source_run_id="run-source", execution_run_id="run-child",
+                thread_id="thread-build", target_node="build", checkpoint_id="entry-build",
+                reentry_reason=WorkflowReentryReason.FAILURE_RETRY,
+                entry_state={**entry, "active_run_id": "run-source"},
+            )
+            with (
+                bind_recovery_runtime(context), bind_node_recovery(entry, "build"),
+                patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner),
+                patch("app.graph.subgraphs.build._finalize_build", return_value=({}, {}, None, [], None)),
+            ):
+                result = run_build_scheduler(entry)
+            self.assertEqual(calls, [["B"]])
+            self.assertEqual(result["build_summary"]["status"], "completed")
+
     def test_empty_dag_enters_post_dag_finalization(self) -> None:
         """没有业务任务的确认 DAG 仍必须进入 Post-DAG Finalization。"""
 
@@ -1069,6 +1238,103 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertIn("scheduler:dispatch:page", result["build_events"])
         self.assertEqual(runner_skill_sets, [["workflow-skill"], ["workflow-skill"]])
 
+    def test_explicit_build_resume_restarts_formal_tasks(self) -> None:
+        """主动停止后从 Build 节点重新进入，应重新派发正式任务及下游。"""
+
+        calls: list[list[str]] = []
+        tasks = [
+            {
+                "id": "api",
+                "owner": "backend",
+                "status": "failed",
+                "failure_category": "runner_crash",
+                "dependencies": [],
+                "change_scope": [{"operation": "add", "path": "Backend/app/api.py"}],
+            },
+            {
+                "id": "page",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": ["api"],
+                "change_scope": [{"operation": "add", "path": "Frontend/src/Page.tsx"}],
+            },
+        ]
+        initial_results = [
+            {
+                "task_id": "api",
+                "owner": "backend",
+                "status": "failed",
+                "failure_category": "runner_crash",
+            }
+        ]
+
+        def complete_runner(**kwargs):
+            calls.append([str(task["id"]) for task in kwargs["tasks"]])
+            for task in kwargs["tasks"]:
+                change = task.get("change_scope", [{}])[0]
+                _write_workspace_file(kwargs.get("workspace"), str(change.get("path") or ""))
+            return [
+                {
+                    "task_id": task["id"],
+                    "owner": task["owner"],
+                    "status": "completed",
+                }
+                for task in kwargs["tasks"]
+            ]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_data_sources_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+                patch(
+                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                    side_effect=complete_runner,
+                ),
+            ):
+                result = run_build_scheduler(
+                    _ready_build_state(workspace, {
+                        "workspace": workspace,
+                        "project_plan": {"version": "1.0.0"},
+                        "build_task_plan": replace_build_task_plan_tasks(
+                            {
+                                "schema_version": "build-dag.v4",
+                                "build_units": {
+                                    "application:root": {
+                                        "id": "application:root",
+                                        "kind": "application",
+                                        "task_ids": ["api", "page"],
+                                    }
+                                },
+                                "unit_graph": {"nodes": ["application:root"], "edges": []},
+                            },
+                            tasks,
+                        ),
+                        "build_results": initial_results,
+                        # 旧快照可能残留修复计划；显式重试不能把它重新派发。
+                        "repair_task_plan": {
+                            "decision": "repair",
+                            "tasks": [
+                                {
+                                    "id": "stale-repair",
+                                    "owner": "backend",
+                                    "status": "pending",
+                                    "dependencies": [],
+                                }
+                            ],
+                        },
+                        "resume_from": "build",
+                        "timeline": [],
+                    })
+                )
+
+        self.assertEqual(result["build_summary"]["status"], "completed")
+        self.assertFalse(result["retry_failed_tasks"])
+        self.assertEqual(calls, [["api"], ["page"]])
+        self.assertIn("scheduler:dispatch:api", result["build_events"])
+        self.assertEqual([task["status"] for task in result["tasks"]], ["completed", "completed"])
+
     def test_explicit_retry_resets_runner_failure_and_releases_downstream(self) -> None:
         """重试动作应恢复 runner 失败任务，并在成功后继续执行其下游任务。"""
 
@@ -1165,7 +1431,6 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertEqual(calls, [["api"], ["page"]])
         self.assertIn("scheduler:retry:api", result["build_events"])
         self.assertEqual([task["status"] for task in result["tasks"]], ["completed", "completed"])
-
     def test_explicit_retry_reports_when_no_task_is_retryable(self) -> None:
         """没有 retry 分类候选时应返回明确提示，而不是静默重跑或伪造成功。"""
 

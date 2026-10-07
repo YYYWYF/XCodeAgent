@@ -27,16 +27,12 @@ import type {
   EditorMode,
   WorkflowRevisionContinuation
 } from '../../../typings'
-import {
-  cleanupSessionFailedExecutions,
-  releaseSessionPendingPlan
-} from '../../../service/applicationLifecycle'
+import { prepareSessionDeletion } from '../../../service/applicationLifecycle'
 import type { WorkbenchPhase } from '../../../workbenchPhase'
 import type { AgentChatMessage } from '../types'
 import {
   createSessionIdentity,
   pendingDraftKey,
-  releasePendingBeforeSessionDelete,
   sameDevelopmentTarget,
   sessionIdentityFromSummary,
   sessionRuntimeKey,
@@ -737,30 +733,22 @@ export function useChatSessions({
   const handleDeleteSession = async (sessionId: string): Promise<void> => {
     if (!application.workspaceRoot || deletingSessionId) return
     const key = sessionRuntimeKey(application.workspaceRoot, editorMode, sessionId)
-    if (runningSessionsRef.current.has(key)) return
+    const target = sessions.find((session) => session.id === sessionId)
+    if (!target) return
 
     const nextSession = sessions.find((session) => session.id !== sessionId)
     setDeletingSessionIds((current) => ({ ...current, [editorMode]: sessionId }))
     setSessionErrors((current) => ({ ...current, [editorMode]: undefined }))
 
     try {
-      const releaseSucceeded = await releasePendingBeforeSessionDelete(
-        () => runningSessionsRef.current.has(key),
-        () => releaseSessionPendingPlan(application.workspaceRoot, sessionId),
-        onApplicationLifecycleChange,
-        () => deleteChatSession(application.workspaceRoot, editorMode, sessionId),
-        async () => {
-          const lifecycle = await cleanupSessionFailedExecutions(
-            application.workspaceRoot,
-            sessionId
-          )
-          onApplicationLifecycleChange(lifecycle)
-        },
-        () => {
-          antdMessage.warning('会话已删除，但服务端失败 execution 尚未完全收口。')
-        }
+      const lifecycle = await prepareSessionDeletion(
+        application.workspaceRoot,
+        sessionId,
+        target.threadId
       )
-      if (!releaseSucceeded) return
+      onApplicationLifecycleChange(lifecycle)
+      await agUiSessionsRef.current[key]?.stop()
+      await deleteChatSession(application.workspaceRoot, editorMode, sessionId)
       setSessionSummaries((current) => ({
         ...current,
         [editorMode]: current[editorMode].filter((session) => session.id !== sessionId)

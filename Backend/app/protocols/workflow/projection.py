@@ -458,7 +458,7 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         # 误判为"设计稿生成中"继续渲染设计稿区域。
         if update.get("status") == "requires_user_input":
             return []
-        return ["technical_planning"]
+        return ["technical_planning_begin"]
     if node_name == "product_planning":
         if update.get("status") == "requires_user_input":
             return []
@@ -569,6 +569,11 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         )
     if node_name == "acceptance_phase_confirmation":
         return ["acceptance"] if update.get("status") == "completed" else []
+    if node_name == "acceptance":
+        # 验收子图启动失败或等待用户时没有可执行后继，不能用静态边覆盖恢复目标。
+        return ["finalize_project"] if (
+            update.get("status") == "completed" and update.get("accepted") is True
+        ) else []
     if node_name == "launch_project":
         return ["acceptance_review"] if update.get("status") != "failed" else []
     if node_name == "acceptance_review":
@@ -619,6 +624,11 @@ def _public_workflow_state(
             "development_review_files",
             "test_report_path",
             "test_report_json_path",
+            # Native Recovery 的审阅路由是后端 Durable Graph State，不能成为公开协议事实。
+            "application_planning_review_route",
+            "application_planning_recovery_boundary",
+            "technical_plan_candidate",
+            "technical_plan_candidate_sha256",
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。
             "technical_plan_repair_candidate",
             "technical_plan_repair_errors",
@@ -810,7 +820,14 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "requiresUserInput": update.get("status") == "requires_user_input",
             },
         }
-    if node_name == "technical_planning":
+    if node_name in {
+        "technical_planning",
+        "technical_planning_begin",
+        "technical_planning_generate",
+        "technical_planning_commit",
+        "technical_planning_confirm",
+        "technical_planning_review",
+    }:
         clarification = update.get("clarification")
         return {
             "message": f"技术规划={update.get('technical_plan_path') or update.get('project_plan_path')}",
@@ -1427,8 +1444,14 @@ def _workflow_summary(
             )
             message += f"{iteration_text} 终止原因：{terminal_reason}"
         retry_message = build_summary.get("retry_message")
-        if retry_message:
+        if status == "failed" and build_summary.get("status") == "failed" and retry_message:
             message = str(retry_message)
+        # 当前失败原因优先于旧 Build 重试说明；不改变执行结果或原始诊断。
+        from app.services.workflow_failure_message import workflow_failure_message
+
+        failure_message = workflow_failure_message(result)
+        if status == "failed" and isinstance(failure_message, str) and failure_message.strip():
+            message = failure_message.strip()
     # 只有启动预览及其后续阶段可以公开预览地址，避免重试集成测试时泄漏旧值。
     preview_visible = _preview_visible_for_phase(result.get("phase"))
     if preview_visible and result.get("preview_url") and status != "failed":

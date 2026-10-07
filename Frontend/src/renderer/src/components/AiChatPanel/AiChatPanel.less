@@ -197,6 +197,94 @@
   container-type: inline-size;
 }
 
+.@{class-prefix}-ai-chat-global-fallback {
+  box-sizing: border-box;
+  width: 100%;
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding: 16px 30px 0;
+
+  > .@{class-prefix}-connection-status-banner,
+  > .@{class-prefix}-application-planning-recovery-incident,
+  > .@{class-prefix}-agent-error-card {
+    width: min(100%, 1080px);
+    gap: 9px;
+    margin: 0 auto;
+    padding: 9px 14px;
+  }
+
+  .@{class-prefix}-connection-status-banner-icon,
+  .@{class-prefix}-application-planning-recovery-incident-icon,
+  .@{class-prefix}-agent-error-card-icon {
+    width: 24px;
+    height: 24px;
+    flex-basis: 24px;
+    font-size: 18px;
+  }
+
+  .@{class-prefix}-connection-status-banner-copy,
+  .@{class-prefix}-application-planning-recovery-incident-copy,
+  .@{class-prefix}-agent-error-card-copy {
+    gap: 2px;
+  }
+
+  .@{class-prefix}-agent-error-card-copy {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+
+    > .ant-typography {
+      grid-column: 1;
+    }
+  }
+
+  .@{class-prefix}-agent-error-card-retry.ant-btn {
+    grid-column: 2;
+    grid-row: 1 / span 4;
+    align-self: center;
+    margin: 0;
+  }
+
+  .@{class-prefix}-connection-status-banner-title.ant-typography,
+  .@{class-prefix}-application-planning-recovery-incident-title.ant-typography,
+  .@{class-prefix}-agent-error-card-title.ant-typography {
+    font-size: 14px;
+    line-height: 1.35;
+  }
+
+  .@{class-prefix}-connection-status-banner-message.ant-typography,
+  .@{class-prefix}-application-planning-recovery-incident-recovery-message.ant-typography,
+  .@{class-prefix}-agent-error-card-message.ant-typography {
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .@{class-prefix}-connection-status-banner-action.ant-btn,
+  .@{class-prefix}-application-planning-recovery-incident-action.ant-btn,
+  .@{class-prefix}-agent-error-card-retry.ant-btn {
+    height: 30px;
+    padding: 0 12px;
+  }
+}
+
+@media (max-width: 820px) {
+  .@{class-prefix}-ai-chat-global-fallback {
+    padding: 16px 16px 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .@{class-prefix}-ai-chat-global-fallback .@{class-prefix}-agent-error-card-retry.ant-btn {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+  }
+}
+
+.@{class-prefix}-ai-chat-main.@{class-prefix}-has-global-fallback
+  > .@{class-prefix}-ai-chat-composer {
+  margin-top: 0;
+}
+
 .@{class-prefix}-preview-action-error.ant-alert {
   margin: 10px 16px 0;
   border-radius: 8px;

@@ -264,6 +264,11 @@ export function isStructuredPlanningWorkflow(workflow: WorkflowRunPayload | unde
   return workflow.events.some((event) => planningNodes.has(String(event.nodeName || '')))
 }
 
+/** 识别后端按节点数量拼接的 Workflow 完成摘要；它不是模型回复。 */
+export function isWorkflowCompletionStatusMessage(content: string | undefined): boolean {
+  return /^Workflow completed：完成 \d+ 个节点。$/.test(content?.trim() || '')
+}
+
 /** 隐藏结构化规划流程的原始 JSON 与重复 Workflow 摘要，同时保留真实回复内容。 */
 export function workflowMessageContentForDisplay(
   content: string,

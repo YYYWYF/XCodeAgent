@@ -1,5 +1,8 @@
 from collections.abc import Awaitable, Callable
+from inspect import isawaitable
 from typing import Any
+
+from langchain_core.runnables import RunnableConfig
 
 from langgraph.graph import END, START, StateGraph
 
@@ -15,6 +18,8 @@ from app.persistence.checkpoints import (
     workflow_checkpoint_db_path,
     workflow_checkpointer,
 )
+from app.services.workflow_reentry import workflow_entry
+from app.services.node_recovery_context import bind_node_recovery
 
 
 def _route_prepare_build_tasks_resume(state: ProjectState) -> str:
@@ -304,6 +309,7 @@ def build_graph(
         prepare_build_tasks_node = create_async_workflow_planning_adapter()
 
     builder = StateGraph(ProjectState)
+    builder.add_node("workflow_entry", workflow_entry)
 
     builder.add_node("development_readiness_gate", nodes.development_readiness_gate)
     builder.add_node("api_design_readiness_gate", nodes.api_design_readiness_gate)
@@ -314,28 +320,93 @@ def build_graph(
     builder.add_node("entity_source_binding", nodes.entity_source_binding)
     builder.add_node("project_planning", nodes.project_planning)
     builder.add_node("inspect_workspace", nodes.inspect_workspace)
-    builder.add_node(
-        "prepare_build_tasks",
-        prepare_build_tasks_node,
-    )
+    async def prepare_build_tasks_with_recovery(state: ProjectState) -> dict[str, Any]:
+        """只在本次 Prepare 节点调用中绑定经验证的内部恢复来源。"""
+
+        from app.services.node_recovery_context import current_node_recovery_context
+
+        with bind_node_recovery(state, "prepare_build_tasks"):
+            fields = {}
+            if current_node_recovery_context() is not None:
+                # 规划恢复基于当前磁盘重新冻结输入，旧缓存只由规划自身判断是否可复用。
+                scanned = nodes.inspect_workspace(state)
+                fields = {key: value for key, value in scanned.items() if key.startswith("workspace_")}
+                state = {**state, "workspace_snapshot": {}, **fields}
+            result = prepare_build_tasks_node(state)
+            result = await result if isawaitable(result) else result
+            return {**result, **fields}
+
+    def build_with_recovery(state: ProjectState) -> dict[str, Any]:
+        """绑定经验证的 Build 重入身份，节点内部按当前磁盘重新开始。"""
+
+        with bind_node_recovery(state, "build"):
+            return nodes.build(state)
+
+    builder.add_node("prepare_build_tasks", prepare_build_tasks_with_recovery)
     builder.add_node("authorization_bootstrap", nodes.authorization_bootstrap)
-    builder.add_node("build", nodes.build)
-    builder.add_node("unit_test", nodes.unit_test)
-    builder.add_node("unit_test_repair", nodes.unit_test_repair)
+    builder.add_node("build", build_with_recovery)
+    def unit_test_with_recovery(state: ProjectState) -> dict[str, Any]:
+        """从单测入口重进，交给测试映射缓存和复测机制处理当前文件。"""
+
+        from app.services.unit_test_reentry import prepare_unit_test_reentry
+
+        with bind_node_recovery(state, "unit_test"):
+            prepared, fields = prepare_unit_test_reentry(state, "unit_test")
+            return {**nodes.unit_test(prepared), **fields}
+
+    def unit_test_repair_with_recovery(state: ProjectState) -> dict[str, Any]:
+        """从修复入口重进，保留已提交的完成任务和修复额度。"""
+
+        from app.services.unit_test_reentry import prepare_unit_test_reentry
+
+        with bind_node_recovery(state, "unit_test_repair"):
+            prepared, fields = prepare_unit_test_reentry(state, "unit_test_repair")
+            return {**nodes.unit_test_repair(prepared), **fields}
+
+    builder.add_node("unit_test", unit_test_with_recovery)
+    builder.add_node("unit_test_repair", unit_test_repair_with_recovery)
     builder.add_node("test_phase_confirmation", nodes.test_phase_confirmation)
     builder.add_node("review_phase_confirmation", nodes.review_phase_confirmation)
-    builder.add_node("code_review", nodes.code_review)
+    def code_review_with_recovery(state: ProjectState, config: RunnableConfig) -> dict[str, Any]:
+        """审查重入刷新当前源码，再交回原扫描、修复和构建验证子图。"""
+
+        from app.services.code_review_reentry import prepare_code_review_reentry
+
+        with bind_node_recovery(state, "code_review"):
+            prepared, fields = prepare_code_review_reentry(state)
+            return {**nodes.code_review(prepared, config), **fields}
+
+    builder.add_node("code_review", code_review_with_recovery)
     builder.add_node("acceptance_phase_confirmation", nodes.acceptance_phase_confirmation)
-    builder.add_node("integration_test", nodes.integration_test)
-    builder.add_node("small_task_repair", nodes.small_task_repair)
+    def integration_test_with_recovery(state: ProjectState) -> dict[str, Any]:
+        """刷新测试重入现场，再由原测试子图执行检查和内部修复。"""
+
+        from app.services.integration_test_reentry import prepare_integration_test_reentry
+
+        with bind_node_recovery(state, "integration_test"):
+            prepared, fields = prepare_integration_test_reentry(state, "integration_test")
+            return {**nodes.integration_test(prepared), **fields}
+
+    def small_task_repair_with_recovery(state: ProjectState) -> dict[str, Any]:
+        """保留已提交修复任务及次数，完成后仍返回集成检查复测。"""
+
+        from app.services.integration_test_reentry import prepare_integration_test_reentry
+
+        with bind_node_recovery(state, "small_task_repair"):
+            prepared, fields = prepare_integration_test_reentry(state, "small_task_repair")
+            return {**nodes.small_task_repair(prepared), **fields}
+
+    builder.add_node("integration_test", integration_test_with_recovery)
+    builder.add_node("small_task_repair", small_task_repair_with_recovery)
     # 验收必须作为真实子图挂载，协议层才能在项目启动期间逐条收到 custom 进度，
     # 不能再由同步包装节点 invoke，否则子步骤会在启动完成后才一次性交付。
     builder.add_node("acceptance", acceptance_subgraph)
     builder.add_node("finalize_project", nodes.finalize_project)
     builder.add_node("handle_failure", nodes.handle_failure)
 
+    builder.add_edge(START, "workflow_entry")
     builder.add_conditional_edges(
-        START,
+        "workflow_entry",
         route_workflow_start,
         {
             "api_design_readiness_gate": "api_design_readiness_gate",

@@ -26,6 +26,9 @@ from app.graph.application_planning_interrupts import (
     planning_stage_entry,
     requirement_document_review,
     requirements_review,
+    route_requirements_review,
+    route_planning_stage_entry,
+    route_technical_planning_review,
     technical_planning_review,
     ui_confirmation_review,
 )
@@ -37,7 +40,6 @@ from app.domain.application_lifecycle import (
     utc_now,
 )
 from app.persistence.checkpoints import workflow_checkpoint_db_path, workflow_checkpointer
-from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
     application_lifecycle_payload,
@@ -62,11 +64,21 @@ from app.services.template_reconcile.runtime_v2 import load_current_attempt
 from app.services.template_reconcile.template_preparation import (
     template_preparation_projection_v2,
 )
+from app.services.execution_failure_classifier import classify_execution_failure
+from app.services.application_planning_generation_lifecycle import ensure_generation_running
 from app.services.template_scaffold_injection import (
     inject_deterministic_backend_skeleton,
 )
 from app.services.workspace_bootstrap.requested_config import compile_template_requested_config
 from app.workspace.plan_documents import technical_plan_json_path
+from app.services.application_planning_persistence import confirm_application_planning_artifacts
+from app.services.workflow_reentry import workflow_entry
+from app.graph.nodes.application_technical_planning import (
+    technical_planning_begin,
+    technical_planning_generate,
+    technical_planning_commit,
+    technical_planning_confirm,
+)
 
 def _route_start(state: ProjectState) -> str:
     """根据原创建规划 thread 的恢复点选择正常阶段或设计意图入口。"""
@@ -108,6 +120,21 @@ def _route_start(state: ProjectState) -> str:
             ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
             ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
         },
+        "technical_planning_begin": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+            ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+        },
+        "technical_planning_generate": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+        },
+        "technical_planning_commit": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        },
+        "technical_planning_confirm": {
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        },
     }
     if resume_from in allowed_resume_stages:
         if (
@@ -120,7 +147,7 @@ def _route_start(state: ProjectState) -> str:
                 f"resume_from={resume_from}，"
                 f"lifecycle={lifecycle.initialization.stage.value}。"
             )
-        return resume_from
+        return "technical_planning_begin" if resume_from == "technical_planning" else resume_from
     if resume_from:
         raise ApplicationLifecycleConflictError(
             f"application_planning 不支持恢复入口：{resume_from}"
@@ -186,6 +213,21 @@ def _route_technical_planning(state: ProjectState) -> str:
     return "template_reconcile" if state.get("template_reconcile_pending") else "completed"
 
 
+def _route_technical_planning_generate(state: ProjectState) -> str:
+    """候选已生成时提交产物，否则回到 TechnicalPlan 原生审阅门。"""
+
+    candidate = state.get("technical_plan_candidate")
+    return "technical_planning_commit" if isinstance(candidate, dict) and candidate else "technical_planning_review"
+
+
+def _route_technical_planning_confirm(state: ProjectState) -> str:
+    """校验失败返回生成，正式修订进入模板收口，其余结束规划。"""
+
+    if str(state.get("application_planning_review_route") or "").strip() == "technical_planning_begin":
+        return "technical_planning_begin"
+    return "template_reconcile" if state.get("template_reconcile_pending") else "completed"
+
+
 def _requirements(state: ProjectState) -> dict:
     """在需求节点前后同步工作区权威生命周期并记录错误。"""
 
@@ -202,25 +244,16 @@ def _requirements(state: ProjectState) -> dict:
         if lifecycle.initialization.stage in {
             ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
             ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+            ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
         }:
-            lifecycle = persist_application_lifecycle_transition(
+            lifecycle = ensure_generation_running(
                 workspace,
                 stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                status=ApplicationLifecycleStatus.RUNNING,
                 active_run_id=state.get("active_run_id"),
-            )
-        elif (
-            lifecycle.initialization.stage == ApplicationLifecycleStage.ANALYZING_REQUIREMENT
-            and lifecycle.initialization.status in {
-                ApplicationLifecycleStatus.FAILED,
-                ApplicationLifecycleStatus.CANCELLED,
-            }
-        ):
-            lifecycle = persist_application_lifecycle_transition(
-                workspace,
-                stage=ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-                status=ApplicationLifecycleStatus.RUNNING,
-                active_run_id=state.get("active_run_id"),
+                predecessor_stages={
+                    ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+                },
             )
         elif (
             lifecycle.initialization.stage
@@ -252,7 +285,7 @@ def _requirements(state: ProjectState) -> dict:
         _persist_node_cancelled(workspace, state)
         raise
     except Exception as exc:
-        _persist_node_error(workspace, state, exc)
+        _persist_node_error(workspace, state, exc, node_name="requirements")
         raise
 
 
@@ -270,12 +303,17 @@ async def _ui_confirmation(state: ProjectState) -> dict:
     try:
         lifecycle = load_application_lifecycle(workspace) or _ensure_lifecycle(state)
         # 需求确认完成后推进到 UI设计生成阶段（若尚未推进）。
-        if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION:
-            lifecycle = persist_application_lifecycle_transition(
+        if lifecycle.initialization.stage in {
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+            ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+        }:
+            lifecycle = ensure_generation_running(
                 workspace,
                 stage=ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-                status=ApplicationLifecycleStatus.RUNNING,
                 active_run_id=state.get("active_run_id"),
+                predecessor_stages={
+                    ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+                },
             )
         update = await nodes.ui_confirmation(node_state)
         if update.get("status") != "completed":
@@ -325,7 +363,7 @@ async def _ui_confirmation(state: ProjectState) -> dict:
         _persist_node_cancelled(workspace, state)
         raise
     except Exception as exc:
-        _persist_node_error(workspace, state, exc)
+        _persist_node_error(workspace, state, exc, node_name="ui_confirmation")
         raise
 
 
@@ -341,10 +379,9 @@ def _product_planning(state: ProjectState) -> dict:
             == ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT
         ):
             # RequirementSpec 草稿已通过校验后，继续生成同一联合阶段的 ProductPlan 草稿。
-            lifecycle = persist_application_lifecycle_transition(
+            lifecycle = ensure_generation_running(
                 workspace,
                 stage=ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
-                status=ApplicationLifecycleStatus.RUNNING,
                 active_run_id=state.get("active_run_id"),
             )
         update = nodes.product_planning(node_state)
@@ -389,7 +426,7 @@ def _product_planning(state: ProjectState) -> dict:
         _persist_node_cancelled(workspace, state)
         raise
     except Exception as exc:
-        _persist_node_error(workspace, state, exc)
+        _persist_node_error(workspace, state, exc, node_name="product_planning")
         raise
 
 
@@ -493,7 +530,7 @@ def _technical_planning(state: ProjectState) -> dict:
         _persist_node_cancelled(workspace, state)
         raise
     except Exception as exc:
-        _persist_node_error(workspace, state, exc)
+        _persist_node_error(workspace, state, exc, node_name="technical_planning")
         raise
 
 
@@ -559,7 +596,7 @@ def _reconcile_confirmed_revision(state: ProjectState) -> dict:
             and latest.active_formal_revision.status == "template_reconciling"
         ):
             mark_template_reconcile_failed(workspace, change_id=active_revision.change_id)
-        _persist_node_error(workspace, state, exc)
+        _persist_node_error(workspace, state, exc, node_name="template_reconcile")
         raise
 
 
@@ -600,9 +637,7 @@ def _ensure_lifecycle(state: ProjectState):
 def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: ProjectState):
     """校验计划阶段入口动作，并把生命周期推进到 TechnicalPlan 生成。"""
 
-    common = {
-        "active_run_id": state.get("active_run_id"),
-    }
+    common = {"active_run_id": state.get("active_run_id")}
     interaction = state.get("application_planning_interaction")
     action = str(interaction.get("action") or "") if isinstance(interaction, dict) else ""
     if lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY:
@@ -615,12 +650,9 @@ def _prepare_technical_planning_lifecycle(workspace: str, lifecycle, state: Proj
             **common,
         )
     elif (
-        lifecycle.initialization.stage
-        == ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION
+        lifecycle.initialization.stage == ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION
         and action == "revise"
     ):
-        # 用户要求重做当前 TechnicalPlan 时先回到生成态；确认动作则继续留在
-        # awaiting 状态，由 project_planning 同步 Markdown 并完成确认。
         lifecycle = persist_application_lifecycle_transition(
             workspace,
             stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
@@ -683,12 +715,22 @@ def _persist_requirement_result(workspace: str, update: dict, state: ProjectStat
     )
 
 
-def _persist_node_error(workspace: str, state: ProjectState, exc: Exception) -> None:
-    """把节点失败记录在当前阶段，避免错误时丢失恢复位置。"""
+def _persist_node_error(
+    workspace: str,
+    state: ProjectState,
+    exc: Exception,
+    *,
+    node_name: str,
+) -> None:
+    """把节点失败记录在真实 Graph 节点，避免 UI 阶段污染失败证据。"""
 
     current = load_application_lifecycle(workspace)
     if current is None:
         return
+    evidence = classify_execution_failure(
+        exc,
+        operation=node_name,
+    )
     persist_application_lifecycle_transition(
         workspace,
         stage=current.initialization.stage,
@@ -696,9 +738,19 @@ def _persist_node_error(workspace: str, state: ProjectState, exc: Exception) -> 
         active_run_id=state.get("active_run_id"),
         error=ApplicationLifecycleError(
             code="application_planning_failed",
-            message=str(exc)[:2048] or type(exc).__name__,
+            message=evidence.diagnostic_message or type(exc).__name__,
             recoverable=True,
             occurredAt=utc_now(),
+            details={
+                "origin": evidence.origin.value,
+                "code": evidence.code,
+                "operation": evidence.operation,
+                "dependency": evidence.dependency,
+                "provider": evidence.provider,
+                "model": evidence.model,
+                "httpStatus": evidence.http_status,
+                "replayCompatible": evidence.replay_compatible,
+            },
         ),
     )
 
@@ -828,6 +880,7 @@ def build_application_planning_graph(*, checkpointer):
     """构建设计、规划分段且含显式入口门禁的创建规划 Graph。"""
 
     builder = StateGraph(ProjectState)
+    builder.add_node("workflow_entry", workflow_entry)
     builder.add_node("design_intent_analysis", analyze_design_intent)
     builder.add_node("design_chat_response", design_chat_response)
     builder.add_node("requirements", _requirements)
@@ -837,16 +890,23 @@ def build_application_planning_graph(*, checkpointer):
     builder.add_node("ui_confirmation", _ui_confirmation)
     builder.add_node("ui_confirmation_review", ui_confirmation_review)
     builder.add_node("planning_stage_entry", planning_stage_entry)
-    builder.add_node("technical_planning", _technical_planning)
+    builder.add_node("technical_planning_begin", technical_planning_begin)
+    builder.add_node("technical_planning_generate", technical_planning_generate)
+    builder.add_node("technical_planning_commit", technical_planning_commit)
+    builder.add_node("technical_planning_confirm", technical_planning_confirm)
     builder.add_node("technical_planning_review", technical_planning_review)
     builder.add_node("template_reconcile", _reconcile_confirmed_revision)
-    builder.add_conditional_edges(START, _route_start, {
+    builder.add_edge(START, "workflow_entry")
+    builder.add_conditional_edges("workflow_entry", _route_start, {
         "design_intent_analysis": "design_intent_analysis",
         "requirements": "requirements",
         "product_planning": "product_planning",
         "ui_confirmation": "ui_confirmation",
         "planning_stage_entry": "planning_stage_entry",
-        "technical_planning": "technical_planning",
+        "technical_planning_begin": "technical_planning_begin",
+        "technical_planning_generate": "technical_planning_generate",
+        "technical_planning_commit": "technical_planning_commit",
+        "technical_planning_confirm": "technical_planning_confirm",
         "template_reconcile": "template_reconcile",
     })
     builder.add_conditional_edges("design_intent_analysis", route_design_intent, {
@@ -859,6 +919,15 @@ def build_application_planning_graph(*, checkpointer):
         "product_planning": "product_planning",
         "requirements_review": "requirements_review",
     })
+    builder.add_conditional_edges(
+        "requirements_review",
+        route_requirements_review,
+        {
+            "requirements": "requirements",
+            "product_planning": "product_planning",
+            "design_intent_analysis": "design_intent_analysis",
+        },
+    )
     builder.add_conditional_edges("product_planning", _route_product_planning, {
         "ui_confirmation": "ui_confirmation",
         "requirement_document_review": "requirement_document_review",
@@ -867,11 +936,38 @@ def build_application_planning_graph(*, checkpointer):
         "planning_stage_entry": "planning_stage_entry",
         "ui_confirmation_review": "ui_confirmation_review",
     })
-    builder.add_conditional_edges("technical_planning", _route_technical_planning, {
-        "technical_planning_review": "technical_planning_review",
-        "template_reconcile": "template_reconcile",
-        "completed": END,
+    builder.add_conditional_edges("planning_stage_entry", route_planning_stage_entry, {
+        "technical_planning_begin": "technical_planning_begin",
+        "design_intent_analysis": "design_intent_analysis",
     })
+    builder.add_edge("technical_planning_begin", "technical_planning_generate")
+    builder.add_conditional_edges(
+        "technical_planning_generate",
+        _route_technical_planning_generate,
+        {
+            "technical_planning_commit": "technical_planning_commit",
+            "technical_planning_review": "technical_planning_review",
+        },
+    )
+    builder.add_edge("technical_planning_commit", "technical_planning_review")
+    builder.add_conditional_edges(
+        "technical_planning_review",
+        route_technical_planning_review,
+        {
+            "technical_planning_begin": "technical_planning_begin",
+            "technical_planning_confirm": "technical_planning_confirm",
+            "design_intent_analysis": "design_intent_analysis",
+        },
+    )
+    builder.add_conditional_edges(
+        "technical_planning_confirm",
+        _route_technical_planning_confirm,
+        {
+            "technical_planning_begin": "technical_planning_begin",
+            "template_reconcile": "template_reconcile",
+            "completed": END,
+        },
+    )
     builder.add_conditional_edges("design_chat_response", route_design_chat_response, {
         "completed": END,
         "requirements_review": "requirements_review",

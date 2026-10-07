@@ -44,6 +44,10 @@ from tests.dag_planning_orchestrator_fixtures import model_tasks, planning_input
 from tests.test_unit_generation_contracts import _policy_payload
 from app.services.unit_generation import UnitGenerationInfrastructureError
 from app.services.unit_generation_contracts import UnitGenerationAttemptResult, UnitGenerationPolicy
+from app.services.unit_model_failure import (
+    LEGACY_INFRASTRUCTURE_FAILURE,
+    failure_evidence_from_issue,
+)
 
 
 def _infrastructure_issue() -> ValidationIssue:
@@ -109,6 +113,61 @@ class PlanningRecoveryContractTests(unittest.TestCase):
         payload["candidates_by_unit"]["page:orders"]["generation_metadata"] = {"changed": True}
         with self.assertRaises(ValueError):
             PlanningRecoverySnapshot.model_validate(payload)
+
+    def test_old_snapshot_without_stage_keeps_digest_and_failure_summary(self) -> None:
+        """历史 Snapshot 缺少 stage 时仍可读取，原摘要和摘要校验值保持不变。"""
+
+        old_issue = ValidationIssue(
+            code=LEGACY_INFRASTRUCTURE_FAILURE,
+            level="system",
+            category="infrastructure",
+            unit_ids=("page:failed",),
+            retryable=False,
+            message="生成执行计划的本次处理已超时。",
+            details={"attempt_id": "attempt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        )
+        initial = transitions.begin_generation(run(unit("page:ready")), at=AT)
+        failed = transitions.fail(
+            ready(initial, "page:ready"), old_issue, at=AT,
+        )
+        snapshot = build_planning_recovery_snapshot(failed, owner_session_id="session-1")
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        old_digest = snapshot.snapshot_digest
+
+        restored = PlanningRecoverySnapshot.model_validate_json(snapshot.model_dump_json())
+        self.assertEqual(restored.snapshot_digest, old_digest)
+        self.assertEqual(restored.failure.message, "生成执行计划的本次处理已超时。")
+        self.assertNotIn("stage", restored.failure.details)
+        evidence = failure_evidence_from_issue(restored.failure)
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertIsNone(evidence.stage)
+
+    def test_new_model_code_keeps_recovery_candidate_and_rejects_other_infrastructure(self) -> None:
+        """新增模型码与旧 Snapshot 共享精确门禁，其他 system/infrastructure 不获复用。"""
+
+        generating = transitions.begin_generation(run(), at=AT)
+        issue = _infrastructure_issue().model_copy(update={
+            "code": "UNIT_GENERATION_MODEL_HTTP_ERROR",
+            "message": "模型服务返回 HTTP 429。",
+            "details": {"stage": "model_invoke", "http_status": 429},
+        })
+        failed = transitions.fail(ready(generating), issue, at=AT)
+        snapshot = build_planning_recovery_snapshot(failed, owner_session_id="session-1")
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.failure.code, issue.code)
+        self.assertEqual(
+            PlanningRecoverySnapshot.model_validate_json(snapshot.model_dump_json()).snapshot_digest,
+            snapshot.snapshot_digest,
+        )
+        unrelated = issue.model_copy(update={"code": "SOME_OTHER_INFRASTRUCTURE_FAILURE"})
+        with self.assertRaises(ValueError):
+            build_planning_recovery_snapshot(
+                transitions.fail(ready(generating), unrelated, at=AT),
+                owner_session_id="session-1",
+            )
 
     def test_failure_gate_and_empty_ready_set(self) -> None:
         """普通失败不能建 Recovery；没有 ready Candidate 时返回空而非伪造空 Snapshot。"""
@@ -528,7 +587,7 @@ class PlanningRecoveryMainlineCleanupTests(unittest.IsolatedAsyncioTestCase):
         self._write_source_recovery()
         error = await self._run_retry_infrastructure_failure()
 
-        self.assertEqual(error.issues[0].code, "UNIT_GENERATION_INFRASTRUCTURE_FAILURE")
+        self.assertEqual(error.issues[0].code, "UNIT_GENERATION_MODEL_CALL_FAILED")
         self.assertIsNone(load_planning_recovery(self.state, "workflow-r1"))
         self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r2"))
 
@@ -542,7 +601,7 @@ class PlanningRecoveryMainlineCleanupTests(unittest.IsolatedAsyncioTestCase):
         ):
             error = await self._run_retry_infrastructure_failure()
 
-        self.assertEqual(error.issues[0].code, "UNIT_GENERATION_INFRASTRUCTURE_FAILURE")
+        self.assertEqual(error.issues[0].code, "UNIT_GENERATION_MODEL_CALL_FAILED")
         self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r1"))
         self.assertIsNone(load_planning_recovery(self.state, "workflow-r2"))
 
@@ -556,7 +615,7 @@ class PlanningRecoveryMainlineCleanupTests(unittest.IsolatedAsyncioTestCase):
         ):
             error = await self._run_retry_infrastructure_failure()
 
-        self.assertEqual(error.issues[0].code, "UNIT_GENERATION_INFRASTRUCTURE_FAILURE")
+        self.assertEqual(error.issues[0].code, "UNIT_GENERATION_MODEL_CALL_FAILED")
         self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r1"))
         self.assertIsNotNone(load_planning_recovery(self.state, "workflow-r2"))
 
@@ -803,7 +862,7 @@ class PlanningRecoveryProductionHookTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             caught.exception.issues[0].code,
-            "UNIT_GENERATION_INFRASTRUCTURE_FAILURE",
+            "UNIT_GENERATION_MODEL_CALL_FAILED",
         )
         self.assertEqual(load_planning_run(self.state)["status"], "failed")
         self.assertNotIn(
@@ -955,6 +1014,36 @@ class PlanningRecoveryRegenerateHookTests(unittest.IsolatedAsyncioTestCase):
             "planning-new",
         )
         self.assertIsNone(load_pending_build_task_plan(self.state))
+
+        retry_units: list[str] = []
+        # 恢复调用需要携带与旧 Pending 一致的 Workbench scope。
+        self.state["build_execution_scope"] = identity["build_execution_scope"]
+
+        async def retry_generate(job, **_: object) -> UnitGenerationAttemptResult:
+            """R2 只执行未被有效 Candidate 覆盖的 Unit。"""
+
+            retry_units.append(job.identity.unit_id)
+            return await self._generate_valid(job)
+
+        recovered = await regenerate_pending_build_task_plan(
+            self.state,
+            planning_run_id=identity["planning_run_id"],
+            draft_digest=identity["draft_digest"],
+            workflow_run_id="workflow-r2",
+            thread_id="thread-new",
+            current_inputs_factory=current_inputs,
+            policy=self.policy,
+            generate_once=retry_generate,
+            recovery_source_workflow_run_id="workflow-new",
+            planning_run_id_factory=lambda: "planning-r2",
+        )
+        self.assertEqual(recovered.status, "regenerated")
+        self.assertEqual(retry_units, ["page:b"])
+        run_r2 = recovered.planning_run
+        candidate_a = run_r2.candidates[run_r2.unit_states["page:a"].latest_candidate_id]
+        self.assertEqual(candidate_a.origin, "recovered")
+        self.assertEqual(candidate_a.recovered_from.source_planning_run_id, "planning-new")
+        self.assertIsNotNone(load_pending_build_task_plan(self.state))
 
 
 class PlanningRecoveryRetryConsumptionTests(unittest.IsolatedAsyncioTestCase):

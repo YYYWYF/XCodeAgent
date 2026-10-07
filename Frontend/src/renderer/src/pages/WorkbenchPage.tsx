@@ -87,6 +87,10 @@ type Props = {
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试设计阶段规划任务。 */
   onRetryPlanning?: () => void
+  /** 底部连接恢复后只读同步规划投影，不派发节点重试。 */
+  onReconcilePlanning?: () => void
+  /** 保留独立的模板初始化重试动作。 */
+  onRetryTemplateGeneration?: () => void
   /** 通过专用动作重试失败的模板能力更新。 */
   onRetryTemplateReconcile?: () => void
   /** 当前应用唯一的 Planning 业务状态。 */
@@ -125,6 +129,8 @@ function WorkbenchPage({
   onStopPlanning,
   generatingTemplate,
   onRetryPlanning,
+  onReconcilePlanning,
+  onRetryTemplateGeneration,
   onRetryTemplateReconcile,
   planningState,
   theme
@@ -207,18 +213,23 @@ function WorkbenchPage({
       try {
         const applicationConfig = await loadWorkspaceApplicationConfig(application.workspaceRoot)
         if (!active) return
-        setWorkspaceApplication((prev) => ({
-          ...application,
-          ...applicationConfig,
-          // 磁盘是分支表的权威来源；只在磁盘没有分支表时才回退到内存那份。
-          // 详见 resolveBranchChain 的说明（此前无条件取内存，会把磁盘上的多分支冲成单条）。
-          ...resolveBranchChain({
-            diskBranches: applicationConfig.branches,
-            diskBranchName: applicationConfig.branchName,
-            memoryBranches: prev.branches,
-            memoryBranchName: prev.branchName
-          })
-        }))
+        // application.json 只保存工作区配置，不拥有首页索引中的页面元数据；合并时保留索引字段，避免进入工作台后把 pages/defaultPage 覆盖成 undefined。
+        setWorkspaceApplication((prev) => {
+          const pages = Array.isArray(prev.pages) && prev.pages.length > 0 ? prev.pages : ['页面']
+          return {
+            ...prev,
+            ...applicationConfig,
+            pages,
+            defaultPage: prev.defaultPage || pages[0],
+            // 磁盘是分支表的权威来源；只在磁盘没有分支表时才回退到内存那份。
+            ...resolveBranchChain({
+              diskBranches: applicationConfig.branches,
+              diskBranchName: applicationConfig.branchName,
+              memoryBranches: prev.branches,
+              memoryBranchName: prev.branchName
+            })
+          }
+        })
       } catch (error) {
         console.warn('读取工作区 application.json 失败，终止本次工作台加载。', error)
         failWorkbenchEntry(formatWorkbenchEntryError(error, '读取工作区 application.json 失败。'))
@@ -381,10 +392,14 @@ function WorkbenchPage({
       (entity) => applicationLifecycle?.developmentArtifacts?.entities[entity.id]
     )
   ]
+  // 显式跳过的实体不属于本次必做开发项，与后端测试门禁使用同一计数口径。
+  const requiredDevelopmentRecords = activeDevelopmentRecords.filter(
+    (record) => record?.initialDevelopmentStatus !== 'skipped'
+  )
   const topBarDevelopmentTotals = isViewingActiveVersion
     ? {
-      completed: developmentCompletedCount(activeDevelopmentRecords),
-      total: activeDevelopmentRecords.length
+      completed: developmentCompletedCount(requiredDevelopmentRecords),
+      total: requiredDevelopmentRecords.length
     }
     : topBarLifecycle?.developmentArtifacts
       ? developmentArtifactTotals(topBarLifecycle.developmentArtifacts)
@@ -732,6 +747,8 @@ function WorkbenchPage({
                   onSessionHistoryReadyChange={handleSessionHistoryReadyChange}
                   generatingTemplate={generatingTemplate}
                   onRetryPlanning={onRetryPlanning}
+                  onReconcilePlanning={onReconcilePlanning}
+                  onRetryTemplateGeneration={onRetryTemplateGeneration}
                   onRetryTemplateReconcile={onRetryTemplateReconcile}
                   planningState={planningState}
                   theme={theme}

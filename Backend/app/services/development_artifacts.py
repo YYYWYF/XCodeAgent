@@ -204,6 +204,10 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
             # 实体完成状态每次 reconcile 都按技术规划重算，所以归属标签必须显式继承：
             # 已经是 completed 的实体保留它首次完成时的分支，不能每轮都被改写成当前分支。
             previous_entity = old.entities.get(target.entity_id or "")
+            # 跳过仅属于当前工作区的当前实体，不继承到其他应用或新迭代。
+            if previous_entity and previous_entity.initial_development_status == "skipped" and not confirmed:
+                artifacts.entities[target.entity_id or ""] = previous_entity
+                continue
             entity_completed_branch = (
                 previous_entity.completed_branch_name
                 if previous_entity is not None
@@ -247,6 +251,7 @@ def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
     ] + [
         (DevelopmentArtifactTarget(type="entity", entityId=key), progress)
         for key, progress in artifacts.entities.items()
+        if progress.initial_development_status != "skipped"
     ]
     # Build 计划只描述当前目标的执行范围；不能据此跳过其他尚未初次完成的产物。
     completed = sum(progress.initial_development_status == "completed" for _, progress in records)

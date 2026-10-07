@@ -8,6 +8,7 @@ from app.persistence.checkpoints import (
     close_workflow_checkpointer,
     close_workflow_checkpointer_for_workspace,
     delete_workflow_checkpoints_for_workspace,
+    delete_workflow_checkpoints_for_threads,
     workflow_checkpoint_db_path,
     workflow_checkpointer,
 )
@@ -97,6 +98,36 @@ class WorkflowCheckpointerTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertTrue(closed)
             self.assertIsNot(first, second)
+
+    async def test_session_cleanup_keeps_other_threads_and_rejects_foreign_workspace(self) -> None:
+        """按会话清理 checkpoint，且不得触及共享库里其它工作区。"""
+
+        with TemporaryDirectory() as directory:
+            workspace = str(Path(directory) / "workspace")
+            foreign = str(Path(directory) / "foreign")
+            saver = await workflow_checkpointer(workspace=workspace)
+            for thread_id, root in (("deleted", workspace), ("kept", workspace), ("foreign", foreign)):
+                type_tag, blob = saver.serde.dumps_typed(
+                    {"channel_values": {"workspace": root}}
+                )
+                await saver.conn.execute(
+                    "INSERT INTO checkpoints(thread_id, checkpoint_ns, checkpoint_id, type, checkpoint, metadata) VALUES (?, '', 'one', ?, ?, '{}')",
+                    (thread_id, type_tag, blob),
+                )
+            await saver.conn.commit()
+
+            with self.assertRaises(ValueError):
+                await delete_workflow_checkpoints_for_threads(
+                    workspace=workspace, thread_ids={"deleted", "foreign"}
+                )
+            deleted = await delete_workflow_checkpoints_for_threads(
+                workspace=workspace, thread_ids={"deleted"}
+            )
+            cursor = await saver.conn.execute("SELECT thread_id FROM checkpoints ORDER BY thread_id")
+            rows = await cursor.fetchall()
+            await cursor.close()
+            self.assertEqual(deleted, 1)
+            self.assertEqual(rows, [("foreign",), ("kept",)])
 
 
 if __name__ == "__main__":

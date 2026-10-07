@@ -19,9 +19,7 @@ import './PlanExecutionDock.less'
 const { Text } = Typography
 
 type Props = {
-  canRetryFailedTasks?: boolean
   dependencyLocked?: boolean
-  error?: string
   execution?: WorkbenchExecution
   developmentTotals?: { completed: number; total: number }
   mode: Exclude<PlanExecutionMode, 'idle'>
@@ -33,14 +31,11 @@ type Props = {
   onOpenPreview: () => void
   onRetry: () => void
   onStop: () => void
-  onViewPlan: () => void
 }
 
 /** 仅替换工作区最底部输入区，承载计划锁定说明和必要控制动作。 */
 export default function PlanExecutionDock({
-  canRetryFailedTasks = false,
   dependencyLocked = false,
-  error,
   execution,
   developmentTotals,
   mode,
@@ -51,8 +46,7 @@ export default function PlanExecutionDock({
   onEnd,
   onOpenPreview,
   onRetry,
-  onStop,
-  onViewPlan
+  onStop
 }: Props): ReactElement {
   const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -120,9 +114,7 @@ export default function PlanExecutionDock({
                 : planModeDescription(
                     mode,
                     execution?.phase,
-                    pending?.payload,
-                    error,
-                    canRetryFailedTasks
+                    pending?.payload
                   )}
           </Text>
         </div>
@@ -130,7 +122,6 @@ export default function PlanExecutionDock({
           <div className={cx('plan-execution-dock-actions')}>
             {(mode === 'running' || mode === 'stopping') && (
               <>
-                <Button onClick={onViewPlan}>查看计划</Button>
                 <Button
                   danger
                   icon={<PauseCircleOutlined />}
@@ -189,7 +180,7 @@ export default function PlanExecutionDock({
             ) : null}
             {!developmentGateBlocked && mode === 'awaiting_review_phase_confirmation' && (
               <div className={cx('plan-execution-dock-interaction')}>
-                测试已通过，请在上方确认进入审查阶段。
+                请在上方选择审查范围，确认进入审查阶段。
               </div>
             )}
             {!developmentGateBlocked && mode === 'awaiting_acceptance_phase_confirmation' && (
@@ -224,9 +215,9 @@ export default function PlanExecutionDock({
             )}
             {(mode === 'failed' || mode === 'stopped') && (
               <>
-                {(mode === 'stopped' || (mode === 'failed' && canRetryFailedTasks)) && (
+                {mode === 'stopped' && (
                   <Button icon={<RedoOutlined />} onClick={onRetry} type="primary">
-                    {mode === 'failed' ? '重试失败任务' : '继续执行'}
+                    继续执行
                   </Button>
                 )}
                 <Popconfirm
@@ -321,17 +312,10 @@ function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
 function planModeDescription(
   mode: Exclude<PlanExecutionMode, 'idle'>,
   phase?: string,
-  payload?: Record<string, unknown>,
-  error?: string,
-  canRetryFailedTasks = false
+  payload?: Record<string, unknown>
 ): string {
   if (mode === 'failed') {
-    return (
-      error ||
-      (canRetryFailedTasks
-        ? '存在可恢复的失败任务或待执行修复任务。'
-        : '当前失败需要调整计划、确认修复范围或结束。')
-    )
+    return '可以在上方重试，或结束当前计划。'
   }
   if (mode === 'awaiting_repair_confirmation') {
     return String(payload?.reason || payload?.message || '修复范围发生变化，确认后继续。')
@@ -340,7 +324,7 @@ function planModeDescription(
     return '开发已完成，请在上方确认进入测试阶段。'
   }
   if (mode === 'awaiting_review_phase_confirmation') {
-    return '测试已通过，请在上方确认进入审查阶段。'
+    return String(payload?.message || '请在上方确认进入审查阶段。')
   }
   if (mode === 'awaiting_acceptance_phase_confirmation') {
     return '代码审查已完成，请在上方确认进入验收阶段。'

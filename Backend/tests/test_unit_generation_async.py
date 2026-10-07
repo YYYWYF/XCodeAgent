@@ -128,7 +128,7 @@ class AsyncUnitGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result.validation_issues), 1)
 
     async def test_async_session_timeout_is_classified_as_infrastructure(self) -> None:
-        """异步 session 超时保持 model_invoke/infrastructure 分类且不重试。"""
+        """异步 session 超时归于整个 Unit，会话到期不冒充请求超时。"""
 
         async def never_complete(_prompt: str) -> SimpleNamespace:
             """模拟不会自行返回的异步 provider 调用。"""
@@ -157,7 +157,7 @@ class AsyncUnitGenerationTests(unittest.IsolatedAsyncioTestCase):
         model_factory.assert_called_once()
         async_invoke.assert_awaited_once()
         self.assertEqual(raised.exception.category, "infrastructure")
-        self.assertEqual(raised.exception.stage, "model_invoke")
+        self.assertEqual(raised.exception.stage, "unit_session")
         self.assertEqual(raised.exception.cause_type, "TimeoutError")
         self.assertIsInstance(raised.exception.__cause__, TimeoutError)
 

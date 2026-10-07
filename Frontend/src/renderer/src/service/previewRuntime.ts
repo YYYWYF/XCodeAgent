@@ -27,6 +27,7 @@ export type PreviewLog = {
   truncated: boolean
 }
 export type PreviewRepair = {
+  interrupted?: boolean
   status?:
     | 'awaiting_confirmation'
     | 'running'
@@ -59,6 +60,15 @@ export type PreviewRuntimePayload = {
   launchResult?: ProjectLaunchResult
   error?: { message?: string }
   progress?: { stage: string; message: string }
+}
+
+/** 标记已收到 Backend 业务失败，避免把业务错误误报为连接中断。 */
+export class PreviewRuntimeBusinessError extends Error {
+  /** 保留业务错误原文并提供可判别类型。 */
+  constructor(message: string) {
+    super(message)
+    this.name = 'PreviewRuntimeBusinessError'
+  }
 }
 
 /** 通过标准 AG-UI 客户端执行预览动作，并持续发布业务状态。 */
@@ -106,7 +116,7 @@ export async function runPreviewRuntime(
     )
     accept((result.result as { previewRuntime?: unknown } | undefined)?.previewRuntime)
     if (!latest) throw new Error('预览服务没有返回有效状态。')
-    if (latest.status === 'failed') throw new Error(latest.error?.message || '预览服务操作失败。')
+    if (latest.status === 'failed') throw new PreviewRuntimeBusinessError(latest.error?.message || '预览服务操作失败。')
     return latest
   } finally {
     options.signal?.removeEventListener('abort', abort)

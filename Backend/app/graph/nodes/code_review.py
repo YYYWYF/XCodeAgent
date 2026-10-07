@@ -105,8 +105,11 @@ def code_review(
         "code_review_next_action": result.get("code_review_next_action", "handle_failure"),
         "timeline": result.get("timeline", ["code_review"]),
     }
-    if result.get("error"):
-        update["error"] = str(result["error"])[:2_000]
+    # 子图返回合并态，成功或等待确认时必须清除继承的旧错误，再显式写回主图。
+    update["error"] = (
+        str(result.get("error") or "")[:2_000]
+        if update["status"] == "failed" else ""
+    )
     if result.get("code_changes"):
         update["code_changes"] = result["code_changes"]
     if result.get("code_change_sets"):

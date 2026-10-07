@@ -906,13 +906,13 @@ test('AG-UI 继续执行只发送旧 runId 作为资源锁转移令牌', () => {
   assert.equal(forwardedProps.resumeExecutionRunId, 'run-stopped')
 })
 
-test('AG-UI 重试失败任务发送显式工作流动作', () => {
+test('AG-UI 代码审查重试发送显式工作流动作', () => {
   const forwardedProps = buildWorkflowForwardedProps({
     editorMode: 'frontend',
-    workflowAction: 'retry_failed_tasks'
+    workflowAction: 'retry_code_review'
   })
 
-  assert.equal(forwardedProps.workflowAction, 'retry_failed_tasks')
+  assert.equal(forwardedProps.workflowAction, 'retry_code_review')
 })
 
 test('AG-UI 审查模型重试发送独立工作流动作', () => {
@@ -1631,7 +1631,7 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
   )
 
   assert.ok(snapshot)
-  assert.match(markup, /任务 DAG Unit 进度/)
+  assert.match(markup, /执行计划进度/)
   assert.match(markup, /page:home/)
   assert.match(markup, /retained 0 \/ candidate 1/)
   assert.doesNotMatch(

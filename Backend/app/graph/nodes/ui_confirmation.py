@@ -766,6 +766,10 @@ async def _apply_ui_design_action(
     pages = existing.get("pages") if isinstance(existing, dict) else None
     pages = [p for p in (pages or []) if isinstance(p, dict)]
 
+    # 显式恢复只进入既有孤立任务自愈；不重做活跃页，不确认产物或推进下游。
+    if action_type == "refresh":
+        return await _latest_ui_designs(state, existing)
+
     # 多页调整：顺序遍历 pageIds，对每页基于现有设计稿 + 调整指令重新生成。
     # adjust_pages 不落盘，需在此持久化；换一换/选模板由池落盘，这里不重复写。
     if action_type == "adjust_pages":

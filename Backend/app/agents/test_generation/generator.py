@@ -25,6 +25,11 @@ from app.workspace.code_changes import capture_workspace_changes
 
 MAX_TEST_FILES = 5
 _SOURCE_SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".java"}
+# 仅平台恢复数据库及 SQLite 自有附属文件属于运行态，不能放宽整个 recovery 目录。
+_RECOVERY_RUNTIME_ARTIFACT_PATHS = frozenset(
+    f"recovery/execution-recovery.sqlite{suffix}"
+    for suffix in ("", "-wal", "-shm", "-journal")
+)
 
 
 def generate_or_update_unit_tests_with_agent(
@@ -537,7 +542,7 @@ def _sha256(path: Path) -> str:
 
 
 def _internal_artifact_snapshot(workspace: str) -> dict[str, str]:
-    """快照 `.devagentstudio` 正式工件，并忽略 LangGraph 自有 checkpoint 写入。"""
+    """快照正式工件，排除 checkpoint 和平台恢复数据库的运行期写入。"""
 
     root = Path(workspace).expanduser().resolve() / WORKSPACE_ARTIFACT_DIR
     snapshot: dict[str, str] = {}
@@ -547,6 +552,9 @@ def _internal_artifact_snapshot(workspace: str) -> dict[str, str]:
         dirnames[:] = sorted(name for name in dirnames if name != "checkpoints")
         for filename in filenames:
             path = Path(dirpath) / filename
+            # 心跳续租会并行写数据库；按根目录下的精确路径排除，其余内部文件仍检查。
+            if path.relative_to(root).as_posix() in _RECOVERY_RUNTIME_ARTIFACT_PATHS:
+                continue
             try:
                 snapshot[path.relative_to(root.parent).as_posix()] = hashlib.sha256(
                     path.read_bytes()

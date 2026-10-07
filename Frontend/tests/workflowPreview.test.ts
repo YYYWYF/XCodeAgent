@@ -35,8 +35,8 @@ import {
   resolveWorkflowForDisplay,
   shouldRenderPlanExecutionDock,
   withWorkflowExecutionStatus,
-  workflowCanRetryFailedTasks,
   workflowCodeReviewRetry,
+  workflowEndedPlanControl,
   workflowInteractionAvailability,
   workflowResumeNode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
@@ -1219,6 +1219,18 @@ test('权威生命周期已移除 execution 时忽略历史取消快照并恢复
   )
 })
 
+test('结束计划的成功控制回执覆盖迟到的旧执行快照并恢复输入框', () => {
+  const workflow = previewWorkflow({ status: 'completed', phase: 'plan_control' })
+  workflow.summary.planControl = {
+    action: 'end',
+    status: 'ended',
+    targetRunId: 'run-orders',
+    message: '计划已结束，工作区已恢复自由输入。'
+  }
+
+  assert.equal(workflowEndedPlanControl(workflow), true)
+})
+
 test('当前请求仍在运行时即使生命周期暂为空也保持输入锁', () => {
   assert.equal(deriveDisplayedPlanExecutionMode(undefined, 'running', true, true), 'running')
 })
@@ -1252,62 +1264,6 @@ test('暂停后的调试窗口默认选中最近完成的可恢复节点', () =>
   assert.equal(workflowResumeNode(undefined, 'integration_test'), 'integration_test')
 })
 
-test('失败计划只为可恢复的 Build 失败显示恢复动作', () => {
-  assert.equal(
-    workflowCanRetryFailedTasks(
-      previewWorkflow({
-        status: 'failed',
-        phase: 'build',
-        buildSummary: { retry_available: true, retryable_failures: 1 }
-      })
-    ),
-    true
-  )
-  assert.equal(
-    workflowCanRetryFailedTasks(
-      previewWorkflow({
-        status: 'failed',
-        phase: 'build',
-        buildSummary: { retry_available: false, repairable_failures: 1 }
-      })
-    ),
-    false
-  )
-  assert.equal(
-    workflowCanRetryFailedTasks({
-      ...previewWorkflow({
-        status: 'failed',
-        phase: 'failed',
-        buildSummary: { retry_available: false }
-      }),
-      state: { buildSummary: { retry_available: true, retryable_failures: 1 } }
-    }),
-    false
-  )
-  assert.equal(
-    workflowCanRetryFailedTasks({
-      ...previewWorkflow({ status: 'failed', phase: 'failed' }),
-      state: { build_summary: { retry_available: true, retryable_failures: 1 } }
-    }),
-    true
-  )
-})
-
-test('最后一个 Build 任务失败并清空实时 Workflow 后仍从终态消息显示重试动作', () => {
-  const finalWorkflow = previewWorkflow({
-    status: 'failed',
-    phase: 'build',
-    buildSummary: { recovery_available: true, retryable_failures: 1 }
-  })
-  const workflow = resolveWorkflowForDisplay(undefined, [
-    { workflow: previewWorkflow({ status: 'running', phase: 'build' }) },
-    { workflow: finalWorkflow }
-  ])
-
-  assert.equal(workflow, finalWorkflow)
-  assert.equal(workflowCanRetryFailedTasks(workflow), true)
-})
-
 test('仅后端签发的审查模型失败快照提供重试动作', () => {
   assert.deepEqual(
     workflowCodeReviewRetry(
@@ -1332,41 +1288,6 @@ test('仅后端签发的审查模型失败快照提供重试动作', () => {
       state: { codeReviewRetry: { available: true, target: 'build' } }
     }),
     undefined
-  )
-})
-
-test('验收失败已有修复计划时也显示失败恢复动作', () => {
-  assert.equal(
-    workflowCanRetryFailedTasks({
-      ...previewWorkflow({
-        status: 'failed',
-        phase: 'build',
-        buildSummary: { repairable_failures: 1, retry_available: false }
-      }),
-      state: {
-        repairTaskPlan: {
-          status: 'ready',
-          decision: 'repair',
-          tasks: [{ id: 'repair-page', status: 'pending' }]
-        }
-      }
-    }),
-    true
-  )
-})
-
-test('生命周期标记失败可恢复时即使 Workflow 快照不完整也显示恢复动作', () => {
-  assert.equal(
-    workflowCanRetryFailedTasks(previewWorkflow({ status: 'failed', phase: 'build' }), {
-      ...pageExecution(),
-      status: 'failed',
-      error: {
-        code: 'workbench_execution_failed',
-        message: '计划执行失败。',
-        recoverable: true
-      }
-    }),
-    true
   )
 })
 

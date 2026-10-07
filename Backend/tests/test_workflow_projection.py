@@ -13,6 +13,22 @@ from app.protocols.workflow.projection import (
 
 
 class WorkflowProjectionTests(unittest.TestCase):
+    def test_current_failure_is_not_replaced_by_previous_build_retry_message(self) -> None:
+        """底部摘要保留当前单测原始错误，不被已完成 Build 的旧提示覆盖。"""
+        error = "测试生成 Agent 检测到测试目录外实际写入：.devagentstudio/recovery/execution-recovery.sqlite"
+        summary = _workflow_summary({
+            "status": "failed", "phase": "failed", "error": error,
+            "build_summary": {"status": "completed", "retry_message": "旧构建重试提示"},
+        }, [])
+        self.assertEqual(summary["message"], error)
+
+    def test_build_retry_hint_does_not_hide_explicit_build_error(self) -> None:
+        """Build 本身有真实错误时也保留错误，无错误时仍允许显示既有重试提示。"""
+        result = {"status": "failed", "phase": "build", "build_summary": {
+            "status": "failed", "retry_message": "当前没有可重试的构建任务"}}
+        self.assertEqual(_workflow_summary(result, [])["message"], "当前没有可重试的构建任务")
+        self.assertEqual(_workflow_summary({**result, "error": "真实构建错误"}, [])["message"], "真实构建错误")
+
     def test_code_review_scan_projects_only_safe_relative_source_path(self) -> None:
         """瞬态审查进度只公开当前契约允许的工作区源码相对路径。"""
 

@@ -39,7 +39,7 @@ import type {
   WorkflowTemplatePreparation,
   WorkspaceCodeChangeSet
 } from '../../typings'
-import { CLASS_PREFIX, composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../utils'
+import { composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../utils'
 import { readWorkspaceFile } from '../../service/workspaceTools'
 import type {
   ChatSessionDevelopmentContinuation,
@@ -58,6 +58,8 @@ import type {
   WorkflowRevisionContinuationHandoff
 } from '../../service/applicationPagePlanning'
 import { isAuthenticationFailure } from '../../service/authentication'
+import { ApplicationPlanningSubmissionNotCommittedError } from '../../service/applicationPlanningRuntime'
+import { isWorkflowCompletionStatusMessage } from '../../service/processStepHistory'
 import { formatError } from '../Welcome/utils'
 import {
   planningWorkflowActivity,
@@ -67,6 +69,7 @@ import {
   planningRequirementsConfirmed,
   ensureApplicationPlanningAction,
   planningWorkflowRequiresUserInput,
+  workflowCardRequiresUserInput,
   planningWorkflowSettlesLoading,
   planningWorkflowUiDesignSkipped,
   retainApplicationPlanningInterrupt,
@@ -93,8 +96,10 @@ import StageOutputPanel from './components/StageOutputPanel'
 import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
+import AgentErrorCard from '../AgentErrorCard'
 import MilestoneCommitReminder from './components/MilestoneCommitReminder'
 import FieldMappingWorkspace from './components/FieldMapping'
+import { endpointRecoveryScope, useEndpointDesignRecovery } from './hooks/useEndpointDesignRecovery'
 import CommitBeforeSendModal from './components/MilestoneCommitReminder/CommitBeforeSendModal'
 import MilestoneCommitModal from './components/MilestoneCommitReminder/MilestoneCommitModal'
 import {
@@ -136,6 +141,8 @@ import { useCodeReviewReportPanel } from './hooks/useCodeReviewReportPanel'
 import { useTestReportPanel } from './hooks/useTestReportPanel'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import { useSessionRuntimeStore } from './hooks/useSessionRuntimeStore'
+import { useWorkbenchRunRefresh } from './hooks/useWorkbenchRunRefresh'
+import { ownedWorkbenchExecution, restoreWorkbenchPresentation, workbenchExecutionRunning } from './workbenchRunPresentation'
 import {
   activeFormalRevisionStageSession,
   appendRevisionDevelopmentEntryMessage,
@@ -170,6 +177,15 @@ import {
   pendingDagOwnerSessionId,
   stageOutputPhase
 } from './stageOutputState'
+import { executionRecoveryForSession, executionRecoveryReadError } from './executionRecoveryState'
+import { acceptancePreviewCanFocus, globalFallbackState, latestConversationFailure, workbenchRecoveryCoveredByExecution } from './globalFallbackState'
+import ConnectionStatusBanner from '../ConnectionStatusBanner'
+import RecoverySurface from './recoverySurface'
+import {
+  applicationPlanningRecoveryIncident,
+  workbenchRecoveryIncident
+} from '../../service/recoveryIncident'
+import { runPlanningStageEntryTransaction } from './planningStageEntry'
 import {
   endpointDetailTargetKey,
   pageDetailTargetKey,
@@ -194,13 +210,13 @@ import {
   planExecutionContextForRun,
   resolveWorkflowForDisplay,
   shouldRenderPlanExecutionDock,
-  workflowCanRetryFailedTasks,
-  workflowCodeReviewRetry,
   workflowInteractionAvailability,
+  workflowCodeReviewRetry,
   workflowResumeNode,
   type PlanExecutionMode
 } from './planExecutionMode'
 import './AiChatPanel.less'
+import { uiDesignRecoveryError } from '../../service/applicationPlanningRecovery'
 
 // 把规划确认答案转成可读的用户操作文案，用于对话区留痕。
 // 不同 mode 对应不同的操作语义：确认全部设计稿/确认保存需求文档/进入项目规划等。
@@ -324,6 +340,10 @@ type Props = {
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试规划 Graph。 */
   onRetryPlanning?: () => void
+  /** 底部连接恢复后读取当前规划中断事实，不启动生成或恢复动作。 */
+  onReconcilePlanning?: () => void
+  /** 仅重试应用模板初始化，独立于规划 Graph 的恢复。 */
+  onRetryTemplateGeneration?: () => void
   /** 通过独立 AG-UI 动作重试 Template Reconcile。 */
   onRetryTemplateReconcile?: () => void
   /** 当前应用唯一的 Planning 业务状态。 */
@@ -841,6 +861,8 @@ export default function AiChatPanel({
   onSessionHistoryReadyChange,
   generatingTemplate,
   onRetryPlanning,
+  onReconcilePlanning,
+  onRetryTemplateGeneration,
   onRetryTemplateReconcile,
   planningState,
   theme,
@@ -851,7 +873,7 @@ export default function AiChatPanel({
 }: Props): ReactElement {
   const planningThreadId = planningState?.threadId
   const currentPlanningWorkflow = planningState?.workflow
-  const planningError = planningState?.syncError || planningState?.error
+  const planningError = planningState?.error
   const restorePlanningArtifactsFromDisk = planningState?.restoreArtifactsFromDisk === true
   const [activeView, setActiveView] = useState<ActiveView>('chat')
   const sourceNavigationGuard = useRef<((action: () => void) => void)>()
@@ -2316,17 +2338,20 @@ export default function AiChatPanel({
   )
 
   const {
-    activeWorkflow,
+    activeWorkflow: localActiveWorkflow,
     conversationRunning,
+    connectionState,
+    workbenchRefreshConnection,
     error,
     handleAcceptPreview,
     handleContinueDevelopment: continueDevelopmentExecution,
+    handleExecuteRecoveryAction,
+    handleRetryCodeReview,
+    handleContinueStoppedPlan,
     handleContinueRevisionBuild,
     handleEndPlan,
     handleProductStageConversation,
     handleResumePlan,
-    handleRetryCodeReview,
-    handleRetryPlan,
     handleStopPlan,
     handleSend,
     handleStartEndpointDevelopment,
@@ -2334,13 +2359,17 @@ export default function AiChatPanel({
     handleStartDetailConfirmation,
     handleStopGenerating,
     handleSubmitClarification,
-    loading,
+    loading: localWorkflowLoading,
     planEnded,
     phaseExecution,
     sessionExecutionLocked,
     sessionRunStates,
-    stopping,
-    workspaceBusy
+    stopping: localWorkflowStopping,
+    workspaceBusy,
+    recoveryError,
+    recoveryRunning,
+    retryCurrentRecovery,
+    refreshExecutionRecoveryLifecycle
   } = useWorkflowConversation({
     acquireSessionExecution,
     activeSession,
@@ -2348,6 +2377,14 @@ export default function AiChatPanel({
     application,
     applicationLifecycle,
     applicationMutationReadonly,
+    recoveryMutationReadonlyForLifecycle: (lifecycle) =>
+      applicationMutationReadonlyForSession(
+        resolveApplicationMutationOwnership(lifecycle, allSessions, sessionExecutions, {
+          applicationId: application.id,
+          workspaceRoot: application.workspaceRoot
+        }),
+        activeSession
+      ),
     draft,
     draftKey,
     editorMode,
@@ -2397,8 +2434,27 @@ export default function AiChatPanel({
     updateSessionExecutionStatus
   })
 
+  // 重入后以 Backend execution 衔接运行展示；只读投影不冒充本地流连接。
+  const ownedExecution = ownedWorkbenchExecution(applicationLifecycle, activeSession)
+  const restoredRun = localWorkflowLoading
+    ? { messages, workflow: undefined }
+    : restoreWorkbenchPresentation(messages, applicationLifecycle, activeSession)
+  const activeWorkflow = localWorkflowLoading
+    ? localActiveWorkflow
+    : restoredRun.workflow || localActiveWorkflow
+  const displayedMessages = restoredRun.messages
+  const restoredRunRunning = !planEnded && workbenchExecutionRunning(ownedExecution)
+  const loading = localWorkflowLoading || restoredRunRunning
+  const stopping = localWorkflowStopping || (restoredRunRunning && ownedExecution?.status === 'stopping')
+  useWorkbenchRunRefresh(
+    application,
+    !localWorkflowLoading && restoredRunRunning ? ownedExecution?.runId : undefined,
+    onApplicationLifecycleChange,
+    workbenchRefreshConnection
+  )
+
   // 同一执行归属同时决定停止按钮的显示与动作路由，普通 Workflow 保持原有优先级。
-  const currentGenerationOwner = loading
+  const currentGenerationOwner = localWorkflowLoading
     ? 'workflow'
     : isApplicationPlanningPhase && planningState?.transportState === 'running'
       ? 'planning'
@@ -2411,6 +2467,10 @@ export default function AiChatPanel({
       void onStopPlanning().catch((reason) => {
         if (!isAuthenticationFailure(reason)) message.error(formatError(reason, '停止规划失败'))
       })
+      return
+    }
+    if (restoredRunRunning && !localWorkflowLoading) {
+      void handleStopPlan(ownedExecution?.runId)
       return
     }
     handleStopGenerating()
@@ -2641,8 +2701,13 @@ export default function AiChatPanel({
   // 新一轮（用户提交确认后，或 runId 变化）新增消息卡片，保留历史对话。
   const injectPlanningChunk = (
     sessionKey: string,
-    chunk: { content?: string; workflow?: WorkflowRunPayload }
+    incomingChunk: { content?: string; workflow?: WorkflowRunPayload }
   ): void => {
+    // 计划确认后的节点计数只是平台状态，不作为规划 Agent 的新一轮回复落盘。
+    const chunk =
+      isTechnicalPlanningPhase && isWorkflowCompletionStatusMessage(incomingChunk.content)
+        ? { ...incomingChunk, content: undefined }
+        : incomingChunk
     if (
       shouldSuppressConfirmedTechnicalPlanTransitionChunk(
         chunk.workflow,
@@ -2750,7 +2815,9 @@ export default function AiChatPanel({
         // 例外：计划阶段 running 期间创建卡片显示生成加载态，
         // 让用户看到规划进度，而非长时间无反馈。
         const hasContent = Boolean(chunk.content?.trim())
-        const requiresInput = planningWorkflowRequiresUserInput(incomingWorkflow)
+        const requiresInput = isApplicationPlanningPhase
+          ? planningWorkflowRequiresUserInput(incomingWorkflow)
+          : workflowCardRequiresUserInput(incomingWorkflow)
         const chunkActivity = planningWorkflowActivity(incomingWorkflow)
         const isPlanningRunning =
           incomingWorkflow.summary?.status === 'running' &&
@@ -3017,7 +3084,7 @@ export default function AiChatPanel({
     pendingPlanOwnedByOtherSession
   // 当前可见会话只要仍有 active runtime entry，就必须保留自己的 Workflow 控制入口。
   // 该判断独立于 ownership 的 loading/conflicted 投影，避免 LockDock 覆盖停止/结束按钮。
-  const currentSessionExecuting = hasActiveSessionExecution(sessionExecutions, activeSession)
+  const currentSessionExecuting = hasActiveSessionExecution(sessionExecutions, activeSession) || restoredRunRunning
   const showSessionExecutionLock = otherSessionExecutionLocked && !currentSessionExecuting
   const phaseSessionRunActive =
     Boolean(phaseExecution) ||
@@ -3052,8 +3119,11 @@ export default function AiChatPanel({
   const phaseExecutionLabel = applicationOwnership.owner?.workbenchPhase
     ? WORKBENCH_PHASE_AGENTS[applicationOwnership.owner.workbenchPhase].label
     : WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label
+  // 规划 transport 只约束设计/技术规划输入；开发阶段不能被保留的旧规划状态误锁。
   const workflowInputLocked =
-    workspaceBusy || pendingPlanActionable || planningMutationBlocked(planningState)
+    workspaceBusy ||
+    pendingPlanActionable ||
+    (isApplicationPlanningPhase && planningMutationBlocked(planningState))
   const displayedSessionRunStates =
     planningSessionRunActive && existingPlanningSession
       ? { ...sessionRunStates, [existingPlanningSession.id]: 'running' as const }
@@ -3247,6 +3317,10 @@ export default function AiChatPanel({
     runId: activeWorkflow?.runId,
     threadId: activeWorkflow?.threadId || activeSession?.threadId
   }
+  const activeExecutionRecovery = useMemo(
+    () => executionRecoveryForSession(applicationLifecycle, activeSession?.sessionId),
+    [applicationLifecycle, activeSession?.sessionId]
+  )
   // 实体数据源绑定以聊天样式呈现，并作为独立流程结束。
   const entityDesignChatActive = Boolean(
     activeDetailTarget.type === 'entity' &&
@@ -3274,24 +3348,28 @@ export default function AiChatPanel({
           workflowIdentity
         )
   const scopedExecution = targetExecutionContext.execution
-  const latestWorkflowForDisplay = resolveWorkflowForDisplay(activeWorkflow, messages)
+  const latestWorkflowForDisplay = resolveWorkflowForDisplay(activeWorkflow, displayedMessages)
   // 新建对话的空白草稿不归属于任何历史 Run；应用级 execution 不能重新锁住输入区。
   const detachedConversationDraft =
     !isApplicationPlanningPhase && !activeSession && activeDetailTarget.type === 'none'
+  // 同一 Run 的 Durable 失败或中断均证明旧执行已停止；可恢复中断也必须覆盖 lifecycle 的旧 running，展示恢复入口。
   const displayedPlanExecutionMode =
     detachedConversationDraft || planEnded
       ? 'idle'
+      : (activeExecutionRecovery?.executionStatus === 'failed' ||
+          activeExecutionRecovery?.executionStatus === 'interrupted') &&
+          scopedExecution?.runId === activeExecutionRecovery.sourceRunId
+        ? 'failed'
       : deriveDisplayedPlanExecutionMode(
           scopedExecution,
           stopping ? 'stopping' : activeWorkflow?.summary.status,
           loading,
           Boolean(applicationLifecycle)
         )
-  const canRetryFailedTasks = workflowCanRetryFailedTasks(latestWorkflowForDisplay, scopedExecution)
   const workspaceRoot = application.workspaceRoot || '未选择工作目录'
   const showPreviewActions = editorMode === 'frontend'
   const activePageTitle =
-    activePageOption?.label || application.defaultPage || application.pages[0] || '页面'
+    activePageOption?.label || application.defaultPage || application.pages?.[0] || '页面'
   const activePage = useMemo(
     () => findPageMenuItem(application.menus?.items || [], activePageTitle),
     [activePageTitle, application.menus?.items]
@@ -3414,14 +3492,14 @@ export default function AiChatPanel({
         : pendingDagExecution
           ? []
           : stageOutputContextAligned
-            ? messages
+            ? displayedMessages
             : [],
     [
       pendingDagExecution,
       hasOwnedPendingPlan,
       pendingDagSessionMessages,
       stageOutputContextAligned,
-      messages
+      displayedMessages
     ]
   )
   const stageOutputWorkflow = hasOwnedPendingPlan
@@ -3653,13 +3731,84 @@ export default function AiChatPanel({
     ]
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
+  const endpointRecovery = useEndpointDesignRecovery(workspaceRoot || '', showRightPanel
+    ? rightPanel?.type === 'field-mapping'
+      ? [endpointRecoveryScope(workspaceRoot || ''), endpointRecoveryScope(workspaceRoot || '', apiDesignConfigTarget)]
+      : rightPanel?.type === 'outline' ? [endpointRecoveryScope(workspaceRoot || '', apiTarget)] : []
+    : [], rightPanel?.type === 'field-mapping' ? ['binding', 'advanced'] : ['detail'])
+  const workflowConnection =
+    (isApplicationPlanningPhase || templateGenerationRecoverable || templateReconcileRetryable) && planningState
+      ? planningState.connection : connectionState
+  const previewFallbackError = !previewRuntime.control.busy
+    ? previewRuntime.control.error || ((previewRuntime.repairState?.interrupted && previewRuntime.control.snapshot?.runtime?.status !== 'running') || previewRuntime.repairState?.status === 'failed' ? previewRuntime.repairState.message : undefined)
+    : undefined
+  const previewConnectionUnavailable = previewRuntime.connection.status === 'unavailable'
+  const currentPreviewRetry = previewConnectionUnavailable || (previewFallbackError && workflowConnection.status === 'healthy')
+    ? () => { void previewRuntime.retry() } : undefined
+  const currentEndpointRetry = endpointRecovery.issue ? () => { void endpointRecovery.retry() } : undefined
+  const activeConnectionState = endpointRecovery.issue && endpointRecovery.connection.status !== 'healthy'
+    ? endpointRecovery.connection : previewConnectionUnavailable ? previewRuntime.connection : workflowConnection
+  const planningReconnectRef = useRef<{ scope: string; status: string }>()
+  const reconcilePlanningRef = useRef(onReconcilePlanning)
+  reconcilePlanningRef.current = onReconcilePlanning
+  useEffect(() => {
+    const scope = `${workspaceRoot}:${planningThreadId}`
+    const previous = planningReconnectRef.current
+    planningReconnectRef.current = { scope, status: activeConnectionState.status }
+    // 兜底连接可能来自预览订阅；健康重连只证明可达，需再读规划生成池的权威中断投影。
+    // 只针对同工作区/规划线程的一次重连，复用现有 single-flight AG-UI Get，绝不自动重试节点。
+    if (isApplicationPlanningPhase && planningThreadId && previous?.scope === scope &&
+      previous.status === 'unavailable' && activeConnectionState.status === 'healthy' &&
+      planningState?.transportState === 'idle') reconcilePlanningRef.current?.()
+  }, [workspaceRoot, planningThreadId, isApplicationPlanningPhase, activeConnectionState.status, planningState?.transportState])
+  // 模板动作继续使用原专用入口，连接兜底和业务错误兜底共用同一动作归属。
+  const currentTemplateRetry = !generatingTemplate && templateGenerationRecoverable
+    ? onRetryTemplateGeneration
+    : templateReconcileRetryable ? onRetryTemplateReconcile : undefined
+  const templateFallbackError = generatingTemplate ? undefined : templateGenerationRecoverable
+    ? applicationLifecycle?.error?.message || '应用模板初始化未完成，请重试。'
+    : templateReconcileRetryable ? '应用模板能力更新失败，请重试。' : undefined
+  // 新一轮工作台执行已经开始时，旧失败投影只能留在历史记录，不能继续占用当前控制面。
+  const workbenchExecutionInProgress = workbenchRecoveryCoveredByExecution({
+    isApplicationPlanningPhase,
+    recoveryRunning,
+    loading,
+    planExecutionMode: displayedPlanExecutionMode
+  })
+  // End 成功后立即隐藏旧 Recovery；Backend lifecycle 投影更新前也不能再点旧重试。
+  const endedWorkbenchRecovery = !isApplicationPlanningPhase && planEnded
+  const recoveryProjectionError = executionRecoveryReadError(applicationLifecycle)
+  // 恢复投影失败只重新读取该投影，不误派发到另一个独立节点或执行旧动作。
+  const retryRecoveryProjection = recoveryProjectionError ? () => { void refreshExecutionRecoveryLifecycle() } : undefined
+  const currentRecoveryIncident = Boolean(recoveryProjectionError) || workbenchExecutionInProgress || endedWorkbenchRecovery || Boolean(workflowCodeReviewRetry(activeWorkflow)) || Boolean(currentTemplateRetry) || Boolean(currentPreviewRetry) || Boolean(currentEndpointRetry)
+    ? undefined
+    : isApplicationPlanningPhase
+      ? applicationPlanningRecoveryIncident(planningState)
+      : workbenchRecoveryIncident(activeExecutionRecovery, latestWorkflowForDisplay)
+  const globalFallbackError = recoveryProjectionError ||
+    (isApplicationPlanningPhase ? uiDesignRecoveryError(planningState?.recovery) : undefined) ||
+    (endpointRecovery.issue ? `${endpointRecovery.issue.reason instanceof Error ? endpointRecovery.issue.reason.message : String(endpointRecovery.issue.reason)} 当前映射输入保留；重试只同步状态，保存仍需明确操作。` : undefined) || previewFallbackError || (!workbenchExecutionInProgress &&
+    !endedWorkbenchRecovery
+      ? (isApplicationPlanningPhase
+          ? planningState?.syncError || planningError || planningState?.error || templateFallbackError || latestConversationFailure(messages)
+          : templateFallbackError || error || (previewRuntime.repairSession ? undefined : latestConversationFailure(messages)))
+      : undefined)
+  const globalFallback = globalFallbackState({
+    connectionStatus: activeConnectionState.status,
+    hasRecoveryIncident: Boolean(currentRecoveryIncident),
+    recoveryEnded: endedWorkbenchRecovery,
+    recoveryError: workbenchExecutionInProgress || Boolean(currentTemplateRetry) || Boolean(currentPreviewRetry) || Boolean(currentEndpointRetry) ? undefined : recoveryError,
+    globalFallbackError
+  })
+  const showGlobalFallback = globalFallback.visible
   const acceptanceAwaiting = shouldShowAcceptanceDecisionDock({
     activePhase: activeWorkbenchPhase,
     planExecutionMode: displayedPlanExecutionMode,
     acceptancePassed
   })
-  const acceptancePreviewFocus =
-    activeWorkbenchPhase === 'acceptance' && showRightPanel && rightPanel?.type === 'preview'
+  const acceptancePreviewFocus = acceptancePreviewCanFocus(
+    activeWorkbenchPhase, showRightPanel && rightPanel?.type === 'preview', showGlobalFallback
+  )
   // 「检查遗漏变更」：未提交文件里没被任何模块任务认领的部分。
   // 用 codePaths 而不是 eligiblePaths —— `.devagentstudio` 平台产物永远不在构建计划的
   // 模块归属里，算进来会把每个产物文件都误报成"未关联到任何模块"。
@@ -4235,11 +4384,13 @@ export default function AiChatPanel({
               (planningAnswers.revision_draft_interaction as { action?: unknown }).action || ''
             )
           : ''
+      const technicalPlanConfirmed =
+        planningAnswers.__applicationPlanningAction === 'confirm' &&
+        planningWorkflowPhase(workflow) === 'technical_planning'
       const revisionTechnicalPlanConfirmed =
         Boolean(activeFormalRevision) &&
         (revisionDraftAction === 'confirm' ||
-          (planningWorkflowPhase(workflow) === 'technical_planning' &&
-            planningAnswers.__applicationPlanningAction === 'confirm'))
+          technicalPlanConfirmed)
       // UI 设计稿的单页动作（换一换/选模板/调整）是同一轮内的更新，不新增消息卡片，
       // 只更新现有卡片；跳过与确认全部等推进到下一阶段的操作才新增卡片并留痕。
       const isUiDesignPageAction =
@@ -4308,113 +4459,135 @@ export default function AiChatPanel({
           let sourceMessagesWithReceipt: AgentChatMessage[] = []
           let sourceReceiptAdded = false
           let sourceReceiptPersisted = false
-          try {
-            // 首次创建和二次修改都先新建独立 PLAN StageSession/conversation thread，
-            // 再切阶段并恢复原 Graph checkpoint，两个 thread 身份不得混用。
-            planningIdentity = await ensurePlanningSession(
-              stageEntryKey,
-              'planning',
-              revisionContext,
-              sourceIdentity
-            )
-            if (revisionContext?.changeId && sourceIdentity) {
-              sourceMessages = getSessionMessages(sourceIdentity.key)
-              const receiptExists = sourceMessages.some(
-                (item) =>
-                  item.revisionHandoff?.kind === 'revision_planning' &&
-                  item.revisionHandoff.changeId === revisionContext.changeId &&
-                  item.revisionHandoff.targetSessionId === planningIdentity?.sessionId
+          const stageEntryOutcome = await runPlanningStageEntryTransaction({
+            prepare: async () => {
+              // 首次创建和二次修改都先新建独立 PLAN StageSession/conversation thread，
+              // 再切阶段并恢复原 Graph checkpoint，两个 thread 身份不得混用。
+              planningIdentity = await ensurePlanningSession(
+                stageEntryKey,
+                'planning',
+                revisionContext,
+                sourceIdentity
               )
-              if (!receiptExists) {
-                sourceReceiptAdded = true
-                const receiptId = Date.now() * 1000
-                const nextSourceMessages: AgentChatMessage[] = [
-                  ...sourceMessages,
-                  {
-                    id: receiptId,
-                    role: 'assistant',
-                    content: '',
-                    revisionHandoff: {
-                      kind: 'revision_planning',
-                      formalBranch: revisionContext.formalBranch,
-                      targetSessionId: planningIdentity.sessionId,
-                      targetConversationThreadId: planningIdentity.threadId,
-                      impactInteractionId: revisionContext.impactInteractionId,
-                      changeId: revisionContext.changeId,
-                      request: String(
-                        activeFormalRevision?.request ||
-                          '需求设计已确认，进入本次二次修改的技术计划阶段。'
-                      )
-                    },
-                    createdAt: receiptId
-                  }
-                ]
-                sourceMessagesWithReceipt = nextSourceMessages
-                setSessionMessages(sourceIdentity.key, nextSourceMessages)
-                await persistSession({
-                  editorMode: sourceIdentity.editorMode,
-                  messages: nextSourceMessages,
-                  sessionId: sourceIdentity.sessionId,
-                  threadId: sourceIdentity.threadId,
-                  revisionContext
-                })
-                sourceReceiptPersisted = true
-              }
-            }
-            planningSessionKeyRef.current = planningIdentity.key
-            setLocalPlanningConversationThreadId(planningIdentity.threadId)
-            appendPlanningUserMessage(planningAnswers)
-            switchPhase('planning')
-            await onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec)
-          } catch (error) {
-            if (planningStageTransitionRef.current === stageEntryKey) {
-              planningStageTransitionRef.current = ''
-            }
-            let sourceReceiptRolledBack = true
-            if (sourceIdentity && sourceReceiptAdded) {
-              setSessionMessages(sourceIdentity.key, sourceMessages)
-              if (sourceReceiptPersisted) {
-                try {
+              if (revisionContext?.changeId && sourceIdentity) {
+                sourceMessages = getSessionMessages(sourceIdentity.key)
+                const receiptExists = sourceMessages.some(
+                  (item) =>
+                    item.revisionHandoff?.kind === 'revision_planning' &&
+                    item.revisionHandoff.changeId === revisionContext.changeId &&
+                    item.revisionHandoff.targetSessionId === planningIdentity?.sessionId
+                )
+                if (!receiptExists) {
+                  sourceReceiptAdded = true
+                  const receiptId = Date.now() * 1000
+                  const nextSourceMessages: AgentChatMessage[] = [
+                    ...sourceMessages,
+                    {
+                      id: receiptId,
+                      role: 'assistant',
+                      content: '',
+                      revisionHandoff: {
+                        kind: 'revision_planning',
+                        formalBranch: revisionContext.formalBranch,
+                        targetSessionId: planningIdentity.sessionId,
+                        targetConversationThreadId: planningIdentity.threadId,
+                        impactInteractionId: revisionContext.impactInteractionId,
+                        changeId: revisionContext.changeId,
+                        request: String(
+                          activeFormalRevision?.request ||
+                            '需求设计已确认，进入本次二次修改的技术计划阶段。'
+                        )
+                      },
+                      createdAt: receiptId
+                    }
+                  ]
+                  sourceMessagesWithReceipt = nextSourceMessages
+                  setSessionMessages(sourceIdentity.key, nextSourceMessages)
                   await persistSession({
                     editorMode: sourceIdentity.editorMode,
-                    messages: sourceMessages,
+                    messages: nextSourceMessages,
                     sessionId: sourceIdentity.sessionId,
                     threadId: sourceIdentity.threadId,
                     revisionContext
                   })
-                } catch (rollbackError) {
-                  sourceReceiptRolledBack = false
-                  // 磁盘仍保留回执时，内存也恢复为同一状态，并保留目标会话维持可跳转关系。
-                  setSessionMessages(sourceIdentity.key, sourceMessagesWithReceipt)
-                  message.warning(formatError(rollbackError, '计划阶段交接回执回滚失败'))
+                  sourceReceiptPersisted = true
                 }
               }
-            }
-            if (planningIdentity && sourceReceiptRolledBack) {
-              try {
-                await discardPreparedSession(planningIdentity)
-              } catch (rollbackError) {
-                message.warning(formatError(rollbackError, '预创建规划会话清理失败'))
+              planningSessionKeyRef.current = planningIdentity.key
+              setLocalPlanningConversationThreadId(planningIdentity.threadId)
+              planningSubmission = appendPlanningUserMessage(planningAnswers)
+              switchPhase('planning')
+              return planningIdentity
+            },
+            execute: async () => {
+              await onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec)
+            },
+            rollback: async () => {
+              if (planningStageTransitionRef.current === stageEntryKey) {
+                planningStageTransitionRef.current = ''
               }
+              let sourceReceiptRolledBack = true
+              if (sourceIdentity && sourceReceiptAdded) {
+                setSessionMessages(sourceIdentity.key, sourceMessages)
+                if (sourceReceiptPersisted) {
+                  try {
+                    await persistSession({
+                      editorMode: sourceIdentity.editorMode,
+                      messages: sourceMessages,
+                      sessionId: sourceIdentity.sessionId,
+                      threadId: sourceIdentity.threadId,
+                      revisionContext
+                    })
+                  } catch (rollbackError) {
+                    sourceReceiptRolledBack = false
+                    // 磁盘仍保留回执时，内存也恢复为同一状态，并保留目标会话维持可跳转关系。
+                    setSessionMessages(sourceIdentity.key, sourceMessagesWithReceipt)
+                    message.warning(formatError(rollbackError, '计划阶段交接回执回滚失败'))
+                  }
+                }
+              }
+              if (planningIdentity && sourceReceiptRolledBack) {
+                try {
+                  await discardPreparedSession(planningIdentity)
+                } catch (rollbackError) {
+                  message.warning(formatError(rollbackError, '预创建规划会话清理失败'))
+                }
+              }
+              planningSessionKeyRef.current = ''
+              setLocalPlanningConversationThreadId('')
+              switchPhase('product')
             }
-            setLocalPlanningConversationThreadId('')
-            switchPhase('product')
-            message.error(formatError(error, '进入计划阶段失败'))
+          })
+          if (stageEntryOutcome.status === 'frontend_handoff_failed') {
+            message.error(formatError(stageEntryOutcome.error, '进入计划阶段失败'))
+          } else if (
+            stageEntryOutcome.status === 'backend_failed' &&
+            stageEntryOutcome.error instanceof ApplicationPlanningSubmissionNotCommittedError
+          ) {
+            planningNewRoundRef.current = false
+            rollbackPlanningSubmission(planningSubmission)
+            message.error(stageEntryOutcome.error.message)
           }
           return
         } else {
-          // 其它确认/放弃/填表操作继续保留用户消息与即时加载占位。
+          // 确认/放弃/填表保留用户消息；TechnicalPlan 确认不预置没有模型回复的 Agent 加载消息。
           // TechnicalPlan 二次修改确认后继续停留在当前规划会话；只有服务端
           // continuation 被开发 Workflow 成功接管后，才激活 DEVELOPMENT StageSession。
           suppressRevisionTechnicalPlanTransitionRef.current = revisionTechnicalPlanConfirmed
           planningSubmission = appendPlanningUserMessage(
             planningAnswers,
-            !revisionTechnicalPlanConfirmed
+            !revisionTechnicalPlanConfirmed && !technicalPlanConfirmed
           )
         }
       }
       void onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec).catch(
         (reason) => {
+          if (reason instanceof ApplicationPlanningSubmissionNotCommittedError) {
+            planningNewRoundRef.current = false
+            rollbackPlanningSubmission(planningSubmission)
+            message.error(reason.message)
+            return
+          }
           if (revisionTechnicalPlanConfirmed) {
             suppressRevisionTechnicalPlanTransitionRef.current = false
             planningNewRoundRef.current = false
@@ -4538,14 +4711,6 @@ export default function AiChatPanel({
     await handleProductStageConversation(draft, originalPlanningThreadId)
   }
 
-  /** 滚动到现有 Workflow 进度区域，不改变消息列表和中央内容结构。 */
-  const handleViewPlan = (): void => {
-    document.querySelector(`.${CLASS_PREFIX}-process-steps`)?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center'
-    })
-  }
-
   /** 用户点击"进入开发阶段"：放开 planning 锁并进入带快捷任务的空白对话。 */
   const handleEnterDevelopment = useCallback((): void => {
     markApplicationEnteredDevelopment(application.id, iterationScopeId, iterationToken)
@@ -4662,7 +4827,7 @@ export default function AiChatPanel({
               />
             </div>
           ) : (
-            <div className={cx('ai-chat-main')}>
+            <div className={cx('ai-chat-main', showGlobalFallback && 'has-global-fallback')}>
               {activeDetailTarget.type !== 'none' ? (
                 <PageContextHeader
                   description={activeHeaderTarget.description}
@@ -4729,7 +4894,7 @@ export default function AiChatPanel({
                 error={planningError || error}
                 key={activeSession?.key || draftKey}
                 loading={loading || otherSessionExecutionLocked}
-                messages={messages}
+                messages={displayedMessages}
                 apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
                 onContinueDevelopment={handleContinueDevelopment}
                 onEntityDesignGateJump={handleEntityDesignGateJump}
@@ -4737,16 +4902,9 @@ export default function AiChatPanel({
                 onOpenCodeChangeFile={handleOpenCodeChangeFile}
                 onOpenRevisionSession={handleOpenRevisionSession}
                 onRevertCodeChanges={requestCodeChangeRevert}
-                onRetryError={
-                  planningError
-                    ? onRetryPlanning
-                    : workflowCodeReviewRetry(activeWorkflow)
-                      ? () => void handleRetryCodeReview()
-                      : undefined
-                }
                 onRetryTemplateGeneration={
                   templateGenerationRecoverable
-                    ? onRetryPlanning
+                    ? onRetryTemplateGeneration
                     : templateReconcileRetryable
                       ? onRetryTemplateReconcile
                       : undefined
@@ -4812,6 +4970,50 @@ export default function AiChatPanel({
                 title="保存当前改动为版本"
               />
 
+              {showGlobalFallback ? (
+                <div className={cx('ai-chat-global-fallback')}>
+                  {activeConnectionState.status !== 'healthy' ? (
+                    <ConnectionStatusBanner
+                      connection={activeConnectionState}
+                      onReconnect={retryRecoveryProjection || currentEndpointRetry || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
+                        ? onRetryPlanning
+                        : () => { void retryCurrentRecovery() })}
+                    />
+                  ) : currentRecoveryIncident ? (
+                    <RecoverySurface
+                      actionDisabled={
+                        isApplicationPlanningPhase &&
+                        (planningState?.transportState === 'running' ||
+                          planningState?.transportState === 'reconciling')
+                      }
+                      activeExecutionRecovery={activeExecutionRecovery}
+                      currentWorkflow={latestWorkflowForDisplay}
+                      isApplicationPlanningPhase={isApplicationPlanningPhase}
+                      onExecuteRecoveryAction={(recovery) => { void handleExecuteRecoveryAction(recovery) }}
+                      onRetryCurrentRecovery={() => { void retryCurrentRecovery() }}
+                      onRetryPlanning={onRetryPlanning}
+                      planningState={planningState}
+                      recoveryError={
+                        isApplicationPlanningPhase
+                          ? planningState?.recoveryActionError
+                          : recoveryError
+                      }
+                      recoveryRunning={recoveryRunning}
+                    />
+                  ) : globalFallback.error ? (
+                    <AgentErrorCard
+                      error={globalFallback.error}
+                      onRetry={retryRecoveryProjection || currentEndpointRetry || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
+                        ? onRetryPlanning
+                        : workflowCodeReviewRetry(activeWorkflow)
+                          ? () => { void handleRetryCodeReview() }
+                          : () => { void retryCurrentRecovery() })}
+                      retrying={endpointRecovery.retrying || recoveryRunning}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+
               {showSessionExecutionLock ? (
                 <SessionExecutionLockDock
                   phaseLabel={phaseExecutionLabel}
@@ -4848,7 +5050,7 @@ export default function AiChatPanel({
                   activeWorkflow={activeWorkflow}
                   copy={copy}
                   initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
-                  loading={currentGenerationLoading}
+                  loading={loading}
                   onSend={
                     planExecutionShowsDebugResume(displayedPlanExecutionMode) && activeWorkflow
                       ? handleResumePlan
@@ -4857,9 +5059,7 @@ export default function AiChatPanel({
                   onStopGenerating={handleStopCurrentGeneration}
                   rightContent={
                     <PlanExecutionDock
-                      canRetryFailedTasks={canRetryFailedTasks}
                       dependencyLocked={targetExecutionContext.dependencyLocked}
-                      error={scopedExecution?.error?.message || error}
                       execution={scopedExecution}
                       developmentTotals={developmentTotals}
                       mode={displayedPlanExecutionMode}
@@ -4868,13 +5068,12 @@ export default function AiChatPanel({
                       onConfirmInteraction={handleConfirmPlanInteraction}
                       onEnd={() => void handleEndPlan(scopedExecution?.runId)}
                       onOpenPreview={() => void handleOpenFullscreenPreview()}
-                      onRetry={() => void handleRetryPlan(latestWorkflowForDisplay)}
+                      onRetry={() => void handleContinueStoppedPlan(latestWorkflowForDisplay)}
                       onStop={
                         currentGenerationLoading
                           ? handleStopCurrentGeneration
                           : () => void handleStopPlan(scopedExecution?.runId)
                       }
-                      onViewPlan={handleViewPlan}
                     />
                   }
                   stopping={stopping}
@@ -4966,7 +5165,7 @@ export default function AiChatPanel({
       {!isApplicationPlanningPhase && workspaceRoot ? <div className={cx('embedded-preview-pane', 'workspace-pane')} style={{ display: showRightPanel && rightPanel?.type === 'field-mapping' ? undefined : 'none' }}>
         <RightPanelTabs tabs={displayedWorkspaceTabs} active="field-mapping" onChange={openDisplayedWorkspaceTab} onClose={() => { setRightPanel(undefined); onRightPanelOpenChange(false) }} />
         <div className={cx('workspace-content')}><FieldMappingWorkspace key={workspaceRoot} workspaceRoot={workspaceRoot} target={apiDesignConfigTarget}
-          contracts={developmentPlanningApiContracts} onSelect={setApiDesignConfigTarget} onSaved={handleApiDesignConfigSaved} /></div>
+          contracts={developmentPlanningApiContracts} onSelect={setApiDesignConfigTarget} onSaved={handleApiDesignConfigSaved} onEndpointRecovery={endpointRecovery.report} /></div>
       </div> : null}
 
       {showRightPanel && rightPanel?.type === 'outline' && (
@@ -4989,6 +5188,7 @@ export default function AiChatPanel({
               detailLabel={artifactDetailLabel}
               apiTarget={apiTarget}
               apiDesignRefreshKey={apiDesignRefreshKey}
+              onEndpointRecovery={endpointRecovery.report}
               workspaceRoot={workspaceRoot}
               outlineLocked={false}
               pages={displayedPlanningPages}

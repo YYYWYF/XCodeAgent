@@ -18,6 +18,7 @@ from app.services.planning_run_events import (
 from app.services.unit_generation_contracts import AttemptIdentity
 from app.workspace.planning_run_documents import project_planning_run, write_planning_run_atomic
 from app.workspace.spec_documents import workspace_root
+from app.workspace.planning_interruption_documents import persist_planning_interruption
 
 
 SnapshotPublisher = Callable[[Mapping[str, Any]], Awaitable[None]]
@@ -89,6 +90,7 @@ class PlanningRunController:
             raise TypeError("Controller 必须接收完整内存 PlanningRun，不能从轻量磁盘投影恢复。")
         self._snapshot = PlanningRun.model_validate(initial_run)
         self._workspace_state = {"workspace": str(workspace_root(dict(workspace_state)).resolve())}
+        self._workspace_state["owner_session_id"] = str(workspace_state.get("owner_session_id") or "")
         self._publish = publish
         self._lock = asyncio.Lock()
         self._transaction: asyncio.Task[PlanningRun] | None = None
@@ -171,6 +173,8 @@ class PlanningRunController:
         except Exception as exc:
             raise PlanningRunPersistenceError(proposed.revision) from exc
         self._snapshot = proposed
+        # 每次状态提交都刷新候选指针，确保 Global Repair 后旧候选立即失效。
+        await asyncio.to_thread(persist_planning_interruption, self._workspace_state, proposed)
         if self._publish is not None:
             try:
                 await self._publish(self.projection)

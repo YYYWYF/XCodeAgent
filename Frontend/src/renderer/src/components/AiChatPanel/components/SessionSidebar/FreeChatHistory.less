@@ -1,15 +1,21 @@
 .@{class-prefix}-free-chat-history-panel {
+  // 与临时对话一样覆盖主区域，不参与工作台横向空间分配。
+  position: absolute;
+  z-index: 30;
+  top: 0;
+  bottom: 0;
+  left: 68px;
   display: flex;
   width: 316px;
+  max-width: calc(100% - 68px);
   min-width: 0;
   height: 100%;
   min-height: 0;
-  flex: 0 0 316px;
   flex-direction: column;
   color: #26304a;
   background: #ffffff;
   border-right: 1px solid #e7e5ee;
-  box-shadow: 5px 0 18px rgba(38, 34, 51, 0.035);
+  box-shadow: 18px 0 42px rgba(29, 24, 55, 0.14);
   animation: free-chat-history-enter 0.18s ease-out;
 }
 
@@ -296,7 +302,7 @@
   color: #d9dce5;
   background: #161b27;
   border-right-color: #303646;
-  box-shadow: 5px 0 18px rgba(0, 0, 0, 0.12);
+  box-shadow: 18px 0 42px rgba(0, 0, 0, 0.42);
 
   .@{class-prefix}-free-chat-history-header {
     border-bottom-color: #303646;
@@ -389,7 +395,6 @@
 @media (max-width: 760px) {
   .@{class-prefix}-free-chat-history-panel {
     width: 280px;
-    flex-basis: 280px;
   }
 }
 

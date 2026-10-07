@@ -20,6 +20,7 @@ from app.services.global_repair_orchestrator import run_global_repair_loop
 from app.services.planning_frozen import FrozenPlanningModel, plain_json
 from app.services.planning_issues import ValidationIssue
 from app.services.planning_recovery_contracts import PlanningRecoverySnapshot
+from app.workspace.planning_interruption_documents import PlanningInterruptionSnapshot
 from app.services.planning_run_contracts import PlanningRun, UnitRunState
 from app.services.planning_run_controller import PlanningRunController, SnapshotPublisher
 from app.services.planning_run_events import (
@@ -51,6 +52,7 @@ class DagPlanningError(RuntimeError):
 
         self.issues = tuple(ValidationIssue.model_validate(issue) for issue in issues)
         self.snapshot = snapshot
+        self.code = self.issues[0].code if len(self.issues) == 1 else None
         super().__init__("；".join(issue.message for issue in self.issues))
 
 
@@ -150,17 +152,17 @@ async def plan_dag_sequential(
     settings: Settings | None = None,
     generate_once: Callable[..., Awaitable[UnitGenerationAttemptResult]] | None = None,
     publish: SnapshotPublisher | None = None,
-    recovery_snapshot: PlanningRecoverySnapshot | None = None,
+    recovery_snapshot: PlanningRecoverySnapshot | PlanningInterruptionSnapshot | None = None,
     now: Callable[[], str] = _now,
 ) -> ValidatedAssembledPlan:
-    """执行最多三个 model session 并发的新链路，只写轻量 planning-run.json。
+    """执行有限并发规划，保存轻量投影及独立的中断候选证据。
 
     上游提供正式输入、Scope、骨架及受信 ReuseFacts；若提供已计算 requirements，必须
     与本次 T2.3 结果精确相同。所有 Context 在首个模型调用前冻结；每个模型 Unit 独立
     完成最多三次 Local，Global=2 只重开归因目标。deterministic 不消耗模型预算。
     仅成功返回 ValidatedAssembledPlan；内容/基础设施失败抛 DagPlanningError。持久化、
     发布或任务取消保持 Controller 原有异常语义。成功返回前提交 PendingPersistenceStarted，
-    让 Run 停在 active/persisting_pending，等待调用方写 Pending；本函数不写任何文件。
+    让 Run 停在 active/persisting_pending，等待调用方写 Pending；本函数不写 Pending/Formal。
     """
 
     frozen = SequentialPlanningInputs.model_validate(inputs)
@@ -277,7 +279,11 @@ async def plan_dag_sequential(
         if recovery_snapshot is None:
             return
         try:
-            recovery = PlanningRecoverySnapshot.model_validate(recovery_snapshot)
+            recovery = (
+                PlanningInterruptionSnapshot.model_validate(recovery_snapshot)
+                if isinstance(recovery_snapshot, PlanningInterruptionSnapshot)
+                else PlanningRecoverySnapshot.model_validate(recovery_snapshot)
+            )
         except Exception:
             # Service loader 已经做过一次校验；纯领域调用传入损坏 Snapshot 时也只
             # 放弃优化，不让 Recovery 数据把正常 Planning 变成失败。

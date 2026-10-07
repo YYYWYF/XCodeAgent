@@ -129,6 +129,13 @@ class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
             message="source run infrastructure failure",
         )
 
+    def test_failure_exposes_only_unambiguous_issue_code(self):
+        """单一失败原因可交给前端分类，多个原因不得伪装成其中一个。"""
+
+        issue = self._infrastructure_failure()
+        self.assertEqual(DagPlanningError((issue,)).code, issue.code)
+        self.assertIsNone(DagPlanningError((issue, issue)).code)
+
     def _recovery_snapshot_from_success(self, result: ValidatedAssembledPlan) -> PlanningRecoverySnapshot:
         """把已拥有完整 Candidate 的测试 Run 转成合法 Recovery Snapshot。"""
 

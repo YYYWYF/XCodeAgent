@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { randomUUID } from '@ag-ui/client'
-import { runPreviewRuntime } from '../../../service/previewRuntime'
+import { PreviewRuntimeBusinessError, runPreviewRuntime } from '../../../service/previewRuntime'
 import type { PreviewAction, PreviewRuntimePayload } from '../../../service/previewRuntime'
 import type { AgentChatMessage } from '../types'
 import type { SessionIdentity } from './sessionRuntime'
 import type { PersistSessionInput } from './useChatSessions'
 import type { ServiceStatusControl } from '../../BrowserPreviewPanel/ServiceStatusDrawer'
 import { useSessionRuntimeStore } from './useSessionRuntimeStore'
+import { usePreviewRuntimeConnection } from './usePreviewRuntimeConnection'
+import type { ConnectionState } from '../../../service/connectionState'
+import { previewRecoveryAction } from '../previewRuntimeRecovery'
 
 type Options = {
   workspace: string
@@ -26,6 +29,8 @@ export function usePreviewRuntime(options: Options): {
   repairSession: boolean
   repairState?: PreviewRuntimePayload['repair']
   repairBusy: boolean
+  connection: ConnectionState
+  retry: () => Promise<void>
   act: (action: PreviewAction, feedback?: string) => Promise<void>
 } {
   const { acquireSessionExecution, releaseSessionExecution, updateSessionExecutionStatus } =
@@ -51,6 +56,7 @@ export function usePreviewRuntime(options: Options): {
   const cancelRequestedRef = useRef(false)
   const optimisticallyCancelledThreadsRef = useRef<Set<string>>(new Set())
   const optionsRef = useRef(options)
+  const failedActionRef = useRef<{ action: PreviewAction; identity?: SessionIdentity; workspace: string }>()
   optionsRef.current = options
   const lastReadyUrlRef = useRef('')
   const repairSession = !!options.activeSession?.entryKey?.startsWith('preview-repair:')
@@ -128,43 +134,10 @@ export function usePreviewRuntime(options: Options): {
     setSnapshot(undefined)
     setError('')
     setRepairs({})
+    failedActionRef.current = undefined
     lastReadyUrlRef.current = ''
   }, [options.workspace])
-  useEffect(() => {
-    if (!options.workspace) return
-    const controller = new AbortController()
-    const workspace = options.workspace
-    /** 始终订阅轻量运行状态；打开抽屉时再附带日志，断线后自动重新校准。 */
-    const watch = async (): Promise<void> => {
-      let initialRead = true
-      while (!controller.signal.aborted) {
-        const onUpdate = (value: PreviewRuntimePayload): void => {
-          if (!controller.signal.aborted) {
-            setError('')
-            receive(value, activeThread)
-          }
-        }
-        try {
-          await runPreviewRuntime(
-            { workspace, action: initialRead ? 'get' : 'watch', includeLogs: open },
-            {
-              threadId: activeThread,
-              signal: controller.signal,
-              onUpdate
-            }
-          )
-          initialRead = false
-        } catch (reason) {
-          if (controller.signal.aborted) return
-          initialRead = true
-          setError(reason instanceof Error ? reason.message : '读取服务状态失败')
-          await new Promise<void>((resolve) => window.setTimeout(resolve, 1000))
-        }
-      }
-    }
-    void watch()
-    return () => controller.abort()
-  }, [options.workspace, open, activeThread, receive])
+  const previewConnection = usePreviewRuntimeConnection(options.workspace, activeThread, open, receive)
 
   /** 立即停止渲染端等待，并在后台让服务端完成取消与占用收口。 */
   const cancelRepairImmediately = (identity?: SessionIdentity): void => {
@@ -211,8 +184,11 @@ export function usePreviewRuntime(options: Options): {
       }
     )
       .catch((reason) => {
-        if (workspaceRef.current === workspace)
+        if (workspaceRef.current === workspace) {
+          previewConnection.reportFailure(reason)
+          failedActionRef.current = { action: 'cancel', identity, workspace }
           setError(reason instanceof Error ? reason.message : '停止修复失败')
+        }
       })
       .finally(() => {
         // 有正在等待的 AG-UI 运行时由其 catch 分支清理标记；没有运行时则在后台请求结束后清理。
@@ -249,6 +225,7 @@ export function usePreviewRuntime(options: Options): {
     )
     setBusy(true)
     setError('')
+    failedActionRef.current = undefined
     const previous = identity ? captured.getMessages(identity.key) : []
     const now = Date.now()
     const user: AgentChatMessage = {
@@ -289,7 +266,7 @@ export function usePreviewRuntime(options: Options): {
       if (identity) {
         const blocker = acquireSessionExecution(identity, true)
         if (blocker && blocker.identity.key !== identity.key)
-          throw new Error('当前开发阶段已有执行任务。')
+          throw new PreviewRuntimeBusinessError('当前开发阶段已有执行任务。')
         updateSessionExecutionStatus(identity.key, 'running')
       }
       const value = await runPreviewRuntime(
@@ -331,6 +308,10 @@ export function usePreviewRuntime(options: Options): {
         }
       )
       if (cancelRequestedRef.current) return
+      if (value.launchResult?.status === 'failed') {
+        failedActionRef.current = { action, identity, workspace }
+        setError(value.launchResult.message || '预览服务启动失败。')
+      }
       const repair = value.repair
       awaitingConfirmation = repair?.status === 'awaiting_confirmation'
       const oldChangeIds = new Set(previous.map((message) => message.codeChanges?.id))
@@ -367,12 +348,17 @@ export function usePreviewRuntime(options: Options): {
         return
       }
       const message = reason instanceof Error ? reason.message : '预览服务操作失败'
+      if (workspaceRef.current !== workspace) return
+      previewConnection.reportFailure(reason)
+      failedActionRef.current = { action, identity, workspace }
       setError(message)
       assistant = { ...assistant, content: message, error: message }
-      if (identity && action === 'diagnose' && !accepted) {
+      // 断线不能证明诊断未被接收，保留同一会话供权威读取恢复。
+      if (identity && action === 'diagnose' && !accepted && reason instanceof PreviewRuntimeBusinessError) {
         releaseSessionExecution(identity.key)
         captured.setMessages(identity.key, [])
         await captured.discardSession(identity)
+        failedActionRef.current = undefined
         return
       }
     } finally {
@@ -409,14 +395,39 @@ export function usePreviewRuntime(options: Options): {
     ? '当前应用有会话执行中或等待确认，请完成或明确停止后再操作。'
     : snapshot?.blockedBy?.message ||
       (snapshot?.runtime?.maintenance ? '当前应用有预览维护任务，请完成或停止后再操作。' : '')
+  /** 底部重试先校准事实，只有明确安全的原动作才重新派发；确认修复从不自动重放。 */
+  const retry = async (): Promise<void> => {
+    if (busyRef.current) return
+    const workspace = optionsRef.current.workspace
+    const failed = failedActionRef.current?.workspace === workspace ? failedActionRef.current : undefined
+    try {
+      const value = await previewConnection.read(failed?.identity?.threadId || activeThread)
+      if (workspaceRef.current !== workspace) return
+      setError('')
+      failedActionRef.current = undefined
+      const identity = failed?.identity || optionsRef.current.activeSession
+      const action = previewRecoveryAction(value, failed?.action, identity?.threadId)
+      if (action === 'restart') await execute('restart')
+      else if (action === 'diagnose') {
+        if (!value.repair?.status && failed?.identity) await execute('diagnose', failed.identity)
+        else await diagnose()
+      } else if (action === 'revise' && identity) await execute('revise', identity)
+      else if (action === 'cancel') await execute('cancel', identity)
+    } catch (reason) {
+      // 只读重连的通信错误由连接入口持有，避免重连成功后残留成业务失败。
+      if (workspaceRef.current === workspace) setError(reason instanceof PreviewRuntimeBusinessError ? reason.message : '')
+    }
+  }
   return {
+    connection: previewConnection.connection,
+    retry,
     control: {
       open,
       setOpen,
       snapshot,
       busy,
       busyLaunchLabel,
-      error,
+      error: error || previewConnection.businessError || previewConnection.connection.lastError || '',
       blockedReason,
       onRestart: () => {
         void execute('restart')

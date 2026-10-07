@@ -352,6 +352,36 @@ def build_run_task_plan_json_path(state: dict[str, Any], build_run_id: str) -> P
     return workflow_artifact_root(state) / "plans" / "build-runs" / f"{normalized_id}.json"
 
 
+def build_execution_record_path(state: dict[str, Any], execution_run_id: str) -> Path:
+    """按 Workflow execution 身份定位 Build Run 绑定与内部进度记录。"""
+
+    run_id = str(execution_run_id or "").strip()
+    if not run_id:
+        raise ValueError("Build execution 缺少 Run 身份。")
+    digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
+    return workflow_artifact_root(state) / "plans" / "build-runs" / f"execution-{digest}.json"
+
+
+def load_build_execution_record(state: dict[str, Any], execution_run_id: str) -> dict[str, Any] | None:
+    """读取指定 Workflow execution 的绑定；缺失与损坏分别处理。"""
+
+    path = build_execution_record_path(state, execution_run_id)
+    try:
+        record = load_build_task_plan_json(path)
+    except FileNotFoundError:
+        return None
+    if not isinstance(record, dict):
+        raise ValueError("Build execution 绑定记录格式无效。")
+    return record
+
+
+def write_build_execution_record(state: dict[str, Any], record: dict[str, Any]) -> None:
+    """在任务派发前原子提交绑定，随后原子更新同一记录中的调度进度。"""
+
+    path = build_execution_record_path(state, str(record.get("execution_run_id") or ""))
+    write_json_atomic(path, record)
+
+
 
 
 def write_build_run_task_plan_json(
@@ -457,6 +487,7 @@ def write_build_task_plan_execution_state(
         persisted["last_update"] = {
             "stage": "build_scheduler",
             "updated_by": "build-scheduler",
+            "build_run_id": str(state["build_run_id"]),
             "updated_at": datetime.now(UTC).isoformat(),
         }
         write_json_atomic(path, persisted)

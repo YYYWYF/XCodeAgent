@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
+import { test } from 'node:test'
 
-import { buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
+import { AgUiRunError, buildWorkflowForwardedProps } from '../src/renderer/src/service/agUiAgent'
 import {
   appendPlanningLoadingPlaceholder,
   compactPlanningMessageHistory,
@@ -26,7 +27,8 @@ import {
   planningWorkflowUiDesignSkipped,
   retainApplicationPlanningInterrupt,
   shouldBackfillPlanningWorkflow,
-  shouldSuppressConfirmedTechnicalPlanTransitionChunk
+  shouldSuppressConfirmedTechnicalPlanTransitionChunk,
+  workflowCardRequiresUserInput
 } from '../src/renderer/src/components/Welcome/planningWorkflowState'
 import type {
   ApplicationConfig,
@@ -84,13 +86,14 @@ import {
   reduceApplicationPlanningCurrentState,
   type ApplicationPlanningCurrentState
 } from '../src/renderer/src/service/activeApplicationPlanning'
+import { initialConnectionState } from '../src/renderer/src/service/connectionState'
+import { runPlanningStageEntryTransaction } from '../src/renderer/src/components/AiChatPanel/planningStageEntry'
 import {
   planningMessageActionsDisabled,
-  planningMessageHostsSyncError,
   planningInteractionIsCurrent,
-  planningSyncErrorHostMessageIndex,
   resolvePlanningMessageWorkflow
 } from '../src/renderer/src/components/AiChatPanel/components/MessageList/planningMessageWorkflow'
+import { deriveWorkbenchPhase, resolveWorkbenchPhase } from '../src/renderer/src/workbenchPhase'
 
 const canonicalPlanningApplication = {
   id: 'canonical-app',
@@ -119,6 +122,101 @@ function canonicalPlanningLifecycle(
   }
 }
 
+/** 构造用于验证阶段入口回滚边界的最小本地状态。 */
+function planningStageEntryTestState(): {
+  phase: 'product' | 'planning'
+  persistedPhase: 'product' | 'planning'
+  session: string | undefined
+  discarded: number
+} {
+  return {
+    phase: 'product',
+    persistedPhase: 'product',
+    session: undefined,
+    discarded: 0
+  }
+}
+
+/** 构造带 APIConnectionError 名称的模型连接异常，复现真实 SDK 错误类别。 */
+function apiConnectionError(): Error {
+  const error = new Error('Connection error.')
+  error.name = 'APIConnectionError'
+  return error
+}
+
+test('Technical Planning 后端异常不回滚已完成的阶段交接', async () => {
+  const failures = [
+    apiConnectionError(),
+    new AgUiRunError('RUN_ERROR'),
+    new Error('transport lost')
+  ]
+
+  for (const failure of failures) {
+    const state = planningStageEntryTestState()
+    const outcome = await runPlanningStageEntryTransaction({
+      prepare: async () => {
+        state.phase = 'planning'
+        state.persistedPhase = 'planning'
+        state.session = 'planning-session'
+        return state.session
+      },
+      execute: async () => {
+        throw failure
+      },
+      rollback: async () => {
+        state.discarded += 1
+        state.phase = 'product'
+        state.persistedPhase = 'product'
+        state.session = undefined
+      }
+    })
+
+    assert.equal(outcome.status, 'backend_failed')
+    assert.equal(state.phase, 'planning')
+    assert.equal(state.persistedPhase, 'planning')
+    assert.equal(state.session, 'planning-session')
+    assert.equal(state.discarded, 0)
+  }
+})
+
+test('只有 planning StageSession handoff 失败才回滚到设计阶段', async () => {
+  const state = planningStageEntryTestState()
+  let executionCalls = 0
+  const outcome = await runPlanningStageEntryTransaction({
+    prepare: async () => {
+      throw new Error('planning session create failed')
+    },
+    execute: async () => {
+      executionCalls += 1
+    },
+    rollback: async () => {
+      state.discarded += 1
+      state.phase = 'product'
+      state.persistedPhase = 'product'
+      state.session = undefined
+    }
+  })
+
+  assert.equal(outcome.status, 'frontend_handoff_failed')
+  assert.equal(executionCalls, 0)
+  assert.equal(state.phase, 'product')
+  assert.equal(state.persistedPhase, 'product')
+  assert.equal(state.session, undefined)
+  assert.equal(state.discarded, 1)
+})
+
+test('Technical Planning lifecycle generating 或 failed 都推导为计划阶段', () => {
+  for (const status of ['running', 'failed'] as const) {
+    const lifecycle = canonicalPlanningLifecycle(11, status)
+    lifecycle.initialization.stage = 'generating_technical_plan'
+    const derivedPhase = deriveWorkbenchPhase(lifecycle)
+    assert.equal(derivedPhase, 'planning')
+    assert.equal(resolveWorkbenchPhase(derivedPhase, null), 'planning')
+    // 手动覆盖语义保持不变；这里只验证系统未通过 catch 主动写入 product。
+    assert.equal(resolveWorkbenchPhase(derivedPhase, 'product'), 'product')
+  }
+})
+
 const canonicalTechnicalPlanWorkflow = {
   runId: 'canonical-run',
   threadId: 'canonical-thread',
@@ -142,6 +240,7 @@ const canonicalPlanningBaseState: ApplicationPlanningCurrentState = {
   application: canonicalPlanningApplication,
   lifecycle: canonicalPlanningLifecycle(10),
   threadId: 'canonical-thread',
+  connection: initialConnectionState(true),
   transportState: 'idle',
   workflow: canonicalTechnicalPlanWorkflow
 }
@@ -206,26 +305,12 @@ assert.equal(
   historicalCompletedWorkflow
 )
 
-assert.equal(planningMessageHostsSyncError('状态未同步', 2), true)
-assert.equal(planningMessageHostsSyncError('状态未同步', -1), false)
 assert.equal(planningMessageActionsDisabled(true, true), true)
 assert.equal(planningMessageActionsDisabled(false, true), false)
 // 新 gate/revision 暂时复用旧消息宿主时，当前宿主仍应保持可交互；真正历史卡才失效。
 assert.equal(planningInteractionIsCurrent(false, true), true)
 assert.equal(planningInteractionIsCurrent(true, false), true)
 assert.equal(planningInteractionIsCurrent(false, false), false)
-// 当前审阅门仍由消息 0 承载时，即使同 thread 的最新 Assistant 消息位于 2，也只选择原确认卡。
-const splitPlanningSyncErrorHost = planningSyncErrorHostMessageIndex(
-  'technical-plan:gate-g:revision-g',
-  new Map([['technical-plan:gate-g:revision-g', 0]]),
-  2
-)
-assert.equal(splitPlanningSyncErrorHost, 0)
-assert.deepEqual(
-  [0, 2].filter((messageIndex) => messageIndex === splitPlanningSyncErrorHost),
-  [0]
-)
-
 const technicalPlanGenerationErrorWorkflow = {
   ...canonicalTechnicalPlanWorkflow,
   runId: 'technical-plan-error',
@@ -246,7 +331,7 @@ assert.equal(
       true
     )
   ),
-  true
+  false
 )
 assert.equal(
   (
@@ -1064,8 +1149,31 @@ const summaryOnlyQuestionsWorkflow = {
   result: {}
 } as WorkflowRunPayload
 
-assert.equal(planningWorkflowRequiresUserInput(summaryOnlyQuestionsWorkflow), true)
-assert.equal(planningWorkflowCanPublishDuringRun(summaryOnlyQuestionsWorkflow), false)
+assert.equal(planningWorkflowRequiresUserInput(summaryOnlyQuestionsWorkflow), false)
+const apiDesignRequiredWorkflow = {
+  runId: 'run-api-design',
+  threadId: 'thread-api-design',
+  summary: {
+    status: 'requires_user_input',
+    phase: 'api_design_readiness_gate',
+    clarification: {
+      mode: 'api_design_required',
+      status: 'requires_user_input',
+      missingApiDesigns: [
+        {
+          api_contract_id: 'cat_image_api',
+          endpoint_id: 'cat_image_api.list'
+        }
+      ]
+    }
+  },
+  events: [],
+  state: {},
+  result: {}
+} as WorkflowRunPayload
+assert.equal(planningWorkflowRequiresUserInput(apiDesignRequiredWorkflow), false)
+assert.equal(workflowCardRequiresUserInput(apiDesignRequiredWorkflow), true)
+assert.equal(planningWorkflowCanPublishDuringRun(summaryOnlyQuestionsWorkflow), true)
 assert.equal(
   planningWorkflowCanPublishDuringRun({
     ...summaryOnlyQuestionsWorkflow,
@@ -1446,9 +1554,9 @@ const clarificationOnlyQuestionsWorkflow = {
   }
 } as WorkflowRunPayload
 
-assert.equal(planningWorkflowRequiresUserInput(clarificationOnlyQuestionsWorkflow), true)
-assert.equal(planningWorkflowIsActivelyRunning(clarificationOnlyQuestionsWorkflow), false)
-assert.equal(planningWorkflowSettlesLoading(clarificationOnlyQuestionsWorkflow), true)
+assert.equal(planningWorkflowRequiresUserInput(clarificationOnlyQuestionsWorkflow), false)
+assert.equal(planningWorkflowIsActivelyRunning(clarificationOnlyQuestionsWorkflow), true)
+assert.equal(planningWorkflowSettlesLoading(clarificationOnlyQuestionsWorkflow), false)
 assert.equal(
   planningWorkflowIsActivelyRunning({
     ...clarificationOnlyQuestionsWorkflow,
@@ -1456,7 +1564,7 @@ assert.equal(
   } as WorkflowRunPayload),
   true
 )
-assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, false), true)
+assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, false), false)
 assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, true), false)
 
 const previousRunWithInterrupt = {
@@ -1508,6 +1616,29 @@ assert.equal(
   planningWorkflowNeedsChatLoading(technicalPlanningWithStaleEntry, true, false, false, '', true),
   true
 )
+// 进入计划阶段后的事务子节点首帧可能尚未携带 lifecycle，仍须显示现有技术规划进度卡。
+const technicalPlanningGenerateFirstFrame = {
+  ...summaryOnlyQuestionsWorkflow,
+  summary: { status: 'running', phase: 'technical_planning_generate' },
+  events: [
+    {
+      type: 'workflow.node.started',
+      nodeName: 'technical_planning_generate',
+      status: 'running'
+    }
+  ],
+  state: {},
+  result: {}
+} as WorkflowRunPayload
+assert.equal(planningWorkflowPhase(technicalPlanningGenerateFirstFrame), 'technical_planning')
+assert.equal(planningWorkflowActivity(technicalPlanningGenerateFirstFrame)?.title, '正在生成技术规划')
+assert.equal(
+  planningWorkflowNeedsChatLoading(technicalPlanningGenerateFirstFrame, true, false, false, ''),
+  true
+)
+// 阶段交接已有末条空助手消息但 workflow 尚未投递时，仍应沿用原加载卡。
+assert.equal(planningWorkflowNeedsChatLoading(undefined, true, false, false, '', true), true)
+assert.equal(planningWorkflowNeedsChatLoading(undefined, true, false, false, '', false), false)
 
 const latePlanningEntryFrame = {
   ...technicalPlanningWithStaleEntry,
@@ -1541,6 +1672,12 @@ const awaitingPlanningEntryWithStaleTechnicalProjection = {
   state: {
     lifecycle: {
       initialization: { stage: 'awaiting_planning_stage_entry', status: 'awaiting_user' }
+    },
+    application_planning_interrupt: {
+      type: 'application_planning_review',
+      gateId: 'ui-designs:entry',
+      artifact: 'ui_designs',
+      artifactRevision: 'entry'
     }
   },
   events: [

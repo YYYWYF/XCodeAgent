@@ -26,6 +26,7 @@ from app.services.development_artifacts import (
     DevelopmentArtifactsIncompleteError, complete_initial_development,
     refresh_development_artifacts, require_test_entry, test_entry_gate,
 )
+from app.services.entity_development_skip import skip_entity_development
 
 
 class DevelopmentArtifactsTests(unittest.TestCase):
@@ -85,6 +86,54 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.assertFalse(gate.allowed)
         self.assertNotIn("testEntryGate", json.loads((self.workspace / ".devagentstudio/application-lifecycle.json").read_text()))
         self.assertEqual(application_lifecycle_payload(state)["testEntryGate"]["total"], 3)
+
+    def test_entity_skip_persists_without_confirming_formal_binding(self) -> None:
+        """显式跳过仅移除实体门禁，冷读仍保留理由，正式技术规划保持原样。"""
+
+        self.technical["entities"] = [{"id": "entity"}]
+        self.write_plans()
+        original = (self.plans / "technical-plan.json").read_bytes()
+        for target in ("one", "two", "get"):
+            self.finish(target)
+        state = skip_entity_development(self.workspace, entity_id="entity", reason="当前应用不需要实体开发")
+        self.assertTrue(test_entry_gate(state).allowed)
+        self.assertEqual(test_entry_gate(state).total, 3)
+        refreshed = refresh_development_artifacts(self.workspace)
+        entity = refreshed.development_artifacts.entities["entity"]
+        self.assertEqual(entity.initial_development_status, "skipped")
+        self.assertEqual(entity.skip_reason, "当前应用不需要实体开发")
+        self.assertIsNotNone(entity.skipped_at)
+        self.assertEqual((self.plans / "technical-plan.json").read_bytes(), original)
+
+    def test_entity_skip_does_not_skip_other_entities_or_pages(self) -> None:
+        """跳过一个实体不放行其他未完成目标，未申请跳过的目录保持阻挡。"""
+
+        self.technical["entities"] = [{"id": "entity"}, {"id": "other"}]
+        self.write_plans()
+        state = skip_entity_development(self.workspace, entity_id="entity", reason="只跳过该实体")
+        gate = test_entry_gate(state)
+        self.assertFalse(gate.allowed)
+        self.assertEqual(gate.total, 4)
+        self.assertIn("other", [target.entity_id for target in gate.blockers])
+        self.assertNotIn("entity", [target.entity_id for target in gate.blockers])
+        with self.assertRaisesRegex(ValueError, "不存在"):
+            skip_entity_development(self.workspace, entity_id="unknown", reason="无效目标")
+
+    def test_entity_skip_requires_binding_execution_to_end(self) -> None:
+        """运行或等待确认的实体绑定不能被跳过动作并发修改。"""
+
+        self.technical["entities"] = [{"id": "entity"}]
+        self.write_plans()
+        start_workbench_execution(
+            self.workspace, scope="data_source", target_id="entity", page_id=None,
+            thread_id="entity-thread", run_id="entity-run", phase="entity_source_binding",
+        )
+        with self.assertRaisesRegex(ValueError, "先结束"):
+            skip_entity_development(self.workspace, entity_id="entity", reason="不再需要")
+        end_workbench_execution(self.workspace, run_id="entity-run")
+        state = skip_entity_development(self.workspace, entity_id="entity", reason="不再需要")
+        revision = state.revision
+        self.assertEqual(skip_entity_development(self.workspace, entity_id="entity", reason="再次请求").revision, revision)
 
     def test_entity_counts_and_requires_persisted_confirmation(self) -> None:
         """实体必须确认正式绑定才计完成，等待确认和重试保持开发中。"""

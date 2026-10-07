@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,17 +13,42 @@ from unittest.mock import patch
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.config import Settings
+from app.domain.execution_recovery import WorkflowReentryReason
+from app.domain.application_lifecycle import (
+    ApplicationLifecycleStage, ApplicationLifecycleStatus,
+    PendingInteractionType, WorkbenchExecutionStatus,
+)
 from app.graph.nodes.task_planning_adapter import (
     create_async_workflow_planning_adapter,
     production_unit_generation_policy,
 )
 from app.services.build_task_planning_service import run_mainline_planning
+from app.services.application_lifecycle import (
+    create_application_lifecycle, start_workbench_execution,
+    update_workbench_execution, write_application_lifecycle,
+)
+from app.services.execution_recovery import (
+    observe_execution_failed, observe_execution_started, observe_node_started,
+)
+from app.services.execution_recovery_action_planner import plan_failed_node_reentry_action
+from app.services.execution_recovery_executor import prepare_native_recovery
+from app.services.execution_lease_heartbeat import stop_execution_heartbeat
+from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
+from app.persistence.execution_recovery import get_execution, mark_execution_interrupted
+from app.protocols.workflow.lifecycle import begin_workflow_lifecycle, fail_workflow_lifecycle
+from app.services.node_recovery_context import (
+    NodeRecoveryContext,
+    bind_node_recovery,
+    bind_recovery_runtime,
+    current_node_recovery_context,
+)
 from app.graph.workflow import build_graph
 from app.services.planning_frozen import plain_json
 from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
     UnitGenerationPolicy,
 )
+from app.services.unit_generation import UnitGenerationInfrastructureError
 from app.workspace.planning_run_documents import load_planning_run
 from app.workspace.task_documents import (
     build_task_plan_pending_json_path,
@@ -31,6 +57,7 @@ from app.workspace.task_documents import (
     validate_pending_self_digest,
     write_build_task_plan_json,
 )
+from app.services.dag_planning_regeneration import regenerate_pending_build_task_plan
 from tests.dag_planning_baseline_fixtures import (
     confirmed_baseline,
     execution_scope,
@@ -137,6 +164,47 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             "active_thread_id": "thread-async-adapter",
         }
 
+    async def test_prepare_wrapper_sync_async_and_exception_context(self) -> None:
+        """真实 Graph 对四种注入返回路径均只调用一次并在退出后撤销上下文。"""
+
+        for asynchronous in (False, True):
+            for failing in (False, True):
+                with self.subTest(asynchronous=asynchronous, failing=failing):
+                    state = {**self._state(execution_scope()), "workspace_revision": "ready"}
+                    seen: list[str] = []
+                    context = NodeRecoveryContext(
+                        source_run_id="source", execution_run_id=state["active_run_id"],
+                        thread_id=state["active_thread_id"], target_node="prepare_build_tasks",
+                        checkpoint_id="entry", reentry_reason=WorkflowReentryReason.FAILURE_RETRY,
+                    )
+
+                    def node(_: dict) -> dict:
+                        """同步注入节点读取一次作用域，按测试用例返回或抛错。"""
+
+                        seen.append(current_node_recovery_context().source_run_id)
+                        if failing:
+                            raise RuntimeError("injected")
+                        return {"phase": "prepare_build_tasks", "status": "requires_user_input"}
+
+                    async def async_node(value: dict) -> dict:
+                        """异步注入节点跨 await 后仍读取同一个可信上下文。"""
+
+                        await asyncio.sleep(0)
+                        return node(value)
+
+                    graph = build_graph(
+                        checkpointer=InMemorySaver(),
+                        prepare_build_tasks_node=async_node if asynchronous else node,
+                    )
+                    with bind_recovery_runtime(context):
+                        if failing:
+                            with self.assertRaisesRegex(RuntimeError, "injected"):
+                                await graph.ainvoke(state, config={"configurable": {"thread_id": f"wrapper-{asynchronous}-{failing}"}})
+                        else:
+                            await graph.ainvoke(state, config={"configurable": {"thread_id": f"wrapper-{asynchronous}-{failing}"}})
+                        self.assertIsNone(current_node_recovery_context())
+                    self.assertEqual(seen, ["source"])
+
     async def _generate(self, job, **_: object) -> UnitGenerationAttemptResult:
         """让真实 Scheduler/Assembly/Global 链消费合法的逐 Unit Candidate。"""
 
@@ -149,14 +217,208 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             tasks=tasks,
         )
 
-    async def test_prepare_retry_forwards_explicit_source_id_even_when_build_retry_flag_is_false(self) -> None:
-        """DAG Prepare Retry 只传 source execution ID，不依赖 Build 专用布尔值。"""
+    async def _native_regenerate_round(self, *, interrupted: bool) -> None:
+        """从真实 Pending 经过 Graph、Durable 记录和 Native fork 恢复 Regenerate。"""
 
-        state = {
-            **self._state(execution_scope()),
-            "workflow_action": "retry_failed_tasks",
-            "resume_execution_run_id": "workflow-source-r1",
+        scope = execution_scope(name="orders")
+        write_build_task_plan_json(self._state(scope), confirmed_baseline(self.plan, scope))
+        saver = InMemorySaver()
+        model_calls = 0
+        service_calls = 0
+        fail_source = False
+
+        async def generate(job, **kwargs):
+            """只替换外部模型，在旧 Pending 消费后注入一次逃逸故障。"""
+
+            nonlocal model_calls
+            model_calls += 1
+            if fail_source:
+                if interrupted:
+                    raise InterruptedError("backend interrupted after consume")
+                raise UnitGenerationInfrastructureError(
+                    identity=job.identity, stage="model_invoke",
+                    cause=RuntimeError("regenerate model failed"),
+                )
+            return await self._generate(job, **kwargs)
+
+        async def observe_service(*args, **kwargs):
+            """计数但不替换 production Regenerate 服务。"""
+
+            nonlocal service_calls
+            service_calls += 1
+            return await regenerate_pending_build_task_plan(*args, **kwargs)
+
+        adapter = create_async_workflow_planning_adapter(
+            policy=self.policy, generate_once=generate,
+            regenerate_service=observe_service,
+        )
+        graph = build_graph(checkpointer=saver, prepare_build_tasks_node=adapter)
+        seed_thread = "regenerate-seed"
+        with patch(
+            "app.graph.nodes.task_planning_adapter.load_template_state",
+            return_value=_ready_template(self.workspace),
+        ):
+            await graph.ainvoke(self._state(scope), config={"configurable": {"thread_id": seed_thread}})
+        old_pending = load_pending_build_task_plan(self._state(scope))
+        old_identity = validate_pending_self_digest(old_pending)
+        source_run_id = "regenerate-source-interrupted" if interrupted else "regenerate-source-failed"
+        thread_id = seed_thread
+        lifecycle = create_application_lifecycle(
+            application_id="native-regenerate", application_name="Native Regenerate",
+        )
+        lifecycle = lifecycle.model_copy(update={
+            "initialization": lifecycle.initialization.model_copy(update={
+                "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                "status": ApplicationLifecycleStatus.COMPLETED,
+            }),
+        })
+        write_application_lifecycle(self.workspace, lifecycle)
+        start_workbench_execution(
+            self.workspace, scope="page", target_id="orders", page_id="orders",
+            thread_id=seed_thread, run_id="workflow-async-adapter",
+            phase="prepare_build_tasks", owner_session_id="session-async-adapter",
+        )
+        waiting = update_workbench_execution(
+            self.workspace, run_id="workflow-async-adapter", phase="prepare_build_tasks",
+            status=WorkbenchExecutionStatus.AWAITING_USER,
+            pending_type=PendingInteractionType.TASK_PLAN_CONFIRMATION,
+            pending_payload={"mode": "build_task_plan_confirmation"},
+        )
+        interaction = waiting.active_executions["workflow-async-adapter"].pending_interaction
+        assert interaction is not None
+        begin_workflow_lifecycle(
+            {
+                "workspace": str(self.workspace),
+                "resume_values": {
+                    "owner_session_id": "session-async-adapter",
+                    "build_execution_scope": scope,
+                    "resume_execution_run_id": "workflow-async-adapter",
+                    "lifecycle_interaction_submission": {
+                        "runId": "workflow-async-adapter", "id": interaction.id,
+                        "basedOnRevision": interaction.based_on_revision,
+                    },
+                },
+            },
+            thread_id=thread_id, run_id=source_run_id, phase="prepare_build_tasks",
+        )
+        source_state = {
+            **self._state(scope), "active_run_id": source_run_id,
+            "active_thread_id": thread_id,
+            "build_task_plan_confirmation": {
+                "action": "regenerate",
+                "planning_run_id": old_identity.planning_run_id,
+                "draft_digest": old_identity.draft_digest,
+            },
         }
+        await observe_execution_started(
+            workspace=str(self.workspace), project_id=None, thread_id=thread_id,
+            run_id=source_run_id, workflow_scope="application",
+            first_node="prepare_build_tasks",
+        )
+        await observe_node_started(
+            workspace=str(self.workspace), run_id=source_run_id, thread_id=thread_id,
+            workflow_scope="application", node_name="prepare_build_tasks",
+        )
+        fail_source = True
+        with patch(
+            "app.graph.nodes.task_planning_adapter.load_template_state",
+            return_value=_ready_template(self.workspace),
+        ):
+            with self.assertRaises((InterruptedError, RuntimeError)) as raised:
+                await graph.ainvoke(source_state, config={"configurable": {"thread_id": thread_id}})
+        self.assertIsNone(load_pending_build_task_plan(source_state))
+        fact_path = (
+            self.workspace / ".devagentstudio" / "runtime" / "dag-regeneration"
+            / f"{old_identity.draft_digest}.json"
+        )
+        self.assertEqual(json.loads(fact_path.read_text())["phase"], "consumed")
+        source_snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+        self.assertNotEqual(source_snapshot.values.get("status"), "failed")
+        if interrupted:
+            source = await mark_execution_interrupted(
+                workspace=self.workspace, run_id=source_run_id,
+                interrupted_at=datetime.now(timezone.utc),
+            )
+            assert source is not None
+            # 重建 Graph/adapter 实例，只沿既存 checkpoint 和磁盘操作事实继续。
+            adapter = create_async_workflow_planning_adapter(
+                policy=self.policy, generate_once=generate,
+                regenerate_service=observe_service,
+            )
+            graph = build_graph(checkpointer=saver, prepare_build_tasks_node=adapter)
+            resolution = await InterruptedTargetResolver().resolve(
+                workspace=str(self.workspace), source=source, graph=graph,
+            )
+            self.assertEqual(resolution.kind, "continue")
+            reentry = resolution.reentry_plan
+            self.assertEqual(reentry.reason, WorkflowReentryReason.INTERRUPTED_CONTINUE)
+        else:
+            fail_workflow_lifecycle(str(self.workspace), run_id=source_run_id,
+                                    phase="prepare_build_tasks", error=raised.exception)
+            await observe_execution_failed(
+                workspace=str(self.workspace), run_id=source_run_id,
+                thread_id=thread_id, workflow_scope="application",
+                exception=raised.exception, authoritative_node="prepare_build_tasks",
+            )
+            source = await get_execution(self.workspace, source_run_id)
+            assert source is not None
+            reentry = await FailureTargetResolver().resolve(
+                workspace=str(self.workspace), source=source, graph=graph,
+            )
+            action = plan_failed_node_reentry_action(
+                workspace=str(self.workspace), source=source, reentry_plan=reentry,
+            )
+            self.assertIsNotNone(action.primary_action)
+        assert reentry is not None
+        context = await prepare_native_recovery(
+            workspace=str(self.workspace), source_run_id=source_run_id,
+            graph=graph, reentry_plan=reentry,
+        )
+        self.assertIsNone(context.internal_progress)
+        self.assertEqual(context.entry_state["build_task_plan_confirmation"],
+                         source_state["build_task_plan_confirmation"])
+        fail_source = False
+        before_resume_calls = service_calls
+        try:
+            with (
+                patch("app.graph.nodes.task_planning_adapter.load_template_state",
+                      return_value=_ready_template(self.workspace)),
+                bind_recovery_runtime(context.node_recovery_context()),
+            ):
+                await graph.ainvoke(None, config=context.fork_config)
+        finally:
+            await stop_execution_heartbeat(context.heartbeat_task)
+        new_pending = load_pending_build_task_plan(source_state)
+        self.assertIsNotNone(new_pending)
+        self.assertNotEqual(new_pending["draft_identity"]["draft_digest"], old_identity.draft_digest)
+        committed_fact = json.loads(fact_path.read_text())
+        self.assertEqual(committed_fact["phase"], "committed")
+        self.assertEqual(committed_fact["current_workflow_run_id"], context.new_run_id)
+        self.assertEqual(service_calls, before_resume_calls + 1)
+        self.assertGreater(model_calls, 0)
+
+    async def test_native_regenerate_failure_retries_consumed_operation(self) -> None:
+        """无业务 failed checkpoint 的异常可经上方恢复入口重新调用操作服务。"""
+
+        await self._native_regenerate_round(interrupted=False)
+
+    async def test_native_regenerate_interrupted_continue_consumed_operation(self) -> None:
+        """中断继续保留原 reason 与旧 Pending 消费事实。"""
+
+        await self._native_regenerate_round(interrupted=True)
+
+    async def test_prepare_retry_uses_bound_native_recovery_source(self) -> None:
+        """DAG Prepare 只在目标节点的本次 Native Recovery 调用读取可信 source。"""
+
+        state = self._state(execution_scope())
+        context = NodeRecoveryContext(
+            source_run_id="workflow-source-r1",
+            execution_run_id=str(state["active_run_id"]),
+            thread_id=str(state["active_thread_id"]),
+            target_node="prepare_build_tasks",
+            checkpoint_id="source-entry",
+            reentry_reason=WorkflowReentryReason.FAILURE_RETRY,
+        )
         captured: dict[str, object] = {}
 
         async def capture_planning(inputs, **kwargs):
@@ -170,9 +432,13 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             generate_once=self._generate,
             planning_service=capture_planning,
         )
-        with patch(
-            "app.graph.nodes.task_planning_adapter.load_template_state",
-            return_value=_ready_template(self.workspace),
+        with (
+            patch(
+                "app.graph.nodes.task_planning_adapter.load_template_state",
+                return_value=_ready_template(self.workspace),
+            ),
+            bind_recovery_runtime(context),
+            bind_node_recovery(state, "prepare_build_tasks"),
         ):
             result = await adapter(state)
 

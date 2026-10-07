@@ -67,6 +67,10 @@ type Props = {
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试设计阶段规划任务。 */
   onRetryPlanning?: () => void
+  /** 转交底部健康重连后的规划只读同步，不提交重试。 */
+  onReconcilePlanning?: () => void
+  /** 保留独立的模板初始化重试动作。 */
+  onRetryTemplateGeneration?: () => void
   /** 通过专用动作重试失败的模板能力更新。 */
   onRetryTemplateReconcile?: () => void
   /** 当前应用唯一的 Planning 业务状态。 */
@@ -110,6 +114,8 @@ export default function LeftPanel({
   onSessionHistoryReadyChange,
   generatingTemplate,
   onRetryPlanning,
+  onReconcilePlanning,
+  onRetryTemplateGeneration,
   onRetryTemplateReconcile,
   planningState,
   theme,
@@ -151,6 +157,8 @@ export default function LeftPanel({
             onSessionHistoryReadyChange={onSessionHistoryReadyChange}
             generatingTemplate={generatingTemplate}
             onRetryPlanning={onRetryPlanning}
+            onReconcilePlanning={onReconcilePlanning}
+            onRetryTemplateGeneration={onRetryTemplateGeneration}
             onRetryTemplateReconcile={onRetryTemplateReconcile}
             planningState={planningState}
             theme={theme}

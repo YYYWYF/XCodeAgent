@@ -1,11 +1,17 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { WorkbenchRunRefreshConnection } from './useWorkbenchRunRefresh'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { randomUUID } from '@ag-ui/client'
 import { workflowDebugResumeSource } from '../workflowDebugResume'
+import { executionRecoveryForSession, executionRecoveryReadError } from '../executionRecoveryState'
+import { NO_RECOVERY_ENTRY_ERROR } from '../globalFallbackState'
+import { canRestorePendingWorkflowInput, type PendingWorkflowInput } from '../pendingWorkflowInput'
 import {
   AgUiChatSession,
   AgUiRunError,
+  cancelWorkflowRun,
   appendElementContextToConversationPrompt,
+  getExecutionRecoveryActionUrl,
   getConversationUrl,
   getWorkflowUrl
 } from '../../../service/agUiAgent'
@@ -17,10 +23,18 @@ import { getApplicationLifecycle } from '../../../service/applicationLifecycle'
 import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
+import {
+  beginConnectionRequest,
+  completeConnectionRequest,
+  failConnectionRequest,
+  initialConnectionState,
+  type ConnectionState
+} from '../../../service/connectionState'
 import type {
   ApplicationConfig,
   ApplicationPlanningInteraction,
   ApplicationLifecycle,
+  ExecutionRecoveryCandidate,
   ChatMessageSkill,
   EditorMode,
   InspectedElementContext,
@@ -49,6 +63,7 @@ import {
 } from '../components/WorkflowRunCard'
 import { workflowClarification } from '../components/WorkflowRunCard/workflowClarification'
 import type { AgentChatMessage } from '../types'
+import { ownedWorkbenchExecution, workbenchExecutionRunning } from '../workbenchRunPresentation'
 import { developmentContinuationFromWorkflow } from '../developmentContinuation'
 import {
   beginOptimisticSkillSend,
@@ -76,6 +91,7 @@ import {
   planExecutionForPage,
   withWorkflowExecutionStatus,
   workflowCodeReviewRetry,
+  workflowEndedPlanControl,
   workflowInteractionAvailability
 } from '../planExecutionMode'
 import { maybeRefreshPendingPlanLifecycleAfterGeneration } from '../pendingPlanLifecycleRefresh'
@@ -96,6 +112,80 @@ type ConversationTarget =
       apiContractId: string
       endpointId: string
     }
+
+type PlanControlRequestGuard = {
+  requestId: string
+  identity: SessionIdentity
+  targetRunId: string
+}
+
+type ActivePlanControlContext = {
+  identity?: SessionIdentity
+  targetRunId?: string
+}
+
+/** 读取当前 Workflow 的控制目标；Plan Control 自身没有 active execution 时保持未指定。 */
+function planControlTargetFromWorkflow(
+  workflow: WorkflowRunPayload | undefined,
+  pageId: string | undefined
+): string | undefined {
+  if (!workflow) return undefined
+  const execution = planExecutionForPage(workflow.summary.lifecycle, pageId, {
+    runId: workflow.runId,
+    threadId: workflow.threadId
+  })
+  if (execution) return execution.runId
+  if (
+    workflow.summary.phase === 'plan_control' ||
+    workflow.summary.phase === 'build_task_plan_abandon'
+  ) {
+    return undefined
+  }
+  return workflow.runId
+}
+
+/** 创建一次带会话、阶段、目标和 requestId 的 Plan Control 哨兵。 */
+function createPlanControlRequestGuard(
+  identity: SessionIdentity,
+  targetRunId: string
+): PlanControlRequestGuard {
+  return {
+    requestId: randomUUID(),
+    identity,
+    targetRunId
+  }
+}
+
+/** 判断两个 Plan Control 哨兵是否仍指向同一个会话身份。 */
+function samePlanControlIdentity(left: SessionIdentity, right: SessionIdentity): boolean {
+  return (
+    left.key === right.key &&
+    left.sessionId === right.sessionId &&
+    left.threadId === right.threadId &&
+    left.workflowId === right.workflowId &&
+    left.workbenchPhase === right.workbenchPhase &&
+    left.workspaceRoot === right.workspaceRoot &&
+    left.editorMode === right.editorMode
+  )
+}
+
+/** 判断迟到的 Plan Control 响应是否仍属于当前 request 和 active session。 */
+function isCurrentPlanControlRequest(
+  request: PlanControlRequestGuard,
+  latestRequest: PlanControlRequestGuard | undefined,
+  context: ActivePlanControlContext | undefined
+): boolean {
+  const currentIdentity = context?.identity
+  if (
+    !latestRequest ||
+    latestRequest.requestId !== request.requestId ||
+    !currentIdentity ||
+    !samePlanControlIdentity(currentIdentity, request.identity)
+  ) {
+    return false
+  }
+  return !context?.targetRunId || context.targetRunId === request.targetRunId
+}
 
 /** 从当前工作台选择提取页面或接口目标，让“这个页面”等指代随普通自然语言请求到达后端。 */
 function conversationTargetFromSelection(
@@ -142,6 +232,8 @@ type UseWorkflowConversationParams = {
   applicationLifecycle?: ApplicationLifecycle
   /** 当前会话是否因另一会话持有 DAG Planning mutation ownership 而只读。 */
   applicationMutationReadonly?: boolean
+  /** Recovery GET 后按最新 lifecycle 重算当前会话的 mutation 权限。 */
+  recoveryMutationReadonlyForLifecycle?: (lifecycle: ApplicationLifecycle) => boolean
   draft: string
   draftKey: string
   selectedSkills: ChatMessageSkill[]
@@ -189,6 +281,8 @@ type UseWorkflowConversationParams = {
 
 type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
+  connectionState: ConnectionState
+  workbenchRefreshConnection: WorkbenchRunRefreshConnection
   conversationRunning: boolean
   error?: string
   handleAcceptPreview: () => Promise<boolean>
@@ -199,6 +293,9 @@ type UseWorkflowConversationResult = {
   handleContinueDevelopment: (
     continuation: import('../../../service/chatSessions').ChatSessionDevelopmentContinuation
   ) => Promise<boolean>
+  handleExecuteRecoveryAction: (
+    recovery: ExecutionRecoveryCandidate
+  ) => Promise<boolean>
   handleEndPlan: (runId?: string) => Promise<void>
   handleProductStageConversation: (
     request: string,
@@ -206,7 +303,7 @@ type UseWorkflowConversationResult = {
   ) => Promise<boolean>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleRetryCodeReview: () => Promise<void>
-  handleRetryPlan: (workflow?: WorkflowRunPayload) => Promise<void>
+  handleContinueStoppedPlan: (workflow?: WorkflowRunPayload) => Promise<void>
   handleStopPlan: (runId?: string) => Promise<void>
   handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleStartDetailConfirmation: (
@@ -244,6 +341,10 @@ type UseWorkflowConversationResult = {
   sessionRunStates: Record<string, SessionRunStatus>
   stopping: boolean
   workspaceBusy: boolean
+  recoveryRunning: boolean
+  recoveryError?: string
+  refreshExecutionRecoveryLifecycle: () => Promise<boolean>
+  retryCurrentRecovery: () => Promise<boolean>
 }
 
 /** 从 Workflow 快照中读取最近一次页面选择，作为确认继续时的兜底上下文。 */
@@ -549,6 +650,7 @@ export function useWorkflowConversation({
   application,
   applicationLifecycle,
   applicationMutationReadonly = false,
+  recoveryMutationReadonlyForLifecycle,
   draft,
   draftKey,
   selectedSkills,
@@ -601,7 +703,51 @@ export function useWorkflowConversation({
   const [runStates, setRunStates] = useState<Record<string, SessionRunEntry>>({})
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [liveWorkflows, setLiveWorkflows] = useState<Record<string, WorkflowRunPayload>>({})
-  // 记录用户已明确结束的会话，保证自由输入不依赖后端控制请求或生命周期回传时序。
+  const [recoveringSourceRunId, setRecoveringSourceRunId] = useState<string>()
+  const recoveryRetryRequestRef = useRef(false)
+  const pendingWorkflowInputsRef = useRef<Record<string, PendingWorkflowInput>>({})
+  const activeInputRef = useRef({ key: activeSession?.key || draftKey, draft })
+  activeInputRef.current = { key: activeSession?.key || draftKey, draft }
+  const [recoveryErrors, setRecoveryErrors] = useState<Record<string, string | undefined>>({})
+  const [connectionState, setConnectionState] = useState<ConnectionState>(() =>
+    initialConnectionState(Boolean(applicationLifecycle))
+  )
+  const connectionRequestGenerationRef = useRef(0)
+  const applicationLifecycleRef = useRef(applicationLifecycle)
+  const connectionStateRef = useRef(connectionState)
+  const planControlRequestRef = useRef<PlanControlRequestGuard>()
+  const activePlanControlContextRef = useRef<ActivePlanControlContext>()
+  applicationLifecycleRef.current = applicationLifecycle
+  connectionStateRef.current = connectionState
+
+  const workbenchRefreshConnection: WorkbenchRunRefreshConnection = {
+    scopeKey: activeSession?.key,
+    /** 后台轮询只预留统一请求代次，不切换 connecting 状态以免每三秒闪动。 */
+    start: () => {
+      const generation = ++connectionRequestGenerationRef.current
+      connectionStateRef.current = { ...connectionStateRef.current, requestGeneration: generation }
+      setConnectionState((current) => ({ ...current, requestGeneration: generation }))
+      return generation
+    },
+    /** 仅最新通信结果影响连接维度；执行状态仍由原生命周期合并逻辑决定。 */
+    settle: (generation, error) => {
+      /** 沿用现有代次校验，迟到的轮询结果不能覆盖更新后的连接。 */
+      const update = (current: ConnectionState): ConnectionState => error === undefined
+        ? completeConnectionRequest(current, generation)
+        : failConnectionRequest(current, generation, error)
+      connectionStateRef.current = update(connectionStateRef.current)
+      setConnectionState(update)
+    }
+  }
+
+  // 任一成功到达的 Backend lifecycle 都能恢复连接维度，但不会改写 Recovery projection。
+  useEffect(() => {
+    if (!applicationLifecycle) return
+    setConnectionState((current) =>
+      completeConnectionRequest(current, current.requestGeneration)
+    )
+  }, [applicationLifecycle])
+  // 记录已由 Backend 确认结束的会话，避免生命周期回传时序短暂阻塞自由输入。
   const [endedPlanSessionKeys, setEndedPlanSessionKeys] = useState<Record<string, boolean>>({})
 
   const phaseExecution = activeSession
@@ -621,20 +767,102 @@ export function useWorkflowConversation({
         : undefined)
     : undefined
   const activeRuntimeKey = activeRun?.identity.key || matchingActiveSession?.key
+  const recoveryError = activeSession ? recoveryErrors[activeSession.key] : undefined
   const loading = Boolean(activeRun)
   const stopping = activeRun?.status === 'stopping'
   const conversationRunning = Boolean(activeRun?.conversation)
-  const planEnded = Boolean(endedPlanSessionKeys[activeRuntimeKey || draftKey])
   const error = activeRuntimeKey ? errors[activeRuntimeKey] : undefined
+  /** 恢复请求的临时错误只归属发起请求的会话，迟到结果不能污染当前会话。 */
+  const setRecoveryErrorForSession = (sessionKey: string, message?: string): void => {
+    setRecoveryErrors((current) => ({ ...current, [sessionKey]: message }))
+  }
   const activeWorkflow = activeRuntimeKey
     ? activeRun
       ? liveWorkflows[activeRuntimeKey]
       : (liveWorkflows[activeRuntimeKey] ?? latestWorkflow(getSessionMessages(activeRuntimeKey)))
     : undefined
+  // 结束控制的成功回执属于当前会话消息，即使本地生命周期快照晚到也必须立即恢复输入。
+  const planEnded = Boolean(
+    endedPlanSessionKeys[activeRuntimeKey || draftKey] || workflowEndedPlanControl(activeWorkflow)
+  )
+  // 正常完成回执只清理本会话兜底请求错误；业务失败、连接错误和其它会话不受影响。
+  useEffect(() => {
+    if (!activeRuntimeKey || activeWorkflow?.summary.status !== 'completed') return
+    // 新执行仍被 lifecycle 持有时，旧消息的 completed 不能替它清除兜底错误。
+    if (Object.values(applicationLifecycle?.activeExecutions || {}).some((execution) =>
+      execution.ownerSessionId === activeSession?.sessionId && execution.status !== 'completed')) return
+    setRecoveryErrors((current) => current[activeRuntimeKey] === NO_RECOVERY_ENTRY_ERROR
+      ? { ...current, [activeRuntimeKey]: undefined } : current)
+  }, [activeRuntimeKey, activeWorkflow, recoveryError, applicationLifecycle, activeSession?.sessionId])
+  activePlanControlContextRef.current = {
+    identity: activeSession,
+    targetRunId: planControlTargetFromWorkflow(activeWorkflow, selectedPageId)
+  }
   // DAG Planning ownership 已在面板层按 lifecycle + 本地登记派生；hook 只消费该投影，
   // 不再用当前 phase 的局部 execution 反推其它阶段是否可以写入。
   const sessionExecutionLocked = applicationMutationReadonly
   const workspaceBusy = sessionExecutionLocked
+
+  /** Recovery mutation 仅用最新 lifecycle 重算权限，缺少快照时保持只读。 */
+  const recoveryMutationReadonly = (lifecycle?: ApplicationLifecycle): boolean =>
+    !lifecycle || (recoveryMutationReadonlyForLifecycle?.(lifecycle) ?? workspaceBusy)
+
+  /** 只提交 Backend 签发的当前恢复动作，缺少 action identity 时保持 fail closed。 */
+  const handleExecuteRecoveryAction = async (
+    recovery: ExecutionRecoveryCandidate
+  ): Promise<boolean> => {
+    const latestRecovery = executionRecoveryForSession(
+      applicationLifecycleRef.current,
+      activeSession?.sessionId
+    )
+    const requestedActionId = recovery.recoveryActionPlan.primaryAction?.actionId
+    const latestActionId = latestRecovery?.recoveryActionPlan.primaryAction?.actionId
+    if (
+      !latestRecovery ||
+      latestRecovery.recoveryActionPlan.incidentId !== recovery.recoveryActionPlan.incidentId ||
+      latestActionId !== requestedActionId
+    ) {
+      if (activeSession) {
+        setRecoveryErrorForSession(activeSession.key, '当前恢复操作已更新，请使用最新的恢复状态。')
+      }
+      return false
+    }
+    recovery = latestRecovery
+    const actionPlan = latestRecovery.recoveryActionPlan
+    const primaryAction = actionPlan.primaryAction
+    if (
+      !activeSession ||
+      activeSession.sessionId !== recovery.ownerSessionId ||
+      connectionStateRef.current.status !== 'healthy' ||
+      loading ||
+      recoveryMutationReadonly(applicationLifecycleRef.current) ||
+      recoveringSourceRunId === recovery.sourceRunId ||
+      actionPlan.status !== 'recoverable' ||
+      !primaryAction
+    ) {
+      return false
+    }
+    const sessionIdentity = activeSession
+    setRecoveringSourceRunId(recovery.sourceRunId)
+    setRecoveryErrorForSession(sessionIdentity.key)
+    try {
+      return await sendWorkflowMessage(primaryAction?.label || '重试', {
+        executionRecovery: {
+          action: 'execute',
+          incidentId: actionPlan.incidentId,
+          actionId: primaryAction.actionId
+        },
+        executionThreadId: recovery.threadId,
+        sessionIdentity,
+        titleFrom: primaryAction?.label || '重试',
+        conversation: false
+      })
+    } finally {
+      await refreshExecutionRecoveryLifecycle()
+      setRecoveringSourceRunId(undefined)
+    }
+  }
+
   const sessionRunStates = sessionExecutions.reduce<Record<string, SessionRunStatus>>(
     (states, entry) => {
       if (
@@ -650,6 +878,8 @@ export function useWorkflowConversation({
 
   /** 首次发送时创建阶段会话；简单模式补充输入优先复用当前会话和 thread。 */
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
+    // 重入时即使本地流登记为空，Backend 仍运行也不能再次启动当前会话。
+    if (workbenchExecutionRunning(ownedWorkbenchExecution(applicationLifecycleRef.current, activeSession))) return
     // 调试属于已有执行的恢复，不能落到普通发送路径并改用会话的聊天 thread。
     if (workflowDebug?.enabled && workflowDebug.resumeFrom && activeWorkflow) {
       await handleResumePlan(workflowDebug)
@@ -657,6 +887,22 @@ export function useWorkflowConversation({
     }
     const message = draft.trim() || workflowDebugMessage(workflowDebug)
     if (!message || loading || workspaceBusy) return
+    const pendingKey = activeSession?.key || draftKey
+    const pending = pendingWorkflowInputsRef.current[pendingKey]
+    if (!workflowDebug?.enabled && pending?.restored && message === pending.draft) {
+      if (applicationMutationReadonly) return
+      // 再次发送前重新校准，覆盖恢复输入之后才落盘的原请求，并丢弃读取期间切换的输入。
+      if (!(await refreshExecutionRecoveryLifecycle()) || activeInputRef.current.key !== pendingKey ||
+        activeInputRef.current.draft.trim() !== pending.draft || recoveryMutationReadonly(applicationLifecycleRef.current)) return
+      if (!activeSession || !canRestorePendingWorkflowInput(pending, activeSession, applicationLifecycleRef.current)) {
+        delete pendingWorkflowInputsRef.current[pendingKey]
+        setRecoveryErrorForSession(pendingKey, '当前会话已有新的执行事实，请查看当前任务，原请求不会重复发送。')
+        return
+      }
+      delete pendingWorkflowInputsRef.current[pendingKey]
+      await pending.submit()
+      return
+    }
     const sessionIdentity =
       isConversationWorkflow(activeWorkflow) && activeSession
         ? matchingActiveSession
@@ -746,6 +992,123 @@ export function useWorkflowConversation({
     return accepted || completed
   }
 
+  /** 重新读取当前 Execution Recovery Incident，避免 stale action 继续占据控制面。 */
+  const refreshExecutionRecoveryLifecycle = async (): Promise<boolean> => {
+    const requestGeneration = ++connectionRequestGenerationRef.current
+    setConnectionState((current) => beginConnectionRequest(current, requestGeneration))
+    try {
+      const lifecycle = await getApplicationLifecycle(application)
+      applicationLifecycleRef.current = lifecycle
+      onApplicationLifecycleChange(lifecycle)
+      connectionStateRef.current = completeConnectionRequest(
+        connectionStateRef.current,
+        requestGeneration
+      )
+      setConnectionState((current) => completeConnectionRequest(current, requestGeneration))
+      const projectionError = executionRecoveryReadError(lifecycle)
+      if (projectionError) {
+        if (activeSession) setRecoveryErrorForSession(activeSession.key, projectionError)
+        return false
+      }
+      return true
+    } catch (error) {
+      setConnectionState((current) =>
+        failConnectionRequest(
+          current,
+          requestGeneration,
+          error instanceof Error ? error.message : 'Backend 暂时不可用，无法同步最新状态。'
+        )
+      )
+      return false
+    }
+  }
+
+  /** 单次点击先刷新 durable truth，再执行 Backend 当前允许的恢复或重新判断失败。 */
+  const retryCurrentRecovery = async (): Promise<boolean> => {
+    if (recoveryRetryRequestRef.current || loading || recoveringSourceRunId) {
+      return false
+    }
+    recoveryRetryRequestRef.current = true
+    setRecoveringSourceRunId('refreshing')
+    const recoverySessionKey = activeSession?.key
+    if (recoverySessionKey) setRecoveryErrorForSession(recoverySessionKey)
+    try {
+      if (!(await refreshExecutionRecoveryLifecycle())) return false
+      if (recoverySessionKey && activeInputRef.current.key !== recoverySessionKey) return false
+      const recovery = executionRecoveryForSession(
+        applicationLifecycleRef.current,
+        activeSession?.sessionId
+      )
+      if (!recovery || !activeSession || activeSession.sessionId !== recovery.ownerSessionId) {
+        const pending = recoverySessionKey ? pendingWorkflowInputsRef.current[recoverySessionKey] : undefined
+        if (pending && activeSession) {
+          if (canRestorePendingWorkflowInput(pending, activeSession, applicationLifecycleRef.current)) {
+            const currentDraft = activeInputRef.current.draft.trim()
+            if (currentDraft && currentDraft !== pending.draft) {
+              setRecoveryErrorForSession(activeSession.key, '输入区已有新内容，原失败请求仍保留；请先处理当前输入后再重试。')
+              return false
+            }
+            pending.restored = true
+            // 原输入只回到同一会话；显式点发送时才沿用冻结的目标，底部重试本身不启动 Run。
+            setDraftByKey(activeSession.key, pending.draft)
+            setSelectedSkillsByKey(activeSession.key, pending.skills)
+            setRecoveryErrorForSession(activeSession.key, '尚未确认原请求被接收，已恢复原输入。请检查后点击发送；本次重试没有重复启动任务。')
+            return true
+          }
+          delete pendingWorkflowInputsRef.current[activeSession.key]
+          setRecoveryErrorForSession(activeSession.key, '已同步到该会话的新执行记录，请查看当前任务；不会重复发送原请求。')
+          return true
+        }
+        // 候选只包含失败/中断；同会话仍正常运行或等待确认时，同步成功不能伪造恢复失败。
+        const ownedExecutions = Object.values(applicationLifecycleRef.current?.activeExecutions || {})
+          .filter((execution) => execution.ownerSessionId === activeSession?.sessionId)
+        if (activeSession && ownedExecutions.some((execution) =>
+          ['running', 'awaiting_user'].includes(execution.status))) return true
+        // 已完成的同会话回执无需恢复；连接同步不能重新制造已清理的“无恢复入口”错误。
+        if (activeSession && !ownedExecutions.length && activeWorkflow?.summary.status === 'completed') return true
+        if (recoverySessionKey) setRecoveryErrorForSession(recoverySessionKey, NO_RECOVERY_ENTRY_ERROR)
+        return false
+      }
+      if (recoveryMutationReadonly(applicationLifecycleRef.current)) {
+        setRecoveryErrorForSession(activeSession.key, '已同步后端状态，但当前应用由其他会话持有，无法执行恢复。')
+        return false
+      }
+      if (recovery.recoveryActionPlan.status === 'recoverable') {
+        // 等待恢复流真正收口后才清理恢复身份；直接返回 Promise 会提前执行 finally。
+        return await handleExecuteRecoveryAction(recovery)
+      }
+      if (recovery.recoveryActionPlan.status !== 'needs_attention') return false
+      setRecoveringSourceRunId(recovery.sourceRunId)
+      try {
+        return await sendWorkflowMessage('重试', {
+          executionRecovery: {
+            action: 'retry_current_failure',
+            sourceRunId: recovery.sourceRunId
+          },
+          executionThreadId: recovery.threadId,
+          sessionIdentity: activeSession,
+          titleFrom: '重试',
+          conversation: false
+        })
+      } finally {
+        await refreshExecutionRecoveryLifecycle()
+      }
+    } finally {
+      recoveryRetryRequestRef.current = false
+      setRecoveringSourceRunId(undefined)
+    }
+  }
+
+  // 浏览器网络恢复只触发 durable truth 刷新，绝不自动执行 Recovery action。
+  useEffect(() => {
+    const handleOnline = (): void => {
+      if (connectionState.status !== 'unavailable') return
+      void refreshExecutionRecoveryLifecycle()
+    }
+    window.addEventListener('online', handleOnline)
+    return () => window.removeEventListener('online', handleOnline)
+  }, [connectionState.status])
+
   /** 发送并持久化 Workflow 对话，认证失败时恢复发送前的界面状态。 */
   const sendWorkflowMessage = async (
     message: string,
@@ -768,6 +1131,7 @@ export function useWorkflowConversation({
       buildExecutionScope?: WorkflowBuildExecutionScope
       planControlAction?: 'stop' | 'end' | 'abandon'
       planControlRunId?: string
+      planControlRequest?: PlanControlRequestGuard
       planningRunId?: string
       draftDigest?: string
       resumeExecutionRunId?: string
@@ -795,11 +1159,17 @@ export function useWorkflowConversation({
       revisionContinuation?: { changeId: string; token: string }
       revisionInteraction?: WorkflowRevisionDraftInteraction
       workflowScope?: string
+      executionRecovery?:
+        | { action: 'execute'; incidentId: string; actionId: string }
+        | { action: 'retry_current_failure'; sourceRunId: string }
     }
   ): Promise<boolean> => {
     const trimmedMessage = message.trim()
     if (!trimmedMessage) return false
-    if (applicationMutationReadonly) {
+    if (
+      applicationMutationReadonly &&
+      !(options?.executionRecovery && !recoveryMutationReadonly(applicationLifecycleRef.current))
+    ) {
       // 只读会话在 ensureActiveSession 前失败，避免 B 会话因直接调用创建新的 mutation thread。
       setErrors((current) => ({
         ...current,
@@ -837,6 +1207,18 @@ export function useWorkflowConversation({
       }))
       return false
     }
+    const planControlRequest = options?.planControlAction
+      ? options.planControlRequest ||
+        createPlanControlRequestGuard(identity, options.planControlRunId || '')
+      : undefined
+    if (planControlRequest) planControlRequestRef.current = planControlRequest
+    const isPlanControlResponseCurrent = (): boolean =>
+      !planControlRequest ||
+      isCurrentPlanControlRequest(
+        planControlRequest,
+        planControlRequestRef.current,
+        activePlanControlContextRef.current
+      )
 
     const explicitBuildExecutionScope =
       options?.buildExecutionScope || options?.workflowDebug?.buildExecutionScope
@@ -886,14 +1268,17 @@ export function useWorkflowConversation({
     const effectiveBuildExecutionScope =
       explicitBuildExecutionScope || sessionTargetFields.buildExecutionScope
 
-    const endpointUrl = options?.conversation
+    const endpointUrl = options?.executionRecovery
+      ? getExecutionRecoveryActionUrl()
+      : options?.conversation
       ? getConversationUrl()
       : options?.workflowScope === 'application_planning'
         ? getApplicationPlanningUrl()
         : getWorkflowUrl()
     const currentAgUiSession = agUiSessionsRef.current[identity.key]
-    const agUiSession =
-      currentAgUiSession &&
+    const agUiSession = options?.executionRecovery
+      ? new AgUiChatSession(executionThreadId, endpointUrl)
+      : currentAgUiSession &&
       currentAgUiSession.endpointUrl === endpointUrl &&
       currentAgUiSession.threadId === executionThreadId
         ? currentAgUiSession
@@ -917,6 +1302,8 @@ export function useWorkflowConversation({
       createdAt: Date.now()
     }
     const previousMessages = getSessionMessages(identity.key)
+    const baselineRunIds = Object.keys(applicationLifecycleRef.current?.activeExecutions || {})
+    delete pendingWorkflowInputsRef.current[identity.key]
     const nextMessages = [...previousMessages, userMessage, assistantMessage]
 
     setRunStates((current) => ({
@@ -952,6 +1339,9 @@ export function useWorkflowConversation({
     let streamedProcessSteps: ProcessStepRecord[] = []
     let latestMessages = nextMessages
     let executionStartedNotified = false
+    let connectionRequestGeneration = 0
+    let backendRequestStarted = false
+    let backendRunSettled = false
     let executionFinalized = false
     /** 收口本地运行态；不修改 Backend Pending，避免以 UI 状态猜测生命周期。 */
     const finalizeSessionExecution = (): void => {
@@ -1009,6 +1399,11 @@ export function useWorkflowConversation({
       notifiedPreviewTargetsRef.current.add(previewTarget.key)
       onPreviewReady(previewTarget)
     }
+    /** 过滤迟到的 Plan Control lifecycle，避免旧请求覆盖新会话的全局快照。 */
+    const onPlanControlLifecycle = (lifecycle: ApplicationLifecycle): void => {
+      if (!isPlanControlResponseCurrent()) return
+      onApplicationLifecycleChange(lifecycle)
+    }
 
     try {
       await persistSession({
@@ -1027,6 +1422,8 @@ export function useWorkflowConversation({
           conversation: Boolean(options?.conversation)
         }
       }))
+      connectionRequestGeneration = ++connectionRequestGenerationRef.current
+      backendRequestStarted = true
       const {
         answer: rawAnswer,
         workflow,
@@ -1040,7 +1437,7 @@ export function useWorkflowConversation({
         applicationPlanningInteraction: options?.applicationPlanningInteraction,
         productStageConversation: options?.productStageConversation,
         originalRequest: options?.originalRequest,
-        onApplicationLifecycle: onApplicationLifecycleChange,
+        onApplicationLifecycle: onPlanControlLifecycle,
         selectedSkillNames: selectedSkillNames(options?.selectedSkills),
         selectedPageId: effectiveSelectedPageId,
         selectedApiContractId: effectiveSelectedApiContractId,
@@ -1075,8 +1472,10 @@ export function useWorkflowConversation({
         revisionContinuation: options?.revisionContinuation,
         developmentContinuation: options?.developmentContinuation,
         revisionInteraction: options?.revisionInteraction,
-        workflowScope: options?.workflowScope,
+      workflowScope: options?.workflowScope,
+      executionRecovery: options?.executionRecovery,
         onContent: (content) => {
+          if (!isPlanControlResponseCurrent()) return
           streamedContent = content
           updateAssistantMessage(content, streamedWorkflow, streamedToolCalls)
         },
@@ -1084,10 +1483,12 @@ export function useWorkflowConversation({
           updateWorkflow(nextWorkflow)
         },
         onToolCalls: (nextToolCalls) => {
+          if (!isPlanControlResponseCurrent()) return
           streamedToolCalls = nextToolCalls
           updateAssistantMessage(streamedContent, streamedWorkflow, nextToolCalls)
         },
         onProcessSteps: (nextProcessSteps) => {
+          if (!isPlanControlResponseCurrent()) return
           streamedProcessSteps = nextProcessSteps
           updateAssistantMessage(
             streamedContent,
@@ -1097,6 +1498,15 @@ export function useWorkflowConversation({
           )
         }
       })
+      if (!isPlanControlResponseCurrent()) {
+        // 迟到结果只负责释放本地 request 占用，不得提交旧会话的成功状态。
+        backendRunSettled = true
+        return false
+      }
+      backendRunSettled = true
+      setConnectionState((current) =>
+        completeConnectionRequest(current, connectionRequestGeneration)
+      )
       const stopped = Boolean(stopRequestedRef.current[identity.key])
       const answer = stopped ? stoppedAnswer(streamedContent || rawAnswer) : rawAnswer.trim()
       const finalWorkflow = stopped
@@ -1154,6 +1564,28 @@ export function useWorkflowConversation({
       publishAiMessage(identity.editorMode, answer)
       return true
     } catch (caughtError) {
+      if (!isPlanControlResponseCurrent()) {
+        // 旧 Plan Control 的错误同样丢弃，不能改变新会话的连接或错误状态。
+        backendRunSettled = true
+        return false
+      }
+      if (backendRequestStarted && !backendRunSettled && !isAbortedStreamError(caughtError)) {
+        if (caughtError instanceof AgUiRunError || isAuthenticationFailure(caughtError)) {
+          setConnectionState((current) =>
+            completeConnectionRequest(current, connectionRequestGeneration)
+          )
+        } else {
+          setConnectionState((current) =>
+            failConnectionRequest(
+              current,
+              connectionRequestGeneration,
+              caughtError instanceof Error
+                ? caughtError.message
+                : 'Backend 暂时不可用，无法同步最新状态。'
+            )
+          )
+        }
+      }
       if (isAuthenticationFailure(caughtError)) {
         setSessionMessages(identity.key, previousMessages)
         if (options?.clearDraft) setDraftByKey(identity.key, trimmedMessage)
@@ -1207,12 +1639,40 @@ export function useWorkflowConversation({
       const failedContent =
         runError?.message ||
         (caughtError instanceof Error ? caughtError.message : '调用 Workflow 失败。')
+      if (options?.clearDraft && !failedWorkflow && !runError && !executionStartedNotified &&
+        !options.workflowAction && !options.planControlAction && !options.executionRecovery &&
+        !options.clarificationAnswers && !options.applicationPlanningInteraction && !options.revisionInteraction &&
+        !options.revisionContinuation && !options.developmentContinuation && !options.conversationHandoffDecision &&
+        !options.conversationImpactInteractionId &&
+        !options.resumeState && !options.workflowDebug?.enabled && !streamedContent &&
+        streamedToolCalls.length === 0 && streamedProcessSteps.length === 0) {
+        const originalDraft = options.titleFrom || trimmedMessage
+        const frozenOptions = { ...options, sessionIdentity: identity,
+          selectedSkills: [...(options.selectedSkills || [])],
+          selectedPageId: effectiveSelectedPageId, selectedApiContractId: effectiveSelectedApiContractId,
+          selectedEndpointId: effectiveSelectedEndpointId, detailTargetType: effectiveDetailTargetType,
+          buildExecutionScope: effectiveBuildExecutionScope }
+        pendingWorkflowInputsRef.current[identity.key] = {
+          identity, draft: originalDraft, skills: rollbackSkillSelection(options.selectedSkills),
+          baselineRunIds, restored: false,
+          /** 用户再次明确发送时使用原 AG-UI 入口和目标，不继承后来切换的选择。 */
+          submit: async () => {
+            const sent = await sendWorkflowMessage(trimmedMessage, frozenOptions)
+            if (sent && frozenOptions.conversation && frozenOptions.conversationElementContext)
+              onElementContextConsumed(frozenOptions.conversationElementContext)
+            return sent
+          }
+        }
+        setErrors((current) => ({ ...current, [identity.key]: failedContent }))
+      }
+      const staleRecoveryAction =
+        Boolean(options?.executionRecovery) && runError?.code === 'STALE_RECOVERY_ACTION'
       const failedMessages = updateAssistantMessage(
         '',
         failedWorkflow,
         failedToolCalls,
         failedProcessSteps,
-        failedContent
+        !options?.executionRecovery && runError ? failedContent : undefined
       )
       if (failedWorkflow) {
         setLiveWorkflows((current) => ({
@@ -1220,17 +1680,40 @@ export function useWorkflowConversation({
           [identity.key]: failedWorkflow
         }))
       }
-      await persistSession({
+      const failedSession = {
         editorMode: identity.editorMode,
         messages: failedMessages,
         sessionId: identity.sessionId,
         threadId: identity.threadId,
         titleFrom: options?.titleFrom || message
-      })
-      setErrors((current) => ({
-        ...current,
-        [identity.key]: failedContent
-      }))
+      }
+      if (backendRequestStarted) await persistSession(failedSession)
+      else {
+        // 首次落盘失败时仍保留内存中的原输入及错误入口，不让第二次同源落盘异常跳过兜底。
+        try { await persistSession(failedSession) } catch { /* 原落盘错误已显示，等待用户重试。 */ }
+      }
+      if (!options?.executionRecovery && runError) {
+        setErrors((current) => ({
+          ...current,
+          [identity.key]: failedContent
+        }))
+      }
+      if (options?.executionRecovery) {
+        // Recovery endpoint 的内部错误码不写入历史错误卡，避免 stale action 形成第二控制面。
+        if (staleRecoveryAction) {
+          setRecoveryErrorForSession(identity.key, '当前恢复操作已过期。')
+          const refreshed = await refreshExecutionRecoveryLifecycle()
+          if (refreshed) {
+            setRecoveryErrorForSession(identity.key)
+          }
+        } else {
+          setRecoveryErrorForSession(identity.key, '无法安全执行当前恢复操作，请查看最新状态。')
+        }
+      }
+      if (runError && !options?.executionRecovery && !options?.planControlAction) {
+        // Backend 已返回业务 RUN_ERROR；只读刷新 durable truth，绝不根据错误文本猜恢复动作。
+        await refreshExecutionRecoveryLifecycle()
+      }
       return false
     } finally {
       finalizeSessionExecution()
@@ -1844,6 +2327,11 @@ export function useWorkflowConversation({
   const handleStopGenerating = (): void => {
     const runningIdentity = activeRun?.identity
     if (!runningIdentity || !loading || stopping) return
+    // Native Recovery 使用独立流，不在普通聊天 transport 登记中；取消其服务端子 Run。
+    if (recoveringSourceRunId) {
+      void handleStopPlan(activeWorkflow?.runId)
+      return
+    }
     const agUiSession = agUiSessionsRef.current[runningIdentity.key]
     if (!agUiSession) return
 
@@ -1871,22 +2359,20 @@ export function useWorkflowConversation({
     return handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
   }
 
-  /** 从实时或终态消息快照的可恢复节点重新执行失败或已停止的计划切片。 */
-  const handleRetryPlan = async (workflow?: WorkflowRunPayload): Promise<void> => {
+  /** 仅为主动停止的计划沿用原有继续执行动作。 */
+  const handleContinueStoppedPlan = async (workflow?: WorkflowRunPayload): Promise<void> => {
     const retryWorkflow = workflow || activeWorkflow
     if (!retryWorkflow || loading || workspaceBusy) return
     const execution = planExecutionForPage(retryWorkflow.summary.lifecycle, selectedPageId, {
       runId: retryWorkflow.runId,
       threadId: retryWorkflow.threadId
     })
-    const isStopped =
-      execution?.status === 'stopped' || retryWorkflow.summary.status === 'stopped'
-    await sendWorkflowMessage('重试当前计划任务。', {
+    if (execution?.status !== 'stopped' && retryWorkflow.summary.status !== 'stopped') return
+    await sendWorkflowMessage('继续当前计划任务。', {
       resumeState: retryWorkflow,
       resumeExecutionRunId: execution?.runId || retryWorkflow.runId,
       selectedPageId: workflowSelectedPageId(retryWorkflow) || selectedPageId,
-      titleFrom: '重试计划任务',
-      ...(!isStopped ? { workflowAction: 'retry_failed_tasks' as const } : {})
+      titleFrom: '继续计划任务'
     })
   }
 
@@ -1945,6 +2431,7 @@ export function useWorkflowConversation({
     })
     const targetRunId = runId || execution?.runId || activeWorkflow?.runId
     const controlIdentity = activeRun?.identity || matchingActiveSession || activeSession
+    if (loading || workspaceBusy || !targetRunId || !controlIdentity) return
     const endedSessionKeys = Array.from(
       new Set(
         [activeRuntimeKey, controlIdentity?.key, draftKey].filter((key): key is string =>
@@ -1953,81 +2440,106 @@ export function useWorkflowConversation({
       )
     )
 
-    // 先释放前端输入门禁；即使没有 runId 或后端控制请求失败，用户也不能被卡在计划栏。
-    if (endedSessionKeys.length > 0) {
-      setEndedPlanSessionKeys((current) => {
-        const next = { ...current }
-        endedSessionKeys.forEach((key) => {
-          next[key] = true
-        })
-        return next
-      })
-      setLiveWorkflows((current) => {
-        const next = { ...current }
-        endedSessionKeys.forEach((key) => {
-          const workflow = current[key] || (key === activeRuntimeKey ? activeWorkflow : undefined)
-          const endedWorkflow = withWorkflowExecutionStatus(workflow, 'stopped', targetRunId)
-          if (endedWorkflow) next[key] = endedWorkflow
-        })
-        return next
-      })
-    }
-
-    // 结束动作的 UI 解锁不等待后端；请求仍尽力释放服务端工作区锁。
-    if (loading || workspaceBusy || !targetRunId) return
-    await sendWorkflowMessage('结束当前计划。', {
+    // 只有 Backend 返回成功的权威 lifecycle 后，前端才标记结束并解锁计划输入。
+    const planControlRequest = createPlanControlRequestGuard(controlIdentity, targetRunId)
+    const ended = await sendWorkflowMessage('结束当前计划。', {
       planControlAction: 'end',
       planControlRunId: targetRunId,
       selectedPageId,
       sessionIdentity: controlIdentity,
+      planControlRequest,
       titleFrom: '结束计划'
+    })
+    if (
+      !ended ||
+      !isCurrentPlanControlRequest(
+        planControlRequest,
+        planControlRequestRef.current,
+        activePlanControlContextRef.current
+      ) ||
+      endedSessionKeys.length === 0
+    ) {
+      return
+    }
+    setEndedPlanSessionKeys((current) => {
+      const next = { ...current }
+      endedSessionKeys.forEach((key) => {
+        next[key] = true
+      })
+      return next
+    })
+    // 成功结束只清理本次会话持有的恢复错误，失败回执和其它会话不受影响。
+    setRecoveryErrors((current) => {
+      const next = { ...current }
+      endedSessionKeys.forEach((key) => {
+        delete next[key]
+      })
+      return next
     })
   }
 
   /** 在当前 Run 已暂停等待时暂停计划，但保留 checkpoint 和恢复入口。 */
   const handleStopPlan = async (runId?: string): Promise<void> => {
+    const owned = ownedWorkbenchExecution(applicationLifecycleRef.current, activeSession)
+    // 恢复流已报告子 Run 时优先使用该身份，lifecycle 轮询可能仍停留在源 Run。
+    const recovering = recoveringSourceRunId && activeRun && activeWorkflow
+      ? { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId }
+      : undefined
+    // 恢复流或重入后由 lifecycle 持有的运行必须取消真实 Run，不能被生成忙碌锁挡住。
+    // 普通本地 Workflow 仍由原 handleStopGenerating 处理；等待确认的计划沿用下方 Stop。
+    if (recovering || (!activeRun && workbenchExecutionRunning(owned))) {
+      const target = recovering || owned
+      if (!target || !activeSession || owned?.status === 'stopping' || (runId && target.runId !== runId)) return
+      const identity = activeSession
+      // 本地恢复流收口时沿用已有主动停止标记，避免把取消回执再展示为执行失败。
+      if (activeRun && recoveringSourceRunId) stopRequestedRef.current[identity.key] = true
+      const outcome = await cancelWorkflowRun(target.threadId, target.runId, identity.workspaceRoot)
+      if (!['cancelled', 'pending_confirmation', 'not_running'].includes(outcome.status)) {
+        if (activeRun && recoveringSourceRunId) stopRequestedRef.current[identity.key] = false
+        setRecoveryErrorForSession(identity.key, outcome.message || '无法确认恢复运行已停止，请重试。')
+      }
+      await refreshExecutionRecoveryLifecycle()
+      return
+    }
     if (loading || workspaceBusy) return
     const execution = planExecutionForPage(activeWorkflow?.summary.lifecycle, selectedPageId, {
       runId: activeWorkflow?.runId,
       threadId: activeWorkflow?.threadId
     })
     const targetRunId = runId || execution?.runId || activeWorkflow?.runId
-    if (!targetRunId) return
-    const resumeWorkflow = activeWorkflow
-    if (activeRuntimeKey && resumeWorkflow) {
-      setLiveWorkflows((current) => ({
-        ...current,
-        [activeRuntimeKey]:
-          withWorkflowExecutionStatus(resumeWorkflow, 'stopping', targetRunId) || resumeWorkflow
-      }))
-    }
-    const stopped = await sendWorkflowMessage('暂停当前计划执行。', {
+    const controlIdentity = activeRun?.identity || matchingActiveSession || activeSession
+    if (!targetRunId || !controlIdentity) return
+    const restoredExecution = applicationLifecycleRef.current?.activeExecutions?.[targetRunId]
+    // Stop 的 stopping/stopped 投影均由 Backend lifecycle stream 驱动，前端不先猜测状态。
+    const planControlRequest = createPlanControlRequestGuard(controlIdentity, targetRunId)
+    await sendWorkflowMessage('暂停当前计划执行。', {
       planControlAction: 'stop',
       planControlRunId: targetRunId,
+      // 可见聊天线程与 Graph 线程可能不同，重入暂停必须沿用后端登记的执行线程。
+      executionThreadId: restoredExecution?.ownerSessionId === controlIdentity.sessionId
+        ? restoredExecution.threadId : activeWorkflow?.threadId,
       selectedPageId,
+      sessionIdentity: controlIdentity,
+      planControlRequest,
       titleFrom: '暂停计划'
     })
-    if (stopped && activeRuntimeKey && resumeWorkflow) {
-      setLiveWorkflows((current) => ({
-        ...current,
-        [activeRuntimeKey]:
-          withWorkflowExecutionStatus(resumeWorkflow, 'stopped', targetRunId) || resumeWorkflow
-      }))
-    }
   }
 
   return {
     activeWorkflow,
+    connectionState,
+    workbenchRefreshConnection,
     conversationRunning,
     error,
     handleAcceptPreview,
     handleContinueRevisionBuild,
     handleContinueDevelopment,
+    handleExecuteRecoveryAction,
+    handleRetryCodeReview,
+    handleContinueStoppedPlan,
     handleEndPlan,
     handleProductStageConversation,
     handleResumePlan,
-    handleRetryCodeReview,
-    handleRetryPlan,
     handleStopPlan,
     handleSend,
     handleStartEndpointDevelopment,
@@ -2041,7 +2553,11 @@ export function useWorkflowConversation({
     sessionExecutionLocked,
     sessionRunStates,
     stopping,
-    workspaceBusy
+    workspaceBusy,
+    recoveryRunning: Boolean(recoveringSourceRunId),
+    recoveryError,
+    refreshExecutionRecoveryLifecycle,
+    retryCurrentRecovery
   }
 }
 

@@ -32,6 +32,7 @@ from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
     UnitGenerationPolicy,
 )
+from app.services.unit_model_failure import is_unit_model_failure_issue
 from app.workspace.task_documents import (
     build_planning_provenance,
     build_task_plan_lifecycle_lock,
@@ -46,6 +47,7 @@ from app.workspace.planning_recovery_documents import (
     write_planning_recovery_atomic,
 )
 from app.workspace.spec_documents import workspace_root
+from app.workspace.planning_interruption_documents import PlanningInterruptionSnapshot, load_planning_interruption
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -94,12 +96,15 @@ def _new_planning_run_id() -> str:
 def _load_recovery_for_retry(
     workspace_state: Mapping[str, Any],
     source_workflow_run_id: str | None,
-) -> PlanningRecoverySnapshot | None:
+    *, interrupted: bool = False,
+) -> PlanningRecoverySnapshot | PlanningInterruptionSnapshot | None:
     """按明确 source Workflow ID 尝试读取 Recovery，存储异常只降级为 fresh generation。"""
 
     source_id = str(source_workflow_run_id or "").strip()
     if not source_id:
         return None
+    if interrupted:
+        return load_planning_interruption(workspace_state, source_id)
     try:
         return load_planning_recovery(dict(workspace_state), source_id)
     except Exception:
@@ -128,13 +133,7 @@ def persist_planning_recovery_if_applicable(
     if snapshot is None:
         return False
     failure = snapshot.failure
-    if (
-        failure is None
-        or failure.code != "UNIT_GENERATION_INFRASTRUCTURE_FAILURE"
-        or failure.level != "system"
-        or failure.category != "infrastructure"
-        or failure.retryable
-    ):
+    if failure is None or not is_unit_model_failure_issue(failure):
         return False
     try:
         recovery = build_planning_recovery_snapshot(
@@ -250,6 +249,7 @@ async def run_mainline_planning(
     ] | None = None,
     publish: SnapshotPublisher | None = None,
     recovery_source_workflow_run_id: str | None = None,
+    recovery_interrupted: bool = False,
 ) -> MainlinePlanningResult:
     """执行完整 PlanningRun，并仅在全局验证成功后原子写入 PendingPlan。
 
@@ -263,11 +263,12 @@ async def run_mainline_planning(
     recovery_snapshot = _load_recovery_for_retry(
         workspace_state,
         recovery_source_workflow_run_id,
+        interrupted=recovery_interrupted,
     )
     try:
         planned = await plan_dag_sequential(
             frozen.sequential_inputs(),
-            workspace_state=workspace_state,
+            workspace_state={**workspace_state, "owner_session_id": frozen.owner_session_id},
             planning_run_id=planning_run_id,
             workflow_run_id=frozen.workflow_run_id,
             thread_id=frozen.thread_id,

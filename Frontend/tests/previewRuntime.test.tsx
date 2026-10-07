@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { leavePreviewRuntime, runPreviewRuntime } from '../src/renderer/src/service/previewRuntime'
+import { PreviewRuntimeBusinessError, leavePreviewRuntime, runPreviewRuntime } from '../src/renderer/src/service/previewRuntime'
+import { previewRecoveryAction } from '../src/renderer/src/components/AiChatPanel/previewRuntimeRecovery'
+import { usePreviewRuntime } from '../src/renderer/src/components/AiChatPanel/hooks/usePreviewRuntime'
+import { SessionRuntimeProvider } from '../src/renderer/src/components/AiChatPanel/hooks/useSessionRuntimeStore'
+import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import PreviewRepairControls from '../src/renderer/src/components/BrowserPreviewPanel/PreviewRepairControls'
 import {
   previewServiceActionAvailability,
@@ -69,8 +73,68 @@ try {
   mockStream(true)
   await assert.rejects(
     runPreviewRuntime({ workspace: '/workspace', action: 'restart' }),
-    /等待确认/
+    (reason: unknown) => reason instanceof PreviewRuntimeBusinessError && /等待确认/.test(reason.message)
   )
+
+  const runtime = { attemptId: 'a', status: 'failed' as const, repairAvailable: true,
+    frontend: { status: 'failed' as const }, backend: { status: 'stopped' as const } }
+  assert.equal(previewRecoveryAction({ status: 'completed', runtime }, 'restart'), 'restart')
+  assert.equal(previewRecoveryAction({ status: 'completed', runtime: { ...runtime, status: 'running' } }, 'restart'), undefined)
+  assert.equal(previewRecoveryAction({ status: 'completed', runtime, repair: { status: 'awaiting_confirmation' } }, 'confirm'), undefined)
+  assert.equal(previewRecoveryAction({ status: 'completed', runtime, repair: { status: 'running' } }, 'confirm'), undefined)
+  assert.equal(previewRecoveryAction({ status: 'completed', runtime, repair: { status: 'stopped', interrupted: true, iteration: 2 } }, 'confirm'), 'revise')
+  assert.equal(previewRecoveryAction({ status: 'completed', runtime: { ...runtime, failedStage: 'launch_interrupted', repairAvailable: false }, repair: { status: 'stopped', interrupted: true, iteration: 2 } }, 'confirm'), 'restart')
+  assert.equal(previewRecoveryAction({ status: 'completed', runtime, repair: { status: 'stopped', iteration: 2 } }, 'confirm'), undefined)
+  assert.equal(previewRecoveryAction({ status: 'completed', runtime }, 'diagnose'), 'diagnose')
+  assert.equal(previewRecoveryAction({ status: 'completed', runtime: { ...runtime, maintenance: { threadId: 'other', action: 'confirm' } } }, 'cancel', 'current'), undefined)
+  assert.equal(previewRecoveryAction({ status: 'completed', runtime: { ...runtime, maintenance: { threadId: 'current', action: 'confirm' } } }, 'cancel', 'current'), 'cancel')
+  globalThis.fetch = async () => { throw new TypeError('Network unavailable') }
+  await assert.rejects(runPreviewRuntime({ workspace: '/workspace', action: 'get' }),
+    (reason: unknown) => reason instanceof Error && !(reason instanceof PreviewRuntimeBusinessError))
+
+  const identity: SessionIdentity = { key: 'preview-key', sessionId: 'session', threadId: 'preview-thread',
+    workflowId: 'preview-workflow', workbenchPhase: 'development', editorMode: 'frontend',
+    workspaceRoot: '/workspace', entryKey: 'preview-repair:test' }
+  for (const scenario of ['waiting', 'interrupted', 'unaccepted', 'offline'] as const) {
+    let controller: ReturnType<typeof usePreviewRuntime> | undefined
+    const actions: string[] = []
+    const threads: string[] = []
+    let discarded = 0
+    /** 捕获真实维护编排；SSR 不启动后台订阅，使点击重试的请求边界可验证。 */
+    function Probe() {
+      controller = usePreviewRuntime({ workspace: '/workspace', activeSession: identity, localBlocked: false,
+        createSession: async () => { throw new Error('不应创建另一个会话') },
+        discardSession: async () => { discarded++ }, persistSession: async () => {},
+        setMessages: () => {}, getMessages: () => [], onReady: () => {} })
+      return createElement('div')
+    }
+    renderToStaticMarkup(createElement(SessionRuntimeProvider, null, createElement(Probe)))
+    globalThis.fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body))
+      const action = body.forwardedProps.previewRuntime.action
+      actions.push(action)
+      threads.push(body.threadId)
+      if (actions.length === 1 || scenario === 'offline') throw new TypeError('test disconnected')
+      const repair = scenario === 'unaccepted' && action === 'get' ? undefined :
+        scenario === 'interrupted' && action === 'get' ? { status: 'stopped', interrupted: true, iteration: 2 } :
+        { status: 'awaiting_confirmation', planId: 'fresh-plan', iteration: 2 }
+      const payload = { status: 'completed', runtime, repair }
+      const frames = [
+        { type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+        { type: 'CUSTOM', name: 'preview-runtime', value: payload },
+        { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId, result: { previewRuntime: payload } }
+      ]
+      return new Response(frames.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    }
+    await controller!.act(scenario === 'unaccepted' ? 'diagnose' : 'confirm')
+    await controller!.retry()
+    assert.equal(discarded, 0, '断线不能作为丢弃会话的证据')
+    assert.deepEqual(actions, scenario === 'interrupted' ? ['confirm', 'get', 'revise'] :
+      scenario === 'unaccepted' ? ['diagnose', 'get', 'diagnose'] : ['confirm', 'get'])
+    assert.ok(threads.every(thread => thread === identity.threadId), '中断重试必须沿用同一会话')
+  }
 
   assert.deepEqual(
     previewServiceActionAvailability({ busy: false, blockedReason: '' }),

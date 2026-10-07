@@ -1,4 +1,4 @@
-import type { ApplicationLifecycle, EditorMode } from '../../../typings'
+import type { EditorMode } from '../../../typings'
 import type { WorkbenchPhase } from '../../../workbenchPhase'
 import type {
   AgentStage,
@@ -165,32 +165,4 @@ export function sessionIdentityFromSummary(
     developmentTarget: summary.developmentTarget,
     revisionContext: summary.revisionContext
   })
-}
-
-/** 在删除前收口 Pending，并只在本地删除成功后执行可选的 Session lifecycle cleanup。 */
-export async function releasePendingBeforeSessionDelete(
-  isRunning: () => boolean,
-  releasePending: () => Promise<ApplicationLifecycle>,
-  onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void,
-  deleteSession: () => Promise<void>,
-  afterSessionDeleted?: () => Promise<void>,
-  onPostDeleteCleanupError?: (error: unknown) => void
-): Promise<boolean> {
-  if (isRunning()) return false
-  const lifecycle = await releasePending()
-  onApplicationLifecycleChange(lifecycle)
-
-  // Backend round-trip 期间 Session 可能重新进入运行态，真正删除前必须再次确认。
-  if (isRunning()) return false
-
-  await deleteSession()
-  if (afterSessionDeleted) {
-    try {
-      await afterSessionDeleted()
-    } catch (error) {
-      // 本地 Session 已经删除，Backend cleanup 失败只能告警，不能伪造回滚。
-      onPostDeleteCleanupError?.(error)
-    }
-  }
-  return true
 }

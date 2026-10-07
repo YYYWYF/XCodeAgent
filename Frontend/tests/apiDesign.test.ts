@@ -2,3 +2,4 @@
 import './apiDesignSerialization.test'
 import './endpointDesignResult.test'
 import './fieldMappingModel.test'
+import './endpointRecovery.test'

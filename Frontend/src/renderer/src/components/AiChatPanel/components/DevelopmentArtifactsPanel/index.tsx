@@ -5,9 +5,11 @@ import ApplicationOutline from '../ApplicationOutline'
 import type { ApplicationOutlineProps } from '../ApplicationOutline'
 import EndpointDesignResult from '../EndpointDesignResult'
 import { useEndpointDesignDetail } from '../../hooks/useEndpointDesignDetail'
+import type { EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
 import './DevelopmentArtifactsPanel.less'
 
 type Props = ApplicationOutlineProps & {
+  onEndpointRecovery?: EndpointRecoveryReporter
   detailLabel?: string
   apiTarget?: { apiContractId: string; endpointId: string }
   workspaceRoot?: string
@@ -22,12 +24,14 @@ export default function DevelopmentArtifactsPanel({
   workspaceRoot,
   apiDesignRefreshKey,
   onConfigureApi,
+  onEndpointRecovery,
   ...outlineProps
 }: Props): ReactElement {
   const { detail, error, loading, reload } = useEndpointDesignDetail(
     workspaceRoot,
     apiTarget,
-    apiDesignRefreshKey
+    apiDesignRefreshKey,
+    onEndpointRecovery
   )
   return (
     <div className={cx('development-artifacts-panel')}>
@@ -41,7 +45,7 @@ export default function DevelopmentArtifactsPanel({
         {apiTarget && onConfigureApi ? <Button onClick={() => onConfigureApi({ ...apiTarget, label: detailLabel })}>打开字段映射</Button> : null}
         {apiTarget ? (
           loading ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>正在读取映射结果…</h3></div>
-            : error ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>读取失败</h3><p>{error}</p><Button onClick={reload} type="primary">重试</Button></div>
+            : error ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>读取失败</h3>{onEndpointRecovery ? <p>请使用下方重试入口同步映射结果。</p> : <><p>{error}</p><Button onClick={reload} type="primary">重试</Button></>}</div>
               : <EndpointDesignResult detail={detail} />
         ) : <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status">
           <h3>{detailLabel || '请选择开发产物'}</h3>

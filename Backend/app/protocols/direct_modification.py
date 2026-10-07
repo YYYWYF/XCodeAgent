@@ -503,7 +503,7 @@ def build_conversation_ag_ui_stream(
         current_task = asyncio.current_task()
         if current_task is None:
             raise RuntimeError("快速修改必须运行在异步任务中。")
-        workflow_run_registry.register(run_id, current_task, workspace=workspace_root)
+        workflow_run_registry.register(run_id, current_task, workspace=workspace_root, thread_id=thread_id)
         lease: WorkspaceRunLease | None = None
         events: list[dict[str, Any]] = []
         state_view: dict[str, Any] = {
@@ -782,6 +782,8 @@ def build_conversation_ag_ui_stream(
         },
         accept=accept,
         emit_progress_text=False,
+        # 自由对话 operation 会按工作区、thread 和 run 自行登记；避免通用包装层用同一 runId 重复登记。
+        register_workspace_run=False,
     )
 
 

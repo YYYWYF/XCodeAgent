@@ -38,6 +38,12 @@ RepairPlanner 根据当前启动失败及脱敏日志生成精确文件范围，
 
 ## 验证
 
+预览订阅和操作的通信错误接入工作台底部连接入口，业务失败仍保持 Backend 已连接。底部重试先通过同一 `/preview-runtime/run` 的 `get` 校准当前服务和修复会话；正在执行或等待确认时只恢复展示，不重放 `confirm`。只有已失败/停止的手动重启可以重新派发 `restart`；未被接收的诊断沿用原会话重新诊断，取消只针对匹配的维护所有者。
+
+Backend 重启后，失去执行者的 `diagnose/confirm/revise` 占用在首次读取时收口为 `stopped`，标记 `interrupted`，保留计划、已产生的代码变更和已消耗轮次并释放占用。待确认计划及当前仍有运行任务的占用不受影响。中断会话允许原 `revise` 重新诊断，预算继续沿用原轮次；新计划仍须显式确认，普通主动停止的会话不获得此重试权限。
+
+若修复中断时已进入启动器，则同时清理半启动进程，把启动尝试收口为 `launch_interrupted`；底部重试仅重新启动服务，不重放代码修复。服务恢复运行后不继续展示该历史中断错误。
+
 - Backend：`python -m unittest tests.test_preview_runtime tests.test_project_launcher tests.test_ag_ui_action_stream tests.test_application_lifecycle tests.test_application_lifecycle_protocol tests.test_workspace_run_lease`。
 - Frontend：`pnpm test:preview-runtime`、`pnpm test:stage-sessions`、`pnpm test:preview-inspector`、`pnpm test:workflow-preview`、`pnpm lint`、`pnpm build`（包含 typecheck）。
 - 运行时：检查 `/health`；在实际 Electron 中验证抽屉、明暗主题、日志滚动跟随、窄窗口和当前页面重启刷新。浏览器中的 Vite 页面不能替代此项。

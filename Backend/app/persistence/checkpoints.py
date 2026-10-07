@@ -205,6 +205,47 @@ async def delete_workflow_checkpoints_for_workspace(
     }
 
 
+async def delete_workflow_checkpoints_for_threads(
+    *, workspace: str, thread_ids: set[str]
+) -> int:
+    """只删除指定会话 Graph 线程的 checkpoint 与 pending writes。"""
+
+    ids = sorted(thread_id for thread_id in thread_ids if thread_id)
+    if not ids:
+        return 0
+    saver = await workflow_checkpointer(workspace=workspace)
+    async with saver.lock:
+        normalized_workspace = os.path.normcase(
+            str(Path(workspace).expanduser().resolve(strict=False))
+        )
+        for thread_id in ids:
+            cursor = await saver.conn.execute(
+                "SELECT type, checkpoint, metadata FROM checkpoints WHERE thread_id = ?",
+                (thread_id,),
+            )
+            rows = await cursor.fetchall()
+            await cursor.close()
+            for type_tag, blob, raw_metadata in rows:
+                values = _deserialize_checkpoint(saver, type_tag, blob).get("channel_values")
+                values = values if isinstance(values, dict) else {}
+                recorded_workspace = str(
+                    _checkpoint_metadata(raw_metadata).get("workspace")
+                    or values.get("workspace") or ""
+                ).strip()
+                if recorded_workspace and os.path.normcase(
+                    str(Path(recorded_workspace).expanduser().resolve(strict=False))
+                ) != normalized_workspace:
+                    raise ValueError("目标 checkpoint 线程属于另一工作区。")
+        await saver.conn.executemany(
+            "DELETE FROM writes WHERE thread_id = ?", [(thread_id,) for thread_id in ids]
+        )
+        await saver.conn.executemany(
+            "DELETE FROM checkpoints WHERE thread_id = ?", [(thread_id,) for thread_id in ids]
+        )
+        await saver.conn.commit()
+    return len(ids)
+
+
 async def close_workflow_checkpointer_for_workspace(
     *,
     workspace: str,

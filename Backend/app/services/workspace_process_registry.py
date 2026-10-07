@@ -44,6 +44,20 @@ class WorkspaceProcessRegistry:
         for process in processes:
             _terminate_process_group(process, force=False)
 
+    def wait_run_processes(self, run_id: str, timeout_seconds: float = 5.0) -> list[int]:
+        """等待目标运行的受控子进程退出，并强制结束超时的进程组。"""
+
+        with self._lock:
+            processes = list(self._run_processes.get(run_id, set()))
+        deadline = time.monotonic() + timeout_seconds
+        for process in processes:
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=max(0.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    _terminate_process_group(process, force=True)
+        return [process.pid for process in processes if process.poll() is None]
+
     @contextmanager
     def managed_process(
         self, *popenargs: Any, workspace: str | Path, run_id: str = "", **kwargs: Any,

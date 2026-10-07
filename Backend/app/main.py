@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
 
@@ -75,6 +76,10 @@ from app.protocols.direct_modification import (
     build_conversation_ag_ui_stream,
     conversation_capabilities,
 )
+from app.protocols.execution_recovery import (
+    build_execution_recovery_ag_ui_stream,
+    execution_recovery_capabilities,
+)
 from app.protocols.user_skills import (
     build_user_skills_ag_ui_stream,
     user_skills_capabilities,
@@ -89,6 +94,7 @@ from app.services.database_crypto import (
     database_encryption_metadata,
     ensure_database_platform_key,
 )
+from app.services.backend_instance import current_backend_instance, initialize_backend_instance
 from app.services.ui_design_generation_pool import get_ui_design_generation_pool
 from app.services.workspace_bootstrap.service import workspace_bootstrap_service
 from app.tools import database_tools
@@ -104,6 +110,13 @@ async def lifespan(_app: FastAPI):
 
     ensure_database_platform_key()
     ensure_agents_document()
+    backend_instance = initialize_backend_instance()
+    logging.getLogger("uvicorn.error").info(
+        "backend.instance.started instanceId=%s pid=%s startedAt=%s",
+        backend_instance.instance_id,
+        backend_instance.pid,
+        backend_instance.started_at.isoformat(),
+    )
     try:
         yield
     finally:
@@ -134,6 +147,7 @@ async def health() -> dict[str, object]:
 
     return {
         "status": "ok",
+        "backendInstanceId": current_backend_instance().instance_id,
         "provider": settings.model_provider,
         "model": settings.model_api_name,
         "configured_model": settings.model_name,
@@ -165,6 +179,7 @@ async def health() -> dict[str, object]:
             "repository_branch": repository_branch_capabilities(),
             "iteration_service": iteration_service_capabilities(),
             "conversation": conversation_capabilities(),
+            "execution_recovery": execution_recovery_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
     }
@@ -178,6 +193,23 @@ async def run_application_page_planning(
     return StreamingResponse(
         build_application_page_planning_ag_ui_stream(
             graph=application_planning_graph_for_request,
+            payload=input_data,
+            accept=accept,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/execution-recovery/execute")
+async def execute_execution_recovery(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 端点执行后端签发的当前恢复动作。"""
+
+    return StreamingResponse(
+        build_execution_recovery_ag_ui_stream(
             payload=input_data,
             accept=accept,
         ),

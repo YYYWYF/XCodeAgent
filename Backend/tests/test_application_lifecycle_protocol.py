@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.domain.application_lifecycle import (
     ApplicationLifecycle,
@@ -18,6 +18,7 @@ from app.protocols.application_lifecycle import (
     application_lifecycle_capabilities,
     build_application_lifecycle_ag_ui_stream,
 )
+from app.persistence.checkpoints import close_workflow_checkpointer, workflow_checkpointer
 from app.services.application_lifecycle import (
     application_lifecycle_path,
     create_application_lifecycle,
@@ -54,8 +55,28 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                 "workspace_attach",
                 "release_session_pending",
                 "cleanup_session_failed_executions",
+                "prepare_session_deletion",
+                "skip_entity_development",
             ],
         )
+
+    def test_get_projection_failure_keeps_lifecycle_and_explicit_read_error(self) -> None:
+        """外层 Recovery 读取异常仍完成 AG-UI GET，但绝不发布成功空候选。"""
+        with tempfile.TemporaryDirectory() as directory:
+            write_application_lifecycle(directory, create_application_lifecycle(
+                application_id="app-projection-failure", application_name="读取失败测试"))
+            async def collect() -> str:
+                """读取规范 AG-UI 全生命周期并核对公开错误。"""
+                return "".join([frame async for frame in build_application_lifecycle_ag_ui_stream(payload={
+                    "threadId": "get-thread", "runId": "get-run", "forwardedProps": {
+                        "applicationLifecycle": {"action": "get", "workspaceRoot": directory}
+                    }})])
+            with patch("app.protocols.application_lifecycle.resolve_execution_recovery_projection",
+                       new=AsyncMock(side_effect=OSError("unavailable"))):
+                frames = asyncio.run(collect())
+        self.assertIn("RECOVERY_PROJECTION_READ_FAILED", frames)
+        self.assertIn('"status":"completed"', frames)
+        self.assertIn('"type":"RUN_FINISHED"', frames)
 
     def test_release_session_pending_requires_session_id(self) -> None:
         """Session Pending 收口动作缺少合法 sessionId 时必须由协议拒绝。"""
@@ -171,6 +192,7 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
         self.assertIn('"sessionPendingReleased":true', frames)
         self.assertIn('"source":"none"', frames)
         self.assertIn('"status":"completed"', frames)
+        self.assertNotIn('"executionRecovery":', frames)
 
     def test_cleanup_session_failed_executions_removes_execution_after_explicit_action(self) -> None:
         """Session 删除后的独立 action 应移除 failed execution 并返回最新 lifecycle。"""
@@ -230,6 +252,60 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
         self.assertIn("cleanup_session_failed_executions", frames)
         self.assertIn('"status":"completed"', frames)
         self.assertNotIn("cleanup-run", saved["activeExecutions"])
+
+    def test_prepare_session_deletion_removes_owned_checkpoint_only(self) -> None:
+        """删除准备收口 owner execution 与目标 checkpoint，保留其它会话线程。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            lifecycle = create_application_lifecycle(
+                application_id="app-delete-session", application_name="会话删除测试"
+            )
+            lifecycle = lifecycle.model_copy(update={
+                "initialization": lifecycle.initialization.model_copy(update={
+                    "stage": ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+                    "status": ApplicationLifecycleStatus.COMPLETED,
+                })
+            })
+            write_application_lifecycle(directory, lifecycle)
+            start_workbench_execution(
+                directory, scope="page", target_id="orders", page_id="orders",
+                thread_id="owned-thread", run_id="owned-run",
+                phase="prepare_build_tasks", owner_session_id="session-owned",
+            )
+
+            async def collect() -> tuple[str, list[tuple[str]]]:
+                """在同一事件循环里构造 checkpoint、执行删除并读取结果。"""
+
+                saver = await workflow_checkpointer(workspace=directory)
+                for thread_id in ("owned-thread", "other-thread"):
+                    type_tag, blob = saver.serde.dumps_typed(
+                        {"channel_values": {"workspace": directory}}
+                    )
+                    await saver.conn.execute(
+                        "INSERT INTO checkpoints(thread_id, checkpoint_ns, checkpoint_id, type, checkpoint, metadata) VALUES (?, '', 'one', ?, ?, '{}')",
+                        (thread_id, type_tag, blob),
+                    )
+                await saver.conn.commit()
+                stream = build_application_lifecycle_ag_ui_stream(payload={
+                    "threadId": "request-thread", "runId": "request-run",
+                    "forwardedProps": {"applicationLifecycle": {
+                        "action": "prepare_session_deletion", "workspaceRoot": directory,
+                        "sessionId": "session-owned", "sessionThreadId": "owned-thread",
+                    }},
+                })
+                frames = "".join([frame async for frame in stream])
+                cursor = await saver.conn.execute("SELECT thread_id FROM checkpoints ORDER BY thread_id")
+                rows = await cursor.fetchall()
+                await cursor.close()
+                await close_workflow_checkpointer()
+                return frames, rows
+
+            frames, rows = asyncio.run(collect())
+            saved = json.loads(application_lifecycle_path(directory).read_text(encoding="utf-8"))
+
+        self.assertIn('"status":"completed"', frames)
+        self.assertNotIn("owned-run", saved["activeExecutions"])
+        self.assertEqual(rows, [("other-thread",)])
 
     def test_create_action_emits_complete_ag_ui_lifecycle(self) -> None:
         """独立端点创建状态时应发送事件、快照和完成事件。"""
@@ -372,9 +448,14 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                     return "".join([frame async for frame in stream])
 
                 frames = asyncio.run(collect())
+                saved_extensions = json.loads(
+                    application_lifecycle_path(directory).read_text(encoding="utf-8")
+                ).get("extensions", {})
 
         attach_workspace.assert_not_called()
         self.assertIn("已读取应用生命周期", frames)
+        self.assertIn('"workbenchProgress":{}', frames)
+        self.assertNotIn("workbenchProgress", saved_extensions)
 
     def test_get_action_is_not_blocked_by_preview_maintenance(self) -> None:
         """工作台只读恢复不应被隐藏页面的预览维护状态阻断。"""

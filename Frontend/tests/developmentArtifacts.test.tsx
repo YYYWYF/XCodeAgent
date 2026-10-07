@@ -146,7 +146,8 @@ function lifecycle(gate?: TestEntryGate, revision = 1): ApplicationLifecycle {
         updatedAt: ''
       }
     },
-    testEntryGate: gate
+    testEntryGate: gate,
+    extensions: {}
   }
 }
 
@@ -224,10 +225,17 @@ function renderPhaseDock(
       onOpenPreview={() => undefined}
       onRetry={() => undefined}
       onStop={() => undefined}
-      onViewPlan={() => undefined}
     />
   )
 }
+
+test('底部失败状态只保留结束控制，停止状态仍可继续', () => {
+  const failed = renderPhaseDock('failed')
+  const stopped = renderPhaseDock('stopped')
+  assert.doesNotMatch(failed, /重试失败任务|继续执行/)
+  assert.match(failed, /结束/)
+  assert.match(stopped, /继续执行/)
+})
 
 test('底部阶段提示遵循全应用开发门禁，2/3 不声称可以进入测试或审查', () => {
   const partial: TestEntryGate = {

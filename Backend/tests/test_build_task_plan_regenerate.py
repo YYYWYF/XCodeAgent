@@ -151,6 +151,126 @@ class BuildTaskPlanRegenerateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending["draft_identity"]["workflow_run_id"], "workflow-new")
         self.assertEqual(self.formal_path.read_bytes(), formal_bytes)
 
+    async def test_consumed_regenerate_recovers_without_snapshot_and_keeps_new_pending(self) -> None:
+        """旧 Pending 已删除后的异常可从持久化事实续跑，成功后不再次生成。"""
+
+        identity, _ = await self._write_old_pending()
+        self.state["build_execution_scope"] = plain_json(shared_inputs(self.formal).build_execution_scope)
+
+        def fail_after_consume(_: dict | None):
+            """在旧草稿消费后、新 PlanningRun 建立前模拟进程异常。"""
+
+            raise RuntimeError("after-consume")
+
+        with self.assertRaisesRegex(RuntimeError, "after-consume"):
+            await regenerate_pending_build_task_plan(
+                self.state, planning_run_id=identity["planning_run_id"],
+                draft_digest=identity["draft_digest"], workflow_run_id="workflow-r1",
+                thread_id="thread-new", current_inputs_factory=fail_after_consume,
+                policy=self.policy,
+            )
+        self.assertIsNone(load_pending_build_task_plan(self.state))
+        calls = 0
+
+        async def generate(job, **kwargs):
+            """计数真实 Unit 生成，确保已提交后的再次恢复不重跑模型。"""
+
+            nonlocal calls
+            calls += 1
+            return await self._generate(job, marker="recovered", **kwargs)
+
+        kwargs = dict(
+            planning_run_id=identity["planning_run_id"],
+            draft_digest=identity["draft_digest"], thread_id="thread-new",
+            current_inputs_factory=self._current_inputs, policy=self.policy,
+            generate_once=generate,
+        )
+        with self.assertRaisesRegex(RuntimeError, "second-failure"):
+            await regenerate_pending_build_task_plan(
+                self.state, workflow_run_id="workflow-r2",
+                recovery_source_workflow_run_id="workflow-r1",
+                current_inputs_factory=lambda _: (_ for _ in ()).throw(RuntimeError("second-failure")),
+                planning_run_id=identity["planning_run_id"],
+                draft_digest=identity["draft_digest"], thread_id="thread-new",
+                policy=self.policy,
+            )
+        recovered = await regenerate_pending_build_task_plan(
+            self.state, workflow_run_id="workflow-r3",
+            recovery_source_workflow_run_id="workflow-r2", **kwargs,
+        )
+        pending = load_pending_build_task_plan(self.state)
+        self.assertEqual(recovered.status, "regenerated")
+        self.assertEqual(pending["draft_identity"]["planning_run_id"], recovered.planning_run.planning_run_id)
+        self.assertGreater(calls, 0)
+        first_calls = calls
+        committed = await regenerate_pending_build_task_plan(
+            self.state, workflow_run_id="workflow-r4",
+            recovery_source_workflow_run_id="workflow-r3", **kwargs,
+        )
+        self.assertEqual(committed.status, "regenerated")
+        self.assertEqual(calls, first_calls)
+        stale = await regenerate_pending_build_task_plan(
+            self.state, workflow_run_id="forged", **kwargs,
+        )
+        self.assertEqual(stale.status, "stale_draft")
+
+    async def test_interrupted_continue_uses_operation_fact_without_candidate_snapshot(self) -> None:
+        """已消费旧 Pending 的中断执行靠操作事实续接，不把 Candidate 快照当授权。"""
+
+        identity, _ = await self._write_old_pending()
+        self.state["build_execution_scope"] = plain_json(shared_inputs(self.formal).build_execution_scope)
+
+        def interrupt_after_consume(_formal):
+            """模拟消费后进程中断，保留服务端 prepared/consumed 事实。"""
+
+            raise InterruptedError("restart")
+
+        with self.assertRaises(InterruptedError):
+            await regenerate_pending_build_task_plan(
+                self.state, planning_run_id=identity["planning_run_id"],
+                draft_digest=identity["draft_digest"], workflow_run_id="interrupted-source",
+                thread_id="thread-new", current_inputs_factory=interrupt_after_consume,
+                policy=self.policy,
+            )
+        self.assertIsNone(load_pending_build_task_plan(self.state))
+        calls = 0
+
+        async def generate(job, **kwargs):
+            """统计中断继续实际执行的 Unit 模型调用。"""
+
+            nonlocal calls
+            calls += 1
+            return await self._generate(job, marker="continued", **kwargs)
+
+        kwargs = dict(
+            planning_run_id=identity["planning_run_id"],
+            draft_digest=identity["draft_digest"], thread_id="thread-new",
+            current_inputs_factory=self._current_inputs, policy=self.policy,
+            generate_once=generate, reuse_recovery_candidate=False,
+        )
+        unrelated = await regenerate_pending_build_task_plan(
+            self.state, workflow_run_id="unrelated-child",
+            recovery_source_workflow_run_id="unrelated-source",
+            recovery_lineage_run_ids=("unrelated-source",), **kwargs,
+        )
+        self.assertEqual(unrelated.status, "stale_draft")
+        self.assertEqual(calls, 0)
+        resumed = await regenerate_pending_build_task_plan(
+            self.state, workflow_run_id="continue-child",
+            recovery_source_workflow_run_id="interrupted-child",
+            recovery_lineage_run_ids=("interrupted-child", "interrupted-source"),
+            **kwargs,
+        )
+        self.assertEqual(resumed.status, "regenerated")
+        self.assertGreater(calls, 0)
+        committed_calls = calls
+        repeated = await regenerate_pending_build_task_plan(
+            self.state, workflow_run_id="next-child",
+            recovery_source_workflow_run_id="continue-child", **kwargs,
+        )
+        self.assertEqual(repeated.status, "regenerated")
+        self.assertEqual(calls, committed_calls)
+
     async def test_stale_regenerate_keeps_pending_and_does_not_start(self) -> None:
         """旧 digest 不能删除当前 Pending，也不能装载输入或创建 PlanningRun。"""
 

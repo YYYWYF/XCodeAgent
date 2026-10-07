@@ -1,5 +1,9 @@
 import type { WorkspaceCodeChangeSet } from './codeChanges'
 import type { ToolApproval } from '../service/workspaceTools'
+import type {
+  RecoveryActionPlan,
+  RecoveryFailureDiagnostic
+} from '../service/recoveryActionPlan'
 
 export type WorkflowEvent = {
   type: string
@@ -21,6 +25,7 @@ export type WorkflowEvent = {
 export type WorkflowSummary = {
   status?: string
   message?: string
+  failureDiagnostic?: RecoveryFailureDiagnostic
   phase?: string
   previewUrl?: string
   launchResult?: WorkflowLaunchResult
@@ -1236,6 +1241,36 @@ export type PlanningRefreshState = {
   message: string
 }
 
+export type ExecutionRecoveryAvailability =
+  | 'ready'
+  | 'requires_handler'
+  | 'blocked'
+  | 'awaiting_user'
+
+export type ExecutionRecoveryCandidate = {
+  sourceRunId: string
+  ownerSessionId: string
+  threadId: string
+  executionKind: 'application_planning' | 'workbench'
+  workflowScope?: string
+  executionStatus: 'interrupted' | 'failed'
+  currentNode?: string
+  availability: ExecutionRecoveryAvailability
+  canContinue: boolean
+  reasonCode: string
+  message: string
+  failureDiagnostic?: RecoveryFailureDiagnostic | null
+  recoveryActionPlan: RecoveryActionPlan
+  updatedAt: string
+}
+
+export type ExecutionRecoveryProjection = {
+  schemaVersion: 'execution-recovery.v1'
+  generatedAt: string
+  candidates: ExecutionRecoveryCandidate[]
+  error?: { code: 'RECOVERY_PROJECTION_READ_FAILED'; message: string } | null
+}
+
 export type ExecutionResourceLock = {
   runId: string
   ownerPageId?: string
@@ -1251,7 +1286,9 @@ export type DevelopmentArtifactTarget =
   | { type: 'endpoint'; apiContractId: string; endpointId: string }
 
 export type DevelopmentArtifactProgress = {
-  initialDevelopmentStatus: 'pending' | 'in_progress' | 'completed'
+  initialDevelopmentStatus: 'pending' | 'in_progress' | 'completed' | 'skipped'
+  skippedAt?: string | null
+  skipReason?: string | null
   completedAt?: string | null
   completedRunId?: string | null
   completedThreadId?: string | null
@@ -1346,7 +1383,13 @@ export type ApplicationLifecycle = {
     [key: string]: unknown
   }
   recovery?: Record<string, unknown>
-  extensions: Record<string, unknown> & { planningRefresh?: PlanningRefreshState }
+  extensions: Record<string, unknown> & {
+    planningRefresh?: PlanningRefreshState
+    executionRecovery?: ExecutionRecoveryProjection
+    workbenchProgress?: Record<string, WorkbenchExecution & {
+      dagGeneration?: import('../service/agUiAgent').DagGenerationSnapshot
+    }>
+  }
 }
 
 export type WorkflowRunPayload = {
@@ -1361,7 +1404,6 @@ export type WorkflowRunPayload = {
 }
 
 export type WorkflowAction =
-  | 'retry_failed_tasks'
   | 'retry_code_review'
   | 'retry_template_reconcile'
   | 'start_design_revision'

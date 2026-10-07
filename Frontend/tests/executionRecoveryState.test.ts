@@ -1,0 +1,236 @@
+import { globalFallbackState } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import {
+  executionRecoveryForSession,
+  executionRecoveryReadError,
+  executionRecoveryProjection
+} from '../src/renderer/src/components/AiChatPanel/executionRecoveryState'
+import { workbenchRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
+import { reconcileWorkflowFailurePayload } from '../src/renderer/src/service/agUiAgent'
+import { parseRecoveryFailureDiagnostic } from '../src/renderer/src/service/recoveryActionPlan'
+import type { ApplicationLifecycle, ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
+
+test('同 Run 的通用终态保留具体诊断，新 Run 不继承旧失败', () => {
+  const specific = {
+    runId: 'run-R1', threadId: 'thread-A', events: [],
+    summary: {
+      status: 'failed', errorCode: 'UNIT_GENERATION_MODEL_HTTP_ERROR',
+      message: '模型服务返回 HTTP 429。',
+      failureDiagnostic: {
+        sourceRunId: 'run-R1', origin: 'model_call',
+        code: 'UNIT_GENERATION_MODEL_HTTP_ERROR', httpStatus: 429,
+        stage: 'model_invoke',
+        message: '模型服务返回 HTTP 429。'
+      }
+    }
+  } as WorkflowRunPayload
+  const generic = {
+    ...specific,
+    summary: { status: 'failed', errorCode: 'WORKFLOW_RUN_FAILED', message: '通用终态' }
+  } as WorkflowRunPayload
+  const merged = reconcileWorkflowFailurePayload(specific, generic)
+  assert.equal(merged?.summary.errorCode, 'UNIT_GENERATION_MODEL_HTTP_ERROR')
+  assert.equal(merged?.summary.failureDiagnostic?.httpStatus, 429)
+  assert.equal(merged?.summary.failureDiagnostic?.stage, 'model_invoke')
+  assert.equal(merged?.summary.message, '模型服务返回 HTTP 429。')
+  const nextRun = reconcileWorkflowFailurePayload(specific, {
+    ...generic, runId: 'run-R2', summary: { status: 'failed', message: 'R2 失败' }
+  })
+  assert.equal(nextRun?.summary.failureDiagnostic, undefined)
+  const planning = {
+    ...specific,
+    summary: {
+      status: 'failed', errorCode: 'GLOBAL_REPAIR_LIMIT_EXHAUSTED',
+      failureDiagnostic: {
+        sourceRunId: 'run-R1', origin: 'unknown', code: 'GLOBAL_REPAIR_LIMIT_EXHAUSTED',
+        userMessage: 'AI 生成的任务信息不完整，自动修复后仍未通过检查。',
+        message: '第 1 轮：模型输出被截断。'
+      }
+    }
+  } as WorkflowRunPayload
+  const planningMerged = reconcileWorkflowFailurePayload(planning, generic)
+  assert.equal(planningMerged?.summary.failureDiagnostic?.userMessage,
+    'AI 生成的任务信息不完整，自动修复后仍未通过检查。')
+  assert.equal(parseRecoveryFailureDiagnostic(planningMerged?.summary.failureDiagnostic)?.userMessage,
+    planning.summary.failureDiagnostic?.userMessage)
+  assert.equal(reconcileWorkflowFailurePayload(planning, {
+    ...generic, threadId: 'other-thread'
+  })?.summary.failureDiagnostic, undefined)
+})
+
+test('失败诊断保留后端 stage，历史记录缺少 stage 时不做推断', () => {
+  const current = parseRecoveryFailureDiagnostic({
+    sourceRunId: 'run-current', origin: 'model_call', code: 'MODEL_CALL_FAILED',
+    stage: 'model_setup'
+  })
+  const historical = parseRecoveryFailureDiagnostic({
+    sourceRunId: 'run-old', origin: 'model_call', code: 'UNIT_GENERATION_INFRASTRUCTURE_FAILURE'
+  })
+  const unknown = parseRecoveryFailureDiagnostic({
+    sourceRunId: 'run-unknown-stage', origin: 'model_call', code: 'MODEL_CALL_FAILED',
+    stage: 'new_stage'
+  })
+  assert.equal(current?.stage, 'model_setup')
+  assert.equal(historical?.stage, undefined)
+  assert.equal(unknown?.stage, undefined)
+})
+
+/** 构造只包含当前恢复投影扩展的 lifecycle 测试快照。 */
+function lifecycleWithCandidates(candidates: unknown[]): ApplicationLifecycle {
+  return {
+    application: { id: 'app-recovery-state-test', name: '恢复测试' },
+    updatedAt: '2026-09-12T00:00:00.000Z',
+    revision: 1,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: {},
+    extensions: {
+      executionRecovery: {
+        schemaVersion: 'execution-recovery.v1',
+        generatedAt: '2026-09-12T00:00:00.000Z',
+        candidates
+      }
+    }
+  } as unknown as ApplicationLifecycle
+}
+
+/** 创建前端可接受的公开恢复候选。 */
+function candidate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const executionKind =
+    (overrides.executionKind as 'application_planning' | 'workbench' | undefined) || 'workbench'
+  const sourceRunId = (overrides.sourceRunId as string | undefined) || 'run-A'
+  const threadId = (overrides.threadId as string | undefined) || 'exec-thread-A'
+  return {
+    sourceRunId,
+    ownerSessionId: 'session-A',
+    threadId,
+    executionKind,
+    executionStatus: 'interrupted',
+    availability: 'ready',
+    canContinue: true,
+    reasonCode: 'READY_NATIVE',
+    message: '上一次执行被中断，可以从已保存的现场继续。',
+    recoveryActionPlan: {
+      schemaVersion: 'recovery-action-plan.v1',
+      incidentId: 'incident-A',
+      sourceRunId,
+      threadId,
+      executionKind,
+      status: 'recoverable',
+      reasonCode: 'READY_NATIVE',
+      message: '上一次执行可以安全恢复。',
+      primaryAction: {
+        actionId: 'action-A',
+        kind: 'continue_checkpoint',
+        label: '继续执行',
+        description: '从已保存的现场继续执行。',
+        requiresConfirmation: false
+      },
+      alternateActions: []
+    },
+    updatedAt: '2026-09-12T00:00:01.000Z',
+    ...overrides
+  }
+}
+
+test('错误 schema 不会被当作 execution recovery projection', () => {
+  const lifecycle = lifecycleWithCandidates([])
+  lifecycle.extensions.executionRecovery = {
+    schemaVersion: 'execution-recovery.v0'
+  } as never
+  assert.equal(executionRecoveryProjection(lifecycle), undefined)
+})
+
+test('recovery candidate 只按 active session sessionId 匹配并选择最新记录', () => {
+  const lifecycle = lifecycleWithCandidates([
+    candidate({
+      sourceRunId: 'run-old',
+      ownerSessionId: 'session-A',
+      updatedAt: '2026-09-12T00:00:01.000Z'
+    }),
+    candidate({
+      sourceRunId: 'run-new',
+      ownerSessionId: 'session-A',
+      updatedAt: '2026-09-12T00:00:02.000Z'
+    }),
+    candidate({ sourceRunId: 'run-other', ownerSessionId: 'session-B', threadId: 'exec-thread-A' })
+  ])
+
+  assert.equal(executionRecoveryForSession(lifecycle, 'session-A')?.sourceRunId, 'run-new')
+  assert.equal(executionRecoveryForSession(lifecycle, 'session-B')?.sourceRunId, 'run-other')
+  assert.equal(executionRecoveryForSession(lifecycle, 'session-C'), undefined)
+  assert.equal(executionRecoveryForSession(lifecycle, undefined), undefined)
+})
+
+test('缺少 ownerSessionId 的候选不会被投影到前端', () => {
+  const lifecycle = lifecycleWithCandidates([candidate({ ownerSessionId: undefined })])
+
+  assert.deepEqual(executionRecoveryProjection(lifecycle)?.candidates, [])
+})
+
+test('缺少或失配 RecoveryActionPlan 的候选 fail closed', () => {
+  const basePlan = candidate().recoveryActionPlan as Record<string, unknown>
+  const lifecycle = lifecycleWithCandidates([
+    candidate({ recoveryActionPlan: undefined }),
+    candidate({
+      recoveryActionPlan: {
+        ...basePlan,
+        threadId: 'other-thread'
+      }
+    })
+  ])
+  assert.deepEqual(executionRecoveryProjection(lifecycle)?.candidates, [])
+})
+
+/** 从当前投影构造纯函数测试使用的合法恢复候选。 */
+function projectedCandidate(
+  executionKind: ExecutionRecoveryCandidate['executionKind']
+): ExecutionRecoveryCandidate {
+  const projected = executionRecoveryForSession(
+    lifecycleWithCandidates([candidate({ executionKind })]),
+    'session-A'
+  )
+  if (!projected) throw new Error('测试候选未成功投影。')
+  return projected
+}
+
+test('Workbench 当前 Incident 只接受 Workbench ActionPlan', () => {
+  const applicationPlanningCandidate = projectedCandidate('application_planning')
+  const workbenchCandidate = projectedCandidate('workbench')
+
+  assert.equal(workbenchRecoveryIncident(applicationPlanningCandidate), undefined)
+  assert.equal(workbenchRecoveryIncident(workbenchCandidate)?.kind, 'recoverable')
+})
+
+test('真实 Backend failureDiagnostic 使用公开字段后仍能生成当前 Incident', () => {
+  const projected = executionRecoveryForSession(
+    lifecycleWithCandidates([
+      candidate({
+        failureDiagnostic: {
+          sourceRunId: 'run-A',
+          origin: 'model_call',
+          code: 'MODEL_ERROR',
+          operation: 'code_review',
+          httpStatus: 404,
+          message: 'model not found'
+        }
+      })
+    ]),
+    'session-A'
+  )
+
+  assert.equal(projected?.failureDiagnostic?.httpStatus, 404)
+  assert.equal(workbenchRecoveryIncident(projected)?.failureMessage, undefined)
+})
+
+/** 即使连接健康、没有候选且旧执行还在运行，也能显示同步入口且拒绝旧动作。 */
+test('恢复读取错误提供底部兜底且禁止旧候选执行', () => {
+  const lifecycle = { extensions: { executionRecovery: {
+    schemaVersion: 'execution-recovery.v1', generatedAt: '2026-10-06', candidates: [],
+    error: { code: 'RECOVERY_PROJECTION_READ_FAILED', message: '恢复状态读取失败' }
+  } } } as unknown as ApplicationLifecycle
+  const message = executionRecoveryReadError(lifecycle)
+  assert.equal(message, '恢复状态读取失败')
+  assert.equal(executionRecoveryForSession(lifecycle, 'session-A'), undefined)
+  assert.equal(globalFallbackState({ connectionStatus: 'healthy', hasRecoveryIncident: false, globalFallbackError: message }).visible, true)
+})

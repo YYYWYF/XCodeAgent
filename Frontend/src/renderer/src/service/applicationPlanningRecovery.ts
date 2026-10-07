@@ -7,6 +7,12 @@ import { workflowApplicationLifecycle } from './activeApplicationPlanning'
 import { getApplicationLifecycle } from './applicationLifecycle'
 import { getApplicationPlanningUrl } from './applicationPagePlanning'
 import { createAgUiHttpAgent, isAuthenticationFailure } from './authentication'
+import {
+  parseRecoveryActionPlan as parseSharedRecoveryActionPlan,
+  type RecoveryAction,
+  type RecoveryActionPlan,
+  type RecoveryFailureDiagnostic
+} from './recoveryActionPlan'
 
 const APPLICATION_PLANNING_RECONCILE_TIMEOUT_MS = 20_000
 const APPLICATION_PLANNING_RECONCILE_ATTEMPTS = 2
@@ -26,6 +32,178 @@ type ApplicationPlanningRecoveryEnvelope = {
 export type ApplicationPlanningAuthoritativeSnapshot = {
   workflow: WorkflowRunPayload
   lifecycle: ApplicationLifecycle
+  recovery: ApplicationPlanningRecoveryProjection
+}
+
+export type {
+  RecoveryActionKind,
+  RecoveryFailureDiagnostic,
+  RecoveryIncidentStatus
+} from './recoveryActionPlan'
+export type ApplicationPlanningFailureDiagnostic = RecoveryFailureDiagnostic
+export type ApplicationPlanningRecoveryAction = RecoveryAction
+export type ApplicationPlanningRecoveryActionPlan = RecoveryActionPlan<'application_planning'>
+export { parseRecoveryAction, parseRecoveryActionPlan } from './recoveryActionPlan'
+
+export type ApplicationPlanningRecoveryProjection = {
+  schemaVersion: 'application-planning-recovery.v1'
+  classification:
+    | 'awaiting_user'
+    | 'running'
+    | 'ready_to_continue'
+    | 'completed'
+    | 'failed'
+    | 'blocked'
+    | 'conflict'
+    | 'legacy_unverified'
+  sourceRunId?: string
+  threadId: string
+  canContinue: boolean
+  userActionRequired: boolean
+  inputCommitted: boolean
+  reasonCode: string
+  message: string
+  failureDiagnostic?: ApplicationPlanningFailureDiagnostic | null
+  recoveryActionPlan?: ApplicationPlanningRecoveryActionPlan | null
+  uiGenerationRecovery?: { pageIds: string[] } | null
+}
+
+/** 只在后端确认的当前 UI 中断任务存在时显示统一重试，不用本地生成中状态猜测。 */
+export function uiDesignRecoveryError(recovery?: ApplicationPlanningRecoveryProjection): string | undefined {
+  return recovery?.classification === 'awaiting_user' && recovery.uiGenerationRecovery?.pageIds.length
+    ? 'UI 设计生成已中断，请重试；系统会恢复未完成页面，生成后仍需确认。'
+    : undefined
+}
+
+const APPLICATION_PLANNING_RECOVERY_CLASSIFICATIONS = new Set([
+  'awaiting_user',
+  'running',
+  'ready_to_continue',
+  'completed',
+  'failed',
+  'blocked',
+  'conflict',
+  'legacy_unverified'
+])
+
+/** 从公开投影中读取可展示的可选文本，拒绝对象、数组和未定义字段。 */
+function optionalDiagnosticText(value: unknown): string | null | undefined {
+  if (value === null) return null
+  if (typeof value !== 'string') return undefined
+  const normalized = value.trim()
+  return normalized || null
+}
+
+/** 从公开投影中读取合法 HTTP 状态，避免 UI 信任任意数字。 */
+function optionalDiagnosticHttpStatus(value: unknown): number | null | undefined {
+  if (value === null) return null
+  return typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599
+    ? value
+    : undefined
+}
+
+/** 严格解析 Backend 提供的安全失败诊断，历史缺失字段保持兼容。 */
+function parseFailureDiagnostic(
+  value: unknown
+): ApplicationPlanningFailureDiagnostic | null | undefined {
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const candidate = value as Record<string, unknown>
+  const sourceRunId = String(candidate.sourceRunId || '').trim()
+  const origin = String(candidate.origin || '').trim()
+  const code = String(candidate.code || '').trim()
+  if (!sourceRunId || !origin || !code) return undefined
+  const httpStatus = optionalDiagnosticHttpStatus(candidate.httpStatus)
+  return {
+    sourceRunId,
+    origin,
+    code,
+    operation: optionalDiagnosticText(candidate.operation),
+    dependency: optionalDiagnosticText(candidate.dependency),
+    provider: optionalDiagnosticText(candidate.provider),
+    model: optionalDiagnosticText(candidate.model),
+    ...(httpStatus !== undefined ? { httpStatus } : {}),
+    message: optionalDiagnosticText(candidate.message)
+  }
+}
+
+/** 严格解析当前 RecoveryActionPlan，并校验它与外层 Planning thread/source 身份一致。 */
+function parsePlanningRecoveryActionPlan(
+  value: unknown,
+  outer?: { threadId: string; sourceRunId?: string }
+): ApplicationPlanningRecoveryActionPlan | null | undefined {
+  return parseSharedRecoveryActionPlan<'application_planning'>(
+    value,
+    outer
+      ? {
+          ...outer,
+          executionKind: 'application_planning'
+        }
+      : undefined
+  )
+}
+
+/** 从 Workflow result/state 严格读取 Backend 给出的 Planning 恢复分类。 */
+export function applicationPlanningRecoveryProjection(
+  workflow?: WorkflowRunPayload
+): ApplicationPlanningRecoveryProjection | undefined {
+  for (const source of [workflow?.result, workflow?.state]) {
+    const raw = source?.applicationPlanningRecovery
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const value = raw as Record<string, unknown>
+    const classification = String(value.classification || '')
+    const threadId = String(value.threadId || '').trim()
+    const reasonCode = String(value.reasonCode || '').trim()
+    const message = String(value.message || '').trim()
+    if (
+      value.schemaVersion !== 'application-planning-recovery.v1' ||
+      !APPLICATION_PLANNING_RECOVERY_CLASSIFICATIONS.has(classification) ||
+      !threadId ||
+      !reasonCode ||
+      !message ||
+      typeof value.canContinue !== 'boolean' ||
+      typeof value.userActionRequired !== 'boolean' ||
+      typeof value.inputCommitted !== 'boolean'
+    ) {
+      continue
+    }
+    const sourceRunId = String(value.sourceRunId || '').trim()
+    const failureDiagnostic = parseFailureDiagnostic(value.failureDiagnostic)
+    const hasRecoveryActionPlan = Object.prototype.hasOwnProperty.call(
+      value,
+      'recoveryActionPlan'
+    )
+    const recoveryActionPlan = parsePlanningRecoveryActionPlan(value.recoveryActionPlan, {
+      threadId,
+      ...(sourceRunId ? { sourceRunId } : {})
+    })
+    // ActionPlan 一旦出现但无法严格解析，整帧拒绝，避免前端根据旧 canContinue 猜动作。
+    if (hasRecoveryActionPlan && recoveryActionPlan === undefined) continue
+    const uiRecovery = value.uiGenerationRecovery
+    let uiGenerationRecovery: { pageIds: string[] } | null | undefined
+    if (uiRecovery === null) uiGenerationRecovery = null
+    else if (uiRecovery !== undefined) {
+      if (!uiRecovery || typeof uiRecovery !== 'object' || Array.isArray(uiRecovery)) continue
+      const pageIds = (uiRecovery as Record<string, unknown>).pageIds
+      if (!Array.isArray(pageIds) || !pageIds.length || !pageIds.every(id => typeof id === 'string' && id.trim() === id && id.length > 0)) continue
+      uiGenerationRecovery = { pageIds: [...new Set(pageIds)] }
+    }
+    return {
+      schemaVersion: 'application-planning-recovery.v1',
+      classification: classification as ApplicationPlanningRecoveryProjection['classification'],
+      ...(sourceRunId ? { sourceRunId } : {}),
+      threadId,
+      canContinue: value.canContinue,
+      userActionRequired: value.userActionRequired,
+      inputCommitted: value.inputCommitted,
+      reasonCode,
+      message,
+      ...(uiGenerationRecovery !== undefined ? { uiGenerationRecovery } : {}),
+      ...(failureDiagnostic !== undefined ? { failureDiagnostic } : {}),
+      ...(recoveryActionPlan !== undefined ? { recoveryActionPlan } : {})
+    }
+  }
+  return undefined
 }
 
 /** 标识目标 planning thread 尚未产生可恢复 checkpoint。 */
@@ -135,13 +313,17 @@ async function readApplicationPlanningAuthoritativeSnapshotOnce(
   if (workflow.threadId !== threadId) {
     throw new Error('应用规划权威状态与请求 thread 不匹配。')
   }
+  const recovery = applicationPlanningRecoveryProjection(workflow)
+  if (!recovery || recovery.threadId !== threadId) {
+    throw new Error('读取应用规划权威状态没有返回有效的 Recovery Projection。')
+  }
   const lifecycle =
     workflowApplicationLifecycle(workflow) ??
     (await getApplicationLifecycle(application, threadId))
   if (lifecycle.application.id !== application.id) {
     throw new Error('应用规划权威状态与请求 application 不匹配。')
   }
-  return { workflow, lifecycle }
+  return { workflow, lifecycle, recovery }
 }
 
 /** 以最多两次、单次二十秒的有界读取获取 application planning 权威状态。 */

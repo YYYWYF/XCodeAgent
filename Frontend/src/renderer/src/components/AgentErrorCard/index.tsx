@@ -23,7 +23,7 @@ export default function AgentErrorCard({
   title
 }: AgentErrorCardProps): ReactElement {
   const copy = readableAgentError(error)
-  const resolvedTitle = title || (copy.modelServiceError ? '模型服务异常' : '任务执行异常')
+  const resolvedTitle = title || (copy?.modelServiceError ? '模型服务异常' : '任务执行异常')
 
   return (
     <section
@@ -39,14 +39,19 @@ export default function AgentErrorCard({
         <Text className={cx('agent-error-card-title')} strong>
           {resolvedTitle}
         </Text>
-        <Text className={cx('agent-error-card-message')}>{copy.message}</Text>
-        <Text className={cx('agent-error-card-hint')} type="secondary">
-          {copy.hint}
-        </Text>
-        {copy.detail ? (
-          <Text className={cx('agent-error-card-detail')} type="secondary">
-            错误详情：{copy.detail}
+        <Text className={cx('agent-error-card-message')}>{copy?.message}</Text>
+        {copy?.hint ? (
+          <Text className={cx('agent-error-card-hint')} type="secondary">
+            {copy.hint}
           </Text>
+        ) : null}
+        {copy?.detail ? (
+          <details className={cx('agent-error-card-details')}>
+            <summary>错误详情</summary>
+            <Text className={cx('agent-error-card-detail')} type="secondary">
+              {copy.detail}
+            </Text>
+          </details>
         ) : null}
         {onRetry ? (
           <Button
@@ -65,7 +70,9 @@ export default function AgentErrorCard({
 }
 
 /** 将连接异常和普通运行异常分别翻译成可操作提示，并保留原始详情。 */
-function readableAgentError(error?: string): {
+function readableAgentError(
+  error?: string
+): {
   message: string
   hint: string
   modelServiceError: boolean

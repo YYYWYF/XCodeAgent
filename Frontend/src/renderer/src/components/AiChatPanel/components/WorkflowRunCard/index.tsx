@@ -66,7 +66,7 @@ import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
 import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
-import { workflowClarification } from './workflowClarification'
+import { workflowClarification, workflowUnitTestRunning } from './workflowClarification'
 import {
   buildTaskDisplayStatus,
   isCheckpointCandidate,
@@ -176,6 +176,7 @@ export default function WorkflowRunCard({
   const status = String(workflow.summary.status || 'unknown')
   const artifacts = workflow.summary.artifacts || {}
   const clarification = workflowClarification(workflow)
+  const unitTestRunning = workflowUnitTestRunning(workflow) && !clarification
   // 项目启动快照可能暂时保留上一测试节点已提交的性能测试确认；启动卡不应重复展示该旧交互。
   const projectLaunch = workflowShouldShowProjectLaunch(workflow, currentWorkbenchPhase)
   const launchNode = workflow.summary.phase === 'launch_project'
@@ -346,7 +347,13 @@ export default function WorkflowRunCard({
           {workflowStatusText(status)}
         </Tag>
       </div>
-      {workflow.summary.message &&
+      {unitTestRunning ? (
+        <div className={cx('workflow-run-progress')}>
+          <LoadingOutlined aria-hidden="true" />
+          <Text type="secondary">正在生成或执行单元测试，请查看执行进度。</Text>
+        </div>
+      ) : null}
+      {workflow.summary.message && !unitTestRunning &&
         !apiDesignReadinessGate &&
         !revisionImpact &&
         !entityDesignReview &&

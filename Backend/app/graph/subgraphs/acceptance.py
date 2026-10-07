@@ -7,6 +7,7 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from app.graph.state import ProjectState
+from app.services.node_recovery_context import bind_node_recovery, current_node_recovery_context
 
 
 def _launch_project(state: ProjectState) -> dict[str, Any]:
@@ -42,6 +43,10 @@ def _route_start(state: ProjectState) -> str:
     # 保留既有 accepted/finalize 后端调用能力：已提交通过动作无需再次启动项目。
     if str(state.get("acceptance_decision") or "") == "accepted":
         return "acceptance_review"
+    with bind_node_recovery(state, "acceptance"):
+        if current_node_recovery_context() is not None:
+            # 后端重启后旧预览地址不证明进程仍可用，交给确定性启动器重新检查当前项目。
+            return "launch_project"
     return "acceptance_review" if _launch_succeeded(state) else "launch_project"
 
 

@@ -1,4 +1,13 @@
-import type { WorkflowClarification, WorkflowRunPayload } from '../../../../typings'
+import type { ApplicationLifecycle, WorkflowClarification, WorkflowRunPayload } from '../../../../typings'
+
+/** 同 Run/Thread 生命周期确认单测正在执行，扫描进度的临时 phase 不改变业务阶段。 */
+export function workflowUnitTestRunning(workflow: WorkflowRunPayload): boolean {
+  const lifecycle = workflow.summary.lifecycle || workflow.state?.lifecycle || workflow.result?.lifecycle
+  const execution = lifecycle && typeof lifecycle === 'object' && 'activeExecutions' in lifecycle
+    ? (lifecycle as ApplicationLifecycle).activeExecutions?.[workflow.runId] : undefined
+  return workflow.summary.status === 'running' && execution?.status === 'running' &&
+    execution.phase === 'unit_test' && execution.threadId === workflow.threadId && !execution.pendingInteraction
+}
 
 const WORKFLOW_PHASE_CONFIRMATION_MODES: Record<string, string> = {
   test_phase_confirmation: 'test_phase_confirmation',
@@ -52,6 +61,11 @@ export function workflowClarification(
   }
 
   const currentClarification = candidates.find(isUsableWorkflowClarification)
+  // 单测恢复已沿用 run 决策并进入执行时，旧确认载荷不能再显示为待答表单。
+  // 必须同时有同 Run/Thread 的 running 生命周期且没有 pendingInteraction，避免帧间误隐藏真实确认。
+  if (
+    currentClarification?.mode === 'unit_test_confirmation' && workflowUnitTestRunning(workflow)
+  ) return undefined
   if (currentClarification) return currentClarification
 
   // 只有当前 clarification 完全缺失时，才用历史 DAG 投影支持 PendingPlan 恢复。

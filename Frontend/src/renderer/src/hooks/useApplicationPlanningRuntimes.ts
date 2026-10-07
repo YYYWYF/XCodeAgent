@@ -113,12 +113,14 @@ export function useApplicationPlanningRuntimes(
     runtimesRef.current.clear()
   }, [])
 
-  // 网络恢复事件只为 uncertain Runtime 触发一次只读同步，不建立周期性轮询。
+  // 网络恢复事件只为连接已失效的 Runtime 触发一次只读同步，不建立周期性轮询。
   useEffect(() => {
     const handleOnline = (): void => {
       for (const runtime of runtimesRef.current.values()) {
         const current = optionsRef.current.getPlanningState(runtime.applicationId)
-        if (current?.threadId !== runtime.threadId || current.transportState !== 'uncertain') continue
+        if (!current || current.threadId !== runtime.threadId || current.connection.status !== 'unavailable') {
+          continue
+        }
         void runtime.reconcileCurrentState().catch((reason: unknown) => {
           console.error('[planning-runtime] online reconcile failed', reason)
         })

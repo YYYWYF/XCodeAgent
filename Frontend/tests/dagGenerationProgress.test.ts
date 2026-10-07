@@ -576,8 +576,8 @@ test('模型重试与 reuse_and_generate 显示真实 attempt 和安全任务计
 test('Global repair 显示真实轮次，failed/cancelled 只由 Run status 决定', () => {
   const repairing = snapshot({ globalRepairRound: 1, globalRepairLimit: 2 })
   assert.equal(dagGenerationSummaryCopy(repairing), '正在执行 Global repair 1/2')
-  assert.equal(dagGenerationSummaryCopy(snapshot({ status: 'failed' })), 'PlanningRun failed')
-  assert.equal(dagGenerationSummaryCopy(snapshot({ status: 'cancelled' })), 'PlanningRun cancelled')
+  assert.equal(dagGenerationSummaryCopy(snapshot({ status: 'failed' })), '执行计划生成失败')
+  assert.equal(dagGenerationSummaryCopy(snapshot({ status: 'cancelled' })), '执行计划生成已取消')
 })
 
 test('shell、无需参与和复用状态区分展示，auth 确定性生成不展示虚假 attempt', () => {

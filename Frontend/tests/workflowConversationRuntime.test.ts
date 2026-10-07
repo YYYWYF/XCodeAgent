@@ -9,17 +9,22 @@ import {
   pendingDagConfirmationWorkflow,
   pendingDagOwnerSessionId
 } from '../src/renderer/src/components/AiChatPanel/stageOutputState'
-import { resolveApplicationMutationOwnership } from '../src/renderer/src/components/AiChatPanel/applicationOwnership'
+import {
+  applicationMutationReadonlyForSession,
+  resolveApplicationMutationOwnership
+} from '../src/renderer/src/components/AiChatPanel/applicationOwnership'
 import {
   createSessionIdentity,
   type SessionExecutionEntry,
   type SessionIdentity
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import { useWorkflowConversation } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation'
+import { canRestorePendingWorkflowInput, type PendingWorkflowInput } from '../src/renderer/src/components/AiChatPanel/pendingWorkflowInput'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
+  ExecutionRecoveryCandidate,
   WorkflowBuildTaskPlanConfirmation,
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
@@ -31,6 +36,272 @@ const OWNER_THREAD_ID = 'thread-owner'
 const WORKFLOW_EXECUTION_THREAD_ID = 'workflow-thread-regenerate'
 const DRAFT_DIGEST = 'a'.repeat(64)
 type WorkflowConversationParams = Parameters<typeof useWorkflowConversation>[0]
+
+test('兜底同步正常待确认执行不报缺少恢复入口，也不提交验收或重发任务', async () => {
+  const savedFetch = globalThis.fetch
+  const savedWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+  try {
+    for (const owner of [OWNER_SESSION_ID, 'another-session', 'completed', 'failed-after-completed']) {
+      const identity = buildSessionIdentity()
+      const lifecycle = buildIdleLifecycle()
+      lifecycle.activeExecutions = { acceptance: {
+        runId: 'acceptance-run', threadId: 'acceptance-graph', ownerSessionId: owner,
+        phase: 'acceptance', status: 'awaiting_user', startedAt: '2026-10-07T00:00:00Z'
+      } } as ApplicationLifecycle['activeExecutions']
+      let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+      let reads = 0
+      const params = buildRuntimeParams({ activeSession: identity,
+        application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+        applicationLifecycle: lifecycle, agUiSessionsRef: { current: {} },
+        acquireSessionExecution: () => { throw new Error('同步不得启动任务') },
+        releaseSessionExecution: () => undefined, onApplicationLifecycleChange: () => undefined })
+      if (owner === 'completed' || owner === 'failed-after-completed') {
+        if (owner === 'completed') lifecycle.activeExecutions = {}
+        else {
+          lifecycle.activeExecutions.acceptance.ownerSessionId = OWNER_SESSION_ID
+          lifecycle.activeExecutions.acceptance.status = 'failed'
+        }
+        params.getSessionMessages = () => [{
+          id: 1, role: 'assistant', content: '当前计划已完成。', createdAt: Date.now(),
+          workflow: { runId: 'completed-run', threadId: identity.threadId, events: [], summary: { status: 'completed', phase: 'finalize_project' } }
+        }]
+      }
+      /** 使用真实 Hook 与 AG-UI 客户端验证只读同步和会话归属，不自动提交确认。 */
+      function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+      globalThis.fetch = async (input, init) => {
+        assert.ok(String(input).endsWith('/application-lifecycle/run'))
+        reads++
+        const request = JSON.parse(String(init?.body))
+        return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+      }
+      renderToStaticMarkup(createElement(Probe))
+      assert.equal(await runtime!.retryCurrentRecovery(), [OWNER_SESSION_ID, 'completed'].includes(owner))
+      assert.equal(reads, 2) // 既有 workspace_attach + get；不派发恢复或验收写动作。
+    }
+  } finally {
+    globalThis.fetch = savedFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
+  }
+})
+
+test('底部重试保持恢复身份直到真实异步流结束，期间不能再次发起恢复', async () => {
+  const savedFetch = globalThis.fetch
+  const savedWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+  const identity = buildSessionIdentity()
+  const lifecycle = buildRecoveryLifecycle('incident-A', 'action-A')
+  let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+  let release: (() => void) | undefined
+  let signalStarted: (() => void) | undefined
+  const started = new Promise<void>(resolve => { signalStarted = resolve })
+  const pending = new Promise<void>(resolve => { release = resolve })
+  let mutations = 0
+  const params = buildRuntimeParams({ activeSession: identity, application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig, applicationLifecycle: lifecycle, agUiSessionsRef: { current: {} }, acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined, onApplicationLifecycleChange: () => undefined })
+  /** 保留实际 Hook 的 request ref，验证 finally 不能在 Promise 收口前解锁。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body))
+    if (String(input).endsWith('/application-lifecycle/run')) return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+    assert.ok(String(input).endsWith('/execution-recovery/execute'))
+    mutations++
+    signalStarted!()
+    await pending
+    return sseResponse(request.threadId, request.runId, { workflow: { runId: 'recovery-child', threadId: request.threadId, events: [], summary: { status: 'completed' } } })
+  }
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    const first = runtime!.retryCurrentRecovery()
+    await started
+    assert.equal(await runtime!.retryCurrentRecovery(), false)
+    assert.equal(mutations, 1)
+    release!()
+    await first
+  } finally { release?.(); globalThis.fetch = savedFetch; Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow }) }
+})
+
+test('重入的当前会话运行在忙碌锁下仍取消真实 Run，不借用其它会话或过期 Run', async () => {
+  const savedFetch = globalThis.fetch
+  const savedWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+  try {
+    for (const scenario of ['owned', 'other', 'stale'] as const) {
+      const identity = buildSessionIdentity()
+      const lifecycle = buildIdleLifecycle()
+      lifecycle.activeExecutions = { child: { runId: 'child', threadId: 'graph-thread', ownerSessionId: scenario === 'other' ? 'other' : identity.sessionId, phase: 'unit_test', status: 'running', startedAt: '2026-10-06T00:00:00Z' } } as ApplicationLifecycle['activeExecutions']
+      const writes: any[] = []
+      let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+      const params = buildRuntimeParams({ activeSession: identity, application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig, applicationLifecycle: lifecycle, agUiSessionsRef: { current: {} }, acquireSessionExecution: () => { throw new Error('暂停不能占用第二个生成 Run') }, releaseSessionExecution: () => undefined, onApplicationLifecycleChange: () => undefined })
+      params.applicationMutationReadonly = true
+      /** 使用实际 Hook 和 AG-UI 客户端捕获取消请求及随后的只读同步。 */
+      function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+      globalThis.fetch = async (input, init) => {
+        const request = JSON.parse(String(init?.body))
+        if (String(input).endsWith('/workflow/run')) {
+          writes.push(request.forwardedProps)
+          assert.equal(request.threadId, 'graph-thread')
+          return sseResponse(request.threadId, request.runId, { workflowRunControl: { status: 'cancelled', message: '已停止' } })
+        }
+        assert.ok(String(input).endsWith('/application-lifecycle/run'))
+        return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+      }
+      renderToStaticMarkup(createElement(Probe))
+      await runtime!.handleStopPlan(scenario === 'stale' ? 'old-run' : 'child')
+      assert.equal(writes.length, scenario === 'owned' ? 1 : 0)
+      if (writes.length) assert.deepEqual(writes[0], { cancelRunId: 'child', workspaceRoot: WORKSPACE_ROOT })
+    }
+  } finally { globalThis.fetch = savedFetch; Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow }) }
+})
+
+test('无新执行事实才允许恢复同会话输入，已接收和其他会话均不能借空候选重发', () => {
+  const identity = buildSessionIdentity()
+  const lifecycle = buildIdleLifecycle()
+  const pending: PendingWorkflowInput = { identity, draft: '原请求', skills: [], baselineRunIds: [], restored: false, submit: async () => true }
+  assert.equal(canRestorePendingWorkflowInput(pending, identity, lifecycle), true)
+  assert.equal(canRestorePendingWorkflowInput(pending, buildSessionIdentity('other', 'other-thread'), lifecycle), false)
+  assert.equal(canRestorePendingWorkflowInput(pending, identity, undefined), false)
+  lifecycle.activeExecutions = { received: { runId: 'received', ownerSessionId: identity.sessionId, status: 'completed' } } as ApplicationLifecycle['activeExecutions']
+  assert.equal(canRestorePendingWorkflowInput(pending, identity, lifecycle), false)
+  pending.baselineRunIds = ['received']
+  assert.equal(canRestorePendingWorkflowInput(pending, identity, lifecycle), true)
+})
+
+test('Run 建立前失败的底部重试只恢复输入；再次发送保留原目标，读取失败和已接收时不重发', async () => {
+  const savedFetch = globalThis.fetch
+  const savedWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+  try {
+    for (const scenario of ['transport', 'persistence', 'read-failed', 'received', 'late-received'] as const) {
+      const identity = buildSessionIdentity()
+      const lifecycle = buildIdleLifecycle()
+      let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+      let workflowWrites = 0
+      let reads = 0
+      let failPersistence = scenario === 'persistence'
+      const restoredDrafts: string[] = []
+      const requests: Record<string, any>[] = []
+      const params = buildRuntimeParams({ activeSession: identity,
+        application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+        applicationLifecycle: lifecycle, agUiSessionsRef: { current: {} }, acquireSessionExecution: () => undefined,
+        releaseSessionExecution: () => undefined, onApplicationLifecycleChange: () => undefined,
+        persistSession: async () => { if (failPersistence) throw new Error('local save failed') } })
+      params.selectedPageId = 'original-page'
+      params.setDraftByKey = (key, value) => { assert.equal(key, identity.key); restoredDrafts.push(value) }
+      /** 捕获生产编排并使用实际 AG-UI 客户端，验证底部重试的读写边界。 */
+      function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+      globalThis.fetch = async (input, init) => {
+        const request = JSON.parse(String(init?.body))
+        if (String(input).endsWith('/application-lifecycle/run')) {
+          reads++
+          if (scenario === 'read-failed') throw new TypeError('still offline')
+          const fresh = buildIdleLifecycle()
+          if (scenario === 'received' || (scenario === 'late-received' && reads > 2)) fresh.activeExecutions = {
+            'received-run': { runId: 'received-run', ownerSessionId: identity.sessionId, threadId: identity.threadId,
+              status: 'running', phase: 'build', scope: 'page', targetId: 'original-page' }
+          } as ApplicationLifecycle['activeExecutions']
+          return sseResponse(request.threadId, request.runId, { applicationLifecycle: fresh })
+        }
+        workflowWrites++
+        requests.push(request)
+        if (workflowWrites === 1 && scenario !== 'persistence') throw new TypeError('offline before response')
+        return sseResponse(request.threadId, request.runId, { workflow: { runId: request.runId,
+          threadId: request.threadId, events: [], summary: { status: 'completed' } } })
+      }
+      renderToStaticMarkup(createElement(Probe))
+      await runtime!.handleSend()
+      const beforeRetry = workflowWrites
+      failPersistence = false
+      const result = await runtime!.retryCurrentRecovery()
+      assert.equal(workflowWrites, beforeRetry, '底部重试不能重复提交原请求')
+      assert.equal(reads, scenario === 'read-failed' ? 1 : 2, `${scenario}: workspace Attach + lifecycle get`)
+      if (scenario === 'transport' || scenario === 'persistence' || scenario === 'late-received') {
+        assert.equal(result, true)
+        assert.equal(restoredDrafts.at(-1), params.draft)
+        await runtime!.handleSend()
+        if (scenario === 'late-received') {
+          assert.equal(workflowWrites, beforeRetry, '输入恢复之后落盘的原 Run 也不能被再次启动')
+          continue
+        }
+        assert.equal(workflowWrites, beforeRetry + 1, `${scenario}: explicit sends`)
+        assert.equal(requests.at(-1)?.threadId, identity.threadId)
+        assert.equal(requests.at(-1)?.forwardedProps.selectedPageId, 'original-page')
+      } else {
+        assert.notEqual(restoredDrafts.at(-1), params.draft)
+        if (scenario === 'read-failed') assert.equal(result, false)
+        else { await runtime!.handleSend(); assert.equal(workflowWrites, beforeRetry) }
+      }
+    }
+  } finally {
+    globalThis.fetch = savedFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
+  }
+})
+
+test('重入丢失本地登记时，仍运行的 Backend Run 阻止重复发送', async () => {
+  const identity = createSessionIdentity({ workspaceRoot: WORKSPACE_ROOT, editorMode: 'frontend', sessionId: OWNER_SESSION_ID, threadId: OWNER_THREAD_ID, workflowId: APPLICATION_ID, workbenchPhase: 'development' })
+  const lifecycle = buildPendingLifecycle()
+  lifecycle.activeExecutions = { 'ongoing-run': {
+    runId: 'ongoing-run', threadId: WORKFLOW_EXECUTION_THREAD_ID, ownerSessionId: OWNER_SESSION_ID,
+    scope: 'page', targetId: 'runtime-test-page', phase: 'prepare_build_tasks', status: 'running',
+    startedAt: '2026-10-05T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z'
+  } }
+  const params = buildRuntimeParams({
+    activeSession: identity,
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: lifecycle,
+    agUiSessionsRef: { current: {} },
+    acquireSessionExecution: () => { throw new Error('不得重新登记执行') },
+    releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined
+  })
+  let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+  /** 捕获生产发送入口，模拟 Renderer 已重载且内存登记为空。 */
+  function Probe(): ReactElement {
+    runtime = useWorkflowConversation(params)
+    return createElement('div')
+  }
+  renderToStaticMarkup(createElement(Probe))
+  assert.ok(runtime)
+  await runtime.handleSend()
+})
+
+test('重入后的暂停使用实际 Graph 线程和精确 Run，而非可见聊天线程', async () => {
+  const identity = createSessionIdentity({ workspaceRoot: WORKSPACE_ROOT, editorMode: 'frontend', sessionId: OWNER_SESSION_ID, threadId: OWNER_THREAD_ID, workflowId: APPLICATION_ID, workbenchPhase: 'development' })
+  const lifecycle = buildPendingLifecycle()
+  lifecycle.activeExecutions = { 'ongoing-run': {
+    runId: 'ongoing-run', threadId: WORKFLOW_EXECUTION_THREAD_ID, ownerSessionId: OWNER_SESSION_ID,
+    scope: 'page', targetId: 'runtime-test-page', phase: 'prepare_build_tasks', status: 'running',
+    startedAt: '2026-10-05T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z'
+  } }
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+  let request: Record<string, any> | undefined
+  globalThis.fetch = async (url, init) => {
+    const current = JSON.parse(String(init?.body))
+    if (String(url).endsWith('/application-lifecycle/run')) return sseResponse(current.threadId, current.runId, { applicationLifecycle: lifecycle })
+    request = current
+    return sseResponse(current.threadId, current.runId, { workflowRunControl: { status: 'cancelled', message: '已停止' } })
+  }
+  let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+  const params = buildRuntimeParams({ activeSession: identity, application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig, applicationLifecycle: lifecycle, agUiSessionsRef: { current: {} }, acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined, onApplicationLifecycleChange: () => undefined })
+  /** 捕获冷恢复后的暂停入口，不创建本地运行登记。 */
+  function Probe(): ReactElement {
+    runtime = useWorkflowConversation(params)
+    return createElement('div')
+  }
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.ok(runtime)
+    await runtime.handleStopPlan('ongoing-run')
+    assert.equal(request?.threadId, WORKFLOW_EXECUTION_THREAD_ID)
+    assert.equal(request?.forwardedProps.cancelRunId, 'ongoing-run')
+    assert.equal(request?.forwardedProps.workspaceRoot, WORKSPACE_ROOT)
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+  }
+})
 
 /** 构造 generation 完成后服务端签发的 DAG 确认载荷。 */
 function buildDagConfirmation(): Record<string, unknown> {
@@ -156,6 +427,84 @@ function sseResponse(
   })
 }
 
+/** 生成恢复端点返回 stale action 的最小 AG-UI RUN_ERROR 流。 */
+function sseErrorResponse(threadId: string, runId: string): Response {
+  const events = [
+    { type: 'RUN_STARTED', threadId, runId },
+    {
+      type: 'RUN_ERROR',
+      message: '恢复动作已经过期，请刷新当前 Recovery Incident。',
+      code: 'STALE_RECOVERY_ACTION'
+    }
+  ]
+  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+    headers: { 'content-type': 'text/event-stream' },
+    status: 200
+  })
+}
+
+/** 构造 stale 后由 Backend 投影的新 Incident。 */
+function buildRecoveryLifecycle(incidentId: string, actionId: string): ApplicationLifecycle {
+  return {
+    application: { id: APPLICATION_ID },
+    updatedAt: `2026-09-11T00:00:${incidentId.endsWith('B') ? '03' : '02'}.000Z`,
+    revision: incidentId.endsWith('B') ? 3 : 2,
+    initialization: { stage: 'ready_for_workbench', status: 'completed' },
+    activeExecutions: {},
+    extensions: {
+      executionRecovery: {
+        schemaVersion: 'execution-recovery.v1',
+        generatedAt: '2026-09-11T00:00:03.000Z',
+        candidates: [
+          {
+            sourceRunId: incidentId === 'incident-B' ? 'run-B' : 'run-A',
+            ownerSessionId: OWNER_SESSION_ID,
+            threadId: OWNER_THREAD_ID,
+            executionKind: 'workbench',
+            executionStatus: 'failed',
+            availability: 'ready',
+            canContinue: true,
+            reasonCode: 'RETRY_FAILED_NODE',
+            message: '当前失败可以安全重试。',
+            failureDiagnostic: {
+              sourceRunId: incidentId === 'incident-B' ? 'run-B' : 'run-A',
+              origin: 'model_call',
+              code: 'MODEL_ERROR',
+              httpStatus: 404,
+              message: 'model not found'
+            },
+            recoveryActionPlan: {
+              schemaVersion: 'recovery-action-plan.v1',
+              incidentId,
+              sourceRunId: incidentId === 'incident-B' ? 'run-B' : 'run-A',
+              threadId: OWNER_THREAD_ID,
+              executionKind: 'workbench',
+              status: 'recoverable',
+              reasonCode: 'RETRY_FAILED_NODE',
+              message: '当前失败可以安全重试。',
+              primaryAction: {
+                actionId,
+                kind: 'retry_failed_node',
+                label: '重试当前失败操作',
+                description: '重新执行当前失败操作。',
+                requiresConfirmation: false
+              },
+              alternateActions: []
+            },
+            updatedAt: '2026-09-11T00:00:03.000Z'
+          }
+        ]
+      }
+    }
+  } as unknown as ApplicationLifecycle
+}
+
+/** 取得可直接提交给 hook 的当前恢复候选。 */
+function recoveryCandidate(): ExecutionRecoveryCandidate {
+  const lifecycle = buildRecoveryLifecycle('incident-A', 'action-A')
+  return lifecycle.extensions?.executionRecovery?.candidates?.[0] as ExecutionRecoveryCandidate
+}
+
 /** 通过服务端 SSE 伪造生产 hook 所需的最小会话依赖。 */
 function buildRuntimeParams(input: {
   activeSession: SessionIdentity
@@ -165,6 +514,7 @@ function buildRuntimeParams(input: {
   acquireSessionExecution: WorkflowConversationParams['acquireSessionExecution']
   releaseSessionExecution: (sessionKey: string) => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
+  persistSession?: WorkflowConversationParams['persistSession']
 }): WorkflowConversationParams {
   const noopAsync = async (): Promise<void> => undefined
   const noopIdentity = async (): Promise<SessionIdentity> => input.activeSession
@@ -187,7 +537,7 @@ function buildRuntimeParams(input: {
     ensureActiveSession: noopIdentity,
     ensureDevelopmentSession: async () => input.activeSession,
     getSessionMessages: () => [],
-    persistSession: noopAsync,
+    persistSession: input.persistSession || noopAsync,
     onApplicationLifecycleChange: input.onApplicationLifecycleChange,
     onStartDesignStageRevision: noopAsync,
     onStartWorkbenchPlanRevision: noopIdentity,
@@ -411,5 +761,426 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
       configurable: true,
       value: originalWindow
     })
+  }
+})
+
+test('STALE_RECOVERY_ACTION 会读取并替换最新 Incident，且不写入历史错误消息', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  const ownerIdentity = buildSessionIdentity()
+  const application = {
+    id: APPLICATION_ID,
+    appName: 'Recovery runtime test application',
+    workspaceRoot: WORKSPACE_ROOT,
+    source: 'existing-workspace'
+  } as unknown as ApplicationConfig
+  const lifecycleA = buildRecoveryLifecycle('incident-A', 'action-A')
+  const lifecycleB = buildRecoveryLifecycle('incident-B', 'action-B')
+  const lifecycleUpdates: ApplicationLifecycle[] = []
+  const persistedMessages: Array<{ messages: unknown[] }> = []
+  let lifecycleGetCount = 0
+  let captured: ReturnType<typeof useWorkflowConversation> | undefined
+  const agUiSessionsRef = { current: {} as Record<string, AgUiChatSession> }
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (input, init) => {
+    const url = String(input)
+    const request = JSON.parse(String(init?.body)) as { threadId: string; runId: string }
+    if (url.endsWith('/application-lifecycle/run')) {
+      lifecycleGetCount += 1
+      return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycleB })
+    }
+    return sseErrorResponse(request.threadId, request.runId)
+  }
+
+  const params = buildRuntimeParams({
+    activeSession: ownerIdentity,
+    application,
+    applicationLifecycle: lifecycleA,
+    agUiSessionsRef,
+    acquireSessionExecution: () => undefined,
+    releaseSessionExecution: () => undefined,
+    persistSession: async ({ messages }) => {
+      persistedMessages.push({ messages })
+    },
+    onApplicationLifecycleChange: (lifecycle) => lifecycleUpdates.push(lifecycle)
+  })
+
+  function Probe(): ReactElement {
+    captured = useWorkflowConversation(params)
+    return createElement('div')
+  }
+
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.ok(captured)
+
+    const result = await captured.handleExecuteRecoveryAction(recoveryCandidate())
+
+    assert.equal(result, false)
+    assert.ok(lifecycleGetCount >= 1)
+    assert.equal(lifecycleUpdates.at(-1)?.extensions?.executionRecovery?.candidates?.[0]?.recoveryActionPlan?.incidentId, 'incident-B')
+    assert.equal(captured.recoveryError, undefined)
+    assert.equal(
+      persistedMessages.some(({ messages }) => JSON.stringify(messages).includes('当前恢复操作已过期')),
+      false
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow
+    })
+  }
+})
+
+test('J13 needs_attention rejects direct execute but Retry re-resolves current failure', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  const ownerIdentity = buildSessionIdentity()
+  const application = {
+    id: APPLICATION_ID,
+    appName: 'Recovery fail-closed application',
+    workspaceRoot: WORKSPACE_ROOT,
+    source: 'existing-workspace'
+  } as unknown as ApplicationConfig
+  const lifecycle = buildRecoveryLifecycle('incident-A', 'action-A')
+  const baseCandidate = recoveryCandidate()
+  const candidate: ExecutionRecoveryCandidate = {
+    ...baseCandidate,
+    availability: 'blocked',
+    canContinue: false,
+    reasonCode: 'NO_RECOVERY_POINT',
+    recoveryActionPlan: {
+      ...baseCandidate.recoveryActionPlan,
+      status: 'needs_attention',
+      reasonCode: 'NO_RECOVERY_POINT',
+      primaryAction: null
+    }
+  }
+  if (lifecycle.extensions.executionRecovery) {
+    lifecycle.extensions.executionRecovery.candidates = [candidate]
+  }
+  let recoveryRequest: Record<string, unknown> | undefined
+  let captured: ReturnType<typeof useWorkflowConversation> | undefined
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      threadId: string
+      runId: string
+      forwardedProps?: { executionRecovery?: Record<string, unknown> }
+    }
+    if (String(input).endsWith('/application-lifecycle/run')) {
+      return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+    }
+    recoveryRequest = request.forwardedProps?.executionRecovery
+    return sseErrorResponse(request.threadId, request.runId)
+  }
+
+  const params = buildRuntimeParams({
+    activeSession: ownerIdentity,
+    application,
+    applicationLifecycle: lifecycle,
+    agUiSessionsRef: { current: {} as Record<string, AgUiChatSession> },
+    acquireSessionExecution: () => undefined,
+    releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined
+  })
+
+  /** 捕获 Hook 暴露的当前恢复执行入口。 */
+  function Probe(): ReactElement {
+    captured = useWorkflowConversation(params)
+    return createElement('div')
+  }
+
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.ok(captured)
+    const result = await captured.handleExecuteRecoveryAction(candidate)
+    assert.equal(result, false)
+    assert.equal(recoveryRequest, undefined)
+    await captured.retryCurrentRecovery()
+    assert.deepEqual(recoveryRequest, {
+      action: 'retry_current_failure',
+      sourceRunId: candidate.sourceRunId
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow
+    })
+  }
+})
+
+test('J14 one Retry refreshes then sends only Backend incidentId and actionId', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  const ownerIdentity = buildSessionIdentity()
+  const application = {
+    id: APPLICATION_ID,
+    appName: 'Recovery action identity application',
+    workspaceRoot: WORKSPACE_ROOT,
+    source: 'existing-workspace'
+  } as unknown as ApplicationConfig
+  const lifecycle = buildRecoveryLifecycle('incident-J14', 'action-J14')
+  let recoveryRequest: Record<string, unknown> | undefined
+  let lifecycleReads = 0
+  let captured: ReturnType<typeof useWorkflowConversation> | undefined
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body)) as {
+      threadId: string
+      runId: string
+      forwardedProps?: { executionRecovery?: Record<string, unknown> }
+    }
+    if (String(input).endsWith('/application-lifecycle/run')) {
+      lifecycleReads += 1
+      return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+    }
+    recoveryRequest = request.forwardedProps?.executionRecovery
+    return sseErrorResponse(request.threadId, request.runId)
+  }
+
+  const params = buildRuntimeParams({
+    activeSession: ownerIdentity,
+    application,
+    applicationLifecycle: lifecycle,
+    agUiSessionsRef: { current: {} as Record<string, AgUiChatSession> },
+    acquireSessionExecution: () => undefined,
+    releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined
+  })
+
+  /** 捕获 Hook 暴露的 Backend action identity 执行入口。 */
+  function Probe(): ReactElement {
+    captured = useWorkflowConversation(params)
+    return createElement('div')
+  }
+
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.ok(captured)
+    await captured.retryCurrentRecovery()
+    assert.ok(lifecycleReads >= 1)
+    assert.deepEqual(recoveryRequest, {
+      action: 'execute',
+      incidentId: 'incident-J14',
+      actionId: 'action-J14'
+    })
+    assert.equal('sourceRunId' in (recoveryRequest || {}), false)
+    assert.equal('targetNode' in (recoveryRequest || {}), false)
+    assert.equal('currentNode' in (recoveryRequest || {}), false)
+    assert.equal('phase' in (recoveryRequest || {}), false)
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow
+    })
+  }
+})
+
+test('Recovery Retry refreshes an empty projection without sending a mutation', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  const activeSession = buildSessionIdentity()
+  const application = {
+    id: APPLICATION_ID,
+    appName: 'Recovery empty projection application',
+    workspaceRoot: WORKSPACE_ROOT,
+    source: 'existing-workspace'
+  } as unknown as ApplicationConfig
+  const lifecycle = buildIdleLifecycle()
+  lifecycle.extensions = {
+    ...lifecycle.extensions,
+    executionRecovery: {
+      schemaVersion: 'execution-recovery.v1',
+      generatedAt: '2026-09-11T00:00:03.000Z',
+      candidates: []
+    }
+  }
+  let lifecycleReads = 0
+  let mutationRequests = 0
+  let captured: ReturnType<typeof useWorkflowConversation> | undefined
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body)) as { threadId: string; runId: string }
+    if (String(input).endsWith('/application-lifecycle/run')) {
+      lifecycleReads += 1
+      return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+    }
+    mutationRequests += 1
+    return sseErrorResponse(request.threadId, request.runId)
+  }
+
+  const params = buildRuntimeParams({
+    activeSession,
+    application,
+    applicationLifecycle: buildRecoveryLifecycle('incident-A', 'action-A'),
+    agUiSessionsRef: { current: {} as Record<string, AgUiChatSession> },
+    acquireSessionExecution: () => undefined,
+    releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined
+  })
+
+  /** 捕获真实 Hook 的只读刷新入口。 */
+  function Probe(): ReactElement {
+    captured = useWorkflowConversation(params)
+    return createElement('div')
+  }
+
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.ok(captured)
+    assert.equal(await captured.retryCurrentRecovery(), false)
+    assert.ok(lifecycleReads >= 1)
+    assert.equal(mutationRequests, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow
+    })
+  }
+})
+
+test('stale workspace ownership allows Recovery GET but blocks mutation after refresh', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  const activeSession = buildSessionIdentity()
+  const application = {
+    id: APPLICATION_ID,
+    appName: 'Recovery stale ownership application',
+    workspaceRoot: WORKSPACE_ROOT,
+    source: 'existing-workspace'
+  } as unknown as ApplicationConfig
+  const lifecycle = buildRecoveryLifecycle('incident-A', 'action-A')
+  lifecycle.activeExecutions = {
+    'run-other-owner': {
+      scope: 'page',
+      targetId: 'page-other',
+      threadId: 'thread-other',
+      runId: 'run-other-owner',
+      ownerSessionId: 'session-other',
+      phase: 'prepare_build_tasks',
+      status: 'running',
+      startedAt: '2026-09-11T00:00:00.000Z',
+      updatedAt: '2026-09-11T00:00:03.000Z'
+    }
+  } as ApplicationLifecycle['activeExecutions']
+  let lifecycleReads = 0
+  let mutationRequests = 0
+  let ownershipChecks = 0
+  let captured: ReturnType<typeof useWorkflowConversation> | undefined
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { xcodeAgent: { agentBaseUrl: 'http://agent.test' } }
+  })
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body)) as { threadId: string; runId: string }
+    if (String(input).endsWith('/application-lifecycle/run')) {
+      lifecycleReads += 1
+      return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+    }
+    mutationRequests += 1
+    return sseErrorResponse(request.threadId, request.runId)
+  }
+
+  const params = {
+    ...buildRuntimeParams({
+      activeSession,
+      application,
+      applicationLifecycle: lifecycle,
+      agUiSessionsRef: { current: {} as Record<string, AgUiChatSession> },
+      acquireSessionExecution: () => undefined,
+      releaseSessionExecution: () => undefined,
+      onApplicationLifecycleChange: () => undefined
+    }),
+    applicationMutationReadonly: true,
+    recoveryMutationReadonlyForLifecycle: (fresh: ApplicationLifecycle): boolean => {
+      ownershipChecks += 1
+      assert.equal(fresh.extensions?.executionRecovery?.candidates?.[0]?.sourceRunId, 'run-A')
+      return applicationMutationReadonlyForSession(
+        resolveApplicationMutationOwnership(fresh, [], [], {
+          applicationId: APPLICATION_ID,
+          workspaceRoot: WORKSPACE_ROOT
+        }),
+        activeSession
+      )
+    }
+  }
+
+  /** 捕获带 stale owner 的真实 Hook 重试入口。 */
+  function Probe(): ReactElement {
+    captured = useWorkflowConversation(params)
+    return createElement('div')
+  }
+
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.ok(captured)
+    assert.equal(await captured.retryCurrentRecovery(), false)
+    assert.ok(lifecycleReads >= 1)
+    assert.equal(ownershipChecks, 1)
+    assert.equal(mutationRequests, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: originalWindow
+    })
+  }
+})
+
+/** 底部恢复投影错误的同步仅走 Attach/Get；读取失败及成功都不直接执行旧动作。 */
+test('恢复投影读取失败重试只同步状态，不执行旧候选或其他节点', async () => {
+  const savedFetch = globalThis.fetch
+  const savedWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+  try {
+    const identity = buildSessionIdentity()
+    const lifecycle = buildRecoveryLifecycle('incident-read', 'action-read')
+    let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+    let failed = true
+    const actions: string[] = []
+    const params = buildRuntimeParams({ activeSession: identity,
+      application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+      applicationLifecycle: lifecycle, agUiSessionsRef: { current: {} }, acquireSessionExecution: () => undefined,
+      releaseSessionExecution: () => undefined, onApplicationLifecycleChange: () => undefined })
+    /** 捕获实际会话编排供只读同步验证。 */
+    function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+    globalThis.fetch = async (input, init) => {
+      assert.ok(String(input).endsWith('/application-lifecycle/run'), '投影同步不能调用恢复执行或业务节点')
+      const body = JSON.parse(String(init?.body))
+      actions.push(body.forwardedProps.applicationLifecycle.action)
+      const fresh = buildRecoveryLifecycle('incident-fresh', 'action-fresh')
+      if (failed) fresh.extensions.executionRecovery!.error = { code: 'RECOVERY_PROJECTION_READ_FAILED', message: '读取失败' }
+      return sseResponse(body.threadId, body.runId, { applicationLifecycle: fresh })
+    }
+    renderToStaticMarkup(createElement(Probe))
+    assert.equal(await runtime!.refreshExecutionRecoveryLifecycle(), false)
+    failed = false
+    assert.equal(await runtime!.refreshExecutionRecoveryLifecycle(), true)
+    assert.deepEqual(actions, ['workspace_attach', 'get', 'workspace_attach', 'get'])
+  } finally {
+    globalThis.fetch = savedFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
   }
 })

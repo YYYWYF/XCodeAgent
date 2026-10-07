@@ -1,0 +1,312 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+from app.domain.execution_recovery import (
+    DurableExecutionRecord,
+    DurableExecutionStatus,
+    ExecutionFailureEvidence,
+    ExecutionFailureOrigin,
+    WorkflowReentryContextAuthority,
+    WorkflowReentryContextAuthorityKind,
+    WorkflowReentryLifecycleAuthority,
+    WorkflowReentryPlan,
+    WorkflowReentryReason,
+)
+from app.services.execution_recovery_projection import (
+    recovery_failure_diagnostic,
+    resolve_execution_recovery_projection,
+)
+
+
+class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
+    """覆盖 lifecycle GET 的 canonical interrupted execution 安全投影。"""
+
+    def setUp(self) -> None:
+        """为投影测试准备隔离工作区。"""
+
+        self._temporary_workspace = tempfile.TemporaryDirectory()
+        self.workspace = Path(self._temporary_workspace.name)
+
+    def tearDown(self) -> None:
+        """释放投影测试的临时工作区。"""
+
+        self._temporary_workspace.cleanup()
+
+    def _record(self, run_id: str, thread_id: str = "thread-A") -> DurableExecutionRecord:
+        """构造一条只包含公开投影来源字段的中断 execution。"""
+
+        now = datetime.now(timezone.utc)
+        return DurableExecutionRecord(
+            run_id=run_id,
+            thread_id=thread_id,
+            owner_session_id="session-A",
+            workspace=str(self.workspace),
+            project_id=None,
+            execution_kind="workbench",
+            workflow_scope=None,
+            first_node="build",
+            current_node="build",
+            status=DurableExecutionStatus.INTERRUPTED,
+            started_at=now,
+            updated_at=now,
+            ended_at=now,
+        )
+
+    def _reentry_plan(self, run_id: str) -> WorkflowReentryPlan:
+        """构造 projection 使用的中断 checkpoint authority。"""
+
+        return WorkflowReentryPlan(
+            reason=WorkflowReentryReason.INTERRUPTED_CONTINUE,
+            execution_kind="workbench",
+            target_node="build",
+            thread_id="thread-A",
+            source_run_id=run_id,
+            lineage_parent_run_id=run_id,
+            context_authority=WorkflowReentryContextAuthority(
+                kind=WorkflowReentryContextAuthorityKind.CHECKPOINT,
+                source_run_id=run_id,
+                thread_id="thread-A",
+                target_node="build",
+                checkpoint_id="projection-checkpoint",
+                checkpoint_ns="",
+            ),
+            lifecycle_authority=WorkflowReentryLifecycleAuthority(
+                owner_run_id=run_id,
+                revision=None,
+            ),
+        )
+
+    async def test_empty_projection_when_no_interrupted_execution_exists(self) -> None:
+        """没有中断 execution 时返回空 candidates。"""
+
+        with patch(
+            "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+            new=AsyncMock(return_value=[]),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(projection.candidates, [])
+        self.assertIsNone(projection.error)
+
+    async def test_candidate_query_failure_is_not_successful_empty_projection(self) -> None:
+        """候选查询失败必须显式标记，不能把停服重连后的未知状态当成无任务。"""
+        with patch("app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                   new=AsyncMock(side_effect=OSError("store unavailable"))):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+        self.assertEqual(projection.candidates, [])
+        self.assertEqual(projection.error.code, "RECOVERY_PROJECTION_READ_FAILED")
+
+    async def test_single_candidate_failure_marks_projection_incomplete(self) -> None:
+        """单个候选解析失败同样不能授权清除原恢复信息。"""
+        with (
+            patch("app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                  new=AsyncMock(return_value=[self._record("run-A")])),
+            patch("app.services.execution_recovery_projection._resolve_candidate",
+                  new=AsyncMock(side_effect=OSError("checkpoint unavailable"))),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+        self.assertEqual(projection.error.code, "RECOVERY_PROJECTION_READ_FAILED")
+
+    async def test_ready_native_only_exposes_public_fields(self) -> None:
+        """READY_NATIVE 只能投影可继续状态，不泄漏内部 RecoveryPlan authority。"""
+
+        record = self._record("run-A")
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=object()),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        kind="continue",
+                        reentry_plan=self._reentry_plan(record.run_id),
+                    )
+                ),
+            ),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(len(projection.candidates), 1)
+        candidate = projection.candidates[0].model_dump(mode="json", by_alias=True)
+        self.assertTrue(candidate["canContinue"])
+        self.assertEqual(candidate["availability"], "ready")
+        self.assertEqual(candidate["ownerSessionId"], "session-A")
+        for forbidden in (
+            "checkpointId",
+            "checkpointNs",
+            "workspaceRevision",
+            "workspaceSnapshotHash",
+            "recoveryPointId",
+            "strategy",
+        ):
+            self.assertNotIn(forbidden, candidate)
+
+    async def test_invalid_interrupted_authority_is_blocked(self) -> None:
+        """最新中断 authority 无效时只投影 blocked，不生成恢复 action。"""
+
+        record = self._record("run-invalid")
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=object()),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        kind="needs_attention",
+                        reentry_plan=None,
+                        reason_code="INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING",
+                        reason="missing latest checkpoint",
+                    )
+                ),
+            ),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(projection.candidates[0].availability, "blocked")
+        self.assertFalse(projection.candidates[0].can_continue)
+
+    async def test_legacy_record_uses_exact_checkpoint_owner_without_mutating_record(self) -> None:
+        """旧记录只允许从 P0.3A 精确 checkpoint 读取 ownership。"""
+
+        record = self._record("run-legacy").model_copy(update={"owner_session_id": None})
+        snapshot = type("Snapshot", (), {"values": {"owner_session_id": "session-legacy"}})()
+        plan = self._reentry_plan(record.run_id).model_copy(
+            update={
+                "context_authority": self._reentry_plan(record.run_id).context_authority.model_copy(
+                    update={"checkpoint_id": "checkpoint-exact", "checkpoint_ns": "namespace"}
+                )
+            }
+        )
+        graph = type("Graph", (), {"aget_state": AsyncMock(return_value=snapshot)})()
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=graph),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(kind="continue", reentry_plan=plan)
+                ),
+            ),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(projection.candidates[0].owner_session_id, "session-legacy")
+        graph.aget_state.assert_awaited_once_with(
+            {
+                "configurable": {
+                    "thread_id": record.thread_id,
+                    "checkpoint_ns": "namespace",
+                    "checkpoint_id": "checkpoint-exact",
+                }
+            }
+        )
+        self.assertIsNone(record.owner_session_id)
+
+    async def test_legacy_record_without_checkpoint_owner_is_not_projected(self) -> None:
+        """旧记录无法从精确 checkpoint 证明 ownership 时必须 fail closed。"""
+
+        record = self._record("run-unowned").model_copy(update={"owner_session_id": None})
+        snapshot = type("Snapshot", (), {"values": {}})()
+        plan = self._reentry_plan(record.run_id).model_copy(
+            update={
+                "context_authority": self._reentry_plan(record.run_id).context_authority.model_copy(
+                    update={"checkpoint_id": "checkpoint-exact"}
+                )
+            }
+        )
+        graph = type("Graph", (), {"aget_state": AsyncMock(return_value=snapshot)})()
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=graph),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(kind="continue", reentry_plan=plan)
+                ),
+            ),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(projection.candidates, [])
+
+    async def test_business_failure_uses_only_matching_lifecycle_error(self) -> None:
+        """无异常 evidence 时补充同 Run/Thread 原始业务错误，不读取其他会话错误。"""
+        from types import SimpleNamespace
+
+        record = self._record("run-business").model_copy(update={"status": DurableExecutionStatus.FAILED})
+        execution = SimpleNamespace(thread_id=record.thread_id, phase="unit_test",
+            error=SimpleNamespace(code="workbench_execution_failed", message="真实单测错误"))
+        with patch("app.services.execution_recovery_projection.load_application_lifecycle",
+            return_value=SimpleNamespace(active_executions={record.run_id: execution})):
+            self.assertEqual(recovery_failure_diagnostic(record)["message"], "真实单测错误")
+            execution.thread_id = "other-thread"
+            self.assertIsNone(recovery_failure_diagnostic(record))
+
+    async def test_failure_diagnostic_uses_public_camel_case_contract(self) -> None:
+        """真实失败证据只能通过公共 mapper 暴露，不能直接泄漏 domain 字段名。"""
+
+        record = self._record("run-failure").model_copy(
+            update={
+                "status": DurableExecutionStatus.FAILED,
+                "ended_at": datetime.now(timezone.utc),
+                "failure": ExecutionFailureEvidence(
+                    origin=ExecutionFailureOrigin.MODEL_CALL,
+                    code="MODEL_NOT_FOUND",
+                    operation="code_review",
+                    dependency="model-provider",
+                    provider="openai",
+                    model="missing-model",
+                    http_status=404,
+                    diagnostic_message="model not found",
+                ),
+            }
+        )
+
+        self.assertEqual(
+            recovery_failure_diagnostic(record),
+            {
+                "sourceRunId": "run-failure",
+                "origin": "model_call",
+                "code": "MODEL_NOT_FOUND",
+                "operation": "code_review",
+                "dependency": "model-provider",
+                "provider": "openai",
+                "model": "missing-model",
+                "httpStatus": 404,
+                "message": "model not found",
+            },
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

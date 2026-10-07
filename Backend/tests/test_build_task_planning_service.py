@@ -168,7 +168,7 @@ class BuildTaskPlanningServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             {task["unit_id"] for task in assembled["task_registry"].values()},
-            {"application:root", "page:a", "page:b"},
+            {"page:a", "page:b"},
         )
         self.assertEqual(
             set(result.pending_plan["task_registry"]),

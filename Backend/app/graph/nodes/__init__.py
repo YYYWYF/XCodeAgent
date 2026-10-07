@@ -3,6 +3,12 @@ from app.graph.nodes.task_planning_adapter import (
 )
 from app.graph.nodes.authorization_bootstrap import authorization_bootstrap
 from app.graph.nodes.application_revision import start_application_revision
+from app.graph.nodes.application_technical_planning import (
+    technical_planning_begin,
+    technical_planning_commit,
+    technical_planning_confirm,
+    technical_planning_generate,
+)
 from app.graph.nodes.classification import classify_request_complexity
 from app.graph.nodes.lifecycle import (
     acceptance,
@@ -56,4 +62,8 @@ __all__ = [
     "review_phase_confirmation",
     "code_review",
     "acceptance_phase_confirmation",
+    "technical_planning_begin",
+    "technical_planning_commit",
+    "technical_planning_confirm",
+    "technical_planning_generate",
 ]
