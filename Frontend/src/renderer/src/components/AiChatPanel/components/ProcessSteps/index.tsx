@@ -251,8 +251,13 @@ function ProcessStep({
       hasWorkspaceInspectionProgress ||
       hasRepairPanel)
   const awaitingInput = !titleOnly && waitingForInput && step.status === 'requires_user_input'
+  // 二次修改的普通动作详情默认收起，流式更新不自动展开；结构化进度和确认提示沿用原展示规则。
+  const collapseConversationDetail = conversation &&
+    !hasChecks && !hasBuildRun && !hasDagGeneration && !hasProjectPlanUpdate &&
+    !hasWorkspaceInspection && !hasWorkspaceInspectionProgress && !hasRepairPanel &&
+    !awaitingInput
   const [open, setOpen] = useState(
-    expandable &&
+    expandable && !collapseConversationDetail &&
       (step.status === 'running' ||
         awaitingInput ||
         hasChecks ||
@@ -266,6 +271,7 @@ function ProcessStep({
   )
 
   useEffect(() => {
+    if (collapseConversationDetail) return
     // 二次修改的导航扫描完成后只保留节点摘要，避免工作区大图持续占满对话区。
     if (collapseCompletedWorkspaceScan) {
       setOpen(false)
@@ -286,6 +292,7 @@ function ProcessStep({
       setOpen(true)
     }
   }, [
+    collapseConversationDetail,
     awaitingInput,
     expandable,
     hasBuildRun,

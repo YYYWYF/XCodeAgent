@@ -87,6 +87,21 @@ async def assert_run_id_available(
         )
 
 
+async def recovery_graph_for_execution(record: DurableExecutionRecord) -> Any:
+    """按执行的服务端 scope 选择原 Graph；二次修改复用 Workbench 恢复合同。"""
+
+    from app.graph.application_planning_workflow import application_planning_graph_for_request
+    from app.graph.direct_modification_workflow import direct_modification_graph_for_request
+    from app.graph.workflow import workflow_graph_for_request
+
+    factory = (
+        direct_modification_graph_for_request if record.workflow_scope == "conversation"
+        else application_planning_graph_for_request if record.execution_kind == "application_planning"
+        else workflow_graph_for_request
+    )
+    return await factory(workspace=record.workspace, project_id=record.project_id)
+
+
 async def observe_execution_started(
     *,
     workspace: str | None,

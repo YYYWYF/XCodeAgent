@@ -244,7 +244,7 @@
 
 .@{class-prefix}-technical-plan-endpoint-block {
   display: grid;
-  gap: 7px;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -344,6 +344,21 @@
 
 .@{class-prefix}-technical-plan-endpoint-list {
   gap: 0;
+}
+
+.@{class-prefix}-technical-plan-endpoint-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 88px;
+  padding: 24px 16px;
+  border-top: 1px solid var(--wb-border);
+  text-align: center;
+
+  .ant-typography-secondary {
+    color: var(--wb-text-tertiary);
+    line-height: 1.6;
+  }
 }
 
 .@{class-prefix}-technical-plan-endpoint-list .@{class-prefix}-technical-plan-endpoint {

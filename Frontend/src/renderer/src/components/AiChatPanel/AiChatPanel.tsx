@@ -135,6 +135,7 @@ import SettingsPage from '../SettingsPage/SettingsPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
+import { useFormalRevisionHandoffRecovery } from './hooks/useFormalRevisionHandoffRecovery'
 import { useDevelopmentArtifactDetail } from './hooks/useDevelopmentArtifactDetail'
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useCodeReviewReportPanel } from './hooks/useCodeReviewReportPanel'
@@ -178,7 +179,7 @@ import {
   stageOutputPhase
 } from './stageOutputState'
 import { executionRecoveryForSession, executionRecoveryReadError } from './executionRecoveryState'
-import { acceptancePreviewCanFocus, globalFallbackState, latestConversationFailure, workbenchRecoveryCoveredByExecution } from './globalFallbackState'
+import { acceptancePreviewCanFocus, conversationUsesWorkflowRecovery, globalFallbackState, latestConversationFailure, workbenchRecoveryCoveredByExecution } from './globalFallbackState'
 import ConnectionStatusBanner from '../ConnectionStatusBanner'
 import RecoverySurface from './recoverySurface'
 import {
@@ -2927,6 +2928,21 @@ export default function AiChatPanel({
     }
   }
 
+  useFormalRevisionHandoffRecovery({
+    applicationId: application.id,
+    lifecycle: applicationLifecycle,
+    sessions: allSessions,
+    phase: derivedWorkbenchPhase,
+    loading: loadingSessions,
+    loadSessionIdentity, ensurePlanningSession, getSessionMessages, setSessionMessages, persistSession,
+    onRestored: (identity, phase) => {
+      setLocalPlanningConversationThreadId(identity.threadId)
+      switchPhase(phase, 'auto')
+      if (planningCurrentStateRef.current?.transportState !== 'running') onReconcilePlanning?.()
+    },
+    onError: (error) => message.error(formatError(error, '恢复正式修订交接失败'))
+  })
+
   // ensurePlanningSession 用 ref 持有，避免 effect 依赖它循环。
   const ensurePlanningSessionRef = useRef(ensurePlanningSession)
   ensurePlanningSessionRef.current = ensurePlanningSession
@@ -3743,11 +3759,21 @@ export default function AiChatPanel({
     ? previewRuntime.control.error || ((previewRuntime.repairState?.interrupted && previewRuntime.control.snapshot?.runtime?.status !== 'running') || previewRuntime.repairState?.status === 'failed' ? previewRuntime.repairState.message : undefined)
     : undefined
   const previewConnectionUnavailable = previewRuntime.connection.status === 'unavailable'
-  const currentPreviewRetry = previewConnectionUnavailable || (previewFallbackError && workflowConnection.status === 'healthy')
+  // 二次修改断线走原 Workbench 对账与恢复；预览订阅断线不能抢走它的重试入口。
+  const conversationNeedsRecovery = conversationUsesWorkflowRecovery({
+    conversationActive, workflowConnectionStatus: workflowConnection.status,
+    previewConnectionUnavailable, hasRecovery: Boolean(activeExecutionRecovery), hasError: Boolean(error)
+  })
+  // 规划已有当前失败或恢复入口时，模板启动留下的预览错误不能抢走规划续接重试。
+  const planningNeedsRecovery = isApplicationPlanningPhase && Boolean(
+    planningError || planningState?.syncError || applicationPlanningRecoveryIncident(planningState)
+  )
+  const currentPreviewRetry = !conversationNeedsRecovery && !planningNeedsRecovery && (previewConnectionUnavailable || (previewFallbackError && workflowConnection.status === 'healthy'))
     ? () => { void previewRuntime.retry() } : undefined
   const currentEndpointRetry = endpointRecovery.issue ? () => { void endpointRecovery.retry() } : undefined
   const activeConnectionState = endpointRecovery.issue && endpointRecovery.connection.status !== 'healthy'
-    ? endpointRecovery.connection : previewConnectionUnavailable ? previewRuntime.connection : workflowConnection
+    ? endpointRecovery.connection : conversationNeedsRecovery && workflowConnection.status !== 'healthy'
+      ? workflowConnection : previewConnectionUnavailable ? previewRuntime.connection : workflowConnection
   const planningReconnectRef = useRef<{ scope: string; status: string }>()
   const reconcilePlanningRef = useRef(onReconcilePlanning)
   reconcilePlanningRef.current = onReconcilePlanning

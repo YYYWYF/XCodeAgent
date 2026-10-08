@@ -2219,7 +2219,9 @@ def build_workflow_ag_ui_stream(
                 if workflow_scope == "application_planning":
                     result = project_application_planning_interrupt(result, snapshot)
             result.update(boundary_state)
-            if lifecycle_payload is not None:
+            # 规划恢复的 admission lifecycle 是入场快照；终帧必须保留节点提交的
+            # 最新修订状态，否则会把 continuation_ready 覆盖回 template_reconcile_failed。
+            if lifecycle_payload is not None and workflow_scope != "application_planning":
                 result["lifecycle"] = lifecycle_payload
             summary = _workflow_summary(result, events)
             if durable_execution_started:

@@ -19,6 +19,57 @@ import { recoveryFailureMessage } from '../src/renderer/src/service/recoveryFail
 import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
 
+/** 模板失败显示明确原因，并保留后端签发的原节点重试动作。 */
+test('模板故障在底部展示真实原因，不标成模型调用失败', () => {
+  const state = planningStateFromRecovery({ sourceRunId: 'template-run', model: '',
+    diagnosticMessage: 'Template Engine 地址未配置。' })
+  state.recovery!.failureDiagnostic = {
+    sourceRunId: 'template-run', origin: 'external_dependency', code: 'templateengineerror',
+    dependency: 'template_engine', operation: 'template_reconcile',
+    message: 'Template Engine 地址未配置。'
+  }
+  state.recovery!.recoveryActionPlan!.primaryAction = {
+    actionId: 'template-retry', kind: 'retry_failed_node', targetNode: 'template_reconcile',
+    label: '重新执行失败步骤', description: '重试已验证的失败节点', requiresConfirmation: false
+  }
+  const markup = renderToStaticMarkup(createElement(RecoverySurface, {
+    isApplicationPlanningPhase: true, planningState: state, recoveryRunning: false,
+    /** 测试只渲染原节点重试按钮。 */
+    onRetryPlanning: () => {},
+    /** 测试只检查展示，不执行恢复动作。 */
+    onExecuteRecoveryAction: () => {}
+  }))
+  assert.match(markup, /模板更新失败/)
+  assert.match(markup, /错误说明/)
+  assert.match(markup, /Template Engine 地址未配置。/)
+  assert.match(markup, /重新执行失败步骤/)
+  assert.doesNotMatch(markup, /模型调用失败|技术规划已中断/)
+  // 当前失败异常类型仍是权威事实，模块名误判的 origin 不应覆盖已知模板原因。
+  assert.equal(recoveryFailureMessage({ ...state.recovery!.failureDiagnostic!,
+    origin: 'model_call', dependency: 'model'
+  }), 'Template Engine 地址未配置。')
+  assert.equal(recoveryFailureMessage({ ...state.recovery!.failureDiagnostic!,
+    origin: 'model_call', dependency: 'model', code: 'templatestateerror',
+    message: 'PROJECT_LAUNCH_FAILED：前端依赖安装失败。'
+  }), 'PROJECT_LAUNCH_FAILED：前端依赖安装失败。')
+})
+
+test('二次修改新一轮扫描和分类不展示旧确认，本轮等待输入才显示', () => {
+  const confirmation = { mode: 'direct_modification_clarification',
+    message: '上一轮补充修改信息', questions: [] }
+  const workflow = { runId: 'new-run', threadId: 'same-thread', events: [],
+    state: { workflow_scope: 'conversation', clarification: confirmation },
+    summary: { status: 'running', phase: 'scan_workspace_code', clarification: confirmation }
+  } as unknown as WorkflowRunPayload
+  assert.equal(workflowClarification(workflow), undefined)
+  workflow.summary.phase = 'classify_intent'
+  workflow.summary.status = 'completed'
+  assert.equal(workflowClarification(workflow), undefined)
+  workflow.summary.status = 'requires_user_input'
+  workflow.summary.clarification = { ...confirmation, message: '本轮确认事项' }
+  assert.equal(workflowClarification(workflow)?.message, '本轮确认事项')
+})
+
 test('单测恢复仅在同 Run 正在执行且无待确认交互时隐藏旧确认', () => {
   const workflow = {
     runId: 'run-unit', threadId: 'thread-unit', events: [],
@@ -279,8 +330,9 @@ test('底部保留同一失败 Run 的单测错误，拒绝其他 Run 的诊断'
   assert.equal(workbenchRecoveryIncident(candidate)!.failureMessage, undefined)
 })
 
-test('Workbench Recovery Incident exposes the Backend primary action', () => {
-  const incident = workbenchRecoveryIncident(recovery('ready'))
+test('Workbench Incident 保留后端恢复动作身份', () => {
+  const candidate = recovery('ready')
+  const incident = workbenchRecoveryIncident(candidate)
   if (!incident) throw new Error('测试候选未生成 Workbench Incident。')
   const markup = renderToStaticMarkup(
     createElement(RecoveryIncidentCard, {
@@ -290,6 +342,8 @@ test('Workbench Recovery Incident exposes the Backend primary action', () => {
   )
   assert.match(markup, /工作台执行需要恢复/)
   assert.match(markup, /继续执行/)
+  assert.equal(incident.action.actionId, candidate.recoveryActionPlan.primaryAction?.actionId)
+  assert.equal(incident.action.kind, candidate.recoveryActionPlan.primaryAction?.kind)
 })
 
 test('Build 失败重试按同 Run 任务摘要显示保留进度，其他 Run 数量不得混入', () => {
@@ -531,15 +585,28 @@ test('消息区永远不渲染当前或历史通用错误卡', () => {
   assert.equal(countOccurrences(markup, 'agent-error-card-title'), 0)
 })
 
-test('Workbench retry card does not repeat the last retry error', () => {
+test('二次修改复用普通错误入口并显示当前重试错误', () => {
   const markup = renderToStaticMarkup(createElement(RecoverySurface, {
-    activeExecutionRecovery: recovery('ready'),
+    activeExecutionRecovery: { ...recovery('ready'), workflowScope: 'conversation' },
     isApplicationPlanningPhase: false,
     onExecuteRecoveryAction: () => undefined,
     recoveryError: '上次重试没成功',
     recoveryRunning: false
   }))
-  assert.doesNotMatch(markup, /上次重试没成功|重试未成功/)
+  assert.match(markup, /上次重试没成功/)
+  assert.match(markup, /agent-error-card/)
+  assert.doesNotMatch(markup, /application-planning-recovery-incident|工作台执行需要恢复/)
+})
+
+test('Build 恢复保留原控制卡，不受二次修改错误入口影响', () => {
+  const markup = renderToStaticMarkup(createElement(RecoverySurface, {
+    activeExecutionRecovery: recovery('ready'),
+    isApplicationPlanningPhase: false,
+    onExecuteRecoveryAction: () => undefined,
+    recoveryRunning: false
+  }))
+  assert.doesNotMatch(markup, /agent-error-card/)
+  assert.match(markup, /工作台执行需要恢复/)
 })
 
 test('Workbench needs_attention retains a retry entry for Backend re-resolution', () => {
@@ -883,6 +950,8 @@ test('Workbench caller renders one unified current Recovery Incident', () => {
 
   assert.equal(countOccurrences(markup, 'data-testid="application-planning-recovery-incident"'), 0)
   assert.equal(countOccurrences(markup, 'data-testid="workbench-recovery-incident"'), 1)
+  assert.equal(countOccurrences(markup, 'agent-error-card-title'), 0)
+  assert.match(markup, /application-planning-recovery-incident-action|工作台执行需要恢复/)
 })
 
 test('J8 awaiting_user leaves the business confirmation card as the only control surface', () => {

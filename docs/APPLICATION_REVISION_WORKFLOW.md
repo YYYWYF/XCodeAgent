@@ -100,6 +100,7 @@ SmallTask 禁止通过该路径：
 - 后端不创建第二个设计 Graph，仍以 lifecycle 中的原 `planningThreadId` 恢复原 `application_planning_workflow` checkpoint；新的 conversation thread 只承接前端消息展示和流式投影，不作为 Graph 恢复依据。
 - 二次修改的 DESIGN/PLAN session 持久化绑定 `impactInteractionId + sourceSessionId + sourceConversationThreadId + sourceRunId + planningThreadId + changeId`。其中 `sourceSessionId + sourceConversationThreadId` 唯一指向发起修改的原 DEVELOPMENT 会话，`changeId` 由审批后的 lifecycle 补齐；冷恢复必须按完整身份匹配，不能按标题猜测或补建开发会话。
 - 发起二次修改的来源会话保留一条交接回执，记录目标 session/thread 和原始请求，并提供“打开二次修改会话”入口；交接回执不是新的审批，也不改变原 checkpoint 的权威性。
+- DESIGN 启动请求在后端断线时，不能仅凭 transport 失败撤销回执或删除 StageSession。已收到匹配的 active formal revision，或暂时无法只读确认是否入场时，保留展示会话并在重连后对账；只有明确未入场的业务拒绝才回滚准备。当前生命周期证明修订已批准时，按 change/impact/source/planning 身份恢复并定位当前设计阶段；展示会话缺失且原 DEVELOPMENT 来源会话精确存在时，可补同一当前修订的 StageSession 与交接回执，不新建 Graph/Run 或再次批准。来源确认门在对应 source Run/Thread 交接后立即失效，节点重试仍由原 Planning Runtime 执行服务端签发的恢复动作。
 - DESIGN 确认进入 PLAN 时同样在 DESIGN 来源会话写入可点击交接回执；阶段启动失败时先撤销回执，再删除尚未成功进入的预创建 StageSession，并保留来源会话供用户重试。若回执撤销无法落盘，则保留其目标 StageSession，不能制造悬空跳转。
 - TechnicalPlan 确认后不创建新的开发会话，而是按 DESIGN/PLAN revisionContext 中的来源身份返回原 DEVELOPMENT 会话；先在原历史末尾追加“前置产物已更新完成”卡片，再由该会话的既有 AG-UI thread 承接工作区扫描、DAG 和执行内容。
 - “进入开发”是显式且幂等的 handoff：重复触发同一 `workflowId + changeId + technicalPlanSha256 + 来源 PLAN session/thread` 时仍解析到同一个原 DEVELOPMENT session/thread；只有该原会话成功激活后才切换到开发阶段并消费 continuation。原会话缺失或身份不匹配时失败关闭，禁止新建替代会话。
@@ -1286,3 +1287,14 @@ bounded context
 -> inspect_workspace + prepare_build_tasks
 -> DAG confirmation + Build + Test + Preview + Acceptance
 ```
+
+
+## 二次修改的统一节点恢复
+
+`/conversation/run` 的节点中断、异常失败和已处理业务失败进入现有 Workbench 恢复机制。执行记录使用 `execution_kind=workbench`、`workflow_scope=conversation`，绑定当前 StageSession 的 ownerSessionId 和 AG-UI thread；checkpoint 直接使用该 thread，首业务节点之前通过无副作用的 `workflow_entry` 提交精确入口。当前合同不读取旧 thread 前缀或迁移历史数据。
+
+底部重试先通过原 lifecycle AG-UI 对账，再提交现有 `/execution-recovery/execute` 的服务端 incident/action 身份。Graph 的选择来自 DurableExecution scope，节点及上下文来自共享 Failure/Business/InterruptedTargetResolver；原执行器负责 claim、lifecycle handoff、checkpoint fork、资源与 lineage 校验。准备完成后回到原 Conversation 协议流，不重发用户请求、不重跑已完成前置节点，不增加第二套恢复存储、接口或前端持久化。
+
+节点入口上下文保留修复次数、额度和原用户确认规则。恢复后遇到确认仍暂停，正式修订 impact 继续由原 lifecycle 交接；来源对话在交接门释放 Workbench 执行资源，并在二次修改适配器的同一生命周期锁内刷新本次 impact 的 revision 绑定；已发生的外部漂移仍拒绝。共用 Workflow lifecycle、Build 节点和调度保持原行为，普通错误卡只用于二次修改。没有精确 checkpoint 或运行归属时仍拒绝恢复。预览订阅断线不能抢走二次修改的统一重试按钮；后端不可达时显示连接失败，流提前结束且未收到 AG-UI 结束回执也按连接中断处理。
+
+本地回归使用真实 LangGraph checkpoint、SQLite Durable Store 与共享恢复执行器，覆盖首节点/后续节点异常、模拟中断、业务失败、stale action 拒绝及恢复后的确认门；真实模型停服/重启的 Electron 验收仍需单独执行。

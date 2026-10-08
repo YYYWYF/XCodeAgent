@@ -52,6 +52,7 @@ import type {
   WorkflowTestTarget
 } from '../../../typings'
 import {
+  conversationRevisionHandoffCommitted,
   isConversationWorkflow,
   shouldUseConversation,
   type ChatInputMode
@@ -1779,7 +1780,7 @@ export function useWorkflowConversation({
   ): Promise<boolean> => {
     const conversation = isConversationWorkflow(workflow)
     if (
-      !conversation &&
+      (!conversation || conversationRevisionHandoffCommitted(workflow, applicationLifecycle)) &&
       workflowInteractionAvailability(workflow, applicationLifecycle) !== 'active'
     )
       return false

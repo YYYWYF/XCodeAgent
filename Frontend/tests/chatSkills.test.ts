@@ -28,6 +28,7 @@ import ApplicationPlanningQuestionPanel from '../src/renderer/src/components/Wel
 import { ToolCallChain } from '../src/renderer/src/components/AiChatPanel/components/ToolCallCard'
 import {
   isConversationWaitingForInput,
+  isConversationWorkflow,
   shouldUseConversation
 } from '../src/renderer/src/components/AiChatPanel/conversationMode'
 import { workflowDebugBuildScope } from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
@@ -1033,6 +1034,33 @@ test('AG-UI 暂停在自然收口窗口内完成时不发送取消请求', async
 
     await Promise.all([activeRequest, stopPromise])
     assert.equal(cancellationRequests, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('二次修改首个扫描节点尚未分类也保持统一恢复入口归属', () => {
+  assert.equal(isConversationWorkflow({ runId: 'source', threadId: 'thread', events: [],
+    summary: { status: 'in_progress', phase: 'scan_workspace_code' },
+    state: { workflow_scope: 'conversation' } }), true)
+})
+
+test('二次修改流提前结束必须报连接中断，不能把 EOF 当作运行完成', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body))
+    const events = [
+      { type: 'RUN_STARTED', threadId: request.threadId, runId: request.runId },
+      { type: 'CUSTOM', name: 'conversation', value: { runId: request.runId,
+        threadId: request.threadId, events: [], summary: { status: 'in_progress', phase: 'conversation' } } }
+    ]
+    return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'content-type': 'text/event-stream' }
+    })
+  }
+  try {
+    const session = new AgUiChatSession('conversation-thread', 'http://agent.test/conversation/run')
+    await assert.rejects(session.sendMessage('修改按钮', { conversation: true }), /未收到运行结束回执/)
   } finally {
     globalThis.fetch = originalFetch
   }

@@ -317,8 +317,17 @@ def _workflow_progress_summary(
     code_changes = _workflow_code_changes(result)
 
     phase = started_node or result.get("phase") or node.get("id")
+    status = last_event.get("status") or result.get("status") or "running"
+    # 子节点完成只代表本节点交接成功；业务增量仍为 running 时，整轮尚未结束。
+    # 保留失败、待确认和真实终态，不能用节点的 completed 提前收掉原规划加载卡。
+    if (
+        last_event.get("type") == "workflow.node.completed"
+        and status == "completed"
+        and result.get("status") == "running"
+    ):
+        status = "running"
     return {
-        "status": last_event.get("status") or result.get("status") or "running",
+        "status": status,
         # 下一节点刚开始时，result 仍属于上一节点，必须优先展示正在执行的节点。
         "phase": phase,
         "message": last_event.get("message") or "Workflow is running.",
@@ -471,6 +480,19 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         # 二次修改确认后的实际下一节点是 Template Reconcile。此处只负责
         # AG-UI 时间线预测；若不投影 started 帧，前端会继续使用上一个
         # technical_planning running 事件，错误地把模板更新显示为技术规划。
+        return ["template_reconcile"] if update.get("template_reconcile_pending") else []
+    if node_name == "technical_planning_generate":
+        # 只展示实际候选决定的后继，生成失败必须回原审阅门，不能假装开始提交。
+        candidate = update.get("technical_plan_candidate")
+        return (
+            ["technical_planning_commit"]
+            if isinstance(candidate, dict) and candidate
+            else ["technical_planning_review"]
+        )
+    if node_name == "technical_planning_confirm":
+        # 与当前 Graph 的确认后路由一致；确认通过后不能再次投射生成加载态。
+        if update.get("application_planning_review_route") == "technical_planning_begin":
+            return ["technical_planning_begin"]
         return ["template_reconcile"] if update.get("template_reconcile_pending") else []
     if node_name == "integration_test":
         if update.get("quality_gate_passed"):

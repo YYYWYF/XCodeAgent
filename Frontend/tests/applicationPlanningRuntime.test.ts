@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import './formalRevisionHandoffRecovery.test'
 import {
   ApplicationPlanningRuntime,
   type ApplicationPlanningRuntimeDependencies
@@ -21,6 +22,7 @@ import type {
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
 import { initialConnectionState } from '../src/renderer/src/service/connectionState'
+import { applicationPlanningRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
 
 /** 构造带稳定身份的最小 Planning 当前状态，不挂载任何 React 视图。 */
 function planningState(applicationId = 'app-A', threadId = 'thread-A'): ApplicationPlanningCurrentState {
@@ -386,6 +388,60 @@ async function waitForCondition<T>(
 }
 
 // I：transport settled 不代表业务完成，待确认状态保持原样。
+// 恢复执行期间旧中断卡退让；失败收口后原证据仍可展示，不提前删除恢复事实。
+{
+  const current = planningState()
+  current.recovery = recoveryProjection('thread-A', { classification: 'ready_to_continue' })
+  assert.equal(applicationPlanningRecoveryIncident(current)?.kind, 'recoverable')
+  const running = reduceApplicationPlanningCurrentState(current, {
+    type: 'run_started', applicationId: 'app-A', threadId: 'thread-A'
+  })
+  assert.equal(applicationPlanningRecoveryIncident(running), undefined)
+  assert.equal(running.recovery, current.recovery)
+  const settled = reduceApplicationPlanningCurrentState(running, {
+    type: 'run_settled', applicationId: 'app-A', threadId: 'thread-A'
+  })
+  assert.equal(applicationPlanningRecoveryIncident(settled)?.kind, 'recoverable')
+}
+
+// 正式修订交接后停服，即使只读对账也断线，启动调用不能触发删除设计会话的回滚。
+{
+  const h = harness()
+  const input = { request: '增加异常流程测试页', target: { type: 'application' }, impact: { formalBranch: 'design_stage_revision', interactionId: 'impact-entered' }, sourceSessionId: 'source-session', sourceConversationThreadId: 'source-thread', sourceRunId: 'source-run' } as WorkflowDesignStageRevisionStart
+  h.onSend(async () => {
+    const current = h.current()!
+    h.setCurrent({ ...current, lifecycle: {
+      ...current.lifecycle,
+      activeFormalRevision: {
+        changeId: 'change-entered', formalBranch: 'design_stage_revision',
+        impactInteractionId: input.impact.interactionId,
+        sourceThreadId: input.sourceConversationThreadId, sourceRunId: input.sourceRunId,
+        planningThreadId: 'thread-A', status: 'design_planning', currentArtifact: 'requirement-spec'
+      }
+    } })
+    throw new Error('Failed to fetch')
+  })
+  h.onRead(async () => { throw new Error('Backend unavailable') })
+  await h.runtime.startDesignRevision(input)
+  assert.equal(h.current()?.lifecycle.activeFormalRevision?.currentArtifact, 'requirement-spec')
+  assert.equal(h.current()?.connection.status, 'unavailable')
+  assert.equal(h.calls.length, 1)
+  assert.equal(h.current()?.transportState, 'idle')
+}
+
+// 尚未收到回执的网络中断也不能被当成未入场证明；明确业务拒绝仍向上层抛错。
+{
+  const input = { request: '增加页面', target: { type: 'application' }, impact: { formalBranch: 'design_stage_revision', interactionId: 'impact-unacknowledged' }, sourceSessionId: 'source-session', sourceConversationThreadId: 'source-thread', sourceRunId: 'source-run' } as WorkflowDesignStageRevisionStart
+  const uncertain = harness()
+  uncertain.onSend(async () => { throw new Error('Failed to fetch') })
+  uncertain.onRead(async () => { throw new Error('Backend unavailable') })
+  await uncertain.runtime.startDesignRevision(input)
+  assert.equal(uncertain.calls.length, 1)
+  const rejected = harness()
+  rejected.onSend(async () => { throw new AgUiRunError('impact 已过期') })
+  await assert.rejects(rejected.runtime.startDesignRevision(input), /impact 已过期/)
+}
+
 {
   const h = harness()
   h.onSend(async () => result(confirmationWorkflow()))
@@ -1115,6 +1171,30 @@ async function waitForCondition<T>(
   assert.equal(h.calls.length, 0)
   assert.equal(h.readCalls(), 1)
   assert.equal(uiDesignRecoveryError(h.current()?.recovery), undefined)
+}
+
+// 显式重试对账到已完成的模板节点时，续接原事务，不重复生成模板或重放技术规划确认。
+{
+  const initial = planningState()
+  const continuation = { action: 'continue_revision_build' as const, changeId: 'change-ready',
+    formalBranch: 'design_stage_revision' as const, token: 'c'.repeat(48), technicalPlanSha256: 'a'.repeat(64) }
+  const lifecycle = { ...authoritativeLifecycle(initial), activeFormalRevision: {
+    changeId: continuation.changeId, formalBranch: continuation.formalBranch,
+    status: 'continuation_ready', technicalPlanSha256: continuation.technicalPlanSha256
+  } } as ApplicationLifecycle
+  const workflow: WorkflowRunPayload = { runId: 'template-completed', threadId: initial.threadId, events: [],
+    summary: { status: 'completed', phase: 'template_reconcile', revisionContinuation: continuation },
+    state: { lifecycle }, result: { lifecycle, revision_continuation: continuation } }
+  let handoffs = 0
+  const h = harness(initial, {
+    /** 仅记录服务端已签发的原事务交接。 */
+    onRevisionContinuation: async handoff => { handoffs++; assert.equal(handoff.continuation.changeId, continuation.changeId) }
+  })
+  h.onRead(async () => ({ workflow, lifecycle,
+    recovery: recoveryProjection(initial.threadId, { classification: 'completed', sourceRunId: workflow.runId }) }))
+  await h.runtime.retryCurrentFailure()
+  assert.equal(handoffs, 1)
+  assert.equal(h.calls.length, 0)
 }
 
 console.log('application planning runtime tests passed')

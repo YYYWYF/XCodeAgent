@@ -1,7 +1,8 @@
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
-  LoadingOutlined
+  LoadingOutlined,
+  PauseCircleOutlined
 } from '@ant-design/icons'
 import { Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
@@ -13,11 +14,12 @@ const { Text } = Typography
 
 type Props = {
   workflow?: WorkflowRunPayload
+  interrupted?: boolean
 }
 
 /** 展示设计变更意图识别和正式产物生成的实时 AG-UI 状态。 */
-export default function PlanningWorkflowActivity({ workflow }: Props): ReactElement | null {
-  const activity = planningWorkflowActivity(workflow)
+export default function PlanningWorkflowActivity({ workflow, interrupted }: Props): ReactElement | null {
+  const activity = planningWorkflowActivity(workflow, interrupted)
   if (!activity) return null
 
   return (
@@ -28,6 +30,8 @@ export default function PlanningWorkflowActivity({ workflow }: Props): ReactElem
       <span className={cx('planning-workflow-activity-icon')} aria-hidden="true">
         {activity.status === 'running' ? (
           <LoadingOutlined spin />
+        ) : activity.status === 'interrupted' ? (
+          <PauseCircleOutlined />
         ) : activity.status === 'failed' ? (
           <CloseCircleOutlined />
         ) : (

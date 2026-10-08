@@ -1,5 +1,5 @@
 import type { ApplicationLifecycle, WorkbenchExecution, WorkflowRunPayload } from '../../typings'
-import { isConversationWorkflow } from './conversationMode'
+import { conversationRevisionHandoffCommitted, isConversationWorkflow } from './conversationMode'
 import { workflowClarification } from './components/WorkflowRunCard/workflowClarification'
 
 export type PlanExecutionMode =
@@ -109,6 +109,7 @@ export function workflowInteractionAvailability(
 ): WorkflowInteractionAvailability {
   // 快速修改没有正式计划生命周期；它的确认卡由当前对话直接承接。
   if (isConversationWorkflow(workflow)) {
+    if (conversationRevisionHandoffCommitted(workflow, lifecycle)) return 'stale'
     return workflow.summary.status === 'requires_user_input' ? 'active' : 'stale'
   }
   const dagConfirmation = isDagConfirmationWorkflow(workflow)
@@ -183,6 +184,7 @@ export function workflowMessageInteractionAvailability(
     return workflowInteractionAvailability(workflow, lifecycle)
   }
   if (hasNewerMessage) return 'stale'
+  if (conversationRevisionHandoffCommitted(workflow, lifecycle)) return 'stale'
   return locallyManaged ? 'active' : workflowInteractionAvailability(workflow, lifecycle)
 }
 

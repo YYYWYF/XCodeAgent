@@ -59,7 +59,7 @@ import {
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage } from '../../types'
 import type { ChatSessionDevelopmentContinuation } from '../../../../service/chatSessions'
-import { isConversationWorkflow } from '../../conversationMode'
+import { conversationRevisionHandoffCommitted, isConversationWorkflow } from '../../conversationMode'
 import { workflowDevelopmentContinuation } from '../../developmentContinuation'
 import {
   isEntityDesignWorkflow,
@@ -75,6 +75,7 @@ import { workflowInteractionAvailability } from '../../planExecutionMode'
 import { phasePendingDetail } from './phasePending'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import PlanningWorkflowActivity from './PlanningWorkflowActivity'
+import { isTemplateEngineFailure } from '../../../../service/recoveryFailureMessage'
 import {
   isResiduePlanningPlaceholder,
   isSupersededPlanningStageEntryMessage,
@@ -734,9 +735,30 @@ export default function MessageList({
               )
               // 设计规划已经由专用进度块表达当前意图和生成阶段，不再重复展示
               // 通用 ProcessSteps 的“执行完成 / 已归档步骤”摘要。
-              const planningActivity = designPhasePlanning
-                ? planningWorkflowActivity(planningCardWorkflow)
+              // 仅同一运行的模板诊断可收掉旧规划进度卡，历史和其他会话不受影响。
+              const planningTemplateFailed = Boolean(
+                isCurrentPlanningMessage &&
+                  planningCardWorkflow?.summary.status === 'failed' &&
+                  planningState?.recovery?.sourceRunId === planningCardWorkflow.runId &&
+                  planningState.recovery.threadId === planningCardWorkflow.threadId &&
+                  planningState.recovery.failureDiagnostic?.sourceRunId === planningCardWorkflow.runId &&
+                  isTemplateEngineFailure(planningState.recovery.failureDiagnostic)
+              )
+              const planningInterrupted = Boolean(
+                isCurrentPlanningMessage &&
+                  !planningTemplateFailed &&
+                  planningCardWorkflow?.summary.status === 'failed' &&
+                  planningState?.recovery?.classification === 'ready_to_continue' &&
+                  planningState.recovery.sourceRunId === planningCardWorkflow.runId &&
+                  planningState.recovery.threadId === planningCardWorkflow.threadId
+              )
+              const planningActivity = designPhasePlanning && !planningTemplateFailed
+                ? planningWorkflowActivity(planningCardWorkflow, planningInterrupted)
                 : undefined
+              // 已验证中断复用原进度卡显示暂停；业务失败仍只走现有底部错误控制面。
+              const planningActivityVisible = Boolean(
+                planningActivity && (!messageError || planningActivity.status === 'interrupted')
+              )
               // 只有真正携带实体设计载荷的确认才渲染聊天卡片；
               // DDL 审批等其它确认类型继续走 WorkflowRunCard 的审批卡片。
               const entityDesignCardVisible =
@@ -810,7 +832,7 @@ export default function MessageList({
                 !applicationLifecycle?.activeFormalRevision
               const interactionAvailability =
                 planningCardWorkflow && requiresClarification
-                  ? browsingDesignHistory
+                  ? browsingDesignHistory || conversationRevisionHandoffCommitted(planningCardWorkflow, applicationLifecycle)
                     ? 'stale'
                     : messageIndex < messages.length - 1 && !currentPlanningInteraction
                       ? 'stale'
@@ -907,7 +929,7 @@ export default function MessageList({
                 message.revisionHandoff ||
                   message.developmentContinuation ||
                   showPlanningLoading ||
-                  (!messageError && planningActivity && planningCardWorkflow) ||
+                  (planningActivityVisible && planningCardWorkflow) ||
                   (!hideEntityWorkflowChrome &&
                     !designPhasePlanning &&
                     visibleProcessSteps?.length) ||
@@ -984,10 +1006,9 @@ export default function MessageList({
                             />
                           ))}
                         {!showPlanningLoading &&
-                        !messageError &&
-                        planningActivity &&
+                        planningActivityVisible &&
                         planningCardWorkflow ? (
-                          <PlanningWorkflowActivity workflow={planningCardWorkflow} />
+                          <PlanningWorkflowActivity workflow={planningCardWorkflow} interrupted={planningInterrupted} />
                         ) : null}
                         {!hideEntityWorkflowChrome &&
                           visibleProcessSteps &&

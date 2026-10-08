@@ -50,6 +50,10 @@ from app.services.application_revision_lifecycle import (
     submit_revision_impact,
 )
 from app.services.user_skill_runtime import validate_selected_user_skills
+from app.services.conversation_execution import ConversationExecution
+from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext
+from app.services.node_recovery_context import bind_recovery_runtime
+from app.services.workflow_reentry import SYNTHETIC_WORKFLOW_ENTRY_NODE
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
 
@@ -241,6 +245,12 @@ def conversation_capabilities() -> dict[str, Any]:
             "userVisibleExplanation": "reason-only",
         },
         "workflowIndependent": True,
+        "nodeRecovery": {
+            "endpoint": "/execution-recovery/execute",
+            "executionKind": "workbench",
+            "workflowScope": "conversation",
+            "authority": "shared-native-checkpoint-reentry",
+        },
         "targetRequired": False,
         "target": {
             "optional": True,
@@ -433,9 +443,19 @@ def build_conversation_ag_ui_stream(
     *,
     payload: dict[str, Any],
     accept: str | None = None,
+    native_recovery_context: NativeRecoveryRuntimeContext | None = None,
 ) -> AsyncIterator[str]:
     """执行自由对话 Graph，并投射完整 AG-UI 生命周期和进度。"""
 
+    if native_recovery_context is not None:
+        # 统一执行器已验证 checkpoint、claim、child 和资源归属；不接受客户端恢复节点。
+        values = dict(native_recovery_context.fork_snapshot.values)
+        payload = {
+            "threadId": native_recovery_context.thread_id,
+            "runId": native_recovery_context.new_run_id,
+            "messages": [{"role": "user", "content": str(values.get("request") or "继续二次修改")}],
+            "forwardedProps": {"conversation": {"workspaceRoot": native_recovery_context.workspace}},
+        }
     thread_id = str(payload.get("threadId") or uuid4())
     run_id = str(payload.get("runId") or f"conversation-{uuid4().hex[:12]}")
     normalized_payload = {**payload, "threadId": thread_id, "runId": run_id}
@@ -497,14 +517,15 @@ def build_conversation_ag_ui_stream(
                 decision="rejected",
             )
         await cleanup_workflow_checkpoints(workspace=workspace_root)
-        active_graph = await direct_modification_graph_for_request(
+        active_graph = native_recovery_context.graph if native_recovery_context else await direct_modification_graph_for_request(
             workspace=workspace_root
         )
         current_task = asyncio.current_task()
         if current_task is None:
             raise RuntimeError("快速修改必须运行在异步任务中。")
         workflow_run_registry.register(run_id, current_task, workspace=workspace_root, thread_id=thread_id)
-        lease: WorkspaceRunLease | None = None
+        lease: WorkspaceRunLease | None = native_recovery_context.workspace_lease if native_recovery_context else None
+        execution = ConversationExecution(workspace_root, thread_id, run_id, active_graph, native_recovery_context)
         events: list[dict[str, Any]] = []
         state_view: dict[str, Any] = {
             "request": user_request,
@@ -512,6 +533,12 @@ def build_conversation_ag_ui_stream(
             "selected_skill_names": list(request.selected_skill_names),
             "active_thread_id": thread_id,
             "active_run_id": run_id,
+            "workflow_scope": "conversation",
+            # 同一 thread 的新请求不继承上一轮确认；本轮分类/分析重新签发待确认内容。
+            "clarification": {},
+            "conversation_intent": "",
+            "conversation_response": "",
+            "direct_modification_result": {},
             "change_id": str(request.change_id or ""),
             "change_target": (
                 request.target.model_dump(by_alias=True, exclude_none=True)
@@ -560,7 +587,7 @@ def build_conversation_ag_ui_stream(
         persisted_revision_impact_ids: set[str] = set()
         config = {
             "configurable": {
-                "thread_id": f"conversation:{thread_id}",
+                "thread_id": thread_id,
             },
             "run_name": "devagentstudio-conversation",
             "tags": ["devagentstudio", "conversation"],
@@ -572,7 +599,12 @@ def build_conversation_ag_ui_stream(
             },
         }
         try:
+            if native_recovery_context is not None:
+                state_view = dict(native_recovery_context.fork_snapshot.values)
+                config = native_recovery_context.fork_config
             if (
+                native_recovery_context is None
+                and
                 request.handoff_decision in {"approved", "rejected"}
                 and not formal_revision_rejected
             ):
@@ -600,12 +632,15 @@ def build_conversation_ag_ui_stream(
                             workspace_root=workspace_root,
                         )
 
-            initial_node_name = str(
+            await execution.start(state_view, await active_graph.aget_state(config) if hasattr(active_graph, "aget_state") else None,
+                                  str((normalized_payload.get("forwardedProps") or {}).get("sessionId") or "") or None)
+            initial_node_name = native_recovery_context.recovery_plan.target_node if native_recovery_context else str(
                 state_view.get("direct_modification_resume_node")
                 or "scan_workspace_code"
             )
             if (
                 initial_node_name in {"execute_frontend", "execute_backend"}
+                and lease is None
                 and state_view.get("direct_modification_handoff_decision") == "approved"
             ):
                 # 小任务范围确认可能已经完成过 code.scan；此时首节点就是写入
@@ -618,6 +653,7 @@ def build_conversation_ag_ui_stream(
                     run_id=run_id,
                 )
             if not formal_revision_rejected:
+                await execution.started_node(initial_node_name)
                 await _report_direct_node_started(
                     report,
                     node_name=initial_node_name,
@@ -627,10 +663,10 @@ def build_conversation_ag_ui_stream(
                     thread_id=thread_id,
                     percent=0,
                 )
-            async for stream_mode, chunk in active_graph.astream(
-                state_view,
+            async for stream_mode, chunk in _conversation_graph_stream(active_graph,
+                None if native_recovery_context else state_view,
                 config=config,
-                stream_mode=["updates", "custom"],
+                context=native_recovery_context,
             ):
                 if stream_mode == "custom":
                     await _report_custom_progress(
@@ -647,6 +683,8 @@ def build_conversation_ag_ui_stream(
                     if not isinstance(update, dict):
                         continue
                     state_view.update(update)
+                    if node_name == SYNTHETIC_WORKFLOW_ENTRY_NODE:
+                        continue
                     if formal_revision_rejected:
                         # 取消分支只借收口节点清理同一 thread 的 checkpoint，
                         # 不对用户展示任何 Graph 执行步骤。
@@ -742,6 +780,8 @@ def build_conversation_ag_ui_stream(
                         and state_view.get("status") == "requires_user_input"
                     )
                     if next_node_name and not hide_next_pending_finalizer:
+                        if state_view.get("status") != "failed":
+                            await execution.started_node(next_node_name)
                         await _report_direct_node_started(
                             report,
                             node_name=next_node_name,
@@ -751,14 +791,20 @@ def build_conversation_ag_ui_stream(
                             thread_id=thread_id,
                             percent=DIRECT_NODE_PERCENT.get(node_name, 0),
                         )
-            final_state = dict((await active_graph.aget_state(config)).values)
+            final_state = dict((await active_graph.aget_state(
+                native_recovery_context.observation_config if native_recovery_context else config)).values)
+            await execution.finish(final_state)
             final_payload = direct_final_payload(final_state, events=events)
             return AgUiActionResult(
                 data=final_payload,
                 # 已经通过 TEXT_MESSAGE_CONTENT 增量送出的回复不能再次作为最终 delta 发送，避免正文重复。
                 message="" if streamed_text else str(final_payload["summary"]["message"]),
             )
+        except BaseException as error:
+            await execution.failed(error)
+            raise
         finally:
+            await execution.close()
             if lease is not None:
                 lease.release()
             workflow_run_registry.unregister(run_id, current_task)
@@ -785,6 +831,15 @@ def build_conversation_ag_ui_stream(
         # 自由对话 operation 会按工作区、thread 和 run 自行登记；避免通用包装层用同一 runId 重复登记。
         register_workspace_run=False,
     )
+
+
+async def _conversation_graph_stream(graph: Any, state: Any, *, config: dict[str, Any],
+                                     context: NativeRecoveryRuntimeContext | None):
+    """把原 Graph 流绑定到统一 Native 节点上下文，保留节点内部恢复与修复预算。"""
+
+    with bind_recovery_runtime(context.node_recovery_context() if context else None):
+        async for chunk in graph.astream(state, config=config, stream_mode=["updates", "custom"]):
+            yield chunk
 
 
 async def _report_direct_node_started(

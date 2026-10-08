@@ -31,6 +31,7 @@ from app.services.application_planning_persistence import (
 from app.services.application_revision_lifecycle import (
     begin_technical_plan_revision_generation,
     ensure_technical_plan_generation_lifecycle,
+    update_active_revision_progress,
 )
 from app.workspace.plan_documents import (
     commit_technical_plan_document,
@@ -402,6 +403,17 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
     )
     revision_continuation: dict[str, Any] = {}
     active_revision = lifecycle.active_formal_revision
+    if active_revision is not None and active_revision.formal_branch.value == "design_stage_revision":
+        # 确认文件与全部正式产物校验完成后，先提交修订进度再进入模板节点；
+        # 新事务节点必须保留原确认节点的生命周期同步，不能只更新磁盘文件。
+        update_active_revision_progress(
+            workspace,
+            change_id=active_revision.change_id,
+            status="design_planning",
+            current_artifact="technical-plan",
+            remaining_artifacts=[],
+        )
+        _, lifecycle = _ensure_technical_lifecycle(state)
     template_reconcile_pending = bool(
         active_revision is not None
         and active_revision.formal_branch.value

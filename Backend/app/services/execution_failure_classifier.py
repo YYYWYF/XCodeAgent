@@ -9,6 +9,7 @@ from app.domain.execution_recovery import (
     ExecutionFailureEvidence,
     ExecutionFailureOrigin,
 )
+from app.services.workspace_bootstrap.models import TemplateEngineError, WorkspaceBootstrapError
 
 
 _MODEL_OPERATIONS = frozenset(
@@ -65,6 +66,20 @@ def classify_execution_failure(
     """根据异常类型和受控操作上下文生成带安全诊断摘要的失败证据。"""
 
     normalized_operation = str(operation or "").strip() or None
+    # 模板领域的 models 模块不是模型 SDK，必须在通用模块归因前识别。
+    # 保留原可重放属性和真实 Graph 节点，恢复入口仍由既有 resolver 验证。
+    if isinstance(exc, WorkspaceBootstrapError):
+        is_engine_error = isinstance(exc, TemplateEngineError)
+        template_status = exc.http_status if is_engine_error else _http_status(exc)
+        return ExecutionFailureEvidence(
+            origin=ExecutionFailureOrigin.EXTERNAL_DEPENDENCY if is_engine_error else ExecutionFailureOrigin.BUSINESS,
+            code=_stable_code(exc, template_status),
+            operation=normalized_operation,
+            dependency="template_engine" if is_engine_error else "template",
+            http_status=template_status,
+            replay_compatible=True,
+            diagnostic_message=sanitize_failure_diagnostic(exc),
+        )
     status = _http_status(exc)
     module_name = type(exc).__module__.lower()
     class_name = type(exc).__name__

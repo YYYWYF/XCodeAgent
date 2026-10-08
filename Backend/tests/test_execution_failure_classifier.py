@@ -12,6 +12,7 @@ from app.services.execution_failure_classifier import (
     public_failure_diagnostic,
     sanitize_failure_diagnostic,
 )
+from app.services.workspace_bootstrap.models import TemplateEngineError, TemplateStateError
 
 
 class FakeModelFailure(Exception):
@@ -29,6 +30,38 @@ class FakeModelFailure(Exception):
 
 class ExecutionFailureClassifierTests(unittest.TestCase):
     """覆盖失败摘要的脱敏、限长和 recovery identity 稳定性。"""
+
+    def test_template_validation_failure_is_not_a_model_call(self) -> None:
+        """模板运行校验失败属于模板业务失败，保留原节点与安全诊断。"""
+
+        failure = classify_execution_failure(
+            TemplateStateError("PROJECT_LAUNCH_FAILED：前端依赖安装失败。"),
+            operation="template_reconcile",
+        )
+        self.assertEqual(failure.origin, ExecutionFailureOrigin.BUSINESS)
+        self.assertEqual(failure.dependency, "template")
+        self.assertEqual(failure.code, "templatestateerror")
+        self.assertEqual(failure.operation, "template_reconcile")
+        self.assertTrue(failure.replay_compatible)
+        self.assertEqual(failure.diagnostic_message, "PROJECT_LAUNCH_FAILED：前端依赖安装失败。")
+
+    def test_template_engine_error_is_not_a_model_call(self) -> None:
+        """模板配置与 HTTP 错误保留真实原因及重试属性，不受 models 模块名误导。"""
+
+        for status in (None, 403, 503):
+            with self.subTest(status=status):
+                failure = classify_execution_failure(
+                    TemplateEngineError("Template Engine 地址未配置。", http_status=status),
+                    operation="template_reconcile",
+                )
+                self.assertEqual(failure.origin, ExecutionFailureOrigin.EXTERNAL_DEPENDENCY)
+                self.assertEqual(failure.dependency, "template_engine")
+                self.assertEqual(failure.code, f"http_{status}" if status else "templateengineerror")
+                self.assertEqual(failure.operation, "template_reconcile")
+                self.assertEqual(failure.http_status, status)
+                self.assertTrue(failure.replay_compatible)
+                self.assertIsNone(failure.model)
+                self.assertEqual(failure.diagnostic_message, "Template Engine 地址未配置。")
 
     def test_model_failure_keeps_safe_diagnostic_message(self) -> None:
         """模型失败应保留用户可读摘要，但移除常见凭据值。"""

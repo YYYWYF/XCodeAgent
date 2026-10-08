@@ -656,7 +656,7 @@ class RevisionRoutingTests(unittest.TestCase):
         self.assertEqual(update["design_change_generation_target"], "ui_confirmation")
         self.assertEqual(update["design_change_affected_page_ids"], ["orders"])
         self.assertEqual(update["resume_from"], "")
-        self.assertIn("currentArtifact", update["design_change_reason"])
+        self.assertEqual(update["design_change_reason"], "")
         self.assertEqual(update["technical_plan"], {})
         self.assertEqual(update["technical_plan_path"], "")
         self.assertEqual(update["technical_plan_json_path"], "")

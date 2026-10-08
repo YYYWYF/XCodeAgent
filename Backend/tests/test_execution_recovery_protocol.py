@@ -23,6 +23,10 @@ from app.protocols.execution_recovery import (
     _resolve_current_recovery_source,
     build_execution_recovery_ag_ui_stream,
 )
+from app.domain.application_lifecycle import ApplicationInitialization
+from app.services.application_lifecycle import (
+    create_application_lifecycle, write_application_lifecycle, start_workbench_execution,
+)
 
 
 class _RecoverySnapshot:
@@ -276,6 +280,13 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
             updated_at=now,
             ended_at=now,
         )
+        # 先提供当前合同要求的 lifecycle ownership，才能单独验证缺少 history 的拒绝路径。
+        lifecycle = create_application_lifecycle(application_id="history-app", application_name="History")
+        lifecycle = lifecycle.model_copy(update={"initialization": ApplicationInitialization(
+            stage="ready_for_workbench", status="completed", threadId="planning")})
+        write_application_lifecycle(self.workspace, lifecycle, expected_revision=0)
+        start_workbench_execution(self.workspace, scope="application", target_id="application",
+            page_id=None, thread_id=source.thread_id, run_id=source.run_id, phase="B")
         await insert_execution(source)
         snapshot = _RecoverySnapshot(source.thread_id, "source-checkpoint")
         snapshot.values["active_run_id"] = source.run_id

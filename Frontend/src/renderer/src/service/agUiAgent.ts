@@ -646,6 +646,7 @@ export class AgUiChatSession {
     let processSteps: ProcessStepRecord[] = []
     let runErrorMessage = ''
     let runErrorCode: string | undefined
+    let runFinished = false
     const emitToolCalls = (nextToolCalls: ToolCallRecord[]): void => {
       toolCalls = nextToolCalls
       options.onToolCalls?.(toolCalls)
@@ -677,7 +678,10 @@ export class AgUiChatSession {
             processSteps = mergeProcessStep(processSteps, step)
             options.onProcessSteps?.(processSteps)
           }
-          if (workflow) options.onWorkflow?.(workflow)
+          if (workflow) {
+            emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
+            options.onWorkflow?.(workflow)
+          }
         }
         if (event.name === 'llm.token') {
           // 规划模型 token 是内部 JSON 生成过程，只由 Workflow 事件驱动进度 UI，禁止写入聊天正文。
@@ -715,6 +719,10 @@ export class AgUiChatSession {
         // RUN_ERROR 是运行失败终态；HttpAgent 不会自动 reject，需要在会话边界显式抛出。
         runErrorMessage = event.message || 'Workflow 运行失败，请重试。'
         runErrorCode = event.code
+      },
+      onRunFinishedEvent: () => {
+        // HTTP 流结束不等于节点完成；停服导致的提前 EOF 必须进入原连接错误路径。
+        runFinished = true
       },
       onToolCallStartEvent: ({ event }) => {
         emitToolCalls(applyToolCallEvent(toolCalls, 'start', event))
@@ -755,6 +763,10 @@ export class AgUiChatSession {
         toolCalls,
         processSteps
       })
+    }
+    // 提前 EOF 检查仅用于本次二次修改接入，主 Workflow（含 Build）保持原行为。
+    if (!runFinished && (options.conversation || workflow?.state?.workflow_scope === 'conversation')) {
+      throw new Error('Backend 连接中断，未收到运行结束回执。请重试同步当前节点状态。')
     }
     const assistantMessage = result.newMessages.find(
       (newMessage) => newMessage.role === 'assistant'

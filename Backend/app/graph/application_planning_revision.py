@@ -109,8 +109,7 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
             reason=(
                 "业务访问控制必须由 RequirementSpec 持有，已纠正 formal revision 的旧起点。"
                 if target != authoritative_target
-                else f"formal revision 起点由 lifecycle.currentArtifact 固定为 {target}，"
-                "直接进入对应正式产物生成节点。"
+                else request
             ),
             affected_page_ids=authoritative_page_ids,
             response="",
@@ -152,6 +151,9 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         ("requirement_change", "product_behavior"): "product_planning",
         ("ui_change", "ui"): "ui_confirmation",
     }.get((decision.intent, decision.change_level))
+    # 已确认的正式修订直接进入生成，不向用户展示内部起点说明。
+    if authoritative_target is not None and semantic_target == authoritative_target:
+        reason = ""
     product_stage_conversation = bool(state.get("product_stage_conversation"))
     if product_stage_conversation and authoritative_target is None:
         # 已完成应用回到产品阶段时只允许 Coordinator 回答；正式产品修改必须

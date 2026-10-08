@@ -9,10 +9,18 @@ const MODEL_FAILURE_MESSAGES: Record<string, string> = {
   UNIT_GENERATION_INFRASTRUCTURE_FAILURE: '生成执行计划失败，未能确定具体原因。请重试。'
 }
 
+/** 按模板领域的结构化诊断识别失败，不从错误文本猜测来源。 */
+export function isTemplateEngineFailure(diagnostic?: RecoveryFailureDiagnostic | null): boolean {
+  return ['template_engine', 'template'].includes(diagnostic?.dependency || '') ||
+    ['templateengineerror', 'templatestateerror', 'templateconfigerror', 'templatepackageerror',
+      'workspacebootstrapreadinesserror', 'workspacebootstraperror'].includes(diagnostic?.code || '')
+}
+
 /** 优先使用同一执行的后端中文说明，仅以明确错误码或 HTTP 状态补充模型原因。 */
 export function recoveryFailureMessage(diagnostic?: RecoveryFailureDiagnostic | null): string | undefined {
   if (!diagnostic) return undefined
   if (diagnostic.userMessage?.trim()) return diagnostic.userMessage.trim()
+  if (isTemplateEngineFailure(diagnostic)) return diagnostic.message?.trim() || '模板处理失败，请查看错误详情。'
   if (MODEL_FAILURE_MESSAGES[diagnostic.code]) return MODEL_FAILURE_MESSAGES[diagnostic.code]
   if (diagnostic.code === 'UNIT_GENERATION_MODEL_HTTP_ERROR' || diagnostic.origin === 'model_call') {
     switch (diagnostic.httpStatus) {

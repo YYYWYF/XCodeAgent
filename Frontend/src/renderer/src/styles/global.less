@@ -115,6 +115,24 @@ textarea[disabled],
   background: var(--wb-bg);
 }
 
+// 重试与恢复按钮不播放 Ant Design 外扩光晕；键盘仍保留清晰的主题焦点提示。
+.@{class-prefix}-connection-status-banner-action.ant-btn,
+.@{class-prefix}-agent-error-card-retry.ant-btn,
+.@{class-prefix}-application-planning-recovery-incident-action.ant-btn {
+  &[ant-click-animating-without-extra-node='true']::after,
+  &[ant-click-animating='true']::after,
+  .ant-click-animating-node {
+    display: none;
+    animation: none;
+    box-shadow: none;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-focus, var(--modal-border));
+    outline-offset: 2px;
+  }
+}
+
 /* Ant Design 浮层通过 Portal 挂载到 body，需要从当前页面同步主题。 */
 body:has(.@{class-prefix}-workbench-shell[data-theme='light']),
 body:has(.@{class-prefix}-welcome-page[data-theme='light']) {

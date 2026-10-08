@@ -280,7 +280,9 @@ export function ContractSection({
                   )
                 })
               ) : (
-                <Text type="secondary">暂无 Endpoint</Text>
+                <div className={cx('technical-plan-endpoint-empty')}>
+                  <Text type="secondary">暂无 Endpoint</Text>
+                </div>
               )}
             </div>
           </div>

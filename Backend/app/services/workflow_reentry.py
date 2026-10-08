@@ -132,13 +132,18 @@ class BusinessTargetResolver:
         )
         target_node = str(source.current_node or "").strip()
         if (
-            target_node not in {
+            (target_node not in {
                 "development_readiness_gate", "inspect_workspace",
                 "prepare_build_tasks", "build",
                 "unit_test", "unit_test_repair",
                 "integration_test", "small_task_repair",
                 "code_review", "acceptance",
-            }
+            } and not (source.workflow_scope == "conversation" and target_node in {
+                "scan_workspace_code", "classify_intent", "scan_change_impact_code",
+                "respond_conversation", "answer_workspace", "execute_frontend",
+                "execute_backend", "execute_workspace", "validate_direct_fix",
+                "direct_modification_repair", "finalize_direct_modification",
+            }))
             or (
                 require_source_lifecycle
                 and (

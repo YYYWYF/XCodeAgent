@@ -5,7 +5,7 @@ import type {
 } from '../typings'
 
 export type PlanningWorkflowActivity = {
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'interrupted'
   title: string
   detail: string
   intentLabel?: string
@@ -346,8 +346,6 @@ function planningPhaseForLifecycleStage(stage: string): string {
 
 // 优先使用权威生命周期收口设计到规划的边界，再读取节点事件兼容流式摘要滞后。
 export function planningWorkflowPhase(workflow?: WorkflowRunPayload): string {
-  const lifecyclePhase = planningPhaseForLifecycleStage(planningWorkflowLifecycleStage(workflow))
-  if (lifecyclePhase) return lifecyclePhase
   const events = workflow?.events || []
   const lastEvent = events.length ? events[events.length - 1] : undefined
   const startedPhase =
@@ -355,6 +353,10 @@ export function planningWorkflowPhase(workflow?: WorkflowRunPayload): string {
       ? lastEvent.nodeName || lastEvent.node?.id
       : undefined
   const phase = String(startedPhase || workflow?.summary?.phase || '')
+  // 模板收口已进入独立节点时，旧的技术规划确认 lifecycle 不能覆盖真实执行阶段。
+  if (phase === 'template_reconcile') return phase
+  const lifecyclePhase = planningPhaseForLifecycleStage(planningWorkflowLifecycleStage(workflow))
+  if (lifecyclePhase) return lifecyclePhase
   // TechnicalPlan 的事务子节点都属于同一个可见规划阶段；首帧尚无 lifecycle 时也要显示生成进度。
   return phase.startsWith('technical_planning_') ? 'technical_planning' : phase
 }
@@ -477,10 +479,19 @@ export function planningRequirementsDocumentGenerating(
 
 // 把创建规划 Graph 的实时节点和意图结果转换为聊天区可直接展示的进度文案。
 export function planningWorkflowActivity(
-  workflow?: WorkflowRunPayload
+  workflow?: WorkflowRunPayload,
+  interrupted = false
 ): PlanningWorkflowActivity | undefined {
   if (!workflow) return undefined
   const phase = planningWorkflowPhase(workflow)
+  // 只由当前会话已验证的中断投影启用暂停展示，不能把旧 lifecycle 当作仍在生成。
+  if (interrupted && phase === 'technical_planning') {
+    return {
+      status: 'interrupted',
+      title: '技术规划已中断',
+      detail: '已保留当前进度，点击下方“继续执行”接着完成技术规划。'
+    }
+  }
   const status = String(workflow.summary.status || 'running')
   const intent = readDesignIntent(workflow)
   const designChangeSubmission =

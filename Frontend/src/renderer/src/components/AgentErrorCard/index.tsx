@@ -10,6 +10,7 @@ type AgentErrorCardProps = {
   error?: string
   onRetry?: () => void
   retrying?: boolean
+  retryDisabled?: boolean
   retryLabel?: string
   title?: string
 }
@@ -19,6 +20,7 @@ export default function AgentErrorCard({
   error,
   onRetry,
   retrying,
+  retryDisabled = false,
   retryLabel = '重试',
   title
 }: AgentErrorCardProps): ReactElement {
@@ -58,6 +60,7 @@ export default function AgentErrorCard({
             className={cx('agent-error-card-retry')}
             icon={<RedoOutlined />}
             loading={retrying}
+            disabled={retryDisabled}
             onClick={onRetry}
             type="primary"
           >

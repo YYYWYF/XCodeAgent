@@ -24,6 +24,7 @@ from app.services.execution_recovery_action_planner import (
     plan_interrupted_continue_action,
 )
 from app.services.execution_failure_classifier import public_failure_diagnostic
+from app.services.execution_recovery import recovery_graph_for_execution
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.execution_recovery_reconciliation import (
     reconcile_interrupted_execution_state,
@@ -141,7 +142,7 @@ async def _resolve_candidate(
         if record.execution_kind == "application_planning"
         else workflow_graph_for_request
     )
-    graph = await graph_factory(
+    graph = await recovery_graph_for_execution(record) if record.workflow_scope == "conversation" else await graph_factory(
         workspace=record.workspace,
         project_id=record.project_id,
     )

@@ -1,4 +1,5 @@
 import type { ApplicationLifecycle, WorkflowClarification, WorkflowRunPayload } from '../../../../typings'
+import { isConversationWorkflow } from '../../conversationMode'
 
 /** 同 Run/Thread 生命周期确认单测正在执行，扫描进度的临时 phase 不改变业务阶段。 */
 export function workflowUnitTestRunning(workflow: WorkflowRunPayload): boolean {
@@ -19,6 +20,10 @@ const WORKFLOW_PHASE_CONFIRMATION_MODES: Record<string, string> = {
 export function workflowClarification(
   workflow: WorkflowRunPayload
 ): WorkflowClarification | undefined {
+  // 二次修改只有当前轮等待输入时才展示确认，扫描/分类期间不读取旧 checkpoint 或事件中的表单。
+  if (isConversationWorkflow(workflow) && workflow.summary.status !== 'requires_user_input') {
+    return undefined
+  }
   const candidates: unknown[] = [
     workflow.summary.clarification,
     workflow.state?.clarification,

@@ -1780,8 +1780,8 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
   margin-top: 16px;
 }
 
-// 「修改」按钮：次要样式，强调色边框与文字，与 primary「确认并继续规划」搭配。
-.ant-btn.@{class-prefix}-requirement-spec-edit-btn {
+// 「修改」按钮仅在可用时使用强调色；禁用时沿用主题的默认灰化样式。
+.ant-btn.@{class-prefix}-requirement-spec-edit-btn:not(:disabled) {
   color: var(--wb-accent, #6b3cf0);
   border-color: var(--wb-accent-border, rgba(107, 60, 240, 0.3));
   background: var(--wb-surface, #ffffff);
@@ -1791,6 +1791,14 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
     border-color: var(--wb-accent, #6b3cf0);
     background: var(--wb-accent-soft, rgba(107, 60, 240, 0.06));
   }
+}
+
+// 禁用的文档修改按钮使用浅色/深色工作台共有的灰化主题变量。
+.ant-btn.@{class-prefix}-requirement-spec-edit-btn:disabled {
+  color: var(--wb-text-tertiary) !important;
+  border-color: var(--wb-border) !important;
+  background: var(--wb-surface-subtle) !important;
+  box-shadow: none;
 }
 
 // 需求文档修改弹窗：Modal portal 挂在 body 下，脱离 .workbench-shell 的 --wb-* 变量域，

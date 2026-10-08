@@ -32,6 +32,7 @@ from app.persistence.execution_recovery import (
 )
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.execution_recovery import recovery_graph_for_execution
 from app.services.execution_recovery_executor import (
     NativeRecoveryRuntimeContext,
     WorkflowReentryExecutor,
@@ -138,12 +139,7 @@ def build_execution_recovery_ag_ui_stream(
                         "INVALID_EXECUTION_RECOVERY_REQUEST",
                         "workspaceRoot 与 source execution 的 workspace 不一致。",
                     )
-                async for frame in build_workflow_ag_ui_stream(
-                    graph=reconciled_context.graph,
-                    payload={},
-                    accept=accept,
-                    native_recovery_context=reconciled_context,
-                ):
+                async for frame in _native_recovery_stream(reconciled_context, accept):
                     yield frame
                 return
             source = await _load_requested_recovery_source(
@@ -169,7 +165,7 @@ def build_execution_recovery_ag_ui_stream(
                 if source.execution_kind == "application_planning"
                 else workflow_graph_for_request
             )
-            graph = await graph_factory(
+            graph = await recovery_graph_for_execution(source) if source.workflow_scope == "conversation" else await graph_factory(
                 workspace=workspace,
                 project_id=source.project_id,
             )
@@ -296,12 +292,7 @@ def build_execution_recovery_ag_ui_stream(
                     "RECOVERY_ACTION_NOT_EXECUTABLE",
                     "当前 RecoveryActionPlan 没有可执行的 Workbench action。",
                 )
-            async for frame in build_workflow_ag_ui_stream(
-                graph=context.graph,
-                payload={},
-                accept=accept,
-                native_recovery_context=context,
-            ):
+            async for frame in _native_recovery_stream(context, accept):
                 yield frame
             return
         except Exception as exc:
@@ -599,7 +590,7 @@ async def _resolve_action_source_run(
             if record.execution_kind == "application_planning"
             else workflow_graph_for_request
         )
-        graph = await graph_factory(workspace=workspace, project_id=record.project_id)
+        graph = await recovery_graph_for_execution(record) if record.workflow_scope == "conversation" else await graph_factory(workspace=workspace, project_id=record.project_id)
         reentry_plan = None
         if record.status is DurableExecutionStatus.FAILED:
             action_plan, reentry_plan = await _resolve_failed_action(
@@ -676,7 +667,7 @@ async def _reconcile_prepared_lineage(
             if child.execution_kind == "application_planning"
             else workflow_graph_for_request
         )
-        graph = await graph_factory(workspace=workspace, project_id=child.project_id)
+        graph = await recovery_graph_for_execution(child) if child.workflow_scope == "conversation" else await graph_factory(workspace=workspace, project_id=child.project_id)
         reconciled = await reconcile_recovery_attempt(
             workspace=workspace,
             new_run_id=attempt.new_run_id,
@@ -697,3 +688,13 @@ __all__ = [
     "build_execution_recovery_ag_ui_stream",
     "execution_recovery_capabilities",
 ]
+
+
+def _native_recovery_stream(context: NativeRecoveryRuntimeContext, accept: str | None) -> AsyncIterator[str]:
+    """统一准备完成后交回原协议流；恢复 claim、fork 和 action authority 不分叉。"""
+
+    if context.workflow_scope == "conversation":
+        from app.protocols.direct_modification import build_conversation_ag_ui_stream
+        return build_conversation_ag_ui_stream(payload={}, accept=accept, native_recovery_context=context)
+    return build_workflow_ag_ui_stream(graph=context.graph, payload={}, accept=accept,
+                                      native_recovery_context=context)

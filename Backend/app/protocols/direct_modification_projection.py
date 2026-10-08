@@ -84,6 +84,7 @@ def direct_summary(state: dict[str, Any], *, status: str) -> dict[str, Any]:
     return {
         "status": status,
         "phase": str(state.get("phase") or "conversation"),
+        "lifecycle": state.get("lifecycle"),
         "message": direct_state_message(state) or str(result.get("summary") or "自由对话已结束。"),
         "request": str(state.get("request") or ""),
         "previewUrl": state.get("preview_url") or result.get("previewUrl"),
@@ -112,6 +113,7 @@ def public_direct_state(state: dict[str, Any]) -> dict[str, Any]:
 
     keys = (
         "request",
+        "workflow_scope",
         "change_id",
         "change_target",
         "phase",

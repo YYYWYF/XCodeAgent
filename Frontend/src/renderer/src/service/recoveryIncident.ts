@@ -6,6 +6,7 @@ import type {
   RecoveryFailureDiagnostic
 } from './recoveryActionPlan'
 import { parseRecoveryFailureDiagnostic } from './recoveryActionPlan'
+import { isTemplateEngineFailure } from './recoveryFailureMessage'
 
 export type RecoveryIncidentPresentation =
   | {
@@ -93,12 +94,19 @@ export function applicationPlanningRecoveryIncident(
   state?: ApplicationPlanningCurrentState
 ): RecoveryIncidentPresentation | undefined {
   if (!state) return undefined
+  // 当前 Planning transport 已进入执行时，旧 Incident 只保留为后台证据，
+  // 不再显示“执行已中断”；失败收口后仍由最新对账结果决定恢复入口。
+  if (state.transportState === 'running') return undefined
   const recovery = state.recovery
   const actionPlan = recovery?.recoveryActionPlan
+  const templateFailure = recovery?.failureDiagnostic?.sourceRunId === recovery?.sourceRunId &&
+    isTemplateEngineFailure(recovery?.failureDiagnostic)
+  const failureTitle = recovery?.failureDiagnostic?.operation === 'template_reconcile'
+    ? '模板更新失败' : '模板生成失败'
   if (recovery && actionPlan?.status === 'recoverable' && actionPlan.primaryAction) {
     return {
       kind: 'recoverable',
-      title: '执行已中断',
+      title: templateFailure ? failureTitle : '执行已中断',
       failureDiagnostic: recovery.failureDiagnostic,
       failureMessage: currentPlanningFailureMessage(state, actionPlan),
       recoveryMessage: actionPlan.message,
@@ -109,7 +117,7 @@ export function applicationPlanningRecoveryIncident(
   if (actionPlan?.status === 'needs_attention') {
     return {
       kind: 'needs_attention',
-      title: '执行需要处理',
+      title: templateFailure ? failureTitle : '执行需要处理',
       failureDiagnostic: recovery?.failureDiagnostic,
       failureMessage: currentPlanningFailureMessage(state, actionPlan),
       recoveryMessage: actionPlan.message,

@@ -7,6 +7,7 @@ import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recovery
 import AgentErrorCard from '../src/renderer/src/components/AgentErrorCard'
 import {
   globalFallbackState,
+  conversationUsesWorkflowRecovery,
   acceptancePreviewCanFocus,
   latestConversationFailure,
   NO_RECOVERY_ENTRY_ERROR,
@@ -31,6 +32,19 @@ import './workflowConversationRuntime.test'
 import './workbenchRunPresentation.test'
 import './workbenchRunRefresh.test'
 import './templateRecovery.test'
+
+test('二次修改断线及恢复候选始终复用 Workflow 重试，预览断线不抢入口', () => {
+  const healthy = { conversationActive: true, workflowConnectionStatus: 'healthy',
+    previewConnectionUnavailable: false, hasRecovery: false, hasError: false }
+  assert.equal(conversationUsesWorkflowRecovery(healthy), false)
+  assert.equal(conversationUsesWorkflowRecovery({ ...healthy, previewConnectionUnavailable: true }), true)
+  assert.equal(conversationUsesWorkflowRecovery({ ...healthy, workflowConnectionStatus: 'unavailable' }), true)
+  assert.equal(conversationUsesWorkflowRecovery({ ...healthy, workflowConnectionStatus: 'reconnecting' }), true)
+  assert.equal(conversationUsesWorkflowRecovery({ ...healthy, hasRecovery: true }), true)
+  assert.equal(conversationUsesWorkflowRecovery({ ...healthy, hasError: true }), true)
+  assert.equal(conversationUsesWorkflowRecovery({ ...healthy, conversationActive: false,
+    previewConnectionUnavailable: true }), false)
+})
 
 /** 构造 Backend 签发的唯一 durable Recovery 候选。 */
 function recoveryCandidate(

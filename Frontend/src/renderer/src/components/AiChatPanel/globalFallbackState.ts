@@ -50,3 +50,15 @@ export function acceptancePreviewCanFocus(phase: string, previewOpen: boolean, f
   return phase === 'acceptance' && previewOpen && !fallbackVisible
 }
 export const NO_RECOVERY_ENTRY_ERROR = '已同步后端状态，但当前会话没有可验证的恢复入口。'
+
+/** 二次修改的执行故障由原统一恢复处理，预览订阅的断线不能抢走按钮。 */
+export function conversationUsesWorkflowRecovery(input: {
+  conversationActive: boolean
+  workflowConnectionStatus: string
+  previewConnectionUnavailable: boolean
+  hasRecovery: boolean
+  hasError: boolean
+}): boolean {
+  return input.conversationActive && (input.workflowConnectionStatus !== 'healthy' ||
+    input.previewConnectionUnavailable || input.hasRecovery || input.hasError)
+}

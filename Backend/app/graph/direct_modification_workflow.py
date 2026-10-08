@@ -19,6 +19,7 @@ from app.graph.nodes.workspace_inspection import scan_workspace_code
 from app.graph.nodes.direct_repair import direct_modification_repair
 from app.graph.state import ProjectState
 from app.persistence.checkpoints import workflow_checkpoint_db_path, workflow_checkpointer
+from app.services.workflow_reentry import SYNTHETIC_WORKFLOW_ENTRY_NODE, workflow_entry
 
 
 _DIRECT_ENTRY_NODES = {
@@ -174,6 +175,7 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
     """构建不依赖正式规划产物的快速修改 LangGraph。"""
 
     builder = StateGraph(ProjectState)
+    builder.add_node(SYNTHETIC_WORKFLOW_ENTRY_NODE, workflow_entry)
     builder.add_node("classify_intent", classify_direct_modification)
     builder.add_node("scan_workspace_code", scan_workspace_code)
     builder.add_node("scan_change_impact_code", scan_change_impact_code)
@@ -190,7 +192,7 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
     # 确认续跑由协议层从同一 thread 的服务端 checkpoint 写入首节点标记，
     # 因此可以跳过重复的导航扫描和意图分类，但仍经过必要的 code.scan 闸门。
     builder.add_conditional_edges(
-        START,
+        SYNTHETIC_WORKFLOW_ENTRY_NODE,
         _route_direct_entry,
         {
             "scan_workspace_code": "scan_workspace_code",
@@ -201,6 +203,8 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
             "finalize_direct_modification": "finalize_direct_modification",
         },
     )
+    # 与主 Workflow 相同，先提交无副作用入口，首个业务节点也具备精确重入 checkpoint。
+    builder.add_edge(START, SYNTHETIC_WORKFLOW_ENTRY_NODE)
     builder.add_conditional_edges(
         "scan_workspace_code",
         _route_scan_workspace,

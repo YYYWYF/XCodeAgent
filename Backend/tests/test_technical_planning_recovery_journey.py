@@ -24,6 +24,8 @@ from app.domain.execution_recovery import (
     DurableExecutionStatus,
     RecoveryActionKind,
 )
+from app.domain.application_revision import ActiveFormalRevision, RevisionTarget
+from app.graph.nodes.application_technical_planning import technical_planning_confirm
 from app.graph.application_planning_workflow import (
     application_planning_graph_for_request,
 )
@@ -55,7 +57,8 @@ from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
     resolve_recovery_lineage_head,
 )
-from app.workspace.plan_documents import technical_plan_json_path
+from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_json_path
+from app.services.template_reconcile.finalization import claim_template_reconcile_finalization
 from app.workspace.product_plan_documents import (
     write_confirmed_product_plan_documents,
 )
@@ -336,7 +339,7 @@ class TechnicalPlanningRecoveryJourneyHarness:
         primary_action = action_plan.get("primaryAction")
         if not isinstance(primary_action, dict):
             raise AssertionError("action plan has no primary action")
-        _ = [
+        self.last_recovery_frames = [
             frame
             async for frame in build_execution_recovery_ag_ui_stream(
                 payload={
@@ -371,6 +374,75 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             project_id=self.harness.project_id,
         )
         self.harness.close()
+
+    async def test_design_revision_confirmation_advances_before_template_reconcile(self) -> None:
+        """技术规划确认同时推进正式修订进度，下一模板节点无需重放确认。"""
+
+        harness = self.harness
+        lifecycle = persist_application_lifecycle_transition(
+            harness.workspace,
+            stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+            status=ApplicationLifecycleStatus.AWAITING_USER,
+            active_run_id=harness.source_run_id,
+        )
+        active = ActiveFormalRevision(
+            changeId="chg-design-confirmation",
+            formalBranch="design_stage_revision",
+            sourceThreadId="conversation-thread",
+            sourceRunId="conversation-run",
+            request=harness.request,
+            target=RevisionTarget(type="application"),
+            impactInteractionId="impact-design",
+            planningThreadId=harness.thread_id,
+            status="design_planning",
+            currentArtifact="ui-design",
+            remainingArtifacts=["technical-plan"],
+        )
+        write_application_lifecycle(
+            harness.workspace,
+            lifecycle.model_copy(update={
+                "revision": lifecycle.revision + 1,
+                "active_formal_revision": active,
+            }),
+            expected_revision=lifecycle.revision,
+        )
+        state = {
+            "workspace": str(harness.workspace),
+            "workflow_scope": "application_planning",
+            "active_run_id": harness.source_run_id,
+            "requirement_spec": harness.requirement_spec,
+            "requirement_spec_path": str(harness.workspace / ".devagentstudio/specs/requirement-spec.md"),
+            "product_plan": harness.product_plan,
+            "product_plan_path": str(harness.workspace / ".devagentstudio/plans/product-plan.md"),
+            "ui_designs": harness.ui_designs,
+            "technical_plan": harness.candidate,
+            "application_planning_interaction": {"action": "confirm"},
+            "application_planning_recovery_boundary": application_planning_boundary_payload(
+                operation_id="technical-plan-confirmation",
+                operation=ApplicationPlanningOperation.INITIAL,
+                boundary=ApplicationPlanningRecoveryBoundary.ARTIFACT_COMMITTED,
+                request="",
+                candidate=harness.candidate,
+            ),
+        }
+        markdown_path, json_path = commit_technical_plan_document(state, harness.candidate)
+        state.update(technical_plan_path=markdown_path, technical_plan_json_path=json_path)
+        update = technical_planning_confirm(state)
+        self.assertEqual(update["status"], "completed")
+        self.assertTrue(update["template_reconcile_pending"])
+        persisted = load_application_lifecycle(harness.workspace)
+        self.assertEqual(persisted.active_formal_revision.current_artifact, "technical-plan")
+        self.assertEqual(persisted.active_formal_revision.remaining_artifacts, [])
+        self.assertEqual(
+            update["lifecycle"]["activeFormalRevision"]["currentArtifact"], "technical-plan"
+        )
+        self.assertEqual(json.loads(Path(json_path).read_text())["confirmation_status"], "confirmed")
+        claim = claim_template_reconcile_finalization(
+            harness.workspace,
+            change_id=active.change_id,
+            technical_plan_path=json_path,
+        )
+        self.assertTrue(claim.acquired)
 
     async def test_failed_technical_planning_retries_exact_generation_node(self) -> None:
         """Technical Planning 生成异常只能从精确失败节点重入并使用当前模型。"""
@@ -428,6 +500,14 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 ApplicationLifecycleStatus.AWAITING_USER,
             )
             self.assertEqual(lifecycle.active_run_id, run_b.run_id)
+            # 真实恢复终帧必须使用节点写入的新 lifecycle，不能被 admission 的失败快照覆盖。
+            snapshots = [json.loads(line[5:].strip())["snapshot"]["workflow"]
+                for frame in self.harness.last_recovery_frames for line in frame.splitlines()
+                if line.startswith("data:") and json.loads(line[5:].strip()).get("type") == "STATE_SNAPSHOT"]
+            self.assertTrue(snapshots)
+            final_lifecycle = snapshots[-1]["result"]["lifecycle"]
+            self.assertEqual(final_lifecycle["initialization"]["status"], "awaiting_user")
+            self.assertEqual(final_lifecycle["initialization"]["stage"], "awaiting_technical_plan_confirmation")
             self.assertTrue(
                 technical_plan_json_path(
                     {"workspace": str(self.harness.workspace)}

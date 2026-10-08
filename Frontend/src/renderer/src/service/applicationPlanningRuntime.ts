@@ -265,6 +265,11 @@ export class ApplicationPlanningRuntime {
       if (outcome.status !== 'recovered') return
       const current = this.requireCurrentState()
       const recovery = current.recovery
+      // 重试对账发现同一规划已完成时，只消费服务端已签发的原续接，不重新执行模板节点。
+      if (current.workflow?.summary.status === 'completed' && revisionContinuationHandoffFromWorkflow(current.workflow)) {
+        await this.handlePlanningResult(this.runToken, current.workflow)
+        return
+      }
       // 当前权威 UI 确认门仍持有孤立生成页时，进入节点已有自愈，禁止 replay 换一换/确认。
       if (recovery?.classification === 'awaiting_user' && recovery.uiGenerationRecovery?.pageIds.length && current.workflow) {
         await this.submitClarification(current.workflow, {
@@ -707,6 +712,15 @@ export class ApplicationPlanningRuntime {
         reason,
         planningRuntimeError(reason, '创建规划运行失败')
       )
+      // 断线只证明本轮 transport 结束，不能证明正式修订尚未进入。
+      // 保留已准备的设计会话和来源回执，重连后通过权威对账恢复原 Graph。
+      const activeRevision = this.requireCurrentState().lifecycle.activeFormalRevision
+      const designRevisionEntered = designRevision && activeRevision &&
+        activeRevision.impactInteractionId === designRevision.impact.interactionId &&
+        activeRevision.sourceThreadId === designRevision.sourceConversationThreadId &&
+        activeRevision.sourceRunId === designRevision.sourceRunId &&
+        activeRevision.planningThreadId === this.threadId
+      if (designRevision && (outcome === 'uncertain' || designRevisionEntered)) return
       if ((interaction || designRevision || workflowAction) && outcome !== 'recovered') throw reason
     }
   }
