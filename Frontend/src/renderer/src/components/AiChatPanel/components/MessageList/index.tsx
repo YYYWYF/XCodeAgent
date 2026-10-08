@@ -744,20 +744,18 @@ export default function MessageList({
                   planningState.recovery.failureDiagnostic?.sourceRunId === planningCardWorkflow.runId &&
                   isTemplateEngineFailure(planningState.recovery.failureDiagnostic)
               )
-              const planningInterrupted = Boolean(
-                isCurrentPlanningMessage &&
-                  !planningTemplateFailed &&
-                  planningCardWorkflow?.summary.status === 'failed' &&
-                  planningState?.recovery?.classification === 'ready_to_continue' &&
-                  planningState.recovery.sourceRunId === planningCardWorkflow.runId &&
-                  planningState.recovery.threadId === planningCardWorkflow.threadId
-              )
               const planningActivity = designPhasePlanning && !planningTemplateFailed
-                ? planningWorkflowActivity(planningCardWorkflow, planningInterrupted)
+                ? planningWorkflowActivity(planningCardWorkflow)
                 : undefined
-              // 已验证中断复用原进度卡显示暂停；业务失败仍只走现有底部错误控制面。
+              // 规划中断和失败统一由底部恢复区域展示，空消息沿用下方规则隐藏 Agent 头。
               const planningActivityVisible = Boolean(
-                planningActivity && (!messageError || planningActivity.status === 'interrupted')
+                planningActivity && !messageError && planningCardWorkflow?.summary.status !== 'failed'
+              )
+              // 当前技术规划失败仅保留必要的交接回执，移除原中断卡对应的 Agent 头像和名称。
+              const hideInterruptedPlanningAgent = Boolean(
+                isCurrentPlanningMessage &&
+                  planningCardWorkflow?.summary.status === 'failed' &&
+                  planningWorkflowPhase(planningCardWorkflow) === 'technical_planning'
               )
               // 只有真正携带实体设计载荷的确认才渲染聊天卡片；
               // DDL 审批等其它确认类型继续走 WorkflowRunCard 的审批卡片。
@@ -961,9 +959,11 @@ export default function MessageList({
                       <>
                         {/* 统一 Agent 头：人像图标 + 当前阶段 Agent 角色名（产品/规划/研发/测试/审查），
                             独占一行，下方换行展示正文/卡片。 */}
-                        <MessageAgentHeader
-                          agentKey={messageAgentPhase(currentPresentationWorkflow, currentPhase)}
-                        />
+                        {!hideInterruptedPlanningAgent && (
+                          <MessageAgentHeader
+                            agentKey={messageAgentPhase(currentPresentationWorkflow, currentPhase)}
+                          />
+                        )}
                         {message.revisionHandoff ? (
                           <RevisionHandoffCard
                             handoff={message.revisionHandoff}
@@ -1008,7 +1008,7 @@ export default function MessageList({
                         {!showPlanningLoading &&
                         planningActivityVisible &&
                         planningCardWorkflow ? (
-                          <PlanningWorkflowActivity workflow={planningCardWorkflow} interrupted={planningInterrupted} />
+                          <PlanningWorkflowActivity workflow={planningCardWorkflow} />
                         ) : null}
                         {!hideEntityWorkflowChrome &&
                           visibleProcessSteps &&

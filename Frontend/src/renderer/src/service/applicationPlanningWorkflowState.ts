@@ -5,7 +5,7 @@ import type {
 } from '../typings'
 
 export type PlanningWorkflowActivity = {
-  status: 'running' | 'completed' | 'failed' | 'interrupted'
+  status: 'running' | 'completed' | 'failed'
   title: string
   detail: string
   intentLabel?: string
@@ -479,19 +479,10 @@ export function planningRequirementsDocumentGenerating(
 
 // 把创建规划 Graph 的实时节点和意图结果转换为聊天区可直接展示的进度文案。
 export function planningWorkflowActivity(
-  workflow?: WorkflowRunPayload,
-  interrupted = false
+  workflow?: WorkflowRunPayload
 ): PlanningWorkflowActivity | undefined {
   if (!workflow) return undefined
   const phase = planningWorkflowPhase(workflow)
-  // 只由当前会话已验证的中断投影启用暂停展示，不能把旧 lifecycle 当作仍在生成。
-  if (interrupted && phase === 'technical_planning') {
-    return {
-      status: 'interrupted',
-      title: '技术规划已中断',
-      detail: '已保留当前进度，点击下方“继续执行”接着完成技术规划。'
-    }
-  }
   const status = String(workflow.summary.status || 'running')
   const intent = readDesignIntent(workflow)
   const designChangeSubmission =

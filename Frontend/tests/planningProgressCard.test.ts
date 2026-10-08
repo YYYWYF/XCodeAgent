@@ -8,6 +8,7 @@ import { WORKBENCH_PHASE_AGENTS } from '../src/renderer/src/workbenchPhase'
 import type { WorkflowRunPayload } from '../src/renderer/src/typings'
 import type { ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
 import type { ApplicationPlanningRecoveryProjection } from '../src/renderer/src/service/applicationPlanningRecovery'
+import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 
 /** 渲染测试不执行任何用户动作。 */
 function ignoreAction(): void {}
@@ -35,7 +36,8 @@ function planningProgress(phase: string, status: string): WorkflowRunPayload {
 /** 用现有消息列表与阶段上下文检查原卡片的实际渲染结果。 */
 function renderPlanningMessage(
   workflow: WorkflowRunPayload,
-  recovery?: ApplicationPlanningRecoveryProjection
+  recovery?: ApplicationPlanningRecoveryProjection,
+  revisionHandoff?: AgentChatMessage['revisionHandoff']
 ): string {
   return renderToStaticMarkup(createElement(
     WorkbenchPhaseContext.Provider,
@@ -51,7 +53,7 @@ function renderPlanningMessage(
       planningState: recovery ? {
         workflow, recovery, transportState: 'idle', connection: { status: 'healthy', requestGeneration: 1 }
       } as ApplicationPlanningCurrentState : undefined,
-      messages: [{ id: 1, role: 'assistant', content: '', createdAt: 1, workflow }],
+      messages: [{ id: 1, role: 'assistant', content: '', createdAt: 1, workflow, revisionHandoff }],
       revertingCodeChangeIds: new Set<string>(),
       onRevertCodeChanges: ignoreAction, onOpenCodeChangeFile: ignoreAction,
       onSubmitClarification: ignoreConfirmation
@@ -80,8 +82,8 @@ test('模板重试显示真实模板阶段，保留已确认规划的生命周�
   assert.doesNotMatch(markup, /正在生成技术规划/)
 })
 
-/** 当前执行中断必须保留原进度卡，但不能伪装成仍在运行或影响其他执行。 */
-test('当前规划中断显示原进度卡的暂停状态，其他运行不受影响', () => {
+/** 规划中断由底部恢复区域承载，空进度消息连同 Agent 头像一起隐藏。 */
+test('当前规划中断不显示进度卡和孤立 Agent 头像，运行中仍显示进度', () => {
   const workflow = planningProgress('technical_planning_begin', 'failed')
   const recovery: ApplicationPlanningRecoveryProjection = {
     schemaVersion: 'application-planning-recovery.v1', classification: 'ready_to_continue',
@@ -90,9 +92,13 @@ test('当前规划中断显示原进度卡的暂停状态，其他运行不受�
     message: '已验证当前 checkpoint，可以继续执行。'
   }
   const markup = renderPlanningMessage(workflow, recovery)
-  assert.match(markup, /技术规划已中断/)
-  assert.match(markup, /anticon-pause-circle/)
-  assert.doesNotMatch(markup, /anticon-loading/)
+  assert.doesNotMatch(markup, /技术规划已中断|planning-workflow-activity|规划 Agent|anticon-loading/)
+  const handoffMarkup = renderPlanningMessage(workflow, recovery, {
+    kind: 'revision_planning', formalBranch: 'design_stage_revision', targetSessionId: 'planning-session',
+    targetConversationThreadId: 'planning-thread', impactInteractionId: 'impact', request: '新增页面'
+  })
+  assert.match(handoffMarkup, /已转入独立技术规划会话/)
+  assert.doesNotMatch(handoffMarkup, /技术规划已中断|ai-message-agent-avatar|规划 Agent/)
   assert.doesNotMatch(renderPlanningMessage(workflow, { ...recovery, sourceRunId: 'other-run' }), /技术规划已中断/)
   assert.doesNotMatch(renderPlanningMessage(workflow, { ...recovery, threadId: 'other-thread' }), /技术规划已中断/)
   assert.doesNotMatch(renderPlanningMessage(workflow, { ...recovery, classification: 'failed' }), /技术规划已中断/)
@@ -121,7 +127,7 @@ test('当前模板失败不显示技术规划中断卡', () => {
       operation: 'template_reconcile', message: 'Template Engine 地址未配置。' }
   }
   assert.doesNotMatch(renderPlanningMessage(workflow, recovery), /技术规划已中断|anticon-loading/)
-  assert.match(renderPlanningMessage(workflow, { ...recovery,
+  assert.doesNotMatch(renderPlanningMessage(workflow, { ...recovery,
     failureDiagnostic: { ...recovery.failureDiagnostic!, sourceRunId: 'other-run' }
   }), /技术规划已中断/)
 })
