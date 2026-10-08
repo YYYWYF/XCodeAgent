@@ -19,6 +19,7 @@ type UiDesignPage = {
   name?: string
   path?: string
   code?: string
+  code_error?: string
   status?: string
 }
 
@@ -56,7 +57,7 @@ export default function UiDesignPreviewPanel({
   const activePageGenerating = useMemo(
     () =>
       activePage
-        ? actingSet.has(activePageId) || isPoolGenerating(activePage.status)
+        ? isPoolGenerating(activePage.status) || (actingSet.has(activePageId) && activePage.status !== 'confirmed' && activePage.status !== 'generation_failed' && activePage.status !== 'cancelled')
         : false,
     [activePage, activePageId, actingSet]
   )
@@ -78,7 +79,7 @@ export default function UiDesignPreviewPanel({
             const pageId = page.pageId || `page-${index + 1}`
             const confirmed = Boolean(page.code) && page.status === 'confirmed'
             const active = activePageId === pageId
-            const generatingPage = actingSet.has(pageId) || isPoolGenerating(page.status)
+            const generatingPage = isPoolGenerating(page.status) || (actingSet.has(pageId) && page.status !== 'confirmed' && page.status !== 'generation_failed' && page.status !== 'cancelled')
             return (
               <button
                 className={cx(
@@ -110,7 +111,7 @@ export default function UiDesignPreviewPanel({
       </aside>
       <div className={cx('ui-design-preview-stage')}>
         <div className={cx('ui-design-preview-stage-body')}>
-          {activePageGenerating || (generating && !code && actingSet.size === 0) ? (
+          {activePageGenerating || (generating && !code && actingSet.size === 0 && activePage?.status !== 'confirmed') ? (
             <div className={cx('ui-design-preview-loading')}>
               <RichLoading bare title="正在生成设计稿…" />
             </div>
@@ -122,8 +123,8 @@ export default function UiDesignPreviewPanel({
           ) : (
             <div className={cx('ui-design-preview-empty')}>
               <InboxOutlined className={cx('ui-design-preview-empty-icon')} />
-              <Text strong>本页尚未生成设计稿</Text>
-              <Text type="secondary">在中间区点击「换一换」或「选模板」生成</Text>
+              <Text strong>{activePage?.status === 'confirmed' ? '设计稿源码读取失败' : '本页尚未生成设计稿'}</Text>
+              <Text type="secondary">{activePage?.status === 'confirmed' ? activePage.code_error || '设计稿已生成，但暂时无法读取源码。请检查项目文件。' : '在中间区点击「换一换」或「选模板」生成'}</Text>
             </div>
           )}
         </div>

@@ -17,6 +17,7 @@ from app.graph.nodes.api_design import api_design_readiness_gate
 from app.graph.nodes.planning import entity_source_binding, project_planning
 from app.graph.nodes.product_planning import product_planning
 from app.graph.nodes.requirements import requirements
+from app.graph.nodes.screenshot_ui_preparation import screenshot_ui_preparation
 from app.graph.nodes.testing import integration_test, quality_gate, unit_test
 from app.graph.nodes.small_task import small_task_repair, unit_test_repair
 from app.graph.nodes.ui_confirmation import ui_confirmation
@@ -52,6 +53,7 @@ __all__ = [
     "product_planning",
     "quality_gate",
     "requirements",
+    "screenshot_ui_preparation",
     "ui_confirmation",
     "review_phase_confirmation",
     "code_review",

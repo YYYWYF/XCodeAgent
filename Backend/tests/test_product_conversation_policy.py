@@ -54,6 +54,7 @@ class ProductConversationPolicyTests(unittest.TestCase):
             "增加供应商管理模块": ("requirement_change", "requirement"),
             "订单支持批量归档": ("requirement_change", "product_behavior"),
             "首页改成左侧导航": ("ui_change", "ui"),
+            "定时任务侧边栏修改为和聊天页面侧边栏保持一致": ("ui_change", "ui"),
         }
         for request, expected in cases.items():
             with self.subTest(request=request):

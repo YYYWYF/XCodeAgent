@@ -63,13 +63,15 @@ function rewriteRequire(code: string): string {
  */
 export function compileTsx(source: string): string {
   // sucrase 转 TS/JSX/ESM→CJS。production 去除 dev-only 检查。
-  // jsxRuntime: automatic 需要引入 jsx-runtime，但运行时对象里没有，
-  // 这里改用 classic 运行时（React.createElement），与设计稿代码里
-  // 显式 import React 的写法兼容。
+  // 继续使用 classic 运行时，但把 JSX 工厂明确指向 iframe 已提供的 React。
+  // 这样仅具名导入 useState 的设计稿也能渲染，且显式导入 React 的旧稿行为不变。
+  // Fragment 同样必须指定，否则 <>...</> 仍会引用未定义的 React。
   const transformed = transform(source, {
     transforms: ['jsx', 'typescript', 'imports'],
     production: true,
-    jsxRuntime: 'classic'
+    jsxRuntime: 'classic',
+    jsxPragma: 'window.__DESIGN_RUNTIME__.React.createElement',
+    jsxFragmentPragma: 'window.__DESIGN_RUNTIME__.React.Fragment'
   }).code
 
   // 把 require('xxx') 改写为对运行时全局的取值。

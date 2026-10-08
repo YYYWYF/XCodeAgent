@@ -20,6 +20,9 @@ from app.agents.main.planner import (
     revise_project_plan_with_chat_model,
     technical_plan_contract_repair_applicable,
 )
+from app.agents.screenshot_technical_plan import (
+    plan_screenshot_technical_plan_with_chat_model,
+)
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
@@ -1813,6 +1816,8 @@ def _repair_technical_plan_candidate(
     requirement_spec: dict,
     current_plan: dict,
     errors: list[str],
+    *,
+    screenshot_mode: bool = False,
 ) -> dict:
     """保守路由 Action Binding、API Contract 或完整 TechnicalPlan 修复。"""
 
@@ -1931,7 +1936,11 @@ def _repair_technical_plan_candidate(
         reason,
         errors,
     )
-    return plan_project_with_chat_model(
+    generation = (
+        plan_screenshot_technical_plan_with_chat_model
+        if screenshot_mode else plan_project_with_chat_model
+    )
+    return generation(
         requirement_spec,
         existing_plan=current_plan,
         on_token=_planning_token_callback,
@@ -1948,6 +1957,11 @@ def _generate_valid_technical_plan(
     """在统一的三次总预算内完成 TechnicalPlan 生成、规范化校验与错误反馈修复。"""
 
     current_plan = existing_plan
+    screenshot_mode = (
+        state.get("workflow_scope") == "application_planning"
+        and isinstance(state.get("requirement_input"), dict)
+        and state["requirement_input"].get("mode") == "screenshot"
+    )
     remaining_errors = list(initial_errors or [])
     base_feedback = str(
         requirement_spec.get("planning_adjustment_request") or ""
@@ -1978,9 +1992,13 @@ def _generate_valid_technical_plan(
                     current_requirement,
                     current_plan,
                     remaining_errors,
+                    **({"screenshot_mode": True} if screenshot_mode else {}),
                 )
                 if current_plan and remaining_errors
-                else plan_project_with_chat_model(
+                else (
+                    plan_screenshot_technical_plan_with_chat_model
+                    if screenshot_mode else plan_project_with_chat_model
+                )(
                     current_requirement,
                     **({"existing_plan": current_plan} if current_plan else {}),
                     on_token=_planning_token_callback,
@@ -2038,6 +2056,13 @@ def _repair_technical_plan_validation_errors(
                 },
                 current_plan,
                 remaining_errors,
+                **(
+                    {"screenshot_mode": True}
+                    if state.get("workflow_scope") == "application_planning"
+                    and isinstance(state.get("requirement_input"), dict)
+                    and state["requirement_input"].get("mode") == "screenshot"
+                    else {}
+                ),
             )
             repaired = apply_project_plan_feedback(
                 repaired,

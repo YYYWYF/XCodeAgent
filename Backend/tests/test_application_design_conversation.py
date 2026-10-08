@@ -12,7 +12,6 @@ from app.graph.application_planning_revision import (
     cleared_design_change_context,
     design_artifact_node_state,
     design_node_update,
-    earliest_available_design_target,
     formal_revision_design_target,
     is_design_change,
     prepare_ui_revision_state,
@@ -24,6 +23,7 @@ from app.protocols.application_page_planning import (
 from app.protocols.workflow.projection import _workflow_next_nodes, _workflow_start_node
 from app.protocols.workflow.request import workflow_run_inputs
 from app.agents.design_conversation.router import classify_design_conversation
+from app.agents.design_conversation import DesignConversationDecision, resolve_design_target
 from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
@@ -87,7 +87,7 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             ui_designs={"confirmation_status": "confirmed"},
         )
 
-        self.assertEqual(decision.target, "requirements")
+        self.assertEqual((decision.intent, decision.change_level), ("requirement_change", "requirement"))
 
     def test_authorization_initialization_question_stays_in_requirements_review(self) -> None:
         """权限初始化待回答时必须产生 RequirementSpec 原生中断。"""
@@ -169,7 +169,9 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         """需求意图应调用真实生命周期服务，从后续阶段回到分析并保存原始输入。"""
 
         classify.return_value = SimpleNamespace(
-            target="requirements",
+            intent="requirement_change",
+            change_level="requirement",
+            suggested_phase="none",
             reason="页面清单发生变化",
             affected_page_ids=["orders"],
             response="",
@@ -245,6 +247,41 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
         )
         self.assertEqual(persisted.active_run_id, "run-1")
+
+    def test_sidebar_design_change_uses_current_coordinator_contract(self) -> None:
+        """侧栏自由输入在分类模型不可用时也应进入 UI 节点，而非访问旧 target 字段。"""
+
+        with TemporaryDirectory() as workspace:
+            ensure_application_lifecycle(
+                workspace,
+                application_id="app-sidebar",
+                application_name="侧栏应用",
+                initialization_thread_id="planning-thread",
+            )
+            for stage, status in (
+                (ApplicationLifecycleStage.ANALYZING_REQUIREMENT, ApplicationLifecycleStatus.RUNNING),
+                (ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT, ApplicationLifecycleStatus.RUNNING),
+                (ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION, ApplicationLifecycleStatus.AWAITING_USER),
+                (ApplicationLifecycleStage.GENERATING_UI_DESIGNS, ApplicationLifecycleStatus.RUNNING),
+                (ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION, ApplicationLifecycleStatus.AWAITING_USER),
+            ):
+                persist_application_lifecycle_transition(workspace, stage=stage, status=status)
+            with patch(
+                "app.agents.design_conversation.router.create_chat_model",
+                side_effect=RuntimeError("model unavailable"),
+            ):
+                update = analyze_design_intent(
+                    {
+                        "request": "定时任务侧边栏修改为和聊天页面侧边栏保持一致",
+                        "workspace": workspace,
+                        "active_run_id": "run-sidebar",
+                        "requirement_spec": {"confirmation_status": "confirmed"},
+                        "product_plan": {"confirmation_status": "confirmed", "pages": []},
+                        "ui_designs": {"confirmation_status": "pending_user_confirmation"},
+                    }
+                )
+        self.assertEqual(update["design_change_target"], "ui_confirmation")
+        self.assertEqual(update["product_conversation_result"]["kind"], "ui_change")
 
     def test_first_node_application_uses_original_change_request(self) -> None:
         """只有服务端指定的一次性目标节点读取原始变更。"""
@@ -498,16 +535,16 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         """意图 Agent 不能越过尚未确认的上游产物。"""
 
         self.assertEqual(
-            earliest_available_design_target(
-                "ui_confirmation",
+            resolve_design_target(
+                DesignConversationDecision(intent="ui_change", change_level="ui", reason="调整侧栏"),
                 requirement_spec={"confirmation_status": "pending_user_confirmation"},
                 product_plan={"confirmation_status": "confirmed"},
             ),
             "requirements",
         )
         self.assertEqual(
-            earliest_available_design_target(
-                "ui_confirmation",
+            resolve_design_target(
+                DesignConversationDecision(intent="ui_change", change_level="ui", reason="调整侧栏"),
                 requirement_spec={"confirmation_status": "confirmed"},
                 product_plan={"confirmation_status": "pending_user_confirmation"},
             ),

@@ -284,11 +284,16 @@ export function reduceApplicationPlanningCurrentState(
   return { ...next, error, transportState: 'idle' }
 }
 
+/** 判断应用是否有可读取规划生命周期的工作区；重启后的来源标签不代表创建流程已经完成。 */
+export function isPlanningRecoveryCandidate(application: ApplicationConfig): boolean {
+  return Boolean(application.workspaceRoot?.trim())
+}
+
 // 从应用目录逐一读取生命周期，并返回全部未完成创建流程。
 export async function loadActiveApplicationPlannings(): Promise<ApplicationPlanningCurrentState[]> {
   const recoveredActive: ApplicationPlanningCurrentState[] = []
   const applications = (await loadStoredApplications())
-    .filter((application) => application.source === 'new' && application.workspaceRoot)
+    .filter(isPlanningRecoveryCandidate)
     .sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
 
   for (const application of applications) {

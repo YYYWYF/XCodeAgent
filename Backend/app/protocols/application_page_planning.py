@@ -130,6 +130,13 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "technicalPlanConfirmation": "technical_plan_confirmation",
             "technicalPlanGenerationError": "technical_plan_generation_error",
         },
+        "requirementInput": {
+            "requestField": "forwardedProps.requirementInput",
+            "modes": ["text", "screenshot"],
+            "screenshotFormats": ["image/jpeg", "image/png", "image/webp"],
+            "maxScreenshots": 10,
+            "maxScreenshotBytes": 15728640,
+        },
         "artifactSchemas": {
             "product_plan": "product-plan.v5",
             "ui_designs": "ui-manifest.v3",

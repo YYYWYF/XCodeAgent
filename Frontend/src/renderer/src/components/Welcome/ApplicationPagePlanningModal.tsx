@@ -209,6 +209,7 @@ export default function ApplicationPagePlanningModal({
                   onReturnHome={onReturnHome}
                   onSubmit={onSubmit}
                   rootPath={application.menus?.rootPath || '/'}
+                  workspaceRoot={application.workspaceRoot}
                   workflow={workflow}
                 />
               ) : null}

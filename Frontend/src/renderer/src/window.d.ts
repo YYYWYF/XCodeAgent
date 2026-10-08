@@ -2,6 +2,8 @@ export {}
 
 import type { ElectronAPI } from '@electron-toolkit/preload'
 import type {
+  ApplicationRequirementInput,
+  ApplicationRequirementScreenshotSelection,
   ApplicationSchemaConfig,
   DevelopmentPlanningPageTreeNode
 } from './typings'
@@ -38,11 +40,23 @@ declare global {
         selectDirectory: (options?: {
           title?: string
         }) => Promise<{ canceled: boolean; path?: string }>
+        selectRequirementScreenshots: () => Promise<{
+          canceled: boolean
+          files: ApplicationRequirementScreenshotSelection[]
+        }>
         createProjectDirectory: (payload: {
           workspacePath: string
           applicationConfig: ApplicationSchemaConfig
-        }) => Promise<{ ok?: boolean; path: string }>
+          requirementScreenshotPaths?: string[]
+        }) => Promise<{
+          ok?: boolean
+          path: string
+          requirementInput: ApplicationRequirementInput
+        }>
         readApplication: (payload: { workspaceRoot: string }) => Promise<{ application?: unknown }>
+        readRequirementInput: (payload: {
+          workspaceRoot: string
+        }) => Promise<{ requirementInput?: ApplicationRequirementInput }>
         readUiDesigns: (payload: { workspaceRoot: string }) => Promise<{ uiDesigns: unknown }>
         writeApplication: (payload: {
           workspaceRoot: string

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -11,9 +12,15 @@ from langgraph.types import Command
 from app.graph.application_planning_interrupts import (
     planning_stage_entry,
     requirement_document_review,
+    ui_confirmation_review,
+)
+from app.graph.application_planning_revision import (
+    design_chat_response,
+    route_design_chat_response,
 )
 from app.graph.state import ProjectState
 from app.protocols.application_planning_interrupt import (
+    application_planning_interrupt_from_snapshot,
     project_application_planning_interrupt,
 )
 from app.protocols.workflow import build_workflow_ag_ui_stream
@@ -186,6 +193,135 @@ def _resume_payload(
 
 
 class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_non_mutating_ui_chat_returns_to_actionable_review(self) -> None:
+        """设计对话不能清空 UI 门禁，返回后仍应能确认并继续。"""
+
+        def chat_intent(state: ProjectState) -> dict:
+            """模拟无需修改正式产物的设计对话。"""
+
+            return {"conversation_response": "请使用当前确认卡进入下一阶段。"}
+
+        def confirm_ui(state: ProjectState) -> dict:
+            """记录原 UI 确认门收到明确确认动作。"""
+
+            return {"status": "completed", "phase": "ui_confirmation"}
+
+        builder = StateGraph(ProjectState)
+        builder.add_node("ui_confirmation_review", ui_confirmation_review)
+        builder.add_node("design_intent_analysis", chat_intent)
+        builder.add_node("design_chat_response", design_chat_response)
+        builder.add_node("ui_confirmation", confirm_ui)
+        builder.add_edge(START, "ui_confirmation_review")
+        builder.add_edge("design_intent_analysis", "design_chat_response")
+        builder.add_conditional_edges(
+            "design_chat_response",
+            route_design_chat_response,
+            {"ui_confirmation_review": "ui_confirmation_review", "completed": END},
+        )
+        graph = builder.compile(checkpointer=InMemorySaver())
+        config = {"configurable": {"thread_id": "ui-chat-review"}}
+        initial = {
+            "ui_designs": {
+                "confirmation_status": "pending_user_confirmation",
+                "pages": [{"pageId": "home", "status": "confirmed"}],
+            },
+            "product_plan": {"pages": [{"pageId": "home", "name": "首页"}]},
+            "clarification": {
+                "mode": "ui_design_confirmation",
+                "status": "requires_user_input",
+            },
+        }
+        _ = [chunk async for chunk in graph.astream(initial, config=config, stream_mode="updates")]
+        first = await graph.aget_state(config)
+        pending = application_planning_interrupt_from_snapshot(first)
+        self.assertIsNotNone(pending)
+
+        _ = [
+            chunk
+            async for chunk in graph.astream(
+                Command(resume={
+                    "gateId": pending["gateId"],
+                    "artifact": pending["artifact"],
+                    "artifactRevision": pending["artifactRevision"],
+                    "action": "design_change",
+                    "request": "进入计划阶段",
+                }),
+                config=config,
+                stream_mode="updates",
+            )
+        ]
+        returned = await graph.aget_state(config)
+        projected = project_application_planning_interrupt(dict(returned.values), returned)
+        restored = projected["application_planning_interrupt"]
+        self.assertEqual(projected["phase"], "ui_confirmation")
+        self.assertEqual(projected["clarification"]["mode"], "ui_design_confirmation")
+        self.assertEqual(restored["gateId"], pending["gateId"])
+
+        _ = [
+            chunk
+            async for chunk in graph.astream(
+                Command(resume={
+                    "gateId": restored["gateId"],
+                    "artifact": restored["artifact"],
+                    "artifactRevision": restored["artifactRevision"],
+                    "action": "confirm",
+                    "request": "确认全部设计稿",
+                }),
+                config=config,
+                stream_mode="updates",
+            )
+        ]
+        self.assertEqual((await graph.aget_state(config)).values["status"], "completed")
+
+    async def test_empty_ui_interrupt_recovers_from_same_checkpoint(self) -> None:
+        """旧空确认卡从同一待确认 UiManifest 重建，不把会话永久锁死。"""
+
+        state = {
+            "ui_designs": {
+                "confirmation_status": "pending_user_confirmation",
+                "pages": [{"pageId": "home", "status": "confirmed"}],
+            },
+            "product_plan": {"pages": [{"pageId": "home", "name": "首页"}]},
+            "clarification": {},
+        }
+        snapshot = SimpleNamespace(
+            values=state,
+            tasks=(SimpleNamespace(name="ui_confirmation_review", error=None, interrupts=(
+                SimpleNamespace(id="ui-interrupt", value={
+                    "type": "application_planning_review",
+                    "gateId": "old-empty-gate",
+                    "artifact": "ui_designs",
+                    "artifactRevision": "old-empty-revision",
+                    "phase": "ui_confirmation",
+                    "clarification": {},
+                }),
+            )),),
+        )
+        projected = project_application_planning_interrupt(
+            {**state, "phase": "design_chat_response", "status": "requires_user_input"},
+            snapshot,
+        )
+        self.assertEqual(projected["phase"], "ui_confirmation")
+        self.assertEqual(projected["clarification"]["mode"], "ui_design_confirmation")
+        self.assertNotEqual(
+            projected["application_planning_interrupt"]["gateId"], "old-empty-gate"
+        )
+
+    async def test_failed_design_intent_projects_error_instead_of_empty_review(self) -> None:
+        """已消费审阅门的意图失败不能恢复成没有问题的待确认卡。"""
+
+        snapshot = SimpleNamespace(
+            tasks=(SimpleNamespace(name="design_intent_analysis", error="AttributeError: intent", interrupts=()),),
+        )
+        projected = project_application_planning_interrupt(
+            {"phase": "ui_confirmation", "status": "requires_user_input", "clarification": {}},
+            snapshot,
+        )
+        self.assertEqual(projected["status"], "failed")
+        self.assertEqual(projected["phase"], "design_intent_analysis")
+        self.assertIn("AttributeError", projected["error"])
+        self.assertFalse(projected["application_planning_interrupt"])
+
     """验证创建规划原生中断、恢复和过期提交保护。"""
 
     async def test_confirm_resumes_exact_pending_review(self) -> None:

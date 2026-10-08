@@ -4,7 +4,12 @@ import { useState } from 'react'
 import { createApplicationLifecycle } from '../../service/applicationLifecycle'
 import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
 import { encryptSensitiveDatasourceFields } from '../../service/databaseCredentialCrypto'
-import type { ApplicationConfig, ApplicationDraft, ApplicationLifecycle } from '../../typings'
+import type {
+  ApplicationConfig,
+  ApplicationDraft,
+  ApplicationLifecycle,
+  ApplicationRequirementScreenshotSelection
+} from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from './ApplicationForm'
 import WelcomeActionCard from './WelcomeActionCard'
@@ -29,6 +34,10 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
   const [modalOpen, setModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [selectingParent, setSelectingParent] = useState(false)
+  const [selectingRequirementScreenshots, setSelectingRequirementScreenshots] = useState(false)
+  const [requirementScreenshots, setRequirementScreenshots] = useState<
+    ApplicationRequirementScreenshotSelection[]
+  >([])
 
   // 打开应用基础配置弹窗。
   const openModal = (): void => {
@@ -56,6 +65,31 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
     }
   }
 
+  // 调用 Electron 文件选择器并保存待复制的需求截图清单。
+  const handleSelectRequirementScreenshots = async (): Promise<void> => {
+    setSelectingRequirementScreenshots(true)
+    try {
+      const workspaceApi = window.xcodeAgent?.workspace
+      if (!workspaceApi?.selectRequirementScreenshots) {
+        message.warning('当前环境不能选择截图，请在桌面客户端中使用。')
+        return
+      }
+      const result = await workspaceApi.selectRequirementScreenshots()
+      if (!result.canceled) setRequirementScreenshots(result.files)
+    } catch (error) {
+      message.error(formatError(error, '选择截图失败'))
+    } finally {
+      setSelectingRequirementScreenshots(false)
+    }
+  }
+
+  // 从本轮需求输入中移除指定截图。
+  const handleRemoveRequirementScreenshot = (screenshotPath: string): void => {
+    setRequirementScreenshots((current) =>
+      current.filter((screenshot) => screenshot.path !== screenshotPath)
+    )
+  }
+
   // 创建项目目录和应用索引，然后进入全屏页面规划。
   const handleCreateApplication = async (): Promise<void> => {
     setCreating(true)
@@ -67,18 +101,26 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
       }
 
       const projectPath = values.projectPath.trim()
+      if (values.requirementInputMode === 'screenshot' && !requirementScreenshots.length) {
+        throw new Error('截图生成模式至少需要选择一张页面截图。')
+      }
       const schema = buildApplicationSchema(values)
       const persistedSchema = await encryptSensitiveDatasourceFields(schema)
       const planningThreadId = createPagePlanningThreadId()
       const projectDirectory = await workspaceApi.createProjectDirectory({
         workspacePath: projectPath,
-        applicationConfig: persistedSchema
+        applicationConfig: persistedSchema,
+        requirementScreenshotPaths:
+          values.requirementInputMode === 'screenshot'
+            ? requirementScreenshots.map((screenshot) => screenshot.path)
+            : []
       })
       const application: ApplicationConfig = {
         ...persistedSchema,
         id: createApplicationId(),
         name: persistedSchema.appName,
         workspaceRoot: projectDirectory.path,
+        requirementInput: projectDirectory.requirementInput,
         projectParentPath: '',
         projectDirectoryName: pathBasename(projectPath),
         source: 'new',
@@ -117,6 +159,7 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
       <Modal
         afterClose={() => {
           form.resetFields()
+          setRequirementScreenshots([])
         }}
         cancelText="取消"
         confirmLoading={creating}
@@ -142,8 +185,12 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
       >
         <ApplicationForm
           form={form}
+          onRemoveRequirementScreenshot={handleRemoveRequirementScreenshot}
+          onSelectRequirementScreenshots={handleSelectRequirementScreenshots}
           onSelectProjectParent={handleSelectProjectParent}
+          requirementScreenshots={requirementScreenshots}
           selectingParent={selectingParent}
+          selectingRequirementScreenshots={selectingRequirementScreenshots}
         />
       </Modal>
     </>

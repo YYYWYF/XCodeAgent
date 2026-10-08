@@ -1958,3 +1958,33 @@ const uiCardActionWithHistoricalIntent = {
 } as WorkflowRunPayload
 
 assert.equal(planningWorkflowActivity(uiCardActionWithHistoricalIntent), undefined)
+const screenshotUiPreparationWorkflow = {
+  ...initialRequirementWorkflow,
+  summary: {
+    status: 'running',
+    phase: 'ui_confirmation'
+  },
+  state: {
+    lifecycle: {
+      initialization: {
+        stage: 'generating_ui_designs'
+      }
+    }
+  },
+  events: [
+    {
+      type: 'workflow.node.progress',
+      nodeName: 'screenshot_ui_preparation',
+      status: 'running',
+      message: '个人信息：设计稿已就绪',
+      data: { detail: { pageId: 'profile', ready: 4, total: 5 } }
+    }
+  ]
+} as WorkflowRunPayload
+
+assert.deepEqual(planningWorkflowActivity(screenshotUiPreparationWorkflow), {
+  status: 'running',
+  title: '正在根据截图生成 UI 设计稿',
+  detail: '个人信息：设计稿已就绪',
+  intentLabel: undefined
+})

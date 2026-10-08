@@ -4,6 +4,7 @@ import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
 import type {
   ApplicationConfig,
+  ApplicationRequirementInput,
   ApplicationPlanningInteraction,
   ApplicationLifecycle,
   EditorMode,
@@ -25,6 +26,7 @@ export type SendWorkflowMessageOptions = {
   sessionId?: string
   editorMode: EditorMode
   application?: ApplicationConfig
+  requirementInput?: ApplicationRequirementInput
   clarificationAnswers?: WorkflowClarificationAnswers
   applicationPlanningInteraction?: ApplicationPlanningInteraction
   productStageConversation?: {
@@ -106,6 +108,7 @@ export function buildWorkflowForwardedProps(
     sessionId: options.sessionId,
     editorMode: options.editorMode,
     application: options.application,
+    requirementInput: options.requirementInput,
     clarificationAnswers: options.clarificationAnswers,
     applicationPlanningInteraction: options.applicationPlanningInteraction,
     productStageConversation: options.productStageConversation,

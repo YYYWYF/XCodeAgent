@@ -189,9 +189,15 @@ export function buildApplicationPlanningRequest(application: ApplicationConfig):
   const initialAdministratorSubjects = authorizationEnabled
     ? (application.authorization?.initialAdministratorSubjects ?? [])
     : []
+  const requirementInput = application.requirementInput
+  const requirementInputLine =
+    requirementInput?.mode === 'screenshot'
+      ? `需求输入：使用 ${requirementInput.screenshots.length} 张页面截图进行视觉识别；文字仅作为补充说明。`
+      : '需求输入：根据文字描述生成。'
   return [
     `请为新应用「${appName}」完成需求、产品、UI（可跳过）和技术规划。`,
     `应用场景：${scenario}`,
+    requirementInputLine,
     `目标终端：${terminal}。`,
     `导航布局：${layout.type || '由计划阶段确定'}，页头=${layout.useHeader ? '启用' : '禁用'}，页脚=${layout.useFooter ? '启用' : '禁用'}。`,
     `数据源类型：${datasource}。`,

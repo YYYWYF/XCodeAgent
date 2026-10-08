@@ -32,6 +32,7 @@
 <script>
   var nonce = new URLSearchParams(window.location.hash.slice(1)).get('nonce');
   var root = null;
+  var renderSequence = 0;
 
   // 仅向父窗口报告真实的运行时状态，防止丢失首个 ready 消息时永久等待。
   function reportReady() {
@@ -68,12 +69,63 @@
       if (typeof component !== 'function') throw new Error('设计稿没有有效的默认导出组件');
       var runtime = window.__DESIGN_RUNTIME__;
       if (!root) root = runtime.ReactDOMClient.createRoot(document.getElementById('root'));
-      root.render(runtime.React.createElement(component));
-      window.parent.postMessage({
-        type: 'design-rendered',
-        nonce: nonce,
-        ok: true
-      }, '*');
+      var currentSequence = ++renderSequence;
+      var replied = false;
+
+      // 每次渲染只回传一个终态，过期渲染不得覆盖新页面的结果。
+      function finishRender(ok, error) {
+        if (replied || currentSequence !== renderSequence) return;
+        replied = true;
+        window.parent.postMessage({
+          type: 'design-rendered',
+          nonce: nonce,
+          ok: ok,
+          error: error ? String(error.message || error) : '',
+          stack: error && error.stack ? String(error.stack).slice(0, 1000) : ''
+        }, '*');
+      }
+
+      // React 18 的 root.render 为异步提交，错误边界负责捕获真正渲染阶段的异常。
+      class DesignRuntimeErrorBoundary extends runtime.React.Component {
+        // 初始化本次预览的错误状态。
+        constructor(props) {
+          super(props);
+          this.state = { failed: false };
+        }
+
+        // 出错后停止继续渲染损坏的组件树。
+        static getDerivedStateFromError() {
+          return { failed: true };
+        }
+
+        // 把异步渲染异常回传主窗口，不能提前宣告成功后留下白屏。
+        componentDidCatch(error) {
+          finishRender(false, error);
+        }
+
+        // 正常时透传页面组件，失败时保留空容器给主窗口错误层覆盖。
+        render() {
+          return this.state.failed ? null : this.props.children;
+        }
+      }
+
+      root.render(runtime.React.createElement(
+        DesignRuntimeErrorBoundary,
+        null,
+        runtime.React.createElement(component)
+      ));
+      // 等待两帧确认 React 已提交且根节点确有内容，再通知主窗口渲染成功。
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (replied || currentSequence !== renderSequence) return;
+          var container = document.getElementById('root');
+          if (!container || container.childNodes.length === 0) {
+            finishRender(false, new Error('设计稿渲染结果为空'));
+            return;
+          }
+          finishRender(true, null);
+        });
+      });
     } catch (e) {
       window.parent.postMessage({
         type: 'design-rendered',

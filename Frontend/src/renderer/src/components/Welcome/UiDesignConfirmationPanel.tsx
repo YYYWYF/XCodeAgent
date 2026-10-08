@@ -7,7 +7,7 @@ import {
   ReloadOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Input, Modal, Spin, Tag, Typography } from 'antd'
+import { Alert, Button, Input, message, Modal, Spin, Tag, Typography } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
@@ -34,6 +34,8 @@ type PageDesign = {
   code_path?: string
   /** 设计稿 .tsx 源码（方案 B：DesignRenderer 直接消费此字段编译渲染）。 */
   code?: string
+  /** 已有设计稿源码暂时无法从工作区读取时的提示。 */
+  code_error?: string
   /** 仅用于隔离设计稿预览，不是 ProductPlan 正式路由。 */
   preview_path?: string
   /** 旧 UI Manifest 兼容字段。 */
@@ -50,7 +52,7 @@ type Props = {
   onSubmit: (
     workflow: WorkflowRunPayload,
     answers: WorkflowClarificationAnswers
-  ) => void
+  ) => void | Promise<void>
   workflow: WorkflowRunPayload
   /** 受控当前选中页 id（可选，用于与右侧设计稿预览面板联动）。 */
   activePageId?: string
@@ -109,14 +111,20 @@ export default function UiDesignConfirmationPanel({
   // queued/generating。直接读 ui-designs.json 拿到最新 status 覆盖快照，避免卡片
   // 一直显示「生成中」。override 只在本地 acting/generating 页存在时由轮询填充。
   const [pageStatusOverrides, setPageStatusOverrides] = useState<Record<string, string>>({})
+  const [pageCodeOverrides, setPageCodeOverrides] = useState<
+    Record<string, Pick<PageDesign, 'code' | 'code_error' | 'error'>>
+  >({})
+  // 正在提交停止请求的页面；避免重复停止，并让用户看到请求仍在处理中。
+  const [stoppingPageIds, setStoppingPageIds] = useState<string[]>([])
+  const stoppingSet = useMemo(() => new Set(stoppingPageIds), [stoppingPageIds])
   const pages = useMemo(
     () =>
       rawPages.map((page) => {
         const pageId = page.pageId || ''
         const override = pageId ? pageStatusOverrides[pageId] : undefined
-        return override ? { ...page, status: override } : page
+        return override ? { ...page, ...pageCodeOverrides[pageId], status: override } : page
       }),
-    [rawPages, pageStatusOverrides]
+    [rawPages, pageStatusOverrides, pageCodeOverrides]
   )
   // 最终确认被后端事实校验拒绝时，直接展示确定性错误而不是只停留在当前页面。
   const validationErrors = useMemo(() => {
@@ -177,22 +185,63 @@ export default function UiDesignConfirmationPanel({
   const workflowRef = useRef(workflow)
   workflowRef.current = workflow
   // 是否已观察到本轮 run 真正进入 running（后端流式推送 status=running）。
+  const observedRunningRef = useRef(false)
+
+  // 新一轮提交前清除目标页上一轮终态覆盖，避免旧 generation_failed 立即把新任务的
+  // acting 状态清掉，造成按钮点击后没有加载反馈并允许同一 checkpoint 并发提交。
+  const clearPageStatusOverrides = useCallback((pageIds: string[]): void => {
+    const targetIds = new Set(pageIds)
+    setPageStatusOverrides((prev) => {
+      if (!Object.keys(prev).some((pageId) => targetIds.has(pageId))) return prev
+      const next = { ...prev }
+      for (const pageId of targetIds) delete next[pageId]
+      return next
+    })
+  }, [])
+
+  // 统一提交 UI 设计动作；提交失败时立即恢复本地按钮状态并给出可见提示。
+  const submitUiDesignRun = useCallback(
+    (
+      payload: Record<string, unknown>,
+      targetPageIds: string[],
+      failureMessage = '设计稿生成任务提交失败，请稍后重试。'
+    ): void => {
+      clearPageStatusOverrides(targetPageIds.filter((pageId) => pageId !== 'adjust'))
+      runInFlightRef.current = true
+      observedRunningRef.current = false
+      const submission = onSubmitRef.current(workflowRef.current, {
+        ui_design_action: payload,
+        __applicationPlanningAction: 'ui_action'
+      })
+      void Promise.resolve(submission).catch((reason: unknown) => {
+        const failedIds = new Set(targetPageIds)
+        pendingActionsRef.current = pendingActionsRef.current.filter(
+          (item) => !failedIds.has(item.pageId)
+        )
+        setActingPageIds((prev) => prev.filter((pageId) => !failedIds.has(pageId)))
+        runInFlightRef.current = false
+        observedRunningRef.current = false
+        // 提交可能在前端同步门禁、AG-UI 网络或服务端校验任一阶段失败；
+        // 保留具体原因，避免所有问题都被同一条“稍后重试”提示掩盖。
+        const detail = reason instanceof Error ? reason.message.trim() : ''
+        message.error(detail ? `${failureMessage} ${detail}` : failureMessage)
+      })
+    },
+    [clearPageStatusOverrides, setActingPageIds]
+  )
   // flush 瞬间 workflowStatus 可能还是上一轮残留的 requires_user_input（run 尚未开始
   // 流式），若据此判定 run 完成会提前重置 runInFlightRef，导致同 thread 并发新 run
   // （AsyncSqliteSaver checkpoint 链冲突，workflow 回退到 requirements 节点）。
   // 只有先观察到 running、再回到 requires_user_input 才算本轮 run 真正完成。
-  const observedRunningRef = useRef(false)
   // 斜杠提及：输入框输入 / 后弹出页面列表浮层。
   const [mentionOpen, setMentionOpen] = useState(false)
   const [mentionQuery, setMentionQuery] = useState('')
   const feedbackRef = useRef<HTMLTextAreaElement | null>(null)
 
-  // 确认状态以后端 page.status 为权威源：选模板或换一换成功后后端置 confirmed。
-  // 不强制要求 page.code：manifest 落盘时剥离 code，no-op resume 回填 code 有延迟，
-  // 若要求 code 非空才算确认，生成成功的页会短暂显示「未生成」。code 仅用于
-  // 「查看设计稿」按钮的 disabled 判断（各自检查 page.code），不影响确认状态。
+  // 确认状态必须同时有可预览源码；后端 manifest 的 confirmed 可能先于 TSX 读取，
+  // 此时不能把页面展示成已确认，也不能允许它进入全部确认。
   const isPageConfirmed = useCallback(
-    (page: PageDesign): boolean => page.status === 'confirmed',
+    (page: PageDesign): boolean => page.status === 'confirmed' && Boolean(page.code?.trim()),
     []
   )
   // 后台生成池处理中：入队（queued）或已领取（generating），尚未产出设计稿。
@@ -254,7 +303,7 @@ export default function UiDesignConfirmationPanel({
     if (disabled || runInFlightRef.current) return
     const pendingPages = pages.filter(
       (page) =>
-        !isPageConfirmed(page) &&
+        page.status !== 'confirmed' &&
         !isPageGenerating(page) &&
         !actingSet.has(page.pageId || '')
     )
@@ -266,13 +315,11 @@ export default function UiDesignConfirmationPanel({
     // 立即把这些页标记为 acting（禁用按钮 + 显示生成中），与逐页点击一致。
     const actingPageIds = batch.map((b) => b.pageId)
     setActingPageIds(actingPageIds)
-    runInFlightRef.current = true
-    observedRunningRef.current = false
     const payload =
       batch.length === 1
         ? { pageId: batch[0].pageId, action: batch[0].action }
         : { action: 'multi', actions: batch }
-    onSubmit(workflow, { ui_design_action: payload, __applicationPlanningAction: 'ui_action' })
+    submitUiDesignRun(payload, actingPageIds)
   }
 
   // 用户明确选择跳过 UI 设计时，只提交跳过动作并等待计划阶段入口卡。
@@ -290,8 +337,6 @@ export default function UiDesignConfirmationPanel({
   const flushPendingActions = useCallback((): void => {
     if (pendingActionsRef.current.length === 0) return
     const batch = pendingActionsRef.current.splice(0)
-    runInFlightRef.current = true
-    observedRunningRef.current = false
     const payload =
       batch.length === 1
         ? { pageId: batch[0].pageId, action: batch[0].action, ...(batch[0].templateId ? { templateId: batch[0].templateId } : {}) }
@@ -299,25 +344,35 @@ export default function UiDesignConfirmationPanel({
     // 用 ref 持有的最新 onSubmit/workflow，避免本 callback 依赖 workflow
     // （workflow 每次轮询都会变，会让 flushPendingActions 引用变化，进而触发
     // cleanup-effect 依赖它而反复重跑、形成 actingPageIds 抖动闪烁）。
-    onSubmitRef.current(workflowRef.current, { ui_design_action: payload, __applicationPlanningAction: 'ui_action' })
-  }, [])
+    submitUiDesignRun(payload, batch.map((item) => item.pageId))
+  }, [submitUiDesignRun])
 
   // 用户主动停止单页生成：调后端 /api/ui-design/cancel（池立即把该页置 cancelled
-  // 终态，LLM 请求不打断但结果丢弃），随后立即复位本地 acting/run 态——不等 3 秒
-  // 轮询，点停止的瞬间卡片就退出「生成中」、恢复可重试。后端取消失败（如任务其实
-  // 已结束）时也照常复位本地态：本地「生成中」与后端在途任务解耦后，复位永远安全
-  // （若后端仍在生成，下轮 override 轮询会把 queued/generating 状态带回）。
+  // 终态，LLM 请求不打断但结果丢弃）。只有后端确认 cancelled 已持久化后才更新
+  // 本地状态；网络失败或 cancelled=false 时不得伪装停止成功，否则下一轮磁盘轮询
+  // 会改回 queued，并被后端自愈逻辑再次自动入队。
   const cancelPageGeneration = useCallback(
     async (pageId: string): Promise<void> => {
+      if (stoppingSet.has(pageId)) return
       const baseUrl = window.xcodeAgent?.agentBaseUrl || 'http://127.0.0.1:8000'
+      setStoppingPageIds((prev) => (prev.includes(pageId) ? prev : [...prev, pageId]))
       try {
-        await fetch(`${baseUrl.replace(/\/$/, '')}/api/ui-design/cancel`, {
+        const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/ui-design/cancel`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspace: workspaceRoot, pageId }),
         })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const result = (await response.json()) as { cancelled?: boolean }
+        if (result.cancelled !== true) {
+          message.info('该任务已经结束或不在后台队列中，正在同步最新状态。')
+          return
+        }
       } catch {
-        // 网络失败不阻塞本地复位——本地加载态卡住的危害远大于一次取消请求丢失。
+        message.error('停止生成失败，后台任务仍可能继续运行，请重试。')
+        return
+      } finally {
+        setStoppingPageIds((prev) => prev.filter((id) => id !== pageId))
       }
       setActingPageIds((prev) => prev.filter((id) => id !== pageId))
       if (actingPageIdsRef.current.filter((id) => id !== pageId).length === 0) {
@@ -327,7 +382,7 @@ export default function UiDesignConfirmationPanel({
       // 立即把该页 override 置为 cancelled，卡片马上显示已停止（不等轮询）。
       setPageStatusOverrides((prev) => ({ ...prev, [pageId]: 'cancelled' }))
     },
-    [workspaceRoot, setActingPageIds]
+    [stoppingSet, workspaceRoot, setActingPageIds]
   )
 
   // 逐页"选模板"或"重新生成"：点击即把该页加入 acting 集合（立即禁用该页按钮 +
@@ -338,9 +393,15 @@ export default function UiDesignConfirmationPanel({
   // 的页跳过，避免重复入队。
   const submitPageAction = useCallback(
     (pageId: string, action: 'select_template' | 'regenerate', templateId?: string): void => {
-      if (actingSet.has(pageId)) return
+      if (actingSet.has(pageId)) {
+        message.info('该页面的生成任务已经提交，请等待当前任务完成。')
+        return
+      }
       const page = pages.find((p) => (p.pageId || '') === pageId)
-      if (page && isPageGenerating(page)) return
+      if (page && isPageGenerating(page)) {
+        message.info('该页面正在后台排队或生成，无需重复提交。')
+        return
+      }
       setActingPageIds((prev) => (prev.includes(pageId) ? prev : [...prev, pageId]))
       pendingActionsRef.current.push({ pageId, action, templateId })
       onActivePageChange?.(pageId)
@@ -382,18 +443,17 @@ export default function UiDesignConfirmationPanel({
     const { pageIds, instruction } = parseMentionedPageIds(feedback)
     if (!instruction) return
     setActingPageIds(['adjust'])
-    runInFlightRef.current = true
-    observedRunningRef.current = false
-    onSubmit(workflow, {
-      ui_design_action: {
+    submitUiDesignRun(
+      {
         action: 'adjust_pages',
         pageIds,
-        instruction,
+        instruction
       },
-      __applicationPlanningAction: 'ui_action'
-    })
+      ['adjust'],
+      '设计稿调整任务提交失败，请稍后重试。'
+    )
     setFeedback('')
-  }, [feedback, onSubmit, parseMentionedPageIds, workflow])
+  }, [feedback, parseMentionedPageIds, setActingPageIds, submitUiDesignRun])
 
   // 输入框变更：检测光标前最近的 / 触发提及浮层。
   const handleFeedbackChange = useCallback(
@@ -502,6 +562,16 @@ export default function UiDesignConfirmationPanel({
     if (workflowStatus === 'running') {
       observedRunningRef.current = true
     }
+    if (workflowStatus === 'failed') {
+      if (!runInFlightRef.current && pendingActionsRef.current.length === 0) return
+      pendingActionsRef.current = []
+      runInFlightRef.current = false
+      observedRunningRef.current = false
+      setRefreshing(false)
+      setActingPageIds([])
+      message.error('设计稿操作执行失败，按钮已恢复，请重试。')
+      return
+    }
     if (workflowStatus !== 'requires_user_input') return
     if (!observedRunningRef.current) return
     if (!runInFlightRef.current && pendingActionsRef.current.length === 0) return
@@ -533,7 +603,7 @@ export default function UiDesignConfirmationPanel({
   const [refreshing, setRefreshing] = useState(false)
   const refreshingTimeoutRef = useRef<number | undefined>(undefined)
   const refreshUiDesigns = useCallback((): void => {
-    if (runInFlightRef.current || refreshing) return
+    if (runInFlightRef.current || refreshing || workflowRef.current.summary?.status === 'running') return
     runInFlightRef.current = true
     observedRunningRef.current = true
     setRefreshing(true)
@@ -546,43 +616,55 @@ export default function UiDesignConfirmationPanel({
     }, 5000)
   }, [refreshing])
 
-  // 后台生成池完成（confirmed/generation_failed）后不会主动通知前端，workflow 快照
-  // 里的 page status 仍停留在 queued/generating，导致卡片一直显示「生成中」无法恢复。
-  // 直接通过 IPC 读 ui-designs.json 拿最新 status 覆盖快照。但 isPageConfirmed 还要求
-  // page.code 非空，而 manifest 只存 code_path 不存 code——纯 IPC 覆盖 status 不够，
-  // 必须触发一次 no-op resume Graph run 让后端 _latest_ui_designs 回填 code 到快照。
-  // 因此轮询检测到任一页从非终态变为终态时，自动调 refreshUiDesigns（已有 runInFlight/
-  // refreshing 守卫避免并发）。refreshUiDesigns 用 ref 持有，避免依赖变化重建定时器。
+  // 后台生成池完成后直接从工作区读取状态与 TSX；不通过同一工作流线程发起
+  // no-op resume 回填代码，避免刷新被并发门禁跳过后永久停留在空预览。
   const refreshUiDesignsRef = useRef(refreshUiDesigns)
   refreshUiDesignsRef.current = refreshUiDesigns
-  const prevStatusRef = useRef<Record<string, string>>({})
+  const observedGenerationRef = useRef<Set<string>>(new Set())
+  const queuedSinceRef = useRef<Record<string, number>>({})
+  const lastQueuedRecoveryRef = useRef(0)
   useEffect(() => {
     if (!workspaceRoot) return
     let cancelled = false
-    const TERMINAL_STATUSES = new Set(['confirmed', 'generation_failed'])
     const poll = async (): Promise<void> => {
       try {
         const result = await window.xcodeAgent?.workspace?.readUiDesigns({ workspaceRoot })
         if (cancelled || !result?.uiDesigns) return
-        const manifestPages = (result.uiDesigns as { pages?: Array<{ pageId?: string; status?: string }> }).pages
+        const manifestPages = (result.uiDesigns as { pages?: PageDesign[] }).pages
         if (!Array.isArray(manifestPages)) return
         const overrides: Record<string, string> = {}
-        let reachedTerminal = false
+        const codeOverrides: Record<string, Pick<PageDesign, 'code' | 'code_error' | 'error'>> = {}
+        const now = Date.now()
         for (const page of manifestPages) {
           const pageId = String(page?.pageId || '')
           const status = String(page?.status || '')
           if (!pageId || !status) continue
           overrides[pageId] = status
-          const prev = prevStatusRef.current[pageId]
-          // 检测从非终态变为终态：prev 缺失或非终态，当前是终态。
-          if (TERMINAL_STATUSES.has(status) && (!prev || !TERMINAL_STATUSES.has(prev))) {
-            reachedTerminal = true
+          codeOverrides[pageId] = {
+            code: typeof page.code === 'string' ? page.code : '',
+            code_error: page.code_error,
+            error: page.error
+          }
+          if (status === 'queued' || status === 'generating') observedGenerationRef.current.add(pageId)
+          if (status === 'queued') {
+            queuedSinceRef.current[pageId] ??= now
+          } else {
+            delete queuedSinceRef.current[pageId]
           }
         }
-        prevStatusRef.current = overrides
-        if (!cancelled) setPageStatusOverrides(overrides)
-        // 有页刚进入终态：自动触发 no-op resume 让后端回填 code，UI 立即反映生成结果。
-        if (reachedTerminal) refreshUiDesignsRef.current()
+        if (!cancelled) {
+          setPageStatusOverrides(overrides)
+          setPageCodeOverrides(codeOverrides)
+        }
+        if (
+          Object.values(queuedSinceRef.current).some((since) => now - since >= 15000) &&
+          now - lastQueuedRecoveryRef.current >= 20000
+        ) {
+          // IPC 只读磁盘不会唤醒后端 worker；排队长时间不动时低频走原 AG-UI
+          // no-op resume，让 _latest_ui_designs 恢复热重载后遗失的池任务。
+          lastQueuedRecoveryRef.current = now
+          refreshUiDesignsRef.current()
+        }
       } catch {
         // 读取失败不阻塞，下次轮询重试。
       }
@@ -624,9 +706,16 @@ export default function UiDesignConfirmationPanel({
       )
       .map(([pageId]) => pageId)
     if (terminalIds.length === 0) return
-    const stuck = terminalIds.filter((pageId) => actingSet.has(pageId))
+    // 新任务刚提交时磁盘仍可能保留上一轮 confirmed；先等本轮 run 结束或观察到
+    // queued/generating，不能把旧终态误当本轮完成而提前清掉加载态。
+    const stuck = terminalIds.filter(
+      (pageId) =>
+        actingSet.has(pageId) &&
+        (!runInFlightRef.current || observedGenerationRef.current.has(pageId))
+    )
     if (stuck.length === 0) return
     const stuckSet = new Set(stuck)
+    stuck.forEach((pageId) => observedGenerationRef.current.delete(pageId))
     setActingPageIds((prev) => prev.filter((id) => !stuckSet.has(id)))
     // 全部 acting 页都已到终态：本轮 run 的入队提交其实早已返回（只是流式状态
     // 序列没满足导致 runInFlight 未复位）。强制复位，让重试/全部生成恢复可用。
@@ -773,7 +862,7 @@ export default function UiDesignConfirmationPanel({
                 const index = activeIndex >= 0 ? activeIndex : 0
                 const pageId = page.pageId || `page-${index + 1}`
                 const confirmed = isPageConfirmed(page)
-                const generating = actingSet.has(pageId) || isPageGenerating(page)
+                const generating = isPageGenerating(page) || (actingSet.has(pageId) && page.status !== 'confirmed' && page.status !== 'generation_failed' && page.status !== 'cancelled')
                 return (
                   <div
                     className={cx(
@@ -824,6 +913,7 @@ export default function UiDesignConfirmationPanel({
                           <Button
                             className={cx('ui-design-action-btn')}
                             danger
+                            loading={stoppingSet.has(pageId)}
                             onClick={() => void cancelPageGeneration(pageId)}
                             title="停止本页设计稿生成（已产生的模型调用结果将被丢弃）"
                           >
@@ -897,10 +987,12 @@ export default function UiDesignConfirmationPanel({
                           <div className={cx('ui-design-card-empty')}>
                             <InboxOutlined className={cx('ui-design-card-empty-icon')} />
                             <span className={cx('ui-design-card-empty-title')}>
-                              本页尚未生成设计稿
+                              {page.status === 'confirmed' ? '设计稿源码读取失败' : '本页尚未生成设计稿'}
                             </span>
                             <span className={cx('ui-design-card-empty-hint')}>
-                              选择模板定版式，由 AI 填入本页内容并重新生成（需等待）。
+                              {page.status === 'confirmed'
+                                ? page.code_error || '设计稿已生成，但暂时无法读取源码。请检查项目文件。'
+                                : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）。'}
                             </span>
                             <div className={cx('ui-design-card-empty-actions')}>
                               <Button
@@ -931,7 +1023,7 @@ export default function UiDesignConfirmationPanel({
             const confirmed = isPageConfirmed(page)
             // acting 同时覆盖本地瞬时处理（actingSet）与后台生成池状态（queued/generating），
             // 二者都表示该页尚未产出设计稿、正在生成中。
-            const acting = actingSet.has(pageId) || isPageGenerating(page)
+            const acting = isPageGenerating(page) || (actingSet.has(pageId) && page.status !== 'confirmed' && page.status !== 'generation_failed' && page.status !== 'cancelled')
             return (
               <div
                 className={cx(
@@ -962,6 +1054,8 @@ export default function UiDesignConfirmationPanel({
                     <Tag className={cx('ui-design-page-row-status', 'is-generating')}>生成中</Tag>
                   ) : confirmed ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-confirmed')}>已确认</Tag>
+                  ) : page.status === 'confirmed' ? (
+                    <Tag className={cx('ui-design-page-row-status', 'is-failed')} color="error" title={page.code_error}>源码读取失败</Tag>
                   ) : page.status === 'generation_failed' ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-failed')} color="error">生成失败</Tag>
                   ) : page.status === 'cancelled' ? (
@@ -998,6 +1092,7 @@ export default function UiDesignConfirmationPanel({
                     <Button
                       className={cx('ui-design-action-btn')}
                       danger
+                      loading={stoppingSet.has(pageId)}
                       onClick={() => void cancelPageGeneration(pageId)}
                       title="停止本页设计稿生成（已产生的模型调用结果将被丢弃）"
                     >

@@ -108,6 +108,28 @@ export interface ApplicationAuthorizationSeed {
   initialAdministratorSubjects: string[]
 }
 
+/** 描述已经由 Electron 校验并复制到工作区的一张需求截图。 */
+export interface ApplicationRequirementScreenshot {
+  relativePath: string
+  name: string
+  mimeType: 'image/jpeg' | 'image/png' | 'image/webp'
+  size: number
+  sha256: string
+}
+
+/** 描述创建规划使用的文字或截图需求输入。 */
+export interface ApplicationRequirementInput {
+  mode: 'text' | 'screenshot'
+  screenshots: ApplicationRequirementScreenshot[]
+}
+
+/** 描述 Renderer 选择但尚未复制到工作区的本地截图。 */
+export interface ApplicationRequirementScreenshotSelection {
+  path: string
+  name: string
+  size: number
+}
+
 export interface ApplicationSchemaConfig {
   schemaVersion: 6
   /** 标识 application.json 的当前配置事实版本，供规划和模板链路检测过期产物。 */
@@ -417,6 +439,8 @@ export interface ApplicationConfig extends ApplicationSchemaConfig, ApplicationI
   /** 应用规划线程 id，模板生成时持久化，供从历史恢复设计阶段历史卡片使用
    *  （后端在 lifecycle=ready_for_workbench 时会清空 threadId，前端需自行保留）。 */
   planningThreadId?: string
+  /** 工作区独立清单恢复出的需求输入，不属于 application.json 配置。 */
+  requirementInput?: ApplicationRequirementInput
 }
 
 /**
@@ -476,6 +500,7 @@ export interface ApplicationDraft {
   appIcon: string
   senario: string
   projectPath: string
+  requirementInputMode: ApplicationRequirementInput['mode']
   versionNo: string
   repoUrl: string
   terminal: ApplicationTerminal

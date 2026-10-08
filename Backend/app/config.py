@@ -39,6 +39,18 @@ class Settings:
     )
     default_temperature: float = 0.2
     default_max_tokens: int = 32768
+    # 截图需求识别与截图 UI 生成共用 OpenAI-compatible 多模态模型；三项留空时
+    # 回落主模型。主模型使用 Anthropic 协议时应显式配置该独立模型。
+    screenshot_base_url: str = ""
+    screenshot_api_key: str = ""
+    screenshot_model_name: str = ""
+    screenshot_response_format: str = "auto"
+    screenshot_max_output_tokens: int = 16000
+    screenshot_timeout_seconds: float = 300.0
+    screenshot_ui_min_similarity: int = 78
+    screenshot_ui_max_retries: int = 1
+    screenshot_ui_max_images_per_page: int = 8
+    screenshot_ui_page_image_max_side: int = 1600
     # UI 确认节点生成 React 设计稿的生成 token 上限。推理模型（如 glm-5.2）的
     # 思考过程与正文共用该预算，且网关会把 thinking 以 [{'thinking': ..}] 碎片
     # 形式逐 token 拼进 content——16384 时思考可吃掉大部分预算导致正文在
@@ -89,6 +101,47 @@ class Settings:
     @property
     def model_api_name(self) -> str:
         return _DISPLAY_MODEL_SUFFIX.sub("", self.model_name).strip()
+
+    @property
+    def screenshot_model_api_name(self) -> str:
+        """返回截图模式使用的视觉模型名称，未独立配置时复用主模型。"""
+
+        self._validate_screenshot_model_configuration()
+        configured = self.screenshot_model_name or self.model_name
+        return _DISPLAY_MODEL_SUFFIX.sub("", configured).strip()
+
+    @property
+    def screenshot_model_base_url(self) -> str:
+        """返回 OpenAI-compatible 截图模型地址，并阻止误用 Anthropic 协议。"""
+
+        self._validate_screenshot_model_configuration()
+        return (self.screenshot_base_url or self.model_base_url).rstrip("/")
+
+    @property
+    def screenshot_model_api_key(self) -> str:
+        """返回截图模型密钥，未独立配置时复用主模型密钥。"""
+
+        self._validate_screenshot_model_configuration()
+        return self.screenshot_api_key or self.model_api_key
+
+    def _validate_screenshot_model_configuration(self) -> None:
+        """要求截图模型配置全有或全无，并阻止回落到 Anthropic 协议。"""
+
+        configured = (
+            self.screenshot_base_url,
+            self.screenshot_api_key,
+            self.screenshot_model_name,
+        )
+        if any(configured) and not all(configured):
+            raise RuntimeError(
+                "XCODEAGENT_SCREENSHOT_BASE_URL、XCODEAGENT_SCREENSHOT_API_KEY "
+                "和 XCODEAGENT_SCREENSHOT_MODEL_NAME 必须同时配置或同时留空。"
+            )
+        if self.model_provider == "anthropic" and not all(configured):
+            raise RuntimeError(
+                "截图模式需要配置 XCODEAGENT_SCREENSHOT_BASE_URL、"
+                "XCODEAGENT_SCREENSHOT_API_KEY 和 XCODEAGENT_SCREENSHOT_MODEL_NAME。"
+            )
 
     @property
     def provider_api_name(self) -> str:
@@ -168,6 +221,46 @@ class Settings:
             ),
             default_temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
             default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "32768")),
+            screenshot_base_url=os.getenv(
+                "XCODEAGENT_SCREENSHOT_BASE_URL", ""
+            ).strip(),
+            screenshot_api_key=os.getenv(
+                "XCODEAGENT_SCREENSHOT_API_KEY", ""
+            ).strip(),
+            screenshot_model_name=os.getenv(
+                "XCODEAGENT_SCREENSHOT_MODEL_NAME", ""
+            ).strip(),
+            screenshot_response_format=os.getenv(
+                "XCODEAGENT_SCREENSHOT_RESPONSE_FORMAT", "auto"
+            ).strip().lower(),
+            screenshot_max_output_tokens=_env_int(
+                "XCODEAGENT_SCREENSHOT_MAX_OUTPUT_TOKENS",
+                default=16000,
+                minimum=1,
+            ),
+            screenshot_timeout_seconds=float(
+                os.getenv("XCODEAGENT_SCREENSHOT_TIMEOUT_SECONDS", "300.0")
+            ),
+            screenshot_ui_min_similarity=_env_int(
+                "XCODEAGENT_SCREENSHOT_UI_MIN_SIMILARITY",
+                default=78,
+                minimum=0,
+            ),
+            screenshot_ui_max_retries=_env_int(
+                "XCODEAGENT_SCREENSHOT_UI_MAX_RETRIES",
+                default=1,
+                minimum=0,
+            ),
+            screenshot_ui_max_images_per_page=_env_int(
+                "XCODEAGENT_SCREENSHOT_UI_MAX_IMAGES_PER_PAGE",
+                default=8,
+                minimum=1,
+            ),
+            screenshot_ui_page_image_max_side=_env_int(
+                "XCODEAGENT_SCREENSHOT_UI_PAGE_IMAGE_MAX_SIDE",
+                default=1600,
+                minimum=640,
+            ),
             ui_design_model_base_url=os.getenv("UI_DESIGN_MODEL_BASE_URL", "").strip(),
             ui_design_model_api_key=os.getenv("UI_DESIGN_MODEL_API_KEY", "").strip(),
             ui_design_model_name=os.getenv("UI_DESIGN_MODEL_NAME", "").strip(),

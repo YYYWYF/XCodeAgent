@@ -478,6 +478,17 @@ def build_workflow_ag_ui_stream(
                         application_planning_interaction,
                     )
                 checkpoint_values = dict(checkpoint_snapshot.values)
+                if workflow_inputs.get("workflow_action") == "retry_design_intent":
+                    failed_tasks = [
+                        task for task in getattr(checkpoint_snapshot, "tasks", ()) or ()
+                        if str(getattr(task, "name", "") or "") == "design_intent_analysis"
+                        and getattr(task, "error", None)
+                    ]
+                    original_request = str(checkpoint_values.get("request") or "").strip()
+                    if not failed_tasks or not original_request:
+                        raise ValueError("当前线程没有可重试的设计意图失败任务，请刷新状态。")
+                    # 请求只能来自失败 checkpoint，客户端不能借重试动作替换设计变更。
+                    request = original_request
             snapshot_only = (
                 workflow_scope == "application_planning"
                 and bool(checkpoint_values)
@@ -585,6 +596,10 @@ def build_workflow_ag_ui_stream(
                 and not application_planning_interaction
             ):
                 initial_state.update(cleared_design_change_context())
+                if workflow_inputs.get("workflow_action") == "retry_design_intent":
+                    initial_state["design_interaction_origin"] = str(
+                        checkpoint_values.get("design_interaction_origin") or "ui_confirmation"
+                    )
             first_node_name = _application_planning_resume_node(
                 application_planning_interaction
             ) or _workflow_start_node(resume_from, workflow_scope)
@@ -1178,6 +1193,75 @@ def build_workflow_ag_ui_stream(
                                 "prepare_build_tasks", task_attempt
                             ),
                             dag_generation=dag_generation,
+                        )
+                        continue
+                    if event_type == "screenshot_ui_preparation.progress":
+                        progress_node = str(
+                            progress.get("node_name") or "screenshot_ui_preparation"
+                        )
+                        progress_attempt = _current_node_attempt(
+                            node_attempts, progress_node
+                        )
+                        progress_detail = (
+                            progress.get("detail")
+                            if isinstance(progress.get("detail"), dict)
+                            else {}
+                        )
+                        progress_message = str(
+                            progress.get("message")
+                            or "正在根据截图准备 UI 设计稿。"
+                        )
+                        # 截图准备尚未形成可确认 UiManifest，只投影节点进度，避免用
+                        # 空页面列表覆盖 checkpoint 中已经存在的设计稿状态。
+                        progress_state = {
+                            **stream_state,
+                            "phase": progress_node,
+                            "status": "running",
+                        }
+                        _workflow_event(
+                            events,
+                            "workflow.node.progress",
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            node_name=progress_node,
+                            status="running",
+                            message=progress_message,
+                            data={
+                                "phase": progress_node,
+                                "detail": progress_detail,
+                            },
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(
+                                progress_node, progress_attempt
+                            ),
+                            node_label=_runtime_node_label(
+                                progress_node, progress_state
+                            ),
+                        )
+                        for frame in _workflow_ag_ui_frames(
+                            encoder,
+                            run_id=run_id,
+                            thread_id=thread_id,
+                            events=events,
+                            result=progress_state,
+                        ):
+                            yield frame
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id(progress_node, progress_attempt),
+                            kind="workflow",
+                            status="running",
+                            title=(
+                                f"正在执行 "
+                                f"{_runtime_node_label(progress_node, progress_state)}"
+                            ),
+                            detail=progress_message,
+                            sequence=process_sequence,
+                            node_name=progress_node,
+                            attempt=progress_attempt,
+                            iteration_kind=_iteration_kind(
+                                progress_node, progress_attempt
+                            ),
                         )
                         continue
                     if event_type == "template_reconcile.progress":

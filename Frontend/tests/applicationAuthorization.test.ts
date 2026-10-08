@@ -57,6 +57,32 @@ test('规划请求携带当前权限事实', () => {
   assert.doesNotMatch(request, /权限提供器模式/)
 })
 
+/** 验证截图输入只以工作区清单进入规划上下文，并明确文字是补充说明。 */
+test('截图规划请求携带需求输入方式', () => {
+  const schema = buildApplicationSchema(
+    structuredClone(initialApplicationDraft) as ApplicationDraft
+  )
+  const application = {
+    ...schema,
+    id: 'application-screenshot-test',
+    name: '截图规划应用',
+    requirementInput: {
+      mode: 'screenshot',
+      screenshots: [
+        {
+          relativePath: '.xcodeagent/inputs/screenshots/batch/01-a.png',
+          name: '首页.png',
+          mimeType: 'image/png',
+          size: 128,
+          sha256: 'a'.repeat(64)
+        }
+      ]
+    }
+  } as ApplicationConfig
+
+  assert.match(buildApplicationPlanningRequest(application), /使用 1 张页面截图进行视觉识别/)
+})
+
 /** 验证首页持久化对象只保留工作区索引，运行时配置不会写入 applications.json。 */
 test('应用索引不保存 application.json 配置副本', () => {
   const schema = buildApplicationSchema(structuredClone(initialApplicationDraft) as ApplicationDraft)
@@ -69,7 +95,8 @@ test('应用索引不保存 application.json 配置副本', () => {
     pages: ['工作台'],
     defaultPage: '工作台',
     source: 'new' as const,
-    planningThreadId: 'thread-1'
+    planningThreadId: 'thread-1',
+    requirementInput: { mode: 'text', screenshots: [] }
   } as ApplicationConfig
 
   const applicationIndex = applicationIndexOf(application)
@@ -83,6 +110,7 @@ test('应用索引不保存 application.json 配置副本', () => {
   assert.equal('id' in persistedSchema, false)
   assert.equal('workspaceRoot' in persistedSchema, false)
   assert.equal('planningThreadId' in persistedSchema, false)
+  assert.equal('requirementInput' in persistedSchema, false)
   assert.deepEqual(persistedSchema.auth, schema.auth)
 })
 

@@ -13,6 +13,7 @@ from app.agents.main.requirements_analyzer import (
     MAX_REQUIREMENT_CLARIFICATION_ROUNDS,
     analyze_requirements_with_chat_model,
 )
+from app.agents.screenshot_requirements import analyze_requirements_from_screenshots
 from app.graph.nodes.confirmation import (
     extract_confirmation_answer,
     user_confirmed_text,
@@ -314,13 +315,29 @@ def requirements(state: ProjectState) -> dict:
         interaction,
         application_planning_scope=application_planning_scope,
     )
-    analysis = analyze_requirements_with_chat_model(
-        analysis_request,
-        existing_spec=existing_spec,
-        datasource_type=datasource_type,
-        clarification_round=clarification_round,
-        on_token=_llm_token_callback,
+    requirement_input = state.get("requirement_input")
+    screenshot_mode = (
+        isinstance(requirement_input, dict)
+        and requirement_input.get("mode") == "screenshot"
     )
+    if screenshot_mode:
+        # 截图模式只替换 RequirementSpec 生成器，沿用当前校验、确认和落盘链路。
+        analysis = analyze_requirements_from_screenshots(
+            analysis_request,
+            requirement_input,
+            workspace=str(state.get("workspace") or state.get("workspace_path") or ""),
+            existing_spec=existing_spec,
+            datasource_type=datasource_type,
+            on_token=_llm_token_callback,
+        )
+    else:
+        analysis = analyze_requirements_with_chat_model(
+            analysis_request,
+            existing_spec=existing_spec,
+            datasource_type=datasource_type,
+            clarification_round=clarification_round,
+            on_token=_llm_token_callback,
+        )
     spec = apply_authoritative_datasource_type(
         analysis["requirement_spec"],
         datasource_type,

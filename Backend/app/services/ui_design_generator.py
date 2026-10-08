@@ -333,7 +333,15 @@ def _extract_tsx_code(text: str) -> str:
                 if lines[j].strip():
                     start = j
                 j -= 1
-            return "\n".join(lines[start : export_idx + 1]).strip()
+            # export default function/class/表达式可以从这一行开始跨多行定义。
+            # 普通 `export default Name;` 仍在该行结束，避免吞入尾部说明文字。
+            export_tail = stripped[e_start:]
+            defines_component = re.match(
+                r"export\s+default\s+(?:(?:async\s+)?function\b|class\b|\(|<)",
+                export_tail,
+            )
+            end = None if defines_component else export_idx + 1
+            return "\n".join(lines[start:end]).strip()
 
     # 3) 兜底：整段被围栏包裹 / 去掉开头说明行，保留以 import 开头的代码
     fence_match = _CODE_FENCE_RE.match(stripped)
@@ -398,8 +406,25 @@ def _invoke_ui_design_model(
 # 生成后静态校验：捕获 esbuild 查不出的"空代码"与"未定义引用"两类错误
 # ---------------------------------------------------------------------------
 
-# React / TS 内置、无需 import 即可在 JSX 中使用的大写标识符。
-_REACT_BUILTIN_TAGS = {"Fragment", "React"}
+# React 内置以及只会出现在 TypeScript 类型位置、无需 import 的大写标识符。
+# JSX 的轻量正则也会看到 ``useRef<HTMLInputElement>`` 中的尖括号；把常见 DOM
+# 类型排除，避免把类型实参误判成未导入组件并触发无意义的模型重试。
+_REACT_BUILTIN_TAGS = {
+    "Fragment",
+    "React",
+    "Element",
+    "EventTarget",
+    "HTMLElement",
+    "HTMLButtonElement",
+    "HTMLDivElement",
+    "HTMLFormElement",
+    "HTMLImageElement",
+    "HTMLInputElement",
+    "HTMLSelectElement",
+    "HTMLSpanElement",
+    "HTMLTextAreaElement",
+    "SVGElement",
+}
 
 
 def _collect_imported_and_local_names(code: str) -> set[str]:
@@ -651,6 +676,103 @@ def _component_import_source(name: str) -> str:
     return ""
 
 
+_NAMED_COMPONENT_IMPORT_RE = re.compile(
+    r"^[ \t]*import\s+(?P<type_only>type\s+)?\{(?P<names>[^}]*)\}\s+from\s+"
+    r"(?P<quote>['\"])(?P<source>antd|@ant-design/pro-components|@ant-design/icons)"
+    r"(?P=quote)\s*;?",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def _imported_component_name(clause: str) -> str:
+    """从命名导入项读取源组件名，兼容 ``Button as ActionButton``。"""
+
+    match = re.match(r"(?:type\s+)?([A-Za-z_$][\w$]*)", clause.strip())
+    return match.group(1) if match else ""
+
+
+def _imported_local_name(clause: str) -> str:
+    """从命名导入项读取本地绑定名，供合并导入时去重。"""
+
+    normalized = re.sub(r"^type\s+", "", clause.strip())
+    parts = re.split(r"\s+as\s+", normalized, maxsplit=1)
+    return parts[-1].strip() if parts else ""
+
+
+def _misplaced_component_imports(code: str) -> list[str]:
+    """返回从错误运行时模块导入的已知组件说明。"""
+
+    issues: list[str] = []
+    for match in _NAMED_COMPONENT_IMPORT_RE.finditer(code):
+        if match.group("type_only"):
+            continue
+        source = match.group("source")
+        for clause in match.group("names").split(","):
+            name = _imported_component_name(clause)
+            expected = _component_import_source(name)
+            if expected and expected != source:
+                issues.append(f"{name} 应从 {expected} 导入，不能从 {source} 导入")
+    return issues
+
+
+def _auto_fix_component_import_sources(code: str) -> tuple[str, int]:
+    """把已知 antd/Pro/Icon 组件移动到真实导出它的模块。
+
+    错误包中的命名导入能通过 TSX 语法转换，却会在 React 运行时得到 undefined
+    并产生白屏。本修复只移动映射表中来源明确的组件，未知类型和工具函数不动。
+    """
+
+    additions: dict[str, list[str]] = {}
+    moved_count = 0
+
+    def replace_import(match: re.Match[str]) -> str:
+        """重写单条命名导入并收集需要补到正确模块的组件。"""
+
+        nonlocal moved_count
+        if match.group("type_only"):
+            return match.group(0)
+        source = match.group("source")
+        clauses = [item.strip() for item in match.group("names").split(",") if item.strip()]
+        kept: list[str] = []
+        for clause in clauses:
+            expected = _component_import_source(_imported_component_name(clause))
+            if expected and expected != source:
+                additions.setdefault(expected, []).append(clause)
+                moved_count += 1
+            else:
+                kept.append(clause)
+        if not kept:
+            return ""
+        return f"import {{ {', '.join(kept)} }} from '{source}';"
+
+    fixed = _NAMED_COMPONENT_IMPORT_RE.sub(replace_import, code)
+    if not additions:
+        return code, 0
+    imported_locals: dict[str, set[str]] = {}
+    for match in _NAMED_COMPONENT_IMPORT_RE.finditer(fixed):
+        source = match.group("source")
+        locals_for_source = imported_locals.setdefault(source, set())
+        for clause in match.group("names").split(","):
+            local_name = _imported_local_name(clause)
+            if local_name:
+                locals_for_source.add(local_name)
+    new_imports: list[str] = []
+    for source, clauses in additions.items():
+        seen = imported_locals.setdefault(source, set())
+        unique: list[str] = []
+        for clause in clauses:
+            local_name = _imported_local_name(clause)
+            if not local_name or local_name in seen:
+                continue
+            seen.add(local_name)
+            unique.append(clause)
+        if unique:
+            new_imports.append(f"import {{ {', '.join(unique)} }} from '{source}';")
+    if new_imports:
+        fixed = "\n".join(new_imports) + "\n" + fixed.lstrip("\n")
+    return fixed, moved_count
+
+
 def _auto_fix_missing_imports(code: str) -> tuple[str, list[str]]:
     """程序化补回 JSX 中使用但未 import 的组件。
 
@@ -711,6 +833,96 @@ def _auto_fix_missing_imports(code: str) -> tuple[str, list[str]]:
         lines[insert_index:insert_index] = new_imports
     return "\n".join(lines), unresolved
 
+
+_PREVIEW_ONLY_RETRY_LABEL_RE = re.compile(
+    r"(?:重试|再试一次|重新(?:加载|获取|请求)|重载(?:页面|数据)?|恢复(?:加载|页面)"
+    r"|\bretry\b|\btry\s+again\b|\breload\b|\brecover(?:\s+(?:page|data|loading))?\b)",
+    re.IGNORECASE,
+)
+
+
+def _jsx_opening_tag_end(code: str, start: int) -> int:
+    """返回 JSX 起始标签的结束位置，同时跳过属性表达式里的箭头符号。"""
+
+    quote = ""
+    escaped = False
+    brace_depth = 0
+    for index in range(start, len(code)):
+        char = code[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+        elif char == "{":
+            brace_depth += 1
+        elif char == "}" and brace_depth:
+            brace_depth -= 1
+        elif char == ">" and brace_depth == 0:
+            return index
+    return -1
+
+
+def _visible_jsx_literal_text(body: str) -> str:
+    """提取 JSX 子节点中的静态可见文本，忽略表达式和嵌套标签。"""
+
+    previous = ""
+    text = body
+    while text != previous:
+        previous = text
+        text = re.sub(r"\{[^{}]*\}", " ", text, flags=re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text, flags=re.DOTALL)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _auto_fix_preview_only_review_buttons(code: str) -> tuple[str, int]:
+    """给明确的重试/恢复评审按钮补 preview-only 标记。
+
+    只处理静态可见文案能确定为错误态恢复工具的 ``Button``。普通业务按钮、
+    动态文案按钮和已有 ProductPlan 绑定的按钮保持不变，避免以自动修复绕过
+    产品契约校验。返回修复后的代码和补标数量。
+    """
+
+    insertions: list[int] = []
+    cursor = 0
+    while True:
+        match = re.search(r"<Button\b", code[cursor:])
+        if match is None:
+            break
+        start = cursor + match.start()
+        opening_end = _jsx_opening_tag_end(code, start)
+        if opening_end < 0:
+            break
+        opening_tag = code[start : opening_end + 1]
+        cursor = opening_end + 1
+        if opening_tag.rstrip().endswith("/>"):
+            continue
+        if re.search(
+            r"\bdata-(?:action-id|action-step-id|preview-only)\s*=",
+            opening_tag,
+            re.IGNORECASE,
+        ):
+            continue
+        closing = re.search(r"</Button\s*>", code[opening_end + 1 :], re.IGNORECASE)
+        if closing is None:
+            continue
+        body_end = opening_end + 1 + closing.start()
+        label = _visible_jsx_literal_text(code[opening_end + 1 : body_end])
+        if _PREVIEW_ONLY_RETRY_LABEL_RE.search(label):
+            insertions.append(opening_end)
+
+    if not insertions:
+        return code, 0
+    fixed = code
+    for index in reversed(insertions):
+        fixed = fixed[:index] + ' data-preview-only="true"' + fixed[index:]
+    return fixed, len(insertions)
+
 # 常见禁用来源 → 修复指引。LLM 常误从这些库引路由/数据/导出功能。
 _FORBIDDEN_IMPORT_HINTS = {
     "umi": "umi 是框架，设计稿工程未安装。路由参数用 react-router-dom 的 "
@@ -768,6 +980,14 @@ def validate_page_code(
             False,
             "生成的代码为空、过短或缺少 `export default` 导出。"
             "请输出一个完整的、以 `export default <ComponentName>` 结尾的页面组件。",
+        )
+    misplaced = _misplaced_component_imports(code)
+    if misplaced:
+        return (
+            False,
+            "以下组件导入来源错误，会在 React 运行时变成 undefined 并导致白屏："
+            + "；".join(misplaced)
+            + "。",
         )
     forbidden = _find_forbidden_imports(code)
     if forbidden:

@@ -17,10 +17,16 @@ import asyncio
 import hashlib
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from langgraph.config import get_stream_writer
 
+from app.agents.screenshot_ui_design.visibility_contract import validate_visible_bindings
+from app.agents.screenshot_ui_design.agent import _validate_with_static_fixes
+from app.agents.screenshot_ui_design.models import ScreenshotVisualObservation
+from app.agents.screenshot_ui_design.shared_shell import derive_shared_shell
+from app.agents.screenshot_ui_design.shell_reuse import recompose_page_with_shared_shell
 from app.graph.nodes.confirmation import (
     extract_confirmation_answer,
     user_confirmed_text,
@@ -86,6 +92,72 @@ def _product_plan_hash(state: ProjectState) -> str:
     return hashlib.sha256(
         json.dumps(product_plan, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
+
+
+def _is_screenshot_sidebar_alignment(state: ProjectState, instruction: str) -> bool:
+    """只将截图模式中明确要求多页侧栏一致的指令交给确定性共享壳。"""
+
+    source = state.get("requirement_input")
+    if not isinstance(source, dict) or source.get("mode") != "screenshot":
+        return False
+    lowered = instruction.casefold()
+    return any(term in lowered for term in ("侧边栏", "侧栏", "sidebar")) and any(
+        term in lowered for term in ("保持一致", "统一", "相同", "一样", "一致", "same")
+    )
+
+
+def _recompose_screenshot_sidebars(
+    state: ProjectState,
+    pages: list[dict[str, Any]],
+    project_dir: str,
+) -> list[dict[str, Any]]:
+    """先校验全部已完成页面，再按清单锁逐页写回共享侧栏。"""
+
+    reference_path = Path(workspace_root(state)) / ".xcodeagent" / "specs" / "screenshot-ui-reference.json"
+    reference = json.loads(reference_path.read_text(encoding="utf-8"))
+    observations = [
+        ScreenshotVisualObservation.model_validate(item)
+        for item in reference.get("observations", [])
+        if isinstance(item, dict)
+    ]
+    spec_pages = _page_list(state)
+    shell = derive_shared_shell(observations, spec_pages)
+    if not shell.enabled:
+        raise ValueError("截图参考中没有可确认的共享侧边栏，未覆盖现有设计稿。")
+    spec_by_id = {_page_id(page): page for page in spec_pages}
+    candidates: list[tuple[int, dict[str, Any], str]] = []
+    for index, entry in enumerate(pages):
+        if entry.get("status") != "confirmed":
+            continue
+        page_id = _page_id(entry)
+        spec_page = spec_by_id.get(page_id)
+        page_key = str(entry.get("page_key") or "").strip()
+        code = load_page_code(project_dir, page_key) if page_key else ""
+        if not spec_page or not code:
+            raise ValueError(f"{page_id} 缺少当前设计稿或 ProductPlan 页面，未覆盖任何页面。")
+        candidate = recompose_page_with_shared_shell(
+            code, page=spec_page, pages=spec_pages, shell=shell
+        )
+        candidate, valid, error = _validate_with_static_fixes(project_dir, candidate, spec_page)
+        if not valid:
+            raise ValueError(f"{page_id} 共享侧边栏校验失败：{error}")
+        candidates.append((index, spec_page, candidate))
+    updated = list(pages)
+    for index, spec_page, code in candidates:
+        old = pages[index]
+        page_key = str(old.get("page_key") or "")
+        code_path = persist_page_code(project_dir, page_key, code)
+        updated[index] = _carry_visual_reference_after_adjustment(
+            old,
+            build_ui_page_manifest(
+                spec_page,
+                page_key=page_key,
+                code_path=code_path,
+                code=code,
+                status="confirmed",
+            ),
+        )
+    return updated
 
 
 def _ui_design_confirmation_payload(
@@ -236,6 +308,20 @@ def _verified_ui_designs_for_confirmation(
             template_source_path=str(existing.get("template_source_path") or ""),
             error=str(existing.get("error") or ""),
         )
+        # 截图 UI 扩展字段不参与产品事实校验，但必须保留给下游生成 Agent。
+        for key in (
+            "visual_source",
+            "visual_reference_path",
+            "app_shell_reference_path",
+            "source_screenshot_sha256s",
+            "screenshot_ui_pipeline_version",
+            "visual_verification",
+        ):
+            if key in existing:
+                verified[key] = existing[key]
+        if existing.get("visual_source") == "screenshot":
+            for hidden_error in validate_visible_bindings(code):
+                errors.append(f"页面 {page_id} 存在不可见业务绑定：{hidden_error}")
         verification = verified.get("verification", {})
         page_errors = verification.get("errors") if isinstance(verification, dict) else []
         if status != "confirmed":
@@ -344,6 +430,33 @@ async def _apply_adjust_pages(
             "pages": pages,
         }
 
+    if _is_screenshot_sidebar_alignment(state, instruction):
+        _emit_progress(
+            "正在统一截图页面侧边栏并校验全部已生成设计稿…",
+            ready=0,
+            total=len(pages),
+            pages=list(pages),
+            adjust_total=len(pages),
+            adjust_ready=0,
+        )
+        aligned = await asyncio.to_thread(
+            _recompose_screenshot_sidebars, state, pages, project_dir
+        )
+        _emit_progress(
+            "已统一侧边栏；未完成页面保持原生成状态",
+            ready=len(aligned),
+            total=len(aligned),
+            pages=aligned,
+            adjust_total=len(aligned),
+            adjust_ready=len(aligned),
+        )
+        return {
+            "schema_version": UI_MANIFEST_SCHEMA_VERSION,
+            "confirmation_status": "pending_user_confirmation",
+            "product_plan_sha256": _product_plan_hash(state),
+            "pages": aligned,
+        }
+
     # 用户未通过 @页面名 指定目标时，让大模型根据 instruction + 所有页面信息
     # 自行判断需要调整哪些页面。
     if not page_ids:
@@ -448,12 +561,15 @@ async def _apply_adjust_pages(
                 instruction,
             )
             code_path = persist_page_code(project_dir, page_key, code)
-            pages[idx] = build_ui_page_manifest(
-                spec_page,
-                page_key=page_key,
-                code_path=code_path,
-                code=code,
-                status="confirmed",
+            pages[idx] = _carry_visual_reference_after_adjustment(
+                target,
+                build_ui_page_manifest(
+                    spec_page,
+                    page_key=page_key,
+                    code_path=code_path,
+                    code=code,
+                    status="confirmed",
+                ),
             )
             _emit_progress(
                 f"设计稿已调整：{name}（第 {seq + 1}/{total} 页完成）",
@@ -465,13 +581,16 @@ async def _apply_adjust_pages(
             )
         except Exception as exc:
             logger.exception("ui_design_adjust_failed page_id=%s", page_id)
-            pages[idx] = build_ui_page_manifest(
-                spec_page,
-                page_key=page_key,
-                code_path=str(target.get("code_path") or ""),
-                code=str(target.get("code") or ""),
-                status="generation_failed",
-                error=str(exc),
+            pages[idx] = _carry_visual_reference_after_adjustment(
+                target,
+                build_ui_page_manifest(
+                    spec_page,
+                    page_key=page_key,
+                    code_path=str(target.get("code_path") or ""),
+                    code=str(target.get("code") or ""),
+                    status="generation_failed",
+                    error=str(exc),
+                ),
             )
             _emit_progress(
                 f"设计稿调整失败：{name}（第 {seq + 1}/{total} 页）",
@@ -508,6 +627,9 @@ async def _latest_ui_designs(
     workspace = str(workspace_root(state))
     project_dir = str(ui_design_project_dir(workspace))
     pool = get_ui_design_generation_pool()
+    # 轮询不只读取清单，也检查后台 worker 的真实存活状态。这样任务已经写成
+    # queued、但 worker 因热重载或流取消退出时，无需再次点击即可恢复消费。
+    await pool.ensure_started()
     active_ids = pool.pending_page_ids(workspace)
     spec_pages = {_page_id(p): p for p in _page_list(state) if _page_id(p)}
 
@@ -537,6 +659,7 @@ async def _latest_ui_designs(
                 page_key=page_key,
                 action="select_template" if template_id else "regenerate",
                 template_id=template_id,
+                recovery=True,
             )
         )
     if stale:
@@ -674,9 +797,20 @@ async def _apply_ui_design_action(
     # 多页调整：顺序遍历 pageIds，对每页基于现有设计稿 + 调整指令重新生成。
     # adjust_pages 不落盘，需在此持久化；换一换/选模板由池落盘，这里不重复写。
     if action_type == "adjust_pages":
+        original_by_id = {_page_id(page): dict(page) for page in pages}
         adjusted = await _apply_adjust_pages(state, pages, project_dir, action)
-        _persist_ui_designs(state, adjusted)
-        return adjusted
+        changed_entries = [
+            page
+            for page in adjusted.get("pages", [])
+            if isinstance(page, dict)
+            and page != original_by_id.get(_page_id(page))
+        ]
+        await get_ui_design_generation_pool().merge_external_page_entries(
+            workspace,
+            str(state.get("project_id") or ""),
+            changed_entries,
+        )
+        return await _latest_ui_designs(state, adjusted)
 
     # 单页 / multi「换一换 / 选模板」：登记到后台并发池。
     return await _enqueue_ui_design_generation(state, pages, action)
@@ -830,3 +964,28 @@ def _persist_ui_designs(state: ProjectState, ui_designs: dict[str, Any]) -> None
         write_ui_designs_json(state, ui_designs)
     except Exception:
         logger.exception("ui_designs_persist_failed")
+
+
+def _carry_visual_reference_after_adjustment(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+) -> dict[str, Any]:
+    """调整截图设计稿后保留来源证据，并显式作废旧视觉审查分数。"""
+
+    if previous.get("visual_source") != "screenshot":
+        return current
+    result = dict(current)
+    for key in (
+        "visual_source",
+        "visual_reference_path",
+        "app_shell_reference_path",
+        "source_screenshot_sha256s",
+    ):
+        if key in previous:
+            result[key] = previous[key]
+    result["visual_verification"] = {
+        "status": "invalidated_by_user_adjustment",
+        "method": "original_ui_confirmation",
+        "message": "页面经用户文字调整后需在原 UI 确认界面重新人工审核。",
+    }
+    return result

@@ -9,6 +9,10 @@ from typing import Any
 from langgraph.config import get_stream_writer
 
 from app.agents.main.product_planner import plan_product_with_chat_model
+from app.agents.screenshot_requirements.product_planning import (
+    ScreenshotProductPlanOperationCoverageError,
+    plan_screenshot_product_with_chat_model,
+)
 from app.agents.main.document_sync import sync_product_plan_from_markdown
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.nodes.requirements import prepare_requirement_spec_confirmation
@@ -646,12 +650,25 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
         else ""
     )
     try:
-        plan = _generate_valid_product_plan(
-            requirement_spec,
-            existing_plan=existing if isinstance(existing, dict) else None,
-            user_feedback=feedback,
-        )
-    except ProductPlanOperationCoverageError as exc:
+        requirement_input = state.get("requirement_input")
+        screenshot_mode = (
+            isinstance(requirement_input, dict)
+            and requirement_input.get("mode") == "screenshot"
+        ) or requirement_spec.get("analysis_source") == "screenshot_vision_model"
+        if screenshot_mode:
+            plan = plan_screenshot_product_with_chat_model(
+                requirement_spec,
+                existing_plan=existing if isinstance(existing, dict) else None,
+                user_feedback=feedback,
+                on_token=_product_planning_token,
+            )
+        else:
+            plan = _generate_valid_product_plan(
+                requirement_spec,
+                existing_plan=existing if isinstance(existing, dict) else None,
+                user_feedback=feedback,
+            )
+    except (ProductPlanOperationCoverageError, ScreenshotProductPlanOperationCoverageError) as exc:
         return _operation_coverage_update(state, exc.candidate, exc.coverage)
     markdown_path, json_path = write_product_plan_documents(state, plan)
     return {

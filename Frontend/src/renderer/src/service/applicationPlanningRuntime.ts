@@ -219,6 +219,14 @@ export class ApplicationPlanningRuntime {
   async retryCurrentFailure(): Promise<void> {
     const current = this.requireCurrentState()
     this.assertMutationAllowed()
+    if (
+      current.workflow?.summary.status === 'failed' &&
+      current.workflow.summary.phase === 'design_intent_analysis'
+    ) {
+      // 从同一失败 checkpoint 重试原设计指令，不能退回 UI 节点重跑旧产物。
+      await this.runPlanning('重试设计变更意图分析', undefined, undefined, 'retry_design_intent')
+      return
+    }
     if (workflowConfirmation(current.workflow)) return
     if (current.lifecycle.initialization.status === 'awaiting_user') {
       await this.reconcileCurrentState()
@@ -499,7 +507,7 @@ export class ApplicationPlanningRuntime {
     const current = this.requireCurrentState()
     if (!current.application.workspaceRoot) return
     const previousRunActive = this.runActive || this.session.hasActiveRun()
-    if (previousRunActive && !interaction && !designRevision) return
+    if (previousRunActive && !interaction && !designRevision && !workflowAction) return
     if (previousRunActive && interaction?.action === 'design_change')
       throw new Error('当前设计正在生成，完成后即可发送新的调整。')
     let token: number | undefined
@@ -515,7 +523,7 @@ export class ApplicationPlanningRuntime {
           await this.handlePlanningResult(currentToken, merged)
         },
         {
-          stopPrevious: Boolean(interaction || designRevision),
+          stopPrevious: Boolean(interaction || designRevision || workflowAction),
           onToken: (currentToken) => {
             token = currentToken
           }
@@ -543,6 +551,7 @@ export class ApplicationPlanningRuntime {
   ): SendWorkflowMessageOptions {
     return {
       application: current.application,
+      requirementInput: current.application.requirementInput,
       applicationPlanningInteraction: interaction,
       editorMode: 'frontend',
       originalRequest: buildApplicationPlanningRequest(current.application),
@@ -559,7 +568,13 @@ export class ApplicationPlanningRuntime {
       workflowDebug:
         interaction || designRevision || workflowAction
           ? undefined
-          : { enabled: true, resumeFrom: planningResumeFrom(current.lifecycle) },
+          : {
+              enabled: true,
+              resumeFrom: planningResumeFrom(
+                current.lifecycle,
+                current.application.requirementInput
+              )
+            },
       workflowScope: 'application_planning',
       workspaceRoot: current.application.workspaceRoot
     }

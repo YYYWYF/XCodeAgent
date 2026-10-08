@@ -71,6 +71,7 @@ class ProjectState(TypedDict, total=False):
     requirements_clarification_round: int
     edited_requirement_spec: dict[str, Any]
     requirement_spec_feedback: str
+    requirement_input: dict[str, Any]
     requirement_spec_path: str
     requirement_spec_json_path: str
     product_plan: dict[str, Any]
@@ -227,3 +228,4 @@ class ProjectState(TypedDict, total=False):
     message: str
     error: str
     timeline: Annotated[list[str], add]
+    screenshot_ui_prepared_product_plan_sha256: str

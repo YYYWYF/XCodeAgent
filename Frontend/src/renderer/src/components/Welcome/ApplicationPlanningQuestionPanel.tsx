@@ -50,8 +50,10 @@ type Props = {
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string
-  ) => void
+  ) => void | Promise<void>
   rootPath?: string
+  /** 应用工作区根目录，用于读取异步落盘的 UI 设计稿状态和 TSX。 */
+  workspaceRoot?: string
   workflow: WorkflowRunPayload
 }
 
@@ -399,6 +401,7 @@ export default function ApplicationPlanningQuestionPanel({
   onReturnHome,
   onSubmit,
   rootPath,
+  workspaceRoot,
   workflow
 }: Props): ReactElement | null {
   const [form] = Form.useForm<{ answers: WorkflowClarificationAnswers }>()
@@ -487,6 +490,7 @@ export default function ApplicationPlanningQuestionPanel({
         disabled={disabled}
         onSubmit={(currentWorkflow, answers) => onSubmit(currentWorkflow, answers)}
         workflow={effectiveWorkflow}
+        workspaceRoot={workspaceRoot}
       />
     )
   }
@@ -669,6 +673,7 @@ export default function ApplicationPlanningQuestionPanel({
         disabled={disabled}
         onSubmit={(currentWorkflow, answers) => onSubmit(currentWorkflow, answers)}
         workflow={workflow}
+        workspaceRoot={workspaceRoot}
       />
     )
   }

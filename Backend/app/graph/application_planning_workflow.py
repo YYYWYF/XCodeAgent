@@ -95,6 +95,9 @@ def _route_start(state: ProjectState) -> str:
             ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
             ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
         },
+        "screenshot_ui_preparation": {
+            ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+        },
         "ui_confirmation": {
             ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
             ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
@@ -165,7 +168,18 @@ def _route_product_planning(state: ProjectState) -> str:
     """联合需求文档未确认时进入原生审阅中断，否则进入 UI 设计。"""
 
     clarification = state.get("clarification")
-    return "requirement_document_review" if isinstance(clarification, dict) and clarification.get("status") == "requires_user_input" else "ui_confirmation"
+    if (
+        isinstance(clarification, dict)
+        and clarification.get("status") == "requires_user_input"
+    ):
+        return "requirement_document_review"
+    requirement_input = state.get("requirement_input")
+    if (
+        isinstance(requirement_input, dict)
+        and requirement_input.get("mode") == "screenshot"
+    ):
+        return "screenshot_ui_preparation"
+    return "ui_confirmation"
 
 
 def _route_ui_confirmation(state: ProjectState) -> str:
@@ -254,14 +268,32 @@ def _requirements(state: ProjectState) -> dict:
         raise
 
 
+async def _screenshot_ui_preparation(state: ProjectState) -> dict:
+    """运行截图 UI 内部准备节点，并把失败记录到当前生命周期阶段。"""
+
+    workspace = _workspace(state)
+    try:
+        return await nodes.screenshot_ui_preparation(state)
+    except asyncio.CancelledError:
+        _persist_node_cancelled(workspace, state)
+        raise
+    except Exception as exc:
+        _persist_node_error(workspace, state, exc)
+        raise
+
+
 async def _ui_confirmation(state: ProjectState) -> dict:
     """为每个页面生成设计稿或处理明确跳过，完成后等待用户进入计划阶段。"""
 
     node_state = design_artifact_node_state(state, "ui_confirmation")
+    screenshot_ui_prepared = bool(
+        node_state.get("screenshot_ui_prepared_product_plan_sha256")
+    )
     if (
         is_design_change(state)
         and state.get("design_change_generation_target") == "ui_confirmation"
         and not node_state.get("application_planning_interaction")
+        and not screenshot_ui_prepared
     ):
         node_state = prepare_ui_revision_state(node_state)
     workspace = _workspace(node_state)
@@ -276,6 +308,12 @@ async def _ui_confirmation(state: ProjectState) -> dict:
                 active_run_id=state.get("active_run_id"),
             )
         update = await nodes.ui_confirmation(node_state)
+        if screenshot_ui_prepared:
+            # 一次性标记只防止设计修订逻辑覆盖刚生成的截图设计稿。
+            update = {
+                **update,
+                "screenshot_ui_prepared_product_plan_sha256": "",
+            }
         if update.get("status") != "completed":
             # 仅在当前阶段允许推进到 UI设计确认时才推进，避免恢复场景下的自转冲突。
             if (
@@ -293,6 +331,7 @@ async def _ui_confirmation(state: ProjectState) -> dict:
                 "ui_confirmation",
                 {
                     **update,
+                    "requirement_input": state.get("requirement_input"),
                     "workflow_scope": "application_planning",
                     "lifecycle": application_lifecycle_payload(lifecycle),
                 },
@@ -379,6 +418,7 @@ def _product_planning(state: ProjectState) -> dict:
             "product_planning",
             {
                 **update,
+                "requirement_input": state.get("requirement_input"),
                 "workflow_scope": "application_planning",
                 "lifecycle": application_lifecycle_payload(lifecycle),
             },
@@ -415,12 +455,35 @@ def _technical_planning(state: ProjectState) -> dict:
             )
         update = nodes.project_planning(node_state)
         if update.get("status") != "completed":
-            lifecycle = persist_application_lifecycle_transition(
-                workspace,
-                stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-                status=ApplicationLifecycleStatus.AWAITING_USER,
-                active_run_id=state.get("active_run_id"),
+            clarification = update.get("clarification")
+            screenshot_generation_failed = (
+                isinstance(state.get("requirement_input"), dict)
+                and state["requirement_input"].get("mode") == "screenshot"
+                and isinstance(clarification, dict)
+                and clarification.get("mode") == "technical_plan_generation_error"
             )
+            if screenshot_generation_failed:
+                errors = clarification.get("errors")
+                message = "；".join(str(item) for item in errors[:3]) if isinstance(errors, list) else ""
+                lifecycle = persist_application_lifecycle_transition(
+                    workspace,
+                    stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                    status=ApplicationLifecycleStatus.FAILED,
+                    active_run_id=state.get("active_run_id"),
+                    error=ApplicationLifecycleError(
+                        code="technical_plan_generation_error",
+                        message=message[:2048] or "技术规划生成未通过校验，请重新生成。",
+                        recoverable=True,
+                        occurredAt=utc_now(),
+                    ),
+                )
+            else:
+                lifecycle = persist_application_lifecycle_transition(
+                    workspace,
+                    stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+                    status=ApplicationLifecycleStatus.AWAITING_USER,
+                    active_run_id=state.get("active_run_id"),
+                )
             return design_node_update(
                 state,
                 "technical_planning",
@@ -832,6 +895,7 @@ def build_application_planning_graph(*, checkpointer):
     builder.add_node("requirements_review", requirements_review)
     builder.add_node("product_planning", _product_planning)
     builder.add_node("requirement_document_review", requirement_document_review)
+    builder.add_node("screenshot_ui_preparation", _screenshot_ui_preparation)
     builder.add_node("ui_confirmation", _ui_confirmation)
     builder.add_node("ui_confirmation_review", ui_confirmation_review)
     builder.add_node("planning_stage_entry", planning_stage_entry)
@@ -842,6 +906,7 @@ def build_application_planning_graph(*, checkpointer):
         "design_intent_analysis": "design_intent_analysis",
         "requirements": "requirements",
         "product_planning": "product_planning",
+        "screenshot_ui_preparation": "screenshot_ui_preparation",
         "ui_confirmation": "ui_confirmation",
         "planning_stage_entry": "planning_stage_entry",
         "technical_planning": "technical_planning",
@@ -858,9 +923,11 @@ def build_application_planning_graph(*, checkpointer):
         "requirements_review": "requirements_review",
     })
     builder.add_conditional_edges("product_planning", _route_product_planning, {
+        "screenshot_ui_preparation": "screenshot_ui_preparation",
         "ui_confirmation": "ui_confirmation",
         "requirement_document_review": "requirement_document_review",
     })
+    builder.add_edge("screenshot_ui_preparation", "ui_confirmation")
     builder.add_conditional_edges("ui_confirmation", _route_ui_confirmation, {
         "planning_stage_entry": "planning_stage_entry",
         "ui_confirmation_review": "ui_confirmation_review",

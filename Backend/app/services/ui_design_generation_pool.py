@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
+from uuid import uuid4
 
 from app.config import Settings
 from app.services.page_templates import load_template_source
@@ -67,6 +68,8 @@ class UiDesignGenerationTask:
     page_key: str
     action: str  # "regenerate" | "select_template"
     template_id: str = ""
+    recovery: bool = False  # 仅恢复落盘 queued/generating；不得覆盖更新后的终态。
+    attempt_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 class UiDesignGenerationCancelled(RuntimeError):
@@ -132,9 +135,25 @@ def generate_page_entry(
                 error=str(exc),
             )
 
-    # regenerate：删旧稿，绕过 load_page_code 复用，强制重新调 LLM。
-    delete_page_code(task.project_dir, task.page_key)
     try:
+        if should_cancel and should_cancel():
+            raise UiDesignGenerationCancelled("应用正在删除，页面设计生成已取消。")
+        # 截图视觉规范存在时沿用原截图进行多模态重生成；文字模式保持原生成器。
+        from app.agents.screenshot_ui_design import regenerate_screenshot_ui_page
+
+        screenshot_entry = regenerate_screenshot_ui_page(
+            workspace=task.workspace,
+            page=page,
+            page_key=task.page_key,
+            project_dir=task.project_dir,
+        )
+        if should_cancel and should_cancel():
+            raise UiDesignGenerationCancelled("应用正在删除，页面设计生成已取消。")
+        if screenshot_entry is not None:
+            return screenshot_entry
+        # 文字模式才删除旧稿以强制重生成；截图模式会原子覆盖成功产物，
+        # 失败时应保留上一版可预览的设计稿。
+        delete_page_code(task.project_dir, task.page_key)
         code = generate_page_react_code(
             page,
             task.page_key,
@@ -175,10 +194,12 @@ class UiDesignGenerationPool:
         self._pending_ids: set[tuple[str, str]] = set()
         self._active_ids: set[tuple[str, str]] = set()
         self._deleting_workspaces: set[str] = set()
-        # 用户主动取消的 (workspace, page_id)：worker 领取时跳过，已进入模型调用的
+        # 用户主动取消的 attempt_id：worker 领取时跳过，已进入模型调用的
         # 任务由 should_cancel 回调在返回后拦截写入（LLM 调用本身不可中断，取消的
         # 语义是"结果不落盘、状态置 cancelled"，而不是杀掉 HTTP 请求）。
-        self._cancelled_page_ids: set[tuple[str, str]] = set()
+        # 必须按生成尝试标识而非 page_id 记录：取消旧任务后立即重试时，新任务不能
+        # 清除旧任务的取消信号，否则旧模型结果会重新覆盖 cancelled 状态。
+        self._cancelled_task_ids: set[str] = set()
         # 在途任务副本：cancel_page 构造 cancelled manifest 条目需要 spec_page/page_key。
         self._tasks_by_id: dict[tuple[str, str], UiDesignGenerationTask] = {}
         # 每个工作区一把写锁：多个 worker 并发更新同一工作区清单时串行化写文件。
@@ -194,12 +215,38 @@ class UiDesignGenerationPool:
         return lock
 
     async def _ensure_started(self) -> None:
-        if self._started:
-            return
-        self._started = True
+        """确保当前事件循环拥有足量存活 worker，并恢复无人消费的排队任务。"""
+
         loop = asyncio.get_running_loop()
-        for _index in range(self._concurrency):
+        alive_workers = [
+            worker
+            for worker in self._workers
+            if not worker.done() and worker.get_loop() is loop
+        ]
+        if self._workers and not alive_workers:
+            # 热重载、流任务取消或事件循环切换后，旧 Task 可能已经结束，但历史
+            # `_started=True` 不能再作为 worker 存活证据。若当前循环没有 worker，
+            # 依据任务登记表重建队列，避免已经写成 queued 的页面永久无人领取。
+            recoverable_tasks = [
+                task
+                for key, task in self._tasks_by_id.items()
+                if key in self._pending_ids
+            ]
+            self._queue = asyncio.Queue()
+            self._locks = {}
+            self._active_ids.clear()
+            for task in recoverable_tasks:
+                self._queue.put_nowait(task)
+        self._workers = alive_workers
+        missing_workers = self._concurrency - len(self._workers)
+        for _index in range(max(0, missing_workers)):
             self._workers.append(loop.create_task(self._worker_loop()))
+        self._started = bool(self._workers)
+
+    async def ensure_started(self) -> None:
+        """供轮询恢复路径显式检查 worker 存活，修复已落盘但无人消费的 queued。"""
+
+        await self._ensure_started()
 
     def is_active(self, workspace: str, page_id: str) -> bool:
         """页面是否已排队或正在生成。"""
@@ -260,12 +307,28 @@ class UiDesignGenerationPool:
                 queued: list[UiDesignGenerationTask] = []
                 for task in ws_tasks:
                     key = (workspace, task.page_id)
+                    if task.recovery:
+                        current_page = next(
+                            (
+                                page
+                                for page in manifest.get("pages", [])
+                                if isinstance(page, dict)
+                                and str(page.get("pageId") or "") == task.page_id
+                            ),
+                            None,
+                        )
+                        current_status = str((current_page or {}).get("status") or "")
+                        if current_status not in {
+                            UI_DESIGN_STATUS_QUEUED,
+                            UI_DESIGN_STATUS_GENERATING,
+                        }:
+                            # 停止动作可能在恢复任务构造后先写入 cancelled；恢复提交
+                            # 必须在同一写锁内重读并尊重最新终态，不能再次改回 queued。
+                            continue
                     if key in self._pending_ids:
                         continue  # 已排队/生成中：去重，避免重复生成
                     self._pending_ids.add(key)
                     self._tasks_by_id[key] = task
-                    # 重新提交曾被取消的页：清除取消标记，否则新任务会被旧标记误杀。
-                    self._cancelled_page_ids.discard(key)
                     self._replace_page(
                         manifest,
                         task.page_id,
@@ -287,6 +350,26 @@ class UiDesignGenerationPool:
                         self._queue.put_nowait(task)
         return accepted
 
+    async def merge_external_page_entries(
+        self,
+        workspace: str,
+        project_id: str,
+        entries: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """在生成池同一写锁下合并调整页，保留其它页面的最新排队与生成状态。"""
+
+        async with self._lock_for(workspace):
+            manifest = self._read_manifest(workspace, project_id)
+            for entry in entries:
+                page_id = str(entry.get("pageId") or "").strip()
+                if page_id:
+                    self._replace_page(manifest, page_id, entry)
+            if entries:
+                write_ui_designs_json(
+                    {"workspace": workspace, "project_id": project_id}, manifest
+                )
+            return manifest
+
     async def _worker_loop(self) -> None:
         while True:
             task = await self._queue.get()
@@ -295,8 +378,12 @@ class UiDesignGenerationPool:
                 if task.workspace in self._deleting_workspaces:
                     continue
                 # 惰性出队：任务在排队期间被 cancel_page 取消（pending 已释放、
-                # 终态已写回），领取时直接跳过，不覆盖 cancelled 终态。
-                if key not in self._pending_ids:
+                # 终态已写回），或同页已经提交了新 attempt 时直接跳过旧任务，
+                # 不覆盖 cancelled/新任务状态。
+                if (
+                    key not in self._pending_ids
+                    or self._tasks_by_id.get(key) is not task
+                ):
                     continue
                 self._active_ids.add(key)
                 await self._process(task)
@@ -317,9 +404,12 @@ class UiDesignGenerationPool:
                 )
             finally:
                 self._active_ids.discard(key)
-                self._pending_ids.discard(key)
-                self._tasks_by_id.pop(key, None)
-                self._cancelled_page_ids.discard(key)
+                # 取消后允许同页立即重试；旧 worker 收尾时不能误删新 attempt 的
+                # pending/task 登记，否则新任务会被当成无人处理并反复自动恢复。
+                if self._tasks_by_id.get(key) is task:
+                    self._pending_ids.discard(key)
+                    self._tasks_by_id.pop(key, None)
+                self._cancelled_task_ids.discard(task.attempt_id)
                 self._queue.task_done()
 
     async def _process(self, task: UiDesignGenerationTask) -> None:
@@ -328,19 +418,34 @@ class UiDesignGenerationPool:
         def should_cancel() -> bool:
             return (
                 task.workspace in self._deleting_workspaces
-                or key in self._cancelled_page_ids
+                or task.attempt_id in self._cancelled_task_ids
             )
 
-        # 领取即标记 generating，让前端轮询看到「生成中」。
-        await self._write_result(
-            task,
-            build_ui_page_manifest(
-                task.spec_page,
-                page_key=task.page_key,
-                status=UI_DESIGN_STATUS_GENERATING,
-                template_id=task.template_id,
-            ),
-        )
+        # 检查取消和写入 generating 必须在同一把工作区锁内完成：若停止动作先写入
+        # cancelled，本 worker 不得随后把终态覆盖回 generating；若本 worker 先写，
+        # 停止动作会等待同一把锁并最后写入 cancelled。
+        async with self._lock_for(task.workspace):
+            if (
+                should_cancel()
+                or key not in self._pending_ids
+                or self._tasks_by_id.get(key) is not task
+            ):
+                raise UiDesignGenerationCancelled("页面设计生成已取消。")
+            manifest = self._read_manifest(task.workspace, task.project_id)
+            self._replace_page(
+                manifest,
+                task.page_id,
+                build_ui_page_manifest(
+                    task.spec_page,
+                    page_key=task.page_key,
+                    status=UI_DESIGN_STATUS_GENERATING,
+                    template_id=task.template_id,
+                ),
+            )
+            write_ui_designs_json(
+                {"workspace": task.workspace, "project_id": task.project_id},
+                manifest,
+            )
         entry = await asyncio.to_thread(
             generate_page_entry,
             task,
@@ -397,8 +502,10 @@ class UiDesignGenerationPool:
 
         - 还在队列里（queued）：登记取消并立即写回 cancelled 终态、释放 pending，
           worker 领取时发现不在 pending 直接跳过（惰性出队，不重建队列）。
-        - 已进入模型调用（generating）：登记到 _cancelled_page_ids，LLM 调用返回
+        - 已进入模型调用（generating）：登记 attempt_id 取消信号，LLM 调用返回
           后由 should_cancel 抛 UiDesignGenerationCancelled 拦截落盘。
+        - 后端重启后内存任务已丢失、但磁盘仍为 queued/generating：直接把磁盘条目
+          写成 cancelled，阻止 ui_confirmation 的自愈恢复再次自动入队。
         LLM HTTP 请求本身不打断（打断会在网关侧留下半截流式计费），取消语义是
         "结果丢弃、状态立即置终态、前端立即可重试"。queued/generating 两种情况
         都在这里立即写回 cancelled 终态：前端点停止要立刻看到可重试态，不必等
@@ -407,18 +514,48 @@ class UiDesignGenerationPool:
 
         key = (workspace, page_id)
         task = self._tasks_by_id.get(key)
-        if key not in self._pending_ids or task is None:
-            return False
-        self._cancelled_page_ids.add(key)
-        await self._write_result(
-            task,
-            build_ui_page_manifest(
-                task.spec_page,
-                page_key=task.page_key,
-                status="cancelled",
-                error="用户取消了本次生成。",
-            ),
-        )
+        if key in self._pending_ids and task is not None:
+            self._cancelled_task_ids.add(task.attempt_id)
+            await self._write_result(
+                task,
+                build_ui_page_manifest(
+                    task.spec_page,
+                    page_key=task.page_key,
+                    status="cancelled",
+                    error="用户取消了本次生成。",
+                ),
+            )
+            self._pending_ids.discard(key)
+            return True
+
+        # 进程重启会清空内存池，但 queued/generating 已持久化。停止操作必须仍能
+        # 修改磁盘权威状态，否则前端刚显示 cancelled 就会被下一次轮询改回 queued，
+        # 随后 _latest_ui_designs 又会把它自动恢复为生成任务。
+        async with self._lock_for(workspace):
+            manifest = self._read_manifest(workspace, "")
+            current_page = next(
+                (
+                    page
+                    for page in manifest.get("pages", [])
+                    if isinstance(page, dict)
+                    and str(page.get("pageId") or "") == page_id
+                ),
+                None,
+            )
+            current_status = str((current_page or {}).get("status") or "")
+            if current_status not in {
+                UI_DESIGN_STATUS_QUEUED,
+                UI_DESIGN_STATUS_GENERATING,
+            }:
+                return False
+            cancelled_entry = dict(current_page)
+            cancelled_entry["status"] = "cancelled"
+            cancelled_entry["error"] = "用户取消了本次生成。"
+            self._replace_page(manifest, page_id, cancelled_entry)
+            write_ui_designs_json(
+                {"workspace": workspace, "project_id": ""},
+                manifest,
+            )
         self._pending_ids.discard(key)
         return True
 

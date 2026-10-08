@@ -7,13 +7,16 @@ from unittest.mock import MagicMock, patch
 
 from app.config import Settings
 from app.services.ui_design_generator import (
+    _auto_fix_component_import_sources,
     _auto_fix_missing_imports,
+    _auto_fix_preview_only_review_buttons,
     _build_ui_design_prompt,
     _extract_tsx_code,
     _find_undefined_refs,
     _is_likely_truncated,
     _merge_truncated_code,
     generate_page_react_code,
+    validate_page_code,
 )
 
 
@@ -53,6 +56,26 @@ class UiDesignSettingsTests(unittest.TestCase):
 
 
 class UiDesignGeneratorTests(unittest.TestCase):
+    def test_typescript_dom_generic_is_not_treated_as_jsx_component(self) -> None:
+        """useRef 的 DOM 类型实参不能被 JSX 组件扫描器误判为未导入组件。"""
+
+        code = """import React, { useRef } from 'react';
+const Page = () => {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  return <div ref={inputRef}>内容</div>;
+};
+export default Page;
+"""
+
+        self.assertEqual(_find_undefined_refs(code), [])
+
+    def test_real_undefined_jsx_component_is_still_detected(self) -> None:
+        """排除 TypeScript 类型后，真实缺失 import 的 JSX 组件仍必须被拦截。"""
+
+        code = "const Page = () => <MissingPanel />; export default Page;"
+
+        self.assertEqual(_find_undefined_refs(code), ["MissingPanel"])
+
     def test_prompt_declares_product_plan_as_only_product_fact_source(self) -> None:
         """UI 提示词必须明确禁止新增业务字段、操作、指标和正式路由。"""
 
@@ -74,8 +97,12 @@ class UiDesignGeneratorTests(unittest.TestCase):
         """单页设计稿生成必须绑定 UI 设计专用输出上限。"""
 
         model = MagicMock()
-        model.bind.return_value.invoke.return_value = SimpleNamespace(
-            content="const MoviePage = () => <div>电影</div>; export default MoviePage;"
+        model.bind.return_value.stream.return_value = iter(
+            [
+                SimpleNamespace(
+                    content="const MoviePage = () => <div>电影</div>; export default MoviePage;"
+                )
+            ]
         )
         settings = SimpleNamespace(
             ui_design_max_tokens=12288,
@@ -107,10 +134,14 @@ class UiDesignGeneratorTests(unittest.TestCase):
 
         model = MagicMock()
         bound_model = model.bind.return_value
-        bound_model.invoke.side_effect = [
+        bound_model.stream.side_effect = [
             RuntimeError("Connection error."),
-            SimpleNamespace(
-                content="const MoviePage = () => <div>电影</div>; export default MoviePage;"
+            iter(
+                [
+                    SimpleNamespace(
+                        content="const MoviePage = () => <div>电影</div>; export default MoviePage;"
+                    )
+                ]
             ),
         ]
         settings = SimpleNamespace(
@@ -133,7 +164,7 @@ class UiDesignGeneratorTests(unittest.TestCase):
                 "MoviePage",
             )
 
-        self.assertEqual(bound_model.invoke.call_count, 2)
+        self.assertEqual(bound_model.stream.call_count, 2)
         self.assertIn("export default MoviePage", code)
 
     def test_truncated_output_is_continued_not_regenerated(self) -> None:
@@ -153,9 +184,9 @@ class UiDesignGeneratorTests(unittest.TestCase):
         continuation = " /></div>;\nexport default MoviePage;"
         model = MagicMock()
         bound_model = model.bind.return_value
-        bound_model.invoke.side_effect = [
-            SimpleNamespace(content=partial),       # 首次：截断，无 export default
-            SimpleNamespace(content=continuation),  # 续写：补全
+        bound_model.stream.side_effect = [
+            iter([SimpleNamespace(content=partial)]),       # 首次：截断，无 export default
+            iter([SimpleNamespace(content=continuation)]),  # 续写：补全
         ]
         settings = SimpleNamespace(ui_design_max_tokens=32768, ui_design_max_retries=1)
         settings.for_ui_design_model = lambda: settings
@@ -175,11 +206,11 @@ class UiDesignGeneratorTests(unittest.TestCase):
             )
 
         # 只调 2 次：首次生成 + 一次续写，不触发整页 repair。
-        self.assertEqual(bound_model.invoke.call_count, 2)
+        self.assertEqual(bound_model.stream.call_count, 2)
         self.assertIn("export default MoviePage", code)
         self.assertIn("<ProTable", code)
         # 续写的 prompt 必须带"从断点续写"指令与已生成的部分代码。
-        continuation_prompt = bound_model.invoke.call_args_list[1][0][0]
+        continuation_prompt = bound_model.stream.call_args_list[1][0][0]
         self.assertIn("CUT OFF", continuation_prompt)
         self.assertIn("MoviePage", continuation_prompt)
         # 续写成功后 validate 第二次收到的是拼接后的完整代码。
@@ -236,6 +267,28 @@ class MergeTruncatedCodeTests(unittest.TestCase):
 
 
 class ExtractTsxCodeTests(unittest.TestCase):
+    def test_keeps_bare_exported_function_body(self) -> None:
+        """直接导出函数时，函数声明后的 JSX 与闭合大括号也属于代码。"""
+
+        raw = (
+            "import React from 'react';\n"
+            "export default function BillingPage() {\n"
+            "  return <main><h1>账单</h1></main>;\n"
+            "}\n"
+        )
+        self.assertEqual(_extract_tsx_code(raw), raw.strip())
+
+    def test_keeps_multiline_default_expression(self) -> None:
+        """跨行默认导出表达式也必须保留完整 JSX。"""
+
+        raw = (
+            "import React from 'react';\n"
+            "export default (\n"
+            "  <main><h1>账单</h1></main>\n"
+            ");\n"
+        )
+        self.assertEqual(_extract_tsx_code(raw), raw.strip())
+
     def test_extracts_pure_code_with_multiple_imports(self) -> None:
         """纯代码（多 import）应完整保留，不能从最后一个 import 截断。"""
 
@@ -455,6 +508,90 @@ class AutoFixImportsTests(unittest.TestCase):
         fixed, unresolved = _auto_fix_missing_imports(code)
         self.assertEqual(fixed, code)
         self.assertEqual(unresolved, [])
+
+
+class AutoFixPreviewOnlyReviewButtonsTests(unittest.TestCase):
+    """错误态恢复按钮可确定性补标，业务按钮仍交给产品契约校验。"""
+
+    def test_marks_only_static_retry_button(self) -> None:
+        """带箭头函数的重试按钮应补标，导出和普通刷新按钮不得被误标。"""
+
+        code = """
+const Page = () => <div>
+  <Button onClick={() => setFailed(false)}><ReloadOutlined />重新加载</Button>
+  <Button onClick={exportData}>导出</Button>
+  <Button onClick={refreshData}>刷新</Button>
+</div>;
+export default Page;
+"""
+
+        fixed, count = _auto_fix_preview_only_review_buttons(code)
+
+        self.assertEqual(count, 1)
+        self.assertIn(
+            '<Button onClick={() => setFailed(false)} data-preview-only="true">',
+            fixed,
+        )
+        self.assertNotIn(
+            '<Button onClick={exportData} data-preview-only="true">', fixed
+        )
+        self.assertNotIn(
+            '<Button onClick={refreshData} data-preview-only="true">', fixed
+        )
+
+    def test_keeps_bound_or_already_marked_retry_button(self) -> None:
+        """已有 actionId 或 preview-only 的重试按钮必须保持原样。"""
+
+        code = """
+const Page = () => <div>
+  <Button data-action-id="retry-request">重试</Button>
+  <Button data-preview-only="true">再试一次</Button>
+</div>;
+export default Page;
+"""
+
+        fixed, count = _auto_fix_preview_only_review_buttons(code)
+
+        self.assertEqual(count, 0)
+        self.assertEqual(fixed, code)
+
+
+class AutoFixComponentImportSourcesTests(unittest.TestCase):
+    """组件导入来源错误时应在落盘前修复，避免 React 运行时白屏。"""
+
+    def test_moves_antd_components_out_of_pro_components(self) -> None:
+        """Button 等 antd 组件应移出 Pro Components，ProCard 保持不变。"""
+
+        code = """import React from 'react';
+import { ProCard, Button, Select, Typography, Statistic } from '@ant-design/pro-components';
+import { Card } from 'antd';
+const Page = () => <ProCard><Typography.Text>用量</Typography.Text><Button>导出</Button><Select /><Statistic value={1} /><Card /></ProCard>;
+export default Page;
+"""
+
+        fixed, count = _auto_fix_component_import_sources(code)
+
+        self.assertEqual(count, 4)
+        self.assertIn("import { ProCard } from '@ant-design/pro-components';", fixed)
+        self.assertIn(
+            "import { Button, Select, Typography, Statistic } from 'antd';", fixed
+        )
+        self.assertNotIn("ProCard, Button", fixed)
+
+    def test_validator_rejects_known_component_from_wrong_module(self) -> None:
+        """未经过自动修复的错误命名导入不得再被静态校验判为成功。"""
+
+        code = """import React from 'react';
+import { ProCard, Button } from '@ant-design/pro-components';
+const Page = () => <ProCard><Button>导出</Button></ProCard>;
+export default Page;
+"""
+
+        ok, error = validate_page_code("", code)
+
+        self.assertFalse(ok)
+        self.assertIn("Button 应从 antd 导入", error)
+        self.assertIn("白屏", error)
 
 
 if __name__ == "__main__":

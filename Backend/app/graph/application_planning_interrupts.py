@@ -46,6 +46,16 @@ def application_planning_review_payload(
         else state.get(artifact)
     )
     clarification = state.get("clarification")
+    if (
+        node_name == "ui_confirmation"
+        and (not isinstance(clarification, dict) or not clarification.get("mode"))
+        and isinstance(artifact_value, dict)
+        and artifact_value.get("confirmation_status") == "pending_user_confirmation"
+    ):
+        # 非修改设计对话曾清空审阅说明；只从当前待确认 UiManifest 重建原 UI 门禁。
+        from app.graph.nodes.ui_confirmation import _ui_design_confirmation_payload
+
+        clarification = _ui_design_confirmation_payload(state, artifact_value)
     if node_name == "planning_stage_entry":
         ui_designs = artifact_value if isinstance(artifact_value, dict) else {}
         skipped = ui_designs.get("confirmation_status") == "skipped"
@@ -183,7 +193,8 @@ def resume_application_planning_review(
                 # 节点优先消费并错误地重新展示初始管理员 subjectId 问题。
                 "authorization_config_conflict": {},
                 "pending_application_config_target": {},
-                "clarification": {},
+                # 非修改对话返回原审阅门时必须保留原确认载荷；真正的产物修订节点会覆盖它。
+                "clarification": payload.get("clarification") or {},
             },
             goto="design_intent_analysis",
         )

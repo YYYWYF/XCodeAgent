@@ -27,6 +27,12 @@ const PLANNING_ACTIVITY_COPY: Record<
     detail: '正在梳理页面目标、核心操作、状态与产品验收标准。',
     revisionDetail: '正在更新受影响页面的目标、操作、状态与产品验收标准。'
   },
+  screenshot_ui_preparation: {
+    title: '正在根据截图生成 UI 设计稿',
+    revisionTitle: '正在根据截图重新生成 UI 设计稿',
+    detail: '正在建立截图与页面映射，并并发生成尚未就绪的页面。',
+    revisionDetail: '正在复用已通过页面，只更新本次受影响或失败的设计稿。'
+  },
   ui_confirmation: {
     title: '正在生成 UI 设计稿',
     revisionTitle: '正在重新生成 UI 设计稿',
@@ -348,6 +354,25 @@ function planningPhaseForLifecycleStage(stage: string): string {
 
 // 优先使用权威生命周期收口设计到规划的边界，再读取节点事件兼容流式摘要滞后。
 export function planningWorkflowPhase(workflow?: WorkflowRunPayload): string {
+  // generating_ui_designs 同时覆盖截图准备和最终 UI 确认，不能用该粗粒度生命周期
+  // 覆盖正在运行的截图节点，否则逐页进度会被误当成 ui_confirmation 后丢弃。
+  const latestNodeEvent = [...(workflow?.events || [])]
+    .reverse()
+    .find(
+      (event) =>
+        ['workflow.node.started', 'workflow.node.progress', 'workflow.node.completed'].includes(
+          event.type
+        )
+    )
+  if (
+    latestNodeEvent &&
+    String(latestNodeEvent.nodeName || latestNodeEvent.node?.id || '') ===
+      'screenshot_ui_preparation' &&
+    latestNodeEvent.type !== 'workflow.node.completed' &&
+    latestNodeEvent.status !== 'completed'
+  ) {
+    return 'screenshot_ui_preparation'
+  }
   const lifecyclePhase = planningPhaseForLifecycleStage(planningWorkflowLifecycleStage(workflow))
   if (lifecyclePhase) return lifecyclePhase
   const events = workflow?.events || []
@@ -552,6 +577,7 @@ export function planningWorkflowActivity(
           revisionDetail: '正在把本次确认后的需求修订写入正式 Markdown 文档。'
         }
       : copy
+  const liveProgressDetail = latestPlanningProgressMessage(workflow, phase)
   // 首次创建的需求、产品和技术阶段使用活动块；UI 首次生成由设计预览区反馈。
   // 只有设计变更显示“重新生成”和意图标签。
   // UI 设计卡片的结构化动作会保留历史意图但显式关闭设计变更，此时沿用卡片自身加载态。
@@ -571,10 +597,24 @@ export function planningWorkflowActivity(
       status === 'failed'
         ? String(workflow.summary.message || '当前设计产物生成失败，请重试。')
         : isRevision
-          ? intent.reason || effectiveCopy.revisionDetail || effectiveCopy.detail
-          : effectiveCopy.detail,
+          ? liveProgressDetail || intent.reason || effectiveCopy.revisionDetail || effectiveCopy.detail
+          : liveProgressDetail || effectiveCopy.detail,
     intentLabel: isRevision ? DESIGN_INTENT_LABELS[intent.target] || intent.target : undefined
   }
+}
+
+// 读取当前节点最后一条 AG-UI 进度消息，让长耗时截图生成展示真实逐页阶段。
+function latestPlanningProgressMessage(workflow: WorkflowRunPayload, phase: string): string {
+  const event = [...(workflow.events || [])]
+    .reverse()
+    .find(
+      (item) =>
+        item.type === 'workflow.node.progress' &&
+        String(item.nodeName || item.node?.id || '') === phase &&
+        typeof item.message === 'string' &&
+        item.message.trim()
+    )
+  return typeof event?.message === 'string' ? event.message.trim() : ''
 }
 
 // 只读取服务端创建修订事务时冻结的产物状态；缺少快照一律按首次生成展示。

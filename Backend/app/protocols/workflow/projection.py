@@ -401,6 +401,7 @@ def _workflow_start_node(
                 "design_intent_analysis",
                 "requirements",
                 "product_planning",
+                "screenshot_ui_preparation",
                 "ui_confirmation",
                 "technical_planning",
                 "template_reconcile",
@@ -438,6 +439,14 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     if node_name == "product_planning":
         if update.get("status") == "requires_user_input":
             return []
+        requirement_input = update.get("requirement_input")
+        return (
+            ["screenshot_ui_preparation"]
+            if isinstance(requirement_input, dict)
+            and requirement_input.get("mode") == "screenshot"
+            else ["ui_confirmation"]
+        )
+    if node_name == "screenshot_ui_preparation":
         return ["ui_confirmation"]
     if node_name == "requirements":
         if update.get("status") == "requires_user_input":
@@ -1379,6 +1388,12 @@ def _workflow_summary(
         message = conversation_response
     elif status == "requires_user_input":
         message = _workflow_user_input_message(result, clarification)
+    elif (
+        status == "failed"
+        and result.get("phase") == "design_intent_analysis"
+        and str(result.get("error") or "").strip()
+    ):
+        message = str(result["error"]).strip()
     else:
         message = f"Workflow {status}：完成 {len(completed_nodes)} 个节点。"
         quality_gate_passed = result.get("quality_gate_passed")

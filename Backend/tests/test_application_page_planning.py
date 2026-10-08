@@ -710,6 +710,39 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
             )
 
+    def test_screenshot_plan_generation_error_stays_in_failed_generation_stage(self) -> None:
+        """截图计划没有产物时不能误报为等待用户确认 TechnicalPlan。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            state = _confirmed_state(workspace)
+            _write_planning_stage_entry_lifecycle(workspace)
+            state["requirement_input"] = {"mode": "screenshot"}
+            state["application_planning_interaction"] = {
+                "action": "enter_planning", "artifact": "ui_designs",
+            }
+            update = {
+                "phase": "technical_planning",
+                "status": "requires_user_input",
+                "clarification": {
+                    "status": "requires_user_input",
+                    "mode": "technical_plan_generation_error",
+                    "errors": ["模型输出被截断"],
+                },
+            }
+            with patch(
+                "app.graph.application_planning_workflow.nodes.project_planning",
+                return_value=update,
+            ):
+                result = _technical_planning({**state, "workflow_scope": "application_planning"})
+
+            lifecycle = load_application_lifecycle(workspace)
+            assert lifecycle is not None
+            self.assertEqual(result["clarification"]["mode"], "technical_plan_generation_error")
+            self.assertEqual(lifecycle.initialization.stage, ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN)
+            self.assertEqual(lifecycle.initialization.status, ApplicationLifecycleStatus.FAILED)
+            self.assertEqual(lifecycle.error.code, "technical_plan_generation_error")
+
     def test_design_revision_confirmation_commits_before_template_reconcile(self) -> None:
         """二次修改确认先提交 TechnicalPlan，下一节点才执行模板收口。"""
 

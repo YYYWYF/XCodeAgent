@@ -73,9 +73,12 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
     if not isinstance(pages, list) or not pages:
         return ""
     entries: list[dict[str, str]] = []
+    screenshot_visual_reference = False
     for page in pages:
         if not isinstance(page, dict):
             continue
+        if page.get("visual_source") == "screenshot":
+            screenshot_visual_reference = True
         page_id = str(page.get("pageId") or "").strip()
         page_key = str(page.get("page_key") or "").strip()
         if not page_id or not page_key:
@@ -89,7 +92,18 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
         )
     if not entries:
         return ""
-    return (
+    screenshot_instruction = (
+        "This UI design was derived from uploaded screenshots. Before implementing the first "
+        "page, also use `read_file` on `/.xcodeagent/specs/screenshot-ui-reference.json` to "
+        "understand the page-to-screenshot mapping and observed visual tokens. Use `read_file` "
+        "on `/.xcodeagent/specs/screenshot-app-shell-reference.json` only to understand which "
+        "header/sidebar elements belong to the outer application shell; never duplicate that "
+        "shell inside a route page or modify framework-owned files outside allowed_paths. The "
+        "confirmed TSX remains the executable page-content reference.\n\n"
+        if screenshot_visual_reference
+        else ""
+    )
+    return screenshot_instruction + (
         "## UI Design Reference (MUST READ BEFORE WRITING EACH PAGE)\n"
         "For each frontend page task, the task's unit_id is `page:<pageId>`. Before writing "
         "the page, find the matching pageId in the design reference map below and use "

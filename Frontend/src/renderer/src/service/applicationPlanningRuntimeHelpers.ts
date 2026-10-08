@@ -3,6 +3,7 @@ import type {
   ApplicationLifecycle,
   ApplicationPlanningConfirmation,
   ApplicationPlanningInteraction,
+  ApplicationRequirementInput,
   WorkflowClarificationAnswers,
   WorkflowRunPayload
 } from '../typings'
@@ -130,12 +131,16 @@ export function buildPlanningInteraction(
 
 /** 根据本轮读取的权威阶段保持原有恢复节点映射。 */
 export function planningResumeFrom(
-  lifecycle: ApplicationLifecycle
+  lifecycle: ApplicationLifecycle,
+  requirementInput?: ApplicationRequirementInput
 ): NonNullable<SendWorkflowMessageOptions['workflowDebug']>['resumeFrom'] {
   switch (lifecycle.initialization.stage) {
     case 'generating_technical_plan':
     case 'awaiting_technical_plan_confirmation': return 'technical_planning'
     case 'generating_ui_designs':
+      return requirementInput?.mode === 'screenshot'
+        ? 'screenshot_ui_preparation'
+        : 'ui_confirmation'
     case 'awaiting_ui_design_confirmation': return 'ui_confirmation'
     case 'generating_requirement_document':
     case 'awaiting_requirement_document_confirmation': return 'product_planning'

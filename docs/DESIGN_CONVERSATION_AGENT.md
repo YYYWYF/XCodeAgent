@@ -68,6 +68,8 @@ out_of_scope
 
 `product_conversation_result` 固定携带 `mutating=false` 和 `presentation.artifactPresentation=preserve`。AG-UI 将 response 投影为普通 assistant 正文；前端按 `artifact + gateId + artifactRevision` 复用原审阅卡，不以新 runId 或 messageId 重放同一文档。它们不得调用产物失效、当前产物 revision 或 lifecycle restart，不得改变 RequirementSpec、ProductPlan、UiDesign、TechnicalPlan 或 application_planning_confirmation。只读问答只使用 Coordinator 收到的有界产品上下文，不扫描工作区源码。
 
+返回原审阅门时必须保留其 `clarification`，并以重新挂起的门禁阶段投影当前 phase；`design_chat_response` 只作为本轮普通回复内容。若旧 checkpoint 中 UI 审阅中断的 `clarification` 已为空，只允许从同一 checkpoint 的待确认 UiManifest 重建 UI 确认载荷及门禁身份，不得跳过人工确认。
+
 ## 正式修改和确认
 
 正式修改仍由原节点写草稿并经过原确认门：

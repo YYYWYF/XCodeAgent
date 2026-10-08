@@ -390,7 +390,13 @@ function AppEntryContent(): JSX.Element {
                   ? () => {
                       void planningController.retryTemplateGeneration(activeApplication.id)
                     }
-                  : () => void planningRuntimeController.retryCurrentFailure(activeApplication.id)
+                  : () => {
+                      void planningRuntimeController.retryCurrentFailure(activeApplication.id).catch(
+                        (reason: unknown) => {
+                          message.error(reason instanceof Error ? reason.message : '规划重试失败，请检查后端服务。')
+                        }
+                      )
+                    }
             }
             onRetryTemplateReconcile={() =>
               void planningRuntimeController.retryTemplateReconcile(activeApplication.id)

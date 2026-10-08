@@ -23,7 +23,10 @@ import { Button, Form, Input, Radio, Select, Switch, Tooltip } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useMemo, useState } from 'react'
-import type { ApplicationDraft } from '../../typings'
+import type {
+  ApplicationDraft,
+  ApplicationRequirementScreenshotSelection
+} from '../../typings'
 import { cx } from '../../utils'
 import {
   applicationIconOptions,
@@ -33,6 +36,7 @@ import {
 } from './constants'
 import { TabHintInput, TabHintAutoComplete } from './components/TabHintInput'
 import DatasourceConfigFields from './DatasourceConfigFields'
+import RequirementInputFields from './RequirementInputFields'
 
 const { TextArea } = Input
 
@@ -53,8 +57,12 @@ const iconComponents: Record<string, typeof AppstoreOutlined> = {
 
 type Props = {
   form: FormInstance<ApplicationDraft>
+  onRemoveRequirementScreenshot: (path: string) => void
+  onSelectRequirementScreenshots: () => void
   onSelectProjectParent: () => void
+  requirementScreenshots: ApplicationRequirementScreenshotSelection[]
   selectingParent: boolean
+  selectingRequirementScreenshots: boolean
 }
 
 /** 渲染应用创建表单的分组标题。 */
@@ -70,9 +78,14 @@ function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode
 /** 渲染应用创建配置与项目目录提示。 */
 export default function ApplicationForm({
   form,
+  onRemoveRequirementScreenshot,
+  onSelectRequirementScreenshots,
   onSelectProjectParent,
-  selectingParent
+  requirementScreenshots,
+  selectingParent,
+  selectingRequirementScreenshots
 }: Props): ReactElement {
+  const requirementInputMode = Form.useWatch('requirementInputMode', form) ?? 'text'
   const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? true
   const authorizationEnabled = Form.useWatch(['authorization', 'enabled'], form) ?? false
   const trackEnabled = Form.useWatch(['track', 'enable'], form) ?? true
@@ -164,13 +177,36 @@ export default function ApplicationForm({
             })}
           </Radio.Group>
         </Form.Item>
+        <RequirementInputFields
+          form={form}
+          onRemoveScreenshot={onRemoveRequirementScreenshot}
+          onSelectScreenshots={onSelectRequirementScreenshots}
+          screenshots={requirementScreenshots}
+          selecting={selectingRequirementScreenshots}
+        />
         <Form.Item
           className={cx('application-form-scenario')}
-          label="应用场景"
+          label={requirementInputMode === 'screenshot' ? '补充说明' : '应用场景'}
           name="senario"
-          rules={[{ required: true, whitespace: true, message: '请输入应用场景' }]}
+          rules={[
+            ({ getFieldValue }) => ({
+              validator: (_rule, value: string) => {
+                if (getFieldValue('requirementInputMode') === 'screenshot' || value?.trim()) {
+                  return Promise.resolve()
+                }
+                return Promise.reject(new Error('请输入应用场景'))
+              }
+            })
+          ]}
         >
-          <TextArea rows={3} />
+          <TextArea
+            placeholder={
+              requirementInputMode === 'screenshot'
+                ? '可选：补充截图无法表达的业务背景、角色或流程'
+                : '请描述应用场景、业务角色和核心流程'
+            }
+            rows={3}
+          />
         </Form.Item>
         <Form.Item
           label="码云地址"

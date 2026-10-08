@@ -1214,11 +1214,60 @@ export default function AiChatPanel({
             | undefined
         )?.pages ??
         localUiDesignPages)
+  // 工作流快照不包含已落盘的 TSX 时，从当前工作区读取真正的页面状态和源码；
+  // 此读取不触发 Graph run，因此不会与正在进行的规划线程竞争 checkpoint。
+  const [diskUiDesignPages, setDiskUiDesignPages] = useState<{
+    workspaceRoot: string
+    pages: Array<{
+      pageId?: string
+      name?: string
+      code?: string
+      code_error?: string
+      status?: string
+      template_id?: string
+    }>
+  }>({ workspaceRoot: '', pages: [] })
+  useEffect(() => {
+    const workspaceRoot = application.workspaceRoot
+    const readUiDesigns = window.xcodeAgent?.workspace?.readUiDesigns
+    if (!isDesignPhase || !workspaceRoot || !readUiDesigns) return
+    let cancelled = false
+    let inFlight = false
+    // 同一工作区每次只做一个读取；磁盘清单与 TSX 一起抵达右侧预览。
+    const poll = async (): Promise<void> => {
+      if (inFlight) return
+      inFlight = true
+      try {
+        const result = await readUiDesigns({ workspaceRoot })
+        const pages = (result.uiDesigns as { pages?: unknown[] } | null)?.pages
+        if (cancelled || !Array.isArray(pages)) return
+        const nextPages = pages.filter(
+          (page): page is Record<string, unknown> => Boolean(page && typeof page === 'object')
+        ) as typeof diskUiDesignPages.pages
+        setDiskUiDesignPages((current) =>
+          current.workspaceRoot === workspaceRoot &&
+          JSON.stringify(current.pages) === JSON.stringify(nextPages)
+            ? current
+            : { workspaceRoot, pages: nextPages }
+        )
+      } catch {
+        // 短暂读盘失败保留上一份快照，下一次轮询继续恢复。
+      } finally {
+        inFlight = false
+      }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [application.workspaceRoot, isDesignPhase])
   // UI 设计稿页面列表（右侧"UI设计稿"tab 预览用）。
   // workflow running 期间流式快照可能丢失 page.code，用 ref 缓存上一次有 code 的 pages，
   // running 期间回退到缓存，避免右侧设计稿闪烁消失、tab 被误禁用。
   const uiDesignPagesCacheRef = useRef<
-    Array<{ pageId?: string; name?: string; code?: string; status?: string; template_id?: string }>
+    Array<{ pageId?: string; name?: string; code?: string; code_error?: string; status?: string; template_id?: string }>
   >([])
   const uiDesignPages = useMemo(() => {
     const raw = (
@@ -1229,18 +1278,27 @@ export default function AiChatPanel({
       pageId?: string
       name?: string
       code?: string
+      code_error?: string
       status?: string
       template_id?: string
     }>
-    if (raw.some((p) => Boolean(p.code))) {
-      uiDesignPagesCacheRef.current = raw
-      return raw
+    const livePages = diskUiDesignPages.workspaceRoot === application.workspaceRoot
+      ? diskUiDesignPages.pages
+      : []
+    const liveById = new Map(livePages.map((page) => [page.pageId, page]))
+    const merged = (raw.length > 0 ? raw : livePages).map((page) => {
+      const diskPage = liveById.get(page.pageId)
+      return diskPage ? { ...page, ...diskPage } : page
+    })
+    if (merged.some((page) => Boolean(page.code))) {
+      uiDesignPagesCacheRef.current = merged
+      return merged
     }
-    if (planningPhaseRunning && uiDesignPagesCacheRef.current.length > 0) {
+    if (planningPhaseRunning && livePages.length === 0 && uiDesignPagesCacheRef.current.length > 0) {
       return uiDesignPagesCacheRef.current
     }
-    return raw
-  }, [planningUiDesignPagesSource, planningPhaseRunning])
+    return merged
+  }, [planningUiDesignPagesSource, planningPhaseRunning, diskUiDesignPages, application.workspaceRoot])
   const requirementDocContent = mergedRequirementDocContentFor(
     designDocFileContent,
     currentPlanningWorkflow
@@ -4336,18 +4394,22 @@ export default function AiChatPanel({
           )
         }
       }
-      void onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec).catch(
-        (reason) => {
-          if (revisionTechnicalPlanConfirmed) {
-            suppressRevisionTechnicalPlanTransitionRef.current = false
-            planningNewRoundRef.current = false
-            rollbackPlanningSubmission(planningSubmission)
-            message.error(
-              formatError(reason, '技术规划确认未提交成功，上一轮规划连接未能正常结束，请重试')
-            )
-          }
+      try {
+        await onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec)
+      } catch (reason) {
+        if (revisionTechnicalPlanConfirmed) {
+          suppressRevisionTechnicalPlanTransitionRef.current = false
+          planningNewRoundRef.current = false
+          rollbackPlanningSubmission(planningSubmission)
+          message.error(
+            formatError(reason, '技术规划确认未提交成功，上一轮规划连接未能正常结束，请重试')
+          )
+          return
         }
-      )
+        // UI 设计按钮由 UiDesignConfirmationPanel 负责复位 acting/run 状态并提示；
+        // 必须把错误继续抛回去，不能在这里静默吞掉造成“点击没有反应”。
+        if (isUiDesignPageAction) throw reason
+      }
       return
     }
     await handleSubmitClarification(workflow, answers)
@@ -4429,14 +4491,20 @@ export default function AiChatPanel({
     planningNewRoundRef.current = true
     lastUiDesignRunIdRef.current = undefined
     appendPlanningUserMessage({ design_change_request: trimmed })
-    void onSubmitPlanningClarification(
-      currentPlanningWorkflow,
-      {},
-      undefined,
-      undefined,
-      trimmed
-    ).catch(() => undefined)
-    setDraftByKey(draftKey, '')
+    try {
+      await onSubmitPlanningClarification(
+        currentPlanningWorkflow,
+        {},
+        undefined,
+        undefined,
+        trimmed
+      )
+      setDraftByKey(draftKey, '')
+    } catch (reason) {
+      // 设计意图节点失败时保留原输入并明确展示错误，避免只剩“待确认”空卡。
+      planningNewRoundRef.current = false
+      message.error(formatError(reason, '设计变更提交失败，请重试。'))
+    }
   }
 
   /** 按应用是否完成初始创建，在原审阅门与 formal revision 语义入口之间分流。 */

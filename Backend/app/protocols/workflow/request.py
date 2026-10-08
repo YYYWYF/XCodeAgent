@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.agents.screenshot_requirements import normalize_requirement_input
 from app.domain.application_revision import (
     FormalRevisionBranch,
     RevisionContinuationRequest,
@@ -199,6 +200,16 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         _optional_text(payload.get("workflowScope"))
         or _optional_text(forwarded_props.get("workflowScope"))
     )
+    requirement_input = normalize_requirement_input(
+        payload.get("requirementInput")
+        if payload.get("requirementInput") is not None
+        else forwarded_props.get("requirementInput")
+    )
+    if (
+        requirement_input.get("mode") == "screenshot"
+        and workflow_scope != "application_planning"
+    ):
+        raise ValueError("截图需求输入只能提交到 application_planning Graph。")
     application_planning_interaction = _application_planning_interaction(
         payload,
         forwarded_props=forwarded_props,
@@ -227,6 +238,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         "start_revision",
         "submit_revision_interaction",
         "retry_template_reconcile",
+        "retry_design_intent",
     } and explicit_resume_from:
         raise ValueError(f"{workflow_action} 不接受 node 或 resume_from。")
     # UI 卡片的结构化动作是 ui_confirmation 的直接调用，不属于自由输入设计变更。
@@ -277,6 +289,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("retry_template_reconcile 只适用于 application_planning Graph。")
         # 节点由专用 action 选择，普通恢复请求不能自行抵达 Template Reconcile。
         resume_from = "template_reconcile"
+    elif workflow_action == "retry_design_intent":
+        if workflow_scope not in APPLICATION_PLANNING_SCOPES:
+            raise ValueError("retry_design_intent 只适用于 application_planning Graph。")
+        # 失败任务身份与原请求还要在持有同线程锁后由 checkpoint 二次校验。
+        resume_from = "design_intent_analysis"
     elif small_task_handoff_submission and workflow_scope not in APPLICATION_PLANNING_SCOPES:
         # 单测修复使用独立节点；恢复快照中的 repairReturnNode 是当前契约里
         # 唯一可靠的来源，不能让通用 SmallTask 节点吞掉开发阶段修复计数。
@@ -839,6 +856,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             if workflow_scope in APPLICATION_PLANNING_SCOPES
             else {}
         ),
+        **(
+            {"requirement_input": requirement_input}
+            if workflow_scope in APPLICATION_PLANNING_SCOPES
+            else {}
+        ),
     }
     return {
         "plan_control_run_id": (
@@ -1185,6 +1207,7 @@ def _supported_workflow_action(value: str) -> str:
             "start_entity_binding",
             "continue_after_entity_binding",
             "retry_template_reconcile",
+            "retry_design_intent",
         }
         else ""
     )
@@ -1473,6 +1496,7 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "design_intent_analysis",
             "requirements",
             "product_planning",
+            "screenshot_ui_preparation",
             "ui_confirmation",
             "technical_planning",
         }

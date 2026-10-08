@@ -133,7 +133,7 @@ type WorkflowRunCardProps = {
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>
-  ) => void
+  ) => void | Promise<void>
   /** UI 设计稿确认：当前选中页 id（与右侧预览面板联动）。 */
   uiDesignActivePageId?: string
   /** UI 设计稿确认：选中页变化时通知外部（联动右侧预览）。 */

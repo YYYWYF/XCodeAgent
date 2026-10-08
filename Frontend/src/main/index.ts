@@ -1,4 +1,5 @@
 import { stopProjectPreviewViaAgUi } from './projectPreviewControl'
+import { readWorkspaceUiDesigns } from './uiDesignSnapshot'
 import { app, shell, BrowserWindow, ipcMain, dialog, Menu, Tray, nativeImage } from 'electron'
 import { join } from 'path'
 import crypto from 'node:crypto'
@@ -12,6 +13,11 @@ import { normalizePersistentSessionMessage } from './sessionMessageNormalization
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
 import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
+import {
+  readWorkspaceRequirementInput,
+  selectRequirementScreenshotMetadata,
+  stageWorkspaceRequirementInput
+} from './requirementScreenshots'
 import { endpointDesignDocumentStatus, PRODUCT_PLAN_SCHEMA_VERSION } from './planningArtifactStatus'
 import {
   nextStageSessionSequence,
@@ -1515,20 +1521,18 @@ function setupWorkspaceIpc(): void {
   // 绕过 Graph run（同 thread 不能并发），避免 no-op resume 被 checkpoint 约束吞掉。
   ipcMain.handle('workspace:read-ui-designs', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
-    const uiDesignsPath = path.join(workspaceRoot, '.xcodeagent', 'specs', 'ui-designs.json')
-    try {
-      const content = await fs.readFile(uiDesignsPath, 'utf8')
-      const parsed = JSON.parse(content)
-      return { uiDesigns: parsed }
-    } catch {
-      return { uiDesigns: null }
-    }
+    return { uiDesigns: await readWorkspaceUiDesigns(workspaceRoot) }
   })
 
   ipcMain.handle('workspace:read-application', async (_event, payload = {}) => {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
     const applicationConfig = await readManagedWorkspaceApplication(workspaceRoot)
     return { application: applicationConfig }
+  })
+
+  ipcMain.handle('workspace:read-requirement-input', async (_event, payload = {}) => {
+    const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
+    return { requirementInput: await readWorkspaceRequirementInput(workspaceRoot) }
   })
 
   ipcMain.handle('workspace:write-application', async (_event, payload = {}) => {
@@ -1564,6 +1568,19 @@ function setupWorkspaceIpc(): void {
     }
   })
 
+  ipcMain.handle('workspace:select-requirement-screenshots', async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: '选择需求参考截图',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '应用截图', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+    })
+    if (result.canceled) return { canceled: true, files: [] }
+    return {
+      canceled: false,
+      files: await selectRequirementScreenshotMetadata(result.filePaths)
+    }
+  })
+
   ipcMain.handle('workspace:create-project-directory', async (_event, payload = {}) => {
     if (typeof payload.workspacePath !== 'string' || !payload.workspacePath.trim()) {
       throw new Error('workspacePath must be a non-empty string')
@@ -1576,6 +1593,8 @@ function setupWorkspaceIpc(): void {
       throw new Error('applicationConfig must be an object')
     }
     assertCurrentApplicationSchema(payload.applicationConfig as Record<string, unknown>)
+    // 先复核所有源文件，避免无效截图请求创建半成品工作区。
+    await selectRequirementScreenshotMetadata(payload.requirementScreenshotPaths)
 
     const projectPath = path.resolve(payload.workspacePath)
     await assertNewProjectDirectory(projectPath)
@@ -1588,10 +1607,15 @@ function setupWorkspaceIpc(): void {
       encoding: 'utf8',
       flag: 'wx'
     })
+    const requirementInput = await stageWorkspaceRequirementInput(
+      projectPath,
+      payload.requirementScreenshotPaths
+    )
 
     return {
       ok: true,
-      path: projectPath
+      path: projectPath,
+      requirementInput
     }
   })
 }

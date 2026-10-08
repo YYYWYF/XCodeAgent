@@ -10,11 +10,17 @@ from unittest.mock import patch
 from app.services.ui_design_generation_pool import (
     UI_DESIGN_STATUS_GENERATING,
     UI_DESIGN_STATUS_QUEUED,
+    UiDesignGenerationCancelled,
     UiDesignGenerationPool,
     UiDesignGenerationTask,
     generate_page_entry,
 )
-from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_path
+from app.services.ui_design_generator import load_page_code, persist_page_code
+from app.workspace.spec_documents import (
+    load_ui_designs_json,
+    ui_designs_json_path,
+    write_ui_designs_json,
+)
 
 # 单页设计稿假代码：仅用于验证状态流转，不涉及真实 LLM 生成。
 FAKE_CODE = (
@@ -90,6 +96,19 @@ class GeneratePageEntryTests(unittest.TestCase):
         self.assertEqual(entry["status"], "generation_failed")
         self.assertIn("boom", entry["error"])
 
+    def test_screenshot_retry_failure_keeps_previous_preview(self) -> None:
+        """截图模式重试失败时，之前可预览的设计稿文件仍应存在。"""
+
+        task = _task(self.workspace, self.project_dir)
+        persist_page_code(self.project_dir, task.page_key, FAKE_CODE)
+        with patch(
+            "app.agents.screenshot_ui_design.regenerate_screenshot_ui_page",
+            return_value={"pageId": task.page_id, "status": "generation_failed", "error": "repair failed"},
+        ):
+            entry = generate_page_entry(task)
+        self.assertEqual(entry["status"], "generation_failed")
+        self.assertEqual(load_page_code(self.project_dir, task.page_key), FAKE_CODE)
+
     def test_select_template_success_returns_confirmed(self) -> None:
         """select_template 成功应返回 confirmed 并记录 template_id。"""
 
@@ -134,6 +153,36 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         )
         return manifest.get("pages", [])
 
+    def test_adjustment_merge_preserves_other_page_queue_state(self) -> None:
+        """多页侧栏调整写回时不得把插件页最新 queued 状态覆盖成旧快照。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        write_ui_designs_json(
+            {"workspace": self.workspace, "project_id": "proj"},
+            {
+                "schema_version": "ui-manifest.v3",
+                "confirmation_status": "pending_user_confirmation",
+                "pages": [
+                    {"pageId": "chat", "status": "confirmed"},
+                    {"pageId": "plugin", "status": "queued"},
+                ],
+            },
+        )
+
+        async def scenario() -> dict:
+            """执行同一写锁下的外部页面合并。"""
+
+            return await pool.merge_external_page_entries(
+                self.workspace,
+                "proj",
+                [{"pageId": "chat", "status": "confirmed", "code_path": "new-chat.tsx"}],
+            )
+
+        result = asyncio.run(scenario())
+        by_id = {page["pageId"]: page for page in result["pages"]}
+        self.assertEqual(by_id["plugin"]["status"], "queued")
+        self.assertEqual(by_id["chat"]["code_path"], "new-chat.tsx")
+
     def test_submit_dedups_and_worker_confirms(self) -> None:
         """同页重复提交只接受一次，worker 处理完落盘 confirmed 并退出活跃集。"""
 
@@ -142,7 +191,7 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page, page_key, project_dir, *, should_cancel=None):
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
@@ -173,6 +222,63 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         self.assertEqual(pages[0]["status"], "confirmed")
         self.assertEqual(pages[0]["code"], FAKE_CODE)
 
+    def test_submit_restarts_finished_workers(self) -> None:
+        """历史 worker 已结束时，新提交必须重建 worker，不能永久停在 queued。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        task = _task(self.workspace, self.project_dir)
+
+        with patch(
+            "app.services.ui_design_generation_pool.generate_page_react_code",
+            return_value=FAKE_CODE,
+        ):
+            async def scenario():
+                async def finished_worker() -> None:
+                    """模拟热重载或流取消后已经结束的历史 worker。"""
+
+                worker = asyncio.create_task(finished_worker())
+                await worker
+                pool._started = True
+                pool._workers = [worker]
+
+                accepted = await pool.submit([task])
+                self.assertEqual(accepted, ["orders"])
+                await asyncio.wait_for(pool._queue.join(), timeout=5)
+
+            asyncio.run(scenario())
+
+        self.assertEqual(self._manifest_pages()[0]["status"], "confirmed")
+
+    def test_ensure_started_recovers_existing_queued_task(self) -> None:
+        """轮询检查应恢复已登记但因 worker 退出而无人消费的历史 queued 任务。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        task = _task(self.workspace, self.project_dir)
+
+        with patch(
+            "app.services.ui_design_generation_pool.generate_page_react_code",
+            return_value=FAKE_CODE,
+        ):
+            async def scenario():
+                async def finished_worker() -> None:
+                    """模拟任务入队之后意外结束的历史 worker。"""
+
+                worker = asyncio.create_task(finished_worker())
+                await worker
+                key = (task.workspace, task.page_id)
+                pool._started = True
+                pool._workers = [worker]
+                pool._pending_ids.add(key)
+                pool._tasks_by_id[key] = task
+                pool._queue.put_nowait(task)
+
+                await pool.ensure_started()
+                await asyncio.wait_for(pool._queue.join(), timeout=5)
+
+            asyncio.run(scenario())
+
+        self.assertEqual(self._manifest_pages()[0]["status"], "confirmed")
+
     def test_queued_status_persisted_while_worker_busy(self) -> None:
         """并发度为 1 时，worker 忙期间新提交页应落盘 queued，之后随 worker 一起完成。"""
 
@@ -182,7 +288,7 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page, page_key, project_dir, *, should_cancel=None):
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
@@ -245,7 +351,7 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page, page_key, project_dir, *, should_cancel=None):
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
@@ -284,7 +390,7 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         release = threading.Event()
         generated: list[str] = []
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page, page_key, project_dir, *, should_cancel=None):
             generated.append(page_key)
             started.set()
             release.wait(timeout=10)
@@ -315,6 +421,26 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         self.assertEqual(by_id["dashboard"], "cancelled")
         self.assertEqual(by_id["orders"], "confirmed")
 
+    def test_cancelled_terminal_cannot_be_overwritten_by_worker_start(self) -> None:
+        """停止先落盘时，已领取 worker 不得再把 cancelled 覆盖为 generating。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        task = _task(self.workspace, self.project_dir)
+        key = (task.workspace, task.page_id)
+
+        async def scenario():
+            pool._pending_ids.add(key)
+            pool._tasks_by_id[key] = task
+            self.assertTrue(await pool.cancel_page(self.workspace, task.page_id))
+            with self.assertRaises(UiDesignGenerationCancelled):
+                await pool._process(task)
+
+        asyncio.run(scenario())
+
+        page = self._manifest_pages()[0]
+        self.assertEqual(page["status"], "cancelled")
+        self.assertIn("取消", page["error"])
+
     def test_cancel_page_without_active_task_is_noop(self) -> None:
         """无在途任务时取消返回 False，不写状态（幂等）。"""
 
@@ -325,6 +451,79 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
 
         self.assertFalse(asyncio.run(scenario()))
         self.assertEqual(self._manifest_pages(), [])
+
+    def test_cancel_page_after_restart_persists_cancelled_tombstone(self) -> None:
+        """内存任务丢失后仍须取消磁盘 queued，且恢复任务不得覆盖 cancelled。"""
+
+        write_ui_designs_json(
+            {"workspace": self.workspace, "project_id": "proj"},
+            {
+                "schema_version": "ui-manifest.v3",
+                "confirmation_status": "pending_user_confirmation",
+                "pages": [
+                    {
+                        "pageId": "orders",
+                        "page_key": "Orders",
+                        "status": UI_DESIGN_STATUS_QUEUED,
+                    }
+                ],
+            },
+        )
+        pool = UiDesignGenerationPool(concurrency=1)
+
+        async def scenario():
+            cancelled = await pool.cancel_page(self.workspace, "orders")
+            self.assertTrue(cancelled)
+            accepted = await pool.submit(
+                [_task(self.workspace, self.project_dir, recovery=True)]
+            )
+            self.assertEqual(accepted, [])
+
+        asyncio.run(scenario())
+
+        page = self._manifest_pages()[0]
+        self.assertEqual(page["status"], "cancelled")
+        self.assertIn("取消", page["error"])
+
+    def test_immediate_resubmit_does_not_revive_cancelled_attempt(self) -> None:
+        """取消旧调用后立即重试时，旧结果不得覆写或清除新 attempt。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        task = _task(self.workspace, self.project_dir)
+        started = threading.Event()
+        release = threading.Event()
+        calls = 0
+        old_code = FAKE_CODE.replace("页面设计稿", "旧设计稿")
+        new_code = FAKE_CODE.replace("页面设计稿", "新设计稿")
+
+        def generate_by_attempt(page, page_key, project_dir, *, should_cancel=None):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                started.set()
+                release.wait(timeout=10)
+                return old_code
+            return new_code
+
+        with patch(
+            "app.services.ui_design_generation_pool.generate_page_react_code",
+            side_effect=generate_by_attempt,
+        ):
+            async def scenario():
+                await pool.submit([task])
+                self.assertTrue(await asyncio.to_thread(started.wait, 5))
+                self.assertTrue(await pool.cancel_page(self.workspace, "orders"))
+                accepted = await pool.submit([_task(self.workspace, self.project_dir)])
+                self.assertEqual(accepted, ["orders"])
+                release.set()
+                await asyncio.wait_for(pool._queue.join(), timeout=5)
+
+            asyncio.run(scenario())
+
+        page = self._manifest_pages()[0]
+        self.assertEqual(calls, 2)
+        self.assertEqual(page["status"], "confirmed")
+        self.assertEqual(page["code"], new_code)
 
     def test_resubmit_after_cancel_clears_cancelled_flag(self) -> None:
         """取消后重新生成同页：新任务不被旧取消标记误杀，正常走到 confirmed。"""
@@ -357,7 +556,7 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page, page_key, project_dir, *, should_cancel=None):
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE

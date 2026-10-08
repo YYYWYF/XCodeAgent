@@ -4,12 +4,14 @@ import {
   type ApplicationPlanningRuntimeDependencies
 } from '../src/renderer/src/service/applicationPlanningRuntime'
 import {
+  isPlanningRecoveryCandidate,
   reduceApplicationPlanningCurrentState,
   type ApplicationPlanningCurrentEvent,
   type ApplicationPlanningCurrentState
 } from '../src/renderer/src/service/activeApplicationPlanning'
 import { AgUiRunError, type AgUiChatResult, type SendWorkflowMessageOptions } from '../src/renderer/src/service/agUiAgent'
 import { ApplicationPlanningCheckpointNotFoundError } from '../src/renderer/src/service/applicationPlanningRecovery'
+import { planningResumeFrom } from '../src/renderer/src/service/applicationPlanningRuntimeHelpers'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -162,6 +164,21 @@ async function waitForCondition<T>(
   throw new Error(`等待${description}超时。`)
 }
 
+// 截图模式在 UI 生成阶段恢复到视觉准备节点；进入人工确认后仍恢复原确认节点。
+{
+  const current = planningState()
+  current.lifecycle.initialization.stage = 'generating_ui_designs'
+  assert.equal(
+    planningResumeFrom(current.lifecycle, { mode: 'screenshot', screenshots: [] }),
+    'screenshot_ui_preparation'
+  )
+  current.lifecycle.initialization.stage = 'awaiting_ui_design_confirmation'
+  assert.equal(
+    planningResumeFrom(current.lifecycle, { mode: 'screenshot', screenshots: [] }),
+    'ui_confirmation'
+  )
+}
+
 // A：没有 Modal 也会启动；重复 ensureStarted 不创建第二轮执行。
 {
   const h = harness()
@@ -208,6 +225,19 @@ async function waitForCondition<T>(
   h.setCurrent({ ...current, lifecycle: { ...current.lifecycle, initialization: { ...current.lifecycle.initialization, stage: 'generating_technical_plan', status: 'failed' } } })
   await h.runtime.retryCurrentFailure()
   assert.equal(h.calls[0].options.workflowDebug?.resumeFrom, 'technical_planning')
+}
+
+// D2：设计意图失败必须请求服务端重试同一 checkpoint，而非恢复旧 UI 确认门。
+{
+  const current = planningState()
+  current.workflow = {
+    runId: 'failed-run', threadId: 'thread-A', events: [], result: {},
+    summary: { status: 'failed', phase: 'design_intent_analysis', message: 'intent failed' }
+  } as WorkflowRunPayload
+  const h = harness(current)
+  await h.runtime.retryCurrentFailure()
+  assert.equal(h.calls[0].options.workflowAction, 'retry_design_intent')
+  assert.equal(h.calls[0].options.workflowDebug, undefined)
 }
 
 // E：两个应用各自持有会话、事件和流式订阅。
@@ -683,6 +713,14 @@ async function waitForCondition<T>(
   await h.runtime.ensureStarted()
   assert.equal(h.events.some((event) => event.type === 'run_failed'), false)
   assert.equal(h.current()?.transportState, 'idle')
+}
+
+// 冷启动从索引重建的应用来源变成 existing-workspace，未完成规划仍须按工作区恢复。
+{
+  const workspace = { workspaceRoot: 'F:\\XCode_project\\pending' } as ApplicationConfig
+  assert.equal(isPlanningRecoveryCandidate({ ...workspace, source: 'new' }), true)
+  assert.equal(isPlanningRecoveryCandidate({ ...workspace, source: 'existing-workspace' }), true)
+  assert.equal(isPlanningRecoveryCandidate({ workspaceRoot: '' } as ApplicationConfig), false)
 }
 
 console.log('application planning runtime tests passed')

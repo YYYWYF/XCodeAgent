@@ -1,0 +1,34 @@
+// 截图需求输入沿用弹窗主题变量，保证明暗主题下文件清单、边框和空态可读。
+.@{class-prefix}-requirement-screenshot-picker {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px dashed var(--modal-border-strong);
+  border-radius: 8px;
+  background: var(--modal-field);
+}
+
+.@{class-prefix}-requirement-screenshot-list {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  .ant-tag {
+    max-width: 100%;
+    margin: 0;
+    color: var(--modal-text);
+    border-color: var(--modal-border-strong);
+    background: var(--modal-surface);
+    white-space: normal;
+    word-break: break-all;
+  }
+}
+
+.@{class-prefix}-requirement-screenshot-empty {
+  align-self: center;
+  color: var(--modal-text-secondary);
+  font-size: 13px;
+}

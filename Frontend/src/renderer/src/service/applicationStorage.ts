@@ -1,6 +1,7 @@
 import type {
   ApplicationConfig,
   ApplicationIndex,
+  ApplicationRequirementInput,
   ApplicationSchemaConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
@@ -82,17 +83,23 @@ export function applicationSchemaOf(application: ApplicationConfig): Application
     dynamicRouteDescription: _dynamicRouteDescription,
     requirementPlan: _requirementPlan,
     planningThreadId: _planningThreadId,
+    requirementInput: _requirementInput,
     ...schema
   } = application
+  void _requirementInput
   return schema
 }
 
 /** 读取工作区唯一 application.json 后与首页索引组装当前运行时应用视图。 */
 async function applicationViewFromIndex(index: ApplicationIndex): Promise<ApplicationConfig> {
-  const schema = await loadWorkspaceApplicationConfig(index.workspaceRoot)
+  const [schema, requirementInput] = await Promise.all([
+    loadWorkspaceApplicationConfig(index.workspaceRoot),
+    loadWorkspaceRequirementInput(index.workspaceRoot)
+  ])
   return {
     ...schema,
     ...index,
+    ...(requirementInput ? { requirementInput } : {}),
     name: schema.appName.trim() || index.name,
     source: 'existing-workspace',
     pages: ['工作台'],
@@ -273,6 +280,18 @@ export async function loadWorkspaceApplicationConfig(
     throw new Error('工作区 application.json 格式无效');
   }
   return result.application as unknown as ApplicationSchemaConfig;
+}
+
+/** 从工作区独立清单读取需求输入，避免把截图运行态写入 application.json。 */
+export async function loadWorkspaceRequirementInput(
+  workspaceRoot: string
+): Promise<ApplicationRequirementInput | undefined> {
+  const workspaceApi = window.xcodeAgent?.workspace
+  if (!workspaceApi?.readRequirementInput) return undefined
+  const result = await workspaceApi.readRequirementInput({ workspaceRoot })
+  if (!result.requirementInput) return undefined
+  if (!isRecord(result.requirementInput)) throw new Error('工作区需求输入清单格式无效')
+  return result.requirementInput
 }
 
 /** 将完整配置保存到其所属工作区，applications.json 绝不参与配置写入。 */
