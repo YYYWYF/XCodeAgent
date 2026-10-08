@@ -64,7 +64,7 @@ export async function projectWorkbenchAgents(
   const invalid: string[] = []
   const agents: WorkbenchAgentOption[] = []
   const technicalPlanSha256 = await fileSha256(
-    path.join(workspaceRoot, '.xcodeagent', 'plans', 'technical-plan.json')
+    path.join(workspaceRoot, '.devagentstudio', 'plans', 'technical-plan.json')
   )
   for (const productAgent of productAgents) {
     const agentId = String(productAgent.agentId || '').trim()
@@ -236,7 +236,7 @@ async function projectArtifacts(
 /** 从当前 TemplateState 与生成工程读取 Agent Runtime 只读摘要。 */
 async function readAgentRuntimeState(workspaceRoot: string): Promise<Record<string, unknown>> {
   try {
-    const statePath = path.join(workspaceRoot, '.xcodeagent', 'template-state.json')
+    const statePath = path.join(workspaceRoot, '.devagentstudio', 'template-state.json')
     const state = JSON.parse(await fs.readFile(statePath, 'utf8')) as Record<string, unknown>
     const runtimePath = path.join(workspaceRoot, 'agent-runtime', 'pyproject.toml')
     const runtimeStat = await fs.lstat(runtimePath).catch(() => undefined)

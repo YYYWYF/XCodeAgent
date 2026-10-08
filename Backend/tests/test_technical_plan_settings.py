@@ -36,7 +36,7 @@ class TechnicalPlanSettingsTests(unittest.TestCase):
     def test_budget_can_be_configured_independently(self) -> None:
         """环境变量只覆盖技术规划预算。"""
 
-        settings = self._settings(XCODEAGENT_TECHNICAL_PLAN_MAX_TOKENS="49152")
+        settings = self._settings(DEVAGENTSTUDIO_TECHNICAL_PLAN_MAX_TOKENS="49152")
         self.assertEqual(settings.technical_plan_max_tokens, 49152)
         self.assertEqual(settings.default_max_tokens, 8192)
 
@@ -46,6 +46,6 @@ class TechnicalPlanSettingsTests(unittest.TestCase):
         for value in ("0", "-1", "invalid", "1.5"):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(
-                    ValueError, "XCODEAGENT_TECHNICAL_PLAN_MAX_TOKENS"
+                    ValueError, "DEVAGENTSTUDIO_TECHNICAL_PLAN_MAX_TOKENS"
                 ):
-                    self._settings(XCODEAGENT_TECHNICAL_PLAN_MAX_TOKENS=value)
+                    self._settings(DEVAGENTSTUDIO_TECHNICAL_PLAN_MAX_TOKENS=value)

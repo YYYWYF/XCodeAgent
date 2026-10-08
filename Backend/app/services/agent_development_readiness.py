@@ -52,10 +52,10 @@ def inspect_agent_development_readiness(
     if not normalized_agent_id:
         return _result("", "", [], [_blocker("agent_contract", "", "请选择要开发的智能体。", "revise_technical_plan")])
 
-    requirement_spec = _load_plan(root / ".xcodeagent/specs/requirement-spec.json")
-    product_plan = _load_plan(root / ".xcodeagent/plans/product-plan.json")
-    ui_designs = _load_plan(root / ".xcodeagent/specs/ui-designs.json")
-    technical_plan = _load_plan(root / ".xcodeagent/plans/technical-plan.json")
+    requirement_spec = _load_plan(root / ".devagentstudio/specs/requirement-spec.json")
+    product_plan = _load_plan(root / ".devagentstudio/plans/product-plan.json")
+    ui_designs = _load_plan(root / ".devagentstudio/specs/ui-designs.json")
+    technical_plan = _load_plan(root / ".devagentstudio/plans/technical-plan.json")
     _append_artifact_blockers(root, product_plan, technical_plan, blockers)
     product_agents = [
         item
@@ -142,10 +142,10 @@ def _append_artifact_blockers(
     """检查 Agent readiness 必需的四份当前正式产物。"""
 
     artifact_specs = (
-        ("RequirementSpec", root / ".xcodeagent/specs/requirement-spec.json", {"confirmed"}),
-        ("ProductPlan", root / ".xcodeagent/plans/product-plan.json", {"confirmed"}),
-        ("UiManifest", root / ".xcodeagent/specs/ui-designs.json", {"confirmed", "skipped"}),
-        ("TechnicalPlan", root / ".xcodeagent/plans/technical-plan.json", {"confirmed"}),
+        ("RequirementSpec", root / ".devagentstudio/specs/requirement-spec.json", {"confirmed"}),
+        ("ProductPlan", root / ".devagentstudio/plans/product-plan.json", {"confirmed"}),
+        ("UiManifest", root / ".devagentstudio/specs/ui-designs.json", {"confirmed", "skipped"}),
+        ("TechnicalPlan", root / ".devagentstudio/plans/technical-plan.json", {"confirmed"}),
     )
     for label, path, statuses in artifact_specs:
         artifact = (

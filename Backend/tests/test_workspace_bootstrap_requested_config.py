@@ -47,7 +47,7 @@ class RequestedConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write(root, login=False, authorization=False)
-            plan_file = root / ".xcodeagent/plans/technical-plan.json"
+            plan_file = root / ".devagentstudio/plans/technical-plan.json"
             plan = json.loads(plan_file.read_text(encoding="utf-8"))
             self.assertEqual(
                 bootstrap_managed_roots(root), ("frontend", "backend")

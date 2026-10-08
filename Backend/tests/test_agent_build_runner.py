@@ -81,7 +81,7 @@ class AgentBuildRunnerTests(unittest.TestCase):
         self.assertNotIn("execute", tool_names)
         self.assertNotIn("middleware", agent)
         self.assertIn(
-            "/.xcodeagent/builtin-skills/agent-runtime-generate/SKILL.md",
+            "/.devagentstudio/builtin-skills/agent-runtime-generate/SKILL.md",
             agent["system_prompt"],
         )
 

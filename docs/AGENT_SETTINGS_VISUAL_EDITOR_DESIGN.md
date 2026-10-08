@@ -10,7 +10,7 @@
 
 开发阶段不再把 `agentSettings` 作为可直接编辑的 JSON 暴露给用户，而是提供结构化、能力感知的可视化配置界面。用户只修改平台允许的关键参数；平台根据已确认 ProductPlan、当前 TechnicalPlan、API Contract、Runtime 能力和安全策略重新编译完整 Agent Contract。
 
-最终仍由 `.xcodeagent/plans/technical-plan.json` 中的 `agent_contracts[].agentSettings` 保存正式配置，不新增 `agent-settings.json`，也不把生成的 Python 代码作为配置事实来源。
+最终仍由 `.devagentstudio/plans/technical-plan.json` 中的 `agent_contracts[].agentSettings` 保存正式配置，不新增 `agent-settings.json`，也不把生成的 Python 代码作为配置事实来源。
 
 本设计需要同时满足：
 

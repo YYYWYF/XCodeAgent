@@ -83,7 +83,7 @@ Token 在当前 Runtime 进程生命周期内保持不变。重新启动 Runtime
 调试启动和预览启动都会写入：
 
 ```text
-<workspace>/.xcodeagent/runtime/launch/agent-runtime-debug.json
+<workspace>/.devagentstudio/runtime/launch/agent-runtime-debug.json
 ```
 
 当前结构：

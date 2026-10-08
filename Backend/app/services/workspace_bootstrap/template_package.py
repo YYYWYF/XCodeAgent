@@ -35,7 +35,7 @@ def validate_template_package(
             _validate_required_roots(files, managed_roots)
             state_entries = [entry for entry in files if entry.filename == _STATE_PATH]
             if len(state_entries) != 1:
-                raise TemplatePackageError("模板 ZIP 必须且只能包含 .xcodeagent/template-state.json。")
+                raise TemplatePackageError("模板 ZIP 必须且只能包含 .devagentstudio/template-state.json。")
             try:
                 state = json.loads(package.read(_STATE_PATH).decode("utf-8"))
             except (KeyError, OSError, UnicodeDecodeError, json.JSONDecodeError, RuntimeError) as exc:

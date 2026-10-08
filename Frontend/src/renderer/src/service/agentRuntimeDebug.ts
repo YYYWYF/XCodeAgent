@@ -25,7 +25,7 @@ type AgentRuntimeDebugAgUiPayload = {
 
 /** 返回 Agent Runtime 独立调试动作的 AG-UI 地址。 */
 function getAgentRuntimeDebugUrl(): string {
-  const agentBaseUrl = window.xcodeAgent?.agentBaseUrl
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
   return agentBaseUrl
     ? `${agentBaseUrl.replace(/\/$/, '')}/agent-runtime-debug/run`
     : '/api/agent/agent-runtime-debug/run'

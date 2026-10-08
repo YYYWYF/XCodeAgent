@@ -159,7 +159,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            manifest_path = workspace / ".xcodeagent" / "specs" / "ui-designs.json"
+            manifest_path = workspace / ".devagentstudio" / "specs" / "ui-designs.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             latest = {
                 "schema_version": "ui-manifest.v5",

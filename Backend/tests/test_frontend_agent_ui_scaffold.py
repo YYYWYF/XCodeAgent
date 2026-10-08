@@ -34,7 +34,7 @@ class FrontendAgentUiScaffoldTests(unittest.TestCase):
         """创建带最小前端目录和正式 ProductPlan 的测试工作区。"""
 
         (root / "frontend/src").mkdir(parents=True)
-        (root / ".xcodeagent/plans").mkdir(parents=True)
+        (root / ".devagentstudio/plans").mkdir(parents=True)
         bindings = []
         if surface_type is not None:
             bindings.append(
@@ -58,7 +58,7 @@ class FrontendAgentUiScaffoldTests(unittest.TestCase):
                 }
             ],
         }
-        (root / ".xcodeagent/plans/product-plan.json").write_text(
+        (root / ".devagentstudio/plans/product-plan.json").write_text(
             json.dumps(product_plan, ensure_ascii=False),
             encoding="utf-8",
         )

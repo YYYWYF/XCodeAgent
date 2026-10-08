@@ -52,7 +52,6 @@ from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.execution_recovery_reconciliation import reconcile_interrupted_execution_state
 from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.ui_design_generator import load_page_code
-from app.graph.nodes.ui_confirmation import refresh_ui_design_recovery_state
 from app.services.ui_design_manifest import present_ui_pages
 from app.services.ui_design_recovery import interrupted_ui_design_pages
 from app.services.ui_design_project_setup import ui_design_project_dir
@@ -677,7 +676,6 @@ def _build_application_planning_recovery_ag_ui_stream(
                 result,
                 projection=projection,
             )
-            result = await refresh_ui_design_recovery_state(result)
             # UI 确认阶段：后台生成池把最新 page status/code 写进 ui-designs.json，
             # 但 checkpoint 里的 ui_designs 仍停留在入队时的 queued/generating（池不写
             # checkpoint）。recovery 只读 checkpoint 不跑 Graph，若不回填 manifest，

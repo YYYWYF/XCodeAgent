@@ -166,7 +166,7 @@ type DevelopmentPlanningAgentOption = {
 2. `agentId` 必须在两份计划中各唯一命中一次；不匹配时把正式规划标记为 invalid，不生成残缺 Agent 节点。
 3. 产品名称、用途、入口和验收来自 ProductPlan；Settings、Gateway、Tools、Runtime、安全和文件路径来自 TechnicalPlan。
 4. 文件存在状态只检查 Contract 中三个平台编译路径；先验证相对路径、工作区边界和非符号链接，不开放任意路径读取。
-5. Runtime commit 只读 `.xcodeagent/template-generation-manifest.json` 中已验证的 `agentRuntime` 目标；不在 Renderer 执行 Git 命令。
+5. Runtime commit 只读 `.devagentstudio/template-generation-manifest.json` 中已验证的 `agentRuntime` 目标；不在 Renderer 执行 Git 命令。
 6. `taskSummary` 只合并 scope 为当前 Agent、Contract Hash 匹配的 Build Context；旧计划不得显示为当前进度。
 7. System Prompt 可以在受控 Agent 详情中展示，但不得进入搜索索引、状态摘要、AG-UI公开 readiness、默认日志或错误信息。
 

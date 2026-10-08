@@ -1137,8 +1137,8 @@ class RequirementsConfirmationTests(unittest.TestCase):
                         "timeline": [],
                     }
                 )
-            draft_markdown = Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.md"
-            draft_json = Path(workspace) / ".xcodeagent/drafts/specs/requirement-spec.json"
+            draft_markdown = Path(workspace) / ".devagentstudio/drafts/specs/requirement-spec.md"
+            draft_json = Path(workspace) / ".devagentstudio/drafts/specs/requirement-spec.json"
 
         self.assertEqual(result["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["mode"], "ask_user_question")

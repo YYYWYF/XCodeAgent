@@ -303,7 +303,7 @@ Agent Runtime 模板的规范仓库固定为 `https://github.com/Bettetman/agent
 
 ### 10.3 manifest 目标结构
 
-现有 `.xcodeagent/template-generation-manifest.json` 的 `download.targets` 扩展为当前三目标结构：
+现有 `.devagentstudio/template-generation-manifest.json` 的 `download.targets` 扩展为当前三目标结构：
 
 ```json
 {
@@ -422,7 +422,7 @@ XCodeAgent 托管启动 Agent Runtime 时，模型配置使用显式白名单兜
 
 工作台 Agent 详情在“开始开发智能体”之前提供带悬浮说明的“启动 Runtime”临时调试按钮。该按钮通过独立 `/agent-runtime-debug/run` AG-UI 动作直接启动当前受管工作区的 `agent-runtime/`，不进入主 Workflow、不执行 Agent 代码生成，也不连带启动 Java 或前端。成功返回进程、readiness、loopback Runtime 地址和本次启动专用的临时 Bearer Token，供用户在本机复制执行 `curl`；重新启动后旧 Token 立即失效。模型 fallback、物理路径和普通项目预览的内部凭据仍不得进入 Renderer。
 
-显式调试启动还会把当前状态写入工作区 `.xcodeagent/runtime/launch/agent-runtime-debug.json`，字段包含 `status`、`service`、`host`、`port`、`health`、`reused`、`errorCode`、`message` 和 `debugToken`。文件权限在 POSIX 上固定为 `0600`，重新启动时原子覆盖；停止 Runtime 后状态改为 `stopped` 并把 `debugToken` 清空。后续启动会先安全清理该工作区旧 Runtime，再优先复用文件中的上次端口；端口被其他服务占用时只重新分配，不会按端口直接终止占用者。PID 文件恢复必须以 Runtime 命令标识和精确工作目录（Windows 为命令中的精确工作区路径）作为两项身份依据；任一依据缺失或不匹配都拒绝终止并停止新启动。工作区启动锁和清理失败即停止的规则保证 XCodeAgent 不会为同一工作区并发创建多个受管 Runtime。该文件只服务本机临时调试，不属于生成应用源码或正式运行配置。
+显式调试启动还会把当前状态写入工作区 `.devagentstudio/runtime/launch/agent-runtime-debug.json`，字段包含 `status`、`service`、`host`、`port`、`health`、`reused`、`errorCode`、`message` 和 `debugToken`。文件权限在 POSIX 上固定为 `0600`，重新启动时原子覆盖；停止 Runtime 后状态改为 `stopped` 并把 `debugToken` 清空。后续启动会先安全清理该工作区旧 Runtime，再优先复用文件中的上次端口；端口被其他服务占用时只重新分配，不会按端口直接终止占用者。PID 文件恢复必须以 Runtime 命令标识和精确工作目录（Windows 为命令中的精确工作区路径）作为两项身份依据；任一依据缺失或不匹配都拒绝终止并停止新启动。工作区启动锁和清理失败即停止的规则保证 XCodeAgent 不会为同一工作区并发创建多个受管 Runtime。该文件只服务本机临时调试，不属于生成应用源码或正式运行配置。
 
 ### 12.3 健康返回
 

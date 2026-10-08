@@ -276,7 +276,7 @@ def _frontend_generation_prompt(
         "continue importing all business API functions from the shared Contract module.\n\n"
     )
     agent_ui_skill_requirement = (
-        "3. `/.xcodeagent/builtin-skills/agent-ui-surface-template/SKILL.md` — "
+        "3. `/.devagentstudio/builtin-skills/agent-ui-surface-template/SKILL.md` — "
         "fixed generated-application Agent UI composition, exact ProductPlan identifiers, "
         "default Mock Adapter use, and the prohibition on real network or duplicate chat core. "
         "READ THIS before editing any task listed in AgentUiMockContracts.\n"

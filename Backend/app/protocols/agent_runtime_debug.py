@@ -136,7 +136,7 @@ def _validated_debug_workspace(workspace_root: str) -> Path:
     workspace = candidate.resolve(strict=False)
     if not workspace.is_dir() or workspace.is_symlink():
         raise ValueError("应用工作区不存在或不是普通目录。")
-    marker = workspace / ".xcodeagent" / "application.json"
+    marker = workspace / ".devagentstudio" / "application.json"
     if not marker.is_file() or marker.is_symlink():
         raise ValueError("该目录不是由 XCodeAgent 管理的应用工作区。")
     return workspace

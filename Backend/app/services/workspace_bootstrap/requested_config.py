@@ -38,7 +38,7 @@ def bootstrap_managed_roots(workspace_root: str | Path) -> tuple[str, ...]:
 
     root = Path(workspace_root).expanduser().resolve()
     technical_plan = _load_object(
-        root / ".xcodeagent/plans/technical-plan.json", "technical-plan.json"
+        root / ".devagentstudio/plans/technical-plan.json", "technical-plan.json"
     )
     _validate_technical_plan(technical_plan)
     agent_contracts = technical_plan.get("agent_contracts")

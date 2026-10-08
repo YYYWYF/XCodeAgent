@@ -26,7 +26,7 @@ from app.services.workspace_process_registry import workspace_process_registry
 
 logger = logging.getLogger(__name__)
 
-_STATE_PATH = ".xcodeagent/template-state.json"
+_STATE_PATH = ".devagentstudio/template-state.json"
 _ENGINE_MANAGED_ROOTS = frozenset({"frontend", "backend"})
 _GIT_SUPPLEMENT_ROOTS = frozenset({"agent-runtime"})
 
@@ -495,7 +495,7 @@ def _write_archive(
                     (Path(root_name) / path.relative_to(root)).as_posix(),
                 )
         package.writestr(
-            ".xcodeagent/template-state.json",
+            ".devagentstudio/template-state.json",
             json.dumps(
                 state.model_dump(mode="json"),
                 ensure_ascii=False,

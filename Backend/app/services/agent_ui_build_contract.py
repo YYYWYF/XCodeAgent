@@ -14,7 +14,7 @@ AGENT_UI_BUILD_CONTRACT_VERSION = "agent-ui-build.v1"
 AGENT_UI_COMPONENT_MODULE = "@/components/AgentConversation"
 AGENT_UI_CONFIG_TYPE_MODULE = "@/typings/agentConversation"
 AGENT_UI_MOCK_ADAPTER_PATH = "frontend/src/apis/agentConversationMock.ts"
-AGENT_UI_SKILL_PATH = "/.xcodeagent/builtin-skills/agent-ui-surface-template/SKILL.md"
+AGENT_UI_SKILL_PATH = "/.devagentstudio/builtin-skills/agent-ui-surface-template/SKILL.md"
 
 _COMPONENTS = {
     "standalone_page": (

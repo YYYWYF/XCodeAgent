@@ -413,7 +413,7 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 ### TechnicalPlan 上下文预算
 
 - 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、V1 页面与操作权限目标身份、业务流程、页面信息和业务动作上下文。确认卡直接修订和 `workbench_plan_revision` 都以 checkpoint 中当前 TechnicalPlan 为 authoritative baseline，叠加本轮修改请求并返回完整新版本，同时保留未受影响事实及必要依赖闭合；RequirementSpec、ProductPlan 或 UiDesign 先变化时旧 baseline 失效并按新上游重建。数据权限不进入第一阶段模型上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
-- 模型输出预算独立于上述输入上下文及全局 `AGENT_MAX_TOKENS`：完整 TechnicalPlan 和定向 API Contract 修复使用 `XCODEAGENT_TECHNICAL_PLAN_MAX_TOKENS`，默认 `32768`，必须为正整数。调用时复制当前 Settings，不修改其他 Agent 的配置，也不自动无限提高预算或增加重试次数。
+- 模型输出预算独立于上述输入上下文及全局 `AGENT_MAX_TOKENS`：完整 TechnicalPlan 和定向 API Contract 修复使用 `DEVAGENTSTUDIO_TECHNICAL_PLAN_MAX_TOKENS`，默认 `32768`，必须为正整数。调用时复制当前 Settings，不修改其他 Agent 的配置，也不自动无限提高预算或增加重试次数。
 - 规划响应只允许一个完整根级 JSON 对象（可用单个完整 JSON 代码围栏包裹）；截断、附加正文、多对象或非对象响应直接进入既有有界修复，不从内层对象恢复，不补造契约。同步和流式调用均保留结束原因及用量，空正文的末尾片段也必须处理；`finish_reason=length` 即使正文可解析也视为截断，其他明确非正常结束同样拒绝。未提供结束原因时仍须通过完整 JSON 与正式契约校验。
 - 默认新增诊断只记录正文长度、短 SHA-256、受控结束原因枚举、输出 token 数和配置上限，不记录模型正文、提示词、凭据或任意供应商元数据。输出校验不改变 AG-UI 生命周期、三次总尝试预算和 TechnicalPlan 显式确认门禁。
 

@@ -19,6 +19,7 @@ import {
   type SessionIdentity
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import { useWorkflowConversation } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation'
+import { createPlanControlRequestGuard, isCurrentPlanControlRequest } from '../src/renderer/src/components/AiChatPanel/hooks/planControlRequestGuard'
 import { canRestorePendingWorkflowInput, type PendingWorkflowInput } from '../src/renderer/src/components/AiChatPanel/pendingWorkflowInput'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
 import type {
@@ -36,6 +37,57 @@ const OWNER_THREAD_ID = 'thread-owner'
 const WORKFLOW_EXECUTION_THREAD_ID = 'workflow-thread-regenerate'
 const DRAFT_DIGEST = 'a'.repeat(64)
 type WorkflowConversationParams = Parameters<typeof useWorkflowConversation>[0]
+
+test('结束另一会话计划的哨兵绑定发起目标，拒绝目标变更和被替代请求', () => {
+  const identity = buildSessionIdentity()
+  const target = buildSessionIdentity('agent-owner', 'agent-thread')
+  const context = { identity, targetRunId: 'origin-run-a' }
+  const request = createPlanControlRequestGuard(target, 'agent-run', context)
+  assert.equal(isCurrentPlanControlRequest(request, request, context), true)
+  assert.equal(isCurrentPlanControlRequest(request, request, { ...context, targetRunId: 'origin-run-b' }), false)
+  const newer = createPlanControlRequestGuard(target, 'agent-run', context)
+  assert.equal(isCurrentPlanControlRequest(request, newer, context), false)
+  const ordinary = createPlanControlRequestGuard(identity, 'origin-run-a')
+  assert.equal(isCurrentPlanControlRequest(ordinary, ordinary, context), true)
+  assert.equal(isCurrentPlanControlRequest(ordinary, ordinary, { ...context, targetRunId: 'origin-run-b' }), false)
+})
+
+test('从另一会话结束 Agent 计划时接收权威回执，切换当前会话后丢弃迟到回执', async () => {
+  const savedFetch = globalThis.fetch
+  const savedWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+  try {
+    for (const switchSession of [false, true]) {
+      const identity = buildSessionIdentity()
+      const target = buildSessionIdentity('agent-owner', 'agent-thread')
+      const lifecycle = buildIdleLifecycle()
+      let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+      let published = 0
+      const params = buildRuntimeParams({ activeSession: identity,
+        application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+        applicationLifecycle: lifecycle, agUiSessionsRef: { current: {} }, acquireSessionExecution: () => undefined,
+        releaseSessionExecution: () => undefined, onApplicationLifecycleChange: () => { published += 1 } })
+      params.getSessionMessages = () => [{ id: 1, role: 'assistant', content: '', createdAt: 1,
+        workflow: { runId: 'origin-run-a', threadId: identity.threadId, events: [], summary: { status: 'completed' } } }]
+      /** 捕获真实 Hook，并保持调用者与结束目标为不同会话。 */
+      function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+      globalThis.fetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body))
+        assert.equal(body.threadId, target.threadId)
+        assert.equal(body.forwardedProps.planControlRunId, 'agent-run')
+        if (switchSession) identity.sessionId = 'changed-session'
+        return sseResponse(body.threadId, body.runId, { workflow: { runId: body.runId, threadId: body.threadId,
+          events: [], summary: { status: 'completed', phase: 'plan_control', lifecycle } } })
+      }
+      renderToStaticMarkup(createElement(Probe))
+      assert.equal(await runtime!.handleEndPlan('agent-run', target), !switchSession)
+      assert.equal(published > 0, !switchSession)
+    }
+  } finally {
+    globalThis.fetch = savedFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
+  }
+})
 
 test('兜底同步正常待确认执行不报缺少恢复入口，也不提交验收或重发任务', async () => {
   const savedFetch = globalThis.fetch

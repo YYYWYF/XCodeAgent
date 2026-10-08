@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import type { WorkbenchRunRefreshConnection } from './useWorkbenchRunRefresh'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { randomUUID } from '@ag-ui/client'
+import {
+  createPlanControlRequestGuard,
+  isCurrentPlanControlRequest,
+  type ActivePlanControlContext,
+  type PlanControlRequestGuard
+} from './planControlRequestGuard'
 import { workflowDebugResumeSource } from '../workflowDebugResume'
 import { executionRecoveryForSession, executionRecoveryReadError } from '../executionRecoveryState'
 import { NO_RECOVERY_ENTRY_ERROR } from '../globalFallbackState'
@@ -114,17 +120,6 @@ type ConversationTarget =
       endpointId: string
     }
 
-type PlanControlRequestGuard = {
-  requestId: string
-  identity: SessionIdentity
-  targetRunId: string
-}
-
-type ActivePlanControlContext = {
-  identity?: SessionIdentity
-  targetRunId?: string
-}
-
 /** 读取当前 Workflow 的控制目标；Plan Control 自身没有 active execution 时保持未指定。 */
 function planControlTargetFromWorkflow(
   workflow: WorkflowRunPayload | undefined,
@@ -143,49 +138,6 @@ function planControlTargetFromWorkflow(
     return undefined
   }
   return workflow.runId
-}
-
-/** 创建一次带会话、阶段、目标和 requestId 的 Plan Control 哨兵。 */
-function createPlanControlRequestGuard(
-  identity: SessionIdentity,
-  targetRunId: string
-): PlanControlRequestGuard {
-  return {
-    requestId: randomUUID(),
-    identity,
-    targetRunId
-  }
-}
-
-/** 判断两个 Plan Control 哨兵是否仍指向同一个会话身份。 */
-function samePlanControlIdentity(left: SessionIdentity, right: SessionIdentity): boolean {
-  return (
-    left.key === right.key &&
-    left.sessionId === right.sessionId &&
-    left.threadId === right.threadId &&
-    left.workflowId === right.workflowId &&
-    left.workbenchPhase === right.workbenchPhase &&
-    left.workspaceRoot === right.workspaceRoot &&
-    left.editorMode === right.editorMode
-  )
-}
-
-/** 判断迟到的 Plan Control 响应是否仍属于当前 request 和 active session。 */
-function isCurrentPlanControlRequest(
-  request: PlanControlRequestGuard,
-  latestRequest: PlanControlRequestGuard | undefined,
-  context: ActivePlanControlContext | undefined
-): boolean {
-  const currentIdentity = context?.identity
-  if (
-    !latestRequest ||
-    latestRequest.requestId !== request.requestId ||
-    !currentIdentity ||
-    !samePlanControlIdentity(currentIdentity, request.identity)
-  ) {
-    return false
-  }
-  return !context?.targetRunId || context.targetRunId === request.targetRunId
 }
 
 /** 从当前工作台选择提取页面或接口目标，让“这个页面”等指代随普通自然语言请求到达后端。 */
@@ -2476,7 +2428,12 @@ export function useWorkflowConversation({
     )
 
     // 只有 Backend 返回成功的权威 lifecycle 后，前端才标记结束并解锁计划输入。
-    const planControlRequest = createPlanControlRequestGuard(controlIdentity, targetRunId)
+    // 显式结束其他 Agent 会话时，迟到响应仍按发起者的当前会话和选中目标过滤。
+    const planControlRequest = createPlanControlRequestGuard(
+      controlIdentity,
+      targetRunId,
+      sessionIdentity ? activePlanControlContextRef.current : undefined
+    )
     const ended = await sendWorkflowMessage('结束当前计划。', {
       planControlAction: 'end',
       planControlRunId: targetRunId,

@@ -5362,9 +5362,7 @@ export default function AiChatPanel({
               entities={developmentPlanningEntities}
               detailLabel={artifactDetailLabel}
               apiTarget={apiTarget}
-              apiDesignRefreshKey={`${apiDesignRefreshKey}:${workflowApiDesignRevisionKey(
-                latestWorkflowForDisplay
-              )}`}
+              apiDesignRefreshKey={apiDesignRefreshKey}
               developmentDisabled={loading || workflowInputLocked}
               onAgentSettingsApplied={onPlanningArtifactsRefresh}
               onEndAgentExecution={async (execution) => {

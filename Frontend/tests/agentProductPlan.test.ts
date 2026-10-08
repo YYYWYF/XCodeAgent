@@ -203,9 +203,9 @@ test('开发工作台投影智能体页面交互载体', async () => {
     ]
   }
   try {
-    await fs.mkdir(path.join(workspaceRoot, '.xcodeagent', 'plans'), { recursive: true })
+    await fs.mkdir(path.join(workspaceRoot, '.devagentstudio', 'plans'), { recursive: true })
     await fs.writeFile(
-      path.join(workspaceRoot, '.xcodeagent', 'plans', 'technical-plan.json'),
+      path.join(workspaceRoot, '.devagentstudio', 'plans', 'technical-plan.json'),
       JSON.stringify(technicalPlan),
       'utf8'
     )
@@ -269,9 +269,9 @@ test('开发工作台过滤已关闭的智能体浮窗', async () => {
     ]
   }
   try {
-    await fs.mkdir(path.join(workspaceRoot, '.xcodeagent', 'plans'), { recursive: true })
+    await fs.mkdir(path.join(workspaceRoot, '.devagentstudio', 'plans'), { recursive: true })
     await fs.writeFile(
-      path.join(workspaceRoot, '.xcodeagent', 'plans', 'technical-plan.json'),
+      path.join(workspaceRoot, '.devagentstudio', 'plans', 'technical-plan.json'),
       JSON.stringify(technicalPlan),
       'utf8'
     )

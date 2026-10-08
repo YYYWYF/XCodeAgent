@@ -85,7 +85,7 @@ def artifact_paths(workspace_root: str) -> tuple[Path, Path, Path]:
     root = Path(workspace_root).expanduser().resolve()
     if not root.is_dir():
         raise ValueError("Agent Settings 工作区不存在。")
-    plans = root / ".xcodeagent" / "plans"
+    plans = root / ".devagentstudio" / "plans"
     return root, plans / "product-plan.json", plans / "technical-plan.json"
 
 
@@ -150,7 +150,7 @@ def invalidate_old_agent_build_plan(
 ) -> list[str]:
     """仅在当前 BuildTaskPlan 确实绑定旧 Agent Contract 时标记其 stale。"""
 
-    path = root / ".xcodeagent" / "plans" / "build-task-plan.json"
+    path = root / ".devagentstudio" / "plans" / "build-task-plan.json"
     if not path.is_file():
         return []
     try:

@@ -57,7 +57,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
             (root / "agent-runtime").mkdir()
             self.assertFalse(agent_runtime_launch_required(root))
 
-            technical_plan_path = root / ".xcodeagent/plans/technical-plan.json"
+            technical_plan_path = root / ".devagentstudio/plans/technical-plan.json"
             technical_plan_path.parent.mkdir(parents=True)
             technical_plan_path.write_text(
                 json.dumps(
@@ -194,7 +194,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
                 result = launch_agent_runtime_project(root, settings=_settings())
             state = json.loads(
                 (
-                    root / ".xcodeagent/runtime/launch/agent-runtime-debug.json"
+                    root / ".devagentstudio/runtime/launch/agent-runtime-debug.json"
                 ).read_text(encoding="utf-8")
             )
 
@@ -261,11 +261,11 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
 
             state_path = (
                 root
-                / ".xcodeagent/runtime/launch/agent-runtime-debug.json"
+                / ".devagentstudio/runtime/launch/agent-runtime-debug.json"
             )
             state = json.loads(state_path.read_text(encoding="utf-8"))
             leftover_pid = (
-                root / ".xcodeagent/runtime/launch/agent-runtime.pid"
+                root / ".devagentstudio/runtime/launch/agent-runtime.pid"
             ).exists()
 
         self.assertEqual(result["status"], "running")
@@ -292,7 +292,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
             root = Path(workspace).resolve()
             runtime = root / "agent-runtime"
             runtime.mkdir()
-            runtime_root = root / ".xcodeagent/runtime/launch"
+            runtime_root = root / ".devagentstudio/runtime/launch"
             runtime_root.mkdir(parents=True)
             write_agent_runtime_debug_state(
                 runtime_root,
@@ -356,7 +356,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
             root = Path(workspace).resolve()
             runtime = root / "agent-runtime"
             runtime.mkdir()
-            runtime_root = root / ".xcodeagent/runtime/launch"
+            runtime_root = root / ".devagentstudio/runtime/launch"
             runtime_root.mkdir(parents=True)
             write_agent_runtime_debug_state(
                 runtime_root,
@@ -493,7 +493,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
                 result = launch_agent_runtime_project(root, settings=_settings())
             state = json.loads(
                 (
-                    root / ".xcodeagent/runtime/launch/agent-runtime-debug.json"
+                    root / ".devagentstudio/runtime/launch/agent-runtime-debug.json"
                 ).read_text(encoding="utf-8")
             )
 
@@ -550,7 +550,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
                 result = launch_agent_runtime_project(root, settings=_settings())
             state = json.loads(
                 (
-                    root / ".xcodeagent/runtime/launch/agent-runtime-debug.json"
+                    root / ".devagentstudio/runtime/launch/agent-runtime-debug.json"
                 ).read_text(encoding="utf-8")
             )
 
@@ -586,7 +586,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
                 result = launch_agent_runtime_project(root, settings=_settings())
             state = json.loads(
                 (
-                    root / ".xcodeagent/runtime/launch/agent-runtime-debug.json"
+                    root / ".devagentstudio/runtime/launch/agent-runtime-debug.json"
                 ).read_text(encoding="utf-8")
             )
 
@@ -651,7 +651,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
         """验证超过约 15 秒未刷新的 running 会被改成 offline。"""
 
         with tempfile.TemporaryDirectory() as workspace:
-            runtime_root = Path(workspace) / ".xcodeagent/runtime/launch"
+            runtime_root = Path(workspace) / ".devagentstudio/runtime/launch"
             runtime_root.mkdir(parents=True)
             write_agent_runtime_debug_state(
                 runtime_root,
@@ -682,7 +682,7 @@ class AgentRuntimeProjectLauncherTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
-            runtime_root = root / ".xcodeagent/runtime/launch"
+            runtime_root = root / ".devagentstudio/runtime/launch"
             runtime_root.mkdir(parents=True)
             write_agent_runtime_debug_state(
                 runtime_root,

@@ -34,7 +34,7 @@ Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。
 - 数据库仅已添加表可进入简化绑定候选。“添加数据表”读取实时直连 MySQL 元数据、搜索与批量添加；“移除”只移除应用候选，不执行 DDL。Builtin/DBID 保留配置但不伪造元数据读取。删除源、目录、接口和移除表之前查询正式 Endpoint 引用，正式映射不会被自动删除。
 - 右侧“应用文件”之后提供常驻“字段映射”页签。目录按现有 API Contract/Endpoint 投影；读取契约→选择类型→选择对象→配置映射是前端交互步骤，不是新增 Workflow 节点。单个 Endpoint 选择一张表或一个外部接口，每字段只允许直接映射；数据库沿用行式选择，外部 API 的入参和出参分别用一个大箭头说明方向，再按目标字段逐行下拉选择来源，支持搜索和“仅看未配置”，不展示逐字段连线。不引入登录用户条件、表达式、常量、SQL 编辑或模拟调试；外部 Path/Query 的实时必填字段未配置时只能保存草稿，不能正式确认。无可映射字段的 Endpoint 可保存来源选择草稿，但不能确认来源绑定，避免正式产物丢失选择；未选择来源时，工作台可确认空字段映射；已选择来源的草稿需用户明确清除选择后才能确认无来源映射，不能提交时静默丢弃。该路径仍校验 TechnicalPlan 指纹与 baseRevision，后续沿用开发门禁。
 - “保存”只写中间草稿，允许未配置字段；“保存并确认”校验来源清单、单对象一致性、TechnicalPlan 指纹与正式 baseRevision，再调用原有确认服务。成功后清空草稿并展示常驻只读结果。两处确认按钮共用提交锁。编辑、保存和正式确认均不会自动推进开发或修改开发完成计数。
-- 对应数据库 JSON 的 `managedTables` 保存 source 所属的已添加表名和说明；表字段结构在数据源详情、绑定选择和正式确认时实时读取，不写入数据源。`.xcodeagent/binding-workspace` 仅保存 `draft-<复合身份 SHA256>.json` 草稿、selection、baseRevision、technicalPlanHash、savedAt；无凭据副本，不改变正式 Endpoint JSON/Markdown。连接设置更新保留最新表清单，模式、地址、端口、Schema 或 DBID 变化会清空清单；确认冲突保留输入，用户可明确放弃草稿重新加载。
+- 对应数据库 JSON 的 `managedTables` 保存 source 所属的已添加表名和说明；表字段结构在数据源详情、绑定选择和正式确认时实时读取，不写入数据源。`.devagentstudio/binding-workspace` 仅保存 `draft-<复合身份 SHA256>.json` 草稿、selection、baseRevision、technicalPlanHash、savedAt；无凭据副本，不改变正式 Endpoint JSON/Markdown。连接设置更新保留最新表清单，模式、地址、端口、Schema 或 DBID 变化会清空清单；确认冲突保留输入，用户可明确放弃草稿重新加载。
 - 数据源与 Endpoint 的独立 AG-UI 动作继续负责元数据、暂存和确认。正式产物只接受 `endpoint-field-mapping.v7`；旧正式产物显示“需重新配置”，旧草稿不加载。用户从当前 Endpoint 契约重新配置后可覆盖旧产物，不做迁移、回填或双写。
 - 定向回归：`tests.test_binding_workspace`、Endpoint 详情/协议、数据源路由、API Design/readiness，覆盖外部必填字段缺失和重复来源。UI 静态检查使用 `pnpm typecheck:web`；本次按用户要求不执行前端测试、pnpm build、/health 或 Electron 验证，视觉与运行时验收未执行。
 

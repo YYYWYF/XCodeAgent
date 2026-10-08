@@ -57,7 +57,7 @@ def _write_workspace(root: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("# test\n", encoding="utf-8")
     (runtime / "tests").mkdir()
-    metadata = root / ".xcodeagent"
+    metadata = root / ".devagentstudio"
     metadata.mkdir()
     (metadata / "template-state.json").write_text(
         json.dumps(

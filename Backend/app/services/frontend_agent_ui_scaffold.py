@@ -20,7 +20,7 @@ from app.services.product_plan import PRODUCT_PLAN_SCHEMA_VERSION
 _AGENT_UI_FRONTEND_COMPONENT_DIRECTORY = Path(
     "frontend/src/components/AgentConversation"
 )
-_PRODUCT_PLAN_RELATIVE_PATH = Path(".xcodeagent/plans/product-plan.json")
+_PRODUCT_PLAN_RELATIVE_PATH = Path(".devagentstudio/plans/product-plan.json")
 _SUPPORTED_SURFACES = {"standalone_page", "floating_panel"}
 
 

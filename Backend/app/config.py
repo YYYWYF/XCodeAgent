@@ -245,25 +245,25 @@ class Settings:
                 "DEVAGENTSTUDIO_TEMPLATE_ENGINE_BASE_URL", ""
             ).rstrip("/"),
             template_git_frontend_repository_url=os.getenv(
-                "XCODEAGENT_TEMPLATE_GIT_FRONTEND_REPOSITORY_URL",
+                "DEVAGENTSTUDIO_TEMPLATE_GIT_FRONTEND_REPOSITORY_URL",
                 "https://github.com/ruyue1/frontend-template.git",
             ).strip(),
             template_git_backend_repository_url=os.getenv(
-                "XCODEAGENT_TEMPLATE_GIT_BACKEND_REPOSITORY_URL",
+                "DEVAGENTSTUDIO_TEMPLATE_GIT_BACKEND_REPOSITORY_URL",
                 "https://github.com/Hupy2118/springboot-template.git",
             ).strip(),
             template_git_agent_runtime_repository_url=os.getenv(
-                "XCODEAGENT_TEMPLATE_GIT_AGENT_RUNTIME_REPOSITORY_URL",
+                "DEVAGENTSTUDIO_TEMPLATE_GIT_AGENT_RUNTIME_REPOSITORY_URL",
                 "https://github.com/Bettetman/agent-runtime-template.git",
             ).strip(),
             template_git_agent_runtime_branch=(
                 os.getenv(
-                    "XCODEAGENT_TEMPLATE_GIT_AGENT_RUNTIME_BRANCH", "master"
+                    "DEVAGENTSTUDIO_TEMPLATE_GIT_AGENT_RUNTIME_BRANCH", "master"
                 ).strip()
                 or "master"
             ),
             template_git_clone_timeout_seconds=float(
-                os.getenv("XCODEAGENT_TEMPLATE_GIT_CLONE_TIMEOUT_SECONDS", "120")
+                os.getenv("DEVAGENTSTUDIO_TEMPLATE_GIT_CLONE_TIMEOUT_SECONDS", "120")
             ),
             template_engine_connect_timeout_seconds=float(
                 os.getenv("DEVAGENTSTUDIO_TEMPLATE_ENGINE_CONNECT_TIMEOUT_SECONDS", "10")

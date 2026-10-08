@@ -26,7 +26,7 @@ Implement exactly one `source_refs.agent_module` from the confirmed Agent Contra
 
 - Treat the Contract as the complete business source. Do not invent identity, Prompt rules,
   capabilities, Tools, schemas, URLs, credentials, approval policy, or Java behavior.
-- Do not modify paths outside the task policy, `.xcodeagent/`, frontend, Java backend, planning artifacts,
+- Do not modify paths outside the task policy, `.devagentstudio/`, frontend, Java backend, planning artifacts,
   the Build DAG, dependency files, environment files, or another Agent.
 - Reuse a template capability when it already satisfies the current module. Do not create a file
   merely to produce a Diff, and do not create a per-Agent wrapper by convention.

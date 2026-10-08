@@ -49,7 +49,7 @@ def agent_runtime_launch_required(workspace_path: str | Path) -> bool:
     """只根据已确认 TechnicalPlan 判断当前工作区是否需要启动 Agent Runtime。"""
 
     root = Path(workspace_path).expanduser().resolve()
-    technical_plan_path = root / ".xcodeagent" / "plans" / "technical-plan.json"
+    technical_plan_path = root / ".devagentstudio" / "plans" / "technical-plan.json"
     if not technical_plan_path.is_file() or technical_plan_path.is_symlink():
         return False
     try:
@@ -79,7 +79,7 @@ def launch_agent_runtime_project(
 
     root = Path(workspace_path).expanduser().resolve()
     agent_runtime_root = root / "agent-runtime"
-    runtime_root = root / ".xcodeagent" / "runtime" / "launch"
+    runtime_root = root / ".devagentstudio" / "runtime" / "launch"
     runtime_root.mkdir(parents=True, exist_ok=True)
     with agent_runtime_launch_lock(root):
         return _launch_agent_runtime_project_locked(
@@ -378,7 +378,7 @@ def stop_workspace_agent_runtime_project(
 
     root = Path(workspace_path).expanduser().resolve()
     agent_runtime_root = root / "agent-runtime"
-    runtime_root = root / ".xcodeagent" / "runtime" / "launch"
+    runtime_root = root / ".devagentstudio" / "runtime" / "launch"
     runtime_root.mkdir(parents=True, exist_ok=True)
     stop_agent_runtime_heartbeat(root)
     with agent_runtime_launch_lock(root):

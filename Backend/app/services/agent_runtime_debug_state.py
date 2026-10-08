@@ -23,7 +23,7 @@ _STATE_LOCKS_GUARD = threading.Lock()
 def agent_runtime_launch_root(workspace: str | Path) -> Path:
     """返回工作区 Runtime 启动状态与日志所在目录。"""
 
-    return Path(workspace).expanduser().resolve(strict=False) / ".xcodeagent" / "runtime" / "launch"
+    return Path(workspace).expanduser().resolve(strict=False) / ".devagentstudio" / "runtime" / "launch"
 
 
 def update_time_now_iso() -> str:

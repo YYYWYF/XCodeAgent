@@ -49,7 +49,7 @@ class AgentSettingsRevisionTests(unittest.TestCase):
             agent_plan=fixture._technical_model_plan(requirement),
         )
         technical_plan["confirmation_status"] = "confirmed"
-        plans = root / ".xcodeagent" / "plans"
+        plans = root / ".devagentstudio" / "plans"
         plans.mkdir(parents=True)
         (plans / "product-plan.json").write_text(
             json.dumps(product_plan, ensure_ascii=False, indent=2) + "\n",
@@ -111,7 +111,7 @@ class AgentSettingsRevisionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            plans = root / ".xcodeagent" / "plans"
+            plans = root / ".devagentstudio" / "plans"
             plans.mkdir(parents=True)
             path = plans / "build-task-plan.json"
             path.write_text(

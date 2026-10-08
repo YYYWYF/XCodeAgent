@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.graph.nodes.ui_confirmation import _apply_ui_design_action
 from app.protocols.application_page_planning import _build_application_planning_recovery_projection
+from app.protocols.application_page_planning import _build_application_planning_recovery_ag_ui_stream
+from app.protocols.application_planning_recovery_projection import build_application_planning_recovery_projection
 from app.services.ui_design_recovery import interrupted_ui_design_pages
 from app.protocols.workflow.request import _ui_design_action
 
@@ -53,3 +55,33 @@ class UiDesignRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await _apply_ui_design_action(self.state, self.manifest, {"action": "refresh"}), latest)
         restore.assert_awaited_once_with(self.state, self.manifest)
         enqueue.assert_not_awaited()
+
+    async def test_recovery_get_never_requeues_ui_or_restores_stale_confirmation(self):
+        """恢复 GET 只回填 manifest，不能启动 worker 或覆盖权威恢复分类。"""
+        state = {**self.state, "phase": "ui_confirmation", "ui_designs": self.manifest,
+                 "clarification": {"mode": "ui_design_confirmation"}}
+        graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(values=state, tasks=[])))
+        for classification in ["blocked", "running", "completed"]:
+            with self.subTest(classification=classification):
+                projection = build_application_planning_recovery_projection(
+                    classification=classification, source=None, thread_id="read-only-ui",
+                    reason_code="TEST_RECOVERY", message="只读恢复",
+                )
+                with patch("app.protocols.application_page_planning.reconcile_workspace_recovery", new=AsyncMock()), patch(
+                    "app.protocols.application_page_planning.resolve_recovery_lineage_head",
+                    new=AsyncMock(return_value=SimpleNamespace(head=None)),
+                ), patch("app.protocols.application_page_planning._build_application_planning_recovery_projection", new=AsyncMock(return_value=projection)), patch(
+                    "app.protocols.application_page_planning.load_application_lifecycle", return_value=None,
+                ), patch("app.protocols.application_page_planning.load_ui_designs_json", return_value=self.manifest), patch(
+                    "app.protocols.application_page_planning._with_page_code", return_value=self.manifest,
+                ), patch("app.graph.nodes.ui_confirmation._latest_ui_designs", new=AsyncMock(return_value=self.manifest)) as restore, patch(
+                    "app.protocols.application_page_planning.build_ag_ui_action_stream",
+                ) as stream:
+                    _build_application_planning_recovery_ag_ui_stream(
+                        graph=graph, payload={"threadId": "read-only-ui", "runId": "read-run"},
+                        recovery_input={"action": "get", "workspaceRoot": "/workspace", "applicationId": "app"}, accept=None,
+                    )
+                    result = await stream.call_args.kwargs["operation"]()
+                restore.assert_not_awaited()
+                self.assertNotIn("clarification", result.data["result"])
+                self.assertEqual(result.data["result"]["applicationPlanningRecovery"]["classification"], classification)

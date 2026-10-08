@@ -18,7 +18,7 @@ type Props = ApplicationOutlineProps & {
   onEndpointRecovery?: EndpointRecoveryReporter
   detailLabel?: string
   apiTarget?: { apiContractId: string; endpointId: string }
-  apiDesignRefreshKey?: string
+  apiDesignRefreshKey?: number
   developmentDisabled?: boolean
   applicationLifecycle?: ApplicationLifecycle
   onEndAgentExecution?: (execution: WorkbenchExecution) => Promise<boolean>

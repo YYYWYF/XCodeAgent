@@ -72,8 +72,8 @@ Agent 节点至少展示：
 | 名称、职责、能力、页面入口、交互、业务边界、产品验收 | ProductPlan `agents[]` | 只读；修改进入 Product/Technical 正式修订 |
 | System Prompt、Model、Memory、Tools、Skills、Knowledge、Context | TechnicalPlan `agent_contracts[].agentSettings` | 第一期只读；修改进入 TechnicalPlan 正式修订 |
 | Gateway、Tool Endpoint 快照、Runtime、Security、Artifacts、Checks | TechnicalPlan `agent_contracts[]` 平台派生字段 | 只读，用于依赖门禁和 Build |
-| EntitySourceBinding | `.xcodeagent/plans/entities/` | 依赖门禁读取；修改使用实体设计流 |
-| Build DAG 与 Build Run | `.xcodeagent/plans/build-task-plan.json` 和 Build Run 绑定副本 | 按现有确认与执行规则 |
+| EntitySourceBinding | `.devagentstudio/plans/entities/` | 依赖门禁读取；修改使用实体设计流 |
+| Build DAG 与 Build Run | `.devagentstudio/plans/build-task-plan.json` 和 Build Run 绑定副本 | 按现有确认与执行规则 |
 | 源码、Diff、测试、审查和验收证据 | 当前 Workspace 与对应 Run 产物 | 只能证明实现状态，不改写上游 Contract |
 
 ### 5.1 不新增重复 Agent 设计 Artifact
@@ -247,7 +247,7 @@ Agent Runtime CodeRunner：
 - 只接收当前 Agent Contract 和它实际引用的 Java API Contract/Schema。
 - 使用模板注入的 Model、RuntimeContext 和 Checkpointer。
 - 业务模块使用 `create_deep_agent`，不自行初始化第二个模型。
-- 不修改 Frontend、Java Backend、正式规划产物或 `.xcodeagent/`。
+- 不修改 Frontend、Java Backend、正式规划产物或 `.devagentstudio/`。
 
 Java Gateway 仍由 Data Source/Backend owner 负责，页面入口仍由 Frontend owner 负责；不把两者写权扩大给 Agent CodeRunner。
 

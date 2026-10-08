@@ -16,7 +16,7 @@ class AgentRuntimeDebugProtocolTests(unittest.TestCase):
         """构造包含受管标记和 Runtime 入口的最小工作区。"""
 
         root = Path(directory)
-        marker = root / ".xcodeagent/application.json"
+        marker = root / ".devagentstudio/application.json"
         marker.parent.mkdir(parents=True)
         marker.write_text("{}\n", encoding="utf-8")
         runtime = root / "agent-runtime"

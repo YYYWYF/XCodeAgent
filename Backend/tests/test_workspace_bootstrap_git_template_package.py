@@ -217,7 +217,7 @@ class GitTemplatePackageBuilderTests(unittest.TestCase):
             package.writestr("backend/pom.xml", "<project />\n")
             if include_agent_runtime:
                 package.writestr("agent-runtime/pyproject.toml", "[project]\n")
-            package.writestr(".xcodeagent/template-state.json", json.dumps(state))
+            package.writestr(".devagentstudio/template-state.json", json.dumps(state))
         return TemplatePackageDownload(
             temporary_path=path,
             sha256="ignored",

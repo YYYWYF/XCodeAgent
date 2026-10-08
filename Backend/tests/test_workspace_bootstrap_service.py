@@ -165,7 +165,7 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             _prepare_generating_workspace(workspace)
-            plan_file = workspace / ".xcodeagent/plans/technical-plan.json"
+            plan_file = workspace / ".devagentstudio/plans/technical-plan.json"
             plan = json.loads(plan_file.read_text(encoding="utf-8"))
             plan["agent_contracts"] = [{"agentId": "policy_assistant"}]
             plan_file.write_text(json.dumps(plan), encoding="utf-8")

@@ -53,7 +53,7 @@ export default function AgentDevelopmentDetail({
     try {
       const result = await startAgentRuntimeDebug(workspaceRoot)
       setRuntimeDebugStatus('running')
-      void window.xcodeAgent?.projectPreview?.registerWorkspace({ workspaceRoot })
+      void window.devAgentStudio?.projectPreview?.registerWorkspace({ workspaceRoot })
       message.success(result.message)
       Modal.success({
         title: 'Agent Runtime 已启动',
