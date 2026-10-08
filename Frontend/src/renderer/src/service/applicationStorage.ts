@@ -122,8 +122,8 @@ export function loadCachedApplications(): ApplicationIndex[] {
   }
 }
 
-/** 读取索引并从每个工作区重新加载 application.json，避免使用缓存配置。 */
-export async function loadStoredApplications(): Promise<ApplicationConfig[]> {
+/** 读取原始首页索引，目录缺失或配置不可读不能改变索引中的其他项目。 */
+async function loadStoredApplicationIndexes(): Promise<ApplicationIndex[]> {
   const electronApplications = window.devAgentStudio?.applications;
 
   if (electronApplications) {
@@ -131,11 +131,7 @@ export async function loadStoredApplications(): Promise<ApplicationConfig[]> {
       const data = await electronApplications.load();
       const indexes = normalizeApplicationIndexes(data.applications);
       cacheApplications(indexes);
-      return (await Promise.allSettled(indexes.map(applicationViewFromIndex)))
-        .filter(
-          (result): result is PromiseFulfilledResult<ApplicationConfig> => result.status === 'fulfilled'
-        )
-        .map((result) => result.value)
+      return indexes
     } catch (error) {
       console.warn(error);
     }
@@ -148,18 +144,20 @@ export async function loadStoredApplications(): Promise<ApplicationConfig[]> {
     const data = (await response.json()) as { applications?: unknown };
     const indexes = normalizeApplicationIndexes(data.applications);
     cacheApplications(indexes);
-    return (await Promise.allSettled(indexes.map(applicationViewFromIndex)))
-      .filter(
-        (result): result is PromiseFulfilledResult<ApplicationConfig> => result.status === 'fulfilled'
-      )
-      .map((result) => result.value)
+    return indexes
   } catch {
-    return (await Promise.allSettled(loadCachedApplications().map(applicationViewFromIndex)))
-      .filter(
-        (result): result is PromiseFulfilledResult<ApplicationConfig> => result.status === 'fulfilled'
-      )
-      .map((result) => result.value)
+    return loadCachedApplications()
   }
+}
+
+/** 读取索引并从每个工作区重新加载 application.json，避免使用缓存配置。 */
+export async function loadStoredApplications(): Promise<ApplicationConfig[]> {
+  const indexes = await loadStoredApplicationIndexes()
+  return (await Promise.allSettled(indexes.map(applicationViewFromIndex)))
+    .filter(
+      (result): result is PromiseFulfilledResult<ApplicationConfig> => result.status === 'fulfilled'
+    )
+    .map((result) => result.value)
 }
 
 /** 保存应用索引；调用者不得传入任何 application.json 配置字段。 */
@@ -194,11 +192,9 @@ export async function saveStoredApplications(applications: ApplicationIndex[]): 
 
 // 从首页应用索引中移除指定项目，不会删除工作区中的任何文件。
 export async function removeStoredApplication(applicationId: string): Promise<void> {
-  const applications = await loadStoredApplications();
+  const applications = await loadStoredApplicationIndexes();
   await saveStoredApplications(
-    applications
-      .filter((application) => application.id !== applicationId)
-      .map(applicationIndexOf)
+    applications.filter((application) => application.id !== applicationId)
   );
 }
 

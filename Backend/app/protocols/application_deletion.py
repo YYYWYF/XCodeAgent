@@ -240,15 +240,11 @@ async def prepare_application_deletion(
         workspace=workspace_text,
         project_id=request.application_id,
     )
-    if workspace_exists:
+    if workspace_exists or checkpoint_path.is_file():
         checkpoint_result = await delete_workflow_checkpoints_for_workspace(
             workspace=workspace_text,
             project_id=request.application_id,
             thread_ids=thread_ids,
-        )
-        closed_local_checkpointer = await close_workflow_checkpointer_for_workspace(
-            workspace=workspace_text,
-            project_id=request.application_id,
         )
     else:
         checkpoint_result = {
@@ -256,7 +252,11 @@ async def prepare_application_deletion(
             "deletedThreadCount": 0,
             "alreadyTrashed": True,
         }
-        closed_local_checkpointer = False
+    # 目录被外部删除后，进程内仍可能持有旧 SQLite inode，必须照常关闭连接。
+    closed_local_checkpointer = await close_workflow_checkpointer_for_workspace(
+        workspace=workspace_text,
+        project_id=request.application_id,
+    )
     if closed_local_checkpointer:
         cache_key = str(checkpoint_path)
         clear_workflow_graph_cache(cache_key=cache_key)
@@ -349,16 +349,20 @@ def complete_application_deletion(
 
 
 def _validated_managed_workspace(workspace_root: str, *, application_id: str) -> Path:
-    """校验受管工作区；已完成停机的删除重试允许目录已经进入回收站。"""
+    """校验受管工作区；缺失目录仍须经过停机门禁以清理残留运行资源。"""
 
     candidate = Path(workspace_root).expanduser()
     if candidate.is_symlink():
         raise ValueError("不能通过符号链接删除应用工作区。")
     workspace = candidate.resolve(strict=False)
-    if not workspace.exists():
-        if workflow_run_registry.is_workspace_deleting(str(workspace)):
-            return workspace
-        raise ValueError("应用工作区不存在，且没有可恢复的删除事务。")
+    try:
+        workspace.stat()
+    except FileNotFoundError:
+        # 只把真实缺失视为幂等删除，权限及其他文件系统错误继续向调用方报告。
+        prepared_id = workflow_run_registry.workspace_deletion_application_id(str(workspace))
+        if prepared_id is not None and prepared_id != application_id:
+            raise ValueError("应用标识与当前删除事务不匹配，已拒绝删除。")
+        return workspace
     if not workspace.is_dir() or workspace.is_symlink():
         raise ValueError("只能删除真实存在且不是符号链接的应用工作区。")
     marker = workspace / WORKSPACE_ARTIFACT_DIR / "application.json"

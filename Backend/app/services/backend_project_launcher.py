@@ -372,7 +372,14 @@ def stop_workspace_backend_project(workspace_path: str | Path) -> dict[str, Any]
     backend_root = find_backend_project_root(root) or root / "backend"
     pom_path = backend_root / "pom.xml"
     runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
-    if not pom_path.is_file():
+    # 即使目录被外部删除，内存中的 Java 进程仍须停止；停机不创建任何目录。
+    with backend_launch_lock(root):
+        cleanup = stop_previous_backend_process(
+            workspace=root,
+            backend_root=backend_root,
+            runtime_root=runtime_root,
+        )
+    if not pom_path.is_file() and not cleanup.get("attempted") and cleanup.get("success"):
         return {
             "status": "skipped",
             "message": "未识别到后端 Maven 工程，已跳过后端停止。",
@@ -387,13 +394,6 @@ def stop_workspace_backend_project(workspace_path: str | Path) -> dict[str, Any]
             },
         }
 
-    runtime_root.mkdir(parents=True, exist_ok=True)
-    with backend_launch_lock(root):
-        cleanup = stop_previous_backend_process(
-            workspace=root,
-            backend_root=backend_root,
-            runtime_root=runtime_root,
-        )
     return {
         "status": "stopped" if cleanup.get("success") else "failed",
         "message": (

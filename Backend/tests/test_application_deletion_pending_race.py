@@ -21,7 +21,6 @@ from app.protocols.workflow.run_control import (
     build_workflow_plan_control_ag_ui_stream,
     workflow_run_registry,
 )
-from app.services.application_lifecycle import ApplicationLifecycleConflictError
 from app.services.build_task_plan_lifecycle import abandon_pending_build_task_plan
 from app.services.ui_design_generation_pool import get_ui_design_generation_pool
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
@@ -269,11 +268,11 @@ class ApplicationDeletionPendingRaceTests(unittest.IsolatedAsyncioTestCase):
                     "app.protocols.workflow.run_control.abandon_pending_build_task_plan",
                     wraps=abandon_pending_build_task_plan,
                 ) as abandon:
-                    with self.assertRaisesRegex(
-                        ApplicationLifecycleConflictError,
-                        "当前应用正在删除，不能放弃 Pending Build DAG。",
-                    ):
-                        _frames = [frame async for frame in stream]
+                    frames = "\n".join([frame async for frame in stream])
+                    # 当前 AG-UI 合同将业务冲突转为完整失败回执，不向流消费者抛异常。
+                    self.assertIn("PLAN_CONTROL_LIFECYCLE_CONFLICT", frames)
+                    self.assertIn('"status":"failed"', frames)
+                    self.assertIn("RUN_ERROR", frames)
 
                 abandon.assert_not_called()
                 self.assertEqual(pending_path.read_bytes(), pending_before)
@@ -344,11 +343,10 @@ class ApplicationDeletionPendingRaceTests(unittest.IsolatedAsyncioTestCase):
                             application_id="application-race",
                         )
 
-                    with self.assertRaisesRegex(
-                        ApplicationLifecycleConflictError,
-                        "当前应用正在删除，不能放弃 Pending Build DAG。",
-                    ):
-                        await abandon_task
+                    frames = "\n".join(await abandon_task)
+                    self.assertIn("PLAN_CONTROL_LIFECYCLE_CONFLICT", frames)
+                    self.assertIn('"status":"failed"', frames)
+                    self.assertIn("RUN_ERROR", frames)
                     abandon.assert_not_called()
                     self.assertEqual(pending_path.read_bytes(), pending_before)
                     self.assertEqual(planning_path.read_bytes(), planning_before)

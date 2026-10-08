@@ -261,7 +261,9 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
     }
     from app.services.preview_runtime_state import finish_attempt
 
-    finish_attempt(root, result)
+    # 外部删除后的停机仍需清理进程登记，但不能为了保存停止状态重建项目目录。
+    if root.is_dir():
+        finish_attempt(root, result)
     return result
 
 

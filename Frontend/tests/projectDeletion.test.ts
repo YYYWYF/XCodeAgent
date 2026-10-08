@@ -14,6 +14,7 @@ import {
   sessionRuntimeKeyBelongsToWorkspace
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import type { ApplicationLifecycle } from '../src/renderer/src/typings'
+import { removeStoredApplication } from '../src/renderer/src/service/applicationStorage'
 
 /** 验证已不存在的路径可以重复执行删除而不产生错误。 */
 test('删除不存在的目录按幂等成功处理', async () => {
@@ -90,6 +91,48 @@ test('会话运行态按完整工作区路径隔离清理', () => {
   assert.equal(sessionRuntimeKeyBelongsToWorkspace(targetKey, targetWorkspace), true)
   assert.equal(sessionRuntimeKeyBelongsToWorkspace(sameNameElsewhereKey, targetWorkspace), false)
   assert.equal(sessionRuntimeKeyBelongsToWorkspace('malformed-key', targetWorkspace), false)
+})
+
+/** 删除索引只移除目标，不读取缺失配置、不丢失其他项目或改写最近打开时间。 */
+test('手动删除目录后移除索引仍保留其他缺失目录的项目', async () => {
+  const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window
+  const indexes = [
+    { id: 'deleted', workspaceRoot: '/missing/xc50', name: '目标项目', lastOpenedAt: 1 },
+    { id: 'keep', workspaceRoot: '/missing/other', name: '保留项目', lastOpenedAt: 2 }
+  ]
+  let saved: unknown
+  let configReads = 0
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      localStorage: { setItem: (): void => {} },
+      dispatchEvent: (): boolean => true,
+      devAgentStudio: {
+        applications: {
+          load: async () => ({ applications: indexes }),
+          save: async (applications: unknown): Promise<void> => {
+            saved = applications
+          }
+        },
+        workspace: {
+          readApplication: async (): Promise<never> => {
+            configReads += 1
+            throw new Error('ENOENT')
+          }
+        }
+      }
+    }
+  })
+  try {
+    await removeStoredApplication('deleted')
+    assert.deepEqual(saved, [indexes[1]])
+    assert.equal(configReads, 0)
+    await removeStoredApplication('unknown')
+    assert.deepEqual(saved, indexes)
+  } finally {
+    if (originalWindow === undefined) Reflect.deleteProperty(globalThis, 'window')
+    else Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+  }
 })
 
 /** 删除准备必须把本地 Session 和 Graph thread 身份一并发送给服务端。 */
