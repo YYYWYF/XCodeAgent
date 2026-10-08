@@ -79,4 +79,4 @@ class ValidatedTemplatePackage:
     """保存通过安全和根目录契约检查的 Package 与 TemplateState。"""
 
     archive_path: Path
-    template_state: "TemplateStateV2"
+    template_state: "TemplateStateV3"

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
-from app.services.template_reconcile.protocol_v2 import TemplateStateV2
+from app.services.template_reconcile.protocol_v3 import TemplateStateV3
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
 from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
@@ -99,7 +99,7 @@ class WorkspaceMaterializer:
         *,
         workspace: str | Path,
         archive_path: str | Path,
-        template_state: TemplateStateV2,
+        template_state: TemplateStateV3,
         readiness: Callable[[Path], None] | None = None,
     ) -> str:
         """完整提交 ZIP 的安全文件、Git baseline 与唯一 TemplateState。"""
@@ -173,7 +173,7 @@ class WorkspaceMaterializer:
             raise
 
 
-def _write_template_state(path: Path, template_state: TemplateStateV2) -> None:
+def _write_template_state(path: Path, template_state: TemplateStateV3) -> None:
     """以同目录原子替换落盘 Engine 原样输出的 TemplateState。"""
 
     atomic_write_json(path, template_state.model_dump(mode="json"))

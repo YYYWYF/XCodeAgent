@@ -45,12 +45,10 @@ class TemplateEngineClient:
         self._client_factory = client_factory
 
     async def generate(self, requested_config: dict[str, Any], *, temporary_dir: str | Path | None = None) -> TemplatePackageDownload:
-        """调用 `/v1/generate` 并分块写临时 ZIP，同时计算 SHA-256。"""
+        """调用 V3 `/v1/generate-next` 并分块写临时 ZIP，同时计算 SHA-256。"""
 
         if not self._base_url:
-            # Engine 未配置时走 git fallback：直接 clone 固定模板仓库并打包成契约 ZIP。
-            logger.info("Template Engine 未配置，使用 git fallback 拉取模板仓库。")
-            return await self._generate_from_git_fallback(requested_config, temporary_dir=temporary_dir)
+            raise TemplateEngineError("Template Engine 地址未配置，无法生成 V3 TemplateState。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
         descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-", suffix=".zip", dir=directory)
         temporary_path = Path(name)
@@ -60,7 +58,7 @@ class TemplateEngineClient:
             timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
             # trust_env=False：模板引擎是本机直连的基础设施；httpx 在 Windows 会采用注册表系统代理但不执行其排除列表，回环请求会被代理拦截。
             async with self._client_factory(timeout=timeout, trust_env=False) as client:
-                async with client.stream("POST", f"{self._base_url}/v1/generate", json={"requestedConfig": requested_config}, headers={"Accept": "application/zip"}) as response:
+                async with client.stream("POST", f"{self._base_url}/v1/generate-next", json={"requestedConfig": requested_config}, headers={"Accept": "application/zip"}) as response:
                     if response.status_code >= 400:
                         raise await _engine_response_error(response, "Template Engine 拒绝请求")
                     content_type = response.headers.get("content-type")
@@ -145,7 +143,7 @@ class TemplateEngineClient:
         mode: str = "APPLY",
         temporary_dir: str | Path | None = None,
     ) -> TemplatePackageDownload | None:
-        """调用 V2 单次 `/v1/update`；204 返回 `None`，200 时下载 Strategy Package。"""
+        """调用 V3 `/v1/update-next`；APPLY 的 204 表示无变化。"""
 
         if not self._base_url:
             raise TemplateEngineError("Template Engine 地址未配置。")
@@ -159,7 +157,7 @@ class TemplateEngineClient:
         try:
             # 仅记录调用边界与非敏感摘要；不得输出完整请求配置或 ZIP 内容。
             logger.info(
-                "模板更新请求已发起：endpoint=%s/v1/update，当前模板版本=%s。",
+                "模板更新请求已发起：endpoint=%s/v1/update-next，当前模板版本=%s。",
                 self._base_url,
                 str(current_template_state.get("templateRevision") or "unknown"),
             )
@@ -168,9 +166,9 @@ class TemplateEngineClient:
             async with self._client_factory(timeout=timeout, trust_env=False) as client:
                 async with client.stream(
                     "POST",
-                    f"{self._base_url}/v1/update",
+                    f"{self._base_url}/v1/update-next",
                     json={
-                        "protocolVersion": "2",
+                        "protocolVersion": "3",
                         "currentTemplateState": current_template_state,
                         "requestedConfig": requested_config,
                         "mode": mode,
@@ -178,7 +176,7 @@ class TemplateEngineClient:
                     headers={"Accept": "application/zip"},
                 ) as response:
                     logger.info(
-                        "模板更新接口已响应：endpoint=%s/v1/update，status=%s。",
+                        "模板更新接口已响应：endpoint=%s/v1/update-next，status=%s。",
                         self._base_url,
                         response.status_code,
                     )
@@ -186,6 +184,8 @@ class TemplateEngineClient:
                         os.close(descriptor)
                         descriptor = -1
                         temporary_path.unlink(missing_ok=True)
+                        if mode == "RECONCILE":
+                            raise TemplateEngineError("Template Engine V3 RECONCILE 必须返回更新包，不能返回 HTTP 204。", http_status=204)
                         logger.info("模板更新接口返回无变更（HTTP 204）。")
                         return None
                     if response.status_code >= 400:
@@ -207,13 +207,13 @@ class TemplateEngineClient:
             logger.info("模板更新 ZIP 下载完成：bytes=%s，sha256=%s。", size, download.sha256)
             return download
         except httpx.TimeoutException as exc:
-            logger.warning("模板更新接口调用超时：endpoint=%s/v1/update。", self._base_url)
+            logger.warning("模板更新接口调用超时：endpoint=%s/v1/update-next。", self._base_url)
             raise TemplateEngineError("调用 Template Engine 更新超时。") from exc
         except httpx.HTTPError as exc:
-            logger.warning("模板更新接口调用失败：endpoint=%s/v1/update，error=%s。", self._base_url, type(exc).__name__)
+            logger.warning("模板更新接口调用失败：endpoint=%s/v1/update-next，error=%s。", self._base_url, type(exc).__name__)
             raise TemplateEngineError("调用 Template Engine 更新失败。") from exc
         except Exception:
-            logger.exception("模板更新接口处理失败：endpoint=%s/v1/update。", self._base_url)
+            logger.exception("模板更新接口处理失败：endpoint=%s/v1/update-next。", self._base_url)
             if descriptor >= 0:
                 os.close(descriptor)
             temporary_path.unlink(missing_ok=True)
@@ -290,4 +290,3 @@ def _build_fallback_template_state(requested_config: dict[str, Any]) -> dict[str
         "effective": enabled,
         "appliedAdditions": {},
     }
-

@@ -1,4 +1,4 @@
-"""校验 Template Engine `/v1/generate` ZIP 的最小 Bootstrap 契约。"""
+"""校验 Template Engine V3 `/v1/generate-next` ZIP 的 Bootstrap 契约。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
-from app.services.template_reconcile.protocol_v2 import TemplateStateV2
+from app.services.template_reconcile.protocol_v3 import TemplateStateV3
 from app.services.workspace_bootstrap.archive_security import validate_archive_entries
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageError, ValidatedTemplatePackage
 
@@ -16,7 +16,7 @@ _REQUIRED_ROOTS = frozenset({"frontend", "backend"})
 
 
 def validate_template_package(archive_path: str | Path, limits: ArchiveLimits) -> ValidatedTemplatePackage:
-    """仅要求 ZIP 顶层存在 frontend/backend，并读取 TemplateState。"""
+    """校验 ZIP 只含 frontend/backend 和唯一 V3 TemplateState。"""
 
     path = Path(archive_path)
     try:
@@ -30,15 +30,15 @@ def validate_template_package(archive_path: str | Path, limits: ArchiveLimits) -
                 raise TemplatePackageError("模板 ZIP 中的 TemplateState 无法读取。") from exc
 
             try:
-                return ValidatedTemplatePackage(path, TemplateStateV2.model_validate(state))
+                return ValidatedTemplatePackage(path, TemplateStateV3.model_validate(state))
             except ValueError as exc:
-                raise TemplatePackageError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：Bootstrap Package 未提供 V2 TemplateState。") from exc
+                raise TemplatePackageError("TEMPLATE_STATE_SCHEMA_UNSUPPORTED：Bootstrap Package 未提供 V3 TemplateState。") from exc
     except zipfile.BadZipFile as exc:
         raise TemplatePackageError("模板 ZIP 已损坏或格式无效。") from exc
 
 
 def _validate_required_roots(entries: list[zipfile.ZipInfo]) -> None:
-    """仅校验 ZIP 顶层存在 frontend 和 backend 目录；其它路径不做限制。"""
+    """拒绝 V3 Generate ZIP 中 frontend/backend/State 外的任何路径。"""
 
     roots = {
         PurePosixPath(entry.filename).parts[0]
@@ -51,3 +51,12 @@ def _validate_required_roots(entries: list[zipfile.ZipInfo]) -> None:
             "模板 ZIP 顶层必须包含 frontend 和 backend 目录，缺少："
             + "、".join(sorted(missing))
         )
+    for entry in entries:
+        name = entry.filename.rstrip("/")
+        if name in {"frontend", "backend", ".devagentstudio"} and entry.is_dir():
+            continue
+        if name.startswith("frontend/") or name.startswith("backend/") or name == _STATE_PATH:
+            continue
+        raise TemplatePackageError("V3 Generate ZIP 包含未授权路径：" + entry.filename)
+    if sum(entry.filename == _STATE_PATH for entry in entries if not entry.is_dir()) != 1:
+        raise TemplatePackageError("V3 Generate ZIP 必须包含唯一 .devagentstudio/template-state.json。")
