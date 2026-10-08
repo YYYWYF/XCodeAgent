@@ -4,22 +4,43 @@ import type { BindingDraft } from '../../../../typings/endpointDesign'
 import type { EndpointDesignPreparation, EndpointDesignSaveResult, WorkflowApiDesignDraft, DataSourceCatalog } from '../../../../typings'
 import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
 import { discardEndpointBindingDraft, requestEndpointDesignPreparation, saveEndpointBindingDraft, saveEndpointDesign } from '../../../../service/endpointDesigns'
-import { requestDataSources, requestSelectedTables, requestApiDesignDatabaseColumns, requestApiDesignExternalOperation } from '../../../../service/dataSources'
+import { requestSelectedTables, requestApiDesignDatabaseColumns, requestApiDesignExternalOperation } from '../../../../service/dataSources'
 import type { SelectedDataTable, ApiDesignDatabaseMetadata, ApiDesignExternalOperationMetadata } from '../../../../service/dataSources'
 import { defaultDatabaseOperation, normalizeApiDesignDraft, validateApiDesignDraft } from '../WorkflowRunCard/apiDesignSerialization'
 import { inferSelection, selectionKey, tableIsSelected } from './model'
 import { AgUiBusinessError } from '../../../../service/agUiBusinessError'
 import { BindingInputError, readBindingRecoverySnapshot, reconcileBindingAfterRecovery } from './bindingRecovery'
 import { endpointRecoveryScope, type EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
+import { observeBindingSources, type BindingSourcesReader } from './bindingSources'
 
 export type BindingEntry = {
   preparation: EndpointDesignPreparation; value: BindingDraft; readOnly: boolean; complex: boolean; conflict: boolean; dirty: boolean
 }
 
+type BindingWorkspaceState = {
+  key: string
+  entry?: BindingEntry
+  catalog: DataSourceCatalog
+  tables: SelectedDataTable[]
+  loading: boolean
+  busy: boolean
+  error: string
+  reportedError: boolean
+  metadata?: ApiDesignDatabaseMetadata | ApiDesignExternalOperationMetadata
+  metadataLoading: boolean
+  update: (next: BindingEntry) => void
+  edit: (draft: WorkflowApiDesignDraft, selection?: BindingDraft['selection']) => void
+  save: (confirm: boolean) => Promise<void>
+  reload: () => void
+  discard: () => Promise<void>
+  refreshSources: () => void
+  refreshSourceCandidates: () => void
+}
+
 /** 为工作台缓存每个接口的编辑状态，切页签与异步返回均不覆盖其他接口。 */
 export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConfigTarget | undefined,
   onSaved: (target: ApiDesignConfigTarget, result: EndpointDesignSaveResult) => void | Promise<void>,
-  onRecovery?: EndpointRecoveryReporter) {
+  onRecovery?: EndpointRecoveryReporter): BindingWorkspaceState {
   const [entries, setEntries] = useState<Record<string, BindingEntry>>({})
   const [catalog, setCatalog] = useState<DataSourceCatalog>({ sources: [] })
   const [tables, setTables] = useState<SelectedDataTable[]>([])
@@ -30,6 +51,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   const [metadata, setMetadata] = useState<ApiDesignDatabaseMetadata | ApiDesignExternalOperationMetadata>()
   const [metadataLoading, setMetadataLoading] = useState(false)
   const [refresh, setRefresh] = useState(0)
+  const sourcesReader = useRef<BindingSourcesReader>()
   const locked = useRef(false)
   const generation = useRef(0)
   const key = target ? JSON.stringify([workspaceRoot, target.apiContractId, target.endpointId]) : ''
@@ -63,12 +85,12 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   }, [workspaceRoot])
 
   useEffect(() => {
-    let disposed = false
     setError('')
-    Promise.all([requestDataSources(workspaceRoot), requestSelectedTables(workspaceRoot)])
-      .then(([sources, selected]) => { if (!disposed) { setCatalog(sources); setTables(selected); publish('catalog', undefined, endpointRecoveryScope(workspaceRoot)) } })
-      .catch((reason) => { if (!disposed) failRead(reason, 'catalog', endpointRecoveryScope(workspaceRoot)) })
-    return () => { disposed = true }
+    const reader = observeBindingSources(workspaceRoot, ({ catalog: sources, tables: selected }) => {
+      setCatalog(sources); setTables(selected); publish('catalog', undefined, endpointRecoveryScope(workspaceRoot))
+    }, (reason) => failRead(reason, 'catalog', endpointRecoveryScope(workspaceRoot)))
+    sourcesReader.current = reader
+    return () => { reader.dispose(); sourcesReader.current = undefined }
   }, [workspaceRoot, refresh])
 
   useEffect(() => {
@@ -193,5 +215,6 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   }
   return { key, entry, catalog, tables, loading, busy, error, reportedError, metadata, metadataLoading, update, edit, save, reload,
     discard,
-    refreshSources: () => setRefresh((value) => value + 1) }
+    refreshSources: () => setRefresh((value) => value + 1),
+    refreshSourceCandidates: () => sourcesReader.current?.refresh() }
 }

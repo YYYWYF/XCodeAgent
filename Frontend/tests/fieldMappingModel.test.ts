@@ -53,7 +53,7 @@ test('database query tree keeps repeated columns', () => {
 
   const valueCondition = { ...condition, column: 'amount', type: 'decimal', operator: 'between' as const, right: { kind: 'fixed' as const, value: [1, 10] } }
   assert.equal(validateApiDesignDraft({ ...draft, databaseQuery: { join: 'and', items: [valueCondition] } }).__databaseQuery, undefined)
-  assert.match(validateApiDesignDraft({ ...draft, databaseQuery: { join: 'and', items: [{ ...valueCondition, right: { kind: 'fixed', value: [10, 1] } }] } }).__databaseQuery || '', /有效运算符和右值/)
+  assert.match(validateApiDesignDraft({ ...draft, databaseQuery: { join: 'and', items: [{ ...valueCondition, right: { kind: 'fixed', value: [10, 1] } }] } }).__databaseQuery || '', /固定值格式或类型不正确/)
 })
 
 /** 同一入参可供多个外部目标加工，目标重复和失效依赖仍阻止确认。 */
@@ -62,7 +62,11 @@ test('external target rules reuse inputs and retain missing policy', () => {
   const right = { kind: 'business' as const, origin: 'endpoint' as const, endpointFields: [request], builtinFields: [], businessDescription: '将页码转成偏移量。', missingBehavior: 'default' as const, defaultValue: 0 }
   const draft: WorkflowApiDesignDraft = { apiContractId: 'products', endpointId: 'list', fieldMappings: [{ endpointField: request, mappingType: 'unconfigured' }], externalApiBindings: ['offset', 'start'].map((path) => ({ externalField: { sourceType: 'external_api', sourceId: 'api', directoryId: 'dir', operationId: 'op', section: 'query', path, type: 'integer' }, right })) }
   assert.deepEqual(validateApiDesignDraft(draft), {})
-  assert.match(valueSummary(right), /默认值 0/)
+  // 缺值策略仍保存在契约内，但当前界面摘要按产品规则隐藏它。
+  assert.equal(right.missingBehavior, 'default')
+  assert.equal(right.defaultValue, 0)
+  assert.match(valueSummary(right), /输入：page/)
+  assert.doesNotMatch(valueSummary(right), /默认值/)
   assert.equal(inferSelection(draft).complex, false)
   const duplicate = { ...draft, externalApiBindings: [draft.externalApiBindings![0], draft.externalApiBindings![0]] }
   assert.match(validateApiDesignDraft(duplicate)['__externalApiBinding:query:offset'], /重复配置/)
@@ -83,8 +87,8 @@ test('external source binding validates without physical field mappings', () => 
     ]
   }
   assert.deepEqual(validateApiDesignDraft(draft), {})
-  assert.match(validateApiDesignDraft({ ...draft, sourceBinding: undefined })['request:query:traceId'], /尚未配置/)
-  assert.match(validateApiDesignDraft({ ...draft, fieldMappings: [draft.fieldMappings[0], { endpointField: response, mappingType: 'unconfigured' }] })['response:response_body:accepted'], /尚未配置/)
+  assert.match(validateApiDesignDraft({ ...draft, sourceBinding: undefined })['request:query:traceId'], /请配置接口参数/)
+  assert.match(validateApiDesignDraft({ ...draft, fieldMappings: [draft.fieldMappings[0], { endpointField: response, mappingType: 'unconfigured' }] })['response:response_body:accepted'], /请配置/)
 })
 
 /** 多字段业务加工仍属于同一表，全部业务输出也能恢复显式来源选择。 */

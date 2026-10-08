@@ -65,7 +65,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   }))
   const editable = Boolean(entry && !entry.readOnly && !entry.complex && !entry.conflict)
     const withoutSource = fields.length === 0 && !selection && entry?.value.draft.fieldMappings.length === 0 && !entry?.value.draft.externalApiBindings?.length
-  const canConfirm = editable && editingRules === 0
+  const canConfirm = editable && !sourceChanging && editingRules === 0
     && (withoutSource || fields.length > 0 && Boolean(selection && (selection.sourceType === 'static' || metadata)) && !metadataLoading && !unavailableTable && !missingFields && !missingQueryColumns && !missingRequiredExternal)
   const databaseSelection = selection?.sourceType === 'database' ? selection : undefined
 
@@ -158,7 +158,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
       {!target ? <Empty description="请选择应用 API" /> : loading && !entry ? <Spin tip="正在读取 API 契约…" /> : null}
       {error && !(onEndpointRecovery && state.reportedError) ? <Alert type="error" showIcon message={error} action={<Space><Button onClick={state.refreshSources}>重试</Button>{entry && <Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃草稿并重新加载？', content: '未确认的修改将被清除，正式映射不变。', okText: '放弃并加载', cancelText: '继续编辑', onOk: state.discard })}>重新加载</Button>}</Space>} /> : null}
       {entry && <>
-        <header className="binding-heading"><div className="binding-heading-copy"><span className="binding-heading-contract">{activeContractName}</span><strong className="binding-heading-name">{activeEndpointName}</strong><div className="binding-heading-endpoint"><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{activeEndpointPath}</code></div></div><Space className="binding-heading-actions">{entry.readOnly ? <Button className="binding-edit-button" icon={<EditOutlined />} onClick={() => state.update({ ...entry, readOnly: false })}>修改映射</Button> : !entry.complex ? <><Button className="binding-stash-button" loading={busy} disabled={entry.conflict || editingRules > 0} onClick={() => void state.save(false)}>暂存</Button><Button className="binding-confirm-button" type="primary" loading={busy} disabled={!canConfirm} onClick={confirmMapping}>保存并确认</Button></> : null}</Space></header>
+        <header className="binding-heading"><div className="binding-heading-copy"><span className="binding-heading-contract">{activeContractName}</span><strong className="binding-heading-name">{activeEndpointName}</strong><div className="binding-heading-endpoint"><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{activeEndpointPath}</code></div></div><Space className="binding-heading-actions">{entry.readOnly ? <Button className="binding-edit-button" icon={<EditOutlined />} onClick={() => state.update({ ...entry, readOnly: false })}>修改映射</Button> : !entry.complex ? <><Button className="binding-stash-button" loading={busy} disabled={entry.conflict || sourceChanging || editingRules > 0} onClick={() => void state.save(false)}>暂存</Button><Button className="binding-confirm-button" type="primary" loading={busy} disabled={!canConfirm} onClick={confirmMapping}>保存并确认</Button></> : null}</Space></header>
         {entry.conflict ? <Alert type="warning" message="草稿基于的契约或正式映射已变化，当前草稿已保留。" description="请核对当前内容后，明确放弃旧草稿并重新加载。" action={<Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃旧草稿并重新加载？', okText: '放弃并加载', cancelText: '保留草稿', onOk: state.discard })}>重新加载</Button>} /> : null}
         {entry.complex ? <Alert type="info" message="当前接口包含复杂映射，继续使用原有编辑能力。" action={<Button onClick={() => setAdvanced(true)}>打开完整编辑器</Button>} /> : <>
           {entry.readOnly && selection && <section className="binding-section database-source-section">
@@ -182,7 +182,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
                   <Radio.Button value="external_api">外部 API</Radio.Button>
                   <Radio.Button value="static">静态数据</Radio.Button>
                 </Radio.Group>
-                {kind && kind !== 'static' && <Select className="binding-target" showSearch optionFilterProp="label" placeholder={kind === 'database' ? '选择已添加的数据表' : '选择域名 / 目录 / 接口'} disabled={busy || entry.conflict} value={displayedSelection?.sourceType === kind ? selectionKey(displayedSelection) : undefined} options={candidates} onChange={(value) => stageSourceSelection(candidates.find((item) => item.value === value)?.selection || null)} />}
+                {kind && kind !== 'static' && <Select className="binding-target" showSearch optionFilterProp="label" placeholder={kind === 'database' ? '选择已添加的数据表' : '选择域名 / 目录 / 接口'} disabled={busy || entry.conflict} value={displayedSelection?.sourceType === kind ? selectionKey(displayedSelection) : undefined} options={candidates} onDropdownVisibleChange={(open) => { if (open) state.refreshSourceCandidates() }} onChange={(value) => stageSourceSelection(candidates.find((item) => item.value === value)?.selection || null)} />}
                 {sourceChanging ? <div className="database-source-toolbar"><Space><Button disabled={busy} onClick={cancelSourceChange}>取消</Button><Button type="primary" disabled={busy || entry.conflict || !pendingSelectionChanged} onClick={() => changeSelection(pendingSelection, kind)}>确认更换</Button></Space></div> : null}
                 {kind && kind !== 'static' && !candidates.length ? <p>暂无可绑定来源，请先配置{kind === 'database' ? '连接并添加数据表' : '外部 API 接口'}。</p> : null}
               </>}
@@ -190,9 +190,12 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
               {missingQueryColumns ? <Alert type="warning" message="查询条件中的数据库列已失效，请重新选择当前数据表中的列。" /> : null}
             </div> : null}
           </section>}
+          {/* 更换来源时隐藏旧表单但保持挂载，取消后恢复未应用的 JSON 和映射输入。 */}
+          <div hidden={sourceChanging}>
           {selection?.sourceType === 'static' && <StaticDataCard key={`data:${state.key}`} draft={entry.value.draft} readOnly={entry.readOnly} disabled={!editable || busy || sourceChanging} errors={errors} onChange={state.edit} />}
           {selection?.sourceType === 'static' && <StaticMapping key={state.key} draft={entry.value.draft} fields={fields} readOnly={entry.readOnly} disabled={!editable || busy} previewDisabled={editingRules > 0} errors={errors} onChange={state.edit} />}
           {selection && <Spin spinning={metadataLoading}>{selection.sourceType === 'external_api' && metadata && 'fields' in metadata ? <ExternalMapping key={`${state.key}:${selectionKey(selection)}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} onChange={(draft) => state.edit(draft)} selection={selection} /> : databaseSelection && metadata && 'columns' in metadata ? <DatabaseMapping key={`${state.key}:${selectionKey(selection)}:${entry.value.draft.databaseOperation}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} operation={entry.value.draft.databaseOperation} selection={databaseSelection} onChange={(draft) => state.edit(draft)} onOperationChange={(operation) => confirmWorkspaceAction({ title: '切换数据库操作？', content: '切到新增会清空查询条件；切到查询或删除会清除写入映射。', okText: '切换并更新', cancelText: '取消', onOk: () => state.edit(resetDraftForDatabaseOperation(entry.value.draft, operation)) })} /> : null}</Spin>}
+          </div>
           {entry.readOnly && <p className="binding-readonly"><NodeIndexOutlined /> 映射已确认</p>}
         </>}
       </>}

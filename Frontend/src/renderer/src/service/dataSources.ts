@@ -9,6 +9,7 @@ import type {
 } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 import { AgUiBusinessError } from './agUiBusinessError'
+import { notifyDataSourcesChanged } from './dataSourceEvents'
 
 type DataSourceAction =
   | 'list'
@@ -73,6 +74,7 @@ export async function requestSelectedTables(workspaceRoot: string): Promise<Sele
 export async function changeSelectedTables(workspaceRoot: string, sourceId: string, tables: string[], remove = false): Promise<SelectedDataTable[]> {
   const result = await runDataSourceAction(workspaceRoot, remove ? 'remove_tables' : 'add_tables', { sourceId, tables }, '更新已添加表。')
   if (!result.tables) throw new Error('接口未返回表清单。')
+  notifyDataSourcesChanged(workspaceRoot)
   return result.tables
 }
 
@@ -259,7 +261,7 @@ export async function createDataSource(
   workspaceRoot: string,
   source: DatabaseDataSourceInput | ExternalApiDataSourceInput
 ): Promise<DataSourceCatalog> {
-  return requireCatalog(
+  const catalog = requireCatalog(
     await runDataSourceAction(
       workspaceRoot,
       'create',
@@ -267,6 +269,8 @@ export async function createDataSource(
       `创建数据源 ${source.name}。`
     )
   )
+  notifyDataSourcesChanged(workspaceRoot)
+  return catalog
 }
 
 /** 更新一个独立数据源。 */
@@ -274,7 +278,7 @@ export async function updateDataSource(
   workspaceRoot: string,
   source: DatabaseDataSourceInput | ExternalApiDataSourceInput
 ): Promise<DataSourceCatalog> {
-  return requireCatalog(
+  const catalog = requireCatalog(
     await runDataSourceAction(
       workspaceRoot,
       'update',
@@ -282,6 +286,8 @@ export async function updateDataSource(
       `更新数据源 ${source.name}。`
     )
   )
+  notifyDataSourcesChanged(workspaceRoot)
+  return catalog
 }
 
 /** 删除一个独立数据源。 */
@@ -289,7 +295,7 @@ export async function deleteDataSource(
   workspaceRoot: string,
   sourceId: string
 ): Promise<DataSourceCatalog> {
-  return requireCatalog(
+  const catalog = requireCatalog(
     await runDataSourceAction(
       workspaceRoot,
       'delete',
@@ -297,6 +303,8 @@ export async function deleteDataSource(
       '删除独立数据源。'
     )
   )
+  notifyDataSourcesChanged(workspaceRoot)
+  return catalog
 }
 
 /** 校验一个尚未保存的数据源。 */
