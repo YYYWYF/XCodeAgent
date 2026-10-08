@@ -230,6 +230,11 @@ function ReadyCard({
   const pushedBranchName = repositoryBranch?.branchName || branchName
   const pushFailed = repositoryBranch?.status === 'failed'
 
+  // HEAD 的提交描述与短 commitId。自动提交由平台发起、用户没参与写信息，
+  // 必须显示出来，否则这个 commit 对用户是黑盒；未建立基线时用占位符兜底。
+  const headDescription = snapshot?.headMessage || '—'
+  const headShortSha = snapshot?.head.slice(0, 8) || '—'
+
   // 提交区该显示哪一行：见 templateCommitRow 的说明（这里最容易写出"建议一个做不到的动作"）。
   const commitRow = resolveTemplateCommitRow({
     showCommitArea: Boolean(workspaceRoot && !dismissed && !commitResult),
@@ -328,10 +333,11 @@ function ReadyCard({
                   : pushedBranchName
                     ? `已自动提交到版本 ${pushedBranchName}，无需手动操作`
                     : '已自动提交，无需手动操作'}
-              {/* 提交信息来自 HEAD（后端 headMessage）：自动提交是平台发起的，
-                  用户没参与写信息，所以要显示出来，否则这个 commit 对用户是黑盒。 */}
-              {snapshot?.headMessage ? ` · ${snapshot.headMessage}` : ''}
-              {` · ${snapshot?.head.slice(0, 8) || '—'}`}
+            </Text>
+            {/* 提交描述与 commitId 单独占一行：和上面的状态文案挤在同一行时既拥挤、
+                又让提交标识难以辨认。 */}
+            <Text type="secondary">
+              {`提交描述：[${headDescription}]，commitId：${headShortSha}`}
             </Text>
             {/* 推送失败时给一个可点的重试入口：这条推送只在 Bootstrap 时自动跑一次，
                 没有重试按钮的话用户只能等下次发起新迭代。 */}
