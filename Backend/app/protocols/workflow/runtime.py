@@ -1444,7 +1444,13 @@ def build_workflow_ag_ui_stream(
                                 "detail": {
                                     "ready": progress_detail.get("ready", len(ready_pages)),
                                     "total": progress_detail.get("total", 0),
-                                    "pageId": progress_detail.get("pageId"),
+                                    # 单页动作写 pageId；多页 adjust 逐页处理时节点写的是
+                                    # adjust_current。两者都是"当前正在生成的那一页"，
+                                    # 统一按 pageId 透出：前端据此点亮该页的「生成中」。
+                                    # 用户没 @ 指定页面时前端无从预知目标页，这条进度是
+                                    # 它唯一能知道"正在改哪一页"的来源。
+                                    "pageId": progress_detail.get("pageId")
+                                    or progress_detail.get("adjust_current"),
                                 },
                             },
                             attempt=progress_attempt,

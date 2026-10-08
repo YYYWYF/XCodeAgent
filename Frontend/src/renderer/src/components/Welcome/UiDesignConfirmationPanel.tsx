@@ -19,6 +19,8 @@ import type {
 import { cx } from '../../utils'
 import { useUiDesignPagesWithCode } from '../../hooks/useUiDesignPagesWithCode'
 import { shouldSettleAdjust } from '../../service/uiDesignAdjustSettlement'
+import { parseDesignMentions } from '../../service/designMention'
+import { uiDesignGenerationProgress } from '../../service/uiDesignGenerationProgress'
 import {
   designOriginKind,
   designOriginLabel,
@@ -233,27 +235,23 @@ export default function UiDesignConfirmationPanel({
     [pages, isPageGenerating]
   )
 
-  // 多页调整排队进度：从 workflow events 读 ui_confirmation.progress 的 detail。
-  const adjustProgress = useMemo(() => {
-    if (!actingSet.has('adjust')) return null
-    const events = workflow.events || []
-    for (let i = events.length - 1; i >= 0; i--) {
-      const ev = events[i]
-      if (ev.type === 'ui_confirmation.progress' && ev.data) {
-        const detail = ev.data as Record<string, unknown>
-        const total = typeof detail.adjust_total === 'number' ? detail.adjust_total : 0
-        const ready = typeof detail.adjust_ready === 'number' ? detail.adjust_ready : 0
-        if (total > 0) {
-          return { ready, total, message: ev.message || '' }
-        }
-      }
-    }
-    return null
-  }, [workflow.events, actingPageIds])
+  // 设计稿生成进度：文案 + 当前正在生成的那一页（见 uiDesignGenerationProgress 的说明）。
+  // 只在 adjust 进行中采信 pageId：run 结束后事件仍留在 workflow.events 里，
+  // 不加这道闸门会让那一页永远挂着「生成中」。
+  const generationProgress = useMemo(
+    () => uiDesignGenerationProgress(workflow.events),
+    [workflow.events]
+  )
+  const adjustingPageId = actingSet.has('adjust') ? generationProgress?.pageId : undefined
+  // 调整中的提示文案。adjust 期间所有页都已是 confirmed，若不占住这一行，下面会
+  // 显示「所有页面设计稿已确认，可以进入技术规划。」—— 正在生成时这么说等于误导。
+  const adjustingHint = actingSet.has('adjust')
+    ? generationProgress?.message || '正在调整设计稿…'
+    : ''
 
-  // adjust 完成收口：靠 **runId 换代 + run 落回待输入态** 判定，不用 adjustProgress ——
-  // `ui_confirmation.progress` 走的是 AG-UI 的进度通道，不会进入 workflow.events，
-  // 那个字段实际恒为 null（提示文案走的是 actingSet.has('adjust') 分支，不依赖它）。
+  // adjust 完成收口：靠 **runId 换代 + run 落回待输入态** 判定，不用进度事件 ——
+  // 进度只在生成过程中发，收尾那条也不带"本轮结束"的标记，拿它判完成会漏掉
+  // 最后一页之后的空档。
   //
   // 也不能只靠「先观察到 workflow 进入 running」：流式帧可能被批处理合并，错过 running
   // 会让 acting 永久卡住 —— 用户看到「一直在生成中」，而提示让他点「刷新」，那时却连
@@ -398,27 +396,13 @@ export default function UiDesignConfirmationPanel({
     [actingSet, flushPendingActions, isPageGenerating, onActivePageChange, pages, setActingPageIds]
   )
 
-  // 从输入框文本解析 @页面名 提及，映射回 pageId。
+  // 从输入框文本解析 @页面名 提及，映射回 pageId。按已知页面名/ID 做最长匹配，
+  // 不能按空白切分：页面名可以带空格（产品计划里的 "Hello World"，pageId 是
+  // hello_world），切出来的 "Hello" 匹配不到任何页，pageIds 为空会让本页不显示
+  // 「生成中」（后端仍会按 instruction 调整，表现为"预览变了、状态没动"）。
   const parseMentionedPageIds = useCallback(
-    (text: string): { pageIds: string[]; instruction: string } => {
-      const mentionRe = /@([^\s@]+)/g
-      const mentionedNames: string[] = []
-      let m: RegExpExecArray | null
-      while ((m = mentionRe.exec(text)) !== null) {
-        mentionedNames.push(m[1])
-      }
-      const pageIds: string[] = []
-      for (const name of mentionedNames) {
-        const found = pages.find(
-          (p) => (p.name || '') === name || (p.pageId || '') === name
-        )
-        if (found?.pageId && !pageIds.includes(found.pageId)) {
-          pageIds.push(found.pageId)
-        }
-      }
-      const instruction = text.replace(mentionRe, '').replace(/\s+/g, ' ').trim()
-      return { pageIds, instruction }
-    },
+    (text: string): { pageIds: string[]; instruction: string } =>
+      parseDesignMentions({ text, pages }),
     [pages]
   )
 
@@ -1007,12 +991,17 @@ export default function UiDesignConfirmationPanel({
             // acting 同时覆盖本地瞬时处理（actingSet）与后台生成池状态（queued/generating），
             // 二者都表示该页尚未产出设计稿、正在生成中。
             const acting = actingSet.has(pageId) || isPageGenerating(page)
+            // 展示口径比 acting 多一类：多页 adjust 逐页生成的那一页。它既不在本地
+            // 队列也不在生成池里（整轮都在同一个 run 内顺序处理），只能靠后端进度事件
+            // 认出来 —— 用户没 @ 指定页面时，这是唯一能点亮「生成中」的来源。
+            // 刻意不复用给「停止」按钮：本页不在池里，停不掉，不该显示停止。
+            const generating = acting || pageId === adjustingPageId
             return (
               <div
                 className={cx(
                   'ui-design-page-row',
                   confirmed && 'is-confirmed',
-                  acting && 'is-acting'
+                  generating && 'is-acting'
                 )}
                 key={pageId}
               >
@@ -1044,7 +1033,7 @@ export default function UiDesignConfirmationPanel({
                       </Text>
                     ) : null}
                   </div>
-                  {acting ? (
+                  {generating ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-generating')}>生成中</Tag>
                   ) : confirmed ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-confirmed')}>已确认</Tag>
@@ -1070,19 +1059,19 @@ export default function UiDesignConfirmationPanel({
                 <div className={cx('ui-design-page-row-actions')}>
                   <Button
                     className={cx('ui-design-action-btn')}
-                    disabled={!page.code || acting || (disabled && actingSet.has('adjust'))}
+                    disabled={!page.code || generating || (disabled && actingSet.has('adjust'))}
                     icon={<EyeOutlined />}
                     onClick={() => {
                       setActivePageId(pageId)
                       onActivePageChange?.(pageId)
                     }}
-                    title={acting ? '正在生成设计稿' : '在右侧查看设计稿'}
+                    title={generating ? '正在生成设计稿' : '在右侧查看设计稿'}
                   >
                     查看设计稿
                   </Button>
                   <Button
                     className={cx('ui-design-action-btn')}
-                    disabled={acting || templates.length === 0}
+                    disabled={generating || templates.length === 0}
                     icon={<LayoutOutlined />}
                     onClick={() => setTemplatePickerFor(pageId)}
                     title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
@@ -1101,9 +1090,16 @@ export default function UiDesignConfirmationPanel({
                   ) : (
                     <Button
                       className={cx('ui-design-action-btn', 'ui-design-action-btn-regenerate')}
+                      disabled={generating}
                       icon={<ReloadOutlined />}
                       onClick={() => submitPageAction(pageId, 'regenerate')}
-                      title={page.code ? '重新生成本页设计稿' : '生成本页设计稿'}
+                      title={
+                        generating
+                          ? '本页正在调整中，请等本轮结束'
+                          : page.code
+                            ? '重新生成本页设计稿'
+                            : '生成本页设计稿'
+                      }
                     >
                       {page.code ? '换一换' : '生成'}
                     </Button>
@@ -1167,8 +1163,8 @@ export default function UiDesignConfirmationPanel({
         </div>
         <div className={cx('ui-design-confirm-footer-row')}>
           <Text className={cx('ui-design-confirm-hint')} type="secondary">
-            {adjustProgress
-              ? `正在调整设计稿（第 ${adjustProgress.ready}/${adjustProgress.total} 页）…`
+            {adjustingHint
+              ? adjustingHint
               : allConfirmed
                 ? '所有页面设计稿已确认，可以进入技术规划。'
                 : `可为每个页面选模板或换一换生成设计稿，也可以直接跳过（已完成 ${confirmedCount}/${pages.length}）。`}

@@ -2803,6 +2803,88 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             "进度帧必须保留 pages，前端据此渲染左侧页面列表",
         )
 
+    def test_ui_confirmation_progress_forwards_adjusting_page_id(self) -> None:
+        """多页 adjust 的进度必须把「当前正在调整的那一页」透出为 pageId。
+
+        节点在逐页调整时写的是 `adjust_current`（单页动作才写 `pageId`）。runtime 若
+        只转发 `pageId`，这一路就是 None —— 用户没 @ 指定页面时前端无从预知目标页，
+        于是卡片上哪一行都不亮「生成中」，看起来像"点了没反应"（设计稿其实在改）。
+        """
+
+        class FakeAdjustProgressGraph:
+            async def astream(self, initial_state, *, config, stream_mode):
+                # 逐页调整的第 1 页开始：节点写 adjust_current，不写 pageId。
+                yield "custom", {
+                    "type": "ui_confirmation.progress",
+                    "node_name": "ui_confirmation",
+                    "message": "正在调整设计稿（第 1/2 页）：概览页",
+                    "detail": {
+                        "ready": 0,
+                        "total": 2,
+                        "pages": [
+                            {"pageId": "overview", "name": "概览页", "status": "confirmed"},
+                            {"pageId": "hello_world", "name": "Hello World", "status": "confirmed"},
+                        ],
+                        "adjust_total": 2,
+                        "adjust_ready": 0,
+                        "adjust_current": "overview",
+                    },
+                }
+                yield "updates", {
+                    "ui_confirmation": {
+                        "phase": "ui_confirmation",
+                        "status": "requires_user_input",
+                        "ui_designs": {
+                            "confirmation_status": "pending_user_confirmation",
+                            "pages": [
+                                {"pageId": "overview", "name": "概览页", "status": "confirmed"},
+                                {"pageId": "hello_world", "name": "Hello World", "status": "confirmed"},
+                            ],
+                        },
+                    }
+                }
+
+        async def collect() -> list[str]:
+            stream = build_workflow_ag_ui_stream(
+                graph=FakeAdjustProgressGraph(),
+                payload={
+                    "threadId": "thread-ui-adjust",
+                    "runId": "run-ui-adjust",
+                    "messages": [{"role": "user", "content": "把这个页面的文案改成粉色"}],
+                    "forwardedProps": {
+                        "workflowScope": "application_planning",
+                        "resumeFrom": "ui_confirmation",
+                        "resumeState": {
+                            "runId": "run-prev",
+                            "threadId": "thread-ui-adjust",
+                            "summary": {"status": "requires_user_input", "phase": "ui_confirmation"},
+                            "state": {"status": "requires_user_input", "phase": "ui_confirmation"},
+                            "events": [],
+                        },
+                    },
+                },
+                accept="text/event-stream",
+            )
+            return [frame async for frame in stream]
+
+        workflow_frames = _decode_workflow_run_frames(asyncio.run(collect()))
+        progress_events = [
+            event
+            for frame in workflow_frames
+            for event in frame.get("events", [])
+            if event.get("type") == "workflow.node.progress"
+            and event.get("nodeName") == "ui_confirmation"
+        ]
+        self.assertTrue(progress_events, "应至少转发一条 ui_confirmation 进度事件")
+        detail = progress_events[0].get("data", {}).get("detail", {})
+        self.assertEqual(
+            detail.get("pageId"),
+            "overview",
+            "adjust 的 adjust_current 必须映射为 pageId，前端据此点亮该页的生成中",
+        )
+        self.assertEqual(detail.get("ready"), 0)
+        self.assertEqual(detail.get("total"), 2)
+
     def test_requirements_node_started_does_not_carry_checkpoint_clarification(self) -> None:
         """需求阶段提交后 node.started 起始帧不能带上 checkpoint 的 clarification。
 
