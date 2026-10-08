@@ -1,4 +1,4 @@
-"""校验 Template Engine V3 `/v1/generate-next` ZIP 的 Bootstrap 契约。"""
+"""校验 Template Engine V3 `/v1/generate` ZIP 的 Bootstrap 契约。"""
 
 from __future__ import annotations
 

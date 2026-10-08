@@ -56,7 +56,7 @@ class TemplateEngineClientTests(unittest.TestCase):
             self.assertEqual(
                 json.loads(request.content),
                 {
-                    "protocolVersion": "2",
+                    "protocolVersion": "3",
                     "currentTemplateState": {"templateRevision": "v1"},
                     "requestedConfig": {"capabilities": {}},
                     "mode": "APPLY",
