@@ -24,10 +24,12 @@ from app.config import Settings
 from app.services.page_templates import load_template_source
 from app.services.ui_design_generator import (
     UiDesignStreamCancelled,
-    delete_page_code,
+    discard_stashed_page_code,
     generate_adjusted_page_react_code,
     generate_page_react_code,
     persist_page_code,
+    restore_stashed_page_code,
+    stash_page_code,
 )
 from app.services.ui_design_manifest import (
     UI_MANIFEST_SCHEMA_VERSION,
@@ -132,8 +134,9 @@ def generate_page_entry(
                 error=str(exc),
             )
 
-    # regenerate：删旧稿，绕过 load_page_code 复用，强制重新调 LLM。
-    delete_page_code(task.project_dir, task.page_key)
+    # regenerate：旧稿挪到暂存名（不删除），绕过 load_page_code 复用、强制重新调
+    # LLM；生成成功由 _process 丢弃暂存稿，取消/失败则恢复回来，不丢用户的设计稿。
+    stash_page_code(task.project_dir, task.page_key)
     try:
         code = generate_page_react_code(
             page,
@@ -303,9 +306,12 @@ class UiDesignGenerationPool:
             except UiDesignGenerationCancelled:
                 # 工作区删除或页级取消：cancel_page 已写回 cancelled 终态（页级），
                 # 工作区删除由删除流程自己处理状态，这里都不覆写。
-                pass
+                # 但"换一换"暂存的旧稿要恢复回来 —— 取消重新生成应当保留用户原有的
+                # 设计稿，而不是连它一起丢掉。
+                self._restore_stashed_code(task)
             except Exception as exc:  # noqa: BLE001 - worker 兜底，避免整池崩溃
                 logger.exception("ui_design_pool_worker_crashed page_id=%s", task.page_id)
+                self._restore_stashed_code(task)
                 await self._write_result(
                     task,
                     build_ui_page_manifest(
@@ -349,6 +355,18 @@ class UiDesignGenerationPool:
         if should_cancel():
             raise UiDesignGenerationCancelled("页面设计生成已取消。")
         await self._write_result(task, entry)
+        # 新稿已落盘并写入清单：暂存稿只是过期副本，丢弃，别在工作区留下垃圾文件。
+        discard_stashed_page_code(task.project_dir, task.page_key)
+
+    def _restore_stashed_code(self, task: UiDesignGenerationTask) -> None:
+        """生成未成功（取消/失败）时把"换一换"暂存的旧稿恢复回来。
+
+        工作区正在删除时跳过：整个工作区都会被移除，此时往里写文件没有意义。
+        """
+
+        if task.workspace in self._deleting_workspaces:
+            return
+        restore_stashed_page_code(task.project_dir, task.page_key)
 
     async def cancel_workspace(self, workspace: str, *, timeout_seconds: float = 30.0) -> dict[str, Any]:
         """封锁工作区后续设计任务，并等待已经进入模型调用的任务停止写入。"""
@@ -421,6 +439,26 @@ class UiDesignGenerationPool:
         )
         self._pending_ids.discard(key)
         return True
+
+    async def cancel_pending_pages(self, workspace: str) -> list[str]:
+        """取消工作区当前排队/生成中的所有页面，返回实际取消的 page_id。
+
+        与 `cancel_workspace` 的区别是这里**不封锁工作区**：`cancel_workspace` 是
+        应用删除语义，会把工作区永久加入 `_deleting_workspaces` 黑名单、拒绝之后
+        任何生成；而这里只取消"此刻在途"的任务，工作区仍可正常继续生成（用户跳过
+        UI 设计后仍可能回来调整页面）。
+
+        用于「跳过 UI 设计」：跳过表示不再等待生成，若放任 worker 跑完，它会继续把
+        结果写进 ui-designs.json，让已跳过的确认区仍显示"生成中"，落盘结果也与跳过
+        态相互矛盾。逐页走 `cancel_page` 复用同一套取消语义（queued 惰性出队、
+        generating 由 should_cancel 在返回后拦截落盘），无需重建队列。
+        """
+
+        cancelled: list[str] = []
+        for page_id in sorted(self.pending_page_ids(workspace)):
+            if await self.cancel_page(workspace, page_id):
+                cancelled.append(page_id)
+        return cancelled
 
     async def _write_result(
         self, task: UiDesignGenerationTask, entry: dict[str, Any]

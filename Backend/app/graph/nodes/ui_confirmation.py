@@ -182,13 +182,41 @@ def _ui_design_skipped_payload() -> dict[str, Any]:
 
 
 def _build_skipped_ui_designs(state: ProjectState) -> dict[str, Any]:
-    """构造并持久化用户主动跳过后的空 UI Manifest。"""
+    """构造并持久化用户主动跳过后的 UI Manifest。
+
+    跳过只表示"不再继续生成、不进入设计稿确认"，**不销毁已生成的设计稿**：pages
+    原样保留（含 confirmed / cancelled / generation_failed 等终态），只把
+    confirmation_status 置为 skipped。
+
+    为什么必须保留 pages：落盘的 ui-designs.json 同时是前端的磁盘权威事实 ——
+    useUiDesignPagesWithCode 每 2 秒轮询它，用来纠正 workflow 快照里陈旧的
+    queued/generating。若在此清空 pages，该页在磁盘上随之消失，前端两个纠正来源
+    （磁盘 status 与本地 override）会同时失效，已停止的卡片回退显示"生成中"。
+    保留 pages 后，跳过既不影响历史卡片的真实状态，也不丢已生成的设计稿。
+
+    build 阶段不会因此误用设计稿：`_ui_design_reference_instruction` 按
+    confirmation_status == "skipped" 返回"无视觉参考"指令。
+    """
+
+    # 优先读磁盘：池刚写下的 cancelled/confirmed 比 state 快照新。这里刻意不调
+    # _latest_ui_designs —— 它会把 queued/generating 的页重新入队自愈，而用户刚
+    # 跳过，重新拉起生成与跳过意图相悖。
+    manifest = load_ui_designs_json(ui_designs_json_path(state))
+    if not isinstance(manifest, dict):
+        manifest = {}
+    pages = manifest.get("pages")
+    if not isinstance(pages, list):
+        existing = state.get("ui_designs")
+        pages = existing.get("pages") if isinstance(existing, dict) else None
+        if not isinstance(pages, list):
+            pages = []
 
     ui_designs = {
+        **manifest,
         "schema_version": UI_MANIFEST_SCHEMA_VERSION,
         "confirmation_status": "skipped",
         "product_plan_sha256": _product_plan_hash(state),
-        "pages": [],
+        "pages": pages,
     }
     _persist_ui_designs(state, ui_designs)
     return ui_designs
@@ -830,6 +858,14 @@ async def ui_confirmation(state: ProjectState) -> dict:
             else _has_explicit_user_submission(state)
         )
     ):
+        # 跳过前先取消在途生成：否则 worker 会继续跑完并把结果写进 ui-designs.json，
+        # 让已跳过的确认区仍显示"生成中"，落盘结果也与跳过态矛盾。必须排在
+        # _build_skipped_ui_designs 之前 —— 它读磁盘 manifest，先取消才能把
+        # cancelled 终态一并带进跳过态。只取消在途任务，不封锁工作区
+        # （区别于删除应用用的 cancel_workspace）。
+        await get_ui_design_generation_pool().cancel_pending_pages(
+            str(workspace_root(state))
+        )
         ui_designs = _build_skipped_ui_designs(state)
         return {
             "phase": "ui_confirmation",

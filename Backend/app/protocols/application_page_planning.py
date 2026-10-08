@@ -601,7 +601,14 @@ def _build_application_planning_recovery_ag_ui_stream(
                 manifest = load_ui_designs_json(
                     ui_designs_json_path(dict(snapshot.values))
                 )
-                if isinstance(manifest, dict) and manifest.get("pages"):
+                # 跳过态的 manifest 现在保留 pages（前端要靠它做磁盘事实、设计稿也留
+                # 存），但"跳过"意味着确认面板不再列页面 —— 不排除 skipped 会在重新
+                # 打开工作区时把已跳过的页面重新列回确认界面。
+                if (
+                    isinstance(manifest, dict)
+                    and manifest.get("pages")
+                    and manifest.get("confirmation_status") != "skipped"
+                ):
                     # 正式 manifest 刻意剥离了 code（源码是运行时数据，不入库）。但确认界面
                     # 要靠它渲染预览、「查看设计稿」按钮也按它判可用性 —— 不回填的话，
                     # 重新打开工作区后每一页（本轮新生成的和继承来的都一样）都点不开。

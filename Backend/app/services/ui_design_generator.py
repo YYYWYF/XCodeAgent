@@ -39,6 +39,10 @@ UI_DESIGN_SKILL_NAME = "antd-ui-design"
 # .devagentstudio/ui-design/pages/<PageKey>/index.tsx，由前端 DesignRenderer 编译渲染）。
 PAGES_RELATIVE_DIR = "pages"
 
+# "换一换/重新生成"期间旧稿的暂存文件名：放在同一页面目录内，让 index.tsx 缺席
+# （load_page_code 的复用语义不变），但旧稿可恢复。
+_STASHED_PAGE_FILENAME = ".index.tsx.stashed"
+
 _FALLBACK_SKILL_NOTE = (
     "(antd-ui-design SKILL.md 未找到，请仍按以下规范生成：输出单个自包含 .tsx "
     "文件，React + antd5 + @ant-design/pro-components，Pro 系列从 "
@@ -1346,22 +1350,60 @@ def load_page_code(project_dir: str, page_key: str) -> str | None:
     return None
 
 
-def delete_page_code(project_dir: str, page_key: str) -> None:
-    """删除单页已落盘设计稿，供"重新生成"绕过 load_page_code 的复用。
+def stash_page_code(project_dir: str, page_key: str) -> bool:
+    """把已落盘的单页设计稿挪到同目录暂存名，返回是否确有旧稿被暂存。
 
-    删除整个页面目录（index.tsx 及同目录其他文件）。目录不存在时静默返回，
-    与 load_page_code 的缺失语义一致。
+    用于"换一换/重新生成"：生成期间 index.tsx 必须缺席，否则 load_page_code 的复用
+    路径（`_carried_ui_page_manifest` 等）会把旧稿当成新生成的结果。原实现
+    `delete_page_code` 在调模型**之前**就删掉旧稿 —— 生成失败或用户点停止时旧稿就
+    永久丢失了。改为挪到同目录暂存名：live 路径依旧缺席（复用语义完全不变），但旧稿
+    可以恢复，取消/失败时不再丢用户的设计稿。
     """
 
-    target_dir = pages_dir(project_dir) / page_key
-    if not target_dir.exists():
+    target = pages_dir(project_dir) / page_key / "index.tsx"
+    if not target.is_file():
+        return False
+    try:
+        target.replace(target.parent / _STASHED_PAGE_FILENAME)
+    except OSError:
+        logger.warning("ui_design_stash_failed page_key=%s", page_key)
+        return False
+    return True
+
+
+def restore_stashed_page_code(project_dir: str, page_key: str) -> str | None:
+    """把暂存的旧稿恢复为 index.tsx，返回恢复后的代码；无暂存稿返回 None。
+
+    只在 live 路径缺席时恢复：若新稿已经写入，暂存稿只是过期副本，直接丢弃 ——
+    不能覆盖一份已经成功生成的结果。
+    """
+
+    page_directory = pages_dir(project_dir) / page_key
+    stashed = page_directory / _STASHED_PAGE_FILENAME
+    if not stashed.is_file():
+        return None
+    target = page_directory / "index.tsx"
+    if target.is_file():
+        discard_stashed_page_code(project_dir, page_key)
+        return None
+    try:
+        stashed.replace(target)
+    except OSError:
+        logger.warning("ui_design_restore_failed page_key=%s", page_key)
+        return None
+    return _read_page_file(target)
+
+
+def discard_stashed_page_code(project_dir: str, page_key: str) -> None:
+    """丢弃暂存稿（生成成功后调用），避免在工作区留下过期副本。"""
+
+    stashed = pages_dir(project_dir) / page_key / _STASHED_PAGE_FILENAME
+    if not stashed.exists():
         return
     try:
-        import shutil
-
-        shutil.rmtree(target_dir)
+        stashed.unlink()
     except OSError:
-        logger.warning("ui_design_delete_failed page_key=%s", page_key)
+        logger.warning("ui_design_discard_stash_failed page_key=%s", page_key)
 
 
 def _read_page_file(target: Path) -> str | None:
