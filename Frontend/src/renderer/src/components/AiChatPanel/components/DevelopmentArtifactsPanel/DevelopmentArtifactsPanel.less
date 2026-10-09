@@ -16,8 +16,14 @@
   overflow: hidden;
   box-sizing: border-box;
   border-right: 1px solid var(--wb-border);
+  // 目录侧用浅灰底与右侧内容区（--wb-canvas 白/深）拉开层次，与 prototype 的
+  // development-artifacts-directory 同款取色。用 token，明暗主题自动适配。
+  background: var(--wb-surface-subtle);
 
   .@{class-prefix}-application-outline {
+    // ApplicationOutline 自带 --wb-canvas 白底，会盖住本菜单的灰底。
+    // 这里让出背景，灰底由父容器提供；不改该组件本身，因为左侧栏也在用它。
+    background: transparent;
     padding: 16px 12px 14px;
   }
 
