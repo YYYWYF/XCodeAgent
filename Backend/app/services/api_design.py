@@ -52,7 +52,7 @@ from app.services.api_design_schema import resolve_mapping_schema
 from app.services.data_sources import (
     DataSourceError,
     public_catalog,
-    resolve_direct_database_config,
+    resolve_database_config,
 )
 from app.services.frontend_page_tree import project_plan_page_records
 from app.tools.mysql_info import mysql_table_info
@@ -246,7 +246,7 @@ def initial_api_design_payload(
 
 
 def load_database_tables(workspace_root: str | Path, source_id: str) -> dict[str, Any]:
-    """实时读取直属 MySQL 表清单，不返回任何连接凭据。"""
+    """实时读取直连或 DBID MySQL 表清单，不返回任何连接凭据。"""
 
     payload = _mysql_metadata(workspace_root, source_id)
     schemas = payload.get("schemas") if isinstance(payload.get("schemas"), dict) else {}
@@ -267,7 +267,7 @@ def load_database_tables(workspace_root: str | Path, source_id: str) -> dict[str
 
 
 def load_database_columns(workspace_root: str | Path, source_id: str, table: str) -> dict[str, Any]:
-    """实时读取直属 MySQL 单表字段并转换为前端候选结构。"""
+    """实时读取直连或 DBID MySQL 单表字段并转换为前端候选结构。"""
 
     payload = _mysql_metadata(workspace_root, source_id, table=table)
     schemas = payload.get("schemas") if isinstance(payload.get("schemas"), dict) else {}
@@ -1400,7 +1400,7 @@ def _mysql_metadata(workspace_root: str | Path, source_id: str, *, table: str | 
     """解析内部凭据并调用既有只读 MySQL 元数据工具。"""
 
     try:
-        config = resolve_direct_database_config(workspace_root, source_id)
+        config = resolve_database_config(workspace_root, source_id)
         raw = mysql_table_info(
             host=config["host"],
             port=config["port"],
@@ -1415,7 +1415,7 @@ def _mysql_metadata(workspace_root: str | Path, source_id: str, *, table: str | 
     if not isinstance(payload, dict) or payload.get("status") != "ok":
         raise ApiDesignError(str(payload.get("error") or "数据库元数据读取失败。"))
     if payload.get("database_exists") is False:
-        raise ApiDesignError("直属 MySQL 的目标 Schema 不存在。")
+        raise ApiDesignError("MySQL 的目标 Schema 不存在。")
     return payload
 
 

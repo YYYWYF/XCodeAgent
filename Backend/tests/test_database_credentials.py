@@ -336,8 +336,8 @@ class ApplicationDatabaseCredentialTests(unittest.TestCase):
                 with self.assertRaisesRegex(DatabaseCredentialError, "平台内置数据库"):
                     resolve_application_mysql_config(workspace)
 
-    def test_dbid_database_fails_closed_without_environment_fallback(self) -> None:
-        """DBID 模式必须等待专用连接适配器，不能借用全局 MySQL 配置。"""
+    def test_dbid_database_uses_dbid_password_without_environment_fallback(self) -> None:
+        """DBID 模式从当前应用读取连接，默认密码为 DBID，不借用全局配置。"""
 
         with tempfile.TemporaryDirectory() as temporary_root:
             workspace = Path(temporary_root) / "dbid"
@@ -364,8 +364,10 @@ class ApplicationDatabaseCredentialTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.dict("os.environ", {"MYSQL_HOST": "global-host"}):
-                with self.assertRaisesRegex(DatabaseCredentialError, "DBID"):
-                    resolve_application_mysql_config(workspace)
+                config = resolve_application_mysql_config(workspace)
+            self.assertEqual(config.host, "db.local")
+            self.assertEqual(config.password, "dbid-1")
+            self.assertEqual(config.database, "inventory")
 
     def test_top_level_database_fields_are_not_used_as_application_credentials(self) -> None:
         """旧顶层 database 字段不能绕过 datasource.db 的统一配置入口。"""

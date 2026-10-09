@@ -64,7 +64,7 @@ function DatabaseRow({ source, onDelete, onEdit, onValidate }: { source: Databas
       <span className={cx('data-source-directory-row-icon')}><DatabaseOutlined /></span>
       <span className={cx('data-source-directory-row-main')}><span className={cx('data-source-directory-row-name')}>{source.name}</span></span>
       <span className={cx('data-source-directory-row-tags')}><Tag>{databaseModeLabel(source.mode)}</Tag><Tag>{source.managedTables.length} 张已添加表</Tag>{source.mode === 'direct' ? <Tag color={source.hasPassword ? 'green' : 'red'}>{source.hasPassword ? '密码已配置' : '缺少密码'}</Tag> : null}</span>
-      <span className={cx('data-source-directory-row-actions')} onClick={(event) => event.stopPropagation()}><MoreActions actions={[...(source.mode === 'direct' ? [{ key: 'validate', label: '检测连接', onClick: () => onValidate(source) }] : []), { key: 'edit', label: '编辑', onClick: () => onEdit(source) }, { key: 'delete', label: '删除', danger: true, onClick: () => onDelete(source) }]} /></span>
+      <span className={cx('data-source-directory-row-actions')} onClick={(event) => event.stopPropagation()}><MoreActions actions={[...(source.mode !== 'builtin' ? [{ key: 'validate', label: '检测连接', onClick: () => onValidate(source) }] : []), { key: 'edit', label: '编辑', onClick: () => onEdit(source) }, { key: 'delete', label: '删除', danger: true, onClick: () => onDelete(source) }]} /></span>
     </div>
   )
 }

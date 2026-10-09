@@ -67,10 +67,14 @@ export default function DataSourceEditorModal({ createType, editing, onClose, on
     setError('')
   }, [createType, editing, open])
 
-  /** 将数据库表单转换为后端输入，并对新密码使用平台加密。 */
+  /** 按连接模式构造输入，DBID 仅提交标识，直连的新密码使用平台加密。 */
   const buildDatabaseSource = async (): Promise<DatabaseDataSourceInput> => {
-    const source: DatabaseDataSourceInput = { type: 'database', id: editing?.type === 'database' ? editing.id : undefined, name: database.name.trim(), mode: database.mode, domain: database.domain.trim() || undefined, port: database.port ? Number(database.port) : undefined, schema: database.schema.trim() || undefined, userName: database.userName.trim() || undefined, dbid: database.dbid.trim() || undefined }
-    if (database.password.trim()) source.passwordCiphertext = await encryptPlantModePassword(database.password.trim())
+    const source: DatabaseDataSourceInput = { type: 'database', id: editing?.type === 'database' ? editing.id : undefined, name: database.name.trim(), mode: database.mode }
+    if (database.mode === 'builtin') return source
+    Object.assign(source, { domain: database.domain.trim() || undefined, port: database.port ? Number(database.port) : undefined, schema: database.schema.trim() || undefined, userName: database.userName.trim() || undefined })
+    // 模式切换保留表单草稿，但提交时不携带另一种模式的密码或 DBID。
+    if (database.mode === 'dbid') source.dbid = database.dbid.trim() || undefined
+    else if (database.password.trim()) source.passwordCiphertext = await encryptPlantModePassword(database.password.trim())
     return source
   }
 
@@ -128,7 +132,7 @@ export default function DataSourceEditorModal({ createType, editing, onClose, on
   return (
     <Modal
       bodyStyle={{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', padding: '0 24px 24px' }} centered className={cx('data-source-editor-modal')} destroyOnClose
-      footer={<div className={cx('data-source-modal-footer')}>{onDelete && editing ? <Button className={cx('data-source-modal-delete')} danger disabled={saving} onClick={onDelete}>{editing.type === 'external_api' ? '删除域' : '删除连接'}</Button> : null}<Button disabled={saving} onClick={cancel}>取消</Button><Button loading={saving} onClick={() => void handleValidate()}>{kind === 'database' && database.mode === 'direct' ? '检测连接' : '校验配置'}</Button><Button loading={saving} onClick={() => void handleSave()} type="primary">保存</Button></div>}
+      footer={<div className={cx('data-source-modal-footer')}>{onDelete && editing ? <Button className={cx('data-source-modal-delete')} danger disabled={saving} onClick={onDelete}>{editing.type === 'external_api' ? '删除域' : '删除连接'}</Button> : null}<Button disabled={saving} onClick={cancel}>取消</Button><Button loading={saving} onClick={() => void handleValidate()}>{kind === 'database' && database.mode !== 'builtin' ? '检测连接' : '校验配置'}</Button><Button loading={saving} onClick={() => void handleSave()} type="primary">保存</Button></div>}
       keyboard={!saving} maskClosable={!saving} onCancel={cancel} wrapClassName={cx('data-source-editor-modal-wrap', `theme-${theme}`)} title={kind === 'external_api' ? (editing ? '域设置' : '新增接口域') : (editing ? '连接设置' : '新增数据库连接')} visible={open} width={kind === 'external_api' ? 560 : 880}
     >
       {error ? <Alert className={cx('data-source-editor-error')} message={error} showIcon type="error" /> : null}
@@ -139,14 +143,14 @@ export default function DataSourceEditorModal({ createType, editing, onClose, on
           <Divider orientation="left">连接模式</Divider>
           <Radio.Group disabled={saving} onChange={(event) => setDatabase({ ...database, mode: event.target.value })} options={[{ label: '平台内置', value: 'builtin' }, { label: 'DBID', value: 'dbid' }, { label: '数据库直连', value: 'direct' }]} value={database.mode} />
           {database.mode !== 'builtin' ? <div className={cx('data-source-form-grid')}>
-            <label><span>{database.mode === 'direct' ? <em className={cx('data-source-required')}>*</em> : null}数据库地址</span><Input onChange={(event) => setDatabase({ ...database, domain: event.target.value })} value={database.domain} /></label>
-            <label><span>{database.mode === 'direct' ? <em className={cx('data-source-required')}>*</em> : null}端口</span><InputNumber className={cx('data-source-full-control')} min={1} max={65535} onChange={(value) => setDatabase({ ...database, port: value ? String(value) : '' })} value={database.port ? Number(database.port) : undefined} /></label>
-            <label><span>{database.mode === 'direct' ? <em className={cx('data-source-required')}>*</em> : null}Schema</span><Input onChange={(event) => setDatabase({ ...database, schema: event.target.value })} value={database.schema} /></label>
-            <label><span>{database.mode === 'direct' ? <em className={cx('data-source-required')}>*</em> : null}用户名</span><Input onChange={(event) => setDatabase({ ...database, userName: event.target.value })} value={database.userName} /></label>
+            <label><span><em className={cx('data-source-required')}>*</em>数据库地址</span><Input onChange={(event) => setDatabase({ ...database, domain: event.target.value })} value={database.domain} /></label>
+            <label><span><em className={cx('data-source-required')}>*</em>端口</span><InputNumber className={cx('data-source-full-control')} min={1} max={65535} onChange={(value) => setDatabase({ ...database, port: value ? String(value) : '' })} value={database.port ? Number(database.port) : undefined} /></label>
+            <label><span><em className={cx('data-source-required')}>*</em>Schema</span><Input onChange={(event) => setDatabase({ ...database, schema: event.target.value })} value={database.schema} /></label>
+            <label><span><em className={cx('data-source-required')}>*</em>用户名</span><Input onChange={(event) => setDatabase({ ...database, userName: event.target.value })} value={database.userName} /></label>
             {database.mode === 'dbid' ? <label><span><em className={cx('data-source-required')}>*</em>DBID</span><Input onChange={(event) => setDatabase({ ...database, dbid: event.target.value })} value={database.dbid} /></label> : null}
             {database.mode === 'direct' ? <label><span>{editing?.type === 'database' && editing.hasPassword ? null : <em className={cx('data-source-required')}>*</em>}密码{editing?.type === 'database' && editing.hasPassword ? '（留空保持不变）' : ''}</span><Input.Password autoComplete="new-password" onChange={(event) => setDatabase({ ...database, password: event.target.value })} value={database.password} /></label> : null}
           </div> : <Text type="secondary">平台内置数据库不需要填写外部连接信息。</Text>}
-          {database.mode === 'dbid' ? <Text type="secondary">DBID 当前只保存配置并执行静态校验，暂不发起连接检测。</Text> : null}
+          {database.mode === 'dbid' ? <Text type="secondary">数据库密码通过 DBID 自动获取，无需填写。</Text> : null}
         </div>
       ) : (
         <div className={cx('data-source-editor-form')}>

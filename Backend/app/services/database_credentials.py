@@ -5,7 +5,7 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.services.database_crypto import (
     DatabaseCryptoError,
@@ -48,8 +48,10 @@ def load_application_json(workspace_root: str | Path) -> dict[str, Any]:
     return payload
 
 
-def read_plant_mode(application: dict[str, Any]) -> dict[str, Any]:
-    """从应用配置中提取唯一支持直接连接的 datasource.db.plantMode。"""
+def read_database_mode(
+    application: dict[str, Any],
+) -> tuple[Literal["direct", "dbid"], dict[str, Any]]:
+    """从应用配置中提取唯一的直连或 DBID 数据库连接模式。"""
 
     datasource = application.get("datasource")
     if not isinstance(datasource, dict):
@@ -77,14 +79,22 @@ def read_plant_mode(application: dict[str, Any]) -> dict[str, Any]:
             "当前应用同时配置了 plantMode 和 dbidMode，无法确定数据库连接模式。"
         )
     if dbid_mode is not None:
-        raise DatabaseCredentialError(
-            "当前应用使用 DBID 数据库连接模式，暂不支持直接建立 MySQL 连接。"
-        )
+        if not isinstance(dbid_mode, dict):
+            raise DatabaseCredentialError("当前应用的 datasource.db.dbidMode 必须是对象。")
+        return "dbid", dbid_mode
     if plant_mode is None:
         raise DatabaseCredentialError("当前应用未配置 datasource.db.plantMode。")
     if not isinstance(plant_mode, dict):
         raise DatabaseCredentialError("当前应用的 datasource.db.plantMode 必须是对象。")
-    return plant_mode
+    return "direct", plant_mode
+
+
+def resolve_dbid_password(dbid: str) -> str:
+    """通过 DBID 获取运行时数据库密码，供连接检测及所有后续连接统一调用。"""
+
+    # TODO(DBID_PASSWORD): 接入通过 DBID 获取密码的特殊方式；当前默认返回 DBID 本身。
+    # 真实取密逻辑只替换此处，密码仅供本次后端连接使用，不回写配置或公开响应。
+    return _required_text(dbid, "DBID")
 
 
 def decrypt_application_password(
@@ -105,17 +115,17 @@ def decrypt_application_password(
 
 
 def validate_mysql_config(
-    plant_mode: dict[str, Any],
+    connection_fields: dict[str, Any],
     *,
+    mode: Literal["direct", "dbid"],
     key_file: Path | None = None,
 ) -> MySQLConnectionConfig:
-    """校验 plantMode 字段并映射为 MySQLConnectionConfig。"""
+    """校验共享连接字段，按直连解密或 DBID 取密映射为 MySQL 配置。"""
 
-    host = _required_text(plant_mode.get("domain"), "domain")
-    user = _required_text(plant_mode.get("userName"), "userName")
-    database = _required_text(plant_mode.get("schema"), "schema")
-    password = decrypt_application_password(plant_mode.get("pwd"), key_file=key_file)
-    raw_port = plant_mode.get("port")
+    host = _required_text(connection_fields.get("domain"), "domain")
+    user = _required_text(connection_fields.get("userName"), "userName")
+    database = _required_text(connection_fields.get("schema"), "schema")
+    raw_port = connection_fields.get("port")
     if isinstance(raw_port, bool):
         raise DatabaseCredentialError("当前应用的数据库端口必须是合法整数。")
     try:
@@ -124,6 +134,14 @@ def validate_mysql_config(
         raise DatabaseCredentialError("当前应用的数据库端口必须是合法整数。") from exc
     if not 1 <= port <= 65535:
         raise DatabaseCredentialError("当前应用的数据库端口必须在 1 到 65535 之间。")
+    if mode == "dbid":
+        if connection_fields.get("pwd") or connection_fields.get("passwordCiphertext"):
+            raise DatabaseCredentialError("DBID 数据库不应保存直连密码。")
+        password = resolve_dbid_password(connection_fields.get("dbid"))
+        if not isinstance(password, str) or not password:
+            raise DatabaseCredentialError("DBID 取密未返回有效的数据库密码。")
+    else:
+        password = decrypt_application_password(connection_fields.get("pwd"), key_file=key_file)
     return MySQLConnectionConfig(
         host=host,
         port=port,
@@ -142,10 +160,8 @@ def resolve_application_mysql_config(
 
     if workspace_root is None or not str(workspace_root).strip():
         raise DatabaseCredentialError("缺少当前应用工作区，无法读取数据库连接配置。")
-    return validate_mysql_config(
-        read_plant_mode(load_application_json(workspace_root)),
-        key_file=key_file,
-    )
+    mode, connection_fields = read_database_mode(load_application_json(workspace_root))
+    return validate_mysql_config(connection_fields, mode=mode, key_file=key_file)
 
 
 def build_mysql_jdbc_url(config: MySQLConnectionConfig) -> str:

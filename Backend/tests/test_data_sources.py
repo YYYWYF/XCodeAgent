@@ -637,12 +637,12 @@ class DataSourcesServiceTests(unittest.TestCase):
             "passwordCiphertext": ciphertext,
         }
         with patch(
-            "app.services.data_sources.decrypt_password", return_value="plain-password"
+            "app.services.database_credentials.decrypt_password", return_value="plain-password"
         ) as decrypt, patch.dict(sys.modules, {"pymysql": SimpleNamespace(connect=connect)}):
             result = validate_source(source)
 
         self.assertEqual(result, {"valid": True, "connection": "ok"})
-        decrypt.assert_called_once_with(ciphertext)
+        decrypt.assert_called_once_with(ciphertext, key_file=None)
         self.assertEqual(connect.call_args.kwargs["password"], "plain-password")
         connection.close.assert_called_once_with()
 
@@ -677,12 +677,12 @@ class DataSourcesServiceTests(unittest.TestCase):
             "userName": "app2",
         }
         with patch(
-            "app.services.data_sources.decrypt_password", return_value="plain-password"
+            "app.services.database_credentials.decrypt_password", return_value="plain-password"
         ) as decrypt, patch.dict(sys.modules, {"pymysql": SimpleNamespace(connect=connect)}):
             result = validate_source(edited_source, self.workspace)
 
         self.assertEqual(result, {"valid": True, "connection": "ok"})
-        decrypt.assert_called_once_with(ciphertext)
+        decrypt.assert_called_once_with(ciphertext, key_file=None)
         self.assertEqual(connect.call_args.kwargs["password"], "plain-password")
 
     def test_database_connection_error_is_clear_and_hides_driver_class_name(self) -> None:
@@ -700,7 +700,7 @@ class DataSourcesServiceTests(unittest.TestCase):
             "passwordCiphertext": "devagentstudio-secret:v1:rsa-oaep-256:platform-key-v1:cipher",
         }
         with patch(
-            "app.services.data_sources.decrypt_password", return_value="plain-password"
+            "app.services.database_credentials.decrypt_password", return_value="plain-password"
         ), patch.dict(sys.modules, {"pymysql": SimpleNamespace(connect=connect)}):
             with self.assertRaises(DataSourceError) as raised:
                 validate_source(source)

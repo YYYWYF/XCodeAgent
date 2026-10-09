@@ -20,7 +20,12 @@ from app.persistence.data_sources import (
     read_sources,
     write_sources,
 )
-from app.services.database_crypto import DatabaseCryptoError, decrypt_password, is_encrypted_password
+from app.services.database_crypto import is_encrypted_password
+from app.services.database_credentials import (
+    DatabaseCredentialError,
+    MySQLConnectionConfig,
+    validate_mysql_config,
+)
 from app.services.data_source_json_fields import (
     DataSourceFieldType,
     DataSourceJsonFieldError,
@@ -777,28 +782,22 @@ def validate_saved_source(workspace_root: str | Path, source_id: str) -> dict[st
 
 
 def validate_source(source: dict[str, Any], workspace_root: str | Path | None = None) -> dict[str, Any]:
-    """校验单个数据源，并对直连数据库执行只读连接检测。"""
+    """校验单个数据源，并对直连和 DBID 数据库执行只读连接检测。"""
 
     candidate = _source_with_stored_password(source, workspace_root)
     _validate_source(candidate)
-    if candidate.get("type") != "database" or candidate.get("mode") != "direct":
+    if candidate.get("type") != "database" or candidate.get("mode") == "builtin":
         return {"valid": True, "connection": "not_tested"}
-    password_ciphertext = str(candidate.get("passwordCiphertext") or "")
-    try:
-        password = decrypt_password(password_ciphertext)
-    except DatabaseCryptoError as exc:
-        raise DataSourceError(
-            "数据库密码已加密，但当前环境无法解密；请确认使用当前后端的加密公钥，或重新保存密码。"
-        ) from exc
+    config = _source_mysql_config(candidate)
     try:
         import pymysql
 
         connection = pymysql.connect(
-            host=str(candidate["domain"]),
-            port=int(candidate["port"]),
-            user=str(candidate["userName"]),
-            password=password,
-            database=str(candidate["schema"]),
+            host=config.host,
+            port=config.port,
+            user=config.user,
+            password=config.password,
+            database=config.database,
             connect_timeout=5,
             read_timeout=5,
         )
@@ -810,11 +809,11 @@ def validate_source(source: dict[str, Any], workspace_root: str | Path | None = 
     return {"valid": True, "connection": "ok"}
 
 
-def resolve_direct_database_config(
+def resolve_database_config(
     workspace_root: str | Path,
     source_id: str,
 ) -> dict[str, Any]:
-    """为受信任的后端服务解析直属 MySQL 连接，禁止公开密文或明文密码。"""
+    """为受信任的后端服务解析直连或 DBID MySQL，禁止公开密码。"""
 
     sources = _read_catalog(workspace_root)
     source = next(
@@ -829,24 +828,31 @@ def resolve_direct_database_config(
         raise DataSourceError("目标数据库数据源不存在。")
     if source.get("type") != "database":
         raise DataSourceError("目标数据源不是数据库。")
-    if source.get("mode") != "direct":
-        raise DataSourceError("当前数据库模式不支持实时读取元数据，仅直属 MySQL 可用。")
-    password_ciphertext = str(source.get("passwordCiphertext") or "")
-    try:
-        password = decrypt_password(password_ciphertext)
-    except DatabaseCryptoError as exc:
-        raise DataSourceError(
-            "数据库密码无法解密，请重新保存当前直属 MySQL 数据源。"
-        ) from exc
+    config = _source_mysql_config(source)
     return {
         "sourceId": str(source["id"]),
         "name": str(source.get("name") or source["id"]),
-        "host": str(source.get("domain") or ""),
-        "port": int(source.get("port") or 3306),
-        "user": str(source.get("userName") or ""),
-        "password": password,
-        "database": str(source.get("schema") or ""),
+        "host": config.host,
+        "port": config.port,
+        "user": config.user,
+        "password": config.password,
+        "database": config.database,
     }
+
+
+def _source_mysql_config(source: dict[str, Any]) -> MySQLConnectionConfig:
+    """把目录连接投影到共享凭据解析器，统一覆盖检测与后续元数据读取。"""
+
+    mode = source.get("mode")
+    if mode not in {"direct", "dbid"}:
+        raise DataSourceError("当前数据库模式不支持实时连接，仅直连或 DBID MySQL 可用。")
+    connection_fields = dict(source)
+    if mode == "direct":
+        connection_fields["pwd"] = source.get("passwordCiphertext")
+    try:
+        return validate_mysql_config(connection_fields, mode=mode)
+    except DatabaseCredentialError as exc:
+        raise DataSourceError(str(exc)) from exc
 
 
 def _source_with_stored_password(
