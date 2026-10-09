@@ -1617,9 +1617,12 @@ export default function AiChatPanel({
         { key: 'preview', label: '预览', available: Boolean(application.workspaceRoot) },
         { key: 'source', label: '应用文件', available: Boolean(application.workspaceRoot) },
         { key: 'field-mapping', label: '字段映射', available: Boolean(application.workspaceRoot) },
-        { key: 'doc', label: '文档', available: true },
+        // 开发阶段不再提供「文档」tab：非设计/计划阶段时 designDocContent 恒为固定
+        // 占位文案「当前暂无设计文档。」，这个 tab 没有任何实际内容。
         { key: 'stage-output', label: '待确认计划', available: true }
       ]
+  // 开发阶段（非计划阶段）的兜底落在「开发产物」上：该阶段已无「文档」tab，
+  // 回退到 doc 会导致没有任何 tab 高亮，内容区还会渲染那个固定占位文案。
   const activeWorkspaceTab: WorkspaceTabKey = isApplicationPlanningPhase
     ? activeDesignDocKey ||
       designDocs?.find((doc) => doc.available)?.key ||
@@ -1633,7 +1636,7 @@ export default function AiChatPanel({
           ? 'source'
           : rightPanel?.type === 'stage-output'
             ? 'stage-output'
-            : 'doc'
+            : 'outline'
   const openWorkspaceTab = useCallback(
     (key: WorkspaceTabKey) => {
       if (isApplicationPlanningPhase) {
@@ -1649,8 +1652,6 @@ export default function AiChatPanel({
         setRightPanel({ type: 'preview' })
       } else if (key === 'source') {
         setRightPanel({ type: 'source' })
-      } else if (key === 'doc') {
-        setRightPanel({ type: 'doc' })
       }
     },
     [designDocs, generatingDesignDocKey, isApplicationPlanningPhase, setRightPanel]
@@ -3626,6 +3627,7 @@ export default function AiChatPanel({
     activeWorkflowPhase,
     applicationId: application.id,
     isApplicationPlanningPhase,
+    reportPhaseActive: activeWorkbenchPhase === 'test',
     rightPanel,
     rightPanelOpen,
     setRightPanel,
@@ -3642,6 +3644,7 @@ export default function AiChatPanel({
     activeWorkflowPhase,
     applicationId: application.id,
     isApplicationPlanningPhase,
+    reportPhaseActive: activeWorkbenchPhase === 'review',
     rightPanel,
     rightPanelOpen,
     setRightPanel,
@@ -3657,7 +3660,8 @@ export default function AiChatPanel({
       setRightPanel({ type: 'review-report' })
       return
     }
-    setRightPanel(testReportAvailable ? { type: 'test-report' } : { type: 'doc' })
+    // 开发阶段已无「文档」tab，兜底回落到「开发产物」。
+    setRightPanel(testReportAvailable ? { type: 'test-report' } : { type: 'outline' })
   }, [
     codeDiffVisible,
     reviewReportAvailable,
@@ -3670,8 +3674,20 @@ export default function AiChatPanel({
     ? workspaceTabs
     : [
         ...workspaceTabs,
-        { key: 'test-report', label: '测试报告', available: testReportAvailable },
-        { key: 'review-report', label: '审查报告', available: reviewReportAvailable }
+        // 报告 tab 只在各自阶段出现：测试报告属于测试阶段、审查报告属于审查阶段，
+        // 开发阶段不展示，避免右侧 tab 过多。
+        ...(activeWorkbenchPhase === 'test'
+          ? [{ key: 'test-report' as const, label: '测试报告', available: testReportAvailable }]
+          : []),
+        ...(activeWorkbenchPhase === 'review'
+          ? [
+              {
+                key: 'review-report' as const,
+                label: '审查报告',
+                available: reviewReportAvailable
+              }
+            ]
+          : [])
       ]
   const displayedWorkspaceTab: WorkspaceTabKey =
     !isApplicationPlanningPhase && rightPanel?.type === 'test-report'

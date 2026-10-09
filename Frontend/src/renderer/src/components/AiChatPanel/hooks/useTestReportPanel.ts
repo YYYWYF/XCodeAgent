@@ -8,6 +8,12 @@ type Params = {
   activeWorkflowPhase: string
   applicationId: string
   isApplicationPlanningPhase: boolean
+  /**
+   * 当前工作台阶段是否为「测试阶段」。报告 tab 只在测试阶段出现，所以可用性必须
+   * 一并按阶段门控 —— 只隐藏 tab 不够：离开阶段后 rightPanel.type 仍可能停在
+   * test-report，渲染块按 type 判断会继续渲染报告，而 tab 条里已没有对应 tab。
+   */
+  reportPhaseActive: boolean
   rightPanel?: RightPanelState
   rightPanelOpen: boolean
   setRightPanel: (panel?: RightPanelState) => void
@@ -55,6 +61,7 @@ export function useTestReportPanel({
   activeWorkflowPhase,
   applicationId,
   isApplicationPlanningPhase,
+  reportPhaseActive,
   rightPanel,
   rightPanelOpen,
   setRightPanel,
@@ -67,7 +74,9 @@ export function useTestReportPanel({
   const handledReportRef = useRef('')
   const reportResult = readWorkflowTestReportResult(workflow)
   const path = String(reportResult?.reportPath || '').trim()
-  const available = Boolean(path)
+  // 可用性 = 报告已落盘 **且** 当前处在测试阶段；阶段不符时置为不可用，
+  // 下方重置 effect 才会把面板从 test-report 挪走。
+  const available = Boolean(path) && reportPhaseActive
   const testPhaseCompleted = [workflow?.summary?.phase, activeWorkflowPhase].some(
     (phase) => String(phase || '') === 'review_phase_confirmation'
   )
@@ -111,7 +120,8 @@ export function useTestReportPanel({
 
   useEffect(() => {
     if (!isApplicationPlanningPhase && rightPanel?.type === 'test-report' && !available) {
-      setRightPanel({ type: 'doc' })
+      // 开发阶段已无「文档」tab，回落到「开发产物」。
+      setRightPanel({ type: 'outline' })
     }
   }, [available, isApplicationPlanningPhase, rightPanel, setRightPanel])
 
