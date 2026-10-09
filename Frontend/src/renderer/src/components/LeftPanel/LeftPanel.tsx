@@ -54,7 +54,6 @@ type Props = {
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
-  onThemeChange: (theme: 'light' | 'dark') => void
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
@@ -107,7 +106,6 @@ export default function LeftPanel({
   onStartDesignStageRevision,
   onStartIterationPlanning,
   onRevisionContinuationHandlerChange,
-  onThemeChange,
   onPlanningStreamReady,
   onSavePlanningRequirementSpec,
   onStopPlanning,
@@ -150,7 +148,6 @@ export default function LeftPanel({
             onStartDesignStageRevision={onStartDesignStageRevision}
             onStartIterationPlanning={onStartIterationPlanning}
             onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
-            onThemeChange={onThemeChange}
             onPlanningStreamReady={onPlanningStreamReady}
             onSavePlanningRequirementSpec={onSavePlanningRequirementSpec}
             onStopPlanning={onStopPlanning}

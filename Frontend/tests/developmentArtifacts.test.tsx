@@ -4,6 +4,8 @@ import './workbenchPhaseNavigation.test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
+  developmentArtifactTotals,
+  developmentPlanningTotals,
   developmentCompletedCount,
   developmentStatusLabel,
   gateWorkbenchPhase,
@@ -13,6 +15,7 @@ import { WorkbenchPhaseProvider } from '../src/renderer/src/context/WorkbenchPha
 import { useWorkbenchPhase } from '../src/renderer/src/context/workbenchPhaseState'
 import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
 import DevelopmentStatusDot from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/DevelopmentStatusDot'
+import ApplicationOutline from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline'
 import ApiOutlineGroup from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/ApiOutlineGroup'
 import TestPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/TestPhaseConfirmationCard'
 import PlanExecutionDock from '../src/renderer/src/components/AiChatPanel/components/PlanExecutionDock'
@@ -42,7 +45,7 @@ const allowed: TestEntryGate = {
   reason: null
 }
 
-test('新会话卡片按权威状态显示页面、接口和实体三态', () => {
+test('新会话卡片只显示页面和接口，不提供实体设计入口', () => {
   const html = renderToStaticMarkup(
     <QuickTaskGuide
       pages={[
@@ -79,11 +82,11 @@ test('新会话卡片按权威状态显示页面、接口和实体三态', () =>
   assert.match(html, />接口</)
   for (const [status, label] of [
     ['completed', '已初次完成'],
-    ['in_progress', '开发中'],
-    ['pending', '未开发']
+    ['in_progress', '开发中']
   ]) {
     assert.match(html, new RegExp(`data-status="${status}">${label}</span>`))
   }
+  assert.doesNotMatch(html, /实体|data-status="pending"/)
 })
 
 test('开发产物接口树展示 Contract 和 Endpoint 名称并通过悬停提供路径', () => {
@@ -117,14 +120,41 @@ test('开发产物接口树展示 Contract 和 Endpoint 名称并通过悬停提
   assert.match(html, /查询商品列表，GET \/api\/product/)
 })
 
-test('测试门禁正确展示未确认的实体名称', () => {
-  const html = renderConfirmation({
-    ...blocked,
-    blockers: [{ type: 'entity', entityId: 'AgeRecord' }]
-  })
-  assert.match(html, /实体/)
-  assert.match(html, /AgeRecord/)
-  assert.doesNotMatch(html, /undefined|进入测试阶段/)
+test('开发目录只呈现页面和 Endpoint，规划实体不显示为开发产物', () => {
+  const html = renderToStaticMarkup(
+    <ApplicationOutline
+      apiContracts={[]}
+      entities={[{ id: 'Order', label: '订单实体', purpose: '规划定义' }]}
+      pages={[]}
+      pageTree={[]}
+      outlineLocked={false}
+      selectedPageId=""
+      selectedApiEndpointKey=""
+      selectedEntityId="Order"
+      onPageSelect={() => undefined}
+      onApiEndpointSelect={() => undefined}
+      onEntitySelect={() => assert.fail('实体不应提供开发入口')}
+    />
+  )
+  assert.match(html, /页面|接口/)
+  assert.doesNotMatch(html, /实体|Order/)
+})
+
+test('完成比例只统计页面和 Endpoint，实体状态不影响阶段准入', () => {
+  const artifacts = {
+    pages: { page: { initialDevelopmentStatus: 'completed' as const } },
+    endpoints: { api: { get: { initialDevelopmentStatus: 'completed' as const } } },
+    entities: { Order: { initialDevelopmentStatus: 'pending' as const } }
+  }
+  assert.deepEqual(developmentArtifactTotals(artifacts), { completed: 2, total: 2 })
+  assert.deepEqual(developmentPlanningTotals(
+    [{ pageId: 'page', key: 'page', label: '页面', path: '/page', purpose: '', designed: false }],
+    [{ id: 'api', label: '接口', endpoints: [{ id: 'get', method: 'GET', path: '/api', summary: '' }] }],
+    artifacts
+  ), { completed: 2, total: 2 })
+  assert.deepEqual(developmentPlanningTotals([], [], artifacts), { completed: 0, total: 0 })
+  artifacts.entities.Order.initialDevelopmentStatus = 'pending'
+  assert.equal(gateWorkbenchPhase('test', { ...allowed, completed: 2, total: 2 }), 'test')
 })
 
 /** 构造实际阶段 Provider 和 revision 合并测试所需的生命周期快照。 */
@@ -243,7 +273,7 @@ test('底部阶段提示遵循全应用开发门禁，2/3 不声称可以进入�
     completed: 2,
     pending: 1,
     inProgress: 0,
-    blockers: [{ type: 'entity', entityId: 'remaining' }],
+    blockers: [{ type: 'endpoint', apiContractId: 'api', endpointId: 'remaining' }],
     reason: '完成全部开发产物后可进入测试，当前 2/3。'
   }
   for (const mode of [

@@ -145,7 +145,7 @@ function QuickTaskSection({
   )
 }
 
-/** 在空白对话区并排展示页面、接口与实体快捷任务，并保留底部自由输入入口。 */
+/** 在空白对话区并排展示页面与接口快捷任务，并保留底部自由输入入口。 */
 export default function QuickTaskGuide({
   developmentArtifacts,
   currentBranch,
@@ -162,7 +162,6 @@ export default function QuickTaskGuide({
   )
   const pageTasks = tasks.filter((task) => task.kind === 'page')
   const endpointTasks = tasks.filter((task) => task.kind === 'endpoint')
-  const entityTasks = tasks.filter((task) => task.kind === 'entity')
 
   return (
     <div className={cx('quick-task-guide')}>
@@ -173,7 +172,7 @@ export default function QuickTaskGuide({
         <div>
           <Title level={3}>今天想从哪里开始？</Title>
           <Text type="secondary">
-            选择一个页面、接口或实体开始正式任务，也可以直接在下方自由对话。
+            选择一个页面或接口开始正式任务，也可以直接在下方自由对话。
           </Text>
         </div>
       </header>
@@ -202,15 +201,7 @@ export default function QuickTaskGuide({
             title="接口"
             type="endpoint"
           />
-          <QuickTaskSection
-            currentBranch={currentBranch}
-            disabled={disabled}
-            emptyText="项目计划中暂无实体。"
-            items={entityTasks}
-            onStart={onStart}
-            title="实体"
-            type="entity"
-          />
+
         </div>
       )}
     </div>

@@ -42,8 +42,9 @@ BACKEND_TECH_STACK_REQUIREMENT = (
 )
 DATASOURCE_PENDING_REQUIREMENT = (
     "The application has no app-level data source type. Do NOT emit data_source on any entity and "
-    "do NOT emit a data_sources section in ProjectPlan; every entity's data source is decided and "
-    "confirmed later during the entity-design stage. API contracts still bind entity_ids and keep "
+    "do NOT emit a data_sources section in ProjectPlan. Entities define business semantics only; "
+    "physical sources and field mappings are confirmed per Endpoint in the API-design workspace. "
+    "Do not require an independent entity-design stage. API contracts still bind entity_ids and keep "
     "schemas, operations, endpoint ids, methods and paths. Keep the default Java8 + Springboot + "
     "MySQL8 + Redis architecture boundary in ProjectPlan.architecture."
 )
@@ -293,7 +294,7 @@ def _planning_prompt(
     existing_plan: dict[str, Any] | None = None,
     datasource_type: DatasourceType | None = None,
 ) -> str:
-    """构造项目规划提示；数据源不属于应用级，实体数据源由实体设计阶段决定。"""
+    """构造项目规划提示；实体保留业务定义，物理数据来源由 Endpoint 字段映射决定。"""
 
     if isinstance(requirement_spec.get("confirmed_product_plan"), dict):
         return _technical_planning_prompt(
@@ -322,7 +323,7 @@ def _planning_prompt(
         "technical references needed to implement the confirmed UI.\n"
         f"{datasource_requirement}\n"
         "Never assign, infer, or persist a data source type on entities or as a top-level "
-        "data_sources section; entities stay source-free until the entity-design stage.\n"
+        "data_sources section; entities stay source-free. Physical bindings belong to Endpoint API design.\n"
         "If RequirementSpec.app_info.route_root_path is present and non-empty, treat it as the fixed page root route prefix. "
         "All emitted page paths and all non-empty menu unique_path values must stay under that root prefix.\n"
         "If RequirementSpec.app_info.menu_enabled is true, the application uses menus. In that case, no business page may use the bare root route "

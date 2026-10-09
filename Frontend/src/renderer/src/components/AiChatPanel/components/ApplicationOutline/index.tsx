@@ -1,6 +1,5 @@
 import {
   CaretDownOutlined,
-  DatabaseOutlined,
   FilterOutlined,
   LockOutlined,
   SearchOutlined
@@ -20,8 +19,6 @@ import { cx } from '../../../../utils'
 import './ApplicationOutline.less'
 import { OutlineRow } from './outlineHelpers'
 import ApiOutlineGroup from './ApiOutlineGroup'
-import DevelopmentStatusDot from './DevelopmentStatusDot'
-import IterationBadge from '../../../../components/IterationBadge'
 import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import {
   collectRelatedKeys,
@@ -59,21 +56,17 @@ export default function ApplicationOutline({
   developmentArtifacts,
   currentBranch,
   apiContracts = [],
-  entities = [],
   onApiEndpointSelect,
-  onEntitySelect,
   onPageSelect,
   outlineLocked,
   pages,
   pageTree,
   selectedApiEndpointKey,
-  selectedEntityId,
   selectedPageId
 }: ApplicationOutlineProps): ReactElement {
   const [outlineQuery, setOutlineQuery] = useState('')
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apiExpanded, setApiExpanded] = useState(true)
-  const [entitiesExpanded, setEntitiesExpanded] = useState(true)
   const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(
     () => new Set()
   )
@@ -125,17 +118,6 @@ export default function ApplicationOutline({
       return endpoints.length > 0 ? [{ ...contract, endpoints }] : []
     })
   }, [apiContracts, outlineQuery])
-  const visibleEntities = useMemo(() => {
-    const query = outlineQuery.trim().toLocaleLowerCase()
-    if (!query) return entities
-    return entities.filter(
-      (entity) =>
-        entity.id.toLocaleLowerCase().includes(query) ||
-        entity.label.toLocaleLowerCase().includes(query) ||
-        entity.purpose.toLocaleLowerCase().includes(query)
-    )
-  }, [entities, outlineQuery])
-
   /** 独立切换一个 API contract 分组，避免多个资源同时收起或展开。 */
   const handleApiContractToggle = (contractId: string): void => {
     setCollapsedApiContractIds((current) => {
@@ -150,16 +132,16 @@ export default function ApplicationOutline({
     <div className={cx('application-outline')}>
       <fieldset
         aria-disabled={outlineLocked}
-        aria-label={outlineLocked ? '页面产物暂不可操作，API 与实体仍可选择' : '开发产物'}
+        aria-label={outlineLocked ? '页面产物暂不可操作，API 仍可选择' : '开发产物'}
         className={cx('session-outline-lock-shell')}
       >
         <div className={cx('session-outline-content')}>
           <Input
             allowClear
-            aria-label="搜索页面、接口或实体"
+            aria-label="搜索页面或接口"
             className={cx('session-search')}
             onChange={(event) => setOutlineQuery(event.target.value)}
-            placeholder="搜索页面、接口或实体"
+            placeholder="搜索页面或接口"
             prefix={<SearchOutlined />}
             value={outlineQuery}
           />
@@ -269,64 +251,7 @@ export default function ApplicationOutline({
               ) : null}
             </section>
 
-            <section className={cx('outline-section', 'entity-section')}>
-              <button
-                aria-expanded={entitiesExpanded}
-                className={cx('outline-section-heading')}
-                onClick={() => setEntitiesExpanded((current) => !current)}
-                type="button"
-              >
-                <CaretDownOutlined className={cx(!entitiesExpanded && 'collapsed')} />
-                <span>实体</span>
-                <span className={cx('development-count')}>
-                  {developmentCompletedCount(
-                    entities.map((entity) => developmentArtifacts?.entities[entity.id])
-                  )}
-                  /{entities.length}
-                </span>
-              </button>
-              {entitiesExpanded ? (
-                <div className={cx('entity-group')}>
-                  {visibleEntities.map((entity) => {
-                    return (
-                      <div className={cx('entity-node')} key={entity.id}>
-                        <button
-                          aria-current={selectedEntityId === entity.id ? 'true' : undefined}
-                          className={cx('entity-row', selectedEntityId === entity.id && 'selected')}
-                          onClick={() => onEntitySelect(entity)}
-                          title={entity.purpose}
-                          type="button"
-                        >
-                          <span className={cx('entity-icon')}>
-                            <DatabaseOutlined />
-                          </span>
-                          <span className={cx('entity-copy')}>
-                            <span className={cx('outline-label-row')}>
-                              <span className={cx('outline-label')}>{entity.label}</span>
-                              <DevelopmentStatusDot
-                                progress={developmentArtifacts?.entities[entity.id]}
-                              />
-                              <IterationBadge
-                                artifactBranch={
-                                  developmentArtifacts?.entities[entity.id]?.completedBranchName
-                                }
-                                currentBranch={currentBranch}
-                              />
-                            </span>
-                            <span className={cx('entity-meta')}>{entity.id}</span>
-                          </span>
-                        </button>
-                      </div>
-                    )
-                  })}
-                  {visibleEntities.length === 0 ? (
-                    <div className={cx('outline-empty')}>
-                      project_plan.json 的 entities 中暂无实体
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </section>
+
           </div>
         </div>
         {outlineLocked ? (

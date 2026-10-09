@@ -126,7 +126,6 @@ import TemporaryChatOverlay from './components/TemporaryChatOverlay'
 import QuickTaskGuide from './components/QuickTaskGuide'
 import type { QuickTaskItem } from './components/QuickTaskGuide/quickTasks'
 import WorkspaceDebugDock from './components/WorkspaceDebugDock'
-import EntityInfoPanel from './components/EntityInfoPanel'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import DataSourcesDrawer from '../DataSourcesPage/DataSourcesDrawer'
@@ -327,7 +326,6 @@ type Props = {
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
-  onThemeChange: (theme: 'light' | 'dark') => void
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
@@ -743,33 +741,6 @@ function detailTargetKey(target: ActiveDetailTarget): string {
   return ''
 }
 
-/** 判断 Workflow 是否已经返回详细设计确认卡片，避免外层选择器遮住待确认内容。 */
-function workflowHasDetailReview(workflow: unknown): boolean {
-  if (!workflow || typeof workflow !== 'object') return false
-  const payload = workflow as {
-    events?: Array<{ data?: Record<string, unknown> }>
-    result?: Record<string, unknown>
-    state?: Record<string, unknown>
-    summary?: Record<string, unknown>
-  }
-  return [
-    payload.summary?.clarification,
-    payload.state?.clarification,
-    payload.result?.clarification,
-    ...(payload.events || []).map((event) => {
-      const detail = event.data?.detail
-      return detail && typeof detail === 'object'
-        ? (detail as Record<string, unknown>).clarification
-        : undefined
-    })
-  ].some(
-    (clarification) =>
-      clarification &&
-      typeof clarification === 'object' &&
-      (clarification as Record<string, unknown>).mode === 'entity_source_binding'
-  )
-}
-
 /** 按页面名称递归查找对应的菜单配置。 */
 function findPageMenuItem(
   items: ApplicationMenuItem[],
@@ -854,7 +825,6 @@ export default function AiChatPanel({
   onStartDesignStageRevision,
   onStartIterationPlanning,
   onRevisionContinuationHandlerChange,
-  onThemeChange,
   onPlanningStreamReady,
   onSavePlanningRequirementSpec,
   onStopPlanning,
@@ -902,8 +872,8 @@ export default function AiChatPanel({
   // 临时对话仅控制覆盖层可见性，不切换当前工作流会话或持久化上下文。
   const [temporaryChatOpen, setTemporaryChatOpen] = useState(false)
   // 设计阶段自由变更是主规划 Workflow 的显式中断模式，默认保持锁定。
-  const [interactingDetailTargetKey, setInteractingDetailTargetKey] = useState('')
-  const [generatingDetailTargetKey, setGeneratingDetailTargetKey] = useState('')
+  const [, setInteractingDetailTargetKey] = useState('')
+  const [, setGeneratingDetailTargetKey] = useState('')
   const [acceptanceRejecting, setAcceptanceRejecting] = useState(false)
   const acceptanceRejectingRef = useRef(false)
   // 元素审查：是否激活 + 当前审查的元素上下文。两者语义相关，合并减少 state 数量。
@@ -3841,43 +3811,12 @@ export default function AiChatPanel({
     uncommittedPaths: uncommittedSnapshot?.codePaths ?? [],
     moduleOwnedFiles
   })
-  const activeSessionTargetKey = currentStageSessionTargetKey
-  const activeWorkflowTargetKey = workflowDetailTargetKey(latestWorkflowForDisplay)
-  const activeWorkflowMatchesTarget = Boolean(
-    activeTargetKey &&
-      (activeWorkflowTargetKey
-        ? activeWorkflowTargetKey === activeTargetKey
-        : activeSessionTargetKey
-          ? activeSessionTargetKey === activeTargetKey
-          : interactingDetailTargetKey === activeTargetKey)
-  )
-  const detailConfirmationWaitingReview =
-    !loading &&
-    activeWorkflowMatchesTarget &&
-    (activeWorkflowPhase === 'entity_source_binding' ||
-      workflowHasDetailReview(latestWorkflowForDisplay))
-  const detailProgressVisible =
-    loading &&
-    // 新一轮运行尚未收到实时 Workflow 时，不能使用历史消息中的旧快照显示页面进度。
-    Boolean(activeWorkflow) &&
-    activeWorkflowMatchesTarget &&
-    (generatingDetailTargetKey === activeTargetKey ||
-      activeWorkflowPhase === 'entity_source_binding') &&
-    developmentPlanningReady &&
-    Boolean(activeApiEndpoint || activePageOption) &&
-    !detailConfirmationWaitingReview
   const activeSessionUpdatedAt = sessions.find(
     (session) => session.id === activeSessionId
   )?.updatedAt
   const entityDetailTarget = activeDetailTarget.type === 'entity' ? activeDetailTarget : undefined
-  // 当前目标启动阶段会话后直接展示设计对话；已设计且无活动会话时展示信息面板（查看设计）。
+  // 仅保留当前实体运行的身份判断，不再展示独立实体信息或设计面板。
   const entitySessionActive = Boolean(entityDetailTarget && activeSession)
-  const showEntityInfoPanel = Boolean(
-    entityDetailTarget &&
-      Boolean(activeEntityOption?.designed || activeEntityOption?.hasDetailPlan) &&
-      !entitySessionActive &&
-      !detailProgressVisible
-  )
 
   // 实体会话真实开始运行（进入 loading）时记录，切换会话后复位。
   // 合并原两个 effect：切换会话时 reset（依赖 activeSessionId），运行中 set true（依赖 loading 等）。
@@ -4809,7 +4748,6 @@ export default function AiChatPanel({
             onShowExternalApis={handleShowExternalApis}
             onShowSettings={handleShowSettings}
             onShowSkills={handleShowSkills}
-            onThemeChange={onThemeChange}
             pages={displayedPlanningPages}
             pageTree={displayedPlanningPageTree}
             apiContracts={developmentPlanningApiContracts}
@@ -4836,14 +4774,6 @@ export default function AiChatPanel({
             <AgentFilesPage />
           ) : activeView === 'settings' ? (
             <SettingsPage application={application} onSaved={onApplicationUpdate} />
-          ) : showEntityInfoPanel ? (
-            <div className={cx('ai-chat-main')}>
-              <EntityInfoPanel
-                entity={activeEntityOption}
-                theme={theme}
-                workspaceRoot={application.workspaceRoot || ''}
-              />
-            </div>
           ) : (
             <div className={cx('ai-chat-main', showGlobalFallback && 'has-global-fallback')}>
               {activeDetailTarget.type !== 'none' ? (

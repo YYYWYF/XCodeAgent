@@ -238,7 +238,7 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
 
 
 def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
-    """从同一 lifecycle 快照计算计数与门禁，空集合永不自动放行。"""
+    """只检查页面和 Endpoint 的完成事实；技术规划实体不要求独立设计，空集合不放行。"""
 
     artifacts = state.development_artifacts
     records = [
@@ -248,10 +248,6 @@ def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
         (DevelopmentArtifactTarget(type="endpoint", apiContractId=contract, endpointId=key), progress)
         for contract, endpoints in artifacts.endpoints.items()
         for key, progress in endpoints.items()
-    ] + [
-        (DevelopmentArtifactTarget(type="entity", entityId=key), progress)
-        for key, progress in artifacts.entities.items()
-        if progress.initial_development_status != "skipped"
     ]
     # Build 计划只描述当前目标的执行范围；不能据此跳过其他尚未初次完成的产物。
     completed = sum(progress.initial_development_status == "completed" for _, progress in records)

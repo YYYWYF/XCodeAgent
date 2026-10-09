@@ -419,7 +419,9 @@ export default function WorkflowRunCard({
           ))}
         </div>
       )}
+      {/* API 映射门禁使用专用卡片，即使没有通用问题列表也必须提供配置和确认入口。 */}
       {(clarificationQuestions.length > 0 ||
+        apiDesignRequired ||
         unitTestConfirmation ||
         detailReview ||
         technicalPlanGenerationError ||

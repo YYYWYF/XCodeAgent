@@ -166,46 +166,41 @@
   white-space: nowrap;
 }
 
-/* —— 右侧状态提示（Agent + 跟随旅程）—— */
-.@{class-prefix}-workbench-topbar-tail {
+/* —— 右侧快捷区（主题切换 + 预览开关）——
+   margin-left: auto 由本容器承担，把整组推到最右；主题开关排在预览开关左侧。
+   两个按钮共用同一套盒子尺寸与字体继承上下文，图标大小因此天然一致。 */
+.@{class-prefix}-workbench-topbar-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   margin-left: auto;
   flex: 0 0 auto;
 }
 
-.@{class-prefix}-workbench-topbar-agent {
-  color: var(--wb-text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.@{class-prefix}-workbench-topbar-follow {
-  cursor: default;
-  user-select: none;
-}
-
-/* —— 右侧预览开关（VSCode 式，归属顶栏而非对话区）—— */
+.@{class-prefix}-workbench-topbar-theme-toggle,
 .@{class-prefix}-workbench-topbar-preview-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 26px;
   height: 26px;
-  margin-right: 4px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   cursor: pointer;
   color: var(--wb-text-tertiary);
   flex: 0 0 auto;
+  /* 刻意不设 font-size：与同组按钮共用同一继承上下文，两个图标尺寸保持一致。 */
 
   &:hover {
     background: var(--wb-surface-hover);
     color: var(--wb-text);
   }
+}
+
+/* —— 右侧预览开关（VSCode 式，归属顶栏而非对话区）—— */
+.@{class-prefix}-workbench-topbar-preview-toggle {
+  margin-right: 4px;
 
   &.@{class-prefix}-active {
     color: var(--wb-accent);
