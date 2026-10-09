@@ -211,8 +211,9 @@
     min-width: 140px;
     height: 38px;
     padding: 0 18px;
-    border: 0;
+    border: 1px solid transparent;
     border-radius: 7px;
+    color: var(--wb-canvas);
     background: linear-gradient(135deg, var(--wb-accent-active), var(--wb-accent-hover));
     box-shadow: 0 10px 22px color-mix(in srgb, var(--wb-accent) 22%, transparent);
     font-size: 14px;
@@ -220,7 +221,24 @@
 
     &:hover:not(:disabled),
     &:focus-visible:not(:disabled) {
+      color: var(--wb-canvas);
       background: linear-gradient(135deg, var(--wb-accent), var(--wb-accent-hover));
+    }
+
+    &:focus-visible:not(:disabled) {
+      outline: 2px solid var(--wb-accent);
+      outline-offset: 3px;
+    }
+
+    // 禁用态移除紫色渐变与阴影，避免 Ant Design 的禁用文字与背景对比不足。
+    &:disabled,
+    &:disabled:hover,
+    &:disabled:focus {
+      color: var(--wb-text-secondary);
+      border-color: var(--wb-border-strong);
+      background: var(--wb-control);
+      box-shadow: none;
+      opacity: 1;
     }
   }
 
