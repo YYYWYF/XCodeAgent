@@ -70,6 +70,31 @@
   }
 }
 
+/* 全宽：中间对话容器不参与横向分配，释放出的空间由右侧工作区完整接管。
+   注意仍需 .embedded-preview-open 同时成立（右侧有内容），否则会出现对话区归零、
+   右侧空白。 */
+.@{class-prefix}-ai-chat-panel.@{class-prefix}-right-panel-full.@{class-prefix}-embedded-preview-open {
+  .@{class-prefix}-ai-chat-assistant {
+    flex: 0 0 0;
+    width: 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .@{class-prefix}-ai-chat-main {
+    display: none;
+  }
+}
+
+/* 三档控件作为右侧面板的**兄弟节点**渲染（prototype 是渲染在右侧容器内部），
+   所以分栏态不能沿用它的 left:0 —— 那是容器左边缘，在这里会跑到整个面板最左侧。
+   这里把它对齐到分隔线：右侧容器起点正是 --assistant-panel-width。
+   隐藏/全宽态的 floating 用 right:0，兄弟节点下即为整块最右边线，无需覆盖。 */
+.@{class-prefix}-ai-chat-panel
+  > .@{class-prefix}-right-panel-layout-control.@{class-prefix}-docked {
+  left: var(--assistant-panel-width, 66.6667%);
+}
+
 .@{class-prefix}-element-inspection-active {
   .@{class-prefix}-panel-split-handle {
     cursor: default;

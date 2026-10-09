@@ -1,6 +1,7 @@
+import type { Dispatch, SetStateAction } from 'react'
 import { useState } from 'react'
 import type { ApplicationOutlineProps } from '../components/ApplicationOutline'
-import type { RightPanelState } from '../types'
+import type { RightPanelLayout, RightPanelState } from '../types'
 
 type ArtifactSelection = {
   applicationId: string
@@ -15,7 +16,8 @@ type ArtifactSelection = {
 type Options = {
   applicationId: string
   setRightPanel: (panel?: RightPanelState) => void
-  onRightPanelOpenChange: (open: boolean) => void
+  /** 打开产物详情时需要确保右侧可见；隐藏态下切回分栏，已是分栏/全宽则不动。 */
+  setRightPanelLayout: Dispatch<SetStateAction<RightPanelLayout>>
 }
 
 type DevelopmentArtifactDetail = {
@@ -36,7 +38,7 @@ type DevelopmentArtifactDetail = {
 export function useDevelopmentArtifactDetail({
   applicationId,
   setRightPanel,
-  onRightPanelOpenChange
+  setRightPanelLayout
 }: Options): DevelopmentArtifactDetail {
   const [selection, setSelection] = useState<ArtifactSelection>()
   const currentSelection = selection?.applicationId === applicationId ? selection : undefined
@@ -45,7 +47,8 @@ export function useDevelopmentArtifactDetail({
   const openDetail = (target: Omit<ArtifactSelection, 'applicationId'>): void => {
     setSelection({ ...target, applicationId })
     setRightPanel({ type: 'outline' })
-    onRightPanelOpenChange(true)
+    // 隐藏态下打开详情要恢复可见；已是分栏/全宽则保持用户当前布局。
+    setRightPanelLayout((current) => (current === 'hidden' ? 'split' : current))
   }
 
   /** 点击页面只打开该页面的空白详情。 */

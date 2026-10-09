@@ -75,12 +75,10 @@ type Props = {
   /** 当前应用唯一的 Planning 业务状态。 */
   planningState?: ApplicationPlanningCurrentState
   theme: 'light' | 'dark'
-  rightPanelOpen: boolean
   /** 正在查看历史分支：对话区改为只读的应用文件/应用预览双 tab。 */
   versionReadOnly?: boolean
   /** 所查看历史分支的分支名：应用文件与预览按它读取该分支当时的内容。 */
   viewedBranchName?: string
-  onRightPanelOpenChange: (open: boolean) => void
 }
 
 /** 组合工作台左侧应用导航与主 Workflow 面板。 */
@@ -117,10 +115,8 @@ export default function LeftPanel({
   onRetryTemplateReconcile,
   planningState,
   theme,
-  rightPanelOpen,
   versionReadOnly = false,
-  viewedBranchName,
-  onRightPanelOpenChange
+  viewedBranchName
 }: Props): ReactElement {
   return (
     <div className={cx('left-panel-wrapper')}>
@@ -159,8 +155,6 @@ export default function LeftPanel({
             onRetryTemplateReconcile={onRetryTemplateReconcile}
             planningState={planningState}
             theme={theme}
-            rightPanelOpen={rightPanelOpen}
-            onRightPanelOpenChange={onRightPanelOpenChange}
             versionReadOnly={versionReadOnly}
             viewedBranchName={viewedBranchName}
           />

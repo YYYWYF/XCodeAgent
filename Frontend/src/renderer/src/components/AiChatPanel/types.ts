@@ -59,6 +59,14 @@ export type RightPanelState =
       view?: 'stage' | 'confirmation'
     }
 
+/**
+ * 右侧工作区的三档布局：隐藏、分栏、全宽。
+ *
+ * 取代了原先布尔式的"右侧面板是否打开"——那只能表达开/关，无法表达"全宽覆盖"，
+ * 也无法让分隔线上的三档控件有稳定的状态源。
+ */
+export type RightPanelLayout = 'hidden' | 'split' | 'full'
+
 export type ChatCopy = Record<
   EditorMode,
   { title: string; description: string; placeholder: string; label: string }

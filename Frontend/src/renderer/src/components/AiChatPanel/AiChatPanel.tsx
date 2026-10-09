@@ -1,4 +1,3 @@
-import { HolderOutlined } from '@ant-design/icons'
 import { Alert, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -120,6 +119,7 @@ import RightPanelTabs, {
   type WorkspaceTab,
   type WorkspaceTabKey
 } from './components/RightPanelTabs'
+import RightPanelLayoutControl from './components/RightPanelLayoutControl'
 import ReleasedVersionPanel from './components/ReleasedVersionPanel'
 import SessionSidebar from './components/SessionSidebar'
 import TemporaryChatOverlay from './components/TemporaryChatOverlay'
@@ -161,7 +161,7 @@ import {
   resolveApplicationMutationOwnership
 } from './applicationOwnership'
 import { chatCopy } from './constants'
-import type { AgentChatMessage, WorkspaceDocKey } from './types'
+import type { AgentChatMessage, RightPanelLayout, WorkspaceDocKey } from './types'
 import type { EndpointDesignSaveResult } from '../../typings'
 import { workflowDevelopmentContinuation } from './developmentContinuation'
 import {
@@ -347,12 +347,10 @@ type Props = {
   /** 当前应用唯一的 Planning 业务状态。 */
   planningState?: ApplicationPlanningCurrentState
   theme: 'light' | 'dark'
-  rightPanelOpen: boolean
   /** 正在查看历史分支：对话区替换为只读的应用文件/应用预览双 tab。 */
   versionReadOnly?: boolean
   /** 所查看历史分支的分支名：应用文件与预览按它读取该分支当时的内容。 */
   viewedBranchName?: string
-  onRightPanelOpenChange: (open: boolean) => void
 }
 
 type ActiveView = 'chat' | 'skills' | 'files' | 'settings' | 'dataSources' | 'externalApis'
@@ -836,8 +834,6 @@ export default function AiChatPanel({
   onRetryTemplateReconcile,
   planningState,
   theme,
-  rightPanelOpen,
-  onRightPanelOpenChange,
   versionReadOnly = false,
   viewedBranchName
 }: Props): ReactElement {
@@ -1052,7 +1048,6 @@ export default function AiChatPanel({
   const isDesignPhase = activeWorkbenchPhase === 'product'
   const isTechnicalPlanningPhase = activeWorkbenchPhase === 'planning'
   const isApplicationPlanningPhase = isDesignPhase || isTechnicalPlanningPhase
-  const showDevelopmentSidebarActions = activeWorkbenchPhase === 'development'
   const {
     acquireSessionExecution,
     releaseSessionExecution,
@@ -1067,10 +1062,8 @@ export default function AiChatPanel({
     formalRevisionSessionIdentitiesRef.current = {}
   }, [application.id, isApplicationPlanningPhase, planningThreadId, application.workspaceRoot])
 
-  // 离开开发阶段时收回仅开发阶段开放的工具页面，保证非开发阶段只保留临时对话和主题切换。
-  useEffect(() => {
-    if (!showDevelopmentSidebarActions && activeView !== 'chat') setActiveView('chat')
-  }, [activeView, showDevelopmentSidebarActions])
+  // 左侧快捷入口（历史对话/文件/技能/设置等）在各阶段保持一致，不再随阶段收回，
+  // 因此这里也不再强制把工具页面切回 chat。
   // 模板生成完成后（lifecycle 变为 ready_for_workbench），derivedPhase 自动变 development。
   // 前端拦截：保持 product 阶段，等用户点"进入开发"按钮后才放开（switchPhase(null) 恢复跟随旅程）。
   // 用 sessionStorage 按 applicationId 记录用户是否已确认进入开发，跨重挂载保持。
@@ -1181,14 +1174,51 @@ export default function AiChatPanel({
     handlePanelSplitDragStart,
     panelRef,
     panelStyle,
+    rightPanelLayout,
     rightPanel,
+    setRightPanelLayout,
     setRightPanel,
     splitDragging
-  } = useAssistantPreviewLayout({ rightPanelOpen })
+  } = useAssistantPreviewLayout()
+  /**
+   * 需要展示右侧内容时确保它可见：隐藏态切回分栏；已是分栏/全宽则保持用户当前布局，
+   * 不把用户特意选的「全宽」降级回分栏。
+   */
+  const ensureRightPanelVisible = useCallback((): void => {
+    setRightPanelLayout((current) => (current === 'hidden' ? 'split' : current))
+  }, [setRightPanelLayout])
+  /**
+   * 三档布局切换。隐藏只收起工作区、不清除当前 tab，恢复后回到用户上一次看的内容；
+   * 分栏/全宽在没有面板内容时先给一个稳定的文档工作区，避免切过去是空的。
+   */
+  const handleRightPanelLayoutChange = useCallback(
+    (layout: RightPanelLayout): void => {
+      if (layout !== 'hidden' && !rightPanel) setRightPanel({ type: 'doc' })
+      setRightPanelLayout(layout)
+    },
+    [rightPanel, setRightPanel, setRightPanelLayout]
+  )
+  /**
+   * 阶段默认布局（移植自 prototype）：进入验收阶段默认全宽（验收以应用预览为主），
+   * 进入审查阶段回到分栏，避免验收带入的全宽残留。其余阶段保持用户当前选择。
+   *
+   * 只在右侧确有内容时才切全宽：没有面板时全宽会让对话区归零、右侧却空白。
+   */
+  const previousPhaseForLayoutRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const previous = previousPhaseForLayoutRef.current
+    previousPhaseForLayoutRef.current = activeWorkbenchPhase
+    if (previous === activeWorkbenchPhase) return
+    if (activeWorkbenchPhase === 'acceptance' && rightPanel) {
+      setRightPanelLayout('full')
+      return
+    }
+    if (activeWorkbenchPhase === 'review') setRightPanelLayout('split')
+  }, [activeWorkbenchPhase, rightPanel, setRightPanelLayout])
   const { artifactDetailLabel, artifactOutlineProps, apiTarget } = useDevelopmentArtifactDetail({
     applicationId: application.id,
     setRightPanel,
-    onRightPanelOpenChange
+    setRightPanelLayout
   })
   // 中间区卡片点"查看设计稿"时：切到右侧"UI设计稿"tab 并选中该页。
   const handleUiDesignActivePageChange = useCallback(
@@ -1200,12 +1230,12 @@ export default function AiChatPanel({
     },
     [rightPanel, setRightPanel]
   )
-  // 右侧面板实际展示：外部开关 + 面板有内容。开关由 WorkbenchPage 顶栏控制，
+  // 右侧面板实际展示：三档布局 + 面板有内容。布局由分隔线上的三档控件控制，
   // 面板内容（preview/doc/diff）由本组件按目标类型设置。
   // 历史分支下整块不展示，理由见 shouldShowRightWorkspace。
   const showRightPanel = shouldShowRightWorkspace({
     versionReadOnly,
-    rightPanelOpen,
+    rightPanelOpen: rightPanelLayout !== 'hidden',
     hasRightPanel: Boolean(rightPanel)
   })
 
@@ -1659,7 +1689,7 @@ export default function AiChatPanel({
   // 进入开发阶段时重置右侧面板：设计阶段的 doc/docKey 布局切换为开发阶段的预览/文档。
   useEffect(() => {
     if (isApplicationPlanningPhase) return
-    if (!rightPanelOpen) return
+    if (rightPanelLayout === 'hidden') return
     // 设计阶段遗留的 rightPanel（带 docKey）在开发阶段无效，重置为开发产物。
     if (rightPanel?.type === 'doc' && 'docKey' in rightPanel && rightPanel.docKey) {
       setRightPanel({ type: 'outline' })
@@ -1669,7 +1699,7 @@ export default function AiChatPanel({
     if (!rightPanel) {
       setRightPanel({ type: 'outline' })
     }
-  }, [isApplicationPlanningPhase, rightPanelOpen, rightPanel, setRightPanel])
+  }, [isApplicationPlanningPhase, rightPanelLayout, rightPanel, setRightPanel])
   // 设计阶段右侧文档面板管理：合并原 3 个 effect（文档就绪自动打开 + 需求确认切 tab + 阶段切换自动同步）。
   // 三者都管理设计阶段的 rightPanel 文档切换，依赖高度重叠，合并减少 effect 数量。
   // 顺序：1. 阶段切换自动切 tab（用 ref 防止同阶段内覆盖用户手动选择）
@@ -1677,7 +1707,7 @@ export default function AiChatPanel({
   //       3. 文档就绪时自动打开或替换失效文档
   const lastAutoSyncedPhaseRef = useRef<string | undefined>(undefined)
   useEffect(() => {
-    if (!isApplicationPlanningPhase || !rightPanelOpen) return
+    if (!isApplicationPlanningPhase || rightPanelLayout === 'hidden') return
 
     // --- 阶段切换自动切 tab ---
     const phase = planningPhase
@@ -1722,7 +1752,7 @@ export default function AiChatPanel({
   }, [
     isApplicationPlanningPhase,
     isDesignPhase,
-    rightPanelOpen,
+    rightPanelLayout,
     rightPanel,
     designDocs,
     planningPhase,
@@ -1787,10 +1817,10 @@ export default function AiChatPanel({
       setRuntimePreviewBaseUrl(nextBaseUrl)
       setRuntimePreviewLaunchError('')
       // 验收子图完成启动后自动打开嵌入式预览，供用户直接完成验收。
-      onRightPanelOpenChange(true)
+      ensureRightPanelVisible()
       setRightPanel({ type: 'preview', requestKey: target.key, url: nextPreviewUrl })
     },
-    [activePreviewPath, onRightPanelOpenChange, setRightPanel]
+    [activePreviewPath, ensureRightPanelVisible, setRightPanel]
   )
 
   /** 测试会话启动时立即高亮测试阶段，避免生命周期回传延迟造成步骤条仍显示开发中。 */
@@ -3553,7 +3583,7 @@ export default function AiChatPanel({
       const enteringPendingRun = lastPinnedDagRunRef.current !== pendingDagExecution.runId
       lastPinnedDagRunRef.current = pendingDagExecution.runId
       if (enteringPendingRun) {
-        if (!rightPanelOpen) onRightPanelOpenChange(true)
+        ensureRightPanelVisible()
         setRightPanel({
           type: 'stage-output',
           sessionKey: stageOutputSessionKey,
@@ -3580,7 +3610,7 @@ export default function AiChatPanel({
     lastStageOutputSessionRef.current = stageOutputSessionKey
     lastStageOutputPhaseRef.current = currentStageOutputPhase
     if (currentStageOutputPhase === 'confirmation' || currentStageOutputPhase === 'generation') {
-      if (!rightPanelOpen) onRightPanelOpenChange(true)
+      ensureRightPanelVisible()
       setRightPanel({
         type: 'stage-output',
         sessionKey: stageOutputSessionKey,
@@ -3594,11 +3624,11 @@ export default function AiChatPanel({
   }, [
     currentStageOutputPhase,
     isApplicationPlanningPhase,
-    onRightPanelOpenChange,
+    ensureRightPanelVisible,
     pendingDagExecution,
     hasOwnedPendingPlan,
     rightPanel,
-    rightPanelOpen,
+    rightPanelLayout,
     setRightPanel,
     stageOutputSessionKey
   ])
@@ -3629,7 +3659,7 @@ export default function AiChatPanel({
     isApplicationPlanningPhase,
     reportPhaseActive: activeWorkbenchPhase === 'test',
     rightPanel,
-    rightPanelOpen,
+    rightPanelOpen: rightPanelLayout !== 'hidden',
     setRightPanel,
     workflow: latestWorkflowForDisplay,
     workspaceRoot: application.workspaceRoot
@@ -3646,7 +3676,7 @@ export default function AiChatPanel({
     isApplicationPlanningPhase,
     reportPhaseActive: activeWorkbenchPhase === 'review',
     rightPanel,
-    rightPanelOpen,
+    rightPanelOpen: rightPanelLayout !== 'hidden',
     setRightPanel,
     workflow: latestWorkflowForDisplay,
     workspaceRoot: application.workspaceRoot
@@ -3655,7 +3685,7 @@ export default function AiChatPanel({
 
   // 阶段切入测试或审查后立即退出可能遗留的 Diff 详情，避免卡片隐藏后右侧仍显示代码差异。
   useEffect(() => {
-    if (!rightPanelOpen || rightPanel?.type !== 'diff' || codeDiffVisible) return
+    if (rightPanelLayout === 'hidden' || rightPanel?.type !== 'diff' || codeDiffVisible) return
     if (reviewReportAvailable) {
       setRightPanel({ type: 'review-report' })
       return
@@ -3666,7 +3696,7 @@ export default function AiChatPanel({
     codeDiffVisible,
     reviewReportAvailable,
     rightPanel,
-    rightPanelOpen,
+    rightPanelLayout,
     setRightPanel,
     testReportAvailable
   ])
@@ -3931,7 +3961,7 @@ export default function AiChatPanel({
       setPreviewError(runtimePreviewLaunchError || '前端服务尚未启动完成，暂时无法预览页面')
       return
     }
-    onRightPanelOpenChange(true)
+    ensureRightPanelVisible()
     setPreviewError('')
     setRightPanel({
       type: 'preview',
@@ -4003,7 +4033,7 @@ export default function AiChatPanel({
     codeChanges: WorkspaceCodeChangeSet,
     selectedPath: string
   ): void => {
-    onRightPanelOpenChange(true)
+    ensureRightPanelVisible()
     setRightPanel({ type: 'diff', codeChanges, selectedPath })
   }
 
@@ -4582,9 +4612,9 @@ export default function AiChatPanel({
       setApiDesignConfigTarget(target)
       setApiDesignConfigGateWorkflow(_workflow)
       setRightPanel({ type: 'field-mapping' })
-      onRightPanelOpenChange(true)
+      ensureRightPanelVisible()
     },
-    [setRightPanel, onRightPanelOpenChange]
+    [setRightPanel, ensureRightPanelVisible]
   )
 
   /** 保存独立映射后更新当前门禁的已配置标记，不触发检测或继续开发。 */
@@ -4722,6 +4752,8 @@ export default function AiChatPanel({
       className={cx(
         'ai-chat-panel',
         showRightPanel && 'embedded-preview-open',
+        // 全宽：右侧铺满、对话区归零（样式见 .right-panel-full）。
+        rightPanelLayout === 'full' && 'right-panel-full',
         rightPanel?.type === 'diff' && 'diff-panel-open',
         acceptanceAwaiting && 'acceptance-awaiting',
         acceptancePreviewFocus && 'acceptance-preview-focus',
@@ -4778,7 +4810,9 @@ export default function AiChatPanel({
             sessionCreationDisabled={phaseSessionRunActive}
             sessionRunStates={displayedSessionRunStates}
             sessions={sessions}
-            showDevelopmentActions={showDevelopmentSidebarActions}
+            // 历史对话/新建自由对话目前只在开发阶段开放，其他阶段展示还需一并改会话
+            // 创建与导航逻辑，故单独按阶段门控（其余快捷入口各阶段一致）。
+            historyEnabled={activeWorkbenchPhase === 'development'}
             settingsActive={activeView === 'settings'}
             skillsActive={activeView === 'skills'}
             theme={theme}
@@ -5109,7 +5143,8 @@ export default function AiChatPanel({
 
       {(activeView === 'dataSources' || activeView === 'externalApis') ? <DataSourcesDrawer key={`${workspaceRoot}:${activeView}`} mode={activeView === 'externalApis' ? 'external_api' : 'database'} theme={theme} workspaceRoot={workspaceRoot || ''} onNavigationGuard={registerSourceNavigationGuard} onClose={() => setActiveView('chat')} /> : null}
 
-      {showRightPanel && (
+      {/* 分隔条只在分栏态存在：隐藏与全宽没有可拖的边界。 */}
+      {showRightPanel && rightPanelLayout === 'split' && (
         <div
           aria-label="拖动调整右侧面板宽度"
           aria-orientation="vertical"
@@ -5121,13 +5156,22 @@ export default function AiChatPanel({
           role="separator"
           tabIndex={elementInspectionActive ? -1 : 0}
           title="拖动调整左右面板宽度"
-        >
-          <HolderOutlined className={cx('panel-split-handle-icon')} />
-        </div>
+        />
       )}
 
+      {/* 三档布局控件全局只渲染一次（同一时刻只有一个右侧面板）。
+          分栏时贴在分隔条上，隐藏/全宽时退化为贴最右边线的细条。 */}
+      {showRightPanel || rightPanelLayout !== 'split' ? (
+        <RightPanelLayoutControl
+          docked={rightPanelLayout === 'split'}
+          floating={rightPanelLayout !== 'split'}
+          onChange={handleRightPanelLayoutChange}
+          value={rightPanelLayout}
+        />
+      ) : null}
+
       {!isApplicationPlanningPhase && workspaceRoot ? <div className={cx('embedded-preview-pane', 'workspace-pane')} style={{ display: showRightPanel && rightPanel?.type === 'field-mapping' ? undefined : 'none' }}>
-        <RightPanelTabs tabs={displayedWorkspaceTabs} active="field-mapping" onChange={openDisplayedWorkspaceTab} onClose={() => { setRightPanel(undefined); onRightPanelOpenChange(false) }} />
+        <RightPanelTabs tabs={displayedWorkspaceTabs} active="field-mapping" onChange={openDisplayedWorkspaceTab} onClose={() => { setRightPanel(undefined); setRightPanelLayout('hidden') }} />
         <div className={cx('workspace-content')}><FieldMappingWorkspace key={workspaceRoot} workspaceRoot={workspaceRoot} target={apiDesignConfigTarget}
           contracts={developmentPlanningApiContracts} onSelect={setApiDesignConfigTarget} onSaved={handleApiDesignConfigSaved} /></div>
       </div> : null}
@@ -5140,7 +5184,7 @@ export default function AiChatPanel({
             onChange={openDisplayedWorkspaceTab}
             onClose={() => {
               setRightPanel(undefined)
-              onRightPanelOpenChange(false)
+              setRightPanelLayout('hidden')
             }}
           />
           <div className={cx('workspace-content')}>
@@ -5170,7 +5214,7 @@ export default function AiChatPanel({
             onChange={openDisplayedWorkspaceTab}
             onClose={() => {
               setRightPanel(undefined)
-              onRightPanelOpenChange(false)
+              setRightPanelLayout('hidden')
             }}
           />
           <div className={cx('workspace-content')}>
@@ -5225,7 +5269,7 @@ export default function AiChatPanel({
             onChange={openDisplayedWorkspaceTab}
             onClose={() => {
               setRightPanel(undefined)
-              onRightPanelOpenChange(false)
+              setRightPanelLayout('hidden')
             }}
           />
           <div className={cx('workspace-content')}>
@@ -5248,7 +5292,7 @@ export default function AiChatPanel({
             onChange={openDisplayedWorkspaceTab}
             onClose={() => {
               setRightPanel(undefined)
-              onRightPanelOpenChange(false)
+              setRightPanelLayout('hidden')
             }}
           />
           <div className={cx('workspace-content')}>
@@ -5271,7 +5315,7 @@ export default function AiChatPanel({
             onChange={openDisplayedWorkspaceTab}
             onClose={() => {
               setRightPanel(undefined)
-              onRightPanelOpenChange(false)
+              setRightPanelLayout('hidden')
             }}
           />
           <BrowserPreviewPanel
@@ -5339,7 +5383,7 @@ export default function AiChatPanel({
             onChange={openDisplayedWorkspaceTab}
             onClose={() => {
               setRightPanel(undefined)
-              onRightPanelOpenChange(false)
+              setRightPanelLayout('hidden')
             }}
           />
           <div className={cx('workspace-content')}>
@@ -5363,7 +5407,7 @@ export default function AiChatPanel({
             onChange={openDisplayedWorkspaceTab}
             onClose={() => {
               setRightPanel(undefined)
-              onRightPanelOpenChange(false)
+              setRightPanelLayout('hidden')
             }}
           />
           <div className={cx('workspace-content')}>

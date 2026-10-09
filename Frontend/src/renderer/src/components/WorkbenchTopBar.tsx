@@ -1,12 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { message } from 'antd'
-import {
-  BlockOutlined,
-  LeftOutlined,
-  FolderOutlined,
-  MoonOutlined,
-  SunOutlined
-} from '@ant-design/icons'
+import { LeftOutlined, FolderOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import VersionActions from './VersionActions'
@@ -28,8 +22,6 @@ type Props = {
   onReturnWelcome: () => void
   lifecycle?: ApplicationLifecycle
   developmentTotals?: { completed: number; total: number }
-  rightPanelOpen: boolean
-  onToggleRightPanel: () => void
   /** 当前主题：驱动右侧快捷区里月亮/太阳图标按钮的形态。 */
   theme: 'light' | 'dark'
   /** 切换主题：由顶栏的快捷按钮触发。 */
@@ -42,8 +34,6 @@ type Props = {
   onBranchSelect?: (branchName: string) => void
   /** 当前查看的分支名。 */
   viewingBranchName?: string
-  /** 正在回看历史分支：预览开关指向"当前迭代的推进"，在这里无意义，故隐藏（主题是全局偏好，仍保留）。 */
-  versionReadOnly?: boolean
 }
 
 /**
@@ -56,15 +46,12 @@ export default function WorkbenchTopBar({
   developmentTotals: providedDevelopmentTotals,
   workspaceRoot,
   onReturnWelcome,
-  rightPanelOpen,
-  onToggleRightPanel,
   theme,
   onThemeChange,
   onPublishBranch,
   onStartIteration,
   onBranchSelect,
-  viewingBranchName,
-  versionReadOnly = false
+  viewingBranchName
 }: Props): JSX.Element {
   const { phase, derivedPhase, reachedPhase, manualOverride, switchPhase, testEntryGate, locked } =
     useWorkbenchPhase()
@@ -216,9 +203,8 @@ export default function WorkbenchTopBar({
         </>
       ) : null}
 
-      {/* 右侧快捷区：主题切换 + 预览开关。整组由本容器推到最右（margin-left: auto），
-          顺序固定为「主题在预览左侧」。主题是全局偏好，只读回看历史分支时仍保留；
-          预览开关指向"当前迭代的推进"，只读时无意义，故单独隐藏。 */}
+      {/* 右侧快捷区：主题切换。整组由本容器推到最右（margin-left: auto）。
+          右侧面板的显示/分栏/全宽已由分隔线上的三档控件负责，顶栏不再重复提供入口。 */}
       <div className={cx('workbench-topbar-actions')}>
         <button
           aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
@@ -229,19 +215,6 @@ export default function WorkbenchTopBar({
         >
           {theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
         </button>
-
-        {!versionReadOnly ? (
-          <button
-            className={cx('workbench-topbar-preview-toggle', rightPanelOpen && 'active')}
-            onClick={onToggleRightPanel}
-            title={rightPanelOpen ? '隐藏右侧预览' : '显示右侧预览'}
-            type="button"
-            aria-label="切换右侧预览"
-            aria-pressed={rightPanelOpen}
-          >
-            <BlockOutlined />
-          </button>
-        ) : null}
       </div>
 
       <PhaseSwitchConfirmModal

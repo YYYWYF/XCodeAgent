@@ -153,7 +153,6 @@ function WorkbenchPage({
   const [chatSessionHistoryReady, setChatSessionHistoryReady] = useState(false)
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
-  const [rightPanelOpen, setRightPanelOpen] = useState(true)
   // —— 应用分支（提交并推送/发起新迭代/切换分支）状态 ——
   // 当前查看的分支名；为空时取当前分支（branchName）。
   const [viewingBranchName, setViewingBranchName] = useState<string>('')
@@ -683,8 +682,6 @@ function WorkbenchPage({
                 onReturnWelcome={onReturnWelcome}
                 lifecycle={topBarLifecycle}
                 developmentTotals={topBarDevelopmentTotals}
-                rightPanelOpen={rightPanelOpen}
-                onToggleRightPanel={() => setRightPanelOpen((open) => !open)}
                 theme={theme}
                 onThemeChange={handleThemeChange}
                 onPublishBranch={handleOpenPublish}
@@ -695,7 +692,6 @@ function WorkbenchPage({
                 }}
                 onBranchSelect={handleBranchSelect}
                 viewingBranchName={viewingBranchName}
-                versionReadOnly={viewingHistoricalVersion}
               />
               <div className={cx('workbench-shell-body')}>
                 <LeftPanel
@@ -733,8 +729,6 @@ function WorkbenchPage({
                   onRetryTemplateReconcile={onRetryTemplateReconcile}
                   planningState={planningState}
                   theme={theme}
-                  rightPanelOpen={rightPanelOpen}
-                  onRightPanelOpenChange={setRightPanelOpen}
                   // 只读双 tab 只针对回看历史分支（非当前分支）。
                   versionReadOnly={viewingHistoricalVersion}
                   // 该分支名：历史分支的应用文件与预览都按它读取当时的内容。
