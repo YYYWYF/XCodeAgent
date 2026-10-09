@@ -47,7 +47,7 @@ import type {
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
 } from '../typings'
-import { developmentArtifactTotals, developmentCompletedCount } from '../developmentArtifacts'
+import { developmentArtifactTotals, developmentPlanningTotals } from '../developmentArtifacts'
 import { cx } from '../utils'
 import './WorkbenchPage.less'
 
@@ -376,31 +376,11 @@ function WorkbenchPage({
     viewedBranch?.name || workspaceApplication.id,
     topBarLifecycle
   )
-  const activeDevelopmentRecords = [
-    ...developmentPlanningPages.map(
-      (page) => applicationLifecycle?.developmentArtifacts?.pages[page.pageId]
-    ),
-    ...developmentPlanningApiContracts.flatMap((contract) =>
-      contract.endpoints.map(
-        (endpoint) =>
-          applicationLifecycle?.developmentArtifacts?.endpoints[
-          endpoint.apiContractId || contract.id
-          ]?.[endpoint.id]
-      )
-    ),
-    ...developmentPlanningEntities.map(
-      (entity) => applicationLifecycle?.developmentArtifacts?.entities[entity.id]
-    )
-  ]
-  // 显式跳过的实体不属于本次必做开发项，与后端测试门禁使用同一计数口径。
-  const requiredDevelopmentRecords = activeDevelopmentRecords.filter(
-    (record) => record?.initialDevelopmentStatus !== 'skipped'
-  )
   const topBarDevelopmentTotals = isViewingActiveVersion
-    ? {
-      completed: developmentCompletedCount(requiredDevelopmentRecords),
-      total: requiredDevelopmentRecords.length
-    }
+    ? developmentPlanningTotals(
+      developmentPlanningPages, developmentPlanningApiContracts,
+      applicationLifecycle?.developmentArtifacts
+    )
     : topBarLifecycle?.developmentArtifacts
       ? developmentArtifactTotals(topBarLifecycle.developmentArtifacts)
       : undefined

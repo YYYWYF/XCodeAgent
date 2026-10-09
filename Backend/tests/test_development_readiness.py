@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.graph.nodes.development_readiness import development_readiness_gate
 from app.services.development_readiness import development_readiness
@@ -60,14 +61,29 @@ class DevelopmentReadinessTests(unittest.TestCase):
 
         self.assertTrue(readiness["ready"])
 
-    def test_gate_requires_manual_entity_source_binding(self) -> None:
-        result = development_readiness_gate(
-            {"project_plan": _technical_plan(), "selectedPageId": "orders_page"}
-        )
+    def test_gate_uses_endpoint_mapping_without_entity_binding(self) -> None:
+        """显式旧入口只走 API 映射门禁，不再要求实体绑定。"""
 
-        self.assertEqual(result["status"], "requires_user_input")
-        self.assertEqual(result["clarification"]["mode"], "entity_source_binding_required")
-        self.assertEqual(result["clarification"]["missing_entities"][0]["entity_id"], "Order")
+        plan = _technical_plan()
+        for ready, action in ((False, {}), (True, {"action": "refresh"})):
+            with self.subTest(ready=ready), patch(
+                "app.graph.nodes.api_design.api_design_readiness",
+                return_value={
+                    "ready": ready,
+                    "api_designs": [{"endpointId": "orders.list"}],
+                    "missing_api_designs": [] if ready else [{"method": "GET", "path": "/api/orders"}],
+                },
+            ):
+                result = development_readiness_gate({
+                    "workspace": "/tmp/endpoint-mapping", "project_plan": plan,
+                    "selectedPageId": "orders_page", "api_design_gate_action": action,
+                })
+                self.assertEqual(result["phase"], "api_design_readiness_gate")
+                self.assertEqual(result["status"], "completed" if ready else "requires_user_input")
+                if not ready:
+                    self.assertEqual(result["clarification"]["mode"], "api_design_required")
+                    self.assertNotIn("missing_entities", result["clarification"])
+                self.assertNotIn("entity_detail_plans", plan)
 
 
 if __name__ == "__main__":

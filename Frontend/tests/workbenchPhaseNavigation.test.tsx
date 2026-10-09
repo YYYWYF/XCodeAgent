@@ -128,7 +128,7 @@ function assertPhaseActive(html: string, label: string): void {
   assert.ok(active[0].includes(`${label}阶段`), `高亮阶段应为${label}`)
 }
 
-test('顶部开发进度与测试门禁都按完整产物目录判断', () =>
+test('顶部开发进度与测试门禁只统计页面和 Endpoint，规划实体不参与', () =>
   withStorage(() => {
     const lifecycle: ApplicationLifecycle = {
       application: { id: 'three-artifacts', name: 'three-artifacts' },
@@ -136,11 +136,11 @@ test('顶部开发进度与测试门禁都按完整产物目录判断', () =>
       revision: 1,
       initialization: { stage: 'ready_for_workbench', status: 'completed' },
       activeExecutions: {},
-      testEntryGate: { ...allowed, total: 3, completed: 3 },
+      testEntryGate: { ...allowed, total: 2, completed: 2 },
       developmentArtifacts: {
         pages: { home: { initialDevelopmentStatus: 'completed' } },
         endpoints: { age: { save: { initialDevelopmentStatus: 'completed' } } },
-        entities: { AgeRecord: { initialDevelopmentStatus: 'completed' } }
+        entities: { AgeRecord: { initialDevelopmentStatus: 'pending' } }
       }
     }
     const html = renderToStaticMarkup(
@@ -159,8 +159,8 @@ test('顶部开发进度与测试门禁都按完整产物目录判断', () =>
         />
       </WorkbenchPhaseProvider>
     )
-    assert.match(html, /开发阶段<span>3\/3<\/span>/)
-    assert.equal(lifecycle.testEntryGate?.total, 3)
+    assert.match(html, /开发阶段<span>2\/2<\/span>/)
+    assert.equal(lifecycle.testEntryGate?.total, 2)
 
     const newVersionHtml = renderToStaticMarkup(
       <WorkbenchPhaseProvider applicationId="new-version" versionId="v2" lifecycle={lifecycle}>

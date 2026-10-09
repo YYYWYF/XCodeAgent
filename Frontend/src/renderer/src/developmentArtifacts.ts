@@ -1,4 +1,7 @@
-import type { DevelopmentArtifactProgress, DevelopmentArtifacts, TestEntryGate } from './typings'
+import type {
+  DevelopmentArtifactProgress, DevelopmentArtifacts, TestEntryGate,
+  DevelopmentPlanningPageOption, DevelopmentPlanningApiContract
+} from './typings'
 import type { WorkbenchPhase } from './workbenchPhase'
 
 /** 根据权威门禁约束测试及后续视图，覆盖手动选择、冷启动恢复与自动阶段推导。 */
@@ -36,16 +39,30 @@ export function developmentCompletedCount(
   return records.filter((record) => record?.initialDevelopmentStatus === 'completed').length
 }
 
-/** 统计完整开发产物目录；顶部进度与服务端测试门禁使用同一分母。 */
+/** 只统计页面与 Endpoint；规划实体不参与开发完成比例或阶段门禁。 */
 export function developmentArtifactTotals(artifacts: DevelopmentArtifacts): {
   completed: number
   total: number
 } {
   const records = [
     ...Object.values(artifacts.pages),
-    ...Object.values(artifacts.entities),
     ...Object.values(artifacts.endpoints).flatMap((endpoints) => Object.values(endpoints))
   ]
   const required = records.filter((record) => record.initialDevelopmentStatus !== 'skipped')
   return { completed: developmentCompletedCount(required), total: required.length }
+}
+
+/** 按当前正式目录统计页面和 Endpoint，清空迭代目录时不沿用旧完成事实，也不计入规划实体。 */
+export function developmentPlanningTotals(
+  pages: DevelopmentPlanningPageOption[],
+  contracts: DevelopmentPlanningApiContract[],
+  artifacts?: DevelopmentArtifacts
+): { completed: number; total: number } {
+  const records = [
+    ...pages.map((page) => artifacts?.pages[page.pageId]),
+    ...contracts.flatMap((contract) => contract.endpoints.map(
+      (endpoint) => artifacts?.endpoints[endpoint.apiContractId || contract.id]?.[endpoint.id]
+    ))
+  ]
+  return { completed: developmentCompletedCount(records), total: records.length }
 }

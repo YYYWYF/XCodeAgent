@@ -39,11 +39,11 @@ export type EntityQuickTaskItem = QuickTaskItemBase & {
 
 export type QuickTaskItem = PageQuickTaskItem | EndpointQuickTaskItem | EntityQuickTaskItem
 
-/** 将项目计划投影为携带一次性工作流目标、但不定义会话归属的页面、接口与实体快捷任务。 */
+/** 将项目计划投影为携带一次性工作流目标、但不定义会话归属的页面与接口快捷任务，实体仅保留在技术规划中。 */
 export function buildQuickTasks(
   pages: DevelopmentPlanningPageOption[],
   apiContracts: DevelopmentPlanningApiContract[],
-  entities: DevelopmentPlanningEntityOption[],
+  _entities: DevelopmentPlanningEntityOption[],
   artifacts?: DevelopmentArtifacts
 ): QuickTaskItem[] {
   const pageTasks: PageQuickTaskItem[] = pages.map((page) => ({
@@ -82,16 +82,5 @@ export function buildQuickTasks(
       }
     })
   )
-  const entityTasks: EntityQuickTaskItem[] = entities.map((entity) => ({
-    progress: artifacts?.entities[entity.id],
-    description: String(entity.purpose || '从这个实体开始配置数据来源。').trim(),
-    entityId: entity.id,
-    entityLabel: String(entity.label || entity.id || '未命名实体').trim(),
-    hasDetailPlan: Boolean(entity.hasDetailPlan),
-    id: `entity:${entity.id}`,
-    kind: 'entity' as const,
-    meta: String(entity.dataSourceType || '待配置').trim(),
-    title: String(entity.label || entity.id || '未命名实体').trim()
-  }))
-  return [...pageTasks, ...endpointTasks, ...entityTasks]
+  return [...pageTasks, ...endpointTasks]
 }

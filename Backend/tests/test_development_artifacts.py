@@ -106,15 +106,15 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.assertEqual((self.plans / "technical-plan.json").read_bytes(), original)
 
     def test_entity_skip_does_not_skip_other_entities_or_pages(self) -> None:
-        """跳过一个实体不放行其他未完成目标，未申请跳过的目录保持阻挡。"""
+        """实体是否跳过均不影响门禁，未完成页面和接口仍阻止进入测试。"""
 
         self.technical["entities"] = [{"id": "entity"}, {"id": "other"}]
         self.write_plans()
         state = skip_entity_development(self.workspace, entity_id="entity", reason="只跳过该实体")
         gate = test_entry_gate(state)
         self.assertFalse(gate.allowed)
-        self.assertEqual(gate.total, 4)
-        self.assertIn("other", [target.entity_id for target in gate.blockers])
+        self.assertEqual(gate.total, 3)
+        self.assertNotIn("other", [target.entity_id for target in gate.blockers])
         self.assertNotIn("entity", [target.entity_id for target in gate.blockers])
         with self.assertRaisesRegex(ValueError, "不存在"):
             skip_entity_development(self.workspace, entity_id="unknown", reason="无效目标")
@@ -135,17 +135,17 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         revision = state.revision
         self.assertEqual(skip_entity_development(self.workspace, entity_id="entity", reason="再次请求").revision, revision)
 
-    def test_entity_counts_and_requires_persisted_confirmation(self) -> None:
-        """实体必须确认正式绑定才计完成，等待确认和重试保持开发中。"""
+    def test_entity_confirmation_does_not_affect_test_entry(self) -> None:
+        """实体绑定状态独立保留，页面和 Endpoint 完成后即可进入测试。"""
 
         self.technical["entities"] = [{"id": "entity"}]
         self.write_plans()
         for target in ("one", "two", "get"):
             self.finish(target)
         state = refresh_development_artifacts(self.workspace)
-        self.assertEqual((test_entry_gate(state).completed, test_entry_gate(state).total), (3, 4))
-        self.assertFalse(test_entry_gate(state).allowed)
-        self.assertEqual(test_entry_gate(state).blockers[0].entity_id, "entity")
+        self.assertEqual((test_entry_gate(state).completed, test_entry_gate(state).total), (3, 3))
+        self.assertTrue(test_entry_gate(require_test_entry(self.workspace)).allowed)
+        self.assertEqual(test_entry_gate(state).blockers, [])
         start_workbench_execution(
             self.workspace, scope="data_source", target_id="entity", page_id=None,
             thread_id="entity-thread", run_id="entity-run", phase="entity_source_binding",
@@ -171,13 +171,13 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         directory.mkdir()
         path = directory / "entity--entity.json"
         path.write_text(json.dumps({"entity_id": "entity", "status": "pending_user_confirmation"}))
-        self.assertFalse(test_entry_gate(refresh_development_artifacts(self.workspace)).allowed)
+        self.assertTrue(test_entry_gate(refresh_development_artifacts(self.workspace)).allowed)
         path.write_text(json.dumps({"entity_id": "entity", "status": "confirmed"}))
         state = refresh_development_artifacts(self.workspace)
         self.assertEqual(state.development_artifacts.entities["entity"].initial_development_status, "completed")
         self.assertTrue(test_entry_gate(state).allowed)
         path.write_text("invalid json")
-        self.assertFalse(test_entry_gate(refresh_development_artifacts(self.workspace)).allowed)
+        self.assertTrue(test_entry_gate(refresh_development_artifacts(self.workspace)).allowed)
         self.technical["entities"] = []
         self.write_plans()
         state = refresh_development_artifacts(self.workspace)
@@ -201,6 +201,10 @@ class DevelopmentArtifactsTests(unittest.TestCase):
     def test_page_does_not_complete_endpoint_and_last_target_unlocks(self) -> None:
         """每个目标独立计数，最后完成项先写盘再解锁。"""
 
+        self.technical["entities"] = [{"id": "Order", "fields": [{"name": "number"}]}]
+        self.technical["api_contracts"][0]["entity_ids"] = ["Order"]
+        self.write_plans()
+        original = (self.plans / "technical-plan.json").read_bytes()
         self.finish("one")
         self.finish("two")
         state = refresh_development_artifacts(self.workspace)
@@ -209,6 +213,13 @@ class DevelopmentArtifactsTests(unittest.TestCase):
             require_test_entry(self.workspace)
         self.finish("get")
         self.assertTrue(test_entry_gate(require_test_entry(self.workspace)).allowed)
+        state = start_workbench_execution(
+            self.workspace, scope="application", target_id="test", page_id=None,
+            thread_id="test-thread", run_id="test-run", phase="integration_test",
+        )
+        self.assertIn("test-run", state.active_executions)
+        self.assertEqual(state.development_artifacts.entities["Order"].initial_development_status, "pending")
+        self.assertEqual((self.plans / "technical-plan.json").read_bytes(), original)
 
     def test_endpoint_build_scope_cannot_unlock_test_at_two_of_three(self) -> None:
         """接口 Build 只覆盖自身时，另一个未完成页面仍阻止确认与测试启动。"""
