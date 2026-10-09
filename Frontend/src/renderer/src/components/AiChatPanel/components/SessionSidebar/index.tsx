@@ -94,9 +94,14 @@ type SessionSidebarProps = {
   sessionCreationDisabled: boolean
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
-  showDevelopmentActions: boolean
   settingsActive: boolean
   skillsActive: boolean
+  /**
+   * 是否展示「历史对话 / 新建自由对话」这一组。该能力目前只在开发阶段开放：
+   * 会话创建与导航还依赖开发阶段的运行态，其他阶段展示需要一并改这些逻辑，
+   * 所以这里单独按阶段门控，不影响文件/技能/设置等其他快捷入口。
+   */
+  historyEnabled: boolean
   theme: 'light' | 'dark'
   workspaceRoot: string
 }
@@ -139,9 +144,9 @@ export default function SessionSidebar({
   sessionCreationDisabled,
   sessionRunStates,
   sessions,
-  showDevelopmentActions,
   settingsActive,
   skillsActive,
+  historyEnabled,
   theme
 }: SessionSidebarProps): ReactElement {
   const [collapsed, setCollapsed] = useState(false)
@@ -153,10 +158,10 @@ export default function SessionSidebar({
   // 小屏（compactLayout）与大屏共用 collapsed 状态：默认展开常驻左侧，仅手动折叠成图标栏。
   const effectiveCollapsed = forceCollapsed ? true : collapsed
 
-  // 离开开发阶段时关闭历史浮层，避免重新进入开发阶段后恢复旧的展开状态。
+  // 离开开发阶段时关闭历史浮层，避免下次回到开发阶段时恢复旧的展开状态。
   useEffect(() => {
-    if (!showDevelopmentActions) setHistoryOpen(false)
-  }, [showDevelopmentActions])
+    if (!historyEnabled) setHistoryOpen(false)
+  }, [historyEnabled])
 
   /** 关闭历史侧栏并执行用户选择的左栏导航。 */
   const handleRailNavigation = (navigate: () => void): void => {
@@ -288,7 +293,7 @@ export default function SessionSidebar({
                 <SidebarAssetIcon source={freeChatIcon} />
                 <span>临时对话</span>
               </button>
-              {showDevelopmentActions ? (
+              {historyEnabled ? (
                 <button
                   aria-label="新建自由对话"
                   className={cx('free-chat-new-session')}
@@ -301,86 +306,80 @@ export default function SessionSidebar({
                 </button>
               ) : null}
             </div>
-            {showDevelopmentActions ? (
-              <>
-                <button
-                  aria-expanded={historyOpen}
-                  aria-label={historyOpen ? '关闭历史对话' : '打开历史对话'}
-                  className={cx('free-chat-history-trigger', historyOpen && 'active')}
-                  onClick={handleHistoryToggle}
-                  title={historyOpen ? '关闭历史对话' : '打开历史对话'}
-                  type="button"
-                >
-                  <HistoryOutlined />
-                  <span>历史对话</span>
-                  {sessions.length > 0 ? (
-                    <span className={cx('free-chat-history-trigger-count')}>
-                      {sessions.length > 99 ? '99+' : sessions.length}
-                    </span>
-                  ) : null}
-                </button>
-                {dataSourcesEnabled ? (
-                  <button
-                    className={cx(dataSourcesActive && 'active')}
-                    onClick={() => handleRailNavigation(onShowDataSources)}
-                    title="数据源"
-                    type="button"
-                  >
-                    <DatabaseOutlined />
-                    <span>数据源</span>
-                  </button>
+            {historyEnabled ? (
+              <button
+                aria-expanded={historyOpen}
+                aria-label={historyOpen ? '关闭历史对话' : '打开历史对话'}
+                className={cx('free-chat-history-trigger', historyOpen && 'active')}
+                onClick={handleHistoryToggle}
+                title={historyOpen ? '关闭历史对话' : '打开历史对话'}
+                type="button"
+              >
+                <HistoryOutlined />
+                <span>历史对话</span>
+                {sessions.length > 0 ? (
+                  <span className={cx('free-chat-history-trigger-count')}>
+                    {sessions.length > 99 ? '99+' : sessions.length}
+                  </span>
                 ) : null}
-                {dataSourcesEnabled ? (
-                  <button
-                    className={cx(externalApisActive && 'active')}
-                    onClick={() => handleRailNavigation(onShowExternalApis)}
-                    title="外部 API"
-                    type="button"
-                  >
-                    <ApiOutlined />
-                    <span>外部 API</span>
-                  </button>
-                ) : null}
-                <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
-                  <HourglassOutlined />
-                  <span>推荐任务</span>
-                </button>
-              </>
+              </button>
             ) : null}
+            {dataSourcesEnabled ? (
+              <button
+                className={cx(dataSourcesActive && 'active')}
+                onClick={() => handleRailNavigation(onShowDataSources)}
+                title="数据源"
+                type="button"
+              >
+                <DatabaseOutlined />
+                <span>数据源</span>
+              </button>
+            ) : null}
+            {dataSourcesEnabled ? (
+              <button
+                className={cx(externalApisActive && 'active')}
+                onClick={() => handleRailNavigation(onShowExternalApis)}
+                title="外部 API"
+                type="button"
+              >
+                <ApiOutlined />
+                <span>外部 API</span>
+              </button>
+            ) : null}
+            <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
+              <HourglassOutlined />
+              <span>推荐任务</span>
+            </button>
           </div>
           <span className={cx('session-rail-divider')} aria-hidden="true" />
           <div className={cx('session-rail-secondary')}>
-            {showDevelopmentActions ? (
-              <>
-                <button
-                  className={cx(filesActive && 'active')}
-                  onClick={() => handleRailNavigation(onShowFiles)}
-                  title="文件"
-                  type="button"
-                >
-                  <FolderOutlined />
-                  <span>文件</span>
-                </button>
-                <button
-                  className={cx(skillsActive && 'active')}
-                  onClick={() => handleRailNavigation(onShowSkills)}
-                  title="技能"
-                  type="button"
-                >
-                  <ThunderboltOutlined />
-                  <span>技能</span>
-                </button>
-                <button
-                  className={cx(settingsActive && 'active')}
-                  onClick={() => handleRailNavigation(onShowSettings)}
-                  title="设置"
-                  type="button"
-                >
-                  <SettingOutlined />
-                  <span>设置</span>
-                </button>
-              </>
-            ) : null}
+            <button
+              className={cx(filesActive && 'active')}
+              onClick={() => handleRailNavigation(onShowFiles)}
+              title="文件"
+              type="button"
+            >
+              <FolderOutlined />
+              <span>文件</span>
+            </button>
+            <button
+              className={cx(skillsActive && 'active')}
+              onClick={() => handleRailNavigation(onShowSkills)}
+              title="技能"
+              type="button"
+            >
+              <ThunderboltOutlined />
+              <span>技能</span>
+            </button>
+            <button
+              className={cx(settingsActive && 'active')}
+              onClick={() => handleRailNavigation(onShowSettings)}
+              title="设置"
+              type="button"
+            >
+              <SettingOutlined />
+              <span>设置</span>
+            </button>
             <span className={cx('session-user')} aria-label="当前用户 S" title="当前用户">
               <span className={cx('session-user-avatar')}>S</span>
               <span className={cx('session-user-name')}>S</span>
@@ -405,7 +404,7 @@ export default function SessionSidebar({
           />
         ) : null}
       </aside>
-      {showDevelopmentActions && historyOpen ? (
+      {historyEnabled && historyOpen ? (
         <FreeChatHistory
           activeSessionId={activeSessionId}
           deletingSessionId={deletingSessionId}
