@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { message, Tag } from 'antd'
+import { message } from 'antd'
 import { BlockOutlined, LeftOutlined, FolderOutlined } from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
@@ -54,17 +54,8 @@ export default function WorkbenchTopBar({
   viewingBranchName,
   versionReadOnly = false
 }: Props): JSX.Element {
-  const {
-    phase,
-    derivedPhase,
-    reachedPhase,
-    manualOverride,
-    switchPhase,
-    agent,
-    testEntryGate,
-    locked
-  } = useWorkbenchPhase()
-  const following = manualOverride === null
+  const { phase, derivedPhase, reachedPhase, manualOverride, switchPhase, testEntryGate, locked } =
+    useWorkbenchPhase()
   const previousPhaseRef = useRef<WorkbenchPhase | null>(null)
   const developmentTotals =
     providedDevelopmentTotals ||
@@ -213,32 +204,18 @@ export default function WorkbenchTopBar({
         </>
       ) : null}
 
-      {/* 历史分支只读回看：Agent 身份、跟随开关与预览开关都指向"当前迭代的推进"，
-          在这里既无意义也无处可去，整组隐藏。 */}
+      {/* 历史分支只读回看：预览开关指向"当前迭代的推进"，在这里既无意义也无处可去，故隐藏。 */}
       {!versionReadOnly ? (
-        <>
-          <div className={cx('workbench-topbar-tail')}>
-            <span className={cx('workbench-topbar-agent')}>{agent.role}</span>
-            <Tag
-              className={cx('workbench-topbar-follow')}
-              color={following ? undefined : 'processing'}
-              onClick={following ? undefined : () => switchPhase(null)}
-            >
-              {following ? '跟随旅程' : '恢复自动'}
-            </Tag>
-          </div>
-
-          <button
-            className={cx('workbench-topbar-preview-toggle', rightPanelOpen && 'active')}
-            onClick={onToggleRightPanel}
-            title={rightPanelOpen ? '隐藏右侧预览' : '显示右侧预览'}
-            type="button"
-            aria-label="切换右侧预览"
-            aria-pressed={rightPanelOpen}
-          >
-            <BlockOutlined />
-          </button>
-        </>
+        <button
+          className={cx('workbench-topbar-preview-toggle', rightPanelOpen && 'active')}
+          onClick={onToggleRightPanel}
+          title={rightPanelOpen ? '隐藏右侧预览' : '显示右侧预览'}
+          type="button"
+          aria-label="切换右侧预览"
+          aria-pressed={rightPanelOpen}
+        >
+          <BlockOutlined />
+        </button>
       ) : null}
 
       <PhaseSwitchConfirmModal

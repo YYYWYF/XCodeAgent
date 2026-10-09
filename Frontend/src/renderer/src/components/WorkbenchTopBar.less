@@ -166,34 +166,16 @@
   white-space: nowrap;
 }
 
-/* —— 右侧状态提示（Agent + 跟随旅程）—— */
-.@{class-prefix}-workbench-topbar-tail {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  flex: 0 0 auto;
-}
-
-.@{class-prefix}-workbench-topbar-agent {
-  color: var(--wb-text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.@{class-prefix}-workbench-topbar-follow {
-  cursor: default;
-  user-select: none;
-}
-
-/* —— 右侧预览开关（VSCode 式，归属顶栏而非对话区）—— */
+/* —— 右侧预览开关（VSCode 式，归属顶栏而非对话区）——
+   margin-left: auto 负责把右侧这组推到最右；原先由已移除的"Agent + 跟随旅程"
+   容器承担，移除后必须由本开关自己接管，否则它会紧贴阶段条而不是靠右。 */
 .@{class-prefix}-workbench-topbar-preview-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 26px;
   height: 26px;
+  margin-left: auto;
   margin-right: 4px;
   border: 0;
   border-radius: 6px;
