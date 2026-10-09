@@ -407,17 +407,42 @@ def _operation_coverage_update(
     }
 
 
+def _ordered_page_ids(artifact: dict[str, Any]) -> list[str]:
+    """按顺序取产物（RequirementSpec 或 ProductPlan）的 pageId 列表。"""
+
+    return [
+        str(page.get("pageId") or "")
+        for page in (artifact.get("pages") or [])
+        if isinstance(page, dict)
+    ]
+
+
 def _pending_product_plan_update(
     state: ProjectState,
     plan: dict[str, Any],
+    requirement_spec: dict[str, Any],
 ) -> dict[str, Any]:
-    """保存自动修复后的新版本，并保持正式产物必须重新确认的门禁。"""
+    """保存自动修复后的新版本，并保持正式产物必须重新确认的门禁。
+
+    必须同时回写 `requirement_spec`：调用方是按**传入的**这份 spec 校验并重建 plan 的，
+    只回写 plan 会让 graph state 自相矛盾（plan 绑新 spec、spec 还是旧的）。一旦矛盾，
+    下一轮确认的 existing 校验必然失败（sha256 与 pages 双双对不上）→ 再修一次 → 又弹
+    确认卡，永远无法收敛。
+
+    这里只回写 state，**不重写需求草稿文件** —— 草稿持有用户的最新编辑，用这份 spec
+    覆盖它会直接毁掉用户的修改。
+    """
 
     pending = {**plan, "confirmation_status": "pending_user_confirmation"}
+    pending_requirement = {
+        **requirement_spec,
+        "confirmation_status": "pending_user_confirmation",
+    }
     markdown_path, json_path = write_product_plan_documents(state, pending)
     return {
         "phase": "product_planning",
         "status": "requires_user_input",
+        "requirement_spec": pending_requirement,
         "product_plan": pending,
         "product_plan_path": markdown_path,
         "product_plan_json_path": json_path,
@@ -496,7 +521,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
         errors = validate_product_plan(resolved, requirement_spec)
         if errors:
             raise ValueError("受限操作归属处理后 ProductPlan 仍未通过校验：" + "；".join(errors))
-        return _pending_product_plan_update(state, resolved)
+        return _pending_product_plan_update(state, resolved, requirement_spec)
     if isinstance(existing, dict):
         if (
             existing.get("schema_version") != PRODUCT_PLAN_SCHEMA_VERSION
@@ -505,18 +530,30 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             raise ValueError(
                 f"当前流程只接受 {PRODUCT_PLAN_SCHEMA_VERSION}，不读取或迁移历史 ProductPlan。"
             )
-        existing_errors = validate_product_plan(existing, requirement_spec)
-        if existing_errors:
-            logger.warning("existing_product_plan_validation_errors: %s", existing_errors)
-            try:
-                repaired = _repair_existing_product_plan(
-                    requirement_spec,
-                    existing,
-                    existing_errors,
-                )
-            except ProductPlanOperationCoverageError as exc:
-                return _operation_coverage_update(state, exc.candidate, exc.coverage)
-            return _pending_product_plan_update(state, repaired)
+        # 用户明确确认、且 plan 的页面集合已与 spec 对不上时，不要在这里提前返回。
+        # 同一次 run 里 requirements 节点可能刚按用户编辑更新过 spec（增删页面），此时
+        # plan 必然暂时对不上 —— 那是正常的中间态，不是需要用户再确认的问题。下面的
+        # 确认分支会按新 spec 重建 pages 并一次走完；若在这里以"plan 需修复"为由提前返回，
+        # 用户会白点一次确认、看到同一张卡片弹两次。
+        # 只在**页面集合不一致**时才让路：plan 与 spec 页面一致、仅其他字段待修（如
+        # navigation_targets 未同步）时仍走这里的确定性修复，不改变既有的修复语义。
+        confirming = (
+            action == "confirm" if application_planning_scope else _user_confirmed(request)
+        )
+        pages_drifted = _ordered_page_ids(existing) != _ordered_page_ids(requirement_spec)
+        if not (confirming and pages_drifted):
+            existing_errors = validate_product_plan(existing, requirement_spec)
+            if existing_errors:
+                logger.warning("existing_product_plan_validation_errors: %s", existing_errors)
+                try:
+                    repaired = _repair_existing_product_plan(
+                        requirement_spec,
+                        existing,
+                        existing_errors,
+                    )
+                except ProductPlanOperationCoverageError as exc:
+                    return _operation_coverage_update(state, exc.candidate, exc.coverage)
+                return _pending_product_plan_update(state, repaired, requirement_spec)
     if (
         isinstance(existing, dict)
         and existing.get("confirmation_status") == "pending_user_confirmation"
@@ -548,7 +585,21 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
         synchronized = (
             sync_product_plan_from_markdown(existing, confirmed_requirement_spec, edited_markdown)
             if edited_markdown is not None
-            else existing
+            else (
+                # 用户在需求文档里增删页面时，ProductPlan 的 pages 必须同步增删：否则
+                # 联合确认会以"pages 与 RequirementSpec 不一致"为由反复打回，用户每点
+                # 一次确认就多消耗一轮修复。create_product_plan 按 spec 重建 pages，并用
+                # agent_plan 保留模型已写下的页面内容。只在页面集合真的不同时才重建，
+                # 未变更时不重算，避免无谓改写已确认的计划内容。
+                create_product_plan(
+                    confirmed_requirement_spec,
+                    agent_plan=existing,
+                    existing_plan=existing,
+                )
+                if _ordered_page_ids(existing)
+                != _ordered_page_ids(confirmed_requirement_spec)
+                else existing
+            )
         )
         confirmed = {
             **synchronized,
@@ -566,7 +617,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
                 )
             except ProductPlanOperationCoverageError as exc:
                 return _operation_coverage_update(state, exc.candidate, exc.coverage)
-            return _pending_product_plan_update(state, repaired)
+            return _pending_product_plan_update(state, repaired, confirmed_requirement_spec)
         application_file = Path(str(state.get("workspace") or "")) / WORKSPACE_ARTIFACT_DIR / "application.json"
         if application_planning_scope and application_file.is_file():
             # 正式修订进入规划前已提交配置，所有规划预检只读取唯一事实源。

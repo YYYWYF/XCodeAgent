@@ -370,6 +370,38 @@ def _normalized_actions(page: dict[str, Any], value: Any) -> list[dict[str, Any]
     return actions
 
 
+def _prune_dangling_action_targets(
+    actions: list[dict[str, Any]],
+    page_ids: set[str],
+) -> list[dict[str, Any]]:
+    """修剪指向已删除页面的跳转引用，避免"删除页面"后确认反复失败。
+
+    用户在需求文档里删掉某个页面后，其余页面里指向它的 action.behavior.targetPageId
+    就成了悬空引用。`navigation_targets` 已在 `_normalized_pages` 里按 page_ids 过滤，
+    action 自身这一份也必须同步修剪 —— 否则校验必然报"操作引用了不存在的
+    targetPageId"，逼出一轮自动修复，用户要白点一次确认、看到同一张卡片弹两次。
+
+    - navigation action：跳转目标已不存在，这条跳转本身已无意义，丢弃。不能只清空
+      targetPageId —— 校验要求 navigation action 必须声明 targetPageId。
+    - 其他类型的 action：仅清空悬空的 targetPageId，保留操作本身（它可能还有业务语义）。
+    """
+
+    pruned: list[dict[str, Any]] = []
+    for action in actions:
+        behavior = action.get("behavior")
+        if not isinstance(behavior, dict):
+            pruned.append(action)
+            continue
+        target = str(behavior.get("targetPageId") or "").strip()
+        if not target or target in page_ids:
+            pruned.append(action)
+            continue
+        if str(behavior.get("type") or "").strip() == "navigation":
+            continue
+        pruned.append({**action, "behavior": {**behavior, "targetPageId": ""}})
+    return pruned
+
+
 def _normalized_pages(
     requirement_spec: dict[str, Any],
     agent_plan: dict[str, Any] | None,
@@ -409,7 +441,10 @@ def _normalized_pages(
         if not information:
             fallback = str(source.get("description") or source.get("name") or "页面核心信息")
             information = _normalized_information_items(source, [fallback])
-        actions = _normalized_actions(source, supplement.get("actions"))
+        actions = _prune_dangling_action_targets(
+            _normalized_actions(source, supplement.get("actions")),
+            page_ids,
+        )
         action_targets = [
             str(
                 action.get("behavior", {}).get("targetPageId")
@@ -645,12 +680,43 @@ def create_product_plan(
     return plan
 
 
-def requirement_spec_sha256(requirement_spec: dict[str, Any]) -> str:
-    """计算 RequirementSpec 当前确认内容的稳定摘要，供联合需求文档绑定使用。"""
+# 生成/同步过程的**溯源元数据与生命周期状态**，不属于用户确认的业务内容，且每次
+# 规范化、换个编辑路径或推进确认门就会变：
+#   generated_at —— create_requirement_spec 末尾无条件刷成当前时间；
+#   agent_note   —— 随触发路径不同（live 需求分析 / 摘要编辑器 / Markdown 同步）；
+#   markdown_sync / editor_sync —— 标记本轮同步来源；
+#   confirmation_status —— 产物自身的确认门状态（pending/confirmed），是工作流状态
+#       而非业务内容。把 spec 标回 pending_user_confirmation 会改变它，从而让刚绑定
+#       好的哈希立刻失效 —— 门禁自己把自己判失败。
+# 把它们计入哈希会让联合确认门禁永远无法满足：确认时 requirements 节点重新规范化
+# spec → generated_at 变化 → ProductPlan 绑定的哈希失配 → 打回待确认 → 用户再次确认
+# → 无限循环。门禁只应绑定业务内容的变化。
+_UNSTABLE_SPEC_METADATA = frozenset(
+    {
+        "generated_at",
+        "agent_note",
+        "markdown_sync",
+        "editor_sync",
+        "confirmation_status",
+    }
+)
 
+
+def requirement_spec_sha256(requirement_spec: dict[str, Any]) -> str:
+    """计算 RequirementSpec 当前确认内容的稳定摘要，供联合需求文档绑定使用。
+
+    只覆盖用户确认的**业务内容**，剔除生成/同步溯源元数据（见
+    `_UNSTABLE_SPEC_METADATA`）—— 它们每次都变，计入会让联合确认门禁永远无法满足。
+    """
+
+    stable_content = {
+        key: value
+        for key, value in requirement_spec.items()
+        if key not in _UNSTABLE_SPEC_METADATA
+    }
     return hashlib.sha256(
         json.dumps(
-            requirement_spec,
+            stable_content,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),

@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any
 
+from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.api_contract_validation import validate_api_contract_consistency
@@ -131,7 +132,13 @@ def _sync_prompt(
         {
             key: value
             for key, value in structured_document.items()
-            if key not in {"data_sources", "acceptance_criteria"}
+            # source_request 是**内部溯源文本**，Markdown 并不表达它（prompt 已要求模型
+            # 保留 Markdown 未体现的元数据，本就不该让它重新生成）。它却是一个不断累积
+            # 的长文本块，含验收标准的 Python repr（{'id': ..., 'description': '…"…"…'}）。
+            # 让模型回抄它会因引号未转义而产出非法 JSON，extract_json_object 解析失败后
+            # 静默回退到某个嵌套片段，下游见不到 pages 就保留旧数组 —— 表现为用户在
+            # Markdown 里删掉的页面确认后依然存在。排除后模型不再有这段文本的来源。
+            if key not in {"data_sources", "acceptance_criteria", "source_request"}
         }
         if artifact_name == "RequirementSpec"
         else structured_document
@@ -167,14 +174,14 @@ def _invoke_sync_model(
             datasource_type=datasource_type,
         )
     )
-    content = getattr(result, "content", result)
-    if isinstance(content, list):
-        text = "\n".join(
-            str(item.get("text", item)) if isinstance(item, dict) else str(item)
-            for item in content
-        )
-    else:
-        text = content if isinstance(content, str) else str(content)
+    # 统一走 _coerce_content_text：它只取 type=="text" 的 block，并剥离字符串内容里的
+    # thinking 片段。原先这里内联拼接所有 block 的文本，glm-5.2 等带 thinking 的模型会
+    # 把推理过程混进正文（block 无 text 字段时 str() 还会产出 Python repr 的
+    # {'thinking': ...}），导致 extract_json_object 解析失败、退化成某个嵌套片段。
+    # 后果不是报错而是**静默丢数据**：模型其实正确应用了用户的删除，但那段正确输出被
+    # 丢弃，下游 create_requirement_spec 只能回落到 existing_spec 的旧数组 —— 表现为
+    # 用户在 Markdown 里删掉的页面，确认后依然出现在 JSON 里。
+    text = _coerce_content_text(getattr(result, "content", result))
     synced = extract_json_object(text)
     if not isinstance(synced, dict):
         raise ValueError(f"Failed to synchronize edited {artifact_name} Markdown")
