@@ -705,6 +705,8 @@ function WorkbenchPage({
                 developmentTotals={topBarDevelopmentTotals}
                 rightPanelOpen={rightPanelOpen}
                 onToggleRightPanel={() => setRightPanelOpen((open) => !open)}
+                theme={theme}
+                onThemeChange={handleThemeChange}
                 onPublishBranch={handleOpenPublish}
                 onStartIteration={() => {
                   // 每次打开都从「在当前分支继续」开始，避免沿用上一次的选择。
@@ -740,7 +742,6 @@ function WorkbenchPage({
                     onStartIterationPlanning(workspaceApplication.id, request)
                   }
                   onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
-                  onThemeChange={handleThemeChange}
                   onPlanningStreamReady={onPlanningStreamReady}
                   onSavePlanningRequirementSpec={onSavePlanningRequirementSpec}
                   onStopPlanning={onStopPlanning}

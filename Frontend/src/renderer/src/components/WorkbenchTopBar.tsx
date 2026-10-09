@@ -1,6 +1,12 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { message } from 'antd'
-import { BlockOutlined, LeftOutlined, FolderOutlined } from '@ant-design/icons'
+import {
+  BlockOutlined,
+  LeftOutlined,
+  FolderOutlined,
+  MoonOutlined,
+  SunOutlined
+} from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import VersionActions from './VersionActions'
@@ -24,6 +30,10 @@ type Props = {
   developmentTotals?: { completed: number; total: number }
   rightPanelOpen: boolean
   onToggleRightPanel: () => void
+  /** 当前主题：驱动右侧快捷区里月亮/太阳图标按钮的形态。 */
+  theme: 'light' | 'dark'
+  /** 切换主题：由顶栏的快捷按钮触发。 */
+  onThemeChange: (theme: 'light' | 'dark') => void
   /** 提交并推送：打开提交弹框。 */
   onPublishBranch?: () => void
   /** 发起新迭代：打开迭代弹框。 */
@@ -32,13 +42,13 @@ type Props = {
   onBranchSelect?: (branchName: string) => void
   /** 当前查看的分支名。 */
   viewingBranchName?: string
-  /** 正在回看历史分支：右侧的 Agent 身份、跟随开关与预览开关都不适用，整组隐藏。 */
+  /** 正在回看历史分支：预览开关指向"当前迭代的推进"，在这里无意义，故隐藏（主题是全局偏好，仍保留）。 */
   versionReadOnly?: boolean
 }
 
 /**
  * 工作台顶部单条：左 = Logo(DevAgent Studio)，分隔线后 = 应用卡 + 阶段横排 stepper，
- * 右侧 = 状态提示（当前 Agent + 跟随旅程）+ 预览开关，主题入口统一放在左侧快捷栏。
+ * 右侧 = 快捷区（主题切换 + 预览开关）。
  */
 export default function WorkbenchTopBar({
   application,
@@ -48,6 +58,8 @@ export default function WorkbenchTopBar({
   onReturnWelcome,
   rightPanelOpen,
   onToggleRightPanel,
+  theme,
+  onThemeChange,
   onPublishBranch,
   onStartIteration,
   onBranchSelect,
@@ -204,19 +216,33 @@ export default function WorkbenchTopBar({
         </>
       ) : null}
 
-      {/* 历史分支只读回看：预览开关指向"当前迭代的推进"，在这里既无意义也无处可去，故隐藏。 */}
-      {!versionReadOnly ? (
+      {/* 右侧快捷区：主题切换 + 预览开关。整组由本容器推到最右（margin-left: auto），
+          顺序固定为「主题在预览左侧」。主题是全局偏好，只读回看历史分支时仍保留；
+          预览开关指向"当前迭代的推进"，只读时无意义，故单独隐藏。 */}
+      <div className={cx('workbench-topbar-actions')}>
         <button
-          className={cx('workbench-topbar-preview-toggle', rightPanelOpen && 'active')}
-          onClick={onToggleRightPanel}
-          title={rightPanelOpen ? '隐藏右侧预览' : '显示右侧预览'}
+          aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
+          className={cx('workbench-topbar-theme-toggle')}
+          onClick={() => onThemeChange(theme === 'dark' ? 'light' : 'dark')}
+          title={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
           type="button"
-          aria-label="切换右侧预览"
-          aria-pressed={rightPanelOpen}
         >
-          <BlockOutlined />
+          {theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
         </button>
-      ) : null}
+
+        {!versionReadOnly ? (
+          <button
+            className={cx('workbench-topbar-preview-toggle', rightPanelOpen && 'active')}
+            onClick={onToggleRightPanel}
+            title={rightPanelOpen ? '隐藏右侧预览' : '显示右侧预览'}
+            type="button"
+            aria-label="切换右侧预览"
+            aria-pressed={rightPanelOpen}
+          >
+            <BlockOutlined />
+          </button>
+        ) : null}
+      </div>
 
       <PhaseSwitchConfirmModal
         fromPhase={derivedPhase}

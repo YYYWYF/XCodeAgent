@@ -5,11 +5,9 @@ import {
   HistoryOutlined,
   HourglassOutlined,
   LeftOutlined,
-  MoonOutlined,
   PlusOutlined,
   RightOutlined,
   SettingOutlined,
-  SunOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
 import type { CSSProperties, ReactElement } from 'react'
@@ -84,7 +82,6 @@ type SessionSidebarProps = {
   onShowExternalApis: () => void
   onShowSettings: () => void
   onShowSkills: () => void
-  onThemeChange: (theme: 'light' | 'dark') => void
   pages: DevelopmentPlanningPageOption[]
   pageTree: DevelopmentPlanningPageTreeNode[]
   entities: DevelopmentPlanningEntityOption[]
@@ -127,7 +124,6 @@ export default function SessionSidebar({
   onApiEndpointSelect,
   onEntitySelect,
   onPageSelect,
-  onThemeChange,
   onShowFiles,
   onShowDataSources,
   onShowExternalApis,
@@ -351,16 +347,6 @@ export default function SessionSidebar({
                 </button>
               </>
             ) : null}
-            <button
-              aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
-              className={cx('session-theme-toggle')}
-              onClick={() => onThemeChange(theme === 'dark' ? 'light' : 'dark')}
-              title={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
-              type="button"
-            >
-              {theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
-              <span>{theme === 'dark' ? '浅色主题' : '深色主题'}</span>
-            </button>
           </div>
           <span className={cx('session-rail-divider')} aria-hidden="true" />
           <div className={cx('session-rail-secondary')}>

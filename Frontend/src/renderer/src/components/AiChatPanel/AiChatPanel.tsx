@@ -328,7 +328,6 @@ type Props = {
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
-  onThemeChange: (theme: 'light' | 'dark') => void
   onPlanningStreamReady?: (
     inject: ((chunk: { content?: string; workflow?: WorkflowRunPayload }) => void) | null
   ) => void
@@ -855,7 +854,6 @@ export default function AiChatPanel({
   onStartDesignStageRevision,
   onStartIterationPlanning,
   onRevisionContinuationHandlerChange,
-  onThemeChange,
   onPlanningStreamReady,
   onSavePlanningRequirementSpec,
   onStopPlanning,
@@ -4817,7 +4815,6 @@ export default function AiChatPanel({
             onShowExternalApis={handleShowExternalApis}
             onShowSettings={handleShowSettings}
             onShowSkills={handleShowSkills}
-            onThemeChange={onThemeChange}
             pages={displayedPlanningPages}
             pageTree={displayedPlanningPageTree}
             apiContracts={developmentPlanningApiContracts}
