@@ -105,9 +105,17 @@ export default function WorkbenchTopBar({
 
   return (
     <div className={cx('workbench-topbar')}>
-      <div className={cx('workbench-topbar-logo')}>
+      {/* Logo 同时是返回首页的入口：图标与 "DevAgent Studio" 文案整块可点，
+          与右侧应用卡保持一致的返回语义，避免左上角只有应用卡能回首页。 */}
+      <button
+        className={cx('workbench-topbar-logo')}
+        onClick={onReturnWelcome}
+        title="返回首页"
+        aria-label="返回首页"
+        type="button"
+      >
         <BrandLogo size={22} />
-      </div>
+      </button>
 
       <span className={cx('workbench-topbar-divider')} aria-hidden="true" />
 

@@ -9,7 +9,7 @@
   background: var(--wb-canvas);
 }
 
-/* —— Logo（独立块）—— */
+/* —— Logo（独立块，可点返回首页）—— */
 .@{class-prefix}-workbench-topbar-logo {
   display: flex;
   align-items: center;
@@ -18,9 +18,15 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  cursor: default;
+  cursor: pointer;
   color: var(--wb-text);
   flex: 0 0 auto;
+  /* button 默认字体与周围不同，会改变 Logo 文案外观，这里继承页面字体。 */
+  font: inherit;
+
+  &:hover {
+    background: var(--wb-surface-hover);
+  }
 }
 
 .@{class-prefix}-workbench-topbar-divider {
