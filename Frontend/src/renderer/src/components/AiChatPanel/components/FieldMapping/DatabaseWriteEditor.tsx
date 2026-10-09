@@ -37,7 +37,7 @@ export default function DatabaseWriteEditor({ selection, columns, fields, writes
   /** 渲染一行先选目标列、再选值来源及参数的写入配置。 */
   const renderWrite = (write: WorkflowApiDatabaseWriteDraft, index: number): ReactElement => {
     const right = write.right
-    const targetColumn = columns.find((column) => column.name === write.column)
+    const targetColumn = readOnly ? write : columns.find((column) => column.name === write.column)
     const targetLabel = `${write.column || '—'}${targetColumn?.description ? `（${targetColumn.description}）` : ''} · ${write.type}`
     const rowError = errors[`__databaseWrite:${index}`]
 

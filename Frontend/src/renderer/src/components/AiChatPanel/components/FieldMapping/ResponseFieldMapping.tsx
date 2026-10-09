@@ -37,7 +37,7 @@ export default function ResponseFieldMapping({ field, fields, sources, draft, re
   const endpointField = endpointFieldSnapshot(field)
   const selected = mapped?.sourceFields || []
   const options = sources.map((source) => ({ value: sourceFieldKey(source), label: `${source.sourceType === 'database' ? source.column : source.path}${source.description ? `（${source.description}）` : ''} · ${source.type}` }))
-  const issue = error || (selected.some((source) => !sources.some((candidate) => sourceFieldKey(candidate) === sourceFieldKey(source))) ? '来源字段已失效，请重新配置。' : '')
+  const issue = error || (!readOnly && selected.some((source) => !sources.some((candidate) => sourceFieldKey(candidate) === sourceFieldKey(source))) ? '来源字段已失效，请重新配置。' : '')
   const ruleOptions = [...options.map((item) => ({ ...item, value: `source:${item.value}` })),
     ...fields.filter((item) => item.side === 'request').map((item) => ({ value: `endpoint:${apiDesignFieldKey(item)}`, label: `${item.path} · ${item.type}`, group: ({ path: '路径参数', query: '查询参数', header: '请求头', request_body: '请求体', response_body: '响应体' })[item.location] })),
     ...BUILTIN_OPTIONS.map((item) => ({ ...item, value: `builtin:${item.value}` }))]

@@ -18,7 +18,7 @@ const CRUD_OPTIONS = Object.entries(DATABASE_OPERATION_LABELS).map(([value, labe
 type Props = {
   fields: WorkflowApiField[]
   selection: BindingSelection & { sourceType: 'database' }
-  metadata: ApiDesignDatabaseMetadata
+  metadata?: ApiDesignDatabaseMetadata
   draft: WorkflowApiDesignDraft
   operation?: WorkflowApiDatabaseOperation
   editable: boolean
@@ -34,7 +34,7 @@ export default function DatabaseMapping({ fields, selection, metadata, draft, op
   const [collapsed, setCollapsed] = useState<Record<'query' | 'write' | 'return', boolean>>({ query: !readOnly, write: !readOnly, return: !readOnly })
   // 切换编辑与详情模式时重置默认状态，普通草稿更新保留用户的展开选择。
   useEffect(() => { setCollapsed({ query: !readOnly, write: !readOnly, return: !readOnly }) }, [readOnly])
-  const columns = metadata.columns || []
+  const columns = metadata?.columns || []
   const responseFields = fields.filter((field) => field.side === 'response')
 
   // 仅在收到一次提交校验结果时展开错误区，用户随后仍可手动收起。
@@ -49,7 +49,7 @@ export default function DatabaseMapping({ fields, selection, metadata, draft, op
 
   /** 返回字段复用单数据源规则编辑器，不改变来源选择旅程。 */
   const renderField = (field: WorkflowApiField): ReactElement => <ResponseFieldMapping key={apiDesignFieldKey(field)} field={field} fields={fields}
-    sources={mappingCandidates(field, selection, metadata)} draft={draft} readOnly={readOnly} disabled={!editable || busy}
+    sources={metadata ? mappingCandidates(field, selection, metadata) : []} draft={draft} readOnly={readOnly} disabled={!editable || busy}
     error={errors[apiDesignFieldKey(field)]} onChange={onChange} />
 
   /** 展开或收起指定配置区。 */
