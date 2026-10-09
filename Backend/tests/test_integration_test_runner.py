@@ -13,6 +13,78 @@ from app.services.test_validation import create_revision_requests, evaluate_qual
 
 
 class IntegrationTestRunnerTests(unittest.TestCase):
+    def test_direct_runtime_runs_python_dependency_compile_and_startup_checks(self) -> None:
+        """Direct 工作区不得因缺少 Maven 而跳过 Python 后端质量检查。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            runtime = root / "agent-runtime"
+            runtime.mkdir()
+            (runtime / "pyproject.toml").write_text("[project]\nname='example'\n", encoding="utf-8")
+            (runtime / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+            calls: list[list[str]] = []
+
+            def fake_run(argv, **_kwargs):
+                """记录被执行的 uv 命令并模拟成功。"""
+
+                calls.append(argv)
+                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+            with (
+                patch("app.services.integration_test_runner.resolve_uv_command", return_value="/usr/bin/uv"),
+                patch("app.services.integration_test_runner.workspace_process_registry.run", side_effect=fake_run),
+                patch("app.services.integration_test_runner.run_python_runtime_startup_check", return_value={
+                    "id": "backend_startup", "passed": True, "skipped": False,
+                    "required": True, "language": "python",
+                }),
+            ):
+                result = run_integration_checks(
+                    {"workspace": workspace}, phase="build",
+                    affected_layers={"backend"}, include_backend_startup=True,
+                )
+
+        self.assertEqual(
+            [item["id"] for item in result["test_results"]],
+            ["backend_install", "backend_build", "backend_startup"],
+        )
+        self.assertEqual(calls, [
+            ["/usr/bin/uv", "sync", "--frozen"],
+            ["/usr/bin/uv", "run", "--no-sync", "python", "-m", "compileall", "-q", "src"],
+        ])
+        self.assertTrue(all(item["passed"] for item in result["test_results"]))
+
+    def test_direct_runtime_dependency_failure_skips_compile_and_startup(self) -> None:
+        """Python 依赖同步失败时保留一条阻塞证据，不继续启动 Runtime。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            runtime = Path(workspace) / "agent-runtime"
+            runtime.mkdir()
+            (runtime / "pyproject.toml").write_text("[project]\nname='example'\n", encoding="utf-8")
+            calls: list[list[str]] = []
+
+            def failed_sync(argv, **_kwargs):
+                """只记录依赖同步命令并返回失败。"""
+
+                calls.append(argv)
+                return SimpleNamespace(returncode=1, stdout="", stderr="依赖不可用")
+
+            with (
+                patch("app.services.integration_test_runner.resolve_uv_command", return_value="/usr/bin/uv"),
+                patch("app.services.integration_test_runner.workspace_process_registry.run", side_effect=failed_sync),
+                patch("app.services.integration_test_runner.run_python_runtime_startup_check") as startup,
+            ):
+                result = run_integration_checks(
+                    {"workspace": workspace}, phase="build",
+                    affected_layers={"backend"}, include_backend_startup=True,
+                )
+
+        checks = result["test_results"]
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(checks[0]["passed"])
+        self.assertTrue(checks[1]["skipped"])
+        self.assertTrue(checks[2]["skipped"])
+        startup.assert_not_called()
+
     def test_direct_frontend_scope_skips_install_and_backend_checks(self) -> None:
         """快速前端修复只验证前端层，不重复安装依赖或执行后端命令。"""
 

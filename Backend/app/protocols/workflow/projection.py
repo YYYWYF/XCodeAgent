@@ -683,10 +683,15 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
         result = _workflow_code_review_result(
             update.get("code_review_result"), update.get("code_review_report_path")
         )
+        message = str(
+            update.get("message") or result.get("summary") or "前后端代码审查完成。"
+        )
+        review_error = str(update.get("error") or "").strip()
+        # 审查节点已裁剪宿主路径；失败时将有限原因附在动作详情中。
+        if update.get("status") == "failed" and review_error:
+            message = f"{message} 原因：{review_error[:1_000]}"
         return {
-            "message": str(
-                update.get("message") or result.get("summary") or "前后端代码审查完成。"
-            ),
+            "message": message,
             "data": {
                 "codeReviewResult": result,
                 "codeReviewRepair": _workflow_code_review_repair(
@@ -924,8 +929,14 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
         }
     if node_name == "build":
         summary = update.get("build_summary", {})
+        finalization_error = (
+            str(summary.get("finalization_error") or "").strip()
+            if isinstance(summary, dict)
+            else ""
+        )
         return {
-            "message": f"完成={summary.get('completed', 0)}，失败={summary.get('failed', 0)}",
+            "message": finalization_error
+            or f"完成={summary.get('completed', 0)}，失败={summary.get('failed', 0)}",
             "data": {
                 "buildSummary": summary,
                 "buildExecutionSlice": update.get("build_execution_slice"),
@@ -1398,6 +1409,11 @@ def _workflow_summary(
         retry_message = build_summary.get("retry_message")
         if retry_message:
             message = str(retry_message)
+        # 审查失败保留上游已裁剪的原因，避免旧测试门禁结论遮住真实故障。
+        if status == "failed" and result.get("code_review_next_action") == "handle_failure":
+            review_error = str(result.get("error") or "").strip()
+            if review_error:
+                message = f"前后端代码审查失败：{review_error[:1_000]}"
     # 只有启动预览及其后续阶段可以公开预览地址，避免重试集成测试时泄漏旧值。
     preview_visible = _preview_visible_for_phase(result.get("phase"))
     if preview_visible and result.get("preview_url") and status != "failed":

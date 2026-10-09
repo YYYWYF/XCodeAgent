@@ -15,6 +15,14 @@ export type DirectEntityDesign = {
   fields: string[]
 }
 
+export type DirectEntityExecution = {
+  entityId: string
+  tableName: string
+  databasePath: string
+  migrationName: string
+  status: 'applied' | 'already_applied'
+}
+
 export type DirectEndpointContract = {
   apiContractId: string
   endpointId: string
@@ -34,6 +42,7 @@ type DirectDevelopmentPayload = {
   threadId: string
   status: 'completed' | 'failed'
   entity?: DirectEntityDesign
+  execution?: DirectEntityExecution
   endpoint?: DirectEndpointContract
   lifecycle?: ApplicationLifecycle
   error?: { message?: string }
@@ -62,7 +71,7 @@ function readDirectPayload(value: unknown): DirectDevelopmentPayload | undefined
 
 /** 通过现有 AG-UI 客户端执行一次 Direct 正式产物动作。 */
 async function runDirectAction(
-  action: 'read_entity' | 'confirm_entity' | 'read_endpoint' | 'generate_endpoint' | 'save_endpoint',
+  action: 'read_entity' | 'confirm_entity' | 'execute_entity_sql' | 'read_endpoint' | 'generate_endpoint' | 'save_endpoint',
   workspaceRoot: string,
   target: Record<string, unknown>,
   extra: Record<string, unknown> = {}
@@ -112,6 +121,17 @@ export async function confirmDirectEntityDesign(
   const payload = await runDirectAction('confirm_entity', workspaceRoot, { entityId }, { sqlSha256 })
   if (!payload.entity || !payload.lifecycle) throw new Error('实体 SQL 确认缺少产物或生命周期结果。')
   return { entity: payload.entity, lifecycle: payload.lifecycle }
+}
+
+/** 将用户当前看到的已确认 SQL 执行到本项目业务 SQLite。 */
+export async function executeDirectEntitySql(
+  workspaceRoot: string,
+  entityId: string,
+  sqlSha256: string
+): Promise<DirectEntityExecution> {
+  const payload = await runDirectAction('execute_entity_sql', workspaceRoot, { entityId }, { sqlSha256 })
+  if (!payload.execution) throw new Error('实体 SQL 执行缺少结果。')
+  return payload.execution
 }
 
 /** 读取当前 Endpoint 正式 Schema 草稿及保存状态。 */

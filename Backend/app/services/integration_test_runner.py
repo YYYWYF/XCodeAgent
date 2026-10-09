@@ -15,6 +15,8 @@ from app.services.data_source_policy import read_application_datasource_type
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.backend_startup_check import run_backend_startup_check
 from app.services.backend_startup_diagnostics import startup_source_fingerprint
+from app.services.agent_runtime_uv import resolve_uv_command
+from app.services.python_runtime_startup_check import run_python_runtime_startup_check
 from app.utils.subprocess_output import subprocess_output_text
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
@@ -100,14 +102,17 @@ def run_integration_checks(
     for result in frontend_results:
         results.append(result)
         events.append(result["id"])
-    # Static 是纯前端运行时，即使模板保留 pom.xml 也不得触发后端质量门。
-    if "backend" in selected_layers and datasource_type != "static":
+    # Static 仅跳过无 Runtime 的后端；正式 Python Runtime 始终属于可执行后端。
+    if "backend" in selected_layers and (
+        datasource_type != "static" or _find_python_runtime_root(root) is not None
+    ):
         if (
             "frontend" in selected_layers
             and frontend is not None
             and _has_blocking_failure(frontend_results)
         ):
             backend_results = _backend_checks_skipped_after_frontend_failure(
+                root=root,
                 phase=phase,
                 on_progress=on_progress,
             )
@@ -157,6 +162,19 @@ def _backend_startup_result(
     """仅在真实后端构建成功后检测新产物；前置失败不产生重复修复请求。"""
     build = next((item for item in backend_results if item["id"] == "backend_build"), {})
     backend_root = _find_maven_project_root(root)
+    python_root = _find_python_runtime_root(root) if backend_root is None else None
+    if python_root is not None:
+        if not build.get("passed") or build.get("skipped"):
+            return _skipped_after_blocking_failure_result(
+                check_id="backend_startup", name="后端启动检查", layer="backend", language="python",
+                evidence="Python 依赖或源码检查未通过，跳过本轮启动探测。",
+                required=True, on_progress=on_progress,
+            )
+        return run_python_runtime_startup_check(
+            root=root, runtime_root=python_root, log_root=log_root,
+            run_id=str(state.get("active_run_id") or ""),
+            uv_command=resolve_uv_command(), on_progress=on_progress,
+        )
     if not backend_root or not build.get("passed") or build.get("skipped"):
         return _skipped_after_blocking_failure_result(
             check_id="backend_startup", name="后端启动检查", layer="backend", language="java",
@@ -551,6 +569,49 @@ def _backend_checks(
             )
         return [build_result, unit_test_result]
 
+    python_root = _find_python_runtime_root(root)
+    if python_root is not None:
+        uv_command = resolve_uv_command()
+        install = (
+            _run_command_result(
+                check_id="backend_install", name="Python 依赖同步检查",
+                layer="backend", language="python",
+                argv=[uv_command, "sync", "--frozen"], cwd=python_root,
+                root=root, log_root=log_root, required=True, on_progress=on_progress,
+                timeout_seconds=300,
+            )
+            if uv_command
+            else _missing_tool_result(
+                check_id="backend_install", name="Python 依赖同步检查",
+                layer="backend", language="python", evidence="未找到 uv 命令，无法同步 Agent Runtime 依赖。",
+                required=True, on_progress=on_progress,
+            )
+        )
+        build = (
+            _run_command_result(
+                check_id="backend_build", name="Python 源码编译检查",
+                layer="backend", language="python",
+                argv=[uv_command, "run", "--no-sync", "python", "-m", "compileall", "-q", "src"],
+                cwd=python_root, root=root, log_root=log_root, required=True,
+                on_progress=on_progress,
+            )
+            if install["passed"] and uv_command
+            else _skipped_after_blocking_failure_result(
+                check_id="backend_build", name="Python 源码编译检查",
+                layer="backend", language="python", evidence="Python 依赖同步未通过，源码检查未执行。",
+                required=True, on_progress=on_progress,
+            )
+        )
+        results = [install, build]
+        if include_unit_tests:
+            results.append(_python_runtime_unit_check(
+                root=root, python_root=python_root, log_root=log_root,
+                unit_tests_affected=unit_tests_affected,
+                prerequisite_passed=bool(install["passed"] and build["passed"]),
+                on_progress=on_progress,
+            ))
+        return results
+
     results = [
         _missing_tool_result(
             check_id="backend_build",
@@ -589,6 +650,13 @@ def _backend_unit_checks(
 
     maven_root = _find_maven_project_root(root)
     if maven_root is None:
+        python_root = _find_python_runtime_root(root)
+        if python_root is not None:
+            return [_python_runtime_unit_check(
+                root=root, python_root=python_root, log_root=log_root,
+                unit_tests_affected=unit_tests_affected,
+                prerequisite_passed=True, on_progress=on_progress,
+            )]
         return [
             _missing_tool_result(
                 check_id="backend_unit_tests",
@@ -767,6 +835,7 @@ def _run_command_result(
     log_root: Path,
     required: bool,
     on_progress: CheckProgressCallback | None,
+    timeout_seconds: int = COMMAND_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     report_check_progress(
         on_progress,
@@ -792,7 +861,7 @@ def _run_command_result(
             cwd=str(cwd),
             text=True,
             capture_output=True,
-            timeout=COMMAND_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
             check=False,
         )
         stdout = subprocess_output_text(completed.stdout)
@@ -827,7 +896,7 @@ def _run_command_result(
     if error:
         evidence = f"{evidence}；错误：{error}"
     if timed_out:
-        evidence = f"{evidence}；超过 {COMMAND_TIMEOUT_SECONDS}s 超时。"
+        evidence = f"{evidence}；超过 {timeout_seconds}s 超时。"
     if returncode not in (0, None):
         evidence = f"{evidence}；退出码：{returncode}。"
     if not passed:
@@ -1011,6 +1080,7 @@ def _has_blocking_failure(results: list[dict[str, Any]]) -> bool:
 
 def _backend_checks_skipped_after_frontend_failure(
     *,
+    root: Path,
     phase: IntegrationCheckPhase,
     on_progress: CheckProgressCallback | None,
 ) -> list[dict[str, Any]]:
@@ -1018,6 +1088,8 @@ def _backend_checks_skipped_after_frontend_failure(
 
     checks: list[tuple[str, str, bool]] = []
     if phase in {"all", "build"}:
+        if _find_maven_project_root(root) is None and _find_python_runtime_root(root) is not None:
+            checks.append(("backend_install", "Python 依赖同步检查", True))
         checks.append(("backend_build", "后端构建检查", True))
     if phase in {"all", "unit"}:
         checks.append(("backend_unit_tests", "后端单元测试", False))
@@ -1026,7 +1098,7 @@ def _backend_checks_skipped_after_frontend_failure(
             check_id=check_id,
             name=name,
             layer="backend",
-            language="java",
+            language="python" if _find_python_runtime_root(root) is not None else "java",
             evidence="前端检查已发生阻塞失败，本步骤未执行并直接进入修复任务。",
             required=required,
             on_progress=on_progress,
@@ -1119,6 +1191,50 @@ def _find_maven_project_root(root: Path) -> Path | None:
         if (candidate / "pom.xml").is_file():
             return candidate
     return None
+
+
+def _find_python_runtime_root(root: Path) -> Path | None:
+    """仅识别当前 Direct 拓扑的 agent-runtime Python 工程。"""
+
+    candidate = root / "agent-runtime"
+    return candidate if candidate.is_dir() and (candidate / "pyproject.toml").is_file() else None
+
+
+def _python_runtime_unit_check(
+    *, root: Path, python_root: Path, log_root: Path,
+    unit_tests_affected: bool, prerequisite_passed: bool,
+    on_progress: CheckProgressCallback | None,
+) -> dict[str, Any]:
+    """只在 Python Runtime 存在且本轮受影响时执行其 pytest 测试。"""
+
+    tests_root = python_root / "tests"
+    if not tests_root.is_dir() or not any(tests_root.rglob("test_*.py")):
+        return _missing_tool_result(
+            check_id="backend_unit_tests", name="Python 单元测试", layer="backend",
+            language="python", evidence="Agent Runtime 没有 pytest 测试文件，跳过。",
+            required=False, on_progress=on_progress,
+        )
+    if not unit_tests_affected or not prerequisite_passed:
+        return _skipped_after_blocking_failure_result(
+            check_id="backend_unit_tests", name="Python 单元测试", layer="backend",
+            language="python", evidence=(
+                "本轮未影响 Agent Runtime，跳过 Python 单元测试。"
+                if not unit_tests_affected else "Python 依赖或源码检查未通过，跳过单元测试。"
+            ), required=False, on_progress=on_progress,
+        )
+    uv_command = resolve_uv_command()
+    if not uv_command:
+        return _missing_tool_result(
+            check_id="backend_unit_tests", name="Python 单元测试", layer="backend",
+            language="python", evidence="未找到 uv 命令，无法执行 pytest。",
+            required=True, on_progress=on_progress,
+        )
+    return _run_command_result(
+        check_id="backend_unit_tests", name="Python 单元测试", layer="backend",
+        language="python", argv=[uv_command, "run", "--frozen", "pytest"],
+        cwd=python_root, root=root, log_root=log_root, required=True,
+        on_progress=on_progress,
+    )
 
 
 def _maven_command(cwd: Path) -> list[str] | None:

@@ -243,6 +243,10 @@
   gap: 10px;
 }
 
+.preview-service-card.is-agent-runtime {
+  grid-column: 1 / -1;
+}
+
 .preview-service-card {
   position: relative;
   min-width: 0;
@@ -490,6 +494,21 @@
   > span:last-child {
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+}
+
+.preview-service-debug-link.ant-btn {
+  margin-top: 10px;
+  padding: 0 8px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-color: var(--wb-accent-border);
+
+  &:hover,
+  &:focus {
+    color: var(--wb-accent-hover);
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent);
   }
 }
 

@@ -615,7 +615,7 @@ acceptance.START
 `actual_project_checks` 复用项目已有行业标准工具，而不是自定义测试逻辑：
 
 - 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm` 或 `yarn`，执行 install、build，并在有对应测试文件时优先执行 `test:unit`、否则执行 `test`；
-- 后端：仅识别当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`），先执行 `-B -Dmaven.test.skip=true clean install`，确认构建通过且存在对应 `*Test.java` 后再执行 `-B -DfailIfNoTests=true test`；不探测 Python 工程或执行 pytest；
+- 后端：Maven 工程继续使用 Wrapper / Maven 执行生产构建及对应 Java 单测；Direct 的 `agent-runtime/pyproject.toml` 使用 `uv sync --frozen` 同步 Python 依赖、`uv run --no-sync python -m compileall -q src` 检查源码，并在测试阶段临时启动 Runtime 验证 `/health`。存在对应 `test_*.py` 且本轮受影响时执行 `uv run --frozen pytest`；依赖或源码失败会短路后续启动检查。
 - 缺失必需入口（如前端 package.json、frontend build script）会失败。没有对应单测文件时不执行 Jest/Maven test，并以明确原因跳过；不执行 E2E。
 - 前端性能测试：单测确认后弹出“是否跳过”按钮；继续执行时用 `launch_frontend_project(skip_install=True)` 启动用户 `frontend` 工程并解析真实 `preview_url`，再由 `npx --yes --package @lhci/cli@0.7.2 lhci autorun` 对 `collect.url=[preview_url]` 执行 Lighthouse；使用模拟采集但把网络/CPU 限速调至接近本地无限制，避免 dev server 大体积未打包模块被限速模型放大；结果 advisory，失败不进入质量门禁阻断或修复闭环。
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import secrets
 import subprocess
 from datetime import UTC, datetime
@@ -28,6 +29,7 @@ from app.services.agent_runtime_launch_support import (
     agent_runtime_environment as _agent_runtime_environment,
     agent_runtime_ready_timeout_seconds,
     allocate_loopback_port as _allocate_loopback_port,
+    load_or_create_anonymous_session_secret,
     run_agent_runtime_install as _run_agent_runtime_install,
     start_agent_runtime_server as _start_agent_runtime_server,
     wait_for_agent_runtime_ready as _wait_for_agent_runtime_ready,
@@ -86,7 +88,7 @@ def launch_agent_runtime_project(
     settings: Settings | None = None,
     include_debug_access: bool = False,
 ) -> dict[str, Any]:
-    """安装依赖并以每次启动独立的内部凭据运行 loopback Runtime。"""
+    """安装依赖并以独立内部凭据及稳定匿名会话密钥运行 Runtime。"""
 
     root = Path(workspace_path).expanduser().resolve()
     agent_runtime_root = root / "agent-runtime"
@@ -219,12 +221,25 @@ def _launch_agent_runtime_project_locked(
     runtime_url = f"http://127.0.0.1:{port}"
     gateway_token = secrets.token_urlsafe(32)
     direct_auth_enabled = _direct_runtime_auth_enabled(root)
+    # 匿名 Cookie 按工作区隔离，签名密钥跨进程重启保持不变；调试令牌仍逐次轮换。
+    anonymous_session_secret = (
+        load_or_create_anonymous_session_secret(runtime_root)
+        if direct_auth_enabled is False
+        else None
+    )
+    anonymous_cookie_name = (
+        "agent_runtime_" + hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16]
+        if direct_auth_enabled is False
+        else None
+    )
     environment = _agent_runtime_environment(
         settings,
         port=port,
         gateway_token=gateway_token,
         direct_auth_enabled=direct_auth_enabled,
         include_debug_access=include_debug_access,
+        anonymous_session_secret=anonymous_session_secret,
+        anonymous_cookie_name=anonymous_cookie_name,
     )
     server_result, process = _start_agent_runtime_server(
         uv_command=uv_command,

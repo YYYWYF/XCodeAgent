@@ -4,7 +4,7 @@
 
 Workbench 读取 `.xcodeagent/plans/technical-plan.json`，以 ProductPlan `pages` 作为页面事实，并按 `pageId` 合并 TechnicalPlan `pages[].references`；API 大纲从 `api_contracts` 投射 Endpoint。含 Java Backend 的拓扑仅在当前版 Endpoint Design 双文件已确认且指纹匹配时标记“已设计”；Direct 不读该映射产物。实体大纲只展示 TechnicalPlan 顶层 `entities`；实体没有全局数据源绑定状态。
 
-`agent_runtime_direct` 的实体详情在「开发产物」页展示正式字段和确定性 SQLite 建表 SQL。服务端先在隔离内存库执行并核对列，再由用户点击确认；确认后保存 `.xcodeagent/plans/direct/entities/` 设计与 `agent-runtime/src/app/infrastructure/migrations/sql/` 迁移文件，实体初次开发完成。目标库不在此时或预览启动时自动迁移。Direct 的接口详情从正式 Entity 定义和 Endpoint 语义单次调用模型生成请求体/响应体 JSON Schema 草稿，用户可编辑并保存确认于 `.xcodeagent/plans/direct/endpoints/`。接口契约保存不依赖实体 SQL 确认，也不等于接口代码已完成。Direct Build 再校验当前哈希下的 API 契约和相关实体 SQL，通过后复用通用 DAG 生成代码；模型不得改写已确认 SQL。下文 Endpoint 字段映射和 EntitySourceBinding 规则仅适用于非 Direct 拓扑。
+`agent_runtime_direct` 的实体详情在「开发产物」页展示正式字段和确定性 SQLite 建表 SQL。服务端先在隔离内存库执行并核对列，再由用户点击确认；确认后保存 `.xcodeagent/plans/direct/entities/` 设计与 `agent-runtime/src/app/infrastructure/migrations/sql/` 迁移文件，实体初次开发完成。用户可在同一详情页点击「执行 SQL」，将当前已确认且摘要匹配的建表语句应用到本项目业务 SQLite；执行结果与 SQLite 异常在页面展示，并与 Runtime 共用 `schema_migrations` 记录以支持重复点击。当前预览启动流程也会应用未执行的业务迁移。Direct 的接口详情从正式 Entity 定义和 Endpoint 语义单次调用模型生成请求体/响应体 JSON Schema 草稿，用户可编辑并保存确认于 `.xcodeagent/plans/direct/endpoints/`。接口契约保存不依赖实体 SQL 确认，也不等于接口代码已完成。Direct Build 再校验当前哈希下的 API 契约和相关实体 SQL，通过后复用通用 DAG 生成代码；模型不得改写已确认 SQL。下文 Endpoint 字段映射和 EntitySourceBinding 规则仅适用于非 Direct 拓扑。
 
 点击大纲只选择本次目标。Endpoint 的“设计 API/重新设计”动作打开独立的 `ApiDesignConfigModal`，通过 `/endpoint-designs/run` 的 AG-UI `prepare/save` 动作保存正式映射，不进入主工作流；页面或 API 开发先进入 `api_design_readiness_gate`，门禁缺失时暂停并展示缺失清单，用户点击具体条目后才打开同一弹窗，保存后仍需在原会话确认继续开发。会话不归属于页面、接口或实体，已有 Workflow 消息及用户显式打开的历史会话继续展示运行结果。
 

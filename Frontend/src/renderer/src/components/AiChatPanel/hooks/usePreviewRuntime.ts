@@ -242,7 +242,8 @@ export function usePreviewRuntime(options: Options): {
     setBusyLaunchLabel(
       action === 'restart'
         ? snapshot?.runtime?.frontend.status === 'running' &&
-          snapshot.runtime.backend.status === 'running'
+          ['running', 'skipped'].includes(snapshot.runtime.backend.status) &&
+          ['running', 'skipped'].includes(snapshot.runtime.agentRuntime.status)
           ? '重启服务'
           : '启动服务'
         : undefined

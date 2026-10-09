@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -17,8 +18,10 @@ from app.services.direct_api_contract import (
 )
 from app.services.direct_entity_design import (
     DirectEntityConfirmRequest,
+    DirectEntityExecuteRequest,
     DirectEntityRequest,
     confirm_direct_entity_design,
+    execute_direct_entity_sql,
     read_direct_entity_design,
 )
 
@@ -126,6 +129,33 @@ class DirectDevelopmentTests(unittest.TestCase):
         ))
         self.assertEqual(saved["status"], "confirmed")
         self.assertEqual((self.root / saved["sqlPath"]).read_text(encoding="utf-8"), draft["sql"])
+
+    def test_confirmed_sql_executes_once_in_project_database(self) -> None:
+        """显式执行只写当前项目业务库，并与 Runtime 迁移记录保持一致。"""
+
+        request = DirectEntityRequest(workspaceRoot=str(self.root), entityId="Message")
+        draft = read_direct_entity_design(request)
+        confirmed = confirm_direct_entity_design(DirectEntityConfirmRequest(
+            workspaceRoot=str(self.root), entityId="Message", sqlSha256=draft["sqlSha256"],
+        ))
+        database_path = self.root / "agent-runtime/.business-data/business.sqlite"
+        self.assertFalse(database_path.exists())
+        execute_request = DirectEntityExecuteRequest(
+            workspaceRoot=str(self.root), entityId="Message", sqlSha256=confirmed["sqlSha256"],
+        )
+        first = execute_direct_entity_sql(execute_request)
+        second = execute_direct_entity_sql(execute_request)
+        self.assertEqual(first["status"], "applied")
+        self.assertEqual(second["status"], "already_applied")
+        self.assertEqual(first["databasePath"], "agent-runtime/.business-data/business.sqlite")
+        with sqlite3.connect(database_path) as connection:
+            columns = [row[1] for row in connection.execute('PRAGMA table_info("message")')]
+            record = connection.execute(
+                "SELECT sha256 FROM schema_migrations WHERE name = ?",
+                (first["migrationName"],),
+            ).fetchone()
+        self.assertEqual(columns, ["id", "owner_id", "content"])
+        self.assertEqual(record, (draft["sqlSha256"],))
 
 
 if __name__ == "__main__":

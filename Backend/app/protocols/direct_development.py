@@ -7,8 +7,10 @@ from typing import Any, AsyncIterator
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.services.direct_entity_design import (
     DirectEntityConfirmRequest,
+    DirectEntityExecuteRequest,
     DirectEntityRequest,
     confirm_direct_entity_design,
+    execute_direct_entity_sql,
     read_direct_entity_design,
 )
 from app.services.direct_api_contract import (
@@ -27,7 +29,7 @@ def direct_development_capabilities() -> dict[str, Any]:
         "name": "direct-development",
         "endpoint": "/direct-development/run",
         "transport": "ag-ui-sse",
-        "actions": ["read_entity", "confirm_entity", "read_endpoint", "generate_endpoint", "save_endpoint"],
+        "actions": ["read_entity", "confirm_entity", "execute_entity_sql", "read_endpoint", "generate_endpoint", "save_endpoint"],
         "customEventName": "direct-development",
         "stateSnapshotKey": "directDevelopment",
         "workflowIndependent": True,
@@ -61,6 +63,21 @@ def build_direct_development_stream(
             return AgUiActionResult(
                 data={"action": action, "entity": design, "lifecycle": lifecycle.model_dump(mode="json", by_alias=True)},
                 message="实体 SQL 已确认，实体开发已完成。",
+            )
+        if action == "execute_entity_sql":
+            import asyncio
+
+            execution = await asyncio.to_thread(
+                execute_direct_entity_sql,
+                DirectEntityExecuteRequest.model_validate(values),
+            )
+            message = (
+                "实体 SQL 此前已应用到项目 SQLite。"
+                if execution["status"] == "already_applied"
+                else "实体 SQL 已应用到项目 SQLite。"
+            )
+            return AgUiActionResult(
+                data={"action": action, "execution": execution}, message=message
             )
         if action in {"read_endpoint", "generate_endpoint", "save_endpoint"}:
             if action == "save_endpoint":

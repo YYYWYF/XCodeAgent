@@ -20,6 +20,7 @@ ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 LOG_FILES = {
     "frontend": ("install.stdout.log", "install.stderr.log", "frontend.stdout.log", "frontend.stderr.log"),
     "backend": ("backend-build.stdout.log", "backend-build.stderr.log", "backend-repackage.stdout.log", "backend-repackage.stderr.log", "backend.stdout.log", "backend.stderr.log"),
+    "agentRuntime": ("agent-runtime-install.stdout.log", "agent-runtime-install.stderr.log", "agent-runtime.stdout.log", "agent-runtime.stderr.log"),
 }
 
 
@@ -91,7 +92,7 @@ def read_record(workspace: str | Path) -> dict[str, Any]:
     path = runtime_root(workspace) / "preview-runtime.json"
     with _lock:
         if not path.exists():
-            return {"attemptId": "", "status": "stopped", "frontend": {"status": "stopped"}, "backend": {"status": "stopped"}}
+            return {"attemptId": "", "status": "stopped", "frontend": {"status": "stopped"}, "backend": {"status": "stopped"}, "agentRuntime": {"status": "stopped"}}
         return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -116,7 +117,7 @@ def begin_attempt(workspace: str | Path) -> str:
                 if path.exists() and not path.is_symlink():
                     path.write_text("", encoding="utf-8")
         attempt = uuid4().hex
-        write_record(workspace, {"attemptId": attempt, "startedAt": datetime.now(UTC).isoformat(), "status": "starting", "frontend": {"status": "stopped"}, "backend": {"status": "starting"}})
+        write_record(workspace, {"attemptId": attempt, "startedAt": datetime.now(UTC).isoformat(), "status": "starting", "frontend": {"status": "stopped"}, "backend": {"status": "stopped"}, "agentRuntime": {"status": "stopped"}})
         return attempt
 
 
@@ -124,12 +125,13 @@ def record_progress(workspace: str | Path, stage: str, status: str, message: str
     """记录启动阶段，供独立抽屉实时读取。"""
     with _lock:
         value = read_record(workspace)
-        if stage in {"frontend", "backend"}:
-            current = value.get(stage) if isinstance(value.get(stage), dict) else {}
+        layer = "agentRuntime" if stage == "agent_runtime" else stage
+        if layer in {"frontend", "backend", "agentRuntime"}:
+            current = value.get(layer) if isinstance(value.get(layer), dict) else {}
             # 进度事件没有 PID 和就绪证据，完整启动结果落盘前必须保持 starting，
             # 否则 watch 会把缺少 PID 的临时 running 误判为服务异常退出。
             projected_status = "starting" if status in {"running", "completed"} else status
-            value[stage] = {
+            value[layer] = {
                 **current,
                 "status": projected_status,
                 "message": redact(message),
@@ -160,8 +162,10 @@ def finish_attempt(workspace: str | Path, result: dict[str, Any]) -> None:
     with _lock:
         value = read_record(workspace)
         value.update({"status": result.get("status", "failed"), "message": redact(str(result.get("message") or "")), "previewUrl": result.get("preview_url") if result.get("status") == "running" else None, "failedStage": result.get("failed_stage")})
-        for layer in ("backend", "frontend"):
-            part = result.get(layer) or {}
+        for layer in ("backend", "frontend", "agentRuntime"):
+            part = result.get("agent_runtime" if layer == "agentRuntime" else layer) or {}
+            if layer == "backend" and not part and result.get("agent_runtime"):
+                part = {"status": "skipped", "message": "当前拓扑没有 Java 后端，无需启动。"}
             server = part.get("server") or {}
             value[layer] = {"status": part.get("status", "stopped"), "message": redact(str(part.get("message") or ("未启动：后端启动失败" if layer == "frontend" and result.get("status") == "failed" else ""))), "pid": server.get("pid"), "port": _coerce_port(server.get("port") or part.get("port")) or _port_from_url(part.get("preview_url")), "url": part.get("preview_url"), "command": str(server.get("command") or ""), "ready": server.get("ready", False)}
         write_record(workspace, value)
@@ -203,7 +207,7 @@ def read_logs(workspace: str | Path) -> dict[str, Any]:
                 stream.seek(max(0, size - LOG_LIMIT))
                 content = _plain_log_text(stream.read(LOG_LIMIT).decode("utf-8", errors="replace"))
             if content:
-                entries.append({"name": name, "stream": "stderr" if ".stderr." in name else "stdout", "stage": "install" if name.startswith("install") else "build" if "build" in name or "repackage" in name else "start", "content": content, "truncated": size > LOG_LIMIT})
+                entries.append({"name": name, "stream": "stderr" if ".stderr." in name else "stdout", "stage": "install" if name.startswith("install") or "-install." in name else "build" if "build" in name or "repackage" in name else "start", "content": content, "truncated": size > LOG_LIMIT})
         logs[layer] = entries
     return logs
 
@@ -231,6 +235,43 @@ def _frontend_runtime_is_ready(root: Path, part: dict[str, Any]) -> bool:
     )
 
 
+def _agent_runtime_service(root: Path, recorded: dict[str, Any]) -> dict[str, Any]:
+    """从当前 Runtime 监督状态投影独立服务，绝不暴露内部调试凭据。"""
+    from app.services.agent_runtime_debug_state import (
+        reconcile_stale_running_agent_runtime_debug_state,
+    )
+
+    state = reconcile_stale_running_agent_runtime_debug_state(root)
+    if not state:
+        return recorded
+    raw_status = str(state.get("status") or "stopped")
+    status = (
+        "running" if raw_status == "running"
+        else "starting" if raw_status in {"cleaning", "validating", "installing", "starting"}
+        else "stopped" if raw_status == "stopped"
+        else "failed"
+    )
+    pid = state.get("pid")
+    if status == "running":
+        try:
+            if int(pid or 0) <= 0:
+                raise ProcessLookupError()
+            os.kill(int(pid), 0)
+        except (OSError, ValueError):
+            status = "failed"
+    message = str(state.get("message") or recorded.get("message") or "")
+    if status == "failed" and raw_status == "running":
+        message = "Agent Runtime 进程已退出，请重启服务。"
+    return {
+        "status": status,
+        "message": redact(message),
+        "pid": pid if status == "running" else None,
+        "port": _coerce_port(state.get("port")),
+        "url": f"http://127.0.0.1:{state['port']}" if _coerce_port(state.get("port")) else None,
+        "ready": status == "running" and state.get("health") == 200,
+    }
+
+
 def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, Any]:
     """校验启动事实对应的进程仍存在，并投影最新状态与占用。"""
     with _lock:
@@ -238,6 +279,13 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
         if logs:
             value["logs"] = read_logs(workspace)
     root = runtime_root(workspace)
+    value["agentRuntime"] = _agent_runtime_service(
+        root, value.get("agentRuntime") or {"status": "stopped"}
+    )
+    from app.topologies import read_confirmed_technical_plan, serves_agent_runtime_public_edge
+    plan = read_confirmed_technical_plan(Path(workspace).expanduser().resolve())
+    if plan and serves_agent_runtime_public_edge(plan) and value["backend"].get("status") == "stopped":
+        value["backend"] = {"status": "skipped", "message": "当前拓扑没有 Java 后端，无需启动。"}
     for layer in ("frontend", "backend"):
         part = value[layer]
         if _coerce_port(part.get("port")) is None:
@@ -264,6 +312,11 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                 message = "服务进程已退出或就绪检测失败，请重启服务。"
                 part.update(status="failed", message=message)
                 value.update(status="failed", message=message, failedStage=f"{layer}_process", previewUrl=None)
+    if value["agentRuntime"]["status"] == "failed" and value.get("status") == "running":
+        value.update(
+            status="failed", message=value["agentRuntime"]["message"],
+            failedStage="agent_runtime_process", previewUrl=None,
+        )
     # 必须在实时健康校准之后计算；否则历史 running 在本轮变成 failed 时，
     # UI 会显示失败却仍把诊断按钮禁用。
     value["repairAvailable"] = bool(

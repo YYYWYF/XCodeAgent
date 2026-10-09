@@ -5165,7 +5165,20 @@ export default function AiChatPanel({
             }}
           />
           <BrowserPreviewPanel
-            serviceControl={previewRuntime.control}
+            serviceControl={{
+              ...previewRuntime.control,
+              onOpenAgentRuntimeDebug: developmentPlanningAgents.length
+                ? () => {
+                    previewRuntime.control.setOpen(false)
+                    if (developmentPlanningAgents.length === 1) {
+                      artifactOutlineProps.onAgentSelect(developmentPlanningAgents[0])
+                    } else {
+                      setRightPanel({ type: 'outline' })
+                      onRightPanelOpenChange(true)
+                    }
+                  }
+                : undefined
+            }}
             application={application}
             pages={displayedPlanningPages}
             requestKey={rightPanel.requestKey}

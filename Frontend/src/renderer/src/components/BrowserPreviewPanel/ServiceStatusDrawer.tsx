@@ -26,9 +26,12 @@ export type ServiceStatusControl = {
   blockedReason: string
   onRestart: () => void
   onDiagnose: () => void
+  onOpenAgentRuntimeDebug?: () => void
 }
 
-type ServiceLayer = 'frontend' | 'backend'
+type ServiceLayer = 'frontend' | 'backend' | 'agentRuntime'
+
+const SERVICE_LAYERS: ServiceLayer[] = ['frontend', 'backend', 'agentRuntime']
 
 const statusMeta: Record<
   PreviewServiceState['status'],
@@ -43,13 +46,13 @@ const statusMeta: Record<
 
 /** 返回服务层的中文名称，统一服务卡片和日志标签的用词。 */
 function serviceLabel(layer: ServiceLayer): string {
-  return layer === 'frontend' ? '前端服务' : '后端服务'
+  return layer === 'frontend' ? '前端服务' : layer === 'backend' ? 'Java 后端' : 'Agent Runtime'
 }
 
 /** 返回服务层的说明，帮助用户在没有地址或失败时快速判断下一步。 */
 function serviceHint(layer: ServiceLayer, status: PreviewServiceState['status']): string {
   if (status === 'skipped')
-    return layer === 'backend' ? '当前项目无需启动后端进程' : '等待前端运行时就绪'
+    return layer === 'backend' ? '当前项目没有 Java 后端，无需启动' : '当前项目无需启动此服务'
   if (status === 'starting') return '正在执行依赖、构建与就绪检测'
   if (status === 'running') return '进程已受控运行，可从预览地址访问'
   if (status === 'failed') return '请查看本次启动日志，必要时诊断并修复'
@@ -92,14 +95,16 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
   const actionTone = busy ? 'is-busy' : blockedReason ? 'is-blocked' : 'is-ready'
   const actionLabel = busy ? '处理中' : blockedReason ? '任务占用' : runtime ? '可操作' : '可启动'
   const launchLabel =
-    runtime?.frontend.status === 'running' && runtime?.backend.status === 'running'
+    runtime?.frontend.status === 'running' &&
+    ['running', 'skipped'].includes(runtime?.backend.status || '') &&
+    ['running', 'skipped'].includes(runtime?.agentRuntime.status || '')
       ? '重启服务'
       : '启动服务'
   const launching = busy && !!props.busyLaunchLabel
 
   useEffect(() => {
     if (runtime?.failedStage)
-      setTab(runtime.failedStage.startsWith('backend') ? 'backend' : 'frontend')
+      setTab(runtime.failedStage.startsWith('agent_runtime') ? 'agentRuntime' : runtime.failedStage.startsWith('backend') ? 'backend' : 'frontend')
   }, [runtime?.attemptId, runtime?.failedStage])
 
   useEffect(() => {
@@ -152,14 +157,14 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
             <span className="preview-section-caption">受控进程 · 就绪检测</span>
           </div>
           <div className="preview-service-grid">
-            {(['frontend', 'backend'] as const).map((layer) => {
+            {SERVICE_LAYERS.map((layer) => {
               const service = runtime?.[layer]
               const status = service?.status || 'stopped'
               const meta = statusMeta[status]
               const LayerIcon = layer === 'frontend' ? ApiOutlined : CloudServerOutlined
               const port = servicePort(service)
               return (
-                <article key={layer} className={`preview-service-card is-${status}`}>
+                <article key={layer} className={`preview-service-card is-${status}${layer === 'agentRuntime' ? ' is-agent-runtime' : ''}`}>
                   <div className="preview-service-card__topline">
                     <div className="preview-service-card__identity">
                       <span className="preview-service-card__icon">
@@ -167,7 +172,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
                       </span>
                       <div>
                         <strong>{serviceLabel(layer)}</strong>
-                        <span>{layer === 'frontend' ? 'WEB CLIENT' : 'API SERVER'}</span>
+                        <span>{layer === 'frontend' ? 'WEB CLIENT' : layer === 'backend' ? 'JAVA API SERVER' : 'PYTHON API SERVER'}</span>
                       </div>
                     </div>
                     <span className={`preview-service-status-pill is-${meta.tone}`}>
@@ -189,6 +194,14 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
                       <span className="is-empty">等待端口</span>
                     )}
                   </div>
+                  {layer === 'agentRuntime' && props.onOpenAgentRuntimeDebug && (
+                    <Button
+                      className="preview-service-debug-link"
+                      onClick={props.onOpenAgentRuntimeDebug}
+                    >
+                      进入智能体调试
+                    </Button>
+                  )}
                   {service?.message && (
                     <div className={`preview-service-card__message is-${meta.tone}`}>
                       <span>{meta.icon}</span>
@@ -270,21 +283,21 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               </div>
             </div>
             <span className="preview-log-count">
-              {logs.length} 个{tab === 'frontend' ? '前端' : '后端'}日志文件
+              {logs.length} 个{serviceLabel(tab)}日志文件
             </span>
           </div>
           <Tabs
             className="preview-log-tabs"
             activeKey={tab}
             onChange={selectLogTab}
-            items={(['frontend', 'backend'] as const).map((layer) => ({
+            items={SERVICE_LAYERS.map((layer) => ({
               key: layer,
               label: (
                 <span className="preview-log-tab-label">
                   <span
                     className={`preview-log-tab-dot is-${statusMeta[runtime?.[layer]?.status || 'stopped'].tone}`}
                   />
-                  {layer === 'frontend' ? '前端' : '后端'}
+                  {serviceLabel(layer)}
                   <em>{runtime?.logs?.[layer]?.length || 0}</em>
                 </span>
               )
@@ -317,7 +330,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
             <pre
               ref={logRef}
               className="preview-service-logs"
-              aria-label={`${tab === 'frontend' ? '前端' : '后端'}启动日志`}
+              aria-label={`${serviceLabel(tab)}启动日志`}
               onScroll={(event) => {
                 const node = event.currentTarget
                 if (node.scrollHeight - node.scrollTop - node.clientHeight > 24) setFollowing(false)

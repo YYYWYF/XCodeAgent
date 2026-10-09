@@ -1,4 +1,4 @@
-import { Alert, Button, Spin, Table, Typography } from 'antd'
+import { Alert, Button, Space, Spin, Table, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useEffect, useState } from 'react'
 import type {
@@ -8,9 +8,10 @@ import type {
 } from '../../../../typings'
 import {
   confirmDirectEntityDesign,
+  executeDirectEntitySql,
   readDirectEntityDesign
 } from '../../../../service/directDevelopment'
-import type { DirectEntityDesign } from '../../../../service/directDevelopment'
+import type { DirectEntityDesign, DirectEntityExecution } from '../../../../service/directDevelopment'
 import { cx } from '../../../../utils'
 import DevelopmentTargetDetail from './DevelopmentTargetDetail'
 
@@ -24,7 +25,7 @@ type Props = {
   onLifecycleChange: (lifecycle: ApplicationLifecycle) => void
 }
 
-/** 在截图所示的实体详情区预览 SQL，明确区分确认与目标库执行。 */
+/** 在实体详情区预览、确认并按用户动作执行当前 SQL。 */
 export default function DirectEntityDesignPanel({
   disabled,
   entity,
@@ -35,6 +36,8 @@ export default function DirectEntityDesignPanel({
   const [design, setDesign] = useState<DirectEntityDesign>()
   const [loading, setLoading] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [executing, setExecuting] = useState(false)
+  const [execution, setExecution] = useState<DirectEntityExecution>()
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -43,6 +46,7 @@ export default function DirectEntityDesignPanel({
     setLoading(true)
     setError('')
     setDesign(undefined)
+    setExecution(undefined)
     readDirectEntityDesign(workspaceRoot, entity.id)
       .then((result) => {
         if (active) setDesign(result)
@@ -61,6 +65,7 @@ export default function DirectEntityDesignPanel({
     if (!workspaceRoot || !design || confirming) return
     setConfirming(true)
     setError('')
+    setExecution(undefined)
     try {
       const saved = await confirmDirectEntityDesign(workspaceRoot, entity.id, design.sqlSha256)
       setDesign(saved.entity)
@@ -78,6 +83,21 @@ export default function DirectEntityDesignPanel({
     }
   }
 
+  /** 执行当前已确认的 SQL，并显示数据库位置或具体失败原因。 */
+  const handleExecute = async (): Promise<void> => {
+    if (!workspaceRoot || !design || design.status !== 'confirmed' || executing) return
+    setExecuting(true)
+    setError('')
+    setExecution(undefined)
+    try {
+      setExecution(await executeDirectEntitySql(workspaceRoot, entity.id, design.sqlSha256))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '实体 SQL 执行失败。')
+    } finally {
+      setExecuting(false)
+    }
+  }
+
   const fields = Array.isArray(entity.fields) ? entity.fields : []
   const confirmed = design?.status === 'confirmed'
   const lifecycleComplete = progress?.initialDevelopmentStatus === 'completed'
@@ -85,7 +105,7 @@ export default function DirectEntityDesignPanel({
     <DevelopmentTargetDetail
       actionLabel={confirming ? '正在确认…' : confirmed ? '同步实体完成状态' : '确认实体 SQL'}
       description={entity.purpose}
-      disabled={disabled || loading || confirming || !design}
+      disabled={disabled || loading || confirming || executing || !design}
       notice={
         error ? <Alert message={error} showIcon type="error" />
           : confirming ? <Alert message="正在保存实体 SQL 并同步开发完成状态…" showIcon type="info" />
@@ -96,7 +116,7 @@ export default function DirectEntityDesignPanel({
       extra={
         <div className={cx('direct-entity-design')}>
           <Alert
-            message="SQL 只在隔离的临时 SQLite 库校验；确认后保存到生成项目，目标业务库仍需你自行执行。"
+            message="SQL 先在隔离 SQLite 中校验。确认后可点击执行 SQL，写入当前项目的业务 SQLite。"
             showIcon
             type="info"
           />
@@ -118,12 +138,29 @@ export default function DirectEntityDesignPanel({
               <h3>建表 SQL</h3>
               <Text code>{design.sqlPath}</Text>
               <pre className={cx('direct-entity-sql')}><code>{design.sql}</code></pre>
-              <Button onClick={() => navigator.clipboard.writeText(design.sql)}>复制 SQL</Button>
+              <Space>
+                <Button onClick={() => navigator.clipboard.writeText(design.sql)}>复制 SQL</Button>
+                <Button
+                  disabled={disabled || !confirmed || confirming || executing}
+                  loading={executing}
+                  onClick={() => { void handleExecute() }}
+                >
+                  执行 SQL
+                </Button>
+              </Space>
+              {execution ? (
+                <Alert
+                  message={execution.status === 'applied' ? 'SQL 已执行' : 'SQL 此前已执行'}
+                  description={`数据库：${execution.databasePath}；迁移：${execution.migrationName}`}
+                  showIcon
+                  type="success"
+                />
+              ) : null}
             </>
           ) : null}
         </div>
       }
-      hint="确认建表 SQL 后即完成实体开发；无需绑定数据源。SQL 不会在目标业务库自动执行。"
+      hint="确认建表 SQL 后即完成实体开发；点击执行 SQL 可写入当前项目业务 SQLite，重复执行会显示已应用。"
       kind="entity"
       progress={progress}
       title={entity.label}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from hashlib import sha256
 import json
 import os
@@ -11,6 +12,7 @@ import sqlite3
 from typing import Any
 from uuid import uuid4
 
+from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.artifact_invalidation import canonical_sha256
@@ -39,6 +41,10 @@ class DirectEntityConfirmRequest(DirectEntityRequest):
     """确认前精确复验用户预览的 SQL 内容摘要。"""
 
     sql_sha256: str = Field(alias="sqlSha256", pattern=r"^[0-9a-f]{64}$")
+
+
+class DirectEntityExecuteRequest(DirectEntityConfirmRequest):
+    """执行时再次绑定用户当前看到的已确认 SQL 摘要。"""
 
 
 def _read_entity(request: DirectEntityRequest) -> tuple[Path, dict[str, Any], dict[str, Any], str]:
@@ -210,3 +216,87 @@ def confirm_direct_entity_design(request: DirectEntityConfirmRequest) -> dict[st
     _publish_text(markdown_path, markdown)
     _publish_text(json_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     return read_direct_entity_design(request)
+
+
+def _business_database_path(root: Path) -> Path:
+    """按生成 Runtime 的环境优先级解析工作区内的业务 SQLite 文件。"""
+
+    runtime_root = (root / "agent-runtime").resolve()
+    if not runtime_root.is_relative_to(root) or not runtime_root.is_dir():
+        raise ValueError("当前项目缺少有效的 agent-runtime 目录。")
+    env_path = runtime_root / ".env"
+    if env_path.is_symlink():
+        raise ValueError("Agent Runtime 配置文件不能是符号链接。")
+    env_values = dotenv_values(env_path) if env_path.is_file() else {}
+    configured = (
+        os.environ.get("BUSINESS_DATABASE_PATH", "").strip()
+        or str(env_values.get("BUSINESS_DATABASE_PATH") or "").strip()
+        or ".business-data/business.sqlite"
+    )
+    path = Path(configured).expanduser()
+    database_path = (path if path.is_absolute() else runtime_root / path).resolve()
+    if not database_path.is_relative_to(runtime_root):
+        raise ValueError("业务 SQLite 路径必须位于当前项目的 agent-runtime 目录内。")
+    if database_path.is_dir():
+        raise ValueError("业务 SQLite 路径指向目录，无法执行 SQL。")
+    return database_path
+
+
+def _table_columns(connection: sqlite3.Connection, table: str) -> list[tuple[Any, ...]]:
+    """读取列名、类型、非空和主键信息，用于检测已有表结构冲突。"""
+
+    return [
+        (row[1], row[2], row[3], row[5])
+        for row in connection.execute(f"PRAGMA table_info({_quoted(table)})")
+    ]
+
+
+def execute_direct_entity_sql(request: DirectEntityExecuteRequest) -> dict[str, Any]:
+    """只把当前已确认的确定性建表 SQL 应用到项目业务 SQLite。"""
+
+    design = read_direct_entity_design(request)
+    if design["status"] != "confirmed":
+        raise ValueError("请先确认当前实体 SQL，再执行到项目 SQLite。")
+    if design["sqlSha256"] != request.sql_sha256:
+        raise ValueError("实体 SQL 已变化，请刷新预览后重试执行。")
+    root = Path(request.workspace_root).expanduser().resolve()
+    sql_path = root / design["sqlPath"]
+    if sql_path.is_symlink() or not sql_path.is_file():
+        raise ValueError("已确认的实体 SQL 文件不存在或无效。")
+    sql = sql_path.read_text(encoding="utf-8")
+    if sql != design["sql"]:
+        raise ValueError("实体 SQL 文件内容与当前确认版本不一致。")
+    database_path = _business_database_path(root)
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(":memory:")) as expected_db:
+        expected_db.execute(sql)
+        expected_columns = _table_columns(expected_db, design["tableName"])
+    with closing(sqlite3.connect(database_path, timeout=30)) as connection, connection:
+        # 与生成 Runtime 的迁移记录共用一张表，并在写锁中原子执行和登记。
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations "
+            "(name TEXT PRIMARY KEY, sha256 TEXT NOT NULL)"
+        )
+        migration_name = sql_path.name
+        recorded = connection.execute(
+            "SELECT sha256 FROM schema_migrations WHERE name = ?", (migration_name,)
+        ).fetchone()
+        if recorded and recorded[0] != design["sqlSha256"]:
+            raise ValueError("已执行的迁移摘要与当前 SQL 不一致，不能覆盖。")
+        if not recorded:
+            connection.execute(sql)
+        if _table_columns(connection, design["tableName"]) != expected_columns:
+            raise ValueError("目标 SQLite 已有同名表，但列结构与当前实体 SQL 不一致。")
+        if not recorded:
+            connection.execute(
+                "INSERT INTO schema_migrations (name, sha256) VALUES (?, ?)",
+                (migration_name, design["sqlSha256"]),
+            )
+    return {
+        "entityId": request.entity_id,
+        "tableName": design["tableName"],
+        "databasePath": str(database_path.relative_to(root)),
+        "migrationName": migration_name,
+        "status": "already_applied" if recorded else "applied",
+    }

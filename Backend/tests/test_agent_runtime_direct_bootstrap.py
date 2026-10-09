@@ -9,7 +9,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.services.agent_runtime_launch_support import agent_runtime_environment
+from app.services.agent_runtime_launch_support import (
+    agent_runtime_environment,
+    load_or_create_anonymous_session_secret,
+)
 from app.services.agent_runtime_project_launcher import (
     _direct_runtime_auth_enabled,
     agent_runtime_launch_required,
@@ -244,6 +247,35 @@ class _ModelFallbackSettings:
 
 class DirectRuntimeEnvironmentTests(unittest.TestCase):
     """验证 direct 拓扑下 Runtime 自持认证，且宿主凭据不得被继承。"""
+
+    def test_anonymous_cookie_secret_survives_runtime_restart(self) -> None:
+        """验证同一工作区重启沿用私有密钥，并注入项目独立 Cookie 名称。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory)
+            first = load_or_create_anonymous_session_secret(runtime_root)
+            second = load_or_create_anonymous_session_secret(runtime_root)
+            self.assertEqual(first, second)
+            self.assertGreaterEqual(len(first), 32)
+            self.assertEqual(
+                (runtime_root / "anonymous-session-secret").stat().st_mode & 0o777,
+                0o600,
+            )
+            environment = agent_runtime_environment(
+                _ModelFallbackSettings(),
+                port=5100,
+                gateway_token="rotating-debug-token",
+                direct_auth_enabled=False,
+                anonymous_session_secret=second,
+                anonymous_cookie_name="agent_runtime_workspace123",
+            )
+            self.assertEqual(
+                environment["AGENT_RUNTIME_ANONYMOUS_SESSION_SECRET"], first
+            )
+            self.assertEqual(
+                environment["AGENT_RUNTIME_ANONYMOUS_COOKIE_NAME"],
+                "agent_runtime_workspace123",
+            )
 
     def test_gateway_managed_runtime_receives_shared_internal_token(self) -> None:
         """公开入口不由 Runtime 承担时，仍注入网关共享内部凭据。"""

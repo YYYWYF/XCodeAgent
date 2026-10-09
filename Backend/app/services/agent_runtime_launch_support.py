@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import secrets
 import socket
 import subprocess
 import time
@@ -41,6 +42,7 @@ _INHERITED_MODEL_ENVIRONMENT_NAMES = (
     "AGENT_RUNTIME_AUTH_ENABLED",
     "AGENT_RUNTIME_AUTH_MODE",
     "AGENT_RUNTIME_ANONYMOUS_SESSION_SECRET",
+    "AGENT_RUNTIME_ANONYMOUS_COOKIE_NAME",
     "AGENT_RUNTIME_ALLOWED_ORIGINS",
     "AGENT_RUNTIME_DEBUG_TOKEN",
     # Direct 拓扑下本轮不注入网关凭据，必须同时清掉宿主残留，避免旧凭据随环境继承。
@@ -55,12 +57,15 @@ def agent_runtime_environment(
     gateway_token: str,
     direct_auth_enabled: bool | None = None,
     include_debug_access: bool = False,
+    anonymous_session_secret: str | None = None,
+    anonymous_cookie_name: str | None = None,
 ) -> dict[str, str]:
     """注入受管监听、内部认证和仅供模板兜底的模型白名单配置。
 
     direct_auth_enabled 为 None 表示由网关托管认证：Runtime 只接受共享内部凭据。
     为布尔值则表示 Direct 拓扑下 Runtime 自己就是公开入口、自行终止认证，此时按
-    该开关注入本地认证配置，并把本轮共享随机串复用为匿名会话密钥，不再注入网关凭据；
+    该开关注入本地认证配置；匿名模式可传入工作区持久密钥与独立 Cookie 名称，
+    未传入时仅供临时启动检查复用本轮随机串；不再注入网关凭据；
     include_debug_access 为 True 时额外下发调试令牌。
     """
 
@@ -95,7 +100,9 @@ def agent_runtime_environment(
                 "AGENT_RUNTIME_PROFILE": "local",
                 "AGENT_RUNTIME_AUTH_ENABLED": str(direct_auth_enabled).lower(),
                 "AGENT_RUNTIME_AUTH_MODE": "local",
-                "AGENT_RUNTIME_ANONYMOUS_SESSION_SECRET": gateway_token,
+                "AGENT_RUNTIME_ANONYMOUS_SESSION_SECRET": (
+                    anonymous_session_secret or gateway_token
+                ),
                 "AGENT_RUNTIME_ALLOWED_ORIGINS": (
                     "http://127.0.0.1,http://localhost,"
                     "http://127.0.0.1:5173,http://localhost:5173"
@@ -104,8 +111,30 @@ def agent_runtime_environment(
         )
         if include_debug_access:
             runtime_environment["AGENT_RUNTIME_DEBUG_TOKEN"] = gateway_token
+        if anonymous_cookie_name:
+            runtime_environment["AGENT_RUNTIME_ANONYMOUS_COOKIE_NAME"] = (
+                anonymous_cookie_name
+            )
     environment.update(runtime_environment)
     return environment
+
+
+def load_or_create_anonymous_session_secret(runtime_root: Path) -> str:
+    """在工作区受管目录保存匿名 Cookie 签名密钥，保证重启后仍可验签。"""
+
+    secret_path = runtime_root / "anonymous-session-secret"
+    if secret_path.is_symlink():
+        raise RuntimeError("匿名会话密钥文件不能是符号链接。")
+    if secret_path.exists():
+        secret = secret_path.read_text(encoding="utf-8").strip()
+        if len(secret) < 32:
+            raise RuntimeError("匿名会话密钥文件无效。")
+        return secret
+    secret = secrets.token_urlsafe(48)
+    descriptor = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+        file.write(secret)
+    return secret
 
 
 def run_agent_runtime_install(

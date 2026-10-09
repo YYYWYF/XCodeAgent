@@ -4,6 +4,7 @@ import unittest
 
 from app.protocols.workflow.projection import (
     _public_workflow_state,
+    _workflow_node_detail,
     _workflow_next_nodes,
     _workflow_summary,
     _workflow_visual_payload,
@@ -11,6 +12,29 @@ from app.protocols.workflow.projection import (
 
 
 class WorkflowProjectionTests(unittest.TestCase):
+    def test_code_review_failure_exposes_bounded_reason(self) -> None:
+        """审查模型拒绝请求时，动作详情和最终摘要应展示真实原因。"""
+
+        error = "ValueError: CodeAnalyze Agent 审查失败：Error code: 403 permission_denied"
+        detail = _workflow_node_detail(
+            "code_review",
+            {"status": "failed", "message": "前后端代码审查失败。", "error": error},
+        )
+        summary = _workflow_summary(
+            {
+                "status": "failed",
+                "phase": "failed",
+                "quality_gate_passed": True,
+                "code_review_next_action": "handle_failure",
+                "error": error,
+            },
+            [],
+        )
+
+        self.assertIn("403 permission_denied", detail["message"])
+        self.assertIn("403 permission_denied", summary["message"])
+        self.assertNotIn("质量门禁=通过", summary["message"])
+
     def test_api_design_gate_projects_waiting_and_completed_routes(self) -> None:
         """字段映射门禁等待时停图，确认完成后投影工作区检查。"""
 

@@ -53,6 +53,7 @@ _UNIT_TEST_CHECK_IDS = {
 _INTEGRATION_CHECK_ORDER = (
     "frontend_install",
     "frontend_build",
+    "backend_install",
     "backend_build",
     "backend_startup",
     "backend_static_check",
@@ -1689,6 +1690,7 @@ _INTEGRATION_REPAIR_CONFIG_HINTS = {
         "frontend/vite.config.js",
     ],
     "backend_build": ["backend/pom.xml"],
+    "backend_install": ["agent-runtime/pyproject.toml", "agent-runtime/uv.lock"],
     "backend_static_check": [
         "backend/pom.xml",
         "backend/src/main/resources/application.yml",
@@ -1735,6 +1737,12 @@ def _repair_config_hints_for(
         if check_id == "backend_startup":
             hints.extend(_string_list(result.get("repair_hints"), limit=20))
             continue
+        if check_id == "backend_build" and result.get("language") == "python":
+            hints.extend([
+                "agent-runtime/pyproject.toml",
+                "agent-runtime/src/app/main.py",
+            ])
+            continue
         hints.extend(_INTEGRATION_REPAIR_CONFIG_HINTS.get(check_id, []))
     return list(dict.fromkeys(hints))
 
@@ -1762,10 +1770,16 @@ def _repair_scoped_tasks(state: ProjectState) -> list[dict[str, Any]]:
         config_hints = _repair_config_hints_for(state, owner)
         owner_failures = failed_by_owner.get(owner, [])
         repair_directory = _REPAIR_DIRECTORY_BY_OWNER[owner]
+        if owner == "backend" and any(
+            path.startswith("agent-runtime/") for path in config_hints
+        ):
+            repair_directory = "agent-runtime"
         if owner == "backend" and any(item.get("id") == "backend_startup" for item in owner_failures):
             # 启动检测提供真实目录大小写，避免 Backend 工程只能获准修改不存在的 backend。
             if any(path.startswith("Backend/") for path in config_hints):
                 repair_directory = "Backend"
+            elif any(path.startswith("agent-runtime/") for path in config_hints):
+                repair_directory = "agent-runtime"
         if not owner_tests and not owner_sources and not config_hints and not owner_failures:
             continue
         owner_task = next((task for task in tasks if task.get("owner") == owner), None)
