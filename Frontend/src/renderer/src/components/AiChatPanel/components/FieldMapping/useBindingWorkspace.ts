@@ -68,7 +68,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   const publish = useCallback((slot: string, reason?: unknown, scopeKey = key): void => {
     recoveryRef.current?.({ workspaceRoot, scopeKey, source: 'binding', slot, reason, retry: () => retryRef.current() })
   }, [workspaceRoot, key])
-  /** 读取失败保留当前输入，并交给底部独立入口。 */
+  /** 读取失败保留当前输入，并交给字段映射内部恢复入口。 */
   const failRead = (reason: unknown, slot: string, scopeKey = key): void => {
     setError(reason instanceof Error ? reason.message : String(reason))
     setReportedError(true)
@@ -119,7 +119,8 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   useEffect(() => {
     const selection = entry?.value.selection
     setMetadata(undefined)
-    if (!selection || selection.sourceType === 'static') { setMetadataLoading(false); publish('metadata'); return }
+    // 已确认的数据库映射直接展示保存的字段快照，进入编辑后才查询实时列。
+    if (!selection || selection.sourceType === 'static' || entry?.readOnly && selection.sourceType === 'database') { setMetadataLoading(false); publish('metadata'); return }
     let disposed = false
     setMetadataLoading(true); setError('')
     const request = selection.sourceType === 'database'
@@ -129,16 +130,17 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
       .catch((reason) => { if (!disposed) failRead(reason, 'metadata') })
       .finally(() => { if (!disposed) setMetadataLoading(false) })
     return () => { disposed = true }
-  }, [workspaceRoot, key, sourceKey, refresh])
+  }, [workspaceRoot, key, sourceKey, entry?.readOnly, refresh])
 
-  /** 底部重试仅校准来源和当前契约；不调用会删除草稿的 reload，也不重放保存或确认。 */
+  /** 面板内重试仅校准来源和当前契约；不调用会删除草稿的 reload，也不重放保存或确认。 */
   const recover = async (): Promise<void> => {
     if (locked.current) return
     locked.current = true; setBusy(true)
     const requestGeneration = generation.current
     const capturedKey = key
     try {
-      const selection = entryRef.current?.value.selection
+      const currentEntry = entryRef.current
+      const selection = currentEntry?.readOnly && currentEntry.value.selection?.sourceType === 'database' ? undefined : currentEntry?.value.selection
       const [sources, selected, preparation, nextMetadata] = await readBindingRecoverySnapshot(workspaceRoot, target, selection)
       if (generation.current !== requestGeneration || activeKey.current !== capturedKey) return
       setCatalog(sources); setTables(selected); setMetadata(nextMetadata)

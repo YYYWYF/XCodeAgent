@@ -17,18 +17,19 @@ import { mappingCandidates, resetDraftForDatabaseOperation, selectionKey, tableI
 import { useBindingWorkspace } from './useBindingWorkspace'
 import { RuleEditingContext } from './RuleEditor'
 import './index.less'
-import type { EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
+import { endpointRecoveryScope, useEndpointDesignRecovery } from '../../hooks/useEndpointDesignRecovery'
 
 type Props = {
-  onEndpointRecovery?: EndpointRecoveryReporter
   workspaceRoot: string; target?: ApiDesignConfigTarget; contracts: DevelopmentPlanningApiContract[]
   onSelect: (target: ApiDesignConfigTarget) => void
   onSaved: (target: ApiDesignConfigTarget, result: EndpointDesignSaveResult) => void | Promise<void>
 }
 
 /** 在常驻页签内编辑直接映射，复杂映射仍交给原有编辑器。 */
-export default function FieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onSaved, onEndpointRecovery }: Props): ReactElement {
-  const state = useBindingWorkspace(workspaceRoot, target, onSaved, onEndpointRecovery)
+export default function FieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onSaved }: Props): ReactElement {
+  // 映射失败只归属当前工作台，不参与主工作流的错误与恢复投影。
+  const recovery = useEndpointDesignRecovery(workspaceRoot, [endpointRecoveryScope(workspaceRoot), endpointRecoveryScope(workspaceRoot, target)], ['binding'])
+  const state = useBindingWorkspace(workspaceRoot, target, onSaved, recovery.report)
   const { entry, catalog, tables, metadata, busy, loading, error, metadataLoading } = state
   const [editingRules, setEditingRules] = useState(0)
   /** 汇总尚未应用的规则编辑器，防止确认旧值。 */
@@ -156,7 +157,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
     </section>)}</nav>
     <main className="binding-editor">
       {!target ? <Empty description="请选择应用 API" /> : loading && !entry ? <Spin tip="正在读取 API 契约…" /> : null}
-      {error && !(onEndpointRecovery && state.reportedError) ? <Alert type="error" showIcon message={error} action={<Space><Button onClick={state.refreshSources}>重试</Button>{entry && <Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃草稿并重新加载？', content: '未确认的修改将被清除，正式映射不变。', okText: '放弃并加载', cancelText: '继续编辑', onOk: state.discard })}>重新加载</Button>}</Space>} /> : null}
+      {(recovery.issue || error) ? <Alert type="error" showIcon message={recovery.issue ? (recovery.issue.reason instanceof Error ? recovery.issue.reason.message : String(recovery.issue.reason)) : error} action={<Space><Button loading={recovery.retrying} disabled={busy} onClick={() => { if (recovery.issue) void recovery.retry(); else state.refreshSources() }}>同步状态</Button>{entry && <Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃草稿并重新加载？', content: '未确认的修改将被清除，正式映射不变。', okText: '放弃并加载', cancelText: '继续编辑', onOk: state.discard })}>重新加载</Button>}</Space>} /> : null}
       {entry && <>
         <header className="binding-heading"><div className="binding-heading-copy"><span className="binding-heading-contract">{activeContractName}</span><strong className="binding-heading-name">{activeEndpointName}</strong><div className="binding-heading-endpoint"><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{activeEndpointPath}</code></div></div><Space className="binding-heading-actions">{entry.readOnly ? <Button className="binding-edit-button" icon={<EditOutlined />} onClick={() => state.update({ ...entry, readOnly: false })}>修改映射</Button> : !entry.complex ? <><Button className="binding-stash-button" loading={busy} disabled={entry.conflict || sourceChanging || editingRules > 0} onClick={() => void state.save(false)}>暂存</Button><Button className="binding-confirm-button" type="primary" loading={busy} disabled={!canConfirm} onClick={confirmMapping}>保存并确认</Button></> : null}</Space></header>
         {entry.conflict ? <Alert type="warning" message="草稿基于的契约或正式映射已变化，当前草稿已保留。" description="请核对当前内容后，明确放弃旧草稿并重新加载。" action={<Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃旧草稿并重新加载？', okText: '放弃并加载', cancelText: '保留草稿', onOk: state.discard })}>重新加载</Button>} /> : null}
@@ -194,12 +195,12 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
           <div hidden={sourceChanging}>
           {selection?.sourceType === 'static' && <StaticDataCard key={`data:${state.key}`} draft={entry.value.draft} readOnly={entry.readOnly} disabled={!editable || busy || sourceChanging} errors={errors} onChange={state.edit} />}
           {selection?.sourceType === 'static' && <StaticMapping key={state.key} draft={entry.value.draft} fields={fields} readOnly={entry.readOnly} disabled={!editable || busy} previewDisabled={editingRules > 0} errors={errors} onChange={state.edit} />}
-          {selection && <Spin spinning={metadataLoading}>{selection.sourceType === 'external_api' && metadata && 'fields' in metadata ? <ExternalMapping key={`${state.key}:${selectionKey(selection)}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} onChange={(draft) => state.edit(draft)} selection={selection} /> : databaseSelection && metadata && 'columns' in metadata ? <DatabaseMapping key={`${state.key}:${selectionKey(selection)}:${entry.value.draft.databaseOperation}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} operation={entry.value.draft.databaseOperation} selection={databaseSelection} onChange={(draft) => state.edit(draft)} onOperationChange={(operation) => confirmWorkspaceAction({ title: '切换数据库操作？', content: '切到新增会清空查询条件；切到查询或删除会清除写入映射。', okText: '切换并更新', cancelText: '取消', onOk: () => state.edit(resetDraftForDatabaseOperation(entry.value.draft, operation)) })} /> : null}</Spin>}
+          {selection && <Spin spinning={metadataLoading}>{selection.sourceType === 'external_api' && metadata && 'fields' in metadata ? <ExternalMapping key={`${state.key}:${selectionKey(selection)}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} onChange={(draft) => state.edit(draft)} selection={selection} /> : databaseSelection && (entry.readOnly || metadata && 'columns' in metadata) ? <DatabaseMapping key={`${state.key}:${selectionKey(selection)}:${entry.value.draft.databaseOperation}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata && 'columns' in metadata ? metadata : undefined} operation={entry.value.draft.databaseOperation} selection={databaseSelection} onChange={(draft) => state.edit(draft)} onOperationChange={(operation) => confirmWorkspaceAction({ title: '切换数据库操作？', content: '切到新增会清空查询条件；切到查询或删除会清除写入映射。', okText: '切换并更新', cancelText: '取消', onOk: () => state.edit(resetDraftForDatabaseOperation(entry.value.draft, operation)) })} /> : null}</Spin>}
           </div>
           {entry.readOnly && <p className="binding-readonly"><NodeIndexOutlined /> 映射已确认</p>}
         </>}
       </>}
     </main>
-    <ApiDesignConfigModal open={advanced} target={target} workspaceRoot={workspaceRoot} onEndpointRecovery={onEndpointRecovery} onClose={() => setAdvanced(false)} onSaved={async (current, result) => { await onSaved(current, result); state.reload() }} />
+    <ApiDesignConfigModal open={advanced} target={target} workspaceRoot={workspaceRoot} onClose={() => setAdvanced(false)} onSaved={async (current, result) => { await onSaved(current, result); state.reload() }} />
   </div></RuleEditingContext.Provider>
 }

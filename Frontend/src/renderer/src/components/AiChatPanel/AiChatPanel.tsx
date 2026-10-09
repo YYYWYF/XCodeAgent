@@ -99,7 +99,6 @@ import MessageList from './components/MessageList'
 import AgentErrorCard from '../AgentErrorCard'
 import MilestoneCommitReminder from './components/MilestoneCommitReminder'
 import FieldMappingWorkspace from './components/FieldMapping'
-import { endpointRecoveryScope, useEndpointDesignRecovery } from './hooks/useEndpointDesignRecovery'
 import CommitBeforeSendModal from './components/MilestoneCommitReminder/CommitBeforeSendModal'
 import MilestoneCommitModal from './components/MilestoneCommitReminder/MilestoneCommitModal'
 import {
@@ -3747,11 +3746,6 @@ export default function AiChatPanel({
     ]
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
-  const endpointRecovery = useEndpointDesignRecovery(workspaceRoot || '', showRightPanel
-    ? rightPanel?.type === 'field-mapping'
-      ? [endpointRecoveryScope(workspaceRoot || ''), endpointRecoveryScope(workspaceRoot || '', apiDesignConfigTarget)]
-      : rightPanel?.type === 'outline' ? [endpointRecoveryScope(workspaceRoot || '', apiTarget)] : []
-    : [], rightPanel?.type === 'field-mapping' ? ['binding', 'advanced'] : ['detail'])
   const workflowConnection =
     (isApplicationPlanningPhase || templateGenerationRecoverable || templateReconcileRetryable) && planningState
       ? planningState.connection : connectionState
@@ -3770,9 +3764,7 @@ export default function AiChatPanel({
   )
   const currentPreviewRetry = !conversationNeedsRecovery && !planningNeedsRecovery && (previewConnectionUnavailable || (previewFallbackError && workflowConnection.status === 'healthy'))
     ? () => { void previewRuntime.retry() } : undefined
-  const currentEndpointRetry = endpointRecovery.issue ? () => { void endpointRecovery.retry() } : undefined
-  const activeConnectionState = endpointRecovery.issue && endpointRecovery.connection.status !== 'healthy'
-    ? endpointRecovery.connection : conversationNeedsRecovery && workflowConnection.status !== 'healthy'
+  const activeConnectionState = conversationNeedsRecovery && workflowConnection.status !== 'healthy'
       ? workflowConnection : previewConnectionUnavailable ? previewRuntime.connection : workflowConnection
   const planningReconnectRef = useRef<{ scope: string; status: string }>()
   const reconcilePlanningRef = useRef(onReconcilePlanning)
@@ -3806,14 +3798,14 @@ export default function AiChatPanel({
   const recoveryProjectionError = executionRecoveryReadError(applicationLifecycle)
   // 恢复投影失败只重新读取该投影，不误派发到另一个独立节点或执行旧动作。
   const retryRecoveryProjection = recoveryProjectionError ? () => { void refreshExecutionRecoveryLifecycle() } : undefined
-  const currentRecoveryIncident = Boolean(recoveryProjectionError) || workbenchExecutionInProgress || endedWorkbenchRecovery || Boolean(workflowCodeReviewRetry(activeWorkflow)) || Boolean(currentTemplateRetry) || Boolean(currentPreviewRetry) || Boolean(currentEndpointRetry)
+  const currentRecoveryIncident = Boolean(recoveryProjectionError) || workbenchExecutionInProgress || endedWorkbenchRecovery || Boolean(workflowCodeReviewRetry(activeWorkflow)) || Boolean(currentTemplateRetry) || Boolean(currentPreviewRetry)
     ? undefined
     : isApplicationPlanningPhase
       ? applicationPlanningRecoveryIncident(planningState)
       : workbenchRecoveryIncident(activeExecutionRecovery, latestWorkflowForDisplay)
   const globalFallbackError = recoveryProjectionError ||
     (isApplicationPlanningPhase ? uiDesignRecoveryError(planningState?.recovery) : undefined) ||
-    (endpointRecovery.issue ? `${endpointRecovery.issue.reason instanceof Error ? endpointRecovery.issue.reason.message : String(endpointRecovery.issue.reason)} 当前映射输入保留；重试只同步状态，保存仍需明确操作。` : undefined) || previewFallbackError || (!workbenchExecutionInProgress &&
+    previewFallbackError || (!workbenchExecutionInProgress &&
     !endedWorkbenchRecovery
       ? (isApplicationPlanningPhase
           ? planningState?.syncError || planningError || planningState?.error || templateFallbackError || latestConversationFailure(messages)
@@ -3823,7 +3815,7 @@ export default function AiChatPanel({
     connectionStatus: activeConnectionState.status,
     hasRecoveryIncident: Boolean(currentRecoveryIncident),
     recoveryEnded: endedWorkbenchRecovery,
-    recoveryError: workbenchExecutionInProgress || Boolean(currentTemplateRetry) || Boolean(currentPreviewRetry) || Boolean(currentEndpointRetry) ? undefined : recoveryError,
+    recoveryError: workbenchExecutionInProgress || Boolean(currentTemplateRetry) || Boolean(currentPreviewRetry) ? undefined : recoveryError,
     globalFallbackError
   })
   const showGlobalFallback = globalFallback.visible
@@ -5001,7 +4993,7 @@ export default function AiChatPanel({
                   {activeConnectionState.status !== 'healthy' ? (
                     <ConnectionStatusBanner
                       connection={activeConnectionState}
-                      onReconnect={retryRecoveryProjection || currentEndpointRetry || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
+                      onReconnect={retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
                         ? onRetryPlanning
                         : () => { void retryCurrentRecovery() })}
                     />
@@ -5029,12 +5021,12 @@ export default function AiChatPanel({
                   ) : globalFallback.error ? (
                     <AgentErrorCard
                       error={globalFallback.error}
-                      onRetry={retryRecoveryProjection || currentEndpointRetry || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
+                      onRetry={retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
                         ? onRetryPlanning
                         : workflowCodeReviewRetry(activeWorkflow)
                           ? () => { void handleRetryCodeReview() }
                           : () => { void retryCurrentRecovery() })}
-                      retrying={endpointRecovery.retrying || recoveryRunning}
+                      retrying={recoveryRunning}
                     />
                   ) : null}
                 </div>
@@ -5191,7 +5183,7 @@ export default function AiChatPanel({
       {!isApplicationPlanningPhase && workspaceRoot ? <div className={cx('embedded-preview-pane', 'workspace-pane')} style={{ display: showRightPanel && rightPanel?.type === 'field-mapping' ? undefined : 'none' }}>
         <RightPanelTabs tabs={displayedWorkspaceTabs} active="field-mapping" onChange={openDisplayedWorkspaceTab} onClose={() => { setRightPanel(undefined); onRightPanelOpenChange(false) }} />
         <div className={cx('workspace-content')}><FieldMappingWorkspace key={workspaceRoot} workspaceRoot={workspaceRoot} target={apiDesignConfigTarget}
-          contracts={developmentPlanningApiContracts} onSelect={setApiDesignConfigTarget} onSaved={handleApiDesignConfigSaved} onEndpointRecovery={endpointRecovery.report} /></div>
+          contracts={developmentPlanningApiContracts} onSelect={setApiDesignConfigTarget} onSaved={handleApiDesignConfigSaved} /></div>
       </div> : null}
 
       {showRightPanel && rightPanel?.type === 'outline' && (
@@ -5214,7 +5206,6 @@ export default function AiChatPanel({
               detailLabel={artifactDetailLabel}
               apiTarget={apiTarget}
               apiDesignRefreshKey={apiDesignRefreshKey}
-              onEndpointRecovery={endpointRecovery.report}
               workspaceRoot={workspaceRoot}
               outlineLocked={false}
               pages={displayedPlanningPages}
