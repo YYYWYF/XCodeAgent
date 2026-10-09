@@ -3,18 +3,21 @@ import {
   CodeOutlined,
   FileOutlined,
   FolderOpenOutlined,
-  MessageOutlined,
+  ProjectOutlined,
   ProfileOutlined,
   SafetyCertificateOutlined
 } from '@ant-design/icons'
 import { cx } from '../../utils'
 import './WelcomeAgentTrack.less'
 
+// 首页执行轨道的阶段文案与工作台阶段旅程保持一致，避免两套旅程术语。
 const stages = [
-  { icon: <MessageOutlined />, label: '需求确认' },
-  { icon: <ProfileOutlined />, label: '需求设计' },
-  { icon: <CodeOutlined />, label: '编码' },
-  { icon: <SafetyCertificateOutlined />, label: '验证' }
+  { icon: <ProfileOutlined />, label: '设计阶段' },
+  { icon: <ProjectOutlined />, label: '计划阶段' },
+  { icon: <CodeOutlined />, label: '开发阶段' },
+  { icon: <CheckSquareOutlined />, label: '测试阶段' },
+  { icon: <SafetyCertificateOutlined />, label: '审查阶段' },
+  { icon: <FileOutlined />, label: '验收阶段' }
 ]
 
 const files = [
