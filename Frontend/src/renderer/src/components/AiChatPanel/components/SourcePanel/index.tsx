@@ -305,27 +305,31 @@ export default function SourcePanel({
     }
   }, [workspaceRoot, revision])
 
-  // 树加载后尝试选中 initialFilePath
+  // 初始选中：优先 initialFilePath（当前选中页面的文件），否则落到需求文档。
+  //
+  // 合并为一个 effect：拆成两个时会出现"initialFilePath 有值、但该文件不在目录树里"
+  // 的夹缝 —— 前者已把 initialTried 置真却没加载任何文件，后者又被 initialTried 挡住，
+  // 最终谁都不加载，表现为停在「未选择文件」。页面目录名与 pageId 大小写不一致
+  // （磁盘 Home / pageId home）就会踩到这一点。
+  //
+  // 等 tree 与 docsProbed 都就绪再决定，才能判断 initialFilePath 是否真的可选中。
   useEffect(() => {
-    if (initialTried || !tree || !initialFilePath) return
+    if (initialTried || !tree || !docsProbed) return
     setInitialTried(true)
-    // 展开到目标文件的祖先目录
-    const ancestors = ancestorDirPaths(tree, initialFilePath)
-    if (ancestors.length > 0) {
-      setExpanded((current) => new Set([...current, ...ancestors]))
-      void loadFile(initialFilePath)
+    if (initialFilePath) {
+      const ancestors = ancestorDirPaths(tree, initialFilePath)
+      if (ancestors.length > 0) {
+        // 展开到目标文件的祖先目录再加载。
+        setExpanded((current) => new Set([...current, ...ancestors]))
+        void loadFile(initialFilePath)
+        return
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tree, initialFilePath, initialTried])
-
-  // 未指定初始文件时默认落在需求文档：历史版本下这是最该先看的一份。
-  useEffect(() => {
-    if (initialTried || initialFilePath || !docsProbed) return
-    setInitialTried(true)
+    // 无指定文件、或指定文件不在树里：默认落在需求文档（最该先看的一份）。
     const requirementPath = docPaths['requirement-spec']
     if (requirementPath) void loadFile(requirementPath)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docPaths, docsProbed, initialFilePath, initialTried])
+  }, [tree, docsProbed, docPaths, initialFilePath, initialTried])
 
   const loadFile = (filePath: string): void => {
     if (!workspaceRoot || !filePath) return
