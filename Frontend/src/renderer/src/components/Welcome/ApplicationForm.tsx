@@ -187,7 +187,6 @@ export default function ApplicationForm({
               }
             }
           ]}
-          extra="默认使用平台提供的仓库地址；也可以改成自己的仓库，应用代码会推送到这里。"
         >
           <Input prefix={<GithubOutlined />} placeholder={defaultRepoUrl} />
         </Form.Item>
