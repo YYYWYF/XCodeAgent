@@ -117,6 +117,30 @@ export function validateBranchName(value: string): string | undefined {
   return undefined
 }
 
+/** 允许的仓库地址协议。后端 build_authenticated_remote_url 只认带协议与主机的 URL。 */
+const ALLOWED_REPO_PROTOCOLS = new Set(['http:', 'https:', 'ssh:'])
+
+/**
+ * 校验码云地址。规则与后端 build_authenticated_remote_url 保持一致：
+ * 必须是带协议与主机名的 URL，否则后端拼不出可推送的认证地址。
+ */
+export function validateRepoUrl(value: string): string | undefined {
+  const repoUrl = (value ?? '').trim()
+  if (!repoUrl) return '请输入码云地址'
+  if (/\s/.test(repoUrl)) return '码云地址不能包含空格'
+  let parsed: URL
+  try {
+    parsed = new URL(repoUrl)
+  } catch {
+    return '码云地址格式无效，请填写完整的 http(s):// 或 ssh:// 地址'
+  }
+  if (!ALLOWED_REPO_PROTOCOLS.has(parsed.protocol)) {
+    return '码云地址只支持 http、https 或 ssh 协议'
+  }
+  if (!parsed.hostname) return '码云地址缺少主机名'
+  return undefined
+}
+
 /** 通过标准 AG-UI 客户端在工作区建出分支并推送到远端。 */
 export async function createRepositoryBranch(input: {
   workspaceRoot: string

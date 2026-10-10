@@ -19,15 +19,16 @@ import {
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import { Button, Form, Input, Radio, Select, Switch, Tooltip } from 'antd'
+import { Button, Form, Input, Radio, Select, Switch } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useMemo, useState } from 'react'
 import type { ApplicationDraft } from '../../typings'
-import { validateBranchName } from '../../service/repositoryBranch'
+import { validateBranchName, validateRepoUrl } from '../../service/repositoryBranch'
 import { cx } from '../../utils'
 import {
   applicationIconOptions,
+  defaultRepoUrl,
   initialApplicationDraft,
   terminalLabels,
   trackMethodOptions
@@ -176,17 +177,19 @@ export default function ApplicationForm({
         <Form.Item
           label="码云地址"
           name="repoUrl"
-          extra={
-            <Tooltip title="当前阶段为固定地址，后续将开放自定义仓库地址。">
-              <span className={cx('application-form-hint')}>暂为固定地址，后续开放自定义。</span>
-            </Tooltip>
-          }
+          rules={[
+            {
+              validator: (_rule, value: string) => {
+                const invalidReason = validateRepoUrl(value)
+                return invalidReason
+                  ? Promise.reject(new Error(invalidReason))
+                  : Promise.resolve()
+              }
+            }
+          ]}
+          extra="默认使用平台提供的仓库地址；也可以改成自己的仓库，应用代码会推送到这里。"
         >
-          <Input
-            prefix={<GithubOutlined />}
-            readOnly
-            style={{ cursor: 'default', color: 'rgba(0, 0, 0, 0.65)' }}
-          />
+          <Input prefix={<GithubOutlined />} placeholder={defaultRepoUrl} />
         </Form.Item>
         <Form.Item
           label="版本号（对应码云仓库中的分支名）"

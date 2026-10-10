@@ -124,7 +124,7 @@ export interface ApplicationSchemaConfig {
    * 分支列表推断。
    */
   branches?: ApplicationBranch[]
-  /** 应用代码提交目标仓库地址（码云/GitHub）；当前阶段固定写死，后续开放自定义。 */
+  /** 应用代码提交目标仓库地址（码云/GitHub）。新建应用时默认填平台仓库，用户可改成自己的仓库。 */
   repoUrl: string
   /**
    * 当前正在开发的分支名；指向 branches 中正在编辑的那条。
