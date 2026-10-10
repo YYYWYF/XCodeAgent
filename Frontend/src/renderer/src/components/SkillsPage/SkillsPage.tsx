@@ -1,4 +1,5 @@
 import {
+  CloseOutlined,
   CloudUploadOutlined,
   ImportOutlined,
   PlusOutlined,
@@ -32,6 +33,8 @@ import './SkillsPage.less'
 const { Text, Title } = Typography
 
 type Props = {
+  /** 作为抽屉展示时的关闭入口；不传则不渲染关闭按钮。 */
+  onClose?: () => void
   onSkillDisabled?: (skillName: string) => void
   theme: 'light' | 'dark'
 }
@@ -48,6 +51,7 @@ const pendingActions: PendingAction[] = [
 
 /** 渲染支持来源分类、启停、刷新和用户技能维护的技能页面。 */
 export default function SkillsPage({
+  onClose,
   onSkillDisabled,
   theme
 }: Props): ReactElement {
@@ -200,6 +204,16 @@ export default function SkillsPage({
             <div className={cx('skills-title-line')}>
               <Title level={4}>技能</Title>
               <Tag>{categorySkills.length} 个{category === 'user' ? '用户' : '内置'}</Tag>
+              {onClose ? (
+                <Button
+                  aria-label="关闭技能"
+                  className={cx('skills-close')}
+                  icon={<CloseOutlined />}
+                  onClick={onClose}
+                  title="关闭技能"
+                  type="text"
+                />
+              ) : null}
             </div>
             <Text>{categoryRoot || (category === 'user' ? '~/.devagentstudio_dev/skills' : '/.devagentstudio/builtin-skills')}</Text>
           </div>

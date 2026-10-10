@@ -18,7 +18,8 @@ import {
   ShoppingOutlined,
   TeamOutlined,
   ToolOutlined,
-  UserOutlined
+  UserOutlined,
+  CloseOutlined
 } from '@ant-design/icons'
 import {
   Anchor,
@@ -65,6 +66,8 @@ type EnvVariable = {
 
 type Props = {
   application: ApplicationConfig
+  /** 作为抽屉展示时的关闭入口；不传则不渲染关闭按钮。 */
+  onClose?: () => void
   onSaved: (application: ApplicationConfig) => void
 }
 
@@ -109,7 +112,7 @@ function SettingsCard({
 }
 
 /** 组织并保存应用级基础能力与环境配置。 */
-export default function SettingsPage({ application, onSaved }: Props): ReactElement {
+export default function SettingsPage({ application, onClose, onSaved }: Props): ReactElement {
   const [form] = Form.useForm<SettingsFormValues>()
   const [saving, setSaving] = useState(false)
 
@@ -243,6 +246,15 @@ export default function SettingsPage({ application, onSaved }: Props): ReactElem
           >
             保存设置
           </Button>
+          {onClose ? (
+            <Button
+              aria-label="关闭应用设置"
+              icon={<CloseOutlined />}
+              onClick={onClose}
+              title="关闭应用设置"
+              type="text"
+            />
+          ) : null}
         </div>
       </header>
 

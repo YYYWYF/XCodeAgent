@@ -1,4 +1,4 @@
-import { FileTextOutlined, SaveOutlined } from '@ant-design/icons'
+import { CloseOutlined, FileTextOutlined, SaveOutlined } from '@ant-design/icons'
 import { Alert, Button, Empty, Input, Spin, Typography, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -37,7 +37,12 @@ function formatUpdatedAt(value: string): string {
   }).format(updatedAt)
 }
 
-export default function AgentFilesPage(): ReactElement {
+type Props = {
+  /** 作为抽屉展示时的关闭入口；不传则不渲染关闭按钮。 */
+  onClose?: () => void
+}
+
+export default function AgentFilesPage({ onClose }: Props): ReactElement {
   const [agentFile, setAgentFile] = useState<AgentFile>()
   const [content, setContent] = useState('')
   const [error, setError] = useState('')
@@ -129,16 +134,27 @@ export default function AgentFilesPage(): ReactElement {
               <Text title={pathLabel}>{pathLabel}</Text>
             </div>
           </div>
-          <Button
-            className={cx('agent-files-save-button')}
-            disabled={!hasChanges || loading}
-            icon={<SaveOutlined />}
-            loading={saving}
-            onClick={() => void handleSave()}
-            type="primary"
-          >
-            保存
-          </Button>
+          <div className={cx('agent-files-actions')}>
+            <Button
+              className={cx('agent-files-save-button')}
+              disabled={!hasChanges || loading}
+              icon={<SaveOutlined />}
+              loading={saving}
+              onClick={() => void handleSave()}
+              type="primary"
+            >
+              保存
+            </Button>
+            {onClose ? (
+              <Button
+                aria-label="关闭文件"
+                icon={<CloseOutlined />}
+                onClick={onClose}
+                title="关闭文件"
+                type="text"
+              />
+            ) : null}
+          </div>
         </header>
 
         <div className={cx('agent-files-content')}>

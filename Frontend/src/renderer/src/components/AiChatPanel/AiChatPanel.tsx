@@ -120,6 +120,7 @@ import RightPanelTabs, {
   type WorkspaceTabKey
 } from './components/RightPanelTabs'
 import RightPanelLayoutControl from './components/RightPanelLayoutControl'
+import WorkbenchDrawer from './components/WorkbenchDrawer'
 import ReleasedVersionPanel from './components/ReleasedVersionPanel'
 import SessionSidebar from './components/SessionSidebar'
 import TemporaryChatOverlay from './components/TemporaryChatOverlay'
@@ -4818,13 +4819,8 @@ export default function AiChatPanel({
             theme={theme}
             workspaceRoot={workspaceRoot}
           />
-          {activeView === 'skills' ? (
-            <SkillsPage onSkillDisabled={handleSkillDisabled} theme={theme} />
-          ) : activeView === 'files' ? (
-            <AgentFilesPage />
-          ) : activeView === 'settings' ? (
-            <SettingsPage application={application} onSaved={onApplicationUpdate} />
-          ) : (
+          {/* 技能/文件/设置已改为抽屉（见下方 WorkbenchDrawer），对话区不再被替换。 */}
+          {(
             <div className={cx('ai-chat-main', showGlobalFallback && 'has-global-fallback')}>
               {activeDetailTarget.type !== 'none' ? (
                 <PageContextHeader
@@ -5142,6 +5138,32 @@ export default function AiChatPanel({
       {temporaryChatOpen ? <TemporaryChatOverlay onClose={handleCloseTemporaryChat} /> : null}
 
       {(activeView === 'dataSources' || activeView === 'externalApis') ? <DataSourcesDrawer key={`${workspaceRoot}:${activeView}`} mode={activeView === 'externalApis' ? 'external_api' : 'database'} theme={theme} workspaceRoot={workspaceRoot || ''} onNavigationGuard={registerSourceNavigationGuard} onClose={() => setActiveView('chat')} /> : null}
+
+      {/* 左下角三个入口改为抽屉：与临时对话/历史对话/数据源同一套浮层形态，
+          对话区不再被整块替换。宽度按内容型页面放宽（设置是锚点+表单，用 wide）。 */}
+      {activeView === 'skills' ? (
+        <WorkbenchDrawer label="技能" size="wide">
+          <SkillsPage
+            onClose={() => setActiveView('chat')}
+            onSkillDisabled={handleSkillDisabled}
+            theme={theme}
+          />
+        </WorkbenchDrawer>
+      ) : null}
+      {activeView === 'files' ? (
+        <WorkbenchDrawer label="文件">
+          <AgentFilesPage onClose={() => setActiveView('chat')} />
+        </WorkbenchDrawer>
+      ) : null}
+      {activeView === 'settings' ? (
+        <WorkbenchDrawer label="应用设置" size="wide">
+          <SettingsPage
+            application={application}
+            onClose={() => setActiveView('chat')}
+            onSaved={onApplicationUpdate}
+          />
+        </WorkbenchDrawer>
+      ) : null}
 
       {/* 分隔条只在分栏态存在：隐藏与全宽没有可拖的边界。 */}
       {showRightPanel && rightPanelLayout === 'split' && (

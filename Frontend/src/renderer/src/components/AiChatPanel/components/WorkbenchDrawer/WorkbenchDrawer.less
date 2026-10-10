@@ -1,0 +1,55 @@
+/* 左栏抽屉外壳：与临时对话/历史对话/数据源同一套定位、阴影与进场动效。
+   那两个对话抽屉只有 316px；这里承载的是内容型页面（技能卡片、AGENTS.md 编辑、
+   应用设置表单），所以按内容放宽。 */
+.@{class-prefix}-workbench-drawer {
+  position: absolute;
+  z-index: 30;
+  top: 0;
+  bottom: 0;
+  left: 68px;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  max-width: calc(100% - 68px);
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  border-right: 1px solid var(--wb-border-strong);
+  box-shadow: 18px 0 42px rgba(29, 24, 55, 0.14);
+  animation: workbench-drawer-enter 0.18s ease-out;
+}
+
+/* 子页面自带 flex:1 + 100% 尺寸，这里只需保证它在抽屉里可收缩、可滚动。 */
+.@{class-prefix}-workbench-drawer > * {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 列表型：技能卡片、AGENTS.md。 */
+.@{class-prefix}-workbench-drawer-medium {
+  width: clamp(420px, 44vw, 680px);
+}
+
+/* 表单型：应用设置（左侧锚点导航 + 右侧表单）、技能（卡片栅格 + 三按钮头部），
+   都需要比列表型更宽。 */
+.@{class-prefix}-workbench-drawer-wide {
+  width: clamp(560px, 56vw, 880px);
+}
+
+.@{class-prefix}-workbench-shell[data-theme='dark'] {
+  .@{class-prefix}-workbench-drawer {
+    box-shadow: 18px 0 42px rgba(0, 0, 0, 0.42);
+  }
+}
+
+@keyframes workbench-drawer-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

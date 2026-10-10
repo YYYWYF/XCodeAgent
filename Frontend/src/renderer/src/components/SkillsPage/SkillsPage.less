@@ -15,11 +15,14 @@
 
 .@{class-prefix}-skills-header {
   display: flex;
+  // 上下两行：第一行标题（关闭按钮贴该行最右），第二行操作按钮（左对齐）。
+  // 用列布局而非换行，保证任何宽度下标题区都独占一行、不会被操作区挤窄。
+  flex-direction: column;
+  align-items: stretch;
   min-height: 80px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 14px 30px 13px;
+  gap: 12px;
+  // 抽屉比原先的整块对话区窄，左右内边距从 30 收到 20，给标题与标签留出空间。
+  padding: 14px 20px 13px;
   border-bottom: 1px solid var(--wb-border);
 }
 
@@ -43,6 +46,65 @@
     color: var(--wb-text-secondary);
     font-size: 12px;
   }
+}
+
+/* 抽屉化后头部宽度远小于原先的整块对话区，必须显式分配，否则会出现标题被挤到
+   折行、内容溢出后压住右侧按钮。规则：
+   1) 标题块独占整行（列布局），不再与操作区争宽；
+   2) 「技能」标题永不折行，标签可收缩并省略号截断；
+   3) 路径是无空格长串，强制单行 + 省略号截断（否则逐字折行）；
+   4) 关闭按钮贴标题行最右，不占操作区。 */
+.@{class-prefix}-skills-title {
+  width: 100%;
+
+  > div {
+    // 必须吃满图标之后的剩余宽度：否则标题行只按内容宽撑开，
+    // 关闭按钮的 margin-left:auto 只能贴到标签后面，到不了抽屉右上角。
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+}
+
+.@{class-prefix}-skills-actions {
+  // 极窄时按钮自身换行，避免溢出（对齐方式见下方同名规则）。
+  flex-wrap: wrap;
+}
+
+/* 关闭按钮：贴在「技能」标题行的最右端，即抽屉右上角（margin-left:auto 吃掉
+   标题与标签之后的余量）。 */
+.@{class-prefix}-skills-close {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.@{class-prefix}-skills-title-icon {
+  flex: 0 0 auto;
+}
+
+.@{class-prefix}-skills-title-line {
+  min-width: 0;
+
+  h4.ant-typography {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .ant-tag {
+    flex: 0 1 auto;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-skills-title > div > .ant-typography {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .@{class-prefix}-skills-title-line {
@@ -77,7 +139,8 @@
 
 .@{class-prefix}-skills-actions {
   flex: 0 0 auto;
-  justify-content: flex-end;
+  // 抽屉化后操作区独占一行，按左对齐排布。
+  justify-content: flex-start;
   gap: 8px;
 
   .ant-btn {
