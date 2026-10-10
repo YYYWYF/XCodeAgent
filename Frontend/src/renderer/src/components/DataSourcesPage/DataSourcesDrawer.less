@@ -20,6 +20,13 @@
     > .anticon { font-size: 24px; color: var(--wb-accent); } > div { flex: 1; min-width: 0; }
     h3 { color: var(--wb-text); margin: 0; font-weight: 600; } p { color: var(--wb-text-tertiary); margin: 5px 0 0; font-size: 12px; }
   }
+  /* 列表栏头部与「历史对话」抽屉对齐：同款图标框、同款标题/副标题字号。
+     必须限定 .source-drawer-list —— .source-drawer-header 也被详情栏复用，
+     不限定会把详情栏头部一起改掉。 */
+  .source-drawer-list > .source-drawer-header { gap: 10px; min-height: 72px; padding: 14px 16px;
+    > .anticon { display: inline-flex; width: 34px; height: 34px; flex: 0 0 34px; align-items: center; justify-content: center; font-size: 15px; color: var(--wb-accent); background: var(--wb-accent-soft); border: 1px solid var(--wb-accent-border); border-radius: 9px; }
+    h3 { font-size: 14px; line-height: 20px; } p { margin-top: 2px; font-size: 10px; line-height: 15px; }
+  }
   .source-drawer-header > .source-drawer-header-actions { display: flex; flex: none; align-items: center; gap: 8px; }
   .source-drawer-tabs { display: flex; align-items: center; overflow-x: auto; border-bottom: 1px solid var(--wb-border); padding: 0 12px;
     > button { flex-shrink: 0; padding: 16px 12px; background: transparent; color: var(--wb-text-secondary); border: 0; border-bottom: 2px solid transparent; font-weight: 600; cursor: pointer;

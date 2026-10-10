@@ -5,7 +5,8 @@
   bottom: 0;
   left: 68px;
   display: flex;
-  width: clamp(360px, 30vw, 460px);
+  // 与「历史对话」抽屉同宽，避免两个对话抽屉宽度不一致。
+  width: 316px;
   max-width: calc(100% - 68px);
   min-width: 0;
   flex-direction: column;
@@ -17,30 +18,31 @@
 
 .@{class-prefix}-temporary-chat-header {
   display: flex;
-  min-height: 96px;
-  flex: 0 0 96px;
+  // 头部尺寸随图标/标题一起对齐「历史对话」；内容缩小后保留 96px 会显得空。
+  min-height: 72px;
+  flex: 0 0 72px;
   align-items: center;
-  gap: 14px;
-  padding: 16px 22px;
+  gap: 10px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--wb-border);
 }
 
 .@{class-prefix}-temporary-chat-agent-icon {
   display: inline-flex;
-  width: 54px;
-  height: 54px;
-  flex: 0 0 54px;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
   align-items: center;
   justify-content: center;
   color: var(--wb-accent);
   background: var(--wb-accent-soft);
   border: 1px solid var(--wb-accent-border);
-  border-radius: 15px;
+  border-radius: 9px;
 }
 
 .@{class-prefix}-temporary-chat-agent-icon-glyph {
-  width: 26px;
-  height: 26px;
+  width: 15px;
+  height: 15px;
   background: currentColor;
   mask: var(--temporary-chat-icon-source) center / contain no-repeat;
 }
@@ -54,16 +56,16 @@
 
   strong {
     color: var(--wb-text);
-    font-size: 18px;
-    font-weight: 650;
-    line-height: 26px;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 20px;
   }
 
   > span {
     overflow: hidden;
     color: var(--wb-text-secondary);
-    font-size: 13px;
-    line-height: 20px;
+    font-size: 10px;
+    line-height: 15px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -71,17 +73,17 @@
 
 .@{class-prefix}-temporary-chat-close {
   display: inline-flex;
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   align-items: center;
   justify-content: center;
   padding: 0;
   color: var(--wb-text-secondary);
-  font-size: 20px;
+  font-size: 15px;
   background: transparent;
   border: 0;
-  border-radius: 9px;
+  border-radius: 7px;
   cursor: pointer;
 
   &:hover,
