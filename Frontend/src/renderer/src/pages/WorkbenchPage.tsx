@@ -306,7 +306,9 @@ function WorkbenchPage({
     if (!applicationLifecycle) return
     setWorkspaceApplication((prev) => {
       if (prev.branches && prev.branches.length > 0) return prev
-      const branchName = prev.branchName || 'v1.0'
+      // 兜底分支名与新建表单默认值保持一致（公司内 Gitee 只允许字母、数字、下划线，
+      // 所以是 v1_0 而不是 v1.0）。
+      const branchName = prev.branchName || 'v1_0'
       const initialBranch = createInitialBranch(branchName, applicationLifecycle, Date.now())
       return { ...prev, branches: [initialBranch], branchName: initialBranch.name }
     })

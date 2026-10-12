@@ -487,7 +487,12 @@ export interface ApplicationDraft {
   senario: string
   projectPath: string
   repoUrl: string
-  /** 应用代码在远端仓库中的分支名；默认 v1.0（表单标签为「版本号」），用户可改。 */
+  /**
+   * 应用代码在远端仓库中的分支名；默认 v1_0（表单标签为「版本号」），用户可改。
+   *
+   * 默认值用下划线而不是点号：公司内 Gitee 的分支名白名单只允许字母、数字、下划线
+   * （服务端错误码 git017），`v1.0` 会在推送时被 pre-receive hook 拒绝。
+   */
   branchName: string
   terminal: ApplicationTerminal
   layout: ApplicationSchemaConfig['layout']

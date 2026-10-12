@@ -206,7 +206,7 @@ export default function ApplicationForm({
           ]}
           extra="应用代码会推送到远端的这个分支。如果远端已经有同名分支，它上面的代码会被覆盖。"
         >
-          <Input placeholder="v1.0" />
+          <Input placeholder="v1_0" />
         </Form.Item>
       </section>
 

@@ -29,7 +29,7 @@ export const initialApplicationDraft: ApplicationDraft = {
   senario: '',
   projectPath: '',
   repoUrl: defaultRepoUrl,
-  branchName: 'v1.0',
+  branchName: 'v1_0',
   terminal: 'PC',
   layout: { type: 'side', useHeader: true, useFooter: false },
   theme: { primaryColor: '#6b3cf0' },
