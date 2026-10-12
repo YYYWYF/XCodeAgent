@@ -1512,7 +1512,7 @@ export default function AiChatPanel({
   const commitBeforeSend = useCommitBeforeSend(
     application.workspaceRoot || '',
     `${application.id}:commit-before-send`,
-    'chore: 保存当前改动',
+    'Z991700-1911 #comment chore: 保存当前改动',
     designArtifactsSettling
   )
 
@@ -5370,7 +5370,7 @@ export default function AiChatPanel({
                       workspaceRoot={application.workspaceRoot || ''}
                       title={`有 ${orphanChangePaths.length} 个文件未关联到任何模块，请确认归属`}
                       description={`未归属模块：${summarizePaths(orphanChangePaths)}`}
-                      defaultCommitMessage="chore: 提交遗漏变更"
+                      defaultCommitMessage="Z991700-1911 #comment chore: 提交遗漏变更"
                       milestoneId={`${application.id}:quality-gate-${application.branchName || ''}`}
                       disabled={loading || workspaceBusy}
                       hideWhenUnavailable
@@ -5379,7 +5379,7 @@ export default function AiChatPanel({
                     <MilestoneCommitReminder
                       workspaceRoot={application.workspaceRoot || ''}
                       title="代码已通过自动检查，可先创建版本"
-                      defaultCommitMessage="chore: 保存当前模块代码"
+                      defaultCommitMessage="Z991700-1911 #comment chore: 保存当前模块代码"
                       milestoneId={`${application.id}:quality-gate-${application.branchName || ''}`}
                       disabled={loading || workspaceBusy}
                       hideWhenUnavailable

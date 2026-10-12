@@ -11,6 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.services.git_commit_message import ensure_board_number
 from app.services.workspace_process_registry import workspace_process_registry
 from app.workspace.workspace import _is_sensitive_path
 
@@ -241,7 +242,9 @@ def commit_version_control(
             raise VersionControlError("暂存内容与所选文件不一致，已停止提交。")
         _run_git_checked(
             repository_root,
-            ["commit", "-m", request.message],
+            # 统一补看板编号：这条路径包含验收阶段的静默自动保存，用户看不到提交信息，
+            # 所以不能依赖前端默认值带编号。
+            ["commit", "-m", ensure_board_number(request.message)],
             "Git 提交失败",
             timeout=60,
         )

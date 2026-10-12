@@ -36,7 +36,7 @@ export default function ReviewPhaseConfirmationCard({
       {/* 转换前的最后一步：提醒用户先把测试阶段的修复提交掉。 */}
       {workspaceRoot ? (
         <MilestoneCommitReminder
-          defaultCommitMessage="test: 完成测试阶段修复"
+          defaultCommitMessage="Z991700-1911 #comment test: 完成测试阶段修复"
           disabled={Boolean(disabled)}
           inline
           milestoneId={`${workspaceRoot}:review-gate`}

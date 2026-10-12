@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.branding import WORKSPACE_ARTIFACT_DIR_NAME
+from app.services.git_commit_message import template_baseline_commit_message
 from app.services.git_identity import apply_commit_identity
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapError
 from app.services.workspace_process_registry import workspace_process_registry
@@ -23,11 +24,6 @@ _GITIGNORE_CONTENT = "\n".join(
     f"{WORKSPACE_ARTIFACT_DIR_NAME}/{name}/"
     for name in _RUNTIME_ARTIFACT_DIRS
 ) + "\n"
-
-# 模板基线提交信息。公司内的看板要求每次提交带上看板编号（`#comment` 是看板系统的
-# 指令，会把这条提交关联成该编号下的一条评论），所以这里固定带上编号。
-# 编号是团队/项目级的常量，换项目时改这一行即可。
-_TEMPLATE_BASELINE_COMMIT_MESSAGE = "Z991700-1911 #comment chore：模板初始化"
 
 
 class BootstrapGitManager:
@@ -50,7 +46,7 @@ class BootstrapGitManager:
         if (root / WORKSPACE_ARTIFACT_DIR_NAME).is_dir():
             add_paths.append(WORKSPACE_ARTIFACT_DIR_NAME)
         self._run(root, ["git", "add", "--", *add_paths])
-        self._run(root, ["git", "commit", "-m", _TEMPLATE_BASELINE_COMMIT_MESSAGE])
+        self._run(root, ["git", "commit", "-m", template_baseline_commit_message()])
         return self._run(root, ["git", "rev-parse", "HEAD"]).strip()
 
     def verify_baseline(self, workspace: str | Path) -> str:

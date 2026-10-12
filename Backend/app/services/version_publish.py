@@ -12,6 +12,7 @@ from urllib.parse import urlparse, urlunparse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.git_branch import validate_branch_name
+from app.services.git_commit_message import ensure_board_number
 from app.services.git_credentials import (
     git_env,
     git_failure_detail,
@@ -95,7 +96,8 @@ def publish_version(
         # 说明为空时回退到分支名。这里原先是 request.version_label —— 版本号模型
         # 去掉后该字段已不存在，说明为空时会抛 AttributeError（前端禁用了空说明提交，
         # 所以没暴露出来，但直接调接口就会中招）。
-        commit_message = request.description.strip() or branch
+        # 统一补看板编号：提交入口不止一处，且看板要求每次提交都带编号。
+        commit_message = ensure_board_number(request.description.strip() or branch)
         _run_git_checked(
             repository_root,
             ["commit", "-m", commit_message],
