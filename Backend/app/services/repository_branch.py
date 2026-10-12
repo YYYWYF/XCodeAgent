@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.git_branch import GitBranchError, validate_branch_name
+from app.services.git_credentials import git_env, git_failure_detail
 from app.services.version_publish import build_authenticated_remote_url
 from app.services.workspace_process_registry import workspace_process_registry
 
@@ -331,10 +332,21 @@ def _is_transient_push_failure(detail: str) -> bool:
 
 
 def _is_rejected_push(detail: str) -> bool:
-    """判断推送失败是否只是"远端分支已存在且历史分叉"这类拒绝。"""
+    """判断推送失败是否只是"远端分支已存在且历史分叉"这类拒绝。
+
+    只认**非快进**语义的拒绝，绝不能按 "rejected" 泛匹配 —— git 的两种输出前缀不同：
+
+    - `! [rejected]        HEAD -> v1.0 (non-fast-forward)` —— 远端已有分叉历史，
+      不覆盖是对的，返回 skipped 让用户知道没推。
+    - `! [remote rejected] HEAD -> v1.0 (pre-receive hook declined)` —— 服务端钩子拒绝，
+      最常见的原因是当前账号**没有该仓库的推送权限**（公司内 Gitee 正是按员工身份校验）。
+      这不是"已存在"，必须按 failed 报出来，否则用户会以为代码已经在远端了。
+
+    两种前缀里只有前者含子串 `[rejected]`（后者是 `[remote rejected]`），据此区分。
+    """
 
     lowered = detail.lower()
-    return "rejected" in lowered or "non-fast-forward" in lowered or "fetch first" in lowered
+    return "[rejected]" in lowered or "non-fast-forward" in lowered or "fetch first" in lowered
 
 
 def _read_head(repository_root: Path) -> str:
@@ -345,10 +357,9 @@ def _read_head(repository_root: Path) -> str:
 
 
 def _failure_detail(completed: subprocess.CompletedProcess[str]) -> str:
-    """从失败命令中提取可展示的原因，并限制长度。"""
+    """从失败命令中提取可展示的原因（认证类失败附带可操作提示），并限制长度。"""
 
-    detail = (completed.stderr or completed.stdout or "").strip() or "未知错误"
-    return detail[:512]
+    return git_failure_detail(completed)
 
 
 def _run_git(
@@ -365,6 +376,8 @@ def _run_git(
         ["git", *arguments],
         workspace=cwd,
         cwd=str(cwd),
+        # 禁用交互式提问：无 TTY 时等输入会把推送流程挂住（见 services/git_credentials）。
+        env=git_env(),
         text=True,
         capture_output=True,
         check=False,

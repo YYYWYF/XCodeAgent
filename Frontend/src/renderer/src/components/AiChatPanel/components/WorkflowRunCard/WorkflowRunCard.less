@@ -1689,6 +1689,24 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
   font-size: 13px;
 }
 
+// 推送被服务端拒绝时展示的原始原因。必须保留服务端返回的换行（policy 说明常常是多行
+// 文本 + 格式示例），所以用 pre-wrap 而不是普通文本节点；字体走等宽，便于辨认提交信息
+// 格式这类对字符敏感的内容。可选中复制，方便用户照着服务端要求改。
+.@{class-prefix}-template-preparing-push-reason {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  color: var(--wb-text-secondary, rgba(0, 0, 0, 0.65));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: color-mix(in srgb, var(--wb-warning) 8%, transparent);
+  border-left: 3px solid var(--wb-warning);
+  border-radius: 6px;
+}
+
 // 重试按钮沿用工作台主按钮的视觉语言（紫色→蓝色渐变、圆角、柔光投影），
 // 而不是 antd 默认的描边小按钮 —— 后者在这张卡片里显得很突兀。
 .@{class-prefix}-template-preparing-push-retry.ant-btn {

@@ -13,7 +13,6 @@ import type {
   WorkflowTemplatePreparation
 } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { asMessageClause } from '../../../../service/repositoryBranch'
 import MilestoneCommitModal from '../MilestoneCommitReminder/MilestoneCommitModal'
 import { useMilestoneCommit } from '../MilestoneCommitReminder/useMilestoneCommit'
 import { resolveTemplateCommitRow } from './templateCommitRow'
@@ -228,7 +227,10 @@ function ReadyCard({
 
   // 远端推送是否失败。分支名优先用后端返回的（重试后可能与配置里的旧值不同）。
   const pushedBranchName = repositoryBranch?.branchName || branchName
-  const pushFailed = repositoryBranch?.status === 'failed'
+  // 只有 pushed 才算"代码已在远端"。skipped（远端已存在未覆盖 / 未配置仓库地址）与
+  // failed 同样是**没推上去**，绝不能按成功文案展示 —— 否则用户以为远端已经有代码了。
+  // repositoryBranch 缺失（本轮没有推送动作）时保持原样，不误报。
+  const pushNotOnRemote = Boolean(repositoryBranch) && repositoryBranch?.status !== 'pushed'
 
   // HEAD 的提交描述与短 commitId。自动提交由平台发起、用户没参与写信息，
   // 必须显示出来，否则这个 commit 对用户是黑盒；未建立基线时用占位符兜底。
@@ -311,7 +313,7 @@ function ReadyCard({
       {commitRow === 'baseline' ? (
         <div className={cx('template-preparing-commit-row')}>
           <span className={cx('template-preparing-commit-icon')}>
-            {pushFailed ? (
+            {pushNotOnRemote ? (
               <ExclamationCircleFilled className={cx('template-preparing-push-warning')} />
             ) : (
               <CheckCircleOutlined />
@@ -319,21 +321,29 @@ function ReadyCard({
           </span>
           <div className={cx('template-preparing-commit-copy')}>
             <Text strong>
-              {pushFailed
+              {pushNotOnRemote
                 ? `版本 ${pushedBranchName} 未提交到远端`
                 : reusedExistingTemplate
                   ? '工程代码已保存'
                   : '模板代码已保存'}
             </Text>
             <Text type="secondary">
-              {pushFailed
-                ? `${asMessageClause(repositoryBranch?.message, '原因未知')}。代码已提交到本地，应用可以正常使用。`
+              {pushNotOnRemote
+                ? '代码已提交到本地，应用可以正常使用。'
                 : reusedExistingTemplate
                   ? '沿用已有工程，无需重新提交'
                   : pushedBranchName
                     ? `已自动提交到版本 ${pushedBranchName}，无需手动操作`
                     : '已自动提交，无需手动操作'}
             </Text>
+            {/* 未推送成功时把服务端的原话整段展示出来：真正的拒绝理由（例如提交信息
+                不符合仓库规范、以及规范要求的格式示例）只在服务端返回的 remote: 行里，
+                压成一句摘要会让用户无从下手。pre-wrap 保留换行，可选中复制。 */}
+            {pushNotOnRemote ? (
+              <pre className={cx('template-preparing-push-reason')}>
+                {repositoryBranch?.message?.trim() || '未提供失败原因。'}
+              </pre>
+            ) : null}
             {/* 提交描述与 commitId 单独占一行：和上面的状态文案挤在同一行时既拥挤、
                 又让提交标识难以辨认。 */}
             <Text type="secondary">
@@ -341,7 +351,7 @@ function ReadyCard({
             </Text>
             {/* 推送失败时给一个可点的重试入口：这条推送只在 Bootstrap 时自动跑一次，
                 没有重试按钮的话用户只能等下次发起新迭代。 */}
-            {pushFailed && onRetryRepositoryBranch ? (
+            {pushNotOnRemote && onRetryRepositoryBranch ? (
               <Button
                 className={cx('template-preparing-push-retry')}
                 disabled={retryingRepositoryBranch}
