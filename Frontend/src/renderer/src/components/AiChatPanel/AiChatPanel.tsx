@@ -1,4 +1,4 @@
-import { Alert, message } from 'antd'
+import { Alert, Modal, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useUncommittedChanges, useWorkbench, useWorkbenchPhase } from '../../context'
@@ -1104,9 +1104,37 @@ export default function AiChatPanel({
   const handleRetryRepositoryBranch = useCallback(async (): Promise<void> => {
     const workspaceRoot = application.workspaceRoot || ''
     if (!workspaceRoot || retryingRepositoryBranch) return
+
+    // 远端可能已经存在同名分支。平台推送的是全新初始化的模板基线，与远端既有分支
+    // 没有共同祖先，普通推送和 force 都会被服务端拒绝（denyNonFastForwards），
+    // 只能删掉远端那条分支再推 —— 也就是"全覆盖"。这是破坏性操作，必须先确认。
+    const branchLabel = application.branchName || '所选版本'
+    const confirmed = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        cancelText: '取消',
+        centered: true,
+        content: (
+          <div className={cx('welcome-branch-overwrite-confirmation')}>
+            <p>
+              如果远端仓库里已经有 <strong>{branchLabel}</strong> 分支，它的代码会被
+              <strong>全部覆盖</strong>，原来的内容找不回来。
+            </p>
+            <p>确认后会把本地当前代码完整推送到该分支。</p>
+          </div>
+        ),
+        okButtonProps: { danger: true },
+        okText: '覆盖并提交',
+        onCancel: () => resolve(false),
+        onOk: () => resolve(true),
+        title: `确定要把代码提交到 ${branchLabel} 吗？`,
+        wrapClassName: cx('welcome-modal', `theme-${theme}`)
+      })
+    })
+    if (!confirmed) return
+
     setRetryingRepositoryBranch(true)
     try {
-      const outcome = await pushRepositoryBranch({ workspaceRoot })
+      const outcome = await pushRepositoryBranch({ workspaceRoot, allowOverwrite: true })
       const nextApplication: ApplicationConfig = {
         ...application,
         repositoryBranch: { ...outcome, updatedAt: Date.now() }
@@ -1129,7 +1157,8 @@ export default function AiChatPanel({
     application,
     onApplicationUpdate,
     onPersistApplication,
-    retryingRepositoryBranch
+    retryingRepositoryBranch,
+    theme
   ])
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'

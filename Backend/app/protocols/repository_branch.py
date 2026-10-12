@@ -122,8 +122,12 @@ def build_repository_branch_ag_ui_stream(
         if request.action == "push":
             # 重试把当前分支推到远端。分支名/仓库地址都从工作区配置读，
             # 所以不需要请求里带 branchName；返回值同样把 branchName 带出来。
+            # allowOverwrite 由请求显式给出：工作台的重试按钮有自己的确认弹窗，
+            # 用户确认后才会带 true —— 远端已有同名分支时据此覆盖。
             result = await asyncio.to_thread(
-                push_workspace_branch, request.workspace_root or ""
+                push_workspace_branch,
+                request.workspace_root or "",
+                allow_overwrite=request.allow_overwrite,
             )
             pushed = result.get("status") == "pushed"
             return AgUiActionResult(

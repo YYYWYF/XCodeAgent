@@ -211,6 +211,8 @@ export async function createRepositoryBranch(input: {
  */
 export async function pushRepositoryBranch(input: {
   workspaceRoot: string
+  /** 用户已明确确认覆盖远端同名分支；远端已有该分支时据此删除后重推。 */
+  allowOverwrite?: boolean
   threadId?: string
 }): Promise<RepositoryBranchOutcome> {
   const agent = createAgUiHttpAgent({
@@ -238,7 +240,15 @@ export async function pushRepositoryBranch(input: {
   }
 
   const result = await agent.runAgent(
-    { forwardedProps: { repositoryBranch: { action: 'push', workspaceRoot: input.workspaceRoot } } },
+    {
+      forwardedProps: {
+        repositoryBranch: {
+          action: 'push',
+          workspaceRoot: input.workspaceRoot,
+          allowOverwrite: input.allowOverwrite === true
+        }
+      }
+    },
     subscriber
   )
   payload =
