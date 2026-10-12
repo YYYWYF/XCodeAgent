@@ -48,6 +48,21 @@ _REJECTED_MARKERS = (
     "returned error: 403",
 )
 
+# 公司内 Gitee 的 policy 校验错误码。这类拒绝会给出精确原因，比"服务端拒绝"这句
+# 笼统提示有用得多，所以放在通用的 _SERVER_REJECTED_MARKERS 之前优先匹配。
+#
+# git002：提交的 author email 未被仓库授权。取值见 services/git_identity.py。
+_EMAIL_UNAUTHORIZED_MARKERS = (
+    "unauthorized email account",
+    "git002",
+)
+
+# git017：分支名不符合仓库白名单（只允许字母、数字、下划线）。
+_BRANCH_NAME_POLICY_MARKERS = (
+    "branch name only allow",
+    "git017",
+)
+
 # 推送被服务端钩子拒绝。**不能断言原因** —— pre-receive hook 既可能校验提交信息规范
 # （公司内仓库常见要求：`Z991700-1911 #comment feat：说明`），也可能校验账号写权限。
 # git 输出 `! [remote rejected] ... (pre-receive hook declined)`，真正的理由在服务端
@@ -117,6 +132,23 @@ def credential_failure_hint(detail: str) -> str:
                 "（凭证会存入系统凭据管理器）"
             )
         return "未配置 Git 凭证，请在 .env 设置 DEVAGENTSTUDIO_GIT_USERNAME 与 DEVAGENTSTUDIO_GIT_TOKEN"
+    # policy 错误码优先于笼统的"服务端拒绝"：它们给出的是精确原因，照做即可解决。
+    # 注意邮箱这条要提示"重试按钮不管用" —— 重试推送的是已存在的那个提交，
+    # 改了 .env 里的身份也不会改变它，必须重建应用或改写该提交的 author。
+    if any(marker in lowered for marker in _EMAIL_UNAUTHORIZED_MARKERS):
+        return (
+            "服务端拒绝了本次推送：提交的邮箱未被该仓库授权（git002）。"
+            "平台提交身份取自本机 Git 全局配置（user.name / user.email），"
+            "可在 .env 用 DEVAGENTSTUDIO_GIT_AUTHOR_NAME / _EMAIL 指定。"
+            "注意：已生成的提交无法靠重试修正（重试推送的是同一个提交），"
+            "请重新创建应用，或在该工作区执行 "
+            "git commit --amend --no-edit --reset-author 后再重试。服务端返回如下"
+        )
+    if any(marker in lowered for marker in _BRANCH_NAME_POLICY_MARKERS):
+        return (
+            "服务端拒绝了本次推送：分支名不符合仓库白名单（git017，只允许字母、数字、下划线）。"
+            "请在新建应用时把版本号改成合规写法（例如 v1_0）。服务端返回如下"
+        )
     if any(marker in lowered for marker in _SERVER_REJECTED_MARKERS):
         return (
             "服务端拒绝了本次推送（常见原因：提交信息不符合仓库规范，"
