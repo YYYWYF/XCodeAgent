@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 # 看板编号。公司内每次提交都要带上它。
-BOARD_COMMIT_NUMBER = "Z991700-1911"
+BOARD_COMMIT_NUMBER = "Z000000-0000"
 
 # 看板系统的评论指令，跟在编号后面。
 _COMMENT_DIRECTIVE = "#comment"

@@ -212,7 +212,7 @@ function ReadyCard({
   commitDisabled: boolean
 }): ReactElement {
   // 无 workspaceRoot 时跳过提交区，仅展示就绪态与进入开发按钮。
-  const commit = useMilestoneCommit(workspaceRoot ?? '', 'template-init', 'Z991700-1911 #comment chore: 初始化应用工程')
+  const commit = useMilestoneCommit(workspaceRoot ?? '', 'template-init', 'Z000000-0000 #comment chore: 初始化应用工程')
   const {
     snapshot,
     commitResult,

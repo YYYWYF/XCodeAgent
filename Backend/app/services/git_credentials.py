@@ -76,7 +76,7 @@ _NON_FAST_FORWARD_MARKERS = (
 )
 
 # 推送被服务端钩子拒绝。**不能断言原因** —— pre-receive hook 既可能校验提交信息规范
-# （公司内仓库常见要求：`Z991700-1911 #comment feat：说明`），也可能校验账号写权限。
+# （公司内仓库常见要求：`Z000000-0000 #comment feat：说明`），也可能校验账号写权限。
 # git 输出 `! [remote rejected] ... (pre-receive hook declined)`，真正的理由在服务端
 # 自己打的 `remote:` 行里，所以提示只说明"服务端拒绝"，把原话留给用户看。
 _SERVER_REJECTED_MARKERS = (

@@ -84,7 +84,7 @@ export default function TestPhaseConfirmationCard({
           无 workspaceRoot、或没有可提交变更时组件自己不渲染（见 shouldRenderCommitReminder）。 */}
       {gate?.allowed && workspaceRoot ? (
         <MilestoneCommitReminder
-          defaultCommitMessage="Z991700-1911 #comment feat: 完成开发阶段代码"
+          defaultCommitMessage="Z000000-0000 #comment feat: 完成开发阶段代码"
           disabled={Boolean(disabled)}
           inline
           milestoneId={`${workspaceRoot}:test-gate`}
