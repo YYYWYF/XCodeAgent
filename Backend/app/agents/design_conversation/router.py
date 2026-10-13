@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from app.agents.design_conversation.models import DesignConversationDecision
+from app.agents.design_conversation.fallback import (
+    fallback_design_conversation_decision,
+    invalid_model_decision,
+)
 
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
@@ -13,25 +17,6 @@ from app.services.access_control_intent import (
     has_explicit_business_access_control_change,
 )
 from app.utils.model_output import extract_json_object
-
-
-DesignChangeTarget = Literal[
-    "requirements",
-    "product_planning",
-    "ui_confirmation",
-    "chat",
-]
-
-
-class DesignConversationDecision(BaseModel):
-    """设计阶段对话 Agent 的稳定路由结果。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    target: DesignChangeTarget
-    reason: str = Field(min_length=1, max_length=500)
-    affected_page_ids: list[str] = Field(default_factory=list, max_length=100)
-    response: str = Field(default="", max_length=2000)
 
 
 def classify_design_conversation(
@@ -47,7 +32,8 @@ def classify_design_conversation(
     if has_explicit_business_access_control_change(request):
         # 受控页面、操作或角色访问权属于 RequirementSpec 事实，不能交给路由模型猜测层级。
         return DesignConversationDecision(
-            target="requirements",
+            intent="requirement_change",
+            change_level="requirement",
             reason="输入明确调整角色访问控制，必须先修订需求权限规则。",
             affected_page_ids=_mentioned_page_ids(request, product_plan),
             response="",
@@ -63,11 +49,16 @@ def classify_design_conversation(
         result = create_chat_model(active_settings).invoke(prompt)
         content = _coerce_content_text(getattr(result, "content", "")) or ""
         parsed = extract_json_object(content)
-        decision = DesignConversationDecision.model_validate(parsed)
-        return _normalize_decision(decision, product_plan)
     except Exception:
-        # 路由 Agent 失败时仍保持可用，并按“越上游越安全”的确定性规则兜底。
-        return _fallback_decision(request, product_plan)
+        # 调用失败使用现有保守语义兜底；非法输出不得被转成修改授权。
+        return fallback_design_conversation_decision(
+            request, requirement_spec=requirement_spec, product_plan=product_plan
+        )
+    try:
+        decision = DesignConversationDecision.model_validate(parsed)
+    except Exception:
+        return invalid_model_decision(parsed)
+    return _normalize_decision(decision, product_plan)
 
 
 def _classification_prompt(
@@ -86,23 +77,24 @@ def _classification_prompt(
     }
     return (
         "You are the dedicated design-conversation routing agent for DevAgent Studio.\n"
-        "Your only job is to decide the earliest formal design artifact node that must be revised. "
+        "Your only job is to classify product conversation semantics. "
         "Return one JSON object and no markdown.\n"
-        "Allowed target values: requirements, product_planning, ui_confirmation, chat.\n"
-        "Choose requirements for changes to product goals, scope, roles, modules, page inventory, "
+        "Allowed intent values: chat, read_only, requirement_change, ui_change, clarification, out_of_scope.\n"
+        "Use requirement_change with change_level=requirement for changes to product goals, scope, roles, modules, page inventory, "
         "business flows, or required business information.\n"
-        "Choose product_planning when the fixed RequirementSpec remains valid but page goals, user "
+        "Use requirement_change with change_level=product_behavior when RequirementSpec remains valid but page goals, user "
         "actions, navigation, visible outcomes, states, or product acceptance criteria must change.\n"
-        "Choose ui_confirmation only for visual layout, hierarchy, styling, controls, responsive/theme "
+        "Use ui_change with change_level=ui only for visual layout, hierarchy, styling, controls, responsive/theme "
         "presentation, or local interaction treatment that does not change product facts.\n"
-        "Choose chat only when no formal artifact needs to change.\n"
-        "If one request spans several levels, choose the earliest node: requirements before "
-        "product_planning before ui_confirmation. Never choose technical planning, APIs, schemas, "
-        "databases, code generation, or implementation nodes.\n"
+        "Use read_only for questions about current product facts, chat for casual conversation, clarification for ambiguous requests. "
+        "Use out_of_scope for technical planning or code execution requests, with suggested_phase planning, development or test. "
+        "For other intents suggested_phase must be none. For nonmutating intents change_level must be none. "
+        "If several product levels change, classify the earliest one. Correcting local versus server action semantics is product_behavior.\n"
         "affected_page_ids may contain only pageIds from the current ProductPlan. Leave it empty when "
-        "the affected page cannot be determined safely. response is required only for chat.\n"
-        "Output shape: {\"target\":\"requirements|product_planning|ui_confirmation|chat\","
-        "\"reason\":\"short reason\",\"affected_page_ids\":[],\"response\":\"\"}.\n\n"
+        "the affected page cannot be determined safely. response answers chat/read_only or explains out_of_scope; clarification_question asks missing information.\n"
+        "Output shape: {\"intent\":\"requirement_change\",\"change_level\":\"product_behavior\","
+        "\"reason\":\"short reason\",\"affected_page_ids\":[],\"response\":\"\","
+        "\"suggested_phase\":\"none\",\"clarification_question\":\"\"}.\n\n"
         f"Current compact design context:\n{json.dumps(context, ensure_ascii=False)}\n\n"
         f"Latest user input:\n{request}"
     )
@@ -196,68 +188,10 @@ def _normalize_decision(
         )
     )
     response = decision.response.strip()
-    if decision.target == "chat" and not response:
+    if decision.intent == "chat" and not response:
         response = "这条消息不需要调整需求、产品规划或 UI 设计。"
     return decision.model_copy(
         update={"affected_page_ids": affected, "response": response}
-    )
-
-
-def _fallback_decision(
-    request: str,
-    product_plan: dict[str, Any] | None,
-) -> DesignConversationDecision:
-    """模型不可用时按关键词选择最早设计节点，并尽量识别页面 ID。"""
-
-    text = request.strip().lower()
-    requirement_signals = (
-        "需求",
-        "范围",
-        "角色",
-        "模块",
-        "新增页面",
-        "删除页面",
-        "业务流程",
-        "不需要这个页面",
-        "权限",
-        "授权",
-        "访问控制",
-    )
-    product_signals = (
-        "产品规划",
-        "操作",
-        "跳转",
-        "验收标准",
-        "加载状态",
-        "空状态",
-        "业务结果",
-    )
-    ui_signals = (
-        "ui",
-        "界面",
-        "布局",
-        "样式",
-        "颜色",
-        "弹窗",
-        "组件",
-        "响应式",
-        "深色",
-        "浅色",
-    )
-    if any(signal in text for signal in requirement_signals):
-        target: DesignChangeTarget = "requirements"
-    elif any(signal in text for signal in product_signals):
-        target = "product_planning"
-    elif any(signal in text for signal in ui_signals):
-        target = "ui_confirmation"
-    else:
-        target = "chat"
-    page_ids = _mentioned_page_ids(text, product_plan)
-    return DesignConversationDecision(
-        target=target,
-        reason="路由模型不可用，已使用设计阶段保守规则判断。",
-        affected_page_ids=page_ids,
-        response=("这条消息暂未识别为正式设计产物调整。" if target == "chat" else ""),
     )
 
 
