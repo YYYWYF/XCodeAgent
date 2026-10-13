@@ -1185,7 +1185,7 @@ export default function UiDesignConfirmationPanel({
               size="large"
               type="primary"
             >
-              进入计划阶段
+              下一步
             </Button>
           </div>
         </div>
