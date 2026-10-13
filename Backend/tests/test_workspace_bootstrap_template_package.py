@@ -22,12 +22,36 @@ class TemplatePackageTests(unittest.TestCase):
             path = Path(directory) / "template.zip"
             path.write_bytes(package)
             result = validate_template_package(path, self._limits())
-            self.assertEqual(result.template_state.templateRevision, "R1")
+            self.assertEqual(result.template_state.templateRevision, "2026.10.10.1")
+
+    def test_accepts_template_contract_directory(self) -> None:
+        """确认契约目录及其任意文件、子目录可以随 V3 ZIP 交付。"""
+
+        entries = {"frontend/package.json": "{}", "backend/pom.xml": "<project/>",
+                   ".devagentstudio/template-state.json": json.dumps(self._state())}
+        for name in ("route-projector.json", "route-projector-input.schema.json", "route-projector-output.schema.json"):
+            entries[".devagentstudio/template-contracts/" + name] = "{}"
+        entries.update({
+            ".devagentstudio/template-contracts/": "",
+            ".devagentstudio/template-contracts/extra.txt": "contract",
+            ".devagentstudio/template-contracts/schemas/": "",
+            ".devagentstudio/template-contracts/schemas/custom.json": "{}",
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "template.zip"
+            path.write_bytes(self._archive(entries))
+            self.assertEqual(validate_template_package(path, self._limits()).template_state.templateRevision, "2026.10.10.1")
 
     def test_rejects_unmanaged_and_internal_paths(self) -> None:
         """确认额外 root、额外 .devagentstudio 与路径穿越均被拒绝。"""
 
-        cases = ("scripts/setup.sh", ".devagentstudio/application.json", "../escape")
+        cases = (
+            "scripts/setup.sh",
+            ".devagentstudio/application.json",
+            ".devagentstudio/template-contracts-other/custom.json",
+            ".devagentstudio/template-contracts/../application.json",
+            "../escape",
+        )
         for entry in cases:
             with self.subTest(entry=entry), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "template.zip"
@@ -44,11 +68,12 @@ class TemplatePackageTests(unittest.TestCase):
         """构造 Engine State fixture。"""
 
         return {
-            "schemaVersion": 2,
-            "templateRevision": "R1",
+            "schemaVersion": 3,
+            "templateRevision": "2026.10.10.1",
             "requested": {},
             "effective": {},
-            "appliedAdditions": {},
+            "installedArtifacts": {},
+            "managedContributions": {},
         }
 
     def _archive(self, entries: dict[str, str]) -> bytes:

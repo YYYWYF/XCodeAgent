@@ -12,11 +12,13 @@ from app.services.workspace_bootstrap.archive_security import validate_archive_e
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageError, ValidatedTemplatePackage
 
 _STATE_PATH = (WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix()
+_TEMPLATE_CONTRACTS_DIR = (WORKSPACE_ARTIFACT_DIR / "template-contracts").as_posix()
+_TEMPLATE_CONTRACTS_PREFIX = _TEMPLATE_CONTRACTS_DIR + "/"
 _REQUIRED_ROOTS = frozenset({"frontend", "backend"})
 
 
 def validate_template_package(archive_path: str | Path, limits: ArchiveLimits) -> ValidatedTemplatePackage:
-    """校验 ZIP 只含 frontend/backend 和唯一 V3 TemplateState。"""
+    """校验 ZIP 只含 frontend/backend、路由契约和唯一 V3 TemplateState。"""
 
     path = Path(archive_path)
     try:
@@ -38,7 +40,7 @@ def validate_template_package(archive_path: str | Path, limits: ArchiveLimits) -
 
 
 def _validate_required_roots(entries: list[zipfile.ZipInfo]) -> None:
-    """拒绝 V3 Generate ZIP 中 frontend/backend/State 外的任何路径。"""
+    """允许双端源码、整个模板契约目录和唯一 State，拒绝其他路径。"""
 
     roots = {
         PurePosixPath(entry.filename).parts[0]
@@ -53,9 +55,15 @@ def _validate_required_roots(entries: list[zipfile.ZipInfo]) -> None:
         )
     for entry in entries:
         name = entry.filename.rstrip("/")
-        if name in {"frontend", "backend", ".devagentstudio"} and entry.is_dir():
+        if name in {"frontend", "backend", WORKSPACE_ARTIFACT_DIR.as_posix(), _TEMPLATE_CONTRACTS_DIR} and entry.is_dir():
             continue
-        if name.startswith("frontend/") or name.startswith("backend/") or name == _STATE_PATH:
+        # 按带斜杠的目录前缀开放契约文件和子目录，避免放行同名前缀的相邻目录。
+        if (
+            name.startswith("frontend/")
+            or name.startswith("backend/")
+            or name == _STATE_PATH
+            or name.startswith(_TEMPLATE_CONTRACTS_PREFIX)
+        ):
             continue
         raise TemplatePackageError("V3 Generate ZIP 包含未授权路径：" + entry.filename)
     if sum(entry.filename == _STATE_PATH for entry in entries if not entry.is_dir()) != 1:
