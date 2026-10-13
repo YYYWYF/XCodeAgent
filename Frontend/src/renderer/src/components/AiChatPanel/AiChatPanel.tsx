@@ -125,6 +125,9 @@ import ReleasedVersionPanel from './components/ReleasedVersionPanel'
 import SessionSidebar from './components/SessionSidebar'
 import QuickTaskGuide from './components/QuickTaskGuide'
 import type { QuickTaskItem } from './components/QuickTaskGuide/quickTasks'
+import { buildQuickTasks } from './components/QuickTaskGuide/quickTasks'
+import NextDevelopmentGuide from './components/NextDevelopmentGuide'
+import { developmentNextStep, latestDevelopmentTarget } from './developmentNextStep'
 import WorkspaceDebugDock from './components/WorkspaceDebugDock'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
@@ -1811,8 +1814,9 @@ export default function AiChatPanel({
   const activeApiEndpoint = activeDetailTarget.type === 'endpoint' ? activeDetailTarget : undefined
   const activeTargetKey = detailTargetKey(activeDetailTarget)
   useEffect(() => {
-    // 历史会话切换只恢复显式持久化目标；无目标自由会话不会借用上一个目标。
-    setActiveDetailTarget(activeDetailTargetFromSession(activeSession?.developmentTarget))
+    // 多目标开发会话恢复最近一次正式运行的显式目标；普通自由会话不借用其他会话上下文。
+    const target = activeSession ? latestDevelopmentTarget(getSessionMessages(activeSession.key)) : undefined
+    setActiveDetailTarget(activeDetailTargetFromSession(target || activeSession?.developmentTarget))
     setInteractingDetailTargetKey('')
     setGeneratingDetailTargetKey('')
   }, [activeSession?.developmentTarget, activeSession?.key])
@@ -4191,6 +4195,30 @@ export default function AiChatPanel({
     })
   }
 
+  /** 从完成/结束引导在当前会话追加新目标，保留正式开发门禁且不创建第二个可见会话。 */
+  const handleNextDevelopmentStart = async (task: QuickTaskItem): Promise<void> => {
+    if (loading || workflowInputLocked || otherSessionExecutionLocked || pendingPlanActionable ||
+      !activeSession || activeWorkbenchPhase !== 'development') return
+    setPreviewError('')
+    setRightPanel(undefined)
+    setActiveView('chat')
+    setGeneratingDetailTargetKey('')
+    if (task.kind === 'page') {
+      setActiveDetailTarget({ type: 'page', pageId: task.pageId })
+      await handleStartDetailConfirmation(task.pageId, task.pageLabel, task.hasDetailPlan, undefined, true)
+    } else if (task.kind === 'endpoint') {
+      setActiveDetailTarget({ type: 'endpoint', apiContractId: task.apiContractId,
+        endpointId: task.endpointId, endpointKey: `${task.apiContractId}:${task.endpointId}`, label: task.endpointLabel })
+      await handleStartEndpointDevelopment({ ...task, reuseCurrentSession: true })
+    }
+    onPlanningArtifactsRefresh()
+  }
+  const nextDevelopmentStep = activeWorkbenchPhase === 'development' && !loading &&
+    !loadingSessions && !previewRuntime.repairSession
+    ? developmentNextStep(displayedMessages, applicationLifecycle) : undefined
+  const nextDevelopmentTasks = buildQuickTasks(displayedPlanningPages,
+    developmentPlanningApiContracts, [], applicationLifecycle?.developmentArtifacts)
+
   /** 消费实体完成续接卡，在同一历史会话中重新启动原页面或 Endpoint 正式任务。 */
   const handleContinueDevelopment = async (
     messageId: number,
@@ -4863,6 +4891,20 @@ export default function AiChatPanel({
               )}
 
               <MessageList
+                developmentNextStepContent={nextDevelopmentStep ? (
+                  <NextDevelopmentGuide
+                    key={nextDevelopmentStep.key}
+                    step={nextDevelopmentStep}
+                    tasks={nextDevelopmentTasks}
+                    disabled={workflowInputLocked || otherSessionExecutionLocked}
+                    disabledHint={pendingPlanActionable
+                      ? '先处理待确认计划，再开始下一项'
+                      : '当前任务结束后，即可开始下一项'}
+                    loading={!developmentPlanningReady || !applicationLifecycle?.developmentArtifacts}
+                    catalogError={applicationLifecycle?.developmentArtifacts?.catalogError}
+                    onStart={handleNextDevelopmentStart}
+                  />
+                ) : undefined}
                 applicationLifecycle={applicationLifecycle}
                 applicationTemplatePreparationEligible={applicationTemplatePreparationEligible}
                 codeChangeActionsDisabled={

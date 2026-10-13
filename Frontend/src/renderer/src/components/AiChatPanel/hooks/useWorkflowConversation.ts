@@ -63,6 +63,7 @@ import {
   type ClarificationAnswers
 } from '../components/WorkflowRunCard'
 import { workflowClarification } from '../components/WorkflowRunCard/workflowClarification'
+import { latestDevelopmentTarget } from '../developmentNextStep'
 import type { AgentChatMessage } from '../types'
 import { ownedWorkbenchExecution, workbenchExecutionRunning } from '../workbenchRunPresentation'
 import { developmentContinuationFromWorkflow } from '../developmentContinuation'
@@ -316,13 +317,15 @@ type UseWorkflowConversationResult = {
       templateId?: string
       templateName?: string
       templateSourcePath?: string
-    }
+    },
+    reuseCurrentSession?: boolean
   ) => Promise<boolean>
   handleStartEndpointDevelopment: (target: {
     apiContractId?: string
     endpointId: string
     endpointLabel: string
     hasDetailPlan?: boolean
+    reuseCurrentSession?: boolean
   }) => Promise<boolean>
   handleStartEntityDetailConfirmation: (target: {
     entityId: string
@@ -1233,7 +1236,9 @@ export function useWorkflowConversation({
     const sessionTargetFields =
       explicitBuildExecutionScope || hasExplicitTargetSelection
         ? {}
-        : developmentTargetWorkflowFields(identity.developmentTarget)
+        : developmentTargetWorkflowFields(
+            latestDevelopmentTarget(getSessionMessages(identity.key)) || identity.developmentTarget
+          )
     const effectiveSelectedPageId =
       options?.selectedPageId !== undefined
         ? options.selectedPageId
@@ -1289,21 +1294,23 @@ export function useWorkflowConversation({
             endpointUrl
           ))
     const optimisticSkills = beginOptimisticSkillSend(options?.selectedSkills || [])
+    const previousMessages = getSessionMessages(identity.key)
+    // 连续的确定性动作可能在同一毫秒返回；新任务消息身份必须唯一，避免覆盖此前任务/结束回执。
+    const userMessageId = previousMessages.reduce((next, item) => Math.max(next, item.id + 1), Date.now())
     const userMessage: AgentChatMessage = {
-      id: Date.now(),
+      id: userMessageId,
       role: 'user',
       content: trimmedMessage,
       skills: optimisticSkills.messageSkills,
       createdAt: Date.now()
     }
-    const assistantMessageId = Date.now() + 1
+    const assistantMessageId = userMessageId + 1
     const assistantMessage: AgentChatMessage = {
       id: assistantMessageId,
       role: 'assistant',
       content: '',
       createdAt: Date.now()
     }
-    const previousMessages = getSessionMessages(identity.key)
     const baselineRunIds = Object.keys(applicationLifecycleRef.current?.activeExecutions || {})
     delete pendingWorkflowInputsRef.current[identity.key]
     const nextMessages = [...previousMessages, userMessage, assistantMessage]
@@ -2241,10 +2248,13 @@ export function useWorkflowConversation({
       templateId?: string
       templateName?: string
       templateSourcePath?: string
-    }
+    },
+    reuseCurrentSession = false
   ): Promise<boolean> => {
     if (!selectedPageId || loading || workspaceBusy) return false
-    const identity = await ensureDevelopmentSession({
+    if (reuseCurrentSession && activeSession?.workbenchPhase !== 'development') return false
+    // 下一步引导保留可见会话和历史，但每个目标使用独立 Graph 线程与原有开发门禁。
+    const identity = reuseCurrentSession ? await ensureActiveSession() : await ensureDevelopmentSession({
       type: 'page',
       pageId: selectedPageId,
       label: pageLabel
@@ -2253,6 +2263,9 @@ export function useWorkflowConversation({
       conversation: false,
       executionThreadId: randomUUID(),
       selectedPageId,
+      selectedApiContractId: '',
+      selectedEndpointId: '',
+      buildExecutionScope: { type: 'page', targetId: selectedPageId },
       detailTargetType: 'page',
       sessionIdentity: identity,
       titleFrom: `开发页面：${pageLabel}`,
@@ -2274,9 +2287,12 @@ export function useWorkflowConversation({
     endpointId: string
     endpointLabel: string
     hasDetailPlan?: boolean
+    reuseCurrentSession?: boolean
   }): Promise<boolean> => {
     if (!target.apiContractId || !target.endpointId || loading || workspaceBusy) return false
-    const identity = await ensureDevelopmentSession({
+    if (target.reuseCurrentSession && activeSession?.workbenchPhase !== 'development') return false
+    // 从结束/完成引导启动接口时仅追加本轮显式目标，不改写会话创建时的元数据。
+    const identity = target.reuseCurrentSession ? await ensureActiveSession() : await ensureDevelopmentSession({
       type: 'endpoint',
       apiContractId: target.apiContractId,
       endpointId: target.endpointId,

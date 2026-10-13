@@ -1,0 +1,293 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { renderToStaticMarkup } from 'react-dom/server'
+import type { ApplicationLifecycle, WorkflowRunPayload } from '../src/renderer/src/typings'
+import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
+import {
+  developmentNextStep,
+  latestDevelopmentTarget,
+  nextDevelopmentTask
+} from '../src/renderer/src/components/AiChatPanel/developmentNextStep'
+import {
+  allDevelopmentTargetsCompleted,
+  filterDevelopmentTargets
+} from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide/pickerTasks'
+import DevelopmentTargetPicker from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide/DevelopmentTargetPicker'
+import NextDevelopmentGuide from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide'
+import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide/quickTasks'
+
+/** 构造服务端已经确认当前页初次完成的真实结构。 */
+function completion(): WorkflowRunPayload {
+  return {
+    runId: 'run-one',
+    threadId: 'graph-one',
+    events: [],
+    summary: {
+      status: 'requires_user_input',
+      phase: 'test_phase_confirmation',
+      buildExecutionScope: { type: 'page', targetId: 'one' },
+      testTarget: { type: 'page', id: 'one', label: '介绍页' }
+    }
+  }
+}
+/** 只包装结构化 Workflow，避免测试借用消息自然语言判断完成。 */
+function message(workflow: WorkflowRunPayload): AgentChatMessage {
+  return { id: 1, role: 'assistant', content: '当前步骤执行完成', workflow }
+}
+const lifecycle = {
+  developmentArtifacts: {
+    pages: {
+      one: {
+        initialDevelopmentStatus: 'completed',
+        completedRunId: 'run-one',
+        completedThreadId: 'graph-one'
+      },
+      two: { initialDevelopmentStatus: 'pending' },
+      busy: { initialDevelopmentStatus: 'in_progress' }
+    },
+    endpoints: { api: { get: { initialDevelopmentStatus: 'pending' } } }
+  }
+} as ApplicationLifecycle
+const tasks = buildQuickTasks(
+  [
+    { pageId: 'one', key: 'one', label: '介绍页', path: '/one', purpose: '', designed: true },
+    { pageId: 'two', key: 'two', label: '我的回检', path: '/two', purpose: '', designed: true },
+    {
+      pageId: 'busy',
+      key: 'busy',
+      label: '开发中的页面',
+      path: '/busy',
+      purpose: '',
+      designed: true
+    }
+  ],
+  [
+    {
+      id: 'api',
+      label: '回检',
+      endpoints: [{ id: 'get', name: '查询回检', method: 'GET', path: '/api', summary: '' }]
+    }
+  ],
+  [],
+  lifecycle.developmentArtifacts
+)
+
+test('只有本次正式运行的初次完成事实触发引导，普通节点 completed 不触发', () => {
+  assert.equal(developmentNextStep([message(completion())], lifecycle)?.reason, 'completed')
+  for (const [phase, status] of [
+    ['build', 'completed'],
+    ['unit_test', 'completed'],
+    ['test_phase_confirmation', 'stopped'],
+    ['test_phase_confirmation', 'failed'],
+    ['test_phase_confirmation', 'running']
+  ]) {
+    const workflow = completion()
+    Object.assign(workflow.summary, { phase, status })
+    assert.equal(developmentNextStep([message(workflow)], lifecycle), undefined)
+  }
+  const otherCompletion = completion()
+  otherCompletion.runId = 'another-run'
+  otherCompletion.threadId = 'another-thread'
+  assert.equal(developmentNextStep([message(otherCompletion)], lifecycle), undefined)
+  assert.equal(developmentNextStep([message(completion())]), undefined)
+})
+
+test('End 成功才出现结束引导，保留未完成目标状态，不把 stop 或失败 End 算成结束', () => {
+  const source = completion()
+  source.summary.buildExecutionScope = { type: 'page', targetId: 'two' }
+  source.summary.status = 'stopped'
+  const control: WorkflowRunPayload = {
+    runId: 'control',
+    threadId: 'visible-thread',
+    events: [],
+    summary: {
+      phase: 'plan_control',
+      status: 'completed',
+      planControl: { action: 'end', status: 'ended', targetRunId: source.runId }
+    }
+  }
+  const step = developmentNextStep([message(source), message(control)], lifecycle)
+  assert.equal(step?.reason, 'ended')
+  assert.equal(step?.target?.type === 'page' && step.target.pageId, 'two')
+  assert.equal(lifecycle.developmentArtifacts?.pages.two.initialDevelopmentStatus, 'pending')
+  control.summary.status = 'failed'
+  assert.equal(developmentNextStep([message(source), message(control)], lifecycle), undefined)
+  control.summary.status = 'completed'
+  control.summary.planControl = { action: 'stop', status: 'stopped', targetRunId: source.runId }
+  assert.equal(developmentNextStep([message(source), message(control)], lifecycle), undefined)
+})
+
+test('新任务取代上一张引导，推荐跳过当前目标、已完成和开发中目标', () => {
+  const first = message(completion())
+  assert.equal(
+    nextDevelopmentTask(tasks, developmentNextStep([first], lifecycle)?.target)?.id,
+    'page:two'
+  )
+  const next = completion()
+  next.runId = 'run-two'
+  next.summary = {
+    status: 'requires_user_input',
+    phase: 'api_design_readiness_gate',
+    buildExecutionScope: { type: 'page', targetId: 'two' }
+  }
+  assert.equal(developmentNextStep([first, message(next)], lifecycle), undefined)
+  assert.equal(
+    latestDevelopmentTarget([first, message(next)])?.type === 'page' &&
+      (latestDevelopmentTarget([first, message(next)]) as { pageId: string }).pageId,
+    'two'
+  )
+  assert.equal(
+    nextDevelopmentTask(tasks.filter((task) => task.kind !== 'page'))?.id,
+    'endpoint:api:get'
+  )
+})
+
+test('显式放弃规划成功后展示结束引导，无草稿和过期拒绝不展示', () => {
+  const control: WorkflowRunPayload = {
+    runId: 'abandon',
+    threadId: 'thread',
+    events: [],
+    summary: { status: 'completed', phase: 'build_task_plan_abandon' },
+    state: { buildTaskPlanAbandon: { status: 'abandoned', planningRunId: 'planning' } }
+  }
+  assert.equal(developmentNextStep([message(control)], lifecycle)?.reason, 'ended')
+  for (const status of ['no_pending', 'stale_draft', 'already_confirmed']) {
+    control.state!.buildTaskPlanAbandon = { status }
+    assert.equal(developmentNextStep([message(control)], lifecycle), undefined)
+  }
+})
+
+test('完成后的闲聊不消费引导，新的修改确认、失败或暂停不回显旧卡', () => {
+  const conversation: WorkflowRunPayload = {
+    runId: 'chat',
+    threadId: 'chat-thread',
+    events: [],
+    summary: { phase: 'conversation', status: 'completed', intent: 'casual_chat' }
+  }
+  assert.equal(
+    developmentNextStep([message(completion()), message(conversation)], lifecycle)?.reason,
+    'completed'
+  )
+  for (const status of ['requires_user_input', 'failed', 'stopped']) {
+    conversation.summary.status = status
+    assert.equal(
+      developmentNextStep([message(completion()), message(conversation)], lifecycle),
+      undefined
+    )
+  }
+})
+
+test('全部完成隐藏卡片，目录错误和锁定仍禁止发起新任务', () => {
+  const step = developmentNextStep([message(completion())], lifecycle)!
+  const html = renderToStaticMarkup(
+    <NextDevelopmentGuide
+      step={step}
+      tasks={tasks.slice(0, 1)}
+      disabled={false}
+      loading={false}
+      onStart={async () => undefined}
+    />
+  )
+  assert.equal(html, '')
+  const locked = renderToStaticMarkup(
+    <NextDevelopmentGuide
+      step={step}
+      tasks={tasks}
+      disabled
+      disabledHint="请先处理待确认计划"
+      loading={false}
+      onStart={async () => undefined}
+    />
+  )
+  assert.match(locked, /disabled=""/)
+  assert.match(locked, /请先处理待确认计划/)
+  const failed = renderToStaticMarkup(
+    <NextDevelopmentGuide
+      step={step}
+      tasks={tasks}
+      disabled={false}
+      catalogError="目录读取失败"
+      loading={false}
+      onStart={async () => undefined}
+    />
+  )
+  assert.match(failed, /目录读取失败/)
+  assert.doesNotMatch(failed, /aria-label="开发「/)
+})
+
+test('卡片区分完成与主动结束，推荐操作可见且没有自动提交', () => {
+  const completed = developmentNextStep([message(completion())], lifecycle)!
+  const html = renderToStaticMarkup(
+    <NextDevelopmentGuide
+      step={completed}
+      tasks={tasks}
+      disabled={false}
+      loading={false}
+      onStart={async () => assert.fail('渲染不能发起开发')}
+    />
+  )
+  assert.match(html, /介绍页初次开发已完成/)
+  assert.match(html, /开发「我的回检」/)
+  assert.match(html, /查看全部页面 \/ API/)
+  const endedHtml = renderToStaticMarkup(
+    <NextDevelopmentGuide
+      step={{
+        ...completed,
+        reason: 'ended',
+        target: { type: 'page', pageId: 'two', label: '我的回检' }
+      }}
+      tasks={tasks}
+      disabled
+      loading={false}
+      onStart={async () => undefined}
+    />
+  )
+  assert.match(endedHtml, /本次开发已结束/)
+  assert.match(endedHtml, /2 个页面/)
+  assert.doesNotMatch(endedHtml, /我的回检初次开发已完成/)
+})
+
+test('完成判断覆盖页面和 API，未加载、空目录、目录错误和未知进度不误判', () => {
+  assert.equal(allDevelopmentTargetsCompleted(tasks, false), false)
+  assert.equal(allDevelopmentTargetsCompleted(tasks.slice(0, 1), false), true)
+  assert.equal(allDevelopmentTargetsCompleted(tasks.slice(0, 1), true), false)
+  assert.equal(allDevelopmentTargetsCompleted(tasks.slice(0, 1), false, '目录错误'), false)
+  assert.equal(allDevelopmentTargetsCompleted([], false), false)
+  const empty = renderToStaticMarkup(
+    <NextDevelopmentGuide step={{ key: 'end', reason: 'ended' }} tasks={[]} disabled={false}
+      loading={false} onStart={async () => undefined} />
+  )
+  assert.match(empty, /暂无可开发的页面或 API/)
+  assert.doesNotMatch(empty, /全部开发完成|全部页面和 API 已完成/)
+  assert.equal(allDevelopmentTargetsCompleted([{ ...tasks[0], progress: undefined }], false), false)
+  const finished = tasks.map((task) => ({
+    ...task,
+    progress: { initialDevelopmentStatus: 'completed' as const }
+  }))
+  assert.equal(allDevelopmentTargetsCompleted(finished, false), true)
+  finished[finished.length - 1] = tasks[tasks.length - 1] as (typeof finished)[number]
+  assert.equal(allDevelopmentTargetsCompleted(finished, false), false)
+})
+
+test('完整目录支持状态类型搜索联合筛选，并且只给未开发目标提供启动操作', () => {
+  assert.equal(filterDevelopmentTargets(tasks, 'all', 'all', '').length, 4)
+  assert.deepEqual(
+    filterDevelopmentTargets(tasks, 'pending', 'endpoint', '/API').map((task) => task.id),
+    ['endpoint:api:get']
+  )
+  assert.equal(filterDevelopmentTargets(tasks, 'completed', 'page', '').length, 1)
+  assert.equal(filterDevelopmentTargets(tasks, 'in_progress', 'all', '').length, 1)
+  assert.equal(filterDevelopmentTargets(tasks, 'pending', 'page', '没有这个目标').length, 0)
+  const html = renderToStaticMarkup(
+    <DevelopmentTargetPicker
+      tasks={tasks}
+      blocked={false}
+      startingId=""
+      onStart={async () => assert.fail('筛选不能发起开发')}
+    />
+  )
+  assert.match(html, /全部页面与 API/)
+  assert.match(html, /按开发状态筛选/)
+  assert.match(html, /开始开发「我的回检」/)
+  assert.doesNotMatch(html, /开始开发「介绍页」|开始开发「开发中的页面」|data-recommended/)
+})

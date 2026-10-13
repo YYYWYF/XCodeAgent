@@ -40,6 +40,10 @@ Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。
 
 ## Initial Development Completion and Test Entry
 
+开发会话的对话末尾由 `NextDevelopmentGuide` 提供下一步引导。页面/Endpoint 到达 `test_phase_confirmation`，且当前 lifecycle 的初次完成记录匹配本轮 Run/Graph thread 时展示“初次开发已完成”；主动 End 只有在 `/workflow/run` 返回成功结束回执、当前请求收口后展示“本次开发已结束”，明确放弃待确认规划的 `abandoned` 成功回执也展示结束引导。普通节点 completed、失败、暂停、停止中、失败 End 与拒绝放弃均不触发。引导只读正式目录和 lifecycle，不写开发状态；未完成目标主动结束仍保持实际状态。推荐按目录顺序优先其他 pending 页面，再选 pending Endpoint；用户也可展开“全部页面与 API”完整清单，按状态、类型和名称/路径联合筛选；筛选不改变推荐目标或正式开发状态，列表不默认选中任何项。已完成或开发中的项不重复启动，目录读取错误或应用执行锁未释放时不能发起。End 保留待确认规划的既有合同不变；规划仍可操作时明确提示先处理或放弃规划。正式目录成功读取且非空的页面/API 全部完成后隐藏继续开发卡片，测试入口及阻断原因由既有测试阶段确认卡负责；加载中、目录错误、空目录或进度未知不当成全部完成。
+
+引导卡的按钮在当前 DEVELOPMENT 可见会话中追加“开始开发页面/接口”用户消息，保留此前记录；每轮创建独立 Graph thread，通过原 `/workflow/run` 和 API Design/DAG 确认门进入开发。会话创建时的 `developmentTarget` 元数据不改写，最新正式 Workflow 的显式目标用于当前上下文、普通后续请求和重新打开会话时的详情恢复；不根据标题、自然语言或其他会话推断目标。新任务开始后旧引导退出当前控制面，不自动选择、结束或确认任何任务。
+
 页面和 Endpoint 必须分别作为显式开发目标走完一次初次流程，全部完成后才能进入测试阶段。页面开发顺带实现依赖 Endpoint 不替接口标记完成。实体也单独计数，只有用户显式确认且正式 EntitySourceBinding 成功写盘后才完成；选表、生成设计和等待确认均不算完成。三类产物全部完成后才能进入测试阶段。
 
 `.devagentstudio/application-lifecycle.json.developmentArtifacts` 保存 `pages[pageId]` 与 `endpoints[apiContractId][endpointId]` 的 `initialDevelopmentStatus`：`pending`、`in_progress`、`completed`。绿色完成记录同时保存首次 `completedAt`、`completedRunId`、`completedThreadId`，二次修改、测试失败、重复或迟到事件均不能覆盖。未完成运行在等待用户操作时保持紫色；失败、停止或放弃且无同目标其他初次执行时回到灰色。叶子点击只浏览，不更新开发状态。

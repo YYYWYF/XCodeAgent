@@ -38,6 +38,68 @@ const WORKFLOW_EXECUTION_THREAD_ID = 'workflow-thread-regenerate'
 const DRAFT_DIGEST = 'a'.repeat(64)
 type WorkflowConversationParams = Parameters<typeof useWorkflowConversation>[0]
 
+test('完成引导在同一可见会话开始新页面和 API，使用新 Graph 并清除旧目标参数', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+  const identity = buildSessionIdentity()
+  identity.developmentTarget = { type: 'endpoint', apiContractId: 'old-api', endpointId: 'old-endpoint', label: '旧接口' }
+  const messages: AgentChatMessage[] = []
+  const requests: Record<string, any>[] = []
+  const params = buildRuntimeParams({ activeSession: identity,
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: buildIdleLifecycle(), agUiSessionsRef: { current: {} },
+    acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined })
+  params.ensureDevelopmentSession = async () => { throw new Error('不应新建可见会话') }
+  params.selectedApiContractId = 'old-api'
+  params.selectedEndpointId = 'old-endpoint'
+  params.getSessionMessages = () => messages
+  params.setSessionMessages = (_key, update) => {
+    const next = typeof update === 'function' ? update(messages) : update
+    messages.splice(0, messages.length, ...next)
+  }
+  let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+  /** 真实 Hook/AG-UI 回归验证多目标任务追加和再次发送的目标上下文。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body))
+    assert.ok(String(input).endsWith('/workflow/run'))
+    requests.push(request)
+    return sseResponse(request.threadId, request.runId, { workflow: { runId: request.runId,
+      threadId: request.threadId, events: [], summary: { status: 'requires_user_input', phase: 'api_design_readiness_gate',
+        buildExecutionScope: request.forwardedProps.buildExecutionScope } } })
+  }
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    await runtime!.handleStartDetailConfirmation('new-page', '第二页', true, undefined, true)
+    assert.equal(requests[0].forwardedProps.sessionId, identity.sessionId)
+    assert.notEqual(requests[0].threadId, identity.threadId)
+    assert.equal(requests[0].forwardedProps.selectedApiContractId, '')
+    assert.equal(requests[0].forwardedProps.selectedEndpointId, '')
+    assert.deepEqual(requests[0].forwardedProps.buildExecutionScope, { type: 'page', targetId: 'new-page' })
+    // 重开会话时尚未选中大纲叶子，仍应从最新正式运行恢复第二页，而不是创建时的旧接口。
+    params.selectedApiContractId = undefined
+    params.selectedEndpointId = undefined
+    renderToStaticMarkup(createElement(Probe))
+    await runtime!.handleSend()
+    assert.equal(requests[1].forwardedProps.selectedPageId, 'new-page')
+    assert.equal(requests[1].forwardedProps.selectedEndpointId, '')
+    renderToStaticMarkup(createElement(Probe))
+    await runtime!.handleStartEndpointDevelopment({ apiContractId: 'new-api', endpointId: 'get', endpointLabel: '查询', reuseCurrentSession: true })
+    assert.equal(requests[2].forwardedProps.sessionId, identity.sessionId)
+    assert.notEqual(requests[2].threadId, requests[0].threadId)
+    assert.equal(requests[2].forwardedProps.selectedPageId, '')
+    assert.deepEqual(requests[2].forwardedProps.buildExecutionScope, { type: 'endpoint', targetId: 'get', apiContractId: 'new-api' })
+    assert.equal(messages.filter(message => message.role === 'user').length, 3)
+    assert.equal(new Set(messages.map(message => message.id)).size, messages.length)
+    assert.equal(identity.developmentTarget.endpointId, 'old-endpoint')
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+  }
+})
+
 test('本地暂停失败回传给按钮提示并恢复可再次暂停，不能持久化为任务失败', async () => {
   const identity = buildSessionIdentity()
   const statuses: string[] = []

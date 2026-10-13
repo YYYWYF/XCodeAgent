@@ -329,6 +329,8 @@ type MessageListProps = {
   entityDesignSession?: boolean
   /** 普通自由对话没有消息时使用的工作区级快捷任务内容。 */
   emptyContent?: ReactNode
+  /** 开发完成或主动结束成功后，紧随消息展示当前会话的下一步入口。 */
+  developmentNextStepContent?: ReactNode
   /** 当前会话错误只影响滚动和占位判断，错误卡统一由 Composer 上方展示。 */
   error?: string
   /** 设计阶段：规划 workflow 确认卡始终可提交（由 planningSubmitRef 驱动），
@@ -407,6 +409,7 @@ export default function MessageList({
   dagConfirmationInStageOutput = false,
   entityDesignSession = false,
   emptyContent,
+  developmentNextStepContent,
   designPhasePlanning = false,
   reusedExistingTemplate = false,
   branchName,
@@ -564,7 +567,7 @@ export default function MessageList({
   // 消息或加载状态切换后主动安排一次跟随，ResizeObserver 不可用时仍可工作。
   useEffect(() => {
     scheduleScrollUpdate()
-  }, [loading, messages, scheduleScrollUpdate, visibleError])
+  }, [loading, messages, scheduleScrollUpdate, visibleError, developmentNextStepContent])
 
   // 是否在渲染空态（需求输入卡 / 空会话提示）。空态需要消息区占满面板高度来垂直居中，
   // 所以它决定消息区是"撑满"还是"按内容收缩"（见下面的 has-content 修饰类）。
@@ -1183,6 +1186,7 @@ export default function MessageList({
               )
             })
           )}
+          {developmentNextStepContent}
           {templatePreparationVisible ? (
             <article className={cx('ai-message', 'assistant', 'template-preparing-message')}>
               <div className={cx('ai-message-content')}>

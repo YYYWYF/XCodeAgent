@@ -263,20 +263,14 @@ test('保留验收回访权限不能绕过当前测试门禁', () =>
     assertPhaseActive(staleReview.html, '开发')
   }))
 
-test('历史版本隐藏顶部右侧的 Agent 身份、跟随开关与预览开关', () =>
+test('顶部快捷区只保留主题切换，当前版本与只读版本都不重复提供面板控制', () =>
   withStorage(() => {
-    // 当前版本：三样都在，行为不变。
-    const current = renderNavigation('one', 'acceptance_review')
-    assert.ok(current.html.includes('workbench-topbar-agent'), '当前版本应展示 Agent 身份')
-    assert.ok(current.html.includes('workbench-topbar-follow'), '当前版本应展示跟随开关')
-    assert.ok(current.html.includes('workbench-topbar-preview-toggle'), '当前版本应展示预览开关')
-
-    // 历史版本：这三样都指向"当前迭代的推进"，回看时无意义，整组隐藏。
-    const historical = renderNavigation('one', 'acceptance_review', allowed, true, true)
-    assert.ok(!historical.html.includes('workbench-topbar-agent'), '历史版本不应展示 Agent 身份')
-    assert.ok(!historical.html.includes('workbench-topbar-follow'), '历史版本不应展示跟随开关')
-    assert.ok(
-      !historical.html.includes('workbench-topbar-preview-toggle'),
-      '历史版本不应展示预览开关'
-    )
+    // 当前顶栏已把面板布局操作交给右侧分隔条，只保留主题快捷入口。
+    for (const view of [renderNavigation('one', 'acceptance_review'),
+      renderNavigation('one', 'acceptance_review', allowed, true, true)]) {
+      assert.ok(view.html.includes('workbench-topbar-theme-toggle'))
+      assert.ok(!view.html.includes('workbench-topbar-agent'))
+      assert.ok(!view.html.includes('workbench-topbar-follow'))
+      assert.ok(!view.html.includes('workbench-topbar-preview-toggle'))
+    }
   }))
