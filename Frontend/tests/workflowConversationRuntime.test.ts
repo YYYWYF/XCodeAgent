@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { createElement, type MutableRefObject, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { AgUiChatSession } from '../src/renderer/src/service/agUiAgent'
+import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import {
   currentDagConfirmationPlan,
   pendingDagConfirmationExecution,
@@ -67,6 +68,145 @@ test('本地暂停失败回传给按钮提示并恢复可再次暂停，不能�
   await runtime!.handleStopGenerating()
   assert.equal(attempts, 2)
   assert.deepEqual(statuses, ['stopping', 'running', 'stopping'])
+})
+
+test('结束局部修复后首次调试入场拒绝，再次调试仍新建执行并保留原 Graph 线程', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }
+  })
+  const identity = buildSessionIdentity()
+  const source: WorkflowRunPayload = {
+    runId: 'repair-run',
+    threadId: 'test-graph-thread',
+    events: [],
+    summary: { status: 'stopped', phase: 'small_task_repair' }
+  }
+  let messages: AgentChatMessage[] = [
+    { id: 1, role: 'assistant', content: '已停止生成。', workflow: source }
+  ]
+  const lifecycle = buildIdleLifecycle()
+  lifecycle.activeExecutions = {
+    'repair-run': {
+      runId: source.runId,
+      threadId: source.threadId,
+      ownerSessionId: identity.sessionId,
+      phase: 'small_task_repair',
+      status: 'stopped',
+      scope: 'application',
+      targetId: 'application',
+      type: 'workbench',
+      startedAt: '2026-10-13T00:00:00Z'
+    }
+  } as ApplicationLifecycle['activeExecutions']
+  const requests: Record<string, any>[] = []
+  const params = buildRuntimeParams({
+    activeSession: identity,
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: lifecycle,
+    agUiSessionsRef: { current: {} },
+    acquireSessionExecution: () => undefined,
+    releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: (incoming) => {
+      Object.assign(lifecycle, incoming)
+    }
+  })
+  params.getSessionMessages = () => messages
+  params.setSessionMessages = (_key, update) => {
+    messages = typeof update === 'function' ? update(messages) : update
+  }
+  let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+  /** 模拟结束回执落盘后重渲染，使用真实 Hook 和 AG-UI 客户端捕获调试请求。 */
+  function Probe(): ReactElement {
+    runtime = useWorkflowConversation(params)
+    return createElement('div')
+  }
+  globalThis.fetch = async (input, init) => {
+    const request = JSON.parse(String(init?.body))
+    if (String(input).endsWith('/application-lifecycle/run')) {
+      return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+    }
+    assert.ok(String(input).endsWith('/workflow/run'))
+    requests.push(request)
+    if (request.forwardedProps.planControlAction === 'end') {
+      lifecycle.activeExecutions = {}
+      return sseResponse(request.threadId, request.runId, {
+        workflow: {
+          runId: request.runId,
+          threadId: request.threadId,
+          events: [],
+          summary: {
+            status: 'completed',
+            phase: 'plan_control',
+            lifecycle,
+            planControl: { action: 'end', status: 'ended', targetRunId: source.runId }
+          }
+        }
+      })
+    }
+    assert.equal(request.threadId, source.threadId)
+    assert.equal(request.forwardedProps.resumeFrom, 'integration_test')
+    assert.equal(request.forwardedProps.resumeExecutionRunId, undefined)
+    assert.equal(request.forwardedProps.resumeState, undefined)
+    assert.equal(request.forwardedProps.executionRecovery, undefined)
+    assert.notEqual(request.runId, source.runId)
+    if (requests.length === 2) {
+      const workflow: WorkflowRunPayload = {
+        runId: request.runId,
+        threadId: request.threadId,
+        summary: { status: 'failed', phase: 'failed' },
+        events: [
+          {
+            type: 'workflow.run.failed',
+            status: 'failed',
+            message: '调试入场被拒绝，业务节点尚未开始。'
+          }
+        ]
+      }
+      return new Response(
+        [
+          { type: 'RUN_STARTED', threadId: request.threadId, runId: request.runId },
+          { type: 'STATE_SNAPSHOT', snapshot: { workflow } },
+          { type: 'RUN_ERROR', message: '调试入场被拒绝，业务节点尚未开始。' }
+        ]
+          .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+          .join(''),
+        {
+          headers: { 'content-type': 'text/event-stream' }
+        }
+      )
+    }
+    return sseResponse(request.threadId, request.runId, {
+      workflow: {
+        runId: request.runId,
+        threadId: request.threadId,
+        events: [],
+        summary: { status: 'completed', phase: 'integration_test', lifecycle }
+      }
+    })
+  }
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    await runtime!.handleEndPlan(source.runId)
+    assert.equal(requests[0].forwardedProps.planControlRunId, source.runId)
+    assert.equal(messages.at(-1)?.workflow?.summary.phase, 'plan_control')
+    renderToStaticMarkup(createElement(Probe))
+    await runtime!.handleSend({ enabled: true, resumeFrom: 'integration_test' })
+    assert.equal(requests.length, 2)
+    assert.equal(messages.at(-1)?.workflow?.summary.status, 'failed')
+    // 模拟冷重入后的再次显式调试，失败的请求 ID 不能成为续接令牌或改变业务 thread。
+    messages = JSON.parse(JSON.stringify(messages))
+    renderToStaticMarkup(createElement(Probe))
+    await runtime!.handleSend({ enabled: true, resumeFrom: 'integration_test' })
+    assert.equal(requests.length, 3)
+    assert.notEqual(requests[2].runId, requests[1].runId)
+    assert.equal(messages.at(-1)?.error, undefined)
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+  }
 })
 
 test('兜底同步正常待确认执行不报缺少恢复入口，也不提交验收或重发任务', async () => {

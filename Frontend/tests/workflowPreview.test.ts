@@ -142,6 +142,105 @@ test('单测调试复用仍登记的 Build thread，避免聊天 thread 丢失�
   )
 })
 
+test('结束控制回执按精确目标选择原业务 Graph，不能借用其他历史执行', () => {
+  const source = {
+    ...previewWorkflow({ phase: 'small_task_repair', status: 'stopped' }, 'repair-run'),
+    threadId: 'test-graph'
+  }
+  const other = { ...source, runId: 'other-run', threadId: 'other-graph' }
+  const ended = previewWorkflow(
+    {
+      phase: 'plan_control',
+      status: 'completed',
+      planControl: { action: 'end', status: 'ended', targetRunId: source.runId }
+    },
+    'control-run'
+  )
+  const messages: AgentChatMessage[] = [source, other, ended].map((workflow, id) => ({
+    id,
+    role: 'assistant',
+    content: '',
+    workflow
+  }))
+  assert.equal(workflowDebugResumeSource(ended, messages, undefined, 'integration_test'), source)
+  assert.equal(
+    workflowDebugResumeSource(ended, messages.slice(1), undefined, 'integration_test'),
+    ended
+  )
+  const stopped = {
+    ...ended,
+    summary: {
+      ...ended.summary,
+      planControl: { action: 'stop', status: 'stopped', targetRunId: source.runId }
+    }
+  }
+  assert.equal(workflowDebugResumeSource(stopped, messages, undefined, 'integration_test'), stopped)
+})
+
+test('连续入场拒绝可定位当前 End；已开始或仍登记的新执行禁止回溯', () => {
+  const source = {
+    ...previewWorkflow({ phase: 'small_task_repair', status: 'stopped' }, 'repair'),
+    threadId: 'business-graph'
+  }
+  const ended = previewWorkflow(
+    {
+      phase: 'plan_control',
+      status: 'completed',
+      planControl: { action: 'end', status: 'ended', targetRunId: source.runId }
+    },
+    'end'
+  )
+  const failure = previewWorkflow({ phase: 'failed', status: 'failed' }, 'rejected')
+  failure.events = [{ type: 'workflow.run.failed', status: 'failed' }]
+  const secondFailure = { ...failure, runId: 'rejected-again' }
+  const messages: AgentChatMessage[] = [source, ended, failure, secondFailure].map(
+    (workflow, id) => ({
+      id,
+      role: 'assistant',
+      content: '',
+      workflow
+    })
+  )
+  assert.equal(
+    workflowDebugResumeSource(secondFailure, messages, undefined, 'integration_test'),
+    source
+  )
+  const entered = {
+    ...failure,
+    runId: 'entered',
+    events: [{ type: 'workflow.node.started', status: 'running', nodeName: 'integration_test' }]
+  }
+  assert.equal(
+    workflowDebugResumeSource(
+      secondFailure,
+      [
+        messages[0],
+        messages[1],
+        { id: 5, role: 'assistant', content: '', workflow: entered },
+        messages[3]
+      ],
+      undefined,
+      'integration_test'
+    ),
+    secondFailure
+  )
+  assert.equal(workflowDebugResumeSource(entered, messages, undefined, 'integration_test'), entered)
+  const registered = pageExecution({
+    runId: secondFailure.runId,
+    threadId: secondFailure.threadId,
+    status: 'failed'
+  })
+  assert.equal(
+    workflowDebugResumeSource(
+      secondFailure,
+      messages,
+      planLifecycle(registered),
+      'integration_test'
+    ),
+    secondFailure
+  )
+})
+
 test('实时成功 launch 会生成可去重的预览目标', () => {
   const target = workflowPreviewTarget(previewWorkflow(), true)
 

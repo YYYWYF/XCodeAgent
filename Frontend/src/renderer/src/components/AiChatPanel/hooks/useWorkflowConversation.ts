@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { WorkbenchRunRefreshConnection } from './useWorkbenchRunRefresh'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { randomUUID } from '@ag-ui/client'
-import { workflowDebugResumeSource } from '../workflowDebugResume'
+import { workflowDebugEndedControl, workflowDebugResumeSource } from '../workflowDebugResume'
 import { executionRecoveryForSession, executionRecoveryReadError } from '../executionRecoveryState'
 import { NO_RECOVERY_ENTRY_ERROR } from '../globalFallbackState'
 import { canRestorePendingWorkflowInput, type PendingWorkflowInput } from '../pendingWorkflowInput'
@@ -90,6 +90,7 @@ import {
 } from './sessionRuntime'
 import {
   planExecutionForPage,
+  planExecutionContextForRun,
   withWorkflowExecutionStatus,
   workflowCodeReviewRetry,
   workflowEndedPlanControl,
@@ -881,7 +882,7 @@ export function useWorkflowConversation({
   const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     // 重入时即使本地流登记为空，Backend 仍运行也不能再次启动当前会话。
     if (workbenchExecutionRunning(ownedWorkbenchExecution(applicationLifecycleRef.current, activeSession))) return
-    // 调试属于已有执行的恢复，不能落到普通发送路径并改用会话的聊天 thread。
+    // 已有上下文的调试先解析业务 Graph；结束后新建 Run，暂停后仍走原执行续接。
     if (workflowDebug?.enabled && workflowDebug.resumeFrom && activeWorkflow) {
       await handleResumePlan(workflowDebug)
       return
@@ -1316,6 +1317,10 @@ export function useWorkflowConversation({
       }
     }))
     setErrors((current) => ({ ...current, [identity.key]: undefined }))
+    if (options?.workflowDebug?.enabled) {
+      // 显式调试已创建新请求，旧的“无恢复入口”提示不再代表当前执行。
+      setRecoveryErrorForSession(identity.key)
+    }
     if (!options?.planControlAction) {
       setLiveWorkflows((current) => omitKey(current, identity.key))
       setEndedPlanSessionKeys((current) => {
@@ -2416,25 +2421,26 @@ export function useWorkflowConversation({
   /** 按暂停态调试面板选择的节点恢复当前计划，并保留原执行身份与状态快照。 */
   const handleResumePlan = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
     if (!activeWorkflow || !workflowDebug?.resumeFrom || loading || workspaceBusy) return
+    const messages = getSessionMessages(activeRuntimeKey || draftKey)
+    const lifecycle = applicationLifecycleRef.current
     const source =
       workflowDebugResumeSource(
         activeWorkflow,
-        getSessionMessages(activeRuntimeKey || draftKey),
-        applicationLifecycle,
+        messages,
+        lifecycle,
         workflowDebug.resumeFrom
       ) || activeWorkflow
-    const execution = planExecutionForPage(
-      applicationLifecycle || source.summary.lifecycle,
-      selectedPageId,
-      {
-        runId: source.runId,
-        threadId: source.threadId
-      }
-    )
+    const execution = planExecutionContextForRun(lifecycle, {
+      runId: source.runId,
+      threadId: source.threadId
+    }).execution
+    const ended = Boolean(workflowDebugEndedControl(activeWorkflow, messages, lifecycle))
     await sendWorkflowMessage(`从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`, {
-      resumeState: source,
-      // Mock 或旧会话可能没有 lifecycle projection，但 Workflow runId 仍是可校验的恢复令牌。
-      resumeExecutionRunId: execution?.runId || source.runId,
+      // 已成功 End 的执行没有续接令牌；显式调试建立新 Run，只复用原业务 Graph 线程。
+      resumeState: ended ? undefined : source,
+      executionThreadId: source.threadId,
+      // 仅当前 lifecycle 登记的执行能提供续接令牌，控制/失败消息的 Run ID 不能代替。
+      resumeExecutionRunId: ended ? undefined : execution?.runId,
       selectedPageId: workflowSelectedPageId(source) || selectedPageId,
       titleFrom: '从指定节点继续执行',
       workflowDebug
