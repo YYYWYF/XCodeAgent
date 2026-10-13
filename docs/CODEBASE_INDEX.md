@@ -41,6 +41,8 @@ For small local edits that do not change structure or ownership, leave the index
 
 底部 `retryCurrentRecovery` 必须 await 恢复调用再释放请求锁/恢复身份；本地 Native Recovery 暂停使用当前 AG-UI Workflow 报告的子 Run/Graph thread，避免 lifecycle 迟到时取消源 Run或落入未登记的普通聊天 transport。无本地流时仍用当前会话 lifecycle 归属；普通本地 Workflow 停止路径不变。回归包含 `workflowConversationRuntime.test.ts` 的恢复异步流防重入用例，以及 Electron 报告修复后 E05 实测。
 
+普通本地暂停由 `useWorkflowConversation.handleStopGenerating` 返回实际停止 Promise；失败撤回乐观暂停态，交由 `AiChatPanel.handleStopCurrentGeneration` 即时提示，不写入任务失败入口。`AgUiChatSession` 仅在 Backend 确认停止后强制收口悬挂请求，丢弃旧流迟到事件；未确认停止仍阻止同线程新请求。回归：`pnpm test:chat-skills`、`pnpm test:connection-recovery`，Electron 验收需覆盖运行中 Build、取消失败后再次暂停与暂停后新请求。
+
 `services/workflow_failure_message.py` 只为当前失败 Build 提取已有 `build_summary.finalization_error`，供 lifecycle 错误边界、失败收尾与最终 AG-UI 摘要一致展示；不改变 Build 调度或模板投影。`useWorkflowConversation.handleStopPlan` 对本地恢复流和当前会话冷重入的运行，以 lifecycle 精确 Run/Graph thread 经既有 `/workflow/run` AG-UI cancellation 取消并同步；普通本地 Workflow 停止和待确认计划 Stop 保留原路径，不通过改写 lifecycle 假装停止。回归：`tests.test_workflow_failure_message`、`tests.test_workflow_run_control`、`pnpm test:connection-recovery`。
 
 `useWorkflowConversation.handleEndPlan` 在成功且身份仍匹配的结束回执后清理该会话恢复错误；`globalFallbackState` 对已结束执行排除旧 recoveryError，但连接、投影读取及独立业务错误继续展示。验收预览仅在没有全局兜底时使用 `acceptance-preview-focus`；故障时保留原分栏和底部入口，健康后恢复全宽，不改变验收决定与恢复动作。回归：`pnpm test:connection-recovery`；Electron 实测见恢复验收报告 E06/E07。

@@ -37,6 +37,38 @@ const WORKFLOW_EXECUTION_THREAD_ID = 'workflow-thread-regenerate'
 const DRAFT_DIGEST = 'a'.repeat(64)
 type WorkflowConversationParams = Parameters<typeof useWorkflowConversation>[0]
 
+test('本地暂停失败回传给按钮提示并恢复可再次暂停，不能持久化为任务失败', async () => {
+  const identity = buildSessionIdentity()
+  const statuses: string[] = []
+  let attempts = 0
+  const session = {
+    /** 首次模拟取消通信失败，第二次允许同一运行重试停止。 */
+    stop: async (): Promise<void> => {
+      if (++attempts === 1) throw new Error('取消请求失败')
+    }
+  } as unknown as AgUiChatSession
+  const params = buildRuntimeParams({
+    activeSession: identity,
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: buildIdleLifecycle(),
+    agUiSessionsRef: { current: { [identity.key]: session } },
+    acquireSessionExecution: () => undefined,
+    releaseSessionExecution: () => { throw new Error('未确认停止不得释放运行锁') },
+    onApplicationLifecycleChange: () => undefined
+  })
+  params.sessionExecutions = [{ identity, status: 'running', conversation: false }]
+  params.updateSessionExecutionStatus = (_key, status) => { statuses.push(status) }
+  let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+  /** 用真实 Hook 验证停止 Promise 的错误归属和中央运行态恢复。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  renderToStaticMarkup(createElement(Probe))
+  await assert.rejects(runtime!.handleStopGenerating(), /取消请求失败/)
+  assert.deepEqual(statuses, ['stopping', 'running'])
+  await runtime!.handleStopGenerating()
+  assert.equal(attempts, 2)
+  assert.deepEqual(statuses, ['stopping', 'running', 'stopping'])
+})
+
 test('兜底同步正常待确认执行不报缺少恢复入口，也不提交验收或重发任务', async () => {
   const savedFetch = globalThis.fetch
   const savedWindow = globalThis.window

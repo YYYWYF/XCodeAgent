@@ -2504,7 +2504,9 @@ export default function AiChatPanel({
       void handleStopPlan(ownedExecution?.runId)
       return
     }
-    handleStopGenerating()
+    void handleStopGenerating().catch((reason) => {
+      if (!isAuthenticationFailure(reason)) message.error(formatError(reason, '暂停执行失败，请重试。'))
+    })
   }
 
   // 普通二次修改发送前清理旧的页面详细设计标记，避免历史 Workflow 触发进度卡片。

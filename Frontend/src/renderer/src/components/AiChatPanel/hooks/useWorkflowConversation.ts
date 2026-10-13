@@ -329,7 +329,7 @@ type UseWorkflowConversationResult = {
     hasDetailPlan?: boolean
     continuation?: WorkflowDevelopmentContinuation
   }) => Promise<boolean>
-  handleStopGenerating: () => void
+  handleStopGenerating: () => Promise<void>
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
@@ -2326,12 +2326,12 @@ export function useWorkflowConversation({
   }
 
   /** 暂停本地运行；取消失败时展示原因并允许重试，不能永久停留在正在暂停。 */
-  const handleStopGenerating = (): void => {
+  const handleStopGenerating = async (): Promise<void> => {
     const runningIdentity = activeRun?.identity
     if (!runningIdentity || !loading || stopping) return
     // Native Recovery 使用独立流，不在普通聊天 transport 登记中；取消其服务端子 Run。
     if (recoveringSourceRunId) {
-      void handleStopPlan(activeWorkflow?.runId)
+      await handleStopPlan(activeWorkflow?.runId)
       return
     }
     const agUiSession = agUiSessionsRef.current[runningIdentity.key]
@@ -2352,10 +2352,8 @@ export function useWorkflowConversation({
       const stoppingWorkflow = withWorkflowExecutionStatus(workflow, 'stopping')
       return stoppingWorkflow ? { ...current, [runningIdentity.key]: stoppingWorkflow } : current
     })
-    void agUiSession.stop().catch((reason) => {
+    await agUiSession.stop().catch((reason) => {
       stopRequestedRef.current[runningIdentity.key] = false
-      const message = reason instanceof Error ? reason.message : '暂停执行失败，请重试。'
-      setErrors((current) => ({ ...current, [runningIdentity.key]: message }))
       setRunStates((current) => {
         const run = current[runningIdentity.key]
         if (!run || run.status !== 'stopping') return current
@@ -2368,6 +2366,8 @@ export function useWorkflowConversation({
         return { ...current, [runningIdentity.key]: activeWorkflow }
       })
       updateSessionExecutionStatus(runningIdentity.key, 'running')
+      // 暂停失败只交给按钮调用者即时提示；不能写入任务失败态并在成功暂停后残留。
+      throw reason
     })
   }
 

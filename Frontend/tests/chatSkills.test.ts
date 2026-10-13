@@ -110,6 +110,7 @@ Object.defineProperty(globalThis, 'window', {
 function renderWorkflowRunCard(props: ComponentProps<typeof WorkflowRunCard>): string {
   const lifecycle = {
     initialization: { stage: 'ready_for_workbench' },
+    testEntryGate: { allowed: true },
     activeExecutions: {
       test: {
         phase: props.workflow.summary.phase,
@@ -1196,6 +1197,11 @@ test('AG-UI 旧运行确认停止后才发送且只发送一次 TechnicalPlan �
 
 test('AG-UI 旧 SSE 永不结束时 stop 和原执行请求都在限定时间内收口', async () => {
   const originalFetch = globalThis.fetch
+  let resolveOldResponse: ((response: Response) => void) | undefined
+  let resolveNextResponse: ((response: Response) => void) | undefined
+  let oldRequest: { runId?: string; threadId?: string } | undefined
+  let nextRequest: { runId?: string; threadId?: string } | undefined
+  const lateContent: string[] = []
   globalThis.fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as {
       forwardedProps?: { cancelRunId?: string }
@@ -1217,13 +1223,18 @@ test('AG-UI 旧 SSE 永不结束时 stop 和原执行请求都在限定时间内
         status: 200
       })
     }
-    return new Promise<Response>(() => undefined)
+    if (!oldRequest) {
+      oldRequest = request
+      return new Promise<Response>((resolve) => { resolveOldResponse = resolve })
+    }
+    nextRequest = request
+    return new Promise<Response>((resolve) => { resolveNextResponse = resolve })
   }
 
   try {
     const session = new AgUiChatSession('thread-stuck-sse', 'http://agent.test/workflow/run')
     const execution = assert.rejects(
-      session.sendMessage('执行计划', { editorMode: 'frontend' }),
+      session.sendMessage('执行计划', { editorMode: 'frontend', onContent: (content) => lateContent.push(content) }),
       { name: 'AbortError' }
     )
     await Promise.resolve()
@@ -1234,14 +1245,39 @@ test('AG-UI 旧 SSE 永不结束时 stop 和原执行请求都在限定时间内
       )
     ])
     assert.equal(session.hasActiveRun(), false)
+    const nextExecution = session.sendMessage('下一轮执行', { editorMode: 'frontend' })
+    await Promise.resolve()
+    const events = [
+      { type: 'RUN_STARTED', threadId: oldRequest!.threadId, runId: oldRequest!.runId },
+      { type: 'TEXT_MESSAGE_START', messageId: 'late-old-message', role: 'assistant' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId: 'late-old-message', delta: '旧运行迟到内容' },
+      { type: 'TEXT_MESSAGE_END', messageId: 'late-old-message' },
+      { type: 'RUN_FINISHED', threadId: oldRequest!.threadId, runId: oldRequest!.runId, result: {} }
+    ]
+    resolveOldResponse!(new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'content-type': 'text/event-stream' }
+    }))
+    // 等待旧 SDK 消费迟到终帧，确认其既不发布内容也不释放新 Run 的锁。
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(lateContent, [])
+    assert.equal(session.hasActiveRun(), true)
+    resolveNextResponse!(new Response([
+      { type: 'RUN_STARTED', threadId: nextRequest!.threadId, runId: nextRequest!.runId },
+      { type: 'RUN_FINISHED', threadId: nextRequest!.threadId, runId: nextRequest!.runId, result: {} }
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'content-type': 'text/event-stream' }
+    }))
+    await nextExecution
+    assert.equal(session.hasActiveRun(), false)
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test('AG-UI 服务端 cancel_timeout 时拒绝发送下一条确认', async () => {
+test('AG-UI 取消超时阻止新请求，再次确认停止后才允许继续', async () => {
   const originalFetch = globalThis.fetch
   let normalRequestCount = 0
+  let cancellationCount = 0
   globalThis.fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as {
       forwardedProps?: { cancelRunId?: string }
@@ -1249,6 +1285,7 @@ test('AG-UI 服务端 cancel_timeout 时拒绝发送下一条确认', async () =
       threadId?: string
     }
     if (request.forwardedProps?.cancelRunId) {
+      cancellationCount += 1
       const events = [
         { type: 'RUN_STARTED', threadId: String(request.threadId), runId: String(request.runId) },
         {
@@ -1257,7 +1294,7 @@ test('AG-UI 服务端 cancel_timeout 时拒绝发送下一条确认', async () =
           runId: String(request.runId),
           result: {
             workflowRunControl: {
-              status: 'cancel_timeout',
+              status: cancellationCount === 1 ? 'cancel_timeout' : 'cancelled',
               message: 'Workflow 未能在限定时间内停止，请稍后重试。'
             }
           }
@@ -1269,12 +1306,23 @@ test('AG-UI 服务端 cancel_timeout 时拒绝发送下一条确认', async () =
       })
     }
     normalRequestCount += 1
+    if (normalRequestCount > 1) {
+      return new Response([
+        { type: 'RUN_STARTED', threadId: request.threadId, runId: request.runId },
+        { type: 'RUN_FINISHED', threadId: request.threadId, runId: request.runId, result: {} }
+      ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    }
     return new Promise<Response>(() => undefined)
   }
 
   try {
     const session = new AgUiChatSession('thread-cancel-timeout', 'http://agent.test/workflow/run')
-    void session.sendMessage('旧规划运行', { editorMode: 'frontend' }).catch(() => undefined)
+    const oldExecution = assert.rejects(
+      session.sendMessage('旧规划运行', { editorMode: 'frontend' }),
+      { name: 'AbortError' }
+    )
     await Promise.resolve()
     await assert.rejects(
       async () => {
@@ -1285,6 +1333,13 @@ test('AG-UI 服务端 cancel_timeout 时拒绝发送下一条确认', async () =
     )
 
     assert.equal(normalRequestCount, 1)
+    assert.equal(session.hasActiveRun(), true)
+    await assert.rejects(session.sendMessage('不能提前发送', { editorMode: 'frontend' }), /尚未确认停止/)
+    await Promise.all([session.stop(), oldExecution])
+    assert.equal(cancellationCount, 2)
+    assert.equal(session.hasActiveRun(), false)
+    await session.sendMessage('确认停止后的新请求', { editorMode: 'frontend' })
+    assert.equal(normalRequestCount, 2)
   } finally {
     globalThis.fetch = originalFetch
   }
