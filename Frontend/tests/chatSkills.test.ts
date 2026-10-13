@@ -1194,7 +1194,7 @@ test('AG-UI 旧运行确认停止后才发送且只发送一次 TechnicalPlan �
   }
 })
 
-test('AG-UI 旧 SSE 永不结束时 stop 仍在限定时间内完成', async () => {
+test('AG-UI 旧 SSE 永不结束时 stop 和原执行请求都在限定时间内收口', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as {
@@ -1222,14 +1222,18 @@ test('AG-UI 旧 SSE 永不结束时 stop 仍在限定时间内完成', async () 
 
   try {
     const session = new AgUiChatSession('thread-stuck-sse', 'http://agent.test/workflow/run')
-    void session.sendMessage('执行计划', { editorMode: 'frontend' }).catch(() => undefined)
+    const execution = assert.rejects(
+      session.sendMessage('执行计划', { editorMode: 'frontend' }),
+      { name: 'AbortError' }
+    )
     await Promise.resolve()
     await Promise.race([
-      session.stop(),
+      Promise.all([session.stop(), execution]),
       new Promise<never>((_resolve, reject) =>
         setTimeout(() => reject(new Error('stop 未在限定时间内完成')), 2_000)
       )
     ])
+    assert.equal(session.hasActiveRun(), false)
   } finally {
     globalThis.fetch = originalFetch
   }

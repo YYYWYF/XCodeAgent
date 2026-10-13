@@ -2325,6 +2325,7 @@ export function useWorkflowConversation({
     )
   }
 
+  /** 暂停本地运行；取消失败时展示原因并允许重试，不能永久停留在正在暂停。 */
   const handleStopGenerating = (): void => {
     const runningIdentity = activeRun?.identity
     if (!runningIdentity || !loading || stopping) return
@@ -2351,7 +2352,23 @@ export function useWorkflowConversation({
       const stoppingWorkflow = withWorkflowExecutionStatus(workflow, 'stopping')
       return stoppingWorkflow ? { ...current, [runningIdentity.key]: stoppingWorkflow } : current
     })
-    agUiSession.stop()
+    void agUiSession.stop().catch((reason) => {
+      stopRequestedRef.current[runningIdentity.key] = false
+      const message = reason instanceof Error ? reason.message : '暂停执行失败，请重试。'
+      setErrors((current) => ({ ...current, [runningIdentity.key]: message }))
+      setRunStates((current) => {
+        const run = current[runningIdentity.key]
+        if (!run || run.status !== 'stopping') return current
+        return { ...current, [runningIdentity.key]: { ...run, status: 'running' } }
+      })
+      setLiveWorkflows((current) => {
+        const workflow = current[runningIdentity.key]
+        if (workflow?.summary.status !== 'stopping' || !activeWorkflow) return current
+        // 仅撤回本次乐观暂停投影；已到达的 Backend 终态不能被旧请求覆盖。
+        return { ...current, [runningIdentity.key]: activeWorkflow }
+      })
+      updateSessionExecutionStatus(runningIdentity.key, 'running')
+    })
   }
 
   /** 通过结构化验收动作继续 acceptance 节点，禁止普通文本冒充验收通过。 */

@@ -569,6 +569,7 @@ export class AgUiChatSession {
   private activeRunId?: string
   private activeRunCompletion?: Promise<void>
   private resolveActiveRunCompletion?: () => void
+  private rejectStoppedRun?: (reason: Error) => void
   private unresolvedServerRunId?: string
 
   /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
@@ -621,7 +622,12 @@ export class AgUiChatSession {
       )
     }
     if (!transportSettled) {
-      this.finishActiveRun(runId, activeAgent)
+      // 服务端已确认停止，但 SDK abort 可能没有结束原 Promise；让调用者真正进入 finally。
+      if (this.activeRunId === runId && this.activeAgent === activeAgent) {
+        const reason = new Error('Workflow 已停止。')
+        reason.name = 'AbortError'
+        this.rejectStoppedRun?.(reason)
+      }
     }
   }
 
@@ -647,12 +653,14 @@ export class AgUiChatSession {
     let runErrorMessage = ''
     let runErrorCode: string | undefined
     let runFinished = false
+    let acceptingEvents = true
     const emitToolCalls = (nextToolCalls: ToolCallRecord[]): void => {
       toolCalls = nextToolCalls
       options.onToolCalls?.(toolCalls)
     }
     const subscriber: AgentSubscriber = {
       onCustomEvent: ({ event }) => {
+        if (!acceptingEvents) return
         if (event.name === 'application-lifecycle') {
           const lifecycle = readApplicationLifecycle(event.value)
           if (lifecycle) options.onApplicationLifecycle?.(lifecycle)
@@ -703,6 +711,7 @@ export class AgUiChatSession {
         }
       },
       onStateSnapshotEvent: ({ event }) => {
+        if (!acceptingEvents) return
         workflow = reconcileWorkflowFailurePayload(workflow, readWorkflowFromState(event.snapshot))
         if (workflow) {
           emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
@@ -710,30 +719,38 @@ export class AgUiChatSession {
         }
       },
       onTextMessageContentEvent: ({ event, textMessageBuffer }) => {
+        if (!acceptingEvents) return
         options.onContent?.(`${textMessageBuffer}${event.delta}`)
       },
       onTextMessageEndEvent: ({ textMessageBuffer }) => {
+        if (!acceptingEvents) return
         options.onContent?.(textMessageBuffer)
       },
       onRunErrorEvent: ({ event }) => {
+        if (!acceptingEvents) return
         // RUN_ERROR 是运行失败终态；HttpAgent 不会自动 reject，需要在会话边界显式抛出。
         runErrorMessage = event.message || 'Workflow 运行失败，请重试。'
         runErrorCode = event.code
       },
       onRunFinishedEvent: () => {
+        if (!acceptingEvents) return
         // HTTP 流结束不等于节点完成；停服导致的提前 EOF 必须进入原连接错误路径。
         runFinished = true
       },
       onToolCallStartEvent: ({ event }) => {
+        if (!acceptingEvents) return
         emitToolCalls(applyToolCallEvent(toolCalls, 'start', event))
       },
       onToolCallArgsEvent: ({ event }) => {
+        if (!acceptingEvents) return
         emitToolCalls(applyToolCallEvent(toolCalls, 'args', event))
       },
       onToolCallEndEvent: ({ event }) => {
+        if (!acceptingEvents) return
         emitToolCalls(applyToolCallEvent(toolCalls, 'end', event))
       },
       onToolCallResultEvent: ({ event }) => {
+        if (!acceptingEvents) return
         emitToolCalls(applyToolCallEvent(toolCalls, 'result', event))
       }
     }
@@ -745,15 +762,20 @@ export class AgUiChatSession {
       this.resolveActiveRunCompletion = resolve
     })
     let result: Awaited<ReturnType<HttpAgent['runAgent']>>
+    const stoppedRun = new Promise<never>((_resolve, reject) => {
+      this.rejectStoppedRun = reject
+    })
     try {
-      result = await requestAgent.runAgent(
+      result = await Promise.race([requestAgent.runAgent(
         {
           runId,
           forwardedProps: buildWorkflowForwardedProps(options)
         },
         subscriber
-      )
+      ), stoppedRun])
     } finally {
+      // 收口后丢弃旧 transport 的迟到帧，防止覆盖暂停态或下一轮执行。
+      acceptingEvents = false
       this.finishActiveRun(runId, requestAgent)
     }
     if (runErrorMessage) {
@@ -797,6 +819,7 @@ export class AgUiChatSession {
     this.resolveActiveRunCompletion?.()
     this.activeRunCompletion = undefined
     this.resolveActiveRunCompletion = undefined
+    this.rejectStoppedRun = undefined
   }
 }
 
