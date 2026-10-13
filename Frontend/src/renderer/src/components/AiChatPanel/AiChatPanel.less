@@ -23,7 +23,12 @@
 
 .@{class-prefix}-acceptance-preview-focus {
   .@{class-prefix}-ai-chat-assistant,
-  .@{class-prefix}-panel-split-handle {
+  .@{class-prefix}-panel-split-handle,
+  // 三档控件也要一起收起：分栏态的它靠 left: var(--assistant-panel-width) 对齐分隔线
+  // （见下方兄弟节点那条规则），而这里助手已 display:none、预览占满 100%，分隔线不再
+  // 存在，控件却仍停在原分隔线位置 —— 表现为预览正中浮着一条孤立的窄条。此时
+  // 隐藏/分栏/全宽也没有可作用的对象（预览本就全宽），关闭预览走页签上的关闭按钮。
+  .@{class-prefix}-right-panel-layout-control {
     display: none;
   }
 
