@@ -24,6 +24,7 @@ import { BuildExecutionRunCard } from '../WorkflowRunCard'
 import DagGenerationProgress from './DagGenerationProgress'
 import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
 import RepairInProgressPanel from './RepairInProgressPanel'
+import { buildProcessDisplayItems, isToolActivityStep } from './processDisplayItems'
 import { integrationTestCheckReportPath } from './reportAction'
 import ToolActivityChain from './ToolActivityChain'
 import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
@@ -38,10 +39,6 @@ type Props = {
   waitingPrompt?: string
   waitingForInput?: boolean
 }
-
-type ProcessDisplayItem =
-  | { kind: 'step'; step: ProcessStepRecord; toolSteps?: ProcessStepRecord[] }
-  | { kind: 'tool-chain'; steps: ProcessStepRecord[] }
 
 /** 渲染一条可折叠的 Agent 执行轨迹，并在测试步骤中保留结构化检查结果。 */
 export default function ProcessSteps({
@@ -165,45 +162,6 @@ export default function ProcessSteps({
   )
 }
 
-/** 为自由对话把工具步骤归入所属节点，缺少节点归属时才保留顶层调用链。 */
-function buildProcessDisplayItems(
-  steps: ProcessStepRecord[],
-  conversation: boolean
-): ProcessDisplayItem[] {
-  if (!conversation) return steps.map((step) => ({ kind: 'step', step }))
-
-  const workflowNodeNames = new Set(
-    steps
-      .filter((step) => !isToolActivityStep(step) && step.nodeName)
-      .map((step) => String(step.nodeName))
-  )
-  const toolStepsByNode = new Map<string, ProcessStepRecord[]>()
-  const orphanToolSteps: ProcessStepRecord[] = []
-  for (const step of steps.filter((candidate) => isToolActivityStep(candidate))) {
-    const nodeName = String(step.nodeName || '')
-    if (!nodeName || !workflowNodeNames.has(nodeName)) {
-      orphanToolSteps.push(step)
-      continue
-    }
-    toolStepsByNode.set(nodeName, [...(toolStepsByNode.get(nodeName) || []), step])
-  }
-
-  const items: ProcessDisplayItem[] = []
-  let orphanToolChainAdded = false
-  for (const step of steps) {
-    if (isToolActivityStep(step)) {
-      if (orphanToolSteps.includes(step) && !orphanToolChainAdded) {
-        items.push({ kind: 'tool-chain', steps: orphanToolSteps })
-        orphanToolChainAdded = true
-      }
-      continue
-    }
-    const toolSteps = step.nodeName ? toolStepsByNode.get(step.nodeName) : undefined
-    items.push({ kind: 'step', step, ...(toolSteps?.length ? { toolSteps } : {}) })
-  }
-  return items
-}
-
 /** 渲染单个 Agent 步骤，仅让包含实际详情的步骤具备展开交互。 */
 function ProcessStep({
   conversation,
@@ -252,12 +210,19 @@ function ProcessStep({
       hasRepairPanel)
   const awaitingInput = !titleOnly && waitingForInput && step.status === 'requires_user_input'
   // 二次修改的普通动作详情默认收起，流式更新不自动展开；结构化进度和确认提示沿用原展示规则。
-  const collapseConversationDetail = conversation &&
-    !hasChecks && !hasBuildRun && !hasDagGeneration && !hasProjectPlanUpdate &&
-    !hasWorkspaceInspection && !hasWorkspaceInspectionProgress && !hasRepairPanel &&
+  const collapseConversationDetail =
+    conversation &&
+    !hasChecks &&
+    !hasBuildRun &&
+    !hasDagGeneration &&
+    !hasProjectPlanUpdate &&
+    !hasWorkspaceInspection &&
+    !hasWorkspaceInspectionProgress &&
+    !hasRepairPanel &&
     !awaitingInput
   const [open, setOpen] = useState(
-    expandable && !collapseConversationDetail &&
+    expandable &&
+      !collapseConversationDetail &&
       (step.status === 'running' ||
         awaitingInput ||
         hasChecks ||
@@ -372,11 +337,21 @@ function ProcessStep({
             />
           )}
         {hasRepairPanel && (
-          <RepairInProgressPanel completed={hasRepairCompletion} detail={step.detail} />
+          <RepairInProgressPanel
+            activity={
+              (
+                [...toolSteps].reverse().find((tool) => tool.status === 'running') ||
+                toolSteps[toolSteps.length - 1]
+              )?.detail
+            }
+            completed={hasRepairCompletion}
+            detail={step.detail}
+          />
         )}
         {hasToolActivity && (
           <NodeToolActivityChain
             conversation={conversation}
+            defaultExpanded={isRepairStep}
             loading={!settled}
             steps={toolSteps}
             waitingForInput={waitingForInput}
@@ -404,21 +379,25 @@ function ProcessStep({
 /** 在所属流程节点的详情区渲染该节点自己的工具调用链。 */
 function NodeToolActivityChain({
   conversation,
+  defaultExpanded,
   loading,
   steps,
   waitingForInput,
   waitingPrompt
 }: {
   conversation: boolean
+  defaultExpanded: boolean
   loading: boolean
   steps: ProcessStepRecord[]
   waitingForInput: boolean
   waitingPrompt: string
 }): ReactElement {
-  const latestStep = steps[steps.length - 1]
+  const latestStep =
+    [...steps].reverse().find((tool) => tool.status === 'running') || steps[steps.length - 1]
   return (
     <ToolActivityChain
       count={steps.length}
+      defaultExpanded={defaultExpanded}
       isLast
       latestDetail={latestStep.detail}
       latestIcon={stepIcon(latestStep, !loading)}
@@ -639,11 +618,6 @@ function processStepTitle(
   if (step.status === 'failed') return `${label}失败`
   if (step.status === 'requires_user_input') return `等待确认 · ${label}`
   return step.status === 'running' && !settled ? `正在${label}` : `已完成${label}`
-}
-
-/** 判断自由对话中需要合并展示的工具和命令步骤。 */
-function isToolActivityStep(step: ProcessStepRecord): boolean {
-  return step.kind === 'tool' || step.kind === 'command'
 }
 
 /** 渲染非结构化步骤的详情或执行结果。 */

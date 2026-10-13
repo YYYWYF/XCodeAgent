@@ -1859,10 +1859,13 @@ def build_workflow_ag_ui_stream(
                         process_sequence += 1
                         task_id = str(activity.get("taskId") or "")
                         tool_node = str(progress.get("node_name") or "small_task_repair")
+                        tool_attempt = _current_node_attempt(node_attempts, tool_node)
+                        call_id = str(activity.get("callId") or process_sequence)
                         yield _process_frame(
                             encoder,
-                            id=f"small-task-tool:{task_id or process_sequence}",
-                            kind="tool",
+                            # 每次工具调用独立归档；同一次调用的开始、完成和失败原位更新。
+                            id=f"small-task-tool:{tool_node}:{tool_attempt}:{task_id}:{call_id}",
+                            kind="command" if activity.get("category") == "execute" else "tool",
                             status=activity_status,
                             title=str(activity.get("tool") or "SmallTask 工作区工具"),
                             detail=str(
@@ -1872,6 +1875,7 @@ def build_workflow_ag_ui_stream(
                             ),
                             sequence=process_sequence,
                             node_name=tool_node,
+                            attempt=tool_attempt,
                         )
                         continue
                     if event_type == "llm.token":

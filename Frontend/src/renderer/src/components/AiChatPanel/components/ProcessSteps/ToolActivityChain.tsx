@@ -14,6 +14,7 @@ type Props = {
   latestIcon: ReactNode
   latestTitle: string
   children: ReactNode
+  defaultExpanded?: boolean
 }
 
 /** 将多条工具步骤收拢为一条最新活动，并允许用户展开完整调用链。 */
@@ -23,9 +24,10 @@ export default function ToolActivityChain({
   isLast,
   latestDetail,
   latestIcon,
-  latestTitle
+  latestTitle,
+  defaultExpanded = false
 }: Props): ReactElement {
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const detail = latestDetail?.trim()
   const summary = detail ? `已记录 ${count} 次调用 · ${detail}` : `已记录 ${count} 次调用`
 

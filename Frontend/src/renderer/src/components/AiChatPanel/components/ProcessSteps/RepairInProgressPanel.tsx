@@ -9,14 +9,19 @@ const { Text } = Typography
 type Props = {
   detail: string
   completed?: boolean
+  activity?: string
 }
 
 /** 展示局部修复的执行或完成反馈，并用紫色主题区分当前状态。 */
-export default function RepairInProgressPanel({ detail, completed = false }: Props): ReactElement {
+export default function RepairInProgressPanel({
+  detail,
+  completed = false,
+  activity
+}: Props): ReactElement {
   return (
     <section
       aria-busy={!completed}
-      aria-label={completed ? '局部修复已完成' : '正在准备局部修复'}
+      aria-label={completed ? '局部修复已完成' : '正在执行局部修复'}
       aria-live="polite"
       className={cx('repair-in-progress', completed && 'repair-completed')}
     >
@@ -29,10 +34,15 @@ export default function RepairInProgressPanel({ detail, completed = false }: Pro
           {completed ? 'AUTO REPAIR · COMPLETE' : 'AUTO REPAIR'}
         </Text>
         <Text className={cx('repair-in-progress-title')} strong>
-          {completed ? '局部修复任务已完成' : '正在定位失败原因并生成局部修复方案'}
+          {completed
+            ? '局部修复任务已完成'
+            : activity
+              ? '正在执行局部修复任务'
+              : '正在定位失败原因并生成局部修复方案'}
         </Text>
         <Text className={cx('repair-in-progress-detail')} type="secondary">
-          {detail ||
+          {(!completed && activity) ||
+            detail ||
             (completed
               ? '修复结果已应用，正在重新执行集成测试。'
               : '修复任务准备完成后将自动执行，无需手动刷新。')}

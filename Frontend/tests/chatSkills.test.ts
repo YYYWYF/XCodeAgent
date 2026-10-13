@@ -24,6 +24,8 @@ import type {
 import { revisionContinuationFromWorkflow } from '../src/renderer/src/service/applicationPagePlanning'
 import { technicalPlanConfirmationSubmission } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation'
 import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
+import { buildProcessDisplayItems } from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/processDisplayItems'
+import type { ProcessStepRecord } from '../src/renderer/src/service/agUiAgent'
 import ApplicationPlanningQuestionPanel from '../src/renderer/src/components/Welcome/ApplicationPlanningQuestionPanel'
 import { ToolCallChain } from '../src/renderer/src/components/AiChatPanel/components/ToolCallCard'
 import {
@@ -1857,6 +1859,145 @@ test('集成测试步骤渲染具体检查项而不是数字详情', () => {
   assert.match(markup, /已跳过/)
   assert.match(markup, /通过 3\/3 个测试/)
   assert.doesNotMatch(markup, /<pre>[^<]*已完成 2\/2 项，通过 1 项，跳过 1 项/)
+})
+
+test('测试修复保留读取、编辑和验证调用，默认展开并显示当前文件', () => {
+  for (const nodeName of ['small_task_repair', 'unit_test_repair']) {
+    const steps: ProcessStepRecord[] = [
+      {
+        id: 'repair',
+        kind: 'workflow',
+        status: 'running',
+        title: '正在执行 局部修复任务',
+        detail: '正在执行修复',
+        sequence: 1,
+        nodeName,
+        attempt: 1
+      },
+      {
+        id: 'read',
+        kind: 'tool',
+        status: 'completed',
+        title: 'read_file',
+        detail: '已完成读取文件：/backend/src/App.java',
+        sequence: 2,
+        nodeName,
+        attempt: 1
+      },
+      {
+        id: 'edit',
+        kind: 'tool',
+        status: 'running',
+        title: 'edit_file',
+        detail: '正在编辑文件：/backend/src/App.java',
+        sequence: 3,
+        nodeName,
+        attempt: 1
+      },
+      {
+        id: 'verify',
+        kind: 'command',
+        status: 'completed',
+        title: 'execute',
+        detail: '已完成执行项目验证命令',
+        sequence: 4,
+        nodeName,
+        attempt: 1
+      },
+      {
+        id: 'build-tool',
+        kind: 'tool',
+        status: 'completed',
+        title: 'read_file',
+        detail: '不重复展示 Build 工具',
+        sequence: 5,
+        nodeName: 'build'
+      }
+    ]
+    const displayed = processStepsForMessageDisplay(steps, undefined) || []
+    assert.deepEqual(
+      displayed.map((step) => step.id),
+      ['repair', 'read', 'edit', 'verify']
+    )
+    const markup = renderToStaticMarkup(
+      createElement(ProcessSteps, { loading: true, steps: displayed })
+    )
+    assert.match(markup, /正在执行局部修复任务/)
+    assert.match(markup, /正在编辑文件：\/backend\/src\/App.java/)
+    assert.match(markup, /已记录 3 次调用/)
+    assert.match(markup, /aria-expanded="true"/)
+    assert.match(markup, /read_file/)
+    assert.match(markup, /edit_file/)
+    assert.match(markup, /execute/)
+  }
+})
+
+test('多轮局部修复工具只属于对应轮次，未归属工具仍可查看', () => {
+  const steps: ProcessStepRecord[] = [
+    {
+      id: 'round1',
+      kind: 'workflow',
+      status: 'completed',
+      title: '修复完成',
+      detail: '',
+      sequence: 1,
+      nodeName: 'small_task_repair',
+      attempt: 1
+    },
+    {
+      id: 'read1',
+      kind: 'tool',
+      status: 'completed',
+      title: 'read_file',
+      detail: '',
+      sequence: 2,
+      nodeName: 'small_task_repair',
+      attempt: 1
+    },
+    {
+      id: 'round2',
+      kind: 'workflow',
+      status: 'running',
+      title: '修复中',
+      detail: '',
+      sequence: 3,
+      nodeName: 'small_task_repair',
+      attempt: 2
+    },
+    {
+      id: 'read2',
+      kind: 'tool',
+      status: 'running',
+      title: 'read_file',
+      detail: '',
+      sequence: 4,
+      nodeName: 'small_task_repair',
+      attempt: 2
+    },
+    {
+      id: 'orphan',
+      kind: 'tool',
+      status: 'failed',
+      title: 'read_file',
+      detail: '',
+      sequence: 5,
+      nodeName: 'unit_test_repair',
+      attempt: 1
+    }
+  ]
+  const items = buildProcessDisplayItems(steps, false)
+  assert.deepEqual(
+    items.map((item) =>
+      item.kind === 'step'
+        ? [item.step.id, item.toolSteps?.map((tool) => tool.id)]
+        : ['orphan', item.steps.map((tool) => tool.id)]
+    ),
+    [
+      ['round1', ['read1']],
+      ['round2', ['read2']],
+      ['orphan', ['orphan']]
+    ]
+  )
 })
 
 test('局部修复完成态展示紫色结果卡并隐藏普通动作详情', () => {

@@ -63,6 +63,8 @@ Recovery GET 投影增加可选 `error`（`RECOVERY_PROJECTION_READ_FAILED`）�
 
 测试阶段 `integration_test` / `small_task_repair` 通过 `services/integration_test_reentry.py` 在经验证的首次重入中刷新当前工作区，重跑集成检查，保留单测跳过决定、修复次数与同入口已提交的任务进度；正常内部修复循环不重置。执行归属、资源锁和 checkpoint 校验保持不变，已执行或起点变化的事务禁止再次准备。此流程仍经现有 AG-UI 恢复入口；回归：`tests.test_integration_test_reentry`、`tests.test_integration_native_recovery`。
 
+测试局部修复的 `small_task.tool_activity` 经 `protocols/workflow/runtime.py` 投影为 `agent-process`：调用 ID 包含节点、轮次、任务与 callId，同一调用的开始/完成/失败原位更新，并携带 `attempt`；验证命令使用 command kind。前端 `processStepHistory.ts` 保留 `small_task_repair` / `unit_test_repair` 的工具步骤，`ProcessSteps/processDisplayItems.ts` 按节点轮次归属到修复卡片，默认展开调用链，`RepairInProgressPanel` 展示当前操作与安全文件路径。其他正式节点沿用原工具隐藏规则；不改变修复调度、额度、确认或恢复合同。回归：`tests.test_workflow_ag_ui`、`pnpm test:chat-skills`。
+
 单测恢复保留精确的 `unit_test` / `unit_test_repair` 入口。`services/unit_test_reentry.py` 在目标节点首次恢复调用中刷新工作区，不用旧源码指纹阻止测试生成或修复后的重入；保留测试缓存、Build 范围与绑定、已消耗的修复额度，撤销旧通过标记。失败修复进度须匹配入口绑定，已完成 SmallTask 保留，未完成任务恢复 pending，新失败重试重新计费；中断无已提交内部进度时重跑节点入口任务。单测命令重新执行，测试生成器自行验证源码摘要缓存。回归：`tests.test_unit_test_reentry`、`tests.test_unit_test_repair_budget`。
 
 Build 恢复按来源分流：FAILED 重入 `build` 后读取同 Run/Thread/正式计划绑定的内部进度，保留已完成任务，局部重试可重试失败任务或继续已准备好的 Build 修复计划；INTERRUPTED 和显式从 Build 节点执行则由 `services/build_restart.py` 清空旧进度，按 Formal DAG 重建 pending 清单并创建独立 Build Run。两条路径都重新扫描当前工作区，不用旧源码指纹阻止重入；Agent 根据真实文件判断 `already_satisfied`，平台照常验收。`services/execution_recovery_executor.py` 保留执行身份、checkpoint、lifecycle ownership 校验；数据库审批等正常交互确认续行保持原行为。回归：`tests.test_native_build_entry_recovery`、`tests.test_build_subgraph_scheduler`。

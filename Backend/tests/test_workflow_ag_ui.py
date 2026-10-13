@@ -2174,6 +2174,62 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIn("前端 lint 通过：已跳过", detail)
         self.assertNotIn("2/2", detail)
 
+    def test_small_task_tool_calls_have_independent_ids_and_repair_attempts(self) -> None:
+        """同一任务的工具独立归档，重复调用 ID 在下一轮修复也不会覆盖。"""
+
+        class ToolActivityGraph:
+            async def astream(self, initial_state, *, config, stream_mode):
+                """模拟两轮修复中的读取、编辑、并行任务与命令活动。"""
+
+                test_node = "unit_test" if initial_state["resume_from"] == "unit_test_repair" else "integration_test"
+                for _ in range(2):
+                    for task_id, call_id, tool, category in [
+                        ("repair-a", "read", "read_file", "read"),
+                        ("repair-a", "edit", "edit_file", "write"),
+                        ("repair-b", "read", "read_file", "read"),
+                        ("repair-a", "verify", "execute", "execute"),
+                    ]:
+                        for status in ("running", "completed"):
+                            yield "custom", {
+                                "type": "small_task.tool_activity",
+                                "node_name": initial_state["resume_from"],
+                                "activity": {"taskId": task_id, "callId": call_id,
+                                    "tool": tool, "category": category, "status": status,
+                                    "message": "正在读取文件：/backend/src/App.java"},
+                            }
+                    yield "updates", {initial_state["resume_from"]: {
+                        "phase": initial_state["resume_from"], "status": "completed",
+                        "small_task_route": test_node,
+                    }}
+                    yield "updates", {test_node: {
+                        "phase": test_node, "status": "completed",
+                        "quality_gate_passed": False,
+                        "integration_next_action": initial_state["resume_from"],
+                        "unit_test_next_action": initial_state["resume_from"],
+                    }}
+
+        for node in ("small_task_repair", "unit_test_repair"):
+            async def collect() -> list[str]:
+                """消费真实 AG-UI Runtime 以校验工具事件投影。"""
+
+                return [frame async for frame in build_workflow_ag_ui_stream(
+                    graph=ToolActivityGraph(),
+                    payload={"threadId": f"tools-{node}", "runId": f"run-{node}",
+                        "messages": [{"role": "user", "content": "repair"}],
+                        "forwardedProps": {"resumeFrom": node}},
+                )]
+
+            frames = [frame for frame in _decode_agent_process_frames(asyncio.run(collect()))
+                if str(frame.get("id", "")).startswith("small-task-tool:")]
+            self.assertEqual(len(frames), 16)
+            self.assertEqual(len({frame["id"] for frame in frames}), 8)
+            self.assertEqual({frame["attempt"] for frame in frames}, {1, 2})
+            self.assertTrue(all(frame["nodeName"] == node for frame in frames))
+            for start, end in zip(frames[::2], frames[1::2]):
+                self.assertEqual(start["id"], end["id"])
+                self.assertEqual((start["status"], end["status"]), ("running", "completed"))
+            self.assertEqual(sum(frame["kind"] == "command" for frame in frames), 4)
+
     def test_failed_gate_projects_repair_step_before_integration_node_finishes(self) -> None:
         """修复 running 帧必须早于集成测试完成帧，避免 RepairPlanner 分析期间界面空白。"""
 

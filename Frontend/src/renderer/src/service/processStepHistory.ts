@@ -211,13 +211,14 @@ export function processStepsForMessageDisplay(
   const displaySteps = processStepsForDisplay(steps, workflow)
   if (!displaySteps?.length) return displaySteps
 
-  // 自由对话需要展示工具和当前动作；正式 Workflow 则隐藏底层工具，避免重复渲染。
+  // 局部修复保留工具活动，由修复节点统一承载；其他正式节点仍隐藏底层工具。
   if (isConversationWorkflow(workflow)) return displaySteps
 
   const stableSteps = displaySteps.filter(
     (step) =>
-      step.kind !== 'tool' &&
-      step.kind !== 'command' &&
+      ((step.kind !== 'tool' && step.kind !== 'command') ||
+        step.nodeName === 'small_task_repair' ||
+        step.nodeName === 'unit_test_repair') &&
       !(
         step.status === 'running' &&
         HIDDEN_RUNNING_ACCEPTANCE_NODES.has(String(step.nodeName || ''))
