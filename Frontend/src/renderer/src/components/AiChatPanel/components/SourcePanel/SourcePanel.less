@@ -8,7 +8,7 @@
   background: var(--wb-canvas);
 }
 
-// 右栏：目录树（规划文档 + 工程源码）。内容在左、树在右，与原型口径一致。
+// 左栏：目录树（规划文档 + 工程源码）。树在左、内容在右。
 .@{class-prefix}-source-panel-tree {
   display: flex;
   flex: 0 0 240px;
@@ -16,7 +16,7 @@
   width: 240px;
   min-height: 0;
   background: var(--wb-surface-subtle);
-  border-left: 1px solid var(--wb-border);
+  border-right: 1px solid var(--wb-border);
 }
 
 .@{class-prefix}-source-panel-tree-head {
@@ -64,7 +64,7 @@
   width: 34px;
   padding: 10px 0;
   border: 0;
-  border-left: 1px solid var(--wb-border);
+  border-right: 1px solid var(--wb-border);
   background: var(--wb-surface-subtle);
   color: var(--wb-text-secondary);
   cursor: pointer;

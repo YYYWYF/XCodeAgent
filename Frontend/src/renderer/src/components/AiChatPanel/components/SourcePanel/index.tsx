@@ -208,7 +208,7 @@ function renderTreeNodes(
   )
 }
 
-/** 应用文件面板：左侧内容查看器 + 右侧可整栏收起的目录树（规划文档 + 工程源码）。 */
+/** 应用文件面板：左侧可整栏收起的目录树（规划文档 + 工程源码）+ 右侧内容查看器。 */
 export default function SourcePanel({
   workspaceRoot,
   initialFilePath,
@@ -386,45 +386,7 @@ export default function SourcePanel({
 
   return (
     <div className={cx('source-panel', treeCollapsed && 'is-tree-collapsed')}>
-      <div className={cx('source-panel-viewer')}>
-        <header className={cx('source-panel-header')}>
-          <Text code>{selectedDocLabel || selectedPath || '未选择文件'}</Text>
-          {fileTruncated ? (
-            <Text className={cx('source-panel-truncated')} type="warning">
-              文件过大，已截断
-            </Text>
-          ) : null}
-        </header>
-        {fileLoading ? (
-          <div className={cx('source-panel-viewer-loading')}>
-            <Spin size="small" />
-            <Text type="secondary">正在读取文件…</Text>
-          </div>
-        ) : fileError ? (
-          <div className={cx('source-panel-viewer-empty')}>
-            <Empty description={fileError} image={Empty.PRESENTED_IMAGE_SIMPLE} />
-          </div>
-        ) : fileContent ? (
-          selectedIsDoc ? (
-            <div className={cx('source-panel-doc')}>
-              <MarkdownContent content={fileContent} />
-            </div>
-          ) : (
-            <pre className={cx('source-panel-pre')}>
-              <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
-            </pre>
-          )
-        ) : (
-          <div className={cx('source-panel-viewer-empty')}>
-            <Empty
-              description="选择右侧目录树中的文件查看内容"
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* 目录树固定在右：可整栏收起为窄条，收起后点窄条展开。 */}
+      {/* 目录树固定在左：可整栏收起为窄条，收起后点窄条展开。 */}
       {treeCollapsed ? (
         <button
           aria-label="展开目录树"
@@ -433,7 +395,7 @@ export default function SourcePanel({
           title="展开目录树"
           type="button"
         >
-          <LeftOutlined />
+          <RightOutlined />
           <span className={cx('source-panel-tree-rail-label')}>目录树</span>
         </button>
       ) : (
@@ -447,7 +409,7 @@ export default function SourcePanel({
               title="收起目录树"
               type="button"
             >
-              <RightOutlined />
+              <LeftOutlined />
             </button>
           </header>
 
@@ -507,6 +469,44 @@ export default function SourcePanel({
           </div>
         </div>
       )}
+
+      <div className={cx('source-panel-viewer')}>
+        <header className={cx('source-panel-header')}>
+          <Text code>{selectedDocLabel || selectedPath || '未选择文件'}</Text>
+          {fileTruncated ? (
+            <Text className={cx('source-panel-truncated')} type="warning">
+              文件过大，已截断
+            </Text>
+          ) : null}
+        </header>
+        {fileLoading ? (
+          <div className={cx('source-panel-viewer-loading')}>
+            <Spin size="small" />
+            <Text type="secondary">正在读取文件…</Text>
+          </div>
+        ) : fileError ? (
+          <div className={cx('source-panel-viewer-empty')}>
+            <Empty description={fileError} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          </div>
+        ) : fileContent ? (
+          selectedIsDoc ? (
+            <div className={cx('source-panel-doc')}>
+              <MarkdownContent content={fileContent} />
+            </div>
+          ) : (
+            <pre className={cx('source-panel-pre')}>
+              <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
+            </pre>
+          )
+        ) : (
+          <div className={cx('source-panel-viewer-empty')}>
+            <Empty
+              description="选择左侧目录树中的文件查看内容"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          </div>
+        )}
+      </div>
     </div>
   )
 }
