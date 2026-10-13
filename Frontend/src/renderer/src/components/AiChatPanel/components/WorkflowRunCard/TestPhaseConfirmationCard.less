@@ -16,15 +16,6 @@
   }
 }
 
-// 卡内的提交提醒框改用「开发已完成」的绿，不再用主题紫。
-//
-// 这张卡的底色本身就是淡紫（--wb-accent-soft + --wb-accent-border），而
-// .version-commit-reminder 的默认样式用的是同一组 accent token，两层同色叠在一起
-// 分不出层次 —— 最需要用户决策的「稍后 / 审阅并提交」反而被淹没了。
-// 这里按 DevelopmentStatusDot / IterationBadge「已完成」档的绿色口径改写，
-// 底色与描边用 color-mix 从 token 派生，明暗两套主题自动跟随，不写死颜色。
-//
-// 只作用于本卡：审查卡与验收卡底色是中性的，紫色提醒在它们那里有强调作用，不该跟着改。
 .@{class-prefix}-workflow-test-phase-confirmation {
   .@{class-prefix}-version-commit-reminder {
     background: color-mix(in srgb, var(--wb-development-completed) 12%, var(--wb-surface));
