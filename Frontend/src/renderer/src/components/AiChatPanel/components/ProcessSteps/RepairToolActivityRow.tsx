@@ -25,7 +25,16 @@ const STATUS_LABELS: Record<ProcessStepRecord['status'], string> = {
 export default function RepairToolActivityRow({ step, icon, title, isLast }: Props): ReactElement {
   const detail = step.detail.trim()
   return (
-    <div className={cx('process-step', step.kind, step.status, 'static', 'repair-tool-row', isLast && 'last')}>
+    <div
+      className={cx(
+        'process-step',
+        step.kind,
+        step.status,
+        'static',
+        'repair-tool-row',
+        isLast && 'last'
+      )}
+    >
       <div className={cx('process-step-summary', 'repair-tool-row-heading')}>
         <span className={cx('process-step-icon')}>{icon}</span>
         <Text>{title}</Text>
