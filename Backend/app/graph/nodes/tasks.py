@@ -506,7 +506,7 @@ def _confirmed_build_task_plan_result(
             "mode": "build_task_plan_confirmation",
             "status": "clear",
             "confirmationStatus": "confirmed",
-            "message": "Build DAG 已确认，可以进入 Build。",
+            "message": "任务计划已确认，可以开始执行。",
         },
         "clarification": {},
     }

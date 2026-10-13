@@ -1,6 +1,6 @@
 import { Alert, Modal, message } from 'antd'
 import type { ReactElement } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useUncommittedChanges, useWorkbench, useWorkbenchPhase } from '../../context'
 import {
   orphanUncommittedPaths,
@@ -176,9 +176,20 @@ import {
   latestDagGenerationSnapshot,
   pendingDagConfirmationExecution,
   pendingDagConfirmationWorkflow,
-  pendingDagOwnerSessionId,
-  stageOutputPhase
+  pendingDagOwnerSessionId
 } from './stageOutputState'
+import {
+  browserPendingDagGuidanceStorage,
+  dagGenerationCompletionSummary,
+  pendingDagManualNavigationDecision,
+  pendingDagGuidanceStorageKey,
+  pendingDagPlanIdentityKey,
+  recordPendingDagPlanAutoGuided,
+  shouldRenderPendingDagConfirmationTab,
+  shouldAutoGuidePendingDagPlan,
+  wasPendingDagPlanAutoGuided
+} from './dagPendingPlanPresentation'
+import type { DagPendingPlanCompletion } from './dagPendingPlanPresentation'
 import { executionRecoveryForSession, executionRecoveryReadError } from './executionRecoveryState'
 import { acceptancePreviewCanFocus, conversationUsesWorkflowRecovery, globalFallbackState, latestConversationFailure, workbenchRecoveryCoveredByExecution } from './globalFallbackState'
 import ConnectionStatusBanner from '../ConnectionStatusBanner'
@@ -1665,57 +1676,6 @@ export default function AiChatPanel({
   const generatingDesignDocKey = planningPhaseRunning
     ? PHASE_DOC_KEY[String(planningPhase || '')]
     : undefined
-  const workspaceTabs: WorkspaceTab[] = isApplicationPlanningPhase
-    ? (designDocs || []).map((doc) => ({
-      key: doc.key,
-      label: doc.title,
-      // 当前阶段的文档即使尚未落盘也允许切回，内容区继续展示对应 loading。
-      available: doc.available || doc.key === generatingDesignDocKey
-    }))
-    : [
-      { key: 'outline', label: '开发产物', available: true },
-      { key: 'preview', label: '预览', available: Boolean(application.workspaceRoot) },
-      { key: 'source', label: '应用文件', available: Boolean(application.workspaceRoot) },
-      { key: 'field-mapping', label: '字段映射', available: Boolean(application.workspaceRoot) },
-      // 开发阶段不再提供「文档」tab：非设计/计划阶段时 designDocContent 恒为固定
-      // 占位文案「当前暂无设计文档。」，这个 tab 没有任何实际内容。
-      { key: 'stage-output', label: '待确认计划', available: true }
-    ]
-  // 开发阶段（非计划阶段）的兜底落在「开发产物」上：该阶段已无「文档」tab，
-  // 回退到 doc 会导致没有任何 tab 高亮，内容区还会渲染那个固定占位文案。
-  const activeWorkspaceTab: WorkspaceTabKey = isApplicationPlanningPhase
-    ? activeDesignDocKey ||
-    designDocs?.find((doc) => doc.available)?.key ||
-    designDocs?.[0]?.key ||
-    'requirement-spec'
-    : rightPanel?.type === 'field-mapping' ? 'field-mapping' : rightPanel?.type === 'outline'
-      ? 'outline'
-      : rightPanel?.type === 'preview'
-        ? 'preview'
-        : rightPanel?.type === 'source'
-          ? 'source'
-          : rightPanel?.type === 'stage-output'
-            ? 'stage-output'
-            : 'outline'
-  const openWorkspaceTab = useCallback(
-    (key: WorkspaceTabKey) => {
-      if (isApplicationPlanningPhase) {
-        // 已生成文档与当前生成中的文档均可切换；其他未开始的文档继续保持禁用。
-        const target = designDocs?.find((doc) => doc.key === key)
-        if (!target || (!target.available && target.key !== generatingDesignDocKey)) return
-        setRightPanel({ type: 'doc', docKey: key as WorkspaceDocKey })
-      } else if (key === 'field-mapping') {
-        setRightPanel({ type: 'field-mapping' })
-      } else if (key === 'outline') {
-        setRightPanel({ type: 'outline' })
-      } else if (key === 'preview') {
-        setRightPanel({ type: 'preview' })
-      } else if (key === 'source') {
-        setRightPanel({ type: 'source' })
-      }
-    },
-    [designDocs, generatingDesignDocKey, isApplicationPlanningPhase, setRightPanel]
-  )
   // 进入开发阶段时重置右侧面板：设计阶段的 doc/docKey 布局切换为开发阶段的预览/文档。
   useEffect(() => {
     if (isApplicationPlanningPhase) return
@@ -3575,9 +3535,11 @@ export default function AiChatPanel({
       hasOwnedPendingPlan ? currentDagConfirmationTargetReview(stageOutputWorkflow) : undefined,
     [hasOwnedPendingPlan, stageOutputWorkflow]
   )
-  const dagConfirmationHasIdentity = Boolean(
-    hasOwnedPendingPlan && currentDagConfirmationDraftIdentity(stageOutputWorkflow)
-  )
+  const dagConfirmationIdentity = hasOwnedPendingPlan
+    ? currentDagConfirmationDraftIdentity(stageOutputWorkflow)
+    : undefined
+  const dagConfirmationIdentityKey = pendingDagPlanIdentityKey(dagConfirmationIdentity)
+  const dagConfirmationHasIdentity = Boolean(dagConfirmationIdentityKey)
   const [dagConfirmationSubmissionError, setDagConfirmationSubmissionError] = useState('')
   useEffect(() => {
     setDagConfirmationSubmissionError('')
@@ -3588,7 +3550,7 @@ export default function AiChatPanel({
         ? [
           ...currentDagConfirmationErrors(stageOutputWorkflow),
           ...(!dagConfirmationHasIdentity
-            ? ['当前任务规划缺少服务端 DraftIdentity，请刷新后重试。']
+            ? ['当前待确认计划的确认信息不完整，请刷新后重试。']
             : []),
           ...(dagConfirmationSubmissionError ? [dagConfirmationSubmissionError] : [])
         ]
@@ -3600,86 +3562,160 @@ export default function AiChatPanel({
       stageOutputWorkflow
     ]
   )
-  const currentStageOutputPhase = stageOutputPhase(
-    stageOutputWorkflow,
-    currentDagSnapshot,
-    dagConfirmationPlan
-  )
+  const dagPendingPlanCompletion: DagPendingPlanCompletion | undefined = hasOwnedPendingPlan
+    ? {
+        planningRunId: dagConfirmationIdentity?.planningRunId,
+        summary: dagGenerationCompletionSummary(
+          currentDagSnapshot,
+          dagConfirmationIdentity?.planningRunId
+        )
+      }
+    : undefined
   const stageOutputSessionKey =
     hasOwnedPendingPlan && pendingDagExecution
-      ? `${application.id}:pending-dag:${pendingDagExecution.runId}`
+      ? `${application.id}:pending-dag:${currentSessionId}:${dagConfirmationIdentityKey || pendingDagExecution.runId}`
       : `${application.id}:${activeTargetKey || 'free-chat'}:${activeSession?.key || draftKey}`
   const stageOutputMatchesSession =
     rightPanel?.type === 'stage-output' && rightPanel.sessionKey === stageOutputSessionKey
-  const lastStageOutputSessionRef = useRef('')
-  const lastStageOutputPhaseRef = useRef('')
-  const lastPinnedDagRunRef = useRef('')
+  const pendingDagGuidanceStorage = useMemo(() => browserPendingDagGuidanceStorage(), [])
+  const dagGuidanceStorageKey = pendingDagGuidanceStorageKey(application.id, currentSessionId)
+  const scopedPendingDagGuidanceKey =
+    dagGuidanceStorageKey && dagConfirmationIdentityKey
+      ? `${dagGuidanceStorageKey}:${dagConfirmationIdentityKey}`
+      : ''
+  const lastAutoGuidedPendingDagKeyRef = useRef('')
+  const [pendingDagAttentionKey, setPendingDagAttentionKey] = useState('')
 
-  // 右侧面板只在会话或 DAG 大阶段变化时切换；同一阶段的 revision 更新直接刷新完整 Unit 快照。
-  useEffect(() => {
-    if (isApplicationPlanningPhase) return
-    if (pendingDagExecution && hasOwnedPendingPlan) {
-      const enteringPendingRun = lastPinnedDagRunRef.current !== pendingDagExecution.runId
-      lastPinnedDagRunRef.current = pendingDagExecution.runId
-      if (enteringPendingRun) {
-        ensureRightPanelVisible()
-        setRightPanel({
-          type: 'stage-output',
-          sessionKey: stageOutputSessionKey,
-          view: 'confirmation'
-        })
-      } else if (
-        rightPanel?.type === 'stage-output' &&
-        (rightPanel.sessionKey !== stageOutputSessionKey || rightPanel.view !== 'confirmation')
-      ) {
-        setRightPanel({
-          type: 'stage-output',
-          sessionKey: stageOutputSessionKey,
-          view: 'confirmation'
-        })
-      }
-      return
-    }
-
-    lastPinnedDagRunRef.current = ''
-    const sessionChanged = lastStageOutputSessionRef.current !== stageOutputSessionKey
-    const phaseChanged = lastStageOutputPhaseRef.current !== currentStageOutputPhase
-    if (!sessionChanged && !phaseChanged) return
-
-    lastStageOutputSessionRef.current = stageOutputSessionKey
-    lastStageOutputPhaseRef.current = currentStageOutputPhase
-    if (currentStageOutputPhase === 'confirmation' || currentStageOutputPhase === 'generation') {
-      ensureRightPanelVisible()
-      setRightPanel({
-        type: 'stage-output',
-        sessionKey: stageOutputSessionKey,
-        view: currentStageOutputPhase === 'confirmation' ? 'confirmation' : 'stage'
-      })
-      return
-    }
-    if (rightPanel?.type === 'stage-output') {
-      setRightPanel({ type: 'stage-output', sessionKey: stageOutputSessionKey })
-    }
+  /** 记录用户已主动选择右侧内容，避免待确认状态刚就绪时再抢回 Tab。 */
+  const markPendingDagPlanGuided = useCallback((): void => {
+    if (!dagConfirmationIdentityKey || !scopedPendingDagGuidanceKey) return
+    lastAutoGuidedPendingDagKeyRef.current = scopedPendingDagGuidanceKey
+    recordPendingDagPlanAutoGuided(
+      pendingDagGuidanceStorage,
+      dagGuidanceStorageKey,
+      dagConfirmationIdentityKey
+    )
   }, [
-    currentStageOutputPhase,
-    isApplicationPlanningPhase,
-    ensureRightPanelVisible,
-    pendingDagExecution,
-    hasOwnedPendingPlan,
-    rightPanel,
-    rightPanelLayout,
-    setRightPanel,
-    stageOutputSessionKey
+    dagConfirmationIdentityKey,
+    dagGuidanceStorageKey,
+    pendingDagGuidanceStorage,
+    scopedPendingDagGuidanceKey
   ])
 
-  /** 从 Unit 进度返回当前任务确认卡。 */
-  const handleReturnDagConfirmation = useCallback((): void => {
+  /** 左侧按钮每次都可主动返回确认视图，且不会重置已打开确认卡的阅读位置。 */
+  const handleOpenPendingDagConfirmation = useCallback((): void => {
+    const navigation = pendingDagManualNavigationDecision(
+      hasOwnedPendingPlan,
+      rightPanel?.type === 'stage-output' &&
+        rightPanel.sessionKey === stageOutputSessionKey &&
+        rightPanel.view === 'confirmation'
+    )
+    if (navigation === 'unavailable') return
+    markPendingDagPlanGuided()
+    ensureRightPanelVisible()
+    if (navigation === 'already-showing') {
+      return
+    }
     setRightPanel({
       type: 'stage-output',
       sessionKey: stageOutputSessionKey,
       view: 'confirmation'
     })
-  }, [setRightPanel, stageOutputSessionKey])
+  }, [
+    ensureRightPanelVisible,
+    hasOwnedPendingPlan,
+    markPendingDagPlanGuided,
+    rightPanel,
+    setRightPanel,
+    stageOutputSessionKey
+  ])
+
+  // Tab 高亮只维持短暂的一次过渡；系统减少动态效果时由样式直接关闭动画。
+  useEffect(() => {
+    if (!pendingDagAttentionKey) return undefined
+    const timeout = window.setTimeout(() => setPendingDagAttentionKey(''), 1400)
+    return () => window.clearTimeout(timeout)
+  }, [pendingDagAttentionKey])
+
+  // PendingPlan 被消费后在绘制前回退右侧内容，避免 Tab 已移除但面板短暂空白。
+  useLayoutEffect(() => {
+    if (isApplicationPlanningPhase || hasOwnedPendingPlan || rightPanel?.type !== 'stage-output') {
+      return
+    }
+    setRightPanel({ type: 'outline' })
+  }, [hasOwnedPendingPlan, isApplicationPlanningPhase, rightPanel, setRightPanel])
+
+  // 只对新的、身份完整的 PendingPlan 自动导航一次；确认 Tab 后续由用户自行控制。
+  useEffect(() => {
+    if (isApplicationPlanningPhase) return
+    if (pendingDagExecution && hasOwnedPendingPlan) {
+      if (!dagConfirmationIdentityKey || !dagGuidanceStorageKey || !scopedPendingDagGuidanceKey) {
+        return
+      }
+      const alreadyGuided =
+        wasPendingDagPlanAutoGuided(
+          pendingDagGuidanceStorage,
+          dagGuidanceStorageKey,
+          dagConfirmationIdentityKey
+        ) || lastAutoGuidedPendingDagKeyRef.current === scopedPendingDagGuidanceKey
+      if (alreadyGuided) {
+        lastAutoGuidedPendingDagKeyRef.current = scopedPendingDagGuidanceKey
+        // 同一 Tab 已被用户打开时只修正身份和视图，不打断用户切到的其他面板。
+        if (
+          rightPanel?.type === 'stage-output' &&
+          (rightPanel.sessionKey !== stageOutputSessionKey || rightPanel.view !== 'confirmation')
+        ) {
+          setRightPanel({
+            type: 'stage-output',
+            sessionKey: stageOutputSessionKey,
+            view: 'confirmation'
+          })
+        }
+        return
+      }
+      if (
+        !shouldAutoGuidePendingDagPlan(
+          scopedPendingDagGuidanceKey,
+          lastAutoGuidedPendingDagKeyRef.current
+        )
+      ) {
+        return
+      }
+      lastAutoGuidedPendingDagKeyRef.current = scopedPendingDagGuidanceKey
+      recordPendingDagPlanAutoGuided(
+        pendingDagGuidanceStorage,
+        dagGuidanceStorageKey,
+        dagConfirmationIdentityKey
+      )
+      setPendingDagAttentionKey(scopedPendingDagGuidanceKey)
+      ensureRightPanelVisible()
+      if (
+        rightPanel?.type === 'stage-output' &&
+        rightPanel.sessionKey === stageOutputSessionKey &&
+        rightPanel.view === 'confirmation'
+      ) {
+        return
+      }
+      setRightPanel({
+        type: 'stage-output',
+        sessionKey: stageOutputSessionKey,
+        view: 'confirmation'
+      })
+      return
+    }
+  }, [
+    dagConfirmationIdentityKey,
+    dagGuidanceStorageKey,
+    ensureRightPanelVisible,
+    hasOwnedPendingPlan,
+    isApplicationPlanningPhase,
+    pendingDagExecution,
+    pendingDagGuidanceStorage,
+    rightPanel,
+    scopedPendingDagGuidanceKey,
+    setRightPanel,
+    stageOutputSessionKey
+  ])
   const activeWorkflowPhase = String(
     activeWorkflow?.summary?.phase ||
     activeWorkflow?.result?.phase ||
@@ -3721,6 +3757,69 @@ export default function AiChatPanel({
     workspaceRoot: application.workspaceRoot
   })
   const codeDiffVisible = workflowShouldShowCodeChanges(latestWorkflowForDisplay)
+  const workspaceTabs: WorkspaceTab[] = isApplicationPlanningPhase
+    ? (designDocs || []).map((doc) => ({
+        key: doc.key,
+        label: doc.title,
+        // 当前阶段的文档即使尚未落盘也允许切回，内容区继续展示对应 loading。
+        available: doc.available || doc.key === generatingDesignDocKey
+      }))
+    : [
+        { key: 'outline', label: '开发产物', available: true },
+        { key: 'preview', label: '预览', available: Boolean(application.workspaceRoot) },
+        { key: 'source', label: '应用文件', available: Boolean(application.workspaceRoot) },
+        { key: 'field-mapping', label: '字段映射', available: Boolean(application.workspaceRoot) },
+        ...(shouldRenderPendingDagConfirmationTab(hasOwnedPendingPlan)
+          ? [
+              {
+                key: 'stage-output' as const,
+                label: '待确认任务',
+                available: true,
+                pending: true,
+                attention: Boolean(
+                  scopedPendingDagGuidanceKey &&
+                    pendingDagAttentionKey === scopedPendingDagGuidanceKey
+                )
+              }
+            ]
+          : [])
+      ]
+  // 开发阶段（非计划阶段）的兜底落在「开发产物」上，避免失效 Tab 留下空白内容区。
+  const activeWorkspaceTab: WorkspaceTabKey = isApplicationPlanningPhase
+    ? activeDesignDocKey ||
+      designDocs?.find((doc) => doc.available)?.key ||
+      designDocs?.[0]?.key ||
+      'requirement-spec'
+    : rightPanel?.type === 'field-mapping'
+      ? 'field-mapping'
+      : rightPanel?.type === 'outline'
+        ? 'outline'
+        : rightPanel?.type === 'preview'
+          ? 'preview'
+          : rightPanel?.type === 'source'
+            ? 'source'
+            : rightPanel?.type === 'stage-output' && hasOwnedPendingPlan
+              ? 'stage-output'
+              : 'outline'
+  const openWorkspaceTab = useCallback(
+    (key: WorkspaceTabKey) => {
+      if (isApplicationPlanningPhase) {
+        // 已生成文档与当前生成中的文档均可切回；其他未开始的文档保持禁用。
+        const target = designDocs?.find((doc) => doc.key === key)
+        if (!target || (!target.available && target.key !== generatingDesignDocKey)) return
+        setRightPanel({ type: 'doc', docKey: key as WorkspaceDocKey })
+      } else if (key === 'field-mapping') {
+        setRightPanel({ type: 'field-mapping' })
+      } else if (key === 'outline') {
+        setRightPanel({ type: 'outline' })
+      } else if (key === 'preview') {
+        setRightPanel({ type: 'preview' })
+      } else if (key === 'source') {
+        setRightPanel({ type: 'source' })
+      }
+    },
+    [designDocs, generatingDesignDocKey, isApplicationPlanningPhase, setRightPanel]
+  )
 
   // 阶段切入测试或审查后立即退出可能遗留的 Diff 详情，避免卡片隐藏后右侧仍显示代码差异。
   useEffect(() => {
@@ -3767,16 +3866,21 @@ export default function AiChatPanel({
   /** 在开发阶段处理阶段产物及测试/审查报告 tab，其余 tab 继续复用既有切换逻辑。 */
   const openDisplayedWorkspaceTab = useCallback(
     (key: WorkspaceTabKey): void => {
+      if (!isApplicationPlanningPhase && hasOwnedPendingPlan) markPendingDagPlanGuided()
       if (key === 'stage-output' && !isApplicationPlanningPhase) {
+        const navigation = pendingDagManualNavigationDecision(
+          hasOwnedPendingPlan,
+          rightPanel?.type === 'stage-output' &&
+            rightPanel.sessionKey === stageOutputSessionKey &&
+            rightPanel.view === 'confirmation'
+        )
+        if (navigation === 'unavailable') return
+        ensureRightPanelVisible()
+        if (navigation === 'already-showing') return
         setRightPanel({
           type: 'stage-output',
           sessionKey: stageOutputSessionKey,
-          view:
-            currentStageOutputPhase === 'confirmation'
-              ? 'confirmation'
-              : currentStageOutputPhase === 'generation'
-                ? 'stage'
-                : undefined
+          view: 'confirmation'
         })
         return
       }
@@ -3791,9 +3895,12 @@ export default function AiChatPanel({
       openWorkspaceTab(key)
     },
     [
-      currentStageOutputPhase,
+      ensureRightPanelVisible,
+      hasOwnedPendingPlan,
       isApplicationPlanningPhase,
+      markPendingDagPlanGuided,
       openWorkspaceTab,
+      rightPanel,
       reviewReportAvailable,
       setRightPanel,
       stageOutputSessionKey,
@@ -4343,7 +4450,7 @@ export default function AiChatPanel({
       // 绝不提交无身份的 Graph 请求，否则 Backend 只会按 stale 拒绝。
       const identityBoundAction = bindDagConfirmationDraftIdentity(pendingDagWorkflow, action)
       if (!identityBoundAction) {
-        setDagConfirmationSubmissionError('当前任务规划缺少服务端 DraftIdentity，请刷新后重试。')
+        setDagConfirmationSubmissionError('当前待确认计划的确认信息不完整，请刷新后重试。')
         return
       }
       const submitted = await handleSubmitClarification(
@@ -4911,18 +5018,15 @@ export default function AiChatPanel({
                   loading || workflowInputLocked || otherSessionExecutionLocked
                 }
                 conversationRunning={conversationRunning}
-                dagConfirmationInStageOutput={Boolean(
-                  stageOutputMatchesSession &&
-                  rightPanel?.type === 'stage-output' &&
-                  rightPanel.view === 'confirmation' &&
-                  dagConfirmationPlan
-                )}
+                dagConfirmationOwnedByStageOutput={hasOwnedPendingPlan}
+                dagPendingPlanCompletion={dagPendingPlanCompletion}
                 entityDesignSession={entityDesignChatActive}
                 designPhasePlanning={isApplicationPlanningPhase}
                 reusedExistingTemplate={reusingExistingTemplate}
                 branchName={application.branchName}
                 repositoryBranch={application.repositoryBranch}
                 onRetryRepositoryBranch={handleRetryRepositoryBranch}
+                onOpenPendingDagConfirmation={handleOpenPendingDagConfirmation}
                 retryingRepositoryBranch={retryingRepositoryBranch}
                 emptyContent={
                   !isApplicationPlanningPhase ? (
@@ -5502,19 +5606,10 @@ export default function AiChatPanel({
                     void handlePinnedDagConfirmation(action)
                   }}
                 />
-              ) : rightPanel.view === 'stage' && currentDagSnapshot ? (
-                <StageOutputPanel
-                  onReturnToConfirmation={
-                    currentStageOutputPhase === 'confirmation' && dagConfirmationPlan
-                      ? handleReturnDagConfirmation
-                      : undefined
-                  }
-                  snapshot={currentDagSnapshot}
-                />
-              ) : hasOwnedPendingPlan && rightPanel.view === 'confirmation' ? (
+              ) : hasOwnedPendingPlan ? (
                 <Alert
-                  message="正在恢复待确认的任务计划"
-                  description="确认卡会固定显示在这里，恢复完成前不会释放当前流程锁。"
+                  message="正在恢复待确认的任务"
+                  description="任务内容恢复完成后，可在这里审阅并确认。"
                   showIcon
                   type="info"
                 />

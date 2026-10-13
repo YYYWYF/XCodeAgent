@@ -136,6 +136,12 @@ def _complete_projected_units(value):
     return value
 
 
+_UnitDisplayNames = Annotated[
+    Mapping[Id, Id], BeforeValidator(plain_json), AfterValidator(freeze_json),
+    PlainSerializer(_mapping_copy, return_type=dict[str, str]),
+]
+
+
 class PlanningRunProjection(FrozenPlanningModel):
     """刷新/中断诊断的严格轻量证据；全部顶层字段必填，不含 Candidate 或恢复能力。"""
 
@@ -149,6 +155,7 @@ class PlanningRunProjection(FrozenPlanningModel):
     input_fingerprint: Id
     base_confirmed_plan_digest: Id | None
     required_unit_ids: Ids
+    unit_display_names: _UnitDisplayNames
     planning_unit_ids: Ids
     global_repair_round: Annotated[int, Field(ge=0, le=2)]
     global_repair_limit: Annotated[int, Field(ge=2, le=2)]
@@ -163,6 +170,9 @@ class PlanningRunProjection(FrozenPlanningModel):
         """校验轻量字段的范围、终态、轮次及在途身份，不伪造正文来验证 Candidate。"""
 
         required = set(self.required_unit_ids)
+        # 名称仅属于本轮 Unit；缺名允许展示兜底，但不能借展示元数据扩大范围。
+        if not set(self.unit_display_names).issubset(required):
+            raise ValueError("unit_display_names 只能包含本轮 required_unit_ids。")
         planning = {key for key, unit in self.unit_states.items() if unit.participation in GENERATING_PARTICIPATIONS}
         if len(required) != len(self.required_unit_ids) or required != set(self.unit_states):
             raise ValueError("unit_states 必须精确覆盖唯一的 required_unit_ids。")

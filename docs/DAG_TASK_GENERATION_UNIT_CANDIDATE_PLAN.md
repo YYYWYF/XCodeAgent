@@ -2324,6 +2324,7 @@ Unit states
 rounds
 issues
 diagnostics
+unit_display_names (只读本轮名称映射)
 ```
 
 Backend 重启后：

@@ -1083,7 +1083,7 @@ def _build_abandon_frames(
     """把 Pending Abandon 结果编码成 AG-UI 生命周期，不触发 Graph 或取消。"""
 
     messages = {
-        "abandoned": "当前 Pending Build DAG 已安全放弃。",
+        "abandoned": "当前待确认计划已放弃。",
         "already_abandoned": "该 Pending Build DAG 已经被放弃，请刷新查看当前状态。",
         "already_confirmed": "该 Build DAG 已经确认，不能再放弃。",
         "no_pending": "当前没有可放弃的 Pending Build DAG。",

@@ -23,6 +23,7 @@ from app.services.planning_frozen import (
     tuple_input,
 )
 from app.services.planning_run_contracts import PlanningRun, UnitRunState
+from app.services.planning_unit_display_names import project_plan_unit_display_names
 from app.services.unit_generation_contracts import UnitGenerationContext
 from app.services.unit_generation_requirement_targets import scoped_formal_targets
 from app.services.unit_generation_requirements import resolve_generation_requirements
@@ -135,6 +136,8 @@ class SequentialPlanningInputs(FrozenPlanningModel):
                 retained_task_ids=self.reuse_facts.retained_task_ids_by_unit.get(key, ()),
                 reusable_capabilities=tuple(self.reuse_facts.reusable_capabilities_by_unit.get(key, {})),
             )
+        # 同一冻结输入只在新 Run 创建时派生名称，后续发布和重连均读取 Run。
+        display_names = project_plan_unit_display_names(plain_json(self.project_plan))
         return PlanningRun(
             planning_run_id=planning_run_id, workflow_run_id=workflow_run_id, thread_id=thread_id,
             build_execution_scope=self.build_execution_scope,
@@ -143,6 +146,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
             if self.base_confirmed_plan is not None else None,
             required_unit_ids=tuple(units), planning_unit_ids=requirements.planning_unit_ids,
             unit_states=units, started_at=at, updated_at=at,
+            unit_display_names={key: display_names[key] for key in units if key in display_names},
         )
 
     def unit_context(

@@ -29,6 +29,7 @@ def run(*units) -> sm.PlanningRun:
 
     units = units or (unit(),)
     return sm.PlanningRun(
+        unit_display_names={},
         planning_run_id="run-1", workflow_run_id="workflow-1", thread_id="thread-1",
         build_execution_scope={"type": "page", "targetId": "orders"},
         input_fingerprint="frozen-input", base_confirmed_plan_digest="confirmed-digest",

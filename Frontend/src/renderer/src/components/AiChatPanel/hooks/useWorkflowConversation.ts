@@ -384,9 +384,9 @@ function buildTaskPlanConfirmationMessage(
   action: WorkflowBuildTaskPlanConfirmation['action']
 ): string {
   const messages: Record<WorkflowBuildTaskPlanConfirmation['action'], string> = {
-    confirm: '已确认 Build DAG，请进入 Build。',
-    abandon: '放弃当前待确认 Build DAG。',
-    regenerate: '丢弃当前待确认 Build DAG，并重新生成任务规划。'
+    confirm: '已确认任务计划，请开始执行。',
+    abandon: '放弃当前待确认计划。',
+    regenerate: '放弃当前待确认计划，并重新生成任务计划。'
   }
   return messages[action]
 }
@@ -1983,7 +1983,7 @@ export function useWorkflowConversation({
           setErrors((current) => ({
             ...current,
             [activeRuntimeKey || draftKey]:
-              '当前 Build DAG 缺少服务端 DraftIdentity，请刷新后重试。'
+              '当前待确认计划的确认信息不完整，请刷新后重试。'
           }))
           return false
         }

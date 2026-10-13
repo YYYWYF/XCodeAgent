@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+import re
+from typing import Literal, NotRequired, TypedDict
 
 from app.domain.models import BuildUnitKind
 from app.services.planning_issues import ValidationIssue
@@ -20,6 +21,11 @@ DAG_GENERATION_SNAPSHOT_SCHEMA_VERSION = "dag-generation.v1"
 LOCAL_ATTEMPT_LIMIT = 3
 _READY_UNIT_STATUSES = frozenset({"not_required", "candidate_ready"})
 _ACTIVE_UNIT_STATUSES = frozenset({"generating", "validating"})
+_CANDIDATE_LABEL_PATTERN = re.compile(
+    r"\b(?:Unit\s+Candidate(?:\s+Tasks?)?|Candidate(?:\s+Tasks?)?)\b"
+    r"(?:\s+(?=[\u4e00-\u9fff]))?",
+    re.IGNORECASE,
+)
 
 
 class DagGenerationIssue(TypedDict):
@@ -38,6 +44,7 @@ class DagGenerationUnit(TypedDict):
     """一个 Unit 的当前只读生成进度。"""
 
     id: str
+    displayName: NotRequired[str]
     kind: BuildUnitKind
     participation: Participation
     generationStrategy: GenerationStrategy
@@ -92,7 +99,10 @@ def project_planning_run_progress(
         raise TypeError("PlanningRun progress projector 必须接收只读 PlanningRun snapshot。")
 
     units = [
-        _project_unit(snapshot.unit_states[unit_id])
+        _project_unit(
+            snapshot.unit_states[unit_id],
+            display_name=snapshot.unit_display_names.get(unit_id),
+        )
         for unit_id in snapshot.required_unit_ids
     ]
     global_issues = [_project_issue(issue) for issue in snapshot.global_issues]
@@ -110,11 +120,12 @@ def project_planning_run_progress(
     }
 
 
-def _project_unit(unit: UnitRunState) -> DagGenerationUnit:
+def _project_unit(unit: UnitRunState, *, display_name: str | None = None) -> DagGenerationUnit:
     """投影单个 Unit 的可展示事实，仅暴露 Candidate 数量而不暴露身份或正文。"""
 
     return {
         "id": unit.unit_id,
+        **({"displayName": display_name} if display_name else {}),
         "kind": unit.kind,
         "participation": unit.participation,
         "generationStrategy": unit.generation_strategy,
@@ -133,7 +144,7 @@ def _project_unit(unit: UnitRunState) -> DagGenerationUnit:
 
 
 def _project_issue(issue: ValidationIssue) -> DagGenerationIssue:
-    """投影结构化路由与展示信息，省略 Candidate 身份和内部诊断上下文。"""
+    """投影结构化路由与展示信息，将内部候选任务术语改为用户文案。"""
 
     return {
         "code": issue.code,
@@ -142,7 +153,7 @@ def _project_issue(issue: ValidationIssue) -> DagGenerationIssue:
         "unitIds": list(issue.unit_ids),
         "retryUnitIds": list(issue.retry_unit_ids),
         "retryable": issue.retryable,
-        "message": issue.message,
+        "message": _CANDIDATE_LABEL_PATTERN.sub("候选任务", issue.message),
     }
 
 

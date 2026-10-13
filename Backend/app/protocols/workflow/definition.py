@@ -30,7 +30,7 @@ WORKFLOW_NODE_LABELS = {
     "entity_source_binding": "实体数据源绑定",
     "project_planning": "技术规划调整",
     "inspect_workspace": "扫描工作区代码",
-    "prepare_build_tasks": "构建任务 DAG 生成",
+    "prepare_build_tasks": "生成开发任务计划",
     "authorization_bootstrap": "权限数据库初始化",
     "build": "代码生成与构建协调",
     "unit_test": "开发阶段单元测试",

@@ -234,7 +234,7 @@ export default function WorkflowRunCard({
     ? clarification?.errors
     : [
         ...(Array.isArray(clarification?.errors) ? clarification.errors : []),
-        '当前任务规划缺少服务端 DraftIdentity，请刷新后重试。'
+        '当前待确认计划的确认信息不完整，请刷新后重试。'
       ]
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode

@@ -40,6 +40,7 @@ import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import CodeChangeCard from '../CodeChangeCard'
 import { ToolCallChain } from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
+import DagGenerationProgress from '../ProcessSteps/DagGenerationProgress'
 import VersionCommitReminder from '../VersionCommitReminder'
 import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
 import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
@@ -58,6 +59,7 @@ import {
   workflowMessageContentForDisplay
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage } from '../../types'
+import type { DagPendingPlanCompletion } from '../../dagPendingPlanPresentation'
 import type { ChatSessionDevelopmentContinuation } from '../../../../service/chatSessions'
 import { conversationRevisionHandoffCommitted, isConversationWorkflow } from '../../conversationMode'
 import { workflowDevelopmentContinuation } from '../../developmentContinuation'
@@ -324,8 +326,10 @@ type MessageListProps = {
   applicationTemplatePreparationEligible: boolean
   codeChangeActionsDisabled: boolean
   conversationRunning: boolean
-  /** 右侧阶段产物面板可见时，把 Build DAG 确认卡从消息流移出以避免重复。 */
-  dagConfirmationInStageOutput?: boolean
+  /** 当前会话拥有待确认 DAG 时，完整确认表单固定由右侧工作区承载。 */
+  dagConfirmationOwnedByStageOutput?: boolean
+  /** 当前 owner 的待确认任务身份与可信进度摘要。 */
+  dagPendingPlanCompletion?: DagPendingPlanCompletion
   entityDesignSession?: boolean
   /** 普通自由对话没有消息时使用的工作区级快捷任务内容。 */
   emptyContent?: ReactNode
@@ -343,6 +347,8 @@ type MessageListProps = {
   /** 模板基线的远端推送结果：模板卡据此如实说明"推送成功"还是"没推上去"。 */
   repositoryBranch?: ApplicationConfig['repositoryBranch']
   onRetryRepositoryBranch?: () => void
+  /** 从左侧进度卡主动打开当前 PendingPlan 的确认视图。 */
+  onOpenPendingDagConfirmation?: () => void
   retryingRepositoryBranch?: boolean
   /** UI 设计稿确认：当前选中页 id（与右侧预览面板联动）。 */
   uiDesignActivePageId?: string
@@ -406,7 +412,8 @@ export default function MessageList({
   applicationTemplatePreparationEligible,
   codeChangeActionsDisabled,
   conversationRunning,
-  dagConfirmationInStageOutput = false,
+  dagConfirmationOwnedByStageOutput = false,
+  dagPendingPlanCompletion,
   entityDesignSession = false,
   emptyContent,
   developmentNextStepContent,
@@ -415,6 +422,7 @@ export default function MessageList({
   branchName,
   repositoryBranch,
   onRetryRepositoryBranch,
+  onOpenPendingDagConfirmation,
   retryingRepositoryBranch = false,
   error,
   uiDesignActivePageId,
@@ -573,6 +581,14 @@ export default function MessageList({
   // 所以它决定消息区是"撑满"还是"按内容收缩"（见下面的 has-content 修饰类）。
   const showingEmptyState =
     messages.every(isResiduePlanningPlaceholder) && !visibleError && !templatePreparationVisible
+  const hasMatchingPendingDagProgress = Boolean(
+    dagPendingPlanCompletion?.planningRunId &&
+      messages.some((message) =>
+        processStepsForMessageDisplay(message.processSteps, message.workflow)?.some(
+          (step) => step.dagGeneration?.planningRunId === dagPendingPlanCompletion.planningRunId
+        )
+      )
+  )
 
   return (
     <div className={cx('ai-message-list-shell', !showingEmptyState && 'has-content')}>
@@ -796,7 +812,7 @@ export default function MessageList({
                 message.workflow && messageClarification?.mode === 'acceptance_phase_confirmation'
               // Build DAG 确认只属于右侧阶段产物；普通消息流不恢复或复制确认卡。
               const dagConfirmationMovedToStageOutput = Boolean(
-                dagConfirmationInStageOutput &&
+                dagConfirmationOwnedByStageOutput &&
                   messageClarification?.mode === 'build_task_plan_confirmation'
               )
               const isCodeReviewCard = workflowShouldShowCodeReview(message.workflow)
@@ -1019,7 +1035,9 @@ export default function MessageList({
                           !designPhasePlanning && (
                             <ProcessSteps
                               conversation={conversation}
+                              dagPendingPlanCompletion={dagPendingPlanCompletion}
                               loading={messageLoading}
+                              onOpenPendingDagConfirmation={onOpenPendingDagConfirmation}
                               steps={visibleProcessSteps}
                             />
                           )}
@@ -1186,6 +1204,18 @@ export default function MessageList({
               )
             })
           )}
+          {dagPendingPlanCompletion && !hasMatchingPendingDagProgress ? (
+            <article className={cx('ai-message', 'assistant')}>
+              <div className={cx('ai-message-content')}>
+                <DagGenerationProgress
+                  completion={{
+                    summary: dagPendingPlanCompletion.summary,
+                    onGoToConfirmation: onOpenPendingDagConfirmation
+                  }}
+                />
+              </div>
+            </article>
+          ) : null}
           {developmentNextStepContent}
           {templatePreparationVisible ? (
             <article className={cx('ai-message', 'assistant', 'template-preparing-message')}>
