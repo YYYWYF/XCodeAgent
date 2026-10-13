@@ -5,8 +5,8 @@
   bottom: 0;
   left: 68px;
   display: flex;
-  // 与「历史对话」抽屉同宽，避免两个对话抽屉宽度不一致。
-  width: 316px;
+  // 与对话管理列表共用宽度，详情返回时保持布局稳定。
+  width: 480px;
   max-width: calc(100% - 68px);
   min-width: 0;
   flex-direction: column;
@@ -29,9 +29,9 @@
 
 .@{class-prefix}-temporary-chat-agent-icon {
   display: inline-flex;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
   align-items: center;
   justify-content: center;
   color: var(--wb-accent);
@@ -41,8 +41,8 @@
 }
 
 .@{class-prefix}-temporary-chat-agent-icon-glyph {
-  width: 15px;
-  height: 15px;
+  width: 22px;
+  height: 22px;
   background: currentColor;
   mask: var(--temporary-chat-icon-source) center / contain no-repeat;
 }
@@ -64,8 +64,8 @@
   > span {
     overflow: hidden;
     color: var(--wb-text-secondary);
-    font-size: 10px;
-    line-height: 15px;
+    font-size: 13px;
+    line-height: 19px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -104,68 +104,19 @@
   flex: 1;
   flex-direction: column;
   overflow-y: auto;
-  padding: 34px 26px;
+  padding: 40px 18px;
 }
 
 .@{class-prefix}-temporary-chat-message {
   width: fit-content;
   max-width: min(100%, 420px);
-  padding: 16px 18px;
+  padding: 11px 14px;
   color: var(--wb-text);
   font-size: 15px;
   line-height: 1.72;
   background: var(--wb-surface-subtle);
   border-radius: 16px;
   overflow-wrap: anywhere;
-}
-
-.@{class-prefix}-temporary-chat-composer {
-  display: flex;
-  min-height: 58px;
-  flex: 0 0 auto;
-  align-items: flex-end;
-  gap: 8px;
-  margin: 0 26px 22px;
-  padding: 9px 9px 9px 16px;
-  background: var(--wb-canvas);
-  border: 1px solid var(--wb-border-strong);
-  border-radius: 18px;
-
-  .ant-input[disabled] {
-    width: auto;
-    min-height: 38px;
-    min-width: 0;
-    flex: 1;
-    padding: 8px 0;
-    color: var(--wb-text-tertiary);
-    font-size: 14px;
-    line-height: 22px;
-    background: transparent;
-    resize: none;
-    cursor: not-allowed;
-
-    &::placeholder {
-      color: var(--wb-text-tertiary);
-      opacity: 0.62;
-    }
-  }
-
-  > button {
-    display: inline-flex;
-    width: 40px;
-    height: 40px;
-    flex: 0 0 40px;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    color: var(--wb-text-tertiary);
-    font-size: 17px;
-    background: var(--wb-surface-hover);
-    border: 0;
-    border-radius: 50%;
-    cursor: not-allowed;
-    opacity: 0.62;
-  }
 }
 
 .@{class-prefix}-workbench-shell[data-theme='dark'] {
@@ -183,10 +134,5 @@
   .@{class-prefix}-temporary-chat-messages {
     padding-right: 18px;
     padding-left: 18px;
-  }
-
-  .@{class-prefix}-temporary-chat-composer {
-    margin-right: 18px;
-    margin-left: 18px;
   }
 }

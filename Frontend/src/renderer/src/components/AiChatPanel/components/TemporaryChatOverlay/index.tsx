@@ -1,5 +1,4 @@
-import { CloseOutlined, SendOutlined } from '@ant-design/icons'
-import { Input } from 'antd'
+import { ArrowLeftOutlined, CloseOutlined } from '@ant-design/icons'
 import type { ReactElement } from 'react'
 import { useEffect } from 'react'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
@@ -7,11 +6,17 @@ import { cx } from '../../../../utils'
 import './TemporaryChatOverlay.less'
 
 type TemporaryChatOverlayProps = {
+  number: number
+  onBack: () => void
   onClose: () => void
 }
 
 /** 渲染暂未接入 Agent 的临时对话浮层，并允许用户通过关闭按钮或 Escape 返回工作台。 */
-export default function TemporaryChatOverlay({ onClose }: TemporaryChatOverlayProps): ReactElement {
+export default function TemporaryChatOverlay({
+  number,
+  onBack,
+  onClose
+}: TemporaryChatOverlayProps): ReactElement {
   useEffect(() => {
     /** 在浮层打开期间响应 Escape，避免用户必须移动鼠标才能退出。 */
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -34,9 +39,18 @@ export default function TemporaryChatOverlay({ onClose }: TemporaryChatOverlayPr
           />
         </span>
         <span className={cx('temporary-chat-heading')}>
-          <strong>临时对话</strong>
-          <span>辅助主对话解决即时疑问</span>
+          <strong>临时对话 {number}</strong>
+          <span>查阅与 Chat 类事务，不触发 Workflow 或写入工作区</span>
         </span>
+        <button
+          aria-label="返回对话管理"
+          className={cx('temporary-chat-close')}
+          onClick={onBack}
+          title="返回对话管理"
+          type="button"
+        >
+          <ArrowLeftOutlined />
+        </button>
         <button
           aria-label="关闭临时对话"
           className={cx('temporary-chat-close')}
@@ -50,21 +64,8 @@ export default function TemporaryChatOverlay({ onClose }: TemporaryChatOverlayPr
 
       <div className={cx('temporary-chat-messages')} role="log">
         <div className={cx('temporary-chat-message', 'assistant')}>
-          嗨，你好呀！我是你的临时对话助手，页面、接口、代码上的疑问都可以直接问我，也能帮你分析问题、聊聊思路。
+          这是一个新的临时对话。你可以查阅、分析和讨论，但不能从这里发起正式工作流。
         </div>
-      </div>
-
-      <div aria-disabled="true" className={cx('temporary-chat-composer')}>
-        <Input.TextArea
-          aria-label="临时对话输入框，暂不可用"
-          autoSize={{ minRows: 1, maxRows: 4 }}
-          bordered={false}
-          disabled
-          placeholder="问问当前应用、产品或代码的问题…"
-        />
-        <button aria-label="发送消息，暂不可用" disabled title="暂未接入 Agent" type="button">
-          <SendOutlined />
-        </button>
       </div>
     </aside>
   )

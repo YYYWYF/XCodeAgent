@@ -2,16 +2,14 @@ import {
   DatabaseOutlined,
   ApiOutlined,
   FolderOutlined,
-  HistoryOutlined,
   HourglassOutlined,
   LeftOutlined,
-  PlusOutlined,
   RightOutlined,
   SettingOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons'
 import type { CSSProperties, ReactElement } from 'react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import type {
@@ -54,18 +52,16 @@ type SessionSidebarProps = {
   apiContracts: DevelopmentPlanningApiContract[]
   application: ApplicationConfig
   deletingSessionId?: string
-  temporaryChatActive: boolean
+  advancingSessionId?: string
   filesActive: boolean
   dataSourcesActive: boolean
   dataSourcesEnabled: boolean
   externalApisActive: boolean
   forceCollapsed?: boolean
   loadingSessions: boolean
-  onCloseTemporaryChat: () => void
   onBeforeNavigate?: (action: () => void) => void
   onCreateFreeChatSession: () => void
   onDeleteSession: (sessionId: string) => Promise<void>
-  onOpenTemporaryChat: () => void
   onOpenSession: (sessionId: string) => Promise<void>
   outlineLocked: boolean
   onApiEndpointSelect: (target: {
@@ -113,18 +109,16 @@ export default function SessionSidebar({
   deletingSessionId,
   currentBranch,
   entities = [],
-  temporaryChatActive,
+  advancingSessionId,
   filesActive,
   dataSourcesActive,
   dataSourcesEnabled,
   externalApisActive,
   forceCollapsed = false,
   loadingSessions,
-  onCloseTemporaryChat,
   onBeforeNavigate,
   onCreateFreeChatSession,
   onDeleteSession,
-  onOpenTemporaryChat,
   onOpenSession,
   onApiEndpointSelect,
   onEntitySelect,
@@ -147,7 +141,8 @@ export default function SessionSidebar({
   settingsActive,
   skillsActive,
   historyEnabled,
-  theme
+  theme,
+  workspaceRoot
 }: SessionSidebarProps): ReactElement {
   const [collapsed, setCollapsed] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -158,14 +153,12 @@ export default function SessionSidebar({
   // 小屏（compactLayout）与大屏共用 collapsed 状态：默认展开常驻左侧，仅手动折叠成图标栏。
   const effectiveCollapsed = forceCollapsed ? true : collapsed
 
-  // 离开开发阶段时关闭历史浮层，避免下次回到开发阶段时恢复旧的展开状态。
-  useEffect(() => {
-    if (!historyEnabled) setHistoryOpen(false)
-  }, [historyEnabled])
-
   /** 关闭历史侧栏并执行用户选择的左栏导航。 */
   const handleRailNavigation = (navigate: () => void): void => {
-    const action = (): void => { setHistoryOpen(false); navigate() }
+    const action = (): void => {
+      setHistoryOpen(false)
+      navigate()
+    }
     if (onBeforeNavigate) onBeforeNavigate(action)
     else action()
   }
@@ -177,10 +170,12 @@ export default function SessionSidebar({
     else onCreateFreeChatSession()
   }
 
-  /** 打开历史会话面板时先关闭临时对话，避免两个浮层相互遮挡。 */
+  /** 通过唯一入口打开或关闭对话管理面板。 */
   const handleHistoryToggle = (): void => {
     const next = !historyOpen
-    const action = (): void => { if (next) onCloseTemporaryChat(); setHistoryOpen(next) }
+    const action = (): void => {
+      setHistoryOpen(next)
+    }
     if (next && onBeforeNavigate) onBeforeNavigate(action)
     else action()
   }
@@ -282,48 +277,19 @@ export default function SessionSidebar({
         ) : null}
         <nav className={cx('session-footer-nav')} aria-label="快捷入口">
           <div className={cx('session-rail-primary')}>
-            <div className={cx('free-chat-nav-row', temporaryChatActive && 'active')}>
+            <div className={cx('free-chat-nav-row', historyOpen && 'active')}>
               <button
-                aria-current={temporaryChatActive ? 'page' : undefined}
+                aria-expanded={historyOpen}
+                aria-label={historyOpen ? '关闭对话管理' : '打开对话管理'}
                 className={cx('free-chat-nav-main')}
-                onClick={() => handleRailNavigation(onOpenTemporaryChat)}
-                title="临时对话"
+                onClick={handleHistoryToggle}
+                title="对话管理"
                 type="button"
               >
                 <SidebarAssetIcon source={freeChatIcon} />
-                <span>临时对话</span>
+                <span>对话管理</span>
               </button>
-              {historyEnabled ? (
-                <button
-                  aria-label="新建自由对话"
-                  className={cx('free-chat-new-session')}
-                  disabled={sessionCreationDisabled}
-                  onClick={handleCreateHistorySession}
-                  title={sessionCreationDisabled ? '当前阶段有流程未结束' : '新建自由对话'}
-                  type="button"
-                >
-                  <PlusOutlined />
-                </button>
-              ) : null}
             </div>
-            {historyEnabled ? (
-              <button
-                aria-expanded={historyOpen}
-                aria-label={historyOpen ? '关闭历史对话' : '打开历史对话'}
-                className={cx('free-chat-history-trigger', historyOpen && 'active')}
-                onClick={handleHistoryToggle}
-                title={historyOpen ? '关闭历史对话' : '打开历史对话'}
-                type="button"
-              >
-                <HistoryOutlined />
-                <span>历史对话</span>
-                {sessions.length > 0 ? (
-                  <span className={cx('free-chat-history-trigger-count')}>
-                    {sessions.length > 99 ? '99+' : sessions.length}
-                  </span>
-                ) : null}
-              </button>
-            ) : null}
             {dataSourcesEnabled ? (
               <button
                 className={cx(dataSourcesActive && 'active')}
@@ -404,22 +370,24 @@ export default function SessionSidebar({
           />
         ) : null}
       </aside>
-      {historyEnabled && historyOpen ? (
-        <FreeChatHistory
-          activeSessionId={activeSessionId}
-          deletingSessionId={deletingSessionId}
-          loadingSessions={loadingSessions}
-          onClose={() => setHistoryOpen(false)}
-          onCreateSession={handleCreateHistorySession}
-          onDeleteSession={onDeleteSession}
-          onOpenSession={handleOpenHistorySession}
-          sessionCreationDisabled={sessionCreationDisabled}
-          sessionError={sessionError}
-          sessionRunStates={sessionRunStates}
-          sessions={sessions}
-          theme={theme}
-        />
-      ) : null}
+      <FreeChatHistory
+        key={workspaceRoot}
+        open={historyOpen}
+        historyEnabled={historyEnabled}
+        advancingSessionId={advancingSessionId}
+        activeSessionId={activeSessionId}
+        deletingSessionId={deletingSessionId}
+        loadingSessions={loadingSessions}
+        onClose={() => setHistoryOpen(false)}
+        onCreateSession={handleCreateHistorySession}
+        onDeleteSession={onDeleteSession}
+        onOpenSession={handleOpenHistorySession}
+        sessionCreationDisabled={sessionCreationDisabled}
+        sessionError={sessionError}
+        sessionRunStates={sessionRunStates}
+        sessions={sessions}
+        theme={theme}
+      />
     </>
   )
 }

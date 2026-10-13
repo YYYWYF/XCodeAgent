@@ -123,7 +123,6 @@ import RightPanelLayoutControl from './components/RightPanelLayoutControl'
 import WorkbenchDrawer from './components/WorkbenchDrawer'
 import ReleasedVersionPanel from './components/ReleasedVersionPanel'
 import SessionSidebar from './components/SessionSidebar'
-import TemporaryChatOverlay from './components/TemporaryChatOverlay'
 import QuickTaskGuide from './components/QuickTaskGuide'
 import type { QuickTaskItem } from './components/QuickTaskGuide/quickTasks'
 import WorkspaceDebugDock from './components/WorkspaceDebugDock'
@@ -866,8 +865,6 @@ export default function AiChatPanel({
     setApiDesignConfigGateWorkflow(undefined)
     setApiDesignSavedMappingKeys(new Set())
   }, [application.workspaceRoot])
-  // 临时对话仅控制覆盖层可见性，不切换当前工作流会话或持久化上下文。
-  const [temporaryChatOpen, setTemporaryChatOpen] = useState(false)
   // 设计阶段自由变更是主规划 Workflow 的显式中断模式，默认保持锁定。
   const [, setInteractingDetailTargetKey] = useState('')
   const [, setGeneratingDetailTargetKey] = useState('')
@@ -3153,6 +3150,12 @@ export default function AiChatPanel({
     (phaseExecution
       ? allSessions.find((session) => session.id === phaseExecution.identity.sessionId)?.title
       : pendingDagSession?.title || existingPlanningSession?.title)
+  // 推进标记沿用实际流程归属；空闲时展示最近会话，浏览历史不会转移该标记或执行门禁。
+  const advancingSessionId =
+    applicationOwnerSession?.id ||
+    phaseExecution?.identity.sessionId ||
+    pendingDagSessionId ||
+    sessions[0]?.id
   const applicationOwnerStatus = applicationOwnership.owner?.status
   const phaseExecutionStatus =
     applicationOwnerStatus === 'awaiting_confirmation' || applicationOwnerStatus === 'awaiting_user'
@@ -4014,7 +4017,6 @@ export default function AiChatPanel({
     setAcceptanceRejecting(true)
     try {
       await createDevelopmentConversation('验收反馈：二次修改')
-      setTemporaryChatOpen(false)
       setActiveView('chat')
       setActiveDetailTarget({ type: 'none' })
       switchPhase('development')
@@ -4070,21 +4072,18 @@ export default function AiChatPanel({
   }
 
   const handleShowSkills = (): void => {
-    setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('skills')
   }
 
   const handleShowFiles = (): void => {
-    setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('files')
   }
 
   const handleShowSettings = (): void => {
-    setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('settings')
@@ -4093,32 +4092,18 @@ export default function AiChatPanel({
   /** 在当前对话之上打开数据来源抽屉，保留右侧映射与会话上下文。 */
   const handleShowDataSources = (): void => {
     setPreviewError('')
-    setTemporaryChatOpen(false)
     setActiveView((current) => current === 'dataSources' ? 'chat' : 'dataSources')
   }
 
   /** 在当前对话之上打开外部 API 抽屉，复用数据来源的导航保护。 */
   const handleShowExternalApis = (): void => {
     setPreviewError('')
-    setTemporaryChatOpen(false)
     setActiveView((current) => current === 'externalApis' ? 'chat' : 'externalApis')
   }
-
-  /** 打开独立临时对话浮层，不改变底层工作区选择和会话上下文。 */
-  const handleOpenTemporaryChat = (): void => {
-    if (phaseSessionRunActive) return
-    setTemporaryChatOpen(true)
-  }
-
-  /** 关闭临时对话浮层并完整保留底层工作区状态。 */
-  const handleCloseTemporaryChat = useCallback((): void => {
-    setTemporaryChatOpen(false)
-  }, [])
 
   /** 从历史面板进入空白对话草稿，首轮发送前不创建历史记录。 */
   const handleCreateChatSession = (): void => {
     if (phaseSessionRunActive) return
-    setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
@@ -4187,7 +4172,6 @@ export default function AiChatPanel({
   /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置页面、Endpoint 或实体目标。 */
   const handleQuickTaskStart = async (task: QuickTaskItem): Promise<void> => {
     if (pendingPlanActionable) return
-    setTemporaryChatOpen(false)
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
@@ -4292,9 +4276,8 @@ export default function AiChatPanel({
     )
   }
 
-  /** 从历史面板恢复原有会话，并关闭临时对话浮层避免遮挡持久会话。 */
+  /** 从对话管理恢复原有会话，保留工作流与目标的既有归属。 */
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
-    setTemporaryChatOpen(false)
     setActiveView('chat')
     setInteractingDetailTargetKey('')
     setGeneratingDetailTargetKey('')
@@ -4309,7 +4292,6 @@ export default function AiChatPanel({
       await handleOpenChatSession(sessionId)
       return
     }
-    setTemporaryChatOpen(false)
     setActiveView('chat')
     setInteractingDetailTargetKey('')
     setGeneratingDetailTargetKey('')
@@ -4814,13 +4796,11 @@ export default function AiChatPanel({
             deletingSessionId={deletingSessionId}
             forceCollapsed
             loadingSessions={loadingSessions}
-            temporaryChatActive={temporaryChatOpen}
+            advancingSessionId={advancingSessionId}
             outlineLocked={false}
-            onCloseTemporaryChat={handleCloseTemporaryChat}
             onBeforeNavigate={handleSidebarNavigation}
             onCreateFreeChatSession={handleCreateChatSession}
             onDeleteSession={handleDeleteSession}
-            onOpenTemporaryChat={handleOpenTemporaryChat}
             onOpenSession={handleOpenChatSession}
             onReturnWelcome={onReturnWelcome}
             onShowFiles={handleShowFiles}
@@ -5165,8 +5145,6 @@ export default function AiChatPanel({
           )}
         </div>
       )}
-
-      {temporaryChatOpen ? <TemporaryChatOverlay onClose={handleCloseTemporaryChat} /> : null}
 
       {(activeView === 'dataSources' || activeView === 'externalApis') ? <DataSourcesDrawer key={`${workspaceRoot}:${activeView}`} mode={activeView === 'externalApis' ? 'external_api' : 'database'} theme={theme} workspaceRoot={workspaceRoot || ''} onNavigationGuard={registerSourceNavigationGuard} onClose={() => setActiveView('chat')} /> : null}
 
