@@ -23,7 +23,9 @@ import type {
 } from '../src/renderer/src/service/agUiAgent'
 import { revisionContinuationFromWorkflow } from '../src/renderer/src/service/applicationPagePlanning'
 import { technicalPlanConfirmationSubmission } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation'
-import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
+import ProcessSteps, {
+  ProcessStep
+} from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
 import { buildProcessDisplayItems } from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/processDisplayItems'
 import type { ProcessStepRecord } from '../src/renderer/src/service/agUiAgent'
 import ApplicationPlanningQuestionPanel from '../src/renderer/src/components/Welcome/ApplicationPlanningQuestionPanel'
@@ -1861,7 +1863,7 @@ test('集成测试步骤渲染具体检查项而不是数字详情', () => {
   assert.doesNotMatch(markup, /<pre>[^<]*已完成 2\/2 项，通过 1 项，跳过 1 项/)
 })
 
-test('测试修复保留读取、编辑和验证调用，默认展开并显示当前文件', () => {
+test('测试修复保留读取、编辑和验证调用，默认收起且仅在调用链展示当前文件', () => {
   for (const nodeName of ['small_task_repair', 'unit_test_repair']) {
     const steps: ProcessStepRecord[] = [
       {
@@ -1925,10 +1927,43 @@ test('测试修复保留读取、编辑和验证调用，默认展开并显示�
     assert.match(markup, /正在执行局部修复任务/)
     assert.match(markup, /正在编辑文件：\/backend\/src\/App.java/)
     assert.match(markup, /已记录 3 次调用/)
-    assert.match(markup, /aria-expanded="true"/)
-    assert.match(markup, /read_file/)
+    assert.match(markup, /aria-expanded="false"/)
+    assert.match(markup, /展开调用链/)
+    assert.doesNotMatch(markup, /tool-activity-chain-body/)
+    assert.doesNotMatch(markup.split('aria-label="工具调用链"')[0], /App\.java|正在编辑文件/)
     assert.match(markup, /edit_file/)
-    assert.match(markup, /execute/)
+  }
+})
+
+test('单次修复工具直接展示主题文件活动，不提供子步骤展开交互', () => {
+  for (const nodeName of ['small_task_repair', 'unit_test_repair']) {
+    for (const kind of ['tool', 'command'] as const) {
+      for (const status of ['running', 'completed', 'failed'] as const) {
+        const markup = renderToStaticMarkup(
+          createElement(ProcessStep, {
+            conversation: false,
+            isLast: true,
+            settled: status !== 'running',
+            waitingForInput: false,
+            waitingPrompt: '',
+            step: {
+              id: 'call',
+              kind,
+              status,
+              title: kind === 'tool' ? 'read_file' : 'execute',
+              detail: '正在读取文件：/frontend/src/pages/中文 页面.tsx',
+              sequence: 2,
+              nodeName,
+              attempt: 1
+            }
+          })
+        )
+        assert.match(markup, /正在读取文件：\/frontend\/src\/pages\/中文 页面\.tsx/)
+        assert.match(markup, /repair-tool-row-file/)
+        assert.doesNotMatch(markup, /<details|<summary|<button|动作详情/)
+        assert.doesNotMatch(markup, /AUTO REPAIR|局部修复任务已完成|repair-in-progress/)
+      }
+    }
   }
 })
 
@@ -2019,7 +2054,7 @@ test('局部修复完成态展示紫色结果卡并隐藏普通动作详情', ()
     })
   )
 
-  assert.match(markup, /AUTO REPAIR · COMPLETE/)
+  assert.doesNotMatch(markup, /AUTO REPAIR|COMPLETE/)
   assert.match(markup, /局部修复任务已完成/)
   assert.match(markup, /repair-completed/)
   assert.match(markup, /aria-busy="false"/)

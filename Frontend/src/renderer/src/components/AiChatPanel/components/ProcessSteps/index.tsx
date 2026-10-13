@@ -24,6 +24,7 @@ import { BuildExecutionRunCard } from '../WorkflowRunCard'
 import DagGenerationProgress from './DagGenerationProgress'
 import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
 import RepairInProgressPanel from './RepairInProgressPanel'
+import RepairToolActivityRow from './RepairToolActivityRow'
 import { buildProcessDisplayItems, isToolActivityStep } from './processDisplayItems'
 import { integrationTestCheckReportPath } from './reportAction'
 import ToolActivityChain from './ToolActivityChain'
@@ -163,7 +164,7 @@ export default function ProcessSteps({
 }
 
 /** 渲染单个 Agent 步骤，仅让包含实际详情的步骤具备展开交互。 */
-function ProcessStep({
+export function ProcessStep({
   conversation,
   isLast,
   settled,
@@ -188,7 +189,9 @@ function ProcessStep({
   const hasWorkspaceInspectionProgress = Boolean(step.workspaceInspectionProgress)
   const collapseCompletedWorkspaceScan =
     step.nodeName === 'scan_workspace_code' && hasWorkspaceInspection && step.status === 'completed'
-  const isRepairStep = step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair'
+  const isRepairStep =
+    step.kind === 'workflow' &&
+    (step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair')
   const hasRepairActivity = isRepairStep && step.status === 'running'
   const hasRepairCompletion = isRepairStep && step.status === 'completed'
   const hasRepairPanel = hasRepairActivity || hasRepairCompletion
@@ -294,6 +297,20 @@ function ProcessStep({
     </>
   )
 
+  if (
+    isToolActivityStep(step) &&
+    (step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair')
+  ) {
+    return (
+      <RepairToolActivityRow
+        icon={stepIcon(step, settled)}
+        isLast={isLast}
+        step={step}
+        title={processStepTitle(step, conversation, settled)}
+      />
+    )
+  }
+
   if (awaitingInput) {
     const clarificationText =
       step.detail.trim() ||
@@ -338,20 +355,14 @@ function ProcessStep({
           )}
         {hasRepairPanel && (
           <RepairInProgressPanel
-            activity={
-              (
-                [...toolSteps].reverse().find((tool) => tool.status === 'running') ||
-                toolSteps[toolSteps.length - 1]
-              )?.detail
-            }
             completed={hasRepairCompletion}
             detail={step.detail}
+            executing={hasToolActivity}
           />
         )}
         {hasToolActivity && (
           <NodeToolActivityChain
             conversation={conversation}
-            defaultExpanded={isRepairStep}
             loading={!settled}
             steps={toolSteps}
             waitingForInput={waitingForInput}
@@ -379,14 +390,12 @@ function ProcessStep({
 /** 在所属流程节点的详情区渲染该节点自己的工具调用链。 */
 function NodeToolActivityChain({
   conversation,
-  defaultExpanded,
   loading,
   steps,
   waitingForInput,
   waitingPrompt
 }: {
   conversation: boolean
-  defaultExpanded: boolean
   loading: boolean
   steps: ProcessStepRecord[]
   waitingForInput: boolean
@@ -397,7 +406,6 @@ function NodeToolActivityChain({
   return (
     <ToolActivityChain
       count={steps.length}
-      defaultExpanded={defaultExpanded}
       isLast
       latestDetail={latestStep.detail}
       latestIcon={stepIcon(latestStep, !loading)}
