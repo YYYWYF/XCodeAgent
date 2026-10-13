@@ -18,8 +18,11 @@
   gap: 12px;
   padding: 12px 14px;
   color: var(--wb-text);
-  background: var(--wb-accent-soft);
-  border: 1px solid var(--wb-accent-border);
+  // 提交提醒统一用琥珀：提醒用户"需要你操作"。不用绿色 —— 绿色在本项目语义是
+  // "已完成"，会让人以为可以忽略。不用主题紫 —— 提醒框常嵌在同样淡紫的阶段确认卡里，
+  // 两层同色分不出层次。
+  background: color-mix(in srgb, var(--wb-warning) 8%, var(--wb-surface));
+  border: 1px solid color-mix(in srgb, var(--wb-warning) 40%, var(--wb-border));
   border-radius: 9px;
 
   // 嵌在别的卡片里（阶段转换确认卡）时的变体：用满宽，间距交给卡片的 gap。
@@ -29,19 +32,28 @@
     margin: 0;
   }
 
+  // 读不到 Git 状态 / 修改未通过验证：中性底 + 红色图标，与常态的琥珀拉开区分。
   &.@{class-prefix}-warning {
     background: var(--wb-surface-subtle);
     border-color: var(--wb-border-strong);
 
     .@{class-prefix}-version-commit-icon {
-      color: var(--wb-warning);
+      color: var(--wb-danger);
       background: var(--wb-surface);
       border-color: var(--wb-border);
     }
   }
 
+  // 已提交成功：绿色（本项目"已完成"的语义色），不能跟着常态一起变琥珀。
   &.@{class-prefix}-committed {
     grid-template-columns: auto minmax(0, 1fr);
+    background: color-mix(in srgb, var(--wb-development-completed) 8%, var(--wb-surface));
+    border-color: color-mix(in srgb, var(--wb-development-completed) 40%, var(--wb-border));
+
+    .@{class-prefix}-version-commit-icon {
+      color: var(--wb-development-completed);
+      border-color: color-mix(in srgb, var(--wb-development-completed) 40%, var(--wb-border));
+    }
   }
 }
 
@@ -51,9 +63,9 @@
   height: 32px;
   align-items: center;
   justify-content: center;
-  color: var(--wb-accent);
+  color: var(--wb-warning);
   background: var(--wb-canvas);
-  border: 1px solid var(--wb-accent-border);
+  border: 1px solid color-mix(in srgb, var(--wb-warning) 40%, var(--wb-border));
   border-radius: 8px;
 }
 
@@ -83,6 +95,36 @@
   .ant-btn {
     border-radius: 6px;
     font-size: 12px;
+  }
+
+  // 「审阅并提交」浅琥珀底 + 琥珀字。
+  //
+  // 不做实心按钮：暗色主题下 --wb-warning 是浅琥珀，白字压上去只有 1.72:1，要达标
+  // 就得按主题分别压深底色。改成浅底 + 琥珀字，字色由 token 与 --wb-text 混出
+  // （明色主题得深琥珀、暗色主题得浅琥珀），一套声明同时满足两套主题。
+  .ant-btn-primary:not(:disabled) {
+    color: color-mix(in srgb, var(--wb-warning) 40%, var(--wb-text));
+    background: color-mix(in srgb, var(--wb-warning) 18%, var(--wb-surface));
+    border-color: color-mix(in srgb, var(--wb-warning) 40%, var(--wb-border));
+
+    &:hover,
+    &:focus-visible {
+      background: color-mix(in srgb, var(--wb-warning) 22%, var(--wb-surface));
+    }
+
+    &:active {
+      background: color-mix(in srgb, var(--wb-warning) 26%, var(--wb-surface));
+    }
+  }
+
+  // 禁用态沿用仓库既有中性口径，避免 antd 默认的禁用主按钮透出紫色。
+  // 与上面 `:not(:disabled)` 并列写：嵌进去会编译成永不成立的 `:not(:disabled):disabled`。
+  .ant-btn-primary:disabled,
+  .ant-btn-primary.ant-btn-disabled {
+    color: var(--wb-text-tertiary);
+    background: var(--wb-control);
+    border-color: var(--wb-border);
+    box-shadow: none;
   }
 }
 

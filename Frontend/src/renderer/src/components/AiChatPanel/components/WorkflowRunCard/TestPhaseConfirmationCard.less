@@ -16,45 +16,8 @@
   }
 }
 
-.@{class-prefix}-workflow-test-phase-confirmation {
-  .@{class-prefix}-version-commit-reminder {
-    background: color-mix(in srgb, var(--wb-development-completed) 12%, var(--wb-surface));
-    border-color: color-mix(in srgb, var(--wb-development-completed) 40%, var(--wb-border));
-  }
-
-  .@{class-prefix}-version-commit-icon {
-    color: var(--wb-development-completed);
-    border-color: color-mix(in srgb, var(--wb-development-completed) 40%, var(--wb-border));
-  }
-
-  .@{class-prefix}-version-commit-actions .ant-btn-primary:not(:disabled) {
-    color: color-mix(in srgb, var(--wb-development-completed) 40%, var(--wb-text));
-    background: color-mix(in srgb, var(--wb-development-completed) 24%, var(--wb-surface));
-    border-color: color-mix(in srgb, var(--wb-development-completed) 40%, var(--wb-border));
-
-    &:hover,
-    &:focus-visible {
-      background: color-mix(in srgb, var(--wb-development-completed) 28%, var(--wb-surface));
-    }
-
-    &:active {
-      background: color-mix(in srgb, var(--wb-development-completed) 33%, var(--wb-surface));
-    }
-  }
-
-  // 禁用态（读取 Git 状态中、Agent 运行中）沿用仓库既有口径，避免 antd 默认那套
-  // 主色灰化版本在这只绿框里透出紫色。
-  //
-  // 必须与上面的 `:not(:disabled)` 并列写：嵌在它内部会编译成
-  // `:not(:disabled):disabled` 这种永远不成立的选择器，规则等于没写。
-  .@{class-prefix}-version-commit-actions .ant-btn-primary:disabled,
-  .@{class-prefix}-version-commit-actions .ant-btn-primary.ant-btn-disabled {
-    color: var(--wb-text-tertiary);
-    background: var(--wb-control);
-    border-color: var(--wb-border);
-    box-shadow: none;
-  }
-}
+// 卡内提交提醒框的琥珀配色已提到共用基类（VersionCommitReminder.less），
+// 这里不再单独覆盖。
 
 .@{class-prefix}-workflow-test-phase-confirmation-title {
   display: flex;
