@@ -13,15 +13,15 @@ import { cx } from '../utils'
 type VersionGenerateState = { stepIndex: number } | null
 
 /** 发起新迭代时用户对分支的选择。 */
-export type IterationBranchChoice =
-  | { mode: 'current' }
-  | { mode: 'new'; branchName: string }
+export type IterationBranchChoice = { mode: 'current' } | { mode: 'new'; branchName: string }
 
 type PublishModalProps = {
   /** 当前正在开发的分支名：提交与推送的落点。 */
   branchName: string
   /** 变更说明草稿。 */
   description: string
+  /** 是否正在按本次改动生成变更说明（生成期间输入框仍可编辑）。 */
+  descriptionGenerating?: boolean
   onDescriptionChange: (value: string) => void
   /** 仓库地址：提交与推送的远程落点，弹框内回显。 */
   repoUrl?: string
@@ -34,6 +34,7 @@ type PublishModalProps = {
 function PublishBranchModal({
   branchName,
   description,
+  descriptionGenerating = false,
   onDescriptionChange,
   repoUrl,
   generating,
@@ -80,10 +81,7 @@ function PublishBranchModal({
               <Steps current={generating.stepIndex} direction="vertical" size="small">
                 <Steps.Step title="打包本次改动" description="页面 / 接口 / 数据源 / 配置" />
                 <Steps.Step title="创建提交" description="写入本地仓库" />
-                <Steps.Step
-                  title={`推送到版本 ${branchName}`}
-                  description="同步到远端仓库"
-                />
+                <Steps.Step title={`推送到版本 ${branchName}`} description="同步到远端仓库" />
               </Steps>
             </div>
           ) : (
@@ -91,18 +89,43 @@ function PublishBranchModal({
               <div className={cx('workbench-generate-reminder')}>
                 <p className={cx('workbench-generate-reminder-title')}>提交并推送将执行以下操作:</p>
                 <ul>
-                  <li>打包本次全部改动(页面 / 接口 / 数据源 / 配置)</li>
                   <li>
-                    提交到本地仓库并推送到版本 <strong>{branchName}</strong>
+                    打包本次
+                    <span className={cx('workbench-generate-emphasis')}>全部改动</span>
+                    (页面 / 接口 / 数据源 / 配置)
                   </li>
-                  <li>版本号对应远端仓库中的一个分支名，每个版本各自占一个分支</li>
-                  <li>推送后该版本仍可继续开发，再次提交</li>
+                  <li>
+                    提交到本地仓库并推送到版本{' '}
+                    <span className={cx('workbench-generate-emphasis')}>{branchName}</span>
+                  </li>
+                  <li>
+                    版本号对应远端仓库中的一个分支名，
+                    <span className={cx('workbench-generate-emphasis')}>
+                      每个版本各自占一个分支
+                    </span>
+                  </li>
+                  <li>
+                    推送后该版本
+                    <span className={cx('workbench-generate-emphasis')}>仍可继续开发</span>
+                    ，再次提交
+                  </li>
+                  <li>
+                    下方填写的变更说明会作为本次的
+                    <span className={cx('workbench-generate-emphasis')}>业务变更记录</span>
+                    写入提交历史，后续可在该版本内追溯
+                  </li>
                 </ul>
               </div>
               <div className={cx('workbench-generate-field')}>
                 <label className={cx('workbench-generate-field-label')}>
                   <span className={cx('workbench-generate-required')}>*</span>
                   变更说明
+                  {/* 生成中给出进行时提示，但不禁用输入框：用户可以先写自己的。 */}
+                  {descriptionGenerating ? (
+                    <span className={cx('workbench-generate-field-hint')}>
+                      <LoadingOutlined aria-hidden="true" /> 正在根据本次改动生成…
+                    </span>
+                  ) : null}
                 </label>
                 <Input.TextArea
                   value={description}
@@ -149,14 +172,14 @@ function PublishBranchModal({
 
 type IterationModalProps = {
   /** 当前正在开发的分支名，作为「在当前分支继续」的落点。 */
-  currentBranchName: string;
+  currentBranchName: string
   /** 应用已有的分支名，用于即时提示"这个名字已经有了"。 */
-  existingBranchNames: string[];
-  choice: IterationBranchChoice;
-  onChoiceChange: (choice: IterationBranchChoice) => void;
-  onCancel: () => void;
-  onConfirm: () => void;
-};
+  existingBranchNames: string[]
+  choice: IterationBranchChoice
+  onChoiceChange: (choice: IterationBranchChoice) => void
+  onCancel: () => void
+  onConfirm: () => void
+}
 
 /**
  * 发起新迭代确认弹框：让用户选择在**当前分支继续**，还是**新建一条分支**。
@@ -173,10 +196,8 @@ function StartIterationModal({
   onConfirm
 }: IterationModalProps): JSX.Element {
   const newBranchName = choice.mode === 'new' ? choice.branchName : ''
-  const invalidReason =
-    choice.mode === 'new' ? validateBranchName(newBranchName) : undefined
-  const duplicated =
-    choice.mode === 'new' && existingBranchNames.includes(newBranchName.trim())
+  const invalidReason = choice.mode === 'new' ? validateBranchName(newBranchName) : undefined
+  const duplicated = choice.mode === 'new' && existingBranchNames.includes(newBranchName.trim())
   const canConfirm = choice.mode === 'current' || (!invalidReason && !duplicated)
 
   return (
@@ -222,9 +243,7 @@ function StartIterationModal({
             <div className={cx('workbench-generate-field')}>
               <Input
                 value={newBranchName}
-                onChange={(e) =>
-                  onChoiceChange({ mode: 'new', branchName: e.target.value })
-                }
+                onChange={(e) => onChoiceChange({ mode: 'new', branchName: e.target.value })}
                 placeholder="例如 v1.2"
                 status={invalidReason || duplicated ? 'error' : undefined}
               />
@@ -266,6 +285,8 @@ type WorkbenchVersionModalsProps = {
   /** 提交推送弹框：仓库地址（提交与推送的远程落点）。 */
   publishRepoUrl?: string
   publishDescription: string
+  /** 是否正在按本次改动生成变更说明。 */
+  descriptionGenerating?: boolean
   onDescriptionChange: (value: string) => void
   generating: VersionGenerateState
   onCancelPublish: () => void
@@ -286,6 +307,7 @@ export default function WorkbenchVersionModals({
   publishBranchName,
   publishRepoUrl,
   publishDescription,
+  descriptionGenerating,
   onDescriptionChange,
   generating,
   onCancelPublish,
@@ -306,6 +328,7 @@ export default function WorkbenchVersionModals({
         <PublishBranchModal
           branchName={publishBranchName}
           description={publishDescription}
+          descriptionGenerating={descriptionGenerating}
           onDescriptionChange={onDescriptionChange}
           repoUrl={publishRepoUrl}
           generating={generating}

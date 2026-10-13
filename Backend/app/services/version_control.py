@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -12,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.services.git_commit_message import ensure_board_number
+from app.services.version_publish import PUBLISH_REMOTE_NAME
 from app.services.workspace_process_registry import workspace_process_registry
 from app.workspace.workspace import _is_sensitive_path
 
@@ -75,6 +77,29 @@ class InspectAllVersionControlRequest(BaseModel):
 
     action: Literal["inspect_all"]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1)
+
+
+class SummarizeVersionControlRequest(BaseModel):
+    """校验一次"按本次改动生成变更说明"的请求。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: Literal["summarize"]
+    workspace_root: str = Field(alias="workspaceRoot", min_length=1)
+
+
+class SummarizeVersionControlResult(BaseModel):
+    """返回模型生成的业务摘要；生成不出来时为空串。
+
+    字段名刻意不用 `summary`：`preview_runtime_guard.record_product_interaction` 把
+    `data["summary"]` 当作**对象**读取（`data["summary"]["status"]`，为 conversation 流程
+    预留），动作数据里放字符串 `summary` 会让它 AttributeError 崩在流收尾处。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: Literal["summarize"] = "summarize"
+    change_summary: str = Field(alias="changeSummary")
 
 
 class CommitVersionControlRequest(BaseModel):
@@ -267,6 +292,271 @@ def commit_version_control(
         remainingDirty=after_snapshot.dirty,
         snapshot=after_snapshot,
     )
+
+
+# 生成的摘要上限，与前端「变更说明」输入框的 maxLength 同一口径。
+_SUMMARY_MAX_CHARS = 200
+# 喂给模型的文件清单条数上限：一轮开发可能动几百个文件，全量塞进提示词只会稀释信号。
+_SUMMARY_MAX_FILES = 60
+# 业务产物摘要里每类条目（页面 / 接口 / 实体）的条数上限。
+_SUMMARY_MAX_BUSINESS_ITEMS = 24
+
+_SUMMARY_SYSTEM_PROMPT = (
+    "你是研发交付助手。根据给定的『本轮业务产物』与『本次代码改动清单』，"
+    "写一条面向业务人员的变更说明，用于 Git 提交信息。要求："
+    "1) 用业务语言描述做了什么，不要出现文件路径、类名、函数名；"
+    "2) 一到三句话，中文，不分行、不加编号或 Markdown；"
+    f"3) 总长度不超过 {_SUMMARY_MAX_CHARS} 个字符；"
+    "4) 只输出这条说明本身，不要任何前后缀、解释或引号。"
+)
+
+
+async def summarize_version_control(
+    request: SummarizeVersionControlRequest,
+) -> SummarizeVersionControlResult:
+    """按本次推送会带上的改动生成一条业务变更说明，供提交弹窗预填。
+
+    注意口径是「本次推送会带上什么」，**不是**「工作区有什么未提交改动」：验收阶段
+    的 `AcceptanceCommitDock` 已经把这一轮的代码自动提交了，用户点「提交并推送」时
+    工作区通常是干净的，改动都在本地提交里（见 `_read_publish_base`）。
+
+    生成只是便利：读不到仓库、没有改动、产物缺失或模型调用失败时一律返回空串，
+    由前端保持空框让用户自己写。这里绝不抛错 —— 一个填默认值的动作不该把用户挡在
+    提交弹窗外。
+    """
+
+    try:
+        workspace_root = _resolve_workspace_root(request.workspace_root)
+        repository_root = _resolve_independent_repository_root(workspace_root)
+        _status_bytes, status_files = _read_status(repository_root)
+    except (VersionControlError, OSError):
+        return SummarizeVersionControlResult(changeSummary="")
+
+    business_digest = _read_business_digest(workspace_root)
+    change_digest = _read_change_digest(repository_root, status_files)
+    # 没有业务改动就没有可说明的内容，不必打扰模型。
+    if not change_digest:
+        return SummarizeVersionControlResult(changeSummary="")
+
+    prompt = (
+        f"【本轮业务产物】\n{business_digest or '（未找到已确认的规划产物）'}\n\n"
+        f"【本次代码改动清单】\n{change_digest}"
+    )
+
+    try:
+        summary = await _generate_summary_text(prompt)
+    except Exception:
+        # 模型侧任何异常都降级为空串，交给用户手写。
+        return SummarizeVersionControlResult(changeSummary="")
+    return SummarizeVersionControlResult(changeSummary=_normalize_summary(summary))
+
+
+async def _generate_summary_text(prompt: str) -> str:
+    """调用当前配置的聊天模型，取回纯文本摘要。
+
+    模型相关导入必须留在函数内：`app.agents` 会经 `app.agents.__init__` 拉起整棵 agent
+    树，其中 `app.services.development_review_files` 又反向 import 本模块，写成模块级
+    导入会构成循环（本模块被最先导入时直接 ImportError）。代价是测试要 patch 源头
+    `app.agents.model_factory.create_chat_model`，而不是本模块属性。
+
+    取文本必须走 `_coerce_content_text`，不能自己拼 content：推理模型（本项目实际用的
+    glm-5.2 就是）会把思考过程作为 `{"type": "thinking", ...}` block 混在 content 列表里，
+    与真正的正文并列。自己按 `item["text"]` 取值会把这些 block 读成空串、把正文整个漏掉，
+    表现为"模型明明答了，摘要却是空的"。
+    """
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from app.agents.messages import _coerce_content_text
+    from app.agents.model_factory import create_chat_model
+    from app.config import Settings
+
+    model = create_chat_model(Settings.from_env())
+    response = await model.ainvoke(
+        [SystemMessage(content=_SUMMARY_SYSTEM_PROMPT), HumanMessage(content=prompt)]
+    )
+    return _coerce_content_text(getattr(response, "content", response))
+
+
+def _normalize_summary(value: str) -> str:
+    """把模型输出收敛成单行、无引号、不超长的提交说明。"""
+
+    text = " ".join((value or "").split())
+    text = text.strip().strip('"').strip("'").strip()
+    if len(text) > _SUMMARY_MAX_CHARS:
+        text = text[:_SUMMARY_MAX_CHARS].rstrip()
+    return text
+
+
+def _read_publish_base(repository_root: Path) -> str | None:
+    """确定「本次推送的基线」——远端分支已经到哪，就从哪里算起。
+
+    发布流程把 `HEAD:refs/heads/<branch>` 强推上去（见 `version_publish.publish_version`），
+    所以「本次改动」= 本地有、远端没有的那部分。三种情况依次尝试：
+
+    1. 分支配了上游（`@{u}`）：直接用。
+    2. **发布过**：发布用的 remote 是 `devagentstudio-publish`，它按显式 refspec 推送，
+       **不会**配置 upstream（实测 `@{u}` 必然报 "no upstream configured"），但 `git push`
+       会更新远端跟踪引用，所以从 `refs/remotes/devagentstudio-publish/*` 取。这是第二次
+       及以后发布的正常路径 —— 只差这一点会让第二次发布把历史全量重算一遍。
+    3. **从未发布**：没有可比对象，以根提交为基线 —— 即"这个应用从模板初始化以来的全部
+       内容"，正是首次推送会整体交付的东西。
+
+    取不到基线时返回 None，调用方退化为只看工作区未提交改动。
+    """
+
+    upstream = _run_git(
+        repository_root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
+    )
+    if upstream.returncode == 0 and upstream.stdout.strip():
+        return upstream.stdout.strip()
+
+    published = _run_git(
+        repository_root,
+        [
+            "for-each-ref",
+            "--format=%(refname:short)",
+            f"refs/remotes/{PUBLISH_REMOTE_NAME}/",
+        ],
+    )
+    if published.returncode == 0 and published.stdout.strip():
+        return published.stdout.strip().splitlines()[0]
+
+    roots = _run_git(repository_root, ["rev-list", "--max-parents=0", "HEAD"])
+    if roots.returncode == 0 and roots.stdout.strip():
+        # 多根（合并过历史）时取最早那一个，保证基线足够靠前。
+        return roots.stdout.strip().splitlines()[-1]
+    return None
+
+
+def _read_change_digest(
+    repository_root: Path, status_files: list[VersionControlFile]
+) -> str:
+    """把「本次推送会带上」的业务改动整理成"路径 +N -M"清单。
+
+    两条来源合起来才是完整的推送内容：
+
+    - `git diff --numstat <基线>`：覆盖基线之后的**已提交**改动与**未提交**改动。
+      用 `workspace_process_registry` 这个仓库统一的 git 入口执行。
+    - 未跟踪文件：不在 diff 里，按状态补「（新增）」。新建的整页代码全靠这一条，
+      漏掉它新建页面在提示词里会完全看不见。
+
+    最后按 `_business_paths` 滤掉 `.devagentstudio` 平台产物：它们会随版本一起提交，
+    但不是业务内容。实测一个只有 Hello World 的应用，验收提交里 16 个文件有 14 个是
+    平台产物（build-runs、recovery sqlite、reports），不过滤的话模型会对着构建日志写摘要。
+
+    没有任何业务改动时返回空串，调用方据此跳过模型调用。
+    """
+
+    base = _read_publish_base(repository_root)
+    arguments = ["diff", "--numstat"] + ([base] if base else [])
+    completed = _run_git(repository_root, arguments, timeout=30)
+
+    stats: dict[str, tuple[int, int]] = {}
+    if completed.returncode == 0:
+        for line in completed.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            added, removed, path = parts
+            # 二进制文件给的是 "-"，按 0 计，避免 int() 抛错。
+            stats[path] = (
+                int(added) if added.isdigit() else 0,
+                int(removed) if removed.isdigit() else 0,
+            )
+
+    # 未跟踪文件补进来（diff 不包含它们）。
+    untracked = [item.path for item in status_files if item.untracked]
+    business_paths = _business_paths(list(stats) + untracked)
+    if not business_paths:
+        return ""
+
+    listed = business_paths[:_SUMMARY_MAX_FILES]
+    lines: list[str] = []
+    for path in listed:
+        if path in stats:
+            lines.append(f"  {path}  +{stats[path][0]} -{stats[path][1]}")
+        else:
+            lines.append(f"  {path}（新增）")
+    if len(business_paths) > _SUMMARY_MAX_FILES:
+        lines.append(f"  …另有 {len(business_paths) - _SUMMARY_MAX_FILES} 个文件未列出")
+
+    total_added = sum(stats[path][0] for path in business_paths if path in stats)
+    total_removed = sum(stats[path][1] for path in business_paths if path in stats)
+    lines.append(
+        f"  共 {len(business_paths)} 个文件，+{total_added} / -{total_removed}"
+    )
+    return "\n".join(lines)
+
+
+def _read_business_digest(workspace_root: Path) -> str:
+    """从已确认的规划产物里取出业务名清单（页面 / 接口 / 实体）。
+
+    刻意比 `iteration_service._build_iteration_section` 窄：那个函数是给 AGENTS.md 用的
+    完整摘要（含 application.json、UI 设计稿等），喂给一条 200 字说明属于浪费。这里只要
+    业务名，且条数封顶，保证提示词有界。
+    """
+
+    artifact_dir = workspace_root / ".devagentstudio"
+    lines: list[str] = []
+
+    product_plan = _load_artifact_json(artifact_dir / "plans" / "product-plan.json")
+    pages = product_plan.get("pages") if isinstance(product_plan, dict) else None
+    if isinstance(pages, list) and pages:
+        names: list[str] = []
+        for page in pages[:_SUMMARY_MAX_BUSINESS_ITEMS]:
+            if not isinstance(page, dict):
+                continue
+            name = str(page.get("name") or page.get("pageId") or "").strip()
+            description = str(page.get("description") or "").strip()
+            if name:
+                names.append(f"{name}（{description}）" if description else name)
+        if names:
+            lines.append("页面：" + "、".join(names))
+
+    tech_plan = _load_artifact_json(artifact_dir / "plans" / "technical-plan.json")
+    if isinstance(tech_plan, dict):
+        endpoints = tech_plan.get("endpoints")
+        if isinstance(endpoints, list) and endpoints:
+            labels: list[str] = []
+            for endpoint in endpoints[:_SUMMARY_MAX_BUSINESS_ITEMS]:
+                if not isinstance(endpoint, dict):
+                    continue
+                method = str(endpoint.get("method") or "").strip()
+                path = str(endpoint.get("path") or "").strip()
+                summary = str(
+                    endpoint.get("summary") or endpoint.get("name") or ""
+                ).strip()
+                label = " ".join(part for part in (method, path) if part)
+                if label:
+                    labels.append(f"{label}（{summary}）" if summary else label)
+            if labels:
+                lines.append("接口：" + "、".join(labels))
+
+        entities = tech_plan.get("entities")
+        if isinstance(entities, list) and entities:
+            entity_names = [
+                str(entity.get("name") or entity.get("id") or "").strip()
+                for entity in entities[:_SUMMARY_MAX_BUSINESS_ITEMS]
+                if isinstance(entity, dict)
+            ]
+            entity_names = [name for name in entity_names if name]
+            if entity_names:
+                lines.append("实体：" + "、".join(entity_names))
+
+    return "\n".join(lines)
+
+
+def _load_artifact_json(path: Path) -> dict[str, object] | None:
+    """安全加载规划产物 JSON，缺失或损坏时返回 None（摘要降级，不报错）。"""
+
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _resolve_workspace_root(value: str) -> Path:

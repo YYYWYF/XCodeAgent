@@ -27,6 +27,7 @@ import {
   resolveBranchChain
 } from '../service/applicationBranches'
 import { publishVersion } from '../service/versionPublish'
+import { summarizeVersionControl } from '../service/versionControl'
 import { startIteration } from '../service/iterationService'
 import { asMessageClause, createRepositoryBranch } from '../service/repositoryBranch'
 import type {
@@ -160,6 +161,8 @@ function WorkbenchPage({
   const [versionGenerating, setVersionGenerating] = useState<{ stepIndex: number } | null>(null)
   // 提交推送弹框：变更说明草稿。
   const [publishDescription, setPublishDescription] = useState('')
+  // 提交推送弹框：是否正在根据本次改动生成变更说明（生成期间弹窗照常可用）。
+  const [descriptionGenerating, setDescriptionGenerating] = useState(false)
   // 提交推送弹框是否开启。
   const [publishModalOpen, setPublishModalOpen] = useState(false)
   // 发起新迭代弹框是否开启。
@@ -423,12 +426,44 @@ function WorkbenchPage({
 
   const autoPublishShownRef = useRef(false)
 
+  // 生成期间用户是否已经动过输入框。生成是异步的，用户可能在模型返回前就先打字；
+  // 那种情况下不能拿模型结果覆盖他写的内容。
+  const descriptionEditedRef = useRef(false)
+
+  // 变更说明的手写入口：标记已编辑，之后模型返回不再覆盖。
+  const handleDescriptionChange = useCallback((value: string): void => {
+    descriptionEditedRef.current = true
+    setPublishDescription(value)
+  }, [])
+
+  /** 弹窗打开后按本次改动生成变更说明，预填进输入框。
+   *
+   * 不阻塞弹窗：先照旧打开，生成结果回来了再填。生成不出来（空串）或请求失败都保持
+   * 空框让用户自己写 —— 生成只是便利，不能把用户挡在提交之外。
+   */
+  const requestDescriptionDraft = useCallback((workspaceRoot: string): void => {
+    if (!workspaceRoot) return
+    setDescriptionGenerating(true)
+    void summarizeVersionControl(workspaceRoot)
+      .then((generated) => {
+        if (generated && !descriptionEditedRef.current) {
+          setPublishDescription(generated)
+        }
+      })
+      .catch(() => {
+        // 生成失败静默降级：留空框即可，不额外弹提示打扰提交流程。
+      })
+      .finally(() => setDescriptionGenerating(false))
+  }, [])
+
   // 打开提交并推送弹框。
   const handleOpenPublish = useCallback((): void => {
     setPublishDescription('')
     setVersionGenerating(null)
     setPublishModalOpen(true)
-  }, [])
+    descriptionEditedRef.current = false
+    requestDescriptionDraft(workspaceApplication.workspaceRoot || '')
+  }, [requestDescriptionDraft, workspaceApplication.workspaceRoot])
 
   // 进入工作台时若当前迭代已可发布，视为自动弹框已消费（避免一进来就打断阶段回看）；
   // 仅本会话内旅程推进到可发布时才自动弹出发布弹框。
@@ -445,7 +480,10 @@ function WorkbenchPage({
       autoPublishShownRef.current = true
       setPublishDescription('')
       setPublishModalOpen(true)
+      descriptionEditedRef.current = false
+      requestDescriptionDraft(workspaceApplication.workspaceRoot || '')
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versionReleasable])
 
   // 确认提交并推送：调后端真实 git 提交并推送到当前分支，三步进度实时推进。
@@ -749,7 +787,8 @@ function WorkbenchPage({
                   : undefined
               }
               publishDescription={publishDescription}
-              onDescriptionChange={setPublishDescription}
+              descriptionGenerating={descriptionGenerating}
+              onDescriptionChange={handleDescriptionChange}
               generating={versionGenerating}
               onCancelPublish={() => {
                 if (versionGenerating) return

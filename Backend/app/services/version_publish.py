@@ -116,7 +116,7 @@ def publish_version(
     report("push", "正在推送到应用分支…", 60)
 
     remote_url = build_authenticated_remote_url(request.repo_url)
-    remote_name = "devagentstudio-publish"
+    remote_name = PUBLISH_REMOTE_NAME
     _ensure_remote(repository_root, remote_name, remote_url)
 
     pushed = False
@@ -158,6 +158,9 @@ def publish_version(
         commitSha=commit_sha,
     )
 
+
+# 发布用的远端名。version_control 读取"远端已到哪"来界定本次推送范围，必须与此一致。
+PUBLISH_REMOTE_NAME = "devagentstudio-publish"
 
 _RUNTIME_ARTIFACT_PATHS = (
     ".devagentstudio/runtime",
