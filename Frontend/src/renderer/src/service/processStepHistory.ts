@@ -359,7 +359,12 @@ function completedWorkflowProcessSteps(
     }
     stepsById.set(step.id, step)
   }
-  if (stepsById.size === 0) {
+  // 新 Run 的开始事件已经明确执行边界；checkpoint timeline 可能包含来源 Run
+  // 的开发步骤，不能在尚无完成事件时将它们投影为本次恢复已完成的节点。
+  const hasCurrentRunStart = workflow.events.some(
+    (event) => event.type === 'workflow.run.started' || event.type === 'workflow.node.started'
+  )
+  if (stepsById.size === 0 && !hasCurrentRunStart) {
     const timeline = workflowTimeline(workflow)
     for (const [index, nodeName] of timeline.entries()) {
       const label = workflowNodeLabel(nodeName)

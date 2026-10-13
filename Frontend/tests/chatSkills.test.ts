@@ -1967,6 +1967,105 @@ test('单次修复工具直接展示主题文件活动，不提供子步骤展�
   }
 })
 
+test('重启后继续测试修复，不从 checkpoint timeline 补入开发阶段步骤', () => {
+  const checkpointTimeline = [
+    'inspect_workspace',
+    'prepare_build_tasks',
+    'build',
+    'unit_test',
+    'test_phase_confirmation',
+    'integration_test'
+  ]
+  const repairStep: ProcessStepRecord = {
+    id: 'workflow:small_task_repair',
+    kind: 'workflow',
+    status: 'running',
+    title: '正在执行 局部修复任务',
+    detail: '正在分析失败原因并准备局部修复。',
+    sequence: 1,
+    nodeName: 'small_task_repair',
+    attempt: 1
+  }
+  const toolStep: ProcessStepRecord = {
+    id: 'repair-read',
+    kind: 'tool',
+    status: 'running',
+    title: 'read_file',
+    detail: '正在读取文件：/frontend/src/App.tsx',
+    sequence: 2,
+    nodeName: 'small_task_repair',
+    attempt: 1
+  }
+  const workflow: WorkflowRunPayload = {
+    runId: 'recovery-child',
+    threadId: 'test-thread',
+    summary: { status: 'running', phase: 'small_task_repair' },
+    events: [
+      {
+        type: 'workflow.run.started',
+        status: 'running',
+        data: { resumeFrom: 'small_task_repair' }
+      },
+      {
+        type: 'workflow.node.started',
+        status: 'running',
+        nodeName: 'small_task_repair',
+        attempt: 1
+      }
+    ],
+    state: { timeline: checkpointTimeline },
+    result: { timeline: checkpointTimeline }
+  }
+  // 持久化再加载仍使用当前 Run 的边界，不能把来源 checkpoint 的完成记录带进新消息。
+  const restoredWorkflow: WorkflowRunPayload = JSON.parse(JSON.stringify(workflow))
+  for (const currentWorkflow of [workflow, restoredWorkflow]) {
+    assert.equal(processStepsForDisplay(undefined, currentWorkflow), undefined)
+    const displayed = processStepsForMessageDisplay([repairStep, toolStep], currentWorkflow) || []
+    assert.deepEqual(
+      displayed.map((step) => step.id),
+      [repairStep.id, toolStep.id]
+    )
+    const markup = renderToStaticMarkup(
+      createElement(ProcessSteps, { loading: true, steps: displayed })
+    )
+    assert.match(markup, /局部修复任务/)
+    assert.doesNotMatch(
+      markup,
+      /扫描工作区代码|构建任务 DAG|代码生成与构建协调|开发阶段单元测试|开发完成与测试阶段确认/
+    )
+  }
+  const completedWorkflow: WorkflowRunPayload = {
+    ...workflow,
+    events: [
+      ...workflow.events,
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'integration_test',
+        status: 'failed',
+        attempt: 1,
+        node: { id: 'integration_test', label: '集成测试与质量门禁' }
+      }
+    ]
+  }
+  const steps = processStepsForDisplay([repairStep, toolStep], completedWorkflow) || []
+  assert.deepEqual(steps.map((step) => step.nodeName).sort(), [
+    'integration_test',
+    'small_task_repair',
+    'small_task_repair'
+  ])
+})
+
+test('只有节点开始事件的恢复快照也不使用来源 timeline 伪造完成步骤', () => {
+  const workflow: WorkflowRunPayload = {
+    runId: 'repair-run',
+    threadId: 'test-thread',
+    summary: { status: 'running', phase: 'integration_test' },
+    events: [{ type: 'workflow.node.started', nodeName: 'integration_test', status: 'running' }],
+    state: { timeline: ['inspect_workspace', 'prepare_build_tasks', 'build', 'unit_test'] }
+  }
+  assert.equal(processStepsForMessageDisplay(undefined, workflow), undefined)
+})
+
 test('多轮局部修复工具只属于对应轮次，未归属工具仍可查看', () => {
   const steps: ProcessStepRecord[] = [
     {
