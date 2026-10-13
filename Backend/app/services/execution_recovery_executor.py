@@ -475,6 +475,26 @@ async def _apply_application_planning_transaction_authority(
         ) from exc
     values = getattr(snapshot, "values", {})
     values = values if isinstance(values, dict) else {}
+    if plan.target_node == "design_intent_analysis":
+        # 设计意图识别先读取输入，正式产物节点才取得生命周期 ownership；
+        # 识别失败时保留原审阅阶段，以同 thread、revision CAS 领取 child。
+        lifecycle = load_application_lifecycle(workspace)
+        if (
+            lifecycle is not None
+            and lifecycle.initialization.thread_id == source.thread_id
+            and lifecycle.initialization.status is ApplicationLifecycleStatus.AWAITING_USER
+            and lifecycle.initialization.stage in {
+                ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+                ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+            }
+            and lifecycle.revision == plan.lifecycle_revision
+            and str(values.get("active_run_id") or "") == source.run_id
+        ):
+            return plan.model_copy(update={
+                "lifecycle_ownership_mode": RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
+            })
     boundary = parse_application_planning_boundary(
         values.get("application_planning_recovery_boundary")
     )

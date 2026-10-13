@@ -104,6 +104,8 @@ DAG 中断候选由 `Backend/app/workspace/planning_interruption_documents.py` �
 
 - `agents/design_conversation/router.py` 与 `models.py` 共用当前产品对话语义契约（intent/change_level/suggested_phase），由既有 Policy 解析正式节点；不再生产旧 target 路由对象。调用失败使用 `fallback.py` 的保守语义，非法模型对象降级为零写入；回归为 `tests.test_product_conversation_policy`、`tests.test_application_design_conversation`。
 
+- `services/execution_recovery_executor.py` 对 design_intent_analysis 在取得产物 ownership 前的失败，仅在同 thread、同 lifecycle revision、同源 checkpoint Run 的待确认阶段采用 PRE_OWNERSHIP CAS；后续归属校验保持原规则，回归为 `tests.test_execution_recovery_executor`。
+
 - `services/planning_failure_diagnostic.py` 从同 Run/Thread 的失败 PlanningRun 主失败与各轮结构化 Issues 投影简明中文 `userMessage` 和详细 `message`，实时 Workflow AG-UI 与当前 Recovery 查询共用；查询只补充展示，不修改 Durable 失败身份或恢复动作。`ExecutionFailureEvidence.user_message` 与公共 `failureDiagnostic.userMessage` 是可选展示字段；前端 `service/recoveryFailureMessage.ts` 统一展示中文规划说明及明确模型错误码/HTTP 状态映射，技术信息保留在恢复卡详情。
 
 - Unit Candidate 模型调用失败由 `services/unit_model_failure.py` 在 SDK 调用边界分类。六个当前错误码与旧 `UNIT_GENERATION_INFRASTRUCTURE_FAILURE` 共用受限 Planning Recovery 门禁；Snapshot 保留原码及摘要。`services/unit_generation_orchestrator.py` 将分类写入 Controller 主 `PlanningRun.failure`，`protocols/workflow/runtime.py` 仅从同一 Run 的主失败投影到 Workflow summary、AG-UI custom/snapshot、RUN_ERROR 和显式 Durable `ExecutionFailureEvidence`。`services/execution_failure_classifier.py::public_failure_diagnostic` 为实时与刷新提供同一公开字段白名单，包括可选 `stage` 与 `providerErrorCode`；恢复节点仍由 `RecoveryActionPlan` 决定。前端 `service/agUiAgent.ts` 合并同 Run 的晚到通用终帧，`service/recoveryIncident.ts` 只在当前 source Run 的卡片显示可信模型诊断。
