@@ -1,6 +1,6 @@
 # DevAgent Studio Codebase Index
 
-Last updated: 2026-10-09
+Last updated: 2026-10-14
 
 Use this file before broad code exploration. It is a routing map, not full documentation: read the matching row, then inspect only the listed entry files and nearby code.
 
@@ -20,6 +20,8 @@ For small local edits that do not change structure or ownership, leave the index
 ## Top-Level Map
 
 ## Native Recovery Admission Contract
+
+集成测试安排 `small_task_repair` 后公开状态保持 `in_progress`，真实检查项失败仍留在矩阵与报告中，只有终止性失败进入 failed lifecycle。`services/small_task_context.py` 从编译诊断按命令 cwd 解析已授权且真实存在的源码候选，优先交给 SmallTask，并传递 `repair_task_plan.strategy`；不扩大 allowedPaths。SmallTask 使用现有 LangChain ModelCallLimitMiddleware 限制每次任务 24 轮模型调用，超限明确收口为失败；`middleware/small_task_cancellation.py` 和动态文件范围按内部 active Run 观察取消，防止同步修复线程在 End 后继续调用模型或工具。前端 End 不受普通写入只读门禁拦截，先等待本地流落盘/收口，再走原 AG-UI Plan Control；后端按 workspace/精确 Run 校验后等待真实 owner 取消，超时不释放锁。Pending Abandon、正式确认与其他 Run 保持各自边界。回归：`tests.test_integration_repair_progress`、`tests.test_workflow_run_control`、`pnpm test:connection-recovery`。
 
 二次修改正式修订的模板恢复实测见 `docs/ELECTRON_SECOND_MODIFICATION_RETRY_TEST_2026_10_08.md`。`execution_failure_classifier.py` 在模块判断前处理 WorkspaceBootstrapError：引擎失败为 template_engine 外部依赖，模板配置、包及运行校验失败为 template 业务错误，均保留原 Graph 重试属性。规划 Native Recovery 的 AG-UI 终帧保留节点最新 lifecycle，不用 admission 快照覆盖 continuation_ready；`applicationPlanningWorkflowState.ts` 以明确的 template_reconcile 节点优先于旧技术规划 lifecycle 展示模板阶段。用户显式重试对账到已完成且已签发 continuation 的当前规划时，`applicationPlanningRuntime.ts` 交回原续接，不重放模板或确认。`AiChatPanel` 的当前规划失败入口优先于模板启动遗留的预览重试；独立预览与普通二次修改恢复规则保持原归属。
 

@@ -251,9 +251,13 @@ test('结束局部修复后首次调试入场拒绝，再次调试仍新建执�
   }
   try {
     renderToStaticMarkup(createElement(Probe))
+    // 其他 DAG 会话的只读投影不能阻止本次精确 Run 的终止性清理。
+    params.applicationMutationReadonly = true
+    renderToStaticMarkup(createElement(Probe))
     await runtime!.handleEndPlan(source.runId)
     assert.equal(requests[0].forwardedProps.planControlRunId, source.runId)
     assert.equal(messages.at(-1)?.workflow?.summary.phase, 'plan_control')
+    params.applicationMutationReadonly = false
     renderToStaticMarkup(createElement(Probe))
     await runtime!.handleSend({ enabled: true, resumeFrom: 'integration_test' })
     assert.equal(requests.length, 2)
@@ -268,6 +272,127 @@ test('结束局部修复后首次调试入场拒绝，再次调试仍新建执�
   } finally {
     globalThis.fetch = originalFetch
     Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+  }
+})
+
+test('结束正在运行的修复必须等待旧流落盘和释放登记，再发送 End', async () => {
+  const savedWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }
+  })
+  const identity = buildSessionIdentity()
+  const lifecycle = buildIdleLifecycle()
+  const events: string[] = []
+  let messages: AgentChatMessage[] = []
+  let locked = false
+  let finishRepair!: (result: {
+    answer: string
+    workflow: WorkflowRunPayload
+    toolCalls: []
+  }) => void
+  let notifyStarted!: () => void
+  let notifyPersisting!: () => void
+  let releasePersistence!: () => void
+  const started = new Promise<void>((resolve) => {
+    notifyStarted = resolve
+  })
+  const persisting = new Promise<void>((resolve) => {
+    notifyPersisting = resolve
+  })
+  const persisted = new Promise<void>((resolve) => {
+    releasePersistence = resolve
+  })
+  const session = {
+    threadId: identity.threadId,
+    endpointUrl: 'http://agent.test/workflow/run',
+    /** 首次模拟修复流，第二次必须已释放本地登记才允许发送结束控制。 */
+    sendMessage: async (_message: string, options: { planControlAction?: string }) => {
+      if (!options.planControlAction) {
+        notifyStarted()
+        return new Promise((resolve) => {
+          finishRepair = resolve
+        })
+      }
+      events.push('end')
+      return {
+        answer: '计划已结束',
+        toolCalls: [],
+        workflow: {
+          runId: 'end-control',
+          threadId: identity.threadId,
+          events: [],
+          summary: {
+            status: 'completed',
+            phase: 'plan_control',
+            lifecycle,
+            planControl: { action: 'end', status: 'ended', targetRunId: 'repair-run' }
+          }
+        }
+      }
+    },
+    /** 模拟取消确认后 transport 返回，但会话持久化尚未完成。 */
+    stop: async (): Promise<void> => {
+      events.push('stop')
+      finishRepair({
+        answer: '已暂停',
+        toolCalls: [],
+        workflow: {
+          runId: 'repair-run',
+          threadId: identity.threadId,
+          events: [],
+          summary: { status: 'stopped', phase: 'small_task_repair' }
+        }
+      })
+    }
+  } as unknown as AgUiChatSession
+  const params = buildRuntimeParams({
+    activeSession: identity,
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: lifecycle,
+    agUiSessionsRef: { current: { [identity.key]: session } },
+    acquireSessionExecution: () => {
+      assert.equal(locked, false, '旧流收口前不能再次占用同一会话')
+      locked = true
+      events.push('acquire')
+      return undefined
+    },
+    releaseSessionExecution: () => {
+      locked = false
+      events.push('release')
+    },
+    persistSession: async (input) => {
+      if (input.messages.at(-1)?.workflow?.summary.phase === 'small_task_repair') {
+        notifyPersisting()
+        await persisted
+      }
+    },
+    onApplicationLifecycleChange: () => undefined
+  })
+  params.getSessionMessages = () => messages
+  params.setSessionMessages = (_key, update) => {
+    messages = typeof update === 'function' ? update(messages) : update
+  }
+  let runtime: ReturnType<typeof useWorkflowConversation> | undefined
+  /** 调用真实 Hook，覆盖点击发生在 React 尚未重渲染的边界。 */
+  function Probe(): ReactElement {
+    runtime = useWorkflowConversation(params)
+    return createElement('div')
+  }
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    const sending = runtime!.handleSend()
+    await started
+    const ending = runtime!.handleEndPlan('repair-run')
+    await persisting
+    assert.deepEqual(events, ['acquire', 'stop'])
+    releasePersistence()
+    await Promise.all([sending, ending])
+    assert.deepEqual(events, ['acquire', 'stop', 'release', 'acquire', 'end', 'release'])
+    assert.equal(messages.at(-1)?.workflow?.summary.phase, 'plan_control')
+  } finally {
+    releasePersistence()
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
   }
 })
 

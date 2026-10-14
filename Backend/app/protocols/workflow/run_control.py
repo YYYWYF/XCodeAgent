@@ -720,6 +720,17 @@ async def _execute_workbench_plan_control(
                 application_lifecycle_payload(lifecycle) if lifecycle is not None else None,
                 _plan_control_message(action, "already_ended"),
             )
+        # 生命周期可能滞后于正在执行的修复；释放锁之前必须先停止真实 owner。
+        if workflow_run_registry.is_active(target_run_id, workspace=workspace):
+            cancellation = await workflow_run_registry.cancel_and_wait(
+                target_run_id, workspace=workspace,
+            )
+            if cancellation not in {"cancelled", "not_running"}:
+                raise PlanControlError(
+                    status="failed",
+                    code="PLAN_CONTROL_RUN_STOP_FAILED",
+                    message="尚未确认当前运行停止，工作区未释放，请重试结束计划。",
+                )
         try:
             updated_lifecycle = end_workbench_execution(
                 workspace,

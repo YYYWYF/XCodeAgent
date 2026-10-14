@@ -721,6 +721,8 @@ export function useWorkflowConversation({
   const applicationLifecycleRef = useRef(applicationLifecycle)
   const connectionStateRef = useRef(connectionState)
   const planControlRequestRef = useRef<PlanControlRequestGuard>()
+  const endingPlanRef = useRef(false)
+  const runFinalizationRef = useRef<Record<string, { promise: Promise<void>; resolve: () => void }>>({})
   const activePlanControlContextRef = useRef<ActivePlanControlContext>()
   applicationLifecycleRef.current = applicationLifecycle
   connectionStateRef.current = connectionState
@@ -1173,6 +1175,7 @@ export function useWorkflowConversation({
     if (!trimmedMessage) return false
     if (
       applicationMutationReadonly &&
+      options?.planControlAction !== 'end' &&
       !(options?.executionRecovery && !recoveryMutationReadonly(applicationLifecycleRef.current))
     ) {
       // 只读会话在 ensureActiveSession 前失败，避免 B 会话因直接调用创建新的 mutation thread。
@@ -1363,6 +1366,8 @@ export function useWorkflowConversation({
       releaseSessionExecution(identity.key)
       setRunStates((current) => omitKey(current, identity.key))
       stopRequestedRef.current[identity.key] = false
+      runFinalizationRef.current[identity.key]?.resolve()
+      delete runFinalizationRef.current[identity.key]
     }
     const updateAssistantMessage = (
       content: string,
@@ -1418,6 +1423,15 @@ export function useWorkflowConversation({
       onApplicationLifecycleChange(lifecycle)
     }
 
+    // 结束操作必须等待完整的本地收口，而不只是等待 AG-UI transport 返回。
+    let resolveFinalization!: () => void
+    const finalization = new Promise<void>((resolve) => {
+      resolveFinalization = resolve
+    })
+    runFinalizationRef.current[identity.key] = {
+      promise: finalization,
+      resolve: resolveFinalization
+    }
     try {
       await persistSession({
         editorMode: identity.editorMode,
@@ -2471,51 +2485,86 @@ export function useWorkflowConversation({
     })
     const targetRunId = runId || execution?.runId || activeWorkflow?.runId
     const controlIdentity = activeRun?.identity || matchingActiveSession || activeSession
-    if (loading || workspaceBusy || !targetRunId || !controlIdentity) return
-    const endedSessionKeys = Array.from(
-      new Set(
-        [activeRuntimeKey, controlIdentity?.key, draftKey].filter((key): key is string =>
-          Boolean(key)
+    if (endingPlanRef.current || !targetRunId || !controlIdentity) return
+    endingPlanRef.current = true
+    try {
+      // End 是精确 Run 的清理操作，不能被普通写入只读锁静默拦截。
+      // 当前仍有本地修复流时，先确认取消并等待落盘/finally 收口，避免结束回执被旧流覆盖。
+      const finalization = runFinalizationRef.current[controlIdentity.key]?.promise
+      if (finalization) {
+        stopRequestedRef.current[controlIdentity.key] = true
+        if (recoveringSourceRunId) {
+          const cancellation = await cancelWorkflowRun(
+            activeWorkflow?.threadId || controlIdentity.threadId,
+            targetRunId,
+            controlIdentity.workspaceRoot
+          )
+          if (!['cancelled', 'pending_confirmation', 'not_running'].includes(cancellation.status)) {
+            stopRequestedRef.current[controlIdentity.key] = false
+            throw new Error(cancellation.message || '尚未确认局部修复停止，请重试结束计划。')
+          }
+        } else {
+          const session = agUiSessionsRef.current[controlIdentity.key]
+          if (!session) throw new Error('无法确认当前本地运行已停止，请重试结束计划。')
+          await session.stop().catch((error) => {
+            stopRequestedRef.current[controlIdentity.key] = false
+            throw error
+          })
+        }
+        await finalization
+      }
+      const endedSessionKeys = Array.from(
+        new Set(
+          [activeRuntimeKey, controlIdentity?.key, draftKey].filter((key): key is string =>
+            Boolean(key)
+          )
         )
       )
-    )
 
-    // 只有 Backend 返回成功的权威 lifecycle 后，前端才标记结束并解锁计划输入。
-    const planControlRequest = createPlanControlRequestGuard(controlIdentity, targetRunId)
-    const ended = await sendWorkflowMessage('结束当前计划。', {
-      planControlAction: 'end',
-      planControlRunId: targetRunId,
-      selectedPageId,
-      sessionIdentity: controlIdentity,
-      planControlRequest,
-      titleFrom: '结束计划'
-    })
-    if (
-      !ended ||
-      !isCurrentPlanControlRequest(
+      // 只有 Backend 返回成功的权威 lifecycle 后，前端才标记结束并解锁计划输入。
+      const planControlRequest = createPlanControlRequestGuard(controlIdentity, targetRunId)
+      const ended = await sendWorkflowMessage('结束当前计划。', {
+        planControlAction: 'end',
+        planControlRunId: targetRunId,
+        selectedPageId,
+        sessionIdentity: controlIdentity,
         planControlRequest,
-        planControlRequestRef.current,
-        activePlanControlContextRef.current
-      ) ||
-      endedSessionKeys.length === 0
-    ) {
-      return
+        titleFrom: '结束计划'
+      })
+      if (
+        !ended ||
+        !isCurrentPlanControlRequest(
+          planControlRequest,
+          planControlRequestRef.current,
+          activePlanControlContextRef.current
+        ) ||
+        endedSessionKeys.length === 0
+      ) {
+        return
+      }
+      setEndedPlanSessionKeys((current) => {
+        const next = { ...current }
+        endedSessionKeys.forEach((key) => {
+          next[key] = true
+        })
+        return next
+      })
+      // 成功结束只清理本次会话持有的恢复错误，失败回执和其它会话不受影响。
+      setRecoveryErrors((current) => {
+        const next = { ...current }
+        endedSessionKeys.forEach((key) => {
+          delete next[key]
+        })
+        return next
+      })
+    } catch (error) {
+      setRecoveryErrorForSession(
+        controlIdentity.key,
+        error instanceof Error ? error.message : '结束计划失败，请重试。'
+      )
+    } finally {
+      endingPlanRef.current = false
     }
-    setEndedPlanSessionKeys((current) => {
-      const next = { ...current }
-      endedSessionKeys.forEach((key) => {
-        next[key] = true
-      })
-      return next
-    })
-    // 成功结束只清理本次会话持有的恢复错误，失败回执和其它会话不受影响。
-    setRecoveryErrors((current) => {
-      const next = { ...current }
-      endedSessionKeys.forEach((key) => {
-        delete next[key]
-      })
-      return next
-    })
   }
 
   /** 在当前 Run 已暂停等待时暂停计划，但保留 checkpoint 和恢复入口。 */

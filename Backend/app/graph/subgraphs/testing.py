@@ -1969,6 +1969,8 @@ def integration_test(state: ProjectState) -> dict:
         if waiting_for_test_decision
         else "completed"
         if quality_gate_passed
+        else "in_progress"
+        if result.get("integration_next_action") == "small_task_repair"
         else "failed"
     )
     resumed_build_checks_completed = (

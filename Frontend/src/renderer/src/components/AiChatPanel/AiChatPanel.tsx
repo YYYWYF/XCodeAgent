@@ -5113,7 +5113,7 @@ export default function AiChatPanel({
                       testEntryGate={applicationLifecycle?.testEntryGate}
                       onAccept={handleAcceptPreview}
                       onConfirmInteraction={handleConfirmPlanInteraction}
-                      onEnd={() => void handleEndPlan(scopedExecution?.runId)}
+                      onEnd={() => handleEndPlan(scopedExecution?.runId)}
                       onOpenPreview={() => void handleOpenFullscreenPreview()}
                       onRetry={() => void handleContinueStoppedPlan(latestWorkflowForDisplay)}
                       onStop={

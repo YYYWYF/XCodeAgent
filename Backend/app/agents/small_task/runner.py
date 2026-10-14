@@ -30,7 +30,10 @@ def build_small_task_prompt(packet: dict[str, Any]) -> str:
         "Execute exactly one bounded coding task from the packet below.\n"
         "Before writing, compare the requested change with the packet's confirmedContext, "
         "allowedPaths, engineeringAcceptanceChecks, and businessAcceptanceChecks. Read in this order: "
-        "packet.candidateFiles first, then "
+        "packet.candidateFiles first. Follow packet.repairStrategy when supplied: once the "
+        "reported source error is confirmed, apply the bounded fix instead of repeatedly "
+        "reading build configuration. Read unchanged files only once unless a new diagnostic "
+        "requires another range. Then read "
         "the narrowest relevant source directory under allowedPaths, then package or build metadata "
         "only when verification requires it. Never inspect node_modules, dist, build, target, cache, "
         "or generated dependency contents; use package manifests and lockfiles when dependency names "
@@ -63,7 +66,10 @@ def invoke_small_task_agent(
 
     from app.agents import create_agent_bundle
 
-    with small_task_path_scope(_string_list(packet.get("allowedPaths"), limit=100)):
+    with small_task_path_scope(
+        _string_list(packet.get("allowedPaths"), limit=100),
+        run_id=str(packet.get("executionRunId") or ""),
+    ):
         return invoke_agent_with_tool_activity(
             create_agent_bundle(workspace, selected_skill_names).small_task,
             {"messages": [{"role": "user", "content": build_small_task_prompt(packet)}]},

@@ -27,7 +27,7 @@ type Props = {
   testEntryGate?: TestEntryGate
   onAccept: () => Promise<boolean>
   onConfirmInteraction: (decision: 'reject' | 'once' | 'always') => void
-  onEnd: () => void
+  onEnd: () => void | Promise<void>
   onOpenPreview: () => void
   onRetry: () => void
   onStop: () => void
