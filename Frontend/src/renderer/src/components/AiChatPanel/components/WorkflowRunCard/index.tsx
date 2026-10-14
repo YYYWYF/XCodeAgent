@@ -2538,7 +2538,7 @@ export function buildClarificationContinuationMessage(
     .map((question, index) => {
       const key = clarificationQuestionKey(question, index)
       const value = answers[key]
-      const answer = clarificationAnswerText(value)
+      const answer = clarificationAnswerText(value, question)
       if (!answer || !String(answer).trim()) return ''
       return `- ${
         question.header || question.dimension || `问题${index + 1}`
@@ -2551,16 +2551,26 @@ export function buildClarificationContinuationMessage(
   return answerLines.join('\n')
 }
 
-function clarificationAnswerText(value: WorkflowClarificationAnswer | undefined): string {
+/** 展示选择项的中文标签，协议枚举仍由原始 answers 单独提交。 */
+function clarificationAnswerText(
+  value: WorkflowClarificationAnswer | undefined,
+  question: WorkflowClarificationQuestion
+): string {
+  /** 只转换题目声明的选项值，保留自由输入和其他补充原文。 */
+  const choiceLabel = (selected: string): string =>
+    question.type === 'text'
+      ? selected
+      : question.options?.find((option) => (option.value || option.label) === selected)?.label ||
+        selected
   if (typeof value === 'object' && value && !Array.isArray(value) && 'selected' in value) {
     const selected = selectedAnswerValues(value).filter((item) => item !== OTHER_OPTION_VALUE)
-    const parts = selected.length > 0 ? [`已选：${selected.join('、')}`] : []
+    const parts = selected.length > 0 ? [`已选：${selected.map(choiceLabel).join('、')}`] : []
     const other = answerOtherText(value).trim()
     if (other) parts.push(`其他补充：${other}`)
     return parts.join('；')
   }
-  if (Array.isArray(value)) return value.join('、')
-  return typeof value === 'string' ? value : ''
+  if (Array.isArray(value)) return value.map(choiceLabel).join('、')
+  return typeof value === 'string' ? choiceLabel(value) : ''
 }
 
 // 从 Workflow payload 的多个位置读取待确认载荷，兼容流式快照、最终结果和自定义事件。

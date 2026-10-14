@@ -133,7 +133,7 @@ def normalize_small_task_result(agent_note: str) -> dict[str, Any]:
 
 
 def _read_small_task_output(agent_note: str) -> tuple[dict[str, Any], str | None]:
-    """只接收完整结果对象，禁止把工具参数或损坏 JSON 的嵌套对象当成执行结果。"""
+    """接收唯一完整结果对象，允许前置说明，禁止从工具参数或损坏 JSON 内捞取结果。"""
 
     text = agent_note.strip()
     if not text or text == NO_AGENT_TEXT:
@@ -144,6 +144,17 @@ def _read_small_task_output(agent_note: str) -> tuple[dict[str, Any], str | None
         lines = text.splitlines()
         if len(lines) >= 3 and lines[-1].strip() == "```":
             text = "\n".join(lines[1:-1]).strip()
+    # 模型可能在最终结果前附带说明；只剥离不含 JSON 结构的独立说明行。
+    # 必须解析剩余全文，不能从损坏外层、数组或多个结果中选择一个“成功”对象。
+    object_start = text.find("{")
+    if object_start > 0:
+        prefix = text[:object_start]
+        if (
+            "[" not in prefix
+            and "```" not in prefix
+            and not prefix.rsplit("\n", 1)[-1].strip()
+        ):
+            text = text[object_start:]
     try:
         payload = json.loads(text)
     except (ValueError, TypeError):

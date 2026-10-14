@@ -37,6 +37,7 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/conversationMode'
 import { workflowDebugBuildScope } from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
 import WorkflowRunCard, {
+  buildClarificationContinuationMessage,
   buildToolActivityPlacement,
   PlanConfirmationCard,
   workflowOriginalRequest
@@ -1723,8 +1724,10 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
 
   assert.ok(snapshot)
   assert.match(markup, /执行计划进度/)
-  assert.match(markup, /page:home/)
-  assert.match(markup, /retained 0 \/ candidate 1/)
+  assert.equal(snapshot.units[0].id, 'page:home')
+  assert.match(markup, /未命名页面/)
+  assert.match(markup, /新增 1 项任务/)
+  assert.doesNotMatch(markup, /page:home|retained 0 \/ candidate 1/)
   assert.doesNotMatch(
     JSON.stringify(snapshot),
     /raw-model-output|\/workspace\/build-task-plan\.json|candidate:secret/
@@ -2251,6 +2254,58 @@ test('单元测试生成期间展示运行中的测试检查步骤', () => {
   assert.match(markup, /检查中/)
   assert.match(markup, /aria-busy="true"/)
   assert.match(markup, /anticon-spin/)
+})
+
+test('各阶段跳过和执行的对话使用中文选项标签，协议答案保持不变', () => {
+  for (const [mode, header, skipLabel] of [
+    ['unit_test_confirmation', '单元测试', '是，跳过单元测试'],
+    ['frontend_performance_confirmation', '前端性能测试', '是，跳过性能测试']
+  ] as const) {
+    const workflow: WorkflowRunPayload = {
+      runId: 'run-test-choice',
+      threadId: 'thread-test-choice',
+      events: [],
+      summary: {
+        request: '开发年龄录入页面',
+        status: 'requires_user_input',
+        clarification: {
+          mode,
+          status: 'requires_user_input',
+          questions: [
+            {
+              id: mode,
+              header,
+              question: `是否跳过${header}？`,
+              type: 'choice',
+              options: [
+                { label: skipLabel, value: 'skip' },
+                { label: '否，继续执行', value: 'run' }
+              ]
+            }
+          ]
+        }
+      }
+    }
+    for (const decision of ['skip', 'run'] as const) {
+      const answers = { [mode]: decision }
+      const message = buildClarificationContinuationMessage(workflow, answers)
+      assert.match(message, new RegExp(`回答：${decision === 'skip' ? skipLabel : '否，继续执行'}`))
+      assert.doesNotMatch(message, /回答：(skip|run)/)
+      assert.deepEqual(answers, { [mode]: decision })
+    }
+    assert.match(
+      buildClarificationContinuationMessage(workflow, {
+        [mode]: { selected: ['skip'], other: '下次再执行' }
+      }),
+      new RegExp(`已选：${skipLabel}；其他补充：下次再执行`)
+    )
+    assert.match(
+      buildClarificationContinuationMessage(workflow, { [mode]: ['run'] }),
+      /回答：否，继续执行/
+    )
+    workflow.summary.clarification!.questions![0].type = 'text'
+    assert.match(buildClarificationContinuationMessage(workflow, { [mode]: 'run' }), /回答：run/)
+  }
 })
 
 test('构建完成后展示单元测试跳过确认按钮', () => {
