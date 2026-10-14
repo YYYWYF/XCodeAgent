@@ -268,10 +268,19 @@
   }
 
   > .ant-collapse-header {
+    // 无默认折叠图标时按块布局约束宽度，避免 Ant Design 的头部文本按长行撑开。
+    display: block;
     align-items: center;
     min-width: 0;
-    padding: 12px 54px 12px 14px;
+    padding: 12px 14px;
     color: var(--wb-text-primary);
+
+    > .ant-collapse-header-text {
+      display: block;
+      min-width: 0;
+      width: 100%;
+      max-width: 100%;
+    }
   }
 
   > .ant-collapse-content {
@@ -309,19 +318,55 @@
   display: flex;
   min-width: 0;
   width: 100%;
+  max-width: 100%;
   flex: 1 1 auto;
   flex-direction: column;
 }
 
 .@{class-prefix}-workflow-build-task-header {
-  display: flex;
+  display: grid;
   min-width: 0;
-  align-items: center;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: flex-start;
   gap: 12px;
 
   .ant-tag {
     flex: 0 0 auto;
     margin-right: 0;
+  }
+}
+
+.@{class-prefix}-workflow-build-task-footer {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-border);
+
+  .ant-tag {
+    margin: 0;
+  }
+}
+
+.@{class-prefix}-workflow-build-task-details-toggle.ant-btn {
+  color: var(--wb-text-secondary);
+
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: 1px;
   }
 }
 

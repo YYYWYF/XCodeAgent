@@ -25,6 +25,7 @@ import WorkflowRunCard, {
   BuildExecutionRunCard
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import CodeReviewCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/CodeReviewCard'
+import { splitBuildTaskInstructions } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/buildTaskInstructionRows'
 import ReviewPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ReviewPhaseConfirmationCard'
 import {
   deriveDisplayedPlanExecutionMode,
@@ -33,7 +34,6 @@ import {
   planExecutionContextForPage,
   planExecutionForPage,
   planExecutionShowsDebugResume,
-  resolveWorkflowForDisplay,
   shouldRenderPlanExecutionDock,
   withWorkflowExecutionStatus,
   workflowCodeReviewRetry,
@@ -1680,6 +1680,57 @@ test('API 设计门禁在全部完成时仍展示字段映射概览', () => {
   assert.equal((markup.match(/查看映射/g) || []).length, 2)
   assert.match(markup, /确认并检测/)
   assert.match(markup, /ant-alert-success/)
+})
+
+test('任务说明按连续序号拆行，保留路径、版本号和未编号说明', () => {
+  assert.deepEqual(
+    splitBuildTaskInstructions(
+      '1. 创建 frontend/src/App.tsx，使用 React 18.2.0。 2. 配置 API /api/age。 3. 验证构建。'
+    ),
+    [
+      { number: 1, content: '创建 frontend/src/App.tsx，使用 React 18.2.0。' },
+      { number: 2, content: '配置 API /api/age。' },
+      { number: 3, content: '验证构建。' }
+    ]
+  )
+  assert.deepEqual(splitBuildTaskInstructions('执行说明\n1、创建对象\n2、验证结果'), [
+    { content: '执行说明' },
+    { number: 1, content: '创建对象' },
+    { number: 2, content: '验证结果' }
+  ])
+  assert.deepEqual(splitBuildTaskInstructions('支持 Node 20.19.0'), [
+    { content: '支持 Node 20.19.0' }
+  ])
+  assert.deepEqual(splitBuildTaskInstructions('  '), [])
+})
+
+test('执行卡片默认逐行收起编号说明，状态与详情箭头位于底栏', () => {
+  const markup = renderToStaticMarkup(
+    createElement(BuildExecutionRunCard, {
+      status: 'completed',
+      executionSlice: {
+        scope: { type: 'application', targetId: 'application' },
+        tasks: [
+          {
+            id: 'dto',
+            title: '创建请求与响应对象',
+            status: 'completed',
+            description:
+              '1. 创建请求对象，保留必填字段。 2. 创建响应对象，保留确认类型。 3. 验证对象映射。',
+            targetFiles: ['backend/src/Input.java']
+          }
+        ]
+      }
+    })
+  )
+  assert.equal((markup.match(/workflow-build-instruction-row[^"<>]*collapsed/g) || []).length, 3)
+  const footer = markup.slice(markup.indexOf('workflow-build-task-footer'))
+  assert.ok(markup.indexOf('workflow-build-task-footer') > markup.indexOf('验证对象映射。'))
+  assert.match(footer, /workflow-build-task-status-tag/)
+  assert.match(footer, /可形成检查点/)
+  assert.match(footer, /aria-expanded="false" aria-label="展开任务详情：创建请求与响应对象"/)
+  assert.doesNotMatch(markup, /ant-collapse-arrow/)
+  assert.doesNotMatch(markup, /任务 ID/)
 })
 
 test('构建卡片将已满足要求的任务展示为完成，并与其他状态保持一致排序', () => {

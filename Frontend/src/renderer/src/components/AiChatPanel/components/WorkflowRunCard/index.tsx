@@ -2,6 +2,7 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
+  DownOutlined,
   LoadingOutlined,
   PauseCircleOutlined
 } from '@ant-design/icons'
@@ -56,6 +57,7 @@ import ConfirmationArtifact from './ConfirmationArtifact'
 import RevisionImpactReview from '../ApplicationRevisionCard/RevisionImpactReview'
 import RevisionDraftReview from '../ApplicationRevisionCard/RevisionDraftReview'
 import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
+import BuildTaskInstructions from './BuildTaskInstructions'
 import DetailReview from './DetailReview'
 import ApiDesignReadinessGateCard from './ApiDesignReadinessGateCard'
 import type { ApiDesignConfigTarget } from './ApiDesignConfigModal'
@@ -1287,6 +1289,13 @@ function BuildExecutionSliceProgress({
   const displayTasks = sortBuildTasksForDisplay(tasks)
   const expandedTaskKeys = new Set(activeTaskKeys)
 
+  /** 仅由底栏箭头切换任务详情，行内展开不会触发整张任务卡片。 */
+  const toggleTaskDetails = (id: string): void => {
+    setActiveTaskKeys((current) =>
+      current.includes(id) ? current.filter((key) => key !== id) : [...current, id]
+    )
+  }
+
   return (
     <div className={cx('workflow-build-progress')}>
       <div className={cx('workflow-build-progress-header')}>
@@ -1355,10 +1364,7 @@ function BuildExecutionSliceProgress({
             activeKey={activeTaskKeys}
             className={cx('workflow-build-task-list')}
             expandIconPosition="right"
-            onChange={(keys) => {
-              const nextKeys = Array.isArray(keys) ? keys : [keys]
-              setActiveTaskKeys(nextKeys.map(String))
-            }}
+            collapsible="icon"
           >
             {displayTasks.map((task) => (
               <Collapse.Panel
@@ -1366,12 +1372,19 @@ function BuildExecutionSliceProgress({
                 header={
                   <BuildExecutionTaskHeader
                     expanded={expandedTaskKeys.has(taskId(task))}
+                    onToggle={() => toggleTaskDetails(taskId(task))}
                     task={task}
                   />
                 }
                 key={taskId(task)}
+                showArrow={false}
               >
                 <BuildExecutionTaskDetails task={task} />
+                <BuildExecutionTaskFooter
+                  expanded
+                  onToggle={() => toggleTaskDetails(taskId(task))}
+                  task={task}
+                />
               </Collapse.Panel>
             ))}
           </Collapse>
@@ -1441,9 +1454,11 @@ function BuildProgressStat({
 
 function BuildExecutionTaskHeader({
   expanded,
+  onToggle,
   task
 }: {
   expanded: boolean
+  onToggle: () => void
   task: WorkflowBuildExecutionTask
 }): ReactElement {
   /** 渲染可折叠任务卡片的头部摘要。 */
@@ -1459,27 +1474,57 @@ function BuildExecutionTaskHeader({
         </span>
         <div className={cx('workflow-build-task-title')}>
           <Text strong>{title}</Text>
-          <Text type="secondary">{description}</Text>
+          <BuildTaskInstructions description={description} />
         </div>
-        <Tag
-          className={cx('workflow-build-task-status-tag', status)}
-          color={taskStatusColor(status)}
-        >
-          {taskStatusText(status)}
-        </Tag>
-        {/* 弱提醒：任务完成且确实写过文件时标记"可形成检查点"，只做标记、不弹窗。 */}
-        {isCheckpointCandidate(task) ? (
-          <Tag
-            className={cx('workflow-build-task-checkpoint-tag')}
-            title="本轮改动已落盘，可在版本入口创建提交"
-          >
-            可形成检查点
-          </Tag>
-        ) : null}
       </div>
       {buildToolActivityPlacement(task, expanded) === 'header' && (
         <BuildToolActivity activity={task.activeToolActivity!} />
       )}
+      {!expanded && <BuildExecutionTaskFooter expanded={false} onToggle={onToggle} task={task} />}
+    </div>
+  )
+}
+
+/** 在卡片最底部展示任务状态、检查点提示及详情展开入口。 */
+function BuildExecutionTaskFooter({
+  expanded,
+  onToggle,
+  task
+}: {
+  expanded: boolean
+  onToggle: () => void
+  task: WorkflowBuildExecutionTask
+}): ReactElement {
+  const status = buildTaskDisplayStatus(task.status)
+  const title = displayTaskTitle(task)
+  return (
+    <div className={cx('workflow-build-task-footer')}>
+      <Tag className={cx('workflow-build-task-status-tag', status)} color={taskStatusColor(status)}>
+        {taskStatusText(status)}
+      </Tag>
+      {/* 弱提醒：任务完成且确实写过文件时标记"可形成检查点"，只做标记、不弹窗。 */}
+      {isCheckpointCandidate(task) ? (
+        <Tag
+          className={cx('workflow-build-task-checkpoint-tag')}
+          title="本轮改动已落盘，可在版本入口创建提交"
+        >
+          可形成检查点
+        </Tag>
+      ) : null}
+      <Button
+        aria-expanded={expanded}
+        aria-label={`${expanded ? '收起' : '展开'}任务详情：${title}`}
+        className={cx('workflow-build-task-details-toggle')}
+        icon={<DownOutlined rotate={expanded ? 180 : 0} />}
+        onClick={(event) => {
+          event.stopPropagation()
+          onToggle()
+        }}
+        onKeyDown={(event) => event.stopPropagation()}
+        onKeyPress={(event) => event.stopPropagation()}
+        size="small"
+        type="text"
+      />
     </div>
   )
 }
