@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import './dagConfirmationPresentation.test'
 import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'

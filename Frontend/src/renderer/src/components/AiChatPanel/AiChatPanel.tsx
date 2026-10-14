@@ -5018,7 +5018,6 @@ export default function AiChatPanel({
                   loading || workflowInputLocked || otherSessionExecutionLocked
                 }
                 conversationRunning={conversationRunning}
-                dagConfirmationOwnedByStageOutput={hasOwnedPendingPlan}
                 dagPendingPlanCompletion={dagPendingPlanCompletion}
                 entityDesignSession={entityDesignChatActive}
                 designPhasePlanning={isApplicationPlanningPhase}

@@ -326,8 +326,6 @@ type MessageListProps = {
   applicationTemplatePreparationEligible: boolean
   codeChangeActionsDisabled: boolean
   conversationRunning: boolean
-  /** 当前会话拥有待确认 DAG 时，完整确认表单固定由右侧工作区承载。 */
-  dagConfirmationOwnedByStageOutput?: boolean
   /** 当前 owner 的待确认任务身份与可信进度摘要。 */
   dagPendingPlanCompletion?: DagPendingPlanCompletion
   entityDesignSession?: boolean
@@ -412,7 +410,6 @@ export default function MessageList({
   applicationTemplatePreparationEligible,
   codeChangeActionsDisabled,
   conversationRunning,
-  dagConfirmationOwnedByStageOutput = false,
   dagPendingPlanCompletion,
   entityDesignSession = false,
   emptyContent,
@@ -810,11 +807,9 @@ export default function MessageList({
                 message.workflow && messageClarification?.mode === 'review_phase_confirmation'
               const isAcceptancePhaseConfirmationCard =
                 message.workflow && messageClarification?.mode === 'acceptance_phase_confirmation'
-              // Build DAG 确认只属于右侧阶段产物；普通消息流不恢复或复制确认卡。
-              const dagConfirmationMovedToStageOutput = Boolean(
-                dagConfirmationOwnedByStageOutput &&
-                  messageClarification?.mode === 'build_task_plan_confirmation'
-              )
+              // 完整 DAG 确认表单始终由右侧承载，Pending 消费后也不在左侧恢复历史表单。
+              const isDagConfirmation =
+                messageClarification?.mode === 'build_task_plan_confirmation'
               const isCodeReviewCard = workflowShouldShowCodeReview(message.workflow)
               // 创建规划的产品/技术阶段也展示 WorkflowRunCard，保证运行与确认状态连续可见。
               const isPlanningStageCard =
@@ -827,9 +822,8 @@ export default function MessageList({
                 planningCardWorkflow &&
                   (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
                   !isDuplicatePlanningReview &&
-                  ((requiresClarification &&
-                    !isUiDesignConfirmationCard &&
-                    !dagConfirmationMovedToStageOutput) ||
+                  !isDagConfirmation &&
+                  ((requiresClarification && !isUiDesignConfirmationCard) ||
                     isLatestUiDesignConfirmationCard ||
                     isPlanningStageCard ||
                     isLaunchProjectCard ||
