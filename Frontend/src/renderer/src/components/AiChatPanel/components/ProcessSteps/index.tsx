@@ -497,9 +497,8 @@ function IntegrationTestChecklist({
             <SafetyCertificateOutlined />
           </span>
           <span>
-            <Text className={cx('integration-test-checklist-eyebrow')}>QUALITY GATE</Text>
             <Text className={cx('integration-test-checklist-title')} strong>
-              集成检查矩阵
+              测试检查步骤
             </Text>
           </span>
         </div>
@@ -540,9 +539,6 @@ function IntegrationTestChecklist({
               <span className={cx('integration-test-check-content')}>
                 <span className={cx('integration-test-check-heading')}>
                   <Text>{check.name}</Text>
-                  <span className={cx('integration-test-check-scope')}>
-                    {check.required ? 'REQUIRED' : 'OPTIONAL'}
-                  </span>
                 </span>
                 {testCheckCountLabel(check) && (
                   <Text type="secondary">{testCheckCountLabel(check)}</Text>

@@ -1803,5 +1803,5 @@ test('单测矩阵显示修复额度耗尽原因', () => {
     })
   )
   assert.match(markup, /单元测试子步骤已用完各 10 次修复额度/)
-  assert.match(markup, /集成检查矩阵/)
+  assert.match(markup, /测试检查步骤/)
 })

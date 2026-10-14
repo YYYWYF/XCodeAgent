@@ -1913,9 +1913,8 @@ test('集成测试步骤渲染具体检查项而不是数字详情', () => {
 
   assert.match(markup, /前端构建检查/)
   assert.match(markup, /前端 lint 通过/)
-  assert.match(markup, /QUALITY GATE/)
-  assert.match(markup, /REQUIRED/)
-  assert.match(markup, /OPTIONAL/)
+  assert.match(markup, /测试检查步骤/)
+  assert.doesNotMatch(markup, /QUALITY GATE|REQUIRED|OPTIONAL/)
   assert.match(markup, /已通过/)
   assert.match(markup, /已跳过/)
   assert.match(markup, /通过 3\/3 个测试/)
@@ -2220,7 +2219,7 @@ test('局部修复完成态展示紫色结果卡并隐藏普通动作详情', ()
   assert.doesNotMatch(markup, /动作详情/)
 })
 
-test('单元测试生成期间展示运行中的集成检查矩阵', () => {
+test('单元测试生成期间展示运行中的测试检查步骤', () => {
   const markup = renderToStaticMarkup(
     createElement(ProcessSteps, {
       loading: true,
@@ -2246,7 +2245,7 @@ test('单元测试生成期间展示运行中的集成检查矩阵', () => {
     })
   )
 
-  assert.match(markup, /集成检查矩阵/)
+  assert.match(markup, /测试检查步骤/)
   assert.match(markup, /前端单元测试生成检查/)
   assert.match(markup, /正在调用 TestGeneration Agent/)
   assert.match(markup, /检查中/)
