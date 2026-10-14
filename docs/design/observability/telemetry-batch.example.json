@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "batch_id": "batch_example_001",
+  "sent_at": "2026-10-13T05:01:00Z",
+  "records": [
+    {
+      "record_id": "span:span_model_001:final",
+      "type": "execution_trace",
+      "occurred_at": "2026-10-13T02:01:10Z",
+      "producer": {
+        "source": "backend",
+        "environment": "test",
+        "platform": "macos",
+        "xcodeagent_version": "demo-1.0.0"
+      },
+      "identity": {
+        "user_id": "user_001",
+        "project_id": "app_001",
+        "thread_id": "graph_design_001",
+        "run_id": "run_001",
+        "operation_id": "requirements_operation_001",
+        "change_id": null,
+        "workflow_scope": "application_planning",
+        "conversation_id": "session_design_001"
+      },
+      "context": {
+        "business_stage": "requirements",
+        "node_name": "requirements",
+        "execution_kind": "initial",
+        "attempt": 1,
+        "mode": "pro",
+        "target": {
+          "type": "application",
+          "id": "app_001",
+          "api_contract_id": null
+        },
+        "extra": {
+          "clarification_round": 0,
+          "question_count": 0
+        }
+      },
+      "data": {
+        "trace_id": "trace_001",
+        "span_id": "span_model_001",
+        "parent_span_id": "span_workflow_001",
+        "span_kind": "model",
+        "run_name": "requirement_analysis",
+        "started_at": "2026-10-13T02:01:01Z",
+        "ended_at": "2026-10-13T02:01:10Z",
+        "duration_ms": 9000,
+        "status": "completed",
+        "error": null,
+        "model": {
+          "provider": "demo_provider",
+          "name": "demo_model",
+          "input_tokens": 1200,
+          "output_tokens": 600,
+          "total_tokens": 1800,
+          "usage_source": "provider",
+          "usage_status": "complete",
+          "ttft_ms": 1500,
+          "output_duration_ms": 7500
+        }
+      }
+    },
+    {
+      "record_id": "event:application_created:1",
+      "type": "telemetry_event",
+      "occurred_at": "2026-10-13T02:00:00Z",
+      "producer": {
+        "source": "backend",
+        "environment": "test",
+        "platform": "macos",
+        "xcodeagent_version": "demo-1.0.0"
+      },
+      "identity": {
+        "user_id": "user_001",
+        "project_id": "app_001",
+        "thread_id": null,
+        "run_id": null,
+        "operation_id": null,
+        "change_id": null,
+        "workflow_scope": null,
+        "conversation_id": null
+      },
+      "context": {
+        "business_stage": null,
+        "node_name": null,
+        "execution_kind": null,
+        "attempt": null,
+        "mode": null,
+        "target": null,
+        "extra": {}
+      },
+      "data": {
+        "event_name": "application_created",
+        "event_category": "business",
+        "payload": {
+          "creation_source": "new_app"
+        }
+      }
+    }
+  ]
+}
