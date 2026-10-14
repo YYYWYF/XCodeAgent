@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import FreeChatHistory from '../src/renderer/src/components/AiChatPanel/components/SessionSidebar/FreeChatHistory'
 import {
   beginOptimisticSkillSend,
   normalizeChatSkills,
@@ -88,6 +89,48 @@ import type {
   UserSkillCatalog,
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
+
+test('会话列表保护当前查看和当前推进的会话，历史会话仍可删除', () => {
+  for (const theme of ['light', 'dark'] as const) {
+    for (const activeSessionId of ['viewed', 'history']) {
+      const sessions: ComponentProps<typeof FreeChatHistory>['sessions'] = [
+        'viewed', 'advancing', 'history'
+      ].map((id) => ({
+        id,
+        title: id,
+        editorMode: 'frontend',
+        workbenchPhase: 'development',
+        workflowId: 'application',
+        threadId: `thread-${id}`,
+        createdAt: 1,
+        updatedAt: 1,
+        messageCount: 1
+      }))
+      const markup = renderToStaticMarkup(createElement(FreeChatHistory, {
+        open: true,
+        historyEnabled: true,
+        activeSessionId,
+        advancingSessionId: 'advancing',
+        loadingSessions: false,
+        onClose: () => undefined,
+        onCreateSession: () => undefined,
+        onDeleteSession: async () => { throw new Error('渲染列表不能执行删除') },
+        onOpenSession: async () => undefined,
+        sessionCreationDisabled: false,
+        sessionRunStates: { advancing: 'running' },
+        sessions,
+        theme
+      }))
+      for (const session of sessions) {
+        const button = markup.match(new RegExp(`<button[^>]*aria-label="删除会话 ${session.id}"[^>]*>`))?.[0]
+        assert.ok(button, `应保留 ${session.id} 的删除按钮`)
+        const protectedSession = session.id === activeSessionId || session.id === 'advancing'
+        assert.equal(button.includes('disabled=""'), protectedSession)
+        assert.equal(button.includes('title="当前会话不能删除"'), protectedSession)
+      }
+    }
+  }
+})
 
 const testLocalStorage = new Map<string, string>()
 

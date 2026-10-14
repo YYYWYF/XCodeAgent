@@ -730,13 +730,14 @@ export function useChatSessions({
     }))
   }
 
+  /** 删除历史会话前保护当前选择，避免绕过列表按钮停止或删除当前会话。 */
   const handleDeleteSession = async (sessionId: string): Promise<void> => {
     if (!application.workspaceRoot || deletingSessionId) return
+    if (sessionId === activeSessionId) return
     const key = sessionRuntimeKey(application.workspaceRoot, editorMode, sessionId)
     const target = sessions.find((session) => session.id === sessionId)
     if (!target) return
 
-    const nextSession = sessions.find((session) => session.id !== sessionId)
     setDeletingSessionIds((current) => ({ ...current, [editorMode]: sessionId }))
     setSessionErrors((current) => ({ ...current, [editorMode]: undefined }))
 
@@ -762,17 +763,6 @@ export function useChatSessions({
       }
       // 删除会话后清空该工作区的实体设计草稿缓存，避免新会话继承旧状态。
       clearEntityDesignDraftStore(application.workspaceRoot)
-
-      if (activeSessionId === sessionId) {
-        if (nextSession) {
-          await openChatSession(editorMode, nextSession.id, nextSession.workbenchPhase)
-        } else {
-          setActiveSessionIds((current) =>
-            withSelectedSessionForPhase(current, editorMode, workbenchPhase, undefined)
-          )
-          setPersistedActiveSessionId(application.id, editorMode, workbenchPhase, undefined)
-        }
-      }
 
       antdMessage.success('已删除会话')
     } catch (caughtError) {
