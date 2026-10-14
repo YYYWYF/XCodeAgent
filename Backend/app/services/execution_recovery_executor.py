@@ -18,6 +18,7 @@ from app.domain.application_planning_recovery import (
     ApplicationPlanningRecoveryBoundary,
     application_planning_sha256,
     parse_application_planning_boundary,
+    validate_application_planning_baseline,
 )
 from app.domain.application_revision import RevisionTarget
 from app.domain.execution_recovery import (
@@ -513,18 +514,13 @@ async def _apply_application_planning_transaction_authority(
             "LIFECYCLE_DRIFT",
             "TechnicalPlan transaction boundary 的 request authority 已发生变化。",
         )
-    if (
-        boundary.operation
-        in {
-            ApplicationPlanningOperation.REVISE,
-            ApplicationPlanningOperation.REPAIR,
-        }
-        and boundary.baseline_sha256 is None
-    ):
+    try:
+        validate_application_planning_baseline(boundary, values.get("technical_plan"))
+    except ValueError as exc:
         raise RecoveryExecutionError(
             "LIFECYCLE_DRIFT",
-            "TechnicalPlan 修订或修复 boundary 缺少 baseline authority。",
-        )
+            str(exc),
+        ) from exc
 
     change_id = str(values.get("change_id") or "").strip()
     if boundary.operation is ApplicationPlanningOperation.REVISE and change_id:
@@ -570,6 +566,17 @@ async def _apply_application_planning_transaction_authority(
             or lifecycle.active_formal_revision is not None
         )
     ):
+        mode = RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
+    elif (
+        stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
+        and status is ApplicationLifecycleStatus.RUNNING
+        and lifecycle.active_run_id != source.run_id
+        and boundary.operation is ApplicationPlanningOperation.REPAIR
+        and str(values.get("technical_plan_repair_source_run_id") or "") == lifecycle.active_run_id
+        and str(values.get("active_run_id") or "") == source.run_id
+        and lifecycle.initialization.thread_id == source.thread_id
+    ):
+        # 失败审阅已提交输入，但 begin 尚未交接旧生成 Run；child 以现有 CAS 领取归属。
         mode = RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
     elif not (
         stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN

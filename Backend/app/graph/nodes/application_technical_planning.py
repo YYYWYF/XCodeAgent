@@ -17,6 +17,7 @@ from app.domain.application_planning_recovery import (
     application_planning_boundary_payload,
     application_planning_sha256,
     parse_application_planning_boundary,
+    validate_application_planning_baseline,
 )
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
@@ -119,24 +120,7 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
     request = _technical_request(state)
     if operation is ApplicationPlanningOperation.REVISE and not request:
         raise ValueError("TechnicalPlan revise 必须提供明确的修改要求。")
-    if operation in {
-        ApplicationPlanningOperation.REVISE,
-        ApplicationPlanningOperation.REPAIR,
-    } and boundary.baseline_sha256 is None:
-        raise ValueError("TechnicalPlan 修订/修复缺少 baseline 摘要。")
-    baseline = state.get("technical_plan")
-    if (
-        operation in {
-            ApplicationPlanningOperation.REVISE,
-            ApplicationPlanningOperation.REPAIR,
-        }
-        and (
-            not isinstance(baseline, dict)
-            or not baseline
-            or application_planning_sha256(baseline) != boundary.baseline_sha256
-        )
-    ):
-        raise ValueError("TechnicalPlan 修订/修复 baseline 与 boundary 不匹配。")
+    validate_application_planning_baseline(boundary, state.get("technical_plan"))
 
     change_id = str(state.get("change_id") or "").strip()
     if operation is ApplicationPlanningOperation.REVISE and change_id:
@@ -159,6 +143,11 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
             active_run_id=state.get("active_run_id"),
             thread_id=state.get("active_thread_id"),
             change_id=change_id or None,
+            repair_source_run_id=(
+                state.get("technical_plan_repair_source_run_id")
+                if operation is ApplicationPlanningOperation.REPAIR
+                else None
+            ),
         )
     return {
         "phase": "technical_planning_begin",
@@ -171,6 +160,7 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
         "application_planning_interaction": {},
         "technical_plan_candidate": {},
         "technical_plan_candidate_sha256": "",
+        "technical_plan_repair_source_run_id": "",
         "lifecycle": application_lifecycle_payload(lifecycle),
         "timeline": ["technical_planning_begin"],
     }

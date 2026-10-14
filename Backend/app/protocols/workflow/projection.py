@@ -654,6 +654,7 @@ def _public_workflow_state(
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。
             "technical_plan_repair_candidate",
             "technical_plan_repair_errors",
+            "technical_plan_repair_source_run_id",
             "development_continuation_id",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))

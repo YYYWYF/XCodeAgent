@@ -88,6 +88,8 @@ class ProjectState(TypedDict, total=False):
     technical_plan_candidate_sha256: str
     technical_plan_repair_candidate: dict[str, Any]
     technical_plan_repair_errors: list[str]
+    # 失败审阅门确认重试后，记录待交接的原生成 Run；只供当前事务内部消费。
+    technical_plan_repair_source_run_id: str
     project_plan: dict[str, Any]
     pages: list[dict[str, Any]]
     frontend_pages: list[dict[str, Any]]

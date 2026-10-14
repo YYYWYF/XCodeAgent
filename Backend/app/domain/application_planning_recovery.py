@@ -17,7 +17,7 @@ class ApplicationPlanningArtifact(StrEnum):
 
 
 class ApplicationPlanningOperation(StrEnum):
-    """区分首次生成、正式修订和确认后修复三类事务来源。"""
+    """区分首次生成、正式修订以及失败候选或已有计划修复三类事务来源。"""
 
     INITIAL = "initial"
     REVISE = "revise"
@@ -93,6 +93,35 @@ def application_planning_sha256(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def validate_application_planning_baseline(
+    boundary: ApplicationPlanningBoundary,
+    baseline: Any,
+) -> None:
+    """统一校验修订/修复基线，仅允许无已有计划的失败续修不携带摘要。"""
+
+    if boundary.operation not in {
+        ApplicationPlanningOperation.REVISE,
+        ApplicationPlanningOperation.REPAIR,
+    }:
+        return
+    # 首次生成失败只保留内部候选，尚无 TechnicalPlan；交回节点决定续修或重生。
+    # 已有计划或已声明摘要时仍严格校验，禁止利用 repair 绕过基线一致性。
+    if (
+        boundary.operation is ApplicationPlanningOperation.REPAIR
+        and (baseline is None or (isinstance(baseline, dict) and not baseline))
+        and boundary.baseline_sha256 is None
+    ):
+        return
+    if boundary.baseline_sha256 is None:
+        raise ValueError("TechnicalPlan 修订/修复缺少 baseline 摘要。")
+    if (
+        not isinstance(baseline, dict)
+        or not baseline
+        or application_planning_sha256(baseline) != boundary.baseline_sha256
+    ):
+        raise ValueError("TechnicalPlan 修订/修复 baseline 与 boundary 不匹配。")
+
+
 def application_planning_boundary_payload(
     *,
     operation_id: str,
@@ -147,4 +176,5 @@ __all__ = [
     "application_planning_sha256",
     "canonical_application_planning_json",
     "parse_application_planning_boundary",
+    "validate_application_planning_baseline",
 ]

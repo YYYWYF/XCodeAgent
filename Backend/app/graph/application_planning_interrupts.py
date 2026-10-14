@@ -287,6 +287,13 @@ def prepare_application_planning_review_resume(
             artifact_revision=payload["artifactRevision"],
             request=submission.request,
         )
+        if effective_node_name == "technical_planning":
+            # 已校验的失败审阅动作先把来源写进 checkpoint；begin 才做 lifecycle CAS 交接。
+            update["technical_plan_repair_source_run_id"] = (
+                str(state.get("active_run_id") or "")
+                if clarification.get("mode") == "technical_plan_generation_error"
+                else ""
+            )
         if effective_node_name == "ui_confirmation":
             update["ui_design_action"] = {
                 "action": "adjust_pages",

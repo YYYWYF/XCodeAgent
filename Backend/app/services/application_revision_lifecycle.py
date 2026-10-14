@@ -21,6 +21,7 @@ from app.services.application_lifecycle import (
     _application_lifecycle_lock,
     application_lifecycle_path,
     execution_belongs_to_active_revision,
+    handoff_application_planning_run_for_recovery,
     load_application_lifecycle,
     persist_application_lifecycle_transition,
     restart_application_planning_lifecycle,
@@ -403,6 +404,7 @@ def ensure_technical_plan_generation_lifecycle(
     active_run_id: str | None,
     thread_id: str | None = None,
     change_id: str | None = None,
+    repair_source_run_id: str | None = None,
 ) -> ApplicationLifecycle:
     """幂等推进 TechnicalPlan generation lifecycle，并验证 thread/run 所有权。"""
 
@@ -421,16 +423,23 @@ def ensure_technical_plan_generation_lifecycle(
         initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
         and initialization.status is ApplicationLifecycleStatus.RUNNING
     ):
-        if current.active_run_id != expected_run_id:
-            raise ApplicationLifecycleConflictError(
-                "TechnicalPlan generation activeRunId 与当前 transaction 不匹配。"
-            )
         if change_id:
             active = current.active_formal_revision
             if active is None or active.change_id != change_id:
                 raise ApplicationLifecycleConflictError(
                     "TechnicalPlan generation 缺少匹配的 active formal revision。"
                 )
+        if current.active_run_id != expected_run_id:
+            source_run_id = str(repair_source_run_id or "").strip()
+            if not source_run_id or current.active_run_id != source_run_id:
+                raise ApplicationLifecycleConflictError(
+                    "TechnicalPlan generation activeRunId 与当前 transaction 不匹配。"
+                )
+            # 只消费当前失败审阅门提交的来源，复用原归属校验及 revision CAS，不猜测旧 Run。
+            current = handoff_application_planning_run_for_recovery(
+                workspace, source_run_id=source_run_id, new_run_id=expected_run_id,
+                thread_id=expected_thread_id, expected_lifecycle_revision=current.revision,
+            )
         return current
 
     if change_id:

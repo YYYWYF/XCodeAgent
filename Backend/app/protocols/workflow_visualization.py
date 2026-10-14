@@ -1340,6 +1340,7 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
             "application_planning_recovery_boundary",
             "technical_plan_candidate",
             "technical_plan_candidate_sha256",
+            "technical_plan_repair_source_run_id",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
