@@ -169,6 +169,29 @@
   user-select: text;
 }
 
+details > .@{class-prefix}-process-step-summary {
+  list-style: none;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+}
+
+.@{class-prefix}-process-step-summary > .@{class-prefix}-process-step-toggle {
+  margin-left: auto;
+  font-size: 12px;
+
+  > span {
+    color: inherit;
+  }
+}
+
 .@{class-prefix}-process-step-icon {
   position: absolute;
   top: 50%;

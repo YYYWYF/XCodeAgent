@@ -162,7 +162,7 @@ test('当前 PendingPlan 完成态覆盖旧 Run 的活动快照，匹配快照�
       unit({ status: 'generating' })
     ])
   )
-  assert.doesNotMatch(staleActiveMarkup, /执行计划进度/)
+  assert.doesNotMatch(staleActiveMarkup, /任务生成进度/)
   assert.doesNotMatch(staleActiveMarkup, /<details class="xa-process-steps xa-completed" open=""/)
 
   const currentMarkup = renderProgress(finalSnapshot)

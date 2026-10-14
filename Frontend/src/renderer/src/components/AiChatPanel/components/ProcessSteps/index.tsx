@@ -2,12 +2,14 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   CodeOutlined,
+  DownOutlined,
   LoadingOutlined,
   MinusCircleOutlined,
   PauseCircleOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
-  ToolOutlined
+  ToolOutlined,
+  UpOutlined
 } from '@ant-design/icons'
 import { Button, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
@@ -217,8 +219,7 @@ export function ProcessStep({
   const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
   const hasWorkspaceInspection = Boolean(step.workspaceInspection)
   const hasWorkspaceInspectionProgress = Boolean(step.workspaceInspectionProgress)
-  const collapseCompletedWorkspaceScan =
-    step.nodeName === 'scan_workspace_code' && hasWorkspaceInspection && step.status === 'completed'
+  const collapseCompletedWorkspaceScan = hasWorkspaceInspection && step.status === 'completed'
   const isRepairStep =
     step.kind === 'workflow' &&
     (step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair')
@@ -265,6 +266,7 @@ export function ProcessStep({
     !awaitingInput
   const [open, setOpen] = useState(
     expandable &&
+      !collapseCompletedWorkspaceScan &&
       !collapseConversationDetail &&
       (step.status === 'running' ||
         awaitingInput ||
@@ -272,19 +274,19 @@ export function ProcessStep({
         hasBuildRun ||
         hasDagGeneration ||
         hasProjectPlanUpdate ||
-        (hasWorkspaceInspection && !collapseCompletedWorkspaceScan) ||
+        hasWorkspaceInspection ||
         hasWorkspaceInspectionProgress ||
         hasRepairPanel ||
         hasToolActivity)
   )
 
   useEffect(() => {
-    if (collapseConversationDetail) return
-    // 二次修改的导航扫描完成后只保留节点摘要，避免工作区大图持续占满对话区。
-    if (collapseCompletedWorkspaceScan) {
-      setOpen(false)
-      return
-    }
+    // 正式流程和二次修改的扫描完成时收起一次，后续更新不覆盖用户的手动展开。
+    if (collapseCompletedWorkspaceScan) setOpen(false)
+  }, [collapseCompletedWorkspaceScan])
+
+  useEffect(() => {
+    if (collapseConversationDetail || collapseCompletedWorkspaceScan) return
     if (
       expandable &&
       (step.status === 'running' ||
@@ -376,10 +378,18 @@ export function ProcessStep({
   return (
     <details
       className={className}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(event) => {
+        if (event.target === event.currentTarget) setOpen(event.currentTarget.open)
+      }}
       open={open}
     >
-      <summary className={cx('process-step-summary')}>{summaryContent}</summary>
+      <summary className={cx('process-step-summary')}>
+        {summaryContent}
+        <span className={cx('tool-activity-chain-toggle', 'process-step-toggle')}>
+          <span>{open ? '收起详情' : '展开详情'}</span>
+          {open ? <UpOutlined aria-hidden="true" /> : <DownOutlined aria-hidden="true" />}
+        </span>
+      </summary>
       <div className={cx('process-step-detail')}>
         {(!hasChecks || (step.nodeName === 'unit_test' && step.status === 'failed')) &&
           !hasDagGeneration &&

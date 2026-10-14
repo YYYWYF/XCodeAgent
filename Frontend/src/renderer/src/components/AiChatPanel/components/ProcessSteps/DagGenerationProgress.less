@@ -42,7 +42,8 @@
   }
 }
 
-.@{class-prefix}-dag-generation-completion-header > .@{class-prefix}-dag-generation-summary-metrics {
+.@{class-prefix}-dag-generation-completion-header
+  > .@{class-prefix}-dag-generation-summary-metrics {
   grid-column: 2 / -1;
 }
 
@@ -106,17 +107,6 @@
     display: none;
   }
 
-  &::after {
-    width: 6px;
-    height: 6px;
-    flex: 0 0 6px;
-    content: '';
-    border-right: 1px solid var(--wb-text-tertiary);
-    border-bottom: 1px solid var(--wb-text-tertiary);
-    transform: rotate(45deg) translateY(-2px);
-    transition: transform 160ms ease;
-  }
-
   &:focus-visible {
     outline: 2px solid var(--wb-accent);
     outline-offset: 3px;
@@ -124,8 +114,8 @@
   }
 }
 
-details[open] > .@{class-prefix}-dag-generation-summary::after {
-  transform: rotate(225deg) translate(-1px, -1px);
+.@{class-prefix}-dag-generation-summary > .@{class-prefix}-dag-generation-toggle {
+  font-size: 12px;
 }
 
 .@{class-prefix}-dag-generation-summary-icon {
@@ -306,10 +296,6 @@ details[open] > .@{class-prefix}-dag-generation-summary::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .@{class-prefix}-dag-generation-summary::after {
-    transition: none;
-  }
-
   .@{class-prefix}-dag-generation .anticon-spin {
     animation: none !important;
   }
@@ -334,7 +320,8 @@ details[open] > .@{class-prefix}-dag-generation-summary::after {
     grid-template-columns: 30px minmax(0, 1fr);
   }
 
-  .@{class-prefix}-dag-generation-completion-header > .@{class-prefix}-dag-generation-summary-metrics {
+  .@{class-prefix}-dag-generation-completion-header
+    > .@{class-prefix}-dag-generation-summary-metrics {
     display: flex;
     grid-column: 2;
   }

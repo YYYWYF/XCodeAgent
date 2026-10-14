@@ -1521,7 +1521,7 @@ test('AG-UI DAG 生成步骤按稳定 ID 合并最新完整快照', async () => 
   }
 })
 
-test('工作区检查快照过滤绝对路径并渲染默认展开的科技感面板', () => {
+test('DAG 前置工作区扫描过滤绝对路径并默认收起完成结果', () => {
   const snapshot = readWorkspaceInspectionSnapshot({
     schemaVersion: '1.0.0',
     revision: 'revision-1234567890',
@@ -1561,7 +1561,7 @@ test('工作区检查快照过滤绝对路径并渲染默认展开的科技感�
   assert.match(markup, /FastAPI/)
   assert.match(markup, /Backend\/app/)
   assert.match(markup, /代码图暂不可用/)
-  assert.ok((markup.match(/ open=""/g) || []).length >= 2)
+  assert.equal((markup.match(/ open=""/g) || []).length, 1)
   assert.doesNotMatch(markup, /private\/workspace|snapshot\.json/)
 })
 
@@ -1766,7 +1766,7 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
   )
 
   assert.ok(snapshot)
-  assert.match(markup, /执行计划进度/)
+  assert.match(markup, /任务生成进度/)
   assert.equal(snapshot.units[0].id, 'page:home')
   assert.match(markup, /未命名页面/)
   assert.match(markup, /新增 1 项任务/)

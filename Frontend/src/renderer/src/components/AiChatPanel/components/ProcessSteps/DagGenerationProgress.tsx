@@ -3,14 +3,16 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
+  DownOutlined,
   LoadingOutlined,
   NodeIndexOutlined,
   StopOutlined,
+  UpOutlined,
   WarningOutlined
 } from '@ant-design/icons'
 import { Button, Typography } from 'antd'
 import { useEffect, useRef, useState } from 'react'
-import type { ReactElement } from 'react'
+import type { ReactElement, SyntheticEvent } from 'react'
 import type {
   DagGenerationPhase,
   DagGenerationSnapshot,
@@ -29,6 +31,7 @@ import {
   dagGenerationUnitTaskCopy
 } from '../../stageOutputState'
 import './DagGenerationProgress.less'
+import './ToolActivityChain.less'
 
 const { Text } = Typography
 
@@ -47,13 +50,30 @@ export default function DagGenerationProgress({
 }: Props): ReactElement | null {
   const active = snapshot?.status === 'active' && !completion
   const wasActive = useRef(active)
+  const manuallyToggled = useRef(false)
+  const planningRunId = useRef(snapshot?.planningRunId)
   const [open, setOpen] = useState(active)
 
   useEffect(() => {
-    if (active) setOpen(true)
-    else if (wasActive.current) setOpen(false)
+    // 新规划使用默认展开策略；同一规划内，用户选择优先于快照和 Pending 展示变化。
+    if (planningRunId.current !== snapshot?.planningRunId) {
+      planningRunId.current = snapshot?.planningRunId
+      manuallyToggled.current = false
+      setOpen(active)
+    } else if (!manuallyToggled.current) {
+      if (active) setOpen(true)
+      else if (wasActive.current) setOpen(false)
+    }
     wasActive.current = active
-  }, [active])
+  }, [active, snapshot?.planningRunId])
+
+  /** 记录鼠标、键盘及辅助功能触发的折叠选择，忽略嵌套元素与程序同步事件。 */
+  const handleToggle = (event: SyntheticEvent<HTMLDetailsElement>): void => {
+    if (event.target !== event.currentTarget) return
+    const nextOpen = event.currentTarget.open
+    if (nextOpen !== open) manuallyToggled.current = true
+    setOpen(nextOpen)
+  }
 
   if (completion) {
     return (
@@ -92,7 +112,7 @@ export default function DagGenerationProgress({
         {snapshot ? (
           <details
             className={cx('dag-generation-details', snapshot.status)}
-            onToggle={(event) => setOpen(event.currentTarget.open)}
+            onToggle={handleToggle}
             open={open}
           >
             <summary>{completion.summary ? '查看生成明细' : '查看生成过程记录'}</summary>
@@ -106,23 +126,13 @@ export default function DagGenerationProgress({
   if (!snapshot) return null
 
   return (
-    <details
-      className={cx('dag-generation', snapshot.status)}
-      onToggle={(event) => {
-        if (active && !event.currentTarget.open) {
-          event.currentTarget.open = true
-          return
-        }
-        setOpen(event.currentTarget.open)
-      }}
-      open={open}
-    >
+    <details className={cx('dag-generation', snapshot.status)} onToggle={handleToggle} open={open}>
       <summary className={cx('dag-generation-summary')}>
         <span className={cx('dag-generation-summary-icon')}>
           <NodeIndexOutlined />
         </span>
         <span className={cx('dag-generation-summary-copy')}>
-          <Text strong>执行计划进度</Text>
+          <Text strong>任务生成进度</Text>
           <Text type="secondary">{dagGenerationSummaryCopy(snapshot)}</Text>
         </span>
         <span className={cx('dag-generation-summary-metrics')}>
@@ -131,6 +141,13 @@ export default function DagGenerationProgress({
           </i>
           <i>{snapshot.summary.retainedTaskCount} 项复用任务</i>
           <i>{snapshot.summary.candidateTaskCount} 项新增任务</i>
+        </span>
+        <span
+          className={cx('tool-activity-chain-toggle', 'dag-generation-toggle')}
+          title={open ? '收起详情' : '展开详情'}
+          aria-hidden="true"
+        >
+          {open ? <UpOutlined aria-hidden="true" /> : <DownOutlined aria-hidden="true" />}
         </span>
       </summary>
 
@@ -160,7 +177,7 @@ function DagGenerationDetails({
           </code>
         ) : null}
       </div>
-      <ol className={cx('dag-generation-units')} aria-label="执行计划进度">
+      <ol className={cx('dag-generation-units')} aria-label="任务生成进度">
         {snapshot.units.map((unit, index) => (
           <DagGenerationUnit index={index} key={unit.id} unit={unit} units={snapshot.units} />
         ))}
