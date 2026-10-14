@@ -1653,7 +1653,13 @@ function BuildToolActivity({
       title={activity.message}
     >
       <span className={cx('workflow-build-tool-activity-icon')} aria-hidden="true">
-        {activity.status === 'running' ? <LoadingOutlined spin /> : <CloseCircleOutlined />}
+        {activity.status === 'running' ? (
+          <LoadingOutlined spin />
+        ) : activity.status === 'completed' ? (
+          <CheckCircleOutlined />
+        ) : (
+          <CloseCircleOutlined />
+        )}
       </span>
       <Text>{activity.message}</Text>
     </div>

@@ -1452,7 +1452,7 @@ export type WorkflowBuildToolActivity = {
   callId: string
   tool: 'ls' | 'read_file' | 'glob' | 'grep' | 'write_file' | 'edit_file' | 'delete_file'
   category: 'browse' | 'read' | 'search' | 'write' | 'delete'
-  status: 'running' | 'failed'
+  status: 'running' | 'completed' | 'failed'
   message: string
   path?: string
 }

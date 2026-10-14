@@ -3087,6 +3087,57 @@ test('运行中任务默认折叠并只显示最新工具活动', () => {
   assert.equal(buildToolActivityPlacement({ ...task, status: 'completed' }, false), undefined)
 })
 
+test('构建工具成功显示勾，失败显示叉，运行中显示加载图标', () => {
+  for (const [status, icon] of [
+    ['completed', 'check-circle'],
+    ['failed', 'close-circle'],
+    ['running', 'loading']
+  ] as const) {
+    const markup = renderToStaticMarkup(
+      createElement(ProcessSteps, {
+        loading: true,
+        steps: [
+          {
+            id: 'workflow:build',
+            kind: 'workflow',
+            status: 'running',
+            title: '正在执行 代码生成与构建协调',
+            detail: '正在执行构建任务：home',
+            sequence: 1,
+            nodeName: 'build',
+            buildExecutionSlice: {
+              scope: { type: 'page', targetId: 'home' },
+              tasks: [
+                {
+                  id: 'home',
+                  title: '实现页面',
+                  status: 'running',
+                  activeToolActivity: {
+                    callId: 'write-home',
+                    tool: 'write_file',
+                    category: 'write',
+                    status,
+                    message:
+                      status === 'completed'
+                        ? '已完成写入文件：/frontend/src/Home.tsx'
+                        : '写入文件',
+                    path: '/frontend/src/Home.tsx'
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      })
+    )
+    const toolIcon = markup.match(
+      /<span class="[^"<>]*workflow-build-tool-activity-icon[^"<>]*"[^>]*>([\s\S]*?)<\/span>/
+    )?.[1]
+    assert.ok(toolIcon, '构建卡片必须显示当前工具调用图标')
+    assert.match(toolIcon, new RegExp(`data-icon="${icon}"`))
+  }
+})
+
 test('更早的 session 可从 timeline 和 snake_case 测试报告恢复步骤', () => {
   const steps = processStepsForDisplay(undefined, {
     runId: 'run-legacy',
