@@ -115,39 +115,51 @@ export function RequirementOverviewSection({
   )
 }
 
-function PageCard({ page }: { page: RequirementPageRow }): ReactElement {
+/** 渲染单张页面卡：头部（序号 + 名称 + 路径）、主区（目标 / 业务信息 / 操作）与规则区。 */
+function PageCard({ page, index }: { page: RequirementPageRow; index: number }): ReactElement {
   return (
     <article className={cx('requirement-doc-page-card')} key={page.key}>
-      <div className={cx('requirement-doc-page-heading')}>
-        <div>
+      <header className={cx('requirement-doc-page-head')}>
+        <span className={cx('requirement-doc-page-index')} aria-hidden="true">
+          {index + 1}
+        </span>
+        <div className={cx('requirement-doc-page-title')}>
           <strong>{page.name}</strong>
-          <code>{page.path || page.pageId}</code>
+          {page.path || page.pageId ? (
+            <code className={cx('requirement-doc-page-path')}>{page.path || page.pageId}</code>
+          ) : null}
         </div>
-        {page.moduleId ? <span>{page.moduleId}</span> : null}
-      </div>
-      {page.description ? <Text type="secondary">{page.description}</Text> : null}
-      {page.goal ? (
-        <p className={cx('requirement-doc-page-goal')}>
-          <span>页面目标</span>
-          {page.goal}
-        </p>
+      </header>
+      {page.description ? (
+        <p className={cx('requirement-doc-page-desc')}>{page.description}</p>
       ) : null}
+
+      {/* 主区：每块套一个浅底内嵌面板，让层次从"平铺的小标题"变成"可分辨的区块"。 */}
+      {page.goal ? (
+        <section className={cx('requirement-doc-page-zone')}>
+          <span className={cx('requirement-doc-page-zone-title')}>页面目标</span>
+          <p className={cx('requirement-doc-page-zone-body')}>{page.goal}</p>
+        </section>
+      ) : null}
+
       {page.informationItems.length ? (
-        <div className={cx('requirement-doc-page-block')}>
-          <span className={cx('requirement-doc-page-block-title')}>业务信息</span>
-          <ul>
+        <section className={cx('requirement-doc-page-zone')}>
+          <span className={cx('requirement-doc-page-zone-title')}>业务信息</span>
+          {/* 磁贴网格而非列表：信息项之间彼此独立，网格比竖排列表更易扫读。 */}
+          <div className={cx('requirement-doc-page-tiles')}>
             {page.informationItems.map((item) => (
-              <li key={item.key}>
+              <div className={cx('requirement-doc-page-tile')} key={item.key}>
                 <strong>{item.label}</strong>
                 {item.description ? <span>{item.description}</span> : null}
-              </li>
+              </div>
             ))}
-          </ul>
-        </div>
+          </div>
+        </section>
       ) : null}
+
       {page.actions.length ? (
-        <div className={cx('requirement-doc-page-block')}>
-          <span className={cx('requirement-doc-page-block-title')}>核心操作</span>
+        <section className={cx('requirement-doc-page-zone')}>
+          <span className={cx('requirement-doc-page-zone-title')}>核心操作</span>
           <div className={cx('requirement-doc-action-list')}>
             {page.actions.map((action) => (
               <div className={cx('requirement-doc-action')} key={action.key}>
@@ -167,42 +179,50 @@ function PageCard({ page }: { page: RequirementPageRow }): ReactElement {
               </div>
             ))}
           </div>
-        </div>
+        </section>
       ) : null}
+
       {page.navigationTargets.length ? (
-        <div className={cx('requirement-doc-page-block')}>
-          <span className={cx('requirement-doc-page-block-title')}>页面跳转</span>
+        <section className={cx('requirement-doc-page-zone')}>
+          <span className={cx('requirement-doc-page-zone-title')}>页面跳转</span>
           <div className={cx('requirement-doc-tag-row')}>
             {page.navigationTargets.map((target) => (
               <Tag key={target}>{target}</Tag>
             ))}
           </div>
-        </div>
+        </section>
       ) : null}
-      {page.stateRequirements.length ? (
-        <div className={cx('requirement-doc-page-block')}>
-          <span className={cx('requirement-doc-page-block-title')}>状态要求</span>
-          <ul>
-            {page.stateRequirements.map((state) => (
-              <li key={state.key}>
-                <strong className={cx('requirement-doc-state-label', `is-${state.key}`)}>
-                  {state.label}
-                </strong>
-                {state.description ? <span>{state.description}</span> : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      {page.acceptanceCriteria.length ? (
-        <div className={cx('requirement-doc-page-block')}>
-          <span className={cx('requirement-doc-page-block-title')}>产品验收标准</span>
-          <ul className={cx('requirement-doc-acceptance')}>
-            {page.acceptanceCriteria.map((criterion, index) => (
-              <li key={`${page.key}-ac-${index}`}>{criterion}</li>
-            ))}
-          </ul>
-        </div>
+
+      {/* 规则区：状态要求与验收标准是长尾细节，合并成一个弱化区（分隔线而非面板底），
+          不与目标 / 操作抢注意力，但内容一条不少、不折叠。 */}
+      {page.stateRequirements.length || page.acceptanceCriteria.length ? (
+        <section className={cx('requirement-doc-page-zone', 'is-muted')}>
+          {page.stateRequirements.length ? (
+            <>
+              <span className={cx('requirement-doc-page-zone-title')}>状态要求</span>
+              <ul className={cx('requirement-doc-page-rules')}>
+                {page.stateRequirements.map((state) => (
+                  <li key={state.key}>
+                    <strong className={cx('requirement-doc-state-label', `is-${state.key}`)}>
+                      {state.label}
+                    </strong>
+                    {state.description ? <span>{state.description}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {page.acceptanceCriteria.length ? (
+            <>
+              <span className={cx('requirement-doc-page-zone-title')}>产品验收标准</span>
+              <ul className={cx('requirement-doc-page-rules', 'requirement-doc-acceptance')}>
+                {page.acceptanceCriteria.map((criterion, criterionIndex) => (
+                  <li key={`${page.key}-ac-${criterionIndex}`}>{criterion}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </section>
       ) : null}
     </article>
   )
@@ -228,7 +248,7 @@ export function RequirementPagesSection({
       </div>
       <div className={cx('requirement-doc-page-list')}>
         {pages.length ? (
-          pages.map((page) => <PageCard key={page.key} page={page} />)
+          pages.map((page, index) => <PageCard index={index} key={page.key} page={page} />)
         ) : (
           <Text type="secondary">暂无页面规划</Text>
         )}

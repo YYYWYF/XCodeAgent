@@ -10,7 +10,6 @@ export type RequirementPageRow = {
   pageId: string
   name: string
   path: string
-  moduleId: string
   description: string
   goal: string
   informationItems: Array<{ key: string; label: string; description: string }>
@@ -84,7 +83,6 @@ export function requirementPageRows(
       pageId,
       name: textValue(page.name) || textValue(specPage.name, pageId),
       path: textValue(page.path) || textValue(specPage.path),
-      moduleId: textValue(page.module_id) || textValue(specPage.module_id),
       description: textValue(page.description) || textValue(specPage.description),
       goal: textValue(page.goal),
       informationItems,
