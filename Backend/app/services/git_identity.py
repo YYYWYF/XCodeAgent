@@ -46,13 +46,21 @@ def _read_local_git_identity(key: str) -> str:
             completed = subprocess.run(
                 ["git", "config", scope, "--get", key],
                 capture_output=True,
-                text=True,
+                # 按字节捕获，避免 Windows 读取线程按系统编码解码中文 Git 身份失败。
+                text=False,
                 timeout=_IDENTITY_TIMEOUT_SECONDS,
                 check=False,
             )
         except (OSError, subprocess.SubprocessError):
             continue
-        value = completed.stdout.strip()
+        if completed.returncode != 0:
+            continue
+        try:
+            # 在当前线程严格解码 UTF-8；损坏的身份不替换为乱码后写入新仓库。
+            value = (completed.stdout or b"").decode("utf-8").strip()
+        except UnicodeDecodeError:
+            logger.warning("Git 身份配置不是有效 UTF-8：scope=%s，key=%s。", scope, key)
+            continue
         if completed.returncode == 0 and value:
             return value
     return ""
