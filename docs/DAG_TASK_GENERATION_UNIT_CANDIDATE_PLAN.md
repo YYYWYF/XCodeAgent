@@ -2,11 +2,15 @@
 
 # 最终技术方案设计稿
 
-## 1. 背景与目标
+> **文档状态**：本文是职责分组候选任务方案设计记录。议题表中的“当前进度”和“还需要明确的内容”表示方案讨论阶段的状态，不是当前代码的未完成清单；第 2 章之后仍保留目标设计和推演。当前生产实现以 [DAG 任务生成技术交接](DAG_TASK_GENERATION_TECHNICAL_HANDOFF.md) 及其链接的代码为准。
+>
+> 当前代码已采用本方案的主要执行边界：按职责分组生成候选任务、单组校验与重试、有限并发、只追加式任务组装、可归因的全图修复，以及独立确认待确认任务计划。具体当前实现见本文“当前实现”小节；其余目标设计不能单独证明代码行为。
 
-当前 DAG Task Planning 的主要问题是：
+## 1. 方案讨论时的背景与目标
 
-| 议题 | 当前进度 | 还需要明确的内容 |
+以下议题表记录设计稿形成时的讨论结论，不代表当前实现进度：
+
+| 议题 | 设计讨论阶段的结论 | 当时未决事项 |
 | --- | --- | --- |
 | 1. UnitGenerationContext | 输入范围、来源与切片主线已讨论；必需合同提供途径、冻结输入和 UI 代码不进入规划已确认。 | 公共／专属输入字段表最后统一对齐，尤其生成范围、资源清单与正式来源的表达；不重新讨论输入范围。冻结材料的工具签名、读取限额及上下文管理归第 10 项，持久化引用归第 8 项。 |
 | 2. 各类 Unit 生成与复用 | Endpoint、static、Page、adapter 方向已确认；权限资源归平台投影；shell 前置检查／复用边界已明确。 | 文档仍有一个具体尾项：shell 无可复用任务且确需贡献时，原有规划职责如何落成具体任务与输入。只沿用现有职责，不增加自动修复。bootstrap 具体数据源配置判断继续延期；同 Unit 追加／替换归第 7 项。 |
@@ -1562,11 +1566,15 @@ generation_attempt
 
 反向检验：按上述额度，一个每轮都被选中的 Unit 最多经历 `(2 + 1) × 3 = 9` 次内容生成会话；一次 Global 修复不能因多个问题重复入队而变成多轮，也不能在后台基础设施重试之外再套一层重试。用户显式创建新 Run 是上层新操作，不计入旧 Run 的九次范围，也不能因此带入旧 Candidate。
 
-### 当前实现与可复用逻辑
+### 当前实现（代码复核：2026-10-15）
 
-- `Backend/app/agents/main/task_preparer.py::prepare_build_tasks_with_main_agent` 使用 `build_task_plan_max_retries`，当前代码默认 2 次重试，即 3 次总尝试；原始候选错误、编译失败、最终组装校验失败仍共用一个 Scope 级循环。可复用配置及错误反馈入口，但需拆成已确认的 Unit Local 与 Global 两层控制。
-- `Backend/app/agents/model_factory.py::create_chat_model` 将 `model_max_retries` 传给模型 SDK；`Backend/app/config.py` 的代码默认值为 2。这是独立的 SDK infrastructure retry，实际配置可覆盖默认值；不能在外层再悄悄套相同重试循环。
-- `Backend/app/agents/main/task_preparer_prompt.py::_task_plan_retry_feedback` 已把校验错误注入下一次完整任务生成请求，当前最多插入 20 条字符串。可复用反馈入口，改为根据结构化问题投射当前 Unit 的反馈；该固定截取不能直接当作最终完整反馈契约。
+- `Backend/app/graph/workflow.py` 将 `prepare_build_tasks` 接到异步任务规划适配器；当前生产规划不调用早期的单一目标范围生成 Agent。`Backend/app/graph/nodes/task_planning_adapter.py` 读取确认计划、目标范围和工作区事实，生成 ReuseFacts，并组装冻结的主线规划输入。
+- `Backend/app/services/build_task_planning_service.py::run_mainline_planning` 调用 `dag_planning_orchestrator.py::plan_dag_sequential` 创建新的 PlanningRun。调度器为待规划职责分组分别生成候选任务，执行单组校验与有界重试；确定性职责由平台处理。候选恢复只能把通过身份和当前输入复核的来源候选任务接纳到新运行。
+- `Backend/app/services/scope_assembly.py::assemble_scope_build_task_plan` 只读保留完整正式任务，追加本轮有效候选任务，再调用 `compile_build_task_plan_scope` 重编译依赖、校验和执行派发信息。该路径不按整个职责分组替换历史任务。`build_task_planner.py::create_build_task_plan` 仍是独立旧函数，当前 Backend 主线只有其定义而没有调用点；不要用它概括生产生成或任务组装行为。
+- `dag_planning_orchestrator.py` 在候选任务齐备后执行全局校验，并仅按结构化来源将可重试问题归因到本轮候选任务；有界全图修复后再次组装和校验。输入、平台或无法安全归因的问题不会靠重新生成候选任务处理。
+- 校验通过后，`build_task_planning_service.py` 写入待确认任务计划和 DraftIdentity。`Confirm`、`Abandon`、`Regenerate` 由既有生命周期与确认入口处理；只有精确确认后才更新正式任务计划。
+
+以上是对当前主线的摘要，不改变本设计稿其余目标章节的性质。PlanningRun 状态、持久化投影、恢复和展示细节以交接文档为准。
 
 ### 已确认的默认预算
 
