@@ -190,6 +190,9 @@ export default function WorkflowRunCard({
   const codeReviewRepairConfirmation = clarification?.mode === 'code_review_repair_confirmation'
   // 恢复或重跑测试节点时快照可能短暂携带上一轮审查结果，必须以当前阶段为显示边界。
   const codeReview = workflowShouldShowCodeReview(workflow)
+  const reviewStage = ['code_review', 'acceptance_phase_confirmation'].includes(
+    String(workflow.summary.phase || '')
+  )
   const staleFrontendPerformanceConfirmation =
     launchNode && clarification?.mode === 'frontend_performance_confirmation'
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification)
@@ -433,7 +436,7 @@ export default function WorkflowRunCard({
         reviewPhaseConfirmation ||
         acceptancePhaseConfirmation) && (
         <div className={cx('workflow-clarification', apiDesignReadinessGate && 'workflow-clarification-api-design-readiness')}>
-          {!apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
+          {!reviewStage && !apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
             <div className={cx('workflow-clarification-header')}>
               <div>
                 <Text strong>待确认事项</Text>
