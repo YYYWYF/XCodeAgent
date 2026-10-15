@@ -230,16 +230,21 @@
   }
 
   span {
+    min-width: 0;
     padding: 2px 5px;
+    overflow: hidden;
     color: var(--wb-text-secondary);
     font-size: 9px;
     text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     background: var(--wb-surface);
     border: 1px solid var(--wb-border);
     border-radius: 4px;
   }
 
   code {
+    min-width: 0;
     overflow: hidden;
     color: var(--wb-text-secondary);
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
