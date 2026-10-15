@@ -23,6 +23,18 @@ For small local edits that do not change structure or ownership, leave the index
 
 ## Native Recovery Admission Contract
 
+规划冷启动在 `applicationPlanningRuntime.ts::ensureStarted` 成功读取现有 checkpoint 后只展示权威状态，不因 lifecycle 仍为 running 或 ActionPlan 尚未签发而落入普通阶段生成；仍运行的执行保持进度，已中断的执行沿原底部 Backend ActionPlan 显式重试。仅 collecting_requirement/pending 且 checkpoint 缺失时允许首次启动。回归：`pnpm test:application-planning-runtime`（冷启动 running 无动作→只读对账出恢复动作、全程不自动 send）。
+
+冷恢复首次读取早于旧租约到期时，`useApplicationPlanningRuntimes.ts` 每5秒调用 Runtime 的只读 `refreshDetachedRunningState`：仅本地无执行流、transport idle 且 Backend 分类仍为 running 时读取权威快照，直到对账为中断/确认/终态；已存在本地写流、正在同步、状态不确定和已释放实例不参与。该读取不会提交 Graph 或恢复动作，避免租约已过期但当前页面永久停在旧 running。回归：`pnpm test:application-planning-runtime` T3/T4。
+
+正式修订启动的展示会话撤销先经现有 AG-UI lifecycle 只读确认：已接纳同一 branch/impact/source 或后端暂不可达时保留目标 StageSession 和来源回执，不能因 SSE 断线删除它们。`revisionSession.ts` 与 `useFormalRevisionHandoffRecovery.ts` 同时恢复 design_stage_revision 的 DESIGN/PLAN 和 workbench_plan_revision drafting 的 PLAN 展示归属；只补当前已批准修订的会话/回执，不启动 Graph、不重新分类、不改 checkpoint。回归：`formalRevisionHandoffRecovery.test.ts`（由 `pnpm test:application-planning-runtime` 执行）。
+
+工作台冷进入时，缓存的 ready_for_workbench 可能早于正式修订生成的新待确认产物；`pages/WorkbenchPage.tsx` 在拟报产物损坏前通过现有 lifecycle AG-UI 读取当前状态，规划中/待确认时保留入口，防止用旧缓存将正常修订拒之门外。
+
+`protocols/application_page_planning.py` 的 INTERRUPTED 恢复投影与兜底执行器统一使用 `InterruptedTargetResolver` 读取最新已提交 checkpoint，不以 `aget_state` 叠加 pending writes 后的空 next 判定生成已完成；只有已提交的确认门或终态才做终态对账。回归：`tests.test_technical_planning_stage_retry` 的暂停后空 next 展示快照仍签发原生成节点恢复动作。
+
+同一次正式技术修订中的再次修改与 Native Recovery，不再把当前技术规划请求、当前产物审阅 gate 与最初影响确认时的请求和 gate 比较。`services/application_revision_lifecycle.py` 的 active revision begin 与 `services/execution_recovery_executor.py` 的 INPUT_COMMITTED 入场仅据原 change/branch/target 证明修订归属；通用 Run/Thread、精确 checkpoint/节点、当前事务边界及 lifecycle/资源归属校验继续生效。首次 pending impact 的确认合同不变，新产物仍需重新确认。回归：`tests.test_technical_planning_stage_retry` 的正常生成与 begin 失败后原节点恢复用例。
+
 任务计划待确认时显式 End，`services/planning_refresh_recovery.py` 按 Pending 的精确 `workflow_run_id` 对照 `endedExecutions`，暂时将草稿投影为不可行动：保留草稿但释放其全应用确认占用，避免结束后“继续任务”被 Pending 锁置灰。原任务继续入场消费归档后，重新经过原任务计划确认门；不自动确认草稿。回归：`tests.test_planning_refresh_recovery`。
 
 技术规划自由输入沿原 `/application-page-planning/run` 的 `forwardedProps.technicalPlanningConversation`：`agents/technical_planning_conversation.py` 识别只读问答或明确技术修改，`protocols/technical_planning_conversation.py` 验证当前应用/规划线程；`classify` 用独立 AG-UI transport 返回回答，不登记原工作区 Run，不改 checkpoint、lifecycle 或恢复入口。`revise` 必须携带分类时的 sourceRunId/checkpointId，在原规划写锁内再次校验版本后，由 `services/technical_planning_retry.py` 整理现有计划和新要求，复用原 begin/generate/commit/review；无计划只引导上方重试，文本确认不能越过正式确认门。前端 `service/technicalPlanningConversation.ts` 使用 @ag-ui/client，`applicationPlanningRuntime.ts` 管理取消和原会话续接，`AiChatPanel` 将计划阶段底部输入交给该路径。回归：`tests.test_technical_planning_conversation`、`pnpm test:application-planning-runtime`。

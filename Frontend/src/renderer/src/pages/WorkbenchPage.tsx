@@ -254,6 +254,15 @@ function WorkbenchPage({
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
           if (lifecycleReadyForWorkbench) {
+            // 冷启动缓存可能仍是开发就绪，而正式修订已把磁盘产物转为待确认；以当前生命周期决定入口，避免误报损坏。
+            const currentLifecycle = await getApplicationLifecycle({
+              workspaceRoot: application.workspaceRoot,
+              id: application.id,
+              appName: application.appName
+            })
+            if (!active) return
+            onApplicationLifecycleChange(currentLifecycle)
+            if (!isApplicationCreationComplete(currentLifecycle)) return
             const details = [...inspection.missing, ...inspection.invalid].join('、')
             failWorkbenchEntry(
               details ? `工作区规划产物缺失或损坏：${details}` : '工作区规划产物不完整。'
@@ -282,7 +291,7 @@ function WorkbenchPage({
       active = false
       window.removeEventListener('focus', syncWorkspaceFiles)
     }
-  }, [application, failWorkbenchEntry, lifecycleReadyForWorkbench, planningRefreshRevision])
+  }, [application, failWorkbenchEntry, lifecycleReadyForWorkbench, onApplicationLifecycleChange, planningRefreshRevision])
 
   useEffect(() => {
     let active = true

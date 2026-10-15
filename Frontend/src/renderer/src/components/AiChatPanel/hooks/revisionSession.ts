@@ -10,6 +10,7 @@ import type {
 } from '../../../typings'
 import type { AgentChatMessage } from '../types'
 import type { SessionIdentity } from './sessionRuntime'
+import type { WorkbenchPhase } from '../../../workbenchPhase'
 
 /** 为一次已批准的 formal revision 创建独立前端会话身份。 */
 export function createFormalRevisionSessionContext(
@@ -163,4 +164,31 @@ export function initialFormalRevisionPhase(
   branch: WorkflowFormalRevisionBranch
 ): 'product' | 'planning' {
   return branch === 'design_stage_revision' ? 'product' : 'planning'
+}
+
+/** 后端已接纳或读取结果未知时保留正式修订展示会话，只有确定未入场才允许撤销。 */
+export function retainFormalRevisionSessionAfterStart(
+  input: WorkflowDesignStageRevisionStart,
+  lifecycle: ApplicationLifecycle | undefined
+): boolean {
+  if (!lifecycle) return true
+  const active = lifecycle.activeFormalRevision
+  return Boolean(active && active.formalBranch === input.impact.formalBranch &&
+    active.impactInteractionId === input.impact.interactionId &&
+    active.sourceThreadId === input.sourceConversationThreadId &&
+    active.sourceRunId === input.sourceRunId)
+}
+
+/** 判断当前正式修订是否允许恢复指定阶段的展示会话，不启动或重放 Graph。 */
+export function formalRevisionHandoffRestorable(
+  lifecycle: ApplicationLifecycle | undefined,
+  phase: WorkbenchPhase
+): boolean {
+  const active = lifecycle?.activeFormalRevision
+  if (!active || active.planningThreadId !== lifecycle?.initialization.threadId) return false
+  if (active.formalBranch === 'design_stage_revision') {
+    return active.status === 'design_planning' && ['product', 'planning'].includes(phase)
+  }
+  return active.formalBranch === 'workbench_plan_revision' && active.status === 'drafting' &&
+    phase === 'planning' && ['generating_technical_plan', 'awaiting_technical_plan_confirmation'].includes(lifecycle.initialization.stage)
 }

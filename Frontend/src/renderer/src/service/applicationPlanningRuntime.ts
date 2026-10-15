@@ -25,10 +25,7 @@ import {
   type WorkflowRevisionContinuationHandoff
 } from './applicationPagePlanning'
 import { isAuthenticationFailure } from './authentication'
-import {
-  planningWorkflowCanPublishDuringRun,
-  planningWorkflowRequiresUserInput
-} from './applicationPlanningWorkflowState'
+import { planningWorkflowCanPublishDuringRun } from './applicationPlanningWorkflowState'
 import {
   ApplicationPlanningCheckpointNotFoundError,
   readApplicationPlanningAuthoritativeSnapshot,
@@ -215,10 +212,9 @@ export class ApplicationPlanningRuntime {
         await this.runPlanning(buildApplicationPlanningRequest(current.application))
         return
       }
-      // 已有 durable 执行的恢复入口由 Backend ActionPlan 决定；冷启动只展示该动作。
-      // lifecycle 仍标记 running 不能成为擅自重发普通 Planning 请求的依据。
-      if (current.recovery?.recoveryActionPlan) return
-      if (planningWorkflowRequiresUserInput(current.workflow)) return
+      // 已有 checkpoint 的冷启动只读对账：仍运行就展示现状，中断则等待兜底动作。
+      // ActionPlan 尚未签发也不能落入普通阶段启动，否则会抢在孤儿识别前重复生成。
+      return
     }
     if (
       [
@@ -502,6 +498,19 @@ export class ApplicationPlanningRuntime {
     } finally {
       this.reconcilePromise = undefined
     }
+  }
+
+  /** 冷恢复暂报 running 时只读追踪租约收口，不自动执行任何恢复动作。 */
+  async refreshDetachedRunningState(): Promise<void> {
+    if (this.disposed || this.runActive || this.session.hasActiveRun()) return
+    const current = this.dependencies.getCurrentState()
+    if (
+      current?.application.id !== this.applicationId || current.threadId !== this.threadId ||
+      current.transportState !== 'idle' || current.connection.status !== 'healthy' ||
+      current.recovery?.classification !== 'running'
+    ) return
+    // 第一次读取可能早于孤儿租约到期；后续只读对账负责显露兜底入口。
+    await this.reconcileCurrentState()
   }
 
   /** 执行一次只读对账，失败只更新 Connection State，不伪造业务 Recovery。 */

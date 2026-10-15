@@ -692,6 +692,67 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.transportState, 'idle')
 }
 
+// T3：冷启动对账仍在运行且尚无恢复动作时，也不得创建新的普通阶段 Run。
+{
+  const initial = planningState()
+  initial.restoreArtifactsFromDisk = true
+  initial.lifecycle = authoritativeLifecycle(initial, {
+    stage: 'generating_technical_plan', status: 'running'
+  })
+  const h = harness(initial)
+  const running = {
+    ...confirmationWorkflow(),
+    summary: { status: 'running', phase: 'technical_planning_generate' },
+    state: {},
+    result: {}
+  } as WorkflowRunPayload
+  h.onRead(async () => ({
+    workflow: running,
+    lifecycle: authoritativeLifecycle(initial),
+    recovery: recoveryProjection('thread-A', {
+      classification: 'running', userActionRequired: false, recoveryActionPlan: null
+    })
+  }))
+
+  await h.runtime.ensureStarted()
+  await h.runtime.ensureStarted()
+  assert.equal(h.readCalls(), 1)
+  assert.equal(h.calls.length, 0)
+  assert.equal(h.current()?.workflow?.summary.status, 'running')
+
+  // 原执行稍后被后端识别为中断，只读同步应展示兜底动作，仍不能自动执行。
+  h.onRead(async () => ({
+    workflow: running,
+    lifecycle: authoritativeLifecycle(h.current()!),
+    recovery: recoveryProjection('thread-A', { classification: 'ready_to_continue' })
+  }))
+  await h.runtime.refreshDetachedRunningState()
+  assert.equal(h.readCalls(), 2)
+  assert.equal(h.calls.length, 0)
+  assert.equal(h.current()?.recovery?.recoveryActionPlan?.primaryAction?.kind, 'continue_checkpoint')
+  await h.runtime.refreshDetachedRunningState()
+  assert.equal(h.readCalls(), 2)
+}
+
+// T4：本地执行中、状态不确定或 Runtime 已释放时，不让后台只读校准干扰当前动作。
+{
+  const current = planningState()
+  current.recovery = recoveryProjection('thread-A', { classification: 'running', recoveryActionPlan: null })
+  current.transportState = 'running'
+  const h = harness(current)
+  await h.runtime.refreshDetachedRunningState()
+  assert.equal(h.readCalls(), 0)
+  h.setCurrent({ ...current, transportState: 'reconciling' })
+  await h.runtime.refreshDetachedRunningState()
+  assert.equal(h.readCalls(), 0)
+  h.setCurrent({ ...current, transportState: 'idle', connection: { ...current.connection, status: 'unavailable' } })
+  await h.runtime.refreshDetachedRunningState()
+  assert.equal(h.readCalls(), 0)
+  h.runtime.dispose()
+  await h.runtime.refreshDetachedRunningState()
+  assert.equal(h.readCalls(), 0)
+}
+
 // U：只有 collecting_requirement/pending 且 checkpoint 缺失时允许首次启动 Graph。
 {
   const current = planningState()

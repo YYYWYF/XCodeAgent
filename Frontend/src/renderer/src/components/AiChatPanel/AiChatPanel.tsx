@@ -137,6 +137,7 @@ import SkillsPage from '../SkillsPage/SkillsPage'
 import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
 import { useFormalRevisionHandoffRecovery } from './hooks/useFormalRevisionHandoffRecovery'
+import { getApplicationLifecycle } from '../../service/applicationLifecycle'
 import { useDevelopmentArtifactDetail } from './hooks/useDevelopmentArtifactDetail'
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useCodeReviewReportPanel } from './hooks/useCodeReviewReportPanel'
@@ -154,6 +155,7 @@ import {
   formalRevisionPlanningSourceSession,
   initialFormalRevisionPhase,
   planningStageTransitionKey,
+  retainFormalRevisionSessionAfterStart,
   revisionDevelopmentSessionForContinuation
 } from './hooks/revisionSession'
 import { sessionIdentityFromSummary, sessionRuntimeKey } from './hooks/sessionRuntime'
@@ -2257,6 +2259,14 @@ export default function AiChatPanel({
       input: WorkflowDesignStageRevisionStart | WorkflowWorkbenchPlanRevisionStart,
       identity: SessionIdentity
     ): Promise<void> => {
+      // 传输断线不等于后端未入场；必须先只读确认，不能删除已接纳修订的计划会话。
+      let authoritativeLifecycle: ApplicationLifecycle | undefined
+      try {
+        authoritativeLifecycle = await getApplicationLifecycle(application)
+      } catch {
+        // 后端暂不可达时保留展示身份，等重连后按当前修订恢复。
+      }
+      if (retainFormalRevisionSessionAfterStart(input, authoritativeLifecycle)) return
       const sourceSessionKey = sessionRuntimeKey(
         String(application.workspaceRoot || ''),
         editorMode,
@@ -2295,6 +2305,7 @@ export default function AiChatPanel({
       }
     },
     [
+      application,
       application.workspaceRoot,
       discardPreparedSession,
       editorMode,

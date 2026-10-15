@@ -233,11 +233,12 @@ async def _build_application_planning_recovery_projection(
                     reentry_plan=reentry_plan,
                 )
     elif source.status is DurableExecutionStatus.INTERRUPTED:
+        # 与兜底执行器共用已提交 checkpoint；当前读取可能含断线后尚未提交的
+        # pending writes，不能用它的空 next 把中断的生成节点误判为完成。
         resolution = await InterruptedTargetResolver().resolve(
             workspace=workspace,
             source=source,
             graph=graph,
-            latest_snapshot=snapshot,
         )
         if resolution.kind in {"terminal", "awaiting_user"}:
             status = resolution.terminal_status or (

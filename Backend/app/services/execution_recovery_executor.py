@@ -534,7 +534,6 @@ async def _apply_application_planning_transaction_authority(
     if boundary.operation is ApplicationPlanningOperation.REVISE and change_id:
         _validate_formal_revision_transaction_identity(
             values=values,
-            boundary=boundary,
             lifecycle=lifecycle,
         )
 
@@ -601,10 +600,9 @@ async def _apply_application_planning_transaction_authority(
 def _validate_formal_revision_transaction_identity(
     *,
     values: dict[str, Any],
-    boundary: Any,
     lifecycle: Any,
 ) -> None:
-    """验证 Formal Revision transaction 的 change、gate、请求、分支和目标事实一致。"""
+    """验证原修订、分支和目标归属，不用最初确认门或请求阻止节点重入。"""
 
     change_id = str(values.get("change_id") or "").strip()
     target_value = values.get("change_target")
@@ -620,7 +618,6 @@ def _validate_formal_revision_transaction_identity(
             "LIFECYCLE_DRIFT",
             "Formal Revision INPUT_COMMITTED boundary 的 target identity 无效。",
         ) from exc
-    request = _technical_request_from_values(values)
     pending = lifecycle.pending_revision_impact
     active = lifecycle.active_formal_revision
     if pending is not None and active is not None:
@@ -631,16 +628,12 @@ def _validate_formal_revision_transaction_identity(
     if pending is not None:
         matches = (
             pending.change_id == change_id
-            and pending.interaction_id == str(boundary.gate_id or "")
-            and pending.request == request
             and pending.impact.formal_branch.value == "workbench_plan_revision"
             and pending.target == target
         )
     elif active is not None:
         matches = (
             active.change_id == change_id
-            and active.impact_interaction_id == str(boundary.gate_id or "")
-            and active.request == request
             and active.formal_branch.value == "workbench_plan_revision"
             and active.target == target
         )

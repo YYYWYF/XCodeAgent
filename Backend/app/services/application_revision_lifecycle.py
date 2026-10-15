@@ -245,8 +245,6 @@ def begin_technical_plan_revision_generation(
             _assert_technical_plan_revision_identity(
                 active=active,
                 change_id=change_id,
-                interaction_id=interaction_id,
-                request=request,
                 target=target,
             )
             if (
@@ -380,16 +378,12 @@ def _assert_technical_plan_revision_identity(
     *,
     active: ActiveFormalRevision,
     change_id: str,
-    interaction_id: str,
-    request: str,
     target: RevisionTarget,
 ) -> None:
-    """验证已批准 Formal Revision 与 TechnicalPlan begin 输入完全一致。"""
+    """验证技术规划仍属于原正式修订，允许当前审阅门和修改要求变化。"""
 
     if (
         active.change_id != change_id
-        or active.impact_interaction_id != interaction_id
-        or active.request != request
         or active.formal_branch is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
         or active.target != target
     ):

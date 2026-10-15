@@ -88,7 +88,7 @@ export function useApplicationPlanningRuntimes(
     return ensureRuntime(current)
   }, [ensureRuntime])
 
-  // 这里只同步前端对象的存在性，不执行后台 checkpoint 对账或周期性轮询。
+  // 同步前端对象的存在性；脱离本地执行流的 running 由下方只读校准跟进。
   useEffect(() => {
     for (const [key, runtime] of runtimesRef.current) {
       const current = optionsRef.current.getPlanningState(runtime.applicationId)
@@ -106,6 +106,18 @@ export function useApplicationPlanningRuntimes(
       })
     }
   }, [options.activePlannings, ensureRuntime])
+
+  // 仅跟进冷恢复暂报 running 的执行，等待租约收口；正常流和确认/恢复门均不轮询。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const runtime of runtimesRef.current.values()) {
+        void runtime.refreshDetachedRunningState().catch((reason: unknown) => {
+          console.error('[planning-runtime] detached running reconcile failed', reason)
+        })
+      }
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   // 应用根部真正卸载时才释放所有后台执行器；视图显隐不会触发这里。
   useEffect(() => () => {

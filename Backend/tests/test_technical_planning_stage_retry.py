@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from app.domain.application_planning_recovery import ApplicationPlanningOperation
+from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
+from app.domain.application_revision import ActiveFormalRevision, RevisionTarget
 from app.domain.execution_recovery import DurableExecutionStatus
 from app.graph.application_planning_interrupts import _technical_input_boundary
 from app.graph.nodes.application_technical_planning import technical_planning_begin, technical_planning_generate
@@ -13,7 +15,11 @@ from app.protocols.workflow.run_control import build_workflow_cancellation_ag_ui
 from app.persistence.execution_recovery import get_execution
 from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
+from app.protocols.application_page_planning import _build_application_planning_recovery_projection
 from app.workspace.plan_documents import commit_technical_plan_document
+from app.services.application_lifecycle import (
+    load_application_lifecycle, persist_application_lifecycle_transition, write_application_lifecycle,
+)
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
 
@@ -123,6 +129,85 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
         """保存失败且尚无技术规划时，重试重新调用原生成器。"""
         await self._retry(has_plan=False, native=True, commit_failure=True)
 
+    async def _revise_formal_plan(self, *, native: bool) -> None:
+        """真实 Graph 用当前要求和审阅门重跑原修订，不再比对最初的请求与影响确认门。"""
+        harness = self.harness
+        harness.request = "将分页默认值改为8，保留其他接口契约。"
+        lifecycle = persist_application_lifecycle_transition(
+            harness.workspace,
+            stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+            status=ApplicationLifecycleStatus.AWAITING_USER,
+            active_run_id=harness.source_run_id,
+        )
+        active = ActiveFormalRevision(
+            changeId="chg-current-technical-revision",
+            formalBranch="workbench_plan_revision",
+            sourceThreadId="development-thread", sourceRunId="development-run",
+            request="将分页默认值改为7。", target=RevisionTarget(type="application"),
+            impactInteractionId="original-impact-gate", planningThreadId=harness.thread_id,
+            status="drafting", currentArtifact="technical-plan", remainingArtifacts=[],
+        )
+        write_application_lifecycle(
+            harness.workspace,
+            lifecycle.model_copy(update={
+                "revision": lifecycle.revision + 1, "active_formal_revision": active,
+            }),
+            expected_revision=lifecycle.revision,
+        )
+        with patch("app.config.Settings.from_env", side_effect=harness.current_settings):
+            await harness.initialize_graph()
+            config = {"configurable": {"thread_id": harness.thread_id}}
+            snapshot = await harness.graph.aget_state(config)
+            state = {
+                **snapshot.values,
+                "change_id": active.change_id,
+                "change_target": {"type": "application"},
+                "technical_plan": deepcopy(harness.candidate),
+            }
+            state["application_planning_recovery_boundary"] = _technical_input_boundary(
+                state, operation=ApplicationPlanningOperation.REVISE,
+                gate_id="current-technical-review-gate", artifact_revision="current-plan",
+                request=harness.request,
+            )
+            commit_technical_plan_document(state, harness.candidate)
+            await harness.graph.aupdate_state(snapshot.config, state, as_node="workflow_entry")
+            if native:
+                # 让 begin 在交接前失败，确保底部恢复确实经过 INPUT_COMMITTED 入场校验。
+                with patch(
+                    "app.graph.nodes.application_technical_planning.begin_technical_plan_revision_generation",
+                    side_effect=RuntimeError("模拟开始生成前中断"),
+                ):
+                    await harness.run_initial()
+                source, _, action = await harness.resolve_action()
+                self.assertEqual(source.current_node, "technical_planning_begin")
+            with (
+                patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(harness.candidate)) as generate,
+                patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+            ):
+                if native:
+                    child = await harness.execute_action(action)
+                    self.assertEqual(child.first_node, "technical_planning_begin")
+                    self.assertEqual(child.status, DurableExecutionStatus.AWAITING_USER, "\n".join(harness.last_recovery_frames))
+                else:
+                    await harness.run_initial()
+                generate.assert_called_once()
+                self.assertEqual(generate.call_args.args[0]["planning_adjustment_request"], harness.request)
+            final = await harness.graph.aget_state(config)
+            self.assertEqual(tuple(final.next), ("technical_planning_review",))
+            self.assertTrue(any(task.interrupts for task in final.tasks))
+            self.assertEqual(final.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
+            persisted = load_application_lifecycle(harness.workspace)
+            self.assertEqual(persisted.active_formal_revision.change_id, active.change_id)
+            self.assertEqual(persisted.active_formal_revision.request, active.request)
+
+    async def test_formal_revision_accepts_current_modification_request(self) -> None:
+        """同一次正式修订允许用新审阅门和新要求再次生成，仍停在确认门。"""
+        await self._revise_formal_plan(native=False)
+
+    async def test_formal_revision_native_retry_accepts_current_modification_request(self) -> None:
+        """底部兜底恢复回到原 begin 节点，当前修改不必等于最初修订请求。"""
+        await self._revise_formal_plan(native=True)
+
     async def test_pause_generation_can_continue_through_recovery(self) -> None:
         """真实取消控制把技术规划暂停落为中断，并沿原恢复动作重新生成、等待确认。"""
         harness = self.harness
@@ -156,6 +241,17 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.gather(task, return_exceptions=True)
             source = await get_execution(harness.workspace, harness.source_run_id)
             self.assertEqual(source.status, DurableExecutionStatus.INTERRUPTED)
+            # aget_state 可叠加未提交的模型返回并呈现空 next；恢复仍应读取
+            # history 中已提交的 generate 入口，不能把展示快照当成完成事实。
+            committed = await harness.graph.aget_state({"configurable": {"thread_id": harness.thread_id}})
+            projected = await _build_application_planning_recovery_projection(
+                workspace=str(harness.workspace), thread_id=harness.thread_id,
+                graph=harness.graph, source=source,
+                snapshot=committed._replace(next=(), tasks=()),
+            )
+            self.assertEqual(projected.classification, "ready_to_continue")
+            self.assertEqual((await get_execution(harness.workspace, harness.source_run_id)).status,
+                             DurableExecutionStatus.INTERRUPTED)
             _, projection, action = await harness.resolve_action()
             self.assertEqual(projection.classification, "ready_to_continue")
             with (
