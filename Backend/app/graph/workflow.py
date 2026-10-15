@@ -385,16 +385,17 @@ def build_graph(
 
         with bind_node_recovery(state, "integration_test"):
             prepared, fields = prepare_integration_test_reentry(state, "integration_test")
-            return {**nodes.integration_test(prepared), **fields}
+            # 先合并重启清理，再让本轮真实结果覆盖，不能用入口重置覆盖新报告或新任务。
+            return {**fields, **nodes.integration_test(prepared)}
 
     def small_task_repair_with_recovery(state: ProjectState) -> dict[str, Any]:
-        """保留已提交修复任务及次数，完成后仍返回集成检查复测。"""
+        """仅暂停续接保留修复进度，失败恢复统一由测试阶段入口重新开始。"""
 
         from app.services.integration_test_reentry import prepare_integration_test_reentry
 
         with bind_node_recovery(state, "small_task_repair"):
             prepared, fields = prepare_integration_test_reentry(state, "small_task_repair")
-            return {**nodes.small_task_repair(prepared), **fields}
+            return {**fields, **nodes.small_task_repair(prepared)}
 
     builder.add_node("integration_test", integration_test_with_recovery)
     builder.add_node("small_task_repair", small_task_repair_with_recovery)

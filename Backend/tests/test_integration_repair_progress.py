@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
-from deepagents.backends import StateBackend
+from deepagents.backends import FilesystemBackend
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 
@@ -42,7 +42,11 @@ class IntegrationRepairProgressTests(unittest.TestCase):
                 "args": {"file_path": "/frontend/src/App.tsx"},
             }])])
             agent = create_small_task_agent(
-                model, workspace, user_skills_backend=StateBackend(), agent_memory_backend=StateBackend(),
+                # 生产技能/记忆后端不依赖 Agent 的 files channel；这里同样使用磁盘后端，
+                # 避免嵌在范围代理内的 StateBackend 在真正调用模型前就因缺少 channel 失败。
+                model, workspace,
+                user_skills_backend=FilesystemBackend(root_dir=workspace, virtual_mode=True),
+                agent_memory_backend=FilesystemBackend(root_dir=workspace, virtual_mode=True),
             )
             def invoke_loop(**kwargs: object) -> str:
                 """通过生产 Prompt 调用真实 Agent，保留原生调用上限异常。"""

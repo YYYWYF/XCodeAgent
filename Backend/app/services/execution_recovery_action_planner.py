@@ -112,6 +112,8 @@ def plan_business_node_reentry_action(
         if reentry_plan.target_node == "prepare_build_tasks"
         else "重试失败任务"
         if reentry_plan.target_node == "build"
+        else "重新测试"
+        if reentry_plan.target_node == "integration_test"
         else "重新执行失败步骤"
     )
     action = _action(
@@ -240,6 +242,7 @@ def _failed_node_retry_label(node: str | None) -> str:
         "prepare_build_tasks": "重新生成执行计划",
         "build": "重新执行代码生成",
         "code_review": "重新执行代码审查",
+        "integration_test": "重新测试",
     }.get(normalized, "重新执行失败步骤")
 
 

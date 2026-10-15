@@ -1,6 +1,6 @@
 # DevAgent Studio Codebase Index
 
-Last updated: 2026-10-14
+Last updated: 2026-10-15
 
 Use this file before broad code exploration. It is a routing map, not full documentation: read the matching row, then inspect only the listed entry files and nearby code.
 
@@ -61,7 +61,7 @@ Recovery GET 投影增加可选 `error`（`RECOVERY_PROJECTION_READ_FAILED`）�
 
 `AiChatPanel/pendingWorkflowInput.ts` 与 `hooks/useWorkflowConversation.ts` 保留普通发送在 Run 建立前失败的内存输入快照。底部重试仍先走既有 lifecycle Attach/Get；有当前 Recovery 时沿用原后端动作，无候选且无同会话新 execution 时只恢复原输入和技能。用户再次明确发送时沿用冻结的页面/Endpoint/实体目标及原 AG-UI 入口。空候选不被视为请求未接收的证明，不自动重发；读取失败、切换会话、新执行事实或输入区的新内容均阻止错误恢复。确认、续接 token、调试、主动停止和认证失败不进入此输入恢复分支。不增加持久化字段或后端重试合同。回归：`pnpm test:connection-recovery` 的 Workflow Conversation Runtime 测试。
 
-集成测试 `integration_test` 与集成局部修复 `small_task_repair` 的已处理业务失败也进入现有 BUSINESS_RETRY 入口，由底部统一重试提交后端签发动作；lifecycle 失败身份、精确节点 checkpoint、运行归属与资源校验仍必需，节点内部进度、修复额度及确认门保持既有规则。回归：`tests.test_integration_native_recovery`、`tests.test_workflow_reentry_contract`。
+集成测试 `integration_test` 与集成局部修复 `small_task_repair` 的业务失败及异常失败，底部统一签发从 `integration_test` 开始的“重新测试”。`domain/workflow_recovery_boundary.py::failed_reentry_target` 是解析、恢复事务与持久化校验共用的失败恢复边界；真实失败节点不改写。必须找到同一 Run 的测试入口 checkpoint，缺失时明确拒绝，不降级到重试 SmallTask；lifecycle 仍按真实失败节点证明身份。恢复事务保留失败修复调用的合法代码变更证据，但不复用其旧任务。回归：`tests.test_integration_native_recovery`、`tests.test_workflow_reentry_contract`。
 
 验收 `acceptance` 的项目启动失败通过现有 BUSINESS_RETRY 重入同一验收节点，仍校验 lifecycle、Run/Thread、checkpoint 与资源归属。启动节点显式写入本轮 `message/error`，成功时清空旧错误；AG-UI 下一节点投影仅在明确验收通过后宣告 `finalize_project`，失败或待用户验收时不得覆盖 durable 当前节点。回归：`tests.test_workflow_failure_message`、`tests.test_workflow_reentry_contract`。
 
@@ -69,7 +69,7 @@ Recovery GET 投影增加可选 `error`（`RECOVERY_PROJECTION_READ_FAILED`）�
 
 代码审查 `code_review` 同样不以旧工作区 revision/snapshot hash 阻止 Native Recovery；`services/code_review_reentry.py` 仅在首次已验证重入中重新扫描当前源码，保留 Diff/full 方式、原入口的修复确认、同范围已提交问题快照和修复轮次，再进入原审查子图。Diff 文件范围由现有服务端正式计划重新选取，正常扫描/修复及用户确认门不变；审查支持同一 INTERRUPTED_CONTINUE、FAILURE_RETRY 和经 lifecycle 证明的 BUSINESS_RETRY 入口，运行身份、checkpoint、资源归属与 Build 绑定仍严格校验。回归：`tests.test_code_review_reentry`、`tests.test_code_review_native_recovery`。
 
-测试阶段 `integration_test` / `small_task_repair` 通过 `services/integration_test_reentry.py` 在经验证的首次重入中刷新当前工作区，重跑集成检查，保留单测跳过决定、修复次数与同入口已提交的任务进度；正常内部修复循环不重置。执行归属、资源锁和 checkpoint 校验保持不变，已执行或起点变化的事务禁止再次准备。此流程仍经现有 AG-UI 恢复入口；回归：`tests.test_integration_test_reentry`、`tests.test_integration_native_recovery`。
+测试阶段 `services/integration_test_reentry.py` 在经验证的首次失败重入中刷新工作区、清空旧检查/报告/修复任务/交接与性能选择，并把本轮 `repair_iteration` 重置为 0；保留单测决定、既有代码变更归属与修复上限。入口更新先合并，再由真实节点结果覆盖，避免旧 checkpoint 状态残留或入口重置覆盖新报告。暂停续接保留原修复额度与同入口任务进度，正常内部修复循环不重置。执行归属、资源锁和 checkpoint 校验保持不变，已执行或起点变化的事务禁止再次准备。沿用现有 AG-UI 恢复入口；前端 `service/recoveryIncident.ts` 只解释服务端签发的测试重启，不推断恢复目标。回归：`tests.test_integration_test_reentry`、`tests.test_integration_native_recovery`、`pnpm test:execution-recovery`。
 
 `processStepHistory.ts` 在当前 Workflow 存在 `workflow.run.started` / `workflow.node.started` 时只按本次 Run 的完成事件恢复步骤，不从来源 checkpoint 的整段 timeline 补建完成节点，避免 Electron 重启后继续测试局部修复时展示扫描、DAG、Build、单元测试等开发阶段进度。真实实时步骤、工具活动与本次 Run 的完成事件继续保留；不改变 Native Recovery 执行入口和恢复合同。回归：`pnpm test:chat-skills`。
 

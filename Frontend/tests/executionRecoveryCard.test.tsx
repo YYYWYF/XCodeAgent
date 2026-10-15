@@ -19,6 +19,23 @@ import { recoveryFailureMessage } from '../src/renderer/src/service/recoveryFail
 import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
 
+/** 测试失败统一解释为阶段重启，前端仍只执行后端签发的恢复动作。 */
+test('测试局部修复失败的兜底说明从测试阶段重新开始', () => {
+  const candidate = recovery('ready')
+  candidate.executionStatus = 'failed'
+  candidate.recoveryActionPlan.primaryAction = {
+    actionId: 'restart-tests', kind: 'retry_business_node', targetNode: 'integration_test',
+    label: '重新测试', description: '从测试阶段重新开始', requiresConfirmation: false
+  }
+  const incident = workbenchRecoveryIncident(candidate)
+  assert.equal(incident?.kind, 'recoverable')
+  if (incident?.kind !== 'recoverable') return
+  assert.match(incident.recoveryMessage, /从测试阶段重新开始/)
+  assert.match(incident.recoveryMessage, /重新计算本轮修复次数/)
+  assert.equal(incident.action.actionId, 'restart-tests')
+  assert.equal(incident.action.targetNode, 'integration_test')
+})
+
 /** 模板失败显示明确原因，并保留后端签发的原节点重试动作。 */
 test('模板故障在底部展示真实原因，不标成模型调用失败', () => {
   const state = planningStateFromRecovery({ sourceRunId: 'template-run', model: '',

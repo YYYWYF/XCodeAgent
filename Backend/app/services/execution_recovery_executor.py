@@ -34,6 +34,7 @@ from app.domain.execution_recovery import (
     WorkflowReentryReason,
     execution_failure_sha256,
 )
+from app.domain.workflow_recovery_boundary import failed_reentry_target
 from app.persistence.execution_recovery import (
     claim_recovery_finalization,
     claim_native_recovery_attempt,
@@ -69,6 +70,7 @@ from app.services.workflow_reentry import (
     FailureTargetResolver,
     InterruptedTargetResolver,
     recovery_plan_from_reentry,
+    resolve_node_entry_boundary,
     semantic_context_sha256,
 )
 from app.services.node_recovery_context import NodeRecoveryContext
@@ -338,7 +340,7 @@ async def prepare_native_recovery(
         or reentry_plan.execution_kind != source.execution_kind
         or (
             source.status is DurableExecutionStatus.FAILED
-            and reentry_plan.target_node != source.current_node
+            and reentry_plan.target_node != failed_reentry_target(source)
         )
     ):
         raise RecoveryExecutionError(
@@ -970,6 +972,29 @@ async def _failed_source_state(
 
     if source.status is not DurableExecutionStatus.FAILED:
         return None
+    if target_node != source.current_node:
+        # 测试重启使用阶段入口，但变更证据必须取自真实失败的修复调用，不能丢掉
+        # 先前修复已提交的 Diff，也不能把失败任务重新派发到新一轮测试中。
+        boundary = await resolve_node_entry_boundary(
+            workspace=source.workspace, source=source,
+            target_node=str(source.current_node), graph=graph,
+        )
+        snapshot = await graph.aget_state({"configurable": {
+            "thread_id": source.thread_id, "checkpoint_ns": boundary.checkpoint_ns,
+            "checkpoint_id": boundary.checkpoint_id,
+        }})
+        values = dict(snapshot.values)
+        for key in ("build_execution_scope", "build_run_id", "build_run_plan_path", "build_run_plan_sha256"):
+            if values.get(key) != entry_state.get(key):
+                raise RecoveryExecutionError(
+                    "RECOVERY_INTERNAL_PROGRESS_DRIFT", "测试阶段入口与失败修复的范围或 Build 绑定不一致。"
+                )
+        progress = await _failed_source_state(
+            graph, source, entry_state=values, target_node=str(source.current_node),
+            entry_checkpoint_id=boundary.checkpoint_id,
+        )
+        # 异常可能发生在节点更新提交前，此时仍保留修复入口已有的变更证据。
+        return progress if progress is not None else values
     history_reader = getattr(graph, "aget_state_history", None)
     if not callable(history_reader):
         return None
@@ -1160,10 +1185,10 @@ async def _revalidate_finalizing_recovery(
             "RECOVERY_SOURCE_CHECKPOINT_INVALID",
             "source checkpoint nextNodes 已偏离 child first Node。",
         )
-    if source.status is DurableExecutionStatus.FAILED and next_nodes != [source.current_node]:
+    if source.status is DurableExecutionStatus.FAILED and next_nodes != [failed_reentry_target(source)]:
         raise RecoveryExecutionError(
             "RECOVERY_STATE_DRIFT",
-            "FAILED source 的 checkpoint successor 已偏离当前失败节点。",
+            "FAILED source 的 checkpoint successor 已偏离当前业务恢复入口。",
         )
     if any(getattr(task, "interrupts", ()) for task in getattr(snapshot, "tasks", ()) or ()):
         raise RecoveryExecutionError(
@@ -1251,7 +1276,7 @@ def _validate_checkpoint_reentry_source(
         or (plan is not None and plan.target_node != target_node)
         or (
             source.status is DurableExecutionStatus.FAILED
-            and target_node != source.current_node
+            and target_node != failed_reentry_target(source)
         )
     ):
         raise RecoveryExecutionError(
@@ -1396,7 +1421,7 @@ def _require_checkpoint_reentry_plan(
         or not plan.target_node
         or (
             source.status is DurableExecutionStatus.FAILED
-            and plan.target_node != source.current_node
+            and plan.target_node != failed_reentry_target(source)
         )
     ):
         raise RecoveryExecutionError(

@@ -190,6 +190,9 @@ export function workbenchRecoveryIncident(
               : '继续处理失败任务。'}`
         : candidate.executionStatus === 'interrupted' && targetNode === 'build'
           ? '将从开发实现阶段重新开始，重新检查当前文件并执行任务清单。'
+          : retryingNode && targetNode === 'integration_test'
+            // 恢复入口由后端签发；此处只解释测试阶段重启，不在前端改写节点或预算。
+            ? '将从测试阶段重新开始，重新检查当前代码，并重新计算本轮修复次数。'
           : retryingNode
         ? nodeLabel ? `将从「${nodeLabel}」节点重试。` : '重试时将重新确认执行起点。'
         : '可以继续当前执行。',

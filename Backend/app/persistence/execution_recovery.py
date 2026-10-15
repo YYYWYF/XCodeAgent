@@ -10,6 +10,7 @@ from typing import AsyncIterator
 
 import aiosqlite
 from app.branding import WORKSPACE_ARTIFACT_DIR
+from app.domain.workflow_recovery_boundary import failed_reentry_target
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
@@ -494,7 +495,7 @@ async def _claim_recovery_attempt(
         or not plan.target_node
         or (
             source.status is DurableExecutionStatus.FAILED
-            and plan.target_node != source.current_node
+            and plan.target_node != failed_reentry_target(source)
         )
     ):
         raise RecoveryExecutionError(
@@ -589,7 +590,9 @@ async def _claim_recovery_attempt(
                 persisted_source.execution_kind != "workbench"
                 or persisted_source.status is not DurableExecutionStatus.FAILED
                 or persisted_source.failure is not None
-                or persisted_source.current_node != plan.target_node
+                # 多个内部节点可归到同一业务入口，但 claim 前真实失败位置仍不能漂移。
+                or persisted_source.current_node != source.current_node
+                or failed_reentry_target(persisted_source) != plan.target_node
             ):
                 raise RecoveryExecutionError(
                     "RECOVERY_SOURCE_NOT_ADMISSIBLE",
