@@ -1,6 +1,6 @@
 """创建工作台和自由对话共同使用的局部代码修改 Agent。"""
 
-from deepagents import create_deep_agent
+from app.agents.execution_control import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 from langchain.agents.middleware import ModelCallLimitMiddleware
 

@@ -56,6 +56,10 @@ class WorkspaceProcessRegistry:
                     process.wait(timeout=max(0.0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     _terminate_process_group(process, force=True)
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        pass
         return [process.pid for process in processes if process.poll() is None]
 
     @contextmanager
@@ -63,6 +67,9 @@ class WorkspaceProcessRegistry:
         self, *popenargs: Any, workspace: str | Path, run_id: str = "", **kwargs: Any,
     ) -> Iterator[subprocess.Popen[Any]]:
         """为需自行观察就绪的短期进程提供登记、取消和异常回收边界。"""
+        from app.services.run_workers import current_run_id
+
+        run_id = run_id or current_run_id()
         key = _workspace_key(workspace)
         _configure_process_group(kwargs)
         with self._lock:
@@ -114,6 +121,9 @@ class WorkspaceProcessRegistry:
     ) -> subprocess.CompletedProcess[Any]:
         """按 subprocess.run 语义执行命令，并在整个等待期间登记其进程组。"""
 
+        from app.services.run_workers import current_run_id
+
+        run_id = run_id or current_run_id()
         key = _workspace_key(workspace)
         with self._lock:
             if key in self._deleting_workspaces:

@@ -19,6 +19,7 @@ import './PlanExecutionDock.less'
 const { Text } = Typography
 
 type Props = {
+  ending?: boolean
   dependencyLocked?: boolean
   execution?: WorkbenchExecution
   developmentTotals?: { completed: number; total: number }
@@ -35,6 +36,7 @@ type Props = {
 
 /** 仅替换工作区最底部输入区，承载计划锁定说明和必要控制动作。 */
 export default function PlanExecutionDock({
+  ending = false,
   dependencyLocked = false,
   execution,
   developmentTotals,
@@ -84,7 +86,7 @@ export default function PlanExecutionDock({
 
   return (
     <section
-      aria-busy={mode === 'stopping'}
+      aria-busy={ending || mode === 'stopping'}
       aria-live="polite"
       className={cx('plan-execution-dock', mode)}
     >
@@ -100,14 +102,14 @@ export default function PlanExecutionDock({
         </span>
         <div className={cx('plan-execution-dock-copy')}>
           <Text strong>
-            {dependencyLocked
+            {ending ? '正在结束任务…' : dependencyLocked
               ? '该页面被关联计划锁定'
               : developmentGateBlocked
                 ? '继续完成开发产物'
                 : planModeTitle(mode)}
           </Text>
           <Text type="secondary">
-            {dependencyLocked
+            {ending ? '正在等待后台 Agent、工具和命令退出，请稍候。' : dependencyLocked
               ? dependencyLockDescription(ownerPageId, execution?.phase)
               : developmentGateBlocked
                 ? developmentGateReason
@@ -118,7 +120,7 @@ export default function PlanExecutionDock({
                   )}
           </Text>
         </div>
-        {!dependencyLocked && (
+        {ending ? <Button loading disabled>正在结束</Button> : !dependencyLocked && (
           <div className={cx('plan-execution-dock-actions')}>
             {(mode === 'running' || mode === 'stopping') && (
               <>
@@ -220,40 +222,21 @@ export default function PlanExecutionDock({
                     继续执行
                   </Button>
                 )}
-                <Popconfirm
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  okText="结束计划"
-                  onConfirm={onEnd}
-                  title="结束后将释放工作区并恢复自由输入，确定结束吗？"
-                >
-                  <Button danger type="text">
-                    结束
-                  </Button>
-                </Popconfirm>
+
               </>
             )}
-            {mode === 'awaiting_plan_adjustment' && (
-              <Popconfirm
-                cancelText="取消"
-                okButtonProps={{ danger: true }}
-                okText="结束计划"
-                onConfirm={onEnd}
-                title="确定结束当前计划吗？"
-              >
-                <Button danger type="text">
-                  结束
-                </Button>
-              </Popconfirm>
-            )}
+            <Popconfirm cancelText="取消" okButtonProps={{ danger: true }} okText="结束任务"
+              onConfirm={onEnd} title="结束后将停止所有相关执行；工作区未变化时可继续任务。">
+              <Button danger type="text" disabled={mode === 'stopping'}>结束任务</Button>
+            </Popconfirm>
           </div>
         )}
       </div>
 
-      {mode === 'stopping' ? (
+      {ending || mode === 'stopping' ? (
         <div
-          aria-label="正在等待后端暂停计划执行"
-          aria-valuetext="正在安全暂停并保存进度"
+          aria-label={ending ? '正在等待后端结束任务' : '正在等待后端暂停计划执行'}
+          aria-valuetext={ending ? '正在等待所有相关执行退出' : '正在安全暂停并保存进度'}
           className={cx('plan-execution-dock-loading')}
           role="progressbar"
         >

@@ -67,6 +67,7 @@ from app.protocols.workflow.stream_events import (
 )
 from app.config import Settings
 from app.domain.execution_recovery import (
+    WorkflowReentryReason,
     DurableExecutionRunConflictError,
 )
 from app.services.dag_planning_orchestrator import DagPlanningError
@@ -97,7 +98,8 @@ from app.services.execution_recovery import (
 )
 from app.services.execution_failure_classifier import sanitize_failure_diagnostic
 from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext, WorkflowReentryExecutor
-from app.services.node_recovery_context import bind_recovery_runtime
+from app.services.node_recovery_context import NodeRecoveryContext, bind_recovery_runtime
+from app.services.run_workers import bind_run_workers
 from app.services.execution_lease_heartbeat import maintain_execution_heartbeat, stop_execution_heartbeat
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.backend_instance import current_backend_instance
@@ -602,6 +604,35 @@ def build_workflow_ag_ui_stream(
                     entity_test_entry_id = await _source_entity_test_entry(
                         active_graph, workspace, source_run_id
                     )
+            ended_node_context = None
+            if workflow_inputs.get("ended_resume"):
+                if not workspace or not hasattr(active_graph, "aget_state"):
+                    raise ValueError("结束任务缺少服务端 checkpoint，无法安全继续。")
+                saved = await active_graph.aget_state({"configurable": {"thread_id": thread_id}})
+                authoritative = dict(saved.values) if saved else {}
+                source_id = str(resume_values.get("resume_execution_run_id") or "")
+                selected_skill_names = tuple(authoritative.get("selected_skill_names") or [])
+                selected_skill_validation = validate_selected_user_skills(selected_skill_names)
+                phase_review_files = None
+
+                if authoritative.get("active_run_id") != source_id:
+                    raise ValueError("原任务 checkpoint 已被其他执行替换，请重新发起任务。")
+                # 恢复私有修复进度和原确认状态，拒绝用前端公开快照重建内部执行事实。
+                # reducer 字段不重新注入，同 thread 的 checkpoint 已经持有完整历史。
+                additive = {"timeline", "build_events", "test_events", "code_review_events", "code_change_sets"}
+                resume_values.clear()
+                resume_values.update({key: value for key, value in authoritative.items()
+                                 if key not in additive | {"active_run_id", "active_thread_id", "lifecycle", "observability", "resume_from", "lifecycle_interaction_submission", "workflow_action", "request"}})
+                resume_values.update({"resume_execution_run_id": source_id, "owner_session_id": owner_session_id})
+                workflow_inputs["resume_values"] = resume_values
+                # 归档、指纹、原 checkpoint 与生命周期接管共同授权本次继续；复用各节点的
+                # 既有重入整理，失败测试仍从测试阶段重开，暂停预算与正式确认门保持原语义。
+                ended_node_context = NodeRecoveryContext(
+                    source_run_id=source_id, execution_run_id=run_id, thread_id=thread_id,
+                    target_node=resume_from, checkpoint_id=str(saved.config.get("configurable", {}).get("checkpoint_id") or ""),
+                    reentry_reason=WorkflowReentryReason.BUSINESS_RETRY if workflow_inputs.get("ended_resume_failed") else WorkflowReentryReason.INTERRUPTED_CONTINUE,
+                    build_execution_scope=dict(authoritative.get("build_execution_scope") or {}), entry_state=authoritative,
+                )
             checkpoint_values: dict[str, Any] = {}
             execution_checkpoint_state: dict[str, Any] = {}
             checkpoint_snapshot: Any | None = None
@@ -1173,10 +1204,10 @@ def build_workflow_ag_ui_stream(
 
                     try:
                         # ContextVar 只进入本次 producer；节点 wrapper 再限定首次目标调用。
-                        with bind_recovery_runtime(
+                        with bind_run_workers(run_id, str(workflow_inputs["workspace"] or "")), bind_recovery_runtime(
                             native_recovery_context.node_recovery_context()
                             if native_recovery_context is not None
-                            else None
+                            else ended_node_context
                         ):
                             async for item in active_graph.astream(graph_input, **stream_kwargs):
                                 await queue.put(("item", item))

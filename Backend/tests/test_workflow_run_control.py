@@ -73,7 +73,7 @@ class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
                         action="end", workspace=directory, target_run_id="repair-run",
                         thread_id="control-thread", run_id="control-run",
                     )])
-                cancel.assert_awaited_once_with("repair-run", workspace=directory)
+                cancel.assert_awaited_once_with("repair-run", workspace=directory, ending=True)
                 remaining = load_application_lifecycle(directory).active_executions
                 self.assertEqual("repair-run" in remaining, outcome == "cancel_timeout")
                 if outcome == "cancel_timeout":
@@ -171,7 +171,7 @@ class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
             ) as abandon:
                 frames = [frame async for frame in stream]
 
-            end.assert_called_once_with(directory, run_id="run-dag")
+            end.assert_called_once_with(directory, run_id="run-dag", preserve_resume=True)
             abandon.assert_not_called()
             self.assertTrue(frames)
 

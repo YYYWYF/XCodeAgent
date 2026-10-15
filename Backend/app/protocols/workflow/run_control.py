@@ -36,6 +36,7 @@ from app.services.build_task_plan_lifecycle import (
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.services.workspace_process_registry import workspace_process_registry
+from app.services.run_workers import active_worker_runs, wait_run_workers
 from app.workspace.task_documents import build_task_plan_lifecycle_lock
 
 WorkflowCancellationStatus = Literal[
@@ -122,6 +123,8 @@ class WorkflowRunRegistry:
                 raise RuntimeError("当前应用正在删除，不能启动新的运行。")
             if (workspace_key, thread_id) in self._deleting_threads:
                 raise RuntimeError("当前会话正在删除，不能启动新的运行。")
+            if run_id in active_worker_runs():
+                raise WorkflowRunAlreadyActiveError(run_id)
             existing = self._tasks.get(run_id)
             if existing is not None:
                 _existing_workspace, existing_task = existing
@@ -137,7 +140,7 @@ class WorkflowRunRegistry:
         """返回真实在运行的任务，供维护入口原子检查。"""
         key = _workspace_key(workspace)
         with self._lock:
-            return [run_id for run_id, (root, task) in self._tasks.items() if root == key and not task.done()]
+            return list({run_id for run_id, (root, task) in self._tasks.items() if root == key and not task.done()} | active_worker_runs(key))
 
     def unregister(self, run_id: str, task: asyncio.Task[Any] | None = None) -> None:
         """仅移除仍指向同一 asyncio task 的运行登记。"""
@@ -207,39 +210,48 @@ class WorkflowRunRegistry:
         self,
         run_id: str,
         *,
-        timeout_seconds: float = 3.0,
+        timeout_seconds: float = 30.0,
         workspace: str | None = None,
+        ending: bool = False,
     ) -> WorkflowCancellationStatus:
         """取消指定运行并等待终态；已提交 Pending 时让正常确认生命周期胜出。"""
 
         with self._lock:
             entry = self._tasks.get(run_id)
+        requested_workspace = _workspace_key(workspace)
+        if requested_workspace and (
+            (entry is not None and entry[0] != requested_workspace)
+            or (run_id in active_worker_runs() and run_id not in active_worker_runs(requested_workspace))
+        ):
+            # 相同 ID 的其它工作区不能被克隆项目里的旧执行登记取消。
+            return "cancel_timeout"
         task = entry[1] if entry is not None else None
         workspace_key = (
             entry[0]
             if entry is not None and entry[0]
             else _workspace_key(workspace)
         )
-        if _pending_confirmation_for_run(workspace_key, run_id) is not None:
+        if not ending and _pending_confirmation_for_run(workspace_key, run_id) is not None:
             return "pending_confirmation"
-        if task is None or task.done():
-            return "not_running"
-
+        had_work = (task is not None and not task.done()) or run_id in active_worker_runs(workspace_key)
+        # 即使外层 Task 已注销，也要封锁迟到节点并等待仍在运行的同步 Agent。
         workspace_process_registry.cancel_run(run_id)
-        cancellation_requested = task.cancel()
-        if not cancellation_requested:
-            return "not_running" if task.done() else "cancel_timeout"
-
-        done, _pending = await asyncio.wait(
-            [task],
-            timeout=max(0.0, timeout_seconds),
+        deadline = asyncio.get_running_loop().time() + max(0.0, timeout_seconds)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.wait([task], timeout=max(0.0, deadline - asyncio.get_running_loop().time()))
+        processes = await asyncio.to_thread(
+            workspace_process_registry.wait_run_processes, run_id,
+            min(5.0, max(0.0, deadline - asyncio.get_running_loop().time())),
         )
-        if _pending_confirmation_for_run(workspace_key, run_id) is not None:
-            # 极窄竞态下 Cancel 已发出但 Pending 先完成提交；恢复同步进程栅栏，
-            # 后续 Confirm 仍可沿该 Workflow 身份进入正常 Build 生命周期。
-            workspace_process_registry.allow_run(run_id)
+        drained = await asyncio.to_thread(
+            wait_run_workers, run_id, max(0.0, deadline - asyncio.get_running_loop().time()),
+        )
+        if not drained or processes or (task is not None and not task.done()):
+            return "cancel_timeout"
+        if not ending and _pending_confirmation_for_run(workspace_key, run_id) is not None:
             return "pending_confirmation"
-        return "cancelled" if task in done or task.done() else "cancel_timeout"
+        return "cancelled" if had_work else "not_running"
 
     def is_active(self, run_id: str, *, workspace: str | None = None) -> bool:
         """判断指定 Workflow 是否仍由当前 Backend 进程真实持有。"""
@@ -247,9 +259,10 @@ class WorkflowRunRegistry:
         workspace_key = _workspace_key(workspace)
         with self._lock:
             entry = self._tasks.get(run_id)
-        if entry is None or entry[1].done():
-            return False
-        return not workspace_key or entry[0] == workspace_key
+        return (
+            entry is not None and not entry[1].done()
+            and (not workspace_key or entry[0] == workspace_key)
+        ) or run_id in active_worker_runs(workspace_key)
 
     def active_run_ids(self, workspace: str | None = None) -> set[str]:
         """返回当前进程仍活跃且属于目标 workspace 的 Workflow runId。"""
@@ -261,7 +274,7 @@ class WorkflowRunRegistry:
             run_id
             for run_id, (entry_workspace, task) in entries
             if not task.done() and (not workspace_key or entry_workspace == workspace_key)
-        }
+        } | active_worker_runs(workspace_key)
 
     def begin_workspace_deletion(
         self,
@@ -688,7 +701,7 @@ def _plan_control_message(action: str, status: str) -> str:
     """根据计划控制结果生成稳定的用户提示。"""
 
     if action == "end" and status == "ended":
-        return "计划已结束，工作区已恢复自由输入。"
+        return "任务已结束，相关后台执行已停止。工作区未变化时可继续任务。"
     if action == "end" and status == "already_ended":
         return "计划已经结束，当前工作区已处于自由输入状态。"
     if action == "stop" and status == "already_stopped":
@@ -720,21 +733,21 @@ async def _execute_workbench_plan_control(
                 application_lifecycle_payload(lifecycle) if lifecycle is not None else None,
                 _plan_control_message(action, "already_ended"),
             )
-        # 生命周期可能滞后于正在执行的修复；释放锁之前必须先停止真实 owner。
-        if workflow_run_registry.is_active(target_run_id, workspace=workspace):
-            cancellation = await workflow_run_registry.cancel_and_wait(
-                target_run_id, workspace=workspace,
+        # 即使外层已注销，也先封锁尚在线程池队列里的迟到节点，再等待全部真实工作。
+        cancellation = await workflow_run_registry.cancel_and_wait(
+            target_run_id, workspace=workspace, ending=True,
+        )
+        if cancellation not in {"cancelled", "not_running"}:
+            raise PlanControlError(
+                status="failed",
+                code="PLAN_CONTROL_RUN_STOP_FAILED",
+                message="尚未确认当前运行停止，工作区未释放，请重试结束计划。",
             )
-            if cancellation not in {"cancelled", "not_running"}:
-                raise PlanControlError(
-                    status="failed",
-                    code="PLAN_CONTROL_RUN_STOP_FAILED",
-                    message="尚未确认当前运行停止，工作区未释放，请重试结束计划。",
-                )
         try:
             updated_lifecycle = end_workbench_execution(
                 workspace,
                 run_id=target_run_id,
+                preserve_resume=True,
             )
         except ApplicationLifecycleConflictError as exc:
             # 另一个 End 可能刚刚完成；重新解析仍只接受同一 workspace/runId。

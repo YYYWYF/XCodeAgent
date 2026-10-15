@@ -4,7 +4,8 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, START
+from app.services.run_workers import WorkerStateGraph as StateGraph
 
 from app.graph import nodes
 from app.graph.nodes.task_planning_adapter import (

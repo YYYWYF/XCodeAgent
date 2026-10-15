@@ -341,6 +341,8 @@ type UseWorkflowConversationResult = {
   ) => Promise<boolean>
   loading: boolean
   planEnded: boolean
+  endingPlan: boolean
+  handleContinueEndedPlan: (runId: string) => Promise<void>
   phaseExecution?: SessionExecutionEntry
   sessionExecutionLocked: boolean
   sessionRunStates: Record<string, SessionRunStatus>
@@ -722,6 +724,7 @@ export function useWorkflowConversation({
   const connectionStateRef = useRef(connectionState)
   const planControlRequestRef = useRef<PlanControlRequestGuard>()
   const endingPlanRef = useRef(false)
+  const [endingPlan, setEndingPlan] = useState(false)
   const runFinalizationRef = useRef<Record<string, { promise: Promise<void>; resolve: () => void }>>({})
   const activePlanControlContextRef = useRef<ActivePlanControlContext>()
   applicationLifecycleRef.current = applicationLifecycle
@@ -790,7 +793,9 @@ export function useWorkflowConversation({
     : undefined
   // 结束控制的成功回执属于当前会话消息，即使本地生命周期快照晚到也必须立即恢复输入。
   const planEnded = Boolean(
-    endedPlanSessionKeys[activeRuntimeKey || draftKey] || workflowEndedPlanControl(activeWorkflow)
+    endedPlanSessionKeys[activeRuntimeKey || draftKey] || workflowEndedPlanControl(activeWorkflow) ||
+    (activeWorkflow?.summary.status === 'failed' && Object.values(applicationLifecycle?.endedExecutions || {})
+      .some((item) => item.execution.threadId === activeWorkflow.threadId))
   )
   // 正常完成回执只清理本会话兜底请求错误；业务失败、连接错误和其它会话不受影响。
   useEffect(() => {
@@ -2429,6 +2434,20 @@ export function useWorkflowConversation({
     })
   }
 
+  /** 继续已结束的原任务；重新 GET 资格，最终由后端原子校验指纹、身份和资源。 */
+  const handleContinueEndedPlan = async (runId: string): Promise<void> => {
+    if (loading || workspaceBusy || !activeSession) return
+    if (!(await refreshExecutionRecoveryLifecycle())) return
+    const archived = applicationLifecycleRef.current?.endedExecutions?.[runId]
+    if (!archived?.workspaceUnchanged) return
+    // 原始公开消息可能在断线前未落盘；继续只需要精确服务端身份，业务状态从 checkpoint 读取。
+    await sendWorkflowMessage('继续已结束的任务。', {
+      executionThreadId: archived.execution.threadId, resumeExecutionRunId: runId,
+      selectedPageId: archived.execution.scope === 'page' ? archived.execution.targetId : '',
+      titleFrom: '继续任务'
+    })
+  }
+
   /** 在原审查会话和执行范围内重新调用失败的扫描或修复模型子步骤。 */
   const handleRetryCodeReview = async (): Promise<void> => {
     if (!activeWorkflow || !workflowCodeReviewRetry(activeWorkflow) || loading || workspaceBusy) {
@@ -2487,6 +2506,7 @@ export function useWorkflowConversation({
     const controlIdentity = activeRun?.identity || matchingActiveSession || activeSession
     if (endingPlanRef.current || !targetRunId || !controlIdentity) return
     endingPlanRef.current = true
+    setEndingPlan(true)
     try {
       // End 是精确 Run 的清理操作，不能被普通写入只读锁静默拦截。
       // 当前仍有本地修复流时，先确认取消并等待落盘/finally 收口，避免结束回执被旧流覆盖。
@@ -2564,6 +2584,7 @@ export function useWorkflowConversation({
       )
     } finally {
       endingPlanRef.current = false
+      setEndingPlan(false)
     }
   }
 
@@ -2638,6 +2659,8 @@ export function useWorkflowConversation({
     handleSubmitClarification,
     loading,
     planEnded,
+    endingPlan,
+    handleContinueEndedPlan,
     phaseExecution,
     sessionExecutionLocked,
     sessionRunStates,

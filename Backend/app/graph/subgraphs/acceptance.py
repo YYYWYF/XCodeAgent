@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, START
+from app.services.run_workers import WorkerStateGraph as StateGraph
 
 from app.graph.state import ProjectState
 from app.services.node_recovery_context import bind_node_recovery, current_node_recovery_context

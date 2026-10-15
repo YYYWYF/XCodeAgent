@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from app.domain.application_lifecycle import EndedWorkbenchExecution
+from app.services.ended_workspace import workspace_fingerprint, ended_workspace_unchanged
+
 import hashlib
 import json
 import logging
@@ -431,6 +434,29 @@ def start_workbench_execution(
                 "应用尚未完成创建规划，当前阶段 "
                 f"{current.initialization.stage.value} 不能启动工作台计划执行。"
             )
+        archived = current.ended_executions.get(replaces_run_id or "")
+        if archived is not None:
+            original = archived.execution
+            if (original.thread_id != thread_id or original.scope != scope or original.target_id != target_id
+                    or original.owner_session_id != (str(owner_session_id or "").strip() or None)):
+                raise ApplicationLifecycleConflictError("结束任务的继续请求不属于原会话或目标。")
+            if not ended_workspace_unchanged(str(workspace), archived.fingerprint):
+                raise ApplicationLifecycleConflictError("工作区已变化，不能安全继续，请重新发起任务。")
+            requested_keys = {_resource_claim_key(claim) for claim in [*archived.claims, *(resource_claims or [])]}
+            for other_id in current.active_executions:
+                occupied = {_resource_claim_key(claim) for claim in _resource_claims_for_run(current.resource_locks, other_id)}
+                if (requested_keys & occupied or (requested_keys and "application:application" in occupied)
+                        or (occupied and "application:application" in requested_keys)):
+                    raise ApplicationLifecycleConflictError("原任务资源已被其他执行占用，请先结束相关任务。")
+            if current.active_formal_revision is not None:
+                raise ApplicationLifecycleConflictError("已有新的正式修订，不能继续旧任务。")
+            # 仅在内存中恢复原登记以复用既有确认校验；新执行与资源锁成功写盘后才消费归档。
+            current = current.model_copy(update={
+                "active_executions": {**current.active_executions, original.run_id: original},
+                "ended_executions": {key: value for key, value in current.ended_executions.items() if key != replaces_run_id},
+                "active_formal_revision": archived.formal_revision or current.active_formal_revision,
+            })
+            resource_claims = [*(resource_claims or []), *archived.claims]
         _assert_application_mutation_admission(
             workspace,
             current,
@@ -1010,6 +1036,7 @@ def end_workbench_execution(
     *,
     run_id: str,
     missing_ok: bool = False,
+    preserve_resume: bool = False,
 ) -> ApplicationLifecycle:
     """终止当前计划并释放工作区输入锁，同时保留最后执行快照供审计。"""
 
@@ -1025,6 +1052,16 @@ def end_workbench_execution(
                 return current
             raise ApplicationLifecycleConflictError("当前没有可结束的工作台计划执行。")
         ending_execution = current.active_executions[run_id]
+        if preserve_resume:
+            # 控制面已等待真实工作退出；只在此时采集稳定基线，和释放锁一次写盘。
+            archived = EndedWorkbenchExecution(
+                execution=ending_execution.model_copy(update={"status": WorkbenchExecutionStatus.STOPPED}),
+                claims=_resource_claims_for_run(current.resource_locks, run_id),
+                workspace=str(Path(workspace).resolve()), fingerprint=workspace_fingerprint(workspace),
+                sourceFailed=ending_execution.status == WorkbenchExecutionStatus.FAILED,
+                formalRevision=current.active_formal_revision if execution_belongs_to_active_revision(current, ending_execution) else None,
+            )
+            current = current.model_copy(update={"ended_executions": {**current.ended_executions, run_id: archived}})
         remaining = dict(current.active_executions)
         remaining.pop(run_id, None)
         ended = _persist_workbench_execution_removal(
@@ -1447,6 +1484,13 @@ def application_lifecycle_payload(state: ApplicationLifecycle) -> dict[str, Any]
     # continuation 的原请求和 token 哈希只属于服务端控制面；公开运行结果通过
     # developmentContinuation 单独投射当前可执行动作，生命周期快照不暴露内部登记表。
     payload.pop("developmentContinuations", None)
+    if state.ended_executions:
+        payload["endedExecutionsCheckedAt"] = utc_now().isoformat()
+    payload["endedExecutions"] = {
+        run_id: {"execution": item.execution.model_dump(mode="json", by_alias=True),
+                 "workspaceUnchanged": ended_workspace_unchanged(item.workspace, item.fingerprint)}
+        for run_id, item in state.ended_executions.items()
+    }
     return payload
 
 

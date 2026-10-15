@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
+from app.domain.workflow_recovery_boundary import failed_node_reentry_target
 
 from pathlib import Path
 from typing import Any
@@ -243,6 +244,18 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 "创建规划 UI 动作必须通过 applicationPlanningInteraction 提交。"
             )
+    ended_resume = None
+    if explicit_resume_execution_run_id and workspace and workflow_scope not in APPLICATION_PLANNING_SCOPES:
+        lifecycle = load_application_lifecycle(workspace)
+        ended_resume = lifecycle.ended_executions.get(explicit_resume_execution_run_id) if lifecycle else None
+        if ended_resume is not None:
+            if workflow_action or clarification_answers or explicit_resume_from or debug_state:
+                raise ValueError("继续已结束任务不能同时提交确认、业务动作或节点调试。")
+            # 已结束任务只能回到服务端保存的阶段；继续本身不代表用户提交正式确认。
+            resume_from = _supported_resume_node(
+                failed_node_reentry_target(ended_resume.execution.phase) if ended_resume.source_failed else ended_resume.execution.phase,
+                workflow_scope=workflow_scope,
+            )
     if workflow_action == "retry_failed_tasks":
         raise ValueError(
             "retry_failed_tasks 入口已更新，请刷新当前恢复状态并使用上方恢复卡片。"
@@ -309,6 +322,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if (
         resume_from == "review_phase_confirmation"
         and not review_phase_confirmation
+        and ended_resume is None
         and workflow_scope != "application_planning"
     ):
         raise ValueError(
@@ -317,6 +331,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if (
         resume_from == "acceptance_phase_confirmation"
         and not acceptance_phase_confirmation
+        and ended_resume is None
         and workflow_scope != "application_planning"
     ):
         raise ValueError(
@@ -325,6 +340,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if (
         resume_from == "code_review"
         and not code_review_repair_confirmation
+        and ended_resume is None
         and workflow_scope != "application_planning"
         and _clarification_mode(resume_state) == "code_review_repair_confirmation"
     ):
@@ -806,6 +822,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
     }
     return {
+        "ended_resume": ended_resume is not None,
+        "ended_resume_failed": bool(ended_resume and ended_resume.source_failed),
         "plan_control_run_id": (
             _optional_text(payload.get("planControlRunId"))
             or _optional_text(payload.get("plan_control_run_id"))

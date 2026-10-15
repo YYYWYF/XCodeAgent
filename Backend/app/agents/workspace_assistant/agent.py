@@ -1,6 +1,6 @@
 """创建只读工作区问答 Agent。"""
 
-from deepagents import create_deep_agent
+from app.agents.execution_control import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 
 from app.agents.workspace_scope import (

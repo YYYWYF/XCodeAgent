@@ -5,7 +5,7 @@ import {
   InfoCircleOutlined
 } from '@ant-design/icons'
 import { Button, Typography } from 'antd'
-import { useRef, useState, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import {
   developmentTargetTaskId,
@@ -14,6 +14,7 @@ import {
 } from '../../developmentNextStep'
 import type { QuickTaskItem } from '../QuickTaskGuide/quickTasks'
 import DevelopmentTargetPicker from './DevelopmentTargetPicker'
+import EndedTaskNotice from './EndedTaskNotice'
 import { allDevelopmentTargetsCompleted } from './pickerTasks'
 import './NextDevelopmentGuide.less'
 
@@ -27,6 +28,7 @@ type Props = {
   loading: boolean
   catalogError?: string | null
   onStart: (task: QuickTaskItem) => Promise<void>
+  onContinue?: (runId: string) => Promise<void>
 }
 
 /** 在当前对话末尾提供开发完成/主动结束后的下一步，并让用户显式选择后才启动新任务。 */
@@ -37,10 +39,17 @@ export default function NextDevelopmentGuide({
   disabledHint,
   loading,
   catalogError,
-  onStart
+  onStart,
+  onContinue
 }: Props): ReactElement | null {
   const [expanded, setExpanded] = useState(false)
+  const [restarting, setRestarting] = useState(false)
+  const [continuing, setContinuing] = useState(false)
   const [startingId, setStartingId] = useState('')
+  useEffect(() => {
+    // 只有仍不具备继续资格时保留重新选择；基线恢复后重新提供唯一的继续入口。
+    if (step.workspaceUnchanged) setRestarting(false)
+  }, [step.workspaceUnchanged])
   const startingRef = useRef(false)
   const currentId = developmentTargetTaskId(step.target)
   const currentTask = tasks.find((task) => task.id === currentId)
@@ -68,8 +77,23 @@ export default function NextDevelopmentGuide({
     }
   }
 
-  // 不把加载中、目录异常或空目录当成全部完成；完成后由既有测试确认卡负责下一步。
-  if (allDevelopmentTargetsCompleted(tasks, loading, catalogError)) return null
+  const allCompleted = allDevelopmentTargetsCompleted(tasks, loading, catalogError)
+  /** 等待继续请求收口期间锁住唯一动作，沿用原后端恢复校验。 */
+  const handleContinue = async (): Promise<void> => {
+    if (!onContinue || !step.endedRunId || continuing || disabled) return
+    setContinuing(true)
+    try {
+      await onContinue(step.endedRunId)
+    } finally {
+      setContinuing(false)
+    }
+  }
+
+  // End 成功后先给出唯一动作；重新发起只展开原任务卡，不直接启动 Agent。
+  if (step.endedRunId && !restarting) return (
+    <EndedTaskNotice unchanged={step.workspaceUnchanged} continuing={continuing} disabled={disabled}
+      onContinue={handleContinue} onRestart={() => { setRestarting(true); setExpanded(true) }} />
+  )
 
   return (
     <section className={cx('next-development-guide')} aria-label="继续开发引导" aria-live="polite">
@@ -105,7 +129,7 @@ export default function NextDevelopmentGuide({
         </div>
       ) : (
         <div className={cx('next-development-guide-notice')}>
-          <Text>{targets.length ? '选择一个目标，继续完善应用' : '暂无可开发的页面或 API'}</Text>
+          <Text>{allCompleted || !targets.length ? '暂无可开发任务' : '选择一个目标，继续完善应用'}</Text>
         </div>
       )}
       <footer className={cx('next-development-guide-footer')}>

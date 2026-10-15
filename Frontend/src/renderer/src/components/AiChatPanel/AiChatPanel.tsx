@@ -2341,6 +2341,8 @@ export default function AiChatPanel({
     handleExecuteRecoveryAction,
     handleRetryCodeReview,
     handleContinueStoppedPlan,
+    handleContinueEndedPlan,
+    endingPlan,
     handleContinueRevisionBuild,
     handleEndPlan,
     handleProductStageConversation,
@@ -2439,9 +2441,12 @@ export default function AiChatPanel({
   const restoredRunRunning = !planEnded && workbenchExecutionRunning(ownedExecution)
   const loading = localWorkflowLoading || restoredRunRunning
   const stopping = localWorkflowStopping || (restoredRunRunning && ownedExecution?.status === 'stopping')
+  // 已结束任务也只读刷新工作区资格；切换会话或本地开始新运行后自动停止旧轮询。
+  const endedExecutionForSession = planEnded ? Object.values(applicationLifecycle?.endedExecutions || {})
+    .find((item) => item.execution.ownerSessionId === activeSession?.sessionId) : undefined
   useWorkbenchRunRefresh(
     application,
-    !localWorkflowLoading && restoredRunRunning ? ownedExecution?.runId : undefined,
+    !localWorkflowLoading ? restoredRunRunning ? ownedExecution?.runId : endedExecutionForSession?.execution.runId : undefined,
     onApplicationLifecycleChange,
     workbenchRefreshConnection
   )
@@ -4307,8 +4312,12 @@ export default function AiChatPanel({
 
   /** 从完成/结束引导在当前会话追加新目标，保留正式开发门禁且不创建第二个可见会话。 */
   const handleNextDevelopmentStart = async (task: QuickTaskItem): Promise<void> => {
-    if (loading || workflowInputLocked || otherSessionExecutionLocked || pendingPlanActionable ||
-      !activeSession || activeWorkbenchPhase !== 'development') return
+    if (loading || workflowInputLocked || otherSessionExecutionLocked || pendingPlanActionable || !activeSession) return
+    if (activeWorkbenchPhase !== 'development') {
+      switchPhase('development')
+      await handleQuickTaskStart(task)
+      return
+    }
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
@@ -4323,9 +4332,11 @@ export default function AiChatPanel({
     }
     onPlanningArtifactsRefresh()
   }
-  const nextDevelopmentStep = activeWorkbenchPhase === 'development' && !loading &&
+  const candidateNextDevelopmentStep = !loading &&
     !loadingSessions && !previewRuntime.repairSession
     ? developmentNextStep(displayedMessages, applicationLifecycle) : undefined
+  const nextDevelopmentStep = candidateNextDevelopmentStep?.endedRunId || activeWorkbenchPhase === 'development'
+    ? candidateNextDevelopmentStep : undefined
   const nextDevelopmentTasks = buildQuickTasks(displayedPlanningPages,
     developmentPlanningApiContracts, [], applicationLifecycle?.developmentArtifacts)
 
@@ -5022,6 +5033,7 @@ export default function AiChatPanel({
                     loading={!developmentPlanningReady || !applicationLifecycle?.developmentArtifacts}
                     catalogError={applicationLifecycle?.developmentArtifacts?.catalogError}
                     onStart={handleNextDevelopmentStart}
+                    onContinue={handleContinueEndedPlan}
                   />
                 ) : undefined}
                 applicationLifecycle={applicationLifecycle}
@@ -5207,7 +5219,7 @@ export default function AiChatPanel({
                 />
               ) : !entityDesignChatActive &&
                 !acceptanceAwaiting &&
-                shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive) ? (
+                (endingPlan || shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive)) ? (
                 <WorkspaceDebugDock
                   activeWorkflow={activeWorkflow}
                   copy={copy}
@@ -5224,10 +5236,11 @@ export default function AiChatPanel({
                       dependencyLocked={targetExecutionContext.dependencyLocked}
                       execution={scopedExecution}
                       developmentTotals={developmentTotals}
-                      mode={displayedPlanExecutionMode}
+                      mode={endingPlan || displayedPlanExecutionMode === 'idle' ? 'stopping' : displayedPlanExecutionMode}
                       testEntryGate={applicationLifecycle?.testEntryGate}
                       onAccept={handleAcceptPreview}
                       onConfirmInteraction={handleConfirmPlanInteraction}
+                      ending={endingPlan}
                       onEnd={() => handleEndPlan(scopedExecution?.runId)}
                       onOpenPreview={() => void handleOpenFullscreenPreview()}
                       onRetry={() => void handleContinueStoppedPlan(latestWorkflowForDisplay)}

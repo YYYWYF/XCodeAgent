@@ -1,3 +1,4 @@
+import { mergeEndedTaskAvailability } from '../src/renderer/src/service/endedTaskAvailability'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -177,7 +178,7 @@ test('完成后的闲聊不消费引导，新的修改确认、失败或暂停�
   }
 })
 
-test('全部完成隐藏卡片，目录错误和锁定仍禁止发起新任务', () => {
+test('全部完成显示暂无可开发任务，目录错误和锁定仍禁止发起新任务', () => {
   const step = developmentNextStep([message(completion())], lifecycle)!
   const html = renderToStaticMarkup(
     <NextDevelopmentGuide
@@ -188,7 +189,8 @@ test('全部完成隐藏卡片，目录错误和锁定仍禁止发起新任务',
       onStart={async () => undefined}
     />
   )
-  assert.equal(html, '')
+  assert.match(html, /暂无可开发任务/)
+  assert.doesNotMatch(html, /aria-label="开发「/)
   const locked = renderToStaticMarkup(
     <NextDevelopmentGuide
       step={step}
@@ -257,7 +259,7 @@ test('完成判断覆盖页面和 API，未加载、空目录、目录错误和�
     <NextDevelopmentGuide step={{ key: 'end', reason: 'ended' }} tasks={[]} disabled={false}
       loading={false} onStart={async () => undefined} />
   )
-  assert.match(empty, /暂无可开发的页面或 API/)
+  assert.match(empty, /暂无可开发任务/)
   assert.doesNotMatch(empty, /全部开发完成|全部页面和 API 已完成/)
   assert.equal(allDevelopmentTargetsCompleted([{ ...tasks[0], progress: undefined }], false), false)
   const finished = tasks.map((task) => ({
@@ -290,4 +292,27 @@ test('完整目录支持状态类型搜索联合筛选，并且只给未开发�
   assert.match(html, /按开发状态筛选/)
   assert.match(html, /开始开发「我的回检」/)
   assert.doesNotMatch(html, /开始开发「介绍页」|开始开发「开发中的页面」|data-recommended/)
+})
+
+
+test('结束后工作区未变化仅提供继续，变化后仅提供重新发起入口', () => {
+  for (const unchanged of [true, false]) {
+    const html = renderToStaticMarkup(<NextDevelopmentGuide
+      step={{ key: 'ended', reason: 'ended', endedRunId: 'source', workspaceUnchanged: unchanged }}
+      tasks={tasks} disabled={false} loading={false} onStart={async () => undefined}
+      onContinue={async () => undefined} />)
+    assert.match(html, unchanged ? /继续任务/ : /重新发起任务/)
+    assert.doesNotMatch(html, unchanged ? /重新发起任务/ : />继续任务</)
+    assert.doesNotMatch(html, /查看全部页面|推荐下一项|aria-label="开发「/)
+  }
+})
+
+
+test('结束资格同 revision 更新，迟到或旧 revision 的检查不能回退当前结果', () => {
+  const current = { ...lifecycle, endedExecutionsCheckedAt: '2026-10-15T01:00:00Z' }
+  const incoming = { ...current, endedExecutions: {}, endedExecutionsCheckedAt: '2026-10-15T01:00:03Z' }
+  const latest = mergeEndedTaskAvailability(current, current, incoming)
+  assert.equal(latest.endedExecutionsCheckedAt, incoming.endedExecutionsCheckedAt)
+  assert.equal(mergeEndedTaskAvailability(latest, latest, current), latest)
+  assert.equal(mergeEndedTaskAvailability(latest, latest, { ...incoming, revision: current.revision - 1 }), latest)
 })

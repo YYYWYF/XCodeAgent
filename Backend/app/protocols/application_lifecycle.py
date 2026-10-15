@@ -122,6 +122,12 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "identity": ["runId", "threadId", "ownerSessionId"],
             "dagGenerationSchema": "dag-generation.v1",
         },
+        "endedTasks": {
+            "field": "endedExecutions", "checkedAtField": "endedExecutionsCheckedAt",
+            "availability": "workspaceUnchanged", "resumeEndpoint": "/workflow/run",
+            "resumeField": "forwardedProps.resumeExecutionRunId",
+            "checks": ["workspace_fingerprint", "owner_session", "thread", "target", "resource_claims", "checkpoint_run"],
+        },
         "workflowIndependent": True,
         "developmentArtifacts": {
             "targets": ["page", "endpoint"],

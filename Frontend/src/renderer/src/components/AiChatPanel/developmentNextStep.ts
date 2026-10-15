@@ -9,6 +9,8 @@ import type { QuickTaskItem } from './components/QuickTaskGuide/quickTasks'
 export type DevelopmentNextStep = {
   key: string
   reason: 'completed' | 'ended'
+  endedRunId?: string
+  workspaceUnchanged?: boolean
   target?: ChatSessionDevelopmentTarget
 }
 
@@ -97,6 +99,8 @@ export function developmentNextStep(
       return {
         key: workflow.runId,
         reason: 'ended',
+        endedRunId: targetRunId,
+        workspaceUnchanged: targetRunId ? lifecycle?.endedExecutions?.[targetRunId]?.workspaceUnchanged : undefined,
         target: source?.workflow ? workflowDevelopmentTarget(source.workflow) : undefined
       }
     }
@@ -123,6 +127,15 @@ export function developmentNextStep(
         reason: 'ended',
         target: source?.workflow ? workflowDevelopmentTarget(source.workflow) : undefined
       }
+    }
+    // 继续在入场前失败时归档尚未消费，保留原任务入口，避免只能重试一个不存在的执行。
+    const ended = workflow.summary.status === 'failed'
+      ? Object.values(lifecycle?.endedExecutions || {}).find((item) => item.execution.threadId === workflow.threadId)
+      : undefined
+    if (ended) {
+      const source = messages.find((item) => item.workflow?.runId === ended.execution.runId)?.workflow
+      return { key: workflow.runId, reason: 'ended', endedRunId: ended.execution.runId,
+        workspaceUnchanged: ended.workspaceUnchanged, target: source ? workflowDevelopmentTarget(source) : undefined }
     }
     // 新正式运行或控制请求已经取代上一项；不能回溯旧完成卡并再次推荐。
     const target = workflowDevelopmentTarget(workflow)

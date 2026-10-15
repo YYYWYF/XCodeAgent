@@ -447,7 +447,8 @@ export type ProcessStepRecord = {
 
 const DEFAULT_AGENT_BASE_URL = 'http://127.0.0.1:8000'
 const STOP_NATURAL_DRAIN_MS = 300
-const STOP_CONTROL_TIMEOUT_MS = 4_000
+// 后端最多等待 30 秒真实退出，控制请求需留出传输和进程收尾余量。
+const STOP_CONTROL_TIMEOUT_MS = 40_000
 const STOP_TRANSPORT_DRAIN_MS = 800
 
 export type WorkflowCancellationStatus =

@@ -125,7 +125,10 @@ def begin_workflow_lifecycle(
         resume_values.get("resume_execution_run_id") or ""
     ).strip()
     if explicit_resume_run_id:
-        previous = lifecycle.active_executions.get(explicit_resume_run_id)
+        previous = lifecycle.active_executions.get(explicit_resume_run_id) or (
+            lifecycle.ended_executions[explicit_resume_run_id].execution
+            if explicit_resume_run_id in lifecycle.ended_executions else None
+        )
         # 先校验应用级调试执行的原身份，再以服务端切片纠正新执行；页面之间仍禁止串目标。
         application_resume = use_executed_scope and previous is not None and previous.scope == "application"
         _validate_resumable_execution(
@@ -230,7 +233,9 @@ def _validate_resumable_execution(
 ) -> None:
     """只允许安全恢复同一目标上的旧执行，阶段确认可切换到新对话。"""
 
-    execution = lifecycle.active_executions.get(run_id)
+    execution = lifecycle.active_executions.get(run_id) or (
+        lifecycle.ended_executions[run_id].execution if run_id in lifecycle.ended_executions else None
+    )
     if execution is None:
         raise ApplicationLifecycleConflictError("要继续的工作台执行已不存在，请刷新后重试。")
     resumable_status = execution.status in {
