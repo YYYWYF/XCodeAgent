@@ -1546,6 +1546,35 @@ test('不在资源集合中的页面仍可自由输入', () => {
   assert.equal(context.dependencyLocked, false)
 })
 
+/** 验证应用级门禁可提交现有确认检测动作，不因目标类型变成禁用卡。 */
+test('应用级 API 门禁保留可用的确认检测按钮', () => {
+  const workflow: WorkflowRunPayload = {
+    runId: 'application-gate-run', threadId: 'application-gate-thread', events: [],
+    summary: {
+      phase: 'api_design_readiness_gate', status: 'requires_user_input',
+      revisionImpact: {
+        interactionId: 'previous-impact', formalBranch: 'workbench_plan_revision'
+      } as WorkflowRunPayload['summary']['revisionImpact'],
+      clarification: {
+        mode: 'api_design_required', status: 'requires_user_input',
+        developmentTarget: { type: 'application', id: 'application', label: '整个应用' },
+        apiDesigns: [{ api_contract_id: 'orders-api', endpoint_id: 'orders.list', method: 'GET', path: '/orders', status: 'stale', designed: false }]
+      }
+    }
+  }
+  const markup = renderToStaticMarkup(createElement(WorkbenchPhaseContext.Provider, {
+    value: {
+      phase: 'development', derivedPhase: 'development', reachedPhase: 'development',
+      manualOverride: null, agent: WORKBENCH_PHASE_AGENTS.development,
+      recordReachedPhase: () => {}, switchPhase: () => {}, canEdit: () => false
+    }
+  }, createElement(WorkflowRunCard, { workflow, interactionAvailability: 'active' })))
+  const button = markup.match(/<button[^>]*api-design-readiness-confirm-button[^>]*>/)?.[0]
+  assert.ok(button)
+  assert.doesNotMatch(button, /disabled/)
+  assert.doesNotMatch(markup, /确认并进入计划阶段/)
+})
+
 /** 验证 API 设计门禁同时展示已完成、待配置和需重新配置的 Endpoint。 */
 test('API 设计门禁展示目标范围内的完整 Endpoint 状态', () => {
   const workflow: WorkflowRunPayload = {

@@ -270,7 +270,7 @@ class ApiDesignGateAction(ApiDesignModel):
     """描述 API 开发门禁的重新检测动作。"""
 
     action: Literal["refresh"]
-    target_type: Literal["page", "endpoint"] = Field(alias="targetType")
+    target_type: Literal["application", "page", "endpoint"] = Field(alias="targetType")
     target_id: str = Field(alias="targetId", min_length=1, max_length=256)
     api_contract_id: str | None = Field(
         default=None,
@@ -285,6 +285,8 @@ class ApiDesignGateAction(ApiDesignModel):
 
         if self.target_type == "endpoint" and not self.api_contract_id:
             raise ValueError("Endpoint 开发门禁必须携带 API Contract 标识。")
+        if self.target_type == "application" and (self.target_id != "application" or self.api_contract_id):
+            raise ValueError("应用开发门禁必须使用 application 目标且不指定 API Contract。")
         return self
 
 

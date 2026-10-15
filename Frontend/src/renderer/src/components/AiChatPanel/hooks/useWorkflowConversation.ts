@@ -955,7 +955,7 @@ export function useWorkflowConversation({
     }
   }
 
-  /** 在开发阶段会话中消费 TechnicalPlan continuation，并进入工作区扫描与 DAG 链。 */
+  /** 在开发会话消费 TechnicalPlan continuation，先检查映射，再扫描并生成 DAG。 */
   const handleContinueRevisionBuild = async (
     continuation: WorkflowRevisionContinuation,
     sessionIdentity: SessionIdentity
@@ -963,14 +963,14 @@ export function useWorkflowConversation({
     // continuation 绑定新 DEVELOPMENT 会话和服务端一次性 token；不能被来源规划会话
     // 尚未收口的全局 loading/workspaceBusy 抢占。新会话并发和资源合法性分别由
     // runningSessionsRef 与服务端 lifecycle/CAS 校验。
-    return sendWorkflowMessage('TechnicalPlan 已确认，进入工作区扫描并重新生成 Build DAG。', {
+    return sendWorkflowMessage('技术规划已确认，接下来检查接口配置。检查通过后，将生成本次修改的开发计划。', {
       workflowAction: 'continue_revision_build',
       revisionContinuation: {
         changeId: continuation.changeId,
         token: continuation.token
       },
       sessionIdentity,
-      titleFrom: 'TechnicalPlan 修改 · 生成 DAG',
+      titleFrom: '技术规划修改 · 生成开发计划',
       conversation: false
     })
   }
@@ -2219,7 +2219,7 @@ export function useWorkflowConversation({
         selectedApiContractId:
           action.targetType === 'endpoint' ? action.apiContractId : undefined,
         selectedEndpointId: action.targetType === 'endpoint' ? action.targetId : undefined,
-        detailTargetType: action.targetType,
+        detailTargetType: action.targetType === 'application' ? undefined : action.targetType,
         buildExecutionScope: workflowBuildScope,
         titleFrom: actionMessage,
         conversation: false

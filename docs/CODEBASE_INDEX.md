@@ -6,6 +6,8 @@ Use this file before broad code exploration. It is a routing map, not full docum
 
 > 当前旅程规则：Endpoint 的自包含字段映射由独立 `/endpoint-designs/run` AG-UI 配置流负责；页面和接口开发必须先进入主 `/workflow/run` 的 `api_design_readiness_gate`。页面门禁检查全部关联 Endpoint，接口门禁只检查自身；只要目标包含 Endpoint，首次门禁就通过 `apiDesigns` 展示全部 Endpoint 的已完成、待配置和已失效状态，并以缺失子集决定是否阻断；用户点击任一条目后打开右侧字段映射工作台查看或配置，保存确认后只更新当前会话的本地已配置状态，可继续配置其他 Endpoint。用户点击门禁“确认并检测”后统一复检，检测通过便直接继续开发，不再进入 `api_design_confirmation` 或展示聚合映射确认卡片；无 Endpoint 的纯静态页面直接放行。字段映射步骤与保存操作不再在对话区重复展示，保存不会自动推进开发。旧版 `development_readiness_gate` 与 EntitySourceBinding 仅保留为独立旧入口。
 
+正式修订确认 TechnicalPlan 后，application/page/endpoint 续接统一进入现有 `api_design_readiness_gate`；应用级门禁按当前 TechnicalPlan 检查全部 Endpoint，并使用同一 `refresh` 确认动作。无 Endpoint 直接放行；保存映射仍不自动推进。`services/application_build_context.py` 逐 Contract 复用正式映射读取与校验，为应用级 DAG 提供完整 `endpoint_designs`、来源与数据流；生成前再次读取当前磁盘，不使用旧门禁快照。回归：`tests.test_application_api_design_continuation`、`tests.test_workflow_request`、`tests.test_api_design_node`、`pnpm test:workflow-preview`。
+
 ## Update Policy
 
 Update this index in the same change when a code change:

@@ -1169,7 +1169,7 @@ safe revert service
 4. 正式修改需要澄清；
 5. design branch -> 影响范围确认 -> approved -> 恢复原 planning thread；
 6. design branch 从最早节点进入现有 RequirementSpec -> ProductPlan -> UiDesign -> TechnicalPlan 确认链；
-7. 任一 formal branch TechnicalPlan confirmed -> 自动切回开发并调用 `continue_revision_build` -> 工作区扫描 -> DAG 确认 -> Build/Test/Preview/Acceptance；
+7. 任一 formal branch TechnicalPlan confirmed -> 自动切回开发并调用 `continue_revision_build` -> 现有 API 映射检查（application 检查全部接口，page/endpoint 检查目标范围；无接口直接通过）-> 用户确认并检测通过 -> 工作区扫描 -> 加载当前已确认映射 -> DAG 确认 -> Build/Test/Preview/Acceptance；
 8. workbench branch -> 影响范围确认 -> approved -> 生成第一个草稿 -> DAG 确认 -> Build/Test/Preview/Acceptance；
 9. 影响范围确认 rejected -> 不进入任何 branch 且 canonical 不变；
 10. 过期、重复或请求/target 不匹配的 impact interaction 被拒绝；
@@ -1284,6 +1284,8 @@ bounded context
 -> Markdown sync + validation + canonical atomic replace
 -> basedOn hash invalidation
 -> confirmed-only Build gate
+-> api_design_readiness_gate (application/page/endpoint)
+-> refresh confirmed mappings (no endpoints: pass directly)
 -> inspect_workspace + prepare_build_tasks
 -> DAG confirmation + Build + Test + Preview + Acceptance
 ```

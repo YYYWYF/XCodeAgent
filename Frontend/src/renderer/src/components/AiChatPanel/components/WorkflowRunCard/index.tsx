@@ -89,13 +89,13 @@ const { TextArea } = Input
 
 const OTHER_OPTION_VALUE = '__other__'
 
-/** 校验门禁卡片的页面或 Endpoint 开发目标，拒绝不完整的历史载荷。 */
+/** 校验门禁卡片的应用、页面或 Endpoint 开发目标。 */
 function normalizeApiDesignDevelopmentTarget(
   value: unknown
-): { type: 'page' | 'endpoint'; id: string; label?: string; apiContractId?: string } | undefined {
+): { type: 'application' | 'page' | 'endpoint'; id: string; label?: string; apiContractId?: string } | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const target = value as Record<string, unknown>
-  const type = target.type === 'page' ? 'page' : target.type === 'endpoint' ? 'endpoint' : undefined
+  const type = target.type === 'application' ? 'application' : target.type === 'page' ? 'page' : target.type === 'endpoint' ? 'endpoint' : undefined
   const id = String(target.id || '')
   if (!type || !id) return undefined
   return {
@@ -770,11 +770,12 @@ export default function WorkflowRunCard({
   )
 }
 
-/** 从 clarification、summary 或公开 state/result 读取只读 revision impact。 */
+/** 仅在当前影响确认门读取 revision impact，避免历史影响范围遮蔽后续映射/DAG 确认。 */
 function workflowRevisionImpact(
   workflow: WorkflowRunPayload,
   clarification?: WorkflowClarification
 ): WorkflowRevisionImpact | undefined {
+  if (clarification?.mode !== 'revision_impact_confirmation') return undefined
   const clarificationImpact = (clarification as Record<string, unknown> | undefined)?.revisionImpact
   const candidates = [
     clarificationImpact,

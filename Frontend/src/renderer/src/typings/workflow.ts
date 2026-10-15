@@ -891,7 +891,7 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
 
 export type WorkflowApiDesignGateAction = {
   action: 'refresh'
-  targetType: 'page' | 'endpoint'
+  targetType: 'application' | 'page' | 'endpoint'
   targetId: string
   apiContractId?: string
 }

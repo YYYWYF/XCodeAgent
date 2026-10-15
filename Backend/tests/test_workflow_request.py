@@ -42,7 +42,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_values"]["owner_session_id"], "session-owner-1")
 
     def test_application_revision_continuation_ignores_stale_client_scope(self) -> None:
-        """application continuation 必须清空旧目标并直接进入工作区扫描。"""
+        """application continuation 清空旧目标并进入共用映射门禁。"""
 
         active_revision = SimpleNamespace(
             request="调整全局技术方案",
@@ -80,7 +80,8 @@ class WorkflowRequestTests(unittest.TestCase):
             )
 
         self.assertEqual(inputs["request"], "调整全局技术方案")
-        self.assertEqual(inputs["resume_from"], "inspect_workspace")
+        self.assertEqual(inputs["resume_from"], "api_design_readiness_gate")
+        self.assertEqual(inputs["resume_values"]["api_design_gate_action"], {})
         self.assertEqual(
             inputs["resume_values"]["build_execution_scope"],
             {"type": "application", "targetId": "application"},
@@ -91,7 +92,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertNotIn("detail_target_type", inputs["resume_values"])
 
     def test_page_revision_continuation_ignores_stale_application_scope(self) -> None:
-        """page continuation 由 lifecycle 锁定页面并保留实体绑定门禁。"""
+        """page continuation 由 lifecycle 锁定页面并进入映射门禁。"""
 
         active_revision = SimpleNamespace(
             request="修改订单页",
@@ -124,7 +125,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
+        self.assertEqual(inputs["resume_from"], "api_design_readiness_gate")
         self.assertEqual(inputs["resume_values"]["selectedPageId"], "orders")
         self.assertEqual(
             inputs["resume_values"]["build_execution_scope"],
@@ -166,7 +167,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
+        self.assertEqual(inputs["resume_from"], "api_design_readiness_gate")
         self.assertNotIn("selectedPageId", inputs["resume_values"])
         self.assertEqual(inputs["resume_values"]["selected_api_contract_id"], "orders-api")
         self.assertEqual(inputs["resume_values"]["selected_endpoint_id"], "orders.list")

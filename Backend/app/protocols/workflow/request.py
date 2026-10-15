@@ -414,6 +414,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("detail_target_type"))
         or _optional_text(resume_values_from_state.get("detail_target_type"))
     )
+    if api_design_gate_target_type == "application":
+        selectedPageId = ""
+        selected_api_contract_id = ""
+        selected_endpoint_id = ""
+        selected_entity_id = ""
+        detail_target_type = ""
     if api_design_gate_target_type in {"page", "endpoint"}:
         detail_target_type = api_design_gate_target_type
         gate_target_id = _optional_text(api_design_gate_action.get("targetId")) if api_design_gate_action else None
@@ -541,12 +547,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selected_entity_id = ""
         detail_target_type = ""
         if revision_build_target_type == "application":
-            resume_from = "inspect_workspace"
+            resume_from = "api_design_readiness_gate"
         elif revision_build_target_type == "page":
             selectedPageId = str(active_revision.target.page_id or "").strip()
             if not selectedPageId:
                 raise ValueError("revision lifecycle 页面目标缺少 pageId。")
-            resume_from = "development_readiness_gate"
+            resume_from = "api_design_readiness_gate"
             selected_api_contract_id = ""
             selected_endpoint_id = ""
             detail_target_type = "page"
@@ -559,7 +565,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             ).strip()
             if not selected_api_contract_id or not selected_endpoint_id:
                 raise ValueError("revision lifecycle Endpoint 目标缺少完整接口标识。")
-            resume_from = "development_readiness_gate"
+            resume_from = "api_design_readiness_gate"
             detail_target_type = "endpoint"
         else:
             raise ValueError(
@@ -621,7 +627,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     )
     # formal revision continuation 不解析客户端构建范围；它的 scope 与
     # entry node 已由同一 lifecycle target 决定，必须保持原子一致。
-    if revision_build_target_type == "application":
+    if revision_build_target_type == "application" or api_design_gate_target_type == "application":
         build_execution_scope = {"type": "application", "targetId": "application"}
     elif revision_build_target_type == "page":
         build_execution_scope = {"type": "page", "targetId": selectedPageId}
@@ -727,6 +733,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         **({"entity_design_action": entity_design_action} if entity_design_action else {}),
         **({"api_design_gate_action": api_design_gate_action} if api_design_gate_action else {}),
+        **({"api_design_gate_action": {}} if workflow_action == "continue_revision_build" else {}),
         **({"ui_design_action": ui_design_action} if ui_design_action else {}),
         **({"acceptance_decision": acceptance_decision} if acceptance_decision else {}),
         **(
