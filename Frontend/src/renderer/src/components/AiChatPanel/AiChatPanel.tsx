@@ -333,7 +333,8 @@ type Props = {
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
-    designChangeRequest?: string
+    designChangeRequest?: string,
+    technicalPlanningConversation?: boolean
   ) => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onStartIterationPlanning: (request: string) => Promise<void>
@@ -1786,9 +1787,9 @@ export default function AiChatPanel({
     lifecycleReadyForWorkbench
   )
   // 只要用户主动选中产品阶段，Composer 就必须保持 Product Agent 能力边界。
-  const productConversationAvailable = activeProductConversationRoute !== 'development_conversation'
+  const productConversationAvailable = isTechnicalPlanningPhase || activeProductConversationRoute !== 'development_conversation'
   // 应用完成态只改变正式修订入口，不再复用初始 planning 的旧审阅门。
-  const initialProductPlanningAvailable = activeProductConversationRoute === 'initial_planning'
+  const initialProductPlanningAvailable = isTechnicalPlanningPhase || activeProductConversationRoute === 'initial_planning'
   const productConversationSendDisabled = productConversationSendBlocked(
     productConversationAvailable,
     initialProductPlanningAvailable &&
@@ -4834,6 +4835,15 @@ export default function AiChatPanel({
     planningNewRoundRef.current = true
     lastUiDesignRunIdRef.current = undefined
     appendPlanningUserMessage({ design_change_request: trimmed })
+    if (isTechnicalPlanningPhase) {
+      try {
+        await onSubmitPlanningClarification(currentPlanningWorkflow, {}, undefined, undefined, trimmed, true)
+        setDraftByKey(draftKey, '')
+      } catch (reason) {
+        message.error(reason instanceof Error ? reason.message : '技术规划对话失败，请重试。')
+      }
+      return
+    }
     void onSubmitPlanningClarification(
       currentPlanningWorkflow,
       {},
@@ -5244,7 +5254,9 @@ export default function AiChatPanel({
                     onInspectedElementContextClear={() => setInspectedElementContext(undefined)}
                     onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
                     placeholder={
-                      productConversationAvailable ? PRODUCT_CONVERSATION_PLACEHOLDER : undefined
+                      isTechnicalPlanningPhase
+                        ? '可以询问技术规划或报错原因，也可以描述要修改的技术方案…'
+                        : productConversationAvailable ? PRODUCT_CONVERSATION_PLACEHOLDER : undefined
                     }
                     sendDisabled={productConversationSendDisabled}
                     sendDisabledHint={

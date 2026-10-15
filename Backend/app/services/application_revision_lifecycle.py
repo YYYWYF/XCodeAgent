@@ -447,7 +447,13 @@ def ensure_technical_plan_generation_lifecycle(
         if (
             active is None
             or active.change_id != change_id
-            or active.formal_branch is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
+            or not (
+                active.formal_branch is FormalRevisionBranch.WORKBENCH_PLAN_REVISION
+                or (
+                    active.formal_branch is FormalRevisionBranch.DESIGN_STAGE_REVISION
+                    and active.status == "design_planning"
+                )
+            )
         ):
             raise ApplicationLifecycleConflictError(
                 "TechnicalPlan formal revision 不在允许的 lifecycle predecessor。"

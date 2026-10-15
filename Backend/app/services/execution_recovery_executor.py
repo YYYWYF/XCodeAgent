@@ -55,6 +55,9 @@ from app.services.application_lifecycle import (
     resource_claims_for_run,
 )
 from app.services.backend_instance import current_backend_instance
+from app.services.technical_planning_retry import (
+    TECHNICAL_PLANNING_RETRY_NODES, prepare_technical_planning_retry,
+)
 from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
@@ -478,6 +481,9 @@ async def _apply_application_planning_transaction_authority(
         ) from exc
     values = getattr(snapshot, "values", {})
     values = values if isinstance(values, dict) else {}
+    if plan.target_node in TECHNICAL_PLANNING_RETRY_NODES and source.status is DurableExecutionStatus.FAILED:
+        # 已证明来源 checkpoint 后，按本轮用户输入和已有计划重建生成事务。
+        values = {**values, **prepare_technical_planning_retry(values)}
     if plan.target_node == "design_intent_analysis":
         # 设计意图识别先读取输入，正式产物节点才取得生命周期 ownership；
         # 识别失败时保留原审阅阶段，以同 thread、revision CAS 领取 child。
@@ -841,6 +847,12 @@ async def _fork_and_start(
         "active_thread_id": source.thread_id,
         "observability": observability,
     }
+    if (
+        source.execution_kind == "application_planning"
+        and source.status is DurableExecutionStatus.FAILED
+        and plan.target_node in TECHNICAL_PLANNING_RETRY_NODES
+    ):
+        updates.update(prepare_technical_planning_retry(source_values, target_node=plan.target_node))
     if lifecycle is not None:
         updates["lifecycle"] = application_lifecycle_payload(lifecycle)
     try:

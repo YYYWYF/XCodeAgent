@@ -494,6 +494,9 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
         if update.get("application_planning_review_route") == "technical_planning_begin":
             return ["technical_planning_begin"]
         return ["template_reconcile"] if update.get("template_reconcile_pending") else []
+    if node_name == "technical_planning_commit":
+        # 提交失败重试先回原生成入口，进度不能提前显示成等待确认。
+        return ["technical_planning_begin"] if update.get("phase") == "technical_planning_begin" else ["technical_planning_review"]
     if node_name == "integration_test":
         if update.get("quality_gate_passed"):
             return ["review_phase_confirmation"]

@@ -1197,4 +1197,56 @@ async function waitForCondition<T>(
   assert.equal(h.calls.length, 0)
 }
 
+// 技术规划报错后的问题只发布答复，不能把原恢复源替换成一次普通对话。
+{
+  const initial = planningState()
+  initial.workflow = { ...confirmationWorkflow(), summary: { status: 'failed', message: '模型请求失败。' } }
+  initial.recovery = recoveryProjection()
+  initial.recoveryActionError = '上次提问被限流'
+  const h = harness(initial, { readTechnicalPlanningReply: async () => ({
+    intent: 'reply', message: '原修改要求仍已保存，可以使用上方重试。',
+    planningThreadId: initial.threadId, sourceRunId: 'failed-run', checkpointId: 'checkpoint-A'
+  }) })
+  await h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, '为什么失败？', true)
+  assert.equal(h.calls.length, 0)
+  assert.equal(h.current()?.workflow, initial.workflow)
+  assert.equal(h.current()?.recovery, initial.recovery)
+  assert.equal(h.contents.at(-1), '原修改要求仍已保存，可以使用上方重试。')
+  assert.equal(h.current()?.recoveryActionError, undefined)
+}
+
+// 明确的新技术修改使用原 Planning 会话，携带后端分类时的当前版本身份。
+{
+  const initial = planningState()
+  initial.workflow = confirmationWorkflow()
+  const h = harness(initial, { readTechnicalPlanningReply: async () => ({
+    intent: 'revise', message: '将修改已有技术规划。',
+    planningThreadId: initial.threadId, sourceRunId: 'source-run', checkpointId: 'checkpoint-B'
+  }) })
+  const latestRecovery = recoveryProjection(initial.threadId, { sourceRunId: 'new-generation-run', recoveryActionPlan: null })
+  h.onRead(async () => ({ workflow: confirmationWorkflow(initial.threadId), lifecycle: initial.lifecycle!, recovery: latestRecovery }))
+  await h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, '修改前端架构说明', true)
+  assert.equal(h.calls.length, 1)
+  assert.equal(h.calls[0].options.conversation, undefined)
+  assert.deepEqual(h.calls[0].options.technicalPlanningConversation, {
+    action: 'revise', workspaceRoot: initial.application.workspaceRoot,
+    applicationId: initial.application.id, planningThreadId: initial.threadId,
+    request: '修改前端架构说明', sourceRunId: 'source-run', checkpointId: 'checkpoint-B'
+  })
+  assert.equal(h.current()?.recovery, latestRecovery)
+}
+
+// 停止只读提问后，晚到的修改分类不能自动触发生成。
+{
+  const initial = planningState()
+  initial.workflow = confirmationWorkflow()
+  let complete!: (reply: { intent: 'revise'; message: string; planningThreadId: string; sourceRunId: string; checkpointId: string }) => void
+  const h = harness(initial, { readTechnicalPlanningReply: async () => new Promise(resolve => { complete = resolve }) })
+  const pending = h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, '修改架构', true)
+  h.runtime.dispose()
+  complete({ intent: 'revise', message: '修改', planningThreadId: initial.threadId, sourceRunId: 'old', checkpointId: 'old' })
+  await pending
+  assert.equal(h.calls.length, 0)
+}
+
 console.log('application planning runtime tests passed')

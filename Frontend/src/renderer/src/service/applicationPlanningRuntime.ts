@@ -48,8 +48,10 @@ import {
   workflowConfirmation
 } from './applicationPlanningRuntimeHelpers'
 import { productConversationSubmissionError } from './applicationPlanningProductConversation'
+import { readTechnicalPlanningReply } from './technicalPlanningConversation'
 
 export type ApplicationPlanningRuntimeDependencies = {
+  readTechnicalPlanningReply?: typeof readTechnicalPlanningReply
   applicationId: string
   threadId: string
   getCurrentState: () => ApplicationPlanningCurrentState | undefined
@@ -102,6 +104,7 @@ export class ApplicationPlanningRuntime {
   private runActive = false
   private reconcilePromise?: Promise<PlanningReconcileOutcome>
   private streamingContent = ''
+  private technicalMessageAbort?: AbortController
   private streamingListeners = new Set<(content: string) => void>()
 
   /** 绑定应用和线程身份，只保存会话执行能力，不捕获业务快照。 */
@@ -329,8 +332,13 @@ export class ApplicationPlanningRuntime {
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
-    designChangeRequest?: string
+    designChangeRequest?: string,
+    technicalPlanningConversation = false
   ): Promise<void> {
+    if (technicalPlanningConversation && designChangeRequest?.trim()) {
+      await this.submitTechnicalPlanningMessage(designChangeRequest.trim())
+      return
+    }
     let current = this.requireCurrentState()
     this.assertMutationAllowed()
     if (workflow.threadId !== current.threadId) throw new Error('当前规划确认卡已经失效。')
@@ -420,6 +428,7 @@ export class ApplicationPlanningRuntime {
   /** 停止 transport 后等待服务端取消落盘，并刷新 Canonical 生命周期。 */
   async stop(): Promise<void> {
     this.requireCurrentState()
+    this.technicalMessageAbort?.abort()
     try {
       await this.session.stop()
       const lifecycle = await waitForStoppedPlanningLifecycle(
@@ -440,6 +449,47 @@ export class ApplicationPlanningRuntime {
       this.runActive = false
       const outcome = await this.reconcileAfterTransportFailure(reason)
       if (outcome !== 'recovered') throw reason
+    }
+  }
+
+  /** 技术提问只发布回复；明确修改才使用原生成会话，且没有计划时不承接首次生成。 */
+  private async submitTechnicalPlanningMessage(request: string): Promise<void> {
+    const abort = new AbortController()
+    let revised = false
+    this.technicalMessageAbort = abort
+    try {
+      await this.withExclusiveTransport(async (token) => {
+        const current = this.requireCurrentState()
+        this.dispatch({ type: 'recovery_action_started', applicationId: this.applicationId, threadId: this.threadId })
+        const read = this.dependencies.readTechnicalPlanningReply ?? readTechnicalPlanningReply
+        const reply = await read(current.application, this.threadId, request, abort.signal)
+        if (abort.signal.aborted || !this.isCurrentRun(token)) return
+        this.technicalMessageAbort = undefined
+        if (reply.intent === 'reply') {
+          this.setStreamingContent(reply.message)
+          this.dependencies.publishContent(reply.message)
+          return
+        }
+        revised = true
+        const merged = await this.sendMessageWithinTransport(token, request, {
+          editorMode: 'frontend', workspaceRoot: current.application.workspaceRoot,
+          technicalPlanningConversation: {
+            action: 'revise', workspaceRoot: current.application.workspaceRoot || '',
+            applicationId: this.applicationId, planningThreadId: this.threadId, request,
+            sourceRunId: reply.sourceRunId, checkpointId: reply.checkpointId
+          }
+        })
+        await this.handlePlanningResult(token, merged)
+      })
+      // 新生成已替换原执行，必须读取 durable truth 撤下旧恢复入口；只读问答不对账。
+      if (revised && !this.disposed) await this.reconcileCurrentState()
+    } catch (reason) {
+      if (abort.signal.aborted) return
+      if (revised && !this.disposed) await this.handleExecutionFailure(reason, '技术规划修改失败')
+      this.reportRecoveryActionFailure(reason, '技术规划对话失败')
+      throw reason
+    } finally {
+      if (this.technicalMessageAbort === abort) this.technicalMessageAbort = undefined
     }
   }
 
@@ -661,6 +711,7 @@ export class ApplicationPlanningRuntime {
   /** 使晚到帧立即失效并释放会话与正文订阅，停止失败不会写回已移除的应用。 */
   dispose(): void {
     if (this.disposed) return
+    this.technicalMessageAbort?.abort()
     this.disposed = true
     this.runToken += 1
     this.runActive = false

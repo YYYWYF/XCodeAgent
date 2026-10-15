@@ -416,6 +416,14 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         ],
         "workspaceGate": "planning-artifacts",
         "mainWorkflowIndependent": True,
+        "technicalPlanningConversation": {
+            "requestField": "forwardedProps.technicalPlanningConversation",
+            "actions": ["classify", "revise"],
+            "readOnlyClassification": True,
+            "revisionRequiresExistingPlan": True,
+            "revisionRequiresCurrentSourceRunAndCheckpoint": True,
+            "generationNode": "technical_planning_generate",
+        },
     }
 
 
@@ -432,6 +440,13 @@ def build_application_page_planning_ag_ui_stream(
         **payload,
         "workflowScope": "application_planning",
     }
+    technical_message = (payload.get("forwardedProps") or {}).get("technicalPlanningConversation")
+    if technical_message is not None:
+        from app.protocols.technical_planning_conversation import build_technical_planning_conversation_stream
+
+        return build_technical_planning_conversation_stream(
+            graph=graph, payload=normalized_payload, raw=technical_message, accept=accept,
+        )
     product_stage_input = _product_stage_conversation_input(normalized_payload)
     if product_stage_input is not None:
         try:

@@ -117,7 +117,7 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                             await call
 
     async def _retry_failed_begin(self, *, has_candidate: bool, before_handoff: bool = False) -> None:
-        """通过公开 AG-UI 恢复失败 begin，验证真实节点内部修复或重新生成及确认门。"""
+        """通过公开 AG-UI 重试失败 begin，验证原生成节点重新执行及确认门。"""
 
         harness = self.harness
         seed = {**deepcopy(harness.candidate), "app": {"name": "失败候选"}}
@@ -140,7 +140,7 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                 state["active_run_id"] = harness.source_run_id
             self.assertNotIn("baselineSha256", state["application_planning_recovery_boundary"])
             await harness.graph.aupdate_state(snapshot.config, state, as_node="workflow_entry")
-            # 模拟 begin 内部一次异常，随后由底部兜底恢复精确入口；业务状态不被恢复器重写。
+            # 模拟 begin 内部一次异常，随后由底部重试整理新一轮生成输入。
             with patch(
                 "app.graph.nodes.application_technical_planning._ensure_technical_lifecycle",
                 side_effect=ValueError("测试技术入口临时失败"),
@@ -162,20 +162,15 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("app.graph.nodes.planning._repair_technical_plan_candidate", return_value=deepcopy(harness.candidate)) as repair,
                 patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(harness.candidate)) as generate,
-                patch("app.graph.nodes.planning._project_plan_validation_errors", side_effect=([['候选契约错误'], []] if has_candidate else [[]])),
+                patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
             ):
                 child = await harness.execute_action(action)
             self.assertNotEqual(child.run_id, source.run_id)
             self.assertEqual(child.first_node, "technical_planning_begin")
             self.assertEqual(child.status, DurableExecutionStatus.AWAITING_USER)
-            if has_candidate:
-                repair.assert_called_once()
-                generate.assert_not_called()
-                self.assertEqual(repair.call_args.args[2], ["候选契约错误"])
-            else:
-                generate.assert_called_once()
-                repair.assert_not_called()
-                self.assertNotIn("existing_plan", generate.call_args.kwargs)
+            generate.assert_called_once()
+            repair.assert_not_called()
+            self.assertNotIn("existing_plan", generate.call_args.kwargs)
             recovered = await harness.graph.aget_state({"configurable": {"thread_id": harness.thread_id}})
             self.assertEqual(tuple(recovered.next), ("technical_planning_review",))
             self.assertTrue(any(task.interrupts for task in recovered.tasks))
@@ -192,8 +187,8 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any(event["type"] == "STATE_SNAPSHOT" for event in events))
             self.assertFalse(any(event["type"] == "RUN_ERROR" for event in events))
 
-    async def test_native_failure_retry_repairs_initial_candidate(self) -> None:
-        """首次失败候选无正式基线时，兜底重入后走节点内部修复并重新等待确认。"""
+    async def test_native_failure_retry_regenerates_ignoring_failed_candidate(self) -> None:
+        """首次失败只有内部候选时，复用原节点重新生成并等待确认。"""
 
         await self._retry_failed_begin(has_candidate=True)
 
@@ -227,7 +222,7 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(load_application_lifecycle(self.harness.workspace).active_run_id, owner)
 
     async def test_initial_generation_error_review_retries_without_baseline(self) -> None:
-        """初次生成耗尽内部预算后，原审阅门的重新生成动作可以直接续修失败候选。"""
+        """初次生成耗尽内部预算后，原审阅门重新生成，不使用上次失败候选。"""
 
         harness = self.harness
         seed = deepcopy(harness.candidate)
@@ -246,7 +241,8 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             request = "请重新生成技术规划，并修复全部结构和契约错误。"
             with (
                 patch("app.graph.nodes.planning._repair_technical_plan_candidate", return_value=deepcopy(harness.candidate)) as repair,
-                patch("app.graph.nodes.planning._project_plan_validation_errors", side_effect=[["候选契约错误"], []]),
+                patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(harness.candidate)) as generate,
+                patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
             ):
                 frames = [frame async for frame in build_workflow_ag_ui_stream(
                     graph=harness.graph,
@@ -262,7 +258,8 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                         },
                     },
                 )]
-            repair.assert_called_once()
+            generate.assert_called_once()
+            repair.assert_not_called()
             self.assertTrue(frames)
             recovered = await harness.graph.aget_state(config)
             self.assertEqual(recovered.values["application_planning_recovery_boundary"]["operation"], "repair")

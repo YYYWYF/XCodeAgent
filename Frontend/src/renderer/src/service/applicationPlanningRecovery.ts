@@ -52,6 +52,8 @@ export type ApplicationPlanningRecoveryProjection = {
     | 'running'
     | 'ready_to_continue'
     | 'completed'
+    | 'cancelled'
+    | 'stopped'
     | 'failed'
     | 'blocked'
     | 'conflict'
@@ -80,6 +82,8 @@ const APPLICATION_PLANNING_RECOVERY_CLASSIFICATIONS = new Set([
   'running',
   'ready_to_continue',
   'completed',
+  'cancelled',
+  'stopped',
   'failed',
   'blocked',
   'conflict',

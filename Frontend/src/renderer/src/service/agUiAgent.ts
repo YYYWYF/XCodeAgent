@@ -28,6 +28,7 @@ export type SendWorkflowMessageOptions = {
   application?: ApplicationConfig
   clarificationAnswers?: WorkflowClarificationAnswers
   applicationPlanningInteraction?: ApplicationPlanningInteraction
+  technicalPlanningConversation?: import('./technicalPlanningConversation').TechnicalPlanningMessage
   productStageConversation?: {
     request: string
   }
@@ -112,6 +113,7 @@ export function buildWorkflowForwardedProps(
     application: options.application,
     clarificationAnswers: options.clarificationAnswers,
     applicationPlanningInteraction: options.applicationPlanningInteraction,
+    technicalPlanningConversation: options.technicalPlanningConversation,
     productStageConversation: options.productStageConversation,
     editedRequirementSpec: options.editedRequirementSpec,
     requirementSpecFeedback: options.requirementSpecFeedback,
@@ -662,6 +664,9 @@ export class AgUiChatSession {
     const subscriber: AgentSubscriber = {
       onCustomEvent: ({ event }) => {
         if (!acceptingEvents) return
+        if (event.name === 'technical-planning-conversation' && event.value?.status === 'failed') {
+          runErrorMessage = event.value.error?.message || '技术规划修改失败。'
+        }
         if (event.name === 'application-lifecycle') {
           const lifecycle = readApplicationLifecycle(event.value)
           if (lifecycle) options.onApplicationLifecycle?.(lifecycle)

@@ -217,6 +217,10 @@ def _route_technical_planning_generate(state: ProjectState) -> str:
     """候选已生成时提交产物，否则回到 TechnicalPlan 原生审阅门。"""
 
     candidate = state.get("technical_plan_candidate")
+    boundary = state.get("application_planning_recovery_boundary") or {}
+    if boundary.get("boundary") == "input_committed" and state.get("technical_plan_repair_source_run_id"):
+        # 提交失败的 fork 清空旧候选后仍保留原提交入口，由该入口交回原生成链路。
+        return "technical_planning_commit"
     return "technical_planning_commit" if isinstance(candidate, dict) and candidate else "technical_planning_review"
 
 
@@ -226,6 +230,16 @@ def _route_technical_planning_confirm(state: ProjectState) -> str:
     if str(state.get("application_planning_review_route") or "").strip() == "technical_planning_begin":
         return "technical_planning_begin"
     return "template_reconcile" if state.get("template_reconcile_pending") else "completed"
+
+
+def _route_technical_planning_commit(state: ProjectState) -> str:
+    """提交失败重试返回原生成入口，正常提交仍进入正式确认门。"""
+
+    return (
+        "technical_planning_begin"
+        if state.get("phase") == "technical_planning_begin"
+        else "technical_planning_review"
+    )
 
 
 def _requirements(state: ProjectState) -> dict:
@@ -949,7 +963,10 @@ def build_application_planning_graph(*, checkpointer):
             "technical_planning_review": "technical_planning_review",
         },
     )
-    builder.add_edge("technical_planning_commit", "technical_planning_review")
+    builder.add_conditional_edges("technical_planning_commit", _route_technical_planning_commit, {
+        "technical_planning_begin": "technical_planning_begin",
+        "technical_planning_review": "technical_planning_review",
+    })
     builder.add_conditional_edges(
         "technical_planning_review",
         route_technical_planning_review,

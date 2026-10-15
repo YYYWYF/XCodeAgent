@@ -42,6 +42,7 @@ from app.protocols.workflow.projection import (
     _workflow_visual_payload,
 )
 from app.protocols.workflow.request import workflow_run_inputs
+from app.services.technical_planning_retry import TechnicalPlanningMessageRevision, prepare_technical_planning_retry
 from app.protocols.workflow.lifecycle import (
     begin_workflow_lifecycle,
     fail_workflow_lifecycle,
@@ -425,6 +426,7 @@ def build_workflow_ag_ui_stream(
     payload: dict[str, Any],
     accept: str | None = None,
     native_recovery_context: NativeRecoveryRuntimeContext | None = None,
+    technical_planning_revision: TechnicalPlanningMessageRevision | None = None,
 ) -> AsyncIterator[str]:
     """以 AG-UI SSE 事件流运行或取消一次主工作流请求。"""
 
@@ -634,6 +636,11 @@ def build_workflow_ag_ui_stream(
                         application_planning_interaction,
                     )
                 checkpoint_values = dict(checkpoint_snapshot.values)
+            if technical_planning_revision is not None:
+                # 分类与启动之间重新持锁核对版本，禁止旧问答结果覆盖新计划或另一轮输入。
+                if (workflow_scope != "application_planning" or resume_from != "technical_planning"
+                        or checkpoint_snapshot.config["configurable"]["checkpoint_id"] != technical_planning_revision.checkpoint_id):
+                    raise ValueError("技术规划状态已变化，请同步后重新提交修改要求。")
             snapshot_only = (
                 native_recovery_context is None
                 and workflow_scope == "application_planning"
@@ -762,6 +769,17 @@ def build_workflow_ag_ui_stream(
                 "active_run_id": run_id,
             }
             initial_state.update(resume_values)
+            if (
+                native_recovery_context is None
+                and workflow_scope == "application_planning"
+                and resume_from == "technical_planning"
+                and not isinstance(application_planning_interaction, dict)
+            ):
+                # 显式阶段重试沿用服务端上一轮要求，不能把“继续执行”提示覆盖为业务输入。
+                initial_state.update(prepare_technical_planning_retry(
+                    checkpoint_values,
+                    new_request=technical_planning_revision.request if technical_planning_revision else None,
+                ))
             if entity_test_entry_id:
                 initial_state["entity_test_entry_id"] = entity_test_entry_id
                 initial_state["selected_entity_id"] = entity_test_entry_id
@@ -793,6 +811,10 @@ def build_workflow_ag_ui_stream(
                 and not application_planning_interaction
             ):
                 initial_state.update(cleared_design_change_context())
+                if technical_planning_revision is not None:
+                    # 新的技术修改替代旧生成要求；后续失败重试继续沿用这次明确输入。
+                    initial_state["design_change_request"] = technical_planning_revision.request
+                    initial_state["design_change_generation_request"] = technical_planning_revision.request
             first_node_name = _application_planning_resume_node(
                 application_planning_interaction
             ) or _workflow_start_node(resume_from, workflow_scope)
@@ -2306,6 +2328,13 @@ def build_workflow_ag_ui_stream(
                         workflow_scope=workflow_scope,
                         explicitly_cancelled=workspace_process_registry.is_run_cancelled(
                             run_id
+                        ) and not (
+                            # 技术规划的停止生成表示暂停，保留 checkpoint 供现有恢复入口继续。
+                            workflow_scope == "application_planning"
+                            and current_phase in {
+                                "technical_planning", "technical_planning_begin",
+                                "technical_planning_generate", "technical_planning_commit",
+                            }
                         ),
                         backend_instance_id=backend_identity.instance_id,
                     ),

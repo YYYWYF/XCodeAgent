@@ -123,6 +123,14 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
     validate_application_planning_baseline(boundary, state.get("technical_plan"))
 
     change_id = str(state.get("change_id") or "").strip()
+    repair_source = str(state.get("technical_plan_repair_source_run_id") or "")
+    if repair_source and _lifecycle.initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN:
+        # 阶段重试由原 checkpoint 证明来源，再用既有 CAS 把生成归属交给新 Run。
+        ensure_technical_plan_generation_lifecycle(
+            workspace, active_run_id=state.get("active_run_id"),
+            thread_id=state.get("active_thread_id"), change_id=change_id or None,
+            repair_source_run_id=repair_source,
+        )
     if operation is ApplicationPlanningOperation.REVISE and change_id:
         target = state.get("change_target")
         if not isinstance(target, dict) or not target:
@@ -192,14 +200,8 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             **technical_requirement,
             "planning_adjustment_request": request,
         }
-    repair_seed = state.get("technical_plan_repair_candidate")
-    repair_errors = state.get("technical_plan_repair_errors")
     existing_plan = (
-        deepcopy(repair_seed)
-        if boundary.operation is ApplicationPlanningOperation.REPAIR
-        and isinstance(repair_seed, dict)
-        and repair_seed
-        else deepcopy(state.get("technical_plan"))
+        deepcopy(state.get("technical_plan"))
         if isinstance(state.get("technical_plan"), dict)
         and state.get("technical_plan")
         else None
@@ -208,12 +210,6 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         state,
         technical_requirement,
         existing_plan,
-        initial_errors=(
-            [str(error) for error in repair_errors]
-            if boundary.operation is ApplicationPlanningOperation.REPAIR
-            and isinstance(repair_errors, list)
-            else None
-        ),
     )
     if plan is None:
         # 生成失败不写磁盘、不改生命周期；审阅节点会把错误作为当前业务交互展示。
@@ -221,6 +217,7 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             "phase": "technical_planning_generate",
             "status": "requires_user_input",
             "technical_plan_repair_candidate": failed_candidate or {},
+            "technical_plan_repair_source_run_id": "",
             "technical_plan_repair_errors": errors[:12],
             "application_planning_recovery_boundary": _boundary_payload_for_state(
                 state,
@@ -245,6 +242,7 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         ),
         "technical_plan_repair_candidate": {},
         "technical_plan_repair_errors": [],
+        "technical_plan_repair_source_run_id": "",
         "timeline": ["technical_planning_generate"],
     }
 
@@ -265,6 +263,12 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
     """校验候选摘要并幂等原子提交 TechnicalPlan JSON/Markdown。"""
 
     boundary = _technical_boundary(state)
+    if (
+        boundary.boundary is ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED
+        and state.get("technical_plan_repair_source_run_id")
+    ):
+        # 提交失败后的显式重试不复用旧候选，由原 begin/generate 重新生成再提交。
+        return {"phase": "technical_planning_begin", "resume_from": ""}
     if boundary.boundary is not ApplicationPlanningRecoveryBoundary.CANDIDATE_COMMITTED:
         raise ValueError("TechnicalPlan commit 只能从 CANDIDATE_COMMITTED boundary 开始。")
     candidate = state.get("technical_plan_candidate")

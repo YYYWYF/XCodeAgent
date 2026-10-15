@@ -47,7 +47,8 @@ type Props = {
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
-    designChangeRequest?: string
+    designChangeRequest?: string,
+    technicalPlanningConversation?: boolean
   ) => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onStartIterationPlanning: (request: string) => Promise<void>
