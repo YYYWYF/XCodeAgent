@@ -4130,6 +4130,8 @@ export default function AiChatPanel({
       await createDevelopmentConversation('验收反馈：二次修改')
       setActiveView('chat')
       setActiveDetailTarget({ type: 'none' })
+      // 验收预览会隐藏对话区，返回开发时必须同步恢复分栏。
+      setRightPanelLayout('split')
       switchPhase('development')
     } catch (error) {
       message.error(formatError(error, '进入开发阶段失败'))
@@ -4137,7 +4139,7 @@ export default function AiChatPanel({
       acceptanceRejectingRef.current = false
       setAcceptanceRejecting(false)
     }
-  }, [createDevelopmentConversation, switchPhase])
+  }, [createDevelopmentConversation, setRightPanelLayout, switchPhase])
 
   /** 验收通过：将验收状态标记为 passed，解锁后续"提交并推送"节点。 */
   const handleAcceptanceApprove = useCallback((): void => {
