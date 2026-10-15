@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import BrowserPreviewPanel from '../src/renderer/src/components/BrowserPreviewPanel/BrowserPreviewPanel'
 import FreeChatHistory from '../src/renderer/src/components/AiChatPanel/components/SessionSidebar/FreeChatHistory'
 import {
   beginOptimisticSkillSend,
@@ -133,6 +134,30 @@ test('会话列表保护当前查看和当前推进的会话，历史会话仍�
 })
 
 const testLocalStorage = new Map<string, string>()
+
+test('验收预览禁用元素审查，移除设备切换并保留页面导航和浏览器入口', () => {
+  const application = {
+    name: '验收预览',
+    menus: { items: [] },
+    pages: []
+  } as ComponentProps<typeof BrowserPreviewPanel>['application']
+  for (const theme of ['light', 'dark']) {
+    const markup = renderToStaticMarkup(
+      createElement('div', { 'data-theme': theme }, createElement(BrowserPreviewPanel, {
+        application,
+        inspectionDisabled: true,
+        requestedUrl: 'http://localhost:3000/page/orders'
+      }))
+    )
+    const inspectorButton = markup.match(/<button[^>]*aria-label="审查元素"[^>]*>/)?.[0]
+    assert.ok(inspectorButton)
+    assert.ok(inspectorButton.includes('disabled=""'))
+    assert.doesNotMatch(markup, /browser-viewport-switcher|aria-label="视口"/)
+    assert.match(markup, /aria-label="页面"/)
+    assert.match(markup, /aria-label="在系统浏览器打开"/)
+    assert.match(markup, /src="http:\/\/localhost:3000\/page\/orders"/)
+  }
+})
 
 // 服务端渲染测试只需提供工作台阶段 Provider 读取的最小本地存储接口。
 Object.defineProperty(globalThis, 'window', {

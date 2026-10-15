@@ -5497,6 +5497,7 @@ export default function AiChatPanel({
             }}
           />
           <BrowserPreviewPanel
+            inspectionDisabled={activeWorkbenchPhase === 'acceptance'}
             serviceControl={previewRuntime.control}
             application={application}
             pages={displayedPlanningPages}

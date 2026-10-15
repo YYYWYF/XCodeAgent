@@ -12,6 +12,7 @@ import {
 } from './elementInspectorProtocol'
 
 type Options = {
+  disabled?: boolean
   frameKey: string
   onElementContextChange?: (context: InspectedElementContext | undefined) => void
   onInspectingChange?: (active: boolean) => void
@@ -29,6 +30,7 @@ const ELEMENT_INSPECTOR_MESSAGE_KEY = 'element-inspector-selection'
 
 /** 管理跨域 iframe 审查协议、就绪状态以及 renderer 内的选中结果反馈。 */
 export function useElementInspector({
+  disabled = false,
   frameKey,
   onElementContextChange,
   onInspectingChange,
@@ -63,13 +65,23 @@ export function useElementInspector({
 
   /** 切换审查状态并同步父级布局状态和 iframe 运行时。 */
   const toggle = useCallback((): void => {
+    if (disabled) return
     if (!activeRef.current && !ready) return
     const nextActive = !activeRef.current
     activeRef.current = nextActive
     setActive(nextActive)
     onInspectingChange?.(nextActive)
     postActiveCommand(nextActive)
-  }, [onInspectingChange, postActiveCommand, ready])
+  }, [disabled, onInspectingChange, postActiveCommand, ready])
+
+  useEffect(() => {
+    // 阶段切换时同步关闭 iframe 审查与父级布局，不能只禁用按钮而保留拦截层。
+    if (!disabled || !activeRef.current) return
+    activeRef.current = false
+    setActive(false)
+    inspectingChangeRef.current?.(false)
+    postActiveCommand(false)
+  }, [disabled, postActiveCommand])
 
   useEffect(() => {
     setReady(false)
@@ -85,9 +97,10 @@ export function useElementInspector({
       if (!message) return
       if (message.type === 'ready') {
         setReady(true)
-        if (activeRef.current) postActiveCommand(true)
+        if (!disabled && activeRef.current) postActiveCommand(true)
         return
       }
+      if (disabled) return
       const context = inspectedElementContextFromMessage(message)
       const selectionContent = context
         ? inspectedElementLocationMessage(context)
@@ -109,7 +122,7 @@ export function useElementInspector({
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [postActiveCommand, previewUrl])
+  }, [disabled, postActiveCommand, previewUrl])
 
   useEffect(() => {
     return () => {
@@ -119,5 +132,5 @@ export function useElementInspector({
     }
   }, [])
 
-  return { active, iframeRef, ready, toggle }
+  return { active: !disabled && active, iframeRef, ready: !disabled && ready, toggle }
 }
