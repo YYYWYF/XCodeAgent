@@ -14,7 +14,7 @@ import type {
   WorkflowRunPayload
 } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { normalizePreviewUrl, openPreviewWindow } from '../../../../utils/previewUrl'
+import { normalizePreviewUrl, openExternalPreviewUrl } from '../../../../utils/previewUrl'
 import { launchStageIndex, projectLaunchProgress } from './projectLaunchProgress'
 import './ProjectLaunchCard.less'
 
@@ -72,12 +72,13 @@ export default function ProjectLaunchCard({ workflow }: Props): ReactElement {
   )
   const failedStage = String(launch?.failed_stage || '')
 
+  /** 使用系统浏览器打开项目，避免启动独立全屏预览窗口。 */
   const handleOpenPreview = async (): Promise<void> => {
     if (!previewUrl) return
     try {
-      await openPreviewWindow(previewUrl)
+      await openExternalPreviewUrl(previewUrl)
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '打开预览窗口失败')
+      message.error(error instanceof Error ? error.message : '在浏览器中打开预览失败')
     }
   }
 
