@@ -8,6 +8,7 @@ from app.graph.subgraphs.testing import (
     INTEGRATION_TEST_PROGRESS_REPORTER_KEY,
     _check_progress_snapshot_writer,
     _repair_scoped_tasks,
+    _route_unit_test_confirmation,
     actual_project_checks,
     build_project_checks,
     build_testing_subgraph,
@@ -555,7 +556,27 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             result["clarification"]["mode"],
             "unit_test_confirmation",
         )
+        self.assertEqual(
+            result["clarification"]["message"],
+            "构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。",
+        )
+        question = result["clarification"]["questions"][0]
+        self.assertEqual(question["question"], "是否执行单元测试？")
+        self.assertEqual(
+            [(option["label"], option["value"]) for option in question["options"]],
+            [("执行单元测试", "run"), ("不执行单元测试", "skip")],
+        )
         invoke_agent.assert_not_called()
+
+    def test_unit_test_choices_route_to_generation_or_skip(self) -> None:
+        """确认选项分别进入测试生成和跳过分支，不能颠倒行为。"""
+
+        for decision, target in [("run", "generate_unit_tests"), ("skip", "skip_unit_tests")]:
+            with self.subTest(decision=decision):
+                result = unit_test_confirmation({"unit_test_decision": decision})
+                self.assertEqual(result["status"], "in_progress")
+                self.assertEqual(result["clarification"], {})
+                self.assertEqual(_route_unit_test_confirmation(result), target)
 
     def test_disabled_unit_test_generation_skips_confirmation(self) -> None:
         """快速修改模式关闭测试生成时不应被新的确认门阻塞。"""

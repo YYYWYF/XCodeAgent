@@ -1586,7 +1586,7 @@ def _workflow_user_input_message(
         "entity_source_binding_required": "请先完成当前目标依赖实体的数据源绑定。",
         "api_design_required": "请查看当前目标依赖的字段映射并确认检测后继续。",
         "small_task_scope_confirmation": "小任务需要确认新增代码范围后继续。",
-        "unit_test_confirmation": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",
+        "unit_test_confirmation": "构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。",
         "build_task_plan_confirmation": "Build DAG 已生成，请确认任务规划后再进入 Build。",
         "test_phase_confirmation": "开发已完成，请确认进入测试阶段。",
         "review_phase_confirmation": "测试已通过，请确认进入审查阶段。",

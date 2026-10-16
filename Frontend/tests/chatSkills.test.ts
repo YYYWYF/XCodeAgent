@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createElement, type ComponentProps } from 'react'
+import {
+  Children,
+  createElement,
+  isValidElement,
+  type ComponentProps,
+  type ReactNode
+} from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import BrowserPreviewPanel from '../src/renderer/src/components/BrowserPreviewPanel/BrowserPreviewPanel'
 import FreeChatHistory from '../src/renderer/src/components/AiChatPanel/components/SessionSidebar/FreeChatHistory'
@@ -38,6 +44,7 @@ import {
   shouldUseConversation
 } from '../src/renderer/src/components/AiChatPanel/conversationMode'
 import { workflowDebugBuildScope } from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
+import UnitTestConfirmationPanel from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/UnitTestConfirmationPanel'
 import WorkflowRunCard, {
   buildClarificationContinuationMessage,
   buildToolActivityPlacement,
@@ -2334,9 +2341,9 @@ test('单元测试生成期间展示运行中的测试检查步骤', () => {
 })
 
 test('各阶段跳过和执行的对话使用中文选项标签，协议答案保持不变', () => {
-  for (const [mode, header, skipLabel] of [
-    ['unit_test_confirmation', '单元测试', '是，跳过单元测试'],
-    ['frontend_performance_confirmation', '前端性能测试', '是，跳过性能测试']
+  for (const [mode, header, skipLabel, runLabel] of [
+    ['unit_test_confirmation', '单元测试', '不执行单元测试', '执行单元测试'],
+    ['frontend_performance_confirmation', '前端性能测试', '是，跳过性能测试', '否，继续执行']
   ] as const) {
     const workflow: WorkflowRunPayload = {
       runId: 'run-test-choice',
@@ -2352,11 +2359,12 @@ test('各阶段跳过和执行的对话使用中文选项标签，协议答案�
             {
               id: mode,
               header,
-              question: `是否跳过${header}？`,
+              question:
+                mode === 'unit_test_confirmation' ? `是否执行${header}？` : `是否跳过${header}？`,
               type: 'choice',
               options: [
                 { label: skipLabel, value: 'skip' },
-                { label: '否，继续执行', value: 'run' }
+                { label: runLabel, value: 'run' }
               ]
             }
           ]
@@ -2366,7 +2374,7 @@ test('各阶段跳过和执行的对话使用中文选项标签，协议答案�
     for (const decision of ['skip', 'run'] as const) {
       const answers = { [mode]: decision }
       const message = buildClarificationContinuationMessage(workflow, answers)
-      assert.match(message, new RegExp(`回答：${decision === 'skip' ? skipLabel : '否，继续执行'}`))
+      assert.match(message, new RegExp(`回答：${decision === 'skip' ? skipLabel : runLabel}`))
       assert.doesNotMatch(message, /回答：(skip|run)/)
       assert.deepEqual(answers, { [mode]: decision })
     }
@@ -2378,54 +2386,84 @@ test('各阶段跳过和执行的对话使用中文选项标签，协议答案�
     )
     assert.match(
       buildClarificationContinuationMessage(workflow, { [mode]: ['run'] }),
-      /回答：否，继续执行/
+      new RegExp(`回答：${runLabel}`)
     )
     workflow.summary.clarification!.questions![0].type = 'text'
     assert.match(buildClarificationContinuationMessage(workflow, { [mode]: 'run' }), /回答：run/)
   }
 })
 
-test('构建完成后展示单元测试跳过确认按钮', () => {
+test('构建完成后按执行和不执行顺序展示单元测试确认按钮', () => {
   const markup = renderWorkflowRunCard({
-      interactionAvailability: 'active',
-      workflow: {
-        runId: 'run-unit-test-confirmation',
-        threadId: 'thread-unit-test-confirmation',
-        summary: {
+    interactionAvailability: 'active',
+    workflow: {
+      runId: 'run-unit-test-confirmation',
+      threadId: 'thread-unit-test-confirmation',
+      summary: {
+        status: 'requires_user_input',
+        phase: 'integration_test',
+        message: '项目预览已就绪，请确认是否符合预期。 预览地址：http://127.0.0.1:3000。',
+        clarification: {}
+      },
+      result: {
+        clarification: {
+          mode: 'unit_test_confirmation',
           status: 'requires_user_input',
-          phase: 'integration_test',
-          message: '项目预览已就绪，请确认是否符合预期。 预览地址：http://127.0.0.1:3000。',
-          clarification: {}
-        },
-        result: {
-          clarification: {
-            mode: 'unit_test_confirmation',
-            status: 'requires_user_input',
-            message: '构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？',
-            questions: [
-              {
-                id: 'unit_test_confirmation',
-                header: '单元测试',
-                question: '是否跳过单元测试？',
-                type: 'choice',
-                options: [
-                  { label: '是，跳过单元测试', value: 'skip' },
-                  { label: '否，继续执行', value: 'run' }
-                ]
-              }
-            ]
-          }
-        },
-        events: []
-      }
+          message:
+            '构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。',
+          questions: [
+            {
+              id: 'unit_test_confirmation',
+              header: '单元测试',
+              question: '是否执行单元测试？',
+              type: 'choice',
+              options: [
+                { label: '执行单元测试', value: 'run' },
+                { label: '不执行单元测试', value: 'skip' }
+              ]
+            }
+          ]
+        }
+      },
+      events: []
+    }
   })
 
-  assert.match(markup, /是否跳过单元测试？/)
-  assert.match(markup, /是，跳过单元测试/)
-  assert.match(markup, /否，继续执行/)
+  assert.match(
+    markup,
+    /构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。/
+  )
+  assert.match(markup, />执行单元测试<.*>不执行单元测试</)
+  assert.doesNotMatch(markup, /是，跳过单元测试|否，继续执行/)
   assert.match(markup, /待确认事项/)
   assert.doesNotMatch(markup, /项目预览已就绪/)
   assert.doesNotMatch(markup, /127\.0\.0\.1:3000/)
+})
+
+test('单元测试左右按钮提交对应决策，并保留禁用状态与默认文案', () => {
+  for (const disabled of [false, true]) {
+    const decisions: Array<'skip' | 'run'> = []
+    const panel = UnitTestConfirmationPanel({
+      disabled,
+      onSubmit: (decision) => decisions.push(decision)
+    })
+    assert.match(renderToStaticMarkup(panel), /跳过单元测试不会对代码质量产生较大影响。/)
+    const actions = Children.toArray(panel.props.children).find(
+      (child) => isValidElement(child) && child.type === 'div'
+    )
+    assert.ok(isValidElement<{ children: ReactNode }>(actions))
+    const buttons = Children.toArray(actions.props.children)
+    for (const [index, label] of ['执行单元测试', '不执行单元测试'].entries()) {
+      const button = buttons[index]
+      assert.ok(
+        isValidElement<{ children: string; disabled: boolean; onClick: () => void }>(button)
+      )
+      assert.equal(button.props.children, label)
+      assert.equal(button.props.disabled, disabled)
+      if (!disabled) button.props.onClick()
+    }
+    assert.deepEqual(decisions, disabled ? [] : ['run', 'skip'])
+  }
 })
 
 test('项目启动节点不展示已过期的前端性能测试确认', () => {

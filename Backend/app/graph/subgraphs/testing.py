@@ -269,24 +269,24 @@ def _unit_test_confirmation_payload() -> dict[str, Any]:
     return {
         "mode": "unit_test_confirmation",
         "status": "requires_user_input",
-        "message": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",
+        "message": "构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。",
         "questions": [
             {
                 "id": "unit_test_confirmation",
                 "header": "单元测试",
-                "question": "是否跳过单元测试？",
+                "question": "是否执行单元测试？",
                 "type": "choice",
                 "allowOther": False,
                 "options": [
                     {
-                        "label": "是，跳过单元测试",
-                        "value": "skip",
-                        "description": "不生成、不执行单元测试。",
-                    },
-                    {
-                        "label": "否，继续执行",
+                        "label": "执行单元测试",
                         "value": "run",
                         "description": "继续生成并执行单元测试。",
+                    },
+                    {
+                        "label": "不执行单元测试",
+                        "value": "skip",
+                        "description": "不生成、不执行单元测试。",
                     },
                 ],
             }

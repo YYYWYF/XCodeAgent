@@ -159,7 +159,7 @@ export default function PlanExecutionDock({
             )}
             {mode === 'awaiting_unit_test_confirmation' && (
               <div className={cx('plan-execution-dock-interaction')}>
-                单元测试门禁等待选择，确认卡可选择继续执行或跳过。
+                请在上方确认卡选择执行单元测试或不执行单元测试。
               </div>
             )}
             {mode === 'awaiting_frontend_performance_confirmation' && (
@@ -316,7 +316,7 @@ function planModeDescription(
     return '代码审查发现问题，请在上方执行一键修复。'
   }
   if (mode === 'awaiting_unit_test_confirmation') {
-    return '请在上方确认卡选择继续执行或跳过单元测试。'
+    return '请在上方确认卡选择执行单元测试或不执行单元测试。'
   }
   if (mode === 'awaiting_frontend_performance_confirmation') {
     return '请在上方确认卡选择继续执行或跳过前端性能测试。'

@@ -65,6 +65,7 @@ import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
+import UnitTestConfirmationPanel from './UnitTestConfirmationPanel'
 import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
@@ -2165,31 +2166,6 @@ function ClarificationQuestionControl({
       placeholder={question.placeholder || '请输入你的补充说明'}
       value={typeof value === 'string' ? value : ''}
     />
-  )
-}
-
-/** 构建检查完成后提供跳过或继续单元测试的双按钮确认面板。 */
-function UnitTestConfirmationPanel({
-  disabled,
-  message,
-  onSubmit
-}: {
-  disabled?: boolean
-  message?: string
-  onSubmit: (decision: 'skip' | 'run') => void
-}): ReactElement {
-  return (
-    <div className={cx('workflow-unit-test-confirmation')}>
-      <Text>{message || '构建检查已完成。是否跳过单元测试？'}</Text>
-      <div className={cx('workflow-unit-test-confirmation-actions')}>
-        <Button disabled={disabled} onClick={() => onSubmit('skip')} type="default">
-          是，跳过单元测试
-        </Button>
-        <Button disabled={disabled} onClick={() => onSubmit('run')} type="primary">
-          否，继续执行
-        </Button>
-      </div>
-    </div>
   )
 }
 
