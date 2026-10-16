@@ -596,7 +596,7 @@ acceptance.START
 - 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm` 或 `yarn`，执行 install、build，并在有对应测试文件时优先执行 `test:unit`、否则执行 `test`；
 - 后端：仅识别当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`），先执行 `-B -Dmaven.test.skip=true clean install`，确认构建通过且存在对应 `*Test.java` 后再执行 `-B -DfailIfNoTests=true test`；不探测 Python 工程或执行 pytest；
 - 缺失必需入口（如前端 package.json、frontend build script）会失败。没有对应单测文件时不执行 Jest/Maven test，并以明确原因跳过；不执行 E2E。
-- 前端性能测试：单测确认后弹出“是否跳过”按钮；继续执行时用 `launch_frontend_project(skip_install=True)` 启动用户 `frontend` 工程并解析真实 `preview_url`，再由 `npx --yes --package @lhci/cli@0.7.2 lhci autorun` 对 `collect.url=[preview_url]` 执行 Lighthouse；使用模拟采集但把网络/CPU 限速调至接近本地无限制，避免 dev server 大体积未打包模块被限速模型放大；结果 advisory，失败不进入质量门禁阻断或修复闭环。
+- 前端性能测试：构建检查完成后询问“是否执行前端性能测试？”，从左到右展示“执行性能测试”（`run`）和“跳过性能测试”（`skip`），通过现有 AG-UI 结构化确认续接。选择执行时用 `launch_frontend_project(skip_install=True)` 启动用户 `frontend` 工程并解析真实 `preview_url`，再由 `npx --yes --package @lhci/cli@0.7.2 lhci autorun` 对 `collect.url=[preview_url]` 执行 Lighthouse；跳过时不启动前端或 Lighthouse，直接进入质量门禁。使用模拟采集但把网络/CPU 限速调至接近本地无限制，避免 dev server 大体积未打包模块被限速模型放大；结果 advisory，失败不进入质量门禁阻断或修复闭环。
 
 任务编译和执行还必须遵守以下确定性边界：
 

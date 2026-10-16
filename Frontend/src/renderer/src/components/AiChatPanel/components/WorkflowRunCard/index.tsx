@@ -67,6 +67,7 @@ import PlanningStageEntryCard from './PlanningStageEntryCard'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
 import WorkspaceToolActivity from './WorkspaceToolActivity'
 import UnitTestConfirmationPanel from './UnitTestConfirmationPanel'
+import FrontendPerformanceConfirmationPanel from './FrontendPerformanceConfirmationPanel'
 import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
@@ -2139,31 +2140,6 @@ function ClarificationQuestionControl({
       placeholder={question.placeholder || '请输入你的补充说明'}
       value={typeof value === 'string' ? value : ''}
     />
-  )
-}
-
-/** 单元测试完成后提供跳过或继续前端性能测试的双按钮确认面板。 */
-function FrontendPerformanceConfirmationPanel({
-  disabled,
-  message,
-  onSubmit
-}: {
-  disabled?: boolean
-  message?: string
-  onSubmit: (decision: 'skip' | 'run') => void
-}): ReactElement {
-  return (
-    <div className={cx('workflow-frontend-performance-confirmation')}>
-      <Text>{message || '单元测试已完成。是否跳过前端性能测试？'}</Text>
-      <div className={cx('workflow-frontend-performance-confirmation-actions')}>
-        <Button disabled={disabled} onClick={() => onSubmit('skip')} type="default">
-          是，跳过性能测试
-        </Button>
-        <Button disabled={disabled} onClick={() => onSubmit('run')} type="primary">
-          否，继续执行
-        </Button>
-      </div>
-    </div>
   )
 }
 

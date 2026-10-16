@@ -2213,7 +2213,7 @@ def _unit_test_decision(value: Any) -> str:
 
 
 def _frontend_performance_decision(value: Any) -> str:
-    """从结构化确认答案提取前端性能测试的 skip/run 决策。"""
+    """只从结构化确认答案提取明确的性能测试执行或跳过动作。"""
 
     if not isinstance(value, dict):
         return ""
@@ -2222,11 +2222,7 @@ def _frontend_performance_decision(value: Any) -> str:
         selected = answer.get("selected")
         answer = selected[0] if isinstance(selected, list) and selected else selected
     normalized = str(answer or "").strip().casefold()
-    if normalized in {"skip", "是", "yes", "true", "跳过"}:
-        return "skip"
-    if normalized in {"run", "否", "no", "false", "继续"}:
-        return "run"
-    return ""
+    return normalized if normalized in {"skip", "run"} else ""
 
 
 def _page_acceptance_decision(value: Any) -> str:

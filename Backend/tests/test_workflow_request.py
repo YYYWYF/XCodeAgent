@@ -23,6 +23,7 @@ from app.services.application_lifecycle import (
 from app.services.application_revision_lifecycle import register_revision_impact
 from app.protocols.workflow.request import (
     _build_execution_scope,
+    _frontend_performance_decision,
     _resume_values,
     workflow_run_inputs,
 )
@@ -1160,28 +1161,40 @@ class WorkflowRequestTests(unittest.TestCase):
     def test_frontend_performance_confirmation_is_forwarded_as_resume_decision(self) -> None:
         """前端性能测试确认按钮必须转换为主 Workflow 可消费的 skip/run 状态。"""
 
-        inputs = workflow_run_inputs(
-            {
-                "clarificationAnswers": {
-                    "frontend_performance_confirmation": {
-                        "selected": "run",
-                    }
-                },
-                "resumeState": {
-                    "summary": {
-                        "status": "requires_user_input",
-                        "phase": "integration_test",
-                    }
-                },
-            }
-        )
+        for decision in ("run", "skip"):
+            for answer in (decision, {"selected": decision}, {"selected": [decision]}):
+                with self.subTest(answer=answer):
+                    inputs = workflow_run_inputs(
+                        {
+                            "clarificationAnswers": {
+                                "frontend_performance_confirmation": answer
+                            },
+                            "resumeState": {
+                                "summary": {
+                                    "status": "requires_user_input",
+                                    "phase": "integration_test",
+                                }
+                            },
+                        }
+                    )
+                    self.assertEqual(inputs["resume_from"], "integration_test")
+                    self.assertEqual(
+                        inputs["resume_values"]["frontend_performance_decision"],
+                        decision,
+                    )
+                    self.assertNotIn("user_interaction_submission", inputs)
 
-        self.assertEqual(inputs["resume_from"], "integration_test")
-        self.assertEqual(
-            inputs["resume_values"]["frontend_performance_decision"],
-            "run",
-        )
-        self.assertNotIn("user_interaction_submission", inputs)
+    def test_frontend_performance_rejects_ambiguous_yes_no_answers(self) -> None:
+        """性能测试确认只消费动作值，不再把是或否解释为跳过或执行。"""
+
+        for answer in ("是", "否", "yes", "no", True, False, "继续", None):
+            with self.subTest(answer=answer):
+                self.assertEqual(
+                    _frontend_performance_decision(
+                        {"frontend_performance_confirmation": answer}
+                    ),
+                    "",
+                )
 
     def test_performance_resume_keeps_integration_build_cache(self) -> None:
         """性能测试确认恢复时必须保留集成构建缓存，避免测试阶段从头重跑。"""

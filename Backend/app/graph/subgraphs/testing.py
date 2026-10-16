@@ -300,7 +300,7 @@ def _unit_test_confirmation_payload() -> dict[str, Any]:
 def _frontend_performance_decision(
     state: ProjectState | dict[str, Any],
 ) -> str:
-    """读取并规范化用户对前端性能测试的 skip/run 决策。"""
+    """读取明确的执行或跳过动作，不再按反向的是非问题解释答案。"""
 
     raw_decision = state.get("frontend_performance_decision")
     if isinstance(raw_decision, dict) and "selected" in raw_decision:
@@ -311,11 +311,7 @@ def _frontend_performance_decision(
             else selected
         )
     normalized = str(raw_decision or "").strip().casefold()
-    if normalized in {"skip", "是", "yes", "true", "跳过"}:
-        return "skip"
-    if normalized in {"run", "否", "no", "false", "继续"}:
-        return "run"
-    return ""
+    return normalized if normalized in _FRONTEND_PERFORMANCE_DECISIONS else ""
 
 
 def _frontend_performance_confirmation_payload() -> dict[str, Any]:
@@ -326,25 +322,25 @@ def _frontend_performance_confirmation_payload() -> dict[str, Any]:
         "status": "requires_user_input",
         "message": (
             "构建检查已完成。前端性能测试不是必需步骤，可能耗时较长，"
-            "是否跳过前端性能测试？"
+            "是否执行前端性能测试？"
         ),
         "questions": [
             {
                 "id": "frontend_performance_confirmation",
                 "header": "前端性能测试",
-                "question": "是否跳过前端性能测试？",
+                "question": "是否执行前端性能测试？",
                 "type": "choice",
                 "allowOther": False,
                 "options": [
                     {
-                        "label": "是，跳过性能测试",
-                        "value": "skip",
-                        "description": "不启动前端、不执行 Lighthouse 性能测试。",
-                    },
-                    {
-                        "label": "否，继续执行",
+                        "label": "执行性能测试",
                         "value": "run",
                         "description": "启动用户 frontend 工程并执行 Lighthouse 性能测试。",
+                    },
+                    {
+                        "label": "跳过性能测试",
+                        "value": "skip",
+                        "description": "不启动前端、不执行 Lighthouse 性能测试。",
                     },
                 ],
             }
@@ -1278,7 +1274,7 @@ def actual_project_checks(
 def frontend_performance_confirmation(
     state: ProjectState,
 ) -> dict[str, Any]:
-    """在单元测试阶段完成后暂停，等待用户选择是否跳过前端性能测试。"""
+    """在构建检查完成后暂停，等待用户明确执行或跳过前端性能测试。"""
 
     if state.get("frontend_performance_test_enabled") is False:
         return {

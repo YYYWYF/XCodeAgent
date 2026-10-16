@@ -46,6 +46,7 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/conversationMode'
 import { workflowDebugBuildScope } from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
 import UnitTestConfirmationPanel from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/UnitTestConfirmationPanel'
+import FrontendPerformanceConfirmationPanel from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/FrontendPerformanceConfirmationPanel'
 import WorkflowRunCard, {
   buildClarificationContinuationMessage,
   buildToolActivityPlacement,
@@ -2450,7 +2451,7 @@ test('单测工具活动不进入完成检查、其他检查和持久化历史',
 test('各阶段跳过和执行的对话使用中文选项标签，协议答案保持不变', () => {
   for (const [mode, header, skipLabel, runLabel] of [
     ['unit_test_confirmation', '单元测试', '不执行单元测试', '执行单元测试'],
-    ['frontend_performance_confirmation', '前端性能测试', '是，跳过性能测试', '否，继续执行']
+    ['frontend_performance_confirmation', '前端性能测试', '跳过性能测试', '执行性能测试']
   ] as const) {
     const workflow: WorkflowRunPayload = {
       runId: 'run-test-choice',
@@ -2466,12 +2467,11 @@ test('各阶段跳过和执行的对话使用中文选项标签，协议答案�
             {
               id: mode,
               header,
-              question:
-                mode === 'unit_test_confirmation' ? `是否执行${header}？` : `是否跳过${header}？`,
+              question: `是否执行${header}？`,
               type: 'choice',
               options: [
-                { label: skipLabel, value: 'skip' },
-                { label: runLabel, value: 'run' }
+                { label: runLabel, value: 'run' },
+                { label: skipLabel, value: 'skip' }
               ]
             }
           ]
@@ -2573,6 +2573,69 @@ test('单元测试左右按钮提交对应决策，并保留禁用状态与默�
   }
 })
 
+test('性能测试确认按执行和跳过顺序展示，并提交对应动作', () => {
+  for (const disabled of [false, true]) {
+    const decisions: Array<'skip' | 'run'> = []
+    const panel = FrontendPerformanceConfirmationPanel({
+      disabled,
+      onSubmit: (decision) => decisions.push(decision)
+    })
+    const markup = renderToStaticMarkup(panel)
+    assert.match(markup, /构建检查已完成。.*是否执行前端性能测试？/)
+    assert.match(markup, />执行性能测试<.*>跳过性能测试</)
+    assert.doesNotMatch(markup, /是否跳过|是，|否，|单元测试已完成/)
+    const actions = Children.toArray(panel.props.children).find(
+      (child) => isValidElement(child) && child.type === 'div'
+    )
+    assert.ok(isValidElement<{ children: ReactNode }>(actions))
+    const buttons = Children.toArray(actions.props.children)
+    for (const [index, label] of ['执行性能测试', '跳过性能测试'].entries()) {
+      const button = buttons[index]
+      assert.ok(
+        isValidElement<{ children: string; disabled: boolean; onClick: () => void }>(button)
+      )
+      assert.equal(button.props.children, label)
+      assert.equal(button.props.disabled, disabled)
+      if (!disabled) button.props.onClick()
+    }
+    assert.deepEqual(decisions, disabled ? [] : ['run', 'skip'])
+  }
+})
+
+test('工作流确认卡展示性能测试执行和跳过动作', () => {
+  const markup = renderWorkflowRunCard({
+    interactionAvailability: 'active',
+    workflow: {
+      runId: 'run-performance-confirmation',
+      threadId: 'thread-performance-confirmation',
+      summary: {
+        status: 'requires_user_input',
+        phase: 'integration_test',
+        clarification: {
+          mode: 'frontend_performance_confirmation',
+          status: 'requires_user_input',
+          questions: [
+            {
+              id: 'frontend_performance_confirmation',
+              header: '前端性能测试',
+              question: '是否执行前端性能测试？',
+              type: 'choice',
+              allowOther: false,
+              options: [
+                { label: '执行性能测试', value: 'run' },
+                { label: '跳过性能测试', value: 'skip' }
+              ]
+            }
+          ]
+        }
+      },
+      events: []
+    }
+  })
+  assert.match(markup, />执行性能测试<.*>跳过性能测试</)
+  assert.doesNotMatch(markup, /是，跳过性能测试|否，继续执行/)
+})
+
 test('项目启动节点不展示已过期的前端性能测试确认', () => {
   const markup = renderWorkflowRunCard({
       interactionAvailability: 'stale',
@@ -2585,16 +2648,16 @@ test('项目启动节点不展示已过期的前端性能测试确认', () => {
           clarification: {
             mode: 'frontend_performance_confirmation',
             status: 'requires_user_input',
-            message: '单元测试已完成。是否跳过前端性能测试？',
+            message: '构建检查已完成。是否执行前端性能测试？',
             questions: [
               {
                 id: 'frontend_performance_confirmation',
                 header: '前端性能测试',
-                question: '是否跳过前端性能测试？',
+                question: '是否执行前端性能测试？',
                 type: 'choice',
                 options: [
-                  { label: '是，跳过性能测试', value: 'skip' },
-                  { label: '否，继续执行', value: 'run' }
+                  { label: '执行性能测试', value: 'run' },
+                  { label: '跳过性能测试', value: 'skip' }
                 ]
               }
             ]
@@ -2605,8 +2668,8 @@ test('项目启动节点不展示已过期的前端性能测试确认', () => {
   })
 
   assert.match(markup, /正在启动项目预览/)
-  assert.doesNotMatch(markup, /是否跳过前端性能测试/)
-  assert.doesNotMatch(markup, /是，跳过性能测试/)
+  assert.doesNotMatch(markup, /是否执行前端性能测试/)
+  assert.doesNotMatch(markup, /执行性能测试|跳过性能测试/)
   assert.doesNotMatch(markup, /待确认事项/)
   assert.doesNotMatch(markup, /该确认已提交或已失效/)
 })

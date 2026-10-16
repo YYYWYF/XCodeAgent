@@ -9,6 +9,7 @@ from app.graph.subgraphs.testing import (
     INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE,
     INTEGRATION_TEST_PROGRESS_REPORTER_KEY,
     _check_progress_snapshot_writer,
+    _route_frontend_performance_confirmation,
     _repair_scoped_tasks,
     _route_unit_test_confirmation,
     actual_project_checks,
@@ -296,7 +297,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         clarification = {
             "mode": "frontend_performance_confirmation",
             "status": "requires_user_input",
-            "message": "是否跳过前端性能测试？",
+            "message": "是否执行前端性能测试？",
             "questions": [{"id": "frontend_performance_confirmation"}],
         }
 
@@ -355,7 +356,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         clarification = {
             "mode": "frontend_performance_confirmation",
             "status": "requires_user_input",
-            "message": "是否跳过前端性能测试？",
+            "message": "是否执行前端性能测试？",
             "questions": [{"id": "frontend_performance_confirmation"}],
         }
         cached_build_results = [
@@ -590,7 +591,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         self.assertIn("unit_test_confirmation:auto_skipped_disabled", result["test_events"])
 
     def test_frontend_performance_confirmation_pauses_without_decision(self) -> None:
-        """单测完成后未选择性能测试时，应暂停并展示确认载荷。"""
+        """构建检查完成后未选择性能测试时，应暂停并展示正向动作。"""
 
         with patch(
             "app.graph.subgraphs.testing.frontend_performance_available",
@@ -609,6 +610,36 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             "frontend_performance_confirmation",
         )
         self.assertEqual(result["integration_next_action"], "await_user_input")
+        question = result["clarification"]["questions"][0]
+        self.assertEqual(question["question"], "是否执行前端性能测试？")
+        self.assertEqual(
+            [(option["label"], option["value"]) for option in question["options"]],
+            [("执行性能测试", "run"), ("跳过性能测试", "skip")],
+        )
+        self.assertIn("是否执行前端性能测试？", result["clarification"]["message"])
+
+    def test_frontend_performance_routes_only_explicit_actions(self) -> None:
+        """执行、跳过按动作路由，含糊的是非答案不能越过确认门。"""
+
+        for decision, expected in (
+            ("run", "frontend_performance_test"),
+            ("skip", "skip_frontend_performance"),
+            ({"selected": ["run"]}, "frontend_performance_test"),
+            ({"selected": "skip"}, "skip_frontend_performance"),
+            ("是", "await_user_input"),
+            ("否", "await_user_input"),
+            (True, "await_user_input"),
+            (False, "await_user_input"),
+            ("继续", "await_user_input"),
+            ("", "await_user_input"),
+        ):
+            with self.subTest(decision=decision):
+                self.assertEqual(
+                    _route_frontend_performance_confirmation(
+                        {"frontend_performance_decision": decision}
+                    ),
+                    expected,
+                )
 
     def test_frontend_performance_confirmation_auto_skips_when_disabled(self) -> None:
         """快速修改流程关闭性能测试时自动跳过确认门。"""
