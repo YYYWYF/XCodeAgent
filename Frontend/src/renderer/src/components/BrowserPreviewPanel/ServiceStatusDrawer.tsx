@@ -5,16 +5,20 @@ import {
   CloseCircleFilled,
   CopyOutlined,
   ExclamationCircleFilled,
+  FullscreenExitOutlined,
+  FullscreenOutlined,
   LoadingOutlined,
   ReloadOutlined,
   ToolOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Drawer, Empty, Tabs, Typography } from 'antd'
-import { useEffect, useRef, useState } from 'react'
+import { Alert, Button, Drawer, Tabs, Typography } from 'antd'
+import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { PreviewRuntimePayload, PreviewServiceState } from '../../service/previewRuntime'
 import { previewServiceActionAvailability } from './serviceStatusPolicy'
+import ServiceLogContent from './ServiceLogContent'
 import './ServiceStatusDrawer.less'
+import './ServiceStatusDrawer.expanded.less'
 
 export type ServiceStatusControl = {
   open: boolean
@@ -75,7 +79,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
   const [tab, setTab] = useState<ServiceLayer>('frontend')
   const [following, setFollowing] = useState(true)
   const [copyError, setCopyError] = useState('')
-  const logRef = useRef<HTMLPreElement>(null)
+  const [logsExpanded, setLogsExpanded] = useState(false)
   const runtime = snapshot?.runtime
   const logs = runtime?.logs?.[tab] || []
   const content = logs
@@ -103,13 +107,13 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
   }, [runtime?.attemptId, runtime?.failedStage])
 
   useEffect(() => {
-    if (following && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
-  }, [content, following, tab])
+    if (!props.open) setLogsExpanded(false)
+  }, [props.open])
 
   /** 复制当前端的脱敏日志，并反馈剪贴板错误。 */
-  const copyLogs = async (): Promise<void> => {
+  const copyLogs = async (text = content): Promise<void> => {
     try {
-      await navigator.clipboard.writeText(content)
+      await navigator.clipboard.writeText(text)
       setCopyError('')
     } catch {
       setCopyError('无法访问剪贴板，请选择日志文本复制。')
@@ -137,7 +141,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
       onClose={() => props.setOpen(false)}
       width="min(520px, 100%)"
       getContainer={false}
-      rootClassName="preview-service-drawer"
+      className={`preview-service-drawer${logsExpanded ? ' is-log-expanded' : ''}`}
     >
       <div className="preview-service-drawer__body">
         <section
@@ -232,12 +236,12 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               诊断并修复
             </Button>
           </div>
-          {(props.error || copyError) && (
+          {props.error && (
             <Alert
               className="preview-service-callout is-error"
               type="error"
               showIcon
-              message={props.error || copyError}
+              message={props.error}
             />
           )}
         </section>
@@ -291,25 +295,33 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               >
                 {following ? '跟随最新' : '恢复跟随'}
               </Button>
+              <Button
+                size="small"
+                icon={logsExpanded ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+                aria-label={logsExpanded ? '还原日志高度' : '展开日志至抽屉高度'}
+                aria-pressed={logsExpanded}
+                onClick={() => setLogsExpanded((expanded) => !expanded)}
+              >
+                {logsExpanded ? '还原' : '展开'}
+              </Button>
             </div>
           </div>
-          {content ? (
-            <pre
-              ref={logRef}
-              className="preview-service-logs"
-              aria-label={`${tab === 'frontend' ? '前端' : '后端'}启动日志`}
-              onScroll={(event) => {
-                const node = event.currentTarget
-                if (node.scrollHeight - node.scrollTop - node.clientHeight > 24) setFollowing(false)
-              }}
-            >
-              {content}
-            </pre>
-          ) : (
-            <div className="preview-log-empty">
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本次启动暂无日志" />
-            </div>
+          {copyError && (
+            <Alert
+              type="error"
+              showIcon
+              message={copyError}
+              className="preview-service-callout is-error"
+            />
           )}
+          <ServiceLogContent
+            content={content}
+            label={`${tab === 'frontend' ? '前端' : '后端'}启动日志`}
+            following={following}
+            expanded={logsExpanded}
+            onPauseFollowing={() => setFollowing(false)}
+            onCopy={copyLogs}
+          />
         </section>
       </div>
     </Drawer>
