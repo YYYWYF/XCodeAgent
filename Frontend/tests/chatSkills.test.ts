@@ -297,6 +297,15 @@ test('prepare_build_tasks 调试默认继承当前页面范围', () => {
   assert.deepEqual(scope, { type: 'page', targetId: 'pet_list_page' })
 })
 
+test('二次修改主动继续把来源 Run 送入独立 AG-UI 协议', () => {
+  const props = buildWorkflowForwardedProps({
+    editorMode: 'frontend', workspaceRoot: '/workspace', conversation: true,
+    resumeExecutionRunId: 'paused-conversation'
+  })
+  assert.equal(props.conversation?.resumeExecutionRunId, 'paused-conversation')
+  assert.equal(props.conversation?.workspaceRoot, '/workspace')
+})
+
 test('页面和 Endpoint 开发目标严格规范化并投影到 Workflow scope', () => {
   const page = normalizeDevelopmentTarget({
     type: 'page',

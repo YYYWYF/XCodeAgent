@@ -451,6 +451,7 @@ export default function WorkflowRunCard({
           )}
           {requiresConfirmation && interactionAvailability !== 'active' && (
             <Alert
+              className={cx('workflow-confirmation-status')}
               message={
                 interactionAvailability === 'unavailable'
                   ? '正在校准确认状态，请稍候。'

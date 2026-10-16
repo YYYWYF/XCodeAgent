@@ -1338,6 +1338,8 @@ test('当前请求仍在运行时即使生命周期暂为空也保持输入锁',
 test('简单模式运行时保留对话框，正式计划运行时显示计划控制栏', () => {
   assert.equal(shouldRenderPlanExecutionDock('running', true), false)
   assert.equal(shouldRenderPlanExecutionDock('stopping', true), false)
+  assert.equal(shouldRenderPlanExecutionDock('stopped', true), true)
+  assert.equal(shouldRenderPlanExecutionDock('failed', true), false)
   assert.equal(shouldRenderPlanExecutionDock('running', false), true)
   assert.equal(shouldRenderPlanExecutionDock('idle', false), false)
 })

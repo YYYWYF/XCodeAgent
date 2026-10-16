@@ -147,6 +147,9 @@ export function buildWorkflowForwardedProps(
       ? {
           workspaceRoot: options.workspaceRoot,
           selectedSkillNames: options.selectedSkillNames,
+          ...(options.resumeExecutionRunId !== undefined
+            ? { resumeExecutionRunId: options.resumeExecutionRunId }
+            : {}),
           ...(options.conversationTarget !== undefined
             ? { target: options.conversationTarget }
             : {}),
@@ -575,6 +578,7 @@ export class AgUiChatSession {
   private resolveActiveRunCompletion?: () => void
   private rejectStoppedRun?: (reason: Error) => void
   private unresolvedServerRunId?: string
+  private activeWorkspaceRoot?: string
 
   /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
   constructor(threadId = randomUUID(), url = getWorkflowUrl()) {
@@ -603,7 +607,7 @@ export class AgUiChatSession {
       return
     }
 
-    const cancellation = await cancelWorkflowRun(this.threadId, runId, undefined, this.endpointUrl)
+    const cancellation = await cancelWorkflowRun(this.threadId, runId, this.activeWorkspaceRoot, this.endpointUrl)
     const serverStopped =
       cancellation.status === 'cancelled' ||
       cancellation.status === 'pending_confirmation' ||
@@ -765,6 +769,7 @@ export class AgUiChatSession {
     const runId = randomUUID()
     this.activeAgent = requestAgent
     this.activeRunId = runId
+    this.activeWorkspaceRoot = options.workspaceRoot
     this.activeRunCompletion = new Promise((resolve) => {
       this.resolveActiveRunCompletion = resolve
     })

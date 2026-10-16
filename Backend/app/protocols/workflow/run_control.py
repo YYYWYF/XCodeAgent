@@ -251,6 +251,17 @@ class WorkflowRunRegistry:
             return "cancel_timeout"
         if not ending and _pending_confirmation_for_run(workspace_key, run_id) is not None:
             return "pending_confirmation"
+        if workspace_key:
+            source = await get_execution(workspace_key, run_id)
+            if source is not None and getattr(source, "workflow_scope", None) == "conversation":
+                from app.domain.execution_recovery import DurableExecutionStatus
+                from app.persistence.execution_recovery import reconcile_interrupted_execution_status
+                from app.protocols.workflow.lifecycle import stop_workflow_lifecycle
+
+                # 二次修改只在真实线程与命令全部退出后落盘主动暂停；停服窗口仍保留 interrupted。
+                await reconcile_interrupted_execution_status(workspace=workspace_key, run_id=run_id,
+                    status=DurableExecutionStatus.CANCELLED)
+                stop_workflow_lifecycle(workspace_key, run_id=run_id, phase=source.current_node)
         return "cancelled" if had_work else "not_running"
 
     def is_active(self, run_id: str, *, workspace: str | None = None) -> bool:

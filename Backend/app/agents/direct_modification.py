@@ -610,6 +610,7 @@ def _frontend_direct_modification_prompt(
         "and report the tool error as a warning if the task is otherwise complete.\n"
         f"1. `{_FRONTEND_REQUIRED_SKILLS[0]}`\n"
         f"2. `{_FRONTEND_REQUIRED_SKILLS[1]}`\n"
+        f"3. `{_FRONTEND_REQUIRED_SKILLS[2]}`\n"
         "Read code-block-template references only when relevant to this request; do not load all "
         "references up front. These built-in skills are mounted read-only and are independent of "
         "the user-selected skill list.\n\n"

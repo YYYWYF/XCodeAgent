@@ -41,6 +41,11 @@
   gap: 12px;
 }
 
+// 确认状态提示跟随工作台正文色，深色主题使用白色文字并保留浅色主题的可读性。
+.@{class-prefix}-workflow-confirmation-status .ant-alert-message {
+  color: var(--wb-text);
+}
+
 .@{class-prefix}-workflow-artifacts,
 .@{class-prefix}-workflow-clarification,
 .@{class-prefix}-workflow-build-progress,

@@ -5232,6 +5232,7 @@ export default function AiChatPanel({
                 !acceptanceAwaiting &&
                 (endingPlan || shouldRenderPlanExecutionDock(displayedPlanExecutionMode, conversationActive)) ? (
                 <WorkspaceDebugDock
+                  controlsOnly={conversationActive}
                   activeWorkflow={activeWorkflow}
                   copy={copy}
                   initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}

@@ -698,6 +698,7 @@ export function useWorkflowConversation({
   updateSessionExecutionStatus
 }: UseWorkflowConversationParams): UseWorkflowConversationResult {
   const stopRequestedRef = useRef<Record<string, boolean>>({})
+  const stopAcknowledgementRef = useRef<Record<string, Promise<boolean>>>({})
   const notifiedPreviewTargetsRef = useRef<Set<string>>(new Set())
   // 测试阶段切换会先异步创建新会话，用 runId 防止按钮连点创建多个空白测试会话。
   const testPhaseTransitionRunIdsRef = useRef<Set<string>>(new Set())
@@ -1344,6 +1345,7 @@ export function useWorkflowConversation({
       })
     }
     stopRequestedRef.current[identity.key] = false
+    delete stopAcknowledgementRef.current[identity.key]
     setSessionMessages(identity.key, nextMessages)
     if (options?.clearDraft) {
       setDraftByKey(identity.key, '')
@@ -1535,6 +1537,8 @@ export function useWorkflowConversation({
         backendRunSettled = true
         return false
       }
+      const pauseConfirmed = await stopAcknowledgementRef.current[identity.key]
+      if (pauseConfirmed === false) throw new Error('后台尚未确认停止，请再次暂停并等待退出。')
       backendRunSettled = true
       setConnectionState((current) =>
         completeConnectionRequest(current, connectionRequestGeneration)
@@ -1596,12 +1600,16 @@ export function useWorkflowConversation({
       publishAiMessage(identity.editorMode, answer)
       return true
     } catch (caughtError) {
+      // 主动取消造成的原流断开不代表 Backend 断线，先等待控制面确认真实退出。
+      const pauseConfirmed = await stopAcknowledgementRef.current[identity.key]
       if (!isPlanControlResponseCurrent()) {
         // 旧 Plan Control 的错误同样丢弃，不能改变新会话的连接或错误状态。
         backendRunSettled = true
         return false
       }
-      if (backendRequestStarted && !backendRunSettled && !isAbortedStreamError(caughtError)) {
+      if (pauseConfirmed === true) {
+        setConnectionState((current) => completeConnectionRequest(current, connectionRequestGeneration))
+      } else if (backendRequestStarted && !backendRunSettled && !isAbortedStreamError(caughtError)) {
         if (caughtError instanceof AgUiRunError || isAuthenticationFailure(caughtError)) {
           setConnectionState((current) =>
             completeConnectionRequest(current, connectionRequestGeneration)
@@ -1637,7 +1645,8 @@ export function useWorkflowConversation({
         }))
         return false
       }
-      if (stopRequestedRef.current[identity.key] || isAbortedStreamError(caughtError)) {
+      // 原流可能先于同步线程退出；必须等待独立取消控制回执，不能把断流当作暂停成功。
+      if (pauseConfirmed !== false && (stopRequestedRef.current[identity.key] || isAbortedStreamError(caughtError))) {
         const answer = stoppedAnswer(streamedContent)
         const stoppedWorkflow = withWorkflowExecutionStatus(streamedWorkflow, 'stopped')
         const completedMessages = updateAssistantMessage(
@@ -2392,7 +2401,9 @@ export function useWorkflowConversation({
       const stoppingWorkflow = withWorkflowExecutionStatus(workflow, 'stopping')
       return stoppingWorkflow ? { ...current, [runningIdentity.key]: stoppingWorkflow } : current
     })
-    await agUiSession.stop().catch((reason) => {
+    const acknowledgement = agUiSession.stop()
+    stopAcknowledgementRef.current[runningIdentity.key] = acknowledgement.then(() => true, () => false)
+    await acknowledgement.catch((reason) => {
       stopRequestedRef.current[runningIdentity.key] = false
       setRunStates((current) => {
         const run = current[runningIdentity.key]
@@ -2417,7 +2428,7 @@ export function useWorkflowConversation({
     return handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
   }
 
-  /** 仅为主动停止的计划沿用原有继续执行动作。 */
+  /** 主动暂停按原执行类型继续；二次修改由服务端沿同 thread checkpoint 续跑。 */
   const handleContinueStoppedPlan = async (workflow?: WorkflowRunPayload): Promise<void> => {
     const retryWorkflow = workflow || activeWorkflow
     if (!retryWorkflow || loading || workspaceBusy) return
@@ -2427,6 +2438,8 @@ export function useWorkflowConversation({
     })
     if (execution?.status !== 'stopped' && retryWorkflow.summary.status !== 'stopped') return
     await sendWorkflowMessage('继续当前计划任务。', {
+      conversation: isConversationWorkflow(retryWorkflow),
+      executionThreadId: retryWorkflow.threadId,
       resumeState: retryWorkflow,
       resumeExecutionRunId: execution?.runId || retryWorkflow.runId,
       selectedPageId: workflowSelectedPageId(retryWorkflow) || selectedPageId,

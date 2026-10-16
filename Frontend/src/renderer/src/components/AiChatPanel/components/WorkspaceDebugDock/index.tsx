@@ -10,6 +10,7 @@ import './WorkspaceDebugDock.less'
 const { Text } = Typography
 
 type Props = {
+  controlsOnly?: boolean
   activeWorkflow?: WorkflowRunPayload
   copy: ChatCopy[EditorMode]
   initialResumeFrom: string
@@ -27,6 +28,7 @@ const ignoreSelectedSkillsChange = (): void => undefined
 
 /** 在工作台底部以紧凑横向布局呈现调试工具，并复用右侧原有控制内容。 */
 export default function WorkspaceDebugDock({
+  controlsOnly = false,
   activeWorkflow,
   copy,
   initialResumeFrom,
@@ -38,6 +40,8 @@ export default function WorkspaceDebugDock({
   workspaceBusy,
   workspaceRoot
 }: Props): ReactElement {
+  // 二次修改暂停只提供原 checkpoint 继续，不暴露正式 Workflow 的节点调试入口。
+  if (controlsOnly && rightContent) return rightContent
   return (
     <section
       aria-label="Workflow 调试工具与计划控制"

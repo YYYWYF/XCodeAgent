@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, START
+from app.services.run_workers import WorkerStateGraph
 
 from app.graph.nodes.direct_modification import (
     classify_direct_modification,
@@ -174,7 +175,7 @@ def direct_next_node_name(node_name: str, state: ProjectState) -> str | None:
 def build_direct_modification_graph(*, checkpointer: Any) -> Any:
     """构建不依赖正式规划产物的快速修改 LangGraph。"""
 
-    builder = StateGraph(ProjectState)
+    builder = WorkerStateGraph(ProjectState)
     builder.add_node(SYNTHETIC_WORKFLOW_ENTRY_NODE, workflow_entry)
     builder.add_node("classify_intent", classify_direct_modification)
     builder.add_node("scan_workspace_code", scan_workspace_code)

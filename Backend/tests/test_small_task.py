@@ -195,8 +195,9 @@ class SmallTaskExecutionTests(unittest.TestCase):
                     ]
                 ),
                 workspace,
-                user_skills_backend=StateBackend(),
-                agent_memory_backend=StateBackend(),
+                # 只读挂载使用真实文件 backend；StateBackend 需要宿主显式注册 files channel。
+                user_skills_backend=create_workspace_backend(workspace),
+                agent_memory_backend=create_workspace_backend(workspace),
             )
             result = agent.invoke(
                 {

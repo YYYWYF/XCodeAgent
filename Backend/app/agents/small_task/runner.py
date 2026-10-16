@@ -65,10 +65,11 @@ def invoke_small_task_agent(
     """使用本次工作流技能快照调用共享小任务 Agent。"""
 
     from app.agents import create_agent_bundle
+    from app.services.run_workers import current_run_id
 
     with small_task_path_scope(
         _string_list(packet.get("allowedPaths"), limit=100),
-        run_id=str(packet.get("executionRunId") or ""),
+        run_id=str(packet.get("executionRunId") or current_run_id()),
     ):
         return invoke_agent_with_tool_activity(
             create_agent_bundle(workspace, selected_skill_names).small_task,

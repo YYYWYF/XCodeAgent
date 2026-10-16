@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from langgraph.types import Command
 
 from app.agents.workspace_scope import resolve_workspace_root
 from app.domain.application_revision import RevisionImpact, RevisionTarget
@@ -53,6 +54,7 @@ from app.services.user_skill_runtime import validate_selected_user_skills
 from app.services.conversation_execution import ConversationExecution
 from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext
 from app.services.node_recovery_context import bind_recovery_runtime
+from app.services.run_workers import bind_run_workers
 from app.services.workflow_reentry import SYNTHETIC_WORKFLOW_ENTRY_NODE
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
@@ -196,6 +198,7 @@ class DirectModificationInput(BaseModel):
         alias="elementContext",
     )
     change_id: str | None = Field(default=None, alias="changeId", max_length=256)
+    resume_execution_run_id: str | None = Field(default=None, alias="resumeExecutionRunId", min_length=1, max_length=256)
     approved_paths: list[str] = Field(
         default_factory=list,
         alias="approvedPaths",
@@ -245,6 +248,12 @@ def conversation_capabilities() -> dict[str, Any]:
             "userVisibleExplanation": "reason-only",
         },
         "workflowIndependent": True,
+        "pauseContinuation": {
+            "requestField": "forwardedProps.conversation.resumeExecutionRunId",
+            "authority": "server-checkpoint",
+            "sameThread": True,
+            "abnormalInterruption": "/execution-recovery/execute",
+        },
         "nodeRecovery": {
             "endpoint": "/execution-recovery/execute",
             "executionKind": "workbench",
@@ -461,10 +470,13 @@ def build_conversation_ag_ui_stream(
     normalized_payload = {**payload, "threadId": thread_id, "runId": run_id}
     cancel_run_id = _cancel_run_id(normalized_payload)
     if cancel_run_id:
+        forwarded = normalized_payload.get("forwardedProps") or {}
+        conversation = conversation_input(normalized_payload) or {}
         return build_workflow_cancellation_ag_ui_stream(
             thread_id=thread_id,
             run_id=run_id,
             target_run_id=cancel_run_id,
+            workspace=str(conversation.get("workspaceRoot") or forwarded.get("workspaceRoot") or ""),
             accept=accept,
         )
     raw_input = conversation_input(normalized_payload)
@@ -599,6 +611,17 @@ def build_conversation_ag_ui_stream(
             },
         }
         try:
+            paused_snapshot = None
+            if request.resume_execution_run_id:
+                paused_snapshot = await active_graph.aget_state(config)
+                # 仅恢复服务端 checkpoint；继续按钮文本和客户端旧快照都不作为业务输入。
+                state_view = dict(paused_snapshot.values)
+                user_request = str(state_view.get("request") or "")
+                lease = workspace_run_leases.acquire(
+                    workspace_root=workspace_root, project_id=None,
+                    execution_scope={"type": "application", "targetId": "conversation"},
+                    thread_id=thread_id, run_id=run_id,
+                )
             if native_recovery_context is not None:
                 state_view = dict(native_recovery_context.fork_snapshot.values)
                 config = native_recovery_context.fork_config
@@ -633,9 +656,11 @@ def build_conversation_ag_ui_stream(
                         )
 
             await execution.start(state_view, await active_graph.aget_state(config) if hasattr(active_graph, "aget_state") else None,
-                                  str((normalized_payload.get("forwardedProps") or {}).get("sessionId") or "") or None)
+                                  str((normalized_payload.get("forwardedProps") or {}).get("sessionId") or "") or None,
+                                  paused_run_id=request.resume_execution_run_id)
             initial_node_name = native_recovery_context.recovery_plan.target_node if native_recovery_context else str(
-                state_view.get("direct_modification_resume_node")
+                (paused_snapshot.next[0] if paused_snapshot else None)
+                or state_view.get("direct_modification_resume_node")
                 or "scan_workspace_code"
             )
             if (
@@ -664,9 +689,14 @@ def build_conversation_ag_ui_stream(
                     percent=0,
                 )
             async for stream_mode, chunk in _conversation_graph_stream(active_graph,
-                None if native_recovery_context else state_view,
+                (None if native_recovery_context else Command(update={
+                    "active_run_id": run_id, "active_thread_id": thread_id,
+                    "lifecycle": state_view.get("lifecycle"),
+                }) if paused_snapshot else state_view),
                 config=config,
                 context=native_recovery_context,
+                run_id=run_id,
+                workspace=workspace_root,
             ):
                 if stream_mode == "custom":
                     await _report_custom_progress(
@@ -834,10 +864,12 @@ def build_conversation_ag_ui_stream(
 
 
 async def _conversation_graph_stream(graph: Any, state: Any, *, config: dict[str, Any],
-                                     context: NativeRecoveryRuntimeContext | None):
+                                     context: NativeRecoveryRuntimeContext | None,
+                                     run_id: str, workspace: str):
     """把原 Graph 流绑定到统一 Native 节点上下文，保留节点内部恢复与修复预算。"""
 
-    with bind_recovery_runtime(context.node_recovery_context() if context else None):
+    with (bind_recovery_runtime(context.node_recovery_context() if context else None),
+          bind_run_workers(run_id, workspace)):
         async for chunk in graph.astream(state, config=config, stream_mode=["updates", "custom"]):
             yield chunk
 

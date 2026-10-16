@@ -294,12 +294,12 @@ export function deriveDisplayedPlanExecutionMode(
   return 'idle'
 }
 
-/** 自由对话期间隐藏计划控制栏，仅让正式 Workflow 占用底部控制栏。 */
+/** 二次修改主动暂停后显示继续入口；运行与异常仍保留各自原控制面。 */
 export function shouldRenderPlanExecutionDock(
   mode: PlanExecutionMode,
   conversationActive: boolean
 ): mode is Exclude<PlanExecutionMode, 'idle'> {
-  return mode !== 'idle' && !conversationActive
+  return mode !== 'idle' && (!conversationActive || mode === 'stopped')
 }
 
 /** 乐观更新指定计划执行的控制状态，不覆盖独立的创建生命周期状态。 */

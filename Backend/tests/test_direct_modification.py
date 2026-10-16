@@ -67,8 +67,8 @@ from app.tools.execute import ExecuteInput
 class DirectModificationPromptTests(unittest.TestCase):
     """验证快速修改 Prompt 与正式生成 Prompt 保持隔离。"""
 
-    def test_frontend_prompt_requires_two_builtin_skills(self) -> None:
-        """前端写代码前必须完整读取两个指定内置 Skill。"""
+    def test_frontend_prompt_requires_declared_builtin_skills(self) -> None:
+        """前端写代码前必须完整读取模板边界、代码块与 React 规范。"""
 
         prompt = _frontend_direct_modification_prompt(
             user_request="修改统计卡片间距",
@@ -84,6 +84,7 @@ class DirectModificationPromptTests(unittest.TestCase):
             "/.devagentstudio/builtin-skills/react-develop-specification/SKILL.md",
             prompt,
         )
+        self.assertIn("/.devagentstudio/builtin-skills/frontend-template-modification-boundary/SKILL.md", prompt)
         self.assertIn("read_file(limit=400)", prompt)
         self.assertIn("task and write_todos are unavailable", prompt)
         self.assertIn("appropriate to the actual change scope", prompt)
