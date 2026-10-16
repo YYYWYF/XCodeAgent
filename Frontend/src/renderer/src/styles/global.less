@@ -40,6 +40,25 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+// 浏览器默认会按比例缩小辅助文字，保证继承 12px 字号时仍满足可读下限。
+small {
+  font-size: max(12px, 0.85em);
+}
+
+sub,
+sup {
+  font-size: max(12px, 0.75em);
+}
+
+// Ant Design 的行内代码默认按父字号缩小，紧凑文档中也须保留 12px 下限。
+.ant-typography code {
+  font-size: max(12px, 0.85em);
+}
+
+.ant-typography kbd {
+  font-size: max(12px, 0.9em);
+}
+
 html[data-platform='windows'] body {
   -webkit-font-smoothing: auto;
 }

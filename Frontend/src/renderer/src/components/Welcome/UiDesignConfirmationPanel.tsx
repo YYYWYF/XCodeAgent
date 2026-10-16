@@ -1240,7 +1240,7 @@ export default function UiDesignConfirmationPanel({
                       <img src={previewImg} alt={tpl.manifest.name} draggable={false} />
                     ) : (
                       <div className={cx('ui-design-template-thumb-empty')}>
-                        <Text type="secondary" style={{ fontSize: 11 }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
                           暂无预览图
                         </Text>
                       </div>
