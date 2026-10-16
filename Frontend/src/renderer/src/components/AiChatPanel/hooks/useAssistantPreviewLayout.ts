@@ -13,6 +13,7 @@ import {
   DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO
 } from '../constants'
 import type { RightPanelLayout, RightPanelState } from '../types'
+import type { WorkbenchPhase } from '../../../workbenchPhase'
 import { clampAssistantPanelRatio } from '../utils'
 
 type AssistantPreviewLayout = {
@@ -27,6 +28,14 @@ type AssistantPreviewLayout = {
   setRightPanelLayout: Dispatch<SetStateAction<RightPanelLayout>>
   setRightPanel: (panel?: RightPanelState) => void
   splitDragging: boolean
+}
+
+/** 进入审查或验收时恢复对话分栏，其余阶段保留用户选择的布局。 */
+export function phaseEntryRightPanelLayout(
+  phase: WorkbenchPhase,
+  currentLayout: RightPanelLayout
+): RightPanelLayout {
+  return phase === 'review' || phase === 'acceptance' ? 'split' : currentLayout
 }
 
 /** 管理右侧工作区的三档布局（隐藏/分栏/全宽）、分栏宽度、拖拽及预览初始比例。 */

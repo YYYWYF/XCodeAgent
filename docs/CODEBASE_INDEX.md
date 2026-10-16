@@ -6,6 +6,8 @@ Last updated: 2026-10-16
 
 Use this file before broad code exploration. It is a routing map, not full documentation: read the matching row, then inspect only the listed entry files and nearby code.
 
+审查确认进入验收时先激活验收会话并恢复对话分栏，展示 `launch_project` 的工程识别、后端启动、前端启动及就绪步骤。`hooks/useAssistantPreviewLayout.ts::phaseEntryRightPanelLayout` 清除上阶段的全宽/隐藏布局；`globalFallbackState.ts::acceptancePreviewCanFocus` 仅在当前 execution 为 `awaiting_acceptance`、预览已打开且没有故障兜底时铺满验收预览。已有预览、阶段切换或启动 ready 进度均不能提前隐藏对话；恢复运行、停止或失败继续展示步骤和原恢复入口。回归：`pnpm test:acceptance-phase`、`pnpm test:connection-recovery`。
+
 前端性能测试确认使用正向问题“是否执行前端性能测试？”，`WorkflowRunCard/FrontendPerformanceConfirmationPanel.tsx` 从左到右展示“执行性能测试”（`run`）和“跳过性能测试”（`skip`）。沿现有 AG-UI `clarificationAnswers.frontend_performance_confirmation` 续接 `integration_test`；`protocols/workflow/request.py` 与 `graph/subgraphs/testing.py` 只解析明确的 `run`/`skip` 动作，不将是/否或布尔答案映射成反向动作。跳过不启动前端或 Lighthouse，执行沿原性能测试分支，性能检查仍不阻断质量门禁。回归：`tests.test_workflow_request`、`tests.test_testing_subgraph_events`、`pnpm test:chat-skills`。
 
 > 当前旅程规则：Endpoint 的自包含字段映射由独立 `/endpoint-designs/run` AG-UI 配置流负责；页面和接口开发必须先进入主 `/workflow/run` 的 `api_design_readiness_gate`。页面门禁检查全部关联 Endpoint，接口门禁只检查自身；只要目标包含 Endpoint，首次门禁就通过 `apiDesigns` 展示全部 Endpoint 的已完成、待配置和已失效状态，并以缺失子集决定是否阻断；用户点击任一条目后打开右侧字段映射工作台查看或配置，保存确认后只更新当前会话的本地已配置状态，可继续配置其他 Endpoint。用户点击门禁“确认并检测”后统一复检，检测通过便直接继续开发，不再进入 `api_design_confirmation` 或展示聚合映射确认卡片；无 Endpoint 的纯静态页面直接放行。字段映射步骤与保存操作不再在对话区重复展示，保存不会自动推进开发。旧版 `development_readiness_gate` 与 EntitySourceBinding 仅保留为独立旧入口。

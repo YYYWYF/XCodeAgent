@@ -19,9 +19,13 @@ import {
   sessionsForWorkbenchPhase
 } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
 import { DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO } from '../src/renderer/src/components/AiChatPanel/constants'
+import { acceptancePreviewCanFocus } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
+import { phaseEntryRightPanelLayout } from '../src/renderer/src/components/AiChatPanel/hooks/useAssistantPreviewLayout'
+import type { RightPanelLayout } from '../src/renderer/src/components/AiChatPanel/types'
 import type {
   ApplicationLifecycle,
   WorkbenchExecution,
+  WorkflowLaunchProgress,
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
 import {
@@ -158,6 +162,79 @@ test('验收启动中无需等待 launchResult 即展示项目启动步骤', () 
   assert.equal(workflowShouldShowProjectLaunch(workflow, 'acceptance'), true)
   assert.equal(workflowShouldShowProjectLaunch(workflow, 'review'), false)
   assert.equal(workflowShouldShowCodeReview(workflow), false)
+})
+
+test('首次从审查进入验收先展示会话和启动步骤，待验收后才全屏预览', async () => {
+  let layout: RightPanelLayout = 'full'
+  let mode: PlanExecutionMode = 'awaiting_acceptance_phase_confirmation'
+  const workflow = acceptanceWorkflow()
+  workflow.summary.status = 'running'
+  // 即使审查阶段已打开旧预览，也不能将它视为当前验收已经就绪。
+  assert.equal(acceptancePreviewCanFocus('review', true, false, mode), false)
+  const session = await preparePhaseTransitionSession(
+    async () => ({ id: 'first-acceptance-session', workbenchPhase: 'acceptance' as const }),
+    () => {
+      layout = phaseEntryRightPanelLayout('acceptance', layout)
+      mode = 'idle'
+    }
+  )
+  assert.equal(session.workbenchPhase, 'acceptance')
+  assert.equal(layout, 'split')
+  assert.equal(acceptancePreviewCanFocus('acceptance', true, false, mode), false)
+
+  mode = derivePlanExecutionMode(acceptanceExecution({ status: 'running' }))
+  for (const stage of ['structure', 'backend', 'frontend', 'ready'] as const) {
+    const progress: WorkflowLaunchProgress = {
+      stage,
+      status: stage === 'ready' ? 'completed' : 'running'
+    }
+    workflow.summary.launchProgress = progress
+    assert.equal(workflowShouldShowProjectLaunch(workflow, 'acceptance'), true)
+    assert.deepEqual(projectLaunchProgress(workflow), progress)
+    assert.equal(workflowPreviewTarget(workflow, true), undefined)
+    assert.equal(acceptancePreviewCanFocus('acceptance', true, false, mode), false)
+  }
+
+  workflow.summary.status = 'requires_user_input'
+  mode = derivePlanExecutionMode(
+    acceptanceExecution({
+      pendingInteraction: {
+        id: 'first-page-acceptance',
+        type: 'page_acceptance',
+        basedOnRevision: 1,
+        payload: {},
+        artifactRefs: [],
+        createdAt: '2026-10-16T00:00:00Z'
+      }
+    })
+  )
+  assert.equal(mode, 'awaiting_acceptance')
+  assert.ok(workflowPreviewTarget(workflow, true))
+  assert.equal(acceptancePreviewCanFocus('acceptance', true, false, mode), true)
+})
+
+test('恢复验收时按当前执行状态显示步骤或全屏，不沿用旧预览的完成状态', () => {
+  const awaiting = acceptanceExecution({
+    pendingInteraction: {
+      id: 'restored-page-acceptance',
+      type: 'page_acceptance',
+      basedOnRevision: 1,
+      payload: {},
+      artifactRefs: [],
+      createdAt: '2026-10-16T00:00:00Z'
+    }
+  })
+  const layout = phaseEntryRightPanelLayout('acceptance', 'hidden')
+  assert.equal(layout, 'split')
+  assert.equal(
+    acceptancePreviewCanFocus('acceptance', true, false, derivePlanExecutionMode(awaiting)),
+    true
+  )
+  for (const status of ['running', 'stopping', 'failed', 'stopped', 'completed'] as const) {
+    const mode = derivePlanExecutionMode(acceptanceExecution({ status }))
+    assert.equal(acceptancePreviewCanFocus('acceptance', true, false, mode), false)
+  }
+  assert.equal(phaseEntryRightPanelLayout('development', 'full'), 'full')
 })
 
 test('项目启动进度选择后续子步骤，不被旧工程识别事件覆盖', () => {

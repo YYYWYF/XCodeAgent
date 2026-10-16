@@ -134,7 +134,10 @@ import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import DataSourcesDrawer from '../DataSourcesPage/DataSourcesDrawer'
 import SettingsPage from '../SettingsPage/SettingsPage'
 import SkillsPage from '../SkillsPage/SkillsPage'
-import { useAssistantPreviewLayout } from './hooks/useAssistantPreviewLayout'
+import {
+  phaseEntryRightPanelLayout,
+  useAssistantPreviewLayout
+} from './hooks/useAssistantPreviewLayout'
 import { useChatSessions } from './hooks/useChatSessions'
 import { useFormalRevisionHandoffRecovery } from './hooks/useFormalRevisionHandoffRecovery'
 import { getApplicationLifecycle } from '../../service/applicationLifecycle'
@@ -1242,23 +1245,15 @@ export default function AiChatPanel({
     },
     [rightPanel, setRightPanel, setRightPanelLayout]
   )
-  /**
-   * 阶段默认布局（移植自 prototype）：进入验收阶段默认全宽（验收以应用预览为主），
-   * 进入审查阶段回到分栏，避免验收带入的全宽残留。其余阶段保持用户当前选择。
-   *
-   * 只在右侧确有内容时才切全宽：没有面板时全宽会让对话区归零、右侧却空白。
-   */
+  /** 进入审查或验收时先展示对话分栏，验收全屏由当前执行的待验收状态驱动。 */
   const previousPhaseForLayoutRef = useRef<string | undefined>(undefined)
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previous = previousPhaseForLayoutRef.current
     previousPhaseForLayoutRef.current = activeWorkbenchPhase
     if (previous === activeWorkbenchPhase) return
-    if (activeWorkbenchPhase === 'acceptance' && rightPanel) {
-      setRightPanelLayout('full')
-      return
-    }
-    if (activeWorkbenchPhase === 'review') setRightPanelLayout('split')
-  }, [activeWorkbenchPhase, rightPanel, setRightPanelLayout])
+    // 在绘制前解除上阶段全宽，避免新验收会话的首帧仍被旧布局隐藏。
+    setRightPanelLayout((current) => phaseEntryRightPanelLayout(activeWorkbenchPhase, current))
+  }, [activeWorkbenchPhase, setRightPanelLayout])
   const { artifactDetailLabel, artifactOutlineProps, apiTarget } = useDevelopmentArtifactDetail({
     applicationId: application.id,
     setRightPanel,
@@ -4004,7 +3999,10 @@ export default function AiChatPanel({
     acceptancePassed
   })
   const acceptancePreviewFocus = acceptancePreviewCanFocus(
-    activeWorkbenchPhase, showRightPanel && rightPanel?.type === 'preview', showGlobalFallback
+    activeWorkbenchPhase,
+    showRightPanel && rightPanel?.type === 'preview',
+    showGlobalFallback,
+    displayedPlanExecutionMode
   )
   // 「检查遗漏变更」：未提交文件里没被任何模块任务认领的部分。
   // 用 codePaths 而不是 eligiblePaths —— `.devagentstudio` 平台产物永远不在构建计划的

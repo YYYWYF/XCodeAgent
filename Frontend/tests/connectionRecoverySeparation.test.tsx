@@ -265,9 +265,9 @@ test('验收预览在断线、恢复候选或错误出现时让出分栏，入�
     { connectionStatus: 'healthy', hasRecoveryIncident: true },
     { connectionStatus: 'healthy', hasRecoveryIncident: false, globalFallbackError: '启动失败' }
   ]) {
-    assert.equal(acceptancePreviewCanFocus('acceptance', true, globalFallbackState(input).visible), false)
+    assert.equal(acceptancePreviewCanFocus('acceptance', true, globalFallbackState(input).visible, 'awaiting_acceptance'), false)
   }
-  assert.equal(acceptancePreviewCanFocus('acceptance', true, false), true)
-  assert.equal(acceptancePreviewCanFocus('acceptance', false, false), false)
-  assert.equal(acceptancePreviewCanFocus('build', true, false), false)
+  assert.equal(acceptancePreviewCanFocus('acceptance', true, false, 'awaiting_acceptance'), true)
+  assert.equal(acceptancePreviewCanFocus('acceptance', false, false, 'awaiting_acceptance'), false)
+  assert.equal(acceptancePreviewCanFocus('build', true, false, 'awaiting_acceptance'), false)
 })

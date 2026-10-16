@@ -45,9 +45,19 @@ export function globalFallbackState(input: {
   }
 }
 
-/** 验收预览仅在没有兜底入口时占满区域，故障时保留助手分栏供用户重试。 */
-export function acceptancePreviewCanFocus(phase: string, previewOpen: boolean, fallbackVisible: boolean): boolean {
-  return phase === 'acceptance' && previewOpen && !fallbackVisible
+/** 当前执行进入待验收后才铺满预览，启动过程与故障恢复继续展示对话步骤。 */
+export function acceptancePreviewCanFocus(
+  phase: string,
+  previewOpen: boolean,
+  fallbackVisible: boolean,
+  executionMode: PlanExecutionMode
+): boolean {
+  return (
+    phase === 'acceptance' &&
+    executionMode === 'awaiting_acceptance' &&
+    previewOpen &&
+    !fallbackVisible
+  )
 }
 export const NO_RECOVERY_ENTRY_ERROR = '已同步后端状态，但当前会话没有可验证的恢复入口。'
 
