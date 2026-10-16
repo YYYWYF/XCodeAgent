@@ -62,6 +62,7 @@ def create_small_task_agent(
         "verification blocker. "
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}"
     )
+    execute_tool = create_execute_tool(workspace_root)
     return create_deep_agent(
         name="small-task-coding-agent",
         model=model,
@@ -72,10 +73,11 @@ def create_small_task_agent(
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
         tools=[
             create_delete_file_tool(workspace_root, path_guard=is_small_task_path_allowed),
-            create_execute_tool(workspace_root),
+            execute_tool,
         ],
         middleware=[
-            DirectModificationMiddleware(),
+            # 与前端 Agent 一样，在每次模型调用前补回可能被中间层遗漏的命令工具。
+            DirectModificationMiddleware(required_tools=[execute_tool]),
             SmallTaskCancellationMiddleware(),
             # 局部任务不能无限探索；达到上限后抛出可被执行器明确收口的错误。
             ModelCallLimitMiddleware(run_limit=24, exit_behavior="error"),

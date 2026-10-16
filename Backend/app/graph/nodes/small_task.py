@@ -442,7 +442,18 @@ def _small_task_tool_activity_writer(node_name: str = "small_task_repair") -> To
 def unit_test_repair(state: ProjectState) -> dict[str, Any]:
     """执行开发阶段单元测试失败后的 SmallTask 修复。"""
 
-    working_state = {**state, "repair_return_node": "unit_test"}
+    # 单测计划和报告独立持久化；首次执行、结束后继续及原生恢复都从同一权威字段取上下文。
+    # 通用修复字段可能为空或属于集成测试，不能让它们覆盖本轮单测的既定修复策略。
+    unit_report = state.get("unit_test_report") or {}
+    working_state = {
+        **state,
+        "repair_return_node": "unit_test",
+        "repair_task_plan": state.get("unit_test_repair_task_plan") or {},
+        "repair_task_plan_path": state.get("unit_test_repair_task_plan_path"),
+        "test_report": unit_report,
+        "test_results": state.get("unit_test_results") or [],
+        "revision_requests": unit_report.get("revision_requests", []),
+    }
     result = small_task_repair(working_state)
     # 失败和等待范围确认也保存已派发的次数，恢复时不能退回旧额度。
     return {
