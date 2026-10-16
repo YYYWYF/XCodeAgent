@@ -950,6 +950,8 @@ function RequirementSpecConfirmationCard({
 }): ReactElement {
   const spec = readRequirementSpec(workflow)
   const requirementsConfirmed = readRequirementsConfirmed(workflow)
+  const clarification = workflowClarification(workflow)
+  const errors = clarification?.errors?.map(String).filter(Boolean) || []
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Record<string, unknown> | undefined>()
   const [saving, setSaving] = useState(false)
@@ -983,6 +985,14 @@ function RequirementSpecConfirmationCard({
 
   return (
     <div className={cx('requirement-spec-confirmation-card')}>
+      {errors.length > 0 ? (
+        <Alert
+          description={errors.join('；')}
+          message={<Text strong>需求文档需要调整</Text>}
+          showIcon
+          type="warning"
+        />
+      ) : null}
       {!requirementsConfirmed && spec ? (
         <div className={cx('requirement-spec-draft-summary')}>
           <Text strong>需求草稿已展示在右侧</Text>

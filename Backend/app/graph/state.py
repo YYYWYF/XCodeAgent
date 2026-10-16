@@ -40,6 +40,7 @@ class ProjectState(TypedDict, total=False):
     revision_draft: dict[str, Any]
     revision_interaction: dict[str, Any]
     design_change_submission: bool
+    design_revision_intent: dict[str, Any]
     design_change_request: str
     design_change_target: str
     design_change_reason: str

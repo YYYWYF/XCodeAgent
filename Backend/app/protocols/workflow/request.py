@@ -40,6 +40,7 @@ from app.services.application_revision_lifecycle import (
     submit_revision_impact,
 )
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.design_revision_admission import design_revision_input
 from app.services.development_continuation import (
     validate_development_continuation,
     validate_entity_binding_continuation,
@@ -391,6 +392,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         workspace=workspace,
         request=request,
     )
+    design_revision_values = design_revision_input(
+        forwarded_props.get("_designRevisionIntent"), workspace=workspace,
+        request=request, workflow_scope=workflow_scope, resume_from=resume_from,
+    )
     selectedPageId = (
         _optional_text(payload.get("selectedPageId"))
         or _optional_text(payload.get("selected_page_id"))
@@ -704,6 +709,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             workflow_action == "retry_failed_tasks" and resume_from == "build"
         ),
         **technical_revision_values,
+        **design_revision_values,
         **({"change_id": continuation_change_id} if continuation_change_id else {}),
         **(
             {

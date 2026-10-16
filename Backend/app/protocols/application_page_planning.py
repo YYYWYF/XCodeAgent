@@ -64,7 +64,6 @@ from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
 )
-from app.services.application_revision_lifecycle import submit_revision_impact
 from app.services.requirement_spec import (
     SaveRequirementSpecDraftRequest,
     save_requirement_spec_draft,
@@ -978,20 +977,18 @@ def _prepare_start_design_revision_payload(
         planning_thread_id = str(lifecycle.initialization.thread_id or "").strip()
         if not planning_thread_id:
             raise ValueError("设计修订缺少原 application planning thread。")
-        active = submit_revision_impact(
-            workspace,
-            interaction_id=request.confirmed_impact.interaction_id,
-            decision="approved",
-        )
-        if active is None:
-            raise ValueError("revision impact 未批准。")
+        # 只冻结批准凭据；影响消费必须在 Graph durable input 之后，避免批准成功却没有可恢复 Run。
+        next_forwarded["_designRevisionIntent"] = {
+            "changeId": pending.change_id,
+            "interactionId": pending.interaction_id,
+        }
         next_forwarded["resumeState"] = {
             "state": {"product_stage_conversation": False}
         }
         return {
             **payload,
-            "threadId": active.planning_thread_id,
-            "request": active.request,
+            "threadId": planning_thread_id,
+            "request": pending.request,
             "resumeFrom": "design_intent_analysis",
             "forwardedProps": next_forwarded,
         }

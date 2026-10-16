@@ -16,6 +16,8 @@
 
 写入使用同目录临时文件、文件 fsync、原子替换和目录 fsync。损坏或不符合当前结构的文件会显式拒绝读取，不根据旧索引、localStorage、checkpoint 或正式文档反向生成状态文件。所有状态文件和动作输入先经过 Pydantic 校验。
 
+设计阶段正式修订从开发工作台返回时，HTTP 入口只验证并冻结原影响确认凭据，不提前消费 `pendingRevisionImpact`。原规划 Graph 先持久化本次输入与 Run，随后 `design_intent_analysis` 节点幂等批准原 changeId，再提交配置变化并回退到最早产物。批准完成但需求节点尚未开始时异常中止，由原节点 checkpoint 签发显式兜底动作；重启不自动重新生成。恢复 handoff 合法推进 lifecycle revision，不要求它仍等于首次批准前的版本。内部 `design_revision_intent` 不进入公开状态，节点完成后清空。
+
 ## 新建应用状态机
 
 ```text

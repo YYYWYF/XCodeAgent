@@ -21,6 +21,7 @@ from app.domain.application_planning_recovery import (
     validate_application_planning_baseline,
 )
 from app.domain.application_revision import RevisionTarget
+from app.services.design_revision_admission import design_revision_matches
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
@@ -488,6 +489,19 @@ async def _apply_application_planning_transaction_authority(
         # 设计意图识别先读取输入，正式产物节点才取得生命周期 ownership；
         # 识别失败时保留原审阅阶段，以同 thread、revision CAS 领取 child。
         lifecycle = load_application_lifecycle(workspace)
+        intent = values.get("design_revision_intent")
+        if (
+            isinstance(intent, dict) and intent
+            and design_revision_matches(lifecycle, intent, source.thread_id)
+            and lifecycle.revision == plan.lifecycle_revision
+            and str(values.get("active_run_id") or "") == source.run_id
+            and lifecycle.initialization.stage is ApplicationLifecycleStage.READY_FOR_WORKBENCH
+            and lifecycle.initialization.status is ApplicationLifecycleStatus.COMPLETED
+        ):
+            # 正式设计修订已在 Graph 冻结输入，但尚未进入需求节点取得生命周期运行归属。
+            return plan.model_copy(update={
+                "lifecycle_ownership_mode": RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
+            })
         if (
             lifecycle is not None
             and lifecycle.initialization.thread_id == source.thread_id

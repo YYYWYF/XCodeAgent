@@ -345,6 +345,26 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         self.assertNotEqual(downstream["request"], "新增报表页")
         self.assertIn("ProductPlan", downstream["request"])
 
+    def test_joint_requirement_draft_advances_product_generation(self) -> None:
+        """联合确认前需求草稿已就绪时推进产品生成，澄清未结束时保留原节点。"""
+        state = {
+            "design_change_submission": True,
+            "design_change_request": "修改说明",
+            "design_change_target": "requirements",
+            "design_change_generation_target": "requirements",
+            "design_change_generation_request": "修改说明",
+        }
+        for confirmation, expected in [
+            ("pending_user_confirmation", "product_planning"),
+            ("pending_user_input", "requirements"),
+        ]:
+            with self.subTest(confirmation=confirmation):
+                update = design_node_update(state, "requirements", {
+                    "status": "clear",
+                    "requirement_spec": {"confirmation_status": confirmation},
+                })
+                self.assertEqual(update["design_change_generation_target"], expected)
+
     def test_terminal_snapshot_drops_design_change_context(self) -> None:
         """已终结快照禁止回传设计变更上下文，防止旧变更指令在后续轮次复活。"""
 

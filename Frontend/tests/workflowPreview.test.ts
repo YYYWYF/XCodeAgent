@@ -1547,6 +1547,32 @@ test('不在资源集合中的页面仍可自由输入', () => {
 })
 
 /** 验证应用级门禁可提交现有确认检测动作，不因目标类型变成禁用卡。 */
+test('需求配置诊断保留标准联合确认按钮并展示可处理原因', () => {
+  const workflow: WorkflowRunPayload = {
+    runId: 'alignment-run', threadId: 'alignment-thread', events: [],
+    summary: {
+      phase: 'product_planning', status: 'requires_user_input',
+      clarification: {
+        mode: 'requirement_document_confirmation', status: 'requires_user_input',
+        errors: ['请补充真实初始管理员 subjectId。'],
+        questions: [{ id: 'confirmation', question: '请确认完整需求文档。', type: 'text' }]
+      }
+    },
+    state: { requirement_spec: { confirmation_status: 'pending_user_confirmation' } }
+  }
+  const markup = renderToStaticMarkup(createElement(WorkbenchPhaseContext.Provider, {
+    value: {
+      phase: 'design', derivedPhase: 'design', reachedPhase: 'design', manualOverride: null,
+      agent: WORKBENCH_PHASE_AGENTS.design, recordReachedPhase: () => {},
+      switchPhase: () => {}, canEdit: () => true
+    }
+  }, createElement(WorkflowRunCard, { workflow, interactionAvailability: 'active' })))
+  assert.match(markup, /需求文档需要调整/)
+  assert.match(markup, /请补充真实初始管理员 subjectId/)
+  assert.match(markup, /确认并继续规划/)
+  assert.doesNotMatch(markup, /<button[^>]*disabled[^>]*>[^<]*确认并继续规划/)
+})
+
 test('应用级 API 门禁保留可用的确认检测按钮', () => {
   const workflow: WorkflowRunPayload = {
     runId: 'application-gate-run', threadId: 'application-gate-thread', events: [],

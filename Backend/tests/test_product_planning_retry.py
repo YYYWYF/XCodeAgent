@@ -34,10 +34,18 @@ class ProductPlanningRetryTests(unittest.TestCase):
     def _technical_planning_state(self) -> dict:
         """构造已确认上游产物的最小 TechnicalPlan 测试状态。"""
 
+        # 当前合同要求从工作区 application.json 读取配置，测试也提供真实唯一事实源。
+        workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(workspace.cleanup)
+        config_path = Path(workspace.name) / ".devagentstudio/application.json"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(json.dumps({"schemaVersion": 6, "configRevision": 1,
+            "auth": {"enable": False}, "authorization": {"enabled": False, "initialAdministratorSubjects": []}}))
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
         product_plan = create_product_plan(requirement_spec)
         product_plan["confirmation_status"] = "confirmed"
         return {
+            "workspace": workspace.name,
             "workflow_scope": "application_planning",
             "requirement_spec": requirement_spec,
             "product_plan": product_plan,
@@ -136,6 +144,29 @@ class ProductPlanningRetryTests(unittest.TestCase):
         self.assertEqual(update["product_plan"], valid_plan)
         retry_feedback = planner_mock.call_args_list[1].kwargs["user_feedback"]
         self.assertIn("跳转操作未同步到 navigation_targets", retry_feedback)
+
+    def test_revision_regenerates_pending_product_with_existing_baseline(self) -> None:
+        """正式修订及恢复重入不能复用旧待确认稿，普通恢复展示仍直接复用。"""
+        requirement_spec = create_requirement_spec("创建一个库存管理系统")
+        existing = create_product_plan(requirement_spec)
+        existing["confirmation_status"] = "pending_user_confirmation"
+        state = {
+            "workflow_scope": "application_planning", "requirement_spec": requirement_spec,
+            "product_plan": existing, "request": "依据新需求更新产品规划",
+        }
+        with (
+            patch("app.graph.nodes.product_planning.plan_product_with_chat_model", return_value=existing) as planner,
+            patch("app.graph.nodes.product_planning.write_product_plan_documents", return_value=("draft.md", "draft.json")),
+        ):
+            product_planning(state)
+            planner.assert_not_called()
+            result = product_planning({**state, "design_change_submission": True,
+                "design_change_generation_target": "product_planning",
+                "design_change_generation_request": state["request"]})
+            planner.assert_called_once()
+            self.assertEqual(planner.call_args.kwargs["existing_plan"], existing)
+            self.assertEqual(planner.call_args.kwargs["user_feedback"], state["request"])
+            self.assertEqual(result["status"], "requires_user_input")
 
     def test_same_page_navigation_is_closed_deterministically(self) -> None:
         """同页导航必须同步进 navigation_targets，避免归一化与校验规则冲突。"""
@@ -344,11 +375,12 @@ class ProductPlanningRetryTests(unittest.TestCase):
             "api_contracts": [
                 {
                     "id": "guides-api",
+                    "name": "指南查询接口",
                     "entity_ids": [requirement_spec["entities"][0]["id"]],
                     "base_path": "/api/guides",
                     "authentication": {"required": False},
                     "schemas": {},
-                    "endpoints": [{"id": "guides.search", "method": "GET"}],
+                    "endpoints": [{"id": "guides.search", "name": "搜索指南", "method": "GET"}],
                 }
             ],
         }
@@ -363,6 +395,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
             ]
         }
         state = {
+            "workspace": self._technical_planning_state()["workspace"],
             "workflow_scope": "application_planning",
             "requirement_spec": requirement_spec,
             "product_plan": product_plan,

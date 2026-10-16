@@ -139,7 +139,13 @@ def validate_application_planning_review_action(
         return
 
     if submission.action == "answer":
-        if artifact != "requirement_spec" or not has_questions:
+        # 产品规划的操作归属也是待回答问题，答案由原 ProductPlan 节点处理；
+        # 回答只补齐业务事实，之后仍停在需求文档联合确认门。
+        product_operation_question = (
+            artifact == "requirement_document"
+            and mode == "authorization_operation_action_resolution"
+        )
+        if (artifact != "requirement_spec" and not product_operation_question) or not has_questions:
             raise ValueError(
                 f"当前 {artifact} 审阅门不允许 action=answer；澄清问题必须存在且不能提交确认卡答案。"
             )
