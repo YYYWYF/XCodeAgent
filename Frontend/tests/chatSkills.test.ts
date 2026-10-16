@@ -22,6 +22,7 @@ import {
   appendElementContextToConversationPrompt,
   buildWorkflowForwardedProps,
   readDagGenerationSnapshot,
+  readIntegrationTestChecks,
   readProjectPlanUpdate,
   readWorkspaceInspectionSnapshot
 } from '../src/renderer/src/service/agUiAgent'
@@ -2338,6 +2339,112 @@ test('单元测试生成期间展示运行中的测试检查步骤', () => {
   assert.match(markup, /检查中/)
   assert.match(markup, /aria-busy="true"/)
   assert.match(markup, /anticon-spin/)
+})
+
+test('单测生成检查在说明下方复用开发任务的工具活动与状态图标', () => {
+  for (const layer of ['frontend', 'backend']) {
+    for (const [status, icon] of [
+      ['running', 'loading'],
+      ['completed', 'check-circle'],
+      ['failed', 'close-circle']
+    ] as const) {
+      const evidence = '正在调用 TestGeneration Agent 生成或更新受影响的单元测试文件。'
+      const activity = {
+        callId: 'read-source',
+        tool: 'read_file',
+        category: 'read',
+        status,
+        message: `正在读取文件：/${layer}/src/Orders.tsx`
+      }
+      const checks = readIntegrationTestChecks([
+        {
+          id: `${layer}_test_generation`,
+          name: `${layer === 'frontend' ? '前端' : '后端'}单元测试生成检查`,
+          status: 'running',
+          required: true,
+          evidence,
+          activeToolActivity: { ...activity, args: { content: 'PRIVATE CONTENT' } }
+        }
+      ])
+      assert.deepEqual(checks?.[0].activeToolActivity, activity)
+      const markup = renderToStaticMarkup(
+        createElement(ProcessSteps, {
+          loading: true,
+          steps: [
+            {
+              id: 'workflow:unit_test',
+              kind: 'workflow',
+              status: 'running',
+              title: '正在执行 开发阶段单元测试',
+              detail: '',
+              sequence: 1,
+              nodeName: 'unit_test',
+              checks
+            }
+          ]
+        })
+      )
+      const evidenceIndex = markup.indexOf(evidence)
+      const activityIndex = markup.indexOf('workflow-build-tool-activity')
+      assert.ok(evidenceIndex >= 0 && activityIndex > evidenceIndex)
+      assert.match(markup, new RegExp(activity.message))
+      const toolIcon = markup.match(
+        /workflow-build-tool-activity-icon[^>]*>([\s\S]*?)<\/span>/
+      )?.[1]
+      assert.ok(toolIcon)
+      assert.match(toolIcon, new RegExp(`data-icon="${icon}"`))
+      assert.doesNotMatch(markup, /PRIVATE CONTENT|工具调用链/)
+    }
+  }
+})
+
+test('单测工具活动不进入完成检查、其他检查和持久化历史', () => {
+  const activity = { callId: 'read', tool: 'read_file', status: 'running', message: '读取文件' }
+  for (const [id, status, tool] of [
+    ['frontend_test_generation', 'passed', 'read_file'],
+    ['backend_test_generation', 'failed', 'read_file'],
+    ['frontend_test_generation', 'skipped', 'read_file'],
+    ['frontend_build', 'running', 'read_file'],
+    ['frontend_test_generation', 'running', 'execute'],
+    ['frontend_test_generation', 'running', 'toString']
+  ]) {
+    const checks = readIntegrationTestChecks([
+      {
+        id,
+        name: '测试检查',
+        status,
+        required: true,
+        activeToolActivity: { ...activity, tool }
+      }
+    ])
+    assert.equal(checks?.[0].activeToolActivity, undefined)
+  }
+  const persisted = normalizePersistentSessionMessage({
+    id: 1,
+    role: 'assistant',
+    content: '',
+    createdAt: 1,
+    processSteps: [
+      {
+        id: 'workflow:unit_test',
+        kind: 'workflow',
+        status: 'running',
+        title: '单元测试',
+        detail: '',
+        sequence: 1,
+        checks: [
+          {
+            id: 'frontend_test_generation',
+            name: '测试生成',
+            status: 'running',
+            required: true,
+            activeToolActivity: activity
+          }
+        ]
+      }
+    ]
+  })
+  assert.doesNotMatch(JSON.stringify(persisted), /activeToolActivity|读取文件/)
 })
 
 test('各阶段跳过和执行的对话使用中文选项标签，协议答案保持不变', () => {

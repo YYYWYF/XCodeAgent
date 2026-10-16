@@ -5,8 +5,10 @@ import json
 import tempfile
 import threading
 import unittest
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from langgraph.graph import END, START, StateGraph
@@ -2262,6 +2264,78 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertGreaterEqual(len(repair_frames), 1)
         self.assertLess(repair_frames[0]["sequence"], integration_terminal["sequence"])
         self.assertIn("局部修复任务", repair_frames[0]["title"])
+
+    def test_unit_generation_activity_survives_ag_ui_stream_and_is_ephemeral(self) -> None:
+        """单测工具进度沿原 AG-UI 检查流发送，完成帧不保留活动或原始参数。"""
+
+        class GenerationProgressGraph:
+            async def astream(
+                self,
+                initial_state: dict[str, Any],
+                *,
+                config: dict[str, Any],
+                stream_mode: list[str],
+            ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+                """模拟生成期间三种工具状态以及最终检查收口。"""
+
+                for status in ("running", "completed", "failed"):
+                    yield "custom", {
+                        "type": "unit_test.checks", "checks": [{
+                            "id": "frontend_test_generation", "name": "前端单元测试生成检查",
+                            "status": "running", "required": True,
+                            "activeToolActivity": {
+                                "callId": "read-source", "tool": "read_file", "category": "read",
+                                "status": status, "message": "正在读取文件：/frontend/src/Orders.tsx",
+                                "args": {"content": "PRIVATE CONTENT"},
+                            },
+                        }],
+                    }
+                yield "updates", {"unit_test": {
+                    "phase": "unit_test", "status": "completed", "unit_test_gate_passed": True,
+                    "unit_test_results": [{
+                        "id": "frontend_test_generation", "name": "前端单元测试生成检查",
+                        "passed": True, "required": True,
+                    }],
+                }}
+
+        async def collect() -> list[str]:
+            """读取正式 AG-UI Runtime 生成的测试检查帧。"""
+
+            return [frame async for frame in build_workflow_ag_ui_stream(
+                graph=GenerationProgressGraph(),
+                payload={"threadId": "generation-tools", "runId": "run-generation-tools",
+                    "messages": [{"role": "user", "content": "run unit tests"}],
+                    "forwardedProps": {"resumeFrom": "unit_test"}},
+            )]
+
+        raw_frames = asyncio.run(collect())
+        frames = _decode_agent_process_frames(raw_frames)
+        activities = [check["activeToolActivity"] for frame in frames
+            for check in frame.get("checks", []) if "activeToolActivity" in check]
+        self.assertEqual([item["status"] for item in activities], ["running", "completed", "failed"])
+        self.assertEqual({item["callId"] for item in activities}, {"read-source"})
+        self.assertNotIn("PRIVATE CONTENT", "".join(raw_frames))
+        for frame in frames:
+            if frame["status"] == "completed":
+                self.assertNotIn("activeToolActivity", str(frame))
+
+    def test_generation_activity_projection_rejects_stale_or_unknown_tools(self) -> None:
+        """生成检查终态、其他检查和未知工具都不能带入实时工具活动。"""
+
+        activity = {"callId": "read", "tool": "read_file", "status": "running", "message": "读取文件"}
+        for check_id, status, tool in [
+            ("frontend_test_generation", "passed", "read_file"),
+            ("frontend_test_generation", "failed", "read_file"),
+            ("frontend_test_generation", "skipped", "read_file"),
+            ("frontend_build", "running", "read_file"),
+            ("backend_test_generation", "running", "execute"),
+        ]:
+            with self.subTest(check_id=check_id, status=status, tool=tool):
+                checks = integration_test_checks([{
+                    "id": check_id, "status": status,
+                    "activeToolActivity": {**activity, "tool": tool},
+                }])
+                self.assertNotIn("activeToolActivity", checks[0])
 
     def test_integration_check_projection_preserves_unit_test_counts(self) -> None:
         """单元测试数量字段必须穿过 AG-UI 进度裁剪层到达前端。"""

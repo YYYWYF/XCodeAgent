@@ -3,6 +3,7 @@ import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
 import { parseRecoveryFailureDiagnostic } from './recoveryActionPlan'
+import { readWorkspaceToolActivity } from './workspaceToolActivity'
 import type {
   ApplicationConfig,
   ApplicationPlanningInteraction,
@@ -11,6 +12,7 @@ import type {
   WorkflowClarificationAnswers,
   WorkflowConfirmationArtifact,
   WorkflowBuildExecutionScope,
+  WorkflowBuildToolActivity,
   WorkflowDebugOptions,
   WorkflowAction,
   WorkflowEvent,
@@ -223,6 +225,7 @@ export type IntegrationTestCheckRecord = {
   required: boolean
   advisory?: boolean
   evidence?: string
+  activeToolActivity?: WorkflowBuildToolActivity
   passedTests?: number
   totalTests?: number
   performanceScores?: {
@@ -1231,6 +1234,10 @@ export function readIntegrationTestChecks(
     const evidence = stringValue(check.evidence).slice(0, 1_000)
     const passedTests = optionalNonNegativeInteger(check.passedTests ?? check.passed_tests)
     const totalTests = optionalNonNegativeInteger(check.totalTests ?? check.total_tests)
+    const activeToolActivity =
+      status === 'running' && ['frontend_test_generation', 'backend_test_generation'].includes(id)
+        ? readWorkspaceToolActivity(check.activeToolActivity)
+        : undefined
     checks.push({
       id,
       name,
@@ -1238,6 +1245,7 @@ export function readIntegrationTestChecks(
       required: check.required === true,
       ...(check.advisory === true ? { advisory: true } : {}),
       ...(evidence ? { evidence } : {}),
+      ...(activeToolActivity ? { activeToolActivity } : {}),
       ...(passedTests !== undefined ? { passedTests } : {}),
       ...(totalTests !== undefined ? { totalTests } : {})
     })

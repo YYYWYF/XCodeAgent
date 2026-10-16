@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from typing import Any
 from unittest.mock import patch
 
+from app.agents.tool_activity_stream import ToolActivityCallback
 from app.graph.subgraphs.testing import (
     INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE,
     INTEGRATION_TEST_PROGRESS_REPORTER_KEY,
@@ -864,6 +866,58 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             "正在调用 TestGeneration Agent",
             progress_events[0]["check"]["evidence"],
         )
+
+    def test_generation_tool_activity_updates_checks_and_clears_on_completion(self) -> None:
+        """真实调用适配器必须转发工具生命周期，生成终态必须清除临时活动。"""
+
+        snapshots: list[dict[str, Any]] = []
+        activity = {
+            "callId": "read-source", "tool": "read_file", "category": "read",
+            "message": "正在读取文件：/frontend/src/Orders.tsx",
+            "path": "/frontend/src/Orders.tsx",
+        }
+
+        def generate(
+            state: dict[str, Any],
+            workspace: str | None,
+            *,
+            selected_skill_names: list[str] | None,
+            on_tool_activity: ToolActivityCallback,
+        ) -> dict[str, Any]:
+            """模拟底层 Agent 连续发布同一次工具调用的各个状态。"""
+
+            self.assertEqual(workspace, "/tmp/workspace")
+            self.assertEqual(selected_skill_names, ["test-skill"])
+            for status in ("running", "completed", "failed"):
+                on_tool_activity({**activity, "status": status})
+            return {"status": "skipped", "summary": "无可生成测试。"}
+
+        with patch(
+            "app.graph.subgraphs.testing.get_stream_writer", return_value=snapshots.append,
+        ), patch(
+            "app.agents.test_generation.generate_or_update_unit_tests_with_agent",
+            side_effect=generate,
+        ):
+            config = {"configurable": {
+                INTEGRATION_TEST_PROGRESS_REPORTER_KEY: _check_progress_snapshot_writer("unit_test.checks"),
+            }}
+            state = {
+                "workspace": "/tmp/workspace", "selected_skill_names": ["test-skill"],
+                "unit_test_generation_context": {
+                    "has_targets": True, "affected_layers": ["frontend", "backend"],
+                },
+            }
+            generated = generate_unit_tests(state, config=config)
+            validate_generated_unit_tests({**state, **generated}, config=config)
+
+        self.assertEqual(len(snapshots), 10)
+        self.assertTrue(all(event["type"] == "unit_test.checks" for event in snapshots))
+        for index, status in enumerate(("running", "completed", "failed")):
+            for check in snapshots[3 + index * 2]["checks"]:
+                self.assertEqual(check["activeToolActivity"], {**activity, "status": status})
+                self.assertIn("正在调用 TestGeneration Agent", check["evidence"])
+        self.assertTrue(all("activeToolActivity" not in check for check in snapshots[-1]["checks"]))
+        self.assertNotIn("activeToolActivity", str(generated))
 
     def test_final_results_place_generation_and_unit_tests_after_build(self) -> None:
         """完成态矩阵按每层构建、生成检查、单元测试的顺序返回。"""

@@ -65,6 +65,7 @@ import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
+import WorkspaceToolActivity from './WorkspaceToolActivity'
 import UnitTestConfirmationPanel from './UnitTestConfirmationPanel'
 import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
@@ -1495,7 +1496,7 @@ function BuildExecutionTaskHeader({
         </div>
       </div>
       {buildToolActivityPlacement(task, expanded) === 'header' && (
-        <BuildToolActivity activity={task.activeToolActivity!} />
+        <WorkspaceToolActivity activity={task.activeToolActivity!} />
       )}
       {!expanded && <BuildExecutionTaskFooter expanded={false} onToggle={onToggle} task={task} />}
     </div>
@@ -1638,7 +1639,7 @@ function BuildExecutionTaskDetails({ task }: { task: WorkflowBuildExecutionTask 
         </div>
       )}
       {buildToolActivityPlacement(task, true) === 'details' && (
-        <BuildToolActivity activity={task.activeToolActivity!} />
+        <WorkspaceToolActivity activity={task.activeToolActivity!} />
       )}
     </div>
   )
@@ -1653,34 +1654,6 @@ export function buildToolActivityPlacement(
 
   if (task.status !== 'running' || !task.activeToolActivity) return undefined
   return expanded ? 'details' : 'header'
-}
-
-function BuildToolActivity({
-  activity
-}: {
-  activity: NonNullable<WorkflowBuildExecutionTask['activeToolActivity']>
-}): ReactElement {
-  /** 以单行高亮样式展示当前任务最新工具操作，不展开原始工具参数。 */
-
-  return (
-    <div
-      aria-label={activity.message}
-      aria-live="polite"
-      className={cx('workflow-build-tool-activity', activity.status)}
-      title={activity.message}
-    >
-      <span className={cx('workflow-build-tool-activity-icon')} aria-hidden="true">
-        {activity.status === 'running' ? (
-          <LoadingOutlined spin />
-        ) : activity.status === 'completed' ? (
-          <CheckCircleOutlined />
-        ) : (
-          <CloseCircleOutlined />
-        )}
-      </span>
-      <Text>{activity.message}</Text>
-    </div>
-  )
 }
 
 function BuildTaskDetailItem({ label, value }: { label: string; value: string }): ReactElement {

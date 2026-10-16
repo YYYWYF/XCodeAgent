@@ -11,6 +11,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.repair_planner import plan_repairs_with_repair_planner_agent
+from app.agents.tool_activity_stream import ToolActivityCallback
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.graph.state import ProjectState
@@ -120,6 +121,8 @@ def _check_progress_snapshot_writer(
             ),
             "report_path": str(check.get("report_path") or "")[:1_000] or None,
         }
+        if status == "running" and isinstance(check.get("activeToolActivity"), dict):
+            checks[check_id]["activeToolActivity"] = dict(check["activeToolActivity"])
         writer(
             {
                 "type": event_type,
@@ -538,12 +541,24 @@ def generate_unit_tests(
         if layer in {"frontend", "backend"}
     ]
     reporter = _progress_reporter(config)
+    generation_evidence = "正在调用 TestGeneration Agent 生成或更新受影响的单元测试文件。"
+
+    def report_tool_activity(activity: dict[str, Any]) -> None:
+        """把同一次测试生成调用的最新工具活动同步到本轮各端生成检查。"""
+
+        for layer in context_layers:
+            check = _generation_progress_check(
+                layer, evidence=generation_evidence, required=True,
+            )
+            check["activeToolActivity"] = activity
+            _report_generation_progress(reporter, check=check, status="running")
+
     for layer in context_layers:
         _report_generation_progress(
             reporter,
             check=_generation_progress_check(
                 layer,
-                evidence="正在调用 TestGeneration Agent 生成或更新受影响的单元测试文件。",
+                evidence=generation_evidence,
                 required=True,
             ),
             status="running",
@@ -569,6 +584,7 @@ def generate_unit_tests(
                 state={**state, "unit_test_generation_context": context},
                 workspace=workspace_from_state(state),
                 selected_skill_names=state.get("selected_skill_names"),
+                on_tool_activity=report_tool_activity if reporter is not None else None,
             )
         except Exception as exc:
             result = _skipped_generation_result(
@@ -768,6 +784,7 @@ def _invoke_test_generation_agent(
     state: dict[str, Any],
     workspace: str | None,
     selected_skill_names: list[str] | None,
+    on_tool_activity: ToolActivityCallback | None = None,
 ) -> dict[str, Any]:
     """延迟导入 TestGeneration Agent，避免 Agent bundle 初始化污染确定性收集阶段。"""
 
@@ -777,7 +794,7 @@ def _invoke_test_generation_agent(
         state,
         workspace,
         selected_skill_names=selected_skill_names,
-        on_tool_activity=None,
+        on_tool_activity=on_tool_activity,
     )
 
 

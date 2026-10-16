@@ -373,6 +373,12 @@ def workflow_capabilities() -> dict[str, Any]:
                             "required": "boolean",
                             "advisory": "boolean; advisory checks never block the quality gate",
                             "evidence": "brief sanitized evidence",
+                            "activeToolActivity": (
+                                "optional ephemeral latest sanitized file-tool activity for a "
+                                "running frontend_test_generation or backend_test_generation check; "
+                                "same callId is updated through running/completed/failed and cleared "
+                                "when the generation check settles"
+                            ),
                             "passed_tests": "optional non-negative integer for unit-test checks",
                             "total_tests": "optional non-negative integer for unit-test checks",
                             "performanceScores": (

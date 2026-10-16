@@ -24,6 +24,7 @@ import { cx } from '../../../../utils'
 import { openLocalReportFile } from '../../../../utils/reportFile'
 import type { DagPendingPlanCompletion } from '../../dagPendingPlanPresentation'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
+import WorkspaceToolActivity from '../WorkflowRunCard/WorkspaceToolActivity'
 import DagGenerationProgress from './DagGenerationProgress'
 import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
 import RepairInProgressPanel from './RepairInProgressPanel'
@@ -598,7 +599,7 @@ function IntegrationTestChecklist({
               <span className={cx('integration-test-check-icon')}>
                 {testCheckIcon(check.status)}
               </span>
-              <span className={cx('integration-test-check-content')}>
+              <div className={cx('integration-test-check-content')}>
                 <span className={cx('integration-test-check-heading')}>
                   <Text>{check.name}</Text>
                 </span>
@@ -609,7 +610,10 @@ function IntegrationTestChecklist({
                   check.status === 'failed' ||
                   check.status === 'skipped') &&
                   check.evidence && <Text type="secondary">{check.evidence}</Text>}
-              </span>
+                {check.status === 'running' && check.activeToolActivity && (
+                  <WorkspaceToolActivity activity={check.activeToolActivity} />
+                )}
+              </div>
               <span className={cx('integration-test-check-actions')}>
                 {reportPath && (
                   <Button
