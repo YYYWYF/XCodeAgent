@@ -19,6 +19,7 @@ from app.agents.test_generation.capabilities import (
     load_frontend_test_capabilities,
     unavailable_frontend_test_imports,
 )
+from app.agents.test_generation.runtime_artifacts import is_preview_runtime_artifact
 from app.utils.model_output import extract_json_object
 from app.workspace.code_changes import capture_workspace_changes
 
@@ -542,7 +543,7 @@ def _sha256(path: Path) -> str:
 
 
 def _internal_artifact_snapshot(workspace: str) -> dict[str, str]:
-    """快照正式工件，排除 checkpoint 和平台恢复数据库的运行期写入。"""
+    """快照正式工件，排除 checkpoint、恢复数据库与精确预览运行文件。"""
 
     root = Path(workspace).expanduser().resolve() / WORKSPACE_ARTIFACT_DIR
     snapshot: dict[str, str] = {}
@@ -552,8 +553,12 @@ def _internal_artifact_snapshot(workspace: str) -> dict[str, str]:
         dirnames[:] = sorted(name for name in dirnames if name != "checkpoints")
         for filename in filenames:
             path = Path(dirpath) / filename
-            # 心跳续租会并行写数据库；按根目录下的精确路径排除，其余内部文件仍检查。
-            if path.relative_to(root).as_posix() in _RECOVERY_RUNTIME_ARTIFACT_PATHS:
+            # 平台心跳与预览服务可独立运行；仅排除已知运行文件，其余内部工件仍检查。
+            relative_path = path.relative_to(root).as_posix()
+            if (
+                relative_path in _RECOVERY_RUNTIME_ARTIFACT_PATHS
+                or is_preview_runtime_artifact(relative_path)
+            ):
                 continue
             try:
                 snapshot[path.relative_to(root.parent).as_posix()] = hashlib.sha256(

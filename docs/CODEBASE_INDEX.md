@@ -75,7 +75,7 @@ TechnicalPlan 的 `repair` 重入基线由 `domain/application_planning_recovery
 
 `Frontend/src/renderer/src/service/workbenchProgressMerge.ts` 只合并当前 Run/Thread/会话及更新时间匹配的 GET 进度，保留较高 DAG revision，执行移除后清除旧进度；没有实际变化时返回原生命周期对象，避免影响普通设计/计划页面的渲染和会话恢复。`latestApplicationLifecycle` 的持久 revision、门禁与恢复候选合并规则不变。回归：`pnpm test:connection-recovery`、`pnpm test:development-artifacts`、`pnpm test:dag-generation`。
 
-单测生成器 `Backend/app/agents/test_generation/generator.py` 的正式工件变更快照仅排除 `.devagentstudio/recovery/execution-recovery.sqlite` 及 SQLite 自有 `-wal`、`-shm`、`-journal` 附属文件，避免正常 Graph 租约心跳被误判为 Agent 越权写入。其他 recovery 文件、正式计划、源码和敏感配置继续受原检查保护，Agent 的测试目录写入边界不变。回归：`tests.test_test_generation_recovery_writes`、`tests.test_test_generation`。
+单测生成器 `Backend/app/agents/test_generation/generator.py` 的正式工件变更快照排除 `.devagentstudio/recovery/execution-recovery.sqlite` 及 SQLite 自有 `-wal`、`-shm`、`-journal` 附属文件，并由 `agents/test_generation/runtime_artifacts.py` 精确排除平台预览的前后端 PID、当前启动器日志、`runtime/launch/preview-runtime.json`、同目录 `.preview-<32位小写十六进制 UUID>.tmp`、`runtime/preview-maintenance.json` 及其 `.tmp` 原子写入文件，避免正常 Graph 租约心跳和并行预览启动/刷新/清理被归因为 Agent 写入。排除范围限定为上述文件；`runtime/launch/`、`runtime/`、`recovery/` 下的其他文件、正式计划、源码和敏感配置仍检查，Agent 文件工具仍只能写测试目录。回归：`tests.test_test_generation_preview_writes`（独立预览线程与真实状态写入、运行文件新增/刷新/清理、临时文件及拒绝 Agent 写入）、`tests.test_test_generation_recovery_writes`、`tests.test_test_generation`。
 
 底部 `retryCurrentRecovery` 必须 await 恢复调用再释放请求锁/恢复身份；本地 Native Recovery 暂停使用当前 AG-UI Workflow 报告的子 Run/Graph thread，避免 lifecycle 迟到时取消源 Run或落入未登记的普通聊天 transport。无本地流时仍用当前会话 lifecycle 归属；普通本地 Workflow 停止路径不变。回归包含 `workflowConversationRuntime.test.ts` 的恢复异步流防重入用例，以及 Electron 报告修复后 E05 实测。
 
