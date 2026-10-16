@@ -188,7 +188,7 @@ function CurrentPhase(): JSX.Element {
 }
 
 /** 在实际阶段上下文中渲染确认卡，隔离服务端测试所需的本地存储。 */
-function renderConfirmation(gate?: TestEntryGate, disabled = false): string {
+function renderConfirmation(gate?: TestEntryGate, disabled = false, message?: string): string {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
@@ -199,6 +199,7 @@ function renderConfirmation(gate?: TestEntryGate, disabled = false): string {
       <WorkbenchPhaseProvider applicationId="test" lifecycle={lifecycle(gate)}>
         <TestPhaseConfirmationCard
           disabled={disabled}
+          message={message}
           target={{ type: 'endpoint', id: 'age', label: 'POST /api/age' }}
           onSubmit={() => assert.fail('渲染卡片不应启动测试')}
         />
@@ -230,6 +231,18 @@ test('全量门禁解锁后恢复测试目标和入口，提交期间保留禁�
   assert.match(html, /<button/)
   assert.doesNotMatch(html, /未完成产物|disabled=""/)
   assert.match(renderConfirmation(allowed, true), /disabled=""/)
+})
+
+test('测试确认卡复用后端单测决策文案，并保留未完成产物的提示', () => {
+  const skippedMessage =
+    '代码生成与 Build 已完成，单元测试已跳过，确认后将进入测试阶段，执行测试与失败修复。'
+  const skippedHtml = renderConfirmation(allowed, false, skippedMessage)
+  assert.match(skippedHtml, /单元测试已跳过/)
+  assert.doesNotMatch(skippedHtml, /单元测试门禁已完成/)
+  assert.match(renderConfirmation(allowed), /单元测试门禁已完成/)
+  const blockedHtml = renderConfirmation(blocked, false, skippedMessage)
+  assert.match(blockedHtml, /完成全部开发产物后可进入测试/)
+  assert.doesNotMatch(blockedHtml, /单元测试已跳过/)
 })
 
 test('门禁读取中或错误时显示原因且不暴露测试入口', () => {

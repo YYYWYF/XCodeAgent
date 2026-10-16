@@ -390,7 +390,11 @@ def test_phase_confirmation(state: ProjectState) -> dict:
             "mode": "test_phase_confirmation",
             "status": "requires_user_input",
             "message": (
-                "代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试与失败修复。"
+                (
+                    "代码生成与 Build 已完成，单元测试已跳过，确认后将进入测试阶段，执行测试与失败修复。"
+                    if state.get("unit_test_decision") == "skip"
+                    else "代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试与失败修复。"
+                )
                 if gate.allowed else f"当前产物初次开发已完成。{gate.reason}"
             ),
             "testEntryGate": gate.model_dump(mode="json", by_alias=True),

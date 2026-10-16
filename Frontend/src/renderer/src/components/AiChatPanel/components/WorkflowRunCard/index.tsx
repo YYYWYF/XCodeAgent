@@ -521,6 +521,7 @@ export default function WorkflowRunCard({
           ) : testPhaseConfirmation && requiresConfirmation ? (
             <TestPhaseConfirmationCard
               disabled={disabled || interactionAvailability !== 'active'}
+              message={clarification?.message}
               onSubmit={() =>
                 onSubmitClarification?.(workflow, {
                   test_phase_confirmation: {
