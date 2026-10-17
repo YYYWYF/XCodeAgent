@@ -8,7 +8,6 @@ import {
   FolderOpenOutlined,
   FundOutlined,
   GithubOutlined,
-  LayoutOutlined,
   LockOutlined,
   MenuOutlined,
   MessageOutlined,
@@ -37,6 +36,13 @@ import { TabHintInput, TabHintAutoComplete } from './components/TabHintInput'
 import DatasourceConfigFields from './DatasourceConfigFields'
 
 const { TextArea } = Input
+
+/** 新建应用可直接选用的主题色，默认紫保持现有默认值。 */
+const themeColorPresets = [
+  { label: '默认紫', value: '#6b3cf0' },
+  { label: '招商红', value: '#e60012' },
+  { label: '蓝色', value: '#1677ff' }
+] as const
 
 const iconComponents: Record<string, typeof AppstoreOutlined> = {
   AppstoreOutlined,
@@ -79,8 +85,6 @@ export default function ApplicationForm({
   const authorizationEnabled = Form.useWatch(['authorization', 'enabled'], form) ?? false
   const trackEnabled = Form.useWatch(['track', 'enable'], form) ?? true
   const apiTrackEnabled = Form.useWatch(['apiTrack', 'enable'], form) ?? true
-  const useHeaderEnabled = Form.useWatch(['layout', 'useHeader'], form) ?? true
-  const useFooterEnabled = Form.useWatch(['layout', 'useFooter'], form) ?? false
   const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
   const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
@@ -90,12 +94,11 @@ export default function ApplicationForm({
     return trackMethodOptions.filter((option) => option.value.toLowerCase().includes(keyword))
   }, [trackMethodSearch])
 
-  const headerBar = useHeaderEnabled ? (
-    <rect fill="#e8e8e8" height="6" rx="2" width="96" x="0" y="0" />
-  ) : null
-  const footerBar = useFooterEnabled ? (
-    <rect fill="#e8e8e8" height="6" width="96" x="0" y="58" />
-  ) : null
+  /** 将选中的预设主题色写入应用表单。 */
+  const applyThemeColor = (color: string): void => {
+    form.setFields([{ name: ['theme', 'primaryColor'], value: color }])
+  }
+
   return (
     <Form
       className={cx('application-form')}
@@ -211,123 +214,6 @@ export default function ApplicationForm({
       </section>
 
       <section className={cx('application-form-section', 'application-form-section--full')}>
-        <SectionTitle icon={<LayoutOutlined />}>导航模式</SectionTitle>
-        <div className={cx('nav-mode-row')}>
-          <Form.Item label="布局方式" name={['layout', 'type']}>
-            <Radio.Group className={cx('nav-mode-picker')} optionType="button" buttonStyle="solid">
-              <Radio.Button value="side">
-                <span className={cx('nav-preview')}>
-                  <svg height="52" viewBox="0 0 96 64" width="78">
-                    <defs>
-                      <clipPath id="nav-side-clip">
-                        <rect height="64" rx="5" width="96" x="0" y="0" />
-                      </clipPath>
-                    </defs>
-                    <g clipPath="url(#nav-side-clip)">
-                      <rect fill="#fff" height="64" width="96" x="0" y="0" />
-                      <rect fill="#2c2c2c" height="64" width="24" x="0" y="0" />
-                      <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="9" />
-                      <rect fill="#555" height="2" rx="1" width="8" x="5" y="15" />
-                      <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="22" />
-                      <rect fill="#555" height="2" rx="1" width="6" x="5" y="28" />
-                      <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="35" />
-                      <rect fill="#555" height="2" rx="1" width="9" x="5" y="41" />
-                      <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="48" />
-                      <rect fill="#555" height="2" rx="1" width="7" x="5" y="54" />
-                      {headerBar}
-                      {footerBar}
-                    </g>
-                    <rect
-                      fill="none"
-                      height="64"
-                      rx="5"
-                      stroke="#d9d9d9"
-                      strokeWidth="1"
-                      width="96"
-                      x="0"
-                      y="0"
-                    />
-                  </svg>
-                  <span className={cx('nav-preview-label')}>左侧导航</span>
-                </span>
-              </Radio.Button>
-              <Radio.Button value="top">
-                <span className={cx('nav-preview')}>
-                  <svg height="52" viewBox="0 0 96 64" width="78">
-                    <defs>
-                      <clipPath id="nav-top-clip">
-                        <rect height="64" rx="5" width="96" x="0" y="0" />
-                      </clipPath>
-                    </defs>
-                    <g clipPath="url(#nav-top-clip)">
-                      <rect fill="#fff" height="64" width="96" x="0" y="0" />
-                      <rect fill="#2c2c2c" height="16" width="96" x="0" y="0" />
-                      {headerBar}
-                      {footerBar}
-                    </g>
-                    <rect
-                      fill="none"
-                      height="64"
-                      rx="5"
-                      stroke="#d9d9d9"
-                      strokeWidth="1"
-                      width="96"
-                      x="0"
-                      y="0"
-                    />
-                  </svg>
-                  <span className={cx('nav-preview-label')}>顶部导航</span>
-                </span>
-              </Radio.Button>
-              <Radio.Button value="mix">
-                <span className={cx('nav-preview')}>
-                  <svg height="52" viewBox="0 0 96 64" width="78">
-                    <defs>
-                      <clipPath id="nav-mix-clip">
-                        <rect height="64" rx="5" width="96" x="0" y="0" />
-                      </clipPath>
-                    </defs>
-                    <g clipPath="url(#nav-mix-clip)">
-                      <rect fill="#fff" height="64" width="96" x="0" y="0" />
-                      <rect fill="#2c2c2c" height="14" width="96" x="0" y="0" />
-                      <rect fill="#2c2c2c" height="50" width="24" x="0" y="14" />
-                      <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="21" />
-                      <rect fill="#555" height="2" rx="1" width="8" x="5" y="27" />
-                      <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="33" />
-                      <rect fill="#555" height="2" rx="1" width="7" x="5" y="39" />
-                      <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="45" />
-                      <rect fill="#555" height="2" rx="1" width="9" x="5" y="51" />
-                      {headerBar}
-                      {footerBar}
-                    </g>
-                    <rect
-                      fill="none"
-                      height="64"
-                      rx="5"
-                      stroke="#d9d9d9"
-                      strokeWidth="1"
-                      width="96"
-                      x="0"
-                      y="0"
-                    />
-                  </svg>
-                  <span className={cx('nav-preview-label')}>混合导航</span>
-                </span>
-              </Radio.Button>
-            </Radio.Group>
-          </Form.Item>
-          <div className={cx('nav-mode-toggles')}>
-            <Form.Item label="开启头部" name={['layout', 'useHeader']} valuePropName="checked">
-              <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-            </Form.Item>
-            <Form.Item label="开启底部" name={['layout', 'useFooter']} valuePropName="checked">
-              <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-            </Form.Item>
-          </div>
-        </div>
-      </section>
-
-      <section className={cx('application-form-section', 'application-form-section--full')}>
         <div className={cx('application-form-section-head')}>
           <SectionTitle icon={<MenuOutlined />}>菜单</SectionTitle>
           <Form.Item
@@ -369,6 +255,25 @@ export default function ApplicationForm({
             <Input />
           </Form.Item>
           <div className={cx('theme-color-picker-row')}>
+            <div className={cx('theme-color-presets')} role="group" aria-label="预设主题色">
+              {themeColorPresets.map((preset) => (
+                <button
+                  aria-pressed={themePrimaryColor.toLowerCase() === preset.value}
+                  className={cx('theme-color-preset')}
+                  key={preset.value}
+                  onClick={() => applyThemeColor(preset.value)}
+                  title={preset.label}
+                  type="button"
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cx('theme-color-preset-swatch')}
+                    style={{ backgroundColor: preset.value }}
+                  />
+                </button>
+              ))}
+            </div>
+            <span className={cx('theme-color-custom-label')}>自定义</span>
             <div className={cx('theme-color-swatch-wrapper')}>
               <div
                 className={cx('theme-color-swatch')}
@@ -376,6 +281,7 @@ export default function ApplicationForm({
               />
               <input
                 type="color"
+                aria-label="自定义主题色"
                 className={cx('theme-color-input')}
                 value={themePrimaryColor}
                 onChange={(e) => {
@@ -385,7 +291,7 @@ export default function ApplicationForm({
               />
             </div>
             <Input
-              placeholder="请输入主题色色值，如：#6b3cf0"
+              placeholder="自定义主题色色值，如：#6b3cf0"
               style={{ flex: 1 }}
               value={themePrimaryColor || ''}
               onChange={(e) => {

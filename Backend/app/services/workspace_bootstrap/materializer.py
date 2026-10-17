@@ -100,15 +100,20 @@ class WorkspaceMaterializer:
         workspace: str | Path,
         archive_path: str | Path,
         template_state: TemplateStateV3,
+        staging_projection: Callable[[Path], None] | None = None,
+        before_baseline: Callable[[Path], None] | None = None,
         readiness: Callable[[Path], None] | None = None,
     ) -> str:
-        """完整提交 ZIP 的安全文件、Git baseline 与唯一 TemplateState。"""
+        """在 staging 注入可选投影后完整提交 ZIP、Git baseline 与唯一 TemplateState。"""
 
         root = Path(workspace).expanduser().resolve()
         self._preflight(root)
         journal = BootstrapJournal(workspace=root)
         try:
             journal.staging = self._extract_to_staging(root, Path(archive_path))
+            # 投影必须先于 manifest，确保完整性摘要和首次 Git baseline 都覆盖实例配置。
+            if staging_projection is not None:
+                staging_projection(journal.staging)
             manifest = _build_file_manifest(journal.staging)
             targets = _materialization_targets(journal.staging)
             _validate_materialization_targets_available(root, targets)
@@ -119,6 +124,8 @@ class WorkspaceMaterializer:
                 os.replace(source, target)
                 journal.moved_roots.append(target)
             _verify_materialized_files(root, manifest)
+            if before_baseline is not None:
+                before_baseline(root)
             journal.template_state_written = True
             _write_template_state(root / TEMPLATE_STATE_RELATIVE_PATH, template_state)
             journal.git_initialized = True

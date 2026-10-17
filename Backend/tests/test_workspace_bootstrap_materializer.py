@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -8,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
-from app.services.template_reconcile.protocol_v2 import TemplateStateV2
+from app.services.template_reconcile.protocol_v3 import TemplateStateV3
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 
@@ -23,15 +24,16 @@ class _FailingGitManager:
         raise OSError("git commit failed")
 
 
-def _template_state() -> TemplateStateV2:
-    """返回满足当前唯一 V2 契约的最小 State。"""
+def _template_state() -> TemplateStateV3:
+    """返回满足当前唯一 V3 契约的最小 State。"""
 
-    return TemplateStateV2.model_validate({
-        "schemaVersion": 2,
-        "templateRevision": "template-r1",
+    return TemplateStateV3.model_validate({
+        "schemaVersion": 3,
+        "templateRevision": "2026.10.17.1",
         "requested": {},
         "effective": {},
-        "appliedAdditions": {},
+        "installedArtifacts": {},
+        "managedContributions": {},
     })
 
 
@@ -69,9 +71,44 @@ class WorkspaceMaterializerTests(unittest.TestCase):
             self.assertTrue((workspace / ".git").is_dir())
             self.assertTrue((workspace / TEMPLATE_STATE_RELATIVE_PATH).is_file())
             self.assertFalse((workspace / ".devagentstudio/bootstrap-staging").exists())
-            exclude = (workspace / ".git/info/exclude").read_text(encoding="utf-8")
-            self.assertIn(".devagentstudio/", exclude)
+            gitignore = (workspace / ".gitignore").read_text(encoding="utf-8")
+            self.assertIn(".devagentstudio/runtime/", gitignore)
             self.assertTrue(BootstrapGitManager().verify_baseline(workspace))
+
+    def test_staging_projection_precedes_manifest_and_git_baseline(self) -> None:
+        """staging 投影必须进入物化摘要和首次 Git 提交。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            archive = Path(directory) / "template.zip"
+            _write_package(
+                archive,
+                {"frontend/src/config/app.generated.ts": "// default\n"},
+            )
+
+            def project(staging: Path) -> None:
+                """模拟确定性投影器在 manifest 生成前覆盖模板默认值。"""
+
+                (staging / "frontend/src/config/app.generated.ts").write_text(
+                    "// projected\n", encoding="utf-8"
+                )
+
+            WorkspaceMaterializer().materialize(
+                workspace=workspace,
+                archive_path=archive,
+                template_state=_template_state(),
+                staging_projection=project,
+            )
+
+            committed = subprocess.run(
+                ["git", "show", "HEAD:frontend/src/config/app.generated.ts"],
+                cwd=workspace,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertEqual(committed, "// projected\n")
 
     def test_materialize_commits_all_safe_zip_files_including_template_contracts(self) -> None:
         """模板新增任意安全文件时，Bootstrap 必须按原路径完整提交而非依赖 allow-list。"""

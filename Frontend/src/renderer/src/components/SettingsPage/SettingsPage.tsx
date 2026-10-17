@@ -37,7 +37,10 @@ import { useMemo, useState } from 'react'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
 import { applicationIconOptions, trackMethodOptions } from '../Welcome/constants'
-import { saveApplication } from '../Welcome/applicationService'
+import {
+  ApplicationProjectionSyncError,
+  saveApplication
+} from '../Welcome/applicationService'
 import './SettingsPage.less'
 
 const { Title, Text } = Typography
@@ -73,7 +76,7 @@ type Props = {
 
 type SettingsFormValues = Pick<
   ApplicationConfig,
-  'appName' | 'appIcon' | 'senario' | 'layout' | 'auth' | 'track' | 'apiTrack'
+  'appName' | 'appIcon' | 'senario' | 'layout' | 'theme' | 'auth' | 'track' | 'apiTrack'
 > & {
   envVariables: EnvVariable[]
 }
@@ -140,6 +143,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
   }, [application?.environment?.dev, application?.environment?.prod])
 
   const envVars: EnvVariable[] = Form.useWatch('envVariables', form) ?? safeEnvVariables
+  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
 
   const [trackMethodSearch, setTrackMethodSearch] = useState('')
   const trackMethodFilteredOptions = useMemo(() => {
@@ -205,6 +209,9 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
           const firstErr = error.errorFields[0]?.errors?.[0]
           if (firstErr) message.error(firstErr)
         }
+      } else if (error instanceof ApplicationProjectionSyncError) {
+        onSaved(error.application)
+        message.error(error.message)
       } else if (error instanceof Error) {
         message.error(`保存失败：${error.message}`)
       }
@@ -333,6 +340,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
               appName: application.appName ?? '',
               appIcon: application.appIcon ?? 'AppstoreOutlined',
               senario: application.senario ?? '',
+              theme: application.theme ?? { primaryColor: '#6b3cf0' },
               layout: safeLayout,
               auth: safeAuth,
               track: safeTrack,
@@ -373,6 +381,26 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
               </Form.Item>
               <Form.Item label="应用场景" name="senario">
                 <Input.TextArea rows={2} style={{ resize: 'vertical' }} />
+              </Form.Item>
+              <Form.Item
+                label="主题色"
+                name={['theme', 'primaryColor']}
+                rules={[
+                  { required: true, message: '请输入主题色' },
+                  { pattern: /^#[0-9A-Fa-f]{6}$/, message: '主题色必须是 #RRGGBB 格式' }
+                ]}
+              >
+                <Input
+                  className={cx('settings-theme-color-input')}
+                  prefix={
+                    <span
+                      aria-hidden="true"
+                      className={cx('settings-theme-color-swatch')}
+                      style={{ backgroundColor: themePrimaryColor }}
+                    />
+                  }
+                  placeholder="#6b3cf0"
+                />
               </Form.Item>
             </SettingsCard>
 

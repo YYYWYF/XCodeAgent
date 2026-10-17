@@ -145,71 +145,6 @@
   }
 }
 
-.@{class-prefix}-nav-mode-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 24px;
-
-  .ant-form-item {
-    margin-bottom: 0;
-  }
-}
-
-.@{class-prefix}-nav-mode-picker {
-  .ant-radio-button-wrapper {
-    height: auto;
-    padding: 4px 6px 4px;
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-
-    &:first-child {
-      border-radius: 6px;
-    }
-
-    &:last-child {
-      border-radius: 6px;
-    }
-
-    // 选中布局卡片时使标签在强调色背景上保持清晰。
-    &-checked .@{class-prefix}-nav-preview-label {
-      color: #fff;
-    }
-  }
-}
-
-.@{class-prefix}-nav-mode-toggles {
-  display: flex;
-  gap: 16px;
-  padding-top: 24px;
-
-  .ant-form-item {
-    margin-bottom: 0;
-
-    .ant-form-item-label {
-      padding-bottom: 2px;
-
-      > label {
-        font-size: 13px;
-        height: auto;
-      }
-    }
-  }
-}
-
-.@{class-prefix}-nav-preview {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-
-.@{class-prefix}-nav-preview-label {
-  font-size: 12px;
-  color: var(--modal-text);
-  line-height: 1;
-}
-
 .@{class-prefix}-application-form-scenario {
   textarea {
     resize: vertical !important;
@@ -273,10 +208,45 @@
 }
 
 // 主题颜色选择器
+.@{class-prefix}-theme-color-presets {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.@{class-prefix}-theme-color-preset {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+
+  &[aria-pressed='true'] .@{class-prefix}-theme-color-preset-swatch {
+    border-color: #fff;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.72);
+  }
+}
+
+.@{class-prefix}-theme-color-preset-swatch {
+  display: block;
+  width: 36px;
+  height: 36px;
+  border: 2px solid #fff;
+  border-radius: 8px;
+}
+
 .@{class-prefix}-theme-color-picker-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
+}
+
+.@{class-prefix}-theme-color-custom-label {
+  color: var(--modal-text-secondary);
+  white-space: nowrap;
 }
 
 .@{class-prefix}-theme-color-swatch-wrapper {
@@ -290,7 +260,7 @@
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  border: 2px solid var(--modal-border);
+  border: 2px solid #fff;
 }
 
 .@{class-prefix}-theme-color-input {

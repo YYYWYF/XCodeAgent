@@ -4,6 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { readManagedWorkspaceApplication, resolveApplicationTemplateBranch } from '../src/main/managedWorkspace'
+import {
+  ApplicationProjectionSyncError,
+  syncSavedApplicationProjection
+} from '../src/renderer/src/components/Welcome/applicationService'
+import type { ApplicationConfig } from '../src/renderer/src/typings'
 
 /** 创建隔离的临时工作区并在测试结束后清理。 */
 async function withTemporaryWorkspace(
@@ -207,4 +212,45 @@ test('拒绝缺少 application.json 的标识目录', async () => {
     await fs.mkdir(path.join(workspaceRoot, '.devagentstudio'))
     await assert.rejects(readManagedWorkspaceApplication(workspaceRoot), /application\.json/)
   })
+})
+
+/** 构造配置投影边界测试所需的最小运行时应用视图。 */
+function projectionApplication(): ApplicationConfig {
+  return {
+    workspaceRoot: '/tmp/projection-app',
+    configRevision: 7
+  } as ApplicationConfig
+}
+
+/** 验证 CHANGED、NO_CHANGE 和新建应用跳过均保持保存成功结果。 */
+test('应用配置投影的成功与无模板结果不改变已保存配置', async () => {
+  const application = projectionApplication()
+  for (const status of ['CHANGED', 'NO_CHANGE', 'SKIPPED_NO_TEMPLATE'] as const) {
+    let receivedRevision = 0
+    const result = await syncSavedApplicationProjection(
+      application,
+      async (_workspaceRoot, revision) => {
+        receivedRevision = revision
+        return { status, configRevision: revision, contentSha256: null }
+      }
+    )
+    assert.equal(result, application)
+    assert.equal(receivedRevision, 7)
+  }
+})
+
+/** 验证 canonical 已保存但工程同步失败时返回可识别的部分成功错误。 */
+test('应用配置投影失败保留已保存应用并提供明确提示', async () => {
+  const application = projectionApplication()
+  await assert.rejects(
+    syncSavedApplicationProjection(application, async () => {
+      throw new Error('旧工程缺少目标文件')
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof ApplicationProjectionSyncError)
+      assert.equal(error.application, application)
+      assert.match(error.message, /配置已保存，工程配置同步失败/)
+      return true
+    }
+  )
 })

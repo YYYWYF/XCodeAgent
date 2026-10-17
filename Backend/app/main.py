@@ -19,6 +19,10 @@ from app.graph.direct_modification_workflow import clear_direct_modification_gra
 from app.middleware.approvals import approval_store
 from app.persistence.checkpoints import close_workflow_checkpointer
 from app.protocols.preview_runtime import preview_runtime_capabilities, build_preview_runtime_stream
+from app.protocols.application_config_projection import (
+    application_config_projection_capabilities,
+    build_application_config_projection_ag_ui_stream,
+)
 
 from app.protocols.agent_files import (
     agent_files_capabilities,
@@ -165,6 +169,7 @@ async def health() -> dict[str, object]:
             "workflow_run": workflow_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),
             "application_lifecycle": application_lifecycle_capabilities(),
+            "application_config_projection": application_config_projection_capabilities(),
             "application_development_planning": application_development_planning_capabilities(),
             "application_deletion": application_deletion_capabilities(),
             "user_skills": user_skills_capabilities(),
@@ -230,6 +235,23 @@ async def run_application_lifecycle(
             payload=input_data,
             accept=accept,
             bootstrap_service=bootstrap_service,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/application-config/run")
+async def run_application_config_projection(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """运行独立的应用公开配置投影 AG-UI 动作。"""
+
+    return StreamingResponse(
+        build_application_config_projection_ag_ui_stream(
+            payload=input_data,
+            accept=accept,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

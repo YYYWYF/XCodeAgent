@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.services.application_config.projection import project_template_app_config
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapReadinessError
 from app.services.workspace_bootstrap.readiness import validate_workspace_bootstrap_readiness
 
@@ -63,11 +64,12 @@ def _prepare_workspace(workspace: Path, *, requested: dict[str, object] | None =
     state_path.write_text(
         json.dumps(
             {
-            "schemaVersion": 2,
-            "templateRevision": "template-r1",
+            "schemaVersion": 3,
+            "templateRevision": "2026.10.17.1",
             "requested": requested or {},
             "effective": effective or {},
-            "appliedAdditions": {},
+            "installedArtifacts": {},
+            "managedContributions": {},
             }
         ),
         encoding="utf-8",
@@ -93,6 +95,43 @@ class WorkspaceBootstrapReadinessTests(unittest.TestCase):
             )
 
             self.assertTrue(verifier.called)
+
+    def test_requires_projection_to_match_frozen_application_snapshot(self) -> None:
+        """首次 Bootstrap 的严格 Readiness 必须校验公开配置投影内容。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            _prepare_workspace(workspace)
+            target = workspace / "frontend/src/config/app.generated.ts"
+            target.parent.mkdir(parents=True)
+            target.write_text("// default\n", encoding="utf-8")
+            application = {
+                "configRevision": 1,
+                "appName": "订单中心",
+                "appIcon": "AppstoreOutlined",
+                "theme": {"primaryColor": "#6b3cf0"},
+            }
+            project_template_app_config(workspace, application)
+            verifier = _GitBaselineVerifier()
+
+            validate_workspace_bootstrap_readiness(
+                workspace,
+                requested_config=_requested_config(),
+                application_config=application,
+                git_manager=verifier,
+            )
+            self.assertTrue(verifier.called)
+
+            target.write_text("// stale\n", encoding="utf-8")
+            verifier = _GitBaselineVerifier()
+            with self.assertRaisesRegex(ValueError, "PROJECTION_MISMATCH"):
+                validate_workspace_bootstrap_readiness(
+                    workspace,
+                    requested_config=_requested_config(),
+                    application_config=application,
+                    git_manager=verifier,
+                )
+            self.assertFalse(verifier.called)
 
     def test_rejects_requested_state_drift_before_git_validation(self) -> None:
         """Engine requested 未原样回写应用请求时不得提交 READY。"""
@@ -122,7 +161,7 @@ class WorkspaceBootstrapReadinessTests(unittest.TestCase):
                 effective={},
             )
 
-            with self.assertRaisesRegex(WorkspaceBootstrapReadinessError, "effective"):
+            with self.assertRaisesRegex(ValueError, "TEMPLATE_STATE_SCHEMA_UNSUPPORTED"):
                 validate_workspace_bootstrap_readiness(
                     workspace,
                     requested_config=_requested_config(login=True),
