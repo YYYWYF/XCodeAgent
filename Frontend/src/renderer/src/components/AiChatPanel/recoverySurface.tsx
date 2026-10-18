@@ -43,7 +43,7 @@ export default function RecoverySurface({
   if (!incident) return null
 
   // 仅二次修改复用普通错误重试入口，其他阶段保留原恢复卡和操作。
-  if (!isApplicationPlanningPhase && (activeExecutionRecovery
+  if (!(incident.kind === 'needs_attention' && incident.reasonCode === 'RETRY_ENTRY_NOT_FOUND') && !isApplicationPlanningPhase && (activeExecutionRecovery
     ? activeExecutionRecovery.workflowScope === 'conversation'
     : isConversationWorkflow(currentWorkflow))) {
     /** 重试前保留后端动作的确认要求，并沿用统一先对账再恢复的调用。 */

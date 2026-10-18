@@ -504,7 +504,8 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
     application_planning_scope = state.get("workflow_scope") == "application_planning"
     request = _product_planning_request(state, interaction)
     action = str(interaction.get("action") or "")
-    existing = state.get("product_plan")
+    # 阶段磁盘加载用空对象表示尚无产物；首次生成不能把它当作历史版本校验。
+    existing = state.get("product_plan") or None
     # 修订游标由上游提交到 checkpoint；旧产品稿只作为本次生成基线，
     # 不可先修补或直接恢复旧确认卡而跳过最新需求的完整产品规划。
     revision_generation = (

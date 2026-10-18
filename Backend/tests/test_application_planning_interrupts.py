@@ -264,7 +264,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         config = {"configurable": {"thread_id": "planning-confirm"}}
         _ = [
             chunk
-            async for chunk in graph.astream({}, config=config, stream_mode="updates")
+            async for chunk in graph.astream({"request": "原始业务提问"}, config=config, stream_mode="updates")
         ]
         snapshot = await graph.aget_state(config)
         projected = project_application_planning_interrupt(
@@ -292,6 +292,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
 
         completed = await graph.aget_state(config)
         self.assertEqual(completed.values["status"], "completed")
+        self.assertEqual(completed.values["request"], "原始业务提问")
         self.assertEqual(
             completed.values["requirement_spec"]["confirmation_status"],
             "confirmed",

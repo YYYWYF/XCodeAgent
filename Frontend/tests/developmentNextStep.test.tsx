@@ -17,6 +17,19 @@ import DevelopmentTargetPicker from '../src/renderer/src/components/AiChatPanel/
 import NextDevelopmentGuide from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide'
 import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide/quickTasks'
 
+test('原开发 Run 已结束后，同 Thread 新测试失败不显示重新选择开发任务', () => {
+  const failed = { runId: 'test-run', threadId: 'shared-thread', events: [],
+    summary: { status: 'failed', phase: 'integration_test' } } as WorkflowRunPayload
+  const ended = { execution: { runId: 'old-build', threadId: 'shared-thread', status: 'stopped' },
+    workspaceUnchanged: false }
+  const lifecycle = { endedExecutions: { 'old-build': ended } } as unknown as ApplicationLifecycle
+  assert.equal(developmentNextStep([message(failed)], lifecycle), undefined)
+  const sameRun = { ...lifecycle, endedExecutions: { 'test-run': {
+    ...ended, execution: { ...ended.execution, runId: 'test-run' }
+  } } } as ApplicationLifecycle
+  assert.equal(developmentNextStep([message(failed)], sameRun)?.endedRunId, 'test-run')
+})
+
 /** 构造服务端已经确认当前页初次完成的真实结构。 */
 function completion(): WorkflowRunPayload {
   return {

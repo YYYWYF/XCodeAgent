@@ -150,7 +150,6 @@ export default function ProcessSteps({
             const latestStep = item.steps[item.steps.length - 1]
             return (
               <ToolActivityChain
-                count={item.steps.length}
                 isLast={index === displayItems.length - 1}
                 key="tool-activity-chain"
                 latestDetail={latestStep.detail}
@@ -468,7 +467,6 @@ function NodeToolActivityChain({
     [...steps].reverse().find((tool) => tool.status === 'running') || steps[steps.length - 1]
   return (
     <ToolActivityChain
-      count={steps.length}
       isLast
       latestDetail={latestStep.detail}
       latestIcon={stepIcon(latestStep, !loading)}

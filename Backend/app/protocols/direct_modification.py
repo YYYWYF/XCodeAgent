@@ -17,7 +17,6 @@ from app.graph.direct_modification_workflow import (
     direct_modification_graph_for_request,
     direct_next_node_name,
 )
-from app.persistence.checkpoints import cleanup_workflow_checkpoints
 from app.protocols.ag_ui_action_stream import (
     AgUiActionProgress,
     AgUiActionResult,
@@ -55,6 +54,7 @@ from app.services.conversation_execution import ConversationExecution
 from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext
 from app.services.node_recovery_context import bind_recovery_runtime
 from app.services.run_workers import bind_run_workers
+from app.services.failed_run_cleanup import shield_run_cleanup
 from app.services.workflow_reentry import SYNTHETIC_WORKFLOW_ENTRY_NODE
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
@@ -528,7 +528,8 @@ def build_conversation_ag_ui_stream(
                 interaction_id=str(request.impact_interaction_id),
                 decision="rejected",
             )
-        await cleanup_workflow_checkpoints(workspace=workspace_root)
+        from app.services.execution_cleanup import best_effort_checkpoint_housekeeping
+        await best_effort_checkpoint_housekeeping(workspace_root)
         active_graph = native_recovery_context.graph if native_recovery_context else await direct_modification_graph_for_request(
             workspace=workspace_root
         )
@@ -611,6 +612,8 @@ def build_conversation_ag_ui_stream(
             },
         }
         try:
+            if native_recovery_context is not None:
+                native_recovery_context.runtime_started = True
             paused_snapshot = None
             if request.resume_execution_run_id:
                 paused_snapshot = await active_graph.aget_state(config)
@@ -623,7 +626,8 @@ def build_conversation_ag_ui_stream(
                     thread_id=thread_id, run_id=run_id,
                 )
             if native_recovery_context is not None:
-                state_view = dict(native_recovery_context.fork_snapshot.values)
+                state_view = ({**state_view, **native_recovery_context.fork_snapshot.values}
+                              if native_recovery_context.restart_node else dict(native_recovery_context.fork_snapshot.values))
                 config = native_recovery_context.fork_config
             if (
                 native_recovery_context is None
@@ -689,7 +693,7 @@ def build_conversation_ag_ui_stream(
                     percent=0,
                 )
             async for stream_mode, chunk in _conversation_graph_stream(active_graph,
-                (None if native_recovery_context else Command(update={
+                (state_view if native_recovery_context and native_recovery_context.restart_node else None if native_recovery_context else Command(update={
                     "active_run_id": run_id, "active_thread_id": thread_id,
                     "lifecycle": state_view.get("lifecycle"),
                 }) if paused_snapshot else state_view),
@@ -834,10 +838,19 @@ def build_conversation_ag_ui_stream(
             await execution.failed(error)
             raise
         finally:
-            await execution.close()
-            if lease is not None:
-                lease.release()
-            workflow_run_registry.unregister(run_id, current_task)
+            async def release_conversation_ownership() -> None:
+                """连接取消也不打断失败工作清理，退出后释放本次运行登记。"""
+                from app.services.failed_run_cleanup import drain_failed_run
+                from app.services.execution_cleanup import finalize_runtime_ownership
+                if execution.failure_error is not None or execution.failed_state is not None:
+                    await drain_failed_run(run_id)
+                try:
+                    await execution.close()
+                finally:
+                    await finalize_runtime_ownership(heartbeat=None,
+                        unregister=lambda: workflow_run_registry.unregister(run_id, current_task), lease=lease)
+
+            await shield_run_cleanup(release_conversation_ownership())
 
     return build_ag_ui_action_stream(
         payload=normalized_payload,

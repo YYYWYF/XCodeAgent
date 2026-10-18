@@ -128,11 +128,11 @@ export function developmentNextStep(
         target: source?.workflow ? workflowDevelopmentTarget(source.workflow) : undefined
       }
     }
-    // 继续在入场前失败时归档尚未消费，保留原任务入口，避免只能重试一个不存在的执行。
+    // 结束归档只匹配本次 Run；同 Thread 的旧开发归档不能把新测试失败引到目标选择。
     const ended = workflow.summary.status === 'failed'
-      ? Object.values(lifecycle?.endedExecutions || {}).find((item) => item.execution.threadId === workflow.threadId)
+      ? lifecycle?.endedExecutions?.[workflow.runId]
       : undefined
-    if (ended) {
+    if (ended?.execution.threadId === workflow.threadId) {
       const source = messages.find((item) => item.workflow?.runId === ended.execution.runId)?.workflow
       return { key: workflow.runId, reason: 'ended', endedRunId: ended.execution.runId,
         workspaceUnchanged: ended.workspaceUnchanged, target: source ? workflowDevelopmentTarget(source) : undefined }

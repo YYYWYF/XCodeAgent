@@ -71,7 +71,7 @@ from app.domain.execution_recovery import (
     DurableExecutionRunConflictError,
 )
 from app.services.dag_planning_orchestrator import DagPlanningError
-from app.services.execution_failure_classifier import public_failure_diagnostic
+from app.services.execution_failure_classifier import classify_execution_failure, public_failure_diagnostic
 from app.services.unit_model_failure import failure_evidence_from_issue
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
 from app.domain.application_lifecycle import PendingInteractionType
@@ -79,13 +79,13 @@ from app.graph.application_planning_interrupts import (
     validate_application_planning_review_action,
 )
 from app.graph.application_planning_revision import cleared_design_change_context
-from app.persistence.checkpoints import cleanup_workflow_checkpoints
 from app.persistence.execution_recovery import get_execution
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
+from app.services.planning_confirmation_projection import prioritize_checkpoint_confirmation
 from app.services.execution_recovery import (
     assert_run_id_available,
     best_effort_recovery_observation,
@@ -100,6 +100,9 @@ from app.services.execution_failure_classifier import sanitize_failure_diagnosti
 from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext, WorkflowReentryExecutor
 from app.services.node_recovery_context import NodeRecoveryContext, bind_recovery_runtime
 from app.services.run_workers import bind_run_workers
+from app.services.failed_run_cleanup import (
+    drain_failed_run, observe_drained_failure, release_failed_execution_resources, shield_run_cleanup, wait_failed_run,
+)
 from app.services.execution_lease_heartbeat import maintain_execution_heartbeat, stop_execution_heartbeat
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.backend_instance import current_backend_instance
@@ -108,6 +111,7 @@ from app.services.template_reconcile.template_preparation import (
     template_preparation_projection_v2,
 )
 from app.services.user_skill_runtime import validate_selected_user_skills
+from app.services.workflow_business_request import control_business_request
 from app.services.workflow_reentry import (
     RevisionTargetResolver,
     SYNTHETIC_WORKFLOW_ENTRY_NODE,
@@ -210,7 +214,7 @@ def _workflow_stream_chunk(item: Any) -> tuple[tuple[str, ...], str, Any]:
     return tuple(), "", item
 
 
-def _lifecycle_payload_with_planning_refresh(
+async def _lifecycle_payload_with_planning_refresh(
     workspace: str | None,
     fallback: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
@@ -225,7 +229,7 @@ def _lifecycle_payload_with_planning_refresh(
         payload = application_lifecycle_payload(lifecycle)
         payload["extensions"] = {
             **dict(payload.get("extensions") or {}),
-            "planningRefresh": resolve_planning_refresh_state(workspace),
+            "planningRefresh": await prioritize_checkpoint_confirmation(workspace, resolve_planning_refresh_state(workspace)),
         }
         return payload
     except (OSError, TypeError, ValueError):
@@ -433,11 +437,21 @@ def build_workflow_ag_ui_stream(
     """以 AG-UI SSE 事件流运行或取消一次主工作流请求。"""
 
     encoder = EventEncoder(accept or "text/event-stream")
-    workflow_inputs = (
-        native_recovery_context.workflow_inputs()
-        if native_recovery_context is not None
-        else workflow_run_inputs(payload)
-    )
+    input_error: ValueError | None = None
+    try:
+        workflow_inputs = (
+            native_recovery_context.workflow_inputs()
+            if native_recovery_context is not None
+            else workflow_run_inputs(payload)
+        )
+    except ValueError as exc:
+        # 确认门等输入校验错误也在 AG-UI 生命周期内收口，不能误报 Backend 不可用。
+        input_error = exc
+        workflow_inputs = {
+            "thread_id": payload.get("threadId"),
+            "run_id": payload.get("runId"),
+            "cancel_run_id": "",
+        }
     thread_id = workflow_inputs["thread_id"] or str(uuid4())
     run_id = workflow_inputs["run_id"] or f"workflow-{uuid4().hex[:12]}"
     resume_values = workflow_inputs.get("resume_values")
@@ -471,6 +485,10 @@ def build_workflow_ag_ui_stream(
     async def stream() -> AsyncIterator[str]:
         events: list[dict[str, Any]] = []
         result: dict[str, Any] = {}
+        failed_run = False
+        failure_drained = True
+        failure_error: Exception | None = None
+        graph_stream: AsyncIterator[Any] | None = None
         workspace_lease: WorkspaceRunLease | None = (
             native_recovery_context.workspace_lease
             if native_recovery_context is not None
@@ -510,7 +528,7 @@ def build_workflow_ag_ui_stream(
         durable_execution_started = native_recovery_context is not None
         workflow_lifecycle_owned = bool(
             native_recovery_context is not None
-            and native_recovery_context.source_execution.execution_kind == "workbench"
+            and native_recovery_context.child_execution.execution_kind == "workbench"
             and native_recovery_context.lifecycle_payload is not None
         )
         task = asyncio.current_task()
@@ -534,6 +552,10 @@ def build_workflow_ag_ui_stream(
         )
 
         try:
+            if native_recovery_context is not None:
+                native_recovery_context.runtime_started = True
+            if input_error is not None:
+                raise input_error
             request = workflow_inputs["request"]
             if not request:
                 raise ValueError(
@@ -584,10 +606,8 @@ def build_workflow_ag_ui_stream(
                 await application_planning_run_lock_instance.acquire()
                 application_planning_run_lock_acquired = True
             if native_recovery_context is None:
-                await cleanup_workflow_checkpoints(
-                    workspace=workspace,
-                    project_id=project_id,
-                )
+                from app.services.execution_cleanup import best_effort_checkpoint_housekeeping
+                await best_effort_checkpoint_housekeeping(workspace, project_id)
             resume_from = workflow_inputs.get("resume_from") or None
             phase_review_files: list[str] | None = (
                 [] if resume_from in {"test_phase_confirmation", "review_phase_confirmation"} else None
@@ -800,6 +820,11 @@ def build_workflow_ag_ui_stream(
                 "active_run_id": run_id,
             }
             initial_state.update(resume_values)
+            business_request = await control_business_request(active_graph, workspace or "", thread_id, resume_values)
+            if business_request:
+                # 任务计划/阶段确认和按钮文案不能覆盖下次失败重试使用的原提问。
+                request = business_request
+                initial_state["request"] = business_request
             if (
                 native_recovery_context is None
                 and workflow_scope == "application_planning"
@@ -807,8 +832,15 @@ def build_workflow_ag_ui_stream(
                 and not isinstance(application_planning_interaction, dict)
             ):
                 # 显式阶段重试沿用服务端上一轮要求，不能把“继续执行”提示覆盖为业务输入。
+                from app.services.stage_artifacts import load_stage_artifacts
+                initial_state["workspace"] = workspace
+                current_artifacts = load_stage_artifacts(initial_state, "technical_planning_begin")
+                initial_state.update(current_artifacts)
+                current_lifecycle = load_application_lifecycle(workspace) if workspace else None
                 initial_state.update(prepare_technical_planning_retry(
-                    checkpoint_values,
+                    {**initial_state,
+                     "request": checkpoint_values.get("request") or initial_state["request"],
+                     "active_run_id": current_lifecycle.active_run_id if current_lifecycle else ""},
                     new_request=technical_planning_revision.request if technical_planning_revision else None,
                 ))
             if entity_test_entry_id:
@@ -850,6 +882,12 @@ def build_workflow_ag_ui_stream(
                 application_planning_interaction
             ) or _workflow_start_node(resume_from, workflow_scope)
             current_phase = first_node_name
+            if workflow_inputs.get("revision_continuation_consume") is not None:
+                from app.services.revision_continuation_handoff import persist_revision_build_entry
+
+                # 原提问和真实开发入口先进入 checkpoint，再原子消费凭据并登记执行。
+                await persist_revision_build_entry(active_graph, inputs=workflow_inputs, state=initial_state,
+                    thread_id=thread_id, run_id=run_id)
             if not workflow_scope and native_recovery_context is None:
                 # 独立创建规划 Graph 只维护创建阶段生命周期，不能登记为工作台开发执行。
                 lifecycle_payload = begin_workflow_lifecycle(
@@ -959,6 +997,10 @@ def build_workflow_ag_ui_stream(
                     "langsmith_enabled": observability["langsmith"]["enabled"],
                 },
             }
+
+            if native_recovery_context is not None and native_recovery_context.restart_node:
+                # 新执行必须保留空分支身份，不能被默认 thread 配置重新合并旧 State。
+                config["configurable"] = dict(native_recovery_context.fork_config["configurable"])
 
             # Recovery 记录是独立旁路：只在确认即将进入真实 Graph 后登记，且任何写入
             # 失败都由服务层降级为 warning，不得改变现有 Workflow 控制流。
@@ -1171,7 +1213,7 @@ def build_workflow_ag_ui_stream(
             tool_indexes: dict[int, str] = {}
 
             graph_input: dict[str, Any] | Command[Any] | None = (
-                None if native_recovery_context is not None else initial_state
+                None if native_recovery_context is not None and not native_recovery_context.restart_node else initial_state
             )
             if (
                 native_recovery_context is None
@@ -1235,7 +1277,8 @@ def build_workflow_ag_ui_stream(
                         # 外层 Runtime 负责统一处理 Graph 异常或取消；这里仅回收 producer。
                         pass
 
-            async for stream_item in buffered_graph_stream():
+            graph_stream = buffered_graph_stream()
+            async for stream_item in graph_stream:
                 namespace, stream_mode, chunk = _workflow_stream_chunk(stream_item)
                 if namespace and stream_mode != "custom":
                     continue
@@ -1542,7 +1585,7 @@ def build_workflow_ag_ui_stream(
                             # 首个 PlanningRun progress 只会在 Regenerate 已消费 A、或首轮
                             # generation 尚无 Pending 后出现；此时显式广播 none/idle，
                             # 让前端清掉旧 projection，而不是继续展示 Confirmation A。
-                            refreshed_lifecycle = _lifecycle_payload_with_planning_refresh(
+                            refreshed_lifecycle = await _lifecycle_payload_with_planning_refresh(
                                 workspace,
                                 lifecycle_payload,
                             )
@@ -2281,6 +2324,15 @@ def build_workflow_ag_ui_stream(
             if lifecycle_payload is not None and workflow_scope != "application_planning":
                 result["lifecycle"] = lifecycle_payload
             summary = _workflow_summary(result, events)
+            if durable_execution_status(result=result, summary=summary).value == "failed":
+                failed_run = True
+                # 正常返回的业务失败也必须等待残留线程和命令退出，才发布可重试终态。
+                failure_drained = await wait_failed_run(run_id)
+                released = release_failed_execution_resources(workspace, run_id) if failure_drained else None
+                if released is not None and workflow_lifecycle_owned:
+                    lifecycle_payload = application_lifecycle_payload(released)
+                    result["lifecycle"] = lifecycle_payload
+                    yield encoder.encode(CustomEvent(name="application-lifecycle", value=lifecycle_payload))
             if durable_execution_started:
                 await best_effort_recovery_observation(
                     operation="execution.finished",
@@ -2382,6 +2434,10 @@ def build_workflow_ag_ui_stream(
 
             # 只读取同一 Workflow Run 的结构化失败；模型主失败和规划逐轮原因各自归因。
             structured_failure = None
+            from app.services.stage_prerequisites import StagePrerequisiteError
+            if isinstance(exc, StagePrerequisiteError):
+                # 外层仅发布业务说明，原文件和解析原因通过 failureDiagnostic 留在详情。
+                structured_failure = classify_execution_failure(exc, operation=current_phase)
             stale_planning_failure = (
                 isinstance(exc, DagPlanningError)
                 and exc.snapshot is not None
@@ -2408,7 +2464,8 @@ def build_workflow_ag_ui_stream(
             if stale_planning_failure:
                 safe_error_message = "执行计划生成失败，未能确认本次错误。"
             elif structured_failure is not None:
-                safe_error_message = structured_failure.diagnostic_message or "模型调用失败，未能确定具体原因。"
+                safe_error_message = (structured_failure.user_message or structured_failure.diagnostic_message
+                                      or "模型调用失败，未能确定具体原因。")
             else:
                 safe_error_message = sanitize_failure_diagnostic(exc) or type(exc).__name__
             authoritative_node = None
@@ -2417,6 +2474,18 @@ def build_workflow_ag_ui_stream(
                 exc,
                 (DurableExecutionRunConflictError, WorkflowRunAlreadyActiveError),
             )
+            if not gate_blocked and not run_id_conflict and (durable_execution_started or workflow_lifecycle_owned):
+                failed_run = True
+                failure_error = exc
+                yield encoder.encode(CustomEvent(name="workflow.cleanup", value={
+                    "runId": run_id, "status": "running", "message": "执行失败，正在停止后台工作并释放占用。",
+                }))
+                # 先取消进程再关闭 producer；前台有界等待，后台保留实际退出与释放责任。
+                failure_drained = await wait_failed_run(
+                    run_id, graph_stream.aclose() if graph_stream is not None else None,
+                )
+                if not failure_drained:
+                    safe_error_message += " 后台工作仍在退出；可点击重试等待清理完成，持续无法退出时请重启 Backend 后重试。"
             blocked_scope: dict[str, Any] = {}
             blocked_target: dict[str, str] = {}
             if gate_blocked:
@@ -2452,10 +2521,15 @@ def build_workflow_ag_ui_stream(
                 )
                 # Regenerate 的旧 Pending 已在服务端提交点消费；失败终帧必须再次按磁盘
                 # 计算 refresh，禁止前端沿用 A 或从失败 execution 合成伪 Pending。
-                lifecycle_payload = _lifecycle_payload_with_planning_refresh(
+                lifecycle_payload = await _lifecycle_payload_with_planning_refresh(
                     workspace,
                     lifecycle_payload,
                 )
+                released = release_failed_execution_resources(workspace, run_id) if failure_drained else None
+                if released is not None:
+                    lifecycle_payload = await _lifecycle_payload_with_planning_refresh(
+                        workspace, application_lifecycle_payload(released),
+                    )
             error_code = (
                 None if stale_planning_failure
                 else structured_failure.code if structured_failure is not None
@@ -2582,12 +2656,12 @@ def build_workflow_ag_ui_stream(
                 visual_payload=failed_payload,
             ):
                 yield frame
-            if gate_blocked:
+            if gate_blocked or input_error is not None:
                 yield encoder.encode(
                     TextMessageContentEvent(messageId=message_id, delta=safe_error_message)
                 )
             yield encoder.encode(TextMessageEndEvent(messageId=message_id))
-            if gate_blocked:
+            if gate_blocked or input_error is not None:
                 yield encoder.encode(RunFinishedEvent(
                     threadId=thread_id, runId=run_id,
                     result=jsonable_encoder({"workflow": failed_payload, "result": result}),
@@ -2600,17 +2674,37 @@ def build_workflow_ag_ui_stream(
                 )
             )
         finally:
-            # 所有终态先停止旁路心跳，再释放任务注册及工作区占用。
-            await stop_execution_heartbeat(heartbeat_task)
-            workflow_run_registry.unregister(run_id, task)
-            if workspace_lease is not None:
-                workspace_lease.release()
-            if (
-                application_planning_run_lock_instance is not None
-                and application_planning_run_lock_acquired
-            ):
-                # 取消、预校验异常和 Graph 异常都走这里，不能把同一 thread 永久锁死。
-                application_planning_run_lock_instance.release()
+            async def persist_failed_cleanup() -> None:
+                """原失败落盘与最终释放分开，失败补写不占住已退出的运行登记。"""
+                if workflow_lifecycle_owned and failure_error is not None:
+                    current = load_application_lifecycle(workspace) if workspace else None
+                    execution = current.active_executions.get(run_id) if current else None
+                    if execution is not None and execution.status.value != "failed":
+                        fail_workflow_lifecycle(workspace, run_id=run_id, phase=current_phase, error=failure_error)
+                release_failed_execution_resources(workspace, run_id)
+                if failure_error is not None and durable_execution_started and workspace:
+                    await observe_drained_failure(workspace=workspace, run_id=run_id, thread_id=thread_id,
+                        workflow_scope=workflow_scope, graph=active_graph, error=failure_error)
+                elif durable_execution_started:
+                    await observe_execution_finished(workspace=workspace, run_id=run_id, thread_id=thread_id,
+                        workflow_scope=workflow_scope,
+                        status=durable_execution_status(result={"status": "failed"}, summary={}))
+
+            async def release_run_ownership() -> None:
+                """先等真实工作退出，再独立补写终态及释放每层进程内持有。"""
+                from app.services.execution_cleanup import retry_cleanup_persistence, finalize_runtime_ownership
+                if failed_run:
+                    await drain_failed_run(run_id)
+                try:
+                    if failed_run:
+                        await retry_cleanup_persistence(persist_failed_cleanup)
+                finally:
+                    await finalize_runtime_ownership(heartbeat=heartbeat_task,
+                        unregister=lambda: workflow_run_registry.unregister(run_id, task),
+                        lease=workspace_lease,
+                        planning_lock=application_planning_run_lock_instance if application_planning_run_lock_acquired else None)
+
+            await shield_run_cleanup(release_run_ownership())
 
     return stream()
 

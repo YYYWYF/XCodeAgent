@@ -1138,6 +1138,54 @@ def _fake_code_change_set() -> dict:
 
 
 class WorkflowAgUiStreamTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """隔离固定测试工作区的 durable 数据库，允许同一组 Run ID 重复运行。"""
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        roots: dict[str, int] = {}
+
+        def isolated_database(workspace: str | Path) -> Path:
+            """同一测试内保留工作区隔离及持久化语义，不读取上次测试记录。"""
+
+            key = str(Path(workspace).resolve())
+            index = roots.setdefault(key, len(roots))
+            return Path(directory.name) / str(index) / "execution-recovery.sqlite"
+
+        database_patch = patch(
+            "app.persistence.execution_recovery.execution_recovery_db_path",
+            side_effect=isolated_database,
+        )
+        database_patch.start()
+        self.addCleanup(database_patch.stop)
+        cleanup_patch = patch(
+            "app.services.execution_cleanup.best_effort_checkpoint_housekeeping",
+            new=AsyncMock(return_value=None),
+        )
+        cleanup_patch.start()
+        self.addCleanup(cleanup_patch.stop)
+
+    def test_invalid_confirmation_debug_input_finishes_ag_ui_without_graph(self) -> None:
+        """调试误选确认门应返回业务错误并收口，不能抛出 HTTP 500 或启动 Graph。"""
+
+        async def collect() -> list[str]:
+            """收集输入校验失败的完整 AG-UI 生命周期。"""
+
+            return [frame async for frame in build_workflow_ag_ui_stream(
+                graph=object(),
+                payload={
+                    "threadId": "invalid-confirm-thread",
+                    "runId": "invalid-confirm-run",
+                    "forwardedProps": {"resumeFrom": "acceptance_phase_confirmation"},
+                },
+            )]
+
+        frames = "\n".join(asyncio.run(collect()))
+        self.assertIn("只能通过 clarificationAnswers", frames)
+        for event in ("RUN_STARTED", "TEXT_MESSAGE_START", "TEXT_MESSAGE_END", "STATE_SNAPSHOT", "RUN_FINISHED"):
+            self.assertIn(event, frames)
+        self.assertNotIn('"type":"RUN_ERROR"', frames)
+
     def test_workspace_inspection_projects_safe_structured_summary(self) -> None:
         """工作区检查详情应包含识别结果，但不能暴露绝对缓存路径或哈希。"""
 
@@ -1417,16 +1465,6 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
 
         self.assertEqual(summary["phase"], "technical_planning")
         self.assertNotIn("requirementsConfirmed", summary)
-
-    def setUp(self) -> None:
-        self.cleanup_patcher = patch(
-            "app.protocols.workflow.runtime.cleanup_workflow_checkpoints",
-            new=AsyncMock(return_value=None),
-        )
-        self.cleanup_patcher.start()
-
-    def tearDown(self) -> None:
-        self.cleanup_patcher.stop()
 
     def test_launch_project_routes_to_acceptance_review_in_visual_timeline(self) -> None:
         """验证验收子图启动成功后预测下一节点为 acceptance_review。"""

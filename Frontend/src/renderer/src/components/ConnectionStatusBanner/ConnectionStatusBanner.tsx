@@ -53,7 +53,7 @@ export default function ConnectionStatusBanner({
           onClick={onReconnect}
           type="default"
         >
-          重试
+          重新同步
         </Button>
       ) : null}
     </section>

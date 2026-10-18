@@ -1750,7 +1750,7 @@ async def list_recovery_projection_candidates(
     *,
     limit: int = 16,
 ) -> list[DurableExecutionRecord]:
-    """只读取没有正式恢复 child 的 FAILED/INTERRUPTED execution 叶子。"""
+    """读取未主动结束的执行索引，业务状态统一由 checkpoint 解释。"""
 
     await initialize_execution_recovery_store(workspace)
     bounded_limit = max(1, min(int(limit), 128))
@@ -1763,7 +1763,7 @@ async def list_recovery_projection_candidates(
                    e.started_at, e.updated_at, e.ended_at, e.owner_session_id,
                    e.failure_json
             FROM execution_records AS e
-            WHERE e.status IN (?, ?)
+            WHERE e.status IN (?, ?, ?, ?)
               AND NOT EXISTS (
                   SELECT 1
                   FROM recovery_attempts AS a
@@ -1776,6 +1776,8 @@ async def list_recovery_projection_candidates(
             (
                 DurableExecutionStatus.INTERRUPTED.value,
                 DurableExecutionStatus.FAILED.value,
+                DurableExecutionStatus.RUNNING.value,
+                DurableExecutionStatus.AWAITING_USER.value,
                 RecoveryAttemptStatus.FAILED_PRESTART.value,
                 bounded_limit,
             ),

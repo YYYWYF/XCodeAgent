@@ -341,18 +341,18 @@ def test_phase_confirmation(state: ProjectState) -> dict:
     if build_summary is None:
         return {
             "phase": "test_phase_confirmation",
-            "status": "failed",
-            "message": "Build 尚未完成，不能进入测试阶段。",
-            "error": "只有 Build 完成后才能进入测试阶段确认。",
+            "status": "in_progress",
+            "message": "重新核对并完成当前构建产物。",
+            "integration_next_action": "build",
             "test_target": target,
             "timeline": ["test_phase_confirmation"],
         }
     if state.get("unit_test_gate_passed") is not True:
         return {
             "phase": "test_phase_confirmation",
-            "status": "failed",
-            "message": "单元测试门禁尚未完成，不能进入测试阶段。",
-            "error": "只有单元测试通过或明确跳过后才能进入测试阶段确认。",
+            "status": "in_progress",
+            "message": "重新执行当前单元测试门禁。",
+            "integration_next_action": "unit_test",
             "test_target": target,
             "timeline": ["test_phase_confirmation"],
         }

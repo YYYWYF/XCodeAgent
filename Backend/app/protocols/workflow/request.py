@@ -36,7 +36,7 @@ from app.workspace.task_documents import load_build_task_plan_json
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 from app.services.build_task_planner import tasks_from_build_task_plan
 from app.services.application_revision_lifecycle import (
-    consume_revision_continuation,
+    validate_revision_continuation,
     submit_revision_impact,
 )
 from app.services.application_lifecycle import load_application_lifecycle
@@ -257,7 +257,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
                 failed_node_reentry_target(ended_resume.execution.phase) if ended_resume.source_failed else ended_resume.execution.phase,
                 workflow_scope=workflow_scope,
             )
-    if workflow_action == "retry_failed_tasks":
+    if workflow_action == "start_modified_testing":
+        # 二次修改已在独立 Graph 完成并释放占用；这是新测试执行，不恢复旧确认或旧质量结果。
+        resume_from = "integration_test"
+        resume_values_from_state = {}
+        resume_state = None
+    elif workflow_action == "retry_failed_tasks":
         raise ValueError(
             "retry_failed_tasks 入口已更新，请刷新当前恢复状态并使用上方恢复卡片。"
         )
@@ -543,7 +548,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             detail_target_type = "endpoint"
     if workflow_action == "continue_revision_build":
         assert revision_continuation is not None
-        active_revision = consume_revision_continuation(
+        active_revision = validate_revision_continuation(
             workspace,
             change_id=revision_continuation.change_id,
             token=revision_continuation.token,
@@ -637,8 +642,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         forwarded_props=forwarded_props,
         resume_state=resume_state,
     )
+    from app.services.workflow_input_artifacts import pregraph_artifact_values
+    artifact_entry_node = resume_from or "api_design_readiness_gate"
     project_plan_start_values = (
-        _project_plan_start_values(workspace, selected_page_id=selectedPageId)
+        pregraph_artifact_values(workspace, artifact_entry_node,
+            lambda: _project_plan_start_values(workspace, selected_page_id=selectedPageId))
         if workflow_scope not in APPLICATION_PLANNING_SCOPES
         else {}
     )
@@ -703,7 +711,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     resume_values = {
         **resume_values_from_state,
         **project_plan_start_values,
-        **_debug_resume_values(debug_state, workspace=workspace),
+        **pregraph_artifact_values(workspace, artifact_entry_node,
+            lambda: _debug_resume_values(debug_state, workspace=workspace)),
         **({"owner_session_id": owner_session_id} if owner_session_id else {}),
         "retry_failed_tasks": (
             workflow_action == "retry_failed_tasks" and resume_from == "build"
@@ -862,6 +871,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "request": request,
         "workflow_action": workflow_action,
+        # 凭据仅留在当前请求适配器内，不写入公开 Workflow 或开发 checkpoint。
+        "revision_continuation_consume": (
+            revision_continuation.model_dump() if workflow_action == "continue_revision_build" else None
+        ),
         "development_continuation_consume": (
             development_continuation.model_dump()
             if workflow_action == "continue_after_entity_binding"
@@ -1166,6 +1179,7 @@ def _supported_workflow_action(value: str) -> str:
         value
         if value
         in {
+            "start_modified_testing",
             "retry_failed_tasks",
             "retry_code_review",
             "start_revision",

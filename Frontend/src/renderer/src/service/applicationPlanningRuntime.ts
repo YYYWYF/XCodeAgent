@@ -13,7 +13,6 @@ import {
 } from './agUiAgent'
 import {
   applicationPlanningDisplayStatus,
-  planningMutationBlocked,
   type ApplicationPlanningCurrentEvent,
   type ApplicationPlanningCurrentState
 } from './activeApplicationPlanning'
@@ -25,9 +24,9 @@ import {
   type WorkflowRevisionContinuationHandoff
 } from './applicationPagePlanning'
 import { isAuthenticationFailure } from './authentication'
+import { endApplicationPlanningExecution } from './applicationLifecycle'
 import { planningWorkflowCanPublishDuringRun } from './applicationPlanningWorkflowState'
 import {
-  ApplicationPlanningCheckpointNotFoundError,
   readApplicationPlanningAuthoritativeSnapshot,
   type ApplicationPlanningAuthoritativeSnapshot,
   type ApplicationPlanningRecoveryActionPlan
@@ -64,11 +63,13 @@ export type ApplicationPlanningRuntimeDependencies = {
   ) => Pick<AgUiChatSession, 'sendMessage'>
   /** 测试可替换保存服务；生产仍使用原有 AG-UI 保存入口。 */
   saveRequirementSpecDraft?: typeof saveRequirementSpecDraft
+  /** 结束控制测试可替换 AG-UI 调用，生产必须完成后端修订收口。 */
+  endPlanningExecution?: typeof endApplicationPlanningExecution
   /** 测试可替换权威读取；生产使用独立 applicationPlanningRecovery client。 */
   readAuthoritativeSnapshot?: (
     application: ApplicationPlanningCurrentState['application'],
     threadId: string
-  ) => Promise<ApplicationPlanningAuthoritativeSnapshot>
+  ) => Promise<ApplicationPlanningAuthoritativeSnapshot | undefined>
 }
 
 export type PlanningReconcileOutcome =
@@ -98,6 +99,7 @@ export class ApplicationPlanningRuntime {
   private completed = false
   private disposed = false
   private runToken = 0
+  private planningEndAcknowledgement?: { sourceToken: number; result: Promise<boolean> }
   private runActive = false
   private reconcilePromise?: Promise<PlanningReconcileOutcome>
   private streamingContent = ''
@@ -152,13 +154,6 @@ export class ApplicationPlanningRuntime {
       threadId: this.threadId,
       error: planningRuntimeError(reason, fallback)
     })
-  }
-
-  /** 阻止未同步状态继续发起可能重复消费用户动作的 Graph 写请求。 */
-  private assertMutationAllowed(): void {
-    if (planningMutationBlocked(this.requireCurrentState())) {
-      throw new Error('当前规划状态尚未与后端完成同步，请先重新同步状态。')
-    }
   }
 
   /** 判断 lifecycle 是否仍是唯一允许在 checkpoint 缺失时首次启动 Graph 的初始状态。 */
@@ -256,11 +251,12 @@ export class ApplicationPlanningRuntime {
       threadId: this.threadId
     })
     try {
-      const currentState = this.requireCurrentState()
-      if (currentState.transportState === 'running' || currentState.transportState === 'reconciling') {
-        this.assertMutationAllowed()
-      }
       const outcome = await this.reconcileCurrentState()
+      // 首次生成尚未创建 checkpoint 时，显式重试可以重新发起；已有产物仍只走后端恢复合同。
+      if (outcome.status === 'checkpoint_missing' && this.isFreshInitialState(this.requireCurrentState())) {
+        await this.runPlanning(buildApplicationPlanningRequest(this.requireCurrentState().application))
+        return
+      }
       if (outcome.status !== 'recovered') return
       const current = this.requireCurrentState()
       const recovery = current.recovery
@@ -279,8 +275,10 @@ export class ApplicationPlanningRuntime {
         return
       }
       const plan = recovery?.recoveryActionPlan
-      if (!plan) return
-      this.assertMutationAllowed()
+      if (!plan) {
+        if (['awaiting_user', 'running', 'completed'].includes(recovery?.classification || '')) return
+        throw new Error('规划状态异常：后端未提供可执行的重试入口，请检查当前规划状态。')
+      }
       if (plan.status === 'needs_attention') {
         await this.executeRecoveryRetry(plan)
         return
@@ -295,7 +293,6 @@ export class ApplicationPlanningRuntime {
   /** 新迭代发起后用户输入需求，用用户输入的消息启动 planning workflow。 */
   async startIterationPlanning(userRequest: string): Promise<void> {
     const current = this.requireCurrentState()
-    this.assertMutationAllowed()
     if (workflowConfirmation(current.workflow)) return
     const request = userRequest.trim() || buildApplicationPlanningRequest(current.application)
     await this.runPlanning(request)
@@ -307,7 +304,6 @@ export class ApplicationPlanningRuntime {
     if (outcome.status !== 'recovered') return
     const current = this.requireCurrentState()
     if (current.lifecycle.activeFormalRevision?.status !== 'template_reconcile_failed') return
-    this.assertMutationAllowed()
     await this.runPlanning(
       buildApplicationPlanningRequest(current.application),
       undefined,
@@ -316,9 +312,8 @@ export class ApplicationPlanningRuntime {
     )
   }
 
-  /** 正式设计修订直接使用原 Planning 会话发送用户请求。 */
+  /** 正式设计或技术修订统一使用原 Planning Runtime 更新当前规划并发送用户请求。 */
   async startDesignRevision(input: WorkflowDesignStageRevisionStart): Promise<void> {
-    this.assertMutationAllowed()
     await this.runPlanning(input.request, undefined, input)
   }
 
@@ -336,7 +331,6 @@ export class ApplicationPlanningRuntime {
       return
     }
     let current = this.requireCurrentState()
-    this.assertMutationAllowed()
     if (workflow.threadId !== current.threadId) throw new Error('当前规划确认卡已经失效。')
     if ((this.runActive || this.session.hasActiveRun()) && designChangeRequest?.trim()) {
       throw new Error('当前设计正在生成，完成后即可发送新的调整。')
@@ -412,7 +406,6 @@ export class ApplicationPlanningRuntime {
   async saveRequirementSpec(
     spec: Record<string, unknown>
   ): Promise<Awaited<ReturnType<typeof saveRequirementSpecDraft>>> {
-    this.assertMutationAllowed()
     const current = this.requireCurrentState()
     const save = this.dependencies.saveRequirementSpecDraft ?? saveRequirementSpecDraft
     const saved = await save(current.application.workspaceRoot || '', spec, current.threadId)
@@ -423,8 +416,47 @@ export class ApplicationPlanningRuntime {
 
   /** 停止 transport 后等待服务端取消落盘，并刷新 Canonical 生命周期。 */
   async stop(): Promise<void> {
-    this.requireCurrentState()
+    const current = this.requireCurrentState()
     this.technicalMessageAbort?.abort()
+    if (current.lifecycle.activeFormalRevision) {
+      // 旧请求可能先于 End 回执断开；等服务端确认后再决定是否向来源会话报错。
+      let acknowledgeEnd!: (ended: boolean) => void
+      this.planningEndAcknowledgement = {
+        sourceToken: this.runToken,
+        result: new Promise<boolean>((resolve) => { acknowledgeEnd = resolve })
+      }
+      // 结束正式修订时先令旧流回调失效，迟到的取消/失败不能覆盖结束回执。
+      const token = ++this.runToken
+      this.dispatch({ type: 'planning_end_started', applicationId: this.applicationId, threadId: this.threadId })
+      try {
+        const end = this.dependencies.endPlanningExecution ?? endApplicationPlanningExecution
+        const lifecycle = await end(current.application, this.threadId)
+        // Backend 已确认真实退出及清锁；旧 transport 的收口异常不能撤销成功的 End。
+        await this.session.stop().catch(() => undefined)
+        if (!this.isCurrentRun(token)) return
+        const message = '本轮设计任务已结束，已有文件已保留，可以新建会话继续修改。'
+        const workflow: WorkflowRunPayload = {
+          runId: current.workflow?.runId || current.lifecycle.activeRunId || 'planning-ended',
+          threadId: this.threadId, events: [], summary: { status: 'completed', phase: 'plan_control', lifecycle,
+            planControl: { action: 'end', status: 'ended', targetRunId: current.workflow?.runId || current.lifecycle.activeRunId } }
+        }
+        this.runActive = false
+        this.dispatch({ type: 'planning_ended', applicationId: this.applicationId, threadId: this.threadId, lifecycle, workflow })
+        this.dependencies.publishContent(message)
+        this.dependencies.publishWorkflow(workflow)
+        acknowledgeEnd(true)
+      } catch (reason) {
+        this.reportRecoveryActionFailure(reason, '结束设计任务失败，请重试结束任务。')
+        throw reason
+      } finally {
+        acknowledgeEnd(false)
+        if (this.isCurrentRun(token)) {
+          this.runActive = false
+          this.dispatch({ type: 'run_settled', applicationId: this.applicationId, threadId: this.threadId })
+        }
+      }
+      return
+    }
     try {
       await this.session.stop()
       const lifecycle = await waitForStoppedPlanningLifecycle(
@@ -532,6 +564,11 @@ export class ApplicationPlanningRuntime {
         this.dependencies.readAuthoritativeSnapshot ?? readApplicationPlanningAuthoritativeSnapshot
       const snapshot = await read(current.application, this.threadId)
       if (!this.isCurrentRun(token)) throw new Error('当前 Planning Runtime 已失效。')
+      if (!snapshot) {
+        this.dispatch({ type: 'reconcile_checkpoint_missing', applicationId: this.applicationId,
+          threadId: this.threadId, requestGeneration: token })
+        return { status: 'checkpoint_missing' }
+      }
       if (
         snapshot.workflow.threadId !== this.threadId ||
         snapshot.lifecycle.application.id !== this.applicationId
@@ -554,25 +591,6 @@ export class ApplicationPlanningRuntime {
       if (!this.isCurrentRun(token)) {
         return { status: 'uncertain', error: '当前 Planning Runtime 已失效。' }
       }
-      if (reason instanceof ApplicationPlanningCheckpointNotFoundError) {
-        if (this.isFreshInitialState(current)) {
-          this.dispatch({
-            type: 'reconcile_checkpoint_missing',
-            applicationId: this.applicationId,
-            threadId: this.threadId,
-            requestGeneration: token
-          })
-        } else {
-          this.dispatch({
-            type: 'reconcile_failed',
-            applicationId: this.applicationId,
-            threadId: this.threadId,
-            error: reason.message,
-            requestGeneration: token
-          })
-        }
-        return { status: 'checkpoint_missing' }
-      }
       const error = planningRuntimeError(reason, PLANNING_SYNC_ERROR)
       this.dispatch({
         type: 'reconcile_failed',
@@ -592,15 +610,7 @@ export class ApplicationPlanningRuntime {
     void _reason
     const outcome = await this.reconcileCurrentState()
     if (outcome.status === 'recovered') return 'recovered'
-    if (outcome.status === 'checkpoint_missing') {
-      this.dispatch({
-        type: 'reconcile_failed',
-        applicationId: this.applicationId,
-        threadId: this.threadId,
-        error: PLANNING_SYNC_ERROR,
-        requestGeneration: this.runToken
-      })
-    }
+    if (outcome.status === 'checkpoint_missing') return 'recovered'
     return 'uncertain'
   }
 
@@ -754,6 +764,12 @@ export class ApplicationPlanningRuntime {
             messageText,
             this.planningRunOptions(latest, interaction, designRevision, workflowAction)
           )
+          // 入场拒绝也有完整 Workflow 终态；必须撤销未成功的交接，不能视为已转入设计。
+          if (designRevision && merged?.summary.status === 'failed') {
+            throw new AgUiRunError(merged.summary.message || '返回设计阶段失败，请重新确认。', {
+              workflow: merged, toolCalls: [], processSteps: []
+            })
+          }
           await this.handlePlanningResult(currentToken, merged)
         },
         {
@@ -765,6 +781,9 @@ export class ApplicationPlanningRuntime {
       )
     } catch (reason) {
       if (token === undefined || !this.isCurrentRun(token)) {
+        const end = this.planningEndAcknowledgement
+        // 主动结束成功属于正常收口，不能让来源会话把取消误报成返回设计失败。
+        if (token !== undefined && end?.sourceToken === token && await end.result) return
         if (interaction || designRevision || workflowAction) throw reason
         return
       }
@@ -797,7 +816,11 @@ export class ApplicationPlanningRuntime {
       applicationPlanningInteraction: interaction,
       editorMode: 'frontend',
       originalRequest: buildApplicationPlanningRequest(current.application),
-      workflowAction: designRevision ? 'start_design_revision' : workflowAction,
+      workflowAction: designRevision
+        ? designRevision.impact.formalBranch === 'workbench_plan_revision'
+          ? 'start_technical_revision'
+          : 'start_design_revision'
+        : workflowAction,
       revisionRequest: designRevision
         ? {
             source: 'conversation_handoff',
@@ -821,7 +844,6 @@ export class ApplicationPlanningRuntime {
     operation: (token: number) => Promise<T>,
     options: { stopPrevious?: boolean; onToken?: (token: number) => void } = {}
   ): Promise<T> {
-    this.assertMutationAllowed()
     const previousRunActive = this.runActive || this.session.hasActiveRun()
     if (previousRunActive && !options.stopPrevious) {
       throw new Error('当前规划仍在执行，请稍后重试。')

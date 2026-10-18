@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from langgraph.graph import END, START
-from app.services.run_workers import WorkerStateGraph
+from app.services.stage_artifacts import ArtifactStateGraph as WorkerStateGraph
 
 from app.graph.nodes.direct_modification import (
     classify_direct_modification,
@@ -24,6 +24,7 @@ from app.services.workflow_reentry import SYNTHETIC_WORKFLOW_ENTRY_NODE, workflo
 
 
 _DIRECT_ENTRY_NODES = {
+    "classify_intent", "respond_conversation", "answer_workspace", "validate_direct_fix", "direct_modification_repair",
     "scan_workspace_code",
     "scan_change_impact_code",
     "execute_frontend",
@@ -196,6 +197,11 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
         SYNTHETIC_WORKFLOW_ENTRY_NODE,
         _route_direct_entry,
         {
+            "classify_intent": "classify_intent",
+            "respond_conversation": "respond_conversation",
+            "answer_workspace": "answer_workspace",
+            "validate_direct_fix": "validate_direct_fix",
+            "direct_modification_repair": "direct_modification_repair",
             "scan_workspace_code": "scan_workspace_code",
             "scan_change_impact_code": "scan_change_impact_code",
             "execute_frontend": "execute_frontend",

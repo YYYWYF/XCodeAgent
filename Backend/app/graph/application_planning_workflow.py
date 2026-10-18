@@ -6,7 +6,8 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, START
+from app.services.stage_artifacts import ArtifactStateGraph as StateGraph
 from langgraph.config import get_stream_writer
 
 from app.graph import nodes
@@ -84,74 +85,30 @@ def _route_start(state: ProjectState) -> str:
     """根据原创建规划 thread 的恢复点选择正常阶段或设计意图入口。"""
 
     resume_from = str(state.get("resume_from") or "").strip()
-    workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
-    lifecycle = load_application_lifecycle(workspace) if workspace else None
     if resume_from == "design_intent_analysis":
         return "design_intent_analysis"
     if (
         resume_from == "template_reconcile"
         and state.get("workflow_action") == "retry_template_reconcile"
-        and lifecycle is not None
-        and lifecycle.active_formal_revision is not None
-        and lifecycle.active_formal_revision.status == "template_reconcile_failed"
     ):
         # 专用重试必须复用已确认的 TechnicalPlan，不能重放旧确认动作。
         return "template_reconcile"
     if resume_from == "template_reconcile":
         raise ApplicationLifecycleConflictError("Template Reconcile 只能通过 retry_template_reconcile 动作重试。")
-    allowed_resume_stages = {
-        "requirements": {
-            ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
-            ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
-            ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
-        },
-        "product_planning": {
-            ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
-            ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
-        },
-        "ui_confirmation": {
-            ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
-            ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
-        },
-        "planning_stage_entry": {
-            ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
-        },
-        "technical_planning": {
-            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-        },
-        "technical_planning_begin": {
-            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-            ApplicationLifecycleStage.READY_FOR_WORKBENCH,
-        },
-        "technical_planning_generate": {
-            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-        },
-        "technical_planning_commit": {
-            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-        },
-        "technical_planning_confirm": {
-            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-        },
+    resume_nodes = {
+        "requirements", "product_planning", "ui_confirmation", "planning_stage_entry",
+        "technical_planning", "technical_planning_begin", "technical_planning_generate",
+        "technical_planning_commit", "technical_planning_confirm",
     }
-    if resume_from in allowed_resume_stages:
-        if (
-            lifecycle is not None
-            and lifecycle.initialization.stage
-            not in allowed_resume_stages[resume_from]
-        ):
-            raise ApplicationLifecycleConflictError(
-                "application_planning 恢复入口与 lifecycle 不匹配："
-                f"resume_from={resume_from}，"
-                f"lifecycle={lifecycle.initialization.stage.value}。"
-            )
+    if resume_from in resume_nodes:
+        # 明确的业务节点直接重执行，不以 Lifecycle 阶段判断是否允许重试。
         return "technical_planning_begin" if resume_from == "technical_planning" else resume_from
     if resume_from:
         raise ApplicationLifecycleConflictError(
             f"application_planning 不支持恢复入口：{resume_from}"
         )
+    workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
+    lifecycle = load_application_lifecycle(workspace) if workspace else None
     if (
         lifecycle is None
         or lifecycle.initialization.stage

@@ -248,10 +248,19 @@ class WorkflowRunRegistry:
             wait_run_workers, run_id, max(0.0, deadline - asyncio.get_running_loop().time()),
         )
         if not drained or processes or (task is not None and not task.done()):
+            if not ending and workspace_key:
+                from app.services.stopped_run_cleanup import continue_stopped_run_cleanup
+
+                # 控制等待预算到期不终止收口；迟到模型返回后由后台自动释放旧占用。
+                continue_stopped_run_cleanup(workspace_key, run_id, task)
             return "cancel_timeout"
         if not ending and _pending_confirmation_for_run(workspace_key, run_id) is not None:
             return "pending_confirmation"
         if workspace_key:
+            if not ending:
+                from app.services.stopped_run_cleanup import finish_stopped_run
+
+                await finish_stopped_run(workspace_key, run_id, task)
             source = await get_execution(workspace_key, run_id)
             if source is not None and getattr(source, "workflow_scope", None) == "conversation":
                 from app.domain.execution_recovery import DurableExecutionStatus
@@ -465,7 +474,7 @@ def build_workflow_cancellation_ag_ui_stream(
                 "Build DAG 已生成，当前进入待确认状态，请选择确认、重新生成或放弃。"
             ),
             "not_running": "目标 Workflow 已结束，无需停止。",
-            "cancel_timeout": "Workflow 未能在限定时间内停止，请稍后重试。",
+            "cancel_timeout": "正在等待本次后台工作退出，退出后会自动释放占用，无需重复点击暂停。",
         }[status]
         lifecycle = (
             _planning_lifecycle_payload(workspace)

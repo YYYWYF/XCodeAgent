@@ -56,6 +56,17 @@ export function workflowEndedPlanControl(workflow?: WorkflowRunPayload): boolean
   })
 }
 
+/** 结束事实只属于同一次执行，旧开发 Run 的结束不能遮住同 Thread 新测试的失败重试。 */
+export function workflowExecutionEnded(
+  workflow: WorkflowRunPayload | undefined,
+  lifecycle: ApplicationLifecycle | undefined
+): boolean {
+  if (workflowEndedPlanControl(workflow)) return true
+  if (!workflow || workflow.summary.status !== 'failed') return false
+  const ended = lifecycle?.endedExecutions?.[workflow.runId]?.execution
+  return ended?.runId === workflow.runId && ended.threadId === workflow.threadId
+}
+
 
 /** 判断 Workflow 是否承载 Build DAG 确认，统一兼容当前 AG-UI 投影位置。 */
 function isDagConfirmationWorkflow(workflow: WorkflowRunPayload): boolean {
@@ -183,6 +194,10 @@ export function workflowMessageInteractionAvailability(
   if (isDagConfirmationWorkflow(workflow)) {
     return workflowInteractionAvailability(workflow, lifecycle)
   }
+  // 后续暂停/继续消息不代表已消费确认；同一后端 Pending 仍有效就保留操作入口。
+  if (!isConversationWorkflow(workflow) && workflowInteractionAvailability(workflow, lifecycle) === 'active') {
+    return 'active'
+  }
   if (hasNewerMessage) return 'stale'
   if (conversationRevisionHandoffCommitted(workflow, lifecycle)) return 'stale'
   return locallyManaged ? 'active' : workflowInteractionAvailability(workflow, lifecycle)
@@ -276,7 +291,7 @@ export function deriveDisplayedPlanExecutionMode(
 ): PlanExecutionMode {
   if (requestRunning && workflowStatus === 'stopping') return 'stopping'
   if (
-    (!hasLifecycleSnapshot || execution) &&
+    !hasLifecycleSnapshot && !execution &&
     (workflowStatus === 'stopped' || workflowStatus === 'cancelled')
   ) {
     return 'stopped'
@@ -312,6 +327,10 @@ export function withWorkflowExecutionStatus(
   const lifecycle = workflow.summary.lifecycle
   const executionRunId = targetRunId || workflow.runId
   const execution = lifecycle?.activeExecutions?.[executionRunId]
+  // 正常最终回执已提交同 Run 的确认门时，迟到暂停意图不能改写该权威事实。
+  if (status === 'stopped' && workflow.summary.status === 'requires_user_input' &&
+    execution?.status === 'awaiting_user' && execution.threadId === workflow.threadId &&
+    execution.pendingInteraction && !execution.pendingInteraction.submittedAt) return workflow
   const nextLifecycle =
     lifecycle && execution
       ? {

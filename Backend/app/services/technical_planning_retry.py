@@ -33,8 +33,9 @@ def prepare_technical_planning_retry(
     """保留上次业务要求，以当前已有技术规划为基线重新进入原生成链路。"""
 
     interaction = state.get("application_planning_interaction") or {}
+    interaction_request = interaction.get("request") if interaction.get("action") in {"answer", "revise", "design_change"} else ""
     request = str(
-        interaction.get("request")
+        interaction_request
         or state.get("design_change_generation_request")
         or state.get("design_change_request")
         or state.get("request")
@@ -64,6 +65,9 @@ def prepare_technical_planning_retry(
         source_run_id = str(state.get("technical_plan_repair_source_run_id") or source_run_id)
     return {
         "request": request,
+        # 清空原 interaction 后，生成节点与恢复校验仍须读取同一笔已冻结的业务要求，
+        # 不能回退到更早一轮残留的 design_change_generation_request。
+        "design_change_generation_request": request,
         **({"design_change_request": request, "design_change_generation_request": request} if new_request is not None else {}),
         "technical_plan": baseline,
         "application_planning_recovery_boundary": application_planning_boundary_payload(

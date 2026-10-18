@@ -57,7 +57,7 @@ def _technical_request(state: ProjectState) -> str:
     """从当前交互或服务端设计变更上下文读取 TechnicalPlan 请求。"""
 
     interaction = state.get("application_planning_interaction")
-    if isinstance(interaction, dict) and interaction:
+    if isinstance(interaction, dict) and interaction.get("action") in {"answer", "revise", "design_change"}:
         return str(interaction.get("request") or "").strip()
     return str(
         state.get("design_change_generation_request")
@@ -131,7 +131,15 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
             thread_id=state.get("active_thread_id"), change_id=change_id or None,
             repair_source_run_id=repair_source,
         )
-    if operation is ApplicationPlanningOperation.REVISE and change_id:
+    # 需求/设计正式修订已经拥有自己的 revision，不得再次按技术专项修订入场。
+    active_revision = _lifecycle.active_formal_revision
+    design_revision = (
+        active_revision is not None
+        and active_revision.change_id == change_id
+        and active_revision.formal_branch.value == "design_stage_revision"
+        and active_revision.status == "design_planning"
+    )
+    if operation is ApplicationPlanningOperation.REVISE and change_id and not design_revision:
         target = state.get("change_target")
         if not isinstance(target, dict) or not target:
             raise ValueError("TechnicalPlan formal revision 缺少 change target。")

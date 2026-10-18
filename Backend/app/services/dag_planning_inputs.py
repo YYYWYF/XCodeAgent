@@ -8,6 +8,7 @@ from typing import Annotated
 from pydantic import AfterValidator, BeforeValidator, StringConstraints
 
 from app.services.build_task_reuse_contracts import ReuseFacts
+from app.services.task_input_freshness import task_covers_current_input
 from app.services.frozen_contract_catalog import (
     ContractCatalogBindingError,
     FormalContractSourceRef,
@@ -127,13 +128,18 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         from app.workspace.task_documents import build_task_plan_sha256
 
         units = {}
+        registry = self.base_confirmed_plan["task_registry"] if self.base_confirmed_plan is not None else {}
         for key, strategy in requirements.generation_strategy_by_unit.items():
             if strategy in {"model", "deterministic"} and not requirements.generation_requirements_by_unit[key]:
                 fail_requirement_input("PLANNING_EMPTY_GENERATION_STRATEGY", "空职责的生成策略不能创建可调度 Unit。", unit_ids=(key,))
+            # 本轮生成会替换直接输入过期的任务，不能向模型或进度声明这些旧任务仍被复用。
+            retained = tuple(task_id for task_id in self.reuse_facts.retained_task_ids_by_unit.get(key, ())
+                             if not (strategy in {"model", "deterministic"}
+                                     and not task_covers_current_input(registry[task_id], self.project_plan, self.build_context)))
             units[key] = UnitRunState.create(
                 unit_id=key, kind=self.skeleton_plan["build_units"][key]["kind"],
                 generation_strategy=strategy,
-                retained_task_ids=self.reuse_facts.retained_task_ids_by_unit.get(key, ()),
+                retained_task_ids=retained,
                 reusable_capabilities=tuple(self.reuse_facts.reusable_capabilities_by_unit.get(key, {})),
             )
         # 同一冻结输入只在新 Run 创建时派生名称，后续发布和重连均读取 Run。

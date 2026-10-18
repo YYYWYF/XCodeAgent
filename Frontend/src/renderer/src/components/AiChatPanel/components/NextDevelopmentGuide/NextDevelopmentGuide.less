@@ -4,14 +4,14 @@
   display: flex;
   min-width: 0;
   width: 100%;
-  padding: 18px 20px 12px;
+  padding: 22px 24px 16px;
   margin-top: 4px;
   flex-direction: column;
   gap: 0;
   color: var(--wb-text);
-  background: color-mix(in srgb, var(--wb-accent) 6%, var(--wb-canvas));
-  border: 1px solid var(--wb-border-strong);
-  border-radius: 12px;
+  background: linear-gradient(135deg, var(--wb-accent-soft), transparent 70%), var(--wb-canvas);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 18px;
 
   .ant-typography {
     color: var(--wb-text);
@@ -97,20 +97,45 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  > .ant-typography {
-    color: var(--wb-text-secondary);
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.@{class-prefix}-next-development-guide-heading-icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+  border-radius: 50%;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  font-size: 30px;
+}
+.@{class-prefix}-next-development-guide-heading-copy {
+  display: flex;
+  flex: 1 1 180px;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  > .ant-typography:first-child {
+    font-size: 20px;
+    line-height: 1.4;
+  }
+  > .ant-typography-secondary {
     font-size: 12px;
-    font-weight: 500;
   }
 }
 .@{class-prefix}-next-development-guide-status {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 48%;
+  max-width: 100%;
   min-width: 0;
-  color: var(--wb-text-secondary);
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--wb-development-completed) 22%, transparent);
+  border-radius: 8px;
+  color: var(--wb-development-completed);
+  background: color-mix(in srgb, var(--wb-development-completed) 8%, var(--wb-canvas));
   font-size: 12px;
   > span:last-child {
     overflow: hidden;
@@ -118,11 +143,47 @@
     white-space: nowrap;
   }
 }
+.@{class-prefix}-next-development-guide-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 20px;
+  > div {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    background: var(--wb-surface);
+    border: 1px solid var(--wb-border-soft);
+    border-radius: 12px;
+    > .anticon {
+      color: var(--wb-accent);
+      font-size: 20px;
+    }
+    > span:last-child {
+      min-width: 0;
+      color: var(--wb-text-secondary);
+      font-size: 12px;
+    }
+    strong {
+      display: block;
+      color: var(--wb-text);
+      font-size: 24px;
+      line-height: 1.4;
+      font-weight: 600;
+    }
+    small {
+      color: var(--wb-text-secondary);
+      font-size: 13px;
+      font-weight: 400;
+    }
+  }
+}
 .@{class-prefix}-next-development-guide-recommendation {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 0 18px;
+  padding: 20px 0;
 }
 .@{class-prefix}-next-development-guide .@{class-prefix}-next-development-guide-target {
   display: flex;
@@ -202,6 +263,15 @@
 @media (max-width: 600px) {
   .@{class-prefix}-next-development-guide {
     padding: 15px 16px 10px;
+  }
+  .@{class-prefix}-next-development-guide-status {
+    margin-left: 0;
+  }
+  .@{class-prefix}-next-development-guide-overview > div {
+    padding: 10px 8px;
+    gap: 5px;
+    flex-direction: column;
+    align-items: flex-start;
   }
   .@{class-prefix}-next-development-guide-recommendation {
     flex-wrap: wrap;

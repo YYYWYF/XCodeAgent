@@ -8,9 +8,37 @@ import type {
   WorkflowFormalRevisionBranch,
   WorkflowRevisionContinuation
 } from '../../../typings'
+import type { WorkflowRunPayload } from '../../../typings'
 import type { AgentChatMessage } from '../types'
 import type { SessionIdentity } from './sessionRuntime'
 import type { WorkbenchPhase } from '../../../workbenchPhase'
+import { sessionToRestoreForPhase } from './phaseSessionSelection'
+
+/** 正式交接使用原确认卡绑定的目标；无显式目标的应用对话不得传出空对象。 */
+export function revisionStartTarget(
+  workflow: WorkflowRunPayload,
+  lifecycle?: ApplicationLifecycle
+): Record<string, unknown> {
+  const pending = lifecycle?.pendingRevisionImpact
+  const boundTarget = pending?.interactionId === workflow.summary.revisionImpact?.interactionId
+    ? pending?.target : undefined
+  const candidates = [boundTarget, workflow.summary.target, workflow.state?.change_target]
+  return (candidates.find((target) => target && typeof target === 'object' &&
+    ['application', 'page', 'endpoint'].includes(String((target as Record<string, unknown>).type))) ||
+    { type: 'application' }) as Record<string, unknown>
+}
+
+/** 后端已授权续接后选择本机输出会话；来源历史缺失不影响续接资格。 */
+export function revisionContinuationOutputSession(
+  sessions: ChatSessionSummary[],
+  applicationId: string,
+  source: SessionIdentity | undefined,
+  continuation: WorkflowRevisionContinuation
+): ChatSessionSummary | undefined {
+  const applicationSessions = sessions.filter((session) => session.workflowId === applicationId)
+  return (source && revisionDevelopmentSessionForContinuation(applicationSessions, source, continuation)) ||
+    sessionToRestoreForPhase(applicationSessions, 'development')
+}
 
 /** 为一次已批准的 formal revision 创建独立前端会话身份。 */
 export function createFormalRevisionSessionContext(

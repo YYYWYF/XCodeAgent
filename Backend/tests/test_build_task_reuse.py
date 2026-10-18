@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from app.services.build_task_reuse import resolve_reuse_facts
 from app.services.build_task_reuse_contracts import ReuseFacts
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
+from app.services.build_unit_compiler import apply_unit_compilation
 from app.services.planning_frozen import freeze_json
 from app.workspace.task_documents import load_confirmed_build_task_plan, write_build_task_plan_json
 
@@ -76,6 +77,81 @@ def _inputs() -> dict:
 
 
 class BuildTaskReuseTests(unittest.TestCase):
+    def test_retained_projection_keeps_capabilities_and_owners_in_same_set(self) -> None:
+        """移除来源时同步移除能力与 Endpoint owner，原始事实不能被修改。"""
+
+        inputs = _inputs()
+        inputs["confirmed_plan"] = _plan(
+            _owner("users", "users-api", "users.list", provides=["users.api"]),
+            _owner("orders", "orders-api", "orders.list", provides=["orders.api"]),
+        )
+        facts = resolve_reuse_facts(**inputs)
+        before = facts.model_dump(mode="json")
+        projected = facts.retained_subset(("orders",))
+        self.assertEqual(projected.retained_task_ids_by_unit["frontend:api-client"], ("orders",))
+        self.assertEqual(set(projected.reusable_capabilities_by_unit["frontend:api-client"]), {"orders.api"})
+        self.assertEqual(tuple(owner.owner_task_id for owner in projected.retained_endpoint_owners), ("orders",))
+        self.assertEqual(facts.model_dump(mode="json"), before)
+        with self.assertRaises(ValueError):
+            facts.retained_subset(("not-in-baseline",))
+
+    def test_page_revision_keeps_history_without_claiming_current_coverage(self) -> None:
+        """已完成旧页不能覆盖新增说明区或组件拆分，重复组装也不能洗新其来源。"""
+
+        inputs = _inputs()
+        plan = inputs["formal_plan"]
+        plan["page_implementation_contracts"] = [{"pageId": "orders", "sections": ["design", "build"]}]
+        plan["frontend_pages"][1]["components"] = ["index.tsx"]
+        task = _task("old-page", unit_id="page:orders", status="completed", provides=["frontend.page:orders"])
+        compiled = apply_unit_compilation(inputs["unit_skeleton"], [task], {"project_plan": plan})[0]
+        inputs["confirmed_plan"] = _plan(compiled)
+        facts = resolve_reuse_facts(**inputs)
+        self.assertIn("frontend.page:orders", facts.reusable_capabilities_by_unit["page:orders"])
+        for mutation in ("design", "technical", "shared_frontend_architecture"):
+            with self.subTest(mutation=mutation):
+                changed = deepcopy(inputs)
+                if mutation == "design":
+                    changed["formal_plan"]["page_implementation_contracts"][0]["sections"].append("accept")
+                elif mutation == "technical":
+                    changed["formal_plan"]["frontend_pages"][1]["components"].append("StageSection.tsx")
+                else:
+                    changed["formal_plan"]["architecture"] = {"frontend": "拆分 StageSection，只读 props"}
+                # 模拟 Unit 被新一轮 Assembly 更新，任务本身仍是原始旧合同。
+                changed["unit_skeleton"]["build_units"]["page:orders"]["source_refs"] = {"new": True}
+                preserved = apply_unit_compilation(
+                    changed["unit_skeleton"], [compiled], {"project_plan": changed["formal_plan"]},
+                    preserve_compiled_task_ids={"old-page"},
+                )[0]
+                self.assertEqual(preserved["source_refs"], compiled["source_refs"])
+                facts = resolve_reuse_facts(**changed)
+                self.assertEqual(facts.retained_task_ids_by_unit["page:orders"], ("old-page",))
+                self.assertEqual(facts.reusable_capabilities_by_unit["page:orders"], {})
+                self.assertEqual(changed["confirmed_plan"]["task_registry"]["old-page"]["status"], "completed")
+
+    def test_unbound_page_task_cannot_cover_current_contract(self) -> None:
+        """页面 ID 相同或 Unit 已刷新均不能代替任务自己的合同摘要。"""
+
+        inputs = _inputs()
+        task = _task("old-page", unit_id="page:orders", status="completed", provides=["frontend.page:orders"])
+        inputs["confirmed_plan"] = _plan(task)
+        inputs["unit_skeleton"]["build_units"]["page:orders"]["input_fingerprint"] = "current-unit"
+        facts = resolve_reuse_facts(**inputs)
+        self.assertEqual(facts.retained_task_ids_by_unit["page:orders"], ("old-page",))
+        self.assertEqual(facts.reusable_capabilities_by_unit["page:orders"], {})
+
+    def test_other_page_change_does_not_invalidate_completed_page(self) -> None:
+        """其他页面技术方案变化不使当前页面任务失效，编译器不接受模型伪造摘要。"""
+
+        inputs = _inputs()
+        task = _task("orders-page", unit_id="page:orders", status="completed", provides=["frontend.page:orders"])
+        task["source_refs"] = {"page_input_sha256": "model-forged"}
+        compiled = apply_unit_compilation(inputs["unit_skeleton"], [task], {"project_plan": inputs["formal_plan"]})[0]
+        self.assertNotEqual(compiled["source_refs"]["page_input_sha256"], "model-forged")
+        inputs["confirmed_plan"] = _plan(compiled)
+        inputs["formal_plan"]["frontend_pages"][0]["components"] = ["Other.tsx"]
+        facts = resolve_reuse_facts(**inputs)
+        self.assertIn("frontend.page:orders", facts.reusable_capabilities_by_unit["page:orders"])
+
     def setUp(self) -> None:
         """为每个用例独立创建正式输入，避免互相污染。"""
 

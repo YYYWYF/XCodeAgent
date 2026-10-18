@@ -23,6 +23,8 @@ class OpenCodeGoHeaderTests(unittest.IsolatedAsyncioTestCase):
         """准备两个协议的本地 HTTP 客户端和请求记录。"""
 
         self.requests = []
+        self.failure = None
+        self.failure_status = 400
         self.sync_client = self.enterContext(httpx.Client(transport=httpx.MockTransport(self._respond)))
         self.async_client = httpx.AsyncClient(transport=httpx.MockTransport(self._respond))
         self.anthropic_sync_client = self.enterContext(anthropic_httpx.Client(transport=anthropic_httpx.MockTransport(self._respond)))
@@ -43,6 +45,8 @@ class OpenCodeGoHeaderTests(unittest.IsolatedAsyncioTestCase):
 
         self.requests.append(request)
         response_class = anthropic_httpx.Response if isinstance(request, anthropic_httpx.Request) else httpx.Response
+        if self.failure and self.failure(request):
+            return response_class(self.failure_status, json={"error": {"type": "invalid_request_error", "message": self.failure_message}})
         body = json.loads(request.content)
         if request.url.path.endswith("messages"):
             message = {
@@ -85,8 +89,8 @@ class OpenCodeGoHeaderTests(unittest.IsolatedAsyncioTestCase):
             # 先关闭工厂创建的客户端，再注入测试传输；不改生产配置与 SDK 请求逻辑。
             model.http_client.close()
             await model.http_async_client.aclose()
-            model.client = openai.OpenAI(api_key="test-key", base_url=self.settings.model_base_url, http_client=self.sync_client).chat.completions
-            model.async_client = openai.AsyncOpenAI(api_key="test-key", base_url=self.settings.model_base_url, http_client=self.async_client).chat.completions
+            model.client = openai.OpenAI(api_key="test-key", base_url=self.settings.model_base_url, http_client=self.sync_client, max_retries=0).chat.completions
+            model.async_client = openai.AsyncOpenAI(api_key="test-key", base_url=self.settings.model_base_url, http_client=self.async_client, max_retries=0).chat.completions
         else:
             model._client = anthropic.Anthropic(api_key="test-key", base_url=self.settings.model_base_url, default_headers=model.default_headers, http_client=self.anthropic_sync_client)
             model._async_client = anthropic.AsyncAnthropic(api_key="test-key", base_url=self.settings.model_base_url, default_headers=model.default_headers, http_client=self.anthropic_async_client)
@@ -164,3 +168,105 @@ class OpenCodeGoHeaderTests(unittest.IsolatedAsyncioTestCase):
             other = await self._model(provider)
             other.invoke("hello")
             self.assertNotEqual(self.requests[-1].headers["x-opencode-session"], first)
+
+    async def test_stream_rejection_uses_same_session_and_body_with_one_nonstream_request(self) -> None:
+        """两个协议四种调用只改变 stream，保留会话、工具及请求内容且不改变共享模型。"""
+
+        self.settings = replace(self.settings, model_base_url="https://opencode.ai/zen/go/v1")
+        self.failure_message = "Upstream request failed: [model_coming_soon] This model is coming soon."
+        self.failure = lambda request: json.loads(request.content).get("stream")
+        for provider in ("openai", "anthropic"):
+            for mode in ("invoke", "ainvoke", "stream", "astream"):
+                thread = f"route-{provider}-{mode}"
+                config = {"configurable": {"thread_id": thread}}
+                model = await self._model(provider)
+                model.streaming = True
+                before = len(self.requests)
+                if mode == "invoke":
+                    model.invoke("hello", config=config)
+                elif mode == "ainvoke":
+                    await model.ainvoke("hello", config=config)
+                elif mode == "stream":
+                    list(model.stream("hello", config=config))
+                else:
+                    _ = [chunk async for chunk in model.astream("hello", config=config)]
+                self.assertEqual(len(self.requests) - before, 2)
+                self.assertEqual(self.requests[-1].headers["x-opencode-session"], thread)
+                before_body = json.loads(self.requests[-2].content)
+                after_body = json.loads(self.requests[-1].content)
+                self.assertTrue(before_body.pop("stream"))
+                self.assertFalse(after_body.pop("stream", False))
+                # SDK 只为流式请求附加 stream_options，非流式请求不支持该参数。
+                before_body.pop("stream_options", None)
+                self.assertEqual(before_body, after_body)
+                self.assertTrue(model.streaming)
+                self.assertEqual(config["configurable"]["thread_id"], thread)
+
+    async def test_nonstream_fallback_is_bounded_and_other_rejections_are_not_retried(self) -> None:
+        """连续失败最多请求两次；额度、参数及非 OpenCode 服务不走非流式补发。"""
+
+        self.settings = replace(self.settings, model_base_url="https://opencode.ai/zen/go/v1")
+        self.failure = lambda request: True
+        for message, expected in (("[model_coming_soon] unavailable", 2), ("Insufficient quota", 1), ("Invalid parameter", 1)):
+            self.failure_message = message
+            model = await self._model()
+            model.streaming = True
+            before = len(self.requests)
+            with self.assertRaises(openai.BadRequestError):
+                await model.ainvoke("hello", config={"configurable": {"thread_id": message}})
+            self.assertEqual(len(self.requests) - before, expected)
+        self.settings = replace(self.settings, model_base_url="https://example.com/v1")
+        self.failure_message = "[model_coming_soon] unavailable"
+        model = await self._model()
+        model.streaming = True
+        before = len(self.requests)
+        with self.assertRaises(openai.BadRequestError):
+            model.invoke("hello")
+        self.assertEqual(len(self.requests) - before, 1)
+
+    async def test_partial_stream_cannot_be_replayed(self) -> None:
+        """已交付任何流片段后即使发生路由错误也不重发，防止重复工具或正文。"""
+
+        from langchain_openai import ChatOpenAI
+        from langchain_core.messages import AIMessageChunk
+
+        self.settings = replace(self.settings, model_base_url="https://opencode.ai/zen/go/v1")
+        model = await self._model()
+        model.streaming = True
+        response = httpx.Response(400, request=httpx.Request("POST", self.settings.model_base_url))
+        error = openai.BadRequestError("route", response=response, body={"error": {"message": "[model_coming_soon] unavailable"}})
+
+        def partial(*args, **kwargs):
+            """先交付正文再模拟上游错误。"""
+            yield AIMessageChunk(content="already delivered")
+            raise error
+
+        async def apartial(*args, **kwargs):
+            """异步流使用相同的部分输出场景。"""
+            yield AIMessageChunk(content="already delivered")
+            raise error
+
+        with patch.object(ChatOpenAI, "stream", partial), self.assertRaises(openai.BadRequestError):
+            list(model.stream("hello"))
+        with patch.object(ChatOpenAI, "astream", apartial), self.assertRaises(openai.BadRequestError):
+            _ = [chunk async for chunk in model.astream("hello")]
+        self.assertTrue(model.streaming)
+
+    async def test_tool_binding_is_kept_and_auth_or_quota_errors_do_not_fallback(self) -> None:
+        """绑定工具原样进入补发；认证、权限及限流即使含相同文字也不补发。"""
+
+        self.settings = replace(self.settings, model_base_url="https://opencode.ai/zen/go/v1")
+        self.failure_message = "[model_coming_soon] unavailable"
+        self.failure = lambda request: json.loads(request.content).get("stream")
+        model = await self._model()
+        model.streaming = True
+        tool = {"name": "read_file", "description": "read", "parameters": {"type": "object", "properties": {}}}
+        await model.bind_tools([tool]).ainvoke("hello", config={"configurable": {"thread_id": "tools-thread"}})
+        self.assertEqual(json.loads(self.requests[-1].content)["tools"], json.loads(self.requests[-2].content)["tools"])
+        self.failure = lambda request: True
+        for status in (401, 403, 429):
+            self.failure_status = status
+            before = len(self.requests)
+            with self.assertRaises(openai.APIStatusError):
+                await model.ainvoke("hello")
+            self.assertEqual(len(self.requests) - before, 1)

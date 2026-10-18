@@ -118,8 +118,9 @@ def _compiled_issues(assembly: ScopeAssemblyResult) -> tuple[ValidationIssue, ..
 
 def _attribute(
     snapshot: PlanningRun, inputs: SequentialPlanningInputs, issues: Sequence[ValidationIssue],
+    assembly: ScopeAssemblyResult | None = None,
 ) -> GlobalRepairDecision:
-    """从全部当前 Candidate 与完整 retained registry 构造可保留碰撞的来源序列。"""
+    """让来源记录与同阶段的保留事实使用同一集合，组装失败仍保留完整冲突证据。"""
 
     owners = [CandidateOwnership.from_candidate(snapshot.candidates[snapshot.unit_states[key].latest_candidate_id])
               for key in snapshot.planning_unit_ids]
@@ -131,11 +132,14 @@ def _attribute(
             source="retained",
         )
         for key, task in retained.items()
+        if assembly is None or key in assembly.retained_task_ids
     ]
     provenance.extend(TaskProvenance(task_id=key, unit_id=owner.unit_id, source="candidate", candidate_id=owner.candidate_id)
                       for owner in owners for key in owner.task_ids)
     return attribute_global_issues(
-        issues, task_provenance=provenance, reuse_facts=inputs.reuse_facts,
+        issues, task_provenance=provenance,
+        reuse_facts=(inputs.reuse_facts.retained_subset(assembly.retained_task_ids)
+                     if assembly is not None else inputs.reuse_facts),
         candidate_ownership=owners, planning_unit_ids=snapshot.planning_unit_ids,
     )
 
@@ -376,7 +380,7 @@ async def plan_dag_sequential(
         except ScopeAssemblyError as exc:
             return _attribute(snapshot, frozen, exc.issues)
         await controller.apply(GlobalValidationStarted(at=now()))
-        return _attribute(snapshot, frozen, _compiled_issues(assembled))
+        return _attribute(snapshot, frozen, _compiled_issues(assembled), assembled)
 
     try:
         await controller.apply(GenerationStarted(at=now()))

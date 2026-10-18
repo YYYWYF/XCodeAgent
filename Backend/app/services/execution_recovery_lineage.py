@@ -99,6 +99,15 @@ async def resolve_recovery_lineage_head(
         thread_id=thread_id,
     )
     records = {record.run_id: record for record in executions}
+    if authoritative_run_id is None:
+        # 业务重新执行不再建立 checkpoint fork 链；当前 owner 由 lifecycle 唯一登记。
+        from app.services.application_lifecycle import load_application_lifecycle
+        lifecycle = load_application_lifecycle(workspace)
+        current = records.get(lifecycle.active_run_id) if lifecycle else None
+        if current and current.thread_id == thread_id and (
+            execution_kind is None or current.execution_kind == execution_kind
+        ):
+            return _resolution_for_lineage_head(current, None)
     if authoritative_run_id is not None:
         resolution, recovery_hop_count = _resolve_anchored_recovery_lineage(
             workspace=workspace,

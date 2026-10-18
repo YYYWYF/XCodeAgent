@@ -1,6 +1,7 @@
 import { globalFallbackState } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { workflowExecutionEnded } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
   executionRecoveryForSession,
   executionRecoveryReadError,
@@ -10,6 +11,25 @@ import { workbenchRecoveryIncident } from '../src/renderer/src/service/recoveryI
 import { reconcileWorkflowFailurePayload } from '../src/renderer/src/service/agUiAgent'
 import { parseRecoveryFailureDiagnostic } from '../src/renderer/src/service/recoveryActionPlan'
 import type { ApplicationLifecycle, ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
+
+test('同 Thread 旧开发结束不隐藏新测试失败，只有同 Run 的结束事实生效', () => {
+  const workflow = { runId: 'test-run', threadId: 'shared-graph', events: [],
+    summary: { status: 'failed', phase: 'integration_test' } } as WorkflowRunPayload
+  const ended = { execution: { runId: 'old-build', threadId: 'shared-graph',
+    status: 'stopped', ownerSessionId: 'source-session' } }
+  const lifecycle = { endedExecutions: { 'old-build': ended } } as unknown as ApplicationLifecycle
+  assert.equal(workflowExecutionEnded(workflow, lifecycle), false)
+  assert.equal(workflowExecutionEnded(workflow, { ...lifecycle,
+    endedExecutions: { 'test-run': { ...ended,
+      execution: { ...ended.execution, runId: 'test-run' } } }
+  } as ApplicationLifecycle), true)
+  assert.equal(workflowExecutionEnded(workflow, { ...lifecycle,
+    endedExecutions: { 'test-run': { ...ended,
+      execution: { ...ended.execution, runId: 'test-run', threadId: 'other-thread' } } }
+  } as ApplicationLifecycle), false)
+  assert.equal(workflowExecutionEnded({ ...workflow, summary: { status: 'completed',
+    planControl: { action: 'end', status: 'ended', targetRunId: 'test-run' } } }, lifecycle), true)
+})
 
 test('同 Run 的通用终态保留具体诊断，新 Run 不继承旧失败', () => {
   const specific = {

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import './planningProgressCard.test'
 import './workflowArtifactNames.test'
 import './performanceReportDocument.test'
+import './technicalPlanArtifact.test'
 import { workflowDebugResumeSource } from '../src/renderer/src/components/AiChatPanel/workflowDebugResume'
 import { test } from 'node:test'
+import { canEnterModifiedTesting } from '../src/renderer/src/components/AiChatPanel/modifiedTestEntry'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { WorkbenchPhaseContext } from '../src/renderer/src/context/workbenchPhaseState'
@@ -92,6 +94,17 @@ import type {
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
+
+test('二次代码修改完成后可进入本轮测试，旧测试确认、问答和失败不提供该入口', () => {
+  const workflow = previewWorkflow({ phase: 'conversation', intent: 'implementation_fix', status: 'completed' })
+  workflow.codeChanges = { id: 'changes', files: [{ path: 'frontend/src/page.tsx' }] } as NonNullable<WorkflowRunPayload['codeChanges']>
+  assert.equal(canEnterModifiedTesting(workflow), true)
+  assert.equal(canEnterModifiedTesting(JSON.parse(JSON.stringify(workflow))), true)
+  assert.equal(canEnterModifiedTesting({ ...workflow, summary: { ...workflow.summary, status: 'failed' } }), false)
+  assert.equal(canEnterModifiedTesting({ ...workflow, summary: { ...workflow.summary, intent: 'read_only' } }), false)
+  assert.equal(canEnterModifiedTesting({ ...workflow, summary: { ...workflow.summary, phase: 'test_phase_confirmation' } }), false)
+  assert.equal(canEnterModifiedTesting({ ...workflow, codeChanges: undefined }), false)
+})
 
 /** 构造指定运行状态的最小 Workflow 预览测试数据。 */
 function previewWorkflow(
@@ -1110,6 +1123,11 @@ test('设计阶段二次修改批准后在 Graph 回写前仍恢复到独立设�
   assert.equal(deriveWorkbenchPhase(lifecycle), 'product')
   lifecycle.activeFormalRevision.currentArtifact = 'technical-plan'
   assert.equal(deriveWorkbenchPhase(lifecycle), 'planning')
+  lifecycle.activeFormalRevision.currentArtifact = 'ui-design'
+  lifecycle.initialization = { stage: 'generating_technical_plan', status: 'running' }
+  assert.equal(deriveWorkbenchPhase(lifecycle), 'planning')
+  lifecycle.initialization.status = 'failed'
+  assert.equal(deriveWorkbenchPhase(lifecycle), 'planning')
   lifecycle.initialization = {
     stage: 'awaiting_technical_plan_confirmation',
     status: 'awaiting_user'
@@ -1397,11 +1415,22 @@ test('本地停止请求在 Workflow 快照到达前立即进入停止 loading',
   assert.equal(deriveDisplayedPlanExecutionMode(undefined, 'stopping', true, true), 'stopping')
 })
 
-test('本地停止状态优先于尚未刷新的运行中生命周期快照', () => {
+test('在途停止保留反馈，最终暂停展示以当前后端执行为准', () => {
   const execution = pageExecution()
 
   assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopping', true), 'stopping')
-  assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopped', false), 'stopped')
+  assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopped', false), 'running')
+})
+
+test('暂停请求不能覆盖已提交的测试确认门', () => {
+  const execution = pageExecution({ status: 'awaiting_user', phase: 'test_phase_confirmation',
+    pendingInteraction: { id: 'test-gate', type: 'test_phase_confirmation', basedOnRevision: 9,
+      payload: { mode: 'test_phase_confirmation' }, artifactRefs: [], createdAt: '', submittedAt: null } })
+  const lifecycle = planLifecycle(execution)
+  const workflow = { ...previewWorkflow({ lifecycle, status: 'requires_user_input', phase: execution.phase }),
+    runId: execution.runId, threadId: execution.threadId }
+  assert.equal(withWorkflowExecutionStatus(workflow, 'stopped'), workflow)
+  assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopped', false, true), 'awaiting_test_phase_confirmation')
 })
 
 test('暂停后的调试窗口默认选中最近完成的可恢复节点', () => {

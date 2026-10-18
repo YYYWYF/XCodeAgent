@@ -10,6 +10,7 @@ import type { RecoveryIncidentPresentation } from '../../service/recoveryInciden
 import { recoveryFailureMessage } from '../../service/recoveryFailureMessage'
 import { cx } from '../../utils'
 import '../ApplicationPlanningRecoveryIncidentCard/ApplicationPlanningRecoveryIncidentCard.less'
+import RetryEntryNotice from '../RetryEntryNotice'
 
 const { Text } = Typography
 
@@ -31,6 +32,9 @@ export default function RecoveryIncidentCard({
   error,
   testId = 'recovery-incident'
 }: RecoveryIncidentCardProps): ReactElement {
+  if (incident.kind === 'needs_attention' && incident.reasonCode === 'RETRY_ENTRY_NOT_FOUND') {
+    return <RetryEntryNotice key={testId} />
+  }
   const action = incident.kind === 'recoverable' ? incident.action : undefined
   const hasAction = incident.kind === 'recoverable' && Boolean(action)
   const canRetry = incident.kind === 'needs_attention'
@@ -69,10 +73,10 @@ export default function RecoveryIncidentCard({
           {incident.title}
         </Text>
         <>
-          <FailureSummary
+          {(recoveryFailureMessage(incident.failureDiagnostic) || incident.failureMessage)?.trim() !== incident.recoveryMessage.trim() ? <FailureSummary
             diagnostic={incident.failureDiagnostic}
             message={incident.failureMessage}
-          />
+          /> : null}
           <Text
             className={cx('application-planning-recovery-incident-recovery-message')}
             type="secondary"

@@ -231,11 +231,15 @@ def prepare_application_planning_review_resume(
             target_node="design_intent_analysis",
         )
 
+    # 确认按钮的控制文案不是业务提问，后续节点及失败重试继续保留真实用户要求。
+    business_request = str(state.get("request") or "").strip()
+    if submission.action in {"answer", "revise"} and submission.request.strip():
+        business_request = submission.request.strip()
     update: dict[str, Any] = {
         **runtime_update,
         # 原生 interrupt 已精确决定恢复节点，本轮开始后必须消费旧 START 指令。
         "resume_from": "",
-        "request": submission.request.strip(),
+        "request": business_request,
         # 用户开始处理原审阅门后，上一轮普通产品对话的 preserve 提示已经消费；
         # 后续正式生成必须按新 artifact revision 决定展示，不能继续隐藏卡片。
         "product_conversation_result": {},
@@ -250,7 +254,7 @@ def prepare_application_planning_review_resume(
             operation=ApplicationPlanningOperation.INITIAL,
             gate_id=payload["gateId"],
             artifact_revision=payload["artifactRevision"],
-            request=submission.request,
+            request=business_request,
         )
         return ApplicationPlanningReviewResumeDecision(
             update=update,

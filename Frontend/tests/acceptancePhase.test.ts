@@ -7,6 +7,7 @@ import {
   type PlanExecutionMode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
+  currentRoundAcceptancePassed,
   shouldShowAcceptanceDecisionDock,
   workflowPreviewTarget,
   workflowShouldShowCodeReview,
@@ -22,6 +23,7 @@ import { DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO } from '../src/renderer/src/compo
 import { acceptancePreviewCanFocus } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
 import { phaseEntryRightPanelLayout } from '../src/renderer/src/components/AiChatPanel/hooks/useAssistantPreviewLayout'
 import type { RightPanelLayout } from '../src/renderer/src/components/AiChatPanel/types'
+import { revisionStartTarget } from '../src/renderer/src/components/AiChatPanel/hooks/revisionSession'
 import type {
   ApplicationLifecycle,
   WorkbenchExecution,
@@ -139,6 +141,28 @@ test('验收通过后不再展示底部验收操作', () => {
     false,
     '非验收阶段不得展示验收底栏'
   )
+})
+
+test('新执行和正式修改不展示旧验收结果，只读结束仍可保留原结果', () => {
+  const lifecycle = { extensions: { acceptanceStatus: 'passed' }, activeExecutions: {} } as ApplicationLifecycle
+  assert.equal(currentRoundAcceptancePassed(lifecycle), true)
+  assert.equal(currentRoundAcceptancePassed({ ...lifecycle, activeExecutions: {
+    run: acceptanceExecution({ phase: 'execute_frontend', status: 'running' })
+  } }), false)
+  assert.equal(currentRoundAcceptancePassed({ ...lifecycle, pendingRevisionImpact: { interactionId: 'impact' } }), false)
+  assert.equal(currentRoundAcceptancePassed({ ...lifecycle, extensions: { acceptanceStatus: 'pending' } }), false)
+})
+
+test('空目标不会遮蔽确认卡绑定目标，页面目标不随右侧选择改变', () => {
+  const workflow = acceptanceWorkflow()
+  workflow.summary.target = {}
+  workflow.state = { change_target: {} }
+  assert.deepEqual(revisionStartTarget(workflow), { type: 'application' })
+  workflow.summary.revisionImpact = { interactionId: 'impact' } as NonNullable<typeof workflow.summary.revisionImpact>
+  const lifecycle = { pendingRevisionImpact: { interactionId: 'impact', target: { type: 'page', pageId: 'journey' } } } as ApplicationLifecycle
+  assert.deepEqual(revisionStartTarget(workflow, lifecycle), { type: 'page', pageId: 'journey' })
+  workflow.summary.target = { type: 'endpoint', apiContractId: 'api', endpointId: 'get' }
+  assert.deepEqual(revisionStartTarget(workflow), workflow.summary.target)
 })
 
 test('验收启动中无需等待 launchResult 即展示项目启动步骤', () => {
@@ -306,7 +330,7 @@ test('会话恢复只保留当前工作台阶段，审查确认不会混入验�
   assert.deepEqual(sessionsForWorkbenchPhase(sessions, 'acceptance'), [sessions[2]])
 })
 
-test('验收底栏高度与预览预留空间使用同一个变量', () => {
+test('验收底栏参与布局并允许内容变高，避免遮挡预览', () => {
   const panelStyles = readFileSync(
     path.join(process.cwd(), 'src/renderer/src/components/AiChatPanel/AiChatPanel.less'),
     'utf8'
@@ -319,8 +343,10 @@ test('验收底栏高度与预览预留空间使用同一个变量', () => {
     'utf8'
   )
 
-  assert.match(panelStyles, /padding-bottom:\s*var\(--acceptance-decision-dock-height\)/)
-  assert.match(dockStyles, /height:\s*var\(--acceptance-decision-dock-height, 72px\)/)
+  assert.match(panelStyles, /browser-preview-panel\s*\{\s*flex:\s*1;\s*height:\s*auto/)
+  assert.match(dockStyles, /max-height:\s*55%/)
+  assert.match(dockStyles, /overflow-y:\s*auto/)
+  assert.doesNotMatch(dockStyles, /position:\s*absolute/)
 })
 
 test('验收 Agent 头像拥有可见的阶段背景', () => {

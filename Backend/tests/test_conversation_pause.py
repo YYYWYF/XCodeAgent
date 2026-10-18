@@ -81,7 +81,12 @@ class ConversationPauseTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("paused", active_worker_runs())
                 stop = asyncio.create_task(workflow_run_registry.cancel_and_wait("paused", workspace=directory))
                 try:
-                    await asyncio.sleep(.1)
+                    async def wait_stopping():
+                        """等待控制面的实际停止投影，避免磁盘调度超过固定 100ms 造成误报。"""
+                        while load_application_lifecycle(directory).active_executions["paused"].status.value != "stopping":
+                            await asyncio.sleep(.01)
+
+                    await asyncio.wait_for(wait_stopping(), timeout=3)
                     self.assertFalse(stop.done())
                     self.assertEqual(load_application_lifecycle(directory).active_executions["paused"].status.value, "stopping")
                     self.assertEqual((await get_execution(directory, "paused")).status.value, "interrupted")

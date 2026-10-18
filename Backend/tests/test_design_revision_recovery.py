@@ -11,7 +11,7 @@ from app.graph.application_planning_revision import analyze_design_intent
 from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
 from app.domain.application_revision import RevisionImpact, RevisionTarget
 from app.domain.execution_recovery import RecoveryPlan, RecoveryLifecycleOwnershipMode
-from app.protocols.application_page_planning import _prepare_start_design_revision_payload
+from app.protocols.application_page_planning import _prepare_start_design_revision_payload, _build_start_design_revision_error_stream
 from app.protocols.workflow.projection import _public_workflow_state
 from app.services.application_lifecycle import create_application_lifecycle, write_application_lifecycle, load_application_lifecycle, claim_application_planning_run_for_recovery
 from app.services.application_revision_lifecycle import register_revision_impact
@@ -33,6 +33,21 @@ def setup_revision(workspace):
 
 class DesignRevisionRecoveryTests(unittest.IsolatedAsyncioTestCase):
     """协议不提前批准，节点入场和批准后中断均保留恢复归属。"""
+
+    async def test_rejected_handoff_publishes_failed_workflow(self):
+        """入场拒绝须发布 Workflow 失败投影，不能只有客户端无法识别的动作信封。"""
+        import json
+        events = []
+        async for frame in _build_start_design_revision_error_stream(
+            payload={'threadId': 'thread', 'runId': 'rejected'},
+            error=ValueError('target 不匹配'), action='start_design_revision', accept='text/event-stream',
+        ):
+            events.extend(json.loads(line[6:]) for line in frame.splitlines() if line.startswith('data: '))
+        failed = next(item['value'] for item in events if item.get('name') == 'workflow-run')
+        self.assertEqual(failed['summary']['status'], 'failed')
+        self.assertIn('target 不匹配', failed['summary']['message'])
+        self.assertEqual(failed['state']['workflow_scope'], 'application_planning')
+        self.assertEqual(events[-1]['type'], 'RUN_FINISHED')
 
     def test_protocol_only_freezes_input(self):
         """HTTP 入场不得消费 pending impact，内部凭据不得成为公开状态。"""
@@ -60,6 +75,8 @@ class DesignRevisionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first.change_id, pending.change_id)
             self.assertEqual(load_application_lifecycle(workspace).revision, approved.revision)
             self.assertIsNone(approved.pending_revision_impact)
+            self.assertEqual(approved.extensions['acceptanceStatus'], 'pending')
+            self.assertEqual(approved.extensions['reviewStatus'], 'pending')
             with self.assertRaises(ValueError):
                 approve_design_revision_from_checkpoint(workspace, {**intent, 'changeId': 'other'}, 'thread')
 

@@ -20,13 +20,15 @@ from app.protocols.workflow.lifecycle import (
     fail_workflow_lifecycle, project_workflow_lifecycle_boundary, stop_workflow_lifecycle,
 )
 from app.services.execution_recovery import (
-    assert_run_id_available, durable_execution_status, observe_execution_cancelled,
+    assert_run_id_available, best_effort_recovery_observation, durable_execution_status, observe_execution_cancelled,
     observe_execution_failed, observe_execution_finished, observe_execution_started,
     observe_node_started,
 )
 from app.services.execution_lease_heartbeat import maintain_execution_heartbeat, stop_execution_heartbeat
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.run_workers import active_worker_runs
+from app.services.failed_run_cleanup import drain_failed_run, observe_drained_failure, release_failed_execution_resources, wait_failed_run
+from app.services.workflow_quality_results import CODE_MUTATION_PHASES
 
 
 class ConversationExecution:
@@ -41,6 +43,9 @@ class ConversationExecution:
         self.registered = context is not None
         self.node = context.recovery_plan.target_node if context else "scan_workspace_code"
         self.heartbeat = context.heartbeat_task if context else None
+        self.failure_error: BaseException | None = None
+        self.failed_state: dict[str, Any] | None = None
+        self.failure_drained = True
 
     def arguments(self) -> dict[str, Any]:
         """向共享观察函数提供同一份不可变运行身份。"""
@@ -105,6 +110,10 @@ class ConversationExecution:
 
         self.node = node
         if self.registered:
+            if node in CODE_MUTATION_PHASES:
+                # 真实修改入口清除旧质量结果，仍由原 Agent 执行修改。
+                update_workbench_execution(self.workspace, run_id=self.run_id, phase=node,
+                                           status=WorkbenchExecutionStatus.RUNNING)
             await observe_node_started(**self.arguments(), node_name=node)
 
     async def finish(self, state: dict[str, Any]) -> None:
@@ -113,6 +122,9 @@ class ConversationExecution:
         if not self.registered:
             return
         status = durable_execution_status(result=state, summary={})
+        if status is DurableExecutionStatus.FAILED:
+            self.failed_state = state
+            self.failure_drained = await wait_failed_run(self.run_id)
         clarification = state.get("clarification") or {}
         formal_handoff = status is DurableExecutionStatus.AWAITING_USER and clarification.get("mode") == "revision_impact_confirmation"
         if formal_handoff:
@@ -126,6 +138,10 @@ class ConversationExecution:
         else:
             state["lifecycle"] = project_workflow_lifecycle_boundary(
                 self.workspace, run_id=self.run_id, node_name=self.node, update=state)
+        if status is DurableExecutionStatus.FAILED and self.failure_drained:
+            lifecycle = release_failed_execution_resources(self.workspace, self.run_id)
+            if lifecycle is not None:
+                state["lifecycle"] = application_lifecycle_payload(lifecycle)
         await observe_execution_finished(**self.arguments(), status=status)
 
     def finish_formal_handoff(self):
@@ -159,6 +175,8 @@ class ConversationExecution:
             else:
                 stop_workflow_lifecycle(self.workspace, run_id=self.run_id, phase=self.node)
         else:
+            self.failure_error = error
+            self.failure_drained = await wait_failed_run(self.run_id)
             source = await get_execution(self.workspace, self.run_id)
             if source is not None:
                 try:
@@ -170,8 +188,33 @@ class ConversationExecution:
                     pass
             await observe_execution_failed(**self.arguments(), exception=error, authoritative_node=self.node)
             fail_workflow_lifecycle(self.workspace, run_id=self.run_id, phase=self.node, error=error)
+            if self.failure_drained:
+                release_failed_execution_resources(self.workspace, self.run_id)
 
     async def close(self) -> None:
-        """释放当前执行的共享心跳，不触碰其他运行。"""
+        """失败清理即使遇到断线也先等待真实退出，再停止共享心跳。"""
 
-        await stop_execution_heartbeat(self.heartbeat)
+        from app.services.execution_cleanup import retry_cleanup_persistence
+
+        async def persist_failure() -> None:
+            """只补齐本 Run 的终态，瞬时存储失败交给后台继续，不阻断最终释放。"""
+            current = load_application_lifecycle(self.workspace)
+            execution = current.active_executions.get(self.run_id) if current else None
+            if execution is not None and execution.status != WorkbenchExecutionStatus.FAILED:
+                if self.failed_state is not None:
+                    project_workflow_lifecycle_boundary(self.workspace, run_id=self.run_id, node_name=self.node, update=self.failed_state)
+                else:
+                    fail_workflow_lifecycle(self.workspace, run_id=self.run_id, phase=self.node, error=self.failure_error)
+            release_failed_execution_resources(self.workspace, self.run_id)
+            if self.failed_state is not None:
+                await observe_execution_finished(**self.arguments(), status=DurableExecutionStatus.FAILED)
+            else:
+                await observe_drained_failure(**self.arguments(), graph=self.graph, error=self.failure_error)
+
+        if self.failure_error is not None or self.failed_state is not None:
+            await drain_failed_run(self.run_id)
+        try:
+            if self.failure_error is not None or self.failed_state is not None:
+                await retry_cleanup_persistence(persist_failure)
+        finally:
+            await stop_execution_heartbeat(self.heartbeat)

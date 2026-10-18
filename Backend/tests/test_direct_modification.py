@@ -1578,28 +1578,28 @@ class DirectModificationNodeTests(unittest.TestCase):
 
         with patch(
             "app.graph.direct_modification_workflow.scan_workspace_code",
-            side_effect=fake_workspace_scan,
+            new=fake_workspace_scan,
         ), patch(
             "app.graph.direct_modification_workflow.classify_direct_modification",
-            side_effect=fake_classify,
+            new=fake_classify,
         ), patch(
             "app.graph.direct_modification_workflow.scan_change_impact_code",
-            side_effect=fake_code_scan,
+            new=fake_code_scan,
         ), patch(
             "app.graph.direct_modification_workflow.execute_frontend_direct_modification",
-            side_effect=fake_owner,
+            new=fake_owner,
         ), patch(
             "app.graph.direct_modification_workflow.finalize_direct_modification",
-            side_effect=fake_finalize,
+            new=fake_finalize,
         ):
             graph = build_direct_modification_graph(checkpointer=None)
-            graph.invoke(
+            asyncio.run(graph.ainvoke(
                 {
                     "request": "修复登录按钮",
                     "workspace": "/tmp/fake-user-workspace",
                     "status": "in_progress",
                 }
-            )
+            ))
 
         self.assertEqual(
             calls,
@@ -1649,16 +1649,16 @@ class DirectModificationNodeTests(unittest.TestCase):
             side_effect=AssertionError("确认续跑不应重新分类"),
         ), patch(
             "app.graph.direct_modification_workflow.scan_change_impact_code",
-            side_effect=fake_code_scan,
+            new=fake_code_scan,
         ), patch(
             "app.graph.direct_modification_workflow.execute_frontend_direct_modification",
-            side_effect=fake_owner,
+            new=fake_owner,
         ), patch(
             "app.graph.direct_modification_workflow.finalize_direct_modification",
-            side_effect=fake_finalize,
+            new=fake_finalize,
         ):
             graph = build_direct_modification_graph(checkpointer=None)
-            graph.invoke(
+            asyncio.run(graph.ainvoke(
                 {
                     "request": "修复登录按钮",
                     "workspace": "/tmp/fake-user-workspace",
@@ -1668,7 +1668,7 @@ class DirectModificationNodeTests(unittest.TestCase):
                     "change_impact_enabled": True,
                     "direct_modification_resume_node": "scan_change_impact_code",
                 }
-            )
+            ))
 
         self.assertEqual(
             calls,
@@ -1914,7 +1914,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
                     new=AsyncMock(return_value=FakeGraph()),
                 ),
                 patch(
-                    "app.protocols.direct_modification.cleanup_workflow_checkpoints",
+                    "app.services.execution_cleanup.best_effort_checkpoint_housekeeping",
                     new=AsyncMock(return_value=0),
                 ),
             ):
@@ -1993,7 +1993,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
                     new=AsyncMock(return_value=FakeGraph()),
                 ),
                 patch(
-                    "app.protocols.direct_modification.cleanup_workflow_checkpoints",
+                    "app.services.execution_cleanup.best_effort_checkpoint_housekeeping",
                     new=AsyncMock(return_value=0),
                 ),
                 patch(
@@ -2106,7 +2106,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
                     new=AsyncMock(return_value=FakeGraph()),
                 ),
                 patch(
-                    "app.protocols.direct_modification.cleanup_workflow_checkpoints",
+                    "app.services.execution_cleanup.best_effort_checkpoint_housekeeping",
                     new=AsyncMock(return_value=0),
                 ),
             ):
@@ -2297,7 +2297,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
                     new=AsyncMock(return_value=FakeGraph()),
                 ),
                 patch(
-                    "app.protocols.direct_modification.cleanup_workflow_checkpoints",
+                    "app.services.execution_cleanup.best_effort_checkpoint_housekeeping",
                     new=AsyncMock(return_value=0),
                 ),
             ):
@@ -2403,7 +2403,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
                     new=AsyncMock(return_value=FakeGraph()),
                 ),
                 patch(
-                    "app.protocols.direct_modification.cleanup_workflow_checkpoints",
+                    "app.services.execution_cleanup.best_effort_checkpoint_housekeeping",
                     new=AsyncMock(return_value=0),
                 ),
             ):

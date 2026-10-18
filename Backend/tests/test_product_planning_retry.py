@@ -1436,6 +1436,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
                     {
                         "workspace": workspace,
                         "requirement_spec": requirement_spec,
+                        "product_plan": {},
                     }
                 )
             draft_markdown = Path(pending["product_plan_path"])

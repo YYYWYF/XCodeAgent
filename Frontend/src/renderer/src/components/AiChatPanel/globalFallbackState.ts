@@ -59,7 +59,7 @@ export function acceptancePreviewCanFocus(
     !fallbackVisible
   )
 }
-export const NO_RECOVERY_ENTRY_ERROR = '已同步后端状态，但当前会话没有可验证的恢复入口。'
+export const NO_RECOVERY_ENTRY_ERROR = '找不到恢复入口，请手动发起流程。'
 
 /** 二次修改的执行故障由原统一恢复处理，预览订阅的断线不能抢走按钮。 */
 export function conversationUsesWorkflowRecovery(input: {

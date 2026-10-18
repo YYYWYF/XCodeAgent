@@ -25,6 +25,7 @@ from app.services.frontend_performance_runner import (
 from app.services.integration_test_runner import run_integration_checks
 from app.services.backend_startup_diagnostics import startup_source_fingerprint
 from app.services.test_validation import evaluate_quality_gate
+from app.services.test_generation_diagnostics import generation_failure_diagnostics
 from app.workspace.code_changes import code_change_state_update
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.test_documents import (
@@ -470,6 +471,14 @@ def collect_unit_test_targets(state: ProjectState) -> dict[str, Any]:
                     changed_paths.append(path)
                 if path and _source_layer(path) and _is_behavioral_change(item):
                     source_paths.append(path)
+    if not changed_paths:
+        # 节点业务重试没有旧 Build 内存结果；阶段入口已从当前正式任务计划和磁盘收集文件。
+        for item in state.get("development_review_files", []):
+            path = _normalized_workspace_path(item)
+            if path:
+                changed_paths.append(path)
+                if _source_layer(path):
+                    source_paths.append(path)
     source_paths = list(dict.fromkeys(source_paths))[:100]
     changed_paths = list(dict.fromkeys(changed_paths))
     affected_layers = list(
@@ -664,6 +673,13 @@ def validate_generated_unit_tests(
     passed = status != "failed" and not validation_failed
     skipped = status == "skipped" and not validation_failed
     summary = str(generation.get("summary") or "未生成单元测试文件。")[:2_000]
+    # 质量门与修复规划必须消费确定性失败，不得用模型自述的成功摘要覆盖实际违规。
+    failure_evidence, failure_details = generation_failure_diagnostics(
+        workspace_from_state(state) or "", validation,
+    ) if not passed else ("", [])
+    if not passed and not failure_details:
+        # 无确定性违规项时仍保留真实生成异常，不能用通用文案掩盖模型或工具错误。
+        failure_evidence = f"生成检查未通过：{summary}"
     checks = [
         {
             "id": f"{layer}_test_generation",
@@ -683,7 +699,10 @@ def validate_generated_unit_tests(
             "skipped": skipped,
             "required": bool(generation.get("test_files")) and not skipped,
             "command": None,
-            "evidence": summary,
+            "evidence": failure_evidence[:2_000] if not passed else summary,
+            "generation_validation": validation,
+            "generation_failure_details": failure_details,
+            "agent_summary": summary,
             "failure_category": None if passed else "test_generation_failure",
             "execution": {
                 "tool": "test-generation-agent" if not skipped else "none",

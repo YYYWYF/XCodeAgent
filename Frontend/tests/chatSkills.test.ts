@@ -844,7 +844,7 @@ test('自由对话运行时展示实时步骤与工具活动', () => {
   assert.match(markup, /正在处理请求/)
   assert.match(markup, /正在调用 read_file 工具/)
   assert.match(markup, /展开调用链/)
-  assert.match(markup, /已记录 2 次调用/)
+  assert.doesNotMatch(markup, /tool-activity-chain-copy[^]*?已记录 2 次调用/)
   assert.doesNotMatch(markup, /已调用 grep 工具/)
 })
 
@@ -2073,7 +2073,7 @@ test('测试修复保留读取、编辑和验证调用，默认收起且仅在�
     )
     assert.match(markup, /正在执行局部修复任务/)
     assert.match(markup, /正在编辑文件：\/backend\/src\/App.java/)
-    assert.match(markup, /已记录 3 次调用/)
+    assert.doesNotMatch(markup, /已记录 3 次调用/)
     assert.match(markup, /aria-expanded="false"/)
     assert.match(markup, /展开调用链/)
     assert.doesNotMatch(markup, /tool-activity-chain-body/)

@@ -26,27 +26,25 @@ export function sessionsForWorkbenchPhase<Session extends { workbenchPhase: Work
 type RestorablePhaseSession = {
   id: string
   workbenchPhase: WorkbenchPhase
-  messageCount: number
+  updatedAt: number
 }
 
-/** 按显式交接、持久化选择、阶段默认值的顺序解析唯一恢复会话。 */
+/** 阶段默认展示最近更新的会话；显式业务交接仅在本次进入时指定新目标。 */
 export function sessionToRestoreForPhase<Session extends RestorablePhaseSession>(
   sessions: Session[],
   phase: WorkbenchPhase,
-  explicitSessionId?: string,
-  persistedSessionId?: string
+  explicitSessionId?: string
 ): Session | undefined {
   const phaseSessions = sessionsForWorkbenchPhase(sessions, phase)
   if (explicitSessionId) {
     // 显式阶段交接必须 fail closed；目标缺失时不能退回旧 persisted session。
     return phaseSessions.find((session) => session.id === explicitSessionId)
   }
-  const persistedSession = persistedSessionId
-    ? phaseSessions.find((session) => session.id === persistedSessionId)
-    : undefined
-  if (persistedSession) return persistedSession
-
-  return phaseSessions.find((session) => session.messageCount > 0) || phaseSessions[0]
+  // 不按消息数、修订、Thread 或上次浏览选择过滤；空的新会话同样是最近一次会话。
+  return phaseSessions.reduce<Session | undefined>((latest, session) => {
+    if (!latest) return session
+    return session.updatedAt > latest.updatedAt ? session : latest
+  }, undefined)
 }
 
 /** 读取指定编辑模式和工作台阶段各自选中的会话，避免跨阶段复用最后会话。 */

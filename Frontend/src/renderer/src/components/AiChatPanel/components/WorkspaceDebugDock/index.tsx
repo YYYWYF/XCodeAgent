@@ -40,7 +40,7 @@ export default function WorkspaceDebugDock({
   workspaceBusy,
   workspaceRoot
 }: Props): ReactElement {
-  // 二次修改暂停只提供原 checkpoint 继续，不暴露正式 Workflow 的节点调试入口。
+  // 二次修改仅展示任务控制，不暴露正式 Workflow 的节点调试入口。
   if (controlsOnly && rightContent) return rightContent
   return (
     <section

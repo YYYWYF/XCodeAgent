@@ -60,7 +60,7 @@ export type SendWorkflowMessageOptions = {
   workflowScope?: string
   executionRecovery?:
     | { action: 'execute'; incidentId: string; actionId: string }
-    | { action: 'retry_current_failure'; sourceRunId: string }
+    | { action: 'continue' | 'retry_current_failure'; sourceRunId: string }
   onContent?: (content: string) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
@@ -590,8 +590,10 @@ export class AgUiChatSession {
   }
 
   /** 返回当前会话是否仍有本地活动运行或尚未确认退出的服务端运行。 */
-  hasActiveRun(): boolean {
-    return Boolean(this.activeRunId || this.unresolvedServerRunId)
+  hasActiveRun(runId?: string): boolean {
+    return runId
+      ? this.activeRunId === runId || this.unresolvedServerRunId === runId
+      : Boolean(this.activeRunId || this.unresolvedServerRunId)
   }
 
   /** 有限等待旧运行自然结束，否则由服务端确认退出后再收口本地 SSE。 */

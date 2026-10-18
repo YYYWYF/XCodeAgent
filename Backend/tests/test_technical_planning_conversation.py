@@ -13,6 +13,11 @@ from app.persistence.checkpoints import close_workflow_checkpointer_for_workspac
 from app.persistence.execution_recovery import get_execution
 from app.protocols.application_page_planning import build_application_page_planning_ag_ui_stream
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.technical_planning_retry import prepare_technical_planning_retry
+from app.services.execution_recovery_executor import (
+    _technical_request_from_values, _validate_formal_revision_transaction_identity,
+)
+from app.domain.application_planning_recovery import application_planning_sha256
 from app.workspace.plan_documents import commit_technical_plan_document
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
@@ -145,20 +150,41 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
             planningThreadId=self.h.thread_id, status="design_planning",
             currentArtifact="ui-design", remainingArtifacts=["technical-plan"],
         )
-        current = lifecycle.model_copy(update={
-            "active_formal_revision": active,
-            "initialization": lifecycle.initialization.model_copy(update={
-                "stage": ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-                "status": ApplicationLifecycleStatus.AWAITING_USER,
-            }),
-        })
-        with (
-            patch("app.services.application_revision_lifecycle._required_lifecycle", return_value=current),
-            patch("app.services.application_revision_lifecycle.restart_application_planning_lifecycle", return_value=current) as restart,
+        for stage in (
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+            ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
         ):
-            result = ensure_technical_plan_generation_lifecycle(
-                self.h.workspace, active_run_id="feedback", thread_id=self.h.thread_id,
-                change_id=active.change_id,
-            )
-        self.assertEqual(result.active_formal_revision, active)
-        restart.assert_called_once_with(self.h.workspace, stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN, active_run_id="feedback")
+            with self.subTest(stage=stage):
+                current = lifecycle.model_copy(update={
+                    "active_formal_revision": active,
+                    "initialization": lifecycle.initialization.model_copy(update={
+                        "stage": stage, "status": ApplicationLifecycleStatus.AWAITING_USER,
+                    }),
+                })
+                with (
+                    patch("app.services.application_revision_lifecycle._required_lifecycle", return_value=current),
+                    patch("app.services.application_revision_lifecycle.restart_application_planning_lifecycle", return_value=current) as restart,
+                ):
+                    result = ensure_technical_plan_generation_lifecycle(
+                        self.h.workspace, active_run_id="feedback", thread_id=self.h.thread_id,
+                        change_id=active.change_id,
+                    )
+                self.assertEqual(result.active_formal_revision, active)
+                restart.assert_called_once_with(self.h.workspace, stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN, active_run_id="feedback")
+                _validate_formal_revision_transaction_identity(values={
+                    "change_id": active.change_id,
+                    "change_target": active.target.model_dump(mode="json"),
+                }, lifecycle=current)
+
+    async def test_retry_retains_input_authority_after_clearing_interaction(self):
+        """重试清空交互后，原业务要求仍是生成节点与事务边界共同的权威输入。"""
+        snapshot = await self.h.graph.aget_state(self.config)
+        state = {
+            **snapshot.values,
+            "application_planning_interaction": {"action": "revise", "request": "本轮已确认的技术修改要求"},
+            "design_change_generation_request": "上一轮残留的要求",
+        }
+        updated = {**state, **prepare_technical_planning_retry(state)}
+        self.assertEqual(_technical_request_from_values(updated), "本轮已确认的技术修改要求")
+        self.assertEqual(updated["application_planning_recovery_boundary"]["requestSha256"],
+                         application_planning_sha256("本轮已确认的技术修改要求"))

@@ -4,8 +4,10 @@
   flex-direction: column;
   gap: 14px;
   margin-top: 14px;
-  padding: 16px 0 0;
-  border-top: 1px solid var(--wb-border);
+  padding: 18px 16px;
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border-soft);
+  border-radius: 14px;
 
   > section {
     display: flex;
@@ -20,7 +22,7 @@
   flex-wrap: wrap;
   gap: 10px;
   > .ant-typography {
-    font-size: 13px;
+    font-size: 16px;
     font-weight: 600;
   }
 }
@@ -100,6 +102,13 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  &::before {
+    content: '';
+    width: 3px;
+    height: 14px;
+    border-radius: 3px;
+    background: var(--wb-accent);
+  }
   .ant-typography {
     color: var(--wb-text);
     font-size: 12px;
@@ -127,7 +136,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  padding: 12px;
+  padding: 14px;
   transition: background 150ms ease;
   + .@{class-prefix}-next-development-guide-item {
     border-top: 1px solid var(--wb-border-soft);

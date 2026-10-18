@@ -103,10 +103,16 @@ class NativeRecoveryRuntimeContext:
     entry_state: dict[str, Any] | None = None
     internal_progress: dict[str, Any] | None = None
     source_lineage_run_ids: tuple[str, ...] = ()
+    restart_node: bool = False
+    retry_lifecycle_before_handoff: Any = None
+    runtime_started: bool = False
+    retry_origin: Any = None
 
-    def node_recovery_context(self) -> NodeRecoveryContext:
+    def node_recovery_context(self) -> NodeRecoveryContext | None:
         """从已验证的 source、child 和 checkpoint 生成一次性节点侧视图。"""
 
+        if self.restart_node:
+            return None
         source = self.source_execution
         return NodeRecoveryContext(
             source_run_id=source.run_id,
@@ -133,7 +139,7 @@ class NativeRecoveryRuntimeContext:
         values = getattr(self.fork_snapshot, "values", {})
         values = values if isinstance(values, dict) else {}
         return {
-            "request": "从 durable checkpoint 继续执行。",
+            "request": str(values.get("request") or "") if self.restart_node else "从 durable checkpoint 继续执行。",
             "selected_skills_error": None,
             "selected_skill_names": list(values.get("selected_skill_names") or []),
             "project_id": self.project_id or "",
@@ -141,7 +147,7 @@ class NativeRecoveryRuntimeContext:
             "editor_mode": str(values.get("editor_mode") or "") or None,
             "workflow_scope": self.workflow_scope or "",
             "application_planning_interaction": None,
-            "resume_from": "",
+            "resume_from": self.recovery_plan.target_node if self.restart_node else "",
             "resume_values": {},
             "application_name": str(values.get("application_name") or "") or None,
             "workflow_debug_enabled": False,
@@ -555,8 +561,17 @@ async def _apply_application_planning_transaction_authority(
     status = lifecycle.initialization.status
     mode = RecoveryLifecycleOwnershipMode.SOURCE_OWNED
     if stage is ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY:
+        # 设计修订也经过同一显式入口；上方已验证该 change、branch 与 target 的权威归属。
+        active = lifecycle.active_formal_revision
+        design_revision_entry = (
+            boundary.operation is ApplicationPlanningOperation.REVISE
+            and active is not None
+            and active.change_id == change_id
+            and active.formal_branch.value == "design_stage_revision"
+            and active.status == "design_planning"
+        )
         if (
-            boundary.operation is not ApplicationPlanningOperation.INITIAL
+            (boundary.operation is not ApplicationPlanningOperation.INITIAL and not design_revision_entry)
             or status is not ApplicationLifecycleStatus.AWAITING_USER
         ):
             raise RecoveryExecutionError(
@@ -648,7 +663,10 @@ def _validate_formal_revision_transaction_identity(
     elif active is not None:
         matches = (
             active.change_id == change_id
-            and active.formal_branch.value == "workbench_plan_revision"
+            and (
+                active.formal_branch.value == "workbench_plan_revision"
+                or (active.formal_branch.value == "design_stage_revision" and active.status == "design_planning")
+            )
             and active.target == target
         )
     else:

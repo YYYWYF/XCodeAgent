@@ -78,7 +78,7 @@ def persist_planning_interruption(state: Mapping, run: PlanningRun) -> None:
             if key in run.planning_unit_ids
             and unit.generation_status == "candidate_ready"
             and unit.latest_candidate_id is not None
-        } if run.status == "active" else {}
+        } if run.status in {"active", "validated"} else {}
         payload = {
             "schema_version": "planning-interruption.v1",
             "source_workflow_run_id": run.workflow_run_id,
@@ -119,7 +119,7 @@ def load_planning_interruption(
             or projection["workflow_run_id"] != source_workflow_run_id
             or projection["planning_run_id"] != snapshot.source_planning_run_id
             or projection["revision"] != snapshot.source_revision
-            or projection["status"] != "active"
+            or projection["status"] not in {"active", "validated"}
         ):
             return None
         return snapshot

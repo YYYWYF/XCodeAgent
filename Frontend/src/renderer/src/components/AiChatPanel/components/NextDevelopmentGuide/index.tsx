@@ -1,7 +1,10 @@
 import {
   ArrowRightOutlined,
+  ApiOutlined,
+  AppstoreOutlined,
   CheckCircleOutlined,
   DownOutlined,
+  FileTextOutlined,
   InfoCircleOutlined
 } from '@ant-design/icons'
 import { Button, Typography } from 'antd'
@@ -55,7 +58,9 @@ export default function NextDevelopmentGuide({
   const currentTask = tasks.find((task) => task.id === currentId)
   const nextTask = nextDevelopmentTask(tasks, step.target)
   const targets = tasks.filter((task) => task.kind !== 'entity')
-  const remaining = targets.filter((task) => task.progress?.initialDevelopmentStatus !== 'completed')
+  const remaining = targets.filter(
+    (task) => task.progress?.initialDevelopmentStatus !== 'completed'
+  )
   const pendingPages = remaining.filter((task) => task.kind === 'page').length
   const pendingApis = remaining.filter((task) => task.kind === 'endpoint').length
   const statusLabel =
@@ -90,20 +95,61 @@ export default function NextDevelopmentGuide({
   }
 
   // End 成功后先给出唯一动作；重新发起只展开原任务卡，不直接启动 Agent。
-  if (step.endedRunId && !restarting) return (
-    <EndedTaskNotice unchanged={step.workspaceUnchanged} continuing={continuing} disabled={disabled}
-      onContinue={handleContinue} onRestart={() => { setRestarting(true); setExpanded(true) }} />
-  )
+  if (step.endedRunId && !restarting)
+    return (
+      <EndedTaskNotice
+        unchanged={step.workspaceUnchanged}
+        continuing={continuing}
+        disabled={disabled}
+        onContinue={handleContinue}
+        onRestart={() => {
+          setRestarting(true)
+          setExpanded(true)
+        }}
+      />
+    )
 
   return (
     <section className={cx('next-development-guide')} aria-label="继续开发引导" aria-live="polite">
       <header className={cx('next-development-guide-heading')}>
-        <Text>继续完善应用</Text>
+        <span className={cx('next-development-guide-heading-icon')} aria-hidden="true">
+          <CheckCircleOutlined />
+        </span>
+        <div className={cx('next-development-guide-heading-copy')}>
+          <Text strong>{step.reason === 'completed' ? '本轮开发已完成' : '本轮开发已结束'}</Text>
+          <Text type="secondary">继续完善应用，或在下方描述下一步修改。</Text>
+        </div>
         <span className={cx('next-development-guide-status')}>
           {step.reason === 'completed' ? <CheckCircleOutlined aria-hidden="true" /> : null}
           <span>{statusLabel}</span>
         </span>
       </header>
+      {!loading && !catalogError && targets.length ? (
+        <div className={cx('next-development-guide-overview')} aria-label="应用开发进度">
+          <div>
+            <AppstoreOutlined aria-hidden="true" />
+            <span>
+              已完成 / 全部目标
+              <strong>
+                {targets.length - remaining.length}
+                <small> / {targets.length}</small>
+              </strong>
+            </span>
+          </div>
+          <div>
+            <FileTextOutlined aria-hidden="true" />
+            <span>
+              应用页面<strong>{targets.filter((task) => task.kind === 'page').length}</strong>
+            </span>
+          </div>
+          <div>
+            <ApiOutlined aria-hidden="true" />
+            <span>
+              应用 API<strong>{targets.filter((task) => task.kind === 'endpoint').length}</strong>
+            </span>
+          </div>
+        </div>
+      ) : null}
       {loading || catalogError ? (
         <div className={cx('next-development-guide-notice')}>
           <Text type={catalogError ? 'danger' : 'secondary'}>
@@ -129,7 +175,9 @@ export default function NextDevelopmentGuide({
         </div>
       ) : (
         <div className={cx('next-development-guide-notice')}>
-          <Text>{allCompleted || !targets.length ? '暂无可开发任务' : '选择一个目标，继续完善应用'}</Text>
+          <Text>
+            {allCompleted || !targets.length ? '暂无可开发任务' : '选择一个目标，继续完善应用'}
+          </Text>
         </div>
       )}
       <footer className={cx('next-development-guide-footer')}>

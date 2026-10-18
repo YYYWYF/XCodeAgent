@@ -17,6 +17,7 @@ from typing import Any
 from pydantic import ValidationError
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.preview_runtime_guard import maintenance_lock, require_no_maintenance
+from app.services.workflow_quality_results import CODE_MUTATION_PHASES, pending_quality_results
 
 from app.domain.development_artifacts import DevelopmentArtifacts
 from app.domain.application_lifecycle import (
@@ -237,6 +238,10 @@ def write_application_lifecycle(
         from app.services.development_artifacts import reconcile_development_artifacts
 
         state = reconcile_development_artifacts(workspace, state)
+        # 只记录现有规划归属，不增加准入校验；清空 activeRunId 后仍保留失败修订的归属。
+        if state.active_formal_revision is not None and state.active_run_id:
+            state = state.model_copy(update={"active_formal_revision":
+                state.active_formal_revision.model_copy(update={"planning_run_id": state.active_run_id})})
         path.parent.mkdir(parents=True, exist_ok=True)
         if expected_revision is not None:
             current = load_application_lifecycle(workspace)
@@ -402,6 +407,7 @@ def start_workbench_execution(
     replaces_run_id: str | None = None,
     resource_claims: list[ExecutionResourceClaim] | None = None,
     development_continuation_consume: dict[str, str] | None = None,
+    revision_continuation_consume: dict[str, str] | None = None,
     initial_development_entry: bool = False,
     api_contract_id: str | None = None,
     requires_test_entry: bool = False,
@@ -429,6 +435,12 @@ def start_workbench_execution(
         current = load_application_lifecycle(workspace)
         if current is None:
             raise ApplicationLifecycleConflictError("进入计划执行模式前必须先创建生命周期状态。")
+        if revision_continuation_consume is not None:
+            from app.services.revision_continuation_handoff import consumed_continuation_state
+
+            # 仅修改内存；后面的既有入场检查全部通过后，与 execution/资源锁一次落盘。
+            current = consumed_continuation_state(current, **revision_continuation_consume,
+                technical_plan_path=Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans/technical-plan.json")
         if current.initialization.stage != ApplicationLifecycleStage.READY_FOR_WORKBENCH:
             raise ApplicationLifecycleConflictError(
                 "应用尚未完成创建规划，当前阶段 "
@@ -528,6 +540,9 @@ def start_workbench_execution(
             ]
         )
         acquired_at = utc_now()
+        if phase in CODE_MUTATION_PHASES:
+            # 新修改不能沿用上一轮验收通过；只更新结果，不增加准入条件。
+            current = current.model_copy(update={"extensions": pending_quality_results(current.extensions)})
         normalized_owner_session_id = str(owner_session_id or "").strip() or None
         next_locks = _resource_locks_with_claims(
             resource_locks,
@@ -609,6 +624,29 @@ def handoff_workbench_execution_for_recovery(
             raise ApplicationLifecycleConflictError(
                 "RECOVERY_STATE_DRIFT: child runId 已被其他 Workbench execution 占用。"
             )
+        retry_locks = None
+        if source.status in {WorkbenchExecutionStatus.FAILED, WorkbenchExecutionStatus.STOPPED}:
+            from app.services.failed_run_cleanup import failed_execution_retry_claims
+            from app.services.run_workers import active_worker_runs
+            from app.services.workspace_process_registry import workspace_process_registry
+
+            if source_run_id in active_worker_runs() or workspace_process_registry.active_run_processes(source_run_id):
+                raise ApplicationLifecycleConflictError("失败任务仍在退出，暂不能重试。")
+            # 失败不再持有资源锁；恢复必须重新取得完整集合，不能覆盖后来任务的占用。
+            claims = failed_execution_retry_claims(source)
+            requested = {_resource_claim_key(claim) for claim in claims}
+            for other_id in current.active_executions:
+                if other_id == source_run_id:
+                    continue
+                occupied = {_resource_claim_key(claim) for claim in _resource_claims_for_run(current.resource_locks, other_id)}
+                # 与正常登记的具名资源语义一致；应用范围不能在重试时突然扩成所有页面/接口的锁。
+                if requested & occupied:
+                    raise ApplicationLifecycleConflictError("重试所需资源正被其他任务占用，请等待其结束。")
+            retry_locks = _resource_locks_with_claims(
+                _resource_locks_without_run(current.resource_locks, source_run_id),
+                claims=claims, run_id=new_run_id, owner_page_id=source.page_id,
+                acquired_at=utc_now(),
+            )
         now = utc_now()
         child = source.model_copy(
             update={
@@ -631,7 +669,7 @@ def handoff_workbench_execution_for_recovery(
                 "revision": current.revision + 1,
                 "active_run_id": new_run_id,
                 "active_executions": executions,
-                "resource_locks": _transfer_resource_locks(
+                "resource_locks": retry_locks if retry_locks is not None else _transfer_resource_locks(
                     current.resource_locks,
                     source_run_id=source_run_id,
                     new_run_id=new_run_id,
@@ -884,6 +922,7 @@ def update_workbench_execution(
     pending_type: PendingInteractionType | None = None,
     pending_payload: dict[str, Any] | None = None,
     error: ApplicationLifecycleError | None = None,
+    extension_updates: dict[str, Any] | None = None,
 ) -> ApplicationLifecycle:
     """在节点完成、等待用户、失败或停止边界更新当前计划执行快照。"""
 
@@ -893,6 +932,13 @@ def update_workbench_execution(
         active = current.active_executions.get(run_id) if current else None
         if current is None or active is None:
             raise ApplicationLifecycleConflictError("当前没有可更新的工作台计划执行。")
+        # 业务边界的持久化结果与执行快照同一次落盘，避免只在前端显示已确认。
+        if extension_updates:
+            current = current.model_copy(
+                update={"extensions": {**current.extensions, **extension_updates}}
+            )
+        if phase in CODE_MUTATION_PHASES and status == WorkbenchExecutionStatus.RUNNING:
+            current = current.model_copy(update={"extensions": pending_quality_results(current.extensions)})
         next_revision = current.revision + 1
         pending = (
             _pending_interaction(

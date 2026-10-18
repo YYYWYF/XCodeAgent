@@ -13,6 +13,7 @@ from app.services.authorization_capability_dependency import (
 )
 from app.services.authorization_overlay import unit_authorization_slice
 from app.services.planning_issues import ValidationIssue
+from app.services.page_task_freshness import page_task_input_digest
 
 
 class BuildUnitCompilationError(ValueError):
@@ -103,6 +104,11 @@ def _with_task_unit_metadata(
         **canonical_source_refs,
         **provided_source_refs,
     }
+    # 覆盖声明绑定正式页面内容，不能用 Unit 已刷新的元数据替旧任务背书。
+    if unit_id.startswith("page:"):
+        source_refs["page_input_sha256"] = page_task_input_digest(
+            unit_id, _dict_value(build_context.get("project_plan"))
+        )
     # 权限 Overlay 是平台拥有的只读事实，模型候选不得提交或覆盖同名来源字段。
     authorization = unit_authorization_slice(unit_id, build_context)
     if authorization is not None:

@@ -5,6 +5,7 @@ import type { ApplicationConfig, ApplicationLifecycle } from '../../../typings'
 export type WorkbenchRunRefreshConnection = {
   scopeKey?: string
   start: () => number
+  isCurrentRequest: (generation: number) => boolean
   settle: (generation: number, error?: string) => void
 }
 
@@ -18,11 +19,11 @@ export async function refreshWorkbenchRun(
   const generation = connection.start()
   try {
     const lifecycle = await read()
-    if (!isCurrent()) return
+    if (!isCurrent() || !connection.isCurrentRequest(generation)) return
     connection.settle(generation)
     onLifecycle(lifecycle)
   } catch (reason) {
-    if (!isCurrent()) return
+    if (!isCurrent() || !connection.isCurrentRequest(generation)) return
     connection.settle(generation, reason instanceof Error ? reason.message : 'Backend 暂时不可用，无法同步最新状态。')
   }
 }

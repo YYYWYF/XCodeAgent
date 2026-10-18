@@ -156,7 +156,7 @@ export function isSupersededPlanningProgressMessage(
   return message.workflow?.summary?.status === 'running'
 }
 
-/** 模板准备终态覆盖空的规划进度，避免模板已就绪后仍显示“正在恢复计划阶段”。 */
+/** 模板准备终态覆盖空的规划进度，避免模板已就绪后仍显示规划加载占位。 */
 export function isTemplateSupersededPlanningProgressMessage(
   message: AgentChatMessage,
   templatePreparationVisible: boolean

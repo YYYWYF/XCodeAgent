@@ -39,6 +39,7 @@ type Props = {
   productPlan?: Record<string, unknown>
   requirementSpec?: Record<string, unknown>
   technicalPlan?: Record<string, unknown>
+  technicalPlanStatus?: string
   structuredDocument?: 'requirement-doc' | 'technical-plan'
   structuredDocumentLoading?: boolean
 }
@@ -53,6 +54,7 @@ export default function DocPanel({
   productPlan,
   requirementSpec,
   technicalPlan,
+  technicalPlanStatus,
   structuredDocument,
   structuredDocumentLoading
 }: Props): ReactElement {
@@ -74,7 +76,7 @@ export default function DocPanel({
             </span>
             {technicalPlan ? (
               <Tag className={cx('doc-panel-technical-status')}>
-                {technicalPlanStatusLabel(technicalPlan)}
+                {technicalPlanStatus || technicalPlanStatusLabel(technicalPlan)}
               </Tag>
             ) : null}
           </div>

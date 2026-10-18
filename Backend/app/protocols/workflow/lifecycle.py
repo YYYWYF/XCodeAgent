@@ -157,6 +157,7 @@ def begin_workflow_lifecycle(
             run_id=revision_continuation_replaces_run_id,
             scope=scope_type,
             target_id=target_id,
+            pending_consumption=workflow_inputs.get("revision_continuation_consume") is not None,
         )
     submission_run_id = (
         str(submission.get("runId") or "")
@@ -180,6 +181,7 @@ def begin_workflow_lifecycle(
         ),
         resource_claims=resource_claims,
         development_continuation_consume=workflow_inputs.get("development_continuation_consume"),
+        revision_continuation_consume=workflow_inputs.get("revision_continuation_consume"),
         initial_development_entry=(
             (phase == "api_design_readiness_gate" or use_executed_scope)
             and workflow_inputs.get("workflow_action") != "continue_revision_build"
@@ -203,6 +205,7 @@ def _validate_revision_continuation_replacement(
     run_id: str,
     scope: str,
     target_id: str,
+    pending_consumption: bool = False,
 ) -> None:
     """校验存在来源 execution 时的 continuation 原子接管边界。"""
 
@@ -210,8 +213,8 @@ def _validate_revision_continuation_replacement(
     execution = lifecycle.active_executions.get(run_id)
     if (
         active_revision is None
-        or active_revision.status != "building"
-        or active_revision.continuation_consumed_at is None
+        or active_revision.status != ("continuation_ready" if pending_consumption else "building")
+        or (not pending_consumption and active_revision.continuation_consumed_at is None)
         or active_revision.continuation_source_run_id != run_id
         or execution is None
         or execution.phase != "application_revision"
@@ -461,11 +464,17 @@ def project_workflow_lifecycle_boundary(
         projected_phase = "code_review"
     elif node_name == "acceptance_phase_confirmation" and status == "completed":
         projected_phase = "acceptance"
+    # 只有原验收节点实际消费了用户决定后才记录通过；后续 finalize 沿既有逻辑释放资源。
+    acceptance_passed = node_name == "acceptance" and status == "completed" and update.get("accepted") is True
     state = update_workbench_execution(
         workspace,
         run_id=run_id,
         phase=projected_phase,
         status=WorkbenchExecutionStatus.RUNNING,
+        extension_updates=(
+            {"testExecutionStatus": "passed", "reviewStatus": "passed", "acceptanceStatus": "passed"}
+            if acceptance_passed else None
+        ),
     )
     payload = application_lifecycle_payload(state)
     if node_name == "prepare_build_tasks":

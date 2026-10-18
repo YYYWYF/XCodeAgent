@@ -337,19 +337,19 @@ export default function ChatComposer({
             )}
             {debugOnly && loading && (
               <Text className={cx('workflow-debug-running-hint')}>
-                {stopping ? 'Agent 正在暂停，请稍候' : 'Agent 正在运行，暂停或等待结束后可调试'}
+                {stopping ? 'Agent 正在退出，请稍候' : 'Agent 正在运行，结束任务后可调试'}
               </Text>
             )}
             {loading && !debugOnly ? (
               <Button
-                aria-label={stopping ? '正在停止' : '停止生成'}
+                aria-label={stopping ? '正在结束任务' : '结束任务'}
                 className={cx('composer-send-button')}
                 danger
                 disabled={stopping}
                 icon={<StopOutlined />}
                 onClick={onStopGenerating}
                 shape="circle"
-                title={stopping ? '正在停止...' : '停止生成'}
+                title={stopping ? '正在结束任务…' : '结束任务'}
               />
             ) : (
               <Button

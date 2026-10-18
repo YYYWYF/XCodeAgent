@@ -5,6 +5,7 @@ from typing import Any
 
 from app.domain.application_revision import ActiveFormalRevision, FormalRevisionBranch
 from app.domain.application_lifecycle import utc_now
+from app.services.workflow_quality_results import pending_quality_results
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
     _application_lifecycle_lock,
@@ -72,6 +73,7 @@ def approve_design_revision_from_checkpoint(
             updated = current.model_copy(update={
                 'updated_at': utc_now(), 'revision': current.revision + 1,
                 'pending_revision_impact': None, 'active_formal_revision': active,
+                'extensions': pending_quality_results(current.extensions),
             })
             write_application_lifecycle(workspace, updated, expected_revision=current.revision)
         if not _awaits_initial_administrator_subjects(active):

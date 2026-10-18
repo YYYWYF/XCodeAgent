@@ -1370,6 +1370,8 @@ export type ApplicationLifecycle = {
     sourceThreadId: string
     sourceRunId: string
     planningThreadId: string
+    /** 最近拥有此修订的规划 Run，供缺失恢复入口后的精确收尾使用。 */
+    planningRunId?: string | null
     status: string
     currentArtifact?: string | null
     remainingArtifacts?: string[]
@@ -1406,6 +1408,7 @@ export type WorkflowRunPayload = {
 }
 
 export type WorkflowAction =
+  | 'start_modified_testing'
   | 'retry_code_review'
   | 'retry_template_reconcile'
   | 'start_design_revision'

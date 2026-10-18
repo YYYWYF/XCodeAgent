@@ -267,18 +267,17 @@ function renderPhaseDock(
       onConfirmInteraction={() => undefined}
       onEnd={() => undefined}
       onOpenPreview={() => undefined}
-      onRetry={() => undefined}
-      onStop={() => undefined}
     />
   )
 }
 
-test('底部失败状态只保留结束控制，停止状态仍可继续', () => {
-  const failed = renderPhaseDock('failed')
-  const stopped = renderPhaseDock('stopped')
-  assert.doesNotMatch(failed, /重试失败任务|继续执行/)
-  assert.match(failed, /结束/)
-  assert.match(stopped, /继续执行/)
+test('执行控制移除暂停和暂停续接，运行、停止及失败均可结束任务', () => {
+  for (const mode of ['running', 'stopping', 'stopped', 'failed', 'awaiting_authorization', 'awaiting_repair_confirmation'] as const) {
+    const html = renderPhaseDock(mode)
+    assert.doesNotMatch(html, /暂停执行|正在暂停|继续执行/)
+    assert.match(html, /结束任务/)
+    assert.doesNotMatch(html, /<button[^>]*disabled[^>]*>结束任务/)
+  }
 })
 
 test('底部阶段提示遵循全应用开发门禁，2/3 不声称可以进入测试或审查', () => {

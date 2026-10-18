@@ -16,6 +16,7 @@ type ApplicationLifecyclePayload = {
     | 'retry_bootstrap_template_generation'
     | 'workspace_attach'
     | 'prepare_session_deletion'
+    | 'end_planning_execution'
   lifecycle?: ApplicationLifecycle
   /** 仅 Bootstrap 动作返回：模板基线推成远端分支的结果（失败不影响 Bootstrap 成功）。 */
   repositoryBranch?: RepositoryBranchOutcome
@@ -24,6 +25,7 @@ type ApplicationLifecyclePayload = {
 
 /** 工作区尚未建立生命周期状态：后端以 ApplicationLifecycleMissingError 单独标识，可幂等补建。 */
 const MISSING_LIFECYCLE_ERROR_TYPE = 'ApplicationLifecycleMissingError'
+const LIFECYCLE_STATUS_REQUEST_TIMEOUT_MS = 20_000
 
 /** Bootstrap 动作的结果：权威 lifecycle + 非致命的远端分支推送结果。 */
 export type ApplicationTemplateBootstrapResult = {
@@ -120,10 +122,25 @@ async function runApplicationLifecycleRequest(
       payload = readApplicationLifecycleState(event.snapshot) ?? payload
     }
   }
-  const result = await agent.runAgent(
-    { forwardedProps: { applicationLifecycle: action } },
-    subscriber
-  )
+  // 只限制状态同步请求；模板生成、创建、删除等业务动作不套用查询超时。
+  const statusRequest = action.action === 'get' || action.action === 'workspace_attach'
+  let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined
+  let result: Awaited<ReturnType<typeof agent.runAgent>>
+  try {
+    const request = agent.runAgent({ forwardedProps: { applicationLifecycle: action } }, subscriber)
+    result = statusRequest ? await Promise.race([
+      request,
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = globalThis.setTimeout(() => {
+          // 先结束等待，即使底层网络没有响应取消，也能释放共享查询供下一次同步使用。
+          reject(new Error('应用状态同步超时，请重新同步。'))
+          agent.abortRun()
+        }, LIFECYCLE_STATUS_REQUEST_TIMEOUT_MS)
+      })
+    ]) : await request
+  } finally {
+    if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId)
+  }
   payload = readApplicationLifecycleState(result.result) ?? payload
   if (!payload) throw new Error('生命周期接口没有返回有效的 AG-UI 状态。')
   if (payload.status === 'failed') {
@@ -166,6 +183,17 @@ export async function createApplicationLifecycle(
     application.id,
     threadId
   )
+}
+
+/** 通过既有 AG-UI 控制端点完整结束当前规划修订，保留文件并释放执行占用。 */
+export async function endApplicationPlanningExecution(
+  application: Pick<ApplicationConfig, 'workspaceRoot' | 'id'>,
+  threadId: string
+): Promise<ApplicationLifecycle> {
+  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
+  return assertApplicationLifecycleOwnership(await runApplicationLifecycleAction(threadId, {
+    action: 'end_planning_execution', workspaceRoot: application.workspaceRoot
+  }), application.id)
 }
 
 // 先接管可能中断的 Workspace，再读取权威生命周期，并合并 StrictMode 等并发请求。

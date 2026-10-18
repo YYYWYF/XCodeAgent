@@ -367,6 +367,15 @@ async def _observe_terminal_status(
         ended_at=_utc_now(),
         failure=failure,
     )
+    if status is DurableExecutionStatus.FAILED:
+        try:
+            from app.services.failed_execution_reconciliation import reconcile_failed_execution_lifecycle
+            source = await get_execution(workspace, run_id)
+            if source is not None:
+                reconcile_failed_execution_lifecycle(source)
+        except Exception:
+            # 两份存储不能跨文件事务提交；同步或重试准备会再次幂等收口，不丢失 Durable 失败。
+            logger.warning("recovery.failure_lifecycle_sync_failed runId=%s", run_id, exc_info=True)
     logger.info(
         "%s runId=%s threadId=%s workflowScope=%s status=%s",
         log_name,

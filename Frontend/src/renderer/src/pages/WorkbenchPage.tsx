@@ -263,10 +263,17 @@ function WorkbenchPage({
             if (!active) return
             onApplicationLifecycleChange(currentLifecycle)
             if (!isApplicationCreationComplete(currentLifecycle)) return
-            const details = [...inspection.missing, ...inspection.invalid].join('、')
-            failWorkbenchEntry(
-              details ? `工作区规划产物缺失或损坏：${details}` : '工作区规划产物不完整。'
-            )
+            const artifactNames: Record<string, string> = {
+              'requirement-spec': '需求文档', 'product-plan': '产品计划', 'technical-plan': '技术规划'
+            }
+            // 入口提示只显示业务产物名称，文件路径留在诊断日志和恢复卡详情中。
+            const details = [...new Set([...inspection.missing, ...inspection.invalid].map(
+              (path) => artifactNames[path.split('/').pop()?.replace(/\.(json|md)$/, '') || ''] || '规划文档'
+            ))].join('、')
+            // 业务产物损坏需要进入工作台修复；不能返回首页并把重新生成入口一起卸载。
+            message.warning(details
+              ? `规划文件缺失或不完整：${details}。执行时会提供对应步骤的重新生成入口。`
+              : '规划文件不完整。执行时会提供对应步骤的重新生成入口。')
           }
         }
       } catch (error) {

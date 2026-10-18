@@ -106,7 +106,7 @@ function AppEntryContent(): JSX.Element {
       const lifecycle =
         event.type === 'reconcile_received'
           ? event.lifecycle
-          : event.type === 'lifecycle_received'
+          : event.type === 'lifecycle_received' || event.type === 'planning_ended'
             ? event.lifecycle
             : event.type === 'workflow_received'
               ? workflowApplicationLifecycle(event.workflow)
@@ -335,6 +335,9 @@ function AppEntryContent(): JSX.Element {
             } else {
               void planningRuntimeController.retryCurrentFailure(visiblePlanning.application.id)
             }
+          }}
+          onReconnect={() => {
+            void planningRuntimeController.reconcileCurrentState(visiblePlanning.application.id).catch(console.error)
           }}
           onReturnHome={planningController.returnHome}
           theme={theme}

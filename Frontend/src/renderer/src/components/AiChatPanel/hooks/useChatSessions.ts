@@ -40,7 +40,7 @@ import {
 } from './sessionRuntime'
 import { clearEntityDesignDraftStore } from '../components/WorkflowRunCard/EntityDesignPanels'
 import { useSessionRuntimeStore } from './useSessionRuntimeStore'
-import { revisionDevelopmentSessionForContinuation } from './revisionSession'
+import { revisionContinuationOutputSession } from './revisionSession'
 import {
   sessionToRestoreForPhase,
   sessionsForWorkbenchPhase,
@@ -96,9 +96,6 @@ type UseChatSessionsParams = {
   workbenchPhase: WorkbenchPhase
   onCloseRightPanel: () => void
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
-  /** 设计阶段：规划 session 由 ensurePlanningSession 激活，loadSessionsForMode
-   *  只加载会话列表不自动 openChatSession，避免覆盖规划 session 的 activeSessionId。 */
-  designPhasePlanning?: boolean
 }
 
 type UseChatSessionsResult = {
@@ -122,7 +119,7 @@ type UseChatSessionsResult = {
     sourceIdentity?: SessionIdentity
   ) => Promise<SessionIdentity>
   ensureRevisionDevelopmentSession: (
-    source: SessionIdentity,
+    source: SessionIdentity | undefined,
     continuation: WorkflowRevisionContinuation
   ) => Promise<SessionIdentity>
   activateRevisionDevelopmentSession: (identity: SessionIdentity) => Promise<void>
@@ -153,8 +150,7 @@ export function useChatSessions({
   editorMode,
   workbenchPhase,
   onCloseRightPanel,
-  onApplicationLifecycleChange,
-  designPhasePlanning = false
+  onApplicationLifecycleChange
 }: UseChatSessionsParams): UseChatSessionsResult {
   const { recordReachedPhase } = useWorkbenchPhase()
   const [sessionSummaries, setSessionSummaries] = useState<
@@ -178,9 +174,6 @@ export function useChatSessions({
   >({})
   // 同一编辑模式只允许最后一次阶段加载写回，避免旧阶段的迟到请求覆盖新会话。
   const sessionLoadGenerationRef = useRef<Partial<Record<EditorMode, number>>>({})
-  // 设计阶段规划 session 已激活标志：ensurePlanningSession 完成后置 true，
-  // 阻止 loadSessionsForMode 的异步 openChatSession 覆盖规划 session 的 activeSessionId。
-  const planningSessionActivatedRef = useRef(false)
   const {
     agUiSessionsRef,
     draftForKey,
@@ -200,13 +193,6 @@ export function useChatSessions({
   useEffect(() => {
     sessionSummariesRef.current = sessionSummaries
   }, [sessionSummaries])
-
-  // 退出设计阶段时重置规划 session 激活标志，允许后续正常 openChatSession。
-  useEffect(() => {
-    if (!designPhasePlanning) {
-      planningSessionActivatedRef.current = false
-    }
-  }, [designPhasePlanning])
 
   useEffect(() => {
     void loadSessionsForMode(editorMode, workbenchPhase)
@@ -281,21 +267,15 @@ export function useChatSessions({
         setActiveSessionIds((current) => withoutEditorModeSessionSelection(current, mode))
         return
       }
-      // 设计阶段规划 session 由 ensurePlanningSession 激活，这里只加载完整列表，
-      // 不自动打开其他会话抢占规划对话。
-      if (designPhasePlanning) return
-      // 当前阶段列表负责界面恢复；跨阶段的历史会话由 allSessions 供上层身份恢复使用。
-      // 显式交接目标拥有最高优先级；只有普通恢复才读取 localStorage 和阶段默认值。
+      // 所有阶段使用同一展示规则：进入时打开最近一次会话，不依赖规划或修订身份。
       const explicitSessionId = explicitPhaseSessionTargetsRef.current[mode]?.[phase]
-      const persistedSessionId = getPersistedActiveSessionId(application.id, mode, phase)
       const sessionToOpen = sessionToRestoreForPhase(
         nextSessions,
         phase,
-        explicitSessionId,
-        persistedSessionId
+        explicitSessionId
       )
       if (sessionToOpen) {
-        await openChatSession(mode, sessionToOpen.id, phase, true)
+        await openChatSession(mode, sessionToOpen.id, phase)
         if (explicitPhaseSessionTargetsRef.current[mode]?.[phase] === sessionToOpen.id) {
           delete explicitPhaseSessionTargetsRef.current[mode]?.[phase]
         }
@@ -326,15 +306,11 @@ export function useChatSessions({
   const openChatSession = async (
     mode: EditorMode,
     sessionId: string,
-    phase: WorkbenchPhase = workbenchPhase,
-    forceActivate = false
+    phase: WorkbenchPhase = workbenchPhase
   ): Promise<void> => {
     if (!application.workspaceRoot) return
 
     await loadChatSessionIdentity(mode, sessionId)
-
-    // 设计阶段规划 session 已激活时，不抢 activeSessionId，避免覆盖规划对话。
-    if (planningSessionActivatedRef.current && !forceActivate) return
 
     setActiveSessionIds((current) => withSelectedSessionForPhase(current, mode, phase, sessionId))
     setPersistedActiveSessionId(application.id, mode, phase, sessionId)
@@ -397,7 +373,7 @@ export function useChatSessions({
         (session) => session.id === sessionId
       )
       if (!summary) throw new Error('目标 owner 会话不存在或已被删除。')
-      await openChatSession(editorMode, sessionId, summary.workbenchPhase, true)
+      await openChatSession(editorMode, sessionId, summary.workbenchPhase)
     } catch (caughtError) {
       setSessionErrors((current) => ({
         ...current,
@@ -435,7 +411,7 @@ export function useChatSessions({
       [phase]: summary.id
     }
     try {
-      await openChatSession(editorMode, summary.id, phase, true)
+      await openChatSession(editorMode, summary.id, phase)
     } catch (error) {
       if (explicitPhaseSessionTargetsRef.current[editorMode]?.[phase] === summary.id) {
         delete explicitPhaseSessionTargetsRef.current[editorMode]?.[phase]
@@ -590,7 +566,6 @@ export function useChatSessions({
             // 读取失败不阻塞，后续流式 chunk 仍可注入。
           }
         }
-        planningSessionActivatedRef.current = true
         setActiveSessionIds((current) =>
           withSelectedSessionForPhase(current, editorMode, phase, best.id)
         )
@@ -604,24 +579,26 @@ export function useChatSessions({
       workbenchPhase: phase,
       revisionContext
     })
-    planningSessionActivatedRef.current = true
     return identity
   }
 
-  /** 解析并载入发起二次修改的原始开发会话；禁止为 continuation 新建会话。 */
+  /** 复用本机开发会话承接后端续接；无历史时新建输出会话，不阻断正式流程。 */
   const ensureRevisionDevelopmentSession = async (
-    source: SessionIdentity,
+    source: SessionIdentity | undefined,
     continuation: WorkflowRevisionContinuation
   ): Promise<SessionIdentity> => {
-    const originalSession = revisionDevelopmentSessionForContinuation(
-      sessionSummariesRef.current[editorMode],
-      source,
-      continuation
-    )
-    if (!originalSession) {
-      throw new Error('找不到发起二次修改的原始开发会话，无法继续开发。')
+    const summaries = sessionSummariesRef.current[editorMode]
+    const existing = revisionContinuationOutputSession(summaries, application.id, source, continuation)
+    if (existing) {
+      try { return await loadChatSessionIdentity(editorMode, existing.id) }
+      catch { /* 本地历史损坏只影响回看，后端 continuation 仍可由新会话承接。 */ }
     }
-    return loadChatSessionIdentity(editorMode, originalSession.id)
+    return createNewSession({
+      title: '正式修改 · 继续开发',
+      entryKey: `revision-continuation:${continuation.changeId}`,
+      workbenchPhase: 'development',
+      activate: false
+    })
   }
 
   /** 激活发起二次修改的原始开发会话，并将其锁定为本次阶段交接目标。 */
@@ -634,14 +611,13 @@ export function useChatSessions({
         session.stage === 'DEVELOPMENT'
     )
     if (!summary) throw new Error('发起二次修改的原始开发会话不存在或身份不匹配。')
-    planningSessionActivatedRef.current = false
     // 自动 continuation 与回执按钮共用同一显式目标，切阶段后的恢复不得降级到旧开发会话。
     explicitPhaseSessionTargetsRef.current[editorMode] = {
       ...explicitPhaseSessionTargetsRef.current[editorMode],
       development: summary.id
     }
     try {
-      await openChatSession(editorMode, summary.id, 'development', true)
+      await openChatSession(editorMode, summary.id, 'development')
     } catch (error) {
       if (explicitPhaseSessionTargetsRef.current[editorMode]?.development === summary.id) {
         delete explicitPhaseSessionTargetsRef.current[editorMode]?.development

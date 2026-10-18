@@ -101,6 +101,15 @@ class WorkspaceRunLeaseRegistry:
                 None,
             )
 
+    def release_run(self, *, workspace_root: str, run_id: str) -> None:
+        """真实工作退出后仅释放指定工作区和 Run，不能清理其他会话的租约。"""
+        workspace_key = effective_workspace_key(workspace_root, None)
+        with self._lock:
+            keys = [key for key, owner in self._active.items()
+                    if owner.workspace_key == workspace_key and owner.run_id == run_id]
+            for key in keys:
+                self._active.pop(key, None)
+
     def release_workspace(
         self,
         *,

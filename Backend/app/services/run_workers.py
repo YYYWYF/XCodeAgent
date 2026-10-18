@@ -16,9 +16,24 @@ _condition = Condition()
 _workers: dict[str, tuple[str, int]] = {}
 
 
+def _current_worker_identity() -> tuple[str, str]:
+    """优先使用显式运行绑定，嵌套 Context 重建后从当前 RunnableConfig 取回同次身份。"""
+    identity = _run.get()
+    if identity[0]:
+        return identity
+    from langchain_core.runnables.config import ensure_config
+
+    # LangGraph/DeepAgent 的嵌套调用会继续传递 RunnableConfig，但不保证保留外层 ContextVar。
+    metadata = ensure_config().get("metadata", {})
+    run_id, workspace = metadata.get("run_id"), metadata.get("workspace")
+    if not isinstance(run_id, str) or not run_id or not isinstance(workspace, str) or not workspace:
+        return ("", "")
+    return run_id, os.path.normcase(str(Path(workspace).expanduser().resolve()))
+
+
 def current_run_id() -> str:
     """读取随 Graph 和线程池传播的精确运行身份。"""
-    return _run.get()[0]
+    return _current_worker_identity()[0]
 
 
 @contextmanager
@@ -37,7 +52,7 @@ def run_worker():
     """登记真实工作直到 finally 完成，并拒绝取消之后才调度的迟到工作。"""
     from app.services.workspace_process_registry import workspace_process_registry
 
-    run_id, workspace = _run.get()
+    run_id, workspace = _current_worker_identity()
     if not run_id:
         yield
         return

@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import ChatComposer from '../src/renderer/src/components/AiChatPanel/components/ChatComposer'
+import { isConversationWorkflow } from '../src/renderer/src/components/AiChatPanel/conversationMode'
 import {
+  generationControlOwner,
   ownedWorkbenchExecution,
   restoreWorkbenchPresentation,
   workbenchExecutionRunning
 } from '../src/renderer/src/components/AiChatPanel/workbenchRunPresentation'
 import { latestApplicationLifecycle } from '../src/renderer/src/service/activeApplicationPlanning'
+import { workflowInteractionAvailability, workflowMessageInteractionAvailability, deriveDisplayedPlanExecutionMode } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
+import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import type { ApplicationLifecycle, WorkbenchExecution, ExecutionRecoveryCandidate } from '../src/renderer/src/typings'
 import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import type { DagGenerationSnapshot } from '../src/renderer/src/service/agUiAgent'
@@ -52,6 +59,56 @@ test('重入恢复运行状态和已有任务进度，重复读取不增加消�
   const second = restoreWorkbenchPresentation(first.messages, fixture(2), session)
   assert.equal(second.messages.length, 1)
   assert.equal(second.messages[0].processSteps?.[0].dagGeneration?.revision, 2)
+})
+
+test('二次修改重开后无本地流，恢复的真实执行仍显示可用结束按钮', () => {
+  const lifecycle = fixture()
+  const messages = [{ id: 1, role: 'assistant', content: '', workflow: {
+    runId: 'run-1', threadId: 'graph-thread', events: [],
+    summary: { status: 'running', intent: 'implementation_fix' },
+    state: { workflow_scope: 'conversation' }
+  } }] as AgentChatMessage[]
+  const restored = restoreWorkbenchPresentation(messages, lifecycle, session)
+  assert.equal(isConversationWorkflow(restored.workflow), true)
+  const owner = generationControlOwner(false,
+    workbenchExecutionRunning(ownedWorkbenchExecution(lifecycle, session)), false)
+  assert.equal(owner, 'workflow')
+  const html = renderToStaticMarkup(createElement(ChatComposer, {
+    activeWorkflow: restored.workflow,
+    copy: { title: '应用开发助手', placeholder: '描述需求' } as any,
+    draft: '', loading: Boolean(owner), stopping: false, workspaceBusy: false,
+    workspaceRoot: '/tmp/reopen-end-control', selectedSkills: [],
+    onDraftChange: () => undefined, onSelectedSkillsChange: () => undefined,
+    onSend: async () => undefined, onStopGenerating: () => undefined
+  }))
+  assert.match(html, /<button[^>]*aria-label="结束任务"/)
+  assert.doesNotMatch(html, /<button[^>]*aria-label="结束任务"[^>]*disabled/)
+  assert.doesNotMatch(html, /暂停执行|aria-label="发送给 Workflow"/)
+  lifecycle.activeExecutions = {}
+  assert.equal(generationControlOwner(false,
+    workbenchExecutionRunning(ownedWorkbenchExecution(lifecycle, session)), false), undefined)
+  assert.equal(generationControlOwner(false, false, true), 'planning')
+})
+
+test('冷进入以当前待确认覆盖旧暂停，确认入口可提交且不再显示继续', () => {
+  const lifecycle = fixture()
+  const execution = lifecycle.activeExecutions['run-1']
+  execution.status = 'awaiting_user'
+  execution.phase = 'test_phase_confirmation'
+  execution.pendingInteraction = { id: 'current-gate', type: 'test_phase_confirmation', basedOnRevision: 10,
+    payload: { mode: 'test_phase_confirmation', message: '进入测试阶段' }, artifactRefs: [], createdAt: '', submittedAt: null }
+  const messages = [{ id: 99, role: 'assistant', content: '已停止生成。',
+    workflow: { runId: execution.runId, threadId: execution.threadId, events: [],
+      summary: { status: 'stopped', phase: execution.phase } } }] as AgentChatMessage[]
+  const restored = restoreWorkbenchPresentation(messages, lifecycle, session)
+  assert.equal(restored.messages.length, 1)
+  assert.equal(restored.messages[0].id, 99)
+  assert.equal(restored.workflow?.summary.status, 'requires_user_input')
+  assert.equal(restored.workflow?.summary.clarification?.message, '进入测试阶段')
+  assert.equal(workflowInteractionAvailability(restored.workflow!, lifecycle), 'active')
+  assert.equal(workflowMessageInteractionAvailability(restored.workflow!, lifecycle, true, false), 'active')
+  assert.equal(deriveDisplayedPlanExecutionMode(execution, restored.workflow?.summary.status, false, true), 'awaiting_test_phase_confirmation')
+  assert.equal(messages[0].workflow?.summary.status, 'stopped')
 })
 
 test('其它会话和错线程进度不能借用', () => {

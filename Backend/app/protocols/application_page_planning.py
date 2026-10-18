@@ -20,6 +20,7 @@ from app.domain.execution_recovery import (
     DurableExecutionStatus,
     RecoveryExecutionError,
 )
+from app.domain.application_lifecycle import ApplicationLifecycleStatus
 from app.graph.application_planning_revision import (
     technical_plan_revision_reset_state,
 )
@@ -76,12 +77,6 @@ REQUIREMENT_SPEC_DRAFT_EVENT_NAME = "requirement-spec-draft"
 logger = logging.getLogger("uvicorn.error")
 
 
-class ApplicationPlanningCheckpointNotFoundError(RuntimeError):
-    """标识只读恢复没有找到目标 application planning checkpoint。"""
-
-    code = "application_planning_checkpoint_not_found"
-
-
 class ApplicationPlanningRecoveryRequest(BaseModel):
     """校验只读恢复动作需要的工作区和应用定位字段。"""
 
@@ -111,29 +106,10 @@ async def _build_application_planning_recovery_projection(
 ) -> ApplicationPlanningRecoveryProjection:
     """在公开 Workflow 边界调用 Generic Recovery authority 并生成 Planning DTO。"""
 
-    if lineage_resolution is not None:
-        if lineage_resolution.state is RecoveryLineageState.AMBIGUOUS:
-            return build_application_planning_recovery_projection(
-                classification="blocked",
-                source=None,
-                thread_id=thread_id,
-                reason_code=lineage_resolution.reason_code,
-                message="当前规划状态无法安全自动恢复，请查看恢复状态。",
-            )
-        if lineage_resolution.state is RecoveryLineageState.NO_HEAD:
-            source = None
-        elif lineage_resolution.head is None:
-            return build_application_planning_recovery_projection(
-                classification="blocked",
-                source=None,
-                thread_id=thread_id,
-                reason_code="RECOVERY_LINEAGE_HEAD_MISSING",
-                message="当前规划状态无法安全自动恢复，请查看恢复状态。",
-            )
-        else:
-            source = lineage_resolution.head
-
     input_committed = application_planning_input_committed(source, snapshot)
+    from app.services.checkpoint_execution import checkpoint_source, interpret_checkpoint
+    if source is not None:
+        source = checkpoint_source(source, interpret_checkpoint(source, snapshot, graph))
     interrupt = application_planning_interrupt_from_snapshot(snapshot)
     if interrupt is not None and (
         source is None
@@ -191,102 +167,14 @@ async def _build_application_planning_recovery_projection(
             reason_code=f"DURABLE_APPLICATION_PLANNING_{source.status.name}",
             message=message,
         )
+    # 没有原生确认现场时不相信旁路索引中的 awaiting_user；沿统一恢复入口处理。
     if source.status is DurableExecutionStatus.AWAITING_USER:
-        return build_application_planning_recovery_projection(
-            classification="conflict",
-            source=source,
-            thread_id=thread_id,
-            input_committed=input_committed,
-            reason_code="DURABLE_AWAITING_USER_WITHOUT_NATIVE_INTERRUPT",
-            message="当前规划状态需要重新校准。",
-        )
+        source = source.model_copy(update={"status": DurableExecutionStatus.INTERRUPTED})
 
-    if source.status is DurableExecutionStatus.FAILED:
-        admission = assess_recovery_source(source)
-        if not admission.admissible:
-            action_plan = plan_failed_node_reentry_action(
-                workspace=workspace,
-                source=source,
-                error=RecoveryExecutionError(
-                    admission.reason_code,
-                    "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
-                ),
-            )
-        else:
-            try:
-                reentry_plan = await FailureTargetResolver().resolve(
-                    workspace=workspace,
-                    source=source,
-                    graph=graph,
-                )
-            except RecoveryExecutionError as exc:
-                action_plan = plan_failed_node_reentry_action(
-                    workspace=workspace,
-                    source=source,
-                    error=exc,
-                )
-            else:
-                action_plan = plan_failed_node_reentry_action(
-                    workspace=workspace,
-                    source=source,
-                    reentry_plan=reentry_plan,
-                )
-    elif source.status is DurableExecutionStatus.INTERRUPTED:
-        # 与兜底执行器共用已提交 checkpoint；当前读取可能含断线后尚未提交的
-        # pending writes，不能用它的空 next 把中断的生成节点误判为完成。
-        resolution = await InterruptedTargetResolver().resolve(
-            workspace=workspace,
-            source=source,
-            graph=graph,
-        )
-        if resolution.kind in {"terminal", "awaiting_user"}:
-            status = resolution.terminal_status or (
-                DurableExecutionStatus.AWAITING_USER
-                if resolution.kind == "awaiting_user"
-                else DurableExecutionStatus.COMPLETED
-            )
-            reconciled = await reconcile_interrupted_execution_state(
-                workspace=workspace,
-                source=source,
-                status=status,
-                snapshot=resolution.snapshot,
-            )
-            classification, message, user_action_required = (
-                terminal_application_planning_projection_fields(status)
-            )
-            return build_application_planning_recovery_projection(
-                classification=classification,
-                source=reconciled or source,
-                thread_id=thread_id,
-                user_action_required=user_action_required,
-                input_committed=input_committed,
-                reason_code=resolution.reason_code,
-                message=message,
-            )
-        if resolution.kind == "continue" and resolution.reentry_plan is not None:
-            action_plan = plan_interrupted_continue_action(
-                workspace=workspace,
-                source=source,
-                reentry_plan=resolution.reentry_plan,
-            )
-        else:
-            action_plan = plan_interrupted_continue_action(
-                workspace=workspace,
-                source=source,
-                error=RecoveryExecutionError(
-                    resolution.reason_code,
-                    resolution.reason,
-                ),
-            )
-    else:
-        return build_application_planning_recovery_projection(
-            classification="blocked",
-            source=source,
-            thread_id=thread_id,
-            input_committed=input_committed,
-            reason_code="DURABLE_APPLICATION_PLANNING_NOT_CONTINUABLE",
-            message="当前计划状态无法安全自动恢复，请查看恢复状态。",
-        )
+    from app.services.business_node_retry import retry_action_plan, release_unretryable_execution
+    action_plan = await retry_action_plan(source, graph)
+    if action_plan.primary_action is None:
+        await release_unretryable_execution(source)
 
     recovery_action_plan = action_plan.model_dump(mode="json", by_alias=True)
     if action_plan.primary_action is not None:
@@ -558,42 +446,38 @@ def _build_application_planning_recovery_ag_ui_stream(
         # 锚定 Durable lineage、恢复投影和 Lifecycle，禁止由历史 clarification 猜门禁。
         async with lock:
             await reconcile_workspace_recovery(request.workspaceRoot)
-            snapshot = await active_graph.aget_state(
-                {
-                    "configurable": {
-                        "thread_id": thread_id,
-                        "checkpoint_ns": "",
-                    }
-                }
-            )
+            try:
+                snapshot = await active_graph.aget_state({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}})
+            except Exception:
+                from types import SimpleNamespace
+                snapshot = SimpleNamespace(values={}, config={}, next=(), tasks=())
             values = getattr(snapshot, "values", {})
             result = dict(values) if isinstance(values, dict) else {}
             if not result:
-                raise ApplicationPlanningCheckpointNotFoundError(
-                    "没有找到可恢复的应用规划 checkpoint。"
-                )
+                from app.persistence.execution_recovery import get_execution
+                lifecycle = load_application_lifecycle(request.workspaceRoot)
+                source = await get_execution(request.workspaceRoot, lifecycle.active_run_id) if lifecycle and lifecycle.active_run_id else None
+                if (source is None and lifecycle and not lifecycle.active_run_id
+                        and lifecycle.initialization.thread_id == thread_id
+                        and lifecycle.initialization.status in {ApplicationLifecycleStatus.FAILED, ApplicationLifecycleStatus.RUNNING}):
+                    # Lifecycle GET 可能已释放缺失入口的旧 owner；仍为同一失败 thread
+                    # 返回提示，但只能选最后一次执行，不能借用其他会话或更早的失败。
+                    from app.persistence.execution_recovery import list_executions_for_thread
+                    records = await list_executions_for_thread(request.workspaceRoot, thread_id=thread_id,
+                                                               execution_kind="application_planning")
+                    source = records[-1] if records else None
+                if source and source.thread_id == thread_id and source.status in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
+                    result = {"active_run_id": source.run_id, "workspace": request.workspaceRoot}
+                else:
+                    return AgUiActionResult(data={"checkpointAvailable": False}, message="当前没有执行存档。")
             checkpoint_run_id = str(result.get("active_run_id") or "").strip()
-            try:
-                lineage_resolution = await resolve_recovery_lineage_head(
-                    request.workspaceRoot,
-                    thread_id=thread_id,
-                    execution_kind="application_planning",
-                    authoritative_run_id=checkpoint_run_id,
-                )
-                source = lineage_resolution.head
-            except Exception as exc:
-                logger.warning(
-                    "application_planning.recovery.lineage_unavailable threadId=%s error=%s",
-                    thread_id,
-                    exc,
-                    exc_info=True,
-                )
-                lineage_resolution = RecoveryLineageResolution(
-                    head=None,
-                    state=RecoveryLineageState.AMBIGUOUS,
-                    reason_code="RECOVERY_LINEAGE_UNAVAILABLE",
-                )
-                source = None
+            # 当前 checkpoint 仅定位原执行；重试不再要求精确恢复 lineage。
+            from app.persistence.execution_recovery import get_execution
+            source = await get_execution(request.workspaceRoot, checkpoint_run_id) if checkpoint_run_id else None
+            if source is None and checkpoint_run_id:
+                from app.services.checkpoint_execution import index_checkpoint_execution
+                source = await index_checkpoint_execution(request.workspaceRoot, thread_id, snapshot)
+            lineage_resolution = None
             projection = await _build_application_planning_recovery_projection(
                 workspace=request.workspaceRoot,
                 thread_id=thread_id,
@@ -1052,6 +936,16 @@ def _build_start_design_revision_error_stream(
             if action == "start_technical_revision"
             else "返回设计阶段失败"
         ),
-        error_data=lambda _exc: {"action": action},
+        # 此端点由 Workflow 客户端消费，入场失败同样提供可识别的终态投影。
+        error_data=lambda exc: {
+            "action": action,
+            "summary": {
+                "status": "failed",
+                "phase": "design_intent_analysis" if action == "start_design_revision" else "technical_planning",
+                "message": f"{type(exc).__name__}: {exc}",
+            },
+            "events": [],
+            "state": {"workflow_scope": "application_planning"},
+        },
         accept=accept,
     )

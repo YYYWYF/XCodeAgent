@@ -106,8 +106,10 @@ export function applicationPlanningRecoveryIncident(
   if (recovery && actionPlan?.status === 'recoverable' && actionPlan.primaryAction) {
     return {
       kind: 'recoverable',
-      title: templateFailure ? failureTitle : '执行已中断',
-      failureDiagnostic: recovery.failureDiagnostic,
+      title: actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE'
+        ? '前置文件需要重新生成' : templateFailure ? failureTitle : '执行已中断',
+      failureDiagnostic: actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE' && recovery.failureDiagnostic
+        ? { ...recovery.failureDiagnostic, userMessage: actionPlan.message } : recovery.failureDiagnostic,
       failureMessage: currentPlanningFailureMessage(state, actionPlan),
       recoveryMessage: actionPlan.message,
       action: actionPlan.primaryAction,
@@ -170,6 +172,7 @@ export function workbenchRecoveryIncident(
   const failureMessage = buildRetry && /^Workflow failed[：:]\s*完成 \d+ 个节点。$/.test(rawFailureMessage || '')
     ? '开发任务执行失败。' : rawFailureMessage
   if (actionPlan.status === 'recoverable' && actionPlan.primaryAction) {
+    const regenerate = actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE'
     const retryingNode = ['retry_failed_node', 'retry_business_node'].includes(
       actionPlan.primaryAction.kind
     )
@@ -177,12 +180,13 @@ export function workbenchRecoveryIncident(
     const nodeLabel = targetNode ? WORKBENCH_RETRY_NODE_LABELS[targetNode] : undefined
     return {
       kind: 'recoverable',
-      title: retryingNode
+      title: regenerate ? '前置文件需要重新生成' : retryingNode
         ? '当前执行失败'
         : '工作台执行需要恢复',
-      failureDiagnostic,
+      failureDiagnostic: regenerate && failureDiagnostic
+        ? { ...failureDiagnostic, userMessage: actionPlan.message } : failureDiagnostic,
       failureMessage,
-      recoveryMessage: buildRetry
+      recoveryMessage: regenerate ? actionPlan.message : buildRetry
         ? `${completedMessage}将保留已完成进度，${buildSummary?.retry_available === true
             ? '仅重试失败任务。'
             : buildSummary?.recovery_available === true
@@ -196,7 +200,7 @@ export function workbenchRecoveryIncident(
           : retryingNode
         ? nodeLabel ? `将从「${nodeLabel}」节点重试。` : '重试时将重新确认执行起点。'
         : '可以继续当前执行。',
-      action: retryingNode
+      action: retryingNode && !regenerate
         ? { ...actionPlan.primaryAction, label: '重试' }
         : actionPlan.primaryAction,
       incidentId: actionPlan.incidentId
@@ -208,7 +212,9 @@ export function workbenchRecoveryIncident(
       title: candidate.executionStatus === 'failed' ? '当前执行失败' : '执行未完成',
       failureDiagnostic,
       failureMessage,
-      recoveryMessage: '请重试；系统会重新确认执行起点。',
+      recoveryMessage: actionPlan.reasonCode === 'RETRY_ENTRY_NOT_FOUND'
+        ? '找不到恢复入口，请手动发起流程。'
+        : '请重试；系统会重新确认执行起点。',
       reasonCode: actionPlan.reasonCode
     }
   }

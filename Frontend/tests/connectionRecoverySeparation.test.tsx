@@ -4,7 +4,7 @@ import { createElement, Fragment } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ConnectionStatusBanner from '../src/renderer/src/components/ConnectionStatusBanner'
 import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recoverySurface'
-import AgentErrorCard from '../src/renderer/src/components/AgentErrorCard'
+import RetryEntryNotice from '../src/renderer/src/components/RetryEntryNotice'
 import {
   globalFallbackState,
   conversationUsesWorkflowRecovery,
@@ -32,6 +32,8 @@ import './workflowConversationRuntime.test'
 import './workbenchRunPresentation.test'
 import './workbenchRunRefresh.test'
 import './templateRecovery.test'
+import './planningFailureScope.test'
+import './applicationLifecycleTimeout.test'
 
 test('二次修改断线及恢复候选始终复用 Workflow 重试，预览断线不抢入口', () => {
   const healthy = { conversationActive: true, workflowConnectionStatus: 'healthy',
@@ -211,19 +213,22 @@ test('connection request generation rejects a late failure from an older request
   assert.deepEqual(lateFailureA, succeededB)
 })
 
-test('healthy GET without Recovery candidate shows the Recovery error card', () => {
+/** 无恢复入口只显示可关闭提示，正常连接不应重复提供重试。 */
+test('healthy GET without Recovery candidate shows a dismissible notice', () => {
   const fallback = globalFallbackState({
     connectionStatus: 'healthy',
     hasRecoveryIncident: false,
     recoveryError: NO_RECOVERY_ENTRY_ERROR
   })
   const html = fallback.visible && fallback.error
-    ? renderToStaticMarkup(createElement(AgentErrorCard, { error: fallback.error }))
+    ? renderToStaticMarkup(createElement(RetryEntryNotice))
     : ''
 
   assert.equal(fallback.visible, true)
-  assert.match(html, /role="alert"/)
-  assert.match(html, /已同步后端状态，但当前会话没有可验证的恢复入口。/)
+  assert.match(html, /role="status"/)
+  assert.match(html, /找不到恢复入口，请手动发起流程。/)
+  assert.match(html, /aria-label="关闭恢复提示"/)
+  assert.doesNotMatch(html, />重试</)
 })
 
 test('没有恢复入口的最新消息错误也在底部展示，新请求不继承历史错误', () => {

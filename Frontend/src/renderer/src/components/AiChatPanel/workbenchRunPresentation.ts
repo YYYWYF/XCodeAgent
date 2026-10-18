@@ -30,6 +30,16 @@ export function workbenchExecutionRunning(execution?: WorkbenchExecution): boole
   return Boolean(execution && ['starting', 'running', 'stopping'].includes(execution.status))
 }
 
+/** 本地流或重开后恢复的当前执行共用结束入口，不因缺少本地连接隐藏控制。 */
+export function generationControlOwner(
+  localWorkflowRunning: boolean,
+  restoredWorkflowRunning: boolean,
+  planningRunning: boolean
+): 'workflow' | 'planning' | undefined {
+  if (localWorkflowRunning || restoredWorkflowRunning) return 'workflow'
+  return planningRunning ? 'planning' : undefined
+}
+
 /** 将已有只读进度恢复为现有消息组件可消费的展示数据，不登记或启动新 Run。 */
 export function restoreWorkbenchPresentation(
   messages: AgentChatMessage[],
@@ -37,7 +47,9 @@ export function restoreWorkbenchPresentation(
   session?: SessionIdentity
 ): { workflow?: WorkflowRunPayload; messages: AgentChatMessage[] } {
   const execution = ownedWorkbenchExecution(lifecycle, session)
-  if (!execution || (!workbenchExecutionRunning(execution) && execution.status !== 'failed'))
+  const awaiting = execution?.status === 'awaiting_user' &&
+    execution.pendingInteraction && !execution.pendingInteraction.submittedAt
+  if (!execution || (!workbenchExecutionRunning(execution) && execution.status !== 'failed' && !awaiting))
     return { messages }
   const projection = lifecycle?.extensions.workbenchProgress?.[execution.runId]
   const dag =
@@ -46,17 +58,19 @@ export function restoreWorkbenchPresentation(
       ? projection.dagGeneration
       : undefined
   const existingIndex = messages.findIndex(
-    (item) => item.role === 'assistant' && item.workflow?.runId === execution.runId
+    (item) => item.role === 'assistant' && item.workflow?.runId === execution.runId &&
+      item.workflow.threadId === execution.threadId
   )
   const existing = messages[existingIndex]
   const title = execution.phase === 'prepare_build_tasks' ? '生成执行计划' : '执行当前任务'
-  const status = execution.status === 'failed' ? 'failed' : 'running'
+  const status = awaiting ? 'requires_user_input' : execution.status === 'failed' ? 'failed' : 'running'
   const target = execution.developmentTarget
   const workflow: WorkflowRunPayload = {
     ...existing?.workflow,
     runId: execution.runId,
     threadId: execution.threadId,
-    summary: { ...existing?.workflow?.summary, status, phase: execution.phase, lifecycle },
+    summary: { ...existing?.workflow?.summary, status, phase: execution.phase, lifecycle,
+      ...(awaiting ? { clarification: execution.pendingInteraction!.payload } : {}) },
     state: {
       ...existing?.workflow?.state,
       selectedPageId:
@@ -82,7 +96,7 @@ export function restoreWorkbenchPresentation(
     previous.revision > dag.revision
       ? previous
       : dag
-  if (snapshot || !steps.length) {
+  if (!awaiting && (snapshot || !steps.length)) {
     const step = {
       id: `restored:${execution.runId}:${execution.phase}`,
       kind: 'workflow' as const,

@@ -427,6 +427,8 @@ export default function WorkflowRunCard({
       )}
       {/* API 映射门禁使用专用卡片，即使没有通用问题列表也必须提供配置和确认入口。 */}
       {(clarificationQuestions.length > 0 ||
+        artifactConfirmation ||
+        uiDesignConfirmation ||
         apiDesignRequired ||
         unitTestConfirmation ||
         detailReview ||
@@ -685,9 +687,11 @@ export default function WorkflowRunCard({
           ) : uiDesignConfirmation ? (
             <UiDesignConfirmationPanel
               disabled={disabled || interactionAvailability !== 'active'}
-              onSubmit={(currentWorkflow, answers) =>
-                onSubmitClarification?.(currentWorkflow, answers)
-              }
+              onSubmit={(currentWorkflow, answers) => {
+                // 历史 UI 卡保留预览能力，但不能提交生成、调整或正式确认动作。
+                if (disabled || interactionAvailability !== 'active') return
+                return onSubmitClarification?.(currentWorkflow, answers)
+              }}
               showPreview={false}
               iterationOrigins={uiDesignIterationOrigins}
               activePageId={uiDesignActivePageId}

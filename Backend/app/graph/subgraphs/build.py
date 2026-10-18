@@ -1494,7 +1494,7 @@ def _restore_build_runtime(
             if result.get("status") in {"completed", "already_satisfied", "failed"}:
                 task["status"] = result["status"]
     restored = {**state, **dict(zip(binding_keys, source_binding)), "tasks": restored_tasks,
-                "retry_failed_tasks": retry_failed_tasks, "request": ""}
+                "retry_failed_tasks": retry_failed_tasks, "request": str(state.get("request") or "")}
     for key in ("build_results", "build_summary", "repair_task_plan", "repair_task_plan_path", "repair_tasks", "database_change_plan", "database_approval_requests"):
         if key in source:
             restored[key] = deepcopy(source[key])
@@ -1606,12 +1606,25 @@ def run_build_scheduler(
     source_record = None
     inherited_progress = None
     progress_source_run_id = None
+    disk_retry_source = str(state.get("retry_source_run_id") or "")
     # 中断和显式从 Build 开始走整轮重启；FAILED 走既有局部失败重试。
     restarting = ((recovery is not None and recovery.reentry_reason is WorkflowReentryReason.INTERRUPTED_CONTINUE)
-                  or (recovery is None and state.get("resume_from") == "build"))
+                  or (recovery is None and not disk_retry_source and state.get("resume_from") == "build"))
     scan_fields: dict[str, Any] = {}
     if restarting:
         state, scan_fields = restart_build_state(state)
+    elif disk_retry_source:
+        # 进度只从业务执行文件读取；损坏或过期的优化记录不能占住主流程。
+        try:
+            record = load_build_execution_record(state, disk_retry_source)
+            progress = record.get("progress") if record else None
+            if progress:
+                state = _restore_build_runtime(state, disk_retry_source, progress, retry_failed_tasks=True)
+                inherited_progress = progress
+                progress_source_run_id = disk_retry_source
+        except (OSError, ValueError, RecoveryExecutionError):
+            state, scan_fields = restart_build_state(state)
+        state, scan_fields = refresh_build_workspace(state)
     elif recovery is not None:
         if recovery.entry_state.get("build_execution_scope") != state.get("build_execution_scope"):
             raise RecoveryExecutionError("BUILD_RETRY_SCOPE_DRIFT", "Build 恢复范围已偏离原节点入口。")
@@ -2174,7 +2187,7 @@ def run_build_scheduler(
         else {}
     )
 
-    return {
+    result = {
         **scan_fields,
         "retry_failed_tasks": False,
         "phase": "build",
@@ -2205,6 +2218,14 @@ def run_build_scheduler(
         **code_change_state_update(merged_code_changes),
         "timeline": ["build"],
     }
+    # 任务批次完成不等于 Build 完成；模板路由/授权等收尾结果也必须先落盘。
+    if state.get("active_run_id") and state.get("active_thread_id"):
+        progress = _build_runtime_progress({**current_state, **result})
+        write_build_execution_record(current_state, _build_execution_record(
+            current_state, build_run_binding, progress,
+            progress_source_run_id=str(current_state["active_run_id"]), execution_stage="finalized",
+        ))
+    return result
 
 
 def build(state: ProjectState) -> dict:
