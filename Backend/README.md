@@ -24,7 +24,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Workflow 调试入口在前端 Chat Composer 的“Workflow 调试”面板中，可以选择开始节点并传入已落盘的 RequirementSpec、ProjectPlan、WorkspaceSnapshot 或 BuildTaskPlan 路径。
+Workflow 调试入口在前端 Chat Composer 的“Workflow 调试”面板中，提供主工作流可调试节点，并可传入已落盘的 RequirementSpec、ProjectPlan、WorkspaceSnapshot 或 BuildTaskPlan 路径。选择 `launch_project` 会进入验收子图并强制重跑项目启动；审查和最终验收确认仍通过各自的结构化确认动作提交。
 
 服务启动后：
 

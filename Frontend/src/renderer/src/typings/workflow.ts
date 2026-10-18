@@ -1447,6 +1447,9 @@ export type WorkflowDebugOptions = {
   buildTaskPlanPath?: string
 }
 
+export type WorkflowDebugStage = 'development' | 'design' | 'planning'
+export type ApplicationPlanningDebugStage = Exclude<WorkflowDebugStage, 'development'>
+
 export type WorkflowBuildExecutionScope = {
   type: 'application' | 'page' | 'data_source' | 'endpoint'
   targetId?: string

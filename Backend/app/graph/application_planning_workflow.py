@@ -98,7 +98,7 @@ def _route_start(state: ProjectState) -> str:
     resume_nodes = {
         "requirements", "product_planning", "ui_confirmation", "planning_stage_entry",
         "technical_planning", "technical_planning_begin", "technical_planning_generate",
-        "technical_planning_commit", "technical_planning_confirm",
+        "technical_planning_commit", "technical_planning_confirm", "technical_planning_review",
     }
     if resume_from in resume_nodes:
         # 明确的业务节点直接重执行，不以 Lifecycle 阶段判断是否允许重试。

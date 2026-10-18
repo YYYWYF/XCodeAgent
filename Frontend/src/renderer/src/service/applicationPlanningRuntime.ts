@@ -1,7 +1,9 @@
 import type {
+  ApplicationPlanningDebugStage,
   ApplicationPlanningConfirmation,
   ApplicationPlanningInteraction,
   WorkflowClarificationAnswers,
+  WorkflowDebugOptions,
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
 } from '../typings'
@@ -45,6 +47,7 @@ import {
 } from './applicationPlanningRuntimeHelpers'
 import { productConversationSubmissionError } from './applicationPlanningProductConversation'
 import { readTechnicalPlanningReply } from './technicalPlanningConversation'
+import { isWorkflowDebugNodeForStage } from './workflowDebugNodes'
 
 export type ApplicationPlanningRuntimeDependencies = {
   readTechnicalPlanningReply?: typeof readTechnicalPlanningReply
@@ -291,10 +294,26 @@ export class ApplicationPlanningRuntime {
   }
 
   /** 新迭代发起后用户输入需求，用用户输入的消息启动 planning workflow。 */
-  async startIterationPlanning(userRequest: string): Promise<void> {
+  async startIterationPlanning(
+    userRequest: string,
+    workflowDebug?: WorkflowDebugOptions,
+    debugStage?: ApplicationPlanningDebugStage
+  ): Promise<void> {
     const current = this.requireCurrentState()
-    if (workflowConfirmation(current.workflow)) return
     const request = userRequest.trim() || buildApplicationPlanningRequest(current.application)
+    if (workflowDebug?.enabled) {
+      const resumeFrom = workflowDebug.resumeFrom?.trim() || ''
+      const supportedStage = debugStage === 'design' || debugStage === 'planning'
+      if (!supportedStage || !isWorkflowDebugNodeForStage(debugStage, resumeFrom)) {
+        throw new Error('调试节点与当前阶段不匹配，请重新选择节点。')
+      }
+      if (workflowConfirmation(current.workflow)) {
+        throw new Error('当前规划有待确认事项，请先完成确认后再调试节点。')
+      }
+      await this.runPlanning(request, undefined, undefined, undefined, workflowDebug)
+      return
+    }
+    if (workflowConfirmation(current.workflow)) return
     await this.runPlanning(request)
   }
 
@@ -741,12 +760,13 @@ export class ApplicationPlanningRuntime {
     })
   }
 
-  /** 初始生成和卡片恢复共用同一个带代次保护的运行入口。 */
+  /** 初始生成、节点调试和卡片恢复共用同一个带代次保护的运行入口。 */
   private async runPlanning(
     messageText: string,
     interaction?: ApplicationPlanningInteraction,
     designRevision?: WorkflowDesignStageRevisionStart,
-    workflowAction?: SendWorkflowMessageOptions['workflowAction']
+    workflowAction?: SendWorkflowMessageOptions['workflowAction'],
+    workflowDebugOverride?: WorkflowDebugOptions
   ): Promise<void> {
     const current = this.requireCurrentState()
     if (!current.application.workspaceRoot) return
@@ -762,7 +782,13 @@ export class ApplicationPlanningRuntime {
           const merged = await this.sendMessageWithinTransport(
             currentToken,
             messageText,
-            this.planningRunOptions(latest, interaction, designRevision, workflowAction)
+            this.planningRunOptions(
+              latest,
+              interaction,
+              designRevision,
+              workflowAction,
+              workflowDebugOverride
+            )
           )
           // 入场拒绝也有完整 Workflow 终态；必须撤销未成功的交接，不能视为已转入设计。
           if (designRevision && merged?.summary.status === 'failed') {
@@ -809,7 +835,8 @@ export class ApplicationPlanningRuntime {
     current: ApplicationPlanningCurrentState,
     interaction?: ApplicationPlanningInteraction,
     designRevision?: WorkflowDesignStageRevisionStart,
-    workflowAction?: SendWorkflowMessageOptions['workflowAction']
+    workflowAction?: SendWorkflowMessageOptions['workflowAction'],
+    workflowDebugOverride?: WorkflowDebugOptions
   ): SendWorkflowMessageOptions {
     return {
       application: current.application,
@@ -833,7 +860,10 @@ export class ApplicationPlanningRuntime {
       workflowDebug:
         interaction || designRevision || workflowAction
           ? undefined
-          : { enabled: true, resumeFrom: planningResumeFrom(current.lifecycle) },
+          : workflowDebugOverride || {
+              enabled: true,
+              resumeFrom: planningResumeFrom(current.lifecycle)
+            },
       workflowScope: 'application_planning',
       workspaceRoot: current.application.workspaceRoot
     }

@@ -41,6 +41,9 @@ def _launch_succeeded(state: ProjectState) -> bool:
 def _route_start(state: ProjectState) -> str:
     """首次进入时启动项目，恢复验收时直接跳过已完成的启动步骤。"""
 
+    # 显式调试启动节点时重跑启动器，即使 checkpoint 中留有旧预览地址。
+    if str(state.get("resume_from") or "") == "launch_project":
+        return "launch_project"
     # 保留既有 accepted/finalize 后端调用能力：已提交通过动作无需再次启动项目。
     if str(state.get("acceptance_decision") or "") == "accepted":
         return "acceptance_review"

@@ -1406,6 +1406,7 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "review_phase_confirmation",
             "code_review",
             "acceptance_phase_confirmation",
+            "launch_project",
             "acceptance",
             "finalize_project",
         }

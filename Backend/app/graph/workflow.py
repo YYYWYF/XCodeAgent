@@ -82,6 +82,8 @@ def route_workflow_start(state: ProjectState) -> str:
         return "code_review"
     if state.get("resume_from") == "acceptance_phase_confirmation":
         return "acceptance_phase_confirmation"
+    if state.get("resume_from") == "launch_project":
+        return "acceptance"
     if state.get("resume_from") == "integration_test":
         return "integration_test"
     if state.get("resume_from") == "small_task_repair":

@@ -367,8 +367,13 @@ function AppEntryContent(): JSX.Element {
             onIterationStarted={(application, threadId, lifecycle) => {
               planningController.startPlanning(application, threadId, lifecycle, false, false)
             }}
-            onStartIterationPlanning={(applicationId, request) =>
-              planningRuntimeController.startIterationPlanning(applicationId, request)
+            onStartIterationPlanning={(applicationId, request, workflowDebug, debugStage) =>
+              planningRuntimeController.startIterationPlanning(
+                applicationId,
+                request,
+                workflowDebug,
+                debugStage
+              )
             }
             onRevisionContinuationHandlerChange={(handler) =>
               registerRevisionContinuation(activeApplication.id, handler)

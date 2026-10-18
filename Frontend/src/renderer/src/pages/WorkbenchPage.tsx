@@ -39,11 +39,13 @@ import type {
   ApplicationBranch,
   ApplicationConfig,
   ApplicationLifecycle,
+  ApplicationPlanningDebugStage,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   EditorMode,
+  WorkflowDebugOptions,
   WorkflowClarificationAnswers,
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
@@ -73,7 +75,12 @@ type Props = {
     threadId: string,
     lifecycle: ApplicationLifecycle
   ) => void
-  onStartIterationPlanning: (applicationId: string, request: string) => Promise<void>
+  onStartIterationPlanning: (
+    applicationId: string,
+    request: string,
+    workflowDebug?: WorkflowDebugOptions,
+    debugStage?: ApplicationPlanningDebugStage
+  ) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
@@ -771,8 +778,13 @@ function WorkbenchPage({
                   onReturnWelcome={onReturnWelcome}
                   onSubmitPlanningClarification={onSubmitPlanningClarification}
                   onStartDesignStageRevision={onStartDesignStageRevision}
-                  onStartIterationPlanning={(request) =>
-                    onStartIterationPlanning(workspaceApplication.id, request)
+                  onStartIterationPlanning={(request, workflowDebug, debugStage) =>
+                    onStartIterationPlanning(
+                      workspaceApplication.id,
+                      request,
+                      workflowDebug,
+                      debugStage
+                    )
                   }
                   onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
                   onPlanningStreamReady={onPlanningStreamReady}

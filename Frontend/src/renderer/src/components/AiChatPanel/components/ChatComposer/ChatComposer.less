@@ -73,8 +73,8 @@
   }
 
   .@{class-prefix}-workflow-debug-node-select {
-    width: 210px;
-    flex: 0 0 210px;
+    width: 250px;
+    flex: 0 0 250px;
   }
 
   .@{class-prefix}-workflow-debug-auto-paths {
@@ -501,6 +501,62 @@
 
 .@{class-prefix}-workflow-debug-node-select {
   min-width: 0;
+
+  .ant-select-selector {
+    min-height: 48px;
+    height: auto;
+    align-items: center;
+    padding-top: 3px;
+    padding-bottom: 3px;
+  }
+
+  .ant-select-selection-item,
+  .ant-select-selection-placeholder {
+    display: flex;
+    align-items: center;
+  }
+}
+
+.@{class-prefix}-workflow-debug-node-option {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.@{class-prefix}-workflow-debug-node-title {
+  overflow: hidden;
+  color: var(--wb-text);
+  font-size: 13px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-workflow-debug-node-id {
+  overflow: hidden;
+  color: var(--wb-text-tertiary);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.@{class-prefix}-workflow-debug-node-dropdown {
+  .ant-select-item-option {
+    min-height: 44px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+
+  .@{class-prefix}-workflow-debug-node-title {
+    font-size: 13px;
+  }
+
+  .@{class-prefix}-workflow-debug-node-id {
+    color: var(--wb-text-tertiary);
+    font-size: 12px;
+  }
 }
 
 .@{class-prefix}-workflow-debug-build-scope {

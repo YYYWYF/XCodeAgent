@@ -13,12 +13,14 @@ import type {
   EditorMode,
   WorkflowBuildExecutionScope,
   WorkflowDebugOptions,
+  WorkflowDebugStage,
   WorkflowRunPayload,
   InspectedElementContext
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { skillsAfterEmptyBackspace } from '../../skillSelection'
 import type { ChatCopy } from '../../types'
+import { workflowDebugNodesForStage } from '../../../../service/workflowDebugNodes'
 import ResourceSkillMenu from './ResourceSkillMenu'
 import { workflowDebugBuildScope } from '../../debugExecutionScope'
 import './ChatComposer.less'
@@ -26,21 +28,6 @@ import './ChatComposer.less'
 const { Text } = Typography
 const { TextArea } = Input
 const { Option } = Select
-
-const resumeNodeOptions = [
-  { value: 'bootstrap_template_generation', label: 'bootstrap_template_generation（下载模板）' },
-  { value: 'api_design_readiness_gate', label: 'api_design_readiness_gate' },
-  { value: 'inspect_workspace', label: 'inspect_workspace' },
-  { value: 'inspect_database_context', label: 'inspect_database_context' },
-  { value: 'prepare_build_tasks', label: 'prepare_build_tasks' },
-  { value: 'build', label: 'build' },
-  { value: 'unit_test', label: 'unit_test' },
-  { value: 'unit_test_repair', label: 'unit_test_repair' },
-  { value: 'integration_test', label: 'integration_test' },
-  { value: 'launch_project', label: 'launch_project' },
-  { value: 'acceptance', label: 'acceptance' },
-  { value: 'finalize_project', label: 'finalize_project' }
-]
 
 const buildScopeOptions: Array<{ value: WorkflowBuildExecutionScope['type']; label: string }> = [
   { value: 'application', label: '整个应用' },
@@ -52,6 +39,7 @@ type ChatComposerProps = {
   activeWorkflow?: WorkflowRunPayload
   copy: ChatCopy[EditorMode]
   debugOnly?: boolean
+  debugStage?: WorkflowDebugStage
   draft: string
   initialResumeFrom?: string
   inspectedElementContext?: InspectedElementContext
@@ -70,10 +58,12 @@ type ChatComposerProps = {
   workspaceRoot: string
 }
 
+/** 按当前工作阶段展示专属调试节点，并处理工作流输入与节点启动参数。 */
 export default function ChatComposer({
   activeWorkflow,
   copy,
   debugOnly = false,
+  debugStage = 'development',
   draft,
   initialResumeFrom = 'api_design_readiness_gate',
   inspectedElementContext,
@@ -92,6 +82,7 @@ export default function ChatComposer({
   workspaceRoot
 }: ChatComposerProps): ReactElement {
   const initialBuildScope = workflowDebugBuildScope(activeWorkflow)
+  const resumeNodeOptions = workflowDebugNodesForStage(debugStage)
   const [debugEnabled, setDebugEnabled] = useState(debugOnly)
   const [traceOpen, setTraceOpen] = useState(false)
   const [resumeFrom, setResumeFrom] = useState(initialResumeFrom)
@@ -103,8 +94,11 @@ export default function ChatComposer({
   const [buildScopeApiContractId, setBuildScopeApiContractId] = useState(
     initialBuildScope.apiContractId || ''
   )
-  const hasDebugNode = !debugEnabled || Boolean(resumeFrom)
-  const isBuildTaskDebug = debugEnabled && resumeFrom === 'prepare_build_tasks'
+  const selectedResumeFrom = resumeNodeOptions.some((option) => option.value === resumeFrom)
+    ? resumeFrom
+    : resumeNodeOptions[0]?.value || ''
+  const hasDebugNode = !debugEnabled || Boolean(selectedResumeFrom)
+  const isBuildTaskDebug = debugEnabled && selectedResumeFrom === 'prepare_build_tasks'
   const hasBuildScopeTarget =
     buildScopeType === 'application' ||
     (Boolean(buildScopeTargetId.trim()) &&
@@ -118,7 +112,7 @@ export default function ChatComposer({
     debugEnabled
       ? {
           enabled: true,
-          resumeFrom,
+          resumeFrom: selectedResumeFrom,
           ...(isBuildTaskDebug
             ? {
                 buildExecutionScope: {
@@ -212,13 +206,35 @@ export default function ChatComposer({
                   <Select
                     className={cx('workflow-debug-node-select')}
                     disabled={loading}
+                    dropdownClassName={cx('workflow-debug-node-dropdown')}
+                    optionLabelProp="label"
                     placeholder="选择开始节点"
-                    value={resumeFrom}
+                    value={selectedResumeFrom}
                     onChange={setResumeFrom}
                   >
                     {resumeNodeOptions.map((option) => (
-                      <Option key={option.value} value={option.value}>
-                        {option.label}
+                      <Option
+                        key={option.value}
+                        label={
+                          <span className={cx('workflow-debug-node-option')}>
+                            <span className={cx('workflow-debug-node-title')}>
+                              {option.title}
+                            </span>
+                            <span className={cx('workflow-debug-node-id')}>
+                              {option.value}
+                            </span>
+                          </span>
+                        }
+                        value={option.value}
+                      >
+                        <span className={cx('workflow-debug-node-option')}>
+                          <span className={cx('workflow-debug-node-title')}>
+                            {option.title}
+                          </span>
+                          <span className={cx('workflow-debug-node-id')}>
+                            {option.value}
+                          </span>
+                        </span>
                       </Option>
                     ))}
                   </Select>

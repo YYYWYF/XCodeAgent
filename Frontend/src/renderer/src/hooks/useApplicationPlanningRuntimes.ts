@@ -5,7 +5,12 @@ import {
   type ApplicationPlanningRuntimeDependencies
 } from '../service/applicationPlanningRuntime'
 import type { WorkflowRevisionContinuationHandoff } from '../service/applicationPagePlanning'
-import type { ApplicationPlanningConfirmation, WorkflowRunPayload } from '../typings'
+import type {
+  ApplicationPlanningDebugStage,
+  ApplicationPlanningConfirmation,
+  WorkflowDebugOptions,
+  WorkflowRunPayload
+} from '../typings'
 
 export type ApplicationPlanningRuntimesOptions = {
   activePlannings: ApplicationPlanningCurrentState[]
@@ -26,7 +31,12 @@ export type ApplicationPlanningRuntimesController = {
   saveRequirementSpec: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['saveRequirementSpec']>) => ReturnType<ApplicationPlanningRuntime['saveRequirementSpec']>
   startDesignRevision: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['startDesignRevision']>) => Promise<void>
   retryCurrentFailure: (applicationId: string) => Promise<void>
-  startIterationPlanning: (applicationId: string, request: string) => Promise<void>
+  startIterationPlanning: (
+    applicationId: string,
+    request: string,
+    workflowDebug?: WorkflowDebugOptions,
+    debugStage?: ApplicationPlanningDebugStage
+  ) => Promise<void>
   retryTemplateReconcile: (applicationId: string) => Promise<void>
   reconcileCurrentState: (applicationId: string) => ReturnType<ApplicationPlanningRuntime['reconcileCurrentState']>
   stop: (applicationId: string) => Promise<void>
@@ -154,7 +164,8 @@ export function useApplicationPlanningRuntimes(
     /** 使用调用时的当前状态重试。 */
     retryCurrentFailure: (applicationId) => requireRuntime(applicationId).retryCurrentFailure(),
     /** 新迭代发起后用户输入需求，启动 planning workflow。 */
-    startIterationPlanning: (applicationId, request) => requireRuntime(applicationId).startIterationPlanning(request),
+    startIterationPlanning: (applicationId, request, workflowDebug, debugStage) =>
+      requireRuntime(applicationId).startIterationPlanning(request, workflowDebug, debugStage),
     /** 使用专用 AG-UI 动作重试 Template Reconcile。 */
     retryTemplateReconcile: (applicationId) => requireRuntime(applicationId).retryTemplateReconcile(),
     /** 只读同步指定应用当前权威状态。 */

@@ -17,6 +17,7 @@ import {
 } from '../../workbenchPhase'
 import type { WorkbenchPhase } from '../../workbenchPhase'
 import type {
+  ApplicationPlanningDebugStage,
   ApplicationConfig,
   ApplicationLifecycle,
   DevelopmentPlanningApiContract,
@@ -354,7 +355,11 @@ type Props = {
     technicalPlanningConversation?: boolean
   ) => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
-  onStartIterationPlanning: (request: string) => Promise<void>
+  onStartIterationPlanning: (
+    request: string,
+    workflowDebug?: WorkflowDebugOptions,
+    debugStage?: ApplicationPlanningDebugStage
+  ) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
@@ -4809,6 +4814,28 @@ export default function AiChatPanel({
     setDraftByKey(draftKey, '')
   }
 
+  /** 在当前设计或计划会话中从所选节点开始调试，并保留本轮消息的乐观回滚。 */
+  const handleApplicationPlanningDebug = async (
+    workflowDebug: WorkflowDebugOptions,
+    debugStage: ApplicationPlanningDebugStage
+  ): Promise<void> => {
+    const node = workflowDebug.resumeFrom || ''
+    const request = draft.trim() || `从节点 ${node} 开始调试。`
+    setGeneratingDetailTargetKey('')
+    planningNewRoundRef.current = true
+    lastUiDesignRunIdRef.current = undefined
+    const transaction = appendPlanningUserMessage({ design_change_request: request })
+    try {
+      await onStartIterationPlanning(request, workflowDebug, debugStage)
+      setDraftByKey(draftKey, '')
+    } catch (reason) {
+      rollbackPlanningSubmission(transaction)
+      if (!isAuthenticationFailure(reason)) {
+        message.error(formatError(reason, '调试规划节点失败'))
+      }
+    }
+  }
+
   /** 按应用是否完成初始创建，在原审阅门与 formal revision 语义入口之间分流。 */
   const handleProductConversationSend = async (): Promise<void> => {
     if (initialProductPlanningAvailable) {
@@ -5242,7 +5269,21 @@ export default function AiChatPanel({
                   <ChatComposer
                     activeWorkflow={activeWorkflow}
                     copy={copy}
+                    debugStage={
+                      isDesignPhase
+                        ? 'design'
+                        : isTechnicalPlanningPhase
+                          ? 'planning'
+                          : 'development'
+                    }
                     draft={draft}
+                    initialResumeFrom={
+                      isDesignPhase
+                        ? 'design_intent_analysis'
+                        : isTechnicalPlanningPhase
+                          ? 'technical_planning'
+                          : workflowResumeNode(activeWorkflow, scopedExecution?.phase)
+                    }
                     inspectedElementContext={inspectedElementContext}
                     loading={currentGenerationLoading}
                     onDraftChange={(value) => setDraftByKey(draftKey, value)}
@@ -5267,7 +5308,14 @@ export default function AiChatPanel({
                     // 也一定会先落到「正式修改确认」卡上，由上面的 onSubmitClarification 拦。
                     onSend={
                       productConversationAvailable
-                        ? async () => {
+                        ? async (workflowDebug) => {
+                          if (workflowDebug?.enabled && (isDesignPhase || isTechnicalPlanningPhase)) {
+                            const debugStage = isDesignPhase ? 'design' : 'planning'
+                            commitBeforeSend.requestAdvance(() =>
+                              handleApplicationPlanningDebug(workflowDebug, debugStage)
+                            )
+                            return
+                          }
                           commitBeforeSend.requestAdvance(handleProductConversationSend)
                         }
                         : handleConversationSend
