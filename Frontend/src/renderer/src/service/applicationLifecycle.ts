@@ -57,18 +57,17 @@ function isLifecycleMissingError(error: unknown): boolean {
 const lifecycleReadRequests = new Map<string, Promise<ApplicationLifecycle>>()
 const workspaceAttachRequests = new Map<string, Promise<ApplicationLifecycle>>()
 
-// 校验生命周期快照只属于当前应用及初始化线程，禁止同目录或异步回包造成跨应用串态。
+// 校验生命周期快照只属于当前应用，禁止同目录或异步回包造成跨应用串态。
+// 注意：不校验 threadId。同一应用复用工作区时，后端 ensure 幂等返回旧 lifecycle
+// （保留旧 threadId），这是正常的"打开已有应用/新建同 id 应用"场景，应复用旧 threadId
+// 而非报错。application.id 不匹配才是真正的跨应用冲突。
 function assertApplicationLifecycleOwnership(
   lifecycle: ApplicationLifecycle,
   applicationId?: string,
-  threadId?: string
+  _threadId?: string
 ): ApplicationLifecycle {
   if (applicationId && lifecycle.application.id !== applicationId) {
     throw new Error('当前工作区已属于另一个应用，请为新应用选择独立的项目目录。')
-  }
-  const lifecycleThreadId = lifecycle.initialization.threadId
-  if (threadId && lifecycleThreadId && lifecycleThreadId !== threadId) {
-    throw new Error('当前工作区已有另一个应用规划线程，请为每个应用使用独立的项目目录。')
   }
   return lifecycle
 }
