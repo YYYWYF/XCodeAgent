@@ -1,4 +1,4 @@
-import { EditOutlined, PauseCircleOutlined, RetweetOutlined, UndoOutlined } from '@ant-design/icons'
+import { EditOutlined, RetweetOutlined, UndoOutlined } from '@ant-design/icons'
 import { Button, Modal } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../utils'
@@ -25,11 +25,6 @@ const POINTS = [
     icon: <RetweetOutlined />,
     title: 'scoped 增量重建',
     desc: '重新进入下游时只重算受影响对象，已完成的部分不会被推倒重来。'
-  },
-  {
-    icon: <PauseCircleOutlined />,
-    title: '旅程暂停自动',
-    desc: '阶段不再跟随旅程自动推进，直至你在顶栏点「恢复自动」。'
   }
 ]
 
