@@ -3750,6 +3750,7 @@ export default function AiChatPanel({
     applicationId: application.id,
     isApplicationPlanningPhase,
     reportPhaseActive: activeWorkbenchPhase === 'test',
+    ensureRightPanelVisible,
     rightPanel,
     rightPanelOpen: rightPanelLayout !== 'hidden',
     setRightPanel,

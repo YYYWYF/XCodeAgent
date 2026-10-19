@@ -14,6 +14,7 @@ type Params = {
    * test-report，渲染块按 type 判断会继续渲染报告，而 tab 条里已没有对应 tab。
    */
   reportPhaseActive: boolean
+  ensureRightPanelVisible: () => void
   rightPanel?: RightPanelState
   rightPanelOpen: boolean
   setRightPanel: (panel?: RightPanelState) => void
@@ -56,12 +57,58 @@ function readWorkflowTestReportResult(
   )
 }
 
+/** 以当前集成测试的完成事件为准，兼顾确认门快照，避免等待下一节点才打开报告。 */
+export function workflowTestReportCompleted(
+  workflow: WorkflowRunPayload | undefined,
+  activeWorkflowPhase: string
+): boolean {
+  if (!workflow) return false
+  if (workflow.summary.phase === 'review_phase_confirmation') return true
+  const integrationEvent = [...workflow.events]
+    .reverse()
+    .find(
+      (event) =>
+        (event.node?.id || event.nodeName) === 'integration_test' &&
+        ['workflow.node.started', 'workflow.node.completed'].includes(event.type)
+    )
+  // 新一轮测试已开始时，不能把续跑快照中保留的旧确认门当作本轮完成。
+  if (integrationEvent) return integrationEvent.type === 'workflow.node.completed'
+  return [
+    workflow.summary.phase,
+    workflow.state?.phase,
+    workflow.result?.phase,
+    activeWorkflowPhase
+  ].includes('review_phase_confirmation')
+}
+
+/** 为当前报告生成一次自动导航请求；同一运行处理后保留用户手动切换或关闭的选择。 */
+export function nextTestReportFocusKey({
+  applicationId,
+  available,
+  completed,
+  handledKey,
+  path,
+  workflowRunId
+}: {
+  applicationId: string
+  available: boolean
+  completed: boolean
+  handledKey: string
+  path: string
+  workflowRunId?: string
+}): string | undefined {
+  if (!available || !completed) return undefined
+  const key = testReportFocusKey(applicationId, workflowRunId, path)
+  return key !== handledKey ? key : undefined
+}
+
 /** 管理测试报告读取、Tab 可用状态和测试阶段完成后的右侧聚焦。 */
 export function useTestReportPanel({
   activeWorkflowPhase,
   applicationId,
   isApplicationPlanningPhase,
   reportPhaseActive,
+  ensureRightPanelVisible,
   rightPanel,
   rightPanelOpen,
   setRightPanel,
@@ -77,9 +124,18 @@ export function useTestReportPanel({
   // 可用性 = 报告已落盘 **且** 当前处在测试阶段；阶段不符时置为不可用，
   // 下方重置 effect 才会把面板从 test-report 挪走。
   const available = Boolean(path) && reportPhaseActive
-  const testPhaseCompleted = [workflow?.summary?.phase, activeWorkflowPhase].some(
-    (phase) => String(phase || '') === 'review_phase_confirmation'
-  )
+  const testPhaseCompleted = workflowTestReportCompleted(workflow, activeWorkflowPhase)
+
+  useEffect(() => {
+    void fetch('http://127.0.0.1:18769/', {
+      method: 'POST',
+      body: JSON.stringify({
+        run: workflow?.runId, phase: workflow?.summary.phase, activeWorkflowPhase,
+        reportPhaseActive, available, testPhaseCompleted, path,
+        panel: rightPanel?.type, rightPanelOpen, handled: handledReportRef.current
+      })
+    }).catch(() => undefined)
+  }, [activeWorkflowPhase, available, path, reportPhaseActive, rightPanel, rightPanelOpen, testPhaseCompleted, workflow])
 
   // 报告路径只来自受控 AG-UI 投影；读取失败保留独立错误态，不影响测试矩阵。
   useEffect(() => {
@@ -112,11 +168,7 @@ export function useTestReportPanel({
     return () => {
       cancelled = true
     }
-  }, [available, path, workspaceRoot])
-
-  useEffect(() => {
-    if (!rightPanelOpen) handledReportRef.current = ''
-  }, [rightPanelOpen])
+  }, [available, path, testPhaseCompleted, workflow?.runId, workspaceRoot])
 
   useEffect(() => {
     if (!isApplicationPlanningPhase && rightPanel?.type === 'test-report' && !available) {
@@ -125,16 +177,36 @@ export function useTestReportPanel({
     }
   }, [available, isApplicationPlanningPhase, rightPanel, setRightPanel])
 
-  // 测试完成后只聚焦已打开的右侧面板；关闭后重开仍优先展示最新测试报告。
+  // 本轮报告就绪后主动展开右侧并聚焦一次，后续更新不抢走用户选择的 tab。
   useEffect(() => {
-    if (!available || !testPhaseCompleted || !rightPanelOpen) return
-    const reportKey = testReportFocusKey(applicationId, workflow?.runId, path)
-    if (handledReportRef.current === reportKey && rightPanel) return
-    handledReportRef.current = reportKey
+    // 报告失效会由上方 effect 自动退回开发产物；不能继续保留已导航标记，
+    // 否则同一 Run 的公开投影恢复或重新测试完成后会永久跳过报告导航。
+    // 用户手动切换或关闭面板不会改变报告就绪状态，因此仍保留其选择。
+    if (!available || !testPhaseCompleted) {
+      handledReportRef.current = ''
+      return
+    }
+    const reportKey = nextTestReportFocusKey({
+      applicationId,
+      available,
+      completed: testPhaseCompleted,
+      handledKey: handledReportRef.current,
+      path,
+      workflowRunId: workflow?.runId
+    })
+    if (!reportKey) return
+    // 请求切换不等于已完成导航；只有渲染状态确认报告可见后才消耗本轮聚焦。
+    // 同批次的默认面板回退若覆盖了请求，下一次渲染仍会继续完成这次导航。
+    if (rightPanelOpen && rightPanel?.type === 'test-report') {
+      handledReportRef.current = reportKey
+      return
+    }
+    ensureRightPanelVisible()
     if (rightPanel?.type !== 'test-report') setRightPanel({ type: 'test-report' })
   }, [
     applicationId,
     available,
+    ensureRightPanelVisible,
     path,
     rightPanel,
     rightPanelOpen,

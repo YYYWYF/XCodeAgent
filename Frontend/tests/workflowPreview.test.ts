@@ -59,7 +59,11 @@ import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/
 import { processStepsForMessageDisplay } from '../src/renderer/src/service/processStepHistory'
 import { workspaceToolErrorMessage } from '../src/renderer/src/service/workspaceTools'
 import { codeReviewReportFocusKey } from '../src/renderer/src/components/AiChatPanel/hooks/useCodeReviewReportPanel'
-import { testReportFocusKey } from '../src/renderer/src/components/AiChatPanel/hooks/useTestReportPanel'
+import {
+  nextTestReportFocusKey,
+  testReportFocusKey,
+  workflowTestReportCompleted
+} from '../src/renderer/src/components/AiChatPanel/hooks/useTestReportPanel'
 import { integrationTestCheckReportPath } from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/reportAction'
 import { workspaceTabIsAvailable } from '../src/renderer/src/components/AiChatPanel/components/RightPanelTabs/tabAvailability'
 import {
@@ -594,6 +598,49 @@ test('同一路径的测试报告在新的 Workflow 运行中获得新的自动�
 
   assert.notEqual(first, second)
   assert.equal(first, 'application-1:run-1:.devagentstudio/reports/test-report.md')
+})
+
+test('集成测试已完成但审查确认节点尚未到达时即可自动展示报告', () => {
+  const workflow = previewWorkflow({ phase: 'integration_test', status: 'completed' })
+  workflow.events = [
+    { type: 'workflow.node.started', node: { id: 'integration_test' } },
+    { type: 'workflow.node.completed', node: { id: 'integration_test' }, status: 'completed' }
+  ]
+  assert.equal(workflowTestReportCompleted(workflow, 'integration_test'), true)
+})
+
+test('测试启动事件阻止旧确认门触发报告聚焦，完成后再放行', () => {
+  const workflow = previewWorkflow({ phase: 'integration_test', status: 'running' })
+  workflow.state = { phase: 'review_phase_confirmation' }
+  workflow.events = [{ type: 'workflow.node.started', node: { id: 'integration_test' } }]
+  assert.equal(workflowTestReportCompleted(workflow, 'review_phase_confirmation'), false)
+  workflow.events.push({ type: 'workflow.node.completed', nodeName: 'integration_test' })
+  assert.equal(workflowTestReportCompleted(workflow, 'integration_test'), true)
+})
+
+test('恢复快照中的测试完成确认可从 state 或 result 读取', () => {
+  for (const field of ['state', 'result'] as const) {
+    const workflow = previewWorkflow({ phase: 'integration_test' })
+    workflow[field] = { phase: 'review_phase_confirmation' }
+    assert.equal(workflowTestReportCompleted(workflow, 'integration_test'), true)
+  }
+  assert.equal(workflowTestReportCompleted(undefined, 'review_phase_confirmation'), false)
+  const confirmed = previewWorkflow({ phase: 'review_phase_confirmation' })
+  confirmed.events = [{ type: 'workflow.node.started', node: { id: 'integration_test' } }]
+  assert.equal(workflowTestReportCompleted(confirmed, 'integration_test'), true)
+})
+
+test('报告就绪后导航一次，保留手动切换，同一路径的新运行可再次导航', () => {
+  const input = {
+    applicationId: 'application-1', available: true, completed: true,
+    handledKey: '', path: '.devagentstudio/reports/test-report.md', workflowRunId: 'run-1'
+  }
+  const first = nextTestReportFocusKey(input)
+  assert.equal(first, testReportFocusKey(input.applicationId, input.workflowRunId, input.path))
+  assert.equal(nextTestReportFocusKey({ ...input, handledKey: first! }), undefined)
+  assert.notEqual(nextTestReportFocusKey({ ...input, handledKey: first!, workflowRunId: 'run-2' }), undefined)
+  assert.equal(nextTestReportFocusKey({ ...input, available: false }), undefined)
+  assert.equal(nextTestReportFocusKey({ ...input, completed: false }), undefined)
 })
 
 test('完整 Lighthouse 报告按钮只允许出现在前端性能检查行', () => {

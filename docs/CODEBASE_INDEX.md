@@ -2,6 +2,8 @@
 
 Last updated: 2026-10-19
 
+测试报告自动展示由 `AiChatPanel/hooks/useTestReportPanel.ts` 根据当前 `integration_test` 完成事件或审查确认门快照触发：测试阶段报告路径就绪后主动展开右侧并选择“测试报告”，按 application/run/path 每轮只导航一次，只有渲染状态确认报告面板可见后才消耗导航标记，避免同批默认面板回退覆盖切换请求后永久跳过；之后保留用户手动切换或关闭。新测试启动事件阻止旧确认快照提前聚焦；同路径的新运行和完成状态变化重新读取 Markdown，避免性能测试后显示旧报告。沿现有 AG-UI 公开投影及面板布局逻辑，无新协议或样式。回归：`pnpm test:workflow-preview`；`pnpm test:test-report` 使用与项目匹配的 React 18 测试渲染器执行生产布局与报告 hook 的真实 effect，覆盖同批覆盖、隐藏面板、手动选择和新运行刷新。测试运行器保留 React/renderer 的原生 Node 实现，避免打包 act 的 MessagePort 收尾问题。
+
 `workspace/code_changes.py` 的共享代码差异快照按文件名后缀精确排除 TypeScript `*.tsbuildinfo` 增量构建缓存（含嵌套路径），避免 SmallTask 修复批次内执行 `tsc -b` 后把缓存刷新误判为批次外写入。源码、`tsconfig.json` 与后缀仅出现在文件名中间的源码仍参与差异归属和越界检查，不增加写权限。回归：`tests.test_workspace_code_changes`、`tests.test_small_task`、`tests.test_direct_validation`（真实批次内 tsc 刷新缓存并返回完整复验）。
 
 开发阶段二次修改的前端验收由 `services/direct_validation.py` 依次执行 `pnpm exec tsc -b`、`pnpm exec vite build` 和原项目重启检查，编译失败短路后续检查，保留受控命令的退出码、cwd 和完整日志。`nodes/direct_modification.py` 不再把工程级前端编译失败降为 advisory；自动修复时整轮保持 in_progress，`direct_modification_projection.py` 保留失败步骤和检查项展示。`services/direct_repair.py` 合并真实 diff 与前端编译诊断中已存在的源码精确路径（含 Vite importer），复用单测的 `repair_candidate_files`；原 RepairPlanner/SmallTask 三轮闭环每次回到完整验收，当前计划策略传入 SmallTask。源码既有错误可自动修复，依赖目录、缺失文件、越界路径不能获得诊断授权；重启失败保持原语义。回归：`tests.test_direct_validation`（真实 tsc/Vite + 生产 SmallTask 调度闭环）、`tests.test_direct_modification`、`tests.test_conversation_native_recovery`、`pnpm test:chat-skills`。
