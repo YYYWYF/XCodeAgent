@@ -1,8 +1,12 @@
 import {
   ApartmentOutlined,
+  ApiOutlined,
   ArrowRightOutlined,
+  BgColorsOutlined,
   BranchesOutlined,
   FileTextOutlined,
+  InteractionOutlined,
+  LayoutOutlined,
   TeamOutlined
 } from '@ant-design/icons'
 import { Tag, Typography } from 'antd'
@@ -13,8 +17,12 @@ import {
   behaviorTypeLabel,
   modulePriorityLabel,
   recordItems,
+  requirementApiContractRows,
   requirementFlowRows,
+  requirementInteractionRows,
+  requirementLayoutRows,
   requirementPageRows,
+  requirementStyleHints,
   stringItems,
   textValue,
   type JsonRecord,
@@ -32,11 +40,22 @@ type SectionProps = {
 /** 渲染应用摘要、用户角色与功能模块的总览，帮助用户先建立整体认识。 */
 export function RequirementOverviewSection({
   spec,
+  productPlan,
+  technicalPlan,
   sectionKey
-}: { spec: JsonRecord } & SectionProps): ReactElement {
+}: {
+  spec: JsonRecord
+  productPlan: JsonRecord
+  technicalPlan: JsonRecord
+} & SectionProps): ReactElement {
   const appInfo = asRecord(spec.app_info)
   const roles = recordItems(spec.user_roles)
   const modules = recordItems(spec.feature_modules)
+  // 概览扩展四块：从 spec + 已有后续产物合并读，缺失时显示空态文案。
+  const interactions = requirementInteractionRows(productPlan)
+  const layouts = requirementLayoutRows(productPlan)
+  const styleHints = requirementStyleHints(spec)
+  const apiContracts = requirementApiContractRows(technicalPlan)
   return (
     <section
       aria-label="概览"
@@ -70,7 +89,6 @@ export function RequirementOverviewSection({
             <article className={cx('requirement-doc-card')} key={textValue(role.id, `role-${index}`)}>
               <div className={cx('requirement-doc-card-heading')}>
                 <strong>{textValue(role.name, `角色 ${index + 1}`)}</strong>
-                <code>{textValue(role.id)}</code>
               </div>
               {textValue(role.description) ? (
                 <Text type="secondary">{textValue(role.description)}</Text>
@@ -109,6 +127,130 @@ export function RequirementOverviewSection({
           ))
         ) : (
           <Text type="secondary">暂无功能模块</Text>
+        )}
+      </div>
+      {/* 概览扩展：页面交互。来自 ProductPlan 各页 actions / navigation_targets。 */}
+      <div className={cx('requirement-doc-section-title')}>
+        <InteractionOutlined /> <span>页面交互</span>
+      </div>
+      <div className={cx('requirement-doc-card-list')}>
+        {interactions.length ? (
+          interactions.map((interaction) => (
+            <article className={cx('requirement-doc-card')} key={interaction.key}>
+              <div className={cx('requirement-doc-card-heading')}>
+                <strong>{interaction.pageName}</strong>
+              </div>
+              {interaction.actions.length ? (
+                <div className={cx('requirement-doc-action-list')}>
+                  {interaction.actions.map((action) => (
+                    <div className={cx('requirement-doc-action')} key={action.key}>
+                      <div className={cx('requirement-doc-action-heading')}>
+                        <strong>{action.name}</strong>
+                        <em className={cx(`is-${action.behaviorType}`)}>
+                          {action.behaviorTypeLabel}
+                        </em>
+                      </div>
+                      {action.expectedResult ? (
+                        <div className={cx('requirement-doc-action-result')}>
+                          <ArrowRightOutlined aria-hidden="true" />
+                          <span>{action.expectedResult}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Text type="secondary">该页面暂无操作</Text>
+              )}
+              {interaction.navigationTargets.length ? (
+                <div className={cx('requirement-doc-tag-row')}>
+                  {interaction.navigationTargets.map((target) => (
+                    <Tag key={target}>{target}</Tag>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+          ))
+        ) : (
+          <Text type="secondary">暂无页面交互</Text>
+        )}
+      </div>
+      {/* 概览扩展：页面布局。来自 ProductPlan 各页 information_items / goal。 */}
+      <div className={cx('requirement-doc-section-title')}>
+        <LayoutOutlined /> <span>页面布局</span>
+      </div>
+      <div className={cx('requirement-doc-card-list')}>
+        {layouts.length ? (
+          layouts.map((layout) => (
+            <article className={cx('requirement-doc-card')} key={layout.key}>
+              <div className={cx('requirement-doc-card-heading')}>
+                <strong>{layout.pageName}</strong>
+              </div>
+              {layout.goal ? <Text type="secondary">{layout.goal}</Text> : null}
+              {layout.informationItems.length ? (
+                <div className={cx('requirement-doc-page-tiles')}>
+                  {layout.informationItems.map((item) => (
+                    <div className={cx('requirement-doc-page-tile')} key={item.key}>
+                      <strong>{item.label}</strong>
+                      {item.description ? <span>{item.description}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Text type="secondary">该页面暂无业务信息</Text>
+              )}
+            </article>
+          ))
+        ) : (
+          <Text type="secondary">暂无页面布局</Text>
+        )}
+      </div>
+      {/* 概览扩展：页面风格。UiDesign 无独立字段，从 spec 自由文本按维度提取。 */}
+      <div className={cx('requirement-doc-section-title')}>
+        <BgColorsOutlined /> <span>页面风格</span>
+      </div>
+      <div className={cx('requirement-doc-card-list')}>
+        {styleHints.length ? (
+          styleHints.map((hint) => (
+            <article className={cx('requirement-doc-card')} key={hint.key}>
+              <div className={cx('requirement-doc-card-heading')}>
+                <strong>{hint.dimensionLabel}</strong>
+              </div>
+              <div className={cx('requirement-doc-tag-row')}>
+                {hint.labels.map((label) => (
+                  <Tag key={label}>{label}</Tag>
+                ))}
+              </div>
+              {hint.source ? <Text type="secondary">{hint.source}</Text> : null}
+            </article>
+          ))
+        ) : (
+          <Text type="secondary">暂无页面风格</Text>
+        )}
+      </div>
+      {/* 概览扩展：接口请求与响应。来自 TechnicalPlan.api_contracts。 */}
+      <div className={cx('requirement-doc-section-title')}>
+        <ApiOutlined /> <span>接口请求与响应</span>
+      </div>
+      <div className={cx('requirement-doc-card-list')}>
+        {apiContracts.length ? (
+          apiContracts.map((contract) => (
+            <article className={cx('requirement-doc-card')} key={contract.key}>
+              <div className={cx('requirement-doc-card-heading')}>
+                <strong>{contract.method} {contract.path}</strong>
+              </div>
+              {contract.summary ? <Text type="secondary">{contract.summary}</Text> : null}
+              <div className={cx('requirement-doc-app-meta')}>
+                <Tag>请求 {contract.requestSchemaRef || '无'}</Tag>
+                <Tag>响应 {contract.responseSchemaRef || '无'}</Tag>
+              </div>
+              {contract.parameters && contract.parameters !== '无' ? (
+                <Text type="secondary">参数：{contract.parameters}</Text>
+              ) : null}
+            </article>
+          ))
+        ) : (
+          <Text type="secondary">暂无接口请求与响应</Text>
         )}
       </div>
     </section>

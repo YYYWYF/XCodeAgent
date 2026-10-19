@@ -1,5 +1,11 @@
 import type { JsonRecord } from './TechnicalPlanDocPanelData'
-import { asRecord, recordItems, stringItems, textValue } from './TechnicalPlanDocPanelData'
+import {
+  asRecord,
+  parameterSummary,
+  recordItems,
+  stringItems,
+  textValue
+} from './TechnicalPlanDocPanelData'
 
 export type { JsonRecord }
 
@@ -157,4 +163,223 @@ export function behaviorTypeLabel(value: string): string {
     operation: '操作'
   }
   return labels[value] || value || '操作'
+}
+
+// ===== 概览 tab 扩展：页面交互 / 页面布局 / 页面风格 / 接口请求与响应 =====
+// 这四块信息在 RequirementSpec 里没有结构化字段，只在后续产物（ProductPlan / TechnicalPlan）
+// 或 spec 自由文本里存在。以下拍平函数把已有后续产物里的数据聚合成概览可直接渲染的行结构；
+// 首次需求草稿阶段后续产物尚未生成时返回空数组，由概览组件渲染空态文案。
+
+export type RequirementInteractionActionRow = {
+  key: string
+  name: string
+  behaviorType: string
+  behaviorTypeLabel: string
+  expectedResult: string
+}
+
+export type RequirementInteractionRow = {
+  key: string
+  pageId: string
+  pageName: string
+  actions: RequirementInteractionActionRow[]
+  navigationTargets: string[]
+}
+
+/**
+ * 按页面聚合 ProductPlan 各页的操作交互：每个页面一张卡，列出该页面有哪些操作、
+ * 操作类型（页面跳转/提交/数据变更/操作）以及预期结果，让用户一眼看清每个页面能做什么。
+ * navigation_targets 存的是 pageId，这里映射成页面中文名展示给用户。
+ */
+export function requirementInteractionRows(productPlan: JsonRecord): RequirementInteractionRow[] {
+  const pages = recordItems(productPlan.pages)
+  if (!pages.length) return []
+  // pageId → 页面中文名，用于把 navigation_targets 里的 pageId 翻译成可读名称。
+  const pageNameMap = new Map<string, string>()
+  pages.forEach((page, index) => {
+    const pageId = textValue(page.pageId, `page-${index + 1}`)
+    pageNameMap.set(pageId, textValue(page.name, pageId))
+  })
+  return pages.map((page, index) => {
+    const pageId = textValue(page.pageId, `page-${index + 1}`)
+    const actions = recordItems(page.actions).map((action, actionIndex) => {
+      const behavior = asRecord(action.behavior)
+      const behaviorType = textValue(behavior.type, 'operation')
+      return {
+        key: textValue(action.actionId, `${pageId}-action-${actionIndex + 1}`),
+        name: textValue(action.name, `操作 ${actionIndex + 1}`),
+        behaviorType,
+        behaviorTypeLabel: behaviorTypeLabel(behaviorType),
+        expectedResult: textValue(behavior.expectedResult)
+      }
+    })
+    return {
+      key: pageId,
+      pageId,
+      pageName: textValue(page.name, pageId),
+      actions,
+      navigationTargets: stringItems(page.navigation_targets).map(
+        (target) => pageNameMap.get(target) || target
+      )
+    }
+  })
+}
+
+export type RequirementLayoutRow = {
+  key: string
+  pageId: string
+  pageName: string
+  goal: string
+  informationItems: Array<{ key: string; label: string; description: string }>
+}
+
+/**
+ * 按页面聚合 ProductPlan 各页的布局：每个页面一张卡，展示页面目标与实际包含的业务信息项
+ * （如"订单号、客户、金额、状态"），让用户看清每个页面要呈现什么内容。
+ */
+export function requirementLayoutRows(productPlan: JsonRecord): RequirementLayoutRow[] {
+  const pages = recordItems(productPlan.pages)
+  if (!pages.length) return []
+  return pages.map((page, index) => {
+    const pageId = textValue(page.pageId, `page-${index + 1}`)
+    const informationItems = recordItems(page.information_items).map((item, itemIndex) => ({
+      key: textValue(item.itemId, `${pageId}-item-${itemIndex + 1}`),
+      label: textValue(item.label, `信息 ${itemIndex + 1}`),
+      description: textValue(item.description)
+    }))
+    return {
+      key: pageId,
+      pageId,
+      pageName: textValue(page.name, pageId),
+      goal: textValue(page.goal),
+      informationItems
+    }
+  })
+}
+
+// 页面风格维度：从 spec 自由文本里轻量提取用户提及的风格描述。
+// UiDesign 产物无独立风格字段（在 TSX code 里），只能从需求文本兜底。
+// 按维度分组，每个维度配关键词列表与可读标签，避免把整句原文塞进 Tag 造成混乱。
+const STYLE_DIMENSIONS: Array<{ key: string; label: string; keywords: string[] }> = [
+  {
+    key: 'tone',
+    label: '色调',
+    keywords: ['暗色', '深色', '亮色', '浅色', '夜间', '深色模式', '亮色模式']
+  },
+  {
+    key: 'aesthetic',
+    label: '视觉风格',
+    keywords: ['简洁', '简约', '扁平', '圆角', '留白', '现代', '商务', '科技感']
+  },
+  {
+    key: 'layout',
+    label: '布局形态',
+    keywords: ['卡片式', '列表式', '表单式', '表格', '看板', '仪表盘', 'dashboard', '左右分栏', '上下分栏']
+  },
+  {
+    key: 'navigation',
+    label: '导航结构',
+    keywords: ['侧边栏导航', '顶部导航', '顶栏导航', '底部导航', '标签栏']
+  },
+  {
+    key: 'device',
+    label: '适配端',
+    keywords: ['响应式', '移动端', '桌面端', '自适应']
+  }
+]
+
+export type RequirementStyleHintRow = {
+  key: string
+  dimension: string
+  dimensionLabel: string
+  // 该维度下命中的关键词（去重），作为可读标签展示。
+  labels: string[]
+  // 用户原文中提及该维度的句子，作为来源说明（可空）。
+  source: string
+}
+
+/**
+ * 从 spec 的 source_request / app_info.summary / pages[].description 里按风格维度
+ * 提取用户提及的视觉/布局/导航/端描述。每个命中的维度返回一行，labels 是简短标签，
+ * source 是用户原文中第一句相关描述。避免把整句原文当 Tag 造成混乱，也避免把
+ * "应用场景"等与风格无关的句子误匹配进来。
+ */
+export function requirementStyleHints(spec: JsonRecord): RequirementStyleHintRow[] {
+  const sentences: string[] = []
+  const pushText = (text: unknown) => {
+    const value = textValue(text)
+    if (!value) return
+    value
+      .split(/[。；;\n]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((s) => sentences.push(s))
+  }
+  pushText(spec.source_request)
+  pushText(asRecord(spec.app_info).summary)
+  recordItems(spec.pages).forEach((page) => pushText(page.description))
+  if (!sentences.length) return []
+  const rows: RequirementStyleHintRow[] = []
+  STYLE_DIMENSIONS.forEach((dimension) => {
+    const matchedLabels = new Set<string>()
+    const matchedSources: string[] = []
+    sentences.forEach((sentence) => {
+      const lower = sentence.toLowerCase()
+      dimension.keywords.forEach((keyword) => {
+        if (lower.includes(keyword.toLowerCase())) {
+          matchedLabels.add(keyword)
+          matchedSources.push(sentence)
+        }
+      })
+    })
+    if (matchedLabels.size) {
+      rows.push({
+        key: dimension.key,
+        dimension: dimension.key,
+        dimensionLabel: dimension.label,
+        labels: Array.from(matchedLabels),
+        source: matchedSources[0] || ''
+      })
+    }
+  })
+  return rows
+}
+
+export type RequirementApiContractRow = {
+  key: string
+  contractId: string
+  contractName: string
+  endpointId: string
+  method: string
+  path: string
+  summary: string
+  requestSchemaRef: string
+  responseSchemaRef: string
+  parameters: string
+}
+
+/** 遍历 TechnicalPlan.api_contracts，把每个 endpoint 拍平为接口请求/响应摘要行。 */
+export function requirementApiContractRows(technicalPlan: JsonRecord): RequirementApiContractRow[] {
+  const contracts = recordItems(technicalPlan.api_contracts)
+  const rows: RequirementApiContractRow[] = []
+  contracts.forEach((contract) => {
+    const contractId = textValue(contract.id)
+    const contractName = textValue(contract.name, contractId)
+    recordItems(contract.endpoints).forEach((endpoint, endpointIndex) => {
+      const endpointId = textValue(endpoint.id, `${contractId}-ep-${endpointIndex + 1}`)
+      rows.push({
+        key: endpointId,
+        contractId,
+        contractName,
+        endpointId,
+        method: textValue(endpoint.method, 'GET'),
+        path: textValue(endpoint.path),
+        summary: textValue(endpoint.summary),
+        requestSchemaRef: textValue(endpoint.request_schema_ref),
+        responseSchemaRef: textValue(endpoint.response_schema_ref),
+        parameters: parameterSummary(endpoint)
+      })
+    })
+  })
+  return rows
 }

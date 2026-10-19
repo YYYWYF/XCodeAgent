@@ -125,7 +125,11 @@ export default function DocPanel({
                 </div>
               )
             ) : requirementReady ? (
-              <RequirementDocPanel productPlan={productPlan || {}} spec={requirementSpec || {}} />
+              <RequirementDocPanel
+                productPlan={productPlan || {}}
+                spec={requirementSpec || {}}
+                technicalPlan={technicalPlan || {}}
+              />
             ) : (
               <MarkdownContent content={content ?? ''} />
             )}
