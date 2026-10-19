@@ -28,8 +28,8 @@ import {
   type WorkspaceTreeNode
 } from '../../../../service/workspaceTools'
 import { cx } from '../../../../utils'
-import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import { BROWSABLE_DESIGN_DOCS } from '../../designArtifacts'
+import SourcePlanningDoc from './SourcePlanningDoc'
 import './SourcePanel.less'
 
 hljs.registerLanguage('bash', bash)
@@ -62,9 +62,6 @@ const MAX_CHARS = 200000
  * 既满足约束，也只需拉回极少量内容。
  */
 const PROBE_CHARS = 200
-
-/** 规划文档的全部候选路径，用于判断选中的是不是文档（决定渲染 Markdown 还是代码）。 */
-const DOC_PATHS = new Set(BROWSABLE_DESIGN_DOCS.flatMap((doc) => [...doc.markdownPaths]))
 
 /**
  * 每份规划文档的图标与色调：三者同形同色时在树里难以区分，按语义各给一个。
@@ -219,6 +216,7 @@ export default function SourcePanel({
   const [treeError, setTreeError] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [selectedPath, setSelectedPath] = useState('')
+  const [fileReadSequence, setFileReadSequence] = useState(0)
   const [fileContent, setFileContent] = useState('')
   const [fileLoading, setFileLoading] = useState(false)
   const [fileError, setFileError] = useState('')
@@ -228,6 +226,13 @@ export default function SourcePanel({
   // 规划文档的可用路径：key -> 实际存在的路径。探测完成前不下"缺失"结论，避免置灰闪烁。
   const [docPaths, setDocPaths] = useState<Record<string, string>>({})
   const [docsProbed, setDocsProbed] = useState(false)
+  const selectedDoc = BROWSABLE_DESIGN_DOCS.find((doc) => doc.markdownPaths.includes(selectedPath))
+  const selectedDocumentKey =
+    selectedDoc?.key === 'requirement-spec' ||
+    selectedDoc?.key === 'product-plan' ||
+    selectedDoc?.key === 'technical-plan'
+      ? selectedDoc.key
+      : undefined
 
   // 加载工作区工程目录树（frontend + backend 等），后端自动过滤 .devagentstudio/node_modules
   useEffect(() => {
@@ -331,27 +336,46 @@ export default function SourcePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tree, docsProbed, docPaths, initialFilePath, initialTried])
 
-  const loadFile = (filePath: string): void => {
-    if (!workspaceRoot || !filePath) return
-    setSelectedPath(filePath)
+  // 规划文档由独立组件读取结构化数据；工程文件沿用现有读取和高亮方式。
+  useEffect(() => {
+    if (!workspaceRoot || !selectedPath || selectedDocumentKey) return
+    let cancelled = false
     setFileLoading(true)
     setFileError('')
     setFileContent('')
     setFileTruncated(false)
     void readWorkspaceFile({
       workspace_root: workspaceRoot,
-      path: filePath,
+      path: selectedPath,
       max_chars: MAX_CHARS,
       revision
     })
       .then((result) => {
+        if (cancelled) return
         setFileContent(result.content || '')
         setFileTruncated(result.truncated)
       })
       .catch((error) => {
+        if (cancelled) return
         setFileError(error instanceof Error ? error.message : '读取文件失败')
       })
-      .finally(() => setFileLoading(false))
+      .finally(() => {
+        if (!cancelled) setFileLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceRoot, selectedPath, selectedDocumentKey, revision, fileReadSequence])
+
+  /** 选择文件并清空上一个文件的展示状态，避免切换时闪现旧内容。 */
+  const loadFile = (filePath: string): void => {
+    if (!workspaceRoot || !filePath) return
+    setSelectedPath(filePath)
+    setFileReadSequence((current) => current + 1)
+    setFileLoading(false)
+    setFileError('')
+    setFileContent('')
+    setFileTruncated(false)
   }
 
   const handleToggle = (path: string): void => {
@@ -378,11 +402,8 @@ export default function SourcePanel({
     return escapeHtml(fileContent)
   }, [fileContent, selectedPath])
 
-  // 规划文档按 Markdown 渲染；源码仍走代码高亮。
-  const selectedIsDoc = selectedPath ? DOC_PATHS.has(selectedPath) : false
-  const selectedDocLabel = BROWSABLE_DESIGN_DOCS.find((doc) =>
-    doc.markdownPaths.includes(selectedPath)
-  )?.label
+  // 三份规划文档复用之前阶段的可视化，源码仍走代码高亮。
+  const selectedDocLabel = selectedDoc?.label
 
   return (
     <div className={cx('source-panel', treeCollapsed && 'is-tree-collapsed')}>
@@ -479,7 +500,16 @@ export default function SourcePanel({
             </Text>
           ) : null}
         </header>
-        {fileLoading ? (
+        {selectedDocumentKey ? (
+          <SourcePlanningDoc
+            key={`${workspaceRoot}:${revision || ''}:${selectedPath}:${fileReadSequence}`}
+            workspaceRoot={workspaceRoot}
+            documentKey={selectedDocumentKey}
+            documentPath={selectedPath}
+            productPlanPath={docPaths['product-plan']}
+            revision={revision}
+          />
+        ) : fileLoading ? (
           <div className={cx('source-panel-viewer-loading')}>
             <Spin size="small" />
             <Text type="secondary">正在读取文件…</Text>
@@ -489,15 +519,9 @@ export default function SourcePanel({
             <Empty description={fileError} image={Empty.PRESENTED_IMAGE_SIMPLE} />
           </div>
         ) : fileContent ? (
-          selectedIsDoc ? (
-            <div className={cx('source-panel-doc')}>
-              <MarkdownContent content={fileContent} />
-            </div>
-          ) : (
-            <pre className={cx('source-panel-pre')}>
-              <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
-            </pre>
-          )
+          <pre className={cx('source-panel-pre')}>
+            <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
+          </pre>
         ) : (
           <div className={cx('source-panel-viewer-empty')}>
             <Empty

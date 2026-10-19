@@ -98,6 +98,11 @@
   padding: 16px 20px;
 }
 
+// 与设计、计划阶段的可视化采用相同留白，复用章节吸顶及明暗主题样式。
+.@{class-prefix}-source-panel-structured {
+  padding: 16px 18px;
+}
+
 .@{class-prefix}-source-panel-tree-loading,
 .@{class-prefix}-source-panel-tree-empty {
   display: flex;
@@ -139,7 +144,9 @@
   text-align: left;
   cursor: pointer;
   user-select: none;
-  transition: background 120ms ease, color 120ms ease;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 
   > .anticon {
     flex: 0 0 auto;

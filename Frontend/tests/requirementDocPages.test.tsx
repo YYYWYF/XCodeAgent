@@ -3,6 +3,9 @@ import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { RequirementPagesSection } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocSections'
 import type { JsonRecord } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocPanelData'
+import ProductPlanDocPanel from '../src/renderer/src/components/AiChatPanel/components/DocPanel/ProductPlanDocPanel'
+import TechnicalPlanDocPanel from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanDocPanel'
+import './sourcePlanningDocument.test'
 
 /** 一份包含所有可选区块的页面规划，用于确认重做后内容一条不少。 */
 function productPlan(): JsonRecord {
@@ -67,4 +70,49 @@ test('页面卡重做后全部内容仍在，且带上序号与磁贴', () => {
   assert.ok(html.includes('requirement-doc-page-tile'), '业务信息应是磁贴')
   assert.ok(html.includes('requirement-doc-page-zone'), '缺少内嵌区块')
   assert.ok(html.includes('is-muted'), '规则区应带弱化标记')
+})
+
+test('独立产品规划复用页面可视化，并保留摘要、状态、版本和产品级验收标准', () => {
+  const html = renderToStaticMarkup(
+    <ProductPlanDocPanel
+      productPlan={{
+        ...productPlan(),
+        app: { name: '欢迎应用', summary: '单页欢迎应用摘要' },
+        confirmation_status: 'confirmed',
+        version: '0.1.0',
+        product_acceptance_criteria: ['应用可正常打开']
+      }}
+    />
+  )
+  for (const text of [
+    '欢迎应用',
+    '单页欢迎应用摘要',
+    '已确认',
+    '0.1.0',
+    '页面与用户操作',
+    '向用户展示固定的欢迎信息',
+    '内容刷新',
+    '能看到欢迎语',
+    '产品级验收标准',
+    '应用可正常打开'
+  ]) {
+    assert.ok(html.includes(text), `产品规划缺少内容：${text}`)
+  }
+  assert.ok(html.includes('requirement-doc-page-tile'), '产品规划应复用设计阶段的页面卡片')
+})
+
+test('空产品规划展示现有空态，待确认状态仍可见', () => {
+  const html = renderToStaticMarkup(
+    <ProductPlanDocPanel productPlan={{ confirmation_status: 'pending_user_confirmation' }} />
+  )
+  for (const text of ['未命名应用', '待确认', '暂无页面规划', '暂无产品级验收标准']) {
+    assert.ok(html.includes(text), `空产品规划缺少内容：${text}`)
+  }
+})
+
+test('技术规划沿用计划阶段的章节导航与无接口空态', () => {
+  const html = renderToStaticMarkup(<TechnicalPlanDocPanel plan={{}} productPlan={{}} />)
+  for (const text of ['架构', '实体', 'API 契约', '页面绑定', 'technical-plan-doc-panel']) {
+    assert.ok(html.includes(text), `技术规划缺少章节：${text}`)
+  }
 })
