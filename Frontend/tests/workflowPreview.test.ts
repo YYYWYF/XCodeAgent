@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import './planningProgressCard.test'
+import './workflowArtifactNames.test'
 import { workflowDebugResumeSource } from '../src/renderer/src/components/AiChatPanel/workflowDebugResume'
 import { test } from 'node:test'
 import { createElement } from 'react'

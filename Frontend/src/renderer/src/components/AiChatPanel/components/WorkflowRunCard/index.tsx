@@ -420,9 +420,7 @@ export default function WorkflowRunCard({
           {Object.entries(artifacts).map(([name, path]) => (
             <div className={cx('workflow-artifact-item')} key={name}>
               <span className={cx('workflow-artifact-marker')} aria-hidden="true" />
-              <Text code>
-                {name}: {path}
-              </Text>
+              <Text code>{path.split(/[\\/]/).filter(Boolean).pop() || '未命名文件'}</Text>
             </div>
           ))}
         </div>
