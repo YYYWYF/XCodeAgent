@@ -12,6 +12,13 @@ type ServiceRuntime = {
   backend?: { status?: string }
 }
 
+/** 任一端已有运行进程时显示重启，避免无需后端的项目被误判为尚未启动。 */
+export function previewServiceLaunchLabel(runtime?: ServiceRuntime): '启动服务' | '重启服务' {
+  return runtime?.frontend?.status === 'running' || runtime?.backend?.status === 'running'
+    ? '重启服务'
+    : '启动服务'
+}
+
 /**
  * 把前后端运行事实收敛成单一服务状态。
  *

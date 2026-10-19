@@ -5542,19 +5542,22 @@ export default function AiChatPanel({
               setRightPanelLayout('hidden')
             }}
           />
-          <BrowserPreviewPanel
-            inspectionDisabled={activeWorkbenchPhase === 'acceptance'}
-            serviceControl={previewRuntime.control}
-            application={application}
-            pages={displayedPlanningPages}
-            requestKey={rightPanel.requestKey}
-            requestedUrl={rightPanel.url}
-            previewBaseUrl={runtimePreviewBaseUrl}
-            selectedPagePath={activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/'}
-            errorMessage={runtimePreviewLaunchError}
-            onInspectingChange={setElementInspectionActive}
-            onElementContextChange={setInspectedElementContext}
-          />
+          {/* 预览及其内联抽屉仅占用剩余高度，避让会动态换行的保存提示和验收底栏。 */}
+          <div className={cx('workspace-content')}>
+            <BrowserPreviewPanel
+              inspectionDisabled={activeWorkbenchPhase === 'acceptance'}
+              serviceControl={previewRuntime.control}
+              application={application}
+              pages={displayedPlanningPages}
+              requestKey={rightPanel.requestKey}
+              requestedUrl={rightPanel.url}
+              previewBaseUrl={runtimePreviewBaseUrl}
+              selectedPagePath={activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/'}
+              errorMessage={runtimePreviewLaunchError}
+              onInspectingChange={setElementInspectionActive}
+              onElementContextChange={setInspectedElementContext}
+            />
+          </div>
           {acceptanceAwaiting && (
             <>
               {/* 验收是质量门禁通过后的稳定边界，此时把工作区自动快照成一个独立

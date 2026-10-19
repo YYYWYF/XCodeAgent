@@ -9,6 +9,7 @@ import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel
 import PreviewRepairControls from '../src/renderer/src/components/BrowserPreviewPanel/PreviewRepairControls'
 import {
   previewServiceActionAvailability,
+  previewServiceLaunchLabel,
   previewServiceState,
   shouldAutoStartPreviewService,
   shouldShowPreviewServiceEmptyState
@@ -158,6 +159,33 @@ try {
   // 服务状态收敛：它同时驱动面板状态标签与"切到预览 tab 是否要自动启动"，
   // 判错会导致要么该启动不启动（白屏），要么把正在跑的服务重复拉起。
   assert.equal(previewServiceState(undefined), 'idle', '无快照时视为未启动')
+  // 启动/重启文案按真实运行进程判断，另一端无需启动或故障均不能抹去运行事实。
+  for (const [frontend, backend] of [
+    ['running', 'skipped'],
+    ['skipped', 'running'],
+    ['running', 'running'],
+    ['running', 'failed'],
+    ['stopped', 'running']
+  ]) {
+    assert.equal(
+      previewServiceLaunchLabel({ frontend: { status: frontend }, backend: { status: backend } }),
+      '重启服务',
+      `${frontend}/${backend} 应显示重启服务`
+    )
+  }
+  for (const [frontend, backend] of [
+    ['stopped', 'skipped'],
+    ['stopped', 'stopped'],
+    ['failed', 'skipped'],
+    ['starting', 'skipped']
+  ]) {
+    assert.equal(
+      previewServiceLaunchLabel({ frontend: { status: frontend }, backend: { status: backend } }),
+      '启动服务',
+      `${frontend}/${backend} 不应被视为已有运行进程`
+    )
+  }
+  assert.equal(previewServiceLaunchLabel(undefined), '启动服务')
   assert.equal(previewServiceState({}), 'idle')
   assert.equal(
     previewServiceState({ frontend: { status: 'stopped' }, backend: { status: 'stopped' } }),

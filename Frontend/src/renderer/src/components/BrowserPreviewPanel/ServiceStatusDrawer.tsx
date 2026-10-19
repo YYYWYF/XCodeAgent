@@ -15,7 +15,7 @@ import { Alert, Button, Drawer, Tabs, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { PreviewRuntimePayload, PreviewServiceState } from '../../service/previewRuntime'
-import { previewServiceActionAvailability } from './serviceStatusPolicy'
+import { previewServiceActionAvailability, previewServiceLaunchLabel } from './serviceStatusPolicy'
 import ServiceLogContent from './ServiceLogContent'
 import './ServiceStatusDrawer.less'
 import './ServiceStatusDrawer.expanded.less'
@@ -95,10 +95,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
   })
   const actionTone = busy ? 'is-busy' : 'is-ready'
   const actionLabel = busy ? '处理中' : runtime ? '可操作' : '可启动'
-  const launchLabel =
-    runtime?.frontend.status === 'running' && runtime?.backend.status === 'running'
-      ? '重启服务'
-      : '启动服务'
+  const launchLabel = previewServiceLaunchLabel(runtime)
   const launching = busy && !!props.busyLaunchLabel
 
   useEffect(() => {
