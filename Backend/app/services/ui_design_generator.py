@@ -256,6 +256,18 @@ def _product_fact_boundary_rules() -> str:
         "just use a Table with `dataSource` and put the static attributes in the column "
         "render function. A static analyzer reads these attributes and also resolves "
         "`.map()` data sources, so expression-bound ids are accepted.\n"
+        "- Reusing a component across MULTIPLE sibling information items (e.g. several "
+        "news/card sections that share layout): do NOT pass `itemId` as a component prop "
+        "and write `data-information-item-id={itemId}` — the analyzer cannot resolve a "
+        "prop value. Instead, put the sections in a `.map()` over an array literal that "
+        "contains each `itemId` as a string literal (e.g. "
+        "`const sections = [{ itemId: 'market_news', title: '行情聚焦', items: [...] }, ...]`), "
+        "render `<ProCard data-information-item-id={section.itemId} "
+        "data-control-id={`${section.itemId}-display`} ...>` inside the `.map()`. The "
+        "analyzer extracts every `itemId: '...'` literal from the array, so all sections "
+        "are recognized without duplication. Do NOT split into N near-identical dedicated "
+        "components and do NOT inline everything — the `.map()` + array-literal pattern is "
+        "the intended way to reuse layout across sibling information items.\n"
         "- Any control used solely to switch prototype states must carry "
         "`data-preview-only=\"true\"`; it is review tooling, not product UI. Do not create any other "
         "preview-only business-looking control or content.\n"
@@ -760,11 +772,17 @@ def validate_page_code(
     project_dir: str,
     code: str,
     page: dict[str, Any] | None = None,
+    *,
+    allow_missing: bool = False,
 ) -> tuple[bool, str]:
     """对单页设计稿代码做完整校验：非空 + 未定义引用 + 禁用依赖 + esbuild 语法。
 
     返回 (是否通过, 错误信息)。错误信息为人类可读的修复指引，供回喂 LLM
     自动修复或展示给用户。esbuild 不可用时跳过语法校验（仅降级，不阻断）。
+
+    ``allow_missing=True`` 透传给 ``validate_ui_design_code``，用于 UI 调整场景：
+    允许代码里缺少 ProductPlan 声明的 actions / information_items（用户主动删除），
+    只校验越界与语法错误。
     """
 
     if not _is_meaningful_code(code):
@@ -803,7 +821,7 @@ def validate_page_code(
             "@ant-design/icons 导入）。",
         )
     if isinstance(page, dict):
-        contract_errors = validate_ui_design_code(page, code)
+        contract_errors = validate_ui_design_code(page, code, allow_missing=allow_missing)
         if contract_errors:
             return (
                 False,
@@ -958,7 +976,7 @@ def generate_adjusted_page_react_code(
         len(code),
     )
 
-    ok, err = validate_page_code(project_dir, code, page)
+    ok, err = validate_page_code(project_dir, code, page, allow_missing=True)
     attempt = 1
     while not ok and attempt <= max_retries:
         attempt += 1
@@ -984,7 +1002,7 @@ def generate_adjusted_page_react_code(
             attempt,
             len(code),
         )
-        ok, err = validate_page_code(project_dir, code, page)
+        ok, err = validate_page_code(project_dir, code, page, allow_missing=True)
 
     if not ok:
         raise ValueError(
